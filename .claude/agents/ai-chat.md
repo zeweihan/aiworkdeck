@@ -201,6 +201,17 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
   回归用例 `FolderContextOfficeFormatTest`。
   （同文件的 `extractFileText` / `collectFolderContent` 有同样的白名单缺陷，但**零生产调用方**，
   本次刻意没动——要用它们之前先照 `buildFolderContext` 改。）
+- **工具失败判据只认前缀，中英文各一个**：`ToolRegistry.ToolResult.success()` 认
+  `Error` 前缀、`错误` 前缀与 `{"error"` JSON 形态。中文前缀是补的——MemoryTools / TagTools /
+  TaskTools / EvidenceTools / PptxTools 共 37 处失败返回写的是「错误：…」，它们**自认为在报错**，
+  判据却只认英文，于是全被判成 SUCCESS：过程卡给失败调用打绿勾、`appendFailureNudge` 把
+  `consecutiveFailures` 清零（连续失败纠正回路对这些工具永不触发，模型能对着同一个错误
+  重试到步数上限）、埋点也记 `success=true`。
+  **新增失败返回必须以 `Error` 或「错误」开头**，别写成「XX 失败：…」——判据看不见。
+  反过来也别改成按包含匹配：合同正文里出现「失败」「违约」是家常便饭，误判成失败比漏判更糟
+  （回归用例 `ToolFailureClassificationTest` 把这条也钉住了）。
+  **`GatewayException` 的 `unavailable()` 文案刻意没加标记**：`Kind.BUDGET_EXCEEDED`
+  按设计「是可恢复的确认，不是失败」，一并标成失败会误伤它——要动先想清楚这一档。
 - **埋点体系**（`com.checkba.service.telemetry`，设计 docs/ANALYTICS_TELEMETRY_DESIGN.md）：
   唯一采集入口 TelemetryService.record/recordConv，字段过 TelemetryAttrWhitelist 白名单
   （新事件/字段要同步白名单 + TelemetryServiceTest + 官网仓 lib/telemetry-store.ts 的 EVENT_WHITELIST）。

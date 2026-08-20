@@ -110,6 +110,14 @@ public class ToolRegistry {
             if (!found || output == null) return false;
             String trimmed = output.stripLeading();
             if (trimmed.startsWith("Error")) return false;
+            // 中文失败前缀与英文同等对待：MemoryTools / TagTools / TaskTools /
+            // EvidenceTools / PptxTools 共 37 处失败返回写的是「错误：…」，它们**自认为在报错**，
+            // 判据却只认英文 "Error"，于是全被判成 SUCCESS——过程卡给失败的调用打绿勾、
+            // appendFailureNudge 把 consecutiveFailures 清零（连续失败纠正回路对这些工具
+            // 永不触发，模型能对着同一个错误重试到步数上限）、埋点也记成功。
+            // 只认**前缀**，不按包含匹配：合同正文里出现「失败」「错误」是家常便饭，
+            // 把正常结果误判成失败比漏判更糟。
+            if (trimmed.startsWith("错误")) return false;
             // 编辑器桥等工具的失败以 JSON 返回（如 {"error": "操作超时..."}）。
             // 此前只认 "Error" 前缀，这类失败被判成 SUCCESS：失败熔断计数被清零、
             // 前端显示绿勾、file_change 照发——模型一路"成功"空转到步数上限（F-09）。

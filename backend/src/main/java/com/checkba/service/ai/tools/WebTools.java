@@ -74,7 +74,7 @@ public class WebTools implements AgentToolComponent {
 
         String apiKey = systemSettingService.get("external.bocha.apiKey", bochaApiKey);
         if (apiKey == null || apiKey.isBlank()) {
-            return "网络搜索未配置：缺少博查（Bocha AI）搜索的 API Key。请管理员在「设置 → 外部服务」中填写博查 API Key"
+            return "错误：网络搜索未配置：缺少博查（Bocha AI）搜索的 API Key。请管理员在「设置 → 外部服务」中填写博查 API Key"
                     + "（可在 bochaai.com 申请），保存后重试。本次已跳过网络搜索，请基于已有信息继续完成任务。";
         }
         try {
