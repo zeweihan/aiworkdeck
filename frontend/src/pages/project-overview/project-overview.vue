@@ -2708,20 +2708,40 @@ export default {
               const imageBase64 = payload && payload.imageDataUrl ? String(payload.imageDataUrl) : ''
               if (!text || !this.projectId) return
               const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
-              await createProjectFavorite(pid, {
-                title: title || (url ? (() => { try { return new URL(url).host } catch (e) { return this.$t('workbench.webMark') } })() : this.$t('workbench.webMark')),
+              const host2 = (() => { try { return url ? new URL(url).host : '' } catch (e) { return '' } })()
+              const created = await createProjectFavorite(pid, {
+                title: title || host2 || this.$t('workbench.webMark'),
                 sourceUrl: url,
                 content: text,
-                imageBase64: imageBase64 || ''
+                imageBase64: imageBase64 || '',
+                // 卡片右下角的来源域名读的是 meta.sourceHost（与 OCR 摘录路径同口径），不写就永远空白
+                meta: JSON.stringify({ kind: 'webmark', capturedAt: new Date().toISOString(), sourceUrl: url, title, sourceHost: host2 })
               })
-              // 立即刷新网核中心面板（如果可见）
-              if (this.$refs.favoritesPanel && typeof this.$refs.favoritesPanel.refresh === 'function') {
-                this.$refs.favoritesPanel.refresh()
-              }
+              // 可见反馈不能只靠 toast：用户此刻正在浏览器标签里，toast 弹在 DOM 层、
+              // 被原生 BrowserView 整个盖住（实测 toast 中心恒落在 view 区域内），看起来
+              // 就是「点了没反应」。照 OCR 摘录收藏（ocrDoFavorite）的模式：打开收藏面板
+              // 并高亮新卡片——面板参与布局，BrowserView 会让位，反馈真实可见。
+              const favId = created && created.id ? created.id : (created && created.data && created.data.id ? created.data.id : null)
+              this.showToolsPanel = true
+              this.activeToolKey = 'favorites'
+              this.$nextTick(async () => {
+                try {
+                  const panel = this.$refs.favoritesPanel
+                  if (panel && typeof panel.refresh === 'function') await panel.refresh(true)
+                  if (favId && panel && typeof panel.focusFavorite === 'function') panel.focusFavorite(Number(favId))
+                } catch (e) {
+                  // ignore
+                }
+              })
               uni.showToast({ title: this.$t('workbench.webMarkFavAdded'), icon: 'success' })
             } catch (e) {
               console.error('保存网核收藏失败:', e)
-              uni.showToast({ title: e.message || this.$t('workbench.saveFailed'), icon: 'none' })
+              // 失败也一样被 BrowserView 盖住 = 静默失败；桌面端走不被遮挡的原生确认弹窗
+              if (host.app && host.app.confirm) {
+                host.app.confirm({ title: this.$t('workbench.saveFailed'), content: e.message || '' }).catch(() => {})
+              } else {
+                uni.showToast({ title: e.message || this.$t('workbench.saveFailed'), icon: 'none' })
+              }
             }
           })
         }
