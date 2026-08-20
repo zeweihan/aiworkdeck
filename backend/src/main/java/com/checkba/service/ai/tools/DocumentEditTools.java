@@ -89,6 +89,12 @@ public class DocumentEditTools implements AgentToolComponent {
             if (denied != null) return denied;
 
             if (!isEditableDocument(file.getName())) {
+                // 纯文本不进文档编辑器（dev-board#37 起走轻量文本编辑器），给模型指对路
+                if (TextFileEditTools.isPlainText(file)) {
+                    return "Error: " + file.getName() + " 是纯文本文件，不在文档编辑器中打开。"
+                            + "读取用 extract_file_text，修改用 text_write_file / text_find_replace"
+                            + "（改动会自动同步到用户已打开的文本标签）。";
+                }
                 return "Error: 该文件不是可编辑的文档格式: " + file.getName();
             }
             

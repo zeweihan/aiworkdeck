@@ -103,7 +103,8 @@ public class ClientCapabilityService {
      * office_* 是 Office 插件专属（经 OfficeBridgeService 等插件回执），且按宿主再细分——
      * office_excel_* 只对 Excel 会话可见、office_ppt_* 只对 PowerPoint 会话可见、
      * 其余 office_*（Word 面）只对 Word 会话可见；
-     * 其余工具（纯后端执行）对所有能力档位可见。
+     * 其余工具（纯后端执行）对所有能力档位可见——包括 text_*（纯文本直读直写，
+     * 后端 StorageService 落盘、无客户端执行器依赖，dev-board#37），刻意不过滤。
      */
     public boolean isToolVisible(String toolName, String conversationId) {
         if (toolName == null) {

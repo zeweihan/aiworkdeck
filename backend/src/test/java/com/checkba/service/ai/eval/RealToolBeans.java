@@ -14,6 +14,7 @@ import com.checkba.service.ai.tools.PdfTools;
 import com.checkba.service.ai.tools.PptxTools;
 import com.checkba.service.ai.tools.PythonTools;
 import com.checkba.service.ai.tools.SubAgentTools;
+import com.checkba.service.ai.tools.TextFileEditTools;
 import com.checkba.service.ai.tools.TodoTools;
 import com.checkba.service.ai.tools.WebTools;
 
@@ -53,6 +54,7 @@ final class RealToolBeans {
                 PptxTools.class,
                 PythonTools.class,
                 SubAgentTools.class,
+                TextFileEditTools.class,
                 // TodoTools 长期漏列：todo_write 在整个回放评测里根本没注册，
                 // 于是「skill 命中时清单工具是否可见」这类断言写了也是空的（工具名不存在，
                 // offeredToolsInclude 永远失败、offeredToolsExclude 永远通过）。
