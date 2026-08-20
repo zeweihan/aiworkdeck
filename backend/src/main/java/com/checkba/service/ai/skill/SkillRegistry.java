@@ -88,10 +88,21 @@ public class SkillRegistry {
         this.appLanguageService = appLanguageService;
     }
 
+    /**
+     * 「语音」合并插件的成员 skill（语音合成 + 会议录音，dev-board#66）。
+     * 概念模型是「左栏一个图标 = 一个插件」：两者共占 rail 'voice' 一个面板位，
+     * 广场里是一个条目、启停一体。前端开关一次翻全部成员；这里在每次扫描后
+     * 再做一次状态收敛（任一启用 → 全部启用），把存量安装里「语音合成开、
+     * 会议录音关」这类分裂态归一——否则会出现面板 tab 可见、但「生成纪要」的
+     * kick-off prompt 永远命不中 meeting-recorder skill 的静默断裂。
+     */
+    static final List<String> VOICE_MERGED_SKILL_IDS = List.of("text-to-speech", "meeting-recorder");
+
     @PostConstruct
     public void init() {
         loadDisabledState();
         scan();
+        convergeVoiceMergedSkills();
         log.info("SkillRegistry initialized: {} skills from dir '{}' (+plugins)",
                 skills.size(), properties.getDir());
     }
@@ -101,7 +112,23 @@ public class SkillRegistry {
         skills.clear();
         loadDisabledState();
         scan();
+        convergeVoiceMergedSkills();
         log.info("Skill rescan done: {} skills", skills.size());
+    }
+
+    /** 见 {@link #VOICE_MERGED_SKILL_IDS}：任一成员启用即全部启用；全关保持全关。 */
+    private void convergeVoiceMergedSkills() {
+        if (!skills.keySet().containsAll(VOICE_MERGED_SKILL_IDS)) {
+            return; // 部署形态里缺成员目录时不收敛，别把半套安装的状态改来改去
+        }
+        boolean anyEnabled = VOICE_MERGED_SKILL_IDS.stream().anyMatch(id -> !disabledSkillIds.contains(id));
+        if (!anyEnabled) {
+            return;
+        }
+        if (disabledSkillIds.removeAll(VOICE_MERGED_SKILL_IDS)) {
+            persist(DISABLED_KEY, disabledSkillIds);
+            log.info("Voice merged skills converged to enabled: {}", VOICE_MERGED_SKILL_IDS);
+        }
     }
 
     /** 全部已注册 skill（含被禁用的，供管理页展示） */

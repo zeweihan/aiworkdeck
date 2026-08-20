@@ -204,7 +204,7 @@
 // 装/卸/启停后通过 uni.$emit('awd:market-changed') 通知左栏刷新。
 import { getPlugins, getSkills, getSkillMarket, getPluginMarket, installMarketSkill, uninstallMarketSkill, installMarketPlugin, uninstallMarketPlugin, setPluginEnabled, setSkillActivation, packStatus, packInfo, packInstall, packUninstall } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
-import { isPanelSkill } from '@/config/leftSidebarPlugins.js'
+import { isPanelSkill, buildVoiceGroupSkill } from '@/config/leftSidebarPlugins.js'
 import { formatPrice, isPaid, paidState, priceCentsOf, priceLabel, purchaseUrl } from '@/utils/marketPricing.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { refreshEntitlements } from '@/composables/useEntitlement.js'
@@ -372,9 +372,10 @@ export default {
       const idx = ACTIVATION_MODES.indexOf(mode)
       return idx >= 0 ? idx : 0
     },
-    /** 背后挂着左栏面板的 skill：详情页也按插件呈现（开关，而不是生效方式三档） */
+    /** 背后挂着左栏面板的 skill：详情页也按插件呈现（开关，而不是生效方式三档）。
+        「语音」合并插件条目（spec.group）同理——它就是一个面板。 */
     isPanel() {
-      return this.spec && this.spec.kind === 'skill' && isPanelSkill(this.spec.id)
+      return this.spec && this.spec.kind === 'skill' && (this.spec.group || isPanelSkill(this.spec.id))
     },
     /** 该 skill 挂着的原生资源包 id；来自 /api/skills/list 的 packId 字段，没有就是普通 skill */
     packId() {
@@ -444,7 +445,15 @@ export default {
       let marketError = null
       const keepMarketError = (e) => { marketError = e; return null }
       try {
-        if (this.spec.kind === 'skill') {
+        if (this.spec.group) {
+          // 「语音」合并插件（dev-board#66）：本机成员 skill 合成一个视图。
+          // 'voice' 不是 registry 条目，不去在线广场查——marketInfo 恒空，
+          // 动作区因此只剩启停开关（没有安装/卸载，内置插件本就不可卸载）。
+          const iRes = await getSkills().catch(() => null)
+          const installedList = Array.isArray(iRes) ? iRes : (iRes?.data || [])
+          this.marketInfo = null
+          this.installedInfo = buildVoiceGroupSkill(installedList)
+        } else if (this.spec.kind === 'skill') {
           const [mRes, iRes] = await Promise.all([
             getSkillMarket().catch(keepMarketError),
             getSkills().catch(() => null),
@@ -700,11 +709,15 @@ export default {
       }
     },
     // AwdSelect 直接抛下标
-    // 面板型：开 = auto（面板 kick-off prompt 要靠触发词命中），关 = disabled
+    // 面板型：开 = auto（面板 kick-off prompt 要靠触发词命中），关 = disabled。
+    // 「语音」合并插件一次作用于全部成员 skill（启停一体，dev-board#66）。
     async onPanelSkillToggle(enabled) {
       const mode = enabled ? 'auto' : 'disabled'
+      const ids = (this.installedInfo && this.installedInfo.groupMemberIds) || [this.spec.id]
       try {
-        await setSkillActivation(this.spec.id, mode)
+        for (const id of ids) {
+          await setSkillActivation(id, mode)
+        }
         if (this.installedInfo) {
           this.installedInfo.activationMode = mode
           this.installedInfo.enabled = enabled

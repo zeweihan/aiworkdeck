@@ -781,8 +781,9 @@ try {
     await page.waitForSelector('.voice-tabs', { timeout: 10000 })
     const t = await textOf()
     if (!t.includes('语音合成')) throw new Error('语音面板里没有「语音合成」tab')
-    // 会议录音那个 tab 是 skill 门控的（meeting-recorder 默认不启用），
-    // 所以这里只断言 tab 条存在与合成 tab 在，不断言录音 tab。
+    // dev-board#66 起语音合成与会议录音是**一个**合并插件（启停一体，后端
+    // SkillRegistry 收敛保证两个成员状态一致）：语音入口在，两个 tab 就都在。
+    if (!t.includes('会议录音')) throw new Error('语音面板里没有「会议录音」tab（合并插件启停一体后应恒在）')
     await mouseClickSel('[title="资源管理器"]')
   })
   await shot('j6-rails')

@@ -154,6 +154,48 @@ class SkillRegistryTest {
     }
 
     @Test
+    @DisplayName("「语音」合并插件状态收敛：任一成员启用即全部启用；全关保持全关；缺成员不收敛")
+    void convergesVoiceMergedSkillPair() throws IOException {
+        // 存量分裂态：语音合成启用、会议录音被用户/旧默认关了 → 收敛为都启用
+        writeSkill(tempDir.resolve("text-to-speech"), "text-to-speech", null);
+        writeSkill(tempDir.resolve("meeting-recorder"), "meeting-recorder", null);
+        InMemorySystemSettingService settings = new InMemorySystemSettingService();
+        settings.set(SkillRegistry.DISABLED_KEY, "[\"meeting-recorder\"]");
+
+        SkillProperties props = new SkillProperties();
+        props.setDir(tempDir.toString());
+        SkillRegistry registry = new SkillRegistry(props, settings, new PluginService(), null);
+        registry.init();
+        assertTrue(registry.isEnabled("text-to-speech"));
+        assertTrue(registry.isEnabled("meeting-recorder"), "任一成员启用即全部启用（启停一体）");
+
+        // 用户把两个都关掉（前端开关一次翻两个成员）：重启后保持全关，不被收敛翻回来
+        registry.setEnabled("text-to-speech", false);
+        registry.setEnabled("meeting-recorder", false);
+        SkillProperties props2 = new SkillProperties();
+        props2.setDir(tempDir.toString());
+        SkillRegistry registry2 = new SkillRegistry(props2, settings, new PluginService(), null);
+        registry2.init();
+        assertFalse(registry2.isEnabled("text-to-speech"), "全关是用户的明确选择，收敛不该打回去");
+        assertFalse(registry2.isEnabled("meeting-recorder"));
+    }
+
+    @Test
+    @DisplayName("「语音」收敛只在两个成员都在场时生效：缺一个就不动禁用名单")
+    void voiceConvergenceRequiresBothMembersPresent() throws IOException {
+        writeSkill(tempDir.resolve("text-to-speech"), "text-to-speech", null);
+        InMemorySystemSettingService settings = new InMemorySystemSettingService();
+        settings.set(SkillRegistry.DISABLED_KEY, "[\"meeting-recorder\"]");
+
+        SkillProperties props = new SkillProperties();
+        props.setDir(tempDir.toString());
+        SkillRegistry registry = new SkillRegistry(props, settings, new PluginService(), null);
+        registry.init();
+        assertEquals("[\"meeting-recorder\"]", settings.get(SkillRegistry.DISABLED_KEY, ""),
+                "meeting-recorder 目录不在场时不该动持久化的禁用名单");
+    }
+
+    @Test
     @DisplayName("坏 skill 跳过不阻断：YAML 语法错误 / 缺 id / 缺 prompt 文件 / 缺 triggers")
     void skipsBrokenSkillsWithoutBlocking() throws IOException {
         // 好的 skill

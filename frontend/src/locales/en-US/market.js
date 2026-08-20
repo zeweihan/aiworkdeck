@@ -16,6 +16,8 @@ export default {
   tabSkillMarket: 'Skill Marketplace',
   tabPluginMarket: 'Plugin Marketplace',
   tabInstalled: 'Installed',
+  tabMarketplace: 'Marketplace',
+  voiceGroupDesc: 'Voice panel: read documents aloud with on-device text-to-speech; record meetings with one tap, auto-transcribe with speaker separation, and let AI draft structured minutes.',
 
   // ---- Categories ----
   catAll: 'All',
