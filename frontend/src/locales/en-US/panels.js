@@ -199,6 +199,8 @@ export default {
   bpSwitchToDesktop: 'Switch back to desktop view',
   bpSwitchToMobile: 'Switch to mobile view (fixes pages that are too wide)',
   bpUnsupportedPlatform: 'The browser control is not supported on this platform (H5 only)',
+  bpCreateFailed: 'Failed to create the browser view',
+  bpRetry: 'Retry',
 
   // ProjectFavoritesPanel.vue
   pfLoading: 'Loading…',

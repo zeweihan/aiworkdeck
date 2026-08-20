@@ -137,36 +137,7 @@ $bg-white: #FFFFFF;
   }
 }
 
-/* IDE 化：顶栏常驻工作状态点 */
-.work-status-chip {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 10px;
-  border-radius: 999px;
-  background: rgba(200, 164, 93, 0.12);
-  border: 1px solid rgba(200, 164, 93, 0.3);
-  cursor: pointer;
-
-  &:hover {
-    background: rgba(200, 164, 93, 0.2);
-  }
-}
-
-.work-status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #c8a45d;
-}
-
-.work-status-text {
-  font-size: 12px;
-  color: #8a6d3b;
-  white-space: nowrap;
-}
-
-/* 协作状态 chip（顶栏，与工作状态点并列；只在案卷已放进团队案件库时渲染） */
+/* 协作状态 chip（顶栏；只在案卷已放进团队案件库时渲染） */
 .collab-chip {
   display: flex;
   align-items: center;
@@ -1295,6 +1266,15 @@ $bg-white: #FFFFFF;
   transition: none !important;
 }
 
+/* 拖拽期间让 iframe/webview 放行鼠标事件：mousemove 一进嵌入文档，父窗口就
+   收不到了，光标滑过编辑器时拖拽会整个冻住——「不跟手」的根因。桌面端的
+   浏览器面板是原生 BrowserView，CSS 管不到，由 desktopOverlayActive 在拖拽
+   期间隐藏兜底。 */
+.page-project-overview.is-resizing :deep(iframe),
+.page-project-overview.is-resizing :deep(webview) {
+  pointer-events: none !important;
+}
+
 .sidebar-header {
   display: flex;
   flex-direction: row;
@@ -1891,10 +1871,12 @@ $bg-white: #FFFFFF;
   min-width: 0; /* 防止内容撑大 */
   transition: all 0.2s ease-in-out; /* 更好的过渡 */
   overflow: hidden;
-  border-radius: 18px;
-  border: 1px solid rgba(15, 23, 42, 0.05);
-  background: rgba(249, 250, 255, 0.82);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.6);
+  /* 方角贴合外壳其余区块（.workbench/.content-area/.side-panel 都已拉平）：
+     圆角卡片残留会在标签栏下沿与分栏缝两侧露出底色小弧口 */
+  border-radius: 0;
+  border: none;
+  background: #ffffff;
+  box-shadow: none;
 
   &.focused {
     /* 聚焦时的高亮提示 */
@@ -1925,9 +1907,9 @@ $bg-white: #FFFFFF;
   width: 100%;
   height: 100%;
   overflow: hidden; /* 确保内部组件不溢出 */
-  border-radius: 16px;
+  border-radius: 0;
   background: #fff;
-  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.03);
+  box-shadow: none;
 }
 
 /* 预热备胎实例（librePool.js）：未激活时脱离布局流隐形占位。不能用
@@ -3211,6 +3193,100 @@ $bg-white: #FFFFFF;
   cursor: not-allowed;
 }
 
+/* 文档关联弹窗（fileLinkPicker）：独立一套类，不与上面的 upload-mask/folder-modal
+   共用——那组样式同时被导出 Word、截图保存、回收站三处对话框复用，直接改动
+   风险面太大。视觉语言对齐 components/collab/CollabDialog.vue。 */
+.filelink-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.filelink-dialog {
+  width: 380px;
+  max-width: 90vw;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+.filelink-header {
+  padding: 18px 24px;
+  border-bottom: 1px solid #f1f5f9;
+}
+.filelink-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #0f172a;
+}
+.filelink-body {
+  padding: 12px 16px;
+  overflow-y: auto;
+  flex: 1;
+}
+.filelink-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.filelink-item:hover {
+  background: #f1f5f9;
+}
+.filelink-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: #64748b;
+}
+.filelink-name {
+  flex: 1;
+  font-size: 13.5px;
+  color: #334155;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filelink-empty {
+  text-align: center;
+  color: #94a3b8;
+  padding: 20px;
+  font-size: 13px;
+}
+.filelink-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 14px 24px;
+  border-top: 1px solid #f1f5f9;
+  background: #f8f9fa;
+}
+.filelink-btn {
+  padding: 8px 18px;
+  border-radius: 6px;
+  font-size: 13.5px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.filelink-btn-secondary {
+  background: #fff;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+}
+.filelink-btn-secondary:hover {
+  background: #f1f5f9;
+}
+
 .dialog-input {
   width: 100%;
   height: 80rpx;
@@ -3965,27 +4041,43 @@ $bg-white: #FFFFFF;
 /* Custom Recording Toast */
 .recording-toast {
   position: fixed;
-  top: 50%;
+  top: 60px;
   left: 50%;
-  transform: translate(-50%, -50%);
-  background-color: rgba(44, 51, 56, 0.9); /* AI WorkDeck Gray-Dark with opacity */
-  color: #fff;
-  padding: 12px 24px;
-  border-radius: 8px;
-  font-size: 16px;
+  transform: translate(-50%, -6px);
+  background-color: #fff;
+  color: #0f172a;
+  padding: 8px 16px;
+  border: 1px solid #E2E8F0;
+  border-radius: 12px;
+  font-size: 13px;
   font-weight: 500;
   pointer-events: none;
   opacity: 0;
-  transition: opacity 0.3s ease;
+  transition: opacity 0.25s ease, transform 0.25s ease;
   z-index: 9999;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08);
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 8px;
 
   &.visible {
     opacity: 1;
+    transform: translate(-50%, 0);
   }
+}
+
+.recording-toast-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #EF4444;
+  flex-shrink: 0;
+  animation: recording-toast-dot-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes recording-toast-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 /* AI Context Drag & Drop */
 .side-panel-ai.drag-over {

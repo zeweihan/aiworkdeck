@@ -157,11 +157,14 @@ const hasSelector = (css, sel) =>
 
 check('project-list.scss 搬齐了必需的样式块', () => {
   const css = readFrontend('src/pages/project-list/project-list.scss')
+  // .btn-primary-small 已被 .awd-btn/.awd-btn-primary 取代（命名弹窗按钮改走 awd-* 视觉语言）；
+  // .card-deco-header 已随卡片重设计删除（不再用顶部 4px 色条区分项目类型，见「Card 重设计」提交）——
+  // 两处都是有意的设计变更，不是搬迁遗漏，从必需清单里去掉。
   const need = [
     '.page-project-list', '.project-list-container', '.main-content',
-    '.content-header', '.header-actions', '.btn-primary-small', '.btn-secondary-small',
+    '.content-header', '.header-actions', '.awd-btn', '.awd-btn-primary', '.btn-secondary-small',
     '.cloud-accept-entry', '.projects-stats-row', '.stat-card',
-    '.project-grid', '.project-item-card', '.card-deco-header', '.action-btn-icon',
+    '.project-grid', '.project-item-card', '.action-btn-icon',
     '.project-title-new', '.card-footer-new', '.member-avatar-new', '.add-member-btn-new',
     '.enter-btn-arrow', '.empty-state-dashed', '.dashed-icon',
     '.project-role-badge', '.role-owner', '.role-text',
@@ -244,18 +247,24 @@ check('项目列表页删掉了写死 0 的两张统计卡', () => {
   return cards === 1 ? null : '统计条应当只剩「全部项目」一张卡，实际 ' + cards + ' 张'
 })
 
-check('项目列表页带全 CloudAcceptDialog 的两个入口', () => {
+check('项目列表页「从团队案件库取一份案卷」暂时收起（用户反馈 5），但方法与组件没删', () => {
   const src = readVue('src/pages/project-list/project-list.vue')
   if (!src.includes('<CloudAcceptDialog')) return '弹窗组件没搬过来'
-  // 1 处 method 定义 + 2 处入口绑定（有项目态顶部按钮 / 空项目态入口）
+  if (!/const\s+SHOW_CLOUD_ACCEPT\s*=\s*false/.test(src)) {
+    return '两个入口应当用 SHOW_CLOUD_ACCEPT 门控收起，不是把整段删掉——日后要开回只改这一个常量'
+  }
+  // 1 处 method 定义 + 2 处入口绑定（有项目态顶部按钮 / 空项目态入口）；门控只加在
+  // 各自的 v-if 上，openCloudAccept 这个方法名出现的次数不会因此减少
   const entries = (src.match(/openCloudAccept/g) || []).length
-  return entries >= 3 ? null : 'openCloudAccept 只出现 ' + entries + ' 次，两个入口缺一个'
+  return entries >= 3 ? null : 'openCloudAccept 只出现 ' + entries + ' 次，方法定义或两个入口绑定被删掉了'
 })
 
 check('项目列表页对 CLIENT 收起写操作入口', () => {
   const src = readVue('src/pages/project-list/project-list.vue')
   if (!/isClientUser\s*\(\)/.test(src)) return '缺 isClientUser computed'
-  if (!src.includes('!isClientUser && projects.length > 0')) return '顶部两个动作按钮没有对 CLIENT 隐藏'
+  if (!src.includes('v-if="!isClientUser" class="create-section"')) {
+    return '页头下方的新建操作行没有对 CLIENT 隐藏'
+  }
   if (!src.includes('canManageMembers')) return '成员增删没有对 CLIENT 收起'
   return null
 })

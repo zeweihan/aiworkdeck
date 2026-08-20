@@ -40,6 +40,9 @@ export default {
   notConfiguredByok: 'No transcription service configured: recordings are still saved to project files, but cannot be turned into text. An administrator can enter Alibaba Cloud Tingwu credentials under System settings - Platform Services - Meeting Transcription, or switch to platform-sourced.',
 
   // ---- Recording ----
+  micDeviceLabel: 'Microphone',
+  micDeviceFallbackName: 'Microphone {n}',
+  micDeviceFallback: 'The selected microphone is unavailable; switched to the default device',
   startRecording: 'Start Recording',
   startHint: 'Tap to start. Speakers are separated automatically, and transcription runs once you stop.',
   recording: 'Recording',

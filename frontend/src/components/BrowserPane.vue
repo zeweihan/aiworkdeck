@@ -33,6 +33,13 @@
     <view class="browser-body">
       <!-- Desktop(Electron): 使用 BrowserView（不在 DOM 内渲染，这里仅作为占位与计算 bounds） -->
       <view v-if="isDesktopBrowser" ref="desktopMount" class="browser-desktop-mount"></view>
+      <!-- BrowserView 创建失败时主进程没有对应 view（僵尸 tab）：面板会一直空白、
+           截图按 viewId 查表报 view not found。原生层不存在时这层 DOM 提示才可见 -->
+      <view v-if="isDesktopBrowser && desktopCreateError" class="browser-create-error">
+        <text class="bce-text">{{ $t('panels.bpCreateFailed') }}</text>
+        <text class="bce-detail">{{ desktopCreateError }}</text>
+        <view class="bce-retry" @tap="retryDesktopCreate"><text>{{ $t('panels.bpRetry') }}</text></view>
+      </view>
 
       <!-- H5: 使用 iframe 做最小可用网页展示 -->
       <!-- #ifdef H5 -->
@@ -98,7 +105,8 @@ export default {
       _desktopReady: false,
       viewCanGoBack: false,
       viewCanGoForward: false,
-      isMobileMode: false
+      isMobileMode: false,
+      desktopCreateError: ''
     }
   },
   computed: {
@@ -202,6 +210,28 @@ export default {
     this._messageBound = false
   },
   methods: {
+    // BrowserView 创建失败此前只 console.warn 一声：tab 留在前端列表里但主进程
+    // 注册表查无此 view（僵尸 tab）——面板空白、截图报 view not found，且当次
+    // 会话内无任何自愈手段（用户反馈14）。失败必须落成可见错误态并给重试。
+    async createDesktopView() {
+      const api = host.browser
+      if (!api) return
+      try {
+        const res = await api.create({ id: this._desktopViewId, url: this.normalizeUrl(this.currentUrl || this.url) })
+        this.adoptViewState(res)
+        this.desktopCreateError = ''
+      } catch (e) {
+        this.desktopCreateError = (e && e.message) ? String(e.message) : String(e || 'create failed')
+        // eslint-disable-next-line no-console
+        console.warn('desktop browser create failed', e)
+      }
+    },
+    async retryDesktopCreate() {
+      await this.createDesktopView()
+      if (!this.desktopCreateError) {
+        this.$nextTick(() => requestAnimationFrame(() => this.syncDesktopBounds()))
+      }
+    },
     async setupDesktopBrowser() {
       const api = host.browser
       if (!api) return
@@ -235,13 +265,7 @@ export default {
       }) : null
 
       // 创建（已有同 id 的保活 view 时是复用，主进程不会重新加载）
-      try {
-        const res = await api.create({ id: this._desktopViewId, url: this.normalizeUrl(this.currentUrl || this.url) })
-        this.adoptViewState(res)
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.warn('desktop browser create failed', e)
-      }
+      await this.createDesktopView()
       this._desktopReady = true
 
       // 绑定尺寸变化：把 DOM 的 rect 传给主进程作为 BrowserView bounds
@@ -558,6 +582,8 @@ export default {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  /* 供 .browser-create-error 绝对定位铺满 */
+  position: relative;
 }
 
 .browser-iframe {
@@ -577,6 +603,47 @@ export default {
 .browser-fallback {
   padding: 16px;
   color: #666666;
+}
+
+.browser-create-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: #f8fafc;
+  padding: 24px;
+  text-align: center;
+}
+
+.bce-text {
+  font-size: 14px;
+  color: #475569;
+}
+
+.bce-detail {
+  font-size: 12px;
+  color: #94a3b8;
+  word-break: break-all;
+  max-width: 420px;
+}
+
+.bce-retry {
+  margin-top: 4px;
+  padding: 7px 18px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1A5336;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.bce-retry:hover {
+  border-color: #1A5336;
+  background: #f0f7f3;
 }
 
 .btn-icon-svg {

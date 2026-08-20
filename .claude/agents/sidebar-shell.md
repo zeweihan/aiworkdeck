@@ -346,6 +346,7 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 - 全局覆盖：`frontend/src/App.vue`（:15-65 只覆盖 uni-modal/uni-toast）。
 - **awd-\* 类名约定**（King IDE 品牌清零后的通用弹窗/按钮样式，PR#171）：awd-dialog/-mask/-header/-title/-body/-footer、awd-btn/-primary/-secondary/-danger、awd-field/awd-input。**没有集中定义**——在 project-overview.vue（~:10180-10300）、ChatInterface.vue（~:2869 起）、FileTree.vue 各自 scoped 重复定义；改样式要多处同步。
 - 外壳布局类：.header-tools:6904、.rail-btn:7009、.sidebar-left:7403/7905、.workbench:7455、.bottom-panel:7283/7510、.compact-mode:7478、.is-resizing:7927。
+- **面板拖拽的跟手守卫是三件一套，删一件拖拽就会退化**（2026-08-20）：① `.is-resizing` 禁 transition；② `.is-resizing :deep(iframe)/:deep(webview)` 关 pointer-events——光标滑进嵌入文档父窗口就收不到 mousemove，拖拽会冻住；③ 桌面端浏览器 BrowserView 是原生层 CSS 管不到，靠 `desktopOverlayActive` 里那条 `resizing.active` 在拖拽期间隐藏。另外 `startResize/stopResize`（tabDragSplit.js）会锁/还原 body 的 cursor 与 user-select。编辑器窗格 `.editor-pane`/`.pane-content` 已拉平成方角（圆角卡片残留会在标签栏下沿与分栏缝露出底色弧口），别再给它们加 border-radius。
 - **编辑器标签（`.tab-item`）在 project-overview.scss 里只有一份定义了**。此前有两份：
   靠前那份是 VS Code 式贴合标签，被靠后那份整个覆盖成死代码，实际生效的是一排
   10px 全圆角 + 四面描边 + `min-width:100px` 的「筛选 chip」，与下方编辑器完全断开。

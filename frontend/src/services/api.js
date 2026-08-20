@@ -2005,7 +2005,7 @@ export function deleteFileVariable(id) {
 }
 
 // ===================== 用户活动日志 =====================
-export function logActivity(actionType, targetId, targetName, duration, metaInfo) {
+export function logActivity(actionType, targetId, targetName, duration, metaInfo, projectId) {
   return request({
     url: '/api/activity/log',
     method: 'POST',
@@ -2014,7 +2014,8 @@ export function logActivity(actionType, targetId, targetName, duration, metaInfo
       targetId,
       targetName,
       duration,
-      metaInfo
+      metaInfo,
+      projectId
     },
     header: { 'Content-Type': 'application/json' }
   })

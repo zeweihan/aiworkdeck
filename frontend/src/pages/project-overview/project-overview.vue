@@ -58,15 +58,6 @@
             <view class="project-status-badge">
               <text class="status-text">{{ $t('workbench.statusInProgress') }}</text>
             </view>
-            <!-- IDE 化：常驻工作状态点（版本记录开着且有未收尾工作/稿时可见，点击直达版本面板） -->
-            <view
-              v-if="versionWorkStatus.enabled && (versionWorkStatus.working || versionWorkStatus.onDraft)"
-              class="work-status-chip"
-              @tap.stop="goHandleAdoptConflict"
-            >
-              <view class="work-status-dot"></view>
-              <text class="work-status-text">{{ versionWorkStatusLabel }}</text>
-            </view>
             <!-- 协作状态 chip：只在这份案卷真的放进过团队案件库时才渲染。
                  没连案件库的律师（绝大多数）在界面上看不到任何协作元素——
                  「以自己工作为主」的产品定位要求协作 UI 零打扰。 -->
@@ -423,6 +414,7 @@
 
     <!-- Custom Recording Toast -->
     <view class="recording-toast" :class="{ visible: showRecordingToast }">
+      <view v-if="isRecording" class="recording-toast-dot"></view>
       <text>{{ recordingToastMessage }}</text>
     </view>
 
@@ -656,6 +648,7 @@
             @clear-file-filter="versionFileFilter = null"
             @reload-files="onVersionReloadFiles"
             @adopt-conflict="adoptConflictPending = $event"
+            @status-changed="checkAdoptConflict"
             @open-collab="openCollab"
           />
           <MarketSidebarPanel
@@ -881,6 +874,15 @@
                       :content="activeFileLeft.content"
                       :file="activeFileLeft"
                     />
+                    <!-- 纯文本（txt/md/markdown）：轻量文本编辑器，不进 LOWA
+                         （dev-board#37）。v-if 单实例，切标签销毁重建，无保活池。 -->
+                    <PlainTextEditor
+                      v-else-if="isPlainTextFile(activeFileLeft)"
+                      :key="'ptx-left-' + activeFileLeft.id"
+                      :ref="el => setPlainTextRef('left', el)"
+                      :file="activeFileLeft"
+                      :project-id="projectId"
+                    />
                     <DocDiffViewer
                       v-else-if="isDiffTab(activeFileLeft)"
                       :source-id="activeFileLeft.diffSource.id"
@@ -993,6 +995,14 @@
                       v-if="isMarkdownTab(activeFileRight)"
                       :content="activeFileRight.content"
                       :file="activeFileRight"
+                    />
+                    <!-- 纯文本轻量编辑器：见左窗格同名注释 -->
+                    <PlainTextEditor
+                      v-else-if="isPlainTextFile(activeFileRight)"
+                      :key="'ptx-right-' + activeFileRight.id"
+                      :ref="el => setPlainTextRef('right', el)"
+                      :file="activeFileRight"
+                      :project-id="projectId"
                     />
                     <DocDiffViewer
                       v-else-if="isDiffTab(activeFileRight)"
@@ -1404,30 +1414,32 @@
 
 
 
-      <!-- 文件关联选择弹窗：一个文本关联多个文件时，点击超链接弹出选择 -->
-      <view v-if="fileLinkPicker.visible" class="upload-mask" @tap="closeFileLinkPicker">
-        <view class="folder-modal" @tap.stop>
-          <view class="upload-header">
-            <text class="upload-title">{{ $t('workbench.chooseFileToOpen') }}</text>
+      <!-- 文件关联选择弹窗：一个文本关联多个文件时，点击超链接弹出选择。
+           独立一套 filelink-* 类，不复用下面导出/截图对话框共用的 upload-mask/
+           folder-modal（那组被三处对话框复用，风险面太大，见样式区注释）。 -->
+      <view v-if="fileLinkPicker.visible" class="filelink-mask" @tap="closeFileLinkPicker">
+        <view class="filelink-dialog" @tap.stop>
+          <view class="filelink-header">
+            <text class="filelink-title">{{ $t('workbench.chooseFileToOpen') }}</text>
           </view>
-          <view class="folder-body">
+          <view class="filelink-body">
             <view
               v-for="f in fileLinkPicker.files"
               :key="f.id"
-              class="folder-item"
+              class="filelink-item"
               @tap="openFileLinkTarget(f.id)"
             >
-              <svg class="folder-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <svg class="filelink-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path v-for="(d, gi) in (f.isFolder ? GLYPHS.folder : GLYPHS.doc)" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
-              <text class="folder-name">{{ f.name }}</text>
+              <text class="filelink-name">{{ f.name }}</text>
             </view>
-            <view v-if="!fileLinkPicker.files || fileLinkPicker.files.length === 0" class="empty-tip">
+            <view v-if="!fileLinkPicker.files || fileLinkPicker.files.length === 0" class="filelink-empty">
               <text>{{ $t('workbench.noLinkedFiles') }}</text>
             </view>
           </view>
-          <view class="upload-footer">
-            <view class="upload-btn upload-btn-secondary" @tap="closeFileLinkPicker">{{ $t('common.close') }}</view>
+          <view class="filelink-footer">
+            <view class="filelink-btn filelink-btn-secondary" @tap="closeFileLinkPicker">{{ $t('common.close') }}</view>
           </view>
         </view>
       </view>
@@ -1545,6 +1557,7 @@ import FileLinkDropZone from '@/components/FileLinkDropZone.vue'
 import FileStagingArea from '@/components/FileStagingArea.vue'
 import PluginPane from '@/components/PluginPane.vue' // Added
 import DrawioEditor from '@/components/DrawioEditor.vue'
+import PlainTextEditor from '@/components/PlainTextEditor.vue'
 // 插件广场 VS Code 形态：左栏列表面板 + 中栏详情 tab（整页 MarketPane 仅存于 admin 独立页）
 import MarketSidebarPanel from '@/components/MarketSidebarPanel.vue'
 import MarketDetailPane from '@/components/MarketDetailPane.vue'
@@ -1674,6 +1687,7 @@ export default {
     MarkdownPreview,
     PluginPane, // Added
     DrawioEditor,
+    PlainTextEditor,
     MarketSidebarPanel,
     MarketDetailPane,
     ProjectHomePane,
@@ -1875,7 +1889,7 @@ export default {
       projectSwitcherOpen: false, // IDE 化最近项目切换器
       switcherProjects: [],
       switcherLoadFailed: false, // 拉取最近项目失败：与"确实没有其他最近项目"的空态区分开，不能吞成同一句文案
-      versionWorkStatus: { enabled: false, working: false, changedCount: 0, onDraft: null }, // 顶栏工作状态点
+      versionWorkStatus: { enabled: false, working: false, changedCount: 0, onDraft: null }, // 底部状态栏工作状态点（顶栏胶囊已去掉）
       // 协作（团队案件库）状态：{linked, serverUrl, pendingUpload, remoteAhead, offline}
       collabCloud: null,
       collabDialogVisible: false,
@@ -2037,6 +2051,9 @@ export default {
         // 页面树之外的浮层（反馈浮窗）也要能压住 BrowserView：它自己不调
         // setViewsVisible，只置这个全局 ref，避免和下面这一处 watcher 互相打架
         globalOverlayActive.value ||
+        // 面板拖拽期间也要藏：BrowserView 是原生层，光标滑进去父窗口就收不到
+        // mousemove，拖拽会冻住（iframe/webview 由 is-resizing 的 CSS 放行）
+        (this.resizing && this.resizing.active) ||
         this.showOcrOverlay ||
         this.showScreenshotSaveDialog ||
         this.showExportDialog ||
@@ -2091,7 +2108,7 @@ export default {
       return FILE_BATCH_ACTIONS
     },
     // 是否为“仅尽调”视图（客户）
-    // IDE 化顶栏工作状态点文案
+    // 底部状态栏工作状态点文案（顶栏胶囊已去掉，见 .adopt-pending-bar 与 status-item 的用法）
     versionWorkStatusLabel() {
       const s = this.versionWorkStatus
       if (s.onDraft && s.onDraft.name) return this.$t('workbench.workingOnDraft', { name: s.onDraft.name })
@@ -3145,14 +3162,16 @@ export default {
     },
     // 进页面时问一次「有没有停在待裁决的采纳」：版本面板可能整个会话都没被打开过
     // （比如上次崩在裁决窗口里、这次进来直接停在资源管理器），那样就没有任何东西
-    // 会去拉 /status，律师看不到任何提示。面板打开后由它的 adopt-conflict 事件接管。
+    // 会去拉 /status，律师看不到任何提示。面板打开后由它的 adopt-conflict 事件接管；
+    // 面板内部的结束工作/丢弃/回主线/采纳/放弃等操作完成后也会经 status-changed
+    // 事件再调一次这里，否则底部状态栏会停在操作之前的样子（同步滞后 bug）。
     async checkAdoptConflict() {
       if (!this.projectId) return
       try {
         const res = await getVersionStatus(this.projectId)
         const d = (res && res.data) || {}
         this.adoptConflictPending = !!(d.adoptConflict || d.cloudConflict || d.sessionEndConflict)
-        // IDE 化顶栏工作状态点（同一次 /status，不多打接口）
+        // 底部状态栏工作状态点（同一次 /status，不多打接口）
         this.versionWorkStatus = {
           enabled: !!d.enabled,
           working: !!d.working,
@@ -3908,7 +3927,7 @@ export default {
       if (!this.isActiveBrowserTab(pane, tabId)) return
       // Track URL Session (flush previous, start new)
       const meta = this.project && this.project.name ? `Project: ${this.project.name}` : ''
-      activityTracker.trackActivePage('OPEN_URL', 0, url, meta)
+      activityTracker.trackActivePage('OPEN_URL', 0, url, this.project && this.project.id, meta)
     },
     onBrowserTitleChange(pane, tabId, title) {
       const active = this.findBrowserTab(pane, tabId)
@@ -3927,7 +3946,7 @@ export default {
       // 同 onBrowserUrlChange：后台标签换标题不算浏览行为
       if (url && this.isActiveBrowserTab(pane, tabId)) {
           // Restart session to capture title in the new segment
-          activityTracker.trackActivePage('OPEN_URL', 0, url, meta)
+          activityTracker.trackActivePage('OPEN_URL', 0, url, this.project && this.project.id, meta)
       }
 
       // 避免过长：保留前 18 字符
@@ -4014,9 +4033,9 @@ export default {
                      const url = file.url || ''
                      const title = file.name || ''
                      const fullMeta = meta + (title ? `. Title: ${title}` : '')
-                     activityTracker.trackActivePage('OPEN_URL', 0, url, fullMeta)
+                     activityTracker.trackActivePage('OPEN_URL', 0, url, this.project && this.project.id, fullMeta)
                  } else {
-                     activityTracker.trackActivePage('OPEN_FILE', file.id, file.name, meta)
+                     activityTracker.trackActivePage('OPEN_FILE', file.id, file.name, this.project && this.project.id, meta)
                  }
              }
         } else {
@@ -4551,6 +4570,12 @@ export default {
         candidate = this.activeFileLeft || this.activeFileRight || null
       }
       if (!candidate) return null
+      // 纯文本标签（PlainTextEditor）也是合法的 AI 目标：后端按 fileType 走
+      // text_* 工具口径（dev-board#37）。不放行的话，用户盯着一份 txt 问 AI，
+      // 上下文里却没有这份文件。
+      if (typeof this.isPlainTextFile === 'function' && this.isPlainTextFile(candidate)) {
+        return candidate
+      }
       if (typeof this.isEditorOpenableFile === 'function' && !this.isEditorOpenableFile(candidate)) {
         return null
       }
@@ -4647,7 +4672,20 @@ export default {
              }
         }
 
-        if (useEditor && this.libreOfficeActive && this.libreOfficeExecutor) {
+        // 纯文本标签：正文/选区直接从 CodeMirror 实例取（拿到的是含未保存输入的
+        // 活内容）。不能落进下面的 LOWA 分支——executor 指着的是别的文档，会把
+        // 那份 docx 的正文错标成这份 txt 的内容。
+        if (useEditor && this.isPlainTextFile(file)) {
+            for (const pane of ['left', 'right']) {
+                const inst = (this._plainTextRefs || {})[pane]
+                if (inst && inst.file && inst.file.id === (file.id || file.fileId)) {
+                    context.selectionText = this.normalizeContextText(inst.getSelectionText(), 1500)
+                    context.documentText = this.normalizeContextText(inst.getText(), 8000)
+                    break
+                }
+            }
+        }
+        else if (useEditor && this.useLibreEditor(file) && this.libreOfficeActive && this.libreOfficeExecutor) {
             try {
                  const sel = await this.libreOfficeExecutor.executeCommand('get_selection', {})
                  context.selectionText = this.normalizeContextText((sel && sel.text) || '', 1500)

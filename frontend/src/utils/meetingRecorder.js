@@ -64,11 +64,41 @@ export function isRecordingActive() {
 }
 
 /**
+ * 枚举可用的麦克风输入设备。
+ * 未授权过麦克风时浏览器把 label 恒置空（隐私考量）——面板据此判断要不要显示
+ * 「麦克风 N」占位名，并在 startRecording 拿到一次授权后重新调用本函数刷新真实 label。
+ */
+export async function listAudioInputDevices() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return []
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices()
+    return devices.filter((d) => d.kind === 'audioinput')
+  } catch (e) {
+    return []
+  }
+}
+
+// 拿指定设备的麦克风流；deviceId 不可用时（多半是设备被拔了）回退默认设备重试一次，
+// 不让用户因为选中的设备消失而彻底开不了录。
+async function acquireMicStream(deviceId) {
+  if (!deviceId) return navigator.mediaDevices.getUserMedia({ audio: true })
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId } } })
+  } catch (e) {
+    if (e && (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError')) throw e
+    recorderState.error = t('meeting.micDeviceFallback')
+    return navigator.mediaDevices.getUserMedia({ audio: true })
+  }
+}
+
+/**
  * 开始录音：建会议档 → 拿麦克风 → 开录。
  * 全局同一时刻只允许一场；重复调用直接抛。
+ * @param {string|number} projectId
+ * @param {string} [deviceId] 指定的麦克风 deviceId；不传则用浏览器默认设备
  * @returns {Promise<object>} 后端返回的 meeting
  */
-export async function startRecording(projectId) {
+export async function startRecording(projectId, deviceId) {
   if (isRecordingActive()) {
     throw new Error(t('meeting.alreadyRecording'))
   }
@@ -84,7 +114,7 @@ export async function startRecording(projectId) {
   recorderState.projectId = projectId
   try {
     // 先拿麦克风再建档：权限被拒时不留空会议记录
-    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    mediaStream = await acquireMicStream(deviceId)
     const res = await createMeetingRecording(projectId)
     const meeting = res.meeting || res
     recorderState.meetingId = meeting.id

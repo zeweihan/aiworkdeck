@@ -142,6 +142,19 @@ export default {
     installPackRetry: 'Install failed, retry',
     installPackFailed: 'Installation failed',
   },
+  // Lightweight plain-text editor (PlainTextEditor.vue, dev-board#37)
+  plainText: {
+    opening: 'Opening the text editor…',
+    loadFailed: 'Failed to read the file',
+    readFailed: 'Failed to read the file ({status})',
+    fileMissing: 'File not found',
+    emptyDownload: 'Downloaded content is empty; editing is disabled to protect the real file. Please retry.',
+    retry: 'Retry',
+    edit: 'Edit',
+    preview: 'Preview',
+    unsaved: 'Unsaved',
+    saveFailedRetry: 'Save failed - tap to retry',
+  },
   // Self-built toolbar (EditorToolbar.vue): tooltips, dropdowns and the find bar.
   toolbar: {
     undo: 'Undo (Cmd/Ctrl+Z)',

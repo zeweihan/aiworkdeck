@@ -64,18 +64,39 @@ export function serveExecutor({ executor, send, subscribe }) {
  *        it is booted and serving ({type:'ready'}). The host uses this to know
  *        when it may push commands that must not be dropped pre-boot (e.g. Track
  *        D's load_document — sent before this, serveExecutor isn't subscribed yet).
+ * @param {(action:string,result:any)=>void} [args.onLateResult] fired when a
+ *        'result' message arrives for a reqId that already timed out (see
+ *        below) — the caller decides whether the straggler is still relevant.
  * @returns {{executeCommand:(a:string,p?:object)=>Promise<any>, dispose:()=>void}}
  */
-export function createRelayExecutor({ send, subscribe, timeoutMs = 30000, onReady }) {
+export function createRelayExecutor({ send, subscribe, timeoutMs = 30000, onReady, onLateResult }) {
   let seq = 0
   let readyCb = onReady
   const pending = new Map() // reqId -> {resolve, timer}
+  // Timing out a command only stops US from waiting on it — the worker-side
+  // operation (e.g. loadComponentFromURL for load_document) is not abortable
+  // and often keeps running to completion after we've already resolved
+  // failure to the caller. Without this, that late 'result' message has
+  // nowhere to land (pending.get returns undefined) and used to be silently
+  // dropped — the exact bug this fixes: editor reports "load failed" while
+  // the document actually finishes loading a moment later.
+  // Bounded + self-pruning on match: a long-lived webview must not leak one
+  // entry per timeout forever.
+  const tombstones = new Map() // reqId -> action
+  const MAX_TOMBSTONES = 20
   const off = subscribe((msg) => {
     if (!msg || msg.__lo !== TAG) return
     if (msg.type === 'ready') { if (readyCb) { const cb = readyCb; readyCb = null; cb() } return }
     if (msg.type !== 'result') return
     const entry = pending.get(msg.reqId)
-    if (!entry) return
+    if (!entry) {
+      const lateAction = tombstones.get(msg.reqId)
+      if (lateAction) {
+        tombstones.delete(msg.reqId)
+        if (onLateResult) onLateResult(lateAction, msg.result)
+      }
+      return
+    }
     clearTimeout(entry.timer)
     pending.delete(msg.reqId)
     entry.resolve(msg.result)
@@ -93,6 +114,8 @@ export function createRelayExecutor({ send, subscribe, timeoutMs = 30000, onRead
       const timer = setTimeout(() => {
         if (pending.has(reqId)) {
           pending.delete(reqId)
+          tombstones.set(reqId, action)
+          if (tombstones.size > MAX_TOMBSTONES) tombstones.delete(tombstones.keys().next().value)
           resolve({ success: false, message: 'LibreOffice relay timeout: ' + action })
         }
       }, budget)

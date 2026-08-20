@@ -85,25 +85,6 @@ $danger-color: #E74C3C;
     margin-left: auto;
 }
 
-.btn-primary-small {
-    background: rgba(26, 83, 54, 0.08); /* Soft Green Background */
-    color: $brand-primary;
-    font-size: 13px;
-    font-weight: 500;
-    padding: 6px 12px;
-    border-radius: 6px;
-    border: 1px solid rgba(26, 83, 54, 0.1);
-    cursor: pointer;
-    line-height: 1.5;
-    transition: all 0.2s;
-
-    &:hover {
-        background: $brand-primary;
-        color: white;
-        border-color: $brand-primary;
-    }
-}
-
 .btn-secondary-small {
     background: #fff;
     color: $text-light;
@@ -178,34 +159,30 @@ $danger-color: #E74C3C;
   gap: 24px;
 }
 
-/* Card Base Style */
+/* Card Base Style：白底、干净描边、悬停轻抬 + 柔和阴影（不做顶部色条、不做深色底） */
 .project-item-card {
   background: $brand-white;
-  border-radius: 16px;
-  box-shadow: 0 4px 20px rgba(18, 52, 77, 0.04);
+  border-radius: 12px;
+  box-shadow: none;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transition: all 0.2s ease;
-  border: 1px solid rgba(0,0,0,0.02);
+  transition: all 0.15s ease;
+  border: 1px solid #E6E8EA;
   position: relative;
   min-height: 200px;
 
   &:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 12px 30px rgba(18, 52, 77, 0.1);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(18, 52, 77, 0.08);
+    border-color: #D8DBDE;
   }
 }
 
-/* Card Variants */
+/* Card Variants：差异只落在类型徽章的浅色 tint 上，不再用顶部色条区分 */
 .card-style-restructuring {
-  border-top: 4px solid $brand-dark;
-  
-  .card-deco-header {
-      background: linear-gradient(90deg, rgba($brand-dark, 0.05), transparent);
-  }
   .project-type-badge-new {
-      background: rgba($brand-dark, 0.1);
+      background: rgba($brand-dark, 0.08);
       color: $brand-dark;
   }
   .info-val-new.highlight {
@@ -215,8 +192,6 @@ $danger-color: #E74C3C;
 }
 
 .card-style-refinancing {
-  border-top: 4px solid #2ecc71; /* Green for growth/money */
-
   .project-type-badge-new {
       background: rgba(46, 204, 113, 0.1);
       color: #27ae60;
@@ -228,8 +203,6 @@ $danger-color: #E74C3C;
 }
 
 .card-style-blank {
-  border-top: 4px solid #e0e0e0;
-  
   .project-type-badge-new {
       background: #f5f5f5;
       color: #999;
@@ -245,14 +218,15 @@ $danger-color: #E74C3C;
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
-    padding: 16px 20px 0;
+    padding: 16px 16px 0;
 }
 
+/* 卡头小号浅色 tinted 徽章 */
 .project-type-badge-new {
-    padding: 4px 10px;
+    padding: 3px 8px;
     border-radius: 6px;
-    font-size: 12px;
-    font-weight: 500;
+    font-size: 11px;
+    font-weight: 600;
     display: inline-block;
 }
 
@@ -284,22 +258,22 @@ $danger-color: #E74C3C;
     }
 }
 
-/* Card Content */
+/* Card Content：间距体系 16/12/8 */
 .card-main-content {
-    padding: 16px 20px;
+    padding: 12px 16px 16px;
     flex: 1;
     display: flex;
     flex-direction: column;
 }
 
 .project-title-area {
-    margin-bottom: 16px;
-    min-height: 48px; /* Ensure alignment */
+    margin-bottom: 12px;
+    min-height: 44px; /* Ensure alignment */
 }
 
 .project-title-new {
-    font-size: 18px;
-    font-weight: 700;
+    font-size: 15px;
+    font-weight: 600;
     color: $text-main;
     line-height: 1.4;
     display: -webkit-box;
@@ -308,7 +282,7 @@ $danger-color: #E74C3C;
     line-clamp: 2;
     overflow: hidden;
     cursor: pointer;
-    
+
     &:hover {
         color: $brand-primary;
     }
@@ -317,7 +291,7 @@ $danger-color: #E74C3C;
 .company-info-area {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
 }
 
 .info-row-new {
@@ -327,27 +301,29 @@ $danger-color: #E74C3C;
 }
 
 .info-label-new {
-    color: $text-light;
-    width: 70px;
+    color: #8A9199;
+    font-size: 12px;
+    width: 68px;
     flex-shrink: 0;
 }
 
 .info-val-new {
-    color: $text-secondary;
+    color: #333333;
+    font-size: 13px;
     flex: 1;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
-/* Footer */
+/* Footer：细分隔线隔开正文与卡脚 */
 .card-footer-new {
-    padding: 12px 20px;
-    border-top: 1px solid #f5f5f5;
+    padding: 12px 16px;
+    border-top: 1px solid #F2F3F4;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    background: #fafbfc;
+    background: $brand-white;
 }
 
 .members-area-new {
@@ -501,33 +477,29 @@ $danger-color: #E74C3C;
     color: $text-secondary;
 }
 
-/* Project Role Badge */
+/* Project Role Badge：弱化成浅色小 chip，不再描边 */
 .project-role-badge {
     margin-left: 8px;
-    padding: 2px 8px;
+    padding: 1px 7px;
     border-radius: 4px;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 500;
 }
 .role-owner {
-    background: #e6f7ff;
+    background: #E9F4FE;
     color: #1890ff;
-    border: 1px solid #91d5ff;
 }
 .role-admin {
-    background: #f6ffed;
+    background: #EBF8E4;
     color: #52c41a;
-    border: 1px solid #b7eb8f;
 }
 .role-client {
-    background: #fff0f6;
+    background: #FDEEF5;
     color: #eb2f96;
-    border: 1px solid #ffadd2;
 }
 .role-member {
-    background: #f0f5ff;
+    background: #EBF0FE;
     color: #2f54eb;
-    border: 1px solid #adc6ff;
 }
 
 /* Manager Avatar */
@@ -680,91 +652,89 @@ $danger-color: #E74C3C;
   }
 }
 
-/* ================= 新建区（列表下方） =================
-   2026-08 从 pages/newproject/index.vue 搬来的两个入口。放在列表下方而不是页头，
-   是维护者定的形制：先看见自己有哪些案卷，再谈新建。
+/* ================= 新建区（页头下方紧凑操作行） =================
+   2026-08 从 pages/newproject/index.vue 搬来的两个入口，此前落在列表最下方、
+   还是两张大灰卡；现在紧跟页头，一条紧凑的水平按钮行——「已经有一堆案卷、想再开
+   一个」与「零项目新用户」共用同一个入口，不必先扫完整页才看得见。
    「单独打开一个文件」那条已去掉——它造出的是个没有归属的临时项目。 */
 
 .create-section {
-    margin-top: 32px;
-    padding-top: 24px;
-    border-top: 1px solid $border-color;
-}
-
-.create-section-title {
-    display: block;
-    margin-bottom: 12px;
-    font-size: 14px;
-    font-weight: 600;
-    color: $text-main;
+    margin-bottom: 20px;
 }
 
 .create-row {
     display: flex;
     flex-direction: row;
-    gap: 16px;
+    gap: 10px;
     flex-wrap: wrap;
 }
 
 .create-card {
-    flex: 1 1 260px;
-    min-width: 0;
     display: flex;
     flex-direction: row;
-    align-items: flex-start;
-    gap: 12px;
-    padding: 18px 20px;
-    background: $brand-white;
-    /* 实线绿描边 + 淡绿底：这两张卡是这一页除了「打开某个案卷」之外最重的动作，
-       原先与页面其它容器同灰度，扫过去根本不像可以点的东西 */
-    border: 1px solid rgba(26, 83, 54, 0.22);
-    background: linear-gradient(180deg, rgba(91, 209, 151, 0.05) 0%, $brand-white 60%);
-    border-radius: 10px;
+    align-items: center;
+    gap: 8px;
+    height: 44px;
+    padding: 0 16px;
+    border-radius: 9px;
+    font-size: 13px;
+    font-weight: 600;
     cursor: pointer;
-    transition: all 0.2s;
-
-    &:hover {
-        border-color: $brand-primary;
-        box-shadow: 0 6px 20px rgba(26, 83, 54, 0.12);
-        transform: translateY(-2px);
-    }
+    box-sizing: border-box;
+    transition: all 0.15s;
 
     &.is-busy {
         opacity: 0.55;
         cursor: default;
+        pointer-events: none;
+    }
+}
+
+/* 主操作：新建项目文件夹——实底强调，这是最常见的落点 */
+.create-card-primary {
+    background: $brand-primary;
+    color: $brand-white;
+    border: 1px solid $brand-primary;
+
+    .create-glyph { color: $brand-white; }
+
+    &:hover {
+        background: #14432b;
+        border-color: #14432b;
+        transform: translateY(-1px);
+    }
+}
+
+/* 次操作：打开已有文件夹——白底描边 */
+.create-card-secondary {
+    background: $brand-white;
+    color: $text-main;
+    border: 1px solid $border-color;
+
+    .create-glyph { color: $brand-primary; }
+
+    &:hover {
+        border-color: $brand-primary;
+        color: $brand-primary;
+        transform: translateY(-1px);
     }
 }
 
 .create-glyph {
-    width: 22px;
-    height: 22px;
+    width: 18px;
+    height: 18px;
     flex-shrink: 0;
-    margin-top: 2px;
-    color: $brand-primary;
-}
-
-.create-text {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    min-width: 0;
 }
 
 .create-title {
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
-    color: $text-main;
-}
-
-.create-desc {
-    font-size: 12px;
-    color: $text-secondary;
-    line-height: 1.5;
+    white-space: nowrap;
 }
 
 .create-busy-hint {
     display: block;
-    margin-top: 12px;
+    margin-top: 8px;
     font-size: 12px;
     color: $text-secondary;
 }
@@ -821,6 +791,48 @@ $danger-color: #E74C3C;
     gap: 10px;
 }
 
+/* awd-btn：与 CloudAcceptDialog 同一套视觉语言，本页按自己的 px 单位约定复制一份
+   （awd-* 全站没有集中定义，各组件各自 scoped 一份是既有约定）。 */
+.awd-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 7px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: all 0.15s;
+}
+
+.awd-btn-secondary {
+    background: $brand-white;
+    color: $text-main;
+    border-color: $border-color;
+
+    &:hover {
+        border-color: $brand-primary;
+        color: $brand-primary;
+    }
+}
+
+.awd-btn-primary {
+    background: $brand-primary;
+    color: $brand-white;
+    border-color: $brand-primary;
+
+    &:hover {
+        background: #14432b;
+        border-color: #14432b;
+    }
+
+    &[disabled] {
+        opacity: 0.5;
+        cursor: default;
+    }
+}
+
 /* ===================== 视图切换与列表视图（2026-08-18） =====================
  * 方块视图信息密度太低：一屏放不下几张卡，每张卡上真正有用的字段只有名字。
  * 加一个列表视图，两个视图承载同一批字段（名称/客户/创建/最近修改/成员），
@@ -861,41 +873,6 @@ $danger-color: #E74C3C;
     height: 16px;
 }
 
-/* 新建：唯一的实心主按钮。此前这一页最重的动作藏在列表底部两张同灰度的卡里，
-   页头只有两个同款次要按钮，「从哪儿开一个新案卷」得先找一遍。 */
-.btn-create-primary {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    gap: 6px;
-    background: $brand-primary;
-    color: $brand-white;
-    font-size: 13px;
-    font-weight: 600;
-    padding: 7px 16px;
-    border-radius: 6px;
-    border: 1px solid $brand-primary;
-    cursor: pointer;
-    line-height: 1.5;
-    transition: all 0.2s;
-
-    &:hover {
-        background: #14432b;
-        border-color: #14432b;
-    }
-
-    &[disabled] {
-        opacity: 0.6;
-        cursor: default;
-    }
-}
-
-.btn-create-plus {
-    font-size: 14px;
-    font-weight: 600;
-    line-height: 1;
-}
-
 /* 卡片顶行：BLANK 项目不再渲染类型标签，留一个占位把删除键顶到右边 */
 .card-top-spacer {
     flex: 1;
@@ -925,7 +902,7 @@ $danger-color: #E74C3C;
     border-bottom: 1px solid $border-color;
 }
 
-/* 边框与悬停已上提到 .ptable-item（主行 + 详情行要连成一体），这里只管高度 */
+/* 边框与悬停挂在外层 .ptable-item 上，这里只管高度 */
 .ptable-row {
     min-height: 56px;
     cursor: pointer;
@@ -1009,37 +986,7 @@ $danger-color: #E74C3C;
     color: $text-light;
 }
 
-/* ---- 「详情」：档案里其余四项 ---- */
-.detail-toggle {
-    display: flex;
-    align-items: center;
-    height: 30px;
-    padding: 0 12px;
-    border: 1px solid $border-color;
-    border-radius: 8px;
-    background: $brand-white;
-    cursor: pointer;
-    transition: all 0.15s;
-
-    &:hover { border-color: $brand-primary; }
-
-    &.active {
-        border-color: $brand-primary;
-        background: rgba(26, 83, 54, 0.06);
-    }
-}
-
-.detail-toggle-text {
-    font-size: 13px;
-    font-weight: 500;
-    color: $text-secondary;
-}
-
-.detail-toggle.active .detail-toggle-text {
-    color: $brand-primary;
-}
-
-/* 一行案卷 = 主行 + 可选详情行；边框与悬停挂在外层，两行才连成一体 */
+/* 一行案卷 = 主行；边框与悬停挂在外层 .ptable-item 上 */
 .ptable-item {
     border-bottom: 1px solid #F4F6F5;
     cursor: pointer;
@@ -1047,42 +994,4 @@ $danger-color: #E74C3C;
 
     &:last-child { border-bottom: none; }
     &:hover { background: rgba(26, 83, 54, 0.03); }
-}
-
-.ptable-detail {
-    display: flex;
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px 18px;
-    padding: 0 20px 12px;
-    /* 与主行的名称列左缘对齐：扫读时详情是「这一行的补充」，不是新的一列 */
-    margin-top: -4px;
-}
-
-.detail-chip {
-    display: flex;
-    flex-direction: row;
-    align-items: baseline;
-    gap: 6px;
-    min-width: 0;
-}
-
-.detail-chip-label {
-    flex-shrink: 0;
-    font-size: 11px;
-    color: $text-light;
-}
-
-.detail-chip-value {
-    font-size: 12px;
-    color: $text-secondary;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-/* 「下一步」常常是一整句话：让它吃掉整行剩余宽度，别把前面几项挤没 */
-.detail-chip:last-child .detail-chip-value {
-    max-width: 520px;
 }

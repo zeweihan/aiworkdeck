@@ -470,6 +470,7 @@ export default {
           send: transport.send,
           subscribe: transport.subscribe,
           onReady: () => this.onEndpointReady(),
+          onLateResult: (action, result) => this.onLateLoadResult(action, result),
         })
         // 命令繁忙跟踪：AI 命令与用户输入都走这同一个 executor。autoSave 据此
         // 避开活跃期（export_document 会冻结 office 线程上的 Qt 事件循环）。
@@ -497,6 +498,25 @@ export default {
       this._endpointUp = true
       await this.finishDocLoad()
     },
+    // 迟到结果：load_document 的 180s relay 超时只是「host 端不再等」，worker 里
+    // 的 loadComponentFromURL 打不断，常常在超时之后仍然真的装载成功。旧行为
+    // 是静默丢弃这条迟到的成功消息——用户看到「文档加载失败」的红胶囊，画布上
+    // 其实已经换成了真文档；更严重的是 docLoadFailed 同时是自动保存闸，误判
+    // 期间的编辑会静默不落盘。
+    // 只在「当前仍显示着这次失败」且「没有更晚的装载尝试发生过」（世代号相符）
+    // 时才撤回失败态——世代号不符说明文档已切换/已重试/组件已卸载后订阅已断开
+    // （dispose() 会取消订阅，届时这个回调根本不会再被触发），这些情形一律
+    // 按兵不动，不能让一个作废的迟到结果去污染当前状态。
+    onLateLoadResult(action, result) {
+      if (action !== 'load_document') return
+      if (!this.docLoadFailed) return
+      if (this._loadGen !== this._loadGenAtFailure) return
+      if (result && result.success) {
+        this.docLoadFailed = false
+        this.statusKey = 'ready'
+        this.appendLog('迟到的 load_document 结果实际成功，撤回失败态 / late load_document result arrived successful, reverting loadFailed')
+      }
+    },
     // 装载 + 发布就绪。两个入口：onEndpointReady（常规：mount 时就有 file，或
     // 备胎空白 boot 完成），以及 file watcher（备胎在引擎就绪后被过继）。
     async finishDocLoad() {
@@ -510,6 +530,10 @@ export default {
           // 空白画布上的任何编辑都不得回传覆盖后端真文件。
           this.docLoadFailed = true
           this.statusKey = 'loadFailed'
+          // 记下这次失败时的世代号——迟到的 load_document 结果（见
+          // onLateLoadResult）只在世代仍相符（没有更晚的装载尝试发生过）时
+          // 才允许撤回这个失败态，防止串到后来的重试/换文档头上。
+          this._loadGenAtFailure = this._loadGen
           this.appendLog('load_document failed: ' + (e && e.message ? e.message : e))
         }
       }
@@ -578,6 +602,10 @@ export default {
       const f = this.file
       const fileId = f.wpsFileId || f.id
       if (!fileId) throw new Error('file has no id/wpsFileId')
+      // 每次真正尝试装载都记一个新世代号——onLateLoadResult 靠它辨认一个迟到的
+      // load_document 结果是否还对着「当前显示着的那次失败」，而不是被后来的
+      // 重试/换文档盖过之后依然生效。
+      this._loadGen = (this._loadGen || 0) + 1
       const url = getFileDownloadUrl(fileId)
       let buf = this._bytesPromise ? await this._bytesPromise : null
       if (!buf) {
@@ -680,6 +708,7 @@ export default {
         // 会用旧内容覆盖后端刚改好的文件。
         this.docLoadFailed = true
         this.statusKey = 'reloadFailed'
+        this._loadGenAtFailure = this._loadGen
         this.appendLog('reload failed: ' + (e && e.message ? e.message : e))
         return false
       } finally {

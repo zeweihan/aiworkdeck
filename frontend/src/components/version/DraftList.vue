@@ -105,35 +105,43 @@ export default {
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 8rpx;
 }
-.draft-list-title { font-size: 24rpx; color: #666; font-weight: 600; }
-.draft-new-btn { flex-shrink: 0; padding: 8rpx 18rpx; font-size: 22rpx; }
+.draft-list-title { font-size: 12.5px; color: #64748b; font-weight: 600; }
 .draft-row {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 10rpx 0;
+  padding: 8px 0;
 }
-.draft-row-main { display: flex; flex-direction: column; gap: 4rpx; min-width: 0; }
-.draft-row-name { font-size: 26rpx; color: #222; }
-.draft-row-date { font-size: 22rpx; color: #999; }
-.draft-row-btn { flex-shrink: 0; padding: 8rpx 18rpx; font-size: 22rpx; }
+.draft-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.draft-row-name { font-size: 13.5px; color: #0f172a; }
+.draft-row-date { font-size: 12px; color: #94a3b8; }
 
-.awd-btn { padding: 10rpx 20rpx; border-radius: 6rpx; font-size: 24rpx; }
-.awd-btn-primary { background: #12344D; color: #fff; }
-.awd-btn-secondary { background: #f0f0f0; color: #333; }
+.awd-btn {
+  padding: 8px 18px; border-radius: 6px; font-size: 13.5px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.awd-btn-primary { background: #1A5336; color: #fff; }
+.awd-btn-primary:hover { background: #14422b; }
+.awd-btn-secondary { background: #fff; color: #475569; border: 1px solid #cbd5e1; }
+.awd-btn-secondary:hover { background: #f1f5f9; }
+/* 列表行内的按钮个头小一点，覆盖顺序放在 .awd-btn 之后才生效（同权重按源码序） */
+.draft-new-btn, .draft-row-btn { padding: 5px 12px; font-size: 12px; }
 
 .awd-mask {
   position: fixed; inset: 0; background: rgba(0,0,0,.4);
-  display: flex; align-items: center; justify-content: center; z-index: 999;
+  display: flex; align-items: center; justify-content: center; z-index: 9999;
 }
-.awd-dialog { width: 600rpx; background: #fff; border-radius: 12rpx; overflow: hidden; }
-.awd-header { padding: 24rpx; border-bottom: 1px solid #eee; }
-.awd-title { font-size: 30rpx; font-weight: 600; }
-.awd-body { padding: 24rpx; }
+.awd-dialog {
+  width: 380px; max-width: 90vw; background: #fff; border-radius: 12px; overflow: hidden;
+  box-shadow: 0 20px 25px -5px rgba(0,0,0,.1), 0 10px 10px -5px rgba(0,0,0,.04);
+}
+.awd-header { padding: 18px 24px; border-bottom: 1px solid #f1f5f9; }
+.awd-title { font-size: 16px; font-weight: 600; color: #0f172a; }
+.awd-body { padding: 20px 24px; }
 .awd-input {
-  width: 100%; padding: 16rpx; border: 1px solid #ddd;
-  border-radius: 8rpx; font-size: 26rpx;
+  width: 100%; height: 38px; padding: 0 12px; border: 1px solid #cbd5e1;
+  border-radius: 6px; font-size: 14px; color: #0f172a; box-sizing: border-box;
 }
 .awd-footer {
-  display: flex; justify-content: flex-end; gap: 16rpx;
-  padding: 20rpx 24rpx; border-top: 1px solid #eee;
+  display: flex; justify-content: flex-end; gap: 12px;
+  padding: 14px 24px; border-top: 1px solid #f1f5f9; background: #f8f9fa;
 }
 </style>
