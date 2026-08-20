@@ -202,7 +202,10 @@ try {
     else if (r.status() === 404 && !/favicon|hot-update/.test(r.url())) note('asset404', r.url().slice(0, 150))
   })
 
+  // 截图只是诊断产物，不是断言：Chrome 偶发 captureScreenshot 超时（2026-08-20
+  // 实跑撞过一次，裸 await 直接把整套旅程打死），这里必须吞掉并记 note。
   const shot = (n) => page.screenshot({ path: path.join(OUT, n + '.png') })
+    .catch((e) => note('shotFail', n + ': ' + String((e && e.message) || e).slice(0, 120)))
   const textOf = () => page.evaluate(() => document.body.innerText.replace(/\n{2,}/g, '\n'))
   const waitText = async (t, ms = 15000) => {
     await page.waitForFunction((x) => document.body.innerText.includes(x), { timeout: ms }, t)
