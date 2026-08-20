@@ -114,6 +114,8 @@ if (!args.skipMac) {
       .split('\n').find(l => l.includes('Developer ID Application')) || '').match(/"([^"]+)"/)?.[1] || ''
   } catch { /* 非 mac 或无 security，保持未签名 */ }
   if (identity) {
+    // sips/复制会给包内文件挂扩展属性，codesign 见 resource fork 直接拒签，先清干净
+    execFileSync('xattr', ['-cr', appDir], { stdio: 'inherit' })
     execFileSync('codesign', ['--force', '--deep', '--options', 'runtime', '--timestamp',
       '--sign', identity, appDir], { stdio: 'inherit' })
   } else {
