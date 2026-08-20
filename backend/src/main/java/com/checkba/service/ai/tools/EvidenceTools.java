@@ -58,12 +58,18 @@ public class EvidenceTools implements AgentToolComponent {
 
         StringBuilder sb = new StringBuilder();
         int total = 0;
+        // 失败的来源要单独记：把「检索没跑成」说成「查无此据」是本工具最不能犯的错，
+        // 见下方 total==0 分支
+        List<String> failedSources = new java.util.ArrayList<>();
+        int sourceCount = 0;
         for (EvidenceRetriever retriever : evidenceRetrieverRegistry.all()) {
+            sourceCount++;
             List<EvidenceItem> items;
             try {
                 items = retriever.retrieve(evidenceQuery);
             } catch (Exception e) {
                 log.warn("retrieve_evidence: 来源 {} 检索失败: {}", retriever.sourceId(), e.getMessage());
+                failedSources.add(retriever.sourceId());
                 continue;
             }
             for (EvidenceItem item : items) {
@@ -87,9 +93,25 @@ public class EvidenceTools implements AgentToolComponent {
         }
 
         if (total == 0) {
-            return "未检索到相关证据。注意：查无此据不等于结论矛盾——请如实向用户说明缺少依据，不要将缺失改写为反证。";
+            // 一条都没查到、而且所有来源都失败了：这**不是**「查无此据」，是「根本没查成」。
+            // 契约红线（docs/EVIDENCE_CONTRACT.md「缺证据≠矛盾」）针对的是真的没有证据；
+            // 把系统故障也说成查无此据，模型会据此在法律文书里断言「无相应依据」——
+            // 比拿不到证据严重得多。
+            if (!failedSources.isEmpty() && failedSources.size() == sourceCount) {
+                return "错误：证据检索未能完成——" + failedSources.size() + " 个来源全部失败（"
+                        + String.join(", ", failedSources) + "）。"
+                        + "**这不代表查无此据**，不要据此断言缺少依据；请如实告知用户检索暂不可用，或稍后重试。";
+            }
+            String partial = failedSources.isEmpty() ? ""
+                    : "（注意：" + failedSources.size() + " 个来源检索失败："
+                            + String.join(", ", failedSources) + "，结果可能不完整）";
+            return "未检索到相关证据。" + partial
+                    + "注意：查无此据不等于结论矛盾——请如实向用户说明缺少依据，不要将缺失改写为反证。";
         }
-        return "检索到 " + total + " 条证据（引用时请带证据ID）:\n\n" + sb;
+        String partialNote = failedSources.isEmpty() ? ""
+                : "（注意：" + failedSources.size() + " 个来源检索失败：" + String.join(", ", failedSources)
+                        + "，以下结果可能不完整）\n";
+        return "检索到 " + total + " 条证据（引用时请带证据ID）:\n\n" + partialNote + sb;
     }
 
     private static String shortHash(String hash) {

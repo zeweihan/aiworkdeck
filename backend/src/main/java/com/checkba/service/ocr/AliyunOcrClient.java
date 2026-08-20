@@ -46,8 +46,13 @@ public class AliyunOcrClient {
         runtime.setReadTimeout(30000);
         RecognizeAllTextResponse resp = client.recognizeAllTextWithOptions(req, runtime);
 
+        // 响应缺体/缺 data 是**调用失败**，不是「这张图没有文字」。返回空 OcrResult 会让
+        // 调用方（OcrService → 前端/AI 工具）把它当成识别成功但内容为空，用户于是认定
+        // 这份扫描件没有文字。上抛由 OcrService 统一包成「OCR 识别失败: …」。
         if (resp == null || resp.getBody() == null || resp.getBody().getData() == null) {
-            return new OcrResult("", "");
+            throw new IllegalStateException("阿里云 OCR 返回了空响应体（requestId="
+                    + (resp != null && resp.getBody() != null ? resp.getBody().getRequestId() : "-")
+                    + "），本次识别未完成");
         }
 
         // 提取全文本

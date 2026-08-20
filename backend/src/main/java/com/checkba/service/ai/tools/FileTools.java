@@ -116,6 +116,24 @@ public class FileTools implements AgentToolComponent {
                     }
                     return FileVisitResult.CONTINUE;
                 }
+
+                // 单个条目读不了就跳过，不许掀翻整次搜索。SimpleFileVisitor 的默认实现是
+                // **把异常重新抛出**，于是一个没权限的目录、一条断掉的符号链接、或者遍历途中
+                // 被删掉的文件，就能让整次搜索抛 IOException——已经找到的匹配全部丢弃，
+                // 模型只拿到一句 "Error searching files"，然后认定这些文件不存在。
+                @Override
+                public FileVisitResult visitFileFailed(Path file, IOException exc) {
+                    log.debug("search_project_files: 跳过读不了的条目 {}: {}", file, exc.toString());
+                    return FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public FileVisitResult postVisitDirectory(Path dir, IOException exc) {
+                    if (exc != null) {
+                        log.debug("search_project_files: 目录 {} 未能完整遍历: {}", dir, exc.toString());
+                    }
+                    return FileVisitResult.CONTINUE;
+                }
             });
             
             if (matches.isEmpty()) return "No files found matching '" + fileNamePattern + "' in " + (dirPath != null ? dirPath : "root");
