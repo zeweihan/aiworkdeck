@@ -362,7 +362,7 @@ import { getPlugins, setPluginEnabled, rescanPlugins, getSkills, setSkillActivat
 import { paidState, priceLabel, purchaseUrl } from '@/utils/marketPricing.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { ICONS } from '@/config/icons.js'
-import { isPanelSkill } from '@/config/leftSidebarPlugins.js'
+import { isPanelSkill, isVoiceGroupMember, buildVoiceGroupSkill } from '@/config/leftSidebarPlugins.js'
 import { t } from '@/i18n'
 import AwdSelect from '@/components/AwdSelect.vue'
 import AwdSwitch from '@/components/AwdSwitch.vue'
@@ -452,10 +452,26 @@ export default {
     ICONS() {
       return ICONS
     },
-    /** 面板型（长在左栏 rail 上）：广场里按插件呈现 */
+    /** 面板型（长在左栏 rail 上）：广场里按插件呈现。
+        「语音」的两个成员 skill 合成一张卡（左栏一个图标 = 一个插件，dev-board#66），
+        开关一次作用于全部成员（onPanelSkillToggle）。 */
     panelSkills() {
       // 插件携带的 skill 跟随插件启停，不在这里单列
-      return this.skills.filter((s) => isPanelSkill(s.id) && !s.sourcePluginId)
+      const rows = []
+      const voiceGroup = buildVoiceGroupSkill(this.skills)
+      let voiceEmitted = false
+      for (const s of this.skills) {
+        if (!isPanelSkill(s.id) || s.sourcePluginId) continue
+        if (voiceGroup && isVoiceGroupMember(s.id)) {
+          if (!voiceEmitted) {
+            voiceEmitted = true
+            rows.push(voiceGroup)
+          }
+          continue
+        }
+        rows.push(s)
+      }
+      return rows
     },
     /** 对话型：在对话里被触发词命中的那一类，才有「生效方式三档」 */
     conversationSkills() {
@@ -669,7 +685,21 @@ export default {
       const mode = enabled ? 'auto' : 'disabled'
       this.switching = true
       try {
-        await setSkillActivation(skill.id, mode)
+        // 「语音」合并插件：一次作用于全部成员 skill（启停一体，dev-board#66）
+        const ids = skill.groupMemberIds || [skill.id]
+        for (const id of ids) {
+          await setSkillActivation(id, mode)
+        }
+        if (skill.groupMemberIds) {
+          // 合并卡是 computed 里合成的非响应式对象，乐观更新要写回底层成员
+          // （this.skills 的元素）才会触发重算重渲染
+          for (const s of this.skills) {
+            if (ids.includes(s.id)) {
+              s.activationMode = mode
+              s.enabled = enabled
+            }
+          }
+        }
         skill.activationMode = mode
         skill.enabled = enabled
         uni.showToast({ title: enabled ? this.$t('market.enabledToast') : this.$t('market.disabledToggleToast'), icon: 'none' })

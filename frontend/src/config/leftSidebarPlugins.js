@@ -247,3 +247,51 @@ export function isPanelSkill(skillId) {
   return PANEL_SKILL_IDS.includes(skillId)
 }
 
+/**
+ * 「语音」合并插件（dev-board#66）：概念模型是**左栏一个图标 = 一个插件**，
+ * skill 只在 AI 对话里生效。语音合成与会议录音共占 rail 'voice' 一个位
+ * （面板内两个 tab），广场里就必须是**一个**插件条目，不能按背后的两个
+ * member skill 拆成两行。
+ *
+ * 成员 skill 的启停一体：广场开关一次作用于全部成员；后端启动时还会做一次
+ * 状态收敛（任一启用 → 全部启用，见 SkillRegistry），保证「tab 可见但
+ * kick-off 命不中 skill」的断裂态不存在。
+ */
+export const VOICE_PLUGIN_GROUP = {
+  id: 'voice',
+  memberSkillIds: ['text-to-speech', 'meeting-recorder'],
+}
+
+export function isVoiceGroupMember(skillId) {
+  return VOICE_PLUGIN_GROUP.memberSkillIds.includes(skillId)
+}
+
+/**
+ * 把 /api/skills/list 里的成员 skill 合成一个「语音」插件视图（广场三处共用：
+ * 左栏列表 / 整页已安装 tab / 详情页）。成员一个都没扫到时返回 null。
+ *
+ * 字段口径：名称用 rail 位同一份 label；描述是合并后的专门文案；版本/作者取
+ * 首个成员（两者都是随包内置的 AI Workdeck v1.0.0）；触发词/工具取并集
+ * （详情页「什么时候用」如实展示两块能力）；enabled = 任一成员启用。
+ */
+export function buildVoiceGroupSkill(skills) {
+  const members = VOICE_PLUGIN_GROUP.memberSkillIds
+    .map(id => (skills || []).find(s => s.id === id && !s.sourcePluginId))
+    .filter(Boolean)
+  if (!members.length) return null
+  const first = members[0]
+  return {
+    id: VOICE_PLUGIN_GROUP.id,
+    groupMemberIds: members.map(m => m.id),
+    name: t('config.sidebar.voice'),
+    description: t('market.voiceGroupDesc'),
+    version: first.version || '',
+    author: first.author || '',
+    license: first.license || '',
+    credits: members.flatMap(m => m.credits || []),
+    triggers: members.flatMap(m => m.triggers || []),
+    allowedTools: members.flatMap(m => m.allowedTools || []),
+    enabled: members.some(m => m.enabled),
+  }
+}
+

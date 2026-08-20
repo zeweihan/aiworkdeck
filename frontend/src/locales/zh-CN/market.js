@@ -16,6 +16,10 @@ export default {
   tabSkillMarket: 'Skill 广场',
   tabPluginMarket: '插件广场',
   tabInstalled: '已安装',
+  // 左栏面板的在线广场分组：Skill 与插件收进同一个「Marketplace」组，组内横向双标签
+  tabMarketplace: 'Marketplace',
+  // 「语音」合并插件（语音合成 + 会议录音，见 leftSidebarPlugins.js 的 VOICE_PLUGIN_GROUP）
+  voiceGroupDesc: '语音面板：文本转语音朗读文档（本机离线合成）；开会一键录音、自动转写并区分说话人，AI 生成结构化会议纪要。',
 
   // ---- 分类 ----
   catAll: '全部',
