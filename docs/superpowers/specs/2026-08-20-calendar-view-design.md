@@ -11,8 +11,9 @@
 - 概览页 A 期已预埋任务系统契约：`GET /api/projects/{projectId}/tasks` 恒空桩
   （ProjectOverviewController，注释约定 B 期只换实现、CRUD 另起 TaskController `/api/tasks`）；
   前端 `TaskSchedule.vue` 预设字段形状 `uid/status/dueDate`。本功能就是把 B 期建出来。
-- 组件选型：FullCalendar（核心 MIT + 官方 `@fullcalendar/vue3`；月/周/list/interaction 均免费，
-  不引入任何 premium 插件——resource 系列视图禁止使用，有许可证边界）。
+- 组件选型：FullCalendar **v6 线**（6.1.21；v7 刚做 headless 重构暂不跟）。核心 MIT +
+  官方 `@fullcalendar/vue3`；月/周/list/interaction 均免费，不引入任何 premium 插件——
+  resource 系列视图禁止使用，有许可证边界。
 - 节假日：组件不内置，用 `chinese-days`（MIT）叠背景标记。
 - 用户决策：全局页月历为主、列表为辅。
 
@@ -29,7 +30,7 @@
 | title | String(500), not null | 事项标题 |
 | dueDate | LocalDate, not null | 截止日 |
 | dueTime | LocalTime, nullable | 具体时刻（如开庭 09:30），null=全天 |
-| status | String(20) | `open` / `done` |
+| status | String(20) | `OPEN` / `DONE`（大写，对齐 TaskSchedule.vue 既有渲染约定） |
 | source | String(20) | `user` / `ai`（AI 建议的任务标 ai，界面可区分） |
 | userId | Long, not null | 创建者 |
 | createdAt / updatedAt | LocalDateTime | 惯例字段 |
