@@ -229,16 +229,29 @@ public class WebTools implements AgentToolComponent {
                 }
             });
 
+            // 导航失败与「等待加载状态超时」必须分开处理。旧代码把两者裹在同一个 catch 里
+            // 一律「continue, content might be partially loaded」，于是域名解析失败、连接被拒、
+            // 或被 SSRF 路由拦掉时，page.content() 拿到的是 about:blank 或 Chromium 自己的
+            // 错误页，照样拼成 "Page Title: …\n\nContent:…" 返回——模型以为自己读到了网页。
+            com.microsoft.playwright.Response navResponse;
             try {
-                page.navigate(url);
-                // Wait for network to be idle or dom content loaded. 'networkidle' is good for SPAs.
-                // Using a reasonable timeout
-                page.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE, new com.microsoft.playwright.Page.WaitForLoadStateOptions().setTimeout(20000));
+                navResponse = page.navigate(url);
             } catch (Exception e) {
-                log.warn("Playwright navigation/wait warning: {}", e.getMessage());
-                // Continue, as content might be partially loaded
-                // Fallback to DOMCONTENTLOADED if network idle times out
-                // page.waitForLoadState(com.microsoft.playwright.options.LoadState.DOMCONTENTLOADED);
+                log.warn("browse_url navigation failed for {}: {}", url, e.getMessage());
+                return "Error browsing URL: navigation failed (" + e.getMessage()
+                        + "). The page was NOT loaded — do not treat this as empty content.";
+            }
+            try {
+                // 网络空闲等待超时是可以容忍的：SPA 常年有长连接，此时页面正文其实已经在了
+                page.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE,
+                        new com.microsoft.playwright.Page.WaitForLoadStateOptions().setTimeout(20000));
+            } catch (Exception e) {
+                log.warn("Playwright wait-for-networkidle timed out for {} (continuing with loaded content): {}",
+                        url, e.getMessage());
+            }
+            if (navResponse != null && navResponse.status() >= 400) {
+                return "Error browsing URL: the site returned HTTP " + navResponse.status()
+                        + ". The page was NOT loaded — do not treat this as empty content.";
             }
 
             // Get standard HTML
@@ -251,9 +264,9 @@ public class WebTools implements AgentToolComponent {
             // Basic extraction: remove script, style, nav, footer
             doc.select("script, style, nav, footer, header, aside, .ads, .advertisement, noscript, iframe").remove();
 
-            String bodyText = doc.body().text();
+            String bodyText = doc.body() == null ? "" : doc.body().text();
 
-            return "Page Title: " + title + "\n\nContent:\n" + bodyText;
+            return renderBrowseResult(url, title, bodyText);
 
         } catch (Exception e) {
              log.error("Failed to browse url {} with Playwright", url, e);
@@ -279,5 +292,28 @@ public class WebTools implements AgentToolComponent {
                 log.error("WebTools initialization warning: Failed to pre-warm Playwright. It will try again on first request.", e);
             }
         }).start();
+    }
+
+    /**
+     * 把抓到的标题/正文拼成给模型的结果；**抓不到正文时绝不伪装成成功**。
+     *
+     * <p>抽成静态纯函数是为了能单测：browse_url 本身要拉起 Playwright + Chromium，
+     * 单元测试里跑不动，而这里正是判「有没有真读到东西」的地方。
+     *
+     * <p>为什么空正文必须报错：旧实现无论如何都返回 "Page Title: …\n\nContent:\n…"，
+     * 即使正文是空的。这个串**非空**，所以既不会被编排器的空输出归一拦住，
+     * 也不会被 ToolResult.success() 判成失败——模型收到一个「成功但什么都没有」的结果，
+     * 转头就当这个网页确实没内容。
+     */
+    static String renderBrowseResult(String url, String title, String bodyText) {
+        String body = bodyText == null ? "" : bodyText.trim();
+        if (body.isEmpty()) {
+            String t = title == null ? "" : title.trim();
+            return "Error browsing URL: loaded " + url + " but extracted no readable text"
+                    + (t.isEmpty() ? "" : " (page title: " + t + ")")
+                    + ". The page may be JS-gated, login-walled, or a PDF/binary — "
+                    + "do not treat this as 'the page is empty'.";
+        }
+        return "Page Title: " + (title == null ? "" : title) + "\n\nContent:\n" + body;
     }
 }
