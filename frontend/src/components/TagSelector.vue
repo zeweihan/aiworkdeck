@@ -22,6 +22,17 @@
           <text class="picker-title">{{ $t('files.createNewTag', { name: pendingTagName }) }}</text>
         </view>
 
+        <text class="picker-subtitle">{{ $t('files.tagTypeLabel') }}</text>
+        <view class="type-segment">
+          <view
+            v-for="opt in typeOptions"
+            :key="opt.type"
+            class="type-segment-option"
+            :class="{ selected: selectedType === opt.type }"
+            @click="selectType(opt.type)"
+          >{{ $t(opt.labelKey) }}</view>
+        </view>
+
         <text class="picker-subtitle">{{ $t('files.pickColor') }}</text>
         <scroll-view scroll-x class="color-scroll" :show-scrollbar="false">
             <view class="color-row">
@@ -51,15 +62,18 @@
       <!-- Normal Search/Select Mode -->
       <template v-else>
         <view v-if="filteredTags.length > 0" class="tag-list">
-          <view 
-            v-for="tag in filteredTags" 
-            :key="tag.id" 
-            class="tag-option"
-            @click="selectTag(tag)"
-          >
-            <view :style="{backgroundColor: tag.color}" class="color-dot"></view>
-            <text>{{ tag.name }}</text>
-          </view>
+          <template v-for="group in tagGroups" :key="group.type">
+            <text v-if="group.tags.length > 0" class="tag-group-head">{{ $t(group.labelKey) }}</text>
+            <view
+              v-for="tag in group.tags"
+              :key="tag.id"
+              class="tag-option"
+              @click="selectTag(tag)"
+            >
+              <view :style="{backgroundColor: tag.color}" class="color-dot"></view>
+              <text>{{ tag.name }}</text>
+            </view>
+          </template>
         </view>
         <view v-else-if="searchText" class="no-tags">
           <text>{{ $t('files.noTagsFound') }}</text>
@@ -86,6 +100,14 @@
 </template>
 
 <script>
+import {
+  TAG_TYPE_NORMAL,
+  TAG_TYPE_PARTY,
+  TAG_TYPE_ISSUE,
+  TAG_TYPE_DEFAULT_COLORS,
+  groupTagsByType
+} from '@/utils/tagTypes.js'
+
 export default {
   props: {
     availableTags: {
@@ -107,22 +129,39 @@ export default {
       showDropdown: false,
       isCreatingTag: false,
       pendingTagName: '',
-      selectedColor: '#5BD197', // Default to Mint Green
+      selectedType: TAG_TYPE_NORMAL,
+      selectedColor: TAG_TYPE_DEFAULT_COLORS[TAG_TYPE_NORMAL],
       presetColors: [
-        '#EF4444', '#F97316', '#F59E0B', '#84CC16', '#10B981', 
+        '#EF4444', '#F97316', '#F59E0B', '#84CC16', '#10B981',
         '#5BD197', '#14B8A6', '#06B6D4', '#3B82F6', '#6366F1',
-        '#8B5CF6', '#A855F7', '#EC4899', '#F43F5E', '#6B7280'
+        '#8B5CF6', '#A855F7', '#EC4899', '#F43F5E', '#6B7280',
+        '#B45309', '#9B1C31'
+      ],
+      // 新建标签弹层里的类型三段控件，顺序与分组顺序一致
+      typeOptions: [
+        { type: TAG_TYPE_NORMAL, labelKey: 'files.tagTypeNormal' },
+        { type: TAG_TYPE_PARTY, labelKey: 'files.tagTypeParty' },
+        { type: TAG_TYPE_ISSUE, labelKey: 'files.tagTypeIssue' }
       ]
     }
   },
   computed: {
     filteredTags() {
       const unassignedTags = this.availableTags.filter(t => !this.existingTagIds.includes(t.id));
-      
+
       if (!this.searchText) return unassignedTags;
-      
+
       const lower = this.searchText.toLowerCase();
       return unassignedTags.filter(t => t.name.toLowerCase().includes(lower));
+    },
+    // 可选标签按「当事人 / 争议焦点 / 标签」三组展示，空组不渲染组头（模板里判空）
+    tagGroups() {
+      const grouped = groupTagsByType(this.filteredTags);
+      return [
+        { type: TAG_TYPE_PARTY, labelKey: 'files.tagGroupParty', tags: grouped[TAG_TYPE_PARTY] },
+        { type: TAG_TYPE_ISSUE, labelKey: 'files.tagGroupIssue', tags: grouped[TAG_TYPE_ISSUE] },
+        { type: TAG_TYPE_NORMAL, labelKey: 'files.tagGroupNormal', tags: grouped[TAG_TYPE_NORMAL] }
+      ];
     }
   },
   methods: {
@@ -138,18 +177,25 @@ export default {
     selectColor(color) {
       this.selectedColor = color;
     },
+    selectType(type) {
+      this.selectedType = type;
+      // 换型时把颜色带到该型的默认色，选完仍可在下面色板里手动改
+      this.selectedColor = TAG_TYPE_DEFAULT_COLORS[type];
+    },
     cancelCreate() {
       this.isCreatingTag = false;
       this.pendingTagName = '';
-      this.selectedColor = '#5BD197';
+      this.selectedType = TAG_TYPE_NORMAL;
+      this.selectedColor = TAG_TYPE_DEFAULT_COLORS[TAG_TYPE_NORMAL];
     },
     confirmCreate() {
-      this.$emit('create', { name: this.pendingTagName, color: this.selectedColor });
+      this.$emit('create', { name: this.pendingTagName, color: this.selectedColor, type: this.selectedType });
       this.searchText = '';
       this.showDropdown = false;
       this.isCreatingTag = false;
       this.pendingTagName = '';
-      this.selectedColor = '#5BD197';
+      this.selectedType = TAG_TYPE_NORMAL;
+      this.selectedColor = TAG_TYPE_DEFAULT_COLORS[TAG_TYPE_NORMAL];
     },
     openManager() {
       this.$emit('manage');
@@ -231,7 +277,16 @@ export default {
   overflow-y: auto;
   flex: 1;
   /* Enforce max height for the scrolling part to keep footer visible */
-  max-height: 180px; 
+  max-height: 180px;
+}
+
+.tag-group-head {
+  display: block;
+  padding: 6px 12px 2px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #9ca3af;
 }
 /* Custom Scrollbar */
 .tag-list::-webkit-scrollbar {
@@ -328,6 +383,33 @@ export default {
     color: #666;
     margin-bottom: 6px;
     display: block;
+}
+
+.type-segment {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.type-segment-option {
+    flex: 1;
+    text-align: center;
+    padding: 5px 0;
+    font-size: 12px;
+    color: #666;
+    background: #f3f4f6;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.type-segment-option:hover {
+    background: #e5e7eb;
+}
+
+.type-segment-option.selected {
+    background: #1A5336;
+    color: #fff;
 }
 
 .color-scroll {

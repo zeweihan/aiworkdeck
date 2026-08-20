@@ -53,7 +53,13 @@ public class Tag {
      */
     @Column(nullable = false, columnDefinition = "boolean default false")
     private Boolean isSystem = false;
-    
+
+    /**
+     * 标签类型：NORMAL 普通 / PARTY 当事人 / ISSUE 争议焦点；null 视同 NORMAL（存量行零迁移）。
+     */
+    @Column(length = 16)
+    private String type;
+
     /**
      * 描述
      */

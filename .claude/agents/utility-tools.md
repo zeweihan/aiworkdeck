@@ -110,6 +110,20 @@ PDFParser 调 PDFBox2 已删除的 `PDDocument.load` 会抛 `NoSuchMethodError`�
 超过 24 个截断给「显示全部 N 个」，超过 12 个再加一个过滤框；**折叠态仍常驻显示已选标签**——
 否则「搜不到东西」的原因被藏起来了。根因不在这个面板，见下面的自动打标签条目。
 
+**标签类型维度（2026-08-20，dev-board#63）**：`Tag.type` = `NORMAL`/`PARTY`（当事人）/
+`ISSUE`（争议焦点），**可空且 null 视同 NORMAL**（存量行零迁移）——前端判断一律走
+`utils/tagTypes.js` 的 `normalizeTagType()`，别手写 `tag.type === 'PARTY'`；后端白名单校验在
+`TagService.validateType`，`updateTag` 收到 null type 是「不改型」不是清空（前端改型总是显式传值，
+含改回 NORMAL）。同名唯一约束不分型：`TagService.getOrCreateTag` 撞同名不同型时**复用不改型**
+（改型是用户在标签管理里的决定）。新建默认色按类型（PARTY `#B45309` / ISSUE `#9B1C31` /
+NORMAL `#3B82F6`，`tagTypes.js` 与 TagService 两处同值）。分组展示在 TagSelector（可选列表三组）
+与 SearchPanel（展开态三个 `.tag-subsec-head` 分组头，**只是 shownTags 的按型切片渲染**，
+过滤/截断/排序仍是那一份全局逻辑，别按组各写一套）。AI 工具 `service/ai/tools/TagTools.java`
+三件：`tag_list`（描述里强制先查再打、防同义词膨胀）/ `tag_file`（`ToolFileGuard` 校验归属，
+幂等）/ `tag_remove_from_file`（只解关联）；接线同步 `RealToolBeans` 与前端 `toolDisplayNames.js`。
+`AutoTaggingService` 刻意不产类型标签（当事人/争点判定不适合挂在每次自动保存的便宜档链路上）。
+测试：`TagServiceTest` / `TagToolsTest`。
+
 **下载**：`DownloadList.vue` 是**孤儿组件**（全仓库无引用、未挂载）；文件下载实际走 FileController `GET /api/files/{fileId}/download`。
 
 **语音 TTS**：`EasyVoicePane.vue`（api：getTtsVoices/generateTtsAudio）；desktop 本地 Kokoro 由 `desktop/main/services/kokoro-service.js` 管理；后端 `controller/TtsController.java`（/api/tts/voices、/generate）+ `service/TtsService.java`。**只有本机一档**：桌面捆绑 Kokoro，OpenAI 兼容 /v1，地址 `external.tts.local-base-url`（打包态由 Electron 注入动态端口），地址为空即「组件未就绪」。云端 ElevenLabs 那一档与 `external.tts.provider` 开关已整体移除。easyvoice Docker 段已停用。

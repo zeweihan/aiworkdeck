@@ -108,6 +108,15 @@ export default {
   deleteTagTitle: '删除标签',
   deleteTagConfirm: '确定要删除标签 "{name}" 吗？',
   deleteFailed: '删除失败',
+  // 标签类型维度（dev-board#63）：TagSelector/TagManager/SearchPanel 共用
+  tagTypeNormal: '普通',
+  tagTypeParty: '当事人',
+  tagTypeIssue: '争议焦点',
+  tagTypeLabel: '类型',
+  tagGroupParty: '当事人',
+  tagGroupIssue: '争议焦点',
+  tagGroupNormal: '标签',
+  tagGroupOther: '其他标签',
   // MarkdownPreview.vue
   loadingDots: '正在加载...',
   loadFailedWithReason: '加载失败: {reason}',
