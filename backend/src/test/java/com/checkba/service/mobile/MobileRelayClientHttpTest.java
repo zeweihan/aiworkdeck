@@ -81,6 +81,7 @@ class MobileRelayClientHttpTest {
         server.createContext("/api/mobile/inbox", ex -> {
             String path = ex.getRequestURI().getPath();
             if (path.endsWith("/content")) {
+                ex.getResponseHeaders().add("Content-Type", "application/octet-stream");
                 respond(ex, 200, "JPEG-BYTES");
             } else if (path.endsWith("/ack")) {
                 acked.add(path);
@@ -234,6 +235,67 @@ class MobileRelayClientHttpTest {
         service().pollInbox();
         assertTrue(acked.isEmpty());
         assertTrue(savedBytes.isEmpty());
+    }
+
+    @Test
+    @DisplayName("令牌失效（HTTP 200 + code 4010 信封）：作废重桥接并重试，不把拒绝当成功")
+    void staleTokenEnvelopeTriggersRebridge() throws Exception {
+        // 预置一个「旧令牌」state：桥接过、指纹一致，authed 会直接带它出站
+        java.nio.file.Files.writeString(stateDir.resolve("mobile-relay.json"),
+                "{\"deviceId\":\"dev-persisted\",\"token\":\"awdt_stale\",\"accountFingerprint\":\"fp-1234\"}");
+
+        // 目录端点：旧令牌回 4010 信封（HTTP 200），新令牌才收下
+        server.removeContext("/api/mobile/projects");
+        server.createContext("/api/mobile/projects", ex -> {
+            String sid = ex.getRequestHeaders().getFirst("X-Session-Id");
+            dirBodies.add(readBody(ex.getRequestBody()));
+            if ("awdt_stale".equals(sid)) {
+                respond(ex, 200, "{\"code\":4010,\"message\":\"请先登录\"}");
+            } else {
+                respond(ex, 200, "{\"code\":0}");
+            }
+        });
+
+        MobileRelayClientService svc = service();
+        svc.pushDirectory();
+
+        assertEquals(1, bridgeBodies.size(), "4010 信封必须触发重桥接");
+        assertEquals(2, dirBodies.size(), "重桥接后应重试一次");
+
+        // 重试也被拒的话绝不能记成「已推送」：下一轮必须再出站
+        server.removeContext("/api/mobile/projects");
+        server.createContext("/api/mobile/projects", ex -> {
+            dirBodies.add(readBody(ex.getRequestBody()));
+            respond(ex, 200, "{\"code\":4010,\"message\":\"请先登录\"}");
+        });
+        MobileRelayClientService svc2 = service();
+        svc2.pushDirectory();
+        int after = dirBodies.size();
+        svc2.pushDirectory();
+        assertTrue(dirBodies.size() > after, "被拒的推送不得被哈希去重当成功吞掉");
+    }
+
+    @Test
+    @DisplayName("内容下载拿到 JSON 信封（非 octet-stream）：不落盘不 ACK")
+    void contentEnvelopeIsNotWrittenAsMedia() {
+        server.removeContext("/api/mobile/inbox");
+        server.createContext("/api/mobile/inbox", ex -> {
+            String path = ex.getRequestURI().getPath();
+            if (path.endsWith("/content")) {
+                ex.getResponseHeaders().add("Content-Type", "application/json");
+                respond(ex, 200, "{\"code\":4010,\"message\":\"请先登录\"}");
+            } else if (path.endsWith("/ack")) {
+                acked.add(path);
+                respond(ex, 200, "{\"code\":0}");
+            } else {
+                respond(ex, 200, inboxJson);
+            }
+        });
+        inboxJson = "[{\"id\":9,\"projectKey\":\"42\",\"clientMediaId\":\"" + MEDIA_ID + "\","
+                + "\"fileName\":\"IMG_0001.jpg\",\"mediaType\":\"image\",\"fileSize\":10}]";
+        service().pollInbox();
+        assertTrue(savedBytes.isEmpty(), "JSON 信封绝不能被当成照片字节落盘");
+        assertTrue(acked.isEmpty(), "没落盘就不许 ACK");
     }
 
     @Test
