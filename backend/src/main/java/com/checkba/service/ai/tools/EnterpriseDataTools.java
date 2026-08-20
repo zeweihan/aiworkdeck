@@ -6,9 +6,13 @@ import com.checkba.service.platform.GatewayException;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -43,12 +47,21 @@ public class EnterpriseDataTools implements AgentToolComponent {
     private final QichachaService qichachaService;
     private final TushareService tushareService;
 
+    /** 发布视频演示桩目录，见 ai.tools.enterprise-demo-fixtures。留空 = 关闭，走原逻辑。 */
+    @Value("${ai.tools.enterprise-demo-fixtures:}")
+    private String enterpriseDemoFixturesDir;
+
     @ToolMeta(displayName = "查询企业工商信息", category = "data")
     @Tool("Look up a Chinese company's business registration record (legal name, registered capital, address, shareholders, executives) by company name or unified social credit code. Returns the raw record as JSON.")
     public String qichacha_query(String companyName) {
         log.info("Tool: qichacha_query called for '{}'", companyName);
         if (!StringUtils.hasText(companyName)) {
             return "Error: companyName is required.";
+        }
+        String demoFixture = readEnterpriseDemoFixture(companyName);
+        if (demoFixture != null) {
+            log.info("Tool: qichacha_query 命中演示 fixture '{}'", companyName);
+            return demoFixture;
         }
         try {
             return qichachaService.queryEciInfoJson(companyName);
@@ -89,6 +102,26 @@ public class EnterpriseDataTools implements AgentToolComponent {
             log.warn("金融数据查询失败: {}", e.toString());
             return "金融数据查询失败：" + e.getMessage()
                     + " 本次已跳过该查询，请基于已有信息继续完成任务。";
+        }
+    }
+
+    /**
+     * 发布视频演示桩：目录未配置时永远返回 null（不影响任何现有行为）；
+     * 配置了但命中不了这个公司名时也返回 null，交回原逻辑走真实网关。
+     */
+    private String readEnterpriseDemoFixture(String companyName) {
+        if (!StringUtils.hasText(enterpriseDemoFixturesDir)) {
+            return null;
+        }
+        File file = new File(enterpriseDemoFixturesDir, companyName.trim() + ".json");
+        if (!file.isFile()) {
+            return null;
+        }
+        try {
+            return Files.readString(file.toPath());
+        } catch (IOException e) {
+            log.warn("演示 fixture 读取失败，回落真实查询: {}", e.toString());
+            return null;
         }
     }
 
