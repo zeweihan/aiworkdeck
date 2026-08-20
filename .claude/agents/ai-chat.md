@@ -212,6 +212,12 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
   （回归用例 `ToolFailureClassificationTest` 把这条也钉住了）。
   **`GatewayException` 的 `unavailable()` 文案刻意没加标记**：`Kind.BUDGET_EXCEEDED`
   按设计「是可恢复的确认，不是失败」，一并标成失败会误伤它——要动先想清楚这一档。
+- **聊天输入框的 Enter 必须先判输入法组合**：中文/日文/韩文输入时，按 Enter「上屏候选词」
+  同样会派发 keydown（`isComposing=true`，部分浏览器只给 `keyCode=229`）。
+  `ChatInterface.handleEnterKey` 不挡住的话，这一下会把**还没上屏的拼音**直接当消息发出去。
+  编辑器侧（`zetaOfficeImeOverlay` / `zetaoffice/editor-main.js`）早就为同一类问题做了
+  composing 闩，聊天输入框一直漏着。守卫必须排在 `handleSubmit` 之前。
+  回归用例 `frontend/tests/project-home/frontend-audit-batch.test.mjs`。
 - **埋点体系**（`com.checkba.service.telemetry`，设计 docs/ANALYTICS_TELEMETRY_DESIGN.md）：
   唯一采集入口 TelemetryService.record/recordConv，字段过 TelemetryAttrWhitelist 白名单
   （新事件/字段要同步白名单 + TelemetryServiceTest + 官网仓 lib/telemetry-store.ts 的 EVENT_WHITELIST）。

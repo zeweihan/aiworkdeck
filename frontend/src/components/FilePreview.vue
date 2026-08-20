@@ -542,6 +542,15 @@ export default {
           method: 'GET',
           header: getAuthHeaders()
         })
+        // uni.request 对 4xx/5xx 不会 reject，走的是 success 回调。不看 statusCode
+        // 就把 response.data 当正文，用户会在「文本预览」里读到后端的错误信封
+        // （{"code":4010,...} 之类），还以为那就是文件内容。
+        const status = Number(response.statusCode || 0)
+        if (status && (status < 200 || status >= 300)) {
+          console.warn('[FilePreview] 文本预览请求失败 status=', status)
+          this.textContent = this.$t('files.loadFailed')
+          return
+        }
         this.textContent = response.data || ''
       } catch (error) {
         console.error('加载文本内容失败:', error)
