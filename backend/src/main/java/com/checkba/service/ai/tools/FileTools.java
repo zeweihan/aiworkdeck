@@ -312,14 +312,19 @@ public class FileTools implements AgentToolComponent {
         return sb.toString();
     }
 
-    @ToolMeta(displayName = "写入文件", category = "file", fileEffect = "ADDED", fileArg = "fileName")
-    @Tool("Write content to a text file. Registers the file in the project database for editor access.")
+    @ToolMeta(displayName = "写入文件", category = "file", fileEffect = "ADDED", fileArg = "fileName", refreshFiles = true)
+    @Tool("Write content to a text file at the project root and register it in the project database so it "
+            + "appears in the file tree and can be opened in the editor. Returns the db_id. "
+            + "For a file inside a subfolder, write it and then call scan_files to register it.")
     public String write_file(
-            @P("Target filename (e.g. 'notes.txt')") String fileName, 
+            @P("Target filename at the project root (e.g. 'notes.txt')") String fileName, 
             @P("File content") String content,
             @P("Project ID (Required for DB registration)") Long projectId
     ) {
         log.info("Tool: write_file called for {}", fileName);
+        if (fileName == null || fileName.isBlank()) {
+            return "Error: fileName is required.";
+        }
         try {
              Path path = resolvePath(fileName);
              if (!Files.exists(path.getParent())) {
@@ -327,11 +332,39 @@ public class FileTools implements AgentToolComponent {
              }
              
              Files.writeString(path, content, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-             
-             // Register in DB so Agent "owns" it. 
-             // Note: We attempt to register. If it fails (e.g. file exists in DB owned by User), we continue 
-             // but Agent won't be able to delete it if it didn't create it.
-             return "Successfully wrote to " + path.toAbsolutePath();
+
+             // 落库。此前这里只有一段「Register in DB so Agent "owns" it」的注释，
+             // 底下一行代码都没有——而工具描述与参数说明都白纸黑字写着会注册。
+             // 后果：文件躺在项目目录里但没有 project_file 行，文件树看不见、编辑器打不开、
+             // 后续工具也拿不到 fileId，模型却已经向用户报告「文件已创建」。
+             // 注册方式与 write_docx 完全一致（createOrUpdateFile 幂等：同名已存在就更新）。
+             if (projectId == null) {
+                 return "File written to " + path.toAbsolutePath()
+                         + " but NOT registered in the project (no projectId): it will not appear in the file "
+                         + "tree. Call scan_files to register it.";
+             }
+             // 带子目录的名字不在这里登记：parentId 只能填 null，会让文件树把它显示在根目录，
+             // 与它实际所在的子文件夹对不上。如实告知并指向 scan_files（那条路会按目录结构登记）。
+             String normalizedName = fileName.replace('\\', '/');
+             if (normalizedName.contains("/")) {
+                 editorBridgeService.sendRefreshFilesAction();
+                 return "File written to " + path.toAbsolutePath()
+                         + ". It is in a subfolder, so it was NOT registered here — call scan_files("
+                         + projectId + ") to register it into the file tree.";
+             }
+             try {
+                 ProjectFile pf = projectFileService.createOrUpdateFile(
+                         projectId, null, fileName, getFileType(fileName), Files.size(path),
+                         "projects/" + projectId + "/" + fileName, null, AGENT_USER_ID);
+                 editorBridgeService.sendRefreshFilesAction();
+                 return String.format("{\"status\":\"success\", \"db_id\":%d, \"file_path\":\"%s\"}",
+                         pf.getId(), path.toAbsolutePath().toString().replace("\\", "\\\\"));
+             } catch (Exception e) {
+                 log.warn("write_file DB register failed for {}", fileName, e);
+                 return "File written to " + path.toAbsolutePath()
+                         + " but DB registration failed (it will not appear in the file tree): "
+                         + e.getMessage() + " — call scan_files to retry registration.";
+             }
         } catch (Exception e) {
             return "Error writing file: " + e.getMessage();
         }
