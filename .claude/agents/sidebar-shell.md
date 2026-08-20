@@ -62,7 +62,8 @@ rail 点击 → toggleLeftPane(key)（:2988）：staging 单独分支 → 把当
 2026-08-19 起「项目概览」与「插件中心」也收进了数组——它们走的都是普通的
 `toggleLeftPane` 语义，单独硬编码成 rail 按钮只会让顺序有两个出处。
 当前顺序：**home(项目概览) → files(资源管理器) → search(搜索) → market(插件中心) →
-voice(语音) → desensitize(文件脱敏) → litigation-visual(门控) → calendar(日历)**。
+dev(插件开发，requiresSkill 'plugin-dev' 门控，dev-board#61) → voice(语音) →
+desensitize(文件脱敏) → litigation-visual(门控) → calendar(日历)**。
 **版本记录同一天又挪出了这个数组**（一进一出）：维护者认为它视觉上该挨着
 「暂存区」（都是围绕本机改动/存档的动作），不该跟文件树/搜索这类常驻浏览面板
 混排。定义照 `DD_FILES_PLUGIN` 的先例独立导出成 `VERSION_PLUGIN`，进

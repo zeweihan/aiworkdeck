@@ -55,6 +55,31 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
 
 示例：`examples/hello-web-plugin/`；SDK 源头 `sdk/plugin-sdk/`（官网模板里那份是分发副本，必须逐字节一致）。
 
+### 插件开发形态（dev-board#61，2026-08-20）
+
+第五种信任路径：**本机用户自己写的插件免签直装**（区别于广场的审核+验签+装后默认禁用）。
+链路：项目根「插件开发/<id>/」文件夹是源码（manifest.json + web/，文件树可见、CodeMirror
+可编辑、进版本记录）→ `PluginDevService.install` 校验后拷进本机 `plugins/<id>/` + rescan +
+**启用**。装出的目录带 `.awd-dev` 标记（JSON：projectId/folderId/installedAt）——
+装机拒绝覆盖无标记（=广场装的）同名目录，`dev/uninstall` 也只认带标记的目录。
+
+- **安全红线：dev 安装只收纯 Web 插件**——manifest 的 backendJars / tools / skills / packs
+  任一非空一律拒装（JAR 与宿主同 JVM 同权限，免审路径会把签名闸变成摆设；沙箱 Web 插件
+  才配「写完直接跑」）。校验错误逐条拼在 IllegalArgumentException.message 里，
+  面板与 AI 工具都按原文展示/返回（AI 靠它自我修复迭代）。
+- 端点 `/api/plugins/dev/*`（scaffold/status/install/uninstall，PluginDevController，
+  写操作 admin 同市场口径）；AI 工具 `plugin_dev_scaffold` / `plugin_dev_install`
+  （PluginDevTools，新工具组件记得同步 RealToolBeans——已加）。
+- 内置 skill `backend/skills/plugin-dev/`（enabled_by_default:false，requiresSkill 门控
+  左栏「插件开发」面板 PluginDevPanel.vue，rail 排在 market 之后）。**prompt.md 是
+  Web 插件开发的权威 spec**（目录契约/manifest 规则/沙箱边界/SDK 桥 v1 全量 API/迭代流程），
+  改桥协议或 manifest 规则时必须同步它，否则 AI 会按旧契约写插件。
+- 骨架模板在 `backend/src/main/resources/plugin-dev/`（template-index.html +
+  awd-plugin-sdk.js 副本）。**SDK 至此有四份分发副本 + 宿主端实现**（原三份 + 本 classpath
+  副本），classpath 副本与源头的逐字节一致由 `PluginDevSdkParityTest` 守着。
+- 文本扩展名白名单已放宽到代码文件（json/js/mjs/css/html/htm/yml/yaml），前后端两张表
+  必须一致：`TextFileEditTools.PLAIN_TEXT_TYPES` 与 `fileOpenTabs.js` 的 `PLAIN_TEXT_TYPES`。
+
 ## 注册与加载链路
 
 1. 静态注册：`frontend/src/config/leftSidebarPlugins.js` 导出 LEFT_SIDEBAR_PLUGINS + `getPluginsForUser(role)`。

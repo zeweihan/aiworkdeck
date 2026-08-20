@@ -7,9 +7,9 @@ import { activityTracker } from '@/utils/activityTracker.js'
 import { ICONS as GLYPHS, fileGlyph } from '@/config/icons.js'
 
 // 轻量文本编辑器（PlainTextEditor.vue）承接的扩展名（dev-board#37）。
-// 写成表便于日后扩展 json/js 等；当前刻意只收 txt/md/markdown——其它文本类
-// 扩展名仍走 FilePreview，不要顺手加。
-const PLAIN_TEXT_TYPES = ['txt', 'md', 'markdown']
+// dev-board#61 插件开发形态起收纳代码文件（js/json/html/css 等），供律师直改插件源码。
+// 必须与后端 TextFileEditTools.PLAIN_TEXT_TYPES 完全一致，改这里要同步改那边。
+const PLAIN_TEXT_TYPES = ['txt', 'md', 'markdown', 'json', 'js', 'mjs', 'css', 'html', 'htm', 'yml', 'yaml']
 
 export const fileOpenTabsMethods = {
     handleFileTreeSelect(file) {

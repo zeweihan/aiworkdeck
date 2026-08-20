@@ -22,10 +22,11 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * 纯文本文件（txt/md/markdown）的直读直写原语。
+ * 纯文本/代码文件（txt/md/markdown/json/js/html/css/yml 等）的直读直写原语。
  *
  * <p>背景：这类文件自 dev-board#37 起不再进 LOWA 编辑器（前端改走 CodeMirror 轻量
  * 文本编辑器），doc_* 那条「SSE 下发 → 编辑器执行 → 回执」的桥对它们不再适用。
+ * dev-board#61 起插件开发形态把代码文件（js/json/html/css 等）也纳入这条轻量路径。
  * 这里走后端直改：StorageService 读写字节 + WorkSessionService.onChangeSignal 接上
  * 版本记录（与 FileController.uploadFile 同一信号），改完发单向 SSE
  * {@code text_reload_file} 让前端已打开的文本标签就地重载。
@@ -44,14 +45,15 @@ public class TextFileEditTools implements AgentToolComponent {
     private final EditorBridgeService editorBridgeService;
     private final com.checkba.service.UserService userService;
 
-    /** 与前端 fileOpenTabs.js 的 plainTextTypes 对齐：只有这几种进轻量文本编辑器。 */
-    static final Set<String> PLAIN_TEXT_TYPES = Set.of("txt", "md", "markdown");
+    /** 与前端 fileOpenTabs.js 的 PLAIN_TEXT_TYPES 对齐：只有这几种进轻量文本编辑器。 */
+    static final Set<String> PLAIN_TEXT_TYPES = Set.of(
+            "txt", "md", "markdown", "json", "js", "mjs", "css", "html", "htm", "yml", "yaml");
 
     /** 大文件熔断：纯文本超过这个尺寸基本是日志/导出物，整篇改写没有意义还吃内存。 */
     private static final long MAX_TEXT_BYTES = 5L * 1024 * 1024;
 
     @ToolMeta(displayName = "写入文本文件", category = "file", fileEffect = "MODIFIED")
-    @Tool("整篇覆盖写入一个纯文本文件（仅限 .txt / .md / .markdown，UTF-8）。docx/xlsx/pptx 等 Office 文档"
+    @Tool("整篇覆盖写入一个纯文本/代码文件（txt/md/json/js/html/css/yml 等，UTF-8）。docx/xlsx/pptx 等 Office 文档"
             + "禁止用本工具，那些走 doc_* / sheet_* / slide_* 编辑原语。读取纯文本用 extract_file_text。"
             + "写入即生效（纯文本没有修订机制），并自动进入版本记录、同步刷新用户已打开的文本标签。")
     public String text_write_file(
@@ -73,7 +75,7 @@ public class TextFileEditTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "文本查找替换", category = "file", fileEffect = "MODIFIED")
-    @Tool("在纯文本文件（仅限 .txt / .md / .markdown）中做字面量查找替换（非正则）。"
+    @Tool("在纯文本/代码文件（txt/md/json/js/html/css/yml 等）中做字面量查找替换（非正则）。"
             + "replaceAll=true 替换全部命中，false 只替换第一处；返回命中次数。"
             + "docx 等 Office 文档禁止用本工具（用 doc_find_replace）。改动直接生效并进入版本记录。")
     public String text_find_replace(
@@ -128,8 +130,8 @@ public class TextFileEditTools implements AgentToolComponent {
             return new Resolved(null, "Error: ID=" + fileId + " 是文件夹，不是文本文件。");
         }
         if (!isPlainText(pf)) {
-            return new Resolved(null, "Error: " + pf.getName() + " 不是纯文本文件。本工具仅限 .txt/.md/.markdown；"
-                    + "Word/Excel/PPT 请分别用 doc_* / sheet_* / slide_* 编辑原语。");
+            return new Resolved(null, "Error: " + pf.getName() + " 不是纯文本文件。本工具仅限纯文本/代码文件"
+                    + "（txt/md/json/js/html/css/yml 等）；Word/Excel/PPT 请分别用 doc_* / sheet_* / slide_* 编辑原语。");
         }
         return new Resolved(pf, null);
     }

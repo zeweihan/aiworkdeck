@@ -54,6 +54,10 @@ import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLi
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language'
 import { markdown } from '@codemirror/lang-markdown'
+import { javascript } from '@codemirror/lang-javascript'
+import { json } from '@codemirror/lang-json'
+import { html } from '@codemirror/lang-html'
+import { css } from '@codemirror/lang-css'
 import MarkdownIt from 'markdown-it'
 import { getFileDownloadUrl, getFileUploadUrl } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
@@ -110,6 +114,18 @@ export default {
     if (this._view) { this._view.destroy(); this._view = null }
   },
   methods: {
+    // 按扩展名选语言包（dev-board#61 插件开发形态：js/json/html/css 补高亮）。
+    // yml/yaml/txt 没有对应语言包，走纯文本，仍有行号/撤销/查找替换等通用能力。
+    languageExtension() {
+      const t = this.file && this.file.fileType ? String(this.file.fileType).toLowerCase() : ''
+      if (t === 'md' || t === 'markdown') return markdown()
+      if (t === 'js' || t === 'mjs') return javascript()
+      if (t === 'json') return json()
+      if (t === 'html' || t === 'htm') return html()
+      if (t === 'css') return css()
+      return null
+    },
+
     fileRef() {
       const f = this.file
       if (!f) return null
@@ -181,7 +197,8 @@ export default {
           '&.cm-focused': { outline: 'none' }
         })
       ]
-      if (this.isMarkdown) extensions.push(markdown())
+      const lang = this.languageExtension()
+      if (lang) extensions.push(lang)
       this._view = new EditorView({
         state: EditorState.create({ doc: text, extensions }),
         parent: host

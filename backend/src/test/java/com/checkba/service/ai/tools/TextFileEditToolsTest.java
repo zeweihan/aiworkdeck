@@ -155,6 +155,15 @@ class TextFileEditToolsTest {
     }
 
     @Test
+    @DisplayName("isPlainText：代码文件（js/json/html）放行，docx 仍拒绝（dev-board#61 插件开发形态扩容）")
+    void isPlainTextCoversCodeFilesButNotOffice() {
+        assertTrue(TextFileEditTools.isPlainText(textFile(20L, "index.js", "js")));
+        assertTrue(TextFileEditTools.isPlainText(textFile(21L, "manifest.json", "json")));
+        assertTrue(TextFileEditTools.isPlainText(textFile(22L, "panel.html", "html")));
+        assertFalse(TextFileEditTools.isPlainText(textFile(23L, "合同.docx", "docx")));
+    }
+
+    @Test
     @DisplayName("跨项目文件被项目边界挡住")
     void rejectsFileFromAnotherProject() {
         ProjectFile pf = textFile(16L, "别人的.txt", "txt");

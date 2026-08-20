@@ -596,6 +596,45 @@ export function rescanPlugins() {
   });
 }
 
+// 插件开发：在项目「插件开发/<id>/」目录下创建骨架（manifest.json + web/index.html + web/awd-plugin-sdk.js）
+export function pluginDevScaffold(projectId, id, name) {
+  return request({
+    url: '/api/plugins/dev/scaffold',
+    method: 'POST',
+    data: { projectId, id, name },
+    header: { 'Content-Type': 'application/json' },
+  });
+}
+
+// 插件开发：列出该项目「插件开发」目录下的插件项目及本机安装状态
+export function pluginDevStatus(projectId) {
+  return request({
+    url: '/api/plugins/dev/status',
+    method: 'GET',
+    params: { projectId },
+  });
+}
+
+// 插件开发：把某个插件项目装进本机 plugins/ 并热重扫，装完即启用
+export function pluginDevInstall(projectId, folderId) {
+  return request({
+    url: '/api/plugins/dev/install',
+    method: 'POST',
+    data: { projectId, folderId },
+    header: { 'Content-Type': 'application/json' },
+  });
+}
+
+// 插件开发：卸载本机安装（仅限 dev 来源），不动项目里的源码文件夹
+export function pluginDevUninstall(id) {
+  return request({
+    url: '/api/plugins/dev/uninstall',
+    method: 'POST',
+    data: { id },
+    header: { 'Content-Type': 'application/json' },
+  });
+}
+
 // 获取 Skill 列表（规范见 docs/SKILL_SPEC.md）
 export function getSkills() {
   return request({
@@ -1633,7 +1672,11 @@ export function resolvePluginEntryUrl(pluginId, entry) {
   const raw = String(entry)
   if (/^https?:\/\//i.test(raw)) return raw
   const baseUrl = getApiBaseUrl() || ''
-  const rel = raw.replace(/^\/+/, '').split('/').filter(Boolean).map(encodeURIComponent).join('/')
+  // /api/plugin-web/<id>/ 的 URL 空间直接映射 plugins/<id>/web/ 的内容
+  // （PluginWebController 的 subPath 是相对 web/ 的），而 manifest.frontendEntry
+  // 带着 web/ 前缀——不剥掉会拼出 web/web/ 双前缀，服务端 404
+  const rel = raw.replace(/^\/+/, '').replace(/^web\//, '')
+    .split('/').filter(Boolean).map(encodeURIComponent).join('/')
   if (!rel) return ''
   return `${baseUrl.replace(/\/$/, '')}/api/plugin-web/${encodeURIComponent(pluginId)}/${rel}`
 }
