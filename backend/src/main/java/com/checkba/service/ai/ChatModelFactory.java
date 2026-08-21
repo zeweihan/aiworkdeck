@@ -108,6 +108,21 @@ public class ChatModelFactory {
     }
 
     /**
+     * 用户是否在设置页里**显式**把供应商选成了本地 OLLAMA。
+     *
+     * <p>必须与 {@link #resolveProvider()} 区分开：yml 的静态默认值恰好也是 OLLAMA，
+     * 而那只是「还没配过」，不代表用户要求内容留在本机——既有契约是
+     * 「静态供应商是什么都不妨碍用户从模型选择器里挑云端模型」（见
+     * ChatModelFactoryTest.allowedModelAlwaysUsesOpenRouter）。
+     * 只有 DB 里真写着 OLLAMA，才是那句明确的「不要把内容发出去」。
+     */
+    private boolean isExplicitLocalProvider() {
+        String configured = systemSettingService.get("ai.activeProvider", null);
+        return configured != null
+                && AiModelProperties.Provider.OLLAMA.name().equalsIgnoreCase(configured.trim());
+    }
+
+    /**
      * 读取系统设置，DB 里的空白值视为未配置、回退默认值。
      * 向导/管理后台保存时未填的字段会以空串写入 DB（toSettingsUpdates 的 safe()），
      * 直接用会把 baseUrl 等必填项置空导致构建模型失败。
@@ -231,6 +246,18 @@ public class ChatModelFactory {
         // Strategy:
         // - If modelID is "default" or local-looking => use Configured Provider (Ollama) properties.
         // - If modelID looks like "provider/model" (e.g. "anthropic/claude") => Force OpenRouter if generic, or check allowed list.
+
+        // 显式选了本地档时必须先于白名单短路判定：那是在明确表达「内容不出这台机器」，
+        // 法律文书场景下那是产品承诺、不是偏好。而白名单判定原本排在前面，只要 modelId
+        // 恰好在白名单里就一律被拽去 OpenRouter；更要命的是辅助模型的默认 id
+        // （qwen/qwen3.7-flash）本身就在白名单里——OLLAMA 档下每一次辅助调用都在走云端。
+        if (isExplicitLocalProvider()) {
+            if (!"default".equals(targetModel) && AllowedModels.isAllowed(targetModel)) {
+                log.warn("供应商为本地 OLLAMA，忽略云端模型 '{}'，改用本地模型 {}",
+                        targetModel, resolveOllamaModelName());
+            }
+            return getOrCreateOllamaModel(resolveOllamaModelName());
+        }
 
         if (AllowedModels.isAllowed(targetModel)) {
             // It's a valid OpenRouter/Cloud model
@@ -435,6 +462,18 @@ public class ChatModelFactory {
         // 同 getChatModel：平台通道先于白名单短路
         if (provider == AiModelProperties.Provider.AWD_CLOUD) {
             return getOrCreatePlatformStreamingModel(resolvePlatformModel(targetModel));
+        }
+
+        // 显式选了本地档时必须先于白名单短路判定：那是在明确表达「内容不出这台机器」，
+        // 法律文书场景下那是产品承诺、不是偏好。而白名单判定原本排在前面，只要 modelId
+        // 恰好在白名单里就一律被拽去 OpenRouter；更要命的是辅助模型的默认 id
+        // （qwen/qwen3.7-flash）本身就在白名单里——OLLAMA 档下每一次辅助调用都在走云端。
+        if (isExplicitLocalProvider()) {
+            if (!"default".equals(targetModel) && AllowedModels.isAllowed(targetModel)) {
+                log.warn("供应商为本地 OLLAMA，忽略云端模型 '{}'，改用本地模型 {}",
+                        targetModel, resolveOllamaModelName());
+            }
+            return getOrCreateOllamaStreamingModel(resolveOllamaModelName());
         }
 
         if (AllowedModels.isAllowed(targetModel)) {
