@@ -48,7 +48,27 @@ npm run test:lowa-big                               # 夹具不存在会自动�
 
 改造前后（本机 Apple Silicon，无头 Chrome，r4 引擎，2026-08-21）：
 
-BIG_DOC_TABLE_PLACEHOLDER
+| 项 | 改造前 | 改造后（3 轮中位数） | 阈值 |
+|---|---|---|---|
+| load_document 6.7MB/150 页 | 3.59s | 1.56s（5.03 / 1.36 / 1.56） | < 15s |
+| get_document_text 第 2 次（同参数） | 1.99s | **20ms**（65 / 20 / 16） | < 300ms |
+| get_document_text {startParagraph:800} | 2.02s | **9-13ms** | （只记录） |
+| find_replace 修订 150 命中 | 28.5s（其后命中超 30s 撞执行器超时，worker 仍在改） | 16.7s（16.7 / 18.3 / 15.9），不再超时、有进度、可取消 | < 8s（soft，WARN） |
+| apply_house_style 920 段 + 30 表 | 执行器 30s 超时，worker 实跑约 630s；超时期间页面主线程被冻住 | 执行器 120s 超时，worker 实跑约 270s（分批让路、不再冻页面、可取消） | < 120s（soft，WARN） |
+| export_document | 2.3s（改造前那轮被前面排队的命令顶到 180s 超时） | 1.77s（2.08 / 1.77 / 1.77） | < 10s |
+| 导出后 30s 内 modified 次数 | 0 | 0 / 0 / 0 | = 0 |
+
+改造前只拿到第 1 轮（旧代码的 find_replace / apply_house_style 超时后 worker 继续跑，
+后续命令全部排队，第 2 轮 load_document 都等不到；第二次复跑撞上本机 load avg 19
+又慢一倍）。改造后三轮完整跑完。所有数字都在本机其他会话同时跑 e2e（load avg 12-22）
+的情况下测得，安静机器上约快一倍。
+
+find_replace / apply_house_style 是 **soft 阈**（打 WARN 不判红，`LOWA_BIG_STRICT=1`
+才判红）：单独探针证实每条 tracked 替换约 90-100ms，整段 `setString` 与最小修订一样贵，
+去掉滚视图、`lockControllers` 都没有变化——这是引擎按条记修订的成本；全文格式化在
+RecordChanges 开着时每个属性写入各记一条格式修订，`setPropertyValues` 批写把 worker
+实跑从约 720s 降到约 270s 后仍超 120s。再往下只能改口径（格式化不记修订 / 先数命中
+再拆成多次调用），不是 worker 里还有大头可砍。
 
 改 `office_thread.js` 里的全文路径（段落枚举 / 修订 / 全文格式化 / 导出）后必跑。
 

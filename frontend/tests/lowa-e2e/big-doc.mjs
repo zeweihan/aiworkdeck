@@ -197,7 +197,8 @@ try {
     console.log('  ' + (softProblem ? 'WARN ' : 'FAIL ') + p)
   }
   if (mem != null) console.log('\n页面内存（measureUserAgentSpecificMemory）: ' + (mem / 1048576).toFixed(0) + ' MB')
-  console.log('\n结果 / result: ' + (failed ? failed + ' 项未达阈值' : '全部达标'))
+  const warned = ITEMS.filter((it) => it.soft && !STRICT && samples[it.key] && !(median(samples[it.key]) < it.max)).length
+  console.log('\n结果 / result: ' + (failed ? failed + ' 项未达阈值' : '硬阈全部达标') + (warned ? '，' + warned + ' 项 soft 告警（LOWA_BIG_STRICT=1 判红）' : ''))
   process.exitCode = failed ? 1 : 0
 } finally {
   await browser.close()
