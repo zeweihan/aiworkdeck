@@ -1461,19 +1461,6 @@ export function getProjectFiles(projectId, parentId = null, tree = false) {
   });
 }
 
-// 文件树「被引用 N 次」角标（dev-board#107 单元 F3）：批量查一批文件 id 各自被
-// EvidenceLink 引用的次数。单元 A 在另一分支实现该端点，本分支可能尚未合并——
-// 调用方（FileTree.vue）自己 try/catch，404/出错时角标不显示，不在这里 mock。
-// 返回形状按本仓 {code:0, data:{fileId:count}} 惯例；FileTree.vue 调用处兼容
-// 裸对象两种形状。
-export function evidenceRefCounts(projectId, fileIds) {
-  const ids = (fileIds || []).join(',')
-  return request({
-    url: `/api/projects/${projectId}/evidence-links/ref-counts?fileIds=${ids}`,
-    method: 'GET',
-  });
-}
-
 // 创建文件夹
 export function createFolder(projectId, parentId, name) {
   return request({
