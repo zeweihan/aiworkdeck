@@ -970,6 +970,7 @@
                       :locator="activeFileLeft.pendingLocator || null"
                       :show-edit-btn="false"
                       @extracted="onArchiveExtracted"
+                      @locator-consumed="onLocatorConsumed"
                     />
                   </view>
                   <view v-else-if="!activeFileLeft" class="pane-empty">
@@ -1102,6 +1103,7 @@
                       :locator="activeFileRight.pendingLocator || null"
                       :show-edit-btn="false"
                       @extracted="onArchiveExtracted"
+                      @locator-consumed="onLocatorConsumed"
                     />
                   </view>
                   <view v-else-if="!activeFileRight" class="pane-empty">

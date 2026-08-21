@@ -8,61 +8,10 @@
 import {
   createEvidenceLink, addEvidenceTargets, updateEvidenceTarget, getEvidenceLink, getFileDetail,
 } from '@/services/api.js'
-import { ulid } from '@/utils/ulid.js'
-import { parseFileLinkUrl, buildFileLinkUrl, locatorSummary } from '@/utils/evidenceLocator.js'
+import { parseFileLinkUrl, locatorSummary } from '@/utils/evidenceLocator.js'
+import { createEvidenceLinkForDrop, pickEvidenceTarget } from './evidenceLinkCore.js'
 
-const METHOD_BAR_TTL_MS = 3000
-
-// 可注入 exec/api 的纯函数（tests/evidence/evidenceLinkActions.test.mjs）。
-// 返回 { ok, reason?, message?, linkKey?, view?, targetId?, created? }。
-export async function createEvidenceLinkForDrop({ exec, api, projectId, docFileId, file, internalBase }) {
-  let cur = null
-  try { cur = await exec('get_selection_hyperlink', {}) } catch (e) { cur = null }
-  const selText = cur && cur.success ? String(cur.text || '').trim() : ''
-  if (!selText) return { ok: false, reason: 'no_selection' }
-
-  let linkKey = ''
-  const parsed = parseFileLinkUrl(cur.url || '')
-  if (parsed && parsed.linkKey) linkKey = parsed.linkKey
-
-  let created = false
-  if (!linkKey) {
-    linkKey = 'EVID_' + ulid()
-    const bm = await exec('bookmark_selection', { name: linkKey })
-    if (!bm || !bm.success) return { ok: false, reason: 'bookmark_failed', message: (bm && (bm.error || bm.message)) || '' }
-    const url = buildFileLinkUrl(internalBase, linkKey, projectId)
-    const r = await exec('set_selection_hyperlink', { url })
-    if (!r || !r.success) return { ok: false, reason: 'hyperlink_failed', message: (r && (r.error || r.message)) || '' }
-    created = true
-  }
-
-  let ctx = null
-  try { ctx = await exec('get_bookmark_context', { name: linkKey }) } catch (e) { ctx = null }
-  const target = { fileId: Number(file.id), relation: 'supports', method: 'written_review' }
-  const view = created
-    ? await api.createEvidenceLink(projectId, {
-      docFileId, linkKey, anchorText: selText,
-      sectionPath: (ctx && ctx.sectionPath) || '', sectionTitle: (ctx && ctx.sectionTitle) || '',
-      createdByKind: 'human', targets: [target],
-    })
-    : await api.addEvidenceTargets(projectId, linkKey, [target])
-  const targets = (view && Array.isArray(view.targets)) ? view.targets : []
-  // 同一文件可能已挂过：取该 fileId 下 id 最大的那条（刚追加的）
-  const mine = targets.filter((x) => Number(x.fileId) === Number(file.id))
-  const tgt = mine.length ? mine.reduce((a, b) => (Number(b.id) > Number(a.id) ? b : a)) : null
-  return { ok: true, linkKey, view, created, targetId: tgt ? tgt.id : null }
-}
-
-// 点击链接后的 target 挑选：t 命中 → 那条；单 target → 它；多条 → null（交给弹窗）。
-export function pickEvidenceTarget(view, targetId) {
-  const targets = (view && Array.isArray(view.targets)) ? view.targets : []
-  if (targetId != null) {
-    const hit = targets.find((x) => Number(x.id) === Number(targetId))
-    if (hit) return hit
-  }
-  if (targets.length === 1) return targets[0]
-  return null
-}
+export { createEvidenceLinkForDrop, pickEvidenceTarget }
 
 // request() 已把 {code:0,data} 整体 resolve 出来，这里统一剥一层。
 function unwrap(resp) {
