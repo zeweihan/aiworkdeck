@@ -6,6 +6,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -277,6 +278,29 @@ class PluginServiceTest {
         assertTrue(service.isEnabled("hello-plugin"));
     }
 
+    @Test
+    @DisplayName("rescan 使 ToolRegistry 的插件工具缓存失效（否则更新/卸载后旧 bean 仍被分发）")
+    void rescanInvalidatesToolRegistryPluginCache() throws IOException {
+        ToolRegistry toolRegistry = mock(ToolRegistry.class);
+        service.setToolRegistry(toolRegistry);
+
+        writeManifest("hello-plugin", FULL_MANIFEST);
+        service.init();
+        verifyNoInteractions(toolRegistry);
+
+        service.rescan();
+
+        verify(toolRegistry).invalidatePluginToolCache();
+    }
+
+    @Test
+    @DisplayName("未装配 ToolRegistry（既有测试直接 new PluginService(...)）时 rescan 不受影响")
+    void rescanToleratesMissingToolRegistry() throws IOException {
+        writeManifest("hello-plugin", FULL_MANIFEST);
+        service.init();
+        assertDoesNotThrow(service::rescan);
+    }
+
     // ==== backendJars 路径校验 ====
 
     @Test
@@ -292,6 +316,37 @@ class PluginServiceTest {
         assertNull(service.resolveBackendJar(pluginDir.toFile(), "../../../etc/passwd", "evil-plugin"));
         assertNull(service.resolveBackendJar(pluginDir.toFile(), null, "evil-plugin"));
         assertNull(service.resolveBackendJar(pluginDir.toFile(), "  ", "evil-plugin"));
+    }
+
+    @Test
+    @DisplayName("修复：backendJar 文件缺失时打一条 WARN，带上插件 id 与缺失的 jar 名")
+    void missingBackendJarFileLogsWarningWithPluginIdAndJarName() throws IOException {
+        // 病灶：manifest 声明了 backendJars 但解压不全/被手删/打包漏了——此前这条路径
+        // 一个字日志都不打，调用方 `if (jarFile != null) loadJar(...)` 又没有 else 分支。
+        // 插件照常出现在列表里、启停可用，就是 0 个工具，日志里搜插件 id 与 jar 名全是空。
+        Path pluginDir = pluginsDir.resolve("gap-plugin");
+        Files.createDirectories(pluginDir);
+
+        ch.qos.logback.classic.Logger logbackLogger =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(PluginService.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        logbackLogger.addAppender(appender);
+        try {
+            File result = service.resolveBackendJar(pluginDir.toFile(), "missing-tool.jar", "gap-plugin");
+            assertNull(result, "文件不存在时仍应返回 null（行为不变）");
+        } finally {
+            logbackLogger.detachAppender(appender);
+        }
+
+        boolean logged = appender.list.stream().anyMatch(e ->
+                e.getLevel() == ch.qos.logback.classic.Level.WARN
+                        && e.getFormattedMessage().contains("gap-plugin")
+                        && e.getFormattedMessage().contains("missing-tool.jar"));
+        assertTrue(logged, "应有一条 WARN 日志同时点名插件 id 与缺失的 jar 名，实际日志：" +
+                appender.list.stream().map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+                        .collect(java.util.stream.Collectors.joining(" | ")));
     }
 
     @Test

@@ -154,6 +154,35 @@ class PdfEditServiceTest {
         assertTrue(e.getMessage().contains("未找到"));
     }
 
+    /**
+     * 修复：texts 里混一个原文没有的目标（LLM 猜错人名/证件号是常态）时，此前的行为是
+     * ——先把命中的那部分真实、不可逆地打码写回磁盘，然后才抛异常。调用方 PdfTools 的
+     * finishModification（轮换 wpsFileId、更新 fileSize/updatedAt、发 reload）被异常
+     * 跳过，磁盘已改、DB 与预览却还停在旧版本，两者从此不一致——磁盘状态与返回结果不一致
+     * 正是这条要守住的不变式。
+     *
+     * <p>裁决：部分命中不算失败（选项 a）。理由：redact 本身不可逆且以秒计生效，AI 给错
+     * 一个名字不该连累已经正确定位到的那些也不落地——真正敏感的内容应该立刻被打码，
+     * 而不是因为清单里一个查无此文的名字就整体作废、逼用户拿着仍然明文的文件回去重试。
+     */
+    @Test
+    void redactPartialMatchSucceedsAndReportsDiskStateHonestly() throws IOException {
+        Path pdf = samplePdf();
+
+        // "Confidential" 命中，"不存在的文本" 不命中——不再抛异常，正常返回
+        PdfEditService.RedactResult result = service.redact(pdf, List.of("Confidential", "不存在的文本"), null);
+
+        assertEquals(1, result.matchCount, "只有真正命中的那部分应计入 matchCount");
+        assertEquals(List.of("不存在的文本"), result.missing, "未命中的目标要如实带回，不能吞掉");
+        assertEquals(List.of(0), result.rasterizedPages);
+
+        // 磁盘状态必须与返回结果一致：既然 result 说命中了 1 处并光栅化了第 0 页，
+        // 磁盘上就必须真的看不到 Confidential 了——不允许"报告成功但磁盘其实没变"，
+        // 也不允许"磁盘变了但调用方拿到的是异常、不知道已经生效"。
+        String after = extractText(pdf);
+        assertFalse(after.contains("Confidential"), "命中的目标必须已经真实打码到磁盘");
+    }
+
     @Test
     void replaceOverlaysNewText() throws IOException {
         Path pdf = samplePdf();

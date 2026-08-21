@@ -349,6 +349,31 @@ class NativePackServiceTest {
     }
 
     @Test
+    @DisplayName("修复：安装/封禁/卸载都会触发登记的状态变化回调，供资源消费方失效自己的运行时解析缓存")
+    void notifiesRegisteredListenerOnInstallRevokeAndUninstall() throws Exception {
+        // 病灶：LitigationVisualService.resolved 是懒加载且只算一次的缓存，此前
+        // NativePackService 全仓没有任何生产调用点会碰 invalidate()——用户在广场点
+        // 「安装/卸载」是不重启后端的 live 操作，装完 pack 面板仍显示上次探测出的「不可用」。
+        byte[] archive = tarGzWithContents(Map.of("cli.py", "x".getBytes(StandardCharsets.UTF_8)));
+        publish(primary, archive, "litviz", List.of("*"), true);
+        primary.files.put("/revoked", ("[{\"id\":\"" + PACK_ID + "\",\"version\":\"*\",\"reason\":\"test\"}]")
+                .getBytes(StandardCharsets.UTF_8));
+
+        NativePackService svc = service(publicKeyPem, primary.baseUrl());
+        java.util.concurrent.atomic.AtomicInteger fired = new java.util.concurrent.atomic.AtomicInteger(0);
+        svc.onPackChanged(PACK_ID, fired::incrementAndGet);
+
+        svc.install(PACK_ID);
+        assertEquals(1, fired.get(), "安装成功应触发一次回调");
+
+        assertEquals(List.of(PACK_ID), svc.syncRevoked());
+        assertEquals(2, fired.get(), "被平台封禁应再触发一次回调");
+
+        svc.uninstall(PACK_ID);
+        assertEquals(3, fired.get(), "卸载应再触发一次回调");
+    }
+
+    @Test
     @DisplayName("命中封禁表后资源解析视而不见，但本地文件不删")
     void revokedPackBecomesInvisible() throws Exception {
         byte[] archive = tarGzWithContents(Map.of("cli.py", "x".getBytes(StandardCharsets.UTF_8)));

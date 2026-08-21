@@ -19,6 +19,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -524,6 +525,44 @@ class ContextAssemblerServiceTest {
 
         assertTrue(systemText.contains("SIMPLIFIED CHINESE ONLY"), "中文模式 Language 行不变");
         assertFalse(systemText.contains("ENGLISH ONLY"), "中文模式不应出现英文 Language 行");
+    }
+
+    // ==== 历史回放容错：一条空白 content 的历史消息不许掀翻整轮 assemble ====
+    // 背景：POST /chat 此前没挡住 message="" 落库；ContextAssemblerService 回放历史时
+    // langchain4j 的 UserMessage.from(text) 对空白文本一律抛 IllegalArgumentException，
+    // 存量脏数据一旦落库，该 conversationId 此后每一轮都会在这里抛异常、永久报废。
+
+    @Test
+    @DisplayName("修复：历史里一条空白 content 的消息被跳过，不再让整轮 assemble 抛异常")
+    void blankHistoryMessageIsSkippedNotThrown() {
+        com.checkba.model.entity.ProjectAiMessage blank = new com.checkba.model.entity.ProjectAiMessage();
+        blank.setId(1L);
+        blank.setRole("USER");
+        blank.setContent(""); // 存量脏数据：曾经落库的空白 message
+
+        com.checkba.model.entity.ProjectAiMessage ok = new com.checkba.model.entity.ProjectAiMessage();
+        ok.setId(2L);
+        ok.setRole("USER");
+        ok.setContent("这是一条正常的历史消息");
+
+        ProjectAiMessageService msgSvc = mock(ProjectAiMessageService.class);
+        when(msgSvc.listByConversationId("conv-1")).thenReturn(List.of(blank, ok));
+
+        ContextAssemblerService withBlankHistory = new ContextAssemblerService(
+                legalTools, msgSvc, mock(FileContextLoader.class),
+                new AiContextProperties(), mockedSkillRouter(), new ClientCapabilityService(),
+                new InlineContentCache(), mockedMemoryManager(), mockedCompressor(),
+                mock(com.checkba.service.AppLanguageService.class));
+
+        List<ChatMessage> messages = assertDoesNotThrow(() -> withBlankHistory.assemble(
+                "conv-1", "帮我修订一下", null, null, null, null, "88", AgentMode.AGENT, 1L, null),
+                "空白历史消息不应掀翻整轮上下文组装");
+
+        boolean hasValidHistoryText = messages.stream()
+                .filter(m -> m instanceof dev.langchain4j.data.message.UserMessage)
+                .map(m -> ((dev.langchain4j.data.message.UserMessage) m).singleText())
+                .anyMatch("这是一条正常的历史消息"::equals);
+        assertTrue(hasValidHistoryText, "跳过坏数据的同时，同一批次里有效的历史消息应正常保留");
     }
 
     // ---- 供自建 assembler 的 mock 工厂（与 setUp 同配方）----

@@ -240,13 +240,7 @@ public class PluginMarketService {
             File target = new File(pluginsDir, id);
             FileUtil.del(target);
             Files.createDirectories(target.toPath().getParent());
-            try {
-                Files.move(staging, target.toPath(), StandardCopyOption.ATOMIC_MOVE);
-            } catch (Exception atomicFailed) {
-                // 跨文件系统时原子移动不可用，退化为拷贝
-                FileUtil.copyContent(staging.toFile(), target, true);
-                FileUtil.del(staging.toFile());
-            }
+            moveStagingToTarget(staging, target);
         } catch (RuntimeException e) {
             FileUtil.del(staging.toFile());
             throw e;
@@ -261,6 +255,32 @@ public class PluginMarketService {
         log.info("Installed market plugin '{}' v{} (disabled until user confirms)", id, version);
         installDeclaredPacks(id);
         return id;
+    }
+
+    /**
+     * 把校验通过的 staging 目录整体落到插件目录：优先原子 move，跨文件系统时退化为拷贝。
+     *
+     * <p>抽成独立方法只为了可测——install() 本身要走网络下载与验签，太重，不好在单测里
+     * 单独触发"拷贝兜底也失败"这条分支。
+     *
+     * <p>不变式：任一步失败都不留半成品。拷贝兜底失败时 target 可能已经是半成品（拷贝到
+     * 一半就断了），必须把它一并清掉再把异常抛给调用方——调用方（install()）只清理
+     * staging，且这条异常在 markDisabledBeforeLoad/rescan 之前抛出，PluginService
+     * 账上根本没有这个插件 id，残缺目录不清掉就会永久留在盘上、谁也不认领。
+     */
+    void moveStagingToTarget(Path staging, File target) throws java.io.IOException {
+        try {
+            Files.move(staging, target.toPath(), StandardCopyOption.ATOMIC_MOVE);
+        } catch (Exception atomicFailed) {
+            // 跨文件系统时原子移动不可用，退化为拷贝
+            try {
+                FileUtil.copyContent(staging.toFile(), target, true);
+            } catch (Exception copyFailed) {
+                FileUtil.del(target);
+                throw copyFailed;
+            }
+            FileUtil.del(staging.toFile());
+        }
     }
 
     /**

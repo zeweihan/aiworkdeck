@@ -152,6 +152,13 @@ public class AiAgentController {
             return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"" +
                     LangText.of("无权操作该会话", "You do not have permission for this conversation") + "\"}");
         }
+        // message 为空/纯空白必须在入口拒绝：一旦落库，ContextAssemblerService 回放历史时
+        // langchain4j 的 UserMessage.from(text) 会对空白文本抛异常——存量脏数据已经在
+        // ContextAssemblerService 里加了容错，但新请求应该在这里就被挡下，不该先污染会话。
+        if (request.getMessage() == null || request.getMessage().isBlank()) {
+            return ResponseEntity.status(400).body("{\"status\":\"error\", \"message\":\"" +
+                    LangText.of("消息内容不能为空", "Message cannot be empty") + "\"}");
+        }
 
         log.info("Received Agent Chat Request: project={}, conversation={}, mode={}, msg={}",
                 request.getProjectId(), request.getConversationId(), request.getAgentMode(), request.getMessage());

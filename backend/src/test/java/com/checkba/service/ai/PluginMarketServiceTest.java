@@ -196,6 +196,33 @@ class PluginMarketServiceTest {
     }
 
     @Test
+    @DisplayName("修复：兜底拷贝也失败时 target 一并清掉，不留半成品目录（要么装成，要么什么都不留）")
+    void moveStagingToTargetCleansUpTargetWhenFallbackCopyFails() throws Exception {
+        // 病灶复现三步：
+        // 1) 先让原子 move 失败——target 预置成非空目录，POSIX rename 语义下移动一个目录
+        //    到已存在的非空目录会失败（ENOTEMPTY），逼进兜底拷贝分支；
+        // 2) 兜底拷贝也失败——target 下预置一个与 staging 内嵌套路径同名的「文件」占位，
+        //    拷贝到该路径时因为要把文件当目录写入而抛异常；
+        // 3) 断言异常确实抛出，且 target 整个目录被清干净，不留半成品。
+        Path staging = Files.createTempDirectory("moveStagingToTargetTest-staging-");
+        Files.writeString(staging.resolve("a.txt"), "A", StandardCharsets.UTF_8);
+        Files.createDirectories(staging.resolve("sub"));
+        Files.writeString(staging.resolve("sub").resolve("b.txt"), "B", StandardCharsets.UTF_8);
+
+        java.io.File target = pluginsDir.resolve("demo").toFile();
+        Files.createDirectories(target.toPath());
+        Files.writeString(target.toPath().resolve("existing-junk.txt"), "占位，撑起非空目录", StandardCharsets.UTF_8);
+        // 与 staging/sub 同名但是文件——拷贝 sub/b.txt 时会因为「同名节点已是文件」而失败
+        Files.writeString(target.toPath().resolve("sub"), "我是文件不是目录", StandardCharsets.UTF_8);
+
+        PluginMarketService svc = service(publicKeyPem);
+        assertThrows(Exception.class, () -> svc.moveStagingToTarget(staging, target));
+
+        assertFalse(Files.exists(target.toPath()),
+                "兜底拷贝失败后 target 必须被清掉，不能留下拷贝到一半的半成品目录");
+    }
+
+    @Test
     @DisplayName("安装：签名无效时中止，不发起任何文件下载")
     void installAbortsOnBadSignature() throws Exception {
         Map<String, String> files = new TreeMap<>();
