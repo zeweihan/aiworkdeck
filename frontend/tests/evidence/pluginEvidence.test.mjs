@@ -52,6 +52,15 @@ test('resolveAnchor quote: 0 命中与多命中都是 anchor_ambiguous', async (
   assert.match(many.error.message, /2 处/)
 })
 
+test('resolveAnchor quote: worker 返回 success:false 不折叠成 0 命中，message 带上 worker 的原因', async () => {
+  const r = await resolveAnchor(fakeExec({ find_text_locations: { success: false, message: 'document not ready', error: 'document not ready' } }), { quote: '第三条' })
+  assert.equal(r.error.code, 'anchor_ambiguous')
+  assert.match(r.error.message, /document not ready/)
+  assert.doesNotMatch(r.error.message, /未命中/)
+  const r2 = await resolveAnchor(fakeExec({ find_text_locations: { success: false, error: 'NOT_TEXT_DOC' } }), { quote: '第三条' })
+  assert.match(r2.error.message, /NOT_TEXT_DOC/)
+})
+
 test('resolveAnchor quote: 命中但没拿到 anchorId 也算 anchor_ambiguous（不能把没法定位的当成功）', async () => {
   const r = await resolveAnchor(fakeExec({ find_text_locations: { success: true, matches: [{ text: 'x' }] } }), { quote: 'x' })
   assert.equal(r.error.code, 'anchor_ambiguous')

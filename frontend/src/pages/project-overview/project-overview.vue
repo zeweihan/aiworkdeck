@@ -1576,6 +1576,8 @@ import ProjectFavoritesPanel from '@/components/ProjectFavoritesPanel.vue'
 import FileLinkDropZone from '@/components/FileLinkDropZone.vue'
 import FileStagingArea from '@/components/FileStagingArea.vue'
 import PluginPane from '@/components/PluginPane.vue' // Added
+// Web 插件 evidence.* 只在 Writer 文档上工作（与 fileOpenTabs.js wpsFormats 的 Writer 段一致）
+const PLUGIN_WRITER_TYPES = ['wps', 'wpt', 'doc', 'dot', 'docx', 'dotx', 'docm', 'dotm', 'rtf', 'odt']
 import PluginDevPanel from '@/components/PluginDevPanel.vue'
 import DrawioEditor from '@/components/DrawioEditor.vue'
 import PlainTextEditor from '@/components/PlainTextEditor.vue'
@@ -2380,8 +2382,11 @@ export default {
     if (this._onMarketChanged) {
       uni.$off('awd:market-changed', this._onMarketChanged)
       uni.$off('awd:market-changed-from-sidebar', this._onMarketChanged)
-      uni.$off('awd:open-evidence-target', this._onOpenEvidenceTarget)
       this._onMarketChanged = null
+    }
+    if (this._onOpenEvidenceTarget) {
+      uni.$off('awd:open-evidence-target', this._onOpenEvidenceTarget)
+      this._onOpenEvidenceTarget = null
     }
     // IDE 化聚焦刷新监听清理（本实例自己加的，直接摘）
     if (typeof window !== 'undefined' && this._localFocusRefresh) {
@@ -4890,11 +4895,18 @@ export default {
     // Word 文档」上打书签、跳书签：给它 { executor(action, params), fileId }。
     // fileId 必须从 executor 反查（resolveLibreExecutorFileId），不能信 activeFile——
     // 指针同步与标签切换之间有窗口，落错文档的代价是锚点进了别的文件。
+    // 只认 Writer 文档（spec：docPath 缺省 = 当前聚焦的 Word 文档）：Calc/Impress
+    // 聚焦时返回 null 让宿主报 no_active_document，否则 bookmark_selection 的
+    // NOT_TEXT_DOC 会被错报成 no_selection、goto_bookmark 错报成 not_found。
     getPluginActiveEditor() {
       if (!this.libreOfficeActive || !this.libreOfficeExecutor) return null
       const ex = this.libreOfficeExecutor
       const fileId = this.resolveLibreExecutorFileId(ex)
       if (!fileId) return null
+      const tabs = [].concat(this.leftFiles || [], this.rightFiles || [])
+      const file = tabs.find(f => f && String(f.id) === String(fileId))
+      const type = file && file.fileType ? String(file.fileType).toLowerCase() : ''
+      if (!PLUGIN_WRITER_TYPES.includes(type)) return null
       return {
         fileId: Number(fileId),
         executor: (action, params) => ex.executeCommand(action, params || {})

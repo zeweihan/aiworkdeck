@@ -47,7 +47,12 @@ export async function resolveAnchor(exec, anchor) {
     const quote = anchor.quote.trim()
     // office_thread.find_text_locations：入参 keyword，命中项带 anchorId（书签 id，喂给 set_selection）
     const r = await exec('find_text_locations', { keyword: quote })
-    const matches = r && r.success && Array.isArray(r.matches) ? r.matches : []
+    if (!r || !r.success) {
+      // worker 失败不折叠成「0 命中」：错误码仍是 anchor_ambiguous，但把原因带给插件
+      const why = (r && (r.message || r.error)) || '查找失败'
+      return { error: { code: 'anchor_ambiguous', message: '引文查找失败：' + why } }
+    }
+    const matches = Array.isArray(r.matches) ? r.matches : []
     const n = matches.length
     if (n !== 1) {
       return { error: { code: 'anchor_ambiguous', message: n === 0 ? '引文未命中：' + quote : '引文命中 ' + n + ' 处，请加长引文' } }
