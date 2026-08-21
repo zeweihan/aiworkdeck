@@ -844,6 +844,7 @@
                       @open-url="onLibreOpenUrl"
                       @open-evidence-target="onOpenEvidenceTarget"
                       @menu-state="pushMenuState"
+                      @command-progress="onEditorCommandProgress"
                       @evidence-drop="onEvidenceDrop($event, 'left')"
                       @locator-consumed="onLocatorConsumed"
                     />
@@ -867,6 +868,7 @@
                       @open-url="onLibreOpenUrl"
                       @open-evidence-target="onOpenEvidenceTarget"
                       @menu-state="pushMenuState"
+                      @command-progress="onEditorCommandProgress"
                       @evidence-drop="onEvidenceDrop($event, 'left')"
                       @locator-consumed="onLocatorConsumed"
                     />
@@ -1012,6 +1014,7 @@
                       @open-url="onLibreOpenUrl"
                       @open-evidence-target="onOpenEvidenceTarget"
                       @menu-state="pushMenuState"
+                      @command-progress="onEditorCommandProgress"
                       @evidence-drop="onEvidenceDrop($event, 'right')"
                       @locator-consumed="onLocatorConsumed"
                     />
@@ -3002,6 +3005,14 @@ export default {
     'leftFiles.length'() { this.pruneClosedLibreSpares() },
   },
   methods: {
+    // 批量命令（find_replace 逐命中路径 / apply_house_style）的「第 x/y 处」进度
+    // （dev-board#108）。AI 过程卡没有工具内进度位，先用 toast 降级显示；一批一帧
+    // （30 命中 / 500 元素），不会刷屏。total=0 表示命令不预知总数。
+    onEditorCommandProgress(p) {
+      if (!p || typeof p.done !== 'number') return
+      const title = p.total > 0 ? ('处理中 ' + p.done + '/' + p.total) : ('已处理 ' + p.done + ' 处')
+      try { uni.showToast({ title, icon: 'none', duration: 1500 }) } catch (e) { /* ignore */ }
+    },
     // Options API 模板拿不到裸导入函数，包一层 method 才能在模板里当 getInitial(...) 调用
     getInitial,
     // 顶栏头像：本地缓存（getCurrentUser，utils/auth.js）只是首屏兜底，
