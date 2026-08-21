@@ -730,6 +730,13 @@ jobs:
           ls -la artifacts
           DEST=/www/wwwroot/update/desktop/installers
           SSH_OPTS="-i $HOME/.ssh/mirror_key -o IdentitiesOnly=yes -o ServerAliveInterval=20"
+
+          # **推送之前先落 marker**：服务器上的 cron 每小时一发，看到新鲜 marker 就
+          # 直接让路（deploy/update-mirror-sync.sh 顶部的判断）。不落这个的话，推送
+          # 途中起来的那一发 cron 会先抢到 flock、再花一小时从 GitHub 重拉同一批包，
+          # 把下面的收尾步骤卡到超时——latest.json 停在上一版、本 job 转红、官网
+          # 下载页继续发旧版（v0.17.0 与 v0.23.0 各踩一次，后者靠人工介入才补上）。
+          ssh $SSH_OPTS "root@$MIRROR_HOST" 'touch /var/lock/awd-release-push-in-progress'
           # --partial --append-verify：这条链路断过（scp 传到 694MB/1437MB 掉线），
           # 断点续传比重传整包可靠。
           for f in artifacts/*.dmg artifacts/*.exe; do
@@ -755,12 +762,32 @@ jobs:
           # 安装包已就位，跑一次同步脚本让它补 latest.json 与补丁包（会 skip exists）。
           # **先等锁再跑**：脚本自带 `flock -n`，撞上 cron 那一发就静默 exit 0，
           # latest.json 停在上一版、下面的校验必挂（v0.17.0 实测）。
-          # `flock -w 1200 ... true` 只是「等到锁空出来就立刻放手」，随后由脚本
+          # `flock -w 3600 ... true` 只是「等到锁空出来就立刻放手」，随后由脚本
           # 自己去加锁。两步之间的窗口极小，真撞上了下面的校验也会报出来。
+          # 上面的 marker 已经挡住「推送途中新起的 cron」；这里的等待是为了另一种
+          # 情形——推送开始之前就已经在跑的那一发，它拉完 GitHub 才会放手，
+          # 1200s 不够（v0.23.0 实测超时），放宽到一小时。
+          # FORCE=1：让脚本无视自己刚落下的 marker。
           ssh $SSH_OPTS "root@$MIRROR_HOST" \
-            'flock -w 1200 /var/lock/awd-update-mirror-sync.lock true \
-             && cd /www/wwwroot/update/desktop && bash update-mirror-sync.sh' | tail -8
+            'flock -w 3600 /var/lock/awd-update-mirror-sync.lock true \
+             && cd /www/wwwroot/update/desktop && FORCE=1 bash update-mirror-sync.sh' | tail -8
 
+          # marker 的清理在下面独立的 always() 步骤里做——这里失败也要清掉，
+          # 否则残留 marker 会让 cron 白白让路（有 90 分钟过期兜底，但那是最后一道）。
           echo "校验 latest.json 指向 ${GITHUB_REF_NAME}"
           curl -fsS --max-time 20 https://www.aiworkdeck.com/update/desktop/installers/latest.json | tee /tmp/latest.json
           grep -q "\"${GITHUB_REF_NAME}\"" /tmp/latest.json || { echo "::error::latest.json 未指向 ${GITHUB_REF_NAME}"; exit 1; }
+
+      - name: Clear release-push marker
+        # 必须 always()：推送失败/校验失败时同样要清，否则 marker 留在服务器上，
+        # 接下来 90 分钟的 cron 全部让路，镜像反而更新不了。
+        if: always()
+        env:
+          MIRROR_HOST: ${{ secrets.MIRROR_HOST }}
+        run: |
+          set -uo pipefail
+          [ -n "${MIRROR_HOST:-}" ] || exit 0
+          [ -f ~/.ssh/mirror_key ] || exit 0
+          ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes "root@$MIRROR_HOST" \
+            'rm -f /var/lock/awd-release-push-in-progress' || \
+            echo "::warning::marker 清理失败，90 分钟后自动过期"
