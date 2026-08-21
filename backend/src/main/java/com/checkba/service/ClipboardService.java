@@ -18,6 +18,8 @@ import java.util.Map;
 @Service
 public class ClipboardService {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ClipboardService.class);
+
     /** 免费版最多回溯的条数（Spec §5）。 */
     public static final int FREE_MAX_ITEMS = 20;
     /** 免费版保留天数（Spec §5）。与条数上限**同时**生效，取更严者。 */
@@ -172,6 +174,31 @@ public class ClipboardService {
             throw new IllegalArgumentException(LangText.of("无权删除该记录", "You do not have permission to delete this record"));
         }
         repository.delete(item);
+        // 文件型记录的字节此前从不删：每删一条就永久漏一份对象。这是维护者看不见的泄漏——
+        // 功能上一切正常，只有磁盘/对象存储用量在慢慢涨。放在删行之后，且失败只记日志：
+        // 对象删不掉不该让用户的删除操作失败（下场是记录还在，用户会一直删不掉）。
+        deleteBlobQuietly(item);
+    }
+
+    /** 取出文件型记录的存储 key 并删除；不是文件型、meta 坏了、删不掉，一律只记日志。 */
+    private void deleteBlobQuietly(ClipboardItem item) {
+        if ("TEXT".equals(item.getType())) return;
+        String path;
+        try {
+            Map<String, Object> meta = new com.fasterxml.jackson.databind.ObjectMapper()
+                    .readValue(item.getMeta(), Map.class);
+            Object raw = meta.get("path");
+            path = raw instanceof String str ? str : null;
+        } catch (Exception e) {
+            log.warn("剪贴板记录 {} 的 meta 无法解析，跳过删除底层对象: {}", item.getId(), e.toString());
+            return;
+        }
+        if (!StringUtils.hasText(path)) return;
+        try {
+            getStorageService().delete(path);
+        } catch (Exception e) {
+            log.warn("剪贴板记录 {} 的底层对象删除失败: path={}", item.getId(), path, e);
+        }
     }
 }
 

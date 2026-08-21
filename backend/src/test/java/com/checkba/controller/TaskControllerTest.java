@@ -95,6 +95,25 @@ class TaskControllerTest {
         }
     }
 
+    /**
+     * title 是裸强转 (String)。传个数字进来抛的是 ClassCastException——不是
+     * IllegalArgumentException，绕过 GlobalExceptionHandler 那条能给出人话的分支，
+     * 落到兜底 Exception 处理器变成「服务器内部错误」，还给一条普通的参数校验失败
+     * 打了 ERROR 级堆栈。调用方看不出真正的原因只是 title 类型不对。
+     */
+    @Test
+    void createRejectsNonStringTitleWithUserFacingError() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(1L);
+            when(projectMemberService.hasWritePermission(7L, 1L)).thenReturn(true);
+            when(projectMemberService.isClient(7L, 1L)).thenReturn(false);
+            Map<String, Object> body = Map.of("projectId", 7, "title", 123, "dueDate", "2026-09-01");
+
+            assertThrows(IllegalArgumentException.class, () -> controller.create(body, "sess"));
+            verify(taskService, never()).createTask(any(), any(), any(), any(), any(), any());
+        }
+    }
+
     @Test
     void createRejectsClient() {
         try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {

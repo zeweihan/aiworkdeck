@@ -322,10 +322,21 @@ public class ShareholderMeetingService {
         return id == null ? List.of() : List.of(id);
     }
 
-    private List<ProjectFile> findFiles(List<Long> ids) {
+    /**
+     * 按 id 取材料文件，**排除回收站里的**。
+     *
+     * <p>裸 findById 不过滤 isDeleted，而 ProjectFileService 完全不知道股东大会核查这回事、
+     * 文件被删时从不解绑材料槽。于是材料被丢进回收站之后，kick-off prompt 仍把它列成
+     * 一份在场的材料、也不进「缺失材料」告警——与这段代码为 null 槽位精心实现的
+     * 缺失提示自相矛盾；若文件已被彻底删除，后续复制或 AI 读取还会失败，
+     * 而清单从没提醒过它没了。
+     */
+    List<ProjectFile> findFiles(List<Long> ids) {
         List<ProjectFile> files = new ArrayList<>();
         for (Long id : ids) {
-            projectFileRepository.findById(id).ifPresent(files::add);
+            projectFileRepository.findById(id)
+                    .filter(f -> !Boolean.TRUE.equals(f.getIsDeleted()))
+                    .ifPresent(files::add);
         }
         return files;
     }
