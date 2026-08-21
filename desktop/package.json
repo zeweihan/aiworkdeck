@@ -11,7 +11,7 @@
     "dev": "cross-env AIWORKDECK_DESKTOP_DEV=1 electron .",
     "start": "electron .",
     "build": "electron-builder",
-    "test": "node --test tests/service-manager.test.js tests/model-manager.test.js tests/pysvc-runtime.test.js tests/overlay.test.js tests/update-service.test.js tests/drawio-server.test.js tests/browser-views.test.js tests/build-pack.test.js"
+    "test": "node --test tests/service-manager.test.js tests/model-manager.test.js tests/pysvc-runtime.test.js tests/overlay.test.js tests/update-service.test.js tests/drawio-server.test.js tests/browser-views.test.js tests/build-pack.test.js tests/fetch-lowa-assets.test.js tests/workflow-release-gating.test.js"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",

@@ -21,22 +21,52 @@ export function normalizeBaseUrl(url) {
   return (url || '').trim().replace(/\/+$/, '')
 }
 
+/**
+ * localStorage 在 Office 任务窗格的 webview 里不保证可用：第三方存储被策略禁用时
+ * getItem/setItem 会抛 SecurityError，未定义时引用标识符本身就是 ReferenceError。
+ * App.vue 顶层同步调用 loadSettings()，异常会让 createApp().mount() 整个抛出、
+ * 任务窗格永远白屏——所以这里统一兜底：读不到用默认值，写不进静默降级。
+ */
+function safeGetItem(key) {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function safeSetItem(key, value) {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    // 存储不可用：静默降级，本次会话内功能仍可用，只是刷新后不记住
+  }
+}
+
+function safeRemoveItem(key) {
+  try {
+    localStorage.removeItem(key)
+  } catch {
+    // 同上
+  }
+}
+
 export function loadSettings() {
   return {
     // 用户显式改过（localStorage 有非空值）则以用户值为准，否则用默认地址
-    serverUrl: localStorage.getItem(KEY_SERVER) || normalizeBaseUrl(DEFAULT_SERVER_URL),
-    token: localStorage.getItem(KEY_TOKEN) || '',
-    projectId: localStorage.getItem(KEY_PROJECT) || ''
+    serverUrl: safeGetItem(KEY_SERVER) || normalizeBaseUrl(DEFAULT_SERVER_URL),
+    token: safeGetItem(KEY_TOKEN) || '',
+    projectId: safeGetItem(KEY_PROJECT) || ''
   }
 }
 
 export function saveSettings({ serverUrl, token }) {
-  localStorage.setItem(KEY_SERVER, normalizeBaseUrl(serverUrl))
-  localStorage.setItem(KEY_TOKEN, (token || '').trim())
+  safeSetItem(KEY_SERVER, normalizeBaseUrl(serverUrl))
+  safeSetItem(KEY_TOKEN, (token || '').trim())
 }
 
 export function saveProjectId(projectId) {
-  localStorage.setItem(KEY_PROJECT, projectId == null ? '' : String(projectId))
+  safeSetItem(KEY_PROJECT, projectId == null ? '' : String(projectId))
 }
 
 /**
@@ -44,7 +74,7 @@ export function saveProjectId(projectId) {
  */
 export function loadConversationId(projectId) {
   if (!projectId) return ''
-  return localStorage.getItem(KEY_CONVERSATION_PREFIX + projectId) || ''
+  return safeGetItem(KEY_CONVERSATION_PREFIX + projectId) || ''
 }
 
 /**
@@ -53,8 +83,8 @@ export function loadConversationId(projectId) {
 export function saveConversationId(projectId, conversationId) {
   if (!projectId) return
   const key = KEY_CONVERSATION_PREFIX + projectId
-  if (conversationId) localStorage.setItem(key, String(conversationId))
-  else localStorage.removeItem(key)
+  if (conversationId) safeSetItem(key, String(conversationId))
+  else safeRemoveItem(key)
 }
 
 export function isConfigured(settings) {

@@ -183,9 +183,20 @@ function get(url, headers, redirects = 0) {
         return resolve(get(new URL(res.headers.location, url).toString(), headers, redirects + 1));
       }
       if (sc !== 200) { res.resume(); return reject(new Error('GET ' + url + ' -> HTTP ' + sc)); }
+      // 只在 end 时 Buffer.concat 从不校验实收字节数是否等于服务器声明的
+      // Content-Length——连接中途断开时 Node 照样触发 'end'，截断的响应体会被
+      // 当成完整文件收下。声明了 Content-Length 就必须对上。
+      const expectedLength = res.headers['content-length'] != null ? Number(res.headers['content-length']) : null;
       const chunks = [];
       res.on('data', (c) => chunks.push(c));
-      res.on('end', () => resolve({ encoding: res.headers['content-encoding'] || null, body: Buffer.concat(chunks) }));
+      res.on('end', () => {
+        const body = Buffer.concat(chunks);
+        if (expectedLength != null && !Number.isNaN(expectedLength) && body.length !== expectedLength) {
+          return reject(new Error('GET ' + url + ' -> truncated response: Content-Length ' +
+            expectedLength + ' but received ' + body.length + ' bytes'));
+        }
+        resolve({ encoding: res.headers['content-encoding'] || null, body });
+      });
       res.on('error', reject);
     });
     req.on('error', reject);
@@ -208,9 +219,13 @@ function checkMagic(raw, magic, dest) {
   if (raw[0] === 0x3c) fail('looks like HTML (starts with "<")');
   switch (magic) {
     case 'wasm':
+      // 同 'js'/'blob' 一样加最小体积下限：不然截断下载只要保留正确的开头 4
+      // 字节就会被当成完整文件收下（且 cachedOk 复验用的是同一套规则，一坏永坏）。
+      if (raw.length < 1024) fail('suspiciously small WASM (' + raw.length + ' bytes)');
       if (!(raw[0] === 0x00 && raw[1] === 0x61 && raw[2] === 0x73 && raw[3] === 0x6d)) fail('not a WASM module (\\0asm)');
       break;
     case 'font':
+      if (raw.length < 1024) fail('suspiciously small font (' + raw.length + ' bytes)');
       if (tag !== 'OTTO' && tag !== 'ttcf' && tag !== 'true' &&
           !(raw[0] === 0x00 && raw[1] === 0x01 && raw[2] === 0x00 && raw[3] === 0x00)) fail('not a TTF/OTF/TTC font');
       break;
@@ -313,4 +328,10 @@ async function main() {
   console.log('  encodings: ' + JSON.stringify(encodings));
 }
 
-main().catch((e) => { console.error('fetch-lowa-assets failed:', e.message || e); process.exit(1); });
+// require.main 判断：直接执行（node fetch-lowa-assets.js / npm 脚本）时行为不变，
+// 照旧跑 main() 真下载；被测试文件 require() 拿 checkMagic 时不触发下载副作用。
+if (require.main === module) {
+  main().catch((e) => { console.error('fetch-lowa-assets failed:', e.message || e); process.exit(1); });
+}
+
+module.exports = { checkMagic };
