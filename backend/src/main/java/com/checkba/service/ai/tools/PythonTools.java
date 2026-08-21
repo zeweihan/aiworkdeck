@@ -46,6 +46,15 @@ public class PythonTools implements AgentToolComponent {
 
     private static final String DOCKER_IMAGE = "python:3.9-slim";
 
+    /**
+     * stdout/stderr 排空缓冲区的字符数上限。本类自己定的默认值（非产品要求）：
+     * 病灶是子进程输出无上限地堆进 JVM 堆里的 StringBuilder——AI 脚本一次
+     * read_document 一份大文档再 print 出来，或死循环脚本在 120 秒超时前疯狂
+     * 打印，都可能把并发跑着的多个 run_python 共同挤爆后端堆，殃及其它请求。
+     * 2MB 字符足够容纳绝大多数正常调试/分析输出的可读部分。
+     */
+    static final int MAX_OUTPUT_CHARS = 2 * 1024 * 1024;
+
     // Python helper code that provides the default_api object
     private static final String PYTHON_API_BRIDGE = """
 # === Auto-injected API Bridge ===
@@ -318,14 +327,27 @@ default_api = _ToolAPI()
 
     /**
      * 后台守护线程持续读取进程输出流到缓冲，防止管道写阻塞导致子进程挂死。
+     *
+     * <p>缓冲区有上限（{@link #MAX_OUTPUT_CHARS}）：超出后不再追加，但仍继续把流读空
+     * ——子进程输出超过 OS 管道缓冲（~64KB）就会阻塞在 write，停止读取会让进程
+     * 永远退不出去，只是把已经不需要的多余内容原地丢弃即可。
      */
-    private Thread pumpStream(java.io.InputStream in, StringBuilder sink) {
+    Thread pumpStream(java.io.InputStream in, StringBuilder sink) {
         Thread t = new Thread(() -> {
             try (BufferedReader r = new BufferedReader(
                     new InputStreamReader(in, java.nio.charset.StandardCharsets.UTF_8))) {
                 String line;
+                boolean truncated = false;
                 while ((line = r.readLine()) != null) {
-                    synchronized (sink) { sink.append(line).append('\n'); }
+                    synchronized (sink) {
+                        if (sink.length() < MAX_OUTPUT_CHARS) {
+                            sink.append(line).append('\n');
+                        } else if (!truncated) {
+                            sink.append("\n... [输出超过 ").append(MAX_OUTPUT_CHARS / (1024 * 1024))
+                                    .append("MB 上限，已截断] ...\n");
+                            truncated = true;
+                        }
+                    }
                 }
             } catch (java.io.IOException ignored) {
                 // 进程结束/流关闭时正常退出

@@ -301,6 +301,49 @@ class PluginServiceTest {
         assertDoesNotThrow(service::rescan);
     }
 
+    /**
+     * 修复：loadJar() 每次都 new 一个 URLClassLoader 加载插件 JAR，从来没有配对的 close()。
+     * rescan()/PluginDevService 热重载/广场装卸插件都会反复调用它，长期运行的服务器
+     * 进程上会不断攒 fd 与已加载类的元数据，最终可能导致插件 JAR 加载开始抛 IOException。
+     *
+     * <p>不能在 loadJar() 里当场关：那会让刚加载出来的插件类立刻失效（已注册的工具对象
+     * 若懒加载同一 JAR 里此刻还没碰过的辅助类会失败）。安全的时机是「下一代已经
+     * 完整接管注册表之后」——此时上一代不再可能被任何新请求经 pluginTools 查到。
+     * 用 JDK 21 实测过的行为验证「真的调用了 close()」：close() 后，loader 上
+     * 从未被访问过的资源会读不到（返回 null），而不是抛异常——这是比检查内部字段
+     * 更可靠的信号。
+     */
+    @Test
+    @DisplayName("修复：rescan 关闭上一代插件 ClassLoader，不能只增不减地攒 fd")
+    void rescanClosesPreviousGenerationClassLoaders() throws IOException {
+        Path pluginDir = pluginsDir.resolve("loader-plugin");
+        Files.createDirectories(pluginDir);
+        writeRealJar(pluginDir.resolve("tool.jar"));
+        writeManifest("loader-plugin",
+                "{\"id\": \"loader-plugin\", \"name\": \"L\", \"backendJars\": [\"tool.jar\"]}");
+
+        service.init();
+        assertEquals(1, service.loadedClassLoaders().size(), "第一代应注册 1 个 loader");
+        java.net.URLClassLoader first = service.loadedClassLoaders().get(0);
+        assertNotNull(first.getResourceAsStream("hello/Foo.class"), "关闭前应能正常读取 jar 内容");
+
+        service.rescan();
+
+        assertEquals(1, service.loadedClassLoaders().size(), "重扫后应只保留新一代，不累积");
+        assertNotSame(first, service.loadedClassLoaders().get(0), "新一代应是全新的 loader 实例");
+        assertNull(first.getResourceAsStream("hello/Foo.class"),
+                "上一代 loader 必须在新一代接管注册表后被 close，否则 fd 一直攒（病灶）");
+    }
+
+    /** 写一个真正合法的 JAR（含两个 class 条目，字节内容不必是合法字节码——不测加载，只测 loader 生命周期）。 */
+    private void writeRealJar(Path jarPath) throws IOException {
+        try (java.util.jar.JarOutputStream jos = new java.util.jar.JarOutputStream(Files.newOutputStream(jarPath))) {
+            jos.putNextEntry(new java.util.jar.JarEntry("hello/Foo.class"));
+            jos.write(new byte[]{1, 2, 3, 4});
+            jos.closeEntry();
+        }
+    }
+
     // ==== backendJars 路径校验 ====
 
     @Test

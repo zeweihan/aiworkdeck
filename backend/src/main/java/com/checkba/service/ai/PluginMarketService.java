@@ -12,7 +12,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -526,16 +529,45 @@ public class PluginMarketService {
      * @param bearer 非空时带 {@code Authorization: Bearer}；付费项 file 端点需要
      */
     protected RegistryReply httpGetBytes(String url, String bearer) {
-        HttpResponse resp;
+        HttpResponse resp = null;
         try {
             HttpRequest req = HttpRequest.get(url).setConnectionTimeout(5000).setReadTimeout(60000);
             if (bearer != null && !bearer.isBlank()) {
                 req.header("Authorization", "Bearer " + bearer);
             }
             resp = req.execute();
+            // 病灶：原来是 resp.bodyBytes() 把整份响应先吃进内存，MAX_FILE_BYTES 只在
+            // readBinary() 里事后判 data.length——恶意/异常大响应（被拒绝之前）已经把
+            // 堆占满了，注释里"防御恶意注册表打爆内存"的说法名不副实。改成边读边计数，
+            // 超限立即掐断连接，不等整份读完。
+            return new RegistryReply(resp.getStatus(), readCapped(resp.bodyStream()));
+        } catch (IllegalStateException e) {
+            throw e; // 50MB 上限异常：原样透传，message 已经是最终提示
         } catch (Exception e) {
             throw new IllegalStateException(LangText.of("下载失败: ", "Download failed: ") + e.getMessage());
+        } finally {
+            if (resp != null) {
+                resp.close();
+            }
         }
-        return new RegistryReply(resp.getStatus(), resp.bodyBytes());
+    }
+
+    /**
+     * 流式读取并边读边计数，超过 MAX_FILE_BYTES 立即掐断——不像 resp.bodyBytes() 那样
+     * 先把整份响应吃进内存再判长度。包可见：供测试直接驱动，不依赖真实网络/50MB 数据。
+     */
+    static byte[] readCapped(InputStream in) throws IOException {
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        byte[] chunk = new byte[8192];
+        long total = 0;
+        int n;
+        while ((n = in.read(chunk)) != -1) {
+            total += n;
+            if (total > MAX_FILE_BYTES) {
+                throw new IllegalStateException(LangText.of("文件超过 50 MB 上限", "File exceeds the 50 MB limit"));
+            }
+            buf.write(chunk, 0, n);
+        }
+        return buf.toByteArray();
     }
 }

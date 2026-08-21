@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Base64;
 import java.util.HexFormat;
@@ -17,6 +18,14 @@ import java.util.List;
 public class DeviceTokenService {
 
     public static final String TOKEN_PREFIX = "awdt_";
+
+    /**
+     * lastUsedAt 写回节流：一分钟内的重复请求不再落盘。
+     * 修复病灶：resolveUserId 原来对每一次设备令牌请求都无条件 SELECT+UPDATE，
+     * 云端协作客户端任何一次轮询/只读请求都会被打成一次写库，放大 DB 写负载与行锁竞争。
+     * 与同一文件夹下 UserSessionService 的 TOUCH_INTERVAL 是同一手法，数值也保持一致。
+     */
+    static final Duration TOUCH_INTERVAL = Duration.ofMinutes(1);
 
     private static final SecureRandom RANDOM = new SecureRandom();
 
@@ -49,8 +58,13 @@ public class DeviceTokenService {
         if (plaintext == null || !plaintext.startsWith(TOKEN_PREFIX)) return null;
         return repository.findByTokenHash(sha256(plaintext))
                 .map(t -> {
-                    t.setLastUsedAt(LocalDateTime.now());
-                    repository.save(t);
+                    LocalDateTime now = LocalDateTime.now();
+                    // 节流：lastUsedAt 从未写过，或已超过节流窗口，才补一次写；
+                    // 窗口内的重复请求（同一设备的高频轮询）不再逐请求落库。
+                    if (t.getLastUsedAt() == null || t.getLastUsedAt().plus(TOUCH_INTERVAL).isBefore(now)) {
+                        t.setLastUsedAt(now);
+                        repository.save(t);
+                    }
                     return t.getUserId();
                 })
                 .orElse(null);

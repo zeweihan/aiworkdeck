@@ -116,4 +116,35 @@ class DeviceTokenServiceTest {
         assertEquals(1, mineOfB.size());
         assertEquals(issuedB.id(), mineOfB.get(0).getId());
     }
+
+    // ==== 修复：resolveUserId 原来每个设备令牌请求都无条件写一次库（SELECT+UPDATE），
+    // 云端协作客户端的每次轮询/读接口都被打成一次写。节流到「一分钟内不重复落盘」，
+    // 与同一份代码里 UserSessionService 的 TOUCH_INTERVAL 节流手法一致。
+
+    @Test
+    void resolveUserIdThrottlesRepeatedLastUsedAtWrites() {
+        DeviceTokenService.IssuedToken issued = svc.issue(42L, "MacBook"); // save #1：签发本身要落库
+
+        // 节流窗口内连续解析三次，应该只在首次（lastUsedAt 从未写过）补一次 save，
+        // 之后的重复请求不能再逐请求写库。
+        assertEquals(42L, svc.resolveUserId(issued.plaintext()));
+        assertEquals(42L, svc.resolveUserId(issued.plaintext()));
+        assertEquals(42L, svc.resolveUserId(issued.plaintext()));
+
+        org.mockito.Mockito.verify(repo, org.mockito.Mockito.times(2)).save(any());
+    }
+
+    @Test
+    void resolveUserIdWritesAgainAfterThrottleWindowElapses() {
+        DeviceTokenService.IssuedToken issued = svc.issue(42L, "MacBook"); // save #1
+        svc.resolveUserId(issued.plaintext()); // save #2：lastUsedAt 首次从 null 写入
+
+        DeviceToken token = byHash.values().iterator().next();
+        // 手工把 lastUsedAt 拨回节流窗口之外，模拟「一分钟后又来了一次请求」。
+        token.setLastUsedAt(token.getLastUsedAt().minus(DeviceTokenService.TOUCH_INTERVAL).minusSeconds(1));
+
+        assertEquals(42L, svc.resolveUserId(issued.plaintext())); // save #3：窗口已过，应重新写
+
+        org.mockito.Mockito.verify(repo, org.mockito.Mockito.times(3)).save(any());
+    }
 }

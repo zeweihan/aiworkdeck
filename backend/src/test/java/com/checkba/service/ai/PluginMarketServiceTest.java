@@ -10,9 +10,12 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.Signature;
@@ -598,5 +601,40 @@ class PluginMarketServiceTest {
         var list = svc.listMarket();
         assertEquals(0, list.get(0).getPriceCents(), "负数按未知");
         assertEquals(0, list.get(1).getPriceCents(), "超上限只可能是畸形值，不能当真价展示");
+    }
+
+    // ==== 修复：50MB 单文件下载上限原来是在 resp.bodyBytes() 把整份响应吃进内存之后才判的，
+    // 恶意/异常大响应能在被拒绝之前先把堆占满。readCapped 必须边读边计数，超限立即掐断。
+
+    @Test
+    @DisplayName("修复：readCapped 边读边计数，超过 50MB 立即掐断，不必先把整份响应吃进内存")
+    void readCappedAbortsWithoutMaterializingOversizedResponse() {
+        // 永不返回 -1、也不预先分配任何内存的 InputStream：只有真正「边读边判」的实现
+        // 才能在有限时间内收敛——先读完整份再判长度的实现会一直读到 OOM/超时都不返回。
+        InputStream endless = new InputStream() {
+            @Override
+            public int read() {
+                return 'x';
+            }
+
+            @Override
+            public int read(byte[] b, int off, int len) {
+                java.util.Arrays.fill(b, off, off + len, (byte) 'x');
+                return len;
+            }
+        };
+        assertTimeoutPreemptively(Duration.ofSeconds(5), () -> {
+            IllegalStateException e = assertThrows(IllegalStateException.class,
+                    () -> PluginMarketService.readCapped(endless));
+            assertTrue(e.getMessage().contains("50 MB"), e.getMessage());
+        });
+    }
+
+    @Test
+    @DisplayName("readCapped 对未超限的正常响应原样返回全部字节")
+    void readCappedReturnsFullDataWhenUnderLimit() throws Exception {
+        byte[] small = "hello world".getBytes(StandardCharsets.UTF_8);
+        byte[] result = PluginMarketService.readCapped(new ByteArrayInputStream(small));
+        assertArrayEquals(small, result);
     }
 }

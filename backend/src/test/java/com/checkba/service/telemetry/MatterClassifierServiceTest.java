@@ -103,4 +103,47 @@ class MatterClassifierServiceTest {
             svc.flush();
         });
     }
+
+    // ==== 修复：classifyAsync 只在会话首轮被调用，去重位提前置上后就再没有第二次机会——
+    // 真正值得做的是给 AI 调用本身加有限次重试，以及给去重集合加上界（见类注释与 PR 说明）。
+
+    @Test
+    void transientFailureIsRetriedAndSucceedsOnSecondAttempt() throws Exception {
+        // 第一次调用（网络抖动/瞬时 5xx 等）失败，第二次成功——不该像原来那样一次失败就永久放弃。
+        when(model.generate(anyString()))
+                .thenThrow(new RuntimeException("model down"))
+                .thenReturn("合规监管");
+        svc.classifyAsync("conv-7", "帮我看看合规要求", false);
+        String attrs = capturedCategory();
+        assertTrue(attrs.contains("合规监管"));
+        verify(model, times(2)).generate(anyString());
+    }
+
+    @Test
+    void retriesGiveUpAfterBoundedAttempts() throws Exception {
+        when(model.generate(anyString())).thenThrow(new RuntimeException("model down"));
+        assertDoesNotThrow(() -> {
+            svc.classifyAsync("conv-8", "帮我看看合规要求", false);
+            svc.flush();
+        });
+        // 重试次数必须有限——不能因为一直失败就无限重试拖住后台线程。
+        verify(model, times(svc.maxClassifyAttempts)).generate(anyString());
+        verify(repo, never()).save(any());
+    }
+
+    @Test
+    void classifiedSetHasUpperBoundAndResetsInsteadOfGrowingForever() throws Exception {
+        when(model.generate(anyString())).thenReturn("其他法律事务");
+        svc.maxClassifiedEntries = 2; // 缩小上界，测试不必真跑一万次
+
+        svc.classifyAsync("conv-a", "问题一", false);
+        svc.classifyAsync("conv-b", "问题二", false);
+        svc.flush();
+        // 去重集合已达上界（2），第三个不同会话到来时必须整体清空重来，
+        // 而不是无限增长——即便这意味着 conv-a 会被重复分类一次。
+        svc.classifyAsync("conv-a", "问题一，再来一次", false);
+        svc.flush();
+
+        verify(model, times(3)).generate(anyString());
+    }
 }
