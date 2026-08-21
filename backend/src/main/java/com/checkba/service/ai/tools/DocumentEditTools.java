@@ -38,6 +38,9 @@ public class DocumentEditTools implements AgentToolComponent {
     private final ProjectFileRepository projectFileRepository;
     private final EditorBridgeService editorBridgeService;
     private final com.checkba.storage.ProjectStorageResolver storageResolver;
+    // 构造器加参：手工 new 的测试（ParagraphIndexBaseTest / DocumentEditToolsEvidenceTest）要同步；
+    // RealToolBeans 走反射取最长构造器，自动跟上
+    private final com.checkba.service.evidence.EvidenceLinkService evidenceLinkService;
 
     // ==================== 文件管理工具 ====================
 
@@ -1296,6 +1299,266 @@ public class DocumentEditTools implements AgentToolComponent {
             log.error("Failed to set hyperlink", e);
             return "Error: " + e.getMessage();
         }
+    }
+
+    // ==================== 证据链接（EvidenceLink，dev-board#112） ====================
+
+    /** 文档内超链接的 web 包装前缀，与前端 workbenchActions.WPS_INTERNAL_HTTP_LINK_BASE / evidenceLocator.buildFileLinkUrl 同形。 */
+    static final String INTERNAL_LINK_BASE = "https://checkba-internal.local/open";
+    private static final java.util.Set<String> EVIDENCE_METHODS = java.util.Set.of(
+            "written_review", "written_statement", "web_check", "third_party", "interview");
+    private static final java.util.Set<String> EVIDENCE_RELATIONS = java.util.Set.of("supports", "contradicts", "partial");
+    private static final com.fasterxml.jackson.databind.ObjectMapper EVIDENCE_JSON = new com.fasterxml.jackson.databind.ObjectMapper();
+
+    @ToolMeta(displayName = "关联底稿", category = "document", fileEffect = "MODIFIED")
+    @Tool("【证据】把报告里的一句事实陈述与它的底稿文件关联起来（EvidenceLink）：在该文字上套书签 + 超链接，并登记底稿位置。" +
+          "写完任何可核对的事实（数字、日期、主体、权属）后立即调用。定位二选一：anchorQuote（原文片段，必须在文档中恰好出现一次，" +
+          "0 或多处命中都会拒绝——换更长的片段或改用 anchorId）或 anchorId（doc_find_text 返回的锚点）。" +
+          "targetsJson 是 JSON 数组，每条 {fileId 或 path, locator?, relation?, method?, note?}：path 是文件树相对路径如 \"底稿/营业执照.pdf\"；" +
+          "locator 按类型 {type:\"pdf\",page,quote?} / {type:\"docx\",quote?,paragraphIndex?} / {type:\"sheet\",sheet,cell} / {type:\"image\",rect} / {type:\"media\",startMs,endMs} / {type:\"web\",url,capturedAt}，不传表示整个文件。" +
+          "AI 建的链状态为 unverified，待用户核对。返回 {linkKey, targetIds, sectionPath, status}。")
+    public String doc_link_evidence(
+            @P("当前打开的报告文件 ID（系统提醒里的 id=）") Long docFileId,
+            @P("报告原文片段，必须在文档中恰好出现一次；与 anchorId 二选一") String anchorQuote,
+            @P("doc_find_text 返回的 anchorId；给了就不再按 anchorQuote 查找") String anchorId,
+            @P("底稿清单 JSON 数组：[{fileId 或 path, locator?, relation?, method?, note?}]") String targetsJson,
+            @P("默认核查方式 written_review/written_statement/web_check/third_party/interview（单条 target 可覆盖），可不传") String method,
+            @P("默认关系 supports（默认）/contradicts/partial（单条 target 可覆盖）") String relation,
+            @P("默认备注，可不传") String note
+    ) {
+        log.info("Tool: doc_link_evidence called docFileId={}, anchorId={}, quote={}", docFileId, anchorId, anchorQuote);
+        Long projectId = com.checkba.service.ai.context.ProjectContextHolder.getProjectIdAsLong();
+        Long userId = com.checkba.service.ai.context.ProjectContextHolder.getUserId();
+        if (projectId == null || userId == null) {
+            return "Error: 缺少项目或用户上下文，无法建立证据链接";
+        }
+        if (docFileId == null) {
+            return "Error: 缺少 docFileId 参数（当前打开报告的文件 ID，见系统提醒里的 id=）";
+        }
+        boolean hasAnchor = anchorId != null && !anchorId.isBlank();
+        boolean hasQuote = anchorQuote != null && !anchorQuote.isBlank();
+        if (!hasAnchor && !hasQuote) {
+            return "Error: anchorQuote 与 anchorId 必须给一个";
+        }
+        if (relation != null && !relation.isBlank() && !EVIDENCE_RELATIONS.contains(relation.trim())) {
+            return "Error: relation 只能是 supports/contradicts/partial";
+        }
+        if (method != null && !method.isBlank() && !EVIDENCE_METHODS.contains(method.trim())) {
+            return "Error: method 只能是 written_review/written_statement/web_check/third_party/interview";
+        }
+
+        List<com.checkba.service.evidence.EvidenceLinkViews.TargetInput> targets;
+        try {
+            targets = parseEvidenceTargets(projectId, targetsJson, relation, method, note);
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        if (targets.isEmpty()) {
+            return "Error: targetsJson 至少要有一条底稿";
+        }
+
+        try {
+            String anchor = anchorId;
+            String matchedText = null;
+            if (!hasAnchor) {
+                com.fasterxml.jackson.databind.JsonNode found = workerJson(
+                        editorBridgeService.executeEditorCommand("find_text_locations", java.util.Map.of("keyword", anchorQuote.trim())));
+                com.fasterxml.jackson.databind.JsonNode matches = found.path("matches");
+                int n = matches.isArray() ? matches.size() : 0;
+                if (n == 0) {
+                    return "Error: anchorQuote 在文档中命中 0 处，未建链。请核对原文（标点、空格要一致），或先用 doc_find_text 定位后传 anchorId";
+                }
+                if (n > 1) {
+                    return "Error: anchorQuote 在文档中命中 " + n + " 处，无法唯一定位，未建链。请给更长、更独特的片段，或用 doc_find_text 挑出那一处后传 anchorId";
+                }
+                anchor = matches.get(0).path("anchorId").asText(null);
+                matchedText = matches.get(0).path("text").asText(null);
+                if (anchor == null || anchor.isBlank()) {
+                    return "Error: 查找结果缺少 anchorId，未建链";
+                }
+            }
+
+            workerJson(editorBridgeService.executeEditorCommand("set_selection", java.util.Map.of("anchor", anchor)));
+
+            String linkKey = "EVID_" + com.checkba.service.evidence.Ulid.next();
+            com.fasterxml.jackson.databind.JsonNode bm = workerJson(
+                    editorBridgeService.executeEditorCommand("bookmark_selection", java.util.Map.of("name", linkKey)));
+            String bookmarkText = bm.path("text").asText(null);
+
+            String inner = "checkba://filelink?k=" + linkKey + "&projectId=" + projectId;
+            String url = INTERNAL_LINK_BASE + "?u=" + java.net.URLEncoder.encode(inner, java.nio.charset.StandardCharsets.UTF_8);
+            workerJson(editorBridgeService.executeEditorCommand("set_selection_hyperlink", java.util.Map.of("url", url)));
+
+            String sectionPath = "";
+            String sectionTitle = "";
+            String contextText = null;
+            try {
+                com.fasterxml.jackson.databind.JsonNode ctx = workerJson(
+                        editorBridgeService.executeEditorCommand("get_bookmark_context", java.util.Map.of("name", linkKey)));
+                sectionPath = ctx.path("sectionPath").asText("");
+                sectionTitle = ctx.path("sectionTitle").asText("");
+                contextText = ctx.path("text").asText(null);
+            } catch (IllegalStateException e) {
+                // 书签与超链接已写入，章节信息拿不到不致命：sectionPath 留空，链照样落库
+                log.warn("doc_link_evidence: get_bookmark_context failed for {}: {}", linkKey, e.getMessage());
+            }
+            String anchorText = firstNonBlank(contextText, bookmarkText, matchedText, anchorQuote);
+
+            com.checkba.service.evidence.EvidenceLinkViews.LinkView view = evidenceLinkService.create(
+                    userId, projectId, docFileId, linkKey, anchorText, sectionPath, sectionTitle,
+                    com.checkba.model.entity.EvidenceLink.KIND_AI, targets);
+
+            java.util.Map<String, Object> out = new java.util.LinkedHashMap<>();
+            out.put("linkKey", view.linkKey());
+            out.put("targetIds", view.targets().stream().map(com.checkba.service.evidence.EvidenceLinkViews.TargetView::id).toList());
+            out.put("sectionPath", view.sectionPath() == null ? "" : view.sectionPath());
+            out.put("status", view.status());
+            return EVIDENCE_JSON.writeValueAsString(out);
+        } catch (IllegalStateException e) {
+            return "Error: " + e.getMessage();
+        } catch (Exception e) {
+            log.error("Failed to link evidence", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "查看底稿关联", category = "document")
+    @Tool("【证据】列出报告里已建立的底稿关联（EvidenceLink）：每条含 linkKey、锚定文字、所在章节 sectionPath、状态" +
+          "（active 已核对 / unverified 待核对 / stale 文字已变 / orphan 锚点丢失）与底稿 targets。" +
+          "用它自查「哪些段落还没有底稿」或「这份底稿被哪些地方引用」：传 docFileId 按报告列，传 fileId 按底稿反查（优先），" +
+          "sectionPath 按章节前缀过滤，status 按状态过滤。")
+    public String doc_list_evidence(
+            @P("报告文件 ID（系统提醒里的 id=）；与 fileId 二选一") Long docFileId,
+            @P("底稿文件 ID：反查它被哪些锚点引用；给了就忽略 docFileId 之外的过滤") Long fileId,
+            @P("章节前缀过滤，如 \"一/（二）\"，可不传") String sectionPath,
+            @P("状态过滤 active/unverified/stale/orphan，可不传") String status
+    ) {
+        log.info("Tool: doc_list_evidence called docFileId={}, fileId={}, sectionPath={}, status={}", docFileId, fileId, sectionPath, status);
+        Long projectId = com.checkba.service.ai.context.ProjectContextHolder.getProjectIdAsLong();
+        Long userId = com.checkba.service.ai.context.ProjectContextHolder.getUserId();
+        if (projectId == null || userId == null) {
+            return "Error: 缺少项目或用户上下文";
+        }
+        if (fileId == null && docFileId == null) {
+            return "Error: docFileId 与 fileId 至少给一个";
+        }
+        try {
+            List<com.checkba.service.evidence.EvidenceLinkViews.LinkView> views = fileId != null
+                    ? evidenceLinkService.listByFile(userId, projectId, fileId)
+                    : evidenceLinkService.listByDoc(userId, projectId, docFileId,
+                            status == null || status.isBlank() ? null : status.trim(),
+                            sectionPath == null || sectionPath.isBlank() ? null : sectionPath.trim());
+            List<java.util.Map<String, Object>> links = new java.util.ArrayList<>();
+            for (com.checkba.service.evidence.EvidenceLinkViews.LinkView v : views) {
+                java.util.Map<String, Object> l = new java.util.LinkedHashMap<>();
+                l.put("linkKey", v.linkKey());
+                l.put("anchorText", v.anchorText());
+                l.put("sectionPath", v.sectionPath() == null ? "" : v.sectionPath());
+                l.put("status", v.status());
+                List<java.util.Map<String, Object>> ts = new java.util.ArrayList<>();
+                for (com.checkba.service.evidence.EvidenceLinkViews.TargetView t : v.targets()) {
+                    java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+                    m.put("targetId", t.id());
+                    m.put("fileId", t.fileId());
+                    m.put("fileName", t.file() == null ? null : t.file().name());
+                    m.put("locator", t.locator());
+                    m.put("relation", t.relation());
+                    m.put("method", t.method());
+                    ts.add(m);
+                }
+                l.put("targets", ts);
+                links.add(l);
+            }
+            java.util.Map<String, Object> out = new java.util.LinkedHashMap<>();
+            out.put("count", links.size());
+            out.put("links", links);
+            return EVIDENCE_JSON.writeValueAsString(out);
+        } catch (Exception e) {
+            log.error("Failed to list evidence links", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    /** 解析 targetsJson：fileId 直用，path 经文件树路径索引（FileTools.dbPathIndex）映射；工具级 relation/method/note 作缺省。 */
+    private List<com.checkba.service.evidence.EvidenceLinkViews.TargetInput> parseEvidenceTargets(
+            Long projectId, String targetsJson, String defRelation, String defMethod, String defNote) {
+        if (targetsJson == null || targetsJson.isBlank()) {
+            throw new IllegalArgumentException("缺少 targetsJson 参数（底稿清单）");
+        }
+        com.fasterxml.jackson.databind.JsonNode arr;
+        try {
+            arr = EVIDENCE_JSON.readTree(targetsJson);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("targetsJson 不是合法 JSON：" + e.getMessage());
+        }
+        if (arr == null || !arr.isArray()) {
+            throw new IllegalArgumentException("targetsJson 必须是 JSON 数组");
+        }
+        java.util.Map<String, ProjectFile> pathIndex = null;
+        List<com.checkba.service.evidence.EvidenceLinkViews.TargetInput> out = new java.util.ArrayList<>();
+        for (com.fasterxml.jackson.databind.JsonNode t : arr) {
+            Long fid = t.hasNonNull("fileId") && t.get("fileId").canConvertToLong() ? t.get("fileId").asLong() : null;
+            if (fid == null) {
+                String path = t.path("path").asText("").trim().replace('\\', '/');
+                while (path.startsWith("/") || path.startsWith("./")) path = path.startsWith("/") ? path.substring(1) : path.substring(2);
+                if (path.isEmpty()) {
+                    throw new IllegalArgumentException("每条 target 必须有 fileId 或 path");
+                }
+                if (pathIndex == null) pathIndex = FileTools.dbPathIndex(projectFileRepository, projectId);
+                ProjectFile pf = pathIndex.get(path);
+                if (pf == null || Boolean.TRUE.equals(pf.getIsFolder())) {
+                    throw new IllegalArgumentException("底稿路径在项目文件树中找不到：" + path + "（用 list_files 核对路径，或改传 fileId）");
+                }
+                fid = pf.getId();
+            }
+            String locator = null;
+            com.fasterxml.jackson.databind.JsonNode loc = t.get("locator");
+            if (loc != null && !loc.isNull()) {
+                if (!loc.isObject()) {
+                    throw new IllegalArgumentException("locator 必须是 JSON 对象");
+                }
+                locator = loc.toString();
+            }
+            String rel = firstNonBlank(t.path("relation").asText(null), defRelation, "supports").trim();
+            if (!EVIDENCE_RELATIONS.contains(rel)) {
+                throw new IllegalArgumentException("relation 只能是 supports/contradicts/partial：" + rel);
+            }
+            String m = firstNonBlank(t.path("method").asText(null), defMethod);
+            if (m != null && !EVIDENCE_METHODS.contains(m.trim())) {
+                throw new IllegalArgumentException("method 只能是 written_review/written_statement/web_check/third_party/interview：" + m);
+            }
+            String n = firstNonBlank(t.path("note").asText(null), defNote);
+            out.add(new com.checkba.service.evidence.EvidenceLinkViews.TargetInput(
+                    fid, locator, rel, m == null ? null : m.trim(), null, n));
+        }
+        return out;
+    }
+
+    /** worker 回执统一判错：{"error":...} 或 success:false 都抛 IllegalStateException（消息给模型看）。 */
+    private static com.fasterxml.jackson.databind.JsonNode workerJson(String raw) {
+        com.fasterxml.jackson.databind.JsonNode node;
+        try {
+            node = EVIDENCE_JSON.readTree(raw == null ? "" : raw);
+        } catch (Exception e) {
+            throw new IllegalStateException("编辑器返回了无法解析的结果：" + raw);
+        }
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            throw new IllegalStateException("编辑器没有返回结果");
+        }
+        if (node.hasNonNull("error") && !node.path("error").asText("").isBlank()) {
+            throw new IllegalStateException(node.path("error").asText());
+        }
+        if (node.has("success") && !node.path("success").asBoolean(true)) {
+            throw new IllegalStateException(node.path("message").asText("编辑器操作失败"));
+        }
+        return node;
+    }
+
+    private static String firstNonBlank(String... candidates) {
+        for (String c : candidates) {
+            if (c != null && !c.isBlank()) return c;
+        }
+        return null;
     }
 
     @ToolMeta(displayName = "插入图片", category = "document", fileEffect = "MODIFIED")
