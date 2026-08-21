@@ -1731,6 +1731,25 @@ try {
     check('再次收编幂等（adopted 空、skipped>=1）', ad2.success === true && (ad2.adopted || []).length === 0 && ad2.skipped >= 1, JSON.stringify(ad2))
     const cOld = await exec('get_bookmark_context', { name: 'lk_old_1' })
     check('收编后的书签文字 = 链接文字', cOld.exists === true && cOld.text === '注册资本', JSON.stringify(cOld))
+    // 7b. 生产 URL 形态：整体 encodeURIComponent、带 &projectId=——key 必须恰等于原 key，
+    // 不许把 %26projectId%3D42 吞进去改写成 lk_123_abc_projectId_42
+    await exec('goto', { type: 'end' })
+    await exec('insert_at_cursor', { text: '\n经营范围为软件开发。' })
+    await selectText('经营范围')
+    const prodUrl = 'https://checkba-internal.local/open?u=' + encodeURIComponent('checkba://filelink?k=lk_123_abc&projectId=42')
+    await exec('set_selection_hyperlink', { url: prodUrl })
+    const ad3 = await exec('adopt_legacy_links', {})
+    check('生产 URL 形态收编 key 恰等于 lk_123_abc', ad3.success === true && JSON.stringify(ad3.adopted) === '["lk_123_abc"]', JSON.stringify(ad3))
+    check('收编后书签文字 = 经营范围', (await exec('get_bookmark_context', { name: 'lk_123_abc' })).text === '经营范围')
+    // 7c. 非法 key（后端兜底 lk_<UUID> 带 -）：跳过并计入 skippedInvalid，不静默改写
+    await exec('goto', { type: 'end' })
+    await exec('insert_at_cursor', { text: '\n法定代表人为张三。' })
+    await selectText('法定代表人')
+    await exec('set_selection_hyperlink', { url: 'https://checkba-internal.local/open?u=' + encodeURIComponent('checkba://filelink?k=lk_a-b&projectId=42') })
+    const ad4 = await exec('adopt_legacy_links', {})
+    check('带 - 的 key 进 skippedInvalid 且不收编', ad4.success === true && ad4.skippedInvalid === 1 && (ad4.adopted || []).length === 0, JSON.stringify(ad4))
+    const ck4 = await exec('check_link_anchors', { names: ['lk_a-b', 'lk_a_b'] })
+    check('非法 key 没被改写成别名落成书签', ck4.items.every((x) => x.exists === false) && ck4.truncated === false, JSON.stringify(ck4))
 
     // 8. docx 往返：书签经 export/load 存活
     await exec('clear_anchors', {})
