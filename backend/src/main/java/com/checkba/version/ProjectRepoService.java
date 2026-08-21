@@ -33,6 +33,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -57,6 +59,19 @@ public class ProjectRepoService {
 
     private static final org.slf4j.Logger log =
             org.slf4j.LoggerFactory.getLogger(ProjectRepoService.class);
+
+    /**
+     * 单个历史版本文件读入内存的体积闸（{@link #blobAt}）。可达性不需要特殊操作：
+     * workTree 就是项目存储根目录，commitAll 是 {@code git.add().addFilepattern(".")}
+     * 全量入库，没有任何 gitignore/体积过滤——会议录音的 webm/mp3、手机端回传的现场影像
+     * 视频、扫描件全都会进版本历史。云端/团队服务器部署的堆上限只有 1.5GB
+     * （deploy/cloud/aiworkdeck-cloud.service 的 {@code -Xmx1536m}），blobAt 原来整份
+     * 读进 ByteArrayOutputStream 没有任何体积闸，几个并发请求各读一份大文件就能把堆打爆。
+     * 50MB 是这个闸的取值：普通法律文档（docx/pdf/xlsx，含内嵌高清扫描件）几乎不会到这个
+     * 量级，真正会撞上它的正是会议录音/现场影像这类本不该走这条内存缓冲路径的媒体文件；
+     * 50MB × 十几个并发请求仍在 1.5GB 堆的安全余量内。
+     */
+    private static final long MAX_BLOB_SIZE_BYTES = 50L * 1024 * 1024;
 
     private final ProjectStorageResolver storageResolver;
 
@@ -118,11 +133,47 @@ public class ProjectRepoService {
     private static final String NOTE_TRAILER = "X-AWD-Note: ";
 
     /**
+     * {@code .git/index.lock} 陈旧锁的判定阈值。commitAll/commitNow 等一切改仓库状态的
+     * 路径统一经 {@code WorkSessionService.repoLock(projectId)} 这把进程内可重入锁串行化，
+     * 也就是说走到这里、真正要执行 {@code git.add()}/{@code git.commit()} 的线程，
+     * 在本进程范围内已经是唯一一个——此刻磁盘上如果还留着 index.lock，只可能是上一次
+     * 进程崩溃/被强杀时没来得及删掉的残留，不会是本进程内的另一个线程正持有
+     * （那不可能，锁已经在我们手上）。mtime 阈值是防唯一的理论例外：另一个独立进程
+     * 这一刻真的在写同一个仓库（不应该发生——见 gitDir/workTree 契约与红线——但万一
+     * 发生，新鲜的 index.lock 不该被当场删掉抢别人的锁）。5 分钟远超一次提交应该花的时间
+     * （提交的是律师项目里的文档，不是会议录音那类大文件——issue 6 已经把单文件读取
+     * 体积闸在 50MB，写入路径这边正常文档提交是秒级操作）。
+     */
+    private static final Duration STALE_INDEX_LOCK_AGE = Duration.ofMinutes(5);
+
+    /**
+     * 清理陈旧的 index.lock——不清理的话，JGit 的 DirCache 撞上残留锁必抛
+     * LockFailedException，此后每一次提交都会同样失败，而进程内的可重入锁对磁盘上的
+     * 残留文件毫无作用，版本记录会从崩溃那一刻起永久静默停摆，直到有人手工删文件。
+     * 探测/清理本身失败不阻断——让后续真实的 git 操作把原因（多半还是
+     * LockFailedException）抛给外层，不在这里吞掉或伪造成功。
+     */
+    private void clearStaleIndexLock(long projectId) {
+        Path lockFile = gitDir(projectId).resolve("index.lock");
+        try {
+            if (!Files.exists(lockFile)) return;
+            FileTime mtime = Files.getLastModifiedTime(lockFile);
+            if (mtime.toInstant().isBefore(Instant.now().minus(STALE_INDEX_LOCK_AGE))) {
+                Files.delete(lockFile);
+                log.warn("清理陈旧的 .git/index.lock（mtime={}）: project={}", mtime, projectId);
+            }
+        } catch (IOException e) {
+            log.warn("陈旧 index.lock 探测/清理失败: project={}", projectId, e);
+        }
+    }
+
+    /**
      * 把工作区当前状态整体提交。无任何变更时返回 null（不产生空提交）。
      * kind 写入提交消息尾注，供时间线区分「自动存档」与「工作段」。
      */
     public String commitAll(long projectId, String message, String kind, String note,
                             String authorName, String authorEmail) {
+        clearStaleIndexLock(projectId);
         try (Repository repo = open(projectId); Git git = new Git(repo)) {
             git.add().addFilepattern(".").call();
             git.add().addFilepattern(".").setUpdate(true).call();
@@ -310,6 +361,8 @@ public class ProjectRepoService {
         try (Repository repo = open(projectId); RevWalk walk = new RevWalk(repo)) {
             ObjectId commitId = repo.resolve(ref);
             return blobAt(repo, walk, commitId, relPath);
+        } catch (VersionException e) {
+            throw e;
         } catch (Exception e) {
             throw new VersionException("读取历史文件失败: project=" + projectId, e);
         }
@@ -323,6 +376,12 @@ public class ProjectRepoService {
         try (TreeWalk tw = TreeWalk.forPath(repo, relPath, commit.getTree())) {
             if (tw == null) return null;
             ObjectLoader loader = repo.open(tw.getObjectId(0));
+            if (loader.getSize() > MAX_BLOB_SIZE_BYTES) {
+                throw VersionException.userFacing(com.checkba.service.LangText.of(
+                        "这份文件超过 " + (MAX_BLOB_SIZE_BYTES / (1024 * 1024)) + "MB，暂不支持在版本记录里读取或对比",
+                        "This file exceeds " + (MAX_BLOB_SIZE_BYTES / (1024 * 1024))
+                                + "MB and can't be read or compared from version history"));
+            }
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
             loader.copyTo(bos);
             return bos.toByteArray();

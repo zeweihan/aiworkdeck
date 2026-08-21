@@ -60,6 +60,10 @@ class MobileRelayStoreServiceTest {
     @BeforeEach
     void setUp() {
         service = new MobileRelayStoreService(dirRepository, inboxRepository, blobRoot.toString());
+        // storeMedia 撞唯一约束时的重试经 self 转发到 storeMediaTx（新事务）；生产环境里 self
+        // 是 Spring 注入的 @Lazy 代理，这里手工 new 没有容器，直接把 service 自己接上去——
+        // 写法与理由同 ProjectProfileServiceTest。
+        service.self = service;
     }
 
     private MobileMediaInbox store(String clientMediaId, String content) {

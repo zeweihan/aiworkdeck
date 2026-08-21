@@ -51,6 +51,31 @@ dev-board#30）；更早的产品设计 `2026-08-17-mobile-clients-design.md`。
 3. 项目在桌面端被删后，指向它的中转件**留置不 ACK**（云端 TTL 兜底），不要改成 ACK——
    那等于把用户拍的证据静默删掉。
 4. 云端/团队服务器绝不能跑客户端：双闸 = `security.local-mode` + 账户 Key 在场。
+5. **`landAndAck` 必须字节先落盘、元数据后落库**（2026-08-21 稳定性审计修复）：
+   `ProjectFileService.createFile` 自带 `@Transactional`、本类没有事务包裹，一旦返回
+   即已提交；旧实现先 `createFile`（建库 + `createFromTemplate` 物化模板文件）再
+   `storage.save(...)` 写真实字节，`save` 抛 IOException（网络中断/磁盘满）时行已落库、
+   ACK 没发，下一轮的幂等判据只按"同名文件已在数据库"判断、误判成已完成直接补 ACK——
+   服务端随之删除中转区原件，现场影像永久丢失却显示"已送达"。修复后把
+   `storage.save` 挪到 `createFile` 之前、显式传入按 `MEDIA_ROOT_FOLDER/日期/落盘文件名`
+   算出的确定性存储路径（不再依赖 `createFile` 自动推导），落库这一步失败或落盘失败
+   都不会产生"行已落库但字节没写对"的空壳。新增任何"先建库拿到路径、再写字节"的
+   两段式落地路径都要检查这条顺序。护栏 `MobileRelayClientHttpTest.
+   pollInboxFailedSaveLeavesNoOrphanRowAndRedownloadsNextRound`。
+6. **`storeMedia` 的先查后插之间没有锁**（同批修复）：`MobileRelayStoreService.storeMedia`
+   查 `findByUserIdAndClientMediaId` 后直接 `save`，中间没有锁也没有 upsert；并发重传
+   （弱网重试）落败的一方会撞 `(user_id, client_media_id)` 唯一约束抛
+   `DataIntegrityViolationException`，这条异常在 mobile 包与 `GlobalExceptionHandler`
+   都没有专项处理，落到通用处理器变成 `{"code":1,"message":"服务器内部错误"}`——与方法
+   注释里"幂等：弱网重传都不产生重复件"正相反。修复照抄
+   `ProjectProfileService.saveUserField` 的 `self`-代理 + `REQUIRES_NEW` 重试模式（同类
+   互相调用不经 Spring 代理，`@Transactional` 会被静默绕过；撞约束把当前事务标记
+   rollback-only，同事务内 catch 后补救一样会在方法出口抛
+   `UnexpectedRollbackException`，必须落在全新事务里重试）：`storeMedia` 现在不带
+   `@Transactional`，捕获 `DataIntegrityViolationException | UnexpectedRollbackException`
+   后经 `self.storeMediaTx(...)` 重试一次，重试时一定能查到对方已提交的记录。
+   手工 `new MobileRelayStoreService(...)` 的测试要记得 `service.self = service;`
+   （`MobileRelayStoreServiceTest`/`MobileRelayStoreServiceConcurrentStoreTest` 已接）。
 
 ## 排查「手机端一个项目都读不到」的顺序（dev-board#75 实测路径）
 

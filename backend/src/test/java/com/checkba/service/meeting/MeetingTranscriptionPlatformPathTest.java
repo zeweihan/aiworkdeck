@@ -145,6 +145,7 @@ class MeetingTranscriptionPlatformPathTest {
                 meetingRepository, projectFileRepository, storageResolver, settingService,
                 transcoder, tingwu, oss, resolver, gateway, mock(LocalAsrClient.class),
                 mock(MeetingTranscriptionService.UrlFetcher.class), uploader,
+                MeetingTranscriptionService.DEFAULT_TRANSCODE_TIMEOUT,
                 "", "", "", "", "");
     }
 
