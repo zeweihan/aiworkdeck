@@ -187,8 +187,14 @@ EOF
     
     # 使用 docker-compose 启动 PPTX 服务
     echo "📦 启动 PPTX 服务容器..."
-    docker-compose up -d pptx-service
-    
+    # 脚本开头 set -e：这条命令失败（比如镜像没拉下来）以前会让整个脚本直接
+    # exit，后端/H5/桌面端三步全被跳过，且这发生在"所有服务已停止，开始重新
+    # 启动..."已经打印之后，看起来像卡住而不是失败。加 if 包一层，失败就如实
+    # 提示并继续启动其余服务。
+    if ! docker-compose up -d pptx-service; then
+        echo "PPTX 服务容器启动命令失败（docker-compose up 非零退出），跳过 PPTX，继续启动其余服务..."
+    fi
+
     # 等待服务启动
     echo "⏳ 等待 PPTX 服务启动 (最多 30 秒)..."
     for i in {1..30}; do
@@ -218,11 +224,16 @@ if [ "$DOCKER_AVAILABLE" = true ]; then
     
     # 使用 docker-compose 启动 MinerU 服务
     echo "📦 启动 MinerU 服务容器..."
-    docker-compose up -d mineru-service
-    
+    # 同上面 PPTX 那条：set -e 下裸命令失败会让整个脚本直接 exit，后端/H5/
+    # 桌面端三步全被跳过。加 if 包一层，失败就如实提示并继续。
+    if ! docker-compose up -d mineru-service; then
+        echo "MinerU 服务容器启动命令失败（docker-compose up 非零退出），跳过 MinerU，继续启动其余服务..."
+    fi
+
     # 等待服务启动（MinerU 需要更长时间来加载模型）
     echo "⏳ 等待 MinerU 服务启动 (最多 300 秒，模型加载需要时间)..."
     echo "   提示: 首次启动需要下载模型，可能需要较长时间"
+    MINERU_TIMED_OUT=false
     for i in {1..300}; do
         if curl -s http://localhost:8001/docs > /dev/null 2>&1; then
             echo "✓ MinerU 服务已启动: http://localhost:8001"
@@ -239,6 +250,10 @@ if [ "$DOCKER_AVAILABLE" = true ]; then
     if ! curl -s http://localhost:8001/docs > /dev/null 2>&1; then
         echo "⚠️ MinerU 服务启动超时，请检查 Docker 日志:"
         echo "   docker-compose logs mineru-service"
+        # 已经在这里如实打过"启动超时"了，把这个事实带到最后的汇总块，不然
+        # 汇总块自己重新 curl 一次照样连不上，只会打"⏳ 启动中..."——300秒都等
+        # 完了还说"启动中"，是误报，不是"还在起"。
+        MINERU_TIMED_OUT=true
     fi
 else
     echo "Docker 不可用，跳过 MinerU 服务启动..."
@@ -302,7 +317,12 @@ cd "$PROJECT_ROOT/backend"
 # Load environment variables from backend/.env.production if it exists
 if [ -f "./.env.production" ]; then
     echo "Found backend/.env.production, loading environment variables..."
-    export $(grep -v '^#' ./.env.production | xargs)
+    # 原来的 export $(grep -v '^#' ... | xargs) 没加引号，值里带空格（比如带空格的
+    # 路径/显示名）会被词分割截断到第一个空格为止，且没有任何报错——静默丢数据。
+    # 直接当 shell 源码 source，交给 shell 自己按引号语义解析，全程不报错也不截断。
+    set -a
+    . ./.env.production
+    set +a
 fi
 
 if [ -f "./restart-backend.sh" ]; then
@@ -358,6 +378,24 @@ cd "$PROJECT_ROOT/desktop"
 echo "执行启动命令: nohup npm run dev > desktop.log 2>&1 &"
 nohup npm run dev > desktop.log 2>&1 &
 
+# 同后端/H5/PPTX/MinerU 一样做启动复检——单靠 nohup ... & 立刻返回不代表 Electron
+# 真的起来了（npm/electron 可能马上崩溃退出），下面汇总块原来对这一步是无条件打
+# "已启动"，跟其余几项能打失败的做法不一致。探测手法与脚本 STOP 段落停止桌面端
+# 时用的是同一个（lsof -t 该文件路径，看有没有进程打开着 main.js）。
+echo "等待桌面端启动 (检查 Electron 主进程)..."
+for i in {1..30}; do
+    if lsof -t "$PROJECT_ROOT/desktop/main/main.js" >/dev/null 2>&1; then
+        echo "桌面端启动成功！"
+        break
+    fi
+    sleep 1
+done
+
+# 二次确认
+if ! lsof -t "$PROJECT_ROOT/desktop/main/main.js" >/dev/null 2>&1; then
+    echo "警告：30秒内未检测到桌面端进程，请检查 desktop/desktop.log"
+fi
+
 cd "$PROJECT_ROOT"
 
 # ==========================================
@@ -393,6 +431,9 @@ if [ "$DOCKER_AVAILABLE" = true ]; then
     
     if curl -s http://localhost:8001/docs > /dev/null 2>&1; then
         echo "✓ MinerU 服务:      http://localhost:8001"
+    elif [ "$MINERU_TIMED_OUT" = true ]; then
+        # 上面等待阶段已经把 300 秒都等完还是连不上——是超时，不是"还在起"
+        echo "MinerU 服务:        启动超时（300 秒），请检查: docker-compose logs mineru-service"
     else
         echo "⏳ MinerU 服务:      启动中... (端口 8001，模型加载需要时间)"
     fi
@@ -413,7 +454,11 @@ else
     echo "✗ TTS 服务依赖:     未安装 (edge-tts)"
 fi
 
-echo "✓ 桌面端:           已启动 (Electron)"
+if lsof -t "$PROJECT_ROOT/desktop/main/main.js" >/dev/null 2>&1; then
+    echo "✓ 桌面端:           已启动 (Electron)"
+else
+    echo "桌面端:             未启动，请检查 desktop/desktop.log"
+fi
 echo "────────────────────────────────────────────────────"
 echo ""
 echo "日志文件位置:"

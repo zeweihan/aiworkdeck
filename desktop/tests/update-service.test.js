@@ -208,6 +208,60 @@ test('大版本：latestMajor 更高时给出全量下载引导，不下补丁',
   assert.strictEqual(overlay.readCurrent(ctx), null)
 })
 
+test('多镜像回退：组件首个 URL 失败时 fetchFirst 落到第二个 URL，流程仍走完', async (t) => {
+  // dev-board#74 稳定性审计：fetchFirst 按 urls 顺序回退的逻辑写了但从没被测过——
+  // 全文件所有用例的 urls 都是单元素数组，把 fetchFirst 改成直接
+  // `return fetchUrl(urls[0], opts)`（砍掉回退），既有六个用例照样全绿。
+  // 这里给组件配两个 url：第一个是必死地址（127.0.0.1:1，特权端口，本机不可能有
+  // 监听，会立刻 ECONNREFUSED 而不是超时挂起），第二个是真正的测试服务器，
+  // 断言整条「验签+下载+校验+激活」事件序仍然正确完成——证明用的是回退后的
+  // 第二个 URL，不是第一个失败就直接放弃。
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upd-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const ctx = { packaged: true, dataDir: root, appVersion: '0.11.0' }
+
+  const jarTar = makeTarGz({ 'app.jar': 'patched-jar-bytes' }, root)
+  const { server, origin } = await serve({})
+  t.after(() => server.close())
+  server.removeAllListeners('request')
+  const manifest = {
+    schema: 1,
+    channels: {
+      '0.11': {
+        latest: '0.11.2',
+        components: [
+          {
+            name: 'backend-app',
+            version: '0.11.2',
+            sha256: crypto.createHash('sha256').update(jarTar).digest('hex'),
+            size: jarTar.length,
+            urls: ['http://127.0.0.1:1/dead', origin + '/backend.tar.gz']
+          }
+        ]
+      }
+    }
+  }
+  const routes = signedManifestRoutes(manifest, { '/backend.tar.gz': jarTar })
+  server.on('request', (req, res) => {
+    const body = routes[req.url]
+    if (body === undefined) return void res.writeHead(404).end()
+    res.writeHead(200).end(typeof body === 'function' ? body() : body)
+  })
+
+  testEnv(t, origin, pubPem)
+  const events = []
+  const svc = createUpdateService(ctx, { extractTar, onEvent: (e) => events.push(e.type) })
+  const state = await svc.check()
+
+  assert.strictEqual(state.phase, 'ready')
+  assert.deepStrictEqual(state.available, { version: '0.11.2' })
+  assert.strictEqual(overlay.effectiveVersion(ctx), '0.11.2')
+  const jarDir = overlay.componentDir(ctx, 'backend-app')
+  assert.strictEqual(fs.readFileSync(path.join(jarDir, 'app.jar'), 'utf8'), 'patched-jar-bytes')
+  assert.ok(events.includes('checking') && events.includes('downloading') && events.includes('ready'))
+  assert.ok(!fs.existsSync(overlay.stagingDir(ctx)))
+})
+
 test('组件级去重：本机已有同版本组件时跳过下载仍推进指针', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upd-'))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))

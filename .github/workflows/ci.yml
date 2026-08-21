@@ -49,7 +49,11 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install dependencies
         working-directory: frontend
-        run: npm ci || npm install
+        # 原来是 npm ci || npm install：lockfile 真漂了的话 npm install 会悄悄改写
+        # package-lock.json 并让构建照样通过，等于没有任何 lockfile 漂移守卫（同文件
+        # desktop job 一直是干净的 npm ci）。本地验证过 frontend/ 的 lockfile 与
+        # package.json 一致（npm ci 能正常跑通），收紧成单纯 npm ci。
+        run: npm ci
       - name: Check emit/binding contracts
         working-directory: frontend
         run: npm run check:emits

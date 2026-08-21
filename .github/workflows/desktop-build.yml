@@ -621,17 +621,38 @@ jobs:
           path: |
             desktop/release/*.dmg
             desktop/release/*.exe
+            desktop/release/patch/*
           if-no-files-found: error
+
+  # 发布收口：GitHub Release 在这一个单点 job 里创建，不放在上面的 matrix job
+  # 里（dev-board#74 稳定性审计）。build 用 fail-fast:false，mac 腿在公证抖动
+  # 处失败时 windows 腿仍会跑完；发布步骤若留在 matrix 里，windows 腿会独自把
+  # release 发出去——用户看到的是只有 .exe、缺 .dmg 的半成品版本。
+  # needs:[build] 不加 if:always()，默认语义就是「build 的所有矩阵腿都成功才
+  # 跑」，天然挡住这种半成品发布；同构于 pack-release.yml 的 release job
+  # （needs:[mac,win] 单点发布）。
+  # patch/* 现在随 aiworkdeck-windows-latest 这个 artifact 一起上传（见上面
+  # upload-artifact 的 path，仅 windows 腿会真的产出这些文件，mac 腿这条 glob
+  # 落空不影响该 step——if-no-files-found 看的是全部 path 的汇总匹配）。
+  # 下面用 merge-multiple 把 mac/windows 两份 artifact 拍平进同一目录再一起发布。
+  release:
+    name: Create GitHub Release
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: aiworkdeck-*
+          merge-multiple: true
       - name: Attach to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          # patch/*：小版本补丁产物 + 签名 manifest（仅 windows job 生成，mac job
-          # 的 glob 落空属正常——softprops 默认不因 unmatched 失败）
           files: |
-            desktop/release/*.dmg
-            desktop/release/*.exe
-            desktop/release/patch/*
+            artifacts/*.dmg
+            artifacts/*.exe
+            artifacts/patch/*
           # Auto-generate a "What's Changed" changelog from merged PRs since the
           # last tag, appended below the bilingual body template. Without this a
           # tag build creates a Release with EMPTY notes (had to `gh release edit`
@@ -664,9 +685,14 @@ jobs:
   # 下载再 rsync 上去才补上）。runner 在境外，上行不受这条限制。
   #
   # cron 那条链路保留不动：它仍负责补丁包与 manifest，也是这条推送失败时的兜底。
+  # needs 必须是 release 而不是 build：这一步会在服务器上跑 update-mirror-sync.sh，
+  # 而那个脚本是**从 GitHub Release 拉资产**的（上面文件名要换成 Release 资产名
+  # 就是为了对上它的 skip 判据），最后还要校验 latest.json 已指向本次 tag。
+  # 发布收口成独立 job 之后，若这里仍写 needs:[build]，它会与 release 并行——
+  # Release 还没建出来，脚本拉不到资产、latest.json 停在上一版，校验步骤必挂。
   sync-mirror:
     name: Sync installers to mirror
-    needs: [build]
+    needs: [release]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:

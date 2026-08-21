@@ -109,25 +109,38 @@ test('verifyReuse=true keeps old reuse semantics', async () => {
   }
 })
 
-test('backend allocator walks the 5269/5369/5169 chain past a foreign listener', async () => {
-  // 直接驱动 allocateBackendPort 的探测逻辑：占住 5269（若本机空闲），期望分配落到 5369
+test('backend allocator walks the 5269/5369/5169 chain past a foreign listener', async (t) => {
+  // 直接驱动 allocateBackendPort 的探测逻辑：占住 5269（若本机空闲），期望分配落到 5369（或
+  // 5169，如果 5369 恰好也被本机其它真实进程占用）。
+  //
+  // 原实现两处 `|| port > 1024` 让断言恒真——findFreePort() 兜底本来就保证 >1024，
+  // 这个析取分支把"分配器真的按 5269→5369→5169 顺序走链"这条断言完全架空，标题写的
+  // 场景从未被验证过。删掉之后断言收紧为「必须落在链上的下一跳」；当本机环境没法
+  // 建立受控前提（5269/5369/5169 已经被别的真实进程占着，不知道分配器该落在哪）时，
+  // 用 t.skip 如实说明，而不是继续放宽断言假装测过。
   const net = require('net')
   const { createBackendDescriptor } = require('../main/services/backend-service')
   const d = createBackendDescriptor()
   const holder = net.createServer()
   const first = await new Promise((resolve) => {
-    holder.once('error', () => resolve(null)) // 5269 本机已被真实占用：跳过该断言前提
+    holder.once('error', () => resolve(null)) // 5269 本机已被真实占用：没法建立受控前提
     holder.listen(5269, '127.0.0.1', () => resolve(5269))
   })
+  if (!first) {
+    t.skip('port 5269 already in use on this machine; cannot set up the controlled precondition')
+    return
+  }
   try {
-    const port = await d.port({ packaged: true })
-    if (first) {
-      // 5269 被占且不是我们的后端（无 /api/admin/wizard 响应）→ 应降级到 5369（或更后）
-      assert.notStrictEqual(port, 5269)
-      assert.ok([5369, 5169].includes(port) || port > 1024)
-    } else {
-      assert.ok([5269, 5369, 5169].includes(port) || port > 1024)
+    // 5369/5169 也必须是真空闲的，断言才有意义；否则分配器合理地会继续下探甚至
+    // 退到 findFreePort() 的随机端口——那是本机环境凑巧全占用，不是代码坏了。
+    if ((await isPortOpen(5369)) || (await isPortOpen(5169))) {
+      t.skip('port 5369 or 5169 already in use on this machine; chain would legitimately fall through further')
+      return
     }
+    const port = await d.port({ packaged: true })
+    // 5269 被占且不是我们的后端（无 /api/admin/wizard 响应）→ 应降级到 5369（或 5169）
+    assert.notStrictEqual(port, 5269)
+    assert.ok([5369, 5169].includes(port))
   } finally {
     holder.close()
   }
