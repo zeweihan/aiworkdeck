@@ -365,8 +365,16 @@ public class LicenseService {
                     .build();
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() != 200) {
-                // 4xx 视为明确拒绝；5xx 视为服务器暂不可用，不清除既有授权
-                return response.statusCode() >= 400 && response.statusCode() < 500
+                // 只有 401/403 才是「官网明确拒绝这把 Key」——与 AccountService.handle 同源
+                // （那边的注释就写着「401/403 才是明确的鉴权失败——与 PR-A LicenseService
+                // 的判定同源」，这里本来却把整个 4xx 都算成了拒绝）。
+                //
+                // INVALID 在启动复验里是要 saveState(new State()) 清空本地授权的，所以这条
+                // 分类线两侧的代价完全不对称：把「暂时问不到」误判成「拒绝」，会把一个正在
+                // 付费的用户当场打回付费墙；反过来把「拒绝」误判成「问不到」，也只是让一把
+                // 已撤销的 Key 多活到宽限期结束。429 限流（发版后大批桌面端同时复验就会撞上）、
+                // 400 版本不匹配、404 路径变更、408 超时，没有一个是鉴权结论，一律走宽限。
+                return (response.statusCode() == 401 || response.statusCode() == 403)
                         ? VerifyKeyOutcome.INVALID
                         : VerifyKeyOutcome.UNREACHABLE;
             }
