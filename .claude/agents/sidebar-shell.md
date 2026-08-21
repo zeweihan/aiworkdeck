@@ -159,21 +159,25 @@ toEventStart），五个消费组件都从这里拿，别再各写一份。
 `type="date"/"time"` 会静默降级成文本框。日期/时间输入一律用 `components/AwdDatePicker.vue`
 （mounted 手工挂真原生 input 绕开 uni 模板劫持；只监听 change 防中间值上抛）。
 
-## 顶栏头像下拉与统一「设置」标签（2026-08-19 立，2026-08-20 并）
+## 顶栏头像与统一「设置」标签（2026-08-19 立，2026-08-20 并，2026-08-21 撤下拉）
 
 rail 底部的**齿轮与用户头像都撤了**，收进顶栏右上角「活动记录」右侧的
-`.header-account`：头像 `.avatar-btn` → 下拉 `.avatar-menu`。
-**2026-08-20 起下拉只有一项「设置」**——个人中心并进了系统设置，两个入口各开一整块
-面板、彼此还互相跳（个人中心侧栏给管理员插一条「系统设置」走 navigateTo，设置页侧栏
-又有一条「个人中心」）是用户点名抱怨过的形态。那一项**不再按 `isClientView` 收**：
-客户也有自己的工作记录与账号安全，「系统」组由面板内部按 isAdmin 自己收。
+`.header-account`：头像 `.avatar-btn`，**点击直接 `goToSystemSettings` 开设置标签，
+没有下拉了**（dev-board#96）。沿革：2026-08-20 个人中心并进系统设置后下拉只剩一项
+「设置」——两个入口各开一整块面板、彼此还互相跳（个人中心侧栏给管理员插一条
+「系统设置」走 navigateTo，设置页侧栏又有一条「个人中心」）是用户点名抱怨过的形态；
+2026-08-21 连那个只有一项的下拉也撤了，`avatarMenuOpen` / `toggleAvatarMenu` /
+`.avatar-menu*` 样式 / App.vue 里菜单那两行 no-drag 全删，`check:nav` 现在断言这些名字
+一个都不许回来。头像**不按 `isClientView` 收**：客户也有自己的工作记录与账号安全，
+「系统」组由面板内部按 isAdmin 自己收。
 
 - **入口**：`goToSystemSettings(opts)` → `openSettingsTab(opts)`，中栏开单例标签
   （`tabType:'admin-settings'`、`isTabVisible` 常显、直接 push 进 leftFiles 绕过
   `isFileTypeSupported`——与 market-detail / 浏览器 tab 同法）。整页跳转会把标签、
   编辑器、AI 会话整个换掉，改个 API Key 的代价是回来重开一遍文件。
   **`goToUserProfile` / `openUserProfileTab` / `tabType:'user-profile'` 全没了**，
-  `check-navigation-contract.mjs` 现在守的是「头像下拉恰好一项、且这四个名字一个都不许回来」。
+  `check-navigation-contract.mjs` 现在守的是「头像直接指向 goToSystemSettings、没有下拉，
+  且这些旧名字一个都不许回来」。
 - **深链等价物**：`openSettingsTab({ nav, service })` 对应薄壳页的
   `?nav=platform&service=ocr`（网关错误提示的逃生门指着它）。标签是单例，
   已经开着时再带深链进来只改 props——所以 **`AdminPane` 里加了
@@ -375,6 +379,14 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
   激活态白底 + 2px mint 顶线、12px/500 文件名、× 悬停或激活才显形。
   **`.tab-item` 的高度写死 36px 不用 `height:100%`**：中间隔着 uni `scroll-view`
   的内层包裹元素，那条 100% 链断了标签会塌成 0 高。
+- **标签支持鼠标中键关闭（2026-08-21，dev-board#97）**：`.tab-item` 上挂
+  `@mousedown="onTabMouseDown"` + `@auxclick="onTabAuxClick"`（两个方法在
+  `fileOpenTabs.js`，紧挨 `closeFile`），中键走的就是 `closeFile(file.id, pane)`——
+  与点 × 同一条路径，脏改动落盘/BrowserView 销毁等闸门一个不少。mousedown 与 auxclick
+  两处都对 `button===1` preventDefault（压掉 Linux/Windows 的中键自动滚动）。
+  uni-h5 的 `<view>` 默认 inheritAttrs，原生 `auxclick` 直接落到 `<uni-view>` 上。
+  标签没有「固定/不可关」概念，所以没有例外分支；要加固定标签时先在这里加判断。
+  app-e2e J6.3 末尾用 `page.mouse.click(..., { button: 'middle' })` 关设置标签兼作覆盖。
 
 ## 相关文件
 

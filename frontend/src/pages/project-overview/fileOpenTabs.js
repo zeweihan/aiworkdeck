@@ -239,6 +239,22 @@ export const fileOpenTabsMethods = {
       }
     },
 
+    /**
+     * 标签条的鼠标中键（dev-board#97）：中键单击 = 点 ×，走同一条 closeFile
+     * （含 Office/文本脏改动先落盘、浏览器标签销毁 BrowserView 等既有闸门）。
+     * 中键在 Linux/Windows 上 mousedown 会起「自动滚动」光标，auxclick 前就得拦，
+     * 所以 mousedown 与 auxclick 两处都 preventDefault；左/右键一律放行
+     * （左键是 @tap 激活，右键没有菜单）。标签没有「固定」概念，全部可关。
+     */
+    onTabMouseDown(e) {
+      if (e && e.button === 1) e.preventDefault()
+    },
+    onTabAuxClick(e, file, pane) {
+      if (!e || e.button !== 1) return
+      e.preventDefault()
+      e.stopPropagation()
+      this.closeFile(file.id, pane)
+    },
     async closeFile(fileId, pane) {
       const list = pane === 'left' ? this.leftFiles : this.rightFiles
       const idProp = pane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'

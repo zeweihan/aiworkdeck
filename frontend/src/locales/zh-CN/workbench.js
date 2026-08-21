@@ -51,7 +51,7 @@ export default {
   systemSettings: '系统设置（AI 提供商 / API Key）',
   clientInitial: '客',
   addMember: '加人',
-  // 顶栏右上角的头像下拉（2026-08-19 从 rail 底部搬上来；2026-08-20 个人中心并进设置后只剩一项）
+  // 顶栏右上角头像的 title（2026-08-19 从 rail 底部搬上来；2026-08-21 起点击直接开设置标签，下拉已撤）
   accountMenu: '设置',
   settingsTabName: '设置',
   // 「语音」面板内部的两个 tab

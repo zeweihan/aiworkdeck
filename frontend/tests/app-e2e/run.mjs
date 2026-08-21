@@ -788,36 +788,30 @@ try {
   })
   await shot('j6-rails')
 
-  // ============ J6.3 顶栏头像下拉 → 系统设置中栏标签 ============
-  // 2026-08-19：rail 底部的齿轮与头像撤掉，改成顶栏右上角头像的下拉；
+  // ============ J6.3 顶栏头像 → 系统设置中栏标签 ============
+  // 2026-08-19：rail 底部的齿轮与头像撤掉，改成顶栏右上角头像；
   // 「系统设置」不再整页跳转，而是中栏的一个标签（薄壳页仍在，J7 单独覆盖）。
-  console.log('== J6.3 头像下拉与设置标签 ==')
-  // .avatar-btn 是开关（toggleAvatarMenu），菜单开着再点会关掉；且点任一菜单项后
-  // 菜单自动收起。所以每一步都要「不在开着才点」，不能盲点。
-  const openAvatarMenu = async () => {
-    if (!(await page.$('.avatar-menu'))) {
-      await mouseClickSel('.avatar-btn')
-      await page.waitForSelector('.avatar-menu', { timeout: 8000 })
-    }
-  }
-  await step('头像下拉只有「设置」一项（2026-08-20 个人中心已并入）', async () => {
-    await openAvatarMenu()
-    const items = await page.evaluate(
-      () => [...document.querySelectorAll('.avatar-menu-item')].map((e) => e.innerText.trim()))
-    if (items.length !== 1) throw new Error('头像下拉应当只剩一项，实际: ' + JSON.stringify(items))
-    if (!items[0].includes('设置')) throw new Error('那一项不是「设置」: ' + JSON.stringify(items))
-  })
-  await step('点「设置」开中栏标签而不是跳页', async () => {
-    await openAvatarMenu()
-    await mouseClickSel('.avatar-menu-item')
+  // 2026-08-21（dev-board#96）：头像下拉撤了，点头像直接开设置标签。
+  console.log('== J6.3 头像与设置标签 ==')
+  await step('点头像直接开中栏设置标签，没有下拉、不跳页', async () => {
+    await mouseClickSel('.avatar-btn')
+    if (await page.$('.avatar-menu')) throw new Error('头像下拉又回来了（应当直接开设置标签）')
     await page.waitForSelector('.page-admin.is-embedded', { timeout: 15000 })
     const h = await page.evaluate(() => location.hash)
     if (h.includes('pages/admin/admin')) throw new Error('设置又变回整页跳转了')
     // 个人组与系统组都要在同一页里够得着
     await waitText('工作记录', 10000)
     await waitText('账户与安全', 10000)
-    // 关掉这个标签，别把后面的旅程都压在设置页上
-    await mouseClickSel('.tab-item.active .tab-close')
+  })
+  await step('鼠标中键单击标签关闭它（dev-board#97）', async () => {
+    // 关掉设置标签，别把后面的旅程都压在设置页上——顺便覆盖中键关闭：
+    // 与点 × 同一条 closeFile 路径，mousedown/auxclick 都 preventDefault。
+    const box = await page.$eval('.tab-item.active', (el) => {
+      const r = el.getBoundingClientRect()
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+    })
+    await page.mouse.click(box.x, box.y, { button: 'middle' })
+    await page.waitForFunction(() => !document.querySelector('.page-admin.is-embedded'), { timeout: 8000 })
   })
   await shot('j6-settings-tab')
 
