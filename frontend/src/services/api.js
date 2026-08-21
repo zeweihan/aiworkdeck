@@ -1758,8 +1758,11 @@ export function createEvidenceLink(projectId, body) {
 export function getEvidenceLink(projectId, linkKey) {
   return request({ url: `/api/projects/${projectId}/evidence-links/${encodeURIComponent(linkKey)}`, method: 'GET' })
 }
-export function listEvidenceLinks(projectId, params) {
-  return request({ url: `/api/projects/${projectId}/evidence-links`, method: 'GET', data: params || {} })
+// query 里 null/undefined 的键剔掉（PluginPane 会传 {status: undefined}），免得序列化成 "undefined"
+export function listEvidenceLinks(projectId, query = {}) {
+  const data = {}
+  for (const k of Object.keys(query || {})) if (query[k] != null && query[k] !== '') data[k] = query[k]
+  return request({ url: `/api/projects/${projectId}/evidence-links`, method: 'GET', data })
 }
 export function addEvidenceTargets(projectId, linkKey, targets) {
   return request({ url: `/api/projects/${projectId}/evidence-links/${encodeURIComponent(linkKey)}/targets`, method: 'POST', data: targets })
@@ -1784,49 +1787,6 @@ export function rebindEvidenceLink(projectId, linkKey, body) {
 }
 export function evidenceRefCounts(projectId, fileIds) {
   return request({ url: `/api/projects/${projectId}/evidence-links/ref-counts`, method: 'GET', data: { fileIds: (fileIds || []).join(',') } })
-}
-
-// 证据链接 EvidenceLink（书签锚点 + 多底稿 target，后端 EvidenceLinkController）。
-// 返回是裸 LinkView / LinkView[]（无 {code,data} 信封，request() 原样透传）。
-export function createEvidenceLink(projectId, payload) {
-  return request({
-    url: `/api/projects/${projectId}/evidence-links`,
-    method: 'POST',
-    data: payload,
-    header: {
-      'Content-Type': 'application/json',
-    },
-  })
-}
-
-export function getEvidenceLink(projectId, linkKey) {
-  return request({
-    url: `/api/projects/${projectId}/evidence-links/${encodeURIComponent(linkKey)}`,
-    method: 'GET',
-  })
-}
-
-/** query: { docFileId | fileId, partyTagId?, status?, sectionPath? }，空值不上串 */
-export function listEvidenceLinks(projectId, query = {}) {
-  const qs = Object.keys(query || {})
-    .filter(k => query[k] !== undefined && query[k] !== null && query[k] !== '')
-    .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(query[k])}`)
-    .join('&')
-  return request({
-    url: `/api/projects/${projectId}/evidence-links${qs ? '?' + qs : ''}`,
-    method: 'GET',
-  })
-}
-
-export function addEvidenceTargets(projectId, linkKey, targets) {
-  return request({
-    url: `/api/projects/${projectId}/evidence-links/${encodeURIComponent(linkKey)}/targets`,
-    method: 'POST',
-    data: targets,
-    header: {
-      'Content-Type': 'application/json',
-    },
-  })
 }
 
 export function deleteFavorite(favoriteId) {
