@@ -136,7 +136,18 @@ export const EDITOR_ACTIONS = [
   // [诊断] 当前文档内核类型（writer/calc/impress/unknown）——审阅按钮等 UI 按 kind
   // 隐藏的判据；load_document 的返回值里也带 kind，宿主常规路径无需二次往返调用本诊断。
   'get_doc_kind',
+  // [取消] 宿主对在飞的批量命令（find_replace / apply_house_style）喊停：
+  // {reqId} 取自 onProgress 回调。宿主发起，不是 AI 管线（dev-board#108）。
+  'cancel',
 ]
+
+// 按 action 分级的等待预算（ms）。整文档传输与全文批量改稿都远超 30s 默认值；
+// 与 zetaOfficeRelay.js 的 ACTION_BUDGET_MS 和后端 EditorBridgeService
+// ACTION_TIMEOUT_SECONDS 三处同表，改一处要同步另两处。
+export const ACTION_BUDGET_MS = {
+  load_document: 180000, export_document: 180000,
+  find_replace: 120000, apply_house_style: 120000, resolve_all_revisions: 120000, insert_table: 120000,
+}
 
 /**
  * Create an executor client bound (later, via connect) to a ZetaOffice worker
@@ -146,6 +157,9 @@ export const EDITOR_ACTIONS = [
  * @param {number} [opts.timeoutMs=30000]
  * @param {(msg:string)=>void} [opts.onError] optional error sink
  * @param {(attrs:object)=>void} [opts.onTelemetry] optional editor.action usage sink (app-side only)
+ * @param {(reqId:string, p:{done:number,total:number})=>void} [opts.onProgress]
+ *        batch progress from the worker for a command still in flight
+ *        (find_replace >50 hits / apply_house_style, dev-board#108)
  */
 export function createLibreOfficeExecutor(opts = {}) {
   const timeoutMs = opts.timeoutMs || 30000
@@ -155,6 +169,13 @@ export function createLibreOfficeExecutor(opts = {}) {
 
   function handleMessage(e) {
     const d = (e && e.data) || {}
+    if (d.cmd === 'progress') {
+      const p = { done: Number(d.done) || 0, total: Number(d.total) || 0 }
+      const entry = pending.get(d.reqId)
+      if (entry && entry.onProgress) { try { entry.onProgress(p) } catch (err) { /* ignore */ } }
+      if (opts.onProgress) { try { opts.onProgress(d.reqId, p) } catch (err) { /* ignore */ } }
+      return
+    }
     if (d.cmd !== 'result') return
     const entry = pending.get(d.reqId)
     if (!entry) return
@@ -182,18 +203,20 @@ export function createLibreOfficeExecutor(opts = {}) {
 
   function isConnected() { return !!workerPort }
 
-  function request(action, params) {
+  // callOpts（可选）：{onProgress(p), onIssued(reqId)}——serveExecutor 用 onIssued 记下
+  // worker 侧 reqId，宿主的 cancel 才能对上号。
+  function request(action, params, callOpts) {
     if (!workerPort) return Promise.reject(new Error('LibreOffice office worker not connected'))
     const reqId = 'lo_' + Date.now() + '_' + (++reqSeq)
-    // Whole-document transfers get a longer deadline (mirror of the host-side
-    // relay budget in zetaOfficeRelay.js — see the comment there).
-    const budget = (action === 'load_document' || action === 'export_document')
-      ? Math.max(timeoutMs, 180000) : timeoutMs
+    // Whole-document transfers and whole-document batch edits get a longer
+    // deadline (mirror of the host-side relay budget in zetaOfficeRelay.js).
+    const budget = ACTION_BUDGET_MS[action] ? Math.max(timeoutMs, ACTION_BUDGET_MS[action]) : timeoutMs
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (pending.has(reqId)) { pending.delete(reqId); reject(new Error('LibreOffice command timeout: ' + action)) }
       }, budget)
-      pending.set(reqId, { resolve, reject, timer })
+      pending.set(reqId, { resolve, reject, timer, onProgress: callOpts && callOpts.onProgress })
+      if (callOpts && callOpts.onIssued) { try { callOpts.onIssued(reqId) } catch (e) { /* ignore */ } }
       workerPort.postMessage({ cmd: 'exec', reqId, action, params: params || {} })
     })
   }
@@ -202,7 +225,7 @@ export function createLibreOfficeExecutor(opts = {}) {
    * Editor-agnostic command entry point — SAME signature/contract as
    * the WPS-era useWpsBridge.executeCommand (removed #79). Unknown / ppt_* actions reject.
    */
-  async function executeCommand(action, params = {}) {
+  async function executeCommand(action, params = {}, callOpts) {
     if (action && action.startsWith && action.startsWith('ppt_')) {
       const m = 'ppt_* not supported by the LibreOffice executor: ' + action
       if (opts.onError) opts.onError(m)
@@ -217,7 +240,7 @@ export function createLibreOfficeExecutor(opts = {}) {
     }
     const startMs = Date.now()
     try {
-      const result = await request(action, params)
+      const result = await request(action, params, callOpts)
       trackEditorAction(action, params, !!(result && result.success), Date.now() - startMs, false)
       return result
     } catch (e) {

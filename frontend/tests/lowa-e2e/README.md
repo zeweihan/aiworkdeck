@@ -30,6 +30,28 @@ npm run test:lowa-e2e
 
 引擎启动约 90 秒；全套跑完约 3 分钟。退出码非 0 = 有断言失败。
 
+server / puppeteer 启动件在 `_boot.mjs`（preflight、COOP/COEP 静态服务、无头 Chrome、
+打开 `editor.html?verify=1`），run.mjs 与下面的大文档基线组共用。端口被别的
+worktree 占着时（`EADDRINUSE`）设 `LOWA_E2E_PORT`。
+
+## 大文档基线组（dev-board#108）
+
+```bash
+python3 -m pip install --user python-docx pillow   # 夹具生成依赖，只装一次
+npm run test:lowa-big                               # 夹具不存在会自动生成到 $TMPDIR/awd-big-doc/big.docx
+```
+
+`big-doc.mjs` 加载 `fixtures/gen-big-doc.py` 生成的 150 页 / 920 段 / 30 张 12x5 表 /
+20 张噪声 JPEG（6.7MB，随机种子固定，每页首段各一处「目标公司」= 150 命中）夹具，
+对六项逐个计时，**每项 3 轮取中位数**（同机抖动可达 2 倍），任一项未达硬阈退出码 1。
+`LOWA_BIG_RUNS` 改轮数，`LOWA_BIG_DOC` 指向别的 docx。
+
+改造前后（本机 Apple Silicon，无头 Chrome，r4 引擎，2026-08-21）：
+
+BIG_DOC_TABLE_PLACEHOLDER
+
+改 `office_thread.js` 里的全文路径（段落枚举 / 修订 / 全文格式化 / 导出）后必跑。
+
 ## 覆盖场景
 
 1. 修订模式下退格删除文档原文——光标逐字越过（PR#164 卡死回归）

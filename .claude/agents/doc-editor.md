@@ -77,6 +77,15 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 
 守卫（防空文档覆盖，PR#194）：`docLoadFailed` 闸——load 失败或"元数据非空却下载 0 字节"（fileSize>0 而 bytes 空）时置位，此后 onDocModified 与 saveDocument 一律拒绝；fileSize==0 才当新建空白。**该编辑器存/取走整文件 XHR，不含分片上传**。
 
+## 长命令的分批 / 进度 / 取消与段落索引（dev-board#108，PR 见 perf/worker-batching-big-doc）
+
+- **office 线程是单事件循环**，一条 20s 的命令会把自动保存的 export、IME 的 ui_command 全排队。`find_replace`（命中 > 50 时按 30 一批）与 `apply_house_style`（500 个顶层元素一批）现在是 **async 原语**：批间 `batchBreak()` 发 `progress`、`await` 一个宏任务、查 cancel、重设修订作者（批间别的命令可能把作者切成用户名）。`execCommand` 对返回 Promise 的原语等它结束再 post result，同步原语路径不变。新增分批原语照 `batchBreak(p, done, total)` 的口径写，**批间允许别的命令插进来**（含写命令），别在批间持有跨批失效的 UNO 对象假设。
+- **进度链路**：worker `post('progress', {reqId, done, total})` → `libreofficeExecutorClient` `cmd:'progress'`（按 pending reqId 回调 `callOpts.onProgress`，也给全局 `opts.onProgress(reqId, p)`）→ `serveExecutor` 转成 relay `type:'progress'`（reqId 换成宿主那一侧的）→ `createRelayExecutor({onProgress})` → `LibreOfficeEditor.vue` `$emit('command-progress', {reqId, done, total})`。`apply_house_style` 不预知总数，progress 的 `total` 为 0、`done` 是已处理元素数。
+- **取消**：宿主 `executeCommand('cancel', {reqId})`，reqId 取自 progress；`serveExecutor` 用 inflight 表把宿主 reqId 换成 worker reqId。协作式：只置位 `CANCELLED[reqId]`，命令在下一个批间检查点停下，返回 `{success:true, cancelled:true, done}`（`apply_house_style` 同时 `truncated:true`；正常完成永远带 `truncated:false`）。
+- **分级超时三处同表**（改一处同步另两处）：`libreofficeExecutorClient.js` / `zetaOfficeRelay.js` 的 `ACTION_BUDGET_MS`（load/export 180s；find_replace / apply_house_style / resolve_all_revisions / insert_table 120s）与后端 `EditorBridgeService.ACTION_TIMEOUT_SECONDS`（默认 30s）。
+- **段落索引缓存** `paraIndex`（`buildParaIndex` 一次枚举存每段 XTextRange）：`get_document_text` / `get_paragraph` / `modify_paragraph` / `select_paragraph` / `eachParagraph` 全走它，150 页二次读从 2s 降到毫秒级。失效：modified 监听器（主闸）、`verifySnapshot()`、undo/redo、索引绑定 `xModel` 引用（换文档自然重建）。`withParaIndex(fn)` 里 **fn 只许读**——段落对象失效抛异常时会重建再调一次；写原语先 `paraAt(idx)` 拿段落再在外面改。
+- **大文档基线组** `npm run test:lowa-big`（`tests/lowa-e2e/big-doc.mjs`，夹具 `fixtures/gen-big-doc.py` 生成到 `$TMPDIR`）：150 页 / 30 表 / 20 图，六项阈值三次中位数；改 worker 的全文路径后必跑，数字表在 `tests/lowa-e2e/README.md`。**实测结论**：tracked 替换每条约 90-100ms 是引擎记修订的成本（整段 `setString` 与最小修订一样贵、与滚视图/`lockControllers` 无关），全文格式化在 RecordChanges 开着时每个属性写入也各记一条格式修订——所以 find_replace 150 命中与 apply_house_style 两项是 soft 阈（WARN 不判红，`LOWA_BIG_STRICT=1` 才判红），再想快只能改口径（批量格式化不记修订 / 先数命中再让模型分段），不是 worker 里还有大头可砍。`applyHouseChar/applyHousePara` 已改成 `setPropertyValues` 批写（往返数约 1/8），对象不支持或被拒时自动退回逐个写。
+
 ## LO chrome 的取舍（自建工具栏路线，spike 已验证）
 
 维护者定调：**最终形态是自建工具栏**，LO 自己的 menubar/toolbar 退场（菜单栏末端那个 × 会把 webview 里的文档关掉）。分期方案见 `docs/superpowers/specs/2026-08-14-editor-chrome-self-built-toolbar.md`。
@@ -123,5 +132,6 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 ## 验证
 
 - 核心回归：`cd frontend && npm run test:lowa-e2e`（真引擎 puppeteer-core 无头，12 组人机模拟，基线 38 步；前置 `npm run build:zetaoffice` + `node ../desktop/scripts/fetch-lowa-assets.js` 或设 LOWA_ENGINE_DIR）。
+- 大文档性能：`npm run test:lowa-big`（同一套启动件 `tests/lowa-e2e/_boot.mjs`；端口被别的 worktree 占着时设 `LOWA_E2E_PORT`）。
 - 涉桌面壳/webview：`npm run test:desktop-e2e`（弹 dev Electron 窗口，验证保存落盘链路）。
 - 全应用：`npm run test:app-e2e`。改编辑器三件套（原语/白名单/worker）必跑 lowa-e2e。

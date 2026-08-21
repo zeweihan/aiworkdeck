@@ -37,17 +37,34 @@ const TAG = 'lo-relay' // ignore unrelated messages on a shared channel
  * @returns {{dispose:()=>void}}
  */
 export function serveExecutor({ executor, send, subscribe }) {
+  // 宿主 reqId -> worker reqId：progress 往上带宿主的 id，cancel 往下换成 worker 的 id。
+  const inflight = new Map()
   const off = subscribe(async (msg) => {
     if (!msg || msg.__lo !== TAG || msg.type !== 'exec') return
     let result
     try {
-      result = await executor.executeCommand(msg.action, msg.params || {})
+      let params = msg.params || {}
+      if (msg.action === 'cancel' && params.reqId && inflight.has(params.reqId)) {
+        params = Object.assign({}, params, { reqId: inflight.get(params.reqId) })
+      }
+      result = await executor.executeCommand(msg.action, params, {
+        onIssued: (id) => inflight.set(msg.reqId, id),
+        onProgress: (p) => send({ __lo: TAG, type: 'progress', reqId: msg.reqId, done: p.done, total: p.total }),
+      })
     } catch (e) {
       result = { success: false, message: e && e.message ? e.message : String(e) }
     }
+    inflight.delete(msg.reqId)
     send({ __lo: TAG, type: 'result', reqId: msg.reqId, result })
   })
   return { dispose: off }
+}
+
+// 按 action 分级的等待预算（ms）——与 libreofficeExecutorClient.js 的
+// ACTION_BUDGET_MS、后端 EditorBridgeService.ACTION_TIMEOUT_SECONDS 三处同表。
+const ACTION_BUDGET_MS = {
+  load_document: 180000, export_document: 180000,
+  find_replace: 120000, apply_house_style: 120000, resolve_all_revisions: 120000, insert_table: 120000,
 }
 
 /**
@@ -67,9 +84,13 @@ export function serveExecutor({ executor, send, subscribe }) {
  * @param {(action:string,result:any)=>void} [args.onLateResult] fired when a
  *        'result' message arrives for a reqId that already timed out (see
  *        below) — the caller decides whether the straggler is still relevant.
+ * @param {(reqId:string, p:{done:number,total:number})=>void} [args.onProgress]
+ *        batch progress of a command still in flight (find_replace >50 hits /
+ *        apply_house_style). The reqId is what executeCommand('cancel', {reqId})
+ *        takes to stop it (dev-board#108).
  * @returns {{executeCommand:(a:string,p?:object)=>Promise<any>, dispose:()=>void}}
  */
-export function createRelayExecutor({ send, subscribe, timeoutMs = 30000, onReady, onLateResult }) {
+export function createRelayExecutor({ send, subscribe, timeoutMs = 30000, onReady, onLateResult, onProgress }) {
   let seq = 0
   let readyCb = onReady
   const pending = new Map() // reqId -> {resolve, timer}
@@ -87,6 +108,13 @@ export function createRelayExecutor({ send, subscribe, timeoutMs = 30000, onRead
   const off = subscribe((msg) => {
     if (!msg || msg.__lo !== TAG) return
     if (msg.type === 'ready') { if (readyCb) { const cb = readyCb; readyCb = null; cb() } return }
+    if (msg.type === 'progress') {
+      const p = { done: Number(msg.done) || 0, total: Number(msg.total) || 0 }
+      const live = pending.get(msg.reqId)
+      if (live && live.onProgress) { try { live.onProgress(p) } catch (e) { /* ignore */ } }
+      if (onProgress) { try { onProgress(msg.reqId, p) } catch (e) { /* ignore */ } }
+      return
+    }
     if (msg.type !== 'result') return
     const entry = pending.get(msg.reqId)
     if (!entry) {
@@ -102,14 +130,15 @@ export function createRelayExecutor({ send, subscribe, timeoutMs = 30000, onRead
     entry.resolve(msg.result)
   })
 
-  function executeCommand(action, params = {}) {
+  // callOpts（可选）：{onProgress(p), onIssued(reqId)}；reqId 也是 cancel 的把手。
+  function executeCommand(action, params = {}, callOpts) {
     const reqId = 'rly_' + Date.now() + '_' + (++seq)
     // Whole-document transfers (load/export can be tens of MB and the worker
-    // marshals every byte into UNO) get a longer deadline than interactive
-    // commands — a 18MB docx on a slow disk must not surface as "加载失败" just
-    // because the default 30s ran out mid-import.
-    const budget = (action === 'load_document' || action === 'export_document')
-      ? Math.max(timeoutMs, 180000) : timeoutMs
+    // marshals every byte into UNO) and whole-document batch edits get a longer
+    // deadline than interactive commands — a 18MB docx on a slow disk must not
+    // surface as "加载失败" just because the default 30s ran out mid-import.
+    const budget = ACTION_BUDGET_MS[action] ? Math.max(timeoutMs, ACTION_BUDGET_MS[action]) : timeoutMs
+    if (callOpts && callOpts.onIssued) { try { callOpts.onIssued(reqId) } catch (e) { /* ignore */ } }
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         if (pending.has(reqId)) {
@@ -119,7 +148,7 @@ export function createRelayExecutor({ send, subscribe, timeoutMs = 30000, onRead
           resolve({ success: false, message: 'LibreOffice relay timeout: ' + action })
         }
       }, budget)
-      pending.set(reqId, { resolve, timer })
+      pending.set(reqId, { resolve, timer, onProgress: callOpts && callOpts.onProgress })
       send({ __lo: TAG, type: 'exec', reqId, action, params })
     })
   }

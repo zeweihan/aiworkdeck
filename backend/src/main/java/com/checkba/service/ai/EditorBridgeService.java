@@ -62,8 +62,26 @@ public class EditorBridgeService {
     // ConversationID -> IsStreaming Mode
     private final ConcurrentHashMap<String, Boolean> streamingModes = new ConcurrentHashMap<>();
     
-    // 编辑器操作超时时间（秒）
+    // 编辑器操作超时时间（秒）——默认值，交互类命令用
     private static final int EDITOR_ACTION_TIMEOUT = 30;
+
+    /**
+     * 按 action 分级的超时（秒，dev-board#108）。整文档装载/导出与全文批量改稿远超 30s
+     * （150 页实测 find_replace 150 命中 20s+、apply_house_style 30s+），而 worker 不会因为
+     * 后端放弃等待就停下——超时后模型被告知失败可能重发一次，造成双改。
+     * 与前端 libreofficeExecutorClient.js / zetaOfficeRelay.js 的 ACTION_BUDGET_MS 三处同表。
+     */
+    static final Map<String, Integer> ACTION_TIMEOUT_SECONDS = Map.of(
+            "doc_open_file_sync", 180,
+            "find_replace", 120,
+            "apply_house_style", 120,
+            "resolve_all_revisions", 120,
+            "export_document", 180);
+
+    static int timeoutSecondsFor(String action) {
+        if (action == null) return EDITOR_ACTION_TIMEOUT; // Map.of 对 null 键抛 NPE
+        return ACTION_TIMEOUT_SECONDS.getOrDefault(action, EDITOR_ACTION_TIMEOUT);
+    }
 
     /**
      * 设置当前会话 ID（由 AgentOrchestrator 在执行工具前调用）
@@ -283,7 +301,7 @@ public class EditorBridgeService {
             log.info("Sent editor command: action={}, requestId={}", action, requestId);
 
             // 等待前端执行结果
-            EditorActionResult result = future.get(EDITOR_ACTION_TIMEOUT, TimeUnit.SECONDS);
+            EditorActionResult result = future.get(timeoutSecondsFor(action), TimeUnit.SECONDS);
             
             if (result.isSuccess()) {
                 recordBridge(action, "ok", conversationId, bridgeStartMs);
