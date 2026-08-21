@@ -43,6 +43,9 @@ public class DocumentEditTools implements AgentToolComponent {
     private final com.checkba.service.evidence.EvidenceLinkService evidenceLinkService;
     // doc_link_evidence 在动编辑器之前预校验写权限：worker 写完再被 Service 拒，文档里会留孤儿书签
     private final com.checkba.service.ProjectMemberService projectMemberService;
+    // 样式画像解析（dev-board#111）：doc_apply_style_profile / doc_start_stream 按 §3.4 顺序取项目画像；
+    // 为 null（手工 new 的测试 / RealToolBeans）时一律视为 house-default
+    private final com.checkba.service.ai.StyleProfileResolver styleProfileResolver;
 
     // ==================== 文件管理工具 ====================
 
@@ -213,13 +216,18 @@ public class DocumentEditTools implements AgentToolComponent {
             }
 
             // 2. 同步打开文件 (Wait for Ready)
-            String resultJson = editorBridgeService.executeEditorCommand("doc_open_file_sync", java.util.Map.of(
-                    "fileId", file.getId(),
-                    "fileName", file.getName(),
-                    "fileType", file.getFileType(),
-                    "wpsFileId", file.getWpsFileId() != null ? file.getWpsFileId() : "",
-                    "trackRevisions", false  // 流式写入不需要修订模式
-            ));
+            java.util.Map<String, Object> openParams = new java.util.HashMap<>();
+            openParams.put("fileId", file.getId());
+            openParams.put("fileName", file.getName());
+            openParams.put("fileType", file.getFileType());
+            openParams.put("wpsFileId", file.getWpsFileId() != null ? file.getWpsFileId() : "");
+            openParams.put("trackRevisions", false);  // 流式写入不需要修订模式
+            // 项目有模板画像（非 house-default）时随打开指令带下去：前端编辑器就绪后先
+            // set_style_profile 再开始流式落字，stream_insert 就按项目画像排版（dev-board#111）
+            java.util.Map<String, Object> profileMap = EditorBridgeService.nonHouseProfileMap(
+                    resolveStyleProfile(file.getProjectId()));
+            if (profileMap != null) openParams.put("styleProfile", profileMap);
+            String resultJson = editorBridgeService.executeEditorCommand("doc_open_file_sync", openParams);
             
             if (resultJson.contains("\"error\"")) {
                 return "Error opening file: " + resultJson;
@@ -700,7 +708,8 @@ public class DocumentEditTools implements AgentToolComponent {
             @P("高亮颜色：yellow/green/cyan/magenta/red/blue/gray/none 或 #RRGGBB，不改则不传") String highlight,
             @P("文字颜色：#RRGGBB 或 auto，不改则不传") String color,
             @P("字号（磅），不改则不传") Double fontSize,
-            @P("字体名，不改则不传") String fontName
+            @P("字体名（中西文一起改），不改则不传") String fontName,
+            @P("中文字体名（只改中文，如 楷体_GB2312；与 fontName 同给时以它为准），不改则不传") String fontNameAsian
     ) {
         log.info("Tool: doc_format_selection called");
         try {
@@ -713,6 +722,7 @@ public class DocumentEditTools implements AgentToolComponent {
             if (color != null && !color.isEmpty()) params.put("color", color);
             if (fontSize != null) params.put("fontSize", fontSize);
             if (fontName != null && !fontName.isEmpty()) params.put("fontName", fontName);
+            if (fontNameAsian != null && !fontNameAsian.isEmpty()) params.put("fontNameAsian", fontNameAsian);
             return editorBridgeService.executeEditorCommand("format_selection", params);
         } catch (Exception e) {
             log.error("Failed to format selection", e);
@@ -780,7 +790,9 @@ public class DocumentEditTools implements AgentToolComponent {
           "applyStandard=true 一键套标准表格式（Grid 实线 1.5 磅边框、10 号字、首行加粗居中、单元格垂直居中、数字居右）。" +
           "也可单独设：borderWidthPt 边框磅数、fontSizePt 表格字号、firstRowBold 首行加粗、" +
           "cellVerticalAlign(top/center/bottom) 单元格垂直对齐、columnWidthsPercent 列宽百分比（逗号分隔，如 '20,50,30'，个数=列数）、" +
-          "rowHeightPt 行高磅数（rowHeightRule: min=最小值默认/exact=固定值）。")
+          "rowHeightPt 行高磅数（rowHeightRule: min=最小值默认/exact=固定值）。" +
+          "边框细分：borderColor(#RRGGBB) / borderStyle(single/double/dashed) / outsideBorderWidthPt 外框 / insideBorderWidthPt 内框；" +
+          "headerFill 表头底纹(#RRGGBB 或 none)、repeatHeader 跨页重复表头、columnWidthsCm 列宽厘米（逗号分隔，个数=列数，按比例折算）。")
     public String doc_format_table(
             @P("一键套标准表格式 true/false") Boolean applyStandard,
             @P("边框线宽（磅，如 1.5），不改则不传") Double borderWidthPt,
@@ -790,7 +802,14 @@ public class DocumentEditTools implements AgentToolComponent {
             @P("列宽百分比，逗号分隔如 '20,50,30'，不改则不传") String columnWidthsPercent,
             @P("行高（磅），不改则不传") Double rowHeightPt,
             @P("行高规则：min(最小值,默认)/exact(固定值)") String rowHeightRule,
-            @P("表格序号（0 开始），不传则用光标所在表格") Integer tableIndex
+            @P("表格序号（0 开始），不传则用光标所在表格") Integer tableIndex,
+            @P("边框颜色 #RRGGBB，不改则不传") String borderColor,
+            @P("边框线型：single/double/dashed，不改则不传") String borderStyle,
+            @P("外框线宽（磅），不改则不传") Double outsideBorderWidthPt,
+            @P("内框线宽（磅），不改则不传") Double insideBorderWidthPt,
+            @P("表头底纹：#RRGGBB 或 none 清除，不改则不传") String headerFill,
+            @P("跨页重复表头 true/false，不改则不传") Boolean repeatHeader,
+            @P("列宽厘米，逗号分隔如 '3,5,4'（个数=列数，按比例折算），不改则不传") String columnWidthsCm
     ) {
         log.info("Tool: doc_format_table called standard={}, border={}, tableIndex={}", applyStandard, borderWidthPt, tableIndex);
         try {
@@ -804,6 +823,13 @@ public class DocumentEditTools implements AgentToolComponent {
             if (rowHeightPt != null) params.put("rowHeightPt", rowHeightPt);
             if (rowHeightRule != null && !rowHeightRule.isEmpty()) params.put("rowHeightRule", rowHeightRule);
             if (tableIndex != null) params.put("tableIndex", tableIndex);
+            if (borderColor != null && !borderColor.isEmpty()) params.put("borderColor", borderColor);
+            if (borderStyle != null && !borderStyle.isEmpty()) params.put("borderStyle", borderStyle);
+            if (outsideBorderWidthPt != null) params.put("outsideBorderWidthPt", outsideBorderWidthPt);
+            if (insideBorderWidthPt != null) params.put("insideBorderWidthPt", insideBorderWidthPt);
+            if (headerFill != null && !headerFill.isEmpty()) params.put("headerFill", headerFill);
+            if (repeatHeader != null) params.put("repeatHeader", repeatHeader);
+            if (columnWidthsCm != null && !columnWidthsCm.isEmpty()) params.put("columnWidthsCm", columnWidthsCm);
             return editorBridgeService.executeEditorCommand("format_table", params);
         } catch (Exception e) {
             log.error("Failed to format table", e);
@@ -1002,6 +1028,101 @@ public class DocumentEditTools implements AgentToolComponent {
             return editorBridgeService.executeEditorCommand("apply_house_style", null);
         } catch (Exception e) {
             log.error("Failed to apply standard format", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    // ==================== 样式画像（dev-board#111） ====================
+
+    /** 当前项目的画像（解析顺序见 StyleProfileResolver）；没有解析器时退到 house-default。 */
+    private com.checkba.util.style.StyleProfile resolveStyleProfile(Long projectId) {
+        if (styleProfileResolver == null) return com.checkba.util.style.StyleProfiles.houseDefault();
+        return styleProfileResolver.resolve(projectId, null);
+    }
+
+    /** 画像转成 editor_command 的 params 载荷（Map 树；写端 worker 按 schemaVersion 1 解析）。 */
+    @SuppressWarnings("unchecked")
+    static java.util.Map<String, Object> profileAsMap(com.checkba.util.style.StyleProfile profile) {
+        return com.checkba.util.style.StyleProfiles.mapper().convertValue(profile.root(), java.util.Map.class);
+    }
+
+    @ToolMeta(displayName = "套用模板画像", category = "document", fileEffect = "MODIFIED")
+    @Tool("【格式】按项目的模板画像（_模板/画像.json；没有则用律所标准格式）给当前文档套格式：先改 Standard/Heading 1-6/表格样式定义，" +
+          "再按 scope 做最小直接格式。scope: document=全文（默认）/ selection=只改选区内段落 / styles-only=只改样式定义不碰正文。" +
+          "项目有模板画像时，用户要求'按模板/按所里格式排版'用本工具而不是 doc_apply_standard_format。" +
+          "长文档分批处理并回传进度，一次调用即可，truncated=false 表示全文已处理。")
+    public String doc_apply_style_profile(
+            @P("document=全文（默认）/ selection=选区 / styles-only=只改样式定义") String scope
+    ) {
+        log.info("Tool: doc_apply_style_profile called scope={}", scope);
+        try {
+            Long projectId = com.checkba.service.ai.context.ProjectContextHolder.getProjectIdAsLong();
+            com.checkba.util.style.StyleProfile profile = resolveStyleProfile(projectId);
+            String set = editorBridgeService.executeEditorCommand("set_style_profile",
+                    java.util.Map.of("profile", profileAsMap(profile)));
+            if (set != null && set.contains("\"error\"")) {
+                return "Error: 画像下发失败: " + set;
+            }
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("scope", scope != null && !scope.isBlank() ? scope : "document");
+            return editorBridgeService.executeEditorCommand("apply_style_profile", params);
+        } catch (Exception e) {
+            log.error("Failed to apply style profile", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "插入目录", category = "document", fileEffect = "MODIFIED")
+    @Tool("【结构】在光标处（position=start 时在文首）插入由标题级别自动生成的目录（真正的目录域，可更新）。" +
+          "levels 收几级标题（默认 3），title 目录标题（默认 '目录'）。文档里的标题要先用 doc_set_paragraph_format 的 headingLevel 标好级别，否则目录为空。")
+    public String doc_insert_toc(
+            @P("收入目录的标题级数 1-10，默认 3") Integer levels,
+            @P("目录标题文本，默认 '目录'") String title,
+            @P("插入位置：cursor=光标处（默认）/ start=文首") String position
+    ) {
+        log.info("Tool: doc_insert_toc called levels={}, title={}", levels, title);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            if (levels != null) params.put("levels", levels);
+            if (title != null && !title.isBlank()) params.put("title", title);
+            if (position != null && !position.isBlank()) params.put("position", position);
+            return editorBridgeService.executeEditorCommand("insert_toc", params);
+        } catch (Exception e) {
+            log.error("Failed to insert toc", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "页面设置", category = "document", fileEffect = "MODIFIED")
+    @Tool("【结构】设置纸张与页边距（单位毫米）：widthMm/heightMm 纸张尺寸（A4 为 210x297）、orientation portrait/landscape、" +
+          "marginTopMm/marginBottomMm/marginLeftMm/marginRightMm 页边距。只传需要改的参数；只给 orientation 时按当前纸张旋转。")
+    public String doc_set_page_setup(
+            @P("纸张宽（毫米），不改则不传") Double widthMm,
+            @P("纸张高（毫米），不改则不传") Double heightMm,
+            @P("方向：portrait/landscape，不改则不传") String orientation,
+            @P("上边距（毫米），不改则不传") Double marginTopMm,
+            @P("下边距（毫米），不改则不传") Double marginBottomMm,
+            @P("左边距（毫米），不改则不传") Double marginLeftMm,
+            @P("右边距（毫米），不改则不传") Double marginRightMm
+    ) {
+        log.info("Tool: doc_set_page_setup called w={}, h={}, orientation={}", widthMm, heightMm, orientation);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            if (widthMm != null) params.put("width", widthMm);
+            if (heightMm != null) params.put("height", heightMm);
+            if (orientation != null && !orientation.isBlank()) params.put("orientation", orientation);
+            java.util.Map<String, Object> margins = new java.util.HashMap<>();
+            if (marginTopMm != null) margins.put("top", marginTopMm);
+            if (marginBottomMm != null) margins.put("bottom", marginBottomMm);
+            if (marginLeftMm != null) margins.put("left", marginLeftMm);
+            if (marginRightMm != null) margins.put("right", marginRightMm);
+            if (!margins.isEmpty()) params.put("margins", margins);
+            if (params.isEmpty()) {
+                return "Error: 没有给任何页面参数（widthMm/heightMm/orientation/margin*Mm 至少一个）";
+            }
+            return editorBridgeService.executeEditorCommand("set_page_setup", params);
+        } catch (Exception e) {
+            log.error("Failed to set page setup", e);
             return "Error: " + e.getMessage();
         }
     }
@@ -1205,21 +1326,29 @@ public class DocumentEditTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "设置页眉页脚", category = "document", fileEffect = "MODIFIED")
     @Tool("【结构】设置文档首节的页眉或页脚文本（只处理第一个页面样式，法律文件极少按节区分页眉页脚）。" +
-          "target: header/footer；align 可选：left/center/right/justify，不传保持原对齐。")
+          "target: header/footer；align 可选：left/center/right/justify，不传保持原对齐。" +
+          "页码用 pageNumberPattern（如 '第 {PAGE} 页 共 {NUMPAGES} 页'，{PAGE}/{NUMPAGES} 落成真正的页码域，接在 text 之后，此时 text 可省略）；" +
+          "fontName/fontSize 设页眉页脚的字体字号。")
     public String doc_edit_header_footer(
             @P("header=页眉，footer=页脚") String target,
-            @P("页眉/页脚文本") String text,
-            @P("对齐：left/center/right/justify，不改则不传") String align
+            @P("页眉/页脚文本（只放页码时可不传）") String text,
+            @P("对齐：left/center/right/justify，不改则不传") String align,
+            @P("页码模板，{PAGE}=当前页 {NUMPAGES}=总页数，如 '第 {PAGE} 页 共 {NUMPAGES} 页'；不要页码则不传") String pageNumberPattern,
+            @P("字体名，不改则不传") String fontName,
+            @P("字号（磅），不改则不传") Double fontSize
     ) {
         log.info("Tool: doc_edit_header_footer called target={}", target);
-        if (text == null) {
-            return "Error: 缺少 text 参数（页眉/页脚文本，清空传空字符串）";
+        if (text == null && (pageNumberPattern == null || pageNumberPattern.isBlank())) {
+            return "Error: 缺少 text 参数（页眉/页脚文本，清空传空字符串；只放页码可改传 pageNumberPattern）";
         }
         try {
             java.util.Map<String, Object> params = new java.util.HashMap<>();
             params.put("target", target != null && !target.isBlank() ? target : "header");
-            params.put("text", text);
+            if (text != null) params.put("text", text);
             if (align != null && !align.isBlank()) params.put("align", align);
+            if (pageNumberPattern != null && !pageNumberPattern.isBlank()) params.put("pageNumberPattern", pageNumberPattern);
+            if (fontName != null && !fontName.isBlank()) params.put("fontName", fontName);
+            if (fontSize != null) params.put("fontSize", fontSize);
             return editorBridgeService.executeEditorCommand("edit_header_footer", params);
         } catch (Exception e) {
             log.error("Failed to edit header/footer", e);
