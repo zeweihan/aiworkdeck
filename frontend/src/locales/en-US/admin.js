@@ -336,7 +336,7 @@ export default {
 
   // Wizard and misc
   userFallbackName: 'User',
-  rerunWizardContent: 'This reopens the first-run Setup Wizard (choose an AI provider again and enter a Key). Existing settings are not cleared; the wizard overwrites them with what you enter on submit. Continue?',
+  rerunWizardContent: 'This reopens the first-run Setup Wizard (connect your account again and confirm the cross-border consent). Existing settings are not cleared; the wizard overwrites them with what you enter on submit. Continue?',
   resetFailed: 'Reset failed',
   loadConfigFailed: 'Failed to load settings',
   saveSuccess: 'Saved',

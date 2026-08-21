@@ -337,7 +337,7 @@ export default {
 
   // 向导与通用
   userFallbackName: '用户',
-  rerunWizardContent: '将重新打开首次运行向导（重新选择 AI 提供商并填写 Key）。现有配置不会被清空，向导提交后按新填内容覆盖。是否继续？',
+  rerunWizardContent: '将重新打开首次运行向导（重新连接账户并确认跨境传输同意）。现有配置不会被清空，向导提交后按新填内容覆盖。是否继续？',
   resetFailed: '重置失败',
   loadConfigFailed: '加载配置失败',
   saveSuccess: '保存成功',
