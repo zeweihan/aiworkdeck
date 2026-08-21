@@ -152,6 +152,8 @@ HOUSE 不再是常量：`buildHouse(profile)` 从画像 JSON 派生写端常量�
 - **本引擎（zh-CN r4）按列设宽做不到**：`new css.text.TableColumnSeparator` 与「读回 `TableColumnSeparators` 改 Position 再设回」都抛 `unregistered UNO type`（WASM 桥没注册该结构），`columnWidthsPercent` 从一开始就是死路（e2e 组 29 实锤）。worker 返回「当前编辑器引擎不支持按列设宽」的明确拒绝，e2e 锁住这条；引擎支持了那条会红，提醒把能力加回工具描述。
 - `set_style_profile` 是 worker 级全局状态：e2e 组 29 末尾必须 `reset`，否则后续组/复用 worker 的断言全按测试画像跑。
 - 改样式定义（`applyProfileToStyles`）要包在 `lockModel/unlockModel` 里，否则每个属性写入都重排版一次。
+- **样式定义改动不进修订**：Writer 没有样式级 redline，`apply_style_profile` 改 Standard/Heading 定义对用户是"全文悄悄变了"，安全网是编排器的文档检查点 + `doc_undo`（工具描述里已明说）。
+- `set_style_profile` 缺 `schemaVersion` 按 1 处理并回 `warning` 字段；给了非 1 才拒绝。
 
 ## EvidenceLink 书签原语（dev-board#103，office_thread.js）
 

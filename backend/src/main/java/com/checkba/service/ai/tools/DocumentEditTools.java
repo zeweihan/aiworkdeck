@@ -789,17 +789,18 @@ public class DocumentEditTools implements AgentToolComponent {
     @Tool("【格式】设置光标所在表格的格式（先把光标点进表格，或传 tableIndex 指定第 N 张表，0 开始）。" +
           "applyStandard=true 一键套标准表格式（Grid 实线 1.5 磅边框、10 号字、首行加粗居中、单元格垂直居中、数字居右）。" +
           "也可单独设：borderWidthPt 边框磅数、fontSizePt 表格字号、firstRowBold 首行加粗、" +
-          "cellVerticalAlign(top/center/bottom) 单元格垂直对齐、columnWidthsPercent 列宽百分比（逗号分隔，如 '20,50,30'，个数=列数）、" +
+          "cellVerticalAlign(top/center/bottom) 单元格垂直对齐、" +
           "rowHeightPt 行高磅数（rowHeightRule: min=最小值默认/exact=固定值）。" +
           "边框细分：borderColor(#RRGGBB) / borderStyle(single/double/dashed) / outsideBorderWidthPt 外框 / insideBorderWidthPt 内框；" +
-          "headerFill 表头底纹(#RRGGBB 或 none)、repeatHeader 跨页重复表头、columnWidthsCm 列宽厘米（逗号分隔，个数=列数，按比例折算）。")
+          "headerFill 表头底纹(#RRGGBB 或 none)、repeatHeader 跨页重复表头。" +
+          "列宽（columnWidthsPercent / columnWidthsCm）当前编辑器引擎不支持，传了会被明确拒绝——不要用它们，让用户在 Word 里手工调列宽。")
     public String doc_format_table(
             @P("一键套标准表格式 true/false") Boolean applyStandard,
             @P("边框线宽（磅，如 1.5），不改则不传") Double borderWidthPt,
             @P("表格字号（磅），不改则不传") Double fontSizePt,
             @P("首行加粗 true/false，不改则不传") Boolean firstRowBold,
             @P("单元格垂直对齐：top/center/bottom，不改则不传") String cellVerticalAlign,
-            @P("列宽百分比，逗号分隔如 '20,50,30'，不改则不传") String columnWidthsPercent,
+            @P("列宽百分比（当前引擎不支持，会被拒绝；保留仅为参数位置兼容）") String columnWidthsPercent,
             @P("行高（磅），不改则不传") Double rowHeightPt,
             @P("行高规则：min(最小值,默认)/exact(固定值)") String rowHeightRule,
             @P("表格序号（0 开始），不传则用光标所在表格") Integer tableIndex,
@@ -809,7 +810,7 @@ public class DocumentEditTools implements AgentToolComponent {
             @P("内框线宽（磅），不改则不传") Double insideBorderWidthPt,
             @P("表头底纹：#RRGGBB 或 none 清除，不改则不传") String headerFill,
             @P("跨页重复表头 true/false，不改则不传") Boolean repeatHeader,
-            @P("列宽厘米，逗号分隔如 '3,5,4'（个数=列数，按比例折算），不改则不传") String columnWidthsCm
+            @P("列宽厘米（当前引擎不支持，会被拒绝；保留仅为参数位置兼容）") String columnWidthsCm
     ) {
         log.info("Tool: doc_format_table called standard={}, border={}, tableIndex={}", applyStandard, borderWidthPt, tableIndex);
         try {
@@ -1036,8 +1037,20 @@ public class DocumentEditTools implements AgentToolComponent {
 
     /** 当前项目的画像（解析顺序见 StyleProfileResolver）；没有解析器时退到 house-default。 */
     private com.checkba.util.style.StyleProfile resolveStyleProfile(Long projectId) {
-        if (styleProfileResolver == null) return com.checkba.util.style.StyleProfiles.houseDefault();
-        return styleProfileResolver.resolve(projectId, null);
+        com.checkba.util.style.StyleProfile house = com.checkba.util.style.StyleProfiles.houseDefault();
+        if (styleProfileResolver == null) return house;
+        try {
+            com.checkba.util.style.StyleProfile p = styleProfileResolver.resolve(projectId, null);
+            if (p == null) {
+                log.warn("项目 {} 画像解析返回 null，退到 house-default", projectId);
+                return house;
+            }
+            return p;
+        } catch (Exception e) {
+            // 画像坏了不能让流式写入 / 套格式整个失败：退到 HOUSE 继续
+            log.warn("项目 {} 画像解析失败，退到 house-default: {}", projectId, e.getMessage());
+            return house;
+        }
     }
 
     /** 画像转成 editor_command 的 params 载荷（Map 树；写端 worker 按 schemaVersion 1 解析）。 */
@@ -1049,6 +1062,7 @@ public class DocumentEditTools implements AgentToolComponent {
     @ToolMeta(displayName = "套用模板画像", category = "document", fileEffect = "MODIFIED")
     @Tool("【格式】按项目的模板画像（_模板/画像.json；没有则用律所标准格式）给当前文档套格式：先改 Standard/Heading 1-6/表格样式定义，" +
           "再按 scope 做最小直接格式。scope: document=全文（默认）/ selection=只改选区内段落 / styles-only=只改样式定义不碰正文。" +
+          "样式定义的改动不进修订记录（Word 没有样式级修订），安全网是文档检查点 / doc_undo；套错了用 doc_undo 或 doc_restore_checkpoint 退回。" +
           "项目有模板画像时，用户要求'按模板/按所里格式排版'用本工具而不是 doc_apply_standard_format。" +
           "长文档分批处理并回传进度，一次调用即可，truncated=false 表示全文已处理。")
     public String doc_apply_style_profile(

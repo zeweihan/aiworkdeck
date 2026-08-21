@@ -241,7 +241,13 @@ export const agentClientActionMethods = {
      * 用户这期间切走别的标签，指针就指向别的文档了。
      */
     async applyStyleProfileWhenReady(fileId, profile) {
+        const stillOpen = () => [...(this.leftFiles || []), ...(this.rightFiles || [])].some(f => f && String(f.id) === String(fileId))
         for (let i = 0; i < 180; i++) {
+            // 用户在等待期间把标签关了：提前退出，别对着不存在的实例空转 90s
+            if (i > 0 && !stillOpen()) {
+                console.log('[ProjectOverview] file', fileId, 'closed before editor ready; style profile skipped')
+                return
+            }
             const map = this.getLibreExecutorMap()
             const exec = map['left:' + fileId] || map['right:' + fileId] || null
             if (exec) {

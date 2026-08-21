@@ -3582,10 +3582,14 @@ const EXEC = {
     if (prof.schemaVersion != null && Number(prof.schemaVersion) !== 1) {
       return tableFail('unsupported schemaVersion: ' + prof.schemaVersion + ' (expected 1)');
     }
+    // 缺 schemaVersion 按 1 处理，但回一个 warning 让调用方看得见（手写画像常漏这一项）
+    const warning = prof.schemaVersion == null ? 'profile 缺 schemaVersion，按 1 处理' : null;
     const merged = profileMergeInto(profileClone(HOUSE_DEFAULT_PROFILE) || {}, prof);
     ACTIVE_PROFILE = merged;
     HOUSE = buildHouse(merged);
-    return Object.assign({ success: true, reset: false }, styleProfileSummary());
+    const out = Object.assign({ success: true, reset: false }, styleProfileSummary());
+    if (warning) out.warning = warning;
+    return out;
   },
   // [样式画像] 把当前画像落到文档。scope: document（样式定义 + 全文最小直接格式）/
   // selection（样式定义 + 选区内段落）/ styles-only（只改样式定义）。分批 500 +
