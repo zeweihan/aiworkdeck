@@ -78,9 +78,96 @@ public class XmlToolCallParser {
             if (code.isEmpty()) {
                 continue;
             }
-            calls.add(parseSingle(code));
+            for (String statement : splitStatements(code)) {
+                if (!statement.isBlank()) {
+                    calls.add(parseSingle(statement));
+                }
+            }
         }
         return calls;
+    }
+
+    /**
+     * 把一个 tool_code 块拆成若干条顶层调用。
+     *
+     * <p>协议是「一个块放一个调用，要批量就连续输出多个块」（system_prompt.md）。
+     * 模型偶尔会把两条塞进同一个块，而此前每个块只产出一个 ParsedCall、
+     * extractStringArg 又只取每个参数名的第一次出现——第二条调用连痕迹都不留：
+     * 没有 ParsedCall、没有报错、没有日志，模型看到第一条成功就当整件事做完了，
+     * 用户要求的第二处修改根本没发生。
+     *
+     * <p><b>只有完全看得明白时才拆</b>：括号全程配平、引号成对、最后一条之后没有残留、
+     * 每一条都是「工具名(...)」的形状。任何一处不确定就原样返回单条，行为与从前一致——
+     * 拆错了会凭空多执行一个调用，比少执行一个更糟。
+     */
+    static List<String> splitStatements(String code) {
+        List<String> single = List.of(code);
+        // run_python 的 code 参数里什么都可能有；ctrl46 定界符格式压根不带括号
+        if (code.startsWith("run_python(") || code.contains("run_python(code=")) return single;
+        if (code.contains("<ctrl46>")) return single;
+
+        final String tripleDouble = "\"\"\"";
+        final String tripleSingle = "'''";
+        List<String> parts = new ArrayList<>();
+        int depth = 0;
+        int start = 0;
+        int i = 0;
+        boolean seenOpen = false;
+        while (i < code.length()) {
+            char c = code.charAt(i);
+            if (code.startsWith(tripleDouble, i) || code.startsWith(tripleSingle, i)) {
+                String marker = code.startsWith(tripleDouble, i) ? tripleDouble : tripleSingle;
+                int end = code.indexOf(marker, i + 3);
+                if (end < 0) return single;
+                i = end + 3;
+                continue;
+            }
+            if (c == '"' || c == '\'') {
+                char quote = c;
+                i++;
+                boolean closed = false;
+                while (i < code.length()) {
+                    char q = code.charAt(i);
+                    if (q == '\\') { i += 2; continue; }
+                    if (q == quote) { i++; closed = true; break; }
+                    i++;
+                }
+                if (!closed) return single;
+                continue;
+            }
+            if (c == '(') {
+                depth++;
+                seenOpen = true;
+                i++;
+                continue;
+            }
+            if (c == ')') {
+                depth--;
+                if (depth < 0) return single;
+                i++;
+                if (depth == 0 && seenOpen) {
+                    parts.add(code.substring(start, i).trim());
+                    while (i < code.length()
+                            && (Character.isWhitespace(code.charAt(i)) || code.charAt(i) == ';')) {
+                        i++;
+                    }
+                    start = i;
+                    seenOpen = false;
+                }
+                continue;
+            }
+            i++;
+        }
+        if (depth != 0) return single;
+        if (start < code.length() && !code.substring(start).isBlank()) return single;
+        if (parts.size() < 2) return single;
+        for (String part : parts) {
+            int paren = part.indexOf('(');
+            if (paren <= 0 || !TOOL_NAME_HEAD.matcher(part.substring(0, paren).strip()).matches()) {
+                return single;
+            }
+        }
+        return parts;
     }
 
     ParsedCall parseSingle(String code) {

@@ -128,6 +128,41 @@ class XmlToolCallParserTest {
                 "replaceText 应保留原文: " + call.argsJson());
     }
 
+    /**
+     * 协议是「一个 tool_code 块放一个调用，要批量就连续输出多个块」
+     * （system_prompt.md「无需中间判断的调用必须在同一轮批量输出」）。
+     * 模型偶尔会把两条塞进同一个块，而 parse() 每个块只产出一个 ParsedCall、
+     * extractStringArg 又只取每个参数名的第一次出现——第二条调用连痕迹都不留：
+     * 没有 ParsedCall、没有报错、没有日志，模型看到第一条成功就当整件事做完了，
+     * 用户要求的第二处修改根本没发生。
+     */
+    @Test
+    @DisplayName("同一个 tool_code 块里的两条调用都要被解析出来")
+    void twoStatementsInOneBlockAreBothParsed() {
+        List<XmlToolCallParser.ParsedCall> calls = parser.parse(
+                "<tool_code>doc_find_replace(findText=\"甲\", replaceText=\"乙\")\n"
+                        + "doc_find_replace(findText=\"丙\", replaceText=\"丁\")</tool_code>");
+        assertEquals(2, calls.size(), "第二条调用被静默丢掉了: " + calls);
+        assertEquals("甲", cn.hutool.json.JSONUtil.parseObj(calls.get(0).argsJson()).getStr("findText"));
+        assertEquals("丙", cn.hutool.json.JSONUtil.parseObj(calls.get(1).argsJson()).getStr("findText"));
+    }
+
+    /** 护栏：看不明白就别拆——拆错了会凭空多执行一个调用，比少执行一个更糟。 */
+    @Test
+    @DisplayName("括号不配平/引号没闭合/尾部有残留时一律退回单条解析")
+    void ambiguousBlocksFallBackToSingleParse() {
+        assertEquals(1, XmlToolCallParser.splitStatements(
+                "doc_find_replace(findText=\"甲\") doc_find_replace(findText=\"丙\"").size(), "引号没闭合");
+        assertEquals(1, XmlToolCallParser.splitStatements(
+                "doc_find_replace(findText=\"甲\") 然后再来一次 doc_find_replace(findText=\"丙\") 说明文字").size(),
+                "最后一条之后还有残留文字");
+        assertEquals(1, XmlToolCallParser.splitStatements(
+                "run_python(code=\"foo()\nbar()\")").size(), "run_python 的 code 参数一律不拆");
+        // 单条调用（含参数值里的括号）保持不拆
+        assertEquals(1, XmlToolCallParser.splitStatements(
+                "doc_find_replace(findText=\"甲\", replaceText=\"见 helper({k: 1}) 的返回\")").size());
+    }
+
     @Test
     @DisplayName("ctrl46 定界符 + 无括号写法（Gemini 兼容）")
     void parsesCtrl46Format() {
