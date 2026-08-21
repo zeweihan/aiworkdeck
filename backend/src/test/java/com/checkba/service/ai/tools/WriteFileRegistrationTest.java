@@ -61,7 +61,7 @@ class WriteFileRegistrationTest {
         when(fileService.createOrUpdateFile(anyLong(), any(), anyString(), anyString(),
                 anyLong(), anyString(), any(), anyLong())).thenReturn(saved);
 
-        FileTools tools = new FileTools(fileService, null, bridge, null, resolver, null, null);
+        FileTools tools = new FileTools(fileService, null, bridge, null, resolver, null, null, null);
         ProjectContextHolder.setProjectId(String.valueOf(PROJECT_ID));
         return new Harness(tools, fileService, bridge, root);
     }
