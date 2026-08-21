@@ -43,7 +43,7 @@ npm run test:lowa-big                               # 夹具不存在会自动�
 
 `big-doc.mjs` 加载 `fixtures/gen-big-doc.py` 生成的 150 页 / 920 段 / 30 张 12x5 表 /
 20 张噪声 JPEG（6.7MB，随机种子固定，每页首段各一处「目标公司」= 150 命中）夹具，
-对六项逐个计时，**每项 3 轮取中位数**（同机抖动可达 2 倍），任一项未达硬阈退出码 1。
+对七项逐个计时，**每项 3 轮取中位数**（同机抖动可达 2 倍），任一项未达硬阈退出码 1。
 `LOWA_BIG_RUNS` 改轮数，`LOWA_BIG_DOC` 指向别的 docx。
 
 改造前后（本机 Apple Silicon，无头 Chrome，r4 引擎；改造前 2026-08-21、改造后 2026-08-22，
@@ -54,6 +54,7 @@ npm run test:lowa-big                               # 夹具不存在会自动�
 | load_document 6.7MB/150 页 | 3.59s | 2.13s（3.71 / 1.43 / 2.13） | < 15s |
 | get_document_text 第 2 次（同参数） | 1.99s | **21ms**（13 / 21 / 28） | < 300ms |
 | get_document_text {startParagraph:800} | 2.02s | 8-64ms | （只记录） |
+| find_text_locations 「公司章程」约 645 命中（返回上限 50） | 约 3s | 3.90s（5.15 / 3.90 / 3.16，08-22 复核轮） | < 9s |
 | find_replace 修订 150 命中 | 28.5s（命中一多就撞执行器 30s 超时，worker 仍在改） | **162ms**（157 / 162 / 254） | < 8s |
 | apply_house_style 920 段 + 30 表 | 执行器 30s 超时，worker 实跑约 440-630s，期间页面主线程被冻住 | **18.4s**（18.4 / 17.9 / 19.3），truncated=false，有进度、可取消 | < 120s |
 | export_document | 2.3s（被前面排队的命令顶到 180s 超时那轮不算）；全文格式化后 11.5s | 6.82s（4.56 / 7.60 / 6.82，全文格式化之后量） | < 10s |

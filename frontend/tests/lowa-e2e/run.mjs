@@ -33,6 +33,15 @@ const puppeteer = await loadPuppeteer()
 
 // ---------- test-only worker actions, injected in-memory ----------
 const DEBUG_ACTIONS = `
+  // 组 28：锁是否平衡（取消路径解锁两次不能下溢）+ modified 是否仍会触发
+  debug_lock_state() {
+    // isActionLocked 在 zetajs 包装上不可调（XActionLockable 没暴露），只看控制器锁 + 计数。
+    // inflightKeys 含本探针自己（=1 即无残留）。
+    let ctl = null;
+    try { ctl = xModel.hasControllersLocked(); } catch (e) { ctl = 'err:' + e; }
+    return { success: true, controllersLocked: ctl, modifySuspended: modifySuspended, lockDepth: modelLockDepth, cancelledKeys: Object.keys(CANCELLED).length, inflightKeys: Object.keys(INFLIGHT).length };
+  },
+  debug_modified_count() { return { success: true, count: MOD_COUNT }; },
   debug_set_record_changes(p) {
     xModel.setPropertyValue('RecordChanges', !!p.on);
     return { success: true, recordChanges: xModel.getPropertyValue('RecordChanges') };
@@ -239,13 +248,18 @@ function patchServed(urlPath, content) {
   if (urlPath === '/office_thread.js') {
     const s = content.toString('utf8')
     if (!s.includes('const EXEC = {')) throw new Error('office_thread.js: EXEC anchor missing')
-    return Buffer.from(s.replace('const EXEC = {', 'const EXEC = {\n' + DEBUG_ACTIONS), 'utf8')
+    for (const anchor of ['function installModifyListener(model) {', "if (model.isModified()) post('modified');"]) {
+      if (!s.includes(anchor)) throw new Error('office_thread.js: anchor missing: ' + anchor)
+    }
+    return Buffer.from(s.replace('const EXEC = {', 'const EXEC = {\n' + DEBUG_ACTIONS)
+      .replace('function installModifyListener(model) {', 'let MOD_COUNT = 0;\nfunction installModifyListener(model) {')
+      .replace("if (model.isModified()) post('modified');", "if (model.isModified()) { MOD_COUNT++; post('modified'); }"), 'utf8')
   }
   if (/^\/assets\/editor-.*\.js$/.test(urlPath)) {
     const s = content.toString('utf8')
     return Buffer.from(
-      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments','debug_fresh_document','debug_table_info','debug_fresh_calc','debug_sheet_cell_info','debug_sheet_doc_info','debug_slide_shape_info','debug_slide_char_prop'")
-        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments","debug_fresh_document","debug_table_info","debug_fresh_calc","debug_sheet_cell_info","debug_sheet_doc_info","debug_slide_shape_info","debug_slide_char_prop"'),
+      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments','debug_fresh_document','debug_table_info','debug_fresh_calc','debug_sheet_cell_info','debug_sheet_doc_info','debug_slide_shape_info','debug_slide_char_prop','debug_lock_state','debug_modified_count'")
+        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments","debug_fresh_document","debug_table_info","debug_fresh_calc","debug_sheet_cell_info","debug_sheet_doc_info","debug_slide_shape_info","debug_slide_char_prop","debug_lock_state","debug_modified_count"'),
       'utf8')
   }
   return content
@@ -1725,6 +1739,64 @@ try {
     check('跳转后选区即书签文字', ((await exec('get_selection')).text || '').indexOf('收购人成立于') === 0, JSON.stringify(await exec('get_selection')))
     const g0 = await exec('goto_bookmark', { name: 'NOPE' })
     check('不存在的书签跳转被拒绝（双字段）', g0.success === false && !!g0.error && g0.message === g0.error, JSON.stringify(g0))
+  }
+
+  console.log('== 28) 批量命令分批 / 进度 / 取消：取消后锁平衡、文档仍可编辑、modified 仍触发（dev-board#108 复核） ==')
+  {
+    // 纯插入型替换（甲乙→甲丙乙，零宽匹配引擎不认）走逐命中分批路径：150 命中 > 50，
+    // 按 30 一批，批间发 progress / 查 cancel。第一帧 progress 到达就喊停，
+    // 命令应在后面的某个批间检查点停下。
+    const lines = []
+    for (let i = 0; i < 150; i++) lines.push('甲乙。')
+    await reset(lines.join('\n'), true)
+    const st0 = await exec('debug_lock_state')
+    check('起跑时锁全空', st0.controllersLocked === false && st0.lockDepth === 0 && st0.modifySuspended === 0, JSON.stringify(st0))
+    const bt = await page.evaluate(async () => {
+      const prog = []
+      let issued = null, cancelSent = false, cancelRes = null
+      const res = await window.__loExecutor.executeCommand('find_replace', { findText: '甲乙', replaceText: '甲丙乙', replaceAll: true, __agent: true }, {
+        onIssued: (id) => { issued = id },
+        onProgress: (p) => {
+          prog.push({ done: p.done, total: p.total })
+          if (!cancelSent && issued) {
+            cancelSent = true
+            window.__loExecutor.executeCommand('cancel', { reqId: issued }).then((r) => { cancelRes = r })
+          }
+        },
+      })
+      await new Promise((r) => setTimeout(r, 200))
+      return { res, prog, cancelRes }
+    })
+    check('progress 帧至少两帧且 done 单调递增、total=150',
+      bt.prog.length >= 2 && bt.prog.every((p) => p.total === 150) && bt.prog.every((p, i) => i === 0 || p.done > bt.prog[i - 1].done), JSON.stringify(bt.prog))
+    check('cancel 对在飞命令生效（非 stale）', bt.cancelRes && bt.cancelRes.success === true && !bt.cancelRes.stale, JSON.stringify(bt.cancelRes))
+    check('中途取消：cancelled=true 且 30 <= done < total', bt.res.success === true && bt.res.cancelled === true && bt.res.done >= 30 && bt.res.done < bt.res.total && bt.res.total === 150, JSON.stringify(bt.res))
+    const txt = await doc()
+    check('文档已改一部分（既有 甲丙乙 也有未改的 甲乙）', txt.indexOf('甲丙乙') !== -1 && /(^|\|)甲乙。/.test(txt), txt.slice(0, 80))
+    const st1 = await exec('debug_lock_state')
+    check('取消后锁平衡：控制器/动作锁都解开、监听器已装回、无残留 reqId',
+      st1.controllersLocked === false && st1.lockDepth === 0 && st1.modifySuspended === 0 && st1.cancelledKeys === 0 && st1.inflightKeys === 1, JSON.stringify(st1))
+    // 对已结束的 reqId 再喊停：stale，不在 CANCELLED 留痕
+    const stale = await exec('cancel', { reqId: 'lo_finished_0' })
+    check('对已结束 reqId 的 cancel 返回 stale 且不留痕', stale.success === true && stale.stale === true && (await exec('debug_lock_state')).cancelledKeys === 0, JSON.stringify(stale))
+    // 取消后文档仍可编辑，且 modified 仍会触发（监听器确已装回）
+    const m0 = (await exec('debug_modified_count')).count
+    await exec('goto', { type: 'end' })
+    const ins = await exec('insert_at_cursor', { text: '取消后继续编辑。' })
+    const m1 = (await exec('debug_modified_count')).count
+    check('取消后 insert_at_cursor 成功', ins.success === true, JSON.stringify(ins).slice(0, 120))
+    check('取消后编辑仍触发 modified（自动保存链路未断）', m1 > m0, 'before=' + m0 + ' after=' + m1)
+    check('取消后正文含新插入文字', (await doc()).indexOf('取消后继续编辑。') !== -1)
+    // 不取消跑完：所有命中处理完，progress 末帧 done=total
+    await reset(lines.join('\n'), true)
+    const full = await page.evaluate(async () => {
+      const prog = []
+      const res = await window.__loExecutor.executeCommand('find_replace', { findText: '甲乙', replaceText: '甲丙乙', replaceAll: true, __agent: true }, { onProgress: (p) => prog.push(p.done) })
+      return { res, prog }
+    })
+    check('不取消：replaced=150 且末帧 done=150', full.res.success === true && full.res.replaced === 150 && !full.res.cancelled && full.prog[full.prog.length - 1] === 150, JSON.stringify(full.res) + ' ' + JSON.stringify(full.prog))
+    const st2 = await exec('debug_lock_state')
+    check('跑完后锁平衡', st2.controllersLocked === false && st2.lockDepth === 0 && st2.modifySuspended === 0 && st2.inflightKeys === 1, JSON.stringify(st2))
   }
 
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')

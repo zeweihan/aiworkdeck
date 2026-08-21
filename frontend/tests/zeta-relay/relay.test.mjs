@@ -15,7 +15,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createRelayExecutor } from '../../src/composables/zetaOfficeRelay.js'
+import { createRelayExecutor, serveExecutor } from '../../src/composables/zetaOfficeRelay.js'
 
 /** 造一对可手动摆布的 {send, subscribe}：send 记下发出的消息，subscribe 的
  * handler 存起来，测试代码直接调它模拟"对端回了一条消息"。 */
@@ -118,4 +118,61 @@ test('墓碑表有上限，超出后丢弃最旧的一条，不无限增长', as
   // 最近的一条（第 25 个）应该还在表里。
   t.deliver({ __lo: 'lo-relay', type: 'result', reqId: reqIds[24], result: { success: true } })
   assert.equal(lateCalls.length, 1, '仍在上限内的墓碑应正常命中')
+})
+
+// ---- dev-board#108 复核：progress 帧与 cancel 的 reqId 映射 ----------------------
+
+test('progress 帧只回调 onProgress，不 resolve pending；随后的 result 才 resolve', async () => {
+  const t = fakeTransport()
+  const frames = []
+  const relay = createRelayExecutor({ send: t.send, subscribe: t.subscribe, timeoutMs: 5000, onProgress: (reqId, p) => frames.push({ reqId, ...p }) })
+  const perCall = []
+  let settled = false
+  const p = relay.executeCommand('find_replace', { findText: 'a' }, { onProgress: (f) => perCall.push(f) }).then((r) => { settled = true; return r })
+  const reqId = t.sent[0].reqId
+  t.deliver({ __lo: 'lo-relay', type: 'progress', reqId, done: 30, total: 150 })
+  t.deliver({ __lo: 'lo-relay', type: 'progress', reqId, done: 60, total: 150 })
+  await new Promise((r) => setTimeout(r, 10))
+  assert.equal(settled, false, 'progress 帧不能 resolve 命令本身')
+  assert.deepEqual(perCall, [{ done: 30, total: 150 }, { done: 60, total: 150 }])
+  assert.deepEqual(frames, [{ reqId, done: 30, total: 150 }, { reqId, done: 60, total: 150 }])
+  t.deliver({ __lo: 'lo-relay', type: 'result', reqId, result: { success: true, replaced: 150 } })
+  const r = await p
+  assert.equal(settled, true)
+  assert.deepEqual(r, { success: true, replaced: 150 })
+  relay.dispose()
+})
+
+test('serveExecutor：在飞命令的 cancel 把宿主 reqId 换成 worker reqId；已结束的原样透传、不再映射', async () => {
+  const t = fakeTransport()
+  const calls = []
+  let release = null
+  const executor = {
+    executeCommand(action, params, callOpts) {
+      calls.push({ action, params })
+      if (action === 'find_replace') {
+        if (callOpts && callOpts.onIssued) callOpts.onIssued('lo_worker_1')
+        return new Promise((resolve) => { release = () => { callOpts.onProgress({ done: 30, total: 60 }); resolve({ success: true, cancelled: true, done: 30 }) } })
+      }
+      return Promise.resolve({ success: true, reqId: params.reqId })
+    },
+  }
+  serveExecutor({ executor, send: t.send, subscribe: t.subscribe })
+  t.deliver({ __lo: 'lo-relay', type: 'exec', reqId: 'rly_1', action: 'find_replace', params: { findText: 'a' } })
+  // 在飞：cancel 的 reqId 应被换成 worker 侧 id
+  t.deliver({ __lo: 'lo-relay', type: 'exec', reqId: 'rly_2', action: 'cancel', params: { reqId: 'rly_1' } })
+  await new Promise((r) => setTimeout(r, 0))
+  assert.equal(calls[1].action, 'cancel')
+  assert.equal(calls[1].params.reqId, 'lo_worker_1', '在飞命令的 cancel 要换成 worker reqId')
+  release()
+  await new Promise((r) => setTimeout(r, 0))
+  const progress = t.sent.find((m) => m.type === 'progress')
+  assert.deepEqual(progress, { __lo: 'lo-relay', type: 'progress', reqId: 'rly_1', done: 30, total: 60 }, 'progress 往上带宿主 reqId')
+  const result = t.sent.find((m) => m.type === 'result' && m.reqId === 'rly_1')
+  assert.deepEqual(result.result, { success: true, cancelled: true, done: 30 })
+  // 已结束：映射已删，cancel 原样透传（worker 侧按 stale 处理，不留 CANCELLED 痕迹）
+  t.deliver({ __lo: 'lo-relay', type: 'exec', reqId: 'rly_3', action: 'cancel', params: { reqId: 'rly_1' } })
+  await new Promise((r) => setTimeout(r, 0))
+  assert.equal(calls[2].action, 'cancel')
+  assert.equal(calls[2].params.reqId, 'rly_1', '已结束的 reqId 不再映射（inflight 已删）')
 })
