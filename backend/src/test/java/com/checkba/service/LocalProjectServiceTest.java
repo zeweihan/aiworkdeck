@@ -47,6 +47,7 @@ class LocalProjectServiceTest {
     @Autowired private ProjectRepository projectRepository;
     @Autowired private ProjectMemberRepository projectMemberRepository;
     @Autowired private ProjectFileRepository projectFileRepository;
+    @Autowired private org.springframework.transaction.PlatformTransactionManager transactionManager;
 
     private LocalProjectService svc;
     private ProjectFileService projectFileService;
@@ -78,7 +79,8 @@ class LocalProjectServiceTest {
         svc = new LocalProjectService(projectRepository, projectMemberRepository,
                 projectFileRepository, projectFileService, memberService, resolver,
                 mock(org.springframework.context.ApplicationEventPublisher.class),
-                mock(com.checkba.service.telemetry.TelemetryService.class));
+                mock(com.checkba.service.telemetry.TelemetryService.class),
+                transactionManager);
     }
 
     private Path userFolder(@TempDir Path tmp) {
@@ -226,6 +228,28 @@ class LocalProjectServiceTest {
         assertTrue(r.rootMissing());
         ProjectFile a = projectFileRepository.findByProjectId(projectId).get(0);
         assertFalse(Boolean.TRUE.equals(a.getIsDeleted()), "根目录不可达时不得软删除任何行");
+    }
+
+    /**
+     * importFolder 在扫描条目数达到 MAX_IMPORT_ENTRIES 上限时会置位 ImportStats.truncated，
+     * 但 reconcileProject 此前只读 stats.changed，truncated 被整个丢弃——ReconcileResult
+     * 没有字段承载它，watcher 触发的后台对账因此全静默：超出上限的文件永远不进文件树，
+     * 无日志无 API 信号。openLocalFolder/OpenLocalResult 早就正确处理了同一个 stats.truncated
+     * （见 reconcileImportsNewAndSoftDeletesVanished 之外的 openLocalFolder 路径），
+     * 这里补上 reconcileProject 这一侧。
+     */
+    @Test
+    void reconcileReportsTruncationWhenImportHitsTheCap(@TempDir Path folder) throws Exception {
+        Long projectId = svc.openLocalFolder(folder.toString(), false, null, null, 1L).project().getId();
+
+        // 超过 MAX_IMPORT_ENTRIES（3000）上限，逼 importFolder 在扫描中途截断
+        int overCap = LocalProjectService.MAX_IMPORT_ENTRIES + 5;
+        for (int i = 0; i < overCap; i++) {
+            Files.writeString(folder.resolve("f" + i + ".txt"), "x");
+        }
+
+        LocalProjectService.ReconcileResult r = svc.reconcileProject(projectId);
+        assertTrue(r.truncated(), "扫描条目数超过上限时，对账结果必须报出截断，否则超限文件永远静默不进文件树");
     }
 
     /**

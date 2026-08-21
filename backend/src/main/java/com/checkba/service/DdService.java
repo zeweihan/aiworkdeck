@@ -232,33 +232,67 @@ public class DdService {
         String fileName = System.currentTimeMillis() + "_" + rawName;
 
         String storagePath = "projects/" + projectId + "/client_uploads/" + fileName;
-        
+
+        // 展示名同样要落进 ProjectFile.name 的 256 字符列宽以内：此前这里直接用未清洗的
+        // originalFilename，客户端传一个超长文件名就在落库时炸出
+        // DataIntegrityViolationException——而这一步已经排在物理写盘之后，事务回滚也
+        // 救不回已经落盘的字节，孤儿对象永久留在存储里（存储 key 带时间戳，永不覆盖，
+        // 重试一次多漏一个）。
+        String displayName = truncateToColumnWidth(originalFilename, 256);
+
         // Physical Save
         storageServiceFactory.getStorageService().save(storagePath, file.getInputStream());
 
-        // 6. Create ProjectFile record in the target folder
-        ProjectFile projectFile = new ProjectFile();
-        projectFile.setProjectId(projectId);
-        projectFile.setParentId(targetFolder.getId());
-        projectFile.setIsFolder(false);
-        projectFile.setName(originalFilename); // Display name
-        projectFile.setFileType(extension);
-        projectFile.setFileSize(file.getSize());
-        projectFile.setFilePath(storagePath);
-        projectFile.setWpsFileId(generateWpsFileId(projectId));
-        projectFile.setSortOrder(0);
-        projectFile.setUserId(userId);
-        projectFile.setCreatedAt(LocalDateTime.now());
-        projectFile.setUpdatedAt(LocalDateTime.now());
-        projectFile = projectFileRepository.save(projectFile);
+        try {
+            // 6. Create ProjectFile record in the target folder
+            ProjectFile projectFile = new ProjectFile();
+            projectFile.setProjectId(projectId);
+            projectFile.setParentId(targetFolder.getId());
+            projectFile.setIsFolder(false);
+            projectFile.setName(displayName); // Display name
+            projectFile.setFileType(extension);
+            projectFile.setFileSize(file.getSize());
+            projectFile.setFilePath(storagePath);
+            projectFile.setWpsFileId(generateWpsFileId(projectId));
+            projectFile.setSortOrder(0);
+            projectFile.setUserId(userId);
+            projectFile.setCreatedAt(LocalDateTime.now());
+            projectFile.setUpdatedAt(LocalDateTime.now());
+            projectFile = projectFileRepository.save(projectFile);
 
-        // 7. Update DdItem
-        item.setUploadedFileId(projectFile.getId());
-        item.setUploadedAt(LocalDateTime.now());
-        item.setUploadedBy(userId);
-        item.setStatus("UPLOADED");
-        
-        return ddItemRepository.save(item);
+            // 7. Update DdItem
+            item.setUploadedFileId(projectFile.getId());
+            item.setUploadedAt(LocalDateTime.now());
+            item.setUploadedBy(userId);
+            item.setStatus("UPLOADED");
+
+            return ddItemRepository.save(item);
+        } catch (RuntimeException e) {
+            // 落库失败（列宽超限之外的原因也算，比如瞬时 DB 故障）：物理对象已经写盘，
+            // 必须补偿删除，否则每次重试都在存储里多留一个孤儿。
+            try {
+                storageServiceFactory.getStorageService().delete(storagePath);
+            } catch (Exception cleanupEx) {
+                log.warn("落库失败后清理孤儿存储对象也失败: path={}", storagePath, cleanupEx);
+            }
+            throw e;
+        }
+    }
+
+    /**
+     * 展示名截到列宽以内，尽量保留扩展名（用户认得文件类型的部分）。
+     */
+    private static String truncateToColumnWidth(String name, int maxLength) {
+        if (name == null || name.length() <= maxLength) {
+            return name;
+        }
+        int dot = name.lastIndexOf('.');
+        // 扩展名本身占了列宽的大部分（异常情况）就不特殊处理，直接截断
+        if (dot > 0 && name.length() - dot <= 32) {
+            String ext = name.substring(dot);
+            return name.substring(0, maxLength - ext.length()) + ext;
+        }
+        return name.substring(0, maxLength);
     }
 
     private ProjectFile ensureFolder(Long projectId, Long parentId, String name, Long userId) {

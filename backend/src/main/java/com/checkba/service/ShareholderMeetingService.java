@@ -182,17 +182,38 @@ public class ShareholderMeetingService {
 
     /**
      * 把字节流保存为项目文件（幂等：同名同目录则覆盖更新）。
+     *
+     * createOrUpdateFile 自带 @Transactional，是独立于本类的一次提交；写字节失败时
+     * 行已经落库，不补偿就会在文件树里留一条有名有大小、内容不存在的僵尸文件。
+     * 只清理"这次新建的"行——如果 createOrUpdateFile 命中的是已有行（重复抓取覆盖
+     * 更新），那条行在写字节失败前还指向一份能打开的旧内容，删掉反而比"元数据先一步
+     * 被改成新值"更糟，所以只在确认是新建时才删除。
      */
     private ProjectFile saveBytesAsProjectFile(Long projectId, Long parentId, String fileName,
                                                String fileType, byte[] bytes, Long userId) {
+        String cleanName = sanitizeName(fileName);
+        boolean isNewFile = projectFileRepository
+                .findByProjectIdAndParentIdAndNameAndIsDeletedFalse(projectId, parentId, cleanName)
+                .isEmpty();
         ProjectFile file = projectFileService.createOrUpdateFile(
-                projectId, parentId, sanitizeName(fileName), fileType, (long) bytes.length, null, null, userId);
-        String savedPath = storageServiceFactory.getStorageService()
-                .save(file.getFilePath(), new ByteArrayInputStream(bytes));
-        file.setFilePath(savedPath);
-        file.setFileSize((long) bytes.length);
-        file.setUpdatedAt(LocalDateTime.now());
-        return projectFileRepository.save(file);
+                projectId, parentId, cleanName, fileType, (long) bytes.length, null, null, userId);
+        try {
+            String savedPath = storageServiceFactory.getStorageService()
+                    .save(file.getFilePath(), new ByteArrayInputStream(bytes));
+            file.setFilePath(savedPath);
+            file.setFileSize((long) bytes.length);
+            file.setUpdatedAt(LocalDateTime.now());
+            return projectFileRepository.save(file);
+        } catch (RuntimeException e) {
+            if (isNewFile) {
+                try {
+                    projectFileRepository.deleteById(file.getId());
+                } catch (Exception cleanupEx) {
+                    log.warn("写盘失败后清理孤儿文件行也失败: fileId={}", file.getId(), cleanupEx);
+                }
+            }
+            throw e;
+        }
     }
 
     // ==================== 巨潮拉取 ====================
