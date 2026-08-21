@@ -70,7 +70,8 @@ class LocalProjectServiceImportCapTest {
                 mock(com.checkba.version.WorkSessionService.class),
                 mock(UserService.class),
                 mock(com.checkba.service.quota.StageQuotaService.class),
-                mock(com.checkba.service.telemetry.TelemetryService.class));
+                mock(com.checkba.service.telemetry.TelemetryService.class),
+                mock(com.checkba.service.evidence.EvidenceLinkService.class));
 
         ProjectMemberService memberService = mock(ProjectMemberService.class);
         when(memberService.hasReadPermission(anyLong(), anyLong())).thenReturn(true);

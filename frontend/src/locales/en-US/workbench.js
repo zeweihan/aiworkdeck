@@ -176,7 +176,6 @@ export default {
   renameFailed: 'Rename failed',
   renameSyncFailed: 'Rename sync failed',
   openDocFirst: 'Open a document first',
-  highlightTextFirst: 'Highlight a passage in the document first (blue selection)',
   setHyperlinkFailed: 'Failed to set hyperlink',
   docNotReady: 'Document not ready',
   linkCreated: 'Link created',
@@ -212,4 +211,29 @@ export default {
   folderTooManyFiles: 'Folder contains {count} files (over the 10-file limit), please remove some',
   fileAdded: 'Added: {name}',
   noDragData: 'No drag data received',
+  // EvidenceLink: drop-to-link in the editor / method bar / link locating (evidenceLinkActions.js, EvidenceMethodBar.vue, LibreOfficeEditor.vue)
+  evidence: {
+    selectFirst: 'Select the text to link first',
+    selfLink: 'A document cannot be linked to itself',
+    bookmarkFailed: 'Could not create the bookmark, reselect the text and try again',
+    linked: 'Linked to "{name}"',
+    methodLabel: 'Method:',
+    dropHint: 'Release to link to the selected text',
+    method: {
+      written_review: 'Document review',
+      written_statement: 'Written statement',
+      web_check: 'Online check',
+      third_party: 'Third-party material',
+      interview: 'Interview',
+    },
+    loc: {
+      wholeFile: 'Whole file',
+      page: 'Page {page}',
+      quote: '"{quote}"',
+      region: 'Marked region',
+      time: 'From {time}',
+      web: '{host}',
+      cell: '{sheet}!{cell}',
+    },
+  },
 }

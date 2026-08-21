@@ -1,5 +1,5 @@
 <template>
-  <view class="libre-editor-wrapper">
+  <view class="libre-editor-wrapper" :class="{ 'evidence-drop-armed': evidenceDropArmed }">
     <!-- NO full-width bar — it read as alien chrome on top of the document
          (user feedback). Status floats over the editor's top-right corner;
          the pill only appears while something is happening (saving/failure)
@@ -65,6 +65,21 @@
            外层右上角会正好压住面板的「修订/批注」标题行（真机截图实证）。 -->
       <view class="libre-canvas-wrap">
         <view :id="hostId" class="libre-host"></view>
+        <!-- 证据关联投放层（EvidenceLink）：画布是 webview/iframe，HTML5 拖放事件落在它
+             的文档里而不是宿主，外层容器直接绑 @drop 收不到。所以文件树/暂存区一开始
+             拖（uni 事件 file-drag-start）就在画布上铺一层透明接收层，drop 落在这层上。
+             选区在拖之前已经选好，接收层挡住画布不影响建链。 -->
+        <view
+          v-if="evidenceDropArmed && ready && file"
+          class="libre-evidence-drop"
+          :class="{ over: evidenceDropOver }"
+          @dragenter.prevent="onEvidenceDragOver"
+          @dragover.prevent="onEvidenceDragOver"
+          @dragleave="onEvidenceDragLeave"
+          @drop.prevent="onEvidenceDrop"
+        >
+          <text class="libre-evidence-hint">{{ $t('workbench.evidence.dropHint') }}</text>
+        </view>
         <view class="libre-float">
           <!-- No manual save button: edits auto-save (modify listener → debounced
                saveDocument). 保存状态只在「慢」和「失败」时出声——见 saveDocument。 -->
@@ -117,7 +132,7 @@ let seq = 0
 export default {
   name: 'LibreOfficeEditor',
   components: { ReviewPanel, EditorToolbar },
-  emits: ['close', 'ready', 'open-url', 'menu-state'],
+  emits: ['close', 'ready', 'open-url', 'menu-state', 'evidence-drop', 'locator-consumed'],
   props: {
     // Track D: the Office file to load into the editor ({ id, name, fileType,
     // wpsFileId }). When set, the editor fetches its bytes (authed) and loads the
@@ -129,6 +144,10 @@ export default {
     return {
       hostId: 'libre-host-' + (++seq),
       ready: false,
+      // EvidenceLink 拖放：armed = 项目内有文件正在被拖（uni file-drag-start/end），
+      // over = 指针正悬在本画布的接收层上（描边高亮）。
+      evidenceDropArmed: false,
+      evidenceDropOver: false,
       // 当前文档内核类型（writer/calc/impress/unknown），worker load_document 返回值
       // 里带回；boot 出来的空白文档恒为 writer，装真文档前保持这个默认值不算错。
       // 审阅按钮/ReviewPanel 按它隐藏——Calc/Impress 都没有修订机制。
@@ -229,10 +248,17 @@ export default {
     // 菜单栏读勾选/置灰的三个信号。合并在这个 watch 里而不是另起一块——
     // 选项对象里两个同名 key，后写的会把先写的整个覆盖掉。
     reviewOpen() { this.$emit('menu-state') },
-    ready() { this.$emit('menu-state') },
+    ready(v) { this.$emit('menu-state'); if (v) this.consumeLocator() },
     docKind() { this.$emit('menu-state') },
+    // 宿主 openFile(file, {locator}) 把定位符挂在 tab 对象上；已打开的标签再次被
+    // 链接点中时是原地换对象，靠这个路径 watch 触发。
+    'file.pendingLocator'(loc) { if (loc) this.consumeLocator() },
   },
   async mounted() {
+    this._onEvidenceDragStart = () => { this.evidenceDropArmed = true }
+    this._onEvidenceDragEnd = () => { this.evidenceDropArmed = false; this.evidenceDropOver = false }
+    uni.$on('file-drag-start', this._onEvidenceDragStart)
+    uni.$on('file-drag-end', this._onEvidenceDragEnd)
     try {
       const api = host.zetaoffice
       if (!api || typeof api.getEditor !== 'function') {
@@ -254,6 +280,8 @@ export default {
     }
   },
   beforeUnmount() {
+    uni.$off('file-drag-start', this._onEvidenceDragStart)
+    uni.$off('file-drag-end', this._onEvidenceDragEnd)
     // Autosave timers die with the instance. Any still-dirty edits were flushed
     // by the closer (closeFile / evictLibreInstance await flushSave first) —
     // export needs the live webview, so saving from here is already too late.
@@ -274,6 +302,65 @@ export default {
     this.executor = null
   },
   methods: {
+    // ---- EvidenceLink：拖放接收层 ----
+    onEvidenceDragOver(e) {
+      this.evidenceDropOver = true
+      try { if (e && e.dataTransfer) e.dataTransfer.dropEffect = 'link' } catch (err) { /* ignore */ }
+    },
+    onEvidenceDragLeave() {
+      this.evidenceDropOver = false
+    },
+    onEvidenceDrop(e) {
+      this.evidenceDropOver = false
+      this.evidenceDropArmed = false
+      let file = null
+      try {
+        const raw = e && e.dataTransfer ? e.dataTransfer.getData('application/x-checkba-file') : ''
+        if (raw) file = JSON.parse(raw)
+      } catch (err) { file = null }
+      if (!file) {
+        try {
+          const raw2 = e && e.dataTransfer ? e.dataTransfer.getData('text/checkba-file-json') : ''
+          if (raw2) file = JSON.parse(raw2)
+        } catch (err) { file = null }
+      }
+      // webview 环境下 dataTransfer 可能被清空：退回 FileTree/暂存区留在 document 上的全局兜底
+      if (!file && typeof document !== 'undefined' && document.__checkbaDraggedFile) {
+        file = { ...document.__checkbaDraggedFile }
+        document.__checkbaDraggedFile = null // 消费即清，免得下一次落空的 drop 捡到陈文件
+      }
+      if (!file || file.fileType === 'folder' || file.isFolder) return
+      const id = file.id != null ? file.id : file.fileId
+      if (!id) return
+      this.$emit('evidence-drop', { file: { ...file, id } })
+    },
+    // ---- EvidenceLink：消费 pendingLocator（docx：书签优先，其次 quote 查找）----
+    async consumeLocator() {
+      const f = this.file
+      const loc = f && f.pendingLocator
+      if (!loc || !this.ready || !this.executor || this._consumingLocator) return
+      this._consumingLocator = true
+      const exec = (action, params) => this.executor.executeCommand(action, params)
+      try {
+        let done = false
+        if (loc.bookmark) {
+          try {
+            const r = await exec('goto_bookmark', { name: String(loc.bookmark) })
+            done = !!(r && r.success)
+          } catch (e) { done = false }
+        }
+        if (!done && loc.quote) {
+          const found = await exec('find_text_locations', { keyword: String(loc.quote).slice(0, 200) })
+          const first = found && Array.isArray(found.matches) && found.matches[0]
+          if (first && first.anchorId) await exec('set_selection', { anchor: first.anchorId })
+        }
+      } catch (e) {
+        this.appendLog('locator failed: ' + (e && e.message ? e.message : e))
+      } finally {
+        this._consumingLocator = false
+        this.$emit('locator-consumed', f.id)
+      }
+    },
     // ---- 菜单栏命令入口 ----------------------------------------------------
     // 「文档」菜单经 appMenuBridge → project-overview 的活跃编辑器 → 这里。
     // 一律薄转发到工具栏/审阅面板已有的方法，不在这层复制业务逻辑——
@@ -917,6 +1004,13 @@ export default {
 .libre-body { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: row; }
 .libre-canvas-wrap { position: relative; flex: 1; min-width: 0; min-height: 0; height: 100%; }
 .libre-host { width: 100%; height: 100%; }
+/* EvidenceLink 拖放：整个编辑器描一圈边，画布上铺透明接收层；悬停时加深 */
+.libre-editor-wrapper.evidence-drop-armed { box-shadow: inset 0 0 0 2px #1A5336; }
+.libre-evidence-drop { position: absolute; inset: 0; z-index: 25; display: flex; align-items: flex-end; justify-content: center;
+  padding-bottom: 28px; background: rgba(230, 249, 240, 0.25); border: 2px dashed rgba(26, 83, 54, 0.45); box-sizing: border-box; }
+.libre-evidence-drop.over { background: rgba(230, 249, 240, 0.55); border-color: #1A5336; border-style: solid; }
+.libre-evidence-hint { padding: 6px 14px; border-radius: 999px; background: #fff; border: 1px solid #1A5336; color: #1A5336;
+  font-size: 12px; pointer-events: none; }
 .libre-review-btn { padding: 3px 10px; border-radius: 999px; background: rgba(31, 41, 55, 0.78);
   color: #e5e7eb; font-size: 12px; backdrop-filter: blur(4px); }
 .libre-review-btn.on { background: #E6F9F0; color: #1A5336; }

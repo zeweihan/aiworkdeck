@@ -33,6 +33,8 @@ public class ProjectFileService {
     private final UserService userService;
     private final com.checkba.service.quota.StageQuotaService stageQuotaService;
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
+    /** 彻底删除时级联清 evidence_link_target（单向依赖：EvidenceLinkService 不注入本类）。 */
+    private final com.checkba.service.evidence.EvidenceLinkService evidenceLinkService;
 
     @org.springframework.beans.factory.annotation.Autowired
     public ProjectFileService(ProjectFileRepository projectFileRepository,
@@ -41,7 +43,9 @@ public class ProjectFileService {
                               WorkSessionService workSessionService,
                               UserService userService,
                               com.checkba.service.quota.StageQuotaService stageQuotaService,
-                              com.checkba.service.telemetry.TelemetryService telemetryService) {
+                              com.checkba.service.telemetry.TelemetryService telemetryService,
+                              com.checkba.service.evidence.EvidenceLinkService evidenceLinkService) {
+        this.evidenceLinkService = evidenceLinkService;
         this.projectFileRepository = projectFileRepository;
         this.projectRagService = projectRagService;
         this.storageServiceFactory = storageServiceFactory;
@@ -460,9 +464,12 @@ public class ProjectFileService {
             }
         }
         
+        // 证据链接级联：删该文件的 target，target 清空的 link 标 orphan（软删不走这里，面板灰显即可）
+        evidenceLinkService.onFilePurged(file.getProjectId(), fileId);
+
         // 删除数据库记录
         projectFileRepository.deleteById(fileId);
-        
+
         // 触发向量库增量刷新（文件删除）
         if (file.getProjectId() != null && filePath != null) {
             projectRagService.refreshProjectKnowledgeIncremental(

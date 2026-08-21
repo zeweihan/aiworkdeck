@@ -120,8 +120,27 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - webview/uni 存储格式坑与宿主侧 e2e 配方见 lowa-keepalive 记录（PR#159）。
 - **预热备胎是同一个 LibreOfficeEditor 组件（file=null）**：任何在组件树/DOM 里"找编辑器实例"的探针（如 desktop-e2e FIND_EDITOR）必须过滤 `file` 非空，否则命令打在隐藏空白备胎上、样样"成功"但真文档纹丝不动。备胎未激活用 visibility 隐藏（绝对定位占位），不能改 display:none——引擎要在有尺寸画布里 boot。
 
+## EvidenceLink 书签原语（dev-board#103，office_thread.js）
+
+书签名 = linkKey（`EVID_<ULID>`，只含 `[A-Za-z0-9_]`），底稿关联挂在命名书签上跟着文字走。五个 host-initiated action（已入 `EDITOR_ACTIONS` 白名单；失败一律 `bmFail()` 双字段 error+message）：
+
+| action | 参数 | 返回 |
+|---|---|---|
+| `bookmark_selection` | `{name}` | `{success, name, text}`；空选区 / 非法名 / **重名精确拒绝**（不像 `insert_link_with_bookmark` 那样加 `_n`） |
+| `get_bookmark_context` | `{name}` | `{success, exists, text, sectionPath, sectionTitle, paragraphIndex}`；不存在是 `exists:false` 不是失败 |
+| `check_link_anchors` | `{names[]}` | `{success, items:[{name, exists, text}], truncated}`；单次 ≤200（超出截断并置 `truncated:true`），宿主分批 |
+| `adopt_legacy_links` | `{}` | `{success, adopted:[name], skipped, skippedInvalid}`；先对整条 URL decodeURIComponent（最多两层）再匹配 `filelink?k=<key>`（到 `&`/`#` 止），生产形态 `open?u=encodeURIComponent('checkba://filelink?k=…&projectId=…')` 取到的 key 恰等于原 key；key 含 `[A-Za-z0-9_]` 以外字符（如后端兜底 `lk_<UUID>` 带 `-`）**不改写、计入 `skippedInvalid`（按去重 key 计）**；逐目标 try/catch，单个坏 run 只 `skipped++`；幂等 |
+| `goto_bookmark` | `{name}` | `{success, name}`；`anchorRange` + `selectVisibly`，不借 `set_selection`（它只认 `__ai_anchor_*`） |
+
+真机实测结论（lowa-e2e 组 27，2026-08-21）：
+- **书签覆盖的文字被整段删除后，LO 连书签一起删掉**：`check_link_anchors` 回 `exists:false`，不会留空点书签。宿主判 orphan 仍用「`!exists || text===''`」双口径（text 为空是防御）。
+- 书签内部插字会扩张书签；**正好在书签末端插入不扩张**（e2e 要先 `collapse_selection end` + `move_cursor left` 再插）。
+- 书签经 docx export/load 往返存活（文字含后插的字）。
+- `adopt_legacy_links` 不能把 TextPortion 直接喂 `insertTextContent`（抛 IllegalArgumentException），要 `createTextCursorByRange(start)` + `gotoRange(end, true)` 在正文上造区间游标；且先收集目标再插书签，枚举中改段落会让 portion 枚举失效。
+- `headingChainOf` 用 `XTextRangeCompare` 定位段落，表格单元格内的书签跨 story 比较会抛 → `sectionPath` 空、`paragraphIndex -1`（P0 接受）。
+
 ## 验证
 
-- 核心回归：`cd frontend && npm run test:lowa-e2e`（真引擎 puppeteer-core 无头，12 组人机模拟，基线 38 步；前置 `npm run build:zetaoffice` + `node ../desktop/scripts/fetch-lowa-assets.js` 或设 LOWA_ENGINE_DIR）。
+- 核心回归：`cd frontend && npm run test:lowa-e2e`（真引擎 puppeteer-core 无头，27 组人机模拟，2026-08-21 基线 421 步；前置 `npm run build:zetaoffice` + `node ../desktop/scripts/fetch-lowa-assets.js` 或设 LOWA_ENGINE_DIR）。
 - 涉桌面壳/webview：`npm run test:desktop-e2e`（弹 dev Electron 窗口，验证保存落盘链路）。
 - 全应用：`npm run test:app-e2e`。改编辑器三件套（原语/白名单/worker）必跑 lowa-e2e。

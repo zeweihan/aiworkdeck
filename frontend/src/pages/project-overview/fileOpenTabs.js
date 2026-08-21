@@ -105,7 +105,9 @@ export const fileOpenTabsMethods = {
       }
     },
 
-    openFile(file) {
+    // opts.locator：EvidenceLink 定位符（spec §1.4），挂在 tab 对象的 pendingLocator 上，
+    // 由 LibreOfficeEditor（书签/quote）或 FilePreview（pdf 页码/图片框/媒体时刻）消费。
+    openFile(file, opts = {}) {
       // 检查文件类型是否支持打开
       if (!this.isFileTypeSupported(file)) {
         uni.showModal({
@@ -138,12 +140,14 @@ export const fileOpenTabsMethods = {
       const targetIdProp = targetPane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'
 
       const existing = targetList.find(f => f.id === file.id)
+      const locator = (opts && opts.locator) || null
       if (existing) {
         Object.assign(existing, file)
+        existing.pendingLocator = locator
         this[targetIdProp] = file.id
         this.focusedPane = targetPane
       } else {
-        targetList.push({ ...file })
+        targetList.push({ ...file, pendingLocator: locator })
         this[targetIdProp] = file.id
       }
 

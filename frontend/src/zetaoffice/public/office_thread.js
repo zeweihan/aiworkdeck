@@ -100,6 +100,39 @@ function anchorRange(name) {
   if (!bms.hasByName(name)) return null;
   return bms.getByName(name).getAnchor(); // XTextRange
 }
+// ---- EvidenceLink 书签原语 helpers（dev-board#103）-----------------------------
+function bmFail(msg) { return { success: false, error: msg, message: msg }; }
+// 当前选区的第一个 range（无选区 → null）。
+function selectionRange() {
+  const sel = ctrl.getSelection();
+  let range = null;
+  try { if (sel && typeof sel.getByIndex === 'function' && sel.getCount() > 0) range = sel.getByIndex(0); } catch (e) {}
+  return range;
+}
+// 从 range 所在段落向前找标题链：OutlineLevel 1..6，每级只取最近的一个，直到
+// 遇到 1 级或文首。返回 {chain:[{level,text}], paragraphIndex}；定位不到（跨
+// story 比较抛异常、表格单元格等）时 chain 为空、paragraphIndex -1。
+function headingChainOf(range) {
+  const chain = [];
+  let seen = 99;
+  try {
+    const body = xModel.getText(); // XTextRangeCompare
+    const paras = [];
+    eachParagraph(function (el) { paras.push(el); return false; });
+    const start = range.getStart();
+    let idx = -1;
+    for (let i = 0; i < paras.length; i++) {
+      if (body.compareRegionStarts(paras[i].getStart(), start) >= 0 && body.compareRegionEnds(paras[i].getEnd(), start) <= 0) { idx = i; break; }
+    }
+    if (idx < 0) return { chain: [], paragraphIndex: -1 };
+    for (let i = idx; i >= 0 && seen > 1; i--) {
+      let lvl = 0;
+      try { lvl = Number(paras[i].getPropertyValue('OutlineLevel')) || 0; } catch (e) {}
+      if (lvl > 0 && lvl < seen) { chain.unshift({ level: lvl, text: (paras[i].getString() || '').trim().slice(0, 200) }); seen = lvl; }
+    }
+    return { chain: chain, paragraphIndex: idx };
+  } catch (e) { return { chain: [], paragraphIndex: -1 }; }
+}
 
 // #104 variable fields: a NAMED bookmark spanning the inserted value marks a
 // "document field" bound to a (scope, varName) variable — the WPS 域 semantics
@@ -3183,6 +3216,131 @@ const EXEC = {
     xText.insertTextContent(cur, bm, true);
     try { vc.gotoRange(cur.getEnd(), false); } catch (e) {}
     return Object.assign({ success: true, bookmarkName: name, text: text, url: url }, verifySnapshot());
+  },
+  // ---- EvidenceLink 锚点原语（dev-board#103）：书签名 = linkKey ----------------
+  // 尽调报告里「每条事实必有底稿」：底稿与正文的关联落在命名书签上，书签随
+  // 文字走、经 docx 往返存活。与 insert_link_with_bookmark 不同，这里给的是
+  // **当前选区**套书签，且重名精确拒绝（linkKey 必须一一对应，不许加 _n 后缀）。
+  // 失败返回同时写 error 与 message（宿主只回传 result.error 的已知地雷）。
+  bookmark_selection(p) {
+    if (!isWriterDoc()) return bmFail(NOT_TEXT_DOC_MSG);
+    const name = String((p && p.name) || '');
+    if (!/^[A-Za-z0-9_]{1,64}$/.test(name)) return bmFail('bookmark name must match [A-Za-z0-9_]{1,64}: ' + name);
+    const range = selectionRange();
+    // 形状/图片选区不是 XTextRange（没有 getString），不能落到外层 dispatcher 只带 message
+    if (!range || typeof range.getString !== 'function') return bmFail('no text selection to bookmark');
+    const text = range.getString() || '';
+    if (!text.length) return bmFail('no selection to bookmark');
+    const bms = xModel.getBookmarks();
+    if (bms.hasByName(name)) return bmFail('bookmark exists: ' + name);
+    try {
+      const bm = xModel.createInstance('com.sun.star.text.Bookmark');
+      bm.setName(name);
+      range.getText().insertTextContent(range, bm, true); // bAbsorb: 书签覆盖整个选区
+    } catch (e) { return bmFail('bookmark_selection failed: ' + errStr(e)); }
+    return { success: true, name: name, text: text };
+  },
+  // 书签所在位置的上下文：文字 + 标题链（OutlineLevel>0 的段落，与 get_outline
+  // 同判据）+ 段落索引（0 基）。不存在 → exists:false（不是失败）。表格单元格内
+  // 的书签跨 story 比较会抛，sectionPath 为空、paragraphIndex -1（P0 接受）。
+  get_bookmark_context(p) {
+    const name = String((p && p.name) || '');
+    const range = anchorRange(name);
+    if (!range) return { success: true, exists: false, text: '', sectionPath: '', sectionTitle: '', paragraphIndex: -1 };
+    const h = headingChainOf(range);
+    return {
+      success: true, exists: true, text: range.getString() || '',
+      sectionPath: h.chain.map(function (c) { return c.text; }).join('/'),
+      sectionTitle: h.chain.length ? h.chain[h.chain.length - 1].text : '',
+      paragraphIndex: h.paragraphIndex,
+    };
+  },
+  // 批量核对：单次最多 200 个（宿主分批、批间让路 autosave）。真机实测（lowa-e2e
+  // 组 27）：书签覆盖的文字被整段删除后 LO 连书签一起删掉，exists:false；宿主以
+  // 「!exists || text===''」判 orphan（text 为空是防御口径，正常路径不会出现）。
+  check_link_anchors(p) {
+    const names = Array.isArray(p && p.names) ? p.names.slice(0, 200) : [];
+    let bms = null;
+    try { bms = xModel.getBookmarks(); } catch (e) { return bmFail('check_link_anchors failed: ' + errStr(e)); }
+    const items = [];
+    for (let i = 0; i < names.length; i++) {
+      const n = String(names[i]);
+      let exists = false, text = '';
+      try { if (bms.hasByName(n)) { exists = true; text = bms.getByName(n).getAnchor().getString() || ''; } } catch (e) {}
+      items.push({ name: n, exists: exists, text: text });
+    }
+    const total = Array.isArray(p && p.names) ? p.names.length : 0;
+    return { success: true, items: items, truncated: total > 200 };
+  },
+  // 旧式关联（超链接 filelink?k=<key>）收编为同名书签；已有同名书签的跳过。
+  // 同一 run 被格式变化拆成多个 portion 时只有第一个被套上（后面 hasByName 命中
+  // skipped）——书签覆盖不全但锚点有效。
+  adopt_legacy_links() {
+    if (!isWriterDoc()) return bmFail(NOT_TEXT_DOC_MSG);
+    const adopted = []; let skipped = 0, skippedInvalid = 0;
+    const invalidSeen = {};
+    // 生产链接形态：https://checkba-internal.local/open?u= + encodeURIComponent(
+    // 'checkba://filelink?k=<key>&projectId=<pid>')，即 ...%3Fk%3Dlk_x%26projectId%3D42。
+    // 先把整条 URL 解码（最多两层）再匹配，key 取到 & / # 为止；key 含
+    // [A-Za-z0-9_] 以外字符（后端兜底 lk_<UUID> 带 -）不能静默改写成别的名字
+    // ——那会永远对不上 link_key 且二次运行被 hasByName 误判 skipped——计入
+    // skippedInvalid 跳过。
+    function legacyKeyOf(url) {
+      let s = String(url || '');
+      for (let i = 0; i < 2 && /%[0-9A-Fa-f]{2}/.test(s); i++) {
+        try { s = decodeURIComponent(s); } catch (e) { break; }
+      }
+      const m = /filelink\?k=([^&#\s]+)/.exec(s);
+      if (!m) return null;
+      return { key: m[1], valid: /^[A-Za-z0-9_]{1,64}$/.test(m[1]) };
+    }
+    try {
+      const bms = xModel.getBookmarks();
+      const xText = xModel.getText();
+      // 先收集再插书签：枚举过程中改段落内容会让 portion 枚举失效。
+      // TextPortion 本身不能直接喂 insertTextContent（真机抛 IllegalArgumentException），
+      // 要用 createTextCursorByRange 在正文上造一个覆盖该 portion 的区间游标。
+      const targets = [];
+      const en = xText.createEnumeration();
+      while (en.hasMoreElements()) {
+        const para = en.nextElement();
+        if (!para.supportsService || !para.supportsService('com.sun.star.text.Paragraph')) continue;
+        const pen = para.createEnumeration();
+        while (pen.hasMoreElements()) {
+          const portion = pen.nextElement();
+          let url = '';
+          try { url = String(portion.getPropertyValue('HyperLinkURL') || ''); } catch (e) { continue; }
+          const k = legacyKeyOf(url);
+          if (!k) continue;
+          // 同一 run 常被书签/格式边界拆成多个 portion：非法 key 按去重后的 key 计数
+          if (!k.valid) { if (!invalidSeen[k.key]) { invalidSeen[k.key] = true; skippedInvalid++; } continue; }
+          targets.push({ key: k.key, start: portion.getStart(), end: portion.getEnd() });
+        }
+      }
+      // 逐目标隔离：一个坏 run 不能把已成功的 adopted 整体报成失败
+      for (let i = 0; i < targets.length; i++) {
+        const t = targets[i];
+        try {
+          if (bms.hasByName(t.key)) { skipped++; continue; }
+          const cur = xText.createTextCursorByRange(t.start);
+          cur.gotoRange(t.end, true);
+          if (!(cur.getString() || '').length) { skipped++; continue; }
+          const bm = xModel.createInstance('com.sun.star.text.Bookmark');
+          bm.setName(t.key);
+          xText.insertTextContent(cur, bm, true);
+          adopted.push(t.key);
+        } catch (e) { skipped++; }
+      }
+    } catch (e) { return bmFail('adopt_legacy_links failed: ' + errStr(e)); }
+    return { success: true, adopted: adopted, skipped: skipped, skippedInvalid: skippedInvalid };
+  },
+  // 跳到书签：anchorRange + selectVisibly（不借 set_selection，它只认 __ai_anchor_*）。
+  goto_bookmark(p) {
+    const name = String((p && p.name) || '');
+    const range = anchorRange(name);
+    if (!range) return bmFail('bookmark not found: ' + name);
+    if (!selectVisibly(range)) return bmFail('could not select bookmark: ' + name);
+    return { success: true, name: name };
   },
   // read the hyperlink URL at the (collapsed) view cursor — the click-to-open
   // seam: LO WASM does NOT surface hyperlink activation (no window.open, real-
