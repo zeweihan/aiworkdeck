@@ -62,8 +62,9 @@ public final class Units {
         return Length.of(round2(twips / TWIPS_PER_PT), "pt");
     }
 
+    /** 纸张尺寸用 1 位小数：Word 把 A4 写成 11906 twips，算回来是 210.01mm。 */
     public static Length twipsToMm(long twips) {
-        return Length.of(round2(twips / TWIPS_PER_MM), "mm");
+        return Length.of(Math.round(twips / TWIPS_PER_MM * 10.0) / 10.0, "mm");
     }
 
     public static Length twipsToCm(long twips) {

@@ -17,6 +17,7 @@ import com.checkba.service.ai.tools.PythonTools;
 import com.checkba.service.ai.tools.SubAgentTools;
 import com.checkba.service.ai.tools.TagTools;
 import com.checkba.service.ai.tools.TaskTools;
+import com.checkba.service.ai.tools.TemplateTools;
 import com.checkba.service.ai.tools.TextFileEditTools;
 import com.checkba.service.ai.tools.TodoTools;
 import com.checkba.service.ai.tools.WebTools;
@@ -66,6 +67,7 @@ final class RealToolBeans {
                 TodoTools.class,
                 TagTools.class,
                 TaskTools.class,
+                TemplateTools.class,
                 WebTools.class);
         List<AgentToolComponent> beans = new ArrayList<>();
         for (Class<? extends AgentToolComponent> type : toolClasses) {

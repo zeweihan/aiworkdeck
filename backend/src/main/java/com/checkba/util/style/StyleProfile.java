@@ -180,7 +180,11 @@ public final class StyleProfile {
             String western = text(n, "western");
             if (western == null) western = text(n, "ascii");
             if (western == null) western = text(n, "hAnsi");
-            return new Font(text(n, "eastAsia"), western, text(n, "cs"), text(n, "theme"));
+            JsonNode theme = n.get("theme");
+            String themeSlot = theme == null || theme.isNull() ? null
+                    : theme.isObject() ? text(theme, "eastAsia") != null ? text(theme, "eastAsia") : text(theme, "western")
+                    : theme.asText();
+            return new Font(text(n, "eastAsia"), western, text(n, "cs"), themeSlot);
         }
 
         public ObjectNode toNode() {

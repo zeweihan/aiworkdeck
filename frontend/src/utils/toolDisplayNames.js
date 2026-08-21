@@ -41,6 +41,8 @@ const NAMES = {
   list_files: { zh: '列出文件', en: 'List files' },
   write_file: { zh: '写入文件', en: 'Write file' },
   write_docx: { zh: '生成Word文档', en: 'Create Word doc' },
+  // 模板画像（TemplateTools，dev-board#110）
+  docx_inspect_template: { zh: '学习模板格式', en: 'Learn template style' },
   // 纯文本直读直写（TextFileEditTools，dev-board#37）
   text_write_file: { zh: '写入文本文件', en: 'Write text file' },
   text_find_replace: { zh: '文本查找替换', en: 'Text find and replace' },

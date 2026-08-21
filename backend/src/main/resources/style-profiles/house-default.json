@@ -91,7 +91,7 @@
       "insideV": {"style": "single", "width": {"value": 1.5, "unit": "pt"}, "color": "#000000"}
     },
     "header": {
-      "rows": 1, "repeatOnEachPage": false, "bold": true,
+      "rows": 1, "repeatOnEachPage": true, "bold": true,
       "alignment": "center", "verticalAlign": "center", "fill": null
     },
     "cell": {
@@ -105,7 +105,7 @@
         "text": {"alignment": "left"},
         "number": {"alignment": "right"},
         "date": {"alignment": "left"},
-        "serial": {"alignment": "left"}
+        "serial": {"alignment": "right"}
       }
     }
   }
