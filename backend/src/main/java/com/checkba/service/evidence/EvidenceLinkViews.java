@@ -24,6 +24,9 @@ public final class EvidenceLinkViews {
                            String sectionPath, String sectionTitle, String status, String createdByKind,
                            LocalDateTime createdAt, LocalDateTime updatedAt, List<TargetView> targets) {}
 
-    /** worker check_link_anchors 的一条核对结果。 */
-    public record AnchorReport(String linkKey, boolean exists, String text) {}
+    /** worker check_link_anchors 的一条核对结果。exists 为 null（漏字段/半截 payload）的条目跳过，不许当成 false 打 orphan。 */
+    public record AnchorReport(String linkKey, Boolean exists, String text) {}
+
+    /** reportAnchors 的结果：状态变了的 linkKey + 因 exists 缺失被忽略的条数。 */
+    public record AnchorReportResult(List<String> changed, int ignored) {}
 }

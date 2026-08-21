@@ -1769,56 +1769,116 @@ export function getDocFileLink(projectId, linkKey) {
   })
 }
 
-// EvidenceLink（报告文字 ↔ 底稿文件关联事实表，dev-board#100/#102）。
-// REST 契约见 .claude/agents/ai-doc-bridge.md「EvidenceLink 契约」。
-const evidenceBase = (projectId) => `/api/projects/${projectId}/evidence-links`
-const JSON_HEADER = { 'Content-Type': 'application/json' }
-
-export function createEvidenceLink(projectId, body) {
-  return request({ url: evidenceBase(projectId), method: 'POST', data: body, header: JSON_HEADER })
+// 证据链接 EvidenceLink（书签锚点 + 多底稿 target，后端 EvidenceLinkController）。
+// 返回是裸 LinkView / LinkView[]（无 {code,data} 信封，request() 原样透传）。
+export function createEvidenceLink(projectId, payload) {
+  return request({
+    url: `/api/projects/${projectId}/evidence-links`,
+    method: 'POST',
+    data: payload,
+    header: {
+      'Content-Type': 'application/json',
+    },
+  })
 }
 
 export function getEvidenceLink(projectId, linkKey) {
-  return request({ url: `${evidenceBase(projectId)}/${encodeURIComponent(linkKey)}`, method: 'GET' })
+  return request({
+    url: `/api/projects/${projectId}/evidence-links/${encodeURIComponent(linkKey)}`,
+    method: 'GET',
+  })
 }
 
-/** params: {docFileId, status?, sectionPath?} | {fileId} | {docFileId, partyTagId} */
-export function listEvidenceLinks(projectId, params) {
-  return request({ url: evidenceBase(projectId), method: 'GET', data: params || {} })
+/** query: { docFileId | fileId, partyTagId?, status?, sectionPath? }，空值不上串 */
+export function listEvidenceLinks(projectId, query = {}) {
+  const qs = Object.keys(query || {})
+    .filter(k => query[k] !== undefined && query[k] !== null && query[k] !== '')
+    .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(query[k])}`)
+    .join('&')
+  return request({
+    url: `/api/projects/${projectId}/evidence-links${qs ? '?' + qs : ''}`,
+    method: 'GET',
+  })
 }
 
 export function addEvidenceTargets(projectId, linkKey, targets) {
-  return request({ url: `${evidenceBase(projectId)}/${encodeURIComponent(linkKey)}/targets`, method: 'POST', data: targets, header: JSON_HEADER })
+  return request({
+    url: `/api/projects/${projectId}/evidence-links/${encodeURIComponent(linkKey)}/targets`,
+    method: 'POST',
+    data: targets,
+    header: {
+      'Content-Type': 'application/json',
+    },
+  })
 }
 
 export function updateEvidenceTarget(projectId, targetId, patch) {
-  return request({ url: `${evidenceBase(projectId)}/targets/${targetId}`, method: 'PATCH', data: patch, header: JSON_HEADER })
+  return request({
+    url: `/api/projects/${projectId}/evidence-links/targets/${targetId}`,
+    method: 'PATCH',
+    data: patch,
+    header: {
+      'Content-Type': 'application/json',
+    },
+  })
 }
 
 export function removeEvidenceTarget(projectId, targetId) {
-  return request({ url: `${evidenceBase(projectId)}/targets/${targetId}`, method: 'DELETE' })
+  return request({
+    url: `/api/projects/${projectId}/evidence-links/targets/${targetId}`,
+    method: 'DELETE',
+  })
 }
 
 export function deleteEvidenceLink(projectId, linkKey) {
-  return request({ url: `${evidenceBase(projectId)}/${encodeURIComponent(linkKey)}`, method: 'DELETE' })
+  return request({
+    url: `/api/projects/${projectId}/evidence-links/${encodeURIComponent(linkKey)}`,
+    method: 'DELETE',
+  })
 }
 
 /** worker check_link_anchors 的结果回写：reports = [{linkKey, exists, text}] → {changed:[linkKey]} */
 export function reportEvidenceAnchors(projectId, docFileId, reports) {
-  return request({ url: `${evidenceBase(projectId)}/anchors/report`, method: 'POST', data: { docFileId, reports }, header: JSON_HEADER })
+  return request({
+    url: `/api/projects/${projectId}/evidence-links/anchors/report`,
+    method: 'POST',
+    data: { docFileId, reports },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  })
 }
 
+/** 用户「保留关联」：text = 文档里现在的锚点文字 */
 export function keepEvidenceAnchor(projectId, linkKey, text) {
-  return request({ url: `${evidenceBase(projectId)}/${encodeURIComponent(linkKey)}/keep`, method: 'POST', data: { text }, header: JSON_HEADER })
+  return request({
+    url: `/api/projects/${projectId}/evidence-links/${encodeURIComponent(linkKey)}/keep`,
+    method: 'POST',
+    data: { text },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  })
 }
 
-/** body: {newLinkKey, anchorText, sectionPath?, sectionTitle?} */
+/** 用户「重新指定」：body = {newLinkKey, anchorText, sectionPath?, sectionTitle?} */
 export function rebindEvidenceLink(projectId, linkKey, body) {
-  return request({ url: `${evidenceBase(projectId)}/${encodeURIComponent(linkKey)}/rebind`, method: 'POST', data: body, header: JSON_HEADER })
+  return request({
+    url: `/api/projects/${projectId}/evidence-links/${encodeURIComponent(linkKey)}/rebind`,
+    method: 'POST',
+    data: body,
+    header: {
+      'Content-Type': 'application/json',
+    },
+  })
 }
 
+/** 文件树角标：Map<fileId, count> */
 export function evidenceRefCounts(projectId, fileIds) {
-  return request({ url: `${evidenceBase(projectId)}/ref-counts`, method: 'GET', data: { fileIds: (fileIds || []).join(',') } })
+  return request({
+    url: `/api/projects/${projectId}/evidence-links/ref-counts?fileIds=${encodeURIComponent((fileIds || []).join(','))}`,
+    method: 'GET',
+  })
 }
 
 export function deleteFavorite(favoriteId) {

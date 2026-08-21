@@ -54,6 +54,8 @@
     <h2>动作</h2>
     <button id="toast">发一条 toast</button>
     <button id="count">记一次点击（storage）</button>
+    <button id="evidence">列当前文档的底稿关联（evidence.list）</button>
+    <pre id="evidence-out" hidden></pre>
   </section>
 
   <!-- SDK 必须同步引入且排在业务脚本之前：宿主在 iframe load 后立刻发 init，
@@ -108,6 +110,20 @@
 
       document.getElementById('toast').onclick = function () {
         awd.ui.toast('来自 ' + (ctx.pluginId || '插件') + ' 的问候');
+      };
+
+      // evidence.list 需要 file_read；没有聚焦的 Word 文档时宿主回 no_active_document
+      document.getElementById('evidence').onclick = async function () {
+        var out = document.getElementById('evidence-out');
+        out.hidden = false;
+        try {
+          var r = await awd.evidence.list({});
+          out.textContent = r.links.length
+            ? JSON.stringify(r.links, null, 2)
+            : '当前文档还没有底稿关联';
+        } catch (e) {
+          out.textContent = '读取失败：' + (e.code || '') + ' ' + e.message;
+        }
       };
 
       document.getElementById('count').onclick = async function () {

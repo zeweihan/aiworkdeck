@@ -3227,8 +3227,10 @@ const EXEC = {
     const name = String((p && p.name) || '');
     if (!/^[A-Za-z0-9_]{1,64}$/.test(name)) return bmFail('bookmark name must match [A-Za-z0-9_]{1,64}: ' + name);
     const range = selectionRange();
-    const text = range ? (range.getString() || '') : '';
-    if (!range || !text.length) return bmFail('no selection to bookmark');
+    // 形状/图片选区不是 XTextRange（没有 getString），不能落到外层 dispatcher 只带 message
+    if (!range || typeof range.getString !== 'function') return bmFail('no text selection to bookmark');
+    const text = range.getString() || '';
+    if (!text.length) return bmFail('no selection to bookmark');
     const bms = xModel.getBookmarks();
     if (bms.hasByName(name)) return bmFail('bookmark exists: ' + name);
     try {
@@ -3267,14 +3269,31 @@ const EXEC = {
       try { if (bms.hasByName(n)) { exists = true; text = bms.getByName(n).getAnchor().getString() || ''; } } catch (e) {}
       items.push({ name: n, exists: exists, text: text });
     }
-    return { success: true, items: items };
+    const total = Array.isArray(p && p.names) ? p.names.length : 0;
+    return { success: true, items: items, truncated: total > 200 };
   },
   // 旧式关联（超链接 filelink?k=<key>）收编为同名书签；已有同名书签的跳过。
   // 同一 run 被格式变化拆成多个 portion 时只有第一个被套上（后面 hasByName 命中
   // skipped）——书签覆盖不全但锚点有效。
   adopt_legacy_links() {
     if (!isWriterDoc()) return bmFail(NOT_TEXT_DOC_MSG);
-    const adopted = []; let skipped = 0;
+    const adopted = []; let skipped = 0, skippedInvalid = 0;
+    const invalidSeen = {};
+    // 生产链接形态：https://checkba-internal.local/open?u= + encodeURIComponent(
+    // 'checkba://filelink?k=<key>&projectId=<pid>')，即 ...%3Fk%3Dlk_x%26projectId%3D42。
+    // 先把整条 URL 解码（最多两层）再匹配，key 取到 & / # 为止；key 含
+    // [A-Za-z0-9_] 以外字符（后端兜底 lk_<UUID> 带 -）不能静默改写成别的名字
+    // ——那会永远对不上 link_key 且二次运行被 hasByName 误判 skipped——计入
+    // skippedInvalid 跳过。
+    function legacyKeyOf(url) {
+      let s = String(url || '');
+      for (let i = 0; i < 2 && /%[0-9A-Fa-f]{2}/.test(s); i++) {
+        try { s = decodeURIComponent(s); } catch (e) { break; }
+      }
+      const m = /filelink\?k=([^&#\s]+)/.exec(s);
+      if (!m) return null;
+      return { key: m[1], valid: /^[A-Za-z0-9_]{1,64}$/.test(m[1]) };
+    }
     try {
       const bms = xModel.getBookmarks();
       const xText = xModel.getText();
@@ -3291,28 +3310,29 @@ const EXEC = {
           const portion = pen.nextElement();
           let url = '';
           try { url = String(portion.getPropertyValue('HyperLinkURL') || ''); } catch (e) { continue; }
-          const m = /filelink(?:\?|%3F)k(?:=|%3D)([A-Za-z0-9_%\-]+)/.exec(url);
-          if (!m) continue;
-          let key = m[1];
-          try { key = decodeURIComponent(key); } catch (e) {}
-          key = key.replace(/[^A-Za-z0-9_]/g, '_');
-          if (!key) continue;
-          targets.push({ key: key, start: portion.getStart(), end: portion.getEnd() });
+          const k = legacyKeyOf(url);
+          if (!k) continue;
+          // 同一 run 常被书签/格式边界拆成多个 portion：非法 key 按去重后的 key 计数
+          if (!k.valid) { if (!invalidSeen[k.key]) { invalidSeen[k.key] = true; skippedInvalid++; } continue; }
+          targets.push({ key: k.key, start: portion.getStart(), end: portion.getEnd() });
         }
       }
+      // 逐目标隔离：一个坏 run 不能把已成功的 adopted 整体报成失败
       for (let i = 0; i < targets.length; i++) {
         const t = targets[i];
-        if (bms.hasByName(t.key)) { skipped++; continue; }
-        const cur = xText.createTextCursorByRange(t.start);
-        cur.gotoRange(t.end, true);
-        if (!(cur.getString() || '').length) { skipped++; continue; }
-        const bm = xModel.createInstance('com.sun.star.text.Bookmark');
-        bm.setName(t.key);
-        xText.insertTextContent(cur, bm, true);
-        adopted.push(t.key);
+        try {
+          if (bms.hasByName(t.key)) { skipped++; continue; }
+          const cur = xText.createTextCursorByRange(t.start);
+          cur.gotoRange(t.end, true);
+          if (!(cur.getString() || '').length) { skipped++; continue; }
+          const bm = xModel.createInstance('com.sun.star.text.Bookmark');
+          bm.setName(t.key);
+          xText.insertTextContent(cur, bm, true);
+          adopted.push(t.key);
+        } catch (e) { skipped++; }
       }
     } catch (e) { return bmFail('adopt_legacy_links failed: ' + errStr(e)); }
-    return { success: true, adopted: adopted, skipped: skipped };
+    return { success: true, adopted: adopted, skipped: skipped, skippedInvalid: skippedInvalid };
   },
   // 跳到书签：anchorRange + selectVisibly（不借 set_selection，它只认 __ai_anchor_*）。
   goto_bookmark(p) {

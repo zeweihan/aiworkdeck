@@ -4,6 +4,7 @@ import com.checkba.service.LangText;
 import com.checkba.service.ProjectMemberService;
 import com.checkba.service.evidence.EvidenceLinkService;
 import com.checkba.service.evidence.EvidenceLinkViews.AnchorReport;
+import com.checkba.service.evidence.EvidenceLinkViews.AnchorReportResult;
 import com.checkba.service.evidence.EvidenceLinkViews.LinkView;
 import com.checkba.service.evidence.EvidenceLinkViews.TargetInput;
 import com.checkba.service.evidence.EvidenceLinkViews.TargetView;
@@ -89,12 +90,14 @@ public class EvidenceLinkController {
         return svc.getByKey(uid(sessionId), projectId, linkKey);
     }
 
+    /** body 是 TargetInput 数组；可选 ?createdByKind=human|ai|plugin（默认 human）记在每条 target 上。 */
     @PostMapping("/" + KEY + "/targets")
     public LinkView addTargets(@PathVariable Long projectId,
                                @PathVariable String linkKey,
                                @RequestBody List<TargetInput> targets,
+                               @RequestParam(required = false) String createdByKind,
                                @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        return svc.addTargets(uid(sessionId), projectId, linkKey, targets);
+        return svc.addTargets(uid(sessionId), projectId, linkKey, targets, createdByKind);
     }
 
     @PatchMapping("/targets/{targetId}")
@@ -121,7 +124,7 @@ public class EvidenceLinkController {
         return Map.of("success", true);
     }
 
-    /** worker check_link_anchors 的结果回写：{docFileId, reports:[{linkKey, exists, text}]} → {changed:[linkKey]}。 */
+    /** worker check_link_anchors 的结果回写：{docFileId, reports:[{linkKey, exists, text}]} → {changed:[linkKey], ignored:N}（exists 缺失的条目不改状态、计入 ignored）。 */
     @PostMapping("/anchors/report")
     public Map<String, Object> reportAnchors(@PathVariable Long projectId,
                                              @RequestBody ReportReq r,
@@ -129,8 +132,8 @@ public class EvidenceLinkController {
         if (r.getDocFileId() == null) {
             throw new IllegalArgumentException(LangText.of("docFileId 必填", "docFileId required"));
         }
-        List<String> changed = svc.reportAnchors(uid(sessionId), projectId, r.getDocFileId(), r.getReports());
-        return Map.of("changed", changed);
+        AnchorReportResult res = svc.reportAnchors(uid(sessionId), projectId, r.getDocFileId(), r.getReports());
+        return Map.of("changed", res.changed(), "ignored", res.ignored());
     }
 
     /** 用户「保留关联」，body {text} = 当前锚点文字。 */

@@ -129,8 +129,8 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 |---|---|---|
 | `bookmark_selection` | `{name}` | `{success, name, text}`；空选区 / 非法名 / **重名精确拒绝**（不像 `insert_link_with_bookmark` 那样加 `_n`） |
 | `get_bookmark_context` | `{name}` | `{success, exists, text, sectionPath, sectionTitle, paragraphIndex}`；不存在是 `exists:false` 不是失败 |
-| `check_link_anchors` | `{names[]}` | `{success, items:[{name, exists, text}]}`；单次 ≤200，宿主分批 |
-| `adopt_legacy_links` | `{}` | `{success, adopted:[name], skipped}`；收编 `filelink?k=<key>` 超链接 run 为同名书签，幂等 |
+| `check_link_anchors` | `{names[]}` | `{success, items:[{name, exists, text}], truncated}`；单次 ≤200（超出截断并置 `truncated:true`），宿主分批 |
+| `adopt_legacy_links` | `{}` | `{success, adopted:[name], skipped, skippedInvalid}`；先对整条 URL decodeURIComponent（最多两层）再匹配 `filelink?k=<key>`（到 `&`/`#` 止），生产形态 `open?u=encodeURIComponent('checkba://filelink?k=…&projectId=…')` 取到的 key 恰等于原 key；key 含 `[A-Za-z0-9_]` 以外字符（如后端兜底 `lk_<UUID>` 带 `-`）**不改写、计入 `skippedInvalid`（按去重 key 计）**；逐目标 try/catch，单个坏 run 只 `skipped++`；幂等 |
 | `goto_bookmark` | `{name}` | `{success, name}`；`anchorRange` + `selectVisibly`，不借 `set_selection`（它只认 `__ai_anchor_*`） |
 
 真机实测结论（lowa-e2e 组 27，2026-08-21）：
@@ -142,6 +142,6 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 
 ## 验证
 
-- 核心回归：`cd frontend && npm run test:lowa-e2e`（真引擎 puppeteer-core 无头，27 组人机模拟，2026-08-21 基线 417 步；前置 `npm run build:zetaoffice` + `node ../desktop/scripts/fetch-lowa-assets.js` 或设 LOWA_ENGINE_DIR）。
+- 核心回归：`cd frontend && npm run test:lowa-e2e`（真引擎 puppeteer-core 无头，27 组人机模拟，2026-08-21 基线 421 步；前置 `npm run build:zetaoffice` + `node ../desktop/scripts/fetch-lowa-assets.js` 或设 LOWA_ENGINE_DIR）。
 - 涉桌面壳/webview：`npm run test:desktop-e2e`（弹 dev Electron 窗口，验证保存落盘链路）。
 - 全应用：`npm run test:app-e2e`。改编辑器三件套（原语/白名单/worker）必跑 lowa-e2e。

@@ -22,7 +22,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 /**
- * doc_file_link → evidence_link 启动迁移（spec §1.5）。幂等：evidence_link 非空或 doc_file_link 读不到即跳过。
+ * doc_file_link → evidence_link 启动迁移（spec §1.5）。幂等：evidence_link 非空即跳过。
  * 每行 → 一条 link（link_key 原值、status=unverified、doc_file_id 按 (project_id, wps_file_id) 反查，
  * 反查不到的行跳过并计数）+ fileIdsJson 每个 fileId 一条 target（locator 空、supports、human）。
  * 旧表保留一个发版周期，由 DocFileLinkController 只读代理到新 Service。
@@ -47,13 +47,8 @@ public class EvidenceLinkMigrationRunner implements ApplicationRunner {
         lastMigrated = 0;
         lastSkipped = 0;
         if (links.count() > 0) return;
-        List<DocFileLink> rows;
-        try {
-            rows = old.findAll();
-        } catch (Exception e) {
-            log.info("doc_file_link 不可读，跳过 EvidenceLink 迁移: {}", e.getMessage());
-            return;
-        }
+        // DocFileLink 实体仍在、表由 JPA 建好，这里不包 try/catch：事务内 catch 仓库异常救不了启动（已 rollback-only）
+        List<DocFileLink> rows = old.findAll();
         if (rows.isEmpty()) return;
         LocalDateTime now = LocalDateTime.now();
         for (DocFileLink r : rows) {

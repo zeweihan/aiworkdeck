@@ -34,8 +34,12 @@
 //   握手  宿主 -> 插件   { awd: 1, type: 'init', context: { pluginId, projectId, language, theme } }
 //   请求  插件 -> 宿主   { awd: 1, type: 'call', seq, method, params }
 //   响应  宿主 -> 插件   { awd: 1, type: 'result', seq, ok, result | error: { code, message } }
-import { getProjectFiles, getFileText } from '@/services/api.js'
+import {
+  getProjectFiles, getFileText,
+  createEvidenceLink, getEvidenceLink, listEvidenceLinks
+} from '@/services/api.js'
 import { getAppLanguage } from '@/utils/appLanguage.js'
+import { resolveAnchor, newLinkKey, toPluginLink, toTargetInputs } from '@/utils/pluginEvidence.js'
 
 /** 桥协议版本 */
 const PROTOCOL = 1
@@ -83,6 +87,15 @@ export default {
     projectId: {
       type: [String, Number],
       default: ''
+    },
+    /**
+     * 宿主注入的「当前聚焦的 Word 编辑器」适配器：() => { executor(action, params), fileId } | null。
+     * evidence.link / evidence.locate 要打书签、跳书签，PluginPane 自己拿不到编辑器，
+     * 与 VariablePanel 从 project-overview 拿 getEditor 适配器是同一做法。不给就是没有活动文档。
+     */
+    getActiveEditor: {
+      type: Function,
+      default: null
     }
   },
   data() {
@@ -222,9 +235,148 @@ export default {
           return { ok: true, result: {} }
         }
 
+        case 'evidence.list':
+          if (!this.hasPermission('file_read')) return this.denied('file_read')
+          return await this.evidenceList(params)
+
+        case 'evidence.link':
+          if (!this.hasPermission('editor')) return this.denied('editor')
+          return await this.evidenceLink(params)
+
+        case 'evidence.locate':
+          if (!this.hasPermission('editor')) return this.denied('editor')
+          return await this.evidenceLocate(params)
+
         default:
           return { ok: false, error: { code: 'unknown_method', message: '未知方法：' + method } }
       }
+    },
+
+    // ==== 证据链接（evidence.*）====
+
+    noActiveDocument(message) {
+      return { ok: false, error: { code: 'no_active_document', message: message || '没有打开的 Word 文档' } }
+    },
+
+    activeEditor() {
+      if (typeof this.getActiveEditor !== 'function') return null
+      const ed = this.getActiveEditor()
+      if (!ed || typeof ed.executor !== 'function' || !ed.fileId) return null
+      return { executor: ed.executor, fileId: Number(ed.fileId) }
+    },
+
+    /** 一次拉全树，同时给出 path->id 与 id->path 两张表（evidence.* 都要双向查） */
+    async pathTables() {
+      const files = await this.listProjectFiles()
+      const idByPath = new Map()
+      const pathById = new Map()
+      files.forEach(f => { idByPath.set(f.path, f.id); pathById.set(f.id, f.path) })
+      return { idByPath, pathById }
+    },
+
+    async evidenceList(params) {
+      const { idByPath, pathById } = await this.pathTables()
+      let query
+      if (params.path) {
+        const fileId = idByPath.get(String(params.path))
+        if (!fileId) return { ok: false, error: { code: 'not_found', message: '文件不存在：' + params.path } }
+        query = { fileId }
+      } else {
+        let docFileId
+        if (params.docPath) {
+          docFileId = idByPath.get(String(params.docPath))
+          if (!docFileId) return { ok: false, error: { code: 'not_found', message: '文件不存在：' + params.docPath } }
+        } else {
+          const ed = this.activeEditor()
+          if (!ed) return this.noActiveDocument()
+          docFileId = ed.fileId
+        }
+        query = { docFileId, status: params.status, sectionPath: params.sectionPath }
+      }
+      const res = await listEvidenceLinks(this.projectId, query)
+      const links = Array.isArray(res) ? res : (res && res.data) || []
+      return { ok: true, result: { links: links.map(l => toPluginLink(l, pathById)) } }
+    },
+
+    async evidenceLink(params) {
+      const ed = this.activeEditor()
+      if (!ed) return this.noActiveDocument()
+      const { idByPath } = await this.pathTables()
+      if (params.docPath) {
+        // 书签只能打在当前聚焦的编辑器里，docPath 指向别的文档无法代劳
+        const want = idByPath.get(String(params.docPath))
+        if (!want) return { ok: false, error: { code: 'not_found', message: '文件不存在：' + params.docPath } }
+        if (want !== ed.fileId) return this.noActiveDocument('docPath 不是当前聚焦的文档，请先切到该文档')
+      }
+      const ti = toTargetInputs(params.targets, idByPath)
+      if (ti.error) return { ok: false, error: ti.error }
+
+      const a = await resolveAnchor(ed.executor, params.anchor)
+      if (a.error) return { ok: false, error: a.error }
+      if (a.mode === 'quote') {
+        const sel = await ed.executor('set_selection', { anchor: a.anchorId })
+        if (!sel || !sel.success) {
+          return { ok: false, error: { code: 'anchor_ambiguous', message: (sel && sel.message) || '引文无法选中' } }
+        }
+      }
+
+      const linkKey = newLinkKey()
+      const bm = await ed.executor('bookmark_selection', { name: linkKey })
+      if (!bm || !bm.success) {
+        return { ok: false, error: { code: 'no_selection', message: (bm && bm.message) || '无法在选区上建立锚点' } }
+      }
+      let ctx = null
+      try { ctx = await ed.executor('get_bookmark_context', { name: linkKey }) } catch (e) { ctx = null }
+      const link = await createEvidenceLink(this.projectId, {
+        docFileId: ed.fileId,
+        linkKey,
+        anchorText: bm.text || a.text,
+        sectionPath: ctx && ctx.success ? ctx.sectionPath || null : null,
+        sectionTitle: ctx && ctx.success ? ctx.sectionTitle || null : null,
+        createdByKind: 'plugin',
+        targets: ti.targets
+      })
+      const view = link && link.linkKey ? link : (link && link.data) || {}
+      return {
+        ok: true,
+        result: {
+          linkKey: view.linkKey || linkKey,
+          targetIds: (Array.isArray(view.targets) ? view.targets : []).map(t => t.id)
+        }
+      }
+    },
+
+    async evidenceLocate(params) {
+      const linkKey = String(params.linkKey || '')
+      let link = null
+      try {
+        const res = await getEvidenceLink(this.projectId, linkKey)
+        link = res && res.linkKey ? res : (res && res.data) || null
+      } catch (e) {
+        link = null
+      }
+      if (!link) return { ok: false, error: { code: 'not_found', message: '链接不存在：' + linkKey } }
+      const targets = Array.isArray(link.targets) ? link.targets : []
+      const tgt = params.targetId != null && params.targetId !== ''
+        ? targets.find(t => Number(t.id) === Number(params.targetId))
+        : null
+      if (params.targetId != null && params.targetId !== '' && !tgt) {
+        return { ok: false, error: { code: 'not_found', message: '底稿位置不存在：' + params.targetId } }
+      }
+      if (tgt) {
+        // 打开底稿并定位：由工作台（project-overview）监听后调 openFileLinkTarget
+        uni.$emit('awd:open-evidence-target', { fileId: tgt.fileId, locator: tgt.locator || null, linkKey })
+        return { ok: true, result: {} }
+      }
+      const ed = this.activeEditor()
+      if (!ed || ed.fileId !== Number(link.docFileId)) {
+        return this.noActiveDocument('该链接所在文档不是当前聚焦的文档')
+      }
+      const r = await ed.executor('goto_bookmark', { name: link.linkKey })
+      if (!r || !r.success) {
+        return { ok: false, error: { code: 'not_found', message: (r && r.message) || '文档里找不到该锚点' } }
+      }
+      return { ok: true, result: {} }
     },
 
     // ==== 项目文件 ====

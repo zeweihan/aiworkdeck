@@ -233,7 +233,7 @@ class EvidenceLinkServiceTest {
         String h = EvidenceLinkService.locatorHash("{\"page\":3,\"type\":\"pdf\"}");
         when(targets.existsByLinkIdAndFileIdAndLocatorHash(100L, 11L, h)).thenReturn(true);
 
-        LinkView v = svc.addTargets(9L, 1L, "EVID_A", List.of(target(11L, "{\"type\":\"pdf\",\"page\":3}")));
+        LinkView v = svc.addTargets(9L, 1L, "EVID_A", List.of(target(11L, "{\"type\":\"pdf\",\"page\":3}")), null);
         verify(targets, never()).save(any());
         assertEquals(0, v.targets().size());
     }
@@ -247,13 +247,28 @@ class EvidenceLinkServiceTest {
         savedTargets.add(t0);
         when(targets.findByLinkIdOrderBySortOrderAscIdAsc(100L)).thenReturn(List.of(t0));
 
-        LinkView v = svc.addTargets(9L, 1L, "EVID_A", List.of(target(12L, null)));
+        LinkView v = svc.addTargets(9L, 1L, "EVID_A", List.of(target(12L, null)), null);
         assertEquals(2, v.targets().size());
         ArgumentCaptor<EvidenceLinkTarget> cap = ArgumentCaptor.forClass(EvidenceLinkTarget.class);
         verify(targets).save(cap.capture());
         assertEquals(1, cap.getValue().getSortOrder());
         assertEquals("-", cap.getValue().getLocatorHash());
+        assertEquals("human", cap.getValue().getCreatedByKind(), "缺省 kind = human");
         assertNotNull(l.getUpdatedAt());
+    }
+
+    @Test
+    @DisplayName("addTargets：createdByKind=plugin 记在 target 上；非法 kind 拒绝且不落库")
+    void addTargetsRecordsCreatedByKind() {
+        existing("EVID_A", "active", "x");
+        svc.addTargets(9L, 1L, "EVID_A", List.of(target(12L, null)), "plugin");
+        ArgumentCaptor<EvidenceLinkTarget> cap = ArgumentCaptor.forClass(EvidenceLinkTarget.class);
+        verify(targets).save(cap.capture());
+        assertEquals("plugin", cap.getValue().getCreatedByKind());
+
+        assertThrows(IllegalArgumentException.class,
+                () -> svc.addTargets(9L, 1L, "EVID_A", List.of(target(11L, null)), "robot"));
+        verify(targets, times(1)).save(any());
     }
 
     @Test
@@ -318,7 +333,7 @@ class EvidenceLinkServiceTest {
                 new AnchorReport("D", false, null),
                 new AnchorReport("E", true, "原　文。"),
                 new AnchorReport("F", true, "原文"),
-                new AnchorReport("ZZZ", true, "不存在的 key 忽略")));
+                new AnchorReport("ZZZ", true, "不存在的 key 忽略"))).changed();
 
         assertEquals("stale", a.getStatus());
         assertEquals("stale", b.getStatus());
@@ -336,9 +351,28 @@ class EvidenceLinkServiceTest {
         EvidenceLink o = new EvidenceLink(); o.setId(1L); o.setLinkKey("O"); o.setStatus("orphan"); o.setAnchorHash(AnchorHash.of("原文"));
         o.setProjectId(1L); o.setDocFileId(10L);
         when(links.findByProjectIdAndDocFileIdOrderByIdAsc(1L, 10L)).thenReturn(List.of(o));
-        List<String> changed = svc.reportAnchors(9L, 1L, 10L, List.of(new AnchorReport("O", true, "原文")));
+        List<String> changed = svc.reportAnchors(9L, 1L, 10L, List.of(new AnchorReport("O", true, "原文"))).changed();
         assertEquals("orphan", o.getStatus());
         assertTrue(changed.isEmpty());
+    }
+
+    @Test
+    @DisplayName("reportAnchors：exists 缺失（半截 payload）不改状态、不打 orphan，计入 ignored")
+    void reportAnchorsIgnoresMissingExists() {
+        EvidenceLink a = new EvidenceLink(); a.setId(1L); a.setLinkKey("A"); a.setStatus("active"); a.setAnchorHash(AnchorHash.of("原文"));
+        EvidenceLink b = new EvidenceLink(); b.setId(2L); b.setLinkKey("B"); b.setStatus("active"); b.setAnchorHash(AnchorHash.of("原文"));
+        for (EvidenceLink l : List.of(a, b)) { l.setProjectId(1L); l.setDocFileId(10L); }
+        when(links.findByProjectIdAndDocFileIdOrderByIdAsc(1L, 10L)).thenReturn(List.of(a, b));
+
+        var res = svc.reportAnchors(9L, 1L, 10L, List.of(
+                new AnchorReport("A", null, "改了"),
+                new AnchorReport("B", false, null)));
+
+        assertEquals("active", a.getStatus(), "exists=null 不许当 false");
+        assertNull(a.getCheckedAt());
+        assertEquals("orphan", b.getStatus());
+        assertEquals(List.of("B"), res.changed());
+        assertEquals(1, res.ignored());
     }
 
     @Test
@@ -479,6 +513,24 @@ class EvidenceLinkServiceTest {
     }
 
     @Test
+    @DisplayName("refCounts：他项目的 fileId 不返回、也不带进计数查询；全是他项目的不查库")
+    void refCountsFiltersByProject() {
+        when(files.findById(13L)).thenReturn(Optional.of(file(13L, 2L, "别家.pdf")));
+        when(targets.countByFileIds(anyCollection())).thenReturn(List.<Object[]>of(new Object[]{11L, 3L}));
+
+        Map<Long, Long> m = svc.refCounts(1L, List.of(11L, 13L));
+        assertEquals(3L, m.get(11L));
+        assertNull(m.get(13L));
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<java.util.Collection<Long>> cap = ArgumentCaptor.forClass(java.util.Collection.class);
+        verify(targets).countByFileIds(cap.capture());
+        assertEquals(List.of(11L), new ArrayList<>(cap.getValue()));
+
+        assertTrue(svc.refCounts(1L, List.of(13L)).isEmpty());
+        verify(targets, times(1)).countByFileIds(anyCollection());
+    }
+
+    @Test
     @DisplayName("locatorHash：canonical（键排序）后再 hash；空/空白 = \"-\"")
     void locatorHashIsCanonical() {
         assertEquals("-", EvidenceLinkService.locatorHash(null));
@@ -490,5 +542,19 @@ class EvidenceLinkServiceTest {
         assertEquals(EvidenceLinkService.locatorHash("{\"a\":{\"z\":1,\"b\":[{\"y\":1,\"x\":2}]}}"),
                 EvidenceLinkService.locatorHash("{\"a\":{\"b\":[{\"x\":2,\"y\":1}],\"z\":1}}"));
         assertThrows(IllegalArgumentException.class, () -> EvidenceLinkService.locatorHash("{nope"));
+    }
+
+    @Test
+    @DisplayName("locatorHash：数字归一（1 / 1.0 / 1.00 同 hash，嵌套也算）；根不是对象（裸数组/标量）拒绝")
+    void locatorHashNormalisesNumbersAndRejectsNonObjectRoot() {
+        assertEquals(EvidenceLinkService.locatorHash("{\"page\":1}"), EvidenceLinkService.locatorHash("{\"page\":1.0}"));
+        assertEquals(EvidenceLinkService.locatorHash("{\"page\":1}"), EvidenceLinkService.locatorHash("{\"page\":1.00}"));
+        assertEquals(EvidenceLinkService.locatorHash("{\"rect\":{\"x\":0.5,\"w\":100}}"),
+                EvidenceLinkService.locatorHash("{\"rect\":{\"w\":100.0,\"x\":0.50}}"));
+        assertNotEquals(EvidenceLinkService.locatorHash("{\"page\":1}"), EvidenceLinkService.locatorHash("{\"page\":1.5}"));
+        assertThrows(IllegalArgumentException.class, () -> EvidenceLinkService.locatorHash("[1]"));
+        assertThrows(IllegalArgumentException.class, () -> EvidenceLinkService.locatorHash("\"x\""));
+        assertThrows(IllegalArgumentException.class, () -> EvidenceLinkService.locatorHash("42"));
+        assertThrows(IllegalArgumentException.class, () -> EvidenceLinkService.locatorHash("null"));
     }
 }

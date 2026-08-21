@@ -40,7 +40,6 @@
     "build:quickapp-webview-huawei": "uni build -p quickapp-webview-huawei",
     "build:quickapp-webview-union": "uni build -p quickapp-webview-union",
     "test:tag-protocol": "node --test tests/tag-protocol/protocol.test.mjs",
-    "test:evidence": "node --test tests/evidence/*.test.mjs",
     "test:lowa-e2e": "node tests/lowa-e2e/run.mjs",
     "test:app-e2e": "node tests/app-e2e/run.mjs",
     "test:desktop-e2e": "node tests/desktop-e2e/run.mjs",
@@ -49,7 +48,9 @@
     "test:project-home": "node --test tests/project-home/*.test.mjs",
     "test:auth-redirect": "node --test tests/auth-redirect/*.test.mjs",
     "test:commands": "node --test tests/commands/commands.test.mjs",
-    "test:zeta-relay": "node --test tests/zeta-relay/*.test.mjs"
+    "test:zeta-relay": "node --test tests/zeta-relay/*.test.mjs",
+    "test:evidence": "node --test tests/evidence/*.test.mjs",
+    "test:plugin-sdk": "node --test tests/plugin-sdk/*.test.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",

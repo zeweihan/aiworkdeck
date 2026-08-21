@@ -11,6 +11,7 @@ import com.checkba.repository.ProjectFileRepository;
 import com.checkba.service.LangText;
 import com.checkba.service.ProjectMemberService;
 import com.checkba.service.evidence.EvidenceLinkViews.AnchorReport;
+import com.checkba.service.evidence.EvidenceLinkViews.AnchorReportResult;
 import com.checkba.service.evidence.EvidenceLinkViews.FileBrief;
 import com.checkba.service.evidence.EvidenceLinkViews.LinkView;
 import com.checkba.service.evidence.EvidenceLinkViews.TargetInput;
@@ -18,6 +19,7 @@ import com.checkba.service.evidence.EvidenceLinkViews.TargetView;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.DecimalNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -120,12 +122,18 @@ public class EvidenceLinkService {
         return view(l);
     }
 
+    /** createdByKind 记在 target 上（human/ai/plugin，null = human），SDK/插件追加时传 plugin。 */
     @Transactional
-    public LinkView addTargets(Long userId, Long projectId, String linkKey, List<TargetInput> targetInputs) {
+    public LinkView addTargets(Long userId, Long projectId, String linkKey, List<TargetInput> targetInputs,
+                               String createdByKind) {
         requireWrite(projectId, userId);
         EvidenceLink l = requireLink(projectId, linkKey);
         if (targetInputs == null || targetInputs.isEmpty()) {
             throw new IllegalArgumentException(LangText.of("至少关联一个底稿", "At least one target required"));
+        }
+        String kind = StringUtils.hasText(createdByKind) ? createdByKind.trim() : KIND_HUMAN;
+        if (!KINDS.contains(kind)) {
+            throw new IllegalArgumentException(LangText.of("createdByKind 非法: ", "Illegal createdByKind: ") + kind);
         }
         for (TargetInput t : targetInputs) validateTarget(projectId, t, true);
 
@@ -139,7 +147,7 @@ public class EvidenceLinkService {
         for (TargetInput t : targetInputs) {
             String h = locatorHash(t.locatorJson());
             if (targets.existsByLinkIdAndFileIdAndLocatorHash(l.getId(), t.fileId(), h)) continue;
-            saveTarget(l, t, h, order++, KIND_HUMAN, userId, now);
+            saveTarget(l, t, h, order++, kind, userId, now);
             added = true;
         }
         if (added) {
@@ -210,10 +218,11 @@ public class EvidenceLinkService {
      * orphan 不会因 exists=true 复活（复活只走 rebind）。每条都刷 checkedAt。
      */
     @Transactional
-    public List<String> reportAnchors(Long userId, Long projectId, Long docFileId, List<AnchorReport> reports) {
+    public AnchorReportResult reportAnchors(Long userId, Long projectId, Long docFileId, List<AnchorReport> reports) {
         requireWrite(projectId, userId);
         List<String> changed = new ArrayList<>();
-        if (reports == null || reports.isEmpty()) return changed;
+        int ignored = 0;
+        if (reports == null || reports.isEmpty()) return new AnchorReportResult(changed, 0);
         Map<String, EvidenceLink> byKey = new HashMap<>();
         for (EvidenceLink l : links.findByProjectIdAndDocFileIdOrderByIdAsc(projectId, docFileId)) {
             byKey.put(l.getLinkKey(), l);
@@ -221,6 +230,8 @@ public class EvidenceLinkService {
         LocalDateTime now = LocalDateTime.now();
         for (AnchorReport r : reports) {
             if (r == null || r.linkKey() == null) continue;
+            // exists 缺失 = payload 不完整，不能当 false 把链接打成 orphan（orphan 只能 rebind 救回）
+            if (r.exists() == null) { ignored++; continue; }
             EvidenceLink l = byKey.get(r.linkKey());
             if (l == null) continue;
             String before = l.getStatus();
@@ -237,7 +248,7 @@ public class EvidenceLinkService {
             }
             links.save(l);
         }
-        return changed;
+        return new AnchorReportResult(changed, ignored);
     }
 
     /** 用户「保留关联」：stale/unverified → active，anchorText/anchorHash 刷成当前文字。orphan 不能保留。 */
@@ -360,12 +371,17 @@ public class EvidenceLinkService {
         return out;
     }
 
-    /** 文件树「被引用 N 次」角标。无权限校验——Controller 负责 requireRead。 */
+    /** 文件树「被引用 N 次」角标。无权限校验——Controller 负责 requireRead；不属于 projectId 的 fileId 直接不计、不查。 */
     @Transactional(readOnly = true)
     public Map<Long, Long> refCounts(Long projectId, Collection<Long> fileIds) {
         Map<Long, Long> out = new HashMap<>();
-        if (fileIds == null || fileIds.isEmpty()) return out;
-        for (Object[] row : targets.countByFileIds(fileIds)) {
+        if (fileIds == null || fileIds.isEmpty() || projectId == null) return out;
+        List<Long> mine = new ArrayList<>();
+        for (ProjectFile f : files.findAllById(fileIds)) {
+            if (projectId.equals(f.getProjectId())) mine.add(f.getId());
+        }
+        if (mine.isEmpty()) return out;
+        for (Object[] row : targets.countByFileIds(mine)) {
             out.put(((Number) row[0]).longValue(), ((Number) row[1]).longValue());
         }
         return out;
@@ -373,7 +389,10 @@ public class EvidenceLinkService {
 
     // ---------------------------------------------------------------- helpers
 
-    /** sha256(canonical locatorJson)：键递归排序后序列化；空/空白 = "-"；非法 JSON 抛 IllegalArgumentException。 */
+    /**
+     * sha256(canonical locatorJson)：键递归排序 + 数字归一（1 与 1.0 同 hash）后序列化；空/空白 = "-"；
+     * 非法 JSON 或根不是对象（裸数组/标量）抛 IllegalArgumentException。
+     */
     static String locatorHash(String json) {
         if (json == null || json.isBlank()) return EvidenceLinkTarget.EMPTY_LOCATOR_HASH;
         return AnchorHash.of(canonical(json));
@@ -388,8 +407,8 @@ public class EvidenceLinkService {
         } catch (Exception e) {
             throw new IllegalArgumentException(LangText.of("locatorJson 不是合法 JSON", "locatorJson is not valid JSON"));
         }
-        if (node == null || node.isMissingNode()) {
-            throw new IllegalArgumentException(LangText.of("locatorJson 不是合法 JSON", "locatorJson is not valid JSON"));
+        if (node == null || !node.isObject()) {
+            throw new IllegalArgumentException(LangText.of("locatorJson 必须是 JSON 对象", "locatorJson must be a JSON object"));
         }
         try {
             return CANON.writeValueAsString(sortKeys(node));
@@ -413,6 +432,10 @@ public class EvidenceLinkService {
             ArrayNode a = CANON.createArrayNode();
             for (JsonNode c : n) a.add(sortKeys(c));
             return a;
+        }
+        if (n.isNumber()) {
+            // 1 / 1.0 / 1.00 归成同一个节点，否则同一位置因序列化习惯不同会被当成两条
+            return DecimalNode.valueOf(n.decimalValue().stripTrailingZeros());
         }
         return n;
     }
