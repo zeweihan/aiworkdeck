@@ -46,6 +46,7 @@
     "test:feedback-e2e": "node tests/feedback-e2e/run.mjs",
     "test:meeting-e2e": "node tests/meeting-e2e/run.mjs",
     "test:project-home": "node --test tests/project-home/*.test.mjs",
+    "test:evidence": "node --test tests/evidence/*.test.mjs",
     "test:auth-redirect": "node --test tests/auth-redirect/*.test.mjs",
     "test:commands": "node --test tests/commands/commands.test.mjs",
     "test:zeta-relay": "node --test tests/zeta-relay/*.test.mjs",
