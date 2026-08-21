@@ -3825,6 +3825,13 @@ const EXEC = {
     if (!text) return { success: false, message: 'insert_link_with_bookmark requires {text}' };
     const requested = String(p.bookmarkName || 'MARK_' + Date.now()).replace(/[^A-Za-z0-9_]/g, '_');
     const url = String(p.url || '');
+    // scheme 校验（P1 复核 F3）：插件宿主把这条原语开放给签名插件，裸透传会让
+    // file:/// javascript: smb:// 之类写进用户文档。放行 http(s) 与 checkba://（正则与
+    // set_selection_hyperlink 同款，#562）
+    //（证据链接的包装形态 https://checkba-internal.local/... 本身就是 https）。
+    if (url && !/^(https?:\/\/|checkba:\/\/)/i.test(url)) {
+      return { success: false, error: 'url 仅支持 http/https/checkba: ' + url, message: 'url 仅支持 http/https/checkba: ' + url };
+    }
     const vc = ctrl.getViewCursor();
     vc.collapseToEnd();
     const xText = vc.getText();
