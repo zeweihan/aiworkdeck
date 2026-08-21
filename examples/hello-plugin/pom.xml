@@ -27,5 +27,13 @@
             <version>${langchain4j.version}</version>
             <scope>provided</scope>
         </dependency>
+        <!-- 宿主 SPI（规范 v2.4 §11）：HostAware / PluginHost 等纯接口；运行时由宿主提供，故 provided。
+             本地构建前先 mvn -q -f ../../backend/plugin-api/pom.xml install -->
+        <dependency>
+            <groupId>com.checkba</groupId>
+            <artifactId>plugin-api</artifactId>
+            <version>1.0.0</version>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
 </project>

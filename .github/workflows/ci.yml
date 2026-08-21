@@ -16,6 +16,10 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
+      - name: Install plugin-api (host SPI, local artifact)
+        # backend 以普通依赖引用 com.checkba:plugin-api，它是 backend/plugin-api 独立工程，
+        # 不在任何远端仓库，必须先 install 进本机 ~/.m2 再跑 backend 的 Maven。
+        run: mvn -B -q -f backend/plugin-api/pom.xml install
       - name: Test
         working-directory: backend
         # forkNode 走 TCP 而不是默认的 stdout 管道：套件里有测试进程往 native stdout

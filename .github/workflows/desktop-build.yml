@@ -102,6 +102,8 @@ jobs:
         env:
           JAVA_HOME: ${{ steps.jdk.outputs.path }}
         run: |
+          # 插件宿主 SPI 是本仓独立工程，不在远端仓库：先 install 再打 backend
+          mvn -B -q -f backend/plugin-api/pom.xml install
           # Apple Silicon only（2026-07-03 决策放弃 Intel Mac）：单 arm64 jar + arm64 JRE
           mvn -B -q -DskipTests -Djavacpp.platform=macosx-arm64 -f backend/pom.xml package
           node desktop/scripts/prepare-backend.js \
@@ -185,6 +187,7 @@ jobs:
         env:
           JAVA_HOME: ${{ steps.jdk.outputs.path }}
         run: |
+          mvn -B -q -f backend/plugin-api/pom.xml install
           mvn -B -q -DskipTests -Djavacpp.platform=windows-x86_64 -f backend/pom.xml package
           node desktop/scripts/prepare-backend.js \
             --jar backend/target/backend-0.0.1-SNAPSHOT.jar \

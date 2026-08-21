@@ -1,7 +1,8 @@
 # hello-plugin 示例插件
 
-插件规范 v1（[docs/PLUGIN_SPEC.md](../../docs/PLUGIN_SPEC.md)）的最小可运行示例：
-提供 `helloEcho`（文本回显）与 `helloWordCount`（字数统计）两个 AI 工具。
+插件规范（[docs/PLUGIN_SPEC.md](../../docs/PLUGIN_SPEC.md)）的最小可运行示例：
+提供 `helloEcho`（文本回显）、`helloWordCount`（字数统计）两个纯函数工具，
+以及 `helloListFiles`——实现 `HostAware` 后经宿主 SPI（规范 v2.4 §11）列出项目根目录。
 
 ## 目录
 
@@ -15,9 +16,10 @@ examples/hello-plugin/
 
 ## 构建
 
-需要 JDK 17+ 与 Maven：
+需要 JDK 17+ 与 Maven。宿主 SPI `com.checkba:plugin-api` 不在中央仓库，先从本仓库装进本地 Maven 仓：
 
 ```bash
+mvn -q -f backend/plugin-api/pom.xml install
 cd examples/hello-plugin
 mvn -q package
 # 产物：target/hello-plugin-1.0.0.jar

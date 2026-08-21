@@ -2,10 +2,10 @@
   "id": "hello-plugin",
   "name": "Hello 示例插件",
   "version": "1.0.0",
-  "description": "演示插件规范 v1 的最小示例：提供文本回显与字数统计两个 AI 工具。",
+  "description": "演示插件规范的最小示例：文本回显、字数统计，以及一个经宿主 SPI 列项目文件的工具。",
   "author": "AI Workdeck",
   "homepage": "https://github.com/zeweihan/checkba_cloud",
-  "permissions": [],
+  "permissions": ["file_read"],
   "tools": [
     {
       "name": "helloEcho",
@@ -14,6 +14,11 @@
     {
       "name": "helloWordCount",
       "description": "统计输入文本的字符数与词数"
+    },
+    {
+      "name": "helloListFiles",
+      "description": "列出当前项目根目录（宿主 SPI 示范）",
+      "permissions": ["file_read"]
     }
   ],
   "backendJars": [
