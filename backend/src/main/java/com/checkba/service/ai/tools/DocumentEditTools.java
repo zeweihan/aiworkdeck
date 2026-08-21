@@ -41,6 +41,8 @@ public class DocumentEditTools implements AgentToolComponent {
     // 构造器加参：手工 new 的测试（ParagraphIndexBaseTest / DocumentEditToolsEvidenceTest）要同步；
     // RealToolBeans 走反射取最长构造器，自动跟上
     private final com.checkba.service.evidence.EvidenceLinkService evidenceLinkService;
+    // doc_link_evidence 在动编辑器之前预校验写权限：worker 写完再被 Service 拒，文档里会留孤儿书签
+    private final com.checkba.service.ProjectMemberService projectMemberService;
 
     // ==================== 文件管理工具 ====================
 
@@ -1305,9 +1307,13 @@ public class DocumentEditTools implements AgentToolComponent {
 
     /** 文档内超链接的 web 包装前缀，与前端 workbenchActions.WPS_INTERNAL_HTTP_LINK_BASE / evidenceLocator.buildFileLinkUrl 同形。 */
     static final String INTERNAL_LINK_BASE = "https://checkba-internal.local/open";
-    private static final java.util.Set<String> EVIDENCE_METHODS = java.util.Set.of(
-            "written_review", "written_statement", "web_check", "third_party", "interview");
-    private static final java.util.Set<String> EVIDENCE_RELATIONS = java.util.Set.of("supports", "contradicts", "partial");
+    private static final java.util.Set<String> EVIDENCE_METHODS = com.checkba.model.entity.EvidenceLinkTarget.METHODS;
+    private static final java.util.Set<String> EVIDENCE_RELATIONS = com.checkba.model.entity.EvidenceLinkTarget.RELATIONS;
+    /** 报告只能是 Writer 文档：书签/超链接原语只在 Writer 里有意义。 */
+    private static final java.util.Set<String> WRITER_EXTS = java.util.Set.of("docx", "doc", "wps", "odt", "rtf");
+    private static final int LIST_EVIDENCE_DEFAULT_LIMIT = 100;
+    private static final int LIST_EVIDENCE_MAX_LIMIT = 500;
+    private static final int LIST_EVIDENCE_ANCHOR_MAX = 120;
     private static final com.fasterxml.jackson.databind.ObjectMapper EVIDENCE_JSON = new com.fasterxml.jackson.databind.ObjectMapper();
 
     @ToolMeta(displayName = "关联底稿", category = "document", fileEffect = "MODIFIED")
@@ -1347,6 +1353,14 @@ public class DocumentEditTools implements AgentToolComponent {
             return "Error: method 只能是 written_review/written_statement/web_check/third_party/interview";
         }
 
+        // 一切 worker 写操作之前先把权限与归属校验完：书签与超链接一旦写进文档，
+        // 后面 Service 再拒绝就只剩一个孤儿 EVID_* 书签和一条死链接
+        if (projectMemberService == null || !projectMemberService.hasWritePermission(projectId, userId)) {
+            return "Error: 无权限修改该项目，未建链";
+        }
+        String docDenied = rejectDocFile(projectId, docFileId);
+        if (docDenied != null) return docDenied;
+
         List<com.checkba.service.evidence.EvidenceLinkViews.TargetInput> targets;
         try {
             targets = parseEvidenceTargets(projectId, targetsJson, relation, method, note);
@@ -1366,9 +1380,11 @@ public class DocumentEditTools implements AgentToolComponent {
                 com.fasterxml.jackson.databind.JsonNode matches = found.path("matches");
                 int n = matches.isArray() ? matches.size() : 0;
                 if (n == 0) {
+                    clearAnchorsQuietly();
                     return "Error: anchorQuote 在文档中命中 0 处，未建链。请核对原文（标点、空格要一致），或先用 doc_find_text 定位后传 anchorId";
                 }
                 if (n > 1) {
+                    clearAnchorsQuietly();
                     return "Error: anchorQuote 在文档中命中 " + n + " 处，无法唯一定位，未建链。请给更长、更独特的片段，或用 doc_find_text 挑出那一处后传 anchorId";
                 }
                 anchor = matches.get(0).path("anchorId").asText(null);
@@ -1379,6 +1395,8 @@ public class DocumentEditTools implements AgentToolComponent {
             }
 
             workerJson(editorBridgeService.executeEditorCommand("set_selection", java.util.Map.of("anchor", anchor)));
+            // 选区已经落定，查找留下的锚点标记可以清掉（顺序不能反：set_selection 靠 anchorId 定位）
+            if (!hasAnchor) clearAnchorsQuietly();
 
             String linkKey = "EVID_" + com.checkba.service.evidence.Ulid.next();
             com.fasterxml.jackson.databind.JsonNode bm = workerJson(
@@ -1431,9 +1449,10 @@ public class DocumentEditTools implements AgentToolComponent {
             @P("报告文件 ID（系统提醒里的 id=）；与 fileId 二选一") Long docFileId,
             @P("底稿文件 ID：反查它被哪些锚点引用；给了就忽略 docFileId 之外的过滤") Long fileId,
             @P("章节前缀过滤，如 \"一/（二）\"，可不传") String sectionPath,
-            @P("状态过滤 active/unverified/stale/orphan，可不传") String status
+            @P("状态过滤 active/unverified/stale/orphan，可不传") String status,
+            @P("最多返回多少条，默认 100，上限 500；超出时 truncated=true，用 sectionPath/status 缩小范围") Integer limit
     ) {
-        log.info("Tool: doc_list_evidence called docFileId={}, fileId={}, sectionPath={}, status={}", docFileId, fileId, sectionPath, status);
+        log.info("Tool: doc_list_evidence called docFileId={}, fileId={}, sectionPath={}, status={}, limit={}", docFileId, fileId, sectionPath, status, limit);
         Long projectId = com.checkba.service.ai.context.ProjectContextHolder.getProjectIdAsLong();
         Long userId = com.checkba.service.ai.context.ProjectContextHolder.getUserId();
         if (projectId == null || userId == null) {
@@ -1448,11 +1467,14 @@ public class DocumentEditTools implements AgentToolComponent {
                     : evidenceLinkService.listByDoc(userId, projectId, docFileId,
                             status == null || status.isBlank() ? null : status.trim(),
                             sectionPath == null || sectionPath.isBlank() ? null : sectionPath.trim());
+            int cap = limit == null || limit <= 0 ? LIST_EVIDENCE_DEFAULT_LIMIT : Math.min(limit, LIST_EVIDENCE_MAX_LIMIT);
+            boolean truncated = views.size() > cap;
             List<java.util.Map<String, Object>> links = new java.util.ArrayList<>();
-            for (com.checkba.service.evidence.EvidenceLinkViews.LinkView v : views) {
+            for (com.checkba.service.evidence.EvidenceLinkViews.LinkView v : views.subList(0, Math.min(cap, views.size()))) {
                 java.util.Map<String, Object> l = new java.util.LinkedHashMap<>();
                 l.put("linkKey", v.linkKey());
-                l.put("anchorText", v.anchorText());
+                String at = v.anchorText() == null ? "" : v.anchorText();
+                l.put("anchorText", at.length() > LIST_EVIDENCE_ANCHOR_MAX ? at.substring(0, LIST_EVIDENCE_ANCHOR_MAX) + "…" : at);
                 l.put("sectionPath", v.sectionPath() == null ? "" : v.sectionPath());
                 l.put("status", v.status());
                 List<java.util.Map<String, Object>> ts = new java.util.ArrayList<>();
@@ -1471,15 +1493,47 @@ public class DocumentEditTools implements AgentToolComponent {
             }
             java.util.Map<String, Object> out = new java.util.LinkedHashMap<>();
             out.put("count", links.size());
+            out.put("total", views.size());
+            out.put("truncated", truncated);
             out.put("links", links);
-            return EVIDENCE_JSON.writeValueAsString(out);
+            return ToolFileGuard.capToolText("evidence-links", EVIDENCE_JSON.writeValueAsString(out));
         } catch (Exception e) {
             log.error("Failed to list evidence links", e);
             return "Error: " + e.getMessage();
         }
     }
 
-    /** 解析 targetsJson：fileId 直用，path 经文件树路径索引（FileTools.dbPathIndex）映射；工具级 relation/method/note 作缺省。 */
+    /** 报告文件预校验：存在、属于本项目、未删除、不是文件夹、是 Writer 文档。不通过返回给模型的错误串。 */
+    private String rejectDocFile(Long projectId, Long docFileId) {
+        ProjectFile doc = projectFileRepository.findById(docFileId).orElse(null);
+        if (doc == null || Boolean.TRUE.equals(doc.getIsDeleted())) {
+            return "Error: 报告文件不存在，docFileId=" + docFileId;
+        }
+        if (!projectId.equals(doc.getProjectId())) {
+            return "Error: 报告文件不属于当前项目，docFileId=" + docFileId;
+        }
+        if (Boolean.TRUE.equals(doc.getIsFolder())) {
+            return "Error: docFileId 指向的是文件夹，不是报告文档";
+        }
+        String name = doc.getName() == null ? "" : doc.getName().toLowerCase(java.util.Locale.ROOT);
+        int dot = name.lastIndexOf('.');
+        String ext = dot >= 0 ? name.substring(dot + 1) : "";
+        if (!WRITER_EXTS.contains(ext)) {
+            return "Error: 报告文件不是 Word 文档（docx/doc/wps/odt/rtf），不能建证据链接: " + doc.getName();
+        }
+        return null;
+    }
+
+    /** 查找留下的锚点标记清理；失败无妨（只是视图残留），不影响建链结果。 */
+    private void clearAnchorsQuietly() {
+        try {
+            editorBridgeService.executeEditorCommand("clear_anchors", java.util.Map.of());
+        } catch (Exception e) {
+            log.debug("clear_anchors failed: {}", e.getMessage());
+        }
+    }
+
+    /** 解析 targetsJson：fileId 直用（须属于本项目且非文件夹），path 经文件树路径索引（FileTools.dbPathIndex）映射；工具级 relation/method/note 作缺省。 */
     private List<com.checkba.service.evidence.EvidenceLinkViews.TargetInput> parseEvidenceTargets(
             Long projectId, String targetsJson, String defRelation, String defMethod, String defNote) {
         if (targetsJson == null || targetsJson.isBlank()) {
@@ -1498,7 +1552,15 @@ public class DocumentEditTools implements AgentToolComponent {
         List<com.checkba.service.evidence.EvidenceLinkViews.TargetInput> out = new java.util.ArrayList<>();
         for (com.fasterxml.jackson.databind.JsonNode t : arr) {
             Long fid = t.hasNonNull("fileId") && t.get("fileId").canConvertToLong() ? t.get("fileId").asLong() : null;
-            if (fid == null) {
+            if (fid != null) {
+                ProjectFile pf = projectFileRepository.findById(fid).orElse(null);
+                if (pf == null || Boolean.TRUE.equals(pf.getIsDeleted()) || !projectId.equals(pf.getProjectId())) {
+                    throw new IllegalArgumentException("底稿文件不存在或不属于当前项目，fileId=" + fid);
+                }
+                if (Boolean.TRUE.equals(pf.getIsFolder())) {
+                    throw new IllegalArgumentException("底稿 fileId 指向的是文件夹，fileId=" + fid);
+                }
+            } else {
                 String path = t.path("path").asText("").trim().replace('\\', '/');
                 while (path.startsWith("/") || path.startsWith("./")) path = path.startsWith("/") ? path.substring(1) : path.substring(2);
                 if (path.isEmpty()) {

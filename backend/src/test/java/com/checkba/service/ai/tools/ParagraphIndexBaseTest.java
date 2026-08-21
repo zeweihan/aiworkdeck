@@ -38,7 +38,7 @@ import static org.mockito.Mockito.verify;
 class ParagraphIndexBaseTest {
 
     private static DocumentEditTools toolsWithBridge(EditorBridgeService bridge) {
-        return new DocumentEditTools(null, null, bridge, null, null);
+        return new DocumentEditTools(null, null, bridge, null, null, null);
     }
 
     /** 收集所有 @P 说明里提到「段落」的参数 */
