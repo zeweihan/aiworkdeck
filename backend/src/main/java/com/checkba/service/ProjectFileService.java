@@ -970,6 +970,43 @@ public class ProjectFileService {
         return createFolder(projectId, parentId, name, userId);
     }
 
+    /**
+     * 从项目根起逐级确保文件夹存在（"a/b/c" → 三段），返回最深一级。
+     * 空白段跳过；某段已存在但是文件而不是文件夹时抛 IllegalArgumentException（不会把文件当目录往下钻）。
+     * 插件宿主 Files.createFolderPath、AI 工具 move_file 的目标目录补建、会议录音目录都走这里，
+     * 同名查找口径（未删除、同父、同名）只在这一处。
+     */
+    @Transactional
+    public ProjectFile ensureFolderPath(Long projectId, Long userId, List<String> segments) {
+        if (projectId == null) {
+            throw new IllegalArgumentException(LangText.of("项目 ID 不能为空", "Project ID must not be empty"));
+        }
+        ProjectFile current = null;
+        Long parentId = null;
+        if (segments != null) {
+            for (String raw : segments) {
+                String seg = raw == null ? "" : raw.trim();
+                if (seg.isEmpty()) continue;
+                Optional<ProjectFile> existing = projectFileRepository
+                        .findByProjectIdAndParentIdAndNameAndIsDeletedFalse(projectId, parentId, seg);
+                if (existing.isPresent()) {
+                    if (!Boolean.TRUE.equals(existing.get().getIsFolder())) {
+                        throw new IllegalArgumentException(LangText.of(
+                                "路径段已存在但不是文件夹: ", "Path segment exists but is not a folder: ") + seg);
+                    }
+                    current = existing.get();
+                } else {
+                    current = createFolder(projectId, parentId, seg, userId);
+                }
+                parentId = current.getId();
+            }
+        }
+        if (current == null) {
+            throw new IllegalArgumentException(LangText.of("文件夹路径不能为空", "Folder path must not be empty"));
+        }
+        return current;
+    }
+
     private ProjectFile ensureConversationFolder(Long projectId, Long parentId, String conversationId, Long userId) {
         // 1. Try by wpsFileId (Robust lookup)
         Optional<ProjectFile> byWpsId = projectFileRepository.findByWpsFileId(conversationId).stream().findFirst();

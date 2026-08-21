@@ -301,7 +301,8 @@ public class MeetingRecordingService {
                 return existing.get();
             }
         }
-        return projectFileService.createFolder(projectId, null, preferred, userId);
+        // 两个语言名都不在：按界面语言建一个（ensureFolderPath 是全仓「逐级确保文件夹」的单一出处）
+        return projectFileService.ensureFolderPath(projectId, userId, List.of(preferred));
     }
 
     private String sanitize(String name) {

@@ -192,6 +192,22 @@ public class EditorBridgeService {
     }
 
     /**
+     * 单名 client_action（无双轨旧名）：显式指定会话，不依赖 ThreadLocal 的当前会话——
+     * 插件后台任务跑在自己的线程池上，这里拿不到 currentConversationId。
+     * 载荷 = fields + {action}。
+     */
+    public void sendClientAction(String action, String conversationId, Map<String, Object> fields) {
+        if (action == null || conversationId == null) return;
+        try {
+            java.util.Map<String, Object> payloadMap = new java.util.HashMap<>(fields != null ? fields : Map.of());
+            payloadMap.put("action", action);
+            sseEmitterService.send(conversationId, "client_action", objectMapper.writeValueAsString(payloadMap));
+        } catch (Exception e) {
+            log.warn("Failed to send client_action {} to {}: {}", action, conversationId, e.getMessage());
+        }
+    }
+
+    /**
      * 发送刷新文件树的 SSE 事件到前端
      */
     public void sendRefreshFilesAction() {

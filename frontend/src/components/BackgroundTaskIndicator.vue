@@ -155,7 +155,8 @@ const getTaskTypeName = (type) => {
     'PPTX_MODIFY': t('chat.taskPptModify'),
     'FILE_PROCESS': t('chat.taskFileProcess'),
     'WEB_FETCH': t('chat.taskWebFetch'),
-    'OTHER': t('chat.taskOther')
+    'OTHER': t('chat.taskOther'),
+    'PLUGIN_JOB': t('chat.taskPluginJob')
   }
   return names[type] || type
 }

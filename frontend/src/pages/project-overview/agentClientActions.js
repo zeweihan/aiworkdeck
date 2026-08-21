@@ -30,6 +30,13 @@ export const agentClientActionMethods = {
         if (isNewName) this._editorContractV2 = true
         if (isLegacyName && this._editorContractV2) return
 
+        // 插件后台任务进度（规范 v2.4 §11 Jobs）：状态已在 useAgentStream 的 client_action 入口
+        // 写进 backgroundTasks（ChatInterface 的 BackgroundTaskIndicator 消费），页面这层无事可做。
+        // 显式占一个分支是为了让读者在这张路由表上能找到它，而不是靠"什么都没匹配上"兜底。
+        if (action.action === 'plugin_job_progress') {
+            return
+        }
+
         if (action.action === 'refresh_files') {
             if (this.$refs.fileTree && this.$refs.fileTree.loadFiles) {
                 console.log('[ProjectOverview] Refreshing File Tree...')

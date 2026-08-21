@@ -476,6 +476,31 @@ export function cancelBackgroundTask(conversationId, taskId) {
   });
 }
 
+// ===================== 插件后台任务（插件规范 v2.4 §11 Jobs） =====================
+// 与上面的 Agent 后台任务是两套簿记：这套按项目归属、id 是 ULID、由 PluginJobService 驱动，
+// 进度经 SSE client_action `plugin_job_progress` 推送；这三个封装给列表/详情/取消用。
+export function listPluginJobs(projectId) {
+  return request({
+    url: `/api/plugin-jobs?projectId=${encodeURIComponent(projectId)}`,
+    method: 'GET',
+  });
+}
+
+export function getPluginJob(jobId) {
+  return request({
+    url: `/api/plugin-jobs/${encodeURIComponent(jobId)}`,
+    method: 'GET',
+  });
+}
+
+// 取消只翻标记 + 中断任务线程；任务体要在 checkCancelled 处配合才会真正停下，文案只许说「正在停止」
+export function cancelPluginJob(jobId) {
+  return request({
+    url: `/api/plugin-jobs/${encodeURIComponent(jobId)}/cancel`,
+    method: 'POST',
+  });
+}
+
 // 获取 AI 公共配置（如默认供应商）
 export function getAiConfig() {
   return request({

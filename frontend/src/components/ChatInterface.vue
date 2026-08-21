@@ -649,7 +649,7 @@ import BackgroundTaskIndicator from './BackgroundTaskIndicator.vue'
 import { useAgentStream } from '@/composables/useAgentStream.js'
 import { parseToolBlock } from '@/composables/agentTagProtocol.mjs'
 import { ref, watch, onMounted, nextTick, getCurrentInstance, computed } from 'vue'
-import { createFile, getProjectFiles, getApiBaseUrl, rollbackConversation, performPptGeneration, getSkills, fetchAiModels, getAiConfig, cancelBackgroundTask } from '@/services/api.js'
+import { createFile, getProjectFiles, getApiBaseUrl, rollbackConversation, performPptGeneration, getSkills, fetchAiModels, getAiConfig, cancelBackgroundTask, listPluginJobs, cancelPluginJob } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
 import { getAppLanguage } from '@/utils/appLanguage.js'
 import { t } from '@/i18n'
@@ -692,6 +692,7 @@ export default {
       onTitleUpdate,
       backgroundTasks,
       dismissBackgroundTask,
+      upsertPluginJob,
       lastHeartbeat,
       tokenUsage,
       fileChanges,
@@ -1133,7 +1134,21 @@ export default {
     onMounted(() => {
       loadModelCatalog()
       loadAiProvider()
+      restoreRunningPluginJobs()
     })
+
+    // 插件后台任务跨页面/跨重连仍在跑：SSE 只在进度变化时推一次，刷新页面或切回工作台的用户
+    // 要等下一次 progress 才能看到它。挂载时按项目拉一次在跑的，接回浮窗。
+    const restoreRunningPluginJobs = async () => {
+      if (!props.projectId) return
+      try {
+        const list = await listPluginJobs(props.projectId)
+        if (!Array.isArray(list)) return
+        list.filter(j => j && (j.status === 'queued' || j.status === 'running')).forEach(upsertPluginJob)
+      } catch (e) {
+        console.warn('[ChatInterface] restore plugin jobs failed:', e)
+      }
+    }
 
     // Scroll to bottom when bubbles change
     watch(() => bubbles.value.length, () => {
@@ -1450,11 +1465,25 @@ export default {
       'PPTX_MODIFY': t('chat.taskPptModify'),
       'FILE_PROCESS': t('chat.taskFileProcess'),
       'WEB_FETCH': t('chat.taskWebFetch'),
-      'OTHER': t('chat.taskOther')
+      'OTHER': t('chat.taskOther'),
+      'PLUGIN_JOB': t('chat.taskPluginJob')
     })[type] || type || t('chat.taskBackgroundFallback')
 
     const handleCancelTask = async (task) => {
       if (!task || !task.taskId || stoppingTasks.value[task.taskId]) return
+      // 插件后台任务（PluginJobService）按 jobId 取消，归属校验是项目成员，不走会话那条路
+      if (task.type === 'PLUGIN_JOB') {
+        stoppingTasks.value = { ...stoppingTasks.value, [task.taskId]: true }
+        try {
+          await cancelPluginJob(task.taskId)
+          uni.showToast({ title: t('chat.stoppingTask'), icon: 'none' })
+        } catch (e) {
+          console.warn('[ChatInterface] 停止插件后台任务失败:', e)
+          uni.showToast({ title: t('chat.stopNotEffective'), icon: 'none' })
+          stoppingTasks.value = { ...stoppingTasks.value, [task.taskId]: false }
+        }
+        return
+      }
       // conversationId 优先取任务自己带的：后台任务跨会话切换仍在跑，
       // 拿当前会话去停别的会话的任务会被后端 403 挡掉
       const cid = task.conversationId || currentConversationId.value
