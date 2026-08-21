@@ -48,6 +48,10 @@ class ShareholderMeetingServiceCninfoOrphanTest {
     void setUp() {
         svc = new ShareholderMeetingService(checkRepository, projectFileRepository,
                 projectFileService, storageServiceFactory, cninfoService);
+        // ensureFolder 经 self 转发到 REQUIRES_NEW 的 ensureFolderTx（并发竞态修复，
+        // dev-board#74）；生产环境里 self 是 Spring 注入的 @Lazy 代理，这里手工 new
+        // 没有容器，直接把 service 自己接上去，与 ProjectProfileServiceTest 同一套写法。
+        svc.self = svc;
         when(storageServiceFactory.getStorageService()).thenReturn(storageService);
     }
 

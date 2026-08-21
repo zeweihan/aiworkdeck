@@ -295,6 +295,50 @@ class StorageLocationServiceTest {
         assertFalse(Files.exists(stateDir.resolve("storage-location.json")), "放弃的迁移不得落配置");
     }
 
+    /**
+     * 旧实现的源侧复查只比较聚合数字（文件数 + 总字节数），抓不住"复制窗口期间，
+     * 已经被 copyTree 走过的某个文件被原地改写成同样字节数的新内容"这种情况——
+     * 文件数没变、总字节数也没变，两次聚合数字仍然相等，校验会误判通过，
+     * 而目标里躺着的是改写前的旧内容，用户在文件树里看得见却打不开最新版本。
+     * 改成逐文件（大小 + mtime）指纹比对后，同样字节数的原地改写也能被抓住。
+     */
+    @Test
+    @DisplayName("迁移窗口期间已复制文件被原地改写成同样字节数：整体放弃，不留下内容过期的副本")
+    void sameSizeInPlaceModificationDuringCopyAbortsMigration() throws IOException {
+        Path target = tempDir.resolve("外置硬盘/awd");
+        Path targetReal = target.toAbsolutePath().normalize();
+        Path rewritten = source.resolve("projects/1/合同.docx");
+        // 原内容"甲方乙方"与新内容"乙方甲方"字节数相同（各占 8 字节，UTF-8 下中文各 3 字节），
+        // 聚合的文件数与总字节数因此两边都不变——旧实现的聚合比对必定判定"没变化"。
+        long originalSize = Files.size(rewritten);
+        assertEquals(originalSize, "乙方甲方".getBytes(java.nio.charset.StandardCharsets.UTF_8).length,
+                "测试前提：替换内容必须与原内容字节数相同，否则测的是旧实现本来就能抓住的场景");
+
+        // 时序模拟：copyTree 走完之后（即对目标那次统计时）原地改写源里已经被复制过的文件，
+        // 换成同样字节数的新内容并显式钉一个更晚的 mtime（不依赖文件系统时间戳分辨率）。
+        StorageLocationService svc = new StorageLocationService(resolver, stateDir.toString()) {
+            @Override
+            Tally tally(Path root) throws IOException {
+                Tally t = super.tally(root);
+                if (root.toAbsolutePath().normalize().equals(targetReal)) {
+                    Files.writeString(rewritten, "乙方甲方");
+                    Files.setLastModifiedTime(rewritten,
+                            java.nio.file.attribute.FileTime.from(Files.getLastModifiedTime(rewritten).toInstant().plusSeconds(5)));
+                }
+                return t;
+            }
+        };
+
+        StorageException e = assertThrows(StorageException.class, () -> svc.migrate(target.toString()));
+        assertTrue(e.getMessage().contains("迁移期间"), "文案要说清原因，用户才知道下一步是关掉正在编辑的文档");
+
+        // 指针留在原位，源目录里的最新内容（改写后的）完好，没有被误当成"没变化"而放行
+        assertEquals(source.toAbsolutePath().normalize(), resolver.globalRoot());
+        assertEquals("乙方甲方", Files.readString(rewritten));
+        assertEquals(3L, countFiles(source));
+        assertFalse(Files.exists(stateDir.resolve("storage-location.json")), "放弃的迁移不得落配置");
+    }
+
     @Test
     @DisplayName("目标是指向源目录内部的软链：按真实路径判定并拒绝，不污染源数据根")
     void symlinkTargetPointingIntoSourceRejected() throws IOException {

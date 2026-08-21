@@ -14,6 +14,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 @Service
@@ -30,6 +31,23 @@ public class AutoTaggingService {
     private final TokenUsageService tokenUsageService;
 
     /**
+     * 按 fileId 序列化整个自动打标签流程（check-then-act 竞态修复，dev-board#74）。
+     *
+     * <p>hasAutoTags() 是一次裸 SELECT，没有锁也没有事务；它与第一次
+     * {@code fileTagService.addTagToFile} 落库之间隔着一整趟 LLM 往返（几百毫秒到几秒）。
+     * 同一个 fileId 的两次自动保存/上传离得够近时，都会在这段窗口里读到"还没打过标签"，
+     * 各自跑一遍 LLM、各自落一遍标签——这正是类头注释里那次"单文件堆到 338 个标签"的
+     * 生产事故的更小规模复现。</p>
+     *
+     * <p>这里不需要 ProjectVariableService/DdService 那种"进程锁 + REQUIRES_NEW 子事务"
+     * 组合：本方法本身不带 @Transactional，从 hasAutoTags() 的检查到最后一次
+     * fileTagService.addTagToFile() 落标签，中间调用的每一个 @Transactional 方法都各自
+     * REQUIRED 独立成一次提交（没有外层事务参与进来），锁在整段流程结束时才释放，
+     * 释放时前面每一次落库都已经真正提交——不会出现"锁放了但对方看不到"的假修陷阱。</p>
+     */
+    private final ConcurrentHashMap<Long, Object> autoTagLocks = new ConcurrentHashMap<>();
+
+    /**
      * Automatically generate and attach tags to a file based on its content.
      */
     public void autoTagFile(Long projectId, Long fileId, String storagePath, Long userId) {
@@ -38,6 +56,13 @@ public class AutoTaggingService {
     }
 
     private void autoTagFileInScope(Long projectId, Long fileId, String storagePath, Long userId) {
+        Object lock = autoTagLocks.computeIfAbsent(fileId, k -> new Object());
+        synchronized (lock) {
+            autoTagFileLocked(projectId, fileId, storagePath, userId);
+        }
+    }
+
+    private void autoTagFileLocked(Long projectId, Long fileId, String storagePath, Long userId) {
         // 一个文件只自动打一次标签。上传端点同时是编辑器自动保存的落点
         // （FileController 的 legacy 分支），没有这道闸的话每存一次盘就再跑一次 LLM：
         // 每轮返回 5 个措辞不同的新词，getOrCreateSystemTag 又只按精确字符串去重，

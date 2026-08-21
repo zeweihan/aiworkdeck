@@ -50,6 +50,10 @@ class StageQuotaServiceTest {
         put(folder(OTHER_FOLDER, "合同"));
 
         when(repository.findById(any())).thenAnswer(inv -> Optional.ofNullable(table.get(inv.getArgument(0))));
+        // lockById 是悲观行锁读取（并发竞态修复，dev-board#74），对这张纯内存假表而言
+        // 语义上就是同一次查找——真实的行锁互斥由 ProjectFileRepositoryStagingLockConcurrentTest
+        // 用真 Spring 容器 + 真 H2 验证。
+        when(repository.lockById(any())).thenAnswer(inv -> Optional.ofNullable(table.get(inv.getArgument(0))));
         when(repository.findByProjectIdAndParentIdAndIsDeletedFalseOrderBySortOrderAsc(any(), any()))
                 .thenAnswer(inv -> {
                     Long parent = inv.getArgument(1);

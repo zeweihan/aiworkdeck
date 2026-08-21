@@ -10,7 +10,11 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.io.ByteArrayInputStream;
@@ -22,6 +26,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 股东大会核查会话管理：建档、材料关联。
@@ -51,6 +56,23 @@ public class ShareholderMeetingService {
     private final StorageServiceFactory storageServiceFactory;
     private final CninfoAnnouncementService cninfoService;
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    /**
+     * 本 bean 的懒加载自身代理，只为让 {@link #ensureFolderTx} 经 Spring 的事务代理真正开出
+     * 独立新事务——写法与 {@link ProjectProfileService#self}、{@link DdService#self} 同一套，
+     * 三处 ensureFolder 是同一形状的 check-then-create 竞态、同一套修法。
+     */
+    @Autowired
+    @Lazy
+    ShareholderMeetingService self;
+
+    /**
+     * ensureFolder 按 (projectId, parentId, name) 序列化"查是否已有 + 没有就建"这段临界区，
+     * 理由与 {@link DdService#ensureFolderLocks} 完全一致：project_file 不加唯一约束，
+     * 没有"插入撞约束后重查"的退路，只能靠进程内锁 + REQUIRES_NEW 子事务把"查+建"钉死成
+     * 一个原子操作——锁必须包住子事务的提交，不能只包住方法调用本身。
+     */
+    private final ConcurrentHashMap<String, Object> ensureFolderLocks = new ConcurrentHashMap<>();
 
     public List<ShareholderMeetingCheck> list(Long projectId) {
         return checkRepository.findByProjectIdOrderByCreatedAtDesc(projectId);
@@ -145,6 +167,15 @@ public class ShareholderMeetingService {
      * 幂等确保文件夹存在（同名已存在则直接返回）。
      */
     private ProjectFile ensureFolder(Long projectId, Long parentId, String name, Long userId) {
+        String key = projectId + "/" + parentId + "/" + name;
+        Object lock = ensureFolderLocks.computeIfAbsent(key, k -> new Object());
+        synchronized (lock) {
+            return self.ensureFolderTx(projectId, parentId, name, userId);
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    ProjectFile ensureFolderTx(Long projectId, Long parentId, String name, Long userId) {
         Optional<ProjectFile> existing = projectFileRepository
                 .findByProjectIdAndParentIdAndNameAndIsDeletedFalse(projectId, parentId, name);
         if (existing.isPresent() && Boolean.TRUE.equals(existing.get().getIsFolder())) {

@@ -204,7 +204,8 @@ public class LocalProjectService {
         for (ProjectFile f : rows) {
             if (Boolean.TRUE.equals(f.getIsDeleted())) continue;
             Path physical;
-            if (Boolean.TRUE.equals(f.getIsFolder())) {
+            boolean isFolder = Boolean.TRUE.equals(f.getIsFolder());
+            if (isFolder) {
                 physical = root.resolve(relativeFolderPath(f, byId));
             } else if (StringUtils.hasText(f.getFilePath())) {
                 try {
@@ -215,7 +216,25 @@ public class LocalProjectService {
             } else {
                 continue; // 无物理路径的行（历史遗留）不动
             }
-            if (!Files.exists(physical)) {
+            boolean missing = !Files.exists(physical);
+            if (!missing && isFolder) {
+                // macOS 默认的 APFS/HFS+ 等大小写不敏感、大小写保留的文件系统上，仅改大小写的
+                // 重命名（"Docs" -> "docs"）之后，旧大小写路径的 Files.exists 依然为 true
+                // （不敏感匹配命中了同一个物理目录），这一行永远不会被判定为缺失——importFolder
+                // 那侧因为 rowKey 按大小写敏感比对，已经在同一轮对账里为新大小写建了一个新行，
+                // 于是旧行成为再也清不掉的永久幽灵行。toRealPath() 能拿到磁盘上的真实大小写；
+                // 与库里存的名字不一致，说明这一行对应的物理目录已经不是"这个大小写"了，
+                // 按缺失处理，交给下面的软删除（下一轮对账会让新大小写那行成为唯一存活的行）。
+                try {
+                    String realName = physical.toRealPath().getFileName().toString();
+                    if (!realName.equals(f.getName())) {
+                        missing = true;
+                    }
+                } catch (IOException ignored) {
+                    // 拿不到真实路径（权限/竞态）时保持原判断，不误伤
+                }
+            }
+            if (missing) {
                 // 父级已被软删除的行会随递归一起处理，重复调用无害（幂等）
                 try {
                     projectFileService.delete(f.getId(), ownerId);
@@ -364,6 +383,16 @@ public class LocalProjectService {
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
                     String fileName = file.getFileName().toString();
                     if (fileName.startsWith(".")) return FileVisitResult.CONTINUE;
+                    if (attrs.isDirectory()) {
+                        // walkFileTree 到达 maxDepth=MAX_IMPORT_DEPTH 时，正卡在边界上的目录
+                        // 不会走 preVisitDirectory（那样就得再往下探一层，超出 maxDepth），
+                        // 而是被当成一个不透明的条目直接扔进 visitFile——这里看到的"文件"
+                        // 其实是目录，就是深度封顶的信号：它自己和它底下的一切都不会再被
+                        // 任何回调访问到，是本轮扫描静默漏掉的那一段。与 MAX_IMPORT_ENTRIES
+                        // 上限不同，这里没有天然会执行到的判断点，必须主动识别这个信号。
+                        stats.truncated = true;
+                        return FileVisitResult.CONTINUE;
+                    }
                     if (!attrs.isRegularFile()) return FileVisitResult.CONTINUE;
                     if (stats.imported >= MAX_IMPORT_ENTRIES) {
                         stats.truncated = true;

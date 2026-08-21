@@ -125,15 +125,20 @@ public class StorageLocationService {
         try {
             Files.createDirectories(target);
             assertWritable(target);
+            // 逐文件指纹（相对路径 -> 大小+mtime），复制前先拍一张快照。
+            Map<String, FileFingerprint> sourceBefore = snapshot(source);
             sourceTally = tally(source);
             copyTree(source, target);
             Tally targetTally = tally(target);
-            // 源侧复查：只比「复制前的源」和「复制后的目标」是不够的。复制一棵大树要几分钟，
-            // 期间自动保存/AI 改文档/浏览器下载都会往源里落盘；落在已经被 copyTree 走过的目录里
-            // 的那些文件不会出现在目标里，而两侧数字仍然相等——校验通过、指针切走，
-            // 那个文件在文件树里看得见却打不开。宁可让用户重来一次。
-            Tally sourceAfter = tally(source);
-            if (sourceAfter.files != sourceTally.files || sourceAfter.bytes != sourceTally.bytes) {
+            // 源侧复查：只比「复制前后源的聚合文件数/总字节数」是不够的——那只能抓住整棵树
+            // 新增/删除了文件，抓不住"某个已经被 copyTree 走过的文件被原地改写成同样字节数
+            // 的新内容"这种情况：文件数没变、总字节数也没变，聚合数字两边仍然相等，校验会
+            // 误判通过。复制一棵大树要几分钟，期间自动保存/AI 改文档/浏览器下载都会往源里
+            // 落盘，命中这个缝隙的窗口不算窄。改成逐文件（大小 + mtime）指纹比对：
+            // 新增、删除、原地改写（哪怕字节数不变）都会让某一路径的指纹在两次快照间不相等，
+            // Map.equals 天然覆盖这三种情况。宁可让用户重来一次。
+            Map<String, FileFingerprint> sourceAfter = snapshot(source);
+            if (!sourceAfter.equals(sourceBefore)) {
                 throw new StorageException(LangText.of(
                         "迁移期间原目录发生了变化（可能有文档在自动保存，或有下载/AI 改动在进行），"
                                 + "为确保一个文件都不落下，已放弃本次迁移并保持原位置。请关闭正在编辑的文档后重试。",
@@ -299,6 +304,27 @@ public class StorageLocationService {
     }
 
     record Tally(long files, long bytes) {}
+
+    record FileFingerprint(long size, long mtimeMillis) {}
+
+    /**
+     * 逐文件指纹快照（相对路径 -> 大小+mtime）。只做 stat，不读内容——树可能有几十 GB，
+     * 全量取内容哈希会让这道复查本身变成新的性能问题。size+mtime 足以抓住"原地改写"：
+     * 内容变了，mtime 必然跟着变。
+     */
+    private Map<String, FileFingerprint> snapshot(Path root) throws IOException {
+        Map<String, FileFingerprint> result = new java.util.HashMap<>();
+        if (!Files.exists(root)) return result;
+        Files.walkFileTree(root, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                result.put(root.relativize(file).toString(),
+                        new FileFingerprint(attrs.size(), attrs.lastModifiedTime().toMillis()));
+                return FileVisitResult.CONTINUE;
+            }
+        });
+        return result;
+    }
 
     /** package-private 是留给测试的接缝：覆写它即可制造「校验不通过」以验证回滚。 */
     Tally tally(Path root) throws IOException {
