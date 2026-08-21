@@ -469,8 +469,18 @@
             <view v-else class="tree-expand-placeholder"></view>
 
             <!-- Icon Logic: Folder uses CSS, Files use SVG Component -->
+            <view
+              v-if="isTemplateFolder(item)"
+              class="tree-item-icon-wrapper tree-template-folder-icon"
+              :title="$t('files.templateFolderHint')"
+            >
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l1.8 2h8.6A1.5 1.5 0 0 1 21 8.5v9A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5v-11z" fill="#EFE6CF" stroke="#8A7340" stroke-width="1.2" />
+                <path d="M9 11.2h6M12 11.2v5.3" stroke="#6B4E16" stroke-width="1.6" stroke-linecap="round" />
+              </svg>
+            </view>
             <image
-              v-if="item.isFolder"
+              v-else-if="item.isFolder"
               class="tree-item-icon-img"
               :class="{ 'is-opened': expandedFolders.has(item.id) }"
               :src="expandedFolders.has(item.id) ? '/static/folder-opened.png' : '/static/folder-closed.png'"
@@ -618,8 +628,18 @@
             <view v-else class="tree-expand-placeholder"></view>
 
              <!-- Icon Logic: Folder uses CSS, Files use SVG Component -->
+            <view
+              v-if="isTemplateFolder(item)"
+              class="tree-item-icon-wrapper tree-template-folder-icon"
+              :title="$t('files.templateFolderHint')"
+            >
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l1.8 2h8.6A1.5 1.5 0 0 1 21 8.5v9A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5v-11z" fill="#EFE6CF" stroke="#8A7340" stroke-width="1.2" />
+                <path d="M9 11.2h6M12 11.2v5.3" stroke="#6B4E16" stroke-width="1.6" stroke-linecap="round" />
+              </svg>
+            </view>
             <image
-              v-if="item.isFolder"
+              v-else-if="item.isFolder"
               class="tree-item-icon-img"
               :class="{ 'is-opened': expandedFolders.has(item.id) }"
               :src="expandedFolders.has(item.id) ? '/static/folder-opened.png' : '/static/folder-closed.png'"
@@ -1880,6 +1900,13 @@ export default {
       }
     },
     // 切换文件夹展开/收起
+    /**
+     * 根级 `_模板` 文件夹（dev-board#112）：模板画像的权威存放处，换模板图标 + 悬浮说明。
+     * 只认根级同名文件夹——子目录里叫 _模板 的只是普通文件夹，画像解析也不会去读它。
+     */
+    isTemplateFolder(item) {
+      return !!(item && item.isFolder && item.name === '_模板' && item.parentId == null)
+    },
     toggleFolder(folderId) {
       if (this.expandedFolders.has(folderId)) {
         this.expandedFolders.delete(folderId)
@@ -4704,6 +4731,19 @@ $bg-grey: $uni-bg-color-grey;
 
 .tree-item-icon-img.is-opened {
   transform: scale(1.2);
+}
+
+.tree-template-folder-icon {
+  width: 32rpx;
+  height: 32rpx;
+  margin-right: 8rpx;
+  cursor: help;
+}
+
+.tree-template-folder-icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 .upload-status-footer-fixed{

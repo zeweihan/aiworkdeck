@@ -1,5 +1,8 @@
 // File preview / picker / staging / download / search / tag component copy
 export default {
+  // FileTree.vue: root-level _模板 folder (dev-board#112)
+  templateFolderHint: 'Template folder: drop your firm\'s report templates here; once learned, AI drafts with their fonts, numbering and table styles',
+
   // FilePreview.vue
   selectFilePrompt: 'Select a file on the left to preview',
   edit: 'Edit',

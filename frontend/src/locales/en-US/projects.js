@@ -56,6 +56,7 @@ export default {
   activitySectionTitle: 'Activity',
   taskSectionTitle: 'Schedule & Tasks',
   conversationSectionTitle: 'AI Conversations',
+  learnedTemplateLine: 'Learned template: {font} {size}pt / {levels} heading levels / {tables} table styles',
   missingProjectParam: 'Missing project parameter',
   saveFailed: 'Save failed',
 

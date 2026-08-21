@@ -28,6 +28,10 @@
         @save="onProfileSave"
       />
 
+      <view v-if="templateLine" class="home-template-line">
+        <text class="home-template-line-text">{{ templateLine }}</text>
+      </view>
+
       <OverviewStatsBar :stats="stats" :loading="statsLoading" />
 
       <view class="home-section">
@@ -80,8 +84,14 @@ import {
   createTask,
   updateTask,
   getVersionTimeline,
+  getProjectFiles,
+  getFileText,
 } from '@/services/api.js'
-import { canEditProfile } from '@/utils/projectHomeFormat.js'
+import { canEditProfile, summarizeTemplateProfile, templateProfileLine } from '@/utils/projectHomeFormat.js'
+
+/** 模板画像的权威存放处（spec 2026-08-21-dd-p1-drafting-design §3.3）：根级 `_模板/画像.json`。 */
+const TEMPLATE_FOLDER_NAME = '_模板'
+const TEMPLATE_PROFILE_FILE = '画像.json'
 
 export default {
   name: 'ProjectHomePane',
@@ -108,6 +118,8 @@ export default {
       conversationsLoading: true,
       nextBefore: null,
       nextBeforeId: null,
+      // `_模板/画像.json` 的四个数（summarizeTemplateProfile 的返回）；没学过模板 = null，整行不渲染
+      templateProfile: null,
       // 请求代：每轮 loadAll() 自增一次。挡的是同一实例内两轮 loadAll() 之间的乱序——
       // 弱网下第一轮的慢请求可能在第二轮已经刷新完之后才姗姗来迟地 resolve，
       // 用旧数据覆盖刚刷新的新数据。各 loadX 进方法体第一行记下当时的代号，
@@ -118,6 +130,9 @@ export default {
   computed: {
     backgroundRuns() {
       return Array.isArray(this.stats.backgroundRuns) ? this.stats.backgroundRuns : []
+    },
+    templateLine() {
+      return templateProfileLine(this.templateProfile)
     },
   },
   watch: {
@@ -144,6 +159,36 @@ export default {
       this.loadActivity()
       this.loadTasks()
       this.loadConversations({ reset: true })
+      this.loadTemplateProfile()
+    },
+    /**
+     * 「已学习模板」一行：根级 `_模板` 文件夹下的 `画像.json`。两级目录列表 + 文本接口三次请求；
+     * 任何一步失败（没有该文件夹 / 没有该文件 / 不是合法 JSON / 无权限）都静默——
+     * 没学过模板是新项目的常态，不是错误，不 toast、不 warn。
+     */
+    async loadTemplateProfile() {
+      const gen = this.loadGeneration
+      let summary = null
+      try {
+        // GET /api/projects/{id}/files 返回裸数组（与 FileTree 的用法一致）
+        const root = await getProjectFiles(this.projectId)
+        const folder = (Array.isArray(root) ? root : []).find(
+          (f) => f && f.isFolder && f.name === TEMPLATE_FOLDER_NAME && f.parentId == null)
+        if (folder) {
+          const children = await getProjectFiles(this.projectId, folder.id)
+          const file = (Array.isArray(children) ? children : []).find(
+            (f) => f && !f.isFolder && f.name === TEMPLATE_PROFILE_FILE)
+          if (file) {
+            const res = await getFileText(file.id)
+            const text = res && typeof res.data === 'string' ? res.data : ''
+            summary = summarizeTemplateProfile(JSON.parse(text))
+          }
+        }
+      } catch (e) {
+        summary = null
+      }
+      if (gen !== this.loadGeneration) return
+      this.templateProfile = summary
     },
     async loadProjectCard() {
       const gen = this.loadGeneration

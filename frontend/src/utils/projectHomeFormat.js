@@ -126,3 +126,31 @@ export function hasConversationPreview(conversation) {
 export function canEditProfile(myRole) {
   return ['OWNER', 'MANAGER', 'ADMIN', 'PARTICIPANT'].indexOf(myRole) !== -1
 }
+
+/**
+ * `_模板/画像.json`（styleProfile v1，spec 2026-08-21-dd-p1-drafting-design §3）→ 概览页一行的四个数。
+ * 只认 body.font.eastAsia / body.size / headings[] / table.samples 这四处；长度字段可能带 unit
+ * （{value, unit}）也可能是裸数字。正文字体或字号缺一个就当没学过（返回 null），
+ * 避免渲染出「已学习模板：undefined NaNpt」。
+ */
+export function summarizeTemplateProfile(profile) {
+  if (!profile || typeof profile !== 'object') return null
+  const body = profile.body || {}
+  const fontSlot = body.font && typeof body.font === 'object' ? body.font : {}
+  const font = String(fontSlot.eastAsia || '').trim()
+  const rawSize = body.size && typeof body.size === 'object' ? body.size.value : body.size
+  const size = Number(rawSize)
+  if (!font || !Number.isFinite(size) || size <= 0) return null
+  const levels = Array.isArray(profile.headings) ? profile.headings.length : 0
+  const samples = profile.table && profile.table.samples
+  const tables = Array.isArray(samples) ? samples.length : Math.max(0, Number(samples) || 0)
+  return { font, size: Number.isInteger(size) ? size : Math.round(size * 10) / 10, levels, tables }
+}
+
+/** 概览页「已学习模板」一行的文案；summary 为 null 时返回空串（不渲染）。 */
+export function templateProfileLine(summary) {
+  if (!summary) return ''
+  const { font, size, levels, tables } = summary
+  return tr('projects.learnedTemplateLine', { font, size, levels, tables },
+    `已学习模板：${font} ${size}pt / ${levels} 级编号 / ${tables} 类表格`)
+}

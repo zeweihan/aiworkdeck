@@ -682,7 +682,10 @@ public class ContextAssemblerService {
                 default -> "\n\n[系统提醒] 编辑器中当前已打开文档" + docLabel + "（id="
                         + activeContext.getId() + "），其正文见 system prompt 的 <active_document>。"
                         + "用户未指明别的文档时，「这个」「当前文档」「修订一下」等都指它——"
-                        + "直接调用 doc_* 工具操作，**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它。";
+                        + "直接调用 doc_* 工具操作，**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它。"
+                        + "写入任何事实陈述（数字、日期、主体、权属等可被核对的内容）后必须立即调用 doc_link_evidence"
+                        + "（docFileId=" + activeContext.getId() + "）把它与底稿文件关联；找不到底稿的事实不得直接写成定论，"
+                        + "改写成【待补：……】并说明缺什么材料。";
             };
         };
     }
@@ -1244,7 +1247,11 @@ All doc_* editing and reading tools act directly on this document. You need NOT 
                         + " (id=" + activeContext.getId() + ") open; its body text is in the system prompt's "
                         + "<active_document>. Unless the user names another document, \"this\", \"the current document\", "
                         + "\"revise it\", and the like refer to it - operate on it directly with the doc_* tools. "
-                        + "Calling doc_list_project_files or doc_open_file to rediscover or reopen it is **FORBIDDEN**.";
+                        + "Calling doc_list_project_files or doc_open_file to rediscover or reopen it is **FORBIDDEN**. "
+                        + "After writing any factual statement (figures, dates, parties, ownership - anything verifiable), "
+                        + "immediately call doc_link_evidence (docFileId=" + activeContext.getId() + ") to tie it to its "
+                        + "source file; a fact with no source must not be stated as settled - write it as "
+                        + "[TO BE SUPPLEMENTED: ...] and say what material is missing.";
             };
         };
     }
