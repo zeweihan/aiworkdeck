@@ -850,7 +850,7 @@ export function createProject(payload) {
 
 // IDE 化本地文件夹项目：打开/新建本地文件夹作为项目
 // payload: { localRoot, createFolder, name, openFileName }
-// 返回 { code: 0, data: { projectId, name, reused, openFileId, importedCount, truncated } }
+// 返回 { code: 0, data: { projectId, name, reused, openFileId, importedCount, truncated, truncatedCount } }
 export function openLocalProject(payload) {
   return request({
     url: '/api/projects/open-local',
@@ -1750,23 +1750,43 @@ export function createProjectFavorite(projectId, payload) {
   })
 }
 
-// 文档-文件关联（WPS 选区超链接）
-export function createDocFileLink(projectId, payload) {
-  return request({
-    url: `/api/projects/${projectId}/doc-links`,
-    method: 'POST',
-    data: payload,
-    header: {
-      'Content-Type': 'application/json',
-    },
-  })
+// 证据链接 EvidenceLink（报告文字 <-> 底稿文件关联事实表，spec §2.2）。
+// 旧 /doc-links POST 已 410，一律走这组。linkKey 只含 [A-Za-z0-9_]。
+export function createEvidenceLink(projectId, body) {
+  return request({ url: `/api/projects/${projectId}/evidence-links`, method: 'POST', data: body })
 }
-
-export function getDocFileLink(projectId, linkKey) {
-  return request({
-    url: `/api/projects/${projectId}/doc-links/${encodeURIComponent(linkKey)}`,
-    method: 'GET',
-  })
+export function getEvidenceLink(projectId, linkKey) {
+  return request({ url: `/api/projects/${projectId}/evidence-links/${encodeURIComponent(linkKey)}`, method: 'GET' })
+}
+// query 里 null/undefined 的键剔掉（PluginPane 会传 {status: undefined}），免得序列化成 "undefined"
+export function listEvidenceLinks(projectId, query = {}) {
+  const data = {}
+  for (const k of Object.keys(query || {})) if (query[k] != null && query[k] !== '') data[k] = query[k]
+  return request({ url: `/api/projects/${projectId}/evidence-links`, method: 'GET', data })
+}
+export function addEvidenceTargets(projectId, linkKey, targets) {
+  return request({ url: `/api/projects/${projectId}/evidence-links/${encodeURIComponent(linkKey)}/targets`, method: 'POST', data: targets })
+}
+export function updateEvidenceTarget(projectId, targetId, patch) {
+  return request({ url: `/api/projects/${projectId}/evidence-links/targets/${targetId}`, method: 'PATCH', data: patch })
+}
+export function removeEvidenceTarget(projectId, targetId) {
+  return request({ url: `/api/projects/${projectId}/evidence-links/targets/${targetId}`, method: 'DELETE' })
+}
+export function deleteEvidenceLink(projectId, linkKey) {
+  return request({ url: `/api/projects/${projectId}/evidence-links/${encodeURIComponent(linkKey)}`, method: 'DELETE' })
+}
+export function reportEvidenceAnchors(projectId, docFileId, reports) {
+  return request({ url: `/api/projects/${projectId}/evidence-links/anchors/report`, method: 'POST', data: { docFileId, reports } })
+}
+export function keepEvidenceAnchor(projectId, linkKey, text) {
+  return request({ url: `/api/projects/${projectId}/evidence-links/${encodeURIComponent(linkKey)}/keep`, method: 'POST', data: { text } })
+}
+export function rebindEvidenceLink(projectId, linkKey, body) {
+  return request({ url: `/api/projects/${projectId}/evidence-links/${encodeURIComponent(linkKey)}/rebind`, method: 'POST', data: body })
+}
+export function evidenceRefCounts(projectId, fileIds) {
+  return request({ url: `/api/projects/${projectId}/evidence-links/ref-counts`, method: 'GET', data: { fileIds: (fileIds || []).join(',') } })
 }
 
 export function deleteFavorite(favoriteId) {

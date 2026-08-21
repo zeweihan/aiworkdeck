@@ -74,7 +74,10 @@ public interface ProjectFileRepository extends JpaRepository<ProjectFile, Long> 
      * 根据 WPS 文件 ID 查询文件
      */
     List<ProjectFile> findByWpsFileId(String wpsFileId);
-    
+
+    /** doc_file_link 迁移用：按 (projectId, wpsFileId) 反查报告文件。 */
+    Optional<ProjectFile> findFirstByProjectIdAndWpsFileId(Long projectId, String wpsFileId);
+
     /**
      * 根据项目 ID、父文件夹 ID 和名称查询文件 (排除已删除)
      */
@@ -82,6 +85,15 @@ public interface ProjectFileRepository extends JpaRepository<ProjectFile, Long> 
     
     @org.springframework.data.jpa.repository.Query("SELECT pf FROM ProjectFile pf WHERE pf.projectId = :projectId AND (:parentId IS NULL AND pf.parentId IS NULL OR pf.parentId = :parentId) AND pf.name = :name AND pf.isDeleted = false")
     Optional<ProjectFile> findByProjectIdAndParentIdAndName(Long projectId, Long parentId, String name);
+
+    /**
+     * 某父文件夹下当前最大排序序号（排除已删除），无子项时返回 null。
+     * 新建文件/文件夹此前靠拉整个同级列表在内存里求 max（每次新建都是一次 O(同级文件数)
+     * 的读取），同一文件夹下连续新建 N 个就是累计 O(N^2)——300 张截图落进同一目录时
+     * 累计读取达数万行。改成单条聚合查询后单次新建是一次索引扫描。
+     */
+    @org.springframework.data.jpa.repository.Query("SELECT MAX(pf.sortOrder) FROM ProjectFile pf WHERE pf.projectId = :projectId AND (:parentId IS NULL AND pf.parentId IS NULL OR pf.parentId = :parentId) AND pf.isDeleted = false")
+    Integer maxSortOrder(Long projectId, Long parentId);
 
     /**
      * 一批项目各自的「最近一次文件活动时间」（排除已删除），返回 [projectId, maxUpdatedAt]。

@@ -33,6 +33,8 @@ public class ProjectFileService {
     private final UserService userService;
     private final com.checkba.service.quota.StageQuotaService stageQuotaService;
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
+    /** 彻底删除时级联清 evidence_link_target（单向依赖：EvidenceLinkService 不注入本类）。 */
+    private final com.checkba.service.evidence.EvidenceLinkService evidenceLinkService;
 
     @org.springframework.beans.factory.annotation.Autowired
     public ProjectFileService(ProjectFileRepository projectFileRepository,
@@ -41,7 +43,9 @@ public class ProjectFileService {
                               WorkSessionService workSessionService,
                               UserService userService,
                               com.checkba.service.quota.StageQuotaService stageQuotaService,
-                              com.checkba.service.telemetry.TelemetryService telemetryService) {
+                              com.checkba.service.telemetry.TelemetryService telemetryService,
+                              com.checkba.service.evidence.EvidenceLinkService evidenceLinkService) {
+        this.evidenceLinkService = evidenceLinkService;
         this.projectFileRepository = projectFileRepository;
         this.projectRagService = projectRagService;
         this.storageServiceFactory = storageServiceFactory;
@@ -92,19 +96,15 @@ public class ProjectFileService {
             throw new IllegalArgumentException(LangText.of("该文件夹下已存在同名文件夹: ", "A folder with this name already exists: ") + name);
         }
 
-        // 获取当前父文件夹下的最大排序序号
-        List<ProjectFile> siblings = projectFileRepository.findByProjectIdAndParentIdOrderBySortOrderAsc(projectId, parentId);
-        int maxSortOrder = siblings.stream()
-                .mapToInt(ProjectFile::getSortOrder)
-                .max()
-                .orElse(-1);
+        // 获取当前父文件夹下的最大排序序号（单条聚合查询，见 ProjectFileRepository.maxSortOrder）
+        Integer maxSortOrder = projectFileRepository.maxSortOrder(projectId, parentId);
 
         ProjectFile folder = new ProjectFile();
         folder.setProjectId(projectId);
         folder.setParentId(parentId);
         folder.setIsFolder(true);
         folder.setName(name.trim());
-        folder.setSortOrder(maxSortOrder + 1);
+        folder.setSortOrder((maxSortOrder == null ? -1 : maxSortOrder) + 1);
         folder.setUserId(userId);
         folder.setCreatedAt(LocalDateTime.now());
         folder.setUpdatedAt(LocalDateTime.now());
@@ -204,12 +204,30 @@ public class ProjectFileService {
         }
     }
 
+    /** 新建文件遇到同名时的处置策略。 */
+    public enum ConflictPolicy {
+        /** 同名直接抛异常（既有行为，前端 REST 路径走这条，不改语义）。 */
+        FAIL,
+        /** 同名自动改名 "name (n).ext" 直到不冲突（后端内部落盘调用点，如导出/OCR 批量保存）。 */
+        RENAME
+    }
+
     /**
-     * 创建文件
+     * 创建文件（同名报错，既有行为不变）
      */
     @Transactional
-    public ProjectFile createFile(Long projectId, Long parentId, String name, String fileType, 
+    public ProjectFile createFile(Long projectId, Long parentId, String name, String fileType,
                                   Long fileSize, String filePath, String wpsFileId, Long userId) {
+        return createFile(projectId, parentId, name, fileType, fileSize, filePath, wpsFileId, userId, ConflictPolicy.FAIL);
+    }
+
+    /**
+     * 创建文件，可选同名冲突策略：FAIL（默认，同名报错）或 RENAME（自动加 "(n)" 直到不冲突）。
+     */
+    @Transactional
+    public ProjectFile createFile(Long projectId, Long parentId, String name, String fileType,
+                                  Long fileSize, String filePath, String wpsFileId, Long userId,
+                                  ConflictPolicy policy) {
         if (projectId == null) {
             throw new IllegalArgumentException(LangText.of("项目 ID 不能为空", "Project ID must not be empty"));
         }
@@ -220,21 +238,20 @@ public class ProjectFileService {
             throw new IllegalArgumentException(LangText.of("用户 ID 不能为空", "User ID must not be empty"));
         }
 
-        // 检查同名文件是否存在
-        if (projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNot(projectId, parentId, name, -1L)) {
+        String finalName = name;
+        if (policy == ConflictPolicy.RENAME) {
+            finalName = resolveConflictingName(projectId, parentId, name.trim());
+        } else if (projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNot(projectId, parentId, name, -1L)) {
+            // 检查同名文件是否存在
             throw new IllegalArgumentException(LangText.of("该文件夹下已存在同名文件: ", "A file with this name already exists: ") + name);
         }
 
-        // 获取当前父文件夹下的最大排序序号
-        List<ProjectFile> siblings = projectFileRepository.findByProjectIdAndParentIdOrderBySortOrderAsc(projectId, parentId);
-        int maxSortOrder = siblings.stream()
-                .mapToInt(ProjectFile::getSortOrder)
-                .max()
-                .orElse(-1);
+        // 获取当前父文件夹下的最大排序序号（单条聚合查询，见 ProjectFileRepository.maxSortOrder）
+        Integer maxSortOrder = projectFileRepository.maxSortOrder(projectId, parentId);
 
         // 如果未提供 filePath，则自动构建
         if (!StringUtils.hasText(filePath)) {
-            filePath = buildPhysicalPath(projectId, parentId, name);
+            filePath = buildPhysicalPath(projectId, parentId, finalName);
         }
         filePath = requireProjectScopedPath(projectId, filePath);
 
@@ -242,18 +259,18 @@ public class ProjectFileService {
         file.setProjectId(projectId);
         file.setParentId(parentId);
         file.setIsFolder(false);
-        file.setName(name.trim());
+        file.setName(finalName.trim());
         file.setFileType(fileType);
         file.setFileSize(fileSize);
         file.setFilePath(filePath);
         file.setWpsFileId(wpsFileId);
-        file.setSortOrder(maxSortOrder + 1);
+        file.setSortOrder((maxSortOrder == null ? -1 : maxSortOrder) + 1);
         file.setUserId(userId);
         file.setCreatedAt(LocalDateTime.now());
         file.setUpdatedAt(LocalDateTime.now());
 
         ProjectFile savedFile = projectFileRepository.save(file);
-        
+
         // 从模板物化物理文件。此前这里调的是 load()——靠「读不到就造一个」的副作用来建文件，
         // 于是读路径也被迫保留那个副作用，任何一份正文丢失的文档都会被静默读成空白模板。
         // 建与读拆开后，这里明确表达「创建」，load() 得以回归纯读（文件不存在就报错）。
@@ -266,6 +283,30 @@ public class ProjectFileService {
 
         signalChange(projectId, userId);
         return savedFile;
+    }
+
+    /**
+     * RENAME 策略：同名时在扩展名前插入 " (n)" 直到不冲突，上限 1000 次尝试
+     * （超出后大概率是查询本身有问题，抛错比死循环/无限重试更安全）。
+     */
+    private String resolveConflictingName(Long projectId, Long parentId, String name) {
+        if (!projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNotAndIsDeletedFalse(projectId, parentId, name, -1L)) {
+            return name;
+        }
+        String base = name;
+        String ext = "";
+        int dot = name.lastIndexOf('.');
+        if (dot > 0 && dot < name.length() - 1) {
+            base = name.substring(0, dot);
+            ext = name.substring(dot);
+        }
+        for (int i = 1; i <= 1000; i++) {
+            String candidate = base + " (" + i + ")" + ext;
+            if (!projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNotAndIsDeletedFalse(projectId, parentId, candidate, -1L)) {
+                return candidate;
+            }
+        }
+        throw new IllegalArgumentException(LangText.of("该文件夹下同名文件过多，请手动改名: ", "Too many files with this name in this folder; please rename manually: ") + name);
     }
 
     /**
@@ -423,9 +464,12 @@ public class ProjectFileService {
             }
         }
         
+        // 证据链接级联：删该文件的 target，target 清空的 link 标 orphan（软删不走这里，面板灰显即可）
+        evidenceLinkService.onFilePurged(file.getProjectId(), fileId);
+
         // 删除数据库记录
         projectFileRepository.deleteById(fileId);
-        
+
         // 触发向量库增量刷新（文件删除）
         if (file.getProjectId() != null && filePath != null) {
             projectRagService.refreshProjectKnowledgeIncremental(

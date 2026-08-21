@@ -418,9 +418,9 @@
 
           <!-- H5端使用HTML5拖拽API -->
           <!-- #ifdef H5 -->
+          <template v-for="(item, index) in windowedDisplayFiles" :key="item.id">
           <view
-            v-for="(item, index) in displayFiles"
-            :key="item.id"
+            v-if="!item.__loadMore"
             class="tree-item"
             :class="{
               'tree-item-selected': selectedFileId === item.id,
@@ -494,6 +494,9 @@
                <text v-if="uploadStatusMap[item.id] && uploadStatusMap[item.id].progress < 100" style="font-size: 10px; color: #999; margin-left: 6px;">
                  {{ Math.floor(uploadStatusMap[item.id].progress) }}%
                </text>
+               <text v-if="!item.isFolder && refCounts[item.id] > 0" class="tree-item-ref-count">
+                 {{ $t('fileTree.referencedCount', { count: refCounts[item.id] }) }}
+               </text>
             </text>
             <view class="tree-item-actions" @tap.stop>
               <template v-if="viewMode === 'files' && renamingId !== item.id">
@@ -554,12 +557,21 @@
             <text v-if="uploadStatusMap[item.id].eta !== null"> · {{ $t('fileTree.etaAbout', { time: formatEta(uploadStatusMap[item.id].eta) }) }}</text>
           </view>
         </view>
+        <!-- 窗口化「展开更多」占位行（dev-board#107 单元 F3）：文件夹子项超过 100 时，
+             其余项先不挂进 DOM，点这一行一次性多渲染 200 项。 -->
+        <view v-else class="tree-item tree-item-load-more" @tap="revealMore(item.parentId)">
+          <view class="tree-item-content" :style="{ paddingLeft: getItemPadding(item) }">
+            <view class="tree-expand-placeholder"></view>
+            <text class="tree-item-load-more-text">{{ $t('fileTree.loadMoreItems', { count: item.remaining }) }}</text>
+          </view>
+        </view>
+        </template>
         <!-- #endif -->
         <!-- 非H5端使用触摸事件 -->
         <!-- #ifndef H5 -->
+        <template v-for="(item, index) in windowedDisplayFiles" :key="item.id">
         <view
-          v-for="(item, index) in displayFiles"
-          :key="item.id"
+          v-if="!item.__loadMore"
           class="tree-item"
           :class="{
             'tree-item-selected': selectedFileId === item.id,
@@ -631,6 +643,9 @@
                <text v-if="uploadStatusMap[item.id] && uploadStatusMap[item.id].progress < 100" style="font-size: 10px; color: #999; margin-left: 6px;">
                  {{ Math.floor(uploadStatusMap[item.id].progress) }}%
                </text>
+               <text v-if="!item.isFolder && refCounts[item.id] > 0" class="tree-item-ref-count">
+                 {{ $t('fileTree.referencedCount', { count: refCounts[item.id] }) }}
+               </text>
             </text>
             <view class="tree-item-actions" @tap.stop>
               <template v-if="viewMode === 'files' && renamingId !== item.id">
@@ -679,6 +694,14 @@
             </view>
           </view>
         </view>
+        <!-- 窗口化「展开更多」占位行，非 H5 端同理（见上方 H5 分支的说明） -->
+        <view v-else class="tree-item tree-item-load-more" @tap="revealMore(item.parentId)">
+          <view class="tree-item-content" :style="{ paddingLeft: getItemPadding(item) }">
+            <view class="tree-expand-placeholder"></view>
+            <text class="tree-item-load-more-text">{{ $t('fileTree.loadMoreItems', { count: item.remaining }) }}</text>
+          </view>
+        </view>
+        </template>
         <!-- #endif -->
 
         <!-- Root Drop Zone: 拖拽到此区域可移动到根目录 -->
@@ -870,6 +893,8 @@ import { getProjectFiles, createFolder, createFile, renameFile, deleteFile, dele
 import { getAuthHeaders, getSessionId } from '@/utils/auth.js'
 import { host } from '@/services/host.js'
 import { findTopmostDeletedAncestor, summarizeDeleteResults } from '@/utils/fileTreeRecycle.js'
+import { groupByParent, buildTreeFromGroups } from '@/utils/fileTreeBuild.js'
+import { evidenceRefCounts } from '@/services/api.js'
 import CircularProgress from '@/components/CircularProgress.vue'
 import FileTypeIcon from '@/components/FileTypeIcon.vue'
 import TagChip from '@/components/TagChip.vue'
@@ -945,6 +970,13 @@ export default {
       allFiles: [], // 完整文件树
       expandedFolders: new Set(), // 展开的文件夹ID集合
       showTree: true, // 是否显示完整树形结构（默认false，只显示当前文件夹）
+      // 窗口化渲染（dev-board#107 单元 F3）：文件夹 id -> 当前渲染的子项上限，
+      // 缺省 WINDOW_PAGE_SIZE；点「展开更多」一次加 WINDOW_PAGE_SIZE。
+      // 不引入虚拟列表，只是把渲染节点数从「整个子树」封顶到「已展开量」。
+      revealCounts: {},
+      // 「被引用 N 次」角标（dev-board#107 单元 F3）：文件 id -> 引用计数，
+      // 树刷新后对当前渲染的文件 id 批量拉取，接口不存在/出错时静默不显示角标。
+      refCounts: {},
       // 批量选择（勾选/框选）
       checkedMap: {}, // { [id]: true }
       pendingBatchAction: null, // 'move'|'cut'|'copy'
@@ -1064,6 +1096,40 @@ export default {
          result = result.filter(f => !hiddenNames.has(f.name))
        }
        return result
+    },
+    // 窗口化渲染（dev-board#107 单元 F3）：只用于模板 v-for 的渲染层，displayFiles 本身
+    // 保持不变——选择/拖拽/批量操作等既有逻辑继续对完整列表生效，只是超过 100 项的
+    // 文件夹在 DOM 里只挂前 N 项 + 一行「展开更多」占位（不引入虚拟列表）。
+    windowedDisplayFiles() {
+      const WINDOW_INITIAL = 100
+      const list = this.displayFiles
+      const totalByParent = new Map()
+      for (const item of list) {
+        const key = this.windowParentKey(item.parentId)
+        totalByParent.set(key, (totalByParent.get(key) || 0) + 1)
+      }
+      const emittedByParent = new Map()
+      const result = []
+      for (const item of list) {
+        const key = this.windowParentKey(item.parentId)
+        const emitted = emittedByParent.get(key) || 0
+        const limit = this.revealCounts[key] || WINDOW_INITIAL
+        if (emitted >= limit) {
+          if (emitted === limit) {
+            result.push({
+              __loadMore: true,
+              id: `__loadmore_${key}`,
+              parentId: item.parentId,
+              remaining: totalByParent.get(key) - limit
+            })
+          }
+          emittedByParent.set(key, emitted + 1)
+          continue
+        }
+        result.push(item)
+        emittedByParent.set(key, emitted + 1)
+      }
+      return result
     },
     checkedIds() {
       return Object.keys(this.checkedMap)
@@ -1305,6 +1371,7 @@ export default {
           const hiddenNames = new Set(['.stagezone', '__staging_area__'])
           this.files = files.filter(f => !hiddenNames.has(f.name))
         }
+        this.scheduleRefCountsFetch()
         console.log('加载文件列表成功:', this.files)
       } catch (error) {
         // 完整打印错误信息，包括堆栈、响应数据等
@@ -1742,27 +1809,13 @@ export default {
         }
     },
 
-    // 构建树形视图
+    // 构建树形视图。分组/递归的纯逻辑抽在 utils/fileTreeBuild.js（node:test 单测，
+    // 见 tests/evidence/treeBuild.test.mjs）：此前每递归一层都对全量 allFiles 做一次
+    // filter+sort，千节点树、多层展开时是 O(N × 展开文件夹数)；现在先一次 O(N) 按
+    // parentId 分组，递归只在分组表里取子集。
     buildTreeView(allFiles, parentId) {
-      const result = []
-
-      // 定义需要隐藏的系统文件夹名称
-      const hiddenNames = new Set(['.stagezone', '__staging_area__'])
-
-      let children = allFiles.filter(f => {
-        // 过滤掉系统文件夹
-        if (hiddenNames.has(f.name)) {
-          return false
-        }
-
-        if (parentId === null) {
-          return f.parentId === null || f.parentId === 0
-        }
-        return f.parentId === parentId
-      })
-
-      // 排序逻辑：文件夹优先，然后按 sortMode 排序
-      children.sort((a, b) => {
+      const byParent = groupByParent(allFiles)
+      const compareFn = (a, b) => {
          // 文件夹始终置顶
          if (a.isFolder && !b.isFolder) return -1
          if (!a.isFolder && b.isFolder) return 1
@@ -1794,18 +1847,8 @@ export default {
          }
 
          return this.sortOrder === 'desc' ? -result : result
-      })
-
-      for (const item of children) {
-        result.push(item)
-        // 如果是文件夹且已展开，递归添加子项
-        if (item.isFolder && this.expandedFolders.has(item.id)) {
-          const subItems = this.buildTreeView(allFiles, item.id)
-          result.push(...subItems)
-        }
       }
-
-      return result
+      return buildTreeFromGroups(byParent, parentId, compareFn, id => this.expandedFolders.has(id))
     },
     setSortMode(mode) {
       this.sortMode = mode
@@ -1824,6 +1867,7 @@ export default {
     refreshTreeView() {
       if (this.showTree && Array.isArray(this.allFiles) && this.allFiles.length > 0) {
         this.files = this.buildTreeView(this.allFiles, this.parentId)
+        this.scheduleRefCountsFetch()
       } else {
         this.loadFiles()
       }
@@ -1838,6 +1882,42 @@ export default {
       // 重新构建树形视图
       if (this.showTree && this.allFiles.length > 0) {
         this.files = this.buildTreeView(this.allFiles, this.parentId)
+        this.scheduleRefCountsFetch()
+      }
+    },
+    // 窗口化渲染的分组 key：根（null/undefined/0）统一归一成 '__root__'，
+    // 与 utils/fileTreeBuild.js 的 normalizeParentId 语义一致。
+    windowParentKey(parentId) {
+      return (parentId === null || parentId === undefined || parentId === 0) ? '__root__' : String(parentId)
+    },
+    // 「展开更多」：每点一次给该文件夹的渲染上限加 200，直到全部展开。
+    revealMore(folderId) {
+      const key = this.windowParentKey(folderId)
+      const current = this.revealCounts[key] || 100
+      this.revealCounts = { ...this.revealCounts, [key]: current + 200 }
+      this.scheduleRefCountsFetch()
+    },
+    // 「被引用 N 次」角标：树刷新/展开更多后，对当前渲染的文件 id 分批拉取引用计数。
+    // 接口不存在（单元 A 可能未合并）或出错时静默不显示角标，不 mock 后端。
+    async scheduleRefCountsFetch() {
+      if (!this.projectId) return
+      const ids = this.windowedDisplayFiles
+        .filter(f => !f.__loadMore && !f.isFolder)
+        .map(f => f.id)
+      if (ids.length === 0) return
+      const BATCH_SIZE = 200
+      for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+        const batch = ids.slice(i, i + BATCH_SIZE)
+        try {
+          const res = await evidenceRefCounts(this.projectId, batch)
+          // 兼容 {code:0, data:{...}} 信封与裸对象两种形状（单元 A 的端点形状以合并时为准）
+          const counts = (res && res.data && typeof res.data === 'object') ? res.data : res
+          if (counts && typeof counts === 'object') {
+            this.refCounts = { ...this.refCounts, ...counts }
+          }
+        } catch (e) {
+          // 端点未合并/出错：角标就不显示，不打扰用户、不 mock 数据
+        }
       }
     },
     // 计算项目的缩进（用于树形结构）
@@ -2272,6 +2352,7 @@ export default {
       // 重新构建树形视图
       if (this.showTree && this.allFiles.length > 0) {
         this.files = this.buildTreeView(this.allFiles, this.parentId)
+        this.scheduleRefCountsFetch()
       }
 
       // 设置选中状态（单选模式）
@@ -2514,8 +2595,10 @@ export default {
       console.log('拖拽放下:', { draggedIndex: this.draggedIndex, targetIndex: index })
 
       const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
-      // BUGFIX: Use displayFiles instead of files since template v-for uses displayFiles
-      const targetItem = this.displayFiles[index]
+      // BUGFIX: 用 windowedDisplayFiles 而不是 displayFiles——模板 v-for 挂的是
+      // windowedDisplayFiles（窗口化渲染，dev-board#107 单元 F3），index 是那个数组里的下标。
+      const targetItem = this.windowedDisplayFiles[index]
+      if (!targetItem || targetItem.__loadMore) return
 
       // Determine Target Parent ID
       let targetParentId
@@ -2725,12 +2808,14 @@ export default {
       const itemHeight = 60 // 估算每个项目高度（rpx转px约30px）
       const targetIndex = Math.round(deltaY / itemHeight) + index
 
-      // BUGFIX: Use displayFiles instead of files since template v-for uses displayFiles
-      if (targetIndex !== index && targetIndex >= 0 && targetIndex < this.displayFiles.length) {
+      // BUGFIX: 用 windowedDisplayFiles 而不是 displayFiles——模板 v-for 挂的是
+      // windowedDisplayFiles（窗口化渲染，dev-board#107 单元 F3），index 是那个数组里的下标。
+      if (targetIndex !== index && targetIndex >= 0 && targetIndex < this.windowedDisplayFiles.length) {
         try {
           const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
-          const draggedItem = this.displayFiles[index]
-          const targetItem = this.displayFiles[targetIndex]
+          const draggedItem = this.windowedDisplayFiles[index]
+          const targetItem = this.windowedDisplayFiles[targetIndex]
+          if (!draggedItem || draggedItem.__loadMore || !targetItem || targetItem.__loadMore) return
 
           let targetParentId
           let newSortOrder = targetItem.sortOrder
@@ -4648,6 +4733,24 @@ $bg-grey: $uni-bg-color-grey;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 「被引用 N 次」角标（dev-board#107 单元 F3） */
+.tree-item-ref-count {
+  font-size: 20rpx;
+  color: #999999;
+  margin-left: 12rpx;
+}
+
+/* 窗口化「展开更多」占位行（dev-board#107 单元 F3） */
+.tree-item-load-more {
+  cursor: pointer;
+}
+
+.tree-item-load-more-text {
+  flex: 1;
+  font-size: 24rpx;
+  color: #1a5336;
 }
 
 .rename-input-wrapper {

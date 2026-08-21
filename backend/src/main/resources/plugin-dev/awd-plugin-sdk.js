@@ -15,8 +15,16 @@
  *   ui.toast      { message }         -> {}
  *   storage.get   { key }             -> { key, value }    插件级 KV，value 为 null 表示不存在
  *   storage.set   { key, value }      -> {}                插件级 KV，总量上限 64 KB
+ *   evidence.link   { anchor: { selection: true } | { quote }, docPath?, targets: [{ path, locator?, relation?, method?, note? }] }
+ *                                     -> { linkKey, targetIds }  需 editor；在当前 Word 文档的选区/引文上建底稿关联
+ *   evidence.list   { docPath?, path?, sectionPath?, status? }
+ *                                     -> { links: [{ linkKey, docPath, anchorText, sectionPath, status, targets: [{ targetId, path, locator, relation, method }] }] }  需 file_read
+ *   evidence.locate { linkKey, targetId? }
+ *                                     -> {}                需 editor；有 targetId 打开底稿定位，否则跳到文档里的锚点
  *
- * 错误码：permission_denied（manifest 未声明所需权限）、unknown_method（宿主不认识的方法）。
+ * 错误码：permission_denied（manifest 未声明所需权限）、unknown_method（宿主不认识的方法）、
+ *   anchor_ambiguous（引文 0 或多处命中 / anchor 形状不对）、no_selection（要求选区但当前没有）、
+ *   not_found（链接或文件不存在）、no_active_document（当前没有打开的 Word 文档）。
  *
  * 重要：本文件必须用普通同步 <script> 引入，且排在业务脚本之前——
  * 宿主在 iframe load 后立刻发 init，晚注册监听会错过握手，ready() 将永远挂起。
@@ -97,6 +105,14 @@
         });
       },
       set: function (key, value) { return call('storage.set', { key: key, value: value }); }
+    },
+    evidence: {
+      /** -> { linkKey, targetIds } */
+      link: function (params) { return call('evidence.link', params || {}); },
+      /** -> { links: [...] } 原始 result，不解包 */
+      list: function (params) { return call('evidence.list', params || {}); },
+      /** -> {} */
+      locate: function (params) { return call('evidence.locate', params || {}); }
     }
   };
 

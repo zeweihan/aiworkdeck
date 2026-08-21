@@ -131,6 +131,63 @@ txt/md/markdown 自 dev-board#37 起不进 LOWA（前端走 PlainTextEditor.vue�
 
 **会话级客户端能力过滤**：chat 请求可选 `clientCapability`（lowa/office/none，缺省 lowa）+ `officeHost`（word/excel/powerpoint，缺省 word）→ `ClientCapabilityService`（按 conversationId 内存登记）→ ToolRegistry 三消费点过滤（getAllSpecifications(conversationId)/execute/resolve(name, conversationId)）：office 会话隐藏 doc_* 与 sheet_* 且**按宿主再细分**（word 只见 Word 面 office_*、excel 只见 office_excel_*、ppt 只见 office_ppt_*，`hostOfTool` 最长前缀优先），lowa 会话隐藏 office_*，none 全隐藏。末位提醒与 <active_document> 段文案在 ContextAssemblerService 按能力三分支+office 宿主三分支切换。
 
+## EvidenceLink 契约（dev-board#100/#102，spec `docs/superpowers/specs/2026-08-21-evidence-link-p0-design.md`）
+
+报告文字 ↔ 底稿文件的关联事实表，平台内置、不门控；尽调插件只是第一个消费方。后端单一出口 `service/evidence/EvidenceLinkService.java`（Controller / SDK 宿主 / P1 AI 工具都只经它读写），实体 `model/entity/EvidenceLink.java` + `EvidenceLinkTarget.java`，REST `controller/EvidenceLinkController.java`，迁移 `service/evidence/EvidenceLinkMigrationRunner.java`，纯函数 `AnchorHash` / `Ulid`。旧 `doc_file_link` 表与 `/api/projects/{pid}/doc-links` 只读代理保留一个发版周期（POST 已 410）。
+
+**两张表**
+
+| `evidence_link`（一条 = 一个书签锚点） | `evidence_link_target`（一条 = 一个底稿位置，id 即 `filelink&t=` 的 t） |
+|---|---|
+| `project_id`、`doc_file_id`（报告 ProjectFile.id，不再用 wpsFileId 软引用） | `link_id`（应用层级联删除）、`file_id`（必须同项目，IDOR 在 Service） |
+| `link_key` varchar(64) **= 文档内书签名**，唯一 `(project_id, link_key)`；新建 `EVID_<26 位 ULID>`（31 字符，只含 `[A-Za-z0-9_]`），迁移行保留 `lk_*` | `locator_json` text（可空 = 整个文件）、`locator_hash` char(64) = sha256(键排序 + 数字归一的 canonical JSON，根必须是对象)，空记 `-`；唯一 `(link_id, file_id, locator_hash)` |
+| `anchor_text` varchar(1000) 快照、`anchor_hash` = `AnchorHash.of(anchorText)` | `relation` supports/contradicts/partial（默认 supports；**contradicts 必须有真实 target**，「查无此据」走缺口清单） |
+| `section_path`（标题链 `一/（二）/3`，worker 派生）、`section_title` | `method` written_review/written_statement/web_check/third_party/interview，可空 |
+| `status` active/unverified/stale/orphan；`created_by_kind` human/ai/plugin | `confidence` 0-100（人工 = null）、`note`、`sort_order` |
+| `created_by/created_at/updated_at/checked_at`（最近一次 worker 核对） | `created_by_kind/created_by/created_at` |
+
+`ProjectFile.metaJson`（text）同期新增：网核截图 `{sourceUrl, capturedAt, provider}`。
+
+**状态机**：human/plugin 建链 → `active`；ai 建链 → `unverified`；worker 报 anchorHash 变了（active/unverified/stale）→ `stale`；报 `exists=false`（任何状态）→ `orphan`；用户「保留关联」keepAnchor（stale/unverified）→ `active` 并刷新 anchorText/anchorHash；用户「重新指定」rebind（换 linkKey 书签）→ `active`。**状态只由 worker 核对结果与用户动作驱动，后端不猜**；唯一例外是文件彻底删除（`ProjectFileService.permDelete` → `onFilePurged`）级联删 target、target 清空的 link 标 `orphan`。软删不动 link（`LinkView.file.isDeleted=true` 由面板灰显）。orphan 不自动删、reportAnchors 报 exists=true 也不复活。
+
+**locatorJson 分型**（`type` 判别，**页码 1 基、paragraphIndex 0 基、坐标 0..1 归一化、毫秒整数**；未知字段忽略，缺 `type` = 整文件）：
+`{type:"pdf", page, quote?, rects?:[{page,x,y,w,h}]}` / `{type:"docx", bookmark?, quote?, paragraphIndex?}` / `{type:"image", rect:{x,y,w,h}}` / `{type:"media", startMs, endMs}` / `{type:"web", url, capturedAt, rect?}` / `{type:"sheet", sheet, cell}`。
+
+**REST `/api/projects/{pid}/evidence-links`**（读 = hasReadPermission，写 = hasWritePermission，全在 Service；未登录 → `请先登录` 4010 信封；`{linkKey}` 限定 `[A-Za-z0-9_]+` 所以 `/ref-counts`、`/anchors/report`、`/targets/{id}` 不会被吃掉）：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/` | create `{docFileId, linkKey?, anchorText, sectionPath?, sectionTitle?, createdByKind?, targets:[{fileId, locatorJson?, relation?, method?, confidence?, note?}]}` → LinkView |
+| GET | `/{linkKey}` | getByKey |
+| GET | `/?docFileId=&status=&sectionPath=` | listByDoc（sectionPath 是前缀） |
+| GET | `/?fileId=` | listByFile（反查，优先于 docFileId） |
+| GET | `/?docFileId=&partyTagId=` | listByParty（targets.file 挂了该 PARTY 标签） |
+| POST | `/{linkKey}/targets?createdByKind=` | addTargets（body 是 TargetInput 数组；同 locatorHash 去重；createdByKind human/ai/plugin 缺省 human，记在 target 上） |
+| PATCH | `/targets/{targetId}` | updateTarget（null 字段不改） |
+| DELETE | `/targets/{targetId}` / `/{linkKey}` | removeTarget / delete |
+| POST | `/anchors/report` | `{docFileId, reports:[{linkKey, exists, text}]}` → `{changed:[linkKey], ignored:N}`（worker 核对回写；`exists` 缺失的条目不改状态、计入 ignored，不许当 false 打 orphan） |
+| POST | `/{linkKey}/keep` | `{text}` keepAnchor |
+| POST | `/{linkKey}/rebind` | `{newLinkKey, anchorText, sectionPath?, sectionTitle?}` |
+| GET | `/ref-counts?fileIds=` | `Map<fileId, count>`（文件树角标） |
+
+`LinkView = {id, linkKey, docFileId, anchorText, anchorHash, sectionPath, sectionTitle, status, createdByKind, createdAt, updatedAt, targets:[{id, fileId, file:{id,name,fileType,parentId,isDeleted}|null, locator, relation, method, confidence, note}]}`。
+
+**worker 五原语**（office_thread.js，单元 B 落地）：`bookmark_selection {name}` → `{success, name, text}`（选区空/重名均失败，不加 `_n`）；`get_bookmark_context {name}` → `{exists, text, sectionPath, sectionTitle, paragraphIndex}`；`check_link_anchors {names[]}` → `{items:[{name, exists, text}]}`（单次 ≤ 200，宿主分批、`modified` 防抖 3s）；`adopt_legacy_links {}` → `{adopted:[name], skipped}`（对 `filelink?k=` 且无同名书签的 run 就地套书签）；`goto_bookmark {name}` → `{success}`。失败返回同时写 `message` 与 `error`。
+
+**前端**（单元 C，dev-board#104）：
+- 纯函数：`frontend/src/utils/anchorHash.js`（`normalizeAnchor` / `anchorHash` 返回 Promise，走 `crypto.subtle`）、`utils/ulid.js`（26 位 Crockford，`EVID_`+ulid = 31 字符）、`utils/evidenceLocator.js`（`locatorSummary(loc, t)` / `parseFileLinkUrl(raw)` → `{linkKey, projectId, targetId|null}` / `buildFileLinkUrl(base, key, pid, targetId?)` / `EVIDENCE_METHODS` 五值）。API 封装在 `services/api.js`「证据链接 EvidenceLink」段（`createEvidenceLink` … `evidenceRefCounts`，旧 `createDocFileLink/getDocFileLink` 已删）。测试 `npm run test:evidence`（`tests/evidence/*.test.mjs`，CI 已接）。
+- 拖到编辑器建链：`pages/project-overview/evidenceLinkActions.js`（mixin，`{ evidenceLinkData, evidenceLinkMethods }`）+ 纯函数层 `evidenceLinkCore.js`（`createEvidenceLinkForDrop({exec, api, projectId, docFileId, file, internalBase})` 与 `pickEvidenceTarget(view, t)`，相对路径 import、不碰 api.js，node --test 直接加载；复用分支遇 not-found 回退 createEvidenceLink 带既有 linkKey 自愈死锚点）。流程：`get_selection_hyperlink` 读选区（空 → toast「先选中要关联的文字」）→ 选区已带 `filelink?k=` 则复用 linkKey 只 `addEvidenceTargets`，否则 `EVID_<ulid>` → `bookmark_selection` → `set_selection_hyperlink`（URL 不带 t）→ `get_bookmark_context` → `createEvidenceLink`（target `{fileId, relation:'supports', method:'written_review'}`）→ `EvidenceMethodBar.vue`（五 chip，点击 `PATCH /targets/{id}`，3s 自动收起，连续拖放只留最后一条）→ `uni.$emit('awd:evidence-changed', {docFileId, linkKey})`。
+- **投放层不是外层容器的 @drop**：画布是 webview/iframe，HTML5 drop 落在它的文档里、宿主收不到。`LibreOfficeEditor.vue` 监听 uni 事件 `file-drag-start/end`（FileTree 与 FileStagingArea 都 emit）在画布上铺 `.libre-evidence-drop` 透明接收层，drop 时读 `application/x-checkba-file`（退 `text/checkba-file-json`、再退 `document.__checkbaDraggedFile`），文件夹忽略，`$emit('evidence-drop', {file})`；宿主按 side 从 `getLibreExecutorMap()[side+':'+docId]` 取该侧 executor，不用全局 `libreOfficeExecutor`。
+- 点击链接定位：两条入口（`onLibreOpenUrl` 与 `__checkbaHandleInternalLink`）都汇到 `handleFileLinkClick(raw)` → `getEvidenceLink` → `pickEvidenceTarget`（`t` 命中 / 单 target 直开；多 target 弹 `filelink-dialog`，列 `file.name + method + locatorSummary`）→ `openFileLinkTarget(target, side)` → `openFile(file, {locator})`。`fileOpenTabs.openFile(file, opts)` 把 `opts.locator` 存进 tab 对象 `pendingLocator`（已打开则原地覆写）；消费方 `LibreOfficeEditor`（`ready` 与 `file.pendingLocator` 两个 watch → `consumeLocator`：`bookmark` → `goto_bookmark`，否则 `quote` → `find_text_locations` 首个命中 → `set_selection`；完成后 `$emit('locator-consumed', fileId)`，宿主 `onLocatorConsumed` 清空）与 `FilePreview`（`locator` prop）。`agentClientActions.handleEditorOpenFile` 透传 `action.locator`。
+
+**地雷**
+- **AnchorHash 双端同步红线**：`backend/.../service/evidence/AnchorHash.java` 与 `frontend/src/utils/anchorHash.js` 是同一算法（NFKC → 删全部空白含 U+3000 → `，。；：！？（）` 映射半角 → 引号一律删 → 保留《》→ sha256 小写 hex），向量 `backend/src/test/resources/fixtures/anchor-hash-vectors.json` 与 `frontend/tests/evidence/anchor-hash-vectors.json` 必须字节一致、每条带 `norm` 与 `hash`。改算法 = 改两端 + 改两份向量；NFKC 已把 `，（）：；！？` 归半角，`。` 不归、靠表。
+- **书签名 = linkKey**：写链接时必须先 `bookmark_selection(linkKey)`，书签才是锚点；超链接 URL 只是跳转用。Word 书签名上限 40 字符，`EVID_`+ULID = 31。
+- 链接 URL 形态：文档里写 `https://checkba-internal.local/open?u=checkba://filelink?k=<linkKey>&projectId=<pid>[&t=<targetId>]`（web 包装不变，`t` 新增可选）；`doc_set_hyperlink` / worker `set_hyperlink_at_anchor` 的 http/https 校验对这个包装前缀天然放行，不要再加内层 `checkba://` 的白名单判断。
+- `EvidenceLinkService` 只注入 Repository + ProjectMemberService，**不注入 ProjectFileService**（后者要回调 `onFilePurged`，注入成环）。`ProjectFileService` 构造器多了 `EvidenceLinkService` 参数，手工 `new ProjectFileService(...)` 的测试要同步（LocalProjectServiceTest 已改）。
+- 迁移 `EvidenceLinkMigrationRunner` 幂等：`evidence_link` 非空即跳过；反查 `(projectId, wpsFileId)` 用 `findFirstByProjectIdAndWpsFileId`（wpsFileId 无唯一约束）；查不到的行 WARN 跳过。迁来的行 `status=unverified`、target 无 locator，靠 `adopt_legacy_links` 套书签后再由正常核对转 active/orphan。
+- 测试：`AnchorHashTest`/`UlidTest`/`EvidenceLinkServiceTest`/`EvidenceLinkMigrationRunnerTest`/`EvidenceLinkControllerTest`/`DocFileLinkControllerProxyTest`/`ProjectFileServicePurgeCascadeTest`。
+
 ## 命名双轨现状（PR#192，下个发布周期摘旧名）
 
 仍活着的 wps_* 旧名：后端 `sendDualNamedAction`（doc_open_file/wps_open_file、doc_reload_file/wps_reload_file）、executeEditorCommand 双发 editor_command/wps_command、doc_open_file_sync↔wps_open_file_sync、doc_stream_data/wps_stream_data 双发、`/wps-result` 路由别名；前端 handleClientAction 显式识别全部旧名+latch 去重、toolDisplayNames 把 wps_* 归一为 doc_*。

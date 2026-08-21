@@ -52,10 +52,10 @@
         <!-- PDF 预览：本地 blob 由浏览器/Electron 内置 PDF 引擎原生渲染，数据不出本机（#36） -->
         <view v-else-if="isPdf" class="preview-pdf">
           <!-- #ifdef H5 -->
-          <iframe v-if="blobUrl" :src="blobUrl" class="preview-iframe" frameborder="0"></iframe>
+          <iframe v-if="blobUrl" :src="pdfSrc" class="preview-iframe" frameborder="0"></iframe>
           <!-- #endif -->
           <!-- #ifndef H5 -->
-          <web-view v-if="blobUrl" :src="blobUrl" />
+          <web-view v-if="blobUrl" :src="pdfSrc" />
           <!-- #endif -->
         </view>
 
@@ -81,6 +81,14 @@
             @load="handleImageLoad"
             @error="handleImageError"
           />
+          <!-- EvidenceLink 图片定位框：locator.rect 是 0..1 归一化坐标，按当前缩放平移换算 -->
+          <view
+            v-if="evidenceRectStyle"
+            class="evidence-rect"
+            :class="{ 'is-fading': evidenceRectFading }"
+            :style="evidenceRectStyle"
+            @click.stop="hideEvidenceRect"
+          ></view>
           <view v-if="imageReady" class="image-toolbar" @mousedown.stop>
             <button class="img-tool-btn" size="mini" @tap="imageZoomOutBtn">−</button>
             <text class="img-zoom-pct">{{ imageZoomPercentText }}</text>
@@ -246,6 +254,11 @@ export default {
     baseUrl: {
       type: String,
       default: ''
+    },
+    // EvidenceLink 定位符（spec §1.4）：pdf → #page；image → 画框；media → 起播时刻
+    locator: {
+      type: Object,
+      default: null
     }
   },
   data() {
@@ -285,7 +298,11 @@ export default {
       audioDuration: 0,
       audioVolume: 1,
       audioMuted: false,
-      audioRate: 1
+      audioRate: 1,
+      // EvidenceLink 定位：locator prop 的本地副本 + 图片画框可见态（3s 淡出/点击隐藏）
+      appliedLocator: null,
+      evidenceRectVisible: false,
+      evidenceRectFading: false
     }
   },
   computed: {
@@ -364,6 +381,27 @@ export default {
       return {
         transform: `translate(${this.imageTx}px, ${this.imageTy}px) scale(${this.imageScale})`
       }
+    },
+    // 定位用的是 appliedLocator（prop 的本地副本）：宿主收到 locator-consumed 会把 prop 清空，
+    // 直接读 prop 的话 pdf 的 #page= 会跟着掉、iframe 重载回第 1 页。
+    pdfSrc() {
+      const loc = this.appliedLocator
+      const page = loc && loc.type === 'pdf' ? Number(loc.page) : 0
+      return this.blobUrl + (page > 0 ? '#page=' + page : '')
+    },
+    evidenceRectStyle() {
+      const loc = this.appliedLocator
+      const r = loc && loc.type === 'image' && this.evidenceRectVisible ? loc.rect : null
+      if (!r || !this.imageReady) return null
+      const s = this.imageScale
+      const w = this.imageNaturalWidth * s
+      const h = this.imageNaturalHeight * s
+      return {
+        left: (this.imageTx + Number(r.x || 0) * w) + 'px',
+        top: (this.imageTy + Number(r.y || 0) * h) + 'px',
+        width: Math.max(2, Number(r.w || 0) * w) + 'px',
+        height: Math.max(2, Number(r.h || 0) * h) + 'px'
+      }
     }
   },
   watch: {
@@ -379,6 +417,16 @@ export default {
     blobUrl(url) {
       this.teardownAudio()
       if (url && this.isAudio) this.setupAudio(url)
+    },
+    // 宿主 openFile(file, {locator}) 落到 tab.pendingLocator → 这里的 prop。收到即拷贝成
+    // appliedLocator（pdf/image/media 三类都按它渲染），然后通知宿主 locator-consumed 清空
+    // pendingLocator，避免切回标签重复跳转。同一文件再次被链接点中（换了时刻/页）走同一条路。
+    locator: {
+      immediate: true,
+      handler(loc) {
+        if (!loc) return
+        this.applyLocator(loc)
+      }
     },
     // AI 修改文件后（pdf_highlight/pdf_redact 等）后端会更新 wpsFileId 并发 reload_file，
     // reload 处理是对既有 file 对象 Object.assign 原地更新——对象引用不变，上面的
@@ -410,7 +458,7 @@ export default {
         a.preload = 'metadata'
         a.volume = this.audioVolume
         a.playbackRate = this.audioRate
-        a.addEventListener('loadedmetadata', () => { this.audioDuration = a.duration || 0 })
+        a.addEventListener('loadedmetadata', () => { this.audioDuration = a.duration || 0; this.seekToLocator() })
         a.addEventListener('timeupdate', () => { this.audioCurrent = a.currentTime || 0 })
         a.addEventListener('play', () => { this.audioPlaying = true })
         a.addEventListener('pause', () => { this.audioPlaying = false })
@@ -498,6 +546,11 @@ export default {
 
     // file watch 与 wpsFileId watch 共用的加载分发（原 file watch handler 逻辑原样抽出）
     reloadPreview(newFile) {
+      // 换文件：定位副本随之作废（新文件的 locator 会经 prop watch 重新 apply）
+      this.clearEvidenceRectTimers()
+      this.appliedLocator = null
+      this.evidenceRectVisible = false
+      this.evidenceRectFading = false
       // 清理旧的 blobUrl
       if (this.blobUrl) {
         URL.revokeObjectURL(this.blobUrl)
@@ -757,9 +810,45 @@ export default {
         this.extracting = false
       }
     },
+    // EvidenceLink media 定位：startMs → currentTime。音频用自绘播放器实例，视频用 loadeddata 记下的元素。
+    applyLocator(loc) {
+      this.appliedLocator = loc
+      this.clearEvidenceRectTimers()
+      if (loc.type === 'image' && loc.rect) {
+        // 画框不常驻：3s 后淡出（或点一下立刻隐藏），免得遮罩把整张图压暗
+        this.evidenceRectVisible = true
+        this.evidenceRectFading = false
+        this._rectFadeTimer = setTimeout(() => {
+          this.evidenceRectFading = true
+          this._rectHideTimer = setTimeout(() => { this.evidenceRectVisible = false }, 400)
+        }, 3000)
+      }
+      this.seekToLocator()
+      const f = this.file
+      if (f && f.id != null) this.$nextTick(() => this.$emit('locator-consumed', f.id))
+    },
+    hideEvidenceRect() {
+      this.clearEvidenceRectTimers()
+      this.evidenceRectVisible = false
+    },
+    clearEvidenceRectTimers() {
+      if (this._rectFadeTimer) { clearTimeout(this._rectFadeTimer); this._rectFadeTimer = null }
+      if (this._rectHideTimer) { clearTimeout(this._rectHideTimer); this._rectHideTimer = null }
+    },
+    seekToLocator() {
+      const loc = this.appliedLocator
+      if (!loc || loc.type !== 'media') return
+      const sec = Number(loc.startMs || 0) / 1000
+      if (!(sec >= 0)) return
+      const el = this.isAudio ? this._audio : this._videoEl
+      if (!el) return
+      try { el.currentTime = sec } catch (e) { /* metadata 未就绪时忽略，loadedmetadata 会再调一次 */ }
+    },
     onVideoLoaded(e) {
       console.log('视频加载成功，可以播放')
       if (e.target) {
+        this._videoEl = e.target
+        this.seekToLocator()
         console.log('视频信息:', {
           duration: e.target.duration,
           videoWidth: e.target.videoWidth,
@@ -1083,6 +1172,20 @@ export default {
 
 .preview-image.is-panning {
   cursor: grabbing;
+}
+
+/* EvidenceLink 图片定位框：跟随 img 的平移缩放，不吃鼠标 */
+.evidence-rect {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid #1A5336;
+  background: rgba(26, 83, 54, 0.12);
+  box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.18);
+  cursor: pointer;
+  transition: opacity 0.4s ease;
+}
+.evidence-rect.is-fading {
+  opacity: 0;
 }
 
 /* 缩放平移由 JS 算出的 transform 控制，图片本身按原始像素尺寸渲染 */

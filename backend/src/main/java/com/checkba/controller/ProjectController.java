@@ -121,6 +121,7 @@ public class ProjectController {
         data.put("openFileId", r.openFileId());
         data.put("importedCount", r.importedCount());
         data.put("truncated", r.truncated());
+        data.put("truncatedCount", r.truncatedCount());
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
         result.put("data", data);

@@ -1605,6 +1605,128 @@ try {
     await exec('set_chrome', { menubar: true, statusbar: true, toolbars: true, rulers: true })
   }
 
+  // ---------- 组 27：EvidenceLink 证据锚点——书签原语五件套（dev-board#103）----------
+  // 书签名 = linkKey：bookmark_selection / get_bookmark_context / check_link_anchors /
+  // adopt_legacy_links / goto_bookmark。每条事实必有底稿，底稿挂在书签上跟着文字走。
+  console.log('\n[27] EvidenceLink 证据锚点：书签五原语')
+  {
+    await exec('debug_fresh_document')
+    await exec('debug_set_record_changes', { on: false })
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: '一、主体资格\n根据《营业执照》，收购人成立于2020年。\n（一）基本情况\n收购人注册资本1000万元。' })
+    await exec('select_paragraph', { index: 0 })
+    await exec('set_paragraph_format', { headingLevel: 1 })
+    await exec('select_paragraph', { index: 2 })
+    await exec('set_paragraph_format', { headingLevel: 2 })
+    const ol = await exec('get_outline')
+    check('标题层级就位（1 级 + 2 级）', ol.count === 2 && ol.outline[0].level === 1 && ol.outline[1].level === 2, JSON.stringify(ol))
+    const selectText = async (kw) => {
+      const ft = await exec('find_text_locations', { keyword: kw })
+      if (!ft.success || ft.count < 1) return ft
+      return exec('set_selection', { anchor: ft.matches[0].anchorId })
+    }
+
+    // 2. 选区套书签；重名精确拒绝（linkKey 不许悄悄加 _n 后缀）
+    await selectText('收购人成立于2020年')
+    const b1 = await exec('bookmark_selection', { name: 'EVID_TEST1' })
+    check('bookmark_selection 成功且回显文字', b1.success === true && b1.name === 'EVID_TEST1' && b1.text === '收购人成立于2020年', JSON.stringify(b1))
+    const dup = await exec('bookmark_selection', { name: 'EVID_TEST1' })
+    check('同名书签被拒绝（error 含 exists，双字段）', dup.success === false && /exists/.test(dup.error || '') && dup.message === dup.error, JSON.stringify(dup))
+    const badName = await exec('bookmark_selection', { name: 'bad-name!' })
+    check('非法书签名被拒绝', badName.success === false && !!badName.error, JSON.stringify(badName))
+
+    // 3. 上下文：标题链 + 段落索引（0 基）
+    const c1 = await exec('get_bookmark_context', { name: 'EVID_TEST1' })
+    check('get_bookmark_context 命中且文字前缀正确', c1.success === true && c1.exists === true && c1.text.indexOf('收购人成立于') === 0, JSON.stringify(c1))
+    check('sectionPath 为一级标题', c1.sectionPath === '一、主体资格' && c1.sectionTitle === '一、主体资格', JSON.stringify(c1))
+    check('paragraphIndex 为 1（0 基）', c1.paragraphIndex === 1, JSON.stringify(c1.paragraphIndex))
+    const cNone = await exec('get_bookmark_context', { name: 'EVID_NOPE' })
+    check('不存在的书签 exists=false 且 success', cNone.success === true && cNone.exists === false && cNone.paragraphIndex === -1, JSON.stringify(cNone))
+
+    // 4. 二级标题下的选区：标题链两级拼接
+    await exec('select_paragraph', { index: 3 })
+    const b2 = await exec('bookmark_selection', { name: 'EVID_TEST2' })
+    check('第二个书签成功', b2.success === true && b2.text === '收购人注册资本1000万元。', JSON.stringify(b2))
+    const c2 = await exec('get_bookmark_context', { name: 'EVID_TEST2' })
+    check('sectionPath 两级拼接', c2.exists === true && c2.sectionPath === '一、主体资格/（一）基本情况' && c2.sectionTitle === '（一）基本情况' && c2.paragraphIndex === 3, JSON.stringify(c2))
+
+    // 5. 书签内部插字：书签随文字扩张，别的书签不动。光标先收到书签末端再左移
+    // 一格（落在书签内部——正好在末端插入不会扩张书签）。
+    await exec('goto_bookmark', { name: 'EVID_TEST1' })
+    await exec('collapse_selection', { to: 'end' })
+    await exec('move_cursor', { dir: 'left' })
+    await exec('insert_at_cursor', { text: '（有限合伙）' })
+    const ck1 = await exec('check_link_anchors', { names: ['EVID_TEST1', 'EVID_TEST2'] })
+    const it1 = (ck1.items || []).find((x) => x.name === 'EVID_TEST1') || {}
+    const it2 = (ck1.items || []).find((x) => x.name === 'EVID_TEST2') || {}
+    check('check_link_anchors 返回两条', ck1.success === true && (ck1.items || []).length === 2, JSON.stringify(ck1))
+    check('书签内插字后 TEST1.text 含新字', it1.exists === true && it1.text.indexOf('（有限合伙）') >= 0, JSON.stringify(it1))
+    check('TEST2 不受影响', it2.exists === true && it2.text === '收购人注册资本1000万元。', JSON.stringify(it2))
+
+    // 6. 整段文字删除：书签成孤儿。真机实测（2026-08-21）：LO 把书签连同文字一起
+    // 删掉，exists:false（不是留空点书签）。宿主侧仍以「!exists || text===''」判
+    // orphan（见 .claude/agents/doc-editor.md「EvidenceLink 书签原语」）。
+    await exec('select_paragraph', { index: 3 })
+    await focus()
+    await key('Backspace', 'Backspace', 8)
+    const ck2 = await exec('check_link_anchors', { names: ['EVID_TEST2'] })
+    const gone = (ck2.items || [])[0] || {}
+    check('整段删除后 TEST2 书签随之消失（exists=false）', gone.name === 'EVID_TEST2' && gone.exists === false && gone.text === '', JSON.stringify(ck2))
+    check('整段删除后正文不再含原句', (await doc()).indexOf('注册资本1000万元') < 0, await doc())
+
+    // 7. 旧式超链接（filelink?k=）收编为书签
+    await exec('goto', { type: 'end' })
+    await exec('insert_at_cursor', { text: '收购人注册资本1000万元。' })
+    await selectText('注册资本')
+    const hl = await exec('set_selection_hyperlink', { url: 'https://checkba-internal.local/open?u=checkba%3A%2F%2Ffilelink%3Fk%3Dlk_old_1' })
+    check('旧式超链接已设置', hl.success === true && hl.text === '注册资本', JSON.stringify(hl))
+    const ad1 = await exec('adopt_legacy_links', {})
+    check('adopt_legacy_links 收编 lk_old_1', ad1.success === true && (ad1.adopted || []).indexOf('lk_old_1') >= 0, JSON.stringify(ad1))
+    const ad2 = await exec('adopt_legacy_links', {})
+    check('再次收编幂等（adopted 空、skipped>=1）', ad2.success === true && (ad2.adopted || []).length === 0 && ad2.skipped >= 1, JSON.stringify(ad2))
+    const cOld = await exec('get_bookmark_context', { name: 'lk_old_1' })
+    check('收编后的书签文字 = 链接文字', cOld.exists === true && cOld.text === '注册资本', JSON.stringify(cOld))
+    // 7b. 生产 URL 形态：整体 encodeURIComponent、带 &projectId=——key 必须恰等于原 key，
+    // 不许把 %26projectId%3D42 吞进去改写成 lk_123_abc_projectId_42
+    await exec('goto', { type: 'end' })
+    await exec('insert_at_cursor', { text: '\n经营范围为软件开发。' })
+    await selectText('经营范围')
+    const prodUrl = 'https://checkba-internal.local/open?u=' + encodeURIComponent('checkba://filelink?k=lk_123_abc&projectId=42')
+    await exec('set_selection_hyperlink', { url: prodUrl })
+    const ad3 = await exec('adopt_legacy_links', {})
+    check('生产 URL 形态收编 key 恰等于 lk_123_abc', ad3.success === true && JSON.stringify(ad3.adopted) === '["lk_123_abc"]', JSON.stringify(ad3))
+    check('收编后书签文字 = 经营范围', (await exec('get_bookmark_context', { name: 'lk_123_abc' })).text === '经营范围')
+    // 7c. 非法 key（后端兜底 lk_<UUID> 带 -）：跳过并计入 skippedInvalid，不静默改写
+    await exec('goto', { type: 'end' })
+    await exec('insert_at_cursor', { text: '\n法定代表人为张三。' })
+    await selectText('法定代表人')
+    await exec('set_selection_hyperlink', { url: 'https://checkba-internal.local/open?u=' + encodeURIComponent('checkba://filelink?k=lk_a-b&projectId=42') })
+    const ad4 = await exec('adopt_legacy_links', {})
+    check('带 - 的 key 进 skippedInvalid 且不收编', ad4.success === true && ad4.skippedInvalid === 1 && (ad4.adopted || []).length === 0, JSON.stringify(ad4))
+    const ck4 = await exec('check_link_anchors', { names: ['lk_a-b', 'lk_a_b'] })
+    check('非法 key 没被改写成别名落成书签', ck4.items.every((x) => x.exists === false) && ck4.truncated === false, JSON.stringify(ck4))
+
+    // 8. docx 往返：书签经 export/load 存活
+    await exec('clear_anchors', {})
+    const evBytes = await page.evaluate(async () => {
+      const r = await window.__loExecutor.executeCommand('export_document', { name: 'evidence.docx' })
+      return r && r.bytes ? Array.from(r.bytes) : null
+    })
+    check('导出字节非空', !!evBytes && evBytes.length > 0)
+    const ld = await exec('load_document', { bytes: evBytes, name: 'evidence-roundtrip.docx', authorName: '测试用户' })
+    check('重新载入成功', ld.success === true, JSON.stringify(ld).slice(0, 160))
+    const ck3 = await exec('check_link_anchors', { names: ['EVID_TEST1', 'lk_old_1'] })
+    check('往返后两枚书签都在', ck3.success === true && (ck3.items || []).length === 2 && ck3.items.every((x) => x.exists === true), JSON.stringify(ck3))
+    check('往返后 TEST1 文字仍含插入字', ((ck3.items || [])[0] || {}).text.indexOf('（有限合伙）') >= 0, JSON.stringify(ck3))
+
+    // 9. 跳转：选中书签范围；不存在的书签明确拒绝
+    const g1 = await exec('goto_bookmark', { name: 'EVID_TEST1' })
+    check('goto_bookmark 成功', g1.success === true, JSON.stringify(g1))
+    check('跳转后选区即书签文字', ((await exec('get_selection')).text || '').indexOf('收购人成立于') === 0, JSON.stringify(await exec('get_selection')))
+    const g0 = await exec('goto_bookmark', { name: 'NOPE' })
+    check('不存在的书签跳转被拒绝（双字段）', g0.success === false && !!g0.error && g0.message === g0.error, JSON.stringify(g0))
+  }
+
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')
 } finally {
   await browser.close()

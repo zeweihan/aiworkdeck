@@ -278,9 +278,25 @@ opaque origin 使然，不能靠 `event.origin` 判断。
 | `ui.toast` | `{ message }` | `{}` | — |
 | `storage.get` | `{ key }` | `{ key, value }`，不存在时 `value: null` | — |
 | `storage.set` | `{ key, value }` | `{}` | — |
+| `evidence.link` | `{ anchor: { selection: true } \| { quote }, docPath?, targets: [{ path, locator?, relation?, method?, note? }] }` | `{ linkKey, targetIds: [] }` | `editor` |
+| `evidence.list` | `{ docPath?, path?, sectionPath?, status? }` | `{ links: [{ linkKey, docPath, anchorText, sectionPath, status, targets: [{ targetId, path, locator, relation, method }] }] }` | `file_read` |
+| `evidence.locate` | `{ linkKey, targetId? }` | `{}` | `editor` |
 
 错误码：`permission_denied`（manifest 未声明所需权限，或读的不是可抽取文本的格式）、
-`unknown_method`、`quota_exceeded`（插件级 KV 超 64 KB）、`not_found`（文件不存在）。
+`unknown_method`、`quota_exceeded`（插件级 KV 超 64 KB）、`not_found`（文件 / 链接 / 底稿位置不存在）、
+`anchor_ambiguous`（`anchor.quote` 在文档里 0 或多处命中，或 anchor 形状不对）、
+`no_selection`（`anchor.selection: true` 但编辑器当前没有选区）、
+`no_active_document`（当前聚焦窗格没有打开的 Word 文档，或 `docPath` 不是它）。
+
+`evidence.*`（EvidenceLink，P0）：
+
+- 路径口径与 `files.*` 一致（项目内相对路径），宿主负责 path 与 fileId 的互换；
+- `evidence.link` 只在**当前聚焦的 Word 文档**上建锚点：`{ selection: true }` 用当前选区，
+  `{ quote }` 要求 `find_text_locations` **恰好 1 个**命中；锚点是命名书签（名 = `linkKey`，
+  `EVID_<ULID>`），随后落库为 `createdByKind: 'plugin'` 的链接；`targets` 至少一条，
+  `locator` 原样存为 JSON（页码 1 基、坐标 0..1）；
+- `evidence.list` 不给 `docPath`/`path` 时查当前聚焦文档；`path` 是反查某份底稿被谁引用；
+- `evidence.locate` 给 `targetId` 打开对应底稿（定位参数由工作台接手），不给则跳到文档里的书签。
 
 插件级 KV 存在宿主的 `localStorage`，键为 `awd_plugin_kv_<pluginId>`，
 每个插件总量上限 64 KB。
@@ -304,6 +320,8 @@ opaque origin 使然，不能靠 `event.origin` 判断。
 
 `awd.call(method, params)` 原样调用任意 v1 方法并返回宿主的 `result`；
 只有 `files.list()` 与 `storage.get()` 做了解包糖衣，`files.read()` 与 `call()` 返回原始 result。
+`awd.evidence.link(params)` / `awd.evidence.list(params)` / `awd.evidence.locate(params)` 是
+三个 `call` 的直通包装，同样返回原始 result。
 
 ### 8.6 开发工作流
 

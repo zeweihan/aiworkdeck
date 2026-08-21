@@ -228,10 +228,9 @@ public class MeetingRecordingService {
         }
         byte[] docx = buildTranscriptDocx(meeting.getTitle(), text);
         ProjectFile folder = ensureFolder(meeting.getProjectId(), userId);
-        String name = uniqueName(meeting.getProjectId(), folder.getId(),
-                LangText.of("转写稿_", "Transcript_") + sanitize(meeting.getTitle()), ".docx");
+        String name = LangText.of("转写稿_", "Transcript_") + sanitize(meeting.getTitle()) + ".docx";
         ProjectFile file = projectFileService.createFile(meeting.getProjectId(), folder.getId(),
-                name, "docx", (long) docx.length, null, null, userId);
+                name, "docx", (long) docx.length, null, null, userId, ProjectFileService.ConflictPolicy.RENAME);
         storageServiceFactory.getStorageService().save(file.getFilePath(), new ByteArrayInputStream(docx));
         return new ExportResult(file, folder.getName());
     }

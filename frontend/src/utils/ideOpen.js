@@ -9,14 +9,31 @@ export function desktopFsApi() {
   return (host.fs && host.fs.showOpenDialog) ? host.fs : null
 }
 
+/** 同一个 projectId 每个会话（标签页/窗口存活期间）只弹一次截断提示，避免每次重开文件夹都再吵一遍。 */
+function shouldWarnTruncatedOnce(projectId) {
+  try {
+    if (typeof window === 'undefined' || !window.sessionStorage) return true
+    const key = `awd_import_truncated_warned_${projectId}`
+    if (window.sessionStorage.getItem(key)) return false
+    window.sessionStorage.setItem(key, '1')
+    return true
+  } catch (e) {
+    return true
+  }
+}
+
 async function launchProject(payload) {
   const r = await openLocalProject(payload)
   const d = (r && r.data) || {}
   if (!d.projectId) {
     throw new Error(t('common.openProjectFailed'))
   }
-  if (d.truncated) {
-    uni.showToast({ title: t('common.folderImportTruncated'), icon: 'none' })
+  if (d.truncated && shouldWarnTruncatedOnce(d.projectId)) {
+    uni.showModal({
+      title: t('common.folderImportTruncatedTitle'),
+      content: t('common.folderImportTruncated', { count: d.truncatedCount || 0 }),
+      showCancel: false,
+    })
   }
   const query = `id=${d.projectId}` + (d.openFileId ? `&openFileId=${d.openFileId}` : '')
   // reLaunch：避免页面栈里堆叠多个 project-overview 实例（全局监听多实例地雷）

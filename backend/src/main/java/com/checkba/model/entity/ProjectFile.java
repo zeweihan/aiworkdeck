@@ -110,6 +110,13 @@ public class ProjectFile {
     public String getUid() { return uid; }
     public void setUid(String uid) { this.uid = uid; }
 
+    /** 来源元数据（JSON）：网核截图 {sourceUrl, capturedAt, provider}；P1 起 {docketNo}。无则 null。 */
+    @Column(name = "meta_json", columnDefinition = "TEXT")
+    private String metaJson;
+
+    public String getMetaJson() { return metaJson; }
+    public void setMetaJson(String metaJson) { this.metaJson = metaJson; }
+
     /**
      * 删除时间
      */

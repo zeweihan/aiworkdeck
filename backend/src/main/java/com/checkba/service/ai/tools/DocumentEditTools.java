@@ -1278,10 +1278,10 @@ public class DocumentEditTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "设置超链接", category = "document", fileEffect = "MODIFIED")
     @Tool("【格式】给指定锚点处的文本设置超链接。先 doc_find_text 拿到目标文本的 anchorId，再对它设链接；" +
-          "url 仅支持 http/https。")
+          "url 仅支持 http/https（证据链接用包装形式 https://checkba-internal.local/open?u=checkba://filelink?k=<linkKey>&projectId=<pid>，同样放行）。")
     public String doc_set_hyperlink(
             @P("doc_find_text 返回的 anchorId（要加链接的目标文本）") String anchorId,
-            @P("链接地址，http:// 或 https:// 开头") String url
+            @P("链接地址，http:// 或 https:// 开头（证据链接用 https://checkba-internal.local/open?u=checkba://filelink 包装）") String url
     ) {
         log.info("Tool: doc_set_hyperlink called anchor={}, url={}", anchorId, url);
         if (anchorId == null || anchorId.isBlank()) {

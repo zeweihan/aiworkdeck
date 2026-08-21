@@ -82,6 +82,13 @@ RecordChanges 开着时每个属性写入各记一条格式修订，`setProperty
 6. Cmd+C/V/X 系统剪贴板复制、多段粘贴覆盖选区、剪切
 7. Home / Shift+End 选择 / Option+← 跳词 / Cmd+← 行首 / Cmd+↓ 文尾
 8. Tab 制表符、Shift+Enter 软回车、Esc 取消选区、PageUp/Down
+9-26. 见 run.mjs 各组标题（条款识别 / 修订署名与颗粒度 / 批注 / 版本对比 / 表格 / Calc / Impress / 工具栏与查找 / chrome 退场）
+27. EvidenceLink 证据锚点（dev-board#103）：bookmark_selection / get_bookmark_context /
+    check_link_anchors / adopt_legacy_links / goto_bookmark，含书签内插字扩张、整段删除
+    书签随之消失、旧式 filelink 超链接收编（含生产 URL 形态与非法 key 跳过）、
+    docx 往返存活（31 步）
+
+步数基线：2026-08-21 组 27 落地后 421 步全绿（此前 390）。
 
 ## 机制说明
 
