@@ -30,8 +30,12 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class HouseProfileParityTest {
 
-    /** 不参与对拍：时间戳、来源、以及多份投票才有的置信度。 */
-    private static final Set<String> VOLATILE = Set.of("learnedAt", "learnedFrom", "confidence");
+    /**
+     * 不参与对拍：时间戳、来源、多份投票才有的置信度；以及 {@code defaults}——改造前常量版不碰 docDefaults
+     * （before 侧是 docx4j 空白模板的主题槽位 + 11pt），改造后按 house-default 的 defaults 块真写
+     * rPrDefault，这是有意的差异，单独在 {@link #defaultsWrittenFromHouse()} 里核。
+     */
+    private static final Set<String> VOLATILE = Set.of("learnedAt", "learnedFrom", "confidence", "defaults");
 
     static byte[] renderHouse(String md) throws Exception {
         MutableDataSet options = AiDocxExportService.markdownOptions();
@@ -81,6 +85,20 @@ class HouseProfileParityTest {
         assertEquals(StyleProfile.Border.read(table.get("borders").get("outside")), house.table().sub("borders").border("outside"));
         assertEquals(StyleProfile.Length.read(table.get("cell").get("size")), house.table().sub("cell").size());
         assertEquals(StyleProfile.LineSpacing.read(table.get("cell").get("lineSpacing")), house.table().sub("cell").lineSpacing());
+    }
+
+    @Test
+    @DisplayName("defaults 块真写进 docDefaults：回读与 house-default 的 defaults 一致")
+    void defaultsWrittenFromHouse() throws Exception {
+        String md = new String(getClass().getResourceAsStream("/fixtures/house-parity.md").readAllBytes(), StandardCharsets.UTF_8);
+        StyleProfile after = DocxProfileReader.read(new ByteArrayInputStream(renderHouse(md)));
+        StyleProfile.Block expected = StyleProfiles.houseDefault().defaults();
+        StyleProfile.Block actual = after.defaults();
+        assertNotNull(actual);
+        assertEquals(expected.font().eastAsia(), actual.font().eastAsia());
+        assertEquals(expected.font().western(), actual.font().western());
+        assertEquals(expected.size(), actual.size());
+        assertEquals(expected.color(), actual.color());
     }
 
     static void diff(String path, JsonNode a, JsonNode b, List<String> out) {

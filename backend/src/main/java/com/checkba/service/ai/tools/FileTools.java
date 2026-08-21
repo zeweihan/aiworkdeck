@@ -399,9 +399,6 @@ public class FileTools implements AgentToolComponent {
             @P(value = "样式画像 JSON（可选；docx_inspect_template 的输出或其子集。不填自动取项目 _模板/画像.json，"
                     + "没有则用系统默认 / 律所标准格式）", required = false) String styleProfileJson
     ) {
-        com.checkba.util.style.StyleProfile profile = styleProfileResolver == null
-                ? com.checkba.util.style.StyleProfiles.houseDefault()
-                : styleProfileResolver.resolve(projectId, styleProfileJson);
         if (parentFolderId != null) {
             // 指定目标文件夹时走 AiDocxExportService（正确的路径构建 + StorageService 落盘 + RAG 刷新）
             log.info("Tool: write_docx (folder={}) called for {}", parentFolderId, fileName);
@@ -410,6 +407,8 @@ public class FileTools implements AgentToolComponent {
             if (fileName.matches(".*(revise|revision|update|modify|change|修改|修订|更新|变动).*")) {
                 return "Error: Creation of files with 'revise/update/modify' in the name is FORBIDDEN. Use doc_open_file to edit the original instead.";
             }
+            // 画像解析放在文件名校验之后：被拒的调用不该白读项目画像/系统配置
+            com.checkba.util.style.StyleProfile profile = resolveProfile(projectId, styleProfileJson);
             try {
                 ProjectFile pf = aiDocxExportService.exportMarkdownToDocx(
                         projectId, parentFolderId, AGENT_USER_ID, fileName, markdownContent, profile);
@@ -421,22 +420,28 @@ public class FileTools implements AgentToolComponent {
                 return "Error creating DOCX in folder " + parentFolderId + ": " + e.getMessage();
             }
         }
-        return writeDocxAtRoot(fileName, markdownContent, projectId, profile);
+        return writeDocxAtRoot(fileName, markdownContent, projectId, styleProfileJson);
     }
 
-    private String writeDocxAtRoot(String fileName, String markdownContent, Long projectId,
-                                   com.checkba.util.style.StyleProfile profile) {
+    private com.checkba.util.style.StyleProfile resolveProfile(Long projectId, String styleProfileJson) {
+        return styleProfileResolver == null
+                ? com.checkba.util.style.StyleProfiles.houseDefault()
+                : styleProfileResolver.resolve(projectId, styleProfileJson);
+    }
+
+    private String writeDocxAtRoot(String fileName, String markdownContent, Long projectId, String styleProfileJson) {
         log.info("Tool: write_docx called for {}", fileName);
         if (fileName == null || fileName.isBlank()) {
             return "Error: fileName is required.";
         }
         if (!fileName.endsWith(".docx")) fileName += ".docx";
-        
+
         // Block suspicious filenames that suggest revision
         if (fileName.matches(".*(revise|revision|update|modify|change|修改|修订|更新|变动).*")) {
             return "Error: Creation of files with 'revise/update/modify' in the name is FORBIDDEN. You MUST use 'doc_open_file' to open the original file and use editing tools (doc_find_replace, doc_modify_paragraph, etc.) to apply changes. DO NOT create a new file.";
         }
-        
+        com.checkba.util.style.StyleProfile profile = resolveProfile(projectId, styleProfileJson);
+
         try {
             Path projectDataDir = storageResolver.projectRoot(projectId).normalize();
             if (!Files.exists(projectDataDir)) Files.createDirectories(projectDataDir);

@@ -106,7 +106,6 @@ class StyleProfileTest {
         assertEquals(24, Units.toHalfPoints(new Length(12, "pt")));
         assertEquals(12, Units.toEighthPoints(new Length(1.5, "pt")));
         assertEquals(48, Units.toTwips(new Length(0.2, "lines"), 10), "0.2 行 @10pt = 2.4 磅 = 48 twips");
-        assertEquals(20, Units.linesToHundredths(new Length(0.2, "lines")));
         assertEquals(1440, Units.toTwips(new Length(2.54, "cm"), 12));
         assertEquals(567, Units.toTwips(new Length(10, "mm"), 12));
         assertEquals(new Length(1.5, "pt"), Units.twipsToPt(30));

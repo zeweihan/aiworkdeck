@@ -240,6 +240,12 @@ class DocxStyleHelperProfileTest {
         assertEquals("增资", DocxStyleHelper.stripLiteralPrefix("1. 增资"));
         assertEquals("增资", DocxStyleHelper.stripLiteralPrefix("1.2.3 增资"));
         assertEquals("2024年度报告", DocxStyleHelper.stripLiteralPrefix("2024年度报告"));
+        // 裸数字只跟空白不算编号
+        assertEquals("2024 年度报告", DocxStyleHelper.stripLiteralPrefix("2024 年度报告"));
+        assertEquals("3 家子公司", DocxStyleHelper.stripLiteralPrefix("3 家子公司"));
+        assertEquals("增资", DocxStyleHelper.stripLiteralPrefix("（1）增资"));
+        assertEquals("增资", DocxStyleHelper.stripLiteralPrefix("1) 增资"));
+        assertEquals("增资", DocxStyleHelper.stripLiteralPrefix("1.2 增资"));
     }
 
     private static String text(P p) {
