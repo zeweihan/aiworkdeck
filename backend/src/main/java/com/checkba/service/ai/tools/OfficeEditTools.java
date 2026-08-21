@@ -538,6 +538,15 @@ public class OfficeEditTools implements AgentToolComponent {
         } catch (IllegalArgumentException e) {
             return "Error: " + e.getMessage();
         }
+        // borderColor/borderWidth 是 borders 的修饰参数，不是独立参数——此前只在"一个格式参数都
+        // 没给"时才会报这个道理（下面那条 all-empty 检查）；只要 headerBold/alignment 等任一其它
+        // 参数也一起给了，这条检查就不触发，调用照常派发成功，borderColor/borderWidth 被悄悄丢弃，
+        // 响应里没有任何字样提示——模型和用户都以为边框颜色生效了（审计条目）。必须单独判一次。
+        if ((borderColor != null || borderWidth != null) && bordersValue == null) {
+            return "Error: borderColor/borderWidth 只在同时传入 borders（且不为 none）时才会生效，"
+                    + "本次没有传 borders，这两个参数不会被应用。若要设置边框请同时传 borders；"
+                    + "若只是想改其它参数（如 headerBold），请去掉 borderColor/borderWidth 后重试。";
+        }
         if (bordersValue == null && alignmentValue == null && headerBold == null && autoFit == null && fontSize == null) {
             return "Error: 未给出任何格式参数（borders/alignment/headerBold/autoFit/fontSize 至少给一个；"
                     + "borderColor 与 borderWidth 只是 borders 的修饰参数）";

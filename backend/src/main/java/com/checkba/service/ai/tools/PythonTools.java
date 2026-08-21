@@ -216,31 +216,32 @@ default_api = _ToolAPI()
             
             long startTime = System.currentTimeMillis();
             long timeout = 120_000; // 2 minutes total
-            
+            // TOCTOU 修复（见 pollForToolRequest 注释）：Java 处理完一条请求后，
+            // 要等 Python 把 requestReadyPath 清理掉一次，才认下一次"exists"是新请求。
+            boolean awaitingPythonCleanup = false;
+
             while (process.isAlive()) {
                 // Check timeout
                 if (System.currentTimeMillis() - startTime > timeout) {
                     process.destroyForcibly();
                     return "Error: Python execution timed out (120s limit).";
                 }
-                
-                // Check for tool call request
-                if (Files.exists(requestReadyPath)) {
+
+                awaitingPythonCleanup = pollForToolRequest(requestReadyPath, awaitingPythonCleanup, () -> {
                     log.info("Detected tool call request from Python");
-                    
                     try {
                         // Read request
                         String requestJson = Files.readString(requestPath);
                         cn.hutool.json.JSONObject request = cn.hutool.json.JSONUtil.parseObj(requestJson);
-                        
+
                         String toolName = request.getStr("tool");
                         cn.hutool.json.JSONObject args = request.getJSONObject("args");
-                        
+
                         log.info("Python requesting tool: {} with args: {}", toolName, args);
-                        
+
                         // Execute tool
                         String result = executeToolForPython(toolName, args);
-                        
+
                         // Write result
                         cn.hutool.json.JSONObject resultObj = new cn.hutool.json.JSONObject();
                         if (result.startsWith("Error")) {
@@ -249,12 +250,12 @@ default_api = _ToolAPI()
                             resultObj.set("content", result);
                         }
                         Files.writeString(resultPath, resultObj.toString(), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-                        
+
                         // Signal result ready
                         Files.writeString(resultReadyPath, "1", StandardOpenOption.CREATE);
-                        
+
                         log.info("Tool result written for Python, length: {}", result.length());
-                        
+
                     } catch (Exception e) {
                         log.error("Error processing Python tool request", e);
                         cn.hutool.json.JSONObject errorResult = new cn.hutool.json.JSONObject();
@@ -262,8 +263,8 @@ default_api = _ToolAPI()
                         Files.writeString(resultPath, errorResult.toString(), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
                         Files.writeString(resultReadyPath, "1", StandardOpenOption.CREATE);
                     }
-                }
-                
+                });
+
                 // Sleep briefly to avoid busy-waiting
                 Thread.sleep(100);
             }
@@ -302,7 +303,47 @@ default_api = _ToolAPI()
             }
         }
     }
-    
+
+    @FunctionalInterface
+    interface ThrowingRunnable {
+        void run() throws java.io.IOException;
+    }
+
+    /**
+     * 单次 IPC 轮询：检测/处理一条 Python 侧的工具调用请求，返回下一轮该带着的
+     * "还在等 Python 清理上一条标记" 状态。
+     *
+     * <p><b>TOCTOU 修复</b>（审计条目 "TOCTOU race on _request_ready marker can replay a
+     * stale tool request or cross-deliver results"）：Java 处理完一条请求、写完结果并置位
+     * resultReadyPath 后，此前会在下一轮（仅 100ms 之后）立刻又检查一次 requestReadyPath——
+     * 但 Python 侧按同样的 100ms 节奏独立轮询、双方没有加锁，它移除 requestReadyPath 的
+     * 清理动作不保证已经跑完（尤其是 Docker bind mount，文件可见性可能再抖上几十到几百毫秒）。
+     * 一旦 Java 在 Python 清理之前就又看见 requestReadyPath 存在，会把同一条 request.json
+     * 当成新请求重新处理一遍，或是与 Python 刚发出的下一条新请求交叉错配结果。
+     *
+     * <p>做法：处理完一条请求后记 {@code awaitingCleanup=true}；只要标记还在，就认定"还是刚才
+     * 那条、Python 还没清理"，不重新处理；等它消失过一次才重新开始把"exists"当成新请求。
+     * 包内可见（不是 private）：供测试直接驱动真实文件系统里的临时目录验证这个状态机，
+     * 不需要起 Docker 容器。
+     *
+     * @param handler 处理一条请求的完整逻辑（读 requestPath、执行工具、写 resultPath+resultReadyPath）
+     * @return 下一轮应带着的 awaitingCleanup 状态
+     */
+    static boolean pollForToolRequest(Path requestReadyPath, boolean awaitingCleanup, ThrowingRunnable handler)
+            throws java.io.IOException {
+        if (awaitingCleanup) {
+            if (Files.exists(requestReadyPath)) {
+                return true; // 仍是同一条标记，Python 还没清理，跳过，不重复处理
+            }
+            awaitingCleanup = false; // Python 已经清理过一次，这一条彻底翻篇
+        }
+        if (Files.exists(requestReadyPath)) {
+            handler.run();
+            return true;
+        }
+        return false;
+    }
+
     /**
      * 注入 Python 子进程的外部服务凭证（环境变量名 -> 值）。
      *

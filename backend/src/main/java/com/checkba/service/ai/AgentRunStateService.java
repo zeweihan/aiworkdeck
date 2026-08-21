@@ -58,7 +58,24 @@ public class AgentRunStateService {
 
     public record RunState(RunStatus status, long updatedAt) {}
 
+    /**
+     * 每会话运行状态。<b>无界增长</b>：每个在本进程内跑过至少一轮的 conversationId 永久占一条，
+     * 从不摘除（审计条目：AgentRunStateService.states map grows unboundedly for the life of
+     * the process）。云端长命进程服务全租户会话，条目只涨不消。用 {@link #purgeStaleStates()}
+     * 做惰性过期：7 天没有新状态更新的记录直接摘掉——超过这个窗口继续占着内存没有任何用户可见
+     * 价值，{@link #get} 对"内存里没有记录"本来就当"无任务"正常渲染（历史会话的既有语义）。
+     */
     private final Map<String, RunState> states = new ConcurrentHashMap<>();
+
+    /** {@link #purgeStaleStates()} 的过期窗口，见 {@link #states} 字段注释。 */
+    private static final long STALE_STATE_MILLIS = 7L * 24 * 60 * 60 * 1000;
+
+    /** 时间源，测试可注入固定值以避免真实等待 7 天。 */
+    private java.util.function.LongSupplier clockMillis = System::currentTimeMillis;
+
+    void setClockMillis(java.util.function.LongSupplier clockMillis) {
+        this.clockMillis = clockMillis;
+    }
 
     private final AgentRunRecordRepository recordRepository;
     private final com.checkba.service.telemetry.TelemetryTurnTracker turnTracker;
@@ -79,11 +96,33 @@ public class AgentRunStateService {
      */
     public void mark(String conversationId, RunStatus status, Long projectId, Long userId) {
         if (conversationId == null || status == null) return;
-        states.put(conversationId, new RunState(status, System.currentTimeMillis()));
+        states.put(conversationId, new RunState(status, clockMillis.getAsLong()));
         // 埋点：终态在此单点合成 ai.turn（新增终止分支只要走 mark 就自动覆盖）；
         // restore() 刻意不打点——启动回收是既有状态回放，进程内也没有未闭合轮次
         turnTracker.onStatus(conversationId, status.name());
         persist(conversationId, status, projectId, userId);
+    }
+
+    /**
+     * 清理超过 {@link #STALE_STATE_MILLIS} 未再更新的会话状态（见 {@link #states} 字段注释）。
+     * 与 {@code TodoListService.purgeStaleLists} / {@code SkillRouter.purgeStaleActivations}
+     * 同款节奏：每日一次 + 错峰的初始延迟。只清内存 map，不碰 DB——持久化记录的清理策略是
+     * 另一个决策，不在本次改动范围内。
+     */
+    @org.springframework.scheduling.annotation.Scheduled(fixedDelay = 24L * 60 * 60 * 1000,
+            initialDelay = 20L * 60 * 1000)
+    public void purgeStaleStates() {
+        try {
+            long cutoff = clockMillis.getAsLong() - STALE_STATE_MILLIS;
+            int before = states.size();
+            states.entrySet().removeIf(e -> e.getValue().updatedAt() < cutoff);
+            int removed = before - states.size();
+            if (removed > 0) {
+                log.info("清理冷 Agent 运行状态记录 {} 条", removed);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to purge stale agent run states", e);
+        }
     }
 
     private void persist(String conversationId, RunStatus status, Long projectId, Long userId) {
@@ -108,7 +147,7 @@ public class AgentRunStateService {
      */
     void restore(String conversationId, RunStatus status) {
         if (conversationId == null || status == null) return;
-        states.put(conversationId, new RunState(status, System.currentTimeMillis()));
+        states.put(conversationId, new RunState(status, clockMillis.getAsLong()));
     }
 
     /** null = 本进程内从未跑过（历史会话），前端按「无任务」处理。 */
@@ -119,5 +158,10 @@ public class AgentRunStateService {
     public String statusName(String conversationId) {
         RunState s = get(conversationId);
         return s == null ? null : s.status().name();
+    }
+
+    /** 供测试断言登记簿大小（不下沉成生产代码路径）。 */
+    int statesSize() {
+        return states.size();
     }
 }

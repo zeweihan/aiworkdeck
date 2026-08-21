@@ -565,6 +565,39 @@ class ContextAssemblerServiceTest {
         assertTrue(hasValidHistoryText, "跳过坏数据的同时，同一批次里有效的历史消息应正常保留");
     }
 
+    // ---- UTF-16 代理对截断（审计条目：char-based truncation can split a surrogate pair）----
+
+    @Test
+    @DisplayName("修复：截断点恰好落在代理对中间时，整个代理对一起舍弃，不留孤立的高代理项")
+    void truncateAtCharBoundaryDoesNotSplitSurrogatePair() {
+        // "𠮷"（U+20BB7，罕见 CJK 扩展 B 人名字）在 UTF-16 里是高/低两个 char 的代理对
+        String surrogatePair = "𠮷";
+        String content = "A".repeat(10) + surrogatePair + "B".repeat(10);
+        // 高代理项在下标 10，低代理项在下标 11——截断点选在两者中间
+        int splitInsideSurrogate = 11;
+
+        String truncated = ContextAssemblerService.truncateAtCharBoundary(content, splitInsideSurrogate);
+
+        assertEquals(10, truncated.length(), "应回退到代理对开始之前，不能截出一个孤立代理项");
+        assertEquals("A".repeat(10), truncated);
+        assertFalse(Character.isSurrogate(truncated.charAt(truncated.length() - 1)),
+                "结尾不该是孤立的代理项: " + truncated);
+    }
+
+    @Test
+    @DisplayName("截断点不落在代理对中间时，行为与普通 substring 完全一致")
+    void truncateAtCharBoundaryMatchesSubstringWhenNoSurrogateSplit() {
+        String surrogatePair = "𠮷";
+        String content = "A".repeat(10) + surrogatePair + "B".repeat(10);
+
+        // 截断点在代理对之前：与 substring 一致
+        assertEquals(content.substring(0, 5), ContextAssemblerService.truncateAtCharBoundary(content, 5));
+        // 截断点在代理对之后（含完整代理对）：与 substring 一致
+        assertEquals(content.substring(0, 12), ContextAssemblerService.truncateAtCharBoundary(content, 12));
+        // 截断点等于原文长度（不截断）：与 substring 一致
+        assertEquals(content, ContextAssemblerService.truncateAtCharBoundary(content, content.length()));
+    }
+
     // ---- 供自建 assembler 的 mock 工厂（与 setUp 同配方）----
 
     private static ProjectAiMessageService mockedMessageService() {

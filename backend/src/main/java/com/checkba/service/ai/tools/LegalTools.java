@@ -115,6 +115,12 @@ public class LegalTools implements AgentToolComponent {
     @Tool("Search for laws and regulations using PKULaw MCP Semantic Search. Use this for general legal questions. Returns a list of relevant articles.")
     public String law_search(String query) {
         log.info("Tool: law_search (semantic) called for query='{}'", query);
+        // 先校验再解引用：query 缺省时 Map.of("query", query) 会直接抛 NPE（getMessage()==null），
+        // 被 ToolRegistry 的通用异常处理兜成一句不可行动的 "Error executing tool: null"——
+        // 模型不知道到底缺了哪个参数。同款问题与修法见 get_law_article/law_recognition（审计条目）。
+        if (!StringUtils.hasText(query)) {
+            return "Error: query is required.";
+        }
         return callPkulaw("pkulaw-semantic", "search_article", Map.of("query", query));
     }
 
@@ -132,6 +138,10 @@ public class LegalTools implements AgentToolComponent {
     @ToolMeta(displayName = "法条识别与溯源", category = "legal")
     @Tool("Identify law names and articles from text and trace their source.")
     public String law_recognition(String text) {
+        // text.length() 曾经排在校验之前：text 缺省时这里直接 NPE，比下面的 Map.of 更早触发。
+        if (!StringUtils.hasText(text)) {
+            return "Error: text is required.";
+        }
         log.info("Tool: law_recognition called for text length={}", text.length());
         return callPkulaw("pkulaw-recognition", "law_recognition", Map.of("text", text));
     }
@@ -140,6 +150,16 @@ public class LegalTools implements AgentToolComponent {
     @Tool("Get the full content of a specific law article by its title and article number. Use this when you have article info from law_search results.")
     public String get_law_article(String title, String number) {
         log.info("Tool: get_law_article called for title='{}', number='{}'", title, number);
+        // 模型常见的调用形状：只给 title 漏给 number（工具描述没标两者都必填）。ToolRegistry.bindArguments
+        // 对缺省的非基本类型参数绑 null，Map.of("title", title, "number", null) 直接抛
+        // NullPointerException（getMessage()==null），外层只会看到 "Error executing tool: null"——
+        // 与 qichacha_query/tushare_query 同款先校验再用的口径对齐，缺哪个就点名哪个。
+        if (!StringUtils.hasText(title)) {
+            return "Error: title is required.";
+        }
+        if (!StringUtils.hasText(number)) {
+            return "Error: number is required.";
+        }
         return callPkulaw("pkulaw-semantic", "get_article", Map.of("title", title, "number", number));
     }
 

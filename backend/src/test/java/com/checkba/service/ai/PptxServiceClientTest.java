@@ -17,6 +17,7 @@ import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -170,5 +171,55 @@ class PptxServiceClientTest {
         assertEquals(target.toString(), saved);
         assertTrue(Files.exists(target));
         assertEquals(fakePptx.length, Files.size(target));
+    }
+
+    // ==== 修复：缺 download_url 被拼成误导性 404 ====
+
+    @Test
+    @DisplayName("修复：download_url 缺失时报「missing download_url」，不是拼出 baseUrl+\"null\" 再报 404")
+    void downloadPptxRejectsMissingDownloadUrlBeforeRequesting() throws Exception {
+        startServer(); // 不为任何路径注册 handler：一旦真的发出 HTTP 请求就会连接被拒/404
+
+        Path target = tmp.resolve("out.pptx");
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> client.downloadPptx(null, target.toString()));
+
+        assertTrue(ex.getMessage().contains("download_url"),
+                "错误信息应点名缺的是 download_url，而不是一句笼统的 HTTP 404: " + ex.getMessage());
+        assertFalse(Files.exists(target));
+    }
+
+    @Test
+    @DisplayName("修复：download_url 为空字符串同样在发请求前拒绝")
+    void downloadPptxRejectsBlankDownloadUrl() {
+        startServer();
+
+        Path target = tmp.resolve("out.pptx");
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> client.downloadPptx("   ", target.toString()));
+        assertTrue(ex.getMessage().contains("download_url"), ex.getMessage());
+    }
+
+    // ==== 修复：10 分钟轮询里一次瞬时网络错误不该掀翻整条多阶段生成 ====
+
+    @Test
+    @DisplayName("修复：单次瞬时轮询失败（一次 503）不该让 waitForTask 直接放弃，应该重试并最终成功")
+    void waitForTaskToleratesTransientPollFailure() throws Exception {
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        server.createContext("/api/projects/proj-1/tasks/task-1", ex -> {
+            if (calls.getAndIncrement() == 0) {
+                // 模拟一次瞬时故障：网关/连接抖动，底层任务在 pptx-service 那边其实还在正常跑
+                respond(ex, 503, "upstream unavailable");
+            } else {
+                respond(ex, 200, "{\"data\":{\"status\":\"COMPLETED\",\"progress\":{\"completed\":1,\"total\":1}}}");
+            }
+        });
+        startServer();
+
+        cn.hutool.json.JSONObject result = client.waitForTask("proj-1", "task-1");
+
+        assertNotNull(result, "重试后应该正常拿到最终状态，不能因为中间一次失败就整体放弃");
+        assertEquals("COMPLETED", result.getStr("status"));
+        assertTrue(calls.get() >= 2, "应该在第一次失败后重试过至少一次");
     }
 }

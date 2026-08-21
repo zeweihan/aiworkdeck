@@ -390,4 +390,42 @@ class SkillRouterTest {
         // skill-a 没有 name_en，英文下回退中文名（可用胜于空白，与注入块同口径）
         assertEquals("skill-a", englishRouter().displayName(registry.getSkill("skill-a").orElseThrow()));
     }
+
+    // ==== activeByConversation 的无界增长 ====
+    // 背景：只有"这一轮没有任何 skill 生效"才会从登记簿里 remove；一个会话只要最后一轮命中过
+    // skill，条目就永久留着，进程越久攒得越多。修法是给每条记录带上激活时刻，配一个每日一次的
+    // 惰性过期扫描（对齐 TodoListService.purgeStaleLists 的既有先例）。
+
+    @Test
+    @DisplayName("修复：超过过期窗口未再激活的会话，purgeStaleActivations 应把登记簿条目清掉")
+    void purgeStaleActivationsRemovesOldEntries() {
+        long[] now = {1_000_000L};
+        router.setClockMillis(() -> now[0]);
+
+        router.activateForTurn("conv-old", "公司考虑IPO");
+        assertEquals(1, router.activeByConversationSize());
+
+        // 推进到超过 24 小时过期窗口之后
+        now[0] += java.time.Duration.ofHours(25).toMillis();
+        router.purgeStaleActivations();
+
+        assertEquals(0, router.activeByConversationSize(),
+                "超过过期窗口未再激活的会话条目应被清掉，不能无限期占着登记簿");
+        assertEquals(List.of(), router.activeSkills("conv-old"), "过期后该会话不应再有生效 skill");
+    }
+
+    @Test
+    @DisplayName("未超过过期窗口的会话不受影响：purgeStaleActivations 不会误删刚激活的记录")
+    void purgeStaleActivationsKeepsFreshEntries() {
+        long[] now = {1_000_000L};
+        router.setClockMillis(() -> now[0]);
+
+        router.activateForTurn("conv-fresh", "公司考虑IPO");
+
+        now[0] += java.time.Duration.ofHours(1).toMillis();
+        router.purgeStaleActivations();
+
+        assertEquals(1, router.activeByConversationSize(), "未超过过期窗口的记录不该被误删");
+        assertEquals(1, router.activeSkills("conv-fresh").size());
+    }
 }

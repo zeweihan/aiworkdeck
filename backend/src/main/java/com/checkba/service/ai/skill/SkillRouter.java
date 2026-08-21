@@ -88,10 +88,35 @@ public class SkillRouter {
      * "关键词猜的"——这条语义从单选时代（pinnedSkillId 优先于触发词匹配）延续下来。
      *
      * <p>只存 id 不存定义：registry 可能在两轮之间 rescan，存定义会拿到已经不存在的旧对象。
+     *
+     * <p><b>无界增长</b>：只有"这一轮没有任何 skill 生效"才会 {@code remove}——一个会话只要
+     * 最后一轮命中过 skill，条目就永久留着，进程不重启就一直涨（审计条目：activeByConversation
+     * never evicts...）。value 额外带上激活时刻，配 {@link #purgeStaleActivations()} 做惰性过期；
+     * 24 小时对齐本仓库同类"内存登记簿"的既有先例（{@code ConversationIssuanceService} 24h 过期）——
+     * 会话超过这么久没有新一轮 activateForTurn，下次用户回来发消息时会重新触发一次，不丢功能。
      */
-    private final Map<String, List<ActiveEntry>> activeByConversation = new ConcurrentHashMap<>();
+    private final Map<String, ActivationRecord> activeByConversation = new ConcurrentHashMap<>();
+
+    /** 过期窗口：见 {@link #activeByConversation} 字段注释。 */
+    private static final long STALE_ACTIVATION_MILLIS = 24L * 60 * 60 * 1000;
+
+    /** 时间源，测试可注入固定值以避免真实等待 24 小时。 */
+    private java.util.function.LongSupplier clockMillis = System::currentTimeMillis;
+
+    void setClockMillis(java.util.function.LongSupplier clockMillis) {
+        this.clockMillis = clockMillis;
+    }
+
+    /** 供测试断言登记簿大小（不下沉成生产代码路径）。 */
+    int activeByConversationSize() {
+        return activeByConversation.size();
+    }
 
     private record ActiveEntry(String skillId, String source) {
+    }
+
+    /** {@link #activeByConversation} 的 value：本轮生效集合 + 激活时刻，供惰性过期判断。 */
+    private record ActivationRecord(List<ActiveEntry> entries, long activatedAtMillis) {
     }
 
     /**
@@ -192,9 +217,30 @@ public class SkillRouter {
         List<ActiveEntry> entries = active.entrySet().stream()
                 .map(e -> new ActiveEntry(e.getKey(), e.getValue()))
                 .toList();
-        activeByConversation.put(conversationId, entries);
+        activeByConversation.put(conversationId, new ActivationRecord(entries, clockMillis.getAsLong()));
         log.info("Skills activated for conversation {}: {}", conversationId, active);
         recordActivation(conversationId, activeSkills(conversationId));
+    }
+
+    /**
+     * 清理超过 {@link #STALE_ACTIVATION_MILLIS} 未再激活的会话条目——见
+     * {@link #activeByConversation} 字段注释的无界增长问题。与 {@code TodoListService.purgeStaleLists}
+     * 同款节奏（每日一次 + 15 分钟初始延迟错峰）。
+     */
+    @org.springframework.scheduling.annotation.Scheduled(fixedDelay = 24L * 60 * 60 * 1000,
+            initialDelay = 15L * 60 * 1000)
+    public void purgeStaleActivations() {
+        try {
+            long cutoff = clockMillis.getAsLong() - STALE_ACTIVATION_MILLIS;
+            int before = activeByConversation.size();
+            activeByConversation.entrySet().removeIf(e -> e.getValue().activatedAtMillis() < cutoff);
+            int removed = before - activeByConversation.size();
+            if (removed > 0) {
+                log.info("清理冷 skill 激活记录 {} 条", removed);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to purge stale skill activations", e);
+        }
     }
 
     /**
@@ -224,7 +270,8 @@ public class SkillRouter {
      * 注入前复查可用性——两轮之间可能被管理员停用。
      */
     public List<ActiveSkill> activeSkills(String conversationId) {
-        List<ActiveEntry> entries = activeByConversation.get(conversationId);
+        ActivationRecord record = activeByConversation.get(conversationId);
+        List<ActiveEntry> entries = record == null ? null : record.entries();
         if (entries == null || entries.isEmpty()) {
             return List.of();
         }

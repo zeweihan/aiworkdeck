@@ -100,19 +100,31 @@ public class MemoryPipelineService {
 
         // 2. 提取并更新项目记忆
         if (projectIdLong != null) {
+            // 2.1 项目级记忆（正则提取，低成本）——单独一个 try/catch：这一步出错（比如并发写
+            // ProjectMemory 撞了唯一约束）不该连带跳过下面更贵、也更值钱的 LLM MemCell 抽取；
+            // 此前两步共用一个 try 块，2.1 一抛异常，2.2 整轮都不会执行，且日志上看不出区别。
             try {
-                // 2.1 项目级记忆（正则提取，低成本）
                 projectMemoryExtractor.extractAndUpdateProjectMemory(projectIdLong, messages);
+            } catch (Exception e) {
+                log.error("Failed to extract project memory (regex step): {}", e.getMessage(), e);
+            }
 
-                // 2.2 MemCell 原子记忆（LLM 提取，控制触发频率）
-                if (messages.size() >= MEMCELL_THRESHOLD) {
+            // 2.2 MemCell 原子记忆（LLM 提取，控制触发频率）——即便 2.1 刚刚失败也要照常跑
+            if (messages.size() >= MEMCELL_THRESHOLD) {
+                try {
                     int memCellCount = memCellExtractor.extractAndSave(projectIdLong, conversationId, messages);
                     if (memCellCount > 0) {
                         log.info("MemCell extraction completed: saved {} atomic memory units", memCellCount);
+                    } else if (memCellCount < 0) {
+                        // -1 是 MemCellExtractor 特意区分出来的"本轮 LLM 响应解析失败"信号，
+                        // 不能当成 0（=正常跑完、确实没有可提取的内容）一样悄悄不吭声。
+                        log.warn("MemCell extraction failed to parse this turn's LLM response "
+                                + "(conversationId={}); treated as a failure, not as \"nothing worth remembering\"",
+                                conversationId);
                     }
+                } catch (Exception e) {
+                    log.error("Failed to extract MemCell memory: {}", e.getMessage(), e);
                 }
-            } catch (Exception e) {
-                log.error("Failed to extract project memory: {}", e.getMessage(), e);
             }
         }
 

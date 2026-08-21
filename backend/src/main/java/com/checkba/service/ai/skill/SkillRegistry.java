@@ -67,6 +67,14 @@ public class SkillRegistry {
     private final Map<String, SkillDefinition> skills = new LinkedHashMap<>();
 
     /**
+     * 最近一次扫描里，因异常（最典型是 skill.yml/prompt 文件不是 UTF-8 编码）而没能注册成功的
+     * 目录名 -> 错误摘要。register() 的 catch 此前只 log.error 一行——getSkills() 结果里
+     * "解析出错"与"这个目录压根没有 skill.yml"两种情况完全看不出区别，管理页/排障者除了翻
+     * 后端日志没有别的办法。每次 {@link #scan()} 开头清空重建，只反映最近一次扫描的状态。
+     */
+    private final Map<String, String> loadErrors = new ConcurrentHashMap<>();
+
+    /**
      * 被禁用 skill id 集合（内存缓存，与 system_setting 同步）。
      *
      * volatile 而非 final：重载（{@link #loadDisabledState}）走"读完新名单再整体换引用"，
@@ -141,6 +149,14 @@ public class SkillRegistry {
     /** 全部已注册 skill（含被禁用的，供管理页展示） */
     public synchronized List<SkillDefinition> getSkills() {
         return new ArrayList<>(skills.values());
+    }
+
+    /**
+     * 最近一次扫描里加载失败的目录名 -> 错误摘要，让"解析出错"与"没有这个 skill"能区分开
+     * （见 {@link #loadErrors} 字段注释）。目录名不是 skill id——解析失败时往往连 id 都没读出来。
+     */
+    public Map<String, String> getLoadErrors() {
+        return java.util.Collections.unmodifiableMap(loadErrors);
     }
 
     public synchronized Optional<SkillDefinition> getSkill(String id) {
@@ -277,6 +293,8 @@ public class SkillRegistry {
     // ==================== 扫描与解析 ====================
 
     private void scan() {
+        // 只反映"最近一次扫描"的状态：上一轮的加载失败如果这次已经修好，不该继续挂着。
+        loadErrors.clear();
         // 1. 可写目录（广场安装落点）。**先扫它**：id 去重是"先扫到优先"，
         //    这样广场装的同 id skill 能覆盖随发行版分发的那份——内置 skill 出了问题
         //    可以走广场热修，不必等下一个客户端版本。被盖住的会打日志。
@@ -337,8 +355,20 @@ public class SkillRegistry {
                         sourcePluginId != null ? ", from plugin " + sourcePluginId : "");
             }
         } catch (Exception e) {
+            // "出错"与"本来就没有"要能分得开：不只 log，同时把原因记进 loadErrors——
+            // getSkills() 结果里少了这个 skill 时，管理页/排障者能查到具体是哪个目录、为什么。
+            String reason = isEncodingFailure(e)
+                    ? "文件编码不是 UTF-8，无法解析: " + e.getMessage()
+                    : String.valueOf(e.getMessage());
+            loadErrors.put(skillDir.getName(), reason);
             log.error("Failed to load skill dir {}, skip: {}", skillDir, e.getMessage());
         }
+    }
+
+    /** {@code Files.readString} 对非 UTF-8 字节抛的 {@code MalformedInputException} 是它的子类。 */
+    private static boolean isEncodingFailure(Throwable e) {
+        return e instanceof java.nio.charset.CharacterCodingException
+                || e.getCause() instanceof java.nio.charset.CharacterCodingException;
     }
 
     /**
@@ -443,11 +473,29 @@ public class SkillRegistry {
         return v == null ? null : String.valueOf(v);
     }
 
-    /** SnakeYAML 对 true/false 字面量已经解析成 Boolean；容错处理字符串写法 ("false"/"true") */
+    /**
+     * SnakeYAML 对裸 true/false 字面量已经解析成 Boolean；这里容错处理"带引号写成字符串"的写法。
+     *
+     * <p>{@code Boolean.parseBoolean} 对除大小写不敏感的 "true" 之外的任何字符串都返回 false——
+     * 作者写 {@code enabled_by_default: "yes"} 这种带引号的真值会被悄悄当成假值，
+     * 於是这个 skill 在第一次扫描时就被 {@link #seedDefaultDisabledIfNeeded} 默认关闭，
+     * 且没有任何警告（审计条目）。这里显式识别常见真/假值写法；认不出的字符串既不当真也不当假，
+     * 返回 null 让调用方保留 {@link SkillDefinition#isEnabledByDefault()} 的安全默认值 true，
+     * 而不是被一个没人预期的假值静默改写，同时打一条 WARN 留痕。
+     */
     private static Boolean asBoolean(Object v) {
         if (v == null) return null;
         if (v instanceof Boolean b) return b;
-        return Boolean.parseBoolean(String.valueOf(v));
+        String s = String.valueOf(v).trim().toLowerCase();
+        return switch (s) {
+            case "true", "yes", "on", "1" -> Boolean.TRUE;
+            case "false", "no", "off", "0" -> Boolean.FALSE;
+            default -> {
+                log.warn("skill.yml 的 enabled_by_default 值 '{}' 无法识别为布尔值，"
+                        + "按未设置处理（保留默认 true），不要静默当成 false", v);
+                yield null;
+            }
+        };
     }
 
     private static List<String> asStringList(Object v) {

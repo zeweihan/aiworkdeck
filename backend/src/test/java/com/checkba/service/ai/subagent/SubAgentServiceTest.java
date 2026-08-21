@@ -205,6 +205,27 @@ class SubAgentServiceTest {
     }
 
     @Test
+    @DisplayName("修复：超时前已经真实跑完的轮次与工具调用，不能被超时结果抹成空列表/0")
+    void timeoutPreservesRealPartialProgress() {
+        props.setTimeoutSeconds(1);
+        // 第一轮：正常调用一次工具（真实执行，有副作用）；第二轮：模型调用直接卡住触发超时
+        when(model.generate(anyList(), anyList()))
+                .thenReturn(toolCallTurn("search_web", "{\"query\":\"x\"}"))
+                .thenAnswer(inv -> {
+                    Thread.sleep(10_000);
+                    return textTurn("太迟了");
+                });
+
+        SubAgentResult result = newService().dispatch("慢任务", null, List.of("search_web"), PARENT_CTX);
+
+        assertFalse(result.success());
+        assertTrue(result.error().contains("timed out"), "错误信息应说明超时: " + result.error());
+        assertEquals(List.of("search_web"), result.toolsUsed(),
+                "第一轮已经真实调用过 search_web，超时结果不该把它抹成空列表");
+        assertEquals(1, result.rounds(), "第一轮已完整跑完，rounds 不该恒为 0");
+    }
+
+    @Test
     @DisplayName("工具域：scope 外的工具被拒绝，不经 ToolRegistry 分发")
     void toolScopeEnforced() {
         when(model.generate(anyList(), anyList())).thenReturn(

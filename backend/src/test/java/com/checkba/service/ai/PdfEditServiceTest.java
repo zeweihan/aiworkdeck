@@ -10,6 +10,7 @@ import org.apache.pdfbox.pdmodel.encryption.StandardProtectionPolicy;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.apache.pdfbox.text.PDFTextStripper;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -211,15 +212,20 @@ class PdfEditServiceTest {
         assertTrue(p0.getStr("text").contains("Confidential Agreement"));
     }
 
+    /**
+     * 契约随「按页密度判扫描件」一起改了：以前无文本层返回 null，现在返回
+     * {@code looksScanned=true} 且照样带回（空的）文本层——上游要靠它在 OCR
+     * 不可用时兜底。这条用例保护的不变式没变：无文本层的 PDF 必须被认成扫描件。
+     */
     @Test
-    void extractMarkdownReturnsNullForScannedLikePdf() throws IOException {
+    void extractMarkdownFlagsScannedLikePdf() throws IOException {
         // 空白页 = 无文本层（扫描件的最小等价物）
         Path path = tempDir.resolve("blank.pdf");
         try (PDDocument doc = new PDDocument()) {
             doc.addPage(new PDPage(PDRectangle.LETTER));
             doc.save(path.toFile());
         }
-        assertEquals(null, service.extractMarkdown(path));
+        assertTrue(service.extractMarkdown(path).looksScanned());
     }
 
     @Test
@@ -249,5 +255,58 @@ class PdfEditServiceTest {
         assertTrue(md.contains("协商一致后订立"), "硬换行应合并");
         assertTrue(md.contains("第二条 保密义务"), "短行独立成段");
         assertTrue(md.contains("1\\."), "行首编号必须转义，防止 flexmark 重排编号");
+    }
+
+    /**
+     * 「是不是扫描件」的判据此前是「全文不足 20 字」。一份几十页的扫描件，每页盖一个
+     * Bates 章或印一行页眉，全文轻松过 20 字，于是被判成文本件走结构化转换——
+     * 产出的 Word 里只有那些章和页眉，正文（图像）一个字都没有，而用户看到的是「转换成功」。
+     */
+    @Test
+    @DisplayName("每页只有 Bates 章的多页扫描件必须判成扫描件，不能因为全文过 20 字就当文本件")
+    void batesStampedScanIsRecognisedAsScanned() throws Exception {
+        Path pdf = tempDir.resolve("bates.pdf");
+        try (PDDocument doc = new PDDocument()) {
+            for (int i = 0; i < 30; i++) {
+                PDPage page = new PDPage();
+                doc.addPage(page);
+                try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                    cs.beginText();
+                    cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 10);
+                    cs.newLineAtOffset(60, 40);
+                    cs.showText(String.format("EXHIBIT-A-%05d", i));
+                    cs.endText();
+                }
+            }
+            doc.save(pdf.toFile());
+        }
+        PdfEditService.ExtractedText extracted = service.extractMarkdown(pdf);
+        assertTrue(extracted.looksScanned(),
+                "每页十几个字符的多页件被判成了文本件，正文会被静默丢光");
+        assertFalse(extracted.markdown().isBlank(),
+                "文本层照样要带回来——OCR 不可用时上游要靠它兜底");
+    }
+
+    @Test
+    @DisplayName("护栏：正常的文字型 PDF 仍判成文本件")
+    void normalTextPdfIsNotScanned() throws Exception {
+        Path pdf = tempDir.resolve("text.pdf");
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage();
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.beginText();
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 11);
+                cs.setLeading(14);
+                cs.newLineAtOffset(60, 740);
+                for (int i = 0; i < 20; i++) {
+                    cs.showText("This is a normal paragraph line of a text-layer PDF document.");
+                    cs.newLine();
+                }
+                cs.endText();
+            }
+            doc.save(pdf.toFile());
+        }
+        assertFalse(service.extractMarkdown(pdf).looksScanned());
     }
 }

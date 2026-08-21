@@ -223,6 +223,18 @@ class OfficeEditToolsTest {
     }
 
     @Test
+    @DisplayName("修复：只传 borderColor + headerBold（不传 borders）不能悄悄丢弃 borderColor")
+    void formatTableRejectsBorderModifiersWithoutBordersEvenWithOtherParams() {
+        // 此前的"至少给一个格式参数"guard 只看 bordersValue/alignmentValue/headerBold/autoFit/
+        // fontSize，headerBold 非空就满足了，于是直接派发成功——borderColor 被静默丢弃，
+        // 响应里没有任何字样提示。修复后必须在派发前就报错，且不触碰桥。
+        String result = tools.office_format_table("conv-1", 0, null, "#FF0000", null, null, true, null, null);
+
+        assertTrue(result.startsWith("Error"), "borders 缺省时 borderColor 不该被静默丢弃: " + result);
+        verifyNoInteractions(bridge);
+    }
+
+    @Test
     @DisplayName("office_format_table：borders=none 不带颜色与粗细（去线时这两个参数没有意义）")
     void formatTableNoneBordersOmitsModifiers() {
         when(bridge.executeOfficeCommand(any(), eq("format_table"), anyMap())).thenReturn("{}");

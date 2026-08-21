@@ -97,6 +97,44 @@ public class SubAgentService {
      */
     private record RunningSubtask(String conversationId, Future<SubAgentResult> future) {}
 
+    /**
+     * runLoop 在子线程里边跑边写、dispatch() 在超时/中断/取消/异常分支读的跨线程进度快照
+     * （审计条目：「Timeout/interrupted/cancelled failure results always report toolsUsed=[]
+     * and rounds=0, discarding real partial progress the child made」）。
+     *
+     * <p>{@code future.get()} 超时/被中断/被取消时拿不到 runLoop 的返回值——被取消的 Future
+     * 连正常返回值都读不到——此前 dispatch() 只能在这些分支里硬编 {@code toolsUsed=List.of()}、
+     * {@code rounds=0}，哪怕子 Agent 已经真实执行过几轮、可能有副作用的工具调用。父级因此无法
+     * 判断"什么都还没发生"和"已经做了不少工作后死掉"，这对是否安全重试同一个子任务
+     * （幂等性）与如何跟用户解释失败都有影响。
+     *
+     * <p>{@link #toolsUsedList()} 与 runLoop 内部循环用的是同一个列表引用（{@code CopyOnWriteArrayList}，
+     * 天然支持"一边被子线程 add、一边被 dispatch 线程读取/复制"），{@link #roundStarted} 在每轮
+     * 循环开头调用，记录"这一刻已经完整跑完的轮数"，与 runLoop 自己失败分支里 {@code round - 1}
+     * 的口径保持一致。
+     */
+    static final class Progress {
+        private final List<String> toolsUsed = new java.util.concurrent.CopyOnWriteArrayList<>();
+        private final AtomicInteger completedRounds = new AtomicInteger(0);
+
+        List<String> toolsUsedList() {
+            return toolsUsed;
+        }
+
+        /** 第 round 轮开始执行前调用：此刻已完整跑完的轮数是 round - 1（本轮才刚开始，还不算数）。 */
+        void roundStarted(int round) {
+            completedRounds.set(round - 1);
+        }
+
+        List<String> toolsUsedSnapshot() {
+            return List.copyOf(toolsUsed);
+        }
+
+        int roundsCompleted() {
+            return completedRounds.get();
+        }
+    }
+
     public SubAgentService(ToolRegistry toolRegistry,
                            ChatModelFactory chatModelFactory,
                            XmlToolCallParser xmlToolCallParser,
@@ -172,10 +210,15 @@ public class SubAgentService {
         Long scopedUser = parentCtx != null && parentCtx.userId() != null
                 ? parentCtx.userId()
                 : PlatformAiUserScope.current();
+        // 跨线程进度快照：超时/中断/取消时子 Agent 可能已经真实跑过几轮工具调用，
+        // 但 future.get() 抛异常时拿不到 runLoop 的返回值（被取消的 Future 连正常返回值都读不到）。
+        // 没有这个快照的话，下面几条 catch 只能硬编 toolsUsed=空/rounds=0——即便子 Agent
+        // 已经执行过真实的、可能有副作用的工具调用，父级也完全看不出来（审计条目）。
+        Progress progress = new Progress();
         Callable<SubAgentResult> task = () -> PlatformAiUserScope.call(scopedUser, () -> {
             IN_SUB_AGENT.set(Boolean.TRUE);
             try {
-                return runLoop(subtaskId, taskDescription, expectedOutput, toolScope, parentCtx, modelId);
+                return runLoop(subtaskId, taskDescription, expectedOutput, toolScope, parentCtx, modelId, progress);
             } finally {
                 IN_SUB_AGENT.remove();
             }
@@ -193,22 +236,26 @@ public class SubAgentService {
         } catch (TimeoutException e) {
             future.cancel(true);
             result = SubAgentResult.failure(subtaskId,
-                    "sub-agent timed out after " + props.getTimeoutSeconds() + "s", List.of(), 0);
+                    "sub-agent timed out after " + props.getTimeoutSeconds() + "s",
+                    progress.toolsUsedSnapshot(), progress.roundsCompleted());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             future.cancel(true);
-            result = SubAgentResult.failure(subtaskId, "sub-agent interrupted", List.of(), 0);
+            result = SubAgentResult.failure(subtaskId, "sub-agent interrupted",
+                    progress.toolsUsedSnapshot(), progress.roundsCompleted());
         } catch (CancellationException e) {
             // 用户点了「停止子任务」（见 cancel）。回喂给模型的文案必须点明「是用户停的、不要自动重派」：
             // 只说 failed 的话模型下一轮会立刻再 dispatch 一次，用户看到的是「点了停止反而又跑起来」。
             cancelledByUser = true;
             result = SubAgentResult.failure(subtaskId,
                     "sub-agent was stopped by the user. Do NOT dispatch this subtask again automatically; "
-                            + "tell the user it stopped and ask how to proceed.", List.of(), 0);
+                            + "tell the user it stopped and ask how to proceed.",
+                    progress.toolsUsedSnapshot(), progress.roundsCompleted());
         } catch (Exception e) {
             log.error("Sub-agent {} failed unexpectedly", subtaskId, e);
             result = SubAgentResult.failure(subtaskId,
-                    "sub-agent failed: " + e.getMessage(), List.of(), 0);
+                    "sub-agent failed: " + e.getMessage(),
+                    progress.toolsUsedSnapshot(), progress.roundsCompleted());
         } finally {
             running.remove(subtaskId);
         }
@@ -254,9 +301,10 @@ public class SubAgentService {
      * 无 SSE 推流、无消息持久化、无 artifact/title 等主会话专属分支。
      *
      * @param modelId 已解析并校验过白名单的子 Agent 模型（见 {@link #dispatch}）
+     * @param progress 跨线程进度快照（见 {@link Progress}），dispatch() 在超时/中断/取消分支读取
      */
     SubAgentResult runLoop(String subtaskId, String taskDescription, String expectedOutput,
-                           List<String> toolScope, ToolContext parentCtx, String modelId) {
+                           List<String> toolScope, ToolContext parentCtx, String modelId, Progress progress) {
         // 子 Agent 继承主会话的客户端能力（不变式 3 同款思路）：
         // office 会话派生的子 Agent 同样不该看到 doc_*/sheet_* 死路径工具
         String parentConversationId = parentCtx != null ? parentCtx.conversationId() : null;
@@ -275,10 +323,15 @@ public class SubAgentService {
         messages.add(SystemMessage.from(buildSystemPrompt(expectedOutput, allowed)));
         messages.add(UserMessage.from(taskDescription));
 
-        List<String> toolsUsed = new ArrayList<>();
+        // 与 progress 共用同一个列表引用：executeScoped 往这里 add，dispatch() 的超时/中断/
+        // 取消分支能看到跑到一半时真实已经执行过的工具（见 Progress 类注释）。
+        List<String> toolsUsed = progress.toolsUsedList();
         long charBudget = (long) (props.getTokenBudget() * props.getCharsPerToken());
 
         for (int round = 1; round <= props.getMaxRounds(); round++) {
+            // 记「已完整跑完 round-1 轮」：本轮才刚开始，还不算数——与下面各分支自己返回的
+            // round - 1 保持同一个口径。
+            progress.roundStarted(round);
             if (Thread.currentThread().isInterrupted()) {
                 return SubAgentResult.failure(subtaskId, "sub-agent interrupted", toolsUsed, round - 1);
             }
