@@ -66,13 +66,13 @@ public class ClientInvitationService {
 
         // 3. Standard Shared Code Logic (Generic)
         // Check for new "CLIENT_GENERIC" type
-        Optional<ProjectInvitation> existingGeneric = invitationRepository.findByProjectIdAndType(projectId, "CLIENT_GENERIC");
+        Optional<ProjectInvitation> existingGeneric = earliest(projectId, "CLIENT_GENERIC");
         if (existingGeneric.isPresent()) {
             return ensureLongCode(existingGeneric.get());
         }
         
         // Check for legacy "CLIENT" type
-        Optional<ProjectInvitation> existingLegacy = invitationRepository.findByProjectIdAndType(projectId, "CLIENT");
+        Optional<ProjectInvitation> existingLegacy = earliest(projectId, "CLIENT");
         if (existingLegacy.isPresent()) {
              return ensureLongCode(existingLegacy.get());
         }
@@ -98,7 +98,36 @@ public class ClientInvitationService {
         invitation.setCreatedBy(requesterId);
         invitationRepository.save(invitation);
 
+        // 通用码此前只建影子用户与 invitation 行，从不建成员行；而客户登录恒走
+        // 「登录成 relatedUserId 这个影子用户」那一支（前端传 displayName=null），
+        // 同样不建成员行。项目访问权全靠 project_member（hasReadPermission 只认成员行
+        // 或项目所有者），于是律师把码发出去，客户登录提示成功、页面跳进工作台，
+        // 之后每个文件接口都回 403——「登录成功」与「什么都打不开」并存。
+        ensureClientMember(projectId, templateUser.getId());
+
         return code;
+    }
+
+    /** 把影子用户补成 CLIENT 成员；已经是成员就不动（重发访问码会走到这里）。 */
+    private void ensureClientMember(Long projectId, Long userId) {
+        if (projectMemberRepository.findByProjectIdAndUserId(projectId, userId).isPresent()) {
+            return;
+        }
+        ProjectMember member = new ProjectMember();
+        member.setProjectId(projectId);
+        member.setUserId(userId);
+        member.setRole("CLIENT");
+        projectMemberRepository.save(member);
+    }
+
+    /**
+     * 同项目同类型的最早一行。并发签发能插出两行通用码，取「最早」保证之后每次都命中同一行，
+     * 不会今天用 A 明天用 B。
+     */
+    private Optional<ProjectInvitation> earliest(Long projectId, String type) {
+        return invitationRepository.findByProjectIdAndType(projectId, type).stream()
+                .min(java.util.Comparator.comparing(ProjectInvitation::getId,
+                        java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder())));
     }
 
     private String ensureLongCode(ProjectInvitation invitation) {
@@ -108,6 +137,8 @@ public class ClientInvitationService {
             invitation.setRevokedAt(null);
             invitationRepository.save(invitation);
         }
+        // 作废客户时成员行会被删掉，重新发码就得把它补回来，否则码能用但没有权限。
+        ensureClientMember(invitation.getProjectId(), invitation.getRelatedUserId());
         String existingCode = invitation.getAccessCode();
         if (existingCode.length() < 10) {
             String newCode = generateUniqueCode();

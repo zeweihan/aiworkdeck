@@ -182,7 +182,7 @@ class FeedbackCloudInboxTest {
             assertEquals("https://cloud/api/feedback/ingest", url);
             assertTrue(ct.startsWith("multipart/form-data; boundary="));
             body.append(new String(bytes, StandardCharsets.UTF_8));
-            return 200;
+            return ok();
         }, true, "https://cloud/api/feedback/ingest");
 
         up.flush();
@@ -199,9 +199,26 @@ class FeedbackCloudInboxTest {
         UserFeedback row = localRow(9L, "x");
         when(repo.findByUploadedFalseAndSourceOrderByIdAsc(eqLocal(), any(Pageable.class)))
                 .thenReturn(List.of(row));
-        uploader((url, ct, bytes) -> 429, true, "https://cloud/api/feedback/ingest").flush();
+        uploader((url, ct, bytes) -> resp(429, ""), true, "https://cloud/api/feedback/ingest").flush();
         // 429 标成已上传等于这条永远消失
         assertFalse(row.isUploaded());
+    }
+
+    /**
+     * 收件端对业务失败也回 HTTP 200 + {"code":1}（controller 里好几处
+     * ResponseEntity.ok(error(...)) 都是这个形状，例如附件读不到导致正文与附件全空时的
+     * 「空反馈」）。上传侧只看状态码，于是把「云端拒收」读成「已收下」，
+     * markUploaded 永久置位——这条反馈既不会重传，也永远进不了优化者的待办队列，
+     * 而用户自己的「我的反馈」里显示已送达。
+     */
+    @Test
+    void businessErrorEnvelopeIsNotTreatedAsDelivered() {
+        UserFeedback row = localRow(9L, "x");
+        when(repo.findByUploadedFalseAndSourceOrderByIdAsc(eqLocal(), any(Pageable.class)))
+                .thenReturn(List.of(row));
+        uploader((url, ct, bytes) -> resp(200, "{\"code\":1,\"message\":\"空反馈\"}"),
+                true, "https://cloud/api/feedback/ingest").flush();
+        assertFalse(row.isUploaded(), "云端明说没收下，不能标成已上传");
     }
 
     @Test
@@ -209,7 +226,7 @@ class FeedbackCloudInboxTest {
         UserFeedback row = localRow(9L, "x");
         when(repo.findByUploadedFalseAndSourceOrderByIdAsc(eqLocal(), any(Pageable.class)))
                 .thenReturn(List.of(row));
-        uploader((url, ct, bytes) -> 500, true, "https://cloud/api/feedback/ingest").flush();
+        uploader((url, ct, bytes) -> resp(500, ""), true, "https://cloud/api/feedback/ingest").flush();
         assertFalse(row.isUploaded());
     }
 
@@ -229,7 +246,7 @@ class FeedbackCloudInboxTest {
     void uploadIsInertWithoutUrl() {
         FeedbackUploadService up = uploader((url, ct, bytes) -> {
             fail("没配地址不该发请求");
-            return 200;
+            return ok();
         }, true, "");
         assertFalse(up.isConfigured());
         assertDoesNotThrow(up::flush);
@@ -240,10 +257,19 @@ class FeedbackCloudInboxTest {
     void disabledUploadStaysLocal() {
         FeedbackUploadService up = uploader((url, ct, bytes) -> {
             fail("关掉了还发就是漏数据");
-            return 200;
+            return ok();
         }, false, "https://cloud/api/feedback/ingest");
         assertFalse(up.isConfigured());
         assertDoesNotThrow(up::flush);
+    }
+
+    private static FeedbackUploadService.Transport.Response resp(int status, String body) {
+        return new FeedbackUploadService.Transport.Response(status, body);
+    }
+
+    /** 收件端成功时的信封。 */
+    private static FeedbackUploadService.Transport.Response ok() {
+        return resp(200, "{\"code\":0,\"data\":{\"id\":1}}");
     }
 
     private static String eqLocal() {
