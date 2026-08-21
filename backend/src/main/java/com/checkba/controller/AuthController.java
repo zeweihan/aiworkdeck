@@ -329,6 +329,25 @@ public class AuthController {
      * 且<b>把尝试记在出站之前</b>——只记成功的话，拿一串无效手机号刷本服务器
      * 就能免费换来等量的对官网出站请求，IP 额度永远不会耗尽。
      */
+    /**
+     * 官网人机验证的公开配置（匿名），供 Office 插件在发码前渲染控件用。只有公开参数，没有密钥。
+     *
+     * <p><b>为什么不能复用 {@code /api/account/captcha-config}</b>：那条开头是
+     * {@code requireUser(sessionId)}。桌面端 local-mode 会把任何请求解析成本机用户所以没事，
+     * 云后端 {@code local-mode=false} 下插件用户此刻还没登录——「取控件参数得先有会话、
+     * 有会话得先登录、登录得先过控件」是死循环。与 {@code /account-login} 不复用
+     * {@code /api/account/login} 是同一个理由。
+     *
+     * <p>未启用时官网回 {@code {"provider": null}}，调用方据此跳过控件直接发码。
+     */
+    @GetMapping("/account-login/captcha-config")
+    public Map<String, Object> accountLoginCaptchaConfig() {
+        Map<String, Object> result = new HashMap<>();
+        result.put("code", 0);
+        result.put("data", awdkLoginService.captchaConfig());
+        return result;
+    }
+
     @PostMapping("/account-login/send-code")
     public Map<String, Object> accountLoginSendCode(@RequestBody(required = false) Map<String, String> body,
                                                     jakarta.servlet.http.HttpServletRequest http) {

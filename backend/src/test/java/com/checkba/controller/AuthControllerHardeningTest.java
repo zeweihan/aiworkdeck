@@ -297,4 +297,48 @@ class AuthControllerHardeningTest {
         assertEquals(0, result.get("code"));
         verify(awdkLoginService).sendLoginCode("13800138000", null);
     }
+
+    @Test
+    @DisplayName("发验证码：人机验证 token 原样透传——不传官网就是 403，插件端的滑块等于白滑")
+    void accountLoginSendCodeForwardsCaptchaToken() {
+        AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
+        AuthController controller = controller(awdkLoginService, serverGuard("open"));
+
+        Map<String, Object> result = controller.accountLoginSendCode(
+                Map.of("phone", "13800138000", "captchaToken", "verify-param-from-widget"), http());
+
+        assertEquals(0, result.get("code"));
+        verify(awdkLoginService).sendLoginCode("13800138000", "verify-param-from-widget");
+    }
+
+    @Test
+    @DisplayName("控件参数端点是匿名的——云后端登录前没有会话，要会话就成了死循环")
+    void accountLoginCaptchaConfigNeedsNoSession() {
+        AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
+        when(awdkLoginService.captchaConfig())
+                .thenReturn(Map.of("provider", "aliyun", "sceneId", "scene-1", "prefix", "px1"));
+        AuthController controller = controller(awdkLoginService, serverGuard("open"));
+
+        Map<String, Object> result = controller.accountLoginCaptchaConfig();
+
+        assertEquals(0, result.get("code"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) result.get("data");
+        assertEquals("aliyun", data.get("provider"));
+        assertEquals("scene-1", data.get("sceneId"));
+    }
+
+    @Test
+    @DisplayName("官网未启用人机验证时 provider 为空，调用方据此跳过控件直接发码")
+    void accountLoginCaptchaConfigPassesThroughDisabled() {
+        AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
+        Map<String, Object> off = new java.util.HashMap<>();
+        off.put("provider", null);
+        when(awdkLoginService.captchaConfig()).thenReturn(off);
+        AuthController controller = controller(awdkLoginService, serverGuard("open"));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) controller.accountLoginCaptchaConfig().get("data");
+        assertNull(data.get("provider"));
+    }
 }
