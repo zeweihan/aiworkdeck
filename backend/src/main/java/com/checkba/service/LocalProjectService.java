@@ -48,6 +48,7 @@ public class LocalProjectService {
     private final ProjectStorageResolver storageResolver;
     private final org.springframework.context.ApplicationEventPublisher eventPublisher;
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
+    private final org.springframework.transaction.support.TransactionTemplate transactionTemplate;
 
     public LocalProjectService(ProjectRepository projectRepository,
                                ProjectMemberRepository projectMemberRepository,
@@ -56,7 +57,8 @@ public class LocalProjectService {
                                ProjectMemberService projectMemberService,
                                ProjectStorageResolver storageResolver,
                                org.springframework.context.ApplicationEventPublisher eventPublisher,
-                               com.checkba.service.telemetry.TelemetryService telemetryService) {
+                               com.checkba.service.telemetry.TelemetryService telemetryService,
+                               org.springframework.transaction.PlatformTransactionManager transactionManager) {
         this.projectRepository = projectRepository;
         this.projectMemberRepository = projectMemberRepository;
         this.projectFileRepository = projectFileRepository;
@@ -65,6 +67,7 @@ public class LocalProjectService {
         this.storageResolver = storageResolver;
         this.eventPublisher = eventPublisher;
         this.telemetryService = telemetryService;
+        this.transactionTemplate = new org.springframework.transaction.support.TransactionTemplate(transactionManager);
     }
 
     /** 本地文件夹项目被打开/创建（LocalRootWatchService 据此启动监听）。 */
@@ -73,7 +76,21 @@ public class LocalProjectService {
     public record OpenLocalResult(Project project, boolean reused, Long openFileId,
                                   int importedCount, boolean truncated) {}
 
-    @Transactional
+    /**
+     * 打开/复用本地文件夹项目。
+     *
+     * <p><b>刻意不带 @Transactional</b>，与 {@link #reconcileProject} 同理：方法里调的
+     * {@code importFolder} 会逐条调 ProjectFileService 那三个 @Transactional 方法
+     * （REQUIRED，会参与外层事务）。磁盘上出现与库中「活着」的文件同名的目录时
+     * （用户把某个文件换成了同名文件夹），createFolder 的同名检查抛异常，
+     * Spring 对参与型事务默认标 rollback-only；importFolder 的 catch 接住异常继续扫，
+     * 却撤不回这个标记——方法体正常返回后，代理提交时抛 UnexpectedRollbackException。
+     * 用户看到的是「打开失败」，而且**重开一次还是失败，项目从此打不开**。
+     *
+     * <p>项目行与成员行仍必须一起落（否则一次失败会留下没有成员的孤儿项目，
+     * 之后 findByLocalRoot 命中它、权限检查又不过，这个文件夹就谁都用不了了），
+     * 所以那一段单独用 TransactionTemplate 包起来，导入留在事务之外。
+     */
     public OpenLocalResult openLocalFolder(String localRootRaw, boolean createFolder,
                                            String name, String openFileName, Long userId) {
         if (userId == null) {
@@ -82,38 +99,9 @@ public class LocalProjectService {
         Path root = validateLocalRoot(localRootRaw, createFolder);
         String canonical = root.toString();
 
-        Optional<Project> existing = projectRepository.findByLocalRoot(canonical);
-        Project project;
-        boolean reused;
-        if (existing.isPresent()) {
-            project = existing.get();
-            if (!projectMemberService.hasReadPermission(project.getId(), userId)) {
-                throw new IllegalArgumentException(LangText.of("该文件夹已被其他账号的项目使用", "This folder is already in use by another account's project"));
-            }
-            reused = true;
-        } else {
-            rejectNestedRoot(root);
-            project = new Project();
-            project.setName(StringUtils.hasText(name) ? name.trim() : folderDisplayName(root));
-            project.setProjectType("BLANK");
-            project.setListedCompanyName("");
-            project.setTargetCompanyName("");
-            project.setUserId(userId);
-            project.setLocalRoot(canonical);
-            LocalDateTime now = LocalDateTime.now();
-            project.setCreatedAt(now);
-            project.setUpdatedAt(now);
-            project = projectRepository.save(project);
-
-            ProjectMember member = new ProjectMember();
-            member.setProjectId(project.getId());
-            member.setUserId(userId);
-            member.setRole("ADMIN");
-            projectMemberRepository.save(member);
-
-            storageResolver.invalidate(project.getId());
-            reused = false;
-        }
+        ProjectResolution resolution = transactionTemplate.execute(status -> resolveProject(canonical, root, name, userId));
+        Project project = resolution.project();
+        boolean reused = resolution.reused();
 
         ImportStats stats = importFolder(project.getId(), root, userId);
 
@@ -132,7 +120,42 @@ public class LocalProjectService {
         return new OpenLocalResult(project, reused, openFileId, stats.imported, stats.truncated);
     }
 
-    public record ReconcileResult(int changed, boolean rootMissing) {}
+    private record ProjectResolution(Project project, boolean reused) {}
+
+    /** 复用既有项目或新建一个（项目行 + 成员行必须同一个事务）。 */
+    private ProjectResolution resolveProject(String canonical, Path root, String name, Long userId) {
+        Optional<Project> existing = projectRepository.findByLocalRoot(canonical);
+        if (existing.isPresent()) {
+            Project project = existing.get();
+            if (!projectMemberService.hasReadPermission(project.getId(), userId)) {
+                throw new IllegalArgumentException(LangText.of("该文件夹已被其他账号的项目使用", "This folder is already in use by another account's project"));
+            }
+            return new ProjectResolution(project, true);
+        }
+        rejectNestedRoot(root);
+        Project project = new Project();
+        project.setName(StringUtils.hasText(name) ? name.trim() : folderDisplayName(root));
+        project.setProjectType("BLANK");
+        project.setListedCompanyName("");
+        project.setTargetCompanyName("");
+        project.setUserId(userId);
+        project.setLocalRoot(canonical);
+        LocalDateTime now = LocalDateTime.now();
+        project.setCreatedAt(now);
+        project.setUpdatedAt(now);
+        project = projectRepository.save(project);
+
+        ProjectMember member = new ProjectMember();
+        member.setProjectId(project.getId());
+        member.setUserId(userId);
+        member.setRole("ADMIN");
+        projectMemberRepository.save(member);
+
+        storageResolver.invalidate(project.getId());
+        return new ProjectResolution(project, false);
+    }
+
+    public record ReconcileResult(int changed, boolean rootMissing, boolean truncated) {}
 
     /**
      * 磁盘 ↔ 数据库文件树对账（watcher 触发；幂等，只写数据库、绝不写磁盘）：
@@ -140,22 +163,39 @@ public class LocalProjectService {
      * ② 磁盘上已消失的行软删除（进回收站语义，signalChange 由服务方法自带）。
      * 根目录整个不可达（外置盘拔出/文件夹被移走）时整体跳过——绝不把「暂时看不见」
      * 当成「都被删了」，否则一次误判就把整棵文件树扫进回收站。
+     *
+     * 本方法故意不带 @Transactional：它调的 ProjectFileService.createFolder /
+     * createOrUpdateFile / delete 各自都是独立 bean 上的 @Transactional（REQUIRED）方法。
+     * 如果这里也开一个外层事务，内层就会"参与"进来共享同一个事务——某一条目录/文件
+     * 因为同名冲突等原因抛异常时（比如磁盘上出现一个和库里"活着"的文件同名的目录，
+     * createFolder 内部的查重不看 isFolder 类型），Spring 对参与型事务抛异常默认标记
+     * rollback-only，下面的 catch 把异常本身接住继续扫下一条，但撤不回这个标记——
+     * 方法体正常 return 之后，AOP 代理 commit 时发现 rollback-only，转而抛
+     * UnexpectedRollbackException，把本轮已经处理完的其它条目一起回滚，而日志还已经
+     * 打过"对账完成"。不开外层事务后，每次对 createFolder/createOrUpdateFile/delete
+     * 的调用都各自独立成一个新事务、处理完就提交，一条坏条目只影响它自己那次调用，
+     * 与"跳过这条坏数据、把其余导完"的既有设计意图一致。
      */
-    @Transactional
     public ReconcileResult reconcileProject(Long projectId) {
         Project project = projectRepository.findById(projectId).orElse(null);
         if (project == null || !StringUtils.hasText(project.getLocalRoot())) {
-            return new ReconcileResult(0, false);
+            return new ReconcileResult(0, false, false);
         }
         Path root = Paths.get(project.getLocalRoot());
         if (!Files.isDirectory(root)) {
             log.warn("对账跳过：项目文件夹不可达 project={}, root={}", projectId, root);
-            return new ReconcileResult(0, true);
+            return new ReconcileResult(0, true, false);
         }
         Long ownerId = project.getUserId();
 
         ImportStats stats = importFolder(projectId, root, ownerId);
         int changed = stats.changed;
+        if (stats.truncated) {
+            // 此前 stats.truncated 只在 openLocalFolder 那侧被读取，watcher 触发的
+            // reconcileProject 从不读它——超出 MAX_IMPORT_ENTRIES 上限的文件永远静默
+            // 不进文件树，无日志无 API 信号。这里补上，与 openLocalFolder 的日志对齐。
+            log.warn("对账触发导入上限截断: project={}, root={}, 上限={}", projectId, root, MAX_IMPORT_ENTRIES);
+        }
 
         // 删除同步：行在库、物理不存在 → 软删除（文件按 filePath 解析，文件夹按父链拼相对路径）
         java.util.List<ProjectFile> rows = projectFileRepository.findByProjectId(projectId);
@@ -188,7 +228,7 @@ public class LocalProjectService {
         if (changed > 0) {
             log.info("对账完成: project={}, changed={}", projectId, changed);
         }
-        return new ReconcileResult(changed, false);
+        return new ReconcileResult(changed, false, stats.truncated);
     }
 
     private String relativeFolderPath(ProjectFile folder, Map<Long, ProjectFile> byId) {

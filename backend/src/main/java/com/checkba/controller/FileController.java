@@ -407,6 +407,26 @@ public class FileController {
                 }
                 inputStream = multipartFile.getInputStream();
             } else {
+                // 裸 octet-stream 分支（分片上传/桌面端三个真实调用点全走这条路）此前没有
+                // 任何空校验：客户端自己在 X-File-Total-Size 里声明了非零总大小却送来空
+                // body，是客户端自相矛盾，必须在写盘前拒绝——否则 save()/append() 的
+                // REPLACE_EXISTING 语义会把已有的非空文件截成 0 字节，还照常回 code:0。
+                // 头缺失或显式为 0 时不拦，保存一个空文件是合法场景。
+                String declaredTotalSizeStr = request.getHeader("X-File-Total-Size");
+                if (StringUtils.hasText(declaredTotalSizeStr)) {
+                    try {
+                        long declaredTotalSize = Long.parseLong(declaredTotalSizeStr);
+                        // 只认「显式声明为 0」。长度未知时是 -1（分块传输，例如反向代理
+                        // 关掉 proxy_request_buffering 后转发的请求），那种情况一律放行——
+                        // 把「不知道多长」当成「空」会误拒正常上传，比漏拦更糟。
+                        if (declaredTotalSize > 0 && request.getContentLengthLong() == 0) {
+                            return ResponseEntity.status(400).body(Map.of("code", -1, "message",
+                                    com.checkba.service.LangText.of("上传内容为空，与声明的文件大小不符", "Uploaded content is empty but a non-zero file size was declared")));
+                        }
+                    } catch (NumberFormatException ignored) {
+                        // 头解析不了不是这里要处理的问题，交给后续既有逻辑
+                    }
+                }
                 inputStream = request.getInputStream();
             }
 
