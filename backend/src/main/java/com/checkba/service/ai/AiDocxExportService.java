@@ -57,6 +57,8 @@ public class AiDocxExportService {
         String wpsFileId = "project_" + projectId + "_ai_" + System.currentTimeMillis();
 
         // 1. 先通过项目文件服务创建 ProjectFile 记录（会自动生成 filePath）
+        // 同名时自动编号而非报错：AI 导出/OCR 转换是后端内部落盘调用点，不应该因为
+        // 用户已有一份同名文档就整个失败。
         ProjectFile file = projectFileService.createFile(
                 projectId,
                 parentId,
@@ -65,7 +67,8 @@ public class AiDocxExportService {
                 null,
                 null,
                 wpsFileId,
-                userId
+                userId,
+                ProjectFileService.ConflictPolicy.RENAME
         );
 
         // 2. 使用 flexmark-docx-converter 根据 markdown 生成 docx

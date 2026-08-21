@@ -280,7 +280,7 @@ public class PdfTools implements AgentToolComponent {
                             file.getProjectId(), parentId, docxName, "docx",
                             Files.size(tempOut), null,
                             "project_" + file.getProjectId() + "_ai_" + System.currentTimeMillis(),
-                            AGENT_USER_ID);
+                            AGENT_USER_ID, ProjectFileService.ConflictPolicy.RENAME);
                     Path target = storageResolver.resolve(docx.getFilePath());
                     Files.createDirectories(target.getParent());
                     Files.move(tempOut, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
