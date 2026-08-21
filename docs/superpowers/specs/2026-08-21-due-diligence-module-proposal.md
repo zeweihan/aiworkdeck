@@ -116,15 +116,17 @@ P3 再修：审阅面板批量处置 O(K·N)、保活池按体积计权、Git �
 
 ---
 
-## 7. 待拍板（4 个）
+## 7. 拍板结果（2026-08-21 21:23）
 
-1. **网核 zip 的内部格式**：需要一个真实返回样例（是否每张图带 URL/时间戳的 manifest？没有就只能靠 OCR 抽 URL）。这决定 P3 的落盘与 link 自动化程度。
-2. **HOUSE 常量改成 profile 注入**会动三处逐字一致的契约（worker / DocxStyleHelper / Office 插件），是否允许在 P1 一并做（否则只能走「先按 HOUSE 出稿再 apply_style_profile 二次套版」，大文档上慢）。
-3. **改字提醒的力度**：只在审阅面板亮黄（推荐，不打断），还是编辑时弹提示。
-4. **商业定位**：内置（官方版用户升级即得）还是广场付费项接 entitlement。影响 skill.yml 与 registry。
-
----
+1. **网核接入**：先留好接口（`WebVerifyProvider` 适配层：输入公司名 → 返回 zip → 解包落盘 + 自动 link），zip 内部格式等拿到真实样例再填实现；除非另行说明不接别家。
+2. **HOUSE 改 profile 注入**：允许。P1 把 worker / DocxStyleHelper / Office 插件三处常量收敛到单源 `house-default.json` + `ACTIVE_PROFILE`，「三处逐字一致」改成对拍测试。
+3. **改字提醒**：要有弹窗。锚点文字变化（stale）时在编辑器内弹一个非阻塞提示条/小弹窗「这段有 N 份底稿，是否需要更新关联 / 重新核查」，审阅面板同步亮黄；弹窗频率要有合并（同一段连续编辑只弹一次，保存或停顿 3s 后）。
+4. **商业定位与分层**：**文字 ↔ 文件关联关系表（EvidenceLink）是平台内置底层能力**，任何插件都可用（证据与证据目录、股东大会核查、诉讼可视化等都是潜在消费方）；**尽调是广场付费插件**，只是 EvidenceLink 的一个场景。由此：
+   - P0 的 EvidenceLink、书签锚点化拖拽、`filelink&t=` 定位、审阅面板「底稿/证据」页、改字提醒弹窗 → 内置（主仓、不门控）。
+   - `dd_ingest`、模板学习里的尽调句式库与表格模板、尽调 skill、底稿目录/查验计划/缺口清单导出、网核适配层 → 尽调插件（entitlement 门控）。
+   - `docx_inspect_template` + styleProfile 是通用能力 → 内置。
+   - EvidenceLink 要给 Web 插件 SDK 暴露 `evidence.link / evidence.list / evidence.locate` 三个方法（SDK 契约只加不破）。
 
 ## 8. 下一步
 
-拍板后按 superpowers 流程走：brainstorm（对齐 P0 数据模型细节）→ writing-plans 出 P0 任务级 plan → subagent-driven 执行。P0 不依赖任何待拍板项，可以先动。
+按 superpowers 流程走：brainstorm（对齐 P0 数据模型细节）→ writing-plans 出 P0 任务级 plan → subagent-driven 执行。P0 不依赖任何待拍板项，可以先动。
