@@ -3,6 +3,7 @@ set -e
 
 # 确保脚本在 backend 目录下执行，解决从根目录即使 invoked 找不到 pom.xml 的问题
 cd "$(dirname "$0")"
+BACKEND_DIR=$(pwd)
 
 echo "== 1. 打包 =="
 mvn clean package -DskipTests
@@ -10,16 +11,26 @@ mvn clean package -DskipTests
 echo "== 2. 停止旧进程（端口 9696） =="
 PID=$(lsof -ti:9696 || true)
 if [ -n "$PID" ]; then
-  echo "找到进程 PID=${PID}，kill..."
-  # 使用 kill -0 检查进程是否存在，避免 kill 失败导致脚本退出
-  if kill -0 $PID 2>/dev/null; then
-    kill $PID || true
-    sleep 2
-    # 如果进程还在，强制杀死
+  # 端口 9696 是全局资源，多个 worktree 并行开发时可能是另一个 checkout 的、完全
+  # 健康的后端占着——不是本脚本起的进程就不杀，只报警（dev-board#74 审计条目：
+  # restart-all.sh 同一问题，这里独立调用时也要有同样的防护，否则 restart-all.sh
+  # 里加的保护会在这一步被绕开重新杀掉）。lsof 拿不到 cwd 时按"不是本 checkout"处理。
+  PID_CWD=$(lsof -a -p "$PID" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
+  if [ "$PID_CWD" != "$BACKEND_DIR" ]; then
+    echo "⚠️ 端口 9696 被其它工作目录的进程占用 (PID: $PID, 工作目录: ${PID_CWD:-未知})，不是本 checkout 启动的，不会杀它。"
+    echo "   新 Jar 无法绑定到 9696，下面的启动步骤会因端口占用而失败——先去占用端口的那个 worktree 里停止。"
+  else
+    echo "找到进程 PID=${PID}，kill..."
+    # 使用 kill -0 检查进程是否存在，避免 kill 失败导致脚本退出
     if kill -0 $PID 2>/dev/null; then
-      echo "进程仍在运行，强制杀死..."
-      kill -9 $PID || true
+      kill $PID || true
       sleep 2
+      # 如果进程还在，强制杀死
+      if kill -0 $PID 2>/dev/null; then
+        echo "进程仍在运行，强制杀死..."
+        kill -9 $PID || true
+        sleep 2
+      fi
     fi
   fi
 else

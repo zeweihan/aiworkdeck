@@ -10,6 +10,32 @@ const { createModelManager } = require('./services/model-manager')
 const { initLocalFileService } = require('./file-service')
 const { createBrowserViewRegistry } = require('./browser-views')
 
+// 单实例锁：必须在文件最开头、任何 app.whenReady()/服务拉起逻辑之前拿。
+//
+// 没有这把锁时，双击启动两次会各自独立走到 whenReady() 之后的
+// services.allocatePorts() → services.startEager()，两个进程都对着同一个
+// ~/.aiworkdeck 数据目录（H2 单机库）各起一套 Java 后端——真正撞上这条路径的不是
+// "端口已被占用"那么简单（后面 backend-service.js 的端口链 + isOurBackend 复用探测
+// 本来就处理得了这种情况），而是两种更窄的时序竞态：① 首启瞬间两个进程的
+// allocateBackendPort() 几乎同时跑，各自 canBind() 探测到同一个端口"当下空闲"就都
+// 选中它，等真正 spawn 时后一个才会撞见占用；② isOurBackend() 探测自家后端时用的
+// 1.5s 超时，在 JVM 刚起、Spring 还在做上下文刷新、响应不过来的窗口期会被误判成
+// "陌生进程占用"，进而降级到端口链下一档另起一套全新后端。requestSingleInstanceLock
+// 直接把第二个进程在此拦停、退出，让它永远走不到 whenReady()，上面两种竞态都无从
+// 发生——不修 allocateBackendPort/isOurBackend 本身（那是复用逻辑，另一类问题）。
+const singleInstanceLock = app.requestSingleInstanceLock()
+if (!singleInstanceLock) {
+  app.quit()
+  return
+}
+app.on('second-instance', () => {
+  // 用户又点了一次图标/关联文件：把已经在跑的这个实例的窗口拉到前台，
+  // 而不是让第二次点击悄无声息地什么都不发生
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.focus()
+  }
+})
 
 const DEV_SERVER_URL = process.env.CHECKBA_DEV_SERVER_URL || 'http://localhost:5173'
 const IS_DEV = process.env.AIWORKDECK_DESKTOP_DEV === '1'
@@ -283,6 +309,27 @@ function attachCopyListener(webContents, sourceLabel) {
   })
 }
 
+// 下载弹「另存为」对话框的监听器：挂在 session 上，跟 attachCopyListener 一样用
+// 一个标记位去重。macOS 下关主窗口不退出应用（见下方 window-all-closed），用户可以
+// 反复点 Dock 图标触发 createMainWindow() 重开窗口——mainWindow.webContents.session
+// 默认走的是共享的 session.defaultSession，不去重的话每 reopen 一次就多挂一个
+// will-download 监听器，永久累积、从不释放，重开够多次会打出
+// MaxListenersExceededWarning，且以后每次下载都会把已经死掉的旧回调重复触发一遍。
+function attachDownloadListener(session) {
+  if (!session || session.__checkbaDownloadBound) return
+  session.__checkbaDownloadBound = true
+  session.on('will-download', (event, item, webContents) => {
+    // Set options for the save dialog
+    item.setSaveDialogOptions({
+      title: require('./app-language').t({ zh: '保存文件', en: 'Save File' }),
+      defaultPath: item.getFilename() // Use the default filename suggestion
+    })
+    // Note: If item.setSavePath() is NOT called, Electron implicitly shows the dialog
+    // (unless global "Always ask..." is disabled, but setSaveDialogOptions helps hint it).
+    // To strictly FORCE it, we would need to check existing configuration, but usually this is enough.
+  })
+}
+
 function createMainWindow() {
   // 后端实际端口（打包态默认 5269，冲突自动降级，见 backend-service.js 端口链）。
   // 经 additionalArguments 同步注入 preload → window.checkbaDesktop.apiBaseUrl，
@@ -420,16 +467,7 @@ function createMainWindow() {
   attachCopyListener(mainWindow.webContents, 'renderer')
 
   // Handle file downloads: ensure "Safe As" dialog appears
-  mainWindow.webContents.session.on('will-download', (event, item, webContents) => {
-    // Set options for the save dialog
-    item.setSaveDialogOptions({
-      title: require('./app-language').t({ zh: '保存文件', en: 'Save File' }),
-      defaultPath: item.getFilename() // Use the default filename suggestion
-    })
-    // Note: If item.setSavePath() is NOT called, Electron implicitly shows the dialog 
-    // (unless global "Always ask..." is disabled, but setSaveDialogOptions helps hint it).
-    // To strictly FORCE it, we would need to check existing configuration, but usually this is enough.
-  })
+  attachDownloadListener(mainWindow.webContents.session)
 
   startClipboardWatcher()
 }

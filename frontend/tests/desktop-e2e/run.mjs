@@ -60,7 +60,11 @@ catch { console.error('缺少 puppeteer-core：cd frontend && npm i -D puppeteer
 // ---- preflight ----
 for (const [what, ok] of [
   ['dev server ' + DEVURL, await fetch(DEVURL).then(() => true).catch(() => false)],
-  ['后端 ' + BACKEND, await fetch(BACKEND + '/api/skills/market/list').then(() => true).catch(() => false)],
+  // r.ok 而不是"能拿到响应就算活"：fetch() 对 4xx/5xx 照样 resolve，只有网络层失败
+  // 才会走 catch。以前这里只要连得上端口就判 OK，后端 500（比如 skill 注册表坏了）
+  // 会被判成健康，前置检查形同虚设，失败要等 ~10 分钟后在无关步骤里以一堆看不懂的
+  // 报错冒出来，而不是这里干脆利落的"前置缺失"提示。
+  ['后端 ' + BACKEND, await fetch(BACKEND + '/api/skills/market/list').then((r) => r.ok).catch(() => false)],
   ['引擎 dist/zetaoffice/lowa', fs.existsSync(path.join(frontendDir, 'dist/zetaoffice/lowa/soffice.js'))],
   ['desktop/node_modules', fs.existsSync(path.join(desktopDir, 'node_modules'))],
 ]) { if (!ok) { console.error('前置缺失: ' + what); process.exit(2) } }
@@ -73,7 +77,12 @@ async function api(ep, opts = {}) {
     headers: { 'Content-Type': 'application/json', ...(QA.sid ? { 'X-Session-Id': QA.sid } : {}) },
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   })
-  return r.json().catch(() => null)
+  const body = await r.json().catch(() => null)
+  // 4xx/5xx 以前直接把响应体（甚至 null）当正常结果原样返回，调用方看到的只是
+  // "字段缺失/数组为空"这类下游症状，真实原因（后端拒绝了这次请求）被吞掉、没人
+  // 打印出来。这里改成一律抛出，让每个调用点原有的 throw/catch 逻辑接住真实原因。
+  if (!r.ok) throw new Error('API ' + (opts.method || 'GET') + ' ' + ep + ' -> ' + r.status + ': ' + JSON.stringify(body))
+  return body
 }
 {
   // 冷启动后端可能还锁着/未过向导：解锁门与向导分流由 app-e2e J1 专门覆盖，
@@ -852,7 +861,11 @@ try {
   })
 } finally {
   try { if (site) site.close() } catch {}
-  try { await api('/api/projects/' + QA.projectId, { method: 'DELETE' }) } catch {}
+  // 以前这里是空 catch：清理失败（后端瞬时不可达/DELETE 4xx 等）完全无声无息，
+  // QA_<timestamp> 项目连同真实生成的 docx 永久留在项目列表里，没有任何输出能
+  // 告诉维护者为什么、需要手动去清。至少打一行，让残留有迹可查。
+  try { await api('/api/projects/' + QA.projectId, { method: 'DELETE' }) }
+  catch (e) { console.error('⚠️ 清理测试项目失败（' + QA.project + ' #' + QA.projectId + '）：' + e.message + '；需要手动去项目列表删除') }
   try { browser.disconnect() } catch {}
   killTree()
   await sleep(1500)

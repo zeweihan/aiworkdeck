@@ -24,7 +24,7 @@ class AgentStreamWatchdogTest {
     private AgentStreamHandler handlerWithErrorSink(AtomicReference<Throwable> sink, CountDownLatch fired) {
         AgentStreamHandler handler = new AgentStreamHandler(
                 mock(SseEmitterService.class), "conv-watchdog-test",
-                mock(TokenUsageService.class), "1", 1L, "deepseek/deepseek-v4-flash");
+                mock(TokenUsageService.class), "1", 1L, "deepseek/deepseek-v4-flash", 0L);
         handler.setOnError(err -> {
             sink.set(err);
             fired.countDown();

@@ -20,6 +20,13 @@ public class SseEmitterService {
     // Key: conversationId (or sessionId) -> SseEmitter
     private final Map<String, SseEmitter> emitters = new ConcurrentHashMap<>();
 
+    // Key: connectionId -> 当前连接代次，每次 createConnection 建连自增。
+    // close(connectionId, epoch) 靠它判断"要关的是不是这一次连接"，见 close() 的注释。
+    private final Map<String, Long> epochs = new ConcurrentHashMap<>();
+
+    /** 代次表的清理阈值：远大于任何真实并发会话数，触到才动手，正常运行期间等于不清理。 */
+    private static final int EPOCH_PURGE_THRESHOLD = 10_000;
+
     // 心跳广播：15s 一次，双重作用——(a) 长工具执行期间通道零字节流动，企业网关/
     // 代理的空闲回收窗口（常见 60~120s）会静默掐连接，心跳保活穿透；
     // (b) 前端据 lastHeartbeat 判定连接死活，超时触发自动重连（F-04/F-05）。
@@ -51,6 +58,10 @@ public class SseEmitterService {
      * @return SseEmitter 实例
      */
     public SseEmitter createConnection(String connectionId) {
+        // 代次自增：本次建连之后，任何持有旧代次的 close() 调用都不再匹配当前连接
+        epochs.merge(connectionId, 1L, Long::sum);
+        purgeEpochsIfOversized();
+
         // 设置超时时间，0表示不过期 (由客户端重连或业务逻辑控制断开)
         // Spring Boot 默认可能是 30s，这里设为 30分钟
         SseEmitter emitter = new SseEmitter(30 * 60 * 1000L);
@@ -109,9 +120,48 @@ public class SseEmitterService {
     }
     
     /**
-     * 关闭连接
+     * 调用方（一轮 Agent 运行）应在本轮开始时取一次当前代次存起来，收尾调用 {@link #close}
+     * 时原样带回——用来分辨"现在映射的这个 emitter 还是不是本轮建连的那个"。
      */
-    public void close(String connectionId) {
+    /**
+     * 代次表不能在 close() 时随手删掉——删了之后新连接的代次会从 1 重新开始，
+     * 一条迟到的、手里攥着旧代次 1 的 close() 就会误判成"匹配"，把新连接掐掉，
+     * 正是这次要修的那个病。所以只能按规模兜底清理：超过阈值时，
+     * 把当前没有活连接的那些键清掉。
+     *
+     * <p>清掉之后若真有迟到的 close 找上门，它看到的当前代次是 0、与自己手里的对不上，
+     * 于是**跳过关闭**——落在安全的一侧（最坏是某个 emitter 没被显式收尾，
+     * 由 30 分钟超时或下一次重连顶掉），不会误关活连接。
+     */
+    private void purgeEpochsIfOversized() {
+        if (epochs.size() <= EPOCH_PURGE_THRESHOLD) return;
+        epochs.keySet().removeIf(id -> !emitters.containsKey(id));
+    }
+
+    public long currentEpoch(String connectionId) {
+        return epochs.getOrDefault(connectionId, 0L);
+    }
+
+    /**
+     * 关闭连接。
+     *
+     * <p>close() 和 createConnection() 各自跑在不同线程上：后台的 Agent 轮次结束时调用本方法，
+     * 与此同时用户可能因为刷新页面/开新标签/断线重连而并发调用 createConnection() 建立了一个
+     * 全新的 emitter。旧单参版本 {@code emitters.remove(connectionId)} 不认这个区别，谁后写入
+     * map 就删谁，会把刚重连、什么错都没有的新连接一并掐掉。
+     *
+     * <p>epoch 只在与当前代次一致时才真正 complete；重连已经把代次往前推了的话，这次 close
+     * 就是"迟到的旧一轮善后"，原地跳过——新连接自己的生命周期不受影响。
+     *
+     * @param connectionId 会话ID或用户ID
+     * @param epoch 调用方在本轮开始时通过 {@link #currentEpoch} 记下的代次
+     */
+    public void close(String connectionId, long epoch) {
+        if (epochs.getOrDefault(connectionId, 0L) != epoch) {
+            log.debug("Skip close for {}: stale epoch {} (current {}), a newer connection already took over",
+                    connectionId, epoch, epochs.get(connectionId));
+            return;
+        }
         SseEmitter emitter = emitters.remove(connectionId);
         if (emitter != null) {
             emitter.complete();
