@@ -6,6 +6,7 @@ import com.checkba.service.ai.ProjectRagService;
 import com.checkba.storage.StorageException;
 import com.checkba.storage.StorageService;
 import com.checkba.storage.StorageServiceFactory;
+import com.checkba.util.style.StyleProfile;
 import com.vladsch.flexmark.docx.converter.DocxRenderer;
 import com.vladsch.flexmark.parser.Parser;
 import com.vladsch.flexmark.util.ast.Document;
@@ -36,6 +37,14 @@ public class AiDocxExportService {
     private final ProjectFileService projectFileService;
     private final StorageServiceFactory storageServiceFactory;
     private final ProjectRagService projectRagService;
+    private final StyleProfileResolver styleProfileResolver;
+
+    /** write_docx 两条路径共用的 flexmark 配置：表格扩展（GFM 管道表）必须开。 */
+    public static MutableDataSet markdownOptions() {
+        MutableDataSet options = new MutableDataSet();
+        options.set(Parser.EXTENSIONS, java.util.List.of(com.vladsch.flexmark.ext.tables.TablesExtension.create()));
+        return options;
+    }
 
     @Transactional
     public ProjectFile exportMarkdownToDocx(Long projectId,
@@ -43,6 +52,20 @@ public class AiDocxExportService {
                                             Long userId,
                                             String fileName,
                                             String markdownContent) {
+        return exportMarkdownToDocx(projectId, parentId, userId, fileName, markdownContent, null);
+    }
+
+    /**
+     * @param profile 样式画像；null 时按 {@link StyleProfileResolver} 的顺序解析
+     *                （项目 _模板/画像.json → SystemSetting → house-default）
+     */
+    @Transactional
+    public ProjectFile exportMarkdownToDocx(Long projectId,
+                                            Long parentId,
+                                            Long userId,
+                                            String fileName,
+                                            String markdownContent,
+                                            StyleProfile profile) {
         if (projectId == null) {
             throw new IllegalArgumentException("项目 ID 不能为空");
         }
@@ -76,8 +99,9 @@ public class AiDocxExportService {
         StorageService storageService = storageServiceFactory.getStorageService();
 
         try {
-            // flexmark 配置：后续如需启用表格/任务列表等，可以在此处添加扩展
-            MutableDataSet options = new MutableDataSet();
+            // flexmark 配置：表格扩展必须开，否则 markdown 表格会退化成竖线文本，
+            // 画像里的表格格式（边框/列宽/表头）根本没有落点
+            MutableDataSet options = markdownOptions();
             Parser parser = Parser.builder(options).build();
             DocxRenderer renderer = DocxRenderer.builder(options).build();
 
@@ -88,8 +112,9 @@ public class AiDocxExportService {
             // 添加缺失的样式（BodyText, Quotations），避免 docx4j PropertyResolver 报错
             com.checkba.util.DocxStyleHelper.addMissingStyles(wordMLPackage);
             renderer.render(mdDocument, wordMLPackage);
-            // 律所标准格式：楷体_GB2312/Arial、段后 18 磅、首行缩进 2 字符、表格 Grid 1.5 磅等
-            com.checkba.util.DocxStyleHelper.applyStandardFormat(wordMLPackage);
+            // 样式画像：缺省 = 项目画像 / 系统默认 / house-default（律所标准格式）
+            StyleProfile effective = profile != null ? profile : styleProfileResolver.resolve(projectId, null);
+            com.checkba.util.DocxStyleHelper.applyProfile(wordMLPackage, effective);
 
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
             wordMLPackage.save(bos);

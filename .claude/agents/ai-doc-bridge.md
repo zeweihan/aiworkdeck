@@ -31,7 +31,10 @@ description: AI↔文档编辑桥接领域。任务涉及 doc_*/sheet_*/slide_* 
 **后端工具原语**
 - `backend/src/main/java/com/checkba/service/ai/tools/DocumentEditTools.java` — doc_*/sheet_* 工具原语全集（84 个 @Tool 方法），翻译成 `editorBridgeService.executeEditorCommand(action, params)`。曾名 WpsTools。格式面：doc_format_selection（字符）、doc_set_paragraph_format（对齐/标题级别/行距/段距/缩进）、doc_set_numbering（bullet/decimal/chinese/multilevel）、doc_format_table、doc_insert_table、doc_get_formatting（读格式）、doc_apply_standard_format（全文标准格式化）。
 - `backend/src/main/java/com/checkba/service/ai/tools/SlideEditTools.java` — slide_* 演示文稿（Impress）原语，独立文件（不塞进 DocumentEditTools，后者已 70+ 方法），`List<AgentToolComponent>` 自动发现，ToolRegistry 无需改动。当前只有设计 Phase 1 的 7 个原语，见下方专节。
-- `backend/src/main/java/com/checkba/util/DocxStyleHelper.java` — write_docx/AiDocxExportService 两条 flexmark 生成路径的样式：`applyStandardFormat()` 在 render 后、save 前调用，与 worker 端 HOUSE 常量同一套律所标准格式规范。
+- `backend/src/main/java/com/checkba/util/DocxStyleHelper.java` — write_docx/AiDocxExportService 两条 flexmark 生成路径的样式：`applyProfile(pkg, StyleProfile)` 在 render 后、save 前调用；`applyStandardFormat(pkg)` = `applyProfile(pkg, StyleProfiles.houseDefault())`。数值不再写在代码里，单源是 `backend/src/main/resources/style-profiles/house-default.json`（见下方「样式画像 styleProfile」节）。
+- `backend/src/main/java/com/checkba/util/style/` — `StyleProfile`（Jackson 树 + 类型化访问器 + 叶子 merge）、`StyleProfiles`（houseDefault/parse/toJson）、`Units`/`DocxStyleWriter`（单位换算与 wml 落法）、`DocxProfileReader`（docx4j 直读模板 → 画像）。
+- `backend/src/main/java/com/checkba/service/ai/tools/TemplateTools.java` — `docx_inspect_template(fileIds, options?)`：学习团队模板 → styleProfile v1 JSON；`.doc` 返回「另存 docx 或编辑器打开后学习」提示不报错。
+- `backend/src/main/java/com/checkba/service/ai/StyleProfileResolver.java` — 写端画像解析顺序：工具显式 `styleProfileJson` > 项目 `_模板/画像.json` > SystemSetting `dd.styleProfile.default` > house-default；选中的画像总 merge 到 house-default 上补齐缺省叶子。
 - `backend/src/main/java/com/checkba/service/ai/tools/CheckpointTools.java` — `doc_restore_checkpoint`。
 - `backend/src/main/java/com/checkba/service/ai/tools/ToolMeta.java` — `@ToolMeta(displayName/category/fileEffect)`；`fileEffect="MODIFIED"` 是检查点触发依据。
 
@@ -188,6 +191,18 @@ txt/md/markdown 自 dev-board#37 起不进 LOWA（前端走 PlainTextEditor.vue�
 - 迁移 `EvidenceLinkMigrationRunner` 幂等：`evidence_link` 非空即跳过；反查 `(projectId, wpsFileId)` 用 `findFirstByProjectIdAndWpsFileId`（wpsFileId 无唯一约束）；查不到的行 WARN 跳过。迁来的行 `status=unverified`、target 无 locator，靠 `adopt_legacy_links` 套书签后再由正常核对转 active/orphan。
 - 测试：`AnchorHashTest`/`UlidTest`/`EvidenceLinkServiceTest`/`EvidenceLinkMigrationRunnerTest`/`EvidenceLinkControllerTest`/`DocFileLinkControllerProxyTest`/`ProjectFileServicePurgeCascadeTest`。
 
+## 样式画像 styleProfile v1（dev-board#110，spec `docs/superpowers/specs/2026-08-21-dd-p1-drafting-design.md` §3；schema 权威在 `2026-08-21-dd-style-learning-inventory.md` §2）
+
+- 形态：一棵 JSON 树，每个叶子可缺省（缺省 = 不约束，写端用 house-default 补）。顶层块：`defaults` / `body` / `headings[]`（按 `level` 1 基）/ `numbering` / `table` / `page` / `headerFooter` / `toc`，外加 `learnedFrom[]`、`learnedAt`、`confidence`（多份投票才有）、`notes[]`。
+- 叶子类型：长度 `{value, unit}`，`unit ∈ pt|chars|lines|percent|mm|cm|twips`；行距 `{rule: auto|atLeast|exactly, value, unit?}`（auto 时 value 是倍数）；字体 `{eastAsia, western, cs?, theme?}`；颜色 `#RRGGBB`。
+- 段落块（body / headings[i] / table.cell）：`font/size/bold/color/alignment/lineSpacing/spaceBefore/spaceAfter/firstLineIndent/leftIndent/keepWithNext/pageBreakBefore`，`source: style|instance`（实例众数占比 ≥ 1/2 时覆盖样式链声明值）、`samples`。`body.afterTableSpaceBefore` 是表后首段段前。
+- `headings[i].numbering.kind ∈ auto|literal|none`：auto = 段落带 numPr（写端建 `NumberingDefinitionsPart` + Heading 样式 numPr，并剥掉 markdown 里手打的「一、」）；literal = 标题文字自带「（一）」（写端按 `lvlText` 拼字面前缀，`%N` 取 N 级计数，`suffix ∈ space|tab|nothing`；文字已带编号的不重复拼）；`numFmt` 用 OOXML 枚举值（chineseCounting / chineseCountingThousand / decimal / lowerLetter…）。
+- `table`：`borders.source ∈ cell|table|style|none` + `outside/insideH/insideV {style,width,color}`（source=cell 时写端同时落 `tcBorders`）；`columnWidths {mode: twips|percent|cm, samples: [[...]]}`（写端挑列数相符的样本落 `tblGrid`+`tcW`+`tblLayout fixed`）；`header {rows, repeatOnEachPage, bold, alignment, verticalAlign, fill}`；`cell.byContentType {text|number|date|serial: {alignment}}`（分类正则 `DocxProfileReader.classifyCell`，与旧 NUMERIC_CELL 同源）；`zebra`。
+- `page`：`size {width,height,orientation}`（mm，1 位小数）、`margins`（cm）、`docGrid {type, linePitch}`。`headerFooter.footer.pageNumber {enabled, pattern: "第 {PAGE} 页 共 {NUMPAGES} 页", alignment, format, start}`（写端拆成文本 run + FldChar 域）。`toc {enabled, levels: "1-2", hyperlinks, title}`（写端插 TOC 域 + `settings.xml updateFields`，主标题之后）。
+- 读端口径：样式链 docDefaults → basedOn 递归 → 本样式给声明值；主题字体槽位（minorHAnsi 之类）查 theme1.xml 解析成实际名并保留 `theme` 槽位名；表格三层边框不合并只判定层级。
+- 工具链：`docx_inspect_template` 产出 → 存项目 `_模板/画像.json` → `write_docx(..., styleProfileJson?)` 缺省自动取用（顺序见 `StyleProfileResolver`）。
+- fixtures：`backend/src/test/resources/fixtures/gen-template-sample.py`（python-docx 生成 `template-sample.docx`，改 fixture 改脚本重跑）、`house-parity.md` + `house-before.json`（对拍基线）。
+
 ## 命名双轨现状（PR#192，下个发布周期摘旧名）
 
 仍活着的 wps_* 旧名：后端 `sendDualNamedAction`（doc_open_file/wps_open_file、doc_reload_file/wps_reload_file）、executeEditorCommand 双发 editor_command/wps_command、doc_open_file_sync↔wps_open_file_sync、doc_stream_data/wps_stream_data 双发、`/wps-result` 路由别名；前端 handleClientAction 显式识别全部旧名+latch 去重、toolDisplayNames 把 wps_* 归一为 doc_*。
@@ -206,7 +221,8 @@ txt/md/markdown 自 dev-board#37 起不进 LOWA（前端走 PlainTextEditor.vue�
 - 修订模式下手工删除卡死曾因覆盖层吞键，用 `.uno:` 调度修复（PR#164/166），别退回 DOM 键盘事件路线。
 - 改 AgentOrchestrator 构造器必须同步 EvalHarness（踩过两次）。
 - **`insert_at_cursor` 对带 markdown 标记的文本走剥离转换**（`MD_MARKER_RE` 判定，**→真粗体、行首 # 剥掉），纯文本原样插入；改插入路径要想到这两条分支。`insert_under_heading` 曾经后端一直派发但 worker 没实现+白名单没收录（静默失败年久失修），已补齐。
-- **改标准格式规范要改三处**：worker `HOUSE`（office_thread.js）+ 后端 `DocxStyleHelper`（编辑器流式 与 write_docx 两条路径各一份）+ Office 插件端 `HOUSE`（office-addin/taskpane/lib/officeExecutor.js，office_apply_standard_format 用）。三处数值必须逐字一致。
+- **标准格式规范单源 + 对拍**：数值只改 `backend/src/main/resources/style-profiles/house-default.json`（位置与文件名不许动，构建时复制到 worker 与 Office 插件并做 sha256 对拍）。后端 `DocxStyleHelper` 直接读它；worker `HOUSE`（office_thread.js）与 Office 插件端 `HOUSE`（officeExecutor.js）由同一份 JSON 派生。`HouseProfileParityTest` 用 `fixtures/house-before.json`（常量版改造前的输出画像）对拍 `applyStandardFormat()` 的实际落盘值，红了 = 单源数值变了或落法变了，两种都不许静默过。
+- **write_docx 的 markdown 表格扩展**：两条 flexmark 路径共用 `AiDocxExportService.markdownOptions()`（TablesExtension）。改造前没开表格扩展，markdown 管道表一直退化成竖线文本，`formatBodyTables` 实际从未命中过；别再用裸 `Parser.builder().build()`。
 - 流式中断（onError）也会发 doc_stream_end——新增流式相关终止分支时别忘了这个收尾信号，否则 worker 状态机残留半张表。
 - **新增 office_* 工具三件套**：OfficeEditTools 加 @Tool + officeExecutor.js 加 HANDLERS 实现 + COMMAND_DISPLAY_NAMES 加中文名（主前端 toolDisplayNames.js 兜底同步），并在 officeExecutor 的 COMMAND_HOSTS 标宿主。没有客户端实现的远端工具 = 30s 超时空转（与 doc_* 四件套同款地雷）。
 - **能力过滤靠工具名前缀**（doc_/sheet_/office_，office 内再按 office_excel_/office_ppt_ 细分宿主）：新增 LOWA 专属或插件专属工具必须沿用对应前缀，否则会漏到不该见它的会话里（Excel 面起名不带 office_excel_ 前缀 = 漏进 Word 会话的死路径）；ToolRegistry 构造器加了 ClientCapabilityService，改它要同步 RecordingToolRegistry（EvalHarness）与各测试构造点。

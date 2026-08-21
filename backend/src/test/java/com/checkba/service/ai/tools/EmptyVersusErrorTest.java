@@ -120,7 +120,7 @@ class EmptyVersusErrorTest {
             com.checkba.repository.ProjectFileRepository repo =
                     Mockito.mock(com.checkba.repository.ProjectFileRepository.class);
             when(repo.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(anyLong())).thenReturn(List.of());
-            FileTools tools = new FileTools(null, repo, null, null, resolver, null, null);
+            FileTools tools = new FileTools(null, repo, null, null, resolver, null, null, null);
             ProjectContextHolder.setProjectId("7");
 
             String out = tools.search_project_files("*.docx", null);

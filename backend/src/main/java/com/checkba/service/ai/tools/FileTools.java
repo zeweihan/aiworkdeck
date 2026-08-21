@@ -45,6 +45,7 @@ public class FileTools implements AgentToolComponent {
     private final com.checkba.storage.ProjectStorageResolver storageResolver;
     private final com.checkba.service.DocumentTextService documentTextService;
     private final com.checkba.service.ai.AiDocxExportService aiDocxExportService;
+    private final com.checkba.service.ai.StyleProfileResolver styleProfileResolver;
     private static final Long AGENT_USER_ID = 10001L;
 
     /**
@@ -394,8 +395,13 @@ public class FileTools implements AgentToolComponent {
             @P("新文件名 (如 '报告.docx')") String fileName,
             @P("Markdown 内容") String markdownContent,
             @P("项目ID") Long projectId,
-            @P(value = "目标文件夹ID（可选，不填则放项目根目录）", required = false) Long parentFolderId
+            @P(value = "目标文件夹ID（可选，不填则放项目根目录）", required = false) Long parentFolderId,
+            @P(value = "样式画像 JSON（可选；docx_inspect_template 的输出或其子集。不填自动取项目 _模板/画像.json，"
+                    + "没有则用系统默认 / 律所标准格式）", required = false) String styleProfileJson
     ) {
+        com.checkba.util.style.StyleProfile profile = styleProfileResolver == null
+                ? com.checkba.util.style.StyleProfiles.houseDefault()
+                : styleProfileResolver.resolve(projectId, styleProfileJson);
         if (parentFolderId != null) {
             // 指定目标文件夹时走 AiDocxExportService（正确的路径构建 + StorageService 落盘 + RAG 刷新）
             log.info("Tool: write_docx (folder={}) called for {}", parentFolderId, fileName);
@@ -406,7 +412,7 @@ public class FileTools implements AgentToolComponent {
             }
             try {
                 ProjectFile pf = aiDocxExportService.exportMarkdownToDocx(
-                        projectId, parentFolderId, AGENT_USER_ID, fileName, markdownContent);
+                        projectId, parentFolderId, AGENT_USER_ID, fileName, markdownContent, profile);
                 editorBridgeService.sendRefreshFilesAction();
                 return String.format("{\"status\":\"success\", \"db_id\":%d, \"file_path\":\"%s\"}",
                         pf.getId(), String.valueOf(pf.getFilePath()).replace("\\", "\\\\"));
@@ -415,10 +421,11 @@ public class FileTools implements AgentToolComponent {
                 return "Error creating DOCX in folder " + parentFolderId + ": " + e.getMessage();
             }
         }
-        return writeDocxAtRoot(fileName, markdownContent, projectId);
+        return writeDocxAtRoot(fileName, markdownContent, projectId, profile);
     }
 
-    private String writeDocxAtRoot(String fileName, String markdownContent, Long projectId) {
+    private String writeDocxAtRoot(String fileName, String markdownContent, Long projectId,
+                                   com.checkba.util.style.StyleProfile profile) {
         log.info("Tool: write_docx called for {}", fileName);
         if (fileName == null || fileName.isBlank()) {
             return "Error: fileName is required.";
@@ -443,19 +450,21 @@ public class FileTools implements AgentToolComponent {
                 return "Error: File '" + fileName + "' already exists. Please use 'doc_open_file' and editing tools to modify the existing document instead of overwriting it.";
             }
             
-            Parser parser = Parser.builder().build();
+            com.vladsch.flexmark.util.data.MutableDataSet options =
+                    com.checkba.service.ai.AiDocxExportService.markdownOptions();
+            Parser parser = Parser.builder(options).build();
             com.vladsch.flexmark.util.ast.Node document = parser.parse(markdownContent);
-            
+
             // Flexmark docx-converter usage pattern:
             File file = targetPath.toFile();
-            DocxRenderer renderer = DocxRenderer.builder().build();
-            
+            DocxRenderer renderer = DocxRenderer.builder(options).build();
+
             // Create Package -> Add missing styles -> Render -> Save
             org.docx4j.openpackaging.packages.WordprocessingMLPackage wordDoc = org.docx4j.openpackaging.packages.WordprocessingMLPackage.createPackage();
             com.checkba.util.DocxStyleHelper.addMissingStyles(wordDoc);
             renderer.render(document, wordDoc);
-            // 律所标准格式：楷体_GB2312/Arial、段后 18 磅、首行缩进 2 字符、表格 Grid 1.5 磅等
-            com.checkba.util.DocxStyleHelper.applyStandardFormat(wordDoc);
+            // 样式画像：显式 styleProfileJson / 项目画像 / 系统默认 / house-default（律所标准格式）
+            com.checkba.util.DocxStyleHelper.applyProfile(wordDoc, profile);
             wordDoc.save(file);
             
             // Register with AGENT_USER_ID
