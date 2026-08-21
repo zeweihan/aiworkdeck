@@ -312,6 +312,33 @@ public class WorkSessionService {
      * 工作会一直挂着「工作中」。已存在 ACTIVE 段时直接复用，不重新武装——
      * 那种情况下定时器该不该动由调用方自己的重排逻辑负责（见 onChangeSignal）。
      */
+    /**
+     * 合并抛异常时把律师放回他自己的工作段。endSession 是**先 checkout 主线、再合并**的，
+     * 合并「返回值失败」（冲突）那两条路径本来就会切回工作分支，唯独「直接抛异常」那条
+     * 没人管——mergeCore 会把任何 IO/JGit 故障（磁盘写满、.git/index.lock 被并发的 GC 或
+     * push 接收端占着、Windows 上 LOWA 还攥着文件句柄）包成 VersionException 抛出，异常
+     * 一路逃逸出 endSession，留下「段还挂着 ACTIVE、HEAD 却已经停在主线」的残局。
+     *
+     * 那个残局是要命的：之后每一次自动存档都会经 ensureSession 复用这个段（它只看有没有
+     * ACTIVE 段，不看 HEAD 在哪儿），再 commitAll 到当前 HEAD——也就是把律师后续的每一笔
+     * 修改直接提交进主线，绕开整个工作段隔离模型。历史永不重写，落进去就永久污染。
+     *
+     * 尽力而为：还原本身再失败也不能盖掉原始异常，挂到 suppressed 上一起交出去。
+     * abortMerge 在非 MERGING 态是真 no-op、可以盲调（v2 路径抛异常时可能停在 MERGING）。
+     */
+    private void restoreSessionCheckout(long projectId, WorkSession s, RuntimeException cause) {
+        try {
+            repoService.abortMerge(projectId);
+            if (!s.getBranchName().equals(repoService.currentBranch(projectId))) {
+                repoService.checkoutBranch(projectId, s.getBranchName());
+            }
+        } catch (Exception restoreFailure) {
+            cause.addSuppressed(restoreFailure);
+            log.error("合并失败后没能把工作段切回来: project={}, branch={}",
+                    projectId, s.getBranchName(), restoreFailure);
+        }
+    }
+
     private WorkSession ensureSession(long projectId, Long userId, String userName) {
         Optional<WorkSession> existing = activeSession(projectId);
         if (existing.isPresent()) return existing.get();
@@ -584,8 +611,14 @@ public class WorkSessionService {
             if (!mainAdvanced) {
                 // v1 原路径一字不改：单人场景主线没动过，merge() 的 NO_FF 语义与
                 // 既有护栏（ProjectRepoBranchTest）全部照旧。
-                MergeOutcome outcome = repoService.merge(
-                        projectId, s.getBranchName(), finalTitle, userName, email(userName));
+                MergeOutcome outcome;
+                try {
+                    outcome = repoService.merge(
+                            projectId, s.getBranchName(), finalTitle, userName, email(userName));
+                } catch (RuntimeException e) {
+                    restoreSessionCheckout(projectId, s, e);
+                    throw e;
+                }
                 if (!outcome.success()) {
                     // 合并没成，把用户放回他的工作段，改动一个都不能丢
                     repoService.checkoutBranch(projectId, s.getBranchName());
@@ -606,8 +639,14 @@ public class WorkSessionService {
             // 干净也不自动提交——清单要按数据库重算后与内容进同一个双亲提交（地雷 #21）。
             s.setTitle(finalTitle);
             sessionRepository.save(s);
-            MergeOutcome outcome = repoService.mergeNoCommit(
-                    projectId, s.getBranchName(), finalTitle, userName, email(userName));
+            MergeOutcome outcome;
+            try {
+                outcome = repoService.mergeNoCommit(
+                        projectId, s.getBranchName(), finalTitle, userName, email(userName));
+            } catch (RuntimeException e) {
+                restoreSessionCheckout(projectId, s, e);
+                throw e;
+            }
             if (outcome.mergeSha() != null) {
                 // ALREADY_UP_TO_DATE：理论不可达（空段已在上面筛掉），防御性收尾
                 return closeMergedSession(projectId, s, outcome.mergeSha());
