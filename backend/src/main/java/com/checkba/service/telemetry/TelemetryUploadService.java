@@ -105,10 +105,13 @@ public class TelemetryUploadService {
         sync();
     }
 
+    /** 补算窗口：与 uploadPendingRollups 的补传窗口口径一致，不无限往前找缺口。 */
+    private static final int BACKFILL_DAYS = 30;
+
     /** 聚合昨日（及漏算日）并上报未传的 rollup；Tier 2 开时批量上报事件。全程静默失败。 */
     public void sync() {
         try {
-            rollupService.rollupFor(LocalDate.now().minusDays(1));
+            backfillMissingRollups();
             if (!settings.rollupEnabled()) return;
             uploadPendingRollups();
             if (settings.eventsEnabled()) {
@@ -116,6 +119,26 @@ public class TelemetryUploadService {
             }
         } catch (Exception e) {
             log.debug("telemetry 上报轮次失败（静默）: {}", e.toString());
+        }
+    }
+
+    /**
+     * 这是一个不常驻 24/7 的桌面应用；此前每轮只补算"昨日"，应用关了几天没开
+     * （长周末）中间跳过的那几天永远没人替它们算——events 表里有数据，
+     * TelemetryDailyRollup 行永远不会出现，那几天的匿名统计静默永久丢失。
+     *
+     * <p>昨日无条件重算：临近午夜落库的事件可能在第二天才被处理，用旧值覆盖同一天
+     * 是既有行为，不能因为加了补算就丢了这条。更早的日子只在完全没有 rollup 行时才
+     * 补——rollupFor 本身是幂等 upsert，但没必要每天重新算 29 天前已经算对的数据。
+     */
+    private void backfillMissingRollups() {
+        LocalDate today = LocalDate.now();
+        rollupService.rollupFor(today.minusDays(1));
+        for (int i = 2; i <= BACKFILL_DAYS; i++) {
+            LocalDate day = today.minusDays(i);
+            if (rollupRepository.findByDate(day).isEmpty()) {
+                rollupService.rollupFor(day);
+            }
         }
     }
 

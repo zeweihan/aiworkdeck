@@ -68,34 +68,39 @@ public class FeedbackIngestController {
         }
         String installId = str(payload.get("installId"));
         String clientRef = str(payload.get("clientRef"));
-        try {
-            guard.check(installId, files);
-        } catch (IllegalStateException e) {
-            // 这台没开收件箱：让上传方看见 404 而不是「被限流」，免得它永远重试
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error(e.getMessage()));
-        } catch (FeedbackIngestGuard.QuotaExceededException e) {
-            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(error(e.getMessage()));
-        } catch (IllegalArgumentException e) {
-            // 请求本身不合法（缺 installId、附件过大）：429 会让上传方一直重试同一条坏请求
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error(e.getMessage()));
-        }
-        if (clientRef == null || clientRef.isBlank()) {
-            return ResponseEntity.ok(error(LangText.of("缺少 clientRef", "Missing clientRef")));
-        }
-        try {
-            UserFeedback fb = feedbackService.ingest(installId, clientRef,
-                    new FeedbackService.IngestRequest(
-                            str(payload.get("kind")), str(payload.get("text")),
-                            str(payload.get("voiceTranscript")), str(payload.get("page")),
-                            str(payload.get("appVersion")), str(payload.get("platform")),
-                            str(payload.get("contextJson"))),
-                    files);
-            return ResponseEntity.ok(success(Map.of("id", fb.getId())));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.ok(error(e.getMessage()));
-        } catch (Exception e) {
-            log.error("反馈收件失败 installId={}", installId, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error(LangText.of("收件失败", "Ingest failed")));
+        // check() 只读 count 判定配额，真正的落库在 feedbackService.ingest() 里；两者包进
+        // 同一段按 installId 分条的互斥区间，堵住"两个并发请求都查到还没到每日上限、
+        // 都通过 check() 再各自落库"的窗口（见 FeedbackIngestGuard.lockFor 的注释）。
+        synchronized (guard.lockFor(installId)) {
+            try {
+                guard.check(installId, files);
+            } catch (IllegalStateException e) {
+                // 这台没开收件箱：让上传方看见 404 而不是「被限流」，免得它永远重试
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error(e.getMessage()));
+            } catch (FeedbackIngestGuard.QuotaExceededException e) {
+                return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(error(e.getMessage()));
+            } catch (IllegalArgumentException e) {
+                // 请求本身不合法（缺 installId、附件过大）：429 会让上传方一直重试同一条坏请求
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error(e.getMessage()));
+            }
+            if (clientRef == null || clientRef.isBlank()) {
+                return ResponseEntity.ok(error(LangText.of("缺少 clientRef", "Missing clientRef")));
+            }
+            try {
+                UserFeedback fb = feedbackService.ingest(installId, clientRef,
+                        new FeedbackService.IngestRequest(
+                                str(payload.get("kind")), str(payload.get("text")),
+                                str(payload.get("voiceTranscript")), str(payload.get("page")),
+                                str(payload.get("appVersion")), str(payload.get("platform")),
+                                str(payload.get("contextJson"))),
+                        files);
+                return ResponseEntity.ok(success(Map.of("id", fb.getId())));
+            } catch (IllegalArgumentException e) {
+                return ResponseEntity.ok(error(e.getMessage()));
+            } catch (Exception e) {
+                log.error("反馈收件失败 installId={}", installId, e);
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error(LangText.of("收件失败", "Ingest failed")));
+            }
         }
     }
 

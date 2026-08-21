@@ -73,6 +73,11 @@ class FeedbackServiceTest {
         return new MockMultipartFile("files", name, "audio/webm", new byte[]{9, 8, 7});
     }
 
+    /** 非图片/语音附件——用来触发 storeAttachments 里段落中段的校验失败。 */
+    private static MockMultipartFile rejectedType(String name) {
+        return new MockMultipartFile("files", name, "video/mp4", new byte[]{1, 2, 3});
+    }
+
     @Test
     void submitStoresRowAndAttachments() throws Exception {
         UserFeedback fb = service.submit(7L,
@@ -200,5 +205,40 @@ class FeedbackServiceTest {
         assertTrue(tail.endsWith("line 2999\n"), "取的是尾部");
         assertTrue(tail.length() <= 16 * 1024, "尾巴要截断，别把整份日志塞进库");
         assertFalse(tail.startsWith("line 0\n"), "截断处的半行残句要丢掉");
+    }
+
+    /**
+     * 病灶：storeAttachments 是"边校验边落盘落库"的单趟循环——第 1 个附件校验通过、
+     * 已经落库，第 2 个才校验失败抛异常，但反馈行本身在 storeAttachments 被调用之前
+     * 就已经 save() 过一次了。异常从 submit() 冒泡出去，调用方看到"提交失败"、
+     * 通常会精简附件后重试，留下第一次那条已提交但 contextJson==null、缺诊断信息的
+     * 半成品行——它不会被标成任何错误，会被当成正常行继续走上传/分诊流程。
+     *
+     * <p>修法：把附件校验拆成独立的、只读 MultipartFile 自身元信息（不碰磁盘/DB）的
+     * 预检查，挪到 feedbackRepository.save(fb) 之前跑完；任何一个附件不合法，整条提交
+     * 都不该落下任何行。
+     */
+    @Test
+    void submitDoesNotPersistFeedbackRowWhenALaterAttachmentFailsValidation() {
+        assertThrows(IllegalArgumentException.class, () -> service.submit(7L,
+                new FeedbackService.SubmitRequest("BUG", "点保存没反应", null, null, null),
+                List.of(png("a.png"), rejectedType("b.mp4"))));
+
+        verify(feedbackRepo, never()).save(any());
+        verify(attachmentRepo, never()).save(any());
+        assertTrue(savedAttachments.isEmpty());
+    }
+
+    @Test
+    void ingestDoesNotPersistFeedbackRowWhenALaterAttachmentFailsValidation() {
+        when(feedbackRepo.findByInstallIdAndClientRef(any(), any())).thenReturn(java.util.Optional.empty());
+
+        assertThrows(IllegalArgumentException.class, () -> service.ingest("install-1", "ref-1",
+                new FeedbackService.IngestRequest("BUG", "崩了", null, null, "9.9.9", "mac", null),
+                List.of(png("a.png"), rejectedType("b.mp4"))));
+
+        verify(feedbackRepo, never()).save(any());
+        verify(attachmentRepo, never()).save(any());
+        assertTrue(savedAttachments.isEmpty());
     }
 }

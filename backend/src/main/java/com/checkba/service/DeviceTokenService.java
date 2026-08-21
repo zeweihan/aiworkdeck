@@ -3,6 +3,8 @@ package com.checkba.service;
 import com.checkba.controller.AuthController;
 import com.checkba.model.entity.DeviceToken;
 import com.checkba.repository.DeviceTokenRepository;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
@@ -16,6 +18,8 @@ import java.util.List;
 
 @Service
 public class DeviceTokenService {
+
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(DeviceTokenService.class);
 
     public static final String TOKEN_PREFIX = "awdt_";
 
@@ -78,6 +82,21 @@ public class DeviceTokenService {
 
     public List<DeviceToken> listMine(Long userId) {
         return repository.findByUserIdOrderByCreatedAtDesc(userId);
+    }
+
+    private static final long IDLE_EXPIRY_DAYS = 365;
+
+    @Scheduled(fixedDelay = 24 * 60 * 60 * 1000L, initialDelay = 90 * 60 * 1000L)
+    @Transactional
+    public void purgeIdleTokens() {
+        try {
+            int removed = repository.deleteIdleBefore(LocalDateTime.now().minusDays(IDLE_EXPIRY_DAYS));
+            if (removed > 0) {
+                log.info("清理空转设备令牌 {} 条（>{} 天未用）", removed, IDLE_EXPIRY_DAYS);
+            }
+        } catch (Exception e) {
+            log.warn("空转设备令牌清理失败: {}", e.toString());
+        }
     }
 
     private static String sha256(String s) {

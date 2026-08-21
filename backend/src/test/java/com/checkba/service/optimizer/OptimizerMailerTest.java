@@ -138,4 +138,40 @@ class OptimizerMailerTest {
         mailer.send(feedback(), triage(FeedbackTriageService.VERDICT_SUGGESTION), List.of(), sourceRef(""), "");
         verify(router, times(2)).send(any(), any(), any());
     }
+
+    /**
+     * 病灶：多收件人分属不同通道，其中一条通道故障时，send() 对第二个收件人的调用
+     * 会抛异常冒泡出去；OptimizerAgentService.notifyOrFail 接住后把这条反馈判 FAILED/
+     * 转 NEW 重试。没有任何 (feedbackId, 收件人) 维度的"已发送"记录——下一轮定时任务
+     * 重跑，会把已经收到过的第一个收件人再发一封，故障通道修好之前每天都重复。
+     *
+     * <p>修法：进程内存记一份"这条反馈已经成功发给过谁"，不落库（optimizer.mail.to
+     * 是维护者自己的邮箱，重发一次不是数据丢失，不值得为它加表/加列；进程重启会清空
+     * 这份记忆，届时最多再重发一轮，可接受）。同时把"一个收件人失败就不再尝试后面的
+     * 收件人"这条连带问题一起改掉：循环内 catch，全部收件人都试一遍，最后才把失败的
+     * 那些聚合成一个异常抛出去（触发外层重试，但只重试真正没发成功的那些人）。
+     */
+    @Test
+    @DisplayName("重试不会给已经成功收到过的收件人重复发信")
+    void retryDoesNotResendToAlreadyMailedRecipient() {
+        props.getMail().setTo("a@domestic.example,b@global.example");
+        doThrow(new RuntimeException("b 通道故障")).when(router)
+                .send(eq("b@global.example"), any(), any());
+
+        UserFeedback fb = feedback();
+        // 第一轮：a 成功，b 故障——整体应该仍然报失败（触发外层重试机制）
+        assertThrows(RuntimeException.class, () -> mailer.send(fb,
+                triage(FeedbackTriageService.VERDICT_SUGGESTION), List.of(), sourceRef(""), ""));
+        verify(router, times(1)).send(eq("a@domestic.example"), any(), any());
+        verify(router, times(1)).send(eq("b@global.example"), any(), any());
+
+        // b 通道修好了，下一轮定时任务重跑（同一个 fb，同一批收件人）
+        reset(router);
+        when(router.active()).thenReturn(true);
+        mailer.send(fb, triage(FeedbackTriageService.VERDICT_SUGGESTION), List.of(), sourceRef(""), "");
+
+        // a 已经收到过，这一轮不该再发；b 之前没发成功，这一轮该补上
+        verify(router, never()).send(eq("a@domestic.example"), any(), any());
+        verify(router, times(1)).send(eq("b@global.example"), any(), any());
+    }
 }

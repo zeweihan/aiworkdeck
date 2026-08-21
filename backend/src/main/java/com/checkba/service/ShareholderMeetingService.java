@@ -185,25 +185,47 @@ public class ShareholderMeetingService {
     }
 
     /**
+     * 同一 checkId 的底稿夹装配互斥用的分条锁。
+     *
+     * <p>ensureFolder 是「查不到就建」，查和建之间没有锁；start()/fetchFromCninfo() 都会
+     * 调 ensureWorkpaperFolders，双击「开始核查」或前端网络重试都可能并发命中。这条链路
+     * 里 ensureWorkpaperFolders/ensureFolder 本身都不是 @Transactional，真正的提交只发生
+     * 在 projectFileService.createFolder() 这个独立代理调用内部、同步完成——所以把锁包在
+     * 这整段外层能如实盖住提交，不是「锁在 @Transactional 方法里、提交前就放了」那种假修。
+     *
+     * <p>用固定条数的锁数组而不是按 id 建锁的 Map：写法与 ProjectMemoryExtractor 的
+     * PROJECT_LOCKS 同款，避免锁随 check 数量无界增长。单实例基线，多实例部署需要外置锁。
+     */
+
+
+    /**
      * 确保底稿夹五级子目录就绪，回写 workpaperFolderId。
      * 返回 slot 子文件夹名 → 文件夹 ID 的映射。
      */
+    /**
+     * 这里不再自己加锁：真正需要互斥的是「同名文件夹的查了再建」，而那道闸已经在
+     * {@link #ensureFolder} 里按 (projectId, parentId, name) 加了，并且配了 REQUIRES_NEW
+     * 让它盖住那次独立提交。在外面再包一层按 checkId 的锁是同一件事的第二套机制，
+     * 保护范围更粗、还容易让下一个人不知道该看哪一个。
+     */
     public Map<String, Long> ensureWorkpaperFolders(ShareholderMeetingCheck check, Long userId) {
-        Long projectId = check.getProjectId();
-        ProjectFile root = ensureFolder(projectId, null, WORKPAPER_ROOT, userId);
-        String checkFolderName = sanitizeName(check.getCompanyName() + "_" + check.getMeetingName());
-        ProjectFile checkFolder = ensureFolder(projectId, root.getId(), checkFolderName, userId);
+        {
+            Long projectId = check.getProjectId();
+            ProjectFile root = ensureFolder(projectId, null, WORKPAPER_ROOT, userId);
+            String checkFolderName = sanitizeName(check.getCompanyName() + "_" + check.getMeetingName());
+            ProjectFile checkFolder = ensureFolder(projectId, root.getId(), checkFolderName, userId);
 
-        Map<String, Long> folders = new LinkedHashMap<>();
-        for (String sub : List.of(FOLDER_NOTICE, FOLDER_RESOLUTION, FOLDER_VOTE, FOLDER_WORKPAPER, FOLDER_OPINION)) {
-            folders.put(sub, ensureFolder(projectId, checkFolder.getId(), sub, userId).getId());
-        }
+            Map<String, Long> folders = new LinkedHashMap<>();
+            for (String sub : List.of(FOLDER_NOTICE, FOLDER_RESOLUTION, FOLDER_VOTE, FOLDER_WORKPAPER, FOLDER_OPINION)) {
+                folders.put(sub, ensureFolder(projectId, checkFolder.getId(), sub, userId).getId());
+            }
 
-        if (!checkFolder.getId().equals(check.getWorkpaperFolderId())) {
-            check.setWorkpaperFolderId(checkFolder.getId());
-            checkRepository.save(check);
+            if (!checkFolder.getId().equals(check.getWorkpaperFolderId())) {
+                check.setWorkpaperFolderId(checkFolder.getId());
+                checkRepository.save(check);
+            }
+            return folders;
         }
-        return folders;
     }
 
     /** 文件夹/文件名清洗：剥掉路径分隔符等非法字符（validateNodeName 会拒绝） */

@@ -3,6 +3,7 @@ package com.checkba.service.platform;
 import com.checkba.service.SystemSettingService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -116,5 +117,38 @@ class ExternalProviderBackfillTest {
 
         assertEquals(ExternalServiceProvider.ALL.size(), b.backfill());
         assertEquals(0, b.backfill(), "第二次不该再写任何行");
+    }
+
+    /**
+     * 内嵌 Tomcat 在 refresh() 收尾（finishRefresh -> startWebServer）就开始收连接，
+     * 而 ApplicationReadyEvent 要等 refresh() 返回、CommandLineRunner 跑完才发出——
+     * 只挂这一个事件，升级后第一批落在这个窗口里的请求会读到还没回填的默认档位。
+     *
+     * <p>这里不去起真的内嵌 Tomcat 掐时间点（那样测出来的是抖动，不是回归），
+     * 而是验证回填这件事本身发生在 {@code ctx.refresh()} 之内、不依赖
+     * ApplicationReadyEvent 被发出——这正是两种触发方式在时序上的真实差别。
+     */
+    @Test
+    @DisplayName("回填必须在 refresh() 内完成，不能只挂 ApplicationReadyEvent（否则赶不上内嵌 Tomcat 开始收连接）")
+    void backfillCompletesDuringContextRefreshWithoutApplicationReadyEvent() {
+        Map<String, String> rows = new HashMap<>();
+        SystemSettingService settings = settingsWith(rows);
+        ExternalProviderResolver resolver = new ExternalProviderResolver(settings, true);
+
+        AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext();
+        ctx.registerBean(ExternalProviderBackfill.class, () -> new ExternalProviderBackfill(
+                settings, resolver, "", "", "", "", "", "", "", "", "", ""));
+        try {
+            // 只 refresh()，刻意不发 ApplicationReadyEvent——对应内嵌 Tomcat 已经开始
+            // 收连接、但 ApplicationReadyEvent 尚未发出的那个窗口。
+            ctx.refresh();
+
+            for (ExternalServiceProvider.Descriptor d : ExternalServiceProvider.ALL) {
+                assertNotNull(rows.get(ExternalProviderResolver.providerKey(d.service())),
+                        "回填必须在 refresh() 内完成，不能等 ApplicationReadyEvent 才跑：" + d.service());
+            }
+        } finally {
+            ctx.close();
+        }
     }
 }

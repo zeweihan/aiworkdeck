@@ -15,7 +15,9 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -37,14 +39,29 @@ public class TelemetryService {
     private final ObjectMapper mapper = new ObjectMapper();
     private final String appVersion;
 
-    /** 独立于业务线程池：埋点洪峰不与编排循环抢线程；有界队列，满了直接丢 */
-    private final ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "telemetry-writer");
-        t.setDaemon(true);
-        return t;
-    });
+    /**
+     * 队列容量：类注释一直写着"有界队列，满了直接丢"，但此前用
+     * {@code Executors.newSingleThreadExecutor(...)} 构造，背后是无界
+     * {@code LinkedBlockingQueue}——名不副实，DB 持续卡顿时排队的 Runnable
+     * （每个都攥着一个 Map + Instant）会无界堆积，把这条"过载安全阀"变成堆内存隐患。
+     * 2000 是按埋点这个场景选的：一次很猛的突发（如一轮工具调用风暴）也远用不到这个量级，
+     * 真撞上多半是 DB 卡死这种异常情况，此时"丢新事件保内存"就是设计里说的正确行为。
+     */
+    static final int QUEUE_CAPACITY = 2000;
 
+    /** 声明顺序必须在 executor 之前——下面的拒绝策略里引用它，字段初始化按声明顺序跑。 */
     private final AtomicLong dropped = new AtomicLong();
+
+    /** 独立于业务线程池：埋点洪峰不与编排循环抢线程；有界队列，满了直接丢 */
+    private final ExecutorService executor = new ThreadPoolExecutor(
+            1, 1, 0L, TimeUnit.MILLISECONDS,
+            new LinkedBlockingQueue<>(QUEUE_CAPACITY),
+            r -> {
+                Thread t = new Thread(r, "telemetry-writer");
+                t.setDaemon(true);
+                return t;
+            },
+            (r, exec) -> dropped.incrementAndGet()); // 队列满了直接丢弃计数，不抛异常、不阻塞调用方
 
     public TelemetryService(TelemetryEventRepository repository,
                             InstallIdentityService identity,

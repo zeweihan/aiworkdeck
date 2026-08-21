@@ -83,6 +83,32 @@ public class FeedbackIngestGuard {
         }
     }
 
+    /**
+     * installId 维度的分条锁，供 {@code FeedbackIngestController#ingest} 把
+     * check() 与真正的落库动作（{@code FeedbackService.ingest}）包进同一段互斥区间。
+     *
+     * <p>check() 只读 count，真正的插入在别处（FeedbackService.ingest），二者之间
+     * 此前完全没有互斥：两个并发请求都能查到"还没到每日上限"再各自落库，共同越过配额。
+     * 全站日上限不在这把锁的保护范围内——不同 installId 之间仍可能小幅越过，
+     * 但这不是这道闸主要防的"同一个人一次性猛刷"场景，2000/天的余量也足够宽松，
+     * 不值得为此换成跨请求的全局串行。
+     *
+     * <p>固定条数的锁数组而非按 installId 建 Map：写法与 ProjectMemoryExtractor 的
+     * PROJECT_LOCKS 同款，避免锁随 installId 数量无界增长。单实例基线。
+     */
+    private static final Object[] INSTALL_LOCKS = new Object[32];
+
+    static {
+        for (int i = 0; i < INSTALL_LOCKS.length; i++) {
+            INSTALL_LOCKS[i] = new Object();
+        }
+    }
+
+    public Object lockFor(String installId) {
+        int idx = installId == null ? 0 : Math.floorMod(installId.hashCode(), INSTALL_LOCKS.length);
+        return INSTALL_LOCKS[idx];
+    }
+
     /** 供状态展示：收件箱是否在收、今天收了多少。 */
     public long todayCount() {
         return feedbackRepository.countByCreatedAtAfter(LocalDateTime.now().minusDays(1));

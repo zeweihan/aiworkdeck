@@ -7,6 +7,7 @@ import com.checkba.service.account.AccountService;
 import com.checkba.service.account.AccountSwitchCleanup;
 import com.checkba.service.account.MachineAccountGuard;
 import com.checkba.service.ai.PlatformAiChannel;
+import com.checkba.service.LangText;
 import com.checkba.service.ai.PlatformUsageAccountant;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -282,6 +283,15 @@ public class AccountController {
             // 官网不可达不该让整个用量面板报错——本地统计仍然有价值
             platform.put("available", false);
             platform.put("message", e.getMessage());
+            return platform;
+        } catch (RuntimeException e) {
+            // 官网返回的 JSON 形状与约定漂移（比如 entries 里混进非对象元素）会在这里抛
+            // ClassCastException 之类的运行时异常，不是 AccountException，此前接不住，
+            // 冒泡出 usage() 把 data.put("local", ...) 已经算好的本地统计一起丢掉。
+            // 契约漂移只应该降级 platform 这一段，处理方式与上面的 AccountException 一致。
+            log.warn("platform 用量解析失败（官网返回形状与约定不符）: {}", e.toString());
+            platform.put("available", false);
+            platform.put("message", LangText.of("平台用量暂不可用", "Platform usage is temporarily unavailable"));
             return platform;
         }
         putAiQuota(platform);

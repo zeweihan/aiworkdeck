@@ -63,6 +63,38 @@ class TaskManager:
         """Shutdown the executor"""
         self.executor.shutdown(wait=True)
 
+    @staticmethod
+    def reconcile_orphaned_tasks():
+        """启动时对账：把上一条进程遗留的 PENDING/PROCESSING 任务标成失败。
+
+        active_tasks 是进程内的字典，进程一重启（部署、崩溃、被 OOM 杀掉、容器重启）
+        就没了，而数据库里那些行还停在 PENDING/PROCESSING。此前没有任何启动钩子或
+        定时器去清它们：前端轮询那个 task_id 会一直转下去——没有报错、没有超时、
+        也没有任何办法恢复，除非用户自己察觉并重开一个任务。
+
+        本服务是单进程运行（app.py 里 app.run(use_reloader=False)），所以启动这一刻
+        「正在跑」的任务必然为零，把残留一律判失败是安全的；写明原因让用户知道
+        该重试，而不是对着一个永远转圈的进度条干等。
+        """
+        try:
+            orphaned = Task.query.filter(Task.status.in_(['PENDING', 'PROCESSING'])).all()
+            if not orphaned:
+                return 0
+            now = datetime.utcnow()
+            for task in orphaned:
+                task.status = 'FAILED'
+                task.error_message = '服务重启导致任务中断，请重新发起'
+                task.completed_at = now
+            db.session.commit()
+            logger.warning(
+                "启动对账：%d 个上一条进程遗留的任务已标记为失败（原状态 PENDING/PROCESSING）",
+                len(orphaned))
+            return len(orphaned)
+        except Exception as e:
+            db.session.rollback()
+            logger.error("启动对账失败: %s", e, exc_info=True)
+            return 0
+
 
 # Global task manager instance
 task_manager = TaskManager(max_workers=4)

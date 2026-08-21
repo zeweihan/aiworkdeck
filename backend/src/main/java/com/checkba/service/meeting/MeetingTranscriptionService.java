@@ -317,8 +317,25 @@ public class MeetingTranscriptionService {
     /**
      * 提交转写。同步只做状态置位（TRANSCRIBING），耗时步骤进后台执行器。
      * RECORDED / FAILED 可提交；TRANSCRIBING/TRANSCRIBED 幂等返回。
+     *
+     * <p>方法开头的状态判定与真正落库的 {@code setStatus(TRANSCRIBING) + save()} 之间
+     * 隔着一整段校验逻辑，此前中间完全没有互斥：自动结束时触发一次 + 客户端超时重试
+     * 一次，或"重新提交转写"连点两下，都可能各自通过判定、各自提交一次——BYOK 档是
+     * 两次真实的听悟建任务调用，platform 档是两次网关提交（对同一次转写扣两次费）。
+     * 复用 {@link #refreshLock}：与 {@link #refreshIfNeeded} 共享同一把按会议维度的锁，
+     * 这两个方法本就在读改写同一个 status 字段，理应互斥。
      */
     public MeetingRecording startTranscription(Long meetingId) {
+        ReentrantLock lock = refreshLock(meetingId);
+        lock.lock();
+        try {
+            return doStartTranscription(meetingId);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private MeetingRecording doStartTranscription(Long meetingId) {
         MeetingRecording meeting = meetingRepository.findById(meetingId)
                 .orElseThrow(() -> new IllegalArgumentException(
                         LangText.of("会议不存在: ", "Meeting not found: ") + meetingId));

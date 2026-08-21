@@ -125,6 +125,22 @@ public class NativePackService {
     private final Map<String, CachedManifest> manifestCache = new ConcurrentHashMap<>();
 
     /**
+     * 按 packId 维度的互斥，取代此前 install()/uninstall() 共用的同一把 {@code synchronized(this)}
+     * 服务级对象锁。旧写法下卸载一个已装好的 pack B 会被另一个正在下载的、完全无关的 pack A
+     * 卡住——install() 一次下载最长可以跑到 3 次重试 × 10 分钟超时，uninstall() 的请求线程
+     * 会在这整段时间里空等，没有任何报错或提示。装/卸不同 pack 之间不该互相阻塞；
+     * 同一个 packId 上的并发操作仍需要互斥（下载中途不能被卸载删了目录）。
+     * packId 来自固定的插件市场目录（见 requireValidId 的 PACK_ID 校验），不是用户可任意
+     * 生成的值，这个 map 不会无界增长——与本类里 statuses/manifestCache 同一形态。
+     */
+    private final Map<String, Object> packLocks = new ConcurrentHashMap<>();
+
+    /** 包级可见性（无修饰符）纯为单测：并发回归要从外面拿到与 install()/uninstall() 同一把锁。 */
+    Object packLock(String packId) {
+        return packLocks.computeIfAbsent(packId, id -> new Object());
+    }
+
+    /**
      * 「随包内置资源在场」探针：packId -> 判定函数，由资源消费方（如
      * {@link com.checkba.service.ai.LitigationVisualService}）自行登记。
      *
@@ -352,32 +368,34 @@ public class NativePackService {
      *
      * @return 安装的版本号
      */
-    public synchronized String install(String packId) {
+    public String install(String packId) {
         requireValidId(packId);
-        requireEnabled();
-        PackStatus st = liveStatus(packId);
-        try {
-            st.setState(STATE_DOWNLOADING);
-            st.setError(null);
-            String version = doInstall(packId, st);
-            st.setState(STATE_READY);
-            st.setInstalledVersion(version);
-            // 装完让资源消费方的运行时解析缓存失效——不然用户装完 pack 不重启后端，
-            // 面板/工具仍然显示上一次探测出的「不可用」。
-            notifyPackChanged(packId);
-            return version;
-        } catch (RuntimeException e) {
-            // 因封禁被拒不是「安装失败」：状态要如实停在 revoked，否则广场把平台封禁
-            // 显示成一次网络出错，用户只会一遍遍重试
-            JSONObject current = readCurrent(packId);
-            if (current != null && current.getBool("revoked", false)) {
-                st.setState(STATE_REVOKED);
-                st.setInstalledVersion(current.getStr("version"));
-            } else {
-                st.setState(STATE_FAILED);
+        synchronized (packLock(packId)) {
+            requireEnabled();
+            PackStatus st = liveStatus(packId);
+            try {
+                st.setState(STATE_DOWNLOADING);
+                st.setError(null);
+                String version = doInstall(packId, st);
+                st.setState(STATE_READY);
+                st.setInstalledVersion(version);
+                // 装完让资源消费方的运行时解析缓存失效——不然用户装完 pack 不重启后端，
+                // 面板/工具仍然显示上一次探测出的「不可用」。
+                notifyPackChanged(packId);
+                return version;
+            } catch (RuntimeException e) {
+                // 因封禁被拒不是「安装失败」：状态要如实停在 revoked，否则广场把平台封禁
+                // 显示成一次网络出错，用户只会一遍遍重试
+                JSONObject current = readCurrent(packId);
+                if (current != null && current.getBool("revoked", false)) {
+                    st.setState(STATE_REVOKED);
+                    st.setInstalledVersion(current.getStr("version"));
+                } else {
+                    st.setState(STATE_FAILED);
+                }
+                st.setError(e.getMessage());
+                throw e;
             }
-            st.setError(e.getMessage());
-            throw e;
         }
     }
 
@@ -492,36 +510,38 @@ public class NativePackService {
     }
 
     /** 卸载：删 packs/&lt;id&gt;/ 整目录（含 current.json）。canonical 守卫只许删正下方。 */
-    public synchronized void uninstall(String packId) {
+    public void uninstall(String packId) {
         requireValidId(packId);
-        Path root = packsRoot();
-        Path dir = root.resolve(packId);
-        try {
-            String canonicalRoot = root.toFile().getCanonicalPath();
-            String canonicalDir = dir.toFile().getCanonicalPath();
-            if (!canonicalDir.startsWith(canonicalRoot + java.io.File.separator)) {
-                throw new IllegalArgumentException(LangText.of("非法资源包目录: ", "Invalid pack directory: ") + packId);
+        synchronized (packLock(packId)) {
+            Path root = packsRoot();
+            Path dir = root.resolve(packId);
+            try {
+                String canonicalRoot = root.toFile().getCanonicalPath();
+                String canonicalDir = dir.toFile().getCanonicalPath();
+                if (!canonicalDir.startsWith(canonicalRoot + java.io.File.separator)) {
+                    throw new IllegalArgumentException(LangText.of("非法资源包目录: ", "Invalid pack directory: ") + packId);
+                }
+            } catch (IOException e) {
+                throw new IllegalStateException(LangText.of("路径检查失败: ", "Path check failed: ") + e.getMessage());
             }
-        } catch (IOException e) {
-            throw new IllegalStateException(LangText.of("路径检查失败: ", "Path check failed: ") + e.getMessage());
-        }
-        if (!Files.isDirectory(dir)) {
-            // 从未装成功：pack 目录不存在，但可能有失败安装留下的 staging 残留（.part 等）。
-            // 卸载本该是幂等的收口动作——不能因为"没装成功"就拒绝清理，把用户卡在
-            // 「装不上、卸不掉」的死循环里（见 416 断点续传死循环的排查记录）。
+            if (!Files.isDirectory(dir)) {
+                // 从未装成功：pack 目录不存在，但可能有失败安装留下的 staging 残留（.part 等）。
+                // 卸载本该是幂等的收口动作——不能因为"没装成功"就拒绝清理，把用户卡在
+                // 「装不上、卸不掉」的死循环里（见 416 断点续传死循环的排查记录）。
+                deleteStaging(packId);
+                statuses.remove(packId);
+                manifestCache.remove(packId);
+                log.info("Pack {} was never installed; cleared staging leftovers only", packId);
+                return;
+            }
+            FileUtil.del(dir.toFile());
             deleteStaging(packId);
             statuses.remove(packId);
             manifestCache.remove(packId);
-            log.info("Pack {} was never installed; cleared staging leftovers only", packId);
-            return;
+            log.info("Uninstalled native pack {}", packId);
+            // 卸载同理要让缓存失效——否则面板/工具会照着卸载前的探测结果继续显示可用。
+            notifyPackChanged(packId);
         }
-        FileUtil.del(dir.toFile());
-        deleteStaging(packId);
-        statuses.remove(packId);
-        manifestCache.remove(packId);
-        log.info("Uninstalled native pack {}", packId);
-        // 卸载同理要让缓存失效——否则面板/工具会照着卸载前的探测结果继续显示可用。
-        notifyPackChanged(packId);
     }
 
     // ==================== 下载 ====================
@@ -915,17 +935,26 @@ public class NativePackService {
         List<String> hit = new ArrayList<>();
         for (RevokedPack r : revoked) {
             if (r.id() == null) continue;
-            JSONObject current = readCurrent(r.id());
-            if (current == null) continue;
-            String installed = current.getStr("version");
-            boolean matches = "*".equals(r.version()) || r.version() == null || r.version().equals(installed);
-            if (!matches || current.getBool("revoked", false)) continue;
-            writeCurrent(r.id(), installed, true);
-            statuses.remove(r.id());
-            hit.add(r.id());
-            log.warn("Native pack {} v{} revoked by platform: {}", r.id(), installed, r.reason());
-            // 封禁同样是「资源解析结果变了」，消费方缓存的可用性判定要跟着刷新
-            notifyPackChanged(r.id());
+            // 读 current.json -> 判定 -> 写回不是原子的；install()/uninstall() 收尾时也会写
+            // current.json（升级完成 writeCurrent + pruneOtherVersions 删旧版本目录）。不加锁
+            // 的话，这里读到的版本号可能是并发升级提交之前的快照，写回时就会用一个已经被
+            // pruneOtherVersions 删掉目录的旧版本号，把刚升级完的新版本盖掉——新版本没有被
+            // 封禁，却被这次过期的写操作误标成 revoked。与 install()/uninstall() 共用同一把
+            // 按 packId 分的锁（packLock），跟它们对这一个 pack 的临界区互斥即可堵死这个窗口
+            // ——不用 synchronized(this)：那会让这里顺带卡住其它完全无关 pack 的安装/卸载。
+            synchronized (packLock(r.id())) {
+                JSONObject current = readCurrent(r.id());
+                if (current == null) continue;
+                String installed = current.getStr("version");
+                boolean matches = "*".equals(r.version()) || r.version() == null || r.version().equals(installed);
+                if (!matches || current.getBool("revoked", false)) continue;
+                writeCurrent(r.id(), installed, true);
+                statuses.remove(r.id());
+                hit.add(r.id());
+                log.warn("Native pack {} v{} revoked by platform: {}", r.id(), installed, r.reason());
+                // 封禁同样是「资源解析结果变了」，消费方缓存的可用性判定要跟着刷新
+                notifyPackChanged(r.id());
+            }
         }
         return hit;
     }
