@@ -140,8 +140,14 @@ public class PluginService {
                     pluginId, instance.getClass().getName());
             return;
         }
-        aware.setHost(factory.forPlugin(pluginId));
-        log.info("Injected PluginHost into {} (plugin {})", instance.getClass().getName(), pluginId);
+        try {
+            aware.setHost(factory.forPlugin(pluginId));
+            log.info("Injected PluginHost into {} (plugin {})", instance.getClass().getName(), pluginId);
+        } catch (Throwable t) {
+            // 插件的 setHost 抛了：工具照常注册（没有 host 而已），别让一个插件的构造期错误吞掉整次扫描
+            log.warn("Plugin {} tool {} setHost failed, host not injected: {}",
+                    pluginId, instance.getClass().getName(), t.toString());
+        }
     }
 
     @org.springframework.beans.factory.annotation.Autowired

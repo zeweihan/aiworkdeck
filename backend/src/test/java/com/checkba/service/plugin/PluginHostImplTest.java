@@ -342,6 +342,65 @@ class PluginHostImplTest {
     }
 
     @Test
+    @DisplayName("Jobs.cancel/status：他人项目的 job 不能取消（写权限）、不能看（读权限）；别的插件的 job 当不存在")
+    void jobsCancelRequiresProjectPermission() {
+        com.checkba.model.entity.PluginJob foreign = new com.checkba.model.entity.PluginJob();
+        foreign.setId("J-FOREIGN");
+        foreign.setPluginId("dd");
+        foreign.setProjectId(2L);
+        when(pluginJobService.get("J-FOREIGN")).thenReturn(foreign);
+        when(members.hasWritePermission(2L, USER)).thenReturn(false);
+        when(members.hasReadPermission(2L, USER)).thenReturn(false);
+        assertThrows(IllegalArgumentException.class, () -> host.jobs().cancel("J-FOREIGN"));
+        assertThrows(IllegalArgumentException.class, () -> host.jobs().status("J-FOREIGN"));
+        verify(pluginJobService, never()).cancel(anyString());
+
+        // 本项目的 job：读权限能看，写权限能取消
+        com.checkba.model.entity.PluginJob own = new com.checkba.model.entity.PluginJob();
+        own.setId("J-OWN");
+        own.setPluginId("dd");
+        own.setProjectId(PROJECT);
+        when(pluginJobService.get("J-OWN")).thenReturn(own);
+        when(pluginJobService.status("J-OWN")).thenReturn(new com.checkba.plugin.api.JobStatus("J-OWN", "k", "t", "running", 0, 0, null, null, null));
+        assertEquals("running", host.jobs().status("J-OWN").status());
+        host.jobs().cancel("J-OWN");
+        verify(pluginJobService).cancel("J-OWN");
+
+        // 别的插件的 job：不存在
+        com.checkba.model.entity.PluginJob other = new com.checkba.model.entity.PluginJob();
+        other.setId("J-OTHER");
+        other.setPluginId("someone-else");
+        other.setProjectId(PROJECT);
+        when(pluginJobService.get("J-OTHER")).thenReturn(other);
+        assertNull(host.jobs().status("J-OTHER"));
+        host.jobs().cancel("J-OTHER");
+        verify(pluginJobService, never()).cancel("J-OTHER");
+    }
+
+    @Test
+    @DisplayName("Files.write：parentId 必须是本项目的文件夹——文件、别的项目的节点都拒绝，不落盘")
+    void filesWriteValidatesParent() {
+        ProjectFile notFolder = file(70L, "a.txt", false);
+        assertThrows(IllegalArgumentException.class, () -> host.files().write(PROJECT, 70L, "x.txt",
+                new ByteArrayInputStream(new byte[0]), ConflictPolicy.RENAME));
+        ProjectFile foreignFolder = file(71L, "dir", true);
+        foreignFolder.setProjectId(2L);
+        assertThrows(IllegalArgumentException.class, () -> host.files().write(PROJECT, 71L, "x.txt",
+                new ByteArrayInputStream(new byte[0]), ConflictPolicy.RENAME));
+        verify(projectFileService, never()).createFile(anyLong(), any(), anyString(), anyString(), anyLong(), any(), any(), anyLong(),
+                any(ProjectFileService.ConflictPolicy.class));
+
+        ProjectFile okFolder = file(72L, "ok", true);
+        ProjectFile created = file(73L, "x.txt", false);
+        created.setParentId(72L);
+        when(projectFileService.createFile(eq(PROJECT), eq(72L), eq("x.txt"), eq("txt"), eq(0L), isNull(), isNull(),
+                eq(USER), eq(ProjectFileService.ConflictPolicy.RENAME))).thenReturn(created);
+        when(projectFileRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(PROJECT)).thenReturn(List.of(okFolder, created));
+        assertEquals("ok/x.txt", host.files().write(PROJECT, 72L, "x.txt",
+                new ByteArrayInputStream(new byte[0]), ConflictPolicy.RENAME).path());
+    }
+
+    @Test
     @DisplayName("PluginService.injectHostIfAware：HostAware 工具拿到绑定本插件 id 的 host，普通工具不受影响")
     void pluginServiceInjectsHost() {
         PluginService ps = new PluginService();

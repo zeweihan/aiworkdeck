@@ -53,6 +53,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -74,7 +75,13 @@ import java.util.Set;
 @Slf4j
 class PluginHostImpl implements PluginHost {
 
-    /** Docs.exec 放行的编辑器原语：AI 管线已经在用的 writer/sheet/slide 下发名；宿主自用与诊断原语不开放。 */
+    /**
+     * Docs.exec 放行的编辑器原语 = AI 工具已暴露的 doc_ / sheet_ / slide_ 下发名 ∪ EvidenceLink 书签/链接原语
+     * （clear_anchors / insert_paragraph / bookmark_selection / get_bookmark_context / goto_bookmark /
+     * check_link_anchors / get_selection_hyperlink / set_selection_hyperlink / insert_link_with_bookmark——
+     * 尽调插件在文档里建锚点必需，2026-08-22 复核裁决保留）。宿主自用（load/export_document、
+     * doc_open_file_sync、set_zoom 等）与诊断原语不开放。改这张表要同步 docs/PLUGIN_SPEC.md §11 的 Docs.exec 行。
+     */
     static final Set<String> DOC_ACTIONS = Set.of(
             // writer
             "insert_at_cursor", "replace_selection", "find_replace", "get_selection", "find_text_locations",
@@ -180,6 +187,34 @@ class PluginHostImpl implements PluginHost {
             return in.readAllBytes();
         } catch (IOException e) {
             throw new UncheckedIOException(e);
+        }
+    }
+
+    /** 把存储里的文件流式落到临时文件（不整份驻留堆），调用方用完 {@link #deleteQuietly}。 */
+    private Path copyToTemp(ProjectFile pf) {
+        if (Boolean.TRUE.equals(pf.getIsFolder()) || !StringUtils.hasText(pf.getFilePath())) {
+            throw new IllegalArgumentException(LangText.of("不是可读文件: ", "Not a readable file: ") + pf.getName());
+        }
+        String e = ext(pf.getName());
+        Path tmp = null;
+        try {
+            tmp = java.nio.file.Files.createTempFile("plugin-host-", e.isEmpty() ? "" : "." + e);
+            try (InputStream in = f.storageServiceFactory.getStorageService().load(pf.getFilePath()).getInputStream()) {
+                java.nio.file.Files.copy(in, tmp, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+            return tmp;
+        } catch (IOException | RuntimeException ex) {
+            // 半截临时文件别留在磁盘上
+            deleteQuietly(tmp);
+            throw ex instanceof IOException io ? new UncheckedIOException(io) : (RuntimeException) ex;
+        }
+    }
+
+    private static void deleteQuietly(Path p) {
+        try {
+            if (p != null) java.nio.file.Files.deleteIfExists(p);
+        } catch (IOException ignored) {
+            // 临时文件删不掉不影响结果
         }
     }
 
@@ -290,6 +325,13 @@ class PluginHostImpl implements PluginHost {
         public FileInfo write(long projectId, Long parentId, String name, InputStream bytes, ConflictPolicy policy) {
             ToolCall c = requireWrite(projectId);
             if (!StringUtils.hasText(name)) throw new IllegalArgumentException("name required");
+            if (parentId != null) {
+                // 与 move 同款：父节点必须是本项目的文件夹（不然能把文件挂到别的项目 / 挂到文件底下）
+                ProjectFile parent = requireProjectFile(projectId, parentId);
+                if (!Boolean.TRUE.equals(parent.getIsFolder())) {
+                    throw new IllegalArgumentException(LangText.of("目标不是文件夹", "Target is not a folder"));
+                }
+            }
             byte[] data;
             try {
                 data = bytes == null ? new byte[0] : bytes.readAllBytes();
@@ -393,52 +435,58 @@ class PluginHostImpl implements PluginHost {
             ToolCall c = requireRead(projectId);
             ProjectFile p = requireProjectFile(projectId, fileId);
             OcrOptions opt = o == null ? OcrOptions.text() : o;
-            byte[] data = readBytes(p);
             String type = StringUtils.hasText(p.getFileType()) ? p.getFileType().toLowerCase() : ext(p.getName());
-            List<String> pageImages = new ArrayList<>();
+            StringBuilder all = new StringBuilder();
+            List<OcrBlock> blocks = new ArrayList<>();
             if ("pdf".equals(type)) {
-                try (PDDocument doc = Loader.loadPDF(data)) {
+                // 逐页 render → OCR → 丢弃：50 页 base64 攒成 List 会把几百 MB 驻在堆里；
+                // 文件本体也不整份 readAllBytes，先落临时文件让 PDFBox 按需读
+                Path tmp = copyToTemp(p);
+                try (PDDocument doc = Loader.loadPDF(tmp.toFile())) {
                     PDFRenderer renderer = new PDFRenderer(doc);
                     int pages = Math.min(doc.getNumberOfPages(), OCR_MAX_PAGES);
                     for (int i = 0; i < pages; i++) {
                         BufferedImage img = renderer.renderImageWithDPI(i, 150);
                         ByteArrayOutputStream bos = new ByteArrayOutputStream();
                         ImageIO.write(img, "png", bos);
-                        pageImages.add(Base64.getEncoder().encodeToString(bos.toByteArray()));
+                        appendPage(all, blocks, opt, i + 1, ocrOne(c, Base64.getEncoder().encodeToString(bos.toByteArray())));
                     }
                 } catch (IOException e) {
                     throw new UncheckedIOException(e);
+                } finally {
+                    deleteQuietly(tmp);
                 }
             } else if (IMAGE_TYPES.contains(type)) {
-                pageImages.add(Base64.getEncoder().encodeToString(data));
+                appendPage(all, blocks, opt, 1, ocrOne(c, Base64.getEncoder().encodeToString(readBytes(p))));
             } else {
                 throw new IllegalArgumentException(LangText.of(
                         "OCR 只支持图片与 PDF: ", "OCR supports images and PDF only: ") + p.getName());
             }
-            // 平台网关按用户计费：在发起用户的作用域里调
-            StringBuilder all = new StringBuilder();
-            List<OcrBlock> blocks = new ArrayList<>();
-            for (int i = 0; i < pageImages.size(); i++) {
-                String b64 = pageImages.get(i);
-                com.checkba.service.ocr.OcrResult r = PlatformAiUserScope.call(c.userId(), () -> f.ocrService.recognizeGeneral(b64));
-                String t = r == null || r.getText() == null ? "" : r.getText();
-                if (all.length() > 0) all.append('\n');
-                all.append(t);
-                if (opt.blocks()) {
-                    // 网关不回坐标，块粒度到页：一页一块、整页矩形
-                    blocks.add(new OcrBlock(t, i + 1, 0, 0, 1, 1));
-                }
-            }
             return new OcrResult(all.toString(), blocks);
+        }
+
+        /** 平台网关按用户计费：在发起用户的作用域里调。 */
+        private String ocrOne(ToolCall c, String b64) {
+            com.checkba.service.ocr.OcrResult r = PlatformAiUserScope.call(c.userId(), () -> f.ocrService.recognizeGeneral(b64));
+            return r == null || r.getText() == null ? "" : r.getText();
+        }
+
+        private void appendPage(StringBuilder all, List<OcrBlock> blocks, OcrOptions opt, int page, String t) {
+            if (all.length() > 0) all.append('\n');
+            all.append(t);
+            if (opt.blocks()) {
+                // 网关不回坐标，块粒度到页：一页一块、整页矩形
+                blocks.add(new OcrBlock(t, page, 0, 0, 1, 1));
+            }
         }
 
         @Override
         public List<String> pdfPageTexts(long projectId, long fileId, int fromPage, int toPage) {
             requireRead(projectId);
             ProjectFile p = requireProjectFile(projectId, fileId);
-            byte[] data = readBytes(p);
             List<String> out = new ArrayList<>();
-            try (PDDocument doc = Loader.loadPDF(data)) {
+            Path tmp = copyToTemp(p);
+            try (PDDocument doc = Loader.loadPDF(tmp.toFile())) {
                 int n = doc.getNumberOfPages();
                 int from = Math.max(1, fromPage);
                 int to = toPage <= 0 ? n : Math.min(n, toPage);
@@ -450,6 +498,8 @@ class PluginHostImpl implements PluginHost {
                 }
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
+            } finally {
+                deleteQuietly(tmp);
             }
             return out;
         }
@@ -562,19 +612,31 @@ class PluginHostImpl implements PluginHost {
             return f.pluginJobService.start(pluginId, kind, title, snapshot, wrapped);
         }
 
-        @Override
-        public JobStatus status(String jobId) {
-            enter();
+        /** 只认本插件的任务；任务挂在项目上时，还要当前用户对那个项目有读（status）/ 写（cancel）权限。 */
+        private PluginJob ownJob(String jobId, boolean write) {
+            ToolCall c = enter();
             PluginJob j = f.pluginJobService.get(jobId);
             if (j == null || !pluginId.equals(j.getPluginId())) return null;
-            return f.pluginJobService.status(jobId);
+            if (j.getProjectId() != null) {
+                boolean ok = write ? f.projectMemberService.hasWritePermission(j.getProjectId(), c.userId())
+                        : f.projectMemberService.hasReadPermission(j.getProjectId(), c.userId());
+                if (!ok) {
+                    throw new IllegalArgumentException(write
+                            ? LangText.of("无权限修改该项目", "No write access to this project")
+                            : LangText.of("无权限访问该项目", "No access to this project"));
+                }
+            }
+            return j;
+        }
+
+        @Override
+        public JobStatus status(String jobId) {
+            return ownJob(jobId, false) == null ? null : f.pluginJobService.status(jobId);
         }
 
         @Override
         public void cancel(String jobId) {
-            enter();
-            PluginJob j = f.pluginJobService.get(jobId);
-            if (j == null || !pluginId.equals(j.getPluginId())) return;
+            if (ownJob(jobId, true) == null) return;
             f.pluginJobService.cancel(jobId);
         }
     }
