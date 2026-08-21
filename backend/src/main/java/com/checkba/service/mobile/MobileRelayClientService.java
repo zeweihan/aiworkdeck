@@ -173,6 +173,9 @@ public class MobileRelayClientService {
 
     // ==================== 落盘 ====================
 
+    /** 归档根目录名，与 buildPhysicalPath 会拼出的物理路径同构，见 landAndAck 内注释。 */
+    private static final String MEDIA_ROOT_FOLDER = "现场影像";
+
     private void landAndAck(JsonNode item) throws IOException, InterruptedException {
         long itemId = item.path("id").asLong();
         long projectId;
@@ -191,12 +194,15 @@ public class MobileRelayClientService {
         }
 
         String dateStr = captureDate(item);
-        ProjectFile root = ensureFolder(projectId, null, "现场影像", userId);
+        ProjectFile root = ensureFolder(projectId, null, MEDIA_ROOT_FOLDER, userId);
         ProjectFile day = ensureFolder(projectId, root.getId(), dateStr, userId);
 
         String landedName = landedFileName(item.path("fileName").asText(),
                 item.path("clientMediaId").asText());
-        // 幂等：同名已在（上轮落盘成功但 ACK 没发出去）→ 直接补 ACK
+        // 幂等判据：数据库里有没有同名的 project_file 行。这条判据成立的前提是
+        // 「行存在 ⇒ 字节已经真的落好」——下面把 storage.save 挪到 createFile 之前正是为了
+        // 保住这个前提，不然中途失败会把"行已落库、字节没写对"的空壳当成已完成，下一轮直接
+        // 补 ACK，云端随之删除中转区原件，现场影像永久丢失却显示"已送达"。
         boolean already = projectFileService.getFilesByParent(projectId, day.getId()).stream()
                 .anyMatch(f -> !Boolean.TRUE.equals(f.getIsFolder()) && landedName.equals(f.getName()));
         if (!already) {
@@ -215,16 +221,37 @@ public class MobileRelayClientService {
                         itemId, content.statusCode(), contentType);
                 return;
             }
+
+            // 字节先落盘、元数据后落库，顺序不能反：createFile 自带 @Transactional、本类没有
+            // 事务包裹它，一旦返回即已提交，此后任何失败都救不回来（旧实现先 createFile 再
+            // save，save 抛 IOException 时行已落库、ACK 没发，下一轮却只按"同名文件已在"的
+            // 幂等判据误判成功直接补 ACK）。storagePath 与 buildPhysicalPath 会算出的路径同构
+            // （两层目录名就是上面 ensureFolder 用的 MEDIA_ROOT_FOLDER 与 dateStr），显式传给
+            // createFile 而不是留空自动推导，为的是下面这行 save 能在建库之前先拿到确定的
+            // 存储 key；createFile 内部 createFromTemplate 见文件已存在会直接跳过，不会用
+            // 模板覆盖已经落好的真内容。真落盘失败（磁盘满/网络中断）时异常在 createFile 之前
+            // 抛出，本轮不落一条库记录，下一轮幂等判据自然判定"未落地"、重新下载，
+            // 不需要额外的补偿删除。
+            String storagePath = String.format("projects/%d/%s/%s/%s",
+                    projectId, MEDIA_ROOT_FOLDER, dateStr, landedName);
+            try (InputStream in = content.body()) {
+                storageServiceFactory.getStorageService().save(storagePath, in);
+            }
             ProjectFile record = projectFileService.createFile(
                     projectId, day.getId(), landedName,
                     item.path("mediaType").asText("image"),
                     item.path("fileSize").asLong(0),
-                    null, null, userId);
-            try (InputStream in = content.body()) {
-                storageServiceFactory.getStorageService().save(record.getFilePath(), in);
+                    storagePath, null, userId);
+            // storagePath 是照着 ProjectFileService.buildPhysicalPath 的格式手拼的，
+            // 两边一旦被改得对不上，字节就存在一个谁也不去读的位置、而行指向一个空路径——
+            // 那是无声失败。这里对一次账，失配就吼出来（字节已经写完，救不回来，
+            // 但至少不让它悄悄发生）。
+            if (record != null && !storagePath.equals(record.getFilePath())) {
+                log.error("手机同步：存储路径与文件行不一致，影像可能读不出来。saved={} row={}",
+                        storagePath, record.getFilePath());
             }
             log.info("手机同步：影像 {} 已落盘 项目={} 文件={}/{}/{}",
-                    itemId, projectId, "现场影像", dateStr, landedName);
+                    itemId, projectId, MEDIA_ROOT_FOLDER, dateStr, landedName);
         }
         HttpResponse<String> ack = authed("POST", "/api/mobile/inbox/" + itemId + "/ack", "{}");
         if (!okEnvelope(ack)) {

@@ -723,4 +723,93 @@ class WorkSessionServiceTest {
         assertFalse(repoSvc.listBranches(projectId).stream().anyMatch(b -> b.startsWith("work/")),
                 "工作分支必须被删除，不能残留");
     }
+
+    @SuppressWarnings("unchecked")
+    private static Map<Long, Integer> autosaveFailureStreakMap(WorkSessionService target) throws Exception {
+        Field f = WorkSessionService.class.getDeclaredField("autosaveFailureStreak");
+        f.setAccessible(true);
+        return (Map<Long, Integer>) f.get(target);
+    }
+
+    private static int autosaveFailureStreak(WorkSessionService target, long projectId) throws Exception {
+        return autosaveFailureStreakMap(target).getOrDefault(projectId, 0);
+    }
+
+    private static void awaitStreakAtLeast(WorkSessionService target, long projectId, int expected) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline && autosaveFailureStreak(target, projectId) < expected) {
+            Thread.sleep(10);
+        }
+    }
+
+    /**
+     * 等一次防抖任务真正跑完（不只是被摘出 pending）——scheduler 是单线程池
+     * （ThreadPoolTaskScheduler 默认 poolSize=1），先睡够防抖时长确保那次调度的触发
+     * 时间点已经过去，再提交一个立即执行的哨兵任务：单线程意味着哨兵不可能抢在
+     * 触发时间更早的防抖任务前面跑，它的 latch 倒数即证明防抖任务体已经完整执行完毕
+     * （包括 commitNow 与 autosaveFailureStreak 的更新），不是判断"pending 表里还有没有
+     * 这个 key"这种会在任务体真正跑完之前就提前满足的弱信号
+     * （pending.remove 是任务体的第一行，早于 commitNow 执行）。
+     */
+    private void awaitDebounceSettled() throws Exception {
+        Thread.sleep(60);
+        CountDownLatch done = new CountDownLatch(1);
+        scheduler.execute(done::countDown);
+        assertTrue(done.await(5, TimeUnit.SECONDS), "调度器哨兵任务超时，可能卡住了");
+    }
+
+    /**
+     * 防抖自动存档原来撞异常只 log.warn 一句就吞掉——不上抛、不重试、不告警，
+     * 此后每一轮防抖都同样静默失败，用户的版本记录从崩溃/锁残留那一刻起永久停摆，
+     * 界面上没有任何线索。用一把"新鲜"的 index.lock（issue 6/7 的陈旧锁自愈只回收
+     * 超过 5 分钟的锁，新鲜的不会被回收）确定性地制造连续失败，不用真的伪造磁盘满/
+     * 权限错误；断言连续失败次数被正确计数，跨过阈值时才能从 WARN 升级成
+     * 能被发现的信号（ERROR 级日志）。
+     *
+     * <p>锁要等第一轮（正常开工作段，会真的 checkout 一次分支）落地之后才放上去——
+     * ensureSession 对已有 ACTIVE 工作段是空操作、不再碰 git 索引，放早了会连开工作
+     * 本身都失败，测不到本条要测的"防抖自动存档"这一段。
+     */
+    @Test
+    void repeatedAutosaveFailuresAreCountedForEscalation() throws Exception {
+        svc.setDebounceMillis(30);
+
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        awaitDebounceSettled();
+
+        Path lockFile = repoSvc.gitDir(7L).resolve("index.lock");
+        Files.createFile(lockFile);
+
+        for (int i = 1; i <= 3; i++) {
+            svc.onChangeSignal(7L, 1L, "韩泽伟");
+            Files.writeString(root.resolve("projects/7/合同.txt"), "第" + i + "次改动");
+            awaitStreakAtLeast(svc, 7L, i);
+        }
+
+        assertEquals(3, autosaveFailureStreak(svc, 7L),
+                "连续失败要被正确计数，这是从 WARN 升级到能被发现的信号（ERROR）的依据");
+    }
+
+    /** 一旦某一轮自动存档成功，连续失败计数必须清零——不能让很久以前的旧失败继续计入新一轮统计。 */
+    @Test
+    void autosaveFailureStreakResetsAfterASuccessfulRun() throws Exception {
+        svc.setDebounceMillis(30);
+
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        awaitDebounceSettled();
+
+        Path lockFile = repoSvc.gitDir(7L).resolve("index.lock");
+        Files.createFile(lockFile);
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "撞锁的一次改动");
+        awaitStreakAtLeast(svc, 7L, 1);
+        assertEquals(1, autosaveFailureStreak(svc, 7L));
+
+        Files.delete(lockFile);
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "锁已经不在了");
+        awaitDebounceSettled();
+
+        assertEquals(0, autosaveFailureStreak(svc, 7L), "成功一轮之后连续失败计数必须清零");
+    }
 }

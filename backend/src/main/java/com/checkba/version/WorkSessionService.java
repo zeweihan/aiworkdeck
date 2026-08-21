@@ -62,6 +62,19 @@ public class WorkSessionService {
     private final Map<Long, PendingActor> actors = new ConcurrentHashMap<>();
 
     /**
+     * 防抖自动存档的连续失败计数（成功一轮就清零，不出现在这个表里）。修复前撞异常
+     * 只 log.warn 一句就吞掉——不上抛、不重试、不告警，此后每一轮防抖都同样静默失败
+     * （比如崩溃残留的 .git/index.lock，issue 6/7 已经让 commitAll 能自愈陈旧锁，
+     * 但磁盘满/权限错误这类其它持续性故障依然会一直失败），版本记录从那一刻起
+     * 永久停摆、界面上没有任何线索。跨过 {@link #AUTOSAVE_FAILURE_ALERT_THRESHOLD}
+     * 后把日志从 WARN 升级到 ERROR，给运维一个能被日志监控发现的信号。
+     */
+    private final Map<Long, Integer> autosaveFailureStreak = new ConcurrentHashMap<>();
+
+    /** 连续失败到这个次数才升级成 ERROR——避免单次网络抖动之类的偶发失败就报警噪声。 */
+    private static final int AUTOSAVE_FAILURE_ALERT_THRESHOLD = 3;
+
+    /**
      * 按项目维度的可重入互斥，包住所有会改仓库状态的路径（切分支/提交/合并/删分支）。
      * 必须可重入：endSession/revertTo 内部都会再调 commitNow，同一线程二次进入
      * 同一把锁不能死锁。ReentrantLock 而非 synchronized(projectId) ——
@@ -238,8 +251,15 @@ public class WorkSessionService {
                     if (a == null) return;
                     try {
                         commitNow(projectId, a.userId(), a.userName(), null);
+                        autosaveFailureStreak.remove(projectId);
                     } catch (Exception e) {
-                        log.warn("自动存档失败: project={}", projectId, e);
+                        int streak = autosaveFailureStreak.merge(projectId, 1, Integer::sum);
+                        if (streak >= AUTOSAVE_FAILURE_ALERT_THRESHOLD) {
+                            log.error("自动存档连续失败 {} 次，版本记录可能已经停止更新: project={}",
+                                    streak, projectId, e);
+                        } else {
+                            log.warn("自动存档失败: project={}", projectId, e);
+                        }
                     }
                 },
                 Instant.now().plusMillis(debounceMillis));

@@ -6,6 +6,7 @@ import com.checkba.repository.ProjectRepository;
 import com.checkba.service.LocalIdentityService;
 import com.checkba.service.ProjectFileService;
 import com.checkba.service.account.AccountService;
+import com.checkba.storage.StorageException;
 import com.checkba.storage.StorageService;
 import com.checkba.storage.StorageServiceFactory;
 import com.sun.net.httpserver.HttpServer;
@@ -16,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
@@ -24,6 +26,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -225,6 +228,47 @@ class MobileRelayClientHttpTest {
 
         assertTrue(savedBytes.isEmpty(), "不该再写一份字节");
         assertEquals(List.of("/api/mobile/inbox/9/ack"), acked, "但必须补 ACK");
+    }
+
+    @Test
+    @DisplayName("落盘失败（save 抛 IOException）：不留孤行且不误 ACK，下一轮重新下载而不是直接补 ACK")
+    void pollInboxFailedSaveLeavesNoOrphanRowAndRedownloadsNextRound() {
+        inboxJson = "[{\"id\":9,\"projectKey\":\"42\",\"clientMediaId\":\"" + MEDIA_ID + "\","
+                + "\"fileName\":\"IMG_0001.jpg\",\"mediaType\":\"image\",\"fileSize\":10,"
+                + "\"capturedAt\":\"2026-08-19T21:00:00\"}]";
+
+        AtomicInteger saveCalls = new AtomicInteger();
+        when(storageService.save(anyString(), any(InputStream.class))).thenAnswer(inv -> {
+            InputStream in = inv.getArgument(1, InputStream.class);
+            if (saveCalls.getAndIncrement() == 0) {
+                // 模拟落盘中途失败（磁盘满/网络中断），底层 IOException 包成 StorageException 冒出来
+                in.close();
+                throw new StorageException("模拟磁盘写入失败", new IOException("disk full"));
+            }
+            savedStorageKeys.add(inv.getArgument(0));
+            ByteArrayOutputStream buf = new ByteArrayOutputStream();
+            in.transferTo(buf);
+            savedBytes.add(buf.toByteArray());
+            return inv.getArgument(0);
+        });
+
+        // 第一轮：落盘失败
+        service().pollInbox();
+
+        assertTrue(tree.stream().noneMatch(f -> !Boolean.TRUE.equals(f.getIsFolder())
+                        && f.getName() != null && f.getName().startsWith("IMG_0001")),
+                "落盘失败后不该留一条指向空壳的 project_file 记录");
+        assertTrue(savedBytes.isEmpty(), "失败这次不该被记成保存成功");
+        assertTrue(acked.isEmpty(), "字节都没落好就不许 ACK，否则云端会删原件、影像永久丢失");
+
+        // 第二轮：必须重新下载（不能因为第一轮留下的痕迹被幂等判据当成"已完成"直接补 ACK）
+        service().pollInbox();
+
+        assertEquals(1, savedBytes.size(), "第二轮必须重新下载并落盘一次");
+        assertEquals("JPEG-BYTES", new String(savedBytes.get(0), StandardCharsets.UTF_8));
+        assertEquals(List.of("/api/mobile/inbox/9/ack"), acked, "这次真落好了才允许 ACK");
+        assertTrue(tree.stream().anyMatch(f -> !Boolean.TRUE.equals(f.getIsFolder())
+                && "IMG_0001-0a1b2c3d.jpg".equals(f.getName())));
     }
 
     @Test

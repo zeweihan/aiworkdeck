@@ -7,6 +7,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** 听悟结果解析：正常结构、缺字段、坏 JSON 三路都要稳。 */
@@ -47,12 +48,25 @@ class MeetingTranscriptParserTest {
     }
 
     @Test
-    @DisplayName("坏 JSON / null / 空串 一律返回空列表而不是抛错")
+    @DisplayName("null / 空串（没有可解析的内容）→ 空列表；"
+            + "有内容但形状不对（坏 JSON / 缺 Transcription.Paragraphs）→ 抛出而不是悄悄吞成空列表；"
+            + "合法但确实没有段落 → 仍是空列表")
     void parseSegmentsTolerant() {
+        // 上游压根没给结果内容：不是"形状不对"，是没有可解析的东西，按空列表处理
         assertTrue(MeetingTranscriptParser.parseSegments(null).isEmpty());
         assertTrue(MeetingTranscriptParser.parseSegments("").isEmpty());
-        assertTrue(MeetingTranscriptParser.parseSegments("not json").isEmpty());
-        assertTrue(MeetingTranscriptParser.parseSegments("{\"Transcription\":{}}").isEmpty());
+
+        // 有内容但形状不对：不能再被当成合法空结果——这正是本条修复要堵的口子
+        // （历史上这条用例曾经把"not json → 空"钉成期望行为，与
+        // MeetingTranscriptionServiceTest.refreshMalformedTranscriptResultIsFailureNotEmpty
+        // 要求的"落 FAILED 带非空 error"相矛盾，随本条修复一并改期望）
+        assertThrows(MeetingTranscriptParser.UnparseableTranscriptException.class,
+                () -> MeetingTranscriptParser.parseSegments("not json"));
+        assertThrows(MeetingTranscriptParser.UnparseableTranscriptException.class,
+                () -> MeetingTranscriptParser.parseSegments("{\"Transcription\":{}}"));
+
+        // 合法结构、确实没有段落（听悟对无人声/极短音频的正常返回）：仍然是空列表，不抛
+        assertTrue(MeetingTranscriptParser.parseSegments("{\"Transcription\":{\"Paragraphs\":[]}}").isEmpty());
     }
 
     @Test

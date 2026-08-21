@@ -13,6 +13,13 @@ import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -58,6 +65,7 @@ class MeetingTranscriptionServiceTest {
                 mock(MeetingAudioTranscoder.class), tingwu, oss,
                 resolver, mock(PlatformGatewayClient.class), mock(LocalAsrClient.class),
                 fetcher, mock(MeetingTranscriptionService.BinaryUploader.class),
+                MeetingTranscriptionService.DEFAULT_TRANSCODE_TIMEOUT,
                 "", "", "", "", "");
     }
 
@@ -196,5 +204,80 @@ class MeetingTranscriptionServiceTest {
 
         assertEquals(MeetingRecording.STATUS_EMPTY, out.getStatus());
         assertNull(out.getError());
+    }
+
+    @Test
+    @DisplayName("COMPLETED 但结果 JSON 形状不对（异常信封，不是合法的 Transcription 结构）"
+            + "→ 落 FAILED 带非空 error，不能和「没人说话」的合法空结果混成同一个终态")
+    void refreshMalformedTranscriptResultIsFailureNotEmpty() throws Exception {
+        MeetingRecording m = meeting(MeetingRecording.STATUS_TRANSCRIBING);
+        m.setTingwuTaskId("task-1");
+        when(tingwu.getTask(any(), eq("task-1"))).thenReturn(new TingwuClient.TaskInfo(
+                "COMPLETED", null, "http://r/trans", null, null, null));
+        // 听悟侧下发的是一个错误信封，不是预期的 Transcription.Paragraphs 结构
+        when(fetcher.fetch("http://r/trans")).thenReturn("{\"error\":\"expired\"}");
+
+        MeetingRecording out = service(true).refreshIfNeeded(m);
+
+        assertNotEquals(MeetingRecording.STATUS_EMPTY, out.getStatus(),
+                "结果 JSON 形状不对不是「这场会议没人说话」，不能落成合法空结果终态");
+        assertEquals(MeetingRecording.STATUS_FAILED, out.getStatus());
+        assertNotNull(out.getError(), "既然是出错了就该留一个非空 error，不能悄悄清空");
+    }
+
+    @Test
+    @DisplayName("并发 poll-on-read 按 meetingId 串行化：两个线程同时刷新同一个"
+            + "lastPolledAt 为 null 的会议，上游客户端只被调用一次"
+            + "（不能各自拿着一份旧快照都通过节流、各跑一遍下载+落库，platform 档下更是各触发一次结算）")
+    void concurrentRefreshIsSerializedPerMeeting() throws Exception {
+        MeetingRecording base = meeting(MeetingRecording.STATUS_TRANSCRIBING);
+        base.setTingwuTaskId("task-1");
+
+        // 让 mock 仓库表现得像真库：save 写回、findById 读最新——这样"锁内重查"才有意义，
+        // 否则测的只是"两次调用互不影响"这种和真实并发无关的假象
+        AtomicReference<MeetingRecording> stored = new AtomicReference<>(base);
+        when(meetingRepository.findById(7L)).thenAnswer(inv -> Optional.of(stored.get()));
+        when(meetingRepository.save(any())).thenAnswer(inv -> {
+            MeetingRecording m = inv.getArgument(0);
+            stored.set(m);
+            return m;
+        });
+
+        AtomicInteger upstreamCalls = new AtomicInteger();
+        when(tingwu.getTask(any(), eq("task-1"))).thenAnswer(inv -> {
+            upstreamCalls.incrementAndGet();
+            return new TingwuClient.TaskInfo("COMPLETED", null, "http://r/trans", null, null, null);
+        });
+        when(fetcher.fetch("http://r/trans")).thenReturn(TRANSCRIPTION_JSON);
+
+        MeetingTranscriptionService svc = service(true);
+
+        // 两次并发请求各自拿到自己那份"lastPolledAt 为 null"的快照——对应两个独立 HTTP
+        // 请求各自 findById 出来、互不共享的实体实例
+        MeetingRecording snapshot1 = meeting(MeetingRecording.STATUS_TRANSCRIBING);
+        snapshot1.setTingwuTaskId("task-1");
+        MeetingRecording snapshot2 = meeting(MeetingRecording.STATUS_TRANSCRIBING);
+        snapshot2.setTingwuTaskId("task-1");
+
+        CountDownLatch startGate = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<MeetingRecording> f1 = pool.submit(() -> {
+                startGate.await();
+                return svc.refreshIfNeeded(snapshot1);
+            });
+            Future<MeetingRecording> f2 = pool.submit(() -> {
+                startGate.await();
+                return svc.refreshIfNeeded(snapshot2);
+            });
+            startGate.countDown();
+            f1.get(5, TimeUnit.SECONDS);
+            f2.get(5, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdown();
+        }
+
+        assertEquals(1, upstreamCalls.get(),
+                "两个并发请求应只有一次真正问上游，另一次必须被节流窗口挡下而不是各自都通过");
     }
 }

@@ -8,8 +8,12 @@ import com.checkba.service.LangText;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.UnexpectedRollbackException;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
@@ -52,6 +56,16 @@ public class MobileRelayStoreService {
     private final MobileProjectDirRepository dirRepository;
     private final MobileMediaInboxRepository inboxRepository;
     private final Path relayRoot;
+
+    /**
+     * 本 bean 的懒加载自身代理，只为让 storeMedia 撞约束后的重试真正经过 Spring 的事务代理
+     * 开出一个新事务——写法与理由照抄 {@code ProjectProfileService.self}：同类方法互相调用
+     * 不经代理，@Transactional 会被静默绕过；构造器没法自己注入自己，只能字段注入，@Lazy
+     * 打破自引用的构造期死环。包可见（不加 private）是特意的，测试要手工把这个字段接到自己。
+     */
+    @Autowired
+    @Lazy
+    MobileRelayStoreService self;
 
     @Autowired
     public MobileRelayStoreService(MobileProjectDirRepository dirRepository,
@@ -110,8 +124,40 @@ public class MobileRelayStoreService {
 
     // ==================== 影像中转 ====================
 
-    @Transactional
+    /**
+     * 先查后插之间没有锁：两次并发重传（弱网重试、手机端与桌面端同时轮到）各自查到
+     * "不存在"，落败的一方在 {@code inboxRepository.save} 这一步撞
+     * {@code (user_id, client_media_id)} 唯一约束，抛 DataIntegrityViolationException。
+     * 这条异常在 mobile 包与 GlobalExceptionHandler 里都没有专项处理，落到通用处理器变成
+     * {@code {"code":1,"message":"服务器内部错误"}}——与本方法原本承诺的"幂等：弱网重传…
+     * 都不产生重复件"正相反（正常重传本该拿到既有记录，却收到一个错误）。
+     *
+     * <p>不带 @Transactional——重试必须落在新事务里，理由与
+     * {@code ProjectProfileService.saveUserField} 完全一致：撞约束会被 Hibernate 标记
+     * 当前事务 rollback-only，同一事务内 catch 之后继续操作能"正常跑完"，但事务在方法出口
+     * 提交时仍会因 rollback-only 抛 UnexpectedRollbackException，等同于没有兜底。
+     * 落败方重试时一定能查到既有记录：DB 唯一约束在 INSERT 时点检查，我们的 save 之所以
+     * 撞上，就证明对方那笔已经提交（否则我们会拿到行锁等待而不是当场失败）。
+     */
     public MobileMediaInbox storeMedia(Long userId, String deviceId, String projectKey,
+                                       String clientMediaId, String fileName, String mediaType,
+                                       LocalDateTime capturedAt, InputStream content) {
+        try {
+            return self.storeMediaTx(userId, deviceId, projectKey, clientMediaId, fileName, mediaType, capturedAt, content);
+        } catch (DataIntegrityViolationException | UnexpectedRollbackException e) {
+            return self.storeMediaTx(userId, deviceId, projectKey, clientMediaId, fileName, mediaType, capturedAt, content);
+        }
+    }
+
+    /**
+     * {@link #storeMedia} 的事务体。不要直接调用（包括同类内部调用）——必须经 {@link #self}
+     * 代理才能拿到独立的新事务，直接调用会绕过 Spring 的事务拦截。propagation 显式钉死
+     * REQUIRES_NEW，理由同 ProjectProfileService 对应方法：调用方今天确实没有外层事务，
+     * 但 REQUIRES_NEW 的保证不依赖这个前提，且能防止撞约束打上的 rollback-only 标记
+     * 随 join 污染调用方可能存在的外层事务。
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public MobileMediaInbox storeMediaTx(Long userId, String deviceId, String projectKey,
                                        String clientMediaId, String fileName, String mediaType,
                                        LocalDateTime capturedAt, InputStream content) {
         requireDeviceId(deviceId);

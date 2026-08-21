@@ -26,15 +26,39 @@ public final class MeetingTranscriptParser {
     }
 
     /**
+     * 结果 JSON 结构本身不对——不是"转写出来确实没人说话"的合法空结果，是形状根本
+     * 不对（比如听悟侧下发的是 {"error":"..."} 这样的异常信封、或压根不是合法 JSON）。
+     * 与"正文段落解析失败被当成合法空结果直接决定终态"这条缺陷绑定——调用方要能靠这个
+     * 异常把"出错了"与"确实没人说话"分成两种终态，不要再被 parseSegments 悄悄吞掉。
+     */
+    public static final class UnparseableTranscriptException extends RuntimeException {
+        public UnparseableTranscriptException(String message) {
+            super(message);
+        }
+    }
+
+    /**
      * 解析听悟 Transcription 结果：Transcription.Paragraphs[].{SpeakerId, Words[].{Start,End,Text}}。
      * 相邻同说话人段落不合并——听悟的分段本身就带语义停顿，保留它对纪要引用更友好。
+     *
+     * <p>空/null 输入（上游压根没给结果地址）按"没有可解析的内容"处理，返回空列表——这与
+     * "给了内容但形状不对"是两回事，前者继续算合法空结果。非空输入一旦不是合法 JSON、
+     * 或者没有 Transcription.Paragraphs 数组，说明结果形状本身就不对，抛
+     * {@link UnparseableTranscriptException}，不再悄悄吞成空列表。<b>段落内部的字段级缺失
+     * 仍然宽松</b>（缺 SpeakerId 退化成"1"、空 Words 跳过该段落）——宽松的是听悟结果里
+     * 随版本演进的次要字段，不是"这份结果到底是不是一次转写"这件事。
      */
     public static List<Segment> parseSegments(String transcriptionJson) {
         List<Segment> segments = new ArrayList<>();
+        if (transcriptionJson == null || transcriptionJson.isBlank()) return segments;
         JsonNode root = readTree(transcriptionJson);
-        if (root == null) return segments;
-        JsonNode paragraphs = root.path("Transcription").path("Paragraphs");
-        if (!paragraphs.isArray()) return segments;
+        JsonNode paragraphs = root == null ? null : root.path("Transcription").path("Paragraphs");
+        if (root == null || !paragraphs.isArray()) {
+            String preview = transcriptionJson.length() > 200
+                    ? transcriptionJson.substring(0, 200) : transcriptionJson;
+            throw new UnparseableTranscriptException(
+                    "转写结果 JSON 形状不对（缺 Transcription.Paragraphs 数组）: " + preview);
+        }
         for (JsonNode p : paragraphs) {
             String speaker = p.path("SpeakerId").asText("");
             if (speaker.isEmpty()) speaker = "1";

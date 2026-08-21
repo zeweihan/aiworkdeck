@@ -16,8 +16,10 @@ import org.junit.jupiter.api.Test;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -99,24 +101,33 @@ class MeetingTranscriptionLocalPathTest {
     }
 
     private MeetingTranscriptionService service() {
+        return service(MeetingTranscriptionService.DEFAULT_TRANSCODE_TIMEOUT);
+    }
+
+    private MeetingTranscriptionService service(Duration transcodeTimeout) {
         return new MeetingTranscriptionService(
                 meetingRepository, projectFileRepository, storageResolver, settingService,
                 transcoder, tingwu, oss, resolver, gateway, localAsr,
                 mock(MeetingTranscriptionService.UrlFetcher.class),
                 mock(MeetingTranscriptionService.BinaryUploader.class),
+                transcodeTimeout,
                 "", "", "", "", "");
     }
 
     private MeetingRecording meeting(String status) {
+        return meeting(7L, status);
+    }
+
+    private MeetingRecording meeting(long id, String status) {
         MeetingRecording m = new MeetingRecording();
-        m.setId(7L);
+        m.setId(id);
         m.setProjectId(1L);
         m.setTitle("当事人会见 08-17");
         m.setStatus(status);
         m.setAudioFileId(11L);
         m.setDurationMs(600_000L);
         m.setCreatedBy(10001L);
-        when(meetingRepository.findById(7L)).thenReturn(Optional.of(m));
+        when(meetingRepository.findById(id)).thenReturn(Optional.of(m));
         return m;
     }
 
@@ -254,5 +265,33 @@ class MeetingTranscriptionLocalPathTest {
 
         hold.countDown();
         awaitUntil(() -> MeetingRecording.STATUS_TRANSCRIBED.equals(m.getStatus()));
+    }
+
+    @Test
+    @DisplayName("转码卡死超时：该会议落 FAILED 带可见错误，且随后提交的第二个会议仍能被处理"
+            + "（单线程执行器不能被一次卡死永久占住）")
+    void transcodeTimeoutFailsThatMeetingWithoutBlockingTheNextOne() throws Exception {
+        // 模拟 FFmpeg 卡死（截断 webm 最常见的诱因）：toMp3 永远不返回
+        when(transcoder.toMp3(any(), any())).thenAnswer(inv -> {
+            new CountDownLatch(1).await();
+            throw new IllegalStateException("不会跑到这里");
+        });
+
+        MeetingRecording first = meeting(7L, MeetingRecording.STATUS_RECORDED);
+        MeetingTranscriptionService service = service(Duration.ofMillis(200));
+        service.startTranscription(7L);
+        awaitUntil(() -> MeetingRecording.STATUS_FAILED.equals(first.getStatus()));
+        assertTrue(first.getError().contains("超时"), "要能看出是转码卡死: " + first.getError());
+
+        // 换回正常转码，断言单线程执行器没有被第一个卡死的任务永久占住——
+        // 这正是本条修复要堵的口子：没有超时闸的话，第二个会议会跟着第一个一起无限期排队。
+        // 必须用 doReturn().when()，不能用 when().thenReturn()——后者的写法要先真的调用
+        // 一次 transcoder.toMp3(...) 才能拿到"你在给哪个调用打桩"的信息，而这一次调用会
+        // 撞上上面刚注册的、永远不返回的旧桩，把重新打桩这个动作本身也卡死在这里。
+        doReturn(audioFile).when(transcoder).toMp3(any(), any());
+        when(localAsr.transcribe(any(File.class))).thenReturn(LOCAL_JSON);
+        MeetingRecording second = meeting(8L, MeetingRecording.STATUS_RECORDED);
+        service.startTranscription(8L);
+        awaitUntil(() -> MeetingRecording.STATUS_TRANSCRIBED.equals(second.getStatus()));
     }
 }
