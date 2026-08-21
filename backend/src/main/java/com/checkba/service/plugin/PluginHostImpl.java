@@ -145,7 +145,7 @@ class PluginHostImpl implements PluginHost {
 
     /** 配额 + 必须有调用上下文。 */
     private ToolCall enter() {
-        f.quota.acquire(pluginId);
+        f.quota.acquire(pluginId, f.inJob());
         ToolCall c = f.currentCall();
         if (c == null || c.userId() == null) {
             throw new IllegalStateException(LangText.of(
@@ -272,7 +272,8 @@ class PluginHostImpl implements PluginHost {
             Object sha = meta.get("sha256");
             return new FileInfo(p.getId(), p.getName(), p.getParentId(), Boolean.TRUE.equals(p.getIsFolder()),
                     p.getFileType(), p.getFileSize() == null ? 0L : p.getFileSize(), pathOf(p, idx),
-                    sha instanceof String s ? s : null, p.getMetaJson());
+                    sha instanceof String s ? s : null, p.getMetaJson(),
+                    p.getUpdatedAt() == null ? null : p.getUpdatedAt().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
         }
 
         private boolean under(ProjectFile p, Long ancestorId, Map<Long, ProjectFile> idx) {
@@ -602,7 +603,7 @@ class PluginHostImpl implements PluginHost {
             ToolCall snapshot = c;
             // 任务线程上也要有调用上下文：任务体里的 host.files()/llm() 才能鉴权与计费
             JobBody wrapped = ctx -> {
-                f.bindCall(snapshot);
+                f.bindJob(snapshot);
                 try {
                     body.run(ctx);
                 } finally {

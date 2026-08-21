@@ -166,6 +166,53 @@ class PluginHostImplTest {
     }
 
     @Test
+    @DisplayName("配额：后台任务线程（bindJob）走 1200 次/分钟的大窗口，与工具线程的 60 次分开计数")
+    void quotaJobThreadHasLargerWindow() {
+        factory.bindJob(new ToolCall(PROJECT, null, USER, null));
+        for (int i = 0; i < 1200; i++) {
+            host.settings().get("k");
+        }
+        assertThrows(HostQuotaException.class, () -> host.settings().get("k"));
+        // 回到工具线程：自己的 60 次窗口还是空的
+        factory.clear();
+        factory.bindCall(new ToolContext(PROJECT, "conv-1", USER, null));
+        for (int i = 0; i < 60; i++) {
+            host.settings().get("k");
+        }
+        assertThrows(HostQuotaException.class, () -> host.settings().get("k"));
+    }
+
+    @Test
+    @DisplayName("Jobs.start 的任务体包装以 job 模式绑定（大窗口），结束后清掉")
+    void jobsBodyRunsInJobMode() throws Exception {
+        ArgumentCaptor<com.checkba.plugin.api.JobBody> body = ArgumentCaptor.forClass(com.checkba.plugin.api.JobBody.class);
+        when(pluginJobService.start(eq("dd"), eq("ingest"), eq("t"), any(), body.capture()))
+                .thenReturn(new com.checkba.plugin.api.JobHandle("J2"));
+        host.jobs().start("ingest", "t", ctx -> {
+            for (int i = 0; i < 100; i++) host.settings().get("k"); // 超过 60，job 窗口放行
+        });
+        Thread th = new Thread(() -> {
+            try { body.getValue().run(null); } catch (Exception e) { throw new RuntimeException(e); }
+            assertTrue(!factory.inJob() && host.call() == null);
+        });
+        th.start();
+        th.join(5000);
+        assertTrue(!th.isAlive());
+    }
+
+    @Test
+    @DisplayName("FileInfo.updatedAt 填 ProjectFile.updatedAt（epoch millis），为空则 null")
+    void fileInfoCarriesUpdatedAt() {
+        ProjectFile p = file(80L, "u.txt", false);
+        p.setUpdatedAt(java.time.LocalDateTime.of(2026, 8, 22, 1, 0));
+        ProjectFile q = file(81L, "v.txt", false);
+        when(projectFileRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(PROJECT)).thenReturn(List.of(p, q));
+        long expected = p.getUpdatedAt().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
+        assertEquals(expected, host.files().get(PROJECT, 80L).updatedAt());
+        assertNull(host.files().get(PROJECT, 81L).updatedAt());
+    }
+
+    @Test
     @DisplayName("Docs.exec：无 conversationId 抛 IllegalStateException(no active conversation)；非白名单 action 拒绝")
     void docsExecRequiresConversationAndWhitelist() {
         factory.bindCall(new ToolContext(PROJECT, null, USER, null));
