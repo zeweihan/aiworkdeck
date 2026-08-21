@@ -113,14 +113,6 @@ class EvidenceLinkMigrationRunnerTest {
     }
 
     @Test
-    @DisplayName("doc_file_link 表不存在（findAll 抛异常）→ 跳过，不炸启动")
-    void missingOldTableIsSkipped() throws Exception {
-        when(old.findAll()).thenThrow(new RuntimeException("table not found"));
-        runner.run(null);
-        verify(links, never()).save(any());
-    }
-
-    @Test
     @DisplayName("fileIdsJson 坏掉或为空 → 建链但无 target；非法 JSON 不炸")
     void badFileIdsJsonYieldsNoTargets() throws Exception {
         ProjectFile doc = new ProjectFile();

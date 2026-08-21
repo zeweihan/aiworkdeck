@@ -4,6 +4,7 @@ import com.checkba.config.GlobalExceptionHandler;
 import com.checkba.service.ProjectMemberService;
 import com.checkba.service.evidence.EvidenceLinkService;
 import com.checkba.service.evidence.EvidenceLinkViews.AnchorReport;
+import com.checkba.service.evidence.EvidenceLinkViews.AnchorReportResult;
 import com.checkba.service.evidence.EvidenceLinkViews.FileBrief;
 import com.checkba.service.evidence.EvidenceLinkViews.LinkView;
 import com.checkba.service.evidence.EvidenceLinkViews.TargetInput;
@@ -25,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -181,20 +183,24 @@ class EvidenceLinkControllerTest {
     void anchorsReport回写返回changed() throws Exception {
         try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(9L);
-            when(svc.reportAnchors(eq(9L), eq(1L), eq(10L), anyList())).thenReturn(List.of("EVID_A"));
+            when(svc.reportAnchors(eq(9L), eq(1L), eq(10L), anyList()))
+                    .thenReturn(new AnchorReportResult(List.of("EVID_A"), 1));
             String body = om.writeValueAsString(Map.of("docFileId", 10, "reports", List.of(
                     Map.of("linkKey", "EVID_A", "exists", true, "text", "改了"),
-                    Map.of("linkKey", "EVID_B", "exists", false))));
+                    Map.of("linkKey", "EVID_B", "exists", false),
+                    Map.of("linkKey", "EVID_C", "text", "漏了 exists"))));
             mvc().perform(post("/api/projects/1/evidence-links/anchors/report").header("X-Session-Id", "sess")
                             .contentType(MediaType.APPLICATION_JSON).content(body))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.changed[0]").value("EVID_A"));
+                    .andExpect(jsonPath("$.changed[0]").value("EVID_A"))
+                    .andExpect(jsonPath("$.ignored").value(1));
 
             @SuppressWarnings("unchecked")
             ArgumentCaptor<List<AnchorReport>> cap = ArgumentCaptor.forClass(List.class);
             verify(svc).reportAnchors(eq(9L), eq(1L), eq(10L), cap.capture());
-            assertEquals(2, cap.getValue().size());
-            assertEquals(false, cap.getValue().get(1).exists());
+            assertEquals(3, cap.getValue().size());
+            assertEquals(Boolean.FALSE, cap.getValue().get(1).exists());
+            assertNull(cap.getValue().get(2).exists(), "漏字段反序列化成 null，不是 false");
             verify(svc, never()).create(anyLong(), anyLong(), anyLong(), any(), any(), any(), any(), any(), any());
         }
     }
@@ -214,10 +220,12 @@ class EvidenceLinkControllerTest {
                             .content("{\"newLinkKey\":\"EVID_B\",\"anchorText\":\"新\",\"sectionPath\":\"二\",\"sectionTitle\":\"财务\"}"))
                     .andExpect(jsonPath("$.linkKey").value("EVID_B"));
 
-            when(svc.addTargets(eq(9L), eq(1L), eq("EVID_A"), anyList())).thenReturn(link("EVID_A"));
-            mvc().perform(post("/api/projects/1/evidence-links/EVID_A/targets").header("X-Session-Id", "sess")
+            when(svc.addTargets(eq(9L), eq(1L), eq("EVID_A"), anyList(), eq("plugin"))).thenReturn(link("EVID_A"));
+            mvc().perform(post("/api/projects/1/evidence-links/EVID_A/targets").param("createdByKind", "plugin")
+                            .header("X-Session-Id", "sess")
                             .contentType(MediaType.APPLICATION_JSON).content("[{\"fileId\":12,\"relation\":\"partial\"}]"))
-                    .andExpect(status().isOk());
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.linkKey").value("EVID_A"));
 
             when(svc.updateTarget(eq(9L), eq(1L), eq(200L), any())).thenReturn(link("EVID_A").targets().get(0));
             mvc().perform(patch("/api/projects/1/evidence-links/targets/200").header("X-Session-Id", "sess")
