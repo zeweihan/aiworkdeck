@@ -1,7 +1,7 @@
 # 尽调 P1 设计：模板画像 + 插件宿主 SPI + 尽调 JAR 插件（入库整理/起草/勾稽写入）
 
 日期：2026-08-21 ｜ 母卡：dev-board#100 ｜ 上游：总方案 §2 / §5 / §7、样式盘点、样本画像（本机）、P0 设计（EvidenceLink）
-状态：2026-08-21 22:50 维护者通过；私有仓由维护者自建，建好后告知仓名。
+状态：2026-08-21 22:50 维护者通过；私有仓 `zeweihan/aiworkdeck-dd-plugin` 已由本会话创建（22:55）。
 
 ## 0. 本期拍板（2026-08-21 22:40）
 
@@ -190,5 +190,5 @@ prompt.md 工作流：确认主体清单 → `dd_ingest`（等进度）→ 读�
 
 ## 8. 已确认
 
-1. 私有仓 `zeweihan/aiworkdeck-dd-plugin`（名字暂定）由维护者自建；建好前插件代码在本机 scratch 目录起草，不进主仓。
+1. 私有仓 `zeweihan/aiworkdeck-dd-plugin` 已建（private，默认分支 main），插件源码只进这里，不进主仓。
 2. `plugin-api` 先只发本地 `~/.m2` + 随主仓源码；GitHub Packages 等插件仓 CI 需要时再加。
