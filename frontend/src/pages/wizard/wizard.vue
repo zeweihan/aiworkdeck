@@ -12,113 +12,60 @@
         </view>
       </view>
 
-      <!-- Step 1: AI provider (required) -->
+      <!-- Step 1: 连接账户（必做）。
+           2026-08-21 起产品只有官方版（dev-board#98）：AI 只走平台通道 AWD_CLOUD，
+           这里不再让用户在 OLLAMA / OPENROUTER / AWD_CLOUD 三者里选——只剩一项的单选
+           是装饰，直接改成「连接账户」的直述。连接块本身沿用此前 AWD_CLOUD 选中后展开的那一块，
+           向导里每条「下一步」都必须能在向导里做完（地雷 15）。 -->
       <view class="section">
         <view class="section-title">
           <text class="step-badge">1</text>
           <text class="title-text">{{ $t('onboarding.wizard.step1Title') }}</text>
           <text class="required-tag">{{ $t('onboarding.wizard.required') }}</text>
         </view>
-        <view class="provider-list">
-          <view
-            v-for="opt in providerOptions"
-            :key="opt.value"
-            class="provider-card"
-            :class="{ selected: form.ai.activeProvider === opt.value }"
-            @tap="pickProvider(opt)"
-          >
-            <view class="provider-head">
-              <view class="radio-dot" :class="{ checked: form.ai.activeProvider === opt.value }"></view>
-              <text class="provider-name">{{ opt.label }}</text>
-              <text class="data-flow-tag" :class="opt.local ? 'tag-local' : 'tag-cloud'">
-                {{ opt.local ? $t('onboarding.wizard.dataLocal') : $t('onboarding.wizard.dataCloud') }}
+        <text class="section-hint">{{ $t('onboarding.wizard.step1Intro') }}</text>
+        <view class="provider-account">
+          <template v-if="!platformAiAvailable">
+            <text class="account-line">{{ $t('onboarding.wizard.accountIntro') }}</text>
+            <view class="account-actions">
+              <text class="account-link" @tap="openAccountSite">{{ $t('onboarding.wizard.goGetKey') }}</text>
+            </view>
+            <input
+              class="text-input"
+              v-model="accountKey"
+              :placeholder="$t('onboarding.wizard.accountKeyPlaceholder')"
+            />
+            <button
+              class="account-btn"
+              :disabled="connectingAccount"
+              @tap="handleConnectAccount"
+            >
+              {{ connectingAccount ? $t('onboarding.wizard.connecting') : $t('onboarding.wizard.connectAccount') }}
+            </button>
+          </template>
+          <template v-else-if="platformNeedsAllocation">
+            <text class="account-line">{{ $t('onboarding.wizard.accountNoCredits', { label: accountLabel }) }}</text>
+            <view class="account-actions">
+              <text class="account-link" @tap="openAccountSite">{{ $t('onboarding.wizard.goTopUp') }}</text>
+              <text class="account-link" @tap="handleRecheckAccount">
+                {{ recheckingAccount ? $t('onboarding.wizard.rechecking') : $t('onboarding.wizard.recheck') }}
               </text>
             </view>
-            <text class="provider-desc">{{ opt.desc }}</text>
-            <view v-if="form.ai.activeProvider === opt.value && opt.setupHint" class="provider-setup">
-              <text class="setup-line">{{ opt.setupHint }}</text>
-              <text class="setup-cmd" selectable>{{ opt.setupCmd }}</text>
-            </view>
-            <!-- 本地 Ollama 的连通性探测就地完成：装没装、跑没跑、模型拉没拉，
-                 三件事都要在向导里能看清并能重试，不能让用户点完「完成设置」
-                 到发第一条消息才收到 Connection refused（地雷 15）。 -->
-            <view v-if="form.ai.activeProvider === opt.value && opt.value === 'OLLAMA'" class="provider-setup ollama-probe">
-              <text class="setup-line">{{ $t('onboarding.wizard.ollamaAskOnly') }}</text>
-              <text v-if="ollamaProbe.checking" class="setup-line">{{ $t('onboarding.wizard.ollamaProbing') }}</text>
-              <template v-else-if="ollamaProbe.error">
-                <text class="setup-line probe-bad">{{ ollamaProbe.error }}</text>
-              </template>
-              <!-- message / nextStep / command 全部来自后端：三态各自该说什么、该给哪条命令，
-                   由 OllamaProbeService 一处决定，前端只负责排版与配色。 -->
-              <template v-else-if="ollamaProbe.done">
-                <text
-                  class="setup-line"
-                  :class="ollamaProbe.status === 'READY' ? 'probe-ok' : 'probe-bad'"
-                >{{ ollamaProbe.message }}</text>
-                <text v-if="ollamaProbe.nextStep" class="setup-line">{{ ollamaProbe.nextStep }}</text>
-                <text v-if="ollamaProbe.command" class="setup-cmd" selectable>{{ ollamaProbe.command }}</text>
-                <text v-if="ollamaProbe.status === 'SERVICE_DOWN'" class="setup-cmd" selectable>https://ollama.com/download</text>
-              </template>
-              <view class="account-actions">
-                <text class="account-link" @tap="runOllamaProbe">
-                  {{ ollamaProbe.checking ? $t('onboarding.wizard.probing') : $t('onboarding.wizard.reprobe') }}
-                </text>
-              </view>
-              <text class="setup-line">{{ $t('onboarding.wizard.ollamaChangeHint') }}</text>
-            </view>
-            <view v-if="form.ai.activeProvider === opt.value && opt.keyField" class="provider-key">
-              <input
-                class="text-input"
-                :password="true"
-                v-model="apiKeys[opt.value]"
-                :placeholder="opt.keyPlaceholder"
-              />
-            </view>
-            <!-- 平台通道的连接就地完成：把「进入产品后再去系统管理粘贴 Key」的死路收回向导内 -->
-            <view v-if="form.ai.activeProvider === opt.value && opt.accountField" class="provider-account">
-              <template v-if="!platformAiAvailable">
-                <text class="account-line">{{ $t('onboarding.wizard.accountIntro') }}</text>
-                <view class="account-actions">
-                  <text class="account-link" @tap="openAccountSite">{{ $t('onboarding.wizard.goGetKey') }}</text>
-                </view>
-                <input
-                  class="text-input"
-                  v-model="accountKey"
-                  :placeholder="$t('onboarding.wizard.accountKeyPlaceholder')"
-                />
-                <button
-                  class="account-btn"
-                  :disabled="connectingAccount"
-                  @tap="handleConnectAccount"
-                >
-                  {{ connectingAccount ? $t('onboarding.wizard.connecting') : $t('onboarding.wizard.connectAccount') }}
-                </button>
-              </template>
-              <template v-else-if="platformNeedsAllocation">
-                <text class="account-line">{{ $t('onboarding.wizard.accountNoCredits', { label: accountLabel }) }}</text>
-                <view class="account-actions">
-                  <text class="account-link" @tap="openAccountSite">{{ $t('onboarding.wizard.goTopUp') }}</text>
-                  <text class="account-link" @tap="handleRecheckAccount">
-                    {{ recheckingAccount ? $t('onboarding.wizard.rechecking') : $t('onboarding.wizard.recheck') }}
-                  </text>
-                </view>
-              </template>
-              <template v-else>
-                <text class="account-line account-ok">{{ $t('onboarding.wizard.accountReady', { label: accountLabel }) }}</text>
-              </template>
-              <text v-if="accountError" class="account-error">{{ accountError }}</text>
+          </template>
+          <template v-else>
+            <text class="account-line account-ok">{{ $t('onboarding.wizard.accountReady', { label: accountLabel }) }}</text>
+          </template>
+          <text v-if="accountError" class="account-error">{{ accountError }}</text>
 
-              <!-- 跨境传输的单独同意（个保法第三十九条）。与管理后台是同一道闸
-                   （AdminConfigController.crossBorderBlockReason），向导这边曾经完全没有，
-                   而向导恰恰是选平台通道的主入口。绝不预勾选——预勾选的同意无效。 -->
-              <view class="consent-box">
-                <text class="consent-title">{{ $t('onboarding.wizard.consentTitle') }}</text>
-                <text class="consent-body">{{ $t('onboarding.wizard.consentBody') }}</text>
-                <view class="consent-check" @tap="crossBorderConsent = !crossBorderConsent">
-                  <view class="consent-box-mark" :class="{ checked: crossBorderConsent }"></view>
-                  <text class="consent-check-label">{{ $t('onboarding.wizard.consentCheckLabel') }}</text>
-                </view>
-              </view>
+          <!-- 跨境传输的单独同意（个保法第三十九条）。与管理后台是同一道闸
+               （AdminConfigController.crossBorderBlockReason），向导这边曾经完全没有，
+               而向导恰恰是选平台通道的主入口。绝不预勾选——预勾选的同意无效。 -->
+          <view class="consent-box">
+            <text class="consent-title">{{ $t('onboarding.wizard.consentTitle') }}</text>
+            <text class="consent-body">{{ $t('onboarding.wizard.consentBody') }}</text>
+            <view class="consent-check" @tap="crossBorderConsent = !crossBorderConsent">
+              <view class="consent-box-mark" :class="{ checked: crossBorderConsent }"></view>
+              <text class="consent-check-label">{{ $t('onboarding.wizard.consentCheckLabel') }}</text>
             </view>
           </view>
         </view>
@@ -133,9 +80,9 @@
       <!-- Step 2: 平台服务总览。
            改造前这里是 OCR / 语音 / 企业数据三组共 9 个输入框，全部撤走——首次开机就被要求
            去 8 家供应商开账号填 23 个字段，没有律师会去做，结果是绝大多数功能对绝大多数人
-           根本不存在。**不是净删除**：这些服务一项没少，只是默认由我们统一代采、按用量折算
-           Credits 从同一个账户余额扣；BYOK 通道原样保留，挪进「系统管理 → 平台服务」的
-           「使用自己的 Key（高级）」折叠区（自建团队服务器与自有订阅的律所都还要用它）。 -->
+           根本不存在。**不是净删除**：这些服务一项没少，只是由我们统一代采、按用量折算
+           Credits 从同一个账户余额扣。官方版不露 BYOK（dev-board#98），这里也不再指路
+           「使用自己的 Key」。 -->
       <view class="section">
         <view class="section-title collapsible" @tap="showServices = !showServices">
           <text class="step-badge">2</text>
@@ -162,35 +109,15 @@
             </view>
           </view>
 
-          <!-- 未连账户时就地给连接入口：向导里每条「下一步」都必须能在向导里做完（地雷 15）。
-               但这不是必答题——handleSubmit 不因为没连账户拦人，用户可以先跳过，
-               进产品后在「系统管理 → 平台服务」再连。 -->
-          <template v-if="servicesNeedAccount">
-            <text v-if="step1ConnectVisible" class="account-line">
-              {{ $t('onboarding.wizard.servicesConnectAbove') }}
-            </text>
-            <view v-else class="provider-account svc-connect">
-              <text class="account-line">{{ $t('onboarding.wizard.servicesNeedAccount') }}</text>
-              <view class="account-actions">
-                <text class="account-link" @tap="openAccountSite">{{ $t('onboarding.wizard.goGetKey') }}</text>
-              </view>
-              <input
-                class="text-input"
-                v-model="accountKey"
-                :placeholder="$t('onboarding.wizard.accountKeyPlaceholder')"
-              />
-              <button class="account-btn" :disabled="connectingAccount" @tap="handleConnectAccount">
-                {{ connectingAccount ? $t('onboarding.wizard.connecting') : $t('onboarding.wizard.connectAccount') }}
-              </button>
-              <text v-if="accountError" class="account-error">{{ accountError }}</text>
-            </view>
-          </template>
+          <!-- 未连账户时步骤 1 已经有连接块（现在恒常渲染），这里只指路，
+               不再渲染第二个绑同一个 v-model 的输入框。 -->
+          <text v-if="servicesNeedAccount" class="account-line">
+            {{ $t('onboarding.wizard.servicesConnectAbove') }}
+          </text>
           <text
             v-else-if="servicesLoaded && platformState.accountConnected"
             class="account-line account-ok"
           >{{ $t('onboarding.wizard.servicesReady') }}</text>
-
-          <text class="section-hint svc-foot">{{ $t('onboarding.wizard.servicesAdvancedHint') }}</text>
         </view>
       </view>
 
@@ -212,7 +139,6 @@ import {
   getAccountStatus,
   getAccountUsage,
   connectAccount,
-  probeOllama,
   getPlatformServices,
 } from '@/services/api.js'
 import { refreshEntitlements } from '@/composables/useEntitlement.js'
@@ -222,6 +148,9 @@ import { platformServiceMeta, sortPlatformServices } from '@/config/platformServ
 
 // 官网账户页：生成账户 Key、充值都在这里（与 admin 页同一地址）。Credits 重构后没有「分配额度」这一步了
 const ACCOUNT_SITE_URL = 'https://www.aiworkdeck.com/zh/account'
+
+// 官方版唯一的 AI 供应商。后端 toSettingsUpdates 仍校验三档枚举，这里固定写平台通道。
+const OFFICIAL_PROVIDER = 'AWD_CLOUD'
 
 export default {
   name: 'FirstRunWizard',
@@ -248,75 +177,9 @@ export default {
       recheckingAccount: false,
       // 跨境传输的单独同意（个保法第三十九条）。初值必须是 false——预勾选的同意无效。
       crossBorderConsent: false,
-      // 各云端提供商的 key 暂存：切换选项不丢已填内容，提交时只带选中者
-      apiKeys: {
-        OPENROUTER: '',
-      },
-      // 本地 Ollama 探测结果（GET /api/ai/ollama/probe）。done=false 表示还没探过，
-      // 此时不给「已就绪」也不给报错，避免刚点上选项就红一片。
-      // 字段名与后端 OllamaProbeService.ProbeResult 逐字对齐：status 三态
-      // （READY / MODEL_MISSING / SERVICE_DOWN）＋后端给的 message / nextStep / command。
-      // message 与 command 一律原样展示，前端不自己拼 `ollama pull`——目标模型是后端
-      // 按「入参 > DB > yml」解析的，前端拼出来的会和它不一致。
-      ollamaProbe: {
-        checking: false,
-        done: false,
-        status: '',
-        baseUrl: '',
-        targetModel: '',
-        message: '',
-        nextStep: '',
-        command: '',
-        error: '',
-      },
-      // 供应商三档（GEMINI 已下线）：Gemini 系列模型仍可通过 OpenRouter 的 google/* 使用。
-      byokOptions: [
-        {
-          value: 'OLLAMA',
-          label: this.$t('onboarding.wizard.ollamaLabel'),
-          local: true,
-          desc: this.$t('onboarding.wizard.ollamaDesc'),
-          keyField: null,
-        },
-        {
-          value: 'OPENROUTER',
-          label: 'OpenRouter',
-          local: false,
-          desc: this.$t('onboarding.wizard.openRouterDesc'),
-          keyField: 'apiKey',
-          keyPlaceholder: this.$t('onboarding.wizard.openRouterKeyPlaceholder'),
-          setupHint: this.$t('onboarding.wizard.openRouterSetupHint'),
-          setupCmd: 'https://openrouter.ai/settings/keys',
-        },
-      ],
-      form: {
-        ai: {
-          // 刻意不预选：预选 OLLAMA 时，没装 Ollama 的用户一路点「完成设置」，
-          // 会到发第一条消息才收到 Connection refused。必须让用户显式选一个。
-          activeProvider: '',
-        },
-      },
     }
   },
   computed: {
-    // 「AI WorkDeck 云端」置顶：用账户 Key 解锁的用户买的就是这条通道，
-    // 不列出来他会被引导去再配一家别的 Key。选中即就地展开连接块——
-    // 前置条件不满足时**不能只给一句「进入产品后再去设置里连」**，那是死路：
-    // 用户在向导里没有任何办法把它变成可用，只能先选一家别的凑合。
-    providerOptions() {
-      if (!this.isDesktop) return this.byokOptions
-      return [
-        {
-          value: 'AWD_CLOUD',
-          label: this.$t('onboarding.wizard.awdCloudLabel'),
-          local: false,
-          desc: this.$t('onboarding.wizard.awdCloudDesc'),
-          keyField: null,
-          accountField: true,
-        },
-        ...this.byokOptions,
-      ]
-    },
     accountLabel() {
       return this.accountName ? this.$t('onboarding.wizard.accountLabel', { name: this.accountName }) : ''
     },
@@ -347,17 +210,11 @@ export default {
         }
       })
     },
-    // 有服务停在 platform 档却还没连账户 → 步骤 2 里需要一个连接入口
+    // 有服务停在 platform 档却还没连账户 → 步骤 2 里指一句「在上方连接」
     servicesNeedAccount() {
       if (!this.servicesLoaded || !this.platformState.platformAvailable) return false
       if (this.platformState.accountConnected) return false
       return (this.platformState.services || []).some((s) => s.provider === 'platform')
-    },
-    // 步骤 1 选了「AI WorkDeck 云端」且尚未连接时，那里已经有一个连接块了。
-    // 两块同时渲染会得到两个绑同一个 v-model 的输入框（互相镜像，看着像 bug），
-    // 所以步骤 2 这时改成一句指路。
-    step1ConnectVisible() {
-      return this.isDesktop && this.form.ai.activeProvider === 'AWD_CLOUD' && !this.platformAiAvailable
     },
   },
   onLoad() {
@@ -369,7 +226,6 @@ export default {
   },
   methods: {
     // 平台通道可用性：status 是后端本地读盘（不打官网），可用时再补一次用量接口判额度。
-    // 两个条件都满足才替用户预选它——解锁时粘的就是账户 Key 的人不该再被问一遍。
     async loadPlatformAi() {
       try {
         const s = await getAccountStatus()
@@ -393,9 +249,6 @@ export default {
       } catch (e) {
         this.platformNeedsAllocation = false
       }
-      if (!this.platformNeedsAllocation && !this.form.ai.activeProvider) {
-        this.form.ai.activeProvider = 'AWD_CLOUD'
-      }
     },
     // 七项外部服务的档位快照。读失败时说清是「没读到状态」而不是「服务不可用」，
     // 并且**不拦提交**——这一段是告知，不是必答题。
@@ -412,41 +265,6 @@ export default {
         this.servicesError = (e && e.message) || this.$t('platform.loadFailed')
       } finally {
         this.servicesLoaded = true
-      }
-    },
-    pickProvider(opt) {
-      this.form.ai.activeProvider = opt.value
-      // 选中本地档就立刻探一次：把「装了没 / 跑着没 / 模型拉了没」摆在眼前，
-      // 用户不需要先提交再回来看结果
-      if (opt.value === 'OLLAMA' && !this.ollamaProbe.checking) {
-        this.runOllamaProbe()
-      }
-    },
-    // 本机 Ollama 探测。后端读自己的配置去打 /api/tags（不接受前端传地址，
-    // 免得这个端点变成一个可以拿后端当跳板的探测器）。
-    async runOllamaProbe() {
-      if (this.ollamaProbe.checking) return
-      this.ollamaProbe.checking = true
-      this.ollamaProbe.error = ''
-      try {
-        const r = (await probeOllama()) || {}
-        this.ollamaProbe.status = r.status || ''
-        this.ollamaProbe.baseUrl = r.baseUrl || ''
-        this.ollamaProbe.targetModel = r.targetModel || ''
-        this.ollamaProbe.message = r.message || ''
-        this.ollamaProbe.nextStep = r.nextStep || ''
-        this.ollamaProbe.command = r.command || ''
-        this.ollamaProbe.done = true
-      } catch (e) {
-        // 探测端点本身不可达（后端还没起 / 旧后端没有这个端点）：
-        // 说清楚是「没探到」而不是「Ollama 坏了」，并且照样拦住提交
-        this.ollamaProbe.status = ''
-        this.ollamaProbe.done = true
-        this.ollamaProbe.error = (e && e.message)
-          ? this.$t('onboarding.wizard.probeFailedWithReason', { reason: e.message })
-          : this.$t('onboarding.wizard.probeFailedRetry')
-      } finally {
-        this.ollamaProbe.checking = false
       }
     },
     openAccountSite() {
@@ -503,71 +321,30 @@ export default {
         console.warn('查询向导状态失败:', e)
       }
     },
+    // 只带 ai.activeProvider 与同意；不带 external / ollama* 字段——
+    // 后端 toSettingsUpdates 对 null 字段一律跳过，存量 key 不会被清空。
     buildPayload() {
-      const trim = (v) => (v || '').trim()
-      const provider = this.form.ai.activeProvider
-      const payload = { ai: { activeProvider: provider } }
-      // 只在选平台通道时带同意：其余档位不涉及跨境，带 false 会把已有同意误撤回
-      if (provider === 'AWD_CLOUD') {
-        payload.ai.crossBorderConsent = this.crossBorderConsent
+      return {
+        ai: {
+          activeProvider: OFFICIAL_PROVIDER,
+          crossBorderConsent: this.crossBorderConsent,
+        },
       }
-      const external = {}
-
-      // 向导只写 AI 那一档的 Key。其余七家的 BYOK 凭证不在这里出现了——
-      // 它们挪进「系统管理 → 平台服务」的「使用自己的 Key（高级）」，
-      // 向导里带一份等于又把 23 个字段搬回首启页。
-      if (provider === 'OPENROUTER' && trim(this.apiKeys.OPENROUTER)) {
-        external.openRouter = { apiKey: trim(this.apiKeys.OPENROUTER) }
-      }
-
-      if (Object.keys(external).length > 0) {
-        payload.external = external
-      }
-      return payload
     },
     async handleSubmit() {
-      const provider = this.form.ai.activeProvider
-      if (!provider) {
-        uni.showToast({ title: this.$t('onboarding.wizard.pickProviderFirst'), icon: 'none' })
-        return
-      }
-      if (provider === 'OPENROUTER' && !this.apiKeys.OPENROUTER.trim()) {
-        uni.showToast({ title: this.$t('onboarding.wizard.fillOpenRouterKey'), icon: 'none' })
-        return
-      }
-      // 本地档：服务没起或目标模型没 pull 都拦住，并指出下一步（同上方探测块）。
-      // 还没探过就先探一次再判——不能因为用户没点「重新检测」就放行一个跑不起来的配置。
-      if (provider === 'OLLAMA') {
-        if (!this.ollamaProbe.done && !this.ollamaProbe.checking) {
-          await this.runOllamaProbe()
-        }
-        if (this.ollamaProbe.error) {
-          uni.showToast({ title: this.$t('onboarding.wizard.probeNotDone'), icon: 'none' })
-          return
-        }
-        if (this.ollamaProbe.status === 'SERVICE_DOWN') {
-          uni.showToast({ title: this.$t('onboarding.wizard.ollamaServiceDown'), icon: 'none' })
-          return
-        }
-        if (this.ollamaProbe.status !== 'READY') {
-          // MODEL_MISSING，以及后端返回了认不出的 status（宁可拦住也不放行一个跑不起来的配置）
-          uni.showToast({ title: this.$t('onboarding.wizard.ollamaModelMissing'), icon: 'none' })
-          return
-        }
-      }
       // 平台通道两个前置条件缺一都会在发第一条消息时才报错，拦在这里并指出下一步
-      if (provider === 'AWD_CLOUD' && !this.platformAiAvailable) {
+      if (!this.platformAiAvailable) {
         uni.showToast({ title: this.$t('onboarding.wizard.connectAccountFirst'), icon: 'none' })
         return
       }
-      if (provider === 'AWD_CLOUD' && this.platformNeedsAllocation) {
+      if (this.platformNeedsAllocation) {
         // 文案红线：不能含「请先」——api.js 用它判掉线并清会话
         uni.showToast({ title: this.$t('onboarding.wizard.creditsEmpty'), icon: 'none' })
         return
       }
       // 跨境同意：后端 crossBorderBlockReason 也会拦（两道都在才算数），
       // 这里拦一次是为了把提示给在勾选框旁边而不是提交失败之后
-      if (provider === 'AWD_CLOUD' && !this.crossBorderConsent) {
+      if (!this.crossBorderConsent) {
         uni.showToast({ title: this.$t('onboarding.wizard.consentRequired'), icon: 'none' })
         return
       }
@@ -597,6 +374,7 @@ export default {
   },
 }
 </script>
+
 
 <style scoped>
 .wizard-page {
@@ -721,82 +499,8 @@ export default {
   margin-bottom: 10px;
 }
 
-.provider-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.provider-card {
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  border-radius: 12px;
-  padding: 14px 16px;
-  cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
-}
-
-.provider-card.selected {
-  border-color: #2563eb;
-  background: rgba(37, 99, 235, 0.04);
-}
-
-.provider-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.radio-dot {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  border: 2px solid #94a3b8;
-  box-sizing: border-box;
-  flex-shrink: 0;
-}
-
-.radio-dot.checked {
-  border-color: #2563eb;
-  background: radial-gradient(circle, #2563eb 0 4px, transparent 5px);
-}
-
-.provider-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: #0f172a;
-}
-
-.data-flow-tag {
-  margin-left: auto;
-  font-size: 11px;
-  padding: 1px 8px;
-  border-radius: 999px;
-}
-
-.tag-local {
-  color: #166534;
-  background: #dcfce7;
-}
-
-.tag-cloud {
-  color: #9a3412;
-  background: #ffedd5;
-}
-
-.provider-desc {
-  display: block;
-  font-size: 12px;
-  color: #64748b;
-  margin-top: 6px;
-  line-height: 1.6;
-}
-
-.provider-key {
-  margin-top: 10px;
-}
-
 .provider-account {
-  margin-top: 10px;
+  margin-top: 4px;
   padding: 12px;
   border-radius: 10px;
   background: #f8fafc;
@@ -906,53 +610,6 @@ export default {
   line-height: 1.6;
 }
 
-.provider-setup {
-  margin-top: 10px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: #f0fdf4;
-  border: 1px dashed rgba(22, 101, 52, 0.35);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.setup-line {
-  font-size: 12px;
-  color: #166534;
-  line-height: 1.6;
-}
-
-/* 探测块用中性底色：它承载的不只是「怎么装」，还有失败原因与重试动作 */
-.ollama-probe {
-  background: #f8fafc;
-  border-color: rgba(148, 163, 184, 0.4);
-}
-
-.ollama-probe .setup-line {
-  color: #475569;
-}
-
-/* 选择器带上父类：.ollama-probe .setup-line 的权重比裸类名高，否则这两档颜色不生效 */
-.ollama-probe .probe-bad {
-  color: #b45309;
-}
-
-.ollama-probe .probe-ok {
-  color: #166534;
-}
-
-.setup-cmd {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
-  color: #0f172a;
-  background: #ffffff;
-  border: 1px solid rgba(148, 163, 184, 0.45);
-  border-radius: 6px;
-  padding: 6px 10px;
-  user-select: all;
-}
-
 .compliance-note {
   margin-top: 12px;
   padding: 10px 12px;
@@ -1059,10 +716,6 @@ export default {
 .tier-need {
   color: #9a3412;
   background: #ffedd5;
-}
-
-.svc-connect {
-  margin-top: 12px;
 }
 
 .svc-foot {

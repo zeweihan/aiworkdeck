@@ -456,10 +456,17 @@ try {
     for (const gone of ['AccessKey', '企查查 Key', 'Tushare Token', '北大法宝 Token']) {
       if (t.includes(gone)) throw new Error('wizard 页仍含已撤走的第三方凭证字段：' + gone)
     }
+    // 官方版收敛（dev-board#98）：步骤 1 是「连接账户」直述，不再有 OLLAMA / OPENROUTER 单选，
+    // 也不再指路「使用自己的 Key」。
+    if (!t.includes('连接账户')) throw new Error('wizard 步骤 1 未渲染「连接账户」')
+    for (const gone of ['Ollama', 'OpenRouter API Key', '使用自己的 Key']) {
+      if (t.includes(gone)) throw new Error('wizard 页仍含已撤走的供应商自选入口：' + gone)
+    }
 
     // API 置初始化（与向导 UI 等价的后端出口；向导 UI 自身的交互不在本套件覆盖面）
-    // 供应商必须是收敛后的三档之一（AWD_CLOUD / OPENROUTER / OLLAMA）：
+    // 供应商必须是后端仍认的三档之一（AWD_CLOUD / OPENROUTER / OLLAMA）：
     // 已下线的 gemini 现在会被 toSettingsUpdates 的枚举校验打成 400。
+    // 向导 UI 自 dev-board#98 起只写 AWD_CLOUD，这里是后端路径，不受 UI 收敛影响。
     const init = await api('/api/admin/wizard', { method: 'POST', body: { ai: { activeProvider: 'OPENROUTER' } } })
     if (!init || init.code !== 0) throw new Error('API 置向导初始化失败: ' + JSON.stringify(init).slice(0, 150))
   })
