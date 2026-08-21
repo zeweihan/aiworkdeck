@@ -85,6 +85,23 @@ export default {
       default: ''
     }
   },
+  data() {
+    return {
+      // 会话代次：调用点没给 :key，同一个面板槽位换插件时组件被复用、iframe 只换 src，
+      // 于是 A 发起的桥调用可能在 B 已经载入之后才 resolve。响应按 seq 匹配，而新插件的
+      // 序号也从 1 起，投错窗口就是把 A 的数据（可能含 B 无权读的文件内容）兑现给 B。
+      // 换插件时自增，回响应前比对，代次对不上就丢弃。
+      sessionGeneration: 0
+    }
+  },
+  watch: {
+    url() {
+      this.sessionGeneration++
+    },
+    pluginId() {
+      this.sessionGeneration++
+    }
+  },
   computed: {
     // 只有走 /api/plugin-web/ 的 Web 插件才 sandbox + 握手。
     // 绑定 null 会让 Vue 移除该属性，绝对 URL 形态因此与改造前逐字节一致。
@@ -132,16 +149,20 @@ export default {
       const msg = event.data
       if (!msg || msg.awd !== PROTOCOL || msg.type !== 'call') return
 
+      // 发起调用时的代次，await 之后据此判断这条响应还属不属于当前插件
+      const generation = this.sessionGeneration
       let out
       try {
         out = await this.handleCall(String(msg.method || ''), msg.params || {})
       } catch (e) {
         out = { ok: false, error: { code: 'internal_error', message: (e && e.message) || '调用失败' } }
       }
-      this.reply(msg.seq, out)
+      this.reply(msg.seq, out, generation)
     },
 
-    reply(seq, out) {
+    reply(seq, out, generation) {
+      // 代次已过期：调用发出后面板换了插件，这条响应属于上一个插件，丢弃
+      if (generation !== undefined && generation !== this.sessionGeneration) return
       const frame = this.$refs.pluginFrame
       if (!frame || !frame.contentWindow) return
       const msg = { awd: PROTOCOL, type: 'result', seq, ok: !!out.ok }

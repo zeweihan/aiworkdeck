@@ -1162,8 +1162,20 @@ export default {
        pptConfigData.value = null
        // Optionally notify backend of cancellation? Not strictly needed as AI task handles timeout or just hangs.
        // Ideally we should tell user "Cancelled".
+       // 形状必须与 useAgentStream.createAssistantBubble 一致：RootBubble 对
+       // thinking.status / processes.length / artifacts.length 都是裸解引用，
+       // 少字段就在渲染时抛 TypeError，Vue 3 把这条气泡换成空注释节点——
+       // 用户根本看不到「已取消」。
        bubbles.value.push({
           role: 'ASSISTANT',
+          thinking: { status: 'done', content: '', duration: 0 },
+          title: '',
+          planTodos: [],
+          processes: [],
+          artifacts: [],
+          walkthrough: '',
+          question: null,
+          isStreaming: false,
           content: t('chat.pptCancelled'),
           timestamp: new Date().toLocaleTimeString()
        })
@@ -1186,8 +1198,17 @@ export default {
           await performPptGeneration(params)
 
           // Add a system bubble saying "Starting generation..."
+          // 同上：字段少了这条提示会被 Vue 的渲染错误兜底吞成空节点。
           bubbles.value.push({
              role: 'ASSISTANT',
+             thinking: { status: 'done', content: '', duration: 0 },
+             title: '',
+             planTodos: [],
+             processes: [],
+             artifacts: [],
+             walkthrough: '',
+             question: null,
+             isStreaming: false,
              content: t('chat.pptStarting', { variant: pptExportEditable.value ? t('chat.pptVariantEditable') : t('chat.pptVariantImage') }),
              timestamp: new Date().toLocaleTimeString()
           })

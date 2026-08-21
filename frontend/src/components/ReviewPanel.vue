@@ -85,7 +85,7 @@ export default {
     refreshKey: { type: Number, default: 0 },
   },
   data() {
-    return { tab: 'rev', revisions: [], comments: [], error: '' }
+    return { tab: 'rev', revisions: [], comments: [], error: '', resolving: false }
   },
   computed: {
     // 引擎按「一次编辑操作」记一条 redline：连按 Backspace 删掉一个词，就是一个字
@@ -143,16 +143,25 @@ export default {
     gotoComment(c) { this.run('goto_comment', { index: c.index }) },
     // 整组处置。**必须从高索引往低处理**：index 就是枚举序，处置掉一条之后比它
     // 大的索引全部前移一位，而比它小的不受影响——倒着走，剩下的索引才一直有效。
+    // 连点两次会并发跑两轮：两轮手里是同一份索引，第一轮处置掉一条后引擎里的索引
+    // 已经前移，第二轮那份索引会打到别的修订上（引擎照样返回 success）。加重入闸，
+    // 处置期间的重复点击直接忽略。
     async resolveGroup(g, action) {
-      const indices = g.items.map((r) => r.index).sort((a, b) => b - a)
-      let done = 0
-      for (const index of indices) {
-        if (await this.run('resolve_revision', { index, action })) done++
+      if (this.resolving) return
+      this.resolving = true
+      try {
+        const indices = g.items.map((r) => r.index).sort((a, b) => b - a)
+        let done = 0
+        for (const index of indices) {
+          if (await this.run('resolve_revision', { index, action })) done++
+        }
+        if (done) this.$emit('changed')
+        // 引擎没命中的如实说，别让用户以为整组都处理完了
+        if (done < indices.length) this.error = this.$t('editor.review.groupPartialFail', { total: indices.length, failed: indices.length - done })
+        await this.reload()
+      } finally {
+        this.resolving = false
       }
-      if (done) this.$emit('changed')
-      // 引擎没命中的如实说，别让用户以为整组都处理完了
-      if (done < indices.length) this.error = this.$t('editor.review.groupPartialFail', { total: indices.length, failed: indices.length - done })
-      await this.reload()
     },
     async resolveAll(action) {
       const res = await this.run('resolve_all_revisions', { action })

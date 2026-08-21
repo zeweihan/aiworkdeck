@@ -47,7 +47,7 @@
               <input class="bind-input code" type="number" maxlength="6" v-model="totpCodeInput" :placeholder="$t('account.appCodePlaceholder')" />
             </view>
             <view class="bind-actions">
-              <button class="btn-bind-confirm" @tap="confirmTotpBind">{{ $t('account.finishBindBtn') }}</button>
+              <button class="btn-bind-confirm" :disabled="totpSubmitting" @tap="confirmTotpBind">{{ $t('account.finishBindBtn') }}</button>
               <text class="bind-link" @tap="cancelTotpPanel">{{ $t('common.cancel') }}</text>
             </view>
           </template>
@@ -58,7 +58,7 @@
               <input class="bind-input code" type="number" maxlength="6" v-model="totpCodeInput" :placeholder="$t('account.appCodePlaceholder')" />
             </view>
             <view class="bind-actions">
-              <button class="btn-bind-confirm" @tap="confirmTotpDisable">{{ $t('account.confirmUnbindBtn') }}</button>
+              <button class="btn-bind-confirm" :disabled="totpSubmitting" @tap="confirmTotpDisable">{{ $t('account.confirmUnbindBtn') }}</button>
               <text class="bind-link" @tap="cancelTotpPanel">{{ $t('common.cancel') }}</text>
             </view>
           </template>
@@ -82,7 +82,7 @@
             </button>
           </view>
           <view class="bind-actions">
-            <button class="btn-bind-confirm" @tap="confirmBindPhone">{{ $t('account.confirmBindBtn') }}</button>
+            <button class="btn-bind-confirm" :disabled="bindSubmitting" @tap="confirmBindPhone">{{ $t('account.confirmBindBtn') }}</button>
             <text class="bind-link" @tap="cancelBindPhone">{{ $t('common.cancel') }}</text>
           </view>
           <text class="bind-tip">{{ $t('account.bindPhoneTip') }}</text>
@@ -106,7 +106,7 @@
             </button>
           </view>
           <view class="bind-actions">
-            <button class="btn-bind-confirm" @tap="confirmBindEmail">{{ $t('account.confirmBindBtn') }}</button>
+            <button class="btn-bind-confirm" :disabled="bindEmailSubmitting" @tap="confirmBindEmail">{{ $t('account.confirmBindBtn') }}</button>
             <text class="bind-link" @tap="cancelBindEmail">{{ $t('common.cancel') }}</text>
           </view>
           <text class="bind-tip">{{ $t('account.bindEmailTip') }}</text>
@@ -239,6 +239,10 @@ export default {
       totpCodeInput: '',
       totpBusy: false, // startSetup 在飞期间为 true，防止重复点击触发并发请求
       _totpRequestSeq: 0, // 请求代次：只接受"此刻最新一次"发出的响应
+      // 上面两个管的是「开始设置」那一步；下面这个管「确认」那一步——
+      // 验证码是一次性的：连点两次会并发发两次请求，第二次必然失败，
+      // 于是成功 toast 后面又叠一个失败 toast。三个闸各管一个面板。
+      totpSubmitting: false,
 
       // 手机号绑定（登录短信验证，仅 server 模式且启用时显示）
       showBindPhone: false,
@@ -246,6 +250,7 @@ export default {
       bindCodeInput: '',
       bindCountdown: 0,
       bindCountdownTimer: null,
+      bindSubmitting: false,
 
       // 邮箱绑定（与手机号并列的二次验证方式；绑了之后优先走邮件，省短信费）
       showBindEmail: false,
@@ -253,6 +258,7 @@ export default {
       bindEmailCodeInput: '',
       bindEmailCountdown: 0,
       bindEmailCountdownTimer: null,
+      bindEmailSubmitting: false,
     }
   },
   mounted() {
@@ -432,6 +438,8 @@ export default {
         uni.showToast({ title: this.$t('account.enterSixDigitCode'), icon: 'none' })
         return
       }
+      if (this.totpSubmitting) return
+      this.totpSubmitting = true
       try {
         await totpActivate(this.totpCodeInput)
         this.userInfo = { ...this.userInfo, totpEnabled: true }
@@ -440,6 +448,8 @@ export default {
         this.cancelTotpPanel()
       } catch (e) {
         uni.showToast({ title: e.message || this.$t('account.bindFailed'), icon: 'none' })
+      } finally {
+        this.totpSubmitting = false
       }
     },
     async confirmTotpDisable() {
@@ -447,6 +457,8 @@ export default {
         uni.showToast({ title: this.$t('account.enterSixDigitCode'), icon: 'none' })
         return
       }
+      if (this.totpSubmitting) return
+      this.totpSubmitting = true
       try {
         await totpDisable(this.totpCodeInput)
         this.userInfo = { ...this.userInfo, totpEnabled: false }
@@ -455,6 +467,8 @@ export default {
         this.cancelTotpPanel()
       } catch (e) {
         uni.showToast({ title: e.message || this.$t('account.unbindFailed'), icon: 'none' })
+      } finally {
+        this.totpSubmitting = false
       }
     },
     cancelTotpPanel() {
@@ -496,6 +510,8 @@ export default {
         uni.showToast({ title: this.$t('account.enterSixDigitCode'), icon: 'none' })
         return
       }
+      if (this.bindSubmitting) return
+      this.bindSubmitting = true
       try {
         const res = await bindPhone(this.bindPhoneInput, this.bindCodeInput)
         uni.showToast({ title: this.$t('account.bindSuccessToast'), icon: 'success' })
@@ -505,6 +521,8 @@ export default {
         this.cancelBindPhone()
       } catch (e) {
         uni.showToast({ title: e.message || this.$t('account.bindFailed'), icon: 'none' })
+      } finally {
+        this.bindSubmitting = false
       }
     },
     cancelBindPhone() {
@@ -546,6 +564,8 @@ export default {
         uni.showToast({ title: this.$t('account.enterSixDigitCode'), icon: 'none' })
         return
       }
+      if (this.bindEmailSubmitting) return
+      this.bindEmailSubmitting = true
       try {
         const res = await bindEmail(this.bindEmailInput.trim(), this.bindEmailCodeInput)
         uni.showToast({ title: this.$t('account.bindSuccessToast'), icon: 'success' })
@@ -555,6 +575,8 @@ export default {
         this.cancelBindEmail()
       } catch (e) {
         uni.showToast({ title: e.message || this.$t('account.bindFailed'), icon: 'none' })
+      } finally {
+        this.bindEmailSubmitting = false
       }
     },
     cancelBindEmail() {

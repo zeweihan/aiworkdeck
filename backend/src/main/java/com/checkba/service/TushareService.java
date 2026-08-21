@@ -136,8 +136,14 @@ public class TushareService {
             Set<String> executives = new LinkedHashSet<>();
 
             for (Map<String, String> mgr : managers) {
-                String name = mgr.get("name");
-                String title = mgr.get("job"); // mapped to 'job' in helper
+                // 上游 stk_managers 允许 name/title 缺失（原始公告没披露职务是常态）。
+                // 这里不做兜底的话，一行坏数据 NPE 出去，上层 catch 会把这次已经采到的
+                // 基本信息、股东、管理层三组变量一起丢掉，用户还看不到任何报错。
+                String name = StrUtil.nullToEmpty(mgr.get("name"));
+                String title = StrUtil.nullToEmpty(mgr.get("job")); // mapped to 'job' in helper
+                if (StrUtil.isBlank(name)) {
+                    continue;
+                }
                 if (title.contains("独立董事")) {
                     directors.add(name + "(独董)");
                 } else if (title.contains("董事")) {

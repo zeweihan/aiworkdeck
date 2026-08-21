@@ -94,6 +94,7 @@ export default {
     this._seq = 0              // 每次用户编辑 +1；保存完成时对账判定期间有没有新输入
     this._saveTimer = null
     this._retryTimer = null
+    this._inflight = null      // 在途上传的 Promise；flushSave 靠它等真正结束
     this._applyingRemote = false
     this._loadOk = false
     this._md = null
@@ -234,7 +235,9 @@ export default {
       const content = this._view.state.doc.toString()
       this.saving = true
       try {
-        await this.uploadContent(content)
+        // 句柄留给 flushSave：关闭前必须等这一次真正结束，不能只看 saving 标志
+        this._inflight = this.uploadContent(content)
+        await this._inflight
         this.saveFailed = false
         // 保存期间又有输入的话保持脏、让防抖继续跑；没有才清脏
         if (this._seq === seq) this.dirty = false
@@ -247,6 +250,7 @@ export default {
         this._retryTimer = setTimeout(() => { this._retryTimer = null; if (this.dirty) this.save() }, RETRY_DELAY)
         return false
       } finally {
+        this._inflight = null
         this.saving = false
       }
     },
@@ -275,8 +279,12 @@ export default {
     async flushSave() {
       clearTimeout(this._saveTimer)
       this._saveTimer = null
-      for (let i = 0; i < 100 && this.saving; i++) {
-        await new Promise((r) => setTimeout(r, 100))
+      // 必须等在途保存真正结束（xhr.timeout 60s 封顶），不能只等固定几秒就放行：
+      // 放行时 saving 还是 true，紧接着的 save() 会原地 no-op（只重挂一个防抖定时器），
+      // 而组件随即卸载、定时器被 beforeUnmount 清掉——在途请求发出**之后**的那批输入
+      // 就静默丢了。成功失败都只当作「不再在途」，脏内容交给下面这次 save 兜住。
+      while (this._inflight) {
+        try { await this._inflight } catch (e) { /* 失败已在 save 里记账 */ }
       }
       if (this.dirty) await this.save()
     },

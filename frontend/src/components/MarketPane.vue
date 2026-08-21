@@ -615,6 +615,7 @@ export default {
         uni.showToast({ title: this.$t('market.installedEnableHint'), icon: 'none' })
         await this.loadPlugins()
         await this.loadPluginMarket()
+        this.notifyMarketChanged()
       } catch (e) {
         console.error('安装插件失败:', e)
         uni.showToast({ title: e?.message || this.$t('market.installFailedNeedAdmin'), icon: 'none' })
@@ -630,6 +631,7 @@ export default {
         uni.showToast({ title: this.$t('market.uninstalledToast'), icon: 'none' })
         await this.loadPlugins()
         await this.loadPluginMarket()
+        this.notifyMarketChanged()
       } catch (e) {
         console.error('卸载插件失败:', e)
         uni.showToast({ title: e?.message || this.$t('market.uninstallFailedNeedAdmin'), icon: 'none' })
@@ -660,6 +662,7 @@ export default {
         await setPluginEnabled(plugin.id, enabled)
         plugin.enabled = enabled
         uni.showToast({ title: enabled ? this.$t('market.enabledToast') : this.$t('market.disabledToggleToast'), icon: 'none' })
+        this.notifyMarketChanged()
       } catch (e) {
         console.error('切换插件状态失败:', e)
         // 回滚开关显示
@@ -711,7 +714,9 @@ export default {
         this.switching = false
       }
     },
-    // 面板型 skill 的启停直接决定左栏有没有那个图标，必须立刻通知工作台重算。
+    // 装/卸/启停改的是全局安装状态：面板型 skill 的启停决定左栏有没有那个图标，
+    // 装卸决定左栏广场面板那一行是「安装」还是「已安装」——都必须立刻通知外部重算，
+    // 否则同屏的 MarketSidebarPanel 会一直停在旧状态（本页嵌在设置 tab 里时两者共存）。
     // 两个事件都发：广场有两个宿主（左栏列表面板、中栏详情 tab），工作台两个都订。
     notifyMarketChanged() {
       uni.$emit('awd:market-changed')
@@ -773,6 +778,7 @@ export default {
         uni.showToast({ title: skill.installed ? this.$t('market.updatedToast') : this.$t('market.genericInstalledToast'), icon: 'none' })
         await this.loadSkills()
         await this.loadMarket()
+        this.notifyMarketChanged()
       } catch (e) {
         console.error('安装 Skill 失败:', e)
         uni.showToast({ title: e?.message || this.$t('market.installFailedNeedAdmin'), icon: 'none' })
@@ -788,6 +794,7 @@ export default {
         uni.showToast({ title: this.$t('market.uninstalledToast'), icon: 'none' })
         await this.loadSkills()
         await this.loadMarket()
+        this.notifyMarketChanged()
       } catch (e) {
         console.error('卸载 Skill 失败:', e)
         uni.showToast({ title: e?.message || this.$t('market.uninstallFailedNeedAdmin'), icon: 'none' })

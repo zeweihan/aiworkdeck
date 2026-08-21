@@ -56,6 +56,13 @@ function fetchUrl(url, { toFile = null, maxBytes = MAX_COMPONENT_BYTES, timeoutM
     let u
     try { u = new URL(url) } catch (e) { return reject(new Error(`bad url: ${url}`)) }
     const mod = u.protocol === 'http:' ? http : https
+    // 任何失败路径都得先关掉已经开出去的写入流：fetchFirst 失败后会用同一个
+    // toFile 换下个镜像重试，不关就是每次回退、每个检查周期漏一个 fd。
+    let out = null
+    const fail = (e) => {
+      if (out) out.destroy()
+      reject(e)
+    }
     const req = mod.get(u, { timeout: timeoutMs }, (res) => {
       const sc = res.statusCode || 0
       if (sc >= 300 && sc < 400 && res.headers.location && redirects < 5) {
@@ -69,7 +76,7 @@ function fetchUrl(url, { toFile = null, maxBytes = MAX_COMPONENT_BYTES, timeoutM
       const hash = crypto.createHash('sha256')
       let total = 0
       const chunks = []
-      const out = toFile ? fs.createWriteStream(toFile) : null
+      out = toFile ? fs.createWriteStream(toFile) : null
       res.on('data', (c) => {
         total += c.length
         if (total > maxBytes) {
@@ -86,10 +93,10 @@ function fetchUrl(url, { toFile = null, maxBytes = MAX_COMPONENT_BYTES, timeoutM
         if (out) out.end(done)
         else done()
       })
-      res.on('error', reject)
+      res.on('error', fail)
     })
     req.on('timeout', () => req.destroy(new Error(`timeout: ${url}`)))
-    req.on('error', reject)
+    req.on('error', fail)
   })
 }
 

@@ -40,7 +40,10 @@
     <!-- Monaco Diff Editor 容器 -->
     <!-- #ifdef H5 -->
     <view class="diff-container" ref="diffContainer">
-      <div id="monaco-diff-container" class="monaco-container"></div>
+      <!-- 容器只能用模板 ref 取，不能挂全局 id：分栏模式下左右两个窗格会同时挂载
+           两个 DocDiffViewer，硬编码 id 会让两边都拿到 DOM 里靠前的那一个容器，
+           后挂载的实例把 Monaco 建进了别人的窗格。 -->
+      <div ref="monacoContainer" class="monaco-container"></div>
     </view>
     <!-- #endif -->
     
@@ -202,7 +205,7 @@ export default {
         // 动态加载 Monaco Editor
         const monaco = await this.loadMonaco()
         
-        const container = document.getElementById('monaco-diff-container')
+        const container = this.$refs.monacoContainer
         if (!container) {
           throw new Error(this.$t('editor.diff.containerMissing'))
         }

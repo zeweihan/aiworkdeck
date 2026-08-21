@@ -23,7 +23,9 @@
         <text v-if="hasPreview(c)" class="conv-preview">{{ c.lastMessage }}</text>
         <text class="conv-meta">{{ metaOf(c) }}</text>
       </view>
-      <view v-if="hasMore" class="conv-more" @tap="$emit('load-more')">{{ $t('projects.loadMoreConversations') }}</view>
+      <view v-if="hasMore" class="conv-more" :class="{ 'conv-more-busy': loading }" @tap="onLoadMore">
+        {{ loading ? $t('projects.conversationsLoadingHint') : $t('projects.loadMoreConversations') }}
+      </view>
     </template>
   </view>
 </template>
@@ -59,6 +61,13 @@ export default {
     },
     metaOf(c) {
       return [c.ownerName, formatDateTime(c.updatedAt)].filter(Boolean).join(' · ')
+    },
+    // 翻页游标要等响应回来才更新，连点两下会用同一份游标取回同一页拼进列表，
+    // 于是同一个 conversationId 出现两次，v-for 的 :key 撞车、卡片重复渲染。
+    // 请求在飞时不再派发，行本身改成加载中文案（不隐藏，免得内容跳位）。
+    onLoadMore() {
+      if (this.loading) return
+      this.$emit('load-more')
     },
   },
 }
@@ -154,6 +163,11 @@ export default {
   font-size: 12px;
   color: #1A5336;
   cursor: pointer;
+}
+
+.conv-more-busy {
+  color: #6C757D;
+  cursor: default;
 }
 
 /* 响应祖先 .project-home-pane 的实际渲染宽度，见 project-home-pane.scss 的注释 */

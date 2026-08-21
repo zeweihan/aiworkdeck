@@ -14,7 +14,10 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, dirname, resolve, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '../src')
+// CHECK_EMITS_SRC 只给单测用（指向临时 fixture 目录），正常跑走默认的 src/
+const SRC = process.env.CHECK_EMITS_SRC
+  ? resolve(process.env.CHECK_EMITS_SRC)
+  : resolve(dirname(fileURLToPath(import.meta.url)), '../src')
 
 // 原生/透传事件白名单（组件上绑这些不要求子组件 emit）
 const NATIVE_EVENTS = new Set([
@@ -77,7 +80,9 @@ for (const f of vueFiles) {
     const emits = emitsByFile.get(target)
     if (emits === undefined || emits === null) continue // 非本仓组件或动态 emit → 跳过
     // 标签可能写成 <PascalCase 或 <kebab-case>
-    const tagPattern = new RegExp(`<(?:${tag}|${toKebab(tag)})\\b([^>]*)`, 'g')
+    // 属性区先整段吃掉引号字面量，否则 :prop="a > b" 里的裸 '>' 会被当成标签闭合，
+    // 把它后面的 @event 绑定整个漏检
+    const tagPattern = new RegExp(`<(?:${tag}|${toKebab(tag)})\\b((?:"[^"]*"|'[^']*'|[^>])*)`, 'g')
     for (const m of code.matchAll(tagPattern)) {
       const attrs = m[1]
       for (const ev of attrs.matchAll(/@([\w-]+(?::[\w-]+)?)(?:\.[\w.]+)*=/g)) {

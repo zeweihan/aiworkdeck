@@ -411,4 +411,59 @@ class SkillRegistryTest {
 
         assertEquals(1, registry.getSkills().size());
     }
+
+    /**
+     * 读 DISABLED_KEY 时可以卡住的设置服务：用来把 loadDisabledState 停在
+     * 「名单还没读回来」的那一瞬间，验证并发的无锁读方不会读到空名单。
+     */
+    private static class GatedSystemSettingService extends InMemorySystemSettingService {
+        final java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        final java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        final java.util.concurrent.atomic.AtomicBoolean armed = new java.util.concurrent.atomic.AtomicBoolean(false);
+
+        @Override
+        public String get(String key, String defaultValue) {
+            if (SkillRegistry.DISABLED_KEY.equals(key) && armed.compareAndSet(true, false)) {
+                entered.countDown();
+                try {
+                    release.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            return super.get(key, defaultValue);
+        }
+    }
+
+    @Test
+    @DisplayName("并发：重载启停名单期间，无锁读方不该读到空名单（被停用的 skill 短暂变成启用）")
+    void disabledStateIsNotTornWhileReloading() throws Exception {
+        writeSkill(tempDir.resolve("test-skill"), "test-skill", null);
+        GatedSystemSettingService settings = new GatedSystemSettingService();
+
+        SkillProperties props = new SkillProperties();
+        props.setDir(tempDir.toString());
+        props.setDisabledCacheTtlMs(600_000); // 读方 TTL 不到期，走的就是无锁快路径
+        SkillRegistry registry = new SkillRegistry(props, settings, new PluginService(), null);
+        registry.init();
+        registry.setEnabled("test-skill", false);
+        assertFalse(registry.isEnabled("test-skill"));
+
+        settings.armed.set(true);
+        Thread reloader = new Thread(registry::rescan, "skill-rescan");
+        reloader.start();
+        try {
+            assertTrue(settings.entered.await(10, java.util.concurrent.TimeUnit.SECONDS),
+                    "重载线程应停在读禁用名单这一步");
+            org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(
+                    java.time.Duration.ofSeconds(5),
+                    () -> assertFalse(registry.isEnabled("test-skill"),
+                            "重载途中被停用的 skill 不该被读成启用"));
+        } finally {
+            settings.release.countDown();
+            reloader.join(10_000);
+        }
+
+        assertFalse(registry.isEnabled("test-skill"), "重载结束后仍是停用");
+    }
 }

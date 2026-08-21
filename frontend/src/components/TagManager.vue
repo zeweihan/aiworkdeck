@@ -22,7 +22,7 @@
           :style="{ backgroundColor: newTagColor }"
           @click="toggleColorPicker"
         ></view>
-        <button class="add-btn" @click="handleAdd" :disabled="!newTagName">{{ $t('files.add') }}</button>
+        <button class="add-btn" @click="handleAdd" :disabled="!newTagName || adding">{{ $t('files.add') }}</button>
       </view>
 
       <view class="type-segment">
@@ -123,6 +123,8 @@ export default {
       newTagName: '',
       newTagType: TAG_TYPE_NORMAL,
       newTagColor: TAG_TYPE_DEFAULT_COLORS[TAG_TYPE_NORMAL],
+      // 创建请求在途标志：名字要等请求返回才清，没有这道闸双击就会用同名再发一次
+      adding: false,
       showColorPicker: false,
       presetColors: [
         '#EF4444', '#F97316', '#F59E0B', '#10B981', '#3B82F6',
@@ -174,7 +176,9 @@ export default {
       return TAG_TYPE_I18N_KEYS[normalizeTagType(tag)];
     },
     async handleAdd() {
+      if (this.adding) return;
       if (!this.newTagName.trim()) return;
+      this.adding = true;
       try {
         await api.createTag(this.projectId, {
           name: this.newTagName.trim(),
@@ -187,6 +191,8 @@ export default {
         this.refreshTags();
       } catch (e) {
         uni.showToast({ title: 'Failed to create tag', icon: 'none' });
+      } finally {
+        this.adding = false;
       }
     },
     startEdit(tag) {

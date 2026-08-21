@@ -520,10 +520,19 @@ export default {
     // 装载 + 发布就绪。两个入口：onEndpointReady（常规：mount 时就有 file，或
     // 备胎空白 boot 完成），以及 file watcher（备胎在引擎就绪后被过继）。
     async finishDocLoad() {
+      // 重入闸：卡住 30s 露出的「重试」按钮会在原来那次装载**仍在途**时（弱网/挂起
+      // 代理下 XHR 的 60s 超时还没到）再起一条链路，两条各自 dispatch 一次
+      // load_document，且后完成的那条按最后写者赢覆盖 ready/statusKey/docKind——
+      // 迟到的失败能把重试的成功盖成 loadFailed（连带关掉保存闸），迟到的成功能把
+      // 重试装好的文档连同其间的编辑整个换掉。世代号让被取代的那条在每个 await
+      // 之后自行退场：只有最新一次尝试有权推命令、改状态、发 ready。
+      const seq = this._docLoadSeq = (this._docLoadSeq || 0) + 1
       if (this.file) {
         try {
           await this.loadDocument()
+          if (seq !== this._docLoadSeq) return
         } catch (e) {
+          if (seq !== this._docLoadSeq) return
           // Load failed → the seeded prototype is still showing. Surface it; the
           // editor stays usable (AI/IME act on whatever is shown) but the content
           // is wrong, so this is loud, not silent. docLoadFailed 关保存闸——
@@ -606,6 +615,9 @@ export default {
       // load_document 结果是否还对着「当前显示着的那次失败」，而不是被后来的
       // 重试/换文档盖过之后依然生效。
       this._loadGen = (this._loadGen || 0) + 1
+      // 本次装载所属的 finishDocLoad 世代（见那里的重入闸）；下载回来后若已被
+      // 更晚的一次尝试取代，就不能再把命令推给 worker。
+      const seq = this._docLoadSeq || 0
       const url = getFileDownloadUrl(fileId)
       let buf = this._bytesPromise ? await this._bytesPromise : null
       if (!buf) {
@@ -632,6 +644,9 @@ export default {
         this.appendLog('文档为空（新建/未保存）→ 显示空白文档 / empty doc → blank editor: ' + name)
         return false
       }
+      // office 是单线程消息循环，两条 load_document 会按到达顺序依次执行，后到的
+      // 那条把先装好的文档整个换掉——被取代的这次到此为止，不再发命令。
+      if (seq !== (this._docLoadSeq || 0)) throw new Error('装载已被更晚的一次尝试取代 / load superseded')
       this.appendLog('▶ load_document「' + name + '」(' + bytes.length + ' bytes) …')
       this.bootMilestone(86, 95, 'openingDoc')
       // 当前登录用户名随文档传给 worker：用户本人编辑的修订以用户名署名，

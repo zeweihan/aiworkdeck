@@ -1447,9 +1447,39 @@ public class AgentOrchestrator {
         sseEmitterService.send(conversationId, "text_delta", "{\"content\":\"" + esc + "\"}");
     }
 
-    private String truncate(String s, int max) {
+    static String truncate(String s, int max) {
         if (s == null) return "";
-        return s.length() <= max ? s : s.substring(0, max) + LangText.of("...(截断)", "...(truncated)");
+        return s.length() <= max ? s
+                : s.substring(0, tagSafeCut(s, max)) + LangText.of("...(截断)", "...(truncated)");
+    }
+
+    /**
+     * 截断点回退：不许把切口留在一个还没闭合的协议标签形状中间。
+     *
+     * <p>截断先于 {@link AgentTagProtocol#escape} 发生（截断口径按原文字数，与前端
+     * 「...(截断)」提示一致）。切口若落在 {@code <tool_output status="SUC} 这种半截标签里，
+     * 它没有 {@code >}，中和认不出、原样放行；紧随其后的是截断后缀和外层自己的
+     * {@code </tool_output>}，前端 tagRegex 的 {@code [^>]*} 属性段会一路吃到那个闭合标签的
+     * {@code >}——真正的闭合被当成属性吞掉，本轮剩下的正文全被塞进折叠区、工具行一直转圈。
+     *
+     * <p>只回退「还能长成已知标签」的形状：合同里的 {@code <甲方}、比较符 {@code a < b}
+     * 不是标签形状，照旧按字数切，展示内容不凭空少一截。
+     */
+    private static int tagSafeCut(String s, int max) {
+        int lt = s.lastIndexOf('<', max - 1);
+        if (lt < 0) return max;
+        // 切口之前已经闭合过，这个 '<' 不是半截标签
+        if (s.lastIndexOf('>', max - 1) > lt) return max;
+        boolean closing = lt + 1 < max && s.charAt(lt + 1) == '/';
+        String body = s.substring(closing ? lt + 2 : lt + 1, max);
+        for (String tag : AgentTagProtocol.TAGS) {
+            // 标签名还没写全，或标签名已写全、后面正在写属性
+            if (tag.startsWith(body)
+                    || (body.startsWith(tag) && Character.isWhitespace(body.charAt(tag.length())))) {
+                return lt;
+            }
+        }
+        return max;
     }
 
     /** 工具输出在面板上的默认展示上限（历史落库存的是全文，这里只是 SSE 载荷） */

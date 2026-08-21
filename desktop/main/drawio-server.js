@@ -166,7 +166,18 @@ function startDrawioServer() {
           'Content-Length': st.size,
           ...cacheHeaders,
         })
-        createReadStream(filePath).pipe(res)
+        // ReadStream 的 'error' 必须自己收着：它是 EventEmitter，没人听时 Node 会
+        // 直接抛，而这一抛发生在 try/catch 之外的事件循环里、主进程又没有
+        // uncaughtException 兜底——结果不是这一个请求 404，是整个 Electron 应用
+        // 无提示消失。stat 到读完之间随时可能出错：pack 根每次请求现读（装完即
+        // 生效），广场正好在传输途中更新/撤销这一版就会把目录换掉；外接盘被拔、
+        // 杀毒锁文件、磁盘读错误同理。
+        // 200 的响应头（含按 st.size 算的 Content-Length）在上面已经落定，改不回
+        // 500 了；只能掐断连接，让浏览器把它当成一次传输失败，而不是拿到一个长度
+        // 对不上的半截文件。
+        const stream = createReadStream(filePath)
+        stream.on('error', () => { res.destroy() })
+        stream.pipe(res)
       } catch (e) {
         res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('not found')
       }

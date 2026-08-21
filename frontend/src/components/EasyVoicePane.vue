@@ -483,9 +483,12 @@ export default {
         const callback = (content) => {
             if (content) {
                 this.text = content;
-                // Split into sentences for karaoke highlighting
-                this.sentences = this.splitTextToSentences(content)
-                console.log('[EasyVoice] Split into', this.sentences.length, 'sentences')
+                // sentences 是「当前这段音频的时间轴」，不是「文本框里现在有什么」，
+                // 所以导入时不能顺手把它换掉：旧音频还在播的话，ontimeupdate 会按旧音频
+                // 的时长算出下标、去新文档的句子数组里取字符串 emit 出去——而导入路径
+                // （project-overview 的 handleEasyVoiceDocRequest）随后就 openFile 打开了
+                // 新文档，那些句子在新文档里真能被 find 到，选区于是跟着旧音频乱跳。
+                // handleGenerate 在每次合成前都会按当前正文重算，这里不需要提前拆句。
                 uni.showToast({ title: this.$t('panels.evImportedDocSuccess'), icon: 'success' })
             } else {
                  uni.showToast({ title: this.$t('panels.evCannotGetDocContent'), icon: 'none' })

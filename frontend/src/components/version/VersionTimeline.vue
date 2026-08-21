@@ -130,7 +130,7 @@ export default {
   },
   emits: ['reload-files', 'compare-file', 'draft-created'],
   data() {
-    return { versions: [], expanded: {}, selected: null, loadError: false, draftBranches: [] }
+    return { versions: [], expanded: {}, selected: null, loadError: false, draftBranches: [], loadSeq: 0 }
   },
   watch: {
     fileFilter() {
@@ -163,12 +163,20 @@ export default {
     this.load()
   },
   methods: {
+    // fileFilter 每变一次就重新 load()，前一次在途的请求不会被取消。先点文件过滤、
+    // 紧接着点「查看全部」时，两个请求带着不同 fileId 前后脚发出，先发的那个若后回，
+    // 会把已经渲染好的全量时间线覆盖成过滤结果——列表内容和当前过滤状态对不上，
+    // isCurrentHead 拿实时 fileFilter 配陈旧 versions 还会高亮错节点。用自增序号
+    // 只认最后一次发出的请求的响应。
     async load() {
+      const seq = ++this.loadSeq
       try {
         const res = await getVersionTimeline(this.projectId, 50, this.fileFilter && this.fileFilter.fileId)
+        if (seq !== this.loadSeq) return
         this.versions = ((res && res.data && res.data.versions) || [])
         this.loadError = false
       } catch (e) {
+        if (seq !== this.loadSeq) return
         console.warn('[Version] 读取时间线失败', e)
         this.loadError = true
         uni.showToast({ title: this.$t('version.loadFailedToast'), icon: 'none' })

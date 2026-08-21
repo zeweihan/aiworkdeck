@@ -66,14 +66,21 @@ public class SkillRegistry {
     /** id -> skill（保持扫描顺序，内置目录优先于插件） */
     private final Map<String, SkillDefinition> skills = new LinkedHashMap<>();
 
-    /** 被禁用 skill id 集合（内存缓存，与 system_setting 同步） */
-    private final Set<String> disabledSkillIds = ConcurrentHashMap.newKeySet();
+    /**
+     * 被禁用 skill id 集合（内存缓存，与 system_setting 同步）。
+     *
+     * volatile 而非 final：重载（{@link #loadDisabledState}）走"读完新名单再整体换引用"，
+     * 不在原集合上先 clear 再 addAll——{@link #isEnabled} 在 TTL 未到期时是无锁读，
+     * 会在重载的 DB 往返期间读到空名单，把管理员明确停用的 skill 短暂判成启用。
+     * 三个集合的所有写入（增删与换引用）都在 this monitor 下，读方看到的永远是完整的一版。
+     */
+    private volatile Set<String> disabledSkillIds = ConcurrentHashMap.newKeySet();
 
     /** "仅手动"skill id 集合：不参与触发词自动匹配，只能由用户在对话中钉选生效 */
-    private final Set<String> manualSkillIds = ConcurrentHashMap.newKeySet();
+    private volatile Set<String> manualSkillIds = ConcurrentHashMap.newKeySet();
 
     /** 已做过默认启停初始化的 skill id 集合（见 {@link #SEEDED_KEY}） */
-    private final Set<String> seededSkillIds = ConcurrentHashMap.newKeySet();
+    private volatile Set<String> seededSkillIds = ConcurrentHashMap.newKeySet();
 
     private volatile long disabledStateRefreshedAt = 0L;
 
@@ -473,21 +480,35 @@ public class SkillRegistry {
     }
 
     private void loadDisabledState() {
-        disabledSkillIds.clear();
-        manualSkillIds.clear();
-        seededSkillIds.clear();
         if (systemSettingService == null) {
+            disabledSkillIds = ConcurrentHashMap.newKeySet();
+            manualSkillIds = ConcurrentHashMap.newKeySet();
+            seededSkillIds = ConcurrentHashMap.newKeySet();
             return;
         }
         try {
-            disabledSkillIds.addAll(readIdSet(DISABLED_KEY));
-            manualSkillIds.addAll(readIdSet(MANUAL_KEY));
-            seededSkillIds.addAll(readIdSet(SEEDED_KEY));
+            // 三份名单全部读回来之后再换引用：中间隔着几次 DB 往返，
+            // 先 clear 的写法会让并发的无锁读方（isEnabled/isManual）在这段窗口里读到空名单。
+            Set<String> disabled = newIdSet(readIdSet(DISABLED_KEY));
+            Set<String> manual = newIdSet(readIdSet(MANUAL_KEY));
+            Set<String> seeded = newIdSet(readIdSet(SEEDED_KEY));
+            disabledSkillIds = disabled;
+            manualSkillIds = manual;
+            seededSkillIds = seeded;
         } catch (Exception e) {
             log.error("Failed to load skill activation state, default to all auto", e);
+            disabledSkillIds = ConcurrentHashMap.newKeySet();
+            manualSkillIds = ConcurrentHashMap.newKeySet();
+            seededSkillIds = ConcurrentHashMap.newKeySet();
         } finally {
             disabledStateRefreshedAt = System.currentTimeMillis();
         }
+    }
+
+    private static Set<String> newIdSet(List<String> ids) {
+        Set<String> set = ConcurrentHashMap.newKeySet();
+        set.addAll(ids);
+        return set;
     }
 
     private List<String> readIdSet(String key) {

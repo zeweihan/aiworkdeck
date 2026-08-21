@@ -89,6 +89,8 @@ export default {
       defaultDate: '',
       currentFrom: '',
       currentTo: '',
+      // loadTasks 的请求序号，见该方法里的乱序说明
+      loadSeq: 0,
     }
   },
   created() {
@@ -140,11 +142,18 @@ export default {
     },
 
     async loadTasks(from, to) {
+      // 连点翻月/切视图会连发请求，先发的（旧区间）响应可能后到。FullCalendar 只画
+      // 落在当前视图区间内的事件，旧结果落地的表现是当前月份大面积空白（只剩两个
+      // 区间重叠的那几条），直到再翻一次或保存/删除触发 refresh 才恢复。只认最后
+      // 一次请求的结果，被放弃的那次连失败提示也一并咽掉。
+      const seq = ++this.loadSeq
       try {
         const res = await getCalendarTasks(from, to)
+        if (seq !== this.loadSeq) return
         this.tasks = (res.data && res.data.tasks) || []
         this.calendarOptions.events = this.buildEvents()
       } catch (e) {
+        if (seq !== this.loadSeq) return
         console.error('[calendar] 加载日程失败', e)
         uni.showToast({ title: this.$t('calendar.loadFailed'), icon: 'none' })
       }
