@@ -1769,6 +1769,58 @@ export function getDocFileLink(projectId, linkKey) {
   })
 }
 
+// EvidenceLink（报告文字 ↔ 底稿文件关联事实表，dev-board#100/#102）。
+// REST 契约见 .claude/agents/ai-doc-bridge.md「EvidenceLink 契约」。
+const evidenceBase = (projectId) => `/api/projects/${projectId}/evidence-links`
+const JSON_HEADER = { 'Content-Type': 'application/json' }
+
+export function createEvidenceLink(projectId, body) {
+  return request({ url: evidenceBase(projectId), method: 'POST', data: body, header: JSON_HEADER })
+}
+
+export function getEvidenceLink(projectId, linkKey) {
+  return request({ url: `${evidenceBase(projectId)}/${encodeURIComponent(linkKey)}`, method: 'GET' })
+}
+
+/** params: {docFileId, status?, sectionPath?} | {fileId} | {docFileId, partyTagId} */
+export function listEvidenceLinks(projectId, params) {
+  return request({ url: evidenceBase(projectId), method: 'GET', data: params || {} })
+}
+
+export function addEvidenceTargets(projectId, linkKey, targets) {
+  return request({ url: `${evidenceBase(projectId)}/${encodeURIComponent(linkKey)}/targets`, method: 'POST', data: targets, header: JSON_HEADER })
+}
+
+export function updateEvidenceTarget(projectId, targetId, patch) {
+  return request({ url: `${evidenceBase(projectId)}/targets/${targetId}`, method: 'PATCH', data: patch, header: JSON_HEADER })
+}
+
+export function removeEvidenceTarget(projectId, targetId) {
+  return request({ url: `${evidenceBase(projectId)}/targets/${targetId}`, method: 'DELETE' })
+}
+
+export function deleteEvidenceLink(projectId, linkKey) {
+  return request({ url: `${evidenceBase(projectId)}/${encodeURIComponent(linkKey)}`, method: 'DELETE' })
+}
+
+/** worker check_link_anchors 的结果回写：reports = [{linkKey, exists, text}] → {changed:[linkKey]} */
+export function reportEvidenceAnchors(projectId, docFileId, reports) {
+  return request({ url: `${evidenceBase(projectId)}/anchors/report`, method: 'POST', data: { docFileId, reports }, header: JSON_HEADER })
+}
+
+export function keepEvidenceAnchor(projectId, linkKey, text) {
+  return request({ url: `${evidenceBase(projectId)}/${encodeURIComponent(linkKey)}/keep`, method: 'POST', data: { text }, header: JSON_HEADER })
+}
+
+/** body: {newLinkKey, anchorText, sectionPath?, sectionTitle?} */
+export function rebindEvidenceLink(projectId, linkKey, body) {
+  return request({ url: `${evidenceBase(projectId)}/${encodeURIComponent(linkKey)}/rebind`, method: 'POST', data: body, header: JSON_HEADER })
+}
+
+export function evidenceRefCounts(projectId, fileIds) {
+  return request({ url: `${evidenceBase(projectId)}/ref-counts`, method: 'GET', data: { fileIds: (fileIds || []).join(',') } })
+}
+
 export function deleteFavorite(favoriteId) {
   return request({
     url: `/api/favorites/${favoriteId}`,

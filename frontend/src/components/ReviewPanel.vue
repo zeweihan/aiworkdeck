@@ -4,6 +4,7 @@
       <view class="rp-tabs">
         <text class="rp-tab" :class="{ on: tab === 'rev' }" @tap="tab = 'rev'">{{ $t('editor.review.revTab', { count: revisionGroups.length }) }}</text>
         <text class="rp-tab" :class="{ on: tab === 'cmt' }" @tap="tab = 'cmt'">{{ $t('editor.review.cmtTab', { count: comments.length }) }}</text>
+        <text class="rp-tab" :class="{ on: tab === 'evd' }" @tap="tab = 'evd'">{{ $t('editor.review.evidenceTab', { count: evidenceCount }) }}</text>
       </view>
       <text class="rp-close" @tap="$emit('close')">{{ $t('editor.review.collapse') }}</text>
     </view>
@@ -13,9 +14,20 @@
       <text class="rp-bulk-btn" @tap="resolveAll('reject')">{{ $t('editor.review.rejectAll') }}</text>
     </view>
 
-    <view v-if="error" class="rp-error">{{ error }}</view>
+    <view v-if="error && tab !== 'evd'" class="rp-error">{{ error }}</view>
 
-    <scroll-view class="rp-list" scroll-y>
+    <!-- 证据页：独立组件、v-show 常驻（tab 上要显示计数，且切页不丢筛选/折叠态） -->
+    <EvidencePanel
+      v-show="tab === 'evd'"
+      :executor="executor"
+      :project-id="projectId"
+      :doc-file-id="docFileId"
+      @count="evidenceCount = $event"
+      @locate="$emit('locate', $event)"
+      @changed="$emit('changed')"
+    />
+
+    <scroll-view v-show="tab !== 'evd'" class="rp-list" scroll-y>
       <!-- 修订 -->
       <template v-if="tab === 'rev'">
         <view v-if="!revisions.length" class="rp-empty">
@@ -75,17 +87,23 @@
 // 数据全部来自 worker 原语（list_revisions / goto_revision / resolve_revision /
 // resolve_all_revisions 与 list_comments 一族），executor 由宿主编辑器注入。
 // 每次处置后重新拉清单——redline 的索引就是枚举序，处置一条后其余会前移。
+import EvidencePanel from '@/components/EvidencePanel.vue'
+
 export default {
   name: 'ReviewPanel',
-  emits: ['close', 'changed'],
+  components: { EvidencePanel },
+  emits: ['close', 'changed', 'locate'],
   props: {
     // LibreOffice executor（executeCommand(action, params)）。null 时面板静默。
     executor: { type: Object, default: null },
     // 宿主用它在文档改动后要求刷新（自增数字即可）。
     refreshKey: { type: Number, default: 0 },
+    // 「证据」页要的：项目与当前文档（ProjectFile.id）。缺省时证据页为空。
+    projectId: { type: [Number, String], default: null },
+    docFileId: { type: [Number, String], default: null },
   },
   data() {
-    return { tab: 'rev', revisions: [], comments: [], error: '', resolving: false }
+    return { tab: 'rev', revisions: [], comments: [], error: '', resolving: false, evidenceCount: 0 }
   },
   computed: {
     // 引擎按「一次编辑操作」记一条 redline：连按 Backspace 删掉一个词，就是一个字

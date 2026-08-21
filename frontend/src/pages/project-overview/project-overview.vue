@@ -836,7 +836,9 @@
                       :file="file"
                       @ready="onLibreReady($event, 'left', file.id)"
                       @close="onLibreClose"
+                      :project-id="projectId"
                       @open-url="onLibreOpenUrl"
+                      @open-evidence-target="onOpenEvidenceTarget"
                       @menu-state="pushMenuState"
                     />
                   </view>
@@ -855,7 +857,9 @@
                       :file="sp.file"
                       @ready="onLibreSpareReady(sp, $event)"
                       @close="onLibreClose"
+                      :project-id="projectId"
                       @open-url="onLibreOpenUrl"
+                      @open-evidence-target="onOpenEvidenceTarget"
                       @menu-state="pushMenuState"
                     />
                   </view>
@@ -984,7 +988,9 @@
                       :file="file"
                       @ready="onLibreReady($event, 'right', file.id)"
                       @close="onLibreClose"
+                      :project-id="projectId"
                       @open-url="onLibreOpenUrl"
+                      @open-evidence-target="onOpenEvidenceTarget"
                       @menu-state="pushMenuState"
                     />
                   </view>
@@ -3867,6 +3873,13 @@ export default {
     // === Staging Area Methods ===
     // 文件暂存区方法组已外置 → ./stagingArea.js（Phase 2）
 
+    // 审阅面板「证据」页 / 改字提示条的「查看底稿」：{fileId, locator, linkKey, targetId}。
+    // 打开文件交给 openFileLinkTarget；locator 定位（spec §4.2）随单元 C 的
+    // openFileLinkTarget(target) 升级接入——这里只负责把事件接进来。
+    onOpenEvidenceTarget(payload) {
+      if (!payload || !payload.fileId) return
+      this.openFileLinkTarget(payload.fileId)
+    },
     async openFileLinkTarget(fileId, sideOverride = null) {
       const fid = Number(fileId)
       if (!fid || !this.projectId) return

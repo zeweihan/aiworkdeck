@@ -33,6 +33,7 @@ export default {
   review: {
     revTab: '修订 {count}',
     cmtTab: '批注 {count}',
+    evidenceTab: '证据 {count}',
     collapse: '收起',
     acceptAll: '全部接受',
     rejectAll: '全部拒绝',
