@@ -36,13 +36,20 @@ test('applyReport: only keys in changed are applied', () => {
   assert.equal(cache[1].status, 'orphan')
 })
 
-test('resolveKeepText: uses current worker text, falls back to cached text (F2)', async () => {
+test('resolveKeepText: uses current worker text; worker failure falls back to cached text (F2)', async () => {
   const execOk = async () => ({ success: true, items: [{ name: 'A', exists: true, text: 'now' }] })
-  assert.equal(await resolveKeepText(execOk, 'A', 'cached'), 'now')
-  const execGone = async () => ({ success: true, items: [{ name: 'A', exists: false, text: '' }] })
-  assert.equal(await resolveKeepText(execGone, 'A', 'cached'), 'cached')
+  assert.deepEqual(await resolveKeepText(execOk, 'A', 'cached'), { text: 'now', gone: false })
   const execThrow = async () => { throw new Error('boom') }
-  assert.equal(await resolveKeepText(execThrow, 'A', 'cached'), 'cached')
+  assert.deepEqual(await resolveKeepText(execThrow, 'A', 'cached'), { text: 'cached', gone: false })
+  const execNoItems = async () => ({ success: true, items: [] })
+  assert.deepEqual(await resolveKeepText(execNoItems, 'A', 'cached'), { text: 'cached', gone: false })
+})
+
+test('resolveKeepText: bookmark missing or empty text → gone (orphan口径), never keep as active', async () => {
+  const execMissing = async () => ({ success: true, items: [{ name: 'A', exists: false, text: '' }] })
+  assert.deepEqual(await resolveKeepText(execMissing, 'A', 'cached'), { text: null, gone: true })
+  const execEmpty = async () => ({ success: true, items: [{ name: 'A', exists: true, text: '' }] })
+  assert.deepEqual(await resolveKeepText(execEmpty, 'A', 'cached'), { text: null, gone: true })
 })
 
 function harness(cache, opts = {}) {

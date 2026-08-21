@@ -962,10 +962,17 @@ export default {
       for (const key of keys) {
         const item = this.staleItems.find((x) => x.linkKey === key)
         try {
-          const text = this.executor
+          const cur = this.executor
             ? await resolveKeepText((a, p) => this.executor.executeCommand(a, p), key, item ? item.text : null)
-            : (item ? item.text : null)
-          const updated = await keepEvidenceAnchor(ids.pid, key, text)
+            : { text: item ? item.text : null, gone: false }
+          if (cur.gone) {
+            // 文字已经没了：不能 keep 成 active，交给下一轮核对转 orphan，面板里再「重新指定」
+            uni.showToast({ title: this.$t('evidence.keepGone'), icon: 'none' })
+            this.staleItems = this.staleItems.filter((x) => x.linkKey !== key)
+            this.scheduleAnchorCheck()
+            continue
+          }
+          const updated = await keepEvidenceAnchor(ids.pid, key, cur.text)
           if (updated && this._evidenceCache) {
             this._evidenceCache = this._evidenceCache.map((l) => (l.linkKey === key ? updated : l))
           }

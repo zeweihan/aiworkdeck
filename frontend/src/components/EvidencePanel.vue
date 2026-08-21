@@ -90,6 +90,7 @@ import { locatorSummary, buildFileLinkUrl } from '@/utils/evidenceLocator.js'
 import { ulid } from '@/utils/ulid.js'
 import { WPS_INTERNAL_HTTP_LINK_BASE } from '@/config/workbenchActions.js'
 import { EVIDENCE_CHANGED_EVENT } from '@/utils/evidenceEvents.js'
+import { resolveKeepText } from '@/composables/useEvidenceAnchors.js'
 
 const STATUSES = ['all', 'active', 'unverified', 'stale', 'orphan']
 const METHODS = ['written_review', 'written_statement', 'web_check', 'third_party', 'interview']
@@ -207,10 +208,11 @@ export default {
       this.busy = true
       this.error = ''
       try {
-        const r = await this.run('check_link_anchors', { names: [l.linkKey] })
-        const item = r && Array.isArray(r.items) ? r.items[0] : null
-        const text = item && item.exists ? item.text : (l.anchorText || '')
-        const updated = await keepEvidenceAnchor(this.pid, l.linkKey, text)
+        const cur = this.executor
+          ? await resolveKeepText((a, p) => this.executor.executeCommand(a, p), l.linkKey, l.anchorText || '')
+          : { text: l.anchorText || '', gone: false }
+        if (cur.gone) { this.error = this.$t('evidence.keepGone'); return }
+        const updated = await keepEvidenceAnchor(this.pid, l.linkKey, cur.text)
         this.replaceLink(updated)
         this.broadcast()
       } catch (e) {
@@ -236,9 +238,17 @@ export default {
         let newKey = this._rebindKey
         let anchorText = ''
         if (newKey) {
+          // 重试：书签还在就跳过去重写一遍超链接（幂等），再调后端；不在就重来
           const ctx0 = await this.run('get_bookmark_context', { name: newKey })
-          if (ctx0 && ctx0.exists && ctx0.text) anchorText = ctx0.text
-          else newKey = null // 上轮的书签已不在（撤销了），重来
+          if (ctx0 && ctx0.exists && ctx0.text) {
+            anchorText = ctx0.text
+            const gt = await this.run('goto_bookmark', { name: newKey })
+            const hl0 = gt && gt.success ? await this.run('set_selection_hyperlink', { url: buildFileLinkUrl(WPS_INTERNAL_HTTP_LINK_BASE, newKey, this.pid, null) }) : null
+            if (!hl0 || !hl0.success) { if (!this.error) this.error = this.$t('evidence.rebindFailed'); return }
+          } else {
+            newKey = null
+            this._rebindKey = null
+          }
         }
         if (!newKey) {
           const sel = await this.run('get_selection_hyperlink', {})
@@ -247,11 +257,12 @@ export default {
           newKey = 'EVID_' + ulid()
           const bm = await this.run('bookmark_selection', { name: newKey })
           if (!bm || !bm.success) return
-          this._rebindKey = newKey
           anchorText = bm.text || text
           const url = buildFileLinkUrl(WPS_INTERNAL_HTTP_LINK_BASE, newKey, this.pid, null)
           const hl = await this.run('set_selection_hyperlink', { url })
+          // 超链接没写上就不算建好：_rebindKey 不记，下次重试从选区重新来（书签+链接必须成对）
           if (!hl || !hl.success) { if (!this.error) this.error = this.$t('evidence.rebindFailed'); return }
+          this._rebindKey = newKey
         }
         const ctx = await this.run('get_bookmark_context', { name: newKey })
         const updated = await rebindEvidenceLink(this.pid, oldKey, {

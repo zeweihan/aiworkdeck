@@ -47,14 +47,22 @@ export function applyReport(cache, reports, changed) {
   return applied
 }
 
-/** 「保留关联」用文档里现在的文字：先问 worker，问不到才回退缓存文字（F2）。 */
+/**
+ * 「保留关联」用文档里现在的文字：先问 worker，问不到（抛错/无结果）才回退缓存文字（F2）。
+ * worker 明确说书签不在或文字为空 → 按 orphan 口径 `{ gone: true }`，调用方不得 keep 成 active。
+ * @returns {{text: string|null, gone: boolean}}
+ */
 export async function resolveKeepText(exec, linkKey, fallback) {
+  let item = null
   try {
     const r = await exec('check_link_anchors', { names: [linkKey] })
-    const item = r && Array.isArray(r.items) ? r.items[0] : null
-    if (item && item.exists && String(item.text || '') !== '') return String(item.text)
-  } catch (e) { /* 回退 */ }
-  return fallback == null ? null : String(fallback)
+    item = r && Array.isArray(r.items) ? r.items[0] : null
+  } catch (e) { item = null }
+  if (item) {
+    if (!item.exists || String(item.text || '') === '') return { text: null, gone: true }
+    return { text: String(item.text), gone: false }
+  }
+  return { text: fallback == null ? null : String(fallback), gone: false }
 }
 
 /**
