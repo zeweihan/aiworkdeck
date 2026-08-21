@@ -62,6 +62,9 @@ export default {
   loading: 'Loading...',
   noFiles: 'No files yet',
   dropToRoot: 'Drop here to move to the root directory',
+  // Windowed rendering + reference count badge (dev-board#107 unit F3)
+  loadMoreItems: 'Show more ({count} more items)',
+  referencedCount: 'Referenced {count}',
   // Upload status area
   uploadListCount: 'Upload List ({count})',
   cancelAll: 'Cancel All',

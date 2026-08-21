@@ -62,6 +62,9 @@ export default {
   loading: '加载中...',
   noFiles: '暂无文件',
   dropToRoot: '拖拽到此处移至根目录',
+  // 窗口化渲染 + 引用角标（dev-board#107 单元 F3）
+  loadMoreItems: '展开更多（还有 {count} 项）',
+  referencedCount: '引用 {count}',
   // 上传状态区
   uploadListCount: '上传列表 ({count})',
   cancelAll: '取消全部',
