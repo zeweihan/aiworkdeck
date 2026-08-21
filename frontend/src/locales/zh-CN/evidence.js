@@ -58,6 +58,8 @@ export default {
   rebindHint: '在文档里选中新的文字，然后点「确认指定」',
   rebindNoSelection: '请先在文档里选中文字',
   rebindFailed: '重新指定失败',
+  rebindRetryHint: '新书签已在文档里，再点一次「确认指定」即可重试。',
+  orphanGoto: '这段文字的锚点已不在文档里，请点「重新指定」选择新的文字。',
   loadFailed: '加载关联失败',
   opFailed: '操作未成功',
   deleteConfirm: '删除这条关联？底稿文件不会被删除。',

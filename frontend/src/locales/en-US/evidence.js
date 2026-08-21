@@ -58,6 +58,8 @@ export default {
   rebindHint: 'Select the new text in the document, then tap Confirm',
   rebindNoSelection: 'Select text in the document first',
   rebindFailed: 'Reassign failed',
+  rebindRetryHint: 'The new bookmark is already in the document; tap Confirm again to retry.',
+  orphanGoto: 'The anchor for this text is no longer in the document. Tap Reassign to pick new text.',
   loadFailed: 'Failed to load links',
   opFailed: 'Operation failed',
   deleteConfirm: 'Delete this link? The source file will not be deleted.',

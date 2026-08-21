@@ -190,7 +190,13 @@ export default {
     broadcast() {
       try { uni.$emit(EVIDENCE_CHANGED_EVENT, { docFileId: this.did, source: 'panel' }) } catch (e) { /* ignore */ }
     },
-    goto(l) { if (!this.rebinding) this.run('goto_bookmark', { name: l.linkKey }) },
+    goto(l) {
+      if (this.rebinding) return
+      this.error = ''
+      // orphan = 书签已不在文档里，goto 只会报「bookmark not found」；直接说清楚让用户重新指定
+      if (l.status === 'orphan') { this.error = this.$t('evidence.orphanGoto'); return }
+      this.run('goto_bookmark', { name: l.linkKey })
+    },
     locate(l, tg) {
       if (!tg || !tg.fileId || (tg.file && tg.file.isDeleted)) return
       this.$emit('locate', { fileId: tg.fileId, locator: tg.locator || null, linkKey: l.linkKey, targetId: tg.id })
@@ -199,6 +205,7 @@ export default {
     async keep(l) {
       if (this.busy) return
       this.busy = true
+      this.error = ''
       try {
         const r = await this.run('check_link_anchors', { names: [l.linkKey] })
         const item = r && Array.isArray(r.items) ? r.items[0] : null
@@ -214,41 +221,59 @@ export default {
     },
     startRebind(l) {
       this.rebinding = l.linkKey
+      this._rebindKey = null // 本轮还没在文档里建过新书签
       this.error = ''
     },
-    // 「重新指定」：当前选区套新书签 + 写超链接 → 后端换 linkKey → active
+    // 「重新指定」：当前选区套新书签 + 写超链接 → 后端换 linkKey → active。
+    // 书签一旦套上就记在 _rebindKey：后端失败后用户重试时复用它，不再往文档里多塞一个书签。
     async confirmRebind() {
       const oldKey = this.rebinding
       const link = this.links.find((x) => x.linkKey === oldKey)
       if (!link || this.busy) return
       this.busy = true
+      this.error = ''
       try {
-        const sel = await this.run('get_selection_hyperlink', {})
-        const text = sel && sel.success ? String(sel.text || '').trim() : ''
-        if (!text) { this.error = this.$t('evidence.rebindNoSelection'); return }
-        const newKey = 'EVID_' + ulid()
-        const bm = await this.run('bookmark_selection', { name: newKey })
-        if (!bm || !bm.success) return
-        const url = buildFileLinkUrl(WPS_INTERNAL_HTTP_LINK_BASE, newKey, this.pid, null)
-        await this.run('set_selection_hyperlink', { url })
+        let newKey = this._rebindKey
+        let anchorText = ''
+        if (newKey) {
+          const ctx0 = await this.run('get_bookmark_context', { name: newKey })
+          if (ctx0 && ctx0.exists && ctx0.text) anchorText = ctx0.text
+          else newKey = null // 上轮的书签已不在（撤销了），重来
+        }
+        if (!newKey) {
+          const sel = await this.run('get_selection_hyperlink', {})
+          const text = sel && sel.success ? String(sel.text || '').trim() : ''
+          if (!text) { this.error = this.$t('evidence.rebindNoSelection'); return }
+          newKey = 'EVID_' + ulid()
+          const bm = await this.run('bookmark_selection', { name: newKey })
+          if (!bm || !bm.success) return
+          this._rebindKey = newKey
+          anchorText = bm.text || text
+          const url = buildFileLinkUrl(WPS_INTERNAL_HTTP_LINK_BASE, newKey, this.pid, null)
+          const hl = await this.run('set_selection_hyperlink', { url })
+          if (!hl || !hl.success) { if (!this.error) this.error = this.$t('evidence.rebindFailed'); return }
+        }
         const ctx = await this.run('get_bookmark_context', { name: newKey })
         const updated = await rebindEvidenceLink(this.pid, oldKey, {
           newLinkKey: newKey,
-          anchorText: bm.text || text,
+          anchorText,
           sectionPath: (ctx && ctx.sectionPath) || null,
           sectionTitle: (ctx && ctx.sectionTitle) || null,
         })
         this.links = this.links.map((x) => (x.linkKey === oldKey ? updated : x))
         this.rebinding = null
+        this._rebindKey = null
         this.$emit('changed') // 文档真的改了（书签+超链接），让宿主走自动保存
         this.broadcast()
       } catch (e) {
-        this.error = (e && e.message) || this.$t('evidence.rebindFailed')
+        // 后端没接受：书签已在文档里，留着 _rebindKey 等用户重试，提示里说明
+        this.error = ((e && e.message) || this.$t('evidence.rebindFailed')) + (this._rebindKey ? ' ' + this.$t('evidence.rebindRetryHint') : '')
       } finally {
         this.busy = false
       }
     },
     remove(l) {
+      this.error = ''
       uni.showModal({
         title: this.$t('evidence.action.delete'),
         content: this.$t('evidence.deleteConfirm'),
@@ -268,6 +293,7 @@ export default {
     async setMethod(l, tg, method) {
       this.methodPickerFor = null
       if (tg.method === method) return
+      this.error = ''
       try {
         const updated = await updateEvidenceTarget(this.pid, tg.id, { method })
         const targets = (l.targets || []).map((x) => (x.id === tg.id ? { ...x, ...(updated || {}), method } : x))
@@ -277,6 +303,7 @@ export default {
       }
     },
     removeTarget(l, tg) {
+      this.error = ''
       uni.showModal({
         title: this.$t('evidence.action.removeTarget'),
         content: this.$t('evidence.deleteTargetConfirm'),

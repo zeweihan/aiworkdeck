@@ -139,13 +139,10 @@ import { getAuthHeaders, getCurrentUser } from '@/utils/auth.js'
 import { host } from '@/services/host.js'
 import { anchorHash } from '@/utils/anchorHash.js'
 import { StaleQueue } from '@/utils/evidenceStaleQueue.js'
+import { createAnchorChecker, resolveKeepText } from '@/composables/useEvidenceAnchors.js'
 import { EVIDENCE_CHANGED_EVENT } from '@/utils/evidenceEvents.js'
 
 let seq = 0
-// 一次 check_link_anchors 最多带的书签数（worker 侧也按 200 截断）
-const ANCHOR_BATCH = 200
-// 改字后多久核对一次锚点（与 autosave 同源的 modified 信号，各自防抖）
-const STALE_DEBOUNCE_MS = 3000
 
 export default {
   name: 'LibreOfficeEditor',
@@ -310,7 +307,8 @@ export default {
     clearTimeout(this._saveTimer)
     clearTimeout(this._slowSaveTimer)
     clearInterval(this._bootTimer)
-    clearTimeout(this._staleTimer)
+    try { if (this._anchorChecker) this._anchorChecker.dispose() } catch (e) { /* ignore */ }
+    this._anchorChecker = null
     try { if (this._evidenceUnsub) this._evidenceUnsub() } catch (e) { /* ignore */ }
     this._evidenceUnsub = null
     // Tell the host this editor (and its executor) is going away — so it can
@@ -880,19 +878,33 @@ export default {
     },
 
     // ---- EvidenceLink：改字 stale 核对（spec §4.4，dev-board#105） --------------
-    // 缓存 _evidenceCache = 当前文档的 LinkView[]；modified 后 3s 防抖（每次 modified
-    // 重置）调 worker check_link_anchors，按 anchorHash 对比：!exists || text==='' →
-    // orphan；hash 变 → stale（并入 StaleQueue 弹条）。结果一次 POST /anchors/report，
-    // 有变化就更新缓存并广播 awd:evidence-changed 让审阅面板重拉。
+    // 状态机在 composables/useEvidenceAnchors.js（判定 / 回写 / 调度 / 重入 defer），
+    // 这里只接线：缓存 _evidenceCache、executor、REST、StaleQueue 与提示条。
     evidenceIds() {
       const pid = Number(this.projectId) || null
       const did = this.file && Number(this.file.id) || null
       return pid && did ? { pid, did } : null
     },
+    ensureAnchorChecker() {
+      if (this._anchorChecker) return this._anchorChecker
+      if (!this._staleQueue) this._staleQueue = new StaleQueue()
+      this._anchorChecker = createAnchorChecker({
+        getCache: () => this._evidenceCache,
+        exec: (action, params) => this.executor.executeCommand(action, params),
+        report: (reports) => { const ids = this.evidenceIds(); return reportEvidenceAnchors(ids.pid, ids.did, reports) },
+        hash: anchorHash,
+        isBusy: () => this._cmdBusy > 0,
+        canRun: () => !!(this.executor && this.ready && !this.docLoadFailed && !this._reloading && this.evidenceIds()),
+        onStale: (hits) => this.onAnchorStale(hits),
+        onChanged: () => { const ids = this.evidenceIds(); if (ids) { try { uni.$emit(EVIDENCE_CHANGED_EVENT, { docFileId: ids.did, source: 'editor' }) } catch (e) { /* ignore */ } } },
+        log: (m) => this.appendLog(m),
+      })
+      return this._anchorChecker
+    },
     async initEvidence() {
       const ids = this.evidenceIds()
       if (!ids) return
-      if (!this._staleQueue) this._staleQueue = new StaleQueue()
+      this.ensureAnchorChecker()
       if (!this._evidenceUnsub) {
         const handler = (p) => {
           if (!p || p.source === 'editor') return
@@ -913,7 +925,7 @@ export default {
           }
         } catch (e) { this.appendLog('adopt_legacy_links failed: ' + (e && e.message ? e.message : e)) }
       }
-      await this.runAnchorCheck()
+      await this._anchorChecker.run()
     },
     async loadEvidenceCache() {
       const ids = this.evidenceIds()
@@ -929,72 +941,19 @@ export default {
       }
     },
     scheduleAnchorCheck() {
-      if (!this._evidenceCache || !this._evidenceCache.length) return
-      clearTimeout(this._staleTimer)
-      this._staleTimer = setTimeout(() => { this._staleTimer = null; this.runAnchorCheck() }, STALE_DEBOUNCE_MS)
+      if (this._anchorChecker) this._anchorChecker.schedule()
     },
-    async runAnchorCheck(opts) {
-      const ids = this.evidenceIds()
-      const cache = this._evidenceCache
-      if (!ids || !cache || !cache.length || !this.executor || !this.ready || this.docLoadFailed || this._reloading) return
-      if (this._anchorChecking) return
-      // 命令在飞时让路（与 autosave 同款规则）：1s 后重试
-      if (this._cmdBusy > 0) {
-        if (!(opts && opts.noRetry)) { clearTimeout(this._staleTimer); this._staleTimer = setTimeout(() => { this._staleTimer = null; this.runAnchorCheck() }, 1000) }
-        return
-      }
-      this._anchorChecking = true
-      try {
-        const byKey = new Map(cache.map((l) => [l.linkKey, l]))
-        const names = [...byKey.keys()]
-        const reports = []
-        const staleHits = []
-        for (let i = 0; i < names.length; i += ANCHOR_BATCH) {
-          const r = await this.executor.executeCommand('check_link_anchors', { names: names.slice(i, i + ANCHOR_BATCH) })
-          if (!r || !r.success || !Array.isArray(r.items)) continue
-          for (const it of r.items) {
-            const link = byKey.get(it.name)
-            if (!link) continue
-            const text = String(it.text || '')
-            if (!it.exists || text === '') {
-              if (link.status !== 'orphan') reports.push({ linkKey: it.name, exists: false, text: '' })
-              continue
-            }
-            if (link.status === 'orphan') continue // orphan 不因 exists=true 复活（状态机）
-            const h = await anchorHash(text)
-            if (h !== link.anchorHash) {
-              reports.push({ linkKey: it.name, exists: true, text })
-              if (link.status !== 'stale') staleHits.push({ linkKey: it.name, text, link })
-            }
-          }
-        }
-        if (!reports.length) return
-        const res = await reportEvidenceAnchors(ids.pid, ids.did, reports)
-        const changed = new Set((res && Array.isArray(res.changed)) ? res.changed : reports.map((x) => x.linkKey))
-        if (!changed.size) return
-        // 本地先改状态（面板重拉时拿到的是后端权威值）
-        for (const rep of reports) {
-          const link = byKey.get(rep.linkKey)
-          if (!link || !changed.has(rep.linkKey)) continue
-          link.status = rep.exists ? 'stale' : 'orphan'
-        }
-        for (const s of staleHits) {
-          if (changed.has(s.linkKey)) this._staleQueue.offer(s.linkKey, s.text)
-        }
-        const flushed = this._staleQueue.flush()
-        if (flushed.length) {
-          const merged = new Map(this.staleItems.map((x) => [x.linkKey, x]))
-          for (const f of flushed) merged.set(f.linkKey, { linkKey: f.linkKey, text: f.text, link: byKey.get(f.linkKey) })
-          this.staleItems = [...merged.values()]
-        }
-        try { uni.$emit(EVIDENCE_CHANGED_EVENT, { docFileId: ids.did, source: 'editor' }) } catch (e) { /* ignore */ }
-      } catch (e) {
-        this.appendLog('anchor check failed: ' + (e && e.message ? e.message : e))
-      } finally {
-        this._anchorChecking = false
-      }
+    // 核对判出新的 stale：经 StaleQueue 合并（同 key 3s 一次、忽略过的不弹）后进提示条
+    onAnchorStale(hits) {
+      for (const s of hits) this._staleQueue.offer(s.linkKey, s.text)
+      const flushed = this._staleQueue.flush()
+      if (!flushed.length) return
+      const byKey = new Map((this._evidenceCache || []).map((l) => [l.linkKey, l]))
+      const merged = new Map(this.staleItems.map((x) => [x.linkKey, x]))
+      for (const f of flushed) merged.set(f.linkKey, { linkKey: f.linkKey, text: f.text, link: byKey.get(f.linkKey) })
+      this.staleItems = [...merged.values()]
     },
-    // 提示条「保留关联」：用文档里现在的文字刷新锚点 → active
+    // 提示条「保留关联」：先向 worker 要文档里现在的文字，要不到才用弹条时记下的（F2）
     async onStaleKeep(linkKeys) {
       const ids = this.evidenceIds()
       if (!ids) return
@@ -1003,7 +962,10 @@ export default {
       for (const key of keys) {
         const item = this.staleItems.find((x) => x.linkKey === key)
         try {
-          const updated = await keepEvidenceAnchor(ids.pid, key, item ? item.text : null)
+          const text = this.executor
+            ? await resolveKeepText((a, p) => this.executor.executeCommand(a, p), key, item ? item.text : null)
+            : (item ? item.text : null)
+          const updated = await keepEvidenceAnchor(ids.pid, key, text)
           if (updated && this._evidenceCache) {
             this._evidenceCache = this._evidenceCache.map((l) => (l.linkKey === key ? updated : l))
           }
@@ -1079,7 +1041,7 @@ export default {
     async flushSave() {
       clearTimeout(this._saveTimer)
       // 关闭前把锚点状态也结一次账（文档即将离开内存，之后查不到了）
-      if (this._staleTimer) { clearTimeout(this._staleTimer); this._staleTimer = null; await this.runAnchorCheck({ noRetry: true }) }
+      if (this._anchorChecker) { try { await this._anchorChecker.flush() } catch (e) { /* 结账失败不拦保存 */ } }
       while (this.saving) await new Promise((r) => setTimeout(r, 100))
       if (this.dirty) {
         this.dirty = false
