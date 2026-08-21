@@ -1,0 +1,445 @@
+{
+  "schemaVersion" : 1,
+  "page" : {
+    "size" : {
+      "width" : {
+        "value" : 210,
+        "unit" : "mm"
+      },
+      "height" : {
+        "value" : 297,
+        "unit" : "mm"
+      },
+      "orientation" : "portrait"
+    },
+    "margins" : {
+      "top" : {
+        "value" : 2.54,
+        "unit" : "cm"
+      },
+      "bottom" : {
+        "value" : 2.54,
+        "unit" : "cm"
+      },
+      "left" : {
+        "value" : 2.54,
+        "unit" : "cm"
+      },
+      "right" : {
+        "value" : 2.54,
+        "unit" : "cm"
+      }
+    }
+  },
+  "defaults" : {
+    "font" : {
+      "theme" : {
+        "eastAsia" : "minorHAnsi",
+        "western" : "minorHAnsi"
+      }
+    },
+    "size" : {
+      "value" : 11,
+      "unit" : "pt"
+    }
+  },
+  "body" : {
+    "source" : "style",
+    "samples" : 6,
+    "font" : {
+      "eastAsia" : "楷体_GB2312",
+      "western" : "Arial",
+      "cs" : "Arial"
+    },
+    "size" : {
+      "value" : 12,
+      "unit" : "pt"
+    },
+    "bold" : false,
+    "color" : "#000000",
+    "alignment" : "justify",
+    "lineSpacing" : {
+      "rule" : "atLeast",
+      "value" : 16,
+      "unit" : "pt"
+    },
+    "spaceBefore" : {
+      "value" : 0,
+      "unit" : "pt"
+    },
+    "spaceAfter" : {
+      "value" : 18,
+      "unit" : "pt"
+    },
+    "firstLineIndent" : {
+      "value" : 2,
+      "unit" : "chars"
+    },
+    "leftIndent" : {
+      "value" : 0,
+      "unit" : "pt"
+    },
+    "styleId" : "Normal",
+    "afterTableSpaceBefore" : {
+      "value" : 18,
+      "unit" : "pt"
+    }
+  },
+  "headings" : [ {
+    "level" : 1,
+    "styleId" : "Heading1",
+    "styleName" : "heading 1",
+    "source" : "style",
+    "samples" : 1,
+    "font" : {
+      "eastAsia" : "楷体_GB2312",
+      "western" : "Arial",
+      "cs" : "Arial"
+    },
+    "size" : {
+      "value" : 16,
+      "unit" : "pt"
+    },
+    "bold" : true,
+    "color" : "#000000",
+    "alignment" : "center",
+    "lineSpacing" : {
+      "rule" : "atLeast",
+      "value" : 16,
+      "unit" : "pt"
+    },
+    "spaceBefore" : {
+      "value" : 0,
+      "unit" : "pt"
+    },
+    "spaceAfter" : {
+      "value" : 18,
+      "unit" : "pt"
+    },
+    "firstLineIndent" : {
+      "value" : 0,
+      "unit" : "pt"
+    },
+    "leftIndent" : {
+      "value" : 0,
+      "unit" : "pt"
+    },
+    "keepWithNext" : true,
+    "numbering" : {
+      "kind" : "none"
+    }
+  }, {
+    "level" : 2,
+    "styleId" : "Heading2",
+    "styleName" : "heading 2",
+    "source" : "style",
+    "samples" : 2,
+    "font" : {
+      "eastAsia" : "楷体_GB2312",
+      "western" : "Arial",
+      "cs" : "Arial"
+    },
+    "size" : {
+      "value" : 12,
+      "unit" : "pt"
+    },
+    "bold" : true,
+    "color" : "#000000",
+    "alignment" : "justify",
+    "lineSpacing" : {
+      "rule" : "atLeast",
+      "value" : 16,
+      "unit" : "pt"
+    },
+    "spaceBefore" : {
+      "value" : 0,
+      "unit" : "pt"
+    },
+    "spaceAfter" : {
+      "value" : 18,
+      "unit" : "pt"
+    },
+    "firstLineIndent" : {
+      "value" : 2,
+      "unit" : "chars"
+    },
+    "leftIndent" : {
+      "value" : 0,
+      "unit" : "pt"
+    },
+    "keepWithNext" : true,
+    "numbering" : {
+      "kind" : "literal",
+      "numFmt" : "chineseCounting",
+      "lvlText" : "%2、",
+      "suffix" : "nothing",
+      "start" : 1
+    }
+  }, {
+    "level" : 3,
+    "styleId" : "Heading3",
+    "styleName" : "heading 3",
+    "source" : "style",
+    "samples" : 2,
+    "font" : {
+      "eastAsia" : "楷体_GB2312",
+      "western" : "Arial",
+      "cs" : "Arial"
+    },
+    "size" : {
+      "value" : 12,
+      "unit" : "pt"
+    },
+    "bold" : true,
+    "color" : "#000000",
+    "alignment" : "justify",
+    "lineSpacing" : {
+      "rule" : "atLeast",
+      "value" : 16,
+      "unit" : "pt"
+    },
+    "spaceBefore" : {
+      "value" : 0,
+      "unit" : "pt"
+    },
+    "spaceAfter" : {
+      "value" : 18,
+      "unit" : "pt"
+    },
+    "firstLineIndent" : {
+      "value" : 2,
+      "unit" : "chars"
+    },
+    "leftIndent" : {
+      "value" : 0,
+      "unit" : "pt"
+    },
+    "keepWithNext" : true,
+    "numbering" : {
+      "kind" : "literal",
+      "numFmt" : "chineseCounting",
+      "lvlText" : "（%3）",
+      "suffix" : "nothing",
+      "start" : 1
+    }
+  }, {
+    "level" : 4,
+    "styleId" : "Heading4",
+    "styleName" : "heading 4",
+    "source" : "style",
+    "samples" : 1,
+    "font" : {
+      "eastAsia" : "楷体_GB2312",
+      "western" : "Arial",
+      "cs" : "Arial"
+    },
+    "size" : {
+      "value" : 12,
+      "unit" : "pt"
+    },
+    "bold" : true,
+    "italic" : true,
+    "color" : "#000000",
+    "alignment" : "justify",
+    "lineSpacing" : {
+      "rule" : "atLeast",
+      "value" : 16,
+      "unit" : "pt"
+    },
+    "spaceBefore" : {
+      "value" : 0,
+      "unit" : "pt"
+    },
+    "spaceAfter" : {
+      "value" : 18,
+      "unit" : "pt"
+    },
+    "firstLineIndent" : {
+      "value" : 2,
+      "unit" : "chars"
+    },
+    "leftIndent" : {
+      "value" : 0,
+      "unit" : "pt"
+    },
+    "keepWithNext" : true,
+    "numbering" : {
+      "kind" : "literal",
+      "numFmt" : "decimal",
+      "lvlText" : "%4.",
+      "suffix" : "space",
+      "start" : 1
+    }
+  }, {
+    "level" : 5,
+    "styleId" : "Heading5",
+    "styleName" : "Heading5",
+    "source" : "style",
+    "samples" : 1,
+    "font" : {
+      "eastAsia" : "楷体_GB2312",
+      "western" : "Arial",
+      "cs" : "Arial"
+    },
+    "size" : {
+      "value" : 12,
+      "unit" : "pt"
+    },
+    "bold" : true,
+    "color" : "#000000",
+    "alignment" : "justify",
+    "lineSpacing" : {
+      "rule" : "atLeast",
+      "value" : 16,
+      "unit" : "pt"
+    },
+    "spaceBefore" : {
+      "value" : 0,
+      "unit" : "pt"
+    },
+    "spaceAfter" : {
+      "value" : 18,
+      "unit" : "pt"
+    },
+    "firstLineIndent" : {
+      "value" : 2,
+      "unit" : "chars"
+    },
+    "leftIndent" : {
+      "value" : 0,
+      "unit" : "pt"
+    },
+    "numbering" : {
+      "kind" : "literal",
+      "numFmt" : "decimal",
+      "lvlText" : "（%5）",
+      "suffix" : "nothing",
+      "start" : 1
+    }
+  }, {
+    "level" : 6,
+    "styleId" : "Heading6",
+    "styleName" : "Heading6",
+    "source" : "style",
+    "samples" : 1,
+    "font" : {
+      "eastAsia" : "楷体_GB2312",
+      "western" : "Arial",
+      "cs" : "Arial"
+    },
+    "size" : {
+      "value" : 12,
+      "unit" : "pt"
+    },
+    "bold" : true,
+    "color" : "#000000",
+    "alignment" : "justify",
+    "lineSpacing" : {
+      "rule" : "atLeast",
+      "value" : 16,
+      "unit" : "pt"
+    },
+    "spaceBefore" : {
+      "value" : 0,
+      "unit" : "pt"
+    },
+    "spaceAfter" : {
+      "value" : 18,
+      "unit" : "pt"
+    },
+    "firstLineIndent" : {
+      "value" : 2,
+      "unit" : "chars"
+    },
+    "leftIndent" : {
+      "value" : 0,
+      "unit" : "pt"
+    },
+    "numbering" : {
+      "kind" : "none"
+    }
+  } ],
+  "table" : {
+    "source" : "instance",
+    "samples" : 1,
+    "alignment" : "left",
+    "borders" : {
+      "source" : "table",
+      "outside" : {
+        "style" : "single",
+        "width" : {
+          "value" : 1.5,
+          "unit" : "pt"
+        },
+        "color" : "#000000"
+      },
+      "insideH" : {
+        "style" : "single",
+        "width" : {
+          "value" : 1.5,
+          "unit" : "pt"
+        },
+        "color" : "#000000"
+      },
+      "insideV" : {
+        "style" : "single",
+        "width" : {
+          "value" : 1.5,
+          "unit" : "pt"
+        },
+        "color" : "#000000"
+      }
+    },
+    "header" : {
+      "rows" : 1,
+      "repeatOnEachPage" : true,
+      "bold" : true,
+      "alignment" : "center",
+      "verticalAlign" : "center",
+      "fill" : null,
+      "size" : {
+        "value" : 10,
+        "unit" : "pt"
+      }
+    },
+    "cell" : {
+      "size" : {
+        "value" : 10,
+        "unit" : "pt"
+      },
+      "lineSpacing" : {
+        "rule" : "atLeast",
+        "value" : 12,
+        "unit" : "pt"
+      },
+      "spaceBefore" : {
+        "value" : 2.4,
+        "unit" : "pt"
+      },
+      "spaceAfter" : {
+        "value" : 2.4,
+        "unit" : "pt"
+      },
+      "firstLineIndent" : {
+        "value" : 0,
+        "unit" : "pt"
+      },
+      "verticalAlign" : "center",
+      "byContentType" : {
+        "text" : {
+          "alignment" : "left"
+        },
+        "number" : {
+          "alignment" : "right"
+        },
+        "serial" : {
+          "alignment" : "right"
+        }
+      }
+    },
+    "zebra" : {
+      "enabled" : false
+    }
+  },
+  "notes" : [ "2 级标题编号是手打的字面文本（非自动编号），生成时按 literal 拼接", "3 级标题编号是手打的字面文本（非自动编号），生成时按 literal 拼接", "4 级标题编号是手打的字面文本（非自动编号），生成时按 literal 拼接", "5 级标题编号是手打的字面文本（非自动编号），生成时按 literal 拼接" ]
+}

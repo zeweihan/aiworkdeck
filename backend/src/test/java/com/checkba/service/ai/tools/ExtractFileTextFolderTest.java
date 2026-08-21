@@ -49,7 +49,7 @@ class ExtractFileTextFolderTest {
 
     /** 只接线本用例需要的两个依赖，其余传 null——这条分支在碰到它们之前就返回了。 */
     private static FileTools toolsWith(ProjectFileRepository repo) {
-        return new FileTools(null, repo, null, null, null, null, null);
+        return new FileTools(null, repo, null, null, null, null, null, null);
     }
 
     @Test
