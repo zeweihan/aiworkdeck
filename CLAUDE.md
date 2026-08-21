@@ -37,4 +37,15 @@ AI WorkDeck（checkba_cloud）：面向法律行业的 AI 工作台。Java Sprin
 - 本机跑 `mvn` 必须 JDK 21（系统默认 25 会 SIGBUS）。
 - 前端包管理用 npm（不是 pnpm）。
 - 版本号单一来源是 `desktop/package.json`。
+- **能切分的活派出去并行做，按档位选模型**：探查、审计、批量改造、跨文件盘点这类
+  能拆成独立单点的工作，默认派 subagent / Workflow 并行，别一条线从头读到尾。
+  派的时候**逐个 agent 评档**：
+  - 机械且可被机器校验兜底的（读文件、grep、按模板改、清单盘点、翻译搬运）→
+    显式传 `model: 'sonnet'` + 低 effort，不要默认继承主会话模型；
+  - **本身是校验层或裁决层的**（对抗式复核、质量裁决、改模型行为的 prompt 工作、
+    带契约地雷的高风险文件）→ 才用主模型。
+  省钱不许省到质量上——**复现问题、「还原病灶即转红」的空断言校验、最终定稿**
+  这三步永远自己做，不外包给弱模型：误报改坏正常代码比漏修更贵。
+  并发也要压着点：2026-08-20 那轮五个 workflow 同时跑撞了服务端限流，
+  约 120 个子 agent 白跑。
 - **三个 project-\* 路由同名不同物**：`pages/project-overview/project-overview` 在代码里指**工作台**（四列干活界面，刻意不改名）；产品语言里的「项目概览」现在是工作台里的一个标签（内容组件 `components/project-home/ProjectHomePane.vue`），`pages/project-home/project-home` 退成只服务直链的薄壳页；「项目列表页」是 `pages/project-list/project-list`，也是启动的唯一落点。写代码以路由为准，写文案以本条为准。导航总规则：凡是工作台参与的跳转一律 `reLaunch`，工作台之外的页面之间用 `navigateTo`（同级页面如设置⇄个人中心用 `redirectTo`，压栈会互相弹成死循环）。详见 `.claude/agents/sidebar-shell.md` 的术语表。
