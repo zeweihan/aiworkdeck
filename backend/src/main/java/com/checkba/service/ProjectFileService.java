@@ -291,9 +291,11 @@ public class ProjectFileService {
      *
      * <p>「冲突」同时看两处，任一命中都继续加序号：
      * <ul>
-     * <li>数据库里<b>含回收站</b>的同名行。软删除只翻 isDeleted 不动磁盘，回收站里那份
-     *     「a.pdf」的字节仍躺在按名字算出的 filePath 上；若只查活着的行就把「a.pdf」判为可用，
-     *     调用方随后 save/move(REPLACE_EXISTING) 会把回收站文件盖掉，律师一还原拿到的是新文件的内容。</li>
+     * <li>数据库里<b>含回收站</b>的同名行（{@code existsByProjectIdAndParentIdAndNameIncludingDeleted}，
+     *     不过滤 isDeleted；常规查重的 {@code existsByProjectIdAndParentIdAndNameAndIdNot} 只看活着的行）。
+     *     软删除只翻 isDeleted 不动磁盘，回收站里那份「a.pdf」的字节仍躺在按名字算出的 filePath 上；
+     *     若只查活着的行就把「a.pdf」判为可用，调用方随后 save/move(REPLACE_EXISTING) 会把回收站文件盖掉，
+     *     律师一还原拿到的是新文件的内容。</li>
      * <li>物理目标路径已存在（行被彻底删了但文件残留、或外部写入）。</li>
      * </ul>
      */
@@ -318,7 +320,7 @@ public class ProjectFileService {
     }
 
     private boolean conflictingNameTaken(Long projectId, Long parentId, String candidate) {
-        if (projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNot(projectId, parentId, candidate, -1L)) {
+        if (projectFileRepository.existsByProjectIdAndParentIdAndNameIncludingDeleted(projectId, parentId, candidate)) {
             return true;
         }
         String physicalPath = buildPhysicalPath(projectId, parentId, candidate);

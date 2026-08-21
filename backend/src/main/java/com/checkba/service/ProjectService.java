@@ -59,7 +59,7 @@ public class ProjectService {
     private static final List<String> PROJECT_SCOPED_ENTITIES = List.of(
             "ProjectMember", "ProjectFile", "ProjectVariable", "ProjectProfileField",
             "ProjectMemory", "ProjectInvitation", "ProjectRemote", "ProjectTask",
-            "ProjectAiMessage");
+            "ProjectAiMessage", "EvidenceLink");
 
     @Transactional
     public Project createProject(ProjectCreateRequest request, Long userId) {
@@ -270,6 +270,11 @@ public class ProjectService {
         Path projectDir = storageResolver.hasLocalRoot(id) ? null : storageResolver.projectRoot(id);
         Path gitDir = projectRepoService.gitDir(id);
 
+        // evidence_link_target 没有 project_id 列，只能先按 link id 级联，再删 evidence_link 本身。
+        entityManager.createQuery(
+                        "delete from EvidenceLinkTarget t where t.linkId in (select l.id from EvidenceLink l where l.projectId = :pid)")
+                .setParameter("pid", id)
+                .executeUpdate();
         for (String entity : PROJECT_SCOPED_ENTITIES) {
             entityManager.createQuery("delete from " + entity + " e where e.projectId = :pid")
                     .setParameter("pid", id)

@@ -216,10 +216,12 @@ public class EvidenceLinkService {
      * worker check_link_anchors 的结果回写。返回状态发生变化的 linkKey（按入参顺序）。
      * exists=false → orphan（任何状态）；文字 hash 变了且状态在 active/unverified/stale → stale；
      * orphan 不会因 exists=true 复活（复活只走 rebind）。每条都刷 checkedAt。
+     * 读权限即可：编辑器每次打开都自动核对并回写，只改 status/checkedAt 不改内容，
+     * 只读成员打开报告也不该每次落一条「无权限」错误。
      */
     @Transactional
     public AnchorReportResult reportAnchors(Long userId, Long projectId, Long docFileId, List<AnchorReport> reports) {
-        requireWrite(projectId, userId);
+        requireRead(projectId, userId);
         List<String> changed = new ArrayList<>();
         int ignored = 0;
         if (reports == null || reports.isEmpty()) return new AnchorReportResult(changed, 0);

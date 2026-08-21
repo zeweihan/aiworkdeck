@@ -158,6 +158,9 @@ export default {
     file: { type: Object, default: null },
     // EvidenceLink（证据页 / 改字 stale 核对）要按项目查询；宿主工作台传入。
     projectId: { type: [Number, String], default: null },
+    // 当前用户对该项目有没有写权限（只读成员 / 客户 = false）。adopt_legacy_links 会改文档并触发
+    // 自动保存，只读成员不该跑；核对回写（/anchors/report）只需读权限，不受此影响。
+    canWrite: { type: Boolean, default: true },
   },
   data() {
     return {
@@ -920,7 +923,7 @@ export default {
       }
       await this.loadEvidenceCache()
       if (!this._evidenceCache || !this._evidenceCache.length) return
-      if (this.docKind === 'writer' && this.executor && !this.docLoadFailed) {
+      if (this.docKind === 'writer' && this.executor && !this.docLoadFailed && this.canWrite) {
         try {
           const r = await this.executor.executeCommand('adopt_legacy_links', {})
           if (r && r.success && Array.isArray(r.adopted) && r.adopted.length) {
