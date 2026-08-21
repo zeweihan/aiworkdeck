@@ -188,7 +188,8 @@ export default {
       sentences: [],
       currentSentenceIndex: -1,
       sentenceDurations: [],
-      audioDuration: 0
+      audioDuration: 0,
+      _unmounted: false // 卸载判据：generateTtsAudio 的响应可能在切走面板之后才回来
     }
   },
   computed: {
@@ -248,7 +249,14 @@ export default {
     }
   },
   beforeUnmount() {
+    this._unmounted = true
     this.stopAudio()
+    // 卸载时手上可能还攥着一个已经生成好、但还没播的 blob URL，必须一并释放，
+    // 否则每次"生成完切走面板"都会泄漏一个 blob。
+    if (this.audioUrl) {
+      URL.revokeObjectURL(this.audioUrl)
+      this.audioUrl = ''
+    }
     if (this._modelProgressUnsub) {
       this._modelProgressUnsub()
       this._modelProgressUnsub = null
@@ -513,18 +521,25 @@ export default {
         console.log('[EasyVoicePane] Generating with payload:', payload)
         const audioBuffer = await generateTtsAudio(payload)
         console.log('[EasyVoicePane] Generated audio buffer size:', audioBuffer.byteLength)
-        
+
+        // 卸载判据：await 期间用户可能已经切走了这个面板（切左栏面板/切到会议录音
+        // tab 都会销毁组件）。此时没有任何播放控件能停下接下来 togglePlay() 会起播
+        // 的音频，必须在这里拦住，不落地播放。
+        if (this._unmounted) return
+
         const blob = new Blob([audioBuffer], { type: 'audio/mpeg' })
         if (this.audioUrl) {
             URL.revokeObjectURL(this.audioUrl)
         }
         this.audioUrl = URL.createObjectURL(blob)
-        
+
         this.$nextTick(() => {
+             if (this._unmounted) return
              this.togglePlay()
         })
 
       } catch (e) {
+        if (this._unmounted) return
         console.error('[EasyVoicePane] Generation failed', e)
         if (e && e.featureNotConfigured) {
           // TTS 未配置：引导去设置而非报"生成失败"（#18 T7）

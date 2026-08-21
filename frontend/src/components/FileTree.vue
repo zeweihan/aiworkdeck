@@ -428,7 +428,7 @@
               'tree-item-drop-target': dragOverIndex === index
             }"
           :data-file-id="item.id"
-          :draggable="true"
+          :draggable="viewMode !== 'recycle'"
           @tap="handleItemClick(item, $event)"
           @contextmenu.prevent="handleContextMenu(item, $event)"
           @dragstart="handleDragStart($event, item, index)"
@@ -869,6 +869,7 @@
 import { getProjectFiles, createFolder, createFile, renameFile, deleteFile, deleteFilePerm, restoreFile as restoreFileApi, getRecycleBinFiles, moveFile, batchDeleteFiles, batchMoveFiles, batchCopyFiles, getApiBaseUrl } from '@/services/api.js'
 import { getAuthHeaders, getSessionId } from '@/utils/auth.js'
 import { host } from '@/services/host.js'
+import { findTopmostDeletedAncestor, summarizeDeleteResults } from '@/utils/fileTreeRecycle.js'
 import CircularProgress from '@/components/CircularProgress.vue'
 import FileTypeIcon from '@/components/FileTypeIcon.vue'
 import TagChip from '@/components/TagChip.vue'
@@ -1650,21 +1651,32 @@ export default {
         const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
 
         if (this.deleteMode === 'hard') {
-            // Batch Perm Delete
+            // Batch Perm Delete：逐条调用结果先收集，不能循环完就无条件当全体成功——
+            // 否则某一条服务端真的失败时，界面显示全部删除成功且行全部消失，
+            // 但服务端其实还留着那份文档。404（服务端已经没有这条）按成功处理。
+            const results = []
             for (const id of ids) {
                  try {
                    await deleteFilePerm(projectId, id)
+                   results.push({ id, ok: true })
                  } catch (e) {
-                   if (e.statusCode !== 404 && e.status !== 404) {
+                   const isMissing = e.statusCode === 404 || e.status === 404
+                   if (!isMissing) {
                      console.error('Batch perm delete fail:', id, e)
                    }
+                   results.push({ id, ok: isMissing })
                  }
             }
-            // Update local state
-            const deletedSet = new Set(ids.map(Number));
+            const { succeededIds, failedIds } = summarizeDeleteResults(results)
+            // Update local state：只把真正删掉的从本地列表摘掉，失败的原样留着
+            const deletedSet = new Set(succeededIds.map(Number));
             this.recycleBin = this.recycleBin.filter(f => !deletedSet.has(f.id));
-             uni.showToast({ title: this.$t('fileTree.permDeleted'), icon: 'success' })
-             this.$emit('file-deleted', { ids: ids })
+            if (failedIds.length > 0) {
+              uni.showToast({ title: this.$t('fileTree.permDeletePartialFail', { failed: failedIds.length, total: ids.length }), icon: 'none' })
+            } else {
+              uni.showToast({ title: this.$t('fileTree.permDeleted'), icon: 'success' })
+            }
+            this.$emit('file-deleted', { ids: succeededIds })
         } else {
             // Soft Batch Delete
              try {
@@ -1683,6 +1695,29 @@ export default {
 
     async restoreFile(item) {
         if (!item) return
+        // 后端还原只向下递归子节点、从不向上恢复祖先：如果 item 的父文件夹（或更上层）
+        // 仍在回收站里，直接还原 item 会让它的 parentId 指向一个还是软删除状态的文件夹——
+        // 文件树建树时根层只收 parentId 为空的节点、子层只收「已展开文件夹」的子节点，
+        // 那个父文件夹压根不在列表里、永不展开，还原出来的文件因此永久不可见。
+        const blocker = findTopmostDeletedAncestor(item, this.recycleBin)
+        if (blocker) {
+            uni.showModal({
+                title: this.$t('fileTree.restoreBlockedTitle'),
+                content: this.$t('fileTree.restoreBlockedContent', { folderName: blocker.name }),
+                confirmText: this.$t('fileTree.restoreBlockedConfirm'),
+                cancelText: this.$t('fileTree.cancel'),
+                success: (res) => {
+                    if (!res.confirm) return
+                    // 还原最上层的祖先文件夹：后端会向下级联，把 item（以及同批其它
+                    // 子孙）一并带出来。级联影响的不止 blocker 一条本地记录，splice
+                    // 单条不够，还原后整体重拉回收站清单，避免残留幽灵行。
+                    this.restoreFile(blocker).then(() => {
+                        if (this.viewMode === 'recycle') this.loadFiles()
+                    })
+                }
+            })
+            return
+        }
         const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
         try {
             await restoreFileApi(projectId, item.id)
@@ -2466,6 +2501,10 @@ export default {
     },
     async handleDrop(e, index) {
       e.preventDefault()
+      // 回收站视图守卫：:draggable 只挡住了"从回收站里拖出"，挡不住"从外部（如暂存区）
+      // 拖一个文件扔到回收站的某一行"——那条分支不看 draggedIndex，直接调 moveFile，
+      // 会把一个正常文件的 parentId 改写成指向一个软删除的文件夹。回收站视图整个禁止落点。
+      if (this.viewMode === 'recycle') return
       console.log('拖拽放下:', { draggedIndex: this.draggedIndex, targetIndex: index })
 
       const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId

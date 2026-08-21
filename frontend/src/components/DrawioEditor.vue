@@ -72,6 +72,7 @@
 import { getFileDownloadUrl, saveDrawioDiagram, packStatus, packInstall } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
 import { host, isDesktopHost } from '@/services/host.js'
+import { createSerialQueue } from '@/utils/asyncSerialize.js'
 
 export default {
   name: 'DrawioEditor',
@@ -95,7 +96,10 @@ export default {
       packId: null,
       packState: null,        // packStatus() 结果 {state, bytesDownloaded, bytesTotal, error}
       packInstalling: false,
-      packTimer: null
+      packTimer: null,
+      // 并发闸：把 save 事件串行化，堵住 exportSvg() 单槽 pendingExport 被并发调用
+      // 互相覆盖、其中一次保存永久挂起的竞态（见 persist() 处注释）。
+      _persistQueue: createSerialQueue()
     }
   },
   computed: {
@@ -268,7 +272,17 @@ export default {
       })
     },
 
-    async persist(xml) {
+    // 并发闸：exportSvg() 的 pendingExport 是单槽 resolver，两次 persist 同时在飞
+    // （比如用户在 draw.io 里快速触发两次保存）会互相覆盖——第二次覆盖第一次的
+    // resolver，draw.io 对第一次请求的回包到达时只喂得到"当前槽"（第二次的
+    // resolver），第一次真正的回包随后到达时槽已是 null，被直接丢弃；第一次
+    // exportSvg() 的 await 因此永久挂起，那次 persist 静默烂尾（不写盘、不报错、
+    // 不改保存提示）。用队列把 save 事件串行化，保证同一时刻只有一次 exportSvg
+    // 在飞，单槽也就天然安全。
+    persist(xml) {
+      return this._persistQueue(() => this.persistNow(xml))
+    },
+    async persistNow(xml) {
       if (!xml) return
       this.savedTip = this.$t('editor.drawio.saving')
       try {

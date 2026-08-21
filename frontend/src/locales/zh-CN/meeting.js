@@ -52,6 +52,7 @@ export default {
   recording: '录音中',
   connectingMic: '正在连接麦克风…',
   paused: '已暂停',
+  interrupted: '已中断',
   pause: '暂停',
   resume: '继续',
   stopRecording: '结束录音',
@@ -66,6 +67,7 @@ export default {
   micPermissionDenied: '拿不到麦克风权限，到系统设置里允许本应用使用麦克风',
   finishWriteBackFailed: '录音已保存，但状态回写失败：{message}',
   uploadStalled: '上传受阻，正在重试（第 {attempt} 次）',
+  deviceInterrupted: '录音设备已断开或权限被收回，录音已中断，请点击"停止"保存已录制内容',
 
   // ---- 列表与状态徽标 ----
   sectionTitle: '录音记录',

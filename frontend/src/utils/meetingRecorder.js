@@ -13,6 +13,7 @@ import { getAuthHeaders } from '@/utils/auth.js'
 // 报错直接显示在会议录音面板里（recorderState.error 与 throw 出去的 message 都是），
 // 所以文案与面板同一个命名空间。非组件模块的翻译入口是 t()，且只能在函数体内取值。
 import { t } from '@/i18n'
+import { resolveTrackEndedStatus } from '@/utils/meetingRecorderStatus.js'
 
 const CHUNK_TIMESLICE_MS = 5000
 const UPLOAD_TIMEOUT_MS = 60000
@@ -61,6 +62,20 @@ function pickAudioMime() {
 export function isRecordingActive() {
   return recorderState.status === 'recording' || recorderState.status === 'paused'
     || recorderState.status === 'starting' || recorderState.status === 'stopping'
+    || recorderState.status === 'interrupted'
+}
+
+// 麦克风轨道被系统/设备中途结束（拔设备、权限被系统收回）：浏览器只让 track 的
+// readyState 变 ended，既不报错也不会让 MediaRecorder 自己更新我们的状态机，计时器
+// 仍按 status==='recording' 无限自增——界面照常画「录音中」，用户毫无察觉，停止时
+// 写进会议记录的时长（seconds*1000）也就跟着虚增。注意：调用 track.stop() 按规范
+// 不会触发 ended 事件，所以这里不需要区分"自己主动停"和"外部中断"。
+function handleTrackEnded() {
+  const next = resolveTrackEndedStatus(recorderState.status)
+  if (!next) return
+  recorderState.status = next
+  recorderState.level = 0
+  recorderState.error = t('meeting.deviceInterrupted')
 }
 
 /**
@@ -115,6 +130,7 @@ export async function startRecording(projectId, deviceId) {
   try {
     // 先拿麦克风再建档：权限被拒时不留空会议记录
     mediaStream = await acquireMicStream(deviceId)
+    mediaStream.getTracks().forEach((track) => { track.onended = handleTrackEnded })
     const res = await createMeetingRecording(projectId)
     const meeting = res.meeting || res
     recorderState.meetingId = meeting.id

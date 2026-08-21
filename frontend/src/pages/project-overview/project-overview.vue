@@ -2406,6 +2406,16 @@ export default {
     } catch (e) {
       // ignore
     }
+    // OCR 屏幕共享 stream 释放：startOcrCapture 里"授权一次后保持 stream"是刻意设计
+    // （同一页内反复截图不用每次都弹系统的"选择要共享的窗口"选择器），所以 closeOcrOverlay
+    // 关闭浮层时不停轨道；但这意味着必须在离开这个页面实例时兜底停掉，否则浏览器
+    // 「正在共享屏幕」指示条会一直挂着，且产品内没有任何操作能关闭它。stopOcrCapture
+    // 就是干这件事的，此前全仓没有调用点。
+    try {
+      this.stopOcrCapture()
+    } catch (e) {
+      // ignore
+    }
     // Desktop：解绑网核标记监听
     try {
       if (this._desktopWebMarkUnsub) this._desktopWebMarkUnsub()
