@@ -40,9 +40,11 @@ flushDirtyEditors），单测见 `frontend/tests/project-home/flush-dirty-editor
 
 三大块：template :1-1425 / script :1427-4936 / style **已外置**——`:4939` 只有一行
 `<style lang="scss" scoped src="./project-overview.scss">`，样式实体在同目录
-`project-overview.scss`（4316 行）。逻辑也已拆出九个同目录 .js 模块：
-`agentClientActions` / `clipboardBridge` / `fileOpenTabs` / `librePool` / `ocrActions` /
-`ocrCapture` / `panelSwitching` / `stagingArea` / `tabDragSplit`（都以 mixin 形式并进页面）。
+`project-overview.scss`（4316 行）。逻辑也已拆出十个同目录 .js 模块：
+`agentClientActions` / `clipboardBridge` / `evidenceLinkActions`（拖到编辑器建链、
+filelink 点击定位、多 target 弹窗、method 小条；契约见 ai-doc-bridge.md「EvidenceLink 契约 → 前端」）/
+`fileOpenTabs` / `librePool` / `ocrActions` / `ocrCapture` / `panelSwitching` / `stagingArea` /
+`tabDragSplit`（都以 mixin 形式并进页面）。侧栏原 `FileLinkDropZone` 已删，拖拽关联的落点是编辑器画布。
 布局是四列：常驻 rail（Activity Bar）→ 可收起左栏 sidebar-left → 中间 workbench（含底部工具抽屉）→ 右侧 AI 面板。
 
 **template**

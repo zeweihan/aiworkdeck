@@ -44,11 +44,6 @@ export default {
   selectedFolderLabel: '已选择文件夹：',
   confirmImport: '确定导入',
   onlyTypesSupported: '仅支持 {types} 文件',
-  // FileLinkDropZone.vue
-  dropToLink: '拖到这里松手：关联到当前高亮文本',
-  currentFileLabel: '当前文件：{name}',
-  linkToLeftDoc: '关联到左侧文档',
-  linkToRightDoc: '关联到右侧文档',
   // FileStagingArea.vue
   stagingTitle: '文件暂存区',
   clear: '清空',
