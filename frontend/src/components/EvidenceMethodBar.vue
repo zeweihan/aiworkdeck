@@ -17,11 +17,9 @@
 </template>
 
 <script>
-// 拖文件到编辑器建链成功后的 method 浮动小条（spec §4.1）。宿主持有状态；
-// 本组件只负责展示与点 chip 回传，3s 无操作自动 close（props 每次变化重置计时）。
+// 拖文件到编辑器建链成功后的 method 浮动小条（spec §4.1）。纯展示：状态与 3s 自动收起
+// 计时都在宿主（evidenceLinkActions.js 的 armEvidenceMethodBarTimer），这里只回传点击。
 import { EVIDENCE_METHODS } from '@/utils/evidenceLocator.js'
-
-const AUTO_CLOSE_MS = 3000
 
 export default {
   name: 'EvidenceMethodBar',
@@ -33,27 +31,10 @@ export default {
     targetId: { type: [Number, String], default: null },
   },
   data() {
-    return { methods: EVIDENCE_METHODS, _timer: null }
+    return { methods: EVIDENCE_METHODS }
   },
-  watch: {
-    visible(v) { if (v) this.arm(); else this.disarm() },
-    fileName() { this.arm() },
-    method() { this.arm() },
-    targetId() { this.arm() },
-  },
-  mounted() { if (this.visible) this.arm() },
-  beforeUnmount() { this.disarm() },
   methods: {
-    arm() {
-      this.disarm()
-      if (!this.visible) return
-      this._timer = setTimeout(() => { this._timer = null; this.$emit('close') }, AUTO_CLOSE_MS)
-    },
-    disarm() {
-      if (this._timer) { clearTimeout(this._timer); this._timer = null }
-    },
     pick(m) {
-      this.arm()
       if (m === this.method) return
       this.$emit('change', { targetId: this.targetId, method: m })
     },

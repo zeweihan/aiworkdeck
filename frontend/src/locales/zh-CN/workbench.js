@@ -174,7 +174,6 @@ export default {
   renameFailed: '重命名失败',
   renameSyncFailed: '重命名同步失败',
   openDocFirst: '请先打开一个文档',
-  highlightTextFirst: '请先在文档中高亮一段文本（蓝色选区）',
   setHyperlinkFailed: '设置超链接失败',
   docNotReady: '文档未就绪',
   linkCreated: '已建立关联',

@@ -176,7 +176,6 @@ export default {
   renameFailed: 'Rename failed',
   renameSyncFailed: 'Rename sync failed',
   openDocFirst: 'Open a document first',
-  highlightTextFirst: 'Highlight a passage in the document first (blue selection)',
   setHyperlinkFailed: 'Failed to set hyperlink',
   docNotReady: 'Document not ready',
   linkCreated: 'Link created',
