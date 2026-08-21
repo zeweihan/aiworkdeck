@@ -397,14 +397,14 @@ public record ToolCall(Long projectId, String conversationId, Long userId, Strin
 - 两种线程之外（插件自己起的线程、静态初始化）调用宿主 → `IllegalStateException`。
 - **鉴权**：每个方法先校 `call().userId()` 对 projectId 的读/写权限（项目成员表），非成员抛
   `IllegalArgumentException`；fileId 必须属于该 projectId（IDOR 防护）。
-- **配额**：每插件每分钟 60 次宿主调用（滑动窗口），超限抛 `HostQuotaException`。这是防 runaway，
+- **配额**：每插件每分钟宿主调用上限（滑动窗口）——工具调用线程 60 次，后台任务线程（`JobContext` 绑定期间）1200 次，两者分开计数；超限抛 `HostQuotaException`。这是防 runaway，
   不是计费——`Llm` / `Text.ocr` 的钱按**用户 Credits** 在平台网关算，插件不自带 key。
 
 ### 11.2 方法表
 
 | 子接口 | 方法 | 权限 | 宿主落点 / 备注 |
 |---|---|---|---|
-| `Files` | `list(projectId, parentId, recursive)` | 读 | 返回 `FileInfo{id,name,parentId,folder,fileType,size,path,sha256?,metaJson}`，`path` 从项目根起 |
+| `Files` | `list(projectId, parentId, recursive)` | 读 | 返回 `FileInfo{id,name,parentId,folder,fileType,size,path,sha256?,metaJson,updatedAt?}`（`updatedAt` 为 epoch millis、可 null，1.0.0 增量字段、永远是最后一个分量），`path` 从项目根起 |
 | | `get(projectId, fileId)` / `open(projectId, fileId)` | 读 | `open` 返回整份字节的 InputStream |
 | | `createFolderPath(projectId, segments)` | 写 | `ProjectFileService.ensureFolderPath`，逐级确保；某段是文件则抛 |
 | | `write(projectId, parentId, name, bytes, ConflictPolicy)` | 写 | `RENAME` 同名自动 " (n)"，`FAIL` 同名抛；fileType 取扩展名 |

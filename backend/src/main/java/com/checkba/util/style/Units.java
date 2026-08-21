@@ -52,12 +52,6 @@ public final class Units {
         return Math.round(len.value() * 100);
     }
 
-    /** lines → beforeLines/afterLines（1/100 行）；非 lines 单位返回 null。 */
-    public static Long linesToHundredths(Length len) {
-        if (len == null || !"lines".equals(len.unit())) return null;
-        return Math.round(len.value() * 100);
-    }
-
     public static Length twipsToPt(long twips) {
         return Length.of(round2(twips / TWIPS_PER_PT), "pt");
     }
