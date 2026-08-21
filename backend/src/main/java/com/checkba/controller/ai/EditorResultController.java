@@ -42,13 +42,16 @@ public class EditorResultController {
         log.info("Received editor result: requestId={}, success={}", payload.getRequestId(), payload.isSuccess());
         
         try {
-            editorBridgeService.completeEditorAction(
+            boolean accepted = editorBridgeService.completeEditorAction(
                     payload.getRequestId(),
+                    payload.getConversationId(),
                     payload.isSuccess(),
                     payload.getData(),
                     payload.getError()
             );
-            
+            if (!accepted) {
+                return new EditorResultResponse(false, "无效的 requestId 或不属于该会话");
+            }
             return new EditorResultResponse(true, "Result received");
             
         } catch (Exception e) {

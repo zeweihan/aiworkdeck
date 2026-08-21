@@ -30,6 +30,9 @@ class BrowserProxyControllerTest {
 
     private HttpServer site;
     private String siteUrl;
+    private String bigUrl;
+    private String chunkedUrl;
+    private String slowUrl;
     private BrowserProxyController controller;
 
     @BeforeEach
@@ -43,8 +46,34 @@ class BrowserProxyControllerTest {
             exchange.getResponseBody().write(body);
             exchange.close();
         });
+        site.createContext("/big", exchange -> {
+            byte[] chunk = new byte[64 * 1024];
+            exchange.getResponseHeaders().add("Content-Type", "application/pdf");
+            exchange.sendResponseHeaders(200, 8L * chunk.length);
+            for (int i = 0; i < 8; i++) exchange.getResponseBody().write(chunk);
+            exchange.close();
+        });
+        site.createContext("/chunked", exchange -> {
+            byte[] chunk = new byte[64 * 1024];
+            exchange.getResponseHeaders().add("Content-Type", "application/pdf");
+            exchange.sendResponseHeaders(200, 0); // 0 = 分块传输，不声明长度
+            for (int i = 0; i < 8; i++) exchange.getResponseBody().write(chunk);
+            exchange.close();
+        });
+        site.createContext("/slow", exchange -> {
+            try {
+                Thread.sleep(3000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            exchange.sendResponseHeaders(204, -1);
+            exchange.close();
+        });
         site.start();
         siteUrl = "http://127.0.0.1:" + site.getAddress().getPort() + "/a";
+        bigUrl = "http://127.0.0.1:" + site.getAddress().getPort() + "/big";
+        chunkedUrl = "http://127.0.0.1:" + site.getAddress().getPort() + "/chunked";
+        slowUrl = "http://127.0.0.1:" + site.getAddress().getPort() + "/slow";
         controller = new BrowserProxyController();
         ReflectionTestUtils.setField(controller, "e2eAllowedHosts", "");
     }
@@ -52,6 +81,54 @@ class BrowserProxyControllerTest {
     @AfterEach
     void tearDown() {
         if (site != null) site.stop(0);
+    }
+
+    /**
+     * 注入的点击拦截脚本把 iframe 里所有同标签页链接点击都改道这个端点，
+     * 大文件下载链接也不例外；上游响应此前全量进堆（ofByteArray），没有任何体积闸。
+     * 后端是所有用户共用的一个 JVM，一次几百 MB 的下载就能把堆顶起来。
+     */
+    @Test
+    void oversizedResponseIsRejectedInsteadOfBuffered() {
+        ReflectionTestUtils.setField(controller, "e2eAllowedHosts", "127.0.0.1");
+        ReflectionTestUtils.setField(controller, "maxBytes", 64L * 1024);
+        assertEquals(HttpStatus.PAYLOAD_TOO_LARGE,
+                controller.proxy(bigUrl, "tok").getStatusCode(),
+                "超过上限必须直接拒绝，而不是先全量读进内存");
+    }
+
+    /** 分块传输不声明 Content-Length，早退闸看不见它，只能靠边读边数。 */
+    @Test
+    void chunkedOversizedResponseIsAlsoRejected() {
+        ReflectionTestUtils.setField(controller, "e2eAllowedHosts", "127.0.0.1");
+        ReflectionTestUtils.setField(controller, "maxBytes", 64L * 1024);
+        assertEquals(HttpStatus.PAYLOAD_TOO_LARGE,
+                controller.proxy(chunkedUrl, "tok").getStatusCode(),
+                "没有 Content-Length 也必须能停手");
+    }
+
+    /**
+     * 此前只有每跳 20 秒的超时，5 跳能让一个请求占住工作线程近 150 秒。
+     * 这里把总预算压到 1 秒，目标站睡 3 秒，断言在预算内就收手。
+     */
+    @Test
+    void slowTargetHitsTheOverallDeadline() {
+        ReflectionTestUtils.setField(controller, "e2eAllowedHosts", "127.0.0.1");
+        ReflectionTestUtils.setField(controller, "deadlineSeconds", 1L);
+        long started = System.nanoTime();
+        HttpStatus status = (HttpStatus) controller.proxy(slowUrl, "tok").getStatusCode();
+        long elapsedMs = (System.nanoTime() - started) / 1_000_000;
+        assertTrue(elapsedMs < 2500, "必须在总预算内收手，实际耗时 " + elapsedMs + "ms");
+        assertTrue(status == HttpStatus.GATEWAY_TIMEOUT || status == HttpStatus.BAD_GATEWAY,
+                "超时要如实报出来，实际是 " + status);
+    }
+
+    @Test
+    void normalSizedResponseStillPassesThrough() {
+        ReflectionTestUtils.setField(controller, "e2eAllowedHosts", "127.0.0.1");
+        ReflectionTestUtils.setField(controller, "maxBytes", 64L * 1024);
+        assertEquals(HttpStatus.OK, controller.proxy(siteUrl, "tok").getStatusCode(),
+                "护栏：别把正常页面一起拦掉");
     }
 
     @Test

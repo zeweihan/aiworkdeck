@@ -391,4 +391,67 @@ class CloudControllerTest {
         assertEquals(1, response.getBody().get("code"));
         assertEquals("请先把这份案卷放进团队案件库", response.getBody().get("message"));
     }
+
+    // ---- 请求体缺字段：要报「参数不对」，不是 NPE / ClassCastException ----
+
+    /**
+     * 这几个端点直接把 body 里的值往下传或强转：
+     * connect 把 null 交给 {@code serverUrl.replaceAll(...)} 与 {@code Map.of(...)}（Map.of 不收 null），
+     * accept/share 是 {@code ((Number) body.get("connectionId")).longValue()}。
+     * 缺字段就 NPE、传字符串就 ClassCastException，用户看到的是「服务器内部错误」，
+     * 而真正的原因是请求少写了一个字段——两头都不知道该改什么。
+     */
+    @Test
+    void connectRejectsMissingFieldsWithUserFacingError() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("s")).thenReturn(USER_ID);
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> controller.connect(Map.of("serverUrl", "https://x"), "s"),
+                    "缺 username/password 要明确报出来");
+            verify(cloudSyncService, never()).connect(any(), any(), any(), any(), any());
+        }
+    }
+
+    @Test
+    void acceptRejectsMissingOrNonNumericIds() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("s")).thenReturn(USER_ID);
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> controller.accept(Map.of("remoteProjectId", 3), "s"), "缺 connectionId");
+            assertThrows(IllegalArgumentException.class,
+                    () -> controller.accept(Map.of("connectionId", "abc", "remoteProjectId", 3), "s"),
+                    "connectionId 不是数字");
+            verify(cloudSyncService, never()).cloneFromCloud(anyLong(), anyLong(), anyLong());
+        }
+    }
+
+    @Test
+    void shareRejectsMissingConnectionId() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("s")).thenReturn(USER_ID);
+            when(projectMemberService.hasReadPermission(PROJECT_ID, USER_ID)).thenReturn(true);
+            when(projectMemberService.isClient(PROJECT_ID, USER_ID)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(PROJECT_ID, USER_ID)).thenReturn(true);
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> controller.share(PROJECT_ID, Map.of(), "s"));
+            verify(cloudSyncService, never()).shareToCloud(anyLong(), anyLong(), anyLong());
+        }
+    }
+
+    @Test
+    void addMemberRejectsMissingUsername() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("s")).thenReturn(USER_ID);
+            when(projectMemberService.hasReadPermission(PROJECT_ID, USER_ID)).thenReturn(true);
+            when(projectMemberService.isClient(PROJECT_ID, USER_ID)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(PROJECT_ID, USER_ID)).thenReturn(true);
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> controller.addMember(PROJECT_ID, Map.of("role", "PARTICIPANT"), "s"));
+            verify(cloudSyncService, never()).proxyMembers(anyLong(), any(), any());
+        }
+    }
 }

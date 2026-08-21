@@ -42,8 +42,19 @@ public class EditorBridgeService {
     private final ObjectMapper objectMapper;
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
 
-    // 请求 ID -> CompletableFuture 的映射
-    private final ConcurrentHashMap<String, CompletableFuture<EditorActionResult>> pendingRequests = new ConcurrentHashMap<>();
+    /**
+     * 请求 ID -> 在等的那一轮。
+     *
+     * <p>连会话一起记：结果回传的鉴权键必须是「这个 requestId 是给哪个会话发的」，
+     * 而不是调用方自己报的 conversationId。此前只存 future，控制器又只校验
+     * payload 里客户端自报的会话（是他自己的会话就放行）——两把钥匙不是同一把，
+     * 拿到别的会话的 requestId 就能把伪造内容作为工具结果塞进那一轮的 Agent 循环，
+     * 而那个结果会被当成可信的文档内容驱动后续改文档动作。
+     */
+    private final ConcurrentHashMap<String, PendingAction> pendingRequests = new ConcurrentHashMap<>();
+
+    /** 一次在途的编辑器命令：它属于哪个会话，以及谁在等它。 */
+    private record PendingAction(String conversationId, CompletableFuture<EditorActionResult> future) {}
     
     // 当前活跃的 conversationId（由 AgentOrchestrator 设置）
     private final ThreadLocal<String> currentConversationId = new ThreadLocal<>();
@@ -251,7 +262,7 @@ public class EditorBridgeService {
 
         String requestId = UUID.randomUUID().toString();
         CompletableFuture<EditorActionResult> future = new CompletableFuture<>();
-        pendingRequests.put(requestId, future);
+        pendingRequests.put(requestId, new PendingAction(conversationId, future));
         long bridgeStartMs = System.currentTimeMillis();
 
         try {
@@ -305,14 +316,20 @@ public class EditorBridgeService {
      * @param data 结果数据
      * @param error 错误信息
      */
-    public void completeEditorAction(String requestId, boolean success, Object data, String error) {
-        CompletableFuture<EditorActionResult> future = pendingRequests.get(requestId);
-        if (future != null) {
-            future.complete(new EditorActionResult(success, data, error));
-            log.info("Completed editor action: requestId={}, success={}", requestId, success);
-        } else {
+    public boolean completeEditorAction(String requestId, String conversationId,
+                                        boolean success, Object data, String error) {
+        PendingAction pending = pendingRequests.get(requestId);
+        if (pending == null) {
             log.warn("No pending request found for requestId={}", requestId);
+            return false;
         }
+        if (conversationId == null || !conversationId.equals(pending.conversationId())) {
+            log.warn("Rejected editor result: requestId={} belongs to another conversation", requestId);
+            return false;
+        }
+        pending.future().complete(new EditorActionResult(success, data, error));
+        log.info("Completed editor action: requestId={}, success={}", requestId, success);
+        return true;
     }
 
     /**

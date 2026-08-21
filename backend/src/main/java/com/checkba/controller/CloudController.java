@@ -54,7 +54,8 @@ public class CloudController {
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = requireLogin(sessionId);
         CloudConnection conn = cloudSyncService.connect(
-                body.get("serverUrl"), body.get("username"), body.get("password"), body.get("deviceName"), userId);
+                requireText(body, "serverUrl"), requireText(body, "username"), requireText(body, "password"),
+                optionalText(body, "deviceName", LangText.of("本机", "This device")), userId);
         Map<String, Object> data = new HashMap<>();
         data.put("connectionId", conn.getId());
         data.put("username", conn.getUsername());
@@ -95,8 +96,8 @@ public class CloudController {
             @RequestBody Map<String, Object> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = requireLogin(sessionId);
-        long connectionId = ((Number) body.get("connectionId")).longValue();
-        long remoteProjectId = ((Number) body.get("remoteProjectId")).longValue();
+        long connectionId = requireLong(body, "connectionId");
+        long remoteProjectId = requireLong(body, "remoteProjectId");
         Map<String, Object> cloned = cloudSyncService.cloneFromCloud(connectionId, remoteProjectId, userId);
         telemetryService.record("project.created",
                 Map.of("kind", "cloud", "reused", false, "importedCount", 0));
@@ -121,7 +122,7 @@ public class CloudController {
             @RequestBody Map<String, Object> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = requireWriteMember(projectId, sessionId);
-        long connectionId = ((Number) body.get("connectionId")).longValue();
+        long connectionId = requireLong(body, "connectionId");
         return ok(cloudSyncService.shareToCloud(projectId, connectionId, userId));
     }
 
@@ -198,8 +199,8 @@ public class CloudController {
             @RequestBody Map<String, String> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         requireWriteMember(projectId, sessionId);
-        String role = body == null || body.get("role") == null ? "PARTICIPANT" : body.get("role");
-        cloudSyncService.proxyMembers(projectId, body == null ? null : body.get("username"), role);
+        String role = optionalText(body, "role", "PARTICIPANT");
+        cloudSyncService.proxyMembers(projectId, requireText(body, "username"), role);
         return ok(Map.of());
     }
 
@@ -243,6 +244,43 @@ public class CloudController {
     }
 
     /** 只校验登录，不校验项目成员/角色——连接级端点用。 */
+    /**
+     * 请求体里的必填数字。
+     *
+     * <p>此前是 {@code ((Number) body.get(key)).longValue()}：缺字段就 NPE、传字符串就
+     * ClassCastException，两者都被兜成「服务器内部错误」——用户与调用方都不知道
+     * 真正的原因只是请求少写了一个字段。数字串也一并收下，客户端把 id 序列化成字符串很常见。
+     */
+    private static long requireLong(Map<String, Object> body, String key) {
+        Object v = body == null ? null : body.get(key);
+        if (v instanceof Number n) return n.longValue();
+        if (v instanceof String str && !str.isBlank()) {
+            try {
+                return Long.parseLong(str.trim());
+            } catch (NumberFormatException ignore) {
+                // 落到下面统一报错
+            }
+        }
+        throw new IllegalArgumentException(LangText.of(
+                "参数 " + key + " 缺失或不是数字", "Parameter " + key + " is missing or not a number"));
+    }
+
+    /** 请求体里的必填文本。空串与纯空白按缺失处理。 */
+    private static String requireText(Map<String, String> body, String key) {
+        String v = body == null ? null : body.get(key);
+        if (v == null || v.isBlank()) {
+            throw new IllegalArgumentException(LangText.of(
+                    "参数 " + key + " 不能为空", "Parameter " + key + " must not be empty"));
+        }
+        return v.trim();
+    }
+
+    /** 可选文本，缺失时用默认值（下游 Map.of 不收 null，给个默认比放行 null 安全）。 */
+    private static String optionalText(Map<String, String> body, String key, String fallback) {
+        String v = body == null ? null : body.get(key);
+        return v == null || v.isBlank() ? fallback : v.trim();
+    }
+
     private Long requireLogin(String sessionId) {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) throw new IllegalArgumentException("未登录");
