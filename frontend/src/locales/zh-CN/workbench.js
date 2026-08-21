@@ -210,4 +210,29 @@ export default {
   folderTooManyFiles: '文件夹含{count}个文件(超出10个限制)，请减少数量',
   fileAdded: '已添加: {name}',
   noDragData: '未获取到拖拽数据',
+  // EvidenceLink：拖到编辑器建链 / method 小条 / 链接定位（evidenceLinkActions.js、EvidenceMethodBar.vue、LibreOfficeEditor.vue）
+  evidence: {
+    selectFirst: '先选中要关联的文字',
+    selfLink: '不能把文档关联到自己',
+    bookmarkFailed: '建立书签失败，请重新选中文字后再试',
+    linked: '已关联《{name}》',
+    methodLabel: '方法：',
+    dropHint: '松开即关联到选中文字',
+    method: {
+      written_review: '书面审查',
+      written_statement: '书面说明',
+      web_check: '网络核查',
+      third_party: '第三方材料',
+      interview: '访谈',
+    },
+    loc: {
+      wholeFile: '整个文件',
+      page: '第 {page} 页',
+      quote: '“{quote}”',
+      region: '图中框选区域',
+      time: '{time} 起',
+      web: '{host}',
+      cell: '{sheet}!{cell}',
+    },
+  },
 }

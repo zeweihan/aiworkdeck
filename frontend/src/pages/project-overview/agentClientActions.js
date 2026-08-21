@@ -242,8 +242,8 @@ export const agentClientActionMethods = {
                 return
             }
 
-            // 打开文件
-            this.openFile(file)
+            // 打开文件（action.locator：EvidenceLink 定位符，后端 sendOpenFileAction 已允许该字段）
+            this.openFile(file, { locator: action.locator || null })
 
             // 提示用户
             uni.showToast({ title: this.$t('workbenchOps.openedNamed', { name: file.name }), icon: 'none' })

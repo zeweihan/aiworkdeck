@@ -3214,10 +3214,24 @@ $bg-white: #FFFFFF;
   flex-shrink: 0;
   color: #64748b;
 }
+.filelink-item-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
 .filelink-name {
   flex: 1;
   font-size: 13.5px;
   color: #334155;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filelink-meta {
+  font-size: 12px;
+  color: #64748b;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

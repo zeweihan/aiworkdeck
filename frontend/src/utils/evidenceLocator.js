@@ -1,18 +1,25 @@
-// evidenceLocator.js — EvidenceLink target.locator 的展示摘要与 filelink URL 解包。
-// locator 分型见 spec §1.4：页码 1 基、paragraphIndex 0 基、坐标 0..1、毫秒整数；
-// 缺 type = 整个文件。t 是 i18n 翻译函数（组件传 this.$t，非组件传 i18n 的 t）。
+// EvidenceLink 定位符（spec §1.4）与 filelink 链接的纯函数：摘要文案、解包、封装。
+// 链接形态：文档里写 `<base>?u=<encode(checkba://filelink?k=<linkKey>&projectId=<pid>[&t=<targetId>])>`
+// （web 包装不变，t 为可选 targetId）。
+
+export const FILELINK_SCHEME = 'checkba://filelink'
+
+export const EVIDENCE_METHODS = ['written_review', 'written_statement', 'web_check', 'third_party', 'interview']
 
 function fmtMs(ms) {
   const total = Math.max(0, Math.floor(Number(ms || 0) / 1000))
-  const m = Math.floor(total / 60)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
   const s = total % 60
-  return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0')
+  const pad = (n) => String(n).padStart(2, '0')
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`
 }
 
 function hostOf(url) {
   try { return new URL(String(url)).host || String(url) } catch (e) { return String(url) }
 }
 
+// t(key, params) 由调用方注入（组件里传 this.$t），便于纯函数测试。
 export function locatorSummary(loc, t) {
   if (!loc || !loc.type) return t('evidence.loc.wholeFile')
   switch (loc.type) {
@@ -26,29 +33,35 @@ export function locatorSummary(loc, t) {
   }
 }
 
-/** 解包 https://checkba-internal.local/open?u=checkba://filelink?k=&projectId=&t= ；非法返回 null。 */
+// 解包：接受包装 https 链接、裸 checkba://filelink、以及 checkba:/filelink 这种单斜杠写法。
+// 非 filelink 或缺 k → null。t 解析成 Number（非法/缺省 → null）。
 export function parseFileLinkUrl(raw) {
-  const u = String(raw || '')
-  if (!u) return null
-  let inner = u
-  if (/^https?:\/\//i.test(u)) {
-    try {
-      const q = u.includes('?') ? u.slice(u.indexOf('?') + 1) : ''
-      inner = new URLSearchParams(q).get('u') || ''
-    } catch (e) { return null }
-  }
-  if (!/^checkba:\/\/filelink/i.test(inner)) return null
-  const qs = inner.includes('?') ? inner.slice(inner.indexOf('?') + 1) : ''
-  const p = new URLSearchParams(qs)
+  let s = raw == null ? '' : String(raw).trim()
+  if (!s) return null
+  try {
+    if (/^https?:\/\//i.test(s)) {
+      const q = s.includes('?') ? s.slice(s.indexOf('?') + 1) : ''
+      const inner = new URLSearchParams(q).get('u')
+      if (!inner) return null
+      s = decodeURIComponent(String(inner))
+    }
+  } catch (e) { return null }
+  if (!/^checkba:/i.test(s)) return null
+  s = s.replace(/^checkba:\/*/i, 'checkba://')
+  if (!s.startsWith(FILELINK_SCHEME)) return null
+  const q = s.includes('?') ? s.slice(s.indexOf('?') + 1) : ''
+  const p = new URLSearchParams(q)
   const linkKey = p.get('k') || ''
   if (!linkKey) return null
   const tRaw = p.get('t')
-  const targetId = tRaw && /^\d+$/.test(tRaw) ? Number(tRaw) : null
-  return { linkKey, projectId: p.get('projectId') || '', targetId }
+  const t = tRaw != null && tRaw !== '' && /^\d+$/.test(tRaw) ? Number(tRaw) : null
+  return { linkKey, projectId: p.get('projectId') || '', targetId: t }
 }
 
+// 反向：base 为空时返回裸 checkba:// 链接（测试/非 web 包装场景）。
 export function buildFileLinkUrl(base, linkKey, projectId, targetId) {
-  let inner = `checkba://filelink?k=${encodeURIComponent(linkKey)}&projectId=${encodeURIComponent(String(projectId || ''))}`
-  if (targetId != null) inner += `&t=${encodeURIComponent(String(targetId))}`
-  return base ? `${base}${base.includes('?') ? '&' : '?'}u=${encodeURIComponent(inner)}` : inner
+  let inner = `${FILELINK_SCHEME}?k=${encodeURIComponent(String(linkKey))}&projectId=${encodeURIComponent(String(projectId == null ? '' : projectId))}`
+  if (targetId != null && targetId !== '') inner += `&t=${encodeURIComponent(String(targetId))}`
+  if (!base) return inner
+  return `${base}?u=${encodeURIComponent(inner)}`
 }
