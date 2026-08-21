@@ -21,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.endsWith;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
@@ -158,6 +159,23 @@ class MeetingFolderLanguageTest {
                 eq(MeetingRecordingService.FOLDER_NAME_EN), eq(10001L));
         assertTrue(res.file().getName().startsWith("Transcript_"),
                 "英文下导出文件名不该是「转写稿_」：" + res.file().getName());
+    }
+
+    /**
+     * #550 复核 L1：音频占位不再自己探测同名拼 (n)，统一走 createFile 的 RENAME 策略
+     * （那条路径才认回收站同名与物理路径已存在）。
+     */
+    @Test
+    @DisplayName("开始录音的音频占位走 createFile(RENAME)，不再自探同名")
+    void audioPlaceholderUsesRenamePolicy() {
+        service.create(1L, 9L);
+
+        verify(projectFileService).createFile(eq(1L), eq(100L), endsWith(".webm"), eq("webm"),
+                eq(0L), isNull(), isNull(), eq(9L), eq(ProjectFileService.ConflictPolicy.RENAME));
+        verify(projectFileService, never()).createFile(anyLong(), any(), anyString(), anyString(),
+                anyLong(), any(), any(), anyLong());
+        verify(projectFileRepository, never()).existsByProjectIdAndParentIdAndNameAndIdNot(
+                anyLong(), any(), anyString(), anyLong());
     }
 
     @Test

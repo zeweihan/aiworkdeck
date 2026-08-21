@@ -42,6 +42,16 @@ public class LocalProjectService {
     static final int DEFAULT_MAX_IMPORT_ENTRIES = 30000;
     private int maxImportEntries = DEFAULT_MAX_IMPORT_ENTRIES;
     static final int MAX_IMPORT_DEPTH = 20;
+    /**
+     * 命中导入上限后，被跳过的子树只数不入库；数到这个数就停（标 truncatedCountCapped），
+     * 免得为了一个提示数字扫穿一整棵误选的超大目录。
+     */
+    static final int DEFAULT_TRUNCATED_COUNT_CAP = 100_000;
+    private int truncatedCountCap = DEFAULT_TRUNCATED_COUNT_CAP;
+
+    void setTruncatedCountCapForTest(int cap) {
+        this.truncatedCountCap = cap;
+    }
 
     /** 仅供测试覆盖导入上限（包内可见）。生产路径永远用 DEFAULT_MAX_IMPORT_ENTRIES。 */
     void setMaxImportEntriesForTest(int maxImportEntries) {
@@ -82,7 +92,8 @@ public class LocalProjectService {
     public record LocalProjectOpened(long projectId, String localRoot) {}
 
     public record OpenLocalResult(Project project, boolean reused, Long openFileId,
-                                  int importedCount, boolean truncated, int truncatedCount) {}
+                                  int importedCount, boolean truncated, int truncatedCount,
+                                  boolean truncatedCountCapped) {}
 
     /**
      * 打开/复用本地文件夹项目。
@@ -125,7 +136,8 @@ public class LocalProjectService {
         eventPublisher.publishEvent(new LocalProjectOpened(project.getId(), canonical));
         telemetryService.record("project.created", java.util.Map.of(
                 "kind", "local", "reused", reused, "importedCount", stats.imported));
-        return new OpenLocalResult(project, reused, openFileId, stats.imported, stats.truncated, stats.truncatedCount);
+        return new OpenLocalResult(project, reused, openFileId, stats.imported, stats.truncated,
+                stats.truncatedCount, stats.truncatedCountCapped);
     }
 
     private record ProjectResolution(Project project, boolean reused) {}
@@ -163,7 +175,8 @@ public class LocalProjectService {
         return new ProjectResolution(project, false);
     }
 
-    public record ReconcileResult(int changed, boolean rootMissing, boolean truncated, int truncatedCount) {}
+    public record ReconcileResult(int changed, boolean rootMissing, boolean truncated, int truncatedCount,
+                                  boolean truncatedCountCapped) {}
 
     /**
      * 磁盘 ↔ 数据库文件树对账（watcher 触发；幂等，只写数据库、绝不写磁盘）：
@@ -187,12 +200,12 @@ public class LocalProjectService {
     public ReconcileResult reconcileProject(Long projectId) {
         Project project = projectRepository.findById(projectId).orElse(null);
         if (project == null || !StringUtils.hasText(project.getLocalRoot())) {
-            return new ReconcileResult(0, false, false, 0);
+            return new ReconcileResult(0, false, false, 0, false);
         }
         Path root = Paths.get(project.getLocalRoot());
         if (!Files.isDirectory(root)) {
             log.warn("对账跳过：项目文件夹不可达 project={}, root={}", projectId, root);
-            return new ReconcileResult(0, true, false, 0);
+            return new ReconcileResult(0, true, false, 0, false);
         }
         Long ownerId = project.getUserId();
 
@@ -256,7 +269,7 @@ public class LocalProjectService {
         if (changed > 0) {
             log.info("对账完成: project={}, changed={}", projectId, changed);
         }
-        return new ReconcileResult(changed, false, stats.truncated, stats.truncatedCount);
+        return new ReconcileResult(changed, false, stats.truncated, stats.truncatedCount, stats.truncatedCountCapped);
     }
 
     private String relativeFolderPath(ProjectFile folder, Map<Long, ProjectFile> byId) {
@@ -325,7 +338,56 @@ public class LocalProjectService {
         int imported;   // 本次处理（含无变化跳过）的条目数，用于上限控制
         int changed;    // 真正新建/更新的条目数，用于「有没有发生变化」判断
         boolean truncated;
-        int truncatedCount; // 命中上限之后未纳入的条目数（尽力而为的精确计数，见下方 preVisitDirectory/visitFile）
+        int truncatedCount; // 命中上限之后未纳入的条目数（被跳过的子树做有界计数，见 countSkippedSubtree）
+        boolean truncatedCountCapped; // 计数本身也撞了 truncatedCountCap：真实数字只会更大
+    }
+
+    /**
+     * 对一棵不再入库的子树做有界计数（目录自身 + 其下非隐藏的文件/目录），累加进 stats.truncatedCount。
+     * 此前这里只给整棵子树记 1，前端却据此写「N 项未纳入」——一个 5 万文件的目录被报成 1 项。
+     * 计数到 truncatedCountCap 即终止并置 truncatedCountCapped，调用方据此把文案改成「超过 N 项」。
+     */
+    private void countSkippedSubtree(Path dir, ImportStats stats) {
+        stats.truncated = true;
+        int remaining = truncatedCountCap - stats.truncatedCount;
+        if (remaining <= 0) {
+            stats.truncatedCountCapped = true;
+            return;
+        }
+        final int[] counted = {0};
+        try {
+            Files.walkFileTree(dir, java.util.Collections.emptySet(), MAX_IMPORT_DEPTH, new SimpleFileVisitor<>() {
+                private FileVisitResult tally() {
+                    if (counted[0] >= remaining) {
+                        stats.truncatedCountCapped = true;
+                        return FileVisitResult.TERMINATE;
+                    }
+                    counted[0]++;
+                    return FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public FileVisitResult preVisitDirectory(Path d, BasicFileAttributes attrs) {
+                    if (!d.equals(dir) && d.getFileName().toString().startsWith(".")) return FileVisitResult.SKIP_SUBTREE;
+                    return tally();
+                }
+
+                @Override
+                public FileVisitResult visitFile(Path f, BasicFileAttributes attrs) {
+                    if (f.getFileName().toString().startsWith(".")) return FileVisitResult.CONTINUE;
+                    if (!attrs.isRegularFile() && !attrs.isDirectory()) return FileVisitResult.CONTINUE;
+                    return tally();
+                }
+
+                @Override
+                public FileVisitResult visitFileFailed(Path f, IOException exc) {
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (IOException e) {
+            log.warn("统计被截断子树失败（已数 {} 项）: {} ({})", counted[0], dir, e.getMessage());
+        }
+        stats.truncatedCount += counted[0];
     }
 
     /**
@@ -359,10 +421,9 @@ public class LocalProjectService {
                     if (dir.equals(root)) return FileVisitResult.CONTINUE;
                     if (dir.getFileName().toString().startsWith(".")) return FileVisitResult.SKIP_SUBTREE;
                     if (stats.imported >= maxImportEntries) {
-                        // 命中上限后不再下钻子树（避免为了精确计数而扫穿一整棵误选的超大目录），
-                        // 只把这个目录条目本身计入 truncatedCount——「至少 N 项」而非精确到子树内的每一项。
-                        stats.truncated = true;
-                        stats.truncatedCount++;
+                        // 命中上限后不再把子树入库，只做一次有界计数（上限 truncatedCountCap），
+                        // 让前端的「约 N 项未纳入」有一个接近真实的数字。
+                        countSkippedSubtree(dir, stats);
                         return FileVisitResult.SKIP_SUBTREE;
                     }
                     Long parentId = dirIds.get(dir.getParent());
@@ -403,8 +464,7 @@ public class LocalProjectService {
                         // 其实是目录，就是深度封顶的信号：它自己和它底下的一切都不会再被
                         // 任何回调访问到，是本轮扫描静默漏掉的那一段。与 MAX_IMPORT_ENTRIES
                         // 上限不同，这里没有天然会执行到的判断点，必须主动识别这个信号。
-                        stats.truncated = true;
-                        stats.truncatedCount++;
+                        countSkippedSubtree(file, stats);
                         return FileVisitResult.CONTINUE;
                     }
                     if (!attrs.isRegularFile()) return FileVisitResult.CONTINUE;

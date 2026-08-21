@@ -31,7 +31,8 @@ async function launchProject(payload) {
   if (d.truncated && shouldWarnTruncatedOnce(d.projectId)) {
     uni.showModal({
       title: t('common.folderImportTruncatedTitle'),
-      content: t('common.folderImportTruncated', { count: d.truncatedCount || 0 }),
+      content: t(d.truncatedCountCapped ? 'common.folderImportTruncatedCapped' : 'common.folderImportTruncated',
+        { count: d.truncatedCount || 0 }),
       showCancel: false,
     })
   }

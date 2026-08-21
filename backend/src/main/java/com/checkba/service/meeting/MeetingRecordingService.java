@@ -66,9 +66,11 @@ public class MeetingRecordingService {
                 + now.format(DateTimeFormatter.ofPattern("MM-dd HH:mm"));
 
         ProjectFile folder = ensureFolder(projectId, userId);
-        String audioName = uniqueName(projectId, folder.getId(), title, ".webm");
+        // 同名处置交给 ProjectFileService 的 RENAME 策略（含回收站同名与物理路径已存在的判定），
+        // 不再自己先探测再拼 (n) 后缀。
         ProjectFile audio = projectFileService.createFile(
-                projectId, folder.getId(), audioName, "webm", 0L, null, null, userId);
+                projectId, folder.getId(), title + ".webm", "webm", 0L, null, null, userId,
+                ProjectFileService.ConflictPolicy.RENAME);
 
         MeetingRecording meeting = new MeetingRecording();
         meeting.setProjectId(projectId);
@@ -300,17 +302,6 @@ public class MeetingRecordingService {
             }
         }
         return projectFileService.createFolder(projectId, null, preferred, userId);
-    }
-
-    /** createFile 对同名文件抛异常，这里先探测再加 (2)/(3) 后缀。 */
-    private String uniqueName(Long projectId, Long parentId, String base, String ext) {
-        String name = base + ext;
-        int i = 2;
-        while (projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNot(projectId, parentId, name, -1L)) {
-            name = base + " (" + i + ")" + ext;
-            i++;
-        }
-        return name;
     }
 
     private String sanitize(String name) {

@@ -100,6 +100,51 @@ class LocalProjectServiceImportCapTest {
         assertEquals(TEST_CAP, rows.size(), "入库行数必须封顶，多出的文件不许静默进库");
     }
 
+    /**
+     * #550 复核 M1：命中上限后被跳过的子树此前只记 1，前端却据此写「N 项未纳入」。
+     * 现在对被跳过的子树做有界计数。布局：50 个根文件 + zz/（10 文件 + inner/ 20 文件），
+     * 共 82 项；无论文件系统遍历顺序如何（先进目录还是先扫文件），未纳入的都应是 82-50=32。
+     */
+    @Test
+    void skippedSubtreeIsCountedNotJustOne(@TempDir Path folder) throws Exception {
+        for (int i = 0; i < TEST_CAP; i++) {
+            Files.createFile(folder.resolve("f" + i + ".txt"));
+        }
+        Path zz = Files.createDirectory(folder.resolve("zz"));
+        for (int i = 0; i < 10; i++) {
+            Files.createFile(zz.resolve("z" + i + ".txt"));
+        }
+        Path inner = Files.createDirectory(zz.resolve("inner"));
+        for (int i = 0; i < 20; i++) {
+            Files.createFile(inner.resolve("i" + i + ".txt"));
+        }
+        Files.createFile(zz.resolve(".hidden")); // 隐藏项不入库也不计数
+
+        LocalProjectService.OpenLocalResult r = svc.openLocalFolder(folder.toString(), false, null, null, 1L);
+
+        assertTrue(r.truncated());
+        assertEquals(TEST_CAP, r.importedCount());
+        assertEquals(82 - TEST_CAP, r.truncatedCount(), "被跳过的子树要按实际条目数计，不能整棵只算 1");
+        assertFalse(r.truncatedCountCapped());
+    }
+
+    /** M1：计数本身也有上限；撞上就停并标 truncatedCountCapped，前端改口「超过 N 项」。 */
+    @Test
+    void truncatedCountStopsAtCapAndFlagsIt(@TempDir Path folder) throws Exception {
+        svc.setMaxImportEntriesForTest(0);      // 第一项就越限，zz/ 整棵走「跳过并计数」
+        svc.setTruncatedCountCapForTest(10);
+        Path zz = Files.createDirectory(folder.resolve("zz"));
+        for (int i = 0; i < 30; i++) {
+            Files.createFile(zz.resolve("z" + i + ".txt"));
+        }
+
+        LocalProjectService.OpenLocalResult r = svc.openLocalFolder(folder.toString(), false, null, null, 1L);
+
+        assertTrue(r.truncated());
+        assertEquals(10, r.truncatedCount(), "数到上限即停");
+        assertTrue(r.truncatedCountCapped(), "撞了计数上限必须标出来，真实数字只会更大");
+    }
+
     @Test
     void underCapEntriesAllImportedNoTruncation(@TempDir Path folder) throws Exception {
         int total = 30; // 明显小于上限 50

@@ -34,7 +34,8 @@ export default {
   // ---- utils/ideOpen.js ----
   openProjectFailed: '打开项目失败，请稍后重试',
   folderImportTruncatedTitle: '导入已截断',
-  folderImportTruncated: '本次导入已截断，{count} 项未纳入：目录超过 30000 项，请拆分项目',
+  folderImportTruncated: '本次导入已截断，约 {count} 项未纳入：目录超过 30000 项，请拆分项目',
+  folderImportTruncatedCapped: '本次导入已截断，超过 {count} 项未纳入：目录超过 30000 项，请拆分项目',
   openFolder: '打开文件夹',
   openFile: '打开文件',
   open: '打开',
