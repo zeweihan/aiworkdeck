@@ -82,7 +82,7 @@ class PluginHostImpl implements PluginHost {
      * check_link_anchors / get_selection_hyperlink / set_selection_hyperlink / insert_link_with_bookmark——
      * 尽调插件在文档里建锚点必需，2026-08-22 复核裁决保留）。宿主自用（load/export_document、
      * doc_open_file_sync、set_zoom 等）与诊断原语（debug_revisions）不开放。改这张表要同步
-     * docs/PLUGIN_SPEC.md §11 的 Docs.exec 行。{@code PluginHostImplTest} 扫 DocumentEditTools 源码里的
+     * docs/PLUGIN_SPEC.md §11 的 Docs.exec 行。{@code PluginHostImplTest} 扫 DocumentEditTools / SlideEditTools 源码里的
      * 下发名字面量，漏一个就红（P1 复核 F2：J 的四个画像原语当时就漏了）。
      */
     static final Set<String> DOC_ACTIONS = Set.of(
@@ -110,7 +110,9 @@ class PluginHostImpl implements PluginHost {
             // impress
             "slide_get_overview", "slide_get_page", "slide_goto", "slide_add_page", "slide_delete_page",
             "slide_move_page", "slide_add_text_box", "slide_add_shape", "slide_add_table", "slide_delete_shape",
-            "slide_format_shape", "slide_format_text");
+            "slide_format_shape", "slide_format_text", "slide_read_notes", "slide_write_notes", "slide_set_layout",
+            "slide_set_shape_text", "slide_replace_text", "slide_set_shape_geometry", "slide_set_hyperlink",
+            "slide_table_read", "slide_table_set_cell", "slide_table_set_style");
 
     static final Set<String> IMAGE_TYPES = Set.of("png", "jpg", "jpeg", "bmp", "gif", "webp", "tif", "tiff");
     static final int OCR_MAX_PAGES = 50;

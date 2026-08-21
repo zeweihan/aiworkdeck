@@ -388,21 +388,22 @@ class PluginHostImplTest {
     }
 
     @Test
-    @DisplayName("DOC_ACTIONS 白名单 ⊇ DocumentEditTools 实际下发的编辑器动作（宿主自用与诊断原语除外），防再漂移")
+    @DisplayName("DOC_ACTIONS 白名单 ⊇ DocumentEditTools / SlideEditTools 实际下发的编辑器动作（宿主自用与诊断原语除外），防再漂移")
     void docActionsCoverDocumentEditToolsDispatch() throws Exception {
-        java.nio.file.Path src = java.nio.file.Path.of("src/main/java/com/checkba/service/ai/tools/DocumentEditTools.java");
-        assertTrue(java.nio.file.Files.exists(src), "测试工作目录须为 backend/: " + src.toAbsolutePath());
-        String code = java.nio.file.Files.readString(src);
-        java.util.regex.Matcher m = java.util.regex.Pattern
-                .compile("(?:executeEditorCommand|dispatchTableStructureCommand|dispatchInsertNote)\\(\"([a-z_]+)\"")
-                .matcher(code);
         java.util.Set<String> dispatched = new java.util.TreeSet<>();
-        while (m.find()) dispatched.add(m.group(1));
-        assertTrue(dispatched.contains("set_style_profile") && dispatched.contains("insert_toc"), "扫描没抓到已知下发名: " + dispatched);
+        java.util.regex.Pattern pat = java.util.regex.Pattern
+                .compile("(?:executeEditorCommand|dispatchTableStructureCommand|dispatchInsertNote)\\(\"([a-z_]+)\"");
+        for (String name : List.of("DocumentEditTools", "SlideEditTools")) {
+            java.nio.file.Path src = java.nio.file.Path.of("src/main/java/com/checkba/service/ai/tools/" + name + ".java");
+            assertTrue(java.nio.file.Files.exists(src), "测试工作目录须为 backend/: " + src.toAbsolutePath());
+            java.util.regex.Matcher m = pat.matcher(java.nio.file.Files.readString(src));
+            while (m.find()) dispatched.add(m.group(1));
+        }
+        assertTrue(dispatched.contains("set_style_profile") && dispatched.contains("slide_set_hyperlink"), "扫描没抓到已知下发名: " + dispatched);
         // 宿主自用 / 诊断原语，按 SPEC §11 不开放给插件
         dispatched.removeAll(java.util.Set.of("doc_open_file_sync", "debug_revisions"));
         dispatched.removeAll(PluginHostImpl.DOC_ACTIONS);
-        assertTrue(dispatched.isEmpty(), "DocumentEditTools 下发但 DOC_ACTIONS 未放行（同步 docs/PLUGIN_SPEC.md §11）: " + dispatched);
+        assertTrue(dispatched.isEmpty(), "AI 工具下发但 DOC_ACTIONS 未放行（同步 docs/PLUGIN_SPEC.md §11）: " + dispatched);
     }
 
     @Test
