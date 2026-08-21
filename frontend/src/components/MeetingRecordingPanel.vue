@@ -107,7 +107,7 @@
         <view class="mr-live-row">
           <view class="mr-live-dot" :class="{ paused: recState.status === 'paused' }"></view>
           <text class="mr-live-time">{{ formatSeconds(recState.seconds) }}</text>
-          <text class="mr-live-label">{{ recState.status === 'paused' ? $t('meeting.paused') : $t('meeting.recording') }}</text>
+          <text class="mr-live-label">{{ recState.status === 'interrupted' ? $t('meeting.interrupted') : (recState.status === 'paused' ? $t('meeting.paused') : $t('meeting.recording')) }}</text>
         </view>
         <view class="mr-level-track">
           <view class="mr-level-bar" :style="{ width: Math.round(recState.level * 100) + '%' }"></view>

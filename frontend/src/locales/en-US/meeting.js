@@ -48,6 +48,7 @@ export default {
   recording: 'Recording',
   connectingMic: 'Connecting to microphone…',
   paused: 'Paused',
+  interrupted: 'Interrupted',
   pause: 'Pause',
   resume: 'Resume',
   stopRecording: 'Stop Recording',
@@ -62,6 +63,7 @@ export default {
   micPermissionDenied: 'Could not get microphone permission. Allow this app to use the microphone in your system settings.',
   finishWriteBackFailed: 'The recording was saved, but its status could not be written back: {message}',
   uploadStalled: 'Upload stalled, retrying (attempt {attempt})',
+  deviceInterrupted: 'The recording device was disconnected or its permission was revoked. Recording has stopped — click Stop to save what was captured.',
 
   // ---- List and status badges ----
   sectionTitle: 'Recordings',

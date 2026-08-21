@@ -215,7 +215,10 @@ export default {
       this.cancelDelete()
       try {
         await deleteFavorite(id)
-        await this.refresh()
+        // 必须 force：refresh() 默认带 1.2s 节流，删除后的刷新落在节流窗口内会被整个
+        // 吞掉——列表不更新但成功提示照弹，用户再点一次删除时后端已无此 id，
+        // 弹出的失败提示与刚才的成功提示直接矛盾。
+        await this.refresh(true)
         uni.showToast({ title: this.$t('panels.pfDeleteSuccess'), icon: 'success' })
       } catch (e) {
         console.error('删除收藏失败:', e)

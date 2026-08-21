@@ -198,6 +198,7 @@ import { getCurrentUser, setSessionUser } from '@/utils/auth.js'
 import { signOut } from '@/utils/signOut.js'
 import { getAppLanguage, setAppLanguage } from '@/utils/appLanguage.js'
 import { getInitial } from '@/utils/textInitial.js'
+import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
 
 export default {
   name: 'PersonalSettingsPanel',
@@ -236,6 +237,8 @@ export default {
       totpSecret: '',
       totpQrDataUrl: '',
       totpCodeInput: '',
+      totpBusy: false, // startSetup 在飞期间为 true，防止重复点击触发并发请求
+      _totpRequestSeq: 0, // 请求代次：只接受"此刻最新一次"发出的响应
 
       // 手机号绑定（登录短信验证，仅 server 模式且启用时显示）
       showBindPhone: false,
@@ -392,6 +395,7 @@ export default {
       }, 600)
     },
     async toggleTotpPanel() {
+      if (this.totpBusy) return // startSetup 在飞期间禁用，防止二次点击触发并发请求
       if (this.showTotpPanel) {
         this.cancelTotpPanel()
         return
@@ -399,16 +403,28 @@ export default {
       this.totpCodeInput = ''
       this.showTotpPanel = true
       if (this.userInfo.totpEnabled) return
+      // 请求代次：后端 startSetup 每次都新生成一把密钥并落库（后来者覆盖）。反复点
+      // 「绑定」/取消/「绑定」会连续发出多个 startSetup，必须只认最后一次发出的那份
+      // 响应，否则界面可能显示 A 请求的密钥而数据库存的是 B 请求的，用户扫到一把
+      // 服务端已经不认的密钥，验证码永远校验不过。
+      const seq = ++this._totpRequestSeq
+      this.totpBusy = true
       try {
         const res = await totpSetup()
+        if (!shouldAcceptResponse(seq, this._totpRequestSeq)) return
         this.totpSecret = (res.data && res.data.secret) || ''
         const uri = (res.data && res.data.provisioningUri) || ''
         // 二维码在前端渲染：otpauth URI 含密钥，不该经由图片服务多走一手
         const QRCode = (await import('qrcode')).default
-        this.totpQrDataUrl = uri ? await QRCode.toDataURL(uri, { margin: 1, width: 180 }) : ''
+        const dataUrl = uri ? await QRCode.toDataURL(uri, { margin: 1, width: 180 }) : ''
+        if (!shouldAcceptResponse(seq, this._totpRequestSeq)) return
+        this.totpQrDataUrl = dataUrl
       } catch (e) {
+        if (!shouldAcceptResponse(seq, this._totpRequestSeq)) return
         this.showTotpPanel = false
         uni.showToast({ title: e.message || this.$t('account.getTotpBindInfoFailed'), icon: 'none' })
+      } finally {
+        if (shouldAcceptResponse(seq, this._totpRequestSeq)) this.totpBusy = false
       }
     },
     async confirmTotpBind() {
@@ -442,6 +458,11 @@ export default {
       }
     },
     cancelTotpPanel() {
+      // 让任何还在飞的 startSetup 响应作废（代次一旦不匹配，它的 finally 也不会
+      // 再去解 totpBusy），所以这里要显式解锁，否则 in-flight 期间取消一次
+      // 就会把「绑定」按钮永久锁死。
+      this._totpRequestSeq++
+      this.totpBusy = false
       this.showTotpPanel = false
       this.totpSecret = ''
       this.totpQrDataUrl = ''

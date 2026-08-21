@@ -3,7 +3,7 @@
   <div v-if="visible" class="mri-pill" :class="{ paused: state.status === 'paused' }">
     <span class="mri-dot"></span>
     <span class="mri-time">{{ timeText }}</span>
-    <span class="mri-label">{{ state.status === 'paused' ? '已暂停' : '录音中' }}</span>
+    <span class="mri-label">{{ state.status === 'interrupted' ? '已中断' : (state.status === 'paused' ? '已暂停' : '录音中') }}</span>
     <button class="mri-btn" type="button" @click="togglePause">
       {{ state.status === 'paused' ? '继续' : '暂停' }}
     </button>
