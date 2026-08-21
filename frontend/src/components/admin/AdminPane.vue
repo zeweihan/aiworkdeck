@@ -149,115 +149,6 @@
                 </view>
                 <text v-for="(note, i) in svc.notes" :key="'n' + i" class="field-note">{{ note }}</text>
 
-                <!-- 「改用自己的 Key」的逃生门。网关的每一类失败（未开放 / 上游挂 / 我们挂）
-                     都要能指到这里，所以它是一个可以被深链就地展开的固定入口
-                     （?nav=platform&service=ocr），不是藏在别处的高级设置。 -->
-                <view class="platform-fold-head" @tap="togglePlatformByok(svc.key)">
-                  <text class="platform-fold-title">{{ $t('platform.useOwnKey') }}</text>
-                  <text class="platform-fold-arrow">
-                    {{ platformByokOpen[svc.key] ? $t('platform.collapse') : $t('platform.expand') }}
-                  </text>
-                </view>
-
-                <view v-if="platformByokOpen[svc.key]" class="platform-byok-body">
-                  <text class="field-note">
-                    {{ svc.hasByokCredentials ? $t('platform.byokPresentNote') : $t('platform.byokMissingNote') }}
-                  </text>
-
-                  <!-- 会议录音转写（通义听悟 + OSS 中转） -->
-                  <template v-if="svc.key === 'asr'">
-                    <view class="form-row">
-                      <text class="form-label">AccessKey ID</text>
-                      <input v-model="form.external.tingwu.accessKeyId" class="form-input" :placeholder="$t('admin.tingwuKeyIdPlaceholder')" />
-                    </view>
-                    <view class="form-row">
-                      <text class="form-label">AccessKey Secret</text>
-                      <input v-model="form.external.tingwu.accessKeySecret" class="form-input" password :placeholder="$t('admin.tingwuKeySecretPlaceholder')" />
-                    </view>
-                    <view class="form-row">
-                      <text class="form-label">{{ $t('admin.tingwuAppKeyLabel') }}</text>
-                      <input v-model="form.external.tingwu.appKey" class="form-input" :placeholder="$t('admin.tingwuAppKeyPlaceholder')" />
-                    </view>
-                    <view class="form-row">
-                      <text class="form-label">OSS Bucket</text>
-                      <input v-model="form.external.tingwu.ossBucket" class="form-input" :placeholder="$t('admin.tingwuBucketPlaceholder')" />
-                    </view>
-                    <view class="form-row">
-                      <text class="form-label">OSS Endpoint</text>
-                      <input v-model="form.external.tingwu.ossEndpoint" class="form-input" :placeholder="$t('admin.tingwuEndpointPlaceholder')" />
-                    </view>
-                  </template>
-
-                  <!-- 图片文字识别（阿里云 OCR） -->
-                  <template v-else-if="svc.key === 'ocr'">
-                    <view class="form-row">
-                      <text class="form-label">AccessKey ID</text>
-                      <input v-model="form.external.aliyunOcr.accessKeyId" class="form-input" :placeholder="$t('admin.ocrKeyIdPlaceholder')" />
-                    </view>
-                    <view class="form-row">
-                      <text class="form-label">AccessKey Secret</text>
-                      <input v-model="form.external.aliyunOcr.accessKeySecret" class="form-input" password :placeholder="$t('admin.ocrKeySecretPlaceholder')" />
-                    </view>
-                    <view class="form-row">
-                      <text class="form-label">Endpoint</text>
-                      <input v-model="form.external.aliyunOcr.endpoint" class="form-input" :placeholder="$t('admin.ocrEndpointPlaceholder')" />
-                    </view>
-                    <view class="form-row">
-                      <text class="form-label">RegionId</text>
-                      <input v-model="form.external.aliyunOcr.regionId" class="form-input" :placeholder="$t('admin.ocrRegionPlaceholder')" />
-                    </view>
-                    <view class="form-row">
-                      <text class="form-label">{{ $t('admin.publicBaseUrlLabel') }}</text>
-                      <input v-model="form.external.aliyunOcr.publicBaseUrl" class="form-input" :placeholder="$t('admin.ocrPublicBaseUrlPlaceholder')" />
-                    </view>
-                  </template>
-
-                  <!-- 联网搜索（博查） -->
-                  <template v-else-if="svc.key === 'search'">
-                    <view class="form-row">
-                      <text class="form-label">API Key</text>
-                      <input v-model="form.external.bocha.apiKey" class="form-input" :placeholder="$t('admin.bochaKeyPlaceholder')" />
-                    </view>
-                  </template>
-
-                  <!-- 企业工商信息（企查查） -->
-                  <template v-else-if="svc.key === 'qichacha'">
-                    <view class="form-row">
-                      <text class="form-label">Base URL</text>
-                      <input v-model="form.external.qichacha.baseUrl" class="form-input" placeholder="https://api.qichacha.com" />
-                    </view>
-                    <view class="form-row">
-                      <text class="form-label">Key</text>
-                      <input v-model="form.external.qichacha.key" class="form-input" :placeholder="$t('admin.enterKeyPlaceholder')" />
-                    </view>
-                    <view class="form-row">
-                      <text class="form-label">Secret</text>
-                      <input v-model="form.external.qichacha.secret" class="form-input" :placeholder="$t('admin.enterSecretPlaceholder')" />
-                    </view>
-                  </template>
-
-                  <!-- 证券与财务数据（Tushare） -->
-                  <template v-else-if="svc.key === 'tushare'">
-                    <view class="form-row">
-                      <text class="form-label">Base URL</text>
-                      <input v-model="form.external.tushare.baseUrl" class="form-input" placeholder="http://api.tushare.pro" />
-                    </view>
-                    <view class="form-row">
-                      <text class="form-label">Token</text>
-                      <input v-model="form.external.tushare.token" class="form-input" :placeholder="$t('admin.enterTokenPlaceholder')" />
-                    </view>
-                  </template>
-
-                  <!-- 法律法规与案例（北大法宝） -->
-                  <template v-else-if="svc.key === 'pkulaw'">
-                    <view class="form-row">
-                      <text class="form-label">Token</text>
-                      <input v-model="form.external.pkulaw.token" class="form-input" :placeholder="$t('admin.pkulawTokenPlaceholder')" />
-                    </view>
-                  </template>
-
-                  <text class="field-note">{{ $t('platform.saveHint') }}</text>
-                </view>
               </view>
 
               <!-- 花费闸门。设计 §4.9 的用户闸：超过上限时问一句「是否继续」，
@@ -308,19 +199,6 @@
               </view>
             </view>
           </view>
-
-          <!-- 保存按钮 -->
-          <view class="fixed-footer">
-            <button
-              class="btn-save"
-              type="primary"
-              :disabled="saving"
-              :loading="saving"
-              @tap="handleSave"
-            >
-              {{ $t('admin.saveConfigButton') }}
-            </button>
-          </view>
         </scroll-view>
 
         <!-- AI 配置 -->
@@ -337,26 +215,19 @@
               </text>
             </view>
             <view class="section-body">
-              <view class="form-row">
-                <text class="form-label">{{ $t('admin.defaultProviderLabel') }}</text>
-                <view class="provider-radio-group">
-                  <view
-                    v-for="opt in aiProviderOptions"
-                    :key="opt.value"
-                    class="radio-item"
-                    :class="{ checked: form.ai.activeProvider === opt.value, unavailable: opt.unavailable }"
-                    @tap="onPickProvider(opt)"
-                  >
-                    <view class="radio-dot"></view>
-                    <text class="radio-label">{{ opt.label }}</text>
-                    <text v-if="opt.hint" class="radio-hint">{{ opt.hint }}</text>
-                  </view>
-                </view>
+              <!-- 2026-08-21 起产品只有官方版：AI 一律走平台 Credits 通道（AWD_CLOUD），
+                   供应商单选、OpenRouter 自备 Key、本地 Ollama 三块都不再在界面上出现
+                   （后端三档枚举与设置键原样保留）。老用户以前切过别的档位时，
+                   这里给一条提示 + 一键切回；否则整块不渲染。 -->
+              <view v-if="legacyProvider" class="platform-banner platform-banner-warn">
+                <text class="platform-banner-title">{{ $t('admin.legacyProviderTitle') }}</text>
+                <text class="platform-banner-body">{{ $t('admin.legacyProviderBody') }}</text>
+                <text class="platform-link" @tap="switchToOfficialChannel">{{ $t('admin.switchToOfficialChannel') }}</text>
               </view>
 
-              <!-- 跨境传输的单独同意（个保法第三十九条）。只在选中云端通道时出现：
-                   那正是内容开始出境的决定点。绝不预勾选——预勾选的同意是无效的。 -->
-              <view v-if="form.ai.activeProvider === 'AWD_CLOUD'" class="form-row consent-row">
+              <!-- 跨境传输的单独同意（个保法第三十九条）。官方通道会把内容送往境外，
+                   所以它恒显示。绝不预勾选——预勾选的同意是无效的。 -->
+              <view class="form-row consent-row">
                 <view class="consent-box">
                   <text class="consent-title">{{ $t('admin.consentTitle') }}</text>
                   <text class="consent-body">{{ $t('admin.consentBodyPrefix') }}<text class="consent-em">{{ $t('admin.consentEntity') }}</text>{{ $t('admin.consentBodySuffix') }}</text>
@@ -369,42 +240,12 @@
                 </view>
               </view>
 
-              <!-- 自备 Key 的接入参数。从「系统配置 → AI 供应商接入参数」搬到这里：
-                   它是供应商选择的一部分，不是一个独立的系统级设置。
-                   与上面那块跨境同意同一形制——只在选中对应档位时出现。
-                   Google（Gemini）那三个字段随 GEMINI 供应商下线一起删了：
-                   Gemini 系列模型仍可用，走 OpenRouter 的 google/* 即可。 -->
-              <view v-if="form.ai.activeProvider === 'OPENROUTER'" class="form-row">
-                <view class="provider-card">
-                  <view class="provider-header">
-                    <text class="provider-name">{{ $t('admin.externalTitle') }}</text>
-                  </view>
-                  <text class="field-note">{{ $t('admin.externalSubtitle') }}</text>
-                  <view class="form-row">
-                    <text class="form-label">API Key</text>
-                    <input
-                      v-model="form.external.openRouter.apiKey"
-                      class="form-input"
-                      :placeholder="$t('admin.openRouterKeyPlaceholder')"
-                      password
-                    />
-                  </view>
-                  <view class="form-row">
-                    <text class="form-label">{{ $t('admin.apiBaseUrlLabel') }}</text>
-                    <input
-                      v-model="form.external.openRouter.baseUrl"
-                      class="form-input"
-                      placeholder="https://openrouter.ai/api/v1"
-                    />
-                  </view>
-                </view>
-              </view>
-
               <!-- 模型选择。清单唯一来源是后端模型目录（GET /api/ai/models）——
                    历史上前端硬编码过两份互不同步的清单，结果是「后端加模型用户看不到、
                    前端加模型被工厂静默回落默认模型」。
                    系统提示词的 OLLAMA / GEMINI 两个 tab 已随 v1 对话通道移除：
-                   唯一读者是已删的 AiChatService，对四条通道本来就全部失效。 -->
+                   唯一读者是已删的 AiChatService，对四条通道本来就全部失效。
+                   模型下拉是官方版里用户唯一还能选的 AI 参数。 -->
               <view class="section-divider"></view>
               <view class="section-header-inline">
                   <text class="section-title-sm">{{ $t('admin.modelSelectionTitle') }}</text>
@@ -473,34 +314,6 @@
                 </view>
               </view>
               <text class="field-note">{{ networkRegionSummary }}</text>
-
-              <!-- 本地 Ollama。改造前全产品无处可改：yml 里是硬编码字面量，
-                   只能靠 AI_MODEL_OLLAMA_MODEL_NAME 环境变量覆盖，终端用户等于改不了。 -->
-              <view class="section-divider"></view>
-              <view class="section-header-inline">
-                  <text class="section-title-sm">{{ $t('admin.ollamaSectionTitle') }}</text>
-              </view>
-              <text class="field-note">
-                {{ $t('admin.ollamaNote') }}
-              </text>
-              <view class="form-row">
-                <text class="form-label">{{ $t('admin.serverAddressLabel') }}</text>
-                <input
-                  v-model="form.ai.ollamaBaseUrl"
-                  class="form-input"
-                  placeholder="http://localhost:11434"
-                />
-              </view>
-              <view class="form-row">
-                <text class="form-label">{{ $t('admin.modelNameLabel') }}</text>
-                <input
-                  v-model="form.ai.ollamaModelName"
-                  class="form-input"
-                  :placeholder="$t('admin.ollamaModelPlaceholder')"
-                />
-              </view>
-
-              <text class="field-note">{{ $t('admin.externalMovedNote') }}</text>
 
             </view>
           </view>
@@ -1391,7 +1204,7 @@ export default {
     embedded: { type: Boolean, default: false },
     /** 深链定位面板。薄壳页从 onLoad 的 query.nav 传进来，工作台从 openSettingsTab 传 */
     initialNav: { type: String, default: '' },
-    /** ?nav=platform&service=ocr：就地展开那一项的「使用自己的 Key（高级）」 */
+    /** ?nav=platform&service=ocr。宿主仍会传它；BYOK 折叠区撤掉后深链只落到面板本身 */
     initialService: { type: String, default: '' },
   },
   data() {
@@ -1420,8 +1233,7 @@ export default {
         { key: 'personal_settings', label: this.$t('admin.navPersonalSettings'), group: 'personal' },
         // 「系统」组：'config'（系统配置）已撤，内容分别并入 'ai' 与「账户与安全」
         { key: 'ai', label: this.$t('admin.navAi'), group: 'system' },
-        // 平台服务对团队服务器同样要可见：平台档在那里不可选，但那 21 个 BYOK 凭证字段
-        // 已经搬进这个面板，标成 desktopOnly 会让自建服务器的管理员没地方填。
+        // 平台服务对团队服务器同样要可见：平台档在那里不可选，但档位与花费提醒仍要能看。
         { key: 'platform', label: this.$t('admin.navPlatform'), group: 'system' },
         { key: 'account', label: this.$t('admin.navAccount'), group: 'system', desktopOnly: true },
         { key: 'components', label: this.$t('admin.navComponents'), group: 'system', desktopOnly: true },
@@ -1470,25 +1282,18 @@ export default {
         progress: null,
         error: null,
       },
+      // 官方版不再回传 external（七家 BYOK 凭证 + OpenRouter）与 ollama 两个字段：
+      // AdminConfigController.toSettingsUpdates 对 null/缺省字段跳过不写，
+      // 老用户库里存着的 key 原样保留；带空串回去才是「显式清空」。
       form: {
-        external: {
-          openRouter: { apiKey: '', baseUrl: '' },
-          qichacha: { baseUrl: '', key: '', secret: '' },
-          tushare: { baseUrl: '', token: '' },
-          aliyunOcr: { accessKeyId: '', accessKeySecret: '', endpoint: '', regionId: '', publicBaseUrl: '' },
-          pkulaw: { token: '' },
-          bocha: { apiKey: '' },
-          tingwu: { accessKeyId: '', accessKeySecret: '', appKey: '', ossBucket: '', ossEndpoint: '' },
-        },
         ai: {
-          activeProvider: 'OLLAMA',
+          // 后端解析后的生效值；'' = 还没拉到。官方版只认 AWD_CLOUD，其余值触发 legacyProvider 提示
+          activeProvider: '',
           // 三个模型键：空串 = 跟随内置默认（子 Agent 是继承辅助模型）
           defaultModel: '',
           auxModel: '',
           subagentModel: '',
           networkRegion: 'auto',
-          ollamaBaseUrl: '',
-          ollamaModelName: '',
           // 跨境单独同意：null = 本次未动，true/false = 本次勾选/撤回。
           // 绝不初始化为 true——预勾选的同意在个保法下无效。
           crossBorderConsent: null,
@@ -1530,9 +1335,6 @@ export default {
       // 所以留一个明确的保存动作。
       budgetForm: { lowBalance: '0' },
       budgetBusy: false,
-      // 每项的「使用自己的 Key（高级）」是否展开。默认全收起；
-      // ?nav=platform&service=ocr 这样的深链会就地展开对应那一项（错误提示的逃生门）。
-      platformByokOpen: {},
       saving: false,
       cloudConnections: [],
       cloudForm: { serverUrl: '', username: '', password: '' },
@@ -1658,10 +1460,13 @@ export default {
         // 与 false「未开放」是两回事——只有 false 才配显示成「未开放」。
         const enabled = this.platformRemote.enabled[s.service]
 
+        // 官方版只露 platform / local 两档（local 是 ASR 的本地隐私档）。自备 Key 不再可切，
+        // 但生效值若是 byok（老用户、或非 local-mode 下后端把 platform 解析成 byok），
+        // 下拉显示的必须是**正在生效**的那一档，所以把它补进清单而不是让界面空白。
         const values = []
         if (available) values.push('platform')
-        values.push('byok')
         if (localUsable) values.push('local')
+        if (s.provider && !values.includes(s.provider)) values.push(s.provider)
         const labelOf = {
           platform: this.$t('platform.tierPlatform'),
           byok: this.$t('platform.tierByok'),
@@ -1691,22 +1496,19 @@ export default {
         if (s.provider === 'local') notes.push(this.$t('platform.tierLocalNote'))
         if (s.hasLocal && !localUsable) notes.push(this.$t('platform.localAsrPending'))
 
-        // 生效值不在可切清单里（例如非 local-mode 下后端已把 platform 解析成 byok）
-        // 时选中项落在 byok 上——下拉显示的必须是**正在生效**的那一档。
         const idx = values.indexOf(s.provider)
         return {
           key: s.service,
           usageText: this.serviceUsageText(s.service),
           name: meta.nameKey ? this.$t(meta.nameKey) : s.service,
           desc: meta.descKey ? this.$t(meta.descKey) : '',
-          hasByokCredentials: !!s.hasByokCredentials,
           provider: s.provider,
           tierLabel,
           tierClass,
           notes,
           optionValues: values,
-          optionLabels: values.map((v) => labelOf[v]),
-          optionIndex: idx < 0 ? values.indexOf('byok') : idx,
+          optionLabels: values.map((v) => labelOf[v] || v),
+          optionIndex: idx < 0 ? 0 : idx,
         }
       })
     },
@@ -1714,28 +1516,11 @@ export default {
     cloudServerUrlIsHttp() {
       return /^http:\/\//i.test((this.cloudForm.serverUrl || '').trim())
     },
-    // 供应商单选项。「AI WorkDeck 云端」是平台计费通道，条件不满足时展示但不可选——
-    // 隐藏它会让用户根本发现不了这个选项，直接可选又会在发消息时才报错。
-    // 两个前置条件都要单独判：连接账户 → 账户里有 Credits。
-    // 缺后者时官网 /api/account/ai-key 返回 409 no_allocation，只在发消息那一刻才炸。
-    aiProviderOptions() {
-      // 三档（GEMINI 已下线：主对话在架构上跑不通，其模型经 OpenRouter 的 google/* 仍可用）
-      const options = [
-        { value: 'OLLAMA', label: this.$t('admin.providerOllama') },
-        { value: 'OPENROUTER', label: this.$t('admin.providerOpenRouter') },
-      ]
-      if (this.isDesktop) {
-        let hint = ''
-        if (!this.platformAiAvailable) hint = this.$t('admin.hintConnectFirst')
-        else if (this.accountOutOfCredits) hint = this.$t('admin.hintTopUp')
-        options.push({
-          value: 'AWD_CLOUD',
-          label: this.$t('admin.providerAwdCloud'),
-          hint,
-          unavailable: !!hint,
-        })
-      }
-      return options
+    // 后端回来的 activeProvider 不是官方通道（老用户以前切过 OLLAMA / OPENROUTER）。
+    // '' 是还没拉到，不算旧设置。
+    legacyProvider() {
+      const p = this.form.ai.activeProvider
+      return !!p && p !== 'AWD_CLOUD'
     },
     // 已同意 = 本次刚勾选，或服务端有记录且本次没撤回
     crossBorderConsented() {
@@ -1767,19 +1552,6 @@ export default {
       return ''
     },
     // 实时用量口径是否可得。现在只用于判断余额兜底路径。
-    accountQuotaAvailable() {
-      return !!(this.accountPlatform && this.accountPlatform.quotaAvailable)
-    },
-    // 余额为空：平台 AI 通道此时不可选，面板要给出「去官网充值」的引导。
-    // 判据是 Credits 余额——「分配额度」这个动作在 Credits 重构时就删了，
-    // 后端 hasAiQuota 也已由 creditsCents 算出，这里只是沿用那个字段。
-    // 注意 quotaAvailable=false 只表示用量查不到，不代表没 Credits。
-    accountOutOfCredits() {
-      if (!this.accountPlatform) return false
-      const credits = this.accountPlatform.creditsCents
-      if (typeof credits === 'number') return credits <= 0
-      return this.accountQuotaAvailable && !this.accountPlatform.hasAiQuota
-    },
     accountUsageRows() {
       const rows = this.accountUsage && this.accountUsage.local && this.accountUsage.local.recent
       return Array.isArray(rows) ? rows : []
@@ -1819,11 +1591,6 @@ export default {
     initialNav(v) {
       if (v && this.visibleNavItems.some((n) => n.key === v)) this.onNavTap({ key: v })
     },
-    initialService(v) {
-      if (v && this.initialNav === 'platform') {
-        this.platformByokOpen = { ...this.platformByokOpen, [v]: true }
-      }
-    },
   },
   mounted() {
     this.loadUserInfo()
@@ -1831,12 +1598,6 @@ export default {
     const nav = this.initialNav
     if (nav && this.visibleNavItems.some((n) => n.key === nav)) {
       this.onNavTap({ key: nav })
-    }
-    // ?nav=platform&service=ocr：就地展开那一项的「使用自己的 Key（高级）」。
-    // 网关的失败提示要能一步指到逃生门，中间不能再让用户自己去找哪一项。
-    const svc = this.initialService
-    if (nav === 'platform' && svc) {
-      this.platformByokOpen = { ...this.platformByokOpen, [svc]: true }
     }
     // 系统组的三条初始加载只有管理员打得动（/api/admin/* 对普通账号是 403，
     // 会弹一条「请用 admin 账号登录」的 toast）。个人中心并进来之后，非管理员
@@ -2573,13 +2334,17 @@ export default {
       // 而这个入口恰恰是在向他征求出境同意。cross-border 是两站共用的锚点 id。
       openExternalUrl(siteBaseUrl() + '/legal/privacy#cross-border')
     },
-    onPickProvider(opt) {
-      if (opt.value === this.form.ai.activeProvider) return
-      if (opt.unavailable) {
-        uni.showToast({ title: opt.hint || this.$t('admin.currentlyUnavailable'), icon: 'none' })
+    // 老用户「切换到官方通道」：置 AWD_CLOUD 后走既有保存路径。后端的跨境同意闸
+    //（crossBorderBlockReason）仍然把关，没勾同意会回 400，这里提前说清楚省一次往返。
+    async switchToOfficialChannel() {
+      if (!this.crossBorderConsented) {
+        uni.showToast({ title: this.$t('admin.switchNeedsConsent'), icon: 'none' })
         return
       }
-      this.form.ai.activeProvider = opt.value
+      const prev = this.form.ai.activeProvider
+      this.form.ai.activeProvider = 'AWD_CLOUD'
+      const ok = await this.handleSave()
+      if (!ok) this.form.ai.activeProvider = prev
     },
     // ---------- 当前站点（双主站） ----------
     async loadSite() {
@@ -2819,15 +2584,15 @@ export default {
         await this.loadAccount()
         await refreshEntitlements(true)
         this.notifyMarketAccountChanged()
-        // 后端会把 activeProvider 从平台通道摘下来（否则每条消息都报未连接账户，
-        // 而设置页仍显示平台通道正常选中）。这里同步表单并如实告知切到了哪一个。
+        // 后端会把 activeProvider 从平台通道摘下来（否则每条消息都报未连接账户）。
+        // 官方版没有别的档可选：同步表单让 AI 面板露出「切换到官方通道」提示，并说清
+        // 重新连接账户后要回去切一下。
         const fallback = res && res.aiProviderFallback
         if (fallback) {
           this.form.ai.activeProvider = fallback
-          const label = (this.aiProviderOptions.find((o) => o.value === fallback) || {}).label || fallback
           uni.showModal({
             title: this.$t('admin.disconnectedTitle'),
-            content: this.$t('admin.providerFallbackContent', { label }),
+            content: this.$t('admin.providerFallbackContent'),
             showCancel: false,
           })
         } else {
@@ -3036,58 +2801,16 @@ export default {
         await this.loadPlatformServices()
       }
     },
-    togglePlatformByok(key) {
-      this.platformByokOpen = { ...this.platformByokOpen, [key]: !this.platformByokOpen[key] }
-    },
     async loadConfig() {
       try {
         const data = await getAdminConfig()
-        if (data && data.external) {
-          this.form.external = {
-            qichacha: {
-              baseUrl: data.external.qichacha?.baseUrl || '',
-              key: data.external.qichacha?.key || '',
-              secret: data.external.qichacha?.secret || '',
-            },
-            tushare: {
-              baseUrl: data.external.tushare?.baseUrl || '',
-              token: data.external.tushare?.token || '',
-            },
-            aliyunOcr: {
-              accessKeyId: data.external.aliyunOcr?.accessKeyId || '',
-              accessKeySecret: data.external.aliyunOcr?.accessKeySecret || '',
-              endpoint: data.external.aliyunOcr?.endpoint || 'ocr-api.cn-hangzhou.aliyuncs.com',
-              regionId: data.external.aliyunOcr?.regionId || 'cn-hangzhou',
-              publicBaseUrl: data.external.aliyunOcr?.publicBaseUrl || '',
-            },
-            openRouter: {
-              apiKey: data.external.openRouter?.apiKey || '',
-              baseUrl: data.external.openRouter?.baseUrl || '',
-            },
-            pkulaw: {
-              token: data.external.pkulaw?.token || '',
-            },
-            bocha: {
-              apiKey: data.external.bocha?.apiKey || '',
-            },
-            tingwu: {
-              accessKeyId: data.external.tingwu?.accessKeyId || '',
-              accessKeySecret: data.external.tingwu?.accessKeySecret || '',
-              appKey: data.external.tingwu?.appKey || '',
-              ossBucket: data.external.tingwu?.ossBucket || '',
-              ossEndpoint: data.external.tingwu?.ossEndpoint || '',
-            },
-          }
-        }
         if (data && data.ai) {
-          this.form.ai.activeProvider = data.ai.activeProvider || 'OLLAMA'
+          this.form.ai.activeProvider = data.ai.activeProvider || ''
           // 三个模型键留空是合法值（跟随内置默认 / 继承辅助模型），不要在这里塞默认模型 id
           this.form.ai.defaultModel = data.ai.defaultModel || ''
           this.form.ai.auxModel = data.ai.auxModel || ''
           this.form.ai.subagentModel = data.ai.subagentModel || ''
           this.form.ai.networkRegion = data.ai.networkRegion || 'auto'
-          this.form.ai.ollamaBaseUrl = data.ai.ollamaBaseUrl || ''
-          this.form.ai.ollamaModelName = data.ai.ollamaModelName || ''
           this.crossBorderConsentAt = data.ai.crossBorderConsentAt || ''
           this.form.ai.crossBorderConsent = null
         }
@@ -3100,7 +2823,7 @@ export default {
     async handleSave() {
       // 按钮只绑了 :loading，没绑 :disabled，uni-app 的 loading 态本身不拦 tap；
       // 同文件其它写操作（onSaveBudget/onSwitchSite 等）都在方法体开头挡一道，这里补齐。
-      if (this.saving) return
+      if (this.saving) return false
       this.saving = true
       try {
         await saveAdminConfig(this.form)
@@ -3108,12 +2831,14 @@ export default {
         // 区域一改，可用模型清单跟着变；默认模型也可能因此落到清单外，
         // 保存后重新拉一次目录，让页面上显示的就是新口径
         this.loadModelCatalog()
+        return true
       } catch (e) {
         console.error('保存后台配置失败', e)
         uni.showToast({
           title: e.message || this.$t('admin.saveFailed'),
           icon: 'none',
         })
+        return false
       } finally {
         this.saving = false
       }
@@ -3495,18 +3220,6 @@ $border-color: #E9ECEF; // Gray-Light
 .radio-item.checked {
   border-color: $brand-primary;
   background: $brand-mint-light;
-}
-
-// 前置条件未满足（未连接账户 / Credits 为空）的「AI WorkDeck 云端」：
-// 可见但压低，点击给出下一步而不是静默失败
-.radio-item.unavailable {
-  opacity: 0.55;
-}
-
-.radio-hint {
-  margin-left: 8px;
-  font-size: 12px;
-  color: $text-secondary;
 }
 
 .radio-dot {
@@ -4065,31 +3778,6 @@ $border-color: #E9ECEF; // Gray-Light
 .tier-need {
   color: #B45309;
   background: #FDF0DC;
-}
-
-/* 折叠头本身就是「改用自己的 Key」的入口，做成一行可点的分隔条 */
-.platform-fold-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 4px;
-  padding-top: 12px;
-  border-top: 1px solid $border-color;
-  cursor: pointer;
-}
-
-.platform-fold-title {
-  font-size: 12px;
-  color: $text-secondary;
-}
-
-.platform-fold-arrow {
-  font-size: 12px;
-  color: #1A5336;
-}
-
-.platform-byok-body {
-  margin-top: 14px;
 }
 
 /* 数据统计 */

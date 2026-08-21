@@ -96,7 +96,13 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
     闸门挪到 `handleSubmit`（见下方地雷 15：向导里的每一条「下一步」都必须能在向导里做完）。
     向导刻意不预选任何供应商，见下方地雷 14。
 - 供应商自 2026-08 收敛为**三档**：`AWD_CLOUD`（平台通道）/ `OPENROUTER`（自备 Key）/ `OLLAMA`
-  （本地，离线实验档，只支持 ASK）。`GEMINI` 已下线（Google Key 三个字段与 `external.google.*` 键一并删除，
+  （本地，离线实验档，只支持 ASK）。**2026-08-21 起产品只有官方版（dev-board#98）：桌面端设置页
+  前端不露 BYOK——供应商单选、OpenRouter Key、Ollama 字段、平台服务的 21 个 BYOK 凭证表单全部从
+  `AdminPane.vue` 删掉，`form` 不再回传 `external` / `ollama*`（`toSettingsUpdates` 跳过 null，
+  存量 key 不被清空）；后端三档枚举、设置键、`ExternalProviderBackfill` 等分支一律保留。
+  老用户库里 `ai.activeProvider` 仍是 OLLAMA/OPENROUTER 时，AI 面板顶部给「当前仍在使用旧的
+  供应商设置」+「切换到官方通道」一键切回（走既有保存路径，跨境同意闸照旧把关）。本地部署版
+  另开发，不在主线。下面提到「admin 页的 aiProviderOptions」之处都是这次之前的形态。**`GEMINI` 已下线（Google Key 三个字段与 `external.google.*` 键一并删除，
   Gemini 系列模型经 OpenRouter 的 `google/*` 仍可用）。两个入口的取值合法性由
   `AdminConfigController.toSettingsUpdates` 统一校验（非三档枚举直接 400），
   存量 DB 里的 `ai.activeProvider=GEMINI` 由 `ChatModelFactory` 的启动期迁移改写成 `OLLAMA`。
@@ -704,9 +710,9 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
   后端多出的服务以 key 原样显示，不静默漏掉。`LOCAL_TIER_READY.asr=false` 是**本地 ASR 未随包
   发出**的唯一开关，P3 落地时连同「切换时就地探一次 + 下载模型」一起翻牌。
 - `frontend/src/locales/{zh-CN,en-US}/platform.js` — 新命名空间，向导与 admin 面板共用。
-- `frontend/src/pages/admin/admin.vue` 的 `platform` 面板 — 七行档位 + 每行的
-  「使用自己的 Key（高级）」折叠区（**21 个 BYOK 字段从「系统配置」搬到了这里**，
-  `config` 面板只剩 OpenRouter 那两个）。深链 `?nav=platform&service=<key>` 就地展开某一项。
+- `frontend/src/components/admin/AdminPane.vue` 的 `platform` 面板 — 七行档位（platform / local 两档）。
+  **2026-08-21 起前端不露 BYOK**：「使用自己的 Key（高级）」折叠区与 21 个凭证字段已删，
+  生效值为 byok 时只在下拉里如实显示。深链 `?nav=platform&service=<key>` 只落到面板本身。
 - `frontend/src/pages/wizard/wizard.vue` 步骤 2 — 从三组共 9 个输入框换成「平台服务总览 +
   就地连账户」，默认展开，**不拦提交**（向导只拦 AI 供应商那一项）。
 - `frontend/src/components/MeetingRecordingPanel.vue` — 录音开始**之前**显示档位与就绪状态，
