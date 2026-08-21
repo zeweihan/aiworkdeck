@@ -26,8 +26,12 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * 导入硬顶（dev-board#107 单元 F1）：MAX_IMPORT_ENTRIES 从 3000 提到 30000，
- * 超出仍要显式截断并报出 truncatedCount，不许静默丢文件。
+ * 导入硬顶（dev-board#107 单元 F1）：生产上限 DEFAULT_MAX_IMPORT_ENTRIES=30000（提升自
+ * 3000），超出仍要显式截断并报出 truncatedCount，不许静默丢文件。
+ *
+ * 上限本身用 setMaxImportEntriesForTest 覆盖成 50 再测：真去建 30001/3001 个文件曾经
+ * 跑出几十分钟，不能进 CI（复核意见）。行为验证等价——importFolder 里判的是
+ * "stats.imported >= maxImportEntries"，跟这个数字具体是 30000 还是 50 无关。
  */
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
@@ -40,6 +44,8 @@ import static org.mockito.Mockito.when;
         "spring.jpa.hibernate.ddl-auto=create-drop"
 })
 class LocalProjectServiceImportCapTest {
+
+    private static final int TEST_CAP = 50;
 
     @Autowired private ProjectRepository projectRepository;
     @Autowired private ProjectMemberRepository projectMemberRepository;
@@ -74,38 +80,38 @@ class LocalProjectServiceImportCapTest {
                 mock(org.springframework.context.ApplicationEventPublisher.class),
                 mock(com.checkba.service.telemetry.TelemetryService.class),
                 transactionManager);
+        svc.setMaxImportEntriesForTest(TEST_CAP);
     }
 
     @Test
-    void over30000EntriesImportsCapAndReportsTruncatedCount(@TempDir Path folder) throws Exception {
-        int total = LocalProjectService.MAX_IMPORT_ENTRIES + 1; // 30001
+    void overCapEntriesImportsCapAndReportsTruncatedCount(@TempDir Path folder) throws Exception {
+        int total = TEST_CAP + 1; // 51
         for (int i = 0; i < total; i++) {
             Files.createFile(folder.resolve("f" + i + ".txt"));
         }
 
         LocalProjectService.OpenLocalResult r = svc.openLocalFolder(folder.toString(), false, null, null, 1L);
 
-        assertTrue(r.truncated(), "超过 30000 项必须报出截断");
-        assertEquals(LocalProjectService.MAX_IMPORT_ENTRIES, r.importedCount(),
-                "扫描/入库条目数必须封顶在 MAX_IMPORT_ENTRIES");
+        assertTrue(r.truncated(), "超过上限必须报出截断");
+        assertEquals(1, r.truncatedCount(), "51 项超出上限 50，未纳入的应正好是 1 项");
+        assertEquals(TEST_CAP, r.importedCount(), "扫描/入库条目数必须封顶在上限");
         List<ProjectFile> rows = projectFileRepository.findByProjectId(r.project().getId());
-        assertEquals(LocalProjectService.MAX_IMPORT_ENTRIES, rows.size(),
-                "入库行数必须封顶在 30000，多出的文件不许静默进库");
+        assertEquals(TEST_CAP, rows.size(), "入库行数必须封顶，多出的文件不许静默进库");
     }
 
     @Test
-    void under30000EntriesAllImportedNoTruncation(@TempDir Path folder) throws Exception {
-        int total = 3001; // 超过旧上限 3000，验证新上限确实生效
+    void underCapEntriesAllImportedNoTruncation(@TempDir Path folder) throws Exception {
+        int total = 30; // 明显小于上限 50
         for (int i = 0; i < total; i++) {
             Files.createFile(folder.resolve("f" + i + ".txt"));
         }
 
         LocalProjectService.OpenLocalResult r = svc.openLocalFolder(folder.toString(), false, null, null, 1L);
 
-        assertFalse(r.truncated(), "3001 项不到新上限 30000，不该截断");
+        assertFalse(r.truncated(), "30 项不到上限 50，不该截断");
         assertEquals(0, r.truncatedCount());
         assertEquals(total, r.importedCount());
         List<ProjectFile> rows = projectFileRepository.findByProjectId(r.project().getId());
-        assertEquals(total, rows.size(), "3001 项应全部入库");
+        assertEquals(total, rows.size(), "30 项应全部入库");
     }
 }

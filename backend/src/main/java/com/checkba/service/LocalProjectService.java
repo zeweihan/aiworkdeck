@@ -36,9 +36,17 @@ public class LocalProjectService {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(LocalProjectService.class);
 
-    /** 扫描上限：防止误选超大目录（如整个用户主目录）把数据库灌爆。 */
-    static final int MAX_IMPORT_ENTRIES = 30000;
+    /** 扫描上限：防止误选超大目录（如整个用户主目录）把数据库灌爆。生产默认 30000，
+     * 单元测试可用 setMaxImportEntriesForTest 覆盖成一个小值——不然为了触发截断
+     * 就得真的建几万个文件，几十分钟、占磁盘，不能进 CI。 */
+    static final int DEFAULT_MAX_IMPORT_ENTRIES = 30000;
+    private int maxImportEntries = DEFAULT_MAX_IMPORT_ENTRIES;
     static final int MAX_IMPORT_DEPTH = 20;
+
+    /** 仅供测试覆盖导入上限（包内可见）。生产路径永远用 DEFAULT_MAX_IMPORT_ENTRIES。 */
+    void setMaxImportEntriesForTest(int maxImportEntries) {
+        this.maxImportEntries = maxImportEntries;
+    }
 
     private final ProjectRepository projectRepository;
     private final ProjectMemberRepository projectMemberRepository;
@@ -195,7 +203,7 @@ public class LocalProjectService {
             // reconcileProject 从不读它——超出 MAX_IMPORT_ENTRIES 上限的文件永远静默
             // 不进文件树，无日志无 API 信号。这里补上，与 openLocalFolder 的日志对齐。
             log.warn("对账触发导入上限截断: project={}, root={}, 上限={}, truncatedCount={}",
-                    projectId, root, MAX_IMPORT_ENTRIES, stats.truncatedCount);
+                    projectId, root, maxImportEntries, stats.truncatedCount);
         }
 
         // 删除同步：行在库、物理不存在 → 软删除（文件按 filePath 解析，文件夹按父链拼相对路径）
@@ -350,7 +358,7 @@ public class LocalProjectService {
                 public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
                     if (dir.equals(root)) return FileVisitResult.CONTINUE;
                     if (dir.getFileName().toString().startsWith(".")) return FileVisitResult.SKIP_SUBTREE;
-                    if (stats.imported >= MAX_IMPORT_ENTRIES) {
+                    if (stats.imported >= maxImportEntries) {
                         // 命中上限后不再下钻子树（避免为了精确计数而扫穿一整棵误选的超大目录），
                         // 只把这个目录条目本身计入 truncatedCount——「至少 N 项」而非精确到子树内的每一项。
                         stats.truncated = true;
@@ -400,7 +408,7 @@ public class LocalProjectService {
                         return FileVisitResult.CONTINUE;
                     }
                     if (!attrs.isRegularFile()) return FileVisitResult.CONTINUE;
-                    if (stats.imported >= MAX_IMPORT_ENTRIES) {
+                    if (stats.imported >= maxImportEntries) {
                         // 不再 TERMINATE 掉整个 walk：那样连"还有多少项没纳入"都数不出来。
                         // 继续遍历同级/回溯到上级目录的其余兄弟节点计数，但目录分支已经在
                         // preVisitDirectory 里 SKIP_SUBTREE，不会再下钻——总耗时仍然有界。
