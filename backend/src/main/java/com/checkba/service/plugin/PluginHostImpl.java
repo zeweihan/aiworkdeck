@@ -195,14 +195,18 @@ class PluginHostImpl implements PluginHost {
         if (Boolean.TRUE.equals(pf.getIsFolder()) || !StringUtils.hasText(pf.getFilePath())) {
             throw new IllegalArgumentException(LangText.of("不是可读文件: ", "Not a readable file: ") + pf.getName());
         }
+        String e = ext(pf.getName());
+        Path tmp = null;
         try {
-            Path tmp = java.nio.file.Files.createTempFile("plugin-host-", "." + ext(pf.getName()));
+            tmp = java.nio.file.Files.createTempFile("plugin-host-", e.isEmpty() ? "" : "." + e);
             try (InputStream in = f.storageServiceFactory.getStorageService().load(pf.getFilePath()).getInputStream()) {
                 java.nio.file.Files.copy(in, tmp, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }
             return tmp;
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
+        } catch (IOException | RuntimeException ex) {
+            // 半截临时文件别留在磁盘上
+            deleteQuietly(tmp);
+            throw ex instanceof IOException io ? new UncheckedIOException(io) : (RuntimeException) ex;
         }
     }
 
