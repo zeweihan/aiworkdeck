@@ -301,6 +301,8 @@ public class SensitiveService {
 
                 Matcher matcher = type.getPattern().matcher(text);
                 while (matcher.find()) {
+                    // 校验位过不去的（18 位立案号之类）不是这类信息，涂黑它就是把正文改坏
+                    if (!type.isPlausible(matcher.group())) continue;
                     addRedactionArea(type, matcher.start(), matcher.end());
                 }
             }
@@ -374,7 +376,7 @@ public class SensitiveService {
         }
     }
 
-    private String replaceSensitiveData(String content, String strategyCode) {
+    String replaceSensitiveData(String content, String strategyCode) {
         if (StrUtil.isEmpty(content)) return content;
         
         SensitiveType type = SensitiveType.fromCode(strategyCode);
@@ -387,7 +389,8 @@ public class SensitiveService {
         StringBuffer sb = new StringBuffer();
         while (matcher.find()) {
             String original = matcher.group();
-            String masked = type.mask(original);
+            // 同上：校验位过不去的原样留下，法律文书必须逐字可引
+            String masked = type.isPlausible(original) ? type.mask(original) : original;
             matcher.appendReplacement(sb, Matcher.quoteReplacement(masked));
         }
         matcher.appendTail(sb);
