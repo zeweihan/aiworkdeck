@@ -69,9 +69,7 @@ export default {
   // ---- 花费闸门 ----
   budgetTitle: '花费提醒',
   budgetSubtitle: '两个阈值都填 0 表示不启用。这里管的是「什么时候问你一句」，不是硬性封顶。',
-  budgetTaskLimitLabel: '单次任务花费上限',
   // 刻意不做「每次调用前弹确认」——与「零配置、少打扰」的产品目标冲突。
-  budgetTaskLimitNote: '一次任务累计花到这个数时问一句「是否继续」，确认后照常往下跑。不是每次调用都问。',
   budgetLowBalanceLabel: '余额低于此值时提醒',
   budgetLowBalanceNote: '余额掉到这个数以下时在这块面板上提醒，免得转写跑到一半才发现不够。',
   budgetUnit: 'Credits',
