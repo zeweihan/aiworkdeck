@@ -298,7 +298,12 @@ export default {
                   // Note: text/plain might be just an index if from FileTree, so we need validation
                   if (rawData.startsWith('{')) {
                       const data = JSON.parse(rawData)
-                      if (data.fileId) {
+                      // 文件夹没有守卫会被当成普通文件收进暂存区：FileTree.vue 的拖拽对
+                      // 文件/文件夹一视同仁（handleDragStart 里 fileType 写的是
+                      // item.isFolder ? 'folder' : item.fileType），暂存区消费端是给 AI
+                      // 读内容用的，读一个文件夹只会拿到空/报错，且这里的容错只打日志，
+                      // 用户看不出区别——直接在源头拒绝。
+                      if (data.fileId && data.fileType !== 'folder') {
                           files.push({
                               id: data.fileId,
                               name: data.name,
@@ -316,7 +321,8 @@ export default {
       // 2. Fallback: Check global variable (for environments where dataTransfer is restricted/cleared)
       if (files.length === 0 && typeof document !== 'undefined' && document.__checkbaDraggedFile) {
           const data = document.__checkbaDraggedFile
-          if (data.fileId) {
+          // 同上：这条全局兜底走的是同一份 {fileId, fileType} 形状，文件夹要挡在这里
+          if (data.fileId && data.fileType !== 'folder') {
              files.push({
                 id: data.fileId,
                 name: data.name,
@@ -329,7 +335,19 @@ export default {
       }
 
       if (files.length > 0) {
-          this.$emit('drop', files) 
+          this.$emit('drop', files)
+          return
+      }
+
+      // 3. 真实的 OS 文件拖拽（Finder/Explorer/桌面）：面板对任意拖拽都会亮起
+      //    "松手暂存文件" 遮罩（见 onDragEnter/onDragOver），但上面两步只认得
+      //    "项目里已有文件"的内部格式（应用内 JSON / 全局兜底变量）。拖一个真实
+      //    磁盘文件进来时两步都取不出数据，以前到这里就直接什么都不做——遮罩
+      //    消失、用户以为暂存了，其实什么也没发生。dataTransfer.files 是浏览器
+      //    给的原生 File 列表，交给宿主走真正的上传通道。
+      const osFiles = e && e.dataTransfer && e.dataTransfer.files
+      if (osFiles && osFiles.length > 0) {
+          this.$emit('drop-files', Array.from(osFiles))
       }
     },
     

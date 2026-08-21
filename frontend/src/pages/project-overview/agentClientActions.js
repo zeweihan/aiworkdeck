@@ -2,6 +2,19 @@
 // doc 流式写入缓冲、编辑器打开/重载/命令执行与结果回传。
 // 经展开进组件 methods（纯搬移，Phase 1 外置），`this` 即 project-overview 页面实例。
 import { sendEditorResult, getFileDetail } from '@/services/api.js'
+import { createSerialQueue } from '@/utils/asyncSerialize.js'
+
+// CRITICAL（审计 dev-board#74）：流式缓冲与它究竟该写进哪个文档必须绑在一起才能判断
+// "现在还能不能落字"。syncLibreExecutor（librePool.js）会把 libreOfficeExecutor 重指到
+// "当前活动文件"——生成期间用户切一次 tab，flush 就会把 AI 写的内容悄悄插进一份无关文档。
+// targetFileId 是流式会话在 doc_open_file_sync 时绑定的文件；currentFileId 是 executor
+// 此刻实际服务的文件（resolveLibreExecutorFileId 反查）。两者对不上就不许写。
+// targetFileId 为空（理论上不会发生，流式协议恒先 open_sync 才有 stream_data）时放行，
+// 与改动前的行为保持一致，不无谓收紧。
+export function shouldFlushDocStream(targetFileId, currentFileId) {
+    if (targetFileId == null) return true
+    return currentFileId != null && String(currentFileId) === String(targetFileId)
+}
 
 export const agentClientActionMethods = {
     handleClientAction(action) {
@@ -71,6 +84,15 @@ export const agentClientActionMethods = {
     async flushDocStreamBuffer() {
         if (!this._docStreamBuffer || this._docStreamBusy) return
         if (!this.libreOfficeActive || !this.libreOfficeExecutor) return
+        // CRITICAL：落字前核对这份 executor 现在服务的是不是流式会话自己打开的那个
+        // 文件——不一致说明用户切走了/换文档了，缓冲原样保留（不丢数据，等切回来
+        // 或被下一次 open_sync 的 reset 清掉），如实报告，绝不写进错的文档。
+        const currentFileId = this.resolveLibreExecutorFileId(this.libreOfficeExecutor)
+        if (!shouldFlushDocStream(this._docStreamTargetFileId, currentFileId)) {
+            console.error('[ProjectOverview] doc stream target mismatch, refusing to write into unrelated document:',
+                { targetFileId: this._docStreamTargetFileId, currentFileId })
+            return
+        }
         this._docStreamBusy = true
         const text = this._docStreamBuffer
         this._docStreamBuffer = ''
@@ -114,8 +136,20 @@ export const agentClientActionMethods = {
     /**
      * 处理 AI Agent 的同步打开文件请求 (用于流式写入)
      * 打开文件，等待内置 LibreOffice 编辑器就绪后返回结果给后端（#79）
+     *
+     * 只是一层重入闸：真正的活儿在 _handleEditorOpenFileSyncImpl 里，这里把每次调用
+     * 接进 _docOpenSyncQueue 串行化（同款做法见 DrawioEditor.persist 的 _persistQueue）。
+     * handleClientAction 是同步分发、不认在飞标记——后端重试丢失 ack 的请求，或新一轮
+     * 生成在上一轮最长 90s 的 editor-ready 等待还没完时到达，都会让两次调用并发执行；
+     * 不串行的话，后到的那次第 5 步"重置流式缓冲"会在先到的那次仍在写的时候把它的
+     * 缓冲区冲掉/丢弃，静默丢字且后端毫无感知。串行化后两次调用绝不交叉，各自完整
+     * 跑完（含各自的 sendEditorResult ack）才轮到下一个。
      */
     async handleEditorOpenFileSync(action) {
+        if (!this._docOpenSyncQueue) this._docOpenSyncQueue = createSerialQueue()
+        return this._docOpenSyncQueue(() => this._handleEditorOpenFileSyncImpl(action))
+    },
+    async _handleEditorOpenFileSyncImpl(action) {
         console.log('[ProjectOverview] Open File Sync:', action)
         const { params, requestId, conversationId } = action
 
@@ -165,6 +199,9 @@ export const agentClientActionMethods = {
             this._docStreamBuffer = ''
             if (this._docStreamTimer) { clearTimeout(this._docStreamTimer); this._docStreamTimer = null }
             this._docStreamBusy = false
+            // 这条流式会话正式绑定到这份文件——flushDocStreamBuffer 落字前必须核对
+            // executor 此刻服务的还是不是它，见文件头 shouldFlushDocStream。
+            this._docStreamTargetFileId = file.id
             // worker 端 markdown 状态机也要硬清（上一条流若异常中断会留下半张表/半行）
             try { await this.libreOfficeExecutor.executeCommand('stream_flush', { discard: true }) } catch (e) {}
             console.log('[ProjectOverview] Stream state reset, ready for streaming')

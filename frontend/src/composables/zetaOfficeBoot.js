@@ -80,7 +80,22 @@ export function bootZetaOffice(options = {}) {
       '(spike: node serve.mjs; product: Electron onHeadersReceived).'))
   }
 
-  return new Promise(async (resolve, reject) => {
+  // HIGH（审计 dev-board#74）：the executor below used to be `async (resolve, reject) => {...}`
+  // passed directly to `new Promise(...)`. An async function handed to the Promise
+  // constructor only gets its SYNCHRONOUS PREFIX covered by the constructor's implicit
+  // try/catch — once it suspends at the first `await` (a few lines down, fetching CJK
+  // fonts), any later throw becomes an unhandled rejection of the executor's own
+  // DISCARDED return promise, never a call to `reject`. Same problem for `s.onload`
+  // below: it's a plain (non-async) DOM callback, so a synchronous throw inside it
+  // (e.g. `Module.uno_main` missing) never reaches `reject` either. Either failure mode
+  // left this promise (and the caller's loading overlay) hung forever with no error
+  // surfaced. Fix: keep the Promise executor itself synchronous and non-throwing (it
+  // only wires up an inner async IIFE + a plain onload handler), and explicitly funnel
+  // every exception — from any point in the async body, or from the onload callback —
+  // into `reject`.
+  return new Promise((resolve, reject) => {
+    const rejectWithError = (e) => reject(e instanceof Error ? e : new Error(String(e)))
+    ;(async () => {
     // Files to write into the LOWA MEMFS before main() (CJK font). Each
     // { path:'/instdir/...', bytes:Uint8Array }. Fetched here (async) because
     // preRun runs synchronously; written there because /instdir merge-mounts only
@@ -277,13 +292,22 @@ export function bootZetaOffice(options = {}) {
     // only after soffice.js has run — so wire it in onload. (Verified against the
     // allotropia/zetajs web-office example.)
     s.onload = function () {
-      log('soffice.js loaded — initializing office thread…')
-      Module.uno_main.then(function (port) {
-        port.onmessage = onMessage
-        log('thread port ready')
-        resolve({ port, dispose })
-      }, function (err) { dispose(); reject(new Error('uno_main rejected: ' + err)) })
+      // s.onload is a plain DOM callback (not async): a synchronous throw here
+      // (e.g. Module.uno_main being missing/undefined) would otherwise vanish —
+      // nothing upstream catches it, so the boot promise would hang forever.
+      try {
+        log('soffice.js loaded — initializing office thread…')
+        Module.uno_main.then(function (port) {
+          port.onmessage = onMessage
+          log('thread port ready')
+          resolve({ port, dispose })
+        }, function (err) { dispose(); reject(new Error('uno_main rejected: ' + err)) })
+      } catch (e) {
+        dispose()
+        rejectWithError(e)
+      }
     }
     document.body.appendChild(s)
+    })().catch(rejectWithError)
   })
 }

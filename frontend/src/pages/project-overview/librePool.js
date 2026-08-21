@@ -23,6 +23,18 @@ export const librePoolMethods = {
     getLibreExecutorMap() {
         return this._libreExecMap || (this._libreExecMap = {})
     },
+    // 反查某个 executor 此刻绑定的 fileId（按对象恒等，同 onLibreClose 的查法）。
+    // syncLibreExecutor 会把 libreOfficeExecutor 重指到"当前活动文件"——AI 流式
+    // 写入落字前必须核对这份 executor 现在到底服务哪个文件，见 agentClientActions.js
+    // 的 flushDocStreamBuffer。找不到（executor 已被换掉/未注册）返回 null。
+    resolveLibreExecutorFileId(executor) {
+        if (!executor) return null
+        const map = this.getLibreExecutorMap()
+        for (const k of Object.keys(map)) {
+            if (map[k] === executor) return k.slice(k.indexOf(':') + 1)
+        }
+        return null
+    },
     setLibreRef(pane, fileId, el) {
         const refs = this._libreRefs || (this._libreRefs = {})
         const key = pane + ':' + fileId

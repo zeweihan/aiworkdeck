@@ -107,7 +107,16 @@ export default {
         : { left: r.left + 'px', top: (r.bottom + 4) + 'px', minWidth: r.width + 'px' }
     },
     attachDismiss() {
-      this._dismiss = () => this.close()
+      this._dismiss = (e) => {
+        // 下拉菜单自己超过 280px 就会出现内部滚动条（见组件头注释）。滚动事件不
+        // 冒泡，但这里用的是捕获段（第三参 true），会连菜单自己内部的滚动也一起
+        // 收到——不加这道判断，用户在菜单里往下滚一下，菜单立刻把自己关掉，列表
+        // 长一点根本没法用。只有目标不在菜单内部（真正可能让触发器坐标失效的
+        // 外部容器滚动）时才按原逻辑关闭。
+        const menuEl = this.$el && this.$el.querySelector('.awd-select-menu')
+        if (menuEl && e && e.target && menuEl.contains(e.target)) return
+        this.close()
+      }
       // 捕获段：调用点大多在 scroll-view 里，滚动事件不冒泡到 window
       window.addEventListener('scroll', this._dismiss, true)
       window.addEventListener('resize', this._dismiss)

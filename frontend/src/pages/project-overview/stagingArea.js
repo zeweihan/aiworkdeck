@@ -154,6 +154,38 @@ export const stagingAreaMethods = {
         uni.showToast({ title: this.$t('workbenchOps.addToStagingFailed'), icon: 'none' })
       }
     },
+    // 真实 OS 文件拖拽（Finder/Explorer/桌面）落进暂存区（FileStagingArea.onDrop 的
+    // 第 3 分支：dataTransfer.files 是原生 File 列表，而不是"项目里已有文件"的引用）。
+    // 与 onStagingDrop（移动已有文件）不同——这些文件磁盘上有、项目里没有，得先真
+    // 传上去。复用 FileTree 的上传队列（$refs.fileTree.confirmUpload 读的就是
+    // selectedFiles/selectedUploadParent，上传对话框本身也只是把这两个字段填好再
+    // 调它）而不是另起一套上传逻辑——分片续传/并发控制那一整套已经在那里踩过坑。
+    async onStagingDropFiles(fileList) {
+      if (!fileList || fileList.length === 0) return
+      if (!this.stagingFolderId) await this.ensureStagingFolder()
+      if (!this.stagingFolderId) {
+        uni.showToast({ title: this.$t('workbenchOps.addToStagingFailed'), icon: 'none' })
+        return
+      }
+      const fileTree = this.$refs.fileTree
+      if (!fileTree || typeof fileTree.confirmUpload !== 'function') {
+        console.warn('[ProjectOverview] onStagingDropFiles: fileTree ref not ready')
+        return
+      }
+      fileTree.selectedFiles = Array.from(fileList)
+      fileTree.selectedUploadParent = this.stagingFolderId
+      fileTree.isFolderUpload = false
+      this.stagingPinned = true
+      await fileTree.confirmUpload()
+      uni.showToast({ title: this.$t('workbenchOps.addedToStaging'), icon: 'none' })
+      // confirmUpload 只是把上传队列发出去，不等它落盘完成（进度另有 FileTree 自己的
+      // 批量上传状态条）。这里做的是尽力而为的补拉，不是完成通知——暂存列表另有
+      // 独立状态（stagingFiles），FileTree 完成一批后只会刷新它自己的树，不知道
+      // 目标是暂存区。真正做到"传完立即精确出现"需要给 confirmUpload 加完成回调，
+      // 超出这条缺陷的范围；先用两次延时补拉覆盖常见的小文件场景。
+      this.loadStagingFiles()
+      setTimeout(() => this.loadStagingFiles(), 2500)
+    },
     handleStagingClear() {
        // Optional: Move all back to root? Or just clear list (which creates orphans in .stagezone)?
        // User didn't specify, but "Clear" usually means empty the list.
