@@ -1139,11 +1139,14 @@ export default {
     watch(() => bubbles.value.length, () => {
        scrollToBottom()
     })
-    // Deep watch active bubble changes (e.g. streaming content)
-    watch(bubbles, () => {
-       // Optional: throttle scroll?
-       // For now simple trigger
-    }, { deep: true })
+    // 曾经有一个 `watch(bubbles, () => {}, { deep: true })`：回调体是空的（注释也
+    // 写着"for now simple trigger"），从来没做任何事。deep watch 每次触发都要把
+    // bubbles 整棵响应式对象图（含全部消息/工具输出/artifact）重新遍历一遍来
+    // 重建依赖追踪，而流式回答的每一个 token 都会命中它（currentAssistantBubble
+    // 的 content 在 SSE 每个 chunk 都会变）——对话越长这个空转的代价越大，长
+    // 工具调用/长回答期间会明显卡顿。上面那条浅层 watch（只看 length）已经覆盖
+    // "新气泡出现要滚到底"，这条 deep watch 删掉不改变任何行为，纯粹省掉这份
+    // 空转开销。
 
     const scrollToBottom = () => {
        nextTick(() => {
@@ -1279,6 +1282,13 @@ export default {
     }
 
     const startNewChat = () => {
+      // 流式进行中点"新建对话"：以前只清前端状态（setConversationId(null) 触发的
+      // resetSSE 只是断本地连接），从不通知后端——编排器在服务端继续跑这一轮
+      // （模型调用、可能有副作用的工具调用），用户却完全看不到任何迹象，白烧
+      // 资源/额度。复用 handleAbort 同一条 abort()（内部先 POST /api/agent/cancel
+      // 再断连接）；不 await 它——新建对话本身不该被这次网络请求拖住，abort()
+      // 对已经清空的气泡/会话状态做的收尾判断都是空值安全的。
+      if (isStreaming.value) abort()
       setConversationId(null)  // This now triggers resetSSE internally
       clearBubbles()           // Use composable method
       selectedSkillIds.value = [] // 手动选的技能属于这一段对话，新会话从干净状态开始

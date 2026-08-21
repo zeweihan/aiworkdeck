@@ -935,7 +935,12 @@ export default {
       dragCurrentY: 0,
       isDragging: false,
       dragOverIndex: -1, // H5拖拽悬停索引
-      draggedIndex: -1, // H5拖拽源索引
+      draggedIndex: -1, // H5拖拽源索引（仅用于"是不是原地放下"的快速判断，实际
+                         // 移动谁必须靠下面的 draggedFileId 重新按 id 查，见 handleDrop）
+      draggedFileId: null, // H5拖拽源文件 id：dragstart 时记下，drop 时按 id（而不是
+                            // 下标）在（可能已经因为后台重载而重排过的）displayFiles
+                            // 里重新定位，防止把并发上传触发的 loadFiles() 期间
+                            // 挪了位置的另一个文件当成拖拽源移走
       // 树形结构相关
       allFiles: [], // 完整文件树
       expandedFolders: new Set(), // 展开的文件夹ID集合
@@ -2430,6 +2435,7 @@ export default {
     handleDragStart(e, item, index) {
       console.log('拖拽开始:', index)
       this.draggedIndex = index
+      this.draggedFileId = (item && item.id != null) ? item.id : null
       uni.$emit('file-drag-start')
       // 向外部暴露“拖拽文件开始”（用于 WPS 文档建立关联）
       try {
@@ -2529,12 +2535,26 @@ export default {
           if (this.draggedIndex === index) {
             this.dragOverIndex = -1
             this.draggedIndex = -1
+            this.draggedFileId = null
             return
           }
 
           try {
-            // BUGFIX: Use displayFiles instead of files
-            const draggedItem = this.displayFiles[this.draggedIndex]
+            // BUGFIX（原用 displayFiles[this.draggedIndex]，仍会撞上同一类竞态）：
+            // dragstart 与 drop 之间可能有后台重载（比如并发批量上传完成触发的
+            // loadFiles()）把 displayFiles 重新排序/过滤过，draggedIndex 这个下标
+            // 到 drop 时可能已经指向另一个文件——按 dragstart 时记下的 id 重新在
+            // 当前 displayFiles 里查，查不到说明拖拽源已经不在列表里（被移走/
+            // 删除/过滤掉了），放弃这次移动而不是把错的文件挪过去。
+            const draggedItem = this.displayFiles.find(f => f.id === this.draggedFileId)
+            if (!draggedItem) {
+              console.warn('拖拽源文件已不在列表中，取消移动')
+              uni.showToast({ title: this.$t('fileTree.moveFailed'), icon: 'none' })
+              this.dragOverIndex = -1
+              this.draggedIndex = -1
+              this.draggedFileId = null
+              return
+            }
 
             // Prevent self-parenting or no-op moves if needed check
             if (draggedItem.id === targetParentId) return
@@ -2599,9 +2619,11 @@ export default {
 
       this.dragOverIndex = -1
       this.draggedIndex = -1
+      this.draggedFileId = null
     },
     handleDragEnd() {
       this.draggedIndex = -1
+      this.draggedFileId = null
       this.dragOverIndex = -1
       this.$emit('file-drag-end')
       uni.$emit('file-drag-end')
@@ -2625,13 +2647,23 @@ export default {
       // Case 1: Internal FileTree Drag
       if (this.draggedIndex !== -1) {
           try {
-            const draggedItem = this.displayFiles[this.draggedIndex]
+            // 同 handleDrop 的 BUGFIX：按 dragstart 时记下的 id 重新定位，不用可能
+            // 已经因后台重载而过期的下标。
+            const draggedItem = this.displayFiles.find(f => f.id === this.draggedFileId)
+            if (!draggedItem) {
+              console.warn('拖拽源文件已不在列表中，取消移动')
+              uni.showToast({ title: this.$t('fileTree.moveFailed'), icon: 'none' })
+              this.draggedIndex = -1
+              this.draggedFileId = null
+              return
+            }
 
             // If already in root (parentId is null or matches), we might still want to allow movement if subfolder -> root
             await moveFile(projectId, draggedItem.id, targetParentId, newSortOrder)
             await this.loadFiles()
             uni.showToast({ title: this.$t('fileTree.moveToRootSuccess'), icon: 'success' })
             this.draggedIndex = -1
+            this.draggedFileId = null
           } catch (error) {
             console.error('移动到根目录失败:', error)
             uni.showToast({ title: error.message || this.$t('fileTree.moveFailed'), icon: 'none' })
@@ -3281,7 +3313,13 @@ export default {
                            (parentId == null && this.parentId == null) ||
                            (String(parentId) === String(this.parentId))
 
-      const tempId = Date.now()
+      // 并发批量上传（CONCURRENCY=3）时，processNext() 在同一 tick 里背靠背调用
+      // 本方法：每次调用在真正 await createFile(...) 之前都是纯同步代码，三次
+      // Date.now() 落在同一毫秒里完全可能拿到一模一样的值。撞车的两行会共享同一
+      // 个 id——Vue :key 靠它做身份识别，进度/文件名会在两行之间串掉，且
+      // findIndex(f => f.id === tempId) 只命中第一条，另一条永远等不到真实记录
+      // 替换，卡死在"正在上传"。叠加一个自增序号，保证同一毫秒内也互不相同。
+      const tempId = Date.now() * 1000 + (this._uploadTempIdSeq = ((this._uploadTempIdSeq || 0) + 1) % 1000)
       // Transfer file object from pending cache to new ID cache
       if (pendingTempId && this.uploadFileObjects[pendingTempId]) {
            this.uploadFileObjects[tempId] = this.uploadFileObjects[pendingTempId]

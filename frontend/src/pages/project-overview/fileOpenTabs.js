@@ -40,10 +40,16 @@ export const fileOpenTabsMethods = {
         if (target) {
           this.openFile(target)
         } else {
+          // 新建项目流程带 openFileId 直接落地工作台，用户期待那份刚建好的文件
+          // 已经打开——找不到时以前只 console.warn，界面上什么反应都没有，用户
+          // 分不清"文件确实不存在"还是"后端还没写完/网络抖了一下"。同名方法
+          // handleOpenFileFromChat 找不到文件时已经会弹这句提示，这里补齐同款。
           console.warn('[project-overview] openPendingLocalFile: file not found', fileId)
+          uni.showToast({ title: this.$t('workbenchOps.fileNotFound'), icon: 'none' })
         }
       } catch (e) {
         console.warn('[project-overview] openPendingLocalFile failed', e)
+        uni.showToast({ title: this.$t('workbenchOps.fetchFileListFailed'), icon: 'none' })
       }
     },
 

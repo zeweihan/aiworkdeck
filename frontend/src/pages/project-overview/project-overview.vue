@@ -699,6 +699,7 @@
             :files="stagingFiles"
             :usage="stagingUsage"
             @drop="onStagingDrop"
+            @drop-files="onStagingDropFiles"
             @clear="handleStagingClear"
             @remove="handleStagingRemove"
             @open="handleStagingOpen"

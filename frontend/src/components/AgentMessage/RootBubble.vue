@@ -195,13 +195,19 @@ const processGroups = computed(() => {
 })
 
 // 流式进行中默认展开最新一组；结束后（含历史消息）全部收起。用户手动开合后以用户为准
+// 展开状态按分组下标 gi 记，不能按 key（= stepIndex 派生的 's0'/'s1'/...）记：模型
+// 回退重做某一步时（比如 step 1 失败又重跑一次 step 0）processGroups 会产生两个
+// 非相邻但 stepIndex 相同、因此 key 相同的分组，按 key 记会让它们共用同一个槽位，
+// 点开/收起其中一个连带把另一个也翻了状态。gi 是各分组在当前渲染里的下标，
+// processes 只增不减（同一轮内不会重排/截断），已经渲染出来的分组的 gi 不会变，
+// 天然互不冲突。
 const groupToggles = ref({})
 const isGroupExpanded = (key, gi) => {
-  if (key in groupToggles.value) return groupToggles.value[key]
+  if (gi in groupToggles.value) return groupToggles.value[gi]
   return !!props.bubble.isStreaming && gi === processGroups.value.length - 1
 }
 const toggleGroup = (key, gi) => {
-  groupToggles.value = { ...groupToggles.value, [key]: !isGroupExpanded(key, gi) }
+  groupToggles.value = { ...groupToggles.value, [gi]: !isGroupExpanded(key, gi) }
 }
 const isGroupDone = (g) => g.procs.every(p =>
   !(p.items || []).some(it => it.status === 'doing' || it.status === 'loading' || it.status === 'thinking')

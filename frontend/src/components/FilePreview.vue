@@ -222,6 +222,7 @@
 import { getFileDownloadUrl, getArchiveEntries, extractArchive } from '@/services/api.js'
 import { getAuthHeaders, getSessionId } from '@/utils/auth.js'
 import { ICONS } from '@/config/icons.js'
+import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
 
 // docx-preview 依赖 Chromium DOM，仅 H5/桌面构建启用；其它平台落 Office 占位分支
 // #ifdef H5
@@ -724,13 +725,22 @@ export default {
       this.archiveLoading = true
       this.archiveError = ''
       this.archiveEntries = []
+      // 竞态防护：与 loadMediaResource 同一类毛病——快速切换 zip/rar/7z 文件时，
+      // reloadPreview 会为新文件再调一次本方法，旧请求若后回来会用旧文件的条目
+      // 覆盖新文件已经显示的列表。用请求代次判定"这份响应是否还对得上最新一次
+      // 调用"；同时把 file 摘成局部变量，不在 await 之后再读 this.file（那时可能
+      // 已经换成别的文件了）。
+      const seq = (this._archiveReqSeq = (this._archiveReqSeq || 0) + 1)
+      const file = this.file
       try {
-        const res = await getArchiveEntries(this.file.projectId, this.file.id)
+        const res = await getArchiveEntries(file.projectId, file.id)
+        if (!shouldAcceptResponse(seq, this._archiveReqSeq)) return
         this.archiveEntries = (res && res.entries) || []
       } catch (e) {
+        if (!shouldAcceptResponse(seq, this._archiveReqSeq)) return
         this.archiveError = (e && e.message) || this.$t('files.archiveReadFailed')
       } finally {
-        this.archiveLoading = false
+        if (shouldAcceptResponse(seq, this._archiveReqSeq)) this.archiveLoading = false
       }
     },
     // 解压到压缩包所在目录下的新文件夹；成功后通知宿主刷新资源管理器

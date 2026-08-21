@@ -61,7 +61,42 @@ const isExpanded = ref(true)
 const liveSeconds = ref(0)
 let timerInterval = null
 
+// updateTime/stopTimer/startTimer 挪到 watch(...) 前面（原来在后面）：下面的
+// watch 加了 immediate:true 之后，回调会在 watch() 这条语句执行的当下就同步
+// 跑一次（Vue 的 immediate watcher 就是这个语义，不是排到下一轮再跑），如果
+// startTimer/stopTimer 仍按原来的顺序声明在 watch 之后，immediate 回调此刻还
+// 引用不到它们——会话在 <script setup> 的执行顺序里踩中 const 的暂时性死区，
+// 直接抛 ReferenceError: Cannot access 'stopTimer' before initialization，
+// 整个组件渲染失败（用真实 Vue 组件挂载复现过，不是理论推测）。纯挪动顺序，
+// 三个函数体一字未改。
+const updateTime = () => {
+    if (!props.startTime) {
+        liveSeconds.value = 0
+        return
+    }
+    const diff = Math.floor((Date.now() - props.startTime) / 1000)
+    liveSeconds.value = diff > 0 ? diff : 0
+}
+
+const stopTimer = () => {
+    if (timerInterval) clearInterval(timerInterval)
+    timerInterval = null
+}
+
+const startTimer = () => {
+    stopTimer()
+    // Initial calc
+    updateTime()
+    timerInterval = setInterval(updateTime, 1000)
+}
+
 // Auto-collapse when done
+// immediate:true 是必需的，不是可选优化：RootBubble.vue 把 ghost 变体渲染在
+// v-if/v-else 两个结构不同的分支里，isReady 一旦翻真就整体换分支——Vue 会卸载
+// 旧的 ThinkingCard、挂载全新一个实例，而不是复用同一个组件更新 prop。挂载那
+// 一刻如果 status 已经是 'done'（很常见：标题/正文往往比"思考结束"晚不了多久
+// 出现），没有 immediate 这个 watcher 一次都不会跑——isExpanded 停在默认的
+// true，ghost 卡永远摊开显示模型的原始思维链，而不是折成一行"Thought for Ns"。
 watch(() => props.status, (newVal) => {
   if (newVal === 'done') {
     isExpanded.value = false
@@ -70,7 +105,7 @@ watch(() => props.status, (newVal) => {
     isExpanded.value = true
     startTimer()
   }
-})
+}, { immediate: true })
 
 onMounted(() => {
     if (props.status === 'thinking') {
@@ -81,27 +116,6 @@ onMounted(() => {
 onUnmounted(() => {
     stopTimer()
 })
-
-const startTimer = () => {
-    stopTimer()
-    // Initial calc
-    updateTime()
-    timerInterval = setInterval(updateTime, 1000)
-}
-
-const stopTimer = () => {
-    if (timerInterval) clearInterval(timerInterval)
-    timerInterval = null
-}
-
-const updateTime = () => {
-    if (!props.startTime) {
-        liveSeconds.value = 0
-        return
-    }
-    const diff = Math.floor((Date.now() - props.startTime) / 1000)
-    liveSeconds.value = diff > 0 ? diff : 0
-}
 
 const displayDuration = computed(() => {
     // If actively thinking, show live timer
