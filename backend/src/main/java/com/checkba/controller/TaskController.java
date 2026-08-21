@@ -63,7 +63,7 @@ public class TaskController {
         Long userId = requireWrite(projectId, sessionId);
 
         Long fileId = toLong(body.get("fileId"));
-        String title = (String) body.get("title");
+        String title = toText(body.get("title"));
         LocalDate dueDate = toLocalDate(body.get("dueDate"));
         LocalTime dueTime = toLocalTime(body.get("dueTime"));
 
@@ -98,6 +98,18 @@ public class TaskController {
 
     private ResponseEntity<Map<String, Object>> ok(Map<String, Object> data) {
         return ResponseEntity.ok(Map.of("code", 0, "data", data));
+    }
+
+    /**
+     * 裸强转 {@code (String)} 传进来一个数字就抛 ClassCastException——那不是
+     * IllegalArgumentException，绕过 GlobalExceptionHandler 那条能给出人话的分支，
+     * 落到兜底处理器变成「服务器内部错误」，还给一条普通的参数校验失败打了 ERROR 堆栈。
+     * 调用方看不出真正的原因只是 title 类型不对。
+     */
+    private String toText(Object v) {
+        if (v == null) return null;
+        if (v instanceof String str) return str;
+        throw new IllegalArgumentException(LangText.of("标题必须是文本", "The title must be text"));
     }
 
     private Long toLong(Object v) {
