@@ -56,6 +56,26 @@ public class BrowserProxyController {
     @org.springframework.beans.factory.annotation.Value("${security.browser-proxy.e2e-allowed-hosts:}")
     private String e2eAllowedHosts;
 
+    /**
+     * 单次代理允许拉回的最大字节数。默认 50MB。
+     *
+     * <p>注入的点击拦截脚本把 iframe 里**所有**同标签页链接点击都改道这个端点，
+     * 其中包括普通的大文件下载链接。上游响应此前是 {@code ofByteArray()} 全量进堆，
+     * 没有任何体积闸——后端是所有用户共用的一个 JVM，一次几百 MB 的下载就能把堆顶起来。
+     */
+    @org.springframework.beans.factory.annotation.Value("${security.browser-proxy.max-bytes:52428800}")
+    private long maxBytes = 52428800L;
+
+    /**
+     * 一次代理请求（含全部重定向跳）的总时限，秒。
+     *
+     * <p>此前只有每跳 20 秒的单跳超时，5 跳串起来能让一个请求占住一条 Tomcat 工作线程
+     * 将近 150 秒。慢速目标站（或一串各自慢一点的重定向）几个并发就能把线程池吃干净，
+     * 整个后端跟着卡住——而调用方只是在网页面板里点了个链接。
+     */
+    @org.springframework.beans.factory.annotation.Value("${security.browser-proxy.deadline-seconds:30}")
+    private long deadlineSeconds = 30L;
+
     /** 主机是否在 e2e 例外名单里（精确、忽略大小写）。名单为空时恒为 false。 */
     private boolean isE2eAllowedHost(String host) {
         if (host == null || host.isBlank() || e2eAllowedHosts == null || e2eAllowedHosts.isBlank()) return false;
@@ -79,7 +99,8 @@ public class BrowserProxyController {
 
         try {
             URI uri = URI.create(u);
-            HttpResponse<byte[]> resp = null;
+            HttpResponse<java.io.InputStream> resp = null;
+            long deadlineAt = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(Math.max(1, deadlineSeconds));
             // 手动跟随重定向，每一跳都重新做 scheme 白名单 + SSRF 校验，避免自动跳转绕过 SsrfGuard
             for (int hop = 0; hop < 5; hop++) {
                 String scheme = uri.getScheme();
@@ -93,23 +114,48 @@ public class BrowserProxyController {
                         && com.checkba.util.SsrfGuard.rejectIfBlocked(uri.toString()) != null) {
                     return ResponseEntity.status(HttpStatus.FORBIDDEN).body(LangText.of("目标地址不被允许（已禁止本地/内网地址）", "Target address is not allowed (local/internal addresses are blocked)"));
                 }
+                Duration budget = Duration.ofNanos(deadlineAt - System.nanoTime());
+                if (budget.isNegative() || budget.isZero()) {
+                    return ResponseEntity.status(HttpStatus.GATEWAY_TIMEOUT).body(LangText.of(
+                            "代理超时：目标站点响应过慢", "Proxy timed out: the target site is too slow"));
+                }
                 HttpRequest req = HttpRequest.newBuilder(uri)
                         .GET()
-                        .timeout(Duration.ofSeconds(20))
+                        // 单跳超时取「剩余总预算」与 20 秒的较小值：跳数再多也不会累加成分钟级占用
+                        .timeout(budget.compareTo(Duration.ofSeconds(20)) < 0 ? budget : Duration.ofSeconds(20))
                         .header("User-Agent", "checkba-browser/1.0")
                         .build();
-                resp = CLIENT.send(req, HttpResponse.BodyHandlers.ofByteArray());
+                // 流式接收而不是 ofByteArray()：正文要不要收、收多少由下面的体积闸说了算
+                resp = CLIENT.send(req, HttpResponse.BodyHandlers.ofInputStream());
                 int sc = resp.statusCode();
                 if (sc >= 300 && sc < 400) {
                     String loc = resp.headers().firstValue("location").orElse(null);
                     if (loc == null || loc.isBlank()) break;
+                    closeQuietly(resp.body()); // 这一跳的正文用不上，别把连接挂在那儿
+                    resp = null;
                     uri = uri.resolve(loc); // 支持相对 Location，下一轮重新校验
                     continue;
                 }
                 break;
             }
             if (resp == null) {
-                return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(LangText.of("代理失败: 无响应", "Proxy failed: no response"));
+                // 跳满 5 次仍在重定向。此前这里会把最后那个 3xx 的正文当内容原样回给前端，
+                // 换成明确报错更诚实。
+                return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(LangText.of("代理失败: 重定向次数过多", "Proxy failed: too many redirects"));
+            }
+
+            long declared = resp.headers().firstValueAsLong("content-length").orElse(-1L);
+            if (declared > maxBytes) {
+                closeQuietly(resp.body());
+                return tooLarge();
+            }
+            byte[] payload;
+            try (java.io.InputStream in = resp.body()) {
+                payload = readBounded(in, maxBytes);
+            }
+            if (payload == null) {
+                // 上游没声明长度（分块传输），读到超限就停手，堆里最多多出 maxBytes+1 字节
+                return tooLarge();
             }
 
             String contentType = resp.headers().firstValue("content-type").orElse("application/octet-stream");
@@ -119,7 +165,7 @@ public class BrowserProxyController {
                 // 以前是「按 UTF-8 解、回 text/html 不带 charset」：浏览器于是拿默认编码
                 // （windows-1252）去解我们发出去的 UTF-8 字节，中文页面整页乱码。
                 // 已知没覆盖的一档：只在 <meta charset> 里声明、响应头不带的 GBK 页面。
-                String html = new String(resp.body(), charsetOf(contentType));
+                String html = new String(payload, charsetOf(contentType));
                 String injected = inject(html, uri.toString(), token);
                 HttpHeaders headers = new HttpHeaders();
                 headers.setContentType(new MediaType(MediaType.TEXT_HTML, StandardCharsets.UTF_8));
@@ -134,10 +180,38 @@ public class BrowserProxyController {
                 headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             }
             headers.setCacheControl("no-store");
-            return new ResponseEntity<>(resp.body(), headers, HttpStatus.OK);
+            return new ResponseEntity<>(payload, headers, HttpStatus.OK);
         } catch (Exception e) {
             log.warn("BrowserProxy failed: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(LangText.of("代理失败: ", "Proxy failed: ") + e.getMessage());
+        }
+    }
+
+    private ResponseEntity<?> tooLarge() {
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(LangText.of(
+                "目标文件超过代理上限（" + (maxBytes / 1024 / 1024) + "MB），请在系统浏览器中打开",
+                "The target exceeds the proxy limit (" + (maxBytes / 1024 / 1024) + "MB); open it in your system browser"));
+    }
+
+    /** 最多读 max 字节；超了立刻停手并返回 null（堆里最多多出 max+1 字节）。 */
+    private static byte[] readBounded(java.io.InputStream in, long max) throws java.io.IOException {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        long total = 0;
+        int n;
+        while ((n = in.read(buf)) != -1) {
+            total += n;
+            if (total > max) return null;
+            out.write(buf, 0, n);
+        }
+        return out.toByteArray();
+    }
+
+    private static void closeQuietly(java.io.InputStream in) {
+        try {
+            if (in != null) in.close();
+        } catch (Exception ignore) {
+            // 关不掉就算了，连接池会自己回收
         }
     }
 
