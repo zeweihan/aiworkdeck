@@ -172,7 +172,7 @@ NORMAL `#3B82F6`，`tagTypes.js` 与 TagService 两处同值）。分组展示�
 
 **文件存储位置（PR-C）**：`service/storage/StorageLocationService.java` + `GET /api/storage/location`、`POST /api/storage/location`（迁移，需 stage.unlimited）、`POST /api/storage/location/reset`（恢复默认，不需权益）。搬的是**全局存储根**（项目文件与缓存区文件的落盘位置），因为缓存区文件就是项目文件。迁移策略：**复制 → 校验文件数与字节数（含源侧复查）→ 落配置 → 换指针，原目录保留为备份绝不删**；任一步失败清掉本次复制的副本并保持原路径。目标必须是空目录或不存在，且与源不互相嵌套——**嵌套判断在 `toRealPath()` 之后做**，纯词法比较挡不住指向源内部的软链（会把源复制进它自己，在数据根里造出几百个垃圾目录）。**源侧要复查**：只比「复制前的源」与「复制后的目标」，迁移期间自动保存进已复制目录的文件两边数字仍相等，会被静默留在旧根。源目录不可访问时拒绝迁移（否则 copyTree 会把源建出来，「0 个文件迁移成功」）。配置落 `~/.aiworkdeck/storage-location.json`（不落 DB：存储根必须在 JPA 起来之前就确定）。`ProjectStorageResolver.globalRoot` 因此改为 volatile + `relocate()`；能热切是因为 DB 存的是逻辑路径、git 的 gitDir/workTree 每次现算。
 
-**文件预览/插入**：`FilePreview.vue`（docx/pdf/pptx/压缩包分流见 project-overview ~:5110-5157；PDF 走 Chromium 原生引擎渲染，标准 annotation 可见；watch `file.wpsFileId` 在 AI 改完 PDF 后自动重拉字节——reload_file 是 Object.assign 原地更新，file 对象引用不变，别删这个 watch）、`FilePickerDialog.vue`、`FileLinkDropZone.vue`、`FileStagingArea.vue`；图片插入走 `libreofficeExecutorClient.js` insertImage → office_thread.js；desktop `file-service.js` + IPC `checkba:fs-read-file`（含敏感路径拦截+大小上限）；后端 `FileController.java`（download/upload/upload-status/text/compare）、`ProjectFileController.java`（列表/folder/archive/批量/回收站/tags）、`DocFileLinkController.java`（doc-links）。
+**文件预览/插入**：`FilePreview.vue`（docx/pdf/pptx/压缩包分流见 project-overview ~:5110-5157；PDF 走 Chromium 原生引擎渲染，标准 annotation 可见；watch `file.wpsFileId` 在 AI 改完 PDF 后自动重拉字节——reload_file 是 Object.assign 原地更新，file 对象引用不变，别删这个 watch）、`FilePickerDialog.vue`、`FileStagingArea.vue`（原 `FileLinkDropZone.vue` 已删：文件关联的落点改成编辑器画布本身，见 ai-doc-bridge.md「EvidenceLink 契约 → 前端」）；`FilePreview.vue` 还吃 `locator` prop（EvidenceLink 定位：pdf `#page=`、image 归一化 rect 画框随缩放联动、audio/video `startMs` seek）；图片插入走 `libreofficeExecutorClient.js` insertImage → office_thread.js；desktop `file-service.js` + IPC `checkba:fs-read-file`（含敏感路径拦截+大小上限）；后端 `FileController.java`（download/upload/upload-status/text/compare）、`ProjectFileController.java`（列表/folder/archive/批量/回收站/tags）、`DocFileLinkController.java`（doc-links）。
 
 **反馈浮窗的第二个截图消费者**：`FeedbackWidget.vue` 也走 `host.ocr.startSelection({mode:'window'})`，
 自带一份等价的裁剪算法（不复用 project-overview 的实例态方法组）。改截图 IPC 的返回结构
@@ -203,7 +203,7 @@ navigateTo 页面栈会存活多个 project-overview 实例，各自绑定全局
 
 ## 面板在 project-overview.vue 的挂载点
 
-FilePickerDialog :298 / EasyVoicePane :537 / DesensitizePane :543 / SearchPanel :550 / PluginPane(左栏) :555 / FileLinkDropZone :570 / FileStagingArea :578 / BrowserPane 左:719 右:786 / FilePreview 左:749 右:816 / ProjectFavoritesPanel :892 / ClipboardPanel :900。import 区 :1217-1233，components 注册 :1293-1312。
+FilePickerDialog :298 / EasyVoicePane :537 / DesensitizePane :543 / SearchPanel :550 / PluginPane(左栏) :555 / FileStagingArea :578 / BrowserPane 左:719 右:786 / FilePreview 左:749 右:816 / ProjectFavoritesPanel :892 / ClipboardPanel :900。import 区 :1217-1233，components 注册 :1293-1312。
 
 ## 已知地雷
 

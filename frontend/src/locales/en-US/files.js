@@ -44,11 +44,6 @@ export default {
   selectedFolderLabel: 'Selected folder:',
   confirmImport: 'Import',
   onlyTypesSupported: 'Only {types} files are supported',
-  // FileLinkDropZone.vue
-  dropToLink: 'Drop here to link to the highlighted text',
-  currentFileLabel: 'Current file: {name}',
-  linkToLeftDoc: 'Link to Left Document',
-  linkToRightDoc: 'Link to Right Document',
   // FileStagingArea.vue
   stagingTitle: 'File Staging Area',
   clear: 'Clear',

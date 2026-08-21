@@ -66,6 +66,9 @@ jobs:
       - name: Test project-home page
         working-directory: frontend
         run: npm run test:project-home
+      - name: Test EvidenceLink pure functions (anchor hash 双端对拍 / locator / 拖放建链)
+        working-directory: frontend
+        run: npm run test:evidence
       - name: Test command registry (加速键归属与 when 求值)
         working-directory: frontend
         run: npm run test:commands

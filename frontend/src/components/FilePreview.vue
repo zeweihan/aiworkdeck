@@ -52,10 +52,10 @@
         <!-- PDF 预览：本地 blob 由浏览器/Electron 内置 PDF 引擎原生渲染，数据不出本机（#36） -->
         <view v-else-if="isPdf" class="preview-pdf">
           <!-- #ifdef H5 -->
-          <iframe v-if="blobUrl" :src="blobUrl" class="preview-iframe" frameborder="0"></iframe>
+          <iframe v-if="blobUrl" :src="pdfSrc" class="preview-iframe" frameborder="0"></iframe>
           <!-- #endif -->
           <!-- #ifndef H5 -->
-          <web-view v-if="blobUrl" :src="blobUrl" />
+          <web-view v-if="blobUrl" :src="pdfSrc" />
           <!-- #endif -->
         </view>
 
@@ -81,6 +81,8 @@
             @load="handleImageLoad"
             @error="handleImageError"
           />
+          <!-- EvidenceLink 图片定位框：locator.rect 是 0..1 归一化坐标，按当前缩放平移换算 -->
+          <view v-if="evidenceRectStyle" class="evidence-rect" :style="evidenceRectStyle"></view>
           <view v-if="imageReady" class="image-toolbar" @mousedown.stop>
             <button class="img-tool-btn" size="mini" @tap="imageZoomOutBtn">−</button>
             <text class="img-zoom-pct">{{ imageZoomPercentText }}</text>
@@ -246,6 +248,11 @@ export default {
     baseUrl: {
       type: String,
       default: ''
+    },
+    // EvidenceLink 定位符（spec §1.4）：pdf → #page；image → 画框；media → 起播时刻
+    locator: {
+      type: Object,
+      default: null
     }
   },
   data() {
@@ -364,6 +371,25 @@ export default {
       return {
         transform: `translate(${this.imageTx}px, ${this.imageTy}px) scale(${this.imageScale})`
       }
+    },
+    pdfSrc() {
+      const loc = this.locator
+      const page = loc && loc.type === 'pdf' ? Number(loc.page) : 0
+      return this.blobUrl + (page > 0 ? '#page=' + page : '')
+    },
+    evidenceRectStyle() {
+      const loc = this.locator
+      const r = loc && loc.type === 'image' ? loc.rect : null
+      if (!r || !this.imageReady) return null
+      const s = this.imageScale
+      const w = this.imageNaturalWidth * s
+      const h = this.imageNaturalHeight * s
+      return {
+        left: (this.imageTx + Number(r.x || 0) * w) + 'px',
+        top: (this.imageTy + Number(r.y || 0) * h) + 'px',
+        width: Math.max(2, Number(r.w || 0) * w) + 'px',
+        height: Math.max(2, Number(r.h || 0) * h) + 'px'
+      }
     }
   },
   watch: {
@@ -379,6 +405,10 @@ export default {
     blobUrl(url) {
       this.teardownAudio()
       if (url && this.isAudio) this.setupAudio(url)
+    },
+    // 同一文件再次被链接点中（换了时刻）：媒体元素还在，直接 seek
+    locator() {
+      this.seekToLocator()
     },
     // AI 修改文件后（pdf_highlight/pdf_redact 等）后端会更新 wpsFileId 并发 reload_file，
     // reload 处理是对既有 file 对象 Object.assign 原地更新——对象引用不变，上面的
@@ -410,7 +440,7 @@ export default {
         a.preload = 'metadata'
         a.volume = this.audioVolume
         a.playbackRate = this.audioRate
-        a.addEventListener('loadedmetadata', () => { this.audioDuration = a.duration || 0 })
+        a.addEventListener('loadedmetadata', () => { this.audioDuration = a.duration || 0; this.seekToLocator() })
         a.addEventListener('timeupdate', () => { this.audioCurrent = a.currentTime || 0 })
         a.addEventListener('play', () => { this.audioPlaying = true })
         a.addEventListener('pause', () => { this.audioPlaying = false })
@@ -757,9 +787,21 @@ export default {
         this.extracting = false
       }
     },
+    // EvidenceLink media 定位：startMs → currentTime。音频用自绘播放器实例，视频用 loadeddata 记下的元素。
+    seekToLocator() {
+      const loc = this.locator
+      if (!loc || loc.type !== 'media') return
+      const sec = Number(loc.startMs || 0) / 1000
+      if (!(sec >= 0)) return
+      const el = this.isAudio ? this._audio : this._videoEl
+      if (!el) return
+      try { el.currentTime = sec } catch (e) { /* metadata 未就绪时忽略，loadedmetadata 会再调一次 */ }
+    },
     onVideoLoaded(e) {
       console.log('视频加载成功，可以播放')
       if (e.target) {
+        this._videoEl = e.target
+        this.seekToLocator()
         console.log('视频信息:', {
           duration: e.target.duration,
           videoWidth: e.target.videoWidth,
@@ -1083,6 +1125,16 @@ export default {
 
 .preview-image.is-panning {
   cursor: grabbing;
+}
+
+/* EvidenceLink 图片定位框：跟随 img 的平移缩放，不吃鼠标 */
+.evidence-rect {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid #1A5336;
+  background: rgba(26, 83, 54, 0.12);
+  box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.18);
+  pointer-events: none;
 }
 
 /* 缩放平移由 JS 算出的 transform 控制，图片本身按原始像素尺寸渲染 */
