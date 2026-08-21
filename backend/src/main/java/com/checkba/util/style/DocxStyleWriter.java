@@ -124,9 +124,10 @@ public final class DocxStyleWriter {
     // ------------------------------------------------------------------ PPr
 
     /**
-     * 写对齐、段前段后、行距、首行/左缩进到 pPr。chars/lines 单位分别落
-     * {@code firstLineChars}/{@code beforeLines}（Word 原生语义，随字号缩放）；
-     * 其余单位折 twips。fontSizePt 用于 chars/lines 折算磅值的场合。
+     * 写对齐、段前段后、行距、首行/左缩进到 pPr。缩进的 chars 单位落 {@code firstLineChars}/{@code leftChars}
+     * （Word 原生语义，随字号缩放）；段前段后的 lines 单位**不落** {@code beforeLines}，而是按
+     * {@code fontSizePt × 1.2} 折成 twips 写 {@code before/after}（与改造前常量版「0.2 行 ≈ 2.4 磅」同口径，
+     * 保住 HouseProfileParityTest）；其余单位折 twips。
      */
     public static void applyParagraph(PPr pPr, String alignment, Length before, Length after,
                                       LineSpacing ls, Length firstLine, Length left, double fontSizePt) {

@@ -282,6 +282,17 @@ public class DocxStyleHelper {
         if (body == null) return;
         double bodyPt = sizePt(body, 12);
 
+        // docDefaults：画像 defaults 块真写进 rPrDefault（没写过样式的 run 也能落到同一套字体/字号）
+        Block defaults = profile.defaults();
+        if (defaults != null) {
+            DocDefaults dd = styles.getDocDefaults();
+            if (dd == null) { dd = F.createDocDefaults(); styles.setDocDefaults(dd); }
+            DocDefaults.RPrDefault rpd = dd.getRPrDefault();
+            if (rpd == null) { rpd = F.createDocDefaultsRPrDefault(); dd.setRPrDefault(rpd); }
+            if (rpd.getRPr() == null) rpd.setRPr(F.createRPr());
+            DocxStyleWriter.applyRun(rpd.getRPr(), defaults.font(), defaults.size(), defaults.color(), null);
+        }
+
         // 正文类样式：Normal 及 flexmark 会挂到段落上的几个别名样式
         for (String id : new String[]{"Normal", "BodyText", "ParagraphTextBody"}) {
             Style s = findOrCreateStyle(styles, id);
@@ -405,10 +416,13 @@ public class DocxStyleHelper {
             if ("none".equals(kind) || n == null) continue;
             counters[level]++;
             for (int i = level + 1; i < counters.length; i++) counters[i] = 0;
-            String text = textOf(p).trim();
+            String raw = textOf(p);
+            String text = raw.trim();
             String stripped = stripLiteralPrefix(text);
             if ("auto".equals(kind)) {
-                if (!stripped.equals(text)) removeLeadingText(p, text.length() - stripped.length());
+                // 偏移按未 trim 的原文算：段首空白 + 编号前缀一起删
+                int leading = raw.length() - raw.stripLeading().length();
+                if (!stripped.equals(text)) removeLeadingText(p, leading + text.length() - stripped.length());
                 continue;
             }
             // literal：文字自带编号的不重复拼
@@ -527,16 +541,17 @@ public class DocxStyleHelper {
         return 0;
     }
 
+    /**
+     * 段首字面编号：「一、」「（一）」「1.」「1.2.3 」「（1）」。裸数字后面必须有分隔符
+     * （. 、 ． ) ）或多级点号），只跟空白不算编号——「2024 年度报告」不能被剥。
+     */
     private static final Pattern LEADING_LITERAL = Pattern.compile(
-            "^(?:[一二三四五六七八九十百]+、|[（(][一二三四五六七八九十百]+[）)]|\\d+(?:\\.\\d+)*[.、．]?\\s*|[（(]\\d+[）)])\\s*");
+            "^(?:[一二三四五六七八九十百]+、|[（(][一二三四五六七八九十百]+[）)]|\\d+(?:\\.\\d+)+\\.?|\\d+[.、．)）]|[（(]\\d+[）)])\\s*");
 
     public static String stripLiteralPrefix(String text) {
         Matcher m = LEADING_LITERAL.matcher(text);
         if (!m.find()) return text;
-        // 「2024年」这类以数字开头的正文标题不算编号：纯数字后面必须有分隔符或空格
-        String hit = m.group();
-        if (hit.matches("^\\d+$")) return text;
-        return text.substring(hit.length());
+        return text.substring(m.group().length());
     }
 
     /** 按 lvlText 拼字面编号：%N 取 N 级计数，后缀 space/tab/nothing。 */
@@ -703,7 +718,7 @@ public class DocxStyleHelper {
         int colCount = 0;
         for (Tr tr : rows) colCount = Math.max(colCount, cellsOf(tr).size());
 
-        List<Long> widths = columnWidths(table, colCount);
+        List<Long> widths = columnWidths(table, colCount, profile);
         if (widths != null) {
             TblGrid grid = F.createTblGrid();
             long total = 0;
@@ -762,13 +777,32 @@ public class DocxStyleHelper {
         }
     }
 
-    /** 画像里与本表列数相符的列宽样本（twips）；percent 模式按 A4 默认版心折算。 */
-    private static List<Long> columnWidths(Block table, int colCount) {
+    /** A4 纸宽减默认 3.17cm 双边距的版心（twips），画像没写页面时的兜底。 */
+    private static final long DEFAULT_TEXT_WIDTH_TWIPS = 9026;
+
+    /** 版心宽度 = 画像纸宽 − 左右边距；画像没有页面块时退到 A4 默认。 */
+    private static long textWidthTwips(StyleProfile profile) {
+        Block page = profile.page();
+        if (page == null || page.sub("size") == null) return DEFAULT_TEXT_WIDTH_TWIPS;
+        Length width = page.sub("size").length("width");
+        if (width == null) return DEFAULT_TEXT_WIDTH_TWIPS;
+        long w = Units.toTwips(width, 12);
+        Block margins = page.sub("margins");
+        if (margins != null) {
+            if (margins.length("left") != null) w -= Units.toTwips(margins.length("left"), 12);
+            if (margins.length("right") != null) w -= Units.toTwips(margins.length("right"), 12);
+        }
+        return w > 0 ? w : DEFAULT_TEXT_WIDTH_TWIPS;
+    }
+
+    /** 画像里与本表列数相符的列宽样本（twips）；percent 模式按画像版心宽折算。 */
+    private static List<Long> columnWidths(Block table, int colCount, StyleProfile profile) {
         Block cw = table.sub("columnWidths");
         if (cw == null || colCount == 0) return null;
         JsonNode samples = cw.node().get("samples");
         if (samples == null || !samples.isArray()) return null;
         String mode = cw.string("mode");
+        long textWidth = textWidthTwips(profile);
         for (JsonNode sample : samples) {
             if (!sample.isArray() || sample.size() != colCount) continue;
             List<Long> out = new ArrayList<>();
@@ -776,7 +810,7 @@ public class DocxStyleHelper {
             for (JsonNode v : sample) {
                 double d = v.asDouble();
                 if (d <= 0) { ok = false; break; }
-                if ("percent".equals(mode)) out.add(Math.round(d / 100.0 * 9026));
+                if ("percent".equals(mode)) out.add(Math.round(d / 100.0 * textWidth));
                 else if ("cm".equals(mode)) out.add(Units.toTwips(Length.of(d, "cm"), 12));
                 else out.add(Math.round(d));
             }
