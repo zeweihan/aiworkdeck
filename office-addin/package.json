@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node ../frontend/scripts/sync-house-profile.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "build:deploy": "node scripts/build-manifest.mjs",

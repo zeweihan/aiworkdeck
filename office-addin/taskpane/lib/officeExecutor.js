@@ -24,6 +24,10 @@
 
 import { officeAvailable, detectHost } from './wordDoc.js'
 import { minimalEdits } from './minimalEdit.js'
+// 律所标准格式（HOUSE）单源：backend/src/main/resources/style-profiles/house-default.json 的字节副本，
+// 由 frontend/scripts/sync-house-profile.mjs 同步（npm run build 前自动跑），构建时内联进产物；
+// houseProfile.test.js 断言与后端源 sha256 一致。
+import houseProfile from './house-default.json' with { type: 'json' }
 
 // 与后端 ContextAssemblerService.MAX_INLINE_CONTENT_CHARS 一致的截断上限
 const MAX_TEXT_CHARS = 200_000
@@ -379,20 +383,44 @@ function parseCellRef(ref) {
 /* ---- 律所标准格式 ---- */
 
 /**
- * 律所标准格式常量。**三处同源**：桌面端 LOWA 的 office_thread.js `HOUSE`、
- * 后端 `DocxStyleHelper`（write_docx / AiDocxExportService 两条生成路径）、这里。
- * 数值必须逐字一致，改规范要三处一起改。
+ * 律所标准格式常量，从 house-default.json（后端 style-profiles 的副本）派生——三处写端
+ * （后端 DocxStyleHelper / LOWA worker / 这里）同一份源，改规范只改那一个 JSON。
+ * Office.js 只有固定磅值行距，画像的「最小值 16 磅」在这里落成 exact 16（见 lineSpacingMode）；
+ * 首行缩进「2 字符」按正文字号折磅。
  */
-const HOUSE = {
-  fontAsian: '楷体_GB2312',
-  fontWestern: 'Arial',
-  bodyPt: 12,
-  titlePt: 16,
-  spaceAfterPt: 18,
-  lineSpacingPt: 16,      // LOWA 侧是「最小值 16 磅」；Office.js 只有固定磅值行距（见下方 lineSpacingMode）
-  firstLineIndentPt: 24,  // 首行缩进 2 字符 = 2 × 12 磅
-  tablePt: 10
+export function houseFromProfile(p) {
+  const d = (p && p.defaults) || {}
+  const body = (p && p.body) || {}
+  const h1 = ((p && p.headings) || []).find((h) => h && Number(h.level) === 1) || {}
+  const cell = ((p && p.table) || {}).cell || {}
+  const pt = (len, fontPt, fallback) => {
+    if (!len || len.value == null) return fallback
+    const v = Number(len.value)
+    if (!isFinite(v)) return fallback
+    switch (len.unit || 'pt') {
+      case 'pt': return v
+      case 'chars': return v * fontPt
+      case 'lines': return v * fontPt * 1.2
+      case 'mm': return v * 72 / 25.4
+      case 'cm': return v * 720 / 25.4
+      case 'twips': return v / 20
+      default: return fallback
+    }
+  }
+  const bodyPt = pt(body.size, 12, pt(d.size, 12, 12))
+  const ls = body.lineSpacing || {}
+  return {
+    fontAsian: (body.font && body.font.eastAsia) || (d.font && d.font.eastAsia) || '楷体_GB2312',
+    fontWestern: (body.font && body.font.western) || (d.font && d.font.western) || 'Arial',
+    bodyPt,
+    titlePt: pt(h1.size, bodyPt, 16),
+    spaceAfterPt: pt(body.spaceAfter, bodyPt, 18),
+    lineSpacingPt: ls.rule === 'atLeast' || ls.rule === 'exactly' ? pt({ value: ls.value, unit: ls.unit || 'pt' }, bodyPt, 16) : 16,
+    firstLineIndentPt: pt(body.firstLineIndent, bodyPt, 2 * bodyPt),
+    tablePt: pt(cell.size, 10, 10)
+  }
 }
+const HOUSE = houseFromProfile(houseProfile)
 
 /**
  * 小标题启发式：第X条/章/节/款/项、「一、」「（一）」「1.」这类序号开头且不长的段落。
