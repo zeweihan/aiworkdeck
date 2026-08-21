@@ -33,7 +33,8 @@ export default {
   readVersionFileFailed: 'Failed to read version file',
   // ---- utils/ideOpen.js ----
   openProjectFailed: 'Failed to open the project. Please try again later',
-  folderImportTruncated: 'The folder has too many items; only the first 3,000 were imported',
+  folderImportTruncatedTitle: 'Import truncated',
+  folderImportTruncated: 'This import was truncated, {count} item(s) were not included: the folder exceeds 30,000 items, please split the project',
   openFolder: 'Open Folder',
   openFile: 'Open File',
   open: 'Open',

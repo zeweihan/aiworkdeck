@@ -63,7 +63,7 @@ class ProjectControllerOpenLocalGateTest {
             p.setId(7L);
             p.setName("案卷");
             when(localProjectService.openLocalFolder("/Users/me/案卷", false, null, null, 1L))
-                    .thenReturn(new LocalProjectService.OpenLocalResult(p, false, null, 3, false));
+                    .thenReturn(new LocalProjectService.OpenLocalResult(p, false, null, 3, false, 0));
 
             Map<String, Object> result = controller.openLocalFolder(
                     Map.of("localRoot", "/Users/me/案卷"), "sess");

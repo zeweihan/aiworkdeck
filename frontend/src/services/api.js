@@ -850,7 +850,7 @@ export function createProject(payload) {
 
 // IDE 化本地文件夹项目：打开/新建本地文件夹作为项目
 // payload: { localRoot, createFolder, name, openFileName }
-// 返回 { code: 0, data: { projectId, name, reused, openFileId, importedCount, truncated } }
+// 返回 { code: 0, data: { projectId, name, reused, openFileId, importedCount, truncated, truncatedCount } }
 export function openLocalProject(payload) {
   return request({
     url: '/api/projects/open-local',
