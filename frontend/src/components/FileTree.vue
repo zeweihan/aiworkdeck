@@ -895,6 +895,7 @@ import { host } from '@/services/host.js'
 import { findTopmostDeletedAncestor, summarizeDeleteResults } from '@/utils/fileTreeRecycle.js'
 import { groupByParent, buildTreeFromGroups } from '@/utils/fileTreeBuild.js'
 import { evidenceRefCounts } from '@/services/api.js'
+import { createRefCountsFetcher } from '@/utils/fileTreeRefCounts.js'
 import CircularProgress from '@/components/CircularProgress.vue'
 import FileTypeIcon from '@/components/FileTypeIcon.vue'
 import TagChip from '@/components/TagChip.vue'
@@ -1270,6 +1271,9 @@ export default {
         this.isBatchUploading = false
         this.batchUploadTotalSize = 0
         this.batchUploadFinishedSize = 0
+        // 「展开更多」的渲染上限与引用角标都是按项目的，换项目必须归零
+        this.revealCounts = {}
+        this.refCounts = {}
         this.restoreUploadState()
         this.loadFiles()
       }
@@ -1343,6 +1347,9 @@ export default {
       }
 
       this.loading = true
+      // 整树重载：窗口化上限回到初始值，引用角标整批重拉（旧值会被覆盖而不是叠加）
+      this.revealCounts = {}
+      this.refCounts = {}
       try {
         // 确保 projectId 是数字类型
         const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
@@ -1371,7 +1378,7 @@ export default {
           const hiddenNames = new Set(['.stagezone', '__staging_area__'])
           this.files = files.filter(f => !hiddenNames.has(f.name))
         }
-        this.scheduleRefCountsFetch()
+        this.scheduleRefCountsFetch({ reload: true })
         console.log('加载文件列表成功:', this.files)
       } catch (error) {
         // 完整打印错误信息，包括堆栈、响应数据等
@@ -1898,27 +1905,20 @@ export default {
       this.scheduleRefCountsFetch()
     },
     // 「被引用 N 次」角标：树刷新/展开更多后，对当前渲染的文件 id 分批拉取引用计数。
-    // 接口不存在（单元 A 可能未合并）或出错时静默不显示角标，不 mock 后端。
-    async scheduleRefCountsFetch() {
+    // 防抖/去重/过期丢弃/缺失置 0 的规则在 utils/fileTreeRefCounts.js（有 node 测试）。
+    // 接口不存在或出错时静默不显示角标，不 mock 后端。
+    scheduleRefCountsFetch({ reload = false } = {}) {
       if (!this.projectId) return
+      if (!this._refCountsFetcher) {
+        this._refCountsFetcher = createRefCountsFetcher({
+          fetch: (projectId, ids) => evidenceRefCounts(projectId, ids),
+          apply: (counts) => { this.refCounts = { ...this.refCounts, ...counts } }
+        })
+      }
       const ids = this.windowedDisplayFiles
         .filter(f => !f.__loadMore && !f.isFolder)
         .map(f => f.id)
-      if (ids.length === 0) return
-      const BATCH_SIZE = 200
-      for (let i = 0; i < ids.length; i += BATCH_SIZE) {
-        const batch = ids.slice(i, i + BATCH_SIZE)
-        try {
-          const res = await evidenceRefCounts(this.projectId, batch)
-          // 兼容 {code:0, data:{...}} 信封与裸对象两种形状（单元 A 的端点形状以合并时为准）
-          const counts = (res && res.data && typeof res.data === 'object') ? res.data : res
-          if (counts && typeof counts === 'object') {
-            this.refCounts = { ...this.refCounts, ...counts }
-          }
-        } catch (e) {
-          // 端点未合并/出错：角标就不显示，不打扰用户、不 mock 数据
-        }
-      }
+      this._refCountsFetcher.schedule(this.projectId, ids, { reload })
     },
     // 计算项目的缩进（用于树形结构）
     getItemPadding(item) {

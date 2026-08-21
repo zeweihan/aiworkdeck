@@ -238,12 +238,12 @@ public class ProjectFileService {
             throw new IllegalArgumentException(LangText.of("用户 ID 不能为空", "User ID must not be empty"));
         }
 
-        String finalName = name;
+        String finalName = name.trim();
         if (policy == ConflictPolicy.RENAME) {
-            finalName = resolveConflictingName(projectId, parentId, name.trim());
-        } else if (projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNot(projectId, parentId, name, -1L)) {
-            // 检查同名文件是否存在
-            throw new IllegalArgumentException(LangText.of("该文件夹下已存在同名文件: ", "A file with this name already exists: ") + name);
+            finalName = resolveConflictingName(projectId, parentId, finalName);
+        } else if (projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNot(projectId, parentId, finalName, -1L)) {
+            // 检查同名文件是否存在（与 RENAME 对称：按 trim 后的名字查，落库的也是 trim 后的名字）
+            throw new IllegalArgumentException(LangText.of("该文件夹下已存在同名文件: ", "A file with this name already exists: ") + finalName);
         }
 
         // 获取当前父文件夹下的最大排序序号（单条聚合查询，见 ProjectFileRepository.maxSortOrder）
@@ -288,9 +288,17 @@ public class ProjectFileService {
     /**
      * RENAME 策略：同名时在扩展名前插入 " (n)" 直到不冲突，上限 1000 次尝试
      * （超出后大概率是查询本身有问题，抛错比死循环/无限重试更安全）。
+     *
+     * <p>「冲突」同时看两处，任一命中都继续加序号：
+     * <ul>
+     * <li>数据库里<b>含回收站</b>的同名行。软删除只翻 isDeleted 不动磁盘，回收站里那份
+     *     「a.pdf」的字节仍躺在按名字算出的 filePath 上；若只查活着的行就把「a.pdf」判为可用，
+     *     调用方随后 save/move(REPLACE_EXISTING) 会把回收站文件盖掉，律师一还原拿到的是新文件的内容。</li>
+     * <li>物理目标路径已存在（行被彻底删了但文件残留、或外部写入）。</li>
+     * </ul>
      */
     private String resolveConflictingName(Long projectId, Long parentId, String name) {
-        if (!projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNotAndIsDeletedFalse(projectId, parentId, name, -1L)) {
+        if (!conflictingNameTaken(projectId, parentId, name)) {
             return name;
         }
         String base = name;
@@ -302,11 +310,19 @@ public class ProjectFileService {
         }
         for (int i = 1; i <= 1000; i++) {
             String candidate = base + " (" + i + ")" + ext;
-            if (!projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNotAndIsDeletedFalse(projectId, parentId, candidate, -1L)) {
+            if (!conflictingNameTaken(projectId, parentId, candidate)) {
                 return candidate;
             }
         }
         throw new IllegalArgumentException(LangText.of("该文件夹下同名文件过多，请手动改名: ", "Too many files with this name in this folder; please rename manually: ") + name);
+    }
+
+    private boolean conflictingNameTaken(Long projectId, Long parentId, String candidate) {
+        if (projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNot(projectId, parentId, candidate, -1L)) {
+            return true;
+        }
+        String physicalPath = buildPhysicalPath(projectId, parentId, candidate);
+        return storageServiceFactory.getStorageService().exists(physicalPath);
     }
 
     /**

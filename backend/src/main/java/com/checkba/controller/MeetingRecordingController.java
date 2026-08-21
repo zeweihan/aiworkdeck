@@ -30,8 +30,9 @@ public class MeetingRecordingController {
     // 内存标记（utils/meetingRecorder.js 的模块级单例），管不到"同一账号在桌面端 +
     // 浏览器标签页各开一份""同一项目的多个成员各自点了开始"这类跨客户端场景——
     // 这两种都是正常使用即可触发，不需要恶意操作。MeetingRecordingService.create()
-    // 内部 uniqueName() 是"查名字是否存在→建档"两步式，中间有窗口：两个并发请求都
-    // 查到"名字不存在"，各自建出一行同名 ProjectFile，物理路径只由 projectId/
+    // 经 ProjectFileService.createFile(RENAME) 建音频占位，RENAME 仍是"查名字是否
+    // 被占→建档"两步式，中间有窗口：两个并发请求都查到"名字不存在"，各自建出
+    // 一行同名 ProjectFile，物理路径只由 projectId/
     // parentId/name 决定（不含行 id），两行会落到同一个物理文件上，后续两段录音的
     // 分片上传各写各的 audioFileId 却写进同一个文件，互相覆盖。
     //

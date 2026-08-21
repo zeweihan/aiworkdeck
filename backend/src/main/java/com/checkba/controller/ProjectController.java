@@ -122,6 +122,7 @@ public class ProjectController {
         data.put("importedCount", r.importedCount());
         data.put("truncated", r.truncated());
         data.put("truncatedCount", r.truncatedCount());
+        data.put("truncatedCountCapped", r.truncatedCountCapped());
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
         result.put("data", data);
