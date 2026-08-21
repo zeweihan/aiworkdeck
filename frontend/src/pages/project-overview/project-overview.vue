@@ -670,6 +670,7 @@
             :plugin-id="dynamicPlugins.find(p => p.key === leftPaneKey)?.pluginId || ''"
             :permissions="dynamicPlugins.find(p => p.key === leftPaneKey)?.permissions || []"
             :project-id="projectId"
+            :get-active-editor="getPluginActiveEditor"
           />
           <view v-else class="sidebar-plugin-placeholder">
             <text class="placeholder-title">{{ leftPaneTitle }}</text>
@@ -941,6 +942,7 @@
                       :plugin-id="activeFileLeft.pluginId || ''"
                       :permissions="activeFileLeft.permissions || []"
                       :project-id="projectId"
+                      :get-active-editor="getPluginActiveEditor"
                     />
                     <!-- .drawio：诉讼可视化四份产物里唯一的可继续编辑版，走内嵌
                          draw.io。没有这条分支它会落进 FilePreview 的「暂不支持
@@ -1061,6 +1063,7 @@
                       :plugin-id="activeFileRight.pluginId || ''"
                       :permissions="activeFileRight.permissions || []"
                       :project-id="projectId"
+                      :get-active-editor="getPluginActiveEditor"
                     />
                     <DrawioEditor
                       v-else-if="isDrawioFile(activeFileRight)"
@@ -2377,6 +2380,7 @@ export default {
     if (this._onMarketChanged) {
       uni.$off('awd:market-changed', this._onMarketChanged)
       uni.$off('awd:market-changed-from-sidebar', this._onMarketChanged)
+      uni.$off('awd:open-evidence-target', this._onOpenEvidenceTarget)
       this._onMarketChanged = null
     }
     // IDE 化聚焦刷新监听清理（本实例自己加的，直接摘）
@@ -2592,6 +2596,12 @@ export default {
     this._onMarketChanged = () => this.loadEnabledSkills()
     uni.$on('awd:market-changed', this._onMarketChanged)
     uni.$on('awd:market-changed-from-sidebar', this._onMarketChanged)
+    // Web 插件 evidence.locate（PluginPane）要打开底稿：按 fileId 开到聚焦窗格。
+    // locator（页码/段落等）随事件带着，等 openFileLinkTarget 支持定位参数后接上。
+    this._onOpenEvidenceTarget = (p) => {
+      if (p && p.fileId) this.openFileLinkTarget(p.fileId, this.focusedPane || 'left')
+    }
+    uni.$on('awd:open-evidence-target', this._onOpenEvidenceTarget)
   },
   onShow() {
     // 多实例守卫：本实例重新可见（如从个人中心返回）时接管全局事件与 WPS 内链处理，
@@ -4873,6 +4883,21 @@ export default {
     onArchiveExtracted() {
       if (this.$refs.fileTree && this.$refs.fileTree.loadFiles) {
         this.$refs.fileTree.loadFiles()
+      }
+    },
+
+    // Web 插件桥（PluginPane）的 evidence.link / evidence.locate 要在「当前聚焦的
+    // Word 文档」上打书签、跳书签：给它 { executor(action, params), fileId }。
+    // fileId 必须从 executor 反查（resolveLibreExecutorFileId），不能信 activeFile——
+    // 指针同步与标签切换之间有窗口，落错文档的代价是锚点进了别的文件。
+    getPluginActiveEditor() {
+      if (!this.libreOfficeActive || !this.libreOfficeExecutor) return null
+      const ex = this.libreOfficeExecutor
+      const fileId = this.resolveLibreExecutorFileId(ex)
+      if (!fileId) return null
+      return {
+        fileId: Number(fileId),
+        executor: (action, params) => ex.executeCommand(action, params || {})
       }
     },
 

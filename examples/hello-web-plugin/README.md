@@ -33,6 +33,9 @@ cp -R examples/hello-web-plugin backend/plugins/
   把 manifest 里的 `permissions` 改成 `[]` 再重扫，就能看到 `permission_denied` 分支
 - `awd.ui.toast(message)`
 - `awd.storage.get/set`——插件级 KV，宿主代存，总量上限 64 KB
+- `awd.evidence.list({})`——列当前聚焦 Word 文档的底稿关联（需 `file_read`）；
+  没有打开 Word 文档时会看到 `no_active_document` 分支。
+  建链 `awd.evidence.link` / 定位 `awd.evidence.locate` 需要 `editor` 权限，本示例未声明
 
 ## 边界
 
