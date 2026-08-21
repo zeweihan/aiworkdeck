@@ -298,21 +298,38 @@ public class XmlToolCallParser {
     }
 
     /**
-     * JSON 风格调用：tool({...}) → 直接返回 {...}；不是该风格返回 null。
+     * JSON 风格调用：{@code tool({...})} → 直接返回 {@code {...}}；不是该风格返回 null。
+     *
+     * <p>必须锚定到「工具名紧跟左括号」「右花括号收在调用末尾」这个形状。此前用
+     * {@code indexOf("({")} / {@code lastIndexOf("})")} 在整段文本里找，参数值里
+     * 只要出现一对 {@code ({ ... })}——正文引用代码、字典字面量、一句
+     * 「helper({k: 1})」都算——就会被整体当成参数对象返回，真正的命名参数全部丢失。
+     * 而 hutool 的 JSON 解析对无引号键很宽容，所以连兜底 catch 都不会兜住，
+     * 工具拿着一组凭空捏造的参数照常执行，全程零报错。
      */
     private String tryExtractJsonObjectArgs(String code) {
-        int jsonStart = code.indexOf("({");
-        int jsonEnd = code.lastIndexOf("})");
-        if (jsonStart == -1 || jsonEnd == -1 || jsonEnd <= jsonStart) {
-            return null;
+        String trimmed = code.strip();
+        // 允许末尾的分号（模型偶尔按 JS 习惯加）
+        while (trimmed.endsWith(";")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1).strip();
         }
-        String jsonStr = code.substring(jsonStart + 1, jsonEnd + 1);
+        if (!trimmed.endsWith(")")) return null;
+        int paren = trimmed.indexOf('(');
+        if (paren <= 0) return null;
+        // 左括号之前必须整段都是工具名（允许 xx.yy 前缀），中间不许夹别的东西
+        String head = trimmed.substring(0, paren).strip();
+        if (!TOOL_NAME_HEAD.matcher(head).matches()) return null;
+        String inner = trimmed.substring(paren + 1, trimmed.length() - 1).strip();
+        if (!inner.startsWith("{") || !inner.endsWith("}")) return null;
         try {
-            return cn.hutool.json.JSONUtil.parseObj(jsonStr).toString();
+            return cn.hutool.json.JSONUtil.parseObj(inner).toString();
         } catch (Exception e) {
             return null;
         }
     }
+
+    private static final java.util.regex.Pattern TOOL_NAME_HEAD =
+            java.util.regex.Pattern.compile("[A-Za-z_][A-Za-z0-9_.]*");
 
     /**
      * 从代码文本中提取字符串参数值。

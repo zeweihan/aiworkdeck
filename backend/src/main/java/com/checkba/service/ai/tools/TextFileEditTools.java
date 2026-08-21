@@ -74,6 +74,17 @@ public class TextFileEditTools implements AgentToolComponent {
         }
     }
 
+    /**
+     * 「一次都没命中」的返回串。带 {@link ToolRegistry.ToolResult#UNCHANGED_PREFIX}
+     * 前缀，好让编排器的副作用层知道这一次不该发 file_change——本工具声明的
+     * {@code fileEffect="MODIFIED"} 是常量，不带这个前缀，一次没命中的查找也会被
+     * 记成「本轮修改了这个文件」。
+     */
+    public static String noHitMessage(String find, int length) {
+        return com.checkba.service.ai.ToolRegistry.ToolResult.UNCHANGED_PREFIX
+                + "未找到 \"" + abbreviate(find) + "\"（文件共 " + length + " 字符）。";
+    }
+
     @ToolMeta(displayName = "文本查找替换", category = "file", fileEffect = "MODIFIED")
     @Tool("在纯文本/代码文件（txt/md/json/js/html/css/yml 等）中做字面量查找替换（非正则）。"
             + "replaceAll=true 替换全部命中，false 只替换第一处；返回命中次数。"
@@ -95,7 +106,7 @@ public class TextFileEditTools implements AgentToolComponent {
             String text = readText(pf);
             int hits = countOccurrences(text, find);
             if (hits == 0) {
-                return "未找到 \"" + abbreviate(find) + "\"，文件未改动（共 " + text.length() + " 字符）。";
+                return noHitMessage(find, text.length());
             }
             String replacement = replace == null ? "" : replace;
             String updated = replaceAll

@@ -330,7 +330,15 @@ public class NativePackService {
             st.setInstalledVersion(version);
             return version;
         } catch (RuntimeException e) {
-            st.setState(STATE_FAILED);
+            // 因封禁被拒不是「安装失败」：状态要如实停在 revoked，否则广场把平台封禁
+            // 显示成一次网络出错，用户只会一遍遍重试
+            JSONObject current = readCurrent(packId);
+            if (current != null && current.getBool("revoked", false)) {
+                st.setState(STATE_REVOKED);
+                st.setInstalledVersion(current.getStr("version"));
+            } else {
+                st.setState(STATE_FAILED);
+            }
             st.setError(e.getMessage());
             throw e;
         }
@@ -339,6 +347,7 @@ public class NativePackService {
     private String doInstall(String packId, PackStatus st) {
         Manifest m = fetchAndVerifyManifest(packId);
         checkCompatibility(m);
+        requireNotRevoked(packId, m.version());
 
         List<Component> components = componentsForPlatform(m);
         if (components.isEmpty()) {
@@ -410,6 +419,39 @@ public class NativePackService {
         FileUtil.del(staging.toFile());
         log.info("Installed native pack {} v{} ({} component(s))", packId, m.version(), components.size());
         return m.version();
+    }
+
+    /**
+     * 封禁位只有平台说了才算数：安装流程不得顺手把它抹掉。
+     *
+     * <p>病灶：封禁是「打标不删文件」（防误封丢数据），于是版本目录连同 {@code .pack-complete}
+     * 都还在。下一次 {@link #doInstall} 走幂等分支只重写指针，{@code revoked} 被写回 false——
+     * 一次字节都没重新校验，平台的封禁就无声失效了。触发它不需要用户做什么：pack 被封后
+     * {@code resourceReady()} 为假，{@code PackAutoInstaller} 每次后端启动都会再触发一次安装。
+     *
+     * <p>处置：本地标着封禁时，重新问一次封禁表。平台已撤销才放行（并让后续 writeCurrent
+     * 正常清位）；仍在封禁、或封禁表根本拉不到，一律拒装——宁可装不上也不无声复活。
+     */
+    private void requireNotRevoked(String packId, String version) {
+        JSONObject current = readCurrent(packId);
+        if (current == null || !current.getBool("revoked", false)) return;
+
+        List<RevokedPack> list;
+        try {
+            list = fetchRevoked();
+        } catch (Exception e) {
+            throw new IllegalStateException(LangText.of(
+                    "资源包 " + packId + " 已被平台封禁，当前无法核对封禁表，暂不重新安装",
+                    "Pack " + packId + " is revoked and the revocation list is unreachable; install refused"));
+        }
+        boolean stillRevoked = list.stream().anyMatch(r -> packId.equals(r.id())
+                && ("*".equals(r.version()) || r.version() == null || r.version().equals(version)));
+        if (stillRevoked) {
+            throw new IllegalStateException(LangText.of(
+                    "资源包 " + packId + " v" + version + " 已被平台封禁，不能安装",
+                    "Pack " + packId + " v" + version + " is revoked by the platform"));
+        }
+        log.info("Pack {} is no longer on the revocation list; the local revoked flag will be cleared", packId);
     }
 
     /** 卸载：删 packs/&lt;id&gt;/ 整目录（含 current.json）。canonical 守卫只许删正下方。 */

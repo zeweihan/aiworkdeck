@@ -1,0 +1,218 @@
+package com.checkba.service.ai;
+
+import com.checkba.config.AiContextProperties;
+import com.checkba.config.AiFailoverProperties;
+import com.checkba.controller.ai.AiAgentController;
+import com.checkba.model.entity.ProjectAiMessage;
+import com.checkba.service.ProjectAiMessageService;
+import com.checkba.service.ProjectFileService;
+import com.checkba.service.ai.context.ContextCompressor;
+import com.checkba.service.ai.context.RunLoopCompactor;
+import com.checkba.service.ai.memory.MemoryPipelineService;
+import com.checkba.service.ai.skill.SkillRouter;
+import com.checkba.service.ai.tools.ToolMeta;
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import dev.langchain4j.agent.tool.ToolSpecification;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.StreamingResponseHandler;
+import dev.langchain4j.model.chat.StreamingChatLanguageModel;
+import dev.langchain4j.model.output.Response;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/**
+ * 「工具执行成功」不等于「文件被改过」。
+ *
+ * <p>病灶：{@code @ToolMeta(fileEffect="MODIFIED")} 是写死的常量，编排器的
+ * applyToolSideEffects 只看 success()，于是 text_find_replace 一次都没命中、
+ * 明确返回「文件未改动」时，照样发一条 file_change(MODIFIED) 并写进会话的
+ * 文件变更历史——用户被告知「本轮改了这个文件」，去找却找不到任何改动。
+ */
+class AgentOrchestratorNoOpFileChangeTest {
+
+    private static final String MODEL = "qwen/qwen3.7-flash";
+
+    private ChatModelFactory chatModelFactory;
+    private SseEmitterService sse;
+    private AgentRunStateService runState;
+    private ProjectAiMessageService messageService;
+    private ToolRegistry toolRegistry;
+    private TodoListService todoListService;
+    private List<String> sseEvents;
+    private List<String> sseData;
+    private AgentOrchestrator orchestrator;
+
+    /** 按脚本逐轮吐内容的模型，同时留下最后一轮收到的完整消息栈 */
+    private static final class ScriptModel implements StreamingChatLanguageModel {
+        private final List<AiMessage> script;
+        final AtomicInteger calls = new AtomicInteger();
+        volatile List<ChatMessage> lastMessages = List.of();
+
+        ScriptModel(List<AiMessage> script) {
+            this.script = script;
+        }
+
+        @Override
+        public void generate(List<ChatMessage> messages, StreamingResponseHandler<AiMessage> handler) {
+            lastMessages = new ArrayList<>(messages);
+            int idx = calls.getAndIncrement();
+            AiMessage msg = script.get(Math.min(idx, script.size() - 1));
+            if (msg.text() != null && !msg.text().isEmpty()) {
+                handler.onNext(msg.text());
+            }
+            handler.onComplete(Response.from(msg));
+        }
+
+        @Override
+        public void generate(List<ChatMessage> messages, List<ToolSpecification> tools,
+                             StreamingResponseHandler<AiMessage> handler) {
+            generate(messages, handler);
+        }
+    }
+
+    @BeforeEach
+    void setUp() {
+        chatModelFactory = mock(ChatModelFactory.class);
+        sseEvents = new CopyOnWriteArrayList<>();
+        sseData = new CopyOnWriteArrayList<>();
+        sse = mock(SseEmitterService.class);
+        doAnswer(inv -> {
+            sseEvents.add(inv.getArgument(1));
+            sseData.add(String.valueOf((Object) inv.getArgument(2)));
+            return null;
+        }).when(sse).send(any(), any(), any());
+
+        messageService = mock(ProjectAiMessageService.class);
+        when(messageService.listByConversationId(any()))
+                .thenReturn(List.of(mock(ProjectAiMessage.class), mock(ProjectAiMessage.class)));
+        when(messageService.upsertAssistantMessage(any(), any(), any(), any(), any())).thenReturn(1L);
+
+        ContextAssemblerService assembler = mock(ContextAssemblerService.class);
+        when(assembler.assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenAnswer(inv -> new ArrayList<ChatMessage>(List.of(
+                        SystemMessage.from("system"), UserMessage.from("读一下这份合同"))));
+
+        toolRegistry = mock(ToolRegistry.class);
+        when(toolRegistry.getAllSpecifications(any())).thenReturn(List.of());
+        when(toolRegistry.resolve(anyString())).thenReturn(java.util.Optional.empty());
+
+        SkillRouter skillRouter = mock(SkillRouter.class);
+        when(skillRouter.visibleTools(any(), any())).thenAnswer(inv -> inv.getArgument(1));
+        when(skillRouter.activeSkill(any())).thenReturn(java.util.Optional.empty());
+        XmlToolCallParser parser = mock(XmlToolCallParser.class);
+        when(parser.containsToolCall(any())).thenReturn(false);
+
+        todoListService = mock(TodoListService.class);
+        AiContextProperties contextProperties = new AiContextProperties();
+        runState = new AgentRunStateService(
+                mock(com.checkba.repository.AgentRunRecordRepository.class),
+                mock(com.checkba.service.telemetry.TelemetryTurnTracker.class));
+        orchestrator = new AgentOrchestrator(
+                chatModelFactory, messageService, sse, mock(TokenUsageService.class), assembler,
+                toolRegistry, skillRouter, parser, mock(MemoryPipelineService.class),
+                mock(ProjectFileService.class), mock(EditorBridgeService.class),
+                mock(ConversationFileChangeService.class), todoListService,
+                mock(DocumentCheckpointService.class), runState,
+                mock(com.checkba.version.WorkSessionService.class), new AiFailoverProperties(),
+                new RunLoopCompactor(contextProperties, new ContextCompressor(null, null, contextProperties)),
+                mock(com.checkba.service.telemetry.TelemetryService.class),
+                mock(com.checkba.service.telemetry.TelemetryTurnTracker.class),
+                mock(com.checkba.service.telemetry.MatterClassifierService.class));
+    }
+
+    private ScriptModel run(String conversationId, AiMessage... script) {
+        ScriptModel model = new ScriptModel(List.of(script));
+        when(chatModelFactory.getStreamingChatModel(MODEL)).thenReturn(model);
+        AiAgentController.AgentChatRequest request = new AiAgentController.AgentChatRequest();
+        request.setProjectId(1L);
+        request.setConversationId(conversationId);
+        request.setMessage("读一下这份合同");
+        request.setModel(MODEL);
+        orchestrator.handleUserMessage(request, 7L);
+        return model;
+    }
+
+    private static AiMessage readDocumentCall() {
+        return AiMessage.from(List.of(ToolExecutionRequest.builder()
+                .id("t1").name("read_document").arguments("{\"fileId\":\"12\"}").build()));
+    }
+
+    private String bubbleEndData() {
+        for (int i = 0; i < sseEvents.size(); i++) {
+            if ("bubble_end".equals(sseEvents.get(i))) return sseData.get(i);
+        }
+        return null;
+    }
+
+    private String eventData(String event) {
+        for (int i = 0; i < sseEvents.size(); i++) {
+            if (event.equals(sseEvents.get(i))) return sseData.get(i);
+        }
+        return null;
+    }
+
+    @ToolMeta(displayName = "文本查找替换", category = "file", fileEffect = "MODIFIED")
+    public void fakeTextFindReplace() {
+    }
+
+    private ToolRegistry.RegisteredTool fileEffectTool() throws Exception {
+        java.lang.reflect.Method m = getClass().getDeclaredMethod("fakeTextFindReplace");
+        return new ToolRegistry.RegisteredTool(this, m,
+                ToolSpecification.builder().name("text_find_replace").build(),
+                m.getAnnotation(ToolMeta.class), false);
+    }
+
+    private static AiMessage findReplaceCall() {
+        return AiMessage.from(List.of(ToolExecutionRequest.builder()
+                .id("t1").name("text_find_replace")
+                .arguments("{\"fileId\":\"12\",\"find\":\"甲方\",\"replace\":\"乙方\"}").build()));
+    }
+
+    @Test
+    @DisplayName("一次都没命中：不许发 file_change 声称文件被改过")
+    void noOpReplaceMustNotClaimTheFileChanged() throws Exception {
+        when(toolRegistry.execute(any(), any(), any())).thenReturn(new ToolRegistry.ToolResult(
+                com.checkba.service.ai.tools.TextFileEditTools.noHitMessage("甲方", 1200),
+                fileEffectTool(), true));
+
+        run("conv-noop", findReplaceCall(), AiMessage.from("<final>没找到这段文字。</final>"));
+
+        assertFalse(sseEvents.contains("file_change"),
+                "什么都没改却报「已修改」，用户会去找一个不存在的改动：" + sseEvents);
+    }
+
+    @Test
+    @DisplayName("真的替换成功时 file_change 照发（护栏：别把正常通知一起关掉）")
+    void realReplaceStillNotifies() throws Exception {
+        when(toolRegistry.execute(any(), any(), any())).thenReturn(new ToolRegistry.ToolResult(
+                "已在 a.txt 中替换 3 处（命中 3 处）。改动已进入版本记录。",
+                fileEffectTool(), true));
+
+        run("conv-real", findReplaceCall(), AiMessage.from("<final>已替换。</final>"));
+
+        assertTrue(sseEvents.contains("file_change"), "真改了就得通知：" + sseEvents);
+    }
+}

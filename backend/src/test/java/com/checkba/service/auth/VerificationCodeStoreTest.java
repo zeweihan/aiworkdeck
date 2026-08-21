@@ -3,7 +3,16 @@ package com.checkba.service.auth;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -94,5 +103,87 @@ class VerificationCodeStoreTest {
         store.issue("login", "13800000000");
         assertFalse(store.verify("login", "13800000000", null));
         assertFalse(store.verify("login", "13800000000", "  "));
+    }
+
+    // ---- 并发：签发与核销必须对同一 key 互斥 ----
+
+    /**
+     * 可控时钟兼交会点：武装后，第一个读表的线程停在原地，别的线程照常拿到时间。
+     * 借它把「一个线程正停在临界区里」这件事做成确定性的，不靠 sleep 撞运气。
+     */
+    private static final class GateClock implements LongSupplier {
+        volatile boolean armed = false;
+        final CountDownLatch entered = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+        private final AtomicInteger hits = new AtomicInteger();
+        private final long fixed = 1_000_000L;
+
+        @Override
+        public long getAsLong() {
+            if (armed && hits.incrementAndGet() == 1) {
+                entered.countDown();
+                try {
+                    release.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            return fixed;
+        }
+    }
+
+    @Test
+    @DisplayName("并发核销互斥：一个线程在临界区里时另一个 verify 必须被挡住（否则 ++attempts 丢更新，5 次上限形同虚设）")
+    void verifyIsAtomicPerKey() throws Exception {
+        GateClock gate = new GateClock();
+        VerificationCodeStore s = new VerificationCodeStore(gate);
+        String code = s.issue("login", "13800000000");
+        gate.armed = true;
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<Boolean> first = pool.submit(() -> s.verify("login", "13800000000", "000000"));
+            assertTrue(gate.entered.await(5, TimeUnit.SECONDS), "第一个 verify 应当进入临界区");
+
+            Future<Boolean> second = pool.submit(() -> s.verify("login", "13800000000", "111111"));
+            assertThrows(TimeoutException.class, () -> second.get(600, TimeUnit.MILLISECONDS),
+                    "同一 key 的 verify 必须互斥：读计数与写回计数之间放行第二个线程就会丢更新");
+
+            gate.release.countDown();
+            assertFalse(first.get(5, TimeUnit.SECONDS));
+            assertFalse(second.get(5, TimeUnit.SECONDS));
+            // 两次错都必须真的记上
+            assertNotEquals(code, "000000");
+            assertEquals(2, s.attemptsForTest("login", "13800000000"));
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("并发签发互斥：同一 key 两个线程同时进来，第二个必须撞上冷却而不是也发一条")
+    void issueIsAtomicPerKey() throws Exception {
+        GateClock gate = new GateClock();
+        VerificationCodeStore s = new VerificationCodeStore(gate);
+        gate.armed = true;
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<String> first = pool.submit(() -> s.issue("login", "13800000000"));
+            assertTrue(gate.entered.await(5, TimeUnit.SECONDS), "第一个 issue 应当进入临界区");
+
+            Future<String> second = pool.submit(() -> s.issue("login", "13800000000"));
+            assertThrows(TimeoutException.class, () -> second.get(600, TimeUnit.MILLISECONDS),
+                    "同一 key 的签发必须互斥：查冷却与写新码之间放行第二个线程，两条码就会一起发出去");
+
+            gate.release.countDown();
+            assertNotNull(first.get(5, TimeUnit.SECONDS));
+            ExecutionException boom = assertThrows(ExecutionException.class, () -> second.get(5, TimeUnit.SECONDS));
+            assertTrue(boom.getCause().getMessage().contains("频繁"), "第二个线程应被冷却挡下");
+            // 冷却挡下的那次不该算进当日条数
+            assertEquals(1, s.dailySendsForTest("13800000000"));
+        } finally {
+            pool.shutdownNow();
+        }
     }
 }

@@ -349,7 +349,9 @@ public class AgentOrchestrator {
         if (meta.refreshFiles()) {
             sseEmitterService.send(conversationId, "client_action", "{\"action\":\"refresh_files\"}");
         }
-        if (!meta.fileEffect().isEmpty()) {
+        // 「执行成功」不等于「改过文件」：查找替换一次都没命中时照发 MODIFIED，
+        // 用户会被告知本轮改了这个文件，去找却找不到任何改动。
+        if (!meta.fileEffect().isEmpty() && result.fileChanged()) {
             String fileName = meta.fileArg().isEmpty() ? null : extractArg(argsJson, meta.fileArg());
             if (fileName == null || fileName.isEmpty()) {
                 fileName = "Current Document";

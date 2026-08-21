@@ -109,6 +109,25 @@ class XmlToolCallParserTest {
         assertEquals("乙方", args.getStr("replaceText"));
     }
 
+    /**
+     * 参数值里出现一对 {@code ({ ... })} 是常态（正文里引用代码、字典字面量、
+     * 甚至一句「helper({k: 1})」）。此前 tryExtractJsonObjectArgs 用
+     * indexOf("({") / lastIndexOf("})") 在整段文本里找，命中即把中间那段当成
+     * 整体参数对象返回，真正的命名参数全部丢失——工具拿到一组凭空捏造的参数
+     * 却照常执行，而且不报错。
+     */
+    @Test
+    @DisplayName("参数值里的 ({...}) 不得被当成 JSON 风格整体参数")
+    void codeLikeArgumentIsNotMistakenForJsonStyleCall() {
+        XmlToolCallParser.ParsedCall call = single(
+                "<tool_code>doc_find_replace(findText=\"甲方\", replaceText=\"见 helper({k: 1}) 的返回\")</tool_code>");
+        assertEquals("doc_find_replace", call.toolName());
+        cn.hutool.json.JSONObject args = cn.hutool.json.JSONUtil.parseObj(call.argsJson());
+        assertEquals("甲方", args.getStr("findText"), "真实参数不该被 ({...}) 顶掉: " + call.argsJson());
+        assertTrue(args.getStr("replaceText") != null && args.getStr("replaceText").contains("helper("),
+                "replaceText 应保留原文: " + call.argsJson());
+    }
+
     @Test
     @DisplayName("ctrl46 定界符 + 无括号写法（Gemini 兼容）")
     void parsesCtrl46Format() {
