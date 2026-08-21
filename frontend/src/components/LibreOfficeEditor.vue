@@ -327,6 +327,7 @@ export default {
       // webview 环境下 dataTransfer 可能被清空：退回 FileTree/暂存区留在 document 上的全局兜底
       if (!file && typeof document !== 'undefined' && document.__checkbaDraggedFile) {
         file = { ...document.__checkbaDraggedFile }
+        document.__checkbaDraggedFile = null // 消费即清，免得下一次落空的 drop 捡到陈文件
       }
       if (!file || file.fileType === 'folder' || file.isFolder) return
       const id = file.id != null ? file.id : file.fileId
