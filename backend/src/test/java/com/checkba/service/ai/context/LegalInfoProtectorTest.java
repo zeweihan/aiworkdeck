@@ -143,6 +143,24 @@ class LegalInfoProtectorTest {
                 "压缩后金额被截断：" + result.getContent());
     }
 
+    /**
+     * 分段循环结束后就直接返回，最后一个受保护片段之后的正文被无条件丢掉——
+     * 合同/裁判文书里引用与金额往往集中在前半段，后面几百字的约定、送达条款、
+     * 落款就这么没了，而且不像「无受保护片段」那条分支还会补个省略号，
+     * 这里连截断标记都没有：模型与用户都不知道后面还有东西。
+     */
+    @Test
+    @DisplayName("最后一个受保护片段之后的正文不能被无声丢掉")
+    void tailAfterLastProtectedSegmentIsNotSilentlyDropped() {
+        String tail = "本协议自双方签署之日起生效，一式两份，甲乙双方各执一份，具有同等法律效力。".repeat(6);
+        String content = "协议签署日期为2024年1月15日。" + tail;
+        LegalInfoProtector.CompressedResult result =
+                protector.safeCompress(content, content.length() - 20);
+        assertTrue(result.getContent().length() > "协议签署日期为2024年1月15日。".length() + 20,
+                "尾部正文被整段丢掉了：" + result.getContent());
+        assertTrue(result.getContent().contains("2024年1月15日"), "受保护片段仍要在");
+    }
+
     @Test
     @DisplayName("验证压缩结果应检测丢失的关键信息")
     void validateShouldDetectMissingCriticalInfo() {

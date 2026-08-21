@@ -292,7 +292,24 @@ public class LegalInfoProtector {
             result.append(segment.getContent());
             lastEnd = segment.getEnd();
         }
-        
+
+        // 最后一个受保护片段之后的正文：此前循环一结束就直接返回，尾部被无条件丢掉，
+        // 连「无受保护片段」那条分支都有的省略号都没有——合同/裁判文书里引用与金额
+        // 往往集中在前半段，后面的生效条款、送达约定、落款就这么无声消失，
+        // 模型与用户都不知道还有东西被截了。
+        if (lastEnd < content.length()) {
+            String after = content.substring(lastEnd);
+            if (availableForOther > 0) {
+                int takeLength = Math.min(after.length(), availableForOther);
+                result.append(after, 0, takeLength);
+                if (takeLength < after.length()) {
+                    result.append("...");
+                }
+            } else {
+                result.append("...");
+            }
+        }
+
         return new CompressedResult(result.toString(), protectedSegments, true);
     }
 
