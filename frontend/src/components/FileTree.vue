@@ -469,8 +469,18 @@
             <view v-else class="tree-expand-placeholder"></view>
 
             <!-- Icon Logic: Folder uses CSS, Files use SVG Component -->
+            <view
+              v-if="isTemplateFolder(item)"
+              class="tree-item-icon-wrapper tree-template-folder-icon"
+              :title="$t('files.templateFolderHint')"
+            >
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l1.8 2h8.6A1.5 1.5 0 0 1 21 8.5v9A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5v-11z" fill="#EFE6CF" stroke="#8A7340" stroke-width="1.2" />
+                <path d="M9 11.2h6M12 11.2v5.3" stroke="#6B4E16" stroke-width="1.6" stroke-linecap="round" />
+              </svg>
+            </view>
             <image
-              v-if="item.isFolder"
+              v-else-if="item.isFolder"
               class="tree-item-icon-img"
               :class="{ 'is-opened': expandedFolders.has(item.id) }"
               :src="expandedFolders.has(item.id) ? '/static/folder-opened.png' : '/static/folder-closed.png'"
@@ -618,8 +628,18 @@
             <view v-else class="tree-expand-placeholder"></view>
 
              <!-- Icon Logic: Folder uses CSS, Files use SVG Component -->
+            <view
+              v-if="isTemplateFolder(item)"
+              class="tree-item-icon-wrapper tree-template-folder-icon"
+              :title="$t('files.templateFolderHint')"
+            >
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l1.8 2h8.6A1.5 1.5 0 0 1 21 8.5v9A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5v-11z" fill="#EFE6CF" stroke="#8A7340" stroke-width="1.2" />
+                <path d="M9 11.2h6M12 11.2v5.3" stroke="#6B4E16" stroke-width="1.6" stroke-linecap="round" />
+              </svg>
+            </view>
             <image
-              v-if="item.isFolder"
+              v-else-if="item.isFolder"
               class="tree-item-icon-img"
               :class="{ 'is-opened': expandedFolders.has(item.id) }"
               :src="expandedFolders.has(item.id) ? '/static/folder-opened.png' : '/static/folder-closed.png'"
@@ -895,6 +915,7 @@ import { host } from '@/services/host.js'
 import { findTopmostDeletedAncestor, summarizeDeleteResults } from '@/utils/fileTreeRecycle.js'
 import { groupByParent, buildTreeFromGroups } from '@/utils/fileTreeBuild.js'
 import { evidenceRefCounts } from '@/services/api.js'
+import { createRefCountsFetcher } from '@/utils/fileTreeRefCounts.js'
 import CircularProgress from '@/components/CircularProgress.vue'
 import FileTypeIcon from '@/components/FileTypeIcon.vue'
 import TagChip from '@/components/TagChip.vue'
@@ -1270,6 +1291,9 @@ export default {
         this.isBatchUploading = false
         this.batchUploadTotalSize = 0
         this.batchUploadFinishedSize = 0
+        // 「展开更多」的渲染上限与引用角标都是按项目的，换项目必须归零
+        this.revealCounts = {}
+        this.refCounts = {}
         this.restoreUploadState()
         this.loadFiles()
       }
@@ -1343,6 +1367,9 @@ export default {
       }
 
       this.loading = true
+      // 整树重载：窗口化上限回到初始值，引用角标整批重拉（旧值会被覆盖而不是叠加）
+      this.revealCounts = {}
+      this.refCounts = {}
       try {
         // 确保 projectId 是数字类型
         const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
@@ -1371,7 +1398,7 @@ export default {
           const hiddenNames = new Set(['.stagezone', '__staging_area__'])
           this.files = files.filter(f => !hiddenNames.has(f.name))
         }
-        this.scheduleRefCountsFetch()
+        this.scheduleRefCountsFetch({ reload: true })
         console.log('加载文件列表成功:', this.files)
       } catch (error) {
         // 完整打印错误信息，包括堆栈、响应数据等
@@ -1873,6 +1900,13 @@ export default {
       }
     },
     // 切换文件夹展开/收起
+    /**
+     * 根级 `_模板` 文件夹（dev-board#112）：模板画像的权威存放处，换模板图标 + 悬浮说明。
+     * 只认根级同名文件夹——子目录里叫 _模板 的只是普通文件夹，画像解析也不会去读它。
+     */
+    isTemplateFolder(item) {
+      return !!(item && item.isFolder && item.name === '_模板' && item.parentId == null)
+    },
     toggleFolder(folderId) {
       if (this.expandedFolders.has(folderId)) {
         this.expandedFolders.delete(folderId)
@@ -1898,27 +1932,20 @@ export default {
       this.scheduleRefCountsFetch()
     },
     // 「被引用 N 次」角标：树刷新/展开更多后，对当前渲染的文件 id 分批拉取引用计数。
-    // 接口不存在（单元 A 可能未合并）或出错时静默不显示角标，不 mock 后端。
-    async scheduleRefCountsFetch() {
+    // 防抖/去重/过期丢弃/缺失置 0 的规则在 utils/fileTreeRefCounts.js（有 node 测试）。
+    // 接口不存在或出错时静默不显示角标，不 mock 后端。
+    scheduleRefCountsFetch({ reload = false } = {}) {
       if (!this.projectId) return
+      if (!this._refCountsFetcher) {
+        this._refCountsFetcher = createRefCountsFetcher({
+          fetch: (projectId, ids) => evidenceRefCounts(projectId, ids),
+          apply: (counts) => { this.refCounts = { ...this.refCounts, ...counts } }
+        })
+      }
       const ids = this.windowedDisplayFiles
         .filter(f => !f.__loadMore && !f.isFolder)
         .map(f => f.id)
-      if (ids.length === 0) return
-      const BATCH_SIZE = 200
-      for (let i = 0; i < ids.length; i += BATCH_SIZE) {
-        const batch = ids.slice(i, i + BATCH_SIZE)
-        try {
-          const res = await evidenceRefCounts(this.projectId, batch)
-          // 兼容 {code:0, data:{...}} 信封与裸对象两种形状（单元 A 的端点形状以合并时为准）
-          const counts = (res && res.data && typeof res.data === 'object') ? res.data : res
-          if (counts && typeof counts === 'object') {
-            this.refCounts = { ...this.refCounts, ...counts }
-          }
-        } catch (e) {
-          // 端点未合并/出错：角标就不显示，不打扰用户、不 mock 数据
-        }
-      }
+      this._refCountsFetcher.schedule(this.projectId, ids, { reload })
     },
     // 计算项目的缩进（用于树形结构）
     getItemPadding(item) {
@@ -4704,6 +4731,19 @@ $bg-grey: $uni-bg-color-grey;
 
 .tree-item-icon-img.is-opened {
   transform: scale(1.2);
+}
+
+.tree-template-folder-icon {
+  width: 32rpx;
+  height: 32rpx;
+  margin-right: 8rpx;
+  cursor: help;
+}
+
+.tree-template-folder-icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 .upload-status-footer-fixed{

@@ -710,6 +710,11 @@ public class FileTools implements AgentToolComponent {
      * 供路径类工具把物理路径映射回 DB 记录，让所有文件类型都能拿到 fileId。
      */
     private java.util.Map<String, ProjectFile> dbPathIndex(Long projectId) {
+        return dbPathIndex(projectFileRepository, projectId);
+    }
+
+    /** 同上，供同包其他工具（DocumentEditTools.doc_link_evidence 的 path → fileId）复用。 */
+    static java.util.Map<String, ProjectFile> dbPathIndex(ProjectFileRepository projectFileRepository, Long projectId) {
         List<ProjectFile> all = projectFileRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId);
         java.util.Map<Long, ProjectFile> byId = new java.util.HashMap<>();
         for (ProjectFile f : all) byId.put(f.getId(), f);

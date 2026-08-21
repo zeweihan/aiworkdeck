@@ -24,7 +24,7 @@ function loadMethods() {
     .replace(/export default \{/, 'return {')
   const factory = new Function(
     'getFileDownloadUrl', 'getCurrentUser', 'createRelayExecutor',
-    'webviewTransport', 'iframeTransport', 'ReviewPanel', 'EditorToolbar',
+    'webviewTransport', 'iframeTransport', 'ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar',
     'getAuthHeaders', 'host', body)
   return factory((id) => '/download/' + id, () => ({ name: '测试用户' })).methods
 }
@@ -52,6 +52,7 @@ function makeVm() {
     $emit(ev) { this.emitted.push(ev) },
     appendLog() {},
     startBootTrickle() {},   // 定时器与本条无关，停掉以免拖住测试进程
+    initEvidence() {},       // EvidenceLink 首轮核对是 ready 之后的后台事，与装载重入无关
     executor: {
       executeCommand: async (action) => { vm.dispatched.push(action); return { success: true, kind: 'writer' } },
     },

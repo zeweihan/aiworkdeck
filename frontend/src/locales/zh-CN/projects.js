@@ -57,6 +57,7 @@ export default {
   activitySectionTitle: '动态',
   taskSectionTitle: '日程与任务',
   conversationSectionTitle: 'AI 对话',
+  learnedTemplateLine: '已学习模板：{font} {size}pt / {levels} 级编号 / {tables} 类表格',
   missingProjectParam: '缺少项目参数',
   saveFailed: '保存失败',
 

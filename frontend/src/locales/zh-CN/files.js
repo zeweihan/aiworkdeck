@@ -1,5 +1,8 @@
 // 文件预览/选择/暂存/下载/搜索/标签组件文案
 export default {
+  // FileTree.vue：根级 _模板 文件夹（dev-board#112）
+  templateFolderHint: '模板文件夹：放入你所的报告模板，AI 学习后按它的字体、编号与表格样式起草',
+
   // FilePreview.vue
   selectFilePrompt: '请从左侧选择文件进行预览',
   edit: '编辑',

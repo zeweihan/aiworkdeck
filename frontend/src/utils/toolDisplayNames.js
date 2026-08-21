@@ -125,6 +125,8 @@ const NAMES = {
   doc_insert_footnote: { zh: '插入脚注', en: 'Insert footnote' },
   doc_insert_endnote: { zh: '插入尾注', en: 'Insert endnote' },
   doc_set_hyperlink: { zh: '设置超链接', en: 'Set hyperlink' },
+  doc_link_evidence: { zh: '关联底稿', en: 'Link evidence' },
+  doc_list_evidence: { zh: '查看底稿关联', en: 'List evidence links' },
   doc_insert_image: { zh: '插入图片', en: 'Insert image' },
   doc_set_style: { zh: '应用样式', en: 'Apply style' },
   // 电子表格（Calc / xlsx）sheet_* 原语

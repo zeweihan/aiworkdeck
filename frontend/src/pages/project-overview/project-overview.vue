@@ -840,7 +840,9 @@
                       :file="file"
                       @ready="onLibreReady($event, 'left', file.id)"
                       @close="onLibreClose"
+                      :project-id="projectId"
                       @open-url="onLibreOpenUrl"
+                      @open-evidence-target="onOpenEvidenceTarget"
                       @menu-state="pushMenuState"
                       @evidence-drop="onEvidenceDrop($event, 'left')"
                       @locator-consumed="onLocatorConsumed"
@@ -861,7 +863,9 @@
                       :file="sp.file"
                       @ready="onLibreSpareReady(sp, $event)"
                       @close="onLibreClose"
+                      :project-id="projectId"
                       @open-url="onLibreOpenUrl"
+                      @open-evidence-target="onOpenEvidenceTarget"
                       @menu-state="pushMenuState"
                       @evidence-drop="onEvidenceDrop($event, 'left')"
                       @locator-consumed="onLocatorConsumed"
@@ -1004,7 +1008,9 @@
                       :file="file"
                       @ready="onLibreReady($event, 'right', file.id)"
                       @close="onLibreClose"
+                      :project-id="projectId"
                       @open-url="onLibreOpenUrl"
+                      @open-evidence-target="onOpenEvidenceTarget"
                       @menu-state="pushMenuState"
                       @evidence-drop="onEvidenceDrop($event, 'right')"
                       @locator-consumed="onLocatorConsumed"
@@ -3745,6 +3751,12 @@ export default {
     // === Staging Area Methods ===
     // 文件暂存区方法组已外置 → ./stagingArea.js（Phase 2）
 
+    // 审阅面板「证据」页 / 改字提示条的「查看底稿」：payload = {fileId, locator, linkKey, targetId}，
+    // 形状与 TargetView 兼容，直接交给 evidenceLinkActions.js 的 openFileLinkTarget(target) 打开并定位。
+    onOpenEvidenceTarget(payload) {
+      if (!payload || !payload.fileId) return
+      this.openFileLinkTarget(payload, this.focusedPane || 'left')
+    },
     // OCR 采集与浮层生命周期方法组已外置（Phase 3c） → ./ocrCapture.js
     getActiveWebTab() {
       // 优先取当前聚焦窗格的激活 tab

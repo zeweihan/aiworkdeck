@@ -47,6 +47,17 @@ $bg-white: #FFFFFF;
   padding: 16px 18px;
 }
 
+// 「已学习模板」一行：档案头下方的一句话状态，不是卡片，弱化成说明文字
+.home-template-line {
+  padding: 0 4px;
+}
+
+.home-template-line-text {
+  font-size: 12px;
+  color: #6C757D;
+  line-height: 1.6;
+}
+
 .home-section-title {
   display: block;
   margin-bottom: 12px;
