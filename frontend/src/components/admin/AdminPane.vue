@@ -274,17 +274,6 @@
                 </view>
 
                 <view class="form-row">
-                  <text class="form-label">{{ $t('platform.budgetTaskLimitLabel') }}</text>
-                  <input
-                    v-model="budgetForm.taskLimit"
-                    class="form-input"
-                    type="digit"
-                    :placeholder="$t('platform.budgetUnit')"
-                  />
-                </view>
-                <text class="field-note">{{ $t('platform.budgetTaskLimitNote') }}</text>
-
-                <view class="form-row">
                   <text class="form-label">{{ $t('platform.budgetLowBalanceLabel') }}</text>
                   <input
                     v-model="budgetForm.lowBalance"
@@ -1525,7 +1514,7 @@ export default {
       // 控件立刻可用）。远端那一半单独放 platformRemote，异步填，填不上就是「—」。
       platformState: {
         services: [], platformAvailable: false, accountConnected: false,
-        budget: { taskLimitCents: 0, lowBalanceCents: 0 },
+        budget: { lowBalanceCents: 0 },
       },
       // 远端那一半（GET /api/platform-services/remote）。三个 null 与空 enabled 表
       // 都是「不知道」的初值，**不是** 0 / 未开放——在真值到达之前一律显示破折号。
@@ -1539,7 +1528,7 @@ export default {
       // 花费闸门的两个阈值，界面上以 Credits（元）为单位编辑，存库是分。
       // 与档位不同，它们是输入框而不是开关：跟着每个字符写库既没必要也会打断输入，
       // 所以留一个明确的保存动作。
-      budgetForm: { taskLimit: '0', lowBalance: '0' },
+      budgetForm: { lowBalance: '0' },
       budgetBusy: false,
       // 每项的「使用自己的 Key（高级）」是否展开。默认全收起；
       // ?nav=platform&service=ocr 这样的深链会就地展开对应那一项（错误提示的逃生门）。
@@ -2954,15 +2943,16 @@ export default {
     },
     async onSaveBudget() {
       if (this.budgetBusy) return
-      const taskLimitCents = this.creditsToCents(this.budgetForm.taskLimit)
       const lowBalanceCents = this.creditsToCents(this.budgetForm.lowBalance)
-      if (taskLimitCents < 0 || lowBalanceCents < 0) {
+      if (lowBalanceCents < 0) {
         uni.showToast({ title: this.$t('platform.budgetInvalid'), icon: 'none' })
         return
       }
       this.budgetBusy = true
       try {
-        await savePlatformBudget(taskLimitCents, lowBalanceCents)
+        // 「单次任务花费上限」2026-08-21 撤出界面：后端从没有执行点，文案却承诺「花到这个数会问一句」。
+        // 端点仍收两个字段，这里恒传 0（= 不启用）保持兼容。
+        await savePlatformBudget(0, lowBalanceCents)
         uni.showToast({ title: this.$t('platform.budgetSaved'), icon: 'none' })
       } catch (e) {
         uni.showToast({ title: (e && e.message) || this.$t('platform.budgetSaveFailed'), icon: 'none' })
@@ -2983,14 +2973,12 @@ export default {
           platformAvailable: !!s.platformAvailable,
           accountConnected: !!s.accountConnected,
           budget: {
-            taskLimitCents: Number((s.budget && s.budget.taskLimitCents) || 0),
             lowBalanceCents: Number((s.budget && s.budget.lowBalanceCents) || 0),
           },
         }
         // 输入框跟着库里的值走。旧后端不返回 budget 时这里落成 0 = 不启用，
         // 与后端默认值一致，不会凭空冒出一个用户没设过的阈值。
         this.budgetForm = {
-          taskLimit: (this.platformState.budget.taskLimitCents / 100).toFixed(2),
           lowBalance: (this.platformState.budget.lowBalanceCents / 100).toFixed(2),
         }
         this.platformServicesError = ''

@@ -69,8 +69,6 @@ export default {
   // ---- Spending thresholds ----
   budgetTitle: 'Spending alerts',
   budgetSubtitle: 'Set either to 0 to turn it off. These decide when we ask you a question, not a hard cap.',
-  budgetTaskLimitLabel: 'Per-task spending cap',
-  budgetTaskLimitNote: 'When one task reaches this amount we ask whether to continue; confirm and it carries on. Not a prompt on every call.',
   budgetLowBalanceLabel: 'Warn when balance drops below',
   budgetLowBalanceNote: 'Shows a warning on this panel once the balance falls below this amount, so a transcription does not run out halfway.',
   budgetUnit: 'Credits',

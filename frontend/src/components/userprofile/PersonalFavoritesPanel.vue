@@ -17,21 +17,23 @@
     </view>
     <view v-else class="favorites-list">
       <view v-for="fav in favorites" :key="fav.id" class="favorite-card">
-        <view class="favorite-header">
-          <text class="favorite-title">{{ fav.title || (fav.sourceUrl ? fav.sourceUrl : $t('account.untitledExcerpt')) }}</text>
-          <button class="btn-danger-outline small" @tap.stop="handleDeleteFavorite(fav.id)">{{ $t('common.delete') }}</button>
+        <view v-if="fav.imagePath" class="favorite-thumb">
+          <image class="fav-img" mode="aspectFill" :src="getFavoriteImageUrl(fav.id)" />
         </view>
-        <view v-if="fav.sourceUrl" class="favorite-url">
-          <text class="url-text">{{ fav.sourceUrl }}</text>
-        </view>
-        <view v-if="fav.imagePath" class="favorite-image">
-          <image class="fav-img" mode="widthFix" :src="getFavoriteImageUrl(fav.id)" />
-        </view>
-        <view class="favorite-content">
-          <text class="content-text">{{ fav.content }}</text>
-        </view>
-        <view class="favorite-footer">
-          <text class="time-text">{{ formatTime(fav.createdAt) }}</text>
+        <view class="favorite-body">
+          <view class="favorite-header">
+            <text class="favorite-title">{{ fav.title || (fav.sourceUrl ? fav.sourceUrl : $t('account.untitledExcerpt')) }}</text>
+            <button class="btn-danger-outline small" @tap.stop="handleDeleteFavorite(fav.id)">{{ $t('common.delete') }}</button>
+          </view>
+          <view v-if="fav.sourceUrl" class="favorite-url">
+            <text class="url-text">{{ fav.sourceUrl }}</text>
+          </view>
+          <view v-if="fav.content" class="favorite-content">
+            <text class="content-text">{{ fav.content }}</text>
+          </view>
+          <view class="favorite-footer">
+            <text class="time-text">{{ formatTime(fav.createdAt) }}</text>
+          </view>
         </view>
       </view>
     </view>
@@ -118,28 +120,53 @@ $text-light: #ADB5BD;
 }
 
 .favorites-list {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 10px;
 }
 
+// 2026-08-21 卡片压扁：原先单列纵排、截图 widthFix 撑满设置页整宽，一张卡一屏高。
+// 现在自适应网格 + 左侧固定缩略图 + 正文两行截断，宽屏一行放两三张。
 .favorite-card {
+  display: flex;
+  gap: 10px;
   background: $brand-white;
-  border-radius: 14px;
-  box-shadow: 0 4px 16px rgba(18, 52, 77, 0.05);
+  border-radius: 8px;
   border: 1px solid rgba(224, 224, 224, 0.7);
-  padding: 16px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.favorite-thumb {
+  flex-shrink: 0;
+  width: 88px;
+  height: 66px;
+}
+
+.fav-img {
+  width: 88px;
+  height: 66px;
+  border-radius: 6px;
+  border: 1px solid rgba(224, 224, 224, 0.7);
+  display: block;
+}
+
+.favorite-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .favorite-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
 }
 
 .favorite-title {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: $text-main;
   flex: 1;
@@ -149,44 +176,42 @@ $text-light: #ADB5BD;
 }
 
 .favorite-url {
-  margin-top: 6px;
+  margin-top: 2px;
 }
 
 .url-text {
-  font-size: 12px;
+  font-size: 11px;
   color: $text-light;
-  word-break: break-all;
-}
-
-.favorite-image {
-  margin-top: 10px;
-}
-
-.fav-img {
-  width: 100%;
-  border-radius: 10px;
-  border: 1px solid rgba(224, 224, 224, 0.7);
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .favorite-content {
-  margin-top: 10px;
+  margin-top: 4px;
 }
 
 .content-text {
-  font-size: 13px;
+  font-size: 12px;
   color: $text-secondary;
-  line-height: 1.6;
-  white-space: pre-wrap;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
 }
 
 .favorite-footer {
-  margin-top: 10px;
+  margin-top: auto;
+  padding-top: 4px;
   display: flex;
   justify-content: flex-end;
 }
 
 .time-text {
-  font-size: 12px;
+  font-size: 11px;
   color: $text-light;
 }
 

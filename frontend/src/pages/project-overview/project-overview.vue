@@ -220,18 +220,13 @@
              2026-08-20：个人中心并进了「设置」，下拉只剩这一项——两个入口各开一个
              整面板、彼此还互相跳的形态是用户明确抱怨过的。客户同样要能进（个人组
              的工作记录/账号安全对他一样成立），面板内的「系统」组自己按 isAdmin 收。
-             顶栏里每一个能点的东西都必须在 App.vue 的 no-drag 名单里，
-             下拉菜单本身也要——它画在 .project-header 这条 drag 区之内。 -->
+             2026-08-21（dev-board#96）：只剩一项的下拉没有存在的理由，点头像直接开
+             设置标签（同一条 goToSystemSettings 路径），下拉与它的 state/样式一并撤掉。
+             顶栏里每一个能点的东西都必须在 App.vue 的 no-drag 名单里。 -->
         <view class="header-account">
-          <view class="avatar-btn" @tap.stop="toggleAvatarMenu" :title="$t('workbench.accountMenu')">
+          <view class="avatar-btn" @tap.stop="goToSystemSettings" :title="$t('workbench.accountMenu')">
             <image v-if="currentUser && currentUser.avatarUrl" :src="currentUser.avatarUrl" class="avatar-img" />
             <text v-else class="avatar-text">{{ getInitial(userDisplayName || currentUser?.displayName) || 'U' }}</text>
-          </view>
-          <view v-if="avatarMenuOpen" class="avatar-menu-mask" @tap.stop="avatarMenuOpen = false"></view>
-          <view v-if="avatarMenuOpen" class="avatar-menu" @tap.stop>
-            <view class="avatar-menu-item" @tap="goToSystemSettings">
-              <text>{{ $t('workbench.settingsTabName') }}</text>
-            </view>
           </view>
         </view>
       </view>
@@ -740,6 +735,8 @@
                       }"
                       :draggable="true"
                       @tap="activateTab(file, 'left')"
+                      @mousedown="onTabMouseDown"
+                      @auxclick="onTabAuxClick($event, file, 'left')"
                       @dragstart="onTabDragStart($event, file, 'left')"
                       @dragover.prevent="onTabDragOver($event, file, 'left')"
                       @drop.prevent="onTabDropOnItem($event, file, 'left')"
@@ -778,6 +775,8 @@
                       }"
                       :draggable="true"
                       @tap="activateTab(file, 'right')"
+                      @mousedown="onTabMouseDown"
+                      @auxclick="onTabAuxClick($event, file, 'right')"
                       @dragstart="onTabDragStart($event, file, 'right')"
                       @dragover.prevent="onTabDragOver($event, file, 'right')"
                       @drop.prevent="onTabDropOnItem($event, file, 'right')"
@@ -1766,7 +1765,6 @@ export default {
       // 一个不渲染的 tab 上（v-else 兜底能救，但 tab 条上没有高亮项，看着像坏了）。
       voiceTab: 'tts',
       // 顶栏右上角头像下拉（只有「设置」一项）
-      avatarMenuOpen: false,
       // 单文件历史：右键「这份文件的历史」时设置，version 面板据此只显示这份文件的版本
       versionFileFilter: null,
       // 有一次采纳停在待裁决状态（/status 的 adoptConflict）。版本面板之外也要提示，
@@ -4377,9 +4375,6 @@ export default {
     goBack() {
       uni.navigateBack()
     },
-    toggleAvatarMenu() {
-      this.avatarMenuOpen = !this.avatarMenuOpen
-    },
     /**
      * 设置：中栏开标签，不再整页跳转（2026-08-19）。
      * 整页跳转会把工作台（标签、编辑器、AI 会话）整个换掉，改个 API Key 的代价
@@ -4387,7 +4382,6 @@ export default {
      * pages/admin 薄壳页仍在，直链与浏览器端走那条。
      */
     goToSystemSettings(opts) {
-      this.avatarMenuOpen = false
       this.openSettingsTab(opts)
     },
     /**

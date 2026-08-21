@@ -412,10 +412,9 @@ $bg-white: #FFFFFF;
   border-right: none;
 }
 
-/* 右上角头像与它的下拉。独立成一格（不进 .header-tools）是因为它对客户视图
-   也渲染，而整片工具区在客户视图里是收起来的。position:relative 给菜单定位。 */
+/* 右上角头像。独立成一格（不进 .header-tools）是因为它对客户视图
+   也渲染，而整片工具区在客户视图里是收起来的。 */
 .header-account {
-  position: relative;
   display: flex;
   align-items: center;
 }
@@ -438,38 +437,6 @@ $bg-white: #FFFFFF;
 
   &:hover {
     border-color: $color-accent;
-  }
-}
-
-.avatar-menu-mask {
-  position: fixed;
-  inset: 0;
-  z-index: 1999;
-}
-
-.avatar-menu {
-  position: absolute;
-  top: calc(100% + 10px);
-  right: 0;
-  min-width: 150px;
-  background: #fff;
-  border: 1px solid #e9ecef;
-  border-radius: 8px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.14);
-  z-index: 2000;
-  padding: 6px 0;
-}
-
-.avatar-menu-item {
-  padding: 8px 14px;
-  cursor: pointer;
-  display: flex;
-  font-size: 13px;
-  color: #2c3338;
-  white-space: nowrap;
-
-  &:hover {
-    background: rgba(91, 209, 151, 0.1);
   }
 }
 
