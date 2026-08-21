@@ -140,7 +140,7 @@ txt/md/markdown 自 dev-board#37 起不进 LOWA（前端走 PlainTextEditor.vue�
 | `evidence_link`（一条 = 一个书签锚点） | `evidence_link_target`（一条 = 一个底稿位置，id 即 `filelink&t=` 的 t） |
 |---|---|
 | `project_id`、`doc_file_id`（报告 ProjectFile.id，不再用 wpsFileId 软引用） | `link_id`（应用层级联删除）、`file_id`（必须同项目，IDOR 在 Service） |
-| `link_key` varchar(64) **= 文档内书签名**，唯一 `(project_id, link_key)`；新建 `EVID_<26 位 ULID>`（31 字符，只含 `[A-Za-z0-9_]`），迁移行保留 `lk_*` | `locator_json` text（可空 = 整个文件）、`locator_hash` char(64) = sha256(键排序 canonical JSON)，空记 `-`；唯一 `(link_id, file_id, locator_hash)` |
+| `link_key` varchar(64) **= 文档内书签名**，唯一 `(project_id, link_key)`；新建 `EVID_<26 位 ULID>`（31 字符，只含 `[A-Za-z0-9_]`），迁移行保留 `lk_*` | `locator_json` text（可空 = 整个文件）、`locator_hash` char(64) = sha256(键排序 + 数字归一的 canonical JSON，根必须是对象)，空记 `-`；唯一 `(link_id, file_id, locator_hash)` |
 | `anchor_text` varchar(1000) 快照、`anchor_hash` = `AnchorHash.of(anchorText)` | `relation` supports/contradicts/partial（默认 supports；**contradicts 必须有真实 target**，「查无此据」走缺口清单） |
 | `section_path`（标题链 `一/（二）/3`，worker 派生）、`section_title` | `method` written_review/written_statement/web_check/third_party/interview，可空 |
 | `status` active/unverified/stale/orphan；`created_by_kind` human/ai/plugin | `confidence` 0-100（人工 = null）、`note`、`sort_order` |
@@ -162,10 +162,10 @@ txt/md/markdown 自 dev-board#37 起不进 LOWA（前端走 PlainTextEditor.vue�
 | GET | `/?docFileId=&status=&sectionPath=` | listByDoc（sectionPath 是前缀） |
 | GET | `/?fileId=` | listByFile（反查，优先于 docFileId） |
 | GET | `/?docFileId=&partyTagId=` | listByParty（targets.file 挂了该 PARTY 标签） |
-| POST | `/{linkKey}/targets` | addTargets（body 是 TargetInput 数组；同 locatorHash 去重） |
+| POST | `/{linkKey}/targets?createdByKind=` | addTargets（body 是 TargetInput 数组；同 locatorHash 去重；createdByKind human/ai/plugin 缺省 human，记在 target 上） |
 | PATCH | `/targets/{targetId}` | updateTarget（null 字段不改） |
 | DELETE | `/targets/{targetId}` / `/{linkKey}` | removeTarget / delete |
-| POST | `/anchors/report` | `{docFileId, reports:[{linkKey, exists, text}]}` → `{changed:[linkKey]}`（worker 核对回写） |
+| POST | `/anchors/report` | `{docFileId, reports:[{linkKey, exists, text}]}` → `{changed:[linkKey], ignored:N}`（worker 核对回写；`exists` 缺失的条目不改状态、计入 ignored，不许当 false 打 orphan） |
 | POST | `/{linkKey}/keep` | `{text}` keepAnchor |
 | POST | `/{linkKey}/rebind` | `{newLinkKey, anchorText, sectionPath?, sectionTitle?}` |
 | GET | `/ref-counts?fileIds=` | `Map<fileId, count>`（文件树角标） |
