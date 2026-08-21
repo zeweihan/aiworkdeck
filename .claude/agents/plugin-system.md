@@ -177,7 +177,7 @@ JAR 插件拿宿主能力的唯一契约：`com.checkba:plugin-api:1.0.0`，源�
   新机器 / 新 worktree 上 `mvn` backend 报 `Could not resolve com.checkba:plugin-api` 就是漏了这步。
   CI（`ci.yml`）与桌面打包（`desktop-build.yml` 两个平台）都已加这一步。
 - 宿主实现：`service/plugin/PluginHostFactory`（按插件 id 缓存 `PluginHost`、持有调用上下文 ThreadLocal、
-  集中注入全部宿主服务）、`PluginHostImpl`（八个子接口的内部类）、`PluginHostQuota`（60 次/分钟/插件）、
+  集中注入全部宿主服务）、`PluginHostImpl`（八个子接口的内部类）、`PluginHostQuota`（工具线程 60 次/分钟/插件，后台任务线程 1200 次——`PluginHostFactory.bindJob` 标记的 JobContext 期间）、
   `PluginJobService`（后台任务，每插件 2 线程池）+ `PluginJobController`（`/api/plugin-jobs`）+ 实体 `PluginJob`。
 - 注入链：`PluginService.loadJar` 实例化后 `injectHostIfAware` → `HostAware.setHost(factory.forPlugin(id))`。
   `PluginService` 经 `ObjectProvider<PluginHostFactory>` 懒取（构造器注入会成启动死环）。

@@ -55,6 +55,7 @@ public class PluginHostFactory {
     final PluginHostQuota quota;
 
     private final ThreadLocal<ToolCall> currentCall = new ThreadLocal<>();
+    private final ThreadLocal<Boolean> inJob = new ThreadLocal<>();
     private final Map<String, PluginHost> hosts = new ConcurrentHashMap<>();
 
     @Autowired
@@ -135,16 +136,28 @@ public class PluginHostFactory {
         currentCall.set(new ToolCall(ctx.projectId(), ctx.conversationId(), ctx.userId(), ctx.modelId()));
     }
 
-    /** 后台任务线程用：直接绑一份快照。 */
+    /** 直接绑一份快照（工具线程语义：60 次/分钟窗口）。 */
     public void bindCall(ToolCall call) {
         if (call == null) currentCall.remove(); else currentCall.set(call);
     }
 
+    /** 后台任务线程用：绑快照并标记「在 job 线程」，配额走 1200 次/分钟的大窗口。 */
+    public void bindJob(ToolCall call) {
+        bindCall(call);
+        if (call != null) inJob.set(Boolean.TRUE);
+    }
+
     public void clear() {
         currentCall.remove();
+        inJob.remove();
     }
 
     ToolCall currentCall() {
         return currentCall.get();
+    }
+
+    /** 当前线程是否处于 JobContext 绑定期间（决定配额窗口）。 */
+    boolean inJob() {
+        return Boolean.TRUE.equals(inJob.get());
     }
 }
