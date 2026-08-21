@@ -26,6 +26,28 @@ public class MeetingRecordingController {
     private final MeetingTranscriptionService transcriptionService;
     private final ProjectMemberService projectMemberService;
 
+    // 并发「开始录音」竞态防护：前端 isRecordingActive() 只是同一个 JS 运行时里的
+    // 内存标记（utils/meetingRecorder.js 的模块级单例），管不到"同一账号在桌面端 +
+    // 浏览器标签页各开一份""同一项目的多个成员各自点了开始"这类跨客户端场景——
+    // 这两种都是正常使用即可触发，不需要恶意操作。MeetingRecordingService.create()
+    // 内部 uniqueName() 是"查名字是否存在→建档"两步式，中间有窗口：两个并发请求都
+    // 查到"名字不存在"，各自建出一行同名 ProjectFile，物理路径只由 projectId/
+    // parentId/name 决定（不含行 id），两行会落到同一个物理文件上，后续两段录音的
+    // 分片上传各写各的 audioFileId 却写进同一个文件，互相覆盖。
+    //
+    // 锁必须包住对 meetingService.create() 的整次调用（含其 @Transactional 提交），
+    // 而不能放进 create() 内部再对自身方法做同类里自调用——Spring 的事务代理只在
+    // "经过代理的外部调用"上生效，同类自调用会绕开代理导致 @Transactional 整个失效。
+    // 放在控制器这层、包住经代理的服务调用，两头都对。
+    // 单机/单进程部署（当前架构）已经能完整堵住这条路径；水平扩到多实例需要数据库锁，
+    // 不在当前架构范围内，届时再加。
+    private final java.util.concurrent.ConcurrentHashMap<Long, Object> startRecordingLocks =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private Object startRecordingLock(Long projectId) {
+        return startRecordingLocks.computeIfAbsent(projectId, k -> new Object());
+    }
+
     private Long requireMemberByProject(String sessionId, Long projectId) {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) throw new IllegalArgumentException("未登录");
@@ -45,7 +67,10 @@ public class MeetingRecordingController {
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = requireMemberByProject(sessionId, projectId);
-        MeetingRecording meeting = meetingService.create(projectId, userId);
+        MeetingRecording meeting;
+        synchronized (startRecordingLock(projectId)) {
+            meeting = meetingService.create(projectId, userId);
+        }
         Map<String, Object> result = new HashMap<>();
         result.put("meeting", meeting);
         result.put("configured", transcriptionService.isConfigured());

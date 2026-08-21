@@ -56,12 +56,30 @@ function pythonBin(pyRoot) {
     : path.join(pyRoot, 'bin', 'python3.11')
 }
 
+function pythonMarker(pyRoot) {
+  return path.join(pyRoot, '.pbs-extract-complete')
+}
+
+// 缓存判据不能只看 python3.11 二进制在不在：tar 中途被打断（本地 Ctrl-C、OOM-kill、
+// 磁盘满，或 CI 任务被取消/重跑但 workspace 保留）时，bin/python3.11 可能已经落地，
+// 但 stdlib/site-packages 支撑文件还没解压完就没了——下一次调用如果只查这一个文件，
+// 会当"已经装好"直接复用这个残缺运行时，打包出一个每个 Python 子服务启动即崩的安装包。
+// marker 文件是整个下载+解压成功之后最后一步才写的：被打断的流程不可能留下它，
+// 用它而不是"多查几个文件"是因为查再多文件也只是缩小遗漏窗口，marker 才是
+// "流程完整跑完"本身的证明。
+function isPythonRuntimeComplete(pyRoot) {
+  return fs.existsSync(pythonBin(pyRoot)) && fs.existsSync(pythonMarker(pyRoot))
+}
+
 function ensurePython(outDir) {
   const pyRoot = path.join(outDir, 'python')
-  if (fs.existsSync(pythonBin(pyRoot))) {
+  if (isPythonRuntimeComplete(pyRoot)) {
     console.log(`python runtime already present: ${pyRoot}`)
     return pyRoot
   }
+  // 缓存判无效（首次 / 上次被打断过）：整个目录清掉重来，避免半成品残留文件与
+  // 本次新解压的文件混在一起，产出一个"部分新、部分旧"的更难排查的运行时
+  fs.rmSync(pyRoot, { recursive: true, force: true })
   const triple = pbsTriple()
   const name = `cpython-${PY_VERSION}+${PBS_RELEASE}-${triple}-install_only.tar.gz`
   const url = process.env.PBS_BASE_URL
@@ -79,6 +97,7 @@ function ensurePython(outDir) {
     console.error(`unexpected layout after extract: ${pyRoot}`)
     process.exit(1)
   }
+  fs.writeFileSync(pythonMarker(pyRoot), '')
   return pyRoot
 }
 
@@ -136,4 +155,11 @@ function main() {
   console.log(`  app:     ${appDir}`)
 }
 
-main()
+// require.main 判断：直接执行（node prepare-python-service.js / 构建流水线调用）时
+// 行为不变，照旧跑 main() 真下载真解压；被测试文件 require() 拿 isPythonRuntimeComplete
+// 时不触发下载/解压副作用（同 fetch-lowa-assets.js 的 checkMagic 那套用法）。
+if (require.main === module) {
+  main()
+}
+
+module.exports = { isPythonRuntimeComplete, pythonBin, pythonMarker }

@@ -146,6 +146,33 @@ test('backend allocator walks the 5269/5369/5169 chain past a foreign listener',
   }
 })
 
+test('spawned backend env.SERVER_PORT always follows ctx.ports.backend, not an inherited SERVER_PORT', () => {
+  // 原实现是 `if (!env.SERVER_PORT) env.SERVER_PORT = String(ctx.ports.backend)`——
+  // 宿主 shell/环境如果恰好已经设过 SERVER_PORT（不少框架的常见变量名），这个判断
+  // 会让继承值赢，JVM 绑到一个 ServiceManager 根本不知道的端口上；waitStartOrExit
+  // 还在死等 ctx.ports.backend 那个端口开放，永远等不到，把明明健康的 JVM 当启动
+  // 失败杀掉重试。ctx.ports.backend 是 allocateBackendPort() 已经选定、渲染层也据此
+  // 注入 apiBaseUrl 的唯一真源，必须无条件赢过任何继承值。
+  const { createBackendDescriptor } = require('../main/services/backend-service')
+  const d = createBackendDescriptor()
+  const prevServerPort = process.env.SERVER_PORT
+  process.env.SERVER_PORT = '6001' // 模拟宿主环境已经设过这个变量，且与分配到的端口不同
+  try {
+    const ctx = {
+      packaged: false,
+      resourcesPath: null,
+      dataDir: require('os').tmpdir(),
+      projectRoot: path.join(__dirname, '..'),
+      ports: { backend: 5269 }
+    }
+    const cmds = d.commands(ctx)
+    assert.strictEqual(cmds[0].env.SERVER_PORT, '5269')
+  } finally {
+    if (prevServerPort === undefined) delete process.env.SERVER_PORT
+    else process.env.SERVER_PORT = prevServerPort
+  }
+})
+
 test('falls through failed candidate to next command', async () => {
   const mgr = makeManager()
   mgr.register(fakeDescriptor({

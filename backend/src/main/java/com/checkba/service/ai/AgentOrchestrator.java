@@ -109,6 +109,9 @@ public class AgentOrchestrator {
     private final Map<String, StringBuilder> activeStreamContent = new ConcurrentHashMap<>();
     // 本轮 ASSISTANT 消息的行 ID：同一轮内的增量保存/最终保存更新同一行，跨轮次互不覆盖
     private final Map<String, Long> activeAssistantMessageId = new ConcurrentHashMap<>();
+    // 本轮开始时记下的 SSE 连接代次：收尾调用 sseEmitterService.close() 时原样带回，
+    // 防止跑了半天的旧一轮在收尾时把期间用户重连建立的新连接误杀（见 SseEmitterService.close 注释）
+    private final Map<String, Long> turnConnectionEpoch = new ConcurrentHashMap<>();
 
     private final ChatModelFactory chatModelFactory;
     private final ProjectAiMessageService messageService;
@@ -157,6 +160,15 @@ public class AgentOrchestrator {
         cancelledConversations.remove(conversationId);
         activeStreamContent.remove(conversationId);
         activeAssistantMessageId.remove(conversationId);
+        turnConnectionEpoch.remove(conversationId);
+    }
+
+    /**
+     * 收尾关闭本轮 SSE 连接：带上本轮开始时记下的代次，交给 SseEmitterService 做匹配判断。
+     * 只处理这一处的误杀，不动取消/恢复相关逻辑。
+     */
+    private void closeSse(String conversationId) {
+        sseEmitterService.close(conversationId, turnConnectionEpoch.getOrDefault(conversationId, 0L));
     }
 
     /**
@@ -192,7 +204,7 @@ public class AgentOrchestrator {
         // 发送取消事件
         sseEmitterService.send(conversationId, "cancelled",
                 "{\"message\":\"" + LangText.of("用户已停止生成", "Generation stopped by the user") + "\"}");
-        sseEmitterService.close(conversationId);
+        closeSse(conversationId);
         
         // 清理状态
         clearCancelledState(conversationId);
@@ -406,6 +418,9 @@ public class AgentOrchestrator {
         cancelledConversations.remove(conversationId);
         activeStreamContent.put(conversationId, new StringBuilder());
         activeAssistantMessageId.remove(conversationId);
+        // 本轮开始时先取一次 SSE 连接代次存起来：本轮期间无论重试/递归多少层，
+        // 收尾时各处 close() 都带这同一个值，与用户中途重连产生的新代次区分开
+        turnConnectionEpoch.put(conversationId, sseEmitterService.currentEpoch(conversationId));
         // 埋点轮次上下文先于 mark 建立：终态由 AgentRunStateService.mark 单点合成 ai.turn
         java.util.Map<String, Object> turnAttrs = new java.util.HashMap<>();
         turnAttrs.put("mode", agentMode == null ? null : agentMode.name());
@@ -528,12 +543,12 @@ public class AgentOrchestrator {
             log.info("平台通道不可用 [{}]，会话 {}: {}", e.getKind(), conversationId, e.getMessage());
             agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
             sseEmitterService.send(conversationId, "error", e.getMessage());
-            sseEmitterService.close(conversationId);
+            closeSse(conversationId);
         } catch (Exception e) {
             log.error("Agent Loop Error for conversation: " + conversationId, e);
             agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
             sseEmitterService.send(conversationId, "error", "Internal Error: " + e.getMessage());
-            sseEmitterService.close(conversationId);
+            closeSse(conversationId);
         }
     }
 
@@ -559,7 +574,7 @@ public class AgentOrchestrator {
             agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.PAUSED);
             // status=paused 让前端渲染一键「继续」按钮（区别于 finished 的正常收尾）
             sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"paused\",\"reason\":\"max_depth\"}");
-            sseEmitterService.close(conversationId);
+            closeSse(conversationId);
             clearCancelledState(conversationId);
             return;
         }
@@ -569,7 +584,7 @@ public class AgentOrchestrator {
             log.info("Ask mode: stopping loop at depth {}", depth);
             agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.FINISHED);
             sseEmitterService.send(conversationId, "bubble_end", "{}");
-            sseEmitterService.close(conversationId);
+            closeSse(conversationId);
             clearCancelledState(conversationId);
             return;
         }
@@ -578,12 +593,13 @@ public class AgentOrchestrator {
         editorBridgeService.setCurrentConversationId(conversationId);
 
         AgentStreamHandler handler = new AgentStreamHandler(
-            sseEmitterService, 
-            conversationId, 
-            tokenUsageService, 
-            projectId, 
-            userId, 
-            modelId
+            sseEmitterService,
+            conversationId,
+            tokenUsageService,
+            projectId,
+            userId,
+            modelId,
+            turnConnectionEpoch.getOrDefault(conversationId, 0L)
         );
         
 
@@ -679,7 +695,7 @@ public class AgentOrchestrator {
                 saveAssistantMessage(conversationId, projectId, userId, truncPersisted);
                 agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.PAUSED);
                 sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"paused\",\"reason\":\"max_tokens\"}");
-                sseEmitterService.close(conversationId);
+                closeSse(conversationId);
                 clearCancelledState(conversationId);
                 return;
             }
@@ -1024,7 +1040,7 @@ public class AgentOrchestrator {
                     agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.AWAITING_APPROVAL);
                     // 发送 bubble_end 表示当前响应结束（等待用户审批）
                     sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"awaiting_approval\"}");
-                    sseEmitterService.close(conversationId);
+                    closeSse(conversationId);
                     clearCancelledState(conversationId);
                     return; // Stop and wait for user action
                 }
@@ -1074,7 +1090,7 @@ public class AgentOrchestrator {
                 saveAssistantMessage(conversationId, projectId, userId, truncContent);
                 agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.PAUSED);
                 sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"paused\",\"reason\":\"max_tokens\"}");
-                sseEmitterService.close(conversationId);
+                closeSse(conversationId);
                 clearCancelledState(conversationId);
                 activeStreamContent.remove(conversationId);
                 return;
@@ -1103,7 +1119,7 @@ public class AgentOrchestrator {
             agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.FINISHED);
             // 发送 bubble_end 表示整个循环真正结束
             sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"finished\"}");
-            sseEmitterService.close(conversationId);
+            closeSse(conversationId);
             // 清理取消状态
             clearCancelledState(conversationId);
             activeStreamContent.remove(conversationId); // CLEANUP
@@ -1247,7 +1263,7 @@ public class AgentOrchestrator {
             log.info("故障转移中止，平台通道不可用 [{}]，会话 {}: {}", ae.getKind(), conversationId, ae.getMessage());
             agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
             sseEmitterService.send(conversationId, "error", ae.getMessage());
-            sseEmitterService.close(conversationId);
+            closeSse(conversationId);
             clearCancelledState(conversationId);
             return true;
         } catch (Exception e) {
@@ -1323,7 +1339,7 @@ public class AgentOrchestrator {
                     logText + partialContent
                             + LangText.of("\n\n[生成出错，已中断]", "\n\n[Generation error, interrupted]"));
         }
-        sseEmitterService.close(conversationId);
+        closeSse(conversationId);
         clearCancelledState(conversationId);
         editorBridgeService.clearCurrentConversationId();
     }
@@ -1537,7 +1553,7 @@ public class AgentOrchestrator {
         agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.AWAITING_INPUT);
         // status=awaiting_input：会话列表显示「待回答」（区别于待审批），前端解锁输入区
         sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"awaiting_input\"}");
-        sseEmitterService.close(conversationId);
+        closeSse(conversationId);
         clearCancelledState(conversationId);
     }
 

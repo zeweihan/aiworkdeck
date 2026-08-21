@@ -121,8 +121,17 @@ function spawnEnv(ctx) {
   const env = { ...process.env }
   // 开发态默认 prod profile，打包态默认 desktop（H2 单机库），仍可用 env 覆盖
   if (!env.SPRING_PROFILES_ACTIVE) env.SPRING_PROFILES_ACTIVE = ctx.packaged ? 'desktop' : 'prod'
-  // 统一端口（仍可用配置文件覆盖）
-  if (!env.SERVER_PORT) env.SERVER_PORT = String(ctx.ports.backend)
+  // 端口必须以 ctx.ports.backend 为准，不能像上面 SPRING_PROFILES_ACTIVE 那样
+  // "env 里已经有就不覆盖"：ServiceManager.waitStartOrExit 轮询就绪、渲染层注入的
+  // apiBaseUrl，用的都是 allocateBackendPort() 已经选定并写进 ctx.ports.backend
+  // 的那一个端口；如果继承自宿主 shell/环境的 SERVER_PORT（不少框架的常见环境变量
+  // 名，用户从终端启动或某些托管环境里就可能已经被设过）先占了这个位置，JVM 会
+  // 绑到那个不相关的端口上，而 ServiceManager 还在死等 ctx.ports.backend 那个端口
+  // 开放——探测永远等不到，白等一整个 startTimeoutMs 后把明明健康的 JVM 当启动
+  // 失败杀掉重试。真要强制指定端口，走的是上面 allocateBackendPort() 里专门开的
+  // CHECKBA_BACKEND_PORT 口子（会正确流入 ctx.ports.backend），不需要也不该再认
+  // 环境里裸的 SERVER_PORT。
+  env.SERVER_PORT = String(ctx.ports.backend)
   // 其他本地服务的动态端口注入（Spring SystemEnvironmentPropertySource 将
   // external.pptx-service.base-url 解析为 EXTERNAL_PPTX_SERVICE_BASE_URL）
   if (ctx.ports['pptx-service']) {

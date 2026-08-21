@@ -20,6 +20,9 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
     private final String projectId;
     private final Long userId;
     private final String modelId;
+    // 调用方在本轮开始时记下的 SSE 连接代次，close() 收尾时原样带回
+    // （见 SseEmitterService.close 的注释：防止误杀期间重连建立的新连接）
+    private final long connectionEpoch;
 
     private final StringBuilder fullContentBuilder = new StringBuilder();
     private boolean isBubbleStarted = false;
@@ -93,13 +96,14 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
         if (f != null) f.cancel(false);
     }
 
-    public AgentStreamHandler(SseEmitterService sseEmitterService, String conversationId, TokenUsageService tokenUsageService, String projectId, Long userId, String modelId) {
+    public AgentStreamHandler(SseEmitterService sseEmitterService, String conversationId, TokenUsageService tokenUsageService, String projectId, Long userId, String modelId, long connectionEpoch) {
         this.sseEmitterService = sseEmitterService;
         this.conversationId = conversationId;
         this.tokenUsageService = tokenUsageService;
         this.projectId = projectId;
         this.userId = userId;
         this.modelId = modelId;
+        this.connectionEpoch = connectionEpoch;
     }
 
     // Callback for each token generated (for real-time tracking)
@@ -551,7 +555,7 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
             // 无回调（单次响应）：保持旧行为——发 error 并关流，
             // 否则 SSE 连接会挂到 30 分钟超时、前端永久显示加载态。
             sseEmitterService.send(conversationId, "error", "Stream Error: " + error.getMessage());
-            sseEmitterService.close(conversationId);
+            sseEmitterService.close(conversationId, connectionEpoch);
         }
     }
     
