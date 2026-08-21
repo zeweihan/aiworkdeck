@@ -1536,6 +1536,8 @@ let exportInFlight = false;
 // that sees them all. The editor page throttles and relays the signal to the
 // host, which debounce-saves (LibreOfficeEditor.autoSave). isModified() filters
 // out the broadcast a later setModified(false) would emit.
+// 批量命令期间摘下/装回的把手（见 suspendModifyListener）。
+let modifyListener = null;
 function installModifyListener(model) {
   const listener = zetajs.unoObject([css.util.XModifyListener], {
     // exportInFlight：storeToURL 自己会把文档标成 modified（见 export_document）。
@@ -1546,7 +1548,26 @@ function installModifyListener(model) {
     disposing() {},
   });
   model.addModifyListener(listener);
+  modifyListener = listener;
   log('XModifyListener 已装 / installed — 文档修改将上报宿主触发自动保存');
+}
+// 真机实测（150 页夹具）：只要装着 JS 实现的 XModifyListener，引擎每次文档写入
+// （一条 setPropertyValue / 一条 setString）都要回调进 JS 一次，一次约 35ms——
+// 回调本身的成本，与回调体做什么无关（空函数体同样 35ms）；摘掉监听器后同一条
+// 写入 0.1ms。全文格式化 920 段 x 2 次批写 = 1840 次回调 = 60s+ 就是这么来的。
+// 批量命令（lockModel 期间）把监听器摘下，结束装回并补发一次 modified——宿主只
+// 需要「文档改过了」这一个信号，不需要逐条。计数嵌套：batchBreak 会解锁再上锁。
+let modifySuspended = 0;
+function suspendModifyListener() {
+  if (modifySuspended++ > 0 || !modifyListener) return;
+  try { xModel.removeModifyListener(modifyListener); } catch (e) {}
+}
+function resumeModifyListener() {
+  if (modifySuspended <= 0) { modifySuspended = 0; return; }
+  if (--modifySuspended > 0 || !modifyListener) return;
+  try { xModel.addModifyListener(modifyListener); } catch (e) {}
+  invalidateParaIndex();
+  try { if (!exportInFlight && xModel.isModified()) post('modified'); } catch (e) {}
 }
 
 // ---- 自建工具栏：选区变化上报 -------------------------------------------
@@ -1706,13 +1727,72 @@ function postProgress(p, done, total) { if (p && p.__reqId) post('progress', { r
 // 批量改稿期间锁住控制器与动作锁：否则每一条修订 / 每一个属性写入都让 Writer
 // 重排版+重绘一次，150 命中实测每处 130-200ms 大头在这里，不在 LCS。锁在一批之内，
 // 批间解开让视图刷一次、让排队的 export 能正常序列化。
+// 锁之外更大的头是 XModifyListener 的逐条回调（每条写入 35ms，见
+// suspendModifyListener），一并摘下。
 function lockModel() {
   try { xModel.lockControllers(); } catch (e) {}
   try { xModel.addActionLock(); } catch (e) {}
+  suspendModifyListener();
 }
 function unlockModel() {
+  resumeModifyListener();
   try { xModel.removeActionLock(); } catch (e) {}
   try { xModel.unlockControllers(); } catch (e) {}
+}
+// ---- find_replace 的原生快路径 ------------------------------------------------
+// 逐命中 setString 在 150 页上每处 90-130ms（JS 往返 + 监听器回调），150 命中 15-20s；
+// 引擎自己的 XReplaceable.replaceAll 一次调用 150 命中 160ms，且 RecordChanges 开着
+// 时同样按命中各记一条删除+一条插入修订。为了保住 PR#188 的字符级颗粒度
+//（我爱你→我恨你 只删"爱"加"恨"），先把 findText/replaceText 的公共前后缀掐掉，
+// 用正则 (?<=前缀)中段(?=后缀) 只替换差异中段。引擎不接受零宽匹配（纯插入，
+// 如 验收后→验收合格后），这种回退到逐命中路径（分批 + 进度 + 取消）。
+// 返回 {n} 或 null（= 走回退路径）。
+function regexEscape(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function replaceEscape(s) { return String(s).replace(/\\/g, '\\\\').replace(/&/g, '\\&').replace(/\$/g, '\\$'); }
+function nativeTrackedReplaceAll(findText, replaceText, matchCase) {
+  if (!findText || findText === replaceText) return null;
+  if (/[\r\n]/.test(findText) || /[\r\n]/.test(replaceText)) return null;
+  const oLen = findText.length, nLen = replaceText.length, maxP = Math.min(oLen, nLen);
+  let pre = 0;
+  while (pre < maxP && findText.charCodeAt(pre) === replaceText.charCodeAt(pre)) pre++;
+  let suf = 0;
+  while (suf < maxP - pre && findText.charCodeAt(oLen - 1 - suf) === replaceText.charCodeAt(nLen - 1 - suf)) suf++;
+  // 代理对不能从中间掐开
+  const bad = function (str, at) { const c = str.charCodeAt(at); return c >= 0xD800 && c <= 0xDFFF; };
+  if ((pre > 0 && (bad(findText, pre - 1) || bad(replaceText, pre - 1))) ||
+      (suf > 0 && (bad(findText, oLen - suf) || bad(replaceText, nLen - suf)))) { pre = 0; suf = 0; }
+  const oMid = findText.slice(pre, oLen - suf), nMid = replaceText.slice(pre, nLen - suf);
+  if (!oMid) return null; // 纯插入：零宽匹配引擎不认
+  let pattern = regexEscape(oMid);
+  if (pre > 0) pattern = '(?<=' + regexEscape(findText.slice(0, pre)) + ')' + pattern;
+  if (suf > 0) pattern = pattern + '(?=' + regexEscape(findText.slice(oLen - suf)) + ')';
+  try {
+    const rd = xModel.createReplaceDescriptor();
+    rd.setPropertyValue('SearchRegularExpression', true);
+    try { rd.setPropertyValue('SearchCaseSensitive', !!matchCase); } catch (e) {}
+    rd.setSearchString(pattern);
+    rd.setReplaceString(replaceEscape(nMid));
+    const n = xModel.replaceAll(rd);
+    // 拟人：结束时视图停在第一处改动（新中段非空时按新文本找；删除型改动找不到
+    // 就不动视图）
+    if (nMid) {
+      try {
+        const sd = xModel.createSearchDescriptor();
+        sd.setPropertyValue('SearchRegularExpression', true);
+        try { sd.setPropertyValue('SearchCaseSensitive', !!matchCase); } catch (e) {}
+        let look = regexEscape(nMid);
+        if (pre > 0) look = '(?<=' + regexEscape(findText.slice(0, pre)) + ')' + look;
+        if (suf > 0) look = look + '(?=' + regexEscape(findText.slice(oLen - suf)) + ')';
+        sd.setSearchString(look);
+        const first = xModel.findFirst(sd);
+        if (first !== null) selectVisibly(first);
+      } catch (e) {}
+    }
+    return { n: Number(n) || 0 };
+  } catch (e) {
+    log('find_replace 原生 replaceAll 失败，回退逐命中: ' + errStr(e));
+    return null;
+  }
 }
 // 批间让路：返回 true = 已被取消，调用方应停下并返回 {cancelled:true}。
 // 调用方在批内持有 lockModel()；这里先解锁再让路，回来再上锁。
@@ -1766,17 +1846,25 @@ const EXEC = {
     return Object.assign({ success: true, text: String(p.text || '') }, verifySnapshot());
   },
   // [verified] model-native search + redline (RFC §0.2: no integer offsets).
-  // 150 页实测 137-216ms/命中，大头是每命中滚视图 + UNO 往返：现在先 findAll 收齐
-  // 命中（都是活的 XTextRange，改前面的不影响后面的），只在结束时滚到首处；
-  // 命中 > 50 时按 30 一批，批间发 progress / 检查 cancel（见 batchBreak）。
+  // 全部替换走引擎原生 replaceAll（见 nativeTrackedReplaceAll：150 命中 0.2s）；
+  // 只替首处 / 纯插入走逐命中路径：先 findAll 收齐命中（都是活的 XTextRange，
+  // 改前面的不影响后面的），只在结束时滚到首处；命中 > 50 时按 30 一批，批间发
+  // progress / 检查 cancel（见 batchBreak）。
   async find_replace(p) {
     xModel.setPropertyValue('RecordChanges', true);
+    const all = p.replaceAll !== false;
+    const replaceText = String(p.replaceText || '');
+    if (all) {
+      const fast = nativeTrackedReplaceAll(String(p.findText || ''), replaceText, !!p.matchCase);
+      if (fast) {
+        invalidateParaIndex();
+        return { success: true, replaced: fast.n, total: fast.n, recordChanges: true };
+      }
+    }
     const sd = xModel.createSearchDescriptor();
     sd.setSearchString(String(p.findText || ''));
     // matchCase 是后加的可选项（自建查找替换面板要它）；不传时行为与从前一致。
     try { sd.setPropertyValue('SearchCaseSensitive', !!p.matchCase); } catch (e) {}
-    const all = p.replaceAll !== false;
-    const replaceText = String(p.replaceText || '');
     const hits = [];
     if (all) {
       const found = xModel.findAll(sd);
@@ -3780,8 +3868,11 @@ const EXEC = {
     const action = String((p && p.action) || 'accept').toLowerCase();
     if (action !== 'accept' && action !== 'reject') return tableFail("action must be accept|reject");
     const before = countRedlines();
-    css.frame.DispatchHelper.create(context).executeDispatch(
-      ctrl.getFrame(), action === 'accept' ? '.uno:AcceptAllTrackedChanges' : '.uno:RejectAllTrackedChanges', '', 0, []);
+    suspendModifyListener(); // 引擎内部逐条处理修订，每条都会回调监听器（见 suspendModifyListener）
+    try {
+      css.frame.DispatchHelper.create(context).executeDispatch(
+        ctrl.getFrame(), action === 'accept' ? '.uno:AcceptAllTrackedChanges' : '.uno:RejectAllTrackedChanges', '', 0, []);
+    } finally { resumeModifyListener(); }
     const after = countRedlines(); // 前后各数一次（原先结束时数了两遍 O(N)）
     return { success: true, action: action, resolved: before - after, remaining: after };
   },

@@ -303,7 +303,7 @@ public class DocumentEditTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "查找替换", category = "document", fileEffect = "MODIFIED")
     @Tool("在文档中查找并替换文本。所有修改将以修订模式进行，用户可以审阅后接受或拒绝。" +
-          "大量命中（>50 处）会在编辑器内分批处理并回传进度，一次调用即可完成，不要因为耗时较长而重复调用；" +
+          "全文替换一次调用即可完成（大量命中也很快；纯插入型替换会分批处理并回传进度），不要因为耗时较长而重复调用；" +
           "返回 replaced（已替换数）与 total（命中数），cancelled=true 表示用户中途取消、done 为已完成数。")
     public String doc_find_replace(
             @P("要查找的文本") String findText,

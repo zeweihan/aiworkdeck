@@ -67,17 +67,12 @@ function patchServed(urlPath, content) {
 const server = await startServer({ patchServed, extraFiles: { '/big.docx': bigDoc } })
 
 // ---------- 阈值 ----------
-// 单位 ms。另做结果形状断言（replaced 数 / truncated 字段 / modified 次数）。
-// soft: 只告警不判红（LOWA_BIG_STRICT=1 时判红）。find_replace / apply_house_style 的
-// 耗时是引擎按条记修订的成本（实测每条 tracked 替换约 90-100ms，整段 setString 与
-// 最小修订一样贵，与滚视图无关），worker 侧已无大头可砍；两项硬阈是改造前定的
-// 目标，记录实测、别让它把整组打红——见 README 表。
-const STRICT = process.env.LOWA_BIG_STRICT === '1'
+// 单位 ms。另做结果形状断言（replaced 数 / truncated 字段 / modified 次数）。全部硬阈。
 const ITEMS = [
   { key: 'load_document', label: 'load_document 6.7MB/150 页', max: 15000 },
   { key: 'get_document_text_2nd', label: 'get_document_text 第 2 次（同参数）', max: 300 },
-  { key: 'find_replace_150', label: 'find_replace 修订 150 命中', max: 8000, soft: true },
-  { key: 'apply_house_style', label: 'apply_house_style 920 段 + 30 表', max: 120000, soft: true },
+  { key: 'find_replace_150', label: 'find_replace 修订 150 命中', max: 8000 },
+  { key: 'apply_house_style', label: 'apply_house_style 920 段 + 30 表', max: 120000 },
   { key: 'export_document', label: 'export_document', max: 10000 },
   { key: 'quiet_after_export', label: '导出后 ' + (QUIET_MS / 1000) + 's 内 modified 次数', max: 0, unit: '次' },
 ]
@@ -186,19 +181,12 @@ try {
     if (!xs.length) { failed++; console.log('| ' + it.label + ' | - | 无样本 | ' + fmt(it.max, it.unit) + ' | FAIL |'); continue }
     const med = median(xs)
     const ok = it.unit === '次' ? med <= it.max : med < it.max
-    const soft = it.soft && !STRICT
-    if (!ok && !soft) failed++
-    console.log('| ' + it.label + ' | ' + fmt(med, it.unit) + ' | ' + xs.map((x) => fmt(x, it.unit)).join(' / ') + ' | ' + (it.unit === '次' ? '= 0' : '< ' + fmt(it.max)) + (it.soft ? '（soft）' : '') + ' | ' + (ok ? 'PASS' : (soft ? 'WARN' : 'FAIL')) + ' |')
+    if (!ok) failed++
+    console.log('| ' + it.label + ' | ' + fmt(med, it.unit) + ' | ' + xs.map((x) => fmt(x, it.unit)).join(' / ') + ' | ' + (it.unit === '次' ? '= 0' : '< ' + fmt(it.max)) + ' | ' + (ok ? 'PASS' : 'FAIL') + ' |')
   }
-  for (const p of problems) {
-    // apply_house_style 超时属于 soft 项的连带（timeout 结果没有 truncated 字段），同样只告警
-    const softProblem = !STRICT && /apply_house_style/.test(p)
-    if (!softProblem) failed++
-    console.log('  ' + (softProblem ? 'WARN ' : 'FAIL ') + p)
-  }
+  for (const p of problems) { failed++; console.log('  FAIL ' + p) }
   if (mem != null) console.log('\n页面内存（measureUserAgentSpecificMemory）: ' + (mem / 1048576).toFixed(0) + ' MB')
-  const warned = ITEMS.filter((it) => it.soft && !STRICT && samples[it.key] && !(median(samples[it.key]) < it.max)).length
-  console.log('\n结果 / result: ' + (failed ? failed + ' 项未达阈值' : '硬阈全部达标') + (warned ? '，' + warned + ' 项 soft 告警（LOWA_BIG_STRICT=1 判红）' : ''))
+  console.log('\n结果 / result: ' + (failed ? failed + ' 项未达阈值' : '全部达标'))
   process.exitCode = failed ? 1 : 0
 } finally {
   await browser.close()

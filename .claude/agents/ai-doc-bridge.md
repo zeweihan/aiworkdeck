@@ -201,7 +201,7 @@ txt/md/markdown 自 dev-board#37 起不进 LOWA（前端走 PlainTextEditor.vue�
 - **区间批注必须走 `.uno:InsertAnnotation` 派发**；LO API 路线（addAnnotation）会抛虚假异常且只批注锚点（PR#191）。
 - **replace_selection 仅在 RecordChanges 开启时启用最小修订路径**；修订应用必须从右到左，否则前面的编辑使后面的偏移失效（PR#188）。
 - **office 线程会被 export 冻结**：长 export 期间同步命令假死是已知模式，autoSave 需让路（PR#182）。
-- **桥超时按 action 分级**（dev-board#108）：`EditorBridgeService.ACTION_TIMEOUT_SECONDS`（doc_open_file_sync/export_document 180s，find_replace/apply_house_style/resolve_all_revisions 120s，其余 30s），与前端两处 `ACTION_BUDGET_MS` 同表。新增会跑很久的批量原语要三处一起加，否则后端先放弃、模型重发一次造成双改。`find_replace` 命中 > 50 与 `apply_house_style` 在 worker 内分批并回传进度（契约见 doc-editor.md），结果可能带 `cancelled:true`（用户中途取消）——工具描述里已告诉模型不要重复调用。
+- **桥超时按 action 分级**（dev-board#108）：`EditorBridgeService.ACTION_TIMEOUT_SECONDS`（doc_open_file_sync/export_document 180s，find_replace/apply_house_style/resolve_all_revisions 120s，其余 30s），与前端两处 `ACTION_BUDGET_MS` 同表。新增会跑很久的批量原语要三处一起加，否则后端先放弃、模型重发一次造成双改。`find_replace` 全部替换走引擎原生 replaceAll 一次完成（150 命中 0.2s），纯插入型回退逐命中路径并在命中 > 50 时分批回传进度；`apply_house_style` 在 worker 内分批并回传进度（契约见 doc-editor.md），结果可能带 `cancelled:true`（用户中途取消）——工具描述里已告诉模型不要重复调用。
 - **工具位置参数按签名映射为命名参数**（PR#193），改工具签名要考虑旧会话回放。
 - **删除修订跨 reset 会残留**，相关测试口径见 PR#188 记录。
 - 修订模式下手工删除卡死曾因覆盖层吞键，用 `.uno:` 调度修复（PR#164/166），别退回 DOM 键盘事件路线。

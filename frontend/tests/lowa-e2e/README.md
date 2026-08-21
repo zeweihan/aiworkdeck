@@ -46,29 +46,35 @@ npm run test:lowa-big                               # 夹具不存在会自动�
 对六项逐个计时，**每项 3 轮取中位数**（同机抖动可达 2 倍），任一项未达硬阈退出码 1。
 `LOWA_BIG_RUNS` 改轮数，`LOWA_BIG_DOC` 指向别的 docx。
 
-改造前后（本机 Apple Silicon，无头 Chrome，r4 引擎，2026-08-21）：
+改造前后（本机 Apple Silicon，无头 Chrome，r4 引擎；改造前 2026-08-21、改造后 2026-08-22，
+期间本机其他会话同时在跑 e2e，load avg 10-30）：
 
-| 项 | 改造前 | 改造后（3 轮中位数） | 阈值 |
+| 项 | 改造前 | 改造后（3 轮中位数） | 硬阈 |
 |---|---|---|---|
-| load_document 6.7MB/150 页 | 3.59s | 1.56s（5.03 / 1.36 / 1.56） | < 15s |
-| get_document_text 第 2 次（同参数） | 1.99s | **20ms**（65 / 20 / 16） | < 300ms |
-| get_document_text {startParagraph:800} | 2.02s | **9-13ms** | （只记录） |
-| find_replace 修订 150 命中 | 28.5s（其后命中超 30s 撞执行器超时，worker 仍在改） | 16.7s（16.7 / 18.3 / 15.9），不再超时、有进度、可取消 | < 8s（soft，WARN） |
-| apply_house_style 920 段 + 30 表 | 执行器 30s 超时，worker 实跑约 630s；超时期间页面主线程被冻住 | 执行器 120s 超时，worker 实跑约 270s（分批让路、不再冻页面、可取消） | < 120s（soft，WARN） |
-| export_document | 2.3s（改造前那轮被前面排队的命令顶到 180s 超时） | 1.77s（2.08 / 1.77 / 1.77） | < 10s |
+| load_document 6.7MB/150 页 | 3.59s | 2.13s（3.71 / 1.43 / 2.13） | < 15s |
+| get_document_text 第 2 次（同参数） | 1.99s | **21ms**（13 / 21 / 28） | < 300ms |
+| get_document_text {startParagraph:800} | 2.02s | 8-64ms | （只记录） |
+| find_replace 修订 150 命中 | 28.5s（命中一多就撞执行器 30s 超时，worker 仍在改） | **162ms**（157 / 162 / 254） | < 8s |
+| apply_house_style 920 段 + 30 表 | 执行器 30s 超时，worker 实跑约 440-630s，期间页面主线程被冻住 | **18.4s**（18.4 / 17.9 / 19.3），truncated=false，有进度、可取消 | < 120s |
+| export_document | 2.3s（被前面排队的命令顶到 180s 超时那轮不算）；全文格式化后 11.5s | 6.82s（4.56 / 7.60 / 6.82，全文格式化之后量） | < 10s |
 | 导出后 30s 内 modified 次数 | 0 | 0 / 0 / 0 | = 0 |
 
 改造前只拿到第 1 轮（旧代码的 find_replace / apply_house_style 超时后 worker 继续跑，
-后续命令全部排队，第 2 轮 load_document 都等不到；第二次复跑撞上本机 load avg 19
-又慢一倍）。改造后三轮完整跑完。所有数字都在本机其他会话同时跑 e2e（load avg 12-22）
-的情况下测得，安静机器上约快一倍。
+后续命令全部排队，第 2 轮 load_document 都等不到）。改造后三轮完整跑完、六项全过硬阈。
 
-find_replace / apply_house_style 是 **soft 阈**（打 WARN 不判红，`LOWA_BIG_STRICT=1`
-才判红）：单独探针证实每条 tracked 替换约 90-100ms，整段 `setString` 与最小修订一样贵，
-去掉滚视图、`lockControllers` 都没有变化——这是引擎按条记修订的成本；全文格式化在
-RecordChanges 开着时每个属性写入各记一条格式修订，`setPropertyValues` 批写把 worker
-实跑从约 720s 降到约 270s 后仍超 120s。再往下只能改口径（格式化不记修订 / 先数命中
-再拆成多次调用），不是 worker 里还有大头可砍。
+**两个真根因**（2026-08-22 探针实证，与「引擎记修订贵」的猜测相反）：
+
+1. 只要装着 JS 实现的 `XModifyListener`，引擎每条文档写入（一条 `setPropertyValue` /
+   `setString`）都回调进 JS 一次，一次约 35ms，与回调体做什么无关（空函数体同样 35ms），
+   与 RecordChanges / `lockControllers` / undo 无关；摘掉监听器后同一条写入 0.1ms。
+   全文格式化 920 段 x 2 次批写 + 30 表 x 60 格 x 4 次写 ≈ 9000 次回调就是几百秒的来源。
+   现在 `lockModel()` 期间把监听器摘下，结束装回并补发一次 `modified`。
+2. 逐命中 `setString` 每处 90-130ms（JS 往返 + 上面的回调），而引擎原生
+   `XReplaceable.replaceAll` 一次调用 150 命中 160ms，RecordChanges 开着时同样按命中
+   各记一条删除 + 一条插入修订。用正则 `(?<=前缀)中段(?=后缀)` 只替差异中段，字符级
+   颗粒度（PR#188）保持不变；纯插入型（零宽匹配引擎不认）回退逐命中分批路径。
+
+剩下的 18s 里约 15s 是 30 张表（每格约 8ms，5 次写 + 一次取文本），段落只占约 1s。
 
 改 `office_thread.js` 里的全文路径（段落枚举 / 修订 / 全文格式化 / 导出）后必跑。
 
