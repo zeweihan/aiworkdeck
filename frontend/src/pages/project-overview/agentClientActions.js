@@ -37,6 +37,19 @@ export const agentClientActionMethods = {
             return
         }
 
+        // 插件宿主 Docs.openFile(fileId, locator)（规范 v2.4 §11）：locator 非空时后端在
+        // doc_open_file 之后追发这一条。载荷 {fileId, locator} 与 TargetView 形状兼容，
+        // 直接交给 evidenceLinkActions.js 的 openFileLinkTarget(target) 打开并定位——
+        // 与审阅面板「查看底稿」同一条路。
+        if (action.action === 'plugin_open_locator') {
+            if (!action.fileId) {
+                console.warn('[ProjectOverview] No fileId in plugin_open_locator action')
+                return
+            }
+            this.openFileLinkTarget({ fileId: action.fileId, locator: action.locator || null }, this.focusedPane || 'left')
+            return
+        }
+
         if (action.action === 'refresh_files') {
             if (this.$refs.fileTree && this.$refs.fileTree.loadFiles) {
                 console.log('[ProjectOverview] Refreshing File Tree...')

@@ -14,6 +14,7 @@ import com.checkba.service.TagService;
 import com.checkba.service.ai.AuxModelResolver;
 import com.checkba.service.ai.ChatModelFactory;
 import com.checkba.service.ai.EditorBridgeService;
+import com.checkba.service.ai.StyleProfileResolver;
 import com.checkba.service.ai.TokenUsageService;
 import com.checkba.service.ai.tools.ToolContext;
 import com.checkba.service.evidence.EvidenceLinkService;
@@ -48,6 +49,7 @@ public class PluginHostFactory {
     final PluginJobService pluginJobService;
     final EditorBridgeService editorBridgeService;
     final SystemSettingService systemSettingService;
+    final StyleProfileResolver styleProfileResolver;
     final ChatModelFactory chatModelFactory;
     final AuxModelResolver auxModelResolver;
     final TokenUsageService tokenUsageService;
@@ -72,14 +74,15 @@ public class PluginHostFactory {
                              PluginJobService pluginJobService,
                              EditorBridgeService editorBridgeService,
                              SystemSettingService systemSettingService,
+                             StyleProfileResolver styleProfileResolver,
                              ChatModelFactory chatModelFactory,
                              AuxModelResolver auxModelResolver,
                              TokenUsageService tokenUsageService,
                              ObjectMapper objectMapper) {
         this(projectFileService, projectFileRepository, storageServiceFactory, projectMemberService, documentTextService,
                 ocrService, tagService, tagRepository, fileTagService, evidenceLinkService, pluginJobService,
-                editorBridgeService, systemSettingService, chatModelFactory, auxModelResolver, tokenUsageService,
-                objectMapper, new PluginHostQuota());
+                editorBridgeService, systemSettingService, styleProfileResolver, chatModelFactory, auxModelResolver,
+                tokenUsageService, objectMapper, new PluginHostQuota());
     }
 
     PluginHostFactory(ProjectFileService projectFileService,
@@ -95,6 +98,7 @@ public class PluginHostFactory {
                       PluginJobService pluginJobService,
                       EditorBridgeService editorBridgeService,
                       SystemSettingService systemSettingService,
+                      StyleProfileResolver styleProfileResolver,
                       ChatModelFactory chatModelFactory,
                       AuxModelResolver auxModelResolver,
                       TokenUsageService tokenUsageService,
@@ -113,6 +117,7 @@ public class PluginHostFactory {
         this.pluginJobService = pluginJobService;
         this.editorBridgeService = editorBridgeService;
         this.systemSettingService = systemSettingService;
+        this.styleProfileResolver = styleProfileResolver;
         this.chatModelFactory = chatModelFactory;
         this.auxModelResolver = auxModelResolver;
         this.tokenUsageService = tokenUsageService;

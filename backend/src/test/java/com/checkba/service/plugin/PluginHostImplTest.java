@@ -22,12 +22,14 @@ import com.checkba.service.ai.AuxModelResolver;
 import com.checkba.service.ai.ChatModelFactory;
 import com.checkba.service.ai.EditorBridgeService;
 import com.checkba.service.ai.PluginService;
+import com.checkba.service.ai.StyleProfileResolver;
 import com.checkba.service.ai.TokenUsageService;
 import com.checkba.service.ai.tools.ToolContext;
 import com.checkba.service.evidence.EvidenceLinkService;
 import com.checkba.service.evidence.EvidenceLinkViews;
 import com.checkba.storage.StorageService;
 import com.checkba.storage.StorageServiceFactory;
+import com.checkba.util.style.StyleProfiles;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -80,6 +82,7 @@ class PluginHostImplTest {
     PluginJobService pluginJobService = mock(PluginJobService.class);
     EditorBridgeService editorBridge = mock(EditorBridgeService.class);
     SystemSettingService settings = mock(SystemSettingService.class);
+    StyleProfileResolver styleProfileResolver = mock(StyleProfileResolver.class);
     ChatModelFactory chatModelFactory = mock(ChatModelFactory.class);
     AuxModelResolver auxModelResolver = mock(AuxModelResolver.class);
     TokenUsageService tokenUsageService = mock(TokenUsageService.class);
@@ -97,8 +100,8 @@ class PluginHostImplTest {
         when(members.hasWritePermission(PROJECT, USER)).thenReturn(true);
         factory = new PluginHostFactory(projectFileService, projectFileRepository, storageServiceFactory, members,
                 documentTextService, ocrService, tagService, tagRepository, fileTagService, evidenceLinkService,
-                pluginJobService, editorBridge, settings, chatModelFactory, auxModelResolver, tokenUsageService,
-                new ObjectMapper(), new PluginHostQuota());
+                pluginJobService, editorBridge, settings, styleProfileResolver, chatModelFactory, auxModelResolver,
+                tokenUsageService, new ObjectMapper(), new PluginHostQuota());
         host = factory.forPlugin("dd");
         factory.bindCall(new ToolContext(PROJECT, "conv-1", USER, null));
     }
@@ -348,20 +351,58 @@ class PluginHostImplTest {
     }
 
     @Test
-    @DisplayName("Settings：键自动加前缀 plugin.<id>.；styleProfile 先 SystemSetting 再 classpath 兜底")
-    void settingsPrefixAndStyleProfile() {
+    @DisplayName("Settings：键自动加前缀 plugin.<id>.；styleProfile 委托 StyleProfileResolver 并返回合并后的完整画像")
+    void settingsPrefixAndStyleProfile() throws Exception {
         host.settings().set("k", "v");
         verify(settings).set("plugin.dd.k", "v");
         when(settings.get("plugin.dd.k", null)).thenReturn("v");
         assertEquals("v", host.settings().get("k"));
 
-        when(settings.get(PluginHostImpl.STYLE_PROFILE_SETTING, null)).thenReturn("{\"schemaVersion\":1}");
-        assertEquals("{\"schemaVersion\":1}", host.settings().projectStyleProfileJson(PROJECT));
+        when(styleProfileResolver.resolve(PROJECT, null)).thenReturn(StyleProfiles.houseDefault().merge(
+                StyleProfiles.parse("{\"schemaVersion\":1,\"body\":{\"firstLineIndent\":{\"value\":0,\"unit\":\"pt\"}}}")));
+        com.fasterxml.jackson.databind.JsonNode n = new ObjectMapper().readTree(host.settings().projectStyleProfileJson(PROJECT));
+        assertEquals(0, n.path("body").path("firstLineIndent").path("value").asInt());
+        assertEquals("楷体_GB2312", n.path("body").path("font").path("eastAsia").asText(), "缺省叶子由 house-default 补齐");
+        verify(styleProfileResolver).resolve(PROJECT, null);
+        // 非成员拒绝（requireRead）
+        when(members.hasReadPermission(PROJECT, USER)).thenReturn(false);
+        assertThrows(IllegalArgumentException.class, () -> host.settings().projectStyleProfileJson(PROJECT));
+    }
 
-        when(settings.get(PluginHostImpl.STYLE_PROFILE_SETTING, null)).thenReturn(null);
-        String fallback = host.settings().projectStyleProfileJson(PROJECT);
-        boolean resourcePresent = PluginHostImpl.class.getClassLoader().getResource(PluginHostImpl.STYLE_PROFILE_RESOURCE) != null;
-        if (resourcePresent) assertNotNull(fallback); else assertNull(fallback);
+    @Test
+    @DisplayName("Docs.openFile：配额只计一次（P1 复核 F7）；locator 非空时追发 plugin_open_locator {fileId, locator}")
+    void docsOpenFileCountsQuotaOnce() {
+        file(70L, "a.docx", false);
+        for (int i = 0; i < 59; i++) {
+            host.settings().get("k");
+        }
+        // 第 60 次：openFile 若双计会在这里抛 HostQuotaException
+        host.docs().openFile(70L, Map.of("type", "pdf", "page", 7));
+        assertThrows(HostQuotaException.class, () -> host.settings().get("k"));
+        verify(editorBridge).sendOpenFileAction(any());
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> fields = ArgumentCaptor.forClass(Map.class);
+        verify(editorBridge).sendClientAction(eq("plugin_open_locator"), eq("conv-1"), fields.capture());
+        assertEquals(70L, fields.getValue().get("fileId"));
+        assertEquals(7, ((Map<?, ?>) fields.getValue().get("locator")).get("page"));
+    }
+
+    @Test
+    @DisplayName("DOC_ACTIONS 白名单 ⊇ DocumentEditTools 实际下发的编辑器动作（宿主自用与诊断原语除外），防再漂移")
+    void docActionsCoverDocumentEditToolsDispatch() throws Exception {
+        java.nio.file.Path src = java.nio.file.Path.of("src/main/java/com/checkba/service/ai/tools/DocumentEditTools.java");
+        assertTrue(java.nio.file.Files.exists(src), "测试工作目录须为 backend/: " + src.toAbsolutePath());
+        String code = java.nio.file.Files.readString(src);
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("(?:executeEditorCommand|dispatchTableStructureCommand|dispatchInsertNote)\\(\"([a-z_]+)\"")
+                .matcher(code);
+        java.util.Set<String> dispatched = new java.util.TreeSet<>();
+        while (m.find()) dispatched.add(m.group(1));
+        assertTrue(dispatched.contains("set_style_profile") && dispatched.contains("insert_toc"), "扫描没抓到已知下发名: " + dispatched);
+        // 宿主自用 / 诊断原语，按 SPEC §11 不开放给插件
+        dispatched.removeAll(java.util.Set.of("doc_open_file_sync", "debug_revisions"));
+        dispatched.removeAll(PluginHostImpl.DOC_ACTIONS);
+        assertTrue(dispatched.isEmpty(), "DocumentEditTools 下发但 DOC_ACTIONS 未放行（同步 docs/PLUGIN_SPEC.md §11）: " + dispatched);
     }
 
     @Test

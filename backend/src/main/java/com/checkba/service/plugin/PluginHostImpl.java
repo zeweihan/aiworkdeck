@@ -30,6 +30,7 @@ import com.checkba.service.LangText;
 import com.checkba.service.ProjectFileService;
 import com.checkba.service.ai.PlatformAiUserScope;
 import com.checkba.service.evidence.EvidenceLinkViews;
+import com.checkba.util.style.StyleProfiles;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import dev.langchain4j.data.message.AiMessage;
@@ -80,7 +81,9 @@ class PluginHostImpl implements PluginHost {
      * （clear_anchors / insert_paragraph / bookmark_selection / get_bookmark_context / goto_bookmark /
      * check_link_anchors / get_selection_hyperlink / set_selection_hyperlink / insert_link_with_bookmark——
      * 尽调插件在文档里建锚点必需，2026-08-22 复核裁决保留）。宿主自用（load/export_document、
-     * doc_open_file_sync、set_zoom 等）与诊断原语不开放。改这张表要同步 docs/PLUGIN_SPEC.md §11 的 Docs.exec 行。
+     * doc_open_file_sync、set_zoom 等）与诊断原语（debug_revisions）不开放。改这张表要同步
+     * docs/PLUGIN_SPEC.md §11 的 Docs.exec 行。{@code PluginHostImplTest} 扫 DocumentEditTools 源码里的
+     * 下发名字面量，漏一个就红（P1 复核 F2：J 的四个画像原语当时就漏了）。
      */
     static final Set<String> DOC_ACTIONS = Set.of(
             // writer
@@ -92,6 +95,9 @@ class PluginHostImpl implements PluginHost {
             "insert_under_heading", "format_table", "get_formatting", "set_style", "set_numbering", "edit_header_footer",
             "apply_house_style", "add_comment", "list_comments", "reply_comment", "set_comment_resolved", "delete_comment",
             "list_revisions", "resolve_revision", "resolve_all_revisions", "set_hyperlink_at_anchor",
+            "insert_footnote", "insert_endnote",
+            "table_read", "table_set_cell", "table_add_row", "table_delete_row", "table_add_col", "table_delete_col",
+            "set_style_profile", "apply_style_profile", "insert_toc", "set_page_setup",
             "bookmark_selection", "get_bookmark_context", "goto_bookmark", "check_link_anchors",
             "get_selection_hyperlink", "set_selection_hyperlink", "insert_link_with_bookmark",
             // calc
@@ -108,10 +114,6 @@ class PluginHostImpl implements PluginHost {
 
     static final Set<String> IMAGE_TYPES = Set.of("png", "jpg", "jpeg", "bmp", "gif", "webp", "tif", "tiff");
     static final int OCR_MAX_PAGES = 50;
-    static final String STYLE_PROFILE_SETTING = "dd.styleProfile.default";
-    static final String STYLE_PROFILE_RESOURCE = "style-profiles/house-default.json";
-    static final String TEMPLATE_FOLDER = "_模板";
-    static final String TEMPLATE_PROFILE_FILE = "画像.json";
 
     private final String pluginId;
     private final PluginHostFactory f;
@@ -156,7 +158,11 @@ class PluginHostImpl implements PluginHost {
     }
 
     private ToolCall requireRead(long projectId) {
-        ToolCall c = enter();
+        return checkRead(enter(), projectId);
+    }
+
+    /** 已经 enter() 过的调用再做成员校验——配额只计一次（P1 复核 F7）。 */
+    private ToolCall checkRead(ToolCall c, long projectId) {
         if (!f.projectMemberService.hasReadPermission(projectId, c.userId())) {
             throw new IllegalArgumentException(LangText.of("无权限访问该项目", "No access to this project"));
         }
@@ -690,7 +696,7 @@ class PluginHostImpl implements PluginHost {
             ToolCall c = enter();
             if (!StringUtils.hasText(c.conversationId())) throw new IllegalStateException("no active conversation");
             if (c.projectId() == null) throw new IllegalStateException("no project context");
-            requireRead(c.projectId());
+            checkRead(c, c.projectId());
             ProjectFile p = requireProjectFile(c.projectId(), fileId);
             withConversation(c.conversationId(), () -> {
                 f.editorBridgeService.sendOpenFileAction(p);
@@ -727,40 +733,14 @@ class PluginHostImpl implements PluginHost {
         }
 
         /**
-         * 解析顺序（SPEC §3.4，去掉「工具显式传参」那一级）：项目 `_模板/画像.json` >
-         * SystemSetting dd.styleProfile.default > classpath house-default.json > null。
-         * 单元 I 合并后这里改调 StyleProfiles.resolveForProject，顺序不变。
+         * 委托 {@link com.checkba.service.ai.StyleProfileResolver}（SPEC §3.4，去掉「工具显式传参」那一级）：
+         * 项目 `_模板/画像.json` > SystemSetting dd.styleProfile.default > house-default，选中的画像
+         * merge 到 house-default 之上——插件拿到的和 write_docx / doc_open_file 拿到的是同一份完整画像。
          */
         @Override
         public String projectStyleProfileJson(long projectId) {
             requireRead(projectId);
-            String fromProject = projectTemplateProfile(projectId);
-            if (StringUtils.hasText(fromProject)) return fromProject;
-            String fromSetting = f.systemSettingService.get(STYLE_PROFILE_SETTING, null);
-            if (StringUtils.hasText(fromSetting)) return fromSetting;
-            try (InputStream in = PluginHostImpl.class.getClassLoader().getResourceAsStream(STYLE_PROFILE_RESOURCE)) {
-                if (in != null) return new String(in.readAllBytes(), StandardCharsets.UTF_8);
-            } catch (IOException e) {
-                log.debug("house-default style profile unreadable: {}", e.getMessage());
-            }
-            return null;
-        }
-
-        private String projectTemplateProfile(long projectId) {
-            try {
-                Optional<ProjectFile> folder = f.projectFileRepository
-                        .findByProjectIdAndParentIdAndNameAndIsDeletedFalse(projectId, null, TEMPLATE_FOLDER);
-                if (folder.isEmpty() || !Boolean.TRUE.equals(folder.get().getIsFolder())) return null;
-                Optional<ProjectFile> file = f.projectFileRepository
-                        .findByProjectIdAndParentIdAndNameAndIsDeletedFalse(projectId, folder.get().getId(), TEMPLATE_PROFILE_FILE);
-                if (file.isEmpty()) return null;
-                String json = new String(readBytes(file.get()), StandardCharsets.UTF_8);
-                JsonNode node = f.objectMapper.readTree(json);
-                return node != null && node.isObject() ? json : null;
-            } catch (Exception e) {
-                log.debug("project template profile unreadable for project {}: {}", projectId, e.getMessage());
-                return null;
-            }
+            return StyleProfiles.toJson(f.styleProfileResolver.resolve(projectId, null));
         }
     }
 

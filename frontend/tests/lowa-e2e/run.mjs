@@ -1528,6 +1528,14 @@ try {
     await exec('select_paragraph', {})
     const lk = await exec('set_selection_hyperlink', { url: 'https://www.aiworkdeck.com' })
     check('选区加超链接成功', lk.success === true && lk.url === 'https://www.aiworkdeck.com', JSON.stringify(lk).slice(0, 140))
+    // insert_link_with_bookmark 的 scheme 校验（P1 复核 F3）：http(s)/checkba 放行，其它双字段拒绝
+    await exec('goto', { type: 'end' })
+    const lbOk = await exec('insert_link_with_bookmark', { text: '底稿', url: 'https://checkba-internal.local/open?u=checkba%3A%2F%2Ffilelink%3Fk%3Dlk_p1', bookmarkName: 'LK_P1' })
+    check('insert_link_with_bookmark 放行 https 包装链接', lbOk.success === true && lbOk.bookmarkName === 'LK_P1', JSON.stringify(lbOk).slice(0, 160))
+    const lbBare = await exec('insert_link_with_bookmark', { text: '裸', url: 'checkba://filelink?k=lk_p1b', bookmarkName: 'LK_P1B' })
+    check('insert_link_with_bookmark 放行裸 checkba://', lbBare.success === true, JSON.stringify(lbBare).slice(0, 160))
+    const lbBad = await exec('insert_link_with_bookmark', { text: '坏', url: 'javascript:alert(1)' })
+    check('insert_link_with_bookmark 拒绝 javascript: 且 error+message 双字段', lbBad.success === false && !!lbBad.error && !!lbBad.message, JSON.stringify(lbBad).slice(0, 160))
 
     // 查找导航：全程 findFirst/findNext，**不留书签**（书签会跟着存进 docx）
     await exec('debug_fresh_document')
