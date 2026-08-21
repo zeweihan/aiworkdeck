@@ -66,6 +66,10 @@ class MeetingFolderLanguageTest {
         when(projectFileService.createFile(anyLong(), any(), anyString(), anyString(),
                 anyLong(), any(), any(), anyLong()))
                 .thenAnswer(inv -> file(inv.getArgument(2)));
+        // exportTranscript 落盘走 RENAME 策略（dev-board#107 单元 F2），9 参重载
+        when(projectFileService.createFile(anyLong(), any(), anyString(), anyString(),
+                anyLong(), any(), any(), anyLong(), any(ProjectFileService.ConflictPolicy.class)))
+                .thenAnswer(inv -> file(inv.getArgument(2)));
 
         service = new MeetingRecordingService(
                 meetingRepository, projectFileRepository, projectFileService, factory);

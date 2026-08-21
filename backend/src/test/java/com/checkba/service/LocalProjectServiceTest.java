@@ -241,16 +241,19 @@ class LocalProjectServiceTest {
      */
     @Test
     void reconcileReportsTruncationWhenImportHitsTheCap(@TempDir Path folder) throws Exception {
+        // 上限覆盖成一个小值：真实生产上限是 30000，为了触发截断真建这么多文件
+        // 会是几十分钟、几万个 inode 的测试，不能进 CI（dev-board#107 单元 F1 复核）。
+        svc.setMaxImportEntriesForTest(50);
         Long projectId = svc.openLocalFolder(folder.toString(), false, null, null, 1L).project().getId();
 
-        // 超过 MAX_IMPORT_ENTRIES（3000）上限，逼 importFolder 在扫描中途截断
-        int overCap = LocalProjectService.MAX_IMPORT_ENTRIES + 5;
+        int overCap = 55;
         for (int i = 0; i < overCap; i++) {
             Files.writeString(folder.resolve("f" + i + ".txt"), "x");
         }
 
         LocalProjectService.ReconcileResult r = svc.reconcileProject(projectId);
         assertTrue(r.truncated(), "扫描条目数超过上限时，对账结果必须报出截断，否则超限文件永远静默不进文件树");
+        assertEquals(5, r.truncatedCount(), "55 项超出上限 50，未纳入的应正好是 5 项");
     }
 
     /**

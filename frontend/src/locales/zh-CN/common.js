@@ -33,7 +33,8 @@ export default {
   readVersionFileFailed: '读取版本文件失败',
   // ---- utils/ideOpen.js ----
   openProjectFailed: '打开项目失败，请稍后重试',
-  folderImportTruncated: '文件夹内容过多，仅导入了前 3000 项',
+  folderImportTruncatedTitle: '导入已截断',
+  folderImportTruncated: '本次导入已截断，{count} 项未纳入：目录超过 30000 项，请拆分项目',
   openFolder: '打开文件夹',
   openFile: '打开文件',
   open: '打开',

@@ -36,9 +36,17 @@ public class LocalProjectService {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(LocalProjectService.class);
 
-    /** 扫描上限：防止误选超大目录（如整个用户主目录）把数据库灌爆。 */
-    static final int MAX_IMPORT_ENTRIES = 3000;
+    /** 扫描上限：防止误选超大目录（如整个用户主目录）把数据库灌爆。生产默认 30000，
+     * 单元测试可用 setMaxImportEntriesForTest 覆盖成一个小值——不然为了触发截断
+     * 就得真的建几万个文件，几十分钟、占磁盘，不能进 CI。 */
+    static final int DEFAULT_MAX_IMPORT_ENTRIES = 30000;
+    private int maxImportEntries = DEFAULT_MAX_IMPORT_ENTRIES;
     static final int MAX_IMPORT_DEPTH = 20;
+
+    /** 仅供测试覆盖导入上限（包内可见）。生产路径永远用 DEFAULT_MAX_IMPORT_ENTRIES。 */
+    void setMaxImportEntriesForTest(int maxImportEntries) {
+        this.maxImportEntries = maxImportEntries;
+    }
 
     private final ProjectRepository projectRepository;
     private final ProjectMemberRepository projectMemberRepository;
@@ -74,7 +82,7 @@ public class LocalProjectService {
     public record LocalProjectOpened(long projectId, String localRoot) {}
 
     public record OpenLocalResult(Project project, boolean reused, Long openFileId,
-                                  int importedCount, boolean truncated) {}
+                                  int importedCount, boolean truncated, int truncatedCount) {}
 
     /**
      * 打开/复用本地文件夹项目。
@@ -112,12 +120,12 @@ public class LocalProjectService {
                     .map(ProjectFile::getId)
                     .orElse(null);
         }
-        log.info("打开本地文件夹项目: project={}, root={}, reused={}, imported={}, truncated={}",
-                project.getId(), canonical, reused, stats.imported, stats.truncated);
+        log.info("打开本地文件夹项目: project={}, root={}, reused={}, imported={}, truncated={}, truncatedCount={}",
+                project.getId(), canonical, reused, stats.imported, stats.truncated, stats.truncatedCount);
         eventPublisher.publishEvent(new LocalProjectOpened(project.getId(), canonical));
         telemetryService.record("project.created", java.util.Map.of(
                 "kind", "local", "reused", reused, "importedCount", stats.imported));
-        return new OpenLocalResult(project, reused, openFileId, stats.imported, stats.truncated);
+        return new OpenLocalResult(project, reused, openFileId, stats.imported, stats.truncated, stats.truncatedCount);
     }
 
     private record ProjectResolution(Project project, boolean reused) {}
@@ -155,7 +163,7 @@ public class LocalProjectService {
         return new ProjectResolution(project, false);
     }
 
-    public record ReconcileResult(int changed, boolean rootMissing, boolean truncated) {}
+    public record ReconcileResult(int changed, boolean rootMissing, boolean truncated, int truncatedCount) {}
 
     /**
      * 磁盘 ↔ 数据库文件树对账（watcher 触发；幂等，只写数据库、绝不写磁盘）：
@@ -179,12 +187,12 @@ public class LocalProjectService {
     public ReconcileResult reconcileProject(Long projectId) {
         Project project = projectRepository.findById(projectId).orElse(null);
         if (project == null || !StringUtils.hasText(project.getLocalRoot())) {
-            return new ReconcileResult(0, false, false);
+            return new ReconcileResult(0, false, false, 0);
         }
         Path root = Paths.get(project.getLocalRoot());
         if (!Files.isDirectory(root)) {
             log.warn("对账跳过：项目文件夹不可达 project={}, root={}", projectId, root);
-            return new ReconcileResult(0, true, false);
+            return new ReconcileResult(0, true, false, 0);
         }
         Long ownerId = project.getUserId();
 
@@ -194,7 +202,8 @@ public class LocalProjectService {
             // 此前 stats.truncated 只在 openLocalFolder 那侧被读取，watcher 触发的
             // reconcileProject 从不读它——超出 MAX_IMPORT_ENTRIES 上限的文件永远静默
             // 不进文件树，无日志无 API 信号。这里补上，与 openLocalFolder 的日志对齐。
-            log.warn("对账触发导入上限截断: project={}, root={}, 上限={}", projectId, root, MAX_IMPORT_ENTRIES);
+            log.warn("对账触发导入上限截断: project={}, root={}, 上限={}, truncatedCount={}",
+                    projectId, root, maxImportEntries, stats.truncatedCount);
         }
 
         // 删除同步：行在库、物理不存在 → 软删除（文件按 filePath 解析，文件夹按父链拼相对路径）
@@ -247,7 +256,7 @@ public class LocalProjectService {
         if (changed > 0) {
             log.info("对账完成: project={}, changed={}", projectId, changed);
         }
-        return new ReconcileResult(changed, false, stats.truncated);
+        return new ReconcileResult(changed, false, stats.truncated, stats.truncatedCount);
     }
 
     private String relativeFolderPath(ProjectFile folder, Map<Long, ProjectFile> byId) {
@@ -316,6 +325,7 @@ public class LocalProjectService {
         int imported;   // 本次处理（含无变化跳过）的条目数，用于上限控制
         int changed;    // 真正新建/更新的条目数，用于「有没有发生变化」判断
         boolean truncated;
+        int truncatedCount; // 命中上限之后未纳入的条目数（尽力而为的精确计数，见下方 preVisitDirectory/visitFile）
     }
 
     /**
@@ -348,8 +358,11 @@ public class LocalProjectService {
                 public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
                     if (dir.equals(root)) return FileVisitResult.CONTINUE;
                     if (dir.getFileName().toString().startsWith(".")) return FileVisitResult.SKIP_SUBTREE;
-                    if (stats.imported >= MAX_IMPORT_ENTRIES) {
+                    if (stats.imported >= maxImportEntries) {
+                        // 命中上限后不再下钻子树（避免为了精确计数而扫穿一整棵误选的超大目录），
+                        // 只把这个目录条目本身计入 truncatedCount——「至少 N 项」而非精确到子树内的每一项。
                         stats.truncated = true;
+                        stats.truncatedCount++;
                         return FileVisitResult.SKIP_SUBTREE;
                     }
                     Long parentId = dirIds.get(dir.getParent());
@@ -391,12 +404,17 @@ public class LocalProjectService {
                         // 任何回调访问到，是本轮扫描静默漏掉的那一段。与 MAX_IMPORT_ENTRIES
                         // 上限不同，这里没有天然会执行到的判断点，必须主动识别这个信号。
                         stats.truncated = true;
+                        stats.truncatedCount++;
                         return FileVisitResult.CONTINUE;
                     }
                     if (!attrs.isRegularFile()) return FileVisitResult.CONTINUE;
-                    if (stats.imported >= MAX_IMPORT_ENTRIES) {
+                    if (stats.imported >= maxImportEntries) {
+                        // 不再 TERMINATE 掉整个 walk：那样连"还有多少项没纳入"都数不出来。
+                        // 继续遍历同级/回溯到上级目录的其余兄弟节点计数，但目录分支已经在
+                        // preVisitDirectory 里 SKIP_SUBTREE，不会再下钻——总耗时仍然有界。
                         stats.truncated = true;
-                        return FileVisitResult.TERMINATE;
+                        stats.truncatedCount++;
+                        return FileVisitResult.CONTINUE;
                     }
                     Long parentId = dirIds.get(file.getParent());
                     if (parentId == null && !file.getParent().equals(root)) {
