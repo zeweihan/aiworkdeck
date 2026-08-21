@@ -44,9 +44,40 @@ public class ProjectMemoryExtractor {
     private static final Pattern PARTY_PATTERN = Pattern.compile("(甲方|乙方|丙方|丁方|发行人|标的公司|上市公司|交易对方)[：:：]\\s*([^\\n,，。]+)");
 
     /**
+     * 同项目的提取互斥用的分条锁。
+     *
+     * <p>整段是「读 ProjectMemory -> 就地改 -> 保存」，此前没有任何锁；而记忆提取跑在
+     * {@code @Async("memoryExecutor")} 上（核心线程数 2），同一项目的两轮对话几乎同时结束
+     * 就会撞上：后写的那次带着自己读到的旧快照落库，前一次提取出的法条引用、金额、
+     * 当事方全部丢失，而且丢得毫无痕迹。
+     *
+     * <p>用固定条数的锁数组而不是按 id 建锁的 Map：Map 会随项目数无界增长，
+     * 而这里只要「同一项目串行」这一个性质，撞条带来的额外串行完全可以接受。
+     * 单实例基线（与验证码存储同一实现边界），多实例部署需要外置锁或乐观锁。
+     */
+    private static final Object[] PROJECT_LOCKS = new Object[16];
+
+    static {
+        for (int i = 0; i < PROJECT_LOCKS.length; i++) {
+            PROJECT_LOCKS[i] = new Object();
+        }
+    }
+
+    private static Object lockFor(Long projectId) {
+        int idx = projectId == null ? 0 : (int) Math.floorMod(projectId, PROJECT_LOCKS.length);
+        return PROJECT_LOCKS[idx];
+    }
+
+    /**
      * 从对话消息中提取信息并更新项目记忆
      */
     public void extractAndUpdateProjectMemory(Long projectId, List<ChatMessage> messages) {
+        synchronized (lockFor(projectId)) {
+            doExtractAndUpdateProjectMemory(projectId, messages);
+        }
+    }
+
+    private void doExtractAndUpdateProjectMemory(Long projectId, List<ChatMessage> messages) {
         log.info("Extracting project memory from {} messages for projectId={}", messages.size(), projectId);
         
         StringBuilder allContent = new StringBuilder();
@@ -102,11 +133,21 @@ public class ProjectMemoryExtractor {
             }
         }
         
-        // 更新关键日期
-        if (!dates.isEmpty() && pm.getKeyDates() == null) {
-            Map<String, String> keyDates = new HashMap<>();
-            for (int i = 0; i < Math.min(dates.size(), 5); i++) {
-                keyDates.put("日期" + (i + 1), dates.get(i));
+        // 更新关键日期：本轮提到的排在前面，再补上已记住的旧日期，最多留 5 条。
+        // 此前的判据是 `pm.getKeyDates() == null`——写一次就成了闩，此后每一轮都被挡掉。
+        // 对照同一段里的 legalRefs（每轮并集）与 transactionAmount（见到更大值就更新），
+        // 只有关键日期永久冻结；而 ProjectMemory.toContextString() 每轮都把它注进上下文，
+        // 交割日改期之后助手还在把原定日期当现行日期引用——法律期限场景下这是会出事的。
+        if (!dates.isEmpty()) {
+            java.util.LinkedHashSet<String> merged = new java.util.LinkedHashSet<>(dates);
+            if (pm.getKeyDates() != null) {
+                merged.addAll(pm.getKeyDates().values());
+            }
+            Map<String, String> keyDates = new java.util.LinkedHashMap<>();
+            int i = 0;
+            for (String date : merged) {
+                if (i >= 5) break;
+                keyDates.put("日期" + (++i), date);
             }
             pm.setKeyDates(keyDates);
         }
