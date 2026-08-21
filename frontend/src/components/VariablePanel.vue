@@ -86,6 +86,7 @@ import {
   saveUserVariable,
   deleteUserVariable
 } from '@/services/api.js'
+import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
 
 export default {
   props: {
@@ -112,7 +113,12 @@ export default {
       docFields: [],
       showCreateModal: false,
       createForm: { name: '' },
-      confirmDeleteKey: null
+      confirmDeleteKey: null,
+      // 每个数据源各自的请求代次：三者都被 refresh() 之外的写操作
+      //（confirmDelete/insertVariable 等）单独调用，只在 refresh() 层面挡是不够的。
+      _projectVarsSeq: 0,
+      _userVarsSeq: 0,
+      _docFieldsSeq: 0
     }
   },
   computed: {
@@ -212,37 +218,52 @@ export default {
       }
     },
 
+    // 三个 fetch* 不止被 refresh() 调用，scope 切换连点、或切换紧跟着一次
+    // confirmDelete/insertVariable 触发的单独刷新，都会让同一数据源的两次请求
+    // 并发在飞。网络到达顺序不保证跟发出顺序一致，先发的（陈旧）响应若后回，
+    // 会把已经生效的新数据覆盖回去——比如刚删掉的变量又冒出来，或刚改的值
+    // 被打回旧值。三者各自独立的请求代次，只认"此刻最新一次"发出的那份。
     async fetchProjectVars() {
+      const seq = ++this._projectVarsSeq
       if (!this.projectId) {
-        this.projectVars = []
+        if (shouldAcceptResponse(seq, this._projectVarsSeq)) this.projectVars = []
         return
       }
       try {
         const res = await getProjectVariables(this.projectId)
+        if (!shouldAcceptResponse(seq, this._projectVarsSeq)) return
         this.projectVars = Array.isArray(res) ? res : (res.data || [])
       } catch (e) {
+        if (!shouldAcceptResponse(seq, this._projectVarsSeq)) return
         this.projectVars = []
       }
     },
 
     async fetchUserVars() {
+      const seq = ++this._userVarsSeq
       try {
         const res = await getUserVariables()
+        if (!shouldAcceptResponse(seq, this._userVarsSeq)) return
         this.userVars = Array.isArray(res) ? res : (res.data || [])
       } catch (e) {
+        if (!shouldAcceptResponse(seq, this._userVarsSeq)) return
         this.userVars = []
       }
     },
 
     async fetchDocFields() {
+      const seq = ++this._docFieldsSeq
       const editor = this.getEditor ? this.getEditor() : null
       if (!editor || typeof editor.listVariableFields !== 'function') {
-        this.docFields = []
+        if (shouldAcceptResponse(seq, this._docFieldsSeq)) this.docFields = []
         return
       }
       try {
-        this.docFields = await editor.listVariableFields()
+        const fields = await editor.listVariableFields()
+        if (!shouldAcceptResponse(seq, this._docFieldsSeq)) return
+        this.docFields = fields
       } catch (e) {
+        if (!shouldAcceptResponse(seq, this._docFieldsSeq)) return
         this.docFields = []
       }
     },

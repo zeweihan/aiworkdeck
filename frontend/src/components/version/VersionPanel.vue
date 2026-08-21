@@ -101,6 +101,7 @@ import {
   getVersionStatus, enableVersionControl, listDrafts,
   getCloudStatus, checkCloud, listCloudConnections,
 } from '@/services/api.js'
+import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
 import WorkSessionBar from './WorkSessionBar.vue'
 import VersionTimeline from './VersionTimeline.vue'
 import DraftList from './DraftList.vue'
@@ -143,6 +144,7 @@ export default {
       hasConnection: false,
       timelineKey: 0,
       busy: false,
+      refreshSeq: 0,
     }
   },
   watch: {
@@ -159,10 +161,17 @@ export default {
     }).catch(() => {})
   },
   methods: {
+    // refresh() 的触发源很多（mounted/collabRefreshToken watcher/onReload，onReload 又被
+    // WorkSessionBar 结束工作段、三选一冲突弹窗 resolved/aborted 等一堆事件各自触发），
+    // 互相之间可能重叠。没有请求代次的话，先发的那次 getVersionStatus 若后回，会把
+    // 后发的那次已经渲染好的更新状态覆盖回旧值——工作段/稿态/采纳冲突全部倒退，
+    // 且没有任何错误提示。只认"此刻最新一次" refresh 发出的响应。
     async refresh() {
+      const seq = ++this.refreshSeq
       this.loading = true
       try {
         const res = await getVersionStatus(this.projectId)
+        if (!shouldAcceptResponse(seq, this.refreshSeq)) return
         const d = (res && res.data) || {}
         this.enabled = !!d.enabled
         this.working = !!d.working
@@ -184,13 +193,14 @@ export default {
           this.hasConnection = false
         }
       } catch (e) {
+        if (!shouldAcceptResponse(seq, this.refreshSeq)) return
         // 读取失败绝不能落到"未开启"引导页——那会让律师误以为从没开过版本记录，
         // 去重复点开启。宁可显示可区分的错误态，保留 enabled 的上一次已知值。
         console.warn('[Version] 读取状态失败', e)
         this.loadError = true
         uni.showToast({ title: this.$t('version.loadFailedToast'), icon: 'none' })
       } finally {
-        this.loading = false
+        if (shouldAcceptResponse(seq, this.refreshSeq)) this.loading = false
       }
     },
     async fetchDrafts() {

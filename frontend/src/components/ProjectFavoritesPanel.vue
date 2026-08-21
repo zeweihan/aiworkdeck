@@ -67,6 +67,7 @@
 import { getProjectFavorites, deleteFavorite, getFavoriteImageUrl } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
 import { isDesktopHost } from '@/services/host.js'
+import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
 
 export default {
 
@@ -93,6 +94,7 @@ export default {
       scrollIntoView: '',
       highlightId: null,
       _lastRefreshAt: 0,
+      _refreshSeq: 0,
       confirmDeleteId: null
     }
   },
@@ -180,16 +182,22 @@ export default {
       if (!force && this._lastRefreshAt && now - this._lastRefreshAt < 1200 && this.query === this._lastRefreshQuery) return
       this._lastRefreshAt = now
       this._lastRefreshQuery = this.query
+      // query 绑的是父级搜索框、没有去抖，每敲一下键就发一次请求；不同关键字的
+      // 响应到达顺序不保证跟敲键顺序一致。先敲的（陈旧）关键字若后回，会把
+      // 已经渲染好的最新搜索结果盖掉。只认"此刻最新一次"发出的那份。
+      const seq = ++this._refreshSeq
       this.loading = true
       try {
         const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
         const list = await getProjectFavorites(pid, this.query, 80)
+        if (!shouldAcceptResponse(seq, this._refreshSeq)) return
         this.items = Array.isArray(list) ? list : (list?.data || [])
       } catch (e) {
+        if (!shouldAcceptResponse(seq, this._refreshSeq)) return
         console.error('加载项目收藏失败:', e)
         uni.showToast({ title: this.$t('panels.pfLoadFailed'), icon: 'none' })
       } finally {
-        this.loading = false
+        if (shouldAcceptResponse(seq, this._refreshSeq)) this.loading = false
       }
     },
     requestDelete(id) {

@@ -325,6 +325,7 @@
             <button
               class="btn-save"
               type="primary"
+              :disabled="saving"
               :loading="saving"
               @tap="handleSave"
             >
@@ -520,6 +521,7 @@
             <button
               class="btn-save"
               type="primary"
+              :disabled="saving"
               :loading="saving"
               @tap="handleSave"
             >
@@ -1367,6 +1369,7 @@ import { accountPageUrl, siteBaseUrl, loadSiteLinks, resetSiteLinks } from '@/ut
 import { host } from '@/services/host.js'
 import { setGlobalOverlay } from '@/utils/overlayState.js'
 import { refreshEntitlements, isEnabled, FEATURES } from '@/composables/useEntitlement.js'
+import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
 import UnlockHint from '@/components/UnlockHint.vue'
 import MarketPane from '@/components/MarketPane.vue'
 import AwdSelect from '@/components/AwdSelect.vue'
@@ -1446,6 +1449,7 @@ export default {
       // 最后一次点开详情的目标 id：慢到的旧响应不许覆盖后点的那条
       feedbackDetailPendingId: null,
       feedbackLoading: false,
+      feedbackListSeq: 0, // 请求代次：切筛选档太快时，只认"此刻最新一次"发出的列表响应
       feedbackFilter: '',
       feedbackFilters: [
         { key: '', label: this.$t('admin.filterAll') },
@@ -2125,6 +2129,11 @@ export default {
       })
     },
     onNavTap(nav) {
+      // 记忆同步卡的 v-model 直接绑在 this.memoryRepos[i].form 上，loadMemoryRepos()
+      // 每次都用全新对象整体替换这个数组。已经在记忆同步页时再点一次同一个导航项
+      // （双击，或切走又立刻切回同一项），不该触发重拉——否则正在卡片里敲还没保存的
+      // URL/密钥会被这次重拉悄悄冲掉，用户毫无察觉。
+      const wasAlreadyOnMemory = this.activeNav === 'memory'
       this.activeNav = nav.key
       if (nav.key === 'cloud') {
         this.loadCloudConnections()
@@ -2140,7 +2149,7 @@ export default {
         this.loadIdentityCandidates()
         refreshEntitlements()
       }
-      if (nav.key === 'memory') {
+      if (nav.key === 'memory' && !wasAlreadyOnMemory) {
         this.loadMemoryRepos()
       }
       if (nav.key === 'feedback') {
@@ -2152,15 +2161,21 @@ export default {
     async reloadFeedbackPanel() {
       await Promise.all([this.loadFeedbackList(), this.loadOptimizerStatus()])
     },
+    // 切筛选档 A->B 太快时，A、B 两个 getFeedbackList 请求会同时在飞；到达顺序不
+    // 保证跟点击顺序一致。先点的 A 若后回，会把已经渲染好的 B 筛选结果盖成 A 的，
+    // 界面显示的高亮筛选档跟列表内容对不上。只认"此刻最新一次"发出的那份响应。
     async loadFeedbackList() {
+      const seq = ++this.feedbackListSeq
       this.feedbackLoading = true
       try {
         const res = await getFeedbackList(this.feedbackFilter, 100)
+        if (!shouldAcceptResponse(seq, this.feedbackListSeq)) return
         this.feedbackList = ((res && res.data && res.data.items) || [])
       } catch (e) {
+        if (!shouldAcceptResponse(seq, this.feedbackListSeq)) return
         uni.showToast({ title: (e && e.message) || this.$t('admin.loadFeedbackFailed'), icon: 'none' })
       } finally {
-        this.feedbackLoading = false
+        if (shouldAcceptResponse(seq, this.feedbackListSeq)) this.feedbackLoading = false
       }
     },
     async loadOptimizerStatus() {
@@ -3095,6 +3110,9 @@ export default {
       }
     },
     async handleSave() {
+      // 按钮只绑了 :loading，没绑 :disabled，uni-app 的 loading 态本身不拦 tap；
+      // 同文件其它写操作（onSaveBudget/onSwitchSite 等）都在方法体开头挡一道，这里补齐。
+      if (this.saving) return
       this.saving = true
       try {
         await saveAdminConfig(this.form)

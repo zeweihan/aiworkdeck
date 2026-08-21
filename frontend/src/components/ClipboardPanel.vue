@@ -75,6 +75,7 @@ import { getClipboardTypeMeta } from '@/config/clipboard.js'
 import { getSessionId } from '@/utils/auth.js'
 import { ICONS } from '@/config/icons.js'
 import UnlockHint from '@/components/UnlockHint.vue'
+import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
 
 export default {
 
@@ -98,7 +99,8 @@ export default {
       items: [],
       // 免费额度下被隐藏（注意：不是被删除）的历史记录条数。解锁后这些记录会原样回来。
       hiddenCount: 0,
-      confirmDeleteId: null
+      confirmDeleteId: null,
+      _refreshSeq: 0
     }
   },
   mounted() {
@@ -116,10 +118,16 @@ export default {
     formatTypeLabel(type) {
       return (getClipboardTypeMeta(type)?.label || String(type || ''))
     },
+    // query 同样绑的是父级搜索框、没有去抖（连 ProjectFavoritesPanel 那种同关键字
+    // 节流都没有），每敲一下键就发一次 listClipboard。响应到达顺序不保证跟敲键顺序
+    // 一致，先敲的（陈旧）关键字若后回，会把已经渲染好的最新结果和「N 条被免费额度
+    // 隐藏」提示一起盖成陈旧值。只认"此刻最新一次"发出的那份。
     async refresh() {
+      const seq = ++this._refreshSeq
       this.loading = true
       try {
         const res = await listClipboard(this.query, 80)
+        if (!shouldAcceptResponse(seq, this._refreshSeq)) return
         // PR-C 起后端返回 { items, limited, hiddenCount, ... }；
         // 数组分支保留给旧后端（桌面壳可能连着未升级的 backend），此时按无额度处理。
         if (Array.isArray(res)) {
@@ -130,10 +138,11 @@ export default {
           this.hiddenCount = res?.limited ? (res.hiddenCount || 0) : 0
         }
       } catch (e) {
+        if (!shouldAcceptResponse(seq, this._refreshSeq)) return
         console.error('加载剪贴板失败:', e)
         uni.showToast({ title: this.$t('panels.cpLoadFailed'), icon: 'none' })
       } finally {
-        this.loading = false
+        if (shouldAcceptResponse(seq, this._refreshSeq)) this.loading = false
       }
     },
     preview(it) {

@@ -341,6 +341,7 @@
  * 兜底在工作台的 onHide/onUnload（admin / plugin-market / variable-library 都没做）。
  */
 import { getMyProjects, deleteProject, renameProject, getProjectMembers, removeProjectMember, getCurrentUser as getCurrentUserApi } from '@/services/api.js'
+import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
 import { getProjectTypeLabel } from '@/config/projectTypes.js'
 import { roleLabel, ROLE_LABELS } from '@/config/memberRoles.js'
 import { getCurrentUser, getSessionId } from '@/utils/auth.js'
@@ -414,6 +415,8 @@ export default {
       namingVisible: false,
       namingParentDir: '',
       namingName: '',
+
+      loadProjectsSeq: 0,
     }
   },
   onLoad() {
@@ -448,7 +451,13 @@ export default {
         console.error('获取用户信息失败:', e)
       }
     },
+    // 触发源不止一处（onShow 每次页面重新可见都会跑一次，删除/移出成员/邀请成功
+    // 各自还会再补跑一次），互相之间没有取消机制。每个都要等 N+1 的成员查询
+    // fan-out 落地，谁的 Promise.all 后落地就覆盖 this.projects——旧的那次快照
+    // 若在新的一次（比如删除后的刷新）之后才落地，会把刚删掉的项目重新摆回列表。
+    // 用请求代次只认"此刻最新一次"发出的那份快照。
     async loadProjects() {
+      const seq = ++this.loadProjectsSeq
       this.projectsLoading = true
       try {
         // getMyProjects 返回的是裸数组（ProjectController 直接返 List<ProjectCardDTO>，
@@ -474,8 +483,10 @@ export default {
             return { ...p, members: [] }
           }
         }))
+        if (!shouldAcceptResponse(seq, this.loadProjectsSeq)) return
         this.projects = projectsWithMembers
       } catch (error) {
+        if (!shouldAcceptResponse(seq, this.loadProjectsSeq)) return
         console.error('加载项目列表失败:', error)
         // 桌面端免登：绝不跳 login（launch 分流已保证桌面不进登录页，这里若跳就是死胡同），
         // 只提示错误。浏览器端保留原「登录失效回登录页」兜底。
@@ -489,7 +500,7 @@ export default {
           })
         }
       } finally {
-        this.projectsLoading = false
+        if (shouldAcceptResponse(seq, this.loadProjectsSeq)) this.projectsLoading = false
       }
     },
 
@@ -751,14 +762,24 @@ export default {
         uni.showToast({ title: this.$t('projects.projectNameEmpty'), icon: 'none' })
         return
       }
+      // 输入框同时绑了 @confirm="confirmRename" 和 @blur="cancelRename"：请求飞着时
+      // 点别处会触发 blur，同步把 renamingProjectId/renameValue 清空。续写要是等
+      // await 回来才去读 this.renamingProjectId 就已经是 null 了，find 恒失配，
+      // 卡片名字更新不到本地状态。提前把 id/name 存成局部变量，不再依赖会被
+      // 并发清掉的响应式状态；success 之后也只在仍是本次这轮 rename 时才去关输入框，
+      // 避免误关掉期间用户又对另一个项目开的新一轮改名。
+      const id = this.renamingProjectId
+      const name = this.renameValue.trim()
       try {
-        await renameProject(this.renamingProjectId, this.renameValue.trim())
-        const project = this.projects.find((p) => p.id === this.renamingProjectId)
+        await renameProject(id, name)
+        const project = this.projects.find((p) => p.id === id)
         if (project) {
-          project.name = this.renameValue.trim()
+          project.name = name
         }
-        this.renamingProjectId = null
-        this.renameValue = ''
+        if (this.renamingProjectId === id) {
+          this.renamingProjectId = null
+          this.renameValue = ''
+        }
         uni.showToast({ title: this.$t('projects.renameSuccess'), icon: 'success' })
       } catch (e) {
         console.error('重命名失败', e)
