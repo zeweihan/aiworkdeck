@@ -32,6 +32,13 @@
               {{ codeBtnLabel }}
             </button>
           </div>
+          <!--
+            人机验证控件的落点。阿里云是 popup 模式，平时不占位；`-trigger` 是 SDK 要求的
+            触发元素，由 getToken() 代点，用户看不到它，所以藏起来但**必须留在文档里**
+            （display:none 的节点仍可被 click()，移出文档就取不到 token 了）。
+          -->
+          <div id="login-captcha" class="captcha-holder"></div>
+          <button id="login-captcha-trigger" type="button" class="captcha-trigger" aria-hidden="true" tabindex="-1"></button>
         </div>
       </template>
 
@@ -117,13 +124,15 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
   fetchMyProjects,
+  getAccountLoginCaptchaConfig,
   postAccountLogin,
   postAccountLoginSendCode,
   postAwdkLogin
 } from '../lib/api.js'
+import { setupCaptcha } from '../lib/captcha.js'
 import { saveSettings, normalizeBaseUrl, DEFAULT_SERVER_URL } from '../lib/settings.js'
 
 const props = defineProps({
@@ -155,6 +164,10 @@ const loginStatusKind = ref('ok')
 
 let cooldownTimer = null
 
+// 人机验证控件。null = 官网未启用（或配置拿不到），此时跳过控件直接发码。
+let captcha = null
+let captchaReady = null
+
 /** 当前连接状态摘要：只读本地设置，不发请求 */
 const displayServerUrl = computed(() => normalizeBaseUrl(serverUrl.value) || '（未设置地址）')
 
@@ -163,8 +176,29 @@ const codeBtnLabel = computed(() => {
   return sendingCode.value ? '发送中...' : '获取验证码'
 })
 
-// 任务窗格切视图会卸载本组件，倒计时的定时器必须跟着停，否则回来时还在跑
-onBeforeUnmount(stopCooldown)
+// 任务窗格切视图会卸载本组件：倒计时的定时器必须跟着停（否则回来时还在跑），
+// 验证码控件也要拆掉（否则 SDK 还攥着已经不在文档里的节点）。
+onBeforeUnmount(() => {
+  stopCooldown()
+  if (captcha && captcha.destroy) captcha.destroy()
+  captcha = null
+})
+
+// 装控件要下载第三方脚本，放在挂载时预热；失败不打扰用户——真出问题会在发码那步
+// 由官网给出可读的报错（「请先完成安全验证后再试」）。
+onMounted(() => { captchaReady = ensureCaptcha() })
+
+async function ensureCaptcha() {
+  if (captcha) return captcha
+  try {
+    const config = await getAccountLoginCaptchaConfig({ serverUrl: serverUrl.value })
+    captcha = await setupCaptcha(config, 'login-captcha')
+  } catch (e) {
+    console.warn('[settings] 人机验证控件装配失败:', e)
+    captcha = null
+  }
+  return captcha
+}
 
 function stopCooldown() {
   if (cooldownTimer) {
@@ -196,7 +230,19 @@ async function sendCode() {
   }
   sendingCode.value = true
   try {
-    await postAccountLoginSendCode({ serverUrl: serverUrl.value }, phone.value)
+    // 先过人机验证再发码：官网把 verifyCaptcha 排在发短信之前，不带 token 就是 403。
+    // 官网未启用时 ensureCaptcha() 给 null，token 留空，行为与从前一致。
+    const widget = await (captchaReady || ensureCaptcha())
+    let captchaToken = ''
+    if (widget) {
+      captchaToken = await widget.getToken()
+      if (!captchaToken) {
+        loginStatusKind.value = 'error'
+        loginStatus.value = '安全验证未完成，请重试'
+        return
+      }
+    }
+    await postAccountLoginSendCode({ serverUrl: serverUrl.value }, phone.value, captchaToken)
     loginStatusKind.value = 'ok'
     loginStatus.value = '验证码已发送，请查收短信'
     startCooldown()
@@ -368,6 +414,30 @@ function save() {
 .code-btn {
   flex: none;
   white-space: nowrap;
+}
+
+/*
+  阿里云是 popup 模式，控件本身不占位，这个 div 平时是空的（留 margin 只为
+  turnstile 那条分支——它会把控件渲染进来，需要一点与上方输入框的间距）。
+  **不要给它 display:none**：turnstile 渲染进不可见容器会拿不到尺寸而不出现。
+*/
+.captcha-holder:not(:empty) {
+  margin-top: 8px;
+}
+
+/*
+  SDK 要求的触发元素，由 getToken() 代点，用户不该看见也不该 Tab 到。
+  用 position:absolute + 0 尺寸而不是 display:none——两者都能被 click()，
+  但前者对个别 WebView 更保险（隐藏元素的合成点击在 WKWebView 上有过不触发的先例）。
+*/
+.captcha-trigger {
+  position: absolute;
+  width: 0;
+  height: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .advanced {

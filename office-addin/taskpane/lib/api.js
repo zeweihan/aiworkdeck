@@ -81,11 +81,44 @@ export async function fetchConversationHistory({ serverUrl, token }, conversatio
 }
 
 /**
+ * 人机验证的公开配置（匿名端点 GET /api/auth/account-login/captcha-config）。
+ *
+ * **刻意不用 `/api/account/captcha-config`**：那条要 `X-Session-Id`，而云后端
+ * （local-mode=false）下插件用户此刻还没登录——「取控件参数得先有会话、有会话得先登录、
+ * 登录得先过控件」是死循环。
+ *
+ * 静默降级成「未启用」：拿不到配置时返回 `{provider: null}`，调用方跳过控件直接发码，
+ * 官网若确实开着闸会在发码那步给出可读的报错，比在这里把登录整个卡死强。
+ */
+export async function getAccountLoginCaptchaConfig({ serverUrl }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) return { provider: null }
+  try {
+    const resp = await fetch(base + '/api/auth/account-login/captcha-config', {
+      headers: { Accept: 'application/json' },
+    })
+    if (!resp.ok) return { provider: null }
+    const data = await resp.json()
+    if (data && data.code === 0 && data.data) return data.data
+  } catch (e) {
+    // 静默降级：老版本云后端没有这个端点，当作未启用
+  }
+  return { provider: null }
+}
+
+/**
  * 账户登录：给手机号发验证码（匿名端点 POST /api/auth/account-login/send-code）。
  * 后端只是转发官网，真正的冷却与日配额在官网侧。
+ *
+ * `captchaToken` 必须一路带到官网：官网 send-code 把 `verifyCaptcha` 排在发短信之前，
+ * 不带就是 403「请先完成安全验证后再试」。插件端曾经整条链都没有这个参数，
+ * 表现成「点获取验证码永远弹不出滑块」（dev-board#88）。
  */
-export async function postAccountLoginSendCode({ serverUrl }, phone) {
-  await postAnonymous(serverUrl, '/api/auth/account-login/send-code', { phone: (phone || '').trim() })
+export async function postAccountLoginSendCode({ serverUrl }, phone, captchaToken) {
+  await postAnonymous(serverUrl, '/api/auth/account-login/send-code', {
+    phone: (phone || '').trim(),
+    captchaToken: (captchaToken || '').trim(),
+  })
 }
 
 /**
