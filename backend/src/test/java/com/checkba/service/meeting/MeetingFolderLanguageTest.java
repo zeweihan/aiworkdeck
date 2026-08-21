@@ -61,8 +61,9 @@ class MeetingFolderLanguageTest {
                 anyLong(), isNull(), anyString())).thenReturn(Optional.empty());
         when(projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNot(
                 anyLong(), any(), anyString(), anyLong())).thenReturn(false);
-        when(projectFileService.createFolder(anyLong(), isNull(), anyString(), anyLong()))
-                .thenAnswer(inv -> folder(inv.getArgument(2)));
+        // 新建走 ProjectFileService.ensureFolderPath（全仓逐级建文件夹的单一出处，dev-board#109 单元 H3）
+        when(projectFileService.ensureFolderPath(anyLong(), anyLong(), any()))
+                .thenAnswer(inv -> folder(((java.util.List<String>) inv.getArgument(2)).get(0)));
         when(projectFileService.createFile(anyLong(), any(), anyString(), anyString(),
                 anyLong(), any(), any(), anyLong()))
                 .thenAnswer(inv -> file(inv.getArgument(2)));
@@ -130,7 +131,7 @@ class MeetingFolderLanguageTest {
 
         assertEquals(MeetingRecordingService.FOLDER_NAME, res.folderName(),
                 "回给界面的必须是实际目录名，否则「见 X 文件夹」会指错地方");
-        verify(projectFileService, never()).createFolder(anyLong(), isNull(), anyString(), anyLong());
+        verify(projectFileService, never()).ensureFolderPath(anyLong(), anyLong(), any());
     }
 
     @Test
@@ -142,7 +143,7 @@ class MeetingFolderLanguageTest {
         MeetingRecordingService.ExportResult res = service.exportTranscript(9L, 10001L);
 
         assertEquals(MeetingRecordingService.FOLDER_NAME_EN, res.folderName());
-        verify(projectFileService, never()).createFolder(anyLong(), isNull(), anyString(), anyLong());
+        verify(projectFileService, never()).ensureFolderPath(anyLong(), anyLong(), any());
     }
 
     @Test
@@ -154,8 +155,8 @@ class MeetingFolderLanguageTest {
         MeetingRecordingService.ExportResult res = service.exportTranscript(9L, 10001L);
 
         assertEquals(MeetingRecordingService.FOLDER_NAME_EN, res.folderName());
-        verify(projectFileService).createFolder(eq(1L), isNull(),
-                eq(MeetingRecordingService.FOLDER_NAME_EN), eq(10001L));
+        verify(projectFileService).ensureFolderPath(eq(1L), eq(10001L),
+                eq(java.util.List.of(MeetingRecordingService.FOLDER_NAME_EN)));
         assertTrue(res.file().getName().startsWith("Transcript_"),
                 "英文下导出文件名不该是「转写稿_」：" + res.file().getName());
     }
