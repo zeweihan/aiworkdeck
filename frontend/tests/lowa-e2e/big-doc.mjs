@@ -18,6 +18,12 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { here, preflight, loadPuppeteer, startServer, launchBrowser, openEditor } from './_boot.mjs'
 
+// 大文档组是显式开关（npm run test:lowa-big 会设 LOWA_E2E_BIG=1），裸跑本文件不会
+// 误撞几分钟的基线组。
+if (process.env.LOWA_E2E_BIG !== '1') {
+  console.log('大文档基线组需要 LOWA_E2E_BIG=1（npm run test:lowa-big）；未设置，跳过。')
+  process.exit(0)
+}
 const RUNS = Math.max(1, Number(process.env.LOWA_BIG_RUNS || 3))
 const QUIET_MS = Number(process.env.LOWA_BIG_QUIET_MS || 30000)
 const EXPECTED_HITS = 150
@@ -71,6 +77,7 @@ const server = await startServer({ patchServed, extraFiles: { '/big.docx': bigDo
 const ITEMS = [
   { key: 'load_document', label: 'load_document 6.7MB/150 页', max: 15000 },
   { key: 'get_document_text_2nd', label: 'get_document_text 第 2 次（同参数）', max: 300 },
+  { key: 'find_text_locations_600', label: 'find_text_locations 约 600 命中（返回上限 50）', max: 9000 },
   { key: 'find_replace_150', label: 'find_replace 修订 150 命中', max: 8000 },
   { key: 'apply_house_style', label: 'apply_house_style 920 段 + 30 表', max: 120000 },
   { key: 'export_document', label: 'export_document', max: 10000 },
@@ -134,6 +141,13 @@ try {
     // 跳页读也要走索引（O(窗口) 而非 O(n)），只打印不设阈
     const g3 = await timed('get_document_text', { startParagraph: 800, maxParagraphs: 50 })
     console.log('  get_document_text {start:800}: ' + fmt(g3.ms) + ' returned=' + g3.r.returned)
+
+    // find_text_locations：「公司章程」全文约 645 处，原语上限 50 条（truncated=true），
+    // 量的是 findFirst/findNext + 每条锚书签 + 上下文取回的成本（阈 9s = 改造前基线 3s x 3）
+    const ftl = await timed('find_text_locations', { keyword: '公司章程' })
+    console.log('  find_text_locations: ' + fmt(ftl.ms) + ' matches=' + ftl.r.matchesLength + ' truncated=' + ftl.r.truncated)
+    record('find_text_locations_600', ftl.ms)
+    if (ftl.r.success !== true || ftl.r.matchesLength !== 50 || ftl.r.truncated !== true) problems.push('第 ' + run + ' 轮 find_text_locations 形状不对: ' + JSON.stringify(ftl.r))
 
     // find_replace 修订模式 150 命中（夹具每页首段各一处「目标公司」）
     const fr = await timed('find_replace', { findText: '目标公司', replaceText: '标的公司', replaceAll: true, __agent: true })

@@ -81,9 +81,11 @@ export async function startServer({ patchServed = (u, c) => c, extraFiles = {} }
 
 // ---------- browser ----------
 export async function launchBrowser(puppeteer) {
-  // protocolTimeout：worker 里一条几十秒的同步 UNO 操作会连带冻住页面主线程
-  // （em-pthread 代理），page.evaluate 在那期间拿不到回包；默认 180s 会把大文档组
-  // 改造前的 apply_house_style 基线直接打成 ProtocolError。
+  // protocolTimeout 600s（默认 180s）：worker 里一条长时间的同步 UNO 操作会连带
+  // 冻住页面主线程（em-pthread 代理），page.evaluate 在那期间拿不到回包。dev-board#108
+  // 改造前 apply_house_style 在 150 页上要跑几分钟，默认值会把基线直接打成
+  // ProtocolError；改造后单条命令已不会冻住主线程这么久（150 页 apply_house_style
+  // 约 18s），但保留大预算，让回归时大文档组能量出真实数字而不是死在协议层。
   return puppeteer.launch({ executablePath: CHROME, headless: 'new', protocolTimeout: 600000, args: ['--no-sandbox', '--disable-dev-shm-usage'] })
 }
 

@@ -1721,7 +1721,8 @@ function insertFootnoteImpl(p, isEndnote) {
 // 插进来。取消是协作式的：宿主 executeCommand('cancel', {reqId}) 置位，批间检查。
 // 批间别的命令可能切换修订作者（用户 IME 输入署用户名），所以每批开头重新
 // 设回本命令的作者。
-const CANCELLED = Object.create(null);   // reqId -> true
+const CANCELLED = Object.create(null);   // reqId -> true（命令结束时无条件删）
+const INFLIGHT = Object.create(null);    // reqId -> true（只对在飞命令置 cancel，已结束的不留痕）
 function yieldMacrotask() { return new Promise(function (r) { setTimeout(r, 0); }); }
 function postProgress(p, done, total) { if (p && p.__reqId) post('progress', { reqId: p.__reqId, done: done, total: total }); }
 // 批量改稿期间锁住控制器与动作锁：否则每一条修订 / 每一个属性写入都让 Writer
@@ -1729,12 +1730,18 @@ function postProgress(p, done, total) { if (p && p.__reqId) post('progress', { r
 // 批间解开让视图刷一次、让排队的 export 能正常序列化。
 // 锁之外更大的头是 XModifyListener 的逐条回调（每条写入 35ms，见
 // suspendModifyListener），一并摘下。
+// 深度计数：batchBreak 取消返回时已经解过一次锁，调用方的 finally 再解一次不能
+// 让 removeActionLock/unlockControllers 下溢（否则 hasControllersLocked 余生恒 true）。
+let modelLockDepth = 0;
 function lockModel() {
+  if (modelLockDepth++ > 0) return;
   try { xModel.lockControllers(); } catch (e) {}
   try { xModel.addActionLock(); } catch (e) {}
   suspendModifyListener();
 }
 function unlockModel() {
+  if (modelLockDepth <= 0) { modelLockDepth = 0; return; }
+  if (--modelLockDepth > 0) return;
   resumeModifyListener();
   try { xModel.removeActionLock(); } catch (e) {}
   try { xModel.unlockControllers(); } catch (e) {}
@@ -1813,6 +1820,7 @@ const EXEC = {
   cancel(p) {
     const id = String(p && p.reqId || '');
     if (!id) return tableFail('cancel: reqId required');
+    if (!INFLIGHT[id]) return { success: true, reqId: id, stale: true }; // 已结束/不存在：不置位，免得 CANCELLED 泄漏
     CANCELLED[id] = true;
     return { success: true, reqId: id };
   },
@@ -1888,7 +1896,7 @@ const EXEC = {
         n++;
       }
     } finally { unlockModel(); }
-    if (batched) postProgress(p, n, total);
+    if (batched && !cancelled) postProgress(p, n, total); // 取消时批间那帧已报过同一个 done
     if (hits[0]) selectVisibly(hits[0]); // 拟人：结束时视图停在第一处改动
     invalidateParaIndex();
     const r = { success: true, replaced: n, total: total, recordChanges: true };
@@ -3182,6 +3190,10 @@ const EXEC = {
   // export / 宿主的 cancel 有机会插进来），不再有 5000 元素硬顶；truncated 永远
   // 返回（只有被取消时才为 true）。
   async apply_house_style(p) {
+    // progress 的 total = 正文段数 + 表数（顶层元素数）；段数走索引缓存，表数一次 getCount。
+    let total = 0;
+    try { total = getParaIndex().total; } catch (e) {}
+    try { total += xModel.getTextTables().getCount(); } catch (e) {}
     const en = xModel.getText().createEnumeration();
     const BATCH = 500;
     let idx = 0, paras = 0, tables = 0, titled = false, prevWasTable = false, cancelled = false;
@@ -3189,7 +3201,7 @@ const EXEC = {
     try {
     while (en.hasMoreElements()) {
       if (idx > 0 && idx % BATCH === 0) {
-        if (await batchBreak(p, idx, 0)) { cancelled = true; break; }
+        if (await batchBreak(p, idx, total)) { cancelled = true; break; }
       }
       const el = en.nextElement();
       if (el.supportsService && el.supportsService('com.sun.star.text.Paragraph')) {
@@ -3221,7 +3233,7 @@ const EXEC = {
       idx++;
     }
     } finally { unlockModel(); }
-    if (idx > BATCH) postProgress(p, idx, idx);
+    if (idx > BATCH && !cancelled) postProgress(p, idx, total);
     const r = Object.assign({ success: true, paragraphs: paras, tables: tables, truncated: cancelled }, verifySnapshot());
     if (cancelled) { r.cancelled = true; r.done = idx; }
     return r;
@@ -5877,8 +5889,10 @@ function execCommand(reqId, action, params) {
   // 期间 worker 事件循环继续处理别的命令；同步原语路径与从前完全一样。
   const finish = function (result) {
     delete CANCELLED[reqId];
+    delete INFLIGHT[reqId];
     post('result', { reqId: reqId, result: result });
   };
+  INFLIGHT[reqId] = true;
   let result;
   try {
     const p = params || {};
