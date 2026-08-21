@@ -115,6 +115,34 @@ class LegalInfoProtectorTest {
                    result.getProtectedSegments().stream().anyMatch(s -> s.getContent().contains("《公司法》")));
     }
 
+    /**
+     * 重叠片段合并时 end 取了并集、content 却留着第一个片段的原文，于是
+     * [content 长度, end) 那一截在 safeCompress 里被静默跳过。
+     * 「人民币500万元」正好同时命中「人民币+数字」和「数字+万元」两条模式，
+     * 合并后剩下「人民币500」——一份法律文书里的金额从五百万变成五百，
+     * 全程没有任何报错。
+     */
+    @Test
+    @DisplayName("重叠片段合并后必须覆盖整段原文，不能吃掉中间的字")
+    void mergedSegmentsMustCoverTheWholeSpan() {
+        String content = "本次交易对价为人民币500万元，由甲方于交割日一次性支付。";
+        for (LegalInfoProtector.ProtectedSegment s : protector.markProtectedInfo(content)) {
+            assertEquals(content.substring(s.getStart(), s.getEnd()), s.getContent(),
+                    "片段 [" + s.getStart() + "," + s.getEnd() + ") 的正文与原文对不上");
+        }
+    }
+
+    @Test
+    @DisplayName("压缩不得把金额的单位吃掉（人民币500万元 -> 人民币500）")
+    void compressionKeepsTheAmountUnit() {
+        String filler = "以下为与本条无关的背景说明文字，用于把正文撑到需要压缩的长度。".repeat(20);
+        String content = "本次交易对价为人民币500万元，由甲方于交割日一次性支付。\n" + filler;
+        LegalInfoProtector.CompressedResult result =
+                protector.safeCompress(content, content.length() / 2);
+        assertTrue(result.getContent().contains("人民币500万元"),
+                "压缩后金额被截断：" + result.getContent());
+    }
+
     @Test
     @DisplayName("验证压缩结果应检测丢失的关键信息")
     void validateShouldDetectMissingCriticalInfo() {

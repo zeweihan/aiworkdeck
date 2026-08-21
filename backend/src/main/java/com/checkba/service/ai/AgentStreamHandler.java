@@ -562,8 +562,36 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
         sseEmitterService.send(conversationId, "bubble_start", "{\"bubbleId\":\"" + currentBubbleId + "\", \"type\":\"" + type + "\"}");
     }
     
-    private String escapeJson(String raw) {
+    /**
+     * SSE 载荷是手工拼的 JSON 串，这里必须把 JSON 规范要求的字符全转义掉。
+     *
+     * <p>此前只处理了 {@code \ " \n \r}：模型正文里出现一个真制表符（写 Makefile /
+     * Go / 缩进代码块时是常态）就会拼出非法 JSON，前端 text_delta 解析失败后回落成
+     * 「把整段 {"content":"..."} 信封当正文渲染」，artifact 事件则被整条丢弃。
+     * U+0000..U+001F 全区间都要转义，规范如此。
+     */
+    static String escapeJson(String raw) {
         if (raw == null) return "";
-        return raw.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
+        StringBuilder sb = new StringBuilder(raw.length() + 16);
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            switch (c) {
+                case '\\' -> sb.append("\\\\");
+                case '"' -> sb.append("\\\"");
+                case '\n' -> sb.append("\\n");
+                case '\r' -> sb.append("\\r");
+                case '\t' -> sb.append("\\t");
+                case '\b' -> sb.append("\\b");
+                case '\f' -> sb.append("\\f");
+                default -> {
+                    if (c < 0x20) {
+                        sb.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        sb.append(c);
+                    }
+                }
+            }
+        }
+        return sb.toString();
     }
 }

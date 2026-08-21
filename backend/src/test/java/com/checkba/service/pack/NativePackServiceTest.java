@@ -369,6 +369,67 @@ class NativePackServiceTest {
     }
 
     @Test
+    @DisplayName("被封禁的 pack 重装时不得把封禁位抹掉——平台仍在封时拒装")
+    void reinstallDoesNotResurrectRevokedPack() throws Exception {
+        byte[] archive = tarGzWithContents(Map.of("cli.py", "x".getBytes(StandardCharsets.UTF_8)));
+        publish(primary, archive, "litviz", List.of("*"), true);
+        primary.files.put("/revoked", ("[{\"id\":\"" + PACK_ID + "\",\"version\":\"*\",\"reason\":\"test\"}]")
+                .getBytes(StandardCharsets.UTF_8));
+
+        NativePackService svc = service(publicKeyPem, primary.baseUrl());
+        svc.install(PACK_ID);
+        assertEquals(List.of(PACK_ID), svc.syncRevoked());
+        assertFalse(svc.isReady(PACK_ID));
+
+        // 重启后的自动补下载 / 用户再点一次「安装」都会走到这里：
+        // 目标版本已完整落盘，幂等分支只重写指针——绝不能顺手把 revoked 写回 false
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> svc.install(PACK_ID));
+        assertTrue(e.getMessage().contains("封禁") || e.getMessage().toLowerCase().contains("revoked"), e.getMessage());
+        assertFalse(svc.isReady(PACK_ID), "平台仍在封禁，重装后资源不该重新可见");
+        assertTrue(svc.componentDir(PACK_ID, "litviz").isEmpty());
+        // 拒装不是「安装失败」：状态要如实停在 revoked，否则用户只会一遍遍重试
+        assertEquals(NativePackService.STATE_REVOKED, svc.status(PACK_ID).getState());
+    }
+
+    @Test
+    @DisplayName("平台撤销封禁后，重装可正常复活")
+    void reinstallClearsRevokedFlagOncePlatformLiftsIt() throws Exception {
+        byte[] archive = tarGzWithContents(Map.of("cli.py", "x".getBytes(StandardCharsets.UTF_8)));
+        publish(primary, archive, "litviz", List.of("*"), true);
+        primary.files.put("/revoked", ("[{\"id\":\"" + PACK_ID + "\",\"version\":\"*\",\"reason\":\"test\"}]")
+                .getBytes(StandardCharsets.UTF_8));
+
+        NativePackService svc = service(publicKeyPem, primary.baseUrl());
+        svc.install(PACK_ID);
+        svc.syncRevoked();
+        assertFalse(svc.isReady(PACK_ID));
+
+        // 平台把它从封禁表里撤了
+        primary.files.put("/revoked", "[]".getBytes(StandardCharsets.UTF_8));
+        assertEquals(VERSION, svc.install(PACK_ID));
+        assertTrue(svc.isReady(PACK_ID));
+        assertEquals(NativePackService.STATE_READY, svc.status(PACK_ID).getState());
+    }
+
+    @Test
+    @DisplayName("封禁表拉不到时，被封禁的 pack 维持封禁（宁可装不上也不无声复活）")
+    void reinstallRefusesWhenRevocationListUnreachable() throws Exception {
+        byte[] archive = tarGzWithContents(Map.of("cli.py", "x".getBytes(StandardCharsets.UTF_8)));
+        publish(primary, archive, "litviz", List.of("*"), true);
+        primary.files.put("/revoked", ("[{\"id\":\"" + PACK_ID + "\",\"version\":\"*\",\"reason\":\"test\"}]")
+                .getBytes(StandardCharsets.UTF_8));
+
+        NativePackService svc = service(publicKeyPem, primary.baseUrl());
+        svc.install(PACK_ID);
+        svc.syncRevoked();
+
+        // 端点没了（未部署 / 网络不通）
+        primary.files.remove("/revoked");
+        assertThrows(IllegalStateException.class, () -> svc.install(PACK_ID));
+        assertFalse(svc.isReady(PACK_ID));
+    }
+
+    @Test
     @DisplayName("封禁端点 404 时静默跳过，不影响已装 pack")
     void revocationEndpointMissingIsSilent() throws Exception {
         byte[] archive = tarGzWithContents(Map.of("cli.py", "x".getBytes(StandardCharsets.UTF_8)));

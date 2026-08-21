@@ -492,6 +492,11 @@ public class ProjectFileService {
 
         // 权限检查已移至 Controller 层，这里不再检查创建者身份
 
+        // 文件缓存区免费额度：单文件移入同样要过闸。此前额度只挂在 batchMove 上，
+        // 而这条路径也能把文件移进 __staging_area__——一次拖一个就能无限塞，
+        // 付费闸等于没有。目标不是缓存区时 checkAdmission 直接放行，其它移动不受影响。
+        stageQuotaService.checkAdmission(newParentId, java.util.List.of(fileId));
+
         // 检查不能移动到自己的子文件夹中
         if (file.getIsFolder() && newParentId != null) {
             if (isDescendant(fileId, newParentId)) {

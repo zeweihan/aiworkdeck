@@ -106,6 +106,22 @@ public class ToolRegistry {
      */
     public record ToolResult(String output, RegisteredTool tool, boolean found) {
 
+        /**
+         * 声明了 {@code fileEffect} 的工具，用它做返回值前缀表达
+         * 「这一次执行成功，但什么都没改」。
+         *
+         * <p>{@code @ToolMeta.fileEffect} 是写死的常量，编排器只看 success()，
+         * 于是一次「没找到、文件未改动」的查找替换也会发 file_change(MODIFIED)、
+         * 写进会话的文件变更历史——用户被告知本轮改了这个文件，去找却找不到改动。
+         * 有了这个前缀，副作用层能把「成功」与「改过」分开。
+         */
+        public static final String UNCHANGED_PREFIX = "未改动：";
+
+        /** 本次执行是否真的动了文件。仅对声明了 fileEffect 的工具有意义。 */
+        public boolean fileChanged() {
+            return success() && !output.stripLeading().startsWith(UNCHANGED_PREFIX);
+        }
+
         public boolean success() {
             if (!found || output == null) return false;
             String trimmed = output.stripLeading();

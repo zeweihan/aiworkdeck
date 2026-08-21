@@ -182,13 +182,19 @@ public class LegalInfoProtector {
 
         // 按位置排序并去重
         segments.sort(Comparator.comparingInt(ProtectedSegment::getStart));
-        return mergeOverlappingSegments(segments);
+        return mergeOverlappingSegments(content, segments);
     }
 
     /**
-     * 合并重叠的片段
+     * 合并重叠的片段。
+     *
+     * <p>合并后的正文必须重新从原文按 [start, end) 取，不能沿用第一个片段的 content：
+     * 此前 end 取了并集、content 却留着前一段，于是 [content 长度, end) 那一截在
+     * {@link #safeCompress} 里被静默跳过——那里是 {@code append(content)} 后直接
+     * {@code lastEnd = end}。「人民币500万元」同时命中「人民币+数字」与「数字+万元」
+     * 两条模式，合并后只剩「人民币500」：一份合同里的金额从五百万变成五百，零报错。
      */
-    private List<ProtectedSegment> mergeOverlappingSegments(List<ProtectedSegment> segments) {
+    private List<ProtectedSegment> mergeOverlappingSegments(String source, List<ProtectedSegment> segments) {
         if (segments.size() <= 1) {
             return segments;
         }
@@ -203,10 +209,12 @@ public class LegalInfoProtector {
                 int newEnd = Math.max(current.getEnd(), next.getEnd());
                 ProtectionLevel higherLevel = current.getLevel().getScore() >= next.getLevel().getScore() 
                         ? current.getLevel() : next.getLevel();
+                int safeStart = Math.max(0, Math.min(current.getStart(), source.length()));
+                int safeEnd = Math.max(safeStart, Math.min(newEnd, source.length()));
                 current = new ProtectedSegment(
                         current.getStart(),
                         newEnd,
-                        current.getContent(),  // 保留第一个的内容
+                        source.substring(safeStart, safeEnd),  // 按并集重取，别吃掉中间的字
                         higherLevel,
                         current.getType()
                 );
