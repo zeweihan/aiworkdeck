@@ -56,10 +56,10 @@ class ProjectFileServiceCreateConflictTest {
         when(storageServiceFactory.getStorageService()).thenReturn(storageService);
     }
 
-    /** 模拟数据库里（含回收站）是否有同名行。 */
+    /** 模拟数据库里（含回收站，不过滤 isDeleted）是否有同名行——RENAME 策略走的查询。 */
     private void dbHas(String name, boolean taken) {
-        when(projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNot(
-                PROJECT_ID, PARENT_ID, name, -1L)).thenReturn(taken);
+        when(projectFileRepository.existsByProjectIdAndParentIdAndNameIncludingDeleted(
+                PROJECT_ID, PARENT_ID, name)).thenReturn(taken);
     }
 
     @Test
@@ -76,7 +76,8 @@ class ProjectFileServiceCreateConflictTest {
     @Test
     void failPolicyChecksTrimmedNameLikeRename() {
         // L3：落库的是 trim 后的名字，同名检查也必须按 trim 后的名字查，否则 " a.pdf " 能绕过查重
-        dbHas("a.pdf", true);
+        when(projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNot(
+                PROJECT_ID, PARENT_ID, "a.pdf", -1L)).thenReturn(true);
 
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
                 () -> projectFileService.createFile(PROJECT_ID, PARENT_ID, "  a.pdf ", "pdf", 10L, null, null, 1L));
@@ -113,8 +114,8 @@ class ProjectFileServiceCreateConflictTest {
 
         assertEquals("unique.pdf", saved.getName());
         assertEquals(0, saved.getSortOrder(), "空文件夹（maxSortOrder=null）新建的第一个文件序号应为 0");
-        verify(projectFileRepository, times(1)).existsByProjectIdAndParentIdAndNameAndIdNot(
-                eq(PROJECT_ID), eq(PARENT_ID), eq("unique.pdf"), eq(-1L));
+        verify(projectFileRepository, times(1)).existsByProjectIdAndParentIdAndNameIncludingDeleted(
+                eq(PROJECT_ID), eq(PARENT_ID), eq("unique.pdf"));
     }
 
     /**
@@ -133,8 +134,10 @@ class ProjectFileServiceCreateConflictTest {
                 ProjectFileService.ConflictPolicy.RENAME);
 
         assertEquals("a (1).pdf", saved.getName());
-        // 绝不能再靠「只看活着的行」那个查询做决定
+        // 绝不能再靠「只看活着的行」那两个查询做决定
         verify(projectFileRepository, never()).existsByProjectIdAndParentIdAndNameAndIdNotAndIsDeletedFalse(
+                anyLong(), any(), any(), anyLong());
+        verify(projectFileRepository, never()).existsByProjectIdAndParentIdAndNameAndIdNot(
                 anyLong(), any(), any(), anyLong());
     }
 

@@ -841,6 +841,7 @@
                       @ready="onLibreReady($event, 'left', file.id)"
                       @close="onLibreClose"
                       :project-id="projectId"
+                      :can-write="canWriteProject"
                       @open-url="onLibreOpenUrl"
                       @open-evidence-target="onOpenEvidenceTarget"
                       @menu-state="pushMenuState"
@@ -865,6 +866,7 @@
                       @ready="onLibreSpareReady(sp, $event)"
                       @close="onLibreClose"
                       :project-id="projectId"
+                      :can-write="canWriteProject"
                       @open-url="onLibreOpenUrl"
                       @open-evidence-target="onOpenEvidenceTarget"
                       @menu-state="pushMenuState"
@@ -1011,6 +1013,7 @@
                       @ready="onLibreReady($event, 'right', file.id)"
                       @close="onLibreClose"
                       :project-id="projectId"
+                      :can-write="canWriteProject"
                       @open-url="onLibreOpenUrl"
                       @open-evidence-target="onOpenEvidenceTarget"
                       @menu-state="pushMenuState"
@@ -2160,6 +2163,17 @@ export default {
     WPS_INTERNAL_HTTP_LINK_BASE() {
       return WPS_INTERNAL_HTTP_LINK_BASE
     },
+    // 当前用户对项目有没有写权限，与后端 ProjectMemberService.hasWritePermission 同口径
+    // （项目所有者 / ADMIN / PARTICIPANT 可写，READ_ONLY / CLIENT 只读）。成员表没加载到
+    // 或找不到自己时按可写处理——桌面单机没有成员概念，这里只挡「确知是只读」的情况。
+    canWriteProject() {
+      const uid = this.currentUser && this.currentUser.id
+      if (!uid) return true
+      if (this.project && Number(this.project.userId) === Number(uid)) return true
+      const me = (this.projectMembers || []).find(m => Number(m.userId) === Number(uid))
+      if (!me || !me.role) return true
+      return me.role === 'ADMIN' || me.role === 'PARTICIPANT'
+    },
     FILE_BATCH_ACTIONS() {
       return FILE_BATCH_ACTIONS
     },
@@ -2613,11 +2627,10 @@ export default {
     this._onMarketChanged = () => this.loadEnabledSkills()
     uni.$on('awd:market-changed', this._onMarketChanged)
     uni.$on('awd:market-changed-from-sidebar', this._onMarketChanged)
-    // Web 插件 evidence.locate（PluginPane）要打开底稿：按 fileId 开到聚焦窗格。
-    // locator（页码/段落等）随事件带着，等 openFileLinkTarget 支持定位参数后接上。
-    this._onOpenEvidenceTarget = (p) => {
-      if (p && p.fileId) this.openFileLinkTarget(p.fileId, this.focusedPane || 'left')
-    }
+    // Web 插件 evidence.locate（PluginPane）要打开底稿：整个 payload（{fileId, locator, linkKey}）
+    // 交给 onOpenEvidenceTarget → openFileLinkTarget(target, side)。后者读 target.fileId，
+    // 只传裸 fileId 会变成 Number(undefined) 静默返回（复核 F1）。
+    this._onOpenEvidenceTarget = (p) => this.onOpenEvidenceTarget(p)
     uni.$on('awd:open-evidence-target', this._onOpenEvidenceTarget)
   },
   onShow() {

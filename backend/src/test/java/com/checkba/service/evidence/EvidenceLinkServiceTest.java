@@ -346,6 +346,23 @@ class EvidenceLinkServiceTest {
     }
 
     @Test
+    @DisplayName("reportAnchors：只读成员（有读无写）也能回写核对结果；非成员仍拒绝")
+    void reportAnchorsNeedsReadOnly() {
+        EvidenceLink a = new EvidenceLink(); a.setId(1L); a.setLinkKey("A"); a.setStatus("active"); a.setAnchorHash(AnchorHash.of("原文"));
+        a.setProjectId(1L); a.setDocFileId(10L);
+        when(links.findByProjectIdAndDocFileIdOrderByIdAsc(1L, 10L)).thenReturn(List.of(a));
+        when(members.hasWritePermission(1L, 9L)).thenReturn(false);
+
+        var res = svc.reportAnchors(9L, 1L, 10L, List.of(new AnchorReport("A", true, "改了")));
+        assertEquals("stale", a.getStatus());
+        assertEquals(List.of("A"), res.changed());
+
+        when(members.hasReadPermission(1L, 9L)).thenReturn(false);
+        assertThrows(IllegalArgumentException.class,
+                () -> svc.reportAnchors(9L, 1L, 10L, List.of(new AnchorReport("A", true, "改了"))));
+    }
+
+    @Test
     @DisplayName("reportAnchors：orphan 再报 exists=true 不复活（复活只走 rebind）")
     void reportAnchorsDoesNotResurrectOrphan() {
         EvidenceLink o = new EvidenceLink(); o.setId(1L); o.setLinkKey("O"); o.setStatus("orphan"); o.setAnchorHash(AnchorHash.of("原文"));

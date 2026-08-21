@@ -36,10 +36,12 @@
 //   响应  宿主 -> 插件   { awd: 1, type: 'result', seq, ok, result | error: { code, message } }
 import {
   getProjectFiles, getFileText,
-  createEvidenceLink, getEvidenceLink, listEvidenceLinks
+  createEvidenceLink, addEvidenceTargets, getEvidenceLink, listEvidenceLinks
 } from '@/services/api.js'
 import { getAppLanguage } from '@/utils/appLanguage.js'
-import { resolveAnchor, newLinkKey, toPluginLink, toTargetInputs } from '@/utils/pluginEvidence.js'
+import { resolveAnchor, toPluginLink, toTargetInputs } from '@/utils/pluginEvidence.js'
+import { createEvidenceLinkForSelection } from '@/pages/project-overview/evidenceLinkCore.js'
+import { WPS_INTERNAL_HTTP_LINK_BASE } from '@/config/workbenchActions.js'
 
 /** 桥协议版本 */
 const PROTOCOL = 1
@@ -316,31 +318,40 @@ export default {
       if (a.mode === 'quote') {
         const sel = await ed.executor('set_selection', { anchor: a.anchorId })
         if (!sel || !sel.success) {
+          // 查找留下的 __ai_anchor_* 书签不能残留在 docx 里
+          try { await ed.executor('clear_anchors', {}) } catch (e) { /* ignore */ }
           return { ok: false, error: { code: 'anchor_ambiguous', message: (sel && sel.message) || '引文无法选中' } }
         }
       }
 
-      const linkKey = newLinkKey()
-      const bm = await ed.executor('bookmark_selection', { name: linkKey })
-      if (!bm || !bm.success) {
-        return { ok: false, error: { code: 'no_selection', message: (bm && bm.message) || '无法在选区上建立锚点' } }
+      // 与拖放建链同一份流程（复核 F2）：选区已带 filelink?k= 则复用 linkKey 追加 target，
+      // 否则 bookmark_selection + set_selection_hyperlink 成对写入，再落库。
+      let res
+      try {
+        res = await createEvidenceLinkForSelection({
+          exec: ed.executor,
+          api: { createEvidenceLink, addEvidenceTargets },
+          projectId: this.projectId,
+          docFileId: ed.fileId,
+          internalBase: WPS_INTERNAL_HTTP_LINK_BASE,
+          targets: ti.targets,
+          createdByKind: 'plugin'
+        })
+      } finally {
+        if (a.mode === 'quote') {
+          try { await ed.executor('clear_anchors', {}) } catch (e) { /* ignore */ }
+        }
       }
-      let ctx = null
-      try { ctx = await ed.executor('get_bookmark_context', { name: linkKey }) } catch (e) { ctx = null }
-      const link = await createEvidenceLink(this.projectId, {
-        docFileId: ed.fileId,
-        linkKey,
-        anchorText: bm.text || a.text,
-        sectionPath: ctx && ctx.success ? ctx.sectionPath || null : null,
-        sectionTitle: ctx && ctx.success ? ctx.sectionTitle || null : null,
-        createdByKind: 'plugin',
-        targets: ti.targets
-      })
-      const view = link && link.linkKey ? link : (link && link.data) || {}
+      if (!res.ok) {
+        return { ok: false, error: { code: 'no_selection', message: res.message || '无法在选区上建立锚点' } }
+      }
+      const view = res.view && res.view.linkKey ? res.view : (res.view && res.view.data) || {}
+      // 编辑器的 _evidenceCache 与证据面板都只在这个事件上刷新，不发就要重开文档才看得到
+      try { uni.$emit('awd:evidence-changed', { docFileId: ed.fileId, linkKey: res.linkKey, source: 'plugin' }) } catch (e) { /* ignore */ }
       return {
         ok: true,
         result: {
-          linkKey: view.linkKey || linkKey,
+          linkKey: view.linkKey || res.linkKey,
           targetIds: (Array.isArray(view.targets) ? view.targets : []).map(t => t.id)
         }
       }

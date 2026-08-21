@@ -71,6 +71,13 @@ public interface ProjectFileRepository extends JpaRepository<ProjectFile, Long> 
     boolean existsByProjectIdAndParentIdAndNameAndIdNot(Long projectId, Long parentId, String name, Long excludeId);
 
     /**
+     * 同名查重的「含回收站」变体：不过滤 isDeleted。RENAME 策略用它——软删只翻 isDeleted
+     * 不动磁盘，回收站那份同名文件的字节仍在按名字算出的物理路径上，必须算冲突。
+     */
+    @org.springframework.data.jpa.repository.Query("SELECT COUNT(pf) > 0 FROM ProjectFile pf WHERE pf.projectId = :projectId AND (:parentId IS NULL AND pf.parentId IS NULL OR pf.parentId = :parentId) AND pf.name = :name")
+    boolean existsByProjectIdAndParentIdAndNameIncludingDeleted(Long projectId, Long parentId, String name);
+
+    /**
      * 根据 WPS 文件 ID 查询文件
      */
     List<ProjectFile> findByWpsFileId(String wpsFileId);

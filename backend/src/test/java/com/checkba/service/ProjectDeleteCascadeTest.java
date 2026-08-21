@@ -1,5 +1,7 @@
 package com.checkba.service;
 
+import com.checkba.model.entity.EvidenceLink;
+import com.checkba.model.entity.EvidenceLinkTarget;
 import com.checkba.model.entity.Project;
 import com.checkba.model.entity.ProjectAiMessage;
 import com.checkba.model.entity.ProjectFile;
@@ -10,6 +12,8 @@ import com.checkba.model.entity.ProjectProfileField;
 import com.checkba.model.entity.ProjectRemote;
 import com.checkba.model.entity.ProjectTask;
 import com.checkba.model.entity.ProjectVariable;
+import com.checkba.repository.EvidenceLinkRepository;
+import com.checkba.repository.EvidenceLinkTargetRepository;
 import com.checkba.repository.ProjectAiMessageRepository;
 import com.checkba.repository.ProjectFileRepository;
 import com.checkba.repository.ProjectInvitationRepository;
@@ -62,6 +66,8 @@ class ProjectDeleteCascadeTest {
     @Autowired private ProjectRemoteRepository remoteRepository;
     @Autowired private ProjectTaskRepository taskRepository;
     @Autowired private ProjectAiMessageRepository aiMessageRepository;
+    @Autowired private EvidenceLinkRepository evidenceLinkRepository;
+    @Autowired private EvidenceLinkTargetRepository evidenceLinkTargetRepository;
     @Autowired private ProjectStorageResolver storageResolver;
     @Autowired private ProjectRepoService projectRepoService;
 
@@ -87,6 +93,8 @@ class ProjectDeleteCascadeTest {
         assertTrue(remoteRepository.findByProjectId(projectId).isEmpty(), "project_remote 残留孤儿行");
         assertTrue(taskRepository.findAll().stream().noneMatch(t -> projectId.equals(t.getProjectId())), "project_task 残留孤儿行");
         assertTrue(aiMessageRepository.findByProjectIdOrderByCreatedAtAsc(projectId).isEmpty(), "project_ai_message 残留孤儿行");
+        assertTrue(evidenceLinkRepository.findByProjectIdAndDocFileIdOrderByIdAsc(projectId, seededDocFileId).isEmpty(), "evidence_link 残留孤儿行");
+        assertTrue(evidenceLinkTargetRepository.findByFileId(seededEvidenceFileId).isEmpty(), "evidence_link_target 残留孤儿行（没有 project_id，要按 link id 级联）");
 
         assertFalse(Files.exists(projectDir), "项目目录仍留在磁盘上: " + projectDir);
         assertFalse(Files.exists(gitDir), "版本记录仓库仍留在磁盘上: " + gitDir);
@@ -116,6 +124,9 @@ class ProjectDeleteCascadeTest {
         assertTrue(Files.exists(userFolder.resolve("用户自己的文件.txt")), "用户自己的文件夹被误删");
     }
 
+    private Long seededDocFileId;
+    private Long seededEvidenceFileId;
+
     private Long seedProject() {
         Project project = new Project();
         project.setName("待删项目");
@@ -141,7 +152,23 @@ class ProjectDeleteCascadeTest {
         file.setUserId(9000L);
         file.setIsDeleted(false);
         file.setFilePath("projects/" + projectId + "/客户上传/尽调材料.txt");
-        fileRepository.save(file);
+        seededEvidenceFileId = fileRepository.save(file).getId();
+        seededDocFileId = seededEvidenceFileId + 100_000L; // 报告文档 id 只是裸 Long，不必真有行
+
+        EvidenceLink link = new EvidenceLink();
+        link.setProjectId(projectId);
+        link.setDocFileId(seededDocFileId);
+        link.setLinkKey("EVID_DELETECASCADE0000000000001");
+        link.setAnchorText("收购人成立于 2020 年");
+        link.setCreatedAt(LocalDateTime.now());
+        link.setUpdatedAt(LocalDateTime.now());
+        Long linkId = evidenceLinkRepository.save(link).getId();
+
+        EvidenceLinkTarget target = new EvidenceLinkTarget();
+        target.setLinkId(linkId);
+        target.setFileId(seededEvidenceFileId);
+        target.setCreatedAt(LocalDateTime.now());
+        evidenceLinkTargetRepository.save(target);
 
         ProjectVariable variable = new ProjectVariable();
         variable.setProjectId(projectId);

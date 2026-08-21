@@ -1,7 +1,7 @@
 // 拖到编辑器建链的纯函数（evidenceLinkCore.js，exec/api 全部注入）：mock exec 按 action 返回，断言各条路径。
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createEvidenceLinkForDrop, pickEvidenceTarget } from '../../src/pages/project-overview/evidenceLinkCore.js'
+import { createEvidenceLinkForDrop, createEvidenceLinkForSelection, pickEvidenceTarget } from '../../src/pages/project-overview/evidenceLinkCore.js'
 
 const BASE = 'https://checkba-internal.local/open'
 const file = { id: 77, name: '营业执照.pdf' }
@@ -124,4 +124,31 @@ test('pickEvidenceTarget：t 命中优先；单条直接给；多条无 t → nu
   assert.equal(pickEvidenceTarget(view, null), null)
   assert.equal(pickEvidenceTarget({ targets: [{ id: 5 }] }, null).id, 5)
   assert.equal(pickEvidenceTarget(null, null), null)
+})
+
+// 复核 F2：SDK evidence.link 与拖放共用 createEvidenceLinkForSelection——多 target + createdByKind 透传，
+// 复用分支把整组 targets 追加到既有 linkKey 上。
+test('createEvidenceLinkForSelection：多 target / createdByKind=plugin 透传，新建走书签+超链接', async () => {
+  const h = harness({ selection: { success: true, url: '', hasSelection: true, text: '注册资本 100 万' } })
+  const targets = [{ fileId: 77, relation: 'supports' }, { fileId: 78, locatorJson: '{"page":2}' }]
+  const r = await createEvidenceLinkForSelection({ ...h, projectId: 1, docFileId: 10, internalBase: BASE, targets, createdByKind: 'plugin' })
+  assert.equal(r.ok, true)
+  assert.equal(r.created, true)
+  assert.equal(r.selText, '注册资本 100 万')
+  assert.equal(r.targetId, undefined, 'targetId 是拖放层的派生字段，核心层不给')
+  assert.deepEqual(h.actions(), ['get_selection_hyperlink', 'bookmark_selection', 'set_selection_hyperlink', 'get_bookmark_context'])
+  const [, , body] = h.apiCalls[0]
+  assert.equal(body.createdByKind, 'plugin')
+  assert.deepEqual(body.targets, targets)
+})
+
+test('createEvidenceLinkForSelection：选区已带 filelink?k= → 整组 targets 追加到既有 linkKey', async () => {
+  const h = harness({ selection: { success: true, url: WRAPPED_OLD, hasSelection: true, text: 'x' } })
+  const targets = [{ fileId: 77 }, { fileId: 78 }]
+  const r = await createEvidenceLinkForSelection({ ...h, projectId: 1, docFileId: 10, internalBase: BASE, targets, createdByKind: 'plugin' })
+  assert.equal(r.ok, true)
+  assert.equal(r.created, false)
+  assert.equal(r.linkKey, 'EVID_OLD')
+  assert.deepEqual(h.actions(), ['get_selection_hyperlink', 'get_bookmark_context'])
+  assert.deepEqual(h.apiCalls, [['add', 1, 'EVID_OLD', targets]])
 })
