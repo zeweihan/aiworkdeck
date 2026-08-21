@@ -98,6 +98,33 @@ class ChatModelFactoryTest {
                 "白名单内的模型必须走 OpenRouter，而不是落到本地 Ollama");
     }
 
+    /**
+     * 选了本地 Ollama 就是在明确表达「不要把内容发出去」——法律文书场景下这是产品承诺，
+     * 不是偏好。而白名单短路判定排在供应商判定之前：只要 modelId 恰好在白名单里，
+     * 一律被拦去 OpenRouter。更要命的是辅助模型的默认 id（qwen/qwen3.7-flash）
+     * 本身就在白名单里，于是 OLLAMA 档下**每一次辅助调用都在走云端**。
+     */
+    @Test
+    @DisplayName("供应商=OLLAMA 时，白名单模型不得把流量拽去 OpenRouter")
+    void ollamaProviderKeepsAllowedModelsLocal() {
+        properties.setProvider(AiModelProperties.Provider.OLLAMA);
+        setDbProvider("OLLAMA");
+
+        ChatLanguageModel model = factory.getChatModel(AllowedModels.QWEN_3_7_FLASH.getModelId());
+        assertInstanceOf(OllamaChatModel.class, model,
+                "选了本地供应商却把内容发去 OpenRouter：" + model.getClass().getName());
+    }
+
+    @Test
+    @DisplayName("供应商=OLLAMA 时，辅助模型同样留在本地")
+    void ollamaProviderKeepsAuxModelLocal() {
+        properties.setProvider(AiModelProperties.Provider.OLLAMA);
+        setDbProvider("OLLAMA");
+
+        assertInstanceOf(OllamaChatModel.class, factory.getAuxChatModel(),
+                "辅助调用用户根本看不见也选不了，更不该越过本地供应商");
+    }
+
     @Test
     @DisplayName("供应商=OLLAMA（DB 未配置）：空 modelId 仍走本地 Ollama（回归保护）")
     void ollamaProviderStillUsesOllama() {
