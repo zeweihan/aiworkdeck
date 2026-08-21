@@ -244,6 +244,7 @@
 </template>
 
 <script>
+import { normalizeLinkUrl } from '@/utils/linkUrl.js'
 // EditorToolbar.vue — 自建编辑器工具栏（P2）。
 //
 // WHY: LibreOffice 自己画的菜单栏/工具栏是引擎渲染在 canvas 上的，观感老旧，
@@ -508,9 +509,15 @@ export default {
       return this.call('insert_table', { rows, headerRow: false }).then((res) => this.finishInsert(res))
     },
     doLink() {
-      const url = String(this.linkUrl || '').trim()
-      if (!url) { this.insertErr = this.$t('editor.toolbar.linkRequired'); return null }
-      return this.call('set_selection_hyperlink', { url }).then((res) => this.finishInsert(res))
+      const raw = String(this.linkUrl || '').trim()
+      if (!raw) { this.insertErr = this.$t('editor.toolbar.linkRequired'); return null }
+      // worker 校验 scheme：无 scheme 补 https://，不放行的 scheme 在这里用本地化文案拦下
+      const url = normalizeLinkUrl(raw)
+      if (!url) { this.insertErr = this.$t('editor.toolbar.linkInvalid'); return null }
+      return this.call('set_selection_hyperlink', { url }).then((res) => {
+        if (res && res.success !== true) res = { ...res, message: this.$t('editor.toolbar.linkInvalid') }
+        return this.finishInsert(res)
+      })
     },
     doComment() {
       const comment = String(this.commentText || '').trim()

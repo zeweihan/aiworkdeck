@@ -3778,8 +3778,8 @@ const EXEC = {
     // 与 set_hyperlink_at_anchor 同款 scheme 校验：http/https 与内部协议 checkba://（EvidenceLink
     // 包装形态 https://checkba-internal.local/open?u=checkba://... 走 https 分支）。JAR 插件经
     // PluginHostImpl.DOC_ACTIONS 能直接调到这里，file:/javascript: 不能进导出的 docx。
-    if (!/^(https?:\/\/|checkba:\/\/)/i.test(url)) {
-      const msg = 'url 仅支持 http/https/checkba: ' + url;
+    if (!/^(https?:\/\/|checkba:\/\/|mailto:)/i.test(url)) {
+      const msg = 'url 仅支持 http/https/mailto/checkba: ' + url;
       return { success: false, error: msg, message: msg };
     }
     const sel = ctrl.getSelection();

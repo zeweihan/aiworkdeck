@@ -203,6 +203,7 @@ export default {
     cancel: '取消',
     confirm: '确定',
     linkRequired: '请填写链接地址',
+    linkInvalid: '链接地址无效：只支持 http/https/mailto',
     commentRequired: '请填写批注内容',
     opFailed: '操作未成功',
     imageReadFailed: '图片读取失败',

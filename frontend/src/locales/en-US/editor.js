@@ -203,6 +203,7 @@ export default {
     cancel: 'Cancel',
     confirm: 'OK',
     linkRequired: 'Enter a link address',
+    linkInvalid: 'Invalid link: only http, https and mailto are supported',
     commentRequired: 'Enter the comment text',
     opFailed: 'The action did not succeed',
     imageReadFailed: 'Could not read the image',
