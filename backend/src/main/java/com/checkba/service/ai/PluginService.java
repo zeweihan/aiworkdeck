@@ -59,6 +59,22 @@ public class PluginService {
     private final Map<String, File> pluginDirById = new ConcurrentHashMap<>();
 
     /**
+     * 当前这一代已加载的插件 JAR ClassLoader。loadJar() 每次都 new 一个 URLClassLoader，
+     * 从来没有配对的 close()——rescan()/热重载/装卸插件反复调用，长期运行的服务器进程
+     * 上会不断攒 fd 与已加载类的元数据。
+     *
+     * <p>不在 loadJar() 里当场关：那会让刚加载出来的插件类立刻失效（工具对象若懒加载
+     * 同一 JAR 里此刻还没碰过的辅助类会失败——URLClassLoader.close() 不影响已加载的类，
+     * 但会让该 loader 之后再也读不到 jar 里的新类/资源）。改成在 rescan() 里统一处理：
+     * 新一代通过 loadPlugins() 完整重建、注册表已经整体换过、ToolRegistry 缓存也失效之后，
+     * 上一代不再可能被任何新请求经 pluginTools 查到，这时才安全关闭。
+     *
+     * <p>本字段的读写全部发生在 synchronized(this) 的方法里（rescan / setEnabled 都是），
+     * 不需要并发安全的集合类型。
+     */
+    private final List<URLClassLoader> loadedClassLoaders = new ArrayList<>();
+
+    /**
      * 被平台封禁的插件 id -> 原因（由 PluginRevocationService 从注册表同步）。
      * 命中者强制禁用且不允许用户重新启用，见 docs/PLUGIN_DISTRIBUTION.md §8。
      */
@@ -101,6 +117,11 @@ public class PluginService {
     /** 供测试直接装配 ToolRegistry（生产环境由 Spring 按上面的 @Autowired 字段注入）。 */
     void setToolRegistry(ToolRegistry toolRegistry) {
         this.toolRegistry = toolRegistry;
+    }
+
+    /** 供测试查看当前这一代插件 JAR ClassLoader 的快照。 */
+    List<URLClassLoader> loadedClassLoaders() {
+        return new ArrayList<>(loadedClassLoaders);
     }
 
     /** 兼容构造器：仅供既有单测直接 new 使用（无持久化，启停状态只存内存） */
@@ -167,6 +188,10 @@ public class PluginService {
      * 注意：已由旧 ClassLoader 加载的类不会被卸载（MVP 可接受），重扫主要用于发现新装插件。
      */
     public synchronized void rescan() {
+        // 上一代 loader 留到新一代完整接管注册表之后才关，见 loadedClassLoaders 字段注释。
+        List<URLClassLoader> previousGeneration = new ArrayList<>(loadedClassLoaders);
+        loadedClassLoaders.clear();
+
         plugins.clear();
         pluginTools.clear();
         toolSpecifications.clear();
@@ -181,6 +206,15 @@ public class PluginService {
             toolRegistry.invalidatePluginToolCache();
         }
         log.info("Plugin rescan done: {} plugins, {} tools", plugins.size(), pluginTools.size());
+
+        // 新一代已经完整接管，上一代不可能再被任何请求经 pluginTools 查到，此时关闭安全。
+        for (URLClassLoader old : previousGeneration) {
+            try {
+                old.close();
+            } catch (IOException e) {
+                log.debug("关闭上一代插件 ClassLoader 失败（忽略）: {}", e.getMessage());
+            }
+        }
     }
 
     /**
@@ -600,6 +634,7 @@ public class PluginService {
 
     private void loadJar(File jar, String pluginId) throws IOException, ClassNotFoundException {
         URLClassLoader loader = new URLClassLoader(new URL[]{jar.toURI().toURL()}, this.getClass().getClassLoader());
+        loadedClassLoaders.add(loader);
 
         try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(jar)) {
             Enumeration<java.util.jar.JarEntry> entries = jarFile.entries();

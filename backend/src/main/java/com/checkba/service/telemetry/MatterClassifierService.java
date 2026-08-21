@@ -40,6 +40,23 @@ public class MatterClassifierService {
     /** 已分类会话（进程内去重即可：重启后重复分类的概率与代价都可忽略） */
     private final Set<String> classified = ConcurrentHashMap.newKeySet();
 
+    /**
+     * classified 去重集合的上界；本类自己定的默认值（产品未提出具体要求），非精确值：
+     * 单条几十字节的会话 id，一万条内存占用可忽略，只是不能真的无上界。命中上界后
+     * 整体清空重来（见 classifyAsync）——代价是清空后可能重复分类个别会话，
+     * 但这本来就是纯遥测、无用户可见影响，换取「不无限增长」足够划算。
+     * 包可见 + 非 final：测试用小上界驱动，不必真跑一万次。
+     */
+    int maxClassifiedEntries = 10_000;
+
+    /**
+     * AI 分类调用的重试次数上界。classifyAsync 只在会话首轮被调用，去重位一旦提前置上
+     * 就再没有第二次机会——与其让一次瞬时失败（网络抖动/模型偶发 5xx）永久丢掉这条
+     * 会话的事项类别遥测，不如原地重试几次。次数是本类自己定的，不重试到永远。
+     * 包可见 + 非 final：测试用。
+     */
+    int maxClassifyAttempts = 3;
+
     private final ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "matter-classifier");
         t.setDaemon(true);
@@ -65,6 +82,9 @@ public class MatterClassifierService {
             if (conversationId == null || firstUserMessage == null || firstUserMessage.isBlank()) return;
             if (skillMatched) return;
             if (!settings.rollupEnabled()) return;
+            if (classified.size() >= maxClassifiedEntries) {
+                classified.clear();
+            }
             if (!classified.add(conversationId)) return;
             String snippet = firstUserMessage.length() > 500
                     ? firstUserMessage.substring(0, 500) : firstUserMessage;
@@ -76,15 +96,22 @@ public class MatterClassifierService {
     }
 
     private void classify(String conversationId, String message) {
-        try {
-            ChatLanguageModel model = chatModelFactory.getChatModel(classifierModel);
-            String raw = model.generate(PROMPT_PREFIX + message);
-            MatterCategory category = MatterCategory.parse(raw);
-            telemetryService.recordConv("matter.classified", conversationId,
-                    Map.of("category", category.display(), "source", "ai"));
-        } catch (Exception e) {
-            log.debug("事项分类失败（忽略）: {}", e.toString());
+        Exception lastError = null;
+        for (int attempt = 1; attempt <= maxClassifyAttempts; attempt++) {
+            try {
+                ChatLanguageModel model = chatModelFactory.getChatModel(classifierModel);
+                String raw = model.generate(PROMPT_PREFIX + message);
+                MatterCategory category = MatterCategory.parse(raw);
+                telemetryService.recordConv("matter.classified", conversationId,
+                        Map.of("category", category.display(), "source", "ai"));
+                return;
+            } catch (Exception e) {
+                lastError = e;
+                log.debug("事项分类第 {}/{} 次尝试失败: {}", attempt, maxClassifyAttempts, e.toString());
+            }
         }
+        log.debug("事项分类失败（已重试 {} 次，忽略）: {}", maxClassifyAttempts,
+                lastError == null ? "" : lastError.toString());
     }
 
     /** 测试用：等待异步队列排空 */

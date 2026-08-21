@@ -316,16 +316,18 @@ public class LitigationVisualService {
 
             if (!proc.waitFor(TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
                 proc.destroyForcibly();
+                // 超时这一刻排空线程可能还卡在 synchronized(sink) 里追加最后一行——
+                // 读必须跟它用同一把锁，否则 toString() 可能读到半写内容，
+                // 极端情况下内部数组扩容中途还可能抛异常，被外层 catch 吞掉后
+                // 把「出图超时」这个清楚的提示换成一个看起来像引擎崩溃的困惑消息。
                 return new Result(false, JSONUtil.createObj().set("ok", false)
-                        .set("error", "出图超时（" + TIMEOUT_MS / 1000 + " 秒）"), err.toString());
+                        .set("error", "出图超时（" + TIMEOUT_MS / 1000 + " 秒）"), readSink(err));
             }
             op.join(5000);
             ep.join(5000);
 
-            String stdout;
-            String stderr;
-            synchronized (out) { stdout = out.toString().trim(); }
-            synchronized (err) { stderr = err.toString().trim(); }
+            String stdout = readSink(out);
+            String stderr = readSink(err);
 
             if (stdout.isEmpty()) {
                 // cli.py 的契约是「无论成败都打一行 JSON」。什么都没有，说明解释器
@@ -362,6 +364,18 @@ public class LitigationVisualService {
         t.setDaemon(true);
         t.start();
         return t;
+    }
+
+    /**
+     * 安全地取出 pump() 排空线程正在写的缓冲区快照。StringBuilder 本身不是线程安全的，
+     * 必须跟 pump() 里 append 用的同一把锁（sink 自身的对象监视器）同步，
+     * 否则 toString() 可能在 append 中途读到半写内容，甚至在内部数组扩容中途抛异常。
+     * 包可见：供测试直接驱动，不依赖真实子进程。
+     */
+    static String readSink(StringBuilder sink) {
+        synchronized (sink) {
+            return sink.toString().trim();
+        }
     }
 
     /** 读一份引擎自带的参考文档（渐进披露用）。越界返回 null。 */

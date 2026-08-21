@@ -13,6 +13,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -347,6 +349,52 @@ class LitigationVisualServiceTest {
         assertNull(svc.readReference("../cli.py"), "穿越出 engine/ 应被挡");
         assertNull(svc.readReference("/etc/passwd"), "绝对路径应被挡");
         assertNull(svc.readReference("references/../../PATCHES.md"), "绕回上层应被挡");
+    }
+
+    // ==== 并发安全 ====
+
+    /**
+     * 修复：超时分支读 stderr 用的是裸 {@code err.toString()}，没有跟排空线程写
+     * 用的同一把锁（{@code synchronized(sink)}）同步——StringBuilder 本身不是
+     * 线程安全的，toString() 与 append() 并发时可能读到半写的内容，极端情况下
+     * 还可能因为内部数组扩容中途而抛异常，被外层 catch 吞掉后把「出图超时」这个
+     * 清楚的提示换成一个看起来像引擎崩溃的困惑消息。
+     *
+     * <p>不依赖自然产生的竞态窗口（那样测试会时红时绿）：用两个 CountDownLatch
+     * 把交错顺序摆死——写线程先拿到锁、追加一半内容后卡住不放锁，主线程这时去读。
+     * 若读跟写线程用的是同一把锁，读必须被挡住，直到写线程把剩下内容追加完、
+     * 释放锁之后，读到的才是完整值；若读没有同步，会立刻读到「半写」的内容。
+     */
+    @Test
+    @DisplayName("修复：超时分支读 stderr 必须与排空线程的写用同一把锁，不能读到半写的内容")
+    void timeoutPathReadsStderrUnderTheSameLockTheWriterUses() throws Exception {
+        StringBuilder sink = new StringBuilder();
+        CountDownLatch writerHoldingLock = new CountDownLatch(1);
+        CountDownLatch releaseWriter = new CountDownLatch(1);
+        Thread writer = new Thread(() -> {
+            synchronized (sink) {
+                sink.append("partial");
+                writerHoldingLock.countDown();
+                try {
+                    // 最多卡 1 秒——即便主线程的读没有被挡住（说明有 bug），测试也不会真的卡死。
+                    releaseWriter.await(1, TimeUnit.SECONDS);
+                } catch (InterruptedException ignored) {
+                }
+                sink.append("-done");
+            }
+        });
+        writer.start();
+        assertTrue(writerHoldingLock.await(2, TimeUnit.SECONDS), "写线程应先拿到锁并追加了一半内容");
+
+        long startNanos = System.nanoTime();
+        String observed = LitigationVisualService.readSink(sink);
+        long blockedMillis = (System.nanoTime() - startNanos) / 1_000_000;
+        writer.join(2000);
+
+        assertEquals("partial-done", observed,
+                "读必须等写线程把完整内容追加完才能拿到——读到 \"" + observed + "\" 说明没有跟写用同一把锁同步");
+        assertTrue(blockedMillis >= 800,
+                "同步读应该被写线程持锁的那段时间（约 1 秒）挡住，实际只等了 " + blockedMillis + "ms");
     }
 
     // ==== doctor ====
