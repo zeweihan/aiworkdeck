@@ -83,6 +83,9 @@ export const EDITOR_ACTIONS = [
   // 是后端一直在派发但从未接通的原语（本次补齐 worker 实现）。
   'set_numbering', 'format_table', 'insert_table', 'get_formatting', 'apply_house_style',
   'insert_under_heading',
+  // [样式画像 dev-board#111] 项目模板画像：set_style_profile 换 worker 的 HOUSE、
+  // apply_style_profile 落到样式定义与正文；insert_toc / set_page_setup 补齐目录与纸张。
+  'set_style_profile', 'apply_style_profile', 'insert_toc', 'set_page_setup',
   // [Word 表格单元格级] doc_table_* 原语：读表 / 改一格 / 增删行列。insert_table 与
   // format_table 是"整张表"粒度，这一组补的是"改既有表里的一格"（issue #261）。
   'table_read', 'table_set_cell', 'table_add_row', 'table_delete_row',
@@ -150,6 +153,7 @@ export const EDITOR_ACTIONS = [
 export const ACTION_BUDGET_MS = {
   load_document: 180000, export_document: 180000,
   find_replace: 120000, apply_house_style: 120000, resolve_all_revisions: 120000, insert_table: 120000,
+  apply_style_profile: 120000,
 }
 
 /**

@@ -583,18 +583,188 @@ function enumEq(a, b) { return unoEnumVal(a) === unoEnumVal(b); }
 // short 型属性（VertOrient/OutlineLevel 等）必须传带类型的 Any：裸 JS number 会被
 // 编组成 long，严格的 UNO setter（>>= sal_Int16）直接拒绝且被 try 吞掉。
 function shortAny(n) { return new zetajs.Any(zetajs.type.short, Number(n)); }
-const HOUSE = {
-  fontWestern: 'Arial', fontAsian: '楷体_GB2312',
-  bodyPt: 12, titlePt: 16,
-  spaceAfterMm: ptToMm100(18),       // 段后 18 磅
-  lineMinMm: ptToMm100(16),          // 行距最小值 16 磅
-  indentChars: 2,                    // 首行缩进 2 字符（按正文字号折算）
-  tablePt: 10,
-  tableParaSpaceMm: ptToMm100(2.4),  // 单元格段前后 0.2 行 ≈ 2.4 磅
-  tableLineMinMm: ptToMm100(12),     // 单元格行距最小值 12 磅
-  tableBorderMm: 53,                 // 1.5 磅 ≈ 0.53mm（BorderLine2.LineWidth 单位 1/100mm）
-  afterTableBeforeMm: ptToMm100(18), // 表格后首段段前 18 磅
-};
+// ---- 样式画像（styleProfile v1，dev-board#111）----------------------------
+// HOUSE 的唯一出处是 backend/src/main/resources/style-profiles/house-default.json：
+// scripts/sync-house-profile.mjs 把它包装成 house-default.js（self.HOUSE_DEFAULT_JSON），
+// 经 Module.uno_scripts 先于本文件载入。set_style_profile 把项目画像 merge 到默认之上
+// 后重算 HOUSE（派生常量表）；流式落字 / 建表 / 全文格式化 / 样式定义都只读 HOUSE。
+// 单位：pt 直接换 1/100mm；chars 按所在块字号折（1 字符 = 1 em）；lines 按字号 x 1.2
+// （与后端 Units.LINE_FACTOR 同一口径）。
+function houseDefaultProfile() {
+  try { if (self.HOUSE_DEFAULT_JSON) return JSON.parse(self.HOUSE_DEFAULT_JSON); } catch (e) {}
+  return null;
+}
+function profileClone(v) { return v == null ? v : JSON.parse(JSON.stringify(v)); }
+function isPlainObj(v) { return v != null && typeof v === 'object' && !Array.isArray(v); }
+// 同后端 StyleProfile.mergeInto：对象递归合并，headings 数组按 level 合并，其余整体替换。
+function profileMergeInto(target, source) {
+  Object.keys(source || {}).forEach(function (key) {
+    const sv = source[key], tv = target[key];
+    if (key === 'headings' && Array.isArray(sv) && Array.isArray(tv)) {
+      const merged = tv.filter(isPlainObj).map(profileClone);
+      sv.forEach(function (o) {
+        if (!isPlainObj(o)) return;
+        const hit = merged.find(function (m) { return Number(m.level) === Number(o.level); });
+        if (hit) profileMergeInto(hit, o); else merged.push(profileClone(o));
+      });
+      merged.sort(function (a, b) { return (Number(a.level) || 0) - (Number(b.level) || 0); });
+      target[key] = merged;
+    } else if (isPlainObj(sv) && isPlainObj(tv)) {
+      profileMergeInto(tv, sv);
+    } else {
+      target[key] = profileClone(sv);
+    }
+  });
+  return target;
+}
+function profLenPt(len, fontPt) {
+  if (!isPlainObj(len) || len.value == null) return null;
+  const v = Number(len.value);
+  if (!isFinite(v)) return null;
+  switch (len.unit || 'pt') {
+    case 'pt': return v;
+    case 'chars': return v * fontPt;
+    case 'lines': return v * fontPt * 1.2;
+    case 'mm': return v * 72 / 25.4;
+    case 'cm': return v * 720 / 25.4;
+    case 'twips': return v / 20;
+    default: return null;
+  }
+}
+function profMm100(len, fontPt, fallbackMm) {
+  const pt = profLenPt(len, fontPt);
+  return pt == null ? fallbackMm : ptToMm100(pt);
+}
+function profSizePt(block, fallback) {
+  const pt = isPlainObj(block) ? profLenPt(block.size, fallback) : null;
+  return pt == null || pt <= 0 ? fallback : pt;
+}
+function profColorInt(hex, fallback) {
+  if (hex == null) return fallback;
+  const m = String(hex).trim().match(/^#?([0-9a-fA-F]{6})$/);
+  return m ? parseInt(m[1], 16) : fallback;
+}
+// 行距描述（不碰 css.*，HOUSE 在引擎起来前就要算好）：{mode:'min'|'fix'|'prop', mm|pct}
+function profLineSpec(ls, fontPt, fallback) {
+  if (!isPlainObj(ls) || ls.value == null) return fallback;
+  const rule = ls.rule || 'auto';
+  if (rule === 'atLeast' || rule === 'exactly') {
+    const pt = profLenPt({ value: ls.value, unit: ls.unit || 'pt' }, fontPt);
+    if (pt == null || pt <= 0) return fallback;
+    return { mode: rule === 'atLeast' ? 'min' : 'fix', mm: ptToMm100(pt) };
+  }
+  const mult = Number(ls.value);
+  if (!isFinite(mult) || mult <= 0) return fallback;
+  return { mode: 'prop', pct: Math.round(ls.unit === 'percent' ? mult : mult * 100) };
+}
+const PROFILE_ALIGN = { left: 'left', right: 'right', center: 'center', justify: 'justify', both: 'justify', distribute: 'justify', start: 'left', end: 'right' };
+function profAlign(v, fallback) { return (v != null && PROFILE_ALIGN[String(v).toLowerCase()]) || fallback; }
+function profParaSpec(blk, fontPt, dflt) {
+  blk = isPlainObj(blk) ? blk : {};
+  return {
+    align: profAlign(blk.alignment, dflt.align),
+    topMm: profMm100(blk.spaceBefore, fontPt, dflt.topMm),
+    bottomMm: profMm100(blk.spaceAfter, fontPt, dflt.bottomMm),
+    ls: profLineSpec(blk.lineSpacing, fontPt, dflt.ls),
+    indentMm: profMm100(blk.firstLineIndent, fontPt, dflt.indentMm),
+    leftMm: profMm100(blk.leftIndent, fontPt, 0),
+  };
+}
+function profBorder(b, fallback) {
+  if (!isPlainObj(b)) return fallback;
+  const pt = profLenPt(b.width, 12);
+  return {
+    mm: pt == null ? fallback.mm : ptToMm100(pt),
+    color: profColorInt(b.color, fallback.color),
+    style: b.style || fallback.style,
+  };
+}
+// 画像 → 写端常量表。任何叶子缺省都有硬兜底（house-default.js 没载入时也能跑，
+// 但那时已不是单源——bootDoc 会记一条日志）。
+function buildHouse(p) {
+  p = isPlainObj(p) ? p : {};
+  const d = isPlainObj(p.defaults) ? p.defaults : {}, b = isPlainObj(p.body) ? p.body : {};
+  const t = isPlainObj(p.table) ? p.table : {}, cell = isPlainObj(t.cell) ? t.cell : {}, hdr = isPlainObj(t.header) ? t.header : {};
+  const dFont = isPlainObj(d.font) ? d.font : {}, bFont = isPlainObj(b.font) ? b.font : {};
+  const bodyPt = profSizePt(b, profSizePt(d, 12));
+  const fontAsian = bFont.eastAsia || dFont.eastAsia || '楷体_GB2312';
+  const fontWestern = bFont.western || dFont.western || 'Arial';
+  const color = profColorInt(b.color != null ? b.color : d.color, 0x000000);
+  const bodySpec = profParaSpec(b, bodyPt, { align: 'justify', topMm: 0, bottomMm: ptToMm100(18), ls: { mode: 'min', mm: ptToMm100(16) }, indentMm: ptToMm100(2 * bodyPt) });
+  const headings = {};
+  (Array.isArray(p.headings) ? p.headings : []).forEach(function (h) {
+    if (!isPlainObj(h) || h.level == null) return;
+    const lvl = Number(h.level);
+    const pt = profSizePt(h, bodyPt);
+    const hf = isPlainObj(h.font) ? h.font : {};
+    headings[lvl] = Object.assign(profParaSpec(h, pt, {
+      align: lvl === 1 ? 'center' : bodySpec.align, topMm: bodySpec.topMm, bottomMm: bodySpec.bottomMm,
+      ls: bodySpec.ls, indentMm: lvl === 1 ? 0 : bodySpec.indentMm,
+    }), {
+      level: lvl, sizePt: pt, bold: h.bold !== false, color: profColorInt(h.color, color),
+      fontAsian: hf.eastAsia || fontAsian, fontWestern: hf.western || fontWestern,
+    });
+  });
+  const tablePt = profSizePt(cell, 10);
+  const cellSpec = profParaSpec(cell, tablePt, { align: 'left', topMm: ptToMm100(2.4), bottomMm: ptToMm100(2.4), ls: { mode: 'min', mm: ptToMm100(12) }, indentMm: 0 });
+  const borders = isPlainObj(t.borders) ? t.borders : {};
+  const outside = profBorder(borders.outside, { mm: 53, color: 0x000000, style: 'single' });
+  const inside = profBorder(borders.insideH || borders.insideV || borders.inside, outside);
+  const byType = isPlainObj(cell.byContentType) ? cell.byContentType : {};
+  const typeAlign = function (k, dflt) { return profAlign(isPlainObj(byType[k]) ? byType[k].alignment : null, dflt); };
+  const toc = isPlainObj(p.toc) ? p.toc : {};
+  const tocTitle = isPlainObj(toc.titleStyle) ? toc.titleStyle : {};
+  return {
+    name: p.name || null,
+    fontWestern: fontWestern, fontAsian: fontAsian, color: color,
+    bodyPt: bodyPt, bodyBold: b.bold === true, bodySpec: bodySpec,
+    titlePt: headings[1] ? headings[1].sizePt : 16,
+    headings: headings,
+    afterTableBeforeMm: profMm100(b.afterTableSpaceBefore, bodyPt, ptToMm100(18)),
+    tablePt: tablePt, cellSpec: cellSpec,
+    tableBorder: { outsideMm: outside.mm, insideMm: inside.mm, color: outside.color, style: outside.style },
+    tableBorderMm: outside.mm,
+    headerRows: hdr.rows != null ? Math.max(0, Number(hdr.rows) || 0) : 1,
+    headerBold: hdr.bold !== false,
+    headerAlign: profAlign(hdr.alignment, 'center'),
+    headerVAlign: hdr.verticalAlign || 'center',
+    headerFill: profColorInt(hdr.fill, null),
+    repeatHeader: hdr.repeatOnEachPage !== false,
+    cellVAlign: cell.verticalAlign || 'center',
+    textAlign: typeAlign('text', cellSpec.align),
+    numberAlign: typeAlign('number', 'right'),
+    tocLevels: toc.levels != null && isFinite(Number(toc.levels)) ? Number(toc.levels) : 3,
+    tocTitle: toc.title != null ? String(toc.title) : '目录',
+    tocTitleSpec: { sizePt: profSizePt(tocTitle, 16), bold: tocTitle.bold !== false, align: profAlign(tocTitle.alignment, 'center') },
+  };
+}
+const HOUSE_DEFAULT_PROFILE = houseDefaultProfile();
+let ACTIVE_PROFILE = profileClone(HOUSE_DEFAULT_PROFILE);
+let HOUSE = buildHouse(ACTIVE_PROFILE);
+// 标题规格：缺该级时退到最近的已定义级别（画像只学到两级时三级以下沿用二级），
+// 一级兜底 16 磅粗居中、其余兜底正文同款加粗。
+function headingSpec(level) {
+  const lvl = Math.max(1, Math.min(Number(level) || 1, 9));
+  if (HOUSE.headings[lvl]) return HOUSE.headings[lvl];
+  for (let l = lvl - 1; l >= 2; l--) if (HOUSE.headings[l]) return HOUSE.headings[l];
+  const bs = HOUSE.bodySpec;
+  return Object.assign({}, bs, lvl === 1
+    ? { level: 1, sizePt: 16, bold: true, align: 'center', indentMm: 0 }
+    : { level: lvl, sizePt: HOUSE.bodyPt, bold: true }, { color: HOUSE.color, fontAsian: HOUSE.fontAsian, fontWestern: HOUSE.fontWestern });
+}
+function adjustEnum(name) {
+  const A = css.style.ParagraphAdjust;
+  return name === 'center' ? A.CENTER : name === 'right' ? A.RIGHT : name === 'left' ? A.LEFT : A.BLOCK;
+}
+function lineSpacingUno(ls) {
+  const M = css.style.LineSpacingMode;
+  if (ls.mode === 'prop') return new css.style.LineSpacing({ Mode: M.PROP, Height: ls.pct });
+  return new css.style.LineSpacing({ Mode: ls.mode === 'fix' ? M.FIX : M.MINIMUM, Height: ls.mm });
+}
+function vertOrientEnum(name) {
+  const V = css.text.VertOrientation;
+  return name === 'top' ? V.TOP : name === 'bottom' ? V.BOTTOM : V.CENTER;
+}
 // 把标准字符属性设到一个 property set（视图光标/文本光标/段落/单元格文本）上。
 // 只动传入 opts 声明的维度；weight 每次都设（run 级粗体开关需要确定性）。
 // 一次 XMultiPropertySet.setPropertyValues 代替 N 次 setPropertyValue：全文格式化
@@ -605,60 +775,98 @@ function setPropsBatch(ps, names, values) {
   if (!ps || typeof ps.setPropertyValues !== 'function') return false;
   try { ps.setPropertyValues(names, values); return true; } catch (e) { return false; }
 }
+// opts: sizePt / bold / keepWeight / fontAsian / fontWestern / color（缺省取 HOUSE 正文值）。
 function applyHouseChar(ps, opts) {
   const o = opts || {};
+  const fw = o.fontWestern || HOUSE.fontWestern, fa = o.fontAsian || HOUSE.fontAsian;
+  const size = o.sizePt || HOUSE.bodyPt;
+  const color = o.color != null ? o.color : HOUSE.color;
   const names = ['CharFontName', 'CharFontNameAsian', 'CharFontNameComplex',
     'CharHeight', 'CharHeightAsian', 'CharHeightComplex', 'CharColor'];
-  const values = [HOUSE.fontWestern, HOUSE.fontAsian, HOUSE.fontWestern,
-    o.sizePt || HOUSE.bodyPt, o.sizePt || HOUSE.bodyPt, o.sizePt || HOUSE.bodyPt, 0x000000];
+  const values = [fw, fa, fw, size, size, size, color];
   if (!o.keepWeight) {
     const w = o.bold ? css.awt.FontWeight.BOLD : css.awt.FontWeight.NORMAL;
     names.push('CharWeight', 'CharWeightAsian', 'CharWeightComplex');
     values.push(w, w, w);
   }
   if (setPropsBatch(ps, names, values)) return;
-  try { ps.setPropertyValue('CharFontName', HOUSE.fontWestern); } catch (e) {}
-  try { ps.setPropertyValue('CharFontNameAsian', HOUSE.fontAsian); } catch (e) {}
-  try { ps.setPropertyValue('CharFontNameComplex', HOUSE.fontWestern); } catch (e) {}
-  try { setCharProp(ps, 'CharHeight', o.sizePt || HOUSE.bodyPt); } catch (e) {}
+  try { ps.setPropertyValue('CharFontName', fw); } catch (e) {}
+  try { ps.setPropertyValue('CharFontNameAsian', fa); } catch (e) {}
+  try { ps.setPropertyValue('CharFontNameComplex', fw); } catch (e) {}
+  try { setCharProp(ps, 'CharHeight', size); } catch (e) {}
   if (!o.keepWeight) {
     try { setCharProp(ps, 'CharWeight', o.bold ? css.awt.FontWeight.BOLD : css.awt.FontWeight.NORMAL); } catch (e) {}
   }
-  try { ps.setPropertyValue('CharColor', 0x000000); } catch (e) {}
+  try { ps.setPropertyValue('CharColor', color); } catch (e) {}
 }
-// 标准段落属性。kind: 'title' | 'body' | 'heading' | 'list' | 'tableCell'。
-// heading 与 body 同款（规范：小标题与正文一样但加粗），title/list/tableCell 不缩进。
+// 段落规格按画像块取：title = 一级标题块；heading = opts.level 级标题块（缺省二级，
+// house-default 里二至六级与正文同款只加粗）；body / list（不缩进）= 正文块；
+// tableCell = 表格单元格块。opts.afterTable：紧跟表格的首段段前取 afterTableSpaceBefore。
+function houseParaSpec(kind, opts) {
+  const o = opts || {};
+  if (kind === 'title') return headingSpec(1);
+  if (kind === 'heading') return headingSpec(o.level != null ? o.level : 2);
+  if (kind === 'tableCell') return HOUSE.cellSpec;
+  if (kind === 'list') return Object.assign({}, HOUSE.bodySpec, { indentMm: 0 });
+  return HOUSE.bodySpec;
+}
 function applyHousePara(ps, kind, opts) {
   const o = opts || {};
-  const isTitle = kind === 'title';
   const isCell = kind === 'tableCell';
+  const spec = houseParaSpec(kind, o);
+  const top = (!isCell && o.afterTable) ? HOUSE.afterTableBeforeMm : spec.topMm;
   {
-    const indent0 = (isTitle || isCell || kind === 'list') ? 0 : ptToMm100(HOUSE.indentChars * HOUSE.bodyPt);
     const names = ['ParaAdjust', 'ParaTopMargin', 'ParaBottomMargin', 'ParaLineSpacing', 'ParaFirstLineIndent'];
-    const values = [
-      isTitle ? css.style.ParagraphAdjust.CENTER : css.style.ParagraphAdjust.BLOCK,
-      isCell ? HOUSE.tableParaSpaceMm : (o.afterTable ? HOUSE.afterTableBeforeMm : 0),
-      isCell ? HOUSE.tableParaSpaceMm : HOUSE.spaceAfterMm,
-      new css.style.LineSpacing({ Mode: css.style.LineSpacingMode.MINIMUM, Height: isCell ? HOUSE.tableLineMinMm : HOUSE.lineMinMm }),
-      indent0,
-    ];
-    if (!isCell) { names.push('ParaLeftMargin', 'ParaRightMargin'); values.push(0, 0); }
+    const values = [adjustEnum(spec.align), top, spec.bottomMm, lineSpacingUno(spec.ls), spec.indentMm];
+    if (!isCell) { names.push('ParaLeftMargin', 'ParaRightMargin'); values.push(spec.leftMm, 0); }
     if (setPropsBatch(ps, names, values)) return;
   }
-  try { ps.setPropertyValue('ParaAdjust', isTitle ? css.style.ParagraphAdjust.CENTER : css.style.ParagraphAdjust.BLOCK); } catch (e) {}
-  try { ps.setPropertyValue('ParaTopMargin', isCell ? HOUSE.tableParaSpaceMm : (o.afterTable ? HOUSE.afterTableBeforeMm : 0)); } catch (e) {}
-  try { ps.setPropertyValue('ParaBottomMargin', isCell ? HOUSE.tableParaSpaceMm : HOUSE.spaceAfterMm); } catch (e) {}
-  try {
-    ps.setPropertyValue('ParaLineSpacing', new css.style.LineSpacing({
-      Mode: css.style.LineSpacingMode.MINIMUM,
-      Height: isCell ? HOUSE.tableLineMinMm : HOUSE.lineMinMm,
-    }));
-  } catch (e) {}
-  const indent = (isTitle || isCell || kind === 'list') ? 0 : ptToMm100(HOUSE.indentChars * HOUSE.bodyPt);
-  try { ps.setPropertyValue('ParaFirstLineIndent', indent); } catch (e) {}
+  try { ps.setPropertyValue('ParaAdjust', adjustEnum(spec.align)); } catch (e) {}
+  try { ps.setPropertyValue('ParaTopMargin', top); } catch (e) {}
+  try { ps.setPropertyValue('ParaBottomMargin', spec.bottomMm); } catch (e) {}
+  try { ps.setPropertyValue('ParaLineSpacing', lineSpacingUno(spec.ls)); } catch (e) {}
+  try { ps.setPropertyValue('ParaFirstLineIndent', spec.indentMm); } catch (e) {}
   if (!isCell) {
-    try { ps.setPropertyValue('ParaLeftMargin', 0); ps.setPropertyValue('ParaRightMargin', 0); } catch (e) {}
+    try { ps.setPropertyValue('ParaLeftMargin', spec.leftMm); ps.setPropertyValue('ParaRightMargin', 0); } catch (e) {}
   }
+}
+// 把画像写进段落样式定义（apply_style_profile 第一步）：Standard / Heading 1..6 /
+// Table Contents / Table Heading。改样式定义比逐段直接格式便宜得多，且新打的字
+// 自然继承；直接格式随后只做最小覆盖。返回改到的样式名。
+function applyProfileToStyles() {
+  const fam = xModel.getStyleFamilies().getByName('ParagraphStyles');
+  const out = [];
+  const setStyle = function (name, fn) {
+    let st;
+    try { if (!fam.hasByName(name)) return; st = fam.getByName(name); } catch (e) { return; }
+    try { fn(st); out.push(name); } catch (e) { log('样式定义写入失败 ' + name + ': ' + errStr(e)); }
+  };
+  setStyle('Standard', function (st) {
+    applyHouseChar(st, { sizePt: HOUSE.bodyPt, bold: HOUSE.bodyBold });
+    applyHousePara(st, 'body');
+  });
+  for (let l = 1; l <= 6; l++) {
+    setStyle('Heading ' + l, function (st) {
+      const hs = headingSpec(l);
+      applyHouseChar(st, { sizePt: hs.sizePt, bold: hs.bold, fontAsian: hs.fontAsian, fontWestern: hs.fontWestern, color: hs.color });
+      applyHousePara(st, 'heading', { level: l });
+    });
+  }
+  setStyle('Table Contents', function (st) {
+    applyHouseChar(st, { sizePt: HOUSE.tablePt, bold: false });
+    applyHousePara(st, 'tableCell');
+  });
+  setStyle('Table Heading', function (st) {
+    applyHouseChar(st, { sizePt: HOUSE.tablePt, bold: HOUSE.headerBold });
+    applyHousePara(st, 'tableCell');
+    try { st.setPropertyValue('ParaAdjust', adjustEnum(HOUSE.headerAlign)); } catch (e) {}
+  });
+  setStyle('Contents Heading', function (st) {
+    const ts = HOUSE.tocTitleSpec;
+    applyHouseChar(st, { sizePt: ts.sizePt, bold: ts.bold });
+    try { st.setPropertyValue('ParaAdjust', adjustEnum(ts.align)); } catch (e) {}
+  });
+  return out;
 }
 // markdown 行内标记 → 带样式 run 列表：**粗体**、*斜体*、`代码`（剥壳）、[文字](url)。
 // 下划线变体（_、__）在法律文本里误伤率高，故意不识别。
@@ -691,7 +899,7 @@ function writeStyledRuns(vc, runs, kindOpts) {
     if (!run.text) continue;
     const cur = xText.createTextCursorByRange(vc.getEnd());
     xText.insertString(cur, run.text, true); // bAbsorb: cur 跨住刚插入的文本
-    applyHouseChar(cur, { sizePt: o.sizePt, bold: o.bold || !!run.bold });
+    applyHouseChar(cur, { sizePt: o.sizePt, bold: o.bold || !!run.bold, fontAsian: o.fontAsian, fontWestern: o.fontWestern, color: o.color });
     try { setCharProp(cur, 'CharPosture', run.italic ? css.awt.FontSlant.ITALIC : css.awt.FontSlant.NONE); } catch (e) {}
     if (run.url) { try { cur.setPropertyValue('HyperLinkURL', run.url); } catch (e) {} }
     try { vc.gotoRange(cur.getEnd(), false); } catch (e) {}
@@ -784,19 +992,31 @@ function cellName(col, row) {
   return name + (row + 1);
 }
 const NUMERIC_CELL_RE = /^[-+（(]?[\d][\d,.，%．]*[%）)]?$/;
-// 给一张表设标准边框（Grid 实线，全部内外框线同宽）。widthMm 单位 1/100mm。
-function applyTableBorders(table, widthMm, color) {
-  const solid = (css.table.BorderLineStyle && css.table.BorderLineStyle.SOLID != null)
-    ? css.table.BorderLineStyle.SOLID : 0;
-  const bl = new css.table.BorderLine2({
-    Color: color == null ? 0x000000 : color,
-    InnerLineWidth: 0, OuterLineWidth: 0, LineDistance: 0,
-    LineStyle: solid,
-    LineWidth: widthMm,
-  });
+// 边框线型：画像/工具的 single|double|dashed → BorderLineStyle（常量缺席时用数值兜底）。
+function borderLineStyle(name) {
+  const S = css.table.BorderLineStyle || {};
+  const n = String(name || 'single').toLowerCase();
+  if (n === 'double') return S.DOUBLE != null ? S.DOUBLE : 3;
+  if (n === 'dashed') return S.DASHED != null ? S.DASHED : 2;
+  return S.SOLID != null ? S.SOLID : 0;
+}
+// 给一张表设边框。spec: {outsideMm, insideMm, color, style}（宽度单位 1/100mm；
+// 缺省取 HOUSE.tableBorder：Grid 实线、内外同宽）。
+function applyTableBorders(table, spec) {
+  const o = Object.assign({}, HOUSE.tableBorder, spec || {});
+  if (o.insideMm == null) o.insideMm = o.outsideMm;
+  const mk = function (mm) {
+    return new css.table.BorderLine2({
+      Color: o.color == null ? 0x000000 : o.color,
+      InnerLineWidth: 0, OuterLineWidth: 0, LineDistance: 0,
+      LineStyle: borderLineStyle(o.style),
+      LineWidth: mm,
+    });
+  };
+  const bl = mk(o.outsideMm), il = mk(o.insideMm);
   const tb = new css.table.TableBorder2({
     TopLine: bl, BottomLine: bl, LeftLine: bl, RightLine: bl,
-    HorizontalLine: bl, VerticalLine: bl,
+    HorizontalLine: il, VerticalLine: il,
     IsTopLineValid: true, IsBottomLineValid: true, IsLeftLineValid: true,
     IsRightLineValid: true, IsHorizontalLineValid: true, IsVerticalLineValid: true,
     Distance: 0, IsDistanceValid: false,
@@ -807,24 +1027,27 @@ function applyTableBorders(table, widthMm, color) {
 // keepWeight: 非首行不动原有粗体（apply_house_style 走这里，避免抹掉当事人加粗）。
 function styleTableStandard(table, opts) {
   const o = opts || {};
-  const headerRows = o.headerRows != null ? o.headerRows : 1;
-  try { applyTableBorders(table, HOUSE.tableBorderMm, 0x000000); } catch (e) { log('表格边框设置失败 / borders: ' + errStr(e)); }
+  const headerRows = o.headerRows != null ? o.headerRows : HOUSE.headerRows;
+  try { applyTableBorders(table, null); } catch (e) { log('表格边框设置失败 / borders: ' + errStr(e)); }
+  if (headerRows > 0 && HOUSE.repeatHeader) {
+    try { table.setPropertyValue('RepeatHeadline', true); table.setPropertyValue('HeaderRowCount', headerRows); } catch (e) {}
+  }
   const names = table.getCellNames();
   for (let i = 0; i < names.length; i++) {
     const cell = table.getCellByName(names[i]);
     const rowIdx = parseInt(String(names[i]).replace(/^[A-Z]+/, ''), 10) - 1;
     const isHeader = rowIdx < headerRows;
-    try { cell.setPropertyValue('VertOrient', shortAny(css.text.VertOrientation.CENTER)); } catch (e) {}
+    try { cell.setPropertyValue('VertOrient', shortAny(vertOrientEnum(isHeader ? HOUSE.headerVAlign : HOUSE.cellVAlign))); } catch (e) {}
+    if (isHeader && HOUSE.headerFill != null) { try { cell.setPropertyValue('BackColor', HOUSE.headerFill); } catch (e) {} }
     try {
       const ct = cell.createTextCursor();
       ct.gotoStart(false);
       ct.gotoEnd(true);
       applyHousePara(ct, 'tableCell');
-      applyHouseChar(ct, { sizePt: HOUSE.tablePt, bold: isHeader, keepWeight: !isHeader && o.keepWeight });
+      applyHouseChar(ct, { sizePt: HOUSE.tablePt, bold: isHeader && HOUSE.headerBold, keepWeight: !isHeader && o.keepWeight });
       const text = (cell.getString() || '').trim();
-      const adjust = isHeader ? css.style.ParagraphAdjust.CENTER
-        : (NUMERIC_CELL_RE.test(text) ? css.style.ParagraphAdjust.RIGHT : css.style.ParagraphAdjust.LEFT);
-      ct.setPropertyValue('ParaAdjust', adjust);
+      const adjust = isHeader ? HOUSE.headerAlign : (NUMERIC_CELL_RE.test(text) ? HOUSE.numberAlign : HOUSE.textAlign);
+      ct.setPropertyValue('ParaAdjust', adjustEnum(adjust));
     } catch (e) {}
   }
 }
@@ -1381,6 +1604,80 @@ function resolveSlideTable(page, p) {
   return { table: table, shapeName: foundName };
 }
 
+// ---- 全文按画像格式化（apply_house_style / apply_style_profile 共用）--------------
+function styleProfileSummary() {
+  const bs = HOUSE.bodySpec;
+  return {
+    profileName: HOUSE.name,
+    body: {
+      fontAsian: HOUSE.fontAsian, fontWestern: HOUSE.fontWestern, sizePt: HOUSE.bodyPt, alignment: bs.align,
+      firstLineIndentPt: Math.round(bs.indentMm * 72 / 2540 * 10) / 10,
+      spaceBeforePt: Math.round(bs.topMm * 72 / 2540 * 10) / 10,
+      spaceAfterPt: Math.round(bs.bottomMm * 72 / 2540 * 10) / 10,
+    },
+    headingLevels: Object.keys(HOUSE.headings).map(Number),
+    tablePt: HOUSE.tablePt,
+  };
+}
+// 段落分类：首个非空短段（idx 0、<=60 字）为 title；OutlineLevel>0 或 Heading 样式为
+// heading（trueLevels 时取真实级别，否则一律二级 = 改造前"小标题=正文款加粗"）；其余 body。
+function paraKindOf(el, isFirst, trueLevels) {
+  let lvl = 0, style = '';
+  try { lvl = el.getPropertyValue('OutlineLevel') || 0; } catch (e) {}
+  try { style = el.getPropertyValue('ParaStyleName') || ''; } catch (e) {}
+  if (lvl > 0 || /^(Heading|标题)/.test(style)) {
+    let level = lvl;
+    if (!level) { const m = /(\d+)/.exec(style); level = m ? Number(m[1]) : 2; }
+    return { kind: 'heading', level: trueLevels ? level : 2 };
+  }
+  return { kind: 'body', level: null };
+}
+function charOptsFor(k) {
+  if (k.kind === 'body') return { sizePt: HOUSE.bodyPt, bold: HOUSE.bodyBold, keepWeight: true };
+  const hs = k.kind === 'title' ? headingSpec(1) : headingSpec(k.level);
+  return { sizePt: hs.sizePt, bold: hs.bold, fontAsian: hs.fontAsian, fontWestern: hs.fontWestern, color: hs.color };
+}
+async function applyHouseToDocument(p, opts) {
+  const trueLevels = !!(opts && opts.trueLevels);
+  // progress 的 total = 正文段数 + 表数（顶层元素数）；段数走索引缓存，表数一次 getCount。
+  let total = 0;
+  try { total = getParaIndex().total; } catch (e) {}
+  try { total += xModel.getTextTables().getCount(); } catch (e) {}
+  const en = xModel.getText().createEnumeration();
+  const BATCH = 500;
+  let idx = 0, paras = 0, tables = 0, titled = false, prevWasTable = false, cancelled = false;
+  lockModel();
+  try {
+  while (en.hasMoreElements()) {
+    if (idx > 0 && idx % BATCH === 0) {
+      if (await batchBreak(p, idx, total)) { cancelled = true; break; }
+    }
+    const el = en.nextElement();
+    if (el.supportsService && el.supportsService('com.sun.star.text.Paragraph')) {
+      const text = (el.getString() || '').trim();
+      let k = { kind: 'body', level: null };
+      if (!titled && text) {
+        titled = true;
+        if (idx === 0 && text.length <= 60) k = { kind: 'title', level: 1 };
+      }
+      if (k.kind !== 'title') k = paraKindOf(el, idx === 0, trueLevels);
+      applyHousePara(el, k.kind, { afterTable: prevWasTable, level: k.level });
+      applyHouseChar(el, charOptsFor(k));
+      prevWasTable = false;
+      paras++;
+    } else if (el.supportsService && el.supportsService('com.sun.star.text.TextTable')) {
+      try { styleTableStandard(el, { keepWeight: true }); tables++; } catch (e) {}
+      prevWasTable = true;
+    }
+    idx++;
+  }
+  } finally { unlockModel(); }
+  if (idx > BATCH && !cancelled) postProgress(p, idx, total);
+  const r = Object.assign({ success: true, paragraphs: paras, tables: tables, truncated: cancelled }, verifySnapshot());
+  if (cancelled) { r.cancelled = true; r.done = idx; }
+  return r;
+}
+
 // ---- 流式写入状态机：markdown 行级解析 → 标准格式落字 ------------------------
 // stream_insert 攒字节、按完整行消费；stream_flush 收尾（写掉尾行/尾表、复位）。
 // 状态在 worker 内（宿主只透传 token），文档换人/换流由宿主在 open_sync 时
@@ -1411,11 +1708,15 @@ function streamParagraph(runs, kind, headingLevel) {
   const vc = ctrl.getViewCursor();
   vc.collapseToEnd();
   const xText = vc.getText();
-  applyHousePara(vc, kind, { afterTable: STREAM.afterTable });
+  // 续写场景的 #（非主标题）落为二级标题规格：主标题只有一个，其余 # 与 ## 同款
+  //（house-default 里二至六级与正文同款加粗，与改造前"小标题=正文款加粗"一致）。
+  const spec = kind === 'title' ? headingSpec(1) : kind === 'heading' ? headingSpec(Math.max(2, Number(headingLevel) || 2)) : null;
+  applyHousePara(vc, kind, { afterTable: STREAM.afterTable, level: spec ? spec.level : null });
   STREAM.afterTable = false;
   if (headingLevel != null) { try { vc.setPropertyValue('OutlineLevel', shortAny(headingLevel)); } catch (e) {} }
-  const sizePt = kind === 'title' ? HOUSE.titlePt : HOUSE.bodyPt;
-  writeStyledRuns(vc, runs, { sizePt: sizePt, bold: kind === 'title' || kind === 'heading' });
+  writeStyledRuns(vc, runs, spec
+    ? { sizePt: spec.sizePt, bold: spec.bold, fontAsian: spec.fontAsian, fontWestern: spec.fontWestern, color: spec.color }
+    : { sizePt: HOUSE.bodyPt, bold: HOUSE.bodyBold });
   xText.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
   vc.collapseToEnd();
   return vc;
@@ -1508,6 +1809,7 @@ function bootDoc() {
   installKeyHandler();
   try { installModifyListener(xModel); } catch (e) { log('XModifyListener 安装失败 / install failed: ' + errStr(e)); }
   try { installSelectionListener(ctrl); } catch (e) { log('XSelectionChangeListener 安装失败 / install failed: ' + errStr(e)); }
+  if (!HOUSE_DEFAULT_PROFILE) log('house-default.js 未载入（Module.uno_scripts 缺项？）：样式画像退到 worker 内硬兜底值，不再是单源');
   post('ui_ready');
   log('空白文档就绪 swriter / blank doc ready');
   try { const loc = readConfigLocale(); log('UI locale 诊断 / config: ' + JSON.stringify(loc)); } catch (e) { log('UI locale 诊断失败: ' + errStr(e)); }
@@ -1811,6 +2113,37 @@ async function batchBreak(p, done, total) {
   try { setRedlineAuthor(p && p.__agent ? AI_AUTHOR : humanAuthor); } catch (e) {}
   lockModel();
   return false;
+}
+
+// 文档首节页面样式（edit_header_footer / set_page_setup 共用取法：把视图光标挪到
+// 文档开头读 PageStyleName——内部名恒为英文如 'Standard'，不受 zh-CN 语言包影响）。
+function currentPageStyle() {
+  let styleName = '';
+  try {
+    const vc = ctrl.getViewCursor();
+    const savedRange = vc.getStart();
+    vc.gotoStart(false);
+    styleName = String(vc.getPropertyValue('PageStyleName') || '');
+    vc.gotoRange(savedRange, false);
+  } catch (e) { return tableFail('无法定位页面样式: ' + errStr(e)); }
+  if (!styleName) return tableFail('无法确定文档的页面样式');
+  try { return { pageStyle: xModel.getStyleFamilies().getByName('PageStyles').getByName(styleName), styleName: styleName }; }
+  catch (e) { return tableFail('读取页面样式失败: ' + errStr(e)); }
+}
+// 只刷指定的几个样式定义（insert_toc 只要 Contents Heading），失败不致命。
+function applyProfileToStylesSafe(names) {
+  try {
+    const fam = xModel.getStyleFamilies().getByName('ParagraphStyles');
+    names.forEach(function (name) {
+      if (!fam.hasByName(name)) return;
+      const st = fam.getByName(name);
+      if (name === 'Contents Heading') {
+        const ts = HOUSE.tocTitleSpec;
+        applyHouseChar(st, { sizePt: ts.sizePt, bold: ts.bold });
+        try { st.setPropertyValue('ParaAdjust', adjustEnum(ts.align)); } catch (e) {}
+      }
+    });
+  } catch (e) {}
 }
 
 // ==========================================================================
@@ -2773,6 +3106,8 @@ const EXEC = {
     }
     if (p.fontSize != null) { setCharProp(vc, 'CharHeight', Number(p.fontSize)); applied.fontSize = Number(p.fontSize); }
     if (p.fontName != null) { setCharProp(vc, 'CharFontName', String(p.fontName)); applied.fontName = String(p.fontName); }
+    // 中文字体单独设（fontName 已把西文/中文/复杂文种三项一起设成同一字体；中西文分设时后设中文）
+    if (p.fontNameAsian != null) { vc.setPropertyValue('CharFontNameAsian', String(p.fontNameAsian)); applied.fontNameAsian = String(p.fontNameAsian); }
     if (Object.keys(applied).length === 0) return { success: false, message: 'no format params given' };
     return { success: true, applied: applied, selectedText: vc.getString().slice(0, 100) };
   },
@@ -2858,12 +3193,41 @@ const EXEC = {
       styleTableStandard(table, { headerRows: p.firstRowBold === false ? 0 : 1 });
       applied.standard = true;
     }
-    if (p.borderWidthPt != null) {
-      const color = p.borderColor != null ? parseColor(p.borderColor, { black: 0 }) : 0;
-      try { applyTableBorders(table, ptToMm100(p.borderWidthPt), color == null ? 0 : color); applied.borderWidthPt = Number(p.borderWidthPt); }
+    // 边框：borderWidthPt 内外同宽；outsideBorderWidthPt / insideBorderWidthPt 分设；
+    // borderColor / borderStyle(single|double|dashed) 单独给时宽度沿用画像值。
+    if (p.borderWidthPt != null || p.outsideBorderWidthPt != null || p.insideBorderWidthPt != null || p.borderColor != null || p.borderStyle != null) {
+      const color = p.borderColor != null ? parseColor(p.borderColor, { black: 0 }) : HOUSE.tableBorder.color;
+      if (color == null) return { success: false, message: 'bad borderColor: ' + p.borderColor + ' (use #RRGGBB)' };
+      const style = p.borderStyle != null ? String(p.borderStyle).toLowerCase() : HOUSE.tableBorder.style;
+      if (['single', 'double', 'dashed'].indexOf(style) < 0) return { success: false, message: 'bad borderStyle: ' + p.borderStyle + ' (single/double/dashed)' };
+      const outsideMm = p.outsideBorderWidthPt != null ? ptToMm100(p.outsideBorderWidthPt) : p.borderWidthPt != null ? ptToMm100(p.borderWidthPt) : HOUSE.tableBorder.outsideMm;
+      const insideMm = p.insideBorderWidthPt != null ? ptToMm100(p.insideBorderWidthPt) : p.borderWidthPt != null ? ptToMm100(p.borderWidthPt) : outsideMm;
+      try { applyTableBorders(table, { outsideMm: outsideMm, insideMm: insideMm, color: color, style: style }); }
       catch (e) { return { success: false, message: '边框设置失败: ' + errStr(e) }; }
+      if (p.borderWidthPt != null) applied.borderWidthPt = Number(p.borderWidthPt);
+      if (p.outsideBorderWidthPt != null) applied.outsideBorderWidthPt = Number(p.outsideBorderWidthPt);
+      if (p.insideBorderWidthPt != null) applied.insideBorderWidthPt = Number(p.insideBorderWidthPt);
+      if (p.borderColor != null) applied.borderColor = String(p.borderColor);
+      if (p.borderStyle != null) applied.borderStyle = style;
     }
     const names = table.getCellNames();
+    // 表头底纹（首行；'none' 清除）与跨页重复表头
+    if (p.headerFill != null) {
+      const fill = String(p.headerFill).toLowerCase() === 'none' ? -1 : parseColor(p.headerFill, {});
+      if (fill == null) return { success: false, message: 'bad headerFill: ' + p.headerFill + ' (use #RRGGBB or none)' };
+      for (let i = 0; i < names.length; i++) {
+        if (parseInt(String(names[i]).replace(/^[A-Z]+/, ''), 10) !== 1) continue;
+        try { table.getCellByName(names[i]).setPropertyValue('BackColor', fill); } catch (e) {}
+      }
+      applied.headerFill = String(p.headerFill);
+    }
+    if (p.repeatHeader != null) {
+      try {
+        table.setPropertyValue('RepeatHeadline', !!p.repeatHeader);
+        if (p.repeatHeader) table.setPropertyValue('HeaderRowCount', 1);
+        applied.repeatHeader = !!p.repeatHeader;
+      } catch (e) { return { success: false, message: '重复表头设置失败: ' + errStr(e) }; }
+    }
     if (p.fontSizePt != null || p.cellVerticalAlign != null || p.firstRowBold != null) {
       const vmap = { top: css.text.VertOrientation.TOP, center: css.text.VertOrientation.CENTER, bottom: css.text.VertOrientation.BOTTOM };
       for (let i = 0; i < names.length; i++) {
@@ -2885,24 +3249,35 @@ const EXEC = {
       if (p.cellVerticalAlign != null) applied.cellVerticalAlign = String(p.cellVerticalAlign);
       if (p.firstRowBold != null) applied.firstRowBold = !!p.firstRowBold;
     }
-    // 列宽（百分比数组，如 [20,50,30]，个数必须等于列数）
-    if (p.columnWidthsPercent != null) {
+    // 列宽：百分比数组（如 [20,50,30]）或厘米数组（按比例折算，表宽不变），个数必须等于列数
+    const widthsRaw = p.columnWidthsPercent != null ? p.columnWidthsPercent : p.columnWidthsCm;
+    if (widthsRaw != null) {
       try {
-        const pct = Array.isArray(p.columnWidthsPercent) ? p.columnWidthsPercent.map(Number) : String(p.columnWidthsPercent).split(/[,，\s]+/).filter(Boolean).map(Number);
+        const pct = Array.isArray(widthsRaw) ? widthsRaw.map(Number) : String(widthsRaw).split(/[,，\s]+/).filter(Boolean).map(Number);
+        if (pct.some(function (v) { return !(v > 0); })) return { success: false, message: '列宽必须是正数: ' + JSON.stringify(widthsRaw) };
         const seps = table.getPropertyValue('TableColumnSeparators');
         const nCols = (seps ? seps.length : 0) + 1;
         if (pct.length !== nCols) return { success: false, message: '列宽个数(' + pct.length + ')与表格列数(' + nCols + ')不符' };
         const relSum = table.getPropertyValue('TableColumnRelativeSum');
-        const out = [];
+        // 不 new css.text.TableColumnSeparator（zetajs 报 unregistered UNO type，e2e 组 29 实锤）：
+        // 改写读回的分隔符数组再原样设回，个数不变只动 Position。
         let acc = 0;
         const total = pct.reduce(function (a, b) { return a + b; }, 0);
         for (let i = 0; i < pct.length - 1; i++) {
           acc += pct[i];
-          out.push(new css.text.TableColumnSeparator({ Position: Math.round(relSum * acc / total), IsVisible: true }));
+          seps[i].Position = Math.round(relSum * acc / total);
+          seps[i].IsVisible = true;
         }
-        table.setPropertyValue('TableColumnSeparators', out);
-        applied.columnWidthsPercent = pct;
-      } catch (e) { return { success: false, message: '列宽设置失败: ' + errStr(e) }; }
+        table.setPropertyValue('TableColumnSeparators', seps);
+        if (p.columnWidthsPercent != null) applied.columnWidthsPercent = pct; else applied.columnWidthsCm = pct;
+      } catch (e) {
+        // 本引擎（zh-CN r4）的 WASM 桥没注册 TableColumnSeparator 结构，读回再设回也抛
+        // "unregistered UNO type"（e2e 组 29 实锤）——说人话拒绝，别让模型反复撞。
+        const msg = errStr(e);
+        return { success: false, message: /unregistered UNO type/.test(msg)
+          ? '当前编辑器引擎不支持按列设宽（TableColumnSeparator 未在 WASM 桥注册），请改用 Word 打开后手工调整列宽'
+          : '列宽设置失败: ' + msg };
+      }
     }
     // 行高（磅）。rowHeightRule: 'min'（最小值，默认）| 'exact'（固定值）
     if (p.rowHeightPt != null) {
@@ -3190,52 +3565,64 @@ const EXEC = {
   // export / 宿主的 cancel 有机会插进来），不再有 5000 元素硬顶；truncated 永远
   // 返回（只有被取消时才为 true）。
   async apply_house_style(p) {
-    // progress 的 total = 正文段数 + 表数（顶层元素数）；段数走索引缓存，表数一次 getCount。
-    let total = 0;
-    try { total = getParaIndex().total; } catch (e) {}
-    try { total += xModel.getTextTables().getCount(); } catch (e) {}
-    const en = xModel.getText().createEnumeration();
-    const BATCH = 500;
-    let idx = 0, paras = 0, tables = 0, titled = false, prevWasTable = false, cancelled = false;
-    lockModel();
-    try {
-    while (en.hasMoreElements()) {
-      if (idx > 0 && idx % BATCH === 0) {
-        if (await batchBreak(p, idx, total)) { cancelled = true; break; }
-      }
-      const el = en.nextElement();
-      if (el.supportsService && el.supportsService('com.sun.star.text.Paragraph')) {
-        const text = (el.getString() || '').trim();
-        let kind = 'body';
-        if (!titled && text) {
-          titled = true;
-          if (idx === 0 && text.length <= 60) kind = 'title';
-        }
-        if (kind !== 'title') {
-          try {
-            const lvl = el.getPropertyValue('OutlineLevel') || 0;
-            const style = el.getPropertyValue('ParaStyleName') || '';
-            if (lvl > 0 || /^(Heading|标题)/.test(style)) kind = 'heading';
-          } catch (e) {}
-        }
-        applyHousePara(el, kind, { afterTable: prevWasTable });
-        applyHouseChar(el, {
-          sizePt: kind === 'title' ? HOUSE.titlePt : HOUSE.bodyPt,
-          bold: kind === 'title' || kind === 'heading',
-          keepWeight: kind === 'body',
-        });
-        prevWasTable = false;
-        paras++;
-      } else if (el.supportsService && el.supportsService('com.sun.star.text.TextTable')) {
-        try { styleTableStandard(el, { headerRows: 1, keepWeight: true }); tables++; } catch (e) {}
-        prevWasTable = true;
-      }
-      idx++;
+    return applyHouseToDocument(p, { trueLevels: false });
+  },
+  // [样式画像] 换用项目画像：{profile} 校验 schemaVersion 后 merge 到 house-default 之上，
+  // 重算 HOUSE；此后流式落字 / 建表 / 全文格式化都按它。{profile:null} 或 {reset:true}
+  // 回到默认。只改 worker 状态，不碰文档——要落到文档走 apply_style_profile。
+  set_style_profile(p) {
+    let prof = p && p.profile;
+    if (prof == null || (p && p.reset)) {
+      ACTIVE_PROFILE = profileClone(HOUSE_DEFAULT_PROFILE);
+      HOUSE = buildHouse(ACTIVE_PROFILE);
+      return Object.assign({ success: true, reset: true }, styleProfileSummary());
     }
-    } finally { unlockModel(); }
-    if (idx > BATCH && !cancelled) postProgress(p, idx, total);
-    const r = Object.assign({ success: true, paragraphs: paras, tables: tables, truncated: cancelled }, verifySnapshot());
-    if (cancelled) { r.cancelled = true; r.done = idx; }
+    if (typeof prof === 'string') { try { prof = JSON.parse(prof); } catch (e) { return tableFail('profile 不是合法 JSON: ' + (e && e.message)); } }
+    if (!isPlainObj(prof)) return tableFail('profile must be a JSON object');
+    if (prof.schemaVersion != null && Number(prof.schemaVersion) !== 1) {
+      return tableFail('unsupported schemaVersion: ' + prof.schemaVersion + ' (expected 1)');
+    }
+    const merged = profileMergeInto(profileClone(HOUSE_DEFAULT_PROFILE) || {}, prof);
+    ACTIVE_PROFILE = merged;
+    HOUSE = buildHouse(merged);
+    return Object.assign({ success: true, reset: false }, styleProfileSummary());
+  },
+  // [样式画像] 把当前画像落到文档。scope: document（样式定义 + 全文最小直接格式）/
+  // selection（样式定义 + 选区内段落）/ styles-only（只改样式定义）。分批 500 +
+  // progress + 协作式取消，truncated 只在被取消时为 true。
+  async apply_style_profile(p) {
+    if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
+    const scope = String((p && p.scope) || 'document').toLowerCase();
+    if (scope !== 'document' && scope !== 'selection' && scope !== 'styles-only') {
+      return tableFail("scope must be 'document' | 'selection' | 'styles-only'");
+    }
+    let styles = [];
+    lockModel();
+    try { styles = applyProfileToStyles(); } finally { unlockModel(); }
+    if (scope === 'styles-only') {
+      return Object.assign({ success: true, scope: scope, styles: styles, paragraphs: 0, tables: 0, truncated: false }, styleProfileSummary());
+    }
+    if (scope === 'selection') {
+      const vc = ctrl.getViewCursor();
+      let paras = 0;
+      lockModel();
+      try {
+        const cur = vc.getText().createTextCursorByRange(vc);
+        const en = cur.createEnumeration();
+        while (en.hasMoreElements()) {
+          const el = en.nextElement();
+          if (!(el.supportsService && el.supportsService('com.sun.star.text.Paragraph'))) continue;
+          const k = paraKindOf(el, false, true);
+          applyHousePara(el, k.kind, { level: k.level });
+          applyHouseChar(el, charOptsFor(k));
+          paras++;
+        }
+      } finally { unlockModel(); }
+      return Object.assign({ success: true, scope: scope, styles: styles, paragraphs: paras, tables: 0, truncated: false }, verifySnapshot());
+    }
+    const r = await applyHouseToDocument(p, { trueLevels: true });
+    r.scope = scope;
+    r.styles = styles;
     return r;
   },
   // [流式] markdown 剥离 + 标准格式落字（doc_start_stream 管线的落字端）。
@@ -3707,8 +4094,12 @@ const EXEC = {
     if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
     const target = String((p && p.target) || 'header').toLowerCase();
     if (target !== 'header' && target !== 'footer') return tableFail("target must be 'header' or 'footer'");
-    const text = p && p.text != null ? String(p.text) : null;
-    if (text == null) return tableFail('edit_header_footer requires {text}');
+    // pageNumberPattern：「第 {PAGE} 页 共 {NUMPAGES} 页」→ 文本 + PageNumber/PageCount 域交替，
+    // 接在 text 之后（text 可省略）。
+    const pattern = p && p.pageNumberPattern != null ? String(p.pageNumberPattern) : null;
+    const text = p && p.text != null ? String(p.text) : (pattern != null ? '' : null);
+    if (text == null) return tableFail('edit_header_footer requires {text} or {pageNumberPattern}');
+    if (p && p.fontSize != null && !(Number(p.fontSize) > 0)) return tableFail('bad fontSize: ' + p.fontSize);
     const ALIGN_MAP = { left: css.style.ParagraphAdjust.LEFT, right: css.style.ParagraphAdjust.RIGHT, center: css.style.ParagraphAdjust.CENTER, justify: css.style.ParagraphAdjust.BLOCK };
     let alignValue = null;
     if (p && p.align != null) {
@@ -3716,24 +4107,42 @@ const EXEC = {
       // 先校验参数、后落笔——避免"对齐值非法"时页眉页脚文本已经写了一半
       if (alignValue == null) return tableFail('bad align: ' + p.align + ' (left/right/center/justify)');
     }
-    let styleName = '';
-    try {
-      const vc = ctrl.getViewCursor();
-      const savedRange = vc.getStart();
-      vc.gotoStart(false);
-      styleName = String(vc.getPropertyValue('PageStyleName') || '');
-      vc.gotoRange(savedRange, false);
-    } catch (e) { return tableFail('无法定位页面样式: ' + errStr(e)); }
-    if (!styleName) return tableFail('无法确定文档的页面样式');
-    let pageStyle;
-    try { pageStyle = xModel.getStyleFamilies().getByName('PageStyles').getByName(styleName); }
-    catch (e) { return tableFail('读取页面样式失败: ' + errStr(e)); }
+    const ps = currentPageStyle();
+    if (ps.error) return ps;
+    const pageStyle = ps.pageStyle, styleName = ps.styleName;
     const isOnProp = target === 'header' ? 'HeaderIsOn' : 'FooterIsOn';
     const textProp = target === 'header' ? 'HeaderText' : 'FooterText';
+    let fields = 0;
     try {
       pageStyle.setPropertyValue(isOnProp, true);
       const xt = pageStyle.getPropertyValue(textProp);
       xt.setString(text);
+      if (pattern != null) {
+        const cur = xt.createTextCursor();
+        cur.gotoEnd(false);
+        const re = /\{(PAGE|NUMPAGES)\}/g;
+        let last = 0, m;
+        const ARABIC = (css.style.NumberingType && css.style.NumberingType.ARABIC != null) ? css.style.NumberingType.ARABIC : 4;
+        while ((m = re.exec(pattern))) {
+          if (m.index > last) { xt.insertString(cur, pattern.slice(last, m.index), false); cur.gotoEnd(false); }
+          const f = xModel.createInstance(m[1] === 'PAGE' ? 'com.sun.star.text.TextField.PageNumber' : 'com.sun.star.text.TextField.PageCount');
+          try { f.setPropertyValue('NumberingType', shortAny(ARABIC)); } catch (e) {}
+          if (m[1] === 'PAGE') { try { f.setPropertyValue('SubType', css.text.PageNumberType.CURRENT); } catch (e) {} }
+          xt.insertTextContent(cur, f, false);
+          cur.gotoEnd(false);
+          fields++;
+          last = m.index + m[0].length;
+        }
+        if (last < pattern.length) xt.insertString(cur, pattern.slice(last), false);
+        try { xModel.getTextFields().refresh(); } catch (e) {}
+      }
+      if (p && (p.fontName != null || p.fontSize != null || p.fontNameAsian != null)) {
+        const all = xt.createTextCursor();
+        all.gotoStart(false); all.gotoEnd(true);
+        if (p.fontName != null) { try { setCharProp(all, 'CharFontName', String(p.fontName)); } catch (e) {} }
+        if (p.fontNameAsian != null) { try { all.setPropertyValue('CharFontNameAsian', String(p.fontNameAsian)); } catch (e) {} }
+        if (p.fontSize != null) { try { setCharProp(all, 'CharHeight', Number(p.fontSize)); } catch (e) {} }
+      }
       if (alignValue != null) {
         const en = xt.createEnumeration();
         while (en.hasMoreElements()) {
@@ -3744,7 +4153,88 @@ const EXEC = {
         }
       }
     } catch (e) { return tableFail('设置' + (target === 'header' ? '页眉' : '页脚') + '失败: ' + errStr(e)); }
-    return { success: true, target: target, pageStyle: styleName, text: text };
+    const out = { success: true, target: target, pageStyle: styleName, text: text };
+    if (pattern != null) { out.pageNumberPattern = pattern; out.fields = fields; }
+    return out;
+  },
+  // [页面] 纸张与页边距（单位 mm）：{width, height, orientation: portrait|landscape,
+  // margins: {top, bottom, left, right}}。作用于文档首节页面样式（取法同 edit_header_footer）。
+  // 横向要求宽 > 高：给了 orientation 时按它校正宽高；只给宽高时原样写入。
+  set_page_setup(p) {
+    if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
+    const ps = currentPageStyle();
+    if (ps.error) return ps;
+    const pageStyle = ps.pageStyle;
+    const mm = function (v) { const n = Number(v); return isFinite(n) && n > 0 ? Math.round(n * 100) : null; };
+    const applied = {};
+    let w = p && p.width != null ? mm(p.width) : null;
+    let h = p && p.height != null ? mm(p.height) : null;
+    if ((p && p.width != null && w == null) || (p && p.height != null && h == null)) return tableFail('width/height 必须是正数（mm）');
+    try {
+      if (p && p.orientation != null) {
+        const o = String(p.orientation).toLowerCase();
+        if (o !== 'portrait' && o !== 'landscape') return tableFail("orientation must be 'portrait' or 'landscape'");
+        const land = o === 'landscape';
+        let W = w != null ? w : pageStyle.getPropertyValue('Width');
+        let H = h != null ? h : pageStyle.getPropertyValue('Height');
+        if (land ? W < H : W > H) { const t = W; W = H; H = t; }
+        pageStyle.setPropertyValue('IsLandscape', land);
+        pageStyle.setPropertyValue('Width', W);
+        pageStyle.setPropertyValue('Height', H);
+        applied.orientation = o;
+        if (w != null) applied.width = Number(p.width);
+        if (h != null) applied.height = Number(p.height);
+      } else {
+        if (w != null) { pageStyle.setPropertyValue('Width', w); applied.width = Number(p.width); }
+        if (h != null) { pageStyle.setPropertyValue('Height', h); applied.height = Number(p.height); }
+      }
+      const margins = p && isPlainObj(p.margins) ? p.margins : null;
+      if (margins) {
+        const MP = { top: 'TopMargin', bottom: 'BottomMargin', left: 'LeftMargin', right: 'RightMargin' };
+        const got = {};
+        for (const k of Object.keys(MP)) {
+          if (margins[k] == null) continue;
+          const v = Number(margins[k]);
+          if (!isFinite(v) || v < 0) return tableFail('bad margin ' + k + ': ' + margins[k]);
+          pageStyle.setPropertyValue(MP[k], Math.round(v * 100));
+          got[k] = v;
+        }
+        if (Object.keys(got).length) applied.margins = got;
+      }
+    } catch (e) { return tableFail('页面设置失败: ' + errStr(e)); }
+    if (Object.keys(applied).length === 0) return tableFail('no page setup params given');
+    const rd = function (prop) { try { return Math.round(pageStyle.getPropertyValue(prop)) / 100; } catch (e) { return null; } };
+    return {
+      success: true, pageStyle: ps.styleName, applied: applied,
+      page: { width: rd('Width'), height: rd('Height'), landscape: !!pageStyle.getPropertyValue('IsLandscape'),
+        margins: { top: rd('TopMargin'), bottom: rd('BottomMargin'), left: rd('LeftMargin'), right: rd('RightMargin') } },
+    };
+  },
+  // [目录] 在光标处（position:'start' 时在文首）插入从大纲级别生成的目录
+  // （com.sun.star.text.ContentIndex + update()）。levels 缺省取画像 toc.levels，
+  // title 缺省取画像 toc.title；目录标题段走 Contents Heading 样式（按画像 titleStyle）。
+  insert_toc(p) {
+    if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
+    const levels = Math.max(1, Math.min(Number(p && p.levels) || HOUSE.tocLevels, 10));
+    const title = p && p.title != null ? String(p.title) : HOUSE.tocTitle;
+    const vc = ctrl.getViewCursor();
+    if (p && String(p.position || '').toLowerCase() === 'start') vc.gotoStart(false); else vc.collapseToEnd();
+    let index;
+    try {
+      applyProfileToStylesSafe(['Contents Heading']);
+      const xText = vc.getText();
+      index = xModel.createInstance('com.sun.star.text.ContentIndex');
+      index.setPropertyValue('CreateFromOutline', true);
+      index.setPropertyValue('Level', shortAny(levels));
+      index.setPropertyValue('Title', title);
+      xText.insertTextContent(vc, index, false);
+      index.update();
+    } catch (e) { return tableFail('insert_toc failed: ' + errStr(e)); }
+    let tocText = '';
+    try { tocText = index.getAnchor().getString() || ''; } catch (e) {}
+    const lines = tocText.split(/\r?\n/).filter(function (s) { return s.trim(); });
+    invalidateParaIndex();
+    return { success: true, levels: levels, title: title, entries: Math.max(0, lines.length - 1), text: tocText.slice(0, 400) };
   },
   // 分页符/分节符（Word 语义的"下一页"分节符）。页内插入而非追加：先在光标处
   // 打一个段落断（把光标后的内容推到新段），再给这个新段打上 BreakType（纯分页）

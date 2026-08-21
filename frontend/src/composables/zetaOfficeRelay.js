@@ -65,6 +65,7 @@ export function serveExecutor({ executor, send, subscribe }) {
 const ACTION_BUDGET_MS = {
   load_document: 180000, export_document: 180000,
   find_replace: 120000, apply_house_style: 120000, resolve_all_revisions: 120000, insert_table: 120000,
+  apply_style_profile: 120000,
 }
 
 /**

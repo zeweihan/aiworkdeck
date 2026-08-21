@@ -41,6 +41,9 @@ const DEFAULT_SOFFICE_BASE_URL = 'https://cdn.zetaoffice.net/zetaoffice_latest/'
  * @param {string}   [options.sofficeBaseUrl] LOWA runtime base URL.
  * @param {string}   [options.zetaJsUrl='./zeta.js'] vendored zetajs bridge URL.
  * @param {string}   [options.workerScriptUrl='./office_thread.js'] office worker URL.
+ * @param {string}   [options.houseProfileUrl='./house-default.js'] HOUSE 画像包装脚本
+ *   （scripts/sync-house-profile.mjs 从后端 house-default.json 生成，留下
+ *   self.HOUSE_DEFAULT_JSON），必须先于 worker 载入。
  * @param {string}   [options.fontUrl] optional same-origin CJK font to inject.
  * @param {string[]} [options.fontUrls] optional same-origin CJK fonts (one per
  *        typeface category: sans/serif/kai/fangsong); merged with fontUrl.
@@ -56,6 +59,7 @@ export function bootZetaOffice(options = {}) {
     sofficeBaseUrl = DEFAULT_SOFFICE_BASE_URL,
     zetaJsUrl = './zeta.js',
     workerScriptUrl = './office_thread.js',
+    houseProfileUrl = './house-default.js',
     fontUrl,
     fontUrls,
     // UI language for the LibreOffice chrome (issue #66 follow-up). The engine
@@ -204,7 +208,7 @@ export function bootZetaOffice(options = {}) {
     // The globals `canvas` and `Module` must exist before soffice.js loads.
     const Module = {
       canvas,
-      uno_scripts: [zetaJsUrl, workerScriptUrl],
+      uno_scripts: [zetaJsUrl, houseProfileUrl, workerScriptUrl],
       locateFile: function (path, prefix) { return (prefix || sofficeBaseUrl) + path },
       // ALWAYS an array: LOWA's soffice.js prologue does `if(!("preRun" in
       // Module))Module["preRun"]=[]; Module.preRun.push(...)` — a present-but-

@@ -24,6 +24,7 @@
     "dev:quickapp-webview-union": "uni -p quickapp-webview-union",
     "build:custom": "uni build -p",
     "build:h5": "uni build",
+    "prebuild:zetaoffice": "node scripts/sync-house-profile.mjs",
     "build:zetaoffice": "vite build --config vite.zetaoffice.config.js",
     "build:h5:ssr": "uni build --ssr",
     "build:mp-alipay": "uni build -p mp-alipay",
