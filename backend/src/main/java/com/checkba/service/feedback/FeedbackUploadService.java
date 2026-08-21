@@ -53,8 +53,11 @@ public class FeedbackUploadService {
 
     /** 可注入的传输层（测试替身用）。 */
     public interface Transport {
-        /** @return HTTP 状态码 */
-        int post(String url, String contentType, byte[] body) throws Exception;
+        /** @return 状态码与响应体。**响应体必须带回来**：收件端对业务失败也回 HTTP 200 + {"code":1}，
+         *  只看状态码就会把「云端拒收」读成「已收下」。 */
+        Response post(String url, String contentType, byte[] body) throws Exception;
+
+        record Response(int status, String body) {}
     }
 
     @Autowired
@@ -82,13 +85,16 @@ public class FeedbackUploadService {
 
     private static Transport defaultTransport() {
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
-        return (url, contentType, body) -> client.send(
-                HttpRequest.newBuilder(URI.create(url))
-                        .timeout(Duration.ofSeconds(60))
-                        .header("Content-Type", contentType)
-                        .POST(HttpRequest.BodyPublishers.ofByteArray(body))
-                        .build(),
-                HttpResponse.BodyHandlers.discarding()).statusCode();
+        return (url, contentType, body) -> {
+            HttpResponse<String> resp = client.send(
+                    HttpRequest.newBuilder(URI.create(url))
+                            .timeout(Duration.ofSeconds(60))
+                            .header("Content-Type", contentType)
+                            .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            return new Transport.Response(resp.statusCode(), resp.body());
+        };
     }
 
     public boolean isConfigured() {
@@ -152,20 +158,55 @@ public class FeedbackUploadService {
         writeField(out, boundary, "payload", mapper.writeValueAsString(payload));
         for (FeedbackAttachment a : feedbackService.attachmentsOf(fb.getId())) {
             Path p = feedbackService.attachmentPath(fb.getId(), a.getStoredName());
-            if (!Files.isRegularFile(p)) continue;
+            if (!Files.isRegularFile(p)) {
+                // 附件读不到就静默跳过，会让纯语音/纯截图那条反馈发出一个空 multipart，
+                // 云端按「空反馈」拒收。留一条 WARN，否则这条反馈为什么一直传不上去
+                // 在日志里查不到任何线索。
+                log.warn("反馈 #{} 的附件 {} 不在磁盘上，本次上传将不含它", fb.getId(), a.getStoredName());
+                continue;
+            }
             writeFile(out, boundary, "files", a.getStoredName(),
                     a.getContentType() == null ? "application/octet-stream" : a.getContentType(),
                     Files.readAllBytes(p));
         }
         out.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
 
-        int status = transport.post(uploadUrl, "multipart/form-data; boundary=" + boundary, out.toByteArray());
+        Transport.Response resp = transport.post(uploadUrl, "multipart/form-data; boundary=" + boundary, out.toByteArray());
+        int status = resp.status();
         if (status == 429) {
             // 配额挡下的：标成已上传只会让这条永远消失，宁可下轮再试
             log.debug("反馈 #{} 被云端限流，留待下轮", fb.getId());
             return false;
         }
-        return status >= 200 && status < 300;
+        if (status < 200 || status >= 300) {
+            return false;
+        }
+        // 收件端对业务失败也回 HTTP 200 + {"code":1}（controller 里多处
+        // ResponseEntity.ok(error(...))，例如附件读不到导致正文与附件全空时的「空反馈」）。
+        // 只看状态码就把「云端拒收」读成「已收下」，markUploaded 永久置位——
+        // 这条反馈既不会重传也进不了优化者队列，而用户的「我的反馈」显示已送达。
+        if (isRejectedEnvelope(resp.body())) {
+            log.debug("反馈 #{} 被云端拒收（信封 code 非 0），留待下轮: {}", fb.getId(), abbreviate(resp.body()));
+            return false;
+        }
+        return true;
+    }
+
+    /** 信封里 code 非 0 即视为未收下。解析不出来的按「收下了」处理，别让格式变化把正常上传卡死。 */
+    private boolean isRejectedEnvelope(String body) {
+        if (body == null || body.isBlank()) return false;
+        try {
+            com.fasterxml.jackson.databind.JsonNode node = mapper.readTree(body);
+            com.fasterxml.jackson.databind.JsonNode code = node.get("code");
+            return code != null && code.isNumber() && code.asInt() != 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static String abbreviate(String s) {
+        if (s == null) return "";
+        return s.length() <= 200 ? s : s.substring(0, 200) + "...";
     }
 
     private static void writeField(ByteArrayOutputStream out, String boundary, String name, String value)
