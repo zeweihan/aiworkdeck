@@ -292,9 +292,13 @@ test('AdminPane.handleSave: 请求飞着时二次点击不会重复发出保存�
   assert.equal(vm.saving, false)
 })
 
-test('AdminPane: 两处「保存配置」按钮都绑了 :disabled="saving"（此前只绑 :loading）', () => {
+test('AdminPane: 每个「保存配置」按钮都绑了 :disabled="saving"（此前只绑 :loading）', () => {
+  // 2026-08-21 平台服务面板的保存按钮随 BYOK 表单一起撤掉（dev-board#98），只剩 AI 面板一处；
+  // 口径改成「有几个保存按钮就有几个 :disabled」，别再写死个数。
+  const buttons = (AP_SRC.match(/\$t\('admin\.saveConfigButton'\)/g) || []).length
   const count = (AP_SRC.match(/:disabled="saving"/g) || []).length
-  assert.equal(count, 2, '两处保存按钮都要有 :disabled 绑定，跟 handleSave 的重入闸配套')
+  assert.ok(buttons >= 1, '至少得有一个保存按钮')
+  assert.equal(count, buttons, '每个保存按钮都要有 :disabled 绑定，跟 handleSave 的重入闸配套')
 })
 
 // ======================================================================

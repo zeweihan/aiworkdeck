@@ -95,8 +95,20 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
   - `pages/wizard/wizard.vue` 的 `providerOptions`——`AWD_CLOUD` **恒可选**，选中就地展开连接块把条件补齐，
     闸门挪到 `handleSubmit`（见下方地雷 15：向导里的每一条「下一步」都必须能在向导里做完）。
     向导刻意不预选任何供应商，见下方地雷 14。
+    **2026-08-21 起向导也收敛成官方版形态（dev-board#98）**：`providerOptions` / OLLAMA 探测 /
+    OpenRouter Key 输入整体删除，步骤 1 改成「连接账户」直述（沿用原 AWD_CLOUD 选中后展开的连接块
+    + 跨境同意框），`buildPayload` 固定 `ai.activeProvider='AWD_CLOUD'`，只带 `crossBorderConsent`，
+    **不带 `external` / `ollama*` 字段**（`toSettingsUpdates` 对 null 一律跳过，存量 key 不被清空）。
+    `handleSubmit` 三道闸原样保留：未连账户 / Credits 为 0 / 未勾同意都拦提交。
+    `probeOllama` 的 api.js 封装与后端 `/api/ai/ollama/probe` 端点保留，前端已无调用方。
 - 供应商自 2026-08 收敛为**三档**：`AWD_CLOUD`（平台通道）/ `OPENROUTER`（自备 Key）/ `OLLAMA`
-  （本地，离线实验档，只支持 ASK）。`GEMINI` 已下线（Google Key 三个字段与 `external.google.*` 键一并删除，
+  （本地，离线实验档，只支持 ASK）。**2026-08-21 起产品只有官方版（dev-board#98）：桌面端设置页
+  前端不露 BYOK——供应商单选、OpenRouter Key、Ollama 字段、平台服务的 21 个 BYOK 凭证表单全部从
+  `AdminPane.vue` 删掉，`form` 不再回传 `external` / `ollama*`（`toSettingsUpdates` 跳过 null，
+  存量 key 不被清空）；后端三档枚举、设置键、`ExternalProviderBackfill` 等分支一律保留。
+  老用户库里 `ai.activeProvider` 仍是 OLLAMA/OPENROUTER 时，AI 面板顶部给「当前仍在使用旧的
+  供应商设置」+「切换到官方通道」一键切回（走既有保存路径，跨境同意闸照旧把关）。本地部署版
+  另开发，不在主线。下面提到「admin 页的 aiProviderOptions」之处都是这次之前的形态。**`GEMINI` 已下线（Google Key 三个字段与 `external.google.*` 键一并删除，
   Gemini 系列模型经 OpenRouter 的 `google/*` 仍可用）。两个入口的取值合法性由
   `AdminConfigController.toSettingsUpdates` 统一校验（非三档枚举直接 400），
   存量 DB 里的 `ai.activeProvider=GEMINI` 由 `ChatModelFactory` 的启动期迁移改写成 `OLLAMA`。
@@ -535,14 +547,16 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     `account-login/send-code` 还把「尝试」记在出站之前（与 `/sms/send-code?scene=login` 相反——
     那条身后有用户名口令挡着），否则一串无效手机号就能免费换来等量对官网出站，IP 额度永远耗不尽。
 
-14. **首启向导不预选 AI 供应商**。曾经预选「本地 Ollama」，没装 Ollama 的用户一路点「完成设置」，
+14. **首启向导不预选 AI 供应商**（2026-08-21 起向导已无供应商单选，本条只剩后端 `WizardController`
+    拒空 `activeProvider` 那一道仍在生效；历史如下）。曾经预选「本地 Ollama」，没装 Ollama 的用户一路点「完成设置」，
     要到发第一条消息才收到 Connection refused（`ChatModelFactory` 只在 OPENROUTER 下防回退 Ollama，
     反向没有保护）。现在 `activeProvider` 初值是空串、由用户显式选，唯一的例外是「已连接账户且已分配额度」
     时自动预选平台通道——用账户 Key 解锁的人买的就是这条通道，不该再被引导去配别家的 Key。
     向导提交前的空值拦截在 `handleSubmit`，后端 `WizardController` 也拒空 `activeProvider`（两道都在才算数）。
     取值本身的合法性（三档枚举）在 `AdminConfigController.toSettingsUpdates`，两个入口共用。
 
-15. **向导里每一条「下一步」都必须能在向导里做完**。平台通道曾经在未连接账户时置灰 +
+15. **向导里每一条「下一步」都必须能在向导里做完**（规则仍然有效；下文的 Ollama 探测实例
+    已随 2026-08-21 官方版收敛从向导里删除，只留作此规则的历史例证）。平台通道曾经在未连接账户时置灰 +
     提示「进入产品后在系统管理粘贴 Key」——那是死路：试用码解锁的用户在向导里无论如何都点不亮它，
     只能先随便选一家凑合。现在 `AWD_CLOUD` 恒可选，选中就地展开连接块（`handleConnectAccount` 调
     `POST /api/account/connect`，与 admin 页 `onConnectAccount` 同链路：连接 → 重取状态 →
@@ -704,11 +718,13 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
   后端多出的服务以 key 原样显示，不静默漏掉。`LOCAL_TIER_READY.asr=false` 是**本地 ASR 未随包
   发出**的唯一开关，P3 落地时连同「切换时就地探一次 + 下载模型」一起翻牌。
 - `frontend/src/locales/{zh-CN,en-US}/platform.js` — 新命名空间，向导与 admin 面板共用。
-- `frontend/src/pages/admin/admin.vue` 的 `platform` 面板 — 七行档位 + 每行的
-  「使用自己的 Key（高级）」折叠区（**21 个 BYOK 字段从「系统配置」搬到了这里**，
-  `config` 面板只剩 OpenRouter 那两个）。深链 `?nav=platform&service=<key>` 就地展开某一项。
+- `frontend/src/components/admin/AdminPane.vue` 的 `platform` 面板 — 七行档位（platform / local 两档）。
+  **2026-08-21 起前端不露 BYOK**：「使用自己的 Key（高级）」折叠区与 21 个凭证字段已删，
+  生效值为 byok 时只在下拉里如实显示。深链 `?nav=platform&service=<key>` 只落到面板本身。
 - `frontend/src/pages/wizard/wizard.vue` 步骤 2 — 从三组共 9 个输入框换成「平台服务总览 +
-  就地连账户」，默认展开，**不拦提交**（向导只拦 AI 供应商那一项）。
+  就地连账户」，默认展开，**不拦提交**（向导只拦步骤 1 的账户/同意那几项）。
+  2026-08-21 起步骤 2 不再渲染第二个连接块（步骤 1 的连接块现在恒常在），未连账户时只指一句
+  「在上方连接账户」；「使用自己的 Key（高级）」指路文案与 `servicesAdvancedHint` 键一并删除。
 - `frontend/src/components/MeetingRecordingPanel.vue` — 录音开始**之前**显示档位与就绪状态，
   「录音不出本机」开关在本地引擎就绪前一律置灰（理由见地雷 33）。
 - `frontend/src/services/api.js` 的 `getPlatformServices` / `setPlatformServiceProvider`。

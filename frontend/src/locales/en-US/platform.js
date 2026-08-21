@@ -31,30 +31,21 @@ export default {
   tierLocal: 'On this device',
   tierNeedsAccount: 'Account needed',
   tierDisabled: 'Not available yet',
-  tierDisabledNote: "We have not opened this service yet — it is not an error. "
-    + 'If you need it now, expand below and use your own key.',
+  tierDisabledNote: 'We have not opened this service yet; it is not an error. It will be usable here once it opens.',
   holdNotice: '{credits} Credits are reserved by a transcription in progress; the final amount is settled when it finishes.',
   tierPlatformNote: 'Sourced by AI WorkDeck and billed as Credits from your account balance by usage, so you never open a vendor account yourself.',
   tierLocalNote: 'Runs on this device. Nothing leaves the machine and no Credits are used.',
 
   // ---- The three global states ----
   notConnectedTitle: 'No account connected yet',
-  notConnectedBody: 'Platform-sourced services settle against your website account. Paste an account key starting with awdk_ on the account page to connect. You can also work without one by switching each service below to your own key.',
+  notConnectedBody: 'Platform-sourced services settle against your website account. Paste an account key starting with awdk_ on the account page to connect.',
   goConnect: 'Connect an Account',
   serverModeTitle: 'This deployment does not offer platform-sourced services',
-  serverModeBody: 'Team servers and cloud instances always use your own keys: external services there are shared machine-wide, so platform sourcing would bill an entire firm to one account. Enter each credential under "Use your own key (advanced)" below.',
+  serverModeBody: 'Team servers and cloud instances use keys configured on the server: external services there are shared machine-wide, so platform sourcing would bill an entire firm to one account.',
   loadFailed: 'Could not read platform service status. Try again later.',
   switchFailed: 'Could not switch. Try again later.',
   switched: 'Switched',
 
-  // ---- Your-own-key fold ----
-  useOwnKey: 'Use your own key (advanced)',
-  switchToOwnKey: 'Use your own key',
-  expand: 'Expand',
-  collapse: 'Collapse',
-  byokPresentNote: 'This device already holds a key for this service and is using it. Switch to platform-sourced if you would rather drop your own account.',
-  byokMissingNote: 'Fill in the credentials below before switching to your own key, otherwise this service will be unavailable.',
-  saveHint: 'Credential changes need the "Save Settings" button below; tier switches apply immediately and need no save.',
 
   // ---- This month's spend (the number next to each service) ----
   // Unknown always renders as a dash, never as 0 -- same rule as ai-usage. A 0 states a

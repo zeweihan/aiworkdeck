@@ -451,23 +451,36 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
   （`.cloud-help-card`，`admin.cloudNoServerTitle` 起五条文案）：说清案件库是律所自建的一台
   服务器、三个框分别填什么、账号不是 aiworkdeck.com 那个、以及本机只存令牌不存密码。
   在此之前界面对这些只字未提，没部署过服务器的人打开只会发呆（维护者 2026-08-18 亲自问到）。
-- admin 的「AI 功能设置」面板（nav key `ai`）是 AI 供应商与模型的唯一设置入口：三档供应商单选、
+- admin 的「AI 功能设置」面板（nav key `ai`）是 AI 模型设置的唯一入口。**2026-08-21 起产品只有
+  官方版（dev-board#98）：前端不露 BYOK，后端分支与设置键原样保留**。面板里只剩
   默认/辅助/子 Agent 三个模型下拉（清单来自 `GET /api/ai/models`，前端不许硬编码）、网络区域三选一
-  （auto/境内/境外，附判定依据）、本地 Ollama 的地址与模型名。nav 结构未变，改的是该面板内容；
+  （auto/境内/境外，附判定依据）、跨境传输同意勾选（原来只在 AWD_CLOUD 下显示，现在恒显示）。
+  **供应商三选单、OpenRouter Key/Base URL、本地 Ollama 地址/模型名都从 `AdminPane.vue` 删掉了**
+  （连同 `aiProviderOptions` / `onPickProvider` / `accountOutOfCredits` 与对应 i18n 键）。
+  兜底：后端回来的 `form.ai.activeProvider` 不是 `AWD_CLOUD`（老用户以前切过）时，
+  面板顶部渲染 `legacyProvider` 提示条 + 「切换到官方通道」（`switchToOfficialChannel`：
+  置 AWD_CLOUD 走既有 `handleSave`；没勾跨境同意先 toast 拦下，后端 `crossBorderBlockReason`
+  仍把关）。`handleSave` 因此返回布尔值，失败时把 activeProvider 还原。
+  **`form` 不再带 `external` 与 `ollama*` 字段**——`AdminConfigController.toSettingsUpdates`
+  对 null/缺省字段跳过不写（`putIfPresent`），老用户库里的 key 不会被清空；空串才是「显式清空」。
   契约与键名见 ai-chat.md 与 licensing-billing.md。
-- admin 的「平台服务」面板（nav key `platform`，**非 desktopOnly**）是七项外部服务的档位与凭证入口
-  （平台服务网关 P5）。**七家的 21 个 BYOK 字段已从「系统配置」搬到这里**，收在每项的
-  「使用自己的 Key（高级）」折叠区里；「系统配置 → 外部服务」只剩 OpenRouter 那两个字段
-  （它属于 AI 那条通路）。三处必须一起看的约束：
+- admin 的「平台服务」面板（nav key `platform`，**非 desktopOnly**）是七项外部服务的档位入口
+  （平台服务网关 P5）。**2026-08-21 起只有官方版：「使用自己的 Key（高级）」折叠区与七家 21 个
+  BYOK 凭证表单整个删掉**（`platformByokOpen` / `togglePlatformByok` / `hasByokCredentials` 一并走），
+  面板里也没有「保存配置」按钮了（只剩即时写库的档位下拉与自带保存的花费提醒）。
+  档位只露 platform / local 两档（local 是 ASR 的本地隐私档，要留）；生效值若是 byok
+  （老用户、或非 local-mode 下后端把 platform 解析成 byok），`platformServiceRows` 会把它
+  补进下拉清单让它显示出来，**不让界面空白**（`platform.tierByok` 键因此保留，向导也在用）。
+  `initialService` prop 宿主仍会传，但深链 `?nav=platform&service=ocr` 现在只落到面板本身。
+  三处必须一起看的约束：
   ① 当前档位一律读 `GET /api/platform-services` 的 `provider`（后端解析后的**生效值**），
      不要按凭证是否为空去猜——存量机器上这两件事经常对不上；
   ② `platformAvailable=false`（团队服务器/云端实例）时「平台代采」这个选项**整个不出现**并给说明，
      不是摆一个置灰项（决策 D5）；
   ③ 档位切换**立刻写库**（`POST /api/platform-services/{service}/provider`），不跟着「保存配置」按钮走；
-     凭证字段仍走 `handleSave` 的整表回传。
+     面板里已没有走 `handleSave` 的字段。
   服务的展示元数据（名字/描述/本地档就不就绪）在 `frontend/src/config/platformServices.js`，
   文案在新命名空间 `locales/{zh-CN,en-US}/platform.js`（首启向导步骤 2 与本面板共用）。
-  深链 `?nav=platform&service=ocr` 会就地展开那一项的折叠区——网关错误提示的逃生门指的就是它。
 - 首启向导（`pages/wizard/wizard.vue`）步骤 2 已从「OCR / 语音 / 企业数据」三组共 9 个输入框
   换成「平台服务总览 + 就地连接账户」，**默认展开**（这一段的意义就是让用户看见「其余七项不用配」）。
   它**不拦提交**：没连账户照样能完成设置，向导只拦 AI 供应商那一项（既有行为）。

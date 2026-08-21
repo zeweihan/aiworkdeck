@@ -32,29 +32,21 @@ export default {
   // 平台侧尚未开放这一项（合同/账号未就绪）。**不是故障**——说成故障会让用户
   // 反复重试一件永远不会成功的事，而他真正能做的是改用自己的 Key。
   tierDisabled: '未开放',
-  tierDisabledNote: '这项服务我们还没有开放，不是出错了。需要现在就用的话，展开下面填自己的 Key。',
+  tierDisabledNote: '这项服务我们还没有开放，不是出错了。开放后会在这里直接可用。',
   holdNotice: '有 {credits} Credits 正被一项进行中的转写任务占用，完成后按实际用量结算。',
   tierPlatformNote: '由 AI WorkDeck 统一采购，按用量折算 Credits 从账户余额扣，你不用自己去开账号。',
   tierLocalNote: '在本机运行，数据不出本机，不消耗 Credits。',
 
   // ---- 三种全局状态 ----
   notConnectedTitle: '尚未连接账户',
-  notConnectedBody: '平台代采要用官网账户结算。在账户页粘贴一枚 awdk_ 开头的账户 Key 即可连接；不连接也能工作，把下面各项改成自备 Key 就行。',
+  notConnectedBody: '平台代采要用官网账户结算。在账户页粘贴一枚 awdk_ 开头的账户 Key 即可连接。',
   goConnect: '去连接账户',
   serverModeTitle: '本机形态不支持平台代采',
-  serverModeBody: '团队服务器与云端实例统一使用自备 Key：那里的外部服务是整台机器共账的，平台代采会把全所的用量记到同一个账户上。各项凭证在下面各自的「使用自己的 Key（高级）」里填。',
+  serverModeBody: '团队服务器与云端实例统一使用服务器侧配置的 Key：那里的外部服务是整台机器共账的，平台代采会把全所的用量记到同一个账户上。',
   loadFailed: '读取平台服务状态失败，稍后重试',
   switchFailed: '切换失败，稍后重试',
   switched: '已切换',
 
-  // ---- 自备 Key 折叠区 ----
-  useOwnKey: '使用自己的 Key（高级）',
-  switchToOwnKey: '改用自己的 Key',
-  expand: '展开',
-  collapse: '收起',
-  byokPresentNote: '本机已存有这项服务的 Key，当前正在使用它。想省掉自己的账号可以切到平台代采。',
-  byokMissingNote: '切到自备 Key 之前，先在下面填好这项服务的凭证，否则它会处于不可用状态。',
-  saveHint: '改完凭证要点下方的「保存配置」；档位切换是即时生效的，不用保存。',
 
   // ---- 本月消耗（每项服务旁边那个数字）----
   // 取不到时一律显示破折号，**不显示 0**：同 ai-usage 那条既有口径。
