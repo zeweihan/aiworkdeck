@@ -5,7 +5,10 @@ import com.checkba.repository.*;
 import com.checkba.storage.StorageServiceFactory;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
@@ -16,6 +19,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.UUID;
 
@@ -34,6 +38,28 @@ public class DdService {
     private final ProjectFileRepository projectFileRepository;
     private final ProjectFileService projectFileService;
     private final StorageServiceFactory storageServiceFactory;
+
+    /**
+     * 本 bean 的懒加载自身代理，只为让 {@link #ensureFolderTx} 经 Spring 的事务代理真正开出
+     * 独立新事务——写法与 {@link ProjectProfileService#self} 同一套。
+     */
+    @Autowired
+    @Lazy
+    DdService self;
+
+    /**
+     * ensureFolder 按 (projectId, parentId, name) 序列化「查是否已有 + 没有就建」这段临界区。
+     * uploadFile 本身带 @Transactional，如果只在这个既有事务里加一把进程内锁——锁在方法
+     * 返回时就释放，而 createFolder 的插入要到 uploadFile 整个方法返回、AOP 代理提交时才
+     * 真正落库；第二个线程拿到锁后即使重新查库，看到的仍是第一个线程未提交的旧状态，
+     * 照样会插出重复文件夹。project_file 表按团队约定不加 (project_id, parent_id, name)
+     * 唯一约束（ddl-auto: update + 可能已有重复数据，风险大于收益），所以也没有「插入撞约束
+     * 后重查」这条退路可用。于是锁必须包住一个自己独立提交的新事务：ensureFolder 只做
+     * 加锁与转发，真正的查+建放进 {@link #ensureFolderTx}（REQUIRES_NEW，挂起
+     * uploadFile 的外层事务、自己开一个物理事务并在方法返回时提交），锁直到这个子事务
+     * 提交之后才释放，下一个等锁的线程进来时数据库里已经是提交后的真实状态。
+     */
+    private final ConcurrentHashMap<String, Object> ensureFolderLocks = new ConcurrentHashMap<>();
 
     /**
      * 获取项目的尽调请求列表
@@ -296,6 +322,15 @@ public class DdService {
     }
 
     private ProjectFile ensureFolder(Long projectId, Long parentId, String name, Long userId) {
+        String key = projectId + "/" + parentId + "/" + name;
+        Object lock = ensureFolderLocks.computeIfAbsent(key, k -> new Object());
+        synchronized (lock) {
+            return self.ensureFolderTx(projectId, parentId, name, userId);
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    ProjectFile ensureFolderTx(Long projectId, Long parentId, String name, Long userId) {
         Optional<ProjectFile> folderOpt = projectFileRepository.findByProjectIdAndParentIdAndName(projectId, parentId, name);
         if (folderOpt.isPresent()) {
             return folderOpt.get();

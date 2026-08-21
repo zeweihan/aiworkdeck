@@ -106,11 +106,19 @@ public class StageQuotaService {
         if (!limited()) return;
         if (!isStagingFolder(targetParentId)) return;
 
+        // 悲观行锁：把接下来的「查当前用量 + 判断放行」钉进调用方（move/batchMove，都是
+        // @Transactional）已经开着的那个事务里。这里不能用进程内锁（synchronized）代替——
+        // 那种锁在本方法返回时就会释放，而 move/batchMove 真正的写入要等外层 @Transactional
+        // 方法整体返回、AOP 代理提交时才落库；第二个并发请求拿到进程锁后即使重新查库，
+        // 看到的仍是第一个请求尚未提交的旧用量，两边都会放行，合计超额（审计原话描述的
+        // 竞态）。行锁不同：它与事务同生命周期，第二个请求的锁获取会一直阻塞到第一个请求
+        // 的事务提交（或回滚）为止，锁到手时数据库里已经是提交后的真实用量。
+        ProjectFile stagingFolder = projectFileRepository.lockById(targetParentId).orElse(null);
+
         // 缓存区所属项目：跨项目的 id 一律不参与计算。批量移动的归属校验在
         // ProjectFileService 的循环里（逐个 move 之前），比本方法晚；不在这里划清项目边界的话，
         // 越权探测者能靠「是否被额度拒绝」推断出别人项目里某个文件的大小。
-        Long stageProjectId = projectFileRepository.findById(targetParentId)
-                .map(ProjectFile::getProjectId).orElse(null);
+        Long stageProjectId = stagingFolder == null ? null : stagingFolder.getProjectId();
 
         Subtree existing = subtree(stageProjectId, targetParentId);
         long count = existing.files().size();

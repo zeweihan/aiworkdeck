@@ -2,6 +2,8 @@ package com.checkba.repository;
 
 import com.checkba.model.entity.ProjectFile;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
 
 import java.util.List;
 import java.util.Optional;
@@ -11,6 +13,16 @@ public interface ProjectFileRepository extends JpaRepository<ProjectFile, Long> 
      * 根据项目 ID 查询所有文件（包含已删除），用于文件树清单采集
      */
     List<ProjectFile> findByProjectId(Long projectId);
+
+    /**
+     * 悲观行锁读取（SELECT ... FOR UPDATE）。用于把「查当前用量 + 判断放行」钉进调用方
+     * 已经开着的那个事务里：行锁与事务同生命周期，提交/回滚前不释放——不像进程内锁那样
+     * 在方法返回时就提前释放，能正确堵住 check-then-act 竞态（见 StageQuotaService.checkAdmission
+     * 的用法与注释）。三个受支持的数据库（H2/PostgreSQL/MySQL）都支持 FOR UPDATE。
+     */
+    @Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT pf FROM ProjectFile pf WHERE pf.id = :id")
+    Optional<ProjectFile> lockById(Long id);
 
     /**
      * 根据项目 ID 和父文件夹 ID 查询文件列表（按排序序号排序，排除已删除）

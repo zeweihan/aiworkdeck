@@ -253,6 +253,65 @@ class LocalProjectServiceTest {
     }
 
     /**
+     * Files.walkFileTree 的 maxDepth 参数在深度封顶时是"静默"的：preVisitDirectory/visitFile
+     * 对超出 MAX_IMPORT_DEPTH 的目录/文件根本不会被调用，没有任何一次遍历回调会执行到"置位
+     * truncated"这行代码——与 MAX_IMPORT_ENTRIES 上限不同，那个上限的判断天然长在每次回调
+     * 内部，有机会置位。深层文件因此永远静默不进文件树，无日志无 API 信号。
+     */
+    @Test
+    void reportsTruncationWhenNestingExceedsMaxDepth(@TempDir Path folder) throws Exception {
+        Path deepest = folder;
+        for (int i = 1; i <= LocalProjectService.MAX_IMPORT_DEPTH + 1; i++) {
+            deepest = deepest.resolve("d" + i);
+        }
+        Files.createDirectories(deepest);
+        Files.writeString(deepest.resolve("leaf.txt"), "x");
+
+        LocalProjectService.OpenLocalResult r = svc.openLocalFolder(folder.toString(), false, null, null, 1L);
+
+        assertTrue(r.truncated(),
+                "深度超过 MAX_IMPORT_DEPTH 时必须报出截断，否则深层文件永远静默不进文件树且无任何信号");
+    }
+
+    /**
+     * macOS 默认的 APFS/HFS+ 等大小写不敏感、大小写保留的文件系统上，仅改大小写的重命名
+     * （"Docs" -> "docs"）之后：importFolder 的 rowKey 按大小写敏感比对，识别不出这是同一个
+     * 物理目录，会为新大小写建一个新行；而删除同步那一侧，旧行的 Files.exists(root.resolve("Docs"))
+     * 在大小写不敏感文件系统上依然为 true（不敏感匹配命中了同一个物理目录），永远不会被判定
+     * 为缺失——旧行从此成为再也清不掉的永久幽灵行。
+     *
+     * 只在真正大小写不敏感、大小写保留的文件系统上才能复现，用探测式 Assumption 而不是按
+     * 操作系统名称猜测（CI 若跑在大小写敏感的文件系统上，用例据此跳过，不制造假红/假绿）。
+     */
+    @Test
+    void caseOnlyRenameOnCaseInsensitiveFsRetiresStaleGhostRow(@TempDir Path folder) throws Exception {
+        Files.createDirectories(folder.resolve("Docs"));
+        Long projectId = svc.openLocalFolder(folder.toString(), false, null, null, 1L).project().getId();
+
+        boolean caseInsensitiveAndPreserving = Files.exists(folder.resolve("docs"));
+        org.junit.jupiter.api.Assumptions.assumeTrue(caseInsensitiveAndPreserving,
+                "当前文件系统大小写敏感，跳过（此缺陷只在大小写不敏感盘上出现）");
+
+        // 大小写重命名不能直接 Files.move("Docs", "docs")：在 APFS 这类大小写不敏感盘上，
+        // rename(2) 系统调用发现新旧路径解析到同一个物理目录时按 POSIX 语义直接判定"无事可做"，
+        // 连显示大小写都不会更新（实测：mv 走 Finder/shell 的两步改名会真的生效，
+        // 直接单步 Files.move 则是空操作）——这里用同样的"先改到临时名、再改成目标名"
+        // 两步手法，制造出与真实 Finder 改名完全相同的终态：磁盘上的真实大小写已经是 "docs"。
+        Path tmp = folder.resolve("Docs__awd_test_tmp__");
+        Files.move(folder.resolve("Docs"), tmp);
+        Files.move(tmp, folder.resolve("docs"));
+
+        svc.reconcileProject(projectId);
+
+        List<ProjectFile> aliveFolders = projectFileRepository.findByProjectId(projectId).stream()
+                .filter(f -> Boolean.TRUE.equals(f.getIsFolder()) && !Boolean.TRUE.equals(f.getIsDeleted()))
+                .toList();
+        assertEquals(1, aliveFolders.size(),
+                "改大小写重命名后应只剩一个存活的文件夹行，旧大小写那行必须被对账清掉: " + aliveFolders);
+        assertEquals("docs", aliveFolders.get(0).getName(), "存活的应该是新大小写那一行");
+    }
+
+    /**
      * 全链路冒烟：文件系统事件 → 防抖 → reconcileProject → 落库。
      * NOT_SUPPORTED：默认测试事务不提交，watcher 线程的新事务看不见项目行，链路必假。
      *
