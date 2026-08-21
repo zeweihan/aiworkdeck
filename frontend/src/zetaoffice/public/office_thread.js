@@ -198,17 +198,48 @@ function paragraphTextOf(range) {
     return cur.getString();
   } catch (e) { return null; }
 }
-// Enumerate body paragraphs, calling fn(el, index); fn returns true to stop.
-function eachParagraph(fn) {
+// ---- 段落索引缓存（dev-board#108 G3）------------------------------------------
+// 每次 get_document_text / get_paragraph 都从头枚举 900+ 段是 O(n)（150 页实测
+// 2-5s/次，AI 逐页读一遍报告 = 每页付一次全扫）。这里一次枚举把每段的 XTextRange
+// （段落对象本身，引擎里是带标记的活对象，内容变了它跟着变）存进数组，之后按
+// 下标 O(1) 取。失效规则：(1) modified 监听器——任何文档改动都会触发，这是主闸；
+// (2) 索引绑定 xModel 引用，换文档（load_document / 测试探针直接换 xModel）自然
+// 重建；(3) 写原语末尾的 verifySnapshot 再补一刀。段落被删后旧对象会抛异常，
+// withParaIndex 捕到就重建一次再读，仍失败才冒泡。
+const paraIndex = { model: null, ranges: null, total: 0 };
+function invalidateParaIndex() { paraIndex.ranges = null; paraIndex.total = 0; paraIndex.model = null; }
+function buildParaIndex() {
+  const ranges = [];
   const en = xModel.getText().createEnumeration();
-  let i = 0;
   while (en.hasMoreElements()) {
     const el = en.nextElement();
-    if (el.supportsService && el.supportsService('com.sun.star.text.Paragraph')) {
-      if (fn(el, i)) return;
-      i++;
-    }
+    if (el.supportsService && el.supportsService('com.sun.star.text.Paragraph')) ranges.push(el);
   }
+  paraIndex.ranges = ranges; paraIndex.total = ranges.length; paraIndex.model = xModel;
+  return paraIndex;
+}
+function getParaIndex() { return (paraIndex.ranges && paraIndex.model === xModel) ? paraIndex : buildParaIndex(); }
+// fn(index) 只许做读操作——段落对象失效抛异常时会重建索引再调一次 fn。
+function withParaIndex(fn) {
+  try { return fn(getParaIndex()); }
+  catch (e) { invalidateParaIndex(); return fn(getParaIndex()); }
+}
+// 取第 idx（0 基）段，顺手 getString 验活；越界返回 null。写原语先用它拿段落，
+// 再在 withParaIndex 之外改，免得重试把副作用做两遍。
+function paraAt(idx) {
+  return withParaIndex(function (ix) {
+    const el = ix.ranges[idx];
+    if (!el) return null;
+    el.getString();
+    return el;
+  });
+}
+// Enumerate body paragraphs, calling fn(el, index); fn returns true to stop.
+// 走索引缓存：fn 里只做读（见 withParaIndex）。
+function eachParagraph(fn) {
+  withParaIndex(function (ix) {
+    for (let i = 0; i < ix.total; i++) { if (fn(ix.ranges[i], i)) return; }
+  });
 }
 // Select a range THE WAY A HUMAN WOULD: the view cursor jumps there (the view
 // scrolls to it) and the selection is visibly painted. gotoRange(range, false)
@@ -502,6 +533,7 @@ const UI_COMMANDS = {
 // Shared verification snapshot returned by mutating commands: where the cursor
 // is now + the paragraph as it reads AFTER the edit ("改完看一眼").
 function verifySnapshot() {
+  invalidateParaIndex(); // 写原语刚改过文档，段落索引不可信（modified 监听器之外再补一刀）
   try {
     const vc = ctrl.getViewCursor();
     return { paragraphAfterEdit: paragraphTextOf(vc), selectedText: vc.getString() };
@@ -565,8 +597,26 @@ const HOUSE = {
 };
 // 把标准字符属性设到一个 property set（视图光标/文本光标/段落/单元格文本）上。
 // 只动传入 opts 声明的维度；weight 每次都设（run 级粗体开关需要确定性）。
+// 一次 XMultiPropertySet.setPropertyValues 代替 N 次 setPropertyValue：全文格式化
+// 的成本就是 UNO 往返次数（920 段 x 十几个属性 + 30 表 x 60 格），批写把往返数砍到
+// 约 1/10。对象不支持或任一属性被拒就返回 false，调用方退回逐个写的老路径
+//（逐个写本身幂等，重复一遍不会改坏）。
+function setPropsBatch(ps, names, values) {
+  if (!ps || typeof ps.setPropertyValues !== 'function') return false;
+  try { ps.setPropertyValues(names, values); return true; } catch (e) { return false; }
+}
 function applyHouseChar(ps, opts) {
   const o = opts || {};
+  const names = ['CharFontName', 'CharFontNameAsian', 'CharFontNameComplex',
+    'CharHeight', 'CharHeightAsian', 'CharHeightComplex', 'CharColor'];
+  const values = [HOUSE.fontWestern, HOUSE.fontAsian, HOUSE.fontWestern,
+    o.sizePt || HOUSE.bodyPt, o.sizePt || HOUSE.bodyPt, o.sizePt || HOUSE.bodyPt, 0x000000];
+  if (!o.keepWeight) {
+    const w = o.bold ? css.awt.FontWeight.BOLD : css.awt.FontWeight.NORMAL;
+    names.push('CharWeight', 'CharWeightAsian', 'CharWeightComplex');
+    values.push(w, w, w);
+  }
+  if (setPropsBatch(ps, names, values)) return;
   try { ps.setPropertyValue('CharFontName', HOUSE.fontWestern); } catch (e) {}
   try { ps.setPropertyValue('CharFontNameAsian', HOUSE.fontAsian); } catch (e) {}
   try { ps.setPropertyValue('CharFontNameComplex', HOUSE.fontWestern); } catch (e) {}
@@ -582,6 +632,19 @@ function applyHousePara(ps, kind, opts) {
   const o = opts || {};
   const isTitle = kind === 'title';
   const isCell = kind === 'tableCell';
+  {
+    const indent0 = (isTitle || isCell || kind === 'list') ? 0 : ptToMm100(HOUSE.indentChars * HOUSE.bodyPt);
+    const names = ['ParaAdjust', 'ParaTopMargin', 'ParaBottomMargin', 'ParaLineSpacing', 'ParaFirstLineIndent'];
+    const values = [
+      isTitle ? css.style.ParagraphAdjust.CENTER : css.style.ParagraphAdjust.BLOCK,
+      isCell ? HOUSE.tableParaSpaceMm : (o.afterTable ? HOUSE.afterTableBeforeMm : 0),
+      isCell ? HOUSE.tableParaSpaceMm : HOUSE.spaceAfterMm,
+      new css.style.LineSpacing({ Mode: css.style.LineSpacingMode.MINIMUM, Height: isCell ? HOUSE.tableLineMinMm : HOUSE.lineMinMm }),
+      indent0,
+    ];
+    if (!isCell) { names.push('ParaLeftMargin', 'ParaRightMargin'); values.push(0, 0); }
+    if (setPropsBatch(ps, names, values)) return;
+  }
   try { ps.setPropertyValue('ParaAdjust', isTitle ? css.style.ParagraphAdjust.CENTER : css.style.ParagraphAdjust.BLOCK); } catch (e) {}
   try { ps.setPropertyValue('ParaTopMargin', isCell ? HOUSE.tableParaSpaceMm : (o.afterTable ? HOUSE.afterTableBeforeMm : 0)); } catch (e) {}
   try { ps.setPropertyValue('ParaBottomMargin', isCell ? HOUSE.tableParaSpaceMm : HOUSE.spaceAfterMm); } catch (e) {}
@@ -1473,17 +1536,38 @@ let exportInFlight = false;
 // that sees them all. The editor page throttles and relays the signal to the
 // host, which debounce-saves (LibreOfficeEditor.autoSave). isModified() filters
 // out the broadcast a later setModified(false) would emit.
+// 批量命令期间摘下/装回的把手（见 suspendModifyListener）。
+let modifyListener = null;
 function installModifyListener(model) {
   const listener = zetajs.unoObject([css.util.XModifyListener], {
     // exportInFlight：storeToURL 自己会把文档标成 modified（见 export_document）。
     // 不挡掉的话每次自动保存都会引出一次 modified，宿主据此再排一次保存——
     // 实测形成每 3 秒一轮的「保存→modified→保存」死循环，整份 docx 反复上传，
     // 且 export 是全文档同步序列化，会周期性冻住 Qt 事件循环。
-    modified() { try { if (exportInFlight) return; if (model.isModified()) post('modified'); } catch (e) { /* ignore */ } },
+    modified() { invalidateParaIndex(); try { if (exportInFlight) return; if (model.isModified()) post('modified'); } catch (e) { /* ignore */ } },
     disposing() {},
   });
   model.addModifyListener(listener);
+  modifyListener = listener;
   log('XModifyListener 已装 / installed — 文档修改将上报宿主触发自动保存');
+}
+// 真机实测（150 页夹具）：只要装着 JS 实现的 XModifyListener，引擎每次文档写入
+// （一条 setPropertyValue / 一条 setString）都要回调进 JS 一次，一次约 35ms——
+// 回调本身的成本，与回调体做什么无关（空函数体同样 35ms）；摘掉监听器后同一条
+// 写入 0.1ms。全文格式化 920 段 x 2 次批写 = 1840 次回调 = 60s+ 就是这么来的。
+// 批量命令（lockModel 期间）把监听器摘下，结束装回并补发一次 modified——宿主只
+// 需要「文档改过了」这一个信号，不需要逐条。计数嵌套：batchBreak 会解锁再上锁。
+let modifySuspended = 0;
+function suspendModifyListener() {
+  if (modifySuspended++ > 0 || !modifyListener) return;
+  try { xModel.removeModifyListener(modifyListener); } catch (e) {}
+}
+function resumeModifyListener() {
+  if (modifySuspended <= 0) { modifySuspended = 0; return; }
+  if (--modifySuspended > 0 || !modifyListener) return;
+  try { xModel.addModifyListener(modifyListener); } catch (e) {}
+  invalidateParaIndex();
+  try { if (!exportInFlight && xModel.isModified()) post('modified'); } catch (e) {}
 }
 
 // ---- 自建工具栏：选区变化上报 -------------------------------------------
@@ -1630,8 +1714,108 @@ function insertFootnoteImpl(p, isEndnote) {
 // drive LibreOffice with the backend's existing commands. Each handler returns a
 // plain result object; the dispatcher posts {cmd:'result', reqId, result} back.
 // [verified] handlers use the Phase 0-proven primitives; [todo] are stubs.
+// ---- 长命令的分批 / 进度 / 取消（dev-board#108 G2）------------------------------
+// office 线程是单事件循环：一条 20s 的 find_replace 会把后面所有命令（自动保存的
+// export、IME 的 ui_command）全排队，宿主也只能干等。批量命令每处理一批就
+// post 一次 progress 并 await 一个宏任务，让排队的命令和宿主的 cancel 有机会
+// 插进来。取消是协作式的：宿主 executeCommand('cancel', {reqId}) 置位，批间检查。
+// 批间别的命令可能切换修订作者（用户 IME 输入署用户名），所以每批开头重新
+// 设回本命令的作者。
+const CANCELLED = Object.create(null);   // reqId -> true
+function yieldMacrotask() { return new Promise(function (r) { setTimeout(r, 0); }); }
+function postProgress(p, done, total) { if (p && p.__reqId) post('progress', { reqId: p.__reqId, done: done, total: total }); }
+// 批量改稿期间锁住控制器与动作锁：否则每一条修订 / 每一个属性写入都让 Writer
+// 重排版+重绘一次，150 命中实测每处 130-200ms 大头在这里，不在 LCS。锁在一批之内，
+// 批间解开让视图刷一次、让排队的 export 能正常序列化。
+// 锁之外更大的头是 XModifyListener 的逐条回调（每条写入 35ms，见
+// suspendModifyListener），一并摘下。
+function lockModel() {
+  try { xModel.lockControllers(); } catch (e) {}
+  try { xModel.addActionLock(); } catch (e) {}
+  suspendModifyListener();
+}
+function unlockModel() {
+  resumeModifyListener();
+  try { xModel.removeActionLock(); } catch (e) {}
+  try { xModel.unlockControllers(); } catch (e) {}
+}
+// ---- find_replace 的原生快路径 ------------------------------------------------
+// 逐命中 setString 在 150 页上每处 90-130ms（JS 往返 + 监听器回调），150 命中 15-20s；
+// 引擎自己的 XReplaceable.replaceAll 一次调用 150 命中 160ms，且 RecordChanges 开着
+// 时同样按命中各记一条删除+一条插入修订。为了保住 PR#188 的字符级颗粒度
+//（我爱你→我恨你 只删"爱"加"恨"），先把 findText/replaceText 的公共前后缀掐掉，
+// 用正则 (?<=前缀)中段(?=后缀) 只替换差异中段。引擎不接受零宽匹配（纯插入，
+// 如 验收后→验收合格后），这种回退到逐命中路径（分批 + 进度 + 取消）。
+// 返回 {n} 或 null（= 走回退路径）。
+function regexEscape(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function replaceEscape(s) { return String(s).replace(/\\/g, '\\\\').replace(/&/g, '\\&').replace(/\$/g, '\\$'); }
+function nativeTrackedReplaceAll(findText, replaceText, matchCase) {
+  if (!findText || findText === replaceText) return null;
+  if (/[\r\n]/.test(findText) || /[\r\n]/.test(replaceText)) return null;
+  const oLen = findText.length, nLen = replaceText.length, maxP = Math.min(oLen, nLen);
+  let pre = 0;
+  while (pre < maxP && findText.charCodeAt(pre) === replaceText.charCodeAt(pre)) pre++;
+  let suf = 0;
+  while (suf < maxP - pre && findText.charCodeAt(oLen - 1 - suf) === replaceText.charCodeAt(nLen - 1 - suf)) suf++;
+  // 代理对不能从中间掐开
+  const bad = function (str, at) { const c = str.charCodeAt(at); return c >= 0xD800 && c <= 0xDFFF; };
+  if ((pre > 0 && (bad(findText, pre - 1) || bad(replaceText, pre - 1))) ||
+      (suf > 0 && (bad(findText, oLen - suf) || bad(replaceText, nLen - suf)))) { pre = 0; suf = 0; }
+  const oMid = findText.slice(pre, oLen - suf), nMid = replaceText.slice(pre, nLen - suf);
+  if (!oMid) return null; // 纯插入：零宽匹配引擎不认
+  let pattern = regexEscape(oMid);
+  if (pre > 0) pattern = '(?<=' + regexEscape(findText.slice(0, pre)) + ')' + pattern;
+  if (suf > 0) pattern = pattern + '(?=' + regexEscape(findText.slice(oLen - suf)) + ')';
+  try {
+    const rd = xModel.createReplaceDescriptor();
+    rd.setPropertyValue('SearchRegularExpression', true);
+    try { rd.setPropertyValue('SearchCaseSensitive', !!matchCase); } catch (e) {}
+    rd.setSearchString(pattern);
+    rd.setReplaceString(replaceEscape(nMid));
+    const n = xModel.replaceAll(rd);
+    // 拟人：结束时视图停在第一处改动（新中段非空时按新文本找；删除型改动找不到
+    // 就不动视图）
+    if (nMid) {
+      try {
+        const sd = xModel.createSearchDescriptor();
+        sd.setPropertyValue('SearchRegularExpression', true);
+        try { sd.setPropertyValue('SearchCaseSensitive', !!matchCase); } catch (e) {}
+        let look = regexEscape(nMid);
+        if (pre > 0) look = '(?<=' + regexEscape(findText.slice(0, pre)) + ')' + look;
+        if (suf > 0) look = look + '(?=' + regexEscape(findText.slice(oLen - suf)) + ')';
+        sd.setSearchString(look);
+        const first = xModel.findFirst(sd);
+        if (first !== null) selectVisibly(first);
+      } catch (e) {}
+    }
+    return { n: Number(n) || 0 };
+  } catch (e) {
+    log('find_replace 原生 replaceAll 失败，回退逐命中: ' + errStr(e));
+    return null;
+  }
+}
+// 批间让路：返回 true = 已被取消，调用方应停下并返回 {cancelled:true}。
+// 调用方在批内持有 lockModel()；这里先解锁再让路，回来再上锁。
+async function batchBreak(p, done, total) {
+  unlockModel();
+  postProgress(p, done, total);
+  await yieldMacrotask();
+  if (p && p.__reqId && CANCELLED[p.__reqId]) return true;
+  try { setRedlineAuthor(p && p.__agent ? AI_AUTHOR : humanAuthor); } catch (e) {}
+  lockModel();
+  return false;
+}
+
 // ==========================================================================
 const EXEC = {
+  // [取消] 宿主对一条在飞的批量命令喊停（reqId 来自 progress 消息）。只置位，
+  // 真正停下来要等那条命令跑到下一个批间检查点。
+  cancel(p) {
+    const id = String(p && p.reqId || '');
+    if (!id) return tableFail('cancel: reqId required');
+    CANCELLED[id] = true;
+    return { success: true, reqId: id };
+  },
   // [verified] insert at the view cursor (append, not select) — see testInsertText.
   // 带 markdown 标记的文本走剥离转换（**→真粗体、行首 # 剥掉），字体沿用现场格式；
   // 纯文本走原路径不动。
@@ -1662,22 +1846,54 @@ const EXEC = {
     return Object.assign({ success: true, text: String(p.text || '') }, verifySnapshot());
   },
   // [verified] model-native search + redline (RFC §0.2: no integer offsets).
-  find_replace(p) {
+  // 全部替换走引擎原生 replaceAll（见 nativeTrackedReplaceAll：150 命中 0.2s）；
+  // 只替首处 / 纯插入走逐命中路径：先 findAll 收齐命中（都是活的 XTextRange，
+  // 改前面的不影响后面的），只在结束时滚到首处；命中 > 50 时按 30 一批，批间发
+  // progress / 检查 cancel（见 batchBreak）。
+  async find_replace(p) {
     xModel.setPropertyValue('RecordChanges', true);
+    const all = p.replaceAll !== false;
+    const replaceText = String(p.replaceText || '');
+    if (all) {
+      const fast = nativeTrackedReplaceAll(String(p.findText || ''), replaceText, !!p.matchCase);
+      if (fast) {
+        invalidateParaIndex();
+        return { success: true, replaced: fast.n, total: fast.n, recordChanges: true };
+      }
+    }
     const sd = xModel.createSearchDescriptor();
     sd.setSearchString(String(p.findText || ''));
     // matchCase 是后加的可选项（自建查找替换面板要它）；不传时行为与从前一致。
     try { sd.setPropertyValue('SearchCaseSensitive', !!p.matchCase); } catch (e) {}
-    const all = p.replaceAll !== false;
-    let hit = xModel.findFirst(sd), n = 0;
-    while (hit !== null) {
-      selectVisibly(hit); // 拟人：视图滚到正在修订的位置，用户看得见改在哪
-      if (!applyMinimalRedline(hit, String(p.replaceText || ''))) hit.setString(String(p.replaceText || ''));
-      n++;
-      if (!all) break;
-      hit = xModel.findNext(hit, sd);
+    const hits = [];
+    if (all) {
+      const found = xModel.findAll(sd);
+      const cnt = found ? found.getCount() : 0;
+      for (let i = 0; i < cnt; i++) hits.push(found.getByIndex(i));
+    } else {
+      const first = xModel.findFirst(sd);
+      if (first !== null) hits.push(first);
     }
-    return { success: true, replaced: n, recordChanges: true };
+    const total = hits.length;
+    const BATCH = 30, batched = total > 50;
+    let n = 0, cancelled = false;
+    lockModel();
+    try {
+      for (let i = 0; i < total; i++) {
+        if (batched && i > 0 && i % BATCH === 0) {
+          if (await batchBreak(p, n, total)) { cancelled = true; break; }
+        }
+        const hit = hits[i];
+        if (!applyMinimalRedline(hit, replaceText)) hit.setString(replaceText);
+        n++;
+      }
+    } finally { unlockModel(); }
+    if (batched) postProgress(p, n, total);
+    if (hits[0]) selectVisibly(hits[0]); // 拟人：结束时视图停在第一处改动
+    invalidateParaIndex();
+    const r = { success: true, replaced: n, total: total, recordChanges: true };
+    if (cancelled) { r.cancelled = true; r.done = n; }
+    return r;
   },
   // [verified] current selection text (anchor, not integer offset).
   get_selection() {
@@ -1776,35 +1992,21 @@ const EXEC = {
   // [verified-extend] read the Nth (0-based) paragraph's text.
   get_paragraph(p) {
     const idx = Number(p.index) || 0;
-    const en = xModel.getText().createEnumeration();
-    let i = 0;
-    while (en.hasMoreElements()) {
-      const el = en.nextElement();
-      if (el.supportsService && el.supportsService('com.sun.star.text.Paragraph')) {
-        if (i === idx) return { success: true, index: idx, text: el.getString() };
-        i++;
-      }
-    }
-    return { success: false, message: 'paragraph index out of range: ' + idx + ' (count ' + i + ')' };
+    const el = paraAt(idx);
+    if (!el) return { success: false, message: 'paragraph index out of range: ' + idx + ' (count ' + getParaIndex().total + ')' };
+    return { success: true, index: idx, text: el.getString() };
   },
   // [verified-extend] modify the Nth paragraph's text under RecordChanges.
   modify_paragraph(p) {
     xModel.setPropertyValue('RecordChanges', true);
     const idx = Number(p.index) || 0;
-    const en = xModel.getText().createEnumeration();
-    let i = 0;
-    while (en.hasMoreElements()) {
-      const el = en.nextElement();
-      if (el.supportsService && el.supportsService('com.sun.star.text.Paragraph')) {
-        if (i === idx) {
-          selectVisibly(el); // 拟人：先跳到目标段落
-          if (!applyMinimalRedline(el, String(p.newText || ''))) el.setString(String(p.newText || ''));
-          return { success: true, index: idx, paragraphAfterEdit: el.getString().slice(0, 200) };
-        }
-        i++;
-      }
-    }
-    return { success: false, message: 'paragraph index out of range: ' + idx };
+    const el = paraAt(idx);
+    if (!el) return { success: false, message: 'paragraph index out of range: ' + idx };
+    selectVisibly(el); // 拟人：先跳到目标段落
+    if (!applyMinimalRedline(el, String(p.newText || ''))) el.setString(String(p.newText || ''));
+    const after = el.getString().slice(0, 200);
+    invalidateParaIndex();
+    return { success: true, index: idx, paragraphAfterEdit: after };
   },
   // [verified-extend] outline = paragraphs carrying a heading style / outline level.
   get_outline() {
@@ -2481,28 +2683,29 @@ const EXEC = {
   // [感知] read the document as numbered paragraphs — the AI's "eyes". Windowed
   // (startParagraph + maxParagraphs, plus a char budget) so a 200-page contract
   // can be read in passes without blowing the tool-result size.
+  // 走段落索引缓存：O(窗口) 而非 O(全文)，total 直接取索引长度。
   get_document_text(p) {
     const start = Math.max(0, Number(p && p.startParagraph) || 0);
     const maxParas = Math.max(1, Math.min(Number(p && p.maxParagraphs) || 200, 500));
     const charBudget = 15000;
-    const paragraphs = [];
-    let total = 0, chars = 0, truncated = false;
-    eachParagraph(function (el, i) {
-      total = i + 1;
-      if (i < start || paragraphs.length >= maxParas || chars >= charBudget) return false;
-      const item = { index: i, text: el.getString() };
-      try {
-        const lvl = el.getPropertyValue('OutlineLevel') || 0;
-        if (lvl > 0) { item.headingLevel = lvl; item.style = el.getPropertyValue('ParaStyleName') || ''; }
-      } catch (e) {}
-      chars += item.text.length;
-      paragraphs.push(item);
-      return false;
+    return withParaIndex(function (ix) {
+      const total = ix.total;
+      const paragraphs = [];
+      let chars = 0;
+      for (let i = start; i < total && paragraphs.length < maxParas && chars < charBudget; i++) {
+        const el = ix.ranges[i];
+        const item = { index: i, text: el.getString() };
+        try {
+          const lvl = el.getPropertyValue('OutlineLevel') || 0;
+          if (lvl > 0) { item.headingLevel = lvl; item.style = el.getPropertyValue('ParaStyleName') || ''; }
+        } catch (e) {}
+        chars += item.text.length;
+        paragraphs.push(item);
+      }
+      const r = { success: true, totalParagraphs: total, startParagraph: start, returned: paragraphs.length, paragraphs: paragraphs };
+      if (start + paragraphs.length < total) { r.truncated = true; r.nextStartParagraph = start + paragraphs.length; }
+      return r;
     });
-    if (start + paragraphs.length < total) truncated = true;
-    const r = { success: true, totalParagraphs: total, startParagraph: start, returned: paragraphs.length, paragraphs: paragraphs };
-    if (truncated) { r.truncated = true; r.nextStartParagraph = start + paragraphs.length; }
-    return r;
   },
   // [感知] what's around the cursor right now — selection, chars before/after,
   // and the enclosing paragraph ("看一眼手边").
@@ -2517,8 +2720,7 @@ const EXEC = {
   // [定位] select the Nth (0-based) body paragraph, visibly (view scrolls to it).
   select_paragraph(p) {
     const idx = Number(p.index) || 0;
-    let found = null;
-    eachParagraph(function (el, i) { if (i === idx) { found = el; return true; } return false; });
+    const found = paraAt(idx);
     if (!found) return { success: false, message: 'paragraph index out of range: ' + idx };
     if (!selectVisibly(found)) return { success: false, message: 'could not select paragraph ' + idx };
     return { success: true, index: idx, text: found.getString() };
@@ -2976,10 +3178,19 @@ const EXEC = {
   // 段距/行距/首行缩进；首段短文本视为主标题（16 磅粗居中）；标题段（OutlineLevel
   // 或 Heading 样式）整段加粗；表格套标准表格式；表格后首段段前 18 磅。
   // 正文段落不动既有加粗/斜体（当事人名称等手工强调不能被抹掉）。
-  apply_house_style() {
+  // 150 页实测 >30s：按 500 个顶层元素一批，批间 await 一个宏任务（自动保存的
+  // export / 宿主的 cancel 有机会插进来），不再有 5000 元素硬顶；truncated 永远
+  // 返回（只有被取消时才为 true）。
+  async apply_house_style(p) {
     const en = xModel.getText().createEnumeration();
-    let idx = 0, paras = 0, tables = 0, titled = false, prevWasTable = false;
-    while (en.hasMoreElements() && idx < 5000) {
+    const BATCH = 500;
+    let idx = 0, paras = 0, tables = 0, titled = false, prevWasTable = false, cancelled = false;
+    lockModel();
+    try {
+    while (en.hasMoreElements()) {
+      if (idx > 0 && idx % BATCH === 0) {
+        if (await batchBreak(p, idx, 0)) { cancelled = true; break; }
+      }
       const el = en.nextElement();
       if (el.supportsService && el.supportsService('com.sun.star.text.Paragraph')) {
         const text = (el.getString() || '').trim();
@@ -3009,7 +3220,11 @@ const EXEC = {
       }
       idx++;
     }
-    return Object.assign({ success: true, paragraphs: paras, tables: tables }, verifySnapshot());
+    } finally { unlockModel(); }
+    if (idx > BATCH) postProgress(p, idx, idx);
+    const r = Object.assign({ success: true, paragraphs: paras, tables: tables, truncated: cancelled }, verifySnapshot());
+    if (cancelled) { r.cancelled = true; r.done = idx; }
+    return r;
   },
   // [流式] markdown 剥离 + 标准格式落字（doc_start_stream 管线的落字端）。
   // 攒到完整行才消费；尾部残行等 stream_flush。HOUSE 是 Writer 排版语义
@@ -3070,6 +3285,7 @@ const EXEC = {
     for (; done < want; done++) {
       try { um.undo(); } catch (e) { break; } // empty stack ends the loop
     }
+    invalidateParaIndex();
     return Object.assign({ success: done > 0, undone: done }, done > 0 ? verifySnapshot() : { message: 'nothing to undo' });
   },
   redo(p) {
@@ -3079,6 +3295,7 @@ const EXEC = {
     for (; done < want; done++) {
       try { um.redo(); } catch (e) { break; }
     }
+    invalidateParaIndex();
     return Object.assign({ success: done > 0, redone: done }, done > 0 ? verifySnapshot() : { message: 'nothing to redo' });
   },
   // ---- #104 文档变量域原语（VariablePanel via the getEditor adapter) ------------
@@ -3651,9 +3868,13 @@ const EXEC = {
     const action = String((p && p.action) || 'accept').toLowerCase();
     if (action !== 'accept' && action !== 'reject') return tableFail("action must be accept|reject");
     const before = countRedlines();
-    css.frame.DispatchHelper.create(context).executeDispatch(
-      ctrl.getFrame(), action === 'accept' ? '.uno:AcceptAllTrackedChanges' : '.uno:RejectAllTrackedChanges', '', 0, []);
-    return { success: true, action: action, resolved: before - countRedlines(), remaining: countRedlines() };
+    suspendModifyListener(); // 引擎内部逐条处理修订，每条都会回调监听器（见 suspendModifyListener）
+    try {
+      css.frame.DispatchHelper.create(context).executeDispatch(
+        ctrl.getFrame(), action === 'accept' ? '.uno:AcceptAllTrackedChanges' : '.uno:RejectAllTrackedChanges', '', 0, []);
+    } finally { resumeModifyListener(); }
+    const after = countRedlines(); // 前后各数一次（原先结束时数了两遍 O(N)）
+    return { success: true, action: action, resolved: before - after, remaining: after };
   },
   list_comments(p) {
     const limit = Math.max(1, Math.min(500, Number(p && p.limit) || 200));
@@ -5652,9 +5873,16 @@ const EXEC = {
 };
 
 function execCommand(reqId, action, params) {
+  // 原语可以是 async（分批的 find_replace / apply_house_style）：返回 Promise 就等它，
+  // 期间 worker 事件循环继续处理别的命令；同步原语路径与从前完全一样。
+  const finish = function (result) {
+    delete CANCELLED[reqId];
+    post('result', { reqId: reqId, result: result });
+  };
   let result;
   try {
     const p = params || {};
+    p.__reqId = reqId; // 分批命令发 progress / 查 cancel 用
     // 修订署名切换：AI 命令（宿主打 __agent 标记）→ AI WorkDeck；其余（IME 输入
     // 等用户本人操作）→ 用户名。失败不阻断命令本身（降级为引擎默认作者）。
     try { setRedlineAuthor(p.__agent ? AI_AUTHOR : humanAuthor); }
@@ -5664,7 +5892,11 @@ function execCommand(reqId, action, params) {
   } catch (e) {
     result = { success: false, message: errStr(e) };
   }
-  post('result', { reqId: reqId, result: result });
+  if (result && typeof result.then === 'function') {
+    result.then(finish, function (e) { finish({ success: false, message: errStr(e) }); });
+  } else {
+    finish(result);
+  }
 }
 
 // ---- message loop --------------------------------------------------------

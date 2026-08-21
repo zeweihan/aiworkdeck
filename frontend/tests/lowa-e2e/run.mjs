@@ -22,29 +22,14 @@
 // Test-only worker actions (debug_*) are injected IN-MEMORY by the server into
 // the served office_thread.js / editor bundle — source and dist stay clean.
 
-import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
-
-const here = path.dirname(fileURLToPath(import.meta.url))
-const distDir = path.resolve(here, '../../dist/zetaoffice')
-const engineDir = process.env.LOWA_ENGINE_DIR || path.join(distDir, 'lowa')
-const PORT = Number(process.env.LOWA_E2E_PORT || 8901)
-const ORIGIN = 'http://127.0.0.1:' + PORT
-const CHROME = process.env.PUPPETEER_EXECUTABLE_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+// server / puppeteer 启动件与 big-doc.mjs（大文档基线组）共用，抽在 _boot.mjs。
+import { here, preflight, loadPuppeteer, startServer, launchBrowser, openEditor } from './_boot.mjs'
 
 // ---------- preflight ----------
-for (const [what, p] of [
-  ['dist/zetaoffice (npm run build:zetaoffice)', path.join(distDir, 'editor.html')],
-  ['LOWA engine (fetch-lowa-assets.js or LOWA_ENGINE_DIR)', path.join(engineDir, 'soffice.js')],
-  ['Chrome (PUPPETEER_EXECUTABLE_PATH)', CHROME],
-]) {
-  if (!fs.existsSync(p)) { console.error('缺少 ' + what + ': ' + p); process.exit(2) }
-}
-let puppeteer
-try { puppeteer = (await import('puppeteer-core')).default }
-catch { console.error('缺少 puppeteer-core：cd frontend && npm i -D puppeteer-core'); process.exit(2) }
+preflight()
+const puppeteer = await loadPuppeteer()
 
 // ---------- test-only worker actions, injected in-memory ----------
 const DEBUG_ACTIONS = `
@@ -267,33 +252,7 @@ function patchServed(urlPath, content) {
 }
 
 // ---------- COOP/COEP static server ----------
-const encPath = path.join(engineDir, '.encodings.json')
-const encodings = fs.existsSync(encPath) ? JSON.parse(fs.readFileSync(encPath, 'utf8')) : {}
-const MIME = {
-  '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm',
-  '.data': 'application/octet-stream', '.json': 'application/json',
-  '.ttc': 'font/collection', '.ttf': 'font/ttf', '.otf': 'font/otf',
-}
-const server = http.createServer((req, res) => {
-  const urlPath = decodeURIComponent(req.url.split('?')[0])
-  const fromEngine = urlPath.startsWith('/lowa/')
-  const fp = fromEngine
-    ? path.join(engineDir, urlPath.slice('/lowa/'.length))
-    : path.join(distDir, urlPath === '/' ? 'editor.html' : urlPath)
-  if (!fs.existsSync(fp) || fs.statSync(fp).isDirectory()) { res.writeHead(404); res.end(); return }
-  const headers = {
-    'Cross-Origin-Opener-Policy': 'same-origin',
-    'Cross-Origin-Embedder-Policy': 'require-corp',
-    'Cache-Control': 'no-store',
-    'Content-Type': MIME[path.extname(fp)] || 'application/octet-stream',
-  }
-  if (fromEngine && encodings[path.basename(fp)]) headers['Content-Encoding'] = encodings[path.basename(fp)]
-  const body = patchServed(urlPath, fs.readFileSync(fp))
-  res.writeHead(200, headers)
-  res.end(body)
-})
-await new Promise((r) => server.listen(PORT, r))
-console.log('serving ' + distDir + ' (engine: ' + engineDir + ') on ' + ORIGIN)
+const server = await startServer({ patchServed })
 
 // ---------- assertions ----------
 let passed = 0, failed = 0
@@ -304,13 +263,9 @@ function check(label, cond, detail) {
 
 // ---------- drive ----------
 const META = 4, SHIFT = 8, ALT = 1
-const browser = await puppeteer.launch({ executablePath: CHROME, headless: 'new', args: ['--no-sandbox', '--disable-dev-shm-usage'] })
+const browser = await launchBrowser(puppeteer)
 try {
-  await browser.defaultBrowserContext().overridePermissions(ORIGIN, ['clipboard-read', 'clipboard-write', 'clipboard-sanitized-write'])
-  const page = await browser.newPage()
-  await page.goto(ORIGIN + '/editor.html?verify=1&lowa=/lowa/', { waitUntil: 'domcontentloaded' })
-  console.log('booting engine (~90s)...')
-  await page.waitForFunction('!!window.__loExecutor', { timeout: 240000 })
+  const page = await openEditor(browser)
   await page.evaluate(() => { window.__overlayInput = document.querySelector('input[aria-hidden]') })
 
   const cdp = await page.createCDPSession()

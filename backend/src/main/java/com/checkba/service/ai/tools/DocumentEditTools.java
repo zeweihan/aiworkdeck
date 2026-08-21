@@ -307,7 +307,9 @@ public class DocumentEditTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "查找替换", category = "document", fileEffect = "MODIFIED")
-    @Tool("在文档中查找并替换文本。所有修改将以修订模式进行，用户可以审阅后接受或拒绝。")
+    @Tool("在文档中查找并替换文本。所有修改将以修订模式进行，用户可以审阅后接受或拒绝。" +
+          "全文替换一次调用即可完成（大量命中也很快；纯插入型替换会分批处理并回传进度），不要因为耗时较长而重复调用；" +
+          "返回 replaced（已替换数）与 total（命中数），cancelled=true 表示用户中途取消、done 为已完成数。")
     public String doc_find_replace(
             @P("要查找的文本") String findText,
             @P("替换为的文本") String replaceText,
@@ -992,7 +994,8 @@ public class DocumentEditTools implements AgentToolComponent {
     @Tool("【格式】对整篇文档应用律所标准格式：正文楷体_GB2312/西文 Arial 12 号黑色、两端对齐、段前 0 段后 18 磅、" +
           "行距最小值 16 磅、首行缩进 2 字符；首段短文本视为主标题（16 号加粗居中）；标题段整段加粗；" +
           "表格套 Grid 1.5 磅边框、10 号字、首行加粗居中、数字居右；表格后首段段前 18 磅。" +
-          "用户要求'规范格式/按标准排版'时用本工具，正文中既有的加粗强调不会被抹掉。")
+          "用户要求'规范格式/按标准排版'时用本工具，正文中既有的加粗强调不会被抹掉。" +
+          "长文档会分批处理并回传进度（最长约 2 分钟），一次调用即可完成，不要重复调用；返回 truncated=false 表示全文已处理。")
     public String doc_apply_standard_format() {
         log.info("Tool: doc_apply_standard_format called");
         try {

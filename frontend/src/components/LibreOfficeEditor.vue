@@ -147,7 +147,9 @@ let seq = 0
 export default {
   name: 'LibreOfficeEditor',
   components: { ReviewPanel, EditorToolbar, EvidenceStaleBar },
-  emits: ['close', 'ready', 'open-url', 'menu-state', 'evidence-drop', 'locator-consumed', 'open-evidence-target'],
+  // command-progress：批量命令（find_replace >50 命中 / apply_house_style）的
+  // 「第 x/y 处」进度，{reqId, done, total}；reqId 可用 executeCommand('cancel', {reqId}) 喊停。
+  emits: ['close', 'ready', 'open-url', 'menu-state', 'evidence-drop', 'locator-consumed', 'open-evidence-target', 'command-progress'],
   props: {
     // Track D: the Office file to load into the editor ({ id, name, fileType,
     // wpsFileId }). When set, the editor fetches its bytes (authed) and loads the
@@ -581,17 +583,18 @@ export default {
           subscribe: transport.subscribe,
           onReady: () => this.onEndpointReady(),
           onLateResult: (action, result) => this.onLateLoadResult(action, result),
+          onProgress: (reqId, p) => this.$emit('command-progress', { reqId, done: p.done, total: p.total }),
         })
         // 命令繁忙跟踪：AI 命令与用户输入都走这同一个 executor。autoSave 据此
         // 避开活跃期（export_document 会冻结 office 线程上的 Qt 事件循环）。
         this._cmdBusy = 0
         this._lastCmdAt = 0
         const innerExec = this.executor.executeCommand.bind(this.executor)
-        this.executor.executeCommand = async (action, params) => {
-          if (action === 'export_document') return innerExec(action, params) // 保存自身不算「活跃编辑」
+        this.executor.executeCommand = async (action, params, callOpts) => {
+          if (action === 'export_document') return innerExec(action, params, callOpts) // 保存自身不算「活跃编辑」
           this._cmdBusy++
           this._lastCmdAt = Date.now()
-          try { return await innerExec(action, params) }
+          try { return await innerExec(action, params, callOpts) }
           finally { this._cmdBusy--; this._lastCmdAt = Date.now() }
         }
         this.statusKey = this.file ? 'loadingDoc' : 'booting'
