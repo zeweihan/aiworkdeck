@@ -33,6 +33,7 @@ export default {
   review: {
     revTab: 'Tracked Changes {count}',
     cmtTab: 'Comments {count}',
+    evidenceTab: 'Evidence {count}',
     collapse: 'Collapse',
     acceptAll: 'Accept All',
     rejectAll: 'Reject All',
