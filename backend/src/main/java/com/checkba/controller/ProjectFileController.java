@@ -129,6 +129,26 @@ public class ProjectFileController {
     }
 
     /**
+     * 校验创建/移动时指定的父目录：必须是本项目内未删除的文件夹（parentId 为空表示根目录）。
+     * 此前 parentId 完全不校验：前端对话框/拖拽目标缓存的目录 id 若在提交前被另一端软删除，
+     * 新节点仍会以 isDeleted=false 挂到已删除的父目录下，接口返回 200 看着成功，
+     * 但 getFileTree/getFilesByParent 只取 isDeleted=false 的行，永远拼不出它的路径，
+     * 节点在所有树视图里凭空消失。跨项目 parentId 同理。
+     */
+    private void checkParentFolder(Long parentId, Long projectId) {
+        if (parentId == null) {
+            return;
+        }
+        ProjectFile parent = projectFileService.getFile(parentId); // 不存在会抛异常
+        if (!projectId.equals(parent.getProjectId())
+                || !Boolean.TRUE.equals(parent.getIsFolder())
+                || Boolean.TRUE.equals(parent.getIsDeleted())) {
+            throw new IllegalArgumentException(com.checkba.service.LangText.of(
+                    "目标文件夹不存在或已被删除", "The target folder does not exist or has been deleted"));
+        }
+    }
+
+    /**
      * 创建文件夹
      * POST /api/projects/{projectId}/files/folder
      */
@@ -142,6 +162,7 @@ public class ProjectFileController {
             throw new UnauthorizedException("请先登录");
         }
         checkFileWriteAccess(projectId, userId);
+        checkParentFolder(request.getParentId(), projectId);
         return projectFileService.createFolder(projectId, request.getParentId(), request.getName(), userId);
     }
 
@@ -203,6 +224,7 @@ public class ProjectFileController {
             throw new UnauthorizedException("请先登录");
         }
         checkFileWriteAccess(projectId, userId);
+        checkParentFolder(request.getParentId(), projectId);
         // 存储键一律由服务端按 projectId + 目录结构生成：请求体里的 filePath 曾被原样落库，
         // 可指向他人项目的文件，再借这条记录下载/覆盖对方的文档
         return projectFileService.createFile(
@@ -344,6 +366,7 @@ public class ProjectFileController {
         }
         checkFileWriteAccess(projectId, userId);
         checkFileInProject(fileId, projectId);
+        checkParentFolder(request.getParentId(), projectId);
         return projectFileService.move(fileId, request.getParentId(), request.getSortOrder(), userId);
     }
 

@@ -286,12 +286,6 @@ public class ProjectFileService {
 
         // 权限检查已移至 Controller 层，这里不再检查创建者身份
 
-        // 检查同名文件是否存在
-        if (projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNot(
-                file.getProjectId(), file.getParentId(), newName.trim(), fileId)) {
-            throw new IllegalArgumentException(LangText.of("该文件夹下已存在同名文件/文件夹: ", "A file or folder with this name already exists: ") + newName);
-        }
-
         String oldName = file.getName();
         String oldFilePath = file.getFilePath();
         
@@ -315,7 +309,14 @@ public class ProjectFileService {
                 finalNewName = finalNewName + "." + file.getFileType();
             }
         }
-        
+
+        // 检查同名文件是否存在。必须用补完后缀的最终名字来查——用户只填主名时后缀会被自动补回，
+        // 拿裸名字查重会放过与既有同后缀文件的碰撞，物理路径又由名字派生，会覆盖掉对方的内容。
+        if (projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNot(
+                file.getProjectId(), file.getParentId(), finalNewName, fileId)) {
+            throw new IllegalArgumentException(LangText.of("该文件夹下已存在同名文件/文件夹: ", "A file or folder with this name already exists: ") + finalNewName);
+        }
+
         // 更新文件名
         file.setName(finalNewName);
         file.setUpdatedAt(LocalDateTime.now());

@@ -107,7 +107,8 @@ function fetchText(url) {
       }
       if (res.statusCode !== 200) {
         res.resume()
-        return reject(new Error(`HTTP ${res.statusCode}: ${url}`))
+        // 带上 statusCode：调用方要靠它区分"确实没有上一版"(404) 与"这次没拿到"(其余)
+        return reject(Object.assign(new Error(`HTTP ${res.statusCode}: ${url}`), { statusCode: res.statusCode }))
       }
       let body = ''
       res.on('data', (c) => { body += c })
@@ -119,16 +120,37 @@ function fetchText(url) {
   })
 }
 
-async function loadPrevManifest(prev) {
+// 拉取上一版 manifest。**只有"确实不存在"才允许返回 null**（URL 404 / 本地文件缺失
+// ——即首个补丁版本）；网络抖动、超时、5xx、WAF 返回的 HTML、schema 不符一律重试后炸掉
+// 构建。原因：prev 为 null 时下面的 channels 会退成 {}，latestMajor/majorDownloadPage/
+// telemetryUrl 也全部回落默认值，生成的 manifest 只剩当前大版本一条通道；
+// deploy/update-mirror-sync.sh 会把它原子替换到线上，已发布的其它大版本通道就此被
+// 静默抹掉（无报错、无告警、无备份），停在旧大版本的用户从此收不到增量补丁。
+// 宁可让 tag 构建红着重跑，也不能悄悄发一份残缺清单。
+async function loadPrevManifest(prev, { attempts = 3, retryDelayMs = 2000 } = {}) {
   if (!prev) return null
-  try {
-    const text = /^https?:/.test(prev) ? await fetchText(prev) : fs.readFileSync(prev, 'utf8')
-    const m = JSON.parse(text)
-    return m && m.schema === 1 ? m : null
-  } catch (e) {
-    console.warn(`[build-patch-assets] 上一版 manifest 不可用（首个补丁版本属正常）: ${e.message}`)
-    return null
+  const isUrl = /^https?:/.test(prev)
+  let lastErr = null
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      const text = isUrl ? await fetchText(prev) : fs.readFileSync(prev, 'utf8')
+      const m = JSON.parse(text)
+      if (!m || m.schema !== 1) {
+        throw Object.assign(new Error(`上一版 manifest schema 不是 1（拿到 ${m && m.schema}）: ${prev}`), { fatal: true })
+      }
+      return m
+    } catch (e) {
+      if (e.statusCode === 404 || e.code === 'ENOENT') {
+        console.warn(`[build-patch-assets] 上一版 manifest 不存在（首个补丁版本属正常）: ${prev}`)
+        return null
+      }
+      if (e.fatal) throw e
+      lastErr = e
+      console.warn(`[build-patch-assets] 上一版 manifest 拉取失败（第 ${i}/${attempts} 次）: ${e.message}`)
+      if (i < attempts) await new Promise((r) => setTimeout(r, retryDelayMs * i))
+    }
   }
+  throw new Error(`上一版 manifest 拉取失败，已重试 ${attempts} 次: ${prev} — ${lastErr && lastErr.message}`)
 }
 
 async function main() {
@@ -262,4 +284,9 @@ async function main() {
   console.log(`[build-patch-assets] done: ${outDir}`)
 }
 
-main().catch((e) => fail(e.stack || String(e)))
+// CLI 入口只在直接执行本文件时跑；被 require() 当模块用时（单测）只取函数。
+if (require.main === module) {
+  main().catch((e) => fail(e.stack || String(e)))
+}
+
+module.exports = { loadPrevManifest, fetchText }

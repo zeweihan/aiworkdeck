@@ -181,3 +181,39 @@ test('内置根优先于 pack 根', async (t) => {
   assert.match(res.body, /BUILTIN-DRAWIO/)
   assert.doesNotMatch(res.body, /PACK-DRAWIO/)
 })
+
+test('读流中途出错只失败这一个请求，不能掀掉整个进程', async (t) => {
+  // 造「stat 成功但 open 失败」：chmod 000 之后 stat 只需要父目录的搜索权限，
+  // 仍然报告是个普通文件，而 createReadStream 打开时 EACCES。这比真去抢
+  // stat 与 open 之间那几毫秒（删目录/拔盘/杀毒锁文件）稳定得多，暴露的是
+  // 同一条路径：ReadStream 的 'error' 没人听 → Node 直接抛 → 主进程没有
+  // uncaughtException 兜底 → 整个 Electron 应用当场消失。
+  if (process.platform === 'win32' || (process.getuid && process.getuid() === 0)) {
+    t.skip('Windows 与 root 下权限位不生效，造不出 stat 成功而 open 失败的文件')
+    return
+  }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drawio-unreadable-'))
+  const emptyPacks = fs.mkdtempSync(path.join(os.tmpdir(), 'drawio-packs-empty-'))
+  fs.writeFileSync(path.join(dir, 'index.html'), '<html>drawio</html>')
+  const locked = path.join(dir, 'locked.js')
+  fs.writeFileSync(locked, 'console.log(1)')
+  fs.chmodSync(locked, 0o000)
+
+  process.env.AIWORKDECK_DRAWIO_DIR = dir
+  process.env.AIWORKDECK_PACKS_DIR = emptyPacks
+  t.after(async () => {
+    await stopDrawioServer()
+    fs.chmodSync(locked, 0o600)
+    await rmrf(dir)
+    await rmrf(emptyPacks)
+  })
+
+  const { origin } = await startDrawioServer()
+  // 200 的头（含 Content-Length）已经定了，改不回 500，所以约定是掐断这一条连接：
+  // 客户端看到的是一次传输失败，而不是长度对不上的半截文件。
+  await assert.rejects(get(origin, '/locked.js'), '读不出来的文件应当让这一个请求失败')
+  // 进程还活着的直接证据：同一个 server 继续正常服务下一个请求。
+  const idx = await get(origin, '/')
+  assert.strictEqual(idx.status, 200)
+  assert.match(idx.body, /drawio/)
+})

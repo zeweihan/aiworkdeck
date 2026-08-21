@@ -77,8 +77,19 @@ public class CloudSyncService {
 
     public enum UpdateStatus { UP_TO_DATE, UPDATED, CONFLICT, OFFLINE, NOT_LINKED }
 
+    /**
+     * landedOnCloud：这次整合的结果是不是已经到了云端。真合并路径要看
+     * {@link #completeCloudMerge} 的重推有没有落地；快进/已最新两条路径压根不用推
+     * （本地本就是云端的祖先），天然为真——所以缺省构造器给 true，别拿
+     * ProjectRemote.pendingUpload 的历史值反推，会把本就同步的项目误判成失败。
+     */
     public record UpdateResult(UpdateStatus status, List<Long> affectedFileIds,
-                               Map<String, Object> conflict) {}
+                               Map<String, Object> conflict, boolean landedOnCloud) {
+        public UpdateResult(UpdateStatus status, List<Long> affectedFileIds,
+                            Map<String, Object> conflict) {
+            this(status, affectedFileIds, conflict, true);
+        }
+    }
 
     private static final String ORIGIN_MASTER = "refs/remotes/origin/master";
     private static String cloudMergeTitle() {
@@ -408,6 +419,16 @@ public class CloudSyncService {
                     UpdateResult integrated = integrateFromCloud(projectId, conn, null, authorName);
                     if (integrated.status() == UpdateStatus.UPDATED
                             || integrated.status() == UpdateStatus.UP_TO_DATE) {
+                        if (!integrated.landedOnCloud()) {
+                            // 合并在本地落地了，回传却没到云端（重推又被拒/网络断）：报
+                            // UPLOADED 就是把真失败说成成功——界面显示「已交稿」，而同事
+                            // 永远看不到这份合并。黄灯已由 completeCloudMerge 置上，这里
+                            // 只说实话；affectedFileIds 照常带回，整合改写过的磁盘仍要走
+                            // 重载链。
+                            return new UploadResult(UploadStatus.OFFLINE_PENDING,
+                                    LangText.of("这次没能交稿，改动已经记下，稍后还可以再交", "This submission didn't go through — your changes are saved and you can submit again later"),
+                                    integrated.affectedFileIds());
+                        }
                         return new UploadResult(UploadStatus.UPLOADED, null,
                                 integrated.affectedFileIds());
                     }
@@ -695,7 +716,8 @@ public class CloudSyncService {
      * {@link ProjectTreeManifestService#unionApply(long, TreeManifest, TreeManifest)}——
      * 基线是合并前本地 tip 与云端 tip 的合并基线，只有云端那一侧相对基线真的做过复活
      * 动作才会复活本方亲手软删的文件）→ 提交 → 自动重推。
-     * 重推失败（网络问题）不回滚——合并已经落地，只是回传没成，转入待上传，绝不丢改动。
+     * 重推失败（网络问题）不回滚——合并已经落地，只是回传没成，转入待上传，绝不丢改动；
+     * 落没落地随 {@link UpdateResult#landedOnCloud()} 回给调用方（上传路径据此不报成功交稿）。
      */
     private UpdateResult completeCloudMerge(long projectId, String tipBefore, String cloudTip,
                                             CloudConnection conn, Long userId, String userName) {
@@ -706,12 +728,14 @@ public class CloudSyncService {
         manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
         repoService.commitMergeResolution(projectId, cloudMergeTitle(),
                 userName, authorEmail(userId, userName));
+        boolean landed = false;
         try {
             // 重推被拒是返回值不是异常（裁决窗口期间远端又被同事推进了一版）：不接住的话
             // 会绿灯假同步——pendingUpload=false + lastSyncSha=本地 sha，界面显示「已与云端
             // 同步」而云端根本没有这份裁决结果（v2 终审 I1）。
             ProjectRepoService.PushOutcome out = repoService.pushMainlineToOrigin(
                     projectId, conn.getUsername(), conn.getDeviceToken());
+            landed = out.pushed();
             remoteRepository.findByProjectId(projectId).ifPresent(remote -> {
                 if (out.pushed()) {
                     remote.setPendingUpload(false);
@@ -730,7 +754,7 @@ public class CloudSyncService {
                 remoteRepository.save(remote);
             });
         }
-        return new UpdateResult(UpdateStatus.UPDATED, affectedSince(projectId, tipBefore), null);
+        return new UpdateResult(UpdateStatus.UPDATED, affectedSince(projectId, tipBefore), null, landed);
     }
 
     /** 受影响文件 id：口径同 revertTo，动作前后的 HEAD 差异反向传给 diffNameStatus。 */

@@ -9,6 +9,7 @@
           v-model="requestName"
           @blur="updateRequestName"
           @confirm="updateRequestName"
+          :disabled="deleted"
           :placeholder="request ? request.name : $t('panels.ddLoadingPlaceholder')"
         />
         <view class="status-badge" v-if="request" :class="request.status">
@@ -17,7 +18,7 @@
         <text class="progress-info" v-if="items.length > 0">{{ $t('panels.ddProgress', { completed: completedCount, total: items.length }) }}</text>
       </view>
 
-      <view style="display: flex; gap: 10px; align-items: center;">
+      <view style="display: flex; gap: 10px; align-items: center;" v-if="!deleted">
         <button class="delete-list-btn" @tap="handleDeleteRequest">{{ $t('panels.ddDeleteList') }}</button>
         <button class="new-btn" @tap="handleAddItem">
             <text>{{ $t('panels.ddNewItem') }}</text>
@@ -182,6 +183,11 @@ export default {
       selectedItemId: null,
       expandedItems: new Set(),
       hoveredItemId: null,
+      // 本组件在工作台里没有 :key，切换不同尽调清单标签时是同一个实例被复用，
+      // 只靠 requestId watcher 再发一次请求。响应可能乱序回来，用递增序号
+      // 只认最后一次发出的那次结果；删除清单时也把序号推进一格作废在途请求。
+      fetchSeq: 0,
+      deleted: false,
 
       // Comments
       showCommentsDrawer: false,
@@ -244,17 +250,21 @@ export default {
   },
   methods: {
     async fetchData() {
+      const seq = ++this.fetchSeq
       try {
         const res = await api.getDdRequestDetails(this.requestId)
+        if (seq !== this.fetchSeq) return
         this.request = res.request
         this.requestName = this.request.name
         this.items = res.items
       } catch (e) {
+        if (seq !== this.fetchSeq) return
         console.error('Fetch DD details failed', e)
       }
     },
 
     async updateRequestName() {
+        if (!this.request) return
         if (!this.requestName || this.requestName === this.request.name) return
         try {
             await api.updateDdRequest(this.requestId, this.requestName)
@@ -438,10 +448,18 @@ export default {
                     try {
                         await api.deleteDdRequest(this.requestId)
                         uni.showToast({title: this.$t('panels.ddDeleted'), icon: 'success'})
+                        // 父组件（工作台）没有接 @deleted，标签不会自动关；
+                        // 这里先把本地状态清空，免得面板继续渲染已删清单的行、
+                        // 用户接着编辑又拿已不存在的 id 去打接口。
+                        this.deleted = true
+                        this.fetchSeq++
+                        this.request = null
+                        this.requestName = ''
+                        this.items = []
+                        this.selectedItemId = null
+                        this.showCommentsDrawer = false
                         // Emit event to close editor or refresh list
                         this.$emit('deleted')
-                        // For now just back?
-                        // uni.navigateBack()
                     } catch(e) {
                          uni.showToast({title: this.$t('panels.ddDeleteFailed'), icon: 'none'})
                          console.error(e)

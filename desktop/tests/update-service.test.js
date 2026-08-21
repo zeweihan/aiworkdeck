@@ -7,7 +7,7 @@ const http = require('http')
 const crypto = require('crypto')
 const { spawnSync } = require('child_process')
 const overlay = require('../main/services/overlay')
-const { createUpdateService } = require('../main/services/update-service')
+const { createUpdateService, fetchUrl } = require('../main/services/update-service')
 
 // 端到端（本地 HTTP 伪造更新服务器）：manifest 验签 → 组件下载 → sha256 →
 // 解压 → 激活 → 状态机；以及验签失败 / 哈希不符 / 降级拒绝三条失败路径。
@@ -287,4 +287,71 @@ test('组件级去重：本机已有同版本组件时跳过下载仍推进指�
   assert.strictEqual(state.phase, 'ready')
   assert.strictEqual(overlay.effectiveVersion(ctx), '0.11.2')
   assert.strictEqual(overlay.readCurrent(ctx).components['backend-app'].version, '0.11.1')
+})
+
+// dev-board#74 稳定性审计：fetchUrl 在任何失败路径上都不关闭已创建的 WriteStream。
+// 中途断连 / 超时 / 超过 maxBytes 三条路都只 reject(e) 或 req.destroy(e)，
+// out 的 fd 一直挂着；而 fetchFirst 失败后会用同一个 toFile 换下个镜像重试，
+// 于是每次镜像回退、每个 6 小时检查周期都漏一个 fd。
+// 口径：失败时必须 out.destroy()，断言点是 WriteStream 真的 emit 了 'close'（fd 已关）。
+function waitClosed(stream, ms = 2000) {
+  return new Promise((resolve, reject) => {
+    if (stream.closed) return resolve()
+    const t = setTimeout(() => reject(new Error('WriteStream 未在超时内 close，fd 泄漏')), ms)
+    stream.once('close', () => { clearTimeout(t); resolve() })
+  })
+}
+
+// 把 fs.createWriteStream 换成会记账的版本，拿到 fetchUrl 内部创建的那个流
+function spyWriteStreams(t) {
+  const created = []
+  const orig = fs.createWriteStream
+  fs.createWriteStream = function (...args) {
+    const s = orig.apply(fs, args)
+    created.push(s)
+    return s
+  }
+  t.after(() => { fs.createWriteStream = orig })
+  return created
+}
+
+test('下载中途断连：WriteStream 被销毁，不泄漏文件描述符', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upd-fd-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  // 先发头 + 半截 body，再直接掐 socket
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Length': '10000' })
+    res.write('partial-body')
+    setTimeout(() => res.socket.destroy(), 20)
+  })
+  await new Promise((r) => server.listen(0, '127.0.0.1', r))
+  t.after(() => server.close())
+  const url = `http://127.0.0.1:${server.address().port}/x.tar.gz`
+
+  const created = spyWriteStreams(t)
+  await assert.rejects(() => fetchUrl(url, { toFile: path.join(root, 'x.tar.gz'), timeoutMs: 5000 }))
+  assert.strictEqual(created.length, 1, 'fetchUrl 应当只建了一个 WriteStream')
+  await waitClosed(created[0])
+})
+
+test('超过 maxBytes 上限：WriteStream 被销毁，不泄漏文件描述符', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upd-fd-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const big = Buffer.alloc(64 * 1024, 0x41)
+  const server = http.createServer((req, res) => {
+    res.writeHead(200)
+    const tick = setInterval(() => { if (!res.write(big)) { /* 背压交给 res */ } }, 5)
+    res.on('close', () => clearInterval(tick))
+  })
+  await new Promise((r) => server.listen(0, '127.0.0.1', r))
+  t.after(() => server.close())
+  const url = `http://127.0.0.1:${server.address().port}/huge.tar.gz`
+
+  const created = spyWriteStreams(t)
+  await assert.rejects(
+    () => fetchUrl(url, { toFile: path.join(root, 'huge.tar.gz'), maxBytes: 32 * 1024, timeoutMs: 5000 }),
+    /大小上限/
+  )
+  assert.strictEqual(created.length, 1)
+  await waitClosed(created[0])
 })

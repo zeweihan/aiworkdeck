@@ -1443,6 +1443,8 @@ export default {
       // 用户反馈与优化者（右下角浮窗提交 → 优化者分诊 → 开 PR / 发邮件）
       feedbackList: [],
       feedbackDetail: null,
+      // 最后一次点开详情的目标 id：慢到的旧响应不许覆盖后点的那条
+      feedbackDetailPendingId: null,
       feedbackLoading: false,
       feedbackFilter: '',
       feedbackFilters: [
@@ -2192,6 +2194,7 @@ export default {
     setFeedbackFilter(key) {
       this.feedbackFilter = key
       this.feedbackDetail = null
+      this.feedbackDetailPendingId = null
       this.loadFeedbackList()
     },
     async triggerOptimizer() {
@@ -2207,10 +2210,14 @@ export default {
     async toggleFeedbackDetail(id) {
       if (this.feedbackDetail && this.feedbackDetail.id === id) {
         this.feedbackDetail = null
+        this.feedbackDetailPendingId = null
         return
       }
+      this.feedbackDetailPendingId = id
       try {
         const res = await getFeedbackDetail(id)
+        // 先点 A 再点 B、A 的响应后到时直接丢弃，否则会把 B 的详情顶掉、A 自己弹开
+        if (this.feedbackDetailPendingId !== id) return
         const d = (res && res.data) || {}
         this.feedbackDetail = {
           id,
@@ -2219,6 +2226,7 @@ export default {
           contextText: this.formatContext(d.contextJson),
         }
       } catch (e) {
+        if (this.feedbackDetailPendingId !== id) return
         uni.showToast({ title: (e && e.message) || this.$t('admin.loadDetailFailed'), icon: 'none' })
       }
     },

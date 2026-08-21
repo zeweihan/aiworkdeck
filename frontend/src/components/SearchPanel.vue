@@ -367,7 +367,8 @@ export default {
         this.collapsedFiles = {}
       } catch (e) {
         console.error('Search failed:', e)
-        uni.showToast({ title: 'Search failed', icon: 'none' })
+        // 失败提示同样按 seq 收口：陈旧请求的迟到失败不该盖在新结果上弹「搜索失败」
+        if (seq === this._searchSeq) uni.showToast({ title: 'Search failed', icon: 'none' })
       } finally {
         if (seq === this._searchSeq) this.loading = false
       }

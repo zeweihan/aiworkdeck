@@ -379,6 +379,7 @@
         :project-id="projectId"
         :allow-folder="filePickerAllowFolder"
         @confirm="handleFilePickerConfirm"
+        @cancel="handleFilePickerCancel"
       />
 
       <!-- Invite Modal (Refactored to AI WorkDeck) -->
@@ -658,6 +659,7 @@
           <ProjectCalendarPane
             v-else-if="leftPaneKey === 'calendar'"
             :project-id="projectId"
+            @leave-workbench="leaveWorkbench"
           />
           <PluginDevPanel
             v-else-if="leftPaneKey === 'dev'"
@@ -891,8 +893,13 @@
                       :file="activeFileLeft"
                       :project-id="projectId"
                     />
+                    <!-- key 不能省：两个对比标签命中同一个 v-else-if 分支，没有 key
+                         Vue 会就地复用同一个组件实例，而 DocDiffViewer 只在 mounted()
+                         里取一次文档、对 sourceId/targetId 没有 watch——标题换成了新的
+                         两份文档，Monaco 里画的还是上一对（右窗格同理）。 -->
                     <DocDiffViewer
                       v-else-if="isDiffTab(activeFileLeft)"
+                      :key="activeFileLeft.id"
                       :source-id="activeFileLeft.diffSource.id"
                       :target-id="activeFileLeft.diffTarget.id"
                       :source-name="activeFileLeft.diffSource.name"
@@ -1014,6 +1021,7 @@
                     />
                     <DocDiffViewer
                       v-else-if="isDiffTab(activeFileRight)"
+                      :key="activeFileRight.id"
                       :source-id="activeFileRight.diffSource.id"
                       :target-id="activeFileRight.diffTarget.id"
                       :source-name="activeFileRight.diffSource.name"
@@ -3328,6 +3336,16 @@ export default {
         this.openFile(file)
     },
 
+    // 三个面板（脱敏 / 诉讼可视化 / EasyVoice）共用这一个选择器，各自把 resume 回调
+    // 暂存在页面字段上。用户点取消（含点遮罩、点 ×）时不清，残留的旧回调会在下一次
+    // 别的面板开选择器时抢先命中 handleFilePickerConfirm 的分支——新面板的回调永远不
+    // 会被调用，用户选了文件却什么都没发生。
+    handleFilePickerCancel() {
+        this.desensitizeFileSelectCallback = null
+        this.litigationScopeCallback = null
+        this.easyVoiceImportCallback = null
+    },
+
     async handleFilePickerConfirm(file) {
         if (!file || !file.id) return
 
@@ -3629,13 +3647,18 @@ export default {
       this.startRenameProject()
     },
     async confirmRenameProject() {
-      if (!this.renameProjectName || !this.renameProjectName.trim()) {
+      // 名字必须在 await 之前取下来存成局部变量。uni-app H5 的 input 在派发 @confirm
+      // 之后会立刻 input.blur()（confirm-hold 默认 false），模板上 @blur 绑的正是
+      // cancelRenameProject——它同步把 renameProjectName 清成 ''。await 回来再读这个
+      // 字段，写进标题的就是空串（显示成「未命名项目」），而服务端存的其实是对的。
+      const newName = (this.renameProjectName || '').trim()
+      if (!newName) {
         uni.showToast({ title: this.$t('workbench.projectNameEmpty'), icon: 'none' })
         return
       }
       try {
-        await renameProject(this.projectId, this.renameProjectName.trim())
-        this.project.name = this.renameProjectName.trim()
+        await renameProject(this.projectId, newName)
+        this.project.name = newName
         this.isRenamingProject = false
         uni.showToast({ title: this.$t('workbench.renameSuccess'), icon: 'success' })
       } catch (e) {

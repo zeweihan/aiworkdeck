@@ -44,14 +44,31 @@ class WizardStateServiceTest {
 
     @Test
     void resetWindowIsNotAnonymous() {
-        // 管理员 reset：标记显式为 "false"，向导重新开放，但不是匿名窗口
+        // 管理员 reset：标记显式为 "false"，向导重新开放，但不是匿名窗口。
+        // reset 必然发生在向导跑成功之后，ai.activeProvider 那一行一定在。
         when(systemSettingService.get(WizardStateService.KEY_WIZARD_COMPLETED, null)).thenReturn("false");
-        lenient().when(systemSettingRepository.count()).thenReturn(0L);
+        when(systemSettingService.get("ai.activeProvider", null)).thenReturn("OPENROUTER");
+        lenient().when(systemSettingRepository.count()).thenReturn(3L);
 
         WizardStateService s = service();
         assertFalse(s.isInitialized(), "reset 后向导重新开放");
         assertFalse(s.inAnonymousSetupWindow(),
                 "reset 窗口必须带管理员会话——匿名放行等于把改写 AI baseUrl 的入口重新打开");
+    }
+
+    @Test
+    void freshInstallWithPrewrittenFalseMarkerIsStillAnonymousWindow() {
+        // 全新安装（非单机模式）启动时 DataInitializer 会先把标记钉成 "false"，
+        // 于是标记永远非 null——按「标记为空才算匿名窗口」的旧判据，
+        // 向导里的本地 Ollama / 本地 ASR 探测在每一台全新机器上都会 401，
+        // 正好是这个类的注释说要防的那种死法。
+        when(systemSettingService.get(WizardStateService.KEY_WIZARD_COMPLETED, null)).thenReturn("false");
+        when(systemSettingService.get("ai.activeProvider", null)).thenReturn(null);
+        lenient().when(systemSettingRepository.count()).thenReturn(1L);
+
+        WizardStateService s = service();
+        assertFalse(s.isInitialized(), "全新安装不算已初始化");
+        assertTrue(s.inAnonymousSetupWindow(), "从没有人选过 AI 提供商 = 向导还没跑完，匿名窗口仍开着");
     }
 
     @Test

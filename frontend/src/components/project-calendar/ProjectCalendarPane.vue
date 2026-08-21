@@ -33,7 +33,11 @@
       <AwdDatePicker v-model="quickDate" type="date" />
       <view class="pcp-quick-actions">
         <view class="pcp-quick-btn" @tap="quickCreateOpen = false">{{ $t('calendar.cancel') }}</view>
-        <view class="pcp-quick-btn pcp-quick-btn-primary" @tap="submitQuickCreate">{{ $t('calendar.save') }}</view>
+        <view
+          class="pcp-quick-btn pcp-quick-btn-primary"
+          :style="quickSaving ? 'opacity:0.6;cursor:default' : ''"
+          @tap="submitQuickCreate"
+        >{{ $t('calendar.save') }}</view>
       </view>
     </view>
 
@@ -84,6 +88,7 @@ export default {
   props: {
     projectId: { type: [Number, String], required: true },
   },
+  emits: ['leave-workbench'],
   data() {
     return {
       tasks: [],
@@ -92,6 +97,7 @@ export default {
       quickCreateOpen: false,
       quickTitle: '',
       quickDate: '',
+      quickSaving: false,
       activeTask: null,
     }
   },
@@ -178,6 +184,10 @@ export default {
         uni.showToast({ title: this.$t('calendar.requiredDate'), icon: 'none' })
         return
       }
+      // 回车（@confirm）和点「保存」是两条独立入口，网络往返期间两条都点得动，
+      // 各发一次 createTask 就多出一条标题日期完全相同的任务，只能手删。
+      if (this.quickSaving) return
+      this.quickSaving = true
       try {
         await createTask({ projectId: this.projectId, title, dueDate: this.quickDate })
         this.quickCreateOpen = false
@@ -185,6 +195,8 @@ export default {
         this.loadTasks()
       } catch (e) {
         uni.showToast({ title: (e && e.message) || this.$t('calendar.saveFailed'), icon: 'none' })
+      } finally {
+        this.quickSaving = false
       }
     },
     async toggleActiveDone() {
@@ -226,8 +238,12 @@ export default {
       })
     },
     openGlobalCalendar() {
-      // 工作台参与的跳转一律 reLaunch（见 CLAUDE.md 导航总规则）
-      uni.reLaunch({ url: '/pages/calendar/calendar' })
+      // 不在这里自己 reLaunch：离开工作台前必须先把编辑器里的未存改动落盘
+      // （flushDirtyEditors 吃的是挂在工作台页面实例上的编辑器引用，子组件够不到），
+      // 否则律师刚敲的那几秒改动会静默丢失——就是 #489 修过的那一类。
+      // 统一交给父页面的 leaveWorkbench：它先落盘再 reLaunch
+      // （工作台参与的跳转一律 reLaunch，见 CLAUDE.md 导航总规则）。
+      this.$emit('leave-workbench', '/pages/calendar/calendar')
     },
   },
 }

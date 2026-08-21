@@ -227,12 +227,13 @@ export default {
         const res = await createProject({ projectType: 'BLANK', name: this.blankName })
         const projectId = res && res.id
         uni.showToast({ title: this.$t('account.projectCreateSuccess'), icon: 'success' })
+        // busy 一直保持到 reLaunch 真把页面带走：请求返回到跳转之间还有 500ms，
+        // 这段时间里放开按钮，再点一下就会用同一个名字再建一个空白项目
         setTimeout(() => {
           uni.reLaunch({ url: `/pages/project-overview/project-overview?id=${projectId}` })
         }, 500)
       } catch (err) {
         uni.showToast({ title: (err && err.message) || this.$t('account.createProjectFailed'), icon: 'none' })
-      } finally {
         this.busy = false
       }
     },

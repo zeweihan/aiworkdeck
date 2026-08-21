@@ -1,4 +1,4 @@
-import { ref, reactive, nextTick } from 'vue'
+import { ref, reactive, nextTick, onUnmounted, getCurrentInstance } from 'vue'
 import { getApiBaseUrl, getConversationMetadata } from '@/services/api.js'
 import { getSessionId } from '@/utils/auth.js'
 import { createProtocolTagRegex, decodeProtocolTags } from '@/composables/agentTagProtocol.mjs'
@@ -77,6 +77,9 @@ export function useAgentStream() {
     // Abort Controllers
     let sseAbortController = null
     let messageAbortController = null
+    // 本实例最近一次挂上模块级单例的网络恢复回调（卸载时据此判断单例是不是自己的，
+    // 无条件置空会踩掉后挂载实例的重连入口）
+    let myNetworkRecoveryHook = null
 
     // --- 断线自动重连状态（F-05）---
     let reconnectAttempts = 0
@@ -316,9 +319,10 @@ export function useAgentStream() {
                 lastSseActivityAt = Date.now()
                 startHeartbeatMonitor()
                 // 网络恢复/回前台时经模块级单例回调触发本实例重连
-                activeNetworkRecoveryHook = (reason) => {
+                myNetworkRecoveryHook = (reason) => {
                     if (!isConnected.value && currentConversationId.value) scheduleReconnect(reason)
                 }
+                activeNetworkRecoveryHook = myNetworkRecoveryHook
                 resolve()
 
                 // 建连即补拉一次在跑的后台任务：background_task_start 只在任务起跑那一刻发一次，
@@ -1517,6 +1521,23 @@ export function useAgentStream() {
         console.log('[AgentStream] Rolled back to message index:', messageIndex, 'remaining:', bubbles.value.length)
 
         return content
+    }
+
+    // 组件卸载时收尾：SSE reader 循环、心跳 interval、待触发的重连定时器都活在闭包里，
+    // 页面被销毁（工作台的跳转一律 reLaunch，整个页面栈都拆掉）后它们不会自己停。
+    // 后果不只是白耗流量：僵尸实例还会 scheduleReconnect，与新挂载的实例轮流把对方
+    // 从同一会话的 SSE 上挤下去。activeNetworkRecoveryHook 是模块级单例，
+    // 只有它当前指向本实例时才置空，否则会踩掉后挂载实例的重连入口。
+    if (getCurrentInstance()) {
+        onUnmounted(() => {
+            if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+            // 先清会话 id：scheduleReconnect 与重连回调都以它为准，置空即断掉续命链
+            currentConversationId.value = null
+            stopHeartbeatMonitor()
+            if (activeNetworkRecoveryHook === myNetworkRecoveryHook) activeNetworkRecoveryHook = null
+            myNetworkRecoveryHook = null
+            resetSSE()
+        })
     }
 
     return {
