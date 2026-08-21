@@ -588,25 +588,9 @@ public class FileTools implements AgentToolComponent {
             if (parentDir != null) {
                 ProjectFile folder = index.get(parentDir);
                 if (folder == null) {
-                    // 逐段补建缺失的目标文件夹
-                    Long parentId = null;
-                    StringBuilder walked = new StringBuilder();
-                    for (String seg : parentDir.split("/")) {
-                        if (walked.length() > 0) walked.append('/');
-                        walked.append(seg);
-                        ProjectFile existing = index.get(walked.toString());
-                        if (existing != null) {
-                            if (!Boolean.TRUE.equals(existing.getIsFolder())) {
-                                return "Error: '" + walked + "' exists but is a file, not a folder.";
-                            }
-                            parentId = existing.getId();
-                        } else {
-                            ProjectFile created = projectFileService.createFolder(projectId, parentId, seg, toolUserId());
-                            index.put(walked.toString(), created);
-                            parentId = created.getId();
-                        }
-                    }
-                    targetFolderId = parentId;
+                    // 逐段补建缺失的目标文件夹（某段已存在但是文件时抛 IllegalArgumentException，下面统一转成 Error 返回）
+                    targetFolderId = projectFileService.ensureFolderPath(projectId, toolUserId(),
+                            java.util.Arrays.asList(parentDir.split("/"))).getId();
                 } else if (!Boolean.TRUE.equals(folder.getIsFolder())) {
                     return "Error: '" + parentDir + "' exists but is a file, not a folder.";
                 } else {

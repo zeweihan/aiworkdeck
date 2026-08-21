@@ -1,7 +1,7 @@
-# 插件规范 v2.3（Plugin Spec v2.3）
+# 插件规范 v2.4（Plugin Spec v2.4）
 
 > 适用版本：v1 自 0.4.x；v2（权限执行 + 启停过滤）自 Phase 3A；v2.1（插件携带 Skill）自 Phase 3B；
-> v2.3（Web 插件 + `packs` 依赖）自 native pack Phase B。
+> v2.3（Web 插件 + `packs` 依赖）自 native pack Phase B；v2.4（宿主 SPI `plugin-api` + 后台任务）自尽调 P1。
 > 示例插件：[examples/hello-plugin/](../examples/hello-plugin/)（JAR 工具）、
 > [examples/hello-web-plugin/](../examples/hello-web-plugin/)（纯前端）。
 > 后端实现：`PluginService`（扫描/解析/启停）、`PluginController`（HTTP API）、
@@ -135,6 +135,12 @@ Java 侧没有进程内沙箱可用（`SecurityManager` 已于 JEP 411 废弃、
   不是隔离：插件能看见宿主的全部类（Spring、项目自己的 `com.checkba.*` service/repository）。
   依赖冲突自行规避；无法解析的类会被跳过。
 - `backendJars` 的路径必须落在插件目录内（含子目录），`../` 逃逸会被拒绝并记 ERROR。
+- **`HostAware`（v2.4）**：工具类若实现 `com.checkba.plugin.api.HostAware`，宿主在无参构造实例化后
+  立即调用 `setHost(PluginHost)`，注入按插件 id 绑定的宿主门面（项目文件 / 文本抽取与 OCR / 标签 /
+  证据链接 / 后台任务 / 编辑器桥 / 设置 / LLM）。不实现则与旧规范完全一致。方法表见 §11。
+  插件代码**只许**引用 `com.checkba.plugin.api.*`：SPI 之外的宿主内部类（`com.checkba.service.*` 等）
+  虽然在同一 JVM 里看得见，但不是契约，随时会改；插件仓应有一条「源码不含 `import com.checkba.service`」
+  的静态测试（ArchUnit 风格反射断言）。
 
 ## 5. 启用 / 禁用
 
@@ -355,9 +361,84 @@ opaque origin 使然，不能靠 `event.origin` 判断。
 - **v2.2**：加载期收口——禁用即不加载 JAR（§5）、`backendJars` 路径逃逸校验（§4）；
   在线分发落地：平台 Ed25519 签名 + 人工审核 + 客户端验签 + 远程封禁，见
   [docs/PLUGIN_DISTRIBUTION.md](PLUGIN_DISTRIBUTION.md)。
-- **v2.3（当前）**：`frontendEntry` 从「预留」激活为 Web 插件形态（§8）——`web/` 静态服务、
+- **v2.3**：`frontendEntry` 从「预留」激活为 Web 插件形态（§8）——`web/` 静态服务、
   sandbox iframe、postMessage 桥、CSP；**permissions 在 Web 插件上第一次成为真实的执行边界**。
   manifest 新增 `packs` 字段（§9）。
+- **v2.4（当前）**：JAR 插件的宿主 SPI——独立 Maven 工件 `com.checkba:plugin-api:1.0.0`
+  （`backend/plugin-api/`，纯接口、无第三方依赖、版本独立于桌面端、只加不破），`HostAware` 注入（§4），
+  `PluginHost` 八个子接口（§11），后台任务 `plugin_job` 表 + `/api/plugin-jobs` + SSE
+  `client_action: plugin_job_progress`，每插件每分钟 60 次宿主调用配额。manifest 无新增字段。
 - 规划中：进程外插件形态（MCP server）为不需要独立 UI 的插件提供真正的隔离边界。
   **进程内沙箱不在规划中**——Java 侧无此能力（§3），不要再把它列为待办；
   Web 插件那条路已经用「不同源 + 桥」拿到了同等效果，代价是能力必须逐个显式开放。
+
+## 11. 宿主 SPI（`plugin-api`，v2.4）
+
+工件 `com.checkba:plugin-api:1.0.0`（源码 `backend/plugin-api/`，Java 21，无第三方依赖）。
+不在远端仓库：本地 `mvn -q -f backend/plugin-api/pom.xml install` 后，插件以 `provided` 依赖它
+（示例 `examples/hello-plugin/pom.xml`）。**只加不破**：已发布的方法签名与 record 字段不改不删，
+新增能力走新方法 / 新 record 字段追加。
+
+### 11.1 注入与调用上下文
+
+```java
+public interface HostAware { void setHost(PluginHost host); }
+public interface PluginHost {
+    String pluginId(); ToolCall call();
+    Files files(); Text text(); Tags tags(); Evidence evidence();
+    Jobs jobs(); Docs docs(); Settings settings(); Llm llm();
+}
+public record ToolCall(Long projectId, String conversationId, Long userId, String modelId) {}
+```
+
+- `call()` 是**服务端**的调用上下文（ThreadLocal）：工具分发期由 `ToolRegistry` 在分发插件工具前绑定、
+  分发后清除；后台任务体内由宿主按 `Jobs.start` 时的快照重新绑定。模型传进工具参数里的 projectId /
+  userId 一律不可信，以 `call()` 为准。
+- 两种线程之外（插件自己起的线程、静态初始化）调用宿主 → `IllegalStateException`。
+- **鉴权**：每个方法先校 `call().userId()` 对 projectId 的读/写权限（项目成员表），非成员抛
+  `IllegalArgumentException`；fileId 必须属于该 projectId（IDOR 防护）。
+- **配额**：每插件每分钟 60 次宿主调用（滑动窗口），超限抛 `HostQuotaException`。这是防 runaway，
+  不是计费——`Llm` / `Text.ocr` 的钱按**用户 Credits** 在平台网关算，插件不自带 key。
+
+### 11.2 方法表
+
+| 子接口 | 方法 | 权限 | 宿主落点 / 备注 |
+|---|---|---|---|
+| `Files` | `list(projectId, parentId, recursive)` | 读 | 返回 `FileInfo{id,name,parentId,folder,fileType,size,path,sha256?,metaJson}`，`path` 从项目根起 |
+| | `get(projectId, fileId)` / `open(projectId, fileId)` | 读 | `open` 返回整份字节的 InputStream |
+| | `createFolderPath(projectId, segments)` | 写 | `ProjectFileService.ensureFolderPath`，逐级确保；某段是文件则抛 |
+| | `write(projectId, parentId, name, bytes, ConflictPolicy)` | 写 | `RENAME` 同名自动 " (n)"，`FAIL` 同名抛；fileType 取扩展名 |
+| | `move` / `rename` | 写 | 与前端文件树右键同一条服务路径（同名校验/环检测/物理搬迁都继承） |
+| | `setMeta(projectId, fileId, patch)` | 写 | 浅合并进 `ProjectFile.metaJson`，值为 null 的键删除 |
+| | `sha256(projectId, fileId)` | 读 | 算一次缓存到 `metaJson.sha256` + `sha256At`（= updatedAt），同版本不再读存储 |
+| `Text` | `extract(projectId, fileId, maxChars)` | 读 | `DocumentTextService`（Tika / PDFBox） |
+| | `ocr(projectId, fileId, OcrOptions)` | 读 | 图片直接、PDF 逐页渲染（150 dpi，上限 50 页）后走 `OcrService`（平台网关，扣 Credits）；`blocks=true` 时块粒度到页（网关不回坐标） |
+| | `pdfPageTexts(projectId, fileId, from, to)` | 读 | PDFBox 分页文本，页码从 1 起闭区间，`to<=0` = 到末页 |
+| `Tags` | `getOrCreate(projectId, name, type)` | 写 | `TagService.getOrCreateTag`：同名不同型复用不改型；type 空 = NORMAL |
+| | `tagFile` / `tagsOf` | 写 / 读 | 标签必须属于同一项目 |
+| `Evidence` | `create(...)` / `addTargets(...)` | 写 | `EvidenceLinkService`，`createdByKind=plugin`（状态 active） |
+| | `listByDoc` / `listByFile` | 读 | 精简 `LinkView{id,linkKey,docFileId,anchorText,sectionPath,sectionTitle,status,targets[]}` |
+| `Jobs` | `start(kind, title, JobBody)` | 写（有 projectId 时） | 每插件 2 并发、多余排队；任务体在发起用户的计费作用域里跑；`JobContext.progress/checkCancelled/call/result` |
+| | `status(jobId)` / `cancel(jobId)` | - | 只认本插件的任务；取消 = 标记 + 中断线程，任务体要在 `checkCancelled` 处配合 |
+| `Docs` | `exec(action, params)` | 会话 | `EditorBridgeService.executeEditorCommand`；action 必须在宿主白名单（AI 管线在用的 writer / `sheet_*` / `slide_*` 下发名），无 conversationId 抛 `IllegalStateException("no active conversation")` |
+| | `refreshFiles()` / `openFile(fileId, locator)` | 会话 | 刷新文件树 / 打开文件（locator 非空时追发 `client_action: plugin_open_locator`） |
+| `Settings` | `get(key)` / `set(key, value)` | - | `system_setting`，键自动加前缀 `plugin.<id>.` |
+| | `projectStyleProfileJson(projectId)` | 读 | 项目 `_模板/画像.json` > `dd.styleProfile.default` > classpath `style-profiles/house-default.json` > null |
+| `Llm` | `complete(system, user, LlmOptions)` | - | 平台通道；`modelId` 空 = 辅助模型（便宜档，与自动打标签同一条）；token 记账带 pluginId 日志 |
+
+### 11.3 后台任务的外部面
+
+- 表 `plugin_job`：`id`（26 位 ULID）、`plugin_id`、`kind`、`title`、`status`（queued / running / done /
+  failed / cancelled）、`done` / `total` / `message`、`result_json`、`error`、`project_id`、`user_id`、
+  `conversation_id`、时间戳。进度写库按 500ms 节流，内存态才是实时值；终态必落库；宿主重启时
+  库里还在 queued / running 的统一标 failed（宿主重启）。
+- REST：`GET /api/plugin-jobs?projectId=`、`GET /api/plugin-jobs/{id}`（登录 + 项目成员）、
+  `POST /api/plugin-jobs/{id}/cancel`（写权限）。
+- SSE：有 conversationId 时每次落库同时发 `client_action` `{action:"plugin_job_progress", jobId, pluginId,
+  kind, title, status, done, total, message, error, conversationId}`；前端并入
+  `BackgroundTaskIndicator`（类型 `PLUGIN_JOB`），挂载时按项目补拉在跑的。
+
+### 11.4 示例
+
+`examples/hello-plugin` 的 `helloListFiles`：实现 `HostAware`，经 `host.files().list(projectId, null, false)`
+列项目根目录；manifest 为它声明 `file_read`。

@@ -107,6 +107,43 @@ public class PluginService {
     @org.springframework.context.annotation.Lazy
     private ToolRegistry toolRegistry;
 
+    /**
+     * 插件宿主 SPI（规范 v2.4 §4/§11）：实例化出的工具类若实现 HostAware，注入按插件 id 绑定的 PluginHost。
+     * 用 ObjectProvider 懒取——PluginHostFactory 背后挂着 EditorBridgeService/ProjectFileService 一串，
+     * 构造器注入会把本类拖进启动死环；required=false 让直接 new 的测试照旧。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.beans.factory.ObjectProvider<com.checkba.service.plugin.PluginHostFactory> pluginHostFactoryProvider;
+
+    /** 供测试直接装配。 */
+    void setPluginHostFactory(com.checkba.service.plugin.PluginHostFactory factory) {
+        this.pluginHostFactoryProvider = new org.springframework.beans.factory.ObjectProvider<>() {
+            @Override public com.checkba.service.plugin.PluginHostFactory getObject(Object... args) { return factory; }
+            @Override public com.checkba.service.plugin.PluginHostFactory getIfAvailable() { return factory; }
+            @Override public com.checkba.service.plugin.PluginHostFactory getIfUnique() { return factory; }
+            @Override public com.checkba.service.plugin.PluginHostFactory getObject() { return factory; }
+        };
+    }
+
+    /**
+     * 实例化后的钩子：实现了 {@link com.checkba.plugin.api.HostAware} 的工具类拿到宿主门面。
+     * 宿主工厂不可用（测试直接 new、或启动早期）时只记 WARN——插件照常注册，只是拿不到 host。
+     */
+    void injectHostIfAware(Object instance, String pluginId) {
+        if (!(instance instanceof com.checkba.plugin.api.HostAware aware)) {
+            return;
+        }
+        com.checkba.service.plugin.PluginHostFactory factory =
+                pluginHostFactoryProvider != null ? pluginHostFactoryProvider.getIfAvailable() : null;
+        if (factory == null) {
+            log.warn("Plugin {} tool {} implements HostAware but no PluginHostFactory is available; host not injected",
+                    pluginId, instance.getClass().getName());
+            return;
+        }
+        aware.setHost(factory.forPlugin(pluginId));
+        log.info("Injected PluginHost into {} (plugin {})", instance.getClass().getName(), pluginId);
+    }
+
     @org.springframework.beans.factory.annotation.Autowired
     public PluginService(SystemSettingService systemSettingService,
                          @Value("${ai.plugins.dir:plugins}") String pluginsDir) {
@@ -655,6 +692,7 @@ public class PluginService {
                             log.info("Found tool class in plugin: {}", className);
                             // Instantiate and register
                             Object instance = cls.getDeclaredConstructor().newInstance();
+                            injectHostIfAware(instance, pluginId);
                             registerToolObject(instance, pluginId);
                         }
                     } catch (Throwable e) {

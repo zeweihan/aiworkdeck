@@ -150,6 +150,19 @@ public class ToolRegistry {
     private final Map<String, RegisteredTool> pluginToolCache = new ConcurrentHashMap<>();
     private final List<ToolSpecification> builtinSpecifications = new ArrayList<>();
 
+    /**
+     * 插件宿主 SPI（规范 v2.4 §11）：分发插件工具前把服务端上下文绑到 PluginHostFactory 的 ThreadLocal，
+     * 与下面 ToolContextHolder.set 同一处设、同一处清。字段注入 + required=false：
+     * 大量 {@code new ToolRegistry(...)} 直接构造的既有测试（含 EvalHarness）不受影响，null 即跳过。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.plugin.PluginHostFactory pluginHostFactory;
+
+    /** 供测试直接装配。 */
+    void setPluginHostFactory(com.checkba.service.plugin.PluginHostFactory pluginHostFactory) {
+        this.pluginHostFactory = pluginHostFactory;
+    }
+
     public ToolRegistry(List<AgentToolComponent> toolComponents, PluginService pluginService,
                         ClientCapabilityService clientCapabilityService) {
         this.toolComponents = toolComponents;
@@ -338,6 +351,10 @@ public class ToolRegistry {
                         + "' requires permission(s) " + missing
                         + " not declared in the plugin manifest \"permissions\".", tool, true);
             }
+            // 宿主 SPI 的调用上下文（projectId/userId 以服务端为准，模型传的参数不可信）
+            if (pluginHostFactory != null) {
+                pluginHostFactory.bindCall(ctx);
+            }
         }
 
         // 装填线程上下文：修复流式回调线程与请求线程不一致导致的 ThreadLocal 丢失/串会话问题
@@ -369,6 +386,9 @@ public class ToolRegistry {
             // 同时清理 ProjectContextHolder：装填时设置了它（见上），此前只清 ToolContextHolder，
             // 池化回调线程复用会残留上个会话的 projectId/userId，导致记忆作用域串号。
             ProjectContextHolder.clear();
+            if (pluginHostFactory != null) {
+                pluginHostFactory.clear();
+            }
         }
     }
 

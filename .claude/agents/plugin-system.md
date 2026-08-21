@@ -167,6 +167,34 @@ manifest.json 要点：id（必需）/name/version/icon/author/permissions（fil
 - **「先落中间态再 `executor.submit`」的服务（会议转写就是），测试里断中间态必须先卡住后台线程**：`save` mock 成原样返回入参时，方法返回的对象与测试持有的是同一个可变实例，后台那个瞬间返回的 mock 会抢先把它改成终态，断言成败取决于 runner 调度（#394 修的就是这个间歇红）。用 `CountDownLatch` 卡住后台调用的那个 mock，断完中间态再 `countDown` 放行。
 - SubAgentTools 曾因循环依赖断启动，用 @Lazy 解决（PR#98），插件/工具类注入编排器时注意。
 
+## 宿主 SPI（plugin-api，规范 v2.4，dev-board#109）
+
+JAR 插件拿宿主能力的唯一契约：`com.checkba:plugin-api:1.0.0`，源码 `backend/plugin-api/`
+（**独立 Maven 工程**，不是 backend 的子模块；backend 以普通依赖引用）。方法表与鉴权/配额规则在
+`docs/PLUGIN_SPEC.md` §11，这里只记落点与地雷。
+
+- **先 install 再构建 backend**：`mvn -q -f backend/plugin-api/pom.xml install`。它不在任何远端仓库，
+  新机器 / 新 worktree 上 `mvn` backend 报 `Could not resolve com.checkba:plugin-api` 就是漏了这步。
+  CI（`ci.yml`）与桌面打包（`desktop-build.yml` 两个平台）都已加这一步。
+- 宿主实现：`service/plugin/PluginHostFactory`（按插件 id 缓存 `PluginHost`、持有调用上下文 ThreadLocal、
+  集中注入全部宿主服务）、`PluginHostImpl`（八个子接口的内部类）、`PluginHostQuota`（60 次/分钟/插件）、
+  `PluginJobService`（后台任务，每插件 2 线程池）+ `PluginJobController`（`/api/plugin-jobs`）+ 实体 `PluginJob`。
+- 注入链：`PluginService.loadJar` 实例化后 `injectHostIfAware` → `HostAware.setHost(factory.forPlugin(id))`。
+  `PluginService` 经 `ObjectProvider<PluginHostFactory>` 懒取（构造器注入会成启动死环）。
+- 调用上下文：`ToolRegistry.execute` 在 `tool.fromPlugin()` 分支 `pluginHostFactory.bindCall(ctx)`，
+  finally 里 `clear()`（与 `ToolContextHolder` 同一处）。字段注入 `required=false`——
+  `new ToolRegistry(...)` 的测试与 EvalHarness 不受影响；后台任务体由 `Jobs.start` 的包装重新绑定快照。
+- `ProjectFileService.ensureFolderPath(projectId, userId, segments)` 是「逐级确保文件夹」的单一出处：
+  插件 `Files.createFolderPath`、`FileTools.move_file` 目标目录补建、会议录音目录三处都走它。
+- `Settings.projectStyleProfileJson` 当前是 H 的过渡实现（项目 `_模板/画像.json` > SystemSetting
+  `dd.styleProfile.default` > classpath `house-default.json`）；单元 I 合并后改调 `StyleProfiles.resolveForProject`。
+- **地雷**：`Docs.*` 依赖 `EditorBridgeService` 自己的 ThreadLocal 会话——后台任务线程上是空的，
+  `PluginHostImpl` 按 `call().conversationId()` 临时绑定再还原，别绕开它直接调 bridge。
+  `Llm.complete` 的温度 / maxTokens 由通道侧模型配置决定（`ChatModelFactory` 给的是预建实例），
+  `LlmOptions` 里这两个字段目前是声明性的。
+- 测试：`PluginJobServiceTest`、`PluginHostImplTest`、`ProjectFileServiceEnsureFolderPathTest`。
+  示例：`examples/hello-plugin` 的 `helloListFiles`。
+
 ## 验证
 
 - 后端：`cd backend && mvn test`（JDK 21）。
