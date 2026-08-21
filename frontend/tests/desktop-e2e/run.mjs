@@ -120,6 +120,10 @@ const step = async (name, fn) => {
 }
 
 const browser = await puppeteer.connect({ browserWSEndpoint: ws, defaultViewport: null })
+// 本地测试站点（浏览器面板那组用），下面 finally 里要兜底关掉它。
+// 声明必须留在 try 外面：try 块里的 let 对同级 finally 不可见，写在里面 finally 只会抛
+// ReferenceError，再被那行自己的空 catch 吞掉——兜底就成了永不生效的死代码。
+let site = null
 try {
   // main renderer page = the dev URL
   let page = null
@@ -317,7 +321,7 @@ try {
   // 用本机起的两页小站而不是真网站：断言不能挂在外网可达性上。
   const SITE_PORT = pickFreePort(8811)
   const SITE = 'http://127.0.0.1:' + SITE_PORT
-  let site = null
+  site = null
   const clickTabAt = async (idx) => {
     const box = await page.evaluate((check, i) => {
       const el = document.querySelectorAll('.tabs-pane-left .tab-item')[i]
