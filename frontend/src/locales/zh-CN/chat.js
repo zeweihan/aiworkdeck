@@ -108,6 +108,7 @@ export default {
   taskFileProcess: '文件处理',
   taskWebFetch: '网页获取',
   taskOther: '其他任务',
+  taskPluginJob: '插件任务',
   taskBackgroundFallback: '后台任务',
   backgroundTasksHeader: '后台任务',
   viewTaskDetails: '查看任务详情',

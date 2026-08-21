@@ -108,6 +108,7 @@ export default {
   taskFileProcess: 'File Processing',
   taskWebFetch: 'Web Fetch',
   taskOther: 'Other Task',
+  taskPluginJob: 'Plugin Job',
   taskBackgroundFallback: 'Background Task',
   backgroundTasksHeader: 'Background Tasks',
   viewTaskDetails: 'View task details',

@@ -291,6 +291,41 @@ export function useAgentStream() {
         }
     }
 
+    // 插件后台任务 → backgroundTasks 条目。载荷来自 SSE `plugin_job_progress` 或 REST /api/plugin-jobs
+    // （字段同形：jobId/pluginId/kind/title/status/done/total/message/error/conversationId；REST 实体用 id）。
+    // 状态词映射到浮窗认识的四个：queued/running→running，done→completed，failed/cancelled 原样。
+    const upsertPluginJob = (d) => {
+        const jobId = d && (d.jobId || d.id)
+        if (!jobId) return
+        const status = d.status === 'done' ? 'completed'
+            : (d.status === 'failed' || d.status === 'cancelled') ? d.status
+            : 'running'
+        const total = Number(d.total) || 0
+        const done = Number(d.done) || 0
+        const progress = status === 'completed' ? 100 : (total > 0 ? Math.min(100, Math.round(done / total * 100)) : 0)
+        const message = d.status === 'failed' ? (d.error || d.message || t('agentStream.taskFailed'))
+            : d.status === 'done' ? (d.message || t('agentStream.taskCompleted'))
+            : (d.message || d.title || t('agentStream.taskInProgress'))
+        const existing = backgroundTasks.value[jobId]
+        const entry = {
+            taskId: jobId,
+            type: 'PLUGIN_JOB',
+            pluginId: d.pluginId,
+            kind: d.kind,
+            title: d.title,
+            conversationId: d.conversationId || (existing && existing.conversationId) || null,
+            progress,
+            message,
+            stage: d.status,
+            status,
+            error: d.error,
+            startedAt: existing ? existing.startedAt : Date.now(),
+            lastUpdate: Date.now()
+        }
+        if (status !== 'running' && !(existing && existing.completedAt)) entry.completedAt = Date.now()
+        backgroundTasks.value[jobId] = existing ? Object.assign(existing, entry) : entry
+    }
+
     // --- SSE Connection ---
     const connectSSE = (conversationId) => {
         if (sseAbortController && isConnected.value) return Promise.resolve()
@@ -790,6 +825,11 @@ export function useAgentStream() {
         } else if (evt === 'client_action') {
             try {
                 const d = JSON.parse(dataStr)
+                // 插件后台任务进度（PluginJobService，规范 v2.4 §11）：状态归 backgroundTasks，
+                // 与 PPT 生成等 Agent 后台任务同一张表、同一个浮窗；仍继续下发给页面级 handler。
+                if (d && d.action === 'plugin_job_progress') {
+                    upsertPluginJob(d)
+                }
                 // Trigger registered callbacks
                 if (clientActionHandler.value) {
                     clientActionHandler.value(d)
@@ -1569,6 +1609,8 @@ export function useAgentStream() {
         dismissBackgroundTask: (taskId) => {
             if (taskId && backgroundTasks.value[taskId]) delete backgroundTasks.value[taskId]
         },
+        // 插件后台任务：SSE 之外的补种入口（ChatInterface 挂载时拉 /api/plugin-jobs 把在跑的接回浮窗）
+        upsertPluginJob,
         // 切回会话时重连 SSE：后端 connect 会推 run_state（运行中还会推 state_recovery 续流）。
         reattachSSE: async (conversationId) => {
             if (!conversationId) return
