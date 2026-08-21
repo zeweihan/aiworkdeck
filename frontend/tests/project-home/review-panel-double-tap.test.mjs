@@ -12,9 +12,11 @@ import { readFileSync } from 'node:fs'
 const SRC = readFileSync(new URL('../../src/components/ReviewPanel.vue', import.meta.url), 'utf8')
 
 function makeVm(executor) {
+  // 组件带 @/ 别名的 import（证据页子组件）进不来：剥掉 import 行，子组件用形参喂桩。
   const script = SRC.match(/<script>([\s\S]*?)<\/script>/)[1]
+    .replace(/^import .*$/gm, '')
   // eslint-disable-next-line no-new-func
-  const component = new Function(script.replace('export default', 'return'))()
+  const component = new Function('EvidencePanel', script.replace('export default', 'return'))({})
   const base = { $t: (k) => k, $emit: () => {}, executor }
   return Object.assign(base, component.data.call(base), component.methods, {
     revisionGroups: component.computed.revisionGroups,
