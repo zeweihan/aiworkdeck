@@ -66,7 +66,7 @@ class DocumentEditToolsEvidenceTest {
         evidence = Mockito.mock(EvidenceLinkService.class);
         repo = Mockito.mock(ProjectFileRepository.class);
         members = Mockito.mock(ProjectMemberService.class);
-        tools = new DocumentEditTools(null, repo, bridge, null, evidence, members);
+        tools = new DocumentEditTools(null, repo, bridge, null, evidence, members, null);
         ProjectContextHolder.setProjectId(String.valueOf(PROJECT_ID));
         ProjectContextHolder.setUserId(USER_ID);
         when(members.hasWritePermission(PROJECT_ID, USER_ID)).thenReturn(true);

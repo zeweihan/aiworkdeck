@@ -83,7 +83,7 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - **office 线程是单事件循环**，一条 20s 的命令会把自动保存的 export、IME 的 ui_command 全排队。`find_replace`（全部替换走引擎原生 `replaceAll` 一次完成；只替首处 / 纯插入型回退到逐命中路径，命中 > 50 时按 30 一批）与 `apply_house_style`（500 个顶层元素一批）现在是 **async 原语**：批间 `batchBreak()` 发 `progress`、`await` 一个宏任务、查 cancel、重设修订作者（批间别的命令可能把作者切成用户名）。`execCommand` 对返回 Promise 的原语等它结束再 post result，同步原语路径不变。新增分批原语照 `batchBreak(p, done, total)` 的口径写，**批间允许别的命令插进来**（含写命令），别在批间持有跨批失效的 UNO 对象假设。
 - **进度链路**：worker `post('progress', {reqId, done, total})` → `libreofficeExecutorClient` `cmd:'progress'`（按 pending reqId 回调 `callOpts.onProgress`，也给全局 `opts.onProgress(reqId, p)`）→ `serveExecutor` 转成 relay `type:'progress'`（reqId 换成宿主那一侧的）→ `createRelayExecutor({onProgress})` → `LibreOfficeEditor.vue` `$emit('command-progress', {reqId, done, total})`。`apply_house_style` 的 `total` = 正文段数（走 paraIndex）+ 表数，`done` 是已处理顶层元素数；取消时批间那帧已报过同一个 done，结束不再补帧。宿主侧 `project-overview.vue` `onEditorCommandProgress` 用 toast 显示「处理中 x/y」（AI 过程卡没有工具内进度位，先降级）。
 - **取消**：宿主 `executeCommand('cancel', {reqId})`，reqId 取自 progress；`serveExecutor` 用 inflight 表把宿主 reqId 换成 worker reqId。协作式：只置位 `CANCELLED[reqId]`，命令在下一个批间检查点停下，返回 `{success:true, cancelled:true, done}`（`apply_house_style` 同时 `truncated:true`；正常完成永远带 `truncated:false`）。
-- **分级超时三处同表**（改一处同步另两处）：`libreofficeExecutorClient.js` / `zetaOfficeRelay.js` 的 `ACTION_BUDGET_MS`（load/export 180s；find_replace / apply_house_style / resolve_all_revisions / insert_table 120s）与后端 `EditorBridgeService.ACTION_TIMEOUT_SECONDS`（默认 30s）。
+- **分级超时三处同表**（改一处同步另两处）：`libreofficeExecutorClient.js` / `zetaOfficeRelay.js` 的 `ACTION_BUDGET_MS`（load/export 180s；find_replace / apply_house_style / apply_style_profile / resolve_all_revisions / insert_table 120s）与后端 `EditorBridgeService.ACTION_TIMEOUT_SECONDS`（默认 30s）。
 - **段落索引缓存** `paraIndex`（`buildParaIndex` 一次枚举存每段 XTextRange）：`get_document_text` / `get_paragraph` / `modify_paragraph` / `select_paragraph` / `eachParagraph` 全走它，150 页二次读从 2s 降到毫秒级。失效：modified 监听器（主闸）、`verifySnapshot()`、undo/redo、索引绑定 `xModel` 引用（换文档自然重建）。`withParaIndex(fn)` 里 **fn 只许读**——段落对象失效抛异常时会重建再调一次；写原语先 `paraAt(idx)` 拿段落再在外面改。
 - **大文档基线组** `npm run test:lowa-big`（`tests/lowa-e2e/big-doc.mjs`，夹具 `fixtures/gen-big-doc.py` 生成到 `$TMPDIR`）：150 页 / 30 表 / 20 图，六项硬阈三次中位数；改 worker 的全文路径后必跑，数字表在 `tests/lowa-e2e/README.md`。
 - **写入慢的真根因是 JS 实现的 XModifyListener**（2026-08-22 探针实证）：只要装着它，引擎每条文档写入（一条 `setPropertyValue` / `setString`）都回调进 JS 一次，一次约 35ms，与回调体做什么无关（空函数体同样 35ms）；摘掉后同一条写入 0.1ms，读操作（getString/getPropertyValue）本来就只要 0.06ms。与 RecordChanges 开关、`lockControllers`、undo 都无关。所以 **批量写命令必须包在 `lockModel()/unlockModel()` 里**——它除了锁控制器还会 `suspendModifyListener()`（摘下监听器，结束装回并补发一次 `modified`）。**两者都是深度计数**：`batchBreak` 取消返回前已解过一次锁，调用方的 `finally { unlockModel() }` 再解一次不会让 `removeActionLock/unlockControllers` 下溢（下溢会让 `hasControllersLocked()` 余生恒 true，PR#554 复核抓到）。`cancel` 只对 `INFLIGHT` 里的 reqId 置位，已结束的返回 `stale:true` 不留 `CANCELLED` 痕迹；lowa-e2e 组 28 断言取消后锁平衡、文档可编辑、`modified` 仍触发；`resolve_all_revisions` 只摘监听器不锁控制器（派发走视图）。`applyHouseChar/applyHousePara` 同时改成 `setPropertyValues` 批写，对象不支持或被拒时自动退回逐个写。
@@ -132,6 +132,27 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - webview/uni 存储格式坑与宿主侧 e2e 配方见 lowa-keepalive 记录（PR#159）。
 - **预热备胎是同一个 LibreOfficeEditor 组件（file=null）**：任何在组件树/DOM 里"找编辑器实例"的探针（如 desktop-e2e FIND_EDITOR）必须过滤 `file` 非空，否则命令打在隐藏空白备胎上、样样"成功"但真文档纹丝不动。备胎未激活用 visibility 隐藏（绝对定位占位），不能改 display:none——引擎要在有尺寸画布里 boot。
 
+## 样式画像原语（dev-board#111，office_thread.js）
+
+HOUSE 不再是常量：`buildHouse(profile)` 从画像 JSON 派生写端常量表（字体/字号/段落规格/标题各级规格/表格边框与表头/目录标题），`ACTIVE_PROFILE` 默认 = `self.HOUSE_DEFAULT_JSON`（`house-default.js` 经 `Module.uno_scripts` 在 zeta.js 之后、worker 之前载入，`zetaOfficeBoot.js` 的 `houseProfileUrl` 选项；缺席时 worker 退到硬兜底并在 bootDoc 记日志）。`applyHouseChar/applyHousePara/styleTableStandard/streamParagraph/apply_house_style` 全部只读 HOUSE。单位换算 `profLenPt`：pt 直出、chars 按所在块字号、lines 按字号 x 1.2（与后端 `Units` 同口径）、mm/cm/twips 直换。
+
+| action | 参数 | 说明 |
+|---|---|---|
+| `set_style_profile` | `{profile}` / `{reset:true}` | 校验 `schemaVersion`（只认 1）、`profileMergeInto`（同 Java `StyleProfile.mergeInto`：对象递归、headings 按 level 合并、其余整体替换）到 house-default 之上，重算 HOUSE。只改 worker 状态不碰文档。返回 `styleProfileSummary()` |
+| `apply_style_profile` | `{scope: document\|selection\|styles-only}` | 先 `applyProfileToStyles()` 改 `Standard`/`Heading 1..6`/`Table Contents`/`Table Heading`/`Contents Heading` 定义，再按 scope 走 `applyHouseToDocument(p,{trueLevels:true})`（标题按真实 OutlineLevel 取各级规格）/ 选区内段落 / 不碰正文。分批 500 + progress + 取消，`truncated` 只在取消时 true |
+| `insert_toc` | `{levels, title, position: cursor\|start}` | `com.sun.star.text.ContentIndex`（CreateFromOutline、Level=shortAny）insertTextContent 后 `update()`；缺省 levels/title 取画像 `toc`。主标题（流式 `#` 首段）不带 OutlineLevel，不进目录 |
+| `set_page_setup` | `{width, height, orientation, margins:{top,bottom,left,right}}`（mm） | 页面样式 Width/Height/IsLandscape/XxxMargin（1/100mm）；给 orientation 时按它校正宽高顺序。返回读回值 |
+| `edit_header_footer` 扩展 | `pageNumberPattern`、`fontName/fontNameAsian/fontSize` | `{PAGE}`→`TextField.PageNumber`(SubType CURRENT)、`{NUMPAGES}`→`TextField.PageCount`，NumberingType 用 `shortAny(ARABIC)`；接在 text 之后，text 可省 |
+| `format_selection` 扩展 | `fontNameAsian` | 只设 `CharFontNameAsian`（`fontName` 仍三项一起设，先 fontName 后 fontNameAsian） |
+| `format_table` 扩展 | `borderColor/borderStyle(single\|double\|dashed)/outsideBorderWidthPt/insideBorderWidthPt/headerFill/repeatHeader/columnWidthsCm` | `applyTableBorders(table, spec)` 内外线分开；`headerFill` 落首行 `BackColor`（none=-1）；`repeatHeader` = `RepeatHeadline` + `HeaderRowCount` |
+
+地雷：
+- `apply_house_style`（旧 doc_apply_standard_format）保留改造前口径：非主标题的标题一律按**二级**规格（= 正文款加粗），只有 `apply_style_profile` 按真实级别取画像。house-default 一级是 16 磅粗居中，别把 apply_house_style 改成真级别——会把既有文档里所有 Heading 1 段放大居中。
+- 流式续写里的 `#`（非主标题）也按二级规格落（OutlineLevel 仍记 1），理由同上。
+- **本引擎（zh-CN r4）按列设宽做不到**：`new css.text.TableColumnSeparator` 与「读回 `TableColumnSeparators` 改 Position 再设回」都抛 `unregistered UNO type`（WASM 桥没注册该结构），`columnWidthsPercent` 从一开始就是死路（e2e 组 29 实锤）。worker 返回「当前编辑器引擎不支持按列设宽」的明确拒绝，e2e 锁住这条；引擎支持了那条会红，提醒把能力加回工具描述。
+- `set_style_profile` 是 worker 级全局状态：e2e 组 29 末尾必须 `reset`，否则后续组/复用 worker 的断言全按测试画像跑。
+- 改样式定义（`applyProfileToStyles`）要包在 `lockModel/unlockModel` 里，否则每个属性写入都重排版一次。
+
 ## EvidenceLink 书签原语（dev-board#103，office_thread.js）
 
 书签名 = linkKey（`EVID_<ULID>`，只含 `[A-Za-z0-9_]`），底稿关联挂在命名书签上跟着文字走。五个 host-initiated action（已入 `EDITOR_ACTIONS` 白名单；失败一律 `bmFail()` 双字段 error+message）：
@@ -153,7 +174,7 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 
 ## 验证
 
-- 核心回归：`cd frontend && npm run test:lowa-e2e`（真引擎 puppeteer-core 无头，27 组人机模拟，2026-08-21 基线 421 步；前置 `npm run build:zetaoffice` + `node ../desktop/scripts/fetch-lowa-assets.js` 或设 LOWA_ENGINE_DIR）。
+- 核心回归：`cd frontend && npm run test:lowa-e2e`（真引擎 puppeteer-core 无头，29 组人机模拟，2026-08-22 基线 458 步；前置 `npm run build:zetaoffice` + `node ../desktop/scripts/fetch-lowa-assets.js` 或设 LOWA_ENGINE_DIR）。
 - 大文档性能：`npm run test:lowa-big`（同一套启动件 `tests/lowa-e2e/_boot.mjs`；端口被别的 worktree 占着时设 `LOWA_E2E_PORT`）。
 - 涉桌面壳/webview：`npm run test:desktop-e2e`（弹 dev Electron 窗口，验证保存落盘链路）。
 - 全应用：`npm run test:app-e2e`。改编辑器三件套（原语/白名单/worker）必跑 lowa-e2e。

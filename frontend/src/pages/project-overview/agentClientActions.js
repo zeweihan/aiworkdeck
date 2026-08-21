@@ -211,6 +211,12 @@ export const agentClientActionMethods = {
             this._docStreamTargetFileId = file.id
             // worker 端 markdown 状态机也要硬清（上一条流若异常中断会留下半张表/半行）
             try { await this.libreOfficeExecutor.executeCommand('stream_flush', { discard: true }) } catch (e) {}
+            // 项目模板画像（后端只在非 house-default 时附带）：流式落字前先换画像，stream_insert
+            // 才按项目模板排版；失败只记日志（退回 house-default 落字，不让整条流断掉）
+            if (params.styleProfile) {
+                try { await this.libreOfficeExecutor.executeCommand('set_style_profile', { profile: params.styleProfile }) }
+                catch (e) { console.error('[ProjectOverview] set_style_profile before streaming failed:', e) }
+            }
             console.log('[ProjectOverview] Stream state reset, ready for streaming')
 
             // 6. 返回成功给后端
@@ -229,6 +235,28 @@ export const agentClientActionMethods = {
         }
     },
 
+    /**
+     * doc_open_file 附带的项目画像：等该 fileId 的编辑器 ready（最多 90s，口径同 open_sync）
+     * 再发 set_style_profile。按 fileId 反查 executor，不信 libreOfficeExecutor 指针——
+     * 用户这期间切走别的标签，指针就指向别的文档了。
+     */
+    async applyStyleProfileWhenReady(fileId, profile) {
+        for (let i = 0; i < 180; i++) {
+            const map = this.getLibreExecutorMap()
+            const exec = map['left:' + fileId] || map['right:' + fileId] || null
+            if (exec) {
+                try {
+                    await exec.executeCommand('set_style_profile', { profile })
+                    console.log('[ProjectOverview] style profile applied to opened file', fileId)
+                } catch (e) {
+                    console.error('[ProjectOverview] set_style_profile after open failed:', e)
+                }
+                return
+            }
+            await new Promise(resolve => setTimeout(resolve, 500))
+        }
+        console.warn('[ProjectOverview] editor for file', fileId, 'not ready within 90s; style profile not applied')
+    },
     /**
      * 处理 AI Agent 的打开文件请求
      */
@@ -254,6 +282,10 @@ export const agentClientActionMethods = {
 
             // 提示用户
             uni.showToast({ title: this.$t('workbenchOps.openedNamed', { name: file.name }), icon: 'none' })
+
+            // 项目模板画像（后端只在非 house-default 时附带）：等这份文件的编辑器就绪后追发
+            // set_style_profile——worker 按文档实例起，画像必须打在它自己的 worker 上。
+            if (action.styleProfile) this.applyStyleProfileWhenReady(file.id, action.styleProfile)
 
         } catch (e) {
             console.error('[ProjectOverview] handleEditorOpenFile error:', e)

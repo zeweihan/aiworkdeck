@@ -389,7 +389,10 @@ public class ContextAssemblerService {
                         default -> {
                             systemText.append("所有 doc_* 编辑/读取工具直接作用于该文档——**无需也不要**调用 ");
                             systemText.append("`doc_list_project_files` 或 `doc_open_file` 去重新发现/打开它；");
-                            systemText.append("只有用户明确要操作**其他**文档时才需要那两个工具。\n\n");
+                            systemText.append("只有用户明确要操作**其他**文档时才需要那两个工具。");
+                            systemText.append("项目有模板画像（_模板/画像.json，由 docx_inspect_template 学得）时，排版一律用 doc_apply_style_profile " +
+                                    "套用画像（write_docx 新建文件会自动套用），不要用 doc_apply_standard_format；目录用 doc_insert_toc、" +
+                                    "页码用 doc_edit_header_footer 的 pageNumberPattern、纸张页边距用 doc_set_page_setup。\n\n");
                         }
                     }
                 }
@@ -1094,7 +1097,7 @@ Text formatting (font / size / bold and italic / underline / strikethrough / col
 """;
 
     private static final String EN_GUIDE_LOWA_DOC = """
-All doc_* editing and reading tools act directly on this document. You need NOT - and must NOT - call `doc_list_project_files` or `doc_open_file` to rediscover or reopen it; those two tools are needed only when the user explicitly wants to work on a DIFFERENT document.
+All doc_* editing and reading tools act directly on this document. You need NOT - and must NOT - call `doc_list_project_files` or `doc_open_file` to rediscover or reopen it; those two tools are needed only when the user explicitly wants to work on a DIFFERENT document. When the project has a template style profile (_模板/画像.json, learned by docx_inspect_template), format with doc_apply_style_profile (write_docx applies it automatically) rather than doc_apply_standard_format; use doc_insert_toc for a table of contents, doc_edit_header_footer's pageNumberPattern for page numbers, and doc_set_page_setup for paper size and margins.
 
 """;
 

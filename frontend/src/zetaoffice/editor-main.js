@@ -206,6 +206,7 @@ startEditorEndpoint({
   sofficeBaseUrl: q.get('lowa') || 'https://cdn.zetaoffice.net/zetaoffice_latest/',
   zetaJsUrl: q.get('zeta') || './zeta.js',
   workerScriptUrl: q.get('worker') || './office_thread.js',
+  houseProfileUrl: q.get('house') || './house-default.js',
   // Default to the CJK fonts served next to the page — one per Chinese typeface
   // category (黑体类 sans / 宋体类 serif / 楷体 / 仿宋), baked by
   // desktop/scripts/fetch-lowa-assets.js. bootZetaOffice skips any that 404

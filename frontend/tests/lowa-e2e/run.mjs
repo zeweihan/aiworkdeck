@@ -42,6 +42,32 @@ const DEBUG_ACTIONS = `
     return { success: true, controllersLocked: ctl, modifySuspended: modifySuspended, lockDepth: modelLockDepth, cancelledKeys: Object.keys(CANCELLED).length, inflightKeys: Object.keys(INFLIGHT).length };
   },
   debug_modified_count() { return { success: true, count: MOD_COUNT }; },
+  // 组 29 探针：页脚文本与页码域计数（PageNumber / PageCount 文本域各几枚）
+  debug_footer_info() {
+    const out = { success: true, text: '', pageNumberFields: 0, pageCountFields: 0 };
+    try {
+      const ps = currentPageStyle();
+      if (ps.error) return ps;
+      out.text = String(ps.pageStyle.getPropertyValue('FooterText').getString() || '');
+      const en = xModel.getTextFields().createEnumeration();
+      while (en.hasMoreElements()) {
+        const f = en.nextElement();
+        if (f.supportsService && f.supportsService('com.sun.star.text.textfield.PageNumber')) out.pageNumberFields++;
+        if (f.supportsService && f.supportsService('com.sun.star.text.textfield.PageCount')) out.pageCountFields++;
+      }
+    } catch (e) { out.err = errStr(e); }
+    return out;
+  },
+  // 组 29 探针：段落样式定义的字号/粗细/对齐（apply_style_profile 改的是定义，不是某段）
+  debug_para_style_info(p) {
+    try {
+      const st = xModel.getStyleFamilies().getByName('ParagraphStyles').getByName(String(p.name));
+      return { success: true, sizePt: st.getPropertyValue('CharHeight'), bold: st.getPropertyValue('CharWeight') > 100,
+        fontAsian: st.getPropertyValue('CharFontNameAsian'), fontWestern: st.getPropertyValue('CharFontName'),
+        centered: enumEq(st.getPropertyValue('ParaAdjust'), css.style.ParagraphAdjust.CENTER),
+        firstLineIndentMm: st.getPropertyValue('ParaFirstLineIndent') };
+    } catch (e) { return { success: false, message: errStr(e) }; }
+  },
   debug_set_record_changes(p) {
     xModel.setPropertyValue('RecordChanges', !!p.on);
     return { success: true, recordChanges: xModel.getPropertyValue('RecordChanges') };
@@ -93,6 +119,10 @@ const DEBUG_ACTIONS = `
     const out = { success: true, count: ts.getCount() };
     try { out.rows = t.getRows().getCount(); out.cols = t.getColumns().getCount(); } catch (e) {}
     try { out.borderWidth = t.getPropertyValue('TableBorder2').TopLine.LineWidth; } catch (e) { out.borderErr = errStr(e); }
+    // 组 29：内框线宽 / 外框线型与颜色 / 重复表头 / 表头底纹
+    try { const tb = t.getPropertyValue('TableBorder2'); out.innerWidth = tb.HorizontalLine.LineWidth; out.borderStyle = unoEnumVal(tb.TopLine.LineStyle); out.borderColor = tb.TopLine.Color; } catch (e) {}
+    try { out.repeatHeadline = !!t.getPropertyValue('RepeatHeadline'); } catch (e) {}
+    try { out.a1Fill = t.getCellByName('A1').getPropertyValue('BackColor'); } catch (e) {}
     try {
       const a1 = t.getCellByName('A1');
       out.a1Text = a1.getString();
@@ -258,8 +288,8 @@ function patchServed(urlPath, content) {
   if (/^\/assets\/editor-.*\.js$/.test(urlPath)) {
     const s = content.toString('utf8')
     return Buffer.from(
-      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments','debug_fresh_document','debug_table_info','debug_fresh_calc','debug_sheet_cell_info','debug_sheet_doc_info','debug_slide_shape_info','debug_slide_char_prop','debug_lock_state','debug_modified_count'")
-        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments","debug_fresh_document","debug_table_info","debug_fresh_calc","debug_sheet_cell_info","debug_sheet_doc_info","debug_slide_shape_info","debug_slide_char_prop","debug_lock_state","debug_modified_count"'),
+      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments','debug_fresh_document','debug_table_info','debug_fresh_calc','debug_sheet_cell_info','debug_sheet_doc_info','debug_slide_shape_info','debug_slide_char_prop','debug_lock_state','debug_modified_count','debug_footer_info','debug_para_style_info'")
+        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments","debug_fresh_document","debug_table_info","debug_fresh_calc","debug_sheet_cell_info","debug_sheet_doc_info","debug_slide_shape_info","debug_slide_char_prop","debug_lock_state","debug_modified_count","debug_footer_info","debug_para_style_info"'),
       'utf8')
   }
   return content
@@ -1797,6 +1827,110 @@ try {
     check('不取消：replaced=150 且末帧 done=150', full.res.success === true && full.res.replaced === 150 && !full.res.cancelled && full.prog[full.prog.length - 1] === 150, JSON.stringify(full.res) + ' ' + JSON.stringify(full.prog))
     const st2 = await exec('debug_lock_state')
     check('跑完后锁平衡', st2.controllersLocked === false && st2.lockDepth === 0 && st2.modifySuspended === 0 && st2.inflightKeys === 1, JSON.stringify(st2))
+  }
+
+  // ---------- 组 29：样式画像（set/apply_style_profile / insert_toc / set_page_setup / 页码域）----------
+  console.log('\n[29] 样式画像：换画像后流式落字与建表按画像 / 样式定义 / 目录 / 纸张 / 页码域（dev-board#111）')
+  {
+    await exec('debug_fresh_document')
+    await exec('debug_set_record_changes', { on: false })
+    // 测试画像：楷体 12 / 西文 Times New Roman / 无首行缩进 / 段后 18；一级标题 12 磅粗两端对齐；
+    // 表格 9 号字、0.75 磅边框。与 house-default 逐项不同，读回能分辨"按了谁的"。
+    const profile = {
+      schemaVersion: 1, name: '测试画像',
+      body: { font: { eastAsia: '楷体_GB2312', western: 'Times New Roman' }, size: { value: 12, unit: 'pt' }, alignment: 'justify',
+        firstLineIndent: { value: 0, unit: 'pt' }, spaceBefore: { value: 0, unit: 'pt' }, spaceAfter: { value: 18, unit: 'pt' },
+        lineSpacing: { rule: 'atLeast', value: 16, unit: 'pt' } },
+      headings: [{ level: 1, size: { value: 12, unit: 'pt' }, bold: true, alignment: 'justify', firstLineIndent: { value: 0, unit: 'pt' } }],
+      table: { cell: { size: { value: 9, unit: 'pt' } },
+        borders: { outside: { style: 'single', width: { value: 0.75, unit: 'pt' }, color: '#000000' }, insideH: { style: 'single', width: { value: 0.75, unit: 'pt' }, color: '#000000' }, insideV: { style: 'single', width: { value: 0.75, unit: 'pt' }, color: '#000000' } } },
+    }
+    const bad = await exec('set_style_profile', { profile: { schemaVersion: 2 } })
+    check('schemaVersion 2 被拒绝', bad.success === false && /schemaVersion/.test(bad.message || ''), JSON.stringify(bad))
+    const sp = await exec('set_style_profile', { profile })
+    check('set_style_profile 成功且 merge 到默认之上（西文改、中文沿用默认）',
+      sp.success === true && sp.body.fontWestern === 'Times New Roman' && sp.body.fontAsian === '楷体_GB2312'
+      && Math.abs(sp.body.firstLineIndentPt) < 0.2 && Math.abs(sp.body.spaceAfterPt - 18) < 0.2 && sp.headingLevels.length === 6, JSON.stringify(sp))
+    // 流式落字 + markdown 建表按画像
+    await exec('stream_insert', { text: '# 画像标题\n正文段落内容。\n| 项目 | 金额 |\n| --- | --- |\n| 咨询费 | 10000 |\n' })
+    await exec('stream_flush', {})
+    await exec('select_paragraph', { index: 0 })
+    let fm = await exec('get_formatting')
+    check('主标题按画像一级：12 磅粗、两端对齐（不再 16 磅居中）', fm.character.bold === true && Math.abs(fm.character.sizePt - 12) < 0.2 && fm.paragraph.alignment === 'justify', JSON.stringify({ c: fm.character, p: fm.paragraph.alignment }))
+    await exec('select_paragraph', { index: 1 })
+    fm = await exec('get_formatting')
+    check('正文按画像：Times New Roman / 楷体 / 无首行缩进 / 段后 18',
+      fm.character.fontWestern === 'Times New Roman' && fm.character.fontAsian === '楷体_GB2312'
+      && Math.abs(fm.paragraph.firstLineIndentPt) < 0.2 && Math.abs(fm.paragraph.spaceAfterPt - 18) < 0.2, JSON.stringify({ c: fm.character, p: fm.paragraph }))
+    let ti = await exec('debug_table_info', {})
+    check('流式建表按画像：0.75 磅边框（26/100mm）、9 号字、表头仍加粗居中', ti.success && Math.abs((ti.borderWidth || 0) - 26) <= 1 && Math.abs(ti.a1SizePt - 9) < 0.2 && ti.a1Bold === true && ti.a1Centered === true, JSON.stringify(ti))
+    // insert_table 同样按画像
+    await exec('goto', { type: 'end' })
+    const it = await exec('insert_table', { rows: [['a', 'b'], ['c', '1']], headerRow: true })
+    ti = await exec('debug_table_info', { index: 1 })
+    check('insert_table 按画像 9 号字 + 0.75 磅边框', it.success === true && Math.abs(ti.a1SizePt - 9) < 0.2 && Math.abs((ti.borderWidth || 0) - 26) <= 1, JSON.stringify(ti))
+    // apply_style_profile：先造一个 Heading 1 段并打上 20 磅直接格式，套用后应回到画像的 12 磅粗
+    await exec('goto', { type: 'end' })
+    await exec('insert_at_cursor', { text: '第一章 总则' })
+    const t29 = await exec('get_document_text')
+    const lastIdx = t29.paragraphs.length - 1
+    await exec('select_paragraph', { index: lastIdx })
+    await exec('set_paragraph_format', { headingLevel: 1 })
+    await exec('format_selection', { fontSize: 20, bold: false })
+    const ap = await exec('apply_style_profile', { scope: 'document' })
+    check('apply_style_profile 成功、truncated=false、改到 Standard/Heading 1/Table Contents 定义',
+      ap.success === true && ap.truncated === false && ap.paragraphs >= 3 && ap.tables === 2
+      && ['Standard', 'Heading 1', 'Table Contents', 'Table Heading'].every((n) => (ap.styles || []).includes(n)), JSON.stringify(ap).slice(0, 300))
+    await exec('select_paragraph', { index: lastIdx })
+    fm = await exec('get_formatting')
+    check('套用后 Heading 1 段 12 磅且粗（直接格式 20 磅被画像覆盖）', Math.abs(fm.character.sizePt - 12) < 0.2 && fm.character.bold === true && fm.paragraph.styleName === 'Heading 1', JSON.stringify({ c: fm.character, s: fm.paragraph.styleName }))
+    const sd = await exec('debug_para_style_info', { name: 'Standard' })
+    const hd = await exec('debug_para_style_info', { name: 'Heading 1' })
+    check('样式定义已改：Standard 12 磅 Times New Roman 无缩进；Heading 1 12 磅粗', sd.success && Math.abs(sd.sizePt - 12) < 0.2 && sd.fontWestern === 'Times New Roman' && sd.firstLineIndentMm === 0
+      && hd.success && Math.abs(hd.sizePt - 12) < 0.2 && hd.bold === true, JSON.stringify({ sd, hd }))
+    const so = await exec('apply_style_profile', { scope: 'styles-only' })
+    check('styles-only 不碰正文（paragraphs=0）', so.success === true && so.paragraphs === 0 && so.tables === 0, JSON.stringify(so).slice(0, 200))
+    const bs = await exec('apply_style_profile', { scope: 'nope' })
+    check('非法 scope 被拒绝', bs.success === false, JSON.stringify(bs))
+    const st29 = await exec('debug_lock_state')
+    check('apply_style_profile 后锁平衡', st29.controllersLocked === false && st29.lockDepth === 0 && st29.modifySuspended === 0, JSON.stringify(st29))
+    // insert_toc：文首插目录，大纲里的两个标题应进目录，正文前出现「目录」
+    const toc = await exec('insert_toc', { levels: 2, title: '目录', position: 'start' })
+    // 主标题（流式 # 首段）不带大纲级别，不进目录；Heading 1 段进
+    check('insert_toc 成功且收进 Heading 1 段', toc.success === true && toc.entries >= 1 && /第一章 总则/.test(toc.text), JSON.stringify(toc))
+    const d29 = await doc()
+    check('目录出现在正文之前', d29.indexOf('目录') !== -1 && d29.indexOf('目录') < d29.indexOf('正文段落内容'), d29.slice(0, 120))
+    // 页码域：页脚「第 {PAGE} 页 共 {NUMPAGES} 页」
+    const hf = await exec('edit_header_footer', { target: 'footer', pageNumberPattern: '第 {PAGE} 页 共 {NUMPAGES} 页', align: 'center', fontSize: 9 })
+    check('页脚页码域写入（2 枚域）', hf.success === true && hf.fields === 2, JSON.stringify(hf))
+    const fi = await exec('debug_footer_info')
+    check('页脚文本含数字且两种域各一枚', fi.success && /第 \d+ 页 共 \d+ 页/.test(fi.text) && fi.pageNumberFields === 1 && fi.pageCountFields === 1, JSON.stringify(fi))
+    const hfBad = await exec('edit_header_footer', { target: 'header' })
+    check('既无 text 也无 pageNumberPattern 被拒绝', hfBad.success === false, JSON.stringify(hfBad))
+    // set_page_setup：横向 + 上边距 20mm，再改回 A4 纵向
+    const pg = await exec('set_page_setup', { orientation: 'landscape', margins: { top: 20 } })
+    check('横向后宽 > 高且上边距 20mm', pg.success === true && pg.page.landscape === true && pg.page.width > pg.page.height && Math.abs(pg.page.margins.top - 20) < 0.05, JSON.stringify(pg))
+    const pg2 = await exec('set_page_setup', { width: 210, height: 297, orientation: 'portrait' })
+    check('改回 A4 纵向', pg2.success === true && pg2.page.landscape === false && Math.abs(pg2.page.width - 210) < 0.05 && Math.abs(pg2.page.height - 297) < 0.05, JSON.stringify(pg2))
+    check('无参数 set_page_setup 被拒绝', (await exec('set_page_setup', {})).success === false)
+    // format_table 新参：双线红框 1.5/0.5 磅、表头底纹、重复表头、厘米列宽
+    const ft = await exec('format_table', { tableIndex: 0, borderStyle: 'double', borderColor: '#FF0000', outsideBorderWidthPt: 1.5, insideBorderWidthPt: 0.5, headerFill: '#DDDDDD', repeatHeader: true })
+    ti = await exec('debug_table_info', { index: 0 })
+    check('format_table 新参落地：外 53 内 18、红色、双线、底纹、重复表头', ft.success === true && Math.abs(ti.borderWidth - 53) <= 1 && Math.abs(ti.innerWidth - 18) <= 1 && ti.borderColor === 0xFF0000 && ti.borderStyle === 3 && ti.a1Fill === 0xDDDDDD && ti.repeatHeadline === true, JSON.stringify({ ft, ti }))
+    check('非法 borderStyle 被拒绝', (await exec('format_table', { tableIndex: 0, borderStyle: 'wavy' })).success === false)
+    // 列宽：本引擎的 WASM 桥没注册 TableColumnSeparator（new 与读回再设回都抛 unregistered UNO type），
+    // 锁住「明确拒绝且说明原因」；将来引擎支持了这条会红，提醒把工具描述里的能力加回去。
+    const cw = await exec('format_table', { tableIndex: 0, columnWidthsCm: '3,5' })
+    check('列宽被明确拒绝且说明引擎原因', cw.success === false && /不支持按列设宽/.test(cw.message || ''), JSON.stringify(cw))
+    // format_selection.fontNameAsian 只改中文字体
+    const body29 = await exec('find_text_locations', { keyword: '正文段落内容' })
+    await exec('set_selection', { anchor: body29.matches[0].anchorId })
+    const fs29 = await exec('format_selection', { fontNameAsian: '宋体' })
+    fm = await exec('get_formatting')
+    check('fontNameAsian 只改中文字体', fs29.success === true && fm.character.fontAsian === '宋体' && fm.character.fontWestern === 'Times New Roman', JSON.stringify(fm.character))
+    // 复位画像，后续（以及下次复用本 worker 的组）回到 house-default
+    const rs = await exec('set_style_profile', { reset: true })
+    check('reset 回到 house-default（Arial / 首行 24 磅）', rs.success === true && rs.reset === true && rs.body.fontWestern === 'Arial' && Math.abs(rs.body.firstLineIndentPt - 24) < 1, JSON.stringify(rs))
   }
 
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')

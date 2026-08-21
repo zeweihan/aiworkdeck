@@ -41,6 +41,38 @@ public class EditorBridgeService {
     private final SseEmitterService sseEmitterService;
     private final ObjectMapper objectMapper;
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
+    // 样式画像解析（dev-board#111）：字段注入、可缺席——构造器不动，手工 new 的测试与 EvalHarness 免改
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private StyleProfileResolver styleProfileResolver;
+
+    /** 仅测试用：手工 new 的实例挂上解析器。 */
+    void setStyleProfileResolver(StyleProfileResolver resolver) {
+        this.styleProfileResolver = resolver;
+    }
+
+    /**
+     * 画像不是 house-default 时转成 Map（随 doc_open_file / doc_open_file_sync 下发，前端编辑器
+     * 就绪后追发 set_style_profile）；是 house-default 或画像为空时返回 null——worker 默认就是
+     * house-default，不必白发一条。
+     */
+    @SuppressWarnings("unchecked")
+    public static Map<String, Object> nonHouseProfileMap(com.checkba.util.style.StyleProfile profile) {
+        if (profile == null) return null;
+        com.checkba.util.style.StyleProfile house = com.checkba.util.style.StyleProfiles.houseDefault();
+        if (profile.root().equals(house.root())) return null;
+        return com.checkba.util.style.StyleProfiles.mapper().convertValue(profile.root(), Map.class);
+    }
+
+    /** 该文件所在项目的画像（非 house-default 才返回 Map）；解析器缺席或解析失败一律 null。 */
+    private Map<String, Object> styleProfileFor(ProjectFile file) {
+        if (styleProfileResolver == null || file == null || file.getProjectId() == null) return null;
+        try {
+            return nonHouseProfileMap(styleProfileResolver.resolve(file.getProjectId(), null));
+        } catch (Exception e) {
+            log.warn("项目 {} 画像解析失败，打开文件不带画像: {}", file.getProjectId(), e.getMessage());
+            return null;
+        }
+    }
 
     /**
      * 请求 ID -> 在等的那一轮。
@@ -77,6 +109,7 @@ public class EditorBridgeService {
             "apply_house_style", 120,
             "resolve_all_revisions", 120,
             "insert_table", 120,
+            "apply_style_profile", 120,
             "export_document", 180);
 
     static int timeoutSecondsFor(String action) {
@@ -131,16 +164,20 @@ public class EditorBridgeService {
         }
 
         try {
-            Map<String, Object> fields = Map.of(
-                    "fileId", file.getId(),
-                    "fileName", file.getName(),
-                    "fileType", file.getFileType(),
-                    "wpsFileId", file.getWpsFileId() != null ? file.getWpsFileId() : "",
-                    "trackRevisions", true,
-                    "userName", "AI WorkDeck"
-            );
+            Map<String, Object> fields = new java.util.HashMap<>();
+            fields.put("fileId", file.getId());
+            fields.put("fileName", file.getName());
+            fields.put("fileType", file.getFileType());
+            fields.put("wpsFileId", file.getWpsFileId() != null ? file.getWpsFileId() : "");
+            fields.put("trackRevisions", true);
+            fields.put("userName", "AI WorkDeck");
+            // 项目有模板画像时随打开指令带下去（只在非 house-default 时），前端在该文件的编辑器
+            // 就绪后追发 set_style_profile——worker 是按文档实例起的，画像必须打在打开后的那个
+            // worker 上，不能在这里直接发 editor_command（会落到上一份文档或"编辑器未就绪"）。
+            Map<String, Object> profile = styleProfileFor(file);
+            if (profile != null) fields.put("styleProfile", profile);
             sendDualNamedAction("doc_open_file", "wps_open_file", conversationId, fields);
-            log.info("Sent doc_open_file action for file: {} (id={})", file.getName(), file.getId());
+            log.info("Sent doc_open_file action for file: {} (id={}, styleProfile={})", file.getName(), file.getId(), profile != null);
 
         } catch (Exception e) {
             log.error("Failed to send open file action", e);

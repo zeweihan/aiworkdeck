@@ -32,6 +32,7 @@ class EditorBridgeServiceTest {
         assertEquals(120, t.get("find_replace"));
         assertEquals(120, t.get("insert_table"));
         assertEquals(120, t.get("apply_house_style"));
+        assertEquals(120, t.get("apply_style_profile"));
         assertEquals(120, t.get("resolve_all_revisions"));
         assertEquals(180, t.get("doc_open_file_sync"));
         assertEquals(180, t.get("export_document"));
