@@ -185,6 +185,7 @@ import { getRecentErrors, recentErrorCount } from '@/utils/errorBuffer.js'
 import { getLastProjectId } from '@/utils/recentProjects.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { t as t$ } from '@/i18n'
+import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
 
 const MAX_IMAGES = 10
 const MAX_RECORD_SECONDS = 120
@@ -259,6 +260,7 @@ export default {
       mineList: [],
       mineLoading: false,
       mineError: '',
+      _mineRequestSeq: 0, // 请求代次：只接受"此刻最新一次" openMine 发出的响应
     }
   },
   computed: {
@@ -430,19 +432,24 @@ export default {
       this.view = 'form'
     },
     // 「我的反馈」视图：每次打开都重新拉一遍，状态会随后台优化者的处理进度变化，
-    // 缓存旧列表只会让用户看到过期的「待发送」。
+    // 缓存旧列表只会让用户看到过期的「待发送」。back 不取消在途请求，快速
+    // myFeedback->back->myFeedback 会并发出两个请求；用请求代次只认最后一次发出的响应，
+    // 防止先发的（陈旧）响应后回来把已经渲染好的新列表盖掉。
     async openMine() {
       this.view = 'mine'
       this.mineLoading = true
       this.mineError = ''
+      const seq = ++this._mineRequestSeq
       try {
         const res = await getMyFeedback()
+        if (!shouldAcceptResponse(seq, this._mineRequestSeq)) return
         const items = (res && res.data && res.data.items) || []
         this.mineList = items.map(formatMineItem)
       } catch (e) {
+        if (!shouldAcceptResponse(seq, this._mineRequestSeq)) return
         this.mineError = (e && e.message) || this.$t('feedback.loadFailed')
       } finally {
-        this.mineLoading = false
+        if (shouldAcceptResponse(seq, this._mineRequestSeq)) this.mineLoading = false
       }
     },
     // PR 链接必须走系统浏览器/新标签页：桌面端主进程会拦截渲染层的 window.open，
@@ -559,6 +566,12 @@ export default {
         this.setStatus(this.$t('feedback.recordingUnsupported'), true)
         return
       }
+      // getUserMedia 在飞（权限弹窗展示期间）this.recording 还是 false，二次点击会
+      // 重入整段 try、开出第二路 getUserMedia/MediaRecorder，互相踩踏 this._recorder/
+      // this._stream/this._recordTimer。用独立的启动中标志挡住重入，不能复用 recording
+      // ——它要等 await 之后才置真。
+      if (this._startingRecording) return
+      this._startingRecording = true
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
         const mimeType = pickAudioMime()
@@ -596,6 +609,8 @@ export default {
         }, 1000)
       } catch (e) {
         this.setStatus(this.$t('feedback.micPermissionDenied', { message: (e && e.message) || e }), true)
+      } finally {
+        this._startingRecording = false
       }
     },
     /** @returns {Promise<void>} 录音真正落成 File 之后才 resolve。 */

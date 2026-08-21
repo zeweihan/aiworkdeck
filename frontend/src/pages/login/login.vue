@@ -126,7 +126,7 @@
                </view>
                <text class="link-text">{{ $t('account.forgotPassword') }}</text>
             </view>
-            <button class="action-btn" :loading="loginLoading" @tap="handleLogin">{{ $t('account.loginBtn') }}</button>
+            <button class="action-btn" :disabled="loginLoading" :loading="loginLoading" @tap="handleLogin">{{ $t('account.loginBtn') }}</button>
           </view>
 
           <!-- Second Factor Step（登录二次验证：认证器 / 邮箱 / 短信） -->
@@ -144,7 +144,7 @@
                 {{ smsCountdown > 0 ? $t('account.resendCountdown', { count: smsCountdown }) : $t('account.resendCode') }}
               </text>
             </view>
-            <button class="action-btn" :loading="loginLoading" @tap="handleSmsLogin">{{ $t('account.verifyAndLoginBtn') }}</button>
+            <button class="action-btn" :disabled="loginLoading" :loading="loginLoading" @tap="handleSmsLogin">{{ $t('account.verifyAndLoginBtn') }}</button>
           </view>
 
           <!-- Register Form -->
@@ -165,7 +165,7 @@
               <text class="label">{{ $t('account.confirmPasswordLabel') }}</text>
               <input class="glass-input" type="password" v-model="registerForm.passwordConfirm" @confirm="handleRegister" :placeholder="$t('account.confirmPasswordPlaceholder')" placeholder-class="placeholder-style" />
             </view>
-            <button class="action-btn" :loading="registerLoading" @tap="handleRegister">{{ $t('account.registerBtn') }}</button>
+            <button class="action-btn" :disabled="registerLoading" :loading="registerLoading" @tap="handleRegister">{{ $t('account.registerBtn') }}</button>
           </view>
 
           <!-- Client Form -->
@@ -174,7 +174,7 @@
               <text class="label">{{ $t('account.caseAccessCodeLabel') }}</text>
               <input class="glass-input" type="text" v-model="clientForm.accessCode" @confirm="handleClientLogin" :placeholder="$t('account.caseAccessCodePlaceholder')" placeholder-class="placeholder-style" />
             </view>
-            <button class="action-btn" :loading="clientLoginLoading" @tap="handleClientLogin">{{ $t('account.enterCaseBtn') }}</button>
+            <button class="action-btn" :disabled="clientLoginLoading" :loading="clientLoginLoading" @tap="handleClientLogin">{{ $t('account.enterCaseBtn') }}</button>
           </view>
 
           <view class="card-footer">
@@ -366,6 +366,10 @@ export default {
       }
     },
     async handleSmsLogin() {
+      // <button loading> 只画个转圈图标，不会自己拦第二次 tap；模板已经补了
+      // :disabled="loginLoading"，这里在方法体里再挡一道，防止事件在响应式
+      // 状态生效前抢跑发出第二个请求。
+      if (this.loginLoading) return;
       if (!this.smsCodeInput || this.smsCodeInput.length < 6) {
         uni.showToast({ title: this.$t('account.enterSixDigitCode'), icon: 'none' });
         return;
@@ -395,6 +399,7 @@ export default {
       }, 300);
     },
     async handleClientLogin() {
+      if (this.clientLoginLoading) return;
       if (!this.clientForm.accessCode) {
         uni.showToast({ title: this.$t('account.caseAccessCodePlaceholder'), icon: 'none' });
         return;
@@ -419,6 +424,7 @@ export default {
       }
     },
     async handleLogin() {
+      if (this.loginLoading) return;
       if (!this.loginForm.username || !this.loginForm.password) {
         uni.showToast({ title: this.$t('account.enterUsernamePassword'), icon: 'none' });
         return;
@@ -448,6 +454,7 @@ export default {
       }
     },
     async handleRegister() {
+      if (this.registerLoading) return;
       if (!this.registerForm.username || !this.registerForm.password) {
         uni.showToast({ title: this.$t('account.enterUsernamePassword'), icon: 'none' });
         return;

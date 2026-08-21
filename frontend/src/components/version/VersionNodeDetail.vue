@@ -142,17 +142,24 @@ export default {
       this.$emit('close')
     },
     confirmRevert() {
+      // 本文件其它两个写操作（submitMilestone/submitDraftCreate）都靠 busy 挡重入，
+      // 这里漏了：确认框关掉之后按钮和弹窗都还能再点一次，在第一个 revertToVersion
+      // 请求飞着时能弹出并确认第二个 uni.showModal，打出两个并发的退回请求。
+      if (this.busy) return
       uni.showModal({
         title: this.$t('version.revertToVersion'),
         content: this.$t('version.revertConfirmContent'),
         success: async (r) => {
           if (!r.confirm) return
+          this.busy = true
           try {
             const res = await revertToVersion(this.projectId, this.version.sha)
             const affectedFileIds = (res && res.data && res.data.affectedFileIds) || []
             this.$emit('reload-files', affectedFileIds)
           } catch (e) {
             uni.showToast({ title: (e && e.message) || this.$t('version.revertFailed'), icon: 'none' })
+          } finally {
+            this.busy = false
           }
         },
       })
