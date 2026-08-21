@@ -59,6 +59,9 @@ public class FeedbackService {
         if (text.length() > MAX_TEXT_CHARS) {
             text = text.substring(0, MAX_TEXT_CHARS);
         }
+        // 先把全部附件校验完（只读 MultipartFile 自身元信息，不碰磁盘/DB），
+        // 任何一个不合法都在这里抛出，不该落下一条已提交、附件却只存了一半的行。
+        validateAttachments(safeFiles);
 
         UserFeedback fb = new UserFeedback();
         fb.setUserId(userId);
@@ -90,29 +93,43 @@ public class FeedbackService {
         return feedbackRepository.save(fb);
     }
 
-    private List<FeedbackAttachment> storeAttachments(Long feedbackId, List<MultipartFile> files) throws IOException {
-        Path dir = feedbackDir(feedbackId);
-        Files.createDirectories(dir);
-        List<FeedbackAttachment> out = new ArrayList<>();
+    /**
+     * 只读每个 MultipartFile 自身的元信息（体积/ContentType），不碰磁盘也不碰 DB——
+     * 因此可以、也必须在建反馈行之前先跑完整批，任何一个不合法就整体拒绝，
+     * 不会出现"前几个已经落库、后面这个才失败"的半成品状态。
+     * 判定逻辑必须和 storeAttachments 的落盘分支逐条对应，两边分开是因为
+     * "校验会不会通过"与"通过之后具体怎么存"是两件不同的事，硬合成一趟循环
+     * 才是当初留下这个坑的原因。
+     */
+    private void validateAttachments(List<MultipartFile> files) {
         int images = 0;
         int audios = 0;
-        int seq = 0;
         for (MultipartFile f : files) {
             if (f == null || f.isEmpty()) continue;
             if (f.getSize() > MAX_ATTACHMENT_BYTES) {
                 throw new IllegalArgumentException(LangText.of("附件过大（上限 20MB）：", "Attachment is too large (20MB limit): ") + safeName(f.getOriginalFilename()));
             }
             String ct = f.getContentType() == null ? "" : f.getContentType().toLowerCase();
-            String type;
             if (ct.startsWith("audio/")) {
                 if (++audios > MAX_AUDIOS) throw new IllegalArgumentException(LangText.of("最多附 1 段语音", "At most 1 voice note may be attached"));
-                type = FeedbackAttachment.TYPE_AUDIO;
             } else if (ct.startsWith("image/")) {
                 if (++images > MAX_IMAGES) throw new IllegalArgumentException(LangText.of("最多附 " + MAX_IMAGES + " 张图片", "At most " + MAX_IMAGES + " images may be attached"));
-                type = FeedbackAttachment.TYPE_IMAGE;
             } else {
                 throw new IllegalArgumentException(LangText.of("只接受图片与语音附件：", "Only image and voice attachments are accepted: ") + safeName(f.getOriginalFilename()));
             }
+        }
+    }
+
+    /** 落盘 + 落库。调用前必须已经过 validateAttachments，这里不再重复校验、只管存。 */
+    private List<FeedbackAttachment> storeAttachments(Long feedbackId, List<MultipartFile> files) throws IOException {
+        Path dir = feedbackDir(feedbackId);
+        Files.createDirectories(dir);
+        List<FeedbackAttachment> out = new ArrayList<>();
+        int seq = 0;
+        for (MultipartFile f : files) {
+            if (f == null || f.isEmpty()) continue;
+            String ct = f.getContentType() == null ? "" : f.getContentType().toLowerCase();
+            String type = ct.startsWith("audio/") ? FeedbackAttachment.TYPE_AUDIO : FeedbackAttachment.TYPE_IMAGE;
 
             // 落盘文件名由服务端生成：客户端文件名一律只作展示，不参与路径拼接
             String ext = extensionFor(type, ct, f.getOriginalFilename());
@@ -166,6 +183,9 @@ public class FeedbackService {
             throw new IllegalArgumentException(LangText.of("空反馈", "Empty feedback"));
         }
         if (text.length() > MAX_TEXT_CHARS) text = text.substring(0, MAX_TEXT_CHARS);
+        // 与 submit() 同理：先校验完全部附件，再落第一行库——ingest() 按 clientRef 去重，
+        // 半成品行一旦落库，后续同 clientRef 的重试会直接命中它、永远没有机会补全附件。
+        validateAttachments(safeFiles);
 
         UserFeedback fb = new UserFeedback();
         fb.setUserId(null);

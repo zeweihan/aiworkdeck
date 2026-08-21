@@ -8,6 +8,7 @@ import com.checkba.repository.ProjectMemberRepository;
 import com.checkba.repository.ProjectRepository;
 import com.checkba.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -68,7 +69,16 @@ public class ProjectMemberService {
         member.setProjectId(projectId);
         member.setUserId(user.getId());
         member.setRole(role);
-        projectMemberRepository.save(member);
+        try {
+            projectMemberRepository.save(member);
+        } catch (DataIntegrityViolationException e) {
+            // 先查后插不是原子的：两个并发请求都查到"不在项目中"就都会插入，第二个撞上
+            // (project_id, user_id) 唯一约束。这里不追加恢复性查询——本方法整体
+            // @Transactional，插入失败后同一事务在部分数据库（如 Postgres）上已经
+            // 不可再用，追加查询本身会再报错——只把异常翻译成查重分支本该给出的提示，
+            // 跟着事务一起干净回滚。
+            throw new IllegalArgumentException("用户已在项目中");
+        }
     }
 
     @Transactional

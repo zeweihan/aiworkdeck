@@ -37,6 +37,8 @@ class MeetingTranscriptionServiceTest {
     private TingwuClient tingwu;
     private MeetingOssClient oss;
     private MeetingTranscriptionService.UrlFetcher fetcher;
+    /** service() 内部现建的档位解析桩；并发测试需要在外面 verify 它被调了几次。 */
+    private ExternalProviderResolver lastResolver;
 
     private static final String TRANSCRIPTION_JSON = """
             {"Transcription":{"Paragraphs":[{"SpeakerId":"1","Words":[
@@ -60,6 +62,7 @@ class MeetingTranscriptionServiceTest {
         // 本类整体验的是 byok 档：档位解析恒回 BYOK，网关那两个协作者一次都不该被碰
         ExternalProviderResolver resolver = mock(ExternalProviderResolver.class);
         when(resolver.resolve(anyString())).thenReturn(ExternalServiceProvider.BYOK);
+        lastResolver = resolver;
         return new MeetingTranscriptionService(
                 meetingRepository, mock(ProjectFileRepository.class), null, settingService,
                 mock(MeetingAudioTranscoder.class), tingwu, oss,
@@ -106,6 +109,62 @@ class MeetingTranscriptionServiceTest {
         MeetingRecording out = service(true).startTranscription(7L);
         assertEquals(MeetingRecording.STATUS_TRANSCRIBED, out.getStatus());
         verifyNoInteractions(tingwu);
+    }
+
+    /**
+     * 病灶：起手的状态判定（TRANSCRIBING/TRANSCRIBED 幂等短路）与真正落库的
+     * {@code meeting.setStatus(TRANSCRIBING) + meetingRepository.save(meeting)} 之间
+     * 隔着一整段校验逻辑，中间完全没有互斥。两个近乎同时的请求（自动结束时触发一次 +
+     * 客户端超时重试一次，或者「重新提交转写」连点两下）都会读到同一个"还没在转写"的
+     * 状态、都通过校验，最终都会各自提交一次转写——BYOK 档是两次真实的听悟建任务调用
+     * （真花钱），platform 档是两次网关提交（各自预扣一次 Credits，等于对同一次转写
+     * 扣两次费）。
+     *
+     * <p>修法：整个方法体包一把按 meetingId 分条的锁（同一实例内互斥）。第二个请求
+     * 拿到锁时，第一个请求早已经把状态改成 TRANSCRIBING 并落库——它会在方法最开头
+     * 那个既有的幂等短路分支直接返回，不会走到校验和提交。
+     */
+    @Test
+    @DisplayName("同一会议并发提交转写：第二个请求命中幂等短路，不会重复提交")
+    void concurrentStartTranscriptionOnlySubmitsOnce() throws Exception {
+        MeetingRecording m = meeting(MeetingRecording.STATUS_RECORDED);
+        Thread[] threadA = new Thread[1];
+        CountDownLatch aPaused = new CountDownLatch(1);
+        CountDownLatch releaseA = new CountDownLatch(1);
+        when(meetingRepository.findById(7L)).thenAnswer(inv -> {
+            if (Thread.currentThread() == threadA[0]) {
+                aPaused.countDown();
+                assertTrue(releaseA.await(5, TimeUnit.SECONDS), "测试主线程应该及时放行 A");
+            }
+            return Optional.of(m);
+        });
+
+        MeetingTranscriptionService svc = service(true);
+        // resolver.resolve(...) 只在方法开头的幂等短路之后才会被调到，且完全同步（跑在
+        // 调用方线程上、方法返回前必然已经调完）——用它的调用次数判定"这个线程有没有
+        // 真正走到校验+提交"，不受 executor.submit(...) 那段异步后续（转码/建任务/失败
+        // 落库）时序不确定的干扰。
+        Thread a = new Thread(() -> {
+            threadA[0] = Thread.currentThread();
+            svc.startTranscription(7L);
+        });
+        a.start();
+        assertTrue(aPaused.await(5, TimeUnit.SECONDS), "线程 A 应该先卡在 findById 里");
+
+        AtomicReference<MeetingRecording> bResult = new AtomicReference<>();
+        Thread b = new Thread(() -> bResult.set(svc.startTranscription(7L)));
+        b.start();
+
+        Thread.sleep(300); // 有锁的话 B 这时候应该还卡在方法入口，等 A 彻底做完
+        verify(lastResolver, never()).resolve(anyString());
+
+        releaseA.countDown();
+        a.join(5000);
+        b.join(5000);
+
+        // 只应该有一次真正走到校验+提交；B 命中的是方法开头既有的幂等短路分支
+        verify(lastResolver, times(1)).resolve(anyString());
+        assertEquals(MeetingRecording.STATUS_TRANSCRIBING, bResult.get().getStatus());
     }
 
     @Test

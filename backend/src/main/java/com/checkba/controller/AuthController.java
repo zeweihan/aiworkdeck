@@ -9,11 +9,13 @@ import com.checkba.service.LangText;
 import com.checkba.service.UserService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
 import java.util.Map;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
@@ -904,7 +906,11 @@ public class AuthController {
                 User user = staticUserService.getUserById(userId);
                 return user != null ? user.getDisplayName() : null; // Use DisplayName as creator name
             } catch (Exception e) {
-                 return null;
+                // 只补日志、不改行为：这里吞掉的异常与"用户真的不存在"返回同一个 null，
+                // 调用方（署名归属等）区分不出"这次查询失败"和"查无此人"，但改成向上
+                // 抛/返回错误码会动到所有调用方的既有语义，代价大于收益——先把故障留痕。
+                log.warn("getUsernameFromSession: getUserById({}) 失败，按 null 处理: {}", userId, e.toString());
+                return null;
             }
         }
         return null;

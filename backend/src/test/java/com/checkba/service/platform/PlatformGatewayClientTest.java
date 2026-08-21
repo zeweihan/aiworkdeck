@@ -96,6 +96,45 @@ class PlatformGatewayClientTest {
         assertNotNull(transport.calls.get(0).idempotencyKey(), "会扣费的调用必须带幂等键");
     }
 
+    /**
+     * 病灶：HttpPlatformGatewayTransport 捕获 InterruptedException 后会恢复中断标志
+     * （{@code Thread.currentThread().interrupt()}），但返回的 Reply 与其它网络失败长得
+     * 一模一样——PlatformGatewayClient 分不出"这次失败是因为调用方线程被要求停下"还是
+     * "单纯网络抖动"，于是仍然照常重试一次：在一个已经被要求停止的线程上又发起一次
+     * 最长可以再等 timeoutSeconds 的阻塞调用，拖慢优雅关闭。
+     *
+     * <p>修法：重试前查一下当前线程的中断标志（peek，不清）；已经被中断就不重试，
+     * 直接按网络失败处理，把控制权尽快还给调用方。
+     */
+    @Test
+    @DisplayName("第一次调用后线程已被中断时，不再发起重试")
+    void doesNotRetryWhenThreadAlreadyInterrupted() {
+        transport = new RecordingTransport() {
+            @Override
+            public Reply send(String method, String url, String bearerKey, String idempotencyKey,
+                              String jsonBody, int timeoutSeconds) {
+                Reply r = super.send(method, url, bearerKey, idempotencyKey, jsonBody, timeoutSeconds);
+                // 模拟 HttpPlatformGatewayTransport 捕获 InterruptedException 后的真实行为：
+                // 恢复中断标志、把这次结果当网络失败返回。
+                Thread.currentThread().interrupt();
+                return r;
+            }
+        };
+        transport.reply(PlatformGatewayTransport.Reply.NETWORK_FAILURE, null);
+        client = new PlatformGatewayClient(transport, accountService, siteProfileService);
+
+        try {
+            // 只关心发出去几次请求，不关心这次失败具体报成哪种 GatewayException
+            try {
+                client.call("search", "web", Map.of("query", "x"), 30);
+            } catch (GatewayException ignored) {
+            }
+            assertEquals(1, transport.calls.size(), "线程已经被要求停止，不该再发第二次请求");
+        } finally {
+            assertTrue(Thread.interrupted(), "中断标志本该留给线程原本的所有者处理（顺带清掉，不污染后续用例）");
+        }
+    }
+
     @Test
     @DisplayName("两次网络失败后回 GATEWAY_UNREACHABLE，且文案明说不是用户的网络问题")
     void unreachableSaysNotYourNetwork() {

@@ -26,6 +26,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -464,6 +467,96 @@ class NativePackServiceTest {
         svc.install(PACK_ID);
         assertEquals(List.of(), svc.syncRevoked());
         assertTrue(svc.isReady(PACK_ID));
+    }
+
+    @Test
+    @DisplayName("修复：syncRevoked 与 install()/uninstall() 互斥——不会用升级提交前的旧版本号" +
+            "把并发升级刚写完的 current.json 盖掉")
+    void syncRevokedIsMutuallyExclusiveWithConcurrentInstall() throws Exception {
+        // 病灶：syncRevoked() 对每个 pack 都是「读 current.json -> 判定 -> 写回」，
+        // install()/uninstall() 收尾时也会写 current.json，但只有 install/uninstall
+        // 互相持有同一把按 packId 分的锁（packLock）——syncRevoked 此前完全没加锁。
+        // 真实的坏结果（读到升级提交前的旧版本号、写回时把刚升级完的新版本盖掉）依赖
+        // 几毫秒级的本地文件 I/O 时序，没法在测试里稳定掐出那个窗口（审计条目自己也
+        // 这么写）；能稳定验证、且正是修复手段本身的，是「二者互斥」这条结构性质——
+        // 这里直接证明它。
+        byte[] archive = tarGzWithContents(Map.of("cli.py", "x".getBytes(StandardCharsets.UTF_8)));
+        publish(primary, archive, "litviz", List.of("*"), true);
+        NativePackService svc = service(publicKeyPem, primary.baseUrl());
+        svc.install(PACK_ID); // 真实装一遍，建立「已装 1.0.0」这一前提
+        Path packDir = packsRoot().resolve(PACK_ID);
+        primary.files.put("/revoked", ("[{\"id\":\"" + PACK_ID + "\",\"version\":\"1.0.0\",\"reason\":\"test\"}]")
+                .getBytes(StandardCharsets.UTF_8));
+
+        // holder 最多持锁 5 秒（留够调度抖动的余量），中途检查点设在 2 秒——
+        // 两者之间留 3 秒安全边际，不靠贴着毫秒级窗口猜时序。
+        CountDownLatch holderReady = new CountDownLatch(1);
+        CountDownLatch releaseHolder = new CountDownLatch(1);
+        Thread holder = new Thread(() -> {
+            synchronized (svc.packLock(PACK_ID)) { // 与 install()/uninstall() 同一把按 packId 分的锁
+                holderReady.countDown();
+                try {
+                    releaseHolder.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException ignored) {
+                }
+            }
+        });
+        holder.start();
+        assertTrue(holderReady.await(2, TimeUnit.SECONDS));
+
+        AtomicBoolean syncDone = new AtomicBoolean(false);
+        Thread syncer = new Thread(() -> {
+            svc.syncRevoked();
+            syncDone.set(true);
+        });
+        syncer.start();
+
+        Thread.sleep(2000); // holder 最多能撑到 5 秒，这里检查点在 2 秒，边际够宽
+        assertFalse(syncDone.get(),
+                "syncRevoked 不该在 install/uninstall 的临界区还没让出锁时就跑完——说明没有和它们互斥");
+
+        releaseHolder.countDown();
+        syncer.join(3000);
+        assertTrue(syncDone.get(), "锁一放，syncRevoked 应该很快跑完");
+    }
+
+    @Test
+    @DisplayName("修复：卸载一个无关 pack 不会被另一个正在安装的 pack 卡住")
+    void uninstallOfUnrelatedPackDoesNotBlockOnInFlightInstall() throws Exception {
+        // 病灶：install()/uninstall() 此前共用同一把服务级对象锁（synchronized(this) 方法）。
+        // pack A 的下载可能因为重试跑到 3 次 x 10 分钟，这段时间里 uninstall 一个完全无关
+        // 的 pack B 的请求线程会在这把锁上空等，没有任何报错或提示——"卸载"按钮转圈但
+        // 用户根本猜不到是被另一个 pack 拖住的。修法是把锁从服务级收窄到 packId 级，
+        // 这里用同样的"外部持锁 + 检查点"手法直接证明：pack A 的锁被别人攥着时，
+        // pack B 的 uninstall() 完全不受影响。
+        NativePackService svc = service(publicKeyPem, primary.baseUrl());
+        String packA = PACK_ID; // "litigation-visual"，模拟正在安装、下载慢的那个
+        String packB = "other-pack"; // 从未安装过，走 uninstall() 的幂等收口分支即可验证
+
+        CountDownLatch holderReady = new CountDownLatch(1);
+        CountDownLatch releaseHolder = new CountDownLatch(1);
+        Thread holder = new Thread(() -> {
+            synchronized (svc.packLock(packA)) {
+                holderReady.countDown();
+                try {
+                    releaseHolder.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException ignored) {
+                }
+            }
+        });
+        holder.start();
+        assertTrue(holderReady.await(2, TimeUnit.SECONDS), "线程应该先拿到 pack A 的锁");
+
+        try {
+            long start = System.nanoTime();
+            svc.uninstall(packB); // 完全无关的 pack，不该等 pack A 的锁
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+            assertTrue(elapsedMs < 1000,
+                    "卸载无关 pack 不该被 pack A 的锁拖住，实际耗时 " + elapsedMs + "ms");
+        } finally {
+            releaseHolder.countDown();
+            holder.join(3000);
+        }
     }
 
     @Test

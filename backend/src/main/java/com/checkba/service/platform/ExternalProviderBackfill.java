@@ -1,10 +1,9 @@
 package com.checkba.service.platform;
 
 import com.checkba.service.SystemSettingService;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
@@ -79,8 +78,17 @@ public class ExternalProviderBackfill {
         injectedDefaults.put("external.pkulaw.token", pkulawToken);
     }
 
-    @EventListener(ApplicationReadyEvent.class)
-    public void onStartup() {
+    /**
+     * 刻意用 {@code @PostConstruct} 而不是 {@code ApplicationReadyEvent}：内嵌 Tomcat
+     * 在 {@code refresh()} 收尾（{@code finishRefresh -> startWebServer}）就已经开始收
+     * 连接，而 {@code ApplicationReadyEvent} 要等 {@code refresh()} 返回、
+     * {@code CommandLineRunner} 跑完才发出——只挂后者，升级后第一批落在这个窗口里的
+     * 请求会撞见还没回填的默认档位（见类注释）。{@code @PostConstruct} 在本 bean
+     * 的依赖（{@code SystemSettingService}/{@code ExternalProviderResolver}）已经
+     * 就绪之后、且必然早于 {@code finishRefresh()} 执行，能把这个窗口关掉。
+     */
+    @PostConstruct
+    void onStartup() {
         try {
             int written = backfill();
             if (written > 0) {

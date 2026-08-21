@@ -85,7 +85,11 @@ public class PlatformGatewayClient {
 
         PlatformGatewayTransport.Reply reply =
                 transport.send("POST", siteProfileService.baseUrl() + path, key, idempotencyKey, body, timeoutSeconds);
-        if (reply.networkFailure()) {
+        // 中断与其它网络失败长得一模一样（transport 捕获 InterruptedException 后恢复中断标志、
+        // 照样返回 NETWORK_FAILURE）；线程已经被要求停下时不该再发起一次最长可以再等
+        // timeoutSeconds 的阻塞调用——那会拖慢优雅关闭。只 peek 不清，标志留给线程原本的
+        // 所有者去处理。
+        if (reply.networkFailure() && !Thread.currentThread().isInterrupted()) {
             reply = transport.send("POST", siteProfileService.baseUrl() + path, key, idempotencyKey, body, timeoutSeconds);
         }
         return handle(reply);
@@ -96,7 +100,7 @@ public class PlatformGatewayClient {
         String key = requireKey();
         PlatformGatewayTransport.Reply reply =
                 transport.send("GET", siteProfileService.baseUrl() + path, key, null, null, timeoutSeconds);
-        if (reply.networkFailure()) {
+        if (reply.networkFailure() && !Thread.currentThread().isInterrupted()) {
             reply = transport.send("GET", siteProfileService.baseUrl() + path, key, null, null, timeoutSeconds);
         }
         return handle(reply);

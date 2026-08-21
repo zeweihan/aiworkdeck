@@ -121,6 +121,10 @@ def create_app():
     with app.app_context():
         # Load settings from database and sync to app.config
         _load_settings_to_config(app)
+        # 启动对账：上一条进程遗留的 PENDING/PROCESSING 任务在数据库里还挂着，
+        # 而跑它们的执行器早已随进程消失，前端轮询会永远转圈。见 TaskManager 里的说明。
+        from services.task_manager import task_manager
+        task_manager.reconcile_orphaned_tasks()
 
     # Health check endpoint
     @app.route('/health')

@@ -6,7 +6,10 @@ import com.checkba.service.mail.MailRouter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 「建议 / 拿不准」这条出口：给维护者发一封信。
@@ -26,6 +29,20 @@ public class OptimizerMailer implements OptimizerNotifier {
 
     private final OptimizerProperties props;
     private final MailRouter mailRouter;
+
+    /**
+     * 已经成功发信的 (feedbackId, 收件人) 记录，进程内存、不落库。
+     *
+     * <p>病灶：多收件人分属不同通道，某条通道故障时该收件人发送失败，异常冒泡出去，
+     * 外层 notifyOrFail 把这条反馈判失败转 NEW 重试；下一轮定时任务重跑会把已经
+     * 收到过的收件人再发一封，故障通道修好之前每天都重复。
+     *
+     * <p>不落库的理由：optimizer.mail.to 是维护者自己的邮箱，重发一次是「视觉上的
+     * 不一致」而不是数据丢失（审计原话），不值得为它加表/加列。代价是进程重启会
+     * 清空这份记忆，重启后最多再重发一轮——可接受，且 optimizer 本来就是每天一次的
+     * 定时任务，重启不常发生在两次运行之间。
+     */
+    private final Set<String> mailed = ConcurrentHashMap.newKeySet();
 
     public OptimizerMailer(OptimizerProperties props, MailRouter mailRouter) {
         this.props = props;
@@ -69,11 +86,23 @@ public class OptimizerMailer implements OptimizerNotifier {
         String body = body(fb, triage, attachments, source, extraNote);
         // 逐个收件人分别发：多个收件人可能分属不同通道（维护者的 Gmail 与同事的 QQ 邮箱
         // 走的不是同一条），塞进同一封信就只能挑一条通道发，另一半到达率白丢。
+        // 全部收件人都要试一遍，不能因为前一个失败就不再尝试后面的——否则同一次重试
+        // 永远只可能推进到"第一个故障收件人"为止，排在它后面的人永远收不到信。
+        List<String> failed = new ArrayList<>();
         for (String to : props.getMail().getTo().split(",")) {
             String trimmed = to.trim();
-            if (!trimmed.isEmpty()) {
+            if (trimmed.isEmpty()) continue;
+            String key = fb.getId() + ":" + trimmed;
+            if (!mailed.add(key)) continue; // 这条反馈已经成功发给过这个收件人，跳过
+            try {
                 mailRouter.send(trimmed, subject, body);
+            } catch (RuntimeException e) {
+                mailed.remove(key); // 没发成功，撤销标记，留给下一轮重试
+                failed.add(trimmed);
             }
+        }
+        if (!failed.isEmpty()) {
+            throw new IllegalStateException("邮件发送失败: " + String.join(",", failed));
         }
         log.info("[optimizer] 已发送反馈 #{} 的邮件到 {}", fb.getId(), props.getMail().getTo());
     }

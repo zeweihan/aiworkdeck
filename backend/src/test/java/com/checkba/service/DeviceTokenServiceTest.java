@@ -5,7 +5,9 @@ import com.checkba.model.entity.DeviceToken;
 import com.checkba.repository.DeviceTokenRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
+import java.time.LocalDateTime;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -19,6 +21,8 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class DeviceTokenServiceTest {
@@ -104,6 +108,36 @@ class DeviceTokenServiceTest {
         DeviceTokenService.IssuedToken issuedB = svc.issue(2L, "B's phone");
         svc.revoke(1L, issuedB.id());
         assertEquals(2L, svc.resolveUserId(issuedB.plaintext()));
+    }
+
+    @Test
+    void resolveUserIdCoalescesLastUsedAtWrites() {
+        // 病灶：resolveUserId 每次命中都无条件 save()，而它是每个设备令牌请求的必经之路——
+        // 高频轮询（移动端同步中转、activity 上报、编辑器自动保存）把每次读请求都变成一次
+        // DB 写。这里验证：同一令牌短时间内连续解析两次，只应该多落一次库（节流生效），
+        // 而不是每次都写。
+        DeviceTokenService.IssuedToken issued = svc.issue(42L, "MacBook"); // save #1：签发
+        svc.resolveUserId(issued.plaintext()); // lastUsedAt 此前是 null，必然落库一次：save #2
+        svc.resolveUserId(issued.plaintext()); // 紧接着再解析一次：节流窗口内，不该再落库
+
+        verify(repo, times(2)).save(any());
+    }
+
+    @Test
+    void purgeIdleTokensDeletesRowsOlderThan365Days() {
+        // 病灶：device_token 没有任何过期/清理机制——同一 auth 子系统里 UserSessionService
+        // 有 @Scheduled 每日清理过期会话，device_token 没有。签发了忘记撤销的令牌永久留在
+        // 库里。365 天与 UserSessionService 桌面档 security.session-idle-days 默认值一致：
+        // 设备令牌是「长期配对」语义，不该比会话更容易被清掉。
+        when(repo.deleteIdleBefore(any())).thenReturn(3);
+
+        svc.purgeIdleTokens();
+
+        ArgumentCaptor<LocalDateTime> captor = ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(repo).deleteIdleBefore(captor.capture());
+        long daysAgo = java.time.Duration.between(captor.getValue(), LocalDateTime.now()).toDays();
+        assertTrue(daysAgo >= 364 && daysAgo <= 365,
+                "空转清理窗口应为 365 天左右，实际传入的 cutoff 是 " + daysAgo + " 天前");
     }
 
     @Test
