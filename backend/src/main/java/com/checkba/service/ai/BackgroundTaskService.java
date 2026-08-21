@@ -82,6 +82,16 @@ public class BackgroundTaskService {
         this.clock = clock;
     }
 
+    /** 供测试断言 conversationTasks 外层 map 是否还留着某个 key（不下沉成生产代码路径）。 */
+    boolean hasConversationTaskMapEntry(String conversationId) {
+        return conversationTasks.containsKey(conversationId);
+    }
+
+    /** 供测试断言 userTasks 外层 map 是否还留着某个 key（不下沉成生产代码路径）。 */
+    boolean hasUserTaskMapEntry(Long userId) {
+        return userTasks.containsKey(userId);
+    }
+
     @PreDestroy
     public void shutdown() {
         cleanupScheduler.shutdownNow();
@@ -103,8 +113,20 @@ public class BackgroundTaskService {
         activeTasks.put(taskId, taskInfo);
         // 内层用 CopyOnWriteArrayList：注册线程、清理线程、查询线程并发 add/remove/遍历，
         // 普通 ArrayList 会抛 ConcurrentModificationException 或脏读（ConcurrentHashMap 只保护外层 map）。
-        conversationTasks.computeIfAbsent(conversationId, k -> new CopyOnWriteArrayList<>()).add(taskId);
-        userTasks.computeIfAbsent(userId, k -> new CopyOnWriteArrayList<>()).add(taskId);
+        // 用 compute（而不是 computeIfAbsent(...).add(...) 两步）：注册与
+        // cleanupTaskReferences 的"清空后摘除 key"都要经过同一个按 key 加锁的原子操作，
+        // 否则会出现"cleanup 判定 list 为空、正要摘除 key 的同时，registerTask 恰好往同一个
+        // 已存在但即将被摘除的 list 里塞了新 taskId"，新任务在摘除后就从外层 map 里凭空消失。
+        conversationTasks.compute(conversationId, (k, list) -> {
+            List<String> l = list != null ? list : new CopyOnWriteArrayList<>();
+            l.add(taskId);
+            return l;
+        });
+        userTasks.compute(userId, (k, list) -> {
+            List<String> l = list != null ? list : new CopyOnWriteArrayList<>();
+            l.add(taskId);
+            return l;
+        });
         
         // Send background_task_start event
         BackgroundTaskEvent event = BackgroundTaskEvent.started(taskId, taskType.name(), conversationId, estimatedDurationSec);
@@ -371,18 +393,28 @@ public class BackgroundTaskService {
         }, delayMs, TimeUnit.MILLISECONDS);
     }
     
+    /**
+     * 摘除任务在 conversationTasks/userTasks 里的引用。
+     *
+     * <p>此前只 {@code list.remove(taskId)} 摘空内层列表，外层的 conversationId/userId
+     * 这个 key 永远留着一个空 {@link CopyOnWriteArrayList}——每个"处理过至少一个后台任务的
+     * 会话/用户"都会在这两张表里永久占一条，进程不重启就一直涨（见审计条目）。
+     * 用 {@code computeIfPresent} 把"摘元素"与"空了就摘 key"收进同一个按 key 加锁的原子操作，
+     * 与 {@link #registerTask} 的 {@code compute} 互斥，避免"判定为空、正要摘 key"时
+     * 恰好有新任务塞进同一个 list 却被一并摘掉的竞态。
+     */
     private void cleanupTaskReferences(String taskId, TaskInfo task) {
         if (task.getConversationId() != null) {
-            List<String> convTasks = conversationTasks.get(task.getConversationId());
-            if (convTasks != null) {
-                convTasks.remove(taskId);
-            }
+            conversationTasks.computeIfPresent(task.getConversationId(), (id, list) -> {
+                list.remove(taskId);
+                return list.isEmpty() ? null : list;
+            });
         }
         if (task.getUserId() != null) {
-            List<String> uTasks = userTasks.get(task.getUserId());
-            if (uTasks != null) {
-                uTasks.remove(taskId);
-            }
+            userTasks.computeIfPresent(task.getUserId(), (id, list) -> {
+                list.remove(taskId);
+                return list.isEmpty() ? null : list;
+            });
         }
     }
 }

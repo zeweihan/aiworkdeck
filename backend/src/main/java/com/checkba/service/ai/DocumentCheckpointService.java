@@ -117,9 +117,29 @@ public class DocumentCheckpointService {
 
     /**
      * 新的一轮开始时清除上一轮快照（每轮一个独立检查点，语义不变：按 conversationId 整体清空）。
+     *
+     * <p>此前只摘掉内存里的登记条目，存储里的 blob 从来没人删过——checkpoints/ 前缀下的对象
+     * 只增不减，每一轮至少一次修改类文档工具调用就留一条永久占用（审计条目：Document checkpoint
+     * blobs are written to storage but never deleted）。这里连同 blob 一起删是安全的：
+     * {@link #restore} 只能恢复"当前还在内存 map 里"的快照，一旦这里把某个 conversationId
+     * 的条目摘掉，对应 blob 已经彻底不可达——没有任何代码路径还能把它读回来，不是「提前删了
+     * 还有用的东西」，是删一个已经没用的东西。删除失败只记日志：这是清理动作，
+     * 不能因为存储抖动挡住新一轮的正常执行。
      */
     public void clearForNewRun(String conversationId) {
-        checkpoints.remove(conversationId);
+        Map<Long, Checkpoint> perFile = checkpoints.remove(conversationId);
+        if (perFile == null || perFile.isEmpty()) {
+            return;
+        }
+        StorageService storage = storageServiceFactory.getStorageService();
+        for (Checkpoint cp : perFile.values()) {
+            try {
+                storage.delete(cp.checkpointKey());
+            } catch (Exception e) {
+                log.warn("Failed to delete stale document checkpoint blob: conv={}, fileId={}, key={}",
+                        conversationId, cp.fileId(), cp.checkpointKey(), e);
+            }
+        }
     }
 
     public boolean hasCheckpoint(String conversationId) {

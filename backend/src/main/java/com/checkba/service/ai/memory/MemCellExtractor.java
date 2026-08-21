@@ -113,36 +113,60 @@ public class MemCellExtractor {
      * @param messages 对话消息列表
      * @return 提取的 MemCell 列表
      */
-    public List<MemoryEntry> extractMemCells(Long projectId, String conversationId, 
+    public List<MemoryEntry> extractMemCells(Long projectId, String conversationId,
                                               List<ChatMessage> messages) {
+        return extractMemCellsInternal(projectId, conversationId, messages).entries();
+    }
+
+    /**
+     * 与 {@link #extractMemCells} 相同的抽取流程，额外带上"这一轮 LLM 响应是否解析失败"的信号，
+     * 供 {@link #extractAndSave} 把它体现在返回值里。此前 LLM JSON 解析失败与「模型确认无可提取信息」
+     * 都会静默退化成同一个空列表，调用方（记忆管线）无从区分——见审计条目。
+     */
+    private ExtractionOutcome extractMemCellsInternal(Long projectId, String conversationId,
+                                                        List<ChatMessage> messages) {
         log.info("MemCell extraction started: projectId={}, conversationId={}, messageCount={}",
                 projectId, conversationId, messages.size());
-        
+
         if (messages == null || messages.isEmpty()) {
-            return Collections.emptyList();
+            return new ExtractionOutcome(Collections.emptyList(), false);
         }
-        
+
         // 1. 准备对话内容
         String conversationContent = buildConversationContent(messages);
-        
+
         // 2. 并行获取法律关键信息（用于补充和验证）
-        List<LegalInfoProtector.ProtectedSegment> legalSegments = 
+        List<LegalInfoProtector.ProtectedSegment> legalSegments =
                 legalInfoProtector.markProtectedInfo(conversationContent);
-        
+
         // 3. 使用 LLM 提取 MemCell（projectId/conversationId 一路带下去做记账归属）
-        List<MemCellData> llmExtracted = extractWithLLM(conversationContent, projectId, conversationId);
-        
+        LlmOutcome llmOutcome = extractWithLLM(conversationContent, projectId, conversationId);
+        List<MemCellData> llmExtracted = llmOutcome.cells();
+
         // 4. 合并法律关键信息到提取结果
         List<MemCellData> merged = mergeWithLegalInfo(llmExtracted, legalSegments, conversationContent);
-        
+
         // 5. 转换为 MemoryEntry 并去重
         List<MemoryEntry> entries = convertToMemoryEntries(merged, projectId, conversationId);
-        
+
         log.info("MemCell extraction completed: extracted {} cells (LLM: {}, Legal: {})",
-                entries.size(), llmExtracted.size(), 
+                entries.size(), llmExtracted.size(),
                 merged.size() - llmExtracted.size());
-        
-        return entries;
+
+        return new ExtractionOutcome(entries, llmOutcome.parseFailed());
+    }
+
+    /** {@link #extractMemCellsInternal} 的返回包装：抽取到的记忆 + LLM 响应是否解析失败。 */
+    private record ExtractionOutcome(List<MemoryEntry> entries, boolean llmParseFailed) {}
+
+    /** {@link #extractWithLLM} 的返回包装：解析出的 MemCell + 是否因解析失败而放弃。 */
+    private record LlmOutcome(List<MemCellData> cells, boolean parseFailed) {
+        static LlmOutcome ok(List<MemCellData> cells) {
+            return new LlmOutcome(cells, false);
+        }
+        static LlmOutcome failed() {
+            return new LlmOutcome(Collections.emptyList(), true);
+        }
     }
 
     /**
@@ -187,7 +211,8 @@ public class MemCellExtractor {
     /**
      * 使用 LLM 提取 MemCell（辅助模型档，token 落 token_usage）
      */
-    private List<MemCellData> extractWithLLM(String conversationContent, Long projectId, String conversationId) {
+    private LlmOutcome extractWithLLM(String conversationContent, Long projectId, String conversationId) {
+        String responseText;
         try {
             ChatLanguageModel model = chatModelFactory.getAuxChatModel();
 
@@ -199,14 +224,20 @@ public class MemCellExtractor {
             );
             recordUsage(response, projectId, conversationId);
 
-            String responseText = response.content().text();
+            responseText = response.content().text();
             log.debug("LLM extraction response length: {}", responseText.length());
-            
-            return parseMemCellResponse(responseText);
-            
         } catch (Exception e) {
             log.error("LLM MemCell extraction failed: {}", e.getMessage(), e);
-            return Collections.emptyList();
+            return LlmOutcome.failed();
+        }
+
+        try {
+            return LlmOutcome.ok(parseMemCellResponse(responseText));
+        } catch (MemCellParseException e) {
+            // 与"模型明确认为无可提取信息"（parseMemCellResponse 正常返回空列表）区分开：
+            // 这里是响应解析失败，必须在结果里看得出来，不能悄悄退化成同一个空列表。
+            log.warn("MemCell JSON 解析失败，本轮不计入「确认无可提取信息」: {}", e.getMessage(), e);
+            return LlmOutcome.failed();
         }
     }
 
@@ -230,60 +261,81 @@ public class MemCellExtractor {
     }
 
     /**
-     * 解析 LLM 返回的 MemCell JSON
+     * 解析 LLM 返回的 MemCell JSON。
+     *
+     * <p>解析失败一律抛 {@link MemCellParseException}，绝不返回空列表——空列表只保留给
+     * "memcells 是合法空数组"这一种确认为空的情形。此前无论是找不到 JSON、JSON 本身解析出错，
+     * 还是 memcells 字段缺失/形态不对（如被截断成对象），全部吞进同一个 catch 里退化成空列表，
+     * 调用方（乃至最终的记忆管线）拿到的结果与"这轮对话确实没有可记的东西"完全无法区分。
+     *
+     * <p>包内可见：供测试直接验证"解析失败"与"确认为空"两条路径互不相同，不必真的打一次 LLM。
      */
-    private List<MemCellData> parseMemCellResponse(String responseText) {
-        List<MemCellData> cells = new ArrayList<>();
-        
-        try {
-            // 提取 JSON 块
-            Pattern jsonPattern = Pattern.compile("```json\\s*([\\s\\S]*?)\\s*```");
-            Matcher matcher = jsonPattern.matcher(responseText);
-            
-            String jsonStr = null;
-            if (matcher.find()) {
-                jsonStr = matcher.group(1);
-            } else {
-                // 尝试直接解析（如果响应本身就是 JSON）
-                int start = responseText.indexOf("{");
-                int end = responseText.lastIndexOf("}");
-                if (start >= 0 && end > start) {
-                    jsonStr = responseText.substring(start, end + 1);
-                }
+    List<MemCellData> parseMemCellResponse(String responseText) {
+        // 提取 JSON 块
+        Pattern jsonPattern = Pattern.compile("```json\\s*([\\s\\S]*?)\\s*```");
+        Matcher matcher = jsonPattern.matcher(responseText);
+
+        String jsonStr = null;
+        if (matcher.find()) {
+            jsonStr = matcher.group(1);
+        } else {
+            // 尝试直接解析（如果响应本身就是 JSON）
+            int start = responseText.indexOf("{");
+            int end = responseText.lastIndexOf("}");
+            if (start >= 0 && end > start) {
+                jsonStr = responseText.substring(start, end + 1);
             }
-            
-            if (jsonStr == null || jsonStr.isEmpty()) {
-                log.warn("No JSON found in LLM response");
-                return cells;
-            }
-            
-            // 使用简单的 JSON 解析（避免引入额外依赖）
-            cn.hutool.json.JSONObject json = cn.hutool.json.JSONUtil.parseObj(jsonStr);
-            cn.hutool.json.JSONArray memcellsArray = json.getJSONArray("memcells");
-            
-            if (memcellsArray != null) {
-                for (int i = 0; i < memcellsArray.size(); i++) {
-                    cn.hutool.json.JSONObject cellObj = memcellsArray.getJSONObject(i);
-                    MemCellData cell = new MemCellData();
-                    cell.setType(cellObj.getStr("type", "FACT"));
-                    cell.setKey(cellObj.getStr("key", ""));
-                    cell.setValue(cellObj.getStr("value", ""));
-                    cell.setImportance(cellObj.getDouble("importance", 0.7));
-                    cell.setProtected(cellObj.getBool("protected", false));
-                    
-                    if (!cell.getValue().isEmpty()) {
-                        cells.add(cell);
-                    }
-                }
-            }
-            
-            log.debug("Parsed {} MemCells from LLM response", cells.size());
-            
-        } catch (Exception e) {
-            log.error("Failed to parse MemCell JSON: {}", e.getMessage());
         }
-        
+
+        if (jsonStr == null || jsonStr.isEmpty()) {
+            // 响应里压根没有花括号包裹的内容：不是"提取到空数组"，是根本没法解析，两者不能等价
+            throw new MemCellParseException("LLM 响应中未找到 JSON 内容");
+        }
+
+        cn.hutool.json.JSONObject json;
+        cn.hutool.json.JSONArray memcellsArray;
+        try {
+            // 使用简单的 JSON 解析（避免引入额外依赖）
+            json = cn.hutool.json.JSONUtil.parseObj(jsonStr);
+            memcellsArray = json.getJSONArray("memcells");
+        } catch (Exception e) {
+            throw new MemCellParseException("MemCell JSON 解析失败: " + e.getMessage(), e);
+        }
+
+        if (memcellsArray == null) {
+            // memcells 键缺失，或值不是数组形态（例如被截断成 "memcells": {...} 对象）——
+            // 同样是解析失败，不能等同于模型显式返回的 {"memcells": []}
+            throw new MemCellParseException("memcells 字段缺失或不是数组（可能是截断响应）");
+        }
+
+        List<MemCellData> cells = new ArrayList<>();
+        for (int i = 0; i < memcellsArray.size(); i++) {
+            cn.hutool.json.JSONObject cellObj = memcellsArray.getJSONObject(i);
+            MemCellData cell = new MemCellData();
+            cell.setType(cellObj.getStr("type", "FACT"));
+            cell.setKey(cellObj.getStr("key", ""));
+            cell.setValue(cellObj.getStr("value", ""));
+            cell.setImportance(cellObj.getDouble("importance", 0.7));
+            cell.setProtected(cellObj.getBool("protected", false));
+
+            if (!cell.getValue().isEmpty()) {
+                cells.add(cell);
+            }
+        }
+
+        log.debug("Parsed {} MemCells from LLM response", cells.size());
         return cells;
+    }
+
+    /** MemCell JSON 解析失败的信号异常：与"LLM 明确返回空数组"区分开，不是普通的运行时异常。 */
+    static final class MemCellParseException extends RuntimeException {
+        MemCellParseException(String message) {
+            super(message);
+        }
+
+        MemCellParseException(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 
     /**
@@ -386,11 +438,15 @@ public class MemCellExtractor {
     }
 
     /**
-     * 一站式提取并保存 MemCell
+     * 一站式提取并保存 MemCell。
+     *
+     * @return 实际保存的条数；{@code 0} = 正常跑完但确实没有可提取/可保存的内容；
+     *         {@code -1} = 本轮 LLM 响应解析失败（不是"确认为空"，调用方不应当作与 0 相同的信号处理）。
      */
     public int extractAndSave(Long projectId, String conversationId, List<ChatMessage> messages) {
-        List<MemoryEntry> memCells = extractMemCells(projectId, conversationId, messages);
-        return saveMemCells(memCells);
+        ExtractionOutcome outcome = extractMemCellsInternal(projectId, conversationId, messages);
+        int saved = saveMemCells(outcome.entries());
+        return saved == 0 && outcome.llmParseFailed() ? -1 : saved;
     }
 
     /**

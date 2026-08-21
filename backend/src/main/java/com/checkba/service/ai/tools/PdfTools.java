@@ -233,18 +233,30 @@ public class PdfTools implements AgentToolComponent {
             Path localPath = resolveExisting(file);
             String docxName = file.getName().replaceAll("(?i)\\.pdf$", "") + ".docx";
 
-            String markdown = pdfEditService.extractMarkdown(localPath);
+            PdfEditService.ExtractedText extracted = pdfEditService.extractMarkdown(localPath);
+            String markdown = extracted.markdown();
 
-            if (markdown == null) {
+            if (extracted.looksScanned()) {
                 // 扫描件：本地 MinerU OCR（pptx-service 路由本地优先/云端兜底）
                 String ocrMarkdown;
                 try {
                     ocrMarkdown = pptxServiceClient.ocrPdfToMarkdown(localPath.toString());
                 } catch (Exception e) {
                     log.warn("MinerU OCR failed for scanned PDF", e);
-                    return "Error: 该 PDF 是扫描件（无文本层），已尝试本地 MinerU OCR 但失败：" + e.getMessage() +
-                            "\n请确认桌面端 MinerU 组件已下载并启动（设置-组件管理），或稍后重试。";
+                    if (markdown != null && !markdown.isBlank()) {
+                        // 手里还有已经提取到的文本层（页眉页码那种稀薄内容，也可能是一份
+                        // 本来就很短的文本件）。OCR 失败就回退用它，别把一份能转的文档
+                        // 变成一句「请去装 MinerU」——判据偏向 OCR 的前提就是有这条兜底。
+                        log.warn("OCR 不可用，回退到已提取的稀薄文本层: {}", file.getName());
+                    } else {
+                        return "Error: 该 PDF 是扫描件（无文本层），已尝试本地 MinerU OCR 但失败：" + e.getMessage() +
+                                "\n请确认桌面端 MinerU 组件已下载并启动（设置-组件管理），或稍后重试。";
+                    }
+                    ocrMarkdown = null;
                 }
+                if (ocrMarkdown == null) {
+                    // 走下面的文本型分支，用已提取的文本层继续
+                } else {
                 ProjectFile docx = aiDocxExportService.exportMarkdownToDocx(
                         file.getProjectId(), parentId, AGENT_USER_ID, docxName, ocrMarkdown);
                 editorBridgeService.sendRefreshFilesAction();
@@ -253,6 +265,7 @@ public class PdfTools implements AgentToolComponent {
                         "说明：这是 OCR 内容级转换（识别文字并保留段落结构，不保留原版式；识别结果建议人工核对）。\n" +
                         "接下来可用 doc_* 编辑工具修改该 docx（修改带修订痕迹）。",
                         file.getName(), docx.getName(), docx.getId());
+                }
             }
 
             // 文本型：版式级优先（pdf2docx），失败回退结构级

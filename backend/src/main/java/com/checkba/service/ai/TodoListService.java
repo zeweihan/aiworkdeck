@@ -138,15 +138,25 @@ public class TodoListService {
 
     /**
      * 供编排器在每次工具执行后注入的"防走神"摘要（Claude Code system-reminder 模式）。
-     * 清单不存在或已全部完成时返回 null（不注入）。
+     * 清单不存在或已无待办事项（完成或失败均算数）时返回 null（不注入）。
+     *
+     * <p><b>failed 是终态，要和 completed 一起算"done"</b>：此前只认 completed，
+     * 一个 failed 项永远不会自己变成 completed，于是 {@code done < todos.size()} 恒成立，
+     * 这条提醒永远关不掉，且摘要正文只列 in_progress/pending，完全不提 failed 项——
+     * 模型收到的是一句问不出所以然的"还没做完"，看不出到底卡在哪一项（审计条目）。
      */
     public String reminder(String conversationId) {
         List<TodoItem> todos = currentList(conversationId);
         if (todos.isEmpty()) return null;
         long done = todos.stream().filter(t -> "completed".equals(t.status())).count();
-        if (done == todos.size()) return null;
+        List<String> failed = todos.stream().filter(t -> "failed".equals(t.status()))
+                .map(TodoItem::content).toList();
+        if (done + failed.size() == todos.size()) return null;
         StringBuilder sb = new StringBuilder();
         sb.append(String.format("[任务清单状态 %d/%d 完成]", done, todos.size()));
+        if (!failed.isEmpty()) {
+            sb.append(" 已失败：").append(String.join("、", failed)).append("。");
+        }
         todos.stream().filter(t -> "in_progress".equals(t.status())).findFirst()
                 .ifPresent(t -> sb.append(" 进行中：").append(t.content()).append("。"));
         List<String> pending = todos.stream().filter(t -> "pending".equals(t.status()))

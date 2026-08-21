@@ -158,27 +158,33 @@ public class MemoryTools implements AgentToolComponent {
     /**
      * 查询项目记忆
      */
-    @Tool("查询项目相关的记忆信息，支持按关键词和类型检索。用于回顾之前的决策、结论或重要事实。")
+    @Tool("查询项目相关的记忆信息，支持按关键词和类型检索。用于回顾之前的决策、结论或重要事实。" +
+          "若要可靠地找回某次 save_memory 明确绑定过的 file/conversation 作用域记忆，" +
+          "请传 scope（与 sourceFileId）——否则只能靠关键词碰运气，可能命中不了。")
     public String query_memory(
             @P("查询关键词，用于搜索相关记忆") String query,
-            @P("记忆类型过滤(可选): decision/conclusion/fact/reference/preference/all，默认为all") String type
+            @P("记忆类型过滤(可选): decision/conclusion/fact/reference/preference/all，默认为all") String type,
+            @P("按作用域精确定位(可选): file(需配 sourceFileId)/conversation(取当前对话)，"
+                    + "不传则和此前一样只按关键词在全项目范围检索") String scope,
+            @P("来源文件ID(可选)，scope=file 时必填") Long sourceFileId
     ) {
-        log.info("Tool: query_memory called query='{}', type='{}'", query, type);
-        
+        log.info("Tool: query_memory called query='{}', type='{}', scope='{}'", query, type, scope);
+
         Long projectId = ProjectContextHolder.getProjectIdAsLong();
-        
+
         if (projectId == null) {
             return "错误：无法获取当前项目ID。";
         }
-        
+
         try {
             String memoryType = "all".equalsIgnoreCase(type) || type == null ? null : type.toLowerCase();
             List<MemoryEntry> memories = memoryManager.retrieveMemories(projectId, query, memoryType, 10);
-            
+            memories = withScopedMemories(memories, scope, sourceFileId);
+
             if (memories.isEmpty()) {
                 return "未找到相关记忆。可以使用 save_memory 工具保存重要信息。";
             }
-            
+
             StringBuilder sb = new StringBuilder("找到 ").append(memories.size()).append(" 条相关记忆:\n\n");
             sb.append(memoryManager.formatAsEvidenceLedger(memories));
 
@@ -187,6 +193,44 @@ public class MemoryTools implements AgentToolComponent {
             log.error("Failed to query memory: {}", e.getMessage(), e);
             return "查询记忆时出错: " + e.getMessage();
         }
+    }
+
+    /**
+     * 把"确定性按 scope 取值"的结果并入检索算法（关键词/RRF/Agentic）返回的结果，按 id 去重、
+     * scope 命中的排在前面。
+     *
+     * <p>审计条目：query_memory / search_knowledge_base / deep_search 完全不认 save_memory 存下的
+     * scope——file/conversation 作用域的记忆只能靠检索算法"运气好"才捞得到，
+     * 不是保存时承诺的"绑定到这个文件/这次对话就一定找得回来"。这里不改动任何一条检索算法本身
+     * （关键词 LIKE / RRF 混合 / Agentic 多轮都不动），只是在返回前，若调用方明确给了 scope，
+     * 额外做一次按 scope 的确定性查找并合并进来——保证"明确要哪个作用域"时百分之百找得到，
+     * 检索算法继续负责"泛泛地找相关内容"这一半职责。
+     */
+    private List<MemoryEntry> withScopedMemories(List<MemoryEntry> algorithmic, String scope, Long sourceFileId) {
+        if (scope == null || scope.isBlank()) {
+            return algorithmic;
+        }
+        List<MemoryEntry> scoped;
+        String normalized = scope.trim().toLowerCase();
+        if (MemoryEntry.MemoryScope.FILE.equals(normalized)) {
+            scoped = memoryManager.retrieveFileMemories(sourceFileId);
+        } else if (MemoryEntry.MemoryScope.CONVERSATION.equals(normalized)) {
+            scoped = memoryManager.retrieveConversationMemories(ProjectContextHolder.getConversationId());
+        } else {
+            // project/user/global：现有算法已经是按 projectId 全量检索，不额外加一条确定性通路
+            return algorithmic;
+        }
+        if (scoped.isEmpty()) {
+            return algorithmic;
+        }
+        java.util.LinkedHashMap<Long, MemoryEntry> merged = new java.util.LinkedHashMap<>();
+        for (MemoryEntry m : scoped) {
+            merged.put(m.getId(), m);
+        }
+        for (MemoryEntry m : algorithmic) {
+            merged.putIfAbsent(m.getId(), m);
+        }
+        return new java.util.ArrayList<>(merged.values());
     }
 
     /**
@@ -254,27 +298,34 @@ public class MemoryTools implements AgentToolComponent {
      * 智能混合搜索知识库（RRF 融合）
      * 结合关键词检索和语义检索，使用 RRF 算法融合结果，获得更准确的搜索结果
      */
-    @Tool("在项目知识库中进行智能混合搜索，结合关键词和语义理解，查找与查询相关的记忆和信息。")
+    @Tool("在项目知识库中进行智能混合搜索，结合关键词和语义理解，查找与查询相关的记忆和信息。" +
+          "若要可靠地找回某次 save_memory 明确绑定过的 file/conversation 作用域记忆，" +
+          "请传 scope（与 sourceFileId）——否则只能靠语义相关性碰运气，可能命中不了。")
     public String search_knowledge_base(
             @P("搜索查询，描述你想查找的信息") String query,
-            @P("返回结果数量，默认5") int limit
+            @P("返回结果数量，默认5") int limit,
+            @P("按作用域精确定位(可选): file(需配 sourceFileId)/conversation(取当前对话)，"
+                    + "不传则和此前一样只按语义相关性在全项目范围检索") String scope,
+            @P("来源文件ID(可选)，scope=file 时必填") Long sourceFileId
     ) {
-        log.info("Tool: search_knowledge_base (hybrid RRF) called query='{}', limit={}", query, limit);
-        
+        log.info("Tool: search_knowledge_base (hybrid RRF) called query='{}', limit={}, scope='{}'",
+                query, limit, scope);
+
         Long projectId = ProjectContextHolder.getProjectIdAsLong();
-        
+
         if (projectId == null) {
             return "错误：无法获取当前项目ID。";
         }
-        
+
         if (limit <= 0 || limit > 20) {
             limit = 5;
         }
-        
+
         try {
             // 使用 RRF 混合检索替代单纯的语义检索
             List<MemoryEntry> results = memoryManager.hybridSearch(projectId, query, limit);
-            
+            results = withScopedMemories(results, scope, sourceFileId);
+
             if (results.isEmpty()) {
                 return "未在知识库中找到相关信息。";
             }
@@ -305,27 +356,33 @@ public class MemoryTools implements AgentToolComponent {
      * Agentic 深度搜索（多轮召回）
      * 当普通搜索结果不足时，自动生成补充查询并融合结果
      */
-    @Tool("在项目知识库中进行深度智能搜索。当您需要更全面的信息时使用，会自动扩展查询范围。")
+    @Tool("在项目知识库中进行深度智能搜索。当您需要更全面的信息时使用，会自动扩展查询范围。" +
+          "若要可靠地找回某次 save_memory 明确绑定过的 file/conversation 作用域记忆，" +
+          "请传 scope（与 sourceFileId）——否则只能靠多轮召回碰运气，可能命中不了。")
     public String deep_search(
             @P("搜索查询，描述你想查找的信息") String query,
-            @P("返回结果数量，默认10") int limit
+            @P("返回结果数量，默认10") int limit,
+            @P("按作用域精确定位(可选): file(需配 sourceFileId)/conversation(取当前对话)，"
+                    + "不传则和此前一样只按多轮召回在全项目范围检索") String scope,
+            @P("来源文件ID(可选)，scope=file 时必填") Long sourceFileId
     ) {
-        log.info("Tool: deep_search (agentic) called query='{}', limit={}", query, limit);
-        
+        log.info("Tool: deep_search (agentic) called query='{}', limit={}, scope='{}'", query, limit, scope);
+
         Long projectId = ProjectContextHolder.getProjectIdAsLong();
-        
+
         if (projectId == null) {
             return "错误：无法获取当前项目ID。";
         }
-        
+
         if (limit <= 0 || limit > 20) {
             limit = 10;
         }
-        
+
         try {
             // 使用 Agentic 多轮召回检索
             List<MemoryEntry> results = agenticRetriever.agenticRetrieve(projectId, query, limit);
-            
+            results = withScopedMemories(results, scope, sourceFileId);
+
             if (results.isEmpty()) {
                 return "深度搜索未找到相关信息。建议尝试不同的查询词或使用 save_memory 保存新信息。";
             }

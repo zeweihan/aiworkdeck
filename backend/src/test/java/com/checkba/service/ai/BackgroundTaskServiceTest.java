@@ -112,4 +112,26 @@ class BackgroundTaskServiceTest {
         assertTrue(service.hasActiveTasks("conv-1"), "刚注册、未超时的任务不应被误杀");
         assertEquals(TaskInfo.TaskStatus.RUNNING, service.getTask(taskId).getStatus());
     }
+
+    // ==== conversationTasks / userTasks 外层 map 的无界增长 ====
+    // 背景：cleanupTaskReferences 此前只 list.remove(taskId) 摘空内层列表，从不摘外层 map
+    // 的 key——每个处理过至少一个后台任务的会话/用户都在这两张表里永久占一条，进程越久攒得越多。
+
+    @Test
+    @DisplayName("修复：任务清空后，conversationTasks/userTasks 的外层 key 要随之摘除，不能只剩空列表")
+    void cleanupRemovesEmptyOuterMapEntry() {
+        String taskId = service.registerTask("conv-1", 7L, TaskInfo.TaskType.PPTX_GENERATE, 900);
+        service.completeTask(taskId, "done");
+
+        // 走 cleanupOldTasks 的"已终态超过 30 分钟保留期"分支，而不是 completeTask 内部
+        // 5 分钟后才触发的异步 scheduleCleanup——后者要等真实墙钟，单测等不起。
+        service.setClock(java.time.Clock.offset(java.time.Clock.systemUTC(), java.time.Duration.ofHours(1)));
+        service.cleanupOldTasks();
+
+        assertTrue(service.getActiveTasksForConversation("conv-1").isEmpty());
+        assertFalse(service.hasConversationTaskMapEntry("conv-1"),
+                "任务清空后 conversationTasks 里 conv-1 这个 key 应随之摘除，不能只留一个空列表");
+        assertFalse(service.hasUserTaskMapEntry(7L),
+                "任务清空后 userTasks 里 userId=7 这个 key 应随之摘除，不能只留一个空列表");
+    }
 }

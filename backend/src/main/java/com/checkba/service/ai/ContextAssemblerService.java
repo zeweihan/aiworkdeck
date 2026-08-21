@@ -261,7 +261,7 @@ public class ContextAssemblerService {
                     String content = legalTools.read_document(item.getId());
                     // Truncate if too long
                     if (content != null && content.length() > maxCharsPerFile) {
-                        content = content.substring(0, maxCharsPerFile) + "\n... [TRUNCATED - File too long]";
+                        content = truncateAtCharBoundary(content, maxCharsPerFile) + "\n... [TRUNCATED - File too long]";
                     }
                     systemText.append("<file id=\"").append(item.getId())
                               .append("\" name=\"").append(attrSafe(item.getName())).append("\"><![CDATA[\n");
@@ -402,7 +402,7 @@ public class ContextAssemblerService {
                 // Truncate if too long
                 int maxCharsPerFile = contextProperties.getFiles().getMaxCharsPerFile();
                 if (content.length() > maxCharsPerFile) {
-                    content = content.substring(0, maxCharsPerFile) + "\n... [TRUNCATED - File too long]";
+                    content = truncateAtCharBoundary(content, maxCharsPerFile) + "\n... [TRUNCATED - File too long]";
                 }
 
                 systemText.append("<active_document id=\"").append(activeContext.getId())
@@ -565,6 +565,24 @@ public class ContextAssemblerService {
     }
 
     /**
+     * 按字符数截断，但不劈开 UTF-16 代理对（审计条目：char-based truncation of file/document
+     * content can split a surrogate pair）。{@code String.substring(0, n)} 是 UTF-16 code unit
+     * 索引，不是码点索引；n 如果恰好落在某个增补平面字符（如罕见的 CJK 扩展 B 人名字、emoji）
+     * 的高、低代理项中间，截断结果会以一个孤立代理项收尾——序列化成 UTF-8 时被替换成 U+FFFD
+     * 之类的字符，静默损坏注入上下文的最后一个字。命中就把截断点回退一位，让代理对整体保留
+     * 或整体舍弃，不会劈成两半。三处字符级截断（&lt;file&gt;/&lt;active_document&gt;/
+     * 内联正文缓存）共用这一个方法，避免各自实现、只补了一处漏了另外两处。
+     */
+    static String truncateAtCharBoundary(String content, int maxChars) {
+        if (maxChars > 0 && maxChars < content.length()
+                && Character.isHighSurrogate(content.charAt(maxChars - 1))
+                && Character.isLowSurrogate(content.charAt(maxChars))) {
+            maxChars -= 1;
+        }
+        return content.substring(0, maxChars);
+    }
+
+    /**
      * 文件名同样不可信：双引号能撑破 name="..." 属性，接着伪造出新的标签闭合与容器。
      */
     private static String attrSafe(String name) {
@@ -709,7 +727,7 @@ public class ContextAssemblerService {
         if (inline != null && !inline.isEmpty()) {
             if (inline.length() > MAX_INLINE_CONTENT_CHARS) {
                 // 超限正文不入缓存：缓存的内存上界按每条 200k 字符估算
-                return inline.substring(0, MAX_INLINE_CONTENT_CHARS)
+                return truncateAtCharBoundary(inline, MAX_INLINE_CONTENT_CHARS)
                         + "\n... [TRUNCATED - Inline content too long]";
             }
             inlineContentCache.put(conversationId, inline);

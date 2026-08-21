@@ -4,6 +4,7 @@ import com.checkba.model.entity.AgentTodoList;
 import com.checkba.repository.AgentTodoListRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
@@ -118,6 +119,33 @@ class TodoListServiceTest {
     @Test
     void reminder_noList_returnsNull() {
         assertNull(service.reminder("conv-unknown"));
+    }
+
+    // ==== failed 项的防走神提醒（审计条目）====
+    // 背景：reminder() 此前只认 completed 算"done"，failed 项永远不会自己变成 completed，
+    // 于是 done < todos.size() 恒成立，提醒永远关不掉；且正文只列 in_progress/pending，
+    // 完全不提 failed 项，模型看不出到底卡在哪一项。
+
+    @Test
+    @DisplayName("修复：全部项要么完成要么失败时，提醒应该停止（不能因为有 failed 项就永远关不掉）")
+    void reminder_completedAndFailed_returnsNull() {
+        service.update(CONV, "[{\"content\":\"A\",\"status\":\"completed\"},"
+                + "{\"content\":\"B\",\"status\":\"failed\"}]");
+
+        assertNull(service.reminder(CONV), "全部项都已是终态（完成或失败），不该再继续催");
+    }
+
+    @Test
+    @DisplayName("修复：还有未完成项时，提醒正文要点名失败的那一项，不能只字不提")
+    void reminder_withFailedAndPending_mentionsFailedItem() {
+        service.update(CONV, "[{\"content\":\"A\",\"status\":\"failed\"},"
+                + "{\"content\":\"B\",\"status\":\"pending\"}]");
+
+        String reminder = service.reminder(CONV);
+
+        assertNotNull(reminder, "还有 pending 项没解决，提醒不该消失");
+        assertTrue(reminder.contains("已失败：A"), "正文应点名失败项，不能只字不提: " + reminder);
+        assertTrue(reminder.contains("待办：B"));
     }
 
     @Test

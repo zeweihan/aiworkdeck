@@ -343,6 +343,20 @@ public class MemoryManager {
         return memoryEntryRepository.findBySourceFileIdOrderByImportanceScoreDesc(sourceFileId);
     }
 
+    /**
+     * 获取绑定到某个对话的记忆（scope=conversation）。
+     *
+     * 与 {@link #retrieveFileMemories} 同理：query_memory/search_knowledge_base/deep_search
+     * 此前完全不认 scope，file/conversation 作用域保存的记忆只能靠关键词/语义检索"运气好"才捞得到——
+     * 这里提供一条确定性的按 scope 取值通路，供工具层在调用方明确指定 scope 时兜底合并进结果。
+     */
+    public List<MemoryEntry> retrieveConversationMemories(String conversationId) {
+        if (conversationId == null || conversationId.isBlank()) {
+            return Collections.emptyList();
+        }
+        return memoryEntryRepository.findByConversationIdOrderByCreatedAtDesc(conversationId);
+    }
+
     // ==================== RRF 混合检索 ====================
 
     /**
@@ -622,24 +636,40 @@ public class MemoryManager {
         return projectMemoryRepository.findByProjectId(projectId);
     }
 
+    /** find-then-insert 竞态的进程内互斥锁，见 {@link #saveProjectMemory}。 */
+    private final Object projectMemorySaveLock = new Object();
+
     /**
-     * 保存或更新项目记忆
+     * 保存或更新项目记忆。
+     *
+     * <p><b>并发红线</b>：{@code project_id} 上有 {@code unique} 约束，而这里是先查后写的
+     * find-then-insert：两个并发线程（同一项目的两轮对话几乎同时跑完记忆管线）都可能在对方提交前
+     * 读到"还没有这一行"，于是都走 INSERT，后提交的那个直接撞唯一约束抛异常，
+     * 它这一轮抽取出的字段（legalRefs/parties/transactionAmount 等）被整体丢弃——不是"没有变化"，
+     * 是"这次更新完全没发生"。不能加 {@code @Version} 列做乐观锁（不引入新的数据库列），
+     * 这里改用进程内锁把"查 + 决定 insert/update + 写"整段收窄成互斥：同一时刻只有一个线程能
+     * 穿过去，后来者一定能看到前者已经写完的行，从而落到 UPDATE 分支而不是再抢一次 INSERT。
+     * 代价是同一 JVM 内对本方法的调用退化为串行（调用频率低——每轮对话一次，可接受）；
+     * 多实例横向扩容时锁不跨进程，但这已经把审计条目里描述的竞态窗口从"一次完整的 DB 往返"
+     * 收窄到可忽略的量级。
      */
     @Transactional
     public ProjectMemory saveProjectMemory(ProjectMemory projectMemory) {
-        log.info("Saving project memory for projectId={}", projectMemory.getProjectId());
-        
-        ProjectMemory existing = projectMemoryRepository
-                .findByProjectId(projectMemory.getProjectId())
-                .orElse(null);
-        
-        if (existing != null) {
-            // 更新现有记录
-            projectMemory.setId(existing.getId());
-            projectMemory.setCreatedAt(existing.getCreatedAt());
+        synchronized (projectMemorySaveLock) {
+            log.info("Saving project memory for projectId={}", projectMemory.getProjectId());
+
+            ProjectMemory existing = projectMemoryRepository
+                    .findByProjectId(projectMemory.getProjectId())
+                    .orElse(null);
+
+            if (existing != null) {
+                // 更新现有记录
+                projectMemory.setId(existing.getId());
+                projectMemory.setCreatedAt(existing.getCreatedAt());
+            }
+
+            return projectMemoryRepository.save(projectMemory);
         }
-        
-        return projectMemoryRepository.save(projectMemory);
     }
 
     /**
@@ -680,17 +710,23 @@ public class MemoryManager {
         return userMemoryRepository.findByUserId(userId);
     }
 
+    /** find-then-insert 竞态的进程内互斥锁，同 {@link #projectMemorySaveLock}，理由见 {@link #saveProjectMemory}。 */
+    private final Object userMemorySaveLock = new Object();
+
     /**
-     * 保存用户记忆
+     * 保存用户记忆。同 {@link #saveProjectMemory}，{@code user_id} 上也是 unique 约束 +
+     * find-then-insert，一样会被并发撞出丢更新，一样用进程内锁收窄竞态窗口。
      */
     @Transactional
     public UserMemory saveUserMemory(UserMemory userMemory) {
-        UserMemory existing = userMemoryRepository.findByUserId(userMemory.getUserId()).orElse(null);
-        if (existing != null) {
-            userMemory.setId(existing.getId());
-            userMemory.setCreatedAt(existing.getCreatedAt());
+        synchronized (userMemorySaveLock) {
+            UserMemory existing = userMemoryRepository.findByUserId(userMemory.getUserId()).orElse(null);
+            if (existing != null) {
+                userMemory.setId(existing.getId());
+                userMemory.setCreatedAt(existing.getCreatedAt());
+            }
+            return userMemoryRepository.save(userMemory);
         }
-        return userMemoryRepository.save(userMemory);
     }
 
     /**

@@ -115,6 +115,35 @@ class DocumentCheckpointServiceTest {
     }
 
     @Test
+    @DisplayName("修复：clearForNewRun 要把存储里的 blob 一并删掉，不能只摘内存条目")
+    void clearForNewRunDeletesUnderlyingStorageBlob() throws Exception {
+        when(projectFileService.getFile(1L)).thenReturn(fileOf(1L, "A.docx", "projects/1/A.docx"));
+        when(projectFileService.getFileBytes(1L)).thenReturn("v1".getBytes());
+        service.ensureCheckpoint("conv-1", 1L);
+
+        org.mockito.ArgumentCaptor<String> savedKey = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(storage).save(savedKey.capture(), any());
+
+        service.clearForNewRun("conv-1");
+
+        verify(storage).delete(eq(savedKey.getValue()));
+    }
+
+    @Test
+    @DisplayName("清理时存储删除失败只记日志，不阻断新一轮：内存条目照样摘除")
+    void clearForNewRunToleratesStorageDeleteFailure() throws Exception {
+        when(projectFileService.getFile(1L)).thenReturn(fileOf(1L, "A.docx", "projects/1/A.docx"));
+        when(projectFileService.getFileBytes(1L)).thenReturn("v1".getBytes());
+        service.ensureCheckpoint("conv-1", 1L);
+        org.mockito.Mockito.doThrow(new RuntimeException("存储抖动"))
+                .when(storage).delete(any());
+
+        service.clearForNewRun("conv-1");
+
+        assertFalse(service.hasCheckpoint("conv-1"), "即便物理删除失败，内存登记也应正常清空");
+    }
+
+    @Test
     @DisplayName("单文件场景行为不变：restore 文案与既有格式一致")
     void singleFileRestoreMessageUnchanged() throws Exception {
         when(projectFileService.getFile(1L)).thenReturn(fileOf(1L, "合同.docx", "projects/1/合同.docx"));

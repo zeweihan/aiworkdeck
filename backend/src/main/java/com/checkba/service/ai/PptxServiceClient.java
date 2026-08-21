@@ -291,9 +291,20 @@ public class PptxServiceClient {
                 return null;
             }
             
-            JSONObject status = getTaskStatus(projectId, taskId);
+            JSONObject status;
+            try {
+                status = getTaskStatus(projectId, taskId);
+            } catch (Exception e) {
+                // 单次瞬时网络错误（连接被断/一次 502/503）不该直接掀翻整条正在跑的多阶段生成——
+                // 底层任务在 pptx-service 那边可能还在正常继续，只是这一次轮询请求本身失败了。
+                // 跳过这一轮，POLL_INTERVAL_MS 后再试；连续失败到耗尽 MAX_POLL_ATTEMPTS
+                // 会走既有的超时兜底（return null），不会无限重试（审计条目）。
+                log.warn("Task {} status poll failed transiently (attempt {}/{}), will retry: {}",
+                        taskId, i + 1, MAX_POLL_ATTEMPTS, e.getMessage());
+                continue;
+            }
             String taskStatus = status.getStr("status");
-            
+
             if ("COMPLETED".equals(taskStatus)) {
                 // 额外验证：检查是否有实际完成的项目
                 JSONObject progress = status.getJSONObject("progress");
@@ -372,8 +383,17 @@ public class PptxServiceClient {
      * @return 保存的文件路径
      */
     public String downloadPptx(String downloadUrl, String localPath) {
+        if (downloadUrl == null || downloadUrl.isBlank()) {
+            // 调用方从任务状态的 progress 对象里读 download_url——那个对象存在（不会走
+            // null-progress 兜底分支）但恰好没带这个字段时，此前会直接拼出
+            // baseUrl + "null" 去请求，真正发生的是 404，报出来的是
+            // "Failed to download PPTX: HTTP 404"，看着像路由/网络问题，
+            // 实际是响应压根没给 download_url（审计条目）。在真正发请求之前单独识别出来。
+            throw new RuntimeException("Failed to download PPTX: task response is missing download_url "
+                    + "(the export/conversion task may not have finished writing its result yet)");
+        }
         log.info("Downloading PPTX from {} to {}", downloadUrl, localPath);
-        
+
         String fullUrl = baseUrl + downloadUrl;
         
         HttpResponse resp = HttpRequest.get(fullUrl)
@@ -788,9 +808,17 @@ public class PptxServiceClient {
                 return null;
             }
             
-            JSONObject status = getTaskStatus(projectId, taskId);
+            JSONObject status;
+            try {
+                status = getTaskStatus(projectId, taskId);
+            } catch (Exception e) {
+                // 同 waitForTask：单次瞬时网络错误不该掀翻整条多阶段生成，跳过这一轮再试。
+                log.warn("Task {} status poll failed transiently (attempt {}/{}), will retry: {}",
+                        taskId, i + 1, MAX_POLL_ATTEMPTS, e.getMessage());
+                continue;
+            }
             String taskStatus = status.getStr("status");
-            
+
             // 计算并报告进度
             JSONObject taskProgress = status.getJSONObject("progress");
             if (taskProgress != null && progressCallback != null) {

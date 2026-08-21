@@ -228,6 +228,46 @@ class SkillRegistryTest {
     }
 
     @Test
+    @DisplayName("修复：skill.yml 编码错误时，getLoadErrors() 要能看出「解析出错」而不是「没有这个 skill」")
+    void encodingFailureIsDistinguishableFromMissingSkill() throws IOException {
+        writeSkill(tempDir.resolve("good-skill"), "good-skill", null);
+
+        // 非 UTF-8 字节（GBK 编码的中文）：Files.readString(..., UTF_8) 会抛 MalformedInputException
+        Path badEncoding = tempDir.resolve("bad-encoding");
+        Files.createDirectories(badEncoding);
+        Files.write(badEncoding.resolve("skill.yml"),
+                "id: bad-encoding\nname: 中文技能名\ntriggers: [x]\nprompt: prompt.md\n"
+                        .getBytes(java.nio.charset.Charset.forName("GBK")));
+        Files.writeString(badEncoding.resolve("prompt.md"), "p");
+
+        SkillRegistry registry = newRegistry(tempDir, new PluginService());
+
+        // 与"坏 skill 跳过不阻断"一致：解析失败的 skill 不出现在结果里，好 skill 不受影响
+        assertEquals(1, registry.getSkills().size());
+        assertTrue(registry.getSkill("bad-encoding").isEmpty(), "编码错误的 skill 不应该注册成功");
+
+        // 新增的区分信号：loadErrors 里要能查到这个目录，且原因点明是编码问题
+        assertTrue(registry.getLoadErrors().containsKey("bad-encoding"),
+                "解析失败必须在 loadErrors 里留痕，不能和「压根没有这个目录」一样悄无声息");
+        assertTrue(registry.getLoadErrors().get("bad-encoding").contains("编码"),
+                "原因应该点明是编码问题，而不是一句笼统的失败: " + registry.getLoadErrors().get("bad-encoding"));
+        // 正常注册成功的目录不应该出现在 loadErrors 里
+        assertFalse(registry.getLoadErrors().containsKey("good-skill"));
+    }
+
+    @Test
+    @DisplayName("修复：enabled_by_default 写成带引号的真值（\"yes\"）不能被静默当成 false")
+    void quotedTruthyEnabledByDefaultIsNotCoercedToFalse() throws IOException {
+        writeSkill(tempDir.resolve("quoted-yes"), "quoted-yes", "enabled_by_default: \"yes\"\n");
+        SkillRegistry registry = newRegistry(tempDir, new PluginService());
+
+        SkillDefinition skill = registry.getSkill("quoted-yes").orElseThrow();
+        assertTrue(skill.isEnabledByDefault(),
+                "带引号的真值 \"yes\" 应该被识别为启用，不能被 Boolean.parseBoolean 悄悄当成 false");
+        assertTrue(registry.isEnabled("quoted-yes"), "不该被首次扫描的种子逻辑默认关闭");
+    }
+
+    @Test
     @DisplayName("插件携带 skill（manifest.skills）：经 PluginService 收集后注册，带 sourcePluginId")
     void registersPluginCarriedSkills() throws IOException {
         Path pluginsDir = tempDir.resolve("plugins");

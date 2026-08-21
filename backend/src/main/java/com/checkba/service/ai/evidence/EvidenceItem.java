@@ -48,11 +48,32 @@ public record EvidenceItem(
         }
         provenance = provenance == null ? List.of() : List.copyOf(provenance);
         if (excerpt != null && excerpt.length() > MAX_EXCERPT_LENGTH) {
-            excerpt = excerpt.substring(0, MAX_EXCERPT_LENGTH);
+            excerpt = truncateAtCharBoundary(excerpt, MAX_EXCERPT_LENGTH);
         }
     }
 
     private static boolean isBlank(String s) {
         return s == null || s.isBlank();
+    }
+
+    /**
+     * 按字符数截断，但不劈开 UTF-16 代理对（审计条目：Excerpt truncation cuts by UTF-16 char
+     * index and can split a surrogate pair, corrupting the tail of an evidence excerpt）。
+     * {@code String.substring(0, n)} 是 UTF-16 code unit 索引，不是码点索引；n 如果恰好落在
+     * 某个增补平面字符（emoji、罕见 CJK 扩展 B 人名字/公司名字）的高、低代理项中间，截断结果
+     * 会以一个孤立代理项收尾，序列化成 UTF-8 时被替换成 U+FFFD 之类的字符，
+     * 律师看到的证据摘录末尾就是一个乱码。命中就把截断点回退一位，代理对整体舍弃。
+     *
+     * <p>与 {@code ContextAssemblerService.truncateAtCharBoundary} 同一处理逻辑、
+     * 同一处审计条目类别的两处之一，这里不引入跨包依赖单独复制一份——本类是不带其它依赖的
+     * 稳定契约值对象，不该为了几行字符串处理反过来依赖一个大型 Spring 服务类。
+     */
+    private static String truncateAtCharBoundary(String content, int maxChars) {
+        if (maxChars > 0 && maxChars < content.length()
+                && Character.isHighSurrogate(content.charAt(maxChars - 1))
+                && Character.isLowSurrogate(content.charAt(maxChars))) {
+            maxChars -= 1;
+        }
+        return content.substring(0, maxChars);
     }
 }
