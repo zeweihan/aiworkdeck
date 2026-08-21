@@ -2,9 +2,11 @@ package com.checkba.service.ai;
 
 import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
+import com.checkba.service.pack.NativePackService;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.nio.charset.StandardCharsets;
@@ -16,8 +18,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 /**
  * 诉讼可视化的进程边界测试——真起 Python、真跑引擎、真落盘。
@@ -88,6 +94,77 @@ class LitigationVisualServiceTest {
         if (why != null) {
             assertTrue(why.contains("litviz") || why.contains("Python"), "说明应指明缺什么：" + why);
         }
+    }
+
+    /**
+     * 修复：resolved 此前只算一次且全仓没有任何生产调用点会碰 invalidate()——用户在广场
+     * 装完 litigation-visual 资源包（live 安装，不重启后端）后，runtime() 会一直返回
+     * 装包前缓存的旧结果。
+     *
+     * <p>不依赖"litviz 目录一开始必须完全解析不到"（cwd 相对路径的兜底可能会在这台机器上
+     * 真的找到仓库里的 litviz/，环境不同结果不同）：只断言"configuredDir 刚落盘 cli.py 后，
+     * 不失效缓存则 runtime() 还是原来那个缓存实例；失效后才会重新解析并优先命中 configuredDir"
+     * ——这条钉住的是缓存本身会不会刷新，与这台机器上到底有没有真实 litviz/ 无关。
+     */
+    @Test
+    @DisplayName("修复：invalidate() 后重新探测，pack 装完不必重启后端就能生效")
+    void invalidateForcesReResolutionAfterCliPyAppears(@org.junit.jupiter.api.io.TempDir Path tempDir) throws Exception {
+        LitigationVisualService fresh = new LitigationVisualService();
+        ReflectionTestUtils.setField(fresh, "configuredDir", tempDir.toString());
+        ReflectionTestUtils.setField(fresh, "configuredPython", "");
+        ReflectionTestUtils.setField(fresh, "configuredGraphvizDir", "");
+
+        Path tempDirNormalized = tempDir.toAbsolutePath().normalize();
+        // tempDir 里还没有 cli.py：resolveLitvizDir 跳过它，缓存下当时能解析到的结果
+        LitigationVisualService.Runtime before = fresh.runtime();
+        assertFalse(tempDirNormalized.equals(before.litvizDir()), "cli.py 还没落盘，不应解析到 tempDir");
+
+        // 模拟"用户在广场装完 litigation-visual 资源包"：cli.py 落盘到 configuredDir
+        Files.writeString(tempDir.resolve("cli.py"), "# fake cli\n", StandardCharsets.UTF_8);
+
+        // 不失效缓存的话，runtime() 应仍返回失效前缓存的同一个实例——钉住修复前的故障现象
+        assertSame(before, fresh.runtime(), "不失效缓存时应仍返回同一个缓存实例（钉住修复前的行为）");
+
+        fresh.invalidate();
+
+        LitigationVisualService.Runtime after = fresh.runtime();
+        assertEquals(tempDirNormalized, after.litvizDir(),
+                "失效后应重新解析；configuredDir 优先级最高，应命中刚落盘的 cli.py");
+    }
+
+    /**
+     * 上一条测的是"invalidate() 本身管不管用"——这条测的是修复真正加的那一行：
+     * registerPackProbe 有没有把 invalidate 注册给 packService，pack 状态变化时
+     * 是不是真的会调用到它。两条缺一都不能证明生产环境里这条链路是通的。
+     */
+    @Test
+    @DisplayName("修复：registerPackProbe 把 invalidate 登记进 packService.onPackChanged，回调触发时真的会重新解析")
+    void registerPackProbeWiresInvalidateToPackService(@org.junit.jupiter.api.io.TempDir Path tempDir) throws Exception {
+        LitigationVisualService fresh = new LitigationVisualService();
+        ReflectionTestUtils.setField(fresh, "configuredDir", tempDir.toString());
+        ReflectionTestUtils.setField(fresh, "configuredPython", "");
+        ReflectionTestUtils.setField(fresh, "configuredGraphvizDir", "");
+
+        NativePackService packService = mock(NativePackService.class);
+        ReflectionTestUtils.setField(fresh, "packService", packService);
+
+        fresh.registerPackProbe(); // 模拟 Spring 的 @PostConstruct
+
+        ArgumentCaptor<Runnable> captor = ArgumentCaptor.forClass(Runnable.class);
+        verify(packService).onPackChanged(eq(LitigationVisualService.PACK_ID), captor.capture());
+
+        Path tempDirNormalized = tempDir.toAbsolutePath().normalize();
+        LitigationVisualService.Runtime before = fresh.runtime();
+        assertFalse(tempDirNormalized.equals(before.litvizDir()));
+
+        Files.writeString(tempDir.resolve("cli.py"), "# fake cli\n", StandardCharsets.UTF_8);
+        assertSame(before, fresh.runtime(), "登记的回调触发前不该重新解析");
+
+        // 模拟 NativePackService 在 install()/uninstall()/syncRevoked() 里调用注册的回调
+        captor.getValue().run();
+
+        assertEquals(tempDirNormalized, fresh.runtime().litvizDir(),
+                "packService 触发注册的回调后应该重新解析并命中刚落盘的 cli.py");
     }
 
     // ==== 出图 ====

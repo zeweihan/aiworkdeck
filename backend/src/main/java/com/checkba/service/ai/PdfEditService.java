@@ -81,10 +81,13 @@ public class PdfEditService {
     public static class RedactResult {
         public final int matchCount;
         public final List<Integer> rasterizedPages;
+        /** 传入但在文档里一个匹配都没找到的文本（常见于 AI 猜错人名/证件号）；空列表 = 全部命中。 */
+        public final List<String> missing;
 
-        RedactResult(int matchCount, List<Integer> rasterizedPages) {
+        RedactResult(int matchCount, List<Integer> rasterizedPages, List<String> missing) {
             this.matchCount = matchCount;
             this.rasterizedPages = rasterizedPages;
+            this.missing = missing;
         }
     }
 
@@ -335,12 +338,13 @@ public class PdfEditService {
 
             doc.save(pdfPath.toFile());
             List<Integer> pages = new ArrayList<>(affected);
-            if (!missing.isEmpty()) {
-                throw new PdfEditException(String.format(
-                        "部分完成：%d 处已脱敏（第 %s 页已转为图片页），但以下文本未找到: %s",
-                        all.size(), pages, missing));
-            }
-            return new RedactResult(all.size(), pages);
+            // 部分命中不算失败：上面这行 doc.save 已经把打码+光栅化后的字节不可逆地写回了
+            // pdfPath——磁盘已经变了。此前这里在写盘之后才抛异常，调用方 PdfTools.pdf_redact
+            // 的 finishModification（轮换 wpsFileId、更新 fileSize/updatedAt、发 reload）
+            // 被异常跳过，磁盘已改、DB 与预览还停在旧版本，两者从此不一致。
+            // 缺失目标（常见于 AI 猜错人名/证件号）如实带回 missing 字段，让调用方据此照实
+            // 报告，而不是把一次真实生效的脱敏说成一次失败。
+            return new RedactResult(all.size(), pages, missing);
         } catch (IOException e) {
             throw new PdfEditException("脱敏失败: " + e.getMessage());
         }

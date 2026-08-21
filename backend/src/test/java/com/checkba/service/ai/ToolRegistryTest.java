@@ -287,4 +287,47 @@ class ToolRegistryTest {
         reg2.init();
         assertEquals("plugin:ok", reg2.execute("plugin_echo", "{\"text\":\"ok\"}", ctx).output());
     }
+
+    // ==== 插件工具缓存失效（pluginToolCache 从不失效的修复） ====
+
+    /** 插件工具「v1」：与 FakePluginToolsV2 故意同名（plugin_versioned），模拟插件更新前后的两个 bean */
+    static class FakePluginToolsV1 {
+        @Tool("versioned v1")
+        public String plugin_versioned(@P("x") String x) {
+            return "v1:" + x;
+        }
+    }
+
+    /** 插件工具「v2」：同名不同实现，模拟插件更新后新 JAR 加载出的 bean */
+    static class FakePluginToolsV2 {
+        @Tool("versioned v2")
+        public String plugin_versioned(@P("x") String x) {
+            return "v2:" + x;
+        }
+    }
+
+    @Test
+    @DisplayName("修复：pluginToolCache 不失效会一直分发旧 bean；invalidatePluginToolCache 后拿到新 bean")
+    void invalidatePluginToolCacheDropsStaleBean() {
+        PluginService ps = new PluginService();
+        ps.registerToolObject(new FakePluginToolsV1(), "my-plugin");
+        ToolRegistry reg = new ToolRegistry(List.of(new FakeTools()), ps, new ClientCapabilityService());
+        reg.init();
+
+        // 首次 resolve 命中 v1，并把它塞进 pluginToolCache
+        assertEquals("v1:hi", reg.execute("plugin_versioned", "{\"x\":\"hi\"}", ctx).output());
+
+        // 模拟插件更新：PluginService.rescan() 会用新 URLClassLoader 加载出新 bean 覆盖同名 key
+        ps.registerToolObject(new FakePluginToolsV2(), "my-plugin");
+
+        // 不失效缓存的话，resolve() 命中缓存直接返回旧 RegisteredTool，永远看不到 v2
+        // ——这一行钉住修复前的真实故障：插件已经换了新版本，AI 调用的还是旧版工具。
+        assertEquals("v1:hi", reg.execute("plugin_versioned", "{\"x\":\"hi\"}", ctx).output(),
+                "换 bean 但未失效缓存时应仍拿到旧版（钉住修复前的故障现象）");
+
+        reg.invalidatePluginToolCache();
+
+        assertEquals("v2:hi", reg.execute("plugin_versioned", "{\"x\":\"hi\"}", ctx).output(),
+                "失效后应重新从 PluginService 解析，拿到插件更新后的新 bean");
+    }
 }

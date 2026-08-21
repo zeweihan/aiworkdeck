@@ -233,6 +233,25 @@ public class ToolRegistry {
     }
 
     /**
+     * 使插件工具缓存失效：插件重扫/在线安装/卸载后，旧 JAR 加载出的 bean 不应再被分发。
+     *
+     * pluginToolCache 只是 resolve() 的懒加载优化层（省掉每次调用都做的反射方法扫描），
+     * pluginService.getPluginTools() 才是事实来源。插件更新后 PluginService.rescan() 会
+     * 用新 URLClassLoader 加载出全新的 bean 实例覆盖同名 key，但此前 pluginToolCache 里
+     * 一旦缓存过就永不过期——resolve() 命中缓存直接返回，永远看不到新 bean，用户在广场点
+     * 「更新/卸载」后 AI 调的还是旧版本的工具，全程零报错。
+     *
+     * 清空后不会立即重新扫描：下一次 resolve() 撞 miss 时按现有懒加载路径重新解析并回填。
+     */
+    public void invalidatePluginToolCache() {
+        int size = pluginToolCache.size();
+        pluginToolCache.clear();
+        if (size > 0) {
+            log.info("Plugin tool cache invalidated: {} cached entries cleared", size);
+        }
+    }
+
+    /**
      * 已注册工具名，按长度降序（供 XML 协议解析做最长名优先匹配，
      * 避免 pptx_generate 误匹配 pptx_generate_outline 的调用）。
      */

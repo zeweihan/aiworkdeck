@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PreDestroy;
 
+import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -58,8 +59,27 @@ public class BackgroundTaskService {
                 return t;
             });
 
+    /**
+     * RUNNING 任务卡死回收的时间源。生产环境走真实系统时钟；测试用 {@link #setClock} 换成
+     * 可控时钟——不这样做的话，"注册任务后不更新、等它被判定为卡死" 这条路径没法在单测里
+     * 用秒级等待验证（真要卡死回收阈值那么久，测试根本跑不完）。
+     */
+    private volatile Clock clock = Clock.systemUTC();
+
+    /**
+     * RUNNING 状态卡死回收阈值（分钟）：超过这个时长仍未更新进度/心跳的 RUNNING 任务视为卡死。
+     * 与下面"已终态任务保留多久供前端查询"的 30 分钟数值相同但语义不同，各自命名以免以后
+     * 需要分别调整时混在一起。
+     */
+    private static final long STALE_RUNNING_TIMEOUT_MINUTES = 30;
+
     public BackgroundTaskService(SseEmitterService sseEmitterService) {
         this.sseEmitterService = sseEmitterService;
+    }
+
+    /** 供测试注入可控时钟（生产环境走真实系统时钟，见 {@link #clock} 字段注释）。 */
+    void setClock(Clock clock) {
+        this.clock = clock;
     }
 
     @PreDestroy
@@ -312,8 +332,23 @@ public class BackgroundTaskService {
      */
     @Scheduled(fixedRate = 10 * 60 * 1000)
     public void cleanupOldTasks() {
-        Instant cutoff = Instant.now().minusSeconds(30 * 60); // 30 minutes
-        
+        Instant now = Instant.now(clock);
+        Instant cutoff = now.minusSeconds(30 * 60); // 30 minutes
+        Instant staleRunningCutoff = now.minusSeconds(STALE_RUNNING_TIMEOUT_MINUTES * 60);
+
+        // 卡死的 RUNNING 任务：外部服务挂掉 / 调用方异常路径漏调 complete/failTask（PptxTools
+        // 曾经就是这样——registerTask 之后两条异常分支直接 return，从不碰 taskId），此前下面的
+        // removeIf 只认"非活跃"，RUNNING 永远 isActive()==true，三张登记表永久留着一条，
+        // hasActiveTasks 恒为 true，前端进度卡永远转下去。转终态复用 failTask 的既有语义
+        // （发 SSE 通知前端、scheduleCleanup 延迟摘除条目），不在这里另起一套清理逻辑。
+        activeTasks.forEach((taskId, task) -> {
+            if (task.isActive() && task.getLastUpdatedAt().isBefore(staleRunningCutoff)) {
+                log.warn("Reclaiming stuck RUNNING task {} (type={}, no update since {})",
+                        taskId, task.getTaskType(), task.getLastUpdatedAt());
+                failTask(taskId, "任务长时间无响应，已自动终止");
+            }
+        });
+
         activeTasks.entrySet().removeIf(entry -> {
             TaskInfo task = entry.getValue();
             if (!task.isActive() && task.getLastUpdatedAt().isBefore(cutoff)) {

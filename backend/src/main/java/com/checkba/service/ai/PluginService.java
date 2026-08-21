@@ -80,11 +80,27 @@ public class PluginService {
 
     private final String pluginsDir;
 
+    /**
+     * 反向依赖 ToolRegistry，仅用于 rescan() 后使其插件工具缓存失效（见该字段注入点注释）。
+     * 字段注入 + {@code required=false}：ToolRegistry 的构造器已经依赖 PluginService，
+     * 若在这里改成构造器注入会形成启动死环（本仓 SubAgentTools 也用同一招 @Lazy 破环）；
+     * required=false 使大量 {@code new PluginService(...)} 直接构造的既有测试不受影响
+     * ——字段停留 null，rescan() 对 null 判空跳过即可，测试无需关心这层缓存失效。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private ToolRegistry toolRegistry;
+
     @org.springframework.beans.factory.annotation.Autowired
     public PluginService(SystemSettingService systemSettingService,
                          @Value("${ai.plugins.dir:plugins}") String pluginsDir) {
         this.systemSettingService = systemSettingService;
         this.pluginsDir = pluginsDir;
+    }
+
+    /** 供测试直接装配 ToolRegistry（生产环境由 Spring 按上面的 @Autowired 字段注入）。 */
+    void setToolRegistry(ToolRegistry toolRegistry) {
+        this.toolRegistry = toolRegistry;
     }
 
     /** 兼容构造器：仅供既有单测直接 new 使用（无持久化，启停状态只存内存） */
@@ -159,6 +175,11 @@ public class PluginService {
         pluginDirById.clear();
         loadDisabledState();
         loadPlugins();
+        // 插件更新/卸载后 loadPlugins() 可能已经把同名工具换成了新 bean，
+        // 必须让 ToolRegistry 那层懒加载缓存失效，否则旧 bean 会继续被分发执行。
+        if (toolRegistry != null) {
+            toolRegistry.invalidatePluginToolCache();
+        }
         log.info("Plugin rescan done: {} plugins, {} tools", plugins.size(), pluginTools.size());
     }
 
@@ -528,7 +549,16 @@ public class PluginService {
                         pluginId, jarName);
                 return null;
             }
-            return jarFile.isFile() ? jarFile : null;
+            if (!jarFile.isFile()) {
+                // manifest 声明了 backendJars 但文件不在——解压不全/被手删/打包漏了都会走到这里。
+                // 此前这条路径不打任何日志，调用方 `if (jarFile != null) loadJar(...)` 又没有
+                // else 分支：插件照常出现在列表里、启停可用，就是 0 个工具，日志里搜插件 id
+                // 与 jar 名全是空，排障无从下手。
+                log.warn("Plugin {} declares backendJar '{}' but file does not exist: {}",
+                        pluginId, jarName, jarFile);
+                return null;
+            }
+            return jarFile;
         } catch (IOException e) {
             log.error("Plugin {} backendJar '{}' path check failed: {}", pluginId, jarName, e.getMessage());
             return null;

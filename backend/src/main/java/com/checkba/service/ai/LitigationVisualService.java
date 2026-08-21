@@ -96,13 +96,19 @@ public class LitigationVisualService {
     }
 
     /**
-     * 向 pack 服务登记「随包内置资源在场」探针：广场的 packReady 与自动补下载
-     * 都靠它区分「资源真缺」与「老版本随包资源还在」。
+     * 向 pack 服务登记「随包内置资源在场」探针，并登记「pack 状态变化」回调。
+     *
+     * <p>探针供广场的 packReady 与自动补下载区分「资源真缺」与「老版本随包资源还在」；
+     * 状态变化回调解决另一个问题——{@link #resolved} 是懒加载且只算一次的缓存，用户在
+     * 广场点「安装/卸载」是不重启后端的 live 操作，此前没有任何生产调用点会碰
+     * {@link #invalidate()}，装完 pack 面板仍然显示上一次探测出的「不可用」，
+     * 只能重启后端才会生效。
      */
     @jakarta.annotation.PostConstruct
     void registerPackProbe() {
         if (packService != null) {
             packService.registerBuiltinProbe(PACK_ID, this::isEngineAvailableWithoutPack);
+            packService.onPackChanged(PACK_ID, this::invalidate);
         }
     }
 

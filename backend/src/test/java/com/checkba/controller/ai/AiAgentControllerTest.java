@@ -46,6 +46,7 @@ class AiAgentControllerTest {
     private SubAgentService subAgentService;
     private PptxTools pptxTools;
     private ProjectMemberService projectMemberService;
+    private AgentOrchestrator agentOrchestrator;
     private AiAgentController controller;
 
     @BeforeEach
@@ -55,9 +56,10 @@ class AiAgentControllerTest {
         subAgentService = mock(SubAgentService.class);
         pptxTools = mock(PptxTools.class);
         projectMemberService = mock(ProjectMemberService.class);
+        agentOrchestrator = mock(AgentOrchestrator.class);
         controller = new AiAgentController(
                 mock(SseEmitterService.class),
-                mock(AgentOrchestrator.class),
+                agentOrchestrator,
                 messageService,
                 backgroundTaskService,
                 pptxTools,
@@ -182,6 +184,52 @@ class AiAgentControllerTest {
             verify(messageService, timeout(5000)).saveMessage(eq("42"), eq(7L), eq("conv-1"),
                     eq("ASSISTANT"), eq(toolOutput), display.capture());
             assertEquals("PPTX 生成失败: pptx-service 返回 500", display.getValue());
+        }
+    }
+
+    /**
+     * 修既存缺陷：message="" 能过 POST /chat 落库，此后 ContextAssemblerService 每次回放历史
+     * 都会在这条空内容消息上抛 langchain4j 的 IllegalArgumentException，该 conversationId
+     * 永久报废、用户只能新建会话。入口必须在污染会话之前挡下空白 message。
+     */
+    @Test
+    @DisplayName("空白 message 在入口被拒绝（400），不落任何库、不起任何轮次")
+    void blankMessageRejectedBeforeOrchestration() {
+        AiAgentController.AgentChatRequest req = new AiAgentController.AgentChatRequest();
+        req.setProjectId(42L);
+        req.setConversationId("conv-1");
+        req.setMessage("   "); // 纯空白，trim 后为空
+
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("s")).thenReturn(7L);
+            when(projectMemberService.hasReadPermission(42L, 7L)).thenReturn(true);
+            when(messageService.canUseConversation("conv-1", 7L)).thenReturn(true);
+
+            ResponseEntity<?> resp = controller.startSession(req, "s");
+
+            assertEquals(400, resp.getStatusCode().value());
+            assertTrue(String.valueOf(resp.getBody()).contains("消息内容不能为空"), String.valueOf(resp.getBody()));
+            verify(agentOrchestrator, never()).handleUserMessage(any(), any());
+        }
+    }
+
+    @Test
+    @DisplayName("null message 同样在入口被拒绝（400）")
+    void nullMessageRejectedBeforeOrchestration() {
+        AiAgentController.AgentChatRequest req = new AiAgentController.AgentChatRequest();
+        req.setProjectId(42L);
+        req.setConversationId("conv-1");
+        // message 未设置，保持 null
+
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("s")).thenReturn(7L);
+            when(projectMemberService.hasReadPermission(42L, 7L)).thenReturn(true);
+            when(messageService.canUseConversation("conv-1", 7L)).thenReturn(true);
+
+            ResponseEntity<?> resp = controller.startSession(req, "s");
+
+            assertEquals(400, resp.getStatusCode().value());
+            verify(agentOrchestrator, never()).handleUserMessage(any(), any());
         }
     }
 }

@@ -172,8 +172,12 @@ public class PdfTools implements AgentToolComponent {
             Path localPath = resolveExisting(file);
             PdfEditService.RedactResult result = pdfEditService.redact(localPath, texts, pageIndex);
             finishModification(file, localPath);
-            return String.format("脱敏完成：共 %d 处，涉及页面 %s（这些页已转为图片页，文字层已彻底移除，其余页不受影响）。预览将自动刷新。",
-                    result.matchCount, result.rasterizedPages);
+            // 部分命中不算失败：已经真实生效的脱敏必须走 finishModification（否则磁盘已改、
+            // DB 与预览还停在旧版本），缺失目标如实报告，别把已经生效的操作说成失败。
+            String missingNote = result.missing.isEmpty() ? ""
+                    : String.format("；以下文本未找到，未被脱敏（请核对原文是否逐字一致）: %s", result.missing);
+            return String.format("脱敏完成：共 %d 处，涉及页面 %s（这些页已转为图片页，文字层已彻底移除，其余页不受影响）。预览将自动刷新。%s",
+                    result.matchCount, result.rasterizedPages, missingNote);
         } catch (Exception e) {
             return errorOf("脱敏失败", e);
         }

@@ -45,6 +45,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.BooleanSupplier;
@@ -131,6 +132,39 @@ public class NativePackService {
      * （规范 §5 的解析优先级「随包优先于 pack」）。
      */
     private final Map<String, BooleanSupplier> builtinProbes = new ConcurrentHashMap<>();
+
+    /**
+     * pack 状态变化（安装成功 / 卸载 / 被平台封禁）的回调：packId -> 监听器列表。
+     *
+     * <p>存在的理由：资源消费方（如 {@link com.checkba.service.ai.LitigationVisualService}）
+     * 常常把「运行时解析结果」缓存起来避免重复探测，但那份缓存只在进程刚启动、pack 还没装
+     * 时探测过一次就再也不会变——用户装完 pack 不重启后端，缓存的「不可用」会一直显示下去。
+     * 与上面的 builtinProbes 同一套设计原则：本服务不反向依赖具体消费方，由消费方自己在
+     * {@code @PostConstruct} 里登记回调，本服务只管在状态变化时机触发。
+     */
+    private final Map<String, List<Runnable>> changeListeners = new ConcurrentHashMap<>();
+
+    /**
+     * 登记 pack 状态变化回调（安装成功 / 卸载 / 被平台封禁时触发）。
+     * 供资源消费方失效自己的解析缓存，见 {@link #changeListeners} 字段说明。
+     */
+    public void onPackChanged(String packId, Runnable listener) {
+        if (packId != null && listener != null) {
+            changeListeners.computeIfAbsent(packId, k -> new CopyOnWriteArrayList<>()).add(listener);
+        }
+    }
+
+    private void notifyPackChanged(String packId) {
+        List<Runnable> listeners = changeListeners.get(packId);
+        if (listeners == null) return;
+        for (Runnable listener : listeners) {
+            try {
+                listener.run();
+            } catch (Exception e) {
+                log.warn("Pack change listener for {} failed: {}", packId, e.getMessage());
+            }
+        }
+    }
 
     private volatile HttpClient httpClient;
 
@@ -328,6 +362,9 @@ public class NativePackService {
             String version = doInstall(packId, st);
             st.setState(STATE_READY);
             st.setInstalledVersion(version);
+            // 装完让资源消费方的运行时解析缓存失效——不然用户装完 pack 不重启后端，
+            // 面板/工具仍然显示上一次探测出的「不可用」。
+            notifyPackChanged(packId);
             return version;
         } catch (RuntimeException e) {
             // 因封禁被拒不是「安装失败」：状态要如实停在 revoked，否则广场把平台封禁
@@ -483,6 +520,8 @@ public class NativePackService {
         statuses.remove(packId);
         manifestCache.remove(packId);
         log.info("Uninstalled native pack {}", packId);
+        // 卸载同理要让缓存失效——否则面板/工具会照着卸载前的探测结果继续显示可用。
+        notifyPackChanged(packId);
     }
 
     // ==================== 下载 ====================
@@ -885,6 +924,8 @@ public class NativePackService {
             statuses.remove(r.id());
             hit.add(r.id());
             log.warn("Native pack {} v{} revoked by platform: {}", r.id(), installed, r.reason());
+            // 封禁同样是「资源解析结果变了」，消费方缓存的可用性判定要跟着刷新
+            notifyPackChanged(r.id());
         }
         return hit;
     }

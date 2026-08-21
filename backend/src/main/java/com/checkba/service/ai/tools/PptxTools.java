@@ -303,7 +303,11 @@ public class PptxTools implements AgentToolComponent {
                                           String modelId, String conversationId, Long userId,
                                           boolean exportEditable) {
         log.info("Info: pptx_generate_internal start, topic={}, editable={}", topic, exportEditable);
-        
+
+        // 提到外层 try 之外声明：下面两条异常路径（DB 注册失败的内层 catch、方法级的外层 catch）
+        // 都要在失败时把这个任务标成 failTask，否则 registerTask 登记的这条 RUNNING 永远留在
+        // BackgroundTaskService 的三张表里——hasActiveTasks 恒为 true，前端进度卡永远转下去。
+        String taskId = null;
         try {
             // 检查服务
             if (!pptxServiceClient.isHealthy()) {
@@ -352,8 +356,7 @@ public class PptxTools implements AgentToolComponent {
             log.info("Starting PPTX generation to: {}, using model: {}, exportEditable: {}", localPath, modelId, exportEditable);
             PptxServiceClient.PptxGenerationResult result;
             
-            // 如果有 conversationId，使用带进度回调的版本
-            String taskId = null;
+            // 如果有 conversationId，使用带进度回调的版本（taskId 已提到外层 try 之外声明）
             if (conversationId != null && userId != null) {
                 // 注册后台任务
                 taskId = backgroundTaskService.registerTask(
@@ -457,8 +460,12 @@ public class PptxTools implements AgentToolComponent {
                 return successMsg.toString();
                 
             } catch (Exception e) {
-                // 文件已生成但注册失败
+                // 文件已生成但注册失败：任务对用户而言并未真正完成（文件不在项目文件树里可用），
+                // 之前这里直接 return，taskId 那条 RUNNING 记录永远留在 BackgroundTaskService 里。
                 log.warn("PPTX file created but DB registration failed", e);
+                if (taskId != null) {
+                    backgroundTaskService.failTask(taskId, "PPTX 已生成但注册到数据库失败: " + e.getMessage());
+                }
                 return String.format(
                         "PPTX 已生成但注册到数据库失败。\n" +
                         "- 文件名: %s\n" +
@@ -468,9 +475,15 @@ public class PptxTools implements AgentToolComponent {
                         finalFileName, result.getPagesCount(), localPath.toString(), e.getMessage()
                 );
             }
-            
+
         } catch (Exception e) {
+            // 同上：这条外层 catch 覆盖服务不可用/网络失败等更早期的异常，taskId 若已注册
+            // 同样必须标失败，否则这条 RUNNING 记录永远回收不了（本条是 dev-board#74 的触发场景：
+            // AI 调 pptx_generate、pptx-service 网络失败）。
             log.error("PPTX generation failed", e);
+            if (taskId != null) {
+                backgroundTaskService.failTask(taskId, e.getMessage());
+            }
             return "PPTX 生成过程中出错: " + e.getMessage();
         }
     }

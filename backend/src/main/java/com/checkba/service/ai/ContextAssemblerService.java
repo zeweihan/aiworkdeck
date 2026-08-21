@@ -491,10 +491,22 @@ public class ContextAssemblerService {
         // 转换为 ChatMessage 列表
         java.util.List<dev.langchain4j.data.message.ChatMessage> historyMessages = new java.util.ArrayList<>();
         for (com.checkba.model.entity.ProjectAiMessage entity : historyEntities) {
+            String content = entity.getContent();
+            if (content == null || content.isBlank()) {
+                // 容错存量脏数据：langchain4j 的 UserMessage/AiMessage.from(text) 对 null/空白
+                // 一律抛 IllegalArgumentException("text cannot be null or blank")。入口现在已经
+                // 拒绝空白 message（见 AiAgentController），但这挡不住已经落库的历史坏数据——
+                // 不跳过的话，只要该会话曾经存过一条空内容消息，此后每一轮 assemble 都会在这里
+                // 抛出异常，被兜底 catch 变成 SSE error，整个 conversationId 永久报废。
+                // 存量数据修不回来，只能在回放时跳过这一条，不能掀翻整轮上下文组装。
+                log.warn("Skipping blank history message id={} role={} in conversation={} during context assembly",
+                        entity.getId(), entity.getRole(), conversationId);
+                continue;
+            }
             if ("USER".equalsIgnoreCase(entity.getRole())) {
-                historyMessages.add(dev.langchain4j.data.message.UserMessage.from(entity.getContent()));
+                historyMessages.add(dev.langchain4j.data.message.UserMessage.from(content));
             } else if ("ASSISTANT".equalsIgnoreCase(entity.getRole())) {
-                historyMessages.add(dev.langchain4j.data.message.AiMessage.from(entity.getContent()));
+                historyMessages.add(dev.langchain4j.data.message.AiMessage.from(content));
             }
         }
         
