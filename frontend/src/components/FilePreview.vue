@@ -57,6 +57,25 @@
           <!-- #ifndef H5 -->
           <web-view v-if="blobUrl" :src="pdfSrc" />
           <!-- #endif -->
+
+          <!-- EvidenceLink 引文定位卡（P3）：跳页由 pdfSrc 的 #page= 完成，这张卡负责
+               「引文在本页哪儿」。有 rects 就按归一化坐标画在页位图上；没有 rects 就
+               如实说未能定位，只给引文原文与复制按钮（让用户在阅读器里自己 Ctrl+F）。 -->
+          <view v-if="pdfLocate && pdfLocateVisible" class="evidence-locate-card">
+            <view class="elc-head">
+              <text class="elc-title">{{ pdfLocate.page ? $t('files.locate.pdfPage', { page: pdfLocate.page }) : $t('files.locate.pdfNoPage') }}</text>
+              <view class="elc-close" :title="$t('files.locate.close')" @tap="closePdfLocate"><text>×</text></view>
+            </view>
+            <template v-if="pdfLocate.rects.length">
+              <text class="elc-sub">{{ $t('files.locate.rectsTitle') }}</text>
+              <view class="elc-map">
+                <view v-for="(r, i) in pdfLocate.rects" :key="i" class="elc-map-rect" :style="pdfMapRectStyle(r)"></view>
+              </view>
+            </template>
+            <text v-else-if="pdfLocate.quote" class="elc-miss">{{ $t('files.locate.quoteNotFound') }}</text>
+            <text v-if="pdfLocate.quote" class="elc-quote">{{ pdfLocate.quote }}</text>
+            <view v-if="pdfLocate.quote" class="elc-copy" @tap="copyPdfQuote"><text>{{ $t('files.locate.copyQuote') }}</text></view>
+          </view>
         </view>
 
         <!-- 图片/SVG 预览：缩放平移查看器。用原生 img 配 CSS transform 而不是 uni 的
@@ -81,11 +100,13 @@
             @load="handleImageLoad"
             @error="handleImageError"
           />
-          <!-- EvidenceLink 图片定位框：locator.rect 是 0..1 归一化坐标，按当前缩放平移换算 -->
+          <!-- EvidenceLink 图片定位框（P3）：locator.rect 是 0..1 归一化坐标，按当前
+               缩放/平移/旋转换算（imageRectBox）。框本身常驻——用户要缩放、旋转之后
+               核对它还罩不罩得住那块内容；只有压暗周边的遮罩 3s 后淡掉。 -->
           <view
             v-if="evidenceRectStyle"
             class="evidence-rect"
-            :class="{ 'is-fading': evidenceRectFading }"
+            :class="{ 'is-undimmed': evidenceRectUndimmed }"
             :style="evidenceRectStyle"
             @click.stop="hideEvidenceRect"
           ></view>
@@ -96,25 +117,44 @@
             <view class="img-tool-sep"></view>
             <button class="img-tool-btn img-tool-btn-text" size="mini" @tap="imageZoomActual">1:1</button>
             <button class="img-tool-btn img-tool-btn-text" size="mini" @tap="imageZoomFit">{{ $t('files.fitWindow') }}</button>
+            <button class="img-tool-btn img-tool-btn-text" size="mini" @tap="imageRotate">{{ $t('files.rotate') }}</button>
+            <template v-if="hasImageLocatorRect">
+              <view class="img-tool-sep"></view>
+              <button
+                class="img-tool-btn img-tool-btn-text"
+                :class="{ 'is-on': evidenceRectVisible }"
+                size="mini"
+                @tap="toggleEvidenceRect"
+              >{{ $t('files.locate.imageRect') }}</button>
+            </template>
           </view>
         </view>
 
         <!-- 视频预览：与图片/音频一致走带鉴权的 blob——直链 <video src> 不带
              X-Session-Id，后端 401，表现为 MEDIA_ERR_SRC_NOT_SUPPORTED（真机证实） -->
         <view v-else-if="isVideo" class="preview-video">
+          <!-- autoplay 只在「没有定位时刻」时开：带 media locator 打开的目的是看那一帧，
+               自动播下去等于当场把定位冲掉（P3） -->
           <video
             v-if="blobUrl"
             ref="videoPlayer"
             :src="blobUrl"
             controls
-            autoplay
+            :autoplay="mediaLocatorSec == null"
             class="preview-video-player"
             @error="handleVideoError"
             @loadeddata="onVideoLoaded"
+            @loadedmetadata="onVideoLoaded"
           >
             {{ $t('files.videoNotSupported') }}
           </video>
           <view v-else class="loading-video"><text>{{ $t('files.videoLoading') }}</text></view>
+          <!-- EvidenceLink 时间标记：定位到的时刻 + 一键继续播放 -->
+          <view v-if="mediaLocatorSec != null && mediaMarkVisible" class="evidence-media-mark">
+            <text class="emm-label">{{ $t('files.locate.mediaMark', { time: formatClock(mediaLocatorSec) }) }}</text>
+            <view class="emm-btn" @tap="playFromMark"><text>{{ $t('files.locate.playFromMark') }}</text></view>
+            <view class="emm-close" :title="$t('files.locate.close')" @tap="mediaMarkVisible = false"><text>×</text></view>
+          </view>
         </view>
 
         <!-- 音频预览：自绘播放器。
@@ -142,12 +182,20 @@
               >
                 <view class="audio-track-rail"></view>
                 <view class="audio-track-fill" :style="{ width: audioProgressPct + '%' }"></view>
+                <!-- EvidenceLink 时间标记：定位时刻在轨道上的刻度（P3） -->
+                <view v-if="mediaMarkPct != null" class="audio-track-mark" :style="{ left: mediaMarkPct + '%' }"></view>
                 <view class="audio-track-knob" :style="{ left: audioProgressPct + '%' }"></view>
               </view>
 
               <view class="audio-times">
                 <text class="audio-time">{{ formatClock(audioCurrent) }}</text>
                 <text class="audio-time">{{ formatClock(audioDuration) }}</text>
+              </view>
+
+              <view v-if="mediaLocatorSec != null && mediaMarkVisible" class="evidence-media-mark is-inline">
+                <text class="emm-label">{{ $t('files.locate.mediaMark', { time: formatClock(mediaLocatorSec) }) }}</text>
+                <view class="emm-btn" @tap="playFromMark"><text>{{ $t('files.locate.playFromMark') }}</text></view>
+                <view class="emm-close" :title="$t('files.locate.close')" @tap="mediaMarkVisible = false"><text>×</text></view>
               </view>
 
               <view class="audio-controls">
@@ -231,6 +279,10 @@ import { getFileDownloadUrl, getArchiveEntries, extractArchive } from '@/service
 import { getAuthHeaders, getSessionId } from '@/utils/auth.js'
 import { ICONS } from '@/config/icons.js'
 import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
+import {
+  parsePdfLocator, parseImageRect, parseMediaStartSec,
+  imageTransform, imageRectBox, rotatedDisplaySize, normalizeRotation,
+} from '@/utils/evidenceLocator.js'
 
 // docx-preview 依赖 Chromium DOM，仅 H5/桌面构建启用；其它平台落 Office 占位分支
 // #ifdef H5
@@ -291,6 +343,9 @@ export default {
       imagePanStartY: 0,
       imagePanStartTx: 0,
       imagePanStartTy: 0,
+      // 旋转（0/90/180/270，顺时针）：扫描件、手机拍的现场照常常是躺着的，
+      // 定位框要跟着一起转（换算在 utils/evidenceLocator.js 的 imageRectBox）
+      imageRotation: 0,
       // 自绘音频播放器。实例本身（window.Audio）不进 data——它不需要响应式，
       // 塞进 data 会被 Vue 代理一层，媒体元素被 Proxy 包住后行为不可预期。
       audioPlaying: false,
@@ -299,10 +354,14 @@ export default {
       audioVolume: 1,
       audioMuted: false,
       audioRate: 1,
-      // EvidenceLink 定位：locator prop 的本地副本 + 图片画框可见态（3s 淡出/点击隐藏）
+      // EvidenceLink 定位：locator prop 的本地副本 + 三类可见态。
+      // 图片画框常驻（点框或工具栏按钮收起），只有压暗周边的遮罩 3s 后淡掉；
+      // pdf 引文卡与音视频时间标记都由用户显式关闭。
       appliedLocator: null,
       evidenceRectVisible: false,
-      evidenceRectFading: false
+      evidenceRectUndimmed: false,
+      pdfLocateVisible: false,
+      mediaMarkVisible: false
     }
   },
   computed: {
@@ -377,30 +436,56 @@ export default {
     imageZoomPercentText() {
       return Math.round(this.imageScale * 100) + '%'
     },
-    imageTransformStyle() {
+    // 缩放平移旋转共用一套口径：imageTx/imageTy 是「旋转后外接框」的左上角，
+    // 换算全在 utils/evidenceLocator.js（画框要跟它逐像素对齐，别在这儿另写一份）
+    imageView() {
       return {
-        transform: `translate(${this.imageTx}px, ${this.imageTy}px) scale(${this.imageScale})`
+        natW: this.imageNaturalWidth,
+        natH: this.imageNaturalHeight,
+        scale: this.imageScale,
+        tx: this.imageTx,
+        ty: this.imageTy,
+        rotation: this.imageRotation,
       }
+    },
+    imageTransformStyle() {
+      return { transform: imageTransform(this.imageView) }
     },
     // 定位用的是 appliedLocator（prop 的本地副本）：宿主收到 locator-consumed 会把 prop 清空，
     // 直接读 prop 的话 pdf 的 #page= 会跟着掉、iframe 重载回第 1 页。
     pdfSrc() {
-      const loc = this.appliedLocator
-      const page = loc && loc.type === 'pdf' ? Number(loc.page) : 0
-      return this.blobUrl + (page > 0 ? '#page=' + page : '')
+      const loc = this.pdfLocate
+      return this.blobUrl + (loc && loc.page ? '#page=' + loc.page : '')
+    },
+    // {page, quote, rects}；缺字段的 locator（OCR 常见）在这里就退化成 null
+    pdfLocate() {
+      return parsePdfLocator(this.appliedLocator)
+    },
+    imageLocatorRect() {
+      return parseImageRect(this.appliedLocator)
+    },
+    hasImageLocatorRect() {
+      return !!this.imageLocatorRect
+    },
+    mediaLocatorSec() {
+      return parseMediaStartSec(this.appliedLocator)
+    },
+    // 音频轨道上的定位刻度（百分比）；时长未知或定位超出时长就不画
+    mediaMarkPct() {
+      const sec = this.mediaLocatorSec
+      if (sec == null || !this.mediaMarkVisible || !(this.audioDuration > 0)) return null
+      if (sec > this.audioDuration) return null
+      return (sec / this.audioDuration) * 100
     },
     evidenceRectStyle() {
-      const loc = this.appliedLocator
-      const r = loc && loc.type === 'image' && this.evidenceRectVisible ? loc.rect : null
-      if (!r || !this.imageReady) return null
-      const s = this.imageScale
-      const w = this.imageNaturalWidth * s
-      const h = this.imageNaturalHeight * s
+      if (!this.evidenceRectVisible || !this.imageReady) return null
+      const box = imageRectBox(this.imageLocatorRect, this.imageView)
+      if (!box) return null
       return {
-        left: (this.imageTx + Number(r.x || 0) * w) + 'px',
-        top: (this.imageTy + Number(r.y || 0) * h) + 'px',
-        width: Math.max(2, Number(r.w || 0) * w) + 'px',
-        height: Math.max(2, Number(r.h || 0) * h) + 'px'
+        left: box.left + 'px',
+        top: box.top + 'px',
+        width: box.width + 'px',
+        height: box.height + 'px'
       }
     }
   },
@@ -416,7 +501,12 @@ export default {
     // 播放器实例只能等 blobUrl 落地再建。换文件时 reloadPreview 会先清空它。
     blobUrl(url) {
       this.teardownAudio()
+      this.teardownVideoLocator()
       if (url && this.isAudio) this.setupAudio(url)
+      // 视频的 seek 不能只指望模板上的 @loadeddata/@loadedmetadata：uni 在各端把
+      // <video> 编译成自家组件，事件名与 e.target 都不保证是原生那一套。元素一挂出来
+      // 就直接在真的 <video> 上挂一次原生监听，定位才不会静默落空。
+      if (url && this.isVideo) this.$nextTick(() => this.attachVideoLocator())
     },
     // 宿主 openFile(file, {locator}) 落到 tab.pendingLocator → 这里的 prop。收到即拷贝成
     // appliedLocator（pdf/image/media 三类都按它渲染），然后通知宿主 locator-consumed 清空
@@ -440,6 +530,8 @@ export default {
   },
   beforeUnmount() {
     this.teardownAudio()
+    this.teardownVideoLocator()
+    this.clearEvidenceRectTimers()
     if (this.blobUrl) {
       URL.revokeObjectURL(this.blobUrl)
     }
@@ -550,7 +642,11 @@ export default {
       this.clearEvidenceRectTimers()
       this.appliedLocator = null
       this.evidenceRectVisible = false
-      this.evidenceRectFading = false
+      this.evidenceRectUndimmed = false
+      this.pdfLocateVisible = false
+      this.mediaMarkVisible = false
+      this.teardownVideoLocator()
+      this._videoEl = null
       // 清理旧的 blobUrl
       if (this.blobUrl) {
         URL.revokeObjectURL(this.blobUrl)
@@ -585,6 +681,7 @@ export default {
       this.imageFitScale = 1
       this.imageNaturalWidth = 0
       this.imageNaturalHeight = 0
+      this.imageRotation = 0
     },
     async loadTextContent() {
       if (!this.file || !this.fileUrl) return
@@ -810,18 +907,20 @@ export default {
         this.extracting = false
       }
     },
-    // EvidenceLink media 定位：startMs → currentTime。音频用自绘播放器实例，视频用 loadeddata 记下的元素。
+    // EvidenceLink 定位入口（P3）：pdf 跳页 + 引文卡、image 画框、media seek 并停在那一帧。
+    // 三类都可能缺字段（OCR 出来的坐标尤其），缺就什么都不做——退化成「只打开文件」。
     applyLocator(loc) {
       this.appliedLocator = loc
       this.clearEvidenceRectTimers()
-      if (loc.type === 'image' && loc.rect) {
-        // 画框不常驻：3s 后淡出（或点一下立刻隐藏），免得遮罩把整张图压暗
+      this.evidenceRectVisible = false
+      this.evidenceRectUndimmed = false
+      this.pdfLocateVisible = !!this.pdfLocate
+      this.mediaMarkVisible = this.mediaLocatorSec != null
+      if (this.imageLocatorRect) {
+        // 框常驻（用户要缩放、旋转之后核对它还罩不罩得住那块内容），
+        // 只有压暗周边的遮罩 3s 后淡掉
         this.evidenceRectVisible = true
-        this.evidenceRectFading = false
-        this._rectFadeTimer = setTimeout(() => {
-          this.evidenceRectFading = true
-          this._rectHideTimer = setTimeout(() => { this.evidenceRectVisible = false }, 400)
-        }, 3000)
+        this._rectFadeTimer = setTimeout(() => { this.evidenceRectUndimmed = true }, 3000)
       }
       this.seekToLocator()
       const f = this.file
@@ -831,30 +930,95 @@ export default {
       this.clearEvidenceRectTimers()
       this.evidenceRectVisible = false
     },
+    toggleEvidenceRect() {
+      if (this.evidenceRectVisible) { this.hideEvidenceRect(); return }
+      // 重新亮出来时不再压暗周边：用户是主动要看框，不需要再引一次注意力
+      this.clearEvidenceRectTimers()
+      this.evidenceRectUndimmed = true
+      this.evidenceRectVisible = true
+    },
     clearEvidenceRectTimers() {
       if (this._rectFadeTimer) { clearTimeout(this._rectFadeTimer); this._rectFadeTimer = null }
-      if (this._rectHideTimer) { clearTimeout(this._rectHideTimer); this._rectHideTimer = null }
     },
+    closePdfLocate() {
+      this.pdfLocateVisible = false
+    },
+    // 引文在页位图上的位置：归一化坐标直接落成百分比，不掺任何猜测
+    pdfMapRectStyle(r) {
+      return {
+        left: (r.x * 100) + '%',
+        top: (r.y * 100) + '%',
+        width: Math.max(1.5, r.w * 100) + '%',
+        height: Math.max(1.5, r.h * 100) + '%'
+      }
+    },
+    // 复制引文：内置 PDF 引擎没有可编程的查找接口，复制出去让用户自己在阅读器里查找
+    copyPdfQuote() {
+      const q = this.pdfLocate && this.pdfLocate.quote
+      if (!q) return
+      uni.setClipboardData({
+        data: q,
+        success: () => { uni.showToast({ title: this.$t('files.locate.quoteCopied'), icon: 'none' }) },
+        fail: () => { uni.showToast({ title: this.$t('files.locate.quoteCopyFailed'), icon: 'none' }) }
+      })
+    },
+    // uni 的 <video> 在不同平台的编译产物不同：ref 拿到的可能是组件实例、也可能已经是
+    // 原生元素，两种都要能落到真正的 <video> 上，否则 seek 会静默失效。
+    getVideoEl() {
+      if (this._videoEl) return this._videoEl
+      const ref = this.$refs.videoPlayer
+      const el = ref && (ref.$el || ref)
+      if (!el) return null
+      if (el.tagName === 'VIDEO') return el
+      return el.querySelector ? el.querySelector('video') : null
+    },
+    // 在真的 <video> 上挂原生 loadedmetadata/loadeddata，元数据一就绪就把定位落下去
+    attachVideoLocator() {
+      const el = this.getVideoEl()
+      if (!el || el === this._videoBound) return
+      this.teardownVideoLocator()
+      this._videoBound = el
+      this._videoEl = el
+      const onReady = () => this.seekToLocator()
+      el.addEventListener('loadedmetadata', onReady)
+      el.addEventListener('loadeddata', onReady)
+      this._videoOff = () => {
+        el.removeEventListener('loadedmetadata', onReady)
+        el.removeEventListener('loadeddata', onReady)
+      }
+      this.seekToLocator()
+    },
+    teardownVideoLocator() {
+      if (this._videoOff) this._videoOff()
+      this._videoOff = null
+      this._videoBound = null
+    },
+    // media 定位：seek 到 startMs 并**停在那一帧**——自动播下去等于当场把定位冲掉。
+    // 元数据没就绪时 currentTime 写不进去，loadedmetadata/loadeddata 会再调一次。
     seekToLocator() {
-      const loc = this.appliedLocator
-      if (!loc || loc.type !== 'media') return
-      const sec = Number(loc.startMs || 0) / 1000
-      if (!(sec >= 0)) return
-      const el = this.isAudio ? this._audio : this._videoEl
+      const sec = this.mediaLocatorSec
+      if (sec == null) return
+      const el = this.isAudio ? this._audio : this.getVideoEl()
       if (!el) return
-      try { el.currentTime = sec } catch (e) { /* metadata 未就绪时忽略，loadedmetadata 会再调一次 */ }
+      try {
+        el.currentTime = sec
+        if (typeof el.pause === 'function') el.pause()
+      } catch (e) { /* metadata 未就绪，等下一次事件回调 */ }
+    },
+    // 时间标记上的「从这里播放」
+    playFromMark() {
+      const sec = this.mediaLocatorSec
+      const el = this.isAudio ? this._audio : this.getVideoEl()
+      if (!el) return
+      try {
+        if (sec != null && Math.abs((el.currentTime || 0) - sec) > 0.5) el.currentTime = sec
+        const p = el.play()
+        if (p && typeof p.catch === 'function') p.catch(() => {})
+      } catch (e) { /* 播放失败交给原生控件的报错，不再弹框打断 */ }
     },
     onVideoLoaded(e) {
-      console.log('视频加载成功，可以播放')
-      if (e.target) {
-        this._videoEl = e.target
-        this.seekToLocator()
-        console.log('视频信息:', {
-          duration: e.target.duration,
-          videoWidth: e.target.videoWidth,
-          videoHeight: e.target.videoHeight
-        })
-      }
+      if (e && e.target) this._videoEl = e.target
+      this.seekToLocator()
     },
     // uni 的 <view> 在 H5 端 $refs 拿到的有时是组件实例（带 $el），有时已经是原生
     // DOM 节点，取决于具体编译产物——renderPptx/renderDocx 已经踩过这个坑，同款兜底。
@@ -874,18 +1038,25 @@ export default {
     },
     // 摆到「适应窗口」或「100%」，两种都居中显示——工具栏点这两个按钮时不保留
     // 旧的平移量，语义上就是"重新摆一次"，而不是在当前位置基础上微调。
+    // 旋转后按「外接框」算适配与居中（横过来的扫描件宽高要对调）。
     applyImageView(mode) {
       const el = this.getImageViewportEl()
       if (!el || !this.imageNaturalWidth || !this.imageNaturalHeight) return
       const vw = el.clientWidth
       const vh = el.clientHeight
-      this.imageFitScale = this.clampImageScale(
-        Math.min(vw / this.imageNaturalWidth, vh / this.imageNaturalHeight)
-      )
+      const unit = rotatedDisplaySize(this.imageNaturalWidth, this.imageNaturalHeight, 1, this.imageRotation)
+      if (!unit) return
+      this.imageFitScale = this.clampImageScale(Math.min(vw / unit.w, vh / unit.h))
       const scale = mode === 'fit' ? this.imageFitScale : this.clampImageScale(1)
       this.imageScale = scale
-      this.imageTx = (vw - this.imageNaturalWidth * scale) / 2
-      this.imageTy = (vh - this.imageNaturalHeight * scale) / 2
+      this.imageTx = (vw - unit.w * scale) / 2
+      this.imageTy = (vh - unit.h * scale) / 2
+    },
+    // 顺时针 90°，转完重新「适应窗口」——转过之后原来的缩放平移已经没有参照意义了
+    imageRotate() {
+      if (!this.imageNaturalWidth) return
+      this.imageRotation = normalizeRotation(this.imageRotation + 90)
+      this.applyImageView('fit')
     },
     // 以容器坐标 (anchorX, anchorY) 为锚点缩放到 targetScale：锚点在屏幕上的像素位置
     // 缩放前后保持不动。滚轮缩放的手感全靠这个——以中心缩放会让光标指的地方跑掉。
@@ -1113,6 +1284,172 @@ export default {
   height: 100%;
 }
 
+.preview-pdf {
+  position: relative;
+}
+
+/* EvidenceLink 引文定位卡（P3）：浮在原生 PDF 视图右上角。
+   刻意不去猜内置 PDF 引擎的排版几何——它是不透明插件，页面的实际像素位置读不到，
+   照着猜画出来的高亮会偏到别的行上，那是假高亮。这里只画能算准的两样：
+   跳到了第几页（阅读器自己完成）、引文在页面上的归一化位置（页位图）。 */
+.evidence-locate-card {
+  position: absolute;
+  top: 16rpx;
+  right: 16rpx;
+  z-index: 5;
+  width: 380rpx;
+  box-sizing: border-box;
+  padding: 16rpx;
+  background: rgba(255, 255, 255, 0.98);
+  border: 1rpx solid #e5e7eb;
+  border-left: 6rpx solid #1A5336;
+  border-radius: 10rpx;
+  box-shadow: 0 6rpx 20rpx rgba(15, 23, 42, 0.16);
+}
+
+.elc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8rpx;
+}
+
+.elc-title {
+  font-size: 24rpx;
+  font-weight: 600;
+  color: #1A5336;
+}
+
+.elc-close {
+  padding: 0 8rpx;
+  font-size: 28rpx;
+  line-height: 1;
+  color: #9ca3af;
+  cursor: pointer;
+}
+
+.elc-close:hover {
+  color: #374151;
+}
+
+.elc-sub {
+  display: block;
+  margin-top: 8rpx;
+  font-size: 20rpx;
+  color: #6b7280;
+}
+
+/* 页位图：A4 竖版比例的纸面示意，框按归一化坐标落百分比 */
+.elc-map {
+  position: relative;
+  width: 180rpx;
+  height: 254rpx;
+  margin: 8rpx 0;
+  background: #ffffff;
+  border: 1rpx solid #d1d5db;
+}
+
+.elc-map-rect {
+  position: absolute;
+  box-sizing: border-box;
+  background: rgba(26, 83, 54, 0.28);
+  border: 1rpx solid #1A5336;
+}
+
+.elc-miss {
+  display: block;
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  color: #9B1C31;
+}
+
+.elc-quote {
+  display: block;
+  margin-top: 8rpx;
+  padding: 8rpx 10rpx;
+  max-height: 160rpx;
+  overflow: hidden;
+  background: #f9fafb;
+  border-radius: 6rpx;
+  font-size: 22rpx;
+  line-height: 1.5;
+  color: #374151;
+  word-break: break-all;
+}
+
+.elc-copy {
+  display: inline-block;
+  margin-top: 10rpx;
+  padding: 6rpx 16rpx;
+  border: 1rpx solid #d1d5db;
+  border-radius: 6rpx;
+  font-size: 22rpx;
+  color: #374151;
+  cursor: pointer;
+}
+
+.elc-copy:hover {
+  background: #f3f4f6;
+}
+
+/* EvidenceLink 音视频时间标记（P3）：视频浮在画面上，音频跟在时间行下面 */
+.evidence-media-mark {
+  position: absolute;
+  top: 16rpx;
+  right: 16rpx;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  padding: 8rpx 12rpx;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1rpx solid #e5e7eb;
+  border-left: 6rpx solid #1A5336;
+  border-radius: 8rpx;
+  box-shadow: 0 4rpx 14rpx rgba(15, 23, 42, 0.16);
+}
+
+/* 音频卡片一律 px（见「自绘音频播放器」注释），内联那份跟着换单位 */
+.evidence-media-mark.is-inline {
+  position: static;
+  margin-top: 12px;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+.emm-label {
+  font-size: 22rpx;
+  color: #1A5336;
+  font-weight: 600;
+}
+
+.emm-btn {
+  padding: 4rpx 14rpx;
+  border: 1rpx solid #d1d5db;
+  border-radius: 6rpx;
+  font-size: 22rpx;
+  color: #374151;
+  cursor: pointer;
+}
+
+.emm-btn:hover {
+  background: #f3f4f6;
+}
+
+.emm-close {
+  padding: 0 6rpx;
+  font-size: 26rpx;
+  line-height: 1;
+  color: #9ca3af;
+  cursor: pointer;
+}
+
+.emm-close:hover {
+  color: #374151;
+}
+
 /* Word 文档零配置只读渲染容器（docx-preview） */
 .preview-docx {
   width: 100%;
@@ -1174,7 +1511,8 @@ export default {
   cursor: grabbing;
 }
 
-/* EvidenceLink 图片定位框：跟随 img 的平移缩放，不吃鼠标 */
+/* EvidenceLink 图片定位框：跟随 img 的平移缩放旋转。框常驻，只有压暗周边的
+   遮罩（那圈超大 box-shadow）3s 后撤掉——长时间压暗会让整张底稿没法看。 */
 .evidence-rect {
   position: absolute;
   box-sizing: border-box;
@@ -1182,10 +1520,10 @@ export default {
   background: rgba(26, 83, 54, 0.12);
   box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.18);
   cursor: pointer;
-  transition: opacity 0.4s ease;
+  transition: box-shadow 0.4s ease;
 }
-.evidence-rect.is-fading {
-  opacity: 0;
+.evidence-rect.is-undimmed {
+  box-shadow: none;
 }
 
 /* 缩放平移由 JS 算出的 transform 控制，图片本身按原始像素尺寸渲染 */
@@ -1238,6 +1576,12 @@ export default {
   padding: 0 12rpx;
 }
 
+/* 定位框开关的按下态 */
+.img-tool-btn.is-on {
+  background: #E8F0EB;
+  color: #1A5336;
+}
+
 .img-zoom-pct {
   min-width: 76rpx;
   text-align: center;
@@ -1278,6 +1622,7 @@ export default {
 }
 
 .preview-video {
+  position: relative;
   width: 100%;
   height: 100%;
   display: flex;
@@ -1378,6 +1723,18 @@ export default {
 
 .audio-track-fill {
   background: #1A5336;
+}
+
+/* EvidenceLink 定位刻度：告诉用户「证据在这条录音的哪一处」，比进度旋钮矮一档，
+   不吃鼠标（点它要落到轨道上去 seek） */
+.audio-track-mark {
+  position: absolute;
+  top: 2px;
+  width: 2px;
+  height: 12px;
+  margin-left: -1px;
+  background: #9B1C31;
+  pointer-events: none;
 }
 
 .audio-track-knob {

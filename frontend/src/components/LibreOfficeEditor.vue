@@ -156,7 +156,7 @@ export default {
     // REAL document once the office endpoint is ready.
     // （原 'experimental' ⌘⇧O 探针工具栏变体已移除：产品只有内联编辑器一种形态。）
     file: { type: Object, default: null },
-    // EvidenceLink（证据页 / 改字 stale 核对）要按项目查询；宿主工作台传入。
+    // EvidenceLink（底稿页 / 改字 stale 核对）要按项目查询；宿主工作台传入。
     projectId: { type: [Number, String], default: null },
     // 当前用户对该项目有没有写权限（只读成员 / 客户 = false）。adopt_legacy_links 会改文档并触发
     // 自动保存，只读成员不该跑；核对回写（/anchors/report）只需读权限，不受此影响。
@@ -997,7 +997,7 @@ export default {
       for (const key of keys) { if (this._staleQueue) this._staleQueue.ignore(key) }
       this.staleItems = this.staleItems.filter((x) => !keys.includes(x.linkKey))
     },
-    // 证据页 / 提示条「查看底稿」→ 宿主打开并定位 {fileId, locator, linkKey, targetId}
+    // 底稿页 / 提示条「查看底稿」→ 宿主打开并定位 {fileId, locator, linkKey, targetId}
     onEvidenceLocate(payload) {
       if (!payload || !payload.fileId) return
       this.$emit('open-evidence-target', payload)

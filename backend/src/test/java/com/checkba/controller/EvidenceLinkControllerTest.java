@@ -9,6 +9,12 @@ import com.checkba.service.evidence.EvidenceLinkViews.FileBrief;
 import com.checkba.service.evidence.EvidenceLinkViews.LinkView;
 import com.checkba.service.evidence.EvidenceLinkViews.TargetInput;
 import com.checkba.service.evidence.EvidenceLinkViews.TargetView;
+import com.checkba.service.evidence.EvidenceChecks;
+import com.checkba.service.evidence.EvidenceVerifyService;
+import com.checkba.service.evidence.EvidenceVerifyViews.BatchQuery;
+import com.checkba.service.evidence.EvidenceVerifyViews.BatchResult;
+import com.checkba.service.evidence.EvidenceVerifyViews.LinkVerdict;
+import com.checkba.service.evidence.EvidenceVerifyViews.TargetVerdict;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -53,6 +59,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class EvidenceLinkControllerTest {
 
     @Mock private EvidenceLinkService svc;
+    @Mock private EvidenceVerifyService verifySvc;
     @Mock private ProjectMemberService projectMemberService;
     @InjectMocks private EvidenceLinkController controller;
 
@@ -235,6 +242,102 @@ class EvidenceLinkControllerTest {
             mvc().perform(delete("/api/projects/1/evidence-links/targets/200").header("X-Session-Id", "sess"))
                     .andExpect(jsonPath("$.success").value(true));
             verify(svc).removeTarget(9L, 1L, 200L);
+        }
+    }
+
+    // ---------------------------------------------------------------- 勾稽核查（P2，dev-board#116）
+
+    @Test
+    void 核查未登录也是4010信封() throws Exception {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession(isNull())).thenReturn(null);
+            mvc().perform(post("/api/projects/1/evidence-links/EVID_A/verify"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.code").value(GlobalExceptionHandler.CODE_UNAUTHENTICATED));
+            mvc().perform(post("/api/projects/1/evidence-links/verify")
+                            .contentType(MediaType.APPLICATION_JSON).content("{\"docFileId\":10}"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.code").value(GlobalExceptionHandler.CODE_UNAUTHENTICATED));
+            mvc().perform(post("/api/projects/1/evidence-links/verify/cancel"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.code").value(GlobalExceptionHandler.CODE_UNAUTHENTICATED));
+            verify(verifySvc, never()).verifyLink(any(), any(), any());
+            verify(verifySvc, never()).verifyBatch(any(), any(), any());
+            verify(verifySvc, never()).cancelBatch(any(), any());
+        }
+    }
+
+    @Test
+    void 单条核查回结论() throws Exception {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(9L);
+            when(verifySvc.verifyLink(9L, 1L, "EVID_A")).thenReturn(new LinkVerdict("EVID_A", 10L, "一/（一）", "陈述",
+                    EvidenceChecks.VERDICT_CONTRADICTS,
+                    List.of(new TargetVerdict(200L, 11L, "执照.pdf", "contradicts", (short) 0,
+                            EvidenceChecks.VERDICT_CONTRADICTS, List.of()))));
+            mvc().perform(post("/api/projects/1/evidence-links/EVID_A/verify").header("X-Session-Id", "sess"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.verdict").value("contradicts"))
+                    .andExpect(jsonPath("$.targets[0].confidence").value(0));
+        }
+    }
+
+    @Test
+    void 批量核查透传筛选与游标() throws Exception {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(9L);
+            when(verifySvc.verifyBatch(eq(9L), eq(1L), any())).thenReturn(new BatchResult(120, 0, 50, 50, false,
+                    Map.of(EvidenceChecks.VERDICT_SUPPORTS, 50), List.of()));
+            mvc().perform(post("/api/projects/1/evidence-links/verify").header("X-Session-Id", "sess")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"docFileId\":10,\"sectionPath\":\"一/\",\"status\":\"unverified\",\"offset\":0,\"limit\":9999}"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.total").value(120))
+                    .andExpect(jsonPath("$.nextOffset").value(50));
+
+            ArgumentCaptor<BatchQuery> cap = ArgumentCaptor.forClass(BatchQuery.class);
+            verify(verifySvc).verifyBatch(eq(9L), eq(1L), cap.capture());
+            assertEquals(10L, cap.getValue().docFileId());
+            assertEquals("一/", cap.getValue().sectionPath());
+            assertEquals("unverified", cap.getValue().status());
+            // 上限由 Service 夹（MAX_BATCH_LINKS），Controller 原样透传，不在两处各写一份口径
+            assertEquals(9999, cap.getValue().limit());
+        }
+    }
+
+    @Test
+    void 批量核查缺docFileId直接报错() throws Exception {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(9L);
+            mvc().perform(post("/api/projects/1/evidence-links/verify").header("X-Session-Id", "sess")
+                            .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.code").value(1));
+            verify(verifySvc, never()).verifyBatch(any(), any(), any());
+        }
+    }
+
+    @Test
+    void 非成员核查被Service拒绝走code1() throws Exception {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(9L);
+            when(verifySvc.verifyLink(9L, 1L, "EVID_A"))
+                    .thenThrow(new IllegalArgumentException("无权限修改该项目"));
+            mvc().perform(post("/api/projects/1/evidence-links/EVID_A/verify").header("X-Session-Id", "sess"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.code").value(1))
+                    .andExpect(jsonPath("$.message").value("无权限修改该项目"));
+        }
+    }
+
+    @Test
+    void 取消批量核查() throws Exception {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(9L);
+            when(verifySvc.cancelBatch(9L, 1L)).thenReturn(true);
+            mvc().perform(post("/api/projects/1/evidence-links/verify/cancel").header("X-Session-Id", "sess"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.cancelled").value(true));
         }
     }
 }

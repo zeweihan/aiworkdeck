@@ -174,7 +174,45 @@ NORMAL `#3B82F6`，`tagTypes.js` 与 TagService 两处同值）。分组展示�
 
 **文件存储位置（PR-C）**：`service/storage/StorageLocationService.java` + `GET /api/storage/location`、`POST /api/storage/location`（迁移，需 stage.unlimited）、`POST /api/storage/location/reset`（恢复默认，不需权益）。搬的是**全局存储根**（项目文件与缓存区文件的落盘位置），因为缓存区文件就是项目文件。迁移策略：**复制 → 校验文件数与字节数（含源侧复查）→ 落配置 → 换指针，原目录保留为备份绝不删**；任一步失败清掉本次复制的副本并保持原路径。目标必须是空目录或不存在，且与源不互相嵌套——**嵌套判断在 `toRealPath()` 之后做**，纯词法比较挡不住指向源内部的软链（会把源复制进它自己，在数据根里造出几百个垃圾目录）。**源侧要复查**：只比「复制前的源」与「复制后的目标」，迁移期间自动保存进已复制目录的文件两边数字仍相等，会被静默留在旧根。源目录不可访问时拒绝迁移（否则 copyTree 会把源建出来，「0 个文件迁移成功」）。配置落 `~/.aiworkdeck/storage-location.json`（不落 DB：存储根必须在 JPA 起来之前就确定）。`ProjectStorageResolver.globalRoot` 因此改为 volatile + `relocate()`；能热切是因为 DB 存的是逻辑路径、git 的 gitDir/workTree 每次现算。
 
-**文件预览/插入**：`FilePreview.vue`（docx/pdf/pptx/压缩包分流见 project-overview ~:5110-5157；PDF 走 Chromium 原生引擎渲染，标准 annotation 可见；watch `file.wpsFileId` 在 AI 改完 PDF 后自动重拉字节——reload_file 是 Object.assign 原地更新，file 对象引用不变，别删这个 watch）、`FilePickerDialog.vue`、`FileStagingArea.vue`（原 `FileLinkDropZone.vue` 已删：文件关联的落点改成编辑器画布本身，见 ai-doc-bridge.md「EvidenceLink 契约 → 前端」）；`FilePreview.vue` 还吃 `locator` prop（EvidenceLink 定位：pdf `#page=`、image 归一化 rect 画框随缩放联动、audio/video `startMs` seek）；图片插入走 `libreofficeExecutorClient.js` insertImage → office_thread.js；desktop `file-service.js` + IPC `checkba:fs-read-file`（含敏感路径拦截+大小上限）；后端 `FileController.java`（download/upload/upload-status/text/compare）、`ProjectFileController.java`（列表/folder/archive/批量/回收站/tags）、`DocFileLinkController.java`（doc-links）。
+**文件预览/插入**：`FilePreview.vue`（docx/pdf/pptx/压缩包分流见 project-overview ~:5110-5157；PDF 走 Chromium 原生引擎渲染，标准 annotation 可见；watch `file.wpsFileId` 在 AI 改完 PDF 后自动重拉字节——reload_file 是 Object.assign 原地更新，file 对象引用不变，别删这个 watch）、`FilePickerDialog.vue`、`FileStagingArea.vue`（原 `FileLinkDropZone.vue` 已删：文件关联的落点改成编辑器画布本身，见 ai-doc-bridge.md「EvidenceLink 契约 → 前端」）；`FilePreview.vue` 还吃 `locator` prop（EvidenceLink 定位，详见下一条）；图片插入走 `libreofficeExecutorClient.js` insertImage → office_thread.js；desktop `file-service.js` + IPC `checkba:fs-read-file`（含敏感路径拦截+大小上限）；后端 `FileController.java`（download/upload/upload-status/text/compare）、`ProjectFileController.java`（列表/folder/archive/批量/回收站/tags）、`DocFileLinkController.java`（doc-links）。
+
+**底稿定位（EvidenceLink `locator` prop，尽调 P3，改这块之前必读）**：宿主
+`openFile(file, {locator})` → `tab.pendingLocator` → `FilePreview` 的 `locator` prop →
+`applyLocator()` 拷成 `appliedLocator` 并 `$emit('locator-consumed')`（不清 prop 的话切回
+标签会重复跳转）。**locator 的分型 schema 见 `docs/superpowers/specs/2026-08-21-evidence-link-p0-design.md` §1.4，
+不许在前端改口径**；解析、坐标换算全在 `utils/evidenceLocator.js` 的纯函数里
+（`parsePdfLocator` / `parseImageRect` / `parseMediaStartSec` / `imageTransform` / `imageRectBox`），
+组件里只做渲染与播放器控制。三条硬规矩：
+
+- **缺字段一律退化成「只打开文件」**。坐标常来自 OCR 或外部核查服务，少给一个数是常态，
+  纯函数这时返回 null，组件就什么都不画。**绝不补默认值凑一个框出来**——补出来的是假高亮。
+- **pdf 不做「叠在原生视图上的高亮」**。PDF 由 Chromium 内置插件在 iframe 里渲染，它是
+  不透明的：页面的实际像素位置、滚动量、工具栏高度都读不到，照着 `#page=` + `view=FitH`
+  猜出来的坐标会把高亮画到别的行上。所以做法是：跳页仍走 `pdfSrc` 的 `#page=`，右上角浮
+  `.evidence-locate-card`——有 `rects` 就在 A4 比例的**页位图**上按归一化坐标画（那是能算准的），
+  没有 `rects` 只有 `quote` 就**如实显示「未能在本页定位到引文」**并给「复制引文」让用户自己在
+  阅读器里查找（内置引擎没有可编程的查找接口）。要做真正的页内高亮，只有两条路：引 pdf.js
+  自己渲染页面，或让后端用已有的 PDFBox（`PdfEditService` 里已经有找文字算 quad 的机器）
+  出「页面 PNG + 引文 rects」——两条都不是「在现有预览之上加一层」能糊出来的。
+- **图片画框要跟着缩放/平移/旋转走**。`imageTx/imageTy` 的口径是**旋转后外接框的左上角**，
+  `imageTransform` 按角度补一段平移把外接框推回该处，`imageRectBox` 用同一套口径算框——
+  三处（居中摆放 `applyImageView`、缩放锚点 `zoomImageTo`、画框）共用一份 tx/ty，别在组件里
+  另写一份换算。旋转只走 90° 步进（`imageRotate`），转完重新适应窗口。
+  框**常驻**（缩放旋转后还要能核对），3s 后撤掉的只是压暗周边的那圈 `box-shadow`；
+  工具栏「定位框」按钮可收起/重新亮出。
+- **音视频 seek 完必须 `pause()`**，并把 `autoplay` 绑成 `mediaLocatorSec == null`——
+  带定位打开的目的是看那一帧，自动播下去等于当场把定位冲掉。**别只靠模板上的
+  `@loadeddata`/`@loadedmetadata`**：uni 在各端把 `<video>` 编译成自家组件，事件名与
+  `e.target` 都不保证是原生那一套（P0 的 `@loadeddata` 很可能从没触发过）；`attachVideoLocator()`
+  在 `blobUrl` 落地后 `$nextTick` 去真的 `<video>` 上挂原生监听，换文件与卸载时 `teardownVideoLocator()`
+  摘干净。
+
+测试：`frontend/tests/evidence/locatorGeometry.test.mjs`（坐标换算，含四个旋转角与 CSS
+transform 的自洽互校）、`previewLocate.test.mjs`（三种定位各一个可复现实例，抠组件方法体真跑）、
+`previewLocateRender.test.mjs`（用 vue 自带的 compiler-sfc + server-renderer 把模板真渲染成
+HTML 再断言——模板里 class 名写错、v-if 挂错分支、i18n 键打错，只跑方法体的那份测试一个都发现不了）。
+三份都在 `npm run test:evidence` 里，CI 跑。**模板里的中文注释会原样进 HTML**，
+断言标签属性要先剥注释（`<video src>` 这几个字就写在既有注释里，直接 match 会假绿）。
 
 **反馈浮窗的第二个截图消费者**：`FeedbackWidget.vue` 也走 `host.ocr.startSelection({mode:'window'})`，
 自带一份等价的裁剪算法（不复用 project-overview 的实例态方法组）。改截图 IPC 的返回结构

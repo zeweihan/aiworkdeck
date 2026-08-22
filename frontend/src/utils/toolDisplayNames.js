@@ -134,6 +134,7 @@ const NAMES = {
   doc_list_evidence: { zh: '查看底稿关联', en: 'List evidence links' },
   dd_export: { zh: '导出尽调交付件', en: 'Export due-diligence deliverable' },
   web_verify_import: { zh: '导入网核压缩包', en: 'Import web-verification archive' },
+  evidence_verify: { zh: '勾稽核查', en: 'Verify evidence' },
   doc_insert_image: { zh: '插入图片', en: 'Insert image' },
   doc_set_style: { zh: '应用样式', en: 'Apply style' },
   // 电子表格（Calc / xlsx）sheet_* 原语

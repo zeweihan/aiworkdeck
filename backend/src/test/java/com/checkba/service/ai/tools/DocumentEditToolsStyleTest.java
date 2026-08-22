@@ -40,7 +40,7 @@ class DocumentEditToolsStyleTest {
     void setUp() {
         bridge = Mockito.mock(EditorBridgeService.class);
         resolver = Mockito.mock(StyleProfileResolver.class);
-        tools = new DocumentEditTools(null, null, bridge, null, null, null, resolver);
+        tools = new DocumentEditTools(null, null, bridge, null, null, null, null, resolver);
         when(bridge.executeEditorCommand(any(), any())).thenReturn("{\"success\":true}");
         ProjectContextHolder.setProjectId("7");
     }
@@ -82,7 +82,7 @@ class DocumentEditToolsStyleTest {
     @Test
     @DisplayName("doc_apply_style_profile：没有解析器时按 house-default 下发，scope 缺省 document")
     void applyStyleProfileFallsBackToHouseDefault() {
-        DocumentEditTools bare = new DocumentEditTools(null, null, bridge, null, null, null, null);
+        DocumentEditTools bare = new DocumentEditTools(null, null, bridge, null, null, null, null, null);
         bare.doc_apply_style_profile(null);
         Map<String, Object> profile = (Map<String, Object>) paramsOf("set_style_profile").get("profile");
         assertEquals("律所标准格式（HOUSE）", profile.get("name"));
@@ -180,14 +180,14 @@ class DocumentEditToolsStyleTest {
         when(pfs.getFile(100L)).thenReturn(f);
         when(bridge.executeEditorCommand(eq("doc_open_file_sync"), any())).thenReturn("{\"status\":\"ready\"}");
         when(bridge.getCurrentConversationId()).thenReturn("conv");
-        DocumentEditTools bare = new DocumentEditTools(pfs, null, bridge, null, null, null, null);
+        DocumentEditTools bare = new DocumentEditTools(pfs, null, bridge, null, null, null, null, null);
         bare.doc_start_stream(100L, null, null);
         assertFalse(paramsOf("doc_open_file_sync").containsKey("styleProfile"));
 
         Mockito.clearInvocations(bridge);
         when(resolver.resolve(7L, null)).thenReturn(StyleProfiles.houseDefault().merge(StyleProfiles.parse(
                 "{\"body\":{\"font\":{\"western\":\"Times New Roman\"}}}")));
-        DocumentEditTools withResolver = new DocumentEditTools(pfs, null, bridge, null, null, null, resolver);
+        DocumentEditTools withResolver = new DocumentEditTools(pfs, null, bridge, null, null, null, null, resolver);
         withResolver.doc_start_stream(100L, null, null);
         assertTrue(paramsOf("doc_open_file_sync").containsKey("styleProfile"));
     }

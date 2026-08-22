@@ -63,7 +63,7 @@ class EmptyVersusErrorTest {
         EvidenceRetrieverRegistry registry = Mockito.mock(EvidenceRetrieverRegistry.class);
         when(registry.all()).thenReturn(List.of(retrievers));
         ProjectContextHolder.setProjectId("7");
-        return new EvidenceTools(registry);
+        return new EvidenceTools(registry, null);
     }
 
     @Test

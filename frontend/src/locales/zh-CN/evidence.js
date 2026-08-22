@@ -1,8 +1,15 @@
-// evidence.* — EvidenceLink（报告文字 ↔ 底稿关联）：审阅面板「证据」页与改字提示条
+// evidence.* — EvidenceLink（报告文字 ↔ 底稿关联）：审阅面板「底稿」页与改字提示条
 export default {
   view: {
     bySection: '按章节',
     byParty: '按主体',
+  },
+  filter: {
+    allSections: '全部章节',
+    allParties: '全部主体',
+  },
+  stat: {
+    total: '共 {count} 条',
   },
   status: {
     all: '全部',
@@ -59,8 +66,10 @@ export default {
   rebindNoSelection: '请先在文档里选中文字',
   rebindFailed: '重新指定失败',
   rebindRetryHint: '新书签已在文档里，再点一次「确认指定」即可重试。',
-  keepGone: '这段文字已不在文档里，不能保留关联；请在证据页「重新指定」。',
+  keepGone: '这段文字已不在文档里，不能保留关联；请在底稿页「重新指定」。',
   orphanGoto: '这段文字的锚点已不在文档里，请点「重新指定」选择新的文字。',
+  confidence: '置信 {value}',
+  loading: '加载中…',
   loadFailed: '加载关联失败',
   opFailed: '操作未成功',
   deleteConfirm: '删除这条关联？底稿文件不会被删除。',
