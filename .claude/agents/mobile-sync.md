@@ -76,6 +76,24 @@ dev-board#30）；更早的产品设计 `2026-08-17-mobile-clients-design.md`。
    后经 `self.storeMediaTx(...)` 重试一次，重试时一定能查到对方已提交的记录。
    手工 `new MobileRelayStoreService(...)` 的测试要记得 `service.self = service;`
    （`MobileRelayStoreServiceTest`/`MobileRelayStoreServiceConcurrentStoreTest` 已接）。
+7. **目录条数超过 `MAX_DIR_ENTRIES`（1000）不再整批拒绝**（尽调模块 P3 稳定性余项 #5，
+   dev-board#100，与 P0 修 `LocalProjectService.MAX_IMPORT_ENTRIES` 同一口径：截断到
+   上限 + 明确报告，不静默丢）——旧实现 `replaceDirectory` 超限直接抛
+   `IllegalArgumentException`，桌面端 `pushDirectory` 从不本地裁剪清单、每 10 分钟原样
+   重推同一份超限清单，结果是**整批**推送失败、一条项目都进不了库，且失败只在桌面日志
+   留一句 `log.warn`（律师看不到），此后永远同样失败、永远无声。现在
+   `replaceDirectory` 返回 `DirectoryReplaceResult(storedCount, totalCount, truncated)`：
+   超限时截断到前 `MAX_DIR_ENTRIES` 条（客户端按 `findByUserIdOrderByCreatedAtDesc` 传
+   来的顺序，即保留最新的那些）正常入库，不再抛异常；`truncated=true` 时额外
+   `log.warn` 一次（服务端侧）。控制器 `PUT /api/mobile/projects` 响应体新增
+   `totalCount`/`truncated` 两个字段（`count` 语义也从"请求条数"改成"实际入库条数"，
+   未截断时两者相等，不影响既有断言）。桌面端 `MobileRelayClientService.pushDirectory`
+   读这两个字段：`truncated=true` 时改发一条点名总数与已同步数的 WARN（不再是普通的
+   "已推送"INFO），数字全部取服务端口径（`totalCount`/`count`），不与本地 `arr.size()`
+   混用——服务端收到并落库的条数才是"其实同步了多少"的真相。护栏
+   `MobileRelayStoreServiceTest.directoryOverLimitIsTruncatedNotRejected`（服务端截断）、
+   `MobileRelayClientHttpTest.pushDirectoryTruncationIsLoudlyWarned`（客户端 WARN 日志，
+   Logback `ListAppender` 断言，写法同 `AuthControllerGetUsernameLoggingTest`）。
 
 ## 排查「手机端一个项目都读不到」的顺序（dev-board#75 实测路径）
 

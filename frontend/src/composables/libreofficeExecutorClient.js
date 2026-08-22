@@ -106,7 +106,7 @@ export const EDITOR_ACTIONS = [
   // 这一组同时也是文档能力矩阵 4.2 节 Word 待办里"包一层 AI 工具面"的落点：
   // doc_list_revisions/doc_accept(_all)_revision(s)/doc_reject(_all)_revision(s)、
   // doc_get_comments/doc_resolve_comment/doc_delete_comment 直接复用同一批 action。
-  'list_revisions', 'goto_revision', 'resolve_revision', 'resolve_all_revisions',
+  'list_revisions', 'goto_revision', 'resolve_revision', 'resolve_revisions', 'resolve_all_revisions',
   'list_comments', 'goto_comment', 'set_comment_resolved', 'delete_comment',
   // [批注回复] doc_reply_comment 的落点——同一批注锚点上追加一条新批注，见
   // office_thread.js reply_comment 的实现注释（原生线程属性 best-effort）。
@@ -154,6 +154,9 @@ export const ACTION_BUDGET_MS = {
   load_document: 180000, export_document: 180000,
   find_replace: 120000, apply_house_style: 120000, resolve_all_revisions: 120000, insert_table: 120000,
   apply_style_profile: 120000,
+  // resolve_revisions（批量处置一张审阅卡片）最坏情况下 K 接近全文 redline 总数 N
+  // （一次连续大范围编辑落在同一分钟、同一作者），与 resolve_all_revisions 同量级预算。
+  resolve_revisions: 120000,
 }
 
 /**

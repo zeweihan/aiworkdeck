@@ -4380,6 +4380,45 @@ const EXEC = {
       ? { success: true, index: Number(p.index), action: action, remaining: after }
       : Object.assign(tableFail('修订未被处置（引擎未命中该条）'), { remaining: after });
   },
+  // [审阅面板批量处置] ReviewPanel.resolveGroup 把一张卡片（首尾相接合并出的 K 条
+  // redline）一次性打包发过来，代替旧路径对每个 index 单独调 resolve_revision。
+  // resolve_revision 内部的 redlineAt(index) 每次都从头整棵重新枚举
+  // xModel.getRedlines()，K 条 = K 次 O(N) 重扫（O(K·N)）；这里一次性把枚举物化成
+  // 数组（O(N) 一次），K 个目标 index 直接按下标取引用，总开销降到 O(N+K)。
+  // indices 必须按降序处理（与 resolve_revision 的既有约定一致：处置一条后，
+  // 比它大的 index 在引擎里前移，比它小的不受影响）。
+  // 稳妥起见留一条退路：捕获的对象引用如果在跨多次 dispatch 复用时失效（真机未
+  // 验证过这一点——引擎对 redline 对象的生命周期没有文档化保证），selectRedlineRange
+  // 会因异常/取不到区间而返回 false，这时退回 redlineAt 按位重新枚举一次，只让
+  // 那一条退化成旧路径的开销，不拖累整批、也不会把错误的修订当成功处置掉。
+  resolve_revisions(p) {
+    const action = String((p && p.action) || 'accept').toLowerCase();
+    if (action !== 'accept' && action !== 'reject') return tableFail("action must be accept|reject");
+    const indices = Array.isArray(p && p.indices) ? p.indices : [];
+    if (!indices.length) return tableFail('resolve_revisions requires a non-empty indices array');
+    const all = [];
+    try {
+      const en = xModel.getRedlines().createEnumeration();
+      while (en.hasMoreElements()) all.push(en.nextElement());
+    } catch (e) { return tableFail(errStr(e)); }
+    const sorted = indices.slice().sort(function (a, b) { return b - a; });
+    const results = [];
+    const dispatcher = css.frame.DispatchHelper.create(context);
+    for (let i = 0; i < sorted.length; i++) {
+      const index = sorted[i];
+      let r = (index >= 0 && index < all.length) ? all[index] : null;
+      let ok = !!r && selectRedlineRange(r, true);
+      if (!ok) { r = redlineAt(index); ok = !!r && selectRedlineRange(r, true); } // 退回单条重扫兜底
+      if (!ok) { results.push({ index: index, success: false }); continue; }
+      const before = countRedlines();
+      dispatcher.executeDispatch(ctrl.getFrame(),
+        action === 'accept' ? '.uno:AcceptTrackedChange' : '.uno:RejectTrackedChange', '', 0, []);
+      const after = countRedlines();
+      results.push({ index: index, success: after < before });
+    }
+    const resolved = results.filter(function (x) { return x.success; }).length;
+    return { success: true, action: action, resolved: resolved, remaining: countRedlines(), results: results };
+  },
   resolve_all_revisions(p) {
     const action = String((p && p.action) || 'accept').toLowerCase();
     if (action !== 'accept' && action !== 'reject') return tableFail("action must be accept|reject");

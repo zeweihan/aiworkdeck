@@ -138,7 +138,20 @@ public class MobileRelayClientService {
             HttpResponse<String> resp = authed("PUT", "/api/mobile/projects", payload);
             if (okEnvelope(resp)) {
                 lastPushedHash = hash;
-                log.info("手机同步：项目目录已推送（{} 项）", arr.size());
+                // 尽调 P3#5：服务端超过 MAX_DIR_ENTRIES 时不再整批拒绝，改成截断 + 明确
+                // 报告 truncated——这里必须读出来单独吼一句，不能让"HTTP 2xx = 全部同步
+                // 成功"这个默认假设吞掉"其实只同步了前 1000 个"这件事。
+                JsonNode respBody = mapper.readTree(resp.body());
+                if (respBody.path("truncated").asBoolean(false)) {
+                    // 数字全部取服务端的口径（totalCount/count），不与本地 arr.size() 混用——
+                    // 服务端截断判断以它收到并落库的条数为准，才是"其实同步了多少"的真相。
+                    int total = respBody.path("totalCount").asInt(arr.size());
+                    int stored = respBody.path("count").asInt(0);
+                    log.warn("手机同步：本机项目数 {} 超过云端目录上限，仅同步了前 {} 个，其余 {} 个未同步到手机端",
+                            total, stored, Math.max(0, total - stored));
+                } else {
+                    log.info("手机同步：项目目录已推送（{} 项）", arr.size());
+                }
             } else if (resp != null) {
                 log.warn("手机同步：目录推送失败 status={} body={}", resp.statusCode(),
                         resp.body() != null && resp.body().length() > 200

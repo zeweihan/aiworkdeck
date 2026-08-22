@@ -4,9 +4,24 @@
 
 import { isDesktopHost } from '@/services/host.js'
 
-// 内嵌 LibreOffice 实例保活上限（每个 LOWA 实例数百 MB 内存）。超过后按
-// LRU 淘汰最久未激活的实例——淘汰前自动保存（见 evictLibreInstance）。
-const LIBRE_KEEPALIVE_MAX = 3
+// 内嵌 LibreOffice 保活池按文档体积计权（尽调模块 P3 稳定性余项 #2，
+// dev-board#100）：固定 LRU=3 与文档体积无关，三个 150 页/6.6MB 级大文档同时
+// 驻留会把页面内存吃到约 2.4GB（实测基线，见
+// docs/superpowers/specs/2026-08-21-due-diligence-module-proposal.md §3）。
+// 改成"总权重上限固定，大文档占更多权重"：LIBRE_SIZE_UNIT_BYTES 是 1 个权重单位
+// 的体积（保守值 2MB），LIBRE_WEIGHT_BUDGET 是总权重上限（保守值 6）。
+// 150 页/6.6MB 文档权重 = ceil(6.6MB / 2MB) = 4，两份这样的文档已经超预算，
+// 天然把更旧的实例挤出去；而普通几百 KB 的文档权重恒为 1，同时保活的数量
+// 不降反升（旧固定 3 → 最多可到 6）。体积信息缺失（未知/新建文件）按最小
+// 权重 1 处理，退化成旧的"按数量"语义，不会异常淘汰。
+const LIBRE_SIZE_UNIT_BYTES = 2 * 1024 * 1024
+const LIBRE_WEIGHT_BUDGET = 6
+
+function libreInstanceWeight(fileSizeBytes) {
+    const n = Number(fileSizeBytes)
+    if (!(n > 0)) return 1
+    return Math.max(1, Math.ceil(n / LIBRE_SIZE_UNIT_BYTES))
+}
 
 export const librePoolMethods = {
     // Epic #43: embedded LibreOffice editor lifecycle. While ready, backend AI
@@ -62,7 +77,7 @@ export const librePoolMethods = {
     onActiveOfficeFileChanged(pane, file) {
         if (file && this.useLibreEditor(file)) {
             if (pane === 'left') this.maybeAdoptLibreSpare(file)
-            this.touchLibreLru(pane, file.id)
+            this.touchLibreLru(pane, file.id, file.fileSize)
         }
         this.syncLibreExecutor()
     },
@@ -127,12 +142,28 @@ export const librePoolMethods = {
     pruneClosedLibreSpares() {
         this.libreSpares = this.libreSpares.filter(sp => !sp.file || this.isLibreKeyOpen('left:' + sp.file.id))
     },
-    touchLibreLru(pane, fileId) {
+    // fileSize 是"刚激活的这份文档"的体积（调用方 onActiveOfficeFileChanged 手头
+    // 就有，直接传入，不必等组件挂载完成才能取到）；池里其它 key 的体积从
+    // _libreRefs 已挂载实例的 file.fileSize 反查（libreWeightOf）。
+    touchLibreLru(pane, fileId, fileSize) {
         const key = pane + ':' + fileId
         // 触达置顶，顺带清掉已关闭文件的残留记账
         const keys = [key].concat(this.libreLruKeys.filter(k => k !== key && this.isLibreKeyOpen(k)))
         this.libreLruKeys = keys
-        keys.slice(LIBRE_KEEPALIVE_MAX).forEach(k => { this.evictLibreInstance(k) })
+        // 按体积累计权重：从最近使用往回数，累计权重一旦超预算，从那个 key 起
+        // （含它自己）全部是淘汰候选——与旧版"名次超过 LIBRE_KEEPALIVE_MAX 就淘汰"
+        // 同一个"从前往后数、超了就砍"的形状，只是计数单位从"个数"换成"权重"。
+        let acc = 0
+        for (const k of keys) {
+            acc += (k === key ? libreInstanceWeight(fileSize) : this.libreWeightOf(k))
+            if (acc > LIBRE_WEIGHT_BUDGET) this.evictLibreInstance(k)
+        }
+    },
+    // key 对应实例的体积权重：从已挂载的 _libreRefs 反查 file.fileSize；拿不到
+    // （未挂载/无体积信息）按最小权重 1 处理。
+    libreWeightOf(key) {
+        const inst = (this._libreRefs || {})[key]
+        return libreInstanceWeight(inst && inst.file ? inst.file.fileSize : null)
     },
     isLibreKeyOpen(key) {
         const sep = key.indexOf(':')
@@ -149,10 +180,15 @@ export const librePoolMethods = {
         if (inst && inst.ready && !inst.isError && inst.file) {
             try { await inst.flushSave() } catch (e) { console.warn('[ProjectOverview] evict auto-save failed:', e) }
         }
-        // 保存耗时期间可能又被激活/关闭：仍在上限内或已是活动文件则不淘汰
+        // 保存耗时期间可能又被激活/关闭：按此刻的名次重新核验，累计权重仍在预算内
+        // 或已是活动文件则不淘汰（与旧版"idx < LIBRE_KEEPALIVE_MAX"同一防线，只是
+        // 判据从"名次前 N"换成"从最近使用往回累计权重不超预算"）。
         const idx = this.libreLruKeys.indexOf(key)
-        if (idx === -1 || idx < LIBRE_KEEPALIVE_MAX) return
+        if (idx === -1) return
         if (key === 'left:' + this.activeFileIdLeft || key === 'right:' + this.activeFileIdRight) return
+        let acc = 0
+        for (let i = 0; i <= idx; i++) acc += this.libreWeightOf(this.libreLruKeys[i])
+        if (acc <= LIBRE_WEIGHT_BUDGET) return
         this.libreLruKeys = this.libreLruKeys.filter(k => k !== key)
         this.pruneLibreSpare(key)
         console.log('[ProjectOverview] LibreOffice keep-alive evicted (LRU):', key)

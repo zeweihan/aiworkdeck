@@ -49,6 +49,10 @@ class ProjectRepoServiceTest {
      * 这类大文件天然会进版本历史，几个并发的历史版本读取请求就能把云端团队服务器
      * 那台只有 1.5GB 堆上限的机器（deploy/cloud/aiworkdeck-cloud.service 的
      * -Xmx1536m）打爆。这里断言超限文件被拒绝而不是被读进堆，小文件不受影响。
+     *
+     * <p>commitAll 自己也有一道体积闸了（尽调 P3#3，CommitLargeFileFilterTest），
+     * 默认阈值同为 50MB——这里关掉它（放宽到 Long.MAX_VALUE），本用例要验证的是
+     * **读侧**的闸，不该被写侧的闸挡在提交这一步之前，两条闸各自有独立的测试覆盖。
      */
     @Test
     void readBlobAtCommitRejectsOversizedFileInsteadOfBufferingItIntoHeap(@TempDir Path root) throws Exception {
@@ -57,6 +61,7 @@ class ProjectRepoServiceTest {
 
         ProjectRepoService s = svc(root);
         s.init(7L, "韩泽伟", "hzw@example.com");
+        s.setMaxTrackedFileSizeBytesForTest(Long.MAX_VALUE);
 
         // 51MB，超过体积闸（50MB）——量级对应会议录音/手机端现场影像视频这类文件
         Files.write(root.resolve("projects/7/现场影像.mp4"), new byte[51 * 1024 * 1024]);
