@@ -55,8 +55,14 @@ public class EvidenceLinkTarget {
     @Column(length = 16, nullable = false)
     private String relation = RELATION_SUPPORTS;
 
-    /** written_review / written_statement / web_check / third_party / interview，可空。 */
-    @Column(length = 16)
+    /**
+     * written_review / written_statement / web_check / third_party / interview，可空。
+     *
+     * <p>长度 32 不是随手写的：`written_statement` 有 17 个字符，原来的 length=16 让这一档**永远存不进去**
+     * （真实起草跑分里报 "Value too long for column method"，凡是「书面确认」型的链接全部落库失败）。
+     * 枚举里最长的值决定列宽，改枚举时一并核对。
+     */
+    @Column(length = 32)
     private String method;
 
     /** 0-100，人工建 = null。 */
