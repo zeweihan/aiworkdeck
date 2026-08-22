@@ -46,6 +46,7 @@ public class PluginHostFactory {
     final TagRepository tagRepository;
     final FileTagService fileTagService;
     final EvidenceLinkService evidenceLinkService;
+    final com.checkba.service.evidence.EvidenceAnchorService evidenceAnchorService;
     final PluginJobService pluginJobService;
     final EditorBridgeService editorBridgeService;
     final SystemSettingService systemSettingService;
@@ -71,6 +72,7 @@ public class PluginHostFactory {
                              TagRepository tagRepository,
                              FileTagService fileTagService,
                              EvidenceLinkService evidenceLinkService,
+                             com.checkba.service.evidence.EvidenceAnchorService evidenceAnchorService,
                              PluginJobService pluginJobService,
                              EditorBridgeService editorBridgeService,
                              SystemSettingService systemSettingService,
@@ -80,7 +82,7 @@ public class PluginHostFactory {
                              TokenUsageService tokenUsageService,
                              ObjectMapper objectMapper) {
         this(projectFileService, projectFileRepository, storageServiceFactory, projectMemberService, documentTextService,
-                ocrService, tagService, tagRepository, fileTagService, evidenceLinkService, pluginJobService,
+                ocrService, tagService, tagRepository, fileTagService, evidenceLinkService, evidenceAnchorService, pluginJobService,
                 editorBridgeService, systemSettingService, styleProfileResolver, chatModelFactory, auxModelResolver,
                 tokenUsageService, objectMapper, new PluginHostQuota());
     }
@@ -95,6 +97,7 @@ public class PluginHostFactory {
                       TagRepository tagRepository,
                       FileTagService fileTagService,
                       EvidenceLinkService evidenceLinkService,
+                      com.checkba.service.evidence.EvidenceAnchorService evidenceAnchorService,
                       PluginJobService pluginJobService,
                       EditorBridgeService editorBridgeService,
                       SystemSettingService systemSettingService,
@@ -114,6 +117,7 @@ public class PluginHostFactory {
         this.tagRepository = tagRepository;
         this.fileTagService = fileTagService;
         this.evidenceLinkService = evidenceLinkService;
+        this.evidenceAnchorService = evidenceAnchorService;
         this.pluginJobService = pluginJobService;
         this.editorBridgeService = editorBridgeService;
         this.systemSettingService = systemSettingService;

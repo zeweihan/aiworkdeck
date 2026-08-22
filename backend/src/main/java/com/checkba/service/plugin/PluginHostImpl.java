@@ -551,6 +551,18 @@ class PluginHostImpl implements PluginHost {
 
     // ------------------------------------------------------------------ Evidence
 
+    /** EditorBridgeService 按自己的 ThreadLocal 找会话；后台任务线程上没有，这里按调用上下文临时绑定。 */
+    private <T> T withConversation(String conversationId, java.util.function.Supplier<T> body) {
+        String previous = f.editorBridgeService.getCurrentConversationId();
+        f.editorBridgeService.setCurrentConversationId(conversationId);
+        try {
+            return body.get();
+        } finally {
+            if (previous == null) f.editorBridgeService.clearCurrentConversationId();
+            else f.editorBridgeService.setCurrentConversationId(previous);
+        }
+    }
+
     private final class EvidenceImpl implements Evidence {
 
         private List<EvidenceLinkViews.TargetInput> in(List<TargetInput> targets) {
@@ -575,6 +587,22 @@ class PluginHostImpl implements PluginHost {
             ToolCall c = requireWrite(projectId);
             return out(f.evidenceLinkService.create(c.userId(), projectId, docFileId, linkKey, anchorText,
                     sectionPath, sectionTitle, com.checkba.model.entity.EvidenceLink.KIND_PLUGIN, in(targets)));
+        }
+
+        @Override
+        public LinkView linkAtQuote(long projectId, long docFileId, String anchorQuote, List<TargetInput> targets) {
+            ToolCall c = requireWrite(projectId);
+            if (anchorQuote == null || anchorQuote.isBlank()) {
+                throw new IllegalArgumentException(LangText.of("anchorQuote 不能为空", "anchorQuote must not be empty"));
+            }
+            if (targets == null || targets.isEmpty()) {
+                throw new IllegalArgumentException(LangText.of("至少要有一条底稿", "At least one evidence target is required"));
+            }
+            // 建链要走 worker，必须有会话；与 Docs.exec 同一套约束
+            if (!StringUtils.hasText(c.conversationId())) throw new IllegalStateException("no active conversation");
+            return withConversation(c.conversationId(), () -> out(f.evidenceAnchorService.linkAtQuote(
+                    c.userId(), projectId, docFileId, anchorQuote, null, in(targets),
+                    com.checkba.model.entity.EvidenceLink.KIND_PLUGIN)));
         }
 
         @Override
@@ -660,18 +688,6 @@ class PluginHostImpl implements PluginHost {
                 throw new IllegalStateException("no active conversation");
             }
             return c.conversationId();
-        }
-
-        /** EditorBridgeService 按自己的 ThreadLocal 找会话；后台任务线程上没有，这里按调用上下文临时绑定。 */
-        private <T> T withConversation(String conversationId, java.util.function.Supplier<T> body) {
-            String previous = f.editorBridgeService.getCurrentConversationId();
-            f.editorBridgeService.setCurrentConversationId(conversationId);
-            try {
-                return body.get();
-            } finally {
-                if (previous == null) f.editorBridgeService.clearCurrentConversationId();
-                else f.editorBridgeService.setCurrentConversationId(previous);
-            }
         }
 
         @Override

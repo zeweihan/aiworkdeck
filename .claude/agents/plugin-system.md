@@ -169,7 +169,7 @@ manifest.json 要点：id（必需）/name/version/icon/author/permissions（fil
 
 ## 宿主 SPI（plugin-api，规范 v2.4，dev-board#109）
 
-JAR 插件拿宿主能力的唯一契约：`com.checkba:plugin-api:1.0.0`，源码 `backend/plugin-api/`
+JAR 插件拿宿主能力的唯一契约：`com.checkba:plugin-api:1.1.0`（1.0.0 编译的插件照常加载，接口只增不改），源码 `backend/plugin-api/`
 （**独立 Maven 工程**，不是 backend 的子模块；backend 以普通依赖引用）。方法表与鉴权/配额规则在
 `docs/PLUGIN_SPEC.md` §11，这里只记落点与地雷。
 
@@ -200,3 +200,5 @@ JAR 插件拿宿主能力的唯一契约：`com.checkba:plugin-api:1.0.0`，源�
 - 后端：`cd backend && mvn test`（JDK 21）。
 - skill 触发链路：起后端后对话输入触发词验证注入；skill 管理 API `/api/skills/list|{id}/enable|{id}/disable|rescan`（admin）。
 - 前端面板：`cd frontend && npm run test:app-e2e` 覆盖主要旅程。
+
+- **`Evidence.linkAtQuote(projectId, docFileId, anchorQuote, targets)`（SPI 1.1.0 新增）**：插件按引文建链的唯一正路。宿主内部走 `EvidenceAnchorService`（查引文必须恰好命中一次 → set_selection → bookmark_selection（书签名 = linkKey）→ 内部超链接 → get_bookmark_context → 落库），与 AI 工具 `doc_link_evidence` **同一份实现**。插件**不要**自己用 `Docs.exec` 拼这套原语——书签名规则、超链接 scheme、章节路径口径都是契约，两份实现必然漂移。

@@ -41,6 +41,8 @@ public class DocumentEditTools implements AgentToolComponent {
     // 构造器加参：手工 new 的测试（ParagraphIndexBaseTest / DocumentEditToolsEvidenceTest）要同步；
     // RealToolBeans 走反射取最长构造器，自动跟上
     private final com.checkba.service.evidence.EvidenceLinkService evidenceLinkService;
+    /** 建链核心（引文→书签→超链接→落库）唯一实现，AI 工具与插件宿主共用。 */
+    private final com.checkba.service.evidence.EvidenceAnchorService evidenceAnchorService;
     // doc_link_evidence 在动编辑器之前预校验写权限：worker 写完再被 Service 拒，文档里会留孤儿书签
     private final com.checkba.service.ProjectMemberService projectMemberService;
     // 样式画像解析（dev-board#111）：doc_apply_style_profile / doc_start_stream 按 §3.4 顺序取项目画像；
@@ -1438,7 +1440,8 @@ public class DocumentEditTools implements AgentToolComponent {
     // ==================== 证据链接（EvidenceLink，dev-board#112） ====================
 
     /** 文档内超链接的 web 包装前缀，与前端 workbenchActions.WPS_INTERNAL_HTTP_LINK_BASE / evidenceLocator.buildFileLinkUrl 同形。 */
-    static final String INTERNAL_LINK_BASE = "https://checkba-internal.local/open";
+    /** 单一来源在 EvidenceAnchorService；这里保留别名，历史引用不改。 */
+    static final String INTERNAL_LINK_BASE = com.checkba.service.evidence.EvidenceAnchorService.INTERNAL_LINK_BASE;
     private static final java.util.Set<String> EVIDENCE_METHODS = com.checkba.model.entity.EvidenceLinkTarget.METHODS;
     private static final java.util.Set<String> EVIDENCE_RELATIONS = com.checkba.model.entity.EvidenceLinkTarget.RELATIONS;
     /** 报告只能是 Writer 文档：书签/超链接原语只在 Writer 里有意义。 */
@@ -1504,59 +1507,9 @@ public class DocumentEditTools implements AgentToolComponent {
         }
 
         try {
-            String anchor = anchorId;
-            String matchedText = null;
-            if (!hasAnchor) {
-                com.fasterxml.jackson.databind.JsonNode found = workerJson(
-                        editorBridgeService.executeEditorCommand("find_text_locations", java.util.Map.of("keyword", anchorQuote.trim())));
-                com.fasterxml.jackson.databind.JsonNode matches = found.path("matches");
-                int n = matches.isArray() ? matches.size() : 0;
-                if (n == 0) {
-                    clearAnchorsQuietly();
-                    return "Error: anchorQuote 在文档中命中 0 处，未建链。请核对原文（标点、空格要一致），或先用 doc_find_text 定位后传 anchorId";
-                }
-                if (n > 1) {
-                    clearAnchorsQuietly();
-                    return "Error: anchorQuote 在文档中命中 " + n + " 处，无法唯一定位，未建链。请给更长、更独特的片段，或用 doc_find_text 挑出那一处后传 anchorId";
-                }
-                anchor = matches.get(0).path("anchorId").asText(null);
-                matchedText = matches.get(0).path("text").asText(null);
-                if (anchor == null || anchor.isBlank()) {
-                    return "Error: 查找结果缺少 anchorId，未建链";
-                }
-            }
-
-            workerJson(editorBridgeService.executeEditorCommand("set_selection", java.util.Map.of("anchor", anchor)));
-            // 选区已经落定，查找留下的锚点标记可以清掉（顺序不能反：set_selection 靠 anchorId 定位）
-            if (!hasAnchor) clearAnchorsQuietly();
-
-            String linkKey = "EVID_" + com.checkba.service.evidence.Ulid.next();
-            com.fasterxml.jackson.databind.JsonNode bm = workerJson(
-                    editorBridgeService.executeEditorCommand("bookmark_selection", java.util.Map.of("name", linkKey)));
-            String bookmarkText = bm.path("text").asText(null);
-
-            String inner = "checkba://filelink?k=" + linkKey + "&projectId=" + projectId;
-            String url = INTERNAL_LINK_BASE + "?u=" + java.net.URLEncoder.encode(inner, java.nio.charset.StandardCharsets.UTF_8);
-            workerJson(editorBridgeService.executeEditorCommand("set_selection_hyperlink", java.util.Map.of("url", url)));
-
-            String sectionPath = "";
-            String sectionTitle = "";
-            String contextText = null;
-            try {
-                com.fasterxml.jackson.databind.JsonNode ctx = workerJson(
-                        editorBridgeService.executeEditorCommand("get_bookmark_context", java.util.Map.of("name", linkKey)));
-                sectionPath = ctx.path("sectionPath").asText("");
-                sectionTitle = ctx.path("sectionTitle").asText("");
-                contextText = ctx.path("text").asText(null);
-            } catch (IllegalStateException e) {
-                // 书签与超链接已写入，章节信息拿不到不致命：sectionPath 留空，链照样落库
-                log.warn("doc_link_evidence: get_bookmark_context failed for {}: {}", linkKey, e.getMessage());
-            }
-            String anchorText = firstNonBlank(contextText, bookmarkText, matchedText, anchorQuote);
-
-            com.checkba.service.evidence.EvidenceLinkViews.LinkView view = evidenceLinkService.create(
-                    userId, projectId, docFileId, linkKey, anchorText, sectionPath, sectionTitle,
-                    com.checkba.model.entity.EvidenceLink.KIND_AI, targets);
+            com.checkba.service.evidence.EvidenceLinkViews.LinkView view = evidenceAnchorService.linkAtQuote(
+                    userId, projectId, docFileId, anchorQuote, anchorId, targets,
+                    com.checkba.model.entity.EvidenceLink.KIND_AI);
 
             java.util.Map<String, Object> out = new java.util.LinkedHashMap<>();
             out.put("linkKey", view.linkKey());
@@ -1564,7 +1517,7 @@ public class DocumentEditTools implements AgentToolComponent {
             out.put("sectionPath", view.sectionPath() == null ? "" : view.sectionPath());
             out.put("status", view.status());
             return EVIDENCE_JSON.writeValueAsString(out);
-        } catch (IllegalStateException e) {
+        } catch (IllegalArgumentException | IllegalStateException e) {
             return "Error: " + e.getMessage();
         } catch (Exception e) {
             log.error("Failed to link evidence", e);
