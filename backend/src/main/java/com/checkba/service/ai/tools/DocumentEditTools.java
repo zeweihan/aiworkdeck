@@ -1755,9 +1755,18 @@ public class DocumentEditTools implements AgentToolComponent {
         return null;
     }
 
+    /** 图片插入的体积上限（尽调模块 P3 稳定性余项 #4，dev-board#100）：默认 2MB。 */
+    static final long DEFAULT_MAX_IMAGE_BYTES = 2L * 1024 * 1024;
+    private long maxImageBytes = DEFAULT_MAX_IMAGE_BYTES;
+
+    /** 仅供测试覆盖图片体积上限（包内可见）。生产路径永远走 DEFAULT_MAX_IMAGE_BYTES。 */
+    void setMaxImageBytesForTest(long bytes) {
+        this.maxImageBytes = bytes;
+    }
+
     @ToolMeta(displayName = "插入图片", category = "document", fileEffect = "MODIFIED")
     @Tool("【插入】在光标处插入一张图片。fileId 是项目文件树里图片文件（jpg/jpeg/png/gif/bmp/webp）的文件 ID，" +
-          "上限 2MB，超限会报错——先用 doc_list_project_files 之外的方式确认体积，或让用户换一张更小的图。")
+          "上限 2MB；超限会先等比压缩再插入，压缩后仍超限或文件本身无法解析才会报错。")
     public String doc_insert_image(
             @P("项目文件树中图片文件的文件 ID") Long fileId
     ) {
@@ -1780,11 +1789,29 @@ public class DocumentEditTools implements AgentToolComponent {
                 return "Error: 图片文件在磁盘上不存在: " + file.getName();
             }
             long size = java.nio.file.Files.size(path);
-            final long maxBytes = 2L * 1024 * 1024;
-            if (size > maxBytes) {
-                return "Error: 图片过大（" + (size / 1024) + "KB，上限 2MB）: " + file.getName();
+            byte[] bytes;
+            if (size <= maxImageBytes) {
+                bytes = java.nio.file.Files.readAllBytes(path);
+            } else {
+                // 超限先等比压缩（JDK 自带 ImageIO/BufferedImage，不引新库），压不下去再报错——
+                // 图片格式由字节内容自解码，不依赖原始扩展名，压缩产物统一按 JPEG 重新编码。
+                java.awt.image.BufferedImage image;
+                try {
+                    image = javax.imageio.ImageIO.read(path.toFile());
+                } catch (java.io.IOException e) {
+                    image = null;
+                }
+                if (image == null) {
+                    return "Error: 图片过大（实际 " + size + " 字节，上限 " + maxImageBytes
+                        + " 字节）且无法解析用于压缩: " + file.getName();
+                }
+                bytes = compressImageToLimit(image, maxImageBytes);
+                if (bytes == null) {
+                    return "Error: 图片过大（原始 " + size + " 字节，上限 " + maxImageBytes
+                        + " 字节），等比压缩后仍超限，请换一张更小的图: " + file.getName();
+                }
+                log.info("Tool: doc_insert_image 压缩 {} 从 {} 字节到 {} 字节", file.getName(), size, bytes.length);
             }
-            byte[] bytes = java.nio.file.Files.readAllBytes(path);
             String base64 = java.util.Base64.getEncoder().encodeToString(bytes);
             return editorBridgeService.executeEditorCommand("insert_image", java.util.Map.of("base64", base64));
         } catch (Exception e) {
@@ -2540,6 +2567,66 @@ public class DocumentEditTools implements AgentToolComponent {
         String lower = fileName.toLowerCase();
         return lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png")
                 || lower.endsWith(".gif") || lower.endsWith(".bmp") || lower.endsWith(".webp");
+    }
+
+    /**
+     * doc_insert_image 超限时的等比压缩（尽调模块 P3 稳定性余项 #4，dev-board#100）。
+     * 逐档降质量、降尺寸重新编码成 JPEG（worker 侧 insert_image 靠 GraphicProvider 按字节
+     * 内容自解码，不依赖原始扩展名，压缩产物统一用 JPEG 不影响插入）；每一档缩放同时把
+     * 图铺到白底再画——JPEG 不支持透明通道，PNG/GIF 若带透明区域直接转码会变黑底，铺白底
+     * 是文档配图场景更合理的默认（等同大多数转换工具对"透明转不透明"的处理方式）。
+     * 找到第一档能落在 limitBytes 以内的立即返回；全部档位都压不下去返回 null，
+     * 调用方据此报错而不是把超限文件硬插进去。包内可见，供单测直接驱动边界情况
+     * （用一个不可能达到的极小 limitBytes 逼真实压缩循环走"压不下去"分支）。
+     */
+    static byte[] compressImageToLimit(java.awt.image.BufferedImage img, long limitBytes) {
+        double[] scales = {1.0, 0.75, 0.5, 0.35, 0.25};
+        float[] qualities = {0.85f, 0.7f, 0.5f, 0.35f, 0.2f};
+        for (double scale : scales) {
+            java.awt.image.BufferedImage flat = flattenAndScale(img, scale);
+            for (float q : qualities) {
+                byte[] out;
+                try {
+                    out = encodeJpeg(flat, q);
+                } catch (java.io.IOException e) {
+                    continue;
+                }
+                if (out.length <= limitBytes) return out;
+            }
+        }
+        return null;
+    }
+
+    /** 按 scale 等比缩放（1.0 = 不缩尺寸）并铺白底展平透明通道，供 JPEG 编码前调用。 */
+    private static java.awt.image.BufferedImage flattenAndScale(java.awt.image.BufferedImage src, double scale) {
+        int w = Math.max(1, (int) Math.round(src.getWidth() * scale));
+        int h = Math.max(1, (int) Math.round(src.getHeight() * scale));
+        java.awt.image.BufferedImage out = new java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        java.awt.Graphics2D g = out.createGraphics();
+        try {
+            g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            g.setColor(java.awt.Color.WHITE);
+            g.fillRect(0, 0, w, h);
+            g.drawImage(src, 0, 0, w, h, null);
+        } finally {
+            g.dispose();
+        }
+        return out;
+    }
+
+    private static byte[] encodeJpeg(java.awt.image.BufferedImage img, float quality) throws java.io.IOException {
+        javax.imageio.ImageWriter writer = javax.imageio.ImageIO.getImageWritersByFormatName("jpg").next();
+        javax.imageio.ImageWriteParam param = writer.getDefaultWriteParam();
+        param.setCompressionMode(javax.imageio.ImageWriteParam.MODE_EXPLICIT);
+        param.setCompressionQuality(quality);
+        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+        try (javax.imageio.stream.ImageOutputStream ios = javax.imageio.ImageIO.createImageOutputStream(baos)) {
+            writer.setOutput(ios);
+            writer.write(null, new javax.imageio.IIOImage(img, null, null), param);
+        } finally {
+            writer.dispose();
+        }
+        return baos.toByteArray();
     }
 }
 
