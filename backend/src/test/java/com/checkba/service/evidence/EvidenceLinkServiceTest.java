@@ -48,6 +48,21 @@ import static org.mockito.Mockito.when;
  */
 class EvidenceLinkServiceTest {
 
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("列宽放得下每一个枚举值：written_statement 有 17 字符，length=16 会让「书面确认」永远存不进去")
+    void enumColumnsAreWideEnoughForEveryAllowedValue() throws Exception {
+        java.util.Map<String, java.util.Set<String>> cols = java.util.Map.of(
+                "method", com.checkba.model.entity.EvidenceLinkTarget.METHODS,
+                "relation", com.checkba.model.entity.EvidenceLinkTarget.RELATIONS);
+        for (java.util.Map.Entry<String, java.util.Set<String>> e : cols.entrySet()) {
+            java.lang.reflect.Field f = com.checkba.model.entity.EvidenceLinkTarget.class.getDeclaredField(e.getKey());
+            jakarta.persistence.Column c = f.getAnnotation(jakarta.persistence.Column.class);
+            int longest = e.getValue().stream().mapToInt(String::length).max().orElse(0);
+            org.junit.jupiter.api.Assertions.assertTrue(c.length() >= longest,
+                    e.getKey() + " 列宽 " + c.length() + " 放不下最长的枚举值（" + longest + " 字符）");
+        }
+    }
+
     EvidenceLinkRepository links = mock(EvidenceLinkRepository.class);
     EvidenceLinkTargetRepository targets = mock(EvidenceLinkTargetRepository.class);
     ProjectFileRepository files = mock(ProjectFileRepository.class);
