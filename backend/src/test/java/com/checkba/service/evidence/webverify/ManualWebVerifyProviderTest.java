@@ -216,6 +216,16 @@ class ManualWebVerifyProviderTest {
     }
 
     @Test
+    @DisplayName("manifest 的 capturedAt 按字面取，不随服务端时区换算（本机 +08 与 CI UTC 必须同解）")
+    void capturedAtIsZoneIndependent() {
+        LocalDateTime expected = LocalDateTime.of(2026, 8, 21, 10, 0);
+        assertEquals(expected, ManualWebVerifyProvider.parseIsoDateTime("2026-08-21T10:00:00+08:00"));
+        assertEquals(expected, ManualWebVerifyProvider.parseIsoDateTime("2026-08-21T10:00:00Z"));
+        assertEquals(expected, ManualWebVerifyProvider.parseIsoDateTime("2026-08-21T10:00:00-05:00"));
+        assertEquals(expected, ManualWebVerifyProvider.parseIsoDateTime("2026-08-21T10:00:00"));
+    }
+
+    @Test
     @DisplayName("manifest 只覆盖它列到的条目，没列到的仍按文件名解析")
     void manifestCoversOnlyListedEntries() {
         String manifest = "{\"items\":[{\"file\":\"shot1.png\",\"site\":\"env_penalty\",\"capturedAt\":\"2026-08-01\"}]}";

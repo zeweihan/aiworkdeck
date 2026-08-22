@@ -199,12 +199,18 @@ public class ManualWebVerifyProvider implements WebVerifyProvider {
         return s.replaceAll("^[-_\\s]+", "").replaceAll("[-_\\s]+$", "").trim();
     }
 
-    /** 认 ISO-8601（带/不带时区）与 {@code yyyy-MM-dd}；认不出返回 null（不编时间）。 */
+    /**
+     * 认 ISO-8601（带/不带时区）与 {@code yyyy-MM-dd}；认不出返回 null（不编时间）。
+     *
+     * <p>带偏移量的写法<b>按字面取本地时间，不换算到服务端时区</b>：这个时间是外部工具在截图上
+     * 记的「查询时间」，应当与截图里显示的一致，不该因为后端跑在哪台机器上而变。换算过一次的后果
+     * 是本机（+08）绿、CI（UTC）红——`2026-08-21T10:00:00+08:00` 在 CI 上变成 02:00。
+     */
     static LocalDateTime parseIsoDateTime(String raw) {
         if (!StringUtils.hasText(raw)) return null;
         String s = raw.trim();
         try {
-            return OffsetDateTime.parse(s).atZoneSameInstant(ZoneId.systemDefault()).toLocalDateTime();
+            return OffsetDateTime.parse(s).toLocalDateTime();
         } catch (Exception ignored) { /* 下一种 */ }
         try {
             return LocalDateTime.parse(s);
