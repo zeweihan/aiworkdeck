@@ -169,7 +169,7 @@ manifest.json 要点：id（必需）/name/version/icon/author/permissions（fil
 
 ## 宿主 SPI（plugin-api，规范 v2.4，dev-board#109）
 
-JAR 插件拿宿主能力的唯一契约：`com.checkba:plugin-api:1.0.0`，源码 `backend/plugin-api/`
+JAR 插件拿宿主能力的唯一契约：`com.checkba:plugin-api:1.1.0`（1.0.0 编译的插件照常加载，接口只增不改），源码 `backend/plugin-api/`
 （**独立 Maven 工程**，不是 backend 的子模块；backend 以普通依赖引用）。方法表与鉴权/配额规则在
 `docs/PLUGIN_SPEC.md` §11，这里只记落点与地雷。
 
