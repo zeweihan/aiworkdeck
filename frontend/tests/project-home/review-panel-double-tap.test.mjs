@@ -49,6 +49,18 @@ function makeEngine(ids) {
         live.splice(params.index, 1)
         return { success: true }
       }
+      // resolveGroup 批量处置（尽调 P3#1）：indices 降序逐条处置，语义与上面的单条
+      // resolve_revision 一致，只是一次带上整组。
+      if (action === 'resolve_revisions') {
+        const idxs = (params.indices || []).slice().sort((a, b) => b - a)
+        const results = idxs.map((idx) => {
+          if (idx < 0 || idx >= live.length) return { index: idx, success: false }
+          resolved.push(live[idx])
+          live.splice(idx, 1)
+          return { index: idx, success: true }
+        })
+        return { success: true, results }
+      }
       return { success: true }
     },
   }

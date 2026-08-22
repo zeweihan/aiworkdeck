@@ -108,6 +108,7 @@ public class EditorBridgeService {
             "find_replace", 120,
             "apply_house_style", 120,
             "resolve_all_revisions", 120,
+            "resolve_revisions", 120,
             "insert_table", 120,
             "apply_style_profile", 120,
             "export_document", 180);

@@ -85,7 +85,8 @@
 // 无跨格协调）。面板把修订的权威视图搬到右栏：看得全、点得到、能逐条处置。
 //
 // 数据全部来自 worker 原语（list_revisions / goto_revision / resolve_revision /
-// resolve_all_revisions 与 list_comments 一族），executor 由宿主编辑器注入。
+// resolve_revisions（批量） / resolve_all_revisions 与 list_comments 一族），
+// executor 由宿主编辑器注入。
 // 每次处置后重新拉清单——redline 的索引就是枚举序，处置一条后其余会前移。
 import EvidencePanel from '@/components/EvidencePanel.vue'
 
@@ -159,20 +160,25 @@ export default {
     },
     goto(g) { this.run('goto_revision', { index: g.items[0].index }) },
     gotoComment(c) { this.run('goto_comment', { index: c.index }) },
-    // 整组处置。**必须从高索引往低处理**：index 就是枚举序，处置掉一条之后比它
-    // 大的索引全部前移一位，而比它小的不受影响——倒着走，剩下的索引才一直有效。
-    // 连点两次会并发跑两轮：两轮手里是同一份索引，第一轮处置掉一条后引擎里的索引
-    // 已经前移，第二轮那份索引会打到别的修订上（引擎照样返回 success）。加重入闸，
+    // 整组处置（尽调模块 P3 稳定性余项 #1，dev-board#100）：一次性把组内全部 index
+    // 打包发给 resolve_revisions 批量原语，worker 侧一次建索引再批处理，不再对每个
+    // 条目单独调 resolve_revision——旧实现里 worker 的 redlineAt(index) 每次都从头
+    // 整棵重新枚举 getRedlines()，K 个条目就是 K 次 O(N) 重扫（O(K·N)），大文档里一张
+    // 连续删除合并出的大卡片点一次「接受」就能卡住。
+    // **仍要求 indices 按降序传给 worker**：index 是枚举序，处置掉一条之后比它大的
+    // 索引全部前移一位，而比它小的不受影响——worker 侧按这个顺序逐条处置，语义与
+    // 旧实现完全一致，只是一次网络往返代替 K 次。
+    // 连点两次会并发跑两轮：两轮手里是同一份索引，第一轮处置完引擎里的索引已经
+    // 前移，第二轮那份索引会打到别的修订上（引擎照样返回 success）。加重入闸，
     // 处置期间的重复点击直接忽略。
     async resolveGroup(g, action) {
       if (this.resolving) return
       this.resolving = true
       try {
         const indices = g.items.map((r) => r.index).sort((a, b) => b - a)
-        let done = 0
-        for (const index of indices) {
-          if (await this.run('resolve_revision', { index, action })) done++
-        }
+        const res = await this.run('resolve_revisions', { indices, action })
+        const results = (res && res.results) || []
+        const done = results.filter((r) => r && r.success).length
         if (done) this.$emit('changed')
         // 引擎没命中的如实说，别让用户以为整组都处理完了
         if (done < indices.length) this.error = this.$t('editor.review.groupPartialFail', { total: indices.length, failed: indices.length - done })
