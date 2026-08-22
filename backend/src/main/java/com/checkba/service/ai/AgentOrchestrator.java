@@ -953,16 +953,15 @@ public class AgentOrchestrator {
             // 任务做一半、无错误提示、无继续按钮。这里回喂提示让模型重发，最多纠正 2 轮。
             // 含 <question> 时不走纠正回路：模型问了问题、同时输出被截断，此刻正确的动作是
             // 停下来等回答（下面 3.2），而不是催它重发工具调用——那等于让它带着未决问题继续猜。
-            if (agentMode != AgentMode.ASK && !containsQuestion(content)
-                    && content.contains("<tool_code>") && !content.contains("</tool_code>")) {
+            if (agentMode != AgentMode.ASK && !containsQuestion(content) && endsWithUnclosedTag(content)) {
                 if (guard.malformedToolRounds < 2) {
                     guard.malformedToolRounds++;
                     log.warn("Truncated tool_code detected for {} (correction round {}), asking model to re-emit",
                             conversationId, guard.malformedToolRounds);
                     messages.add(dev.langchain4j.data.message.UserMessage.from(
-                            "[系统提醒] 你上一条输出中的 <tool_code> 标签未闭合（内容可能被截断），"
-                            + "该工具调用没有被执行。请重新、完整地输出这次工具调用；"
-                            + "若任务其实已完成，请直接输出最终总结。"));
+                            "[系统提醒] 你上一条输出中的标签未闭合（<tool_code> / <todo_write> / <final> 之一，内容被截断），"
+                            + "这次输出没有生效。请重新、完整地输出这一步；参数很长时先拆小，"
+                            + "或改用能直接把内容写进文档的工具。若任务其实已完成，请直接输出最终总结。"));
                     runLoop(model, messages, conversationId, projectId, userId, modelId,
                             depth + 1, executionLog, agentMode, guard);
                     return;
@@ -1534,6 +1533,28 @@ public class AgentOrchestrator {
      * 用户看了，此时按「有问题」停机远好过当成正常收尾——后者会让用户对着一个没有下文的
      * 问句，而会话状态显示已完成。
      */
+    /** 开了必须闭的结构标签（截断守卫用）。 */
+    private static final java.util.List<String> TRUNCATION_GUARDED_TAGS =
+            java.util.List.of("tool_code", "todo_write", "final");
+
+    /**
+     * 输出是不是在某个结构标签里被截断了。
+     *
+     * <p>原来只看 `<tool_code>`：模型在 `<todo_write>` 的长 JSON 里被切断时不算，回合就静默收尾——
+     * 尽调起草实测一轮里连丢四个回合（每次只输出 12-500 字符就断），用户看到的是「什么都没发生」。
+     */
+    static boolean endsWithUnclosedTag(String content) {
+        if (content == null || content.isBlank()) return false;
+        for (String tag : TRUNCATION_GUARDED_TAGS) {
+            // 开标签用前缀匹配：截断可能发生在开标签自己身上（实测最短的一次只输出了 "<todo_write"）
+            int open = content.lastIndexOf("<" + tag);
+            if (open < 0) continue;
+            int close = content.lastIndexOf("</" + tag + ">");
+            if (close < open) return true;
+        }
+        return false;
+    }
+
     static boolean containsQuestion(String content) {
         return content != null && QUESTION_TAG_START.matcher(content).find();
     }
