@@ -967,7 +967,13 @@ public class AgentOrchestrator {
                             depth + 1, executionLog, agentMode, guard);
                     return;
                 }
-                log.warn("Truncated tool_code persisted after corrections for {}, finishing normally", conversationId);
+                // 两轮纠正还在截断：多半是这次工具调用的参数太长（整张表、整段正文回抄）。
+                // 「静默收尾」会让用户看着一个做了一半的任务发呆——这里把原因追进正文，
+                // 让人知道该怎么办（换更小的参数、或用能自己写文档的工具）。
+                log.warn("Truncated tool_code persisted after corrections for {}, finishing with a visible note", conversationId);
+                content = content + "\n\n> 上一步的工具调用参数太长，模型输出被截断了两次，这一步没有执行完。"
+                        + "常见原因是要写进文档的表格或正文被整段塞进了工具参数。"
+                        + "可以让我把这一步拆小（分几次写），或改用能直接把内容写进文档的工具重试。";
             }
 
             // 3. Check for Artifacts
