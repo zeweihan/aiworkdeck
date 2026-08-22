@@ -1,8 +1,15 @@
-// evidence.* — EvidenceLink (report text to source file links): review panel Evidence tab and stale bar
+// evidence.* — EvidenceLink (report text to source file links): review panel Sources tab and stale bar
 export default {
   view: {
     bySection: 'By Section',
     byParty: 'By Party',
+  },
+  filter: {
+    allSections: 'All sections',
+    allParties: 'All parties',
+  },
+  stat: {
+    total: '{count} total',
   },
   status: {
     all: 'All',
@@ -59,8 +66,10 @@ export default {
   rebindNoSelection: 'Select text in the document first',
   rebindFailed: 'Reassign failed',
   rebindRetryHint: 'The new bookmark is already in the document; tap Confirm again to retry.',
-  keepGone: 'This text is no longer in the document, so the link cannot be kept. Use Reassign in the Evidence tab.',
+  keepGone: 'This text is no longer in the document, so the link cannot be kept. Use Reassign in the Sources tab.',
   orphanGoto: 'The anchor for this text is no longer in the document. Tap Reassign to pick new text.',
+  confidence: 'Confidence {value}',
+  loading: 'Loading…',
   loadFailed: 'Failed to load links',
   opFailed: 'Operation failed',
   deleteConfirm: 'Delete this link? The source file will not be deleted.',

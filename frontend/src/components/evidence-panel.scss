@@ -1,0 +1,91 @@
+// evidence-panel.scss — EvidencePanel.vue（审阅面板「底稿」页）的样式实体。
+// 外置形制照 project-overview.vue + project-overview.scss 那套（见 .claude/agents/sidebar-shell.md）。
+// 配色红线：外壳保持浅色（白/#F8F9FA + 森林绿 #1A5336 / mint #5BD197 点缀），不要引入深色 chrome。
+
+.ep { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+// ---- 统计条（兼状态筛选）----
+.ep-stats { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 10px 0; }
+.ep-stat { padding: 1px 7px; border-radius: 10px; font-size: 11px; color: #495057;
+  background: #F1F3F5; border: 1px solid transparent; }
+.ep-stat.total { color: #1A5336; background: #E6F9F0; }
+.ep-stat.active { color: #1A5336; background: #E6F9F0; }
+.ep-stat.unverified { color: #495057; background: #F1F3F5; }
+.ep-stat.stale { color: #8A5A00; background: #FFF7E6; }
+.ep-stat.orphan { color: #991B1B; background: #FEF2F2; }
+// 计数为 0 的那类淡掉，但仍然列出来——统计要完整，不能因为是 0 就不显示
+.ep-stat.zero { opacity: 0.5; }
+.ep-stat.on { border-color: #1A5336; font-weight: 600; opacity: 1; }
+
+// ---- 视图切换 + 维度筛选 ----
+.ep-bar { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px 0; gap: 6px; }
+.ep-seg { display: flex; border: 1px solid #DEE2E6; border-radius: 6px; overflow: hidden; background: #fff; flex: none; }
+.ep-seg-btn { padding: 3px 9px; font-size: 12px; color: #495057; }
+.ep-seg-btn.on { background: #E6F9F0; color: #1A5336; font-weight: 600; }
+.ep-filter { flex: 1; min-width: 0; }
+.ep-filter-btn { display: block; padding: 3px 9px; border: 1px solid #DEE2E6; border-radius: 6px;
+  font-size: 12px; color: #495057; background: #fff;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ep-filter-btn.on { border-color: #5BD197; color: #1A5336; }
+
+.ep-rebind { margin: 8px 10px 0; padding: 7px 9px; border-radius: 6px; background: #FFF7E6; border: 1px solid #FFD591; }
+.ep-rebind-hint { display: block; font-size: 12px; color: #8A5A00; line-height: 1.5; }
+.ep-rebind-acts { display: flex; gap: 6px; margin-top: 6px; }
+.ep-error { margin: 8px 10px 0; padding: 6px 8px; border-radius: 6px; background: #FEF2F2; color: #991B1B; font-size: 12px; }
+
+// ---- 列表 ----
+.ep-list { flex: 1; min-height: 0; padding: 8px 10px; }
+.ep-loading { padding: 28px 6px; }
+.ep-loading-t { font-size: 12px; color: #ADB5BD; }
+.ep-empty { padding: 28px 6px; display: flex; flex-direction: column; gap: 6px; }
+.ep-empty-t { font-size: 13px; color: #495057; }
+.ep-empty-s { font-size: 12px; color: #ADB5BD; line-height: 1.5; }
+.ep-group-head { display: flex; align-items: center; gap: 6px; padding: 4px 2px; margin-top: 2px; }
+.ep-group-head.sub { padding-left: 12px; }
+.ep-group-caret { width: 12px; font-size: 12px; color: #868E96; font-family: monospace; }
+.ep-group-title { flex: 1; font-size: 12px; color: #495057; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ep-group-head.sub .ep-group-title { font-weight: 400; color: #868E96; }
+.ep-group-count { font-size: 11px; color: #ADB5BD; }
+
+// ---- 卡片 ----
+.ep-card { margin: 4px 0 8px; padding: 8px 9px; background: #fff; border: 1px solid #E9ECEF; border-radius: 8px; border-left-width: 3px; }
+.ep-card.indent { margin-left: 12px; }
+.ep-card.st-active { border-left-color: #5BD197; }
+.ep-card.st-unverified { border-left-color: #CED4DA; }
+.ep-card.st-stale { border-left-color: #F5B30E; background: #FFFBEB; }
+.ep-card.st-orphan { border-left-color: #EF4444; background: #FEF2F2; }
+.ep-card.rebinding { outline: 2px solid #F5B30E; }
+.ep-card-top { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.ep-dot { width: 8px; height: 8px; border-radius: 50%; background: #CED4DA; }
+.ep-dot.active { background: #22C55E; }
+.ep-dot.stale { background: #F5B30E; }
+.ep-dot.orphan { background: #EF4444; }
+.ep-status-txt { font-size: 11px; color: #495057; }
+.ep-kind { padding: 0 5px; border-radius: 4px; font-size: 10px; background: #EEF2FF; color: #3730A3; }
+.ep-count { margin-left: auto; font-size: 11px; color: #ADB5BD; }
+.ep-anchor { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  font-size: 13px; color: #2C3338; line-height: 1.5; word-break: break-all; }
+
+// ---- 底稿位置（target）----
+.ep-target { margin-top: 6px; padding: 5px 7px; border-radius: 6px; background: #F8F9FA; }
+.ep-target.gone { opacity: 0.55; }
+.ep-target-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ep-target-row + .ep-target-row { margin-top: 3px; }
+.ep-target-name { flex: 1; min-width: 0; font-size: 12px; color: #1A5336; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ep-target-loc { font-size: 11px; color: #868E96; }
+.ep-quote { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  margin-top: 3px; padding-left: 6px; border-left: 2px solid #DEE2E6;
+  font-size: 11px; color: #6C757D; line-height: 1.45; word-break: break-all; }
+.ep-chip { padding: 0 6px; border-radius: 4px; font-size: 11px; background: #E6F9F0; color: #1A5336; }
+.ep-chip.none { background: #F1F3F5; color: #868E96; }
+.ep-chip.conf { background: #EEF2FF; color: #3730A3; }
+.ep-chip.rel.contradicts { background: #FEF2F2; color: #991B1B; }
+.ep-chip.rel.partial { background: #FFF7E6; color: #8A5A00; }
+.ep-chip.pick { background: #fff; border: 1px solid #DEE2E6; color: #495057; }
+.ep-chip.pick.on { border-color: #5BD197; color: #1A5336; }
+.ep-target-rm { margin-left: auto; font-size: 11px; color: #ADB5BD; }
+.ep-method-picker { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.ep-acts { display: flex; gap: 6px; margin-top: 7px; }
+.ep-act { padding: 2px 10px; border: 1px solid #DEE2E6; border-radius: 6px; font-size: 12px; color: #495057; background: #fff; }
+.ep-act.ok { border-color: #5BD197; color: #1A5336; }
+.ep-act.no { border-color: #FCA5A5; color: #991B1B; }

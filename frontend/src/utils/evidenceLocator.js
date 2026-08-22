@@ -33,6 +33,17 @@ export function locatorSummary(loc, t) {
   }
 }
 
+/**
+ * 定位符里的引文原文（pdf / docx / web 三型可能带 quote），供「底稿」页显示引文摘要。
+ * 没有 quote 就返回空串——**留空，不拿文件名或摘要顶替**（EVIDENCE_CONTRACT 不变式：
+ * 面板上看到的引文必须是真从底稿里取的那一段）。max 为 0/负数时不截断。
+ */
+export function locatorQuote(loc, max = 60) {
+  const q = loc && typeof loc.quote === 'string' ? loc.quote.trim() : ''
+  if (!q) return ''
+  return max > 0 && q.length > max ? q.slice(0, max) + '…' : q
+}
+
 // 解包：接受包装 https 链接、裸 checkba://filelink、以及 checkba:/filelink 这种单斜杠写法。
 // 非 filelink 或缺 k → null。t 解析成 Number（非法/缺省 → null）。
 export function parseFileLinkUrl(raw) {
