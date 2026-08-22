@@ -18,6 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.hamcrest.Matchers.containsString;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -88,6 +89,15 @@ class IdorAuthIntegrationTest {
         // bob 不能列尽调清单
         mvc.perform(get("/api/dd/projects/" + projectId).header("X-Session-Id", bob))
                 .andExpect(jsonPath("$.code").value(1));
+
+        // bob 不能往 alice 的项目里导网核 zip（会在项目里落文件，必须按写权限拦在 Service 入口）
+        mvc.perform(multipart("/api/projects/" + projectId + "/web-verify/import")
+                        .file(new org.springframework.mock.web.MockMultipartFile(
+                                "file", "网核.zip", "application/zip", new byte[]{1, 2, 3}))
+                        .param("partyName", "某某科技有限公司")
+                        .header("X-Session-Id", bob))
+                .andExpect(jsonPath("$.code").value(1))
+                .andExpect(jsonPath("$.message").value(containsString("无权")));
 
         // alice（创建者/成员）可以正常读自己的项目
         mvc.perform(get("/api/projects/" + projectId).header("X-Session-Id", alice))
