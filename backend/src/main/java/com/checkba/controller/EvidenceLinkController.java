@@ -8,6 +8,10 @@ import com.checkba.service.evidence.EvidenceLinkViews.AnchorReportResult;
 import com.checkba.service.evidence.EvidenceLinkViews.LinkView;
 import com.checkba.service.evidence.EvidenceLinkViews.TargetInput;
 import com.checkba.service.evidence.EvidenceLinkViews.TargetView;
+import com.checkba.service.evidence.EvidenceVerifyService;
+import com.checkba.service.evidence.EvidenceVerifyViews.BatchQuery;
+import com.checkba.service.evidence.EvidenceVerifyViews.BatchResult;
+import com.checkba.service.evidence.EvidenceVerifyViews.LinkVerdict;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -38,6 +42,7 @@ public class EvidenceLinkController {
     private static final String KEY = "{linkKey:[A-Za-z0-9_]+}";
 
     private final EvidenceLinkService svc;
+    private final EvidenceVerifyService verifySvc;
     private final ProjectMemberService projectMemberService;
 
     private Long uid(String sessionId) {
@@ -145,6 +150,38 @@ public class EvidenceLinkController {
         return svc.keepAnchor(uid(sessionId), projectId, linkKey, r == null ? null : r.getText());
     }
 
+    // ---------------------------------------------------------------- 勾稽核查（P2，dev-board#116）
+
+    /** 核查单条：陈述 ↔ 底稿一致性判定，结论落到各 target 的 relation/confidence/verify_json。 */
+    @PostMapping("/" + KEY + "/verify")
+    public LinkVerdict verifyLink(@PathVariable Long projectId,
+                                  @PathVariable String linkKey,
+                                  @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        return verifySvc.verifyLink(uid(sessionId), projectId, linkKey);
+    }
+
+    /**
+     * 批量核查：body {docFileId, sectionPath?, status?, offset?, limit?}。
+     * 单次上限 {@link EvidenceVerifyService#MAX_BATCH_LINKS}，撞上限/超时/被取消都会回 nextOffset，原样再调即续跑。
+     */
+    @PostMapping("/verify")
+    public BatchResult verifyBatch(@PathVariable Long projectId,
+                                   @RequestBody(required = false) VerifyBatchReq r,
+                                   @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        if (r == null || r.getDocFileId() == null) {
+            throw new IllegalArgumentException(LangText.of("docFileId 必填", "docFileId required"));
+        }
+        return verifySvc.verifyBatch(uid(sessionId), projectId,
+                new BatchQuery(r.getDocFileId(), r.getSectionPath(), r.getStatus(), r.getOffset(), r.getLimit()));
+    }
+
+    /** 取消本人在该项目里正在跑的批量核查；没有在跑的回 {cancelled:false}。 */
+    @PostMapping("/verify/cancel")
+    public Map<String, Object> cancelVerify(@PathVariable Long projectId,
+                                            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        return Map.of("cancelled", verifySvc.cancelBatch(uid(sessionId), projectId));
+    }
+
     /** 用户「重新指定」，body {newLinkKey, anchorText, sectionPath, sectionTitle}。 */
     @PostMapping("/" + KEY + "/rebind")
     public LinkView rebind(@PathVariable Long projectId,
@@ -175,6 +212,15 @@ public class EvidenceLinkController {
     @Data
     public static class KeepReq {
         private String text;
+    }
+
+    @Data
+    public static class VerifyBatchReq {
+        private Long docFileId;
+        private String sectionPath;
+        private String status;
+        private Integer offset;
+        private Integer limit;
     }
 
     @Data
