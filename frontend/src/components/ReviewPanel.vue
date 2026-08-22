@@ -16,7 +16,7 @@
 
     <view v-if="error && tab !== 'evd'" class="rp-error">{{ error }}</view>
 
-    <!-- 证据页：独立组件、v-show 常驻（tab 上要显示计数，且切页不丢筛选/折叠态） -->
+    <!-- 底稿页：独立组件、v-show 常驻（tab 上要显示计数，且切页不丢筛选/折叠态） -->
     <EvidencePanel
       v-show="tab === 'evd'"
       :executor="executor"
@@ -98,7 +98,7 @@ export default {
     executor: { type: Object, default: null },
     // 宿主用它在文档改动后要求刷新（自增数字即可）。
     refreshKey: { type: Number, default: 0 },
-    // 「证据」页要的：项目与当前文档（ProjectFile.id）。缺省时证据页为空。
+    // 「底稿」页要的：项目与当前文档（ProjectFile.id）。缺省时底稿页为空。
     projectId: { type: [Number, String], default: null },
     docFileId: { type: [Number, String], default: null },
   },
