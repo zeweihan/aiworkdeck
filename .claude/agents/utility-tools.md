@@ -11,6 +11,8 @@ description: 辅助小工具领域。任务涉及浏览器面板、截图/OCR、
 
 **浏览器**：`frontend/src/components/BrowserPane.vue`；desktop `desktop/main/browser-views.js`（BrowserView 注册表）+ `desktop/main/main.js`（`makeBrowserView` 建 view 并接事件、window.open 拦截转工作区新 tab → 事件 `checkba:browser-open-new-tab`、全屏/黑屏兜底恢复、IPC handlers）；后端 `controller/BrowserProxyController.java`（GET /api/browser/proxy）。
 
+**红线：不做自动网核抓取**。维护者 2026-08-21 拍板「网核只留接口，不做自动逐站爬取，不碰验证码与合规风险」。别在浏览器面板/截图链路上做「输入公司名自动跑一遍企业信用公示/裁判文书/失信被执行人」这类批量抓取——尽调的网核走离线适配层（用户手工把外部工具导出的 zip 交进来，`service/evidence/webverify/`，见 `.claude/agents/ai-doc-bridge.md`「P3 网核 zip 接入」节）。浏览器面板仍是给律师自己开网页看、随手收藏、随手截图的地方，这条红线不影响它。
+
 **BrowserView 生命周期（改这块之前必读）**：**面板卸载 = detach（保活），标签关闭 = destroy**。
 切标签会把 BrowserPane 整个卸载（project-overview 里是 `v-if` + `:key=tab.id`），如果卸载即销毁，
 用户翻到的那一页（页内跳转、滚动位置、填了一半的表单、页面里的登录态）就全没了，

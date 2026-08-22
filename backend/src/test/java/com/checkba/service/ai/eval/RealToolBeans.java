@@ -22,6 +22,7 @@ import com.checkba.service.ai.tools.TemplateTools;
 import com.checkba.service.ai.tools.TextFileEditTools;
 import com.checkba.service.ai.tools.TodoTools;
 import com.checkba.service.ai.tools.WebTools;
+import com.checkba.service.ai.tools.WebVerifyTools;
 
 import java.lang.reflect.Constructor;
 import java.util.ArrayList;
@@ -70,7 +71,8 @@ final class RealToolBeans {
                 TagTools.class,
                 TaskTools.class,
                 TemplateTools.class,
-                WebTools.class);
+                WebTools.class,
+                WebVerifyTools.class);
         List<AgentToolComponent> beans = new ArrayList<>();
         for (Class<? extends AgentToolComponent> type : toolClasses) {
             beans.add(instantiate(type));
