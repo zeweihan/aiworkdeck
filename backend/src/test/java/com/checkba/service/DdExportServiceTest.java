@@ -194,6 +194,22 @@ class DdExportServiceTest {
     // ------------------------------------------------------------ 分组正确性：缺口清单
 
     @Test
+    @org.junit.jupiter.api.DisplayName("缺口清单：模型写成「【待补充证据清单】」也要收（严格正则会静默漏掉真实缺口）")
+    void gapsCatchLooseWordings() {
+        String body = String.join("\n",
+                "第一段。【待补：收购人 的 营业执照（用于主体资格）】",
+                "第二段。【待补充证据清单：一致行动人董监高选举决议】",
+                "第三段。【待补 上市公司前十名股东名册】",
+                "第四段。【待补充：履行到期债务证明】");
+        List<DdExportService.GapRow> rows = DdExportService.buildGaps(body, List.of());
+        assertEquals(4, rows.size(), "四种写法都要收: " + rows);
+        assertTrue(rows.stream().anyMatch(r -> r.content().contains("营业执照")), rows.toString());
+        assertTrue(rows.stream().anyMatch(r -> r.content().contains("选举决议")), rows.toString());
+        assertTrue(rows.stream().anyMatch(r -> r.content().contains("股东名册")), rows.toString());
+        assertTrue(rows.stream().anyMatch(r -> r.content().contains("到期债务")), rows.toString());
+    }
+
+    @Test
     @DisplayName("缺口清单：正则抽取【待补：…】占位符 + 项目里全部 orphan 状态的 link")
     void buildGapsExtractsPlaceholdersAndOrphans() {
         String body = "公司设立情况如上所述。注册资本【待补：验资报告】，控股股东【待补：持股比例】情况见附表。";

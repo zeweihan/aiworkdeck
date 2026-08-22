@@ -79,8 +79,12 @@ public class DdExportService {
     public static final String DELIVERABLE_FOLDER = "_交付件";
 
     private static final int TRUNCATE_LEN = 80;
-    /** 正文占位符：【待补：xxx】，容忍模型偶尔写成半角冒号。 */
-    private static final Pattern GAP_PLACEHOLDER = Pattern.compile("【待补[:：]([^】]*)】");
+    /**
+     * 正文占位符：【待补：xxx】。冒号半角全角都收，「待补充」也收，冒号缺失也收——
+     * 实测模型会写成「【待补充证据清单…】」，原来的严格正则把真实缺口静默漏掉了；
+     * 缺口清单这份交付件最不该有的失败方式就是「少列了一条还不吭声」。
+     */
+    private static final Pattern GAP_PLACEHOLDER = Pattern.compile("【待补(?:充)?[:：]?\\s*([^】]*)】");
     /** EvidenceLinkTarget.METHODS 的展示顺序；""（未注明）固定排最后。 */
     private static final List<String> METHOD_ORDER =
             List.of("written_review", "written_statement", "web_check", "third_party", "interview", "");
