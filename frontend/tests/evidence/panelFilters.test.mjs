@@ -1,4 +1,4 @@
-// 审阅面板「底稿」页（P2，dev-board#117）：章节树两级分组、三重筛选、顶部统计的纯函数，
+// 审阅面板「底稿」页（P2，dev-board#120）：章节树两级分组、三重筛选、顶部统计的纯函数，
 // 外加把 EvidencePanel.vue 的 <script> 抽出来跑一遍 computed 链（同
 // tests/project-home/review-panel-double-tap.test.mjs 的路子：剥掉 import 行，
 // 依赖当形参喂进去），确认「筛选 → 分组 → 拍平成行」这条链真的接上了。
