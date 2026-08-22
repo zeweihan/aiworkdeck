@@ -2,6 +2,8 @@ package com.checkba.service.ai.tools;
 
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
+import com.checkba.service.ProjectFileService;
+import com.checkba.service.ai.StyleProfileResolver;
 import com.checkba.service.ai.context.ProjectContextHolder;
 import com.checkba.storage.StorageService;
 import com.checkba.storage.StorageServiceFactory;
@@ -13,6 +15,9 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.springframework.core.io.ClassPathResource;
 
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
 
@@ -45,7 +50,107 @@ class TemplateToolsTest {
                 .thenReturn(new ClassPathResource("fixtures/template-sample.docx"));
         StorageServiceFactory factory = Mockito.mock(StorageServiceFactory.class);
         Mockito.when(factory.getStorageService()).thenReturn(storage);
-        return new TemplateTools(repo, factory);
+        return new TemplateTools(repo, factory, null);
+    }
+
+    private static ProjectFile folder(long id, long projectId, String name) {
+        ProjectFile f = new ProjectFile();
+        f.setId(id);
+        f.setProjectId(projectId);
+        f.setName(name);
+        f.setIsFolder(true);
+        f.setFileType("folder");
+        return f;
+    }
+
+    @Test
+    @DisplayName("学完自己落盘 _模板/画像.json：建夹 + 建文件 + 存字节，返回带 savedProfileFileId")
+    void savesProfileIntoProject() {
+        ProjectContextHolder.setProjectId("7");
+        ProjectFileRepository repo = Mockito.mock(ProjectFileRepository.class);
+        Mockito.when(repo.findById(1L)).thenReturn(Optional.of(file(1L, 7L, "模板.docx", "docx")));
+        Mockito.when(repo.findByProjectIdAndParentIdAndNameAndIsDeletedFalse(7L, 90L, StyleProfileResolver.PROFILE_FILE))
+                .thenReturn(Optional.empty());
+        ProjectFileService pfs = Mockito.mock(ProjectFileService.class);
+        Mockito.when(pfs.ensureFolderPath(7L, 10001L, List.of(StyleProfileResolver.TEMPLATE_FOLDER)))
+                .thenReturn(folder(90L, 7L, StyleProfileResolver.TEMPLATE_FOLDER));
+        Mockito.when(pfs.createFile(Mockito.eq(7L), Mockito.eq(90L), Mockito.eq(StyleProfileResolver.PROFILE_FILE),
+                        Mockito.eq("json"), Mockito.anyLong(), Mockito.isNull(), Mockito.isNull(), Mockito.eq(10001L)))
+                .thenReturn(file(91L, 7L, StyleProfileResolver.PROFILE_FILE, "json"));
+
+        StorageService storage = Mockito.mock(StorageService.class);
+        Mockito.when(storage.load(Mockito.anyString())).thenReturn(new ClassPathResource("fixtures/template-sample.docx"));
+        StorageServiceFactory factory = Mockito.mock(StorageServiceFactory.class);
+        Mockito.when(factory.getStorageService()).thenReturn(storage);
+
+        String out = new TemplateTools(repo, factory, pfs).docx_inspect_template("1", null);
+        StyleProfile p = StyleProfiles.parse(out);
+        assertEquals(91L, p.root().get("savedProfileFileId").asLong(), out);
+        assertEquals("_模板/画像.json", p.root().get("savedProfilePath").asText());
+        assertFalse(p.root().has("saveError"), out);
+
+        org.mockito.ArgumentCaptor<InputStream> bytes = org.mockito.ArgumentCaptor.forClass(InputStream.class);
+        Mockito.verify(storage).save(Mockito.eq("projects/7/画像.json"), bytes.capture());
+        String written = new String(readAll(bytes.getValue()), StandardCharsets.UTF_8);
+        // 存的是干净画像本身：解析得回来，且不含只给模型看的落盘回执字段
+        StyleProfile reparsed = StyleProfiles.parse(written);
+        assertEquals("楷体_GB2312", reparsed.body().font().eastAsia());
+        assertFalse(written.contains("savedProfileFileId"), written.substring(0, Math.min(200, written.length())));
+    }
+
+    @Test
+    @DisplayName("已有画像：就地覆盖同一个 fileId，不生成「画像 (1).json」")
+    void overwritesExistingProfile() {
+        ProjectContextHolder.setProjectId("7");
+        ProjectFileRepository repo = Mockito.mock(ProjectFileRepository.class);
+        Mockito.when(repo.findById(1L)).thenReturn(Optional.of(file(1L, 7L, "模板.docx", "docx")));
+        ProjectFile old = file(55L, 7L, StyleProfileResolver.PROFILE_FILE, "json");
+        Mockito.when(repo.findByProjectIdAndParentIdAndNameAndIsDeletedFalse(7L, 90L, StyleProfileResolver.PROFILE_FILE))
+                .thenReturn(Optional.of(old));
+        ProjectFileService pfs = Mockito.mock(ProjectFileService.class);
+        Mockito.when(pfs.ensureFolderPath(7L, 10001L, List.of(StyleProfileResolver.TEMPLATE_FOLDER)))
+                .thenReturn(folder(90L, 7L, StyleProfileResolver.TEMPLATE_FOLDER));
+
+        StorageService storage = Mockito.mock(StorageService.class);
+        Mockito.when(storage.load(Mockito.anyString())).thenReturn(new ClassPathResource("fixtures/template-sample.docx"));
+        StorageServiceFactory factory = Mockito.mock(StorageServiceFactory.class);
+        Mockito.when(factory.getStorageService()).thenReturn(storage);
+
+        String out = new TemplateTools(repo, factory, pfs).docx_inspect_template("1", null);
+        assertEquals(55L, StyleProfiles.parse(out).root().get("savedProfileFileId").asLong());
+        Mockito.verify(pfs, Mockito.never()).createFile(Mockito.anyLong(), Mockito.anyLong(), Mockito.anyString(),
+                Mockito.anyString(), Mockito.anyLong(), Mockito.any(), Mockito.any(), Mockito.anyLong());
+        Mockito.verify(storage).save(Mockito.eq(old.getFilePath()), Mockito.any(InputStream.class));
+    }
+
+    @Test
+    @DisplayName("落盘失败：画像照样返回，但带上让模型自己 write_file 的 saveError")
+    void saveFailureIsVisible() {
+        ProjectContextHolder.setProjectId("7");
+        ProjectFileRepository repo = Mockito.mock(ProjectFileRepository.class);
+        Mockito.when(repo.findById(1L)).thenReturn(Optional.of(file(1L, 7L, "模板.docx", "docx")));
+        ProjectFileService pfs = Mockito.mock(ProjectFileService.class);
+        Mockito.when(pfs.ensureFolderPath(Mockito.anyLong(), Mockito.anyLong(), Mockito.anyList()))
+                .thenThrow(new IllegalStateException("磁盘满"));
+
+        StorageService storage = Mockito.mock(StorageService.class);
+        Mockito.when(storage.load(Mockito.anyString())).thenReturn(new ClassPathResource("fixtures/template-sample.docx"));
+        StorageServiceFactory factory = Mockito.mock(StorageServiceFactory.class);
+        Mockito.when(factory.getStorageService()).thenReturn(storage);
+
+        String out = new TemplateTools(repo, factory, pfs).docx_inspect_template("1", null);
+        StyleProfile p = StyleProfiles.parse(out);
+        assertTrue(p.root().get("saveError").asText().contains("磁盘满"), out);
+        assertTrue(p.root().get("saveError").asText().contains("write_file"), out);
+        assertEquals("楷体_GB2312", p.body().font().eastAsia());
+    }
+
+    private static byte[] readAll(InputStream in) {
+        try (InputStream i = in) {
+            return i.readAllBytes();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     @Test
