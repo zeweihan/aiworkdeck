@@ -33,7 +33,7 @@ description: AI↔文档编辑桥接领域。任务涉及 doc_*/sheet_*/slide_* 
 - `backend/src/main/java/com/checkba/service/ai/tools/SlideEditTools.java` — slide_* 演示文稿（Impress）原语，独立文件（不塞进 DocumentEditTools，后者已 70+ 方法），`List<AgentToolComponent>` 自动发现，ToolRegistry 无需改动。当前只有设计 Phase 1 的 7 个原语，见下方专节。
 - `backend/src/main/java/com/checkba/util/DocxStyleHelper.java` — write_docx/AiDocxExportService 两条 flexmark 生成路径的样式：`applyProfile(pkg, StyleProfile)` 在 render 后、save 前调用；`applyStandardFormat(pkg)` = `applyProfile(pkg, StyleProfiles.houseDefault())`。数值不再写在代码里，单源是 `backend/src/main/resources/style-profiles/house-default.json`（见下方「样式画像 styleProfile」节）。
 - `backend/src/main/java/com/checkba/util/style/` — `StyleProfile`（Jackson 树 + 类型化访问器 + 叶子 merge）、`StyleProfiles`（houseDefault/parse/toJson）、`Units`/`DocxStyleWriter`（单位换算与 wml 落法）、`DocxProfileReader`（docx4j 直读模板 → 画像）。
-- `backend/src/main/java/com/checkba/service/ai/tools/TemplateTools.java` — `docx_inspect_template(fileIds, options?)`：学习团队模板 → styleProfile v1 JSON；`.doc` 返回「另存 docx 或编辑器打开后学习」提示不报错。
+- `backend/src/main/java/com/checkba/service/ai/tools/TemplateTools.java` — `docx_inspect_template(fileIds, options?)`：学习团队模板 → styleProfile v1 JSON，并**自己写进项目 `_模板/画像.json`**（同名就地覆盖，返回值带 `savedProfileFileId`/`savedProfilePath`，失败带 `saveError`）——写端只认这个文件，别让模型转抄；`.doc` 返回「另存 docx 或编辑器打开后学习」提示不报错。
 - `backend/src/main/java/com/checkba/service/ai/StyleProfileResolver.java` — 写端画像解析顺序：工具显式 `styleProfileJson` > 项目 `_模板/画像.json` > SystemSetting `dd.styleProfile.default` > house-default；选中的画像总 merge 到 house-default 上补齐缺省叶子。
 - `backend/src/main/java/com/checkba/service/ai/tools/CheckpointTools.java` — `doc_restore_checkpoint`。
 - `backend/src/main/java/com/checkba/service/ai/tools/ToolMeta.java` — `@ToolMeta(displayName/category/fileEffect)`；`fileEffect="MODIFIED"` 是检查点触发依据。
@@ -208,7 +208,7 @@ txt/md/markdown 自 dev-board#37 起不进 LOWA（前端走 PlainTextEditor.vue�
 - `table`：`borders.source ∈ cell|table|style|none` + `outside/insideH/insideV {style,width,color}`（source=cell 时写端同时落 `tcBorders`）；`columnWidths {mode: twips|percent|cm, samples: [[...]]}`（写端挑列数相符的样本落 `tblGrid`+`tcW`+`tblLayout fixed`）；`header {rows, repeatOnEachPage, bold, alignment, verticalAlign, fill}`；`cell.byContentType {text|number|date|serial: {alignment}}`（分类正则 `DocxProfileReader.classifyCell`，与旧 NUMERIC_CELL 同源）；`zebra`。
 - `page`：`size {width,height,orientation}`（mm，1 位小数）、`margins`（cm）、`docGrid {type, linePitch}`。`headerFooter.footer.pageNumber {enabled, pattern: "第 {PAGE} 页 共 {NUMPAGES} 页", alignment, format, start}`（写端拆成文本 run + FldChar 域）。`toc {enabled, levels: "1-2", hyperlinks, title}`（写端插 TOC 域 + `settings.xml updateFields`，主标题之后）。
 - 读端口径：样式链 docDefaults → basedOn 递归 → 本样式给声明值；主题字体槽位（minorHAnsi 之类）查 theme1.xml 解析成实际名并保留 `theme` 槽位名；表格三层边框不合并只判定层级。
-- 工具链：`docx_inspect_template` 产出 → 存项目 `_模板/画像.json` → `write_docx(..., styleProfileJson?)` 缺省自动取用（顺序见 `StyleProfileResolver`）。
+- 工具链：`docx_inspect_template` 产出并**自行落盘** `_模板/画像.json` → `doc_apply_style_profile` / `write_docx(..., styleProfileJson?)` 缺省自动取用（顺序见 `StyleProfileResolver`）。2026-08-22 前这一步靠模型 `write_file` 转抄，实测掉字段（黄金对照 B v6/v7 正文字体没套上）。
 - fixtures：`backend/src/test/resources/fixtures/gen-template-sample.py`（python-docx 生成 `template-sample.docx`，改 fixture 改脚本重跑）、`house-parity.md` + `house-before.json`（对拍基线）。
 
 ## 命名双轨现状（PR#192，下个发布周期摘旧名）
