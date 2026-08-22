@@ -21,10 +21,19 @@
     },
     "expect": {
       "toolCalls": [
-        { "name": "create_folder", "argsContain": { "folderName": "尽调材料" } }
+        {
+          "name": "create_folder",
+          "argsContain": {
+            "folderName": "尽调材料"
+          }
+        }
       ],
-      "promptContains": ["标签未闭合"],
-      "structureContains": ["<final>"],
+      "promptContains": [
+        "标签未闭合"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
       "bubbleEndStatus": "finished"
     }
   },
@@ -47,10 +56,48 @@
     },
     "expect": {
       "toolCalls": [
-        { "name": "doc_find_replace", "argsContain": { "findText": "甲方", "replaceText": "委托方" } }
+        {
+          "name": "doc_find_replace",
+          "argsContain": {
+            "findText": "甲方",
+            "replaceText": "委托方"
+          }
+        }
       ],
-      "structureContains": ["<tool_output status=\"FAILURE\">", "<final>"],
+      "structureContains": [
+        "<tool_output status=\"FAILURE\">",
+        "<final>"
+      ],
       "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "truncated-tool-code-persists-tells-the-user",
+    "title": "两轮纠正后仍截断：收尾要把原因写进正文，不许静默做一半（dev-board#100 实测 4 次）",
+    "category": "files",
+    "protocol": "xml",
+    "userInput": "把这张表写进报告",
+    "turns": [
+      {
+        "text": "<process name=\"插入表格\"><tool_code>doc_insert_table(rowsJson=\"[[\\\"名称\\\",\\\"甲\\\"],[\\\"住所\\\""
+      },
+      {
+        "text": "<process name=\"插入表格\"><tool_code>doc_insert_table(rowsJson=\"[[\\\"名称\\\",\\\"甲\\\"],[\\\"住所\\\""
+      },
+      {
+        "text": "<process name=\"插入表格\"><tool_code>doc_insert_table(rowsJson=\"[[\\\"名称\\\",\\\"甲\\\"],[\\\"住所\\\""
+      }
+    ],
+    "toolStubs": {},
+    "expect": {
+      "promptContains": [
+        "标签未闭合"
+      ],
+      "bubbleEndStatus": "finished",
+      "structureContains": [
+        "参数太长",
+        "没有执行完"
+      ]
     }
   }
 ]
