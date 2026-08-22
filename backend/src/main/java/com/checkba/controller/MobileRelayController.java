@@ -65,8 +65,12 @@ public class MobileRelayController {
                 if (e != null) entries.add(new MobileRelayStoreService.DirEntry(e.getKey(), e.getName()));
             }
         }
-        store.replaceDirectory(userId, request.getDeviceId(), request.getDeviceName(), entries);
-        return Map.of("code", 0, "count", entries.size());
+        MobileRelayStoreService.DirectoryReplaceResult result =
+                store.replaceDirectory(userId, request.getDeviceId(), request.getDeviceName(), entries);
+        // truncated/totalCount 明确带回（尽调 P3#5）：桌面端据此判断本轮推送有没有被截断，
+        // 不能只看 HTTP 2xx 就当成"全部同步成功"。
+        return Map.of("code", 0, "count", result.storedCount(),
+                "totalCount", result.totalCount(), "truncated", result.truncated());
     }
 
     /** 手机端：该账号全部设备的项目目录并集（裸数组）。 */

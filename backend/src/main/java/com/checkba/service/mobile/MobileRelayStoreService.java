@@ -78,21 +78,37 @@ public class MobileRelayStoreService {
 
     public record DirEntry(String key, String name) {}
 
+    /**
+     * storedCount 是实际入库的条数（截断到 MAX_DIR_ENTRIES 时小于 totalCount）；
+     * truncated 供调用方（控制器/客户端日志）明确告警，不许静默丢。
+     */
+    public record DirectoryReplaceResult(int storedCount, int totalCount, boolean truncated) {}
+
     // ==================== 项目目录 ====================
 
+    /**
+     * 尽调模块 P3 稳定性余项 #5（dev-board#100）：超过 MAX_DIR_ENTRIES 此前直接抛异常
+     * 拒绝整批请求——桌面端 pushDirectory 每 10 分钟原样重推同一份超限清单，永远同样
+     * 失败，律师一条项目都同步不到手机端，且失败只在桌面日志里留一句 warn（没人会看）。
+     * 改成与 P0 修 MAX_IMPORT_ENTRIES 一致的口径：截断到上限而不是整批拒绝，
+     * DirectoryReplaceResult 明确带回 truncated/totalCount/storedCount 供调用方
+     * （控制器 API 响应 → 客户端日志）如实告警，不静默丢。
+     */
     @Transactional
-    public void replaceDirectory(Long userId, String deviceId, String deviceName, List<DirEntry> projects) {
+    public DirectoryReplaceResult replaceDirectory(Long userId, String deviceId, String deviceName, List<DirEntry> projects) {
         requireDeviceId(deviceId);
         if (projects == null) projects = List.of();
-        if (projects.size() > MAX_DIR_ENTRIES) {
-            throw new IllegalArgumentException(LangText.of("项目目录条数超限", "Too many directory entries"));
-        }
+        int totalCount = projects.size();
+        boolean truncated = totalCount > MAX_DIR_ENTRIES;
+        List<DirEntry> toStore = truncated ? projects.subList(0, MAX_DIR_ENTRIES) : projects;
+
         dirRepository.deleteByUserIdAndDeviceId(userId, deviceId);
         // Hibernate 的动作队列把 INSERT 排在实体级 DELETE 之前，同键重推会先撞唯一约束——
         // 删除必须先落库
         dirRepository.flush();
         LocalDateTime now = LocalDateTime.now();
-        for (DirEntry entry : projects) {
+        int stored = 0;
+        for (DirEntry entry : toStore) {
             if (entry == null || entry.key() == null || entry.key().isBlank()
                     || entry.name() == null || entry.name().isBlank()) {
                 continue;
@@ -105,7 +121,13 @@ public class MobileRelayStoreService {
             row.setName(truncate(entry.name().trim(), 512));
             row.setUpdatedAt(now);
             dirRepository.save(row);
+            stored++;
         }
+        if (truncated) {
+            log.warn("手机同步：项目目录条数超过上限，已截断: userId={}, deviceId={}, 总数={}, 上限={}, 已存={}",
+                    userId, deviceId, totalCount, MAX_DIR_ENTRIES, stored);
+        }
+        return new DirectoryReplaceResult(stored, totalCount, truncated);
     }
 
     /** 该账号全部设备的目录并集，按更新时间倒序（最近在线的桌面机排前面）。 */

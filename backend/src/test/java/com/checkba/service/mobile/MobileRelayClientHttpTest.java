@@ -63,6 +63,8 @@ class MobileRelayClientHttpTest {
     private final List<String> dirBodies = new CopyOnWriteArrayList<>();
     private final List<String> acked = new CopyOnWriteArrayList<>();
     private volatile String inboxJson = "[]";
+    // 目录推送响应体：默认与旧行为一致（普通成功，无截断），尽调 P3#5 的截断告警用例改它。
+    private volatile String projectsResponseBody = "{\"code\":0}";
 
     // 假文件树：parentId+name → ProjectFile
     private final List<ProjectFile> tree = new ArrayList<>();
@@ -79,7 +81,7 @@ class MobileRelayClientHttpTest {
         });
         server.createContext("/api/mobile/projects", ex -> {
             dirBodies.add(readBody(ex.getRequestBody()));
-            respond(ex, 200, "{\"code\":0}");
+            respond(ex, 200, projectsResponseBody);
         });
         server.createContext("/api/mobile/inbox", ex -> {
             String path = ex.getRequestURI().getPath();
@@ -195,6 +197,41 @@ class MobileRelayClientHttpTest {
         svc.pushDirectory();
         assertEquals(1, dirBodies.size(), "清单没变不该重复出站");
         assertEquals(1, bridgeBodies.size(), "令牌已持久化，不该重复桥接");
+    }
+
+    /**
+     * 尽调模块 P3 稳定性余项 #5（dev-board#100）：服务端目录条数超上限时不再整批拒绝，
+     * 改成截断 + 在响应体里带 truncated/count 字段。桌面端必须把这件事吼出来（WARN 级
+     * 日志、点名总数/已同步数），不能让"HTTP 200 = 全部同步成功"的默认假设吞掉「其实
+     * 只同步了一部分」——旧代码整批拒绝时至少会在 log.warn 里带上 status/body，本条要
+     * 核验新的"部分成功"响应形态下告警同样不会被静默吃掉。
+     */
+    @Test
+    @DisplayName("目录推送被服务端截断：必须 WARN 级明确告警总数与已同步数，不能当普通成功悄悄放过")
+    void pushDirectoryTruncationIsLoudlyWarned() {
+        projectsResponseBody = "{\"code\":0,\"count\":1000,\"totalCount\":1005,\"truncated\":true}";
+        MobileRelayClientService svc = service();
+
+        ch.qos.logback.classic.Logger logbackLogger =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(MobileRelayClientService.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        logbackLogger.addAppender(appender);
+        try {
+            svc.pushDirectory();
+        } finally {
+            logbackLogger.detachAppender(appender);
+        }
+
+        assertEquals(1, dirBodies.size(), "推送本身仍要正常发出去（截断是服务端的事，不是客户端拒绝推送）");
+        boolean warnedWithNumbers = appender.list.stream().anyMatch(e ->
+                e.getLevel() == ch.qos.logback.classic.Level.WARN
+                        && e.getFormattedMessage().contains("1005")
+                        && e.getFormattedMessage().contains("1000"));
+        assertTrue(warnedWithNumbers, "截断必须有一条 WARN 日志点名总数(1005)与已同步数(1000)，实际日志：" +
+                appender.list.stream().map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+                        .collect(java.util.stream.Collectors.joining(" | ")));
     }
 
     @Test

@@ -94,6 +94,48 @@ class MobileRelayStoreServiceTest {
         assertTrue(service.listDirectory(2L).isEmpty());
     }
 
+    /**
+     * 尽调模块 P3 稳定性余项 #5（dev-board#100）：目录条数超过 MAX_DIR_ENTRIES（1000）
+     * 时，旧实现直接抛 IllegalArgumentException——桌面端 pushDirectory 整批推送失败，
+     * 一条项目都进不了库，且客户端只把这次失败按普通网络故障 log.warn 一句（律师根本
+     * 看不到桌面日志），此后每 10 分钟原样重推同一份超限清单，永远同样失败、永远无声。
+     * 改成与 P0 修 MAX_IMPORT_ENTRIES 一致的口径：截断到上限、明确返回截断信息，不
+     * 拒绝整批请求——律师至少能同步到最近的 1000 个项目，而不是一个都同步不到。
+     */
+    @Test
+    @DisplayName("目录条数超过上限：不再整批拒绝，截断到上限并如实报告截断信息")
+    void directoryOverLimitIsTruncatedNotRejected() {
+        List<MobileRelayStoreService.DirEntry> entries = new java.util.ArrayList<>();
+        for (int i = 0; i < 1005; i++) {
+            entries.add(new MobileRelayStoreService.DirEntry(String.valueOf(i), "project-" + i));
+        }
+
+        MobileRelayStoreService.DirectoryReplaceResult result =
+                service.replaceDirectory(1L, "dev-a", "Mac", entries);
+
+        assertTrue(result.truncated(), "超过上限必须如实报告 truncated=true，不能装作全部存下了");
+        assertEquals(1005, result.totalCount(), "totalCount 要是调用方传入的真实总数");
+        assertEquals(1000, result.storedCount(), "storedCount 应该等于上限，不多不少");
+        assertEquals(1000, service.listDirectory(1L).size(),
+            "数据库里实际存下的行数必须等于上限——截断而不是静默丢弃或异常拒绝整批");
+    }
+
+    @Test
+    @DisplayName("目录条数不超上限：truncated=false，行为与旧版一致")
+    void directoryWithinLimitIsNotTruncated() {
+        List<MobileRelayStoreService.DirEntry> entries = List.of(
+                new MobileRelayStoreService.DirEntry("42", "金冠纾困"),
+                new MobileRelayStoreService.DirEntry("43", "probe"));
+
+        MobileRelayStoreService.DirectoryReplaceResult result =
+                service.replaceDirectory(1L, "dev-a", "Mac", entries);
+
+        assertFalse(result.truncated());
+        assertEquals(2, result.totalCount());
+        assertEquals(2, result.storedCount());
+        assertEquals(2, service.listDirectory(1L).size());
+    }
+
     @Test
     @DisplayName("影像入库幂等：同 clientMediaId 重传返回既有记录，blob 不被改写")
     void mediaStoreIsIdempotent() throws Exception {
