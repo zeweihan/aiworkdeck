@@ -132,6 +132,8 @@ const NAMES = {
   doc_set_hyperlink: { zh: '设置超链接', en: 'Set hyperlink' },
   doc_link_evidence: { zh: '关联底稿', en: 'Link evidence' },
   doc_list_evidence: { zh: '查看底稿关联', en: 'List evidence links' },
+  dd_export: { zh: '导出尽调交付件', en: 'Export due-diligence deliverable' },
+  evidence_verify: { zh: '勾稽核查', en: 'Verify evidence' },
   doc_insert_image: { zh: '插入图片', en: 'Insert image' },
   doc_set_style: { zh: '应用样式', en: 'Apply style' },
   // 电子表格（Calc / xlsx）sheet_* 原语

@@ -52,6 +52,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -100,6 +101,7 @@ class PluginHostImplTest {
         when(members.hasWritePermission(PROJECT, USER)).thenReturn(true);
         factory = new PluginHostFactory(projectFileService, projectFileRepository, storageServiceFactory, members,
                 documentTextService, ocrService, tagService, tagRepository, fileTagService, evidenceLinkService,
+                new com.checkba.service.evidence.EvidenceAnchorService(editorBridge, evidenceLinkService),
                 pluginJobService, editorBridge, settings, styleProfileResolver, chatModelFactory, auxModelResolver,
                 tokenUsageService, new ObjectMapper(), new PluginHostQuota());
         host = factory.forPlugin("dd");
@@ -306,6 +308,28 @@ class PluginHostImplTest {
         String h2 = host.files().sha256(PROJECT, 7L);
         assertEquals(h1, h2);
         verify(storage, org.mockito.Mockito.times(1)).load("projects/1/h.txt");
+    }
+
+    @Test
+    void evidenceLinkAtQuoteGoesThroughTheHostAnchorFlow() {
+        // 插件不许自己拼 worker 原语建链：宿主按引文查找→选中→打书签→套超链接→落库，与 doc_link_evidence 同一份实现
+        when(editorBridge.executeEditorCommand(eq("find_text_locations"), anyMap()))
+                .thenReturn("{\"matches\":[{\"anchorId\":\"a1\",\"text\":\"表1-1 收购人主体基本情况表\"}]}");
+        when(editorBridge.executeEditorCommand(eq("set_selection"), anyMap())).thenReturn("{}");
+        when(editorBridge.executeEditorCommand(eq("bookmark_selection"), anyMap())).thenReturn("{\"text\":\"表1-1 收购人主体基本情况表\"}");
+        when(editorBridge.executeEditorCommand(eq("set_selection_hyperlink"), anyMap())).thenReturn("{}");
+        when(editorBridge.executeEditorCommand(eq("get_bookmark_context"), anyMap()))
+                .thenReturn("{\"sectionPath\":\"一/（一）\",\"sectionTitle\":\"基本情况\",\"text\":\"表1-1 收购人主体基本情况表\"}");
+        EvidenceLinkViews.LinkView view = new EvidenceLinkViews.LinkView(9L, "EVID_Y", 3L, "表1-1 收购人主体基本情况表", "hash",
+                "一/（一）", "基本情况", "unverified", "plugin", null, null, List.of());
+        when(evidenceLinkService.create(eq(USER), eq(PROJECT), eq(3L), anyString(), anyString(), eq("一/（一）"),
+                eq("基本情况"), eq("plugin"), anyList())).thenReturn(view);
+
+        LinkView out = host.evidence().linkAtQuote(PROJECT, 3L, "表1-1 收购人主体基本情况表",
+                List.of(new TargetInput(4L, null, "supports", "written_review", null, null)));
+        assertEquals("EVID_Y", out.linkKey());
+        assertEquals("一/（一）", out.sectionPath());
+        verify(editorBridge).executeEditorCommand(eq("bookmark_selection"), anyMap());
     }
 
     @Test

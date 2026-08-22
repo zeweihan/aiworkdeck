@@ -66,6 +66,15 @@ public class EvidenceLinkTarget {
     @Column(length = 512)
     private String note;
 
+    /**
+     * 勾稽核查（P2，dev-board#116）的结构化 findings：
+     * {@code {checkedAt, verdict, checks:[{kind, expected, found, ok, note}], priorRelation}}。
+     * 由 {@link com.checkba.service.evidence.EvidenceVerifyService} 整条覆盖写，幂等可重跑；
+     * 没核查过为 null。verdict 只影响本列与 relation/confidence，<b>不参与 EvidenceLink 状态机</b>。
+     */
+    @Column(name = "verify_json", columnDefinition = "TEXT")
+    private String verifyJson;
+
     @Column(name = "sort_order")
     private Integer sortOrder = 0;
 

@@ -18,7 +18,7 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
 
 ## 现有插件清单
 
-**尽调（DD）**：前端 `frontend/src/components/DdFilesPanel.vue` + `DdRequestEditor.vue`；后端 `controller/DdController.java`（/api/dd）+ `service/DdService.java`；实体 DdRequest/DdItem/DdComment + 对应 Repository。无 skill。
+**尽调（DD，旧）**：前端 `frontend/src/components/DdFilesPanel.vue` + `DdRequestEditor.vue`；后端 `controller/DdController.java`（/api/dd）+ `service/DdService.java`；实体 DdRequest/DdItem/DdComment + 对应 Repository。无 skill。**与新的尽调报告模块（dev-board#100，EvidenceLink 驱动的底稿驱动起草）无关**——这是旧的面向客户协作的「尽调清单」插件，两者只是都译作「尽调/DD」，代码上零关联。新模块的交付件导出（底稿目录/查验计划/缺口清单，`service/DdExportService.java` + `controller/DdExportController.java` + `service/ai/tools/DdExportTools.java`）内置在主仓、不是插件，详见 `.claude/agents/ai-doc-bridge.md`「EvidenceLink 契约」节的「P2 交付件导出」小节；尽调插件本体（`dd_ingest`/句式库/表格模板/skill）仍按 P1 设计（`docs/superpowers/specs/2026-08-21-dd-p1-drafting-design.md`）规划在私有仓 `aiworkdeck-dd-plugin`，尚未落地。
 
 **脱敏**：前端 `frontend/src/components/DesensitizePane.vue`；后端 `controller/SensitiveController.java`（/api/sensitive：GET /options、POST /desensitize）+ `service/SensitiveService.java`（PDF 走 PDFBox PDFTextStripper 定位坐标涂黑，Word 走 XWPFDocument 段落级文本遮蔽）+ OcrService 辅助。**skill 型门控（2026-08-19）**：`backend/skills/desensitize/`（`enabled_by_default:false`，广场启停），`leftSidebarPlugins.js` 的 `desensitize` 条目带 `requiresSkill: 'desensitize'`——照搬诉讼可视化那套模式，装了才在左栏出现。**这个 skill 背后没有 AI 编排注入的能力**（无 `allowed_tools`）：命中触发词「脱敏」时 prompt.md 只引导模型把用户指向面板手动操作，不假装能在对话里完成脱敏；面板本身仍是直连 `/api/sensitive` 的老路径，和 AI 编排无关。`languages` 只给 `zh-CN`——`DesensitizePane.vue` 本身已 i18n 化，但策略勾选项文案来自 `SensitiveType` 枚举（label/description 只有中文，`SensitiveController` 直接拼 `"label (example)"` 无语言分支），面板核心内容英文版下会露出中文，等 `SensitiveType` 补英文文案（需要改 `.java`）再解禁双语。
 
@@ -169,7 +169,7 @@ manifest.json 要点：id（必需）/name/version/icon/author/permissions（fil
 
 ## 宿主 SPI（plugin-api，规范 v2.4，dev-board#109）
 
-JAR 插件拿宿主能力的唯一契约：`com.checkba:plugin-api:1.0.0`，源码 `backend/plugin-api/`
+JAR 插件拿宿主能力的唯一契约：`com.checkba:plugin-api:1.1.0`（1.0.0 编译的插件照常加载，接口只增不改），源码 `backend/plugin-api/`
 （**独立 Maven 工程**，不是 backend 的子模块；backend 以普通依赖引用）。方法表与鉴权/配额规则在
 `docs/PLUGIN_SPEC.md` §11，这里只记落点与地雷。
 
@@ -200,3 +200,5 @@ JAR 插件拿宿主能力的唯一契约：`com.checkba:plugin-api:1.0.0`，源�
 - 后端：`cd backend && mvn test`（JDK 21）。
 - skill 触发链路：起后端后对话输入触发词验证注入；skill 管理 API `/api/skills/list|{id}/enable|{id}/disable|rescan`（admin）。
 - 前端面板：`cd frontend && npm run test:app-e2e` 覆盖主要旅程。
+
+- **`Evidence.linkAtQuote(projectId, docFileId, anchorQuote, targets)`（SPI 1.1.0 新增）**：插件按引文建链的唯一正路。宿主内部走 `EvidenceAnchorService`（查引文必须恰好命中一次 → set_selection → bookmark_selection（书签名 = linkKey）→ 内部超链接 → get_bookmark_context → 落库），与 AI 工具 `doc_link_evidence` **同一份实现**。插件**不要**自己用 `Docs.exec` 拼这套原语——书签名规则、超链接 scheme、章节路径口径都是契约，两份实现必然漂移。
