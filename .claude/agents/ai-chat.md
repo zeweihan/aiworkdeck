@@ -312,3 +312,5 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
   `AI_INTERNAL_ERROR`；read_document 对真实 docx fixture 返回非空正文、空文档给可行动说明）。
 - 前端：`npm run check:emits`；标签协议编解码 `npm run test:tag-protocol`（node:test，零依赖）；UI 链路 `npm run test:app-e2e`。
 - Office 插件的标签解析：`node --test office-addin/taskpane/lib/sse.test.js`（零依赖，未进 CI）。
+
+- **工具参数太长会把模型输出撑到截断**（实测：一章起草里 4 次）。编排器检测到 `<tool_code>` 未闭合会回喂提示让模型重发，最多两轮；**两轮还截断就把原因写进最终正文**（「参数太长…没有执行完」），不再静默收尾。根治办法不是调 max_tokens，而是别让模型回抄大参数：让工具自己把内容写进文档（尽调插件 `dd_table`/`dd_phrases` 的 `docFileId` 就是这么做的）。回归用例 `cases-harness-recovery.json` 的 `truncated-tool-code-persists-tells-the-user`。
