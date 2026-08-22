@@ -474,7 +474,11 @@ export const agentClientActionMethods = {
             const result = await this.libreOfficeExecutor.executeCommand(
                 commandAction, Object.assign({}, params, { __agent: true }))
             const successFlag = result && result.success !== false
-            await sendEditorResult(conversationId, requestId, successFlag, result, (result && result.error) || null)
+            // 失败原因优先取 error，没有就退到 message：worker 里大量失败分支只填 message
+            //（如 delete_match 的「match index out of range」），只取 error 的话模型收到的是
+            // {"error": "null"}，等于没告诉它哪里错了，它只能瞎猜着重试。
+            const failReason = result ? (result.error || result.message || null) : null
+            await sendEditorResult(conversationId, requestId, successFlag, result, successFlag ? (result && result.error) || null : failReason)
         } catch (e) {
             console.error('[ProjectOverview] LibreOffice command error:', e)
             await sendEditorResult(conversationId, requestId, false, null, e.message)

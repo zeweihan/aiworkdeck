@@ -290,3 +290,5 @@ txt/md/markdown 自 dev-board#37 起不进 LOWA（前端走 PlainTextEditor.vue�
 - 原语级测试不够，必须走完 UI 链路验证（用户明确要求过）。
 
 - **枚举列宽**：`evidence_link_target.method` 是 varchar(32) —— 枚举里最长的 `written_statement` 有 17 个字符，原来的 16 让「书面确认」型链接**永远存不进去**（真实起草跑分报 `Value too long for column method`）。改枚举时一并核对列宽，回归测试 `EvidenceLinkServiceTest.enumColumnsAreWideEnoughForEveryAllowedValue` 钉住。
+
+- **worker 失败原因不能丢**：`agentClientActions.handleEditorCommand` 回传失败时 `error` 缺省要退到 `message` —— worker 里大量失败分支只填 `message`（`delete_match` 的「match index out of range」之类），只取 `error` 的话模型收到 `{"error": "null"}`，只能瞎猜着重试。回归用例 `frontend/tests/project-home/editor-command-failure-reason.test.mjs`。
