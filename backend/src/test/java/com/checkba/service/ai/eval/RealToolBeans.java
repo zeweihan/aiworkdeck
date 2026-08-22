@@ -1,6 +1,7 @@
 package com.checkba.service.ai.eval;
 
 import com.checkba.service.ai.tools.AgentToolComponent;
+import com.checkba.service.ai.tools.DdExportTools;
 import com.checkba.service.ai.tools.DocumentEditTools;
 import com.checkba.service.ai.tools.EvidenceTools;
 import com.checkba.service.ai.tools.FileTools;
@@ -45,6 +46,7 @@ final class RealToolBeans {
     /** 与生产 Spring 容器中注册的 AgentToolComponent 集合保持一致 */
     static List<AgentToolComponent> instantiateAll() {
         List<Class<? extends AgentToolComponent>> toolClasses = List.of(
+                DdExportTools.class,
                 DocumentEditTools.class,
                 EnterpriseDataTools.class,
                 EvidenceTools.class,

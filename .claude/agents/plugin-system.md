@@ -18,7 +18,7 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
 
 ## 现有插件清单
 
-**尽调（DD）**：前端 `frontend/src/components/DdFilesPanel.vue` + `DdRequestEditor.vue`；后端 `controller/DdController.java`（/api/dd）+ `service/DdService.java`；实体 DdRequest/DdItem/DdComment + 对应 Repository。无 skill。
+**尽调（DD，旧）**：前端 `frontend/src/components/DdFilesPanel.vue` + `DdRequestEditor.vue`；后端 `controller/DdController.java`（/api/dd）+ `service/DdService.java`；实体 DdRequest/DdItem/DdComment + 对应 Repository。无 skill。**与新的尽调报告模块（dev-board#100，EvidenceLink 驱动的底稿驱动起草）无关**——这是旧的面向客户协作的「尽调清单」插件，两者只是都译作「尽调/DD」，代码上零关联。新模块的交付件导出（底稿目录/查验计划/缺口清单，`service/DdExportService.java` + `controller/DdExportController.java` + `service/ai/tools/DdExportTools.java`）内置在主仓、不是插件，详见 `.claude/agents/ai-doc-bridge.md`「EvidenceLink 契约」节的「P2 交付件导出」小节；尽调插件本体（`dd_ingest`/句式库/表格模板/skill）仍按 P1 设计（`docs/superpowers/specs/2026-08-21-dd-p1-drafting-design.md`）规划在私有仓 `aiworkdeck-dd-plugin`，尚未落地。
 
 **脱敏**：前端 `frontend/src/components/DesensitizePane.vue`；后端 `controller/SensitiveController.java`（/api/sensitive：GET /options、POST /desensitize）+ `service/SensitiveService.java`（PDF 走 PDFBox PDFTextStripper 定位坐标涂黑，Word 走 XWPFDocument 段落级文本遮蔽）+ OcrService 辅助。**skill 型门控（2026-08-19）**：`backend/skills/desensitize/`（`enabled_by_default:false`，广场启停），`leftSidebarPlugins.js` 的 `desensitize` 条目带 `requiresSkill: 'desensitize'`——照搬诉讼可视化那套模式，装了才在左栏出现。**这个 skill 背后没有 AI 编排注入的能力**（无 `allowed_tools`）：命中触发词「脱敏」时 prompt.md 只引导模型把用户指向面板手动操作，不假装能在对话里完成脱敏；面板本身仍是直连 `/api/sensitive` 的老路径，和 AI 编排无关。`languages` 只给 `zh-CN`——`DesensitizePane.vue` 本身已 i18n 化，但策略勾选项文案来自 `SensitiveType` 枚举（label/description 只有中文，`SensitiveController` 直接拼 `"label (example)"` 无语言分支），面板核心内容英文版下会露出中文，等 `SensitiveType` 补英文文案（需要改 `.java`）再解禁双语。
 
