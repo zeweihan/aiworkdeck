@@ -99,5 +99,41 @@
         "没有执行完"
       ]
     }
+  },
+  {
+    "id": "truncated-todo-write-also-corrected",
+    "title": "在 <todo_write> 里被截断也要进纠正回路，不能静默收尾（尽调起草实测一轮丢 4 个回合）",
+    "category": "files",
+    "protocol": "xml",
+    "userInput": "起草第一章",
+    "turns": [
+      {
+        "text": "<todo_write"
+      },
+      {
+        "text": "<process name=\"取素材\"><tool_code>list_files({\"projectId\": 1})</tool_code></process>"
+      },
+      {
+        "text": "<final>第一章素材已取。</final>"
+      }
+    ],
+    "toolStubs": {
+      "list_files": "Contents: [FILE] a.pdf (fileId=1)"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "list_files",
+          "argsContain": {}
+        }
+      ],
+      "promptContains": [
+        "标签未闭合"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
   }
 ]
