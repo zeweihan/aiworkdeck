@@ -45,7 +45,7 @@ class DocumentEditToolsImageTest {
         projectFileService = Mockito.mock(ProjectFileService.class);
         storageResolver = Mockito.mock(ProjectStorageResolver.class);
         bridge = Mockito.mock(EditorBridgeService.class);
-        tools = new DocumentEditTools(projectFileService, null, bridge, storageResolver, null, null, null);
+        tools = new DocumentEditTools(projectFileService, null, bridge, storageResolver, null, null, null, null);
         when(bridge.executeEditorCommand(any(), any())).thenReturn("{\"success\":true}");
         ProjectContextHolder.setProjectId("7");
     }
