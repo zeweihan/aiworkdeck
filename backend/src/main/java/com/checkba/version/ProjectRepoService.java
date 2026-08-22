@@ -27,18 +27,22 @@ import org.eclipse.jgit.treewalk.EmptyTreeIterator;
 import org.eclipse.jgit.treewalk.TreeWalk;
 import org.eclipse.jgit.treewalk.filter.PathFilter;
 import org.eclipse.jgit.treewalk.filter.TreeFilter;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
+import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -72,6 +76,28 @@ public class ProjectRepoService {
      * 50MB × 十几个并发请求仍在 1.5GB 堆的安全余量内。
      */
     private static final long MAX_BLOB_SIZE_BYTES = 50L * 1024 * 1024;
+
+    /**
+     * 单个新增/修改文件入版本库的体积上限（尽调模块 P3 稳定性余项 #3，dev-board#100，
+     * 可配置，默认 50MB——与上面读侧的 {@link #MAX_BLOB_SIZE_BYTES} 同一个保守量级）。
+     * {@link #commitAll} 里超过这个阈值的文件这一轮不 {@code git add}，只在提交说明里
+     * 追加一行指纹记录（路径 + 体积 + sha256），不静默吞掉。**只影响这次新增/修改**：
+     * 已经在库里的旧版本不受影响——未被 add 的路径不会被当成删除处理（"文件被删除"
+     * 走单独一条只看"磁盘上已经不存在的已跟踪路径"的分支，与体积无关，见 commitAll）。
+     * 字段级 {@code @Value}（不是构造器参数）：ProjectRepoService 的单参构造器被约
+     * 20 处测试手工 {@code new}，改构造器签名要挨个改，字段注入零改动、精确复刻
+     * SystemProxyRefresher.autoRefresh 的既有写法——手工 new 的测试用不到 Spring
+     * 容器，字段就停留在这里声明的默认值。
+     */
+    @Value("${version.max-tracked-file-size-bytes:52428800}")
+    private long maxTrackedFileSizeBytes = DEFAULT_MAX_TRACKED_FILE_SIZE_BYTES;
+
+    static final long DEFAULT_MAX_TRACKED_FILE_SIZE_BYTES = 50L * 1024 * 1024;
+
+    /** 仅供测试覆盖体积阈值（包内可见）。生产路径永远走 Spring 注入/上面的默认值。 */
+    void setMaxTrackedFileSizeBytesForTest(long bytes) {
+        this.maxTrackedFileSizeBytes = bytes;
+    }
 
     private final ProjectStorageResolver storageResolver;
 
@@ -131,6 +157,8 @@ public class ProjectRepoService {
 
     private static final String KIND_TRAILER = "X-AWD-Kind: ";
     private static final String NOTE_TRAILER = "X-AWD-Note: ";
+    /** 体积过滤跳过的文件清单（尽调 P3#3）：commitAll 里超限文件不入库，指纹落这一行。 */
+    private static final String SKIPPED_TRAILER = "X-AWD-Skipped-Large-Files: ";
 
     /**
      * {@code .git/index.lock} 陈旧锁的判定阈值。commitAll/commitNow 等一切改仓库状态的
@@ -170,28 +198,109 @@ public class ProjectRepoService {
     /**
      * 把工作区当前状态整体提交。无任何变更时返回 null（不产生空提交）。
      * kind 写入提交消息尾注，供时间线区分「自动存档」与「工作段」。
+     *
+     * <p>体积过滤（尽调模块 P3 稳定性余项 #3，dev-board#100）：新增/修改文件超过
+     * {@link #maxTrackedFileSizeBytes} 的这一轮不 add，只记指纹——**只影响新增/修改**：
+     * <ul>
+     *   <li>新增（未跟踪）超限 → 不 add，保持未跟踪，指纹进提交说明；</li>
+     *   <li>已跟踪文件被改动、改动后仍超限 → 不 add 这次改动，文件在最新提交里保持
+     *       旧版本内容，不会被误判成"删除"；</li>
+     *   <li>已跟踪文件在磁盘上被删除 → 正常入库这次删除，不受体积过滤影响（磁盘上
+     *       已经没有这个文件了，谈不上"超限"，这也是"已经在库里的大文件不能被这次
+     *       改动删掉"这条红线的关键：本方法从不对任何路径做"未 add 就视为删除"的
+     *       反向推断）；</li>
+     *   <li>合并冲突路径（getConflicting）不做体积过滤——`git add` 在合并窗口里等于
+     *       "这个冲突我解决了"（见类头 #20 条注释），跳过会让合并卡死在
+     *       MERGING，比让一份大文件多留一版历史严重得多。</li>
+     * </ul>
+     * 被跳过的文件即使这一轮没有其它变更也要落一笔提交（{@code setAllowEmpty(true)}），
+     * 否则"出现过一份超限文件"这件事会连指纹记录都没有、彻底无痕迹——与"不静默丢
+     * 东西"的要求矛盾。
      */
     public String commitAll(long projectId, String message, String kind, String note,
                             String authorName, String authorEmail) {
         clearStaleIndexLock(projectId);
         try (Repository repo = open(projectId); Git git = new Git(repo)) {
-            git.add().addFilepattern(".").call();
-            git.add().addFilepattern(".").setUpdate(true).call();
+            Path workTree = repo.getWorkTree().toPath();
+            Status pre = git.status().call();
+
+            List<String> skipped = new ArrayList<>();
+            List<String> okNew = new ArrayList<>(pre.getConflicting());
+            for (String path : pre.getUntracked()) {
+                String fp = oversizedFingerprint(workTree, path);
+                if (fp != null) skipped.add(fp); else okNew.add(path);
+            }
+            List<String> okTracked = new ArrayList<>(pre.getMissing()); // 删除不受体积过滤影响
+            for (String path : pre.getModified()) {
+                String fp = oversizedFingerprint(workTree, path);
+                if (fp != null) skipped.add(fp); else okTracked.add(path);
+            }
+
+            if (!okNew.isEmpty()) {
+                var add = git.add();
+                okNew.forEach(add::addFilepattern);
+                add.call();
+            }
+            if (!okTracked.isEmpty()) {
+                var add = git.add().setUpdate(true);
+                okTracked.forEach(add::addFilepattern);
+                add.call();
+            }
+
             Status status = git.status().call();
-            if (status.isClean()) return null;
+            if (status.isClean() && skipped.isEmpty()) return null;
 
             StringBuilder msg = new StringBuilder(message).append("\n\n")
                     .append(KIND_TRAILER).append(kind);
             if (note != null && !note.isBlank()) {
                 msg.append('\n').append(NOTE_TRAILER).append(note);
             }
+            if (!skipped.isEmpty()) {
+                msg.append('\n').append(SKIPPED_TRAILER).append(String.join("; ", skipped));
+            }
             RevCommit c = git.commit()
                     .setMessage(msg.toString())
+                    .setAllowEmpty(true) // 体积过滤可能导致"这一轮只有跳过记录、树没变化"，仍要落一笔可追溯的提交
                     .setAuthor(authorName, authorEmail)
                     .call();
             return c.getName();
         } catch (Exception e) {
             throw new VersionException("提交失败: project=" + projectId, e);
+        }
+    }
+
+    /**
+     * 判断该（未跟踪/已修改）路径是否超过体积阈值；不超限返回 null，超限返回一段
+     * 可读的"指纹"文本（相对路径 + 体积 + sha256），供写进提交说明。只在真的超限
+     * 时才流式计算 sha256（不整份读进内存），不影响正常大小文件的提交路径。
+     */
+    private String oversizedFingerprint(Path workTree, String relPath) {
+        Path p = workTree.resolve(relPath);
+        long size;
+        try {
+            size = Files.size(p);
+        } catch (IOException e) {
+            return null; // 读不到大小（竞态删除等）当正常处理，交给后续 add 自然处理
+        }
+        if (size <= maxTrackedFileSizeBytes) return null;
+        String fingerprint;
+        try {
+            fingerprint = sha256Hex(p);
+        } catch (IOException e) {
+            fingerprint = "unavailable";
+        }
+        return relPath + " (" + size + " bytes, sha256:" + fingerprint + ")";
+    }
+
+    private static String sha256Hex(Path p) throws IOException {
+        try (InputStream in = Files.newInputStream(p)) {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) md.update(buf, 0, n);
+            return HexFormat.of().formatHex(md.digest());
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 不可用", e); // JVM 标配算法，不会真的发生
         }
     }
 
