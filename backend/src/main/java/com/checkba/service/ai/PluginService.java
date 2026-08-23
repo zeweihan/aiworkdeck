@@ -108,6 +108,21 @@ public class PluginService {
     private ToolRegistry toolRegistry;
 
     /**
+     * 反向依赖 SkillRegistry，仅用于 rescan() 后让它把插件携带的 skill 重新拉一遍。
+     * 注入方式与上面的 ToolRegistry 同款（@Lazy + required=false）——SkillRegistry
+     * 的构造器依赖 PluginService，构造器注入会成环；直接 new PluginService(...) 的
+     * 既有测试则停留 null，rescan() 判空跳过。
+     *
+     * <p>为什么必须在这里连上：插件携带的 skill 目录是 loadPlugins() 扫出来的，
+     * SkillRegistry 只在自己 @PostConstruct 与 rescan() 时来拉一次。装完/启用完插件
+     * 只重扫了插件侧，skill 侧不动——工具注册上了、skill 却要等下次重启才出现，
+     * 用户看到的就是「广场装完、插件开了，但让它干活它不认」。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.checkba.service.ai.skill.SkillRegistry skillRegistry;
+
+    /**
      * 插件宿主 SPI（规范 v2.4 §4/§11）：实例化出的工具类若实现 HostAware，注入按插件 id 绑定的 PluginHost。
      * 用 ObjectProvider 懒取——PluginHostFactory 背后挂着 EditorBridgeService/ProjectFileService 一串，
      * 构造器注入会把本类拖进启动死环；required=false 让直接 new 的测试照旧。
@@ -160,6 +175,11 @@ public class PluginService {
     /** 供测试直接装配 ToolRegistry（生产环境由 Spring 按上面的 @Autowired 字段注入）。 */
     void setToolRegistry(ToolRegistry toolRegistry) {
         this.toolRegistry = toolRegistry;
+    }
+
+    /** 供测试直接装配 SkillRegistry（生产环境由 Spring 按上面的 @Autowired 字段注入）。 */
+    void setSkillRegistry(com.checkba.service.ai.skill.SkillRegistry skillRegistry) {
+        this.skillRegistry = skillRegistry;
     }
 
     /** 供测试查看当前这一代插件 JAR ClassLoader 的快照。 */
@@ -247,6 +267,12 @@ public class PluginService {
         // 必须让 ToolRegistry 那层懒加载缓存失效，否则旧 bean 会继续被分发执行。
         if (toolRegistry != null) {
             toolRegistry.invalidatePluginToolCache();
+        }
+        // 插件带来的 skill 也要跟着重来一遍——否则 skill 要等下次重启才出现（见字段注释）。
+        // SkillRegistry.rescan() 只读 getPluginSkillDirs()/isEnabled()，两者都不持本对象的锁，
+        // 在这里同步调用不会与 PluginService 形成锁序环。
+        if (skillRegistry != null) {
+            skillRegistry.rescan();
         }
         log.info("Plugin rescan done: {} plugins, {} tools", plugins.size(), pluginTools.size());
 
