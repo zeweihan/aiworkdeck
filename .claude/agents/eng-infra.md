@@ -112,6 +112,23 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 
 ## 已知地雷
 
+**装好的应用开着，三套 Electron e2e 全起不来（2026-08-23 修）**：`main.js` 的
+`requestSingleInstanceLock` 按 userData 目录判重，dev 实例与 `/Applications/AI WorkDeck.app`
+默认同一个目录，第二个进程被 `app.quit()` 当场顶掉。现象极不好认——Electron 起来、
+打了 `DevTools listening`、随即无声退出，套件只看见「CDP 端点未就绪」或连 ws 时
+`ECONNREFUSED`。`tests/_lib/electron-cdp.mjs` 的 `spawnElectron` 现在给 dev 实例挑
+自己的 `--user-data-dir`（按 CDP 端口取名），`waitForCdpWs` 收下子进程句柄、进程先退
+就立刻报退出码。**新 profile 是空的**：`appLanguage` 对全新安装按 `navigator.language`
+猜语言（Electron 常报 en-*），断言中文字面量的套件必须像 desktop-e2e 那样先写
+`localStorage.awd_app_language='zh-CN'` 再整页 `goto`（只改 hash 是同文档导航，模块不重来）。
+
+**dev vite 的状态会被文件churn 弄脏**：worktree 里大批文件被改回改去（合并冲突、
+stash 误 pop 之类）之后，5174 上的页面可能变成**整页无样式**（`.page-project-overview`
+的 display 变 block、文档高两万多像素），而 CSS 其实都在、控制台一个错都没有。
+按「点在视口外」的形态红在 e2e 里，很容易误读成布局回归。**先重启 vite 再判**。
+
+
+
 - **`@ActiveProfiles("desktop")` 的 `@SpringBootTest` 必须同时把 `spring.datasource.url` 覆盖成
   `jdbc:h2:mem:`**（写法照 IdorAuthIntegrationTest / DesktopContextSmokeTest）：desktop profile
   的默认数据源是 `~/.aiworkdeck/local` 文件库且带 `AUTO_SERVER=TRUE`，开发机上测试会直接附着到
