@@ -13,6 +13,12 @@ import { createEvidenceLinkForDrop, pickEvidenceTarget } from './evidenceLinkCor
 
 export { createEvidenceLinkForDrop, pickEvidenceTarget }
 
+// method 浮动小条无操作时的自动收起延时（ms）。此前这个常量漏定义，
+// armEvidenceMethodBarTimer 的 setTimeout 直接撞 ReferenceError——建链已成功，
+// 但抛出打断了紧随的 awd:evidence-changed 通知，小条也永不收起，用户「释放后没反应」
+// （dev-board#135，真机复现）。
+const METHOD_BAR_TTL_MS = 3000
+
 // request() 已把 {code:0,data} 整体 resolve 出来，这里统一剥一层。
 function unwrap(resp) {
   if (resp && typeof resp === 'object' && 'code' in resp && 'data' in resp) return resp.data

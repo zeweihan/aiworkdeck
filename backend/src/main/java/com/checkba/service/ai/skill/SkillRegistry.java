@@ -284,6 +284,32 @@ public class SkillRegistry {
         log.info("Skill {} {}", skillId, enabled ? "enabled" : "disabled");
     }
 
+    /**
+     * 把某插件携带的全部 skill 翻成启用，返回真正被翻动的 id（已启用的不算）。
+     *
+     * <p>插件携带的 skill 惯例写 {@code enabled_by_default: false}（插件没装前别出现），
+     * 于是用户在广场装好插件、点了启用之后，工具注册上了、skill 仍是禁用态——对话里说触发词
+     * 永远不命中，用户视角是第三个看不见的开关（2026-08-23 尽调插件上架当天真机复现）。
+     * 规则：启用插件 = 启用它携带的 skill；禁用插件不需要反向操作，{@link #isAvailable} 已按
+     * 所属插件判据兜住。
+     */
+    public synchronized List<String> enableSkillsFromPlugin(String pluginId) {
+        if (pluginId == null || pluginId.isBlank()) {
+            return List.of();
+        }
+        List<String> flipped = new ArrayList<>();
+        for (SkillDefinition skill : skills.values()) {
+            if (pluginId.equals(skill.getSourcePluginId()) && disabledSkillIds.remove(skill.getId())) {
+                flipped.add(skill.getId());
+            }
+        }
+        if (!flipped.isEmpty()) {
+            persist(DISABLED_KEY, disabledSkillIds);
+            log.info("Skills {} enabled along with plugin {}", flipped, pluginId);
+        }
+        return flipped;
+    }
+
     private void persist(String key, Set<String> ids) {
         if (systemSettingService != null) {
             systemSettingService.set(key, cn.hutool.json.JSONUtil.toJsonStr(new TreeSet<>(ids)));

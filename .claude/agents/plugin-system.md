@@ -38,6 +38,12 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
 
 **动态 JAR / Web 插件**：前端 `frontend/src/components/PluginPane.vue`（props url/pluginId/permissions/projectId，url 空则报"未配置入口地址"；加载哪个插件由父页面按 leftPaneKey + dynamicPlugins[].frontendEntry 决定）；后端 `service/ai/PluginService.java` + `controller/ai/PluginController.java`（/api/plugins）+ `controller/ai/PluginWebController.java`（/api/plugin-web，见下）。
 
+**动态插件在左栏两种渲染，按有没有 `frontendEntry` 分（dev-board#132，2026-08-23）**：`project-overview.vue` 的 `activeDynamicPlugin` computed 拿到当前 rail 选中的插件后——
+- **有 `frontendEntry`**（Web 插件）→ `PluginPane` iframe；
+- **无 `frontendEntry`**（纯 JAR/skill 插件，如尽调报告）→ 宿主渲染的启动面板 `frontend/src/components/PluginGuidePane.vue`。它就是这类插件的「独立页面」：`manifest.guide`（`{intro, steps[], quickActions[{label,prompt,hint}]}`）渲染成「简介 + 快速开始 + 怎么用 + 该插件为 AI 提供的能力（工具清单）」；quickActions 的按钮点击 `emit('kickoff',{prompt})` → 页面 `onPluginQuickAction` → `resolveChatInterface().sendExternalPrompt`（与股东大会/诉讼可视化同一条 kick-off 路，prompt 里得含 skill 触发词才命中注入）。没写 guide 时用 `description` + 兜底提示 + 工具清单，仍比空面板强。
+  - **后端契约**：`PluginService.PluginMetadata.guide`（`PluginGuide`/`PluginQuickAction`）；`parseManifest` 丢弃 quickActions 里缺 label 或 prompt 的条目；`PluginController.PluginView` 透传 `guide`。测试 `PluginServiceTest.parsesGuideBlock/guideAbsentIsNull`、`frontend/tests/evidence/methodBarTimer.test.mjs` 无关，guide 面板前端无独立单测（真渲染走查配方见 [[ui-live-walkthrough-recipe]]，注入 `/api/plugins/list` 造 guide）。
+  - **地雷（都在 dev-board#132 修掉，别改回去）**：① `dynamicPlugins[].icon` 不要回退 `/static/plugin_default.png`——**那文件不存在**，会 404 成 HTML 破图；registry 的 `icon` 是 emoji（全站禁 emoji、不当图片渲染）。纯工具插件的 rail 图标由模板里 `v-else-if="p.isDynamic"` 的拼图 SVG 兜底。② `toggleLeftPane` **不再** `openFile({fileType:'plugin'})` 开中栏标签——`isFileTypeSupported` 没有 `'plugin'`，那条老路只会弹「无法打开文件」模态、从没渲染出东西；动态插件一律左栏面板渲染（「左栏一个图标 = 一个插件」）。中栏 `activeFileLeft.fileType==='plugin'` 的 PluginPane 分支现已是死代码，留着无害。③ `leftPaneTitle` 要先查 `activeDynamicPlugin.label`，否则动态插件标题掉进兜底显示成「资源管理器」。
+
 ### 三方 Web 插件（规范 v2.3，docs/PLUGIN_SPEC.md §8）
 
 `manifest.frontendEntry` 从「预留」激活。两种形态在 PluginPane 里**行为刻意不同**：
@@ -152,6 +158,7 @@ manifest.json 要点：id（必需）/name/version/icon/author/permissions（fil
 - 存 `system_setting` 表（key/value 键值），值为禁用 id 的 JSON 数组，默认全启用，内存缓存 TTL 5s：插件 `ai.plugins.disabled`（PluginService），skill `ai.skills.disabled`（SkillRegistry）。
 - **插件工具的过滤在 ToolRegistry 而非 PluginService**（Phase 3A）：getAllSpecifications / toolNamesLongestFirst / resolve 三处消费点全部隐藏禁用插件的工具；分发前还有 `missingPermissionsForTool` 权限校验。
 - skill 过滤在 SkillRouter.match 的 isAvailable 检查。
+- **启用插件 = 启用它携带的 skill（dev-board#132，2026-08-23）**：插件携带的 skill 惯例写 `enabled_by_default:false`（插件没装前别出现），于是「装完插件、点了启用，工具注册上了但 skill 仍禁用、对话里触发词永不命中」是第三个看不见的开关。`PluginService.setEnabled(id,true)` 在 `loadJarsIfAbsent` 之后先 `skillRegistry.rescan()` 再 `enableSkillsFromPlugin(id)`（只翻本插件 `sourcePluginId` 命中的 skill，别的插件/内置 skill 不碰）。禁用插件不反向操作——`SkillRegistry.isAvailable` 已按所属插件的启用态兜住。护栏 `PluginServiceTest.enablingPluginEnablesCarriedSkills/disablingPluginLeavesSkillStateAlone`、`SkillRegistryTest.enablingPluginEnablesItsCarriedSkills`。
 
 ## 已知地雷
 

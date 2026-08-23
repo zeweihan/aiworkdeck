@@ -222,6 +222,27 @@ public class PluginService {
         private List<PluginToolInfo> tools;
         /** 插件携带的 skill 子目录名列表（规范 v2.1，见 docs/SKILL_SPEC.md） */
         private List<String> skills;
+        /**
+         * 上手引导（规范 v2.5，可选）：没有 {@code frontendEntry} 的纯工具/skill 插件装完之后
+         * 左栏打开的是宿主渲染的「启动面板」，内容就来自这里。缺省 null，前端按描述与工具清单兜底。
+         */
+        private PluginGuide guide;
+    }
+
+    /** manifest.guide：简介 + 步骤 + 一键动作（动作 = 把 prompt 以 AGENT 模式发进 AI 对话） */
+    @lombok.Data
+    public static class PluginGuide {
+        private String intro;
+        private List<String> steps;
+        private List<PluginQuickAction> quickActions;
+    }
+
+    @lombok.Data
+    public static class PluginQuickAction {
+        private String label;
+        private String prompt;
+        /** 按钮下方一句话提示（比如「先在文件树里选中底稿根文件夹」），可空 */
+        private String hint;
     }
 
     /** 插件携带的一个 skill 目录（交给 SkillRegistry 注册，见 docs/SKILL_SPEC.md） */
@@ -368,6 +389,12 @@ public class PluginService {
         // 反向不成立——JVM 无法卸载已加载的类，禁用只能让工具不可见，要彻底停掉需重启。
         if (enabled) {
             loadJarsIfAbsent(pluginId);
+            // 启用插件 = 启用它携带的 skill（见 SkillRegistry.enableSkillsFromPlugin 的注释）。
+            // 先 rescan 让刚装的插件 skill 进注册表，再翻启用位；两步都只读本对象不持锁的字段。
+            if (skillRegistry != null) {
+                skillRegistry.rescan();
+                skillRegistry.enableSkillsFromPlugin(pluginId);
+            }
         }
         log.info("Plugin {} {}", pluginId, enabled ? "enabled" : "disabled");
     }
@@ -684,6 +711,20 @@ public class PluginService {
                             meta.getId(), p, KNOWN_PERMISSIONS);
                 }
             }
+        }
+        // guide（规范 v2.5）：quickActions 里 label 与 prompt 缺一不可——没有 prompt 的按钮点了没反应，
+        // 没有 label 的按钮画不出来；直接丢弃而不是整个 guide 作废。
+        if (meta.getGuide() != null && meta.getGuide().getQuickActions() != null) {
+            List<PluginQuickAction> valid = new ArrayList<>();
+            for (PluginQuickAction a : meta.getGuide().getQuickActions()) {
+                if (a != null && a.getLabel() != null && !a.getLabel().isBlank()
+                        && a.getPrompt() != null && !a.getPrompt().isBlank()) {
+                    valid.add(a);
+                } else {
+                    log.warn("Plugin {} guide.quickActions has an entry without label/prompt, ignored", meta.getId());
+                }
+            }
+            meta.getGuide().setQuickActions(valid);
         }
         // packs（规范 v2.3）：id 必须过与 pack / 插件同一套正则，非法项丢弃并告警——
         // 这串字符会被拼进注册表 URL 与磁盘路径，不能放行任意输入。

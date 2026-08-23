@@ -220,6 +220,12 @@ export default {
   pfDeleteFailed: '删除失败',
 
   // PluginPane.vue
+  pgQuickActionsTitle: '快速开始',
+  pgQuickActionsTip: '点击即可把这一步交给右侧 AI 助手执行。',
+  pgStepsTitle: '怎么用',
+  pgToolsTitle: '该插件为 AI 提供的能力',
+  pgChatHint: '在右侧 AI 对话里说出你的需求即可使用本插件。',
+  pgDefaultIntro: '{name} 已安装。在右侧 AI 对话里描述你的需求即可使用。',
   ppLoadFailed: '无法加载插件：未配置入口地址',
 
   // EasyVoicePane.vue

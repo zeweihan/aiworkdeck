@@ -268,6 +268,14 @@
             class="rail-icon-img"
             mode="aspectFit"
           />
+          <!-- 动态插件（registry icon 是 emoji、不当图片渲染）用统一的拼图 SVG 兜底，
+               不再指向不存在的 /static/plugin_default.png（会 404 成破图）。 -->
+          <view v-else-if="p.isDynamic" class="rail-icon-wrapper">
+            <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M14 4a2 2 0 1 1 4 0v2h1a2 2 0 0 1 2 2v3h-2a2 2 0 1 0 0 4h2v3a2 2 0 0 1-2 2h-3v-2a2 2 0 1 0-4 0v2H9a2 2 0 0 1-2-2v-3H5a2 2 0 1 1 0-4h2V8a2 2 0 0 1 2-2h1V4Z"
+                stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" class="rail-icon-path" />
+            </svg>
+          </view>
           <text v-else class="rail-icon">{{ p.icon }}</text>
         </view>
 
@@ -664,13 +672,20 @@
             @open-plugin="toggleLeftPane"
             @ai-develop="onPluginDevAiDevelop"
           />
+          <!-- 有真前端入口（Web 插件）走 iframe 沙箱；纯工具/skill 插件走宿主渲染的
+               启动面板（介绍 + 怎么用 + 一键动作发进 AI 对话），不再是「未配置入口地址」。 -->
           <PluginPane
-            v-else-if="leftPaneKey && dynamicPlugins.some(p => p.key === leftPaneKey)"
-            :url="dynamicPlugins.find(p => p.key === leftPaneKey)?.frontendEntry"
-            :plugin-id="dynamicPlugins.find(p => p.key === leftPaneKey)?.pluginId || ''"
-            :permissions="dynamicPlugins.find(p => p.key === leftPaneKey)?.permissions || []"
+            v-else-if="activeDynamicPlugin && activeDynamicPlugin.hasFrontend"
+            :url="activeDynamicPlugin.frontendEntry"
+            :plugin-id="activeDynamicPlugin.pluginId || ''"
+            :permissions="activeDynamicPlugin.permissions || []"
             :project-id="projectId"
             :get-active-editor="getPluginActiveEditor"
+          />
+          <PluginGuidePane
+            v-else-if="activeDynamicPlugin"
+            :plugin="activeDynamicPlugin"
+            @kickoff="onPluginQuickAction"
           />
           <view v-else class="sidebar-plugin-placeholder">
             <text class="placeholder-title">{{ leftPaneTitle }}</text>
@@ -1614,6 +1629,7 @@ import ProjectFavoritesPanel from '@/components/ProjectFavoritesPanel.vue'
 import EvidenceMethodBar from '@/components/EvidenceMethodBar.vue'
 import FileStagingArea from '@/components/FileStagingArea.vue'
 import PluginPane from '@/components/PluginPane.vue' // Added
+import PluginGuidePane from '@/components/PluginGuidePane.vue'
 import PluginDevPanel from '@/components/PluginDevPanel.vue'
 import DrawioEditor from '@/components/DrawioEditor.vue'
 import PlainTextEditor from '@/components/PlainTextEditor.vue'
@@ -1744,6 +1760,7 @@ export default {
     ChatInterface,
     MarkdownPreview,
     PluginPane, // Added
+    PluginGuidePane,
     PluginDevPanel,
     DrawioEditor,
     PlainTextEditor,
@@ -2223,8 +2240,16 @@ export default {
       // Simplified: Admin or owner (backend checks too)
       return user && user.role !== 'CLIENT'
     },
+    // 当前左栏选中的动态插件（rail key = plugin-<id>）；决定走 iframe 还是启动面板
+    activeDynamicPlugin() {
+      if (!this.leftPaneKey) return null
+      return this.dynamicPlugins.find(p => p.key === this.leftPaneKey) || null
+    },
     leftPaneTitle() {
       if (this.leftPaneKey === 'market') return this.$t('workbench.pluginMarket')
+      // 动态插件的标题在 getLeftSidebarPlugin（只认静态 + OFF_RAIL）里查不到，
+      // 会掉进兜底显示成「资源管理器」——从 dynamicPlugins 直接取它的 label。
+      if (this.activeDynamicPlugin) return this.activeDynamicPlugin.label || this.$t('workbench.explorerFallback')
       try {
         return getLeftSidebarPlugin(this.leftPaneKey)?.label || this.$t('workbench.explorerFallback')
       } catch (e) {
@@ -3589,6 +3614,16 @@ export default {
       const chat = await this.resolveChatInterface()
       if (!chat) return
       const prompt = this.$t('workbench.pluginDevAiPrompt', { id, name, folderId })
+      await chat.sendExternalPrompt(prompt)
+    },
+
+    // 插件启动面板（PluginGuidePane）的一键动作：把 manifest.guide.quickActions 里那句
+    // prompt 以 AGENT 模式发进 AI 对话——与股东大会/诉讼可视化同一条 resolveChatInterface 路。
+    // prompt 里含 skill 触发词才会命中注入（由插件作者在 manifest 里写对），这里只负责发出去。
+    async onPluginQuickAction({ prompt }) {
+      if (!prompt) return
+      const chat = await this.resolveChatInterface()
+      if (!chat) return
       await chat.sendExternalPrompt(prompt)
     },
 
@@ -5077,20 +5112,33 @@ export default {
         const list = Array.isArray(res) ? res : ((res && res.data) || null)
         if (list) {
           // Map backend PluginMetadata to frontend plugin structure
-          this.dynamicPlugins = list.map(p => ({
-            key: `plugin-${p.id}`,
-            // 左栏面板 key 是 plugin-<id>，桥要的是原始 id（握手上下文 + KV 分区键），
-            // 两者别混用
-            pluginId: p.id,
-            label: p.name,
-            icon: p.icon || '/static/plugin_default.png',
-            activeIcon: p.icon || '/static/plugin_default.png',
-            isDynamic: true,
-            // manifest.permissions：PluginPane 的桥按它逐调用裁剪能力
-            permissions: p.permissions || [],
-            // web/ 相对路径映射成后端静态服务地址；绝对 URL 原样保留（旧形态）
-            frontendEntry: resolvePluginEntryUrl(p.id, p.frontendEntry)
-          }))
+          this.dynamicPlugins = list.map(p => {
+            const frontendEntry = resolvePluginEntryUrl(p.id, p.frontendEntry)
+            return {
+              key: `plugin-${p.id}`,
+              // 左栏面板 key 是 plugin-<id>，桥要的是原始 id（握手上下文 + KV 分区键），
+              // 两者别混用
+              pluginId: p.id,
+              label: p.name,
+              // registry 的 icon 字段是 emoji（全站禁 emoji，一律不当图片渲染），
+              // 且 /static/plugin_default.png 并不存在（会 404 成 HTML=破图）。所以
+              // 纯工具/skill 插件不给位图，改由 rail 用统一的 SVG 兜底（见模板 svgFallback）。
+              icon: null,
+              activeIcon: null,
+              isDynamic: true,
+              // 有真正的前端入口才走 iframe（PluginPane）；纯工具/skill 插件走宿主渲染的
+              // 启动面板（PluginGuidePane）——否则点开只有一句「未配置入口地址」。
+              hasFrontend: !!frontendEntry,
+              description: p.description || '',
+              tools: Array.isArray(p.tools) ? p.tools : [],
+              guide: p.guide || null,
+              triggers: Array.isArray(p.triggers) ? p.triggers : [],
+              // manifest.permissions：PluginPane 的桥按它逐调用裁剪能力
+              permissions: p.permissions || [],
+              // web/ 相对路径映射成后端静态服务地址；绝对 URL 原样保留（旧形态）
+              frontendEntry
+            }
+          })
           console.log('Dynamic plugins loaded:', this.dynamicPlugins)
         }
       } catch (e) {

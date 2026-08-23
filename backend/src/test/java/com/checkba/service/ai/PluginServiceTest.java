@@ -91,6 +91,38 @@ class PluginServiceTest {
     }
 
     @Test
+    @DisplayName("manifest.guide（规范 v2.5）：intro/steps/quickActions 原样解析，quickActions 缺 label 或 prompt 的条目丢弃")
+    void parsesGuideBlock() throws IOException {
+        writeManifest("guided", """
+            {"id": "guided", "name": "带引导的插件",
+             "guide": {"intro": "三步上手", "steps": ["第一步", "第二步"],
+                       "quickActions": [
+                         {"label": "整理底稿", "prompt": "请整理底稿", "hint": "先选根文件夹"},
+                         {"label": "缺 prompt 的", "hint": "x"},
+                         {"prompt": "缺 label 的"}
+                       ]}}
+            """);
+        service.init();
+
+        PluginService.PluginMetadata meta = service.getPlugins().get(0);
+        assertNotNull(meta.getGuide());
+        assertEquals("三步上手", meta.getGuide().getIntro());
+        assertEquals(List.of("第一步", "第二步"), meta.getGuide().getSteps());
+        assertEquals(1, meta.getGuide().getQuickActions().size());
+        assertEquals("整理底稿", meta.getGuide().getQuickActions().get(0).getLabel());
+        assertEquals("请整理底稿", meta.getGuide().getQuickActions().get(0).getPrompt());
+        assertEquals("先选根文件夹", meta.getGuide().getQuickActions().get(0).getHint());
+    }
+
+    @Test
+    @DisplayName("manifest 没写 guide 时为 null（老插件不受影响）")
+    void guideAbsentIsNull() throws IOException {
+        writeManifest("mini2", "{\"id\": \"mini2\", \"name\": \"极简插件\"}");
+        service.init();
+        assertNull(service.getPlugins().get(0).getGuide());
+    }
+
+    @Test
     @DisplayName("最小 manifest（仅 id/name）可加载，可选字段为空")
     void parsesMinimalManifest() throws IOException {
         writeManifest("mini", "{\"id\": \"mini\", \"name\": \"极简插件\"}");
@@ -314,6 +346,36 @@ class PluginServiceTest {
         service.rescan();
 
         verify(skillRegistry).rescan();
+    }
+
+    @Test
+    @DisplayName("修复：启用插件时顺手重扫并启用它携带的 skill（用户只该看见一个开关）")
+    void enablingPluginEnablesCarriedSkills() throws IOException {
+        com.checkba.service.ai.skill.SkillRegistry skillRegistry =
+                mock(com.checkba.service.ai.skill.SkillRegistry.class);
+        service.setSkillRegistry(skillRegistry);
+        writeManifest("hello-plugin", FULL_MANIFEST);
+        service.init();
+        service.setEnabled("hello-plugin", false);
+
+        service.setEnabled("hello-plugin", true);
+
+        verify(skillRegistry, atLeastOnce()).rescan();
+        verify(skillRegistry).enableSkillsFromPlugin("hello-plugin");
+    }
+
+    @Test
+    @DisplayName("禁用插件不碰 skill 启停（可用性由 isAvailable 的插件判据兜住）")
+    void disablingPluginLeavesSkillStateAlone() throws IOException {
+        com.checkba.service.ai.skill.SkillRegistry skillRegistry =
+                mock(com.checkba.service.ai.skill.SkillRegistry.class);
+        service.setSkillRegistry(skillRegistry);
+        writeManifest("hello-plugin", FULL_MANIFEST);
+        service.init();
+
+        service.setEnabled("hello-plugin", false);
+
+        verify(skillRegistry, never()).enableSkillsFromPlugin(anyString());
     }
 
     @Test

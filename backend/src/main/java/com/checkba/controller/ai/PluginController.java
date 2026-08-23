@@ -58,6 +58,8 @@ public class PluginController {
         private List<PluginService.PluginToolInfo> tools;
         private int toolCount;
         private boolean enabled;
+        /** 上手引导（manifest.guide，规范 v2.5）；null 时前端按描述/工具清单兜底 */
+        private PluginService.PluginGuide guide;
         /** 被平台封禁时的原因；非空表示该插件已下架，界面应标红并禁止启用 */
         private String revokedReason;
     }
@@ -198,6 +200,7 @@ public class PluginController {
         view.setPermissions(meta.getPermissions() == null ? List.of() : meta.getPermissions());
         view.setTools(meta.getTools() == null ? List.of() : meta.getTools());
         view.setToolCount(view.getTools().size());
+        view.setGuide(meta.getGuide());
         view.setEnabled(pluginService.isEnabled(meta.getId()));
         view.setRevokedReason(pluginService.revokedReason(meta.getId()));
         return view;

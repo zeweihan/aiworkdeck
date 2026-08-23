@@ -220,6 +220,12 @@ export default {
   pfDeleteFailed: 'Delete failed',
 
   // PluginPane.vue
+  pgQuickActionsTitle: 'Quick start',
+  pgQuickActionsTip: 'Tap to hand this step to the AI assistant on the right.',
+  pgStepsTitle: 'How to use',
+  pgToolsTitle: 'Capabilities this plugin gives the AI',
+  pgChatHint: 'Describe what you need in the AI chat on the right to use this plugin.',
+  pgDefaultIntro: '{name} is installed. Describe what you need in the AI chat on the right to use it.',
   ppLoadFailed: 'Unable to load the plugin: entry URL not configured',
 
   // EasyVoicePane.vue
