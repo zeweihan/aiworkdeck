@@ -293,6 +293,37 @@ class PluginServiceTest {
         verify(toolRegistry).invalidatePluginToolCache();
     }
 
+    /**
+     * 真机复现（2026-08-23，广场上架尽调插件当天）：从插件广场装完 due-diligence、
+     * 在插件页启用之后，10 个 dd_* 工具都注册上了，但它携带的「尽调报告」skill
+     * 在 /api/skills/list 里根本不出现——手工 POST /api/skills/rescan 才冒出来。
+     *
+     * <p>根因是两套注册表各扫各的：插件携带的 skill 目录由 PluginService.loadPlugins()
+     * 扫出来放进 pluginSkillDirs，而 SkillRegistry 只在自己 @PostConstruct 和 rescan()
+     * 时来拉一次。装插件/启用插件只触发了插件侧 rescan，skill 侧不动，于是要等下次
+     * 重启后端才生效。用户看到的形态是「装完开了，但让它干活它不认」。
+     */
+    @Test
+    @DisplayName("修复：rescan 之后插件携带的 skill 也要立刻重扫（不必重启后端）")
+    void rescanAlsoRescansPluginSkills() throws IOException {
+        com.checkba.service.ai.skill.SkillRegistry skillRegistry =
+                mock(com.checkba.service.ai.skill.SkillRegistry.class);
+        service.setSkillRegistry(skillRegistry);
+        writeManifest("hello-plugin", FULL_MANIFEST);
+
+        service.rescan();
+
+        verify(skillRegistry).rescan();
+    }
+
+    @Test
+    @DisplayName("未装配 SkillRegistry（既有测试直接 new PluginService(...)）时 rescan 不受影响")
+    void rescanToleratesMissingSkillRegistry() throws IOException {
+        writeManifest("hello-plugin", FULL_MANIFEST);
+        service.init();
+        assertDoesNotThrow(service::rescan);
+    }
+
     @Test
     @DisplayName("未装配 ToolRegistry（既有测试直接 new PluginService(...)）时 rescan 不受影响")
     void rescanToleratesMissingToolRegistry() throws IOException {
