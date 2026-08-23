@@ -128,7 +128,7 @@ const { elec, killTree } = spawnElectron({
   elec.stdout.pipe(elecLog); elec.stderr.pipe(elecLog)
 }
 
-const ws = await waitForCdpWs(CDP_PORT)
+const ws = await waitForCdpWs(CDP_PORT, 60, elec)
 if (!ws) { killTree(); die('CDP 端点未就绪（端口 ' + CDP_PORT + '）') }
 {
   const bad = cdpOwnershipError(CDP_PORT, elec)
