@@ -161,6 +161,24 @@ toEventStart），五个消费组件都从这里拿，别再各写一份。
 `type="date"/"time"` 会静默降级成文本框。日期/时间输入一律用 `components/AwdDatePicker.vue`
 （mounted 手工挂真原生 input 绕开 uni 模板劫持；只监听 change 防中间值上抛）。
 
+## 地雷：uni-app H5 把 `<view>` 上的事件重建成普通对象，`button` 一类字段全丢
+
+uni-h5 的 `createNativeEvent` 收到 `<view>`（以及别的内置元素）上的原生事件后，
+**重新造一个普通对象**交给回调，只有 `{ type, timeStamp, target, currentTarget,
+detail }` 加两个转发方法；随后按类型补字段，而补的分支只有四类——
+`click` / `mouse` 开头（含 `contextmenu`）/ `touch` 系 / 键盘——**并且补的只是坐标**
+（`normalizeMouseEvent` 抄 pageX/clientY 一类，`button` 谁都没抄）。
+
+后果：`@auxclick`、`@mousedown` 这类靠 `e.button` 分左右中键的写法在 H5/桌面端**恒不成立**。
+dev-board#97 的「中键关闭标签」就这么静默失效了一整轮：auxclick 确实派发到了标签上、
+`onTabAuxClick` 确实被调用，但 `e.button === undefined`，`e.button !== 1` 恒真一路 return。
+
+判定与修法（`fileOpenTabs.js` 的 `mouseButtonOf`）：键位从**当前正在派发的原生事件**
+（`window.event`）上取，回调里带 `button` 时优先用回调的（原生事件没被包装的平台走那条）。
+同理，凡是要读 `dataTransfer` / `clientX` / `key` 一类原生字段的 `<view>` 事件处理器，
+先确认这一类在不在上面那四个补字段分支里；`tabDragSplit.js` 的 `onTabDragStart`
+就是靠 `if (evt && evt.dataTransfer)` 兜住的（拖拽状态记在组件上，不依赖 dataTransfer）。
+
 ## 顶栏头像与统一「设置」标签（2026-08-19 立，2026-08-20 并，2026-08-21 撤下拉）
 
 rail 底部的**齿轮与用户头像都撤了**，收进顶栏右上角「活动记录」右侧的
