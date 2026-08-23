@@ -44,20 +44,11 @@ export const panelSwitchingMethods = {
         // 否则律师下次回到版本面板，还端着上一次右键那份文件的过滤条。
         if (key !== 'version') this.versionFileFilter = null
 
-        // Check if it's a dynamic plugin and open its tab
-        const plugin = this.dynamicPlugins.find(p => p.key === key)
-        if (plugin) {
-          // pluginId / permissions 随标签一起带过去：PluginPane 的 postMessage 桥
-          // 要用原始插件 id（标签 id 是 plugin-<id> 的面板 key）与 manifest 权限声明
-          this.openFile({
-            id: plugin.key,
-            name: plugin.label,
-            fileType: 'plugin',
-            pluginId: plugin.pluginId,
-            permissions: plugin.permissions || [],
-            frontendEntry: plugin.frontendEntry
-          })
-        }
+        // 动态插件（Web 插件 → PluginPane，纯工具/skill 插件 → PluginGuidePane）在
+        // 左栏面板区渲染，与诉讼可视化/脱敏等一致（「左栏一个图标 = 一个插件」）。
+        // 这里**不再** openFile 一个 fileType:'plugin' 的中栏标签——isFileTypeSupported
+        // 没有 'plugin'，那条老路只会弹「无法打开文件」的模态（dev-board#132 真机复现），
+        // 从来没渲染出过东西。leftPaneKey 已经切到本插件，左栏 v-else-if 分支负责显示。
 
         // 恢复新模式下的活跃 tab。记忆里的 id 可能已经关掉、也可能在新面板下
         // 根本不可见（版本对比标签只在 version/files 下可见），直接照抄会把律师

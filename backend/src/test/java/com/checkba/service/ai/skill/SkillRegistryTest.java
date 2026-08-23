@@ -296,6 +296,45 @@ class SkillRegistryTest {
         assertTrue(registry.getSkill("plugin-skill").isPresent());
     }
 
+    /**
+     * 真机复现（2026-08-23，尽调插件上架当天）：插件携带的 skill 写着 enabled_by_default:false
+     * （为的是插件没装前别出现），用户在广场装好插件、点了启用，工具注册上了，但 skill 仍是禁用态
+     * ——对话里说「尽调报告」永远不命中。用户视角是第三个看不见的开关。
+     * 规则：启用插件 = 启用它携带的全部 skill；别的插件 / 内置 skill 一个都不碰。
+     */
+    @Test
+    @DisplayName("修复：enableSkillsFromPlugin 只把该插件携带的 skill 翻成启用")
+    void enablingPluginEnablesItsCarriedSkills() throws IOException {
+        Path pluginsDir = tempDir.resolve("plugins");
+        Path pluginDir = pluginsDir.resolve("my-plugin");
+        Path otherDir = pluginsDir.resolve("other-plugin");
+        Files.createDirectories(pluginDir);
+        Files.createDirectories(otherDir);
+        Files.writeString(pluginDir.resolve("manifest.json"), """
+                { "id": "my-plugin", "name": "带技能的插件", "version": "1.0.0", "skills": ["my-skill"] }
+                """);
+        Files.writeString(otherDir.resolve("manifest.json"), """
+                { "id": "other-plugin", "name": "别的插件", "version": "1.0.0", "skills": ["other-skill"] }
+                """);
+        writeSkill(pluginDir.resolve("my-skill"), "plugin-skill", "enabled_by_default: false\n");
+        writeSkill(otherDir.resolve("other-skill"), "other-skill", "enabled_by_default: false\n");
+        writeSkill(tempDir.resolve("builtin-off"), "builtin-off", "enabled_by_default: false\n");
+
+        PluginService pluginService = new PluginService(null, pluginsDir.toString());
+        pluginService.init();
+        SkillRegistry registry = newRegistry(tempDir, pluginService);
+        assertFalse(registry.isEnabled("plugin-skill"), "种子化后默认禁用");
+
+        List<String> flipped = registry.enableSkillsFromPlugin("my-plugin");
+
+        assertEquals(List.of("plugin-skill"), flipped);
+        assertTrue(registry.isEnabled("plugin-skill"));
+        assertFalse(registry.isEnabled("other-skill"), "别的插件的 skill 不动");
+        assertFalse(registry.isEnabled("builtin-off"), "内置 skill 不动");
+        assertEquals(List.of(), registry.enableSkillsFromPlugin("my-plugin"), "已启用的不重复报告");
+        assertEquals(List.of(), registry.enableSkillsFromPlugin("no-such-plugin"));
+    }
+
     @Test
     @DisplayName("启停：setEnabled 生效；未知 id 抛 IllegalArgumentException；rescan 后保持")
     void enableDisableAndRescan() throws IOException {
