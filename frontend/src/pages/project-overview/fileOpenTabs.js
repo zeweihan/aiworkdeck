@@ -11,6 +11,17 @@ import { ICONS as GLYPHS, fileGlyph } from '@/config/icons.js'
 // 必须与后端 TextFileEditTools.PLAIN_TEXT_TYPES 完全一致，改这里要同步改那边。
 const PLAIN_TEXT_TYPES = ['txt', 'md', 'markdown', 'json', 'js', 'mjs', 'css', 'html', 'htm', 'yml', 'yaml']
 
+// 取鼠标事件的键位。uni-app H5 会把 <view> 上的原生事件重新包装成普通对象
+// （uni-h5 的 createNativeEvent），只给 click / mouse 系 / touch / keyboard 几类补字段，
+// 补的也只是坐标，`button` 一类都没有；`auxclick` 连"补字段"这一步都不走，
+// 回调拿到的只有 { type, timeStamp, target, currentTarget, detail }。
+// 所以中键判定不能只看回调里的事件对象，要回退到当前正在派发的原生事件。
+function mouseButtonOf(e) {
+  if (e && typeof e.button === 'number') return e.button
+  const native = typeof window !== 'undefined' ? window.event : null
+  return native && typeof native.button === 'number' ? native.button : -1
+}
+
 export const fileOpenTabsMethods = {
     handleFileTreeSelect(file) {
       if (!file || file.isFolder) return
@@ -251,12 +262,12 @@ export const fileOpenTabsMethods = {
      * （左键是 @tap 激活，右键没有菜单）。标签没有「固定」概念，全部可关。
      */
     onTabMouseDown(e) {
-      if (e && e.button === 1) e.preventDefault()
+      if (mouseButtonOf(e) === 1 && e && e.preventDefault) e.preventDefault()
     },
     onTabAuxClick(e, file, pane) {
-      if (!e || e.button !== 1) return
-      e.preventDefault()
-      e.stopPropagation()
+      if (!e || !file || mouseButtonOf(e) !== 1) return
+      if (e.preventDefault) e.preventDefault()
+      if (e.stopPropagation) e.stopPropagation()
       this.closeFile(file.id, pane)
     },
     async closeFile(fileId, pane) {
