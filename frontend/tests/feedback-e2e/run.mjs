@@ -80,7 +80,7 @@ const elecLog = fs.createWriteStream(path.join(os.tmpdir(), 'feedback-e2e-electr
 elec.stdout.pipe(elecLog); elec.stderr.pipe(elecLog)
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-const ws = await waitForCdpWs(CDP_PORT)
+const ws = await waitForCdpWs(CDP_PORT, 60, elec)
 if (!ws) { console.error('CDP 端点未就绪（端口 ' + CDP_PORT + '）'); killTree(); process.exit(1) }
 {
   const bad = cdpOwnershipError(CDP_PORT, elec)

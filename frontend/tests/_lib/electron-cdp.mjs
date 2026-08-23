@@ -10,6 +10,8 @@
 //   ④ 连上之后钉稳输入通道——见 INPUT_FLAGS 与 hardenPageInput 的注释。
 
 import { spawn, execSync } from 'node:child_process'
+import os from 'node:os'
+import path from 'node:path'
 
 // 驱动一个"不在最前面"的窗口时，必须关掉 Chromium 的后台降级。被遮挡/非活动的
 // 窗口一旦被降级，**跟焦点绑定的输入**（mousePressed / mouseReleased / keyDown）
@@ -38,8 +40,18 @@ export const pickCdpPort = (envName, from) => {
 
 // detached 让它自成进程组，收尾时 kill(-pid) 能把 npx→node→Electron 整棵树带走。
 // 测试进程自己被 Ctrl-C / 异常退出时也要收，否则下一轮又撞上一个占着端口的孤儿。
+// 装好的 AI WorkDeck.app 开着的时候，dev 实例会被 main.js 的
+// requestSingleInstanceLock 当场 app.quit()——单实例锁按 userData 目录判重，两边
+// 默认是同一个。现象极不好认：Electron 起来、打了 "DevTools listening"、随即无声退出，
+// 套件只看见「CDP 端点未就绪」或连 ws 时 ECONNREFUSED。给 dev 实例挑一个自己的
+// profile 目录，锁就各归各的，维护者不必为跑一次门禁去关自己的应用。
+// （按端口取名：同一个套件重跑复用同一份 profile，不会把 tmp 撑爆。）
+export const devProfileDir = (cdpPort) =>
+  path.join(os.tmpdir(), 'awd-e2e-electron-profile-' + cdpPort)
+
 export const spawnElectron = ({ desktopDir, cdpPort, env, extraArgs = [] }) => {
-  const elec = spawn('npx', ['electron', '.', '--remote-debugging-port=' + cdpPort, ...INPUT_FLAGS, ...extraArgs], {
+  const elec = spawn('npx', ['electron', '.', '--remote-debugging-port=' + cdpPort,
+    '--user-data-dir=' + devProfileDir(cdpPort), ...INPUT_FLAGS, ...extraArgs], {
     cwd: desktopDir,
     env: { ...process.env, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -55,13 +67,21 @@ export const spawnElectron = ({ desktopDir, cdpPort, env, extraArgs = [] }) => {
   return { elec, killTree }
 }
 
-export const waitForCdpWs = async (cdpPort, tries = 60) => {
+// elec 传进来时顺带看着它：进程自己先退了就不必再干等满 60 秒，
+// 而且能把退出码报出来（"起不来"和"起来了但没听端口"是两种病）。
+export const waitForCdpWs = async (cdpPort, tries = 60, elec = null) => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
   for (let i = 0; i < tries; i++) {
     await sleep(1000)
     const ws = await fetch('http://127.0.0.1:' + cdpPort + '/json/version')
       .then((r) => r.json()).then((j) => j.webSocketDebuggerUrl).catch(() => null)
     if (ws) return ws
+    if (elec && elec.exitCode !== null) {
+      console.error('Electron 起来后自己退了（exitCode=' + elec.exitCode
+        + '）。最常见的是装好的 AI WorkDeck 正开着、单实例锁把 dev 实例顶掉了，'
+        + '或者 dev server 地址不对。日志见 ' + path.join(os.tmpdir(), '*-electron.log'))
+      return null
+    }
   }
   return null
 }

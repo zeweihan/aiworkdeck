@@ -112,7 +112,7 @@ const elecLog = fs.createWriteStream(path.join(os.tmpdir(), 'desktop-e2e-electro
 elec.stdout.pipe(elecLog); elec.stderr.pipe(elecLog)
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-const ws = await waitForCdpWs(CDP_PORT)
+const ws = await waitForCdpWs(CDP_PORT, 60, elec)
 if (!ws) { console.error('CDP 端点未就绪（端口 ' + CDP_PORT + '）'); killTree(); process.exit(1) }
 
 {
@@ -162,7 +162,13 @@ try {
       const x = r.x + r.width / 2, y = r.y + r.height / 2
       const hit = document.elementFromPoint(x, y)
       if (hit && el.contains(hit)) return { x, y }
-      let who = hit ? hit.tagName.toLowerCase() : '(空白)'
+      // 点在视口外时 elementFromPoint 直接返回 null，跟"被浮层盖住"是两种病，
+      // 只报一句 (空白) 分不出来——把当时的矩形与视口一起带上。
+      let who = hit ? hit.tagName.toLowerCase()
+        : ('(空白) rect=' + Math.round(r.x) + ',' + Math.round(r.y) + ' ' + Math.round(r.width) + 'x' + Math.round(r.height)
+           + ' 视口=' + window.innerWidth + 'x' + window.innerHeight
+           + ' 文档高=' + Math.round(document.scrollingElement.scrollHeight)
+           + ' 滚动=' + Math.round(document.scrollingElement.scrollTop))
       try { if (hit && hit.shadowRoot) who += ': ' + hit.shadowRoot.textContent.replace(/\\s+/g, ' ').trim().slice(0, 200) } catch (e) {}
       return { x, y, blockedBy: who }
     }`
