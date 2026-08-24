@@ -1642,6 +1642,19 @@ $bg-white: #FFFFFF;
 .tabs-scroll {
   width: 100%;
   height: 100%;
+
+  /* VS Code 式标签栏：滚动条整条隐藏（横滚靠滚轮，onTabsWheel）。
+     真正 overflow 的是 uni-h5 scroll-view 的内层元素（不带本组件 scope id），要 :deep 兜住。 */
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+  :deep(*) {
+    scrollbar-width: none;
+  }
+  :deep(*::-webkit-scrollbar) {
+    display: none;
+  }
 }
 
 .tabs-list {

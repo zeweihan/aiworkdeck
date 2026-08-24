@@ -48,6 +48,23 @@ export const tabDragSplitMethods = {
       this.onTabDragEnd()
     },
 
+    onTabsWheel(evt) {
+      // VS Code 式标签栏：滚动条整条隐藏，纵向滚轮映射为横向滚动。
+      // scroll-view 真正 overflow 的是 uni-h5 渲染出的内层元素，不是根元素本身，按 scrollWidth 找。
+      const root = evt?.currentTarget
+      if (!root || typeof root.querySelectorAll !== 'function') return
+      let scroller = null
+      if (root.scrollWidth > root.clientWidth) scroller = root
+      if (!scroller) {
+        for (const el of root.querySelectorAll('*')) {
+          if (el.scrollWidth > el.clientWidth + 1) { scroller = el; break }
+        }
+      }
+      if (!scroller) return
+      const delta = Math.abs(evt.deltaX) > Math.abs(evt.deltaY) ? evt.deltaX : evt.deltaY
+      scroller.scrollLeft += delta
+    },
+
     getTabDragPayload(evt) {
       try {
         const raw = evt?.dataTransfer?.getData('application/json')

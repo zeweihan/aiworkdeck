@@ -6,7 +6,7 @@
       class="clip-unlock-hint"
       :text="$t('panels.cpUnlockHint', { count: hiddenCount })"
     />
-    <scroll-view class="clip-body" :scroll-y="false" :scroll-x="true" show-scrollbar="false">
+    <scroll-view class="clip-body" :scroll-y="false" :scroll-x="true" :show-scrollbar="false">
       <view v-if="loading" class="loading">{{ $t('panels.cpLoading') }}</view>
       <view v-else-if="items.length === 0" class="empty">{{ $t('panels.cpEmpty') }}</view>
       <view v-else class="list-grid">
