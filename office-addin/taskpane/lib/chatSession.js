@@ -182,7 +182,7 @@ export async function activateSession({ settings, projectId }) {
 async function preconnect() {
   if (!ctx.projectId || !ctx.settings || !isConfigured(ctx.settings)) return
   if (!conversationId) {
-    // 会话 ID 优先服务端签发；旧后端无该端点时静默回退客户端生成。
+    // 会话 ID 优先服务端签发；仅旧后端（端点 404）时回退客户端生成。
     // 按项目落本机存储，任务窗格重建后据它接回同一场对话。
     const gen = generation
     const issued = await createConversation(ctx.settings, parseInt(ctx.projectId, 10))
@@ -190,7 +190,24 @@ async function preconnect() {
     conversationId = issued || `conv-${Date.now()}`
     saveConversationId(ctx.projectId, conversationId)
   }
-  await ensureConnection()
+  try {
+    await ensureConnection()
+  } catch (e) {
+    // 自愈：存量会话 ID 已死（云后端签发登记簿是内存态，重启即清；或 localStorage 里
+    // 留着历史版本自造的 conv-*）。特征是 connect 403 且本地没有任何消息——有消息的
+    // 会话走 DB 归属判定不会 403。丢弃死 ID → 重新签发 → 只重试一次。
+    const canHeal = e && e.status === 403 && !messages.value.length
+    if (!canHeal) throw e
+    const gen = generation
+    console.warn('[Addin] 存量会话已失效（connect 403），丢弃并重新签发', conversationId)
+    conversationId = null
+    saveConversationId(ctx.projectId, '')
+    const issued = await createConversation(ctx.settings, parseInt(ctx.projectId, 10))
+    if (gen !== generation) return
+    conversationId = issued || `conv-${Date.now()}`
+    saveConversationId(ctx.projectId, conversationId)
+    await ensureConnection()
+  }
 }
 
 /**

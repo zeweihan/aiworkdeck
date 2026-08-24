@@ -38,7 +38,12 @@ export function createSseConnection({ baseUrl, token, conversationId, onEvent, o
       headers: { 'X-Session-Id': token || '' },
       signal: controller.signal
     })
-    if (!resp.ok) throw new Error(`SSE 建连失败（HTTP ${resp.status}）：令牌无效或后端拒绝了请求`)
+    if (!resp.ok) {
+      const err = new Error(`SSE 建连失败（HTTP ${resp.status}）：令牌无效或后端拒绝了请求`)
+      // 挂上状态码：403（会话不归当前用户/签发登记已丢）是调用方能自愈的，其余不能
+      err.status = resp.status
+      throw err
+    }
     return resp
   }
 
