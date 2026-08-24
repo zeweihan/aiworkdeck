@@ -13,12 +13,6 @@ import { createEvidenceLinkForDrop, pickEvidenceTarget } from './evidenceLinkCor
 
 export { createEvidenceLinkForDrop, pickEvidenceTarget }
 
-// method 浮动小条无操作时的自动收起延时（ms）。此前这个常量漏定义，
-// armEvidenceMethodBarTimer 的 setTimeout 直接撞 ReferenceError——建链已成功，
-// 但抛出打断了紧随的 awd:evidence-changed 通知，小条也永不收起，用户「释放后没反应」
-// （dev-board#135，真机复现）。
-const METHOD_BAR_TTL_MS = 3000
-
 // request() 已把 {code:0,data} 整体 resolve 出来，这里统一剥一层。
 function unwrap(resp) {
   if (resp && typeof resp === 'object' && 'code' in resp && 'data' in resp) return resp.data
@@ -26,8 +20,12 @@ function unwrap(resp) {
 }
 
 export const evidenceLinkData = () => ({
-  // method 浮动小条：连续拖放只保留最后一条（对象整体替换）
-  evidenceMethodBar: { visible: false, side: 'left', fileName: '', method: 'written_review', targetId: null, linkKey: '' },
+  // method 浮动小条：连续拖放只保留最后一条（对象整体替换）。
+  // docFileId 用于把小条钉在建链的那份文档上——换标签/关文档后它不该还挂着。
+  evidenceMethodBar: {
+    visible: false, side: 'left', fileName: '', method: 'written_review',
+    targetId: null, linkKey: '', docFileId: null,
+  },
 })
 
 export const evidenceLinkMethods = {
@@ -66,26 +64,32 @@ export const evidenceLinkMethods = {
       uni.showToast({ title: this.$t(key), icon: 'none' })
       return
     }
-    this.showEvidenceMethodBar({ side, fileName: file.name || '', targetId: res.targetId, linkKey: res.linkKey })
+    this.showEvidenceMethodBar({
+      side, fileName: file.name || '', targetId: res.targetId, linkKey: res.linkKey, docFileId: Number(doc.id),
+    })
     uni.$emit('awd:evidence-changed', { docFileId: Number(doc.id), linkKey: res.linkKey })
   },
 
-  showEvidenceMethodBar({ side, fileName, targetId, linkKey }) {
-    this.evidenceMethodBar = { visible: true, side, fileName, method: 'written_review', targetId, linkKey }
-    this.armEvidenceMethodBarTimer()
-  },
-  armEvidenceMethodBarTimer() {
-    clearTimeout(this._evidenceBarTimer)
-    this._evidenceBarTimer = setTimeout(() => { this.evidenceMethodBar.visible = false }, METHOD_BAR_TTL_MS)
+  /**
+   * 建链成功后的确认小条。**不自动收起**：它同时是「已经关联上了」的回执和
+   * 「这条底稿按什么方式核查」的提问，3 秒自动消失两件事都办不成——用户松手时
+   * 眼睛在正文的落点上，等看向窗格左下角，小条已经没了，于是「什么都没发生」
+   * （dev-board#138，维护者真机反馈；#135 修的是它压根不显示，这次修的是它留不住）。
+   * 收起只由用户动作驱动：点 ×、选了方法、又建了新的一条（整体替换）、
+   * 或者换到别的文档（模板里按 docFileId 收，见 project-overview.vue）。
+   */
+  showEvidenceMethodBar({ side, fileName, targetId, linkKey, docFileId }) {
+    this.evidenceMethodBar = {
+      visible: true, side, fileName, method: 'written_review', targetId, linkKey,
+      docFileId: docFileId == null ? null : Number(docFileId),
+    }
   },
   closeEvidenceMethodBar() {
-    clearTimeout(this._evidenceBarTimer)
     this.evidenceMethodBar.visible = false
   },
   async onEvidenceMethodChange({ targetId, method }) {
     if (!targetId || !method) return
     this.evidenceMethodBar.method = method
-    this.armEvidenceMethodBarTimer()
     const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
     try {
       await updateEvidenceTarget(pid, targetId, { method })

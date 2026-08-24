@@ -1,5 +1,8 @@
 <template>
   <view v-if="visible" class="evidence-bar" @mousedown.stop @tap.stop>
+    <svg class="evidence-bar-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path v-for="(d, i) in linkIcon" :key="i" :d="d" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
     <text class="evidence-bar-linked">{{ $t('workbench.evidence.linked', { name: fileName }) }}</text>
     <text class="evidence-bar-sep">·</text>
     <text class="evidence-bar-label">{{ $t('workbench.evidence.methodLabel') }}</text>
@@ -17,9 +20,13 @@
 </template>
 
 <script>
-// 拖文件到编辑器建链成功后的 method 浮动小条（spec §4.1）。纯展示：状态与 3s 自动收起
-// 计时都在宿主（evidenceLinkActions.js 的 armEvidenceMethodBarTimer），这里只回传点击。
+// 拖文件到编辑器建链成功后的 method 浮动小条（spec §4.1）。纯展示，状态在宿主
+// （evidenceLinkActions.js），这里只回传点击。
+// **不自动收起**：它既是「关联成功」的回执，又是「按什么方式核查」的提问，
+// 自动消失两件事都办不成（dev-board#138）。所以视觉上按"成功态"做：绿色描边 +
+// 链接图标，让用户在窗格底部一眼认出来，而不是当成一排普通 chip。
 import { EVIDENCE_METHODS } from '@/utils/evidenceLocator.js'
+import { ICONS } from '@/config/icons.js'
 
 export default {
   name: 'EvidenceMethodBar',
@@ -31,7 +38,7 @@ export default {
     targetId: { type: [Number, String], default: null },
   },
   data() {
-    return { methods: EVIDENCE_METHODS }
+    return { methods: EVIDENCE_METHODS, linkIcon: ICONS.link }
   },
   methods: {
     pick(m) {
@@ -49,11 +56,12 @@ export default {
   max-width: calc(100% - 32px);
   display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
   padding: 8px 12px; border-radius: 10px;
-  background: #fff; border: 1px solid #DEE2E6;
-  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
+  background: #fff; border: 1px solid #1A5336;
+  box-shadow: 0 6px 20px rgba(26, 83, 54, 0.22);
   font-size: 12px; color: #1e293b;
 }
-.evidence-bar-linked { font-weight: 600; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.evidence-bar-icon { width: 15px; height: 15px; flex: none; color: #1A5336; }
+.evidence-bar-linked { font-weight: 600; color: #1A5336; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .evidence-bar-sep { color: #94a3b8; }
 .evidence-bar-label { color: #64748b; }
 .evidence-bar-chips { display: flex; gap: 6px; flex-wrap: wrap; }
