@@ -831,7 +831,7 @@
                   <!-- EvidenceLink method 浮动小条：拖文件到编辑器建链成功后出现，钉在窗格底部 -->
                   <EvidenceMethodBar
                     v-if="evidenceMethodBar.side === 'left'"
-                    :visible="evidenceMethodBar.visible"
+                    :visible="evidenceMethodBar.visible && isEvidenceBarOnActiveDoc(activeFileLeft)"
                     :file-name="evidenceMethodBar.fileName"
                     :method="evidenceMethodBar.method"
                     :target-id="evidenceMethodBar.targetId"
@@ -1007,7 +1007,7 @@
                 >
                   <EvidenceMethodBar
                     v-if="evidenceMethodBar.side === 'right'"
-                    :visible="evidenceMethodBar.visible"
+                    :visible="evidenceMethodBar.visible && isEvidenceBarOnActiveDoc(activeFileRight)"
                     :file-name="evidenceMethodBar.fileName"
                     :method="evidenceMethodBar.method"
                     :target-id="evidenceMethodBar.targetId"
@@ -3646,6 +3646,17 @@ export default {
       this.showFilePicker = true
     },
 
+    /**
+     * method 小条钉在建链的那份文档上。小条不再自动收起（dev-board#138），
+     * 所以必须有这一条：换标签、关文档之后，它不能还挂在别的文档上说「已关联」。
+     * 用渲染期判断而不是 watch —— watch 漏一个入口（关标签/分屏挪动/退出项目）
+     * 就是一条挂错文档的回执，判断放在渲染期漏不掉。
+     */
+    isEvidenceBarOnActiveDoc(activeFile) {
+      const pinned = this.evidenceMethodBar && this.evidenceMethodBar.docFileId
+      if (pinned == null) return true // 旧状态/测试桩没带 docFileId 时不收
+      return !!activeFile && Number(activeFile.id) === Number(pinned)
+    },
     isTabVisible(file) {
       if (!file) return false
       // dd-request 或者 fileType 为 dd 的属于尽调清单类标签
