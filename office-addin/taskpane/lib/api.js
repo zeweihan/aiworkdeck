@@ -272,19 +272,24 @@ export async function refreshPlatformAiKey({ serverUrl, token }, key) {
  */
 export async function createConversation({ serverUrl, token }, projectId) {
   const base = normalizeBaseUrl(serverUrl)
-  try {
-    const resp = await fetch(`${base}/api/agent/conversations`, {
-      method: 'POST',
-      headers: headers(token),
-      body: JSON.stringify({ projectId })
-    })
-    if (!resp.ok) return null
-    const data = await resp.json()
-    if (data && typeof data.conversationId === 'string' && data.conversationId) {
-      return data.conversationId
-    }
-  } catch (e) {
-    // 静默降级：会话 ID 回退客户端生成
+  const resp = await fetch(`${base}/api/agent/conversations`, {
+    method: 'POST',
+    headers: headers(token),
+    body: JSON.stringify({ projectId })
+  })
+  // 只有 404（旧后端没有签发端点）允许回退客户端自造 ID——那种后端也不校验签发。
+  // 403/5xx 一律抛出：强制签发的云后端上，自造 ID 生来就是死的，落盘等于把用户锁死
+  // （2026-08-24 mac 插件「SSE 403」事故的根因之一）。
+  if (resp.status === 404) return null
+  if (!resp.ok) {
+    const err = new Error(`会话签发失败（HTTP ${resp.status}）`)
+    err.status = resp.status
+    throw err
+  }
+  let data = null
+  try { data = await resp.json() } catch (e) { return null }
+  if (data && typeof data.conversationId === 'string' && data.conversationId) {
+    return data.conversationId
   }
   return null
 }
