@@ -44,8 +44,24 @@ function seedPack(packsDir, opts = {}) {
 // 一起卡死——当句柄正是本进程读流 autoClose 排队待跑的 fs.close 时，同步重试
 // 给多大预算都永远等不到释放（run 32237671073 实测 5.6s 预算整段跑穿）。
 // fs.promises.rm 的重试间隔走 setTimeout，让出事件循环，挂起的 close 才有机会执行。
-function rmrf(dir) {
-  return fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+//
+// 外层再包一圈 EPERM/EBUSY 短重试：windows-latest 上 Defender 实时扫描会拿着
+// 排他句柄锁临时文件，rm 内部扫描目录的 lstat 直接报 EPERM（形态：hookFailed
+// "EPERM: operation not permitted, lstat '...\Temp\drawio-*\index.html'"，
+// 2026-08-24 一天内咬了两次、rerun 即绿，run 32709185491）。rm 自带的
+// maxRetries=10/retryDelay=100 总预算约 5.5s，扫描锁窗口可以更长，且内部
+// 重试次数用完就把 EPERM 原样抛出——t.after 里一抛就是 hookFailed。这里每轮
+// 都是完整重跑 rm（诚实重试，不跳过、不吞其它错误码），重试仍失败就照常抛。
+async function rmrf(dir) {
+  const RETRIES = 3
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    } catch (e) {
+      if ((e.code !== 'EPERM' && e.code !== 'EBUSY') || attempt >= RETRIES) throw e
+      await new Promise((r) => setTimeout(r, 500 * (attempt + 1)))
+    }
+  }
 }
 
 function get(origin, urlPath) {
