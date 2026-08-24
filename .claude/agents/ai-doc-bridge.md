@@ -136,6 +136,8 @@ txt/md/markdown 自 dev-board#37 起不进 LOWA（前端走 PlainTextEditor.vue�
 
 ## EvidenceLink 契约（dev-board#100/#102，spec `docs/superpowers/specs/2026-08-21-evidence-link-p0-design.md`）
 
+- **回执一律走 method 小条，不许用 uni.showToast**（PR#590/dev-board#139）：toast 在编辑器场景被 webview 遮挡（#133 定性），失败只弹 toast = 「文字已写成链接但库里没记录、用户毫无感知」。`EvidenceMethodBar` 双态（success/error，`evidenceMethodBar.status`），失败态红描边+原因，钉在建链那份文档上；API 入库失败提示「重拖同一段文字重试」（recovered 分支收编死锚点）。拖拽 ghost 统一走 `utils/dragImage.js` 预加载小徽标（dragstart 现场 new Image 来不及加载会回退整行元素快照）。
+
 报告文字 ↔ 底稿文件的关联事实表，平台内置、不门控；尽调插件只是第一个消费方。后端单一出口 `service/evidence/EvidenceLinkService.java`（Controller / SDK 宿主 / P1 AI 工具都只经它读写），实体 `model/entity/EvidenceLink.java` + `EvidenceLinkTarget.java`，REST `controller/EvidenceLinkController.java`，迁移 `service/evidence/EvidenceLinkMigrationRunner.java`，纯函数 `AnchorHash` / `Ulid`。旧 `doc_file_link` 表与 `/api/projects/{pid}/doc-links` 只读代理保留一个发版周期（POST 已 410）。
 
 **两张表**
