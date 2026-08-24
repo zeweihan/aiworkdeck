@@ -726,7 +726,7 @@
             <view class="tabs-bar">
               <!-- 左侧窗格的 Tabs -->
               <view class="tabs-pane tabs-pane-left" :class="{ 'half-width': splitMode }">
-                <scroll-view class="tabs-scroll" scroll-x show-scrollbar="false">
+                <scroll-view class="tabs-scroll" scroll-x :show-scrollbar="false" @wheel.prevent="onTabsWheel">
                   <view
                     class="tabs-list"
                     @dragover.prevent="onTabDropZoneDragOver('left')"
@@ -766,7 +766,7 @@
 
               <!-- 右侧窗格的 Tabs (仅在分屏时显示) -->
               <view v-if="splitMode" class="tabs-pane tabs-pane-right">
-                <scroll-view class="tabs-scroll" scroll-x show-scrollbar="false">
+                <scroll-view class="tabs-scroll" scroll-x :show-scrollbar="false" @wheel.prevent="onTabsWheel">
                   <view
                     class="tabs-list"
                     @dragover.prevent="onTabDropZoneDragOver('right')"
