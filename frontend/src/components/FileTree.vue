@@ -917,6 +917,7 @@ import { groupByParent, buildTreeFromGroups } from '@/utils/fileTreeBuild.js'
 import { evidenceRefCounts } from '@/services/api.js'
 import { createRefCountsFetcher } from '@/utils/fileTreeRefCounts.js'
 import CircularProgress from '@/components/CircularProgress.vue'
+import { warmDragImage, applyDragImage } from '@/utils/dragImage.js'
 import FileTypeIcon from '@/components/FileTypeIcon.vue'
 import TagChip from '@/components/TagChip.vue'
 import TagSelector from '@/components/TagSelector.vue'
@@ -1319,6 +1320,8 @@ export default {
     }
   },
   mounted() {
+    // 预加载拖拽 ghost 小徽标（dragstart 现场加载来不及，见 utils/dragImage.js）
+    warmDragImage()
     // selectionMode 关闭时，确保不残留选中态
     if (!this.selectionMode) {
       this.clearChecked()
@@ -2558,11 +2561,9 @@ export default {
         // 允许 copy/link/move
         e.dataTransfer.effectAllowed = 'all'
 
-        // 设置自定义拖拽图片
-        const img = new Image()
-        img.src = '/static/Drag.png'
-        // 设置图片热点为中心 (假设图片大概 30x30, 这里的 offset 可以根据实际图调整)
-        e.dataTransfer.setDragImage(img, 15, 15)
+        // 自定义拖拽影像：预加载好的小徽标（见 utils/dragImage.js——现场 new Image
+        // 来不及加载，Chromium 会回退成整行元素快照，操作图标一起浮在正文上）
+        applyDragImage(e)
 
         // 设置拖拽数据
         try {

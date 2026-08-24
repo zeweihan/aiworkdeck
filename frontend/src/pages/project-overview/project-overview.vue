@@ -835,6 +835,8 @@
                     :file-name="evidenceMethodBar.fileName"
                     :method="evidenceMethodBar.method"
                     :target-id="evidenceMethodBar.targetId"
+                    :status="evidenceMethodBar.status"
+                    :error-text="evidenceMethodBar.errorText"
                     @change="onEvidenceMethodChange"
                     @close="closeEvidenceMethodBar"
                   />
@@ -1011,6 +1013,8 @@
                     :file-name="evidenceMethodBar.fileName"
                     :method="evidenceMethodBar.method"
                     :target-id="evidenceMethodBar.targetId"
+                    :status="evidenceMethodBar.status"
+                    :error-text="evidenceMethodBar.errorText"
                     @change="onEvidenceMethodChange"
                     @close="closeEvidenceMethodBar"
                   />
@@ -3655,7 +3659,10 @@ export default {
     isEvidenceBarOnActiveDoc(activeFile) {
       const pinned = this.evidenceMethodBar && this.evidenceMethodBar.docFileId
       if (pinned == null) return true // 旧状态/测试桩没带 docFileId 时不收
-      return !!activeFile && Number(activeFile.id) === Number(pinned)
+      // Number() 出 NaN（非数值 id 文档）按未钉处理：NaN === NaN 恒 false 会让小条永久隐藏
+      const pinnedNum = Number(pinned)
+      if (!Number.isFinite(pinnedNum)) return true
+      return !!activeFile && Number(activeFile.id) === pinnedNum
     },
     isTabVisible(file) {
       if (!file) return false
