@@ -63,6 +63,11 @@ public class WizardController {
         Map<String, Object> body = new HashMap<>();
         body.put("code", 0);
         body.put("initialized", isInitialized());
+        // 后端 build 指纹（桌面壳 spawn 时经 AWD_BACKEND_BUILD 注入 jar 的 size-mtime）。
+        // 桌面壳复用端口上的既有后端前用它验明「不但是我们的后端，而且是当前版本的
+        // 后端」——2026-08-24 维护者真机复用了 8-21 的陈旧后端，evidence-links 一路
+        // 404 且毫无提示（dev-board#139）。非桌面壳拉起的进程（dev/云端）此值为空串。
+        body.put("build", System.getenv().getOrDefault("AWD_BACKEND_BUILD", ""));
         return ResponseEntity.ok(body);
     }
 
