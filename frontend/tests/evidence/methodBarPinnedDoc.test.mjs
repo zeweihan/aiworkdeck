@@ -33,3 +33,8 @@ test('没带 docFileId 的旧状态 → 不收（不因为兼容问题把回执�
   const self = { evidenceMethodBar: { docFileId: null } }
   assert.equal(fn.call(self, { id: 8 }), true)
 })
+
+test('docFileId 非数值（Number→NaN）按未钉处理 → 不收（NaN===NaN 恒 false 会把小条永久藏死）', () => {
+  const self = { evidenceMethodBar: { docFileId: 'not-a-number' } }
+  assert.equal(fn.call(self, { id: 8 }), true)
+})

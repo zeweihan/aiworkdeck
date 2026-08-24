@@ -107,6 +107,7 @@
 
 <script>
 import { ICONS } from '@/config/icons.js'
+import { warmDragImage, applyDragImage } from '@/utils/dragImage.js'
 import UnlockHint from '@/components/UnlockHint.vue'
 export default {
   name: 'FileStagingArea',
@@ -174,7 +175,8 @@ export default {
 
   },
   mounted() {
-      // Marquee listeners removed
+      // 预加载拖拽 ghost 小徽标（与 FileTree 同一份，见 utils/dragImage.js）
+      warmDragImage()
   },
   beforeUnmount() {
       // Marquee listeners removed
@@ -236,6 +238,8 @@ export default {
       // Standard data format for internal file drag
       if (event.dataTransfer) {
           event.dataTransfer.effectAllowed = 'copy'
+          // 小徽标拖拽影像：不设的话是整行元素快照（含 × 删除钮）浮在正文上
+          applyDragImage(event)
           // Use the same format as FileTree to handle drop in editors
           event.dataTransfer.setData('application/json', JSON.stringify(file))
           // Also text/plain for general use

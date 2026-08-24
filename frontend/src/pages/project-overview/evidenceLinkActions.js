@@ -22,9 +22,11 @@ function unwrap(resp) {
 export const evidenceLinkData = () => ({
   // method 浮动小条：连续拖放只保留最后一条（对象整体替换）。
   // docFileId 用于把小条钉在建链的那份文档上——换标签/关文档后它不该还挂着。
+  // status: 'success' | 'error'——失败回执也走小条（toast 会被编辑器 webview 遮挡，
+  // dev-board#133/#139：失败只弹 toast = 用户毫无感知的静默失败）。
   evidenceMethodBar: {
     visible: false, side: 'left', fileName: '', method: 'written_review',
-    targetId: null, linkKey: '', docFileId: null,
+    targetId: null, linkKey: '', docFileId: null, status: 'success', errorText: '',
   },
 })
 
@@ -43,7 +45,10 @@ export const evidenceLinkMethods = {
       return
     }
     if (Number(file.id) === Number(doc.id)) {
-      uni.showToast({ title: this.$t('workbench.evidence.selfLink'), icon: 'none' })
+      this.showEvidenceMethodBarError({
+        side, fileName: file.name || '', docFileId: Number(doc.id),
+        message: this.$t('workbench.evidence.selfLink'),
+      })
       return
     }
     const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
@@ -55,13 +60,21 @@ export const evidenceLinkMethods = {
         projectId: pid, docFileId: Number(doc.id), file, internalBase: this.WPS_INTERNAL_HTTP_LINK_BASE || '',
       })
     } catch (e) {
-      uni.showToast({ title: (e && e.message) || this.$t('workbench.linkFailed'), icon: 'none' })
+      // API 入库失败：此时书签+超链接多半已写入文档（正文里文字已变成链接），
+      // 只弹 toast 会被 webview 遮挡成「看起来关联上了」的静默半成品——必须上小条。
+      // 重拖同一段文字会走 recovered 分支收编死锚点，提示里把这条路告诉用户。
+      this.showEvidenceMethodBarError({
+        side, fileName: file.name || '', docFileId: Number(doc.id),
+        message: ((e && e.message) || this.$t('workbench.linkFailed')) + this.$t('workbench.evidence.retryHint'),
+      })
       return
     }
     if (!res.ok) {
       const key = res.reason === 'no_selection' ? 'workbench.evidence.selectFirst'
         : res.reason === 'bookmark_failed' ? 'workbench.evidence.bookmarkFailed' : 'workbench.setHyperlinkFailed'
-      uni.showToast({ title: this.$t(key), icon: 'none' })
+      this.showEvidenceMethodBarError({
+        side, fileName: file.name || '', docFileId: Number(doc.id), message: this.$t(key),
+      })
       return
     }
     this.showEvidenceMethodBar({
@@ -82,6 +95,15 @@ export const evidenceLinkMethods = {
     this.evidenceMethodBar = {
       visible: true, side, fileName, method: 'written_review', targetId, linkKey,
       docFileId: docFileId == null ? null : Number(docFileId),
+      status: 'success', errorText: '',
+    }
+  },
+  /** 建链失败的回执小条（同一个位置、红描边）。toast 在编辑器场景会被 webview 遮挡，不许用。 */
+  showEvidenceMethodBarError({ side, fileName, docFileId, message }) {
+    this.evidenceMethodBar = {
+      visible: true, side, fileName, method: 'written_review', targetId: null, linkKey: '',
+      docFileId: docFileId == null ? null : Number(docFileId),
+      status: 'error', errorText: message || this.$t('workbench.linkFailed'),
     }
   },
   closeEvidenceMethodBar() {

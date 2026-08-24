@@ -214,6 +214,8 @@ export default {
   // EvidenceLink: drop-to-link in the editor / method bar / link locating (evidenceLinkActions.js, EvidenceMethodBar.vue, LibreOfficeEditor.vue)
   evidence: {
     selectFirst: 'Select the text to link first',
+    failedTitle: '"{name}" was not linked',
+    retryHint: '; drag onto the same text again to retry',
     selfLink: 'A document cannot be linked to itself',
     bookmarkFailed: 'Could not create the bookmark, reselect the text and try again',
     linked: 'Linked to "{name}"',

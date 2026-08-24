@@ -212,6 +212,8 @@ export default {
   // EvidenceLink：拖到编辑器建链 / method 小条 / 链接定位（evidenceLinkActions.js、EvidenceMethodBar.vue、LibreOfficeEditor.vue）
   evidence: {
     selectFirst: '先选中要关联的文字',
+    failedTitle: '《{name}》未关联上',
+    retryHint: '；重新拖拽到同一段文字即可重试',
     selfLink: '不能把文档关联到自己',
     bookmarkFailed: '建立书签失败，请重新选中文字后再试',
     linked: '已关联《{name}》',
