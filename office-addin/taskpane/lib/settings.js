@@ -87,6 +87,18 @@ export function saveConversationId(projectId, conversationId) {
   else safeRemoveItem(key)
 }
 
+const KEY_MODEL = 'awd_addin_model'
+
+/** 模型选择持久化（空串=跟随后端默认）。 */
+export function loadModelChoice() {
+  return safeGetItem(KEY_MODEL) || ''
+}
+
+export function saveModelChoice(modelId) {
+  if (modelId) safeSetItem(KEY_MODEL, String(modelId))
+  else safeRemoveItem(KEY_MODEL)
+}
+
 export function isConfigured(settings) {
   return Boolean(settings.serverUrl && settings.token)
 }

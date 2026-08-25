@@ -147,6 +147,37 @@ async function searchRanges(context, needle, matchCase) {
   return results.items
 }
 
+/** 降级选段时要求的最短长度：太短容易在全文里误命中别处（dev-board#149） */
+const ANCHOR_FALLBACK_MIN_CHARS = 4
+
+/**
+ * 锚点跨段（含 \n/\r）时 body.search 匹配不到——search 不跨段落，模型从内联正文
+ * 摘的 anchorText/target 若跨段会首次必然报「未找到」，此前只能靠模型换短锚点
+ * 重试（dev-board#149）。这里把该重试动作自动化：按 \r\n/\n/\r 拆段，挑一段再
+ * search 一次。
+ *   position 为 null（replace_text，锚点本身就是要被替换/定位的目标，无方向语义）
+ *     → 取最长的一段，最大化命中概率；
+ *   position 为 'after'/'before'（insert_text，锚点表达的是「插在这段文字之后/
+ *   之前」，有方向语义）→ 取靠插入方向的那一段（after 取最后一段、before 取第
+ *   一段），保住「插在哪一侧」的原始意图。
+ * 拆出的段 trim 后需 ≥4 字符才可用；没有可用段时返回 null。
+ */
+export function pickAnchorFallback(anchor, position) {
+  const segments = String(anchor || '')
+    .split(/\r\n|\n|\r/)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= ANCHOR_FALLBACK_MIN_CHARS)
+  if (!segments.length) return null
+  if (position === 'after') return segments[segments.length - 1]
+  if (position === 'before') return segments[0]
+  return segments.reduce((longest, s) => (s.length > longest.length ? s : longest))
+}
+
+/** search 串超过 Word 的 255 字符上限会直接抛异常，降级段落也要守住这条线 */
+export function boundForSearch(s) {
+  return s.length > WORD_SEARCH_MAX_CHARS ? s.slice(0, WORD_SEARCH_MAX_CHARS) : s
+}
+
 /* ==================== Word 最小修订（minimal redline） ====================
  * TrackAll 下对整个命中 Range 直接 insertText(replace) 会记成「整段删除 +
  * 整段插入」——「我爱你」改「我恨你」在修订面板里读作删「我爱你」加
@@ -550,6 +581,13 @@ const HANDLERS = {
     if (!searchText) throw new Error('查找文本不能为空')
     return Word.run(async (context) => {
       return withTracking(context, async () => {
+        // 跨段 searchText 不做静默降级（有意区别于 insert_text）：降级只会命中其中
+        // 一段，却要把完整的多段 replaceText 塞进去——旧的其余段落原地不动，结果是
+        // 内容重复/错位。这里快速失败并把改法说清楚，让模型一次重试就改对（dev-board#149）。
+        if (/[\r\n]/.test(searchText)) {
+          throw new Error('searchText 跨段落（含换行），Word 的查找不支持跨段匹配。'
+            + '请逐段替换：每次以单段内的文本为 searchText，并只提供该段的替换文本')
+        }
         const items = await searchRanges(context, searchText, true)
         if (!items.length) {
           throw new Error('未找到目标文本，请确认 searchText 与文档内容精确一致（可先用 search 命令核对）')
@@ -599,9 +637,18 @@ const HANDLERS = {
     return Word.run(async (context) => {
       return withTracking(context, async () => {
         if (anchorText) {
-          const items = await searchRanges(context, anchorText, true)
+          let items = await searchRanges(context, anchorText, true)
+          if (!items.length && /[\r\n]/.test(anchorText)) {
+            // 锚点跨段：降级为按插入方向取一段再试一次（after 取最后一段、before
+            // 取第一段，保住「插在哪一侧」的原意，dev-board#149）
+            const fallback = pickAnchorFallback(anchorText, position)
+            if (fallback) items = await searchRanges(context, boundForSearch(fallback), true)
+          }
           if (!items.length) {
-            throw new Error('未找到锚点文本，请确认 anchorText 与文档内容精确一致')
+            const suffix = /[\r\n]/.test(anchorText)
+              ? `；锚点跨段，已尝试按段内文本降级仍未命中：${anchorText.slice(0, 40)}`
+              : ''
+            throw new Error(`未找到锚点文本，请确认 anchorText 与文档内容精确一致${suffix}`)
           }
           const location = position === 'before' ? Word.InsertLocation.before : Word.InsertLocation.after
           items[0].insertText(text, location)

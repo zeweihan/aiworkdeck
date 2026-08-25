@@ -60,6 +60,63 @@ export async function ensureAddinDefaultProject({ serverUrl, token }) {
 }
 
 /**
+ * 我在本项目的历史会话列表（GET /api/ai/conversations?projectId=，user-scoped 裸数组）。
+ * 每条：{conversationId, title, lastMessage, updatedAt, runStatus}（title 是 LLM 生成的，
+ * 可能为空）。失败静默回空数组——历史列表拿不到不该打断当前对话（dev-board#148）。
+ */
+export async function fetchConversations({ serverUrl, token }, projectId) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base || !projectId) return []
+  try {
+    const resp = await fetch(
+      `${base}/api/ai/conversations?projectId=${encodeURIComponent(projectId)}`,
+      { headers: headers(token) })
+    if (!resp.ok) return []
+    const data = await resp.json()
+    return Array.isArray(data) ? data : []
+  } catch (e) {
+    return []
+  }
+}
+
+/**
+ * 可用模型清单（GET /api/ai/models → {models:[{id,name,vendor,...}], defaultModel}）。
+ * 失败回 null：模型选择器隐藏，发消息不带 model 字段走后端默认，不影响主链路。
+ */
+export async function fetchModels({ serverUrl, token }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) return null
+  try {
+    const resp = await fetch(`${base}/api/ai/models`, { headers: headers(token) })
+    if (!resp.ok) return null
+    const data = await resp.json()
+    if (data && Array.isArray(data.models)) {
+      return { models: data.models, defaultModel: data.defaultModel || '' }
+    }
+  } catch (e) {
+    // 静默降级
+  }
+  return null
+}
+
+/**
+ * Skill 清单（GET /api/skills/list，登录即可，裸数组）。只取已启用的给斜杠菜单用；
+ * 失败回空数组——skill 菜单隐藏，不影响主链路（dev-board#150）。
+ */
+export async function fetchSkills({ serverUrl, token }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) return []
+  try {
+    const resp = await fetch(`${base}/api/skills/list`, { headers: headers(token) })
+    if (!resp.ok) return []
+    const data = await resp.json()
+    return Array.isArray(data) ? data : []
+  } catch (e) {
+    return []
+  }
+}
+
+/**
  * 拉某个会话的历史消息（GET /api/ai/history?conversationId=...）。
  * 任务窗格重建后据此把上一场对话回灌到界面。
  * 403/404/网络失败一律返回空数组静默降级——历史拿不到不该打断用户开新的对话。
