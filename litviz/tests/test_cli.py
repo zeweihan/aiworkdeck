@@ -17,7 +17,7 @@ import tempfile
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LITVIZ = os.path.dirname(_HERE)
 _CLI = os.path.join(_LITVIZ, "cli.py")
-_EXAMPLES = os.path.join(_LITVIZ, "engine", "examples")
+_EXAMPLES = os.path.join(_LITVIZ, "mqc-litigation-visual-redraw", "examples")
 
 # 哪些布局离了 graphviz 就画不出来。实测矩阵（2026-08-08，引擎 v1.0.2）：
 # 只有流程图真的要 dot。graphviz_relation 名字里带 graphviz，但 v1.0.2 已经换成
@@ -155,7 +155,7 @@ def main():
     # ---- 9. 上游 149 项回归 ---------------------------------------------
     if not skip_engine:
         print("\n上游引擎回归（engine/tests/run_checks.py）")
-        p = subprocess.run([sys.executable, os.path.join(_LITVIZ, "engine", "tests", "run_checks.py")],
+        p = subprocess.run([sys.executable, os.path.join(_LITVIZ, "mqc-litigation-visual-redraw", "tests", "run_checks.py")],
                            capture_output=True, text=True)
         tail = [ln for ln in p.stdout.splitlines() if "checks passed" in ln]
         summary = tail[-1].strip() if tail else "(没抓到统计行)"

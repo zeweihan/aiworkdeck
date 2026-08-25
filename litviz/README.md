@@ -3,7 +3,7 @@
 把案件材料画成能直接进诉讼材料的图：时间轴、流程图、当事人关系图。
 
 出图引擎来自 [mqc-litigation-visual-redraw](https://github.com/MiaoQichuan/mqc-litigation-visual-redraw)
-（作者 **缪奇川**，MIT），vendor 在 `engine/` 下。改它之前先读 [UPSTREAM.md](UPSTREAM.md)
+（作者 **缪奇川**，MIT），vendor 在 `mqc-litigation-visual-redraw/`（重画引擎）与 `mqc-timeline-master/`（时间轴大师）下。改它之前先读 [UPSTREAM.md](UPSTREAM.md)
 与 [PATCHES.md](PATCHES.md)。
 
 ## 分工
@@ -23,7 +23,8 @@
 litviz/
   cli.py          我们写的机器契约层——后端唯一入口（stdout 只有一行 JSON）
   tests/          我们的契约测试
-  engine/         上游原样 vendor，别手改（补丁走 PATCHES.md 登记）
+  mqc-litigation-visual-redraw/   上游原样 vendor：重画引擎（补丁走 PATCHES.md 登记）
+  mqc-timeline-master/            上游原样 vendor：时间轴大师（同上；靠兄弟目录名找共享内核，别改名）
 ```
 
 ## 命令

@@ -1,9 +1,12 @@
 # 对 vendor 引擎打的本地补丁
 
-`litviz/engine/` 原则上是上游原样拷贝（见 `UPSTREAM.md`）。下面每一条都是**不得不打**
+`litviz/mqc-litigation-visual-redraw/` 原则上是上游原样拷贝（见 `UPSTREAM.md`）。下面每一条都是**不得不打**
 的补丁，代码里对应位置都有 `[AWD-PATCH n]` 标记，搜这个标记能找全。
 
 升级引擎时逐条复核：上游若已自行修掉，就删掉这一条，别叠着打。
+
+2026-08-25 升级到 monorepo new-litigation-visualization `0b2c8f8`（重画仍是 v1.0.2）时
+已逐条复核：三条补丁上游都还没修，全部保留原样。
 
 ---
 
@@ -53,7 +56,7 @@ emph_attr = ' data-emph="1"' if nid == _hub else ''
 out.append(f'<g data-role="node" data-id="{nid}"{emph_attr}>')
 ```
 
-打完补丁后，整个 `engine/scripts/` 在 Python 3.9 上都能 import，3.11 自然覆盖。
+打完补丁后，整个 `mqc-litigation-visual-redraw/scripts/` 在 Python 3.9 上都能 import，3.11 自然覆盖。
 **同样值得回馈上游**（顺带把 doctor.py 的版本门槛说法一并纠正）。
 
 ## PATCH 3 · schema 的 layout 枚举补上 `comparison_table`（`schemas/semantic-map.schema.json`）
@@ -78,7 +81,7 @@ out.append(f'<g data-role="node" data-id="{nid}"{emph_attr}>')
 ## 回归怎么跑
 
 ```bash
-python3 litviz/engine/tests/run_checks.py
+python3 litviz/mqc-litigation-visual-redraw/tests/run_checks.py
 ```
 
 上游自带 149 项，要 graphviz（`brew install graphviz`）。补丁不该让任何一项变红——

@@ -253,7 +253,7 @@ class LitigationPngServiceTest {
         ReflectionTestUtils.setField(lv, "configuredGraphvizDir", "");
         if (lv.unavailableReason() != null) return null;
         Path dir = Files.createTempDirectory("png-src-");
-        Path map = lv.runtime().litvizDir().resolve("engine").resolve("examples").resolve("timeline-points.json");
+        Path map = lv.runtime().litvizDir().resolve("mqc-litigation-visual-redraw").resolve("examples").resolve("timeline-points.json");
         LitigationVisualService.Result r = lv.render(map, dir.resolve("d"), null, "svg");
         if (!r.ok()) return null;
         return Path.of(r.raw().getJSONArray("files").getJSONObject(0).getStr("path"));

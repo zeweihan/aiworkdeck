@@ -1,0 +1,384 @@
+{
+  "_note": "脱敏示例。甲公司为原告一（酒店），乙公司为原告二（总公司），丙公司为被告，丁单位为第三方单位，员工A至员工H为脱敏后的员工代号。案号、地址、人名、律所已替换或删除。卡片结构：head 为唯一的标题行；正文二选一，body 为自然段，items 为编号列表，两者不得并存。文字一律按法言法语撰写，不得出现破折号与引号，书名号除外。编号列表仅在并列项确实无法成段时使用。审计性说明（离群观察、引用层级、推定依据）写在 index_note，只进溯源索引，不上图。",
+  "schema_version": 2,
+  "diagram_type": "timeline",
+  "title_text": "合同纠纷案 · 本院查明事实时间轴",
+  "layout": "vertical_single_column",
+  "medium": "a4_portrait",
+  "axis": {
+    "mode": "equidistant",
+    "unit": "year"
+  },
+  "source_block": "本院查明",
+  "events": [
+    {
+      "id": "11",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "occur",
+        "raw": "2015年5月12日",
+        "date": "2015/5/12",
+        "date_text": "2015.05.12"
+      },
+      "head": "丙公司向员工G、员工H转账4万元及9300元",
+      "body": "丙公司称该两名员工曾以过激方式讨薪，故所付赔偿金较高。",
+      "index_note": "原文日期为2015年5月12日，与同一批遣散转账其余各笔（集中在2021年5月）相距1662天。原文照录，未作更改，请核实是否为笔误。"
+    },
+    {
+      "id": "1",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "sign",
+        "raw": "2019年11月29日",
+        "date": "2019/11/29",
+        "date_text": "2019.11.29"
+      },
+      "head": "甲公司与丙公司签署《合作经营合同》",
+      "body": "约定甲公司将其名下餐厅交由丙公司负责日常经营管理，合作经营期限自2020年1月1日至2024年12月1日止。合同落款处有双方盖章及其代表人签字。"
+    },
+    {
+      "id": "9",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "range",
+        "origin": "extracted",
+        "kind": "occur",
+        "raw": "2021年",
+        "from": "2021/1/1",
+        "to": "2021/12/31",
+        "date_text": "2021年"
+      },
+      "head": "丙公司起诉甲公司与乙公司",
+      "body": "请求判令甲公司、乙公司共同赔偿预期经济利益损失1760400元及物品损失230190元。一审判决支持上述两项请求，甲公司、乙公司提起上诉。"
+    },
+    {
+      "id": "2",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "occur",
+        "raw": "2021年3月26日",
+        "date": "2021/3/26",
+        "date_text": "2021.03.26"
+      },
+      "head": "甲公司与丁单位发布职工接转方案通知",
+      "body": "通知载明，甲公司已无法在原场所继续经营酒店、住宿、餐饮等业务，构成劳动合同订立时所依据的客观情况发生重大变化。在职职工与甲公司解除劳动合同后，另与丁单位签署劳动合同。"
+    },
+    {
+      "id": "3",
+      "unit_type": "event",
+      "quote_depth": 2,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "send",
+        "raw": "2021年4月28日",
+        "date": "2021/4/28",
+        "date_text": "2021.04.28"
+      },
+      "head": "甲公司书面通知丙公司解除《合作经营合同》",
+      "body": "该时点载于《借款（垫款）协议》鉴于条款第（B）项，为甲公司行使解除权的时点。",
+      "index_note": "本时点仅见于被引用协议的鉴于条款，判决书他处未再出现（引用层级 2）。"
+    },
+    {
+      "id": "4",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "occur",
+        "raw": "2021年4月30日",
+        "date": "2021/4/30",
+        "date_text": "2021.04.30"
+      },
+      "head": "各方共同参会并形成会议纪要",
+      "body": "丙公司主张其撤出场地须先行解决员工工资和遣散费80万元、对供应商欠款30万元及已收取会员卡退款12万元三项费用，因资金不足，请求甲公司先行提供借款以为资金支持。各方确认，该三项费用的最终承担方由双方在后续赔偿方案中确定；丙公司应于借款到位后一日内撤出场地。"
+    },
+    {
+      "id": "5",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "sign",
+        "raw": "2021年5月17日",
+        "date": "2021/5/17",
+        "date_text": "2021.05.17"
+      },
+      "head": "甲公司与丙公司签订《借款（垫款）协议》",
+      "body": "约定借款（垫款）总额的最终数额为人民币97万元，于最终赔偿方案确认后多退少补。最终赔偿方案确认前，该笔款项不计息。",
+      "emphasis": true
+    },
+    {
+      "id": "6",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "receipt",
+        "raw": "2021年5月17日",
+        "date": "2021/5/17",
+        "date_text": "2021.05.17"
+      },
+      "head": "甲公司向丙公司支付首期垫款485000元",
+      "body": "有转账凭证在案佐证。"
+    },
+    {
+      "id": "7",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "receipt",
+        "raw": "2021年5月19日",
+        "date": "2021/5/19",
+        "date_text": "2021.05.19"
+      },
+      "head": "甲公司向丙公司支付尾款485000元",
+      "body": "两笔合计支付垫款970000元。"
+    },
+    {
+      "id": "8",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "range",
+        "origin": "extracted",
+        "kind": "receipt",
+        "raw": "2021年5月19日至2021年5月21日期间",
+        "from": "2021/5/19",
+        "to": "2021/5/21",
+        "date_text": "2021.05.19至21"
+      },
+      "head": "丙公司向员工B转账共计35万元",
+      "body": "转账摘要为赔偿金。丙公司称其中11万元系员工B本人的补偿，其余24万元由员工B提现后以现金转交他人代为发放。"
+    },
+    {
+      "id": "12",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "receipt",
+        "raw": "2023年7月29日",
+        "date": "2023/7/29",
+        "date_text": "2023.07.29"
+      },
+      "head": "丙公司向员工A转账45000元",
+      "body": "转账用途为赔偿款。丙公司另称以现金支付赔偿款11万元，甲公司、乙公司对此不予认可。"
+    },
+    {
+      "id": "13",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "occur",
+        "raw": "2024年11月11日",
+        "date": "2024/11/11",
+        "date_text": "2024.11.11"
+      },
+      "head": "法院就借款合同纠纷作出民事判决",
+      "body": "该判决认定双方并未确认最终赔偿方案，退补款项的条件尚未成就，判决驳回甲公司、乙公司的全部诉讼请求。该案上诉后维持原判。"
+    },
+    {
+      "id": "14",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "send",
+        "raw": "2025年2月24日",
+        "date": "2025/2/24",
+        "date_text": "2025.02.24"
+      },
+      "head": "甲公司、乙公司出具沟通函",
+      "body": "要求丙公司于收函后三个工作日内提交书面赔偿申请，就三笔费用的构成、计算依据、支付方式及支付时间逐项说明并附相应凭证，以确定最终赔偿方案。"
+    },
+    {
+      "id": "15",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "send",
+        "raw": "2025年2月27日",
+        "date": "2025/2/27",
+        "date_text": "2025.02.27"
+      },
+      "head": "丙公司出具回复函",
+      "body": "称三笔费用损失经初步估计约为160余万元，并主张甲公司所给期限过短，无法在该期限内提供材料，建议先依此前诉讼中已提交的证据核算。"
+    },
+    {
+      "id": "16",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "send",
+        "raw": "2025年2月28日",
+        "date": "2025/2/28",
+        "date_text": "2025.02.28"
+      },
+      "head": "甲公司、乙公司出具相关意见",
+      "body": "甲公司、乙公司认为丙公司所提交的凭证不足以证明损失已实际发生：员工工资和遣散费部分，劳动合同存在缺页、落款无签订日期，所主张已付金额与转账记录无法完全对应；对供应商欠款部分，仅有两份未约定金额的框架协议，未提供结算与付款凭证；已收取会员卡退款部分，未附充值与退款的转账凭证，亦未说明计算明细。"
+    },
+    {
+      "id": "17",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "send",
+        "raw": "2025年3月5日",
+        "date": "2025/3/5",
+        "date_text": "2025.03.05"
+      },
+      "head": "丙公司出具第二次回复函",
+      "body": "主张实际损失已达160余万元且已在此前诉讼中提交证据，并要求甲公司、乙公司明确异议对象、核减理由及核减金额。"
+    },
+    {
+      "id": "18",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "send",
+        "raw": "2025年3月6日",
+        "date": "2025/3/6",
+        "date_text": "2025.03.06"
+      },
+      "head": "甲公司、乙公司再次出具相关意见",
+      "body": "主张其并非三笔费用的权利主张方，不负举证义务，丙公司举证不能应自负不利后果，要求丙公司于收函后三日内返还97万元垫款。"
+    },
+    {
+      "id": "19",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "occur",
+        "raw": "2025年3月12日",
+        "date": "2025/3/12",
+        "date_text": "2025.03.12"
+      },
+      "head": "甲公司、乙公司至法院立案",
+      "body": "其主张资金占用费自该日起算。"
+    },
+    {
+      "id": "20",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "occur",
+        "raw": "2025年3月19日",
+        "date": "2025/3/19",
+        "date_text": "2025.03.19"
+      },
+      "head": "本院立案并适用普通程序公开开庭审理",
+      "body": "双方委托诉讼代理人均到庭参加诉讼，本案现已审理终结。"
+    },
+    {
+      "id": "10",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "order",
+        "origin": "derived",
+        "kind": "occur",
+        "raw": "该案上诉后",
+        "anchor": "9",
+        "relation": "after",
+        "date_text": "上诉后"
+      },
+      "head": "二审判决驳回上诉，维持原判",
+      "body": "二审认为，三笔费用的性质约定清晰，一审未将其认定在案涉损失内一并处理并无不当。",
+      "index_note": "材料未载明二审裁判日期，图上位置由叙述顺序推定，确定度为仅次序。"
+    }
+  ],
+  "stipulated": [
+    {
+      "raw": "2020年1月1日至2024年12月1日",
+      "text": "合作经营期限（《合作经营合同》第二条）"
+    },
+    {
+      "raw": "2020年1月1日至2021年12月31日",
+      "text": "合作利润分成期间（第四条，出现两次）"
+    },
+    {
+      "raw": "自2020年7月10日起生效，至2021年7月9日终止",
+      "text": "员工A劳动合同期限"
+    },
+    {
+      "raw": "2014年11月12日",
+      "text": "员工A在丙公司工作起始时间"
+    },
+    {
+      "raw": "2011年6月8日",
+      "text": "员工B在丙公司工作起始时间"
+    },
+    {
+      "raw": "2014年10月20日",
+      "text": "员工C在丙公司工作起始时间"
+    },
+    {
+      "raw": "2011年8月25日",
+      "text": "员工D在丙公司工作起始时间"
+    },
+    {
+      "raw": "2014年10月21日",
+      "text": "员工E在丙公司工作起始时间"
+    },
+    {
+      "raw": "2011年7月8日",
+      "text": "员工F在丙公司工作起始时间"
+    },
+    {
+      "raw": "2017年8月6日",
+      "text": "员工H在丙公司工作起始时间"
+    },
+    {
+      "raw": "2020年7月15日 / 2020年8月23日 / 2020年11月3日 / 2020年8月6日",
+      "text": "其余员工劳动合同起止（各一组）"
+    }
+  ],
+  "provenance": {
+    "text_policy": "verbatim-condensed",
+    "source_block": "本院查明",
+    "normalize": {
+      "page_marker": 32,
+      "form_feed": 1,
+      "soft_break": 529
+    },
+    "sentences": 446,
+    "note": "本图仅取「本院查明」一块；原告诉称、被告辩称、本院认为三块未纳入。"
+  },
+  "checkpoint": {
+    "confirmed": false,
+    "extraction_confirmed": false,
+    "emphasis_source": "user"
+  }
+}

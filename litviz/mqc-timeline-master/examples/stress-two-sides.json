@@ -1,0 +1,754 @@
+{
+  "_note": "压力测试用例：由两份脱敏示例合并而成，仅用于验证多页排布，不对应任何真实案件。",
+  "schema_version": 2,
+  "diagram_type": "timeline",
+  "title_text": "压力测试 · 双侧多页时间轴",
+  "layout": "numbered_multiband",
+  "medium": "a4_portrait",
+  "axis": {
+    "mode": "equidistant",
+    "unit": "year"
+  },
+  "source_block": "本院查明",
+  "events": [
+    {
+      "id": "1",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "occur",
+        "raw": "2015年5月12日",
+        "date": "2015/5/12",
+        "date_text": "2015.05.12"
+      },
+      "head": "丙公司向员工G、员工H转账4万元及9300元",
+      "body": "丙公司称该两名员工曾以过激方式讨薪，故所付赔偿金较高。",
+      "index_note": "原文日期为2015年5月12日，与同一批遣散转账其余各笔（集中在2021年5月）相距1662天。原文照录，未作更改，请核实是否为笔误。",
+      "head_short": "向员工G、H转账",
+      "lane": "D"
+    },
+    {
+      "id": "2",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "sign",
+        "raw": "2019年11月29日",
+        "date": "2019/11/29",
+        "date_text": "2019.11.29"
+      },
+      "head": "甲公司与丙公司签署《合作经营合同》",
+      "body": "约定甲公司将其名下餐厅交由丙公司负责日常经营管理，合作经营期限自2020年1月1日至2024年12月1日止。合同落款处有双方盖章及其代表人签字。",
+      "head_short": "签署合作经营合同",
+      "lane": "P"
+    },
+    {
+      "id": "3",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "range",
+        "origin": "extracted",
+        "kind": "occur",
+        "raw": "2021年",
+        "from": "2021/1/1",
+        "to": "2021/12/31",
+        "date_text": "2021年"
+      },
+      "head": "丙公司起诉甲公司与乙公司",
+      "body": "请求判令甲公司、乙公司共同赔偿预期经济利益损失1760400元及物品损失230190元。一审判决支持上述两项请求，甲公司、乙公司提起上诉。",
+      "head_short": "丙公司起诉",
+      "lane": "D"
+    },
+    {
+      "id": "4",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "occur",
+        "raw": "2021年3月26日",
+        "date": "2021/3/26",
+        "date_text": "2021.03.26"
+      },
+      "head": "甲公司与丁单位发布职工接转方案通知",
+      "body": "通知载明，甲公司已无法在原场所继续经营酒店、住宿、餐饮等业务，构成劳动合同订立时所依据的客观情况发生重大变化。在职职工与甲公司解除劳动合同后，另与丁单位签署劳动合同。",
+      "head_short": "发布接转通知",
+      "lane": "P"
+    },
+    {
+      "id": "5",
+      "unit_type": "event",
+      "quote_depth": 2,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "send",
+        "raw": "2021年4月28日",
+        "date": "2021/4/28",
+        "date_text": "2021.04.28"
+      },
+      "head": "甲公司书面通知丙公司解除《合作经营合同》",
+      "body": "该时点载于《借款（垫款）协议》鉴于条款第（B）项，为甲公司行使解除权的时点。",
+      "index_note": "本时点仅见于被引用协议的鉴于条款，判决书他处未再出现（引用层级 2）。",
+      "head_short": "书面通知解除",
+      "lane": "P"
+    },
+    {
+      "id": "6",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "occur",
+        "raw": "2021年4月30日",
+        "date": "2021/4/30",
+        "date_text": "2021.04.30"
+      },
+      "head": "各方共同参会并形成会议纪要",
+      "body": "丙公司主张其撤出场地须先行解决员工工资和遣散费80万元、对供应商欠款30万元及已收取会员卡退款12万元三项费用，因资金不足，请求甲公司先行提供借款以为资金支持。各方确认，该三项费用的最终承担方由双方在后续赔偿方案中确定；丙公司应于借款到位后一日内撤出场地。",
+      "head_short": "形成会议纪要",
+      "lane": "P"
+    },
+    {
+      "id": "7",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "sign",
+        "raw": "2021年5月17日",
+        "date": "2021/5/17",
+        "date_text": "2021.05.17"
+      },
+      "head": "甲公司与丙公司签订《借款（垫款）协议》",
+      "body": "约定借款（垫款）总额的最终数额为人民币97万元，于最终赔偿方案确认后多退少补。最终赔偿方案确认前，该笔款项不计息。",
+      "emphasis": true,
+      "head_short": "签订借款协议",
+      "lane": "P"
+    },
+    {
+      "id": "8",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "receipt",
+        "raw": "2021年5月17日",
+        "date": "2021/5/17",
+        "date_text": "2021.05.17"
+      },
+      "head": "甲公司向丙公司支付首期垫款485000元",
+      "body": "有转账凭证在案佐证。",
+      "head_short": "支付首期垫款",
+      "lane": "P"
+    },
+    {
+      "id": "9",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "receipt",
+        "raw": "2021年5月19日",
+        "date": "2021/5/19",
+        "date_text": "2021.05.19"
+      },
+      "head": "甲公司向丙公司支付尾款485000元",
+      "body": "两笔合计支付垫款970000元。",
+      "head_short": "支付尾款",
+      "lane": "P"
+    },
+    {
+      "id": "10",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "range",
+        "origin": "extracted",
+        "kind": "receipt",
+        "raw": "2021年5月19日至2021年5月21日期间",
+        "from": "2021/5/19",
+        "to": "2021/5/21",
+        "date_text": "2021.05.19至21"
+      },
+      "head": "丙公司向员工B转账共计35万元",
+      "body": "转账摘要为赔偿金。丙公司称其中11万元系员工B本人的补偿，其余24万元由员工B提现后以现金转交他人代为发放。",
+      "head_short": "向员工B转账35万",
+      "lane": "D"
+    },
+    {
+      "id": "11",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "receipt",
+        "raw": "2023年7月29日",
+        "date": "2023/7/29",
+        "date_text": "2023.07.29"
+      },
+      "head": "丙公司向员工A转账45000元",
+      "body": "转账用途为赔偿款。丙公司另称以现金支付赔偿款11万元，甲公司、乙公司对此不予认可。",
+      "head_short": "向员工A转账",
+      "lane": "D"
+    },
+    {
+      "id": "12",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "occur",
+        "raw": "2024年11月11日",
+        "date": "2024/11/11",
+        "date_text": "2024.11.11"
+      },
+      "head": "法院就借款合同纠纷作出民事判决",
+      "body": "该判决认定双方并未确认最终赔偿方案，退补款项的条件尚未成就，判决驳回甲公司、乙公司的全部诉讼请求。该案上诉后维持原判。",
+      "head_short": "作出民事判决",
+      "lane": "P"
+    },
+    {
+      "id": "13",
+      "lane": "P",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "range",
+        "origin": "extracted",
+        "kind": "occur",
+        "raw": "2025年1月",
+        "from": "2025/1/1",
+        "to": "2025/1/31",
+        "date_text": "2025年1月"
+      },
+      "head": "甲学院就案涉设备公开招标",
+      "body": "招标文件采购需求章节对货物明细、技术参数、供货周期及售后服务均有明确要求。",
+      "source": {
+        "file": "原告证据目录.pdf",
+        "at": "page:2",
+        "medium": "text_layer",
+        "quote": "2025 年 1 月，原告因案涉设备购置项目公开招标"
+      },
+      "head_short": "公开招标"
+    },
+    {
+      "id": "14",
+      "lane": "D",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "range",
+        "origin": "extracted",
+        "kind": "occur",
+        "raw": "2025年2月",
+        "from": "2025/2/1",
+        "to": "2025/2/28",
+        "date_text": "2025年2月"
+      },
+      "head": "乙公司获悉招标并与生产商核对技术参数",
+      "body": "乙公司主张丙公司产品完全符合四套设备的参数要求，且丙公司此前已向另一院校销售过其中两种设备，使用至今无质量投诉。",
+      "source": {
+        "file": "民事反诉状.pdf",
+        "at": "page:2",
+        "medium": "image"
+      },
+      "head_short": "获悉招标"
+    },
+    {
+      "id": "15",
+      "lane": "D",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "range",
+        "origin": "extracted",
+        "kind": "occur",
+        "raw": "顺利以65.5万元的价格中标",
+        "from": "2025/2/1",
+        "to": "2025/2/28",
+        "date_text": "2025年2月"
+      },
+      "head": "乙公司以65.5万元中标",
+      "body": "乙公司主张其余三家投标人报价分别为110.68万元、113.42万元及112.8万元，其报价显著低于同业。",
+      "source": {
+        "file": "民事反诉状.pdf",
+        "at": "page:2",
+        "medium": "image"
+      },
+      "head_short": "以65.5万元中标"
+    },
+    {
+      "id": "16",
+      "lane": "P",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "arrive",
+        "raw": "2025年2月12日",
+        "date": "2025/2/12",
+        "date_text": "2025.02.12"
+      },
+      "head": "甲学院通知乙公司中标",
+      "body": "同日乙公司另作出澄清说明，声明澄清内容不改变投标文件的实质性条款。",
+      "source": {
+        "file": "原告证据目录.pdf",
+        "at": "page:3",
+        "medium": "text_layer",
+        "quote": "2025 年 2 月 12 日，原告就案涉货物采购通知被告中标。"
+      },
+      "index_note": "同日另有乙公司作出的澄清说明，已并入本事件正文。",
+      "head_short": "通知中标"
+    },
+    {
+      "id": "17",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "send",
+        "raw": "2025年2月24日",
+        "date": "2025/2/24",
+        "date_text": "2025.02.24"
+      },
+      "head": "甲公司、乙公司出具沟通函",
+      "body": "要求丙公司于收函后三个工作日内提交书面赔偿申请，就三笔费用的构成、计算依据、支付方式及支付时间逐项说明并附相应凭证，以确定最终赔偿方案。",
+      "head_short": "出具沟通函",
+      "lane": "P"
+    },
+    {
+      "id": "18",
+      "lane": "P",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "record",
+        "raw": "2025年2月25日",
+        "date": "2025/2/25",
+        "date_text": "2025.02.25"
+      },
+      "head": "乙公司提交政府采购投标文件",
+      "body": "投标书中承诺接受招标文件全部合同条款，完全满足和响应各项商务和技术要求，技术条款偏离表再次确认将满足全部技术要求。",
+      "source": {
+        "file": "原告证据目录.pdf",
+        "at": "page:2",
+        "medium": "text_layer",
+        "quote": "2025 年 2 月 25 日，被告响应原告对货物采购的招标，向原告提交了《政府采购投标文件》"
+      },
+      "index_note": "原告证据目录载投标文件提交日为2025年2月25日，而中标通知日为2025年2月12日，先中标后投标，时序矛盾。原文日期照录，未作更改，请核实。",
+      "head_short": "提交投标文件"
+    },
+    {
+      "id": "19",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "send",
+        "raw": "2025年2月27日",
+        "date": "2025/2/27",
+        "date_text": "2025.02.27"
+      },
+      "head": "丙公司出具回复函",
+      "body": "称三笔费用损失经初步估计约为160余万元，并主张甲公司所给期限过短，无法在该期限内提供材料，建议先依此前诉讼中已提交的证据核算。",
+      "head_short": "出具回复函",
+      "lane": "D"
+    },
+    {
+      "id": "20",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "send",
+        "raw": "2025年2月28日",
+        "date": "2025/2/28",
+        "date_text": "2025.02.28"
+      },
+      "head": "甲公司、乙公司出具相关意见",
+      "body": "甲公司、乙公司认为丙公司所提交的凭证不足以证明损失已实际发生：员工工资和遣散费部分，劳动合同存在缺页、落款无签订日期，所主张已付金额与转账记录无法完全对应；对供应商欠款部分，仅有两份未约定金额的框架协议，未提供结算与付款凭证；已收取会员卡退款部分，未附充值与退款的转账凭证，亦未说明计算明细。",
+      "head_short": "出具相关意见",
+      "lane": "P"
+    },
+    {
+      "id": "21",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "send",
+        "raw": "2025年3月5日",
+        "date": "2025/3/5",
+        "date_text": "2025.03.05"
+      },
+      "head": "丙公司出具第二次回复函",
+      "body": "主张实际损失已达160余万元且已在此前诉讼中提交证据，并要求甲公司、乙公司明确异议对象、核减理由及核减金额。",
+      "head_short": "出具第二次回复函",
+      "lane": "D"
+    },
+    {
+      "id": "22",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "send",
+        "raw": "2025年3月6日",
+        "date": "2025/3/6",
+        "date_text": "2025.03.06"
+      },
+      "head": "甲公司、乙公司再次出具相关意见",
+      "body": "主张其并非三笔费用的权利主张方，不负举证义务，丙公司举证不能应自负不利后果，要求丙公司于收函后三日内返还97万元垫款。",
+      "head_short": "再次出具意见",
+      "lane": "P"
+    },
+    {
+      "id": "23",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "occur",
+        "raw": "2025年3月12日",
+        "date": "2025/3/12",
+        "date_text": "2025.03.12"
+      },
+      "head": "甲公司、乙公司至法院立案",
+      "body": "其主张资金占用费自该日起算。",
+      "head_short": "至法院立案",
+      "lane": "P"
+    },
+    {
+      "id": "24",
+      "lane": "P",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "sign",
+        "raw": "2025年3月13日",
+        "date": "2025/3/13",
+        "date_text": "2025.03.13"
+      },
+      "head": "双方签订货物设备买卖合同",
+      "body": "约定由乙公司提供四种设备并承担验收、安装、调试、运行及培训义务，总价款655000元。第三条第七款约定乙公司对验收结果有异议应于七日内书面提出，逾期视为认可；第九条约定质量存在问题时甲学院有单方解除权并可主张总价款百分之二十的违约金。",
+      "source": {
+        "file": "起诉状.pdf",
+        "at": "page:2",
+        "medium": "text_layer",
+        "quote": "2025 年 3 月 13 日，原告甲学院与被告乙公司签订《甲学院货物（设备）买卖合同》"
+      },
+      "head_short": "签订买卖合同"
+    },
+    {
+      "id": "25",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "occur",
+        "raw": "2025年3月19日",
+        "date": "2025/3/19",
+        "date_text": "2025.03.19"
+      },
+      "head": "本院立案并适用普通程序公开开庭审理",
+      "body": "双方委托诉讼代理人均到庭参加诉讼，本案现已审理终结。",
+      "head_short": "立案开庭审理",
+      "lane": "P"
+    },
+    {
+      "id": "26",
+      "lane": "P",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "arrive",
+        "raw": "2025年4月1日",
+        "date": "2025/4/1",
+        "date_text": "2025.04.01"
+      },
+      "head": "首次交付并当日首次验收，结果未通过",
+      "body": "甲学院主张所交付设备与合同约定严重不符，验收结论为未通过，乙公司未在约定期限内提出书面异议。",
+      "source": {
+        "file": "起诉状.pdf",
+        "at": "page:2",
+        "medium": "text_layer",
+        "quote": "被告于 2025 年 4 月 1 日交付设备，原告于当日对货物进行首次验收"
+      },
+      "head_short": "首次验收未通过"
+    },
+    {
+      "id": "27",
+      "lane": "P",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "arrive",
+        "raw": "2025年4月11日",
+        "date": "2025/4/11",
+        "date_text": "2025.04.11"
+      },
+      "head": "再次交付并第二次验收，仍未通过",
+      "body": "甲学院主张设备在图像采集精度、镜头光圈电动调节、发令系统配置及测距误差等核心参数上均未达标，受托裁判出具证言予以佐证。",
+      "source": {
+        "file": "原告证据目录.pdf",
+        "at": "page:3",
+        "medium": "text_layer",
+        "quote": "2025 年 4 月 11 日，原告第二次对货物进行验收，但仍因设备质量不符合约定，不能通过验收。"
+      },
+      "head_short": "二次验收未通过"
+    },
+    {
+      "id": "28",
+      "lane": "P",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "arrive",
+        "raw": "2025年4月25日",
+        "date": "2025/4/25",
+        "date_text": "2025.04.25"
+      },
+      "head": "甲学院发函行使解除权并主张违约金",
+      "body": "快递信息显示该函件于当日妥投，乙公司签收后未提出异议，亦未支付违约金。同日为甲学院原定举办运动会之日。",
+      "source": {
+        "file": "原告证据目录.pdf",
+        "at": "page:4",
+        "medium": "text_layer",
+        "quote": "2025 年 4 月 25 日，原告基于被告两次交付设备均严重不符合合同约定的事实"
+      },
+      "head_short": "发函行使解除权"
+    },
+    {
+      "id": "29",
+      "lane": "D",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "send",
+        "raw": "2025年4月28日",
+        "date": "2025/4/28",
+        "date_text": "2025.04.28"
+      },
+      "head": "乙公司书面投诉至甲学院纪检部门",
+      "body": "乙公司另主张甲学院体育部门曾派人联系，提出其撤回投诉并放弃投标后可全额退回6.55万元履约保证金，乙公司未予接受。",
+      "source": {
+        "file": "民事反诉状.pdf",
+        "at": "page:2",
+        "medium": "image"
+      },
+      "head_short": "书面投诉纪检"
+    },
+    {
+      "id": "30",
+      "lane": "P",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "range",
+        "origin": "extracted",
+        "kind": "sign",
+        "raw": "2025年5月　日",
+        "from": "2025/5/1",
+        "to": "2025/5/31",
+        "date_text": "2025年5月"
+      },
+      "head": "甲学院提起本诉",
+      "body": "请求解除买卖合同并判令乙公司支付违约金131000元。",
+      "index_note": "起诉状落款日期原文为2025年5月，日期栏空缺未填，故确定度为区间。",
+      "source": {
+        "file": "起诉状.pdf",
+        "at": "page:3",
+        "medium": "text_layer",
+        "quote": "2025 年 5 月"
+      },
+      "head_short": "提起本诉"
+    },
+    {
+      "id": "31",
+      "lane": "D",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "sign",
+        "raw": "2025年6月26日",
+        "date": "2025/6/26",
+        "date_text": "2025.06.26"
+      },
+      "head": "乙公司提起反诉",
+      "body": "请求判令甲学院接收四套设备并继续履行合同，并请求委托第三方就设备是否达到招标文件确定的技术参数进行鉴定。",
+      "source": {
+        "file": "民事反诉状.pdf",
+        "at": "page:1",
+        "medium": "image"
+      },
+      "head_short": "提起反诉"
+    },
+    {
+      "id": "32",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "order",
+        "origin": "derived",
+        "kind": "occur",
+        "raw": "该案上诉后",
+        "anchor": "9",
+        "relation": "after",
+        "date_text": "上诉后"
+      },
+      "head": "二审判决驳回上诉，维持原判",
+      "body": "二审认为，三笔费用的性质约定清晰，一审未将其认定在案涉损失内一并处理并无不当。",
+      "index_note": "材料未载明二审裁判日期，图上位置由叙述顺序推定，确定度为仅次序。",
+      "head_short": "驳回上诉维持原判",
+      "lane": "P"
+    },
+    {
+      "id": "33",
+      "lane": "D",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "order",
+        "origin": "derived",
+        "kind": "occur",
+        "raw": "在之后的两次验收中",
+        "anchor": "6",
+        "relation": "after",
+        "date_text": "两次验收期间"
+      },
+      "head": "乙公司主张两次验收系被无理拒收",
+      "body": "乙公司主张其中标设备在两次验收中均被甲学院组织的专家以各种无理理由拒收，其曾数次据理力争而无结果。",
+      "source": {
+        "file": "民事反诉状.pdf",
+        "at": "page:2",
+        "medium": "image"
+      },
+      "head_short": "主张被无理拒收"
+    }
+  ],
+  "stipulated": [
+    {
+      "raw": "2020年1月1日至2024年12月1日",
+      "text": "合作经营期限（《合作经营合同》第二条）"
+    },
+    {
+      "raw": "2020年1月1日至2021年12月31日",
+      "text": "合作利润分成期间（第四条，出现两次）"
+    },
+    {
+      "raw": "自2020年7月10日起生效，至2021年7月9日终止",
+      "text": "员工A劳动合同期限"
+    },
+    {
+      "raw": "2014年11月12日",
+      "text": "员工A在丙公司工作起始时间"
+    },
+    {
+      "raw": "2011年6月8日",
+      "text": "员工B在丙公司工作起始时间"
+    },
+    {
+      "raw": "2014年10月20日",
+      "text": "员工C在丙公司工作起始时间"
+    },
+    {
+      "raw": "2011年8月25日",
+      "text": "员工D在丙公司工作起始时间"
+    },
+    {
+      "raw": "2014年10月21日",
+      "text": "员工E在丙公司工作起始时间"
+    },
+    {
+      "raw": "2011年7月8日",
+      "text": "员工F在丙公司工作起始时间"
+    },
+    {
+      "raw": "2017年8月6日",
+      "text": "员工H在丙公司工作起始时间"
+    },
+    {
+      "raw": "2020年7月15日 / 2020年8月23日 / 2020年11月3日 / 2020年8月6日",
+      "text": "其余员工劳动合同起止（各一组）"
+    }
+  ],
+  "provenance": {
+    "text_policy": "verbatim-condensed",
+    "source_block": "本院查明",
+    "normalize": {
+      "page_marker": 32,
+      "form_feed": 1,
+      "soft_break": 529
+    },
+    "sentences": 446,
+    "note": "本图仅取「本院查明」一块；原告诉称、被告辩称、本院认为三块未纳入。"
+  },
+  "checkpoint": {
+    "confirmed": false,
+    "extraction_confirmed": false,
+    "emphasis_source": "user"
+  },
+  "lanes": [
+    {
+      "id": "P",
+      "label_text": "甲公司、乙公司"
+    },
+    {
+      "id": "D",
+      "label_text": "丙公司"
+    }
+  ],
+  "conflicts": [],
+  "scope": {
+    "mode": "full",
+    "selection_source": "default",
+    "events_from_image": 5,
+    "documents_unreadable": [
+      {
+        "file": "民事反诉状.pdf",
+        "reason": "纯扫描件，文字层仅 2 字节",
+        "read_as_image": true
+      },
+      {
+        "file": "被告证据目录.pdf",
+        "reason": "纯扫描件，印章覆盖正文",
+        "read_as_image": true
+      }
+    ]
+  }
+}

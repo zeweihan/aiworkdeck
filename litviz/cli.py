@@ -3,7 +3,7 @@
 """litviz —— 诉讼可视化引擎的机器契约层。
 
 后端 Java（LitigationVisualTools）唯一调用的入口。存在的理由只有一个：
-上游 `engine/scripts/render.py` 是给人看的命令行——把进度、审计摘要、lint 警告
+上游 `mqc-litigation-visual-redraw/scripts/render.py` 是给人看的命令行——把进度、审计摘要、lint 警告
 一股脑打到 stdout，成功与否只体现在退出码上。Java 那侧要知道**到底生成了哪些
 文件、是不是草稿、用了哪种模式**，靠正则去啃那段human-readable 文本迟早出事。
 
@@ -34,7 +34,7 @@ import os
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_ENGINE = os.path.join(_HERE, "engine")
+_ENGINE = os.path.join(_HERE, "mqc-litigation-visual-redraw")
 _SCRIPTS = os.path.join(_ENGINE, "scripts")
 
 # 引擎模块之间是平铺 import（`from common import ...`），必须让 scripts/ 在 sys.path 上。
