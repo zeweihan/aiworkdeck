@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>反馈控制台 - AI WorkDeck</title>
+<!--
+  维护者用的反馈控制台：优化者邮件里的「后台直达」链接落在这里。
+  登录 admin 账号后直接看截图、听语音（h5 客户端 2026-08-19 已从云端退役，
+  这一页就是云端收件箱唯一的浏览器入口）。
+
+  由 backend.jar 的 classpath:/static/ 直接托管（路径 /feedback-console/），
+  云端 nginx 需要一条 location 把本路径反代给后端（见 deploy/cloud/nginx-addin.conf.example）。
+
+  安全约定：
+  - 反馈正文/用户名是用户可控输入，渲染一律 textContent，绝不 innerHTML；
+  - 附件用 fetch + X-Session-Id 头取回 blob 再放给 <img>/<audio>，
+    凭据不进 URL（URL 里的 token 会落 nginx access log）。
+-->
+<style>
+  :root {
+    --ink: #1f2328;
+    --ink-soft: #57606a;
+    --paper: #faf9f7;
+    --card: #ffffff;
+    --line: #e4e1db;
+    --accent: #1a5336;
+    --accent-soft: #eef4f0;
+    --warn: #9d3b3b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font: 15px/1.7 -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 32px 20px 64px; }
+  header.site {
+    display: flex; align-items: baseline; gap: 12px;
+    border-bottom: 1px solid var(--line); padding-bottom: 14px; margin-bottom: 24px;
+  }
+  header.site h1 {
+    font: 600 20px/1.3 "Songti SC", "STSong", Georgia, serif;
+    margin: 0; letter-spacing: .02em;
+  }
+  header.site .who { margin-left: auto; color: var(--ink-soft); font-size: 13px; }
+  header.site .who a { color: var(--accent); cursor: pointer; text-decoration: none; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 20px 24px; margin-bottom: 16px;
+  }
+  .muted { color: var(--ink-soft); font-size: 13px; }
+  .error-line { color: var(--warn); font-size: 14px; min-height: 1.5em; margin: 8px 0 0; }
+  /* 登录 */
+  .login-card { max-width: 400px; margin: 48px auto 0; }
+  .login-card h2 { font: 600 17px/1.4 "Songti SC", Georgia, serif; margin: 0 0 4px; }
+  .field { margin-top: 14px; }
+  .field label { display: block; font-size: 13px; color: var(--ink-soft); margin-bottom: 4px; }
+  .field input {
+    width: 100%; padding: 9px 12px; font-size: 15px;
+    border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink);
+  }
+  .field input:focus { outline: none; border-color: var(--accent); }
+  .btn {
+    display: inline-block; margin-top: 18px; padding: 9px 22px;
+    background: var(--accent); color: #fff; border: none; border-radius: 8px;
+    font-size: 15px; cursor: pointer;
+  }
+  .btn[disabled] { opacity: .5; cursor: default; }
+  .btn.ghost {
+    background: transparent; color: var(--accent);
+    border: 1px solid var(--accent); margin-left: 10px;
+  }
+  /* 列表 */
+  table.fb-list { width: 100%; border-collapse: collapse; font-size: 14px; }
+  table.fb-list th, table.fb-list td {
+    text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  table.fb-list th { color: var(--ink-soft); font-weight: 500; white-space: nowrap; }
+  table.fb-list tr.row { cursor: pointer; }
+  table.fb-list tr.row:hover { background: var(--accent-soft); }
+  .tag {
+    display: inline-block; padding: 1px 8px; border-radius: 999px;
+    font-size: 12px; background: var(--accent-soft); color: var(--accent); white-space: nowrap;
+  }
+  .tag.gray { background: #f0efec; color: var(--ink-soft); }
+  /* 详情 */
+  .detail h2 { font: 600 18px/1.4 "Songti SC", Georgia, serif; margin: 0 0 2px; }
+  .meta-line { color: var(--ink-soft); font-size: 13px; margin-bottom: 14px; }
+  .sec-title {
+    font-size: 13px; color: var(--ink-soft); letter-spacing: .06em;
+    margin: 18px 0 6px; text-transform: uppercase;
+  }
+  .quote {
+    border-left: 3px solid var(--accent); background: var(--accent-soft);
+    padding: 10px 14px; border-radius: 0 8px 8px 0; white-space: pre-wrap; word-break: break-word;
+  }
+  .att-block { margin-top: 10px; }
+  .att-block img {
+    max-width: 100%; border: 1px solid var(--line); border-radius: 8px; display: block;
+  }
+  .att-block audio { width: 100%; margin-top: 4px; }
+  .att-name { font-size: 13px; color: var(--ink-soft); margin: 10px 0 4px; }
+  .att-name a { color: var(--accent); }
+  pre.ctx {
+    background: #f6f5f2; border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px 14px; font-size: 12.5px; line-height: 1.6; overflow-x: auto;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  details summary { cursor: pointer; color: var(--ink-soft); font-size: 13px; }
+  a.back { color: var(--accent); text-decoration: none; font-size: 14px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="site">
+    <h1>AI WorkDeck 反馈控制台</h1>
+    <span class="who" id="who"></span>
+  </header>
+
+  <!-- 登录 -->
+  <div id="view-login" class="card login-card hidden">
+    <h2>登录后台</h2>
+    <p class="muted">反馈附件里有用户的截图与运行现场，需要 admin 账号。</p>
+    <div id="login-step-pwd">
+      <div class="field">
+        <label for="in-user">账号</label>
+        <input id="in-user" autocomplete="username" value="admin">
+      </div>
+      <div class="field">
+        <label for="in-pass">密码</label>
+        <input id="in-pass" type="password" autocomplete="current-password">
+      </div>
+    </div>
+    <div id="login-step-code" class="hidden">
+      <div class="field">
+        <label for="in-code" id="code-label">验证码</label>
+        <input id="in-code" inputmode="numeric" autocomplete="one-time-code">
+      </div>
+      <button class="btn ghost" id="btn-resend" type="button">重发验证码</button>
+    </div>
+    <button class="btn" id="btn-login" type="button">登录</button>
+    <p class="error-line" id="login-error"></p>
+  </div>
+
+  <!-- 列表 -->
+  <div id="view-list" class="card hidden">
+    <p class="muted" style="margin-top:0">最近 100 条反馈，点击查看详情。</p>
+    <table class="fb-list">
+      <thead><tr><th>#</th><th>类型</th><th>状态</th><th>时间</th><th>用户</th><th>内容</th></tr></thead>
+      <tbody id="list-body"></tbody>
+    </table>
+    <p class="muted" id="list-empty" style="display:none">还没有反馈。</p>
+  </div>
+
+  <!-- 详情 -->
+  <div id="view-detail" class="card detail hidden">
+    <p style="margin:0 0 12px"><a class="back" href="./">&larr; 全部反馈</a></p>
+    <h2 id="d-title"></h2>
+    <p class="meta-line" id="d-meta"></p>
+    <div class="sec-title">用户原话</div>
+    <div class="quote" id="d-text"></div>
+    <div id="d-transcript-wrap" class="hidden">
+      <div class="sec-title">语音转写</div>
+      <div class="quote" id="d-transcript"></div>
+    </div>
+    <div id="d-atts"></div>
+    <div id="d-triage-wrap" class="hidden">
+      <div class="sec-title">优化者分诊</div>
+      <div id="d-triage" style="white-space:pre-wrap"></div>
+    </div>
+    <div id="d-ctx-wrap" class="hidden" style="margin-top:16px">
+      <details><summary>运行现场（contextJson）</summary><pre class="ctx" id="d-ctx"></pre></details>
+    </div>
+    <p class="error-line" id="detail-error"></p>
+  </div>
+
+  <p class="muted" id="global-loading" style="text-align:center">加载中…</p>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var SID_KEY = 'checkba_session_id'; // 与既有 h5 客户端同键，历史会话可直接续用
+  var qs = new URLSearchParams(location.search);
+  var fbId = /^\d+$/.test(qs.get('fb') || '') ? qs.get('fb') : null;
+  var pendingSecondFactor = null; // 4005 信封里的 method
+
+  function $(id) { return document.getElementById(id); }
+  function show(id) { $(id).classList.remove('hidden'); }
+  function hide(id) { $(id).classList.add('hidden'); }
+  function sid() { try { return localStorage.getItem(SID_KEY) || ''; } catch (e) { return ''; } }
+
+  function showView(name) {
+    ['view-login', 'view-list', 'view-detail'].forEach(function (v) { hide(v); });
+    hide('global-loading');
+    show(name);
+  }
+
+  function api(path, opts) {
+    opts = opts || {};
+    var headers = opts.headers || {};
+    var s = sid();
+    if (s) headers['X-Session-Id'] = s;
+    if (opts.json) headers['Content-Type'] = 'application/json';
+    return fetch(path, {
+      method: opts.method || 'GET',
+      headers: headers,
+      body: opts.json ? JSON.stringify(opts.json) : undefined
+    });
+  }
+
+  // 需要登录：HTTP 401/403，或业务信封 code=4010
+  function needsLogin(httpStatus, body) {
+    if (httpStatus === 401 || httpStatus === 403) return true;
+    return !!(body && body.code === 4010);
+  }
+
+  function kindLabel(k) { return k === 'IDEA' ? '建议' : '报障'; }
+  function statusLabel(s) {
+    return ({ NEW: '待处理', PR_OPENED: '已开 PR', EMAILED: '已发邮件',
+      SKIPPED: '已跳过', FAILED: '处理失败' })[s] || s || '';
+  }
+  function shortTime(t) { return t ? String(t).replace('T', ' ').slice(0, 16) : ''; }
+
+  // ---------- 登录 ----------
+  function showLogin(msg) {
+    showView('view-login');
+    $('login-error').textContent = msg || '';
+    $('in-pass').focus();
+  }
+
+  function sendCode() {
+    var payload = { scene: 'login', username: $('in-user').value.trim(), password: $('in-pass').value };
+    var path = pendingSecondFactor === 'mail' ? '/api/auth/mail/send-code' : '/api/auth/sms/send-code';
+    api(path, { method: 'POST', json: payload }).then(function (r) { return r.json(); })
+      .then(function (body) {
+        if (body.code === 0) {
+          var masked = body.data && (body.data.emailMasked || body.data.phoneMasked);
+          $('login-error').textContent = '验证码已发送' + (masked ? '至 ' + masked : '');
+        } else {
+          $('login-error').textContent = body.message || '发送失败';
+        }
+      })
+      .catch(function () { $('login-error').textContent = '网络错误，发送失败'; });
+  }
+
+  function doLogin() {
+    var btn = $('btn-login');
+    btn.disabled = true;
+    $('login-error').textContent = '';
+    var payload = { username: $('in-user').value.trim(), password: $('in-pass').value };
+    var code = $('in-code').value.trim();
+    if (pendingSecondFactor && code) payload.smsCode = code;
+    api('/api/auth/login', { method: 'POST', json: payload })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        btn.disabled = false;
+        if (body.code === 0 && body.data && body.data.sessionId) {
+          try { localStorage.setItem(SID_KEY, body.data.sessionId); } catch (e) {}
+          pendingSecondFactor = null;
+          init();
+          return;
+        }
+        if (body.code === 4005) {
+          // 密码已对，进入二次验证（TOTP 的码在认证器里，不必发）
+          pendingSecondFactor = (body.data && body.data.method) || 'sms';
+          show('login-step-code');
+          $('code-label').textContent = pendingSecondFactor === 'totp' ? '认证器动态码'
+            : pendingSecondFactor === 'mail' ? '邮箱验证码' : '短信验证码';
+          if (pendingSecondFactor === 'totp') { $('btn-resend').classList.add('hidden'); }
+          else { $('btn-resend').classList.remove('hidden'); sendCode(); }
+          $('in-code').focus();
+          return;
+        }
+        $('login-error').textContent = body.message || '登录失败';
+      })
+      .catch(function () {
+        btn.disabled = false;
+        $('login-error').textContent = '网络错误，请重试';
+      });
+  }
+
+  // ---------- 附件（blob 取回，凭据走请求头，不进 URL）----------
+  function attachTo(container, feedbackId, att) {
+    var nameLine = document.createElement('div');
+    nameLine.className = 'att-name';
+    nameLine.textContent = (att.type || '') + ' · ' + (att.name || '附件 ' + att.id)
+      + (att.sizeBytes ? ' · ' + Math.max(1, Math.round(att.sizeBytes / 1024)) + ' KB' : '');
+    container.appendChild(nameLine);
+
+    var block = document.createElement('div');
+    block.className = 'att-block';
+    block.textContent = '附件加载中…';
+    container.appendChild(block);
+
+    api('/api/feedback/' + feedbackId + '/attachment/' + att.id)
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.blob();
+      })
+      .then(function (blob) {
+        block.textContent = '';
+        var url = URL.createObjectURL(blob);
+        if (att.type === 'IMAGE') {
+          var img = document.createElement('img');
+          img.src = url;
+          img.alt = att.name || '';
+          block.appendChild(img);
+        } else if (att.type === 'AUDIO') {
+          var audio = document.createElement('audio');
+          audio.controls = true;
+          audio.src = url;
+          block.appendChild(audio);
+        }
+        // 统一给一条下载链接兜底（浏览器放不了 webm 时至少能下走）
+        var dl = document.createElement('a');
+        dl.href = url;
+        dl.download = att.name || ('attachment-' + att.id);
+        dl.textContent = '下载原件';
+        dl.style.fontSize = '13px';
+        var p = document.createElement('div');
+        p.className = 'att-name';
+        p.appendChild(dl);
+        block.appendChild(p);
+      })
+      .catch(function (e) {
+        block.textContent = '附件加载失败（' + e.message + '）';
+      });
+  }
+
+  // ---------- 详情 ----------
+  function renderDetail(d) {
+    showView('view-detail');
+    $('d-title').textContent = '反馈 #' + d.id + '（' + kindLabel(d.kind) + '）';
+    var meta = [statusLabel(d.status), shortTime(d.createdAt), d.username,
+      d.page, d.appVersion, d.platform].filter(Boolean).join(' · ');
+    $('d-meta').textContent = meta;
+    $('d-text').textContent = (d.text && d.text.trim()) || '（没写文字）';
+
+    if (d.voiceTranscript) {
+      show('d-transcript-wrap');
+      $('d-transcript').textContent = d.voiceTranscript;
+    }
+
+    var atts = d.attachments || [];
+    var host = $('d-atts');
+    host.textContent = '';
+    if (atts.length) {
+      var title = document.createElement('div');
+      title.className = 'sec-title';
+      title.textContent = '附件（' + atts.length + ' 件）';
+      host.appendChild(title);
+      atts.forEach(function (a) { attachTo(host, d.id, a); });
+    }
+
+    var triageLines = [];
+    if (d.triageVerdict) triageLines.push('判定：' + d.triageVerdict);
+    if (d.triageJson) {
+      try {
+        var t = JSON.parse(d.triageJson);
+        if (t.summary) triageLines.push('复述：' + t.summary);
+        if (t.reason) triageLines.push('依据：' + t.reason);
+        if (t.severity) triageLines.push('严重度：' + t.severity);
+      } catch (e) { /* 非 JSON 就只显示 verdict */ }
+    }
+    if (triageLines.length) {
+      show('d-triage-wrap');
+      $('d-triage').textContent = triageLines.join('\n');
+    }
+
+    if (d.contextJson) {
+      show('d-ctx-wrap');
+      var pretty = d.contextJson;
+      try { pretty = JSON.stringify(JSON.parse(d.contextJson), null, 2); } catch (e) {}
+      $('d-ctx').textContent = pretty;
+    }
+  }
+
+  function loadDetail(id) {
+    api('/api/feedback/' + id).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (body) {
+        if (needsLogin(r.status, body)) { showLogin(sid() ? '会话已过期或不是 admin 账号，请重新登录' : ''); return; }
+        if (body.code === 0 && body.data) { renderDetail(body.data); return; }
+        showView('view-detail');
+        $('detail-error').textContent = body.message || ('加载失败（HTTP ' + r.status + '）');
+      });
+    }).catch(function () {
+      showView('view-detail');
+      $('detail-error').textContent = '网络错误，加载失败';
+    });
+  }
+
+  // ---------- 列表 ----------
+  function renderList(items) {
+    showView('view-list');
+    var tbody = $('list-body');
+    tbody.textContent = '';
+    $('list-empty').style.display = items.length ? 'none' : 'block';
+    items.forEach(function (fb) {
+      var tr = document.createElement('tr');
+      tr.className = 'row';
+      function td(text) {
+        var el = document.createElement('td');
+        el.textContent = text == null ? '' : String(text);
+        tr.appendChild(el);
+        return el;
+      }
+      td(fb.id);
+      var kindTd = document.createElement('td');
+      var kindTag = document.createElement('span');
+      kindTag.className = 'tag' + (fb.kind === 'IDEA' ? ' gray' : '');
+      kindTag.textContent = kindLabel(fb.kind);
+      kindTd.appendChild(kindTag);
+      tr.appendChild(kindTd);
+      td(statusLabel(fb.status));
+      td(shortTime(fb.createdAt));
+      td(fb.username);
+      var snippet = (fb.text && fb.text.trim()) || fb.voiceTranscript || '（语音/截图）';
+      td(snippet.length > 60 ? snippet.slice(0, 60) + '…' : snippet);
+      tr.addEventListener('click', function () { location.search = '?fb=' + fb.id; });
+      tbody.appendChild(tr);
+    });
+  }
+
+  function loadList() {
+    api('/api/feedback?limit=100').then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (body) {
+        if (needsLogin(r.status, body)) { showLogin(sid() ? '会话已过期或不是 admin 账号，请重新登录' : ''); return; }
+        if (body.code === 0 && body.data) { renderList(body.data.items || []); return; }
+        showLogin(body.message || ('加载失败（HTTP ' + r.status + '）'));
+      });
+    }).catch(function () { showLogin('网络错误，无法连接后台'); });
+  }
+
+  function signOut() {
+    try { localStorage.removeItem(SID_KEY); } catch (e) {}
+    location.href = './';
+  }
+
+  function init() {
+    var who = $('who');
+    who.textContent = '';
+    if (sid()) {
+      var a = document.createElement('a');
+      a.textContent = '退出登录';
+      a.addEventListener('click', signOut);
+      who.appendChild(a);
+    }
+    if (fbId) loadDetail(fbId); else loadList();
+  }
+
+  $('btn-login').addEventListener('click', doLogin);
+  $('btn-resend').addEventListener('click', sendCode);
+  ['in-pass', 'in-code'].forEach(function (id) {
+    $(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') doLogin(); });
+  });
+
+  init();
+})();
+</script>
+</body>
+</html>

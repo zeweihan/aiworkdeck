@@ -145,7 +145,7 @@ public class OptimizerIssueNotifier implements OptimizerNotifier {
                 sb.append("- ").append(a.getType()).append(' ')
                         .append(source == null ? a.getStoredName() : source.attachmentRef(fb, a)).append('\n');
             }
-            sb.append("\n附件地址是收件箱上的：直接点开要先登录那台后台，也可以带取件密钥取——\n")
+            sb.append("\n附件裸地址在浏览器里会 403（要带凭据），命令行取用取件密钥——\n")
                     .append("`curl -H \"X-Optimizer-Token: <token>\" '<地址>' -o shot.png`\n");
             boolean audioNoTranscript = attachments.stream()
                     .anyMatch(a -> FeedbackAttachment.TYPE_AUDIO.equals(a.getType()))
@@ -153,6 +153,12 @@ public class OptimizerIssueNotifier implements OptimizerNotifier {
             if (audioNoTranscript) {
                 sb.append("\n> 这条带语音但没有转写，内容需要你亲自听一遍。\n");
             }
+        }
+
+        // 反馈控制台直达（有浏览器入口的来源才有）
+        String console = source == null ? null : source.consoleRef(fb);
+        if (console != null && !console.isBlank()) {
+            sb.append("\n在浏览器里看这条反馈（登录 admin 后直接看截图、听语音）：").append(console).append('\n');
         }
         return sb.toString();
     }

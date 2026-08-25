@@ -110,6 +110,32 @@ class OptimizerMailerTest {
         assertTrue(body.contains("回信不会被系统读取"));
     }
 
+    /**
+     * 病灶（dev-board#151）：邮件里只有裸附件 API 地址，维护者在浏览器里点开是 403 死胡同。
+     * 修法：来源能给出浏览器入口（云端反馈控制台）时，正文必须带上直达链接。
+     */
+    @Test
+    @DisplayName("云端来源的邮件带反馈控制台直达链接")
+    void bodyCarriesConsoleLinkWhenSourceHasOne() {
+        OptimizerFeedbackSource s = sourceRef("https://addin.example/api/feedback/12/attachment/3");
+        when(s.consoleRef(any())).thenReturn("https://addin.example/feedback-console/?fb=12");
+
+        mailer.send(feedback(), triage(FeedbackTriageService.VERDICT_SUGGESTION), List.of(), s, "");
+        String body = capturedBody();
+        assertTrue(body.contains("https://addin.example/feedback-console/?fb=12"),
+                "正文要有控制台直达链接：" + body);
+        assertTrue(body.contains("听语音"));
+    }
+
+    @Test
+    @DisplayName("本地来源没有浏览器入口，正文不出现控制台一节")
+    void bodyOmitsConsoleLineForLocalSource() {
+        // mock 未打桩的 default 方法返回 null，正好等价于 LocalFeedbackSource 的行为
+        mailer.send(feedback(), triage(FeedbackTriageService.VERDICT_SUGGESTION),
+                List.of(), sourceRef(""), "");
+        assertFalse(capturedBody().contains("在浏览器里看这条反馈"));
+    }
+
     @Test
     void unclearVerdictAsksForADecision() {
         mailer.send(feedback(), triage(FeedbackTriageService.VERDICT_UNCLEAR),
