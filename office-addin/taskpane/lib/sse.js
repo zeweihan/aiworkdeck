@@ -109,26 +109,35 @@ export function createSseConnection({ baseUrl, token, conversationId, onEvent, o
     }
   }
 
+  let connecting = false
+
+  async function attemptReconnect() {
+    if (closed || connecting) return
+    connecting = true
+    try {
+      const resp = await connectOnce()
+      backoffMs = RECONNECT_BASE_MS
+      notifyStatus('connected')
+      startWatchdog()
+      readLoop(resp)
+    } catch (e) {
+      if (!closed) {
+        console.warn('[Addin] SSE 重连失败，继续退避', e)
+        scheduleReconnect()
+      }
+    } finally {
+      connecting = false
+    }
+  }
+
   function scheduleReconnect() {
     if (closed || reconnectTimer) return
     notifyStatus('reconnecting')
     const delay = backoffMs
     backoffMs = Math.min(backoffMs * 2, RECONNECT_MAX_MS)
-    reconnectTimer = setTimeout(async () => {
+    reconnectTimer = setTimeout(() => {
       reconnectTimer = null
-      if (closed) return
-      try {
-        const resp = await connectOnce()
-        backoffMs = RECONNECT_BASE_MS
-        notifyStatus('connected')
-        startWatchdog()
-        readLoop(resp)
-      } catch (e) {
-        if (!closed) {
-          console.warn('[Addin] SSE 重连失败，继续退避', e)
-          scheduleReconnect()
-        }
-      }
+      attemptReconnect()
     }, delay)
   }
 
@@ -142,6 +151,19 @@ export function createSseConnection({ baseUrl, token, conversationId, onEvent, o
 
   return {
     ready,
+    /**
+     * 处于重连退避等待时立刻重连；健康（读流在跑）或已关闭时是空操作。
+     * 给发送路径用：后端每轮结束会主动关 SSE，若下一条消息落在退避窗口里，
+     * POST /chat 发出去后 emitter 不在，快回合的 text_delta 乃至 bubble_end
+     * 会被服务端静默丢弃（SseEmitterService 对无 emitter 会话不报错），
+     * 最坏要等满一个 30s 退避周期才靠 run_state 兜底解锁——表现就是
+     * 「文档都写完了光标还一直闪」（dev-board#147 窗口 A）。
+     */
+    reconnectNow() {
+      if (closed || reading) return Promise.resolve()
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+      return attemptReconnect()
+    },
     close() {
       closed = true
       stopWatchdog()

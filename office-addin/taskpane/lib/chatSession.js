@@ -1,11 +1,14 @@
 import { reactive, ref } from 'vue'
 import {
-  postChat, postCancel, postOfficeResult, createConversation, fetchConversationHistory
+  postChat, postCancel, postOfficeResult, createConversation, fetchConversationHistory,
+  fetchConversations, fetchModels, fetchSkills
 } from './api.js'
 import { createSseConnection, createTagStreamParser } from './sse.js'
-import { readActiveDocument, detectHost, hashContent } from './wordDoc.js'
+import { readActiveDocument, readDocumentMeta, detectHost, hashContent } from './wordDoc.js'
 import { executeOfficeCommand, commandDisplayName } from './officeExecutor.js'
-import { loadConversationId, saveConversationId, isConfigured } from './settings.js'
+import {
+  loadConversationId, saveConversationId, isConfigured, loadModelChoice, saveModelChoice
+} from './settings.js'
 
 /**
  * 对话会话的模块级单例状态（import 即共享）。
@@ -37,6 +40,13 @@ export const scrollSignal = ref(0)
  * 优化前后各跑一遍就能说清快在哪一段。不上报遥测。
  */
 export const lastPerf = ref(null)
+
+/** 模型清单（null=未拉到/后端不支持，界面隐藏选择器）与当前选择（空串=后端默认） */
+export const modelCatalog = ref(null)
+export const selectedModel = ref(loadModelChoice())
+/** 已启用的 skill 清单与本会话勾选的 skillIds（随每条消息上送，后端按并集激活） */
+export const skillList = ref([])
+export const selectedSkillIds = ref([])
 
 // ==================== 内部状态 ====================
 
@@ -148,6 +158,9 @@ export async function activateSession({ settings, projectId }) {
 
   if (!pid || !settings || !isConfigured(settings)) return
 
+  // 模型/skill 清单随会话身份拉一次（失败静默：选择器隐藏，主链路不受影响）
+  refreshCatalogs()
+
   // 任务窗格重建（切文档、重开窗格）后：接着上次的会话，而不是从空白开始
   const stored = loadConversationId(pid)
   if (stored) {
@@ -170,6 +183,81 @@ export async function activateSession({ settings, projectId }) {
     // 建连失败（后端不可达/令牌失效）不打断用户：下次发送时会再建一次并给出明确报错
     restorePending = false
     console.warn('[Addin] 会话预连失败', e)
+  }
+}
+
+/** 模型与 skill 清单：与会话无关，按连接配置拉一次；全部静默降级 */
+async function refreshCatalogs() {
+  if (!ctx.settings || !isConfigured(ctx.settings)) return
+  const settings = ctx.settings
+  fetchModels(settings).then((cat) => {
+    modelCatalog.value = cat
+    // 记住的模型已不在清单里（下线/换区）：回落后端默认，别让请求 400
+    if (cat && selectedModel.value && !cat.models.some((m) => m.id === selectedModel.value)) {
+      selectedModel.value = ''
+      saveModelChoice('')
+    }
+  }).catch(() => {})
+  fetchSkills(settings).then((list) => {
+    // 只给用户看「已启用且非 disabled 生效方式」的；勾选态剔除已消失的
+    const usable = list.filter((s) => s && s.enabled !== false && s.activation !== 'disabled')
+    skillList.value = usable
+    selectedSkillIds.value = selectedSkillIds.value.filter((id) => usable.some((s) => s.id === id))
+  }).catch(() => {})
+}
+
+export function chooseModel(modelId) {
+  selectedModel.value = modelId || ''
+  saveModelChoice(selectedModel.value)
+}
+
+export function toggleSkill(skillId) {
+  const cur = selectedSkillIds.value
+  selectedSkillIds.value = cur.includes(skillId)
+    ? cur.filter((id) => id !== skillId)
+    : [...cur, skillId]
+}
+
+/** 我在本项目的历史会话列表（给历史面板用；失败回空数组） */
+export async function loadConversationList() {
+  if (!ctx.settings || !ctx.projectId) return []
+  return fetchConversations(ctx.settings, parseInt(ctx.projectId, 10))
+}
+
+/**
+ * 切换到既有会话：与 activateSession 的回灌路径同一套语义（restorePending +
+ * 首个 run_state 权威），但不重置会话身份。当前会话仍在流式时不允许切（按钮已禁用，
+ * 这里再守一道）。
+ */
+export async function switchConversation(convId) {
+  if (!convId || convId === conversationId) return
+  if (!ctx.projectId || !ctx.settings || !isConfigured(ctx.settings)) return
+  if (streaming.value) return
+  const gen = ++generation
+  closeConnection()
+  messages.value = []
+  currentAssistant = null
+  parser = null
+  reconnecting.value = false
+  everReconnected = false
+  banner.value = ''
+  notice.value = ''
+  resetDocCache()
+  conversationId = convId
+  saveConversationId(ctx.projectId, convId)
+  const history = await fetchConversationHistory(ctx.settings, convId)
+  if (gen !== generation) return
+  if (history.length) {
+    messages.value = history.map(toLocalMessage)
+    sealStaleQuestions()
+    bumpScroll()
+  }
+  restorePending = true
+  try {
+    await preconnect()
+  } catch (e) {
+    restorePending = false
+    console.warn('[Addin] 切换会话建连失败', e)
   }
 }
 
@@ -234,12 +322,14 @@ function toLocalMessage(row) {
   let thinking = ''
   let question = null
   const p = createTagStreamParser({
-    onMainText: (t) => { text += t },
-    onThinkingText: (t) => { thinking += t },
+    // 标签间的裸换行不进正文（与桌面端 useAgentStream 的守卫同口径，dev-board#147）
+    onMainText: (t) => { if (!text && !t.trim()) return; text += t },
+    onThinkingText: (t) => { if (!thinking && !t.trim()) return; thinking += t },
     onQuestion: (q) => { question = q.options.length ? { options: q.options, answered: false } : null }
   })
   p.feed(content)
   p.flush()
+  text = text.replace(/\s+$/, '')
   return reactive({ role: 'assistant', text, thinking, streaming: false, error: '', tools: [], question })
 }
 
@@ -287,8 +377,11 @@ function ensureAssistantBubble() {
 
 function attachParser(assistant) {
   parser = createTagStreamParser({
-    onMainText: (t) => { assistant.text += t },
-    onThinkingText: (t) => { assistant.thinking += t },
+    // 前导空白守卫（dev-board#147）：模型输出的协议标签之间全是裸换行，栈空时会被
+    // 解析器当主文本放行；正文还没开张就先攒十几个换行，光标被推着往下走一屏。
+    // 与桌面端 useAgentStream 的同名守卫保持同口径：正文为空时纯空白直接丢弃。
+    onMainText: (t) => { if (!assistant.text && !t.trim()) return; assistant.text += t },
+    onThinkingText: (t) => { if (!assistant.thinking && !t.trim()) return; assistant.thinking += t },
     // 反问的选项：正文已经流进气泡，这里只挂备选答案给界面做按钮（无选项则不挂，
     // 用户直接在输入框回答）。一轮里问第二次时后一次覆盖前一次——可点的只有最后一问。
     onQuestion: (q) => {
@@ -331,10 +424,21 @@ function handleEvent(evt, dataStr) {
     bumpScroll()
   } else if (evt === 'bubble_end') {
     if (parser) parser.flush()
+    // 尾部空白随收尾裁掉（前导由 attachParser 守卫，这里对称收尾）
+    if (currentAssistant && currentAssistant.text) {
+      currentAssistant.text = currentAssistant.text.replace(/\s+$/, '')
+    }
     commitDocHash()
     let status = ''
     try { status = String(JSON.parse(dataStr).status || '') } catch (e) { /* 无 status 按普通收尾 */ }
+    const finished = currentAssistant
     finishStreaming()
+    // 显式完成态（dev-board#147）：光标消失太隐晦，「写完了没」要有明示。
+    // 只有正常收尾才标——error/cancelled 各有自己的可见反馈。
+    if (finished && !finished.error && status.toLowerCase() !== 'awaiting_input') {
+      finished.done = true
+      finished.durationMs = lastPerf.value ? lastPerf.value.totalMs : 0
+    }
     // awaiting_input：编排器为了反问主动停机，球在用户这边。输入框此时已解锁
     // （答案就是新一轮普通用户消息），只补一行状态提示，别让人以为回答被吞了。
     // notice 由 finishStreaming 清空，所以要放在它之后。
@@ -401,9 +505,11 @@ function handleRunState(dataStr) {
 
   if (everReconnected && streaming.value && !generating) {
     if (parser) parser.flush()
+    const finished = currentAssistant
     finishStreaming()
     // 断线期间漏掉了 bubble_end：解锁之后把「等用户」这一档的提示补回来
     if (awaitingUser) notice.value = awaitingHint
+    else if (finished && !finished.error) finished.done = true
   }
 }
 
@@ -418,24 +524,45 @@ async function handleClientAction(dataStr) {
   try { action = JSON.parse(dataStr) } catch (e) { return }
   if (!action || action.tool !== 'office_command' || !action.requestId) return
 
-  const chip = reactive({ label: commandDisplayName(action.command), status: 'running' })
+  const chip = reactive({ label: commandDisplayName(action.command), status: 'running', error: '' })
   const assistant = ensureAssistantBubble()
   if (!assistant.tools) assistant.tools = []
   assistant.tools.push(chip)
   bumpScroll()
 
-  const result = await executeOfficeCommand(action.command, action.args)
+  // 执行与回传都要兜底（dev-board#147 窗口 B）：这里以前没有 try/catch，回传网络
+  // 失败是未处理 rejection，chip 卡 running、后端 future 干等 30s 超时，用户只看到
+  // 光标一直闪。失败要落在 chip 上（错误详情给用户看，不只回传给模型）。
+  let result
+  try {
+    result = await executeOfficeCommand(action.command, action.args)
+  } catch (e) {
+    result = { ok: false, error: (e && e.message) || String(e) }
+  }
   chip.status = result.ok ? 'done' : 'failed'
-  await postOfficeResult(ctx.settings, {
-    requestId: action.requestId,
-    ok: result.ok,
-    data: result.ok ? result.data : null,
-    error: result.ok ? null : result.error
-  })
+  if (!result.ok) chip.error = result.error || ''
+  try {
+    await postOfficeResult(ctx.settings, {
+      requestId: action.requestId,
+      ok: result.ok,
+      data: result.ok ? result.data : null,
+      error: result.ok ? null : result.error
+    })
+  } catch (e) {
+    chip.status = 'failed'
+    chip.error = '结果回传失败：' + ((e && e.message) || '网络错误')
+    banner.value = '工具结果回传失败，AI 会在等待超时后继续'
+  }
 }
 
 async function ensureConnection() {
-  if (connection) return
+  if (connection) {
+    // 连接对象在但可能处于重连退避（后端每轮结束会主动关流）：发送前把它唤醒并
+    // 等到 emitter 真正挂上，否则 POST /chat 的快回合事件会被服务端静默丢弃
+    // （dev-board#147 窗口 A）。健康连接上这是空操作。
+    if (connection.reconnectNow) await connection.reconnectNow()
+    return
+  }
   const startedAt = nowMs()
   const conn = createSseConnection({
     baseUrl: ctx.settings.serverUrl,
@@ -552,12 +679,16 @@ export async function send(overrideText) {
       preconnect()
     ])
 
-    // 当前文档内容以内联形式随请求上送（activeContext.inlineContent / inlineContentHash）
+    // 当前文档内容以内联形式随请求上送（activeContext.inlineContent / inlineContentHash）。
+    // 不附带正文时也要上送壳（id/name/fileType，不带 inlineContent）：后端
+    // ContextAssemblerService 的整段 office 工具指引挂在 activeContext 上，壳都没有
+    // 的话模型连「用户开着文档、该用哪套工具」都不知道（dev-board#150）。
     let activeContext = null
     if (read) {
       if (read.doc) activeContext = buildActiveContext(read.doc, read.hash)
       else banner.value = '未能读取文档内容，本条消息不附带文档内容'
     }
+    if (!activeContext) activeContext = readDocumentMeta()
 
     await postChat(settings, {
       projectId: parseInt(projectId, 10),
@@ -565,6 +696,9 @@ export async function send(overrideText) {
       message: prompt,
       mode: 'AGENT',
       activeContext,
+      // 按次指定模型与手选 skill（后端 AgentChatRequest 原生字段；空值不上送走默认）
+      ...(selectedModel.value ? { model: selectedModel.value } : {}),
+      ...(selectedSkillIds.value.length ? { skillIds: [...selectedSkillIds.value] } : {}),
       // 声明客户端能力（Phase C）：后端据此让本会话只见 office_* 工具、隐藏 doc_*；
       // officeHost 再按宿主细分（word/excel/powerpoint），点名对应工具面
       clientCapability: 'office',

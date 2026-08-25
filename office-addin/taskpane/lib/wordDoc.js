@@ -138,6 +138,20 @@ export async function hashContent(text) {
   }
 }
 
+/**
+ * 只取文档元信息（名字/类型），不读正文。给「不附带正文」场景用：
+ * activeContext 仍要上送壳（id/name/fileType），否则后端 ContextAssemblerService
+ * 的整段 office 工具指引都不注入，模型连「该操作当前文档」都不知道（dev-board#150）。
+ */
+export function readDocumentMeta() {
+  const host = detectHost()
+  if (!host) return null
+  const fallback = host === 'word' ? '当前 Word 文档'
+    : host === 'excel' ? '当前 Excel 工作簿' : '当前 PowerPoint 演示文稿'
+  const fileType = host === 'word' ? 'docx' : host === 'excel' ? 'xlsx' : 'pptx'
+  return { id: 'office-current-document', name: documentDisplayName(fallback), fileType }
+}
+
 export async function readActiveDocument() {
   if (!officeAvailable()) return null
   try {
