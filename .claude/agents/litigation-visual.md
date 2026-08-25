@@ -19,21 +19,38 @@ JSON 对不对，不取决于模型对像素多聪明——这是上游的核心
 ## 关键文件
 
 **引擎（vendor，别手改）**
-- `litviz/engine/` — 上游 mqc-litigation-visual-redraw v1.0.2（作者缪奇川，MIT）原样拷贝。
+- `litviz/mqc-litigation-visual-redraw/` — 重画引擎 v1.0.2（作者缪奇川，MIT）原样拷贝，
+  2026-08-25 前叫 `litviz/engine/`。上游已并入 monorepo
+  MiaoQichuan/new-litigation-visualization。
+- `litviz/mqc-timeline-master/` — 时间轴大师 v2.0.1（同一上游、同作者）：从原始卷宗
+  直接出案件时间轴的确定性管线（多泳道/双方对读/纵向分页/忠实性子序列校验）。
+  **两个目录名必须保持上游原名**：时间轴脚本与测试有十几处
+  `../../mqc-litigation-visual-redraw/scripts` 兄弟目录硬引用（共享内核机制），
+  保持原名即原生成立，升级零补丁。
 - `litviz/UPSTREAM.md` — vendor 来源、commit、升级步骤。
 - `litviz/PATCHES.md` — 三条本地补丁（代码里搜 `[AWD-PATCH n]`）。升级时逐条复核。
 - `litviz/README.md` — 分工、命令、依赖矩阵。
 
 **我们写的**
 - `litviz/cli.py` — **机器契约层，后端唯一入口**。stdout 恰好一行 JSON，引擎的人类
-  输出全转 stderr。子命令 doctor / validate / checkpoint / render。
-- `litviz/tests/test_cli.py` — 契约测试 + 连带跑上游 149 项回归。
+  输出全转 stderr。子命令 doctor / validate / checkpoint / render / **timeline**
+  （驱动时间轴大师分段管线：--workdir 状态目录 + --stage 阶段白名单，
+  render 阶段代建输出目录并收产物清单，mark 支持 --emphasis-source）。
+- `litviz/tests/test_cli.py` — 契约测试（含时间轴管线端到端）+ 连带跑上游两套回归。
 
 **后端**
 - `service/ai/LitigationVisualService.java` — 进程边界：定位 Python 与 litviz 目录、
   跑 cli.py、解 JSON。含参考文档读取（带路径穿越防护）。
 - `service/ai/tools/LitigationVisualTools.java` — 三个 @Tool：`litigation_reference`
   （渐进披露读规范）、`litigation_checkpoint`（三问）、`litigation_render`（出图）。
+- `service/ai/tools/LitigationTimelineTools.java` — 时间轴大师的三个 @Tool：
+  `litigation_timeline_start`（读材料、回逐句编号清单）、`litigation_timeline_step`
+  （逐阶段推进，五轮勾选走 `<question>` 协议）、`litigation_timeline_render`。
+  一个会话一个 workdir（LRU 32 挤出即删）；模型产出（verdicts/parts/skeleton/items）
+  一律经 modelFilesJson 参数提交，由 Java 写进 workdir；材料由 Java 用 Tika 预转成
+  UTF-8 文本再进管线（上游 read_source 只认 UTF-8 文本与 python-docx，后者打包
+  运行时没有）；溯源索引由服务端按管线落的 `-trace.json` 用 POI 出 Word 三线表
+  （上游的 node 路线桌面端不可用）。守卫：`LitigationTimelineFlowTest`。
 - `service/ai/LitigationPngService.java` — SVG→PNG（Batik，纯 Java）。位图是插进文书
   的那一环，见「已知地雷」里 PNG 那条。
 - `service/LitigationVisualPanelService.java` — 面板后端：图廊、换风格、拼 kickoff prompt。
@@ -131,6 +148,18 @@ render 成功后清掉 pending checkpoint（下一张图重新走三问）。
 「这里挪一下」，落在只读预览上就得自己去文件树翻可编辑版。改这条要同步四处：
 `LitigationVisualTools`（自动打开 + 交付说明）、`LitigationVisualPanel.vue`、
 skill.yml 的 `output`/`output_en`、两份 prompt。
+
+**时间轴大师上游三坑（契约盘点结论，dev-board#164；Java 层已各有对策+测试钉住）**
+- `style` 空参在上游 CLI 默认成 **2（歸藏风）**，与它文档承诺的「不回 = 奇川风」相悖
+  → `litigation_timeline_step` 对空参显式传 "1"。
+- `mark` 空参在上游直接 exit 1，「模型代挑」语义在 CLI 上不可达 → Java 空参转 "0"；
+  模型代挑时传 emphasisSource=model，cli 在 mark 成功后补写 state.json 的
+  emphasis_source（如实记录是谁挑的红，上游的诚实原则）。
+- **不要把管线产物再过 `validate_map.py`/jsonschema**：三处泳道上限互相矛盾
+  （schema 3 / validate_map 2 / 渲染器 6），且管线会写 schema 外字段 `lane.side`，
+  多泳道图必红。管线主路径本来就不调 validate_map。
+- 另：管线是 **cwd 固定文件名**状态机，一个案件一个 workdir 是硬约束；
+  `render` 不自建输出目录（cli 已代建）。
 
 ## 依赖矩阵（实测，别凭名字猜）
 

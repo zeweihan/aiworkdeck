@@ -1331,6 +1331,19 @@ def _():
     fig = os.path.join(HERE, "..", "assets", "modes", "flowchart-3modes.png")
     if not os.path.exists(fig):
         return
+    # **换了字体就不比。** 这条守卫拿「签进仓库的图上那条线的宽度」与
+    # 「当前机器字体量出的文字宽度」比，容差只有 8px ——
+    # ImageFont.getbbox 的结果随字体版本变化，换一台机器那 8px 兜不住，必然假红。
+    # 与 gallery 比图那条是同一类问题（CI 上撞过）。身份记在 .renderer 第二行。
+    _stamp = os.path.join(HERE, "..", "assets", "screenshots", ".renderer")
+    if os.path.exists(_stamp):
+        _lines = open(_stamp, encoding="utf-8").read().splitlines()
+        _font_was = _lines[1].strip() if len(_lines) > 1 else ""
+        _font_now = _mg.font_id()
+        if _font_was and _font_was != _font_now:
+            print(f"  略过标线宽度比对：图上的字由「{_font_was}」画出，"
+                  f"本机字体是「{_font_now}」")
+            return
     im = Image.open(fig).convert("RGB")
     W, panel = im.width, im.width // 3
     RULE = (153, 27, 27)

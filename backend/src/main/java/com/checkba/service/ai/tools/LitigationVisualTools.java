@@ -443,7 +443,7 @@ public class LitigationVisualTools implements AgentToolComponent {
     }
 
     /** 同名文件夹已存在时复用而不是报错——同一张图重出一版是常态。 */
-    private ProjectFile createFolderTolerant(Long projectId, Long parentId, String name) {
+    ProjectFile createFolderTolerant(Long projectId, Long parentId, String name) {
         try {
             return projectFileService.createFolder(projectId, parentId, name, AGENT_USER_ID);
         } catch (IllegalArgumentException e) {
@@ -457,7 +457,7 @@ public class LitigationVisualTools implements AgentToolComponent {
     }
 
     /** 把引擎产物搬进项目存储并登记进文件树。失败只跳过这一个文件，不毁掉整次交付。 */
-    private ProjectFile registerArtifact(Long projectId, Long folderId, Path src, String marker) {
+    ProjectFile registerArtifact(Long projectId, Long folderId, Path src, String marker) {
         try {
             String name = src.getFileName().toString();
             String ext = name.contains(".") ? name.substring(name.lastIndexOf('.') + 1) : "";
@@ -497,7 +497,7 @@ public class LitigationVisualTools implements AgentToolComponent {
     }
 
     /** 文件名净化。图名来自案件标题，斜杠、冒号这类字符很常见，直接建目录会失败。 */
-    private static String sanitize(String raw, String fallback) {
+    static String sanitize(String raw, String fallback) {
         String s = raw == null ? "" : raw.trim();
         s = s.replaceAll("[/\\\\:*?\"<>|\\p{Cntrl}]", "");
         s = s.replaceAll("\\s+", " ").trim();
@@ -505,7 +505,7 @@ public class LitigationVisualTools implements AgentToolComponent {
         return s.length() > 60 ? s.substring(0, 60).trim() : s;
     }
 
-    private static String tail(String s, int max) {
+    static String tail(String s, int max) {
         if (s == null) return "";
         return s.length() <= max ? s : "…" + s.substring(s.length() - max);
     }

@@ -125,6 +125,53 @@ def _render(map_path, out_base, flags):
     raise RuntimeError(f"no PNG produced for {map_path}")
 
 
+def renderer_id():
+    """当前机器用什么渲染器、什么版本。gallery 的图是**光栅化产物**，
+    换一个渲染器（或同一个的不同版本）就会有像素差异 —— 与代码改没改无关。
+
+    CI 上撞过两次：本机 LibreOffice 24.2 渲出来与签进仓库的图一致，
+    CI 的 LibreOffice（Ubuntu 源，版本不同）字体光栅化结果不同，于是三张全判过期。
+    第一次我以为是字节差异、改成按像素比，没解决 —— 差异本来就在像素层面。
+
+    所以记下身份：换了渲染器就跳过比对并说明，不假装检查过。
+    在生成 gallery 的那台机器上，这条门禁照旧是真的。
+    """
+    import shutil
+    import subprocess
+    for exe, args in (("rsvg-convert", ["--version"]), ("resvg", ["--version"]),
+                      ("inkscape", ["--version"]), ("soffice", ["--version"])):
+        if shutil.which(exe):
+            try:
+                out = subprocess.run([exe] + args, capture_output=True, text=True,
+                                     timeout=60)
+                ver = (out.stdout or out.stderr).strip().splitlines()[0][:60]
+            except Exception:
+                ver = "unknown"
+            return f"{exe} {ver}"
+    return "none"
+
+
+def font_id():
+    """签进仓库的 gallery 图，它上面的字是**哪一份字体文件**画的。
+
+    与 renderer_id 同一个道理：`ImageFont.getbbox` 的结果随字体版本变化，
+    而有一条守卫拿它与图上那条深红标线的宽度比（容差只有 8px）——
+    换一台机器、字体版本不同，那 8px 兜不住，必然假红。
+    """
+    try:
+        f = _cjk_font(54)
+        import os as _os
+        path = getattr(f, "path", "") or ""
+        size = _os.path.getsize(path) if path and _os.path.exists(path) else 0
+        return f"{_os.path.basename(path)}:{size}"
+    except Exception:
+        return "none"
+
+
+def stamp_path():
+    return os.path.join(ROOT, "assets", "screenshots", ".renderer")
+
+
 def build(check_only=False):
     from PIL import Image, ImageDraw
     shots_dir = os.path.join(ROOT, "assets", "screenshots")
@@ -134,15 +181,67 @@ def build(check_only=False):
     work = tempfile.mkdtemp(prefix="gallery-")
     stale, written = [], 0
 
+    # 换了渲染器就不比 —— 比了必然假红（见 renderer_id 的说明）。
+    #
+    # **能确定同机才比；只要不确定就不比。** 第一版写成
+    # `if _was and _was != _rid`：身份戳缺席时 `_was` 是空串，条件不成立，
+    # 于是**照旧比对** —— 而身份戳缺席恰恰说明「无从判断是不是同一台机器」，
+    # 那时最该跳过。CI 上第三次假红就是这个口子
+    # （点号开头的文件在 Windows 上拷贝时容易漏，`.github` 已经漏过一次）。
+    #
+    # 判据反过来写：**只有身份戳存在且与本机一致，才真的比对。**
+    # 身份戳是**两行**：第一行渲染器、第二行字体（见下方写入处）。
+    # 而这里原来拿整份内容去跟**一行**的 renderer_id 比 —— 两者永远不相等，
+    # 于是 gallery 比对在任何机器上都从不执行，包括生成它的那一台。
+    # 实测：本机的 renderer_id 与 font_id 与文件里的两行逐字相同，却仍然打印
+    # 「略过 gallery 比对」。一道从不执行的门禁，比没有这道门禁更坏，
+    # 因为它让人以为图被检查过。判据补齐成两行对两行之后，门禁真的跑起来并通过。
+    _rid = renderer_id()
+    if check_only:
+        _stamp = stamp_path()
+        _was = ""
+        try:
+            if os.path.exists(_stamp):
+                _was = open(_stamp, encoding="utf-8").read().strip()
+        except OSError:
+            _was = ""
+        _want = _rid + "\n" + font_id()
+        if _was != _want:
+            if not _was:
+                print(f"  略过 gallery 比对：没有渲染器身份戳"
+                      f"（assets/screenshots/.renderer），无从判断是不是同一台机器")
+            else:
+                print(f"  略过 gallery 比对：签进仓库的图由\n    「{_was}」\n"
+                      f"    渲出，本机是\n    「{_want}」")
+            print(f"    gallery 是光栅化产物，换渲染器必有像素差异，"
+                  f"与代码改没改无关。")
+            print(f"    要在本机重生成并认领身份：python3 scripts/make_gallery.py")
+            return []
+
     def emit(path, im):
         nonlocal written
         if check_only:
             if not os.path.exists(path):
                 stale.append(os.path.basename(path) + " (missing)")
                 return
-            tmp = os.path.join(work, "cmp.png")
-            im.save(tmp)
-            if open(tmp, "rb").read() != open(path, "rb").read():
+            # **按像素比，不按字节比。** 字节比会在任何异机环境下误报：
+            # PNG 的字节受编码器版本与压缩参数影响，同一份 SVG 在本机
+            # （soffice 24.2）与 CI（libreoffice-draw，版本不同）渲出的 PNG
+            # 像素完全相同、字节却不同 —— CI 上实测三张全部误报，
+            # 而逐像素比对显示 diff.getbbox() 是 None（完全一致）。
+            # 这条检查要抓的是「代码改了、图没跟着更新」，那是**内容**差异；
+            # 按字节比会把编码差异也算进来，成了一条会误报的检查。
+            # 「有反例的检查一条不留」—— 所以改判据，不是删检查。
+            from PIL import ImageChops
+            _a = im.convert("RGB")
+            try:
+                _b = Image.open(path).convert("RGB")
+            except Exception:
+                stale.append(os.path.basename(path) + " (unreadable)")
+                return
+            if _a.size != _b.size:
+                stale.append(f"{os.path.basename(path)} (size {_a.size} != {_b.size})")
+            elif ImageChops.difference(_a, _b).getbbox() is not None:
                 stale.append(os.path.basename(path))
         else:
             im.save(path)
@@ -223,7 +322,13 @@ def build(check_only=False):
 
     if check_only:
         return stale
-    print(f"gallery: wrote {written} image(s)")
+    # 生成成功之后记下是谁渲的 —— 下次比对时据此判断能不能比（见 renderer_id）
+    try:
+        with open(stamp_path(), "w", encoding="utf-8") as _fh:
+            _fh.write(_rid + "\n" + font_id() + "\n")
+    except OSError:
+        pass
+    print(f"gallery: wrote {written} image(s)　（渲染器：{_rid}）")
     return []
 
 

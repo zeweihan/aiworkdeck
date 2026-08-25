@@ -17,7 +17,7 @@ import tempfile
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LITVIZ = os.path.dirname(_HERE)
 _CLI = os.path.join(_LITVIZ, "cli.py")
-_EXAMPLES = os.path.join(_LITVIZ, "engine", "examples")
+_EXAMPLES = os.path.join(_LITVIZ, "mqc-litigation-visual-redraw", "examples")
 
 # 哪些布局离了 graphviz 就画不出来。实测矩阵（2026-08-08，引擎 v1.0.2）：
 # 只有流程图真的要 dot。graphviz_relation 名字里带 graphviz，但 v1.0.2 已经换成
@@ -152,10 +152,123 @@ def main():
     check("doctor: 如实回报 graphviz 有无", out.get("graphviz") == have_dot)
     check("doctor: 回报解释器版本", bool(out.get("python")))
 
-    # ---- 9. 上游 149 项回归 ---------------------------------------------
+    # ---- 9. 时间轴大师管线契约 ------------------------------------------
+    # 走一遍完整管线：read → pick → span → style → offer → budget → capacity
+    # → title → render。模型那一半（verdicts/parts/skeleton/items）由本测试
+    # **按 state.json 动态生成**——不写死句子编号，句子切分规则变了测试自动跟上。
+    print("\nlitviz · 时间轴大师（timeline）管线契约")
+    tl_work = tempfile.mkdtemp(prefix="litviz-tl-")
+    os.makedirs(os.path.join(tl_work, "materials"), exist_ok=True)
+    fixture = os.path.join(_LITVIZ, "mqc-timeline-master", "tests", "fixtures", "m7-short.txt")
+    with open(fixture, encoding="utf-8") as f:
+        material_text = f.read()
+    with open(os.path.join(tl_work, "materials", "催告经过.txt"), "w", encoding="utf-8") as f:
+        f.write(material_text)
+
+    def run_tl(stage, *stage_args, extra=None):
+        return run_cli(["timeline", "--workdir", tl_work, "--stage", stage]
+                       + list(extra or []) + list(stage_args))
+
+    out, rc, _ = run_cli(["timeline", "--workdir", tl_work, "--stage", "肯定没有这个阶段"])
+    check("timeline: 未知阶段被白名单挡下", out.get("ok") is False and rc == 1
+          and "阶段" in str(out.get("error", "")))
+
+    out, rc, _ = run_tl("read", "materials/催告经过.txt")
+    check("timeline read: ok 且 stdout 一行 JSON", out.get("ok") is True and rc == 0,
+          str(out)[:120])
+    check("timeline read: 转达管线文本（含 shape 指引）", "verdicts.json" in out.get("text", ""))
+    state = json.load(open(os.path.join(tl_work, "state.json"), encoding="utf-8"))
+    sentences = state["sentences"]
+    check("timeline read: state.json 落在 workdir", len(sentences) >= 5,
+          "句数 %d" % len(sentences))
+
+    for stage, arg in [("pick", "全部"), ("span", "全部"), ("style", "3")]:
+        out, rc, _ = run_tl(stage, arg)
+        check("timeline %s: ok" % stage, out.get("ok") is True, str(out)[:160])
+
+    # 模型产出：逐句判定 + 单一部分。带日期的是事实句，标题行不是。
+    import re as _re
+    date_re = _re.compile(r"\d{4}-\d{2}-\d{2}")
+    verdicts = [{"i": i, "is_event": bool(date_re.search(s)), "why": "带日期的已发生事实" if date_re.search(s) else "标题/非事实"}
+                for i, s in enumerate(sentences)]
+    json.dump(verdicts, open(os.path.join(tl_work, "verdicts.json"), "w", encoding="utf-8"),
+              ensure_ascii=False)
+    parts = [{"id": 1, "name": "催告经过", "sids": list(range(len(sentences))),
+              "first": sentences[0], "last": sentences[-1]}]
+    json.dump(parts, open(os.path.join(tl_work, "parts.json"), "w", encoding="utf-8"),
+              ensure_ascii=False)
+
+    out, rc, _ = run_tl("offer")
+    check("timeline offer: 校验模型产出并给勾选清单", out.get("ok") is True
+          and "催告经过" in out.get("text", ""), str(out)[:200])
+    out, rc, _ = run_tl("budget", "all")
+    check("timeline budget: ok", out.get("ok") is True, str(out)[:160])
+
+    skeleton = []
+    for i, s in enumerate(sentences):
+        m = date_re.search(s)
+        if not m:
+            continue
+        skeleton.append({"id": str(len(skeleton) + 1), "src_sids": [i],
+                         "certainty": "exact", "kind": "occur",
+                         "raw": m.group(0), "date": m.group(0)})
+    json.dump(skeleton, open(os.path.join(tl_work, "skeleton.json"), "w", encoding="utf-8"),
+              ensure_ascii=False)
+    out, rc, _ = run_tl("capacity")
+    check("timeline capacity: 按骨架算出容量", out.get("ok") is True
+          and "items.json" in out.get("text", ""), str(out)[:300])
+
+    out, rc, _ = run_tl("title", "催告经过时间轴")
+    check("timeline title: ok", out.get("ok") is True, str(out)[:160])
+
+    # items：head = 原句砍掉日期时刻前缀 → 子序列成立
+    items = []
+    for ent in skeleton:
+        s = sentences[ent["src_sids"][0]]
+        head = _re.sub(r"^\S+\s+\S+\s+", "", s).strip()
+        items.append(dict(ent, head=head))
+    json.dump(items, open(os.path.join(tl_work, "items.json"), "w", encoding="utf-8"),
+              ensure_ascii=False)
+
+    # 忠实性红线：改写原文必须在出图前被拦（结构化失败，不是 traceback）
+    bad_items = [dict(it) for it in items]
+    bad_items[0]["head"] = "对方收到了我们的首次催告通知"
+    json.dump(bad_items, open(os.path.join(tl_work, "items.json"), "w", encoding="utf-8"),
+              ensure_ascii=False)
+    out, rc, _ = run_tl("render", "out-bad/催告经过.svg")
+    check("timeline render: 改写原文被拦且是结构化失败",
+          out.get("ok") is False and rc == 1 and bool(out.get("text")), str(out)[:200])
+
+    json.dump(items, open(os.path.join(tl_work, "items.json"), "w", encoding="utf-8"),
+              ensure_ascii=False)
+    out, rc, _ = run_tl("render", "out-1/催告经过.svg")
+    files = {f["name"]: f for f in out.get("files", [])}
+    check("timeline render: ok 且报出产物清单", out.get("ok") is True and bool(files),
+          str(out)[:300])
+    check("timeline render: SVG 落盘", any(n.endswith(".svg") for n in files),
+          str(sorted(files)))
+    for ext in (".pptx", ".vsdx", ".drawio"):
+        check("timeline render: %s（纯 stdlib 导出）落盘" % ext,
+              any(n.endswith(ext) for n in files), str(sorted(files)))
+    check("timeline render: 溯源 trace.json 落盘",
+          any(n.endswith("-trace.json") for n in files), str(sorted(files)))
+    check("timeline render: 产物路径绝对且真实存在",
+          all(os.path.isabs(f["path"]) and os.path.isfile(f["path"]) for f in files.values()))
+
+    out, rc, _ = run_tl("next")
+    check("timeline next: 中途接手可问进度", out.get("ok") is True and bool(out.get("text")))
+
+    # ---- 10. 上游回归 ----------------------------------------------------
     if not skip_engine:
-        print("\n上游引擎回归（engine/tests/run_checks.py）")
-        p = subprocess.run([sys.executable, os.path.join(_LITVIZ, "engine", "tests", "run_checks.py")],
+        print("\n上游时间轴回归（mqc-timeline-master/tests/run_checks.py）")
+        tp = subprocess.run([sys.executable, "tests/run_checks.py"],
+                            cwd=os.path.join(_LITVIZ, "mqc-timeline-master"),
+                            capture_output=True, text=True)
+        check("时间轴回归: 全绿", tp.returncode == 0,
+              "\n".join(tp.stdout.splitlines()[-6:]))
+
+        print("\n上游引擎回归（mqc-litigation-visual-redraw/tests/run_checks.py）")
+        p = subprocess.run([sys.executable, os.path.join(_LITVIZ, "mqc-litigation-visual-redraw", "tests", "run_checks.py")],
                            capture_output=True, text=True)
         tail = [ln for ln in p.stdout.splitlines() if "checks passed" in ln]
         summary = tail[-1].strip() if tail else "(没抓到统计行)"

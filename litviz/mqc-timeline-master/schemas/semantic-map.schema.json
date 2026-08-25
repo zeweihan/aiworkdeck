@@ -1,0 +1,857 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/MiaoQichuan/new-litigation-visualization/semantic-map.schema.json",
+  "title": "mqc-nlv semantic map (v2, additive over v1)",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "layout",
+    "title_text"
+  ],
+  "properties": {
+    "schema_version": {
+      "enum": [
+        1,
+        2
+      ]
+    },
+    "diagram_type": {
+      "type": "string"
+    },
+    "layout": {
+      "enum": [
+        "numbered_point_timeline",
+        "dated_point_timeline",
+        "proportional_gantt",
+        "graphviz_flow",
+        "graphviz_relation",
+        "relation_tree",
+        "vertical_single_column"
+      ],
+      "description": "The timeline type. Routing, measured across eight real datasets: NUMBERED is the default, because litigation events cluster into a few days and a proportional axis cannot separate days — none of the eight suited a dated point axis. When the argument really is about dates it is almost always about a PERIOD (时效, 保证期间, 履行期, 迟延, 考核年度), so proportional_gantt carries that work. dated_point_timeline is the narrow case: point events, few of them, well separated, where the gap itself is the argument. Banding, column count and pagination are computed, never chosen."
+    },
+    "title_text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "axis_unit": {
+      "enum": [
+        "year",
+        "month"
+      ]
+    },
+    "direction": {
+      "enum": [
+        "TB",
+        "LR"
+      ]
+    },
+    "engine": {
+      "enum": [
+        "dot",
+        "neato",
+        "fdp",
+        "twopi",
+        "circo"
+      ]
+    },
+    "arrows": {
+      "type": "boolean"
+    },
+    "tall_leaves": {
+      "type": "boolean"
+    },
+    "axis": {
+      "type": "object"
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/event"
+      }
+    },
+    "spans": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/span"
+      }
+    },
+    "points": {
+      "type": "array"
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/node"
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/edge"
+      }
+    },
+    "provenance": {
+      "type": "object"
+    },
+    "medium": {
+      "enum": [
+        "a4_portrait",
+        "a4_landscape",
+        "screen"
+      ],
+      "description": "Paper budget the figure is laid out for. Drives the width cap guard."
+    },
+    "frame": {
+      "$ref": "#/$defs/frame"
+    },
+    "scope": {
+      "$ref": "#/$defs/scope"
+    },
+    "groups": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/group"
+      },
+      "maxItems": 7,
+      "description": "Candidate matters the script offered at the checkpoint. At most 7; the remainder folds into 其他."
+    },
+    "stipulated": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/stipulated"
+      },
+      "description": "Times that a document STIPULATES rather than times at which something happened. Never on the main axis by default."
+    },
+    "lanes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/lane"
+      },
+      "maxItems": 3,
+      "description": "Opposing sides whose assertions are being read against each other (原告 / 被告). This is NOT a layout choice: banding, band count and which card sits where are computed from the geometry. The user picks a timeline TYPE (numbered / dated / gantt) and, if the material has two sides, names them here."
+    },
+    "phases": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/span"
+      }
+    },
+    "residuals": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/residual"
+      }
+    },
+    "documents": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/document"
+      }
+    },
+    "checkpoint": {
+      "$ref": "#/$defs/checkpoint"
+    },
+    "conflicts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/conflict"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "layout": {
+            "const": "dated_point_timeline"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "items": {
+              "required": [
+                "date",
+                "text"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "layout": {
+            "const": "numbered_point_timeline"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "events"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "layout": {
+            "const": "proportional_gantt"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "axis",
+          "spans"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "layout": {
+            "enum": [
+              "graphviz_flow",
+              "graphviz_relation",
+              "relation_tree"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "nodes"
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^.+$"
+    },
+    "event": {
+      "type": "object",
+      "required": [
+        "id",
+        "text"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "band": {
+          "enum": [
+            "up",
+            "down"
+          ]
+        },
+        "date": {
+          "type": "string"
+        },
+        "date_text": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "emphasis": {
+          "type": "boolean"
+        },
+        "unit_type": {
+          "enum": [
+            "event",
+            "period",
+            "stipulated"
+          ],
+          "default": "event"
+        },
+        "quote_depth": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2,
+          "description": "0 = stated by the source document itself; 1 = inside a document it quotes; 2 = a fact recited inside that quoted document."
+        },
+        "lane": {
+          "type": "string"
+        },
+        "time": {
+          "$ref": "#/$defs/time"
+        },
+        "head": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The ONE title line on the card. At most one per card."
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Flowing prose. Mutually exclusive with items."
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 2,
+          "description": "Numbered list. Only when the source itself enumerates. Mutually exclusive with body."
+        },
+        "index_note": {
+          "type": "string",
+          "description": "Audit remark (outlier observation, quote depth, inference basis). Goes to the provenance index ONLY, never onto the figure."
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "head_short": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 10,
+          "description": "A shorter head for the horizontal forms, where a slot is ~80px wide. Still a faithful condensation; the verbatim quote lives in source.quote. Required when the layout is horizontal two-party."
+        }
+      }
+    },
+    "span": {
+      "type": "object",
+      "required": [
+        "id",
+        "label_text",
+        "from",
+        "to"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "label_text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "emphasis": {
+          "type": "boolean"
+        },
+        "directional": {
+          "type": "boolean"
+        },
+        "lane": {
+          "type": "string"
+        },
+        "unit_type": {
+          "enum": [
+            "period",
+            "stipulated"
+          ],
+          "default": "period",
+          "description": "period = a stretch that actually ran. stipulated = a stretch an agreement fixes, such as an assessment year. Drawn lighter and never in the accent colour, so an agreed window is never read as an event."
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "node": {
+      "type": "object",
+      "required": [
+        "id",
+        "title"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "enum": [
+            "step",
+            "decision",
+            "terminal"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "note": {
+          "type": "string"
+        },
+        "level": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "emphasis": {
+          "type": "boolean"
+        },
+        "col": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "required": [
+        "from",
+        "to"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/id"
+        },
+        "to": {
+          "$ref": "#/$defs/id"
+        },
+        "label": {
+          "type": "string"
+        },
+        "route": {
+          "enum": [
+            "straight",
+            "top",
+            "bottom"
+          ]
+        },
+        "emphasis": {
+          "type": "boolean"
+        }
+      }
+    },
+    "time": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "certainty",
+        "raw"
+      ],
+      "properties": {
+        "certainty": {
+          "enum": [
+            "exact",
+            "range",
+            "relative",
+            "order"
+          ]
+        },
+        "origin": {
+          "enum": [
+            "extracted",
+            "derived"
+          ],
+          "default": "extracted",
+          "description": "extracted = written in the material, verbatim-checkable. derived = solved from a relative reference. There is no 'computed' in v2: legal period arithmetic belongs to a separate skill."
+        },
+        "kind": {
+          "enum": [
+            "occur",
+            "sign",
+            "effect",
+            "send",
+            "arrive",
+            "receipt",
+            "record",
+            "due"
+          ],
+          "description": "Which moment the date fixes. send and arrive are distinct on purpose."
+        },
+        "raw": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The time expression verbatim from the material."
+        },
+        "date": {
+          "type": "string"
+        },
+        "date_text": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "anchor": {
+          "$ref": "#/$defs/id"
+        },
+        "relation": {
+          "enum": [
+            "after",
+            "before",
+            "same_day"
+          ]
+        },
+        "offset_days": {
+          "type": "integer"
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "at"
+      ],
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string",
+          "description": "para:12 or page:4 or table:2/row:7"
+        },
+        "quote": {
+          "type": "string",
+          "description": "Verbatim from the NORMALISED text. The index carries this; the card carries prose."
+        },
+        "material_date": {
+          "type": "string",
+          "description": "When the evidence was created, as distinct from the fact it records. Index only."
+        },
+        "medium": {
+          "enum": [
+            "text_layer",
+            "image"
+          ],
+          "default": "text_layer",
+          "description": "text_layer = the quote is verbatim-checkable against the normalised text. image = the model read a scan; no on-disk text exists to diff against, so this event sits in a separate tier and never enters the outlier baseline."
+        }
+      }
+    },
+    "frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Internal only. Not shown to the user, not printed on the figure, not documented publicly yet.",
+      "properties": {
+        "stage": {
+          "enum": [
+            "intake",
+            "filed",
+            "exchanged",
+            "complete",
+            "auto"
+          ],
+          "description": "How complete the material can possibly be. auto = inferred from the documents present."
+        },
+        "audience": {
+          "enum": [
+            "court",
+            "party",
+            "internal",
+            "peers"
+          ]
+        },
+        "stage_inferred_from": {
+          "type": "string"
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "selection_source"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "full",
+            "targeted"
+          ],
+          "description": "full = every sentence was read and accounted for. targeted = a mechanical pre-filter ran first; the recall guarantee covers only what was read."
+        },
+        "selection_source": {
+          "enum": [
+            "user",
+            "default"
+          ],
+          "description": "Must be user when groups were chosen. The model may never author a selection; same discipline as v1's emphasis_source."
+        },
+        "selected_groups": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sentences_total": {
+          "type": "integer"
+        },
+        "sentences_read": {
+          "type": "integer"
+        },
+        "excluded_events": {
+          "type": "integer"
+        },
+        "split": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "by": {
+              "enum": [
+                "none",
+                "block",
+                "subject",
+                "matter",
+                "gap"
+              ]
+            },
+            "figure_index": {
+              "type": "integer"
+            },
+            "figure_count": {
+              "type": "integer"
+            }
+          }
+        },
+        "documents_unreadable": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file",
+              "reason"
+            ],
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "read_as_image": {
+                "type": "boolean"
+              }
+            }
+          },
+          "description": "Files with no usable text layer. Whether they were read as images or skipped entirely, the figure must say so."
+        },
+        "events_from_image": {
+          "type": "integer"
+        }
+      }
+    },
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label_text",
+        "event_ids",
+        "basis"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "label_text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "event_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 1
+        },
+        "basis": {
+          "enum": [
+            "document",
+            "parties",
+            "cluster",
+            "other"
+          ],
+          "description": "Which mechanical clue produced this grouping. Anything else goes to 其他."
+        }
+      }
+    },
+    "lane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label_text"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "label_text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "relation": {
+          "enum": [
+            "assertion",
+            "actor",
+            "stage"
+          ],
+          "default": "assertion",
+          "description": "两侧是什么关系。三个值取自 RELAY-2 对泳道的定义：泳道是语义分方（谁的主张 / 哪一层主体 / 哪个程序阶段）。assertion = 谁的主张（原告与被告各说一套，互相对读）——默认值；actor = 哪一层主体（母公司与子公司、总包与分包）；stage = 哪个程序阶段（一审与二审、审理与执行）。只有 assertion 时两侧才是对立陈述，check_material_conflicts 的「同日相反主张」才成立：账目的支出与收入同日并存、一审与二审同日各有动作，都不是相反主张。**不填等于 assertion**，所以已有的地图一个字都不用改。"
+        }
+      }
+    },
+    "stipulated": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "raw",
+        "text"
+      ],
+      "properties": {
+        "raw": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        }
+      }
+    },
+    "residual": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "at",
+        "raw",
+        "reason"
+      ],
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        },
+        "raw": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "document": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "kind"
+      ],
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "units": {
+          "type": "integer"
+        },
+        "unit_kind": {
+          "enum": [
+            "para",
+            "page"
+          ]
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "events_found": {
+          "type": "integer"
+        }
+      }
+    },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "confirmed": {
+          "type": "boolean"
+        },
+        "extraction_confirmed": {
+          "type": "boolean"
+        },
+        "emphasis_source": {
+          "enum": [
+            "user",
+            "model",
+            "none"
+          ]
+        },
+        "conflict_policy": {}
+      }
+    },
+    "conflict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "fact_text",
+        "members"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "enum": [
+            "date",
+            "characterization"
+          ],
+          "description": "date = the same fact carries different dates. characterization = the dates agree but the parties describe the fact in incompatible terms. Both must be drawn, never resolved."
+        },
+        "fact_text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 2
+        }
+      }
+    }
+  },
+  "description": "v2 is a pure superset of v1. Every v1 map (schema_version 1) validates unchanged and renders byte-identically. All v2-only fields are optional at the schema level; the hand-written validator enforces the v2 rules only when schema_version is 2."
+}

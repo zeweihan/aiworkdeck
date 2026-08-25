@@ -22,7 +22,11 @@ _THEME = None
 LH = 22
 BAR_H = 14                 # light-gray axis bar (slightly thick, not heavy)
 BAR_FILL = "#E5E7EB"
-TICK = "#C6CBD2"           # segment ticks, slightly darker than the bar
+TICK = "#FFFFFF"           # segment ticks: PAPER-WHITE, not darker than the bar.
+                           # 作者定的（2026-08-19）：深灰的分格线把时间带切成一段段，
+                           # 读者会以为那些段本身有含义。白线只是把整条带轻轻分开，
+                           # 刻度的信息由下方的年份标签承担，不由线的深浅承担。
+                           # 与 v2 的 D13 是同一条（v2 那边也是「与纸同色的白」）。
 CONNECT = 56               # bar -> card gap
 LEFT, RIGHT = 132, 132
 YEAR_MIN_PX = 118          # min width per year so the ruler stays readable

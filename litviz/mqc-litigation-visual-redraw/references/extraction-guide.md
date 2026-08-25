@@ -261,8 +261,8 @@ tree; procedure → flow. A single judgment often yields **more than one** diagr
 label. Return your event/party list + what you treated as fact vs. argument, and
 confirm before a final.
 
-*Good:* from "2010年7月3日，新赣公司与傅**等四人签订《7.3协议书》，转让项目开发权及
-股权" → event `date_text:"2010年7月3日"`, `text:"新赣公司与傅**等签订《7.3协议书》，
+*Good:* from "2010年7月3日，甲公司与傅**等四人签订《7.3协议书》，转让项目开发权及
+股权" → event `date_text:"2010年7月3日"`, `text:"甲公司与傅**等签订《7.3协议书》，
 转让项目开发权及股权"` (title & names verbatim, sentence condensed).
 *Bad:* turning "本院认为四被告未尽勤勉义务，应承担赔偿责任" into a node — that is the
 court's reasoning; only the holding (as emphasis) and the underlying dated facts

@@ -53,7 +53,7 @@ class LitigationVisualServiceTest {
 
         LitigationVisualService.Runtime rt = svc.runtime();
         if (rt.litvizDir() != null) {
-            examples = rt.litvizDir().resolve("engine").resolve("examples");
+            examples = rt.litvizDir().resolve("mqc-litigation-visual-redraw").resolve("examples");
         }
     }
 
