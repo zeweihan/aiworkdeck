@@ -106,9 +106,12 @@ public class FeedbackController {
     @GetMapping
     public ResponseEntity<?> list(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
+            @RequestHeader(value = "X-Optimizer-Token", required = false) String optimizerTokenHeader,
             @RequestParam(value = "status", required = false) String status,
             @RequestParam(value = "limit", required = false, defaultValue = "50") int limit) {
-        if (requireAdmin(sessionId) == null) {
+        // 取件密钥也可读列表（只读）：官网 admin 的「用户反馈」分区经服务端代理用它拉数据，
+        // 该密钥本就能取全部待办反馈与附件（/pending、attachment 端点），信任级没有升格
+        if (!optimizerTokenOk(optimizerTokenHeader) && requireAdmin(sessionId) == null) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("需要管理员权限", "Admin access required")));
         }
         List<Map<String, Object>> items = new ArrayList<>();
@@ -121,8 +124,10 @@ public class FeedbackController {
     @GetMapping("/{id}")
     public ResponseEntity<?> detail(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
+            @RequestHeader(value = "X-Optimizer-Token", required = false) String optimizerTokenHeader,
             @PathVariable Long id) {
-        if (requireAdmin(sessionId) == null) {
+        // 同 list：取件密钥可读详情（只读），供官网 admin 代理
+        if (!optimizerTokenOk(optimizerTokenHeader) && requireAdmin(sessionId) == null) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("需要管理员权限", "Admin access required")));
         }
         UserFeedback fb = feedbackRepository.findById(id).orElse(null);

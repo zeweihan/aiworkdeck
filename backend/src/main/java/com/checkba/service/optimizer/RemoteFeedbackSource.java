@@ -30,12 +30,19 @@ public class RemoteFeedbackSource implements OptimizerFeedbackSource {
 
     private final String baseUrl;
     private final String token;
+    /** 「在浏览器里看这条反馈」的地址模板（{id} 占位）；空 = 云端反馈控制台默认页 */
+    private final String consoleUrlTemplate;
     private final HttpClient client;
     private final ObjectMapper mapper = new ObjectMapper();
 
     public RemoteFeedbackSource(String baseUrl, String token) {
+        this(baseUrl, token, "");
+    }
+
+    public RemoteFeedbackSource(String baseUrl, String token, String consoleUrlTemplate) {
         this.baseUrl = baseUrl == null ? "" : baseUrl.trim().replaceAll("/$", "");
         this.token = token == null ? "" : token.trim();
+        this.consoleUrlTemplate = consoleUrlTemplate == null ? "" : consoleUrlTemplate.trim();
         this.client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
     }
 
@@ -141,6 +148,9 @@ public class RemoteFeedbackSource implements OptimizerFeedbackSource {
 
     @Override
     public String consoleRef(UserFeedback fb) {
+        if (!consoleUrlTemplate.isEmpty()) {
+            return consoleUrlTemplate.replace("{id}", String.valueOf(fb.getId()));
+        }
         return baseUrl + "/feedback-console/?fb=" + fb.getId();
     }
 
