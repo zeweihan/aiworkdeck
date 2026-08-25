@@ -28,6 +28,15 @@ public interface OptimizerFeedbackSource {
     /** 邮件里给维护者看的附件地址（本地是磁盘路径，远端是可直接打开的 URL）。 */
     String attachmentRef(UserFeedback fb, FeedbackAttachment a);
 
+    /**
+     * 这条反馈在浏览器里的直达地址（反馈控制台，登录后看图听语音），没有就返回 null。
+     * 远端来源指向云端后台的 /feedback-console/；本地来源没有浏览器入口（桌面端
+     * 自带 admin 看板），返回 null，通知正文里就不出现这一行。
+     */
+    default String consoleRef(UserFeedback fb) {
+        return null;
+    }
+
     /** 人话描述，进状态接口，方便一眼看出这台优化者在读谁。 */
     String describe();
 }

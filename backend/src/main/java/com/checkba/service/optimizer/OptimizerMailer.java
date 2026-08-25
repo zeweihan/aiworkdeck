@@ -162,8 +162,16 @@ public class OptimizerMailer implements OptimizerNotifier {
             }
         }
 
+        // 反馈控制台直达（有浏览器入口的来源才有；本地来源为 null，不出现这一行）
+        String console = source == null ? null : source.consoleRef(fb);
+        if (console != null && !console.isBlank()) {
+            sb.append("\n== 在浏览器里看这条反馈 ==\n")
+                    .append(console).append('\n')
+                    .append("（登录 admin 后直接看截图、听语音，不用 curl）\n");
+        }
+
         sb.append("\n--\n")
-                .append("附件是 http(s) 地址时，直接点开需要先登录那台后台；也可以带取件密钥取：\n")
+                .append("附件裸地址在浏览器里会 403（要带凭据），命令行取用取件密钥：\n")
                 .append("  curl -H \"X-Optimizer-Token: <你的 token>\" '<附件地址>' -o shot.png\n")
                 .append("这封信由 AI WorkDeck 优化者自动发出。**回信不会被系统读取**——\n")
                 .append("要推进就直接去改代码，或把这条反馈的 status 改掉（表 user_feedback，id=")

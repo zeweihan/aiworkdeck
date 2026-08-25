@@ -69,6 +69,18 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # ---- 反馈控制台（维护者用；优化者邮件里的「后台直达」落点）----
+    # 页面在 backend.jar 的 classpath:/static/feedback-console/，随后端一起发版，
+    # 这里只需反代给后端；无需在 web/ 下铺任何文件。
+    location /feedback-console/ {
+        proxy_pass http://127.0.0.1:9696;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
     # ---- Office 插件任务窗格（dist-deploy 托管在 web/office-addin/）----
     # office.js 必须从微软 CDN 加载（跨域脚本），COEP require-corp 会拦掉它，
     # 因此本路径不得继承全站 COOP/COEP——location 内出现任意 add_header 即丢弃继承头，

@@ -43,7 +43,21 @@ description: 用户反馈闭环领域。任务涉及右下角反馈浮窗、反�
 - `controller/OptimizerController` — `/api/optimizer/run|status`（管理员，run 是异步）
 - 维护者机器上的常驻配方：`deploy/optimizer/`（run 脚本 + launchd plist + 搬机器步骤）
 
-**看板**：`frontend/src/pages/admin/admin.vue` 的 `activeNav === 'feedback'` 分区
+**看板**：`frontend/src/components/admin/AdminPane.vue` 的 `activeNav === 'feedback'` 分区
+（`pages/admin/admin.vue` 只是薄壳）——这是桌面端本地库的入口。
+
+**反馈控制台（云端收件箱的浏览器入口，2026-08-25 dev-board#151）**
+- `backend/src/main/resources/static/feedback-console/index.html` — 自包含单页，
+  jar 的 classpath:/static/ 直接托管在 `/feedback-console/`；云端 nginx 有一条
+  location 反代给后端（`deploy/cloud/nginx-addin.conf.example`）。
+- 由来：h5 客户端（含 admin 看板）2026-08-19 从 addin.aiworkdeck.com 退役后，
+  云端收件箱在浏览器里没有任何入口，优化者邮件里的裸附件 API 地址点开是 403 死胡同。
+- 优化者通知里的直达链接来自 `OptimizerFeedbackSource.consoleRef(fb)`（default null）：
+  Remote 来源返回 `<baseUrl>/feedback-console/?fb=<id>`，Local 来源保持 null
+  （桌面端自带 admin 看板），正文里就不出现这一节。
+- 页面安全约定：用户可控文本一律 textContent 渲染；附件用 fetch + `X-Session-Id`
+  头取 blob 再喂给 `<img>`/`<audio>`，凭据不进 URL（URL 里的 token 会落 nginx access log）。
+  登录支持 4005 二次验证（totp/sms/mail）。会话键与 h5 同名 `checkba_session_id`。
 
 ## 不变式（改之前先读）
 

@@ -140,6 +140,11 @@ public class RemoteFeedbackSource implements OptimizerFeedbackSource {
     }
 
     @Override
+    public String consoleRef(UserFeedback fb) {
+        return baseUrl + "/feedback-console/?fb=" + fb.getId();
+    }
+
+    @Override
     public String describe() {
         return "云端收件箱 " + baseUrl;
     }

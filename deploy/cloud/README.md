@@ -30,6 +30,9 @@
   acme/                <- certbot webroot
   web/                 <- index.html 为跳官网的静态重定向页（h5 已退役，见上）
   web/office-addin/    <- Office 插件任务窗格（office-addin 构建产物，见 office-addin.md）
+  （/feedback-console/ 不在 web/ 下：维护者反馈控制台由 backend.jar 的
+   classpath:/static/ 直接托管，nginx 有一条 location 反代给后端——
+   更新它 = 正常更新后端 jar，见 nginx-addin.conf.example）
   web/zetaoffice/      <- 退役残留（原 h5 的 LOWA 引擎载荷），留置不清理
 ```
 
