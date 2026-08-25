@@ -183,6 +183,26 @@ export async function fetchProjectFiles({ serverUrl, token }, projectId) {
 }
 
 /**
+ * 语音听写（POST /api/voice/dictate，dev-board#153）。失败抛错（透传服务端文案）。
+ */
+export async function postDictate({ serverUrl, token }, { audioBase64, format, durationMs }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) throw new Error(t('apiServerUrlEmpty'))
+  const resp = await fetch(`${base}/api/voice/dictate`, {
+    method: 'POST',
+    headers: headers(token),
+    body: JSON.stringify({ audioBase64, format, durationMs })
+  })
+  if (!resp.ok) {
+    let msg = `HTTP ${resp.status}`
+    try { const serverText = (await resp.text()).trim(); if (serverText && serverText.length < 300 && !serverText.startsWith('<')) msg = serverText.replace(/^"|"$/g, '') } catch (e) { /* 保底 */ }
+    throw new Error(msg)
+  }
+  const data = await resp.json()
+  return data && typeof data.text === 'string' ? data.text : ''
+}
+
+/**
  * 拉某个会话的历史消息（GET /api/ai/history?conversationId=...）。
  * 任务窗格重建后据此把上一场对话回灌到界面。
  * 403/404/网络失败一律返回空数组静默降级——历史拿不到不该打断用户开新的对话。

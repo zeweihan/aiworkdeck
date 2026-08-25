@@ -212,6 +212,22 @@
           :placeholder="t('inputPlaceholder')"
           @keydown.enter.exact.prevent="send"
         ></textarea>
+        <button
+          v-if="micAvailable"
+          class="btn mic"
+          :class="{ recording: dictState === 'recording' }"
+          :disabled="dictState === 'transcribing'"
+          :title="dictState === 'recording' ? t('dictateRecording') : t('dictate')"
+          @click="toggleDictation"
+        >
+          <span v-if="dictState === 'transcribing'" class="chip-spinner"></span>
+          <span v-else-if="dictState === 'recording'" class="mic-dot"></span>
+          <svg v-else class="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="3" width="6" height="11" rx="3"/>
+            <path d="M5 11a7 7 0 0 0 14 0"/>
+            <line x1="12" y1="18" x2="12" y2="21"/>
+          </svg>
+        </button>
         <button v-if="streaming" class="btn stop" @click="stop">{{ t('stop') }}</button>
         <button v-else class="btn send" :disabled="!canSend" @click="send">{{ t('send') }}</button>
       </div>
@@ -233,6 +249,8 @@ import {
 } from '../lib/chatSession.js'
 import { readDocumentMeta, detectHost } from '../lib/wordDoc.js'
 import { locateInDocument } from '../lib/officeExecutor.js'
+import { micSupported, startRecording, MAX_RECORD_MS } from '../lib/wavRecorder.js'
+import { postDictate } from '../lib/api.js'
 import { t } from '../lib/i18n.js'
 
 /**
@@ -333,6 +351,58 @@ watch(input, (v) => {
     input.value = ''
   }
 })
+
+// ==================== 语音听写（dev-board#153）====================
+
+const micAvailable = micSupported()
+/** '' | 'recording' | 'transcribing' */
+const dictState = ref('')
+let recorder = null
+let recordTimer = null
+
+async function toggleDictation() {
+  if (dictState.value === 'transcribing') return
+  if (dictState.value === 'recording') {
+    await finishDictation()
+    return
+  }
+  banner.value = ''
+  try {
+    recorder = await startRecording()
+  } catch (e) {
+    banner.value = (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError'))
+      ? t('dictateDenied') : t('dictateUnsupported')
+    return
+  }
+  dictState.value = 'recording'
+  // 到上限自动收束，别让用户录到天荒地老再被服务端拒
+  recordTimer = setTimeout(() => { finishDictation() }, MAX_RECORD_MS)
+}
+
+async function finishDictation() {
+  if (!recorder) { dictState.value = ''; return }
+  if (recordTimer) { clearTimeout(recordTimer); recordTimer = null }
+  const active = recorder
+  recorder = null
+  dictState.value = 'transcribing'
+  try {
+    const result = await active.stop()
+    if (!result || result.durationMs < 300) { dictState.value = ''; return }
+    const text = await postDictate(props.settings, {
+      audioBase64: result.base64, format: 'wav', durationMs: result.durationMs
+    })
+    if (text) {
+      input.value = input.value ? input.value + text : text
+      focusInput()
+    } else {
+      banner.value = t('dictateEmpty')
+    }
+  } catch (e) {
+    banner.value = t('dictateFailed', { message: (e && e.message) || '' })
+  } finally {
+    dictState.value = ''
+  }
+}
 
 // ==================== 附件 / 计划卡 / 引用定位 / 批注快捷 ====================
 
@@ -887,6 +957,31 @@ textarea:focus {
 
 .btn.send:hover:not(:disabled) { background: var(--awd-primary-hover); }
 .btn.send:disabled { opacity: 0.5; cursor: default; }
+
+.btn.mic {
+  padding: 5px 9px;
+  color: var(--awd-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn.mic:hover:not(:disabled) { color: var(--awd-primary); border-color: var(--awd-primary); }
+
+.btn.mic.recording {
+  color: var(--awd-danger);
+  border-color: var(--awd-danger);
+}
+
+.mic-icon { width: 15px; height: 15px; }
+
+.mic-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--awd-danger);
+  animation: blink 1.2s ease-in-out infinite;
+}
 
 .btn.stop {
   color: var(--awd-danger);
