@@ -29,6 +29,14 @@ function detectLang() {
 
 export const ZH = {
   // ---- App.vue ----
+  // ---- 语音听写（dev-board#153）----
+  dictate: '语音输入',
+  dictateRecording: '录音中，点击结束',
+  dictateTranscribing: '转写中…',
+  dictateDenied: '未获得麦克风权限：请在系统设置中允许 Word 使用麦克风，或使用 Word 自带「听写」',
+  dictateUnsupported: '当前环境不支持录音，可使用 Word 自带「听写」',
+  dictateEmpty: '没有听清，请靠近麦克风再试一次',
+  dictateFailed: '听写失败：{message}',
   selectProject: '选择项目',
   currentProjectTitle: '当前项目：{name}',
   settings: '设置',
@@ -277,6 +285,14 @@ export const ZH = {
 
 export const EN = {
   // ---- App.vue ----
+  // ---- 语音听写（dev-board#153）----
+  dictate: 'Voice input',
+  dictateRecording: 'Recording, click to finish',
+  dictateTranscribing: 'Transcribing...',
+  dictateDenied: 'Microphone permission denied: allow Word to use the microphone in system settings, or use Word built-in Dictate',
+  dictateUnsupported: 'Recording is not supported here; use Word built-in Dictate instead',
+  dictateEmpty: 'Could not hear that; move closer to the microphone and retry',
+  dictateFailed: 'Dictation failed: {message}',
   selectProject: 'Select a project',
   currentProjectTitle: 'Current project: {name}',
   settings: 'Settings',
