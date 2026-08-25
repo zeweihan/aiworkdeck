@@ -17,6 +17,7 @@ license: MIT
 # 版权行原样抄自 litviz/engine/LICENSE，改引擎版本时这里也要跟着改。
 credits:
   - "出图引擎 mqc-litigation-visual-redraw v1.0.2 —— Copyright (c) 2026 缪奇川 (Miao Qichuan)，MIT License"
+  - "时间轴管线 mqc-timeline-master v2.0.1 —— Copyright (c) 2026 缪奇川 (Miao Qichuan)，MIT License"
 
 # 默认不安装：出图引擎（Python + graphviz）体积较大，随安装包分发但默认关闭；
 # 用户在插件广场手动启用（= 安装），停用（= 卸载）不影响随包文件，见 SkillRegistry/SkillMarketService。
@@ -100,6 +101,9 @@ allowed_tools:
   - litigation_reference
   - litigation_checkpoint
   - litigation_render
+  - litigation_timeline_start
+  - litigation_timeline_step
+  - litigation_timeline_render
   - extract_file_text
   - search_project_files
   - read_file

@@ -293,6 +293,9 @@ const NAMES = {
   litigation_reference: { zh: '查阅制图规范', en: 'Read diagram standard' },
   litigation_checkpoint: { zh: '出图前确认', en: 'Confirm before drawing' },
   litigation_render: { zh: '生成诉讼图', en: 'Draw litigation diagram' },
+  litigation_timeline_start: { zh: '读入时间轴材料', en: 'Read timeline materials' },
+  litigation_timeline_step: { zh: '推进时间轴管线', en: 'Advance timeline pipeline' },
+  litigation_timeline_render: { zh: '生成案件时间轴', en: 'Draw case timeline' },
   // 会议录音
   meeting_list_recordings: { zh: '列出会议录音', en: 'List meeting recordings' },
   meeting_get_transcript: { zh: '读取会议转写稿', en: 'Read meeting transcript' },

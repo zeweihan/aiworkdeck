@@ -20,7 +20,30 @@ pipeline divides the work:
 Under this division, output quality depends on whether the JSON is right - not on how
 clever you are with pixels.
 
-## Five steps
+## Pick the route first: timeline master, or semantic map
+
+This skill contains two rendering routes with different entry points - do not mix them:
+
+- **The user wants a case timeline built FROM raw materials** (judgment, complaint,
+  defence, contracts, evidence lists, statements, chat logs; "sort out the chronology",
+  "turn these materials into a timeline") -> use the **timeline-master pipeline**:
+  `litigation_timeline_start` (read materials) -> `litigation_timeline_step` (advance
+  stage by stage, with up to five rounds of user choices in between) ->
+  `litigation_timeline_render`. Each tool's return text tells you the next move -
+  follow it. Its fidelity check is stricter than you are: every card text must be a
+  pure-deletion subsequence of the source sentence; changing one word gets blocked
+  before drawing. Note the pipeline's own prompts and outputs are in Chinese - relay
+  the choice lists to the user in the conversation language.
+- **Everything else** - redrawing an existing figure, flowcharts, party-relationship
+  maps, hierarchy trees, A/B tables, or facts the user has already structured -> use
+  the **five-step semantic-map route** below (`litigation_checkpoint` +
+  `litigation_render`).
+- When unsure: only scattered materials in hand and the ask is "chronology/timeline" ->
+  timeline master; an existing figure or a non-timeline figure -> semantic map. Never
+  stage timeline intermediates (verdicts/parts/skeleton/items) through write_file -
+  they are submitted via tool parameters only.
+
+## Five steps (semantic-map route)
 
 **1. Read, decompose, understand.** This step decides success or failure. The source may
 be a judgment, evidence exhibits, a photographed hand sketch, a screenshot, someone

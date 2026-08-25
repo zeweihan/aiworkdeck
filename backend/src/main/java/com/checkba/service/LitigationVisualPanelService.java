@@ -361,6 +361,18 @@ public class LitigationVisualPanelService {
         }
         sb.append("材料范围：").append(
                 scopeDescription == null || scopeDescription.isBlank() ? "本项目全部材料" : scopeDescription.trim());
+        // 从原始材料出时间轴走的是另一条管线（时间轴大师），工具链完全不同。
+        // 提示语与 skill prompt 的「先选路」一节同一口径。
+        if (diagramHint != null && diagramHint.contains("时间轴")) {
+            sb.append("\n\n这是「从原始材料出时间轴」的场景，请走时间轴大师管线，不要走语义地图：");
+            sb.append("\n1. 用 litigation_timeline_start 读入材料（文件 ID 从材料范围里来）。");
+            sb.append("\n2. 按它返回的指引用 litigation_timeline_step 逐阶段推进，");
+            sb.append("中途它列出的勾选清单要原样问我，等我回答。");
+            sb.append("\n3. 最后用 litigation_timeline_render 出图。");
+            sb.append("\n中间产物（verdicts/parts/skeleton/items）一律经工具参数提交，"
+                    + "不要用 write_file 存成项目文件。");
+            return sb.toString();
+        }
         // 工具链写成确定性的四步。这里不是啰嗦：真机上模型走过
         // 「write_file 存地图 → read_file 读回来（报文件不存在）」的岔路，
         // 也出现过确认完只更新地图、忘了调 litigation_render 就说"图好了"。

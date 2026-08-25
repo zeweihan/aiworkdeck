@@ -92,17 +92,21 @@
            整行点开本来就是母版，这个入口就没必要重复出现。 -->
       <text class="lv-link" v-if="d.drawioFileId && d.svgFileId" @tap.stop="openMaster(d)">{{ $t('panels.litViewMaster') }}</text>
       <!-- 换风格是三选一而不是三个并列按钮：它们互斥，摆成一排等权按钮会把
-           「打开/编辑」这两个真正的主动作挤到第二行去。 -->
-      <text class="lv-restyle-label">{{ $t('panels.litRestyleLabel') }}</text>
-      <view class="lv-modes">
-        <text
-          v-for="m in MODES"
-          :key="m"
-          class="lv-mode"
-          :class="{ active: d.mode === m, disabled: restylingId === d.folderId }"
-          @tap.stop="restyle(d, m)"
-        >{{ m }}</text>
-      </view>
+           「打开/编辑」这两个真正的主动作挤到第二行去。
+           没有语义地图的图（时间轴大师管线的产物）换不了风格——后端要拿
+           .map.json 重画，没有就只会报错，入口干脆不出现。 -->
+      <template v-if="d.mapFileId">
+        <text class="lv-restyle-label">{{ $t('panels.litRestyleLabel') }}</text>
+        <view class="lv-modes">
+          <text
+            v-for="m in MODES"
+            :key="m"
+            class="lv-mode"
+            :class="{ active: d.mode === m, disabled: restylingId === d.folderId }"
+            @tap.stop="restyle(d, m)"
+          >{{ m }}</text>
+        </view>
+      </template>
     </view>
   </view>
 

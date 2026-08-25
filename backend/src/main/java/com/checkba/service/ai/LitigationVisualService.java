@@ -282,6 +282,30 @@ public class LitigationVisualService {
         return invoke(List.of("doctor"));
     }
 
+    /**
+     * 驱动时间轴大师（mqc-timeline-master）分段管线的一个阶段。
+     *
+     * <p>管线以 workdir 为状态目录（state.json 与模型产出的四份 JSON 都在里面），
+     * cli.py 的 timeline 子命令负责 chdir 与文本→JSON 的转达。模型要写的文件由
+     * {@code LitigationTimelineTools} 直接写进 workdir，不经过这里。
+     *
+     * @param emphasisSource 仅 mark 阶段有意义：user/model/none，如实记录深红是谁挑的
+     */
+    public Result timeline(Path workdir, String stage, List<String> stageArgs, String emphasisSource) {
+        List<String> args = new ArrayList<>(List.of(
+                "timeline", "--workdir", workdir.toString(), "--stage", stage));
+        if (emphasisSource != null && !emphasisSource.isBlank()) {
+            args.add("--emphasis-source");
+            args.add(emphasisSource.trim());
+        }
+        if (stageArgs != null) {
+            for (String a : stageArgs) {
+                if (a != null && !a.isBlank()) args.add(a);
+            }
+        }
+        return invoke(args);
+    }
+
     private Result invoke(List<String> cliArgs) {
         Runtime rt = runtime();
         String why = unavailableReason();
