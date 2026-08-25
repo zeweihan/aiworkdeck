@@ -20,6 +20,12 @@
     python3 cli.py validate  --map <map.json>
     python3 cli.py checkpoint --map <map.json> [--suggest N]
     python3 cli.py render    --map <map.json> --out <输出basename> [--mode ...] [--formats ...]
+    python3 cli.py timeline  --workdir <目录> --stage <阶段> [--emphasis-source ...] [args...]
+
+`timeline` 驱动的是另一个 vendor 模块 mqc-timeline-master（时间轴大师）的分段管线
+（pipeline.py）。那条管线以 cwd 为状态目录、stdout 全是给人看的中文文本，所以这里
+用子进程跑它（cwd 指到 --workdir），把文本包进一行 JSON 转达。模型要写的四份 JSON
+（verdicts/parts/skeleton/items）由宿主直接写进 workdir，不经过本命令。
 
 `--out` 传的是**不带扩展名的路径前缀**，引擎按 `<out>.svg` / `.png` / `.pptx` /
 `.vsdx` / `.drawio` / `.drawio.svg` 写出。地图里 `checkpoint.confirmed` 不为 true 时，
@@ -260,6 +266,102 @@ def cmd_render(args):
     }
 
 
+# ==================== 时间轴大师（mqc-timeline-master） ====================
+
+_TIMELINE_DIR = os.path.join(_HERE, "mqc-timeline-master")
+_PIPELINE = os.path.join(_TIMELINE_DIR, "scripts", "pipeline.py")
+
+#: pipeline.py 认识的全部子命令（pipeline.py:1338-1371）。白名单挡两类东西：
+#: 拼错的阶段名（pipeline 对未知子命令 exit 2、提示不友好），以及任何"把别的脚本
+#: 当阶段跑"的注入面。
+_TL_STAGES = frozenset({
+    "read", "pick", "span", "style", "offer", "budget", "capacity",
+    "title", "mark", "render", "next", "steps", "shape",
+})
+
+#: 管线单阶段的墙钟上限。要卡在 Java 侧 90s 总闸之内，超时要死在这里——这样还能
+#: 回一行说清楚超时的 JSON，而不是被 Java 掐掉后只剩"引擎没有返回结果"。
+_TL_TIMEOUT_S = 75
+
+#: render 产物目录里按扩展名认领的产物类型（时间轴大师一次 render 可能落多页
+#: -pageN.svg、异风格 -<风格>.svg、五种格式与 trace.json / 溯源索引 docx）。
+_TL_PRODUCT_EXTS = (".svg", ".png", ".pptx", ".vsdx", ".drawio", ".json", ".docx", ".jpg")
+
+
+def cmd_timeline(args):
+    if not os.path.isfile(_PIPELINE):
+        raise RuntimeError("时间轴大师模块未就位（缺 %s）" % _PIPELINE)
+    stage = (args.stage or "").strip()
+    if stage not in _TL_STAGES:
+        raise ValueError("未知的管线阶段 %r，可选：%s" % (stage, "、".join(sorted(_TL_STAGES))))
+    workdir = os.path.abspath(args.workdir)
+    if not os.path.isdir(workdir):
+        raise RuntimeError("工作目录不存在：%s" % workdir)
+
+    # pipeline 不替调用方建输出目录（裸跑会 FileNotFoundError 且横/纵两档都归咎于此）。
+    if stage == "render" and args.stage_args:
+        out_parent = os.path.dirname(os.path.join(workdir, args.stage_args[0]))
+        if out_parent:
+            os.makedirs(out_parent, exist_ok=True)
+
+    import subprocess
+    cmd = [sys.executable, _PIPELINE, stage] + list(args.stage_args or [])
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+    try:
+        proc = subprocess.run(
+            cmd, cwd=workdir, env=env,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=_TL_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "stage": stage, "exit": -1,
+                "error": "管线阶段 %s 超时（%d 秒）" % (stage, _TL_TIMEOUT_S), "text": ""}
+
+    text = (proc.stdout or "").strip()
+    if proc.stderr and proc.stderr.strip():
+        # 管线的正文全在 stdout；stderr 只有解释器级故障（traceback）才有内容。
+        sys.stderr.write(proc.stderr)
+
+    payload = {"ok": proc.returncode == 0, "stage": stage,
+               "exit": proc.returncode, "text": text}
+    if proc.returncode != 0 and not text:
+        payload["error"] = "管线阶段 %s 异常退出（退出码 %s），无输出。stderr 摘要：%s" % (
+            stage, proc.returncode, (proc.stderr or "").strip()[-800:])
+
+    # mark 的「模型代挑」在上游 CLI 上不可达（空参 exit 1）：上游语义里
+    # emphasis_source 应如实记录是谁挑的红。宿主声明是模型挑的时，这里在
+    # mark 成功后补写 state.json——只动这一个键，别的字节不碰。
+    if stage == "mark" and proc.returncode == 0 and args.emphasis_source:
+        src = args.emphasis_source.strip()
+        if src not in ("user", "model", "none"):
+            raise ValueError("emphasis-source 只认 user/model/none，收到 %r" % src)
+        state_path = os.path.join(workdir, "state.json")
+        if os.path.isfile(state_path):
+            with open(state_path, encoding="utf-8") as f:
+                st = json.load(f)
+            if "emphasis" in st:
+                st["emphasis_source"] = src
+                with open(state_path, "w", encoding="utf-8") as f:
+                    json.dump(st, f, ensure_ascii=False, indent=1)
+                payload["emphasis_source"] = src
+
+    # render 成功后收产物：宿主保证每次 render 用一个新的输出子目录
+    # （首个位置参数形如 out-3/图名.svg），目录里的一切都是本次产物。
+    if stage == "render" and proc.returncode == 0 and args.stage_args:
+        out_dir = os.path.dirname(os.path.join(workdir, args.stage_args[0]))
+        files = []
+        if os.path.isdir(out_dir):
+            for name in sorted(os.listdir(out_dir)):
+                fp = os.path.join(out_dir, name)
+                if os.path.isfile(fp) and name.endswith(_TL_PRODUCT_EXTS):
+                    files.append({"name": name, "path": os.path.abspath(fp),
+                                  "bytes": os.path.getsize(fp)})
+        payload["files"] = files
+
+    # 契约：可预期的失败（管线校验不过/缺前置文件）也走一行 JSON，但退出码 1，
+    # 与 validate/render 的失败语义一致。_emit 会直接退出。
+    _emit(payload, code=0 if payload["ok"] else 1)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="litviz", add_help=True)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -281,6 +383,14 @@ def main(argv=None):
     r.add_argument("--formats", default="", help="逗号分隔；留空 = 全部五种格式")
     r.add_argument("--strict", action="store_true")
     r.set_defaults(fn=cmd_render)
+
+    t = sub.add_parser("timeline")
+    t.add_argument("--workdir", required=True, help="管线状态目录（一个案件一个，宿主管理）")
+    t.add_argument("--stage", required=True, help="pipeline.py 子命令名")
+    t.add_argument("--emphasis-source", dest="emphasis_source", default="",
+                   help="仅 mark 阶段：user/model/none，如实记录深红是谁挑的")
+    t.add_argument("stage_args", nargs="*", help="透传给管线阶段的位置参数")
+    t.set_defaults(fn=cmd_timeline)
 
     args = p.parse_args(argv)
     try:

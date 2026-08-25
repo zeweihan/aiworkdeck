@@ -19,7 +19,14 @@ JSON 对不对，不取决于模型对像素多聪明——这是上游的核心
 ## 关键文件
 
 **引擎（vendor，别手改）**
-- `litviz/engine/` — 上游 mqc-litigation-visual-redraw v1.0.2（作者缪奇川，MIT）原样拷贝。
+- `litviz/mqc-litigation-visual-redraw/` — 重画引擎 v1.0.2（作者缪奇川，MIT）原样拷贝，
+  2026-08-25 前叫 `litviz/engine/`。上游已并入 monorepo
+  MiaoQichuan/new-litigation-visualization。
+- `litviz/mqc-timeline-master/` — 时间轴大师 v2.0.1（同一上游、同作者）：从原始卷宗
+  直接出案件时间轴的确定性管线（多泳道/双方对读/纵向分页/忠实性子序列校验）。
+  **两个目录名必须保持上游原名**：时间轴脚本与测试有十几处
+  `../../mqc-litigation-visual-redraw/scripts` 兄弟目录硬引用（共享内核机制），
+  保持原名即原生成立，升级零补丁。
 - `litviz/UPSTREAM.md` — vendor 来源、commit、升级步骤。
 - `litviz/PATCHES.md` — 三条本地补丁（代码里搜 `[AWD-PATCH n]`）。升级时逐条复核。
 - `litviz/README.md` — 分工、命令、依赖矩阵。
