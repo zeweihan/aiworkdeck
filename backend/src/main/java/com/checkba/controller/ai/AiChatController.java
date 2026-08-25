@@ -102,6 +102,44 @@ public class AiChatController {
     }
 
     /**
+     * 删除整个会话（dev-board#148，Office 插件历史面板）。归属校验同 history；
+     * 进行中的会话不许删——先停再删，否则编排器还在往一个不存在的会话里落库。
+     */
+    @DeleteMapping("/conversation/{conversationId}")
+    public ResponseEntity<?> deleteConversation(@PathVariable String conversationId,
+                                                @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (!projectAiMessageService.canUseConversation(conversationId, userId)) {
+            return ResponseEntity.status(403).body(LangText.of("无权操作该会话", "You do not have permission to modify this conversation"));
+        }
+        String status = agentRunStateService.statusName(conversationId);
+        if ("RUNNING".equals(status) || "PAUSED".equals(status)) {
+            return ResponseEntity.status(409).body(LangText.of("会话进行中，请先停止再删除", "Conversation is running; stop it before deleting"));
+        }
+        projectAiMessageService.deleteConversation(conversationId);
+        return ResponseEntity.ok(java.util.Map.of("code", 0));
+    }
+
+    /**
+     * 重命名会话（写首条消息的 conversationTitle，与 LLM 自动起名同一存储位）。
+     */
+    @PostMapping("/conversation/{conversationId}/title")
+    public ResponseEntity<?> renameConversation(@PathVariable String conversationId,
+                                                @RequestBody java.util.Map<String, String> body,
+                                                @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (!projectAiMessageService.canUseConversation(conversationId, userId)) {
+            return ResponseEntity.status(403).body(LangText.of("无权操作该会话", "You do not have permission to modify this conversation"));
+        }
+        String title = body == null ? null : body.get("title");
+        if (title == null || title.isBlank() || title.length() > 60) {
+            return ResponseEntity.badRequest().body(LangText.of("标题需为 1-60 个字符", "Title must be 1-60 characters"));
+        }
+        projectAiMessageService.updateConversationTitle(conversationId, title.trim());
+        return ResponseEntity.ok(java.util.Map.of("code", 0));
+    }
+
+    /**
      * Get conversation metadata: file changes and token usage for historical display.
      */
     @GetMapping("/conversation/{conversationId}/metadata")

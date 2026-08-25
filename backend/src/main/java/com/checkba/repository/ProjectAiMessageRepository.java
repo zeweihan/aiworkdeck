@@ -58,6 +58,8 @@ public interface ProjectAiMessageRepository extends JpaRepository<ProjectAiMessa
             @org.springframework.data.repository.query.Param("beforeId") String beforeId);
 
     void deleteByConversationIdAndCreatedAtAfter(String conversationId, java.time.LocalDateTime timestamp);
+
+    void deleteByConversationId(String conversationId);
     
     /**
      * 根据 conversationId 查找第一条消息

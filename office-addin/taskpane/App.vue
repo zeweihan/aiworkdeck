@@ -10,17 +10,17 @@
         :value="projectId"
         @change="onProjectChange($event.target.value)"
       >
-        <option value="" disabled>选择项目</option>
+        <option value="" disabled>{{ t('selectProject') }}</option>
         <option v-for="p in projects" :key="p.id" :value="String(p.id)">{{ p.name }}</option>
       </select>
       <span
         v-else-if="view === 'chat' && currentProjectName"
         class="project-label"
-        :title="'当前项目：' + currentProjectName"
+        :title="t('currentProjectTitle', { name: currentProjectName })"
       >{{ currentProjectName }}</span>
       <span class="header-spacer"></span>
-      <button class="icon-btn" :title="view === 'chat' ? '设置' : '返回对话'" @click="toggleView">
-        {{ view === 'chat' ? '设置' : '返回' }}
+      <button class="icon-btn" :title="view === 'chat' ? t('settings') : t('backToChat')" @click="toggleView">
+        {{ view === 'chat' ? t('settings') : t('back') }}
       </button>
     </header>
 
@@ -48,6 +48,7 @@ import SettingsView from './components/SettingsView.vue'
 import ChatView from './components/ChatView.vue'
 import { loadSettings, saveProjectId, isConfigured } from './lib/settings.js'
 import { fetchMyProjects, ensureAddinDefaultProject } from './lib/api.js'
+import { t } from './lib/i18n.js'
 
 const settings = reactive(loadSettings())
 const configured = computed(() => isConfigured(settings))

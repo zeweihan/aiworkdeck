@@ -1,4 +1,5 @@
 import { normalizeBaseUrl } from './settings.js'
+import { t } from './i18n.js'
 
 /**
  * 后端 REST 访问。鉴权统一走 X-Session-Id 请求头携带 awdt_ 设备令牌
@@ -19,18 +20,18 @@ function headers(token) {
  */
 export async function fetchMyProjects({ serverUrl, token }) {
   const base = normalizeBaseUrl(serverUrl)
-  if (!base) throw new Error('连接未就绪：后端地址为空')
+  if (!base) throw new Error(t('apiServerUrlEmpty'))
   let resp
   try {
     resp = await fetch(`${base}/api/projects/my`, { headers: headers(token) })
   } catch (e) {
-    throw new Error('后端不可达：请检查地址、网络与 HTTPS/证书')
+    throw new Error(t('apiBackendUnreachable'))
   }
   if (!resp.ok) {
-    throw new Error(`连接失败（HTTP ${resp.status}）：令牌无效或后端拒绝了请求`)
+    throw new Error(t('apiConnectFailedHttp', { status: resp.status }))
   }
   const data = await resp.json()
-  if (!Array.isArray(data)) throw new Error('后端响应格式异常')
+  if (!Array.isArray(data)) throw new Error(t('apiBadResponseFormat'))
   return data
 }
 
@@ -117,6 +118,71 @@ export async function fetchSkills({ serverUrl, token }) {
 }
 
 /**
+ * 删除整个会话（DELETE /api/ai/conversation/{id}）。会话进行中时后端回 409。
+ * 失败抛错（带后端文案），由界面提示——删除是显式动作，不静默吞。
+ */
+export async function deleteConversation({ serverUrl, token }, conversationId) {
+  const base = normalizeBaseUrl(serverUrl)
+  const resp = await fetch(`${base}/api/ai/conversation/${encodeURIComponent(conversationId)}`, {
+    method: 'DELETE',
+    headers: headers(token)
+  })
+  if (!resp.ok) {
+    // 守卫类错误（403/409/400）后端回的是纯文本文案（LangText 解析后的字符串），透传给用户
+    let msg = t('apiDeleteFailedHttp', { status: resp.status })
+    try { const serverText = (await resp.text()).trim(); if (serverText && serverText.length < 200 && !serverText.startsWith('<')) msg = serverText.replace(/^"|"$/g, '') } catch (e) { /* 保底文案 */ }
+    throw new Error(msg)
+  }
+}
+
+/**
+ * 重命名会话（POST /api/ai/conversation/{id}/title {title}，1-60 字符）。
+ */
+export async function renameConversation({ serverUrl, token }, conversationId, title) {
+  const base = normalizeBaseUrl(serverUrl)
+  const resp = await fetch(`${base}/api/ai/conversation/${encodeURIComponent(conversationId)}/title`, {
+    method: 'POST',
+    headers: headers(token),
+    body: JSON.stringify({ title })
+  })
+  if (!resp.ok) {
+    let msg = t('apiRenameFailedHttp', { status: resp.status })
+    try { const serverText = (await resp.text()).trim(); if (serverText && serverText.length < 200 && !serverText.startsWith('<')) msg = serverText.replace(/^"|"$/g, '') } catch (e) { /* 保底文案 */ }
+    throw new Error(msg)
+  }
+}
+
+/**
+ * 项目文件清单（GET /api/projects/{pid}/files?tree=true），给附件选择器用。
+ * 返回拍平后的文件数组（滤掉文件夹）；失败回空数组静默降级。
+ */
+export async function fetchProjectFiles({ serverUrl, token }, projectId) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base || !projectId) return []
+  try {
+    const resp = await fetch(`${base}/api/projects/${encodeURIComponent(projectId)}/files?tree=true`, {
+      headers: headers(token)
+    })
+    if (!resp.ok) return []
+    let data = await resp.json()
+    if (data && typeof data === 'object' && 'data' in data) data = data.data
+    const flat = []
+    const walk = (nodes) => {
+      for (const n of (Array.isArray(nodes) ? nodes : [])) {
+        if (!n) continue
+        const isDir = n.isFolder || n.isDir || n.fileType === 'folder'
+        if (!isDir && n.id != null) flat.push({ id: n.id, name: n.name || String(n.id), fileType: n.fileType || '' })
+        if (Array.isArray(n.children)) walk(n.children)
+      }
+    }
+    walk(data)
+    return flat
+  } catch (e) {
+    return []
+  }
+}
+
+/**
  * 拉某个会话的历史消息（GET /api/ai/history?conversationId=...）。
  * 任务窗格重建后据此把上一场对话回灌到界面。
  * 403/404/网络失败一律返回空数组静默降级——历史拿不到不该打断用户开新的对话。
@@ -188,7 +254,7 @@ export async function postAccountLoginSendCode({ serverUrl }, phone, captchaToke
 export async function postAccountLogin({ serverUrl }, credentials) {
   const data = await postAnonymous(serverUrl, '/api/auth/account-login', credentials || {})
   if (data && data.data && data.data.token) return data.data.token
-  throw new Error('账户校验未通过，请重试')
+  throw new Error(t('apiAccountVerifyFailed'))
 }
 
 /**
@@ -201,7 +267,7 @@ export async function postAccountLogin({ serverUrl }, credentials) {
  */
 async function postAnonymous(serverUrl, path, body) {
   const base = normalizeBaseUrl(serverUrl)
-  if (!base) throw new Error('连接未就绪：后端地址为空')
+  if (!base) throw new Error(t('apiServerUrlEmpty'))
   let resp
   try {
     resp = await fetch(`${base}${path}`, {
@@ -210,25 +276,26 @@ async function postAnonymous(serverUrl, path, body) {
       body: JSON.stringify(body)
     })
   } catch (e) {
-    throw new Error('后端不可达：请检查地址、网络与 HTTPS/证书')
+    throw new Error(t('apiBackendUnreachable'))
   }
   if (resp.status === 404) {
     // 旧版本后端没有这两个端点
-    throw new Error('该服务器不支持账户直接连接，请在「高级设置」中改用 API Key 或设备令牌')
+    throw new Error(t('apiAccountLoginUnsupported'))
   }
-  if (!resp.ok) throw new Error(`账户连接失败（HTTP ${resp.status}）`)
+  if (!resp.ok) throw new Error(t('apiAccountConnectFailedHttp', { status: resp.status }))
   let data
   try {
     data = await resp.json()
   } catch (e) {
-    throw new Error('后端响应格式异常')
+    throw new Error(t('apiBadResponseFormat'))
   }
   if (data && data.code === 0) return data
   const message = data && data.message ? String(data.message) : ''
   if (message.includes('未开启账户桥接')) {
-    throw new Error('该服务器未开启账户直连，请在「高级设置」中改用 API Key 或设备令牌')
+    throw new Error(t('apiAccountBridgeDisabled'))
   }
-  throw new Error(message || '账户连接失败，请稍后重试')
+  // message 是服务端文案，必须透传（见文件头注释），只有拿不到 message 时才用客户端兜底文案
+  throw new Error(message || t('apiAccountConnectFailedRetry'))
 }
 
 /**
@@ -239,7 +306,7 @@ async function postAnonymous(serverUrl, path, body) {
  */
 export async function postAwdkLogin({ serverUrl }, key) {
   const base = normalizeBaseUrl(serverUrl)
-  if (!base) throw new Error('连接未就绪：后端地址为空')
+  if (!base) throw new Error(t('apiServerUrlEmpty'))
   let resp
   try {
     resp = await fetch(`${base}/api/auth/awdk-login`, {
@@ -248,27 +315,27 @@ export async function postAwdkLogin({ serverUrl }, key) {
       body: JSON.stringify({ key: (key || '').trim() })
     })
   } catch (e) {
-    throw new Error('后端不可达：请检查地址、网络与 HTTPS/证书')
+    throw new Error(t('apiBackendUnreachable'))
   }
   if (resp.status === 404) {
     // 旧版本后端没有该端点
-    throw new Error('该服务器未开启账户直连，请改用设备令牌')
+    throw new Error(t('apiAwdkBridgeDisabled'))
   }
-  if (!resp.ok) throw new Error(`账户直连失败（HTTP ${resp.status}）`)
+  if (!resp.ok) throw new Error(t('apiAwdkConnectFailedHttp', { status: resp.status }))
   let data
   try {
     data = await resp.json()
   } catch (e) {
-    throw new Error('后端响应格式异常')
+    throw new Error(t('apiBadResponseFormat'))
   }
   if (data && data.code === 0 && data.data && data.data.token) {
     return data.data.token
   }
   const message = data && data.message ? String(data.message) : ''
   if (message.includes('未开启') || message.includes('桥接')) {
-    throw new Error('该服务器未开启账户直连，请改用设备令牌')
+    throw new Error(t('apiAwdkBridgeDisabled'))
   }
-  throw new Error('账户 Key 校验未通过：请确认 Key 正确且未过期，或改用设备令牌')
+  throw new Error(t('apiAwdkVerifyFailed'))
 }
 
 /**
@@ -297,7 +364,7 @@ export async function fetchPlatformAiStatus({ serverUrl, token }) {
  */
 export async function refreshPlatformAiKey({ serverUrl, token }, key) {
   const base = normalizeBaseUrl(serverUrl)
-  if (!base) throw new Error('连接未就绪：后端地址为空')
+  if (!base) throw new Error(t('apiServerUrlEmpty'))
   let resp
   try {
     resp = await fetch(`${base}/api/platform-ai/key/refresh`, {
@@ -306,20 +373,20 @@ export async function refreshPlatformAiKey({ serverUrl, token }, key) {
       body: JSON.stringify({ key: (key || '').trim() })
     })
   } catch (e) {
-    throw new Error('后端不可达：请检查地址、网络与 HTTPS/证书')
+    throw new Error(t('apiBackendUnreachable'))
   }
   if (resp.status === 404) {
-    throw new Error('该服务器不支持按账号的 AI 额度刷新')
+    throw new Error(t('apiAiRefreshUnsupported'))
   }
-  if (!resp.ok) throw new Error(`额度刷新失败（HTTP ${resp.status}）`)
+  if (!resp.ok) throw new Error(t('apiAiRefreshFailedHttp', { status: resp.status }))
   let data
   try {
     data = await resp.json()
   } catch (e) {
-    throw new Error('后端响应格式异常')
+    throw new Error(t('apiBadResponseFormat'))
   }
   if (data && data.code === 0 && data.data) return data.data
-  throw new Error('额度刷新未通过：请确认这枚 Key 属于本账号且未过期')
+  throw new Error(t('apiAiRefreshVerifyFailed'))
 }
 
 /**
@@ -339,7 +406,7 @@ export async function createConversation({ serverUrl, token }, projectId) {
   // （2026-08-24 mac 插件「SSE 403」事故的根因之一）。
   if (resp.status === 404) return null
   if (!resp.ok) {
-    const err = new Error(`会话签发失败（HTTP ${resp.status}）`)
+    const err = new Error(t('apiConversationIssueFailedHttp', { status: resp.status }))
     err.status = resp.status
     throw err
   }
@@ -364,9 +431,9 @@ export async function postChat({ serverUrl, token }, payload) {
       body: JSON.stringify(payload)
     })
   } catch (e) {
-    throw new Error('后端不可达：消息未送出')
+    throw new Error(t('apiChatUnreachable'))
   }
-  if (!resp.ok) throw new Error(`对话请求失败（HTTP ${resp.status}）`)
+  if (!resp.ok) throw new Error(t('apiChatFailedHttp', { status: resp.status }))
 }
 
 /**

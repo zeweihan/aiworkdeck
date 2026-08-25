@@ -152,6 +152,33 @@ test('重连退避期 reconnectNow 立即重连，不等退避周期', async () 
   }
 })
 
+test('<artifact> 整块捕获为计划卡内容，不混进正文（流式与历史回放同口径）', async () => {
+  const { createTagStreamParser } = await import('./sse.js')
+  let main = ''
+  const artifacts = []
+  const p = createTagStreamParser({
+    onMainText: (t) => { main += t },
+    onThinkingText: () => {},
+    onQuestion: () => {},
+    onArtifact: (c) => artifacts.push(c)
+  })
+  p.feed('<artifact>\n一、先改定义条款\n二、再改违约条款\n</artifact>')
+  p.feed('<final>计划在上面的卡片里。</final>')
+  p.flush()
+  assert.deepEqual(artifacts, ['一、先改定义条款\n二、再改违约条款'])
+  assert.ok(!main.includes('定义条款'), '计划内容不许混进正文')
+  assert.equal(main, '计划在上面的卡片里。')
+
+  // 截断（未闭合）也不丢已解析的计划内容
+  const arts2 = []
+  const p2 = createTagStreamParser({
+    onMainText: () => {}, onThinkingText: () => {}, onQuestion: () => {}, onArtifact: (c) => arts2.push(c)
+  })
+  p2.feed('<artifact>只有半截计划')
+  p2.flush()
+  assert.deepEqual(arts2, ['只有半截计划'])
+})
+
 test('发送契约：不附带正文也上送 activeContext 壳；model/skillIds 随选择上送', async () => {
   store.clear()
   let chatBody = null
@@ -175,6 +202,8 @@ test('发送契约：不附带正文也上送 activeContext 壳；model/skillIds
     includeDocument.value = false
     chooseModel('test-model-x')
     selectedSkillIds.value = ['skill-a', 'skill-b']
+    const { attachedFiles } = await import('./chatSession.js')
+    attachedFiles.value = [{ id: 88, name: '尽调底稿.docx', fileType: 'docx' }]
     input.value = '走一条'
     await send()
     assert.ok(chatBody, 'POST /chat 没发出去')
@@ -184,6 +213,7 @@ test('发送契约：不附带正文也上送 activeContext 壳；model/skillIds
     assert.equal(chatBody.activeContext.inlineContent, undefined)
     assert.equal(chatBody.model, 'test-model-x')
     assert.deepEqual(chatBody.skillIds, ['skill-a', 'skill-b'])
+    assert.deepEqual(chatBody.contextItems, [{ id: '88', name: '尽调底稿.docx', fileType: 'docx' }])
   } finally {
     includeDocumentReset()
     await stop()
@@ -195,5 +225,7 @@ test('发送契约：不附带正文也上送 activeContext 壳；model/skillIds
     includeDocument.value = true
     chooseModel('')
     selectedSkillIds.value = []
+    const { attachedFiles } = await import('./chatSession.js')
+    attachedFiles.value = []
   }
 })

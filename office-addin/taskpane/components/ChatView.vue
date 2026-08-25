@@ -2,9 +2,12 @@
   <div class="chat">
     <div ref="listEl" class="message-list">
       <div v-if="!messages.length" class="empty">
-        <p>与 AI 讨论当前文档或项目事务。</p>
-        <p v-if="!configured" class="empty-warn">连接未就绪：点击右上角「设置」填入官网 API Key。</p>
-        <p v-else-if="!projectId" class="empty-warn">尚未选择项目：在顶部下拉中选一个项目。</p>
+        <p>{{ t('emptyHint') }}</p>
+        <p v-if="!configured" class="empty-warn">{{ t('connectionNotReady') }}</p>
+        <p v-else-if="!projectId" class="empty-warn">{{ t('noProjectSelected') }}</p>
+        <div v-else class="quick-prompts">
+          <button v-for="q in quickPrompts" :key="q.label" class="quick-btn" @click="sendQuick(q.text)">{{ q.label }}</button>
+        </div>
       </div>
 
       <div v-for="(msg, i) in messages" :key="i" class="message" :class="msg.role">
@@ -13,7 +16,7 @@
         </template>
         <template v-else>
           <details v-if="msg.thinking" class="thinking">
-            <summary>思考过程</summary>
+            <summary>{{ t('thinkingProcess') }}</summary>
             <div class="thinking-body">{{ msg.thinking }}</div>
           </details>
           <div v-if="msg.tools && msg.tools.length" class="tool-chips">
@@ -25,24 +28,44 @@
               :title="tool.error || ''"
             >
               <span v-if="tool.status === 'running'" class="chip-spinner"></span>
-              {{ tool.label }}<span v-if="tool.status === 'failed'">（失败）</span>
+              {{ tool.label }}<span v-if="tool.status === 'failed'">{{ t('toolFailedSuffix') }}</span>
             </span>
           </div>
           <!-- 失败详情不能只回传给模型：用户要看得到哪一步、为什么失败（dev-board#147/#149） -->
           <div v-for="(tool, ti) in failedTools(msg)" :key="'e' + ti" class="tool-error">
             {{ tool.label }}：{{ tool.error }}
           </div>
+          <!-- 计划/交付物卡（<artifact> 整块）：此前直接丢弃，审批型计划在插件端看不到本体 -->
+          <div v-if="msg.artifact" class="artifact-card">
+            <div class="artifact-head">{{ t('planLabel') }}</div>
+            <div class="artifact-body">{{ msg.artifact }}</div>
+            <div v-if="i === messages.length - 1 && !streaming" class="artifact-actions">
+              <button class="option-btn" @click="sendQuick(t('proceedWithPlan'))">{{ t('proceedWithPlan') }}</button>
+              <button class="option-btn" @click="focusInput">{{ t('proposeChanges') }}</button>
+            </div>
+          </div>
           <!-- 首 token 前不再是「空气泡+光标」：给一句状态，别让人以为卡死了 -->
           <div v-if="msg.streaming && !msg.text" class="bubble assistant-bubble pending-bubble">
-            {{ msg.tools && msg.tools.length ? '正在操作文档…' : '正在思考…' }}
+            {{ msg.tools && msg.tools.length ? t('workingOnDocument') : t('thinkingEllipsis') }}
           </div>
           <div v-else class="bubble assistant-bubble">
             <span>{{ msg.text }}</span>
             <span v-if="msg.streaming" class="cursor"></span>
           </div>
+          <!-- 引用定位：回答里引用的原文片段可点击，在文档中选中滚动到位（仅 Word 宿主） -->
+          <div v-if="citations(msg).length" class="cite-row">
+            <button
+              v-for="(c, ci) in citations(msg)"
+              :key="ci"
+              class="cite-chip"
+              :title="t('locateInDocumentTitle', { text: c })"
+              @click="locateQuote(c)"
+            >{{ t('locateQuoteButton', { text: c.length > 18 ? c.slice(0, 18) + '…' : c }) }}</button>
+          </div>
           <!-- 显式完成态：光标消失太隐晦，最新一轮收尾后明示（dev-board#147） -->
           <div v-if="msg.done && !msg.streaming && i === messages.length - 1" class="done-line">
-            已完成<template v-if="msg.durationMs"> · {{ Math.round(msg.durationMs / 1000) }} 秒</template>
+            <template v-if="msg.durationMs">{{ t('doneWithDuration', { seconds: Math.round(msg.durationMs / 1000) }) }}</template>
+            <template v-else>{{ t('done') }}</template>
           </div>
           <!-- 反问选项：正文已在上面的气泡里（解析器把 <question> 正文并进主文本），
                选项刻意不进正文以免显示两遍，所以必须在这里渲染成按钮，否则用户
@@ -57,7 +80,7 @@
               :disabled="msg.question.answered || streaming"
               @click="answerQuestion(opt)"
             >{{ opt }}</button>
-            <span v-if="msg.question.answered" class="option-answered">已回答</span>
+            <span v-if="msg.question.answered" class="option-answered">{{ t('answered') }}</span>
           </div>
           <div v-if="msg.error" class="msg-error">{{ msg.error }}</div>
         </template>
@@ -68,20 +91,40 @@
     <div v-if="historyOpen" class="overlay" @click.self="historyOpen = false">
       <div class="panel">
         <div class="panel-head">
-          <span>历史对话</span>
+          <span>{{ t('historyTitle') }}</span>
           <button class="panel-close" @click="historyOpen = false">x</button>
         </div>
-        <div v-if="historyLoading" class="panel-empty">加载中…</div>
-        <div v-else-if="!conversations.length" class="panel-empty">本项目还没有历史对话</div>
-        <button
-          v-for="c in conversations"
-          :key="c.conversationId"
-          class="conv-item"
-          @click="pickConversation(c)"
-        >
-          <span class="conv-title">{{ c.title || c.lastMessage || '（未命名对话）' }}</span>
-          <span class="conv-meta">{{ formatTime(c.updatedAt) }}<template v-if="c.runStatus === 'RUNNING'"> · 进行中</template></span>
-        </button>
+        <div v-if="historyLoading" class="panel-empty">{{ t('loading') }}</div>
+        <div v-else-if="!conversations.length" class="panel-empty">{{ t('noConversationsYet') }}</div>
+        <div v-for="c in conversations" :key="c.conversationId" class="conv-item">
+          <template v-if="renamingId === c.conversationId">
+            <input
+              v-model="renameDraft"
+              class="rename-input"
+              maxlength="60"
+              @keydown.enter.prevent="confirmRename(c)"
+              @keydown.esc="renamingId = ''"
+            />
+            <div class="conv-actions">
+              <button class="conv-act" @click="confirmRename(c)">{{ t('save') }}</button>
+              <button class="conv-act" @click="renamingId = ''">{{ t('cancel') }}</button>
+            </div>
+          </template>
+          <template v-else>
+            <button class="conv-main" @click="pickConversation(c)">
+              <span class="conv-title">{{ c.title || c.lastMessage || t('untitledConversation') }}</span>
+              <span class="conv-meta">{{ formatTime(c.updatedAt) }}<template v-if="c.runStatus === 'RUNNING'">{{ t('runningSuffix') }}</template></span>
+            </button>
+            <div class="conv-actions">
+              <button class="conv-act" :title="t('rename')" @click="startRename(c)">{{ t('rename') }}</button>
+              <button
+                class="conv-act danger"
+                :title="deletingId === c.conversationId ? t('confirmDeleteAgain') : t('deleteConversation')"
+                @click="confirmDelete(c)"
+              >{{ deletingId === c.conversationId ? t('confirmDelete') : t('delete') }}</button>
+            </div>
+          </template>
+        </div>
       </div>
     </div>
 
@@ -89,10 +132,10 @@
     <div v-if="skillsOpen" class="overlay" @click.self="skillsOpen = false">
       <div class="panel">
         <div class="panel-head">
-          <span>技能</span>
+          <span>{{ t('skillsTitle') }}</span>
           <button class="panel-close" @click="skillsOpen = false">x</button>
         </div>
-        <div v-if="!skillList.length" class="panel-empty">服务器上还没有可用技能</div>
+        <div v-if="!skillList.length" class="panel-empty">{{ t('noSkillsAvailable') }}</div>
         <label v-for="s in skillList" :key="s.id" class="skill-item">
           <input
             type="checkbox"
@@ -105,6 +148,26 @@
       </div>
     </div>
 
+    <!-- 附件面板：项目文件作为额外上下文（contextItems，后端按 fileId 读内容） -->
+    <div v-if="attachOpen" class="overlay" @click.self="attachOpen = false">
+      <div class="panel">
+        <div class="panel-head">
+          <span>{{ t('attachFilesTitle') }}</span>
+          <button class="panel-close" @click="attachOpen = false">x</button>
+        </div>
+        <div v-if="attachLoading" class="panel-empty">{{ t('loading') }}</div>
+        <div v-else-if="!projectFiles.length" class="panel-empty">{{ t('noProjectFiles') }}</div>
+        <label v-for="f in projectFiles" :key="f.id" class="skill-item">
+          <input
+            type="checkbox"
+            :checked="attachedFiles.some(a => String(a.id) === String(f.id))"
+            @change="toggleAttachedFile(f)"
+          />
+          <span class="skill-name">{{ f.name }}</span>
+        </label>
+      </div>
+    </div>
+
     <footer class="composer">
       <!-- 上下文与能力一排 pill：取代「随消息附带当前文档正文」检查框——
            勾不勾的真实差别（附不附全文）用文档名 pill 的实/虚态表达（dev-board#150） -->
@@ -112,41 +175,47 @@
         <button
           class="pill doc-pill"
           :class="{ off: !includeDocument }"
-          :title="includeDocument ? '每条消息附带当前文档正文（点击改为不附带）' : '当前不附带文档正文，AI 仍可用工具按需读取（点击恢复附带）'"
+          :title="includeDocument ? t('docPillOnTitle') : t('docPillOffTitle')"
           @click="includeDocument = !includeDocument"
         >{{ docLabel }}</button>
+        <button
+          class="pill"
+          :class="{ active: attachedFiles.length }"
+          :title="t('attachPillTitle')"
+          @click="openAttach"
+        >{{ t('attachButton') }}<template v-if="attachedFiles.length"> {{ attachedFiles.length }}</template></button>
         <button
           v-if="skillList.length"
           class="pill"
           :class="{ active: selectedSkillIds.length }"
-          title="选择随对话生效的技能"
+          :title="t('skillsPillTitle')"
           @click="skillsOpen = true"
-        >技能<template v-if="selectedSkillIds.length"> {{ selectedSkillIds.length }}</template></button>
+        >{{ t('skillsButton') }}<template v-if="selectedSkillIds.length"> {{ selectedSkillIds.length }}</template></button>
         <select
           v-if="modelCatalog && modelCatalog.models.length"
           class="model-select"
           :value="selectedModel"
-          title="本轮使用的模型"
+          :title="t('modelSelectTitle')"
           @change="chooseModel($event.target.value)"
         >
-          <option value="">默认模型</option>
+          <option value="">{{ t('defaultModelOption') }}</option>
           <option v-for="m in modelCatalog.models" :key="m.id" :value="m.id">{{ m.name }}</option>
         </select>
         <span class="context-spacer"></span>
-        <button class="pill" title="查看本项目的历史对话" @click="openHistory">历史</button>
-        <button class="pill" title="开始新对话" :disabled="streaming" @click="newConversation">新对话</button>
+        <button class="pill" :title="t('historyPillTitle')" @click="openHistory">{{ t('historyButton') }}</button>
+        <button class="pill" :title="t('newConversationTitle')" :disabled="streaming" @click="newConversation">{{ t('newConversationButton') }}</button>
       </div>
       <div class="input-row">
         <textarea
           v-model="input"
           rows="2"
-          placeholder="输入消息，Enter 发送，/ 选技能"
+          :placeholder="t('inputPlaceholder')"
           @keydown.enter.exact.prevent="send"
         ></textarea>
-        <button v-if="streaming" class="btn stop" @click="stop">停止</button>
-        <button v-else class="btn send" :disabled="!canSend" @click="send">发送</button>
+        <button v-if="streaming" class="btn stop" @click="stop">{{ t('stop') }}</button>
+        <button v-else class="btn send" :disabled="!canSend" @click="send">{{ t('send') }}</button>
       </div>
-      <p v-if="reconnecting" class="banner conn">连接中断，正在自动重连……</p>
+      <p v-if="reconnecting" class="banner conn">{{ t('reconnectingBanner') }}</p>
       <p v-else-if="notice" class="banner conn">{{ notice }}</p>
       <p v-if="banner" class="banner">{{ banner }}</p>
     </footer>
@@ -159,9 +228,12 @@ import {
   messages, input, streaming, reconnecting, banner, notice, includeDocument, scrollSignal,
   activateSession, send as sendMessage, stop as stopRun, newConversation,
   answerQuestion, modelCatalog, selectedModel, chooseModel, skillList, selectedSkillIds,
-  toggleSkill, loadConversationList, switchConversation
+  toggleSkill, loadConversationList, switchConversation, attachedFiles, toggleAttachedFile,
+  loadProjectFiles, removeConversation, retitleConversation
 } from '../lib/chatSession.js'
-import { readDocumentMeta } from '../lib/wordDoc.js'
+import { readDocumentMeta, detectHost } from '../lib/wordDoc.js'
+import { locateInDocument } from '../lib/officeExecutor.js'
+import { t } from '../lib/i18n.js'
 
 /**
  * 纯渲染与交互层：会话态、SSE 连接与 office_command 执行链都在 lib/chatSession.js。
@@ -218,8 +290,8 @@ const docMeta = ref(null)
 onMounted(() => { docMeta.value = readDocumentMeta() })
 
 const docLabel = computed(() => {
-  const name = docMeta.value && docMeta.value.name ? docMeta.value.name : '当前文档'
-  return (includeDocument.value ? '' : '不附带 ') + name
+  const name = docMeta.value && docMeta.value.name ? docMeta.value.name : t('currentDocument')
+  return (includeDocument.value ? '' : t('docPillOffPrefix')) + name
 })
 
 async function openHistory() {
@@ -261,6 +333,99 @@ watch(input, (v) => {
     input.value = ''
   }
 })
+
+// ==================== 附件 / 计划卡 / 引用定位 / 批注快捷 ====================
+
+const attachOpen = ref(false)
+const attachLoading = ref(false)
+const projectFiles = ref([])
+const renamingId = ref('')
+const renameDraft = ref('')
+const deletingId = ref('')
+
+async function openAttach() {
+  attachOpen.value = true
+  attachLoading.value = true
+  try {
+    projectFiles.value = await loadProjectFiles()
+  } finally {
+    attachLoading.value = false
+  }
+}
+
+async function sendQuick(text) {
+  const result = await sendMessage(text)
+  if (result && result.needSettings) emit('need-settings')
+}
+
+function focusInput() {
+  const el = document.querySelector('.input-row textarea')
+  if (el) el.focus()
+}
+
+/** 空态快捷入口：批注队列处理只在 Word 宿主给（命令面按宿主分） */
+const quickPrompts = computed(() => {
+  const host = detectHost()
+  const list = [{ label: t('quickSummarizeLabel'), text: t('quickSummarizeText') }]
+  if (host === 'word') {
+    list.push({ label: t('quickCommentsLabel'), text: t('quickCommentsText') })
+    list.push({ label: t('quickProofreadLabel'), text: t('quickProofreadText') })
+  }
+  return list
+})
+
+/** 回答里被「」或 “” 包住的原文引用（6-80 字符），可点击定位（仅 Word 宿主） */
+function citations(msg) {
+  if (!msg.text || detectHost() !== 'word') return []
+  const out = []
+  const seen = new Set()
+  const re = /「([^「」\n]{6,80})」|“([^“”\n]{6,80})”/g
+  let m
+  while ((m = re.exec(msg.text)) && out.length < 4) {
+    const t = (m[1] || m[2] || '').trim()
+    if (t && !seen.has(t)) { seen.add(t); out.push(t) }
+  }
+  return out
+}
+
+async function locateQuote(text) {
+  const r = await locateInDocument(text)
+  notice.value = r.found ? '' : t('quoteNotFound')
+}
+
+function startRename(c) {
+  renamingId.value = c.conversationId
+  renameDraft.value = c.title || ''
+  deletingId.value = ''
+}
+
+async function confirmRename(c) {
+  const title = renameDraft.value.trim()
+  if (!title) { renamingId.value = ''; return }
+  try {
+    await retitleConversation(c.conversationId, title)
+    c.title = title
+    renamingId.value = ''
+  } catch (e) {
+    banner.value = (e && e.message) || t('renameFailed')
+  }
+}
+
+/** 删除走两段式确认（Office webview 里不用 window.confirm） */
+async function confirmDelete(c) {
+  if (deletingId.value !== c.conversationId) {
+    deletingId.value = c.conversationId
+    return
+  }
+  try {
+    await removeConversation(c.conversationId)
+    conversations.value = conversations.value.filter((x) => x.conversationId !== c.conversationId)
+    deletingId.value = ''
+  } catch (e) {
+    banner.value = (e && e.message) || t('deleteFailed')
+    deletingId.value = ''
+  }
+}
 </script>
 
 <style scoped>
@@ -364,6 +529,73 @@ watch(input, (v) => {
   font-size: 11px;
   color: var(--awd-text-secondary);
 }
+
+/* 计划/交付物卡：区别于普通气泡，左侧主色描边 */
+.artifact-card {
+  border: 1px solid var(--awd-border);
+  border-left: 3px solid var(--awd-primary);
+  border-radius: 8px;
+  background: var(--awd-surface);
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  max-width: 92%;
+}
+
+.artifact-head {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--awd-primary);
+  margin-bottom: 4px;
+}
+
+.artifact-body {
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.artifact-actions { display: flex; gap: 6px; margin-top: 6px; }
+
+.cite-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.cite-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px dashed var(--awd-border);
+  background: var(--awd-surface);
+  color: var(--awd-text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.cite-chip:hover { border-color: var(--awd-primary); color: var(--awd-primary); }
+
+.quick-prompts {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.quick-btn {
+  padding: 5px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--awd-border);
+  background: var(--awd-surface);
+  color: var(--awd-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.quick-btn:hover { border-color: var(--awd-primary); color: var(--awd-primary); }
 
 .thinking {
   margin-bottom: 6px;
@@ -544,18 +776,50 @@ watch(input, (v) => {
 }
 
 .conv-item {
-  display: block;
-  width: 100%;
-  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   border: 1px solid var(--awd-border);
   border-radius: 6px;
   background: var(--awd-surface);
   padding: 6px 9px;
   margin-bottom: 5px;
-  cursor: pointer;
 }
 
 .conv-item:hover { border-color: var(--awd-primary); }
+
+.conv-main {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.conv-actions { display: flex; gap: 4px; flex-shrink: 0; }
+
+.conv-act {
+  border: none;
+  background: none;
+  color: var(--awd-text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.conv-act:hover { color: var(--awd-primary); }
+.conv-act.danger:hover { color: var(--awd-danger); }
+
+.rename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid var(--awd-primary);
+  border-radius: 4px;
+  font-size: 12px;
+}
 
 .conv-title {
   display: block;
