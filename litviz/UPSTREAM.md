@@ -16,9 +16,9 @@
 历史沿革：重画引擎最初 vendor 自独立仓库 mqc-litigation-visual-redraw（v1.0.2，
 commit `9c6558f`，2026-08-08，当时放在 `litviz/engine/`）。2026-08-23 上游把它并进
 monorepo `new-litigation-visualization` 并新增时间轴大师模块；我们 2026-08-25 跟进，
-同时把目录名从 `engine/` 改回上游原名——**时间轴大师的脚本与测试里有十几处
+同时把布局对齐上游（`litviz/skills/<模块名>/`，相当于上游的 `plugins/mqc-nlv/skills/`）——**时间轴大师的脚本与测试里有十几处
 `../../mqc-litigation-visual-redraw/scripts` 的兄弟目录硬引用**（共享内核机制），
-保持上游目录名可以让这些引用原生成立，升级永远零补丁、上游测试原样可跑。
+保持上游目录名与 `skills/` 层级可以让这些引用原生成立，升级永远零补丁、上游测试原样可跑。**`skills/` 这一层不是装饰**：时间轴的回归套件把 `SKILL/../..` 当插件根做全树脱敏扫描，少这一层它会扫到我们整个产品仓库（frontend/node_modules 里的长数字全被当成公民身份号码）。
 
 ## 为什么 vendor 而不是当依赖装
 
@@ -52,8 +52,8 @@ git clone --depth 1 https://github.com/MiaoQichuan/new-litigation-visualization 
 2. 重新套用 `PATCHES.md` 里记录的每一条本地补丁，逐条确认上游是否已自行修掉——
    已修的就从 PATCHES.md 里删掉，别叠着打。
 3. 跑上游回归：
-   `python3 litviz/mqc-litigation-visual-redraw/tests/run_checks.py`（要 graphviz，预期 146/149）；
-   `cd litviz/mqc-timeline-master && python3 tests/run_checks.py`（预期全绿）。
+   `python3 litviz/skills/mqc-litigation-visual-redraw/tests/run_checks.py`（要 graphviz，预期 146/149）；
+   `cd litviz/skills/mqc-timeline-master && python3 tests/run_checks.py`（预期全绿）。
 4. 跑我们的契约测试：`python3 litviz/tests/test_cli.py`。
 5. 更新本文的 commit / 版本 / 日期。
 

@@ -117,7 +117,7 @@ class LitigationTimelineFlowTest {
 
         // 材料：上游自带的短 fixture（聊天记录式，五个带日期的事实）
         Path fixture = svc.runtime().litvizDir()
-                .resolve("mqc-timeline-master/tests/fixtures/m7-short.txt");
+                .resolve("skills/mqc-timeline-master/tests/fixtures/m7-short.txt");
         assumeTrue(Files.isRegularFile(fixture), "上游 fixture 不在");
         String materialText = Files.readString(fixture, StandardCharsets.UTF_8);
 

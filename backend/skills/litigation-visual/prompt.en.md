@@ -168,7 +168,7 @@ For choosing between the two relation layouts, see
 | Use blue, gray-blue, or any second accent color | Grayscale base + the one crimson `#991B1B` (at most two spots) |
 | Use diamonds for decision nodes | Use rounded hexagons (long labels do not fit in diamonds) |
 | Stuff argument, judicial reasoning, or "the court held" passages into nodes | Nodes carry facts and conclusions only; reasoning is not a node |
-| Tweak frozen values (colors, corner radii, font sizes, spacing) for looks | Do not. If they truly must change, change the spec files in `litviz/mqc-litigation-visual-redraw/` first |
+| Tweak frozen values (colors, corner radii, font sizes, spacing) for looks | Do not. If they truly must change, change the spec files in `litviz/skills/mqc-litigation-visual-redraw/` first |
 | Reorder events, merge or drop entries, or invent dates for looks | Verbatim, in time order; anything uncertain goes into `provenance.uncertainties` |
 | Invent new figure types, add legends, icons, or themes | These seven layouts and nothing else |
 | Draw the audit summary, counsel's name, dates, or slogans onto the figure | The title carries a neutral figure name only; everything else goes in the reply |
