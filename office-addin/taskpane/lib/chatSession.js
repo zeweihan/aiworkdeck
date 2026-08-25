@@ -1,7 +1,8 @@
 import { reactive, ref } from 'vue'
 import {
   postChat, postCancel, postOfficeResult, createConversation, fetchConversationHistory,
-  fetchConversations, fetchModels, fetchSkills
+  fetchConversations, fetchModels, fetchSkills, fetchProjectFiles,
+  deleteConversation as apiDeleteConversation, renameConversation as apiRenameConversation
 } from './api.js'
 import { createSseConnection, createTagStreamParser } from './sse.js'
 import { readActiveDocument, readDocumentMeta, detectHost, hashContent } from './wordDoc.js'
@@ -9,6 +10,7 @@ import { executeOfficeCommand, commandDisplayName } from './officeExecutor.js'
 import {
   loadConversationId, saveConversationId, isConfigured, loadModelChoice, saveModelChoice
 } from './settings.js'
+import { t } from './i18n.js'
 
 /**
  * 对话会话的模块级单例状态（import 即共享）。
@@ -47,6 +49,8 @@ export const selectedModel = ref(loadModelChoice())
 /** 已启用的 skill 清单与本会话勾选的 skillIds（随每条消息上送，后端按并集激活） */
 export const skillList = ref([])
 export const selectedSkillIds = ref([])
+/** 附加的项目文件（随每条消息以 contextItems 上送，后端按 fileId 读内容） */
+export const attachedFiles = ref([])
 
 // ==================== 内部状态 ====================
 
@@ -154,6 +158,7 @@ export async function activateSession({ settings, projectId }) {
   banner.value = ''
   notice.value = ''
   conversationId = null
+  attachedFiles.value = []
   resetDocCache()
 
   if (!pid || !settings || !isConfigured(settings)) return
@@ -222,6 +227,31 @@ export function toggleSkill(skillId) {
 export async function loadConversationList() {
   if (!ctx.settings || !ctx.projectId) return []
   return fetchConversations(ctx.settings, parseInt(ctx.projectId, 10))
+}
+
+/** 项目文件清单（附件选择器用；失败回空数组） */
+export async function loadProjectFiles() {
+  if (!ctx.settings || !ctx.projectId) return []
+  return fetchProjectFiles(ctx.settings, ctx.projectId)
+}
+
+export function toggleAttachedFile(file) {
+  const cur = attachedFiles.value
+  attachedFiles.value = cur.some((f) => String(f.id) === String(file.id))
+    ? cur.filter((f) => String(f.id) !== String(file.id))
+    : [...cur, { id: file.id, name: file.name, fileType: file.fileType || '' }]
+}
+
+/** 删除会话：删的是当前会话时就地转为新对话（清本地 ID 与消息） */
+export async function removeConversation(convId) {
+  if (!ctx.settings) throw new Error(t('connectionNotReadySimple'))
+  await apiDeleteConversation(ctx.settings, convId)
+  if (convId === conversationId) newConversation()
+}
+
+export async function retitleConversation(convId, title) {
+  if (!ctx.settings) throw new Error(t('connectionNotReadySimple'))
+  await apiRenameConversation(ctx.settings, convId, title)
 }
 
 /**
@@ -321,16 +351,18 @@ function toLocalMessage(row) {
   let text = ''
   let thinking = ''
   let question = null
+  let artifact = ''
   const p = createTagStreamParser({
     // 标签间的裸换行不进正文（与桌面端 useAgentStream 的守卫同口径，dev-board#147）
     onMainText: (t) => { if (!text && !t.trim()) return; text += t },
     onThinkingText: (t) => { if (!thinking && !t.trim()) return; thinking += t },
-    onQuestion: (q) => { question = q.options.length ? { options: q.options, answered: false } : null }
+    onQuestion: (q) => { question = q.options.length ? { options: q.options, answered: false } : null },
+    onArtifact: (c) => { artifact = artifact ? artifact + '\n\n' + c : c }
   })
   p.feed(content)
   p.flush()
   text = text.replace(/\s+$/, '')
-  return reactive({ role: 'assistant', text, thinking, streaming: false, error: '', tools: [], question })
+  return reactive({ role: 'assistant', text, thinking, streaming: false, error: '', tools: [], question, artifact })
 }
 
 // ==================== SSE ====================
@@ -382,6 +414,11 @@ function attachParser(assistant) {
     // 与桌面端 useAgentStream 的同名守卫保持同口径：正文为空时纯空白直接丢弃。
     onMainText: (t) => { if (!assistant.text && !t.trim()) return; assistant.text += t },
     onThinkingText: (t) => { if (!assistant.thinking && !t.trim()) return; assistant.thinking += t },
+    // <artifact>（计划/交付物）整块闭合时挂到消息上，界面渲染成计划卡（dev-board#150）
+    onArtifact: (content) => {
+      assistant.artifact = assistant.artifact ? assistant.artifact + '\n\n' + content : content
+      bumpScroll()
+    },
     // 反问的选项：正文已经流进气泡，这里只挂备选答案给界面做按钮（无选项则不挂，
     // 用户直接在输入框回答）。一轮里问第二次时后一次覆盖前一次——可点的只有最后一问。
     onQuestion: (q) => {
@@ -442,15 +479,15 @@ function handleEvent(evt, dataStr) {
     // awaiting_input：编排器为了反问主动停机，球在用户这边。输入框此时已解锁
     // （答案就是新一轮普通用户消息），只补一行状态提示，别让人以为回答被吞了。
     // notice 由 finishStreaming 清空，所以要放在它之后。
-    if (status.toLowerCase() === 'awaiting_input') notice.value = '等待你的回答，回答后 AI 继续'
+    if (status.toLowerCase() === 'awaiting_input') notice.value = t('awaitingAnswer')
   } else if (evt === 'error') {
-    let msg = '执行出错'
+    let msg = t('executionError')
     try { msg = JSON.parse(dataStr).message || msg } catch (e) { /* ignore */ }
     if (currentAssistant) currentAssistant.error = msg
     disableDocDedup()
     finishStreaming()
   } else if (evt === 'cancelled') {
-    if (currentAssistant && !currentAssistant.text) currentAssistant.text = '（已停止）'
+    if (currentAssistant && !currentAssistant.text) currentAssistant.text = t('stoppedPlaceholder')
     finishStreaming()
   } else if (evt === 'client_action') {
     handleClientAction(dataStr)
@@ -486,14 +523,14 @@ function handleRunState(dataStr) {
   const generating = name === 'RUNNING' || name === 'PAUSED'
   const awaitingUser = name === 'AWAITING_APPROVAL' || name === 'AWAITING_INPUT'
   const awaitingHint = name === 'AWAITING_INPUT'
-    ? '等待你的回答，回答后 AI 继续'
-    : 'AI 等你确认后继续：把意见发过去即可'
+    ? t('awaitingAnswer')
+    : t('awaitingConfirmation')
 
   if (restorePending) {
     restorePending = false
     if (generating) {
       streaming.value = true
-      notice.value = '上一次的任务仍在进行中，正在接收后续回复……'
+      notice.value = t('previousTaskInProgress')
       adoptLastAssistantBubble()
     } else if (awaitingUser) {
       // 窗格重建后接回「等用户」的轮次：不锁输入，只提示球在自己这边
@@ -550,8 +587,8 @@ async function handleClientAction(dataStr) {
     })
   } catch (e) {
     chip.status = 'failed'
-    chip.error = '结果回传失败：' + ((e && e.message) || '网络错误')
-    banner.value = '工具结果回传失败，AI 会在等待超时后继续'
+    chip.error = t('resultSendFailedPrefix') + ((e && e.message) || t('networkError'))
+    banner.value = t('toolResultSendFailed')
   }
 }
 
@@ -647,7 +684,7 @@ export async function send(overrideText) {
   notice.value = ''
   if (!ctx.settings || !isConfigured(ctx.settings)) return { needSettings: true }
   if (!ctx.projectId) {
-    banner.value = '尚未选择项目：在顶部下拉中选一个项目'
+    banner.value = t('noProjectBanner')
     return { needSettings: false }
   }
   const prompt = (override === null ? input.value : override).trim()
@@ -686,7 +723,7 @@ export async function send(overrideText) {
     let activeContext = null
     if (read) {
       if (read.doc) activeContext = buildActiveContext(read.doc, read.hash)
-      else banner.value = '未能读取文档内容，本条消息不附带文档内容'
+      else banner.value = t('docReadFailedBanner')
     }
     if (!activeContext) activeContext = readDocumentMeta()
 
@@ -699,6 +736,10 @@ export async function send(overrideText) {
       // 按次指定模型与手选 skill（后端 AgentChatRequest 原生字段；空值不上送走默认）
       ...(selectedModel.value ? { model: selectedModel.value } : {}),
       ...(selectedSkillIds.value.length ? { skillIds: [...selectedSkillIds.value] } : {}),
+      // 附加的项目文件：contextItems 是后端既有字段，按 fileId 由服务端读内容
+      ...(attachedFiles.value.length ? {
+        contextItems: attachedFiles.value.map((f) => ({ id: String(f.id), name: f.name, fileType: f.fileType || '' }))
+      } : {}),
       // 声明客户端能力（Phase C）：后端据此让本会话只见 office_* 工具、隐藏 doc_*；
       // officeHost 再按宿主细分（word/excel/powerpoint），点名对应工具面
       clientCapability: 'office',
@@ -706,7 +747,7 @@ export async function send(overrideText) {
     })
     if (perfRound) perfRound.chatAcceptedMs = perfSince()
   } catch (e) {
-    assistant.error = e.message || '消息发送失败'
+    assistant.error = e.message || t('sendFailed')
     disableDocDedup()
     finishStreaming()
   }
@@ -730,7 +771,7 @@ export async function answerQuestion(optionText) {
 export async function stop() {
   if (conversationId) await postCancel(ctx.settings, conversationId)
   closeConnection()
-  if (currentAssistant && !currentAssistant.text) currentAssistant.text = '（已停止）'
+  if (currentAssistant && !currentAssistant.text) currentAssistant.text = t('stoppedPlaceholder')
   finishStreaming()
 }
 

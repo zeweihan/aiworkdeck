@@ -206,12 +206,15 @@ const PARTIAL_TAG_RE = /^<\/?[a-zA-Z_]?[\w-]*(\s[^>]*)?$/
 // 未知但符合这个形状的标签按「像协议标签」处理，其余尖括号一律当正文。
 const PROTOCOL_TAG_SHAPE_RE = /^[a-z][a-z0-9_]{0,23}$/
 
-export function createTagStreamParser({ onMainText, onThinkingText, onQuestion }) {
+export function createTagStreamParser({ onMainText, onThinkingText, onQuestion, onArtifact }) {
   let pending = ''
   const stack = []
   // 当前 <question> 块（未闭合时非空）与正在累积的 <option> 文案
   let question = null
   let optionBuf = ''
+  // <artifact>（计划/交付物）内容：闭合时整块经 onArtifact 交给界面渲染成计划卡
+  // （dev-board#150——此前直接丢弃，插件端看不到计划审批的内容本体）
+  let artifactBuf = ''
 
   const finishOption = () => {
     const text = optionBuf.trim()
@@ -229,12 +232,19 @@ export function createTagStreamParser({ onMainText, onThinkingText, onQuestion }
     if (!text) return
     // <option> 内容是按钮文案，不能混进正文
     if (stack.includes('option')) { optionBuf += text; return }
+    if (stack.includes('artifact')) { artifactBuf += text; return }
     if (stack.includes('final') || stack.includes('question') || stack.length === 0) {
       onMainText(text)
       return
     }
     if (stack.includes('thinking')) { onThinkingText(text) }
     // 其余标签内的内容：MVP 不渲染
+  }
+
+  const emitArtifact = () => {
+    const content = artifactBuf.trim()
+    artifactBuf = ''
+    if (content && onArtifact) onArtifact(content)
   }
 
   const step = () => {
@@ -258,6 +268,7 @@ export function createTagStreamParser({ onMainText, onThinkingText, onQuestion }
         if (idx !== -1) stack.splice(idx, 1)
         if (name === 'option') finishOption()
         else if (name === 'question') emitQuestion()
+        else if (name === 'artifact') emitArtifact()
       } else if (!candidate.endsWith('/>')) {
         stack.push(name)
         if (name === 'question') question = { options: [] }
@@ -294,9 +305,10 @@ export function createTagStreamParser({ onMainText, onThinkingText, onQuestion }
     flush() {
       route(pending)
       pending = ''
-      // 标签没闭合就断流（截断、出错收尾）：已解析出的选项不丢
+      // 标签没闭合就断流（截断、出错收尾）：已解析出的选项/计划内容不丢
       if (stack.includes('option')) finishOption()
       if (question) emitQuestion()
+      emitArtifact()
     }
   }
 }

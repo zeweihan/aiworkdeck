@@ -1,33 +1,33 @@
 <template>
   <div class="settings">
     <section class="card">
-      <h2>连接</h2>
+      <h2>{{ t('connectionTitle') }}</h2>
 
       <p v-if="token.trim()" class="summary">
-        已连接 {{ displayServerUrl }}
+        {{ t('connectedTo', { url: displayServerUrl }) }}
       </p>
 
       <p class="hint">
-        用 AI WorkDeck 账户登录即可连接，与桌面版是同一个账户。
+        {{ t('loginHint') }}
       </p>
 
       <!-- 手机号是大陆站主路径；国际站与存量账号走邮箱口令 -->
       <div class="tabs">
-        <button class="tab" :class="{ 'is-active': mode === 'phone' }" @click="switchMode('phone')">手机号</button>
-        <button class="tab" :class="{ 'is-active': mode === 'email' }" @click="switchMode('email')">邮箱</button>
+        <button class="tab" :class="{ 'is-active': mode === 'phone' }" @click="switchMode('phone')">{{ t('tabPhone') }}</button>
+        <button class="tab" :class="{ 'is-active': mode === 'email' }" @click="switchMode('email')">{{ t('tabEmail') }}</button>
       </div>
 
       <template v-if="mode === 'phone'">
         <label class="field">
-          <span class="label">手机号</span>
-          <input v-model="phone" type="tel" placeholder="11 位手机号" spellcheck="false" autocomplete="tel" />
+          <span class="label">{{ t('phoneLabel') }}</span>
+          <input v-model="phone" type="tel" :placeholder="t('phonePlaceholder')" spellcheck="false" autocomplete="tel" />
         </label>
 
         <!-- 不用 label 包住整行：label 的激活行为会把点在按钮上的一次点击转发给里面的 input -->
         <div class="field">
-          <span class="label">验证码</span>
+          <span class="label">{{ t('smsCodeLabel') }}</span>
           <div class="code-row">
-            <input v-model="smsCode" type="text" placeholder="6 位验证码" spellcheck="false" autocomplete="one-time-code" />
+            <input v-model="smsCode" type="text" :placeholder="t('smsCodePlaceholder')" spellcheck="false" autocomplete="one-time-code" />
             <button class="btn secondary code-btn" :disabled="sendingCode || cooldown > 0 || !phone.trim()" @click="sendCode">
               {{ codeBtnLabel }}
             </button>
@@ -44,48 +44,47 @@
 
       <template v-else>
         <label class="field">
-          <span class="label">邮箱</span>
-          <input v-model="account" type="email" placeholder="注册时使用的邮箱" spellcheck="false" autocomplete="username" />
+          <span class="label">{{ t('emailLabel') }}</span>
+          <input v-model="account" type="email" :placeholder="t('emailPlaceholder')" spellcheck="false" autocomplete="username" />
         </label>
 
         <label class="field">
-          <span class="label">口令</span>
-          <input v-model="password" type="password" placeholder="账户口令" spellcheck="false" autocomplete="current-password" />
+          <span class="label">{{ t('passwordLabel') }}</span>
+          <input v-model="password" type="password" :placeholder="t('passwordPlaceholder')" spellcheck="false" autocomplete="current-password" />
         </label>
       </template>
 
       <div class="actions">
         <button class="btn primary" :disabled="connecting" @click="connectWithAccount">
-          {{ connecting ? '连接中...' : '登录并连接' }}
+          {{ connecting ? t('connecting') : t('loginAndConnect') }}
         </button>
       </div>
 
       <p v-if="loginStatus" class="status" :class="loginStatusKind">{{ loginStatus }}</p>
 
       <details class="advanced">
-        <summary>高级设置</summary>
+        <summary>{{ t('advancedSettings') }}</summary>
 
         <p class="hint">
-          私有部署与团队服务器场景：可填律所自建后端地址，或同机桌面版的 http://127.0.0.1:5269，
-          再用官网 API Key 或手工粘贴的设备令牌连接。
+          {{ t('advancedHint') }}
         </p>
 
         <label class="field">
-          <span class="label">后端地址</span>
+          <span class="label">{{ t('serverUrlLabel') }}</span>
           <input
             v-model="serverUrl"
             type="text"
-            placeholder="例如 https://ai.yourfirm.com 或 http://127.0.0.1:5269"
+            :placeholder="t('serverUrlPlaceholder')"
             spellcheck="false"
           />
         </label>
 
         <label class="field">
-          <span class="label">官网 API Key（awdk_ 开头）</span>
+          <span class="label">{{ t('awdkKeyLabel') }}</span>
           <input
             v-model="awdkKey"
             type="password"
-            placeholder="粘贴 awdk_ 开头的 API Key"
+            :placeholder="t('awdkKeyPlaceholder')"
             spellcheck="false"
             autocomplete="off"
           />
@@ -93,27 +92,27 @@
 
         <div class="actions">
           <button class="btn secondary" :disabled="connecting" @click="connectWithKey">
-            {{ connecting ? '连接中...' : '用 Key 连接' }}
+            {{ connecting ? t('connecting') : t('connectWithKeyButton') }}
           </button>
         </div>
 
         <p v-if="keyStatus" class="status" :class="keyStatusKind">{{ keyStatus }}</p>
 
         <label class="field">
-          <span class="label">设备令牌（awdt_ 开头）</span>
+          <span class="label">{{ t('deviceTokenLabel') }}</span>
           <textarea
             v-model="token"
             rows="3"
-            placeholder="粘贴 awdt_ 设备令牌。可在 AI WorkDeck 桌面版个人中心的「账号安全」中生成。"
+            :placeholder="t('deviceTokenPlaceholder')"
             spellcheck="false"
           ></textarea>
         </label>
 
         <div class="actions">
           <button class="btn secondary" :disabled="testing" @click="testConnection">
-            {{ testing ? '测试中...' : '测试连接' }}
+            {{ testing ? t('testing') : t('testConnectionButton') }}
           </button>
-          <button class="btn primary" @click="save">保存</button>
+          <button class="btn primary" @click="save">{{ t('save') }}</button>
         </div>
 
         <p v-if="status" class="status" :class="statusKind">{{ status }}</p>
@@ -134,6 +133,7 @@ import {
 } from '../lib/api.js'
 import { setupCaptcha } from '../lib/captcha.js'
 import { saveSettings, normalizeBaseUrl, DEFAULT_SERVER_URL } from '../lib/settings.js'
+import { t } from '../lib/i18n.js'
 
 const props = defineProps({
   initialServerUrl: { type: String, default: '' },
@@ -169,11 +169,11 @@ let captcha = null
 let captchaReady = null
 
 /** 当前连接状态摘要：只读本地设置，不发请求 */
-const displayServerUrl = computed(() => normalizeBaseUrl(serverUrl.value) || '（未设置地址）')
+const displayServerUrl = computed(() => normalizeBaseUrl(serverUrl.value) || t('noAddressSet'))
 
 const codeBtnLabel = computed(() => {
-  if (cooldown.value > 0) return `${cooldown.value} 秒后重发`
-  return sendingCode.value ? '发送中...' : '获取验证码'
+  if (cooldown.value > 0) return t('resendCountdown', { seconds: cooldown.value })
+  return sendingCode.value ? t('sending') : t('getCode')
 })
 
 // 任务窗格切视图会卸载本组件：倒计时的定时器必须跟着停（否则回来时还在跑），
@@ -225,7 +225,7 @@ async function sendCode() {
   loginStatus.value = ''
   if (!serverUrl.value.trim()) {
     loginStatusKind.value = 'error'
-    loginStatus.value = '连接未就绪：后端地址为空，可在「高级设置」中填写'
+    loginStatus.value = t('serverUrlEmptyHint')
     return
   }
   sendingCode.value = true
@@ -238,17 +238,17 @@ async function sendCode() {
       captchaToken = await widget.getToken()
       if (!captchaToken) {
         loginStatusKind.value = 'error'
-        loginStatus.value = '安全验证未完成，请重试'
+        loginStatus.value = t('captchaIncomplete')
         return
       }
     }
     await postAccountLoginSendCode({ serverUrl: serverUrl.value }, phone.value, captchaToken)
     loginStatusKind.value = 'ok'
-    loginStatus.value = '验证码已发送，请查收短信'
+    loginStatus.value = t('codeSent')
     startCooldown()
   } catch (e) {
     loginStatusKind.value = 'error'
-    loginStatus.value = e.message || '验证码发送失败'
+    loginStatus.value = e.message || t('codeSendFailed')
   } finally {
     sendingCode.value = false
   }
@@ -262,7 +262,7 @@ async function connectWithAccount() {
   loginStatus.value = ''
   if (!serverUrl.value.trim()) {
     loginStatusKind.value = 'error'
-    loginStatus.value = '连接未就绪：后端地址为空，可在「高级设置」中填写'
+    loginStatus.value = t('serverUrlEmptyHint')
     return
   }
   const credentials = mode.value === 'phone'
@@ -273,7 +273,7 @@ async function connectWithAccount() {
     : credentials.account && credentials.password
   if (!filled) {
     loginStatusKind.value = 'error'
-    loginStatus.value = mode.value === 'phone' ? '请填写手机号与验证码' : '请填写邮箱与口令'
+    loginStatus.value = mode.value === 'phone' ? t('fillPhoneAndCode') : t('fillEmailAndPassword')
     return
   }
   connecting.value = true
@@ -283,10 +283,10 @@ async function connectWithAccount() {
     password.value = ''
     applyToken(awdtToken)
     loginStatusKind.value = 'ok'
-    loginStatus.value = '连接成功'
+    loginStatus.value = t('connectSuccess')
   } catch (e) {
     loginStatusKind.value = 'error'
-    loginStatus.value = e.message || '账户连接失败'
+    loginStatus.value = e.message || t('accountConnectFailed')
   } finally {
     connecting.value = false
   }
@@ -300,13 +300,13 @@ async function connectWithKey() {
   keyStatus.value = ''
   if (!serverUrl.value.trim()) {
     keyStatusKind.value = 'error'
-    keyStatus.value = '连接未就绪：后端地址为空'
+    keyStatus.value = t('serverUrlEmptySimple')
     return
   }
   const key = awdkKey.value.trim()
   if (!key) {
     keyStatusKind.value = 'error'
-    keyStatus.value = '连接未就绪：请粘贴 awdk_ 开头的 API Key'
+    keyStatus.value = t('awdkKeyEmpty')
     return
   }
   connecting.value = true
@@ -315,10 +315,10 @@ async function connectWithKey() {
     awdkKey.value = ''
     applyToken(awdtToken)
     keyStatusKind.value = 'ok'
-    keyStatus.value = '连接成功：已换取设备令牌'
+    keyStatus.value = t('connectSuccessWithToken')
   } catch (e) {
     keyStatusKind.value = 'error'
-    keyStatus.value = e.message || '账户直连失败'
+    keyStatus.value = e.message || t('directConnectFailed')
   } finally {
     connecting.value = false
   }
@@ -335,17 +335,17 @@ async function testConnection() {
   status.value = ''
   if (!serverUrl.value.trim() || !token.value.trim()) {
     statusKind.value = 'error'
-    status.value = '连接未就绪：请填写后端地址与设备令牌'
+    status.value = t('serverAndTokenEmpty')
     return
   }
   testing.value = true
   try {
     const projects = await fetchMyProjects({ serverUrl: serverUrl.value, token: token.value.trim() })
     statusKind.value = 'ok'
-    status.value = `连接成功：可访问 ${projects.length} 个项目`
+    status.value = t('connectSuccessWithProjects', { count: projects.length })
   } catch (e) {
     statusKind.value = 'error'
-    status.value = e.message || '连接失败'
+    status.value = e.message || t('connectFailed')
   } finally {
     testing.value = false
   }
@@ -354,7 +354,7 @@ async function testConnection() {
 function save() {
   if (!serverUrl.value.trim() || !token.value.trim()) {
     statusKind.value = 'error'
-    status.value = '连接未就绪：请填写后端地址与设备令牌'
+    status.value = t('serverAndTokenEmpty')
     return
   }
   saveSettings({ serverUrl: serverUrl.value, token: token.value })

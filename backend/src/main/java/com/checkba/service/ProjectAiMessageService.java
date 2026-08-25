@@ -343,6 +343,15 @@ public class ProjectAiMessageService {
         }
     }
 
+    /**
+     * 整会话删除（dev-board#148，Office 插件历史面板）。只删消息本体；
+     * token 用量记录是计费对账凭证、文件变动清单挂在自己的服务上，均不随删。
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public void deleteConversation(String conversationId) {
+        repository.deleteByConversationId(conversationId);
+    }
+
     public java.util.Optional<ProjectAiMessage> findById(Long id) {
         return repository.findById(id);
     }

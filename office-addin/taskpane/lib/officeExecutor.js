@@ -24,6 +24,7 @@
 
 import { officeAvailable, detectHost } from './wordDoc.js'
 import { minimalEdits } from './minimalEdit.js'
+import { t } from './i18n.js'
 // 律所标准格式（HOUSE）单源：backend/src/main/resources/style-profiles/house-default.json 的字节副本，
 // 由 frontend/scripts/sync-house-profile.mjs 同步（npm run build 前自动跑），构建时内联进产物；
 // houseProfile.test.js 断言与后端源 sha256 一致。
@@ -176,6 +177,31 @@ export function pickAnchorFallback(anchor, position) {
 /** search 串超过 Word 的 255 字符上限会直接抛异常，降级段落也要守住这条线 */
 export function boundForSearch(s) {
   return s.length > WORD_SEARCH_MAX_CHARS ? s.slice(0, WORD_SEARCH_MAX_CHARS) : s
+}
+
+/**
+ * 客户端直连的「定位到原文」（dev-board#150 引用定位）：AI 回答里引用的原文片段，
+ * 点击即在文档里选中并滚动到位。不走 office_command 协议（无需模型往返）。
+ * 仅 Word 宿主；未命中返回 {found:false}，调用方给轻提示即可。
+ */
+export async function locateInDocument(text) {
+  const needle = String(text || '').trim()
+  if (!needle || typeof Word === 'undefined') return { found: false }
+  try {
+    return await Word.run(async (context) => {
+      let items = await searchRanges(context, boundForSearch(needle), false)
+      if (!items.length && /[\r\n]/.test(needle)) {
+        const fallback = pickAnchorFallback(needle, null)
+        if (fallback) items = await searchRanges(context, boundForSearch(fallback), false)
+      }
+      if (!items.length) return { found: false }
+      items[0].select()
+      await context.sync()
+      return { found: true, count: items.length }
+    })
+  } catch (e) {
+    return { found: false, error: (e && e.message) || String(e) }
+  }
 }
 
 /* ==================== Word 最小修订（minimal redline） ====================
@@ -2958,82 +2984,83 @@ async function loadPptTextFrames(context) {
   return frames
 }
 
-/** 每个 command 的固定中文名（对话流中的工具活动 chip；与后端 @ToolMeta displayName 对齐） */
+/** 每个 command 的固定显示名（对话流中的工具活动 chip；与后端 @ToolMeta displayName 对齐）
+ *  按语言取字典（dev-board#150）：值来自 lib/i18n.js 的 cmd* key，随 currentLang 定死一次。 */
 export const COMMAND_DISPLAY_NAMES = {
-  get_text: '读取文档',
-  get_selection: '读取选区',
-  search: '查找文本',
-  replace_text: '替换文本（修订）',
-  insert_text: '插入文本（修订）',
-  add_comment: '插入批注',
-  format_text: '设置文字格式',
-  set_paragraph_format: '设置段落格式',
-  get_formatting: '读取格式',
-  set_numbering: '设置自动编号',
-  format_table: '设置表格格式',
-  apply_standard_format: '套用标准格式',
-  insert_table: '插入表格',
-  table_read: '读取表格',
-  table_set_cell: '修改单元格',
-  table_add_row: '插入表格行',
-  table_delete_row: '删除表格行',
-  table_add_col: '插入表格列',
-  table_delete_col: '删除表格列',
-  insert_break: '插入分页符',
-  set_hyperlink: '设置超链接',
-  edit_header_footer: '编辑页眉页脚',
-  get_comments: '读取批注',
-  reply_comment: '回复批注',
-  resolve_comment: '解决批注',
-  get_revisions: '读取修订',
-  accept_revision: '接受修订',
-  reject_revision: '拒绝修订',
-  insert_footnote: '插入脚注',
-  insert_endnote: '插入尾注',
-  insert_image: '插入图片',
-  apply_style: '应用样式',
-  manage_content_control: '管理内容控件',
-  set_document_properties: '设置文档属性',
-  excel_get_range: '读取区域',
-  excel_set_values: '写入区域',
-  excel_search: '查找单元格',
-  excel_format_cells: '设置单元格格式',
-  excel_set_borders: '设置边框',
-  excel_edit_rows_cols: '编辑行列',
-  excel_merge_cells: '合并单元格',
-  excel_sort_range: '排序',
-  excel_manage_sheets: '管理工作表',
-  excel_freeze_panes: '冻结窗格',
-  excel_set_formulas: '写入公式',
-  excel_get_overview: '读取总览',
-  excel_select_range: '选中区域',
-  excel_set_autofilter: '设置自动筛选',
-  excel_conditional_format: '设置条件格式',
-  excel_add_comment: '添加批注',
-  excel_get_comments: '读取批注',
-  excel_reply_comment: '回复批注',
-  excel_resolve_comment: '解决批注',
-  excel_delete_comment: '删除批注',
-  excel_set_data_validation: '设置数据验证',
-  excel_add_chart: '插入图表',
-  excel_define_name: '管理命名区域',
-  excel_protect_sheet: '保护工作表',
-  excel_group_rows_cols: '分组行列',
-  excel_add_pivot_table: '创建透视表',
-  ppt_get_slides: '读取幻灯片',
-  ppt_replace_text: '替换幻灯片文本',
-  ppt_format_text: '设置幻灯片文字格式',
-  ppt_add_slide: '新增幻灯片',
-  ppt_delete_slide: '删除幻灯片',
-  ppt_add_text_box: '插入文本框',
-  ppt_move_slide: '移动幻灯片',
-  ppt_add_shape: '插入形状',
-  ppt_get_slide_details: '读取幻灯片明细',
-  ppt_delete_shape: '删除形状',
-  ppt_add_table: '插入表格',
-  ppt_table_read: '读取表格',
-  ppt_table_set_cell: '修改表格单元格',
-  ppt_set_hyperlink: '设置超链接'
+  get_text: t('cmdGetText'),
+  get_selection: t('cmdGetSelection'),
+  search: t('cmdSearch'),
+  replace_text: t('cmdReplaceText'),
+  insert_text: t('cmdInsertText'),
+  add_comment: t('cmdAddComment'),
+  format_text: t('cmdFormatText'),
+  set_paragraph_format: t('cmdSetParagraphFormat'),
+  get_formatting: t('cmdGetFormatting'),
+  set_numbering: t('cmdSetNumbering'),
+  format_table: t('cmdFormatTable'),
+  apply_standard_format: t('cmdApplyStandardFormat'),
+  insert_table: t('cmdInsertTable'),
+  table_read: t('cmdTableRead'),
+  table_set_cell: t('cmdTableSetCell'),
+  table_add_row: t('cmdTableAddRow'),
+  table_delete_row: t('cmdTableDeleteRow'),
+  table_add_col: t('cmdTableAddCol'),
+  table_delete_col: t('cmdTableDeleteCol'),
+  insert_break: t('cmdInsertBreak'),
+  set_hyperlink: t('cmdSetHyperlink'),
+  edit_header_footer: t('cmdEditHeaderFooter'),
+  get_comments: t('cmdGetComments'),
+  reply_comment: t('cmdReplyComment'),
+  resolve_comment: t('cmdResolveComment'),
+  get_revisions: t('cmdGetRevisions'),
+  accept_revision: t('cmdAcceptRevision'),
+  reject_revision: t('cmdRejectRevision'),
+  insert_footnote: t('cmdInsertFootnote'),
+  insert_endnote: t('cmdInsertEndnote'),
+  insert_image: t('cmdInsertImage'),
+  apply_style: t('cmdApplyStyle'),
+  manage_content_control: t('cmdManageContentControl'),
+  set_document_properties: t('cmdSetDocumentProperties'),
+  excel_get_range: t('cmdExcelGetRange'),
+  excel_set_values: t('cmdExcelSetValues'),
+  excel_search: t('cmdExcelSearch'),
+  excel_format_cells: t('cmdExcelFormatCells'),
+  excel_set_borders: t('cmdExcelSetBorders'),
+  excel_edit_rows_cols: t('cmdExcelEditRowsCols'),
+  excel_merge_cells: t('cmdExcelMergeCells'),
+  excel_sort_range: t('cmdExcelSortRange'),
+  excel_manage_sheets: t('cmdExcelManageSheets'),
+  excel_freeze_panes: t('cmdExcelFreezePanes'),
+  excel_set_formulas: t('cmdExcelSetFormulas'),
+  excel_get_overview: t('cmdExcelGetOverview'),
+  excel_select_range: t('cmdExcelSelectRange'),
+  excel_set_autofilter: t('cmdExcelSetAutofilter'),
+  excel_conditional_format: t('cmdExcelConditionalFormat'),
+  excel_add_comment: t('cmdExcelAddComment'),
+  excel_get_comments: t('cmdExcelGetComments'),
+  excel_reply_comment: t('cmdExcelReplyComment'),
+  excel_resolve_comment: t('cmdExcelResolveComment'),
+  excel_delete_comment: t('cmdExcelDeleteComment'),
+  excel_set_data_validation: t('cmdExcelSetDataValidation'),
+  excel_add_chart: t('cmdExcelAddChart'),
+  excel_define_name: t('cmdExcelDefineName'),
+  excel_protect_sheet: t('cmdExcelProtectSheet'),
+  excel_group_rows_cols: t('cmdExcelGroupRowsCols'),
+  excel_add_pivot_table: t('cmdExcelAddPivotTable'),
+  ppt_get_slides: t('cmdPptGetSlides'),
+  ppt_replace_text: t('cmdPptReplaceText'),
+  ppt_format_text: t('cmdPptFormatText'),
+  ppt_add_slide: t('cmdPptAddSlide'),
+  ppt_delete_slide: t('cmdPptDeleteSlide'),
+  ppt_add_text_box: t('cmdPptAddTextBox'),
+  ppt_move_slide: t('cmdPptMoveSlide'),
+  ppt_add_shape: t('cmdPptAddShape'),
+  ppt_get_slide_details: t('cmdPptGetSlideDetails'),
+  ppt_delete_shape: t('cmdPptDeleteShape'),
+  ppt_add_table: t('cmdPptAddTable'),
+  ppt_table_read: t('cmdPptTableRead'),
+  ppt_table_set_cell: t('cmdPptTableSetCell'),
+  ppt_set_hyperlink: t('cmdPptSetHyperlink')
 }
 
 /** 每个 command 要求的宿主（与后端按 officeHost 的工具可见性过滤对齐） */
@@ -3117,7 +3144,7 @@ const COMMAND_HOSTS = {
 const HOST_LABELS = { word: 'Word', excel: 'Excel', powerpoint: 'PowerPoint' }
 
 export function commandDisplayName(command) {
-  return COMMAND_DISPLAY_NAMES[command] || `文档操作（${command}）`
+  return COMMAND_DISPLAY_NAMES[command] || t('cmdFallback', { command })
 }
 
 /**
