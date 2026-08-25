@@ -36,6 +36,6 @@ public class OptimizerSourceConfig {
             throw new IllegalStateException("optimizer.remote.base-url 必须是 https（本机回环除外）");
         }
         log.info("[optimizer] 反馈来源 = 云端收件箱 {}", base);
-        return new RemoteFeedbackSource(base, token);
+        return new RemoteFeedbackSource(base, token, props.getRemote().getConsoleUrl());
     }
 }

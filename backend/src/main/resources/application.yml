@@ -411,6 +411,10 @@ optimizer:
   remote:
     base-url: ${OPTIMIZER_REMOTE_URL:}
     token: ${OPTIMIZER_REMOTE_TOKEN:}
+    # 通知正文「在浏览器里看这条反馈」的地址模板（{id} 占位）；
+    # 留空 = 云端反馈控制台；官网 admin 并入反馈看板后可指到
+    # https://www.aiworkdeck.com/zh/admin?tab=feedback&fb={id}
+    console-url: ${OPTIMIZER_REMOTE_CONSOLE_URL:}
   repo:
     # 仓库工作副本的绝对路径（维护者机器上的一份 clone）
     path: ${OPTIMIZER_REPO_PATH:}

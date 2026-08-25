@@ -55,6 +55,14 @@ description: 用户反馈闭环领域。任务涉及右下角反馈浮窗、反�
 - 优化者通知里的直达链接来自 `OptimizerFeedbackSource.consoleRef(fb)`（default null）：
   Remote 来源返回 `<baseUrl>/feedback-console/?fb=<id>`，Local 来源保持 null
   （桌面端自带 admin 看板），正文里就不出现这一节。
+- 直达地址可用 `optimizer.remote.console-url`（env `OPTIMIZER_REMOTE_CONSOLE_URL`，
+  `{id}` 占位）改指官网 admin 的「用户反馈」分区（dev-board#152）：
+  `https://www.aiworkdeck.com/zh/admin?tab=feedback&fb={id}`——维护者只登录官网后台一处。
+- 官网侧（aiworkdeck_website 仓）：`app/[lang]/admin/FeedbackInbox.tsx` 分区 +
+  `/api/admin/feedback/*` 三条服务端代理（admin cookie 鉴权，取件密钥只在服务端）；
+  官网实例 env 需配 `AWD_FEEDBACK_INBOX_TOKEN`（= 收件箱 FEEDBACK_OPTIMIZER_TOKEN）。
+  为此 `GET /api/feedback` 列表/详情也认 X-Optimizer-Token（只读，密钥本就能取
+  全部待办与附件，未升格信任级；没配密钥恒拒绝）。
 - 页面安全约定：用户可控文本一律 textContent 渲染；附件用 fetch + `X-Session-Id`
   头取 blob 再喂给 `<img>`/`<audio>`，凭据不进 URL（URL 里的 token 会落 nginx access log）。
   登录支持 4005 二次验证（totp/sms/mail）。会话键与 h5 同名 `checkba_session_id`。
