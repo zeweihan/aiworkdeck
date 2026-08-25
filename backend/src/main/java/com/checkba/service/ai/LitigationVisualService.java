@@ -406,7 +406,7 @@ public class LitigationVisualService {
     public String readReference(String relativePath) {
         Runtime rt = runtime();
         if (rt.litvizDir() == null) return null;
-        Path engine = rt.litvizDir().resolve("mqc-litigation-visual-redraw").normalize();
+        Path engine = rt.litvizDir().resolve("skills").resolve("mqc-litigation-visual-redraw").normalize();
         Path target = engine.resolve(relativePath).normalize();
         // 只许读 engine/ 内部：relativePath 来自 LLM，不做这一步就是任意文件读取。
         if (!target.startsWith(engine) || !Files.isRegularFile(target)) return null;

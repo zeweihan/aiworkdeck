@@ -1,6 +1,6 @@
 # 对 vendor 引擎打的本地补丁
 
-`litviz/mqc-litigation-visual-redraw/` 原则上是上游原样拷贝（见 `UPSTREAM.md`）。下面每一条都是**不得不打**
+`litviz/skills/mqc-litigation-visual-redraw/` 原则上是上游原样拷贝（见 `UPSTREAM.md`）。下面每一条都是**不得不打**
 的补丁，代码里对应位置都有 `[AWD-PATCH n]` 标记，搜这个标记能找全。
 
 升级引擎时逐条复核：上游若已自行修掉，就删掉这一条，别叠着打。
@@ -81,7 +81,7 @@ out.append(f'<g data-role="node" data-id="{nid}"{emph_attr}>')
 ## 回归怎么跑
 
 ```bash
-python3 litviz/mqc-litigation-visual-redraw/tests/run_checks.py
+python3 litviz/skills/mqc-litigation-visual-redraw/tests/run_checks.py
 ```
 
 上游自带 149 项，要 graphviz（`brew install graphviz`）。补丁不该让任何一项变红——

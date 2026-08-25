@@ -40,7 +40,7 @@ import os
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_ENGINE = os.path.join(_HERE, "mqc-litigation-visual-redraw")
+_ENGINE = os.path.join(_HERE, "skills", "mqc-litigation-visual-redraw")
 _SCRIPTS = os.path.join(_ENGINE, "scripts")
 
 # 引擎模块之间是平铺 import（`from common import ...`），必须让 scripts/ 在 sys.path 上。
@@ -268,7 +268,7 @@ def cmd_render(args):
 
 # ==================== 时间轴大师（mqc-timeline-master） ====================
 
-_TIMELINE_DIR = os.path.join(_HERE, "mqc-timeline-master")
+_TIMELINE_DIR = os.path.join(_HERE, "skills", "mqc-timeline-master")
 _PIPELINE = os.path.join(_TIMELINE_DIR, "scripts", "pipeline.py")
 
 #: pipeline.py 认识的全部子命令（pipeline.py:1338-1371）。白名单挡两类东西：

@@ -19,10 +19,10 @@ JSON 对不对，不取决于模型对像素多聪明——这是上游的核心
 ## 关键文件
 
 **引擎（vendor，别手改）**
-- `litviz/mqc-litigation-visual-redraw/` — 重画引擎 v1.0.2（作者缪奇川，MIT）原样拷贝，
+- `litviz/skills/mqc-litigation-visual-redraw/` — 重画引擎 v1.0.2（作者缪奇川，MIT）原样拷贝，
   2026-08-25 前叫 `litviz/engine/`。上游已并入 monorepo
   MiaoQichuan/new-litigation-visualization。
-- `litviz/mqc-timeline-master/` — 时间轴大师 v2.0.1（同一上游、同作者）：从原始卷宗
+- `litviz/skills/mqc-timeline-master/` — 时间轴大师 v2.0.1（同一上游、同作者）：从原始卷宗
   直接出案件时间轴的确定性管线（多泳道/双方对读/纵向分页/忠实性子序列校验）。
   **两个目录名必须保持上游原名**：时间轴脚本与测试有十几处
   `../../mqc-litigation-visual-redraw/scripts` 兄弟目录硬引用（共享内核机制），
@@ -101,7 +101,7 @@ JSON 对不对，不取决于模型对像素多聪明——这是上游的核心
 ## 核心契约
 
 **semantic-map.json**：`layout` + `title_text` + 各布局的数据字段 + `provenance` +
-`checkpoint`。schema 在 `litviz/engine/schemas/semantic-map.schema.json`，
+`checkpoint`。schema 在 `litviz/skills/mqc-litigation-visual-redraw/schemas/semantic-map.schema.json`，
 字段说明在 `references/semantic-map-schema.md`。
 
 **七种布局**：`numbered_point_timeline`（安全默认）/ `dated_point_timeline` /
