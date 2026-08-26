@@ -74,8 +74,8 @@ public class WebTools implements AgentToolComponent {
 
         String apiKey = systemSettingService.get("external.bocha.apiKey", bochaApiKey);
         if (apiKey == null || apiKey.isBlank()) {
-            return "错误：网络搜索未配置：缺少博查（Bocha AI）搜索的 API Key。请管理员在「设置 → 外部服务」中填写博查 API Key"
-                    + "（可在 bochaai.com 申请），保存后重试。本次已跳过网络搜索，请基于已有信息继续完成任务。";
+            return "错误：网络搜索未配置：当前部署未提供博查（Bocha AI）搜索的 API Key"
+                    + "（环境变量 BOCHA_API_KEY，可在 bochaai.com 申请）。本次已跳过网络搜索，请基于已有信息继续完成任务。";
         }
         try {
             // Build request body
@@ -138,10 +138,7 @@ public class WebTools implements AgentToolComponent {
             return formatSearchResults(result.data(), query);
         } catch (com.checkba.service.platform.GatewayException e) {
             log.warn("平台搜索失败 kind={}: {}", e.getKind(), e.getMessage());
-            String hint = e.suggestsByok()
-                    ? "如需继续使用，可在「系统管理 → 平台服务」把网络搜索改为自备 Key。"
-                    : "";
-            return "网络搜索本次不可用：" + e.getMessage() + hint
+            return "网络搜索本次不可用：" + e.getMessage() + e.userHint()
                     + " 本次已跳过网络搜索，请基于已有信息继续完成任务。";
         }
     }

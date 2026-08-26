@@ -86,7 +86,7 @@ public class QichachaService {
         // 都猜不到是没配凭证。
         if (appKey == null || appKey.isBlank() || secretKey == null || secretKey.isBlank()) {
             throw new IllegalStateException(
-                    "企业工商信息查询未配置：缺少企查查凭证（管理页「外部服务」或环境变量 QICHACHA_KEY/QICHACHA_SECRET）。请基于已有信息继续完成任务。");
+                    "企业工商信息查询未配置：当前部署未提供企查查凭证（环境变量 QICHACHA_KEY/QICHACHA_SECRET）。请基于已有信息继续完成任务。");
         }
 
         // 1. 准备请求参数

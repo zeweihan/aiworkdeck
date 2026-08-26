@@ -74,4 +74,21 @@ public class GatewayException extends RuntimeException {
         return kind != Kind.UNAUTHORIZED && kind != Kind.BAD_REQUEST && kind != Kind.MALFORMED
                 && kind != Kind.BUDGET_EXCEEDED;
     }
+
+    /**
+     * 给用户/模型看的「下一步」指引（官方版口径，2026-08-26 dev-board#172）。
+     *
+     * <p>旧提示「在系统管理 → 平台服务改为自备 Key」自 #533 起是死路——官方版界面
+     * 已无任何 BYOK 入口。真正需要用户动手的只有两种失败：余额不足去充值、
+     * 未连接账户去连接；其余（服务未开放/上游故障/网关不可达）都在平台侧，
+     * 提示稍后重试即可，不指一条不存在的路。
+     */
+    public String userHint() {
+        return switch (kind) {
+            case NO_CREDITS -> "账户 Credits 余额不足，请到官网账户页充值后重试。";
+            case NOT_CONNECTED -> "请先在设置中连接 AI WorkDeck 账户。";
+            case SERVICE_DISABLED, UPSTREAM_FAILED, GATEWAY_UNREACHABLE -> "请稍后重试；若持续失败请联系 hi@aiworkdeck.com。";
+            default -> "";
+        };
+    }
 }
