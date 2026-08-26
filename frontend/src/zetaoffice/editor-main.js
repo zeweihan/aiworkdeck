@@ -167,6 +167,29 @@ try {
   }
 } catch (e) { console.error('[zeta-editor] window.open hook failed:', e) }
 
+// (dev-board#171) 拖拽建链：原生拖拽的命中目标是本客体页（Electron 的 guest view
+// 在原生 DnD 命中测试里先于宿主 DOM），宿主的 .libre-evidence-drop 对真实鼠标
+// 拖拽永远收不到 dragover/drop——那条路只有合成事件能走到。本页过去没有任何
+// 拖拽处理，drop 被浏览器默认拒绝：用户把文件拖到画布上松手，什么都不发生。
+// 这里代收：dragover 放行（否则光标一直是「禁止」）、drop 把载荷经 lo-relay
+// 转发给宿主。锚点语义不变——锚点=文档内已选中的文字，与松手位置无关。
+try {
+  document.addEventListener('dragover', (e) => {
+    e.preventDefault()
+    try { if (e.dataTransfer) e.dataTransfer.dropEffect = 'link' } catch (err) { /* ignore */ }
+  }, true)
+  document.addEventListener('drop', (e) => {
+    e.preventDefault()
+    let payload = ''
+    try {
+      const dt = e.dataTransfer
+      payload = dt ? (dt.getData('application/x-checkba-file') || dt.getData('text/checkba-file-json') || '') : ''
+    } catch (err) { payload = '' }
+    try { hostTransport.send({ __lo: 'lo-relay', type: 'evidence-drop', payload }) }
+    catch (err) { console.error('[zeta-editor] evidence-drop relay failed:', err) }
+  }, true)
+} catch (e) { console.error('[zeta-editor] drop hook failed:', e) }
+
 // (autosave) The worker posts one 'modified' per document change (typed / IME /
 // AI command — see installModifyListener in office_thread.js). The host only
 // needs an edge to debounce-save on, so throttle the relay to 1/500ms.

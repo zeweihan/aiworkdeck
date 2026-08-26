@@ -851,6 +851,64 @@ try {
     throw new Error('自动保存未确认(超时)；最后状态=' + JSON.stringify(last))
   })
 
+  // 拖拽建链（dev-board#171）：Electron 原生 DnD 把拖拽路由进 <webview> 客体，
+  // 宿主的 .libre-evidence-drop 对真实鼠标拖拽收不到 drop——修法是客体页
+  //（editor-main.js）代收并经 lo-relay 转发。这一步走的就是那条真 webview 链路：
+  // 选区（真 LOWA）→ 产品级 arming → **打进 webview 客体的 drop**（真 bundle 里的
+  // 代收 handler）→ sendToHost → 宿主建链（书签+超链接真写进引擎）→ POST → 回执条。
+  // 唯一合成的环节是 drop 事件本身（CDP 驱动不了 OS 级拖拽），事件之后的每一环
+  // 都与真实手势完全同路。
+  await step('拖拽建链：webview 客体代收转发全链路', async () => {
+    const src = await api('/api/projects/' + QA.projectId + '/files/file', {
+      method: 'POST',
+      body: { parentId: null, name: '拖拽建链源.txt', fileType: 'txt', fileSize: 8 },
+    })
+    // 真 LOWA 选区：锚定刚插入的标记文本
+    const sel = await page.evaluate(async (finder, marker) => {
+      const ed = eval(finder + '; findEditor()')
+      if (!ed) return { err: 'editor component not found' }
+      const ft = await ed.executor.executeCommand('find_text_locations', { keyword: marker })
+      if (!ft || !ft.matches || !ft.matches.length) return { err: 'find_text_locations 未命中' }
+      return await ed.executor.executeCommand('set_selection', { anchor: ft.matches[0].anchorId })
+    }, FIND_EDITOR, MARKER)
+    if (!sel || sel.success !== true) throw new Error('选区失败: ' + JSON.stringify(sel).slice(0, 150))
+    // 产品级 arming：与 FileTree.handleDragStart 同一副作用（uni 事件 + 全局兜底）
+    await page.evaluate((file) => {
+      document.__checkbaDraggedFile = { fileId: file.id, name: file.name, fileType: file.fileType }
+      uni.$emit('file-drag-start')
+    }, src)
+    await sleep(300)
+    // drop 打进 webview 客体（真实手势的命中目标就是它）；备胎 webview 没有宿主
+    // 订阅者，一并派发无害
+    const guests = browser.targets().filter((t) => t.type() === 'webview')
+    if (!guests.length) throw new Error('找不到 webview target')
+    for (const gt of guests) {
+      const gp = await gt.page()
+      await gp.evaluate(() => {
+        document.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }))
+      }).catch(() => {})
+    }
+    // 回执条 + 后端落库双确认
+    let bar = null
+    for (let i = 0; i < 20; i++) {
+      await sleep(500)
+      bar = await page.evaluate(() => {
+        const el = document.querySelector('.evidence-bar')
+        return el ? { text: (el.innerText || '').slice(0, 120), isError: el.className.includes('is-error') } : null
+      })
+      if (bar) break
+    }
+    await page.evaluate(() => uni.$emit('file-drag-end'))
+    if (!bar) throw new Error('回执条未出现（客体代收转发断了）')
+    if (bar.isError) throw new Error('建链失败回执: ' + bar.text)
+    const files = await api('/api/projects/' + QA.projectId + '/files')
+    const docRow = (Array.isArray(files) ? files : []).find((f) => f.fileType === 'docx')
+    const links = await api('/api/projects/' + QA.projectId + '/evidence-links?docFileId=' + (docRow ? docRow.id : 0))
+    const arr = Array.isArray(links) ? links : (links && links.links) || (links && links.data) || []
+    if (!arr.length) throw new Error('后端无 evidence link 记录；links=' + JSON.stringify(links).slice(0, 200))
+    console.log('    回执=' + bar.text.split('\n')[0] + '；后端链接 ' + arr.length + ' 条')
+  })
+
   await step('API 下载 docx 验证内容落盘', async () => {
     const files = await api('/api/projects/' + QA.projectId + '/files')
     const list = Array.isArray(files) ? files : (files && files.data) || []
