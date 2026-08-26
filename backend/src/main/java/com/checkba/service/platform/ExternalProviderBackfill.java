@@ -42,6 +42,16 @@ public class ExternalProviderBackfill {
     private final ExternalProviderResolver resolver;
 
     /**
+     * 官方桌面版（local-mode）标志。2026-08-26 维护者裁决（dev-board#172）：官方版只有
+     * 「全走平台 Credits」一种形态，不做历史设置的向后兼容——BYOK 的配置入口已随 #533
+     * 从界面整体移除，历史 byok 档位只会让工具拿着旧凭证走死路或报「未配置」。
+     * 因此 local-mode 下：缺行一律补 platform（凭证存在与否不再影响判定），
+     * 已有 byok 行强制归位为 platform；local（本机模型，界面仍提供）是显式选择，保留。
+     * 非 local-mode（团队服务器/云实例）平台档不可用（D5），维持原有保守推断不动。
+     */
+    private final boolean localMode;
+
+    /**
      * 各 BYOK 凭证键的 yml/env 默认值。
      *
      * <p>必须一起看，不能只查 DB：团队服务器常用环境变量注入
@@ -54,6 +64,7 @@ public class ExternalProviderBackfill {
     public ExternalProviderBackfill(
             SystemSettingService systemSettingService,
             ExternalProviderResolver resolver,
+            @Value("${security.local-mode:false}") boolean localMode,
             @Value("${bocha.api.key:}") String bochaKey,
             @Value("${external.aliyun-ocr.access-key-id:}") String ocrAk,
             @Value("${external.aliyun-ocr.access-key-secret:}") String ocrSk,
@@ -66,6 +77,7 @@ public class ExternalProviderBackfill {
             @Value("${external.pkulaw.token:}") String pkulawToken) {
         this.systemSettingService = systemSettingService;
         this.resolver = resolver;
+        this.localMode = localMode;
         injectedDefaults.put("external.bocha.apiKey", bochaKey);
         injectedDefaults.put("external.aliyunOcr.accessKeyId", ocrAk);
         injectedDefaults.put("external.aliyunOcr.accessKeySecret", ocrSk);
@@ -104,10 +116,22 @@ public class ExternalProviderBackfill {
     public int backfill() {
         int written = 0;
         for (ExternalServiceProvider.Descriptor d : ExternalServiceProvider.ALL) {
-            if (resolver.hasExplicitSetting(d.service())) continue;
+            String key = ExternalProviderResolver.providerKey(d.service());
+            if (resolver.hasExplicitSetting(d.service())) {
+                // 官方版归位：byok 行强制改回 platform（见 localMode 字段注释）；
+                // local 行是界面上仍存在的显式选择，不动。
+                ExternalServiceProvider current = ExternalServiceProvider.parse(
+                        systemSettingService.get(key, null), ExternalServiceProvider.PLATFORM);
+                if (localMode && current == ExternalServiceProvider.BYOK) {
+                    systemSettingService.set(key, ExternalServiceProvider.PLATFORM.settingValue());
+                    written++;
+                    log.info("服务 {} 档位由 byok 归位为 platform（官方版无自备 Key 入口）", d.service());
+                }
+                continue;
+            }
 
-            ExternalServiceProvider mode = decide(d);
-            systemSettingService.set(ExternalProviderResolver.providerKey(d.service()), mode.settingValue());
+            ExternalServiceProvider mode = localMode ? ExternalServiceProvider.PLATFORM : decide(d);
+            systemSettingService.set(key, mode.settingValue());
             written++;
             if (mode == ExternalServiceProvider.BYOK) {
                 log.info("服务 {} 已有自备凭证，档位回填为 byok（不切到平台代采）", d.service());

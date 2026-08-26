@@ -66,7 +66,7 @@ public class EnterpriseDataTools implements AgentToolComponent {
         try {
             return qichachaService.queryEciInfoJson(companyName);
         } catch (GatewayException e) {
-            return unavailable("企业工商信息查询", "企业数据", e);
+            return unavailable("企业工商信息查询", e);
         } catch (Exception e) {
             log.warn("企业工商信息查询失败: {}", e.toString());
             // 「错误：」前缀是本仓的失败标记（ToolResult.success 认前缀）——没有它，
@@ -99,7 +99,7 @@ public class EnterpriseDataTools implements AgentToolComponent {
             String json = tushareService.queryJson(apiName, params, fields == null ? "" : fields);
             return StringUtils.hasText(json) ? json : "金融数据接口未返回结果（可能是参数不匹配或该接口无权限）。";
         } catch (GatewayException e) {
-            return unavailable("金融数据查询", "金融数据", e);
+            return unavailable("金融数据查询", e);
         } catch (Exception e) {
             log.warn("金融数据查询失败: {}", e.toString());
             // 同上：失败标记不能少，否则判据听不见
@@ -128,13 +128,10 @@ public class EnterpriseDataTools implements AgentToolComponent {
         }
     }
 
-    /** 网关失败的统一说明文本。带上「改用自己的 Key」这条真出路，但不替用户做决定。 */
-    private String unavailable(String action, String panelName, GatewayException e) {
+    /** 网关失败的统一说明文本。官方版没有自备 Key 入口（#533），只指真实存在的出路。 */
+    private String unavailable(String action, GatewayException e) {
         log.warn("{}走平台通道失败 kind={}: {}", action, e.getKind(), e.getMessage());
-        String hint = e.suggestsByok()
-                ? "如需继续使用，可在「系统管理 → 平台服务」把" + panelName + "改为自备 Key。"
-                : "";
-        return action + "本次不可用：" + e.getMessage() + hint
+        return action + "本次不可用：" + e.getMessage() + e.userHint()
                 + " 本次已跳过该查询，请基于已有信息继续完成任务。";
     }
 }

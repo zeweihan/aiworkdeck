@@ -359,85 +359,28 @@ The `law_*` tools are backed by a **PRC (Mainland China) law database**. They co
 - **CAN call backend tools** via `default_api` object
 - Available libraries: pandas, tushare, requests, matplotlib, hashlib
 
-> **IMPORTANT: External API Best Practice**
-> Before writing Python code to call any external API (Qichacha, Tushare, or others):
-> 1. **FIRST** use `browse_url` to check the official API documentation
-> 2. **THEN** write code following the exact authentication and request format from the docs
->
-> **Official Documentation URLs:**
-> - **Qichacha API** (PRC corporate registry data): https://openapi.qcc.com/dataApi
-> - **Tushare API** (China A-share market data): https://tushare.pro/document/2
->
-> This ensures you use the correct endpoints, authentication methods, and parameters.
+> **IMPORTANT: External data goes through first-class tools, not raw Python**
+> Corporate registry, financial data, and web search all have first-class tools
+> (routed through the official platform channel, billed per call from account Credits).
+> Do **NOT** call external APIs from Python via env vars like `QICHACHA_KEY` /
+> `TUSHARE_TOKEN` — the official edition never injects those credentials into the
+> Python environment, so such scripts read empty values and fail silently.
 
-<!-- zh § "5.1 企查查 API (Qichacha)" (L338-374) -->
-### 5.1 Qichacha API (PRC corporate registry)
-**Scope**: Qichacha covers companies registered in Mainland China ONLY. Use it only when researching Chinese entities; for entities registered elsewhere, use the relevant public registry via `search_web` / `browse_url`.
+### 5.1 Corporate registry (`qichacha_query`)
+- `qichacha_query(companyName)`: look up a PRC company's registration record (name,
+  registered capital, address, shareholders, executives) by full legal name or unified
+  social credit code. Returns JSON.
+- Full legal name or credit code only; for partial names, use `search_web` first to
+  find the exact name.
 
-**Official Docs**: https://openapi.qcc.com/dataApi (use `browse_url` to check specific API details)
+### 5.2 Financial data (`tushare_query`)
+- `tushare_query(apiName, paramsJson, fields)`: Tushare Pro interfaces (e.g.
+  `stock_basic`, `top10_holders`).
+- When unsure about interface names/params, check https://tushare.pro/document/2 via
+  `browse_url` first.
+- For analysis, pass the returned JSON into `run_python` (data flows via parameters,
+  not env vars).
 
-**Environment Variables:**
-- `QICHACHA_KEY`: API Key
-- `QICHACHA_SECRET`: API Secret
-
-**CRITICAL Authentication (MUST follow this exact pattern):**
-```python
-import os, time, hashlib, requests
-
-key = os.environ.get('QICHACHA_KEY')
-secret = os.environ.get('QICHACHA_SECRET')
-base_url = "https://api.qichacha.com"
-
-# 1. Generate authentication headers
-timespan = str(int(time.time()))
-token = hashlib.md5((key + timespan + secret).encode()).hexdigest().upper()
-
-# 2. Make request with proper headers
-url = f"{base_url}/ECIInfoVerify/GetInfo"  # company registration details endpoint
-response = requests.get(
-    url,
-    params={"key": key, "searchKey": "<registered Chinese company name>"},
-    headers={"Token": token, "Timespan": timespan},
-    timeout=30
-)
-data = response.json()
-if data.get("Status") == "200":
-    result = data.get("Result", {})
-    print(f"Company name: {result.get('Name')}")
-    # Partners = shareholder list
-    for p in result.get("Partners", []):
-        print(f"Shareholder: {p.get('StockName')}, stake: {p.get('StockPercent')}")
-else:
-    print(f"Lookup failed: {data.get('Message')}")
-```
-
-<!-- zh § "5.2 Tushare API (股票数据)" (L376-397) -->
-### 5.2 Tushare API (China A-share market data)
-**Scope**: Tushare covers Chinese listed-company data. Use it only for China-listed securities.
-
-**Official Docs**: https://tushare.pro/document/2 (use `browse_url` to check specific API details)
-
-**Environment Variables:**
-- `TUSHARE_TOKEN`: Tushare Pro Token
-
-**Usage:**
-```python
-import os
-import tushare as ts
-
-ts.set_token(os.environ.get('TUSHARE_TOKEN'))
-pro = ts.pro_api()
-
-# Basic information on listed companies
-df = pro.stock_basic(list_status='L', fields='ts_code,name,fullname')
-print(df[df['name'].str.contains('<company name>')])
-
-# Top-10 shareholders
-df = pro.top10_holders(ts_code='600519.SH')
-print(df.head(10))
-```
-
-<!-- zh § "5.3 Backend Tools via default_api" (L399-422) -->
 ### 5.3 Backend Tools via default_api
 **Available API methods in Python:**
 ```python

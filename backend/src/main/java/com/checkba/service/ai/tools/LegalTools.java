@@ -189,10 +189,7 @@ public class LegalTools implements AgentToolComponent {
             return McpResponseParser.parse(result.data().path("raw").asText(""));
         } catch (com.checkba.service.platform.GatewayException e) {
             log.warn("平台法规检索失败 kind={}: {}", e.getKind(), e.getMessage());
-            String hint = e.suggestsByok()
-                    ? "如需继续使用，可在「系统管理 → 平台服务」把法规检索改为自备 Key。"
-                    : "";
-            return "法规检索本次不可用：" + e.getMessage() + hint
+            return "法规检索本次不可用：" + e.getMessage() + e.userHint()
                     + " 本次已跳过法规检索，请基于已有信息继续完成任务。";
         }
     }

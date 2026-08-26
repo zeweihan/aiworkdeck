@@ -324,77 +324,19 @@ If you lack critical details, **STOP and ASK** using the `<question>` tag. Do NO
 - **CAN call backend tools** via `default_api` object
 - Available libraries: pandas, tushare, requests, matplotlib, hashlib
 
-> **IMPORTANT: External API Best Practice**
-> Before writing Python code to call any external API (Qichacha, Tushare, or others):
-> 1. **FIRST** use `browse_url` to check the official API documentation
-> 2. **THEN** write code following the exact authentication and request format from the docs
-> 
-> **Official Documentation URLs:**
-> - **企查查 API**: https://openapi.qcc.com/dataApi
-> - **Tushare API**: https://tushare.pro/document/2
-> 
-> This ensures you use the correct endpoints, authentication methods, and parameters.
+> **IMPORTANT: External data goes through first-class tools, not raw Python**
+> 企业工商信息、金融数据、网络搜索都有一等工具（走官方平台通道、按次从账户 Credits 扣费）。
+> **不要**在 Python 里用 `QICHACHA_KEY` / `TUSHARE_TOKEN` 等环境变量直调外部 API——
+> 官方版不向 Python 环境注入这些凭证，脚本只会拿到空值并静默失败。
 
-### 5.1 企查查 API (Qichacha)
-**Official Docs**: https://openapi.qcc.com/dataApi (use `browse_url` to check specific API details)
+### 5.1 企业工商信息 (`qichacha_query`)
+- `qichacha_query(companyName)`：按公司全称或统一社会信用代码查工商登记（名称/注册资本/地址/股东/高管），返回 JSON。
+- 只认完整全称或信用代码；简称/关键词查不到时，先用 `search_web` 找全称再查。
 
-**Environment Variables:**
-- `QICHACHA_KEY`: API Key
-- `QICHACHA_SECRET`: API Secret
-
-**CRITICAL Authentication (MUST follow this exact pattern):**
-```python
-import os, time, hashlib, requests
-
-key = os.environ.get('QICHACHA_KEY')
-secret = os.environ.get('QICHACHA_SECRET')
-base_url = "https://api.qichacha.com"
-
-# 1. Generate authentication headers
-timespan = str(int(time.time()))
-token = hashlib.md5((key + timespan + secret).encode()).hexdigest().upper()
-
-# 2. Make request with proper headers
-url = f"{base_url}/ECIInfoVerify/GetInfo"  # 企业工商详情接口
-response = requests.get(
-    url,
-    params={"key": key, "searchKey": "北京京微资易科技有限公司"},
-    headers={"Token": token, "Timespan": timespan},
-    timeout=30
-)
-data = response.json()
-if data.get("Status") == "200":
-    result = data.get("Result", {})
-    print(f"公司名称: {result.get('Name')}")
-    # Partners = 股东列表
-    for p in result.get("Partners", []):
-        print(f"股东: {p.get('StockName')}, 比例: {p.get('StockPercent')}")
-else:
-    print(f"查询失败: {data.get('Message')}")
-```
-
-### 5.2 Tushare API (股票数据)
-**Official Docs**: https://tushare.pro/document/2 (use `browse_url` to check specific API details)
-
-**Environment Variables:**
-- `TUSHARE_TOKEN`: Tushare Pro Token
-
-**Usage:**
-```python
-import os
-import tushare as ts
-
-ts.set_token(os.environ.get('TUSHARE_TOKEN'))
-pro = ts.pro_api()
-
-# 获取上市公司基本信息
-df = pro.stock_basic(list_status='L', fields='ts_code,name,fullname')
-print(df[df['name'].str.contains('贵州茅台')])
-
-# 获取前十大股东
-df = pro.top10_holders(ts_code='600519.SH')
-print(df.head(10))
-```
+### 5.2 金融数据 (`tushare_query`)
+- `tushare_query(apiName, paramsJson, fields)`：Tushare Pro 接口（如 `stock_basic`、`top10_holders`）。
+- 接口名与参数不确定时，先用 `browse_url` 查 https://tushare.pro/document/2 再调用。
+- 拿到数据后如需分析，把工具返回的 JSON 交给 `run_python` 处理（数据经参数传入，不依赖环境变量）。
 
 ### 5.3 Backend Tools via default_api
 **Available API methods in Python:**

@@ -280,7 +280,10 @@ export default {
   },
   async mounted() {
     this._onEvidenceDragStart = () => { this.evidenceDropArmed = true }
-    this._onEvidenceDragEnd = () => { this.evidenceDropArmed = false; this.evidenceDropOver = false }
+    // _dragEndedAt：客体代收的 drop 经 IPC 转发到达时，dragend 往往已经先一步把
+    // armed 翻回 false（drop 与 dragend 之间只差几百毫秒，IPC 又要过一跳）。
+    // 记下拖拽结束时刻，给转发的 drop 留一个宽限窗（见 onGuestEvidenceDrop）。
+    this._onEvidenceDragEnd = () => { this.evidenceDropArmed = false; this.evidenceDropOver = false; this._dragEndedAt = Date.now() }
     uni.$on('file-drag-start', this._onEvidenceDragStart)
     uni.$on('file-drag-end', this._onEvidenceDragEnd)
     try {
@@ -361,6 +364,19 @@ export default {
       const id = file.id != null ? file.id : file.fileId
       if (!id) return
       this.$emit('evidence-drop', { file: { ...file, id } })
+    },
+    // 客体（webview/iframe 内页）代收的 drop 从 lo-relay 转发到这里（dev-board#171）：
+    // Electron 的原生 DnD 命中测试把拖拽路由进 guest 的 WebContents，宿主 DOM 的
+    // .libre-evidence-drop 对真实鼠标拖拽永远收不到 drop——那条 overlay 路径只有
+    // 合成事件（单测/e2e dispatchEvent）能走到。两条入口共用 onEvidenceDrop 下游。
+    onGuestEvidenceDrop(payload) {
+      // 只认「产品内文件拖拽」：进行中（armed），或刚结束不到 2 秒（drop 的 IPC
+      // 转发常晚于 dragend 到达）。其余一律忽略——用户从系统里拖文件进来不该
+      // 借道全局兜底建出链接。
+      const recentlyEnded = Date.now() - (this._dragEndedAt || 0) < 2000
+      if (!this.evidenceDropArmed && !recentlyEnded) return
+      const raw = payload ? String(payload) : ''
+      this.onEvidenceDrop({ dataTransfer: { getData: (type) => (type === 'application/x-checkba-file' ? raw : '') } })
     },
     // ---- EvidenceLink：消费 pendingLocator（docx：书签优先，其次 quote 查找）----
     async consumeLocator() {
@@ -571,6 +587,8 @@ export default {
         } else if (msg.type === 'selection') {
           // 光标/选区动了：工具栏重读激活态。不标脏——移动光标不是修改文档。
           if (this.ready) this.uiRefreshKey++
+        } else if (msg.type === 'evidence-drop') {
+          this.onGuestEvidenceDrop(msg.payload)
         } else if (msg.type === 'boot-log') {
           this.onBootLog(String(msg.msg || ''))
         }
