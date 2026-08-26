@@ -203,6 +203,39 @@ export async function postDictate({ serverUrl, token }, { audioBase64, format, d
 }
 
 /**
+ * 当前登录用户信息（GET /api/auth/me，dev-board#176 头像）。
+ * 返回 {id, username, displayName, avatarUrl, ...}；未登录/失败一律 null 静默降级——
+ * 头像取不到就显示首字母，不该打断使用。
+ */
+export async function fetchMe({ serverUrl, token }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base || !token) return null
+  try {
+    const resp = await fetch(`${base}/api/auth/me`, { headers: headers(token) })
+    if (!resp.ok) return null
+    const data = await resp.json()
+    if (data && data.code === 0 && data.data) return data.data
+  } catch (e) {
+    // 静默降级
+  }
+  return null
+}
+
+/**
+ * 退出登录（POST /api/auth/logout，尽力而为）。设备令牌的本地清除才是真正的退出，
+ * 服务端调用失败不阻塞也不报错。
+ */
+export async function postLogout({ serverUrl, token }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base || !token) return
+  try {
+    await fetch(`${base}/api/auth/logout`, { method: 'POST', headers: headers(token) })
+  } catch (e) {
+    // 尽力而为
+  }
+}
+
+/**
  * 拉某个会话的历史消息（GET /api/ai/history?conversationId=...）。
  * 任务窗格重建后据此把上一场对话回灌到界面。
  * 403/404/网络失败一律返回空数组静默降级——历史拿不到不该打断用户开新的对话。

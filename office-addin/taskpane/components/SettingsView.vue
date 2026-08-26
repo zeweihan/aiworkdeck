@@ -371,7 +371,8 @@ function save() {
 .card {
   background: var(--awd-surface);
   border: 1px solid var(--awd-border);
-  border-radius: 6px;
+  border-radius: var(--awd-radius-md);
+  box-shadow: var(--awd-shadow-soft);
   padding: 14px;
 }
 
@@ -488,14 +489,16 @@ input, textarea {
   width: 100%;
   padding: 7px 9px;
   border: 1px solid var(--awd-border);
-  border-radius: 4px;
+  border-radius: var(--awd-radius-sm);
   background: var(--awd-surface);
   resize: vertical;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 input:focus, textarea:focus {
   outline: none;
-  border-color: var(--awd-primary);
+  border-color: var(--awd-accent);
+  box-shadow: 0 0 0 3px rgba(91, 209, 151, 0.18);
 }
 
 .actions {
@@ -505,9 +508,12 @@ input:focus, textarea:focus {
 
 .btn {
   padding: 6px 14px;
-  border-radius: 4px;
+  border-radius: var(--awd-radius-sm);
   border: 1px solid var(--awd-border);
+  transition: background 0.2s ease, transform 0.1s ease;
 }
+
+.btn:active { transform: translateY(1px); }
 
 .btn.primary {
   background: var(--awd-primary);
@@ -529,7 +535,7 @@ input:focus, textarea:focus {
   font-size: 12px;
 }
 
-.status.ok { color: #1d7a3e; }
+.status.ok { color: var(--awd-accent); }
 .status.error { color: var(--awd-danger); }
 .status.warn { color: var(--awd-text-secondary); }
 </style>

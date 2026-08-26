@@ -5,11 +5,12 @@
         <p>{{ t('emptyHint') }}</p>
         <p v-if="!configured" class="empty-warn">{{ t('connectionNotReady') }}</p>
         <p v-else-if="!projectId" class="empty-warn">{{ t('noProjectSelected') }}</p>
-        <div v-else class="quick-prompts">
+        <div v-else ref="quickPromptsEl" class="quick-prompts">
           <button v-for="q in quickPrompts" :key="q.label" class="quick-btn" @click="sendQuick(q.text)">{{ q.label }}</button>
         </div>
       </div>
 
+      <TransitionGroup :css="false" @enter="onMessageEnter" @leave="onMessageLeave">
       <div v-for="(msg, i) in messages" :key="i" class="message" :class="msg.role">
         <template v-if="msg.role === 'user'">
           <div class="bubble user-bubble">{{ msg.text }}</div>
@@ -85,11 +86,12 @@
           <div v-if="msg.error" class="msg-error">{{ msg.error }}</div>
         </template>
       </div>
+      </TransitionGroup>
     </div>
 
     <!-- 历史会话面板：窄窗格用覆盖层而不是常驻侧栏 -->
     <div v-if="historyOpen" class="overlay" @click.self="historyOpen = false">
-      <div class="panel">
+      <div ref="historyPanelEl" class="panel glass">
         <div class="panel-head">
           <span>{{ t('historyTitle') }}</span>
           <button class="panel-close" @click="historyOpen = false">x</button>
@@ -130,7 +132,7 @@
 
     <!-- 技能面板：勾选的 skillIds 随每条消息上送（后端与触发词并集激活） -->
     <div v-if="skillsOpen" class="overlay" @click.self="skillsOpen = false">
-      <div class="panel">
+      <div ref="skillsPanelEl" class="panel glass">
         <div class="panel-head">
           <span>{{ t('skillsTitle') }}</span>
           <button class="panel-close" @click="skillsOpen = false">x</button>
@@ -150,7 +152,7 @@
 
     <!-- 附件面板：项目文件作为额外上下文（contextItems，后端按 fileId 读内容） -->
     <div v-if="attachOpen" class="overlay" @click.self="attachOpen = false">
-      <div class="panel">
+      <div ref="attachPanelEl" class="panel glass">
         <div class="panel-head">
           <span>{{ t('attachFilesTitle') }}</span>
           <button class="panel-close" @click="attachOpen = false">x</button>
@@ -168,9 +170,55 @@
       </div>
     </div>
 
-    <footer class="composer">
-      <!-- 上下文与能力一排 pill：取代「随消息附带当前文档正文」检查框——
-           勾不勾的真实差别（附不附全文）用文档名 pill 的实/虚态表达（dev-board#150） -->
+    <footer class="composer glass">
+      <!-- 更多菜单（dev-board#176 多层菜单）：低频操作收进两级菜单，底部只留高频项。
+           点击捕获层盖住菜单以外的区域，点空白即收起 -->
+      <div v-if="moreOpen" class="click-catcher" @click="closeMore"></div>
+      <div v-if="moreOpen" ref="morePanelEl" class="menu-panel glass">
+        <template v-if="moreLevel === 'root'">
+          <button class="menu-row" @click="fromMore(openAttach)">
+            <span class="row-label">{{ t('menuAttach') }}</span>
+            <span v-if="attachedFiles.length" class="row-badge">{{ attachedFiles.length }}</span>
+            <span class="row-chevron">›</span>
+          </button>
+          <button v-if="skillList.length" class="menu-row" @click="fromMore(() => { skillsOpen = true })">
+            <span class="row-label">{{ t('menuSkills') }}</span>
+            <span v-if="selectedSkillIds.length" class="row-badge">{{ selectedSkillIds.length }}</span>
+            <span class="row-chevron">›</span>
+          </button>
+          <button v-if="modelCatalog && modelCatalog.models.length" class="menu-row" @click="moreLevel = 'model'">
+            <span class="row-label">{{ t('menuModel') }}</span>
+            <span class="row-meta">{{ currentModelName }}</span>
+            <span class="row-chevron">›</span>
+          </button>
+          <button class="menu-row" @click="fromMore(openHistory)">
+            <span class="row-label">{{ t('menuHistory') }}</span>
+            <span class="row-chevron">›</span>
+          </button>
+        </template>
+        <template v-else>
+          <!-- 第二级：模型选择 -->
+          <button class="menu-row back-row" @click="moreLevel = 'root'">
+            <span class="row-chevron back">‹</span>
+            <span class="row-label">{{ t('menuModel') }}</span>
+          </button>
+          <button class="menu-row" @click="pickModel('')">
+            <span class="row-label">{{ t('defaultModelOption') }}</span>
+            <span v-if="!selectedModel" class="row-check">✓</span>
+          </button>
+          <button
+            v-for="m in modelCatalog.models"
+            :key="m.id"
+            class="menu-row"
+            @click="pickModel(m.id)"
+          >
+            <span class="row-label">{{ m.name }}</span>
+            <span v-if="selectedModel === m.id" class="row-check">✓</span>
+          </button>
+        </template>
+      </div>
+
+      <!-- 高频三件常驻：文档 pill / 更多菜单 / 新对话；其余收进「更多」两级菜单 -->
       <div class="context-row">
         <button
           class="pill doc-pill"
@@ -179,30 +227,12 @@
           @click="includeDocument = !includeDocument"
         >{{ docLabel }}</button>
         <button
-          class="pill"
-          :class="{ active: attachedFiles.length }"
-          :title="t('attachPillTitle')"
-          @click="openAttach"
-        >{{ t('attachButton') }}<template v-if="attachedFiles.length"> {{ attachedFiles.length }}</template></button>
-        <button
-          v-if="skillList.length"
-          class="pill"
-          :class="{ active: selectedSkillIds.length }"
-          :title="t('skillsPillTitle')"
-          @click="skillsOpen = true"
-        >{{ t('skillsButton') }}<template v-if="selectedSkillIds.length"> {{ selectedSkillIds.length }}</template></button>
-        <select
-          v-if="modelCatalog && modelCatalog.models.length"
-          class="model-select"
-          :value="selectedModel"
-          :title="t('modelSelectTitle')"
-          @change="chooseModel($event.target.value)"
-        >
-          <option value="">{{ t('defaultModelOption') }}</option>
-          <option v-for="m in modelCatalog.models" :key="m.id" :value="m.id">{{ m.name }}</option>
-        </select>
+          class="pill more-pill"
+          :class="{ active: moreOpen || attachedFiles.length || selectedSkillIds.length || selectedModel }"
+          :title="t('moreMenuTitle')"
+          @click="moreOpen ? closeMore() : openMore()"
+        >+</button>
         <span class="context-spacer"></span>
-        <button class="pill" :title="t('historyPillTitle')" @click="openHistory">{{ t('historyButton') }}</button>
         <button class="pill" :title="t('newConversationTitle')" :disabled="streaming" @click="newConversation">{{ t('newConversationButton') }}</button>
       </div>
       <div class="input-row">
@@ -239,7 +269,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch, TransitionGroup } from 'vue'
 import {
   messages, input, streaming, reconnecting, banner, notice, includeDocument, scrollSignal,
   activateSession, send as sendMessage, stop as stopRun, newConversation,
@@ -252,6 +282,7 @@ import { locateInDocument } from '../lib/officeExecutor.js'
 import { micSupported, startRecording, MAX_RECORD_MS } from '../lib/wavRecorder.js'
 import { postDictate } from '../lib/api.js'
 import { t } from '../lib/i18n.js'
+import { riseIn, panelUp, popIn, staggerIn } from '../lib/motion.js'
 
 /**
  * 纯渲染与交互层：会话态、SSE 连接与 office_command 执行链都在 lib/chatSession.js。
@@ -305,7 +336,64 @@ const conversations = ref([])
 const skillsOpen = ref(false)
 const docMeta = ref(null)
 
+// 更多菜单（两级）：root=功能清单，model=模型选择二级页
+const moreOpen = ref(false)
+const moreLevel = ref('root')
+const morePanelEl = ref(null)
+const historyPanelEl = ref(null)
+const skillsPanelEl = ref(null)
+const attachPanelEl = ref(null)
+const quickPromptsEl = ref(null)
+
 onMounted(() => { docMeta.value = readDocumentMeta() })
+
+// ==================== 动效（有动机才动，reduced-motion 自动退化） ====================
+
+function onMessageEnter(el) {
+  riseIn(el)
+}
+
+function onMessageLeave(el, done) {
+  done() // 移除（新对话清屏）不做退场动画，即时反馈
+}
+
+// 覆盖层面板浮现：v-if 挂载后下一帧做升起动画
+watch(historyOpen, (open) => { if (open) nextTick(() => panelUp(historyPanelEl.value)) })
+watch(skillsOpen, (open) => { if (open) nextTick(() => panelUp(skillsPanelEl.value)) })
+
+// 空态快捷入口逐个浮现（只在出现时动一次）
+watch(quickPromptsEl, (el) => {
+  if (el) staggerIn(el.querySelectorAll('.quick-btn'))
+})
+
+// ==================== 更多菜单 ====================
+
+const currentModelName = computed(() => {
+  if (!selectedModel.value || !modelCatalog.value) return t('defaultModelOption')
+  const hit = modelCatalog.value.models.find((m) => m.id === selectedModel.value)
+  return hit ? hit.name : t('defaultModelOption')
+})
+
+function openMore() {
+  moreLevel.value = 'root'
+  moreOpen.value = true
+  nextTick(() => popIn(morePanelEl.value))
+}
+
+function closeMore() {
+  moreOpen.value = false
+}
+
+/** 一级菜单项：关掉菜单再打开对应面板 */
+function fromMore(action) {
+  closeMore()
+  action()
+}
+
+function pickModel(id) {
+  chooseModel(id)
+  closeMore()
+}
 
 const docLabel = computed(() => {
   const name = docMeta.value && docMeta.value.name ? docMeta.value.name : t('currentDocument')
@@ -412,6 +500,8 @@ const projectFiles = ref([])
 const renamingId = ref('')
 const renameDraft = ref('')
 const deletingId = ref('')
+
+watch(attachOpen, (open) => { if (open) nextTick(() => panelUp(attachPanelEl.value)) })
 
 async function openAttach() {
   attachOpen.value = true
@@ -539,12 +629,15 @@ async function confirmDelete(c) {
 
 .user-bubble {
   background: var(--awd-user-bubble);
-  border: 1px solid var(--awd-border);
+  border: 1px solid rgba(45, 122, 82, 0.18);
+  border-radius: 10px 10px 3px 10px;
 }
 
 .assistant-bubble {
   background: var(--awd-surface);
   border: 1px solid var(--awd-border);
+  border-radius: 10px 10px 10px 3px;
+  box-shadow: var(--awd-shadow-soft);
 }
 
 .tool-chips {
@@ -656,16 +749,25 @@ async function confirmDelete(c) {
 }
 
 .quick-btn {
-  padding: 5px 14px;
+  padding: 6px 16px;
   border-radius: 999px;
   border: 1px solid var(--awd-border);
   background: var(--awd-surface);
   color: var(--awd-text);
   font-size: 12px;
   cursor: pointer;
+  box-shadow: var(--awd-shadow-soft);
+  transition: border-color 0.2s ease, color 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease;
 }
 
-.quick-btn:hover { border-color: var(--awd-primary); color: var(--awd-primary); }
+.quick-btn:hover {
+  border-color: var(--awd-accent);
+  color: var(--awd-primary);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(26, 83, 54, 0.12);
+}
+
+.quick-btn:active { transform: translateY(0); }
 
 .thinking {
   margin-bottom: 6px;
@@ -737,9 +839,11 @@ async function confirmDelete(c) {
 
 @keyframes blink { 50% { opacity: 0; } }
 
+/* 不给 composer 设 z-index：历史/技能/附件 overlay（z-20）要能盖住它；
+   更多菜单的捕获层/面板自带更高层级（24/26），不依赖 composer 的层叠上下文 */
 .composer {
-  border-top: 1px solid var(--awd-border);
-  background: var(--awd-surface);
+  position: relative;
+  border-top: 1px solid rgba(26, 83, 54, 0.10);
   padding: 8px 12px 10px;
   flex-shrink: 0;
 }
@@ -784,14 +888,105 @@ async function confirmDelete(c) {
   color: var(--awd-text-secondary);
 }
 
-.model-select {
-  max-width: 40%;
-  padding: 2px 4px;
-  border: 1px solid var(--awd-border);
-  border-radius: 999px;
-  background: var(--awd-surface);
+/* 「更多」pill：加号入口，命中态（菜单开着/有已选项）用品牌绿 */
+.more-pill {
+  min-width: 26px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+/* 点击捕获层：盖住菜单以外的区域（composer 自身是 stacking context，fixed 仍覆盖全窗） */
+.click-catcher {
+  position: fixed;
+  inset: 0;
+  z-index: 24;
+  background: rgba(14, 33, 23, 0.14);
+}
+
+/* 更多菜单面板：毛玻璃浮层，锚在 composer 正上方 */
+.menu-panel {
+  position: absolute;
+  bottom: 100%;
+  left: 10px;
+  margin-bottom: 6px;
+  width: 230px;
+  max-height: 300px;
+  overflow-y: auto;
+  z-index: 26;
+  border: 1px solid rgba(26, 83, 54, 0.12);
+  border-radius: var(--awd-radius-md);
+  box-shadow: var(--awd-shadow-float);
+  padding: 6px;
+}
+
+.menu-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 9px;
+  border: none;
+  border-radius: var(--awd-radius-sm);
+  background: none;
+  color: var(--awd-text);
+  font-size: 12px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.menu-row:hover {
+  background: var(--awd-mint-pale);
+  color: var(--awd-primary);
+}
+
+.back-row {
+  border-bottom: 1px solid var(--awd-border);
+  border-radius: var(--awd-radius-sm) var(--awd-radius-sm) 0 0;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+.row-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.back-row .row-label { flex: none; }
+
+.row-meta {
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--awd-text-secondary);
   font-size: 11px;
+}
+
+.row-badge {
+  min-width: 16px;
+  text-align: center;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--awd-accent);
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.row-chevron {
+  color: var(--awd-border-strong);
+  font-size: 13px;
+}
+
+.row-chevron.back { color: var(--awd-accent); }
+
+.row-check {
+  color: var(--awd-accent);
+  font-weight: 700;
 }
 
 .input-row {
@@ -800,11 +995,11 @@ async function confirmDelete(c) {
   align-items: stretch;
 }
 
-/* 覆盖层面板（历史/技能）：窄窗格从底部铺开 */
+/* 覆盖层面板（历史/技能/附件）：窄窗格从底部铺开，遮罩染品牌绿灰调 */
 .overlay {
   position: absolute;
   inset: 0;
-  background: rgba(15, 23, 42, 0.28);
+  background: rgba(14, 33, 23, 0.24);
   display: flex;
   align-items: flex-end;
   z-index: 20;
@@ -814,9 +1009,9 @@ async function confirmDelete(c) {
   width: 100%;
   max-height: 65%;
   overflow-y: auto;
-  background: var(--awd-surface);
-  border-top: 1px solid var(--awd-border);
-  border-radius: 10px 10px 0 0;
+  border-top: 1px solid rgba(26, 83, 54, 0.12);
+  border-radius: var(--awd-radius-md) var(--awd-radius-md) 0 0;
+  box-shadow: 0 -8px 32px rgba(18, 58, 38, 0.14);
   padding: 8px 10px 12px;
 }
 
@@ -925,13 +1120,16 @@ textarea {
   flex: 1;
   padding: 7px 9px;
   border: 1px solid var(--awd-border);
-  border-radius: 4px;
+  border-radius: var(--awd-radius-sm);
+  background: var(--awd-surface);
   resize: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 textarea:focus {
   outline: none;
-  border-color: var(--awd-primary);
+  border-color: var(--awd-accent);
+  box-shadow: 0 0 0 3px rgba(91, 209, 151, 0.18);
 }
 
 .btn-col {
@@ -943,11 +1141,14 @@ textarea:focus {
 
 .btn {
   padding: 5px 12px;
-  border-radius: 4px;
+  border-radius: var(--awd-radius-sm);
   border: 1px solid var(--awd-border);
   background: var(--awd-surface);
   white-space: nowrap;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease, transform 0.1s ease;
 }
+
+.btn:active { transform: translateY(1px); }
 
 .btn.send {
   background: var(--awd-primary);

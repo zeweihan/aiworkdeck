@@ -1,14 +1,42 @@
-/* AI WorkDeck Office 插件——浅色、克制、专业 */
+/*
+ * AI WorkDeck Office 插件——浅色、克制、专业。
+ * 配色对齐品牌令牌（frontend/src/uni.scss 的 $awd-* 与官网 DESIGN.md）：
+ * 森林绿 #1A5336 为主、mint #5BD197 只做点缀（白底上用 #2D7A52 保对比度），
+ * 中性色走暖白 ivory 系（禁蓝灰冷调）。外壳保持浅色是维护者定的红线。
+ */
 :root {
-  --awd-bg: #f7f8fa;
-  --awd-surface: #ffffff;
-  --awd-border: #e2e6ec;
-  --awd-text: #1f2733;
-  --awd-text-secondary: #6b7686;
-  --awd-primary: #1f3a5f;
-  --awd-primary-hover: #2c4f7c;
-  --awd-danger: #b4232c;
-  --awd-user-bubble: #eef2f8;
+  /* 暖白中性阶 */
+  --awd-bg: #FAF8F4;            /* ivory */
+  --awd-surface: #FFFFFF;
+  --awd-bone: #F1ECE3;
+  --awd-border: #E7E1D5;        /* stone 调淡 */
+  --awd-border-strong: #C5BBA8; /* stone-md */
+  --awd-text: #2B2C30;          /* charcoal */
+  --awd-text-secondary: #6B6E73;/* slate */
+
+  /* 品牌绿 */
+  --awd-primary: #1A5336;       /* forest */
+  --awd-primary-hover: #123A26; /* forest-dark */
+  --awd-accent: #2D7A52;        /* mint-deep：白底上的可交互绿 */
+  --awd-mint: #5BD197;          /* 点缀专用，不做大面积底色 */
+  --awd-mint-pale: #E6F9F0;
+  --awd-user-bubble: #EAF4EE;   /* 用户气泡：极浅森林绿 */
+
+  --awd-danger: #A03B2C;        /* brick */
+
+  /* 毛玻璃表面（@supports 不支持时回落纯色） */
+  --awd-glass: rgba(255, 255, 255, 0.72);
+  --awd-glass-strong: rgba(255, 255, 255, 0.86);
+
+  /* 形状体系：卡片/面板 10px、控件 6px、pill 全圆——三档，全局一致 */
+  --awd-radius-sm: 6px;
+  --awd-radius-md: 10px;
+
+  /* 阴影染绿灰调，不用纯黑 */
+  --awd-shadow-soft: 0 2px 10px rgba(26, 83, 54, 0.06);
+  --awd-shadow-float: 0 8px 32px rgba(18, 58, 38, 0.16);
+
+  --awd-font-mono: 'JetBrains Mono', 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Courier New', monospace;
 }
 
 * { box-sizing: border-box; }
@@ -17,11 +45,17 @@ html, body {
   margin: 0;
   padding: 0;
   height: 100%;
-  background: var(--awd-bg);
+  /* 暖白底上铺一层极淡的 mint 光晕，给毛玻璃层可感知的景深 */
+  background:
+    radial-gradient(680px 340px at 85% -60px, rgba(91, 209, 151, 0.10), transparent 68%),
+    radial-gradient(520px 300px at -80px 30%, rgba(26, 83, 54, 0.05), transparent 60%),
+    var(--awd-bg);
+  background-attachment: fixed;
   color: var(--awd-text);
-  font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", -apple-system, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   font-size: 13px;
   line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
 }
 
 #app { height: 100%; }
@@ -36,4 +70,31 @@ input, textarea, select {
   font-family: inherit;
   font-size: 13px;
   color: var(--awd-text);
+}
+
+/* 毛玻璃工具类：webview 不支持 backdrop-filter 时回落到高不透明纯色 */
+.glass {
+  background: var(--awd-glass-strong);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass {
+    background: var(--awd-glass);
+    -webkit-backdrop-filter: blur(14px) saturate(1.5);
+    backdrop-filter: blur(14px) saturate(1.5);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .glass {
+    background: var(--awd-glass-strong);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* 键盘可达性：全局统一 focus 环（品牌绿） */
+:focus-visible {
+  outline: 2px solid var(--awd-accent);
+  outline-offset: 1px;
 }

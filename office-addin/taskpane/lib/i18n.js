@@ -1,15 +1,31 @@
 /**
  * 极简中英双语字典（dev-board#150）。
  *
- * 语言判定只在模块加载时算一次：优先 Office.context.displayLanguage（Office 未就绪
- * 时 try/catch 吞掉），退回 navigator.language；'zh' 开头判中文，否则英文。
- * Office 的显示语言中途变了要重开任务窗格才生效——这是合理的降级，插件本来就是
- * 每次重开都会重新执行本模块。
+ * 语言判定：用户手动选择（localStorage 覆盖，dev-board#177）优先，其次
+ * Office.context.displayLanguage（Office 未就绪时 try/catch 吞掉），退回
+ * navigator.language；'zh' 开头判中文，否则英文。
+ * setLang() 可在运行时切换——字典查询走可变的 activeLang，界面由 App.vue 的
+ * :key 重挂载让所有 t() 重新求值（officeExecutor 的 chip 名随模块加载定死一次，
+ * 重开任务窗格才换，与 Office 显示语言变更的降级口径一致）。
  *
  * key 一律平铺，不分命名空间；带插值的串用 {name} 占位，t(key, {name: 'x'}) 替换。
  */
 
+export const LANG_STORAGE_KEY = 'awd_addin_lang'
+
+function storedLang() {
+  try {
+    const v = localStorage.getItem(LANG_STORAGE_KEY)
+    if (v === 'zh' || v === 'en') return v
+  } catch (e) {
+    // 存储不可用：走自动判定
+  }
+  return ''
+}
+
 function detectLang() {
+  const stored = storedLang()
+  if (stored) return stored
   try {
     if (typeof Office !== 'undefined' && Office.context && Office.context.displayLanguage) {
       if (String(Office.context.displayLanguage).toLowerCase().startsWith('zh')) return 'zh'
@@ -42,10 +58,22 @@ export const ZH = {
   settings: '设置',
   backToChat: '返回对话',
   back: '返回',
+  login: '登录',
+  logout: '退出登录',
+  accountTitle: '账户',
+  languageLabel: '界面语言',
+  langZh: '中文',
+  langEn: 'English',
+  connectionSettings: '连接与高级设置',
+  moreMenuTitle: '更多操作',
+  menuAttach: '附加项目文件',
+  menuSkills: '技能',
+  menuModel: '模型',
+  menuHistory: '历史对话',
 
   // ---- ChatView.vue：空态 ----
   emptyHint: '与 AI 讨论当前文档或项目事务。',
-  connectionNotReady: '连接未就绪：点击右上角「设置」填入官网 API Key。',
+  connectionNotReady: '尚未登录：点击右上角「登录」连接账户。',
   noProjectSelected: '尚未选择项目：在顶部下拉中选一个项目。',
 
   // ---- ChatView.vue：快捷入口 ----
@@ -121,7 +149,7 @@ export const ZH = {
   quoteNotFound: '原文中未找到该句（可能已被修改或另有措辞）',
 
   // ---- SettingsView.vue ----
-  connectionTitle: '连接',
+  connectionTitle: '登录',
   connectedTo: '已连接 {url}',
   noAddressSet: '（未设置地址）',
   loginHint: '用 AI WorkDeck 账户登录即可连接，与桌面版是同一个账户。',
@@ -298,10 +326,22 @@ export const EN = {
   settings: 'Settings',
   backToChat: 'Back to chat',
   back: 'Back',
+  login: 'Sign in',
+  logout: 'Sign out',
+  accountTitle: 'Account',
+  languageLabel: 'Language',
+  langZh: '中文',
+  langEn: 'English',
+  connectionSettings: 'Connection & advanced settings',
+  moreMenuTitle: 'More actions',
+  menuAttach: 'Attach project files',
+  menuSkills: 'Skills',
+  menuModel: 'Model',
+  menuHistory: 'Conversation history',
 
   // ---- ChatView.vue：空态 ----
   emptyHint: 'Ask AI about the current document or project.',
-  connectionNotReady: 'Not connected: click "Settings" in the top right to enter your API key.',
+  connectionNotReady: 'Not signed in: click "Sign in" in the top right to connect your account.',
   noProjectSelected: 'No project selected: pick one from the dropdown at the top.',
 
   // ---- ChatView.vue：快捷入口 ----
@@ -377,7 +417,7 @@ export const EN = {
   quoteNotFound: 'Could not find this text in the document (it may have been edited or reworded)',
 
   // ---- SettingsView.vue ----
-  connectionTitle: 'Connection',
+  connectionTitle: 'Sign in',
   connectedTo: 'Connected to {url}',
   noAddressSet: '(no address set)',
   loginHint: 'Sign in with your AI WorkDeck account to connect — it\'s the same account as the desktop app.',
@@ -542,13 +582,33 @@ export const EN = {
 
 export const currentLang = detectLang()
 
-const DICT = currentLang === 'zh' ? ZH : EN
+// 运行时可变的当前语言（初值 = currentLang）。t() 每次查它，setLang 改它。
+let activeLang = currentLang
+
+export function getLang() {
+  return activeLang
+}
+
+/**
+ * 手动切换语言并持久化（写不进存储时静默降级，本次会话内仍生效）。
+ * 界面刷新由调用方负责（App.vue 用 :key 重挂载）。
+ */
+export function setLang(lang) {
+  if (lang !== 'zh' && lang !== 'en') return
+  activeLang = lang
+  try {
+    localStorage.setItem(LANG_STORAGE_KEY, lang)
+  } catch (e) {
+    // 存储不可用：本次会话内生效即可
+  }
+}
 
 /**
  * t('key', {name: 'x'})：查字典，未知 key 回退 key 本身；{name} 占位做简单替换。
  */
 export function t(key, params) {
-  const raw = Object.prototype.hasOwnProperty.call(DICT, key) ? DICT[key] : key
+  const dict = activeLang === 'zh' ? ZH : EN
+  const raw = Object.prototype.hasOwnProperty.call(dict, key) ? dict[key] : key
   if (!params) return raw
   return raw.replace(/\{(\w+)\}/g, (match, name) =>
     Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : match)
