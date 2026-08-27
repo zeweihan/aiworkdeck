@@ -60,13 +60,6 @@
                   </view>
               </view>
             </view>
-
-            <view v-if="isAdminUser" class="nav-footer">
-                <view class="action-item" @tap="handleRerunWizard">
-                  <text class="action-text">{{ $t('admin.rerunWizard') }}</text>
-                  <text class="action-arrow">›</text>
-                </view>
-            </view>
         </view>
       </view>
 
@@ -81,129 +74,9 @@
              留一个只剩一项、还配着一个存不了任何东西的「保存配置」按钮的分区，
              比没有这个分区更让人困惑。 -->
 
-        <!-- 平台服务（P5：配置面收敛）。
-             七项外部服务各自走哪一档，以及自备 Key 时的全部凭证字段。
-             当前档位一律读 GET /api/platform-services 的 provider（后端解析后的生效值），
-             绝不自己按凭证是否为空去猜——存量机器上这两件事经常对不上。 -->
-        <!-- 链头：原来是「系统配置」那块 v-if，它撤掉后由平台服务接上 -->
-        <scroll-view
-          v-if="activeNav === 'platform'"
-          scroll-y
-          class="config-scroll"
-        >
-          <view class="section-card">
-            <view class="section-header">
-              <text class="section-title">{{ $t('admin.navPlatform') }}</text>
-              <text class="section-subtitle">{{ $t('admin.platformSubtitle') }}</text>
-            </view>
-            <view class="section-body">
-              <!-- 三种全局状态，互斥。none 之外的两种都要给出下一步。 -->
-              <!--
-                未结算的预扣。设计 §4.6 要求这笔钱「必须可解释」：一场两小时录音的预扣
-                会把余额压低、进而让余额闸拦住 AI 对话——用户会同时发现转写和对话都停了，
-                没有这一行他无从知道是转写占住的。
-              -->
-              <view v-if="pendingHoldNotice" class="platform-banner">
-                <text class="platform-banner-body">{{ pendingHoldNotice }}</text>
-              </view>
-              <!-- 余额低于用户设定的阈值。只在**确知**余额时出现（读不到给 null，
-                   不拿「不知道」编一个数出来），阈值为 0 表示用户没启用这条提醒。 -->
-              <view v-if="lowBalanceNotice" class="platform-banner platform-banner-warn">
-                <text class="platform-banner-body">{{ lowBalanceNotice }}</text>
-              </view>
-              <view v-if="platformServicesError" class="platform-banner platform-banner-warn">
-                <text class="platform-banner-body">{{ platformServicesError }}</text>
-              </view>
-              <view v-else-if="platformLoaded && !platformState.platformAvailable" class="platform-banner">
-                <text class="platform-banner-title">{{ $t('platform.serverModeTitle') }}</text>
-                <text class="platform-banner-body">{{ $t('platform.serverModeBody') }}</text>
-              </view>
-              <view v-else-if="platformLoaded && !platformState.accountConnected" class="platform-banner">
-                <text class="platform-banner-title">{{ $t('platform.notConnectedTitle') }}</text>
-                <text class="platform-banner-body">{{ $t('platform.notConnectedBody') }}</text>
-                <text class="platform-link" @tap="onNavTap({ key: 'account' })">{{ $t('platform.goConnect') }}</text>
-              </view>
-
-              <view v-for="svc in platformServiceRows" :key="svc.key" class="provider-card">
-                <view class="provider-header platform-row-head">
-                  <view class="platform-row-info">
-                    <text class="provider-name">{{ svc.name }}</text>
-                    <text class="platform-row-desc">{{ svc.desc }}</text>
-                  </view>
-                  <view class="platform-row-side">
-                    <text class="platform-tier" :class="svc.tierClass">{{ svc.tierLabel }}</text>
-                    <!-- 本月消耗。取不到时是破折号而不是 0——0 在陈述一个我们并不知道的事实。 -->
-                    <text class="platform-usage">{{ $t('platform.usageMonthLabel') }} {{ svc.usageText }}</text>
-                  </view>
-                </view>
-
-                <view class="form-row">
-                  <text class="form-label">{{ $t('platform.tierLabel') }}</text>
-                  <AwdSelect
-                    class="mode-picker"
-                    :range="svc.optionLabels"
-                    :value="svc.optionIndex"
-                    :disabled="platformBusy"
-                    @change="onPlatformTierPick(svc, $event)"
-                  />
-                </view>
-                <text v-for="(note, i) in svc.notes" :key="'n' + i" class="field-note">{{ note }}</text>
-
-              </view>
-
-              <!-- 花费闸门。设计 §4.9 的用户闸：超过上限时问一句「是否继续」，
-                   **是可恢复的确认而不是失败**。刻意不做「每次调用前弹确认」——
-                   与「零配置、少打扰」的产品目标冲突，设计里明确否了。
-                   两个阈值与档位同属机器级设置，所以写同一个控制器、就地生效。 -->
-              <view class="provider-card">
-                <view class="provider-header platform-row-head">
-                  <view class="platform-row-info">
-                    <text class="provider-name">{{ $t('platform.budgetTitle') }}</text>
-                    <text class="platform-row-desc">{{ $t('platform.budgetSubtitle') }}</text>
-                  </view>
-                  <text v-if="usageTotalText" class="platform-usage">{{ usageTotalText }}</text>
-                </view>
-
-                <view class="form-row">
-                  <text class="form-label">{{ $t('platform.budgetLowBalanceLabel') }}</text>
-                  <input
-                    v-model="budgetForm.lowBalance"
-                    class="form-input"
-                    type="digit"
-                    :placeholder="$t('platform.budgetUnit')"
-                  />
-                </view>
-                <text class="field-note">{{ $t('platform.budgetLowBalanceNote') }}</text>
-
-                <text v-if="!platformRemote.pricingAvailable" class="field-note">
-                  {{ $t('platform.usageUnavailable') }}
-                </text>
-
-                <view class="platform-budget-actions">
-                  <button class="comp-btn primary" :disabled="budgetBusy" @tap="onSaveBudget">
-                    {{ $t('platform.budgetSave') }}
-                  </button>
-                </view>
-              </view>
-
-              <!-- AI 单列说明：它不是这七项里的一项，通路完全不同，
-                   摆在这里是为了回答「那 AI 的钱走哪条路」这个必然会被问到的问题。 -->
-              <view class="provider-card">
-                <view class="provider-header platform-row-head">
-                  <view class="platform-row-info">
-                    <text class="provider-name">{{ $t('platform.aiRowName') }}</text>
-                    <text class="platform-row-desc">{{ $t('platform.aiRowDesc') }}</text>
-                  </view>
-                </view>
-                <text class="platform-link" @tap="onNavTap({ key: 'ai' })">{{ $t('platform.goAiSettings') }}</text>
-              </view>
-            </view>
-          </view>
-        </scroll-view>
-
         <!-- AI 配置 -->
         <scroll-view
-          v-else-if="activeNav === 'ai'"
+          v-if="activeNav === 'ai'"
           scroll-y
           class="config-scroll"
         >
@@ -338,6 +211,20 @@
           scroll-y
           class="config-scroll"
         >
+          <!-- 预扣提示 / 低余额提示。原属已撤销的「平台服务」分区顶部，随花费闸门
+               一并搬来这里——它们是余额/预扣相关的通知，「账户与用量」是唯一还留着的家。
+               ① 未结算的预扣。设计 §4.6 要求这笔钱「必须可解释」：一场两小时录音的预扣
+               会把余额压低、进而让余额闸拦住 AI 对话——用户会同时发现转写和对话都停了，
+               没有这一行他无从知道是转写占住的。
+               ② 余额低于用户设定的阈值。只在**确知**余额时出现（读不到给 null，
+               不拿「不知道」编一个数出来），阈值为 0 表示用户没启用这条提醒。 -->
+          <view v-if="pendingHoldNotice" class="platform-banner">
+            <text class="platform-banner-body">{{ pendingHoldNotice }}</text>
+          </view>
+          <view v-if="lowBalanceNotice" class="platform-banner platform-banner-warn">
+            <text class="platform-banner-body">{{ lowBalanceNotice }}</text>
+          </view>
+
           <!-- 当前站点。摆在账户连接之前：账户 Key 是站点签发的，
                连接之前先知道自己在哪个站，才不会拿着另一个站的 Key 连不上。 -->
           <view v-if="site.displayName" class="section-card">
@@ -411,6 +298,72 @@
 
           <!-- 已连接：账户信息 + 余额 + 本地用量明细 -->
           <template v-else>
+            <!-- 会员钱包卡（dev-board#183）：余额 + 充值 + 等级/成长值/升档进度。
+                 原「余额」小指标行（account-metrics）已收进本卡，别再加回去。 -->
+            <view class="section-card">
+              <view class="section-header">
+                <text class="section-title">{{ $t('admin.walletCardTitle') }}</text>
+                <text class="section-subtitle">{{ $t('admin.walletCardSubtitle') }}</text>
+              </view>
+              <view class="section-body">
+                <view class="provider-card">
+                  <view class="wallet-main">
+                    <view class="wallet-left">
+                      <text class="wallet-balance-label">{{ $t('admin.walletBalanceLabel') }}</text>
+                      <text class="wallet-balance-value">{{ walletBalanceText }}</text>
+                      <button class="btn-primary wallet-recharge-btn" @tap="showRecharge = true">
+                        {{ $t('admin.rechargeButton') }}
+                      </button>
+                    </view>
+                    <view v-if="membershipData" class="wallet-right">
+                      <view class="wallet-tier-row">
+                        <text class="wallet-tier-badge">{{ membershipTierName }}</text>
+                        <text class="wallet-growth">{{ $t('admin.growthPointsLabel', { points: membershipData.growthPoints || 0 }) }}</text>
+                      </view>
+                      <template v-if="membershipData.nextTier">
+                        <view class="wallet-progress-bar">
+                          <view class="wallet-progress-fill" :style="{ width: tierProgressPercent + '%' }"></view>
+                        </view>
+                        <text class="wallet-progress-text">
+                          {{ $t('admin.nextTierHint', { name: nextTierName, points: membershipData.nextTier.remainingPoints }) }}
+                        </text>
+                      </template>
+                      <text v-else class="wallet-progress-text">{{ $t('admin.topTierReached') }}</text>
+                      <text v-if="tierBonusPermille > 0" class="wallet-bonus">
+                        {{ $t('admin.tierBonusNote', { permille: tierBonusPermille }) }}
+                      </text>
+                    </view>
+                  </view>
+                  <!-- 等级规则：七档表全部来自 getAccountMembership 的 tiers，不在前端硬编码第二份 -->
+                  <view class="wallet-rules">
+                    <view class="wallet-rules-head">
+                      <text class="wallet-rules-toggle" @tap="tierRulesOpen = !tierRulesOpen">
+                        {{ tierRulesOpen ? $t('admin.tierRulesCollapse') : $t('admin.tierRulesToggle') }}
+                      </text>
+                      <text class="wallet-rules-link" @tap="openMembershipRules">{{ $t('admin.membershipRulesLink') }}</text>
+                    </view>
+                    <view v-if="tierRulesOpen && membershipTiers.length" class="wallet-tier-table">
+                      <view class="wallet-tier-tr wallet-tier-th">
+                        <text class="wallet-tier-td">{{ $t('admin.tierColName') }}</text>
+                        <text class="wallet-tier-td">{{ $t('admin.tierColThreshold') }}</text>
+                        <text class="wallet-tier-td">{{ $t('admin.tierColBonus') }}</text>
+                      </view>
+                      <view
+                        v-for="tier in membershipTiers"
+                        :key="tier.key"
+                        class="wallet-tier-tr"
+                        :class="{ 'is-current': membershipData && membershipData.tier && tier.key === membershipData.tier.key }"
+                      >
+                        <text class="wallet-tier-td">{{ tierDisplayName(tier) }}</text>
+                        <text class="wallet-tier-td">{{ tier.threshold || 0 }}</text>
+                        <text class="wallet-tier-td">{{ tier.bonusPermille > 0 ? $t('admin.tierBonusCell', { permille: tier.bonusPermille }) : '—' }}</text>
+                      </view>
+                    </view>
+                  </view>
+                </view>
+              </view>
+            </view>
+
             <view class="section-card">
               <view class="section-header">
                 <text class="section-title">{{ $t('admin.accountTitle') }}</text>
@@ -425,18 +378,11 @@
                     </view>
                     <button class="comp-btn danger" @tap="onDisconnectAccount">{{ $t('admin.disconnectButton') }}</button>
                   </view>
-                  <!-- 官网不可达：只降级平台数字，本地统计照常 -->
+                  <!-- 官网不可达：只降级平台数字，本地统计照常。
+                       余额展示已随钱包卡（上方）收编，这里只剩不可达提示 -->
                   <text v-if="!accountPlatformReachable" class="account-note">
                     {{ (accountPlatform && accountPlatform.message) || $t('admin.platformUnreachable') }}
                   </text>
-                  <template v-else>
-                    <view class="account-metrics">
-                      <view class="account-metric">
-                        <text class="account-metric-label">{{ $t('admin.walletBalanceLabel') }}</text>
-                        <text class="account-metric-value">{{ $t('admin.balanceYuan', { amount: accountBalanceYuan }) }}</text>
-                      </view>
-                    </view>
-                  </template>
                   <!-- 购买在官网完成，桌面端拉一次即可看到新解锁的功能 -->
                   <view class="account-refresh-row">
                     <button class="comp-btn" :disabled="entitlementBusy" @tap="onRefreshEntitlements">
@@ -507,6 +453,7 @@
                 <UnlockHint
                   v-if="!storageCanMove"
                   :text="$t('admin.unlockHintStorage')"
+                  sku-id="feature:stage.unlimited"
                 />
                 <view class="account-connect-actions">
                   <button
@@ -567,6 +514,46 @@
                     @tap="onSwitchIdentity(item)"
                   >
                     {{ $t('admin.switchButton') }}
+                  </button>
+                </view>
+              </view>
+            </view>
+          </view>
+
+          <!-- 花费闸门。原属已撤销的「平台服务」分区，官方版全部外部服务统一平台代采后
+               那个分区已无实际作用；这张卡是其中仍然真实的功能，随通知一起搬来本分区末尾
+               （刻意放在最后，减少与本分区其它改动的冲突面）。
+               设计 §4.9 的用户闸：超过上限时问一句「是否继续」，是可恢复的确认而不是失败。
+               刻意不做「每次调用前弹确认」——与「零配置、少打扰」的产品目标冲突，设计里明确否了。 -->
+          <view class="section-card">
+            <view class="section-header">
+              <text class="section-title">{{ $t('platform.budgetTitle') }}</text>
+              <text class="section-subtitle">{{ $t('platform.budgetSubtitle') }}</text>
+            </view>
+            <view class="section-body">
+              <view class="provider-card">
+                <view v-if="usageTotalText" class="provider-header platform-row-head">
+                  <text class="platform-usage">{{ usageTotalText }}</text>
+                </view>
+
+                <view class="form-row">
+                  <text class="form-label">{{ $t('platform.budgetLowBalanceLabel') }}</text>
+                  <input
+                    v-model="budgetForm.lowBalance"
+                    class="form-input"
+                    type="digit"
+                    :placeholder="$t('platform.budgetUnit')"
+                  />
+                </view>
+                <text class="field-note">{{ $t('platform.budgetLowBalanceNote') }}</text>
+
+                <text v-if="!platformRemote.pricingAvailable" class="field-note">
+                  {{ $t('platform.usageUnavailable') }}
+                </text>
+
+                <view class="platform-budget-actions">
+                  <button class="comp-btn primary" :disabled="budgetBusy" @tap="onSaveBudget">
+                    {{ $t('platform.budgetSave') }}
                   </button>
                 </view>
               </view>
@@ -979,18 +966,23 @@
                   <text class="telemetry-kpi-label">{{ $t('admin.kpiHumanEdits') }}</text>
                 </view>
               </view>
-              <view v-if="telemetrySummary.byMatterCategory.length" class="telemetry-list">
-                <text class="telemetry-list-title">{{ $t('admin.matterCategoryTitle') }}</text>
-                <view v-for="item in telemetrySummary.byMatterCategory" :key="'m-' + item.name" class="telemetry-list-row">
-                  <text class="telemetry-list-name">{{ item.name }}</text>
-                  <text class="telemetry-list-count">{{ item.count }}</text>
+              <view
+                v-if="telemetrySummary.byMatterCategory.length || telemetrySummary.byTool.length"
+                class="telemetry-list-columns"
+              >
+                <view v-if="telemetrySummary.byMatterCategory.length" class="telemetry-list">
+                  <text class="telemetry-list-title">{{ $t('admin.matterCategoryTitle') }}</text>
+                  <view v-for="item in telemetrySummary.byMatterCategory" :key="'m-' + item.name" class="telemetry-list-row">
+                    <text class="telemetry-list-name">{{ item.name }}</text>
+                    <text class="telemetry-list-count">{{ item.count }}</text>
+                  </view>
                 </view>
-              </view>
-              <view v-if="telemetrySummary.byTool.length" class="telemetry-list">
-                <text class="telemetry-list-title">{{ $t('admin.topToolsTitle') }}</text>
-                <view v-for="item in telemetrySummary.byTool.slice(0, 8)" :key="'t-' + item.name" class="telemetry-list-row">
-                  <text class="telemetry-list-name">{{ item.name }}</text>
-                  <text class="telemetry-list-count">{{ item.count }}</text>
+                <view v-if="telemetrySummary.byTool.length" class="telemetry-list">
+                  <text class="telemetry-list-title">{{ $t('admin.topToolsTitle') }}</text>
+                  <view v-for="item in telemetrySummary.byTool.slice(0, 8)" :key="'t-' + item.name" class="telemetry-list-row">
+                    <text class="telemetry-list-name">{{ item.name }}</text>
+                    <text class="telemetry-list-count">{{ item.count }}</text>
+                  </view>
                 </view>
               </view>
             </view>
@@ -1142,14 +1134,18 @@
       </view>
     </view>
 
+    <!-- 充值弹窗（dev-board#184）：会员钱包卡的「充值」按钮打开 -->
+    <RechargeDialog v-model:visible="showRecharge" />
+
   </view>
 </template>
 
 <script>
 import {
-  getAdminConfig, saveAdminConfig, resetWizard,
+  getAdminConfig, saveAdminConfig,
   cloudConnect, listCloudConnections, disconnectCloudConnection,
   getAccountStatus, connectAccount, disconnectAccount, getAccountUsage,
+  getAccountBalance, getAccountMembership,
   getStorageLocation, moveStorageLocation, resetStorageLocation,
   getLocalIdentityCandidates, selectLocalIdentity,
   getMemorySyncStatus, setMemorySyncRemote, removeMemorySyncRemote, syncMemoryNow,
@@ -1158,21 +1154,19 @@ import {
   fetchAiModels,
   getFeedbackList, getFeedbackDetail, getOptimizerStatus, runOptimizer, getApiBaseUrl,
   getSiteStatus, selectSite,
-  getPlatformServices, getPlatformServiceRemote, setPlatformServiceProvider, savePlatformBudget,
+  getPlatformServices, getPlatformServiceRemote, savePlatformBudget,
 } from '@/services/api.js'
-import {
-  platformServiceMeta, sortPlatformServices, localTierReady, refreshLocalAsrReadiness,
-} from '@/config/platformServices.js'
 import { getCurrentUser, getSessionId, setSessionUser } from '@/utils/auth.js'
 import { getInitial } from '@/utils/textInitial.js'
 import { getLastProjectId } from '@/utils/recentProjects.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
-import { accountPageUrl, siteBaseUrl, loadSiteLinks, resetSiteLinks } from '@/utils/siteLinks.js'
+import { accountPageUrl, siteBaseUrl, siteLinks, loadSiteLinks, resetSiteLinks } from '@/utils/siteLinks.js'
 import { host } from '@/services/host.js'
 import { setGlobalOverlay } from '@/utils/overlayState.js'
 import { refreshEntitlements, isEnabled, FEATURES } from '@/composables/useEntitlement.js'
 import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
 import UnlockHint from '@/components/UnlockHint.vue'
+import RechargeDialog from '@/components/RechargeDialog.vue'
 import MarketPane from '@/components/MarketPane.vue'
 import AwdSelect from '@/components/AwdSelect.vue'
 import AwdSwitch from '@/components/AwdSwitch.vue'
@@ -1196,7 +1190,7 @@ function cachedIsAdmin() {
 export default {
   name: 'AdminPane',
   components: {
-    UnlockHint, MarketPane, AwdSelect, AwdSwitch,
+    UnlockHint, RechargeDialog, MarketPane, AwdSelect, AwdSwitch,
     PersonalWorkLogPanel, PersonalFavoritesPanel, PersonalTodosPanel, PersonalSettingsPanel,
   },
   props: {
@@ -1231,13 +1225,13 @@ export default {
         { key: 'favorites', label: this.$t('account.tabFavorites'), group: 'personal' },
         { key: 'todos', label: this.$t('account.tabTodos'), group: 'personal' },
         { key: 'personal_settings', label: this.$t('admin.navPersonalSettings'), group: 'personal' },
-        // 「系统」组：'config'（系统配置）已撤，内容分别并入 'ai' 与「账户与安全」
-        { key: 'ai', label: this.$t('admin.navAi'), group: 'system' },
-        // 平台服务对团队服务器同样要可见：平台档在那里不可选，但档位与花费提醒仍要能看。
-        { key: 'platform', label: this.$t('admin.navPlatform'), group: 'system' },
+        // 「系统」组：'config'（系统配置）已撤，内容分别并入 'ai' 与「账户与安全」；
+        // 'platform'（平台服务）2026-08-27 已撤——官方版外部服务统一平台代采，档位
+        // 下拉全是单选项，分区已无实际作用（花费闸门/预扣提醒搬进了 'account' 末尾）。
         { key: 'account', label: this.$t('admin.navAccount'), group: 'system', desktopOnly: true },
-        { key: 'components', label: this.$t('admin.navComponents'), group: 'system', desktopOnly: true },
+        { key: 'ai', label: this.$t('admin.navAi'), group: 'system' },
         { key: 'updates', label: this.$t('admin.navUpdates'), group: 'system', desktopOnly: true },
+        { key: 'components', label: this.$t('admin.navComponents'), group: 'system', desktopOnly: true },
         { key: 'cloud', label: this.$t('admin.navCloud'), group: 'system', desktopOnly: true },
         { key: 'memory', label: this.$t('admin.navMemory'), group: 'system', desktopOnly: true },
         { key: 'telemetry', label: this.$t('admin.navTelemetry'), group: 'system' },
@@ -1310,15 +1304,13 @@ export default {
       ],
       // 平台 AI 通道是否可选（= 是否已连接账户），来自 /api/account/status
       platformAiAvailable: false,
-      // 「平台服务」分区（GET /api/platform-services）。
-      // services 里的 provider 是后端解析后的**生效值**（非 local-mode 下即使库里写着
-      // platform 也回 byok），界面展示与选中项一律以它为准。
+      // 花费闸门 + 预扣/低余额提醒的数据源（GET /api/platform-services 与其 /remote 端点）。
+      // 原属已撤销的「平台服务」分区，两张卡搬进「账户与用量」后这份状态跟着搬来。
       // pricingAvailable=false 时 enabled/balanceCents/pendingHoldCents 全是「不知道」，
       // 不许当成 false/0 渲染（同 ai-usage「查不到用量显示破折号不显示 0」那条）。
-      // 本地那一半：GET /api/platform-services 秒回，页面靠它整页渲染完（档位与切档
-      // 控件立刻可用）。远端那一半单独放 platformRemote，异步填，填不上就是「—」。
+      // 本地那一半：GET /api/platform-services 秒回。远端那一半单独放 platformRemote，
+      // 异步填，填不上就是「—」。
       platformState: {
-        services: [], platformAvailable: false, accountConnected: false,
         budget: { lowBalanceCents: 0 },
       },
       // 远端那一半（GET /api/platform-services/remote）。三个 null 与空 enabled 表
@@ -1327,9 +1319,6 @@ export default {
         pricingAvailable: false, enabled: {}, balanceCents: null,
         pendingHoldCents: null, usage: null,
       },
-      platformLoaded: false,
-      platformServicesError: '',
-      platformBusy: false,
       // 花费闸门的两个阈值，界面上以 Credits（元）为单位编辑，存库是分。
       // 与档位不同，它们是输入框而不是开关：跟着每个字符写库既没必要也会打断输入，
       // 所以留一个明确的保存动作。
@@ -1346,6 +1335,12 @@ export default {
       // status 是纯本地读盘（不含余额），余额与额度都在 usage 的 platform 段
       account: { connected: false, username: '', displayName: '', keyMasked: '' },
       accountUsage: null, // { local: {...}, platform: {...} }，形状见 api.js getAccountUsage
+      // 会员钱包卡（dev-board#183）。walletData 来自轻端点 getAccountBalance（余额），
+      // membershipData 来自 getAccountMembership（等级/成长值/七档表），分开取分开失败
+      walletData: { loaded: false, available: true, balanceCents: null },
+      membershipData: null,
+      showRecharge: false,
+      tierRulesOpen: false,
       accountKeyInput: '',
       accountBusy: false,
       entitlementBusy: false,
@@ -1406,13 +1401,6 @@ export default {
         .map((g) => ({ ...g, items: this.visibleNavItems.filter((n) => n.group === g.key) }))
         .filter((g) => g.items.length > 0)
     },
-    // 「平台服务」的每一行：当前档位标签 + 可切的档位清单 + 说明。
-    //
-    // 可切清单是**动态**拼的，不是一个固定三选项再置灰：
-    //  - platformAvailable=false（团队服务器 / 云端实例）时 platform 档整个不出现（D5）；
-    //  - hasLocal 为真但本地引擎在这台机器上还没就绪（asr 的模型没下载）时 local 档也不
-    //    出现，并说明去哪儿下。摆一个能选中、真用起来才炸的档位，正是设计 §6.2.1
-    //    点名要避免的事。判据读 localTierReady，与会议面板的开关同一个出口。
     /**
      * 「有 N Credits 正被转写占用」的提示。
      *
@@ -1450,68 +1438,6 @@ export default {
         month: usage.month || '',
       })
     },
-    platformServiceRows() {
-      const available = this.platformState.platformAvailable
-      const connected = this.platformState.accountConnected
-      return sortPlatformServices(this.platformState.services).map((s) => {
-        const meta = platformServiceMeta(s.service)
-        const localUsable = s.hasLocal && localTierReady(s.service)
-        // 开放状态来自异步那一半。**undefined 是「还不知道」**（还没到 / 取不到），
-        // 与 false「未开放」是两回事——只有 false 才配显示成「未开放」。
-        const enabled = this.platformRemote.enabled[s.service]
-
-        // 官方版只露 platform / local 两档（local 是 ASR 的本地隐私档）。自备 Key 不再可切，
-        // 但生效值若是 byok（老用户、或非 local-mode 下后端把 platform 解析成 byok），
-        // 下拉显示的必须是**正在生效**的那一档，所以把它补进清单而不是让界面空白。
-        const values = []
-        if (available) values.push('platform')
-        if (localUsable) values.push('local')
-        if (s.provider && !values.includes(s.provider)) values.push(s.provider)
-        const labelOf = {
-          platform: this.$t('platform.tierPlatform'),
-          byok: this.$t('platform.tierByok'),
-          local: this.$t('platform.tierLocal'),
-        }
-
-        let tierLabel = labelOf[s.provider] || s.provider
-        let tierClass = 'tier-' + s.provider
-        if (s.provider === 'platform' && !connected) {
-          tierLabel = this.$t('platform.tierNeedsAccount')
-          tierClass = 'tier-need'
-        } else if (s.provider === 'platform' && enabled === false) {
-          // 平台侧还没开放这一项（合同/账号未就绪）。**必须与「出错了」分开**：
-          // 未开放是产品尚未提供，用户能做的是改用自己的 Key；显示成故障会让他
-          // 反复重试一件永远不会成功的事。enabled 为 undefined 是「查不到」不是「未开放」，
-          // 那种情况照常显示平台档，真调用时网关自己会给准确的信封。
-          tierLabel = this.$t('platform.tierDisabled')
-          tierClass = 'tier-need'
-        }
-
-        const notes = []
-        if (s.provider === 'platform' && enabled === false) {
-          notes.push(this.$t('platform.tierDisabledNote'))
-        } else if (s.provider === 'platform') {
-          notes.push(this.$t('platform.tierPlatformNote'))
-        }
-        if (s.provider === 'local') notes.push(this.$t('platform.tierLocalNote'))
-        if (s.hasLocal && !localUsable) notes.push(this.$t('platform.localAsrPending'))
-
-        const idx = values.indexOf(s.provider)
-        return {
-          key: s.service,
-          usageText: this.serviceUsageText(s.service),
-          name: meta.nameKey ? this.$t(meta.nameKey) : s.service,
-          desc: meta.descKey ? this.$t(meta.descKey) : '',
-          provider: s.provider,
-          tierLabel,
-          tierClass,
-          notes,
-          optionValues: values,
-          optionLabels: values.map((v) => labelOf[v] || v),
-          optionIndex: idx < 0 ? 0 : idx,
-        }
-      })
-    },
     // 未加密地址提醒：仅按前缀判断，不做完整 URL 校验（连接失败自会有报错）。
     cloudServerUrlIsHttp() {
       return /^http:\/\//i.test((this.cloudForm.serverUrl || '').trim())
@@ -1540,10 +1466,46 @@ export default {
     accountPlatformReachable() {
       return !!(this.accountPlatform && this.accountPlatform.available)
     },
-    // 余额后端以整数分下发，展示统一转元
-    accountBalanceYuan() {
-      const cents = this.accountPlatform && this.accountPlatform.balanceCents
-      return ((Number(cents) || 0) / 100).toFixed(2)
+    // ---------- 会员钱包卡（dev-board#183） ----------
+    // 货币符号按站点：cn 人民币，其余美元。site 还没拉到时用 siteLinks 的缓存/兜底
+    walletCurrencySymbol() {
+      const current = this.site.current || siteLinks().current
+      return current === 'cn' ? '¥' : '$'
+    },
+    // 余额大字：分→元两位小数；官网不可达 / 还没拉到时「—」，绝不拿 0 冒充
+    walletBalanceText() {
+      if (!this.walletData.loaded || this.walletData.available === false) return '—'
+      const cents = Number(this.walletData.balanceCents)
+      return this.walletCurrencySymbol + ((Number.isFinite(cents) ? cents : 0) / 100).toFixed(2)
+    },
+    membershipTierName() {
+      const tier = this.membershipData && this.membershipData.tier
+      return tier ? this.tierDisplayName(tier) : ''
+    },
+    nextTierName() {
+      const next = this.membershipData && this.membershipData.nextTier
+      return next ? this.tierDisplayName(next) : ''
+    },
+    // 当前档区间内的进度：下限=本档门槛（从 tiers 表按 key 找），上限=下一档门槛
+    tierProgressPercent() {
+      const m = this.membershipData
+      if (!m || !m.nextTier) return 100
+      const points = Number(m.growthPoints) || 0
+      const upper = Number(m.nextTier.threshold) || 0
+      const currentKey = m.tier && m.tier.key
+      const current = (m.tiers || []).find((t) => t.key === currentKey)
+      const lower = Number(current && current.threshold) || 0
+      if (upper <= lower) return 0
+      const pct = ((points - lower) / (upper - lower)) * 100
+      return Math.max(0, Math.min(100, Math.round(pct)))
+    },
+    tierBonusPermille() {
+      const tier = this.membershipData && this.membershipData.tier
+      return Number(tier && tier.bonusPermille) || 0
+    },
+    membershipTiers() {
+      const tiers = this.membershipData && this.membershipData.tiers
+      return Array.isArray(tiers) ? tiers : []
     },
     accountPlanLabel() {
       const plan = this.accountPlatform && this.accountPlatform.plan
@@ -1608,6 +1570,18 @@ export default {
     // 而 siteLinks 的模块缓存不会被面板自己的 getSiteStatus 顺带填上。
     // 不预热时第一次点击只能拿到兜底站点，国际站用户会被送到没有他账户的站
     loadSiteLinks()
+    // 充值成功 / SKU 购买成功（awd:wallet-refresh）后刷新「账户与用量」分区：
+    // 余额、会员进度、权益、存储位置的 entitled 都可能变了。mounted 挂、
+    // beforeUnmount 必须按引用 $off（工作台标签可以反复开关，不摘会累积订阅）
+    this._onWalletRefresh = () => {
+      if (this.activeNav !== 'account') return
+      this.loadWallet()
+      if (this.account.connected) {
+        this.loadAccountUsage()
+        this.loadStorageLocation()
+      }
+    }
+    uni.$on('awd:wallet-refresh', this._onWalletRefresh)
     if (this.isDesktop) {
       // AI 面板的「AI WorkDeck 云端」选项是否可选，取决于是否已连接账户。
       // status 是后端纯本地读盘，不打官网，可以随页面加载
@@ -1638,6 +1612,10 @@ export default {
     // 关标签时弹窗还开着的话，那个全局 overlay 标志会永远留在 true，
     // 桌面端的 BrowserView 从此再也不显示
     setGlobalOverlay(false)
+    if (this._onWalletRefresh) {
+      uni.$off('awd:wallet-refresh', this._onWalletRefresh)
+      this._onWalletRefresh = null
+    }
     if (this._modelProgressUnsub) {
       this._modelProgressUnsub()
       this._modelProgressUnsub = null
@@ -1861,23 +1839,6 @@ export default {
         },
       })
     },
-    // 重跑首次向导：重置 completed 标记后跳向导页。已有配置不清空，
-    // 向导提交时按新填内容覆盖对应 key。
-    handleRerunWizard() {
-      uni.showModal({
-        title: this.$t('admin.rerunWizard'),
-        content: this.$t('admin.rerunWizardContent'),
-        success: async (r) => {
-          if (!r.confirm) return
-          try {
-            await resetWizard()
-            uni.reLaunch({ url: '/pages/wizard/wizard' })
-          } catch (e) {
-            uni.showToast({ title: (e && e.message) || this.$t('admin.resetFailed'), icon: 'none' })
-          }
-        },
-      })
-    },
     onNavTap(nav) {
       // 记忆同步卡的 v-model 直接绑在 this.memoryRepos[i].form 上，loadMemoryRepos()
       // 每次都用全新对象整体替换这个数组。已经在记忆同步页时再点一次同一个导航项
@@ -1888,16 +1849,16 @@ export default {
       if (nav.key === 'cloud') {
         this.loadCloudConnections()
       }
-      if (nav.key === 'platform') {
-        this.loadPlatformServices()
-      }
       if (nav.key === 'account') {
         this.loadSite()
         this.loadAccount()
+        this.loadWallet() // 会员钱包卡：余额 + 等级/成长值
         // 权益决定「更改位置」按钮出不出现；当前位置本身无论有没有权益都要显示
         this.loadStorageLocation()
         this.loadIdentityCandidates()
         refreshEntitlements()
+        // 花费闸门 + 预扣/低余额提醒（原「平台服务」分区搬来的部分）
+        this.loadPlatformServices()
       }
       if (nav.key === 'memory' && !wasAlreadyOnMemory) {
         this.loadMemoryRepos()
@@ -2434,6 +2395,41 @@ export default {
         this.accountUsage = null
       }
     },
+    // 会员钱包卡（dev-board#183）：余额与会员数据分开取、分开失败——
+    // membership 拿不到时余额那半照常显示，反之亦然
+    async loadWallet() {
+      try {
+        const b = await getAccountBalance()
+        if (b && b.connected) {
+          this.walletData = {
+            loaded: true,
+            available: b.available !== false,
+            balanceCents: b.balanceCents,
+          }
+        } else {
+          this.walletData = { loaded: false, available: true, balanceCents: null }
+        }
+      } catch (e) {
+        this.walletData = { loaded: false, available: true, balanceCents: null }
+      }
+      try {
+        this.membershipData = await getAccountMembership()
+      } catch (e) {
+        // 旧后端/官网不可达：右半（等级/成长值）整块不渲染，余额与充值按钮不受影响
+        this.membershipData = null
+      }
+    },
+    /** 七档表里一档的展示名，按当前语言取 nameZh/nameEn。 */
+    tierDisplayName(tier) {
+      if (!tier) return ''
+      const en = this.$i18n && this.$i18n.locale === 'en-US'
+      return (en ? tier.nameEn : tier.nameZh) || tier.nameZh || tier.nameEn || tier.key || ''
+    },
+    /** 官网会员规则页，语言按当前 locale。 */
+    openMembershipRules() {
+      const lang = this.$i18n && this.$i18n.locale === 'en-US' ? 'en' : 'zh'
+      openExternalUrl(siteBaseUrl() + '/' + lang + '/membership')
+    },
     // 官网账户页：生成账户 Key 与充值都在这里。
     // 地址在点击时才取——siteLinks 首帧可能还是兜底值，固化成常量就纠正不回来了
     openAccountSite() {
@@ -2681,22 +2677,7 @@ export default {
         uni.showToast({ title: e.message || this.$t('common.failed'), icon: 'none' })
       }
     },
-    // ---------- 平台服务 ----------
-    /**
-     * 某一项服务本月花了多少。
-     *
-     * <b>「查不到」与「没花过」是两件事</b>：整段 usage 为 null 是前者（网关不可达 /
-     * 未连账户 / 官网还没上这条端点），显示破折号；usage 拿到了但表里没这一项是后者，
-     * 那是一个真实的 0。把前者显示成 0 会让刚跑完一场两小时转写的用户以为账没记上。
-     */
-    serviceUsageText(service) {
-      const usage = this.platformRemote.usage
-      if (!usage || !usage.services) return this.$t('platform.usageUnknown')
-      const cents = usage.services[service]
-      return this.$t('platform.usageCredits', {
-        credits: ((typeof cents === 'number' ? cents : 0) / 100).toFixed(2),
-      })
-    },
+    // ---------- 花费闸门（原「平台服务」分区） ----------
     // 阈值以 Credits（元）编辑、以分存库。空串按 0（不启用）处理；
     // 负数与非数字交给后端拒绝，不在这里静默改成 0——那等于替用户做决定。
     creditsToCents(input) {
@@ -2728,15 +2709,9 @@ export default {
       }
     },
     async loadPlatformServices() {
-      // 本地档能不能选，判据在 platformServices 那个唯一出口上，由这次探测填。
-      // 与会议面板的开关同源：只在一处接探测的话，用户从另一处照样能切进一个用不了的档。
-      refreshLocalAsrReadiness()
       try {
         const s = (await getPlatformServices()) || {}
         this.platformState = {
-          services: Array.isArray(s.services) ? s.services : [],
-          platformAvailable: !!s.platformAvailable,
-          accountConnected: !!s.accountConnected,
           budget: {
             lowBalanceCents: Number((s.budget && s.budget.lowBalanceCents) || 0),
           },
@@ -2746,11 +2721,8 @@ export default {
         this.budgetForm = {
           lowBalance: (this.platformState.budget.lowBalanceCents / 100).toFixed(2),
         }
-        this.platformServicesError = ''
       } catch (e) {
-        this.platformServicesError = (e && e.message) || this.$t('platform.loadFailed')
-      } finally {
-        this.platformLoaded = true
+        console.error('加载花费闸门失败', e)
       }
       // 远端那一半**故意不 await**：官网挂着的时候这一页照样要能打开，
       // 而它恰恰是用户切回自备 Key 的唯一入口。取不到就一直是「—」。
@@ -2781,24 +2753,6 @@ export default {
           pricingAvailable: false, enabled: {}, balanceCents: null,
           pendingHoldCents: null, usage: null,
         }
-      }
-    },
-    // 切档立刻写库（不等「保存配置」）：档位是一个开关而不是一张表单，
-    // 让它跟着凭证字段一起等保存，用户点完下拉看不到任何变化会以为没生效。
-    // 写失败**不改本地状态**，重新拉一次让界面回到真相——静默留在用户以为的那一档
-    // 比报错更糟（他会以为已经切走了）。
-    async onPlatformTierPick(svc, index) {
-      const target = svc.optionValues[index]
-      if (!target || target === svc.provider) return
-      this.platformBusy = true
-      try {
-        await setPlatformServiceProvider(svc.key, target)
-        uni.showToast({ title: this.$t('platform.switched'), icon: 'none' })
-      } catch (e) {
-        uni.showToast({ title: (e && e.message) || this.$t('platform.switchFailed'), icon: 'none' })
-      } finally {
-        this.platformBusy = false
-        await this.loadPlatformServices()
       }
     },
     async loadConfig() {
@@ -3046,36 +3000,6 @@ $border-color: #E9ECEF; // Gray-Light
   font-weight: 600;
 }
 
-.nav-footer {
-    margin-top: 16px;
-    padding-top: 12px;
-    border-top: 1px solid #f9f9f9;
-}
-
-.action-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 24px;
-  cursor: pointer;
-  transition: background 0.2s;
-  
-  &:hover {
-    background-color: #F8F9FA;
-  }
-}
-
-.action-text {
-  font-size: 14px;
-  color: $text-secondary;
-}
-
-.action-arrow {
-  font-size: 18px;
-  color: #ADB5BD;
-  font-family: monospace;
-}
-
 .admin-main {
   flex: 1;
   min-width: 0;
@@ -3087,10 +3011,13 @@ $border-color: #E9ECEF; // Gray-Light
   height: calc(100vh - 140px);
 }
 
-/* 插件广场内嵌：与 .config-scroll 同高，MarketPane 自身按 100% 撑满并内部滚动 */
+/* 插件广场内嵌：与 .config-scroll 同高，MarketPane 自身按 100% 撑满并内部滚动。
+   外框对齐 .section-card（白底卡片、12px 圆角、浅灰描边），
+   让整块看起来是设置页里的一张卡片而不是嵌进来的独立网页。 */
 .market-embed {
   height: calc(100vh - 140px);
   border-radius: 12px;
+  border: 1px solid $border-color;
   overflow: hidden;
 }
 
@@ -3553,34 +3480,154 @@ $border-color: #E9ECEF; // Gray-Light
   color: $text-secondary;
 }
 
-.account-metrics {
+/* ---------- 会员钱包卡（dev-board#183） ---------- */
+.wallet-main {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 4px;
+  gap: 20px;
+  align-items: stretch;
 }
 
-.account-metric {
-  flex: 1 1 130px;
-  min-width: 130px;
+.wallet-left {
+  flex: 0 0 auto;
+  min-width: 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wallet-balance-label {
+  font-size: 12px;
+  color: $text-secondary;
+}
+
+.wallet-balance-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: $brand-primary;
+  font-variant-numeric: tabular-nums;
+}
+
+.wallet-recharge-btn {
+  margin-top: 4px;
+  align-self: flex-start;
+}
+
+.wallet-right {
+  flex: 1 1 220px;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   padding: 12px 14px;
   border: 1px solid rgba(0, 0, 0, 0.06);
   border-radius: 6px;
   background: $brand-bg;
 }
 
-.account-metric-label {
-  display: block;
+.wallet-tier-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.wallet-tier-badge {
+  font-size: 12px;
+  font-weight: 600;
+  color: $brand-white;
+  background: $brand-primary;
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+
+.wallet-growth {
+  font-size: 12px;
+  color: $text-main;
+}
+
+.wallet-progress-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+}
+
+.wallet-progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: $brand-primary;
+}
+
+.wallet-progress-text {
   font-size: 12px;
   color: $text-secondary;
 }
 
-.account-metric-value {
-  display: block;
-  margin-top: 6px;
-  font-size: 18px;
-  font-weight: 600;
+.wallet-bonus {
+  font-size: 12px;
+  color: $brand-forest-dark;
+}
+
+.wallet-rules {
+  margin-top: 14px;
+  border-top: 1px solid $border-color;
+  padding-top: 10px;
+}
+
+.wallet-rules-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.wallet-rules-toggle {
+  font-size: 12px;
+  font-weight: 500;
   color: $brand-primary;
+  cursor: pointer;
+}
+
+.wallet-rules-link {
+  font-size: 12px;
+  color: $text-secondary;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.wallet-tier-table {
+  margin-top: 10px;
+  border: 1px solid $border-color;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.wallet-tier-tr {
+  display: flex;
+  border-bottom: 1px solid $border-color;
+
+  &:last-child {
+    border-bottom: none;
+  }
+
+  &.is-current {
+    background: $brand-mint-light;
+  }
+}
+
+.wallet-tier-th {
+  background: $brand-bg;
+
+  .wallet-tier-td {
+    font-weight: 600;
+    color: $text-main;
+  }
+}
+
+.wallet-tier-td {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: $text-secondary;
 }
 
 .account-note {
@@ -3732,21 +3779,6 @@ $border-color: #E9ECEF; // Gray-Light
   line-height: 1.5;
 }
 
-.platform-row-side {
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 4px;
-}
-
-.platform-tier {
-  flex: none;
-  font-size: 11px;
-  padding: 2px 9px;
-  border-radius: 999px;
-}
-
 /* 本月消耗：一句附注而不是一个数字块——它是参考值，不该抢档位的位置 */
 .platform-usage {
   font-size: 11px;
@@ -3758,26 +3790,6 @@ $border-color: #E9ECEF; // Gray-Light
   margin-top: 14px;
   display: flex;
   justify-content: flex-end;
-}
-
-.tier-platform {
-  color: #1A5336;
-  background: #DEF3E7;
-}
-
-.tier-byok {
-  color: #4B5563;
-  background: #EEF1F0;
-}
-
-.tier-local {
-  color: #1D4ED8;
-  background: #DBEAFE;
-}
-
-.tier-need {
-  color: #B45309;
-  background: #FDF0DC;
 }
 
 /* 数据统计 */
@@ -3845,21 +3857,22 @@ $border-color: #E9ECEF; // Gray-Light
 }
 
 .telemetry-kpi-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  grid-auto-rows: 1fr;
   gap: 12px;
-  flex-wrap: wrap;
   margin-bottom: 16px;
 }
 
 .telemetry-kpi {
-  flex: 1;
-  min-width: 120px;
+  min-height: 76px;
   padding: 14px 16px;
   background: #F9FAF9;
   border: 1px solid #E4EAE6;
   border-radius: 10px;
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: 4px;
 }
 
@@ -3872,6 +3885,20 @@ $border-color: #E9ECEF; // Gray-Light
 .telemetry-kpi-label {
   font-size: 12px;
   color: $text-secondary;
+}
+
+/* 左右两列（本部门/常用工具）等高对齐，避免一栏条目多、一栏条目少时看着一高一矮 */
+.telemetry-list-columns {
+  display: flex;
+  align-items: stretch;
+  gap: 20px;
+  margin-top: 14px;
+}
+
+.telemetry-list-columns .telemetry-list {
+  flex: 1;
+  min-width: 0;
+  margin-top: 0;
 }
 
 .telemetry-list {

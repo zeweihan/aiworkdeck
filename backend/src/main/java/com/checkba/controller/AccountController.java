@@ -6,7 +6,9 @@ import com.checkba.service.account.AccountException;
 import com.checkba.service.account.AccountService;
 import com.checkba.service.account.AccountSwitchCleanup;
 import com.checkba.service.account.MachineAccountGuard;
+import com.checkba.service.account.SkuPurchaseException;
 import com.checkba.service.ai.PlatformAiChannel;
+import com.checkba.service.entitlement.EntitlementService;
 import com.checkba.service.LangText;
 import com.checkba.service.ai.PlatformUsageAccountant;
 import lombok.extern.slf4j.Slf4j;
@@ -17,6 +19,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
@@ -25,6 +28,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * 与官网账户的连接（商业化改造 PR-B）。
@@ -34,6 +38,10 @@ import java.util.Map;
  *   <li>POST /api/account/connect    {"key":"awdk_..."} 校验并落盘</li>
  *   <li>POST /api/account/disconnect 断开并清空权益缓存、平台 AI 密钥缓存</li>
  *   <li>GET  /api/account/usage      平台结算（官网）+ 本地统计（TokenUsage）两套口径</li>
+ *   <li>GET  /api/account/balance    轻端点，供顶栏高频轮询（内部带 TTL 缓存）</li>
+ *   <li>GET  /api/account/membership 会员等级/积分全量转发</li>
+ *   <li>POST /api/account/recharge   {"amountCents":N} 发起充值，转发官网 payment/create</li>
+ *   <li>GET  /api/account/recharge/status?outTradeNo= 查询充值订单状态</li>
  * </ul>
  *
  * 鉴权与全站同一条：先过 {@link AuthController#getUserIdFromSession}。local-mode 下它把
@@ -59,17 +67,20 @@ public class AccountController {
     private final AccountSwitchCleanup accountSwitchCleanup;
     private final TokenUsageRepository tokenUsageRepository;
     private final MachineAccountGuard machineAccountGuard;
+    private final EntitlementService entitlementService;
 
     public AccountController(AccountService accountService,
                              PlatformAiChannel platformAiChannel,
                              AccountSwitchCleanup accountSwitchCleanup,
                              TokenUsageRepository tokenUsageRepository,
-                             MachineAccountGuard machineAccountGuard) {
+                             MachineAccountGuard machineAccountGuard,
+                             EntitlementService entitlementService) {
         this.accountService = accountService;
         this.platformAiChannel = platformAiChannel;
         this.accountSwitchCleanup = accountSwitchCleanup;
         this.tokenUsageRepository = tokenUsageRepository;
         this.machineAccountGuard = machineAccountGuard;
+        this.entitlementService = entitlementService;
     }
 
     /**
@@ -204,6 +215,119 @@ public class AccountController {
         data.put("local", localUsage(userId));
         data.put("platform", platformUsage());
         return ok(data);
+    }
+
+    // ==================== 会员与充值（dev-board#183/#184，桌面内嵌余额展示与充值） ====================
+
+    /**
+     * 轻端点：供顶栏高频轮询。数据源 {@link AccountService#balanceSnapshot()}，
+     * 内部带 TTL 缓存（profile 60 秒、membership 摘要 10 分钟），不会每次心跳都打两次官网。
+     */
+    @GetMapping("/balance")
+    public Map<String, Object> balance(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
+        return ok(accountService.balanceSnapshot());
+    }
+
+    /** 全量转发官网会员等级/积分接口，不做字段裁剪。 */
+    @GetMapping("/membership")
+    public Map<String, Object> membership(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
+        return ok(accountService.fetchMembership());
+    }
+
+    /** 单笔充值金额上限：1000000 分 = 1 万元，与官网 ORDER_MAX_CENTS 同。 */
+    private static final long RECHARGE_MAX_CENTS = 1_000_000L;
+
+    /**
+     * 发起充值：body {@code {amountCents}}。idempotencyKey 由本端点生成（UUID），
+     * 每次点击「充值」都是一笔新订单。响应透传官网 present/codeUrl/qrCode/redirectUrl/
+     * outTradeNo/amount——微信站二维码、Stripe 站跳转链接，桌面端不在这里分叉。
+     *
+     * <p>参数校验失败一律 {@link IllegalArgumentException}（业务错误，code=1，绝不 4xx/4010）。
+     */
+    @PostMapping("/recharge")
+    public Map<String, Object> recharge(
+            @RequestBody(required = false) Map<String, Object> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
+        long amountCents = parseAmountCents(body == null ? null : body.get("amountCents"));
+        String idempotencyKey = UUID.randomUUID().toString();
+        return ok(accountService.createRecharge(amountCents, idempotencyKey));
+    }
+
+    /** 查询充值订单状态：转发官网 payment/query，字段以官网为准，原样透传。 */
+    @GetMapping("/recharge/status")
+    public Map<String, Object> rechargeStatus(
+            @RequestParam(value = "outTradeNo", required = false) String outTradeNo,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
+        if (outTradeNo == null || outTradeNo.isBlank()) {
+            throw new IllegalArgumentException("outTradeNo 不能为空");
+        }
+        return ok(accountService.queryRecharge(outTradeNo));
+    }
+
+    /**
+     * 应用内可购的本地 SKU 白名单（dev-board#187）。只收这两个：
+     * 市场付费项（skill:/plugin:）仍走既有 MarketPurchaseGate 的购买链路，不从这里绕。
+     * 官网 SKU id 形如 {@code feature:<FeatureCatalog 常量>}。
+     */
+    private static final java.util.Set<String> PURCHASABLE_SKUS = java.util.Set.of(
+            "feature:clipboard.unlimited",
+            "feature:stage.unlimited");
+
+    /**
+     * 应用内购买本地 SKU：body {@code {skuId}}，转发官网 POST /api/account/purchase。
+     * 成功后<b>同步</b>刷新权益（与 GET /api/entitlements?refresh=true 同一条
+     * {@link EntitlementService#refreshQuietly()} 路），并作废余额缓存——
+     * 前端点完「解锁」立刻重查权益/余额，两者都必须是新值。
+     * 白名单外的 skuId 与官网 4xx 一律 code=1 业务信封，绝不 4xx/4010。
+     */
+    @PostMapping("/purchase-sku")
+    public Map<String, Object> purchaseSku(
+            @RequestBody(required = false) Map<String, String> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
+        String skuId = body == null ? null : body.get("skuId");
+        if (skuId == null || !PURCHASABLE_SKUS.contains(skuId)) {
+            // 文案不含「登录/未授权/请先」，不会被 api.js 误判成掉线
+            throw new IllegalArgumentException("无效商品：该功能不支持应用内购买");
+        }
+        Map<String, Object> purchased = accountService.purchaseSku(skuId);
+        // 同步刷新：refreshQuietly 失败静默（权益下次陈旧刷新会兜住），不吞掉已成功的购买
+        entitlementService.refreshQuietly();
+        accountService.clearBalanceCache();
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("ok", true);
+        data.put("feature", purchased.get("feature"));
+        data.put("balanceCents", purchased.get("balanceCents"));
+        return ok(data);
+    }
+
+    /**
+     * amountCents 必须是正整数且不超过 {@link #RECHARGE_MAX_CENTS}。
+     * 用 {@code Map<String,Object>} 接体而不是带校验注解的 DTO，是为了让格式错误
+     * （0/负数/超上限/非整数）走业务信封而不是 Spring 绑定失败的 4xx。
+     */
+    private static long parseAmountCents(Object raw) {
+        if (!(raw instanceof Number number)) {
+            throw new IllegalArgumentException("充值金额必须是整数（单位：分）");
+        }
+        double value = number.doubleValue();
+        if (Double.isNaN(value) || Double.isInfinite(value) || value != Math.floor(value)) {
+            throw new IllegalArgumentException("充值金额必须是整数（单位：分）");
+        }
+        long amountCents = number.longValue();
+        if (amountCents <= 0) {
+            throw new IllegalArgumentException("充值金额必须大于 0");
+        }
+        if (amountCents > RECHARGE_MAX_CENTS) {
+            throw new IllegalArgumentException("单笔充值金额不能超过 10000 元");
+        }
+        return amountCents;
     }
 
     // ==================== 内部 ====================
@@ -341,6 +465,23 @@ public class AccountController {
         result.put("code", 0);
         result.put("data", data);
         return result;
+    }
+
+    /**
+     * SKU 购买失败：在通用信封之上多带机器可读的 {@code reason}
+     * （already_owned / insufficient_credits / invalid_sku）。「余额不足」时前端要
+     * 多摆一个「去充值」按钮，靠双语 message 子串判断必然漂，reason 才是判据。
+     * Spring 按异常类型就近匹配，本方法优先于下面的父类 handler。
+     */
+    @ExceptionHandler(SkuPurchaseException.class)
+    public ResponseEntity<Map<String, Object>> handleSkuPurchaseException(SkuPurchaseException e) {
+        log.warn("SKU 购买失败 [{}]: {}", e.getReason(), e.getMessage());
+        Map<String, Object> result = new HashMap<>();
+        result.put("code", 1);
+        result.put("kind", e.getKind().name());
+        result.put("reason", e.getReason());
+        result.put("message", e.getMessage());
+        return ResponseEntity.ok(result);
     }
 
     /**

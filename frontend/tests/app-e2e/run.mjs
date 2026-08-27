@@ -390,6 +390,20 @@ try {
     await mouseClickSel('.unlock-tab:nth-child(3)')
     // uni-app 的 .unlock-input 是 wrapper，真 textarea 在里面
     await page.waitForSelector('.unlock-input textarea', { timeout: 10000 })
+    await ensureConsentChecked()
+  }
+
+  // 2026-08-27 起解锁提交前有两枚同意勾选框（服务条款/隐私政策 + 跨境单独同意），
+  // 都不预勾选——不点上它们，任何解锁点击都会停在同意提示上
+  const ensureConsentChecked = async () => {
+    await page.waitForSelector('.consent-mark', { timeout: 10000 })
+    await page.evaluate(() => {
+      document.querySelectorAll('.consent-mark:not(.checked)').forEach((el) => el.click())
+    })
+    await page.waitForFunction(
+      () => document.querySelectorAll('.consent-mark:not(.checked)').length === 0,
+      { timeout: 5000 },
+    )
   }
 
   await step('launch 未解锁分流到 unlock 页', async () => {
@@ -422,13 +436,12 @@ try {
     await page.type('.unlock-input textarea', messy)
     await sleep(250); await page.type('.unlock-input textarea', ' '); await sleep(250)
     await mouseClickSel('.unlock-btn')
-    // 解锁成功 → toast → reLaunch 回 launch 分流，两个合法落点：
-    //  - 向导未初始化 → wizard
-    //  - 已初始化 → 项目列表页（2026-08 起启动一律落列表，不再「有最近项目就直达工作台」）
-    await page.waitForFunction(() => {
-      const h = location.hash
-      return h.includes('pages/wizard/wizard') || h.includes('pages/project-list/project-list')
-    }, { timeout: 30000 })
+    // 解锁成功 → toast → reLaunch 回 launch 分流。向导页已下线（2026-08-27），
+    // 唯一合法落点是项目列表页（2026-08 起启动一律落列表，不再「有最近项目就直达工作台」）
+    await page.waitForFunction(
+      () => location.hash.includes('pages/project-list/project-list'),
+      { timeout: 30000 },
+    )
   })
 
   } // ---- J1 两条分支到此合流：下面各步在两种形态下都要成立 ----
@@ -437,38 +450,26 @@ try {
   // 试用码关）此前从不经过这一步——长驻后端早就初始化过所以看不出来，冷启动的
   // 隔离后端 initialized=false，launch 分流永远落 wizard，「已解锁重启 → 落项目
   // 列表页」在那种环境下必红。步骤自带「不在向导页就跳过」守卫，长驻后端零影响。
-  await step('向导页无 admin/123 口令提示（未初始化时）', async () => {
-    // 合流后先回分流起点：非破坏性分支上一步停在哪个页面并不确定
+  await step('向导已下线：分流不落向导页，未初始化走 API 补置', async () => {
+    // 向导页 2026-08-27 起整体删除：首启初始化（官方通道 + 跨境同意）由解锁页在
+    // 登录成功后一次性提交。这里钉两件事：① 分流唯一落点是项目列表页（决不能再
+    // 出现向导路由）；② 冷启动隔离后端 initialized=false 时用 API 出口补置——
+    // 后面「已解锁重启 → 落项目列表页」等步骤依赖一个初始化过的后端。
     await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 30000 })
-    await page.waitForFunction(() => {
-      const h = location.hash
-      return h.includes('pages/wizard/wizard') || h.includes('pages/project-list/project-list')
-    }, { timeout: 30000 })
-    if (!page.url().includes('pages/wizard/wizard')) return // 已初始化后端：此腿天然不出现
-    const t = await textOf()
-    if (t.includes('admin') && t.includes('123')) throw new Error('wizard 页仍含 admin/123 提示')
-
-    // P5 配置面收敛：步骤 2 从「OCR / 语音 / 企业数据」三组共 9 个输入框，换成
-    // 「连接账户 + 平台服务总览」，并且默认展开（这一段的全部意义就是让用户看见
-    // 「其余七项不用你配」，收起来等于没做）。
-    // 钉死两件事：新形态在、旧的凭证字段不在——把 23 个字段搬回首启页是本批的核心回归。
-    if (!t.includes('平台服务')) throw new Error('wizard 步骤 2 未渲染「平台服务」总览')
-    for (const gone of ['AccessKey', '企查查 Key', 'Tushare Token', '北大法宝 Token']) {
-      if (t.includes(gone)) throw new Error('wizard 页仍含已撤走的第三方凭证字段：' + gone)
+    await page.waitForFunction(
+      () => location.hash.includes('pages/project-list/project-list'),
+      { timeout: 30000 },
+    )
+    if (page.url().includes('pages/wizard/wizard')) {
+      throw new Error('向导页已下线，分流不该再落 pages/wizard/wizard')
     }
-    // 官方版收敛（dev-board#98）：步骤 1 是「连接账户」直述，不再有 OLLAMA / OPENROUTER 单选，
-    // 也不再指路「使用自己的 Key」。
-    if (!t.includes('连接账户')) throw new Error('wizard 步骤 1 未渲染「连接账户」')
-    for (const gone of ['Ollama', 'OpenRouter API Key', '使用自己的 Key']) {
-      if (t.includes(gone)) throw new Error('wizard 页仍含已撤走的供应商自选入口：' + gone)
+    const wiz = await api('/api/admin/wizard')
+    if (wiz && wiz.initialized === false) {
+      // 供应商必须是后端仍认的三档之一（AWD_CLOUD / OPENROUTER / OLLAMA）：
+      // AWD_CLOUD 要跨境同意，套件用 OPENROUTER 走后端路径即可。
+      const init = await api('/api/admin/wizard', { method: 'POST', body: { ai: { activeProvider: 'OPENROUTER' } } })
+      if (!init || init.code !== 0) throw new Error('API 置初始化失败: ' + JSON.stringify(init).slice(0, 150))
     }
-
-    // API 置初始化（与向导 UI 等价的后端出口；向导 UI 自身的交互不在本套件覆盖面）
-    // 供应商必须是后端仍认的三档之一（AWD_CLOUD / OPENROUTER / OLLAMA）：
-    // 已下线的 gemini 现在会被 toSettingsUpdates 的枚举校验打成 400。
-    // 向导 UI 自 dev-board#98 起只写 AWD_CLOUD，这里是后端路径，不受 UI 收敛影响。
-    const init = await api('/api/admin/wizard', { method: 'POST', body: { ai: { activeProvider: 'OPENROUTER' } } })
-    if (!init || init.code !== 0) throw new Error('API 置向导初始化失败: ' + JSON.stringify(init).slice(0, 150))
   })
 
   await step('已解锁重启 → 落项目列表页（即使有最近项目）', async () => {

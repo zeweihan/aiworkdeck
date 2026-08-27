@@ -419,7 +419,7 @@ class AccountServiceTest {
         transport.enqueue(409, "{\"error\":\"no_allocation\"}");
         AccountException noAllocationEx = assertThrows(AccountException.class, service::fetchAiKey);
 
-        var accountController = new com.checkba.controller.AccountController(null, null, null, null, null);
+        var accountController = new com.checkba.controller.AccountController(null, null, null, null, null, null);
         var keyController = new com.checkba.controller.PlatformAiKeyController(null, null);
         for (AccountException e : new AccountException[] {notConnectedEx, noAllocationEx}) {
             assertEquals(1, accountController.handleAccountException(e).getBody().get("code"),
@@ -468,6 +468,253 @@ class AccountServiceTest {
         transport.enqueue(200, "<html>502 bad gateway</html>");
         AccountException e = assertThrows(AccountException.class, service::fetchLedger);
         assertEquals(AccountException.Kind.MALFORMED, e.getKind());
+    }
+
+    // ==================== 会员与充值（dev-board#183/#184） ====================
+
+    @Test
+    @DisplayName("membership：全量转发 GET /api/account/membership")
+    void fetchMembershipForwards() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"growthPoints\":10,\"topupCents\":2000,\"spendCents\":500,"
+                + "\"tier\":{\"key\":\"silver\",\"level\":2,\"nameZh\":\"白银\",\"nameEn\":\"Silver\",\"bonusPermille\":10},"
+                + "\"nextTier\":null,\"tiers\":[]}");
+        Map<String, Object> body = service.fetchMembership();
+        assertEquals("GET https://www.aiworkdeck.com/api/account/membership",
+                transport.calls.get(transport.calls.size() - 1));
+        assertEquals(10, body.get("growthPoints"));
+        assertNull(body.get("nextTier"));
+    }
+
+    @Test
+    @DisplayName("membership：官网 401 只归 UNAUTHORIZED，不触碰 LicenseService——只有 connect() 才写解锁票据")
+    void fetchMembershipUnauthorizedDoesNotTouchLicense() {
+        com.checkba.service.LicenseService license =
+                org.mockito.Mockito.mock(com.checkba.service.LicenseService.class);
+        transport = new StubTransport()
+                .enqueue(200, ME) // connect() 的 /api/account/me
+                .enqueue(401, "{\"error\":\"unauthorized\"}"); // membership
+        AccountService service = new AccountService(
+                com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"),
+                tempDir.toString(), transport, license);
+        service.connect(KEY);
+        org.mockito.Mockito.reset(license); // connect() 已经合法地碰过一次，只关心 membership 之后
+
+        AccountException e = assertThrows(AccountException.class, service::fetchMembership);
+        assertEquals(AccountException.Kind.UNAUTHORIZED, e.getKind());
+        org.mockito.Mockito.verifyNoInteractions(license);
+    }
+
+    @Test
+    @DisplayName("recharge：POST /api/payment/create 带 amount/kind/idempotencyKey，微信站 present:qrcode 原样透传")
+    void createRechargeForwardsWechatShape() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"success\":true,\"present\":\"qrcode\",\"outTradeNo\":\"T1\","
+                + "\"codeUrl\":\"weixin://wxpay/bizpayurl?pr=abc\",\"qrCode\":\"data:image/png;base64,xx\",\"amount\":1000}");
+        Map<String, Object> body = service.createRecharge(1000, "idem-key-1");
+
+        assertEquals("POST https://www.aiworkdeck.com/api/payment/create",
+                transport.calls.get(transport.calls.size() - 1));
+        String reqBody = transport.bodies.get(transport.bodies.size() - 1);
+        assertTrue(reqBody.contains("\"amount\":1000"), reqBody);
+        assertTrue(reqBody.contains("\"kind\":\"recharge\""), reqBody);
+        assertTrue(reqBody.contains("idem-key-1"), reqBody);
+        assertEquals(KEY, transport.lastBearer);
+        assertEquals("qrcode", body.get("present"));
+        assertEquals("T1", body.get("outTradeNo"));
+    }
+
+    @Test
+    @DisplayName("recharge：Stripe 站 present:redirect 形状原样透传，桌面端不分叉")
+    void createRechargeForwardsStripeShape() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"success\":true,\"present\":\"redirect\",\"outTradeNo\":\"T2\","
+                + "\"amount\":1000,\"redirectUrl\":\"https://checkout.stripe.com/xyz\"}");
+        Map<String, Object> body = service.createRecharge(1000, "idem-key-2");
+        assertEquals("redirect", body.get("present"));
+        assertEquals("https://checkout.stripe.com/xyz", body.get("redirectUrl"));
+    }
+
+    @Test
+    @DisplayName("recharge：未连接账户直接 NOT_CONNECTED，一个请求都不发")
+    void createRechargeNotConnectedShortCircuits() {
+        transport = new StubTransport();
+        AccountException e = assertThrows(AccountException.class, () -> service().createRecharge(1000, "idem"));
+        assertEquals(AccountException.Kind.NOT_CONNECTED, e.getKind());
+        assertTrue(transport.calls.isEmpty());
+    }
+
+    @Test
+    @DisplayName("recharge/status：转发 GET /api/payment/query?outTradeNo=xxx，字段原样透传")
+    void queryRechargeForwards() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"outTradeNo\":\"T1\",\"status\":\"paid\"}");
+        Map<String, Object> body = service.queryRecharge("T1");
+        assertEquals("GET https://www.aiworkdeck.com/api/payment/query?outTradeNo=T1",
+                transport.calls.get(transport.calls.size() - 1));
+        assertEquals("paid", body.get("status"));
+    }
+
+    @Test
+    @DisplayName("recharge/status：查到 order.status=paid 时作废余额缓存，chip 刷新读到的必须是新余额")
+    void queryRechargePaidInvalidatesBalanceCache() {
+        AccountService service = connected();
+        // 先把 profile 缓存喂热（balanceSnapshot 会拉 profile + membership）
+        transport.enqueue(200, "{\"balanceCents\":100,\"plan\":\"paid\"}");
+        transport.enqueue(200, "{\"tier\":null}");
+        service.balanceSnapshot();
+        // 查询到已支付
+        transport.enqueue(200, "{\"success\":true,\"order\":{\"outTradeNo\":\"T1\",\"status\":\"paid\"}}");
+        service.queryRecharge("T1");
+        // 再取余额必须重新出站（缓存已作废），拿到充值后的新值
+        transport.enqueue(200, "{\"balanceCents\":10100,\"plan\":\"paid\"}");
+        transport.enqueue(200, "{\"tier\":null}");
+        Map<String, Object> snapshot = service.balanceSnapshot();
+        assertEquals(10100, snapshot.get("balanceCents"));
+    }
+
+    // ==================== SKU 购买（dev-board#187） ====================
+
+    @Test
+    @DisplayName("purchase-sku：POST /api/account/purchase 带 skuId，成功响应原样透传")
+    void purchaseSkuForwards() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"ok\":true,\"feature\":\"clipboard.unlimited\","
+                + "\"priceCents\":1990,\"balanceCents\":8010,\"orderId\":\"o-1\"}");
+        Map<String, Object> body = service.purchaseSku("feature:clipboard.unlimited");
+        assertEquals("POST https://www.aiworkdeck.com/api/account/purchase",
+                transport.calls.get(transport.calls.size() - 1));
+        assertTrue(transport.bodies.get(transport.bodies.size() - 1)
+                .contains("\"skuId\":\"feature:clipboard.unlimited\""));
+        assertEquals(KEY, transport.lastBearer);
+        assertEquals("clipboard.unlimited", body.get("feature"));
+        assertEquals(8010, body.get("balanceCents"));
+    }
+
+    @Test
+    @DisplayName("purchase-sku：409 insufficient_credits 映射成带 reason 的业务异常，文案不像掉线")
+    void purchaseSkuInsufficientCredits() {
+        AccountService service = connected();
+        transport.enqueue(409, "{\"error\":\"insufficient_credits\"}");
+        SkuPurchaseException e = assertThrows(SkuPurchaseException.class,
+                () -> service.purchaseSku("feature:stage.unlimited"));
+        assertEquals(AccountException.Kind.CONFLICT, e.getKind());
+        assertEquals("insufficient_credits", e.getReason());
+        assertFalse(e.getMessage().contains("登录"), e.getMessage());
+        assertFalse(e.getMessage().contains("未授权"), e.getMessage());
+        assertFalse(e.getMessage().contains("请先"), e.getMessage());
+    }
+
+    @Test
+    @DisplayName("purchase-sku：409 already_owned 与 400 invalid_sku/not_purchasable 各有可区分的 reason")
+    void purchaseSkuOtherFailures() {
+        AccountService service = connected();
+        transport.enqueue(409, "{\"error\":\"already_owned\"}");
+        assertEquals("already_owned", assertThrows(SkuPurchaseException.class,
+                () -> service.purchaseSku("feature:stage.unlimited")).getReason());
+        transport.enqueue(400, "{\"error\":\"invalid_sku\"}");
+        assertEquals("invalid_sku", assertThrows(SkuPurchaseException.class,
+                () -> service.purchaseSku("feature:stage.unlimited")).getReason());
+        transport.enqueue(400, "{\"error\":\"not_purchasable\"}");
+        assertEquals("invalid_sku", assertThrows(SkuPurchaseException.class,
+                () -> service.purchaseSku("feature:stage.unlimited")).getReason());
+    }
+
+    @Test
+    @DisplayName("purchase-sku：未连接账户直接 NOT_CONNECTED，一个请求都不发")
+    void purchaseSkuNotConnectedShortCircuits() {
+        transport = new StubTransport();
+        AccountException e = assertThrows(AccountException.class,
+                () -> service().purchaseSku("feature:stage.unlimited"));
+        assertEquals(AccountException.Kind.NOT_CONNECTED, e.getKind());
+        assertTrue(transport.calls.isEmpty());
+    }
+
+    @Test
+    @DisplayName("balance：未连接账户返回 {connected:false}，一个请求都不发")
+    void balanceSnapshotNotConnected() {
+        transport = new StubTransport();
+        Map<String, Object> result = service().balanceSnapshot();
+        assertEquals(false, result.get("connected"));
+        assertTrue(transport.calls.isEmpty());
+    }
+
+    @Test
+    @DisplayName("balance：已连接时装配 profile + membership 摘要（只取四个展示字段）")
+    void balanceSnapshotAssemblesProfileAndMembership() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"balanceCents\":500,\"plan\":\"free\"}");
+        transport.enqueue(200, "{\"tier\":{\"key\":\"silver\",\"level\":2,\"nameZh\":\"白银\",\"nameEn\":\"Silver\",\"bonusPermille\":10}}");
+
+        Map<String, Object> result = service.balanceSnapshot();
+
+        assertEquals(true, result.get("connected"));
+        assertEquals(500, result.get("balanceCents"));
+        assertEquals("free", result.get("plan"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> membership = (Map<String, Object>) result.get("membership");
+        assertNotNull(membership);
+        assertEquals("silver", membership.get("key"));
+        assertEquals(2, membership.get("level"));
+        assertFalse(membership.containsKey("bonusPermille"), "balance 只挑四个展示字段，摘要不是全量转发");
+    }
+
+    @Test
+    @DisplayName("balance：TTL 窗口内重复调用不再打官网——profile 60 秒、membership 10 分钟")
+    void balanceSnapshotCachesWithinTtl() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"balanceCents\":500,\"plan\":\"free\"}");
+        transport.enqueue(200, "{\"tier\":{\"key\":\"silver\"}}");
+        service.balanceSnapshot();
+        int callsAfterFirst = transport.calls.size();
+
+        service.balanceSnapshot();
+        service.balanceSnapshot();
+
+        assertEquals(callsAfterFirst, transport.calls.size(), "TTL 窗口内不该再发官网请求");
+    }
+
+    @Test
+    @DisplayName("balance：换账户后 clearBalanceCache 令缓存整体作废，下一次调用重新拉取新数据")
+    void balanceSnapshotInvalidatedAfterClear() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"balanceCents\":500,\"plan\":\"free\"}");
+        transport.enqueue(200, "{\"tier\":{\"key\":\"silver\"}}");
+        service.balanceSnapshot();
+        int callsBefore = transport.calls.size();
+
+        service.clearBalanceCache();
+        transport.enqueue(200, "{\"balanceCents\":900,\"plan\":\"paid\"}");
+        transport.enqueue(200, "{\"tier\":{\"key\":\"gold\"}}");
+        Map<String, Object> result = service.balanceSnapshot();
+
+        assertTrue(transport.calls.size() > callsBefore, "清缓存之后必须重新发请求，不能继续吃旧值");
+        assertEquals(900, result.get("balanceCents"),
+                "换账户没清缓存的话，新账户会在 TTL 到期前一直看到上一个账户的余额");
+    }
+
+    @Test
+    @DisplayName("balance：官网不可达时降级为 {connected:true, available:false}，同 usage 端点的口径")
+    void balanceSnapshotDegradesWhenUnreachable() {
+        AccountService service = connected();
+        transport.enqueueNetworkFailure();
+        Map<String, Object> result = service.balanceSnapshot();
+        assertEquals(true, result.get("connected"));
+        assertEquals(false, result.get("available"));
+        assertNull(result.get("balanceCents"), "降级态不该带一个假的余额数字");
+    }
+
+    @Test
+    @DisplayName("balance：membership 拉取失败单独降级为 null，不拖垮已经拿到的余额")
+    void balanceSnapshotMembershipDegradesIndependently() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"balanceCents\":500,\"plan\":\"free\"}");
+        transport.enqueueNetworkFailure(); // membership 这一路失败
+        Map<String, Object> result = service.balanceSnapshot();
+        assertEquals(true, result.get("connected"));
+        assertEquals(500, result.get("balanceCents"), "余额段不该被 membership 的失败一起拖垮");
+        assertTrue(result.containsKey("membership"), "字段形状必须稳定：即使拿不到也要有这个键");
+        assertNull(result.get("membership"));
     }
 
     // ==================== 配置红线 ====================

@@ -38,8 +38,9 @@ export default {
     // 全局返回键：页面栈深度 > 1 时出现在顶部拖拽条里（见 utils/globalBack.js）
     mountGlobalBack()
     // 埋点：页面路由唯一收口（全仓 50 处 navigateTo/reLaunch 直调，拦截器一处全覆盖）；
-    // 只记页面路径枚举（pages.json 里的 14 个页面，2026-08-08 三级导航加了
-    // project-list 与 project-home 两页，2026-08-20 加了 calendar 全局日历页），query 参数不采集
+    // 只记页面路径枚举（pages.json 里的 13 个页面，2026-08-08 三级导航加了
+    // project-list 与 project-home 两页，2026-08-20 加了 calendar 全局日历页，
+    // 2026-08-27 首启向导页下线），query 参数不采集
     const navTrack = (routeType) => ({
       invoke(args) {
         try {

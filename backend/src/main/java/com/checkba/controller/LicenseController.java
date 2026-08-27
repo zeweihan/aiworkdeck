@@ -35,15 +35,36 @@ public class LicenseController {
     private final AccountService accountService;
     private final AccountSwitchCleanup accountSwitchCleanup;
     private final com.checkba.service.site.SiteProfileService siteProfileService;
+    private final com.checkba.service.SystemSettingService systemSettingService;
 
     public LicenseController(LicenseService licenseService,
                              AccountService accountService,
                              AccountSwitchCleanup accountSwitchCleanup,
-                             com.checkba.service.site.SiteProfileService siteProfileService) {
+                             com.checkba.service.site.SiteProfileService siteProfileService,
+                             com.checkba.service.SystemSettingService systemSettingService) {
         this.licenseService = licenseService;
         this.accountService = accountService;
         this.accountSwitchCleanup = accountSwitchCleanup;
         this.siteProfileService = siteProfileService;
+        this.systemSettingService = systemSettingService;
+    }
+
+    /**
+     * 记录《服务条款》《隐私政策》的同意版本（2026-08-27 起登录页展示两份文本并要求勾选）。
+     * 匿名端点：同意发生在解锁之前，与本控制器其余端点同由 LocalModeAccessFilter 兜底。
+     * 只写两个固定键、只记录不设闸——闸在前端勾选框；这里是留痕（何版本何时被同意）。
+     */
+    @PostMapping("/agreement")
+    public Map<String, Object> acceptAgreement(@RequestBody(required = false) Map<String, String> body) {
+        String version = body == null ? null : body.get("version");
+        if (version == null || version.isBlank()) version = "unversioned";
+        version = version.trim();
+        if (version.length() > 64) version = version.substring(0, 64);
+        systemSettingService.set("legal.userAgreement.version", version);
+        systemSettingService.set("legal.userAgreement.acceptedAt", java.time.Instant.now().toString());
+        Map<String, Object> result = new HashMap<>();
+        result.put("code", 0);
+        return result;
     }
 
     @GetMapping("/status")

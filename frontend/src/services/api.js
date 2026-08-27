@@ -329,6 +329,12 @@ function request(options) {
             // 不再对 err.message 做中文子串匹配
             const bizErr = new Error(errorMessage);
             bizErr.code = res.data.code;
+            // 账户 SKU 购买失败的机器可读原因（already_owned / insufficient_credits /
+            // invalid_sku）：「余额不足」要多摆一个「去充值」按钮，双语 message 子串
+            // 判不住，reason 才是判据（后端 AccountController.handleSkuPurchaseException）。
+            if (res.data.reason) {
+              bizErr.reason = res.data.reason;
+            }
             // 平台服务网关的失败分类。**必须原样带上来**：三类故障（未开放 / 上游挂了 /
             // 我们挂了）在用户眼里长得一模一样，下一步却完全不同，而 canUseOwnKey 决定
             // 要不要摆「改用自己的 Key」这个逃生门。丢在这一层等于后端白分了类。
@@ -832,7 +838,20 @@ export function getAdminUsers() {
   });
 }
 
-// 查询首次运行向导状态（Epic #18 T4）：{ code, initialized }
+// 记录《服务条款》《隐私政策》的同意版本（登录页勾选后调用，只记录不设闸）
+export function acceptLegalAgreement(version) {
+  return request({
+    url: '/api/license/agreement',
+    method: 'POST',
+    data: { version },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
+// 查询首启初始化状态：{ code, initialized }。向导页已下线（2026-08-27），
+// 这条现在由解锁页在登录成功后查询，决定要不要做一次性初始化提交
 export function getWizardStatus() {
   return request({
     url: '/api/admin/wizard',
@@ -840,15 +859,8 @@ export function getWizardStatus() {
   });
 }
 
-// 重置首次运行向导（仅管理员）：completed 置 false，之后可重新走一遍向导
-export function resetWizard() {
-  return request({
-    url: '/api/admin/wizard/reset',
-    method: 'POST',
-  });
-}
-
-// 提交首次运行向导（仅未初始化时可调用，payload 结构同 saveAdminConfig）
+// 提交首启初始化（仅未初始化时可调用，payload 结构同 saveAdminConfig；
+// 向导页下线后由解锁页在登录成功后调用；后端 /api/admin/wizard/reset 保留但前端已无入口）
 export function submitWizard(payload) {
   return request({
     url: '/api/admin/wizard',
@@ -1129,6 +1141,67 @@ export function getAccountUsage() {
   return request({
     url: '/api/account/usage',
     method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// ===================== 余额 / 会员 / 充值（dev-board#183/#184/#187）=====================
+
+// 顶栏 Credits chip 的轻端点（后端带 TTL 缓存，可随 onShow 高频调）：
+// { connected, balanceCents, plan, membership: { level, key, nameZh, nameEn } | null }
+// 未连接 { connected: false }；已连接但官网不可达 { connected: true, available: false }。
+export function getAccountBalance() {
+  return request({
+    url: '/api/account/balance',
+    method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// 会员等级/成长值全量（官网透传，不缓存）：
+// { growthPoints, topupCents, spendCents,
+//   tier: { key, level, nameZh, nameEn, bonusPermille },
+//   nextTier: { ..., threshold, remainingPoints } | null,
+//   tiers: [7 档全表，含 threshold/bonusPermille] }
+export function getAccountMembership() {
+  return request({
+    url: '/api/account/membership',
+    method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// 发起充值：amountCents 单位「分」。响应
+// { success, present: 'qrcode' | 'redirect', outTradeNo, codeUrl?, qrCode?, redirectUrl?, amount }
+// 微信站二维码 / Stripe 站跳转，两种形状由 RechargeDialog 分叉。
+export function createAccountRecharge(amountCents) {
+  return request({
+    url: '/api/account/recharge',
+    method: 'POST',
+    data: { amountCents },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  }).then(unwrapEnvelope);
+}
+
+// 查询充值订单状态（轮询用）。已支付形如 { success: true, order: { ..., status: 'paid' } }，
+// 未付 order.status 为 pending 等，字段以官网为准。
+export function getRechargeStatus(outTradeNo) {
+  return request({
+    url: '/api/account/recharge/status?outTradeNo=' + encodeURIComponent(outTradeNo || ''),
+    method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// 应用内购买本地 SKU（白名单只有 feature:clipboard.unlimited / feature:stage.unlimited）。
+// 成功 { ok, feature, balanceCents }，后端已同步刷新权益并作废余额缓存；
+// 失败 reject 的 Error 上带 reason（already_owned / insufficient_credits / invalid_sku）。
+export function purchaseFeatureSku(skuId) {
+  return request({
+    url: '/api/account/purchase-sku',
+    method: 'POST',
+    data: { skuId },
+    header: {
+      'Content-Type': 'application/json',
+    },
   }).then(unwrapEnvelope);
 }
 

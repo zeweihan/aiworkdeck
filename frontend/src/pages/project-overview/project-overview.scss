@@ -381,6 +381,34 @@ $bg-white: #FFFFFF;
       color: $color-primary;
     }
   }
+
+  // Credits 余额 chip（dev-board#187）：与 account-chip 同一族品牌绿底，
+  // 余额是数字所以字重略加；等级名做成内嵌小徽章
+  &.wallet-chip {
+    background: $color-accent-pale;
+    border-color: #c4ead8;
+    gap: 6px;
+
+    &:hover {
+      border-color: $color-accent;
+    }
+
+    .trial-chip-text {
+      color: $color-primary;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .wallet-chip-tier {
+      font-size: 10px;
+      font-weight: 500;
+      line-height: 14px;
+      color: #fff;
+      background: $color-primary;
+      border-radius: 3px;
+      padding: 0 5px;
+    }
+  }
 }
 
 .project-meta {

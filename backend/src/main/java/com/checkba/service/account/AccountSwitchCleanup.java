@@ -18,7 +18,8 @@ import org.springframework.stereotype.Service;
  * 清理动作原先只写在前者里，后者只调了 {@code entitlementService.refreshAsync()}——
  * 于是从解锁页换成另一个账号时，上一个账号的<b>平台 AI 密钥、已购权益、用量基线</b>三样
  * 全部原封不动留着：新账号没充值也能接着花上一个账号的 OpenRouter 额度，
- * 也继承了上一个账号买过的付费项。
+ * 也继承了上一个账号买过的付费项。（2026-08 起同一道理再管一样：
+ * {@code /api/account/balance} 的 profile/membership TTL 缓存，同样是账户级内容。）
  *
  * <p>而解锁页恰恰是主入口——用账户 Key 解锁的人走的就是那条路。
  * 这是本仓反复踩到的同一个形状：<b>同一道闸有两个入口时，动作必须只有一处定义</b>，
@@ -33,6 +34,7 @@ import org.springframework.stereotype.Service;
 @Slf4j
 public class AccountSwitchCleanup {
 
+    private final AccountService accountService;
     private final EntitlementService entitlementService;
     private final PlatformAiChannel platformAiChannel;
     private final PlatformCreditsGate platformCreditsGate;
@@ -61,5 +63,8 @@ public class AccountSwitchCleanup {
         platformAiChannel.clearCache();
         platformCreditsGate.reset();
         platformUsageAccountant.resetBaseline();
+        // /api/account/balance 的 profile/membership TTL 缓存也是账户级内容（dev-board#183/#184）：
+        // 不清的话换一个没充值的新账号进来，顶栏会先展示上一个账号的余额/等级直到缓存自然过期
+        accountService.clearBalanceCache();
     }
 }

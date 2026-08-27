@@ -5,6 +5,7 @@
       v-if="hiddenCount > 0"
       class="clip-unlock-hint"
       :text="$t('panels.cpUnlockHint', { count: hiddenCount })"
+      sku-id="feature:clipboard.unlimited"
     />
     <scroll-view class="clip-body" :scroll-y="false" :scroll-x="true" :show-scrollbar="false">
       <view v-if="loading" class="loading">{{ $t('panels.cpLoading') }}</view>
