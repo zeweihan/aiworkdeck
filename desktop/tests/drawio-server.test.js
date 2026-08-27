@@ -8,6 +8,16 @@
 //    pack 根惰性解析（revoked / 无完成标记的版本不参与）。
 
 const test = require('node:test')
+
+// CI 按改动面跳过（desktop-build.yml 的「Detect drawio changes」步骤注入）：
+// 这组用例要真起 HTTP 服务 + 真读写 Temp 目录，是 Windows runner 上 Defender
+// 锁临时文件 EPERM 的主要来源（dev-board#146，多次发版被它咬）。本区间没碰
+// drawio 服务/本测试/资源脚本时整套不打；tag 发版与手动触发永远全量。
+if (process.env.SKIP_DRAWIO_TESTS === '1') {
+  test('drawio-server 全套用例跳过（本区间未改动 drawio）', { skip: true }, () => {})
+  return
+}
+
 const assert = require('node:assert')
 const fs = require('fs')
 const os = require('os')

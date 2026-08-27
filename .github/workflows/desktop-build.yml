@@ -56,6 +56,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 全量历史：Detect drawio changes 需要拿 PR base / push before 做 diff
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -94,8 +97,43 @@ jobs:
       - name: Install desktop dependencies
         working-directory: desktop
         run: npm ci
+      - name: Detect drawio changes (skip drawio tests when untouched)
+        shell: bash
+        run: |
+          # drawio-server 测试要真起 HTTP 服务 + 真读写 Temp 目录，是 Windows
+          # runner 上 Defender 锁文件 EPERM（hookFailed）与步骤卡死的主要来源
+          #（dev-board#146；v0.25.1/#609/v0.26.0 三个发版 run 都被咬过）。
+          # 本区间没碰 drawio 服务/测试/资源脚本就整套跳过（测试文件内识别
+          # SKIP_DRAWIO_TESTS=1）；tag 发版与手动触发永远全量跑。
+          SKIP=0
+          if [[ "$GITHUB_REF" == refs/tags/* || "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "tag/manual trigger: full suite"
+          else
+            BASE=""
+            [ "$GITHUB_EVENT_NAME" = "pull_request" ] && BASE="${{ github.event.pull_request.base.sha }}"
+            [ "$GITHUB_EVENT_NAME" = "push" ] && BASE="${{ github.event.before }}"
+            if [ -n "$BASE" ] && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+              CHANGED=$(git diff --name-only "$BASE...$GITHUB_SHA" -- \
+                desktop/main/drawio-server.js \
+                desktop/tests/drawio-server.test.js \
+                desktop/scripts/fetch-drawio-assets.js)
+              if [ -z "$CHANGED" ]; then
+                echo "drawio untouched since $BASE — skipping drawio-server tests"
+                SKIP=1
+              else
+                echo "drawio files changed:"; echo "$CHANGED"
+              fi
+            else
+              echo "no usable base commit ($BASE) — full suite"
+            fi
+          fi
+          [ "$SKIP" = "1" ] && echo "SKIP_DRAWIO_TESTS=1" >> "$GITHUB_ENV"
+          echo "drawio tests: $([ "$SKIP" = "1" ] && echo SKIPPED || echo FULL)"
       - name: Desktop unit tests
         working-directory: desktop
+        # drawio 测试曾在 Windows 上锁死 110 分钟不退出（v0.26.0 首发 run）：
+        # 正常全量 ≤5 分钟，给 3 倍预算快挂，别再拖到 job 默认 6 小时上限。
+        timeout-minutes: 15
         run: npm test
       - name: Bundle backend (macOS arm64)
         if: runner.os == 'macOS'

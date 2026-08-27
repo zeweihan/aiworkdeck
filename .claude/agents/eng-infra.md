@@ -142,6 +142,14 @@ stash 误 pop 之类）之后，5174 上的页面可能变成**整页无样式**
   drawio-server.test.js 的 rmrf 帮手是范本）：读流 autoClose 的 fs.close 回调可能还排在事件
   循环里，rmSync 的 maxRetries 是同步忙等、会把事件循环连同那个 close 一起卡死，给多大预算
   都是 ENOTEMPTY 跑穿（run 32237671073 实测证伪过 rmSync 重试版）。纯文件读写的测试不受影响。
+- **drawio-server 测试在 CI 按改动面跳过（PR#612）**：这组用例真起 HTTP 服务+真读写 Temp
+  目录，Windows runner 的 Defender 会拿排他句柄锁临时文件 → teardown EPERM（hookFailed），
+  外层重试只是把 8 秒的步骤拖成几分钟再挂，v0.26.0 首发 run 更锁死 110 分钟（force-cancel
+  才解）。desktop-build.yml 的「Detect drawio changes」在 PR/push 区间未碰
+  `desktop/main/drawio-server.js` / `desktop/tests/drawio-server.test.js` /
+  `desktop/scripts/fetch-drawio-assets.js` 时注入 `SKIP_DRAWIO_TESTS=1`（测试文件顶层早退）；
+  **tag 发版与 workflow_dispatch 永远全量**。Desktop unit tests 步骤有 `timeout-minutes: 15`
+  兜底。改动这三份文件之一时，自查该 PR 的 Detect 步骤输出应为 FULL。
 - 发版有个跨仓的时间差：镜像脚本删旧包 vs 官网页面 ISR 缓存。两边任何一边改保留策略/缓存时长前，先看 `deploy/update-mirror-sync.sh` 里 prune_old_installers 的注释。
 - macOS CI 红要当真查（Apple 协议过期事件后恢复）；`--admin` 合并与 worktree 删分支技巧见 ci-macos 记录。
 - iCloud 驱逐会掏空本地文件（打包/测试环境两次踩）；EMFILE 用抬 ulimit 解。
