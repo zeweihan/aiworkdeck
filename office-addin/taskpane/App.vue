@@ -65,8 +65,10 @@
         </div>
         <div v-if="quotaText" class="account-quota">
           <span class="quota-label">{{ t('aiQuotaLabel') }}</span>
-          <span class="quota-value">{{ quotaText }}</span>
+          <span class="quota-value" :class="{ low: quotaLow }">{{ quotaText }}</span>
         </div>
+        <!-- 充值走官网账户页（dev-board#198）：云后端不落用户 awdk key，收银台进不了任务窗格 -->
+        <button v-if="siteRecharge" class="menu-item" :title="t('rechargeTitle')" @click="openRecharge">{{ t('recharge') }}</button>
         <button class="menu-item danger" @click="logout">{{ t('logout') }}</button>
       </div>
     </div>
@@ -126,6 +128,7 @@ import {
   createProject, fetchPlatformAiStatus
 } from './lib/api.js'
 import { t, getLang, setLang } from './lib/i18n.js'
+import { rechargeUrl, openExternal } from './lib/site.js'
 import { popIn } from './lib/motion.js'
 
 const settings = reactive(loadSettings())
@@ -171,6 +174,20 @@ const accountContact = computed(() => {
   if (!me.value) return ''
   return me.value.phoneMasked || me.value.emailMasked || ''
 })
+
+/** 官网充值页（仅官方云后端有；私有部署/桌面本机为空串，入口隐藏） */
+const siteRecharge = computed(() => rechargeUrl(settings.serverUrl))
+
+/** 低额度警示：剩余不足 $1 时数字转警示色 */
+const quotaLow = computed(() => {
+  const q = aiQuota.value
+  return Boolean(q && q.hasKey && q.remainingUsd != null && q.remainingUsd <= 1)
+})
+
+function openRecharge() {
+  accountOpen.value = false
+  openExternal(siteRecharge.value)
+}
 
 /** 额度文案：有上限就给「剩余 / 共」，只有用量就给「已用」，什么都没有则隐藏 */
 const quotaText = computed(() => {
@@ -525,6 +542,8 @@ onMounted(async () => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.quota-value.low { color: var(--awd-danger); }
 
 /* 新建项目弹层（dev-board#196） */
 .new-project-menu { padding: 12px 12px 10px; }
