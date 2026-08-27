@@ -353,9 +353,10 @@ function toLocalMessage(row) {
   let question = null
   let artifact = ''
   const p = createTagStreamParser({
-    // 标签间的裸换行不进正文（与桌面端 useAgentStream 的守卫同口径，dev-board#147）
-    onMainText: (t) => { if (!text && !t.trim()) return; text += t },
-    onThinkingText: (t) => { if (!thinking && !t.trim()) return; thinking += t },
+    // 标签间的裸换行不进正文（与桌面端 useAgentStream 的守卫同口径，dev-board#147）；
+    // 首个非空块自带的前导空白同样裁掉——"\n\n正文" 混合块曾让气泡顶部先空一截（dev-board#197）
+    onMainText: (t) => { if (!text) { t = t.replace(/^\s+/, ''); if (!t) return } text += t },
+    onThinkingText: (t) => { if (!thinking) { t = t.replace(/^\s+/, ''); if (!t) return } thinking += t },
     onQuestion: (q) => { question = q.options.length ? { options: q.options, answered: false } : null },
     onArtifact: (c) => { artifact = artifact ? artifact + '\n\n' + c : c }
   })
@@ -411,9 +412,10 @@ function attachParser(assistant) {
   parser = createTagStreamParser({
     // 前导空白守卫（dev-board#147）：模型输出的协议标签之间全是裸换行，栈空时会被
     // 解析器当主文本放行；正文还没开张就先攒十几个换行，光标被推着往下走一屏。
-    // 与桌面端 useAgentStream 的同名守卫保持同口径：正文为空时纯空白直接丢弃。
-    onMainText: (t) => { if (!assistant.text && !t.trim()) return; assistant.text += t },
-    onThinkingText: (t) => { if (!assistant.thinking && !t.trim()) return; assistant.thinking += t },
+    // 与桌面端 useAgentStream 的同名守卫保持同口径：正文为空时纯空白直接丢弃，
+    // 且首个非空块的前导空白也裁掉（"\n\n正文" 混合块此前会带着换行进气泡，dev-board#197）。
+    onMainText: (t) => { if (!assistant.text) { t = t.replace(/^\s+/, ''); if (!t) return } assistant.text += t },
+    onThinkingText: (t) => { if (!assistant.thinking) { t = t.replace(/^\s+/, ''); if (!t) return } assistant.thinking += t },
     // <artifact>（计划/交付物）整块闭合时挂到消息上，界面渲染成计划卡（dev-board#150）
     onArtifact: (content) => {
       assistant.artifact = assistant.artifact ? assistant.artifact + '\n\n' + content : content

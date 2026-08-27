@@ -1,13 +1,21 @@
 <template>
   <div class="chat">
-    <div ref="listEl" class="message-list">
+    <div ref="listEl" class="message-list" @scroll.passive="onListScroll">
       <div v-if="!messages.length" class="empty">
-        <p>{{ t('emptyHint') }}</p>
-        <p v-if="!configured" class="empty-warn">{{ t('connectionNotReady') }}</p>
-        <p v-else-if="!projectId" class="empty-warn">{{ t('noProjectSelected') }}</p>
-        <div v-else ref="quickPromptsEl" class="quick-prompts">
-          <button v-for="q in quickPrompts" :key="q.label" class="quick-btn" @click="sendQuick(q.text)">{{ q.label }}</button>
+        <!-- 未登录空态（dev-board#192）：品牌化欢迎卡替代一句红字 -->
+        <div v-if="!configured" class="welcome">
+          <img class="welcome-logo" :src="logoSrc" alt="AI WorkDeck" />
+          <div class="welcome-title">{{ t('signInWelcomeTitle') }}</div>
+          <p class="welcome-hint">{{ t('signInWelcomeHint') }}</p>
+          <button class="welcome-btn" @click="goSignIn">{{ t('login') }}</button>
         </div>
+        <template v-else>
+          <p>{{ t('emptyHint') }}</p>
+          <p v-if="!projectId" class="empty-warn">{{ t('noProjectSelected') }}</p>
+          <div v-else ref="quickPromptsEl" class="quick-prompts">
+            <button v-for="q in quickPrompts" :key="q.label" class="quick-btn" @click="sendQuick(q.text)">{{ q.label }}</button>
+          </div>
+        </template>
       </div>
 
       <TransitionGroup :css="false" @enter="onMessageEnter" @leave="onMessageLeave">
@@ -39,7 +47,7 @@
           <!-- 计划/交付物卡（<artifact> 整块）：此前直接丢弃，审批型计划在插件端看不到本体 -->
           <div v-if="msg.artifact" class="artifact-card">
             <div class="artifact-head">{{ t('planLabel') }}</div>
-            <div class="artifact-body">{{ msg.artifact }}</div>
+            <div class="artifact-body md" v-html="renderMarkdown(msg.artifact)"></div>
             <div v-if="i === messages.length - 1 && !streaming" class="artifact-actions">
               <button class="option-btn" @click="sendQuick(t('proceedWithPlan'))">{{ t('proceedWithPlan') }}</button>
               <button class="option-btn" @click="focusInput">{{ t('proposeChanges') }}</button>
@@ -49,9 +57,10 @@
           <div v-if="msg.streaming && !msg.text" class="bubble assistant-bubble pending-bubble">
             {{ msg.tools && msg.tools.length ? t('workingOnDocument') : t('thinkingEllipsis') }}
           </div>
+          <!-- Markdown 渲染（dev-board#197）：加粗/列表/代码不再以星号裸奔；
+               renderMarkdown 先整体 HTML 转义再套标签，v-html 无注入面 -->
           <div v-else class="bubble assistant-bubble">
-            <span>{{ msg.text }}</span>
-            <span v-if="msg.streaming" class="cursor"></span>
+            <div class="md" :class="{ 'md-streaming': msg.streaming }" v-html="renderMarkdown(msg.text)"></div>
           </div>
           <!-- 引用定位：回答里引用的原文片段可点击，在文档中选中滚动到位（仅 Word 宿主） -->
           <div v-if="citations(msg).length" class="cite-row">
@@ -186,15 +195,7 @@
             <span v-if="selectedSkillIds.length" class="row-badge">{{ selectedSkillIds.length }}</span>
             <span class="row-chevron">›</span>
           </button>
-          <button v-if="modelCatalog && modelCatalog.models.length" class="menu-row" @click="moreLevel = 'model'">
-            <span class="row-label">{{ t('menuModel') }}</span>
-            <span class="row-meta">{{ currentModelName }}</span>
-            <span class="row-chevron">›</span>
-          </button>
-          <button class="menu-row" @click="fromMore(openHistory)">
-            <span class="row-label">{{ t('menuHistory') }}</span>
-            <span class="row-chevron">›</span>
-          </button>
+          <!-- 历史与模型不再收在这里：它们是高频入口，常驻 composer 一行（dev-board#195） -->
         </template>
         <template v-else>
           <!-- 第二级：模型选择 -->
@@ -228,10 +229,19 @@
         >{{ docLabel }}</button>
         <button
           class="pill more-pill"
-          :class="{ active: moreOpen || attachedFiles.length || selectedSkillIds.length || selectedModel }"
+          :class="{ active: moreOpen || attachedFiles.length || selectedSkillIds.length }"
           :title="t('moreMenuTitle')"
           @click="moreOpen ? closeMore() : openMore()"
         >+</button>
+        <!-- 历史与模型常驻（dev-board#195）：此前收在 + 二级菜单里，用户找不到 -->
+        <button class="pill" :title="t('historyPillTitle')" @click="openHistory">{{ t('historyButton') }}</button>
+        <button
+          v-if="modelCatalog && modelCatalog.models.length"
+          class="pill model-pill"
+          :class="{ active: moreOpen && moreLevel === 'model' || selectedModel }"
+          :title="t('modelSelectTitle')"
+          @click="moreOpen ? closeMore() : openModelMenu()"
+        >{{ currentModelName }}</button>
         <span class="context-spacer"></span>
         <button class="pill" :title="t('newConversationTitle')" :disabled="streaming" @click="newConversation">{{ t('newConversationButton') }}</button>
       </div>
@@ -282,6 +292,7 @@ import { locateInDocument } from '../lib/officeExecutor.js'
 import { micSupported, startRecording, MAX_RECORD_MS } from '../lib/wavRecorder.js'
 import { postDictate } from '../lib/api.js'
 import { t } from '../lib/i18n.js'
+import { renderMarkdown } from '../lib/markdown.js'
 import { riseIn, panelUp, popIn, staggerIn } from '../lib/motion.js'
 
 /**
@@ -297,13 +308,35 @@ const emit = defineEmits(['need-settings'])
 
 const listEl = ref(null)
 
+// 未登录欢迎卡的 Logo：与 App.vue 同款运行时相对路径（绕开 vite 静态改写）
+const logoSrc = 'icon-64.png'
+
 const canSend = computed(() =>
   props.configured && props.projectId && input.value.trim().length > 0 && !streaming.value)
 
-function scrollToBottom() {
+/**
+ * 吸底守卫（dev-board#197）：只有用户本来就贴着底部时，流式增量才继续吸底；
+ * 用户上滚回看时不再被每个 text_delta 拽回去——「内容老往下蹦」的另一半根因。
+ */
+const stickToBottom = ref(true)
+
+function onListScroll() {
+  const el = listEl.value
+  if (!el) return
+  stickToBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+}
+
+function scrollToBottom(force = false) {
   nextTick(() => {
-    if (listEl.value) listEl.value.scrollTop = listEl.value.scrollHeight
+    if (listEl.value && (force || stickToBottom.value)) {
+      listEl.value.scrollTop = listEl.value.scrollHeight
+      stickToBottom.value = true
+    }
   })
+}
+
+function goSignIn() {
+  emit('need-settings')
 }
 
 // 连接配置或项目变化时重新激活会话（同一身份是空操作，不打断进行中的对话）
@@ -313,14 +346,16 @@ watch(
   { immediate: true }
 )
 
-// store 不碰 DOM：由它发出滚动信号，视图负责滚
-watch(scrollSignal, scrollToBottom)
+// store 不碰 DOM：由它发出滚动信号，视图负责滚（吸底与否由守卫决定）
+watch(scrollSignal, () => scrollToBottom())
 
 // 重新挂载（从设置视图切回来）时恢复到最新一条消息
-onMounted(scrollToBottom)
+onMounted(() => scrollToBottom(true))
 
 async function send() {
   const result = await sendMessage()
+  // 自己发的消息永远滚到底：哪怕刚才上滚回看，发送就是「回到对话前沿」的意图
+  scrollToBottom(true)
   if (result && result.needSettings) emit('need-settings')
 }
 
@@ -376,6 +411,13 @@ const currentModelName = computed(() => {
 
 function openMore() {
   moreLevel.value = 'root'
+  moreOpen.value = true
+  nextTick(() => popIn(morePanelEl.value))
+}
+
+/** 模型 pill 直达模型选择页（复用更多菜单的二级面板，dev-board#195） */
+function openModelMenu() {
+  moreLevel.value = 'model'
   moreOpen.value = true
   nextTick(() => popIn(morePanelEl.value))
 }
@@ -515,6 +557,7 @@ async function openAttach() {
 
 async function sendQuick(text) {
   const result = await sendMessage(text)
+  scrollToBottom(true)
   if (result && result.needSettings) emit('need-settings')
 }
 
@@ -612,6 +655,56 @@ async function confirmDelete(c) {
 }
 
 .empty-warn { color: var(--awd-danger); }
+
+/* 未登录欢迎卡（dev-board#192）：品牌化空态，替代一句孤零零的红字 */
+.welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 260px;
+  margin: 24px auto 0;
+  padding: 26px 20px 22px;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
+  border-radius: var(--awd-radius-md);
+  box-shadow: var(--awd-shadow-soft);
+}
+
+.welcome-logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(26, 83, 54, 0.16);
+}
+
+.welcome-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--awd-text);
+}
+
+.welcome-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--awd-text-secondary);
+}
+
+.welcome-btn {
+  margin-top: 4px;
+  padding: 7px 30px;
+  border: none;
+  border-radius: 999px;
+  background: var(--awd-primary);
+  color: #fff;
+  font-size: 13px;
+  transition: background 0.2s ease, transform 0.1s ease, box-shadow 0.2s ease;
+  box-shadow: 0 4px 14px rgba(26, 83, 54, 0.22);
+}
+
+.welcome-btn:hover { background: var(--awd-primary-hover); }
+.welcome-btn:active { transform: translateY(1px); }
 
 .message { margin-bottom: 12px; }
 
@@ -827,16 +920,6 @@ async function confirmDelete(c) {
   font-size: 11px;
 }
 
-.cursor {
-  display: inline-block;
-  width: 7px;
-  height: 13px;
-  margin-left: 2px;
-  background: var(--awd-primary);
-  vertical-align: text-bottom;
-  animation: blink 1s step-start infinite;
-}
-
 @keyframes blink { 50% { opacity: 0; } }
 
 /* 不给 composer 设 z-index：历史/技能/附件 overlay（z-20）要能盖住它；
@@ -894,6 +977,13 @@ async function confirmDelete(c) {
   text-align: center;
   font-size: 13px;
   line-height: 1.2;
+}
+
+/* 模型 pill：显示当前模型名，太长截断 */
+.model-pill {
+  max-width: 30%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 点击捕获层：盖住菜单以外的区域（composer 自身是 stacking context，fixed 仍覆盖全窗） */
@@ -1197,4 +1287,51 @@ textarea:focus {
 }
 
 .banner.conn { color: var(--awd-text-secondary); }
+</style>
+
+<!-- v-html 注入的 Markdown 内容拿不到 scoped 属性，样式放非 scoped 块（.md 前缀限定作用面） -->
+<style>
+.md { white-space: normal; }
+
+.md p { margin: 0 0 8px; }
+.md ul, .md ol { margin: 0 0 8px; padding-left: 18px; }
+.md li { margin: 2px 0; }
+.md h4, .md h5 { margin: 10px 0 6px; font-size: 13px; }
+.md h4:first-child, .md h5:first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+
+.md code {
+  font-family: var(--awd-font-mono);
+  font-size: 12px;
+  background: var(--awd-bone);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+.md pre {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  background: var(--awd-bone);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+.md pre code { background: none; padding: 0; }
+
+.md a { color: var(--awd-accent); }
+
+/* 流式光标挂在最后一个块的尾部，跟着 Markdown 排版走 */
+.md-streaming > :last-child::after {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 13px;
+  margin-left: 2px;
+  background: var(--awd-primary);
+  vertical-align: text-bottom;
+  /* scoped 块里的 @keyframes 会被加 hash 改名，这里用非 scoped 的独立定义 */
+  animation: md-caret-blink 1s step-start infinite;
+}
+
+@keyframes md-caret-blink { 50% { opacity: 0; } }
 </style>
