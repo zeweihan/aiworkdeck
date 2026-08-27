@@ -135,8 +135,10 @@
             </svg>
           </view>
 
-          <!-- 2. Bottom Sidebar (Tools Panel) -->
+          <!-- 2. Bottom Sidebar (Tools Panel)
+               三个工具面板都被搬到左/右之后底栏没东西可显示，开关一并收起（dev-board#180） -->
           <view
+            v-if="bottomToolsList.length"
             class="top-bar-btn"
             :class="{ active: showToolsPanel }"
             @tap="toggleToolsPanel"
@@ -257,9 +259,13 @@
           v-for="p in LEFT_SIDEBAR_PLUGINS"
           :key="p.key"
           class="rail-btn"
-          :class="{ active: (leftPaneKey === p.key && !sidebarCollapsed) || (p.key === 'staging' && stagingPinned) }"
+          :class="{ active: (leftPaneKey === p.key && !sidebarCollapsed) || (p.key === 'staging' && stagingPinned), 'is-movable': isMovablePanel(p.key) }"
           :title="p.label"
+          :draggable="isMovablePanel(p.key)"
           @tap="toggleLeftPane(p.key)"
+          @dragstart="onPanelDragStart(p.key, $event)"
+          @dragend="onPanelDragEnd"
+          @contextmenu="openDockMenu(p.key, $event)"
         >
           <view v-if="p.svgPaths" class="rail-icon-wrapper">
             <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -685,6 +691,65 @@
             @open-plugin="toggleLeftPane"
             @ai-develop="onPluginDevAiDevelop"
           />
+          <!-- 停靠到左栏的工具面板（dev-board#180）。三个面板组件本身一行没改，这里只做宿主：
+               一条紧凑搜索行（底栏那份的等价物——这三个面板的搜索早就外置给宿主了，
+               不给就等于没有搜索）+ 面板体。三个 dock 的 props/@event 逐个显式写，
+               **不改成 <component :is>**：check-emit-bindings.mjs 是静态扫描，动态绑定会静默失去覆盖。 -->
+          <view v-else-if="leftPaneKey === 'variables'" class="dock-tool-pane">
+            <view class="dock-tool-head">
+              <input class="dock-tool-search" v-model="toolsSearchKeyword" :placeholder="$t('workbench.searchVariables')" confirm-type="search" />
+              <view class="dock-tool-btn" :title="$t('workbench.setAsVariable')" @tap="handleOpenCreateVariable"><text>＋</text></view>
+              <view class="dock-tool-btn" :title="$t('workbench.sync')" @tap="handleSyncVariable"><text>↻</text></view>
+            </view>
+            <view class="dock-tool-body">
+              <VariablePanel
+                ref="variablePanel"
+                :project-id="projectId"
+                :get-editor="getLibreVariableBridge"
+                :search-keyword="toolsSearchKeyword"
+              />
+            </view>
+          </view>
+          <view v-else-if="leftPaneKey === 'favorites'" class="dock-tool-pane">
+            <view class="dock-tool-head">
+              <input class="dock-tool-search" v-model="toolsSearchKeyword" :placeholder="$t('workbench.searchFavorites')" confirm-type="search" />
+            </view>
+            <view class="dock-tool-body">
+              <ProjectFavoritesPanel
+                ref="favoritesPanel"
+                :project-id="projectId"
+                :query="toolsSearchKeyword"
+                @insert="insertPlainTextToWps"
+                @open-url="openBrowserTab($event)"
+              />
+            </view>
+          </view>
+          <view v-else-if="leftPaneKey === 'clipboard'" class="dock-tool-pane">
+            <view class="dock-tool-head">
+              <input class="dock-tool-search" v-model="toolsSearchKeyword" :placeholder="$t('workbench.searchClipboard')" confirm-type="search" />
+            </view>
+            <view class="dock-tool-body">
+              <ClipboardPanel
+                ref="clipboardPanel"
+                :query="toolsSearchKeyword"
+                @insert="insertPlainTextToWps"
+                @preview-image="openImagePreview"
+              />
+            </view>
+          </view>
+          <!-- 依据被拖到左栏时（dev-board#182）。标题由外壳的 .sidebar-header 出，
+               面板自己不画标题；这里也不套 .dock-tool-pane 的搜索行——它自带头部。 -->
+          <InsightPane
+            v-else-if="leftPaneKey === 'insight'"
+            :project-id="projectId"
+            :doc-file-id="insightDocFileId"
+            :doc-name="insightDocName"
+            :get-executor="getInsightExecutor"
+            :can-write="canWriteProject"
+            :parse-request="insightParseRequest"
+            :cursor-context="insightCursorContext"
+            @entities="onInsightEntities"
+          />
           <!-- 有真前端入口（Web 插件）走 iframe 沙箱；纯工具/skill 插件走宿主渲染的
                启动面板（介绍 + 怎么用 + 一键动作发进 AI 对话），不再是「未配置入口地址」。 -->
           <PluginPane
@@ -878,6 +943,10 @@
                       @command-progress="onEditorCommandProgress"
                       @evidence-drop="onEvidenceDrop($event, 'left')"
                       @locator-consumed="onLocatorConsumed"
+                      :insight-open="insightPaneOpen && insightDocFileId === file.id"
+                      :insight-subscribed="insightPaneOpen && insightDocFileId === file.id"
+                      @open-insight="onOpenInsight($event, 'left')"
+                      @cursor-context="onEditorCursorContext"
                     />
                   </view>
                   <!-- 预热备胎实例（librePool.js）：file=null 时是后台预 boot 的
@@ -903,6 +972,10 @@
                       @command-progress="onEditorCommandProgress"
                       @evidence-drop="onEvidenceDrop($event, 'left')"
                       @locator-consumed="onLocatorConsumed"
+                      :insight-open="!!(sp.file && insightPaneOpen && insightDocFileId === sp.file.id)"
+                      :insight-subscribed="!!(sp.file && insightPaneOpen && insightDocFileId === sp.file.id)"
+                      @open-insight="onOpenInsight($event, 'left')"
+                      @cursor-context="onEditorCursorContext"
                     />
                   </view>
                   <!-- 网页标签保活池（Web/H5）：与上面的编辑器保活池同形制——按标签建实例、
@@ -1052,6 +1125,10 @@
                       @command-progress="onEditorCommandProgress"
                       @evidence-drop="onEvidenceDrop($event, 'right')"
                       @locator-consumed="onLocatorConsumed"
+                      :insight-open="insightPaneOpen && insightDocFileId === file.id"
+                      :insight-subscribed="insightPaneOpen && insightDocFileId === file.id"
+                      @open-insight="onOpenInsight($event, 'right')"
+                      @cursor-context="onEditorCursorContext"
                     />
                   </view>
                   <!-- 网页标签保活池（见左窗格同名注释）。跨窗格拖拽是"在另一侧也打开同一
@@ -1154,18 +1231,23 @@
             </view>
 
             <!-- 底部常用工具面板（仅占中间工作区宽度；右侧 AI 面板优先完整显示） -->
-            <view v-if="showToolsPanel" class="bottom-panel" ref="bottomPanel" :style="{ height: toolsPanelHeight + 'px' }">
+            <view v-if="showToolsPanel && bottomToolsList.length" class="bottom-panel" ref="bottomPanel" :style="{ height: toolsPanelHeight + 'px' }">
               <view class="bottom-resize-handle" @touchstart="startResize('bottom', $event)" @mousedown="startResize('bottom', $event)"></view>
               <view class="panel-header panel-header-tools">
                 <!-- Group: Tabs + Specific Actions -->
                 <view class="header-content-left">
                   <view class="panel-tabs awd-style">
+                    <!-- tab 可拖到左/右侧栏投放，也可右键选「移到…」（dev-board#180） -->
                     <view
-                      v-for="t in toolsList"
+                      v-for="t in bottomToolsList"
                       :key="t.key"
-                      class="panel-tab"
+                      class="panel-tab is-movable"
                       :class="{ active: activeToolKey === t.key }"
+                      :draggable="true"
                       @tap="switchToolTab(t.key)"
+                      @dragstart="onPanelDragStart(t.key, $event)"
+                      @dragend="onPanelDragEnd"
+                      @contextmenu.prevent.stop="openDockMenu(t.key, $event)"
                     >
                       <text class="panel-tab-label">{{ t.label }}</text>
                       <view class="tab-indicator" v-if="activeToolKey === t.key"></view>
@@ -1244,29 +1326,151 @@
             @dragleave="handleAiDragLeave"
             @drop="handleAiDrop"
           >
+            <!-- 右侧 dock 的 tab 条（dev-board#180）：只有真有面板被停到右侧时才渲染，
+                 平时右侧仍然只有 AI 对话本体，零视觉回归。 -->
+            <view v-if="rightDockPanels.length" class="right-dock-tabs">
+              <view
+                class="right-dock-tab"
+                :class="{ active: rightPaneKey === 'ai' }"
+                @tap="switchRightPane('ai')"
+              >
+                <text>{{ $t('workbench.aiAssistant') }}</text>
+              </view>
+              <view
+                v-for="p in rightDockPanels"
+                :key="p.key"
+                class="right-dock-tab is-movable"
+                :class="{ active: rightPaneKey === p.key }"
+                :draggable="true"
+                @tap="switchRightPane(p.key)"
+                @dragstart="onPanelDragStart(p.key, $event)"
+                @dragend="onPanelDragEnd"
+                @contextmenu.prevent.stop="openDockMenu(p.key, $event)"
+              >
+                <text>{{ p.label }}</text>
+              </view>
+            </view>
+
             <!-- ChatInterface Integration -->
             <!-- Note: We leverage ChatInterface for the entire panel content. -->
             <!-- Resize handle is still here in the outer container scope -->
+            <!-- v-show 不是 v-if：AI 面板挂在 v-if 上时切走一次会丢掉整段会话状态，
+                 $refs.chatInterface 也会消失（resolveChatInterface 靠它）。 -->
+            <view class="right-dock-body" v-show="rightPaneKey === 'ai'">
+              <ChatInterface
+                ref="chatInterface"
+                :project-id="String(projectId)"
+                :project-name="project.name"
+                :recent-history="chatHistoryList.slice(0, 3)"
+                :history-badge="historyBadge"
+                :active-tab="currentActiveTab"
+                :active-tab-pane="focusedPane"
+                @close="toggleAiPanel"
+                @toggle-history="toggleHistoryDrawer"
+                @new-chat="startNewChat"
+                @load-history="loadHistoryChat"
+                @message-action="handleChatInterfaceAction"
+                @client-action="handleClientAction"
+                @refresh-history="fetchChatHistory"
+                @menu-state="pushMenuState"
+                @artifact-open-tab="handleArtifactOpenTab"
+                @open-file="handleOpenFileFromChat"
+              />
+            </view>
 
-            <ChatInterface
-              ref="chatInterface"
-              :project-id="String(projectId)"
-              :project-name="project.name"
-              :recent-history="chatHistoryList.slice(0, 3)"
-              :history-badge="historyBadge"
-              :active-tab="currentActiveTab"
-              :active-tab-pane="focusedPane"
-              @close="toggleAiPanel"
-              @toggle-history="toggleHistoryDrawer"
-              @new-chat="startNewChat"
-              @load-history="loadHistoryChat"
-              @message-action="handleChatInterfaceAction"
-              @client-action="handleClientAction"
-              @refresh-history="fetchChatHistory"
-              @menu-state="pushMenuState"
-              @artifact-open-tab="handleArtifactOpenTab"
-              @open-file="handleOpenFileFromChat"
-            />
+            <!-- 停靠到右侧的面板：一个 key 一条显式分支（加新面板照此加一条，
+                 见 config/panelRegistry.js 顶部的步骤清单）。
+                 链头是 v-if 而不是接着上面那块的 v-else-if——上面那块挂的是 v-show，
+                 v-else-if 挨着它会得到「v-else/v-else-if has no adjacent v-if」编译错。 -->
+            <view v-if="rightPaneKey === 'voice'" class="right-dock-body voice-pane">
+              <view class="voice-tabs">
+                <view
+                  v-if="ttsEnabled"
+                  class="voice-tab"
+                  :class="{ active: effectiveVoiceTab === 'tts' }"
+                  @tap="voiceTab = 'tts'"
+                >
+                  <text>{{ $t('workbench.voiceTts') }}</text>
+                </view>
+                <view
+                  v-if="meetingRecorderEnabled"
+                  class="voice-tab"
+                  :class="{ active: effectiveVoiceTab === 'recorder' }"
+                  @tap="voiceTab = 'recorder'"
+                >
+                  <text>{{ $t('workbench.voiceRecorder') }}</text>
+                </view>
+              </view>
+              <view class="voice-tab-body">
+                <MeetingRecordingPanel
+                  v-if="effectiveVoiceTab === 'recorder'"
+                  :project-id="projectId"
+                  :current-user="currentUser"
+                  @generate-minutes="handleMeetingMinutesStart"
+                />
+                <EasyVoicePane
+                  v-else-if="effectiveVoiceTab === 'tts'"
+                  @request-doc-text="handleEasyVoiceDocRequest"
+                  @highlight-sentence="handleTtsHighlight"
+                  @clear-highlight="handleTtsClearHighlight"
+                />
+              </view>
+            </view>
+            <view v-else-if="rightPaneKey === 'variables'" class="right-dock-body dock-tool-pane">
+              <view class="dock-tool-head">
+                <input class="dock-tool-search" v-model="toolsSearchKeyword" :placeholder="$t('workbench.searchVariables')" confirm-type="search" />
+                <view class="dock-tool-btn" :title="$t('workbench.setAsVariable')" @tap="handleOpenCreateVariable"><text>＋</text></view>
+                <view class="dock-tool-btn" :title="$t('workbench.sync')" @tap="handleSyncVariable"><text>↻</text></view>
+              </view>
+              <view class="dock-tool-body">
+                <VariablePanel
+                  ref="variablePanel"
+                  :project-id="projectId"
+                  :get-editor="getLibreVariableBridge"
+                  :search-keyword="toolsSearchKeyword"
+                />
+              </view>
+            </view>
+            <view v-else-if="rightPaneKey === 'favorites'" class="right-dock-body dock-tool-pane">
+              <view class="dock-tool-head">
+                <input class="dock-tool-search" v-model="toolsSearchKeyword" :placeholder="$t('workbench.searchFavorites')" confirm-type="search" />
+              </view>
+              <view class="dock-tool-body">
+                <ProjectFavoritesPanel
+                  ref="favoritesPanel"
+                  :project-id="projectId"
+                  :query="toolsSearchKeyword"
+                  @insert="insertPlainTextToWps"
+                  @open-url="openBrowserTab($event)"
+                />
+              </view>
+            </view>
+            <view v-else-if="rightPaneKey === 'clipboard'" class="right-dock-body dock-tool-pane">
+              <view class="dock-tool-head">
+                <input class="dock-tool-search" v-model="toolsSearchKeyword" :placeholder="$t('workbench.searchClipboard')" confirm-type="search" />
+              </view>
+              <view class="dock-tool-body">
+                <ClipboardPanel
+                  ref="clipboardPanel"
+                  :query="toolsSearchKeyword"
+                  @insert="insertPlainTextToWps"
+                  @preview-image="openImagePreview"
+                />
+              </view>
+            </view>
+            <!-- 依据（dev-board#182）：默认就停在右侧——它要和正文并排看。 -->
+            <view v-else-if="rightPaneKey === 'insight'" class="right-dock-body">
+              <InsightPane
+                :project-id="projectId"
+                :doc-file-id="insightDocFileId"
+                :doc-name="insightDocName"
+                :get-executor="getInsightExecutor"
+                :can-write="canWriteProject"
+                :parse-request="insightParseRequest"
+                :cursor-context="insightCursorContext"
+                @entities="onInsightEntities"
+              />
+            </view>
 
             <view class="side-resize-handle" @touchstart="startResize('right', $event)" @mousedown="startResize('right', $event)"></view>
 
@@ -1590,10 +1794,49 @@
 
     </view>
 
+    <!-- 面板停靠：右键「移到…」小菜单（保底路径，拖拽只是增强）。dev-board#180 -->
+    <view v-if="dockMenu.visible" class="dock-menu-mask" @tap="closeDockMenu" @contextmenu.prevent="closeDockMenu"></view>
+    <view
+      v-if="dockMenu.visible"
+      class="dock-menu"
+      :style="{ left: dockMenu.x + 'px', top: dockMenu.y + 'px' }"
+      @tap.stop
+    >
+      <view class="dock-menu-title">{{ dockMenuTitle }}</view>
+      <view
+        v-for="opt in dockMenuOptions"
+        :key="opt.dock"
+        class="dock-menu-item"
+        :class="{ disabled: opt.disabled }"
+        @tap="opt.disabled ? null : movePanelToDock(dockMenu.panelKey, opt.dock)"
+      >
+        <text>{{ opt.label }}</text>
+        <text v-if="opt.disabled" class="dock-menu-cur">{{ $t('workbench.dockCurrent') }}</text>
+      </view>
+    </view>
+
+    <!-- 面板停靠：拖拽投放高亮层。只在拖拽期间存在，只铺三个 dock 自身的区域
+         （编辑器画布是 webview，拖进去根本不会有事件，不用管）。 -->
+    <view v-if="draggingPanelKey" class="dock-drop-layer">
+      <view
+        v-for="z in dockDropZones"
+        :key="z.dock"
+        class="dock-drop-zone"
+        :class="['zone-' + z.dock, { 'is-over': dockDragOver === z.dock }]"
+        :style="dockZoneStyle(z.dock)"
+        @dragover.prevent="onDockZoneDragOver(z.dock)"
+        @dragenter.prevent="onDockZoneDragOver(z.dock)"
+        @dragleave="onDockZoneDragLeave(z.dock)"
+        @drop.prevent="onDockZoneDrop(z.dock)"
+      >
+        <text class="dock-drop-label">{{ z.label }}</text>
+      </view>
+    </view>
+
     <!-- 底部状态条（IDE 化：常驻工具入口 + 真实状态信号，等宽字体） -->
     <view class="status-bar" v-if="!isClientView">
       <view
-        v-for="t in toolsList"
+        v-for="t in bottomToolsList"
         :key="'sb-' + t.key"
         class="status-tool"
         :class="{ active: showToolsPanel && activeToolKey === t.key }"
@@ -1658,6 +1901,7 @@ import AdminPane from '@/components/admin/AdminPane.vue'
 import EasyVoicePane from '@/components/EasyVoicePane.vue'
 import DesensitizePane from '@/components/DesensitizePane.vue'
 import ClipboardPanel from '@/components/ClipboardPanel.vue'
+import InsightPane from '@/components/InsightPane.vue'
 import SearchPanel from '@/components/SearchPanel.vue'
 import VersionPanel from '@/components/version/VersionPanel.vue'
 // 异步组件：ProjectCalendarPane 静态 import 会把 FullCalendar 整包拖进工作台主
@@ -1715,8 +1959,19 @@ import { getInitial } from '@/utils/textInitial.js'
 import { recordProjectVisit, getRecentProjectIds, syncRecentToMenuFetching } from '@/utils/recentProjects.js'
 import { markdownToPlainText } from '@/utils/markdownPlain.js'
 import { FILE_BATCH_ACTIONS, FILE_TREE_QUICK_ACTIONS } from '@/config/fileActions.js'
-import { WORKBENCH_TOOLS } from '@/config/tools.js'
+import {
+  DOCKS,
+  getMovablePanel,
+  isDockAllowed,
+  isMovablePanel,
+  resolveDock,
+  resolveDocks
+} from '@/config/panelRegistry.js'
 import { OCR_ACTION_LABELS, INTERNAL_LINK_SCHEMES, WPS_INTERNAL_HTTP_LINK_BASE } from '@/config/workbenchActions.js'
+import { matchEntityAt } from '@/utils/insightMatch.js'
+// 「依据」窗格只对 Writer 能开的文本文档生效（dev-board#182）：解析的是正文段落，
+// 表格/演示/PDF 没有可通读的正文。这份清单是 fileOpenTabs.js 里 wpsFormats 的 Writer 子集。
+const INSIGHT_DOC_TYPES = ['doc', 'docx', 'docm', 'dot', 'dotx', 'dotm', 'rtf', 'odt', 'wps', 'wpt']
 import {
   LEFT_SIDEBAR_PLUGINS,
   VERSION_PLUGIN,
@@ -1742,6 +1997,7 @@ import { librePoolMethods } from './librePool.js'
 import { stagingAreaMethods } from './stagingArea.js'
 import { evidenceLinkData, evidenceLinkMethods } from './evidenceLinkActions.js'
 import { tabDragSplitMethods } from './tabDragSplit.js'
+import { panelDockingData, panelDockingMethods } from './panelDocking.js'
 import { fileOpenTabsMethods } from './fileOpenTabs.js'
 import { clipboardBridgeMethods } from './clipboardBridge.js'
 import { ocrActionMethods } from './ocrActions.js'
@@ -1768,6 +2024,7 @@ export default {
     EvidenceMethodBar,
     FileStagingArea,
     ClipboardPanel,
+    InsightPane,
     DdFilesPanel,
     ShareholderMeetingPanel,
     MeetingRecordingPanel,
@@ -1969,6 +2226,8 @@ export default {
         linkKey: ''
       },
       ...evidenceLinkData(),
+      // 面板停靠（dev-board#180）：panelDockOverrides / rightPaneKey / 拖拽与右键菜单状态
+      ...panelDockingData(),
       // Desensitize Callback
       desensitizeFileSelectCallback: null,
       // 诉讼可视化面板的材料范围选择回调（复用同一个 FilePickerDialog）
@@ -1993,6 +2252,13 @@ export default {
       collabInitialTab: 'casefile',
       collabRefreshToken: 0, // 自增一次 = 让版本面板重拉自己的那份状态
       focusedPane: 'left', // 'left' | 'right'
+
+      // 「依据」窗格（dev-board#182）。窗格是工作台级的（停右栏或左栏），绑「当前活跃的
+      // writer 文档」；这里只存宿主要用的三件：发起解析的令牌、推给窗格的光标邻域、
+      // 以及最近一次点「解析」是哪一侧发起的（用于挑 executor）。
+      // 实体索引在 _insightIndex（非响应式，同 _libreRefs 口径）——它只在事件处理里被读。
+      insightParseRequest: null,
+      insightCursorContext: null,
 
       // 文件状态 - 分两组管理
       leftFiles: [], // 左侧文件列表
@@ -2190,14 +2456,16 @@ export default {
       // null = 还没拉到启用列表，此时不过滤。**不能当成空集合**——那会把已装的
       // 功能在每次刚进页面时先从左栏抹掉再冒出来，接口挂了更是永远不见。
       // 宁可多显示一瞬，也不要让用户以为功能没了。
-      if (this.enabledSkillIds === null) return base
+      // applyPanelDocks：把搬去别的 dock 的面板（语音移到右侧）从 rail 摘掉，
+      // 把搬到左侧的工具面板（变量库/收藏夹/剪贴板）追加在数组之后（dev-board#180）
+      if (this.enabledSkillIds === null) return this.applyPanelDocks(base)
       const filtered = filterPluginsByEnabledSkills(base, this.enabledSkillIds)
       // 「语音」rail 位本身没有 requiresSkill（门控在面板内部按两个 tab 分别做），
       // 两个 tab 都停用时才整个位隐藏，判据复用同一份 ttsEnabled/meetingRecorderEnabled。
       if (!this.ttsEnabled && !this.meetingRecorderEnabled) {
-        return filtered.filter(p => p.key !== 'voice')
+        return this.applyPanelDocks(filtered.filter(p => p.key !== 'voice'))
       }
-      return filtered
+      return this.applyPanelDocks(filtered)
     },
     // 版本记录 2026-08-19 挪出 rail 数组、独立渲染在「项目成员」与「暂存区」之间，
     // 模板拿不到裸导入的 VERSION_PLUGIN，包一层 computed 才能在模板里用它的 svgPaths。
@@ -2286,6 +2554,10 @@ export default {
     },
     leftPaneTitle() {
       if (this.leftPaneKey === 'market') return this.$t('workbench.pluginMarket')
+      // 停靠到左栏的工具面板（变量库/收藏夹/剪贴板）在 leftSidebarPlugins 里查不到，
+      // 会掉进兜底显示成「资源管理器」——从注册表取它的 labelKey（dev-board#180）
+      const movable = getMovablePanel(this.leftPaneKey)
+      if (movable) return this.$t(movable.labelKey)
       // 动态插件的标题在 getLeftSidebarPlugin（只认静态 + OFF_RAIL）里查不到，
       // 会掉进兜底显示成「资源管理器」——从 dynamicPlugins 直接取它的 label。
       if (this.activeDynamicPlugin) return this.activeDynamicPlugin.label || this.$t('workbench.explorerFallback')
@@ -2327,6 +2599,24 @@ export default {
       if (file && !this.isTabVisible(file)) return null
       return file
     },
+    // ——「依据」窗格（dev-board#182）——
+    // 窗格开着没有（不管它停在右栏还是被拖去了左栏）。
+    insightPaneOpen() {
+      if (this.showAiPanel && this.rightPaneKey === 'insight') return true
+      return this.leftPaneKey === 'insight' && !this.sidebarCollapsed
+    },
+    // 窗格绑哪份文档：聚焦那一侧的活跃 writer 文档，聚焦侧没有就看另一侧。
+    // 只认 Writer——解析的是正文，表格/演示文稿没有可通读的段落。
+    insightDocFile() {
+      const order = this.focusedPane === 'right'
+        ? [this.activeFileRight, this.activeFileLeft]
+        : [this.activeFileLeft, this.activeFileRight]
+      for (const f of order) if (this.isInsightDoc(f)) return f
+      return null
+    },
+    insightDocFileId() { return this.insightDocFile ? this.insightDocFile.id : null },
+    insightDocName() { return this.insightDocFile ? (this.insightDocFile.name || '') : '' },
+
     // 内嵌 LibreOffice 保活池（每 pane 一组常驻实例）：当前激活的 Office 文件
     // 必进池（即使 LRU 记账未跟上），其余按 libreLruKeys 保活。文件关闭
     // （出 leftFiles/rightFiles）时自然出池 → 组件卸载走现有 close 流程。
@@ -2441,8 +2731,48 @@ export default {
       }
     }
     ,
-    toolsList() {
-      return WORKBENCH_TOOLS
+    // ——— 面板停靠（dev-board#180）———
+    // 三个 dock 的分配，唯一出处是 config/panelRegistry.js 的纯函数 resolveDocks
+    panelDocks() {
+      return resolveDocks(this.panelDockOverrides)
+    },
+    // 底部抽屉的 tab 列表（原 WORKBENCH_TOOLS）。底栏 tab 条与状态条工具入口同源消费，
+    // 面板被搬到左/右之后这里自动少一项，两处一起变。
+    bottomToolsList() {
+      return this.panelDocks.bottom.map(p => ({ key: p.key, label: this.$t(p.labelKey) }))
+    },
+    // 停靠到右侧面板的面板（非空时右栏才长出 tab 条；平时右侧只有 AI 对话，零视觉回归）
+    rightDockPanels() {
+      return this.panelDocks.right.map(p => ({ key: p.key, label: this.$t(p.labelKey) }))
+    },
+    // 右键「移到…」菜单的选项：只列这个面板允许的 dock，当前所在的那一档置灰
+    dockMenuOptions() {
+      const key = this.dockMenu.panelKey
+      if (!key) return []
+      const cur = resolveDock(key, this.panelDockOverrides)
+      return DOCKS
+        .filter(d => isDockAllowed(key, d))
+        .map(d => ({
+          dock: d,
+          label: this.$t('workbench.dockTo' + d.charAt(0).toUpperCase() + d.slice(1)),
+          disabled: d === cur
+        }))
+    },
+    dockMenuTitle() {
+      const p = getMovablePanel(this.dockMenu.panelKey)
+      return p ? this.$t(p.labelKey) : ''
+    },
+    // 拖拽中的面板允许落到哪几个 dock（决定投放高亮层渲染哪几块）
+    dockDropZones() {
+      const key = this.draggingPanelKey
+      if (!key) return []
+      return DOCKS.filter(d => isDockAllowed(key, d)).map(d => ({
+        dock: d,
+        label: this.$t('workbench.dockTo' + d.charAt(0).toUpperCase() + d.slice(1))
+      }))
+    },
+    isMovablePanel() {
+      return isMovablePanel
     }
     ,
     isDesktopApp() {
@@ -2664,6 +2994,10 @@ export default {
     // checkba_user，user 为 null——原先整段包在 if (user) 里，进项目左栏永远停在
     // 占位符（app-e2e J4 抓到：文件树/工具行不渲染，直到手动点一次左栏图标）。
     // CLIENT 角色默认 dd-files 的分支只对浏览器登录态（客户访问码）有意义，保留。
+    // 面板停靠位（dev-board#180）是本机习惯、不分项目，必须在恢复 leftPaneKey 之前读，
+    // 下面的 normalizeDockSelections 才知道存量的 leftPaneKey 还在不在左栏。
+    this.loadPanelDocks()
+
     const savedKey = uni.getStorageSync(`project_${this.projectId}_leftPaneKey`)
     if (savedKey && user && user.role === 'CLIENT') {
         // CLIENT 只有 dd-files 这一个面板，存量值原样用（migrate 会把它映射成
@@ -2680,6 +3014,9 @@ export default {
     } else {
         this.leftPaneKey = 'files'
     }
+    // 存量 leftPaneKey 可能指向一个已经被搬去右侧/底部的面板（语音），
+    // 那样左栏会渲染成「加载中…」占位符——按停靠分配校一遍，不在左栏就回落资源管理器。
+    this.normalizeDockSelections()
 
     // Restore active tabs for this project/mode
     const savedActiveTabs = uni.getStorageSync(`project_${this.projectId}_activeTabsByMode`)
@@ -3202,6 +3539,8 @@ export default {
     ...evidenceLinkMethods,
     ...tabDragSplitMethods,
     ...fileOpenTabsMethods,
+    // 面板停靠（dev-board#180）
+    ...panelDockingMethods,
     // Phase 3a 外置的方法组
     ...clipboardBridgeMethods,
     // Phase 3b 外置的方法组
@@ -3650,6 +3989,9 @@ export default {
      */
     async resolveChatInterface() {
       if (!this.showAiPanel) this.toggleAiPanel()
+      // 右侧面板可能停着别的面板（dev-board#180）：要发 prompt 就得先切回对话 tab，
+      // 否则消息发出去了、用户看着的还是变量库
+      this.rightPaneKey = 'ai'
       for (let i = 0; i < 30; i++) {
         await this.$nextTick()
         const chat = this.$refs.chatInterface
@@ -3779,8 +4121,12 @@ export default {
       // 诉讼可视化面板也要放行：图廊的「打开」是那个面板唯一的出图入口，
       // 不放行的话点了之后标签被 v-show 藏死、编辑区显示空闲态，功能等于不存在
       // （与上面版本对比标签同一类问题）。
+      // 停靠到左栏的工具面板（变量库/收藏夹/剪贴板，dev-board#180）同样必须放行：
+      // 它们的每个动作都是「往当前文档里插入」或「从当前文档取值」
+      // （VariablePanel 的 :get-editor 直接要活的编辑器），看不见文档就没法用。
       return this.leftPaneKey === 'files' || this.leftPaneKey === 'search'
         || this.leftPaneKey === 'voice' || this.leftPaneKey === 'litigation-visual'
+        || this.isMovablePanel(this.leftPaneKey)
     },
     startRenameProject() {
       this.renameProjectName = this.project.name || ''
@@ -4526,20 +4872,21 @@ export default {
     },
 
     toggleToolsPanel() {
+      // 三个工具面板都被搬到左/右之后底部抽屉里没东西可显示，开关也就不该有反应
+      // （顶栏那个按钮同样按 bottomToolsList 收起，见模板）
+      if (!this.showToolsPanel && !this.bottomToolsList.length) return
       this.showToolsPanel = !this.showToolsPanel
       this.$nextTick(() => this.triggerWorkbenchResize())
     },
 
-    // 底部状态条工具入口：点当前已打开的 tab 则收起抽屉，否则切换/打开到该 tab
+    // 底部状态条工具入口：点当前已打开的 tab 则收起抽屉，否则打开到该 tab。
+    // 状态条只列停在底栏的面板，所以这里的 key 一定是底栏的（dev-board#180）。
     openToolFromStatusBar(key) {
       if (this.showToolsPanel && this.activeToolKey === key) {
         this.toggleToolsPanel()
         return
       }
-      this.switchToolTab(key)
-      if (!this.showToolsPanel) {
-        this.toggleToolsPanel()
-      }
+      this.openPanelInItsDock(key)
     },
 
     triggerWorkbenchResize() {
@@ -4920,6 +5267,66 @@ export default {
         fileId: Number(fileId),
         executor: (action, params) => ex.executeCommand(action, params || {})
       }
+    },
+
+    // ————————————————— 「依据」窗格（dev-board#182） —————————————————
+    /**
+     * 这份文件能不能解析：必须走内嵌编辑器，且是 Writer 能开的文本文档。
+     * 表格/演示/PDF 都不进——解析的是正文段落，没有可通读的正文就没有实体可抽。
+     */
+    isInsightDoc(file) {
+      if (!file || !file.fileType || !this.useLibreEditor(file)) return false
+      return INSIGHT_DOC_TYPES.includes(String(file.fileType).toLowerCase())
+    },
+    /**
+     * 交给 InsightPane 的 executor 取值器：**按窗格绑定的那份文档取**，不用
+     * libreOfficeExecutor 那个"活跃指针"——指针同步与标签切换之间有窗口，
+     * 落错文档的代价是把查找替换打在别人身上。
+     */
+    getInsightExecutor() {
+      const id = this.insightDocFileId
+      if (!id) return null
+      const map = this.getLibreExecutorMap()
+      const ex = map['left:' + id] || map['right:' + id]
+      if (!ex) return null
+      return (action, params) => ex.executeCommand(action, params || {})
+    },
+    /**
+     * 编辑器工具栏「解析」按钮：打开「依据」窗格（走停靠系统的语义——被用户拖去
+     * 左栏就开左栏），并让窗格发起一次解析。
+     */
+    onOpenInsight(payload, pane) {
+      const fileId = payload && payload.fileId
+      // 点的是哪一侧的工具栏，就把焦点挪到哪一侧——insightDocFile 跟着 focusedPane 走，
+      // 不挪的话在分屏下点右侧的「解析」会去解析左侧那份。
+      if (pane && this.focusedPane !== pane) this.focusedPane = pane
+      this.openPanelInItsDock('insight')
+      const target = this.insightDocFileId
+      if (!target) return
+      if (fileId && Number(fileId) !== Number(target)) return
+      // 请求带上 fileId：面板是 v-if 挂载的，这一步之后才挂出来，挂载时它自己认一次
+      this.insightParseRequest = { fileId: target, token: Date.now() }
+    },
+    /** 窗格把实体清单同步上来（宿主据此在正文点击时做匹配）。 */
+    onInsightEntities(payload) {
+      const idx = this._insightIndex || (this._insightIndex = {})
+      const id = payload && payload.docFileId
+      if (!id) return
+      idx[id] = Array.isArray(payload.entities) ? payload.entities : []
+    },
+    /**
+     * 客体页回传的光标邻域（只有窗格订阅着才会有）。宿主先自己匹配一遍：
+     * 命中才把上下文推给窗格（窗格再匹配一次决定展开还是被动高亮）——
+     * 没命中的光标移动不推，免得窗格每次移动都白跑一遍。
+     */
+    onEditorCursorContext(ctx) {
+      if (!ctx || !this.insightPaneOpen) return
+      const fileId = ctx.fileId
+      if (fileId && Number(fileId) !== Number(this.insightDocFileId)) return
+      const list = (this._insightIndex || {})[this.insightDocFileId] || []
+      if (!list.length) return
+      if (!matchEntityAt(ctx, list)) return
+      this.insightCursorContext = ctx
     },
 
     // #104: getEditor() adapter for VariablePanel — the five document-field

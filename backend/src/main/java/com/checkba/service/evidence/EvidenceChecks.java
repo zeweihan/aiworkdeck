@@ -63,6 +63,15 @@ public final class EvidenceChecks {
     private static final Pattern USCC = Pattern.compile(
             "(?<![0-9A-Z])[0-9A-HJ-NP-RTUWXY]{2}[0-9]{6}[0-9A-HJ-NP-RTUWXY]{10}(?![0-9A-Z])");
 
+    /**
+     * 统一社会信用代码的形状正则，供同类扫描复用（{@code service/insight/DocInsightChecks}
+     * 要按<b>匹配位置</b>取上下文做定位，所以拿的是 Pattern 而不是结果集）。
+     * 抄一份正则出去必然漂移——同一份代码形状全仓只此一处。
+     */
+    public static Pattern usccPattern() {
+        return USCC;
+    }
+
     /** 18 位、字符集合法、校验位相符。 */
     public static boolean usccValid(String code) {
         if (code == null || code.length() != 18) return false;
@@ -112,10 +121,20 @@ public final class EvidenceChecks {
             }
         }
         if (name != null && out.size() < ALIAS_MAX_COUNT) {
-            String derived = ORG_SUFFIX.matcher(name.trim()).replaceFirst("");
+            String derived = stripOrgSuffix(name);
             if (derived.length() >= ALIAS_DERIVED_MIN_LEN && !derived.equals(name.trim())) out.add(derived);
         }
         return List.copyOf(out);
+    }
+
+    /**
+     * 剥掉组织形式后缀（「北京京微资易科技有限公司」→「北京京微资易科技」）。
+     * 主体归一的判据全仓共用这一份后缀表：{@link #aliasesOf} 派生简称与
+     * {@code service/insight/DocInsightChecks} 判「是不是同一个主体」都调它。
+     */
+    public static String stripOrgSuffix(String name) {
+        if (name == null) return "";
+        return ORG_SUFFIX.matcher(name.trim()).replaceFirst("");
     }
 
     /** 段内可能还挂着一个标签（「简称 京微科技」），一并剥掉。 */
@@ -348,7 +367,7 @@ public final class EvidenceChecks {
     // ---------------------------------------------------------------- 归一化
 
     /** NFKC + 删除全部空白：给「包含判断」用（PDF/OCR 抽出来的文字里空格与换行位置不可靠）。 */
-    static String compact(String s) {
+    public static String compact(String s) {
         if (s == null) return "";
         String n = Normalizer.normalize(s, Normalizer.Form.NFKC);
         StringBuilder b = new StringBuilder(n.length());

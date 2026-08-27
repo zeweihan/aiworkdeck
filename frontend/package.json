@@ -52,7 +52,9 @@
     "test:commands": "node --test tests/commands/*.test.mjs",
     "test:zeta-relay": "node --test tests/zeta-relay/*.test.mjs",
     "test:evidence": "node --test tests/evidence/*.test.mjs",
-    "test:plugin-sdk": "node --test tests/plugin-sdk/*.test.mjs"
+    "test:plugin-sdk": "node --test tests/plugin-sdk/*.test.mjs",
+    "test:panel-dock": "node --test tests/panel-dock/*.test.mjs",
+    "test:insight": "node --test tests/insight/*.test.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",

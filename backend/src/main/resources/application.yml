@@ -87,6 +87,45 @@ mcp:
       token-setting-key: external.pkulaw.token
       timeout-seconds: 60
       enabled: true
+    # 司法案例库（2026-08-27 实测可用，token 与法规三件套同一把）：
+    # 语义检索 search_case（参数 text，可带 case_type/doc_type 筛选）与
+    # 关键词检索 get_case_list（title/正文关键词）。insight.case-server 指向语义档。
+    - name: pkulaw-case-semantic
+      url: https://apim-gateway.pkulaw.com/mcp-case-search-service
+      token: ${PKULAW_TOKEN:}
+      token-setting-key: external.pkulaw.token
+      timeout-seconds: 60
+      enabled: true
+    - name: pkulaw-case-keyword
+      url: https://apim-gateway.pkulaw.com/mcp-case
+      token: ${PKULAW_TOKEN:}
+      token-setting-key: external.pkulaw.token
+      timeout-seconds: 60
+      enabled: true
+    # 企查查智能体数据平台：模糊搜索（get_company_by_query），把文中的简称解析成
+    # 工商全称，再交给 REST 的 ECIInfoVerify/GetInfo（那条只认全称，非全称回 201 无结果）。
+    # 与 external.qichacha.key/secret 是两套凭证，别混用。
+    - name: qichacha-company
+      url: https://agent.qcc.com/mcp/company/stream
+      token: ${QICHACHA_MCP_TOKEN:}
+      token-setting-key: external.qichacha.mcpToken
+      timeout-seconds: 30
+      enabled: true
+
+# 文档「解析」管线（dev-board#181/#182；对应 InsightProperties）
+insight:
+  # 判决书检索通道（2026-08-27 起默认接法宝司法案例语义检索）。换通道只改配置：
+  # 在上面的 mcp.servers 里加一条，把 server 名 / 工具名 / 查询参数名填到这三项即可，不改代码。
+  case-server: ${INSIGHT_CASE_SERVER:pkulaw-case-semantic}
+  case-tool: ${INSIGHT_CASE_TOOL:search_case}
+  case-arg: ${INSIGHT_CASE_ARG:text}
+  chunk-chars: 10000
+  chunk-overlap: 500
+  max-chars: 200000
+  cache-days: 7
+  max-entities: 200
+  max-mentions: 20
+  stale-minutes: 30
 
 # 登录短信验证（阿里云 dysmsapi；仅 server 模式生效，local-mode 免登无登录环节）。
 # AK/SK 一律环境变量注入（与 OSS_ACCESS_KEY_* 同一模式），绝不写进任何入库文件。

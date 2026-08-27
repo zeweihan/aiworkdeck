@@ -218,6 +218,11 @@
       <view class="etb-btn wide" :class="{ on: reviewOpen }" :title="$t('editor.toolbar.reviewPanel')" @tap.stop="$emit('toggle-review')">
         <text class="etb-tx sm">{{ $t('editor.toolbar.reviewShort') }}</text>
       </view>
+      <!-- 解析（dev-board#182）：AI 通读全文抽实体 + 打外部库 + 一致性校验，联动打开
+           「依据」窗格。这条工具栏只在 docKind==='writer' 时渲染，所以不用再判文档类型。 -->
+      <view class="etb-btn wide" :class="{ on: insightOpen }" :title="$t('editor.toolbar.insightPanel')" @tap.stop="$emit('toggle-insight')">
+        <text class="etb-tx sm">{{ $t('editor.toolbar.insightShort') }}</text>
+      </view>
       <view class="etb-stepper" :title="$t('editor.toolbar.zoom')">
         <text class="etb-step-b" @tap.stop="stepZoom(-10)">−</text>
         <text class="etb-step-v z" @tap.stop="resetZoom">{{ Math.round(state.view.zoom || 100) }}%</text>
@@ -327,13 +332,15 @@ const EMPTY = () => ({ character: {}, paragraph: {}, view: {}, selection: {}, un
 
 export default {
   name: 'EditorToolbar',
-  emits: ['toggle-review', 'changed', 'ui-state'],
+  emits: ['toggle-review', 'toggle-insight', 'changed', 'ui-state'],
   props: {
     // LibreOffice executor（executeCommand(action, params)）。null 时整条静默。
     executor: { type: Object, default: null },
     // 宿主在「选区/光标动了」「文档改了」时自增，驱动激活态刷新。
     refreshKey: { type: Number, default: 0 },
     reviewOpen: { type: Boolean, default: false },
+    // 「依据」窗格（dev-board#182）此刻开着没有——按钮的按下态跟着它。
+    insightOpen: { type: Boolean, default: false },
   },
   data() {
     return {

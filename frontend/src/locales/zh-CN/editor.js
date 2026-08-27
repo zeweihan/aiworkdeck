@@ -186,6 +186,8 @@ export default {
     trackChangesShort: '修订',
     reviewPanel: '审阅面板',
     reviewShort: '审阅',
+    insightPanel: '解析本文并打开「依据」窗格',
+    insightShort: '解析',
     zoom: '显示比例',
     insert: '插入',
     insertTable: '表格…',

@@ -40,6 +40,11 @@ export default {
   collapseSidebar: '收起左侧栏',
   toolsPanel: '常用工具',
   aiAssistant: 'AI 助手',
+  // 面板停靠（dev-board#180）：右键菜单与拖拽投放层共用这三条
+  dockToLeft: '移到左侧栏',
+  dockToRight: '移到右侧面板',
+  dockToBottom: '移到底部面板',
+  dockCurrent: '当前',
   openSplit: '开启分屏',
   closeSplit: '关闭分屏',
   ocrCapture: '截图摘录（OCR）',

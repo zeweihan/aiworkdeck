@@ -40,6 +40,11 @@ export default {
   collapseSidebar: 'Collapse Sidebar',
   toolsPanel: 'Tools Panel',
   aiAssistant: 'AI Assistant',
+  // Panel docking (dev-board#180): shared by the context menu and the drop hints
+  dockToLeft: 'Move to left sidebar',
+  dockToRight: 'Move to right panel',
+  dockToBottom: 'Move to bottom panel',
+  dockCurrent: 'current',
   openSplit: 'Open Split View',
   closeSplit: 'Close Split View',
   ocrCapture: 'Screenshot Capture (OCR)',

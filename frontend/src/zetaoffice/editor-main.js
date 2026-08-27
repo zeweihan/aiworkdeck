@@ -16,6 +16,9 @@
 
 import { startEditorEndpoint } from '../composables/zetaOfficeEditorEndpoint.js'
 import { attachImeOverlay } from '../composables/zetaOfficeImeOverlay.js'
+// 光标邻域半径的单一出处：宿主侧 matchEntityAt 用同一个默认值做窗口截取，
+// 两边不一致会让「实体名明明就在光标上却匹配不到」（纯数据模块，不带 Vue/uni）。
+import { CURSOR_RADIUS } from '../utils/insightMatch.js'
 
 // Electron renderer require is a runtime property access (NOT a static import),
 // so the bundler leaves it alone and the browser fallback path stays clean.
@@ -220,6 +223,59 @@ function relaySelection() {
   }
   lastSelectionRelay = now
   try { hostTransport.send({ __lo: 'lo-relay', type: 'selection' }) } catch (e) { /* ignore */ }
+  relayCursorContext(null)
+}
+
+// (依据窗格, dev-board#182) 光标邻域上报。**默认不开**：宿主只有在「依据」窗格
+// 真绑在这份文档上时才下发 {type:'insight-sub', enabled:true}，此前一次
+// get_cursor_context 都不打——没开窗格的用户完全不受影响。
+//
+// 两个触发点：画布单击落定后（下面那段 link-click seam 里，带修饰键）与选区/光标
+// 变化（relaySelection 里，不带修饰键）。后者再节流一层到 ≥400ms：光标移动比
+// 工具栏激活态刷新贵得多（要过一次 worker 往返）。
+let insightSub = false
+let insightExecutor = null
+let lastCursorRelay = 0
+let cursorInFlight = false
+
+try {
+  hostTransport.subscribe((msg) => {
+    if (!msg || msg.__lo !== 'lo-relay') return
+    if (msg.type !== 'insight-sub') return
+    insightSub = !!msg.enabled
+  })
+} catch (e) { console.error('[zeta-editor] insight-sub subscribe failed:', e) }
+
+function relayCursorContext(meta) {
+  if (!insightSub || !insightExecutor) return
+  // 点击那一路必须送到（用户刚点的就是它），光标移动那一路节流
+  if (!meta) {
+    const now = Date.now()
+    if (now - lastCursorRelay < 400) return
+    lastCursorRelay = now
+  } else {
+    lastCursorRelay = Date.now()
+  }
+  // 上一发还没回来时丢掉光标移动那一路（别把 worker 排满）；**点击那一路不丢**——
+  // 用户刚点的就是它，丢了就是「Cmd+点击没反应」。
+  if (cursorInFlight && !meta) return
+  cursorInFlight = true
+  insightExecutor.executeCommand('get_cursor_context', { radius: CURSOR_RADIUS })
+    .then((r) => {
+      if (!r || !r.success) return
+      hostTransport.send({
+        __lo: 'lo-relay',
+        type: 'cursor-context',
+        payload: {
+          before: r.before || '', after: r.after || '', paragraph: r.paragraph || '',
+          selectedText: r.selectedText || '', hasSelection: !!r.hasSelection,
+          meta: meta || { metaKey: false, ctrlKey: false },
+          at: Date.now(),
+        },
+      })
+    })
+    .catch(() => { /* 只读查询失败不打扰 */ })
+    .then(() => { cursorInFlight = false }, () => { cursorInFlight = false })
 }
 
 startEditorEndpoint({
@@ -265,12 +321,18 @@ startEditorEndpoint({
   // the LO cursor; ask the worker what link the cursor landed in and forward it.
   // Guards: primary button only, no drag-selection (>5px move), 800ms cooldown,
   // and the worker returns '' for non-collapsed cursors (double-click selection).
+  // 光标邻域上报要用同一个 executor（订阅打开后才会真的调用它）
+  insightExecutor = endpoint.executor
   try {
     const canvas = document.getElementById('qtcanvas')
     let downAt = null
     let lastOpen = 0
     canvas.addEventListener('mousedown', (ev) => {
-      downAt = ev.button === 0 ? { x: ev.clientX, y: ev.clientY } : null
+      // 修饰键只能从**原生** mousedown 上取（本页是真 DOM，不经 uni 的事件重建），
+      // mouseup 上的修饰键在部分输入法/触控板组合下已经被放开了。
+      downAt = ev.button === 0
+        ? { x: ev.clientX, y: ev.clientY, metaKey: !!ev.metaKey, ctrlKey: !!ev.ctrlKey }
+        : null
     }, true)
     canvas.addEventListener('mouseup', (ev) => {
       const d = downAt
@@ -279,6 +341,9 @@ startEditorEndpoint({
       if (Math.abs(ev.clientX - d.x) > 5 || Math.abs(ev.clientY - d.y) > 5) return // drag-selection
       // let Qt process the click and move the LO cursor first
       setTimeout(async () => {
+        // (dev-board#182) 依据窗格的正文联动：单击落定后问一次光标邻域。
+        // 与超链接那条并行、互不阻塞（两者都是只读原语，谁先回来都不影响对方）。
+        relayCursorContext({ metaKey: d.metaKey, ctrlKey: d.ctrlKey })
         try {
           const r = await endpoint.executor.executeCommand('get_hyperlink_at_cursor', {})
           if (r && r.success && r.url) {

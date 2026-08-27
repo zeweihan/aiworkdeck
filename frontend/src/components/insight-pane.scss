@@ -1,0 +1,172 @@
+// insight-pane.scss — InsightPane.vue（工作台「依据」面板）的样式实体。
+// 外置形制照 evidence-panel.scss（见 .claude/agents/sidebar-shell.md）。
+//
+// 配色红线：外壳保持浅色（白 / #F8F9FA + 森林绿 #1A5336、mint #5BD197 点缀），
+// 不要引入深色 chrome。密度一律走 App.vue 的 --awd-panel-* 令牌，不要再自定义边距。
+
+.ip { display: flex; flex-direction: column; flex: 1; min-height: 0; background: #fff; }
+
+// ---- 头部：文档名 + 解析按钮 ----
+.ip-head {
+  display: flex; align-items: center; gap: 6px;
+  height: var(--awd-panel-sec-h, 26px); min-height: var(--awd-panel-sec-h, 26px);
+  padding: 0 var(--awd-panel-pad-x, 10px);
+  border-bottom: 1px solid var(--awd-panel-border, #E9ECEF);
+}
+.ip-doc {
+  flex: 1; min-width: 0; font-size: var(--awd-panel-fs, 12px); color: #495057;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ip-parse {
+  flex: none; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;
+  color: #1A5336; background: #E6F9F0; border: 1px solid #5BD197;
+}
+.ip-parse.disabled { color: #ADB5BD; background: #F1F3F5; border-color: #DEE2E6; }
+
+// ---- run 状态行 ----
+.ip-run {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px var(--awd-panel-pad-x, 10px);
+  background: #F8F9FA; border-bottom: 1px solid var(--awd-panel-border, #E9ECEF);
+}
+.ip-run-t { flex: 1; min-width: 0; font-size: 11px; color: #495057; line-height: 1.5; }
+.ip-run.failed { background: #FEF2F2; }
+.ip-run.failed .ip-run-t { color: #991B1B; }
+.ip-run.done { background: #E6F9F0; }
+.ip-run.done .ip-run-t { color: #1A5336; }
+.ip-spin {
+  flex: none; width: 10px; height: 10px; border-radius: 50%;
+  border: 2px solid #CED4DA; border-top-color: var(--awd-panel-accent, #1A5336);
+  animation: ip-rot 0.8s linear infinite;
+}
+@keyframes ip-rot { to { transform: rotate(360deg); } }
+
+.ip-error {
+  margin: 6px var(--awd-panel-pad-x, 10px) 0; padding: 5px 8px; border-radius: 6px;
+  background: #FEF2F2; color: #991B1B; font-size: 11px; line-height: 1.5;
+}
+
+// ---- tab ----
+.ip-tabs { display: flex; border-bottom: 1px solid var(--awd-panel-border, #E9ECEF); }
+.ip-tab {
+  flex: 1; text-align: center; line-height: var(--awd-panel-row-h, 28px);
+  font-size: var(--awd-panel-fs, 12px); color: #868E96; border-bottom: 2px solid transparent;
+}
+.ip-tab.on { color: var(--awd-panel-accent, #1A5336); font-weight: 600; border-bottom-color: #5BD197; }
+.ip-tab-n {
+  margin-left: 4px; padding: 0 5px; border-radius: 999px;
+  background: #F1F3F5; color: #495057; font-size: 10px; font-weight: 400;
+}
+
+.ip-body { flex: 1; min-height: 0; }
+
+// ---- 空态 ----
+.ip-empty { padding: 28px var(--awd-panel-pad-x, 10px); display: flex; flex-direction: column; gap: 6px; }
+.ip-empty-t { font-size: var(--awd-panel-fs, 12px); color: #495057; }
+.ip-empty-s { font-size: 11px; color: #ADB5BD; line-height: 1.6; }
+
+// ---- 分组头（统一形制：26px 行高 + 11px/700 + 计数徽章）----
+.ip-sec {
+  display: flex; align-items: center; gap: 6px;
+  height: var(--awd-panel-sec-h, 26px); padding: 0 var(--awd-panel-pad-x, 10px);
+  background: #F8F9FA;
+}
+.ip-sec-t { flex: 1; font-size: var(--awd-panel-fs-sec, 11px); font-weight: 700; color: #495057; }
+.ip-sec-n { padding: 0 6px; border-radius: 999px; background: #F1F3F5; color: #868E96; font-size: 10px; }
+
+// ---- 实体行 ----
+.ip-row { border-bottom: 1px solid #F1F3F5; }
+.ip-row.hl { background: #F6FFFB; }
+.ip-row.on { background: #FBFCFD; }
+.ip-row-top {
+  display: flex; align-items: center; gap: 6px;
+  min-height: var(--awd-panel-row-h, 28px); padding: 4px var(--awd-panel-pad-x, 10px);
+}
+.ip-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: #CED4DA; }
+.ip-dot.st-OK { background: #1A5336; }
+.ip-dot.st-PENDING { background: #CED4DA; }
+.ip-dot.st-UNAVAILABLE { background: #F0A202; }
+.ip-dot.st-ERROR { background: #C92A2A; }
+.ip-name {
+  flex: 1; min-width: 0; font-size: var(--awd-panel-fs, 12px); color: #212529; line-height: 1.5;
+  word-break: break-all;
+}
+.ip-mentions { flex: none; font-size: 10px; color: #ADB5BD; }
+.ip-caret { flex: none; width: 12px; text-align: center; font-size: 12px; color: #ADB5BD; }
+
+// 通道不可用/查无的可读说明（UNAVAILABLE ≠ 查无此项——这行必须显示出来）
+.ip-note {
+  display: flex; align-items: flex-start; gap: 6px;
+  margin: 0 var(--awd-panel-pad-x, 10px) 6px; padding: 5px 8px; border-radius: 6px;
+  background: #FFF7E6; border: 1px solid #FFD591;
+}
+.ip-note.st-ERROR { background: #FEF2F2; border-color: #FECACA; }
+.ip-note-t { flex: 1; min-width: 0; font-size: 11px; color: #8A5A00; line-height: 1.5; }
+.ip-note.st-ERROR .ip-note-t { color: #991B1B; }
+.ip-act {
+  flex: none; padding: 0 7px; border-radius: 10px; font-size: 10px;
+  color: #1A5336; background: #E6F9F0; border: 1px solid #5BD197;
+}
+
+// ---- 实体详情 ----
+.ip-detail {
+  padding: 2px var(--awd-panel-pad-x, 10px) 8px;
+  display: flex; flex-direction: column; gap: 3px;
+}
+.ip-detail-hint { font-size: 11px; color: #ADB5BD; }
+.ip-detail-err { font-size: 11px; color: #991B1B; line-height: 1.5; }
+.ip-kv { display: flex; gap: 8px; align-items: flex-start; }
+.ip-k { flex: none; width: 88px; font-size: 11px; color: #868E96; line-height: 1.6; }
+.ip-v { flex: 1; min-width: 0; font-size: 11px; color: #212529; line-height: 1.6; word-break: break-all; }
+.ip-sub { margin-top: 5px; font-size: var(--awd-panel-fs-sec, 11px); font-weight: 700; color: #495057; }
+.ip-title { font-size: var(--awd-panel-fs, 12px); font-weight: 600; color: #212529; line-height: 1.5; }
+.ip-meta { font-size: 10px; color: #868E96; line-height: 1.5; }
+.ip-para { font-size: 11px; color: #343A40; line-height: 1.7; white-space: pre-wrap; word-break: break-all; }
+.ip-block { display: flex; flex-direction: column; gap: 2px; }
+.ip-cand { font-size: 11px; color: #495057; line-height: 1.6; word-break: break-all; }
+.ip-raw {
+  margin-top: 4px; padding: 5px 7px; border-radius: 5px; background: #F8F9FA;
+  font-size: 10px; color: #868E96; line-height: 1.5; white-space: pre-wrap; word-break: break-all;
+}
+// 出处引文：点它在文档里定位过去
+.ip-quote {
+  padding: 3px 7px; border-radius: 5px; background: #F1F3F5;
+  font-size: 11px; color: #495057; line-height: 1.6; word-break: break-all;
+}
+
+// ---- 一致性发现 ----
+.ip-find {
+  margin: 8px var(--awd-panel-pad-x, 10px) 0; padding: 7px 9px;
+  border-radius: 6px; border: 1px solid var(--awd-panel-border, #E9ECEF); background: #fff;
+  display: flex; flex-direction: column; gap: 5px;
+}
+.ip-find.sv-error { border-color: #FECACA; }
+.ip-find.done { opacity: 0.55; }
+.ip-find-top { display: flex; align-items: flex-start; gap: 6px; }
+.ip-sv {
+  flex: none; padding: 0 6px; border-radius: 999px; font-size: 10px;
+  color: #8A5A00; background: #FFF7E6;
+}
+.ip-find.sv-error .ip-sv { color: #991B1B; background: #FEF2F2; }
+.ip-find-t { flex: 1; min-width: 0; font-size: var(--awd-panel-fs, 12px); color: #212529; line-height: 1.5; }
+.ip-claim {
+  padding: 4px 7px; border-radius: 5px; background: #F8F9FA;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.ip-claim-q { font-size: 11px; color: #495057; line-height: 1.6; word-break: break-all; }
+.ip-claim-v { font-size: 10px; color: #868E96; }
+.ip-fixes { display: flex; flex-wrap: wrap; gap: 6px; }
+.ip-fix {
+  padding: 2px 9px; border-radius: 10px; font-size: 11px; font-weight: 600;
+  color: #1A5336; background: #E6F9F0; border: 1px solid #5BD197;
+}
+.ip-fix.busy { opacity: 0.5; }
+.ip-blocked { font-size: 10px; color: #ADB5BD; line-height: 1.5; }
+.ip-fixed { display: flex; flex-direction: column; gap: 2px; }
+.ip-fixed-t { font-size: 11px; font-weight: 600; color: #1A5336; }
+.ip-fixed-s { font-size: 10px; color: #868E96; line-height: 1.5; }
+// 失败提示走面板内联小条（编辑器场景下 toast 被 webview 遮挡 = 静默失败）
+.ip-notice {
+  padding: 4px 7px; border-radius: 5px; background: #FFF7E6; border: 1px solid #FFD591;
+  font-size: 10px; color: #8A5A00; line-height: 1.5;
+}

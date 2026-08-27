@@ -186,6 +186,8 @@ export default {
     trackChangesShort: 'Changes',
     reviewPanel: 'Review panel',
     reviewShort: 'Review',
+    insightPanel: 'Analyze this document and open the References panel',
+    insightShort: 'Analyze',
     zoom: 'Zoom',
     insert: 'Insert',
     insertTable: 'Table…',
