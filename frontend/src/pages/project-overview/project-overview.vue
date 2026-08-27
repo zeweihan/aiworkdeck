@@ -239,17 +239,18 @@
             </view>
         </view>
 
-        <!-- Credits 余额 chip（dev-board#187）：余额 + 会员等级徽章（level>=2 才显示等级名）。
-             connected:false 或拉取失败时整个不渲染（绝不出现 0 或 —）；官网不可达
-             （available:false）时余额位显示「—」。点击直达设置「账户与用量」。 -->
+        <!-- Credits 余额（dev-board#187 → #223 合并）：余额与头像本是同一件事
+             （都是「我的账户」，点开都通向设置的「账户与用量」），并排两个 chip
+             是重复入口，已收进头像下拉。
+             **只有余额不足时仍在顶栏常显**——那是唯一「不处理就会卡住干活」的
+             信号，藏进下拉等于让用户在跑任务时才撞上。 -->
         <view
-          v-if="walletChipVisible"
-          class="trial-chip wallet-chip"
+          v-if="walletChipVisible && walletLow"
+          class="trial-chip wallet-chip wallet-chip-low"
           @tap.stop="goToAccountPanel"
           :title="$t('workbench.walletChipTitle')"
         >
           <text class="trial-chip-text">{{ walletChipText }}</text>
-          <text v-if="walletTierName" class="wallet-chip-tier">{{ walletTierName }}</text>
         </view>
 
         <!-- 用户头像 + 下拉（2026-08-19 从 rail 底部搬上来）。
@@ -269,6 +270,14 @@
           </view>
           <view v-if="avatarMenuOpen" class="avatar-menu-mask" @tap.stop="avatarMenuOpen = false"></view>
           <view v-if="avatarMenuOpen" class="avatar-menu">
+            <!-- 账户抬头：余额 + 等级。整块可点，去向与原余额 chip 一致 -->
+            <view v-if="walletChipVisible" class="avatar-menu-wallet" @tap.stop="onAvatarMenuAccount">
+              <view class="avatar-menu-wallet-row">
+                <text class="avatar-menu-balance" :class="{ low: walletLow }">{{ walletChipText }}</text>
+                <text v-if="walletTierName" class="avatar-menu-tier">{{ walletTierName }}</text>
+              </view>
+              <text class="avatar-menu-wallet-label">{{ $t('workbench.walletMenuLabel') }}</text>
+            </view>
             <view class="avatar-menu-item" @tap.stop="onAvatarMenuSettings">
               <text>{{ $t('workbench.settingsTabName') }}</text>
             </view>
@@ -2428,6 +2437,13 @@ export default {
       const cents = Number(this.wallet.balanceCents)
       const symbol = siteLinks().current === 'cn' ? '¥' : '$'
       return symbol + ((Number.isFinite(cents) ? cents : 0) / 100).toFixed(2)
+    },
+    // 余额不足：低于 20 元（2000 分）视为要提醒。官网不可达（余额未知）不算——
+    // 那是连接问题不是钱的问题，用「—」表达就够了，不该冒充告急。
+    walletLow() {
+      if (this.wallet.available === false) return false
+      const cents = Number(this.wallet.balanceCents)
+      return Number.isFinite(cents) && cents < 2000
     },
     // 等级名小徽章：level>=2 才显示（律师助理档只显示余额），按语言取 nameZh/nameEn
     walletTierName() {
@@ -4892,6 +4908,10 @@ export default {
     // 状态判定都在它里面，这里只负责收起菜单。注意位置：不能插在 goToSystemSettings
     // 与 openSettingsTab 之间——check-navigation-contract 的方法提取按
     // 「call site 后第一个 {」配对，中间夹方法会截断它的窗口。
+    onAvatarMenuAccount() {
+      this.avatarMenuOpen = false
+      this.goToAccountPanel()
+    },
     onAvatarMenuSettings() {
       this.avatarMenuOpen = false
       this.goToSystemSettings()

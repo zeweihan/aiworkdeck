@@ -386,6 +386,21 @@ $bg-pale: #F8F9FA; // Pale BG
       padding: 0 5px;
     }
   }
+
+  // 余额不足才留在顶栏（dev-board#223）：既然它此刻的唯一职责是催充值，
+  // 就别再穿品牌绿的日常皮，换告警色
+  &.wallet-chip-low {
+    background: var(--awd-warning-soft);
+    border-color: var(--awd-warning);
+
+    .trial-chip-text {
+      color: var(--awd-warning-text);
+    }
+
+    &:hover {
+      border-color: var(--awd-warning-text);
+    }
+  }
 }
 
 .project-meta {
@@ -453,15 +468,63 @@ $bg-pale: #F8F9FA; // Pale BG
   z-index: 1198;
 }
 
+/* 头像下拉的账户抬头（dev-board#223：原顶栏余额 chip 并进来）：
+   余额是这块的主角，等级做小徽章，底下一行说明它是什么、点了去哪 */
+.avatar-menu-wallet {
+  padding: 8px 10px 9px;
+  border-bottom: 1px solid var(--awd-border-subtle);
+  margin-bottom: 4px;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--awd-surface-2);
+  }
+}
+
+.avatar-menu-wallet-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.avatar-menu-balance {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--awd-text);
+  font-variant-numeric: tabular-nums;
+
+  &.low {
+    color: var(--awd-warning-text);
+  }
+}
+
+.avatar-menu-tier {
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 14px;
+  color: var(--awd-text-on-accent);
+  background: var(--awd-accent);
+  border-radius: 3px;
+  padding: 0 5px;
+}
+
+.avatar-menu-wallet-label {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--awd-text-3);
+}
+
 .avatar-menu {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
-  min-width: 132px;
+  min-width: 168px;
   background: var(--awd-surface);
   border: 1px solid var(--awd-border);
   border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(33, 38, 41, 0.12);
+  box-shadow: var(--awd-shadow-lg);
   padding: 4px;
   z-index: 1199;
 }

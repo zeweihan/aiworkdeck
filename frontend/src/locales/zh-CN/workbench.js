@@ -30,6 +30,7 @@ export default {
   appearanceDark: '深色',
   appearanceSystem: '跟随系统',
   walletChipTitle: 'Credits 余额与会员等级，点击打开账户设置',
+  walletMenuLabel: '账户与用量',
   trialInfo: '试用版说明',
   // 宽限预警 chip 与说明弹窗（2026-08 官方版必须账户登录）
   trialCountdown: '试用版 · 剩 {n} 天',
