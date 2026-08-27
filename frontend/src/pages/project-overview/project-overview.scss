@@ -368,21 +368,7 @@ $bg-white: #FFFFFF;
     }
   }
 
-  // 已连接账户：同一形状换绿系，与「试用版」的暖色区分开
-  &.account-chip {
-    background: $color-accent-pale;
-    border-color: #c4ead8;
-
-    &:hover {
-      border-color: $color-accent;
-    }
-
-    .trial-chip-text {
-      color: $color-primary;
-    }
-  }
-
-  // Credits 余额 chip（dev-board#187）：与 account-chip 同一族品牌绿底，
+  // Credits 余额 chip（dev-board#187）：品牌绿底，
   // 余额是数字所以字重略加；等级名做成内嵌小徽章
   &.wallet-chip {
     background: $color-accent-pale;
@@ -4447,11 +4433,6 @@ $bg-white: #FFFFFF;
   .rail-edit-mode .right-dock-tab.is-movable {
     animation: none;
   }
-}
-
-.rail-edit-btn.active {
-  color: $color-primary;
-  background: $color-accent-pale;
 }
 
 /* —— 右侧面板的 tab 条（只有真有面板停到右侧时才渲染） —— */
