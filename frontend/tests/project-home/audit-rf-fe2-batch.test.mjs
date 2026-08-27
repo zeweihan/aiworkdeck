@@ -227,8 +227,8 @@ function makeOnNavTapVm() {
   const body = extractMethod(AP_SRC, 'onNavTap(nav) {')
   const calls = {
     loadMemoryRepos: 0, loadCloudConnections: 0, loadPlatformServices: 0,
-    loadSite: 0, loadAccount: 0, loadStorageLocation: 0, loadIdentityCandidates: 0,
-    reloadFeedbackPanel: 0, refreshEntitlements: 0,
+    loadSite: 0, loadAccount: 0, loadWallet: 0, loadStorageLocation: 0,
+    loadIdentityCandidates: 0, reloadFeedbackPanel: 0, refreshEntitlements: 0,
   }
   const onNavTap = new Function(
     'refreshEntitlements',
@@ -241,6 +241,7 @@ function makeOnNavTapVm() {
     loadPlatformServices() { calls.loadPlatformServices++ },
     loadSite() { calls.loadSite++ },
     loadAccount() { calls.loadAccount++ },
+    loadWallet() { calls.loadWallet++ }, // 会员钱包卡（dev-board#187）：进入 account 分区顺带拉取
     loadStorageLocation() { calls.loadStorageLocation++ },
     loadIdentityCandidates() { calls.loadIdentityCandidates++ },
     reloadFeedbackPanel() { calls.reloadFeedbackPanel++ },
