@@ -35,7 +35,7 @@
 //   请求  插件 -> 宿主   { awd: 1, type: 'call', seq, method, params }
 //   响应  宿主 -> 插件   { awd: 1, type: 'result', seq, ok, result | error: { code, message } }
 import {
-  getProjectFiles, getFileText,
+  getProjectFiles, getFileText, invokePluginTool,
   createEvidenceLink, addEvidenceTargets, getEvidenceLink, listEvidenceLinks
 } from '@/services/api.js'
 import { getAppLanguage } from '@/utils/appLanguage.js'
@@ -70,6 +70,9 @@ function extOf(name) {
 
 export default {
   name: 'PluginPane',
+  // chat.send 与 PluginGuidePane 的快捷按钮走同一条 kickoff 路：
+  // prompt 作为可见的用户消息进入 AI 对话，用户随时可停，不存在静默注入
+  emits: ['kickoff'],
   props: {
     url: {
       type: String,
@@ -234,6 +237,44 @@ export default {
             return { ok: false, error: { code: 'quota_exceeded', message: '插件存储超过 64 KB 上限' } }
           }
           this.writeStore(serialized)
+          return { ok: true, result: {} }
+        }
+
+        // ==== 规范 v2.5 新增的三个方法 ====
+
+        case 'tools.invoke': {
+          // 直调本插件自己的 JAR 工具：权限/配额/projectId 都在后端端点与 ToolRegistry 里闸，
+          // 桥这里只负责转发；插件不可能借这条路调到别的插件或宿主内置工具（端点按 manifest 校验）
+          const name = String(params.name == null ? '' : params.name).trim()
+          if (!name) return { ok: false, error: { code: 'invalid_params', message: '缺少工具名 name' } }
+          let res
+          try {
+            res = await invokePluginTool(this.pluginId, name, this.projectId, params.args || {})
+          } catch (e) {
+            return { ok: false, error: { code: 'invoke_failed', message: (e && e.message) || '工具调用失败' } }
+          }
+          const body = res && res.output !== undefined ? res : (res && res.data) || {}
+          if (body.code !== 0) {
+            return { ok: false, error: { code: 'invoke_failed', message: String(body.output || body.message || '工具调用失败') } }
+          }
+          return { ok: true, result: { output: body.output == null ? '' : String(body.output) } }
+        }
+
+        case 'chat.send': {
+          const prompt = String(params.prompt == null ? '' : params.prompt).trim()
+          if (!prompt) return { ok: false, error: { code: 'invalid_params', message: 'prompt 不能为空' } }
+          if (prompt.length > 4000) return { ok: false, error: { code: 'quota_exceeded', message: 'prompt 超过 4000 字上限' } }
+          this.$emit('kickoff', { prompt })
+          return { ok: true, result: {} }
+        }
+
+        case 'ui.openFile': {
+          if (!this.hasPermission('file_read')) return this.denied('file_read')
+          const path = String(params.path == null ? '' : params.path)
+          const hit = (await this.listProjectFiles()).find(f => f.path === path)
+          if (!hit) return { ok: false, error: { code: 'not_found', message: '文件不存在：' + path } }
+          // 与 evidence.locate 打开底稿同一条路：工作台监听后走 openFileLinkTarget
+          uni.$emit('awd:open-evidence-target', { fileId: hit.id, locator: null, linkKey: null })
           return { ok: true, result: {} }
         }
 

@@ -53,7 +53,7 @@
 - 插件页面是普通 HTML/CSS/JS，没有构建步骤：不要写 JSX/TypeScript/import 语法，用浏览器直接能跑的 ES5/ES6 脚本。
 - SDK 必须用同步 `<script src="./awd-plugin-sdk.js">` 引入且排在业务脚本之前：宿主在 iframe load 后立刻发握手，晚注册会错过它，`awd.ready()` 永远挂起。
 
-## SDK 桥 API（v1 全量）
+## SDK 桥 API（v1 全量 + v2.5 新增）
 
 引入 SDK 后全局有 `awd` 对象：
 
@@ -65,9 +65,14 @@
 | `awd.ui.toast(message)` | 字符串 | `{}` | 在宿主界面弹一条提示 |
 | `awd.storage.get(key)` | 字符串 | 存过的值，无则 `null` | 插件级 KV |
 | `awd.storage.set(key, value)` | 字符串 + 可序列化值 | `{}` | 插件级 KV，总量上限 64KB，超限报 `quota_exceeded` |
-| `awd.call(method, params)` | 任意 v1 方法 | 宿主的 result | 底层通道，上面的都是它的封装 |
+| `awd.tools.invoke(name, args?)` | 工具名 + 可选参数对象 | 工具原始字符串输出（自行 `JSON.parse`） | **v2.5 新增**：直调本插件 manifest `tools` 里声明的 JAR 工具，绕过模型；`name` 不是本插件工具时报 `invoke_failed` |
+| `awd.chat.send(prompt)` | 字符串，上限 4000 字 | `{}` | **v2.5 新增**：把 `prompt` 作为可见用户消息发进 AI 对话（起草类动作走这条，不要直调工具） |
+| `awd.ui.openFile(path)` | 文件 path | `{}` | **v2.5 新增**：把项目文件打开到工作台中栏；需 `file_read` |
+| `awd.call(method, params)` | 任意方法 | 宿主的 result | 底层通道，上面的都是它的封装 |
 
-错误处理：reject 的 Error 带 `code` 字段——`permission_denied`（manifest 没声明所需权限）、`unknown_method`（宿主不认识的方法）、`quota_exceeded`（KV 超限）、`not_found`。给用户看的报错要转成中文人话。
+错误处理：reject 的 Error 带 `code` 字段——`permission_denied`（manifest 没声明所需权限）、`unknown_method`（宿主不认识的方法，多见于老宿主还不支持 v2.5 新方法，插件要能降级处理）、`quota_exceeded`（KV 超限或 `chat.send` 的 prompt 超 4000 字）、`not_found`（`ui.openFile` 的文件不存在）、`invalid_params`（`tools.invoke`/`chat.send` 参数缺失或形状不对）、`invoke_failed`（`tools.invoke` 目标工具未声明或执行出错）。给用户看的报错要转成中文人话。
+
+`awd.tools.invoke` 提醒：**开发安装的插件 manifest `tools` 必须为空**（见上文「开发安装只收纯 Web 插件」），所以这个方法在本地自测环境下永远拿不到工具、只会收 `invoke_failed`；只有走插件广场审核上架、且插件确实声明了 JAR 工具时才会真正生效。给用户写代码前先确认这一点，别承诺一个本机测不出效果的功能。
 
 最小可用示例（骨架的 index.html 就是这个形状）：
 

@@ -44,7 +44,7 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
   - **后端契约**：`PluginService.PluginMetadata.guide`（`PluginGuide`/`PluginQuickAction`）；`parseManifest` 丢弃 quickActions 里缺 label 或 prompt 的条目；`PluginController.PluginView` 透传 `guide`。测试 `PluginServiceTest.parsesGuideBlock/guideAbsentIsNull`、`frontend/tests/evidence/methodBarTimer.test.mjs` 无关，guide 面板前端无独立单测（真渲染走查配方见 [[ui-live-walkthrough-recipe]]，注入 `/api/plugins/list` 造 guide）。
   - **地雷（都在 dev-board#132 修掉，别改回去）**：① `dynamicPlugins[].icon` 不要回退 `/static/plugin_default.png`——**那文件不存在**，会 404 成 HTML 破图；registry 的 `icon` 是 emoji（全站禁 emoji、不当图片渲染）。纯工具插件的 rail 图标由模板里 `v-else-if="p.isDynamic"` 的拼图 SVG 兜底。② `toggleLeftPane` **不再** `openFile({fileType:'plugin'})` 开中栏标签——`isFileTypeSupported` 没有 `'plugin'`，那条老路只会弹「无法打开文件」模态、从没渲染出东西；动态插件一律左栏面板渲染（「左栏一个图标 = 一个插件」）。中栏 `activeFileLeft.fileType==='plugin'` 的 PluginPane 分支现已是死代码，留着无害。③ `leftPaneTitle` 要先查 `activeDynamicPlugin.label`，否则动态插件标题掉进兜底显示成「资源管理器」。
 
-### 三方 Web 插件（规范 v2.3，docs/PLUGIN_SPEC.md §8）
+### 三方 Web 插件（规范 v2.5，docs/PLUGIN_SPEC.md §8）
 
 `manifest.frontendEntry` 从「预留」激活。两种形态在 PluginPane 里**行为刻意不同**：
 
@@ -54,6 +54,8 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
 **绝不给 sandbox 加 `allow-same-origin`。** 同源的 iframe 能读 localStorage 里的 `X-Session-Id` 并打全部 `/api/*`，等于白送宿主权限。
 
 桥协议（`PluginPane.vue` 宿主端 / `sdk/plugin-sdk/awd-plugin-sdk.js` 插件端 / 官网模板与宿主模拟器，**三处同一份契约**）：`init` 握手 → `call{seq,method,params}` → `result{seq,ok,result|error}`；双向来源校验（宿主认 `event.source === iframe.contentWindow`，插件认 `window.parent`），targetOrigin 只能 `'*'`（opaque origin）。v1 方法：`context.get` / `files.list` / `files.read` / `ui.toast` / `storage.get` / `storage.set`；错误码 `permission_denied` / `unknown_method` / `quota_exceeded` / `not_found`。
+
+**v2.5 新增三方法**（`PluginPane.handleCall`，SDK 版本 `1.0.0`→`1.1.0`，老宿主对新方法一律回 `unknown_method`，插件要能降级）：`tools.invoke {name, args?}` -> `{output}`——经直调端点 `POST /api/plugins/{id}/tools/{tool}`（`PluginController.invokeTool`）调本插件自己的 JAR 工具，安全闸自上而下是登录会话 → 项目写权限（`ProjectMemberService.hasWritePermission`）→ 工具名必须是该插件 manifest `tools` 声明的 → 插件启用未封禁，再落到 `ToolRegistry.execute` 走 manifest permissions/宿主 SPI 配额/`ToolContext` 服务端定 projectId·userId 这套 AI 链路同款闸；`chat.send {prompt}`（≤4000 字）-> `{}`——把 prompt 当可见用户消息发进 AI 对话，与 PluginGuidePane quickActions 同一条 kickoff 路；`ui.openFile {path}` -> `{}`（需 `file_read`）——复用 `awd:open-evidence-target` 事件链把项目文件开到工作台中栏。新增错误码 `invalid_params` / `invoke_failed`。设计意图：Web 面板做结构化操作时直调自家工具绕过模型，但一步都不绕过安全闸。
 
 **这是 manifest permissions 第一次成为真实边界**：缺 `file_read` 时 `files.*` 直接 `permission_denied`；`network` 决定 PluginWebController 下发的 CSP 是 `connect-src 'none'` 还是 `connect-src https:`。JAR 插件同 JVM 同权限，做不到这一点。
 
@@ -80,8 +82,10 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
   （PluginDevTools，新工具组件记得同步 RealToolBeans——已加）。
 - 内置 skill `backend/skills/plugin-dev/`（enabled_by_default:false，requiresSkill 门控
   左栏「插件开发」面板 PluginDevPanel.vue，rail 排在 market 之后）。**prompt.md 是
-  Web 插件开发的权威 spec**（目录契约/manifest 规则/沙箱边界/SDK 桥 v1 全量 API/迭代流程），
-  改桥协议或 manifest 规则时必须同步它，否则 AI 会按旧契约写插件。
+  Web 插件开发的权威 spec**（目录契约/manifest 规则/沙箱边界/SDK 桥 v1+v2.5 全量 API/迭代流程），
+  改桥协议或 manifest 规则时必须同步它，否则 AI 会按旧契约写插件。dev 安装的插件 manifest
+  `tools` 强制为空，所以 `tools.invoke` 在本机自测环境下永远只收 `invoke_failed`——
+  prompt.md 已加提醒，别让 AI 对用户承诺一个本机测不出效果的功能。
 - 骨架模板在 `backend/src/main/resources/plugin-dev/`（template-index.html +
   awd-plugin-sdk.js 副本）。**SDK 至此有四份分发副本 + 宿主端实现**（原三份 + 本 classpath
   副本），classpath 副本与源头的逐字节一致由 `PluginDevSdkParityTest` 守着。

@@ -1,7 +1,8 @@
-# 插件规范 v2.4（Plugin Spec v2.4）
+# 插件规范 v2.5（Plugin Spec v2.5）
 
 > 适用版本：v1 自 0.4.x；v2（权限执行 + 启停过滤）自 Phase 3A；v2.1（插件携带 Skill）自 Phase 3B；
-> v2.3（Web 插件 + `packs` 依赖）自 native pack Phase B；v2.4（宿主 SPI `plugin-api` + 后台任务）自尽调 P1。
+> v2.3（Web 插件 + `packs` 依赖）自 native pack Phase B；v2.4（宿主 SPI `plugin-api` + 后台任务）自尽调 P1；
+> v2.5（Web 插件直调工具端点 + 桥新增 `tools.invoke`/`chat.send`/`ui.openFile`）自尽调 P1 补充。
 > 示例插件：[examples/hello-plugin/](../examples/hello-plugin/)（JAR 工具）、
 > [examples/hello-web-plugin/](../examples/hello-web-plugin/)（纯前端）。
 > 后端实现：`PluginService`（扫描/解析/启停）、`PluginController`（HTTP API）、
@@ -177,6 +178,7 @@ Java 侧没有进程内沙箱可用（`SecurityManager` 已于 JEP 411 废弃、
 | POST | `/api/plugins/{id}/disable` | admin | 禁用插件 |
 | POST | `/api/plugins/rescan` | admin | 重新扫描 plugins/ 目录，返回 `{ code, pluginCount, toolCount }` |
 | GET | `/api/plugin-web/{id}/**` | 无 | Web 插件静态资源（`plugins/<id>/web/` 之下），见 §8.2 |
+| POST | `/api/plugins/{id}/tools/{tool}` | 登录 + 项目写权限 | **v2.5 新增**：直调插件工具，见 §8.7 |
 
 管理接口鉴权与 AdminConfigController 一致：`X-Session-Id` 请求头 → session 用户名为 `admin`。
 
@@ -294,6 +296,19 @@ opaque origin 使然，不能靠 `event.origin` 判断。
 `no_selection`（`anchor.selection: true` 但编辑器当前没有选区）、
 `no_active_document`（当前聚焦窗格没有打开的 Word 文档，或 `docPath` 不是它）。
 
+**v2.5 新增方法**（宿主 0.27 起；老宿主对未知方法一律回 `unknown_method`，插件需按此降级）：
+
+| 方法 | 参数 | 返回 | 权限 |
+|---|---|---|---|
+| `tools.invoke` | `{ name, args? }` | `{ output }`，`output` 是工具原始字符串输出（通常为 JSON，插件自行 `JSON.parse`） | 无独立 permission；工具名必须是本插件 manifest `tools` 里声明的，见 §8.7 |
+| `chat.send` | `{ prompt }`，上限 4000 字 | `{}` | — |
+| `ui.openFile` | `{ path }` | `{}` | `file_read` |
+
+对应错误码：`invalid_params`（`tools.invoke` 缺 `name`，或 `chat.send` 的 `prompt` 为空）、
+`invoke_failed`（`tools.invoke` 的目标工具未声明 / 执行出错）、
+`quota_exceeded`（`chat.send` 的 `prompt` 超 4000 字）、
+`not_found`（`ui.openFile` 的 `path` 在项目文件里找不到）。
+
 `evidence.*`（EvidenceLink，P0）：
 
 - 路径口径与 `files.*` 一致（项目内相对路径），宿主负责 path 与 fileId 的互换；
@@ -329,11 +344,37 @@ opaque origin 使然，不能靠 `event.origin` 判断。
 `awd.evidence.link(params)` / `awd.evidence.list(params)` / `awd.evidence.locate(params)` 是
 三个 `call` 的直通包装，同样返回原始 result。
 
+**v2.5**：SDK 版本号 `1.0.0` → `1.1.0`（`awd.version`，与桥协议版本 `PROTOCOL` 无关），新增
+`awd.tools.invoke(name, args)`（解包糖衣，直接返回 `output` 字符串）、`awd.chat.send(prompt)`、
+`awd.ui.openFile(path)`，均为对应新方法的直通/糖衣包装。
+
 ### 8.6 开发工作流
 
 官网插件模板 zip 带一份 `dev/host-simulator.html`——一个假扮宿主桥的静态页，
 起个本地静态服务就能在浏览器里开发调试，不必装桌面端。模拟器的 sandbox 属性与桌面端
 一致（同样没有 `allow-same-origin`）：调试时为了方便加上它，装进桌面端会立刻失败。
+
+### 8.7 直调插件工具端点（v2.5）
+
+`PluginController.invokeTool`：`POST /api/plugins/{id}/tools/{tool}`。设计意图：Web 面板做
+结构化操作时直调自家 JAR 工具，绕过模型、不绕过任何安全闸——是桥 `tools.invoke` 方法
+（见 §8.4）的服务端落点。
+
+请求体：`{ projectId, args }`；鉴权走会话（`X-Session-Id`），不是插件自己的 postMessage 桥。
+
+响应：`{ code: 0 | 1, output }`，`output` 是工具执行的原始字符串（`code: 1` 时装的是失败信息，
+不是 HTTP 层错误）。
+
+安全闸（自上而下，任一不过直接拒绝，不进 ToolRegistry）：
+
+1. 登录会话有效（否则 401）；
+2. 插件存在、已启用、未被平台封禁（否则 404，口径与 §8.2 静态服务一致——不泄露「存在但被禁」）；
+3. `tool` 必须是该插件 manifest `tools` 里声明的名字（否则 404：不能借这条路调到别的插件或
+   宿主内置工具）；
+4. 调用者对 `projectId` 有**项目写权限**（`ProjectMemberService.hasWritePermission`，否则 403）；
+5. 落到 `ToolRegistry.execute`：manifest `permissions` 校验（§3）、宿主 SPI 配额（§11.1）、
+   `ToolContext` 的 `projectId`/`userId` 以服务端解析结果为准（不信任请求体里的用户身份）——
+   与 AI 编排器调用同一插件工具时完全同一套闸，直调端点只是换了个触发源。
 
 ## 9. 插件依赖原生资源包（packs，v2.3）
 
@@ -364,10 +405,13 @@ opaque origin 使然，不能靠 `event.origin` 判断。
 - **v2.3**：`frontendEntry` 从「预留」激活为 Web 插件形态（§8）——`web/` 静态服务、
   sandbox iframe、postMessage 桥、CSP；**permissions 在 Web 插件上第一次成为真实的执行边界**。
   manifest 新增 `packs` 字段（§9）。
-- **v2.4（当前）**：JAR 插件的宿主 SPI——独立 Maven 工件 `com.checkba:plugin-api:1.0.0`
+- **v2.4**：JAR 插件的宿主 SPI——独立 Maven 工件 `com.checkba:plugin-api:1.0.0`
   （`backend/plugin-api/`，纯接口、无第三方依赖、版本独立于桌面端、只加不破），`HostAware` 注入（§4），
   `PluginHost` 八个子接口（§11），后台任务 `plugin_job` 表 + `/api/plugin-jobs` + SSE
   `client_action: plugin_job_progress`，每插件每分钟 60 次宿主调用配额。manifest 无新增字段。
+- **v2.5（当前）**：Web 插件直调工具端点 `POST /api/plugins/{id}/tools/{tool}`（§8.7），
+  服务端落点在 `PluginController.invokeTool`；桥/SDK 新增 `tools.invoke`/`chat.send`/`ui.openFile`
+  三个方法（§8.4、§8.5），SDK 版本号 `1.0.0` → `1.1.0`。manifest 无新增字段。
 - 规划中：进程外插件形态（MCP server）为不需要独立 UI 的插件提供真正的隔离边界。
   **进程内沙箱不在规划中**——Java 侧无此能力（§3），不要再把它列为待办；
   Web 插件那条路已经用「不同源 + 桥」拿到了同等效果，代价是能力必须逐个显式开放。

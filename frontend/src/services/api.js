@@ -619,6 +619,17 @@ export function uninstallMarketPlugin(pluginId) {
   });
 }
 
+// Web 面板直调本插件的 JAR 工具（规范 v2.5）：登录会话 + 项目写权限 + 工具须为该插件声明；
+// 返回 { code, output }，output 是工具的原始字符串输出（通常是 JSON 或 "Error: ..."）
+export function invokePluginTool(pluginId, toolName, projectId, args) {
+  return request({
+    url: `/api/plugins/${pluginId}/tools/${toolName}`,
+    method: 'POST',
+    data: { projectId, args: args || {} },
+    header: { 'Content-Type': 'application/json' },
+  });
+}
+
 // 重新扫描 plugins/ 目录（仅管理员）
 export function rescanPlugins() {
   return request({
