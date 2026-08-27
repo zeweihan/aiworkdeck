@@ -76,6 +76,44 @@ public class EnterpriseDataTools implements AgentToolComponent {
         }
     }
 
+    /** kind → 企查查智能体数据平台 ipr 服务器的工具名。白名单：模型只能挑档，不能自由拼名。 */
+    private static final Map<String, String> IPR_KINDS = Map.of(
+            "trademark", "get_trademark_info",
+            "patent", "get_patent_info",
+            "intl_patent", "get_international_patent",
+            "software_copyright", "get_software_copyright_info",
+            "work_copyright", "get_copyright_work_info",
+            "icp", "get_internet_service_info",
+            "ipr_pledge", "get_ipr_pledge");
+
+    @ToolMeta(displayName = "查询企业知识产权", category = "data")
+    @Tool("Look up a Chinese company's intellectual-property records by company name or unified social credit code. "
+            + "kind must be one of: trademark (商标), patent (专利), intl_patent (国际专利), "
+            + "software_copyright (软件著作权), work_copyright (作品著作权), "
+            + "icp (网站域名 ICP 备案与小程序备案), ipr_pledge (知识产权出质). "
+            + "Call once per kind needed. Returns readable text.")
+    public String qichacha_ipr(String companyName, String kind) {
+        log.info("Tool: qichacha_ipr called for '{}' kind='{}'", companyName, kind);
+        if (!StringUtils.hasText(companyName)) {
+            return "Error: companyName is required.";
+        }
+        String mcpTool = IPR_KINDS.get(kind == null ? "" : kind.trim());
+        if (mcpTool == null) {
+            return "Error: kind 必须是 " + String.join("/", IPR_KINDS.keySet()) + " 之一。收到的是：" + kind;
+        }
+        try {
+            String text = qichachaService.queryIprJson(mcpTool, companyName);
+            return StringUtils.hasText(text) ? text : "该企业暂无对应的知识产权记录。";
+        } catch (GatewayException e) {
+            return unavailable("企业知识产权查询", e);
+        } catch (Exception e) {
+            log.warn("企业知识产权查询失败: {}", e.toString());
+            // 同 qichacha_query：失败标记不能少，否则判据听不见
+            return "错误：企业知识产权查询失败：" + e.getMessage()
+                    + " 本次已跳过该查询，请基于已有信息继续完成任务。";
+        }
+    }
+
     @ToolMeta(displayName = "查询金融数据", category = "data")
     @Tool("Query Tushare financial data for Chinese listed companies. apiName is the Tushare interface name "
             + "(e.g. stock_basic, stock_company, top10_holders, stk_managers, daily, income, balancesheet). "

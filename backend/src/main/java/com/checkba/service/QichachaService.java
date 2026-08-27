@@ -33,6 +33,10 @@ public class QichachaService {
 
     private static final int GATEWAY_TIMEOUT_SECONDS = 30;
 
+    /** MCP 端点实测 10-20s 常态（智能体数据平台聚合查询），30s 会掐掉正常调用。 */
+
+    private static final int IPR_GATEWAY_TIMEOUT_SECONDS = 60;
+
     @Autowired
     private SystemSettingService systemSettingService;
 
@@ -65,6 +69,34 @@ public class QichachaService {
      */
     public String queryEciInfoJson(String searchKey) {
         return fetchEciInfoResult(searchKey).toString();
+    }
+
+    /**
+     * 企业知识产权类查询（商标/专利/软著/备案等，dev-board#179）。
+     *
+     * <p>REST 那把 key 只购买了工商详情接口（ECIInfoVerify/GetInfo），字段里本来就没有
+     * 商标/域名；知识产权走企查查「智能体数据平台」的 MCP 服务器（网关代调，凭证在
+     * 官网侧 gateway-config.json 的 qichachaMcpToken）。{@code mcpTool} 是网关 op，
+     * 白名单由 {@link com.checkba.service.ai.tools.EnterpriseDataTools} 的 kind 映射钉住，
+     * 不接受模型自由拼名。
+     *
+     * <p>仅平台档提供：BYOK/团队服务器没有这把订阅凭证的下发通道（与 AI 子钥不同，
+     * 企查查不支持签发受限子凭证——见 licensing-billing 领域文档 D5 一节）。
+     */
+    public String queryIprJson(String mcpTool, String searchKey) {
+        if (externalProviderResolver.resolve(
+                com.checkba.service.platform.ExternalServiceProvider.QICHACHA)
+                != com.checkba.service.platform.ExternalServiceProvider.PLATFORM) {
+            throw new IllegalStateException(
+                    "企业知识产权查询仅官方版平台通道提供，当前部署未启用。请基于已有信息继续完成任务。");
+        }
+        com.checkba.service.platform.PlatformGatewayClient.Result result =
+                platformGatewayClient.call("qichacha", mcpTool,
+                        Map.of("searchKey", searchKey), IPR_GATEWAY_TIMEOUT_SECONDS);
+        // 网关原样透传 MCP 响应正文（JSON 或 SSE），解析与法宝共用同一个解析器，
+        // 格式漂移只会漂一次
+        return com.checkba.service.ai.mcp.McpResponseParser.parse(
+                result.data().path("raw").asText(""));
     }
 
     /** 取一次工商详情的 {@code Result}。两档在这里分，上面两个方法都不关心谁出的钱。 */

@@ -107,7 +107,9 @@
                     <!-- 子任务结果单独渲染：dispatch_subtask 的输出是 SubAgentResult 的 JSON，
                          裸 JSON 对律师毫无意义。解析不出预期结构就退回纯文本（下方分支）。 -->
                     <SubtaskResultCard v-if="subtaskResult(item)" :result="subtaskResult(item)" />
-                    <div v-else class="output-text">{{ outputText(item) }}</div>
+                    <!-- 原始 JSON 对律师是一段「代码」（dev-board#178）：能解析的一律
+                         渲染成缩进键值文本（空字段/语法噪音剥掉），解析不了的才按原文展示。 -->
+                    <div v-else class="output-text">{{ humanOutput(item) }}</div>
                     <!-- 截断标记由后端 SSE 侧加（AgentOrchestrator.toolOutputDisplayLimit 按
                          工具分档：结果型工具 16000，其余 4000），必须明示：模型看到的是全文，
                          这里没有。刻意不写具体字数——上限是分档的，写死数字就会说谎。 -->
@@ -140,6 +142,7 @@ import ThinkingCard from './ThinkingCard.vue'
 import SubtaskResultCard from './SubtaskResultCard.vue'
 import FileTypeIcon from '../FileTypeIcon.vue'
 import { toolDisplayName, toolRawName } from '@/utils/toolDisplayNames.js'
+import { humanizeToolOutput } from '@/utils/toolOutputHumanize.js'
 import { isEnglish } from '@/utils/appLanguage.js'
 import { t } from '@/i18n'
 
@@ -215,6 +218,18 @@ const openOutputs = ref({})
 const hasOutput = (item) => !!(item && item.output && String(item.output).trim())
 
 const outputText = (item) => String((item && item.output) || '').trim()
+
+// 可读化缓存：与 subtaskCache 同理，流式中 output 每个 token 都在变。
+const humanCache = new Map()
+const humanOutput = (item) => {
+    const raw = outputText(item)
+    if (humanCache.has(raw)) return humanCache.get(raw)
+    const human = humanizeToolOutput(raw)
+    const shown = human != null ? human : raw
+    if (humanCache.size > 16) humanCache.clear()
+    humanCache.set(raw, shown)
+    return shown
+}
 
 const isOutputOpen = (idx) => !!openOutputs.value[idx]
 

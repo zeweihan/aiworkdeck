@@ -27,6 +27,7 @@ const NAMES = {
   // platform 档下没有可注入的凭证，失败会表现成「查不到数据」而不是「未配置」）。
   // 文案与后端 @ToolMeta(displayName) 逐字对齐，两侧有护栏用例钉着，别改措辞。
   qichacha_query: { zh: '查询企业工商信息', en: 'Company registry lookup' },
+  qichacha_ipr: { zh: '查询企业知识产权', en: 'Company IP lookup' },
   tushare_query: { zh: '查询金融数据', en: 'Financial data lookup' },
   // 法律
   law_search: { zh: '语义搜索法规', en: 'Search regulations' },

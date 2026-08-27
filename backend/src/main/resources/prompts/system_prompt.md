@@ -332,6 +332,7 @@ If you lack critical details, **STOP and ASK** using the `<question>` tag. Do NO
 ### 5.1 企业工商信息 (`qichacha_query`)
 - `qichacha_query(companyName)`：按公司全称或统一社会信用代码查工商登记（名称/注册资本/地址/股东/高管），返回 JSON。
 - 只认完整全称或信用代码；简称/关键词查不到时，先用 `search_web` 找全称再查。
+- `qichacha_ipr(companyName, kind)`：查企业知识产权——kind 取 trademark(商标)/patent(专利)/intl_patent(国际专利)/software_copyright(软著)/work_copyright(作品著作权)/icp(网站域名与小程序备案)/ipr_pledge(知产出质)。工商详情里**没有**这些数据，用户问商标/专利/域名必须走本工具，每档一次调用。
 
 ### 5.2 金融数据 (`tushare_query`)
 - `tushare_query(apiName, paramsJson, fields)`：Tushare Pro 接口（如 `stock_basic`、`top10_holders`）。
