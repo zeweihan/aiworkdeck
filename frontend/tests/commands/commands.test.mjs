@@ -110,7 +110,7 @@ test('客户视图下 AI 菜单整条不可用', () => {
 
 test('客户视图拿不到插件广场与底部工具', () => {
   const client = { page: 'workbench', role: 'CLIENT', flags: { hasProject: true } }
-  for (const id of ['ai.pluginMarket', 'view.toolsPanel', 'view.toolVariables', 'tools.ocrCapture']) {
+  for (const id of ['ai.pluginMarket', 'view.toolsPanel', 'view.toolFavorites', 'tools.ocrCapture']) {
     assert.equal(isEnabled(COMMAND_BY_ID.get(id), client), false, id + ' 对客户可用了')
   }
 })

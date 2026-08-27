@@ -1,5 +1,5 @@
 <template>
-  <view class="page-project-overview" :class="{ 'compact-mode': isCompactLayout, 'is-resizing': resizing && resizing.active }">
+  <view class="page-project-overview" :class="{ 'compact-mode': isCompactLayout, 'is-resizing': resizing && resizing.active, 'rail-edit-mode': railEditMode }">
     <!-- 顶部固定项目信息 -->
     <view class="project-header">
       <view class="header-left">
@@ -269,10 +269,10 @@
           v-for="p in LEFT_SIDEBAR_PLUGINS"
           :key="p.key"
           class="rail-btn"
-          :class="{ active: (leftPaneKey === p.key && !sidebarCollapsed) || (p.key === 'staging' && stagingPinned), 'is-movable': isMovablePanel(p.key), 'rail-dragging': draggingRailKey === p.key }"
+          :class="{ active: (leftPaneKey === p.key && !sidebarCollapsed) || (p.key === 'staging' && stagingPinned), 'is-movable': isMovablePanel(p.key), 'is-sortable': !isClientView, 'rail-dragging': draggingRailKey === p.key }"
           :title="p.label"
           :draggable="!isClientView"
-          @tap="toggleLeftPane(p.key)"
+          @tap="onRailBtnTap(p.key)"
           @dragstart="onRailDragStart(p.key, $event)"
           @dragover="onRailDragOver(p.key, $event)"
           @dragend="onRailDragEnd"
@@ -307,6 +307,22 @@
             </svg>
           </view>
           <text v-else class="rail-icon">{{ p.icon }}</text>
+        </view>
+
+        <!-- 整理模式开关（dev-board#215）：iPhone 编辑主屏幕式——按下后所有可拖项
+             抖动+虚线框明示可拖，编辑态下点击不打开面板，再按一次退出 -->
+        <view
+          v-if="!isClientView"
+          class="rail-btn rail-edit-btn"
+          :class="{ active: railEditMode }"
+          :title="railEditMode ? $t('workbench.railEditDone') : $t('workbench.railEditEnter')"
+          @tap="toggleRailEditMode"
+        >
+          <view class="rail-icon-wrapper">
+            <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, gi) in GLYPHS.sort" :key="gi" :d="d" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
+            </svg>
+          </view>
         </view>
 
         <!-- Spacer -->

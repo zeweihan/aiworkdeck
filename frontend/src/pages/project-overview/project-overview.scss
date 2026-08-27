@@ -4424,6 +4424,36 @@ $bg-white: #FFFFFF;
   opacity: 0.35;
 }
 
+/* 整理模式（dev-board#215）：可拖项抖动 + 虚线框，iPhone 编辑主屏幕的隐喻 */
+@keyframes rail-wiggle {
+  0% { transform: rotate(-2.5deg); }
+  50% { transform: rotate(2.5deg); }
+  100% { transform: rotate(-2.5deg); }
+}
+
+.rail-edit-mode .rail-btn.is-sortable,
+.rail-edit-mode .panel-tab.is-movable,
+.rail-edit-mode .right-dock-tab.is-movable {
+  animation: rail-wiggle 0.32s ease-in-out infinite;
+  outline: 1.5px dashed $color-accent;
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+/* 动画敏感用户：只留虚线框，不抖 */
+@media (prefers-reduced-motion: reduce) {
+  .rail-edit-mode .rail-btn.is-sortable,
+  .rail-edit-mode .panel-tab.is-movable,
+  .rail-edit-mode .right-dock-tab.is-movable {
+    animation: none;
+  }
+}
+
+.rail-edit-btn.active {
+  color: $color-primary;
+  background: $color-accent-pale;
+}
+
 /* —— 右侧面板的 tab 条（只有真有面板停到右侧时才渲染） —— */
 .right-dock-tabs {
   display: flex;

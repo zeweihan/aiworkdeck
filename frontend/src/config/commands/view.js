@@ -47,14 +47,8 @@ export const VIEW_COMMANDS = [
 
   // group 2 留给动态生成的「打开视图」子菜单
 
-  {
-    id: 'view.toolVariables',
-    label: { zh: '变量库', en: 'Variables' },
-    menu: 'view', group: 3,
-    type: 'checkbox', checked: 'toolVariables',
-    when: ['workbench', 'notClient'],
-    run: 'wb:openTool:variables',
-  },
+  // 'view.toolVariables'（变量库）2026-08-27 随功能前端隐藏一并摘除（dev-board#216），
+  // 恢复时连 panelRegistry 的 'variables' 条目一起加回。
   {
     id: 'view.toolFavorites',
     label: { zh: '收藏夹', en: 'Favorites' },

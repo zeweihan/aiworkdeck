@@ -80,6 +80,8 @@ export default {
   newOrCopy: 'New / Duplicate',
   emptyWorkspace: 'Select a file to get started',
   emptyWorkspaceHint: 'Open a file from the explorer on the left, or create a new document',
+  railEditEnter: 'Arrange sidebar (drag to reorder or dock)',
+  railEditDone: 'Done arranging',
   leftPaneIdle: 'Left pane idle',
   rightPaneIdle: 'Right pane idle',
   // Bottom tools panel
