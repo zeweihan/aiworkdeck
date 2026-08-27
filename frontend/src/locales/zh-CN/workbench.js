@@ -25,6 +25,7 @@ export default {
   // 顶栏右侧
   accountUsage: '账户与用量',
   accountConnected: '已连接账户',
+  walletChipTitle: 'Credits 余额与会员等级，点击打开账户设置',
   trialInfo: '试用版说明',
   // 宽限预警 chip 与说明弹窗（2026-08 官方版必须账户登录）
   trialCountdown: '试用版 · 剩 {n} 天',

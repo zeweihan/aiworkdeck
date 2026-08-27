@@ -187,27 +187,16 @@
 </template>
 
 <script>
-import { login, register, clientLogin, getWizardStatus, getMyProjects, sendSmsCode, sendMailCode } from '@/services/api.js'
+import { login, register, clientLogin, getMyProjects, sendSmsCode, sendMailCode } from '@/services/api.js'
 import { saveSession, getSessionId, getCurrentUser } from '@/utils/auth.js'
 import { syncRecentToMenu } from '@/utils/recentProjects.js'
 
 export default {
   name: 'Login',
   onLoad() {
-    // 首次运行（未初始化）时跳转设置向导（Epic #18 T4）；
-    // 已初始化或后端不可达则正常停留在登录页
-    getWizardStatus()
-      .then((res) => {
-        if (res && res.initialized === false) {
-          uni.reLaunch({ url: '/pages/wizard/wizard' })
-        } else {
-          // IDE 化启动直达：存储会话仍有效则跳过登录，直接回到上次的工作现场
-          this.tryAutoResume()
-        }
-      })
-      .catch((e) => {
-        console.warn('查询向导状态失败（忽略）:', e)
-      })
+    // 首启向导已下线（2026-08-27）：初始化由桌面解锁页承担，浏览器/团队服务器
+    // 场景直接尝试恢复会话回到上次的工作现场
+    this.tryAutoResume()
   },
   data() {
     return {

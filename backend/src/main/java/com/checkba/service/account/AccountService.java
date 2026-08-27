@@ -8,10 +8,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -284,6 +286,193 @@ public class AccountService {
                     LangText.of("官网返回的 AI 通道密钥为空，请稍后重试", "The website returned an empty AI channel key, please retry shortly"));
         }
         return body;
+    }
+
+    // ==================== 会员与充值（dev-board#183/#184） ====================
+
+    /**
+     * GET /api/account/membership —— 会员等级、积分与充值/消费累计的全量转发。
+     * 契约 {@code {growthPoints, topupCents, spendCents, tier:{...}, nextTier:{...}|null, tiers:[...]}}。
+     * 全量端点不缓存（供设置页/会员卡片这类低频、要看最新数据的场景）；
+     * 高频轮询走 {@link #balanceSnapshot()}，那边有 TTL 缓存。
+     */
+    public Map<String, Object> fetchMembership() {
+        return getJson("/api/account/membership", requireKey());
+    }
+
+    /**
+     * POST /api/payment/create —— 发起一笔充值支付单。amountCents 单位「分」，参数校验
+     * （正整数、上限）在调用方（{@code AccountController.recharge}）做，这里只管转发。
+     *
+     * <p>微信站响应 {@code present:'qrcode'}（+codeUrl/qrCode），Stripe 站
+     * {@code present:'redirect'}（+redirectUrl）；两种形状原样透传，不在桌面端分叉。
+     */
+    public Map<String, Object> createRecharge(long amountCents, String idempotencyKey) {
+        String key = requireKey();
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("amount", amountCents);
+        body.put("kind", "recharge");
+        body.put("idempotencyKey", idempotencyKey);
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(body);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException(e); // 入参都是基本类型/String，序列化不会失败
+        }
+        AccountTransport.Reply reply = transport.send("POST", baseUrl() + "/api/payment/create", key, json);
+        if (reply.networkFailure()) {
+            throw networkError();
+        }
+        return handle(reply);
+    }
+
+    /** GET /api/payment/query?outTradeNo=xxx —— 订单支付状态透传，字段以官网为准。 */
+    public Map<String, Object> queryRecharge(String outTradeNo) {
+        String encoded = java.net.URLEncoder.encode(outTradeNo, StandardCharsets.UTF_8);
+        Map<String, Object> body = getJson("/api/payment/query?outTradeNo=" + encoded, requireKey());
+        // 查到「已支付」就作废余额缓存：充值弹窗确认到账后立刻 emit wallet-refresh，
+        // 顶栏 chip / 会员卡随手重拉，不能让它们再吃 60 秒 TTL 里的旧余额。
+        if (body.get("order") instanceof Map<?, ?> order && "paid".equals(order.get("status"))) {
+            clearBalanceCache();
+        }
+        return body;
+    }
+
+    /**
+     * POST /api/account/purchase —— 用 Credits 余额购买一个应用内 SKU（dev-board#187）。
+     * 官网成功返回 {@code {ok, feature, priceCents, balanceCents, orderId}}；
+     * 失败 400（invalid_sku / not_purchasable）与 409（already_owned / insufficient_credits）
+     * 在这里映射成带 reason 的 {@link SkuPurchaseException}，绝不冒出 4xx/4010。
+     * skuId 白名单在调用方（AccountController）把关，这里只管转发与失败分类。
+     */
+    public Map<String, Object> purchaseSku(String skuId) {
+        String key = requireKey();
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(Map.of("skuId", skuId == null ? "" : skuId));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException(e); // 入参是 String，序列化不会失败
+        }
+        AccountTransport.Reply reply = transport.send("POST", baseUrl() + "/api/account/purchase", key, json);
+        if (reply.networkFailure()) {
+            throw networkError();
+        }
+        if (reply.status() == 400 || reply.status() == 409) {
+            String code = str(parse(reply.body()).get("error"));
+            // 文案红线：不得含「登录」「未授权」「请先」——api.js 曾用这三个子串判掉线
+            if ("already_owned".equals(code)) {
+                throw new SkuPurchaseException(AccountException.Kind.CONFLICT, code,
+                        LangText.of("该功能已拥有，无需重复购买；刷新权益即可使用",
+                                "You already own this feature; refresh entitlements to use it"));
+            }
+            if ("insufficient_credits".equals(code)) {
+                throw new SkuPurchaseException(AccountException.Kind.CONFLICT, code,
+                        LangText.of("账户 Credits 余额不足，充值后再试",
+                                "Insufficient Credits balance; top up and try again"));
+            }
+            if ("invalid_sku".equals(code) || "not_purchasable".equals(code)) {
+                throw new SkuPurchaseException(AccountException.Kind.CONFLICT, "invalid_sku",
+                        LangText.of("无效商品：该功能不支持应用内购买",
+                                "Invalid item: this feature cannot be purchased in-app"));
+            }
+            throw new SkuPurchaseException(AccountException.Kind.CONFLICT, code,
+                    LangText.of("购买未完成（", "Purchase was not completed (")
+                            + (code == null ? LangText.of("未知原因", "unknown reason") : code)
+                            + LangText.of("），请稍后重试", "), please retry shortly"));
+        }
+        return handle(reply);
+    }
+
+    /** profile 缓存保鲜期：顶栏高频轮询用，够短到充值后很快看见新余额。 */
+    private static final long BALANCE_TTL_MS = 60_000L;
+    /** membership 摘要保鲜期：等级不常变，没必要跟余额同频。 */
+    private static final long MEMBERSHIP_SUMMARY_TTL_MS = 10 * 60_000L;
+
+    /** 内存缓存项：值 + 取到的时间 + 归属账户指纹。指纹对不上一律视为未命中，不需要显式失效也安全。 */
+    private record Cached<T>(T value, long fetchedAt, String owner) {
+        boolean fresh(String currentOwner, long ttlMs) {
+            return owner.equals(currentOwner) && System.currentTimeMillis() - fetchedAt < ttlMs;
+        }
+    }
+
+    private volatile Cached<Map<String, Object>> profileCache;
+    private volatile Cached<Map<String, Object>> membershipSummaryCache;
+
+    /**
+     * GET /api/account/balance 的数据源——顶栏高频轮询用的轻端点。
+     *
+     * <p>未连接账户返回 {@code {connected:false}}（业务正常态，不是错误）。
+     * 官网不可达时降级 {@code {connected:true, available:false}}（同 {@code /api/account/usage}
+     * 的降级口径，见地雷 6：权益/余额查不到不等于把人锁在外面）。
+     * {@code membership} 段拿不到时单独降级为 null，不拖垮余额这半（分开取、分开失败）。
+     */
+    public synchronized Map<String, Object> balanceSnapshot() {
+        if (!isConnected()) {
+            return Map.of("connected", false);
+        }
+        // accountFingerprintOrNull() 只在 SHA-256 不可用（不会真的发生）时才返回 null；
+        // 兜个哨兵值而不是让 Cached.fresh() 里的 owner.equals(null) 抛 NPE
+        String owner = accountFingerprintOrNull();
+        if (owner == null) owner = "unknown";
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("connected", true);
+        Map<String, Object> profile;
+        try {
+            profile = cachedProfile(owner);
+        } catch (AccountException e) {
+            result.put("available", false);
+            return result;
+        }
+        result.put("balanceCents", profile.get("balanceCents"));
+        result.put("plan", profile.get("plan"));
+        Map<String, Object> membership = null;
+        try {
+            membership = cachedMembershipSummary(owner);
+        } catch (AccountException e) {
+            log.debug("balance 端点：membership 摘要拿不到，本次降级为 null: {}", e.getMessage());
+        }
+        if (membership != null && membership.get("tier") instanceof Map<?, ?> tier) {
+            Map<String, Object> summary = new LinkedHashMap<>();
+            summary.put("level", tier.get("level"));
+            summary.put("key", tier.get("key"));
+            summary.put("nameZh", tier.get("nameZh"));
+            summary.put("nameEn", tier.get("nameEn"));
+            result.put("membership", summary);
+        } else {
+            result.put("membership", null);
+        }
+        return result;
+    }
+
+    private Map<String, Object> cachedProfile(String owner) {
+        Cached<Map<String, Object>> cache = profileCache;
+        if (cache != null && cache.fresh(owner, BALANCE_TTL_MS)) {
+            return cache.value();
+        }
+        Map<String, Object> fresh = fetchProfile();
+        profileCache = new Cached<>(fresh, System.currentTimeMillis(), owner);
+        return fresh;
+    }
+
+    private Map<String, Object> cachedMembershipSummary(String owner) {
+        Cached<Map<String, Object>> cache = membershipSummaryCache;
+        if (cache != null && cache.fresh(owner, MEMBERSHIP_SUMMARY_TTL_MS)) {
+            return cache.value();
+        }
+        Map<String, Object> fresh = fetchMembership();
+        membershipSummaryCache = new Cached<>(fresh, System.currentTimeMillis(), owner);
+        return fresh;
+    }
+
+    /**
+     * 作废余额/等级缓存——机器级缓存装的是账户级内容。三类调用方：
+     * 换账户（{@link AccountSwitchCleanup} 的 afterConnect/afterDisconnect）、
+     * 充值确认到账（{@link #queryRecharge}）、SKU 购买成功（AccountController.purchaseSku）——
+     * 后两者刚花完钱，下一次读余额必须是新值。
+     */
+    public void clearBalanceCache() {
+        profileCache = null;
+        membershipSummaryCache = null;
     }
 
     // ==================== 内部 ====================

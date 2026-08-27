@@ -35,7 +35,8 @@ class AccountControllerUsageMalformedLedgerTest {
         accountService = mock(AccountService.class);
         MachineAccountGuard guard = mock(MachineAccountGuard.class); // requireMachineScope 默认放行（void no-op）
         controller = new AccountController(accountService, mock(PlatformAiChannel.class),
-                mock(AccountSwitchCleanup.class), mock(TokenUsageRepository.class), guard);
+                mock(AccountSwitchCleanup.class), mock(TokenUsageRepository.class), guard,
+                mock(com.checkba.service.entitlement.EntitlementService.class));
     }
 
     @SuppressWarnings("unchecked")

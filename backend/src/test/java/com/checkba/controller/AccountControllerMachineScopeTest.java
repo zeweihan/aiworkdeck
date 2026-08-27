@@ -79,7 +79,8 @@ class AccountControllerMachineScopeTest {
         entitlementService = mock(EntitlementService.class);
         PlatformAiChannel platformAiChannel = mock(PlatformAiChannel.class);
         accountController = new AccountController(accountService, platformAiChannel,
-                mock(AccountSwitchCleanup.class), mock(TokenUsageRepository.class), guard);
+                mock(AccountSwitchCleanup.class), mock(TokenUsageRepository.class), guard,
+                entitlementService);
         entitlementController = new EntitlementController(entitlementService, guard);
     }
 

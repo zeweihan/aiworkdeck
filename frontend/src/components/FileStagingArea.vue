@@ -36,6 +36,7 @@
       v-if="quotaTight"
       class="staging-unlock-hint"
       :text="$t('files.quotaTightHint')"
+      sku-id="feature:stage.unlimited"
     />
 
     <!-- Contrast Button (Visible when exactly 2 DOC/DOCX files are selected) -->

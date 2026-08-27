@@ -40,7 +40,8 @@ class LicenseControllerEditionTest {
         when(accountService.isConnected()).thenReturn(true);
         LicenseController controller = new LicenseController(
                 licenseService, accountService, mock(AccountSwitchCleanup.class),
-                com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"));
+                com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"),
+                mock(com.checkba.service.SystemSettingService.class));
 
         Map<String, Object> status = controller.status();
 
@@ -59,7 +60,8 @@ class LicenseControllerEditionTest {
         when(accountService.isConnected()).thenReturn(false);
         LicenseController controller = new LicenseController(
                 license(true, unlocked("trial", "trial")), accountService, mock(AccountSwitchCleanup.class),
-                com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"));
+                com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"),
+                mock(com.checkba.service.SystemSettingService.class));
 
         Map<String, Object> status = controller.status();
 
@@ -74,7 +76,8 @@ class LicenseControllerEditionTest {
         when(accountService.isConnected()).thenThrow(new RuntimeException("凭据文件损坏"));
         LicenseController controller = new LicenseController(
                 license(true, unlocked("account", "paid")), accountService, mock(AccountSwitchCleanup.class),
-                com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"));
+                com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"),
+                mock(com.checkba.service.SystemSettingService.class));
 
         Map<String, Object> status = controller.status();
 
@@ -90,7 +93,8 @@ class LicenseControllerEditionTest {
         LicenseController controller = new LicenseController(
                 license(true, Map.of("unlocked", false, "mode", "none", "plan", "none")),
                 accountService, mock(AccountSwitchCleanup.class),
-                com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"));
+                com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"),
+                mock(com.checkba.service.SystemSettingService.class));
 
         assertEquals("none", controller.status().get("edition"));
     }
@@ -101,7 +105,8 @@ class LicenseControllerEditionTest {
         AccountService accountService = mock(AccountService.class);
         LicenseController controller = new LicenseController(
                 license(false, unlocked("account", "paid")), accountService, mock(AccountSwitchCleanup.class),
-                com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"));
+                com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"),
+                mock(com.checkba.service.SystemSettingService.class));
 
         Map<String, Object> status = controller.status();
 
@@ -122,7 +127,8 @@ class LicenseControllerEditionTest {
                 new AccountException(AccountException.Kind.NETWORK, "无法连接账户服务器"));
         LicenseController controller = new LicenseController(
                 licenseService, accountService, mock(AccountSwitchCleanup.class),
-                com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"));
+                com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"),
+                mock(com.checkba.service.SystemSettingService.class));
 
         ResponseEntity<Map<String, Object>> response =
                 controller.activate(Map.of("code", "awdk_abcdef"));
@@ -148,7 +154,8 @@ class LicenseControllerEditionTest {
         AccountSwitchCleanup accountSwitchCleanup = mock(AccountSwitchCleanup.class);
         LicenseController controller = new LicenseController(
                 licenseService, accountService, accountSwitchCleanup,
-                com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"));
+                com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"),
+                mock(com.checkba.service.SystemSettingService.class));
 
         Map<String, Object> body = controller.activate(Map.of("code", "awdk_abcdef")).getBody();
 
@@ -168,7 +175,8 @@ class LicenseControllerEditionTest {
         AccountService accountService = mock(AccountService.class);
         LicenseController controller = new LicenseController(
                 licenseService, accountService, mock(AccountSwitchCleanup.class),
-                com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"));
+                com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"),
+                mock(com.checkba.service.SystemSettingService.class));
 
         Map<String, Object> body = controller.activate(Map.of("code", "AWD-T-XXXX")).getBody();
 

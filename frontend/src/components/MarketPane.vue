@@ -1,6 +1,8 @@
 <template>
-  <view class="market-pane">
-    <!-- Hero：深林绿编辑排版，与官网 /skills 同一套语言（见 aiworkdeckweb/DESIGN.md） -->
+  <view class="market-pane" :class="{ 'is-embedded': !standalone }">
+    <!-- Hero：深林绿编辑排版，与官网 /skills 同一套语言（见 aiworkdeckweb/DESIGN.md）。
+         嵌入设置页时（standalone=false）由 .is-embedded 样式收成与其余设置分区一致的
+         浅色页头，见 <style> 末尾「嵌入态」覆盖块。 -->
     <view class="hero">
       <view class="hero-grain"></view>
       <text class="hero-watermark">{{ $t('market.heroWatermark') }}</text>
@@ -1592,5 +1594,93 @@ $gray-pale: #F8F9FA;
   .card-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* ---------- 嵌入态（standalone=false）：收掉独立页的大 hero/超宽版式，
+   与 AdminPane.vue 其余设置分区（.section-card/.section-header/.section-title）
+   的卡片式、浅色、统一留白语言对齐。standalone=true 的独立页（/pages/plugin-market）
+   不带 .is-embedded，一字不变。色值对照：$gray-dark(#2C3338) = admin 的 $text-main，
+   $gray-medium(#6C757D) = admin 的 $text-secondary，$gray-light(#E9ECEF) = admin 的
+   $border-color，写法不同是因为两个组件的 scss 变量各自 scoped，数值特意保持一致。 */
+.market-pane.is-embedded {
+  background: transparent;
+}
+
+/* 大 hero 收成与 .section-header 同尺寸的浅色页头：去掉深色渐变、噪点纹理、
+   巨型衬线水印与超宽 1140px 版式 */
+.market-pane.is-embedded .hero {
+  background: #fff;
+  border-bottom: 1px solid $gray-light;
+}
+
+.market-pane.is-embedded .hero-grain,
+.market-pane.is-embedded .hero-watermark {
+  display: none;
+}
+
+.market-pane.is-embedded .hero-inner {
+  max-width: none;
+  padding: 24px 24px 16px;
+  align-items: center;
+}
+
+.market-pane.is-embedded .hero-title {
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  color: $gray-dark;
+  margin-bottom: 4px;
+}
+
+.market-pane.is-embedded .hero-sub {
+  font-size: 13px;
+  color: $gray-medium;
+  max-width: none;
+}
+
+.market-pane.is-embedded .hero-stats {
+  margin-top: 10px;
+  gap: 16px;
+}
+
+.market-pane.is-embedded .stat-num {
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  color: $gray-dark;
+}
+
+.market-pane.is-embedded .stat-sep {
+  background: $gray-light;
+}
+
+.market-pane.is-embedded .btn-light {
+  color: $gray-dark;
+  background: #fff;
+  border: 1px solid $gray-light;
+
+  &:hover { background: $gray-pale; }
+}
+
+/* 主页签条与内容区：去掉与 hero 呼应的 1140px 超宽版式，改为跟随嵌入容器的实际宽度，
+   内边距对齐 .section-body(24px) */
+.market-pane.is-embedded .tab-inner,
+.market-pane.is-embedded .content-inner {
+  max-width: none;
+  padding-left: 24px;
+  padding-right: 24px;
+}
+
+.market-pane.is-embedded .content-inner {
+  padding-top: 20px;
+  padding-bottom: 32px;
+}
+
+/* 「已安装」子页签内的区块标题：22px 展示衬线收成与 admin 分区小标题同级 */
+.market-pane.is-embedded .section-title {
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  color: $gray-dark;
 }
 </style>

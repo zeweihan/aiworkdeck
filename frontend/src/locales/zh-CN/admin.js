@@ -2,7 +2,6 @@
 export default {
   // 左侧导航
   navCardTitle: '设置',
-  rerunWizard: '重新运行首次向导',
   // 两个分组标题（2026-08-20 个人中心并入设置）
   navGroupPersonal: '个人',
   navGroupSystem: '系统',
@@ -98,7 +97,34 @@ export default {
   disconnectButton: '断开连接',
   platformUnreachable: '暂时无法连接 AI WorkDeck 服务器，余额与额度稍后再试。本机连接未受影响。',
   walletBalanceLabel: '钱包余额',
-  balanceYuan: '{amount} 元',
+  // 会员钱包卡（dev-board#183）
+  walletCardTitle: '钱包与会员',
+  walletCardSubtitle: 'Credits 余额、会员等级与成长值。充值 1 元记 10 点成长值，消费 1 元记 5 点',
+  rechargeButton: '充值',
+  growthPointsLabel: '成长值 {points}',
+  nextTierHint: '距「{name}」还差 {points} 点',
+  topTierReached: '已达最高等级',
+  tierBonusNote: '本档充值赠 {permille}‰',
+  tierRulesToggle: '等级规则',
+  tierRulesCollapse: '收起等级规则',
+  membershipRulesLink: '官网规则说明',
+  tierColName: '等级',
+  tierColThreshold: '门槛（成长值）',
+  tierColBonus: '充值赠送',
+  tierBonusCell: '{permille}‰',
+  // 充值弹窗（dev-board#184）
+  rechargeTitle: '账户充值',
+  rechargeAmountLabel: '充值金额',
+  rechargeCustomPlaceholder: '自定义金额（元，不超过 10000）',
+  rechargeSubmit: '发起充值',
+  rechargeSubmitting: '创建订单中...',
+  rechargeInvalidAmount: '请输入有效金额：正数、最多两位小数、不超过 10000 元',
+  rechargeCreateFailed: '发起充值失败，请稍后重试',
+  rechargeQrHint: '请使用微信扫码支付 {amount}',
+  rechargeRedirectHint: '已打开浏览器完成 {amount} 支付，支付完成后本窗口会自动确认',
+  rechargeWaiting: '等待支付结果…',
+  rechargePaid: '充值成功',
+  rechargeTimeout: '暂未确认到支付结果，可稍后在账户页刷新确认',
   refreshing: '刷新中...',
   refreshEntitlementsButton: '我已购买，刷新权益',
   recentUsageTitle: '最近用量',
@@ -337,7 +363,6 @@ export default {
 
   // 向导与通用
   userFallbackName: '用户',
-  rerunWizardContent: '将重新打开首次运行向导（重新连接账户并确认跨境传输同意）。现有配置不会被清空，向导提交后按新填内容覆盖。是否继续？',
   resetFailed: '重置失败',
   loadConfigFailed: '加载配置失败',
   saveSuccess: '保存成功',

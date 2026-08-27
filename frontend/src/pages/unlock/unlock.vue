@@ -135,15 +135,6 @@
               <button id="unlock-captcha-trigger" class="unlock-captcha-trigger" type="button"></button>
             </view>
 
-            <text v-if="errorMsg" class="unlock-error">{{ errorMsg }}</text>
-            <button
-              class="unlock-btn"
-              :class="{ 'is-busy': loggingIn }"
-              :disabled="loggingIn"
-              @tap="handleLogin"
-            >
-              {{ primaryLabel }}
-            </button>
             <text v-if="mode === 'register'" class="unlock-hint unlock-register-hint">
               {{ isPhoneSite ? $t('onboarding.unlock.registerHintPhone') : $t('onboarding.unlock.registerHintEmail') }}
             </text>
@@ -160,7 +151,6 @@
             <!-- 注意：不要在 textarea 上挂 @input 清 errorMsg——uni-textarea 在错误文案渲染
                  引发布局变化时会补发一次 input 事件，错误提示会被立刻清掉（联调实测）。
                  errorMsg 在每次点击解锁时重置，足够。 -->
-            <text v-if="errorMsg" class="unlock-error">{{ errorMsg }}</text>
             <!-- 站点错配救济：国际站账户的 Key 粘到国内站会被判「Key 无效」，
                  而 Key 本身是好的。这里给一条一键切站重试的出路，省得用户跑去
                  官网重新生成 Key 再撞一次同样的墙。 -->
@@ -171,13 +161,39 @@
             >
               {{ rescueBusy ? $t('onboarding.unlock.rescueSwitching') : rescueLabel }}
             </text>
+          </view>
+
+          <!-- 共用提交区：错误提示、两项同意与主按钮对三个页签一视同仁。
+               同意分两枚勾选框且都不预勾选：《服务条款》《隐私政策》是合同同意；
+               跨境传输是个保法第三十九条的「单独同意」，绝不能并进协议一揽子打包
+               （打包的不叫单独同意，还留下刻意规避的书面证据）。 -->
+          <view class="unlock-footer">
+            <text v-if="errorMsg" class="unlock-error">{{ errorMsg }}</text>
+            <view class="unlock-consent">
+              <view class="consent-row" @tap="agreementChecked = !agreementChecked">
+                <view class="consent-mark" :class="{ checked: agreementChecked }"></view>
+                <text class="consent-text">
+                  {{ $t('onboarding.unlock.agreePrefix') }}
+                  <text class="unlock-link" @tap.stop="openLegalDoc('terms')">{{ $t('onboarding.unlock.termsName') }}</text>
+                  {{ $t('onboarding.unlock.agreeAnd') }}
+                  <text class="unlock-link" @tap.stop="openLegalDoc('privacy')">{{ $t('onboarding.unlock.privacyName') }}</text>
+                </text>
+              </view>
+              <view class="consent-row" @tap="crossBorderChecked = !crossBorderChecked">
+                <view class="consent-mark" :class="{ checked: crossBorderChecked }"></view>
+                <text class="consent-text">
+                  {{ $t('onboarding.unlock.crossBorderLabel') }}
+                  <text class="unlock-link" @tap.stop="showCrossBorderNotice">{{ $t('onboarding.unlock.crossBorderView') }}</text>
+                </text>
+              </view>
+            </view>
             <button
               class="unlock-btn"
-              :class="{ 'is-busy': unlocking }"
-              :disabled="unlocking"
-              @tap="handleUnlock"
+              :class="{ 'is-busy': submitBusy }"
+              :disabled="submitBusy"
+              @tap="handlePrimary"
             >
-              {{ unlocking ? $t('onboarding.unlock.unlocking') : $t('onboarding.unlock.unlock') }}
+              {{ footerLabel }}
             </button>
           </view>
 
@@ -201,13 +217,17 @@
 </template>
 
 <script>
-import { activateLicense, getLicenseStatus, getSiteStatus, selectSite, sendAccountLoginCode, loginAccount, getAccountCaptchaConfig } from '@/services/api.js'
+import { activateLicense, getLicenseStatus, getSiteStatus, selectSite, sendAccountLoginCode, loginAccount, getAccountCaptchaConfig, getWizardStatus, submitWizard, acceptLegalAgreement } from '@/services/api.js'
 import { setupCaptcha } from '@/utils/captcha.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { loadSiteLinks, siteBaseUrl, resetSiteLinks } from '@/utils/siteLinks.js'
 
 // 与站点无关（GitHub README），不走 siteBaseUrl()
 const TRIAL_CODE_URL = 'https://github.com/zeweihan/aiworkdeck#readme'
+
+// 登录页展示的《服务条款》《隐私政策》组合版本。协议实质内容变更时 +1 日期，
+// 后端只记录「哪个版本在何时被同意过」（legal.userAgreement.*），不据此设闸。
+const AGREEMENT_VERSION = '2026-08-27'
 
 // 共创开发者计划注册赠金的窗口末端：北京时间 2026-10-01 00:00（= 2026-09-30 16:00 UTC）。
 // 到点之后推广位整块不渲染——服务端那边的窗口也在同一时刻关。
@@ -241,6 +261,9 @@ export default {
       cooldownTimer: null,
       // 人机验证控件。null = 本站未启用或装配失败，此时照常发码（官网那边也不会校验）
       captcha: null,
+      // 两项同意都绝不预勾选：预勾选的同意无效（跨境那枚还是个保法 39 条的单独同意）
+      agreementChecked: false,
+      crossBorderChecked: false,
       // 视觉区的鼠标视差。0..1 的归一化位置；motionOn=false 时整块不动
       // （系统「减少动态效果」开着，或非 H5 环境拿不到鼠标）
       pointerX: 0,
@@ -351,6 +374,16 @@ export default {
       return this.trialCodeEnabled
         ? this.$t('onboarding.unlock.pasteFirst')
         : this.$t('onboarding.unlock.keyPasteFirst')
+    },
+    /** 共用主按钮：code 页签是解锁口径，登录/注册页签沿用 primaryLabel。 */
+    footerLabel() {
+      if (this.mode === 'code') {
+        return this.unlocking ? this.$t('onboarding.unlock.unlocking') : this.$t('onboarding.unlock.unlock')
+      }
+      return this.primaryLabel
+    },
+    submitBusy() {
+      return this.loggingIn || this.unlocking
     },
   },
   onLoad() {
@@ -473,7 +506,59 @@ export default {
      * 「不存在即注册」（返回体带 isNewUser），所以这里**不按 mode 分链路**，
      * 只按 mode 换文案。分成两条链路等于凭空造一条服务端没有的路。
      */
+    handlePrimary() {
+      if (this.mode === 'code') this.handleUnlock()
+      else this.handleLogin()
+    },
+    /** 两项同意是提交前置：不满足时把提示给在勾选框旁边，而不是提交失败之后。 */
+    consentGatePassed() {
+      if (!this.agreementChecked) {
+        this.errorMsg = this.$t('onboarding.unlock.agreementRequired')
+        return false
+      }
+      if (!this.crossBorderChecked) {
+        this.errorMsg = this.$t('onboarding.unlock.crossBorderRequired')
+        return false
+      }
+      return true
+    },
+    /** 《服务条款》/《隐私政策》按当前站点与界面语言打开官网对应页。 */
+    openLegalDoc(kind) {
+      const locale = (this.$i18n && this.$i18n.locale) || 'zh'
+      const lang = String(locale).toLowerCase().startsWith('en') ? 'en' : 'zh'
+      openExternalUrl(`${siteBaseUrl()}/${lang}/legal/${kind}`)
+    },
+    showCrossBorderNotice() {
+      uni.showModal({
+        title: this.$t('onboarding.unlock.crossBorderNoticeTitle'),
+        content: this.$t('onboarding.unlock.crossBorderNoticeBody'),
+        showCancel: false,
+        confirmText: this.$t('onboarding.unlock.gotIt'),
+      })
+    },
+    /**
+     * 登录/解锁成功后的一次性收尾：记录协议同意版本；向导已整体下线（2026-08-27），
+     * 全新安装改在这里完成首启初始化——写入官方通道与跨境同意
+     * （后端 POST /api/admin/wizard 的两道闸原样在用，只是没有向导页了）。
+     * 失败不拦路：AI 设置页仍能补救，用户先进产品。
+     */
+    async completeSetup() {
+      try {
+        await acceptLegalAgreement(AGREEMENT_VERSION)
+      } catch (e) {
+        console.warn('记录协议同意失败（忽略）:', e && e.message)
+      }
+      try {
+        const wiz = await getWizardStatus()
+        if (wiz && wiz.initialized === false) {
+          await submitWizard({ ai: { activeProvider: 'AWD_CLOUD', crossBorderConsent: true } })
+        }
+      } catch (e) {
+        console.warn('首启初始化失败（可在 AI 设置中补救）:', e && e.message)
+      }
+    },
     async handleLogin() {
+      if (!this.consentGatePassed()) return
       const identifier = this.codeIdentifier
       const smsCode = (this.smsCode || '').trim()
       if (!identifier) {
@@ -501,7 +586,7 @@ export default {
         this.loggingIn = false
       }
     },
-    applyLoginResult(res) {
+    async applyLoginResult(res) {
       uni.showToast({
         // 是不是新账户由服务端说了算（isNewUser），不看用户点的是哪个页签——
         // 在「登录」页签下第一次用一个新号码进来的人，看到的也该是注册成功的口径
@@ -511,6 +596,8 @@ export default {
         icon: 'success',
         duration: 1600,
       })
+      // 协议记录与首启初始化先做完再走分流：reLaunch 之后这个页面就没了
+      await this.completeSetup()
       // 存量账号还没绑手机号：提示去官网绑定。**不阻断进入产品**——补绑硬期限之前
       // 他们照常能用，到期后官网那侧会直接拒发 Key，那时才是真的进不来。
       if (res && res.mustBindPhone) {
@@ -533,6 +620,7 @@ export default {
       }, 800)
     },
     async handleUnlock() {
+      if (!this.consentGatePassed()) return
       const code = this.normalizedCode
       if (!code) {
         this.errorMsg = this.emptyInputHint
@@ -549,7 +637,7 @@ export default {
         this.unlocking = false
       }
     },
-    applyUnlockResult(res) {
+    async applyUnlockResult(res) {
       const mode = res && res.mode
       // 粘 awdk_ Key 时解锁与账户连接是两件事，后者失败过去被完全吞掉：
       // 用户看到「已连接账户」进了产品，账户却是未连接状态而毫无感知
@@ -1134,6 +1222,50 @@ export default {
   &.is-busy {
     opacity: 0.7;
   }
+}
+
+.unlock-footer {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.unlock-consent {
+  width: 100%;
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.consent-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.consent-mark {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  margin-top: 2px;
+  box-sizing: border-box;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #ffffff;
+  transition: background 0.15s, border-color 0.15s;
+
+  &.checked {
+    border-color: #1a5336;
+    background: #1a5336 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.5l3 3 6-7'/%3E%3C/svg%3E") center / 11px no-repeat;
+  }
+}
+
+.consent-text {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #64748b;
 }
 
 .unlock-links {

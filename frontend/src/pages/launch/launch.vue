@@ -19,7 +19,6 @@
 import {
   getLicenseStatus,
   getLocalIdentityStatus,
-  getWizardStatus,
   getMyProjects,
 } from '@/services/api.js'
 import { syncRecentToMenu } from '@/utils/recentProjects.js'
@@ -75,17 +74,8 @@ export default {
         console.warn('查询本机工作区状态失败（忽略）:', e && e.message)
       }
 
-      // 已解锁：向导检查 + 直达上次项目（迁移自 login.vue tryAutoResume）
-      try {
-        const wiz = await getWizardStatus()
-        if (wiz && wiz.initialized === false) {
-          uni.reLaunch({ url: '/pages/wizard/wizard' })
-          return
-        }
-      } catch (e) {
-        // 向导状态查询失败不拦路，继续尝试直达
-        console.warn('查询向导状态失败（忽略）:', e && e.message)
-      }
+      // 首启向导已下线（2026-08-27）：初始化（官方通道 + 跨境同意）由解锁页在登录成功后
+      // 一次性提交，这里不再分流，直达上次项目
 
       try {
         // local-mode 免登录：不需要 session 探活，getMyProjects 探通即视为可用

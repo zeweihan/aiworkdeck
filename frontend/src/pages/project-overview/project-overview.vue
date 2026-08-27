@@ -214,6 +214,19 @@
             </view>
         </view>
 
+        <!-- Credits 余额 chip（dev-board#187）：余额 + 会员等级徽章（level>=2 才显示等级名）。
+             connected:false 或拉取失败时整个不渲染（绝不出现 0 或 —）；官网不可达
+             （available:false）时余额位显示「—」。点击直达设置「账户与用量」。 -->
+        <view
+          v-if="walletChipVisible"
+          class="trial-chip wallet-chip"
+          @tap.stop="goToAccountPanel"
+          :title="$t('workbench.walletChipTitle')"
+        >
+          <text class="trial-chip-text">{{ walletChipText }}</text>
+          <text v-if="walletTierName" class="wallet-chip-tier">{{ walletTierName }}</text>
+        </view>
+
         <!-- 用户头像 + 下拉（2026-08-19 从 rail 底部搬上来）。
              刻意放在 isClientView 分支之外：rail 上那个头像本来就对客户也渲染。
 
@@ -1690,12 +1703,13 @@ import {
   getMyProjects, // 最近项目切换器
   bindShareholderMeetingConversation, // 股东大会核查：会话绑定
   getLicenseStatus, // 试用版/正式版标识（含 accountConnected 组合口径）
+  getAccountBalance, // Credits 余额 chip（dev-board#187，后端带 TTL 缓存的轻端点）
   getCloudStatus, // 协作 chip：这份案卷有没有放进团队案件库、状态如何
   checkCloud, // 协作 chip 的联网刷新（cloudStatus 是不联网的本地快照）
   getCurrentUser as getCurrentUserApi // 顶栏头像：补一次真实接口，本地缓存只是首屏兜底
 } from '@/services/api.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
-import { loadSiteLinks, siteBaseUrl } from '@/utils/siteLinks.js'
+import { loadSiteLinks, siteBaseUrl, siteLinks } from '@/utils/siteLinks.js'
 import { getCurrentUser } from '@/utils/auth.js'
 import { getInitial } from '@/utils/textInitial.js'
 import { recordProjectVisit, getRecentProjectIds, syncRecentToMenuFetching } from '@/utils/recentProjects.js'
@@ -1815,6 +1829,9 @@ export default {
       // 宽限预警（2026-08 官方版必须账户登录）：'legacyTrial' | 'offlineReverify' | ''
       graceKind: '',
       graceDays: 0,
+      // Credits 余额 chip（dev-board#187）。loaded=false 或 connected=false 时不渲染，
+      // 绝不显示 0 冒充余额；available=false（官网不可达）时余额位显示「—」。
+      wallet: { loaded: false, connected: false, available: true, balanceCents: null, membership: null },
 
       // 布局状态
       sidebarWidth: 260, // 侧边栏宽度
@@ -2080,6 +2097,24 @@ export default {
     graceActionLabel() {
       if (this.graceKind === 'offlineReverify') return this.$t('workbench.openAccountPanel')
       return this.$t('workbench.learnFullVersion')
+    },
+    // ---------- Credits 余额 chip（dev-board#187） ----------
+    walletChipVisible() {
+      return this.wallet.loaded && this.wallet.connected
+    },
+    walletChipText() {
+      // 官网不可达：余额未知，显示「—」而不是 0
+      if (this.wallet.available === false) return '—'
+      const cents = Number(this.wallet.balanceCents)
+      const symbol = siteLinks().current === 'cn' ? '¥' : '$'
+      return symbol + ((Number.isFinite(cents) ? cents : 0) / 100).toFixed(2)
+    },
+    // 等级名小徽章：level>=2 才显示（律师助理档只显示余额），按语言取 nameZh/nameEn
+    walletTierName() {
+      const m = this.wallet.membership
+      if (!m || !(Number(m.level) >= 2)) return ''
+      const en = this.$i18n && this.$i18n.locale === 'en-US'
+      return (en ? m.nameEn : m.nameZh) || m.nameZh || m.nameEn || ''
     },
     /**
      * 「语音」面板里的「会议录音」tab 显不显示。语音两项合并后门控从 rail 位挪到
@@ -2443,6 +2478,15 @@ export default {
       uni.$off('awd:open-evidence-target', this._onOpenEvidenceTarget)
       this._onMarketChanged = null
     }
+    // 余额刷新 / 打开设置 订阅（mounted 挂的，按引用摘）
+    if (this._onWalletRefresh) {
+      uni.$off('awd:wallet-refresh', this._onWalletRefresh)
+      this._onWalletRefresh = null
+    }
+    if (this._onOpenSettings) {
+      uni.$off('awd:open-settings', this._onOpenSettings)
+      this._onOpenSettings = null
+    }
     // IDE 化聚焦刷新监听清理（本实例自己加的，直接摘）
     if (typeof window !== 'undefined' && this._localFocusRefresh) {
       window.removeEventListener('focus', this._localFocusRefresh)
@@ -2565,6 +2609,7 @@ export default {
   onLoad(query) {
     this.pageEnterTime = Date.now()
     this.loadLicenseMode()
+    this.loadWalletBalance()
     // 官网链接预热：本页有两处「跳官网」（试用 chip、缓存区满弹窗），都是同步取地址。
     // 不预热的话第一次点击只能拿到兜底站点，国际站用户会被送到没有他账户的站
     loadSiteLinks()
@@ -2676,6 +2721,8 @@ export default {
 
     // 从设置页返回时刷新授权/账户 chip（用户可能刚连接或断开账户）
     this.loadLicenseMode()
+    // 余额 chip 同一时机刷新（可能刚充值/购买过；后端带 TTL 缓存，不怕频繁）
+    this.loadWalletBalance()
 
     // Sync UI state
     this.isRecording = activityTracker.getRecordingState()
@@ -2733,6 +2780,17 @@ export default {
     // mounted 绑定了全局（ipcRenderer/window 级）监听；全局事件只让最近展示的实例
     // 处理，否则一次事件触发 N 份副作用（与 PR#148 剪贴板重复入库同源）
     if (typeof window !== 'undefined') window.__checkbaActiveOverviewVm = this
+    // 余额刷新事件（充值弹窗 / SKU 购买成功后 emit）。页面栈多实例地雷：mounted 挂、
+    // beforeUnmount 必须按引用 $off，否则每回来一次多一份订阅。
+    this._onWalletRefresh = () => this.loadWalletBalance()
+    uni.$on('awd:wallet-refresh', this._onWalletRefresh)
+    // UnlockHint 应用内化（dev-board#187）：解锁引导不再外跳官网，改为打开设置
+    // 「账户与用量」标签。只让活跃实例响应——openSettingsTab 会动本实例的标签列表。
+    this._onOpenSettings = (opts) => {
+      if (!this.isActiveOverviewInstance()) return
+      this.openSettingsTab(opts || {})
+    }
+    uni.$on('awd:open-settings', this._onOpenSettings)
     this.setupResponsiveListener()
     // IDE 化：窗口重新聚焦时刷新文件树——外部改动（Finder 增删改）都发生在
     // 用户切出去的时候，后端 watcher 已把数据库对齐，聚焦拉一次即可见。
@@ -3091,6 +3149,29 @@ export default {
         // 服务器模式/旧后端没有该端点：静默忽略
         this.accountConnected = false
         this.graceKind = ''
+      }
+    },
+    // Credits 余额 chip 数据（dev-board#187）。轻端点（后端 TTL 缓存），随 onShow /
+    // awd:wallet-refresh 拉取。connected:false 或失败时置 loaded=false 让 chip 整个消失，
+    // 绝不摆一个「¥0.00」冒充余额。
+    async loadWalletBalance() {
+      if (!isDesktopHost()) return
+      try {
+        const data = await getAccountBalance()
+        if (data && data.connected) {
+          this.wallet = {
+            loaded: true,
+            connected: true,
+            available: data.available !== false,
+            balanceCents: data.balanceCents,
+            membership: data.membership || null,
+          }
+        } else {
+          this.wallet = { loaded: false, connected: false, available: true, balanceCents: null, membership: null }
+        }
+      } catch (e) {
+        // 旧后端没有该端点 / 请求失败：chip 不渲染
+        this.wallet = { loaded: false, connected: false, available: true, balanceCents: null, membership: null }
       }
     },
     /** 宽限弹窗的主按钮：联网复验那条去账户设置，其余去官网。 */

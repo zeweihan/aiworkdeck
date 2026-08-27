@@ -2,7 +2,6 @@
 export default {
   // Sidebar navigation
   navCardTitle: 'Settings',
-  rerunWizard: 'Rerun Setup Wizard',
   // The two sidebar groups (profile merged into settings, 2026-08-20)
   navGroupPersonal: 'Personal',
   navGroupSystem: 'System',
@@ -98,7 +97,34 @@ export default {
   disconnectButton: 'Disconnect',
   platformUnreachable: 'Cannot reach the AI WorkDeck server right now; try again later for balance and credits. Your local connection is unaffected.',
   walletBalanceLabel: 'Wallet Balance',
-  balanceYuan: 'CNY {amount}',
+  // Membership wallet card (dev-board#183)
+  walletCardTitle: 'Wallet & Membership',
+  walletCardSubtitle: 'Credits balance, membership tier and growth points. Top-ups earn 10 points per yuan; spending earns 5',
+  rechargeButton: 'Top Up',
+  growthPointsLabel: '{points} growth points',
+  nextTierHint: '{points} points to reach {name}',
+  topTierReached: 'Highest tier reached',
+  tierBonusNote: 'Top-up bonus at this tier: {permille}‰',
+  tierRulesToggle: 'Tier rules',
+  tierRulesCollapse: 'Hide tier rules',
+  membershipRulesLink: 'Rules on the website',
+  tierColName: 'Tier',
+  tierColThreshold: 'Threshold (points)',
+  tierColBonus: 'Top-up bonus',
+  tierBonusCell: '{permille}‰',
+  // Recharge dialog (dev-board#184)
+  rechargeTitle: 'Top Up Account',
+  rechargeAmountLabel: 'Amount',
+  rechargeCustomPlaceholder: 'Custom amount (max 10000)',
+  rechargeSubmit: 'Continue',
+  rechargeSubmitting: 'Creating order...',
+  rechargeInvalidAmount: 'Enter a valid amount: positive, up to two decimals, no more than 10000',
+  rechargeCreateFailed: 'Failed to start the top-up, please retry shortly',
+  rechargeQrHint: 'Scan with WeChat to pay {amount}',
+  rechargeRedirectHint: 'A browser window has been opened to complete the {amount} payment; this dialog will confirm automatically once paid',
+  rechargeWaiting: 'Waiting for payment...',
+  rechargePaid: 'Top-up successful',
+  rechargeTimeout: 'Payment not confirmed yet; you can refresh the account page later to check',
   refreshing: 'Refreshing...',
   refreshEntitlementsButton: 'Purchased? Refresh Entitlements',
   recentUsageTitle: 'Recent Usage',
@@ -336,7 +362,6 @@ export default {
 
   // Wizard and misc
   userFallbackName: 'User',
-  rerunWizardContent: 'This reopens the first-run Setup Wizard (connect your account again and confirm the cross-border consent). Existing settings are not cleared; the wizard overwrites them with what you enter on submit. Continue?',
   resetFailed: 'Reset failed',
   loadConfigFailed: 'Failed to load settings',
   saveSuccess: 'Saved',

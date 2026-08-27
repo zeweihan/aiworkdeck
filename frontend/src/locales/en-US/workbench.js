@@ -25,6 +25,7 @@ export default {
   // Top bar right side
   accountUsage: 'Account & Usage',
   accountConnected: 'Account Connected',
+  walletChipTitle: 'Credits balance and membership tier; click to open account settings',
   trialInfo: 'About the Trial',
   // Grace warning chip and dialog (2026-08: official builds require an account)
   trialCountdown: 'Trial - {n} days left',
