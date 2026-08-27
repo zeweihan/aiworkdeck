@@ -797,7 +797,10 @@ function pickAudioMime() {
 .awdfb-launcher {
   position: fixed;
   right: 16px;
-  bottom: 34px;
+  /* 默认停在右缘约 60% 高度处：右下角（bottom:34px）正好压在 AI 面板 composer
+     的模型选择器/发送键上（dev-board#213）。挪过的用户走 launcherStyle 的
+     left/top 持久化坐标，不受这个默认值影响。 */
+  bottom: 40vh;
   z-index: 99998;
   display: inline-flex;
   align-items: center;

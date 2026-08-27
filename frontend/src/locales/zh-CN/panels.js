@@ -201,6 +201,18 @@ export default {
   bpUnsupportedPlatform: '当前平台暂不支持浏览器控件（仅 H5）',
   bpCreateFailed: '浏览器视图创建失败',
   bpRetry: '重试',
+  bpAddFavorite: '收藏本页',
+  bpFavorited: '已收藏',
+  bpAlreadyFavorited: '已在收藏夹中',
+  bpFavoriteFailed: '收藏失败',
+  bpShelf: '收藏夹与快捷方式',
+  bpShortcuts: '快捷方式',
+  bpPinCurrent: '钉住当前页',
+  bpAlreadyPinned: '已在快捷方式中',
+  bpUnpin: '移除',
+  bpShortcutsEmpty: '还没有快捷方式，可把常用网站钉在这里',
+  bpShelfFavorites: '收藏的页面',
+  bpShelfFavEmpty: '暂无网页收藏',
 
   // ProjectFavoritesPanel.vue
   pfLoading: '加载中...',

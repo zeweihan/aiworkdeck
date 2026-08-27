@@ -140,6 +140,11 @@
               @open-tab="$emit('open-artifact-tab', $event)"
             /> -->
         </div>
+
+        <!-- 7. 停止提示：系统状态行，刻意放在 root-bubble-container 之外且不参与
+             isReady/hasContent 判定——它不是模型正文，不该让空产出的回合长出
+             「用到文档」操作 chip（dev-board#212）。 -->
+        <div v-if="bubble.stopNotice" class="stop-notice">{{ bubble.stopNotice }}</div>
     </div>
   </div>
 </template>
@@ -337,6 +342,13 @@ const hasContent = computed(() => {
   font-weight: 700;
   color: #1A5336; /* Forest Green */
   letter-spacing: 0.3px;
+}
+
+.stop-notice {
+  font-size: 12px;
+  color: #6C757D;
+  padding: 2px 4px 0;
+  margin-bottom: 14px;
 }
 
 .main-content {

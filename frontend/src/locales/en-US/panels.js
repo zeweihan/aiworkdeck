@@ -201,6 +201,18 @@ export default {
   bpUnsupportedPlatform: 'The browser control is not supported on this platform (H5 only)',
   bpCreateFailed: 'Failed to create the browser view',
   bpRetry: 'Retry',
+  bpAddFavorite: 'Bookmark this page',
+  bpFavorited: 'Bookmarked',
+  bpAlreadyFavorited: 'Already in favorites',
+  bpFavoriteFailed: 'Failed to add favorite',
+  bpShelf: 'Favorites & shortcuts',
+  bpShortcuts: 'Shortcuts',
+  bpPinCurrent: 'Pin this page',
+  bpAlreadyPinned: 'Already pinned',
+  bpUnpin: 'Remove',
+  bpShortcutsEmpty: 'No shortcuts yet — pin frequently used sites here',
+  bpShelfFavorites: 'Saved pages',
+  bpShelfFavEmpty: 'No saved pages yet',
 
   // ProjectFavoritesPanel.vue
   pfLoading: 'Loading…',

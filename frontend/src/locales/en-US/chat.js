@@ -55,6 +55,7 @@ export default {
   welcome: 'How can I help you?',
   welcomeSubtitle: 'Ask questions, draft documents, or analyze data anytime.',
   inputPlaceholderEmpty: 'Ask a question, drag files or folders here, or paste contract text...',
+  inputPlaceholder: 'Ask anything or describe a task',
   recentChats: 'Recent Conversations',
   aiDisclaimer: 'AI-generated content is for reference only and does not constitute a formal legal opinion. Use at your own risk.',
   newConversation: 'New Conversation',

@@ -6,9 +6,10 @@ export default {
   taskStarting: '任务开始...',
   taskCompleted: '任务完成',
   taskFailed: '任务失败',
-  // 流式连接与停止标记（拼进气泡 content 的 markdown 片段）
+  // 流式连接标记（拼进气泡 content 的 markdown 片段）
   connectionInterrupted: '*[连接中断]*',
-  stopping: '*[正在停止]*',
+  // 停止提示（走 bubble.stopNotice 独立字段渲染，纯文本不是 markdown）
+  stopRequested: '已发送停止指令',
   // 发送防重入 toast
   alreadyStreamingToast: 'AI 正在执行中，请等待完成或点击停止',
   // 错误提示

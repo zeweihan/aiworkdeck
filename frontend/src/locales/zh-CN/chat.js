@@ -55,6 +55,7 @@ export default {
   welcome: '有什么可以帮您？',
   welcomeSubtitle: '随时为您解答疑问、起草文档或分析数据。',
   inputPlaceholderEmpty: '请输入问题、拖拽文件/文件夹至此、粘贴合同文本或描述案情...',
+  inputPlaceholder: '问点什么，或描述要做的事',
   recentChats: '近期对话',
   aiDisclaimer: 'AI生成内容仅供参考，不构成正式意见，请自负责任使用。',
   newConversation: '新对话',
