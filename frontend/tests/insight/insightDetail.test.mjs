@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import {
   unwrapResult, resultRecords, companyRows, companyShareholders,
   lawArticle, caseRecord, rawFallback,
+  authoritative, caseRecognition, citationDetail,
 } from '../../src/utils/insightDetail.js'
 
 // —————————————————————————— unwrapResult ——————————————————————————
@@ -162,6 +163,99 @@ test('CASE：完全认不出字段时至少把全文段留住', () => {
 test('CASE：纯文本结果落到 fullText 段', () => {
   const c = caseRecord({ result: '上游返回一段文字' })
   assert.deepEqual(c.sections, [{ key: 'fullText', text: '上游返回一段文字' }])
+})
+
+// —————————————————————————— 法宝升级件 ——————————————————————————
+
+test('authoritative：权威条文原文按认得的字段取出', () => {
+  const a = authoritative({
+    result: 'Error',
+    authoritative: {
+      title: '中华人民共和国公司法（2023 修订）',
+      original_text: '公司股东应当遵守法律…',
+      url: 'https://www.pkulaw.com/chl/x',
+      implement_date: '2024-07-01',
+    },
+  })
+  assert.equal(a.title, '中华人民共和国公司法（2023 修订）')
+  assert.match(a.text, /公司股东/)
+  assert.equal(a.date, '2024-07-01')
+  assert.equal(a.url, 'https://www.pkulaw.com/chl/x')
+})
+
+test('authoritative：没有这个字段返回 null（整段不渲染）', () => {
+  assert.equal(authoritative({ result: {} }), null)
+  assert.equal(authoritative(null), null)
+  assert.equal(authoritative({ authoritative: {} }), null)
+})
+
+test('caseRecognition：案号识别行取标准化案号/法院/标题/链接', () => {
+  const r = caseRecognition({
+    recognition: {
+      caseFlag: '（2021）京01民终1234号',
+      court: '北京市第一中级人民法院',
+      title: '甲与乙合同纠纷二审民事判决书',
+      url: 'https://www.pkulaw.com/pfnl/abc',
+    },
+  })
+  assert.equal(r.caseNumber, '（2021）京01民终1234号')
+  assert.equal(r.court, '北京市第一中级人民法院')
+  assert.equal(r.title, '甲与乙合同纠纷二审民事判决书')
+})
+
+test('caseRecognition：没有识别结果返回 null', () => {
+  assert.equal(caseRecognition({ result: [] }), null)
+  assert.equal(caseRecognition(null), null)
+})
+
+// —————————————————————————— 引用发现 ——————————————————————————
+
+const NOT_FOUND = {
+  id: 51, kind: 'CITATION_NOT_FOUND', severity: 'warn',
+  detail: {
+    lawTitle: '中华人民共和国民法典', citedArticle: '第九千九百九十九条', citedArabic: '9999',
+    quote: '依据《中华人民共和国民法典》第九千九百九十九条', note: '可能条号有误或法规名不准，请人工核对',
+    fixable: false,
+  },
+}
+
+const MISMATCH = {
+  id: 52, kind: 'CITATION_MISMATCH', severity: 'warn',
+  detail: {
+    lawTitle: '中华人民共和国公司法', citedArticle: '第十五条',
+    citedText: '公司股东应当遵守…', quote: '依据《公司法》第十五条，公司向其他企业投资…',
+    candidates: [
+      { title: '中华人民共和国公司法（2018 修正）', articleNumber: '16', snippet: '公司向其他企业投资…', url: 'https://x' },
+      null,
+    ],
+    note: '候选可能来自旧版法规（存在条文重编号），请人工核对现行版本',
+    fixable: false,
+  },
+}
+
+test('citationDetail：CITATION_NOT_FOUND 整形出可渲染字段', () => {
+  const c = citationDetail(NOT_FOUND)
+  assert.equal(c.kind, 'CITATION_NOT_FOUND')
+  assert.equal(c.lawTitle, '中华人民共和国民法典')
+  assert.equal(c.citedArticle, '第九千九百九十九条')
+  assert.match(c.note, /人工核对/)
+  assert.deepEqual(c.candidates, [])
+})
+
+test('citationDetail：CITATION_MISMATCH 带引用条文与候选（脏元素被滤掉）', () => {
+  const c = citationDetail(MISMATCH)
+  assert.equal(c.candidates.length, 1)
+  assert.equal(c.candidates[0].articleNumber, '16')
+  assert.match(c.candidates[0].title, /2018 修正/)
+  assert.equal(c.candidates[0].url, 'https://x')
+  assert.match(c.citedText, /公司股东/)
+})
+
+test('citationDetail：别的 finding 一律 null（各走各的渲染路径）', () => {
+  assert.equal(citationDetail({ kind: 'COUNT_MISMATCH', detail: { claims: [] } }), null)
+  assert.equal(citationDetail({ kind: 'USCC_INVALID', detail: { code: '91' } }), null)
+  assert.equal(citationDetail(null), null)
+  assert.equal(citationDetail({ kind: 'CITATION_MISMATCH' }), null)
 })
 
 // —————————————————————————— rawFallback ——————————————————————————

@@ -45,6 +45,7 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -92,6 +93,18 @@ public class DocInsightService {
     private static final String ERROR_PREFIX = "Error";
     /** 经营范围太长，工商详情里它一个字段能顶半页，截断后存。 */
     private static final int SCOPE_LIMIT = 500;
+
+    /** 案号识别送上去的文本上限（案号本身 + 一句上下文足够了，别把整段搬过去）。 */
+    private static final int RECOGNITION_TEXT_LIMIT = 300;
+    /** 一次解析最多校验多少条法条引用——防一份「引用了三百条」的怪文档把上游打爆。 */
+    private static final int MAX_CITATION_CHECKS = 30;
+    /** 引文剥掉「《…》第…条」之后短于这个长度就不发 answerlaw（没有内容线索可给）。 */
+    private static final int CITATION_CLUE_MIN = 12;
+    /** 权威条文原文的存储上限（一条法条正文可以很长，窗格里也读不完）。 */
+    private static final int AUTHORITATIVE_TEXT_LIMIT = 500;
+    /** 内容定位候选的摘要上限与条数上限。 */
+    private static final int CANDIDATE_SNIPPET_LIMIT = 200;
+    private static final int MAX_CANDIDATES = 3;
 
     /** 「《公司法》第二十条」→ title=公司法, article=第二十条。 */
     private static final Pattern LAW_NAME = Pattern.compile("^《([^《》]+)》\\s*(.*)$");
@@ -205,7 +218,8 @@ public class DocInsightService {
             List<DocInsightEntity> rows = persistEntities(runId, projectId, file.getId(), merged);
 
             int ok = retrieveAll(runId, rows);
-            int found = persistFindings(runId, projectId, file.getId(), claims, text);
+            List<DocInsightChecks.Finding> citations = validateCitations(runId, rows);
+            int found = persistFindings(runId, projectId, file.getId(), claims, text, citations);
 
             done(runId, summary(rows.size(), ok, found, truncated));
         } catch (Throwable t) {
@@ -295,8 +309,11 @@ public class DocInsightService {
         return ok;
     }
 
-    private int persistFindings(Long runId, Long projectId, Long docFileId, List<Claim> claims, String text) {
-        List<DocInsightChecks.Finding> found = DocInsightChecks.run(claims, text);
+    /** @param extra 引用校验步产生的发现（{@link #validateCitations}），与文档内部校验的发现一起落库 */
+    private int persistFindings(Long runId, Long projectId, Long docFileId, List<Claim> claims, String text,
+                               List<DocInsightChecks.Finding> extra) {
+        List<DocInsightChecks.Finding> found = new ArrayList<>(DocInsightChecks.run(claims, text));
+        found.addAll(extra);
         for (DocInsightChecks.Finding f : found) {
             DocInsightFinding row = new DocInsightFinding();
             row.setRunId(runId);
@@ -516,32 +533,118 @@ public class DocInsightService {
      * 案例：2026-08-27 起默认接法宝司法案例语义检索（yml：{@code pkulaw-case-semantic}
      * 的 {@code search_case}，查询参数 {@code text}）。server / 工具 / 参数名全部走
      * {@link InsightProperties}，换通道只改配置不改代码。
+     *
+     * <p><b>先导步：案号识别</b>（{@code insight.case-number-server}，法宝 {@code anhao_recognition}）。
+     * 它把文中案号标准化，并直接给出法院 / 判决书标题 / 法宝链接——拿<b>标题</b>再去打语义检索，
+     * 命中率比拿裸案号高得多。识别只是增强：未配置 / 上游报错 / 返回空数组一律<b>静默跳过</b>，
+     * 走原来那条路，绝不让 CASE 检索比没有这一步时更差。
      */
     private void retrieveCase(DocInsightEntity row) {
+        ObjectNode recognition = recognizeCaseNumber(row);
         String server = props.getCaseServer();
         if (!StringUtils.hasText(server)) {
-            unavailable(row, LangText.of("判决书检索通道未配置", "No judgment search channel is configured"));
+            // 识别命中时它自己就是有用结果（法院/标题/法宝链接），不该因为全文通道没配就丢掉
+            if (recognition != null) {
+                okRecognitionOnly(row, recognition, LangText.of(
+                        "判决书检索通道未配置，仅返回案号识别结果",
+                        "No judgment search channel is configured; only the case-number recognition result is shown"));
+            } else {
+                unavailable(row, LangText.of("判决书检索通道未配置", "No judgment search channel is configured"));
+            }
             return;
         }
-        callAndStore(row, server, props.getCaseTool(), Map.of(props.getCaseArg(), row.getName()),
+        boolean ok = callAndStore(row, server, props.getCaseTool(),
+                Map.of(props.getCaseArg(), caseQuery(recognition, row.getName())),
                 LangText.of("判决书检索本次不可用：", "Judgment lookup is unavailable this time: "));
+        if (recognition == null) return;
+        if (ok) {
+            mergeRetrievalField(row, "recognition", recognition);
+        } else {
+            okRecognitionOnly(row, recognition, LangText.of("全文检索未命中，仅返回案号识别结果",
+                    "Full-text search found nothing; only the case-number recognition result is shown"));
+        }
     }
 
-    /** 打一次 MCP 并落结果。返回 "Error..." 前缀或空白一律判通道不可用（{@link McpClientService} 的既有约定）。 */
-    private void callAndStore(DocInsightEntity row, String server, String tool,
-                              Map<String, Object> args, String unavailablePrefix) {
+    /**
+     * 案号识别先导步。任何一环不成（未配置 / 抛异常 / "Error" 前缀 / 不是数组 / 空数组）
+     * 都返回 null 让调用方走原路——这一步永远只做加法。
+     */
+    private ObjectNode recognizeCaseNumber(DocInsightEntity row) {
+        String server = props.getCaseNumberServer();
+        if (!StringUtils.hasText(server)) return null;
+        String raw;
+        try {
+            raw = mcpClientService.callTool(server, props.getCaseNumberTool(),
+                    Map.of("text", recognitionText(row)));
+        } catch (Exception e) {
+            log.warn("案号识别失败（跳过，不影响判决书检索）name={}: {}", row.getName(), e.getMessage());
+            return null;
+        }
+        if (!StringUtils.hasText(raw) || raw.startsWith(ERROR_PREFIX)) return null;
+        JsonNode node = unwrapMcp(raw);
+        if (node == null || !node.isArray() || node.isEmpty()) return null;
+
+        // 与实体案号归一后相等的优先；一条都对不上就取第一条（上游按出现顺序返回）
+        String key = DocInsightExtraction.normalizeCaseNo(row.getName());
+        ObjectNode first = null;
+        for (JsonNode n : node) {
+            if (n == null || !n.isObject()) continue;
+            if (first == null) first = ((ObjectNode) n).deepCopy();
+            if (!key.isEmpty() && key.equals(DocInsightExtraction.normalizeCaseNo(str(n, "caseFlag")))) {
+                return ((ObjectNode) n).deepCopy();
+            }
+        }
+        return first;
+    }
+
+    /** 送去识别的文本：实体名（案号）本身；首条出处更长时拼上，给上游一点上下文。 */
+    private String recognitionText(DocInsightEntity row) {
+        String name = row.getName() == null ? "" : row.getName();
+        List<MentionView> ms = mentions(row.getMentionsJson());
+        String quote = ms.isEmpty() ? "" : ms.get(0).quote();
+        String text = StringUtils.hasText(quote) && quote.length() > name.length() ? name + " " + quote : name;
+        return text.length() > RECOGNITION_TEXT_LIMIT ? text.substring(0, RECOGNITION_TEXT_LIMIT) : text;
+    }
+
+    /** 识别命中时改用判决书标题去检索（语义库对标题的命中率远高于裸案号），标题为空退回标准化案号。 */
+    private static String caseQuery(ObjectNode recognition, String fallback) {
+        if (recognition == null) return fallback;
+        String title = str(recognition, "title");
+        if (StringUtils.hasText(title)) return title;
+        String flag = str(recognition, "caseFlag");
+        return StringUtils.hasText(flag) ? flag : fallback;
+    }
+
+    /** 全文检索没成，但识别拿到了法院/标题/法宝链接——这本身就是结果，记 OK 并写明只有这一半。 */
+    private void okRecognitionOnly(DocInsightEntity row, ObjectNode recognition, String note) {
+        ObjectNode out = om.createObjectNode();
+        out.put("source", props.getCaseNumberServer());
+        out.set("recognition", recognition);
+        row.setRetrievalStatus(DocInsightEntity.RETRIEVAL_OK);
+        row.setRetrievalSource(props.getCaseNumberServer());
+        row.setRetrievalJson(writeJson(out));
+        row.setRetrievalNote(note);
+    }
+
+    /**
+     * 打一次 MCP 并落结果。返回 "Error..." 前缀或空白一律判通道不可用（{@link McpClientService} 的既有约定）。
+     *
+     * @return true = 拿到结果并已落进 retrievalJson
+     */
+    private boolean callAndStore(DocInsightEntity row, String server, String tool,
+                                 Map<String, Object> args, String unavailablePrefix) {
         row.setRetrievalSource(server);
         String raw;
         try {
             raw = mcpClientService.callTool(server, tool, args);
         } catch (Exception e) {
             unavailable(row, unavailablePrefix + readable(e));
-            return;
+            return false;
         }
         if (!StringUtils.hasText(raw) || raw.startsWith(ERROR_PREFIX)) {
             unavailable(row, unavailablePrefix
                     + (StringUtils.hasText(raw) ? raw : LangText.of("上游返回空结果", "empty response")));
-            return;
+            return false;
         }
         ObjectNode out = om.createObjectNode();
         out.put("source", server);
@@ -555,6 +658,33 @@ public class DocInsightService {
         row.setRetrievalStatus(DocInsightEntity.RETRIEVAL_OK);
         row.setRetrievalJson(writeJson(out));
         row.setRetrievalNote(null);
+        return true;
+    }
+
+    /** 往已落库的 retrievalJson 上补一个字段（案号识别、权威条文原文都走它）。 */
+    private void mergeRetrievalField(DocInsightEntity row, String key, JsonNode value) {
+        JsonNode node = readJson(row.getRetrievalJson());
+        ObjectNode out = node != null && node.isObject() ? (ObjectNode) node : om.createObjectNode();
+        out.set(key, value);
+        row.setRetrievalJson(writeJson(out));
+    }
+
+    /**
+     * MCP 回包可能是裸 JSON，也可能裹一层 {@code {"content":[{"type":"text","text":"<JSON>"}]}} 信封。
+     * 两种都要能吃——前端 insightDetail.js 的 unwrapResult 是同一口径。
+     */
+    private JsonNode unwrapMcp(String raw) {
+        JsonNode node = readJson(raw);
+        if (node == null || !node.isObject()) return node;
+        JsonNode content = node.get("content");
+        if (content == null || !content.isArray()) return node;
+        StringBuilder sb = new StringBuilder();
+        for (JsonNode c : content) {
+            String t = str(c, "text");
+            if (t != null) sb.append(t);
+        }
+        JsonNode inner = readJson(sb.toString());
+        return inner == null ? node : inner;
     }
 
     /** 「《公司法》第二十条」→ {公司法, 第二十条}；不带书名号的原样当标题。 */
@@ -568,6 +698,176 @@ public class DocInsightService {
     private void unavailable(DocInsightEntity row, String note) {
         row.setRetrievalStatus(DocInsightEntity.RETRIEVAL_UNAVAILABLE);
         row.setRetrievalNote(note);
+    }
+
+    // ---------------------------------------------------------------- 法条引用校验
+
+    /**
+     * 法条引用校验（{@code insight.citation-server}，法宝 {@code adjust_provisions}）：
+     * 拿文档里「《X》第 N 条」的引用去要权威条文原文，顺带看看引文<b>内容</b>定位到的条文
+     * 是不是同一条。跑在 LAW 实体检索之后，产出两类发现 + 给 LAW 实体回填 {@code authoritative}。
+     *
+     * <h3>三条保守口径</h3>
+     * <ul>
+     *   <li>server 没配 = 整步跳过（不是失败，也不产生任何发现）；</li>
+     *   <li>单条校验抛错 / 上游 "Error" 前缀 / 回包形状不认得 = <b>跳过这一条</b>。
+     *       校验通道不可用 ≠ 引用有错，绝不据此报一条发现；</li>
+     *   <li>最多校验 {@value #MAX_CITATION_CHECKS} 条——一份引用了三百条法规的文档
+     *       不该把上游打爆，也不该让一轮解析卡在这一步。</li>
+     * </ul>
+     */
+    private List<DocInsightChecks.Finding> validateCitations(Long runId, List<DocInsightEntity> rows) {
+        List<DocInsightChecks.Finding> out = new ArrayList<>();
+        String server = props.getCitationServer();
+        if (!StringUtils.hasText(server)) return out;
+
+        int checked = 0;
+        for (DocInsightEntity row : rows) {
+            if (!DocInsightEntity.KIND_LAW.equals(row.getKind())) continue;
+            String[] parts = splitLawName(row.getName());
+            if (!StringUtils.hasText(parts[0]) || !StringUtils.hasText(parts[1])) continue;
+            String arabic = LawArticleNumbers.toArabic(parts[1]);
+            if (arabic == null) continue;      // 条号转不成阿拉伯数字（上游只收数字），跳过
+            if (checked >= MAX_CITATION_CHECKS) break;
+            checked++;
+            phase(runId, LangText.of("校验法条引用 ", "Validating citations ") + checked);
+            try {
+                DocInsightChecks.Finding f = checkCitation(row, server, parts[0], parts[1], arabic);
+                if (f != null) out.add(f);
+            } catch (Exception e) {
+                log.warn("法条引用校验失败（跳过该条，不产生发现）{}: {}", row.getName(), e.getMessage());
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 校验一条引用。
+     * <ul>
+     *   <li>上游返回<b>空数组</b> = 这个条号在法宝检索不到 → {@code CITATION_NOT_FOUND}；</li>
+     *   <li>返回里有 {@code article_number} 等于引用条号的条目 → 把权威原文回填进该实体的
+     *       {@code retrievalJson.authoritative}（窗格当权威原文展示），本身不算错；</li>
+     *   <li>发了 {@code answerlaw}（引文里有足够的内容线索）且返回的<b>内容定位候选</b>
+     *       （条号与引用不同的那些条目）非空 → {@code CITATION_MISMATCH}。
+     *       候选可能来自旧版法规的旧条号，所以只提示人工核对，<b>永不给一键修改</b>。</li>
+     * </ul>
+     */
+    private DocInsightChecks.Finding checkCitation(DocInsightEntity row, String server,
+                                                   String title, String citedArticle, String arabic) {
+        String quote = longestMention(row);
+        String clue = LawArticleNumbers.contentClue(quote);
+        boolean withAnswer = clue.length() >= CITATION_CLUE_MIN;
+
+        Map<String, Object> args = new LinkedHashMap<>();
+        args.put("userlaw", List.of(Map.of("title", title, "article_number", arabic)));
+        if (withAnswer) {
+            args.put("answerlaw", List.of(Map.of("title", title, "text", clue)));
+            args.put("prompt", quote);
+        }
+        String raw = mcpClientService.callTool(server, props.getCitationTool(), args);
+        if (!StringUtils.hasText(raw) || raw.startsWith(ERROR_PREFIX)) return null;
+        JsonNode node = unwrapMcp(raw);
+        if (node == null || !node.isArray()) return null;   // 形状不认得 = 校验不可用，不当成引用有错
+        if (node.isEmpty()) return citationNotFound(title, citedArticle, arabic, quote);
+
+        JsonNode matched = null;
+        List<JsonNode> candidates = new ArrayList<>();
+        for (JsonNode n : node) {
+            if (n == null || !n.isObject()) continue;
+            String number = LawArticleNumbers.toArabic(str(n, "article_number"));
+            if (number != null && number.equals(arabic)) {
+                if (matched == null) matched = n;
+            } else {
+                candidates.add(n);
+            }
+        }
+        if (matched == null && candidates.isEmpty()) return null;   // 一条对象都没有：形状不认得
+        if (matched != null) storeAuthoritative(row, matched);
+        if (!withAnswer || candidates.isEmpty()) return null;
+        return citationMismatch(title, citedArticle, quote, matched, candidates);
+    }
+
+    /** 权威条文原文回填到 LAW 实体（与法宝检索结果并列，窗格单开一段展示）。 */
+    private void storeAuthoritative(DocInsightEntity row, JsonNode entry) {
+        ObjectNode a = om.createObjectNode();
+        putIfText(a, "title", str(entry, "title"));
+        putIfText(a, "original_text", clip(str(entry, "original_text"), AUTHORITATIVE_TEXT_LIMIT));
+        putIfText(a, "url", str(entry, "url"));
+        putIfText(a, "implement_date", str(entry, "implement_date"));
+        if (a.isEmpty()) return;
+        mergeRetrievalField(row, "authoritative", a);
+        entities.save(row);
+    }
+
+    private DocInsightChecks.Finding citationNotFound(String title, String citedArticle,
+                                                      String arabic, String quote) {
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("lawTitle", title);
+        detail.put("citedArticle", citedArticle);
+        detail.put("citedArabic", arabic);
+        detail.put("quote", quote == null ? "" : quote);
+        detail.put("note", LangText.of("可能条号有误或法规名不准，请人工核对",
+                "The article number or the statute name may be wrong; please check manually"));
+        detail.put("fixable", false);
+        return new DocInsightChecks.Finding(DocInsightChecks.KIND_CITATION_NOT_FOUND,
+                DocInsightChecks.SEVERITY_WARN,
+                "《" + title + "》" + citedArticle
+                        + LangText.of("在北大法宝未检索到", " was not found in the statute database"),
+                detail);
+    }
+
+    private DocInsightChecks.Finding citationMismatch(String title, String citedArticle, String quote,
+                                                      JsonNode matched, List<JsonNode> candidates) {
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("lawTitle", title);
+        detail.put("citedArticle", citedArticle);
+        String citedText = matched == null ? null : clip(str(matched, "original_text"), CANDIDATE_SNIPPET_LIMIT);
+        if (StringUtils.hasText(citedText)) detail.put("citedText", citedText);
+        detail.put("quote", quote == null ? "" : quote);
+
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (JsonNode c : candidates) {
+            if (rows.size() >= MAX_CANDIDATES) break;
+            Map<String, Object> one = new LinkedHashMap<>();
+            one.put("title", nullToEmpty(str(c, "title")));
+            one.put("articleNumber", nullToEmpty(str(c, "article_number")));
+            one.put("snippet", nullToEmpty(clip(str(c, "original_text"), CANDIDATE_SNIPPET_LIMIT)));
+            one.put("url", nullToEmpty(str(c, "url")));
+            rows.add(one);
+        }
+        detail.put("candidates", rows);
+        // 旧版重编号是这一条最常见的成因，写进 detail 让窗格原样显示，别让用户照着候选改条号
+        detail.put("note", LangText.of("候选可能来自旧版法规（存在条文重编号），请人工核对现行版本",
+                "Candidates may come from an earlier version of the statute (articles get renumbered); "
+                        + "please check the version in force"));
+        detail.put("fixable", false);
+        return new DocInsightChecks.Finding(DocInsightChecks.KIND_CITATION_MISMATCH,
+                DocInsightChecks.SEVERITY_WARN,
+                "《" + title + "》" + citedArticle
+                        + LangText.of("的引用内容可能与条文不符", " may not match the content cited for it"),
+                detail);
+    }
+
+    /** 引用校验拿最长的那条出处：内容线索越完整，按内容定位越准。 */
+    private String longestMention(DocInsightEntity row) {
+        String best = "";
+        for (MentionView m : mentions(row.getMentionsJson())) {
+            if (m.quote() != null && m.quote().length() > best.length()) best = m.quote();
+        }
+        return best;
+    }
+
+    private static void putIfText(ObjectNode into, String field, String value) {
+        if (StringUtils.hasText(value)) into.put(field, value);
+    }
+
+    private static String nullToEmpty(String s) {
+        return s == null ? "" : s;
+    }
+
+    private static String clip(String s, int limit) {
+        if (s == null) return null;
+        return s.length() <= limit ? s : s.substring(0, limit) + "…";
     }
 
     // ---------------------------------------------------------------- 读取

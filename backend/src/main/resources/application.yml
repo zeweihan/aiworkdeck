@@ -156,6 +156,15 @@ insight:
   case-server: ${INSIGHT_CASE_SERVER:pkulaw-case-semantic}
   case-tool: ${INSIGHT_CASE_TOOL:search_case}
   case-arg: ${INSIGHT_CASE_ARG:text}
+  # 案号识别先导步（法宝 anhao_recognition，参数 text）：把文中案号标准化，并直接给出
+  # 法院 / 判决书标题 / 法宝链接；随后用标题去打上面的全文检索（比裸案号语义搜命中率高）。
+  # 留空 = 跳过这一步；识别失败一律静默走原路，绝不让 CASE 检索比没有它时更差。
+  case-number-server: ${INSIGHT_CASE_NUMBER_SERVER:pkulaw-case-number}
+  case-number-tool: ${INSIGHT_CASE_NUMBER_TOOL:anhao_recognition}
+  # 法条引用校验（法宝 adjust_provisions）：回填权威条文原文，并报「条号在法宝检索不到」
+  # 与「引用内容与条文不符」两类发现。留空 = 整步跳过。
+  citation-server: ${INSIGHT_CITATION_SERVER:pkulaw-citation-validator}
+  citation-tool: ${INSIGHT_CITATION_TOOL:adjust_provisions}
   chunk-chars: 10000
   chunk-overlap: 500
   max-chars: 200000

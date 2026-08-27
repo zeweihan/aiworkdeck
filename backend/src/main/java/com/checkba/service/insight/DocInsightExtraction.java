@@ -240,10 +240,16 @@ final class DocInsightExtraction {
     static RawEntity caseRef(String caseNo, String title, String quote) {
         String no = caseNo == null ? "" : caseNo.trim();
         String display = no.isEmpty() ? title.trim() : no;
-        // 案号归一：全角括号转半角 + 去空白，「（2021）」与「(2021) 」是同一个案号
-        String key = EvidenceChecks.compact(no.isEmpty() ? title : no)
-                .replace('（', '(').replace('）', ')');
-        return new RawEntity(DocInsightEntity.KIND_CASE, display, key, null, mentions(quote));
+        return new RawEntity(DocInsightEntity.KIND_CASE, display,
+                normalizeCaseNo(no.isEmpty() ? title : no), null, mentions(quote));
+    }
+
+    /**
+     * 案号归一：全角括号转半角 + 去空白，「（2021）」与「(2021) 」是同一个案号。
+     * 案号识别先导步拿它比对法宝返回的 {@code caseFlag}，两边必须是同一把尺子。
+     */
+    static String normalizeCaseNo(String s) {
+        return EvidenceChecks.compact(s).replace('（', '(').replace('）', ')');
     }
 
     private static String stripBookMarks(String s) {

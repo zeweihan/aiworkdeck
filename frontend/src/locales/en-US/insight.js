@@ -40,6 +40,17 @@ export default {
     fullText: 'Full judgment',
   },
 
+  authoritative: 'Authoritative text (Pkulaw)',
+  implementDate: 'In force from {date}',
+  recognition: 'Case number recognition',
+  openInPkulaw: 'Open in Pkulaw',
+
+  citation: {
+    citedText: 'Cited article',
+    candidates: 'Articles matched by content',
+    article: 'Article {n}',
+  },
+
   severity: {
     warn: 'Questionable',
     error: 'Error',

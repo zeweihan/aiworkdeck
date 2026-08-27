@@ -12,6 +12,9 @@ import org.springframework.stereotype.Component;
  * 换别家案例 MCP 只要在 {@code mcp.servers} 里加一条、改这三项配置即可接入，
  * 不动一行代码——这正是把 server/工具/参数名都做成配置而不是常量的原因。
  * 代码内缺省仍为空（= 通道未配置，案例实体落 UNAVAILABLE），真实缺省值在 yml。
+ *
+ * <p>{@link #caseNumberServer}（案号识别先导步）与 {@link #citationServer}（法条引用校验）
+ * 照同一个先例：代码内缺省为空 = 这一步不做，yml 里给法宝的默认 server/工具名。
  */
 @Data
 @Component
@@ -26,6 +29,24 @@ public class InsightProperties {
 
     /** 判决书检索工具的查询参数名（法宝 search_case 用 text）。 */
     private String caseArg = "text";
+
+    /**
+     * 案号识别的 MCP server 名（法宝 {@code pkulaw-case-number}）。
+     * <b>空 = 跳过这一先导步</b>，CASE 实体照旧拿案号原文直接打全文检索。
+     */
+    private String caseNumberServer = "";
+
+    /** 案号识别的工具名（法宝 {@code anhao_recognition}，参数 {@code text}）。 */
+    private String caseNumberTool = "anhao_recognition";
+
+    /**
+     * 法条引用校验的 MCP server 名（法宝 {@code pkulaw-citation-validator}）。
+     * <b>空 = 整步跳过</b>，不产生引用类发现，也不回填权威条文原文。
+     */
+    private String citationServer = "";
+
+    /** 法条引用校验的工具名（法宝 {@code adjust_provisions}）。 */
+    private String citationTool = "adjust_provisions";
 
     /** 每块送给辅助模型的字符数。 */
     private int chunkChars = 10000;

@@ -178,6 +178,80 @@ export function caseRecord(detail) {
   }
 }
 
+// —————————————————————————— 法宝升级件 ——————————————————————————
+//
+// 两个字段是后端在检索结果之外补上去的（dev-board#181 升级件）：
+//   LAW.authoritative   引用校验（adjust_provisions）回填的权威条文原文；
+//   CASE.recognition    案号识别（anhao_recognition）的标准化案号 / 法院 / 判决书标题 / 法宝链接。
+// 与 result 并列，不受上游检索成败影响——检索没命中时它们可能是这一条<b>仅有</b>的内容。
+
+const AUTH_TITLE = ['title', 'law_name', 'lawName', '法规名称', '标题']
+const AUTH_TEXT = ['original_text', 'originalText', 'content', 'text', '条文内容', '正文']
+const AUTH_URL = ['url', 'link', '链接']
+const AUTH_DATE = ['implement_date', 'implementDate', 'effective_date', '施行日期', '实施日期']
+
+/** 权威条文原文段。没有这个字段（或一个认得的键都没有）返回 null，整段不渲染。 */
+export function authoritative(detail) {
+  const a = detail && detail.authoritative
+  if (!a || typeof a !== 'object') return null
+  const out = {
+    title: pick(a, AUTH_TITLE),
+    text: pick(a, AUTH_TEXT),
+    url: pick(a, AUTH_URL),
+    date: pick(a, AUTH_DATE),
+  }
+  return out.title || out.text || out.url || out.date ? out : null
+}
+
+const REC_NUMBER = ['caseFlag', 'case_flag', 'caseNumber', 'case_number', '案号', 'text']
+const REC_COURT = ['court', 'courthouse_name', 'courtName', '法院', '审理法院']
+const REC_TITLE = ['title', 'case_name', 'caseName', '案件名称', '标题']
+const REC_URL = ['url', 'link', '链接']
+
+/** 案号识别行。同上：认不出任何一个键就返回 null。 */
+export function caseRecognition(detail) {
+  const r = detail && detail.recognition
+  if (!r || typeof r !== 'object') return null
+  const out = {
+    caseNumber: pick(r, REC_NUMBER),
+    court: pick(r, REC_COURT),
+    title: pick(r, REC_TITLE),
+    url: pick(r, REC_URL),
+  }
+  return out.caseNumber || out.court || out.title || out.url ? out : null
+}
+
+/**
+ * 两类引用发现（CITATION_NOT_FOUND / CITATION_MISMATCH）的 detail 整形。
+ * 不是这两类返回 null（USCC/数量矛盾各有各的渲染路径）。
+ *
+ * <b>永远不带修改建议</b>：候选条号可能来自旧版法规（条文会重编号），机械改写必然出错，
+ * 所以后端 fixable 恒 false、不下发 numberText，前端这边也只列不改。
+ */
+export function citationDetail(finding) {
+  const kind = finding && finding.kind
+  if (kind !== 'CITATION_NOT_FOUND' && kind !== 'CITATION_MISMATCH') return null
+  const d = finding.detail
+  if (!d || typeof d !== 'object') return null
+  const candidates = Array.isArray(d.candidates) ? d.candidates : []
+  return {
+    kind,
+    lawTitle: d.lawTitle == null ? '' : String(d.lawTitle),
+    citedArticle: d.citedArticle == null ? '' : String(d.citedArticle),
+    citedText: d.citedText == null ? '' : String(d.citedText),
+    quote: d.quote == null ? '' : String(d.quote),
+    note: d.note == null ? '' : String(d.note),
+    candidates: candidates
+      .filter((c) => c && typeof c === 'object')
+      .map((c) => ({
+        title: pick(c, ['title', '法规名称', '标题']),
+        articleNumber: pick(c, ['articleNumber', 'article_number', '条号']),
+        snippet: pick(c, ['snippet', 'original_text', 'content', '条文内容']),
+        url: pick(c, AUTH_URL),
+      })),
+  }
+}
+
 // —————————————————————————— 兜底 ——————————————————————————
 
 /**

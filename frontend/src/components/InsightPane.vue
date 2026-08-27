@@ -93,9 +93,24 @@
                   <text class="ip-sub">{{ $t('insight.moreCandidates') }}</text>
                   <text v-for="(m, mi) in lawOf(e).more" :key="'lm' + mi" class="ip-cand">{{ m }}</text>
                 </template>
+                <!-- 引用校验回填的权威条文（与上面的检索结果并列；检索没命中时它可能是仅有的内容） -->
+                <template v-if="authOf(e)">
+                  <text class="ip-sub">{{ $t('insight.authoritative') }}</text>
+                  <text v-if="authOf(e).title" class="ip-title">{{ authOf(e).title }}</text>
+                  <text v-if="authOf(e).date" class="ip-meta">{{ $t('insight.implementDate', { date: authOf(e).date }) }}</text>
+                  <text v-if="authOf(e).text" class="ip-para">{{ authOf(e).text }}</text>
+                  <text v-if="authOf(e).url" class="ip-link" @tap.stop="openUrl(authOf(e).url)">{{ $t('insight.openInPkulaw') }}</text>
+                </template>
               </template>
               <!-- 案例：判决书 -->
               <template v-else>
+                <!-- 案号识别（先导步）：标准化案号 / 法院 / 判决书标题 / 法宝链接 -->
+                <template v-if="recOf(e)">
+                  <text class="ip-sub">{{ $t('insight.recognition') }}</text>
+                  <text v-if="recOf(e).title" class="ip-title">{{ recOf(e).title }}</text>
+                  <text v-if="recMeta(e)" class="ip-meta">{{ recMeta(e) }}</text>
+                  <text v-if="recOf(e).url" class="ip-link" @tap.stop="openUrl(recOf(e).url)">{{ $t('insight.openInPkulaw') }}</text>
+                </template>
                 <text v-if="caseOf(e).title" class="ip-title">{{ caseOf(e).title }}</text>
                 <text v-if="caseMeta(e)" class="ip-meta">{{ caseMeta(e) }}</text>
                 <view v-for="s in caseOf(e).sections" :key="s.key" class="ip-block">
@@ -159,6 +174,31 @@
           <text class="ip-claim-v">{{ uscOf(f).code }}</text>
         </view>
 
+        <!-- 两类引用发现（CITATION_NOT_FOUND / CITATION_MISMATCH）。
+             候选条号可能来自旧版法规（条文会重编号），所以只列不改：后端 fixable 恒 false、
+             不下发 numberText，这里也就自然落不到「修改建议」那一支。 -->
+        <template v-if="citationOf(f)">
+          <view v-if="citationOf(f).quote" class="ip-claim" @tap="locate(citationOf(f).quote)">
+            <text class="ip-claim-q">{{ citationOf(f).quote }}</text>
+          </view>
+          <text v-if="citeHead(f)" class="ip-meta">{{ citeHead(f) }}</text>
+          <template v-if="citationOf(f).citedText">
+            <text class="ip-sub ip-fold" @tap.stop="toggleCited(f)">
+              {{ $t('insight.citation.citedText') }} {{ citedOpen[f.id] ? '−' : '+' }}
+            </text>
+            <text v-if="citedOpen[f.id]" class="ip-para">{{ citationOf(f).citedText }}</text>
+          </template>
+          <template v-if="citationOf(f).candidates.length">
+            <text class="ip-sub">{{ $t('insight.citation.candidates') }}</text>
+            <view v-for="(c, ci) in citationOf(f).candidates" :key="'cd' + ci" class="ip-cite-c">
+              <text class="ip-cand">{{ candidateLabel(c) }}</text>
+              <text v-if="c.snippet" class="ip-para">{{ c.snippet }}</text>
+              <text v-if="c.url" class="ip-link" @tap.stop="openUrl(c.url)">{{ $t('insight.openInPkulaw') }}</text>
+            </view>
+          </template>
+          <text v-if="citationOf(f).note" class="ip-cite-note">{{ citationOf(f).note }}</text>
+        </template>
+
         <view v-if="fixed[f.id]" class="ip-fixed">
           <text class="ip-fixed-t">{{ $t('insight.fixed') }}</text>
           <text class="ip-fixed-s">{{ $t('insight.fixedHint') }}</text>
@@ -202,6 +242,7 @@ import {
 import { matchEntityAt, fixSuggestions, fixBlockReason, findingLocateQuote } from '@/utils/insightMatch.js'
 import {
   companyRows, companyShareholders, lawArticle, caseRecord, rawFallback,
+  authoritative, caseRecognition, citationDetail,
 } from '@/utils/insightDetail.js'
 
 const POLL_MS = 2000
@@ -217,7 +258,9 @@ export default {
   name: 'InsightPane',
   // entities：实体清单同步给宿主，宿主据此在正文点击时做 matchEntityAt（面板自己
   // 不知道用户点了画布哪里，宿主不知道有哪些实体——索引必须交给宿主一份）。
-  emits: ['entities'],
+  // open-url：法宝链接（权威条文 / 案号识别 / 引用候选）交给宿主的浏览器面板打开，
+  // 与 MarketDetailPane / ProjectFavoritesPanel 同一条既有事件。
+  emits: ['entities', 'open-url'],
   props: {
     projectId: { type: [Number, String], default: null },
     // 当前活跃的 writer 文档；换文档时面板整体重载（跟随，不留旧结论）
@@ -244,6 +287,7 @@ export default {
       expandedId: null, highlightId: null,
       details: {}, detailLoading: {}, detailErr: {},
       fixed: {}, fixNotice: {}, fixBusy: null,
+      citedOpen: {},
       parsing: false,
     }
   },
@@ -304,6 +348,7 @@ export default {
       this.fixed = {}
       this.fixNotice = {}
       this.fixBusy = null
+      this.citedOpen = {}
       this._loading = null
       this._seenParse = null
       this.$emit('entities', { docFileId: this.did, entities: [] })
@@ -430,14 +475,26 @@ export default {
       const c = this.caseOf(e)
       return [c.caseNumber, c.court, c.date, c.caseType].filter(Boolean).join(' · ')
     },
+    // 法宝升级件补上的两段（与检索结果并列，检索没命中时可能是仅有的内容）
+    authOf(e) { return authoritative(this.details[e.id]) },
+    recOf(e) { return caseRecognition(this.details[e.id]) },
+    recMeta(e) {
+      const r = this.recOf(e)
+      return r ? [r.caseNumber, r.court].filter(Boolean).join(' · ') : ''
+    },
     // 认得的字段一个都没渲染出来时才亮原文兜底（不是每次都把 JSON 铺一遍）
     showRaw(e) {
       const d = this.details[e.id]
       if (!d) return false
       if (e.kind === 'COMPANY') return !companyRows(d).length
-      if (e.kind === 'LAW') { const a = lawArticle(d); return !a.title && !a.content }
+      if (e.kind === 'LAW') { const a = lawArticle(d); return !a.title && !a.content && !authoritative(d) }
       const c = caseRecord(d)
-      return !c.title && !c.sections.length
+      return !c.title && !c.sections.length && !caseRecognition(d)
+    },
+    /** 法宝链接交给宿主开浏览器面板（面板自己不 window.open：桌面端要走内置浏览器）。 */
+    openUrl(url) {
+      const u = url == null ? '' : String(url)
+      if (u) this.$emit('open-url', u)
     },
 
     // ————————————————— 一致性发现 —————————————————
@@ -449,6 +506,17 @@ export default {
       const d = f && f.detail
       return d && !Array.isArray(d.claims) && d.code ? d : null
     },
+    citationOf(f) { return citationDetail(f) },
+    citeHead(f) {
+      const c = this.citationOf(f)
+      if (!c) return ''
+      return (c.lawTitle ? '《' + c.lawTitle + '》' : '') + c.citedArticle
+    },
+    candidateLabel(c) {
+      const n = c.articleNumber ? this.$t('insight.citation.article', { n: c.articleNumber }) : ''
+      return [c.title, n].filter(Boolean).join(' · ')
+    },
+    toggleCited(f) { this.citedOpen = { ...this.citedOpen, [f.id]: !this.citedOpen[f.id] } },
     suggestionsOf(f) { return fixSuggestions(f && f.detail) },
     blockReason(f) { return fixBlockReason(f && f.detail) },
     onFindingTap(f) { this.locate(findingLocateQuote(f && f.detail)) },
