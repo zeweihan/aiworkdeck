@@ -124,6 +124,9 @@
 .ip-para { font-size: 11px; color: #343A40; line-height: 1.7; white-space: pre-wrap; word-break: break-all; }
 .ip-block { display: flex; flex-direction: column; gap: 2px; }
 .ip-cand { font-size: 11px; color: #495057; line-height: 1.6; word-break: break-all; }
+// 法宝外链（权威条文 / 案号识别 / 引用候选）——点开走宿主的浏览器面板
+.ip-link { font-size: 10px; color: #1A5336; text-decoration: underline; }
+.ip-fold { text-decoration: none; }
 .ip-raw {
   margin-top: 4px; padding: 5px 7px; border-radius: 5px; background: #F8F9FA;
   font-size: 10px; color: #868E96; line-height: 1.5; white-space: pre-wrap; word-break: break-all;
@@ -155,6 +158,12 @@
 }
 .ip-claim-q { font-size: 11px; color: #495057; line-height: 1.6; word-break: break-all; }
 .ip-claim-v { font-size: 10px; color: #868E96; }
+// 引用发现：候选条文与「候选可能来自旧版」的提示
+.ip-cite-c {
+  padding: 4px 7px; border-radius: 5px; background: #F8F9FA;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.ip-cite-note { font-size: 10px; color: #8A5A00; line-height: 1.5; }
 .ip-fixes { display: flex; flex-wrap: wrap; gap: 6px; }
 .ip-fix {
   padding: 2px 9px; border-radius: 10px; font-size: 11px; font-weight: 600;

@@ -10,7 +10,10 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
 import { matchEntityAt, fixSuggestions, fixBlockReason, findingLocateQuote } from '../../src/utils/insightMatch.js'
-import { companyRows, companyShareholders, lawArticle, caseRecord, rawFallback } from '../../src/utils/insightDetail.js'
+import {
+  companyRows, companyShareholders, lawArticle, caseRecord, rawFallback,
+  authoritative, caseRecognition, citationDetail,
+} from '../../src/utils/insightDetail.js'
 
 function makeVm(overrides = {}) {
   const calls = { parse: [], latest: [], entity: [], refresh: [], exec: [] }
@@ -21,6 +24,7 @@ function makeVm(overrides = {}) {
     refreshDocInsightEntity: async (pid, id) => { calls.refresh.push([pid, id]); return { code: 0, data: { retrievalStatus: 'OK', hasDetail: true, detail: { basic: {} } } } },
     matchEntityAt, fixSuggestions, fixBlockReason, findingLocateQuote,
     companyRows, companyShareholders, lawArticle, caseRecord, rawFallback,
+    authoritative, caseRecognition, citationDetail,
   }
   const src = readFileSync(new URL('../../src/components/InsightPane.vue', import.meta.url), 'utf8')
   const script = src.match(/<script>([\s\S]*?)<\/script>/)[1].replace(/^import [\s\S]*?from .*$/gm, '')
@@ -201,6 +205,60 @@ test('空 quote 不发命令（别拿标题去全文查找）', async () => {
   await vm.locate('')
   await vm.onFindingTap({ id: 1, detail: { claims: [] } })
   assert.equal(ex.seen.length, 0)
+})
+
+// ————————————————— 引用发现（法宝升级件） —————————————————
+
+const CITE_MISMATCH = {
+  id: 61, kind: 'CITATION_MISMATCH', severity: 'warn', title: '《公司法》第十五条的引用内容可能与条文不符',
+  detail: {
+    lawTitle: '中华人民共和国公司法', citedArticle: '第十五条', citedText: '公司股东应当遵守…',
+    quote: '依据《公司法》第十五条，公司向其他企业投资',
+    candidates: [{ title: '中华人民共和国公司法（2018 修正）', articleNumber: '16', snippet: '公司向其他企业投资…', url: 'https://x' }],
+    note: '候选可能来自旧版法规（存在条文重编号），请人工核对现行版本',
+    fixable: false,
+  },
+}
+
+test('引用发现：一个修改建议都不给（条文重编号，机械改条号必错）', async () => {
+  const { vm } = makeVm({ latest: { run: { status: 'DONE' }, entities: [], findings: [CITE_MISMATCH] } })
+  await vm.load()
+  assert.deepEqual(vm.suggestionsOf(CITE_MISMATCH), [])
+  assert.equal(vm.blockReason(CITE_MISMATCH), '')
+  assert.equal(vm.uscOf(CITE_MISMATCH), null, '别被 USCC 那条支路吃掉')
+  assert.deepEqual(vm.claimsOf(CITE_MISMATCH), [])
+  const c = vm.citationOf(CITE_MISMATCH)
+  assert.equal(c.candidates.length, 1)
+  assert.match(vm.citeHead(CITE_MISMATCH), /《中华人民共和国公司法》第十五条/)
+})
+
+test('引用发现：点条目仍按 detail.quote 定位（走 find_navigate）', async () => {
+  const ex = execScript(() => ({ success: true, found: true, total: 1 }))
+  const { vm } = makeVm({ latest: { run: { status: 'DONE' }, entities: [], findings: [CITE_MISMATCH] }, getExecutor: ex.getExecutor })
+  await vm.load()
+  await vm.onFindingTap(CITE_MISMATCH)
+  assert.deepEqual(ex.seen.map((c) => c[0]), ['find_navigate'])
+  assert.equal(ex.seen[0][1].keyword, '依据《公司法》第十五条，公司向其他企业投资')
+})
+
+test('法宝链接交给宿主开（面板自己不 window.open），空链接不发', async () => {
+  const { vm, emitted } = makeVm()
+  vm.openUrl('https://www.pkulaw.com/chl/x')
+  vm.openUrl('')
+  vm.openUrl(null)
+  const urls = emitted.filter((e) => e[0] === 'open-url')
+  assert.deepEqual(urls.map((e) => e[1]), ['https://www.pkulaw.com/chl/x'])
+})
+
+test('只有权威原文 / 案号识别时不亮原文兜底（那不是「什么都认不出来」）', async () => {
+  const { vm } = makeVm()
+  vm.details = {
+    3: { authoritative: { title: '公司法', original_text: '正文' } },
+    1: { recognition: { caseFlag: '（2021）京01民终1234号', court: '北京一中院' } },
+  }
+  assert.equal(vm.showRaw({ id: 3, kind: 'LAW' }), false)
+  assert.equal(vm.showRaw({ id: 1, kind: 'CASE' }), false)
+  assert.equal(vm.showRaw({ id: 9, kind: 'CASE' }), false, '没有详情时本来就不亮')
 })
 
 // ————————————————— ③ 列表 / 轮询 / 联动 —————————————————

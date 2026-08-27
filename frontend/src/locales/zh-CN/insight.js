@@ -41,6 +41,19 @@ export default {
     fullText: '判决书全文',
   },
 
+  // 法宝升级件：引用校验回填的权威条文原文 / 案号识别先导步
+  authoritative: '权威原文（北大法宝）',
+  implementDate: '施行日期 {date}',
+  recognition: '案号识别',
+  openInPkulaw: '在法宝打开',
+
+  // 两类引用发现。候选可能来自旧版法规（条文会重编号），只提示人工核对，不给一键修改。
+  citation: {
+    citedText: '引用条文',
+    candidates: '按内容定位到的条文',
+    article: '第 {n} 条',
+  },
+
   severity: {
     warn: '存疑',
     error: '错误',

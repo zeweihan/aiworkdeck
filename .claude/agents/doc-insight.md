@@ -15,7 +15,8 @@ dev-board#181（后端部分）+ #182。
 **服务层 `backend/src/main/java/com/checkba/service/insight/`**
 - `DocInsightService.java` — 管线主体。`startParse` / `latest` / `entityDetail` / `refreshEntity` 四个公有入口，其余全是私有管线。
 - `DocInsightExtraction.java` — 纯函数：切块、提示词、宽容 JSON 解析、确定性正则预抽取、按 normKey 合并去重。
-- `DocInsightChecks.java` — 纯函数：文档内部一致性判定（数量矛盾 + 统一社会信用代码校验位）。**detailJson 的形状定义在这里**。
+- `DocInsightChecks.java` — 纯函数：文档内部一致性判定（数量矛盾 + 统一社会信用代码校验位）。**四类 finding 的 detailJson 形状全部定义在这里**（引用两类由服务层构造，形状注释仍只此一份）。
+- `LawArticleNumbers.java` — 纯函数：中文条号 → 阿拉伯数字（`第二十条`→`20`、`第二十条之一`→`20.1`，转不动返回 null）、引文剥掉引用字样取「内容线索」。
 - `DocInsightViews.java` — REST 视图 record。
 - `InsightProperties.java` — `insight.*` 配置。
 
@@ -43,7 +44,10 @@ dev-board#181（后端部分）+ #182。
 `doc_insight_entity`：id / run_id / project_id / doc_file_id / kind(COMPANY|LAW|CASE) / name（展示名）/ norm_key（归一键，去重与缓存都按它）/ mentions_json / retrieval_status / retrieval_source / retrieval_json(TEXT) / retrieval_note / fetched_at。
 索引 `(run_id)` 与 `(project_id, kind, norm_key, fetched_at)`（后者是 7 天缓存命中查询）。
 
-`doc_insight_finding`：id / run_id / project_id / doc_file_id / kind(COUNT_MISMATCH|USCC_INVALID) / severity(warn|error) / title / detail_json(TEXT) / created_at。
+`doc_insight_finding`：id / run_id / project_id / doc_file_id / kind(COUNT_MISMATCH|USCC_INVALID|CITATION_NOT_FOUND|CITATION_MISMATCH) / severity(warn|error) / title / detail_json(TEXT) / created_at。
+
+`doc_insight_entity.retrieval_json` 里除检索结果外还可能有两个**并列**字段（法宝升级件补的，与 `result` 无关、检索没命中时可能是仅有的内容）：
+LAW 的 `authoritative`（权威条文原文）、CASE 的 `recognition`（案号识别结果）。
 
 **`retrieval_status` 四态的语义分工（最容易写错的一处）**
 | 值 | 含义 | 典型来源 |
@@ -67,8 +71,11 @@ startParse（同步）：写权限 → 文件校验 → 单飞闸 → 落 RUNNIN
                 单块失败只跳过这一块；每块记一笔 token_usage
 ④ 合并去重   按 (kind, normKey)，出处累加（上限 max-mentions），展示名取最长的
 ⑤ 逐个检索   命中 7 天缓存则复制；否则打上游。**每个实体检索完立刻 save**
-⑥ 一致性校验  DocInsightChecks.run(claims, 全文) → findings 落库
-⑦ DONE + phase 摘要（N 实体 / M 检索成功 / K 处不一致）
+⑥ 法条引用校验 insight.citation-server 配了才跑（法宝 adjust_provisions）：逐个 LAW 实体
+              （有条号 + 条号能转成阿拉伯数字，上限 30 个）→ 回填 authoritative +
+              产出 CITATION_NOT_FOUND / CITATION_MISMATCH。**单条失败只跳过这一条**
+⑦ 一致性校验  DocInsightChecks.run(claims, 全文) → 与⑥的发现一起落库
+⑧ DONE + phase 摘要（N 实体 / M 检索成功 / K 处不一致）
 任何顶层异常 → FAILED + 可读 error
 ```
 
@@ -82,7 +89,8 @@ startParse（同步）：写权限 → 文件校验 → 单飞闸 → 落 RUNNIN
 |---|---|---|
 | COMPANY | `QichachaService.queryEciInfoJson` → 查不到再 `qichacha-company` MCP 的 `get_company_by_query` 模糊搜索拿全称 → 用全称重打 REST | REST 只认工商全称，非全称回 Status 201 无结果；MCP 那把是**另一套凭证** |
 | LAW | 有条号 → `pkulaw-semantic` / `get_article`；无条号 → `pkulaw-keyword` / `get_law_list` | |
-| CASE | `insight.case-server` / `insight.case-tool` / `insight.case-arg`，yml 默认 `pkulaw-case-semantic` / `search_case` / `text`（2026-08-27 实测可用，返回判决书全文含查明事实段） | 换别家案例 MCP 只改这三项配置；代码内缺省仍为空 = 未配置落 UNAVAILABLE。法宝另有关键词档 `pkulaw-case-keyword`（`get_case_list`，title/正文关键词），已配 server 备用 |
+| CASE | **先导步**：`insight.case-number-server` / `-tool`（yml 默认 `pkulaw-case-number` / `anhao_recognition`，参数 `text`）把案号标准化并给出法院/判决书标题/法宝链接 → 用**标题**去打 `insight.case-server` / `-tool` / `-arg`（yml 默认 `pkulaw-case-semantic` / `search_case` / `text`） | 识别只做加法：未配置 / 报错 / 空数组一律**静默走原路**（拿案号原文检索）。识别命中而全文检索失败 → 仍记 **OK**，`retrievalJson` 只有 `recognition`、note 写「仅返回案号识别结果」。换别家案例 MCP 只改配置；代码内缺省全为空。法宝另有关键词档 `pkulaw-case-keyword`（`get_case_list`）备用 |
+| LAW 引用校验 | `insight.citation-server` / `-tool`（yml 默认 `pkulaw-citation-validator` / `adjust_provisions`） | 见「法条引用校验」一节。代码内缺省为空 = 整步跳过 |
 
 ## REST 契约（前端照这个接）
 
@@ -126,6 +134,30 @@ USCC_INVALID 的 detail 形状不同（没有 claims）：
 {"code":"91330100799655058C","quote":"…上下文…","reason":"统一社会信用代码校验位不符","fixable":false}
 ```
 
+两类引用发现的 detail（都**没有** claims、**没有** numberText、`fixable` 恒 false）：
+```json
+{"kind":"CITATION_NOT_FOUND",
+ "detail":{"lawTitle":"中华人民共和国民法典","citedArticle":"第九千九百九十九条","citedArabic":"9999",
+           "quote":"…原文片段…","note":"可能条号有误或法规名不准，请人工核对","fixable":false}}
+{"kind":"CITATION_MISMATCH",
+ "detail":{"lawTitle":"中华人民共和国公司法","citedArticle":"第十五条",
+           "citedText":"引用条目的权威原文（截 200 字，可能没有）","quote":"…原文片段…",
+           "candidates":[{"title":"中华人民共和国公司法（2018 修正）","articleNumber":"16",
+                          "snippet":"…（截 200 字）","url":"https://www.pkulaw.com/…"}],
+           "note":"候选可能来自旧版法规（存在条文重编号），请人工核对现行版本","fixable":false}}
+```
+
+实体 `detail` 里的两个升级件字段（`GET /entities/{id}` 才下发）：
+```json
+{"source":"pkulaw-semantic","result":{…},
+ "authoritative":{"title":"中华人民共和国公司法（2023 修订）","original_text":"…（截 500 字）",
+                  "url":"https://…","implement_date":"2024-07-01"}}
+{"source":"pkulaw-case-number",
+ "recognition":{"text":"（2021）京01民终1234号","caseFlag":"（2021）京01民终1234号",
+                "court":"北京市第一中级人民法院","title":"甲与乙合同纠纷二审民事判决书",
+                "url":"https://www.pkulaw.com/pfnl/…","gid":"…"}}
+```
+
 ## 一致性校验与「一键修改」契约
 
 前端一致性校验 tab 的两个动作：① 点条目 → 用 `quote` 在文档里做只读定位；② 点「修改建议」→ `quote.replace(numberText, 新数字)` 做机械替换。
@@ -145,17 +177,41 @@ USCC_INVALID 的 detail 形状不同（没有 claims）：
 - 同组里出现 ≥2 个**归一后不同**的数值才报。1,000 万元 与 10,000,000 元 归一后相等，不报。
 - 统一社会信用代码只报**自身校验位不符**（陈述的硬错）。「文档里的码与企查查返回的不一致」不在这里报——那属于外部检索结果。
 
+## 法条引用校验（法宝 `adjust_provisions`）
+
+三种上游语义（2026-08-27 实测，**照此判定，别自行改判**）：
+- `userlaw=[{title,article_number:"15"}]`（阿拉伯数字字符串）→ 返回该条权威条目 `[{title(含修订版), article_number, original_text, url, issue_date, implement_date}]`；
+- 加 `answerlaw=[{title,text:<内容线索>}]` → 数组里除引用条目外还有**按内容定位到的候选**；
+- 条号不存在（民法典第 9999 条）→ 返回**空数组**。
+
+判定（保守，宁漏报不误报）：
+| 上游返回 | 结果 |
+|---|---|
+| 空数组 | `CITATION_NOT_FOUND`（warn） |
+| 有 `article_number` == 引用条号的条目 | 回填该实体 `retrievalJson.authoritative`，本身不算错 |
+| 发了 answerlaw 且**条号不同**的候选非空 | `CITATION_MISMATCH`（warn），候选上限 3 条 |
+| `"Error"` 前缀 / 抛错 / 形状不是数组 | **跳过该实体，不产生 finding**（校验不可用 ≠ 引用有错） |
+
+- 条号先经 `LawArticleNumbers.toArabic` 转换，**转不动就跳过**（不猜条号去打上游）。
+- 引文剥掉「《…》第…条」后剩余 ≥12 字才带 `answerlaw` + `prompt`。
+- **候选条号绝不能拿来自动改写文档**：内容命中的可能是旧版法规的旧条号（2018 修正第十六条 = 2023 修订第十五条）。这就是两类引用发现恒 `fixable:false` 且不下发 `numberText` 的原因。
+- 上限 30 条／轮。
+
 ## 配置
 
 `application.yml`：
 - `mcp.servers` 新增 `qichacha-company`（`https://agent.qcc.com/mcp/company/stream`，token `${QICHACHA_MCP_TOKEN:}`，在线覆盖键 `external.qichacha.mcpToken`，30s）。
-- `insight.*`：`case-server`（yml 默认 `pkulaw-case-semantic`）/ `case-tool`（yml 默认 `search_case`）/ `case-arg`（yml 默认 `text`）/ `chunk-chars` / `chunk-overlap` / `max-chars` / `cache-days` / `max-entities` / `max-mentions` / `stale-minutes`。
+- `insight.*`：`case-server`（yml 默认 `pkulaw-case-semantic`）/ `case-tool`（`search_case`）/ `case-arg`（`text`）/
+  `case-number-server`（`pkulaw-case-number`）/ `case-number-tool`（`anhao_recognition`）/
+  `citation-server`（`pkulaw-citation-validator`）/ `citation-tool`（`adjust_provisions`）/
+  `chunk-chars` / `chunk-overlap` / `max-chars` / `cache-days` / `max-entities` / `max-mentions` / `stale-minutes`。
+  后四项 server/tool 的**代码内缺省全为空**（= 那一步不做），真实缺省值只在 yml——照 `case-server` 的先例。
 
 `application-prod.yml` 不重复定义 `mcp` 列表（抄一份必然漂移），只在 `external.qichacha` 下留了 `QICHACHA_MCP_TOKEN` 的部署清单注释。
 
 ## 已知地雷
 
-1. **法宝点数已于 2026-08-27 恢复**（新 token 在 `backend/.env` 的 `PKULAW_TOKEN`，法宝 MCP 控制台 mcp.pkulaw.com；**全部 10 个 server 当天逐一 `tools/call` 实测有真数据**，完整清单与工具面见 application.yml mcp.servers 注释与 EXTERNAL_SERVICES.md 法宝行）。管线当前只用其中四个（semantic/keyword/case-semantic + qichacha），另外几个是现成的升级件：`pkulaw-case-number` 的 `anhao_recognition(text)` 能把案号标准化并直接给出判决书标题/法院/法宝链接（可作 CASE 实体的先导步，替代裸语义搜）；`pkulaw-citation-validator` 的 `adjust_provisions` 返回权威法条原文（可做「文档引用条号配错」的校验维度）；`pkulaw-doc-link` 能为整段文本加法宝超链接。接入时按 InsightProperties 的配置化先例来。若再见 `tools/call` 401「checking remaining points」= 点数又耗尽，是账务问题不是回归：LAW/CASE 实体一律 UNAVAILABLE + note 带上游原话，先查点数不要改代码。
+1. **法宝点数已于 2026-08-27 恢复**（新 token 在 `backend/.env` 的 `PKULAW_TOKEN`，法宝 MCP 控制台 mcp.pkulaw.com；**全部 10 个 server 当天逐一 `tools/call` 实测有真数据**，完整清单与工具面见 application.yml mcp.servers 注释与 EXTERNAL_SERVICES.md 法宝行）。管线当前用其中六个：semantic / keyword / case-semantic / qichacha，外加 **2026-08-27 接入的两个升级件**——`pkulaw-case-number` 的 `anhao_recognition(text)`（CASE 检索先导步，见检索路由表 CASE 行）与 `pkulaw-citation-validator` 的 `adjust_provisions`（法条引用校验，见专节）。仍未接的：`pkulaw-doc-link` 能为整段文本加法宝超链接；`pkulaw-fatiao` 的 `get_law_item_content` 是按数字条号取法条的另一条路。接入时按 InsightProperties 的配置化先例来。若再见 `tools/call` 401「checking remaining points」= 点数又耗尽，是账务问题不是回归：LAW/CASE 实体一律 UNAVAILABLE + note 带上游原话，先查点数不要改代码。
    同理 `QICHACHA_MCP_TOKEN` 缺省时企业模糊搜索静默降级为「只认工商全称」——不报错，只是简称查不到。
 2. **`PlatformAiUserScope` 不跟随线程池**。管线跑在自己的池里，`startParse` 提交时必须
    `PlatformAiUserScope.run(userId, …)` 包住**整段**（不只是模型调用那一行）；`refreshEntity` 在控制器线程上跑，同样要包。
@@ -183,7 +239,7 @@ USCC_INVALID 的 detail 形状不同（没有 claims）：
 
 - `frontend/src/components/InsightPane.vue` + 同目录外置样式 `insight-pane.scss` —— 「依据」窗格本体，两个 tab（外部检索 / 一致性校验）。
 - `frontend/src/utils/insightMatch.js` —— 纯函数：`cursorWindow` / `matchEntityAt`（光标邻域命中实体）、`buildFixedQuote` / `fixSuggestions` / `fixBlockReason` / `findingLocateQuote`（一键修改的替换串）。**不许 import Vue/uni/i18n**（`node --test` 直接导入，且客体页 `editor-main.js` 也 import 它取 `CURSOR_RADIUS`）。
-- `frontend/src/utils/insightDetail.js` —— 纯函数：把 COMPANY/LAW/CASE 三种 `detail` 整形成可渲染的行。上游形状是别人家的，一律「认得的列出来、认不得的落原文兜底」。
+- `frontend/src/utils/insightDetail.js` —— 纯函数：把 COMPANY/LAW/CASE 三种 `detail` 整形成可渲染的行，外加 `authoritative`（权威条文原文）/ `caseRecognition`（案号识别行）/ `citationDetail`（两类引用发现）。上游形状是别人家的，一律「认得的列出来、认不得的落原文兜底」。
 - `frontend/src/config/panelRegistry.js` —— `insight` 一条（`defaultDock:'right'`、`allowedDocks:['left','right']`，**不给 bottom**：底栏放不下判决书全文）。
 - `frontend/src/services/api.js` —— `parseDocInsight` / `getDocInsight` / `getDocInsightEntity` / `refreshDocInsightEntity`。
 - 宿主接线在 `frontend/src/pages/project-overview/project-overview.vue`（右栏 `rightPaneKey==='insight'` / 左栏 `leftPaneKey==='insight'` 两条显式分支 + `isInsightDoc` / `getInsightExecutor` / `onOpenInsight` / `onInsightEntities` / `onEditorCursorContext`）。
@@ -221,31 +277,39 @@ USCC_INVALID 的 detail 形状不同（没有 claims）：
 - `parseRequest` **必须带 fileId**：面板是 v-if 挂载的，点完解析才挂出来（watch 看不到变化，所以 mounted 也认一次）；不带 fileId 会让「在 A 文档点过解析、随后切到 B 开面板」把 B 也解析掉。
 - 列表瘦身的另一半在前端：`detail` 展开时才 `GET /entities/{id}` 并缓存在组件里；`hasDetail:false` 的一次都不打。
 - UNAVAILABLE / ERROR 的 `retrievalNote` **必须显示**（`.ip-note`），旁边给「重试」（`POST /entities/{id}/refresh`，要写权限）。
+- 两类引用发现（CITATION_*）在一致性 tab 里只列不改：`fixSuggestions` 看的是 `detail.claims`，引用 detail 没有这一段，天然落不到「修改建议」那一支；点条目仍按 `detail.quote` 定位。CITATION_MISMATCH 的「引用条文」是折叠段（`citedOpen`）。
+- 法宝外链（权威条文 / 案号识别 / 引用候选）走 `@open-url` → 宿主 `openBrowserTab`（与 MarketDetailPane 同一条既有事件），**面板自己不 `window.open`**：桌面端要走内置浏览器面板。
 - 视觉：浅色 + `--awd-panel-*` 密度令牌；**面板不自画标题**（左栏由外壳 `.sidebar-header` 出、右栏由 dock tab 出）。
 - **已知视觉变化**：`insight` 默认停右栏，于是 AI 面板顶部从此恒有一条 dock tab 条（「AI 助手 | 依据」）。此前 `rightDockPanels` 常为空、那条 tab 条不渲染。
 
 ### 前端验证
 
 ```
-cd frontend && npm run test:insight        # 72 条（纯函数 51 + 组件级 21）
+cd frontend && npm run test:insight        # 83 条（纯函数 58 + 组件级 25）
 cd frontend && npm run test:panel-dock     # 注册表自洽 + 停靠回落
 cd frontend && npm run check:emits && npm run check:nav && npm run check:locales
 cd frontend && npm run build:h5 && npm run build:zetaoffice   # 改 editor-main.js 后必须重建 glue
 ```
 `tests/insight/insightPane.test.mjs` 把 `InsightPane.vue` 的 `<script>` 抽出来跑（同
 `tests/evidence/panelFilters.test.mjs` 的路子），锁的是三条真会花钱/改文档的不变式：
-已解析不重跑、唯一命中才替换、卸载清定时器。**改这三处前先确认对应用例会转红**
+已解析不重跑、唯一命中才替换、卸载清定时器。给 `InsightPane.vue` **新加一个 import 时，
+必须同步往那份测试的 `deps` 里加一条**——harness 是把 import 行剥掉、依赖当形参喂进去的，漏了就是 ReferenceError。
+**改这三处前先确认对应用例会转红**
 （2026-08-27 逐条做过还原病灶的对拍）。
 
 ## 验证
 
 ```
-cd backend && mvn test -Dtest='DocInsight*'      # 41 条
+cd backend && mvn test -Dtest='DocInsight*,LawArticle*'   # 58 条
 cd backend && mvn clean test                      # 全量（跨类常量内联，验证阶段一律 clean）
 ```
-- `DocInsightChecksTest`（18）：数字归一（千分位/万/亿）、同主体命中、不同主体与不同基准单位不误报、
+- `DocInsightChecksTest`（19）：数字归一（千分位/万/亿）、同主体命中、不同主体与不同基准单位不误报、
   后缀剥离等价、USCC 校验位与去重、**fixable 三条降级分支**、空输入。
-- `DocInsightServiceTest`（17）：RUNNING 中间态（CountDownLatch）、单飞、企查查降级链、网关失败落 UNAVAILABLE、
-  法宝不可用不连坐、案例通道从「未配置」到「配上就接入」、7 天缓存与 refresh 绕过、列表瘦身/发现不瘦身、
+- `LawArticleNumbersTest`（7）：十/百/千组合与「零」、`之N`、已是阿拉伯数字（含全角）、
+  **转不动一律 null**、引文剥引用字样取内容线索。
+- `DocInsightServiceTest`（26）：RUNNING 中间态（CountDownLatch）、单飞、企查查降级链、网关失败落 UNAVAILABLE、
+  法宝不可用不连坐、案例通道从「未配置」到「配上就接入」、**案号识别命中改用标题检索 / 识别失败静默走原路 /
+  识别命中但全文失败仍 OK**、**引用校验三种判定 + 通道未配置整步跳过 + 通道报错不报发现 + 上限 30**、
+  7 天缓存与 refresh 绕过、列表瘦身/发现不瘦身、
   读不出文字与辅助模型未配置 → FAILED、单块坏输出不炸整轮、鉴权与跨项目 IDOR。
 - `DocInsightControllerTest`（6）：4010 信封、code=1、参数透传、响应形状、路由不互相吃。

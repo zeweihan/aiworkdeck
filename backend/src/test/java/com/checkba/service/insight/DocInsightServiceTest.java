@@ -361,6 +361,178 @@ class DocInsightServiceTest {
         assertEquals("some-judgment-mcp", c2.getRetrievalSource());
     }
 
+    // ---------------------------------------------------------------- 案号识别先导步
+
+    static final String CASE_NO = "（2021）京01民终1234号";
+    static final String CASE_TITLE = "甲与乙合同纠纷二审民事判决书";
+    static final String ANHAO_HIT = """
+            [{"text":"（2021）京01民终1234号","caseFlag":"（2021）京01民终1234号",
+              "court":"北京市第一中级人民法院","title":"甲与乙合同纠纷二审民事判决书",
+              "url":"https://www.pkulaw.com/pfnl/abc","gid":"abc"}]
+            """;
+
+    @Test
+    @DisplayName("案号识别命中 → 改用判决书标题去打全文检索，识别结果一并存进 recognition")
+    void 案号识别命中改用标题检索() throws Exception {
+        when(qichacha.queryEciInfoJson(anyString())).thenReturn(QCC_FULL);
+        stubPkulawUnavailable();
+        stubCaseChannel();
+        when(mcp.callTool(eq("pkulaw-case-number"), eq("anhao_recognition"), anyMap())).thenReturn(ANHAO_HIT);
+        when(mcp.callTool(eq("pkulaw-case-semantic"), eq("search_case"), anyMap()))
+                .thenReturn("{\"docs\":[{\"title\":\"甲与乙合同纠纷二审民事判决书\"}]}");
+
+        awaitStatus(newService().startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+
+        // 裸案号语义搜命中率低，识别拿到标题就该改用标题
+        verify(mcp).callTool(eq("pkulaw-case-semantic"), eq("search_case"), eq(Map.of("text", CASE_TITLE)));
+        DocInsightEntity c = entityOf(DocInsightEntity.KIND_CASE);
+        assertEquals(DocInsightEntity.RETRIEVAL_OK, c.getRetrievalStatus());
+        assertTrue(c.getRetrievalJson().contains("recognition"), c.getRetrievalJson());
+        assertTrue(c.getRetrievalJson().contains("北京市第一中级人民法院"), c.getRetrievalJson());
+    }
+
+    @Test
+    @DisplayName("案号识别不可用 → 静默走原路（拿案号原文检索），不比没有这一步更差")
+    void 案号识别失败走原路() throws Exception {
+        when(qichacha.queryEciInfoJson(anyString())).thenReturn(QCC_FULL);
+        stubPkulawUnavailable();
+        stubCaseChannel();
+        when(mcp.callTool(eq("pkulaw-case-number"), eq("anhao_recognition"), anyMap()))
+                .thenReturn("Error: MCP call failed: 401 checking remaining points");
+        when(mcp.callTool(eq("pkulaw-case-semantic"), eq("search_case"), anyMap()))
+                .thenReturn("{\"docs\":[{\"title\":\"判决书\"}]}");
+
+        awaitStatus(newService().startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+
+        verify(mcp).callTool(eq("pkulaw-case-semantic"), eq("search_case"), eq(Map.of("text", CASE_NO)));
+        DocInsightEntity c = entityOf(DocInsightEntity.KIND_CASE);
+        assertEquals(DocInsightEntity.RETRIEVAL_OK, c.getRetrievalStatus());
+        assertFalse(c.getRetrievalJson().contains("recognition"), c.getRetrievalJson());
+    }
+
+    @Test
+    @DisplayName("识别命中但全文检索没命中 → 仍记 OK（法院/标题/法宝链接已经是有用结果），note 写明只有这一半")
+    void 识别命中而全文失败仍算命中() throws Exception {
+        when(qichacha.queryEciInfoJson(anyString())).thenReturn(QCC_FULL);
+        stubPkulawUnavailable();
+        stubCaseChannel();
+        when(mcp.callTool(eq("pkulaw-case-number"), eq("anhao_recognition"), anyMap())).thenReturn(ANHAO_HIT);
+        when(mcp.callTool(eq("pkulaw-case-semantic"), eq("search_case"), anyMap()))
+                .thenReturn("Error: MCP call failed: 401 checking remaining points");
+
+        awaitStatus(newService().startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+
+        DocInsightEntity c = entityOf(DocInsightEntity.KIND_CASE);
+        assertEquals(DocInsightEntity.RETRIEVAL_OK, c.getRetrievalStatus());
+        assertEquals("pkulaw-case-number", c.getRetrievalSource());
+        assertTrue(c.getRetrievalNote().contains("仅返回案号识别结果"), c.getRetrievalNote());
+        assertTrue(c.getRetrievalJson().contains("https://www.pkulaw.com/pfnl/abc"), c.getRetrievalJson());
+    }
+
+    // ---------------------------------------------------------------- 法条引用校验
+
+    static final String CITATION_SERVER = "pkulaw-citation-validator";
+    static final String AUTHORITATIVE = """
+            {"title":"中华人民共和国公司法（2023 修订）","article_number":"20",
+             "original_text":"公司股东应当遵守法律、行政法规和公司章程，依法行使股东权利。",
+             "url":"https://www.pkulaw.com/chl/gsf20","implement_date":"2024-07-01"}
+            """;
+    static final String OLD_VERSION_CANDIDATE = """
+            {"title":"中华人民共和国公司法（2018 修正）","article_number":"16",
+             "original_text":"公司向其他企业投资或者为他人提供担保，依照公司章程的规定…",
+             "url":"https://www.pkulaw.com/chl/gsf2018"}
+            """;
+
+    @Test
+    @DisplayName("条号查得到 → 权威原文回填进 LAW 实体的 authoritative，不产生发现")
+    void 引用校验回填权威原文() throws Exception {
+        stubExternalsOk();
+        stubCitation("[" + AUTHORITATIVE + "]");
+
+        awaitStatus(newService().startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+
+        DocInsightEntity law = entityOf(DocInsightEntity.KIND_LAW);
+        assertTrue(law.getRetrievalJson() != null && law.getRetrievalJson().contains("authoritative"),
+                String.valueOf(law.getRetrievalJson()));
+        assertTrue(law.getRetrievalJson().contains("2024-07-01"), law.getRetrievalJson());
+        assertTrue(citationFindings().isEmpty(), "查得到就不是发现");
+    }
+
+    @Test
+    @DisplayName("条号在法宝检索不到（返回空数组）→ CITATION_NOT_FOUND，永不给一键修改")
+    void 引用条号查不到() throws Exception {
+        stubExternalsOk();
+        stubCitation("[]");
+
+        awaitStatus(newService().startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+
+        List<DocInsightFinding> found = citationFindings();
+        assertEquals(1, found.size());
+        DocInsightFinding f = found.get(0);
+        assertEquals(DocInsightFinding.KIND_CITATION_NOT_FOUND, f.getKind());
+        assertTrue(f.getTitle().contains("第二十条"), f.getTitle());
+        assertTrue(f.getDetailJson().contains("\"citedArabic\":\"20\""), f.getDetailJson());
+        assertTrue(f.getDetailJson().contains("\"fixable\":false"), f.getDetailJson());
+        assertFalse(f.getDetailJson().contains("numberText"), "引用类发现绝不下发可替换的数字原文");
+    }
+
+    @Test
+    @DisplayName("按内容定位到别的条号 → CITATION_MISMATCH，候选只提示人工核对（旧版重编号陷阱）")
+    void 引用内容与条文不符() throws Exception {
+        stubExternalsOk();
+        stubCitation("[" + AUTHORITATIVE + "," + OLD_VERSION_CANDIDATE + "]");
+
+        awaitStatus(newService().startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+
+        List<DocInsightFinding> found = citationFindings();
+        assertEquals(1, found.size());
+        DocInsightFinding f = found.get(0);
+        assertEquals(DocInsightFinding.KIND_CITATION_MISMATCH, f.getKind());
+        assertTrue(f.getDetailJson().contains("\"articleNumber\":\"16\""), f.getDetailJson());
+        assertTrue(f.getDetailJson().contains("2018 修正"), f.getDetailJson());
+        assertTrue(f.getDetailJson().contains("\"fixable\":false"), f.getDetailJson());
+        assertFalse(f.getDetailJson().contains("numberText"), "条文重编号决定了机械改写条号必然出错");
+        // 引用条目本身仍然回填成权威原文
+        assertTrue(entityOf(DocInsightEntity.KIND_LAW).getRetrievalJson().contains("authoritative"));
+    }
+
+    @Test
+    @DisplayName("校验通道未配置 → 整步跳过（校验不可用 ≠ 引用有错）")
+    void 引用校验未配置整步跳过() throws Exception {
+        stubExternalsOk();
+        awaitStatus(svc.startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+
+        verify(mcp, never()).callTool(eq(CITATION_SERVER), anyString(), anyMap());
+        assertTrue(citationFindings().isEmpty());
+    }
+
+    @Test
+    @DisplayName("校验通道自身报错 → 跳过该条，不产生发现")
+    void 引用校验不可用不报发现() throws Exception {
+        stubExternalsOk();
+        stubCitation("Error: MCP call failed: 401 checking remaining points");
+
+        awaitStatus(newService().startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+        assertTrue(citationFindings().isEmpty());
+    }
+
+    @Test
+    @DisplayName("引用再多也最多校验 30 条，一份怪文档打不爆上游")
+    void 引用校验上限() throws Exception {
+        StringBuilder sb = new StringBuilder("引用清单：");
+        for (int i = 1; i <= 35; i++) sb.append("《测试法》第").append(i).append("条；");
+        when(docText.extractText(any())).thenReturn(sb.toString());
+        when(model.generate(anyList())).thenReturn(modelReply("{}"));   // 只留正则那条腿
+        stubExternalsOk();
+        stubCitation("[" + AUTHORITATIVE + "]");
+
+        awaitStatus(newService().startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+
+        assertEquals(35, entityStore.size(), "35 条引用应当抽成 35 个 LAW 实体");
+        verify(mcp, org.mockito.Mockito.times(30))
+                .callTool(eq(CITATION_SERVER), eq("adjust_provisions"), anyMap());
+    }
+
     // ---------------------------------------------------------------- 缓存
 
     @Test
@@ -514,6 +686,25 @@ class DocInsightServiceTest {
     private void stubExternalsOk() {
         when(qichacha.queryEciInfoJson(anyString())).thenReturn(QCC_FULL);
         stubPkulawUnavailable();
+    }
+
+    /** 判决书通道 + 案号识别先导步都配上（yml 的默认形态）。 */
+    private void stubCaseChannel() {
+        props.setCaseServer("pkulaw-case-semantic");
+        props.setCaseTool("search_case");
+        props.setCaseArg("text");
+        props.setCaseNumberServer("pkulaw-case-number");
+        props.setCaseNumberTool("anhao_recognition");
+    }
+
+    private void stubCitation(String reply) {
+        props.setCitationServer(CITATION_SERVER);
+        props.setCitationTool("adjust_provisions");
+        when(mcp.callTool(eq(CITATION_SERVER), eq("adjust_provisions"), anyMap())).thenReturn(reply);
+    }
+
+    private List<DocInsightFinding> citationFindings() {
+        return findingStore.stream().filter(f -> f.getKind().startsWith("CITATION_")).toList();
     }
 
     /** 法宝当前点数耗尽，真调必失败——测试里把这条当常态，正好覆盖降级路径。 */

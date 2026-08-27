@@ -33,6 +33,10 @@ public class DocInsightFinding {
     public static final String KIND_COUNT_MISMATCH = "COUNT_MISMATCH";
     /** 统一社会信用代码校验位不符（陈述自身的硬错，与外部库无关）。 */
     public static final String KIND_USCC_INVALID = "USCC_INVALID";
+    /** 引用的法条条号在北大法宝检索不到（引用校验步，见 DocInsightChecks 的形状注释）。 */
+    public static final String KIND_CITATION_NOT_FOUND = "CITATION_NOT_FOUND";
+    /** 按引文内容定位到的条文与引用的条号对不上（同上；条文可能被重编号，永不给一键修改）。 */
+    public static final String KIND_CITATION_MISMATCH = "CITATION_MISMATCH";
 
     public static final String SEVERITY_WARN = "warn";
     public static final String SEVERITY_ERROR = "error";
