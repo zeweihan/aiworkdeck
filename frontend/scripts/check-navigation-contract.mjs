@@ -290,13 +290,18 @@ const PERSONAL_PANELS = [
   'src/components/userprofile/PersonalSettingsPanel.vue',
 ]
 
-check('统一设置页有完整的「个人」组，且没把搬走的 projects 带回来', () => {
+check('统一设置页保留四栏「非管理员也看得见」的内容，且没把搬走的 projects 带回来', () => {
+  // 2026-08-27（dev-board#229）：分组由「个人/系统」改成按任务分（我的/账户/工作台/系统），
+  // 可见性也从「组名推导」改成每项自己的 adminOnly。这条断言因此不再看组名，改看真正的
+  // 不变式——这四栏必须存在，且都不能被标成 adminOnly（否则非管理员进来就是空白页）。
   const src = readVue('src/components/admin/AdminPane.vue')
-  const missing = ['work_log', 'favorites', 'todos', 'personal_settings']
-    .filter((k) => !new RegExp("key: '" + k + "'[^\\n]*group: 'personal'").test(src))
-  if (missing.length) return '个人组缺: ' + missing.join(', ')
+  for (const k of ['work_log', 'favorites', 'todos', 'personal_settings']) {
+    const line = src.split('\n').find((l) => l.includes("key: '" + k + "'"))
+    if (!line) return '少了这一栏: ' + k
+    if (line.includes('adminOnly')) return k + ' 被标成了 adminOnly，非管理员会看不到它'
+  }
   if (/key:\s*'projects'/.test(src)) return "navItems 里冒出了 projects——那一栏 2026-08 搬去项目列表页了"
-  if (!src.includes("group: 'system'")) return '系统组的 group 标记没了，两组会挤成一堆'
+  if (!src.includes('group:')) return '分组标记没了，导航会挤成一堆'
   return null
 })
 
@@ -306,8 +311,8 @@ check('统一设置页的默认落点是可见的面板', () => {
   if (!src.includes("activeNav: cachedIsAdmin() ? 'ai' : 'work_log'")) {
     return "activeNav 默认值要按 cachedIsAdmin() 分流（管理员 'ai'，其余 'work_log'）"
   }
-  if (!src.includes("if (n.group === 'system' && !this.isAdminUser) return false")) {
-    return 'visibleNavItems 没有把系统组按 isAdmin 收起（原个人中心 checkAdminTab 那条规则）'
+  if (!src.includes('if (n.adminOnly && !this.isAdminUser) return false')) {
+    return 'visibleNavItems 没有按 adminOnly 收起管理员专属项（原个人中心 checkAdminTab 那条规则）'
   }
   return null
 })

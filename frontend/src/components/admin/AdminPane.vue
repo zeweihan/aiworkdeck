@@ -568,12 +568,75 @@
           </view>
         </scroll-view>
 
-        <!-- 组件管理（仅桌面端：本地模型下载与服务启用） -->
+        <!-- 软件与组件（仅桌面端，dev-board#229）：应用自身版本 + 本地模型组件。
+             两者后端完全独立（update-service / model-manager），并成一页只是因为
+             用户心里它们是同一件事——「这台机器上装了什么」。 -->
         <scroll-view
-          v-else-if="activeNav === 'components'"
+          v-else-if="activeNav === 'software'"
           scroll-y
           class="config-scroll"
         >
+          <!-- 应用版本：更新本来就是后台自动下载、重启生效（维护者原话「不是自动的吗」），
+               不值得单占一个设置项，这里只留版本与一个手动检查入口。 -->
+          <view class="section-card">
+            <view class="section-header">
+              <text class="section-title">{{ $t('admin.softwareVersionTitle') }}</text>
+              <text class="section-subtitle">{{ $t('admin.updatesSubtitle') }}</text>
+            </view>
+            <view class="section-body">
+              <view class="comp-row">
+                <view class="comp-main">
+                  <text class="comp-name">{{ $t('admin.currentVersion', { version: update.effectiveVersion || '-' }) }}</text>
+                  <text class="comp-sub">
+                    <text v-if="update.effectiveVersion !== update.appVersion">{{ $t('admin.updateBaseAndPatch', { app: update.appVersion, effective: update.effectiveVersion }) }}</text>
+                    <text v-else>{{ $t('admin.fullInstallerVersion') }}</text>
+                    <text v-if="update.checkedAt"> · {{ $t('admin.lastChecked', { time: formatUpdateTime(update.checkedAt) }) }}</text>
+                  </text>
+                  <text v-if="update.phase === 'checking'" class="comp-sub">{{ $t('admin.checkingUpdate') }}</text>
+                  <text v-else-if="update.phase === 'downloading'" class="comp-sub">
+                    {{ update.progress && update.progress.component ? $t('admin.downloadingPatchComp', { name: update.progress.component }) : $t('admin.downloadingPatch') }}
+                  </text>
+                  <text v-else-if="update.phase === 'ready'" class="comp-sub">
+                    {{ $t('admin.updateReady', { version: update.available && update.available.version }) }}
+                  </text>
+                  <text v-else-if="update.phase === 'error'" class="comp-error">{{ $t('admin.updateCheckFailedMsg', { error: update.error }) }}</text>
+                  <text v-else-if="update.checkedAt && !update.majorAvailable" class="comp-sub">{{ $t('admin.upToDate') }}</text>
+                  <view v-if="update.phase === 'downloading' && update.progress && update.progress.total" class="comp-progress">
+                    <view
+                      class="comp-progress-fill"
+                      :style="{ width: Math.min(100, Math.round(update.progress.received / update.progress.total * 100)) + '%' }"
+                    />
+                  </view>
+                </view>
+                <view class="comp-actions">
+                  <button
+                    v-if="update.phase === 'ready'"
+                    class="comp-btn primary"
+                    @tap="handleUpdateRestart"
+                  >
+                    {{ $t('admin.restartNowButton') }}
+                  </button>
+                  <button
+                    v-else
+                    class="comp-btn"
+                    :disabled="update.phase === 'checking' || update.phase === 'downloading'"
+                    @tap="handleUpdateCheck"
+                  >
+                    {{ $t('admin.checkUpdateButton') }}
+                  </button>
+                </view>
+              </view>
+              <view v-if="update.majorAvailable" class="comp-row">
+                <view class="comp-main">
+                  <text class="comp-name">{{ $t('admin.majorReleased', { version: update.majorAvailable.major }) }}</text>
+                  <text class="comp-sub">{{ $t('admin.majorNote') }}</text>
+                </view>
+                <view class="comp-actions">
+                  <button class="comp-btn primary" @tap="handleUpdateOpenDownload">{{ $t('admin.goDownloadButton') }}</button>
+                </view>
+              </view>
+            </view>
+          </view>
           <view class="section-card">
             <view class="section-header">
               <text class="section-title">{{ $t('admin.navComponents') }}</text>
@@ -642,80 +705,11 @@
           </view>
         </scroll-view>
 
-        <!-- 软件更新（仅桌面端）：小版本补丁应用内更新，大版本引导官网下载全量包
-             （docs/INCREMENTAL_UPDATE_DESIGN.md §6/§7） -->
-        <scroll-view
-          v-else-if="activeNav === 'updates'"
-          scroll-y
-          class="config-scroll"
-        >
-          <view class="section-card">
-            <view class="section-header">
-              <text class="section-title">{{ $t('admin.navUpdates') }}</text>
-              <text class="section-subtitle">
-                {{ $t('admin.updatesSubtitle') }}
-              </text>
-            </view>
-            <view class="section-body">
-              <view class="comp-row">
-                <view class="comp-main">
-                  <text class="comp-name">{{ $t('admin.currentVersion', { version: update.effectiveVersion || '-' }) }}</text>
-                  <text class="comp-sub">
-                    <text v-if="update.effectiveVersion !== update.appVersion">{{ $t('admin.updateBaseAndPatch', { app: update.appVersion, effective: update.effectiveVersion }) }}</text>
-                    <text v-else>{{ $t('admin.fullInstallerVersion') }}</text>
-                    <text v-if="update.checkedAt"> · {{ $t('admin.lastChecked', { time: formatUpdateTime(update.checkedAt) }) }}</text>
-                  </text>
-                  <text v-if="update.phase === 'checking'" class="comp-sub">{{ $t('admin.checkingUpdate') }}</text>
-                  <text v-else-if="update.phase === 'downloading'" class="comp-sub">
-                    {{ update.progress && update.progress.component ? $t('admin.downloadingPatchComp', { name: update.progress.component }) : $t('admin.downloadingPatch') }}
-                  </text>
-                  <text v-else-if="update.phase === 'ready'" class="comp-sub">
-                    {{ $t('admin.updateReady', { version: update.available && update.available.version }) }}
-                  </text>
-                  <text v-else-if="update.phase === 'error'" class="comp-error">{{ $t('admin.updateCheckFailedMsg', { error: update.error }) }}</text>
-                  <text v-else-if="update.checkedAt && !update.majorAvailable" class="comp-sub">{{ $t('admin.upToDate') }}</text>
-                  <view v-if="update.phase === 'downloading' && update.progress && update.progress.total" class="comp-progress">
-                    <view
-                      class="comp-progress-fill"
-                      :style="{ width: Math.min(100, Math.round(update.progress.received / update.progress.total * 100)) + '%' }"
-                    />
-                  </view>
-                </view>
-                <view class="comp-actions">
-                  <button
-                    v-if="update.phase === 'ready'"
-                    class="comp-btn primary"
-                    @tap="handleUpdateRestart"
-                  >
-                    {{ $t('admin.restartNowButton') }}
-                  </button>
-                  <button
-                    v-else
-                    class="comp-btn"
-                    :disabled="update.phase === 'checking' || update.phase === 'downloading'"
-                    @tap="handleUpdateCheck"
-                  >
-                    {{ $t('admin.checkUpdateButton') }}
-                  </button>
-                </view>
-              </view>
-              <view v-if="update.majorAvailable" class="comp-row">
-                <view class="comp-main">
-                  <text class="comp-name">{{ $t('admin.majorReleased', { version: update.majorAvailable.major }) }}</text>
-                  <text class="comp-sub">{{ $t('admin.majorNote') }}</text>
-                </view>
-                <view class="comp-actions">
-                  <button class="comp-btn primary" @tap="handleUpdateOpenDownload">{{ $t('admin.goDownloadButton') }}</button>
-                </view>
-              </view>
-            </view>
-          </view>
-        </scroll-view>
 
         <!-- 团队案件库（仅桌面端：连接案件库、管理已连的库）。项目里的协作抽屉是同一批动作的
              主入口，这里保留给「一台机器连多个库」与浏览器端的管理场景。 -->
         <scroll-view
-          v-else-if="activeNav === 'cloud'"
+          v-else-if="activeNav === 'sync'"
           scroll-y
           class="config-scroll"
         >
@@ -796,15 +790,21 @@
               </view>
             </view>
           </view>
-        </scroll-view>
 
-        <!-- 记忆同步（仅桌面端）：AI 记忆经独立 Git 仓库跨机器同步。
-             与案卷的版本记录互不相干——记忆仓库绝不进项目文档仓库主线（领域红线）。 -->
-        <scroll-view
-          v-else-if="activeNav === 'memory'"
-          scroll-y
-          class="config-scroll"
-        >
+          <!-- 记忆同步的说明卡（dev-board#229）：团队案件库有整套空态教程，记忆同步
+               此前只有一句 subtitle，进来就是两张各带三个空输入框的卡片，没有一个字
+               说该填谁给的地址——维护者原话「现在我都不会用」。补齐同规格的说明。 -->
+          <view class="section-card">
+            <view class="section-header">
+              <text class="section-title">{{ $t('admin.memoryGuideTitle') }}</text>
+            </view>
+            <view class="section-body">
+              <text class="hint-line">{{ $t('admin.memoryGuideWhat') }}</text>
+              <text class="hint-line">{{ $t('admin.memoryGuideAddress') }}</text>
+              <text class="hint-line">{{ $t('admin.memoryGuideToken') }}</text>
+              <text class="hint-line">{{ $t('admin.memoryGuideSkip') }}</text>
+            </view>
+          </view>
           <view class="section-card">
             <view class="section-header">
               <text class="section-title">{{ $t('admin.navMemory') }}</text>
@@ -888,6 +888,7 @@
             </view>
           </view>
         </scroll-view>
+
 
         <!-- 数据统计（匿名使用统计开关 + 本地使用统计） -->
         <scroll-view
@@ -1218,27 +1219,27 @@ export default {
       activeNav: cachedIsAdmin() ? 'ai' : 'work_log',
       /** 服务端记录的同意时间戳；空 = 未同意或告知文本已改版需重新征求 */
       crossBorderConsentAt: '',
-      // 两组导航。group 只决定排版分组，可见性一律在 visibleNavItems 里判。
+      // 导航分组（dev-board#229 重排）。group 只管排版；可见性一律看每项自己的
+      // adminOnly/desktopOnly，不再从组名推导——旧写法是「system 组 = 管理员可见」，
+      // 于是"给所有人看的项"被迫都叫「个人」，账户与安全、账户与用量这本属一件事的
+      // 两栏才会被拆到两个组里。
       navItems: [
-        // 「个人」组：2026-08-20 从个人中心搬来的四栏。key 刻意避开 'account'
-        //（系统组的「账户与用量」已经占了这个 key）。
-        { key: 'work_log', label: this.$t('account.tabWorkLog'), group: 'personal' },
-        { key: 'favorites', label: this.$t('account.tabFavorites'), group: 'personal' },
-        { key: 'todos', label: this.$t('account.tabTodos'), group: 'personal' },
-        { key: 'personal_settings', label: this.$t('admin.navPersonalSettings'), group: 'personal' },
-        // 「系统」组：'config'（系统配置）已撤，内容分别并入 'ai' 与「账户与安全」；
-        // 'platform'（平台服务）2026-08-27 已撤——官方版外部服务统一平台代采，档位
-        // 下拉全是单选项，分区已无实际作用（花费闸门/预扣提醒搬进了 'account' 末尾）。
-        { key: 'account', label: this.$t('admin.navAccount'), group: 'system', desktopOnly: true },
-        { key: 'ai', label: this.$t('admin.navAi'), group: 'system' },
-        { key: 'updates', label: this.$t('admin.navUpdates'), group: 'system', desktopOnly: true },
-        { key: 'components', label: this.$t('admin.navComponents'), group: 'system', desktopOnly: true },
-        { key: 'cloud', label: this.$t('admin.navCloud'), group: 'system', desktopOnly: true },
-        { key: 'memory', label: this.$t('admin.navMemory'), group: 'system', desktopOnly: true },
-        { key: 'telemetry', label: this.$t('admin.navTelemetry'), group: 'system' },
-        { key: 'feedback', label: this.$t('admin.navFeedback'), group: 'system' },
-        // 'plugins'（插件广场）2026-08-27 已撤——入口统一收敛到左 rail 的插件中心，
-        // 独立页 /pages/plugin-market 仍保留给直链。
+        // 「我的」：这三项其实不是设置，是本人的数据，单独成组免得和设置混在一起。
+        { key: 'work_log', label: this.$t('account.tabWorkLog'), group: 'mine' },
+        { key: 'favorites', label: this.$t('account.tabFavorites'), group: 'mine' },
+        { key: 'todos', label: this.$t('account.tabTodos'), group: 'mine' },
+        // 「账户」：身份与钱是一件事，合成一组（用量仍只对管理员开）。
+        { key: 'personal_settings', label: this.$t('admin.navPersonalSettings'), group: 'account' },
+        { key: 'account', label: this.$t('admin.navAccount'), group: 'account', adminOnly: true, desktopOnly: true },
+        // 「工作台」：影响日常干活的能力。'sync' = 团队案件库 + 记忆同步（都要一个
+        // 可访问的服务器/Git 地址，用户心里是同一类事）。
+        { key: 'ai', label: this.$t('admin.navAi'), group: 'workspace', adminOnly: true },
+        { key: 'sync', label: this.$t('admin.navSync'), group: 'workspace', adminOnly: true, desktopOnly: true },
+        // 「系统」：这台机器与产品改进。'software' = 组件管理 + 应用版本（更新是自动的，
+        // 不单列）。'config'（系统配置）与 'platform'（平台服务）已于 2026-08 先后撤销。
+        { key: 'software', label: this.$t('admin.navSoftware'), group: 'system', adminOnly: true, desktopOnly: true },
+        { key: 'telemetry', label: this.$t('admin.navTelemetry'), group: 'system', adminOnly: true },
+        { key: 'feedback', label: this.$t('admin.navFeedback'), group: 'system', adminOnly: true },
       ],
       // 用户反馈与优化者（右下角浮窗提交 → 优化者分诊 → 开 PR / 发邮件）
       feedbackList: [],
@@ -1390,13 +1391,15 @@ export default {
     visibleNavItems() {
       return this.navItems.filter((n) => {
         if (n.desktopOnly && !this.isDesktop) return false
-        if (n.group === 'system' && !this.isAdminUser) return false
+        if (n.adminOnly && !this.isAdminUser) return false
         return true
       })
     },
     navGroups() {
       const groups = [
-        { key: 'personal', label: this.$t('admin.navGroupPersonal') },
+        { key: 'mine', label: this.$t('admin.navGroupMine') },
+        { key: 'account', label: this.$t('admin.navGroupAccount') },
+        { key: 'workspace', label: this.$t('admin.navGroupWorkspace') },
         { key: 'system', label: this.$t('admin.navGroupSystem') },
       ]
       return groups
