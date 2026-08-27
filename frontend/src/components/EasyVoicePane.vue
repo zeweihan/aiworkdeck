@@ -573,13 +573,13 @@ export default {
    一屏只装得下文本框和半个音色选择器。 */
 .easy-voice-pane {
   height: 100%;
-  background-color: #fff;
+  background-color: var(--awd-surface);
   box-sizing: border-box;
 }
 
 .section {
   padding: 0 var(--awd-panel-pad-x) var(--awd-panel-gap-lg);
-  background: #fff;
+  background: var(--awd-surface);
 }
 
 /* 分组头：与插件广场同形（26px / 11px-700） */
@@ -610,7 +610,7 @@ export default {
     justify-content: center;
     height: 18px;
     padding: 0 6px;
-    background: #fff;
+    background: var(--awd-surface);
     border: 1px solid var(--awd-panel-border);
     border-radius: 4px;
     font-size: 10px;
@@ -620,7 +620,7 @@ export default {
 .mini-btn.icon { width: 20px; padding: 0; }
 .mini-btn:hover {
     background: var(--awd-panel-hover);
-    border-color: #D1D5DB;
+    border-color: var(--awd-border-strong);
 }
 .btn-glyph { width: 11px; height: 11px; }
 
@@ -629,7 +629,7 @@ export default {
     margin-bottom: var(--awd-panel-gap);
     padding: 8px;
     border-radius: var(--awd-panel-radius);
-    background: #FFF7ED;
+    background: var(--awd-warning-soft);
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -637,13 +637,13 @@ export default {
 
 .ev-gate-msg {
     font-size: var(--awd-panel-fs-meta);
-    color: #9A3412;
+    color: var(--awd-danger-text);
     line-height: 1.55;
 }
 
 .ev-gate-hint {
     font-size: var(--awd-panel-fs-meta);
-    color: #8A6D1D;
+    color: var(--awd-warning-text);
     font-variant-numeric: tabular-nums;
 }
 
@@ -668,14 +668,14 @@ export default {
 
 .ev-gate-btn.primary {
     background: var(--awd-panel-accent);
-    color: #fff;
+    color: var(--awd-text-on-accent);
     font-weight: 500;
 }
-.ev-gate-btn.primary:hover { background: #16482E; }
+.ev-gate-btn.primary:hover { background: var(--awd-accent-hover); }
 
 .ev-gate-btn.secondary {
-    background: #fff;
-    border: 1px solid #D1D5DB;
+    background: var(--awd-surface);
+    border: 1px solid var(--awd-border-strong);
     color: var(--awd-panel-text-2);
 }
 .ev-gate-btn.secondary:hover { background: var(--awd-panel-hover); }
@@ -691,7 +691,7 @@ export default {
   font-size: var(--awd-panel-fs);
   line-height: 1.6;
   box-sizing: border-box;
-  background: #ffffff;
+  background: var(--awd-surface);
   resize: none;
   transition: border-color 0.2s;
 }
@@ -721,7 +721,7 @@ export default {
     height: var(--awd-panel-row-h);
     border: 1px solid var(--awd-panel-border);
     border-radius: var(--awd-panel-radius);
-    background: #fff;
+    background: var(--awd-surface);
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -731,7 +731,7 @@ export default {
     transition: all 0.2s;
 }
 .voice-select-trigger:active {
-    border-color: #1A5336;
+    border-color: var(--awd-accent);
 }
 .selected-text {
     font-size: var(--awd-panel-fs);
@@ -741,11 +741,11 @@ export default {
     white-space: nowrap;
 }
 .selected-text .placeholder {
-    color: #9ca3af;
+    color: var(--awd-text-3);
 }
 .select-arrow {
     font-size: 10px;
-    color: #6b7280;
+    color: var(--awd-text-2);
 }
 
 /* Dropdown Drawer */
@@ -754,8 +754,8 @@ export default {
     top: 100%;
     left: 0;
     width: 100%;
-    background: #fff;
-    border: 1px solid #e5e7eb;
+    background: var(--awd-surface);
+    border: 1px solid var(--awd-border);
     border-radius: 8px;
     box-shadow: 0 4px 20px rgba(0,0,0,0.1);
     z-index: 100;
@@ -776,13 +776,13 @@ export default {
 
 .voice-search-box {
     padding: 8px;
-    border-bottom: 1px solid #f3f4f6;
+    border-bottom: 1px solid var(--awd-border-subtle);
 }
 .voice-search-input {
     width: 100%;
     height: 32px;
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
+    background: var(--awd-bg);
+    border: 1px solid var(--awd-border);
     border-radius: 4px;
     padding: 0 8px;
     font-size: 13px;
@@ -795,7 +795,7 @@ export default {
 
 .voice-option {
     padding: 5px 8px;
-    border-bottom: 1px solid #f9fafb;
+    border-bottom: 1px solid var(--awd-border-subtle);
     cursor: pointer;
     transition: background 0.15s;
 }
@@ -803,13 +803,13 @@ export default {
     border-bottom: none;
 }
 .voice-option:hover {
-    background: #f3f4f6;
+    background: var(--awd-surface-2);
 }
 .voice-option.active {
-    background: #effdf6;
+    background: var(--awd-bg);
 }
 .voice-option.active .voice-name-text {
-    color: #1A5336;
+    color: var(--awd-accent-text);
     font-weight: 600;
 }
 
@@ -825,20 +825,20 @@ export default {
 }
 .voice-gender-tag {
     font-size: 10px;
-    background: #f3f4f6;
+    background: var(--awd-surface-2);
     padding: 1px 4px;
     border-radius: 4px;
-    color: #6b7280;
+    color: var(--awd-text-2);
 }
 .voice-locale-text {
     font-size: 11px;
-    color: #9ca3af;
+    color: var(--awd-text-3);
 }
 .empty-tip {
     padding: 16px;
     text-align: center;
     font-size: 12px;
-    color: #9ca3af;
+    color: var(--awd-text-3);
 }
 
 
@@ -877,11 +877,11 @@ export default {
 }
 
 .workdeck-btn-primary {
-  background-color: #1A5336;
-  color: #fff;
+  background-color: var(--awd-accent);
+  color: var(--awd-text-on-accent);
 }
 .workdeck-btn-primary:active {
-  background-color: #14402a;
+  background-color: var(--awd-accent-hover);
   transform: translateY(1px);
 }
 .workdeck-btn:disabled {
@@ -920,20 +920,20 @@ export default {
     display: flex;
     align-items: center;
     gap: 8px;
-    background: rgba(91, 209, 151, 0.08);
+    background: var(--awd-accent-wash);
     padding: 6px 8px;
     border-radius: var(--awd-panel-radius);
-    border: 1px solid rgba(91, 209, 151, 0.35);
+    border: 1px solid var(--awd-mint);
 }
 .play-btn {
     width: 26px;
     height: 26px;
     border-radius: 50%;
-    background: #1A5336;
+    background: var(--awd-accent);
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #fff;
+    color: var(--awd-text-on-accent);
     cursor: pointer;
     transition: transform 0.2s;
     font-size: 14px;
@@ -946,7 +946,7 @@ export default {
 }
 .player-status {
     font-size: 13px;
-    color: #374151;
+    color: var(--awd-text);
 }
 
 .btn-glyph {

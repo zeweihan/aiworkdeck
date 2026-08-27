@@ -121,40 +121,40 @@ export default {
   flex-wrap: wrap;
   gap: 6px;
   padding: 6px 10px;
-  background: #fdf7ec;
-  border: 1px solid #ecdfc3;
+  background: var(--awd-bg);
+  border: 1px solid var(--awd-warning);
   border-radius: 4px;
 }
 
 .unlock-hint-text {
   font-size: 12px;
   line-height: 18px;
-  color: #8a6d2f;
+  color: var(--awd-warning-text);
 }
 
 .unlock-hint-link {
   font-size: 12px;
   line-height: 18px;
   font-weight: 500;
-  color: #1a5336;
+  color: var(--awd-accent-text);
   cursor: pointer;
 }
 
 .unlock-hint-link:hover {
-  color: #2d7a52;
+  color: var(--awd-accent-text);
   text-decoration: underline;
 }
 
 /* 应用内一键解锁：品牌绿实心小按钮 */
 .unlock-hint-buy {
-  background: #1a5336;
+  background: var(--awd-accent);
   border-radius: 4px;
   padding: 2px 10px;
   cursor: pointer;
 }
 
 .unlock-hint-buy:hover {
-  background: #2d7a52;
+  background: var(--awd-accent-hover);
 }
 
 .unlock-hint-buy.is-busy {
@@ -166,6 +166,6 @@ export default {
   font-size: 12px;
   line-height: 18px;
   font-weight: 500;
-  color: #fff;
+  color: var(--awd-text-on-accent);
 }
 </style>

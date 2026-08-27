@@ -138,8 +138,8 @@ const toggle = () => {
 /* Standard Card Styles */
 .thinking-card {
   margin-bottom: 12px;
-  background: #fff;
-  border: 1px solid #E9ECEF;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 12px;
   overflow: hidden;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -161,9 +161,9 @@ const toggle = () => {
 }
 
 .thinking-card.is-done {
-  border-color: #f3f4f6;
+  border-color: var(--awd-border-subtle);
   box-shadow: none;
-  background: #f9fafb;
+  background: var(--awd-bg);
 }
 
 .thinking-card.ghost.is-done {
@@ -177,7 +177,7 @@ const toggle = () => {
   align-items: center;
   padding: 6px 10px;
   cursor: pointer;
-  background: #fff;
+  background: var(--awd-surface);
   transition: background 0.2s;
 }
 
@@ -214,7 +214,7 @@ const toggle = () => {
 }
 
 .header:hover {
-  background-color: #F8F9FA;
+  background-color: var(--awd-bg);
 }
 
 .thinking-card.ghost .header:hover {
@@ -242,7 +242,7 @@ const toggle = () => {
   width: 100%;
   height: 100%;
   border-radius: 50%;
-  border: 2px solid #5BD197; /* Mint Green */
+  border: 2px solid var(--awd-mint); /* Mint Green */
   opacity: 0;
   animation: pulse-ring 2s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
 }
@@ -260,20 +260,20 @@ const toggle = () => {
 .title {
   font-size: 11px; /* Slightly easier to read */
   font-weight: 500;
-  color: #6C757D; /* Gray-Medium */
+  color: var(--awd-text-2); /* Gray-Medium */
   font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
 }
 
 .thinking-card.is-done .title {
-  color: #ADB5BD; /* Lighter gray when done */
+  color: var(--awd-text-3); /* Lighter gray when done */
   font-weight: 500;
 }
 
 .chevron-icon {
   width: 6px;
   height: 6px;
-  border-right: 1.5px solid #ADB5BD;
-  border-bottom: 1.5px solid #ADB5BD;
+  border-right: 1.5px solid var(--awd-border-strong);
+  border-bottom: 1.5px solid var(--awd-border-strong);
   transform: rotate(45deg);
   transition: transform 0.3s;
   display: block;
@@ -285,20 +285,20 @@ const toggle = () => {
 }
 
 .body {
-  border-top: 1px solid #E9ECEF;
-  background: #fff;
+  border-top: 1px solid var(--awd-border);
+  background: var(--awd-surface);
 }
 
 .content {
   padding: 8px 12px;
   font-size: 12px;
   line-height: 1.5;
-  color: #495057; /* Gray-Dark */
+  color: var(--awd-text-2); /* Gray-Dark */
 }
 
 .thinking-card.ghost .content {
     padding: 0; /* 无边距 */
-    color: #6C757D; /* Lighter text for ghost */
+    color: var(--awd-text-2); /* Lighter text for ghost */
     margin: 0;
     background: transparent !important;
     text-align: left; /* 左对齐 */
@@ -327,7 +327,7 @@ const toggle = () => {
     padding: 0;
     font-size: 13px;
     line-height: 1.5;
-    color: #6C757D;
+    color: var(--awd-text-2);
 }
 
 .thinking-card.ghost :deep(.markdown-body p) {
@@ -348,8 +348,8 @@ const toggle = () => {
 .thinking-card.ghost :deep(.markdown-body blockquote) {
     margin: 2px 0 !important;
     padding-left: 8px !important;
-    color: #ADB5BD;
-    border-left: 2px solid #E9ECEF !important;
+    color: var(--awd-text-3);
+    border-left: 2px solid var(--awd-border) !important;
 }
 
 .thinking-card.ghost :deep(.markdown-body h1),
@@ -358,14 +358,14 @@ const toggle = () => {
     margin-top: 6px !important;
     margin-bottom: 2px !important;
     font-size: 13px !important;
-    color: #495057;
+    color: var(--awd-text-2);
 }
 
 .thinking-card.ghost :deep(.markdown-body pre) {
     margin: 4px 0 !important;
     padding: 8px !important;
-    background: #F8F9FA;
-    border: 1px solid #E9ECEF;
+    background: var(--awd-bg);
+    border: 1px solid var(--awd-border);
     border-radius: 4px;
 }
 
@@ -381,7 +381,7 @@ const toggle = () => {
 /* Inline Variant Styles */
 .thinking-inline {
     font-size: 12px;
-    color: #6C757D;
+    color: var(--awd-text-2);
     margin: 4px 0;
     background: transparent; /* Fix white background issue */
 }
@@ -393,7 +393,7 @@ const toggle = () => {
     user-select: none;
 }
 .h-wrap:hover {
-    color: #495057;
+    color: var(--awd-text-2);
 }
 .h-wrap .icon {
     font-size: 12px;
@@ -438,7 +438,7 @@ const toggle = () => {
 .thinking-inline :deep(.markdown-body) {
     font-size: 12px;
     line-height: 1.45;
-    color: #495057;
+    color: var(--awd-text-2);
     margin: 0;
     padding: 0;
 }
@@ -462,7 +462,7 @@ const toggle = () => {
     margin: 2px 0 !important;
     padding-left: 8px !important;
     border-left-width: 2px !important;
-    color: #ADB5BD;
+    color: var(--awd-text-3);
 }
 
 .thinking-inline :deep(.markdown-body h1),
@@ -478,8 +478,8 @@ const toggle = () => {
     margin: 2px 0 !important;
     padding: 6px !important;
     font-size: 11px;
-    background: #F8F9FA;
-    border: 1px solid #E9ECEF;
+    background: var(--awd-bg);
+    border: 1px solid var(--awd-border);
 }
 
 .thinking-inline :deep(.markdown-body table) {

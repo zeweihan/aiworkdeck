@@ -766,7 +766,7 @@ export default {
   width: 100%;
   height: 100%;
   min-height: 0;
-  background: #ffffff;
+  background: var(--awd-surface);
 }
 
 .browser-toolbar {
@@ -776,8 +776,8 @@ export default {
   align-items: center;
   gap: 8px;
   padding: 0 10px;
-  border-bottom: 1px solid #e5e7eb;
-  background: #ffffff;
+  border-bottom: 1px solid var(--awd-border);
+  background: var(--awd-surface);
 }
 
 .browser-btn {
@@ -788,14 +788,14 @@ export default {
   align-items: center;
   justify-content: center;
   border: 1px solid rgba(148, 163, 184, 0.35);
-  background: #fff;
-  color: #1a1a1a;
+  background: var(--awd-surface);
+  color: var(--awd-text);
   cursor: pointer;
 }
 
 .browser-btn.primary {
-  background: #12344D;
-  color: #fff;
+  background: var(--awd-info);
+  color: var(--awd-text-on-accent);
   border-color: transparent;
 }
 
@@ -806,9 +806,9 @@ export default {
 
 /* 星形已收藏 / 抽屉展开：森林绿点缀，保持克制 */
 .browser-btn.on {
-  color: #1A5336;
-  border-color: rgba(26, 83, 54, 0.45);
-  background: #f0f7f3;
+  color: var(--awd-accent-text);
+  border-color: var(--awd-accent);
+  background: var(--awd-accent-soft);
 }
 
 .btn-icon {
@@ -823,7 +823,7 @@ export default {
   border: 1px solid rgba(148, 163, 184, 0.35);
   padding: 0 10px;
   font-size: 13px;
-  background: #fff;
+  background: var(--awd-surface);
 }
 
 /* 收藏夹/快捷方式抽屉：普通文档流元素（flex 列的一段），展开即挤压下方
@@ -834,8 +834,8 @@ export default {
   min-height: 96px;
   overflow-y: auto;
   padding: 10px 12px 12px;
-  background: #fbfcfd;
-  border-bottom: 1px solid #e5e7eb;
+  background: var(--awd-bg);
+  border-bottom: 1px solid var(--awd-border);
 }
 
 .shelf-section + .shelf-section {
@@ -854,7 +854,7 @@ export default {
 .shelf-title {
   font-size: 12px;
   font-weight: 600;
-  color: #475569;
+  color: var(--awd-text-2);
   letter-spacing: 0.02em;
 }
 
@@ -863,17 +863,17 @@ export default {
   align-items: center;
   gap: 4px;
   padding: 3px 10px;
-  border: 1px solid rgba(26, 83, 54, 0.35);
+  border: 1px solid var(--awd-accent);
   border-radius: 999px;
-  color: #1A5336;
+  color: var(--awd-accent-text);
   font-size: 12px;
   cursor: pointer;
-  background: #ffffff;
+  background: var(--awd-surface);
 }
 
 .shelf-action:hover {
-  background: #f0f7f3;
-  border-color: #1A5336;
+  background: var(--awd-accent-soft);
+  border-color: var(--awd-accent);
 }
 
 .shelf-action.disabled {
@@ -889,7 +889,7 @@ export default {
 
 .shelf-empty {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--awd-text-3);
   padding: 6px 2px;
 }
 
@@ -907,13 +907,13 @@ export default {
   padding: 7px 9px;
   border: 1px solid rgba(148, 163, 184, 0.35);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--awd-surface);
   cursor: pointer;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
 }
 
 .shelf-card:hover {
-  border-color: rgba(26, 83, 54, 0.55);
+  border-color: var(--awd-accent);
   box-shadow: 0 1px 4px rgba(26, 83, 54, 0.12);
 }
 
@@ -927,7 +927,7 @@ export default {
 
 .shelf-card-title {
   font-size: 12px;
-  color: #1f2937;
+  color: var(--awd-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -935,7 +935,7 @@ export default {
 
 .shelf-card-host {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--awd-text-3);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -949,7 +949,7 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #94a3b8;
+  color: var(--awd-text-3);
   font-size: 11px;
   visibility: hidden;
 }
@@ -960,7 +960,7 @@ export default {
 
 .shelf-card-x:hover {
   background: rgba(148, 163, 184, 0.18);
-  color: #475569;
+  color: var(--awd-text-2);
 }
 
 .browser-body {
@@ -975,19 +975,19 @@ export default {
   width: 100%;
   height: 100%;
   border: none;
-  background: #fff;
+  background: var(--awd-surface);
 }
 
 .browser-desktop-mount {
   width: 100%;
   height: 100%;
   min-height: 0;
-  background: #fff;
+  background: var(--awd-surface);
 }
 
 .browser-fallback {
   padding: 16px;
-  color: #666666;
+  color: var(--awd-text-2);
 }
 
 .browser-create-error {
@@ -998,19 +998,19 @@ export default {
   align-items: center;
   justify-content: center;
   gap: 10px;
-  background: #f8fafc;
+  background: var(--awd-surface);
   padding: 24px;
   text-align: center;
 }
 
 .bce-text {
   font-size: 14px;
-  color: #475569;
+  color: var(--awd-text-2);
 }
 
 .bce-detail {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--awd-text-3);
   word-break: break-all;
   max-width: 420px;
 }
@@ -1018,17 +1018,17 @@ export default {
 .bce-retry {
   margin-top: 4px;
   padding: 7px 18px;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--awd-border-strong);
   border-radius: 8px;
-  background: #ffffff;
-  color: #1A5336;
+  background: var(--awd-surface);
+  color: var(--awd-accent-text);
   font-size: 13px;
   cursor: pointer;
 }
 
 .bce-retry:hover {
-  border-color: #1A5336;
-  background: #f0f7f3;
+  border-color: var(--awd-accent);
+  background: var(--awd-accent-soft);
 }
 
 .btn-icon-svg {

@@ -130,42 +130,42 @@ export default {
 
 <style lang="scss" scoped>
 .awd-mask {
-  position: fixed; inset: 0; background: rgba(0,0,0,.4);
+  position: fixed; inset: 0; background: var(--awd-overlay);
   display: flex; align-items: center; justify-content: center; z-index: 999;
 }
-.awd-dialog { width: 600rpx; max-height: 74vh; display: flex; flex-direction: column; background: #fff; border-radius: 12rpx; overflow: hidden; }
-.awd-header { padding: 24rpx; border-bottom: 1px solid #eee; }
+.awd-dialog { width: 600rpx; max-height: 74vh; display: flex; flex-direction: column; background: var(--awd-surface); border-radius: 12rpx; overflow: hidden; }
+.awd-header { padding: 24rpx; border-bottom: 1px solid var(--awd-border); }
 .awd-title { font-size: 30rpx; font-weight: 600; }
 .awd-body { padding: 24rpx; overflow-y: auto; flex: 1; }
 .awd-footer {
   display: flex; justify-content: flex-end; gap: 16rpx;
-  padding: 20rpx 24rpx; border-top: 1px solid #eee;
+  padding: 20rpx 24rpx; border-top: 1px solid var(--awd-border);
 }
 .awd-btn { padding: 12rpx 24rpx; border-radius: 6rpx; font-size: 25rpx; }
-.awd-btn-primary { background: #12344D; color: #fff; }
-.awd-btn-secondary { background: #f0f0f0; color: #333; }
+.awd-btn-primary { background: var(--awd-info); color: var(--awd-text-on-accent); }
+.awd-btn-secondary { background: var(--awd-bg); color: var(--awd-text); }
 .awd-btn-disabled { opacity: .4; pointer-events: none; }
 
-.cloud-accept-hint { font-size: 26rpx; color: #666; line-height: 1.6; }
+.cloud-accept-hint { font-size: 26rpx; color: var(--awd-text-2); line-height: 1.6; }
 .cloud-accept-empty { display: flex; flex-direction: column; gap: 12rpx; align-items: flex-start; }
-.cloud-accept-goto-settings { font-size: 25rpx; color: #12344D; text-decoration: underline; }
+.cloud-accept-goto-settings { font-size: 25rpx; color: var(--awd-text); text-decoration: underline; }
 .cloud-accept-picker { display: flex; flex-direction: column; gap: 8rpx; margin-bottom: 20rpx; }
-.cloud-accept-picker-label { font-size: 24rpx; color: #666; }
+.cloud-accept-picker-label { font-size: 24rpx; color: var(--awd-text-2); }
 .cloud-accept-picker-item {
   display: flex; align-items: center; gap: 10rpx;
-  padding: 10rpx 12rpx; border: 1px solid #eee; border-radius: 8rpx;
+  padding: 10rpx 12rpx; border: 1px solid var(--awd-border); border-radius: 8rpx;
 }
-.cloud-accept-picker-item.checked { border-color: #12344D; background: #F4F7F9; }
+.cloud-accept-picker-item.checked { border-color: var(--awd-info); background: var(--awd-info-soft); }
 .cloud-accept-radio {
-  width: 18rpx; height: 18rpx; border-radius: 50%; border: 1px solid #ccc;
+  width: 18rpx; height: 18rpx; border-radius: 50%; border: 1px solid var(--awd-border-strong);
   box-sizing: border-box; flex-shrink: 0;
 }
-.cloud-accept-picker-item.checked .cloud-accept-radio { border-color: #12344D; background: #12344D; }
-.cloud-accept-picker-text { font-size: 24rpx; color: #333; word-break: break-all; }
+.cloud-accept-picker-item.checked .cloud-accept-radio { border-color: var(--awd-info); background: var(--awd-info); }
+.cloud-accept-picker-text { font-size: 24rpx; color: var(--awd-text); word-break: break-all; }
 .cloud-project-list {}
 .cloud-project-row {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 16rpx 0; border-bottom: 1px solid #f0f0f0;
+  padding: 16rpx 0; border-bottom: 1px solid var(--awd-border-subtle);
 }
-.cloud-project-name { font-size: 26rpx; color: #222; word-break: break-all; }
+.cloud-project-name { font-size: 26rpx; color: var(--awd-text); word-break: break-all; }
 </style>

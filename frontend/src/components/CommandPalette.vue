@@ -136,7 +136,7 @@ export default {
 .cp-panel {
   width: 600px;
   max-width: calc(100vw - 48px);
-  background: #fff;
+  background: var(--awd-surface);
   border-radius: 10px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.22);
   overflow: hidden;
@@ -148,7 +148,7 @@ export default {
   height: 48px;
   padding: 0 16px;
   font-size: 15px;
-  border-bottom: 1px solid #e9ecef;
+  border-bottom: 1px solid var(--awd-border);
   box-sizing: border-box;
   width: 100%;
 }
@@ -165,20 +165,20 @@ export default {
   cursor: pointer;
 
   &.is-active {
-    background: rgba(91, 209, 151, 0.14);
+    background: var(--awd-accent-soft);
   }
 }
 
 .cp-item-menu {
   font-size: 12px;
-  color: #adb5bd;
+  color: var(--awd-text-3);
   flex-shrink: 0;
   min-width: 48px;
 }
 
 .cp-item-name {
   font-size: 14px;
-  color: #2c3338;
+  color: var(--awd-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -187,14 +187,14 @@ export default {
 
 .cp-item-accel {
   font-size: 12px;
-  color: #6c757d;
+  color: var(--awd-text-2);
   flex-shrink: 0;
 }
 
 .cp-empty {
   padding: 20px 16px;
   font-size: 13px;
-  color: #6c757d;
+  color: var(--awd-text-2);
   text-align: center;
 }
 </style>

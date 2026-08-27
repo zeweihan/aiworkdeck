@@ -922,10 +922,6 @@ export default {
 </script>
 
 <style scoped lang="scss">
-$mr-primary: #1A5336;
-$mr-danger: #E5484D;
-$mr-border: #E5E7EB;
-$mr-muted: #6B7280;
 
 /* 密度令牌见 App.vue 的 --awd-panel-*（基准 = 插件广场）。此前这个面板在 260px
    宽的左栏里堆了三张 12px 外边距的卡片，一屏只装得下「提示 + 一个按钮」。 */
@@ -966,11 +962,11 @@ $mr-muted: #6B7280;
 .mr-config-hint {
   margin: var(--awd-panel-gap) var(--awd-panel-pad-x);
   padding: 6px 8px;
-  background: #FFF8E6;
-  border: 1px solid #F2E3B3;
+  background: var(--awd-bg);
+  border: 1px solid var(--awd-warning);
   border-radius: var(--awd-panel-radius);
   font-size: var(--awd-panel-fs-meta);
-  color: #8A6D1D;
+  color: var(--awd-warning-text);
   line-height: 1.55;
 }
 
@@ -978,9 +974,9 @@ $mr-muted: #6B7280;
 .mr-tier {
   margin: var(--awd-panel-gap) var(--awd-panel-pad-x) 0;
   padding: 8px;
-  border: 1px solid $mr-border;
+  border: 1px solid var(--awd-border);
   border-radius: var(--awd-panel-radius);
-  background: #FAFBFC;
+  background: var(--awd-bg);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -997,7 +993,7 @@ $mr-muted: #6B7280;
   align-items: flex-start;
   margin-top: 4px;
   padding-top: 8px;
-  border-top: 1px solid $mr-border;
+  border-top: 1px solid var(--awd-border);
 }
 
 .mr-tier-switch-info {
@@ -1011,7 +1007,7 @@ $mr-muted: #6B7280;
 .mr-tier-label {
   font-size: 12px;
   font-weight: 600;
-  color: #1F2328;
+  color: var(--awd-text);
 }
 
 .mr-tier-value {
@@ -1019,23 +1015,23 @@ $mr-muted: #6B7280;
   font-size: 11px;
   padding: 2px 9px;
   border-radius: 999px;
-  color: #4B5563;
-  background: #EEF1F0;
+  color: var(--awd-text-2);
+  background: var(--awd-bg);
 }
 
 .mr-tier-value.tier-platform {
-  color: #1A5336;
-  background: #DEF3E7;
+  color: var(--awd-accent-text);
+  background: var(--awd-surface-2);
 }
 
 .mr-tier-value.tier-local {
-  color: #1D4ED8;
-  background: #DBEAFE;
+  color: var(--awd-info-text);
+  background: var(--awd-surface);
 }
 
 .mr-tier-desc {
   font-size: 11px;
-  color: #6B7280;
+  color: var(--awd-text-2);
   line-height: 1.5;
 }
 
@@ -1044,7 +1040,7 @@ $mr-muted: #6B7280;
   margin-top: 4px;
   padding: 8px;
   border-radius: var(--awd-panel-radius);
-  background: #FFF7ED;
+  background: var(--awd-warning-soft);
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -1052,7 +1048,7 @@ $mr-muted: #6B7280;
 
 .mr-tier-gate-msg {
   font-size: var(--awd-panel-fs-meta);
-  color: #9A3412;
+  color: var(--awd-danger-text);
   line-height: 1.5;
 }
 
@@ -1070,9 +1066,9 @@ $mr-muted: #6B7280;
 .mr-notice {
   margin: var(--awd-panel-gap) var(--awd-panel-pad-x) 0;
   padding: 10px;
-  border: 1px solid #E2E8F0;
+  border: 1px solid var(--awd-border);
   border-radius: 12px;
-  background: #F8F9FA;
+  background: var(--awd-bg);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1081,12 +1077,12 @@ $mr-muted: #6B7280;
 .mr-notice-title {
   font-size: 12px;
   font-weight: 600;
-  color: #0F172A;
+  color: var(--awd-text);
 }
 
 .mr-notice-body {
   font-size: var(--awd-panel-fs-meta);
-  color: #475569;
+  color: var(--awd-text-2);
   line-height: 1.7;
 }
 
@@ -1102,19 +1098,19 @@ $mr-muted: #6B7280;
   width: 13px;
   height: 13px;
   flex: none;
-  border: 1px solid #CBD5E1;
+  border: 1px solid var(--awd-border-strong);
   border-radius: 3px;
-  background: #FFFFFF;
+  background: var(--awd-surface);
 
   &.checked {
-    border-color: $mr-primary;
-    background: $mr-primary;
+    border-color: var(--awd-accent);
+    background: var(--awd-accent);
   }
 }
 
 .mr-notice-check-label {
   font-size: var(--awd-panel-fs-meta);
-  color: #334155;
+  color: var(--awd-text);
 }
 
 .mr-notice-actions {
@@ -1129,9 +1125,9 @@ $mr-muted: #6B7280;
 .mr-record-zone {
   margin: var(--awd-panel-gap) var(--awd-panel-pad-x);
   padding: 10px;
-  border: 1px solid $mr-border;
+  border: 1px solid var(--awd-border);
   border-radius: var(--awd-panel-radius);
-  background: #FAFBFC;
+  background: var(--awd-bg);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1147,7 +1143,7 @@ $mr-muted: #6B7280;
 
 .mr-device-picker-label {
   font-size: 11px;
-  color: $mr-muted;
+  color: var(--awd-text-2);
 }
 
 .mr-record-btn {
@@ -1158,37 +1154,37 @@ $mr-muted: #6B7280;
   width: 100%;
   height: 34px;
   border-radius: var(--awd-panel-radius);
-  background: $mr-primary;
+  background: var(--awd-accent);
   cursor: pointer;
 
-  &:hover { background: #17452E; }
+  &:hover { background: var(--awd-accent-hover); }
 }
 
 .mr-record-dot {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: #FFFFFF;
+  background: var(--awd-surface);
   border: 2px solid rgba(255, 255, 255, 0.45);
   box-sizing: content-box;
 }
 
 .mr-record-text {
-  color: #FFFFFF;
+  color: var(--awd-text-on-accent);
   font-size: 13px;
   font-weight: 600;
 }
 
 .mr-record-hint {
   font-size: 10px;
-  color: $mr-muted;
+  color: var(--awd-text-2);
   text-align: center;
   line-height: 1.5;
 }
 
 .mr-record-error {
   font-size: 11px;
-  color: $mr-danger;
+  color: var(--awd-danger-text);
 }
 
 .mr-recording-live {
@@ -1209,7 +1205,7 @@ $mr-muted: #6B7280;
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: $mr-danger;
+  background: var(--awd-danger);
   animation: mr-pulse 1.2s ease-in-out infinite;
 
   &.paused {
@@ -1227,26 +1223,26 @@ $mr-muted: #6B7280;
   font-size: 20px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-  color: #1F2328;
+  color: var(--awd-text);
 }
 
 .mr-live-label {
   font-size: 12px;
-  color: $mr-muted;
+  color: var(--awd-text-2);
 }
 
 .mr-level-track {
   width: 80%;
   height: 4px;
   border-radius: 2px;
-  background: #E9ECEF;
+  background: var(--awd-surface-3);
   overflow: hidden;
 }
 
 .mr-level-bar {
   height: 100%;
   border-radius: 2px;
-  background: #5BD197;
+  background: var(--awd-mint);
   transition: width 0.15s linear;
 }
 
@@ -1267,23 +1263,23 @@ $mr-muted: #6B7280;
   user-select: none;
 
   &.primary {
-    background: $mr-primary;
-    color: #FFFFFF;
-    &:hover { background: #17452E; }
+    background: var(--awd-accent);
+    color: var(--awd-text-on-accent);
+    &:hover { background: var(--awd-accent-hover); }
   }
 
   &.secondary {
-    background: #FFFFFF;
-    border: 1px solid #D1D5DB;
-    color: #374151;
-    &:hover { background: #F3F4F6; }
+    background: var(--awd-surface);
+    border: 1px solid var(--awd-border-strong);
+    color: var(--awd-text);
+    &:hover { background: var(--awd-surface-2); }
   }
 
   &.danger {
-    background: #FFFFFF;
-    border: 1px solid $mr-danger;
-    color: $mr-danger;
-    &:hover { background: #FDF2F2; }
+    background: var(--awd-surface);
+    border: 1px solid var(--awd-danger);
+    color: var(--awd-danger-text);
+    &:hover { background: var(--awd-danger-soft); }
   }
 
   &.small {
@@ -1305,8 +1301,8 @@ $mr-muted: #6B7280;
 /* 一条录音一行，不再一条一张带描边的卡片：卡片在 260px 宽里只会制造
    「边框套边框」，展开的详情才是需要视觉分区的那一层。 */
 .mr-item {
-  border-bottom: 1px solid #F0F1F3;
-  background: #FFFFFF;
+  border-bottom: 1px solid var(--awd-border-subtle);
+  background: var(--awd-surface);
 }
 
 .mr-item-head {
@@ -1330,7 +1326,7 @@ $mr-muted: #6B7280;
 .mr-item-title {
   font-size: 12px;
   font-weight: 600;
-  color: #1F2328;
+  color: var(--awd-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1338,7 +1334,7 @@ $mr-muted: #6B7280;
 
 .mr-item-meta {
   font-size: 10px;
-  color: $mr-muted;
+  color: var(--awd-text-2);
 }
 
 .mr-status {
@@ -1347,13 +1343,13 @@ $mr-muted: #6B7280;
   padding: 0 6px;
   line-height: 15px;
   border-radius: 999px;
-  background: #F3F4F6;
-  color: $mr-muted;
+  background: var(--awd-surface-2);
+  color: var(--awd-text-2);
 
-  &.recording { background: #FDF2F2; color: $mr-danger; }
-  &.transcribing { background: #EBF5FF; color: #1D6FC2; }
-  &.transcribed { background: #EAF7F0; color: $mr-primary; }
-  &.failed { background: #FDF2F2; color: $mr-danger; }
+  &.recording { background: var(--awd-danger-soft); color: var(--awd-danger-text); }
+  &.transcribing { background: var(--awd-info-soft); color: var(--awd-info-text); }
+  &.transcribed { background: var(--awd-accent-soft); color: var(--awd-accent-text); }
+  &.failed { background: var(--awd-danger-soft); color: var(--awd-danger-text); }
 }
 
 /* 收起行的删除入口（反馈10）：常驻显示会跟状态徽标抢视线，收起时只在 hover 时露出，
@@ -1366,7 +1362,7 @@ $mr-muted: #6B7280;
   width: 20px;
   height: 20px;
   border-radius: 4px;
-  color: $mr-muted;
+  color: var(--awd-text-2);
   opacity: 0;
   /* 不显示时不能吃点击：opacity 不影响命中测试，漏了这行的话，行右侧那块看不见的
      区域仍会响应点击，弹出删除确认框却查不出缘由 */
@@ -1374,8 +1370,8 @@ $mr-muted: #6B7280;
   transition: opacity 0.15s;
 
   &:hover {
-    background: #FDF2F2;
-    color: $mr-danger;
+    background: var(--awd-surface);
+    color: var(--awd-danger-text);
   }
 }
 
@@ -1386,9 +1382,9 @@ $mr-muted: #6B7280;
 
 /* ---- 详情 ---- */
 .mr-detail {
-  border-top: 1px solid #F0F1F3;
+  border-top: 1px solid var(--awd-border-subtle);
   padding: var(--awd-panel-gap) var(--awd-panel-pad-x);
-  background: #FCFCFD;
+  background: var(--awd-info-soft);
   display: flex;
   flex-direction: column;
   gap: var(--awd-panel-gap);
@@ -1401,10 +1397,10 @@ $mr-muted: #6B7280;
 
 .mr-link {
   font-size: 11px;
-  color: #1D6FC2;
+  color: var(--awd-info-text);
   cursor: pointer;
 
-  &.danger { color: $mr-danger; }
+  &.danger { color: var(--awd-danger-text); }
   &:hover { text-decoration: underline; }
 }
 
@@ -1417,11 +1413,11 @@ $mr-muted: #6B7280;
 .mr-input {
   flex: 1;
   min-width: 0;
-  border: 1px solid #D1D5DB;
+  border: 1px solid var(--awd-border-strong);
   border-radius: 6px;
   padding: 4px 8px;
   font-size: 12px;
-  background: #FFFFFF;
+  background: var(--awd-surface);
 }
 
 .mr-section {
@@ -1433,18 +1429,18 @@ $mr-muted: #6B7280;
 .mr-section-title {
   font-size: 11px;
   font-weight: 600;
-  color: #374151;
+  color: var(--awd-text);
 }
 
 .mr-hint {
   font-size: 11px;
-  color: $mr-muted;
+  color: var(--awd-text-2);
   line-height: 1.5;
 }
 
 .mr-error {
   font-size: 11px;
-  color: $mr-danger;
+  color: var(--awd-danger-text);
   line-height: 1.5;
 }
 
@@ -1458,8 +1454,8 @@ $mr-muted: #6B7280;
   width: 12px;
   height: 12px;
   flex-shrink: 0;
-  border: 2px solid #D1D5DB;
-  border-top-color: $mr-primary;
+  border: 2px solid var(--awd-border-strong);
+  border-top-color: var(--awd-accent);
   border-radius: 50%;
   animation: mr-spin 0.9s linear infinite;
 }
@@ -1488,16 +1484,16 @@ $mr-muted: #6B7280;
   cursor: pointer;
   border: 1px solid transparent;
 
-  &:hover { border-color: #B7BCC3; }
+  &:hover { border-color: var(--awd-border-strong); }
 }
 
 /* 六色循环：同一说话人在图例与转写稿里颜色一致 */
-.sp-0 { background: #EAF7F0; color: #1A5336; }
-.sp-1 { background: #EBF5FF; color: #1D6FC2; }
-.sp-2 { background: #FFF4E6; color: #B25E09; }
+.sp-0 { background: var(--awd-accent-soft); color: var(--awd-accent-text); }
+.sp-1 { background: var(--awd-info-soft); color: var(--awd-info-text); }
+.sp-2 { background: var(--awd-warning-soft); color: var(--awd-warning-text); }
 .sp-3 { background: #F5EBFF; color: #7A3FBF; }
-.sp-4 { background: #FDF0F4; color: #C13A6B; }
-.sp-5 { background: #EDF6F7; color: #0F7A8A; }
+.sp-4 { background: var(--awd-danger-soft); color: var(--awd-danger-text); }
+.sp-5 { background: var(--awd-info-soft); color: var(--awd-info-text); }
 
 /* ---- 摘要 ---- */
 .mr-fold-head {
@@ -1521,12 +1517,12 @@ $mr-muted: #6B7280;
 .mr-summary-strong {
   font-size: 11px;
   font-weight: 600;
-  color: #374151;
+  color: var(--awd-text);
 }
 
 .mr-summary-text {
   font-size: 11px;
-  color: #4B5563;
+  color: var(--awd-text-2);
   line-height: 1.6;
 }
 
@@ -1537,10 +1533,10 @@ $mr-muted: #6B7280;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  border: 1px solid #F0F1F3;
+  border: 1px solid var(--awd-border-subtle);
   border-radius: 6px;
   padding: 8px;
-  background: #FAFBFC;
+  background: var(--awd-bg);
 }
 
 .mr-seg {
@@ -1564,13 +1560,13 @@ $mr-muted: #6B7280;
 
 .mr-seg-time {
   font-size: 10px;
-  color: #9CA3AF;
+  color: var(--awd-text-3);
   font-variant-numeric: tabular-nums;
 }
 
 .mr-seg-text {
   font-size: 12px;
-  color: #1F2328;
+  color: var(--awd-text);
   line-height: 1.6;
   word-break: break-word;
 }
@@ -1579,7 +1575,7 @@ $mr-muted: #6B7280;
 .mr-dialog-mask {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--awd-overlay);
   z-index: 9999;
   display: flex;
   align-items: center;
@@ -1588,7 +1584,7 @@ $mr-muted: #6B7280;
 
 .mr-dialog-content {
   width: 300px;
-  background: #FFFFFF;
+  background: var(--awd-surface);
   border-radius: 10px;
   overflow: hidden;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.18);
@@ -1601,19 +1597,19 @@ $mr-muted: #6B7280;
 .mr-dialog-title {
   font-size: 14px;
   font-weight: 600;
-  color: #1F2328;
+  color: var(--awd-text);
 }
 
 .mr-dialog-body {
   padding: 10px 16px 16px;
   font-size: 12px;
-  color: #4B5563;
+  color: var(--awd-text-2);
   line-height: 1.6;
 }
 
 .mr-dialog-footer {
   display: flex;
-  border-top: 1px solid #F0F1F3;
+  border-top: 1px solid var(--awd-border-subtle);
 }
 
 .mr-dialog-btn {
@@ -1623,8 +1619,8 @@ $mr-muted: #6B7280;
   font-size: 13px;
   cursor: pointer;
 
-  &.cancel { color: $mr-muted; }
-  &.confirm { color: $mr-danger; font-weight: 600; }
-  &:hover { background: #F8F9FA; }
+  &.cancel { color: var(--awd-text-2); }
+  &.confirm { color: var(--awd-danger-text); font-weight: 600; }
+  &:hover { background: var(--awd-bg); }
 }
 </style>

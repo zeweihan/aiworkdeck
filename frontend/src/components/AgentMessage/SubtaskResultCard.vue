@@ -102,15 +102,15 @@ const subtaskId = computed(() => {
 
 <style scoped>
 .subtask-result {
-  border: 1px solid #E9ECEF; /* Gray-Light */
-  border-left: 2px solid #5BD197; /* Mint Green */
+  border: 1px solid var(--awd-border); /* Gray-Light */
+  border-left: 2px solid var(--awd-mint); /* Mint Green */
   border-radius: 6px;
-  background: #ffffff;
+  background: var(--awd-surface);
   overflow: hidden;
 }
 
 .subtask-result.is-failed {
-  border-left-color: #E74C3C;
+  border-left-color: var(--awd-danger);
 }
 
 .sr-header {
@@ -118,13 +118,13 @@ const subtaskId = computed(() => {
   align-items: center;
   gap: 6px;
   padding: 5px 8px;
-  border-bottom: 1px solid #F1F3F5;
+  border-bottom: 1px solid var(--awd-border-subtle);
 }
 
 .sr-title {
   font-size: 11px;
   font-weight: 600;
-  color: #1A5336; /* Forest Green */
+  color: var(--awd-accent-text); /* Forest Green */
 }
 
 .sr-badge {
@@ -135,13 +135,13 @@ const subtaskId = computed(() => {
 }
 
 .sr-badge.ok {
-  background: #E6F9F0;
-  color: #1A5336;
+  background: var(--awd-accent-soft);
+  color: var(--awd-accent-text);
 }
 
 .sr-badge.bad {
-  background: #FDEDEC;
-  color: #C0392B;
+  background: var(--awd-bg);
+  color: var(--awd-danger-text);
 }
 
 /* 正文可能很长（子 Agent 摘录了合同段落），自己滚，不撑爆气泡 */
@@ -149,7 +149,7 @@ const subtaskId = computed(() => {
   padding: 7px 8px;
   font-size: 12px;
   line-height: 1.55;
-  color: #2C3338; /* Gray-Dark */
+  color: var(--awd-text); /* Gray-Dark */
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 240px;
@@ -158,8 +158,8 @@ const subtaskId = computed(() => {
 }
 
 .sr-meta {
-  border-top: 1px solid #F1F3F5;
-  background: #F8F9FA; /* Gray-Pale */
+  border-top: 1px solid var(--awd-border-subtle);
+  background: var(--awd-bg); /* Gray-Pale */
   padding: 5px 8px;
   display: flex;
   flex-direction: column;
@@ -174,7 +174,7 @@ const subtaskId = computed(() => {
 
 .sr-meta-label {
   font-size: 10px;
-  color: #6C757D; /* Gray-Medium */
+  color: var(--awd-text-2); /* Gray-Medium */
   flex-shrink: 0;
   width: 52px;
   line-height: 16px;
@@ -182,19 +182,19 @@ const subtaskId = computed(() => {
 
 .sr-meta-value {
   font-size: 11px;
-  color: #2C3338;
+  color: var(--awd-text);
   line-height: 16px;
   word-break: break-all;
 }
 
 .sr-meta-value.is-empty {
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 .sr-meta-value.is-mono {
   font-family: 'SF Mono', Menlo, Consolas, monospace;
   font-size: 10px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 .sr-chips {
@@ -205,15 +205,15 @@ const subtaskId = computed(() => {
 
 .sr-chip {
   font-size: 10px;
-  color: #1A5336;
-  background: #E6F9F0;
+  color: var(--awd-accent-text);
+  background: var(--awd-accent-soft);
   border-radius: 4px;
   padding: 1px 5px;
   line-height: 14px;
 }
 
 .sr-chip-count {
-  color: #6C757D;
+  color: var(--awd-text-2);
   margin-left: 3px;
 }
 </style>

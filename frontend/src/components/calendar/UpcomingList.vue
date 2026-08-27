@@ -69,21 +69,21 @@ export default {
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background: #fff;
-  border: 1px solid #E9ECEF;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 10px;
   overflow: hidden;
 }
 
 .upcoming-header {
   padding: 14px 16px;
-  border-bottom: 1px solid #E9ECEF;
+  border-bottom: 1px solid var(--awd-border);
 }
 
 .upcoming-title {
   font-size: 13px;
   font-weight: 700;
-  color: #2C3338;
+  color: var(--awd-text);
 }
 
 .upcoming-empty {
@@ -96,7 +96,7 @@ export default {
 
 .upcoming-empty-text {
   font-size: 12px;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
   text-align: center;
 }
 
@@ -110,10 +110,10 @@ export default {
   align-items: center;
   gap: 10px;
   padding: 10px 16px;
-  border-bottom: 1px solid #F1F3F5;
+  border-bottom: 1px solid var(--awd-border-subtle);
   cursor: pointer;
 
-  &:hover { background: #F8F9FA; }
+  &:hover { background: var(--awd-bg); }
   &:last-child { border-bottom: none; }
 }
 
@@ -127,7 +127,7 @@ export default {
 
 .upcoming-item-title {
   font-size: 13px;
-  color: #2C3338;
+  color: var(--awd-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -135,7 +135,7 @@ export default {
 
 .upcoming-item-project {
   font-size: 11px;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -151,17 +151,17 @@ export default {
 }
 
 .badge-normal {
-  background: #F1F3F5;
-  color: #6C757D;
+  background: var(--awd-surface-2);
+  color: var(--awd-text-2);
 }
 
 .badge-soon {
-  background: #FDEEEC;
-  color: #E74C3C;
+  background: var(--awd-bg);
+  color: var(--awd-danger-text);
 }
 
 .badge-overdue {
-  background: #E74C3C;
-  color: #fff;
+  background: var(--awd-danger);
+  color: var(--awd-text-on-accent);
 }
 </style>

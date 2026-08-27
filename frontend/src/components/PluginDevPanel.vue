@@ -330,7 +330,7 @@ export default {
   padding: 0 8px;
   font-size: var(--awd-panel-fs);
   color: var(--awd-panel-text);
-  background: #fff;
+  background: var(--awd-surface);
   border: 1px solid var(--awd-panel-border);
   border-radius: var(--awd-panel-radius);
   outline: none;
@@ -347,7 +347,7 @@ export default {
 
 .pdp-form-error {
   font-size: var(--awd-panel-fs-meta);
-  color: #B4552D;
+  color: var(--awd-danger-text);
 }
 
 .pdp-form-actions {
@@ -362,7 +362,7 @@ export default {
   padding: 0 10px;
   border-radius: 4px;
   border: 1px solid var(--awd-panel-border);
-  background: #fff;
+  background: var(--awd-surface);
   cursor: pointer;
 
   text {
@@ -380,11 +380,11 @@ export default {
     border-color: var(--awd-panel-accent);
 
     text {
-      color: #fff;
+      color: var(--awd-text-on-accent);
     }
 
     &:hover {
-      background: #123A26;
+      background: var(--awd-accent-hover);
     }
 
     &.busy {
@@ -426,8 +426,8 @@ export default {
   flex-shrink: 0;
   margin-top: 1px;
   border-radius: 6px;
-  background: #123A26;
-  color: #fff;
+  background: var(--awd-accent-hover);
+  color: var(--awd-text-on-accent);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -462,7 +462,7 @@ export default {
 
 .pdp-row-hint {
   font-size: 10px;
-  color: #8A6D2F;
+  color: var(--awd-warning-text);
 }
 
 .pdp-row-actions {
@@ -478,7 +478,7 @@ export default {
   line-height: 18px;
   padding: 0 8px;
   border-radius: 4px;
-  background: #fff;
+  background: var(--awd-surface);
   border: 1px solid var(--awd-panel-border);
   cursor: pointer;
 
@@ -502,23 +502,23 @@ export default {
     border-color: var(--awd-panel-accent);
 
     text {
-      color: #fff;
+      color: var(--awd-text-on-accent);
     }
 
     &:hover {
-      background: #123A26;
+      background: var(--awd-accent-hover);
     }
   }
 
   &.pdp-action-danger {
-    border-color: #E9C6B8;
+    border-color: var(--awd-danger);
 
     text {
-      color: #B4552D;
+      color: var(--awd-danger-text);
     }
 
     &:hover {
-      background: #FBEEE8;
+      background: var(--awd-bg);
     }
   }
 
@@ -542,7 +542,7 @@ export default {
 
 .pdp-row-error-toggle {
   font-size: 10px;
-  color: #B4552D;
+  color: var(--awd-danger-text);
   cursor: pointer;
 
   &:hover {
@@ -556,8 +556,8 @@ export default {
   padding: 6px 8px;
   font-size: 10px;
   line-height: 1.5;
-  color: #B4552D;
-  background: #FBEEE8;
+  color: var(--awd-danger-text);
+  background: var(--awd-bg);
   border-radius: 4px;
   white-space: pre-wrap;
   word-break: break-word;

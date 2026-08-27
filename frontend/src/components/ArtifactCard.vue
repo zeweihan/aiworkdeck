@@ -262,13 +262,13 @@ export default {
 
 <style scoped>
 .artifact-card {
-  background: #ffffff;
+  background: var(--awd-surface);
   padding: 12px 16px;
   transition: background 0.15s;
 }
 
 .artifact-card:hover {
-  background: #F8F9FA; /* Gray-Pale */
+  background: var(--awd-bg); /* Gray-Pale */
 }
 
 /* Row 1 */
@@ -290,24 +290,24 @@ export default {
 .card-icon-box {
   width: 6px;
   height: 6px;
-  background: #d97706;
+  background: var(--awd-warning);
   border-radius: 50%; /* Circle looks more modern for status-like dots */
   flex-shrink: 0;
 }
-.implementation_plan .card-icon-box { background: #ea580c; }
-.task_list .card-icon-box { background: #3b82f6; }
+.implementation_plan .card-icon-box { background: var(--awd-warning); }
+.task_list .card-icon-box { background: var(--awd-info); }
 .walkthrough .card-icon-box { background: #6b7280; }
 
 .card-title {
   font-size: 13px;
   font-weight: 600;
-  color: #1A5336; /* Forest Green */
+  color: var(--awd-accent-text); /* Forest Green */
 }
 
 .status-badge.resolved {
   font-size: 9px;
-  background: #E6F9F0; /* Mint Lightest */
-  color: #1A5336; /* Forest Green */
+  background: var(--awd-accent-soft); /* Mint Lightest */
+  color: var(--awd-accent-text); /* Forest Green */
   padding: 2px 6px;
   border-radius: 4px;
   font-weight: 600;
@@ -315,8 +315,8 @@ export default {
 
 .status-badge.revised {
   font-size: 9px;
-  background: #FFF4E6;
-  color: #B25E09;
+  background: var(--awd-bg);
+  color: var(--awd-warning-text);
   padding: 2px 6px;
   border-radius: 4px;
   font-weight: 600;
@@ -333,12 +333,12 @@ export default {
 }
 
 .plan-preview {
-  border: 1px solid #E9ECEF;
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   padding: 10px 12px;
   max-height: 320px;
   overflow-y: auto;
-  background: #FCFCFD;
+  background: var(--awd-surface);
 }
 
 .plan-preview :deep(.markdown-preview) {
@@ -355,19 +355,19 @@ export default {
   line-height: 1.55;
   margin: 0;
   padding: 0;
-  color: #2C3338;
+  color: var(--awd-text);
 }
 
 .plan-editor {
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid #5BD197;
+  border: 1px solid var(--awd-mint);
   border-radius: 8px;
   padding: 10px 12px;
   font-size: 12.5px;
   line-height: 20px;
-  color: #2C3338;
-  background: #FFFFFF;
+  color: var(--awd-text);
+  background: var(--awd-surface);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   resize: vertical;
   outline: none;
@@ -381,8 +381,8 @@ export default {
 }
 
 .btn-approve {
-  background: #1A5336; /* Forest Green */
-  color: #fff;
+  background: var(--awd-accent); /* Forest Green */
+  color: var(--awd-text-on-accent);
   font-size: 12px;
   padding: 6px 16px;
   border-radius: 6px;
@@ -390,12 +390,12 @@ export default {
   font-weight: 600;
   transition: background 0.15s;
 }
-.btn-approve:hover { background: #123A26; } /* Forest Green Darker */
+.btn-approve:hover { background: var(--awd-accent-hover); } /* Forest Green Darker */
 
 .btn-revise {
-  background: #FFFFFF;
-  border: 1px solid #E9ECEF;
-  color: #2C3338;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
+  color: var(--awd-text);
   font-size: 12px;
   padding: 5px 16px;
   border-radius: 6px;
@@ -404,21 +404,21 @@ export default {
   transition: all 0.15s;
 }
 .btn-revise:hover {
-  border-color: #5BD197;
-  color: #1A5336;
-  background: #E6F9F0;
+  border-color: var(--awd-mint);
+  color: var(--awd-accent-text);
+  background: var(--awd-accent-soft);
 }
 
 .btn-view {
   background: transparent;
-  color: #6C757D; /* Gray-Medium */
+  color: var(--awd-text-2); /* Gray-Medium */
   font-size: 11px;
   padding: 4px 6px;
   cursor: pointer;
   text-decoration: none;
   font-weight: 500;
 }
-.btn-view:hover { color: #1A5336; text-decoration: underline; }
+.btn-view:hover { color: var(--awd-accent-text); text-decoration: underline; }
 
 /* Row 2 */
 .card-row-bottom {
@@ -426,8 +426,8 @@ export default {
 }
 
 .file-info-block {
-  background: #F8F9FA; /* Gray-Pale */
-  border: 1px solid #E9ECEF; /* Gray-Light */
+  background: var(--awd-bg); /* Gray-Pale */
+  border: 1px solid var(--awd-border); /* Gray-Light */
   border-radius: 6px;
   padding: 8px 12px;
   display: flex;
@@ -438,13 +438,13 @@ export default {
 .file-label {
   font-size: 9px;
   font-weight: 700;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
   letter-spacing: 0.8px;
 }
 
 .file-name-text {
   font-size: 12px;
-  color: #2C3338; /* Gray-Dark */
+  color: var(--awd-text); /* Gray-Dark */
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 </style>

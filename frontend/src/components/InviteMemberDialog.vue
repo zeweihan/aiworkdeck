@@ -213,7 +213,7 @@ export default {
 .workdeck-dialog-mask {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
-  background-color: rgba(0, 0, 0, 0.4);
+  background-color: var(--awd-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -223,7 +223,7 @@ export default {
 
 .workdeck-dialog {
   width: 618px; /* Golden Ratio */
-  background: #ffffff;
+  background: var(--awd-surface);
   border-radius: 12px;
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
   display: flex;
@@ -243,26 +243,26 @@ export default {
 .workdeck-dialog-title {
   font-size: 20px;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--awd-text);
 }
 
 .modal-close {
   font-size: 24px;
-  color: #94a3b8;
+  color: var(--awd-text-3);
   cursor: pointer;
   line-height: 1;
   padding: 4px;
 }
 
 .modal-close:hover {
-  color: #0f172a;
+  color: var(--awd-text);
 }
 
 /* Tabs */
 .dialog-tabs {
   display: flex;
   position: relative;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--awd-border);
   margin-top: 16px;
 }
 
@@ -271,19 +271,19 @@ export default {
   text-align: center;
   padding: 12px 0;
   font-size: 15px;
-  color: #64748b;
+  color: var(--awd-text-2);
   cursor: pointer;
   font-weight: 500;
   transition: all 0.2s;
 }
 
 .dialog-tab:hover {
-  color: #1A5336;
-  background: #f8f9fa;
+  color: var(--awd-accent-text);
+  background: var(--awd-bg);
 }
 
 .dialog-tab.active {
-  color: #1A5336;
+  color: var(--awd-accent-text);
   font-weight: 600;
 }
 
@@ -291,7 +291,7 @@ export default {
   position: absolute;
   bottom: 0;
   height: 2px;
-  background: #1A5336;
+  background: var(--awd-accent);
   width: 50%;
   transition: left 0.3s ease;
 }
@@ -309,7 +309,7 @@ export default {
   display: block;
   font-size: 14px;
   font-weight: 500;
-  color: #334155;
+  color: var(--awd-text);
   margin-bottom: 8px;
 }
 
@@ -317,16 +317,16 @@ export default {
   width: 100%;
   height: 44px;
   padding: 0 12px;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--awd-border-strong);
   border-radius: 6px;
   font-size: 14px;
-  color: #0f172a;
+  color: var(--awd-text);
   transition: all 0.2s;
   box-sizing: border-box;
 }
 
 .workdeck-input:focus {
-  border-color: #1A5336;
+  border-color: var(--awd-accent);
   outline: none;
   box-shadow: 0 0 0 3px rgba(26, 83, 54, 0.1);
 }
@@ -344,48 +344,48 @@ export default {
   cursor: pointer;
   padding: 6px 12px;
   border-radius: 20px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--awd-border);
   font-size: 13px;
-  color: #475569;
+  color: var(--awd-text-2);
   transition: all 0.2s;
 }
 
 .role-option:hover {
-  border-color: #cbd5e1;
-  background: #f8f9fa;
+  border-color: var(--awd-border-strong);
+  background: var(--awd-bg);
 }
 
 .role-option.active {
-  border-color: #1A5336;
-  background: #F0FDF4;
-  color: #1A5336;
+  border-color: var(--awd-accent);
+  background: var(--awd-bg);
+  color: var(--awd-accent-text);
 }
 
 .role-dot {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  border: 1px solid #cbd5e1;
-  background: #fff;
+  border: 1px solid var(--awd-border-strong);
+  background: var(--awd-surface);
   position: relative;
 }
 
 .role-option.active .role-dot {
-  border-color: #1A5336;
-  background: #1A5336;
+  border-color: var(--awd-accent);
+  background: var(--awd-accent);
 }
 
 .role-option.active .role-dot::after {
   content: '';
   position: absolute;
   top: 4px; left: 4px; right: 4px; bottom: 4px;
-  background: #fff;
+  background: var(--awd-surface);
   border-radius: 50%;
 }
 
 /* Client Invite */
 .invite-desc-box {
-  background: #f8f9fa;
+  background: var(--awd-bg);
   padding: 12px;
   border-radius: 8px;
   margin-bottom: 20px;
@@ -393,21 +393,21 @@ export default {
 
 .invite-desc {
   font-size: 13px;
-  color: #64748b;
+  color: var(--awd-text-2);
   line-height: 1.6;
 }
 
 .role-hint {
   display: block;
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--awd-text-3);
   margin-top: 8px;
 }
 
 .code-tip {
   display: block;
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--awd-text-3);
   line-height: 1.6;
   margin-top: 12px;
 }
@@ -419,7 +419,7 @@ export default {
 
 .code-label {
   font-size: 14px;
-  color: #64748b;
+  color: var(--awd-text-2);
   margin-bottom: 8px;
   display: block;
 }
@@ -434,15 +434,15 @@ export default {
 .code-text {
   font-family: monospace;
   font-size: 24px;
-  color: #0f172a;
+  color: var(--awd-text);
   letter-spacing: 2px;
-  background: #f1f5f9;
+  background: var(--awd-surface-2);
   padding: 4px 12px;
   border-radius: 6px;
 }
 
 .copy-link {
-  color: #1A5336;
+  color: var(--awd-accent-text);
   font-size: 14px;
   cursor: pointer;
   text-decoration: underline;
@@ -450,11 +450,11 @@ export default {
 
 .workdeck-dialog-footer {
   padding: 20px 32px 24px;
-  background: #f8f9fa;
+  background: var(--awd-bg);
   display: flex;
   justify-content: flex-end;
   gap: 12px;
-  border-top: 1px solid #f1f5f9;
+  border-top: 1px solid var(--awd-border-subtle);
 }
 
 .workdeck-btn {
@@ -471,29 +471,29 @@ export default {
 }
 
 .workdeck-btn-primary {
-  background: #1A5336;
-  color: #ffffff;
+  background: var(--awd-accent);
+  color: var(--awd-text-on-accent);
   border: 1px solid transparent;
 }
 
 .workdeck-btn-primary:hover {
-  background: #14422b;
+  background: var(--awd-accent-hover);
 }
 
 .workdeck-btn-primary.disabled {
-  background: #94a3b8;
+  background: var(--awd-info);
   cursor: not-allowed;
 }
 
 .workdeck-btn-secondary {
-  background: #ffffff;
-  color: #475569;
-  border: 1px solid #cbd5e1;
+  background: var(--awd-surface);
+  color: var(--awd-text-2);
+  border: 1px solid var(--awd-border-strong);
 }
 
 .workdeck-btn-secondary:hover {
-  background: #f1f5f9;
-  border-color: #94a3b8;
-  color: #1e293b;
+  background: var(--awd-surface-2);
+  border-color: var(--awd-info);
+  color: var(--awd-text);
 }
 </style>

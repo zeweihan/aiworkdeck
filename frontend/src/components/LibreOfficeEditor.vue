@@ -1201,15 +1201,15 @@ export default {
 </script>
 
 <style scoped>
-.libre-editor-wrapper { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; background: #fff; }
+.libre-editor-wrapper { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; background: var(--awd-surface); }
 /* Floating status pill, pinned over the CANVAS's top-right corner (not the
    wrapper's — the review panel sits to the right and would be covered). No
    layout height is reserved — the document canvas gets the full pane. */
 .libre-float { position: absolute; top: 6px; right: 16px; z-index: 20; display: flex; align-items: center; gap: 8px; }
 .libre-pill { display: flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
-  background: rgba(31, 41, 55, 0.78); color: #e5e7eb; font-size: 12px; backdrop-filter: blur(4px); }
-.libre-pill.error { background: rgba(153, 27, 27, 0.9); color: #fecaca; }
-.libre-spin { width: 10px; height: 10px; border: 2px solid rgba(229, 231, 235, 0.35); border-top-color: #e5e7eb;
+  background: var(--awd-info); color: var(--awd-info-text); font-size: 12px; backdrop-filter: blur(4px); }
+.libre-pill.error { background: var(--awd-danger); color: var(--awd-danger-text); }
+.libre-spin { width: 10px; height: 10px; border: 2px solid rgba(229, 231, 235, 0.35); border-top-color: var(--awd-border);
   border-radius: 50%; animation: libre-rot 0.8s linear infinite; }
 @keyframes libre-rot { to { transform: rotate(360deg); } }
 .libre-body { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: row; }
@@ -1218,52 +1218,52 @@ export default {
 /* EvidenceLink 拖放：整个编辑器描一圈边，画布上铺透明接收层；悬停时加深 */
 .libre-editor-wrapper.evidence-drop-armed { box-shadow: inset 0 0 0 2px #1A5336; }
 .libre-evidence-drop { position: absolute; inset: 0; z-index: 25; display: flex; align-items: flex-end; justify-content: center;
-  padding-bottom: 28px; background: rgba(230, 249, 240, 0.25); border: 2px dashed rgba(26, 83, 54, 0.45); box-sizing: border-box; }
-.libre-evidence-drop.over { background: rgba(230, 249, 240, 0.55); border-color: #1A5336; border-style: solid; }
-.libre-evidence-hint { padding: 6px 14px; border-radius: 999px; background: #fff; border: 1px solid #1A5336; color: #1A5336;
+  padding-bottom: 28px; background: rgba(230, 249, 240, 0.25); border: 2px dashed var(--awd-accent); box-sizing: border-box; }
+.libre-evidence-drop.over { background: var(--awd-accent-soft); border-color: var(--awd-accent); border-style: solid; }
+.libre-evidence-hint { padding: 6px 14px; border-radius: 999px; background: var(--awd-surface); border: 1px solid var(--awd-accent); color: var(--awd-accent-text);
   font-size: 12px; pointer-events: none; }
-.libre-review-btn { padding: 3px 10px; border-radius: 999px; background: rgba(31, 41, 55, 0.78);
-  color: #e5e7eb; font-size: 12px; backdrop-filter: blur(4px); }
-.libre-review-btn.on { background: #E6F9F0; color: #1A5336; }
+.libre-review-btn { padding: 3px 10px; border-radius: 999px; background: var(--awd-info);
+  color: var(--awd-text-on-accent); font-size: 12px; backdrop-filter: blur(4px); }
+.libre-review-btn.on { background: var(--awd-accent-soft); color: var(--awd-accent-text); }
 /* ---- 加载进度面板 ---- */
 .libre-loading { position: absolute; inset: 0; z-index: 15; display: flex; align-items: center; justify-content: center;
-  background: #F8F9FA; }
+  background: var(--awd-bg); }
 .libre-loading-card { display: flex; flex-direction: column; align-items: center; gap: 10px; width: 320px; max-width: 80%; }
-.libre-doc-icon { position: relative; width: 44px; height: 56px; background: #fff; border: 1.5px solid #DEE2E6;
+.libre-doc-icon { position: relative; width: 44px; height: 56px; background: var(--awd-surface); border: 1.5px solid var(--awd-border);
   border-radius: 5px; margin-bottom: 4px; overflow: hidden; }
 .doc-fold { position: absolute; top: -1px; right: -1px; width: 14px; height: 14px;
-  background: #F8F9FA; border-left: 1.5px solid #DEE2E6; border-bottom: 1.5px solid #DEE2E6; border-radius: 0 0 0 5px; }
-.doc-line { position: absolute; left: 8px; height: 4px; border-radius: 2px; background: #E6F9F0;
+  background: var(--awd-bg); border-left: 1.5px solid var(--awd-border); border-bottom: 1.5px solid var(--awd-border); border-radius: 0 0 0 5px; }
+.doc-line { position: absolute; left: 8px; height: 4px; border-radius: 2px; background: var(--awd-accent-soft);
   animation: doc-line-pulse 1.6s ease-in-out infinite; }
 .doc-line.l1 { top: 20px; width: 26px; animation-delay: 0s; }
 .doc-line.l2 { top: 30px; width: 20px; animation-delay: 0.25s; }
 .doc-line.l3 { top: 40px; width: 24px; animation-delay: 0.5s; }
-@keyframes doc-line-pulse { 0%, 100% { background: #E9ECEF; } 50% { background: #5BD197; } }
-.libre-loading-name { font-size: 14px; font-weight: 600; color: #2C3338; max-width: 100%;
+@keyframes doc-line-pulse { 0%, 100% { background: var(--awd-surface-3); } 50% { background: var(--awd-mint); } }
+.libre-loading-name { font-size: 14px; font-weight: 600; color: var(--awd-text); max-width: 100%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.libre-progress-track { width: 100%; height: 6px; background: #E9ECEF; border-radius: 999px; overflow: hidden; }
-.libre-progress-fill { position: relative; height: 100%; background: #5BD197; border-radius: 999px;
+.libre-progress-track { width: 100%; height: 6px; background: var(--awd-surface-3); border-radius: 999px; overflow: hidden; }
+.libre-progress-fill { position: relative; height: 100%; background: var(--awd-mint); border-radius: 999px;
   transition: width 0.5s ease; overflow: hidden; }
 .libre-progress-shimmer { position: absolute; inset: 0;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+  background: linear-gradient(90deg, transparent, var(--awd-surface), transparent);
   animation: libre-shimmer 1.4s linear infinite; }
 @keyframes libre-shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
 .libre-loading-meta { display: flex; justify-content: space-between; width: 100%; }
-.libre-loading-stage { font-size: 12px; color: #495057; }
-.libre-loading-pct { font-size: 12px; color: #1A5336; font-weight: 600; }
-.libre-loading-dl { font-size: 11px; color: #868E96; }
-.libre-loading-hint { font-size: 11px; color: #ADB5BD; margin-top: 6px; }
-.libre-loading-retry { margin-top: 8px; padding: 6px 16px; border-radius: 999px; background: #1A5336;
-  color: #fff; font-size: 12px; cursor: pointer; }
-.libre-loading-retry:hover { background: #16452C; }
+.libre-loading-stage { font-size: 12px; color: var(--awd-text-2); }
+.libre-loading-pct { font-size: 12px; color: var(--awd-accent-text); font-weight: 600; }
+.libre-loading-dl { font-size: 11px; color: var(--awd-text-2); }
+.libre-loading-hint { font-size: 11px; color: var(--awd-text-3); margin-top: 6px; }
+.libre-loading-retry { margin-top: 8px; padding: 6px 16px; border-radius: 999px; background: var(--awd-accent);
+  color: var(--awd-text-on-accent); font-size: 12px; cursor: pointer; }
+.libre-loading-retry:hover { background: var(--awd-accent-hover); }
 /* ---- 只读预览接力 ---- */
 .libre-preview-strip { position: absolute; top: 0; left: 0; right: 0; z-index: 2; display: flex; flex-direction: column;
-  gap: 4px; padding: 6px 14px 8px; background: rgba(248, 249, 250, 0.95); border-bottom: 1px solid #E9ECEF;
+  gap: 4px; padding: 6px 14px 8px; background: var(--awd-info-soft); border-bottom: 1px solid var(--awd-border);
   backdrop-filter: blur(4px); }
-.libre-strip-track { width: 100%; height: 3px; background: #E9ECEF; border-radius: 999px; overflow: hidden; }
-.libre-strip-fill { height: 100%; background: #5BD197; border-radius: 999px; transition: width 0.5s ease; }
-.libre-strip-text { font-size: 11px; color: #868E96; }
-.libre-preview-host { position: absolute; inset: 0; top: 34px; overflow-y: auto; background: #F1F3F5; }
+.libre-strip-track { width: 100%; height: 3px; background: var(--awd-surface-3); border-radius: 999px; overflow: hidden; }
+.libre-strip-fill { height: 100%; background: var(--awd-mint); border-radius: 999px; transition: width 0.5s ease; }
+.libre-strip-text { font-size: 11px; color: var(--awd-text-2); }
+.libre-preview-host { position: absolute; inset: 0; top: 34px; overflow-y: auto; background: var(--awd-surface-2); }
 /* docx-preview 生成的页面居中呈现（deep：内容是运行时注入的非 scoped DOM） */
 .libre-preview-host :deep(.docx-wrapper) { background: transparent; padding: 16px 0; }
 </style>

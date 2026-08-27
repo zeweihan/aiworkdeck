@@ -155,18 +155,18 @@ export default {
   gap: 8px;
   height: 36px;
   padding: 0 12px;
-  border: 1px solid #E6EAE8;
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
-  background-color: #fff;
+  background-color: var(--awd-surface);
   font-size: 13px;
-  color: #212629;
+  color: var(--awd-text);
   box-sizing: border-box;
   transition: border-color 0.15s ease;
 }
 
 .awd-select-value:hover,
 .awd-select.is-open .awd-select-value {
-  border-color: #5BD197;
+  border-color: var(--awd-mint);
 }
 
 .awd-select-text {
@@ -177,7 +177,7 @@ export default {
 
 .awd-select-caret {
   flex: none;
-  color: #8b9691;
+  color: var(--awd-text-2);
   font-size: 12px;
   transition: transform 0.15s ease;
 }
@@ -198,8 +198,8 @@ export default {
   max-height: 280px;
   overflow-y: auto;
   padding: 4px;
-  background: #fff;
-  border: 1px solid #E6EAE8;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   box-shadow: 0 8px 28px rgba(18, 52, 77, 0.16);
 }
@@ -212,23 +212,23 @@ export default {
   padding: 7px 10px;
   border-radius: 5px;
   font-size: 13px;
-  color: #212629;
+  color: var(--awd-text);
   cursor: pointer;
   white-space: nowrap;
 }
 
 .awd-select-item:hover {
-  background: #F1F7F4;
+  background: var(--awd-bg);
 }
 
 .awd-select-item.is-active {
-  color: #1A5336;
+  color: var(--awd-accent-text);
   font-weight: 600;
 }
 
 .awd-select-check {
   flex: none;
-  color: #1A5336;
+  color: var(--awd-accent-text);
   font-size: 12px;
 }
 </style>

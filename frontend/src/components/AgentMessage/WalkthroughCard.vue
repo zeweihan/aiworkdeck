@@ -83,7 +83,7 @@ const handleOpen = () => {
   margin-bottom: 6px;
   font-size: 10px;
   font-weight: 600;
-  color: #6b7280;
+  color: var(--awd-text-2);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -95,7 +95,7 @@ const handleOpen = () => {
 .card-body {
   font-size: 12px; /* 减小字体 */
   line-height: 1.45; /* 紧凑行距 */
-  color: #374151;
+  color: var(--awd-text);
 }
 
 .summary-view {
@@ -116,17 +116,17 @@ const handleOpen = () => {
 }
 
 .expand-btn {
-  background: #f3f4f6;
+  background: var(--awd-surface-2);
   padding: 3px 10px;
   border-radius: 10px;
   font-size: 11px;
-  color: #4b5563;
+  color: var(--awd-text-2);
   cursor: pointer;
   box-shadow: 0 1px 3px rgba(0,0,0,0.08);
   transition: background 0.15s;
 }
 .expand-btn:hover {
-  background: #e5e7eb;
+  background: var(--awd-surface-3);
 }
 
 /* Override MarkdownPreview styles for compact walkthrough */

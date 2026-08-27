@@ -244,7 +244,7 @@ export default {
 
 <style scoped>
 .tag-manager {
-  background: #fff;
+  background: var(--awd-surface);
   width: 400px;
   max-width: 90vw;
   border-radius: 8px;
@@ -257,7 +257,7 @@ export default {
 
 .header {
   padding: 16px;
-  border-bottom: 1px solid #eee;
+  border-bottom: 1px solid var(--awd-border);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -272,7 +272,7 @@ export default {
   font-size: 20px;
   cursor: pointer;
   padding: 0 8px;
-  color: #999;
+  color: var(--awd-text-3);
 }
 
 .content {
@@ -293,7 +293,7 @@ export default {
 .new-tag-input {
   flex: 1;
   height: 36px;
-  border: 1px solid #ddd;
+  border: 1px solid var(--awd-border);
   border-radius: 4px;
   padding: 0 8px;
   font-size: 14px;
@@ -304,14 +304,14 @@ export default {
   height: 36px;
   border-radius: 4px;
   cursor: pointer;
-  border: 1px solid #ddd;
+  border: 1px solid var(--awd-border);
 }
 
 .add-btn {
   height: 36px;
   line-height: 36px;
-  background: #1A5336;
-  color: #fff;
+  background: var(--awd-accent);
+  color: var(--awd-text-on-accent);
   font-size: 14px;
   border: none;
   border-radius: 4px;
@@ -319,7 +319,7 @@ export default {
 }
 
 .add-btn:disabled {
-  background: #ccc;
+  background: var(--awd-surface-3);
 }
 
 .type-segment {
@@ -333,20 +333,20 @@ export default {
   text-align: center;
   padding: 5px 0;
   font-size: 12px;
-  color: #666;
-  background: #f3f4f6;
+  color: var(--awd-text-2);
+  background: var(--awd-surface-2);
   border-radius: 4px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .type-segment-option:hover {
-  background: #e5e7eb;
+  background: var(--awd-surface-3);
 }
 
 .type-segment-option.selected {
-  background: #1A5336;
-  color: #fff;
+  background: var(--awd-accent);
+  color: var(--awd-text-on-accent);
 }
 
 .edit-type-segment {
@@ -358,7 +358,7 @@ export default {
   flex-wrap: wrap;
   gap: 8px;
   padding: 8px;
-  background: #f9fafb;
+  background: var(--awd-bg);
   border-radius: 4px;
   margin-bottom: 12px;
 }
@@ -374,14 +374,14 @@ export default {
 }
 
 .check-mark {
-  color: #fff;
+  color: var(--awd-text-on-accent);
   font-size: 12px;
 }
 
 .tag-list-scroll {
   flex: 1;
   overflow-y: auto;
-  border: 1px solid #eee;
+  border: 1px solid var(--awd-border);
   border-radius: 4px;
 }
 
@@ -390,7 +390,7 @@ export default {
   justify-content: space-between;
   align-items: center;
   padding: 10px 12px;
-  border-bottom: 1px solid #f5f5f5;
+  border-bottom: 1px solid var(--awd-border-subtle);
 }
 
 .tag-row:last-child {
@@ -412,14 +412,14 @@ export default {
 
 .tag-name-text {
   font-size: 14px;
-  color: #333;
+  color: var(--awd-text);
   cursor: pointer;
 }
 
 .type-badge {
   font-size: 10px;
-  color: #6b7280;
-  background: #f3f4f6;
+  color: var(--awd-text-2);
+  background: var(--awd-surface-2);
   padding: 1px 4px;
   border-radius: 4px;
   margin-left: 8px;
@@ -435,7 +435,7 @@ export default {
   align-self: flex-end;
   margin-top: 6px;
   font-size: 12px;
-  color: #1A5336;
+  color: var(--awd-accent-text);
   font-weight: 500;
   cursor: pointer;
   padding: 2px 8px;
@@ -447,15 +447,15 @@ export default {
 
 .edit-input {
   font-size: 14px;
-  border: 1px solid #3b82f6;
+  border: 1px solid var(--awd-info);
   border-radius: 2px;
   padding: 2px 4px;
 }
 
 .system-badge {
   font-size: 10px;
-  background: #f3f4f6;
-  color: #666;
+  background: var(--awd-surface-2);
+  color: var(--awd-text-2);
   padding: 1px 4px;
   border-radius: 4px;
   margin-left: 8px;
@@ -478,6 +478,6 @@ export default {
 }
 
 .action-btn.delete:hover {
-  color: #ef4444;
+  color: var(--awd-danger-text);
 }
 </style>

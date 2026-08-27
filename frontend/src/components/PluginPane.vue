@@ -39,6 +39,7 @@ import {
   createEvidenceLink, addEvidenceTargets, getEvidenceLink, listEvidenceLinks
 } from '@/services/api.js'
 import { getAppLanguage } from '@/utils/appLanguage.js'
+import { getResolvedTheme } from '@/utils/appTheme.js'
 import { resolveAnchor, toPluginLink, toTargetInputs } from '@/utils/pluginEvidence.js'
 import { createEvidenceLinkForSelection } from '@/pages/project-overview/evidenceLinkCore.js'
 import { WPS_INTERNAL_HTTP_LINK_BASE } from '@/config/workbenchActions.js'
@@ -153,8 +154,8 @@ export default {
         pluginId: this.pluginId || '',
         projectId: this.projectId == null ? '' : String(this.projectId),
         language: getAppLanguage(),
-        // 外壳恒为浅色（配色红线），字段保留是为了插件侧不必分支处理
-        theme: 'light'
+        // 外壳自 dev-board#223 起有深浅两态，握手把当前生效的那个告诉插件
+        theme: getResolvedTheme()
       }
     },
 
@@ -513,7 +514,7 @@ export default {
 .plugin-pane {
   width: 100%;
   height: 100%;
-  background-color: #fff;
+  background-color: var(--awd-surface);
   display: flex;
   flex-direction: column;
 }
@@ -528,6 +529,6 @@ export default {
 .plugin-error {
   padding: 40px;
   text-align: center;
-  color: #999;
+  color: var(--awd-text-3);
 }
 </style>

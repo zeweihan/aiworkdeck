@@ -238,7 +238,7 @@ export default {
 .task-dialog {
   width: 420px;
   max-width: calc(100vw - 48px);
-  background: #fff;
+  background: var(--awd-surface);
   border-radius: 10px;
   box-shadow: 0 12px 40px rgba(18, 52, 77, 0.22);
   display: flex;
@@ -251,22 +251,22 @@ export default {
   align-items: center;
   justify-content: space-between;
   padding: 16px 20px;
-  border-bottom: 1px solid #E9ECEF;
+  border-bottom: 1px solid var(--awd-border);
 }
 
 .task-dialog-title {
   font-size: 15px;
   font-weight: 600;
-  color: #2C3338;
+  color: var(--awd-text);
 }
 
 .task-dialog-close {
   font-size: 18px;
   line-height: 1;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
   cursor: pointer;
 
-  &:hover { color: #2C3338; }
+  &:hover { color: var(--awd-text); }
 }
 
 .task-dialog-body {
@@ -297,20 +297,20 @@ export default {
 
 .form-label {
   font-size: 12px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 .form-input {
   height: 36px;
   padding: 0 12px;
-  border: 1px solid #E6EAE8;
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
-  background: #fff;
+  background: var(--awd-surface);
   font-size: 13px;
-  color: #212629;
+  color: var(--awd-text);
   box-sizing: border-box;
 
-  &:focus { border-color: #5BD197; outline: none; }
+  &:focus { border-color: var(--awd-mint); outline: none; }
 }
 
 .form-select {
@@ -319,24 +319,24 @@ export default {
 
 .form-static {
   font-size: 13px;
-  color: #2C3338;
+  color: var(--awd-text);
   padding: 8px 0;
 }
 
 .btn-status-toggle {
   align-self: flex-start;
-  background: rgba(26, 83, 54, 0.08);
-  color: #1A5336;
+  background: var(--awd-accent-soft);
+  color: var(--awd-accent-text);
   font-size: 13px;
   font-weight: 500;
   padding: 6px 12px;
   border-radius: 6px;
-  border: 1px solid rgba(26, 83, 54, 0.1);
+  border: 1px solid var(--awd-accent-soft);
 
   &.is-done {
-    background: #F1F3F5;
-    color: #6C757D;
-    border-color: #E9ECEF;
+    background: var(--awd-surface-2);
+    color: var(--awd-text-2);
+    border-color: var(--awd-border);
   }
 }
 
@@ -345,7 +345,7 @@ export default {
   align-items: center;
   gap: 10px;
   padding: 14px 20px;
-  border-top: 1px solid #E9ECEF;
+  border-top: 1px solid var(--awd-border);
 }
 
 .footer-spacer {
@@ -353,32 +353,32 @@ export default {
 }
 
 .btn-secondary {
-  background: #fff;
-  color: #6C757D;
+  background: var(--awd-surface);
+  color: var(--awd-text-2);
   font-size: 13px;
   font-weight: 500;
   padding: 7px 14px;
   border-radius: 6px;
-  border: 1px solid #E9ECEF;
+  border: 1px solid var(--awd-border);
 
-  &:hover { border-color: #1A5336; color: #1A5336; }
+  &:hover { border-color: var(--awd-accent); color: var(--awd-accent-text); }
 }
 
 .btn-primary {
-  background: #1A5336;
-  color: #fff;
+  background: var(--awd-accent);
+  color: var(--awd-text-on-accent);
   font-size: 13px;
   font-weight: 500;
   padding: 7px 16px;
   border-radius: 6px;
-  border: 1px solid #1A5336;
+  border: 1px solid var(--awd-accent);
 
-  &:hover { background: #164429; }
+  &:hover { background: var(--awd-accent-hover); }
 }
 
 .btn-danger-text {
   background: transparent;
-  color: #E74C3C;
+  color: var(--awd-danger-text);
   font-size: 13px;
   font-weight: 500;
   padding: 7px 10px;

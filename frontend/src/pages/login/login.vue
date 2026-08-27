@@ -7,7 +7,7 @@
     <!-- Top Navigation -->
     <view class="top-nav">
       <view class="nav-left">
-        <image class="nav-logo" src="/static/logo_full_v2.png" mode="heightFix" />
+        <image class="nav-logo awd-brand-logo" src="/static/logo_full_v2.png" mode="heightFix" />
       </view>
       <view class="nav-right">
         <text class="nav-item">{{ $t('account.guideNav') }}</text>
@@ -486,19 +486,16 @@ export default {
 <style lang="scss" scoped>
 /* Color Config */
 $color-primary: #1A5336; // Forest Green
-$color-accent: #5BD197; // Mint Green
-$color-text-main: #2C3338;
-$color-text-light: #6C757D;
-$bg-dark: #212629;
-$glass-white: rgba(255, 255, 255, 0.75);
-$glass-border: rgba(255, 255, 255, 0.5);
+// 毛玻璃走令牌：深色下要变成半透明深底，写死白色在深色页面上会糊成一块灰
+$glass-white: var(--awd-glass);
+$glass-border: var(--awd-glass-border);
 
 .login-page {
   width: 100vw;
   height: 100vh;
   position: relative;
   overflow: hidden;
-  background-color: #F8F9FA;
+  background-color: var(--awd-bg);
   display: flex;
   flex-direction: column;
 }
@@ -506,8 +503,8 @@ $glass-border: rgba(255, 255, 255, 0.5);
 .bg-gradient {
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
-  background: radial-gradient(circle at 10% 20%, rgba(91, 209, 151, 0.15) 0%, transparent 40%),
-              radial-gradient(circle at 90% 80%, rgba(26, 83, 54, 0.1) 0%, transparent 40%);
+  background: radial-gradient(circle at 10% 20%, var(--awd-accent-soft) 0%, transparent 40%),
+              radial-gradient(circle at 90% 80%, var(--awd-accent-soft) 0%, transparent 40%);
   z-index: 0;
 }
 
@@ -515,8 +512,8 @@ $glass-border: rgba(255, 255, 255, 0.5);
   position: absolute;
   inset: 0;
   // Subtle mesh pattern
-  background-image: linear-gradient(rgba(26, 83, 54, 0.03) 1px, transparent 1px),
-  linear-gradient(90deg, rgba(26, 83, 54, 0.03) 1px, transparent 1px);
+  background-image: linear-gradient(var(--awd-accent-wash) 1px, transparent 1px),
+  linear-gradient(90deg, var(--awd-accent-wash) 1px, transparent 1px);
   background-size: 40px 40px;
   z-index: 0;
 }
@@ -541,10 +538,10 @@ $glass-border: rgba(255, 255, 255, 0.5);
 }
 .nav-item {
   font-size: 14px;
-  color: $color-text-light;
+  color: var(--awd-text-2);
   cursor: pointer;
   transition: color 0.3s;
-  &:hover { color: $color-primary; }
+  &:hover { color: var(--awd-accent-text); }
 }
 
 .main-layout {
@@ -616,13 +613,13 @@ $glass-border: rgba(255, 255, 255, 0.5);
   gap: 6px;
   margin-right: 16px;
   .control { width: 10px; height: 10px; border-radius: 50%; }
-  .red { background: #ff5f56; }
-  .yellow { background: #ffbd2e; }
-  .green { background: #27c93f; }
+  .red { background: var(--awd-danger); }
+  .yellow { background: var(--awd-warning); }
+  .green { background: var(--awd-accent); }
 }
 
 .window-title {
-  color: #999;
+  color: var(--awd-text-3);
   font-size: 12px;
 }
 
@@ -641,7 +638,7 @@ $glass-border: rgba(255, 255, 255, 0.5);
   gap: 15px;
   .sidebar-icon {
     width: 24px; height: 24px; background: #666; border-radius: 4px;
-    &.active { background: $color-accent; }
+    &.active { background: var(--awd-mint); }
   }
 }
 
@@ -651,9 +648,9 @@ $glass-border: rgba(255, 255, 255, 0.5);
   border-right: 1px solid #333;
   padding: 10px;
   .explorer-item {
-    color: #ccc; font-size: 12px; line-height: 24px;
+    color: var(--awd-text-3); font-size: 12px; line-height: 24px;
     &.indent { padding-left: 15px; }
-    &.active { background: #37373d; color: #fff; }
+    &.active { background: #37373d; color: var(--awd-text-on-accent); }
   }
 }
 
@@ -671,18 +668,18 @@ $glass-border: rgba(255, 255, 255, 0.5);
   display: flex;
   .tab {
     padding: 0 15px;
-    font-size: 12px; color: #999;
+    font-size: 12px; color: var(--awd-text-3);
     display: flex; align-items: center;
     background: #2d2d2d;
-    &.active { background: #1e1e1e; color: #fff; border-top: 2px solid $color-accent; }
+    &.active { background: #1e1e1e; color: var(--awd-text-on-accent); border-top: 2px solid var(--awd-mint); }
   }
 }
 
 .doc-area {
   padding: 30px 40px;
-  background: #fff; /* White paper background for doc view */
+  background: var(--awd-surface); /* White paper background for doc view */
   flex: 1;
-  color: #333;
+  color: var(--awd-text);
   font-family: 'Times New Roman', serif; /* Serif for legal docs */
   overflow: hidden;
   position: relative;
@@ -693,12 +690,12 @@ $glass-border: rgba(255, 255, 255, 0.5);
   font-weight: bold;
   text-align: center;
   margin-bottom: 20px;
-  color: #000;
+  color: var(--awd-text);
 }
 
 .doc-meta {
   font-size: 10px;
-  color: #666;
+  color: var(--awd-text-2);
   margin-bottom: 24px;
   display: flex;
   justify-content: flex-end;
@@ -713,13 +710,13 @@ $glass-border: rgba(255, 255, 255, 0.5);
   &.text-body {
     font-weight: normal;
     text-indent: 2em;
-    color: #444;
+    color: var(--awd-text);
   }
 }
 
 .skeleton-line {
   height: 8px;
-  background: #f0f0f0;
+  background: var(--awd-bg);
   margin-bottom: 12px;
   border-radius: 2px;
 }
@@ -795,12 +792,12 @@ $glass-border: rgba(255, 255, 255, 0.5);
 .product-name {
   font-size: 24px;
   font-weight: 700;
-  color: $color-primary;
+  color: var(--awd-accent-text);
   letter-spacing: -0.5px;
 }
 .product-subtitle {
   font-size: 13px;
-  color: $color-text-light;
+  color: var(--awd-text-2);
   letter-spacing: 0.5px;
 }
 
@@ -815,10 +812,10 @@ $glass-border: rgba(255, 255, 255, 0.5);
   text-align: center;
   padding: 12px 0;
   font-size: 15px;
-  color: $color-text-light;
+  color: var(--awd-text-2);
   cursor: pointer;
   &.active {
-    color: $color-primary;
+    color: var(--awd-accent-text);
     font-weight: 600;
   }
 }
@@ -827,7 +824,7 @@ $glass-border: rgba(255, 255, 255, 0.5);
   bottom: -2px;
   width: 33.33%;
   height: 2px;
-  background: $color-accent;
+  background: var(--awd-mint);
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -839,25 +836,25 @@ $glass-border: rgba(255, 255, 255, 0.5);
 }
 .label {
   font-size: 13px;
-  color: $color-text-main;
+  color: var(--awd-text);
   font-weight: 500;
 }
 .glass-input {
   height: 48px;
-  background: rgba(255,255,255,0.6);
+  background: var(--awd-surface);
   border: 1px solid rgba(0,0,0,0.1);
   border-radius: 8px;
   padding: 0 16px;
   font-size: 15px;
   transition: all 0.2s;
   &:focus {
-    background: #fff;
-    border-color: $color-accent;
+    background: var(--awd-surface);
+    border-color: var(--awd-mint);
     box-shadow: 0 0 0 3px rgba(91, 209, 151, 0.2);
   }
 }
 .placeholder-style {
-  color: #aaa;
+  color: var(--awd-text-3);
 }
 
 .form-options {
@@ -866,14 +863,14 @@ $glass-border: rgba(255, 255, 255, 0.5);
   align-items: center;
   margin-bottom: 24px;
   font-size: 13px;
-  color: $color-text-light;
+  color: var(--awd-text-2);
 }
 .remember-me {
   display: flex;
   align-items: center;
 }
 .link-text {
-  color: $color-primary;
+  color: var(--awd-accent-text);
   cursor: pointer;
 
   &.disabled {
@@ -885,15 +882,15 @@ $glass-border: rgba(255, 255, 255, 0.5);
 .sms-hint {
   display: block;
   font-size: 12px;
-  color: $color-text-light;
+  color: var(--awd-text-2);
   margin-bottom: 6px;
 }
 
 .action-btn {
   width: 100%;
   height: 50px;
-  background: $color-primary;
-  color: #fff;
+  background: var(--awd-accent);
+  color: var(--awd-text-on-accent);
   border-radius: 8px;
   font-size: 16px;
   font-weight: 500;
@@ -913,7 +910,7 @@ $glass-border: rgba(255, 255, 255, 0.5);
   margin-top: 32px;
   text-align: center;
   font-size: 12px;
-  color: #aaa;
+  color: var(--awd-text-3);
 }
 
 /* Animations */

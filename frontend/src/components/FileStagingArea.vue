@@ -383,15 +383,15 @@ export default {
   display: flex;
   flex-direction: column;
   
-  background: #f8fafc;
-  border-top: 1px solid #e2e8f0;
+  background: var(--awd-surface);
+  border-top: 1px solid var(--awd-border);
   box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.05);
   transition: all 0.2s ease;
 }
 
 .drop-zone-container.is-dragging {
-    background: #eff6ff;
-    border-color: #3b82f6;
+    background: var(--awd-info-soft);
+    border-color: var(--awd-info);
 }
 
 .staging-header {
@@ -400,8 +400,8 @@ export default {
     align-items: center;
     justify-content: space-between;
     padding: 0 8px 0 12px;
-    background: #f1f5f9;
-    border-bottom: 1px solid #e2e8f0;
+    background: var(--awd-surface-2);
+    border-bottom: 1px solid var(--awd-border);
 }
 
 .header-left {
@@ -413,7 +413,7 @@ export default {
 .staging-title {
     font-size: 12px;
     font-weight: 600;
-    color: #475569;
+    color: var(--awd-text-2);
 }
 
 .collapse-btn {
@@ -423,13 +423,13 @@ export default {
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    color: #94a3b8;
+    color: var(--awd-text-3);
     border-radius: 4px;
 }
 
 .collapse-btn:hover {
-    background: #e2e8f0;
-    color: #64748b;
+    background: var(--awd-surface-3);
+    color: var(--awd-text-2);
 }
 
 .collapse-icon {
@@ -440,11 +440,11 @@ export default {
 
 .clear-btn {
     font-size: 11px;
-    color: #94a3b8;
+    color: var(--awd-text-3);
     cursor: pointer;
 }
 .clear-btn:hover {
-    color: #ef4444;
+    color: var(--awd-danger-text);
 }
 
 /* 用量条：常态是灰细线，克制到几乎看不见；接近上限才转暖色 */
@@ -453,37 +453,37 @@ export default {
     align-items: center;
     gap: 8px;
     padding: 6px 12px;
-    background: #fff;
-    border-bottom: 1px solid #e2e8f0;
+    background: var(--awd-surface);
+    border-bottom: 1px solid var(--awd-border);
 }
 
 .quota-bar {
     flex: 1;
     height: 3px;
     border-radius: 2px;
-    background: #e2e8f0;
+    background: var(--awd-surface-3);
     overflow: hidden;
 }
 
 .quota-fill {
     height: 100%;
-    background: #cbd5e1;
+    background: var(--awd-surface-3);
     border-radius: 2px;
     transition: width 0.2s ease, background 0.2s ease;
 }
 
 .quota-text {
     font-size: 11px;
-    color: #94a3b8;
+    color: var(--awd-text-3);
     flex-shrink: 0;
 }
 
 .staging-quota.is-tight .quota-fill {
-    background: #d9a441;
+    background: var(--awd-warning);
 }
 
 .staging-quota.is-tight .quota-text {
-    color: #8a6d2f;
+    color: var(--awd-warning-text);
 }
 
 .staging-unlock-hint {
@@ -495,9 +495,9 @@ export default {
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #94a3b8;
+    color: var(--awd-text-3);
     font-size: 12px;
-    border: 2px dashed #e2e8f0;
+    border: 2px dashed var(--awd-border);
     margin: 8px;
     border-radius: 6px;
 }
@@ -538,33 +538,33 @@ export default {
 .custom-checkbox {
     width: 14px;
     height: 14px;
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--awd-border-strong);
     border-radius: 3px;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #fff;
+    background: var(--awd-surface);
     transition: all 0.2s;
 }
 
 .custom-checkbox.checked {
-    background: #3b82f6;
-    border-color: #3b82f6;
+    background: var(--awd-info);
+    border-color: var(--awd-info);
 }
 
 .check-mark {
-    color: #fff;
+    color: var(--awd-text-on-accent);
     font-size: 10px;
     font-weight: bold;
     line-height: 1;
 }
 
 .staging-item:hover {
-    background: #f1f5f9;
+    background: var(--awd-surface-2);
 }
 .staging-item.selected {
-    background: #e0f2fe;
-    border-color: #bae6fd;
+    background: var(--awd-info-soft);
+    border-color: var(--awd-info);
 }
 
 .file-icon {
@@ -576,7 +576,7 @@ export default {
 
 .file-name {
     font-size: 12px;
-    color: #334155;
+    color: var(--awd-text);
     flex: 1;
     white-space: nowrap;
     overflow: hidden;
@@ -585,26 +585,26 @@ export default {
 
 .remove-btn {
     margin-left: 8px;
-    color: #94a3b8;
+    color: var(--awd-text-3);
     cursor: pointer;
     font-size: 16px;
     line-height: 1;
     padding: 4px;
 }
 .remove-btn:hover {
-    color: #ef4444;
+    color: var(--awd-danger-text);
 }
 
 .compare-btn-wrapper {
     padding: 8px;
-    background: #fff;
-    border-bottom: 1px solid #e2e8f0;
+    background: var(--awd-surface);
+    border-bottom: 1px solid var(--awd-border);
     display: flex;
     justify-content: center;
 }
 
 .btn-compare {
-    background: #3b82f6;
+    background: var(--awd-info);
     color: white;
     border: none;
     border-radius: 4px;
@@ -617,7 +617,7 @@ export default {
     line-height: 1.5;
 }
 .btn-compare:hover {
-    background: #2563eb;
+    background: var(--awd-info);
 }
 
 .drop-overlay {
@@ -627,11 +627,11 @@ export default {
     right: 0;
     bottom: 0;
     background: rgba(59, 130, 246, 0.1);
-    border: 2px dashed #3b82f6;
+    border: 2px dashed var(--awd-info);
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #2563eb;
+    color: var(--awd-info-text);
     font-weight: 600;
     pointer-events: none; /* Let drag events pass through to layer below if needed, but here overlay is top */
     z-index: 101;
@@ -646,7 +646,7 @@ export default {
 .marquee-box {
     position: absolute;
     background: rgba(59, 130, 246, 0.2);
-    border: 1px solid #3b82f6;
+    border: 1px solid var(--awd-info);
     pointer-events: none;
     z-index: 1000;
 }

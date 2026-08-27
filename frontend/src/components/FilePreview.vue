@@ -1216,7 +1216,7 @@ export default {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background-color: #ffffff;
+  background-color: var(--awd-surface);
 }
 
 .preview-placeholder {
@@ -1224,7 +1224,7 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #9ca3af;
+  color: var(--awd-text-3);
   font-size: 28rpx;
 }
 
@@ -1237,8 +1237,8 @@ export default {
 
 .preview-header {
   padding: 24rpx;
-  border-bottom: 1rpx solid #e5e7eb;
-  background-color: #ffffff;
+  border-bottom: 1rpx solid var(--awd-border);
+  background-color: var(--awd-surface);
 }
 
 .preview-title-row {
@@ -1251,7 +1251,7 @@ export default {
 .preview-title {
   font-size: 32rpx;
   font-weight: 500;
-  color: #1f2430;
+  color: var(--awd-text);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1269,7 +1269,7 @@ export default {
 
 .meta-item {
   font-size: 24rpx;
-  color: #6b7280;
+  color: var(--awd-text-2);
 }
 
 .preview-body {
@@ -1300,9 +1300,9 @@ export default {
   width: 380rpx;
   box-sizing: border-box;
   padding: 16rpx;
-  background: rgba(255, 255, 255, 0.98);
-  border: 1rpx solid #e5e7eb;
-  border-left: 6rpx solid #1A5336;
+  background: var(--awd-surface);
+  border: 1rpx solid var(--awd-border);
+  border-left: 6rpx solid var(--awd-accent);
   border-radius: 10rpx;
   box-shadow: 0 6rpx 20rpx rgba(15, 23, 42, 0.16);
 }
@@ -1317,26 +1317,26 @@ export default {
 .elc-title {
   font-size: 24rpx;
   font-weight: 600;
-  color: #1A5336;
+  color: var(--awd-accent-text);
 }
 
 .elc-close {
   padding: 0 8rpx;
   font-size: 28rpx;
   line-height: 1;
-  color: #9ca3af;
+  color: var(--awd-text-3);
   cursor: pointer;
 }
 
 .elc-close:hover {
-  color: #374151;
+  color: var(--awd-text);
 }
 
 .elc-sub {
   display: block;
   margin-top: 8rpx;
   font-size: 20rpx;
-  color: #6b7280;
+  color: var(--awd-text-2);
 }
 
 /* 页位图：A4 竖版比例的纸面示意，框按归一化坐标落百分比 */
@@ -1345,22 +1345,22 @@ export default {
   width: 180rpx;
   height: 254rpx;
   margin: 8rpx 0;
-  background: #ffffff;
-  border: 1rpx solid #d1d5db;
+  background: var(--awd-surface);
+  border: 1rpx solid var(--awd-border-strong);
 }
 
 .elc-map-rect {
   position: absolute;
   box-sizing: border-box;
-  background: rgba(26, 83, 54, 0.28);
-  border: 1rpx solid #1A5336;
+  background: var(--awd-accent);
+  border: 1rpx solid var(--awd-accent);
 }
 
 .elc-miss {
   display: block;
   margin-top: 8rpx;
   font-size: 22rpx;
-  color: #9B1C31;
+  color: var(--awd-danger-text);
 }
 
 .elc-quote {
@@ -1369,11 +1369,11 @@ export default {
   padding: 8rpx 10rpx;
   max-height: 160rpx;
   overflow: hidden;
-  background: #f9fafb;
+  background: var(--awd-bg);
   border-radius: 6rpx;
   font-size: 22rpx;
   line-height: 1.5;
-  color: #374151;
+  color: var(--awd-text);
   word-break: break-all;
 }
 
@@ -1381,15 +1381,15 @@ export default {
   display: inline-block;
   margin-top: 10rpx;
   padding: 6rpx 16rpx;
-  border: 1rpx solid #d1d5db;
+  border: 1rpx solid var(--awd-border-strong);
   border-radius: 6rpx;
   font-size: 22rpx;
-  color: #374151;
+  color: var(--awd-text);
   cursor: pointer;
 }
 
 .elc-copy:hover {
-  background: #f3f4f6;
+  background: var(--awd-surface-2);
 }
 
 /* EvidenceLink 音视频时间标记（P3）：视频浮在画面上，音频跟在时间行下面 */
@@ -1402,9 +1402,9 @@ export default {
   align-items: center;
   gap: 12rpx;
   padding: 8rpx 12rpx;
-  background: rgba(255, 255, 255, 0.96);
-  border: 1rpx solid #e5e7eb;
-  border-left: 6rpx solid #1A5336;
+  background: var(--awd-surface);
+  border: 1rpx solid var(--awd-border);
+  border-left: 6rpx solid var(--awd-accent);
   border-radius: 8rpx;
   box-shadow: 0 4rpx 14rpx rgba(15, 23, 42, 0.16);
 }
@@ -1421,33 +1421,33 @@ export default {
 
 .emm-label {
   font-size: 22rpx;
-  color: #1A5336;
+  color: var(--awd-accent-text);
   font-weight: 600;
 }
 
 .emm-btn {
   padding: 4rpx 14rpx;
-  border: 1rpx solid #d1d5db;
+  border: 1rpx solid var(--awd-border-strong);
   border-radius: 6rpx;
   font-size: 22rpx;
-  color: #374151;
+  color: var(--awd-text);
   cursor: pointer;
 }
 
 .emm-btn:hover {
-  background: #f3f4f6;
+  background: var(--awd-surface-2);
 }
 
 .emm-close {
   padding: 0 6rpx;
   font-size: 26rpx;
   line-height: 1;
-  color: #9ca3af;
+  color: var(--awd-text-3);
   cursor: pointer;
 }
 
 .emm-close:hover {
-  color: #374151;
+  color: var(--awd-text);
 }
 
 /* Word 文档零配置只读渲染容器（docx-preview） */
@@ -1455,7 +1455,7 @@ export default {
   width: 100%;
   height: 100%;
   overflow: auto;
-  background-color: #f3f4f6;
+  background-color: var(--awd-surface-2);
 }
 
 /* PPTX 零配置只读渲染容器（pptx-preview） */
@@ -1463,7 +1463,7 @@ export default {
   width: 100%;
   height: 100%;
   overflow: auto;
-  background-color: #f3f4f6;
+  background-color: var(--awd-surface-2);
 }
 
 .pptx-host {
@@ -1480,7 +1480,7 @@ export default {
 .docx-loading {
   padding: 32rpx;
   text-align: center;
-  color: #6b7280;
+  color: var(--awd-text-2);
   font-size: 28rpx;
 }
 
@@ -1493,7 +1493,7 @@ export default {
 .preview-hint {
   display: block;
   font-size: 24rpx;
-  color: #9ca3af;
+  color: var(--awd-text-3);
   margin-top: 8rpx;
 }
 
@@ -1516,8 +1516,8 @@ export default {
 .evidence-rect {
   position: absolute;
   box-sizing: border-box;
-  border: 2px solid #1A5336;
-  background: rgba(26, 83, 54, 0.12);
+  border: 2px solid var(--awd-accent);
+  background: var(--awd-surface-2);
   box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.18);
   cursor: pointer;
   transition: box-shadow 0.4s ease;
@@ -1545,8 +1545,8 @@ export default {
   align-items: center;
   gap: 4rpx;
   padding: 8rpx 12rpx;
-  background: rgba(255, 255, 255, 0.96);
-  border: 1rpx solid #e5e7eb;
+  background: var(--awd-surface);
+  border: 1rpx solid var(--awd-border);
   border-radius: 10rpx;
   box-shadow: 0 4rpx 16rpx rgba(0, 0, 0, 0.18);
   /* 容器背景的 cursor:grab 会被子元素继承，工具栏不是可拖拽画布，这里截断 */
@@ -1563,12 +1563,12 @@ export default {
   border: none;
   border-radius: 6rpx;
   font-size: 26rpx;
-  color: #374151;
+  color: var(--awd-text);
   cursor: pointer;
 }
 
 .img-tool-btn:hover {
-  background: #f3f4f6;
+  background: var(--awd-surface-2);
 }
 
 .img-tool-btn-text {
@@ -1578,21 +1578,21 @@ export default {
 
 /* 定位框开关的按下态 */
 .img-tool-btn.is-on {
-  background: #E8F0EB;
-  color: #1A5336;
+  background: var(--awd-accent-soft);
+  color: var(--awd-accent-text);
 }
 
 .img-zoom-pct {
   min-width: 76rpx;
   text-align: center;
   font-size: 22rpx;
-  color: #6b7280;
+  color: var(--awd-text-2);
 }
 
 .img-tool-sep {
   width: 1rpx;
   height: 28rpx;
-  background: #e5e7eb;
+  background: var(--awd-surface-3);
   margin: 0 4rpx;
 }
 
@@ -1604,7 +1604,7 @@ export default {
 
 .text-content {
   font-size: 28rpx;
-  color: #1f2430;
+  color: var(--awd-text);
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-all;
@@ -1617,7 +1617,7 @@ export default {
   align-items: center;
   justify-content: center;
   gap: 24rpx;
-  color: #9ca3af;
+  color: var(--awd-text-3);
   font-size: 28rpx;
 }
 
@@ -1642,7 +1642,7 @@ export default {
   justify-content: center;
   width: 100%;
   height: 100%;
-  color: #ffffff;
+  color: var(--awd-text-on-accent);
   font-size: 28rpx;
 }
 
@@ -1654,7 +1654,7 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  background-color: #f8f9fa;
+  background-color: var(--awd-bg);
 }
 
 .audio-card {
@@ -1662,8 +1662,8 @@ export default {
   max-width: 460px;
   padding: 24px;
   box-sizing: border-box;
-  background: #ffffff;
-  border: 1px solid #E6EAE8;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 12px;
   box-shadow: 0 6px 24px rgba(18, 52, 77, 0.06);
 }
@@ -1679,14 +1679,14 @@ export default {
   width: 22px;
   height: 22px;
   flex-shrink: 0;
-  color: #1A5336;
+  color: var(--awd-accent-text);
 }
 
 .audio-name {
   flex: 1;
   min-width: 0;
   font-size: 14px;
-  color: #334155;
+  color: var(--awd-text);
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1696,7 +1696,7 @@ export default {
 .audio-loading {
   padding: 12px 0;
   font-size: 12px;
-  color: #9aa5a0;
+  color: var(--awd-text-3);
   text-align: center;
 }
 
@@ -1718,11 +1718,11 @@ export default {
 
 .audio-track-rail {
   right: 0;
-  background: #E6EAE8;
+  background: var(--awd-surface-2);
 }
 
 .audio-track-fill {
-  background: #1A5336;
+  background: var(--awd-accent);
 }
 
 /* EvidenceLink 定位刻度：告诉用户「证据在这条录音的哪一处」，比进度旋钮矮一档，
@@ -1733,7 +1733,7 @@ export default {
   width: 2px;
   height: 12px;
   margin-left: -1px;
-  background: #9B1C31;
+  background: var(--awd-danger);
   pointer-events: none;
 }
 
@@ -1744,7 +1744,7 @@ export default {
   height: 10px;
   margin-left: -5px;
   border-radius: 50%;
-  background: #1A5336;
+  background: var(--awd-accent);
   box-shadow: 0 1px 4px rgba(26, 83, 54, 0.4);
 }
 
@@ -1756,7 +1756,7 @@ export default {
 
 .audio-time {
   font-size: 11px;
-  color: #8b9691;
+  color: var(--awd-text-2);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1775,14 +1775,14 @@ export default {
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: #1A5336;
-  color: #ffffff;
+  background: var(--awd-accent);
+  color: var(--awd-text-on-accent);
   cursor: pointer;
   transition: background 0.15s ease;
 }
 
 .audio-play:hover {
-  background: #22694A;
+  background: var(--awd-accent-hover);
 }
 
 .audio-play-glyph {
@@ -1799,18 +1799,18 @@ export default {
 .audio-rate {
   min-width: 40px;
   padding: 4px 8px;
-  border: 1px solid #E6EAE8;
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   font-size: 12px;
-  color: #4a5751;
+  color: var(--awd-text);
   text-align: center;
   cursor: pointer;
   font-variant-numeric: tabular-nums;
 }
 
 .audio-rate:hover {
-  border-color: #5BD197;
-  color: #1A5336;
+  border-color: var(--awd-mint);
+  color: var(--awd-accent-text);
 }
 
 .audio-vol {
@@ -1822,7 +1822,7 @@ export default {
 .audio-vol-btn {
   width: 20px;
   height: 20px;
-  color: #4a5751;
+  color: var(--awd-text);
   cursor: pointer;
 }
 
@@ -1849,11 +1849,11 @@ export default {
 
 .audio-vol-rail {
   right: 0;
-  background: #E6EAE8;
+  background: var(--awd-surface-2);
 }
 
 .audio-vol-fill {
-  background: #5BD197;
+  background: var(--awd-mint);
 }
 
 .btn-download {
@@ -1872,23 +1872,23 @@ export default {
   align-items: center;
   justify-content: space-between;
   padding: 16rpx 24rpx;
-  border-bottom: 1rpx solid #e5e7eb;
+  border-bottom: 1rpx solid var(--awd-border);
 }
 
 .archive-count {
   font-size: 24rpx;
-  color: #6b7280;
+  color: var(--awd-text-2);
 }
 
 .archive-status {
   padding: 32rpx;
   text-align: center;
-  color: #6b7280;
+  color: var(--awd-text-2);
   font-size: 28rpx;
 }
 
 .archive-error {
-  color: #b91c1c;
+  color: var(--awd-danger-text);
 }
 
 .archive-list {
@@ -1901,7 +1901,7 @@ export default {
   align-items: center;
   gap: 12rpx;
   padding: 12rpx 24rpx;
-  border-bottom: 1rpx solid #f3f4f6;
+  border-bottom: 1rpx solid var(--awd-border-subtle);
 }
 
 .entry-icon {
@@ -1914,7 +1914,7 @@ export default {
 .entry-path {
   flex: 1;
   font-size: 26rpx;
-  color: #1f2430;
+  color: var(--awd-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1922,7 +1922,7 @@ export default {
 
 .entry-size {
   font-size: 24rpx;
-  color: #9ca3af;
+  color: var(--awd-text-3);
 }
 </style>
 

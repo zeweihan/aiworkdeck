@@ -88,7 +88,7 @@ export default {
 <style scoped>
 .markdown-preview {
   padding: 16px;
-  background: #fff;
+  background: var(--awd-surface);
   height: 100%;
   overflow-y: auto;
   overflow-x: hidden; /* Prevent horizontal overflow */
@@ -101,14 +101,14 @@ export default {
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: #666;
+  color: var(--awd-text-2);
   font-size: 14px;
 }
 
 .markdown-body {
   font-size: 14px;
   line-height: 1.7;
-  color: #2c2c2c;
+  color: var(--awd-text);
   word-wrap: break-word;
   overflow-wrap: break-word;
   user-select: text; /* Allow text selection for copying */
@@ -121,12 +121,12 @@ export default {
   margin-top: 16px;
   margin-bottom: 8px;
   font-weight: 600;
-  color: #1a5336;
+  color: var(--awd-accent-text);
 }
 
 .markdown-body :deep(h1) {
   font-size: 20px;
-  border-bottom: 1px solid #e9ecef;
+  border-bottom: 1px solid var(--awd-border);
   padding-bottom: 8px;
 }
 
@@ -153,7 +153,7 @@ export default {
 }
 
 .markdown-body :deep(code) {
-  background: #f5f5f5;
+  background: var(--awd-surface-2);
   padding: 2px 6px;
   border-radius: 4px;
   font-family: 'Menlo', 'Monaco', monospace;
@@ -161,7 +161,7 @@ export default {
 }
 
 .markdown-body :deep(pre) {
-  background: #f9f9f9;
+  background: var(--awd-surface);
   padding: 12px;
   border-radius: 6px;
   overflow-x: auto;
@@ -174,10 +174,10 @@ export default {
 }
 
 .markdown-body :deep(blockquote) {
-  border-left: 3px solid #1a5336;
+  border-left: 3px solid var(--awd-accent);
   padding-left: 12px;
   margin: 12px 0;
-  color: #666;
+  color: var(--awd-text-2);
   font-style: italic;
 }
 
@@ -189,13 +189,13 @@ export default {
 
 .markdown-body :deep(th),
 .markdown-body :deep(td) {
-  border: 1px solid #e9ecef;
+  border: 1px solid var(--awd-border);
   padding: 8px 12px;
   text-align: left;
 }
 
 .markdown-body :deep(th) {
-  background: #f5f5f5;
+  background: var(--awd-surface-2);
   font-weight: 600;
 }
 

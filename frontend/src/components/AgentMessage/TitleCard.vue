@@ -20,7 +20,7 @@ defineProps({
   margin: 0;
   font-size: 14px;
   font-weight: 600;
-  color: #2c3e50;
+  color: var(--awd-text);
   padding: 6px 8px 2px;
 }
 </style>

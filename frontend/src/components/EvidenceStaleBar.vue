@@ -46,16 +46,16 @@ export default {
 </script>
 
 <style scoped>
-.esb { position: absolute; top: 0; left: 0; right: 0; z-index: 30; background: #FFF7E6; border-bottom: 1px solid #FFD591;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06); font-size: 12px; color: #8A5A00; }
+.esb { position: absolute; top: 0; left: 0; right: 0; z-index: 30; background: var(--awd-warning-soft); border-bottom: 1px solid var(--awd-warning);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06); font-size: 12px; color: var(--awd-text); }
 .esb-main { display: flex; align-items: center; gap: 8px; padding: 6px 12px; flex-wrap: wrap; }
-.esb-dot { width: 8px; height: 8px; border-radius: 50%; background: #F5B30E; flex-shrink: 0; }
+.esb-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--awd-warning); flex-shrink: 0; }
 .esb-text { flex: 1; min-width: 0; }
-.esb-link { color: #1A5336; text-decoration: underline; }
+.esb-link { color: var(--awd-accent-text); text-decoration: underline; }
 .esb-acts { display: flex; gap: 6px; }
-.esb-btn { padding: 2px 10px; border: 1px solid #DEE2E6; border-radius: 6px; background: #fff; color: #495057; }
-.esb-btn.ok { border-color: #5BD197; color: #1A5336; }
-.esb-list { border-top: 1px solid #FFE7BA; padding: 4px 12px 6px; }
+.esb-btn { padding: 2px 10px; border: 1px solid var(--awd-border); border-radius: 6px; background: var(--awd-surface); color: var(--awd-text-2); }
+.esb-btn.ok { border-color: var(--awd-mint); color: var(--awd-accent-text); }
+.esb-list { border-top: 1px solid var(--awd-warning); padding: 4px 12px 6px; }
 .esb-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
-.esb-row-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #495057; }
+.esb-row-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--awd-text-2); }
 </style>

@@ -474,7 +474,12 @@ check('顶栏头像下拉恰好两项：设置 + 退出登录（2026-08-27，dev
   if (!btn.includes('avatarMenuOpen')) return '头像没有开下拉（avatarMenuOpen）'
   const menuIdx = src.indexOf('class="avatar-menu"')
   if (menuIdx < 0) return '找不到 .avatar-menu 下拉'
-  const menu = src.slice(menuIdx, menuIdx + 700)
+  // 2026-08-27（dev-board#225）：顶栏余额 chip 并进下拉，菜单顶部多了一块账户抬头。
+  // 判据因此从「字符窗口里找得到两个动作」改成「动作项恰好两项」——抬头不是动作项，
+  // 不占这两项的名额，但也不许再多出第三个动作把退出登录挤下去。
+  const menu = src.slice(menuIdx, menuIdx + 1800)
+  const actions = menu.match(/class="avatar-menu-item/g) || []
+  if (actions.length !== 2) return `下拉动作项应恰好两项，实际 ${actions.length} 项`
   if (!menu.includes('onAvatarMenuSettings')) return '下拉里没有「设置」项（onAvatarMenuSettings）'
   if (!menu.includes('onAvatarMenuSignOut')) return '下拉里没有「退出登录」项（onAvatarMenuSignOut）'
   // 退出必须走唯一编排，不许在页面里自拼 disconnect/deactivate

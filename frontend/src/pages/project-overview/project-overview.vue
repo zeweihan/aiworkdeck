@@ -90,7 +90,7 @@
 
       <!-- Center Logo -->
       <view class="header-center">
-         <image src="/static/logo_full_v2.png" mode="heightFix" class="project-logo" />
+         <image src="/static/logo_full_v2.png" mode="heightFix" class="project-logo awd-brand-logo" />
       </view>
 
       <view class="header-right">
@@ -115,6 +115,25 @@
         </view>
         <!-- 顶部工具区（IDE 风格）：整理 / 分屏 / 浏览器 / 摘录 / AI / 工具 -->
         <view class="header-tools" v-if="!isClientView">
+          <!-- 外观主题（dev-board#223）：浅色/深色/跟随系统三选一。
+               图标显示的是**当前生效**的外观（跟随系统时也显示解析后的那个）。 -->
+          <view class="top-bar-btn theme-btn" :class="{ active: themeMenuOpen }" @tap.stop="themeMenuOpen = !themeMenuOpen" :title="$t('workbench.appearance')">
+            <svg class="tool-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, gi) in (resolvedTheme === 'dark' ? GLYPHS.moon : GLYPHS.sun)" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <view v-if="themeMenuOpen" class="theme-menu" @tap.stop>
+              <view
+                v-for="opt in themeOptions"
+                :key="opt.value"
+                class="theme-menu-item"
+                :class="{ on: themeMode === opt.value }"
+                @tap="pickTheme(opt.value)"
+              >
+                <text class="theme-menu-text">{{ opt.label }}</text>
+              </view>
+            </view>
+          </view>
+          <view v-if="themeMenuOpen" class="theme-menu-mask" @tap="themeMenuOpen = false"></view>
           <!-- rail 整理模式开关（dev-board#215/#221）：从 rail 挪到顶栏（原「已连接账户」chip 位），
                开着时 rail 可拖项抖动+虚线框、点击不打开面板，再按一次退出 -->
           <view
@@ -220,17 +239,18 @@
             </view>
         </view>
 
-        <!-- Credits 余额 chip（dev-board#187）：余额 + 会员等级徽章（level>=2 才显示等级名）。
-             connected:false 或拉取失败时整个不渲染（绝不出现 0 或 —）；官网不可达
-             （available:false）时余额位显示「—」。点击直达设置「账户与用量」。 -->
+        <!-- Credits 余额（dev-board#187 → #223 合并）：余额与头像本是同一件事
+             （都是「我的账户」，点开都通向设置的「账户与用量」），并排两个 chip
+             是重复入口，已收进头像下拉。
+             **只有余额不足时仍在顶栏常显**——那是唯一「不处理就会卡住干活」的
+             信号，藏进下拉等于让用户在跑任务时才撞上。 -->
         <view
-          v-if="walletChipVisible"
-          class="trial-chip wallet-chip"
+          v-if="walletChipVisible && walletLow"
+          class="trial-chip wallet-chip wallet-chip-low"
           @tap.stop="goToAccountPanel"
           :title="$t('workbench.walletChipTitle')"
         >
           <text class="trial-chip-text">{{ walletChipText }}</text>
-          <text v-if="walletTierName" class="wallet-chip-tier">{{ walletTierName }}</text>
         </view>
 
         <!-- 用户头像 + 下拉（2026-08-19 从 rail 底部搬上来）。
@@ -250,6 +270,14 @@
           </view>
           <view v-if="avatarMenuOpen" class="avatar-menu-mask" @tap.stop="avatarMenuOpen = false"></view>
           <view v-if="avatarMenuOpen" class="avatar-menu">
+            <!-- 账户抬头：余额 + 等级。整块可点，去向与原余额 chip 一致 -->
+            <view v-if="walletChipVisible" class="avatar-menu-wallet" @tap.stop="onAvatarMenuAccount">
+              <view class="avatar-menu-wallet-row">
+                <text class="avatar-menu-balance" :class="{ low: walletLow }">{{ walletChipText }}</text>
+                <text v-if="walletTierName" class="avatar-menu-tier">{{ walletTierName }}</text>
+              </view>
+              <text class="avatar-menu-wallet-label">{{ $t('workbench.walletMenuLabel') }}</text>
+            </view>
             <view class="avatar-menu-item" @tap.stop="onAvatarMenuSettings">
               <text>{{ $t('workbench.settingsTabName') }}</text>
             </view>
@@ -2027,6 +2055,7 @@ import { evidenceLinkData, evidenceLinkMethods } from './evidenceLinkActions.js'
 import { tabDragSplitMethods } from './tabDragSplit.js'
 import { panelDockingData, panelDockingMethods } from './panelDocking.js'
 import { railSortData, railSortMethods } from './railSort.js'
+import { themeSwitchData, themeSwitchMethods, themeSwitchComputed } from './themeSwitch.js'
 import { fileOpenTabsMethods } from './fileOpenTabs.js'
 import { clipboardBridgeMethods } from './clipboardBridge.js'
 import { ocrActionMethods } from './ocrActions.js'
@@ -2260,6 +2289,7 @@ export default {
       // 面板停靠（dev-board#180）：panelDockOverrides / rightPaneKey / 拖拽与右键菜单状态
       ...panelDockingData(),
       ...railSortData(),
+      ...themeSwitchData(),
       // Desensitize Callback
       desensitizeFileSelectCallback: null,
       // 诉讼可视化面板的材料范围选择回调（复用同一个 FilePickerDialog）
@@ -2362,6 +2392,7 @@ export default {
     }
   },
   computed: {
+    ...themeSwitchComputed,
     GLYPHS() {
       return GLYPHS
     },
@@ -2406,6 +2437,13 @@ export default {
       const cents = Number(this.wallet.balanceCents)
       const symbol = siteLinks().current === 'cn' ? '¥' : '$'
       return symbol + ((Number.isFinite(cents) ? cents : 0) / 100).toFixed(2)
+    },
+    // 余额不足：低于 20 元（2000 分）视为要提醒。官网不可达（余额未知）不算——
+    // 那是连接问题不是钱的问题，用「—」表达就够了，不该冒充告急。
+    walletLow() {
+      if (this.wallet.available === false) return false
+      const cents = Number(this.wallet.balanceCents)
+      return Number.isFinite(cents) && cents < 2000
     },
     // 等级名小徽章：level>=2 才显示（律师助理档只显示余额），按语言取 nameZh/nameEn
     walletTierName() {
@@ -2825,6 +2863,7 @@ export default {
     }
   },
   beforeUnmount() {
+    this.disposeThemeSwitch()
     // 多实例守卫：只清掉指向自己的活跃指针；返回上一个本页实例时由其 onShow 重新接管
     if (typeof window !== 'undefined' && window.__checkbaActiveOverviewVm === this) {
       window.__checkbaActiveOverviewVm = null
@@ -3037,6 +3076,7 @@ export default {
     this.loadPanelDocks()
     // rail 图标顺序（dev-board#204）：同为本机习惯，跟停靠位一起在首帧前恢复
     this.loadRailOrder()
+    this.initThemeSwitch()
 
     const savedKey = uni.getStorageSync(`project_${this.projectId}_leftPaneKey`)
     if (savedKey && user && user.role === 'CLIENT') {
@@ -3589,6 +3629,7 @@ export default {
     // 面板停靠（dev-board#180）
     ...panelDockingMethods,
     ...railSortMethods,
+    ...themeSwitchMethods,
     // Phase 3a 外置的方法组
     ...clipboardBridgeMethods,
     // Phase 3b 外置的方法组
@@ -4867,6 +4908,10 @@ export default {
     // 状态判定都在它里面，这里只负责收起菜单。注意位置：不能插在 goToSystemSettings
     // 与 openSettingsTab 之间——check-navigation-contract 的方法提取按
     // 「call site 后第一个 {」配对，中间夹方法会截断它的窗口。
+    onAvatarMenuAccount() {
+      this.avatarMenuOpen = false
+      this.goToAccountPanel()
+    },
     onAvatarMenuSettings() {
       this.avatarMenuOpen = false
       this.goToSystemSettings()

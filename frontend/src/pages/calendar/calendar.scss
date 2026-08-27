@@ -1,12 +1,5 @@
 /* 全局日历页样式。配色沿用 project-list.vue 的品牌调色板（浅色专业风红线，
    sidebar-shell 配色红线：白 / #F8F9FA 底 + 森林绿 #1A5336 + mint #5BD197 点缀）。 */
-$brand-primary: #1A5336;
-$brand-accent: #5BD197;
-$text-main: #2C3338;
-$text-secondary: #6C757D;
-$text-light: #ADB5BD;
-$border-color: #E9ECEF;
-$danger-color: #E74C3C;
 
 .page-calendar {
   height: 100vh;
@@ -14,8 +7,8 @@ $danger-color: #E74C3C;
   padding: 24px;
   display: flex;
   flex-direction: column;
-  background: linear-gradient(135deg, #F8F9FA 0%, #E8F3ED 100%);
-  color: $text-main;
+  background: linear-gradient(135deg, var(--awd-bg) 0%, var(--awd-accent-soft) 100%);
+  color: var(--awd-text);
   overflow: hidden;
 }
 
@@ -36,7 +29,7 @@ $danger-color: #E74C3C;
   justify-content: flex-start;
   gap: 20px;
   margin-bottom: 20px;
-  border-bottom: 1px solid $border-color;
+  border-bottom: 1px solid var(--awd-border);
   padding-bottom: 16px;
   flex: none;
 }
@@ -44,7 +37,7 @@ $danger-color: #E74C3C;
 .header-title {
   font-size: 20px;
   font-weight: 600;
-  color: $text-main;
+  color: var(--awd-text);
   flex: 0 0 auto;
 }
 
@@ -56,20 +49,20 @@ $danger-color: #E74C3C;
 }
 
 .btn-secondary-small {
-  background: #fff;
-  color: $text-light;
+  background: var(--awd-surface);
+  color: var(--awd-text-3);
   font-size: 13px;
   font-weight: 500;
   padding: 6px 12px;
   border-radius: 6px;
-  border: 1px solid $border-color;
+  border: 1px solid var(--awd-border);
   cursor: pointer;
   line-height: 1.5;
   transition: all 0.2s;
 
   &:hover {
-    border-color: $brand-primary;
-    color: $brand-primary;
+    border-color: var(--awd-accent);
+    color: var(--awd-accent-text);
   }
 }
 
@@ -86,8 +79,8 @@ $danger-color: #E74C3C;
   min-height: 0;
   box-sizing: border-box;
   padding: 16px;
-  background: #fff;
-  border: 1px solid $border-color;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 10px;
   display: flex;
   flex-direction: column;
@@ -117,22 +110,22 @@ $danger-color: #E74C3C;
   :deep(.fc-toolbar-title) {
     font-size: 16px;
     font-weight: 600;
-    color: $text-main;
+    color: var(--awd-text);
   }
 
   :deep(.fc-button) {
-    background: #fff;
-    border: 1px solid $border-color;
-    color: $text-secondary;
+    background: var(--awd-surface);
+    border: 1px solid var(--awd-border);
+    color: var(--awd-text-2);
     font-size: 13px;
     font-weight: 500;
     text-transform: none;
     box-shadow: none;
 
     &:hover {
-      background: #F1F7F4;
-      border-color: $brand-primary;
-      color: $brand-primary;
+      background: var(--awd-bg);
+      border-color: var(--awd-accent);
+      color: var(--awd-accent-text);
     }
 
     &:focus {
@@ -141,9 +134,9 @@ $danger-color: #E74C3C;
   }
 
   :deep(.fc-button-primary:not(:disabled).fc-button-active) {
-    background: $brand-primary;
-    border-color: $brand-primary;
-    color: #fff;
+    background: var(--awd-accent);
+    border-color: var(--awd-accent);
+    color: var(--awd-text-on-accent);
   }
 
   :deep(.fc-today-button) {
@@ -152,20 +145,20 @@ $danger-color: #E74C3C;
 
   :deep(.fc-daygrid-day.fc-day-today),
   :deep(.fc-timegrid-col.fc-day-today) {
-    background: rgba(91, 209, 151, 0.1);
+    background: var(--awd-accent-soft);
   }
 
   /* 节假日/调休/周末底色 */
   :deep(.fc-day-holiday) {
-    background: #FDEEEC;
+    background: var(--awd-bg);
   }
 
   :deep(.fc-day-makeup) {
-    background: #EAF1FB;
+    background: var(--awd-bg);
   }
 
   :deep(.fc-day-weekend) {
-    background: #F8F9FA;
+    background: var(--awd-bg);
   }
 
   :deep(.fc-daynum) {
@@ -183,13 +176,13 @@ $danger-color: #E74C3C;
   }
 
   :deep(.fc-holiday-badge-rest) {
-    background: $danger-color;
-    color: #fff;
+    background: var(--awd-danger);
+    color: var(--awd-text-on-accent);
   }
 
   :deep(.fc-holiday-badge-work) {
-    background: #2C5AA0;
-    color: #fff;
+    background: var(--awd-info);
+    color: var(--awd-text-on-accent);
   }
 
   /* 事件卡片 */
@@ -222,7 +215,7 @@ $danger-color: #E74C3C;
     font-weight: 700;
     padding: 0 4px;
     border-radius: 3px;
-    background: rgba(255, 255, 255, 0.6);
+    background: var(--awd-surface);
   }
 
   :deep(.fc-event-done .fc-awd-event-title) {
@@ -230,6 +223,6 @@ $danger-color: #E74C3C;
   }
 
   :deep(.fc-list-event-title a) {
-    color: $text-main;
+    color: var(--awd-text);
   }
 }

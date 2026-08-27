@@ -9,6 +9,7 @@ import { initWindowChrome, refreshDragStrip } from '@/utils/windowChrome.js'
 import { mountGlobalBack, refreshGlobalBack } from '@/utils/globalBack.js'
 import { initAppMenuBridge } from '@/utils/appMenuBridge.js'
 import { getAppLanguage, APP_LANGUAGE_EVENT } from '@/utils/appLanguage.js'
+import { initAppTheme } from '@/utils/appTheme.js'
 import { saveAppLanguageRemote } from '@/services/api.js'
 
 export default {
@@ -17,6 +18,8 @@ export default {
     // 无边框窗口适配：挂平台/全屏 class + 页面级拖拽条。最早做，
     // 免得启动页先渲染出来再跳一下（见 utils/windowChrome.js）。
     initWindowChrome()
+    // 外观主题：也要最早——晚一步首屏会先白一下再变深（见 utils/appTheme.js）
+    initAppTheme()
     // 应用语言：最早读一次（首启在此完成猜测并持久化），并把镜像写透到
     // 桌面主进程（菜单等原生文案）与后端 system_setting（prompt/文案语言）。
     // 之后语言切换（设置页 setAppLanguage）经 APP_LANGUAGE_EVENT 走同一条同步链。
@@ -134,18 +137,18 @@ uni-modal .uni-modal {
 uni-modal .uni-modal__title {
     font-size: 18px;
     font-weight: 600;
-    color: #1A5336; /* Forest Green */
+    color: var(--awd-accent-text); /* Forest Green */
     padding-top: 24px;
 }
 
 uni-modal .uni-modal__content {
     font-size: 15px;
-    color: #6C757D;
+    color: var(--awd-text-2);
     padding-bottom: 24px;
 }
 
 uni-modal .uni-modal__ft {
-    border-top: 1px solid #E9ECEF;
+    border-top: 1px solid var(--awd-border);
 }
 
 uni-modal .uni-modal__btn {
@@ -155,22 +158,141 @@ uni-modal .uni-modal__btn {
 
 /* Cancel Button */
 uni-modal .uni-modal__btn_default {
-    color: #6C757D !important;
+    color: var(--awd-text-2) !important;
 }
 
 /* Confirm Button */
 uni-modal .uni-modal__btn_primary {
-    color: #5BD197 !important; /* Mint Green */
+    color: var(--awd-mint) !important; /* Mint Green */
     font-weight: 600;
 }
 
 /* Toast Override */
 uni-toast .uni-toast {
-   background: rgba(26, 83, 54, 0.9);
+   background: var(--awd-accent);
    border-radius: 8px;
 }
 uni-toast .uni-toast__content {
-    color: #fff;
+    color: var(--awd-text-on-accent);
+}
+
+/* ============ 颜色语义令牌（浅色/深色两套取值） ============
+   改造前全前端有 3950 处硬编码颜色、435 种色值，文字/背景/边框各自混着四套
+   并行灰阶（Bootstrap 的 #6C757D/#ADB5BD、Tailwind slate 的 #64748B/#94A3B8、
+   Tailwind gray 的 #6B7280/#D1D5DB，外加 #333/#666/#999 遗留）。收敛成下面这
+   一套语义令牌：**按用途取名，不按色值取名**——深色模式只是同一批名字换一组值。
+
+   用 CSS 自定义属性而非 scss 变量：各组件的 <style scoped> 有的写 scss 有的写
+   纯 css，自定义属性两边都能用、天然穿透 scoped，且能在运行时整体切换。
+
+   切换机制：utils/theme.js 在 documentElement 上挂 data-theme="light|dark"
+   （「跟随系统」解析成其中之一后再挂，页面里不出现第三种状态）。 */
+html,
+html[data-theme='light'] {
+    /* 表面：底色 → 卡片 → 悬停/凹陷 → 更重的填充 */
+    --awd-bg: #F8F9FA;
+    --awd-surface: #FFFFFF;
+    --awd-surface-2: #F1F3F5;
+    --awd-surface-3: #E9ECEF;
+    /* 文字三阶 + 强调底上的反白 */
+    --awd-text: #2C3338;
+    --awd-text-2: #6C757D;
+    --awd-text-3: #ADB5BD;
+    --awd-text-on-accent: #FFFFFF;
+    /* 边框三阶 */
+    --awd-border-subtle: #F1F3F5;
+    --awd-border: #E9ECEF;
+    --awd-border-strong: #CBD5E1;
+    /* 品牌：accent 作底、accent-text 作字——深色下两者取值不同，必须分开 */
+    --awd-accent: #1A5336;
+    --awd-accent-hover: #164429;
+    --awd-accent-text: #1A5336;
+    --awd-accent-soft: #E6F9F0;
+    --awd-accent-wash: rgba(26, 83, 54, 0.04);
+    --awd-mint: #5BD197;
+    /* 语义状态 */
+    --awd-danger: #E74C3C;
+    --awd-danger-text: #C53030;
+    --awd-danger-soft: #FEF2F2;
+    --awd-warning: #F59E0B;
+    --awd-warning-text: #B45309;
+    --awd-warning-soft: #FFF7ED;
+    --awd-info: #3B82F6;
+    --awd-info-text: #1D4ED8;
+    --awd-info-soft: #EFF6FF;
+    /* 阴影与遮罩 */
+    --awd-shadow-sm: 0 1px 2px rgba(18, 52, 77, 0.06);
+    --awd-shadow-md: 0 4px 16px rgba(18, 52, 77, 0.08);
+    --awd-shadow-lg: 0 12px 32px rgba(18, 52, 77, 0.16);
+    --awd-overlay: rgba(0, 0, 0, 0.45);
+    /* 空态光晕（工作区/首屏那圈柔光）：浅色是品牌绿薄雾；深色不能沿用——
+       半透明绿铺在深底上会变成一团脏绿雾，改成不带色相的极淡提亮 */
+    --awd-halo-1: #E6F9F0;
+    --awd-halo-2: rgba(26, 83, 54, 0.04);
+    /* 整页斜向柔光的落点色（项目列表页/设置页） */
+    --awd-halo-page: #E6F9F0;
+    /* 毛玻璃表面（登录页那种半透明卡片） */
+    --awd-glass: rgba(255, 255, 255, 0.75);
+    --awd-glass-border: rgba(255, 255, 255, 0.5);
+    /* 编辑器纸外工作区（纸张本身由 LOWA 引擎渲染，永远是纸白，不参与主题） */
+    --awd-canvas: #F1F3F5;
+    color-scheme: light;
+}
+
+html[data-theme='dark'] {
+    /* 阶差要比浅色更舍得拉开：深色下人眼对低亮度差极不敏感，页面与卡片只差
+       3-4 个灰阶时卡片会整个"沉进"背景里（第一版 #17191C/#1E2125 就是这样，
+       维护者实测反馈「卡片边框也看不见」）。现在页面最深、卡片明显抬起、
+       边框独立成一档，三者互相认得出。 */
+    --awd-bg: #131518;
+    --awd-surface: #1C2024;
+    --awd-surface-2: #23272C;
+    --awd-surface-3: #2C3137;
+    --awd-text: #E7EAEC;
+    --awd-text-2: #A6ADB4;
+    --awd-text-3: #767E86;
+    /* 深色下 accent 底仍是深绿，反白文字对比度约 5.4:1，语义与浅色一致 */
+    --awd-text-on-accent: #FFFFFF;
+    --awd-border-subtle: #23272C;
+    --awd-border: #373D44;
+    --awd-border-strong: #4B525A;
+    --awd-accent: #24714A;
+    --awd-accent-hover: #2E8B5A;
+    /* 绿字直接用森林绿在深底上读不出来，换高亮薄荷（对比度约 8:1） */
+    --awd-accent-text: #6FD9A3;
+    --awd-accent-soft: rgba(91, 209, 151, 0.13);
+    --awd-accent-wash: rgba(91, 209, 151, 0.06);
+    --awd-mint: #5BD197;
+    --awd-danger: #E05A4E;
+    --awd-danger-text: #FF8A80;
+    --awd-danger-soft: rgba(231, 76, 60, 0.15);
+    --awd-warning: #D9971F;
+    --awd-warning-text: #F0B23C;
+    --awd-warning-soft: rgba(245, 158, 11, 0.14);
+    --awd-info: #3B6FD4;
+    --awd-info-text: #7FAEF9;
+    --awd-info-soft: rgba(59, 130, 246, 0.15);
+    /* 深色下阴影靠纯黑加重，浅色那套带蓝的柔光在深底上等于没有 */
+    --awd-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --awd-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
+    --awd-shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
+    --awd-overlay: rgba(0, 0, 0, 0.6);
+    --awd-halo-1: rgba(255, 255, 255, 0.045);
+    --awd-halo-2: rgba(255, 255, 255, 0);
+    --awd-halo-page: #171A1E;
+    --awd-glass: rgba(28, 32, 36, 0.74);
+    --awd-glass-border: rgba(255, 255, 255, 0.10);
+    --awd-canvas: #101214;
+    color-scheme: dark;
+}
+
+/* 深色下的品牌字标：logo 是深墨字 + 绿标记的透明 PNG，铺在深底上几乎看不见。
+   invert + hue-rotate 把明度翻过来、把色相转回去：墨字变浅、绿仍是绿。
+   注意作用对象——uni-image 在 H5 下真正显示的是那个 background-image 的 div，
+   同级的 <img> 只是隐藏的加载器，只给 img 加滤镜是没有效果的（实测踩过）。 */
+html[data-theme='dark'] .awd-brand-logo > div,
+html[data-theme='dark'] .awd-brand-logo > img {
+    filter: invert(1) hue-rotate(180deg) saturate(1.35) brightness(1.1);
 }
 
 /* ============ 无边框窗口：给系统窗口控件让位 ============
@@ -214,15 +336,18 @@ html {
     --awd-panel-fs-sec: 11px;         /* 分组头字号（配 700 字重） */
     --awd-panel-fs: 12px;             /* 行文字号 */
     --awd-panel-fs-meta: 11px;        /* 次要信息 */
-    --awd-panel-border: #E9ECEF;
-    --awd-panel-hover: #F1F3F5;
-    --awd-panel-text: #2C3338;
-    --awd-panel-text-2: #495057;
-    --awd-panel-text-3: #868E96;
-    --awd-panel-text-4: #ADB5BD;
-    --awd-panel-accent: #1A5336;      /* 森林绿 */
-    --awd-panel-accent-2: #5BD197;    /* mint */
-    --awd-panel-accent-wash: rgba(26, 83, 54, 0.04);
+    /* 颜色一律转发到上面的语义令牌，左栏因此自动跟随主题。
+       text-2/-3/-4 三阶在浅色下原本是 #495057/#868E96/#ADB5BD，收敛到统一灰阶后
+       只剩两阶可用（text-2 与 text-3 合并），差别肉眼几乎不可辨。 */
+    --awd-panel-border: var(--awd-border);
+    --awd-panel-hover: var(--awd-surface-2);
+    --awd-panel-text: var(--awd-text);
+    --awd-panel-text-2: var(--awd-text-2);
+    --awd-panel-text-3: var(--awd-text-2);
+    --awd-panel-text-4: var(--awd-text-3);
+    --awd-panel-accent: var(--awd-accent-text);
+    --awd-panel-accent-2: var(--awd-mint);
+    --awd-panel-accent-wash: var(--awd-accent-wash);
 }
 /* mac：三颗交通灯占住左上角（右缘约 70px，留 18px 呼吸） */
 html.is-mac {
@@ -306,10 +431,10 @@ html.is-desktop .awd-window-drag-strip {
     gap: 4px;
     height: 28px;
     padding: 0 11px 0 8px;
-    border: 1px solid #DDE3E0;
+    border: 1px solid var(--awd-border);
     border-radius: 14px;
-    background: #FFFFFF;
-    color: #1A5336;
+    background: var(--awd-surface);
+    color: var(--awd-accent-text);
     font-size: 12px;
     line-height: 1;
     cursor: pointer;
@@ -320,7 +445,7 @@ html.is-desktop .awd-window-drag-strip {
 }
 
 .awd-global-back:hover {
-    border-color: #5BD197;
+    border-color: var(--awd-mint);
     box-shadow: 0 4px 16px rgba(26, 83, 54, 0.18);
 }
 

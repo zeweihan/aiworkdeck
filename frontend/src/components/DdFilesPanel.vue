@@ -233,7 +233,7 @@ export default {
   display: flex;
   align-items: center;
   gap: 4px;
-  background-color: #fff;
+  background-color: var(--awd-surface);
   box-sizing: border-box;
   flex-shrink: 0;
 
@@ -262,7 +262,7 @@ export default {
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    color: #666;
+    color: var(--awd-text-2);
     border-radius: 4px;
     border: 1px solid transparent;
     transition: all 0.2s;
@@ -270,7 +270,7 @@ export default {
     &:hover {
       background-color: rgba(0,0,0,0.05);
       border-color: transparent;
-      color: #333;
+      color: var(--awd-text);
     }
     
     .dd-add-icon {
@@ -288,7 +288,7 @@ export default {
   flex-direction: column;
   align-items: stretch;
   box-sizing: border-box;
-  background-color: #f8f9fa;
+  background-color: var(--awd-bg);
   overflow-y: auto;
   min-height: 0;
 }
@@ -297,7 +297,7 @@ export default {
   display: flex;
   align-items: center;
   padding: 6px 8px;
-  background-color: #fff;
+  background-color: var(--awd-surface);
   border-radius: var(--awd-panel-radius);
   margin: 0 0 2px;
   cursor: pointer;
@@ -308,17 +308,17 @@ export default {
   flex-shrink: 0;
 
   &:hover {
-    background-color: #f5f7f6; 
+    background-color: var(--awd-bg); 
   }
 
   &.active {
-    border-color: #1A5336;
-    background-color: #E6F9F0;
+    border-color: var(--awd-accent);
+    background-color: var(--awd-accent-soft);
     box-shadow: 0 2px 8px rgba(26, 83, 54, 0.1);
   }
 
   &.active:hover {
-    background-color: #E6F9F0;
+    background-color: var(--awd-accent-soft);
   }
 
   .dd-req-icon {
@@ -344,7 +344,7 @@ export default {
 
     .dd-req-name {
       font-size: 13px;
-      color: #333;
+      color: var(--awd-text);
       margin-bottom: 2px;
       white-space: nowrap;
       overflow: hidden;
@@ -354,16 +354,16 @@ export default {
 
     .dd-req-status {
       font-size: 11px;
-      color: #999;
+      color: var(--awd-text-3);
       
-      &.published { color: #28a745; }
-      &.completed { color: #666; }
+      &.published { color: var(--awd-accent-text); }
+      &.completed { color: var(--awd-text-2); }
     }
     
     .dd-rename-input {
         font-size: 13px;
-        border: 1px solid #4a90e2;
-        background: #fff;
+        border: 1px solid var(--awd-info);
+        background: var(--awd-surface);
         border-radius: 4px;
         padding: 2px 4px;
         width: 100%;
@@ -417,7 +417,7 @@ export default {
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: rgba(0, 0, 0, 0.4);
+  background-color: var(--awd-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -428,23 +428,23 @@ export default {
 .dd-dialog-content {
   width: 320px;
   height: 198px;
-  background-color: #ffffff;
+  background-color: var(--awd-surface);
   border-radius: 12px;
   display: flex;
   flex-direction: column;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
   overflow: hidden;
-  border: 1px solid #e0e0e0;
+  border: 1px solid var(--awd-border);
 }
 
 .dd-dialog-header {
   padding: 16px 20px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--awd-border-subtle);
   
   .dd-dialog-title {
     font-size: 15px;
     font-weight: 600;
-    color: #333;
+    color: var(--awd-text);
   }
 }
 
@@ -457,7 +457,7 @@ export default {
   
   .dd-dialog-msg {
     font-size: 13px;
-    color: #666;
+    color: var(--awd-text-2);
     line-height: 1.6;
     text-align: center;
   }
@@ -477,18 +477,18 @@ export default {
     transition: all 0.2s;
     
     &.cancel {
-      background-color: #f5f5f5;
-      color: #666;
+      background-color: var(--awd-surface-2);
+      color: var(--awd-text-2);
       &:hover {
-        background-color: #eeeeee;
+        background-color: var(--awd-surface-3);
       }
     }
     
     &.confirm {
-      background-color: #4a90e2;
-      color: #ffffff;
+      background-color: var(--awd-info);
+      color: var(--awd-text-on-accent);
       &:hover {
-        background-color: #357abd;
+        background-color: var(--awd-info);
       }
     }
   }
@@ -497,7 +497,7 @@ export default {
 .dd-empty-state {
   padding: 20px;
   text-align: center;
-  color: #999;
+  color: var(--awd-text-3);
   font-size: 12px;
 }
 </style>

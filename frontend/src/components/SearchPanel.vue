@@ -437,29 +437,20 @@ export default {
 
 <style lang="scss" scoped>
 /* Brands Colors from color.md */
-$brand-forest: #1A5336;
 $brand-mint: #5BD197;
-$brand-mint-light: #5BD197; /* Keeping same for now */
-$brand-mint-lightest: #E6F9F0;
-$gray-pale: #F8F9FA;
-$gray-light: #E9ECEF;
-$gray-medium: #6C757D;
-$gray-dark: #2C3338;
-$white: #FFFFFF;
-$border-color: #E9ECEF;
 
 .search-panel {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background-color: $gray-pale;
+  background-color: var(--awd-bg);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 /* 密度令牌见 App.vue 的 --awd-panel-*（基准 = 插件广场） */
 .search-header {
     padding: var(--awd-panel-gap) 0 var(--awd-panel-gap);
-    background-color: $gray-pale;
+    background-color: var(--awd-bg);
     border-bottom: 1px solid transparent; /* Prepare for sticky behavior if needed */
 }
 
@@ -471,7 +462,7 @@ $border-color: #E9ECEF;
     display: flex;
     align-items: center;
     height: var(--awd-panel-row-h);
-    background: $white;
+    background: var(--awd-surface);
     border: 1px solid var(--awd-panel-border);
     border-radius: var(--awd-panel-radius);
     padding: 0 8px;
@@ -479,7 +470,7 @@ $border-color: #E9ECEF;
     box-shadow: 0 1px 2px rgba(0,0,0,0.02);
 
     &.focused {
-      border-color: $brand-mint;
+      border-color: var(--awd-mint);
       box-shadow: 0 0 0 3px rgba($brand-mint, 0.15);
     }
 
@@ -492,7 +483,7 @@ $border-color: #E9ECEF;
     .search-input {
       flex: 1;
       font-size: var(--awd-panel-fs);
-      color: $gray-dark;
+      color: var(--awd-text);
       border: none;
       outline: none;
       background: transparent;
@@ -500,7 +491,7 @@ $border-color: #E9ECEF;
       min-width: 0;
 
       &::placeholder {
-          color: #adb5bd;
+          color: var(--awd-text-3);
       }
     }
 
@@ -591,7 +582,7 @@ $border-color: #E9ECEF;
   padding: 0 8px;
   font-size: var(--awd-panel-fs-meta);
   color: var(--awd-panel-text);
-  background: $white;
+  background: var(--awd-surface);
   border: 1px solid var(--awd-panel-border);
   border-radius: 4px;
   outline: none;
@@ -643,14 +634,14 @@ $border-color: #E9ECEF;
 
 .search-stats {
   font-size: var(--awd-panel-fs-meta);
-  color: $gray-medium;
+  color: var(--awd-text-2);
   padding: 0 var(--awd-panel-pad-x);
   display: flex;
   align-items: center;
   gap: 4px;
 
   .highlight {
-      color: $brand-forest;
+      color: var(--awd-accent-text);
       font-weight: 600;
   }
 }
@@ -663,16 +654,16 @@ $border-color: #E9ECEF;
 }
 
 .file-group {
-    background: $white;
+    background: var(--awd-surface);
     margin-bottom: 8px;
     border-top: 1px solid transparent;
     border-bottom: 1px solid transparent;
 
     &:first-child {
-        border-top: 1px solid $border-color;
+        border-top: 1px solid var(--awd-border);
     }
     &:last-child {
-        border-bottom: 1px solid $border-color;
+        border-bottom: 1px solid var(--awd-border);
     }
 }
 
@@ -684,14 +675,14 @@ $border-color: #E9ECEF;
   transition: background-color 0.1s;
 
   &:hover {
-    background-color: $gray-pale;
+    background-color: var(--awd-bg);
   }
 
   .arrow-icon {
     display: flex;
     align-items: center;
     justify-content: center;
-    color: $gray-medium;
+    color: var(--awd-text-2);
     margin-right: 8px;
     width: 16px;
     height: 16px;
@@ -721,21 +712,21 @@ $border-color: #E9ECEF;
       .file-name {
           font-size: 13px;
           font-weight: 500;
-          color: $gray-dark;
+          color: var(--awd-text);
           margin-bottom: 2px;
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
 
           &:hover {
-              color: $brand-forest;
+              color: var(--awd-accent-text);
               text-decoration: underline;
           }
       }
 
       .file-path {
           font-size: 10px;
-          color: #999;
+          color: var(--awd-text-3);
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
@@ -743,8 +734,8 @@ $border-color: #E9ECEF;
   }
 
   .badge {
-    background-color: $gray-light;
-    color: $gray-medium;
+    background-color: var(--awd-surface-3);
+    color: var(--awd-text-2);
     font-size: 10px;
     font-weight: 600;
     padding: 2px 6px;
@@ -779,12 +770,12 @@ $border-color: #E9ECEF;
       top: 0;
       bottom: 0;
       width: 1px;
-      background-color: $border-color;
+      background-color: var(--awd-surface-3);
   }
 
   .line-number {
       font-size: 10px;
-      color: #adb5bd;
+      color: var(--awd-text-3);
       width: 10px;
       text-align: right;
       margin-right: 12px;
@@ -794,14 +785,14 @@ $border-color: #E9ECEF;
   .match-content {
      font-size: 11px;
      line-height: 1.5;
-     color: $gray-medium;
+     color: var(--awd-text-2);
      white-space: pre;
      overflow: hidden;
      text-overflow: ellipsis;
 
      .match-highlight {
          background-color: rgba($brand-mint, 0.15);
-         color: $brand-forest;
+         color: var(--awd-accent-text);
          border-radius: 2px;
          padding: 0 1px;
          font-weight: 500;
@@ -818,11 +809,11 @@ $border-color: #E9ECEF;
 
    .empty-icon {
        margin-bottom: 16px;
-       color: $gray-light;
+       color: var(--awd-info-text);
    }
 
    .empty-text {
-      color: #adb5bd;
+      color: var(--awd-text-3);
       font-size: 13px;
    }
 }

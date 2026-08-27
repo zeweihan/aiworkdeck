@@ -753,7 +753,7 @@ export default {
 .mdp {
   width: 100%;
   height: 100%;
-  background: #fff;
+  background: var(--awd-surface);
 }
 
 .mdp-inner {
@@ -772,11 +772,11 @@ export default {
   height: 72px;
   flex-shrink: 0;
   border-radius: 14px;
-  background: #E8F3ED;
+  background: var(--awd-accent-soft);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #1A5336;
+  color: var(--awd-accent-text);
 
   svg {
     width: 34px;
@@ -785,8 +785,8 @@ export default {
 
   /* 插件 = 可执行扩展：深底，与 Skill（浅底）一眼区分（同左栏列表约定） */
   &.is-plugin {
-    background: #123A26;
-    color: #fff;
+    background: var(--awd-accent-hover);
+    color: var(--awd-text-on-accent);
   }
 }
 
@@ -806,15 +806,15 @@ export default {
   font-family: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', serif;
   font-size: 22px;
   font-weight: 700;
-  color: #123A26;
+  color: var(--awd-text);
   line-height: 1.25;
 }
 
 .mdp-kind-badge {
   font-size: 10px;
   font-weight: 600;
-  color: #1A5336;
-  background: #E8F3ED;
+  color: var(--awd-accent-text);
+  background: var(--awd-accent-soft);
   border-radius: 4px;
   padding: 1px 6px;
 }
@@ -822,8 +822,8 @@ export default {
 .mdp-installed-badge {
   font-size: 10px;
   font-weight: 600;
-  color: #fff;
-  background: #1A5336;
+  color: var(--awd-text-on-accent);
+  background: var(--awd-accent);
   border-radius: 4px;
   padding: 1px 6px;
 }
@@ -832,14 +832,14 @@ export default {
 .mdp-price-badge {
   font-size: 10px;
   font-weight: 600;
-  color: #868E96;
-  background: #F1F3F5;
+  color: var(--awd-text-2);
+  background: var(--awd-surface-2);
   border-radius: 4px;
   padding: 1px 6px;
 
   &.paid {
-    color: #8A6D2F;
-    background: #FDF7EC;
+    color: var(--awd-warning-text);
+    background: var(--awd-bg);
   }
 }
 
@@ -848,7 +848,7 @@ export default {
   margin-top: 8px;
   font-size: 11px;
   line-height: 17px;
-  color: #8A6D2F;
+  color: var(--awd-warning-text);
 }
 
 .mdp-byline {
@@ -861,17 +861,17 @@ export default {
 
 .mdp-byline-item {
   font-size: 12px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 
   & + .mdp-byline-item::before {
     content: '·';
     margin-right: 6px;
-    color: #CED4DA;
+    color: var(--awd-text-3);
   }
 }
 
 .mdp-author {
-  color: #1A5336;
+  color: var(--awd-accent-text);
   font-weight: 600;
 }
 
@@ -880,7 +880,7 @@ export default {
   margin-top: 6px;
   font-size: 11px;
   line-height: 16px;
-  color: #868E96;
+  color: var(--awd-text-2);
 }
 
 .mdp-summary {
@@ -888,7 +888,7 @@ export default {
   margin-top: 8px;
   font-size: 13px;
   line-height: 20px;
-  color: #2C3338;
+  color: var(--awd-text);
 }
 
 .mdp-scenario {
@@ -898,7 +898,7 @@ export default {
 .mdp-scenario-lead {
   display: block;
   font-size: 12px;
-  color: #6C757D;
+  color: var(--awd-text-2);
   margin-bottom: 6px;
 }
 
@@ -915,46 +915,46 @@ export default {
   line-height: 26px;
   padding: 0 14px;
   border-radius: 6px;
-  border: 1px solid #CED4DA;
-  background: #fff;
+  border: 1px solid var(--awd-border-strong);
+  background: var(--awd-surface);
   cursor: pointer;
 
   text {
     font-size: 12px;
     font-weight: 600;
-    color: #2C3338;
+    color: var(--awd-text);
   }
 
   &:hover {
-    border-color: #1A5336;
+    border-color: var(--awd-accent);
 
     text {
-      color: #1A5336;
+      color: var(--awd-accent-text);
     }
   }
 
   &.primary {
-    background: #1A5336;
-    border-color: #1A5336;
+    background: var(--awd-accent);
+    border-color: var(--awd-accent);
 
     text {
-      color: #fff;
+      color: var(--awd-text-on-accent);
     }
 
     &:hover {
-      background: #123A26;
+      background: var(--awd-accent-hover);
 
       text {
-        color: #fff;
+        color: var(--awd-text-on-accent);
       }
     }
   }
 
   &.danger:hover {
-    border-color: #C0392B;
+    border-color: var(--awd-danger);
 
     text {
-      color: #C0392B;
+      color: var(--awd-danger-text);
     }
   }
 
@@ -972,19 +972,19 @@ export default {
 
 .mdp-switch-label {
   font-size: 12px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 .mdp-action-hint {
   font-size: 11px;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
 }
 
 /* 原生资源包状态：下架标红、下载中用中性进度条、失败态错误文案 + 重试按钮 */
 .mdp-pack-revoked {
   font-size: 12px;
   font-weight: 600;
-  color: #C0392B;
+  color: var(--awd-danger-text);
 }
 
 .mdp-pack-progress {
@@ -992,26 +992,26 @@ export default {
   line-height: 28px;
   padding: 0 12px;
   border-radius: 6px;
-  background: #F1F3F5;
+  background: var(--awd-surface-2);
   font-size: 12px;
-  color: #495057;
+  color: var(--awd-text-2);
 }
 
 .mdp-pack-error {
   font-size: 12px;
-  color: #C0392B;
+  color: var(--awd-danger-text);
 }
 
 .mdp-divider {
   height: 1px;
-  background: #E9ECEF;
+  background: var(--awd-surface-3);
   margin: 22px 0 18px;
 }
 
 .mdp-loading {
   padding: 24px 0;
   font-size: 13px;
-  color: #868E96;
+  color: var(--awd-text-2);
 }
 
 .mdp-section {
@@ -1022,7 +1022,7 @@ export default {
   display: block;
   font-size: 13px;
   font-weight: 700;
-  color: #123A26;
+  color: var(--awd-text);
   margin-bottom: 8px;
 }
 
@@ -1030,7 +1030,7 @@ export default {
   display: block;
   font-size: 13px;
   line-height: 20px;
-  color: #2C3338;
+  color: var(--awd-text);
 }
 
 .mdp-sec-note {
@@ -1038,7 +1038,7 @@ export default {
   margin-top: 6px;
   font-size: 11px;
   line-height: 17px;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
 }
 
 .mdp-triggers {
@@ -1049,7 +1049,7 @@ export default {
 
 .mdp-trigger {
   font-size: 13px;
-  color: #1A5336;
+  color: var(--awd-accent-text);
 }
 
 .mdp-kv {
@@ -1067,12 +1067,12 @@ export default {
   width: 56px;
   flex-shrink: 0;
   font-size: 12px;
-  color: #868E96;
+  color: var(--awd-text-2);
 }
 
 .mdp-v {
   font-size: 12px;
-  color: #2C3338;
+  color: var(--awd-text);
   word-break: break-all;
 
   &.mono {
@@ -1081,7 +1081,7 @@ export default {
 }
 
 .mdp-link {
-  color: #1A5336;
+  color: var(--awd-accent-text);
   text-decoration: underline;
   cursor: pointer;
 }

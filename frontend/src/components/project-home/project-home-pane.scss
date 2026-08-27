@@ -1,19 +1,13 @@
 /* 项目概览内容本体的容器样式（一页纸卷轴）。子组件各自的样式在各自 scoped 块里。
    外壳浅色红线：白 / #F8F9FA 底 + 森林绿 #1A5336 + mint #5BD197 点缀，不做深色 chrome。 */
-$color-primary: #1A5336;
-$color-accent: #5BD197;
-$color-text-main: #2C3338;
-$color-border: #E9ECEF;
-$bg-pale: #F8F9FA;
-$bg-white: #FFFFFF;
 
 .project-home-pane {
   container-type: inline-size;
   container-name: home-pane;
   padding: 24px;
   box-sizing: border-box;
-  background: $bg-pale;
-  color: $color-text-main;
+  background: var(--awd-bg);
+  color: var(--awd-text);
 }
 
 /* 嵌在工作台**左栏**里：铺满并自己滚动（独立页那边由 body 滚，不需要这一条）。
@@ -22,7 +16,7 @@ $bg-white: #FFFFFF;
 .project-home-pane.is-compact {
   height: 100%;
   overflow-y: auto;
-  background: $bg-white;
+  background: var(--awd-surface);
 }
 
 .project-home-pane.is-compact .home-column {
@@ -41,8 +35,8 @@ $bg-white: #FFFFFF;
 }
 
 .home-section {
-  background: $bg-white;
-  border: 1px solid $color-border;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   padding: 16px 18px;
 }
@@ -54,7 +48,7 @@ $bg-white: #FFFFFF;
 
 .home-template-line-text {
   font-size: 12px;
-  color: #6C757D;
+  color: var(--awd-text-2);
   line-height: 1.6;
 }
 
@@ -62,11 +56,11 @@ $bg-white: #FFFFFF;
   display: block;
   margin-bottom: 12px;
   padding: 0 0 8px 8px;
-  border-left: 3px solid $color-accent;
-  border-bottom: 1px solid $color-border;
+  border-left: 3px solid var(--awd-mint);
+  border-bottom: 1px solid var(--awd-border);
   font-size: 13px;
   font-weight: 600;
-  color: $color-primary;
+  color: var(--awd-accent-text);
 }
 
 @media (max-width: 720px) {

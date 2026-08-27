@@ -99,49 +99,49 @@ export default {
 
 <style lang="scss" scoped>
 .draft-list {
-  padding: 12rpx 20rpx; border-bottom: 1px solid #eee; background: #FBFAF8;
+  padding: 12rpx 20rpx; border-bottom: 1px solid var(--awd-border); background: var(--awd-warning-soft);
 }
 .draft-list-header {
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 8rpx;
 }
-.draft-list-title { font-size: 12.5px; color: #64748b; font-weight: 600; }
+.draft-list-title { font-size: 12.5px; color: var(--awd-text-2); font-weight: 600; }
 .draft-row {
   display: flex; align-items: center; justify-content: space-between;
   padding: 8px 0;
 }
 .draft-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.draft-row-name { font-size: 13.5px; color: #0f172a; }
-.draft-row-date { font-size: 12px; color: #94a3b8; }
+.draft-row-name { font-size: 13.5px; color: var(--awd-text); }
+.draft-row-date { font-size: 12px; color: var(--awd-text-3); }
 
 .awd-btn {
   padding: 8px 18px; border-radius: 6px; font-size: 13.5px; cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
 }
-.awd-btn-primary { background: #1A5336; color: #fff; }
-.awd-btn-primary:hover { background: #14422b; }
-.awd-btn-secondary { background: #fff; color: #475569; border: 1px solid #cbd5e1; }
-.awd-btn-secondary:hover { background: #f1f5f9; }
+.awd-btn-primary { background: var(--awd-accent); color: var(--awd-text-on-accent); }
+.awd-btn-primary:hover { background: var(--awd-accent-hover); }
+.awd-btn-secondary { background: var(--awd-surface); color: var(--awd-text-2); border: 1px solid var(--awd-border-strong); }
+.awd-btn-secondary:hover { background: var(--awd-surface-2); }
 /* 列表行内的按钮个头小一点，覆盖顺序放在 .awd-btn 之后才生效（同权重按源码序） */
 .draft-new-btn, .draft-row-btn { padding: 5px 12px; font-size: 12px; }
 
 .awd-mask {
-  position: fixed; inset: 0; background: rgba(0,0,0,.4);
+  position: fixed; inset: 0; background: var(--awd-overlay);
   display: flex; align-items: center; justify-content: center; z-index: 9999;
 }
 .awd-dialog {
-  width: 380px; max-width: 90vw; background: #fff; border-radius: 12px; overflow: hidden;
+  width: 380px; max-width: 90vw; background: var(--awd-surface); border-radius: 12px; overflow: hidden;
   box-shadow: 0 20px 25px -5px rgba(0,0,0,.1), 0 10px 10px -5px rgba(0,0,0,.04);
 }
-.awd-header { padding: 18px 24px; border-bottom: 1px solid #f1f5f9; }
-.awd-title { font-size: 16px; font-weight: 600; color: #0f172a; }
+.awd-header { padding: 18px 24px; border-bottom: 1px solid var(--awd-border-subtle); }
+.awd-title { font-size: 16px; font-weight: 600; color: var(--awd-text); }
 .awd-body { padding: 20px 24px; }
 .awd-input {
-  width: 100%; height: 38px; padding: 0 12px; border: 1px solid #cbd5e1;
-  border-radius: 6px; font-size: 14px; color: #0f172a; box-sizing: border-box;
+  width: 100%; height: 38px; padding: 0 12px; border: 1px solid var(--awd-border-strong);
+  border-radius: 6px; font-size: 14px; color: var(--awd-text); box-sizing: border-box;
 }
 .awd-footer {
   display: flex; justify-content: flex-end; gap: 12px;
-  padding: 14px 24px; border-top: 1px solid #f1f5f9; background: #f8f9fa;
+  padding: 14px 24px; border-top: 1px solid var(--awd-border-subtle); background: var(--awd-bg);
 }
 </style>

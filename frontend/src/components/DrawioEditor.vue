@@ -386,7 +386,7 @@ export default {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: #ffffff;
+  background: var(--awd-surface);
 }
 
 .drawio-bar {
@@ -394,12 +394,12 @@ export default {
   align-items: center;
   gap: 8px;
   padding: 6px 12px;
-  border-bottom: 1px solid #ebedf0;
+  border-bottom: 1px solid var(--awd-border);
   flex-shrink: 0;
 }
-.drawio-name { font-size: 12px; color: #1f2329; }
-.drawio-dirty { font-size: 11px; color: #8a5a2b; }
-.drawio-saved { font-size: 11px; color: #2b6a4d; }
+.drawio-name { font-size: 12px; color: var(--awd-text); }
+.drawio-dirty { font-size: 11px; color: var(--awd-warning-text); }
+.drawio-saved { font-size: 11px; color: var(--awd-accent-text); }
 
 .drawio-frame {
   flex: 1;
@@ -417,25 +417,25 @@ export default {
   gap: 10px;
   padding: 40px;
 }
-.drawio-status-text { font-size: 13px; color: #4a5058; }
-.drawio-status-hint { font-size: 12px; color: #9aa0a8; text-align: center; line-height: 1.6; }
+.drawio-status-text { font-size: 13px; color: var(--awd-text); }
+.drawio-status-hint { font-size: 12px; color: var(--awd-text-3); text-align: center; line-height: 1.6; }
 .drawio-actions { display: flex; gap: 8px; }
 .drawio-btn {
   padding: 6px 16px;
   font-size: 12px;
   border-radius: 5px;
-  border: 1px solid #e3e6ea;
-  color: #4a5058;
-  background: #fff;
+  border: 1px solid var(--awd-border);
+  color: var(--awd-text);
+  background: var(--awd-surface);
   cursor: pointer;
   user-select: none;
 }
-.drawio-btn:hover { border-color: #c9ced6; background: #fafbfc; }
+.drawio-btn:hover { border-color: var(--awd-info); background: var(--awd-bg); }
 .drawio-btn.primary {
-  border-color: #3a7afe;
-  background: #3a7afe;
-  color: #fff;
+  border-color: var(--awd-info);
+  background: var(--awd-info);
+  color: var(--awd-text-on-accent);
 }
-.drawio-btn.primary:hover { border-color: #2f68e0; background: #2f68e0; }
+.drawio-btn.primary:hover { border-color: var(--awd-info); background: var(--awd-info); }
 .drawio-btn.disabled { opacity: .6; pointer-events: none; }
 </style>

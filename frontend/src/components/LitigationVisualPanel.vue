@@ -363,7 +363,7 @@ export default {
   background: #FDF3F2;
   border: 1px solid #F3D9D6;
 }
-.lv-notice.subtle { background: #F7F8FA; border-color: #E8EAED; }
+.lv-notice.subtle { background: var(--awd-bg); border-color: #E8EAED; }
 .lv-notice-text { font-size: var(--awd-panel-fs-meta); line-height: 1.55; color: #6B6560; }
 
 /* 原生资源包状态条：常态是中性下载提示，失败态借用 .lv-notice 同一套暖红 */
@@ -391,7 +391,7 @@ export default {
   background: var(--awd-panel-accent);
   cursor: pointer;
 }
-.lv-pack-retry text { font-size: 10px; color: #fff; font-weight: 600; }
+.lv-pack-retry text { font-size: 10px; color: var(--awd-text-on-accent); font-weight: 600; }
 .lv-pack-retry.disabled { opacity: .5; pointer-events: none; }
 
 /* 分组头：与插件广场同形（26px / 11px-700 / 计数徽章 / 右侧动作） */
@@ -440,7 +440,7 @@ export default {
   padding: 4px 8px;
   border: 1px solid var(--awd-panel-border);
   border-radius: var(--awd-panel-radius);
-  background: #fff;
+  background: var(--awd-surface);
   cursor: pointer;
   margin-bottom: var(--awd-panel-gap);
 }
@@ -457,11 +457,11 @@ export default {
 .lv-kinds { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
 .lv-kind {
   padding: 3px 8px; font-size: var(--awd-panel-fs-meta); border-radius: 4px; cursor: pointer;
-  border: 1px solid var(--awd-panel-border); color: var(--awd-panel-text-2); background: #fff;
+  border: 1px solid var(--awd-panel-border); color: var(--awd-panel-text-2); background: var(--awd-surface);
 }
 .lv-kind:hover { border-color: #C9CED6; }
 .lv-kind.active {
-  border-color: var(--awd-panel-accent); color: var(--awd-panel-accent); background: rgba(26, 83, 54, 0.06);
+  border-color: var(--awd-panel-accent); color: var(--awd-panel-accent); background: var(--awd-accent-wash);
 }
 .lv-tip {
   display: block; font-size: 10px; color: var(--awd-panel-text-4);
@@ -473,7 +473,7 @@ export default {
   height: var(--awd-panel-row-h); font-size: var(--awd-panel-fs);
   border-radius: var(--awd-panel-radius); cursor: pointer; user-select: none;
 }
-.lv-btn.primary { background: var(--awd-panel-accent); color: #fff; font-weight: 500; }
+.lv-btn.primary { background: var(--awd-panel-accent); color: var(--awd-text-on-accent); font-weight: 500; }
 .lv-btn.primary:hover { background: #16482E; }
 .lv-btn.disabled { opacity: .5; pointer-events: none; }
 
@@ -496,7 +496,7 @@ export default {
 .lv-badge {
   flex-shrink: 0; padding: 0 5px; font-size: 10px; line-height: 15px; border-radius: 3px;
 }
-.lv-badge.edited { color: var(--awd-panel-accent); background: rgba(26, 83, 54, 0.08); }
+.lv-badge.edited { color: var(--awd-panel-accent); background: var(--awd-accent-soft); }
 .lv-badge.draft { color: #8A5A2B; background: #FDF6EC; }
 
 .lv-row-actions {
@@ -511,12 +511,12 @@ export default {
 .lv-restyle-label { font-size: 10px; color: var(--awd-panel-text-4); }
 .lv-modes { display: flex; gap: 0; border: 1px solid var(--awd-panel-border); border-radius: 4px; overflow: hidden; }
 .lv-mode {
-  padding: 1px 6px; font-size: 10px; color: var(--awd-panel-text-2); background: #fff; cursor: pointer;
+  padding: 1px 6px; font-size: 10px; color: var(--awd-panel-text-2); background: var(--awd-surface); cursor: pointer;
   border-right: 1px solid var(--awd-panel-border);
 }
 .lv-mode:last-child { border-right: none; }
 .lv-mode:hover { background: var(--awd-panel-hover); }
-.lv-mode.active { background: rgba(26, 83, 54, 0.08); color: var(--awd-panel-accent); font-weight: 600; }
+.lv-mode.active { background: var(--awd-accent-soft); color: var(--awd-panel-accent); font-weight: 600; }
 .lv-mode.disabled { opacity: .5; pointer-events: none; }
 
 .lv-credit { padding: var(--awd-panel-gap-lg) var(--awd-panel-pad-x); }

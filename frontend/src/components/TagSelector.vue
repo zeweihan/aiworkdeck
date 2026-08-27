@@ -215,19 +215,19 @@ export default {
   position: relative;
   display: flex;
   align-items: center;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   padding: 0 10px;
-  background: #fff;
+  background: var(--awd-surface);
   transition: all 0.2s;
 }
 
 .input-wrapper:hover {
-  border-color: #d1d5db;
+  border-color: var(--awd-border-strong);
 }
 
 .input-wrapper:focus-within {
-  border-color: #1A5336;
+  border-color: var(--awd-accent);
   box-shadow: 0 0 0 2px rgba(26, 83, 54, 0.1);
 }
 
@@ -237,11 +237,11 @@ export default {
   font-size: 13px;
   border: none;
   background: transparent;
-  color: #374151;
+  color: var(--awd-text);
 }
 
 .clear-icon {
-  color: #9ca3af;
+  color: var(--awd-text-3);
   padding: 4px;
   cursor: pointer;
   display: flex;
@@ -251,8 +251,8 @@ export default {
 }
 
 .clear-icon:hover {
-  background: #f3f4f6;
-  color: #6b7280;
+  background: var(--awd-surface-2);
+  color: var(--awd-text-2);
 }
 
 .dropdown-menu {
@@ -260,8 +260,8 @@ export default {
   top: 100%;
   left: 0;
   right: 0;
-  background: #fff;
-  border: 1px solid #e5e7eb;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
   z-index: 9999;
@@ -286,14 +286,14 @@ export default {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.04em;
-  color: #9ca3af;
+  color: var(--awd-text-3);
 }
 /* Custom Scrollbar */
 .tag-list::-webkit-scrollbar {
   width: 4px;
 }
 .tag-list::-webkit-scrollbar-thumb {
-  background-color: #e5e7eb;
+  background-color: var(--awd-surface-3);
   border-radius: 2px;
 }
 
@@ -303,8 +303,8 @@ export default {
   padding: 10px 12px;
   cursor: pointer;
   font-size: 13px;
-  color: #374151;
-  border-bottom: 1px solid #f9fafb;
+  color: var(--awd-text);
+  border-bottom: 1px solid var(--awd-border-subtle);
 }
 
 .tag-option:last-child {
@@ -312,7 +312,7 @@ export default {
 }
 
 .tag-option:hover {
-  background-color: #f9fafb;
+  background-color: var(--awd-bg);
 }
 
 .color-dot {
@@ -326,23 +326,23 @@ export default {
 .no-tags {
   padding: 16px 12px;
   text-align: center;
-  color: #6b7280;
+  color: var(--awd-text-2);
   font-size: 12px;
 }
 
 .dropdown-footer {
-  border-top: 1px solid #e5e7eb;
+  border-top: 1px solid var(--awd-border);
   padding: 6px 10px;
   display: flex;
   justify-content: space-between;
   align-items: center;
   font-size: 12px;
-  background: #f8fafc;
+  background: var(--awd-surface);
   flex-shrink: 0; /* Ensure footer doesn't shrink */
 }
 
 .manage-link {
-  color: #1A5336;
+  color: var(--awd-accent-text);
   font-weight: 500;
   cursor: pointer;
 }
@@ -352,15 +352,15 @@ export default {
 }
 
 .close-btn-icon {
-    color: #999;
+    color: var(--awd-text-3);
     cursor: pointer;
     padding: 4px;
     border-radius: 4px;
 }
 
 .close-btn-icon:hover {
-    background: #f3f4f6;
-    color: #333;
+    background: var(--awd-surface-2);
+    color: var(--awd-text);
 }
 
 /* Compact Color Picker Mode Styles */
@@ -375,12 +375,12 @@ export default {
 .picker-title {
   font-size: 13px;
   font-weight: 600;
-  color: #333;
+  color: var(--awd-text);
 }
 
 .picker-subtitle {
     font-size: 11px;
-    color: #666;
+    color: var(--awd-text-2);
     margin-bottom: 6px;
     display: block;
 }
@@ -396,20 +396,20 @@ export default {
     text-align: center;
     padding: 5px 0;
     font-size: 12px;
-    color: #666;
-    background: #f3f4f6;
+    color: var(--awd-text-2);
+    background: var(--awd-surface-2);
     border-radius: 4px;
     cursor: pointer;
     transition: all 0.15s ease;
 }
 
 .type-segment-option:hover {
-    background: #e5e7eb;
+    background: var(--awd-surface-3);
 }
 
 .type-segment-option.selected {
-    background: #1A5336;
-    color: #fff;
+    background: var(--awd-accent);
+    color: var(--awd-text-on-accent);
 }
 
 .color-scroll {
@@ -442,13 +442,13 @@ export default {
 }
 
 .color-option-compact.selected {
-  border-color: #1A5336;
+  border-color: var(--awd-accent);
   box-shadow: 0 0 0 2px rgba(26, 83, 54, 0.2);
   transform: scale(1.1);
 }
 
 .check-indicator {
-  color: #fff;
+  color: var(--awd-text-on-accent);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -459,26 +459,26 @@ export default {
   justify-content: flex-end;
   gap: 8px;
   align-items: center;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--awd-border-subtle);
   padding-top: 10px;
 }
 
 .cancel-btn-compact {
   font-size: 12px;
-  color: #666;
+  color: var(--awd-text-2);
   cursor: pointer;
   padding: 4px 8px;
   border-radius: 4px;
 }
 
 .cancel-btn-compact:hover {
-  background: #f3f4f6;
-  color: #333;
+  background: var(--awd-surface-2);
+  color: var(--awd-text);
 }
 
 .confirm-btn-compact {
-  background: #1A5336;
-  color: #fff;
+  background: var(--awd-accent);
+  color: var(--awd-text-on-accent);
   padding: 4px 12px;
   border-radius: 4px;
   font-size: 12px;
@@ -488,25 +488,25 @@ export default {
 }
 
 .confirm-btn-compact:hover {
-  background: #2D7A52;
+  background: var(--awd-accent-hover);
 }
 
 .create-option-card {
     margin-top: 8px;
     padding: 8px;
-    background: #f0fdf4;
-    border: 1px dashed #5BD197;
+    background: var(--awd-bg);
+    border: 1px dashed var(--awd-mint);
     border-radius: 4px;
     display: flex;
     align-items: center;
     gap: 8px;
     cursor: pointer;
-    color: #166534;
+    color: var(--awd-text);
     justify-content: center;
 }
 
 .create-option-card:hover {
-    background: #dcfce7;
+    background: var(--awd-accent-soft);
 }
 
 .create-icon {

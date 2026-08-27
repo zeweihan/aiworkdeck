@@ -91,6 +91,6 @@ export default {
   justify-content: center;
   align-items: center;
   font-size: 10px;
-  color: #666;
+  color: var(--awd-text-2);
 }
 </style>

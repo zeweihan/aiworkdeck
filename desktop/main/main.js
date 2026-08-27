@@ -330,6 +330,16 @@ function attachDownloadListener(session) {
   })
 }
 
+// 原生外观：把渲染层的主题 mode 写进 nativeTheme。
+// 'system' 必须原样传下去而不是自己解析成 light/dark——themeSource 一旦被设成
+// 非 'system'，Electron 会把**所有渲染进程**的 prefers-color-scheme 钉死成那个
+// 值，渲染层的 matchMedia 就永远读不到真实系统设置了（appTheme.js 依赖它）。
+function applyNativeTheme(mode) {
+  const m = ['light', 'dark', 'system'].includes(mode) ? mode : 'light'
+  try { nativeTheme.themeSource = m } catch (e) { /* ignore */ }
+  try { return { systemDark: !!nativeTheme.shouldUseDarkColors } } catch (e) { return { systemDark: false } }
+}
+
 function createMainWindow() {
   // 后端实际端口（打包态默认 5269，冲突自动降级，见 backend-service.js 端口链）。
   // 经 additionalArguments 同步注入 preload → window.checkbaDesktop.apiBaseUrl，
@@ -1600,6 +1610,10 @@ ipcMain.on('checkba:app-language', (_evt, lang) => {
   try { require('./app-language').setAppLanguage(String(lang || '')) } catch (e) { /* ignore */ }
 })
 
+// 外观主题：渲染层是权威源，这里只把它写进 nativeTheme 并回报系统当前深浅
+// （system 态下渲染层拿不准——见 applyNativeTheme 的注释）。
+ipcMain.handle('checkba:set-theme', (_evt, mode) => applyNativeTheme(String(mode || 'light')))
+
 // IDE 化：Finder「打开方式」/ 拖到 Dock 图标进来的路径（macOS open-file 事件，
 // 可能早于窗口创建，先存后发；目录/文件在主进程判好再交渲染层走 open-path 流程）
 let pendingOpenPath = null
@@ -1623,12 +1637,12 @@ app.on('open-file', (event, p) => {
 })
 
 app.whenReady().then(() => {
-  // 原生外观锁定浅色：外壳是浅色单主题（配色红线，深色 chrome 已被否决）。
-  // 不锁的话原生层跟随系统——系统开深色时，窗口失焦后 macOS 按深色规则绘制
-  // 交通灯，落在我们的浅色顶栏上等于隐形（实测失活态偏离背景像素数为 0，
-  // 也就是整组按钮凭空消失；锁浅色后恢复成标准的三个灰色圆点）。
-  // 一并把原生右键菜单、滚动条、系统对话框拉回与浅色 UI 一致。
-  try { nativeTheme.themeSource = 'light' } catch (e) { /* ignore */ }
+  // 原生外观必须与应用主题一致（dev-board#218 → #223）。
+  // 不显式设的话原生层跟随系统：系统开深色而应用是浅色时，窗口失焦后 macOS
+  // 按深色规则绘制交通灯，落在浅色顶栏上等于隐形（实测失活态偏离背景像素数
+  // 为 0，整组按钮凭空消失）。启动先按浅色（渲染层未上报前的安全默认，也是
+  // 主题设置的出厂值），随后由渲染层经 checkba:set-theme 推来真实主题。
+  applyNativeTheme('light')
   initLocalFileService()
   // IDE 化应用菜单（File 全套 + 最近打开；动作发回渲染层处理）
   try {

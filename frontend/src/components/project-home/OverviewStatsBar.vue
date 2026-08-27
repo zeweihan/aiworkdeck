@@ -66,15 +66,15 @@ export default {
 
 <style scoped>
 .overview-stats-bar {
-  background: #FFFFFF;
-  border: 1px solid #E9ECEF;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   padding: 14px 18px;
 }
 
 .stats-loading {
   font-size: 13px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 .stats-tiles {
@@ -87,8 +87,8 @@ export default {
   flex: 1 1 160px;
   min-width: 140px;
   padding: 10px 12px;
-  background: #F8F9FA;
-  border-left: 3px solid #5BD197;
+  background: var(--awd-bg);
+  border-left: 3px solid var(--awd-mint);
   border-radius: 4px;
 }
 
@@ -96,7 +96,7 @@ export default {
   display: block;
   font-size: 15px;
   font-weight: 600;
-  color: #1A5336;
+  color: var(--awd-accent-text);
   line-height: 22px;
 }
 
@@ -104,7 +104,7 @@ export default {
   display: block;
   margin-top: 2px;
   font-size: 11px;
-  color: #6C757D;
+  color: var(--awd-text-2);
   line-height: 16px;
 }
 

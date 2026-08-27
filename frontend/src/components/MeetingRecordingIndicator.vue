@@ -71,13 +71,13 @@ export default {
   gap: 8px;
   height: 32px;
   padding: 0 12px;
-  background: #FFFFFF;
-  border: 1px solid #E5E7EB;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 16px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
   font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   font-size: 12px;
-  color: #333333;
+  color: var(--awd-text);
   overflow: hidden; /* 裁出电平条贴底边的那一小截，借用胶囊自身的圆角；
                        position:fixed 本身即为绝对定位子元素（电平条）建立定位基准 */
 }
@@ -95,7 +95,7 @@ export default {
   display: block;
   height: 100%;
   max-width: 100%;
-  background: #1A5336;
+  background: var(--awd-accent);
   transition: width 0.15s linear;
 }
 
@@ -107,7 +107,7 @@ export default {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #E5484D;
+  background: var(--awd-danger);
   animation: mri-pulse 1.2s ease-in-out infinite;
 }
 
@@ -127,13 +127,13 @@ export default {
 }
 
 .mri-label {
-  color: #6B7280;
+  color: var(--awd-text-2);
 }
 
 .mri-btn {
-  border: 1px solid #D1D5DB;
-  background: #FFFFFF;
-  color: #374151;
+  border: 1px solid var(--awd-border-strong);
+  background: var(--awd-surface);
+  color: var(--awd-text);
   border-radius: 10px;
   height: 22px;
   padding: 0 10px;
@@ -143,16 +143,16 @@ export default {
 }
 
 .mri-btn:hover {
-  background: #F3F4F6;
+  background: var(--awd-surface-2);
 }
 
 .mri-btn.stop {
-  border-color: #E5484D;
-  color: #E5484D;
+  border-color: var(--awd-danger);
+  color: var(--awd-danger-text);
 }
 
 .mri-btn.stop:hover {
-  background: #FDF2F2;
+  background: var(--awd-surface);
 }
 
 .mri-btn:disabled {
