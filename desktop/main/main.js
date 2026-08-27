@@ -1,5 +1,5 @@
 const path = require('path')
-const { app, BrowserWindow, BrowserView, ipcMain, shell, desktopCapturer, screen, clipboard, Menu, globalShortcut } = require('electron')
+const { app, BrowserWindow, BrowserView, ipcMain, shell, desktopCapturer, screen, clipboard, Menu, globalShortcut, nativeTheme } = require('electron')
 const { createServiceManager } = require('./services/service-manager')
 const { createBackendDescriptor } = require('./services/backend-service')
 const { createPptxDescriptor } = require('./services/pptx-service')
@@ -1623,6 +1623,12 @@ app.on('open-file', (event, p) => {
 })
 
 app.whenReady().then(() => {
+  // 原生外观锁定浅色：外壳是浅色单主题（配色红线，深色 chrome 已被否决）。
+  // 不锁的话原生层跟随系统——系统开深色时，窗口失焦后 macOS 按深色规则绘制
+  // 交通灯，落在我们的浅色顶栏上等于隐形（实测失活态偏离背景像素数为 0，
+  // 也就是整组按钮凭空消失；锁浅色后恢复成标准的三个灰色圆点）。
+  // 一并把原生右键菜单、滚动条、系统对话框拉回与浅色 UI 一致。
+  try { nativeTheme.themeSource = 'light' } catch (e) { /* ignore */ }
   initLocalFileService()
   // IDE 化应用菜单（File 全套 + 最近打开；动作发回渲染层处理）
   try {
