@@ -61,7 +61,7 @@ filelink 点击定位、多 target 弹窗、method 小条；契约见 ai-doc-bri
   **home→ProjectHomePane compact**、**voice→内联 tab 宿主**（EasyVoicePane /
   MeetingRecordingPanel）、desensitize、search、version、market→MarketSidebarPanel、
   litigation-visual、动态插件→PluginPane）、拖拽手柄。
-- :595-911 workbench：Tab 栏（左:602 / 右:639 仅 splitMode）、编辑器区:676（左窗格:688、右窗格:762）、bottom-panel:833（v-if showToolsPanel，activeToolKey：variables/favorites/clipboard）。
+- :595-911 workbench：Tab 栏（左:602 / 右:639 仅 splitMode）、编辑器区:676（左窗格:688、右窗格:762）、bottom-panel:833（v-if showToolsPanel **且 bottomToolsList 非空**，activeToolKey：停在 bottom 档的面板，见「面板停靠」一节）。
 - :912-983 ai-panel（v-if showAiPanel，内容整块交 ChatInterface:924，历史下拉:961）。
 - :984-1213 根级弹窗层（AI导出Word/图片预览/截图保存/OCR浮层/文件关联/拖拽蒙层）。
 
@@ -362,6 +362,77 @@ BrowserView 显隐）；② admin 页新增 nav key `feedback`（用户反馈看
 **页面栈地雷（本领域核心机制）**：navigateTo 反复进入 project-overview 不销毁旧实例——页面栈多实例并存，每个都持有全局监听。守卫模式：活跃实例指针 `window.__checkbaActiveOverviewVm` + isActiveOverviewInstance() 判活跃、去重状态挂 window 不挂实例、只清/接管指向自己的指针（beforeUnmount/onShow/mounted 三处配合）。切换项目用 reLaunch 避免堆叠。**外壳里新增任何全局订阅必须套用此模式**（PR#148/#151）。
 **新页同样成立**：`project-home.vue` 套同一套守卫，但**必须用自己的指针名** `window.__checkbaProjectHomeVm`——复用工作台的 `__checkbaActiveOverviewVm`（:2086/:2291/:2352 登记与清理，:3444 判活跃）会让工作台的全局事件被概览页拦掉。`project-home` 的轮询纪律：只在 onLoad 与 onShow 各刷一次，不起定时器；**绝不调 `getVersionStatus` / `/version/status`**（enabled 时会一路走到 `ProjectRepoService` 跑两次 `git add "."`，工作台已有 ≥7 处触发点在喂同一份状态，概览页再打第三次是纯浪费且会与工作台争 per-project 锁）。要「最近修改」时间取 `/version/timeline` 最新一条的 when。
 
+## 面板停靠（dev-board#180，2026-08-27）
+
+「录音窗格拖到右侧就在右侧开、变量库拖到左侧就在左侧开」。三个 dock 就是工作台
+本来就有的三块可收起区域：`left`（左栏 sidebar-left，rail 上一个按钮 = 一个面板）/
+`right`（右侧 `.side-panel-ai`，AI 对话之外的 tab 宿主）/ `bottom`（底部抽屉）。
+
+**唯一出处 `frontend/src/config/panelRegistry.js`**：`MOVABLE_PANELS`（key / labelKey /
+defaultDock / allowedDocks / svgPaths）+ 纯函数 `resolveDocks(overrides)` →
+`{left:[],right:[],bottom:[]}`（非法或 allowedDocks 之外的 override 一律回落 defaultDock）
++ `sanitizeDockOverrides` / `resolveDock` / `isDockAllowed` / `isMovablePanel` / `getMovablePanel`。
+v1 收录四个：variables / favorites / clipboard（默认 bottom，三档都行）、voice（默认 left，
+left|right，**不给 bottom**——底栏放不下它内部那两个 tab）。
+2026-08-27 加第五个：**insight（依据）**，默认 **right**、left|right（同样不给 bottom——
+底栏放不下判决书全文）。它是编辑器工具栏「解析」按钮的联动窗格，要和正文并排看，
+内容是 `components/InsightPane.vue`（外部检索 / 一致性校验两个 tab），详见
+`.claude/agents/doc-insight.md` 的「前端」一节。
+**它带来一处视觉变化**：`rightDockPanels` 从此默认非空，AI 面板顶部恒有一条
+dock tab 条（「AI 助手 | 依据」）——在它之前那条 tab 条只有用户主动搬过面板才出现。
+**这个文件不许 import Vue / uni / `@/i18n`**（照 `config/commands/index.js` 的先例，
+它要能被 `node --test` 直接导入），所以只给 `labelKey`，文案由宿主 `$t` 渲染；
+图标从同目录 `icons.js` 取（变量库是新加的 `ICONS.braces`）。单测
+`frontend/tests/panel-dock/dock-resolve.test.mjs`（`npm run test:panel-dock`）。
+
+**状态与持久化**：`data()` 里 `panelDockOverrides`（panelKey→dock，只存被移动过的）
+与 `rightPaneKey`（`'ai'` 或某个右侧面板 key），并进页面的模块是同目录
+`pages/project-overview/panelDocking.js`（`panelDockingData()` + `panelDockingMethods`）。
+持久化键 **`awd_panel_docks` 是全局的、不带 projectId**——面板停哪儿是本机使用习惯，
+跟着人走不跟着案卷走（同 `checkba_project_list_view` 的先例）。
+`onLoad` 里 **`loadPanelDocks()` 必须排在恢复 `leftPaneKey` 之前**，紧跟着
+`normalizeDockSelections()`：存量 `leftPaneKey` 可能指向一个已经被搬去右/底的面板，
+不校正就是「左栏『加载中…』占位符 + rail 上一个高亮都没有」那个老地雷。
+
+三处宿主的契约：
+- **左栏**：`applyPanelDocks()` 在 `LEFT_SIDEBAR_PLUGINS` 计算属性末尾做两件事——
+  把不在 left 档的可移动面板从 rail 摘掉、把搬到 left 的工具面板追加在静态数组之后
+  （追加位置与动态插件同法，**rail 顺序仍然只有 `LEFT_SIDEBAR_PLUGINS` 一个出处**）。
+  CLIENT 视图整个不参与。工具面板在左栏的宿主是 `.dock-tool-pane`（一条紧凑搜索行 +
+  面板体）——这三个面板的搜索早就外置给宿主了，不给就等于没有搜索。
+  **`isTabVisible` 必须放行这些左栏模式**（`|| this.isMovablePanel(this.leftPaneKey)`）：
+  它们的动作全是「往当前文档里插入 / 从当前文档取值」，把编辑器标签藏死等于功能没了
+  （同「语音合成要在编辑器里取正文」那条）。
+- **右栏**：`rightDockPanels` 非空才渲染 `.right-dock-tabs`（平时右侧只有 AI 对话，
+  零视觉回归）。**ChatInterface 那段模板与九个 @event 绑定一行没动，只在外面包了一层
+  `.right-dock-body` + `v-show`**——挂 v-if 会丢整段会话状态，`$refs.chatInterface`
+  也会消失（`resolveChatInterface()` 靠它，它现在顺带把 `rightPaneKey` 切回 `'ai'`）。
+  因为上面那块是 v-show，**下面停靠面板的分支链链头必须是 `v-if` 而不是 `v-else-if`**，
+  否则编译期直接报「v-else/v-else-if has no adjacent v-if」。
+- **底栏**：`bottomToolsList`（= bottom 档）取代原来的 `toolsList`，底栏 tab 条与
+  status-bar 工具入口**同源消费**；空了则底部抽屉、顶栏那个开关、状态条入口一起收起，
+  `toggleToolsPanel()` 也会直接 return（不开一个空抽屉）。
+
+**移动的两条路**：右键菜单是保底（`openDockMenu` → `.dock-menu`，只列 allowedDocks、
+当前那档置灰），HTML5 拖拽是增强（`.dock-drop-layer` 三块投放区，几何由
+`dockZoneStyle(dock)` 按左右栏的**实时宽度**算——两栏都可拖宽，写死常量会让高亮框
+和它代表的区域对不上）。拖拽状态记在 `draggingPanelKey` 上、**不依赖 dataTransfer**
+（uni 重建 `<view>` 事件对象的老地雷）；`openDockMenu` 的坐标同样先读回调再回退
+`window.event`，`preventDefault` 在方法里做而不在模板上写 `.prevent`——rail 上不是每个
+按钮都能移动，不能移动的要把右键让回系统默认行为。
+搬家动作是 `movePanelToDock(key, dock)`：搬之前开着的，搬完 `openPanelInItsDock` 跟到
+新位置继续开着（右栏不可见时顺带 `toggleAiPanel()`），否则只 `triggerWorkbenchResize`。
+
+**加一个可停靠面板的步骤**（后续「依据」面板照此接入）：
+1. `panelRegistry.js` 加一条（含 `svgPaths`，图标进 `config/icons.js`，禁 emoji）；
+2. `project-overview.vue` 在**每个** allowedDocks 对应的显式 `v-else-if` 分支链里加一条渲染
+   （`rightPaneKey === '<key>'` / `leftPaneKey === '<key>'` / `activeToolKey === '<key>'`），
+   props 与 `@event` **逐个显式写**——`check-emit-bindings.mjs` 是静态扫描，
+   改成 `<component :is>` 会静默失去覆盖，`check-navigation-contract.mjs` 也认字面量；
+3. 文案补 `locales/{zh-CN,en-US}` 两份；
+4. 跑 `npm run test:panel-dock`（注册表自洽断言会拦下 defaultDock 不在 allowedDocks、
+   缺图标一类错误）+ `check:emits` + `check:nav` + 一次真构建。
+
 ## 左栏面板的标题与密度（2026-08-17）
 
 **左栏标题只有一个出处**：外壳的 `.sidebar-header`（`project-overview.vue`，渲染
@@ -411,7 +482,7 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 ## 相关文件
 
 - `frontend/src/services/host.js` — **访问桌面壳能力的唯一出口**（浏览器面板/截图/剪贴板/组件下载/自动更新/本地文件对话框/应用菜单等）。业务代码一律 `import { host } from '@/services/host.js'`，**不要再写 `window.checkbaDesktop`**；「是不是桌面壳」用 `isDesktopHost()`。桌面态逐字段透传、Web 态缺席，所以既有的 `if (host.browser && ...)` 子对象守卫必须保留（守卫就是能力探测）。详见 doc-editor.md 的「宿主能力层与编辑器容器」。
-- `frontend/src/config/tools.js` — 底部工具面板 tab（WORKBENCH_TOOLS）；`fileActions.js` — 文件树批量操作；`workbenchActions.js` — OCR/内链 scheme 常量。
+- `frontend/src/config/panelRegistry.js` — 可停靠面板注册表（**取代了原 `config/tools.js` 的 `WORKBENCH_TOOLS`，那个文件已删**，底栏三项现在是「停在 bottom 档的面板」）；`fileActions.js` — 文件树批量操作；`workbenchActions.js` — OCR/内链 scheme 常量。
 - `frontend/src/components/FileTree.vue`（5225 行）— 左栏文件树。
 - 各页面（行数实测）：login.vue(931)、newproject/index.vue(680)、wizard.vue(1007，重跑语义见 PR#134)、userprofile.vue（**已是薄壳页**，2026-08-20 起挂 `AdminPane initial-nav="work_log"`，个人中心的四栏内容在 `components/userprofile/Personal*Panel.vue`）、variable-library.vue(543)、admin.vue(**已是薄壳页 ~30 行**，实体在 `components/admin/AdminPane.vue`，含插件广场入口与「记忆同步」面板——nav key `memory`、desktopOnly，配置记忆 Git 远端，见 version-control.md)、plugin-market.vue(22，**已是薄壳页**，实体在 `MarketPane`)。
 - **项目列表页** `frontend/src/pages/project-list/project-list.vue` + 同目录 `project-list.scss`（样式 `@import` 引入，照 project-overview.vue + .scss 的既有形制）。整块搬自 `userprofile.vue` 的 projects tab，卡片类名 `.project-item-card` 保持不变（e2e 锚点）；页面根 `.page-project-list`。**新建入口在列表下方**（`.create-section`，两张 `.create-card`：打开文件夹 / 新建项目文件夹，走 `utils/ideOpen.js` 的 `openFolderFlow`/`createFolderFlow`，命名弹窗同页）；「单独打开一个文件」已去掉——它造出的是没有归属的临时项目（`openFileFlow` 仍留给应用菜单与拖拽）。浏览器版没有系统文件夹对话框，降级为 navigateTo `newproject` 页填表建托管空白项目。承载 `InviteMemberDialog` 与 `CloudAcceptDialog`（**这两个必须一起搬**，`CloudAcceptDialog` 的两个入口是协作唯一入口，`CollabDialog.vue:271` 的邀请话术还指着它）。CLIENT 隐藏「+ 新建项目」「从团队案件库取一份案卷」与卡片上的删除/重命名/邀请。角色文案唯一来源是 `config/memberRoles.js`（搬迁时把原来硬编码的 `getRoleLabel` 映射表换掉）。**不要搬**「进行中/已完成」那两张统计卡——它们是写死的字面量 0，Project 实体根本没有状态字段。
@@ -556,6 +627,7 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 ## 验证
 
 - `cd frontend && npm run check:emits`（死绑定护栏）+ `npm run test:app-e2e`（登录→项目→上传→打开文件→独立页面全旅程）。
+- 改面板停靠/注册表加跑 `npm run test:panel-dock`（`resolveDocks` 回落规则与注册表自洽）。
 - 改导航/入口/设置页结构加跑 `npm run check:nav` 与 `npm run check:nav:full`（导航契约静态护栏，
   含「头像下拉只剩一项」「个人组四栏各自有人加载数据」「薄壳页挂的是统一设置面板」等断言）；
   改文案加跑 `npm run check:locales`（zh/en 键对拍）。

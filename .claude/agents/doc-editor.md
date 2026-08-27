@@ -112,6 +112,7 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 ## 已知地雷
 
 - boot 三地雷勿回退（canvas 必须 id=qtcanvas 且禁 border/padding；COOP/COEP 缺失 SharedArrayBuffer 不可用；locale shim）。
+- **lo-relay 的非命令消息**（客体页 → 宿主：`open-url` / `modified` / `selection` / `evidence-drop` / `boot-log` / `cursor-context`；宿主 → 客体页：`insight-sub`）。`cursor-context` / `insight-sub` 是「依据」窗格的正文联动（dev-board#182，契约在 doc-insight.md 的「前端」一节）：**默认关闭**，宿主 `LibreOfficeEditor` 的 `insightSubscribed` prop 置位才下发订阅，客体页此前一次 `get_cursor_context` 都不打。宿主下行走 `this._transportSend`（relay executor 只发命令，非命令消息要自己送），`ready` 时补发一次——webview 重建/换文档后客体页状态是全新的。
 - **宿主事件订阅必须在建元素时就挂，不能推迟到 dom-ready**（`LibreOfficeEditor.subscribeHostEvents`，与命令通道 `wireExecutor` 分开）：`boot-log` 从引擎启动第一刻就在发，`modified` 是自动保存的唯一触发信号——晚挂一步就丢开头的消息，丢 `modified` 等于用户的编辑不落盘。命令通道则相反，webview 必须等 dom-ready（此前 send 无处可去）。
 - **iframe 容器不能加 sandbox**：沙箱会掐掉 SharedArrayBuffer 与 Worker，引擎起不来；跨源隔离靠站点级 COOP/COEP，不是 iframe 属性。
 - iframe 传输的订阅挂在 `window` 上，不随元素移除消失——`beforeUnmount` 必须显式退订（`_eventUnsub`），否则关一个文档漏一个监听器，且已销毁实例的 `onDocModified` 还会被触发。

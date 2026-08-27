@@ -135,10 +135,8 @@ export const menuCommandsMethods = {
       case 'toggleAiPanel': this.toggleAiPanel(); break
       case 'toggleSplit': this.toggleSplitMode(); break
       case 'openView': this.toggleLeftPane(arg); break
-      case 'openTool':
-        if (!this.showToolsPanel) this.toggleToolsPanel()
-        this.activeToolKey = arg
-        break
+      // 工具面板可以被停靠到左/右/底任一处（dev-board#180），菜单命令不该假定它在底栏
+      case 'openTool': this.openPanelInItsDock(arg); break
       case 'openVersionPanel': this.toggleLeftPane('version'); break
       case 'openPluginMarket': this.goToPluginMarket(); break
       // 应用菜单的「设置…」（⌘,）：在工作台里开中栏标签，不跳页。

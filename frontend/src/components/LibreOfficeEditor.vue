@@ -56,7 +56,9 @@
       :executor="executor"
       :refresh-key="uiRefreshKey"
       :review-open="reviewOpen"
+      :insight-open="insightOpen"
       @toggle-review="reviewOpen = !reviewOpen"
+      @toggle-insight="onToggleInsight"
       @changed="onDocModified"
       @ui-state="$emit('menu-state')"
     />
@@ -149,7 +151,10 @@ export default {
   components: { ReviewPanel, EditorToolbar, EvidenceStaleBar },
   // command-progress：批量命令（find_replace >50 命中 / apply_house_style）的
   // 「第 x/y 处」进度，{reqId, done, total}；reqId 可用 executeCommand('cancel', {reqId}) 喊停。
-  emits: ['close', 'ready', 'open-url', 'menu-state', 'evidence-drop', 'locator-consumed', 'open-evidence-target', 'command-progress'],
+  // open-insight：工具栏「解析」按钮 → 宿主打开「依据」窗格并（必要时）发起解析。
+  // cursor-context：画布点击/光标移动时客体页回传的光标邻域（仅在 insightSubscribed
+  //   为真时才产生——不订阅时客体页一条都不发，常态零开销）。
+  emits: ['close', 'ready', 'open-url', 'menu-state', 'evidence-drop', 'locator-consumed', 'open-evidence-target', 'command-progress', 'open-insight', 'cursor-context'],
   props: {
     // Track D: the Office file to load into the editor ({ id, name, fileType,
     // wpsFileId }). When set, the editor fetches its bytes (authed) and loads the
@@ -161,6 +166,11 @@ export default {
     // 当前用户对该项目有没有写权限（只读成员 / 客户 = false）。adopt_legacy_links 会改文档并触发
     // 自动保存，只读成员不该跑；核对回写（/anchors/report）只需读权限，不受此影响。
     canWrite: { type: Boolean, default: true },
+    // 「依据」窗格此刻是不是绑在这份文档上（dev-board#182）。
+    // insightOpen 只管工具栏按钮的按下态；insightSubscribed 会往客体页下发订阅开关——
+    // **不订阅时客体页一次 get_cursor_context 都不打**，常态零开销。
+    insightOpen: { type: Boolean, default: false },
+    insightSubscribed: { type: Boolean, default: false },
   },
   data() {
     return {
@@ -272,7 +282,9 @@ export default {
     // 菜单栏读勾选/置灰的三个信号。合并在这个 watch 里而不是另起一块——
     // 选项对象里两个同名 key，后写的会把先写的整个覆盖掉。
     reviewOpen() { this.$emit('menu-state') },
-    ready(v) { this.$emit('menu-state'); if (v) this.consumeLocator() },
+    ready(v) { this.$emit('menu-state'); if (v) { this.consumeLocator(); this.pushInsightSub() } },
+    // 「依据」窗格开合 → 客体页的光标上报订阅（dev-board#182）
+    insightSubscribed() { this.pushInsightSub() },
     docKind() { this.$emit('menu-state') },
     // 宿主 openFile(file, {locator}) 把定位符挂在 tab 对象上；已打开的标签再次被
     // 链接点中时是原地换对象，靠这个路径 watch 触发。
@@ -426,6 +438,25 @@ export default {
     },
     menuToggleReviewPanel() {
       this.reviewOpen = !this.reviewOpen
+    },
+    /**
+     * 工具栏「解析」（dev-board#182）。窗格在工作台一级（可停右栏也可停左栏），
+     * 编辑器只把意图连同自己是哪份文档一起上抛，开哪个 dock、要不要 POST /parse
+     * 由宿主决定。
+     */
+    onToggleInsight() {
+      this.$emit('open-insight', { fileId: this.file && this.file.id })
+    },
+    /**
+     * 把「依据」窗格的订阅开关下发给客体页。不订阅时客体页一条 cursor-context 都不发，
+     * 也就一次 get_cursor_context 都不打——没开窗格的用户完全不受影响。
+     * ready 时补发一次：webview 重建/换文档后客体页的状态是全新的。
+     */
+    pushInsightSub() {
+      if (!this._transportSend) return
+      try {
+        this._transportSend({ __lo: 'lo-relay', type: 'insight-sub', enabled: !!this.insightSubscribed })
+      } catch (e) { /* 通道没起来：ready 时还会补发一次 */ }
     },
     menuOpenFind() {
       const tb = this.$refs.toolbar
@@ -589,10 +620,16 @@ export default {
           if (this.ready) this.uiRefreshKey++
         } else if (msg.type === 'evidence-drop') {
           this.onGuestEvidenceDrop(msg.payload)
+        } else if (msg.type === 'cursor-context') {
+          // 「依据」窗格的正文联动（dev-board#182）：客体页只在被订阅时才发这条。
+          // 纯只读（get_cursor_context），不标脏、不刷工具栏。
+          this.$emit('cursor-context', Object.assign({ fileId: this.file && this.file.id }, msg.payload || {}))
         } else if (msg.type === 'boot-log') {
           this.onBootLog(String(msg.msg || ''))
         }
       })
+      // 下行通道：relay executor 只发命令，订阅开关这类「非命令」消息要自己送。
+      this._transportSend = transport.send
     },
     // 命令通道：把 {send, subscribe} 传输接成 executor。两种容器共用。
     wireExecutor(transport, whence) {

@@ -10,6 +10,7 @@ AI WorkDeck（checkba_cloud）：面向法律行业的 AI 工作台。Java Sprin
 |---|---|
 | AI 对话、编排器、工具注册、记忆、SSE 流、评测 | `.claude/agents/ai-chat.md` |
 | doc_* 编辑原语、AI 改文档、修订（redline）、检查点、EDITOR_ACTIONS | `.claude/agents/ai-doc-bridge.md` |
+| 文档「解析」、依据窗格、实体抽取与外部库检索（企查查/法宝）、文档内部一致性校验 | `.claude/agents/doc-insight.md` |
 | LOWA/zetaoffice 编辑器、字体、IME、保活、自动保存、.uno: 命令 | `.claude/agents/doc-editor.md` |
 | 浏览器面板、截图、剪贴板、收藏夹、搜索、下载、语音、文件预览/插入、OCR | `.claude/agents/utility-tools.md` |
 | 左侧栏、工作台布局、页面路由、面板切换、设置入口、project-overview.vue 结构 | `.claude/agents/sidebar-shell.md` |

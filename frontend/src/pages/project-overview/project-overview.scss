@@ -4304,3 +4304,202 @@ $bg-white: #FFFFFF;
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
+
+/* ===================== 面板停靠（dev-board#180） =====================
+   录音窗格拖到右侧就在右侧开、变量库拖到左侧就在左侧开。停靠位的唯一出处是
+   config/panelRegistry.js，这里只管三处宿主的样式：右侧 tab 条 / 左右两栏里的
+   工具面板宿主 / 右键菜单与拖拽投放层。密度一律走 App.vue 的 --awd-panel-* 令牌。 */
+
+/* 可移动的 rail 按钮 / tab：拖起来的手型提示 */
+.rail-btn.is-movable,
+.panel-tab.is-movable,
+.right-dock-tab.is-movable {
+  cursor: grab;
+}
+
+/* —— 右侧面板的 tab 条（只有真有面板停到右侧时才渲染） —— */
+.right-dock-tabs {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  padding: 0 var(--awd-panel-pad-x, 10px);
+  background: #F8F9FA;
+  border-bottom: 1px solid var(--awd-panel-border, #E9ECEF);
+}
+
+.right-dock-tab {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  font-size: var(--awd-panel-fs, 12px);
+  color: #6C757D;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+
+  &:hover { color: #2C3338; }
+
+  &.active {
+    color: var(--awd-panel-accent, #1A5336);
+    font-weight: 600;
+    border-bottom-color: var(--awd-panel-accent, #1A5336);
+  }
+}
+
+.right-dock-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+
+  /* ChatInterface 的根是 height:100%，包一层之后要靠这条把高度给足
+     （子组件根元素带父组件的 scope 属性，scoped 里能直接选到） */
+  > .chat-interface {
+    flex: 1;
+    min-height: 0;
+  }
+}
+
+/* —— 左/右栏里的工具面板宿主（变量库 / 收藏夹 / 剪贴板） ——
+   这三个面板的搜索早就外置给宿主了，不给一行搜索就等于没有搜索。 */
+.dock-tool-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.dock-tool-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  height: var(--awd-panel-row-h, 28px);
+  padding: 0 var(--awd-panel-pad-x, 10px);
+  border-bottom: 1px solid var(--awd-panel-border, #E9ECEF);
+}
+
+.dock-tool-search {
+  flex: 1;
+  min-width: 0;
+  height: 20px;
+  font-size: var(--awd-panel-fs, 12px);
+  color: #2C3338;
+  background: transparent;
+  border: none;
+  outline: none;
+}
+
+.dock-tool-btn {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #6C757D;
+  cursor: pointer;
+
+  &:hover {
+    background: #F1F3F5;
+    color: var(--awd-panel-accent, #1A5336);
+  }
+}
+
+.dock-tool-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+/* —— 右键「移到…」菜单（保底路径） —— */
+.dock-menu-mask {
+  position: fixed;
+  left: 0; top: 0; right: 0; bottom: 0;
+  z-index: 10004;
+}
+
+.dock-menu {
+  position: fixed;
+  z-index: 10005;
+  min-width: 152px;
+  padding: 4px 0;
+  background: #ffffff;
+  border: 1px solid $color-border;
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(18, 52, 77, 0.14);
+}
+
+.dock-menu-title {
+  padding: 4px 12px 6px;
+  font-size: var(--awd-panel-fs-sec, 11px);
+  font-weight: 700;
+  color: #868E96;
+}
+
+.dock-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 28px;
+  padding: 0 12px;
+  font-size: var(--awd-panel-fs, 12px);
+  color: #2C3338;
+  cursor: pointer;
+
+  &:hover { background: #F1F3F5; }
+
+  &.disabled {
+    color: #ADB5BD;
+    cursor: default;
+    &:hover { background: transparent; }
+  }
+}
+
+.dock-menu-cur {
+  font-size: var(--awd-panel-fs-sec, 11px);
+  color: #ADB5BD;
+}
+
+/* —— 拖拽投放层：只在拖拽期间存在，只铺三个 dock 自身的区域 —— */
+.dock-drop-layer {
+  position: fixed;
+  left: 0; top: 0; right: 0; bottom: 0;
+  z-index: 10004;
+  pointer-events: none;
+}
+
+.dock-drop-zone {
+  position: absolute;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(91, 209, 151, 0.10);
+  border: 2px dashed rgba(26, 83, 54, 0.35);
+  border-radius: 4px;
+  transition: background 0.12s ease;
+
+  &.is-over {
+    background: rgba(91, 209, 151, 0.22);
+    border-color: var(--awd-panel-accent, #1A5336);
+  }
+
+  /* 三块投放区的几何由 dockZoneStyle() 按左栏/右栏的实时宽度算（两栏都可拖宽，
+     写死常量会让高亮框和它代表的区域对不上），这里只管长相。 */
+}
+
+.dock-drop-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--awd-panel-accent, #1A5336);
+  background: rgba(255, 255, 255, 0.9);
+  padding: 4px 10px;
+  border-radius: 4px;
+}

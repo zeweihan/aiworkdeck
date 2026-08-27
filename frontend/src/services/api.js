@@ -1814,6 +1814,26 @@ export function evidenceRefCounts(projectId, fileIds) {
   return request({ url: `/api/projects/${projectId}/evidence-links/ref-counts`, method: 'GET', data: { fileIds: (fileIds || []).join(',') } })
 }
 
+// 文档解析 /「依据」窗格（dev-board#181/#182）。契约见 .claude/agents/doc-insight.md。
+// 四个端点全在 /api/projects/{pid}/insight 之下；未登录一律 200 + {code:4010}，
+// 由 request() 的统一信封处理（这里不另做分支）。
+/** 发起解析（异步）。返回时 run 已落库为 RUNNING，调用方立刻可以轮询 getInsight。 */
+export function parseDocInsight(projectId, docFileId) {
+  return request({ url: `/api/projects/${projectId}/insight/parse`, method: 'POST', data: { docFileId } })
+}
+/** 最近一次解析结果：run + 实体（列表里不带检索详情）+ 全部发现（含 detail）。run=null = 没解析过。 */
+export function getDocInsight(projectId, docFileId) {
+  return request({ url: `/api/projects/${projectId}/insight`, method: 'GET', data: { docFileId } })
+}
+/** 单个实体的检索详情（列表刻意瘦身，展开时才拉）。 */
+export function getDocInsightEntity(projectId, entityId) {
+  return request({ url: `/api/projects/${projectId}/insight/entities/${entityId}`, method: 'GET' })
+}
+/** 重新检索一个实体（绕过 7 天缓存，花外部库额度，要写权限）。 */
+export function refreshDocInsightEntity(projectId, entityId) {
+  return request({ url: `/api/projects/${projectId}/insight/entities/${entityId}/refresh`, method: 'POST' })
+}
+
 export function deleteFavorite(favoriteId) {
   return request({
     url: `/api/favorites/${favoriteId}`,
