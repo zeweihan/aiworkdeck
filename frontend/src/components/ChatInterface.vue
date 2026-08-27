@@ -2512,7 +2512,7 @@ export default {
   height: 100%;
   width: 100%;
   max-width: 100%;
-  background: #f8f9fa;
+  background: var(--awd-bg);
   position: relative;
   overflow: hidden; /* Prevent children from overflowing */
   box-sizing: border-box;
@@ -2520,18 +2520,18 @@ export default {
 
 .chat-header {
   height: 36px;
-  border-bottom: 1px solid #e0e0e0;
+  border-bottom: 1px solid var(--awd-border);
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 0 16px;
-  background: #f8f9fa;
+  background: var(--awd-bg);
   flex-shrink: 0;
 }
 
 .header-left .project-name-display {
   font-weight: 600;
-  color: #333;
+  color: var(--awd-text);
 }
 
 .header-actions {
@@ -2551,7 +2551,7 @@ export default {
   cursor: pointer;
   padding: 6px;
   border-radius: 6px;
-  color: #666;
+  color: var(--awd-text-2);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2568,7 +2568,7 @@ export default {
   display: none;
 }
 .icon-btn:hover {
-  background: rgba(26, 83, 54, 0.08);
+  background: var(--awd-surface);
 }
 .icon-btn:hover .btn-icon.default {
   display: none;
@@ -2578,7 +2578,7 @@ export default {
 }
 /* Prevent layout shift when active */
 .icon-btn.active {
-  background: rgba(26, 83, 54, 0.12);
+  background: var(--awd-accent-soft);
   border-radius: 6px;
 }
 .icon-btn.active .btn-icon.default {
@@ -2599,7 +2599,7 @@ export default {
   width: 15px;
   height: 15px;
   display: block;
-  color: #666;
+  color: var(--awd-text-2);
   transition: color 0.15s ease;
 }
 .icon-btn.mini .plus-svg {
@@ -2607,16 +2607,16 @@ export default {
   height: 14px;
 }
 .icon-btn:hover .plus-svg {
-  color: #1A5336;
+  color: var(--awd-accent-text);
 }
 /* File add button with border */
 .icon-btn.file-add-btn {
-  border: 1px solid #ddd;
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   padding: 3px;
 }
 .icon-btn.file-add-btn:hover {
-  border-color: rgba(26, 83, 54, 0.4);
+  border-color: var(--awd-accent);
 }
 
 .message-list {
@@ -2653,15 +2653,15 @@ export default {
 }
 
 .user-bubble {
-  background: #E8F3ED; /* AI WorkDeck品牌色 Lightest */
+  background: var(--awd-accent-soft); /* AI WorkDeck品牌色 Lightest */
   padding: 8px 12px;
   border-radius: 6px 6px 0 6px;
   max-width: 80%;
-  color: #2C3338; /* Gray-Dark for text */
+  color: var(--awd-text); /* Gray-Dark for text */
   font-size: 13px;
   line-height: 1.5;
   box-shadow: none;
-  border: 1px solid #d4e5dc;
+  border: 1px solid var(--awd-border);
   word-wrap: break-word;
   overflow-wrap: break-word;
   box-sizing: border-box;
@@ -2682,7 +2682,7 @@ export default {
 
 .bubble-timestamp {
   font-size: 11px;
-  color: #999;
+  color: var(--awd-text-3);
   /* margin-top: 4px; */
 }
 .user-bubble .bubble-timestamp { text-align: right; }
@@ -2726,7 +2726,7 @@ export default {
 .welcome-text {
   font-size: 24px;
   font-weight: 600;
-  color: #333;
+  color: var(--awd-text);
   margin-bottom: 8px;
   display: block;
 }
@@ -2734,13 +2734,13 @@ export default {
 .welcome-subtitle {
   font-size: 15px;
   font-weight: 400;
-  color: #666;
+  color: var(--awd-text-2);
   display: block;
 }
 
 .input-card {
-  background: #fff;
-  border: 1px solid rgba(222, 228, 224, 0.9);
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 12px;
   padding: 16px;
   width: 100%;
@@ -2751,7 +2751,7 @@ export default {
 }
 /* 输入区获得焦点时整卡亮起：品牌绿描边 + mint 光晕（浅色，不做深色 chrome） */
 .input-card:focus-within {
-  border-color: rgba(26, 83, 54, 0.35);
+  border-color: var(--awd-accent);
   box-shadow: 0 0 0 3px rgba(91, 209, 151, 0.16), 0 1px 2px rgba(18, 52, 77, 0.04), 0 4px 16px rgba(18, 52, 77, 0.06);
 }
 
@@ -2759,7 +2759,7 @@ export default {
 .recent-history-header {
   font-size: 12px;
   font-weight: 500;
-  color: #888;
+  color: var(--awd-text-3);
   margin-bottom: 8px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -2769,10 +2769,10 @@ export default {
   display: flex;
   flex-direction: column;
   gap: 0; /* 无间距 */
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--awd-border);
   border-radius: 4px; /* 减小圆角 */
   overflow: hidden;
-  background: #fff;
+  background: var(--awd-surface);
 }
 
 /* 会话后台任务状态点（与宿主抽屉同一套视觉）：
@@ -2784,10 +2784,10 @@ export default {
   flex-shrink: 0;
   margin-right: 6px;
 }
-.conv-dot.dot-running { background: #5BD197; animation: conv-dot-pulse 1.2s ease-in-out infinite; }
-.conv-dot.dot-attention { background: #F5B60D; }
-.conv-dot.dot-unread { background: #3B82F6; }
-.conv-dot.dot-error { background: #E74C3C; }
+.conv-dot.dot-running { background: var(--awd-mint); animation: conv-dot-pulse 1.2s ease-in-out infinite; }
+.conv-dot.dot-attention { background: var(--awd-warning); }
+.conv-dot.dot-unread { background: var(--awd-info); }
+.conv-dot.dot-error { background: var(--awd-danger); }
 .conv-dot.header-dot {
   position: absolute;
   top: 2px;
@@ -2795,7 +2795,7 @@ export default {
   width: 7px;
   height: 7px;
   margin: 0;
-  border: 1px solid #ffffff;
+  border: 1px solid var(--awd-surface);
 }
 @keyframes conv-dot-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
@@ -2807,8 +2807,8 @@ export default {
   justify-content: space-between;
   align-items: center;
   padding: 10px 14px;
-  background: #ffffff;
-  border-bottom: 1px solid #f0f0f0;
+  background: var(--awd-surface);
+  border-bottom: 1px solid var(--awd-border-subtle);
   border-radius: 0; /* 无圆角 */
   cursor: pointer;
   transition: background 0.15s ease;
@@ -2820,12 +2820,12 @@ export default {
 }
 
 .history-item:hover {
-  background: #f8faf9;
+  background: var(--awd-accent-soft);
 }
 
 .history-title {
   font-size: 13px;
-  color: #2c3e50;
+  color: var(--awd-text);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2836,7 +2836,7 @@ export default {
 
 .history-time {
   font-size: 11px;
-  color: #999;
+  color: var(--awd-text-3);
   margin-left: 12px;
   flex-shrink: 0;
   text-align: right;
@@ -2845,18 +2845,18 @@ export default {
 
 .history-empty-placeholder {
   font-size: 13px;
-  color: #999;
+  color: var(--awd-text-3);
   text-align: center;
   padding: 24px 0;
 }
 
 .history-disclaimer {
   font-size: 12px;
-  color: #aaa;
+  color: var(--awd-text-3);
   text-align: center;
   padding: 16px 0 0;
   margin-top: 12px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--awd-border-subtle);
 }
 
 .chat-input-rich {
@@ -2866,12 +2866,12 @@ export default {
   outline: none;
   font-size: 15px;
   line-height: 1.5;
-  color: #333;
+  color: var(--awd-text);
 }
 
 .chat-input-rich:empty:before {
   content: attr(data-placeholder);
-  color: #aaa;
+  color: var(--awd-text-3);
 }
 
 .input-footer {
@@ -2880,7 +2880,7 @@ export default {
   align-items: center;
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--awd-border-subtle);
 }
 
 .action-bar-left {
@@ -2893,7 +2893,7 @@ export default {
 
 .model-selector {
   font-size: 13px;
-  color: #666;
+  color: var(--awd-text-2);
   cursor: pointer;
   /* 定位基准挪给 .input-card（见 .model-dropdown 注释）——AI 面板最窄 240px，
      锚在这个只有内容宽的选择器上，下拉框固定 min-width 无论往哪边对齐都会被
@@ -2911,17 +2911,17 @@ export default {
   white-space: nowrap;
 }
 .model-selector:hover {
-  background: rgba(26, 83, 54, 0.05);
-  border-color: rgba(26, 83, 54, 0.16);
+  background: var(--awd-accent-wash);
+  border-color: var(--awd-accent-soft);
 }
 
 .dropdown-arrow {
   font-size: 8px;
-  color: #999;
+  color: var(--awd-text-3);
   transition: color 0.15s ease;
 }
 .model-selector:hover .dropdown-arrow {
-  color: #666;
+  color: var(--awd-text-2);
 }
 
 .model-dropdown {
@@ -2932,8 +2932,8 @@ export default {
      裁掉一截。改成跟随输入卡自身宽度（left/right 都钉到 0），永不溢出。 */
   left: 0;
   right: 0;
-  background: #fff;
-  border: 1px solid #e0e0e0;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
   z-index: 1001;
@@ -2956,7 +2956,7 @@ export default {
 /* ============= Mode Selector (Agent/Ask/Plan) ============= */
 .mode-selector {
   font-size: 13px;
-  color: #666;
+  color: var(--awd-text-2);
   cursor: pointer;
   /* 同 .model-selector：定位基准挪给 .input-card。实测在 240px 最窄面板下，
      min-width:160px 的下拉锚在这个只有内容宽（约 60px）的选择器上，右边缘
@@ -2970,13 +2970,13 @@ export default {
   box-sizing: border-box;
   padding: 0 8px;
   border-radius: 6px;
-  background: rgba(26, 83, 54, 0.06);
-  border: 1px solid rgba(26, 83, 54, 0.18);
+  background: var(--awd-accent-wash);
+  border: 1px solid var(--awd-accent-soft);
   transition: all 0.15s ease;
 }
 .mode-selector:hover {
-  background: rgba(26, 83, 54, 0.12);
-  border-color: rgba(26, 83, 54, 0.3);
+  background: var(--awd-accent-soft);
+  border-color: var(--awd-accent);
 }
 
 .mode-icon {
@@ -2985,15 +2985,15 @@ export default {
 
 .mode-name {
   font-weight: 500;
-  color: #1A5336;
+  color: var(--awd-accent-text);
 }
 
 .mode-dropdown {
   position: absolute;
   left: 0;
   right: 0;
-  background: #fff;
-  border: 1px solid #e0e0e0;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 10px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
   z-index: 1001;
@@ -3018,13 +3018,13 @@ export default {
   transition: background 0.1s ease;
 }
 .mode-option:hover {
-  background: #f5f5f5;
+  background: var(--awd-surface-2);
 }
 .mode-option.active {
-  background: rgba(26, 83, 54, 0.08);
+  background: var(--awd-accent-soft);
 }
 .mode-option.active .mode-option-name {
-  color: #1A5336;
+  color: var(--awd-accent-text);
   font-weight: 600;
 }
 
@@ -3041,21 +3041,21 @@ export default {
 .mode-option-name {
   font-size: 13px;
   font-weight: 500;
-  color: #333;
+  color: var(--awd-text);
 }
 
 .mode-option-desc {
   font-size: 11px;
-  color: #888;
+  color: var(--awd-text-3);
 }
 
 /* 本地供应商（Ollama）只剩 Ask 时的说明行 */
 .mode-note {
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--awd-border-subtle);
   margin-top: 4px;
   padding: 6px 14px 2px;
   font-size: 10px;
-  color: #aaa;
+  color: var(--awd-text-3);
   line-height: 1.5;
   max-width: 200px;
 }
@@ -3064,8 +3064,8 @@ export default {
   position: absolute;
   top: 100%;
   right: 0;
-  background: #fff;
-  border: 1px solid #e2e8f0;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 10px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.08);
   z-index: 1000;
@@ -3089,9 +3089,9 @@ export default {
   padding: 6px 12px;
   font-size: 11px;
   font-weight: 600;
-  color: #64748b;
-  background: #f8f9fa;
-  border-bottom: 1px solid #f1f5f9;
+  color: var(--awd-text-2);
+  background: var(--awd-bg);
+  border-bottom: 1px solid var(--awd-border-subtle);
 }
 
 .menu-item {
@@ -3101,17 +3101,17 @@ export default {
   justify-content: space-between;
   align-items: center;
   font-size: 13px;
-  color: #334155;
+  color: var(--awd-text);
   transition: all 0.15s ease;
-  border-bottom: 1px solid #f8f9fa;
+  border-bottom: 1px solid var(--awd-border-subtle);
 }
 .menu-item:hover {
-  background: #f1f5f9;
-  color: #1A5336;
+  background: var(--awd-surface-2);
+  color: var(--awd-accent-text);
 }
 .menu-item.active {
-  background: rgba(26, 83, 54, 0.08);
-  color: #1A5336;
+  background: var(--awd-accent-soft);
+  color: var(--awd-accent-text);
   font-weight: 500;
 }
 
@@ -3137,24 +3137,24 @@ export default {
   padding: 8px 14px;
   cursor: pointer;
   font-size: 13px;
-  color: #333;
+  color: var(--awd-text);
   transition: background 0.15s ease;
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 .model-option:hover {
-  background: rgba(26, 83, 54, 0.08);
+  background: var(--awd-accent-soft);
 }
 .model-option.active {
-  color: #1A5336;
+  color: var(--awd-accent-text);
   font-weight: 500;
-  background: rgba(26, 83, 54, 0.04);
+  background: var(--awd-accent-wash);
 }
 
 /* ===== 模型下拉：按厂商分组，国际档在后并标注需国际网络 ===== */
 .model-group + .model-group {
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--awd-border-subtle);
 }
 .model-group-head {
   display: flex;
@@ -3164,12 +3164,12 @@ export default {
 }
 .model-group-vendor {
   font-size: 11px;
-  color: #999;
+  color: var(--awd-text-3);
   letter-spacing: 0.5px;
 }
 .model-region-tag {
   font-size: 10px;
-  color: #b45309;
+  color: var(--awd-warning-text);
   background: rgba(180, 83, 9, 0.1);
   border-radius: 3px;
   padding: 1px 4px;
@@ -3187,33 +3187,33 @@ export default {
 }
 .model-tier-tag {
   font-size: 10px;
-  color: #64748b;
+  color: var(--awd-text-2);
   background: rgba(100, 116, 139, 0.1);
   border-radius: 3px;
   padding: 1px 4px;
 }
 .model-option-price {
   font-size: 11px;
-  color: #888;
+  color: var(--awd-text-3);
   font-weight: 400;
 }
 .model-empty {
   padding: 10px 14px;
   font-size: 12px;
-  color: #888;
+  color: var(--awd-text-3);
 }
 .model-region-basis {
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--awd-border-subtle);
   margin-top: 4px;
   padding: 6px 14px 2px;
   font-size: 10px;
-  color: #aaa;
+  color: var(--awd-text-3);
   line-height: 1.5;
 }
 
 .send-btn {
-  background: #1A5336;
-  color: #fff;
+  background: var(--awd-accent);
+  color: var(--awd-text-on-accent);
   width: 32px;
   height: 32px;
   border-radius: 50%;
@@ -3225,21 +3225,21 @@ export default {
   flex-shrink: 0;
 }
 .send-btn:hover {
-  background: #2D7A52;
+  background: var(--awd-accent-hover);
 }
 .send-btn.disabled {
-  background: #eee;
-  color: #aaa;
+  background: var(--awd-surface-3);
+  color: var(--awd-text-3);
   cursor: not-allowed;
 }
 .send-btn.disabled:hover {
-  background: #eee;
+  background: var(--awd-surface-3);
 }
 .send-btn.stopping {
-  background: #C53030;
+  background: var(--awd-danger);
 }
 .send-btn.stopping:hover {
-  background: #9B2C2C;
+  background: var(--awd-danger);
 }
 .send-icon {
   font-size: 16px;
@@ -3249,8 +3249,8 @@ export default {
 
 .input-area-wrapper {
   padding: 12px 16px 16px;
-  background: #fff;
-  border-top: 1px solid #eee;
+  background: var(--awd-surface);
+  border-top: 1px solid var(--awd-border);
   display: flex;
   flex-direction: column;  /* Fix: Stack children vertically */
   align-items: stretch;    /* Fix: Make children full width */
@@ -3266,19 +3266,19 @@ export default {
   gap: 8px;
   margin: 8px 0;
   padding: 8px 0;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--awd-border-subtle);
 }
 
 .context-file-tag {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  background: #e8f4fd;
-  border: 1px solid #bce0fd;
+  background: var(--awd-bg);
+  border: 1px solid var(--awd-info);
   border-radius: 14px;
   padding: 4px 8px 4px 6px;
   font-size: 12px;
-  color: #1a73e8;
+  color: var(--awd-info-text);
 }
 
 .context-file-icon {
@@ -3294,14 +3294,14 @@ export default {
 
 .context-file-remove {
   margin-left: 4px;
-  color: #999;
+  color: var(--awd-text-3);
   cursor: pointer;
   font-size: 14px;
   line-height: 1;
 }
 
 .context-file-remove:hover {
-  color: #e53935;
+  color: var(--awd-danger-text);
 }
 
 /* =============================================
@@ -3336,8 +3336,8 @@ export default {
   right: -4px;
   width: 18px;
   height: 18px;
-  background: linear-gradient(135deg, #1A5336 0%, #2D7A52 100%);
-  color: #fff;
+  background: linear-gradient(135deg, var(--awd-accent) 0%, var(--awd-accent-hover) 100%);
+  color: var(--awd-text-on-accent);
   border-radius: 50%;
   font-size: 12px;
   text-align: center;
@@ -3348,7 +3348,7 @@ export default {
 }
 
 .preview-remove:hover {
-  background: linear-gradient(135deg, #2D7A52 0%, #1A5336 100%);
+  background: linear-gradient(135deg, var(--awd-accent-hover) 0%, var(--awd-accent) 100%);
   transform: scale(1.1);
 }
 
@@ -3361,7 +3361,7 @@ export default {
    align-items: center;
    gap: 3px;
    background: transparent;
-   color: #1A5336;
+   color: var(--awd-accent-text);
    padding: 3px 8px;
    border-radius: 4px;
    margin: 0 4px 2px 0;
@@ -3370,14 +3370,14 @@ export default {
    vertical-align: middle;
    user-select: none;
    max-width: 160px;
-   border: 1px solid rgba(26, 83, 54, 0.4);
+   border: 1px solid var(--awd-accent);
    transition: all 0.15s ease;
    position: relative;
  }
 
  :deep(.context-tag-inline:hover) {
-   background: rgba(26, 83, 54, 0.08);
-   border-color: rgba(26, 83, 54, 0.6);
+   background: var(--awd-accent-soft);
+   border-color: var(--awd-accent);
    padding-right: 22px; /* Make room for close button */
  }
 
@@ -3390,7 +3390,7 @@ export default {
  }
 
  :deep(.tag-at) {
-   color: #1A5336;
+   color: var(--awd-accent-text);
    font-weight: 600;
  }
 
@@ -3399,7 +3399,7 @@ export default {
    overflow: hidden;
    text-overflow: ellipsis;
    max-width: 100px;
-   color: #1A5336;
+   color: var(--awd-accent-text);
  }
 
  :deep(.tag-close) {
@@ -3410,8 +3410,8 @@ export default {
    transform: translateY(-50%);
    width: 14px;
    height: 14px;
-   background: rgba(26, 83, 54, 0.2);
-   color: #1A5336;
+   background: var(--awd-accent-soft);
+   color: var(--awd-accent-text);
    border-radius: 50%;
    align-items: center;
    justify-content: center;
@@ -3425,8 +3425,8 @@ export default {
  }
 
  :deep(.tag-close:hover) {
-   background: rgba(26, 83, 54, 0.4);
-   color: #fff;
+   background: var(--awd-accent);
+   color: var(--awd-text-on-accent);
  }
 
  /* =============================================
@@ -3438,7 +3438,7 @@ export default {
   align-items: center;
   gap: 3px;
   background: transparent;
-  color: #1A5336;
+  color: var(--awd-accent-text);
   padding: 3px 8px;
   border-radius: 4px;
   margin: 0 4px 2px 0;
@@ -3447,7 +3447,7 @@ export default {
   vertical-align: middle;
   user-select: none;
   max-width: 160px;
-  border: 1px solid rgba(26, 83, 54, 0.4);
+  border: 1px solid var(--awd-accent);
   transition: all 0.15s ease;
 }
 
@@ -3461,7 +3461,7 @@ export default {
 }
 
 .user-bubble .tag-at {
-  color: #1A5336;
+  color: var(--awd-accent-text);
   font-weight: 600;
 }
 
@@ -3470,7 +3470,7 @@ export default {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100px;
-  color: #1A5336;
+  color: var(--awd-accent-text);
 }
 
 /* =============================================
@@ -3527,19 +3527,19 @@ export default {
   height: 20px;
   padding: 0 7px;
   border-radius: 10px;
-  background: rgba(26, 83, 54, 0.08);
-  border: 1px solid rgba(26, 83, 54, 0.16);
+  background: var(--awd-accent-soft);
+  border: 1px solid var(--awd-accent-soft);
 }
 /* 自动命中的用描边 + 更浅的底：与"我自己选的"在一行里要能一眼分开 */
 .skill-chip.auto {
   background: transparent;
   border-style: dashed;
-  border-color: rgba(26, 83, 54, 0.3);
+  border-color: var(--awd-accent);
 }
 
 .skill-chip-name {
   font-size: 11px;
-  color: #1A5336;
+  color: var(--awd-accent-text);
   line-height: 1;
   white-space: nowrap;
 }
@@ -3547,11 +3547,11 @@ export default {
 .skill-chip-remove {
   font-size: 12px;
   line-height: 1;
-  color: rgba(26, 83, 54, 0.55);
+  color: var(--awd-accent-text);
   cursor: pointer;
 }
 .skill-chip-remove:hover {
-  color: #1A5336;
+  color: var(--awd-accent-text);
 }
 
 /* 新自动命中的技能闪几秒：用户只是说了句话就被加载了一个技能，得让他看见 */
@@ -3561,12 +3561,12 @@ export default {
 @keyframes skillChipFlash {
   0%, 100% {
     background: transparent;
-    border-color: rgba(26, 83, 54, 0.3);
+    border-color: var(--awd-accent);
     box-shadow: none;
   }
   50% {
-    background: rgba(91, 209, 151, 0.28);
-    border-color: #5BD197;
+    background: var(--awd-accent-soft);
+    border-color: var(--awd-mint);
     box-shadow: 0 0 0 2px rgba(91, 209, 151, 0.18);
   }
 }
@@ -3588,15 +3588,15 @@ export default {
   flex-shrink: 0;
 }
 .skill-selector:hover {
-  background: rgba(26, 83, 54, 0.05);
+  background: var(--awd-accent-wash);
 }
 
 /* 已选态：绿色实心底 + 计数，让"这轮我额外加载了 N 个技能"一眼可见 */
 .skill-selector.pinned {
-  background: rgba(91, 209, 151, 0.18);
+  background: var(--awd-accent-soft);
 }
 .skill-selector.pinned .skill-glyph-svg {
-  color: #1A5336;
+  color: var(--awd-accent-text);
 }
 /* ASK 模式下 skill 不生效，按钮压暗——下拉仍可打开，里面会说明为什么不能选 */
 .skill-selector.muted .skill-glyph-svg {
@@ -3606,26 +3606,26 @@ export default {
 .skill-count {
   font-size: 10px;
   line-height: 1;
-  color: #1A5336;
+  color: var(--awd-accent-text);
   font-weight: 600;
 }
 
 .skill-glyph-svg {
   width: 16px;
   height: 16px;
-  color: #666;
+  color: var(--awd-text-2);
   flex-shrink: 0;
 }
 .skill-selector:hover .skill-glyph-svg {
-  color: #333;
+  color: var(--awd-text);
 }
 
 .skill-dropdown {
   position: absolute;
   /* 选择器位于工具条最右，向右展开会溢出 AI 面板，故右对齐 */
   right: 0;
-  background: #fff;
-  border: 1px solid #e0e0e0;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
   z-index: 1001;
@@ -3649,12 +3649,12 @@ export default {
 }
 .skill-dropdown-title {
   font-size: 12px;
-  color: #2C3338;
+  color: var(--awd-text);
   font-weight: 500;
 }
 .skill-dropdown-hint {
   font-size: 11px;
-  color: #999;
+  color: var(--awd-text-3);
   white-space: normal;
 }
 
@@ -3667,10 +3667,10 @@ export default {
   column-gap: 6px;
 }
 .skill-option:hover {
-  background: #f5f5f5;
+  background: var(--awd-surface-2);
 }
 .skill-option.active {
-  background: rgba(91, 209, 151, 0.12);
+  background: var(--awd-accent-soft);
 }
 .skill-option.muted {
   opacity: 0.5;
@@ -3683,13 +3683,13 @@ export default {
   flex-shrink: 0;
   font-size: 12px;
   line-height: 18px;
-  color: #1A5336;
+  color: var(--awd-accent-text);
 }
 
 .skill-empty {
   padding: 7px 12px;
   font-size: 12px;
-  color: #999;
+  color: var(--awd-text-3);
 }
 
 .skill-option-text {
@@ -3701,16 +3701,16 @@ export default {
 
 .skill-option-name {
   font-size: 13px;
-  color: #2C3338;
+  color: var(--awd-text);
 }
 .skill-option.active .skill-option-name {
-  color: #1A5336;
+  color: var(--awd-accent-text);
   font-weight: 500;
 }
 
 .skill-option-desc {
   font-size: 11px;
-  color: #999;
+  color: var(--awd-text-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3719,20 +3719,20 @@ export default {
 
 .skill-divider {
   height: 1px;
-  background: #f0f0f0;
+  background: var(--awd-bg);
   margin: 4px 0;
 }
 
 .skill-manage {
   padding: 7px 12px;
   font-size: 12px;
-  color: #666;
+  color: var(--awd-text-2);
   cursor: pointer;
   transition: background 0.15s ease;
 }
 .skill-manage:hover {
-  background: #f5f5f5;
-  color: #1A5336;
+  background: var(--awd-surface-2);
+  color: var(--awd-accent-text);
 }
 
 /* Model dropdown mask overlay */
@@ -3755,7 +3755,7 @@ export default {
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: rgba(0, 0, 0, 0.4);
+  background-color: var(--awd-overlay);
   backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
@@ -3766,7 +3766,7 @@ export default {
 .awd-dialog {
   width: 618px; /* Golden Ratio-ish Width */
   max-width: 90vw;
-  background-color: #ffffff;
+  background-color: var(--awd-surface);
   border-radius: 12px;
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
   overflow: hidden;
@@ -3798,7 +3798,7 @@ export default {
 .awd-dialog-header {
   padding: 24px 24px 16px;
   flex-shrink: 0;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--awd-border-subtle);
 }
 
 .awd-dialog-header .header-row {
@@ -3819,7 +3819,7 @@ export default {
   align-items: center;
   gap: 4px;
   font-size: 13px;
-  color: #1A5336;
+  color: var(--awd-accent-text);
   cursor: pointer;
   padding: 4px 8px;
   border-radius: 4px;
@@ -3827,7 +3827,7 @@ export default {
 }
 
 .new-folder-btn:hover {
-  background: rgba(26, 83, 54, 0.08);
+  background: var(--awd-accent-soft);
 }
 
 .new-folder-btn .btn-plus {
@@ -3839,7 +3839,7 @@ export default {
 .awd-dialog-title {
   font-size: 20px;
   font-weight: 600;
-  color: #1A5336; /* Forest Green */
+  color: var(--awd-accent-text); /* Forest Green */
   line-height: 1.4;
   display: block;
 }
@@ -3847,7 +3847,7 @@ export default {
 .awd-dialog-subtitle {
   margin-top: 6px;
   font-size: 13px;
-  color: #6C757D;
+  color: var(--awd-text-2);
   line-height: 1.5;
   display: block;
 }
@@ -3874,7 +3874,7 @@ export default {
   padding: 24px;
   background-color: transparent;
   flex-shrink: 0;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--awd-border-subtle);
 }
 
 .awd-btn {
@@ -3897,27 +3897,27 @@ export default {
 }
 
 .awd-btn-primary {
-  background-color: #1A5336; /* Forest Green */
-  color: #ffffff;
+  background-color: var(--awd-accent); /* Forest Green */
+  color: var(--awd-text-on-accent);
 }
 .awd-btn-primary:hover {
-  background-color: #16452d;
+  background-color: var(--awd-accent-hover);
 }
 
 .awd-btn-primary.disabled {
   opacity: 0.5;
   pointer-events: none;
-  background-color: #1A5336; /* Maintain color but transparent */
+  background-color: var(--awd-accent); /* Maintain color but transparent */
 }
 
 .awd-btn-secondary {
-  background-color: #ffffff;
-  color: #2C3338;
-  border: 1px solid #E9ECEF;
+  background-color: var(--awd-surface);
+  color: var(--awd-text);
+  border: 1px solid var(--awd-border);
 }
 .awd-btn-secondary:hover {
-  background-color: #F8F9FA;
-  border-color: #DDE2E5;
+  background-color: var(--awd-bg);
+  border-color: var(--awd-border);
 }
 
 .form-group {
@@ -3931,13 +3931,13 @@ export default {
   display: block;
   font-size: 14px;
   font-weight: 500;
-  color: #2C3338;
+  color: var(--awd-text);
   margin-bottom: 8px;
 }
 
 .awd-field {
-  background-color: #F8F9FA;
-  border: 1px solid #E9ECEF;
+  background-color: var(--awd-bg);
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   padding: 12px 16px;
   display: flex;
@@ -3952,8 +3952,8 @@ export default {
 }
 
 .awd-field.clickable:hover {
-  background-color: #E6F9F0;
-  border-color: #5BD197;
+  background-color: var(--awd-accent-soft);
+  border-color: var(--awd-mint);
 }
 
 .awd-field .field-icon-img {
@@ -3964,12 +3964,12 @@ export default {
 
 .awd-field .field-value {
   font-size: 14px;
-  color: #111827;
+  color: var(--awd-text);
 }
 
 .awd-field .field-placeholder {
   font-size: 14px;
-  color: #9CA3AF;
+  color: var(--awd-text-3);
 }
 
 .selected-files-list {
@@ -3983,8 +3983,8 @@ export default {
   background: white;
   padding: 4px 8px;
   border-radius: 4px;
-  border: 1px solid #E5E7EB;
-  color: #374151;
+  border: 1px solid var(--awd-border);
+  color: var(--awd-text);
   max-width: 150px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4003,12 +4003,12 @@ export default {
 }
 
 .folder-tree-item:hover {
-  background-color: #F3F4F6;
+  background-color: var(--awd-surface-2);
 }
 
 .folder-tree-item.active {
-  background-color: #E6F9F0;
-  color: #1A5336;
+  background-color: var(--awd-accent-soft);
+  color: var(--awd-accent-text);
 }
 
 .folder-tree-item .indent {
@@ -4042,12 +4042,12 @@ export default {
 .folder-name {
   margin-left: 8px;
   font-size: 14px;
-  color: #333;
+  color: var(--awd-text);
 }
 
 .empty-tip {
   text-align: center;
-  color: #999;
+  color: var(--awd-text-3);
   font-size: 13px;
   padding: 20px 0;
 }
@@ -4059,9 +4059,9 @@ export default {
   gap: 8px;
   padding: 4px 12px;
   margin-bottom: 8px; /* Maintain margin */
-  background: linear-gradient(135deg, rgba(26, 83, 54, 0.05) 0%, rgba(91, 209, 151, 0.08) 100%);
+  background: linear-gradient(135deg, var(--awd-accent-wash) 0%, var(--awd-accent-wash) 100%);
   border-radius: 6px;
-  border: 1px solid rgba(91, 209, 151, 0.2);
+  border: 1px solid var(--awd-accent-soft);
   width: 100%; /* Fix: Full width */
   box-sizing: border-box; /* Fix: Include padding in width */
   height: 28px; /* Fix: Fixed low height */
@@ -4070,7 +4070,7 @@ export default {
 .token-usage-bar .token-label {
   font-size: 11px;
   font-weight: 600;
-  color: #1A5336;
+  color: var(--awd-accent-text);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -4078,14 +4078,14 @@ export default {
 .token-usage-bar .token-value {
   font-size: 12px;
   font-weight: 600;
-  color: #5BD197;
+  color: var(--awd-mint);
   flex: 1; /* Allow value to take space if needed */
   margin-left: 4px;
 }
 
 .token-usage-bar .token-detail {
   font-size: 10px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 
@@ -4097,22 +4097,22 @@ export default {
   gap: 8px;
   margin: 0 12px 6px;
   padding: 6px 12px;
-  background: #FFF9E8;
-  border: 1px solid #F5DFA6;
+  background: var(--awd-bg);
+  border: 1px solid var(--awd-warning);
   border-radius: 8px;
 }
 
 .continue-hint {
   font-size: 11px;
-  color: #8A6D1D;
+  color: var(--awd-warning-text);
 }
 
 .continue-btn {
   flex-shrink: 0;
   font-size: 12px;
   font-weight: 600;
-  color: #FFFFFF;
-  background: #1A5336;
+  color: var(--awd-text-on-accent);
+  background: var(--awd-accent);
   border-radius: 6px;
   padding: 4px 14px;
   cursor: pointer;
@@ -4120,7 +4120,7 @@ export default {
 }
 
 .continue-btn:hover {
-  background: #14402A;
+  background: var(--awd-accent-hover);
 }
 
 /* 后台任务控制条（停止）：外形对齐 continue-bar，但用中性底色——
@@ -4137,22 +4137,22 @@ export default {
   align-items: center;
   gap: 8px;
   padding: 5px 12px;
-  background: #F8F9FA;
-  border: 1px solid #E9ECEF;
+  background: var(--awd-bg);
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
 }
 
 .task-control-name {
   font-size: 11px;
   font-weight: 600;
-  color: #2C3338;
+  color: var(--awd-text);
   flex-shrink: 0;
 }
 
 .task-control-msg {
   flex: 1;
   font-size: 11px;
-  color: #6C757D;
+  color: var(--awd-text-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4161,9 +4161,9 @@ export default {
 .task-control-btn {
   flex-shrink: 0;
   font-size: 11px;
-  color: #2C3338;
-  background: #FFFFFF;
-  border: 1px solid #E9ECEF;
+  color: var(--awd-text);
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   padding: 3px 12px;
   cursor: pointer;
@@ -4171,17 +4171,17 @@ export default {
 }
 
 .task-control-btn:hover {
-  border-color: #5BD197;
-  color: #1A5336;
-  background: #E6F9F0;
+  border-color: var(--awd-mint);
+  color: var(--awd-accent-text);
+  background: var(--awd-accent-soft);
 }
 
 /* 已发出停止请求：按钮变成状态显示，不再可点（重复点只会多发无用请求） */
 .task-control-btn.pending {
   cursor: default;
-  color: #6C757D;
-  background: #F1F3F5;
-  border-color: #E9ECEF;
+  color: var(--awd-text-2);
+  background: var(--awd-surface-2);
+  border-color: var(--awd-border);
 }
 
 /* Status Bar Row (File Changes + Tokens) */
@@ -4225,12 +4225,12 @@ export default {
   align-items: center;
   padding: 4px 12px;
   border-radius: 6px;
-  background-color: #ffffff;
+  background-color: var(--awd-surface);
   cursor: pointer;
   font-size: 11px;
   font-weight: 600;
-  color: #6C757D; /* Gray-Medium */
-  border: 1px solid #E9ECEF; /* Gray-Light */
+  color: var(--awd-text-2); /* Gray-Medium */
+  border: 1px solid var(--awd-border); /* Gray-Light */
   transition: all 0.2s ease;
 }
 
@@ -4245,28 +4245,28 @@ export default {
 }
 
 .status-btn.modified {
-  border-color: rgba(26, 83, 54, 0.2);
-  color: #1A5336; /* Forest Green */
-  background-color: #E6F9F0; /* Mint Lightest */
+  border-color: var(--awd-accent-soft);
+  color: var(--awd-accent-text); /* Forest Green */
+  background-color: var(--awd-accent-soft); /* Mint Lightest */
 }
 
 .status-btn.modified:hover {
   /* background-color: #5BD197; Mint Green */
-  background-color: #5BD197;
+  background-color: var(--awd-mint);
   /* color: #ffffff; */
   /* border-color: #1A5336; */
 }
 
 .status-btn.created {
-  border-color: rgba(91, 209, 151, 0.3);
-  color: #1A5336;
-  background-color: #E6F9F0;
+  border-color: var(--awd-accent-soft);
+  color: var(--awd-accent-text);
+  background-color: var(--awd-accent-soft);
 }
 
 .status-btn.created:hover {
-  background-color: #5BD197;
+  background-color: var(--awd-mint);
   /* color: #ffffff; */
-  border-color: #1A5336;
+  border-color: var(--awd-accent);
 }
 
 /* Status Popup */
@@ -4281,7 +4281,7 @@ export default {
   box-shadow: 0 4px 12px rgba(0,0,0,0.15);
   padding: 4px 0;
   z-index: 100;
-  border: 1px solid #eee;
+  border: 1px solid var(--awd-border);
   display: flex;
   flex-direction: column;
 }
@@ -4295,7 +4295,7 @@ export default {
 }
 
 .status-popup-item:hover {
-  background-color: #f5f5f5;
+  background-color: var(--awd-surface-2);
 }
 
 .file-icon-mini {
@@ -4307,7 +4307,7 @@ export default {
 
 .file-name-text {
   font-size: 13px;
-  color: #333;
+  color: var(--awd-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4326,7 +4326,7 @@ export default {
 /* Reuse existing token styles */
 .token-label {
   font-weight: 500;
-  color: #666;
+  color: var(--awd-text-2);
 }
 .token-value {
   font-family: monospace;
@@ -4334,7 +4334,7 @@ export default {
 }
 .token-detail {
   font-size: 11px;
-  color: #999;
+  color: var(--awd-text-3);
 }
 
 /* Empty state for file change buttons：0 项时收敛成幽灵标签——去底去框、灰字、
@@ -4344,7 +4344,7 @@ export default {
   cursor: default;
   background-color: transparent;
   border-color: transparent;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
   font-weight: 500;
   padding: 4px 6px;
 }
@@ -4396,7 +4396,7 @@ export default {
   align-items: center;
   justify-content: center;
   margin-right: 4px;
-  color: #1A5336; /* Forest Green */
+  color: var(--awd-accent-text); /* Forest Green */
 }
 
 /* .rollback-btn:hover .rollback-icon-svg,
@@ -4406,17 +4406,17 @@ export default {
 
 .rollback-text {
   font-size: 11px;
-  color: #1A5336;
+  color: var(--awd-accent-text);
   font-weight: 600;
 }
 
 /* Warning Dialog */
 .warning-header {
-  border-bottom: 2px solid #FFED4D;
+  border-bottom: 2px solid var(--awd-warning);
 }
 
 .warning-title {
-  color: #B45309;
+  color: var(--awd-warning-text);
 }
 
 .rollback-warning-content {
@@ -4425,14 +4425,14 @@ export default {
 
 .warning-text {
   font-size: 14px;
-  color: #333;
+  color: var(--awd-text);
   margin-bottom: 12px;
   display: block;
 }
 
 .doc-tip-box {
-  background-color: #f0f9ff;
-  border: 1px solid #bae6fd;
+  background-color: var(--awd-surface);
+  border: 1px solid var(--awd-info);
   border-radius: 6px;
   padding: 10px;
   display: flex;
@@ -4445,12 +4445,12 @@ export default {
   height: 18px;
   margin-right: 10px;
   flex-shrink: 0;
-  color: #B8860B;
+  color: var(--awd-warning-text);
 }
 
 .doc-tip-text {
   font-size: 13px;
-  color: #0369a1;
+  color: var(--awd-info-text);
   display: flex;
   flex-direction: column;
 }
@@ -4461,32 +4461,32 @@ export default {
 }
 
 .rollback-preview {
-  background-color: #f5f5f5;
+  background-color: var(--awd-surface-2);
   padding: 8px;
   border-radius: 4px;
-  border-left: 3px solid #ccc;
+  border-left: 3px solid var(--awd-border-strong);
 }
 
 .preview-label {
   font-size: 12px;
-  color: #666;
+  color: var(--awd-text-2);
   margin-right: 4px;
 }
 
 .preview-content {
   font-size: 12px;
-  color: #333;
+  color: var(--awd-text);
   font-style: italic;
 }
 
 .awd-btn-danger {
-  background-color: #dc2626;
+  background-color: var(--awd-danger);
   color: white;
   border: none;
 }
 
 .awd-btn-danger:hover {
-  background-color: #b91c1c;
+  background-color: var(--awd-danger);
 }
 /* PPT Config Styles */
 .ppt-config-section {
@@ -4495,29 +4495,29 @@ export default {
 
 .section-title {
   font-size: 14px;
-  color: #666;
+  color: var(--awd-text-2);
   margin-bottom: 12px;
   display: block;
 }
 
 .ppt-option-card {
-  border: 1px solid #e0e0e0;
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   padding: 16px;
   margin-bottom: 12px;
   cursor: pointer;
   transition: all 0.2s;
-  background-color: #fff;
+  background-color: var(--awd-surface);
 }
 
 .ppt-option-card:hover {
-  border-color: #2196f3;
-  background-color: #f5f9ff;
+  border-color: var(--awd-info);
+  background-color: var(--awd-surface);
 }
 
 .ppt-option-card.active {
-  border-color: #2196f3;
-  background-color: #e3f2fd;
+  border-color: var(--awd-info);
+  background-color: var(--awd-info-soft);
   box-shadow: 0 2px 8px rgba(33, 150, 243, 0.15);
 }
 
@@ -4532,50 +4532,50 @@ export default {
   height: 20px;
   margin-right: 12px;
   flex-shrink: 0;
-  color: #1A5336;
+  color: var(--awd-accent-text);
 }
 
 .option-name {
   font-size: 16px;
   font-weight: 600;
-  color: #333;
+  color: var(--awd-text);
   flex: 1;
 }
 
 .check-mark {
-  color: #2196f3;
+  color: var(--awd-info-text);
   font-weight: bold;
   font-size: 16px;
 }
 
 .option-desc {
   font-size: 13px;
-  color: #666;
+  color: var(--awd-text-2);
   line-height: 1.5;
   padding-left: 32px; /* align with text start */
 }
 
 .warning-text {
-  color: #ff9800;
+  color: var(--awd-warning-text);
   font-weight: 500;
   display: block;
   margin-top: 4px;
 }
 
 .highlight-text {
-  color: #4caf50;
+  color: var(--awd-accent-text);
   font-weight: 500;
   display: block;
   margin-top: 4px;
 }
 
 .awd-btn-secondary {
-    background-color: #f5f5f5;
-    color: #333;
-    border: 1px solid #ddd;
+    background-color: var(--awd-surface-2);
+    color: var(--awd-text);
+    border: 1px solid var(--awd-border);
 }
 .awd-btn-secondary:hover {
-    background-color: #e0e0e0;
+    background-color: var(--awd-surface-3);
 }
 
 </style>

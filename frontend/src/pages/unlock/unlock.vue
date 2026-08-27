@@ -58,7 +58,7 @@
       <view class="unlock-panel">
         <view class="unlock-card">
           <!-- Logo 图片自带 AI WorkDeck 字标，下面不再重复写一行文字标题 -->
-          <image class="unlock-logo" src="/static/logo_full_v2.png" mode="heightFix" />
+          <image class="unlock-logo awd-brand-logo" src="/static/logo_full_v2.png" mode="heightFix" />
           <text class="unlock-subtitle">{{ $t('onboarding.unlock.subtitle') }}</text>
 
           <!-- 登录与注册走的是同一条链路（官网验证码端点「不存在即注册」），
@@ -767,9 +767,9 @@ export default {
   box-sizing: border-box;
   padding: 40px 32px;
   background:
-    radial-gradient(900px 520px at 12% 18%, rgba(91, 209, 151, 0.16), transparent 62%),
-    radial-gradient(720px 480px at 88% 84%, rgba(26, 83, 54, 0.09), transparent 66%),
-    #f8f9fa;
+    radial-gradient(900px 520px at 12% 18%, var(--awd-accent-soft), transparent 62%),
+    radial-gradient(720px 480px at 88% 84%, var(--awd-accent-soft), transparent 66%),
+    var(--awd-bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -811,7 +811,7 @@ export default {
   height: 340px;
   top: -40px;
   left: 4%;
-  background: rgba(91, 209, 151, 0.32);
+  background: var(--awd-mint);
 }
 
 .showcase-glow-b {
@@ -819,7 +819,7 @@ export default {
   height: 300px;
   bottom: -30px;
   right: 6%;
-  background: rgba(26, 83, 54, 0.16);
+  background: var(--awd-surface);
 }
 
 .showcase-stage {
@@ -833,8 +833,8 @@ export default {
 .mock-window {
   width: 100%;
   height: 380px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 14px;
   box-shadow: 0 30px 60px rgba(15, 23, 42, 0.14);
   overflow: hidden;
@@ -845,8 +845,8 @@ export default {
 .mock-titlebar {
   height: 30px;
   flex-shrink: 0;
-  background: #f1f5f9;
-  border-bottom: 1px solid #e2e8f0;
+  background: var(--awd-surface-2);
+  border-bottom: 1px solid var(--awd-border);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -857,7 +857,7 @@ export default {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #cbd5e1;
+  background: var(--awd-surface-3);
 }
 
 .mock-body {
@@ -869,7 +869,7 @@ export default {
 .mock-rail {
   width: 40px;
   flex-shrink: 0;
-  background: #1a5336;
+  background: var(--awd-accent);
   padding: 12px 0;
   display: flex;
   flex-direction: column;
@@ -884,15 +884,15 @@ export default {
   background: rgba(255, 255, 255, 0.18);
 
   &.is-active {
-    background: #5bd197;
+    background: var(--awd-mint);
   }
 }
 
 .mock-sidebar {
   width: 130px;
   flex-shrink: 0;
-  background: #f8fafc;
-  border-right: 1px solid #e2e8f0;
+  background: var(--awd-surface);
+  border-right: 1px solid var(--awd-border);
   padding: 14px 12px;
   display: flex;
   flex-direction: column;
@@ -902,14 +902,14 @@ export default {
 .mock-line {
   height: 7px;
   border-radius: 4px;
-  background: #dbe3ec;
+  background: var(--awd-surface-2);
 
   &.mock-line-indent {
     margin-left: 12px;
   }
 
   &.is-active {
-    background: #5bd197;
+    background: var(--awd-mint);
   }
 }
 
@@ -919,13 +919,13 @@ export default {
   position: relative;
   display: flex;
   flex-direction: column;
-  background: #ffffff;
+  background: var(--awd-surface);
 }
 
 .mock-tabs {
   height: 28px;
   flex-shrink: 0;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--awd-border);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -936,10 +936,10 @@ export default {
   width: 62px;
   height: 8px;
   border-radius: 4px;
-  background: #e2e8f0;
+  background: var(--awd-surface-3);
 
   &.is-active {
-    background: #1a5336;
+    background: var(--awd-accent);
     opacity: 0.55;
   }
 }
@@ -956,7 +956,7 @@ export default {
   width: 46%;
   height: 12px;
   border-radius: 4px;
-  background: #0f172a;
+  background: var(--awd-info);
   opacity: 0.72;
   margin-bottom: 6px;
 }
@@ -964,11 +964,11 @@ export default {
 .mock-doc-line {
   height: 7px;
   border-radius: 4px;
-  background: #e6ecf2;
+  background: var(--awd-surface-2);
 
   /* 一条被 AI 改过的行：品牌 mint，暗示修订 */
   &.mock-doc-line-mark {
-    background: rgba(91, 209, 151, 0.55);
+    background: var(--awd-mint);
   }
 }
 
@@ -984,8 +984,8 @@ export default {
 .mock-ai {
   width: 108px;
   flex-shrink: 0;
-  border-left: 1px solid #e2e8f0;
-  background: #fbfdfc;
+  border-left: 1px solid var(--awd-border);
+  background: var(--awd-bg);
   padding: 16px 12px;
   display: flex;
   flex-direction: column;
@@ -995,10 +995,10 @@ export default {
 .mock-bubble {
   height: 26px;
   border-radius: 8px;
-  background: #eef3f0;
+  background: var(--awd-accent-soft);
 
   &.is-user {
-    background: rgba(26, 83, 54, 0.14);
+    background: var(--awd-accent-soft);
     margin-left: 16px;
     height: 18px;
   }
@@ -1015,8 +1015,8 @@ export default {
 .unlock-card {
   width: 420px;
   max-width: calc(100vw - 48px);
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 14px;
   box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
   padding: 40px 36px 32px;
@@ -1032,7 +1032,7 @@ export default {
 
 .unlock-subtitle {
   font-size: 13px;
-  color: #64748b;
+  color: var(--awd-text-2);
   margin-bottom: 24px;
   text-align: center;
 }
@@ -1051,7 +1051,7 @@ export default {
   display: flex;
   gap: 4px;
   padding: 4px;
-  background: #f1f5f9;
+  background: var(--awd-surface-2);
   border-radius: 8px;
 }
 
@@ -1061,14 +1061,14 @@ export default {
   white-space: nowrap;
   padding: 8px 0;
   font-size: 13px;
-  color: #64748b;
+  color: var(--awd-text-2);
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.2s, color 0.2s;
 
   &.is-active {
-    background: #ffffff;
-    color: #1a5336;
+    background: var(--awd-surface);
+    color: var(--awd-accent-text);
     font-weight: 500;
     box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
   }
@@ -1079,24 +1079,24 @@ export default {
   box-sizing: border-box;
   margin-top: 16px;
   padding: 12px 14px;
-  border: 1px solid rgba(91, 209, 151, 0.5);
+  border: 1px solid var(--awd-mint);
   border-radius: 8px;
-  background: rgba(91, 209, 151, 0.09);
+  background: var(--awd-accent-soft);
   display: flex;
   flex-direction: column;
   gap: 4px;
 
   /* 注册页签下这条是主角，给足对比度 */
   &.is-strong {
-    border-color: #5bd197;
-    background: rgba(91, 209, 151, 0.16);
+    border-color: var(--awd-mint);
+    background: var(--awd-accent-soft);
   }
 }
 
 .unlock-promo-title {
   font-size: 13px;
   font-weight: 600;
-  color: #1a5336;
+  color: var(--awd-accent-text);
   font-family: 'Songti SC', 'Source Han Serif SC', 'Noto Serif SC', Georgia, serif;
   letter-spacing: 0.3px;
 }
@@ -1104,7 +1104,7 @@ export default {
 .unlock-promo-body {
   font-size: 12px;
   line-height: 1.6;
-  color: #33694c;
+  color: var(--awd-accent-text);
 }
 
 /* 登录字段：与 .unlock-input 同一套边框语言，但单行且用正文字体
@@ -1115,14 +1115,14 @@ export default {
   box-sizing: border-box;
   padding: 0 14px;
   margin-bottom: 10px;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--awd-border-strong);
   border-radius: 8px;
   font-size: 14px;
-  color: #0f172a;
-  background: #ffffff;
+  color: var(--awd-text);
+  background: var(--awd-surface);
 
   &:focus {
-    border-color: #1a5336;
+    border-color: var(--awd-accent);
     box-shadow: 0 0 0 3px rgba(26, 83, 54, 0.1);
   }
 }
@@ -1142,20 +1142,20 @@ export default {
   height: 40px;
   line-height: 40px;
   padding: 0 14px;
-  background: #ffffff;
-  color: #1a5336;
-  border: 1px solid #cbd5e1;
+  background: var(--awd-surface);
+  color: var(--awd-accent-text);
+  border: 1px solid var(--awd-border-strong);
   border-radius: 8px;
   font-size: 13px;
   cursor: pointer;
   transition: border-color 0.2s, color 0.2s;
 
   &:hover:not([disabled]) {
-    border-color: #1a5336;
+    border-color: var(--awd-accent);
   }
 
   &[disabled] {
-    color: #94a3b8;
+    color: var(--awd-text-3);
     cursor: default;
   }
 }
@@ -1165,35 +1165,35 @@ export default {
   height: 88px;
   box-sizing: border-box;
   padding: 12px 14px;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--awd-border-strong);
   border-radius: 8px;
   font-size: 13px;
   line-height: 1.6;
-  color: #0f172a;
-  background: #ffffff;
+  color: var(--awd-text);
+  background: var(--awd-surface);
   font-family: 'SF Mono', Menlo, Consolas, monospace;
 
   &:focus {
-    border-color: #1a5336;
+    border-color: var(--awd-accent);
     box-shadow: 0 0 0 3px rgba(26, 83, 54, 0.1);
   }
 }
 
 .unlock-placeholder {
-  color: #94a3b8;
+  color: var(--awd-text-3);
   font-size: 13px;
 }
 
 .unlock-error {
   margin-top: 10px;
   font-size: 12px;
-  color: #dc2626;
+  color: var(--awd-danger-text);
 }
 
 .unlock-hint {
   font-size: 12px;
   line-height: 1.6;
-  color: #64748b;
+  color: var(--awd-text-2);
 }
 
 .unlock-register-hint {
@@ -1206,8 +1206,8 @@ export default {
   width: 100%;
   height: 44px;
   line-height: 44px;
-  background: #1a5336;
-  color: #ffffff;
+  background: var(--awd-accent);
+  color: var(--awd-text-on-accent);
   border: none;
   border-radius: 8px;
   font-size: 15px;
@@ -1216,7 +1216,7 @@ export default {
   transition: background 0.2s;
 
   &:hover {
-    background: #14422b;
+    background: var(--awd-accent-hover);
   }
 
   &.is-busy {
@@ -1251,21 +1251,21 @@ export default {
   height: 15px;
   margin-top: 2px;
   box-sizing: border-box;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--awd-border-strong);
   border-radius: 4px;
-  background: #ffffff;
+  background: var(--awd-surface);
   transition: background 0.15s, border-color 0.15s;
 
   &.checked {
-    border-color: #1a5336;
-    background: #1a5336 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.5l3 3 6-7'/%3E%3C/svg%3E") center / 11px no-repeat;
+    border-color: var(--awd-accent);
+    background: var(--awd-accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.5l3 3 6-7'/%3E%3C/svg%3E") center / 11px no-repeat;
   }
 }
 
 .consent-text {
   font-size: 12px;
   line-height: 1.6;
-  color: #64748b;
+  color: var(--awd-text-2);
 }
 
 .unlock-links {
@@ -1277,7 +1277,7 @@ export default {
 
 .unlock-link {
   font-size: 12px;
-  color: #1a5336;
+  color: var(--awd-accent-text);
   cursor: pointer;
 
   &:hover {
@@ -1287,12 +1287,12 @@ export default {
 
 .unlock-link-sep {
   font-size: 12px;
-  color: #cbd5e1;
+  color: var(--awd-text-on-accent);
 }
 
 .unlock-site-fixed {
   font-size: 12px;
-  color: #64748b;
+  color: var(--awd-text-2);
 }
 
 .unlock-rescue {

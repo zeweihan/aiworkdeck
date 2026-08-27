@@ -90,7 +90,7 @@
 
       <!-- Center Logo -->
       <view class="header-center">
-         <image src="/static/logo_full_v2.png" mode="heightFix" class="project-logo" />
+         <image src="/static/logo_full_v2.png" mode="heightFix" class="project-logo awd-brand-logo" />
       </view>
 
       <view class="header-right">
@@ -115,6 +115,25 @@
         </view>
         <!-- 顶部工具区（IDE 风格）：整理 / 分屏 / 浏览器 / 摘录 / AI / 工具 -->
         <view class="header-tools" v-if="!isClientView">
+          <!-- 外观主题（dev-board#223）：浅色/深色/跟随系统三选一。
+               图标显示的是**当前生效**的外观（跟随系统时也显示解析后的那个）。 -->
+          <view class="top-bar-btn theme-btn" :class="{ active: themeMenuOpen }" @tap.stop="themeMenuOpen = !themeMenuOpen" :title="$t('workbench.appearance')">
+            <svg class="tool-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, gi) in (resolvedTheme === 'dark' ? GLYPHS.moon : GLYPHS.sun)" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <view v-if="themeMenuOpen" class="theme-menu" @tap.stop>
+              <view
+                v-for="opt in themeOptions"
+                :key="opt.value"
+                class="theme-menu-item"
+                :class="{ on: themeMode === opt.value }"
+                @tap="pickTheme(opt.value)"
+              >
+                <text class="theme-menu-text">{{ opt.label }}</text>
+              </view>
+            </view>
+          </view>
+          <view v-if="themeMenuOpen" class="theme-menu-mask" @tap="themeMenuOpen = false"></view>
           <!-- rail 整理模式开关（dev-board#215/#221）：从 rail 挪到顶栏（原「已连接账户」chip 位），
                开着时 rail 可拖项抖动+虚线框、点击不打开面板，再按一次退出 -->
           <view
@@ -2027,6 +2046,7 @@ import { evidenceLinkData, evidenceLinkMethods } from './evidenceLinkActions.js'
 import { tabDragSplitMethods } from './tabDragSplit.js'
 import { panelDockingData, panelDockingMethods } from './panelDocking.js'
 import { railSortData, railSortMethods } from './railSort.js'
+import { themeSwitchData, themeSwitchMethods, themeSwitchComputed } from './themeSwitch.js'
 import { fileOpenTabsMethods } from './fileOpenTabs.js'
 import { clipboardBridgeMethods } from './clipboardBridge.js'
 import { ocrActionMethods } from './ocrActions.js'
@@ -2260,6 +2280,7 @@ export default {
       // 面板停靠（dev-board#180）：panelDockOverrides / rightPaneKey / 拖拽与右键菜单状态
       ...panelDockingData(),
       ...railSortData(),
+      ...themeSwitchData(),
       // Desensitize Callback
       desensitizeFileSelectCallback: null,
       // 诉讼可视化面板的材料范围选择回调（复用同一个 FilePickerDialog）
@@ -2362,6 +2383,7 @@ export default {
     }
   },
   computed: {
+    ...themeSwitchComputed,
     GLYPHS() {
       return GLYPHS
     },
@@ -2825,6 +2847,7 @@ export default {
     }
   },
   beforeUnmount() {
+    this.disposeThemeSwitch()
     // 多实例守卫：只清掉指向自己的活跃指针；返回上一个本页实例时由其 onShow 重新接管
     if (typeof window !== 'undefined' && window.__checkbaActiveOverviewVm === this) {
       window.__checkbaActiveOverviewVm = null
@@ -3037,6 +3060,7 @@ export default {
     this.loadPanelDocks()
     // rail 图标顺序（dev-board#204）：同为本机习惯，跟停靠位一起在首帧前恢复
     this.loadRailOrder()
+    this.initThemeSwitch()
 
     const savedKey = uni.getStorageSync(`project_${this.projectId}_leftPaneKey`)
     if (savedKey && user && user.role === 'CLIENT') {
@@ -3589,6 +3613,7 @@ export default {
     // 面板停靠（dev-board#180）
     ...panelDockingMethods,
     ...railSortMethods,
+    ...themeSwitchMethods,
     // Phase 3a 外置的方法组
     ...clipboardBridgeMethods,
     // Phase 3b 外置的方法组

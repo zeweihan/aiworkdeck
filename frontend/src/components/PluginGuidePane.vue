@@ -112,7 +112,7 @@ export default {
 /* 密度令牌见 App.vue 的 --awd-panel-*（基准 = 插件广场）。对齐 DesensitizePane/LitigationVisualPanel。 */
 .pg-pane {
   height: 100%;
-  background: #fff;
+  background: var(--awd-surface);
   box-sizing: border-box;
   overflow-y: auto;
 }
@@ -215,7 +215,7 @@ export default {
   text-align: center;
   border-radius: 50%;
   background: var(--awd-panel-accent);
-  color: #fff;
+  color: var(--awd-text-on-accent);
   font-size: 11px;
   font-weight: 700;
   margin-top: 1px;

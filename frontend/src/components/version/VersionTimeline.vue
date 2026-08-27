@@ -281,21 +281,20 @@ export default {
 <style lang="scss" scoped>
 $rail-main: #1A5336;
 $rail-main-line: rgba(26, 83, 54, .28);
-$rail-draft: #5BD197;
 $rail-draft-line: rgba(91, 209, 151, .45);
 
 .timeline { flex: 1; padding: 12rpx 0; }
-.timeline-empty { padding: 24rpx; color: #999; font-size: 26rpx; }
+.timeline-empty { padding: 24rpx; color: var(--awd-text-3); font-size: 26rpx; }
 .timeline-error { padding: 24rpx; display: flex; align-items: center; gap: 16rpx; }
-.timeline-error-desc { font-size: 26rpx; color: #b23; }
-.timeline-error-retry { font-size: 26rpx; color: #12344D; text-decoration: underline; }
+.timeline-error-desc { font-size: 26rpx; color: var(--awd-danger-text); }
+.timeline-error-retry { font-size: 26rpx; color: var(--awd-text); text-decoration: underline; }
 
 .timeline-node { position: relative; padding: 16rpx 20rpx 16rpx 56rpx; }
-.timeline-node.is-current { background: rgba(26, 83, 54, .05); }
+.timeline-node.is-current { background: var(--awd-accent-wash); }
 
 .node-rail { position: absolute; left: 8rpx; top: 0; bottom: 0; width: 40rpx; pointer-events: none; }
 .node-rail-line {
-  position: absolute; left: 20rpx; top: 0; bottom: 0; width: 4rpx; background: $rail-main-line;
+  position: absolute; left: 20rpx; top: 0; bottom: 0; width: 4rpx; background: var(--awd-accent);
 }
 .node-marker { position: absolute; left: 0; top: 6rpx; width: 40rpx; height: 40rpx; }
 .merge-curve { fill: none; stroke: $rail-main-line; stroke-width: 3; }
@@ -303,15 +302,15 @@ $rail-draft-line: rgba(91, 209, 151, .45);
 .node-dot-halo { fill: none; stroke: $rail-main; stroke-width: 2; opacity: .3; }
 
 .timeline-node.is-session .node-title { font-weight: 600; }
-.timeline-node.is-current .node-title { color: $rail-main; }
-.node-title { font-size: 27rpx; color: #222; }
-.node-meta { font-size: 23rpx; color: #999; margin-top: 6rpx; }
-.node-autos-toggle { font-size: 23rpx; color: #12344D; margin-top: 10rpx; }
-.node-autos { margin-top: 10rpx; padding-left: 12rpx; border-left: 2rpx dashed #ddd; }
+.timeline-node.is-current .node-title { color: var(--awd-accent-text); }
+.node-title { font-size: 27rpx; color: var(--awd-text); }
+.node-meta { font-size: 23rpx; color: var(--awd-text-3); margin-top: 6rpx; }
+.node-autos-toggle { font-size: 23rpx; color: var(--awd-text); margin-top: 10rpx; }
+.node-autos { margin-top: 10rpx; padding-left: 12rpx; border-left: 2rpx dashed var(--awd-border); }
 .node-auto { display: flex; gap: 12rpx; padding: 8rpx 0; }
-.auto-time { font-size: 23rpx; color: #aaa; flex-shrink: 0; }
-.auto-msg { font-size: 23rpx; color: #666; }
-.milestone-flag { font-size: 20rpx; color: #C8A45D; border: 1px solid #C8A45D; border-radius: 4rpx; padding: 2rpx 8rpx; margin-right: 8rpx; }
+.auto-time { font-size: 23rpx; color: var(--awd-text-3); flex-shrink: 0; }
+.auto-msg { font-size: 23rpx; color: var(--awd-text-2); }
+.milestone-flag { font-size: 20rpx; color: var(--awd-warning-text); border: 1px solid var(--awd-warning); border-radius: 4rpx; padding: 2rpx 8rpx; margin-right: 8rpx; }
 .has-milestone { font-weight: 600; }
 
 // ---- Phase B：进行中稿件的第二泳道，从分叉点所在的主线节点行下方长出来 ----
@@ -324,21 +323,21 @@ $rail-draft-line: rgba(91, 209, 151, .45);
 .draft-fork-curve { fill: none; stroke: $rail-draft-line; stroke-width: 3; }
 .draft-branch-body {
   padding: 4rpx 16rpx 12rpx 16rpx; margin-top: 4rpx;
-  border-left: 2rpx dashed $rail-draft-line;
+  border-left: 2rpx dashed var(--awd-mint);
 }
 .draft-branch-name {
-  font-size: 23rpx; color: $rail-draft; font-weight: 600; margin-bottom: 6rpx;
+  font-size: 23rpx; color: var(--awd-mint); font-weight: 600; margin-bottom: 6rpx;
 }
 .draft-branch-node { position: relative; display: flex; padding: 6rpx 0 6rpx 32rpx; }
 .draft-node-rail { position: absolute; left: 0; top: 0; bottom: 0; width: 24rpx; }
 .draft-node-rail-line {
-  position: absolute; left: 10rpx; top: 0; bottom: 0; width: 3rpx; background: $rail-draft-line;
+  position: absolute; left: 10rpx; top: 0; bottom: 0; width: 3rpx; background: var(--awd-mint);
 }
 .draft-node-dot {
   position: absolute; left: 4rpx; top: 10rpx; width: 14rpx; height: 14rpx; border-radius: 50%;
-  background: $rail-draft; border: 2rpx solid #fff;
+  background: var(--awd-mint); border: 2rpx solid var(--awd-surface);
 }
 .draft-node-main { flex: 1; min-width: 0; }
-.draft-node-title { font-size: 24rpx; color: #333; }
-.draft-node-meta { font-size: 21rpx; color: #999; margin-top: 4rpx; }
+.draft-node-title { font-size: 24rpx; color: var(--awd-text); }
+.draft-node-meta { font-size: 21rpx; color: var(--awd-text-3); margin-top: 4rpx; }
 </style>

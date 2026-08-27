@@ -255,60 +255,60 @@ export default {
 
 <style lang="scss" scoped>
 .awd-mask {
-  position: fixed; inset: 0; background: rgba(0,0,0,.4);
+  position: fixed; inset: 0; background: var(--awd-overlay);
   display: flex; align-items: center; justify-content: center; z-index: 9999;
 }
 .adopt-dialog {
   width: 460px; max-width: 92vw; max-height: 84vh;
-  display: flex; flex-direction: column; background: #fff;
+  display: flex; flex-direction: column; background: var(--awd-surface);
   border-radius: 12px; overflow: hidden;
   box-shadow: 0 20px 25px -5px rgba(0,0,0,.1), 0 10px 10px -5px rgba(0,0,0,.04);
 }
-.awd-header { padding: 18px 24px; border-bottom: 1px solid #f1f5f9; }
-.awd-title { font-size: 16px; font-weight: 600; color: #0f172a; }
+.awd-header { padding: 18px 24px; border-bottom: 1px solid var(--awd-border-subtle); }
+.awd-title { font-size: 16px; font-weight: 600; color: var(--awd-text); }
 .awd-body { padding: 20px 24px; overflow-y: auto; flex: 1; }
-.adopt-hint { font-size: 13px; color: #475569; margin-bottom: 14px; line-height: 1.6; }
-.adopt-foot-note { font-size: 12px; color: #94a3b8; line-height: 1.6; margin-top: 14px; }
-.adopt-orphan-hint { font-size: 13.5px; color: #b23; line-height: 1.6; }
-.adopt-row { padding: 14px 0; border-bottom: 1px solid #f1f5f9; }
+.adopt-hint { font-size: 13px; color: var(--awd-text-2); margin-bottom: 14px; line-height: 1.6; }
+.adopt-foot-note { font-size: 12px; color: var(--awd-text-3); line-height: 1.6; margin-top: 14px; }
+.adopt-orphan-hint { font-size: 13.5px; color: var(--awd-danger-text); line-height: 1.6; }
+.adopt-row { padding: 14px 0; border-bottom: 1px solid var(--awd-border-subtle); }
 .adopt-row-main { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.adopt-row-name { font-size: 13.5px; color: #0f172a; word-break: break-all; }
-.adopt-row-compare { font-size: 12px; color: #1A5336; text-decoration: underline; cursor: pointer; flex-shrink: 0; margin-left: 12px; }
+.adopt-row-name { font-size: 13.5px; color: var(--awd-text); word-break: break-all; }
+.adopt-row-compare { font-size: 12px; color: var(--awd-accent-text); text-decoration: underline; cursor: pointer; flex-shrink: 0; margin-left: 12px; }
 .adopt-row-choices { display: flex; flex-direction: column; gap: 6px; }
 .radio-item {
   display: flex; flex-direction: column; gap: 2px; cursor: pointer;
-  padding: 8px 10px; border: 1px solid #e2e8f0; border-radius: 6px;
+  padding: 8px 10px; border: 1px solid var(--awd-border); border-radius: 6px;
 }
-.radio-item.checked { border-color: #1A5336; background: #F0FDF4; }
+.radio-item.checked { border-color: var(--awd-accent); background: var(--awd-accent-soft); }
 .radio-head { display: flex; align-items: center; gap: 8px; }
 .radio-dot {
-  width: 12px; height: 12px; border-radius: 50%; border: 1px solid #cbd5e1;
-  background: #fff; box-sizing: border-box; flex-shrink: 0;
+  width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--awd-border-strong);
+  background: var(--awd-surface); box-sizing: border-box; flex-shrink: 0;
 }
-.radio-item.checked .radio-dot { border-color: #1A5336; background: #1A5336; }
-.radio-label { font-size: 13px; color: #334155; }
-.radio-item.checked .radio-label { color: #1A5336; font-weight: 600; }
+.radio-item.checked .radio-dot { border-color: var(--awd-accent); background: var(--awd-accent); }
+.radio-label { font-size: 13px; color: var(--awd-text); }
+.radio-item.checked .radio-label { color: var(--awd-accent-text); font-weight: 600; }
 /* 后果说明：律师是靠这行判断「选了会发生什么」，不是靠上面那四个字。
    必须能在一行里放下，理由见 footNote 的注释。 */
-.radio-desc { font-size: 12px; color: #94a3b8; line-height: 1.5; padding-left: 20px; }
+.radio-desc { font-size: 12px; color: var(--awd-text-3); line-height: 1.5; padding-left: 20px; }
 .awd-footer {
   display: flex; justify-content: flex-end; gap: 12px;
-  padding: 14px 24px; border-top: 1px solid #f1f5f9; background: #f8f9fa;
+  padding: 14px 24px; border-top: 1px solid var(--awd-border-subtle); background: var(--awd-bg);
 }
 .awd-btn {
   padding: 8px 18px; border-radius: 6px; font-size: 13.5px; cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
 }
-.awd-btn-primary { background: #1A5336; color: #fff; }
-.awd-btn-primary:hover { background: #14422b; }
-.awd-btn-secondary { background: #fff; color: #475569; border: 1px solid #cbd5e1; }
-.awd-btn-secondary:hover { background: #f1f5f9; }
+.awd-btn-primary { background: var(--awd-accent); color: var(--awd-text-on-accent); }
+.awd-btn-primary:hover { background: var(--awd-accent-hover); }
+.awd-btn-secondary { background: var(--awd-surface); color: var(--awd-text-2); border: 1px solid var(--awd-border-strong); }
+.awd-btn-secondary:hover { background: var(--awd-surface-2); }
 .awd-btn-disabled { opacity: .45; pointer-events: none; }
 
 .adopt-collapsed-bar {
   position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
   display: flex; align-items: center; gap: 12px;
-  background: #1A5336; color: #fff; padding: 10px 20px; border-radius: 999px;
+  background: var(--awd-accent); color: var(--awd-text-on-accent); padding: 10px 20px; border-radius: 999px;
   font-size: 13px; z-index: 9999; box-shadow: 0 10px 25px -5px rgba(0,0,0,.25);
 }
 .adopt-collapsed-resume { text-decoration: underline; flex-shrink: 0; cursor: pointer; }

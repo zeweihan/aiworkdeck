@@ -351,7 +351,7 @@ const renderItems = computed(() => {
 
 <style scoped>
 .process-card {
-  background: #ffffff;
+  background: var(--awd-surface);
   border-radius: 12px 12px 0 0;
   /* border-bottom: 1px solid #1A5336; */
   /* box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.1); */
@@ -372,12 +372,12 @@ const renderItems = computed(() => {
   align-items: center;
   padding: 7px 12px;
   cursor: pointer;
-  background: #ffffff;
+  background: var(--awd-surface);
   transition: background 0.15s;
 }
 
 .process-header:hover {
-  background: #F8F9FA; /* Gray-Pale */
+  background: var(--awd-bg); /* Gray-Pale */
 }
 
 .left {
@@ -387,7 +387,7 @@ const renderItems = computed(() => {
 }
 
 .header-icon-wrapper {
-  color: #1A5336; /* Forest Green */
+  color: var(--awd-accent-text); /* Forest Green */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -396,7 +396,7 @@ const renderItems = computed(() => {
 .title {
   font-size: 13px;
   font-weight: 600;
-  color: #1A5336; /* Forest Green */
+  color: var(--awd-accent-text); /* Forest Green */
 }
 
 .right {
@@ -413,22 +413,22 @@ const renderItems = computed(() => {
 }
 
 .status-badge.success {
-  background: #E6F9F0; /* Mint Lightest */
-  color: #1A5336; /* Forest Green */
+  background: var(--awd-accent-soft); /* Mint Lightest */
+  color: var(--awd-accent-text); /* Forest Green */
 }
 
 .status-badge.processing {
-  background: #E9ECEF; /* Gray-Light */
-  color: #6C757D; /* Gray-Medium */
+  background: var(--awd-surface-3); /* Gray-Light */
+  color: var(--awd-text-2); /* Gray-Medium */
 }
 
 .status-badge.error {
-  background: #FDEDEC;
-  color: #C0392B;
+  background: var(--awd-bg);
+  color: var(--awd-danger-text);
 }
 
 .chevron-wrapper {
-  color: #ADB5BD;
+  color: var(--awd-text-3);
   transition: transform 0.2s ease;
 }
 
@@ -460,23 +460,23 @@ const renderItems = computed(() => {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: #E9ECEF;
+  background: var(--awd-surface-3);
   margin-top: 6px;
   flex-shrink: 0;
 }
 
 .step-dot.done {
-    background: #5BD197; /* Mint Green */
+    background: var(--awd-mint); /* Mint Green */
 }
 
 .step-text {
   font-size: 12px;
-  color: #2C3338; /* Gray-Dark */
+  color: var(--awd-text); /* Gray-Dark */
   line-height: 1.45;
 }
 
 .step-text.is-meta {
-    color: #6C757D; /* Gray-Medium */
+    color: var(--awd-text-2); /* Gray-Medium */
     font-size: 11px;
 }
 
@@ -484,8 +484,8 @@ const renderItems = computed(() => {
 .file-attachment-card {
     display: flex;
     align-items: center;
-    background: #F8F9FA; /* Gray-Pale */
-    border: 1px solid #E9ECEF; /* Gray-Light */
+    background: var(--awd-bg); /* Gray-Pale */
+    border: 1px solid var(--awd-border); /* Gray-Light */
     border-radius: 8px;
     padding: 7px 10px;
     gap: 10px;
@@ -504,7 +504,7 @@ const renderItems = computed(() => {
 .file-name {
     font-size: 13px;
     font-weight: 600;
-    color: #2C3338;
+    color: var(--awd-text);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -512,7 +512,7 @@ const renderItems = computed(() => {
 
 .file-meta {
     font-size: 11px;
-    color: #6C757D;
+    color: var(--awd-text-2);
     margin-top: 1px;
 }
 
@@ -528,14 +528,14 @@ const renderItems = computed(() => {
     align-items: center;
     justify-content: center;
     border-radius: 6px;
-    color: #6C757D;
+    color: var(--awd-text-2);
     cursor: pointer;
     transition: all 0.2s;
 }
 
 .action-btn:hover {
-    background: #E9ECEF;
-    color: #1A5336;
+    background: var(--awd-surface-3);
+    color: var(--awd-accent-text);
 }
 
 /* Tool Row */
@@ -548,7 +548,7 @@ const renderItems = computed(() => {
   align-items: center;
   justify-content: space-between;
   padding: 3px 8px;
-  background: #F8F9FA;
+  background: var(--awd-bg);
   border-radius: 5px;
   margin-left: 0;
 }
@@ -558,7 +558,7 @@ const renderItems = computed(() => {
 }
 
 .tool-row.is-clickable:hover {
-  background: #E9ECEF;
+  background: var(--awd-surface-3);
 }
 
 .tool-right {
@@ -569,7 +569,7 @@ const renderItems = computed(() => {
 }
 
 .output-chevron {
-    color: #ADB5BD;
+    color: var(--awd-text-3);
     display: flex;
     align-items: center;
     transition: transform 0.2s ease;
@@ -582,9 +582,9 @@ const renderItems = computed(() => {
 /* 工具返回结果折叠区 */
 .tool-output {
     margin: 3px 0 5px 0;
-    border: 1px solid #E9ECEF;
+    border: 1px solid var(--awd-border);
     border-radius: 6px;
-    background: #ffffff;
+    background: var(--awd-surface);
     overflow: hidden;
 }
 
@@ -593,7 +593,7 @@ const renderItems = computed(() => {
     font-family: 'SF Mono', Menlo, Consolas, monospace;
     font-size: 11px;
     line-height: 1.5;
-    color: #2C3338;
+    color: var(--awd-text);
     white-space: pre-wrap;
     word-break: break-word;
     /* 长输出自己滚，不把气泡撑爆 */
@@ -604,10 +604,10 @@ const renderItems = computed(() => {
 
 .output-truncated {
     padding: 4px 8px;
-    border-top: 1px solid #F1F3F5;
-    background: #F8F9FA;
+    border-top: 1px solid var(--awd-border-subtle);
+    background: var(--awd-bg);
     font-size: 10px;
-    color: #6C757D;
+    color: var(--awd-text-2);
 }
 
 .tool-content {
@@ -619,7 +619,7 @@ const renderItems = computed(() => {
 
 .tool-name {
     font-size: 12px;
-    color: #1A5336;
+    color: var(--awd-accent-text);
     font-weight: 500;
     white-space: nowrap;
     overflow: hidden;
@@ -632,9 +632,9 @@ const renderItems = computed(() => {
     flex-shrink: 0;
 }
 
-.status-loading { color: #6C757D; }
-.status-success { color: #5BD197; }
-.status-error { color: #E74C3C; }
+.status-loading { color: var(--awd-text-2); }
+.status-success { color: var(--awd-mint); }
+.status-error { color: var(--awd-danger-text); }
 
 /* Thinking Row */
 .thinking-row {

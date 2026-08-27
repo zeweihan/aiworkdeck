@@ -149,25 +149,25 @@ export default {
 }
 .thinking-icon {
   font-size: 10px;
-  color: #888;
+  color: var(--awd-text-3);
   width: 12px;
   text-align: center;
 }
 .thinking-title {
   font-size: 12px;
-  color: #888;
+  color: var(--awd-text-3);
   font-weight: 500;
 }
 .thinking-body {
   margin-left: 18px;
   padding: 6px 12px;
-  border-left: 2px solid #E0E0E0;
+  border-left: 2px solid var(--awd-border);
   margin-top: 2px;
 }
 .thought-text {
   font-family: 'SF Mono', 'Menlo', monospace;
   font-size: 12px; /* Small, as requested */
-  color: #999;
+  color: var(--awd-text-3);
   font-style: italic;
   white-space: pre-wrap;
   line-height: 1.4;
@@ -175,8 +175,8 @@ export default {
 
 /* --- TASK CARD MODE (Plan/Execution) --- */
 .task-card {
-  background-color: #FAFAFA;
-  border: 1px solid #D1E7DC; /* Mint Green Border */
+  background-color: var(--awd-bg);
+  border: 1px solid var(--awd-border); /* Mint Green Border */
   border-radius: 8px;
   overflow: hidden;
   box-shadow: 0 2px 4px rgba(0,0,0,0.02);
@@ -185,9 +185,9 @@ export default {
 
 /* Header */
 .task-header {
-  background-color: #F8FCFA; /* Very light mint */
+  background-color: var(--awd-surface); /* Very light mint */
   padding: 8px 14px;
-  border-bottom: 1px solid #E6F4EA;
+  border-bottom: 1px solid var(--awd-border);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -195,48 +195,48 @@ export default {
 .task-title-text {
   font-size: 12px;
   font-weight: 700;
-  color: #1A5336; /* Forest Green */
+  color: var(--awd-accent-text); /* Forest Green */
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 .task-time {
   font-size: 10px;
-  color: #BBB;
+  color: var(--awd-text-3);
 }
 
 /* Body */
 .task-body {
   padding: 12px 14px;
   font-size: 13.5px; /* Match input size better */
-  color: #333;
+  color: var(--awd-text);
   line-height: 1.6;
 }
 
 /* Steps Container */
 .task-steps-container {
-  background: #FFFFFF;
-  border-top: 1px solid #EEE;
+  background: var(--awd-surface);
+  border-top: 1px solid var(--awd-border);
   padding: 0;
 }
 
 .task-steps-header {
   padding: 6px 14px;
-  background-color: #FAFAFA;
+  background-color: var(--awd-bg);
   display: flex;
   justify-content: space-between;
   align-items: center;
   cursor: pointer;
-  border-bottom: 1px solid #F0F0F0;
+  border-bottom: 1px solid var(--awd-border-subtle);
 }
 .section-label {
   font-size: 11px;
   font-weight: 600;
-  color: #999;
+  color: var(--awd-text-3);
   text-transform: uppercase;
 }
 .section-toggle {
   font-size: 10px;
-  color: #AAA;
+  color: var(--awd-text-3);
 }
 
 .task-steps-list {
@@ -252,7 +252,7 @@ export default {
   gap: 10px;
 }
 .step-index {
-  color: #CCC;
+  color: var(--awd-text-3);
   min-width: 14px;
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -262,7 +262,7 @@ export default {
   flex: 1;
 }
 .step-title {
-  color: #555;
+  color: var(--awd-text-2);
 }
 .step-status-icon {
   width: 14px;
@@ -271,33 +271,33 @@ export default {
 
 /* --- CHAT MODE (Final Answer) --- */
 .chat-bubble-content {
-  background-color: #FFFFFF;
-  border: 1px solid #E5E5E5;
+  background-color: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 12px 12px 12px 2px;
   padding: 12px 16px;
   box-shadow: 0 1px 2px rgba(0,0,0,0.03);
   font-size: 13.5px; /* Adjusted to be compact */
   line-height: 1.6;
-  color: #2c2c2c;
+  color: var(--awd-text);
 }
 
 /* --- GLOBAL UTILS --- */
 .spinner {
   display: inline-block;
   animation: spin 1s linear infinite;
-  color: #5BD197;
+  color: var(--awd-mint);
 }
 .check {
-  color: #5BD197;
+  color: var(--awd-mint);
   font-weight: bold;
 }
 .dot {
-  color: #EEE;
+  color: var(--awd-text-on-accent);
 }
 .cursor {
   display: inline-block;
   animation: blink 1s step-end infinite;
-  color: #5BD197;
+  color: var(--awd-mint);
   font-weight: bold;
   margin-left: 4px;
 }
@@ -307,9 +307,9 @@ export default {
 
 /* MARKDOWN OVERRIDES FOR ALL MODES */
 :deep(.markdown-body p) { margin-bottom: 8px; }
-:deep(.markdown-body h1) { font-size: 1.3em; margin-top: 12px; margin-bottom: 6px; font-weight: 700; color: #111; }
-:deep(.markdown-body h2) { font-size: 1.2em; margin-top: 10px; margin-bottom: 6px; font-weight: 600; color: #222; }
-:deep(.markdown-body h3) { font-size: 1.1em; margin-top: 8px; margin-bottom: 4px; font-weight: 600; color: #333; }
+:deep(.markdown-body h1) { font-size: 1.3em; margin-top: 12px; margin-bottom: 6px; font-weight: 700; color: var(--awd-text); }
+:deep(.markdown-body h2) { font-size: 1.2em; margin-top: 10px; margin-bottom: 6px; font-weight: 600; color: var(--awd-text); }
+:deep(.markdown-body h3) { font-size: 1.1em; margin-top: 8px; margin-bottom: 4px; font-weight: 600; color: var(--awd-text); }
 :deep(.markdown-body ul), :deep(.markdown-body ol) { 
   margin-left: 18px; margin-bottom: 8px; padding-left: 0;
 }
@@ -320,14 +320,14 @@ export default {
   border-radius: 4px;
   font-family: 'DM Mono', monospace;
   font-size: 0.9em;
-  color: #d63384;
+  color: var(--awd-danger-text);
 }
 :deep(.markdown-body pre) {
-  background-color: #f9f9f9;
+  background-color: var(--awd-surface);
   padding: 10px;
   border-radius: 6px;
   overflow-x: auto;
-  border: 1px solid #efefef;
+  border: 1px solid var(--awd-border);
   margin-bottom: 8px;
 }
 :deep(.markdown-body pre code) {

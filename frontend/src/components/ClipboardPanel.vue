@@ -277,21 +277,13 @@ export default {
 
 <style lang="scss" scoped>
 /* Unified AI WorkDeck Palette */
-$color-primary: #1A5336;
-$color-accent: #5BD197;
-$color-accent-pale: #E6F9F0;
-$color-text-main: #2C3338;
-$color-text-light: #6C757D;
-$color-border: #E9ECEF;
-$bg-pale: #F8F9FA;
-$bg-white: #FFFFFF;
 
 .clip-panel {
   height: 100%;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: $bg-pale;
+  background: var(--awd-bg);
 }
 
 /* 额度提示贴在列表上方，不占据滚动区，避免翻到底才看到 */
@@ -316,8 +308,8 @@ $bg-white: #FFFFFF;
 }
 
 .clip-card {
-  background: $bg-white;
-  border: 1px solid $color-border;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   padding: 12px;
   display: flex;
@@ -335,7 +327,7 @@ $bg-white: #FFFFFF;
 }
 
 .clip-card:hover {
-  border-color: $color-accent;
+  border-color: var(--awd-mint);
   box-shadow: 0 8px 16px rgba(91, 209, 151, 0.12);
   transform: translateY(-2px);
 }
@@ -366,12 +358,12 @@ $bg-white: #FFFFFF;
 .badge-text {
   font-size: 12px;
   font-weight: 600;
-  color: $color-text-main;
+  color: var(--awd-text);
 }
 
 .clip-source {
   font-size: 11px;
-  color: $color-text-light;
+  color: var(--awd-text-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -379,7 +371,7 @@ $bg-white: #FFFFFF;
 
 .time-label {
   font-size: 11px;
-  color: #9aa5b1;
+  color: var(--awd-text-3);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -413,25 +405,25 @@ $bg-white: #FFFFFF;
   width: 14px;
   height: 14px;
   flex-shrink: 0;
-    color: $color-text-light;
+    color: var(--awd-text-2);
   }
 
   &:hover {
-    background: $color-accent-pale;
+    background: var(--awd-accent-soft);
     border-color: transparent;
-    .icon { color: $color-primary; }
+    .icon { color: var(--awd-accent-text); }
   }
 }
 
 .cli-btn.danger:hover {
-  background: #FEF2F2;
-  .icon { color: #DC2626; }
+  background: var(--awd-danger-soft);
+  .icon { color: var(--awd-danger-text); }
 }
 
 .card-content {
   flex: 1;
   min-height: 0;
-  background: #f1f5f9;
+  background: var(--awd-surface-2);
   border-radius: 6px;
   padding: 8px;
   overflow: hidden;
@@ -442,7 +434,7 @@ $bg-white: #FFFFFF;
 /* Content Types */
 .content-text {
   font-size: 12px;
-  color: $color-text-main;
+  color: var(--awd-text);
   line-height: 1.5;
   
   /* Top-Left No Scroll Ellipsis */
@@ -483,8 +475,8 @@ $bg-white: #FFFFFF;
   top: 100%;
   right: 0;
   margin-top: 8px;
-  background: #fff;
-  border: 1px solid $color-border;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.15);
   padding: 8px;
@@ -507,15 +499,15 @@ $bg-white: #FFFFFF;
   right: 10px;
   width: 8px;
   height: 8px;
-  background: #fff;
-  border-top: 1px solid $color-border;
-  border-left: 1px solid $color-border;
+  background: var(--awd-surface);
+  border-top: 1px solid var(--awd-border);
+  border-left: 1px solid var(--awd-border);
   transform: rotate(45deg);
 }
 
 .pop-text {
   font-size: 12px;
-  color: $color-text-main;
+  color: var(--awd-text);
   text-align: center;
   font-weight: 500;
   display: block;
@@ -534,28 +526,28 @@ $bg-white: #FFFFFF;
   text-align: center;
   border-radius: 4px;
   cursor: pointer;
-  background: $bg-pale;
-  color: $color-text-light;
+  background: var(--awd-bg);
+  color: var(--awd-text-2);
   transition: all 0.2s;
   
   &:hover {
-    background: #e2e8f0;
-    color: $color-text-main;
+    background: var(--awd-surface-3);
+    color: var(--awd-text);
   }
 }
 
 .pop-btn.danger {
-  background: #FEF2F2;
-  color: #DC2626;
+  background: var(--awd-danger-soft);
+  color: var(--awd-danger-text);
   
   &:hover {
-    background: #FEE2E2;
+    background: var(--awd-danger-soft);
   }
 }
 
 .file-name {
   font-size: 12px;
-  color: $color-text-main;
+  color: var(--awd-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

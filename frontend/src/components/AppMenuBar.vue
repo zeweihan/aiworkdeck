@@ -166,7 +166,7 @@ export default {
 
 .amb-top-t {
   font-size: 13px;
-  color: #3c4043;
+  color: var(--awd-text);
   white-space: nowrap;
 }
 
@@ -183,8 +183,8 @@ export default {
   z-index: 1000;
   min-width: 232px;
   padding: 5px 0;
-  background: #fff;
-  border: 1px solid #e3e6e8;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
 }
@@ -198,27 +198,27 @@ export default {
   padding: 0 12px;
   cursor: default;
 
-  &:hover:not(.disabled) { background: rgba(91, 209, 151, 0.16); }
+  &:hover:not(.disabled) { background: var(--awd-accent-soft); }
   &.disabled { opacity: 0.38; }
 }
 
 .amb-check {
   width: 12px;
   font-size: 12px;
-  color: #1a5336;
+  color: var(--awd-accent-text);
   flex-shrink: 0;
 }
 
 .amb-label {
   font-size: 13px;
-  color: #2c3338;
+  color: var(--awd-text);
   white-space: nowrap;
   flex: 1;
 }
 
 .amb-accel {
   font-size: 12px;
-  color: #9aa0a6;
+  color: var(--awd-text-3);
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -226,7 +226,7 @@ export default {
 .amb-sep {
   height: 1px;
   margin: 4px 10px;
-  background: #ececec;
+  background: var(--awd-surface-2);
 }
 
 .amb-submenu {
@@ -235,8 +235,8 @@ export default {
   left: 100%;
   min-width: 200px;
   padding: 5px 0;
-  background: #fff;
-  border: 1px solid #e3e6e8;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
   max-height: 60vh;

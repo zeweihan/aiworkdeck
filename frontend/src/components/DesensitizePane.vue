@@ -175,13 +175,13 @@ export default {
    实际可用宽度只剩 196px。 */
 .desensitize-pane {
   height: 100%;
-  background-color: #fff;
+  background-color: var(--awd-surface);
   box-sizing: border-box;
 }
 
 .section {
   padding: 0 var(--awd-panel-pad-x) var(--awd-panel-gap-lg);
-  background: #fff;
+  background: var(--awd-surface);
 }
 
 .section-title {
@@ -202,8 +202,8 @@ export default {
 
 .path-display {
     padding: 6px 8px;
-    background: #F8F9FA;
-    border: 1px dashed #D1D5DB;
+    background: var(--awd-bg);
+    border: 1px dashed var(--awd-border-strong);
     border-radius: var(--awd-panel-radius);
     font-size: var(--awd-panel-fs);
     color: var(--awd-panel-text);
@@ -215,7 +215,7 @@ export default {
     cursor: pointer;
 }
 .path-display.empty {
-    color: #9ca3af;
+    color: var(--awd-text-3);
     justify-content: center;
 }
 
@@ -229,17 +229,17 @@ export default {
     height: 24px;
     line-height: 22px;
     text-align: center;
-    background: #fff;
+    background: var(--awd-surface);
     border: 1px solid var(--awd-panel-border);
     border-radius: 4px;
     font-size: var(--awd-panel-fs-meta);
-    color: #4b5563;
+    color: var(--awd-text-2);
     cursor: pointer;
     transition: all 0.2s;
 }
 .mini-btn:hover {
-    background: #f9fafb;
-    border-color: #d1d5db;
+    background: var(--awd-bg);
+    border-color: var(--awd-border-strong);
 }
 
 .strategies-list {
@@ -260,7 +260,7 @@ export default {
     width: 14px;
     height: 14px;
     flex-shrink: 0;
-    border: 1px solid #d1d5db;
+    border: 1px solid var(--awd-border-strong);
     border-radius: 3px;
     margin-right: 6px;
     display: flex;
@@ -269,11 +269,11 @@ export default {
     transition: all 0.2s;
 }
 .checkbox.checked {
-    background-color: #1A5336;
-    border-color: #1A5336;
+    background-color: var(--awd-accent);
+    border-color: var(--awd-accent);
 }
 .check-mark {
-    color: #fff;
+    color: var(--awd-text-on-accent);
     font-size: 10px;
 }
 
@@ -296,8 +296,8 @@ export default {
   font-weight: 600;
   cursor: pointer;
   border: none;
-  background-color: #1A5336;
-  color: #fff;
+  background-color: var(--awd-accent);
+  color: var(--awd-text-on-accent);
   transition: opacity 0.2s;
 }
 .workdeck-btn:disabled {
@@ -309,7 +309,7 @@ export default {
     margin-top: 6px;
     font-size: 10px;
     line-height: 1.5;
-    color: #6b7280;
+    color: var(--awd-text-2);
     text-align: center;
 }
 </style>

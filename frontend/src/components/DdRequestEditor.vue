@@ -473,19 +473,12 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-$brand-forest: #1A5336;
-$brand-mint: #5BD197;
-$brand-mint-light: #E6F9F0;
-$gray-pale: #F8F9FA;
-$gray-light: #E9ECEF;
-$gray-dark: #2C3338;
-$white: #FFFFFF;
 
 .dd-request-editor {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background-color: $white;
+  background-color: var(--awd-surface);
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 
   .editor-header {
@@ -493,7 +486,7 @@ $white: #FFFFFF;
     justify-content: space-between;
     align-items: center;
     padding: 16px 24px;
-    border-bottom: 1px solid $gray-light;
+    border-bottom: 1px solid var(--awd-border);
 
     .header-left {
       display: flex;
@@ -503,34 +496,34 @@ $white: #FFFFFF;
       .title-edit {
         font-size: 18px;
         font-weight: 600;
-        color: $brand-forest;
+        color: var(--awd-accent-text);
         border: 1px solid transparent;
         border-radius: 4px;
         padding: 4px 8px;
         width: 200px;
 
-        &:hover { border-color: $gray-light; }
-        &:focus { border-color: $brand-mint; outline: none; background: #fff; }
+        &:hover { border-color: var(--awd-border); }
+        &:focus { border-color: var(--awd-mint); outline: none; background: var(--awd-surface); }
       }
 
       .status-badge {
         font-size: 12px;
         padding: 2px 8px;
-        background: $gray-light;
-        color: $gray-dark;
+        background: var(--awd-surface-3);
+        color: var(--awd-text);
         border-radius: 4px;
       }
 
       .progress-info {
         font-size: 12px;
-        color: #999;
+        color: var(--awd-text-3);
         margin-left: 10px;
       }
     }
 
     .new-btn {
-      background-color: $brand-forest;
-      color: $white;
+      background-color: var(--awd-accent);
+      color: var(--awd-text-on-accent);
       font-size: 14px;
       padding: 6px 16px;
       border-radius: 4px;
@@ -539,14 +532,14 @@ $white: #FFFFFF;
       line-height: 1.5;
       transition: background-color 0.2s;
 
-      &:hover { background-color: #2D7A52; }
+      &:hover { background-color: var(--awd-accent-hover); }
     }
 
     .delete-list-btn {
         margin-left: 10px;
         background: transparent;
-        color: #999;
-        border: 1px solid #eee;
+        color: var(--awd-text-3);
+        border: 1px solid var(--awd-border);
         padding: 6px 12px;
         // height: 20px;
         // box-sizing: border-box;
@@ -554,7 +547,7 @@ $white: #FFFFFF;
         border-radius: 4px;
         cursor: pointer;
         font-size: 13px;
-        &:hover { color: #DC3545; border-color: #DC3545; background: #fff; }
+        &:hover { color: var(--awd-danger-text); border-color: var(--awd-danger); background: var(--awd-surface); }
     }
   }
 
@@ -567,11 +560,11 @@ $white: #FFFFFF;
     .table-header {
       display: flex;
       padding: 10px 0;
-      background: $gray-pale;
-      border-bottom: 1px solid $gray-light;
+      background: var(--awd-bg);
+      border-bottom: 1px solid var(--awd-border);
       font-size: 12px;
       font-weight: 600;
-      color: #6C757D;
+      color: var(--awd-text-2);
 
       .col-name { width: 35%; padding-left: 20px; }
       .col-desc { flex: 1; }
@@ -589,16 +582,16 @@ $white: #FFFFFF;
       display: flex;
       align-items: center;
       padding: 8px 0;
-      border-bottom: 1px solid $gray-light;
+      border-bottom: 1px solid var(--awd-border);
       font-size: 13px;
       cursor: pointer;
       transition: background-color 0.1s;
 
       &:hover {
-          background-color: #FAFAFA;
+          background-color: var(--awd-bg);
           .col-action .delete-btn { opacity: 1; }
       }
-      &.selected { background-color: $brand-mint-light; }
+      &.selected { background-color: var(--awd-accent-soft); }
 
       .col-name {
         width: 35%;
@@ -617,11 +610,11 @@ $white: #FFFFFF;
 
           .delete-btn {
               opacity: 0;
-              color: #999;
+              color: var(--awd-text-3);
               cursor: pointer;
               font-size: 14px;
               transition: opacity 0.2s;
-              &:hover { color: #DC3545; }
+              &:hover { color: var(--awd-danger-text); }
           }
       }
 
@@ -643,16 +636,16 @@ $white: #FFFFFF;
         .arrow-btn {
           width: 14px;
           height: 18px;
-          background: #fff;
-          border: 1px solid #ddd;
+          background: var(--awd-surface);
+          border: 1px solid var(--awd-border);
           display: flex;
           align-items: center;
           justify-content: center;
           font-size: 12px;
-          color: #666;
+          color: var(--awd-text-2);
           cursor: pointer;
           border-radius: 2px;
-          &:hover { color: $brand-mint; border-color: $brand-mint; }
+          &:hover { color: var(--awd-mint); border-color: var(--awd-mint); }
         }
       }
 
@@ -661,7 +654,7 @@ $white: #FFFFFF;
       .expand-icon {
         width: 16px;
         font-size: 10px;
-        color: #999;
+        color: var(--awd-text-3);
         cursor: pointer;
         text-align: center;
       }
@@ -674,33 +667,33 @@ $white: #FFFFFF;
         padding: 4px;
         border-radius: 4px;
         font-size: 13px;
-        color: $gray-dark;
+        color: var(--awd-text);
         min-width: 0; /* Allow shrinking */
 
-        &:focus { background: #fff; border-color: $brand-mint; outline: none; }
+        &:focus { background: var(--awd-surface); border-color: var(--awd-mint); outline: none; }
       }
       .title-input { font-weight: 500; }
 
-      .link-text { color: #3498DB; cursor: pointer; &:hover { text-decoration: underline; } }
+      .link-text { color: var(--awd-info-text); cursor: pointer; &:hover { text-decoration: underline; } }
 
       .mini-btn {
         padding: 3px 10px;
         font-size: 12px;
         border-radius: 4px;
-        border: 1px solid $gray-light;
-        background: #fff;
+        border: 1px solid var(--awd-border);
+        background: var(--awd-surface);
         cursor: pointer;
-        color: $gray-dark;
+        color: var(--awd-text);
 
-        &:hover { border-color: $brand-mint; color: $brand-mint; }
+        &:hover { border-color: var(--awd-mint); color: var(--awd-mint); }
       }
 
       .uploaded-info {
          display: flex;
          align-items: center;
          gap: 4px;
-         background: #f0f9f4;
-         border: 1px solid #d1e7dd;
+         background: var(--awd-accent-soft);
+         border: 1px solid var(--awd-border);
          padding: 2px 6px;
          border-radius: 4px;
          cursor: pointer;
@@ -710,15 +703,15 @@ $white: #FFFFFF;
   width: 13px;
   height: 13px;
   flex-shrink: 0; }
-         .file-name { font-size: 11px; color: $brand-forest; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+         .file-name { font-size: 11px; color: var(--awd-accent-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       }
 
       .comment-trigger {
         font-size: 12px;
-        color: #666;
+        color: var(--awd-text-2);
         cursor: pointer;
         position: relative;
-        &:hover { color: $brand-mint; }
+        &:hover { color: var(--awd-mint); }
 
         .dot {
           position: absolute;
@@ -735,26 +728,26 @@ $white: #FFFFFF;
 }
 
 .drawer-mask {
-    position: fixed; inset: 0; background: rgba(0,0,0,0.3); z-index: 1000;
+    position: fixed; inset: 0; background: var(--awd-overlay); z-index: 1000;
     display: flex; justify-content: flex-end;
 
     .drawer {
         width: 300px;
-        background: #fff;
+        background: var(--awd-surface);
         height: 100%;
         display: flex;
         flex-direction: column;
         box-shadow: -2px 0 8px rgba(0,0,0,0.1);
 
-        .drawer-header { padding: 15px; font-weight: bold; border-bottom: 1px solid #eee; }
+        .drawer-header { padding: 15px; font-weight: bold; border-bottom: 1px solid var(--awd-border); }
         .drawer-body { flex: 1; padding: 15px; overflow-y: auto;
             .comment-row { margin-bottom: 10px; font-size: 13px; .user{font-weight:bold; margin-right:5px;} }
-            .no-data { text-align: center; color: #999; margin-top: 20px; }
+            .no-data { text-align: center; color: var(--awd-text-3); margin-top: 20px; }
         }
         .drawer-footer {
-            padding: 10px; border-top: 1px solid #eee; display: flex; gap: 5px;
-            input { flex: 1; border: 1px solid #ddd; padding: 6px; border-radius: 4px; }
-            button { background: $brand-mint; border: none; color: white; padding: 0 12px; border-radius: 4px; font-size: 12px; }
+            padding: 10px; border-top: 1px solid var(--awd-border); display: flex; gap: 5px;
+            input { flex: 1; border: 1px solid var(--awd-border); padding: 6px; border-radius: 4px; }
+            button { background: var(--awd-mint); border: none; color: white; padding: 0 12px; border-radius: 4px; font-size: 12px; }
         }
     }
 }

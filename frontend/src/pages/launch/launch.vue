@@ -2,7 +2,7 @@
   <!-- 启动引导页：极简浅色 splash，只做路由分流，不承载任何业务 UI -->
   <view class="launch-page">
     <view class="launch-center">
-      <image class="launch-logo" src="/static/logo_full_v2.png" mode="heightFix" />
+      <image class="launch-logo awd-brand-logo" src="/static/logo_full_v2.png" mode="heightFix" />
       <view v-if="!failed" class="launch-loading">
         <view class="launch-spinner"></view>
         <text class="launch-status">{{ statusText }}</text>
@@ -120,7 +120,7 @@ export default {
 .launch-page {
   width: 100vw;
   height: 100vh;
-  background: #f8f9fa;
+  background: var(--awd-bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -148,8 +148,8 @@ export default {
 .launch-spinner {
   width: 22px;
   height: 22px;
-  border: 2px solid #e2e8f0;
-  border-top-color: #1a5336;
+  border: 2px solid var(--awd-border);
+  border-top-color: var(--awd-accent);
   border-radius: 50%;
   animation: launch-spin 0.9s linear infinite;
 }
@@ -162,7 +162,7 @@ export default {
 
 .launch-status {
   font-size: 13px;
-  color: #94a3b8;
+  color: var(--awd-text-3);
 }
 
 .launch-error {
@@ -175,7 +175,7 @@ export default {
 
 .launch-error-text {
   font-size: 13px;
-  color: #64748b;
+  color: var(--awd-text-2);
 }
 
 .launch-retry-btn {
@@ -183,15 +183,15 @@ export default {
   line-height: 34px;
   padding: 0 28px;
   font-size: 13px;
-  color: #1a5336;
-  background: #ffffff;
-  border: 1px solid #cbd5e1;
+  color: var(--awd-accent-text);
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border-strong);
   border-radius: 8px;
   cursor: pointer;
 
   &:hover {
-    border-color: #1a5336;
-    background: #f1f5f9;
+    border-color: var(--awd-accent);
+    background: var(--awd-surface-2);
   }
 }
 </style>

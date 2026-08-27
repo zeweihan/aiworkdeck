@@ -195,14 +195,14 @@ const formatTime = (seconds) => {
 /* Full Panel Style */
 .task-panel {
   background: rgba(33, 38, 41, 0.9); /* Dark BG #212629 with opacity */
-  border: 1px solid rgba(91, 209, 151, 0.2); /* Subtle Mint border */
+  border: 1px solid var(--awd-accent-soft); /* Subtle Mint border */
   border-radius: 12px;
   padding: 16px;
   min-width: 280px;
   max-width: 360px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
   backdrop-filter: blur(12px);
-  color: #F8F9FA;
+  color: var(--awd-text-on-accent);
 }
 
 .panel-header {
@@ -223,16 +223,16 @@ const formatTime = (seconds) => {
 .header-title {
   font-size: 14px;
   font-weight: 600;
-  color: #F8F9FA;
+  color: var(--awd-text-on-accent);
 }
 
 .header-title i {
   margin-right: 8px;
-  color: #5BD197; /* Mint Green */
+  color: var(--awd-mint); /* Mint Green */
 }
 
 .task-count {
-  background: #1A5336; /* Forest Green */
+  background: var(--awd-accent); /* Forest Green */
   color: white;
   padding: 2px 8px;
   border-radius: 12px;
@@ -271,7 +271,7 @@ const formatTime = (seconds) => {
   height: 48px;
   background: #212629;
   border-radius: 50%;
-  border: 1px solid rgba(91, 209, 151, 0.3);
+  border: 1px solid var(--awd-accent-soft);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -303,7 +303,7 @@ const formatTime = (seconds) => {
 .percentage-text {
   font-size: 10px;
   font-weight: 700;
-  color: #5BD197;
+  color: var(--awd-mint);
   z-index: 1;
 }
 
@@ -311,7 +311,7 @@ const formatTime = (seconds) => {
   position: absolute;
   top: -4px;
   right: -4px;
-  background: #E74C3C;
+  background: var(--awd-danger);
   color: white;
   font-size: 9px;
   font-weight: 700;
@@ -355,8 +355,8 @@ const formatTime = (seconds) => {
 }
 
 .task-item.is-completed {
-  border-color: rgba(91, 209, 151, 0.2);
-  background: rgba(91, 209, 151, 0.05);
+  border-color: var(--awd-accent-soft);
+  background: var(--awd-accent-wash);
 }
 
 .task-item.is-failed {
@@ -374,7 +374,7 @@ const formatTime = (seconds) => {
 .task-type {
   font-size: 13px;
   font-weight: 600;
-  color: #FFFFFF;
+  color: var(--awd-text-on-accent);
   /* 状态与关闭按钮靠右成一组，所以标题吃掉剩余宽度 */
   flex: 1;
 }
@@ -384,14 +384,14 @@ const formatTime = (seconds) => {
   padding: 0 4px;
   border: none;
   background: transparent;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--awd-text-on-accent);
   font-size: 15px;
   line-height: 1;
   cursor: pointer;
 }
 
 .task-dismiss-btn:hover {
-  color: #FFFFFF;
+  color: var(--awd-text-on-accent);
 }
 
 .task-status {
@@ -404,18 +404,18 @@ const formatTime = (seconds) => {
 }
 
 .task-status.running {
-  background: rgba(91, 209, 151, 0.15);
-  color: #5BD197;
+  background: var(--awd-accent-soft);
+  color: var(--awd-mint);
 }
 
 .task-status.completed {
-  background: rgba(91, 209, 151, 0.1);
-  color: #5BD197;
+  background: var(--awd-accent-soft);
+  color: var(--awd-mint);
 }
 
 .task-status.failed {
   background: rgba(231, 76, 60, 0.15);
-  color: #E74C3C;
+  color: var(--awd-danger-text);
 }
 
 .progress-container {
@@ -451,7 +451,7 @@ const formatTime = (seconds) => {
 
 .progress-text {
   font-size: 11px;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
   min-width: 30px;
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -459,14 +459,14 @@ const formatTime = (seconds) => {
 
 .task-message {
   font-size: 12px;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
   margin-bottom: 4px;
   line-height: 1.4;
 }
 
 .task-eta {
   font-size: 10px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 /* Transition animations */

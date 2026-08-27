@@ -159,13 +159,13 @@ export default {
   padding: 2px 8px;
   border-radius: 6px;
   font-size: 11px;
-  color: #1A5336;
-  background: rgba(26, 83, 54, 0.06);
+  color: var(--awd-accent-text);
+  background: var(--awd-accent-wash);
   cursor: pointer;
 }
 
 .task-add-btn:hover {
-  background: rgba(26, 83, 54, 0.12);
+  background: var(--awd-accent-soft);
 }
 
 .task-quick-create {
@@ -174,19 +174,19 @@ export default {
   gap: 8px;
   padding: 8px;
   margin-bottom: 8px;
-  border: 1px solid #E9ECEF;
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
-  background: #F8F9FA;
+  background: var(--awd-bg);
 }
 
 .task-quick-input {
   height: 32px;
   padding: 0 10px;
-  border: 1px solid #E6EAE8;
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   font-size: 12px;
-  color: #2C3338;
-  background: #fff;
+  color: var(--awd-text);
+  background: var(--awd-surface);
   box-sizing: border-box;
 }
 
@@ -200,26 +200,26 @@ export default {
   padding: 4px 10px;
   border-radius: 6px;
   font-size: 11px;
-  color: #495057;
-  background: #F1F3F5;
+  color: var(--awd-text-2);
+  background: var(--awd-surface-2);
   cursor: pointer;
 }
 
 .task-quick-btn-primary {
-  color: #fff;
-  background: #1A5336;
+  color: var(--awd-text-on-accent);
+  background: var(--awd-accent);
 }
 
 .task-hint {
   font-size: 13px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 .task-guide-title {
   display: block;
   font-size: 13px;
   font-weight: 600;
-  color: #2C3338;
+  color: var(--awd-text);
 }
 
 .task-guide-desc {
@@ -227,7 +227,7 @@ export default {
   margin-top: 4px;
   font-size: 12px;
   line-height: 19px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 .task-row {
@@ -235,7 +235,7 @@ export default {
   align-items: center;
   gap: 10px;
   padding: 8px 0;
-  border-bottom: 1px solid #F1F3F5;
+  border-bottom: 1px solid var(--awd-border-subtle);
 }
 
 .task-row:last-child {
@@ -249,40 +249,40 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid #CED4DA;
+  border: 1px solid var(--awd-border-strong);
   border-radius: 4px;
-  color: #fff;
+  color: var(--awd-text-on-accent);
   cursor: pointer;
 }
 
 .task-check:hover {
-  border-color: #5BD197;
+  border-color: var(--awd-mint);
 }
 
 .task-check.is-done {
-  background: #1A5336;
-  border-color: #1A5336;
+  background: var(--awd-accent);
+  border-color: var(--awd-accent);
 }
 
 .task-title {
   flex: 1;
   min-width: 0;
   font-size: 13px;
-  color: #2C3338;
+  color: var(--awd-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .task-title-done {
-  color: #ADB5BD;
+  color: var(--awd-text-3);
   text-decoration: line-through;
 }
 
 .task-due {
   flex: none;
   font-size: 11px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 .task-due-badge {
@@ -290,18 +290,18 @@ export default {
   padding: 1px 7px;
   border-radius: 10px;
   font-size: 11px;
-  color: #6C757D;
-  background: #F1F3F5;
+  color: var(--awd-text-2);
+  background: var(--awd-surface-2);
 }
 
 .task-due-badge.is-soon {
-  color: #C0392B;
-  background: #FBE9E7;
+  color: var(--awd-danger-text);
+  background: var(--awd-bg);
 }
 
 .task-due-badge.is-overdue {
-  color: #fff;
-  background: #A6291B;
+  color: var(--awd-text-on-accent);
+  background: var(--awd-danger);
 }
 
 .task-done-toggle {
@@ -314,7 +314,7 @@ export default {
 
 .task-done-toggle-label {
   font-size: 12px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 .task-rows-done {

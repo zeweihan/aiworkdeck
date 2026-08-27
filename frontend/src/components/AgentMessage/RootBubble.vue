@@ -277,8 +277,8 @@ const hasContent = computed(() => {
 .root-bubble-container {
   display: flex;
   flex-direction: column;
-  background: #ffffff;
-  border: 1px solid rgba(233, 236, 239, 0.8); /* Very subtle border */
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border); /* Very subtle border */
   border-radius: 12px; /* rounded-xl */
   overflow: hidden;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.08); /* shadow-sm plus */
@@ -294,7 +294,7 @@ const hasContent = computed(() => {
 
 /* Connect artifacts visually */
 .artifact-wrapper {
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid var(--awd-border-subtle);
 }
 
 .artifact-wrapper:last-child {
@@ -307,7 +307,7 @@ const hasContent = computed(() => {
 .artifact-wrapper.artifact-wrapper--approval {
   border-bottom: none;
   margin: 10px 12px 12px;
-  border: 1.5px solid #5BD197; /* Mint Green */
+  border: 1.5px solid var(--awd-mint); /* Mint Green */
   border-radius: 10px;
   overflow: hidden;
   box-shadow: 0 2px 12px rgba(26, 83, 54, 0.10);
@@ -318,7 +318,7 @@ const hasContent = computed(() => {
   content: '';
   display: block;
   height: 4px;
-  background: linear-gradient(90deg, #1A5336, #5BD197);
+  background: linear-gradient(90deg, var(--awd-accent), var(--awd-mint));
 }
 
 .approval-flag {
@@ -326,27 +326,27 @@ const hasContent = computed(() => {
   align-items: center;
   gap: 6px;
   padding: 9px 16px 0;
-  background: #ffffff;
+  background: var(--awd-surface);
 }
 
 .approval-flag-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #5BD197; /* Mint Green */
+  background: var(--awd-mint); /* Mint Green */
   flex-shrink: 0;
 }
 
 .approval-flag-text {
   font-size: 11px;
   font-weight: 700;
-  color: #1A5336; /* Forest Green */
+  color: var(--awd-accent-text); /* Forest Green */
   letter-spacing: 0.3px;
 }
 
 .stop-notice {
   font-size: 12px;
-  color: #6C757D;
+  color: var(--awd-text-2);
   padding: 2px 4px 0;
   margin-bottom: 14px;
 }
@@ -355,14 +355,14 @@ const hasContent = computed(() => {
   padding: 6px 12px;
   font-size: 13px;
   line-height: 1.55;
-  color: #2C3338; /* Gray-Dark */
+  color: var(--awd-text); /* Gray-Dark */
 }
 
 .message-actions {
   position: relative;
   display: flex;
   padding: 8px 16px 12px;
-  border-top: 1px solid #f1f5f9;
+  border-top: 1px solid var(--awd-border-subtle);
   margin-top: 6px;
 }
 
@@ -373,26 +373,26 @@ const hasContent = computed(() => {
   font-size: 12px;
   padding: 3px 10px;
   border-radius: 5px;
-  border: 1px solid #E9ECEF;
-  color: #6C757D;
-  background: #FFFFFF;
+  border: 1px solid var(--awd-border);
+  color: var(--awd-text-2);
+  background: var(--awd-surface);
   cursor: pointer;
   transition: all 0.2s;
   user-select: none;
 }
 
 .msg-act-trigger:hover, .msg-act-trigger.active {
-  border-color: #5BD197;
-  color: #1A5336;
-  background: #E6F9F0;
+  border-color: var(--awd-mint);
+  color: var(--awd-accent-text);
+  background: var(--awd-accent-soft);
 }
 
 .msg-act-menu {
   position: absolute;
   left: 16px;
   bottom: calc(100% - 2px);
-  background: #FFFFFF;
-  border: 1px solid #E9ECEF;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.10);
   padding: 4px;
@@ -402,7 +402,7 @@ const hasContent = computed(() => {
 
 .msg-act-item {
   font-size: 12px;
-  color: #2C3338;
+  color: var(--awd-text);
   padding: 6px 10px;
   border-radius: 5px;
   cursor: pointer;
@@ -410,8 +410,8 @@ const hasContent = computed(() => {
 }
 
 .msg-act-item:hover {
-  background: #E6F9F0;
-  color: #1A5336;
+  background: var(--awd-accent-soft);
+  color: var(--awd-accent-text);
 }
 
 .msg-act-mask {
@@ -432,7 +432,7 @@ const hasContent = computed(() => {
 
 /* ---- plan 步骤分组 ---- */
 .step-group {
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid var(--awd-border-subtle);
 }
 
 .step-group-header {
@@ -445,7 +445,7 @@ const hasContent = computed(() => {
 }
 
 .step-group-header:hover {
-  background: #F8F9FA;
+  background: var(--awd-bg);
 }
 
 .step-group-marker {
@@ -457,18 +457,18 @@ const hasContent = computed(() => {
 }
 
 .step-group-marker.done {
-  background: #5BD197;
+  background: var(--awd-mint);
 }
 
 .step-group-marker.error {
-  background: #E74C3C;
+  background: var(--awd-danger);
 }
 
 .step-group-title {
   flex: 1;
   font-size: 12px;
   font-weight: 600;
-  color: #2C3338;
+  color: var(--awd-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -476,15 +476,15 @@ const hasContent = computed(() => {
 
 .step-group-count {
   font-size: 10px;
-  color: #6C757D;
-  background: #F1F3F5;
+  color: var(--awd-text-2);
+  background: var(--awd-surface-2);
   border-radius: 99px;
   padding: 0 6px;
   flex-shrink: 0;
 }
 
 .step-chevron {
-  color: #ADB5BD;
+  color: var(--awd-text-3);
   transition: transform 0.2s ease;
   display: flex;
   align-items: center;
@@ -496,7 +496,7 @@ const hasContent = computed(() => {
 
 .step-group-body {
   padding-left: 10px;
-  border-left: 2px solid #E6F9F0;
+  border-left: 2px solid var(--awd-border);
   margin-left: 14px;
 }
 
@@ -515,21 +515,21 @@ const hasContent = computed(() => {
 
 /* Inline Code Style - Mint Green Tint */
 .main-content:deep(code) {
-  background: rgba(91, 209, 151, 0.1); /* Subtle Mint Green Tint */
+  background: var(--awd-accent-soft); /* Subtle Mint Green Tint */
   padding: 2px 5px;
   border-radius: 4px;
   font-size: 85%;
-  color: #1A5336; /* Forest Green */
+  color: var(--awd-accent-text); /* Forest Green */
   font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
 }
 
 /* Block Code Style */
 .main-content:deep(pre) {
-  background: #F8F9FA; /* Gray-Pale */
+  background: var(--awd-bg); /* Gray-Pale */
   padding: 16px;
   border-radius: 8px;
   overflow-x: auto;
-  border: 1px solid #E9ECEF;
+  border: 1px solid var(--awd-border);
   font-size: 13px;
   margin: 12px 0;
 }
@@ -555,7 +555,7 @@ const hasContent = computed(() => {
   line-height: 1.55;
   margin: 0;
   padding: 0;
-  color: #2C3338;
+  color: var(--awd-text);
 }
 
 /* Headings */
@@ -565,6 +565,6 @@ const hasContent = computed(() => {
   margin-top: 14px !important;
   margin-bottom: 8px !important;
   font-weight: 600;
-  color: #1A5336; /* Forest Green for headings */
+  color: var(--awd-accent-text); /* Forest Green for headings */
 }
 </style>

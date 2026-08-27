@@ -52,7 +52,8 @@
 import { EditorState } from '@codemirror/state'
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
-import { syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language'
+import { syntaxHighlighting, HighlightStyle } from '@codemirror/language'
+import { tags as hlTags } from '@lezer/highlight'
 import { markdown } from '@codemirror/lang-markdown'
 import { javascript } from '@codemirror/lang-javascript'
 import { json } from '@codemirror/lang-json'
@@ -64,6 +65,57 @@ import { getAuthHeaders } from '@/utils/auth.js'
 
 const AUTOSAVE_DELAY = 3000
 const RETRY_DELAY = 15000
+
+// 语法高亮配色：颜色全部走 --awd-* 令牌而非字面色值，深浅色跟随
+// html[data-theme] 的 CSS 变量自动切换——HighlightStyle 生成的也是普通 CSS
+// 规则（style-mod），var() 在其中和在任何别的样式表里一样会被浏览器实时
+// 解析，因此不需要 Compartment.reconfigure 或监听 APP_THEME_EVENT。
+// 角色分工（覆盖本组件实际会加载的 markdown/js/json/html/css 五种语言）：
+//   text-3       注释、meta/注解/处理指令
+//   text / text-2 变量名/属性名等「纯引用」，text-2 再兼顾运算符与标点
+//   accent-text  关键字、HTML/JSX 标签名、Markdown 标题（品牌绿）
+//   accent-hover 定义处与函数调用名（声明/调用的强调色，比关键字深一档）
+//   mint         类型名/类名/命名空间、HTML 属性名（结构性名字，跳出于纯引用）
+//   info-text    数字/布尔/null、CSS 单位与颜色字面量、链接（蓝）
+//   warning-text 字符串、HTML 属性值（暖色）
+//   danger-text  正则/转义序列、非法 token（红，最扎眼，对应「要留意」的语义）
+// 惰性构建：模块级直接调 HighlightStyle.define 会让 plaintext-flush-save
+// 那套「剥掉 import 后 eval <script>」的测试炸在求值阶段（被剥掉的符号只允许
+// 出现在未被调用的方法体里，这是该测试的既有契约）。挂载时才建、建一次。
+let ptxHighlightStyle = null
+function getPtxHighlightStyle() {
+  if (!ptxHighlightStyle) {
+    ptxHighlightStyle = HighlightStyle.define([
+    { tag: [hlTags.comment, hlTags.lineComment, hlTags.blockComment, hlTags.docComment], color: 'var(--awd-text-3)', fontStyle: 'italic' },
+    { tag: [hlTags.keyword, hlTags.controlKeyword, hlTags.moduleKeyword, hlTags.definitionKeyword, hlTags.operatorKeyword, hlTags.self, hlTags.tagName], color: 'var(--awd-accent-text)' },
+    { tag: hlTags.heading, color: 'var(--awd-accent-text)', fontWeight: 'bold' },
+    { tag: [hlTags.string, hlTags.docString, hlTags.character, hlTags.attributeValue], color: 'var(--awd-warning-text)' },
+    { tag: [hlTags.regexp, hlTags.escape, hlTags.special(hlTags.string), hlTags.invalid, hlTags.deleted], color: 'var(--awd-danger-text)' },
+    { tag: [hlTags.number, hlTags.integer, hlTags.float, hlTags.bool, hlTags.atom, hlTags.null, hlTags.unit, hlTags.color], color: 'var(--awd-info-text)' },
+    { tag: [hlTags.link, hlTags.url], color: 'var(--awd-info-text)', textDecoration: 'underline' },
+    {
+      tag: [hlTags.definition(hlTags.variableName), hlTags.definition(hlTags.propertyName), hlTags.function(hlTags.variableName), hlTags.function(hlTags.propertyName)],
+      color: 'var(--awd-accent-hover)'
+    },
+    { tag: [hlTags.typeName, hlTags.className, hlTags.namespace, hlTags.macroName, hlTags.special(hlTags.variableName), hlTags.attributeName], color: 'var(--awd-mint)' },
+    { tag: hlTags.variableName, color: 'var(--awd-text)' },
+    {
+      tag: [
+        hlTags.propertyName, hlTags.operator, hlTags.derefOperator, hlTags.arithmeticOperator, hlTags.logicOperator, hlTags.bitwiseOperator,
+        hlTags.compareOperator, hlTags.updateOperator, hlTags.definitionOperator, hlTags.typeOperator, hlTags.controlOperator,
+        hlTags.punctuation, hlTags.bracket, hlTags.angleBracket, hlTags.squareBracket, hlTags.paren, hlTags.brace
+      ],
+      color: 'var(--awd-text-2)'
+    },
+    { tag: [hlTags.meta, hlTags.documentMeta, hlTags.annotation, hlTags.processingInstruction, hlTags.modifier], color: 'var(--awd-text-3)' },
+    { tag: [hlTags.quote, hlTags.list, hlTags.contentSeparator, hlTags.labelName, hlTags.monospace], color: 'var(--awd-text-2)' },
+    { tag: hlTags.emphasis, fontStyle: 'italic' },
+    { tag: hlTags.strong, fontWeight: 'bold' },
+    { tag: hlTags.strikethrough, textDecoration: 'line-through' }
+  ])
+  }
+  return ptxHighlightStyle
+}
 
 export default {
   name: 'PlainTextEditor',
@@ -181,20 +233,22 @@ export default {
         history(),
         keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
         EditorView.lineWrapping,
-        syntaxHighlighting(defaultHighlightStyle),
+        syntaxHighlighting(getPtxHighlightStyle()),
         EditorView.updateListener.of((update) => {
           if (update.docChanged && !this._applyingRemote) this.onUserEdit()
         }),
+        // 全部走 --awd-* 令牌：背景/文字/gutter 天然跟随 html[data-theme]，
+        // 已打开的编辑器切主题时浏览器直接重算这些 CSS 变量，不需要 reconfigure。
         EditorView.theme({
-          '&': { height: '100%', fontSize: '13px', backgroundColor: '#ffffff' },
+          '&': { height: '100%', fontSize: '13px', backgroundColor: 'var(--awd-surface)', color: 'var(--awd-text)' },
           '.cm-scroller': {
             fontFamily: "'SF Mono', Menlo, Consolas, 'PingFang SC', 'Microsoft YaHei', monospace",
             lineHeight: '1.7'
           },
-          '.cm-content': { padding: '12px 0', caretColor: '#1a5336' },
-          '.cm-gutters': { backgroundColor: '#fafbfc', color: '#9aa0a8', border: 'none', borderRight: '1px solid #f0f1f3' },
-          '.cm-activeLine': { backgroundColor: 'rgba(26, 83, 54, 0.04)' },
-          '.cm-activeLineGutter': { backgroundColor: 'rgba(26, 83, 54, 0.06)' },
+          '.cm-content': { padding: '12px 0', caretColor: 'var(--awd-accent-text)' },
+          '.cm-gutters': { backgroundColor: 'var(--awd-surface-2)', color: 'var(--awd-text-3)', border: 'none', borderRight: '1px solid var(--awd-border-subtle)' },
+          '.cm-activeLine': { backgroundColor: 'var(--awd-accent-wash)' },
+          '.cm-activeLineGutter': { backgroundColor: 'var(--awd-accent-wash)' },
           '&.cm-focused': { outline: 'none' }
         })
       ]
@@ -355,7 +409,7 @@ export default {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: #ffffff;
+  background: var(--awd-surface);
 }
 
 .ptx-bar {
@@ -363,40 +417,40 @@ export default {
   align-items: center;
   gap: 12px;
   padding: 6px 12px;
-  border-bottom: 1px solid #ebedf0;
+  border-bottom: 1px solid var(--awd-border);
   flex-shrink: 0;
 }
 .ptx-name {
   font-size: 12px;
-  color: #1f2329;
+  color: var(--awd-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .ptx-bar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-.ptx-dirty { font-size: 11px; color: #8a5a2b; }
+.ptx-dirty { font-size: 11px; color: var(--awd-warning-text); }
 .ptx-save-failed {
   font-size: 11px;
-  color: #b42318;
-  border: 1px solid #f0c4bf;
-  background: #fdf3f2;
+  color: var(--awd-danger-text);
+  border: 1px solid var(--awd-danger);
+  background: var(--awd-surface);
   border-radius: 4px;
   padding: 2px 8px;
   cursor: pointer;
   user-select: none;
 }
 
-.ptx-toggle { display: flex; border: 1px solid #e3e6ea; border-radius: 5px; overflow: hidden; }
+.ptx-toggle { display: flex; border: 1px solid var(--awd-info-soft); border-radius: 5px; overflow: hidden; }
 .ptx-toggle-btn {
   font-size: 11px;
   padding: 3px 10px;
-  color: #4a5058;
-  background: #fff;
+  color: var(--awd-text);
+  background: var(--awd-surface);
   cursor: pointer;
   user-select: none;
 }
-.ptx-toggle-btn + .ptx-toggle-btn { border-left: 1px solid #e3e6ea; }
-.ptx-toggle-btn.active { background: #e6f9f0; color: #1a5336; }
+.ptx-toggle-btn + .ptx-toggle-btn { border-left: 1px solid var(--awd-info-soft); }
+.ptx-toggle-btn.active { background: var(--awd-accent-soft); color: var(--awd-accent-text); }
 
 .ptx-cm-host {
   flex: 1;
@@ -422,24 +476,24 @@ export default {
   gap: 10px;
   padding: 40px;
 }
-.ptx-status-text { font-size: 13px; color: #4a5058; text-align: center; }
+.ptx-status-text { font-size: 13px; color: var(--awd-text); text-align: center; }
 .ptx-btn {
   padding: 6px 16px;
   font-size: 12px;
   border-radius: 5px;
-  border: 1px solid #e3e6ea;
-  color: #4a5058;
-  background: #fff;
+  border: 1px solid var(--awd-border);
+  color: var(--awd-text);
+  background: var(--awd-surface);
   cursor: pointer;
   user-select: none;
 }
-.ptx-btn:hover { border-color: #c9ced6; background: #fafbfc; }
+.ptx-btn:hover { border-color: var(--awd-info); background: var(--awd-bg); }
 
 /* Markdown 预览排版：与 MarkdownPreview.vue 同一视觉词汇 */
 .markdown-body {
   font-size: 14px;
   line-height: 1.7;
-  color: #2c2c2c;
+  color: var(--awd-text);
   word-wrap: break-word;
   overflow-wrap: break-word;
   user-select: text;
@@ -451,9 +505,9 @@ export default {
   margin-top: 16px;
   margin-bottom: 8px;
   font-weight: 600;
-  color: #1a5336;
+  color: var(--awd-accent-text);
 }
-.markdown-body :deep(h1) { font-size: 20px; border-bottom: 1px solid #e9ecef; padding-bottom: 8px; }
+.markdown-body :deep(h1) { font-size: 20px; border-bottom: 1px solid var(--awd-border); padding-bottom: 8px; }
 .markdown-body :deep(h2) { font-size: 17px; }
 .markdown-body :deep(h3) { font-size: 15px; }
 .markdown-body :deep(p) { margin: 8px 0; }
@@ -461,23 +515,23 @@ export default {
 .markdown-body :deep(ol) { padding-left: 20px; }
 .markdown-body :deep(li) { margin: 4px 0; }
 .markdown-body :deep(code) {
-  background: #f5f5f5;
+  background: var(--awd-surface-2);
   padding: 2px 6px;
   border-radius: 4px;
   font-family: 'Menlo', 'Monaco', monospace;
   font-size: 13px;
 }
-.markdown-body :deep(pre) { background: #f9f9f9; padding: 12px; border-radius: 6px; overflow-x: auto; margin: 12px 0; }
+.markdown-body :deep(pre) { background: var(--awd-surface); padding: 12px; border-radius: 6px; overflow-x: auto; margin: 12px 0; }
 .markdown-body :deep(pre code) { background: none; padding: 0; }
 .markdown-body :deep(blockquote) {
-  border-left: 3px solid #1a5336;
+  border-left: 3px solid var(--awd-accent);
   padding-left: 12px;
   margin: 12px 0;
-  color: #666;
+  color: var(--awd-text-2);
   font-style: italic;
 }
 .markdown-body :deep(table) { width: 100%; border-collapse: collapse; margin: 12px 0; }
 .markdown-body :deep(th),
-.markdown-body :deep(td) { border: 1px solid #e9ecef; padding: 8px 12px; text-align: left; }
-.markdown-body :deep(th) { background: #f5f5f5; font-weight: 600; }
+.markdown-body :deep(td) { border: 1px solid var(--awd-border); padding: 8px 12px; text-align: left; }
+.markdown-body :deep(th) { background: var(--awd-surface-2); font-weight: 600; }
 </style>

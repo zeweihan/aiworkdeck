@@ -45,7 +45,11 @@ test('不自己补齐或排序 fields（服务端保证恒 5 条顺序固定）'
 })
 
 test('行内编辑而不是弹窗（awd-* 样式没有集中定义）', () => {
-  assert.ok(!CODE.includes('awd-'), '不引入 awd-* 类名就不用自带 scoped 副本')
+  // 判据是「不引入 .awd-dialog/.awd-btn 那套类」——它们没有集中定义，用了就得
+  // 自带一份 scoped 副本。颜色令牌 var(--awd-*) 是全局定义的，不在此列
+  // （dev-board#223 起全站颜色都走令牌，原来那条 includes('awd-') 会误伤）。
+  assert.ok(!/class="[^"]*\bawd-/.test(CODE), '不引入 awd-* 类名就不用自带 scoped 副本')
+  assert.ok(!/\.awd-(dialog|btn)/.test(CODE), '不引入 awd-dialog/awd-btn 的样式副本')
   assert.ok(!SRC.includes('uni.showModal'))
 })
 

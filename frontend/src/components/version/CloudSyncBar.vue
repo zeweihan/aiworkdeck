@@ -74,18 +74,18 @@ export default {
    被别的内容盖住，真实点击落空）。 */
 .cloud-bar {
   display: flex; align-items: center; flex-wrap: wrap; gap: 12rpx;
-  padding: 16rpx 20rpx; border-bottom: 1px solid #eee;
+  padding: 16rpx 20rpx; border-bottom: 1px solid var(--awd-border);
 }
-.cloud-text { font-size: 26rpx; color: #333; flex: 1; min-width: 200rpx; }
-.cloud-unlinked { color: #666; }
+.cloud-text { font-size: 26rpx; color: var(--awd-text); flex: 1; min-width: 200rpx; }
+.cloud-unlinked { color: var(--awd-text-2); }
 .cloud-open-link {
-  font-size: 23rpx; color: #12344D; text-decoration: underline; flex-shrink: 0;
+  font-size: 23rpx; color: var(--awd-text); text-decoration: underline; flex-shrink: 0;
 }
 
 .cloud-dot {
-  width: 14rpx; height: 14rpx; border-radius: 50%; background: #C8A45D; flex-shrink: 0;
+  width: 14rpx; height: 14rpx; border-radius: 50%; background: var(--awd-warning); flex-shrink: 0;
 }
-.cloud-dot-yellow { background: #C8A45D; }
-.cloud-dot-blue { background: #3E7CB1; }
-.cloud-dot-green { background: #4C9A6A; }
+.cloud-dot-yellow { background: var(--awd-warning); }
+.cloud-dot-blue { background: var(--awd-info); }
+.cloud-dot-green { background: var(--awd-accent); }
 </style>

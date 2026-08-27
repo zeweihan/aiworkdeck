@@ -76,14 +76,14 @@ export default {
 <style scoped>
 .conv-hint {
   font-size: 13px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 .conv-guide-title {
   display: block;
   font-size: 13px;
   font-weight: 600;
-  color: #2C3338;
+  color: var(--awd-text);
 }
 
 .conv-guide-desc {
@@ -91,20 +91,20 @@ export default {
   margin-top: 4px;
   font-size: 12px;
   line-height: 19px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 .conv-card {
   padding: 10px 12px;
   margin-bottom: 8px;
-  background: #F8F9FA;
-  border: 1px solid #E9ECEF;
+  background: var(--awd-bg);
+  border: 1px solid var(--awd-border);
   border-radius: 4px;
   cursor: pointer;
 }
 
 .conv-card:hover {
-  border-color: #5BD197;
+  border-color: var(--awd-mint);
 }
 
 .conv-card-head {
@@ -118,7 +118,7 @@ export default {
   min-width: 0;
   font-size: 13px;
   font-weight: 600;
-  color: #2C3338;
+  color: var(--awd-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -127,19 +127,19 @@ export default {
 .conv-status {
   flex: none;
   font-size: 11px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 .conv-status.dot-running {
-  color: #1A5336;
+  color: var(--awd-accent-text);
 }
 
 .conv-status.dot-attention {
-  color: #8A6D1D;
+  color: var(--awd-warning-text);
 }
 
 .conv-status.dot-error {
-  color: #E74C3C;
+  color: var(--awd-danger-text);
 }
 
 .conv-preview {
@@ -147,26 +147,26 @@ export default {
   margin-top: 4px;
   font-size: 12px;
   line-height: 18px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 .conv-meta {
   display: block;
   margin-top: 4px;
   font-size: 11px;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
 }
 
 .conv-more {
   padding: 8px 0;
   text-align: center;
   font-size: 12px;
-  color: #1A5336;
+  color: var(--awd-accent-text);
   cursor: pointer;
 }
 
 .conv-more-busy {
-  color: #6C757D;
+  color: var(--awd-text-2);
   cursor: default;
 }
 

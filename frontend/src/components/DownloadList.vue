@@ -228,7 +228,7 @@ const clearAll = () => {
 <style scoped>
 .download-area {
   padding: 16px;
-  background: #ffffff;
+  background: var(--awd-surface);
   border-radius: 8px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
   margin-top: 20px;
@@ -236,14 +236,14 @@ const clearAll = () => {
 
 .download-header {
   padding-bottom: 12px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--awd-border-subtle);
   position: relative;
 }
 
 .header-title {
   font-size: 16px;
   font-weight: 500;
-  color: #303133;
+  color: var(--awd-text);
 }
 .header-title-tips {
   position: absolute;
@@ -267,11 +267,11 @@ const clearAll = () => {
 }
 
 .download-item:hover {
-  background: #f5f7fa;
+  background: var(--awd-surface-2);
 }
 
 .download-item.downloading {
-  background: #e6f7ff;
+  background: var(--awd-bg);
 }
 
 .file-info {
@@ -283,7 +283,7 @@ const clearAll = () => {
 }
 
 .filename {
-  color: #606266;
+  color: var(--awd-text-2);
   font-size: 14px;
   max-width: 400px;
   overflow: hidden;
@@ -292,7 +292,7 @@ const clearAll = () => {
 }
 
 .file-size {
-  color: #909399;
+  color: var(--awd-text-3);
   font-size: 12px;
   flex-shrink: 0;
 }
@@ -305,13 +305,13 @@ const clearAll = () => {
 
 .delete-icon {
   font-size: 18px;
-  color: #909399;
+  color: var(--awd-text-3);
   cursor: pointer;
   transition: color 0.3s;
 }
 
 .delete-icon:hover {
-  color: #f56c6c;
+  color: var(--awd-danger-text);
 }
 
 .batch-actions {
@@ -319,7 +319,7 @@ const clearAll = () => {
   justify-content: flex-end;
   gap: 8px;
   padding-top: 12px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--awd-border-subtle);
 }
 /* 按钮样式优化 */
 .play-button {

@@ -551,12 +551,12 @@ export default {
   margin: 8px 10px 6px;
   height: 28px;
   padding: 0 8px;
-  background: #fff;
-  border: 1px solid #E9ECEF;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
 
   &:focus-within {
-    border-color: #5BD197;
+    border-color: var(--awd-mint);
     box-shadow: 0 0 0 2px rgba(91, 209, 151, 0.15);
   }
 }
@@ -564,7 +564,7 @@ export default {
 .msb-search-icon {
   width: 13px;
   height: 13px;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
   flex-shrink: 0;
 }
 
@@ -572,7 +572,7 @@ export default {
   flex: 1;
   min-width: 0;
   font-size: 12px;
-  color: #2C3338;
+  color: var(--awd-text);
   background: transparent;
   border: none;
   outline: none;
@@ -586,13 +586,13 @@ export default {
   line-height: 15px;
   text-align: center;
   border-radius: 4px;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
   font-size: 13px;
   cursor: pointer;
 
   &:hover {
-    background: #F1F3F5;
-    color: #2C3338;
+    background: var(--awd-surface-2);
+    color: var(--awd-text);
   }
 }
 
@@ -612,14 +612,14 @@ export default {
   user-select: none;
 
   &:hover {
-    background: rgba(26, 83, 54, 0.04);
+    background: var(--awd-accent-wash);
   }
 }
 
 .msb-sec-chevron {
   width: 12px;
   font-size: 12px;
-  color: #868E96;
+  color: var(--awd-text-2);
   transition: transform 0.12s ease;
   transform-origin: center;
 
@@ -632,13 +632,13 @@ export default {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
-  color: #495057;
+  color: var(--awd-text-2);
 }
 
 .msb-sec-count {
   font-size: 10px;
-  color: #868E96;
-  background: #F1F3F5;
+  color: var(--awd-text-2);
+  background: var(--awd-surface-2);
   border-radius: 999px;
   padding: 0 6px;
   line-height: 14px;
@@ -656,12 +656,12 @@ export default {
   align-items: center;
   justify-content: center;
   border-radius: 4px;
-  color: #868E96;
+  color: var(--awd-text-2);
   cursor: pointer;
 
   &:hover {
-    background: #E8F3ED;
-    color: #1A5336;
+    background: var(--awd-accent-soft);
+    color: var(--awd-accent-text);
   }
 }
 
@@ -701,39 +701,39 @@ export default {
     font-size: 10.5px;
     font-weight: 600;
     letter-spacing: 0.03em;
-    color: #868E96;
+    color: var(--awd-text-2);
   }
 
   &:hover {
-    background: rgba(26, 83, 54, 0.05);
+    background: var(--awd-accent-wash);
   }
 
   &.active {
-    background: #E8F3ED;
+    background: var(--awd-accent-soft);
 
     text {
-      color: #1A5336;
+      color: var(--awd-accent-text);
     }
   }
 }
 
 .msb-tab-count {
   font-size: 9.5px;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
 }
 
 .msb-tab.active .msb-tab-count {
-  color: #1A5336;
+  color: var(--awd-accent-text);
   opacity: 0.7;
 }
 
 .msb-empty {
   padding: 8px 12px 10px 22px;
   font-size: 11px;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
 
   &.msb-error {
-    color: #B4552D;
+    color: var(--awd-danger-text);
   }
 }
 
@@ -746,7 +746,7 @@ export default {
   cursor: pointer;
 
   &:hover {
-    background: rgba(26, 83, 54, 0.05);
+    background: var(--awd-accent-wash);
   }
 }
 
@@ -756,11 +756,11 @@ export default {
   flex-shrink: 0;
   margin-top: 1px;
   border-radius: 6px;
-  background: #E8F3ED;
+  background: var(--awd-accent-soft);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #1A5336;
+  color: var(--awd-accent-text);
 
   svg {
     width: 14px;
@@ -769,8 +769,8 @@ export default {
 
   /* 插件 = 可执行扩展：深底图标与 Skill（浅底）一眼区分 */
   &.is-plugin {
-    background: #123A26;
-    color: #fff;
+    background: var(--awd-accent-hover);
+    color: var(--awd-text-on-accent);
   }
 }
 
@@ -785,7 +785,7 @@ export default {
 .msb-row-name {
   font-size: 12.5px;
   font-weight: 600;
-  color: #2C3338;
+  color: var(--awd-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -794,7 +794,7 @@ export default {
 .msb-row-desc {
   font-size: 11px;
   line-height: 15px;
-  color: #6C757D;
+  color: var(--awd-text-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -802,7 +802,7 @@ export default {
 
 .msb-row-meta {
   font-size: 10px;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -815,18 +815,18 @@ export default {
   line-height: 18px;
   padding: 0 8px;
   border-radius: 4px;
-  background: #1A5336;
-  border: 1px solid #1A5336;
+  background: var(--awd-accent);
+  border: 1px solid var(--awd-accent);
   cursor: pointer;
 
   text {
     font-size: 10px;
     font-weight: 600;
-    color: #fff;
+    color: var(--awd-text-on-accent);
   }
 
   &:hover {
-    background: #123A26;
+    background: var(--awd-accent-hover);
   }
 
   &.busy {
@@ -836,15 +836,15 @@ export default {
 
   /* 付费未购：描边而非实心，与「安装」区分开——点它去的是官网，不是本机动作 */
   &.buy {
-    background: #fff;
-    border-color: #1A5336;
+    background: var(--awd-surface);
+    border-color: var(--awd-accent);
 
     text {
-      color: #1A5336;
+      color: var(--awd-accent-text);
     }
 
     &:hover {
-      background: #E8F3ED;
+      background: var(--awd-accent-soft);
     }
   }
 }
@@ -857,44 +857,44 @@ export default {
   border-radius: 999px;
 
   &.ok {
-    background: #E8F3ED;
+    background: var(--awd-accent-soft);
 
     text {
-      color: #1A5336;
+      color: var(--awd-accent-text);
       font-size: 10px;
     }
   }
 
   &.off {
-    background: #F1F3F5;
+    background: var(--awd-surface-2);
 
     text {
-      color: #868E96;
+      color: var(--awd-text-2);
       font-size: 10px;
     }
   }
 
   /* 未连接账户：与顶栏「试用版」chip 同一族暖色，是引导不是报错 */
   &.need {
-    background: #FDF7EC;
+    background: var(--awd-bg);
     cursor: pointer;
 
     text {
-      color: #8A6D2F;
+      color: var(--awd-warning-text);
       font-size: 10px;
     }
 
     &:hover {
-      background: #F7EBD5;
+      background: var(--awd-bg);
     }
   }
 
   /* 资源包下载中：与 .need 同一族暖色（都是「还没就绪」），不可点 */
   &.downloading {
-    background: #FDF7EC;
+    background: var(--awd-warning-soft);
 
     text {
-      color: #8A6D2F;
+      color: var(--awd-warning-text);
       font-size: 10px;
     }
   }

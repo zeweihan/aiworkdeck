@@ -59,7 +59,7 @@
   cursor: pointer;
 
   &:hover {
-    background: rgba(26, 83, 54, 0.08);
+    background: var(--awd-accent-soft);
   }
 }
 
@@ -79,7 +79,7 @@
   border-radius: var(--awd-panel-radius);
   font-size: var(--awd-panel-fs);
   color: var(--awd-panel-text);
-  background: #fff;
+  background: var(--awd-surface);
   box-sizing: border-box;
 
   &::placeholder {
@@ -103,11 +103,11 @@
 }
 
 .pcp-quick-btn-primary {
-  color: #fff;
+  color: var(--awd-text-on-accent);
   background: var(--awd-panel-accent);
 
   &:hover {
-    background: #164229;
+    background: var(--awd-accent-hover);
   }
 }
 
@@ -250,7 +250,7 @@
   border-radius: var(--awd-panel-radius);
   font-size: var(--awd-panel-fs-meta);
   color: var(--awd-panel-text-2);
-  background: #fff;
+  background: var(--awd-surface);
   border: 1px solid var(--awd-panel-border);
   cursor: pointer;
 
@@ -260,10 +260,10 @@
 }
 
 .pcp-action-btn-danger {
-  color: #C0392B;
+  color: var(--awd-danger-text);
 
   &:hover {
-    border-color: #C0392B;
+    border-color: var(--awd-danger);
   }
 }
 

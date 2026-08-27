@@ -27,7 +27,7 @@ export default {
 
 <style lang="scss" scoped>
 .panel-placeholder {
-  background: #FFFFFF;
+  background: var(--awd-surface);
   border-radius: 12px;
   min-height: 400px;
   display: flex;
@@ -40,6 +40,6 @@ export default {
   width: 40px;
   height: 40px;
   flex-shrink: 0;
-  color: #C9D4CE;
+  color: var(--awd-text-3);
 }
 </style>

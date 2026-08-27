@@ -110,10 +110,6 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-$brand-white: #FFFFFF;
-$text-main: #2C3338;
-$text-secondary: #6C757D;
-$text-light: #ADB5BD;
 
 .panel-favorites {
   width: 100%;
@@ -130,9 +126,9 @@ $text-light: #ADB5BD;
 .favorite-card {
   display: flex;
   gap: 10px;
-  background: $brand-white;
+  background: var(--awd-surface);
   border-radius: 8px;
-  border: 1px solid rgba(224, 224, 224, 0.7);
+  border: 1px solid var(--awd-border);
   padding: 10px 12px;
   min-width: 0;
 }
@@ -147,7 +143,7 @@ $text-light: #ADB5BD;
   width: 88px;
   height: 66px;
   border-radius: 6px;
-  border: 1px solid rgba(224, 224, 224, 0.7);
+  border: 1px solid var(--awd-border);
   display: block;
 }
 
@@ -168,7 +164,7 @@ $text-light: #ADB5BD;
 .favorite-title {
   font-size: 13px;
   font-weight: 600;
-  color: $text-main;
+  color: var(--awd-text);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -181,7 +177,7 @@ $text-light: #ADB5BD;
 
 .url-text {
   font-size: 11px;
-  color: $text-light;
+  color: var(--awd-text-3);
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -194,7 +190,7 @@ $text-light: #ADB5BD;
 
 .content-text {
   font-size: 12px;
-  color: $text-secondary;
+  color: var(--awd-text-2);
   line-height: 1.5;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -212,13 +208,13 @@ $text-light: #ADB5BD;
 
 .time-text {
   font-size: 11px;
-  color: $text-light;
+  color: var(--awd-text-3);
 }
 
 .empty-icon {
   width: 40px;
   height: 40px;
   flex-shrink: 0;
-  color: #C9D4CE;
+  color: var(--awd-text-3);
 }
 </style>

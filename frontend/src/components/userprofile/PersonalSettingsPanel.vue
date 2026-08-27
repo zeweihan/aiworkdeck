@@ -609,15 +609,11 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-$brand-primary: #1A5336;
 $brand-dark: #212629;
-$brand-white: #FFFFFF;
-$text-main: #2C3338;
 $text-secondary: #6C757D;
-$border-color: #E9ECEF;
 
 .panel-settings {
-  background: $brand-white;
+  background: var(--awd-surface);
   border-radius: 12px;
   padding: 32px;
   box-shadow: 0 2px 12px rgba(18, 52, 77, 0.04);
@@ -628,10 +624,10 @@ $border-color: #E9ECEF;
   display: block;
   font-size: 16px;
   font-weight: 600;
-  color: $text-main;
+  color: var(--awd-text);
   margin-bottom: 24px;
   padding-left: 12px;
-  border-left: 4px solid $brand-primary;
+  border-left: 4px solid var(--awd-accent);
 }
 
 .form-group {
@@ -646,7 +642,7 @@ $border-color: #E9ECEF;
   display: flex;
   align-items: center;
   padding: 16px 0;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--awd-border-subtle);
 
   &:last-child {
     border-bottom: none;
@@ -656,12 +652,12 @@ $border-color: #E9ECEF;
 .form-label {
   width: 100px;
   font-size: 14px;
-  color: $text-secondary;
+  color: var(--awd-text-2);
 }
 
 .form-value {
   font-size: 14px;
-  color: $text-main;
+  color: var(--awd-text);
   font-weight: 500;
 }
 
@@ -693,17 +689,17 @@ $border-color: #E9ECEF;
     align-items: center;
     gap: 8px;
     padding: 8px 16px;
-    border: 1px solid $border-color;
+    border: 1px solid var(--awd-border);
     border-radius: 999px;
-    background: #fff;
+    background: var(--awd-surface);
     cursor: pointer;
     transition: all 0.2s;
 
-    &:hover { border-color: $brand-primary; }
+    &:hover { border-color: var(--awd-accent); }
 
     &.checked {
-        border-color: $brand-primary;
-        background: rgba(26, 83, 54, 0.06);
+        border-color: var(--awd-accent);
+        background: var(--awd-accent-wash);
     }
 }
 
@@ -711,25 +707,25 @@ $border-color: #E9ECEF;
     width: 14px;
     height: 14px;
     border-radius: 50%;
-    border: 1px solid #c8d0cc;
+    border: 1px solid var(--awd-border-strong);
     box-sizing: border-box;
     flex-shrink: 0;
 }
 
 .lang-item.checked .lang-dot {
-    border: 4px solid $brand-primary;
-    background: #fff;
+    border: 4px solid var(--awd-accent);
+    background: var(--awd-surface);
 }
 
 .lang-label {
     font-size: 14px;
-    color: $text-main;
+    color: var(--awd-text);
 }
 
 .btn-logout-settings {
-    background: #fff;
-    border: 1px solid $border-color;
-    color: $text-secondary;
+    background: var(--awd-surface);
+    border: 1px solid var(--awd-border);
+    color: var(--awd-text-2);
     height: 44px;
     line-height: 42px; /* Adjust for border */
     border-radius: 8px;
@@ -741,14 +737,14 @@ $border-color: #E9ECEF;
 
     &:hover {
         border-color: $text-secondary;
-        color: $text-main;
-        background: #fafafa;
+        color: var(--awd-text);
+        background: var(--awd-bg);
     }
 }
 
 /* 手机号 / 邮箱 / 认证器绑定 */
 .bind-link {
-    color: $brand-primary;
+    color: var(--awd-accent-text);
     font-size: 13px;
     margin-left: 12px;
     cursor: pointer;
@@ -756,26 +752,26 @@ $border-color: #E9ECEF;
 .bind-phone-form {
     margin-top: 8px;
     padding-top: 8px;
-    border-top: 1px dashed $border-color;
+    border-top: 1px dashed var(--awd-border);
 }
 .bind-input {
     flex: 1;
     height: 36px;
-    border: 1px solid $border-color;
+    border: 1px solid var(--awd-border);
     border-radius: 6px;
     padding: 0 10px;
     font-size: 13px;
-    background: #fff;
+    background: var(--awd-surface);
 }
 .btn-send-code {
     height: 36px;
     line-height: 34px;
     margin-left: 8px;
     padding: 0 12px;
-    border: 1px solid $border-color;
+    border: 1px solid var(--awd-border);
     border-radius: 6px;
-    background: #fff;
-    color: $text-main;
+    background: var(--awd-surface);
+    color: var(--awd-text);
     font-size: 13px;
     cursor: pointer;
 
@@ -794,8 +790,8 @@ $border-color: #E9ECEF;
     line-height: 36px;
     padding: 0 18px;
     border-radius: 6px;
-    background: $brand-primary;
-    color: #fff;
+    background: var(--awd-accent);
+    color: var(--awd-text-on-accent);
     font-size: 13px;
     cursor: pointer;
 }
@@ -803,7 +799,7 @@ $border-color: #E9ECEF;
     display: block;
     margin-top: 8px;
     font-size: 12px;
-    color: $text-secondary;
+    color: var(--awd-text-2);
 }
 .token-info {
     flex: 1;
@@ -812,19 +808,19 @@ $border-color: #E9ECEF;
 }
 .token-name {
     font-size: 14px;
-    color: $text-main;
+    color: var(--awd-text);
     font-weight: 500;
 }
 .token-meta {
     margin-top: 2px;
     font-size: 12px;
-    color: $text-secondary;
+    color: var(--awd-text-2);
 }
 .totp-qr {
     width: 180px;
     margin: 10px 0;
-    background: #fff;
-    border: 1px solid $border-color;
+    background: var(--awd-surface);
+    border: 1px solid var(--awd-border);
     border-radius: 6px;
 }
 .totp-secret {
@@ -832,7 +828,7 @@ $border-color: #E9ECEF;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 13px;
     letter-spacing: 1px;
-    color: $text-main;
+    color: var(--awd-text);
     word-break: break-all;
     user-select: text;
 }

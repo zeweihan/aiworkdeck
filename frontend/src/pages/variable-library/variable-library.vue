@@ -450,7 +450,7 @@ export default {
 }
 
 .variable-card {
-  background-color: #ffffff;
+  background-color: var(--awd-surface);
   border-radius: 12rpx;
   border-width: 1rpx;
   border-style: solid;
@@ -534,7 +534,7 @@ export default {
 .group-title {
   font-size: 28rpx;
   font-weight: 500;
-  color: #333;
+  color: var(--awd-text);
   padding-left: 12rpx;
   border-left: 4rpx solid $uni-color-primary;
 }

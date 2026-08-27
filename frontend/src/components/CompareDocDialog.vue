@@ -151,7 +151,7 @@ export default {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--awd-overlay);
   z-index: 9999;
   display: flex;
   align-items: center;
@@ -159,7 +159,7 @@ export default {
 }
 
 .compare-dialog {
-  background: #fff;
+  background: var(--awd-surface);
   border-radius: 12px;
   width: 400px;
   max-width: 90vw;
@@ -172,26 +172,26 @@ export default {
   align-items: center;
   justify-content: space-between;
   padding: 16px 20px;
-  border-bottom: 1px solid #e5e7eb;
-  background: #f9fafb;
+  border-bottom: 1px solid var(--awd-border);
+  background: var(--awd-bg);
 }
 
 .dialog-title {
   font-size: 16px;
   font-weight: 600;
-  color: #111827;
+  color: var(--awd-text);
 }
 
 .dialog-close {
   font-size: 24px;
-  color: #9ca3af;
+  color: var(--awd-text-3);
   cursor: pointer;
   line-height: 1;
   padding: 4px;
 }
 
 .dialog-close:hover {
-  color: #6b7280;
+  color: var(--awd-text-2);
 }
 
 .dialog-body {
@@ -201,7 +201,7 @@ export default {
 .dialog-desc {
   display: block;
   font-size: 13px;
-  color: #6b7280;
+  color: var(--awd-text-2);
   margin-bottom: 20px;
   line-height: 1.5;
 }
@@ -213,8 +213,8 @@ export default {
 }
 
 .doc-item {
-  background: #f9fafb;
-  border: 1px solid #e5e7eb;
+  background: var(--awd-bg);
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   padding: 14px;
 }
@@ -236,7 +236,7 @@ export default {
 .label-text {
   font-size: 13px;
   font-weight: 500;
-  color: #374151;
+  color: var(--awd-text);
 }
 
 .doc-options {
@@ -250,21 +250,21 @@ export default {
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  background: #fff;
-  border: 1px solid #e5e7eb;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.15s;
 }
 
 .doc-option:hover:not(.disabled) {
-  border-color: #3b82f6;
-  background: #eff6ff;
+  border-color: var(--awd-info);
+  background: var(--awd-info-soft);
 }
 
 .doc-option.selected {
-  border-color: #3b82f6;
-  background: #eff6ff;
+  border-color: var(--awd-info);
+  background: var(--awd-info-soft);
 }
 
 .doc-option.disabled {
@@ -276,13 +276,13 @@ export default {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  border: 2px solid #d1d5db;
+  border: 2px solid var(--awd-border-strong);
   transition: all 0.15s;
   position: relative;
 }
 
 .option-radio.checked {
-  border-color: #3b82f6;
+  border-color: var(--awd-info);
 }
 
 .option-radio.checked::after {
@@ -294,16 +294,16 @@ export default {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #3b82f6;
+  background: var(--awd-surface-3);
 }
 
 .option-radio.disabled {
-  border-color: #e5e7eb;
+  border-color: var(--awd-border);
 }
 
 .option-name {
   font-size: 13px;
-  color: #374151;
+  color: var(--awd-text);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -311,7 +311,7 @@ export default {
 }
 
 .option-name.disabled {
-  color: #9ca3af;
+  color: var(--awd-text-3);
 }
 
 .doc-arrow {
@@ -319,14 +319,14 @@ export default {
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  color: #9ca3af;
+  color: var(--awd-text-3);
   font-size: 14px;
   padding: 4px 0;
 }
 
 .arrow-label {
   font-size: 11px;
-  color: #9ca3af;
+  color: var(--awd-text-3);
 }
 
 .dialog-footer {
@@ -334,43 +334,43 @@ export default {
   justify-content: flex-end;
   gap: 12px;
   padding: 16px 20px;
-  border-top: 1px solid #e5e7eb;
-  background: #f9fafb;
+  border-top: 1px solid var(--awd-border);
+  background: var(--awd-bg);
 }
 
 .btn-cancel {
   padding: 8px 20px;
-  background: #fff;
-  border: 1px solid #d1d5db;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border-strong);
   border-radius: 6px;
   font-size: 14px;
-  color: #374151;
+  color: var(--awd-text);
   cursor: pointer;
   transition: all 0.15s;
 }
 
 .btn-cancel:hover {
-  background: #f9fafb;
+  background: var(--awd-bg);
   border-color: #9ca3af;
 }
 
 .btn-confirm {
   padding: 8px 20px;
-  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  background: linear-gradient(135deg, var(--awd-info) 0%, var(--awd-info) 100%);
   border: none;
   border-radius: 6px;
   font-size: 14px;
-  color: #fff;
+  color: var(--awd-text-on-accent);
   cursor: pointer;
   transition: all 0.15s;
 }
 
 .btn-confirm:hover:not(.disabled) {
-  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  background: linear-gradient(135deg, var(--awd-info) 0%, var(--awd-info) 100%);
 }
 
 .btn-confirm.disabled {
-  background: #d1d5db;
+  background: var(--awd-info);
   cursor: not-allowed;
 }
 </style>

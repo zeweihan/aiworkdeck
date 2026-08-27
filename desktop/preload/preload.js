@@ -191,6 +191,12 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
   appLanguage: {
     set: (lang) => ipcRenderer.send('checkba:app-language', lang)
   },
+  // 外观主题（light/dark/system）：渲染层是权威源，推给主进程去设 nativeTheme，
+  // 原生标题栏/交通灯/右键菜单随之一致（dev-board#218/#223）。
+  // 回执带上系统当前是否深色——system 态下渲染层的 matchMedia 可能还没同步。
+  theme: {
+    set: (mode) => ipcRenderer.invoke('checkba:set-theme', mode)
+  },
   // Epic #43: embedded LibreOffice editor <webview> wiring. getEditor() returns
   // { url, preload, partition } for the host to mount the webview.
   // （onOpenEmbed / ⌘⇧O 覆盖层已移除：内联编辑器就是产品默认。）

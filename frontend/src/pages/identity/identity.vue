@@ -2,7 +2,7 @@
   <!-- 本机工作区选择：仅当本机有多个都带数据的历史账号时出现一次，选完即持久化 -->
   <view class="identity-page">
     <view class="identity-card">
-      <image class="identity-logo" src="/static/logo_full_v2.png" mode="heightFix" />
+      <image class="identity-logo awd-brand-logo" src="/static/logo_full_v2.png" mode="heightFix" />
       <text class="identity-title">{{ $t('onboarding.identity.title') }}</text>
       <text class="identity-subtitle">{{ $t('onboarding.identity.subtitle') }}</text>
 
@@ -103,7 +103,7 @@ export default {
 .identity-page {
   width: 100vw;
   height: 100vh;
-  background: #f8f9fa;
+  background: var(--awd-bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -113,8 +113,8 @@ export default {
   width: 420px;
   max-height: 84vh;
   padding: 36px 32px 30px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 14px;
   display: flex;
   flex-direction: column;
@@ -129,14 +129,14 @@ export default {
 .identity-title {
   font-size: 17px;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--awd-text);
 }
 
 .identity-subtitle {
   margin-top: 10px;
   font-size: 12px;
   line-height: 19px;
-  color: #64748b;
+  color: var(--awd-text-2);
   text-align: center;
 }
 
@@ -150,7 +150,7 @@ export default {
 
 .identity-hint-text {
   font-size: 13px;
-  color: #94a3b8;
+  color: var(--awd-text-3);
 }
 
 .identity-list {
@@ -165,19 +165,19 @@ export default {
 
 .identity-item {
   padding: 12px 14px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--awd-border);
   border-radius: 10px;
-  background: #ffffff;
+  background: var(--awd-surface);
   cursor: pointer;
 
   &:hover {
-    border-color: #cbd5e1;
-    background: #f8fafc;
+    border-color: var(--awd-border-strong);
+    background: var(--awd-surface);
   }
 
   &.is-active {
-    border-color: #1a5336;
-    background: #f1f7f3;
+    border-color: var(--awd-accent);
+    background: var(--awd-bg);
   }
 }
 
@@ -190,19 +190,19 @@ export default {
 .identity-name {
   font-size: 14px;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--awd-text);
 }
 
 .identity-username {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--awd-text-3);
 }
 
 .identity-meta {
   display: block;
   margin-top: 4px;
   font-size: 12px;
-  color: #64748b;
+  color: var(--awd-text-2);
 }
 
 .identity-btn {
@@ -211,18 +211,18 @@ export default {
   line-height: 36px;
   margin-top: 20px;
   font-size: 13px;
-  color: #ffffff;
-  background: #1a5336;
+  color: var(--awd-text-on-accent);
+  background: var(--awd-accent);
   border: none;
   border-radius: 8px;
   cursor: pointer;
 
   &:hover {
-    background: #14422b;
+    background: var(--awd-accent-hover);
   }
 
   &[disabled] {
-    background: #cbd5e1;
+    background: var(--awd-surface-3);
     cursor: default;
   }
 }
@@ -232,9 +232,9 @@ export default {
   line-height: 32px;
   padding: 0 24px;
   font-size: 13px;
-  color: #1a5336;
-  background: #ffffff;
-  border: 1px solid #cbd5e1;
+  color: var(--awd-accent-text);
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border-strong);
   border-radius: 8px;
   cursor: pointer;
 }
@@ -243,7 +243,7 @@ export default {
   margin-top: 12px;
   font-size: 12px;
   line-height: 18px;
-  color: #dc2626;
+  color: var(--awd-danger-text);
   text-align: center;
 }
 </style>

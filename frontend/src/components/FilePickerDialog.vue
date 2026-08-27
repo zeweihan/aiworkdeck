@@ -133,7 +133,7 @@ export default {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--awd-overlay);
   z-index: 9999;
   display: flex;
   align-items: center;
@@ -141,7 +141,7 @@ export default {
 }
 
 .file-picker-dialog {
-  background: #fff;
+  background: var(--awd-surface);
   border-radius: 12px;
   width: 500px;
   max-width: 90vw;
@@ -157,27 +157,27 @@ export default {
   align-items: center;
   justify-content: space-between;
   padding: 16px 20px;
-  border-bottom: 1px solid #e5e7eb;
-  background: #f9fafb;
+  border-bottom: 1px solid var(--awd-border);
+  background: var(--awd-bg);
   flex-shrink: 0;
 }
 
 .dialog-title {
   font-size: 16px;
   font-weight: 600;
-  color: #111827;
+  color: var(--awd-text);
 }
 
 .dialog-close {
   font-size: 24px;
-  color: #9ca3af;
+  color: var(--awd-text-3);
   cursor: pointer;
   line-height: 1;
   padding: 4px;
 }
 
 .dialog-close:hover {
-  color: #6b7280;
+  color: var(--awd-text-2);
 }
 
 .dialog-body {
@@ -191,13 +191,13 @@ export default {
 .file-tree-container {
   flex: 1;
   overflow-y: auto;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--awd-border);
 }
 
 .selected-file-info {
     padding: 12px 20px;
-    background: #f9fafb;
-    border-top: 1px solid #e5e7eb;
+    background: var(--awd-bg);
+    border-top: 1px solid var(--awd-border);
     display: flex;
     align-items: center;
     gap: 8px;
@@ -206,13 +206,13 @@ export default {
 
 .info-label {
     font-size: 13px;
-    color: #6b7280;
+    color: var(--awd-text-2);
 }
 
 .info-name {
     font-size: 13px;
     font-weight: 500;
-    color: #111827;
+    color: var(--awd-text);
 }
 
 .dialog-footer {
@@ -220,34 +220,34 @@ export default {
   justify-content: flex-end;
   gap: 12px;
   padding: 16px 20px;
-  border-top: 1px solid #e5e7eb;
-  background: #fff;
+  border-top: 1px solid var(--awd-border);
+  background: var(--awd-surface);
   flex-shrink: 0;
 }
 
 .btn-cancel {
   padding: 8px 20px;
-  background: #fff;
-  border: 1px solid #d1d5db;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border-strong);
   border-radius: 6px;
   font-size: 14px;
-  color: #374151;
+  color: var(--awd-text);
   cursor: pointer;
   transition: all 0.15s;
 }
 
 .btn-cancel:hover {
-  background: #f9fafb;
+  background: var(--awd-bg);
   border-color: #9ca3af;
 }
 
 .btn-confirm {
   padding: 8px 20px;
-  background: linear-gradient(135deg, #1A5336 0%, #14402a 100%); /* AI WorkDeck Green */
+  background: linear-gradient(135deg, var(--awd-accent) 0%, var(--awd-accent-hover) 100%); /* AI WorkDeck Green */
   border: none;
   border-radius: 6px;
   font-size: 14px;
-  color: #fff;
+  color: var(--awd-text-on-accent);
   cursor: pointer;
   transition: all 0.15s;
 }
@@ -257,7 +257,7 @@ export default {
 }
 
 .btn-confirm.disabled {
-  background: #d1d5db;
+  background: var(--awd-surface-3);
   cursor: not-allowed;
 }
 </style>

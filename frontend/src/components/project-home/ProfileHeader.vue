@@ -150,8 +150,8 @@ export default {
 
 <style scoped>
 .profile-header {
-  background: #FFFFFF;
-  border: 1px solid #E9ECEF;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   padding: 18px 20px;
 }
@@ -160,15 +160,15 @@ export default {
   display: block;
   font-size: 20px;
   font-weight: 600;
-  color: #1A5336;
+  color: var(--awd-accent-text);
   line-height: 28px;
 }
 
 .profile-guide {
   margin-top: 12px;
   padding: 12px 14px;
-  background: #F8F9FA;
-  border-left: 3px solid #5BD197;
+  background: var(--awd-bg);
+  border-left: 3px solid var(--awd-mint);
   border-radius: 4px;
 }
 
@@ -176,22 +176,22 @@ export default {
   display: block;
   font-size: 12px;
   line-height: 19px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 .profile-guide-btn {
   display: inline-block;
   margin-top: 10px;
   padding: 5px 14px;
-  background: #1A5336;
-  color: #FFFFFF;
+  background: var(--awd-accent);
+  color: var(--awd-text-on-accent);
   border-radius: 4px;
   font-size: 12px;
   cursor: pointer;
 }
 
 .profile-guide-btn:hover {
-  background: #2D7A52;
+  background: var(--awd-accent-hover);
 }
 
 .profile-fields {
@@ -209,7 +209,7 @@ export default {
 .profile-field-label {
   display: block;
   font-size: 11px;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
   line-height: 16px;
 }
 
@@ -218,18 +218,18 @@ export default {
   margin-top: 2px;
   font-size: 14px;
   line-height: 22px;
-  color: #2C3338;
+  color: var(--awd-text);
   cursor: pointer;
   word-break: break-word;
 }
 
 .profile-field-value.profile-field-empty {
-  color: #CED4DA;
+  color: var(--awd-text-3);
 }
 
 /* AI 猜的与建档时间派生的都弱化：律师不能把它们当成有人填过的事实 */
 .profile-field-value.profile-field-weak {
-  color: #868E96;
+  color: var(--awd-text-2);
 }
 
 .profile-field-input,
@@ -238,9 +238,9 @@ export default {
   padding: 3px 6px;
   font-size: 14px;
   line-height: 22px;
-  color: #2C3338;
-  background: #FFFFFF;
-  border: 1px solid #1A5336;
+  color: var(--awd-text);
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-accent);
   border-radius: 3px;
   box-sizing: border-box;
   width: 100%;
@@ -250,7 +250,7 @@ export default {
   display: block;
   margin-top: 2px;
   font-size: 11px;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
 }
 
 /* 响应祖先 .project-home-pane 的实际渲染宽度（container-name: home-pane，

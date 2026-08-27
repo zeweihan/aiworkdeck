@@ -65,14 +65,14 @@ function pick(opt) {
 
 <style scoped>
 .question-card {
-  background: #FFFDF7;
-  border-top: 1px solid #F1F5F9;
+  background: var(--awd-surface);
+  border-top: 1px solid var(--awd-border-subtle);
   padding: 10px 16px 12px;
 }
 
 /* 历史态：去掉强调底色，只留一条痕迹 */
 .question-card.is-history {
-  background: #FFFFFF;
+  background: var(--awd-surface);
 }
 
 .q-head {
@@ -86,7 +86,7 @@ function pick(opt) {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #D97706;
+  background: var(--awd-warning);
   flex-shrink: 0;
 }
 
@@ -97,13 +97,13 @@ function pick(opt) {
 .q-title {
   font-size: 13px;
   font-weight: 600;
-  color: #1A5336;
+  color: var(--awd-accent-text);
 }
 
 .q-badge {
   font-size: 9px;
-  background: #E6F9F0;
-  color: #1A5336;
+  background: var(--awd-accent-soft);
+  color: var(--awd-accent-text);
   padding: 2px 6px;
   border-radius: 4px;
   font-weight: 600;
@@ -112,7 +112,7 @@ function pick(opt) {
 .q-body {
   font-size: 12.5px;
   line-height: 1.55;
-  color: #2C3338;
+  color: var(--awd-text);
   margin-bottom: 8px;
 }
 
@@ -130,7 +130,7 @@ function pick(opt) {
   line-height: 1.55;
   margin: 0;
   padding: 0;
-  color: #2C3338;
+  color: var(--awd-text);
 }
 
 /* 选项按钮组（对齐 approval-bar 的 flex + 8px 间距；窄栏里换行堆叠） */
@@ -142,9 +142,9 @@ function pick(opt) {
 }
 
 .btn-option {
-  background: #FFFFFF;
-  border: 1px solid #E9ECEF;
-  color: #2C3338;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
+  color: var(--awd-text);
   font-size: 12px;
   padding: 5px 14px;
   border-radius: 6px;
@@ -156,25 +156,25 @@ function pick(opt) {
 }
 
 .btn-option:hover {
-  border-color: #5BD197;
-  color: #1A5336;
-  background: #E6F9F0;
+  border-color: var(--awd-mint);
+  color: var(--awd-accent-text);
+  background: var(--awd-accent-soft);
 }
 
 .btn-option.disabled {
   cursor: default;
-  color: #6C757D;
-  background: #F8F9FA;
+  color: var(--awd-text-2);
+  background: var(--awd-bg);
 }
 
 .btn-option.disabled:hover {
-  border-color: #E9ECEF;
-  color: #6C757D;
-  background: #F8F9FA;
+  border-color: var(--awd-border);
+  color: var(--awd-text-2);
+  background: var(--awd-bg);
 }
 
 .q-hint {
   font-size: 11px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 </style>

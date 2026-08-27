@@ -1,18 +1,11 @@
 /* 项目概览页容器样式。子组件各自的样式在各自 scoped 块里，这里只管容器。
    外壳浅色红线：白 / #F8F9FA 底 + 森林绿 #1A5336 + mint #5BD197 点缀，不做深色 chrome。 */
-$color-primary: #1A5336;
-$color-primary-light: #2D7A52;
-$color-text-main: #2C3338;
-$color-text-light: #6C757D;
-$color-border: #E9ECEF;
-$bg-pale: #F8F9FA;
-$bg-white: #FFFFFF;
 
 .page-project-home {
   min-height: 100vh;
   box-sizing: border-box;
-  background: $bg-pale;
-  color: $color-text-main;
+  background: var(--awd-bg);
+  color: var(--awd-text);
 }
 
 .home-topbar {
@@ -29,40 +22,40 @@ $bg-white: #FFFFFF;
      变量定义在 App.vue，非桌面/全屏下是 0，max() 自动退回上面那行的 24px。 */
   padding-left: max(24px, var(--awd-titlebar-safe-inline-start));
   padding-right: max(24px, var(--awd-titlebar-safe-inline-end));
-  background: $bg-white;
-  border-bottom: 1px solid $color-border;
+  background: var(--awd-surface);
+  border-bottom: 1px solid var(--awd-border);
 }
 
 /* btn-project-list / btn-workbench 是 e2e 锚点类名，样式挂在 home-back / home-enter 上 */
 .home-back {
   font-size: 13px;
-  color: $color-text-light;
+  color: var(--awd-text-2);
   cursor: pointer;
 }
 
 .home-back:hover {
-  color: $color-primary;
+  color: var(--awd-accent-text);
 }
 
 .home-topbar-title {
   flex: 1;
   font-size: 14px;
   font-weight: 600;
-  color: $color-text-main;
+  color: var(--awd-text);
 }
 
 .home-enter {
   flex: none;
   padding: 6px 16px;
   border-radius: 4px;
-  background: $color-primary;
-  color: $bg-white;
+  background: var(--awd-accent);
+  color: var(--awd-text-on-accent);
   font-size: 13px;
   cursor: pointer;
 }
 
 .home-enter:hover {
-  background: $color-primary-light;
+  background: var(--awd-accent-hover);
 }
 
 /* 卷轴本体（.home-column / .home-section / .home-section-title）的样式已随内容一起
