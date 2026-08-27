@@ -445,6 +445,7 @@ $bg-white: #FFFFFF;
 .header-account {
   display: flex;
   align-items: center;
+  position: relative; /* 头像下拉的定位锚 */
 }
 
 /* 右上角头像（2026-08-19 从 rail 底部搬上来）：统一「设置」页的入口。
@@ -465,6 +466,46 @@ $bg-white: #FFFFFF;
 
   &:hover {
     border-color: $color-accent;
+  }
+}
+
+/* 头像下拉（dev-board#205）：设置 / 退出登录。mask 全屏兜底收起 */
+.avatar-menu-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1198;
+}
+
+.avatar-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 132px;
+  background: $bg-white;
+  border: 1px solid $color-border;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(33, 38, 41, 0.12);
+  padding: 4px;
+  z-index: 1199;
+}
+
+.avatar-menu-item {
+  padding: 7px 12px;
+  border-radius: 5px;
+  font-size: 13px;
+  color: $color-text-main;
+  cursor: pointer;
+
+  &:hover {
+    background: $bg-pale;
+  }
+
+  &.danger {
+    color: #A03B2C;
+
+    &:hover {
+      background: #FEF2F2;
+    }
   }
 }
 
@@ -635,23 +676,56 @@ $bg-white: #FFFFFF;
   background: $bg-white; // Content bg
 }
 
+/* 工作区空态（dev-board#203）：品牌图标坐在一块带浅描边与柔和投影的白色圆角砖上，
+   背后铺一圈极淡的品牌绿光晕；标题 + 一句引导副文案，重心略高于几何中心。 */
 .empty-workspace {
   flex: 1;
+  width: 100%;
+  height: 100%;
   @include flex-center;
   flex-direction: column;
-  color: $color-text-light;
-  background: $bg-pale;
+  background:
+    radial-gradient(480px 300px at 50% 40%, rgba(91, 209, 151, 0.10), rgba(91, 209, 151, 0) 70%),
+    $bg-pale;
+}
+
+.empty-workspace .empty-content {
+  gap: 0;
+  padding-bottom: 5vh; /* 视觉重心上移，避免被底部工具面板压得像沉底 */
+}
+
+.empty-logo-tile {
+  width: 92px;
+  height: 92px;
+  @include flex-center;
+  background: $bg-white;
+  border: 1px solid $color-border;
+  border-radius: 24px;
+  box-shadow:
+    0 1px 2px rgba(33, 38, 41, 0.04),
+    0 14px 36px rgba(26, 83, 54, 0.08);
 }
 
 .empty-state-img {
-  width: 64px;
-  height: 64px;
-  margin-bottom: 16px;
-  opacity: 0.8;
+  width: 46px;
+  height: 46px;
+}
+
+.empty-title {
+  margin-top: 22px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: $color-text-main;
+}
+
+.empty-sub {
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: $color-text-light;
 }
 
 .empty-icon { font-size: 48px; margin-bottom: 16px; opacity: 0.5; } // Keep for fallback/refs if any
-.empty-text { font-size: 14px; }
 
 .editors-grid {
   flex: 1;
@@ -1929,7 +2003,7 @@ $bg-white: #FFFFFF;
   pointer-events: none;
 }
 
-.pane-empty, .empty-workspace {
+.pane-empty {
   width: 100%;
   height: 100%;
   display: flex;
@@ -4343,6 +4417,11 @@ $bg-white: #FFFFFF;
 .panel-tab.is-movable,
 .right-dock-tab.is-movable {
   cursor: grab;
+}
+
+/* rail 内拖动排序（dev-board#204）：被拖走的那颗淡下去，落点由数组实时重排来表达 */
+.rail-btn.rail-dragging {
+  opacity: 0.35;
 }
 
 /* —— 右侧面板的 tab 条（只有真有面板停到右侧时才渲染） —— */

@@ -279,6 +279,7 @@ FilePickerDialog :298 / EasyVoicePane :537 / DesensitizePane :543 / SearchPanel 
   砍掉会让 AI 读到旧内容。往这条分支上加新副作用前，先问「一份文档存 60 次盘，
   这件事跑 60 次可以吗」。
 - **免费额度的红线**：剪贴板是「隐藏超出部分」、缓存区是「拒绝新增」，两者都**绝不删除或清理用户已有数据**。任何"顺手清理超额记录"的改动都是回归——用户付费后必须能看到之前被隐藏的全部内容。
+- **解锁后的即时刷新（dev-board#201）**：`limited/hiddenCount` 都是后端算的，购买成功后组件不重拉就会停在旧值。`UnlockHint` 购买成功广播 `awd:entitlements-changed`，`ClipboardPanel` 与 project-overview（暂存区用量）都订着它重拉——新加带额度横幅的面板必须同样订阅，别只依赖组件重建。
 - **权益失效不等于把人锁在外面**：`applyOnStartup` 无条件应用自选存储根（权益失效后数据照常读写），因此 `GET /api/storage/location` 与「恢复默认位置」都**不设权益闸**——否则 Key 被吊销 + 外置盘拔掉的用户既看不到自己数据在哪，也换不回默认位置。付费闸只加在「改到新的自选位置」这个动作上。
 - `StorageException` 默认落到通用异常处理器会被替换成「服务器内部错误」（防路径回显）。存储位置那几条用户语言文案是在 `StorageLocationController` 里转成 `IllegalArgumentException` 才送出去的，新增可回显文案要走同一条路且确保不含路径。
 

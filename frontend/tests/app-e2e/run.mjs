@@ -799,12 +799,19 @@ try {
   // ============ J6.3 顶栏头像 → 系统设置中栏标签 ============
   // 2026-08-19：rail 底部的齿轮与头像撤掉，改成顶栏右上角头像；
   // 「系统设置」不再整页跳转，而是中栏的一个标签（薄壳页仍在，J7 单独覆盖）。
-  // 2026-08-21（dev-board#96）：头像下拉撤了，点头像直接开设置标签。
+  // 2026-08-21（dev-board#96）：只剩一项时下拉撤掉、点头像直开设置。
+  // 2026-08-27（dev-board#205）：下拉恢复成两项（设置 / 退出登录）。
   console.log('== J6.3 头像与设置标签 ==')
-  await step('点头像直接开中栏设置标签，没有下拉、不跳页', async () => {
+  await step('点头像开两项下拉，点「设置」开中栏标签、不跳页', async () => {
     await mouseClickSel('.avatar-btn')
-    if (await page.$('.avatar-menu')) throw new Error('头像下拉又回来了（应当直接开设置标签）')
+    await page.waitForSelector('.avatar-menu', { timeout: 8000 })
+    const items = await page.$$eval('.avatar-menu .avatar-menu-item', (els) => els.map((e) => e.textContent.trim()))
+    if (items.length !== 2) throw new Error('头像下拉应当恰好两项（设置/退出登录），实际: ' + JSON.stringify(items))
+    if (!items[0].includes('设置')) throw new Error('下拉第一项不是「设置」: ' + items[0])
+    if (!items[1].includes('退出登录')) throw new Error('下拉第二项不是「退出登录」: ' + items[1])
+    await mouseClickSel('.avatar-menu .avatar-menu-item')
     await page.waitForSelector('.page-admin.is-embedded', { timeout: 15000 })
+    if (await page.$('.avatar-menu')) throw new Error('点完菜单项下拉没有收起')
     const h = await page.evaluate(() => location.hash)
     if (h.includes('pages/admin/admin')) throw new Error('设置又变回整页跳转了')
     // 个人组与系统组都要在同一页里够得着

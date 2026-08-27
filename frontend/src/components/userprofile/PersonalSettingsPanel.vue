@@ -126,6 +126,9 @@
           <text class="form-label">{{ $t('account.activatedAtLabel') }}</text>
           <text class="form-value">{{ licenseInfo.activatedAt ? formatTime(licenseInfo.activatedAt) : '—' }}</text>
         </view>
+        <!-- 与「退出登录」分工（dev-board#205）：退出登录管账户连接（换账号用它），
+             这里只清本机的解锁票据、回到启动解锁页——给文案说清楚，别让用户猜 -->
+        <text class="bind-tip">{{ $t('account.deactivateHint') }}</text>
         <button class="btn-logout-settings" @tap="handleDeactivate">{{ $t('account.deactivateBtn') }}</button>
       </view>
 

@@ -394,10 +394,26 @@ dock tab 条（「AI 助手 | 依据」）——在它之前那条 tab 条只有
 `normalizeDockSelections()`：存量 `leftPaneKey` 可能指向一个已经被搬去右/底的面板，
 不校正就是「左栏『加载中…』占位符 + rail 上一个高亮都没有」那个老地雷。
 
+**rail 拖动排序（dev-board#204，2026-08-27）**：与停靠平行的另一层状态，模块
+`pages/project-overview/railSort.js`（`railSortData()` + `railSortMethods`，同 panelDocking
+形制）。全局键 **`awd_rail_order`** 存 key 数组；`applyRailOrder()` 套在
+`applyPanelDocks()` **之后**（只改先后、不增删项），没记过的新增项按默认顺序排在
+已记项之后。rail 按钮 `draggable="!isClientView"`，`onRailDragStart` 会级联调
+`onPanelDragStart`（可停靠面板拖出去落投放区仍走停靠，rail 内松手即排序），
+dragover 实时改 `railOrderDraft` 草稿、dragend 提交并持久化。
+
+**顶栏头像下拉（dev-board#205，2026-08-27）**：恢复成两项（设置 / 退出登录，
+`avatarMenuOpen` + `.avatar-menu`），退出走 `utils/signOut.js` 唯一编排。
+`check-navigation-contract` 钉着「恰好两项」；**别把新方法插在 `goToSystemSettings`
+与 `openSettingsTab` 之间**——该脚本的方法提取按「call site 后第一个 `{`」配对，
+中间夹方法会截断窗口、报「标签没有带 tabType」的假错。菜单与 mask 都在 App.vue
+的 no-drag 名单里。
+
 三处宿主的契约：
 - **左栏**：`applyPanelDocks()` 在 `LEFT_SIDEBAR_PLUGINS` 计算属性末尾做两件事——
   把不在 left 档的可移动面板从 rail 摘掉、把搬到 left 的工具面板追加在静态数组之后
-  （追加位置与动态插件同法，**rail 顺序仍然只有 `LEFT_SIDEBAR_PLUGINS` 一个出处**）。
+  （追加位置与动态插件同法，rail 的**成员**仍然只有 `LEFT_SIDEBAR_PLUGINS` 一个出处；
+  **顺序**从 2026-08-27 起由 `applyRailOrder` 按 `awd_rail_order` 重排，见上）。
   CLIENT 视图整个不参与。工具面板在左栏的宿主是 `.dock-tool-pane`（一条紧凑搜索行 +
   面板体）——这三个面板的搜索早就外置给宿主了，不给就等于没有搜索。
   **`isTabVisible` 必须放行这些左栏模式**（`|| this.isMovablePanel(this.leftPaneKey)`）：

@@ -82,6 +82,9 @@ export default {
         await refreshEntitlements(true)
         // 花了 Credits：顶栏余额 chip 与账户面板都订着这个事件
         uni.$emit('awd:wallet-refresh')
+        // 权益本身变了：被额度挡住内容的面板（剪贴板/暂存区）订着这个事件重拉列表。
+        // 只刷余额不刷列表就是 dev-board#201 的病：扣完钱横幅还挂着「立即解锁」。
+        uni.$emit('awd:entitlements-changed', { skuId: this.skuId })
         uni.showToast({ title: t('onboarding.hint.purchaseSuccess'), icon: 'success' })
       } catch (e) {
         if (e && e.reason === 'insufficient_credits') {
@@ -95,8 +98,9 @@ export default {
             },
           })
         } else if (e && e.reason === 'already_owned') {
-          // 已拥有：权益缓存可能只是旧了，顺手刷新一次
-          refreshEntitlements(true)
+          // 已拥有：权益缓存可能只是旧了，顺手刷新一次，并同样通知额度面板重拉
+          await refreshEntitlements(true)
+          uni.$emit('awd:entitlements-changed', { skuId: this.skuId })
           uni.showToast({ title: (e && e.message) || t('onboarding.hint.purchaseFailed'), icon: 'none' })
         } else {
           uni.showToast({ title: (e && e.message) || t('onboarding.hint.purchaseFailed'), icon: 'none' })

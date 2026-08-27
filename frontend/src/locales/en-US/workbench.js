@@ -79,6 +79,7 @@ export default {
   // Tabs bar and editor area
   newOrCopy: 'New / Duplicate',
   emptyWorkspace: 'Select a file to get started',
+  emptyWorkspaceHint: 'Open a file from the explorer on the left, or create a new document',
   leftPaneIdle: 'Left pane idle',
   rightPaneIdle: 'Right pane idle',
   // Bottom tools panel

@@ -370,13 +370,24 @@
                 <text class="section-subtitle">{{ $t('admin.accountConnectedSubtitle') }}</text>
               </view>
               <view class="section-body">
-                <view class="provider-card">
-                  <view class="provider-header account-header">
+                <!-- 账户卡（dev-board#200/#205）：一行排布——左边身份（头像/显示名/用户名），
+                     右边两个动作按齐。「断开连接」已统一成「退出登录」（utils/signOut.js
+                     唯一编排：摘账户连接，账户模式顺带清授权票据，回启动页重跑分流）。 -->
+                <view class="provider-card account-card">
+                  <view class="account-row">
+                    <view class="account-avatar">
+                      <text class="account-avatar-text">{{ getInitial(account.displayName || account.username) || 'U' }}</text>
+                    </view>
                     <view class="account-identity">
                       <text class="provider-name">{{ account.displayName || account.username || $t('admin.accountTitle') }}</text>
                       <text class="account-sub">{{ account.username }}<text v-if="accountPlanLabel"> · {{ accountPlanLabel }}</text></text>
                     </view>
-                    <button class="comp-btn danger" @tap="onDisconnectAccount">{{ $t('admin.disconnectButton') }}</button>
+                    <view class="account-actions">
+                      <button class="comp-btn" :disabled="entitlementBusy" @tap="onRefreshEntitlements">
+                        {{ entitlementBusy ? $t('admin.refreshing') : $t('admin.refreshEntitlementsButton') }}
+                      </button>
+                      <button class="comp-btn danger" @tap="onSignOut">{{ $t('account.logoutBtn') }}</button>
+                    </view>
                   </view>
                   <!-- 官网不可达：只降级平台数字，本地统计照常。
                        余额展示已随钱包卡（上方）收编，这里只剩不可达提示 -->
@@ -384,11 +395,7 @@
                     {{ (accountPlatform && accountPlatform.message) || $t('admin.platformUnreachable') }}
                   </text>
                   <!-- 购买在官网完成，桌面端拉一次即可看到新解锁的功能 -->
-                  <view class="account-refresh-row">
-                    <button class="comp-btn" :disabled="entitlementBusy" @tap="onRefreshEntitlements">
-                      {{ entitlementBusy ? $t('admin.refreshing') : $t('admin.refreshEntitlementsButton') }}
-                    </button>
-                  </view>
+                  <text class="account-hint">{{ $t('admin.refreshEntitlementsHint') }}</text>
                 </view>
               </view>
             </view>
@@ -998,7 +1005,9 @@
           scroll-y
           class="config-scroll"
         >
-          <view class="section-card">
+          <!-- 优化者是维护者侧能力：只有这台机器的后端配了 optimizer.* 才展示；
+               普通用户的机器 enabled 恒为 false，只看得到下面的反馈记录 -->
+          <view v-if="optimizer.enabled" class="section-card">
             <view class="section-header">
               <text class="section-title">{{ $t('admin.optimizerTitle') }}</text>
               <text class="section-subtitle">
@@ -1109,14 +1118,6 @@
           </view>
         </scroll-view>
 
-        <!-- 插件广场：与其余设置项一致地在页内切换（独立页 /pages/plugin-market 保留给直链） -->
-        <view
-          v-else-if="activeNav === 'plugins'"
-          class="market-embed"
-        >
-          <MarketPane :standalone="false" />
-        </view>
-
         <!-- 「个人」组四栏（2026-08-20 从个人中心并进来）。四段内容各自成组件，
              都只在被选中时渲染，各自的 mounted 就是那一次数据加载。 -->
         <scroll-view v-else-if="activeNav === 'work_log'" scroll-y class="config-scroll">
@@ -1144,7 +1145,7 @@
 import {
   getAdminConfig, saveAdminConfig,
   cloudConnect, listCloudConnections, disconnectCloudConnection,
-  getAccountStatus, connectAccount, disconnectAccount, getAccountUsage,
+  getAccountStatus, connectAccount, getAccountUsage,
   getAccountBalance, getAccountMembership,
   getStorageLocation, moveStorageLocation, resetStorageLocation,
   getLocalIdentityCandidates, selectLocalIdentity,
@@ -1162,12 +1163,12 @@ import { getLastProjectId } from '@/utils/recentProjects.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { accountPageUrl, siteBaseUrl, siteLinks, loadSiteLinks, resetSiteLinks } from '@/utils/siteLinks.js'
 import { host } from '@/services/host.js'
+import { signOut } from '@/utils/signOut.js'
 import { setGlobalOverlay } from '@/utils/overlayState.js'
 import { refreshEntitlements, isEnabled, FEATURES } from '@/composables/useEntitlement.js'
 import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
 import UnlockHint from '@/components/UnlockHint.vue'
 import RechargeDialog from '@/components/RechargeDialog.vue'
-import MarketPane from '@/components/MarketPane.vue'
 import AwdSelect from '@/components/AwdSelect.vue'
 import AwdSwitch from '@/components/AwdSwitch.vue'
 import PersonalWorkLogPanel from '@/components/userprofile/PersonalWorkLogPanel.vue'
@@ -1190,7 +1191,7 @@ function cachedIsAdmin() {
 export default {
   name: 'AdminPane',
   components: {
-    UnlockHint, RechargeDialog, MarketPane, AwdSelect, AwdSwitch,
+    UnlockHint, RechargeDialog, AwdSelect, AwdSwitch,
     PersonalWorkLogPanel, PersonalFavoritesPanel, PersonalTodosPanel, PersonalSettingsPanel,
   },
   props: {
@@ -1236,7 +1237,8 @@ export default {
         { key: 'memory', label: this.$t('admin.navMemory'), group: 'system', desktopOnly: true },
         { key: 'telemetry', label: this.$t('admin.navTelemetry'), group: 'system' },
         { key: 'feedback', label: this.$t('admin.navFeedback'), group: 'system' },
-        { key: 'plugins', label: this.$t('admin.navPlugins'), group: 'system' },
+        // 'plugins'（插件广场）2026-08-27 已撤——入口统一收敛到左 rail 的插件中心，
+        // 独立页 /pages/plugin-market 仍保留给直链。
       ],
       // 用户反馈与优化者（右下角浮窗提交 → 优化者分诊 → 开 PR / 发邮件）
       feedbackList: [],
@@ -2567,36 +2569,15 @@ export default {
         this.accountBusy = false
       }
     },
-    async onDisconnectAccount() {
-      const ok = await new Promise((r) => uni.showModal({
-        title: this.$t('admin.disconnectAccountTitle'),
-        content: this.$t('admin.disconnectAccountContent'),
-        confirmText: this.$t('admin.disconnect'),
-        success: (res) => r(res.confirm),
-      }))
-      if (!ok) return
-      try {
-        const res = await disconnectAccount()
-        await this.loadAccount()
-        await refreshEntitlements(true)
-        this.notifyMarketAccountChanged()
-        // 后端会把 activeProvider 从平台通道摘下来（否则每条消息都报未连接账户）。
-        // 官方版没有别的档可选：同步表单让 AI 面板露出「切换到官方通道」提示，并说清
-        // 重新连接账户后要回去切一下。
-        const fallback = res && res.aiProviderFallback
-        if (fallback) {
-          this.form.ai.activeProvider = fallback
-          uni.showModal({
-            title: this.$t('admin.disconnectedTitle'),
-            content: this.$t('admin.providerFallbackContent'),
-            showCancel: false,
-          })
-        } else {
-          uni.showToast({ title: this.$t('admin.disconnectedTitle'), icon: 'none' })
-        }
-      } catch (e) {
-        uni.showToast({ title: (e && e.message) || this.$t('common.failed'), icon: 'none' })
-      }
+    /**
+     * 「退出登录」（dev-board#205 统一入口）：原「断开连接」只摘账户连接、留人在页里，
+     * 与「账户与安全」的退出登录是两套说法。现在统一走 signOut() 唯一编排——
+     * 确认弹窗、按当前状态决定摘哪几层、成功后回启动页重跑分流，
+     * 所以这里不需要再做 loadAccount / 权益刷新 / 广场广播那些留在页内的收尾。
+     */
+    async onSignOut() {
+      const done = await signOut()
+      if (done) this.notifyMarketAccountChanged()
     },
     /**
      * 账户连接状态变了 → 广场的付费项按钮形态跟着变（「需连接账户」↔「购买」/「安装」）。
@@ -3009,16 +2990,6 @@ $border-color: #E9ECEF; // Gray-Light
 
 .config-scroll {
   height: calc(100vh - 140px);
-}
-
-/* 插件广场内嵌：与 .config-scroll 同高，MarketPane 自身按 100% 撑满并内部滚动。
-   外框对齐 .section-card（白底卡片、12px 圆角、浅灰描边），
-   让整块看起来是设置页里的一张卡片而不是嵌进来的独立网页。 */
-.market-embed {
-  height: calc(100vh - 140px);
-  border-radius: 12px;
-  border: 1px solid $border-color;
-  overflow: hidden;
 }
 
 .section-card {
@@ -3462,20 +3433,53 @@ $border-color: #E9ECEF; // Gray-Light
   margin-top: 8px;
 }
 
-.account-header {
+/* ---------- 账户卡（dev-board#200）：身份一行 + 动作按齐 ---------- */
+.account-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 12px;
+}
+
+.account-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: $brand-primary;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.account-avatar-text {
+  font-size: 16px;
+  font-weight: 600;
+  color: $brand-white;
 }
 
 .account-identity {
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 4px;
   min-width: 0;
 }
 
+.account-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .account-sub {
+  font-size: 12px;
+  color: $text-secondary;
+}
+
+.account-hint {
+  display: block;
+  margin-top: 10px;
   font-size: 12px;
   color: $text-secondary;
 }
