@@ -93,6 +93,13 @@
             <span v-if="msg.question.answered" class="option-answered">{{ t('answered') }}</span>
           </div>
           <div v-if="msg.error" class="msg-error">{{ msg.error }}</div>
+          <!-- 额度耗尽的充值入口（dev-board#198）：付费在官网账户页完成，浏览器打开 -->
+          <button
+            v-if="msg.errorKind === 'quota' && siteRecharge"
+            class="option-btn recharge-btn"
+            :title="t('rechargeTitle')"
+            @click="openExternal(siteRecharge)"
+          >{{ t('recharge') }}</button>
         </template>
       </div>
       </TransitionGroup>
@@ -293,6 +300,7 @@ import { micSupported, startRecording, MAX_RECORD_MS } from '../lib/wavRecorder.
 import { postDictate } from '../lib/api.js'
 import { t } from '../lib/i18n.js'
 import { renderMarkdown } from '../lib/markdown.js'
+import { rechargeUrl, openExternal } from '../lib/site.js'
 import { riseIn, panelUp, popIn, staggerIn } from '../lib/motion.js'
 
 /**
@@ -313,6 +321,9 @@ const logoSrc = 'icon-64.png'
 
 const canSend = computed(() =>
   props.configured && props.projectId && input.value.trim().length > 0 && !streaming.value)
+
+/** 官网充值页（仅官方云后端有；私有部署/桌面本机为空串，入口隐藏） */
+const siteRecharge = computed(() => rechargeUrl(props.settings.serverUrl))
 
 /**
  * 吸底守卫（dev-board#197）：只有用户本来就贴着底部时，流式增量才继续吸底；
@@ -882,6 +893,12 @@ async function confirmDelete(c) {
   margin-top: 4px;
   color: var(--awd-danger);
   font-size: 12px;
+}
+
+.recharge-btn {
+  margin-top: 6px;
+  border-color: var(--awd-primary);
+  color: var(--awd-primary);
 }
 
 /* 反问选项：任务窗格很窄，纵向堆叠而不是横排挤成两行 */

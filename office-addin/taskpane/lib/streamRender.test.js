@@ -179,6 +179,48 @@ test('<artifact> 整块捕获为计划卡内容，不混进正文（流式与历
   assert.deepEqual(arts2, ['只有半截计划'])
 })
 
+test('配额耗尽错误换成引导文案并打 quota 标记，上游英文原文不外漏', async () => {
+  store.clear()
+  const chunks = [
+    sseEvent('error', { message: 'Stream Error: AI_QUOTA_EXHAUSTED: Insufficient credits. Add more using https://openrouter.ai/...' })
+  ]
+  const f = stubFetch((url) => {
+    if (url.includes('/api/ai/history')) return jsonReply([])
+    if (url.endsWith('/api/agent/conversations')) return jsonReply({ conversationId: 'conv-sr-q' })
+    if (url.includes('/api/agent/connect/')) return sseScriptedResponse([])
+    if (url.endsWith('/api/agent/chat')) return jsonReply({ code: 0 })
+    if (url.includes('/api/ai/models') || url.includes('/api/skills/list')) return jsonReply([], false, 404)
+    if (url.includes('/api/agent/cancel/')) return jsonReply({})
+    throw new Error('未预期请求: ' + url)
+  })
+  try {
+    await activateSession({
+      settings: { serverUrl: 'https://x.example', token: 'awdt_srq' }, projectId: '23'
+    })
+    await stop()
+    globalThis.fetch = async (url) => {
+      if (String(url).includes('/api/agent/connect/')) return sseScriptedResponse(chunks)
+      if (String(url).endsWith('/api/agent/chat')) return jsonReply({ code: 0 })
+      if (String(url).includes('/api/ai/history')) return jsonReply([])
+      return jsonReply({}, false, 404)
+    }
+    input.value = '触发配额错误'
+    await send()
+    assert.ok(await until(() => {
+      const last = messages.value[messages.value.length - 1]
+      return last && last.role === 'assistant' && last.error
+    }), '等待 error 事件超时')
+    const last = messages.value[messages.value.length - 1]
+    assert.equal(last.errorKind, 'quota', '必须打上 quota 标记（界面据此挂充值入口）')
+    assert.ok(!last.error.includes('AI_QUOTA_EXHAUSTED'), '协议标记不许外漏给用户')
+    assert.ok(!last.error.includes('openrouter'), '上游供应商原文不许外漏')
+    assert.equal(streaming.value, false)
+  } finally {
+    await stop()
+    f.restore()
+  }
+})
+
 test('发送契约：不附带正文也上送 activeContext 壳；model/skillIds 随选择上送', async () => {
   store.clear()
   let chatBody = null

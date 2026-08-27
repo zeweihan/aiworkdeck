@@ -71,10 +71,13 @@ export const ZH = {
   menuModel: '模型',
   menuHistory: '历史对话',
 
-  // ---- App.vue：账户菜单（dev-board#194）----
+  // ---- App.vue：账户菜单（dev-board#194/#198）----
   aiQuotaLabel: 'AI 额度',
   quotaRemaining: '剩余 {remaining} / 共 {limit}',
   quotaUsed: '已用 {used}',
+  recharge: '充值',
+  rechargeTitle: '在官网账户页充值（浏览器打开，与插件同一账户）',
+  quotaExhaustedNotice: '账户额度不足，本轮已中止。充值到账后重发这条消息即可继续。',
 
   // ---- App.vue：新建项目（dev-board#196）----
   newProjectOption: '+ 新建项目',
@@ -354,10 +357,13 @@ export const EN = {
   menuModel: 'Model',
   menuHistory: 'Conversation history',
 
-  // ---- App.vue：账户菜单（dev-board#194）----
+  // ---- App.vue：账户菜单（dev-board#194/#198）----
   aiQuotaLabel: 'AI quota',
   quotaRemaining: '{remaining} left of {limit}',
   quotaUsed: '{used} used',
+  recharge: 'Top up',
+  rechargeTitle: 'Top up on the website account page (opens in browser, same account as this add-in)',
+  quotaExhaustedNotice: 'Your account is out of credit; this turn was stopped. Top up and resend this message to continue.',
 
   // ---- App.vue：新建项目（dev-board#196）----
   newProjectOption: '+ New project',

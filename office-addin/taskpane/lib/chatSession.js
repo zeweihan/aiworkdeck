@@ -485,7 +485,16 @@ function handleEvent(evt, dataStr) {
   } else if (evt === 'error') {
     let msg = t('executionError')
     try { msg = JSON.parse(dataStr).message || msg } catch (e) { /* ignore */ }
-    if (currentAssistant) currentAssistant.error = msg
+    if (currentAssistant) {
+      // 配额耗尽（后端 LlmErrorClassifier.QUOTA_EXHAUSTED_MARKER）：载荷是上游英文原文，
+      // 原样拼给用户等于没有信息。换成引导文案并打标记，界面据此追加充值入口（dev-board#198）
+      if (msg.includes('AI_QUOTA_EXHAUSTED')) {
+        currentAssistant.error = t('quotaExhaustedNotice')
+        currentAssistant.errorKind = 'quota'
+      } else {
+        currentAssistant.error = msg
+      }
+    }
     disableDocDedup()
     finishStreaming()
   } else if (evt === 'cancelled') {
