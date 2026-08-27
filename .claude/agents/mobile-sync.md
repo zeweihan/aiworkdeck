@@ -3,11 +3,12 @@ name: mobile-sync
 description: 手机端同步领域。任务涉及手机端项目目录镜像、现场影像云中转（/api/mobile/*）、桌面侧 MobileRelayClientService、桥接认领手机号、aiworkdeck_mobile 仓的 iOS/小程序客户端时，先读本文档再动代码。
 ---
 
-# 手机端同步（项目目录镜像 + 现场影像云中转）
+# 手机端同步（项目目录镜像 + 现场影像/录音云中转）
 
-手机端（独立仓 `1-3 aiworkdeck_mobile`：iOS Swift + 微信小程序）拍现场影像，归档到
-桌面端项目的「现场影像/YYYY-MM-DD/」。**桌面端是项目的唯一权威源**，云端只做两件事：
-目录镜像（手机「选择项目」的数据源）与影像中转区（ACK 即删 + 7 天 TTL 兜底）。
+手机端（独立仓 `1-3 aiworkdeck_mobile`：iOS Swift + 微信小程序）拍现场影像与录音，归档到
+桌面端项目的「现场影像/YYYY-MM-DD/」（image/video）或「现场录音/YYYY-MM-DD/」（audio，
+dev-board#228）。**桌面端是项目的唯一权威源**，云端只做两件事：
+目录镜像（手机「选择项目」的数据源）与影像中转区（ACK 即删 + 30 天 TTL 兜底）。
 权威 spec：`aiworkdeck_mobile/docs/specs/2026-08-20-project-sync-relay.md`（根因复盘见
 dev-board#30）；更早的产品设计 `2026-08-17-mobile-clients-design.md`。
 
@@ -35,7 +36,17 @@ dev-board#30）；更早的产品设计 `2026-08-17-mobile-clients-design.md`。
 - 目录条目 = `{deviceId, key, name}`；`key` 是**那台桌面机本地库的项目 id**，跨机同号
   不同物，任何消费方必须连 deviceId 一起用。
 - 影像幂等键 = (userId, clientMediaId)，clientMediaId 只收 UUID 形态（路径穿越围栏）。
-- 删除由 ACK 触发，TTL 只是兜底——两个机制不能混。
+- 删除由 ACK 触发，TTL（30 天，dev-board#226 从 7 天延长）只是兜底——两个机制不能混。
+- `mediaType ∈ {image, video, audio}`（audio 自 dev-board#228）。桌面落盘根目录由它推导：
+  audio → 「现场录音」，其余 → 「现场影像」；rootFolder 同时参与幂等判据与 storagePath
+  拼接，改动必须两处同源（`MobileRelayClientService.landAndAck`）。
+- **每用户 3GB 配额**（dev-board#226）：只计未投递 blob（storagePath 非空行）的 fileSize
+  之和，ACK 即删 = 释放配额。检查在写盘前按声明大小做（幂等重传先于配额检查，不占新
+  空间不得拒）；并发上传可略超上限（最多一件，接受的软度）。拒绝走
+  IllegalArgumentException → HTTP 200 + `{code:1,message:"云端空间已满…"}`，恰是两端
+  客户端能透传到界面的形状（非 2xx 的 body 会被客户端丢弃，别改成 413）。
+- `GET /api/mobile/media/usage` → `{usedBytes, quotaBytes}`（裸对象）；
+  `/media/status` 未投递件带 `expiresAt`（createdAt+TTL，ISO 字符串）供手机端做到期提醒。
 - 桌面落盘文件名 = 原名 + clientMediaId 前 8 位（`landedFileName`）：跨轮重试的幂等锚点，
   「同名已在 → 只补 ACK」。
 - 客户端换账号守卫：state 里的账户指纹与 `AccountService.accountFingerprintOrNull()`

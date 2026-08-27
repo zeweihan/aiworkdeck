@@ -125,6 +125,13 @@ export default {
                }
            case 'mp3':
            case 'wav':
+           case 'm4a':
+           case 'aac':
+           case 'flac':
+           case 'ogg':
+           case 'opus':
+           case 'amr':
+           case 'wma':
            case 'audio':
                return {
                   viewBox: vb1024,

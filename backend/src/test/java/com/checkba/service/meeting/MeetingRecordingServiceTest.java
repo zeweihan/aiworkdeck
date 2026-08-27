@@ -31,13 +31,18 @@ class MeetingRecordingServiceTest {
              {"speaker":"2","start":63000,"end":65000,"text":"我们接受，但要求首期不低于五成"}]
             """;
 
+    private ProjectFileRepository projectFileRepository;
+    private ProjectFileService projectFileService;
+
     @BeforeEach
     void setUp() {
         meetingRepository = mock(MeetingRecordingRepository.class);
+        projectFileRepository = mock(ProjectFileRepository.class);
+        projectFileService = mock(ProjectFileService.class);
         when(meetingRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         service = new MeetingRecordingService(
-                meetingRepository, mock(ProjectFileRepository.class),
-                mock(ProjectFileService.class), mock(StorageServiceFactory.class));
+                meetingRepository, projectFileRepository,
+                projectFileService, mock(StorageServiceFactory.class));
     }
 
     /** LangText 是静态指针，登记过就必须清掉，否则污染后面的测试类。 */
@@ -175,5 +180,110 @@ class MeetingRecordingServiceTest {
         assertEquals("会议录音", MeetingRecordingService.folderName());
         switchToEnglish();
         assertEquals("Meeting Recordings", MeetingRecordingService.folderName());
+    }
+
+    // ==================== 右键转写：注册已有音频文件（dev-board#227） ====================
+
+    private com.checkba.model.entity.ProjectFile audioFile(Long id, Long projectId, String name) {
+        com.checkba.model.entity.ProjectFile f = new com.checkba.model.entity.ProjectFile();
+        f.setId(id);
+        f.setProjectId(projectId);
+        f.setName(name);
+        f.setIsFolder(false);
+        f.setIsDeleted(false);
+        return f;
+    }
+
+    @Test
+    @DisplayName("注册已有音频：直接进 RECORDED、不代管文件、标题去扩展名")
+    void registerExistingCreatesRecordedNonOwningMeeting() {
+        when(projectFileRepository.findById(77L))
+                .thenReturn(Optional.of(audioFile(77L, 1L, "现场谈话_a1b2c3d4.m4a")));
+        when(meetingRepository.findByProjectIdOrderByCreatedAtDesc(1L)).thenReturn(java.util.List.of());
+
+        MeetingRecording m = service.registerExisting(1L, 77L, 10001L);
+        assertEquals(MeetingRecording.STATUS_RECORDED, m.getStatus());
+        assertEquals(77L, m.getAudioFileId());
+        assertEquals(Boolean.FALSE, m.getOwnsAudioFile());
+        assertEquals("现场谈话_a1b2c3d4", m.getTitle());
+    }
+
+    @Test
+    @DisplayName("注册幂等：同一文件已注册过返回既有记录，不建重复行（防重复扣费）")
+    void registerExistingIsIdempotentPerFile() {
+        when(projectFileRepository.findById(77L))
+                .thenReturn(Optional.of(audioFile(77L, 1L, "rec.mp3")));
+        MeetingRecording existing = new MeetingRecording();
+        existing.setId(5L);
+        existing.setProjectId(1L);
+        existing.setAudioFileId(77L);
+        existing.setStatus(MeetingRecording.STATUS_TRANSCRIBED);
+        when(meetingRepository.findByProjectIdOrderByCreatedAtDesc(1L))
+                .thenReturn(java.util.List.of(existing));
+
+        MeetingRecording m = service.registerExisting(1L, 77L, 10001L);
+        assertEquals(5L, m.getId());
+        org.mockito.Mockito.verify(meetingRepository, org.mockito.Mockito.never()).save(any());
+    }
+
+    @Test
+    @DisplayName("注册围栏：非音频/文件夹/跨项目/已删除一律拒绝")
+    void registerExistingRejectsInvalidTargets() {
+        when(projectFileRepository.findById(1L))
+                .thenReturn(Optional.of(audioFile(1L, 1L, "合同.docx")));
+        assertThrows(IllegalArgumentException.class, () -> service.registerExisting(1L, 1L, 10001L));
+
+        com.checkba.model.entity.ProjectFile folder = audioFile(2L, 1L, "语音资料");
+        folder.setIsFolder(true);
+        when(projectFileRepository.findById(2L)).thenReturn(Optional.of(folder));
+        assertThrows(IllegalArgumentException.class, () -> service.registerExisting(1L, 2L, 10001L));
+
+        when(projectFileRepository.findById(3L))
+                .thenReturn(Optional.of(audioFile(3L, 99L, "rec.mp3")));
+        assertThrows(IllegalArgumentException.class, () -> service.registerExisting(1L, 3L, 10001L));
+
+        com.checkba.model.entity.ProjectFile deleted = audioFile(4L, 1L, "rec.mp3");
+        deleted.setIsDeleted(true);
+        when(projectFileRepository.findById(4L)).thenReturn(Optional.of(deleted));
+        assertThrows(IllegalArgumentException.class, () -> service.registerExisting(1L, 4L, 10001L));
+    }
+
+    @Test
+    @DisplayName("删除记录：代管的（面板占位/存量 null）连带删音频，注册的不动用户原始文件")
+    void deleteCascadesOnlyForOwnedAudio() {
+        MeetingRecording registered = transcribedMeeting();
+        registered.setAudioFileId(77L);
+        registered.setOwnsAudioFile(false);
+        when(meetingRepository.findById(9L)).thenReturn(Optional.of(registered));
+        service.delete(9L, 10001L);
+        org.mockito.Mockito.verify(projectFileService, org.mockito.Mockito.never())
+                .delete(any(), any());
+
+        MeetingRecording legacy = transcribedMeeting();
+        legacy.setId(10L);
+        legacy.setAudioFileId(88L);
+        legacy.setOwnsAudioFile(null); // 存量行
+        when(meetingRepository.findById(10L)).thenReturn(Optional.of(legacy));
+        service.delete(10L, 10001L);
+        org.mockito.Mockito.verify(projectFileService).delete(88L, 10001L);
+    }
+
+    @Test
+    @DisplayName("isAudioFileName：按扩展名判定，大小写不敏感")
+    void audioFileNameDetection() {
+        assertTrue(MeetingRecordingService.isAudioFileName("rec.m4a"));
+        assertTrue(MeetingRecordingService.isAudioFileName("REC.MP3"));
+        assertFalse(MeetingRecordingService.isAudioFileName("合同.docx"));
+        assertFalse(MeetingRecordingService.isAudioFileName("noext"));
+        assertFalse(MeetingRecordingService.isAudioFileName(null));
+    }
+
+    @Test
+    @DisplayName("audioFormat：按真实扩展名上报，不再硬编码「非 mp3 即 webm」")
+    void audioFormatFollowsRealExtension() {
+        assertEquals("mp3", MeetingTranscriptionService.audioFormat(new java.io.File("x.mp3")));
+        assertEquals("m4a", MeetingTranscriptionService.audioFormat(new java.io.File("现场谈话.M4A")));
+        assertEquals("wav", MeetingTranscriptionService.audioFormat(new java.io.File("a.b.wav")));
+        assertEquals("webm", MeetingTranscriptionService.audioFormat(new java.io.File("noext")));
     }
 }

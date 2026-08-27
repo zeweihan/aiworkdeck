@@ -304,6 +304,16 @@
           </view>
           <text class="context-menu-text">{{ $t('fileTree.download') }}</text>
         </view>
+        <view v-if="contextMenu.targetItem && transcribeEnabled && isAudioFile(contextMenu.targetItem)" class="context-menu-item" @tap="$emit('transcribe-audio', contextMenu.targetItem); closeContextMenu()">
+          <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2" stroke-linecap="round" stroke-linejoin="round"/>
+              <line x1="12" y1="19" x2="12" y2="23" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </view>
+          <text class="context-menu-text">{{ $t('fileTree.transcribe') }}</text>
+        </view>
         <view v-if="contextMenu.targetItem" class="context-menu-item" @tap="handleRename(contextMenu.targetItem); closeContextMenu()">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -964,6 +974,11 @@ export default {
     hiddenFileIds: {
       type: Array,
       default: () => []
+    },
+    // 右键「转写」项的可见性：随会议录音 skill 的启用状态（父组件传 meetingRecorderEnabled）
+    transcribeEnabled: {
+      type: Boolean,
+      default: false
     }
   },
   data() {
@@ -2322,6 +2337,16 @@ export default {
         this.allFiles.find(f => f.id === id)
       ).filter(Boolean)
       return selectedFiles.every(f => !f.isFolder && docTypes.includes((f.fileType || '').toLowerCase()))
+    },
+
+    /**
+     * 右键「转写」项的判定：扩展名在音频集合内（与后端 MeetingRecordingService
+     * 的 AUDIO_EXTENSIONS 白名单保持一致）
+     */
+    isAudioFile(item) {
+      if (!item || item.isFolder) return false
+      const audioTypes = ['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'opus', 'amr', 'wma', 'webm']
+      return audioTypes.includes((item.fileType || '').toLowerCase())
     },
 
     /**
