@@ -94,9 +94,9 @@
       </view>
 
       <view class="header-right">
-        <!-- 授权标识（低调 chip）。优先级：宽限预警 > 已连接账户 > 试用版。
-             预警排最前是因为它是三者里唯一「不处理就会被挡在门外」的一条；
-             另外两个都只是状态标注（试用码解锁后再连账户的用户该看到账户状态）。 -->
+        <!-- 授权标识（低调 chip）。优先级：宽限预警 > 试用版。
+             「已连接账户」chip 已删（dev-board#221）：手机号登录就是常态，无需状态标注；
+             预警仍排最前——它是唯一「不处理就会被挡在门外」的一条。 -->
         <view
           v-if="graceKind"
           class="trial-chip grace-chip"
@@ -106,23 +106,27 @@
           <text class="trial-chip-text">{{ graceChipText }}</text>
         </view>
         <view
-          v-else-if="accountConnected"
-          class="trial-chip account-chip"
-          @tap.stop="goToAccountPanel"
-          :title="$t('workbench.accountUsage')"
-        >
-          <text class="trial-chip-text">{{ $t('workbench.accountConnected') }}</text>
-        </view>
-        <view
-          v-else-if="licenseMode === 'trial'"
+          v-else-if="!accountConnected && licenseMode === 'trial'"
           class="trial-chip"
           @tap.stop="showTrialInfo = true"
           :title="$t('workbench.trialInfo')"
         >
           <text class="trial-chip-text">{{ $t('workbench.trialBadge') }}</text>
         </view>
-        <!-- 顶部工具区（IDE 风格）：分屏 / 浏览器 / 摘录 / AI / 工具 -->
+        <!-- 顶部工具区（IDE 风格）：整理 / 分屏 / 浏览器 / 摘录 / AI / 工具 -->
         <view class="header-tools" v-if="!isClientView">
+          <!-- rail 整理模式开关（dev-board#215/#221）：从 rail 挪到顶栏（原「已连接账户」chip 位），
+               开着时 rail 可拖项抖动+虚线框、点击不打开面板，再按一次退出 -->
+          <view
+            class="top-bar-btn"
+            :class="{ active: railEditMode }"
+            :title="railEditMode ? $t('workbench.railEditDone') : $t('workbench.railEditEnter')"
+            @tap="toggleRailEditMode"
+          >
+            <svg class="tool-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, gi) in GLYPHS.sort" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </view>
           <!-- 1. Left Sidebar -->
           <view
             class="top-bar-btn"
@@ -309,21 +313,7 @@
           <text v-else class="rail-icon">{{ p.icon }}</text>
         </view>
 
-        <!-- 整理模式开关（dev-board#215）：iPhone 编辑主屏幕式——按下后所有可拖项
-             抖动+虚线框明示可拖，编辑态下点击不打开面板，再按一次退出 -->
-        <view
-          v-if="!isClientView"
-          class="rail-btn rail-edit-btn"
-          :class="{ active: railEditMode }"
-          :title="railEditMode ? $t('workbench.railEditDone') : $t('workbench.railEditEnter')"
-          @tap="toggleRailEditMode"
-        >
-          <view class="rail-icon-wrapper">
-            <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path v-for="(d, gi) in GLYPHS.sort" :key="gi" :d="d" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
-            </svg>
-          </view>
-        </view>
+        <!-- 整理模式开关已挪到顶栏 header-tools（dev-board#221，原在 rail 上太显眼） -->
 
         <!-- Spacer -->
         <view style="flex: 1"></view>
@@ -2120,7 +2110,8 @@ export default {
       // 授权状态（试用版标识，商业化解锁门）
       licenseMode: '',
       showTrialInfo: false,
-      // 账户连接状态（商业化 PR-B）：已连接时 chip 改显「已连接账户」
+      // 账户连接状态（商业化 PR-B）：已连接时不再显示任何 chip（「已连接账户」标注已删，dev-board#221），
+      // 仍用于压掉「试用版」chip
       accountConnected: false,
       // 宽限预警（2026-08 官方版必须账户登录）：'legacyTrial' | 'offlineReverify' | ''
       graceKind: '',
@@ -3525,7 +3516,7 @@ export default {
       }
     },
     // 授权标识：桌面端查授权模式与账户连接状态
-    // （已连接账户 → 「已连接账户」chip；否则 mode=trial → 「试用版」chip）
+    // （已连接账户 → 不显示 chip；未连接且 mode=trial → 「试用版」chip；dev-board#221）
     async loadLicenseMode() {
       if (!isDesktopHost()) return
       try {
@@ -5501,6 +5492,10 @@ export default {
     handleAiDrop(e) {
         if (e && e.preventDefault) e.preventDefault()
         this.dragOverAiPanel = false
+
+        // rail 排序 / 面板停靠的拖拽松在对话区属于误落，静默忽略——
+        // 否则会被当成「拖文件进对话」而弹「未获取到拖拽数据」（dev-board#220）
+        if (this.draggingRailKey || this.draggingPanelKey) return
 
         let fileData = null
         try {
