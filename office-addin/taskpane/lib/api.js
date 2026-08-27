@@ -61,6 +61,30 @@ export async function ensureAddinDefaultProject({ serverUrl, token }) {
 }
 
 /**
+ * 新建项目（POST /api/projects，dev-board#196）。插件端只建 BLANK 类型——
+ * 尽调等结构化项目类型要填公司信息，那是桌面端向导的事。
+ * 返回 {id, name}；失败抛错由界面提示（新建是显式动作，不静默吞）。
+ */
+export async function createProject({ serverUrl, token }, name) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) throw new Error(t('apiServerUrlEmpty'))
+  let resp
+  try {
+    resp = await fetch(`${base}/api/projects`, {
+      method: 'POST',
+      headers: headers(token),
+      body: JSON.stringify({ projectType: 'BLANK', name: (name || '').trim() })
+    })
+  } catch (e) {
+    throw new Error(t('apiBackendUnreachable'))
+  }
+  if (!resp.ok) throw new Error(t('apiConnectFailedHttp', { status: resp.status }))
+  const data = await resp.json()
+  if (data && data.id != null) return { id: data.id, name: data.name }
+  throw new Error(t('apiBadResponseFormat'))
+}
+
+/**
  * 我在本项目的历史会话列表（GET /api/ai/conversations?projectId=，user-scoped 裸数组）。
  * 每条：{conversationId, title, lastMessage, updatedAt, runStatus}（title 是 LLM 生成的，
  * 可能为空）。失败静默回空数组——历史列表拿不到不该打断当前对话（dev-board#148）。

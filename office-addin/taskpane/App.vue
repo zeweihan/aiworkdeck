@@ -11,18 +11,28 @@
         class="project-select"
         :value="projectId"
         :title="currentProjectName ? t('currentProjectTitle', { name: currentProjectName }) : t('selectProject')"
-        @change="onProjectChange($event.target.value)"
+        @change="onProjectSelect($event)"
       >
         <option value="" disabled>{{ t('selectProject') }}</option>
         <option v-for="p in projects" :key="p.id" :value="String(p.id)">{{ p.name }}</option>
+        <!-- 新建项目（dev-board#196）：哨兵值，onProjectSelect 拦截后弹输入面板 -->
+        <option value="__new__">{{ t('newProjectOption') }}</option>
       </select>
       <span class="header-spacer"></span>
-      <!-- 语言切换（dev-board#177）：未登录也要能切，所以放头部而不是账户菜单里 -->
+      <!-- 语言切换（dev-board#177/#193）：未登录也要能切，所以放头部而不是账户菜单里；
+           地球图标 + 目标语言缩写，让它一眼可读为「切换语言」而不是一个谜之汉字按钮 -->
       <button
         class="icon-btn lang-btn"
         :title="t('languageLabel')"
         @click="toggleLang"
-      >{{ langBtnLabel }}</button>
+      >
+        <svg class="lang-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <circle cx="12" cy="12" r="9"/>
+          <path d="M3 12h18"/>
+          <ellipse cx="12" cy="12" rx="4.2" ry="9"/>
+        </svg>
+        <span class="lang-target">{{ langBtnLabel }}</span>
+      </button>
       <template v-if="view === 'chat'">
         <!-- 右上角是登录入口，不是设置（dev-board#176）：设置里剩下的只有连接这一件事 -->
         <button v-if="!configured" class="login-btn" @click="view = 'settings'">{{ t('login') }}</button>
@@ -39,7 +49,8 @@
       <button v-else class="icon-btn" @click="view = 'chat'">{{ t('back') }}</button>
     </header>
 
-    <!-- 账户菜单：毛玻璃弹层 -->
+    <!-- 账户菜单（dev-board#194）：展示账户基本信息与 AI 额度，不再挂「高级设置」入口——
+         那个入口把已登录用户带回登录表单，看起来像是被登出了 -->
     <div v-if="accountOpen" class="account-overlay" @click.self="accountOpen = false">
       <div ref="accountMenuEl" class="account-menu glass">
         <div class="account-head">
@@ -47,10 +58,41 @@
             <img v-if="me && me.avatarUrl" class="avatar-img" :src="me.avatarUrl" alt="" />
             <span v-else class="avatar-initial">{{ avatarInitial }}</span>
           </div>
-          <div class="account-name">{{ me && (me.displayName || me.username) ? (me.displayName || me.username) : t('accountTitle') }}</div>
+          <div class="account-id">
+            <div class="account-name">{{ me && (me.displayName || me.username) ? (me.displayName || me.username) : t('accountTitle') }}</div>
+            <div v-if="accountContact" class="account-sub">{{ accountContact }}</div>
+          </div>
         </div>
-        <button class="menu-item" @click="openSettings">{{ t('connectionSettings') }}</button>
+        <div v-if="quotaText" class="account-quota">
+          <span class="quota-label">{{ t('aiQuotaLabel') }}</span>
+          <span class="quota-value">{{ quotaText }}</span>
+        </div>
         <button class="menu-item danger" @click="logout">{{ t('logout') }}</button>
+      </div>
+    </div>
+
+    <!-- 新建项目弹层（dev-board#196）：Office webview 里不用 window.prompt -->
+    <div v-if="newProjectOpen" class="account-overlay" @click.self="newProjectOpen = false">
+      <div ref="newProjectEl" class="account-menu glass new-project-menu">
+        <div class="np-title">{{ t('newProjectTitle') }}</div>
+        <input
+          ref="newProjectInputEl"
+          v-model="newProjectName"
+          class="np-input"
+          maxlength="60"
+          :placeholder="t('newProjectPlaceholder')"
+          @keydown.enter.prevent="confirmCreateProject"
+          @keydown.esc="newProjectOpen = false"
+        />
+        <div class="np-actions">
+          <button class="np-btn" @click="newProjectOpen = false">{{ t('cancel') }}</button>
+          <button
+            class="np-btn primary"
+            :disabled="creatingProject || !newProjectName.trim()"
+            @click="confirmCreateProject"
+          >{{ creatingProject ? t('creating') : t('create') }}</button>
+        </div>
+        <p v-if="newProjectError" class="np-error">{{ newProjectError }}</p>
       </div>
     </div>
 
@@ -79,7 +121,10 @@ import ChatView from './components/ChatView.vue'
 import {
   loadSettings, saveProjectId, isConfigured, hydrateSettings, clearToken, mirrorLang
 } from './lib/settings.js'
-import { fetchMyProjects, ensureAddinDefaultProject, fetchMe, postLogout } from './lib/api.js'
+import {
+  fetchMyProjects, ensureAddinDefaultProject, fetchMe, postLogout,
+  createProject, fetchPlatformAiStatus
+} from './lib/api.js'
 import { t, getLang, setLang } from './lib/i18n.js'
 import { popIn } from './lib/motion.js'
 
@@ -92,6 +137,16 @@ const langKey = ref(getLang())
 const me = ref(null)
 const accountOpen = ref(false)
 const accountMenuEl = ref(null)
+/** 按用户的平台 AI 额度（/api/platform-ai/key/status；拿不到就不展示额度行） */
+const aiQuota = ref(null)
+
+// 新建项目弹层（dev-board#196）
+const newProjectOpen = ref(false)
+const newProjectName = ref('')
+const newProjectError = ref('')
+const creatingProject = ref(false)
+const newProjectEl = ref(null)
+const newProjectInputEl = ref(null)
 
 // Logo 走运行时相对路径（动态绑定绕开 vite 的静态资源改写）：
 // 部署在 /office-addin/ 子路径与 dev 根路径下都能落到 dist 根的图标
@@ -109,6 +164,24 @@ const langBtnLabel = computed(() => (langKey.value === 'zh' ? 'EN' : '中'))
 const avatarInitial = computed(() => {
   const name = me.value && (me.value.displayName || me.value.username)
   return name ? String(name).trim().charAt(0).toUpperCase() : 'A'
+})
+
+/** 账户第二行：脱敏手机号或邮箱，都没有就不占位 */
+const accountContact = computed(() => {
+  if (!me.value) return ''
+  return me.value.phoneMasked || me.value.emailMasked || ''
+})
+
+/** 额度文案：有上限就给「剩余 / 共」，只有用量就给「已用」，什么都没有则隐藏 */
+const quotaText = computed(() => {
+  const q = aiQuota.value
+  if (!q || !q.hasKey) return ''
+  const fmt = (v) => '$' + Number(v).toFixed(2)
+  if (q.remainingUsd != null && q.limitUsd != null) {
+    return t('quotaRemaining', { remaining: fmt(q.remainingUsd), limit: fmt(q.limitUsd) })
+  }
+  if (q.usageUsd != null) return t('quotaUsed', { used: fmt(q.usageUsd) })
+  return ''
 })
 
 /**
@@ -151,6 +224,45 @@ function onProjectChange(id) {
   saveProjectId(id)
 }
 
+/** 下拉换项目：拦下「新建项目」哨兵项，其余走正常切换 */
+function onProjectSelect(ev) {
+  const value = ev.target.value
+  if (value === '__new__') {
+    // select 的显示值退回当前项目，弹层里再决定建不建
+    ev.target.value = projectId.value || ''
+    openNewProject()
+    return
+  }
+  onProjectChange(value)
+}
+
+function openNewProject() {
+  newProjectName.value = ''
+  newProjectError.value = ''
+  newProjectOpen.value = true
+  nextTick(() => {
+    popIn(newProjectEl.value)
+    if (newProjectInputEl.value) newProjectInputEl.value.focus()
+  })
+}
+
+async function confirmCreateProject() {
+  const name = newProjectName.value.trim()
+  if (!name || creatingProject.value) return
+  creatingProject.value = true
+  newProjectError.value = ''
+  try {
+    const created = await createProject(settings, name)
+    projects.value = [...projects.value, { id: created.id, name: created.name }]
+    onProjectChange(String(created.id))
+    newProjectOpen.value = false
+  } catch (e) {
+    newProjectError.value = (e && e.message) || t('createProjectFailed')
+  } finally {
+    creatingProject.value = false
+  }
+}
+
 function toggleLang() {
   const next = langKey.value === 'zh' ? 'en' : 'zh'
   setLang(next)
@@ -159,17 +271,13 @@ function toggleLang() {
   accountOpen.value = false
 }
 
-function openSettings() {
-  accountOpen.value = false
-  view.value = 'settings'
-}
-
 async function logout() {
   accountOpen.value = false
   postLogout(settings) // 尽力而为，不等待
   clearToken()
   settings.token = ''
   me.value = null
+  aiQuota.value = null
   projects.value = []
   view.value = 'settings'
 }
@@ -183,7 +291,11 @@ function onSettingsSaved({ serverUrl, token }) {
 }
 
 watch(accountOpen, (open) => {
-  if (open) nextTick(() => popIn(accountMenuEl.value))
+  if (open) {
+    nextTick(() => popIn(accountMenuEl.value))
+    // 每次打开都刷一次额度（静默降级：拿不到就不展示那一行）
+    fetchPlatformAiStatus(settings).then((s) => { aiQuota.value = s }).catch(() => {})
+  }
 })
 
 onMounted(async () => {
@@ -269,9 +381,24 @@ onMounted(async () => {
 .icon-btn:active { transform: translateY(1px); }
 
 .lang-btn {
-  min-width: 34px;
-  font-size: 12px;
-  padding: 3px 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 999px;
+}
+
+.lang-icon {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.lang-target {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
 }
 
 .login-btn {
@@ -356,12 +483,106 @@ onMounted(async () => {
   flex-shrink: 0;
 }
 
+.account-id {
+  flex: 1;
+  min-width: 0;
+}
+
 .account-name {
   font-size: 13px;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.account-sub {
+  font-size: 11px;
+  color: var(--awd-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* AI 额度行（dev-board#194） */
+.account-quota {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--awd-border);
+  font-size: 11px;
+}
+
+.quota-label { color: var(--awd-text-secondary); flex-shrink: 0; }
+
+.quota-value {
+  color: var(--awd-primary);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 新建项目弹层（dev-board#196） */
+.new-project-menu { padding: 12px 12px 10px; }
+
+.np-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.np-input {
+  width: 100%;
+  padding: 6px 9px;
+  border: 1px solid var(--awd-border);
+  border-radius: var(--awd-radius-sm);
+  background: var(--awd-surface);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.np-input:focus {
+  outline: none;
+  border-color: var(--awd-accent);
+  box-shadow: 0 0 0 3px rgba(91, 209, 151, 0.18);
+}
+
+.np-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.np-btn {
+  padding: 4px 12px;
+  border: 1px solid var(--awd-border);
+  border-radius: var(--awd-radius-sm);
+  background: var(--awd-surface);
+  color: var(--awd-text);
+  font-size: 12px;
+  transition: background 0.2s ease, transform 0.1s ease;
+}
+
+.np-btn:active { transform: translateY(1px); }
+
+.np-btn.primary {
+  background: var(--awd-primary);
+  border-color: var(--awd-primary);
+  color: #fff;
+}
+
+.np-btn.primary:hover:not(:disabled) { background: var(--awd-primary-hover); }
+.np-btn:disabled { opacity: 0.5; cursor: default; }
+
+.np-error {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--awd-danger);
+  word-break: break-word;
 }
 
 .menu-item {

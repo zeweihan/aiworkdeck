@@ -71,10 +71,25 @@ export const ZH = {
   menuModel: '模型',
   menuHistory: '历史对话',
 
+  // ---- App.vue：账户菜单（dev-board#194）----
+  aiQuotaLabel: 'AI 额度',
+  quotaRemaining: '剩余 {remaining} / 共 {limit}',
+  quotaUsed: '已用 {used}',
+
+  // ---- App.vue：新建项目（dev-board#196）----
+  newProjectOption: '+ 新建项目',
+  newProjectTitle: '新建项目',
+  newProjectPlaceholder: '项目名称，如「某某公司尽调」',
+  create: '创建',
+  creating: '创建中...',
+  createProjectFailed: '项目创建失败',
+
   // ---- ChatView.vue：空态 ----
   emptyHint: '与 AI 讨论当前文档或项目事务。',
   connectionNotReady: '尚未登录：点击右上角「登录」连接账户。',
   noProjectSelected: '尚未选择项目：在顶部下拉中选一个项目。',
+  signInWelcomeTitle: '连接你的 AI WorkDeck 账户',
+  signInWelcomeHint: '登录后即可让 AI 阅读与修改当前文档、检索项目资料，与桌面版是同一个账户。',
 
   // ---- ChatView.vue：快捷入口 ----
   quickSummarizeLabel: '总结当前文档',
@@ -339,10 +354,25 @@ export const EN = {
   menuModel: 'Model',
   menuHistory: 'Conversation history',
 
+  // ---- App.vue：账户菜单（dev-board#194）----
+  aiQuotaLabel: 'AI quota',
+  quotaRemaining: '{remaining} left of {limit}',
+  quotaUsed: '{used} used',
+
+  // ---- App.vue：新建项目（dev-board#196）----
+  newProjectOption: '+ New project',
+  newProjectTitle: 'New project',
+  newProjectPlaceholder: 'Project name, e.g. "Acme due diligence"',
+  create: 'Create',
+  creating: 'Creating...',
+  createProjectFailed: 'Failed to create project',
+
   // ---- ChatView.vue：空态 ----
   emptyHint: 'Ask AI about the current document or project.',
   connectionNotReady: 'Not signed in: click "Sign in" in the top right to connect your account.',
   noProjectSelected: 'No project selected: pick one from the dropdown at the top.',
+  signInWelcomeTitle: 'Connect your AI WorkDeck account',
+  signInWelcomeHint: 'Sign in to let AI read and edit this document and search your project files — same account as the desktop app.',
 
   // ---- ChatView.vue：快捷入口 ----
   quickSummarizeLabel: 'Summarize this document',
