@@ -47,6 +47,13 @@ public class MeetingRecording {
     /** 录音音频在项目文件树里的 ProjectFile ID */
     private Long audioFileId;
 
+    /**
+     * 本记录是否「代管」音频文件（dev-board#227）。面板录音流程自建的占位文件归本记录管，
+     * 删除记录连带删文件；资源管理器右键转写注册的是用户已有的文件，删除记录时绝不能
+     * 动它。null（存量行）一律视同 true——存量行全部来自面板流程。
+     */
+    private Boolean ownsAudioFile;
+
     /** 录音时长（毫秒），结束录音时由前端回报 */
     private Long durationMs;
 

@@ -120,6 +120,38 @@ public class MeetingRecordingController {
         return meeting;
     }
 
+    /**
+     * 资源管理器右键转写（dev-board#227）：把项目里已有的音频文件注册成会议记录并
+     * 立即提交转写（与面板 finish 的自动提交同一套闸：凭证已配、平台档告知已确认）。
+     * 幂等：同一文件重复注册返回既有记录；仅当记录尚可转写（RECORDED/FAILED/EMPTY）
+     * 时才提交，TRANSCRIBED/TRANSCRIBING 的不重复扣费。
+     */
+    @PostMapping("/projects/{projectId}/register-file")
+    public Map<String, Object> registerFile(
+            @PathVariable Long projectId,
+            @RequestBody RegisterFileDto dto,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = requireMemberByProject(sessionId, projectId);
+        if (dto == null || dto.getFileId() == null) {
+            throw new IllegalArgumentException(LangText.of("缺少文件标识", "Missing file id"));
+        }
+        MeetingRecording meeting = meetingService.registerExisting(projectId, dto.getFileId(), userId);
+        boolean submitted = false;
+        boolean transcribable = MeetingRecording.STATUS_RECORDED.equals(meeting.getStatus())
+                || MeetingRecording.STATUS_FAILED.equals(meeting.getStatus())
+                || MeetingRecording.STATUS_EMPTY.equals(meeting.getStatus());
+        if (transcribable && transcriptionService.isConfigured()
+                && !transcriptionService.recordingNoticePending()) {
+            meeting = transcriptionService.startTranscription(meeting.getId());
+            submitted = true;
+        }
+        Map<String, Object> result = new HashMap<>();
+        result.put("meeting", meeting);
+        result.put("configured", transcriptionService.isConfigured());
+        result.put("submitted", submitted);
+        return result;
+    }
+
     /** 手动（重新）提交转写。 */
     @PostMapping("/{meetingId}/transcribe")
     public MeetingRecording transcribe(
@@ -185,6 +217,11 @@ public class MeetingRecordingController {
     }
 
     // ==================== DTO ====================
+
+    @Data
+    public static class RegisterFileDto {
+        private Long fileId;
+    }
 
     @Data
     public static class FinishDto {

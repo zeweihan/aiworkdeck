@@ -24,6 +24,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * 会议录音生命周期：建档（含音频文件占位）→ 结束 → 说话人改名 / 导出 / 删除，
@@ -77,8 +78,63 @@ public class MeetingRecordingService {
         meeting.setTitle(title);
         meeting.setStatus(MeetingRecording.STATUS_RECORDING);
         meeting.setAudioFileId(audio.getId());
+        meeting.setOwnsAudioFile(true);
         meeting.setCreatedBy(userId);
         return meetingRepository.save(meeting);
+    }
+
+    /**
+     * 资源管理器右键转写（dev-board#227）：把项目里一个已存在的音频文件注册成一条
+     * 会议记录，复用整条转写链路（三档编排、说话人分离、纪要都在其上）。
+     *
+     * <p>不复制字节——{@code audioFileId} 是裸外键，转写侧 resolveAudioPath 只按
+     * ProjectFile.filePath 取文件，不关心它在哪个文件夹。{@code ownsAudioFile=false}：
+     * 删除这条记录不许连带删用户的原始文件。
+     *
+     * <p>幂等：同一文件已注册过则返回既有记录（防止重复点右键各花一次转写费）。
+     */
+    @Transactional
+    public MeetingRecording registerExisting(Long projectId, Long fileId, Long userId) {
+        ProjectFile file = projectFileRepository.findById(fileId).orElse(null);
+        if (file == null || Boolean.TRUE.equals(file.getIsDeleted())
+                || !projectId.equals(file.getProjectId())) {
+            throw new IllegalArgumentException(LangText.of("文件不存在", "File not found"));
+        }
+        if (Boolean.TRUE.equals(file.getIsFolder())) {
+            throw new IllegalArgumentException(LangText.of("不能转写文件夹", "Cannot transcribe a folder"));
+        }
+        if (!isAudioFileName(file.getName())) {
+            throw new IllegalArgumentException(LangText.of("该文件不是音频文件", "Not an audio file"));
+        }
+
+        for (MeetingRecording existing : meetingRepository.findByProjectIdOrderByCreatedAtDesc(projectId)) {
+            if (fileId.equals(existing.getAudioFileId())) {
+                return existing;
+            }
+        }
+
+        String name = file.getName();
+        int dot = name.lastIndexOf('.');
+        MeetingRecording meeting = new MeetingRecording();
+        meeting.setProjectId(projectId);
+        meeting.setTitle(dot > 0 ? name.substring(0, dot) : name);
+        // 字节已在，直接进 RECORDED（可转写态），跳过 RECORDING
+        meeting.setStatus(MeetingRecording.STATUS_RECORDED);
+        meeting.setAudioFileId(fileId);
+        meeting.setOwnsAudioFile(false);
+        meeting.setCreatedBy(userId);
+        return meetingRepository.save(meeting);
+    }
+
+    /** 可注册转写的音频扩展名。与前端 FileTree 右键菜单的判定保持一致。 */
+    private static final Set<String> AUDIO_EXTENSIONS = Set.of(
+            "mp3", "m4a", "aac", "wav", "flac", "ogg", "opus", "amr", "wma", "webm");
+
+    public static boolean isAudioFileName(String name) {
+        if (name == null) return false;
+        int dot = name.lastIndexOf('.');
+        if (dot < 0 || dot == name.length() - 1) return false;
+        return AUDIO_EXTENSIONS.contains(name.substring(dot + 1).toLowerCase());
     }
 
     public List<MeetingRecording> list(Long projectId) {
@@ -132,12 +188,18 @@ public class MeetingRecordingService {
         return meetingRepository.save(meeting);
     }
 
-    /** 删除会议记录与音频文件（音频删除失败只记日志，不挡记录删除）。 */
+    /**
+     * 删除会议记录与音频文件（音频删除失败只记日志，不挡记录删除）。
+     *
+     * <p>音频只在本记录代管时（面板流程自建的占位文件）连带删除；右键转写注册的记录
+     * （ownsAudioFile=false）指向用户已有的文件，删除记录绝不能把他的原始录音丢进回收站。
+     * null 视同代管（存量行全部来自面板流程）。
+     */
     @Transactional
     public void delete(Long meetingId, Long userId) {
         MeetingRecording meeting = get(meetingId);
         meetingRepository.delete(meeting);
-        if (meeting.getAudioFileId() != null) {
+        if (meeting.getAudioFileId() != null && !Boolean.FALSE.equals(meeting.getOwnsAudioFile())) {
             try {
                 projectFileService.delete(meeting.getAudioFileId(), userId);
             } catch (Exception e) {

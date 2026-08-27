@@ -64,7 +64,7 @@ class MobileRelayStoreServiceConcurrentStoreTest {
                 .thenThrow(new DataIntegrityViolationException("duplicate key: user_id, client_media_id"));
 
         MobileMediaInbox result = service.storeMedia(1L, "dev-a", "42", MEDIA_ID,
-                "IMG_0001.jpg", "image", null,
+                "IMG_0001.jpg", "image", null, 5,
                 new ByteArrayInputStream("bytes".getBytes(StandardCharsets.UTF_8)));
 
         assertEquals(existing.getId(), result.getId(), "撞约束之后必须回落到既有记录，而不是把异常甩给调用方");

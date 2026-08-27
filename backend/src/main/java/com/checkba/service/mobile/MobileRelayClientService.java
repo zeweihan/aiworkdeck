@@ -188,6 +188,8 @@ public class MobileRelayClientService {
 
     /** 归档根目录名，与 buildPhysicalPath 会拼出的物理路径同构，见 landAndAck 内注释。 */
     private static final String MEDIA_ROOT_FOLDER = "现场影像";
+    /** 录音（mediaType=audio）落这个根目录——律师找录音不该去翻「现场影像」。 */
+    private static final String AUDIO_ROOT_FOLDER = "现场录音";
 
     private void landAndAck(JsonNode item) throws IOException, InterruptedException {
         long itemId = item.path("id").asLong();
@@ -207,7 +209,12 @@ public class MobileRelayClientService {
         }
 
         String dateStr = captureDate(item);
-        ProjectFile root = ensureFolder(projectId, null, MEDIA_ROOT_FOLDER, userId);
+        // 根目录按类型分流：音频进「现场录音」，图片/视频照旧进「现场影像」。rootFolder 必须
+        // 从 mediaType 稳定推导——它同时参与幂等判据（同名文件查找）与 storagePath 拼接，
+        // 跨轮重试两处要落在同一棵目录下。
+        String mediaType = item.path("mediaType").asText("image");
+        String rootFolderName = "audio".equals(mediaType) ? AUDIO_ROOT_FOLDER : MEDIA_ROOT_FOLDER;
+        ProjectFile root = ensureFolder(projectId, null, rootFolderName, userId);
         ProjectFile day = ensureFolder(projectId, root.getId(), dateStr, userId);
 
         String landedName = landedFileName(item.path("fileName").asText(),
@@ -239,20 +246,20 @@ public class MobileRelayClientService {
             // 事务包裹它，一旦返回即已提交，此后任何失败都救不回来（旧实现先 createFile 再
             // save，save 抛 IOException 时行已落库、ACK 没发，下一轮却只按"同名文件已在"的
             // 幂等判据误判成功直接补 ACK）。storagePath 与 buildPhysicalPath 会算出的路径同构
-            // （两层目录名就是上面 ensureFolder 用的 MEDIA_ROOT_FOLDER 与 dateStr），显式传给
+            // （两层目录名就是上面 ensureFolder 用的 rootFolderName 与 dateStr），显式传给
             // createFile 而不是留空自动推导，为的是下面这行 save 能在建库之前先拿到确定的
             // 存储 key；createFile 内部 createFromTemplate 见文件已存在会直接跳过，不会用
             // 模板覆盖已经落好的真内容。真落盘失败（磁盘满/网络中断）时异常在 createFile 之前
             // 抛出，本轮不落一条库记录，下一轮幂等判据自然判定"未落地"、重新下载，
             // 不需要额外的补偿删除。
             String storagePath = String.format("projects/%d/%s/%s/%s",
-                    projectId, MEDIA_ROOT_FOLDER, dateStr, landedName);
+                    projectId, rootFolderName, dateStr, landedName);
             try (InputStream in = content.body()) {
                 storageServiceFactory.getStorageService().save(storagePath, in);
             }
             ProjectFile record = projectFileService.createFile(
                     projectId, day.getId(), landedName,
-                    item.path("mediaType").asText("image"),
+                    mediaType,
                     item.path("fileSize").asLong(0),
                     storagePath, null, userId);
             // storagePath 是照着 ProjectFileService.buildPhysicalPath 的格式手拼的，
@@ -264,7 +271,7 @@ public class MobileRelayClientService {
                         storagePath, record.getFilePath());
             }
             log.info("手机同步：影像 {} 已落盘 项目={} 文件={}/{}/{}",
-                    itemId, projectId, MEDIA_ROOT_FOLDER, dateStr, landedName);
+                    itemId, projectId, rootFolderName, dateStr, landedName);
         }
         HttpResponse<String> ack = authed("POST", "/api/mobile/inbox/" + itemId + "/ack", "{}");
         if (!okEnvelope(ack)) {

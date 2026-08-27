@@ -399,6 +399,20 @@ public class MeetingTranscriptionService {
         return saved;
     }
 
+    /**
+     * 上报给上游的音频格式：取 prepared 文件的真实扩展名。prepared 要么是转码产物（.mp3），
+     * 要么是转码失败时回退的原始文件——旧实现硬编码「非 mp3 即 webm」，那个假设只在
+     * 音频全部来自前端 MediaRecorder（webm）的时代成立；右键转写与手机录音进来后
+     * 原始文件可能是 m4a/wav 等任意格式，把 m4a 字节当 webm 上报会让听悟拒识或识别乱码
+     * （dev-board#227）。无扩展名时仍回落 webm（历史占位文件的形态）。
+     */
+    static String audioFormat(File prepared) {
+        String n = prepared.getName();
+        int dot = n.lastIndexOf('.');
+        String ext = dot >= 0 && dot < n.length() - 1 ? n.substring(dot + 1).toLowerCase() : "";
+        return ext.isEmpty() ? "webm" : ext;
+    }
+
     /** 音频本体的定位与非空校验，两档共用。 */
     private Path resolveAudioPath(MeetingRecording meeting) throws Exception {
         ProjectFile audio = projectFileRepository.findById(meeting.getAudioFileId())
@@ -462,7 +476,7 @@ public class MeetingTranscriptionService {
 
             workDir = Files.createTempDirectory("awd-meeting-");
             File prepared = transcodeWithTimeout(audioPath.toFile(), workDir);
-            String format = prepared.getName().endsWith(".mp3") ? "mp3" : "webm";
+            String format = audioFormat(prepared);
             long durationSec = estimateDurationSec(meeting, prepared);
 
             // ① 凭证：余额闸在这一步就生效，用户不会白传两小时录音才被拒
@@ -581,7 +595,7 @@ public class MeetingTranscriptionService {
 
             workDir = Files.createTempDirectory("awd-meeting-");
             File prepared = transcodeWithTimeout(audioPath.toFile(), workDir);
-            String ext = prepared.getName().endsWith(".mp3") ? "mp3" : "webm";
+            String ext = audioFormat(prepared);
             String objectKey = ossObjectKey(meeting, ext);
 
             String signedUrl = ossClient.uploadAndSign(settings, objectKey, prepared, URL_TTL);

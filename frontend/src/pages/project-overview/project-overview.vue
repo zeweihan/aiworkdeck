@@ -626,6 +626,8 @@
             @file-deleted="handleFileDeleted"
             @file-history="onFileHistory"
             @reveal-file="onRevealFile"
+            :transcribe-enabled="meetingRecorderEnabled"
+            @transcribe-audio="onTranscribeAudio"
           />
           <DdFilesPanel
             v-else-if="leftPaneKey === 'dd-files'"
@@ -685,6 +687,7 @@
                 v-if="effectiveVoiceTab === 'recorder'"
                 :project-id="projectId"
                 :current-user="currentUser"
+                :focus-meeting-id="meetingFocusId"
                 @generate-minutes="handleMeetingMinutesStart"
               />
               <EasyVoicePane
@@ -1460,6 +1463,7 @@
                   v-if="effectiveVoiceTab === 'recorder'"
                   :project-id="projectId"
                   :current-user="currentUser"
+                  :focus-meeting-id="meetingFocusId"
                   @generate-minutes="handleMeetingMinutesStart"
                 />
                 <EasyVoicePane
@@ -2005,7 +2009,8 @@ import {
   getAccountBalance, // Credits 余额 chip（dev-board#187，后端带 TTL 缓存的轻端点）
   getCloudStatus, // 协作 chip：这份案卷有没有放进团队案件库、状态如何
   checkCloud, // 协作 chip 的联网刷新（cloudStatus 是不联网的本地快照）
-  getCurrentUser as getCurrentUserApi // 顶栏头像：补一次真实接口，本地缓存只是首屏兜底
+  getCurrentUser as getCurrentUserApi, // 顶栏头像：补一次真实接口，本地缓存只是首屏兜底
+  registerMeetingFromFile // 右键转写：音频文件注册进会议录音面板（dev-board#227）
 } from '@/services/api.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { signOut } from '@/utils/signOut.js'
@@ -2162,6 +2167,8 @@ export default {
       avatarMenuOpen: false,
       // 单文件历史：右键「这份文件的历史」时设置，version 面板据此只显示这份文件的版本
       versionFileFilter: null,
+      // 右键转写后要在会议录音面板里定位/展开的会议 id（dev-board#227）
+      meetingFocusId: null,
       // 有一次采纳停在待裁决状态（/status 的 adoptConflict）。版本面板之外也要提示，
       // 见模板里的 .adopt-pending-bar。版本面板打开时由它的 /status 拉取实时同步。
       adoptConflictPending: false,
@@ -3640,6 +3647,25 @@ export default {
     onFileHistory(file) {
       this.versionFileFilter = { fileId: file.id, name: file.name }
       if (this.leftPaneKey !== 'version') this.toggleLeftPane('version')
+    },
+    // 右键「转写」：注册成会议记录（凭证已配则后端顺手提交转写），跳会议录音面板定位到它
+    // （dev-board#227）。菜单项本身已按 meetingRecorderEnabled 门控，这里不再重复判。
+    async onTranscribeAudio(file) {
+      try {
+        const res = await registerMeetingFromFile(this.projectId, file.id)
+        this.meetingFocusId = res && res.meeting ? res.meeting.id : null
+        this.voiceTab = 'recorder'
+        if (this.leftPaneKey !== 'voice') this.toggleLeftPane('voice')
+        uni.showToast({
+          title: res && res.submitted
+            ? this.$t('fileTree.transcribeSubmitted')
+            : this.$t('fileTree.transcribeRegistered'),
+          icon: 'none'
+        })
+      } catch (error) {
+        console.error('转写发起失败:', error)
+        uni.showToast({ title: (error && error.message) || this.$t('fileTree.transcribeFailed'), icon: 'none' })
+      }
     },
     // IDE 化窗口标题
     updateWindowTitle() {

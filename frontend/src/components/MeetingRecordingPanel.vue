@@ -336,9 +336,20 @@ export default {
     currentUser: {
       type: Object,
       default: null
+    },
+    // 资源管理器右键转写后要定位/展开的会议 id（dev-board#227）。
+    // 面板可能因转写而被切出来（v-if 重新挂载），所以 mounted 与 watch 两头都处理。
+    focusMeetingId: {
+      type: [String, Number],
+      default: null
     }
   },
   emits: ['generate-minutes'],
+  watch: {
+    focusMeetingId() {
+      this.applyFocus()
+    }
+  },
   data() {
     return {
       meetings: [],
@@ -474,7 +485,7 @@ export default {
     }
   },
   mounted() {
-    this.loadMeetings()
+    this.loadMeetings().then(() => this.applyFocus())
     this.loadAsrTier()
     this.loadAsrNotice()
     this.loadAudioDevices()
@@ -708,6 +719,17 @@ export default {
       const meeting = await stopRecording()
       await this.loadMeetings()
       if (meeting && meeting.id) this.expandedId = meeting.id
+    },
+
+    // 右键转写入口的定位：把 focusMeetingId 指到的会议展开并立刻刷新一次进度（dev-board#227）
+    async applyFocus() {
+      if (this.focusMeetingId == null) return
+      await this.loadMeetings()
+      const id = Number(this.focusMeetingId)
+      if (this.meetings.some(m => Number(m.id) === id)) {
+        this.expandedId = id
+        this.refreshOne(id)
+      }
     },
 
     // ==================== 详情 ====================

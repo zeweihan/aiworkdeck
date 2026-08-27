@@ -252,6 +252,24 @@ class MobileRelayClientHttpTest {
     }
 
     @Test
+    @DisplayName("音频取件（mediaType=audio）：落「现场录音/日期」而不是「现场影像」，storagePath 同构")
+    void pollInboxLandsAudioIntoAudioFolder() {
+        inboxJson = "[{\"id\":11,\"projectKey\":\"42\",\"clientMediaId\":\"" + MEDIA_ID + "\","
+                + "\"fileName\":\"现场谈话.m4a\",\"mediaType\":\"audio\",\"fileSize\":10,"
+                + "\"capturedAt\":\"2026-08-19T21:00:00\",\"createdAt\":\"2026-08-20T09:00:00\"}]";
+        service().pollInbox();
+
+        assertTrue(tree.stream().anyMatch(f -> Boolean.TRUE.equals(f.getIsFolder()) && "现场录音".equals(f.getName())));
+        assertFalse(tree.stream().anyMatch(f -> "现场影像".equals(f.getName())), "音频不该建影像根目录");
+        assertTrue(tree.stream().anyMatch(f -> !Boolean.TRUE.equals(f.getIsFolder())
+                && "现场谈话-0a1b2c3d.m4a".equals(f.getName())));
+        assertEquals(1, savedStorageKeys.size());
+        assertTrue(savedStorageKeys.get(0).startsWith("projects/42/现场录音/2026-08-19/"),
+                "storagePath 必须与 ensureFolder 的目录同构，实际: " + savedStorageKeys.get(0));
+        assertEquals(List.of("/api/mobile/inbox/11/ack"), acked);
+    }
+
+    @Test
     @DisplayName("幂等：同名已落盘（上轮 ACK 丢失）不重复建文件，直接补 ACK")
     void pollInboxSkipsAlreadyLanded() {
         ProjectFile root = addNode(null, "现场影像", true);

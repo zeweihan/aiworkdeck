@@ -2462,6 +2462,17 @@ export function transcribeMeetingRecording(meetingId) {
   })
 }
 
+// 资源管理器右键转写：把项目里已有的音频文件注册成会议记录并（凭证已配时）自动提交转写。
+// 返回 { meeting, configured, submitted }（dev-board#227）
+export function registerMeetingFromFile(projectId, fileId) {
+  return request({
+    url: `/api/meetings/projects/${projectId}/register-file`,
+    method: 'POST',
+    data: { fileId },
+    header: { 'Content-Type': 'application/json' }
+  })
+}
+
 export function updateMeetingRecording(meetingId, payload) {
   return request({
     url: `/api/meetings/${meetingId}`,

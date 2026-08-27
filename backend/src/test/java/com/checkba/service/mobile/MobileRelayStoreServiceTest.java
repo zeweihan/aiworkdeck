@@ -28,8 +28,9 @@ import static org.junit.jupiter.api.Assertions.*;
  * - 影像入库幂等键 (userId, clientMediaId)，重复上传返回既有记录、不重写 blob；
  * - clientMediaId 只收 UUID 形态（路径穿越围栏）；
  * - ACK：置 deliveredAt + 立即删 blob，行保留供 status 查询；
- * - status：delivered 与等待秒数；
- * - 7 天 TTL 清理：删行 + 删残留 blob（ACK 是主机制，TTL 只是兜底）。
+ * - status：delivered 与等待秒数，未投递件带 expiresAt；
+ * - 30 天 TTL 清理：删行 + 删残留 blob（ACK 是主机制，TTL 只是兜底）；
+ * - 3GB 每用户配额：只计未投递 blob，ACK 即释放（dev-board#226）。
  *
  * 内存 H2（MODE=PostgreSQL）约定同 WorkSessionRepositoryTest。
  */
@@ -67,9 +68,10 @@ class MobileRelayStoreServiceTest {
     }
 
     private MobileMediaInbox store(String clientMediaId, String content) {
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
         return service.storeMedia(1L, "dev-a", "42", clientMediaId,
-                "IMG_0001.jpg", "image", null,
-                new ByteArrayInputStream(content.getBytes(StandardCharsets.UTF_8)));
+                "IMG_0001.jpg", "image", null, bytes.length,
+                new ByteArrayInputStream(bytes));
     }
 
     @Test
@@ -193,16 +195,100 @@ class MobileRelayStoreServiceTest {
     }
 
     @Test
-    @DisplayName("7 天 TTL 兜底：过期行删除，未投递的残留 blob 一并删")
+    @DisplayName("30 天 TTL 兜底：过期行删除，未投递的残留 blob 一并删；未过期的不动")
     void ttlCleanupRemovesRowsAndOrphanBlobs() {
         MobileMediaInbox item = store(MEDIA_ID, "payload");
+        // 8 天前：7 天 TTL 时代会被清掉，30 天口径下必须还在（dev-board#226 延长的意义所在）
         item.setCreatedAt(LocalDateTime.now().minusDays(8));
         inboxRepository.save(item);
         Path blob = Path.of(item.getStoragePath());
         assertTrue(Files.exists(blob));
 
         service.cleanupExpired();
+        assertTrue(Files.exists(blob), "8 天的件在 30 天 TTL 下不该被清");
+        assertEquals(1, inboxRepository.count());
+
+        item.setCreatedAt(LocalDateTime.now().minusDays(31));
+        inboxRepository.save(item);
+        service.cleanupExpired();
         assertFalse(Files.exists(blob));
         assertEquals(0, inboxRepository.count());
+    }
+
+    @Test
+    @DisplayName("mediaType 收 audio（手机录音走同一条中转链路），其余类型拒绝")
+    void audioMediaTypeIsAccepted() {
+        MobileMediaInbox item = service.storeMedia(1L, "dev-a", "42", MEDIA_ID,
+                "REC_0001.m4a", "audio", null, 7,
+                new ByteArrayInputStream("audio-x".getBytes(StandardCharsets.UTF_8)));
+        assertEquals("audio", item.getMediaType());
+        assertThrows(IllegalArgumentException.class, () -> service.storeMedia(
+                1L, "dev-a", "42", "0a1b2c3d-1111-4222-8333-444455557777",
+                "x.bin", "binary", null, 1,
+                new ByteArrayInputStream(new byte[]{1})));
+    }
+
+    @Test
+    @DisplayName("status：未投递件带 expiresAt（createdAt+TTL），已投递件不带")
+    void statusCarriesExpiresAtForUndelivered() {
+        MobileMediaInbox item = store(MEDIA_ID, "payload");
+        Map<String, Object> pending = service.status(1L, List.of(MEDIA_ID)).get(0);
+        assertEquals(item.getCreatedAt().plus(MobileRelayStoreService.TTL).toString(),
+                pending.get("expiresAt"));
+
+        service.ack(1L, item.getId());
+        Map<String, Object> delivered = service.status(1L, List.of(MEDIA_ID)).get(0);
+        assertFalse(delivered.containsKey("expiresAt"), "已投递件没有到期概念");
+    }
+
+    @Test
+    @DisplayName("配额：未投递 blob 占满 3GB 后拒绝新上传，ACK 释放后恢复；重传不受配额影响")
+    void quotaBlocksNewUploadsAndAckFrees() throws Exception {
+        // 直接造一行占满配额的未投递件（不真写 3GB 字节）
+        Path bigBlob = blobRoot.resolve("1").resolve("big-blob");
+        Files.createDirectories(bigBlob.getParent());
+        Files.writeString(bigBlob, "placeholder");
+        MobileMediaInbox big = new MobileMediaInbox();
+        big.setUserId(1L);
+        big.setDeviceId("dev-a");
+        big.setProjectKey("42");
+        big.setClientMediaId("ffffffff-0000-4000-8000-00000000aaaa");
+        big.setFileName("huge.mov");
+        big.setMediaType("video");
+        big.setFileSize(MobileRelayStoreService.QUOTA_BYTES);
+        big.setStoragePath(bigBlob.toString());
+        big.setCreatedAt(LocalDateTime.now());
+        inboxRepository.saveAndFlush(big);
+
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> store(MEDIA_ID, "one-more-byte"));
+        assertTrue(e.getMessage().contains("云端空间已满"), "配额拒绝要给用户可读的原因，实际: " + e.getMessage());
+
+        // 同 clientMediaId 的重传是幂等命中，配额满也不能拒（不占新空间）
+        MobileMediaInbox again = service.storeMedia(1L, "dev-a", "42", big.getClientMediaId(),
+                "huge.mov", "video", null, 3, new ByteArrayInputStream("xxx".getBytes(StandardCharsets.UTF_8)));
+        assertEquals(big.getId(), again.getId());
+
+        // 别的用户不受影响
+        MobileMediaInbox other = service.storeMedia(2L, "dev-z", "1", MEDIA_ID,
+                "IMG.jpg", "image", null, 3, new ByteArrayInputStream("abc".getBytes(StandardCharsets.UTF_8)));
+        assertNotNull(other.getId());
+
+        // ACK 即删 blob = 释放配额，循环利用
+        service.ack(1L, big.getId());
+        MobileMediaInbox landed = store(MEDIA_ID, "fits-now");
+        assertNotNull(landed.getId());
+    }
+
+    @Test
+    @DisplayName("usage：只计未投递 blob 的字节数，带配额上限")
+    void usageCountsOnlyPendingBlobs() {
+        MobileMediaInbox item = store(MEDIA_ID, "12345");
+        Map<String, Object> usage = service.usage(1L);
+        assertEquals(5L, usage.get("usedBytes"));
+        assertEquals(MobileRelayStoreService.QUOTA_BYTES, usage.get("quotaBytes"));
+
+        service.ack(1L, item.getId());
+        assertEquals(0L, service.usage(1L).get("usedBytes"), "ACK 之后配额应释放");
     }
 }

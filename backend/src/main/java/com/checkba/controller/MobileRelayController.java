@@ -98,7 +98,8 @@ public class MobileRelayController {
         LocalDateTime captured = parseCapturedAt(capturedAt);
         try (InputStream in = file.getInputStream()) {
             MobileMediaInbox item = store.storeMedia(
-                    userId, deviceId, projectKey, clientMediaId, fileName, mediaType, captured, in);
+                    userId, deviceId, projectKey, clientMediaId, fileName, mediaType, captured,
+                    file.getSize(), in);
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("code", 0);
             out.put("id", item.getId());
@@ -108,6 +109,13 @@ public class MobileRelayController {
         } catch (IOException e) {
             throw new IllegalStateException(LangText.of("影像暂存失败", "Failed to store media"), e);
         }
+    }
+
+    /** 手机端：中转区用量与配额（裸对象，dev-board#226）。 */
+    @GetMapping("/media/usage")
+    public Map<String, Object> mediaUsage(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        return store.usage(requireUser(sessionId));
     }
 
     /** 手机端：查询影像投递状态（裸数组）。 */

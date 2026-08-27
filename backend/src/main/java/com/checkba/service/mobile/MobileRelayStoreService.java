@@ -40,8 +40,13 @@ import java.util.regex.Pattern;
  *   <li>目录按 (userId, deviceId) 整批替换——projectKey 是那台桌面机本地库的项目 id，
  *       跨机同号不同物；</li>
  *   <li>影像幂等键 (userId, clientMediaId)，重传返回既有记录；</li>
- *   <li>删除由桌面端 ACK 触发（删 blob 留行），7 天 TTL 只是兜底（行与残留 blob 一并删）。</li>
+ *   <li>删除由桌面端 ACK 触发（删 blob 留行），30 天 TTL 只是兜底（行与残留 blob 一并删）。</li>
  * </ul>
+ *
+ * <p>容量口径（dev-board#226）：每用户 3GB，只计<b>未投递的 blob</b>（storagePath 非空的行）——
+ * ACK 即删 blob 就是释放配额，空间循环利用。配额检查在写盘之前按声明大小做，两笔并发上传
+ * 可能同时通过检查而略超上限（最多超一件的量，nginx 单请求 200MB 封顶），接受这个软度，
+ * 换取不引锁。
  */
 @Service
 @Slf4j
@@ -51,7 +56,13 @@ public class MobileRelayStoreService {
     private static final Pattern MEDIA_ID = Pattern.compile("^[A-Fa-f0-9-]{8,64}$");
     /** 单设备目录上限：正常律师机器几十个项目，超出多半是调用方出错，不让它撑爆表。 */
     private static final int MAX_DIR_ENTRIES = 1000;
-    private static final Duration TTL = Duration.ofDays(7);
+    /**
+     * TTL 从 7 天延长到 30 天（dev-board#226）：7 天意味着桌面端一周不开机，用户拍的
+     * 证据就被清掉——手机本地虽默认保留原件，但用户感知是「传上去的丢了」。
+     */
+    static final Duration TTL = Duration.ofDays(30);
+    /** 每用户中转区配额：3GB，只计未投递的 blob（ACK 即删 = 释放配额）。 */
+    static final long QUOTA_BYTES = 3L * 1024 * 1024 * 1024;
 
     private final MobileProjectDirRepository dirRepository;
     private final MobileMediaInboxRepository inboxRepository;
@@ -163,11 +174,11 @@ public class MobileRelayStoreService {
      */
     public MobileMediaInbox storeMedia(Long userId, String deviceId, String projectKey,
                                        String clientMediaId, String fileName, String mediaType,
-                                       LocalDateTime capturedAt, InputStream content) {
+                                       LocalDateTime capturedAt, long declaredSize, InputStream content) {
         try {
-            return self.storeMediaTx(userId, deviceId, projectKey, clientMediaId, fileName, mediaType, capturedAt, content);
+            return self.storeMediaTx(userId, deviceId, projectKey, clientMediaId, fileName, mediaType, capturedAt, declaredSize, content);
         } catch (DataIntegrityViolationException | UnexpectedRollbackException e) {
-            return self.storeMediaTx(userId, deviceId, projectKey, clientMediaId, fileName, mediaType, capturedAt, content);
+            return self.storeMediaTx(userId, deviceId, projectKey, clientMediaId, fileName, mediaType, capturedAt, declaredSize, content);
         }
     }
 
@@ -181,7 +192,7 @@ public class MobileRelayStoreService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public MobileMediaInbox storeMediaTx(Long userId, String deviceId, String projectKey,
                                        String clientMediaId, String fileName, String mediaType,
-                                       LocalDateTime capturedAt, InputStream content) {
+                                       LocalDateTime capturedAt, long declaredSize, InputStream content) {
         requireDeviceId(deviceId);
         if (projectKey == null || projectKey.isBlank()) {
             throw new IllegalArgumentException(LangText.of("缺少项目标识", "Missing project key"));
@@ -192,14 +203,25 @@ public class MobileRelayStoreService {
         if (fileName == null || fileName.isBlank()) {
             throw new IllegalArgumentException(LangText.of("缺少文件名", "Missing file name"));
         }
-        if (!"image".equals(mediaType) && !"video".equals(mediaType)) {
-            throw new IllegalArgumentException(LangText.of("影像类型只能是 image 或 video", "Media type must be image or video"));
+        if (!"image".equals(mediaType) && !"video".equals(mediaType) && !"audio".equals(mediaType)) {
+            throw new IllegalArgumentException(LangText.of("影像类型只能是 image、video 或 audio",
+                    "Media type must be image, video or audio"));
         }
 
         Optional<MobileMediaInbox> existing = inboxRepository.findByUserIdAndClientMediaId(userId, clientMediaId);
         if (existing.isPresent()) {
-            // 幂等：弱网重传、进程被杀重启都不产生重复件（spec 不变式 2）
+            // 幂等：弱网重传、进程被杀重启都不产生重复件（spec 不变式 2）。
+            // 幂等命中必须先于配额检查——重传不占新空间，配额满也不能把重传拒成失败。
             return existing.get();
+        }
+
+        // 配额检查在写盘之前、按声明大小做（controller 传 MultipartFile.getSize()，就是实际
+        // 字节数）。只计未投递的 blob：桌面端收走（ACK）即释放，空间循环利用。
+        long usedBytes = inboxRepository.sumPendingBytes(userId);
+        if (usedBytes + Math.max(0, declaredSize) > QUOTA_BYTES) {
+            throw new IllegalArgumentException(LangText.of(
+                    "云端空间已满（3GB）：请在桌面端打开 AI WorkDeck 收取已上传的文件后重试",
+                    "Cloud relay storage is full (3GB). Open AI WorkDeck on your desktop to collect pending items, then retry."));
         }
 
         Path blob = relayRoot.resolve(String.valueOf(userId)).resolve(clientMediaId);
@@ -271,14 +293,26 @@ public class MobileRelayStoreService {
             m.put("delivered", item.getDeliveredAt() != null);
             m.put("waitingSeconds", item.getDeliveredAt() != null ? 0L
                     : Math.max(0L, Duration.between(item.getCreatedAt(), now).getSeconds()));
+            // 未投递件带 TTL 到期时刻，手机端据此做「快到期」提醒（dev-board#226）
+            if (item.getDeliveredAt() == null) {
+                m.put("expiresAt", item.getCreatedAt().plus(TTL).toString());
+            }
             out.add(m);
         }
         return out;
     }
 
+    /** 中转区用量（只计未投递 blob）与配额，手机端设置页展示用。 */
+    public Map<String, Object> usage(Long userId) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("usedBytes", inboxRepository.sumPendingBytes(userId));
+        m.put("quotaBytes", QUOTA_BYTES);
+        return m;
+    }
+
     // ==================== TTL 兜底 ====================
 
-    /** 每天一次：超过 7 天的行（含未投递的）删行 + 删残留 blob。ACK 才是主删除机制。 */
+    /** 每天一次：超过 30 天的行（含未投递的）删行 + 删残留 blob。ACK 才是主删除机制。 */
     @Scheduled(initialDelay = 15 * 60 * 1000, fixedDelay = 24 * 60 * 60 * 1000)
     @Transactional
     public void cleanupExpired() {
