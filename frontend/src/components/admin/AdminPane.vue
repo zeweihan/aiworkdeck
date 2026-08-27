@@ -2807,7 +2807,8 @@ $text-secondary: #6C757D; // Gray-Medium
 .page-admin.is-embedded {
   min-height: 0;
   height: 100%;
-  overflow-y: auto;
+  /* hidden 而不是 auto：内容区自己是滚动容器，外层再留一条就成了双栏滚动 */
+  overflow: hidden;
   padding: 20px 16px;
 }
 
@@ -2817,8 +2818,21 @@ $text-secondary: #6C757D; // Gray-Medium
   width: 100%;
   display: flex;
   flex-direction: row;
-  align-items: flex-start;
+  /* stretch 而不是 flex-start：左导航与内容区都要撑满这一行的高度，
+     内容区才有确定的高度可以给 .config-scroll 用 */
+  align-items: stretch;
   gap: 24px;
+  min-height: 0;
+}
+
+/* 独立页（设置作为整页打开）：这一行占满视口减去页面上下 padding（40px x 2） */
+.page-admin:not(.is-embedded) .admin-container {
+  height: calc(100vh - 80px);
+}
+
+/* 嵌在工作台标签里：外层不滚（只留内容区那一条），这一行铺满标签内容区 */
+.page-admin.is-embedded .admin-container {
+  height: 100%;
 }
 
 .admin-sidebar {
@@ -2826,6 +2840,9 @@ $text-secondary: #6C757D; // Gray-Medium
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
+  /* 导航项一屏放得下就不出滚动条；放不下时它自己滚，不外溢 */
+  min-height: 0;
+  overflow-y: auto;
 }
 
 /* 侧栏顶部的用户卡（取代原来的 logo 头部）。样式沿用原个人中心那张卡，
@@ -2982,8 +2999,14 @@ $text-secondary: #6C757D; // Gray-Medium
   flex-direction: column;
 }
 
+/* 内容区是唯一的滚动条（dev-board#229/#230）。
+   原来写死 height: calc(100vh - 140px)——按视口算，而设置页嵌在工作台标签里时
+   可用高度根本不是视口高：容器比它的格子高，下沿于是与面板对不齐（维护者标红
+   的那条），多出来的高度又把滚动推给外层，两条滚动条同时可滚。
+   改成向父级要高度，父级各自负责把高度定死（下面两条）。 */
 .config-scroll {
-  height: calc(100vh - 140px);
+  height: 100%;
+  min-height: 0;
 }
 
 .section-card {
