@@ -372,6 +372,11 @@ The `law_*` tools are backed by a **PRC (Mainland China) law database**. They co
   social credit code. Returns JSON.
 - Full legal name or credit code only; for partial names, use `search_web` first to
   find the exact name.
+- `qichacha_ipr(companyName, kind)`: intellectual-property records — kind is one of
+  trademark / patent / intl_patent / software_copyright / work_copyright /
+  icp (website & mini-program ICP filings, i.e. domains) / ipr_pledge. The registry
+  record does NOT contain these; questions about trademarks/patents/domains must go
+  through this tool, one call per kind.
 
 ### 5.2 Financial data (`tushare_query`)
 - `tushare_query(apiName, paramsJson, fields)`: Tushare Pro interfaces (e.g.
