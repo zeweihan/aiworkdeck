@@ -31,3 +31,10 @@ test('SDK 暴露 evidence.link / list / locate', () => {
     assert.ok(text.indexOf("call('" + m + "'") >= 0, '缺 ' + m)
   }
 })
+
+test('SDK 暴露 v2.5 的 tools.invoke / chat.send / ui.openFile', () => {
+  const text = source.toString('utf8')
+  for (const m of ['tools.invoke', 'chat.send', 'ui.openFile']) {
+    assert.ok(text.indexOf("call('" + m + "'") >= 0, '缺 ' + m)
+  }
+})

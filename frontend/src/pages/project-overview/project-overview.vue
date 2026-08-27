@@ -771,6 +771,7 @@
             :permissions="activeDynamicPlugin.permissions || []"
             :project-id="projectId"
             :get-active-editor="getPluginActiveEditor"
+            @kickoff="onPluginQuickAction"
           />
           <PluginGuidePane
             v-else-if="activeDynamicPlugin"

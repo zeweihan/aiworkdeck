@@ -5,6 +5,8 @@ import com.checkba.repository.UserRepository;
 import com.checkba.service.AdminAccessService;
 import com.checkba.service.LangText;
 import com.checkba.service.ai.PluginService;
+import com.checkba.service.ai.ToolRegistry;
+import com.checkba.service.ai.tools.ToolContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -43,6 +45,8 @@ public class PluginController {
     private final UserRepository userRepository;
     private final AdminAccessService adminAccessService;
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
+    private final ToolRegistry toolRegistry;
+    private final com.checkba.service.ProjectMemberService projectMemberService;
 
     @lombok.Data
     public static class PluginView {
@@ -185,6 +189,52 @@ public class PluginController {
         telemetryService.record("plugin.lifecycle",
                 Map.of("pluginId", pluginId, "op", enabled ? "enable" : "disable"));
         return ResponseEntity.ok(ok());
+    }
+
+    /**
+     * Web 面板直调本插件工具（规范 v2.5）：绕过模型，不绕过任何安全闸——
+     * 登录会话 + 项目写权限 + 工具必须是该插件 manifest 声明的；
+     * 之后走与 AI 链路同一个 {@link com.checkba.service.ai.ToolRegistry#execute}，
+     * manifest 权限校验、宿主 SPI 配额、projectId/userId 以服务端为准的规则全部照旧。
+     * 请求体：{"projectId": 123, "args": {...}}；args 里与 ToolContext 同名的参数会被服务端值覆盖。
+     */
+    @PostMapping("/{id}/tools/{tool}")
+    public ResponseEntity<Map<String, Object>> invokeTool(
+            @PathVariable("id") String pluginId,
+            @PathVariable("tool") String toolName,
+            @org.springframework.web.bind.annotation.RequestBody(required = false) Map<String, Object> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (userId == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(LangText.of("请先登录", "Please sign in first")));
+        }
+        PluginService.PluginMetadata meta = pluginService.getPlugin(pluginId);
+        if (meta == null || !pluginService.isEnabled(pluginId) || pluginService.revokedReason(pluginId) != null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error(LangText.of("插件不存在或未启用: ", "Plugin not found or disabled: ") + pluginId));
+        }
+        boolean declared = meta.getTools() != null && meta.getTools().stream()
+                .anyMatch(t -> toolName.equals(t.getName()));
+        if (!declared) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error(LangText.of("该插件未声明此工具: ", "Tool not declared by this plugin: ") + toolName));
+        }
+        Object pidRaw = body == null ? null : body.get("projectId");
+        Long projectId = pidRaw instanceof Number n ? n.longValue() : null;
+        if (projectId == null || !projectMemberService.hasWritePermission(projectId, userId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("无权限访问该项目", "No access to this project")));
+        }
+        Object args = body.get("args");
+        String argsJson;
+        try {
+            argsJson = args == null ? "{}" : new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(args);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(error(LangText.of("args 不是合法 JSON 对象", "args is not a valid JSON object")));
+        }
+        ToolRegistry.ToolResult result = toolRegistry.execute(toolName,
+                argsJson, new ToolContext(projectId, null, userId, null));
+        Map<String, Object> out = new HashMap<>();
+        out.put("code", result.found() ? 0 : 1);
+        out.put("output", result.output());
+        return ResponseEntity.ok(out);
     }
 
     private PluginView toView(PluginService.PluginMetadata meta) {
