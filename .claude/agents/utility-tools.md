@@ -11,6 +11,26 @@ description: 辅助小工具领域。任务涉及浏览器面板、截图/OCR、
 
 **浏览器**：`frontend/src/components/BrowserPane.vue`；desktop `desktop/main/browser-views.js`（BrowserView 注册表）+ `desktop/main/main.js`（`makeBrowserView` 建 view 并接事件、window.open 拦截转工作区新 tab → 事件 `checkba:browser-open-new-tab`、全屏/黑屏兜底恢复、IPC handlers）；后端 `controller/BrowserProxyController.java`（GET /api/browser/proxy）。
 
+**工具栏收藏与快捷方式抽屉（dev-board#214）**：BrowserPane 工具栏在 ↵ 之后有两个新按钮——
+「收藏本页」星形（已收藏该 URL 时实心；判定按去尾斜杠的 URL 匹配收藏列表，再点只提示不重复入库，
+删除仍去收藏面板坞位）与「收藏夹/快捷方式」抽屉开关。契约：BrowserPane 新增 prop
+`projectId`（收藏落库目标，缺席即星形禁用）与事件 `favorite-added {id,url,title}`；
+**落库由 BrowserPane 自己 POST**（`createProjectFavorite`，meta 口径与 onWebMark 同：
+kind=webmark + sourceHost，content 存页面标题），父级 project-overview 的
+`onBrowserFavoriteAdded` 只做可见反馈（打开收藏面板 + `refresh(true)` + `focusFavorite`——
+toast 被 BrowserView 遮挡的老规矩）；失败提示走 `host.app.confirm`。页面标题组件自持
+`pageTitle`（桌面端来自 title-updated/adoptViewState，导航时清空；H5 代理不回报标题，
+收藏/钉住时退回域名）。抽屉 `.browser-shelf` 是**参与文档流的普通元素**（flex 列里
+toolbar 与 browser-body 之间，`flex:0 1 240px`），展开即挤压 `.browser-desktop-mount`
+高度、由既有 ResizeObserver 触发 syncDesktopBounds 让 BrowserView 让位——
+**绝不能改成 absolute 浮层**（原生层恒盖 DOM）。两个分区：快捷方式存 uni 本地存储
+`awd_browser_shortcuts`（数组 {url,title}，全局不分项目，每次展开重读——保活池里每个
+标签实例各持一份内存态）；「收藏的页面」拉 `getProjectFavorites`（无 projectId 退
+`getMyFavorites`），只展示有 sourceUrl 的并按 URL 去重，点击在当前面板 navigate。
+新增 i18n 键 `panels.bpAddFavorite/bpFavorited/bpAlreadyFavorited/bpFavoriteFailed/bpShelf/
+bpShortcuts/bpPinCurrent/bpAlreadyPinned/bpUnpin/bpShortcutsEmpty/bpShelfFavorites/bpShelfFavEmpty`
+（zh-CN/en-US 两份）；图标 `ICONS.bookmark` 新增于 `config/icons.js`。
+
 **红线：不做自动网核抓取**。维护者 2026-08-21 拍板「网核只留接口，不做自动逐站爬取，不碰验证码与合规风险」。别在浏览器面板/截图链路上做「输入公司名自动跑一遍企业信用公示/裁判文书/失信被执行人」这类批量抓取——尽调的网核走离线适配层（用户手工把外部工具导出的 zip 交进来，`service/evidence/webverify/`，见 `.claude/agents/ai-doc-bridge.md`「P3 网核 zip 接入」节）。浏览器面板仍是给律师自己开网页看、随手收藏、随手截图的地方，这条红线不影响它。
 
 **BrowserView 生命周期（改这块之前必读）**：**面板卸载 = detach（保活），标签关闭 = destroy**。

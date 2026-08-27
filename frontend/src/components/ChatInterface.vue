@@ -344,8 +344,7 @@
               <view class="input-footer">
                  <view class="action-bar-left">
                     <view class="icon-btn mini file-add-btn" @tap="triggerFileSelect" title="Add File">
-                   <image class="btn-icon default" src="/static/plus.png" />
-                   <image class="btn-icon hover" src="/static/plus_hover.png" />
+                   <svg class="plus-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                  </view>
                     <!-- Agent Mode Selector -->
                     <view class="mode-selector" @tap="toggleModeDropdown">
@@ -530,7 +529,7 @@
             @paste="handlePaste"
             @keydown.enter="handleEnterKey"
             @click="handleInputClick"
-            data-placeholder="Ask anything..."
+            :data-placeholder="$t('chat.inputPlaceholder')"
           ></div>
           <!-- Note: Context files are now shown as inline tags inside the rich input -->
           <!-- 本轮生效的 Skill：手动选的带 × 可移除，自动命中的新出现时闪一下 -->
@@ -546,8 +545,7 @@
           <view class="input-footer">
              <view class="action-bar-left">
                 <view class="icon-btn mini" @tap="triggerFileSelect" title="Add File">
-                   <image class="btn-icon default" src="/static/plus.png" />
-                   <image class="btn-icon hover" src="/static/plus_hover.png" />
+                   <svg class="plus-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                 </view>
                 <!-- Agent Mode Selector -->
                 <view class="mode-selector" @tap="toggleModeDropdown">
@@ -2596,10 +2594,25 @@ export default {
   width: 14px;
   height: 14px;
 }
+/* 加号用内联 SVG（描边风格与发送键一致），hover 走 currentColor 变绿，不再双位图切换 */
+.icon-btn .plus-svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+  color: #666;
+  transition: color 0.15s ease;
+}
+.icon-btn.mini .plus-svg {
+  width: 14px;
+  height: 14px;
+}
+.icon-btn:hover .plus-svg {
+  color: #1A5336;
+}
 /* File add button with border */
 .icon-btn.file-add-btn {
   border: 1px solid #ddd;
-  border-radius: 4px;
+  border-radius: 6px;
   padding: 3px;
 }
 .icon-btn.file-add-btn:hover {
@@ -2727,13 +2740,19 @@ export default {
 
 .input-card {
   background: #fff;
-  border: 1px solid #e0e0e0;
-  border-radius: 0px;
+  border: 1px solid rgba(222, 228, 224, 0.9);
+  border-radius: 12px;
   padding: 16px;
   width: 100%;
   box-sizing: border-box;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.05);
+  box-shadow: 0 1px 2px rgba(18, 52, 77, 0.04), 0 4px 16px rgba(18, 52, 77, 0.06);
   position: relative;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+/* 输入区获得焦点时整卡亮起：品牌绿描边 + mint 光晕（浅色，不做深色 chrome） */
+.input-card:focus-within {
+  border-color: rgba(26, 83, 54, 0.35);
+  box-shadow: 0 0 0 3px rgba(91, 209, 151, 0.16), 0 1px 2px rgba(18, 52, 77, 0.04), 0 4px 16px rgba(18, 52, 77, 0.06);
 }
 
 /* Recent History Section - 紧凑专业样式 */
@@ -2883,13 +2902,17 @@ export default {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 6px;
-  border-radius: 2px;
-  transition: background 0.15s ease;
+  height: 24px;
+  box-sizing: border-box;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  transition: background 0.15s ease, border-color 0.15s ease;
   white-space: nowrap;
 }
 .model-selector:hover {
-  background: rgba(0, 0, 0, 0.05);
+  background: rgba(26, 83, 54, 0.05);
+  border-color: rgba(26, 83, 54, 0.16);
 }
 
 .dropdown-arrow {
@@ -2943,15 +2966,17 @@ export default {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 8px;
-  border-radius: 2px;
-  background: rgba(59, 130, 246, 0.08);
-  border: 1px solid rgba(59, 130, 246, 0.2);
+  height: 24px;
+  box-sizing: border-box;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: rgba(26, 83, 54, 0.06);
+  border: 1px solid rgba(26, 83, 54, 0.18);
   transition: all 0.15s ease;
 }
 .mode-selector:hover {
-  background: rgba(59, 130, 246, 0.15);
-  border-color: rgba(59, 130, 246, 0.3);
+  background: rgba(26, 83, 54, 0.12);
+  border-color: rgba(26, 83, 54, 0.3);
 }
 
 .mode-icon {
@@ -2960,7 +2985,7 @@ export default {
 
 .mode-name {
   font-weight: 500;
-  color: #3b82f6;
+  color: #1A5336;
 }
 
 .mode-dropdown {
@@ -2996,10 +3021,10 @@ export default {
   background: #f5f5f5;
 }
 .mode-option.active {
-  background: rgba(59, 130, 246, 0.1);
+  background: rgba(26, 83, 54, 0.08);
 }
 .mode-option.active .mode-option-name {
-  color: #3b82f6;
+  color: #1A5336;
   font-weight: 600;
 }
 
@@ -3223,7 +3248,7 @@ export default {
 }
 
 .input-area-wrapper {
-  padding: 16px 24px;
+  padding: 12px 16px 16px;
   background: #fff;
   border-top: 1px solid #eee;
   display: flex;
@@ -3558,12 +3583,12 @@ export default {
   min-width: 24px;
   height: 24px;
   padding: 0 3px;
-  border-radius: 2px;
+  border-radius: 6px;
   transition: background 0.15s ease;
   flex-shrink: 0;
 }
 .skill-selector:hover {
-  background: rgba(0, 0, 0, 0.05);
+  background: rgba(26, 83, 54, 0.05);
 }
 
 /* 已选态：绿色实心底 + 计数，让"这轮我额外加载了 N 个技能"一眼可见 */
@@ -4165,7 +4190,8 @@ export default {
   flex-direction: row;
   justify-content: space-between;
   align-items: center;
-  padding: 4px 12px;
+  /* 与下方输入卡对齐（卡自带描边），行距走 8 栅格 */
+  padding: 0 2px 8px;
   background-color: transparent;
   font-size: 11px;
   z-index: 10;
@@ -4311,14 +4337,24 @@ export default {
   color: #999;
 }
 
-/* Empty state for file change buttons */
+/* Empty state for file change buttons：0 项时收敛成幽灵标签——去底去框、灰字、
+   更窄的内边距。刻意不隐藏：用户要能发现「改动/新增」这个功能的存在 */
 .status-btn.empty {
-  opacity: 0.7;
+  opacity: 1;
   cursor: default;
+  background-color: transparent;
+  border-color: transparent;
+  color: #ADB5BD;
+  font-weight: 500;
+  padding: 4px 6px;
+}
+.status-btn.empty .status-icon {
+  opacity: 0.65;
 }
 .status-btn.empty:hover {
   transform: none;
-  background-color: inherit;
+  background-color: transparent;
+  border-color: transparent;
 }
 
 /* Rollback UI */

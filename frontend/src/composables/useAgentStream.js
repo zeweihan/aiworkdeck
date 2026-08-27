@@ -155,7 +155,11 @@ export function useAgentStream() {
         // 问题正文与选项要作为结构化数据交给问题卡（决策 D 的显示通道）。
         question: null,
         rawLog: '',
-        isStreaming: false
+        isStreaming: false,
+        // 用户点停止后的提示条文案。刻意不并进 content：content 是「模型正文」，
+        // 会触发 isReady/hasContent/「用到文档」操作 chip 的判定，系统提示写进去
+        // 会让一个空产出的回合长出可插入文档的操作项（dev-board#212）。
+        stopNotice: ''
     })
 
     // displayContent = 「显示内容 ≠ 发送内容」通道（契约 D）：content 永远是模型看到的原文，
@@ -555,12 +559,22 @@ export function useAgentStream() {
         isStreaming.value = false
         if (currentAssistantBubble.value) {
             currentAssistantBubble.value.isStreaming = false
+            // 顶层 thinking 归位：abort 在上面第 2 步已经掐断了本地 SSE，后端随后
+            // 发出的 cancelled 事件永远到不了前端，正常收尾路径里的这段归零逻辑
+            // 不会再有人执行——漏掉它计时器就永远读秒（dev-board#211）。
+            const thinking = currentAssistantBubble.value.thinking
+            if (thinking.status === 'thinking') {
+                thinking.status = 'done'
+                if (!thinking.duration || thinking.duration === 0) {
+                    thinking.duration = (Date.now() - thinking.startTime) / 1000
+                }
+            }
             // 终态收敛：停止后不允许卡片停留在"执行中"
             finalizeProcesses('error')
-            // 停止标记（必须写 content，walkthrough 当前未渲染）。措辞只说「正在停止」：
-            // 取消打不断已经发出去的 HTTP 读，在途的那一次调用还可能回一小段，
-            // 写「已停止」就是对用户说谎
-            currentAssistantBubble.value.content += '\n\n' + t('agentStream.stopping')
+            // 停止提示走独立字段，不写 content（见 createAssistantBubble 注释）。
+            // 措辞「已发送停止指令」：本地流已断开、不会再渲染新内容，但后端在途
+            // 的那一次调用可能仍在收尾，说「已停止」不完全诚实。
+            currentAssistantBubble.value.stopNotice = t('agentStream.stopRequested')
         }
     }
 
@@ -887,7 +901,7 @@ export function useAgentStream() {
                 }
             }
             finalizeProcesses('error')
-            // 不需要在这里添加 [正在停止] 标记，因为 abort 函数已经添加了
+            // 停止提示不在这里写：abort() 已经设置了 bubble.stopNotice
             isStreaming.value = false
         } else if (evt === 'bubble_end' || evt === 'error') {
             // Flush any remaining content in parserBuffer before ending

@@ -993,9 +993,11 @@
                     <BrowserPane
                       :tab-id="tab.id"
                       :url="tab.url"
+                      :project-id="projectId"
                       @url-change="onBrowserUrlChange('left', tab.id, $event)"
                       @title-change="onBrowserTitleChange('left', tab.id, $event)"
                       @open-new-tab="openBrowserTab($event)"
+                      @favorite-added="onBrowserFavoriteAdded"
                     />
                   </view>
                   <view v-if="activeFileLeft && !useLibreEditor(activeFileLeft) && !isBrowserTab(activeFileLeft)" class="pane-content">
@@ -1144,9 +1146,11 @@
                     <BrowserPane
                       :tab-id="tab.id"
                       :url="tab.url"
+                      :project-id="projectId"
                       @url-change="onBrowserUrlChange('right', tab.id, $event)"
                       @title-change="onBrowserTitleChange('right', tab.id, $event)"
                       @open-new-tab="openBrowserTab($event)"
+                      @favorite-added="onBrowserFavoriteAdded"
                     />
                   </view>
                   <view v-if="activeFileRight && !useLibreEditor(activeFileRight) && !isBrowserTab(activeFileRight)" class="pane-content">
@@ -4428,6 +4432,25 @@ export default {
       // 避免过长：保留前 18 字符
       active.name = t.length > 18 ? (t.slice(0, 18) + '…') : t
       this.$forceUpdate()
+    },
+    // 浏览器工具栏「收藏本页」入库成功后的可见反馈：打开收藏面板并高亮新卡片。
+    // 不能只靠 toast——桌面端 toast 在 DOM 层、被原生 BrowserView 整个盖住
+    // （同 onWebMark 的教训）。落库由 BrowserPane 自己做（它要维护星形实心态），
+    // 这里只负责面板侧反馈。
+    onBrowserFavoriteAdded(payload) {
+      const favId = payload && payload.id ? Number(payload.id) : null
+      this.showToolsPanel = true
+      this.activeToolKey = 'favorites'
+      this.$nextTick(async () => {
+        try {
+          const panel = this.$refs.favoritesPanel
+          // force=true 绕过 1.2s 节流，否则新卡片可能刷不出来、高亮落空
+          if (panel && typeof panel.refresh === 'function') await panel.refresh(true)
+          if (favId && panel && typeof panel.focusFavorite === 'function') panel.focusFavorite(favId)
+        } catch (e) {
+          // ignore
+        }
+      })
     },
     // 激活的网页标签变化：记进保活 LRU（超上限的尾巴直接出池 = 组件卸载 = iframe 收掉，
     // 不像编辑器那样需要先落盘，网页没有我们负责保存的状态）。顺带清掉已关标签的残留记账。

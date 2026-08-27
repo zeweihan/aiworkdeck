@@ -7,9 +7,10 @@ export default {
   taskStarting: 'Task starting…',
   taskCompleted: 'Task completed',
   taskFailed: 'Task failed',
-  // Stream connection / stop markers (markdown fragments appended to bubble content)
+  // Stream connection markers (markdown fragments appended to bubble content)
   connectionInterrupted: '*[Connection lost]*',
-  stopping: '*[Stopping]*',
+  // Stop notice (rendered from the separate bubble.stopNotice field, plain text)
+  stopRequested: 'Stop requested',
   // Re-entrancy guard toast on send
   alreadyStreamingToast: 'AI is still running. Wait for it to finish or click Stop.',
   // Error messages
