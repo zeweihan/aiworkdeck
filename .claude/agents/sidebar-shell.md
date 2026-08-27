@@ -199,7 +199,8 @@ rail 底部的**齿轮与用户头像都撤了**，收进顶栏右上角「活�
   `check-navigation-contract.mjs` 现在守的是「头像直接指向 goToSystemSettings、没有下拉，
   且这些旧名字一个都不许回来」。
 - **深链等价物**：`openSettingsTab({ nav, service })` 对应薄壳页的
-  `?nav=platform&service=ocr`（网关错误提示的逃生门指着它）。标签是单例，
+  `?nav=account`（插件广场的余额提示指着它）。`?nav=platform&service=ocr` 是历史
+  写法，platform 面板已撤、无活生产者；未知 nav 会被过滤后落回默认面板。标签是单例，
   已经开着时再带深链进来只改 props——所以 **`AdminPane` 里加了
   `watch: { initialNav, initialService }`**，没有它第二次深链会停在用户上次看的面板上。
   工作台里 `goToAccountPanel()`（顶栏「已连接账户」chip）也改走这条。
@@ -212,21 +213,38 @@ rail 底部的**齿轮与用户头像都撤了**，收进顶栏右上角「活�
 **实体是 `frontend/src/components/admin/AdminPane.vue`**（`pages/admin/admin.vue` 退成
 ~30 行薄壳，只把 `onLoad(query)` 的 `nav` / `service` 转成 props）。侧栏分两组：
 
+侧栏按**任务**分四组（2026-08-27 / dev-board#229 重排；此前是「个人 / 系统」两组）：
+
 | 组 | key | 内容 |
 |---|---|---|
-| 个人 | `work_log` / `favorites` / `todos` / `personal_settings` | 原个人中心四栏；内容各自成组件，在 `components/userprofile/Personal*Panel.vue` |
-| 系统 | `ai` / `platform` / `account` / `components` / `updates` / `cloud` / `memory` / `telemetry` / `feedback` / `plugins` | 原样未动 |
+| 我的 | `work_log` / `favorites` / `todos` | 本人的数据，不是设置；内容各自成组件，在 `components/userprofile/Personal*Panel.vue` |
+| 账户 | `personal_settings` / `account`(adminOnly) | 身份与钱是一件事；`personal_settings` 也是组件 |
+| 工作台 | `ai`(adminOnly) / `sync`(adminOnly) | `sync` = 团队案件库 + 记忆同步合并 |
+| 系统 | `software`(adminOnly) / `telemetry`(adminOnly) / `feedback`(adminOnly) | `software` = 组件管理 + 应用版本 |
 
-- **个人组的 key 刻意避开 `account`**（系统组的「账户与用量」已经占了这个 key）。
+- **权限逐项标注，不从组名推导**：`adminOnly: true` 写在 navItems 每一项上。
+  旧写法是「`group === 'system'` 就要管理员」，等于逼着「给所有人看的项」都必须
+  叫「个人」——账户与安全、账户与用量因此被拆到两个组里。改分组时别再把权限
+  绑回组名。
+- **已撤的 key**：`config`（2026-08-18，并入 `ai` 与 `personal_settings`）、
+  `platform`（2026-08-27，花费闸门并入 `account` 末尾）、`plugins`（2026-08-27，
+  入口收敛到左 rail）、`updates` 与 `components`（2026-08-27 合并成 `software`）、
+  `cloud` 与 `memory`（2026-08-27 合并成 `sync`）。
+- **个人四栏的 key 刻意避开 `account`**（「账户与用量」已经占了这个 key）。
 - **可见性只有 `visibleNavItems` 一处**：`desktopOnly && !isDesktop` 收起，
-  `group === 'system' && !isAdminUser` 收起。后一条就是原个人中心 `checkAdminTab`
+  `adminOnly && !isAdminUser` 收起。后一条就是原个人中心 `checkAdminTab`
   那条规则（管理员才多出「系统设置」入口），合并后它换了长处。
+- **滚动只许有一条**：内容区 `.config-scroll` 是唯一滚动容器（`height:100%`），
+  外层 `.page-admin.is-embedded` 是 `overflow:hidden`，`.admin-container` 用
+  `align-items:stretch` 并按语境定高。**任何地方都不要再对这一页写 `100vh`**——
+  设置页嵌在工作台标签里时可用高度与视口无关，写死 vh 会同时造成「卡片下沿与
+  面板不齐」和「两栏同时可滚」（dev-board#229/#230 的原病灶）。
 - **`isAdminUser` 读不到用户时按管理员处理**：桌面单机免登下本来就没有会话缓存，
   按 false 起步会让整个系统组在首帧消失、默认面板也落空。真值由 `loadUserInfo()`
   拉 `/api/auth/me` 覆盖；转成 false 时若当前面板已不可见就落回 `work_log`。
 - **`activeNav` 默认值按 `cachedIsAdmin()` 分流**（管理员 `'ai'`、其余 `'work_log'`）；
-  **nav 的 v-if/v-else-if 长链链头仍是 `platform`**，个人组四条是追加在链尾的
-  `v-else-if`，动链头仍然会得到「v-else/v-else-if has no adjacent v-if」的编译错。
+  nav 的 v-if/v-else-if 是一条长链，动链头会得到「v-else/v-else-if has no adjacent v-if」
+  的编译错（`platform` 曾是链头，已撤）。
 - **系统组那三条初始加载（`loadConfig` / `loadModelCatalog` / `loadTelemetry`）收进了
   `loadAdminSections()` 并按 isAdmin 跳过**：`/api/admin/*` 对普通账号是 403，会弹
   「请用 admin 账号登录」——个人中心并进来之后非管理员也会打开这一页，不能让他一进门就吃这条。
@@ -560,7 +578,7 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
   **撤这个分区要一起改的三处**：`navItems` 去掉那一项、`activeNav` 默认值改成 `'ai'`
   （原默认就是 `'config'`，不改会得到一个默认打开却空白的页），以及**把 `v-if` 链头接上**——
   面板是一条 `v-if`/`v-else-if` 长链，删掉链头那块会让编译期直接报
-  「v-else/v-else-if has no adjacent v-if」，现在链头是 `platform`。
+  「v-else/v-else-if has no adjacent v-if」（`platform` 曾是链头，2026-08-27 已撤）。
   app-e2e J7 的 admin 断言文案也从「系统配置」改成了「系统管理」（左侧导航卡标题，不随分区增减变化）。
 - admin 的「团队案件库」面板（nav key `cloud`）在**没有任何连接时**多渲染一张说明卡
   （`.cloud-help-card`，`admin.cloudNoServerTitle` 起五条文案）：说清案件库是律所自建的一台

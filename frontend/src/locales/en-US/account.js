@@ -105,6 +105,7 @@ export default {
   // ---- userprofile.vue: settings - plugin access tokens (desktop) ----
   deviceTokenGroupTitle: 'Plugin Access Tokens',
   deviceTokenTip: 'For external clients such as Microsoft Office add-ins to connect to this machine. A token is equivalent to your access identity — keep it safe.',
+  deviceTokenDefaultName: 'Office add-in',
   tokenNameLabel: 'Label',
   tokenNamePlaceholder: 'e.g. Word Add-in (optional)',
   issueTokenBtn: 'Generate Token',

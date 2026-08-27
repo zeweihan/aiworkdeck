@@ -104,6 +104,7 @@ export default {
   // ---- userprofile.vue：设置 - 插件访问令牌（桌面端） ----
   deviceTokenGroupTitle: '插件访问令牌',
   deviceTokenTip: '供 Microsoft Office 插件等外部客户端连接本机使用。令牌等同于你的访问身份，请妥善保管。',
+  deviceTokenDefaultName: 'Office 插件',
   tokenNameLabel: '备注名',
   tokenNamePlaceholder: '例如：Word 插件（可留空）',
   issueTokenBtn: '生成令牌',

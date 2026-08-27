@@ -132,25 +132,32 @@
         <button class="btn-logout-settings" @tap="handleDeactivate">{{ $t('account.deactivateBtn') }}</button>
       </view>
 
-      <!-- 插件访问令牌（桌面端）：Office 插件等外部客户端连接本机后端的凭据 -->
+      <!-- 连接 Office 插件（桌面端，dev-board#231）：本质是给外部客户端签一枚凭据。
+           维护者反馈「没必要展示给用户」——但它删不得：Office 插件连**本机**桌面
+           后端目前只有这一条路（手机号/邮箱登录与粘 Key 都挂在 awdk-login-enabled
+           开关下，桌面配置默认不开）。折中是收进折叠区、默认收起，并把原来那套
+           「命名→签发→列表→吊销」的管理界面压成一次点击：点一下生成并复制，
+           已有令牌才列出来给个吊销入口。 -->
       <view v-if="isDesktop" class="form-group">
-        <text class="group-title">{{ $t('account.deviceTokenGroupTitle') }}</text>
-        <text class="bind-tip">{{ $t('account.deviceTokenTip') }}</text>
-        <view class="form-row">
-          <text class="form-label">{{ $t('account.tokenNameLabel') }}</text>
-          <input class="bind-input" v-model="tokenNameInput" maxlength="30" :placeholder="$t('account.tokenNamePlaceholder')" />
-          <button class="btn-send-code" :disabled="tokenIssuing" @tap="handleIssueToken">{{ $t('account.issueTokenBtn') }}</button>
+        <view class="advanced-toggle" @tap="deviceTokenOpen = !deviceTokenOpen">
+          <text class="group-title">{{ $t('account.deviceTokenGroupTitle') }}</text>
+          <text class="advanced-caret">{{ deviceTokenOpen ? '收起' : '展开' }}</text>
         </view>
-        <view v-for="t in deviceTokens" :key="t.id" class="form-row">
-          <view class="token-info">
-            <text class="token-name">{{ t.name || $t('account.unnamedToken') }}</text>
-            <text class="token-meta">
-              {{ $t('account.tokenMeta', { createdAt: formatTime(t.createdAt) || '—', lastUsed: t.lastUsedAt ? formatTime(t.lastUsedAt) : $t('account.never') }) }}
-            </text>
+        <view v-if="deviceTokenOpen">
+          <text class="bind-tip">{{ $t('account.deviceTokenTip') }}</text>
+          <view class="form-row">
+            <button class="btn-send-code" :disabled="tokenIssuing" @tap="handleIssueToken">{{ $t('account.issueTokenBtn') }}</button>
           </view>
-          <text class="bind-link" @tap="handleRevokeToken(t)">{{ $t('account.revokeAction') }}</text>
+          <view v-for="t in deviceTokens" :key="t.id" class="form-row">
+            <view class="token-info">
+              <text class="token-name">{{ t.name || $t('account.unnamedToken') }}</text>
+              <text class="token-meta">
+                {{ $t('account.tokenMeta', { createdAt: formatTime(t.createdAt) || '—', lastUsed: t.lastUsedAt ? formatTime(t.lastUsedAt) : $t('account.never') }) }}
+              </text>
+            </view>
+            <text class="bind-link" @tap="handleRevokeToken(t)">{{ $t('account.revokeAction') }}</text>
+          </view>
         </view>
-        <text v-if="!deviceTokens.length" class="bind-tip">{{ $t('account.noTokensYet') }}</text>
       </view>
 
       <!-- 界面语言。2026-08-18 从设置页「系统配置」搬来：语言是每个人自己的
@@ -224,7 +231,8 @@ export default {
 
       // 插件访问令牌（桌面端）：明文只在生成时返回一次，这里只留列表元信息
       deviceTokens: [],
-      tokenNameInput: '',
+      // 折叠区默认收起：普通用户一辈子用不到这枚令牌
+      deviceTokenOpen: false,
       tokenIssuing: false,
 
       // 界面语言：读写走 utils/appLanguage.js（storage 权威源 + App.vue 镜像同步）。
@@ -324,10 +332,9 @@ export default {
       if (this.tokenIssuing) return
       this.tokenIssuing = true
       try {
-        const res = await issueLocalDeviceToken(this.tokenNameInput.trim())
+        const res = await issueLocalDeviceToken(this.$t('account.deviceTokenDefaultName'))
         const token = res && res.data && res.data.token
         if (!token) throw new Error(this.$t('account.tokenIssueFailed'))
-        this.tokenNameInput = ''
         await this.loadDeviceTokens()
         // 明文只在这一次拿得到，弹窗里直接给复制
         uni.showModal({
@@ -801,6 +808,18 @@ $text-secondary: #6C757D;
     font-size: 12px;
     color: var(--awd-text-2);
 }
+.advanced-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+}
+
+.advanced-caret {
+  font-size: 12px;
+  color: var(--awd-text-3);
+}
+
 .token-info {
     flex: 1;
     display: flex;

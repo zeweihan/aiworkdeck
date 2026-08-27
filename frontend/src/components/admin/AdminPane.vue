@@ -1200,7 +1200,9 @@ export default {
     embedded: { type: Boolean, default: false },
     /** 深链定位面板。薄壳页从 onLoad 的 query.nav 传进来，工作台从 openSettingsTab 传 */
     initialNav: { type: String, default: '' },
-    /** ?nav=platform&service=ocr。宿主仍会传它；BYOK 折叠区撤掉后深链只落到面板本身 */
+    /** 深链的 service 参数（历史上 ?nav=platform&service=ocr 用来就地展开某一项）。
+        platform 面板 2026-08-27 已撤，现在没有活的生产者；参数保留是因为薄壳页仍会
+        原样透传，未知 nav 会被 visibleNavItems 过滤掉，落回默认面板而不是空白页。 */
     initialService: { type: String, default: '' },
   },
   data() {
