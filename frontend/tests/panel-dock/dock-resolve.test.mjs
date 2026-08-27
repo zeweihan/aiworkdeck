@@ -34,7 +34,8 @@ test('注册表自洽：key 唯一、defaultDock 在 allowedDocks 里、allowedD
 
 test('没有 override 时全部落到 defaultDock', () => {
   const docks = resolveDocks({})
-  assert.deepEqual(keysOf(docks.bottom), ['variables', 'favorites', 'clipboard'])
+  // 'variables' 2026-08-27 从注册表隐藏（dev-board#216），bottom 只剩两项
+  assert.deepEqual(keysOf(docks.bottom), ['favorites', 'clipboard'])
   assert.deepEqual(keysOf(docks.left), ['voice'])
   assert.deepEqual(keysOf(docks.right), ['insight'])
   // undefined / null 与空对象等价
@@ -43,32 +44,33 @@ test('没有 override 时全部落到 defaultDock', () => {
 })
 
 test('合法 override 生效，各档内保持注册表顺序', () => {
-  const docks = resolveDocks({ voice: 'right', clipboard: 'left', variables: 'right' })
-  assert.deepEqual(keysOf(docks.right), ['variables', 'voice', 'insight'], '右档没有按注册表顺序')
+  const docks = resolveDocks({ voice: 'right', clipboard: 'left', favorites: 'right' })
+  assert.deepEqual(keysOf(docks.right), ['favorites', 'voice', 'insight'], '右档没有按注册表顺序')
   assert.deepEqual(keysOf(docks.left), ['clipboard'])
-  assert.deepEqual(keysOf(docks.bottom), ['favorites'])
+  assert.deepEqual(keysOf(docks.bottom), [])
 })
 
 test('allowedDocks 之外的 override 回落 default（语音不许进底栏）', () => {
   assert.equal(resolveDock('voice', { voice: 'bottom' }), 'left')
   const docks = resolveDocks({ voice: 'bottom' })
   assert.deepEqual(keysOf(docks.left), ['voice'])
-  assert.deepEqual(keysOf(docks.bottom), ['variables', 'favorites', 'clipboard'])
+  assert.deepEqual(keysOf(docks.bottom), ['favorites', 'clipboard'])
 })
 
 test('非法值与未知 key 一律回落 default，不抛异常', () => {
-  assert.equal(resolveDock('variables', { variables: 'floating' }), 'bottom')
-  assert.equal(resolveDock('variables', { variables: '' }), 'bottom')
-  assert.equal(resolveDock('variables', { variables: null }), 'bottom')
+  assert.equal(resolveDock('favorites', { favorites: 'floating' }), 'bottom')
+  assert.equal(resolveDock('favorites', { favorites: '' }), 'bottom')
+  assert.equal(resolveDock('favorites', { favorites: null }), 'bottom')
   assert.equal(resolveDock('nope', { nope: 'left' }), null)
-  const docks = resolveDocks({ nope: 'left', variables: 'nowhere' })
-  assert.deepEqual(keysOf(docks.bottom), ['variables', 'favorites', 'clipboard'])
+  // 'variables' 隐藏后就是「存量 override 指向已下线面板」的真实用例
+  const docks = resolveDocks({ nope: 'left', variables: 'left' })
+  assert.deepEqual(keysOf(docks.bottom), ['favorites', 'clipboard'])
   assert.deepEqual(keysOf(docks.left), ['voice'], '未知 key 混进了左档')
   assert.deepEqual(keysOf(docks.right), ['insight'], '未知 key 混进了右档')
 })
 
 test('三个档位恒定存在（宿主直接读 .left/.right/.bottom，不做存在性判断）', () => {
-  for (const overrides of [{}, { voice: 'right' }, { variables: 'left', favorites: 'left', clipboard: 'left' }]) {
+  for (const overrides of [{}, { voice: 'right' }, { favorites: 'left', clipboard: 'left' }]) {
     const docks = resolveDocks(overrides)
     for (const d of DOCKS) assert.ok(Array.isArray(docks[d]), d + ' 档不是数组')
   }
@@ -83,7 +85,7 @@ test('每个面板恰好落在一个档里', () => {
 
 test('sanitizeDockOverrides 只留下能用的条目', () => {
   assert.deepEqual(
-    sanitizeDockOverrides({ voice: 'right', clipboard: 'bottom', variables: 'floating', ghost: 'left' }),
+    sanitizeDockOverrides({ voice: 'right', clipboard: 'bottom', variables: 'left', ghost: 'left' }),
     { voice: 'right', clipboard: 'bottom' }
   )
   assert.deepEqual(sanitizeDockOverrides({ voice: 'bottom' }), {}, '不被允许的档没有被清掉')
@@ -96,7 +98,8 @@ test('sanitizeDockOverrides 只留下能用的条目', () => {
 test('isMovablePanel / isDockAllowed / getMovablePanel 的口径与注册表一致', () => {
   assert.ok(isMovablePanel('voice'))
   assert.ok(!isMovablePanel('files'), '文件树不是可停靠面板（rail 上不许出现拖拽手柄）')
-  assert.ok(isDockAllowed('variables', 'left'))
+  assert.ok(isDockAllowed('favorites', 'left'))
+  assert.ok(!isMovablePanel('variables'), "'variables' 已隐藏（dev-board#216），不许再是可停靠面板")
   assert.ok(!isDockAllowed('voice', 'bottom'))
   assert.ok(!isDockAllowed('files', 'left'))
   assert.equal(getMovablePanel('favorites').defaultDock, 'bottom')

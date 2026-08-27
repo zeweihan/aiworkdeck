@@ -375,7 +375,10 @@ defaultDock / allowedDocks / svgPaths）+ 纯函数 `resolveDocks(overrides)` �
 v1 收录四个：variables / favorites / clipboard（默认 bottom，三档都行）、voice（默认 left，
 left|right，**不给 bottom**——底栏放不下它内部那两个 tab）。
 2026-08-27 加第五个：**insight（依据）**，默认 **right**、left|right（同样不给 bottom——
-底栏放不下判决书全文）。它是编辑器工具栏「解析」按钮的联动窗格，要和正文并排看，
+底栏放不下判决书全文）。
+**同日 'variables'（变量库）从注册表隐藏（dev-board#216，前端隐藏非拆除）**：现役成员
+只剩 favorites / clipboard / voice / insight 四个；变量库的死分支与休眠件清单见
+`.claude/agents/utility-tools.md`「变量库」一节，恢复/彻底拆除都先读那里。它是编辑器工具栏「解析」按钮的联动窗格，要和正文并排看，
 内容是 `components/InsightPane.vue`（外部检索 / 一致性校验两个 tab），详见
 `.claude/agents/doc-insight.md` 的「前端」一节。
 **它带来一处视觉变化**：`rightDockPanels` 从此默认非空，AI 面板顶部恒有一条
@@ -401,6 +404,11 @@ dock tab 条（「AI 助手 | 依据」）——在它之前那条 tab 条只有
 已记项之后。rail 按钮 `draggable="!isClientView"`，`onRailDragStart` 会级联调
 `onPanelDragStart`（可停靠面板拖出去落投放区仍走停靠，rail 内松手即排序），
 dragover 实时改 `railOrderDraft` 草稿、dragend 提交并持久化。
+**整理模式（dev-board#215）**：rail 底部 `.rail-edit-btn`（GLYPHS.sort）切换
+`railEditMode`——页面根挂 `.rail-edit-mode`，可拖项（`.rail-btn.is-sortable` 与
+两处 `.is-movable` tab）抖动+虚线框（iPhone 编辑主屏幕隐喻，prefers-reduced-motion
+下只留框不抖）；编辑态下 `onRailBtnTap` 拦截点击不打开面板。不持久化。
+由来：0.26.x 里可拖的 rail 图标只有语音一个、无任何指引，被复测判「根本没实现」。
 
 **顶栏头像下拉（dev-board#205，2026-08-27）**：恢复成两项（设置 / 退出登录，
 `avatarMenuOpen` + `.avatar-menu`），退出走 `utils/signOut.js` 唯一编排。

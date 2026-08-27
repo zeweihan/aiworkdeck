@@ -31,13 +31,11 @@ const toPaths = (paths) => (paths || []).map((d) => ({ d }))
  * 已被本表取代）；语音原本是 rail 上的一个左栏面板。
  */
 export const MOVABLE_PANELS = [
-  {
-    key: 'variables',
-    labelKey: 'config.tools.variables',
-    defaultDock: 'bottom',
-    allowedDocks: ['left', 'right', 'bottom'],
-    svgPaths: toPaths(ICONS.braces),
-  },
+  // 'variables'（变量库）2026-08-27（dev-board#216）**前端隐藏、非拆除**：维护者裁决
+  // 「不稳定、不好理解，干掉」，但深层（VariablePanel 组件、project-overview 三处
+  // 死分支、/pages/variable-library 独立页、后端 /api/variables*、LOWA 变量书签胶水）
+  // 一律保留休眠——从注册表摘掉后所有入口（底栏 tab/停靠/菜单）自然消失，
+  // sanitizeDockOverrides 会把存量 override 清掉。恢复=把条目加回来+还原 view.js 菜单项。
   {
     key: 'favorites',
     labelKey: 'config.tools.favorites',

@@ -44,7 +44,6 @@ export const menuCommandsMethods = {
       sidebarOpen: !this.sidebarCollapsed,
       toolsPanelOpen: !!this.showToolsPanel,
       aiPanelOpen: !!this.showAiPanel,
-      toolVariables: !!this.showToolsPanel && this.activeToolKey === 'variables',
       toolFavorites: !!this.showToolsPanel && this.activeToolKey === 'favorites',
       toolClipboard: !!this.showToolsPanel && this.activeToolKey === 'clipboard',
       recording: !!this.isRecording,

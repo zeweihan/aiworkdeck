@@ -19,6 +19,9 @@ export const railSortData = () => ({
   railOrderDraft: null,
   // 正在拖的 rail 项 key（与 draggingPanelKey 并存：后者只对可停靠面板生效）
   draggingRailKey: null,
+  // 整理模式（dev-board#215）：iPhone 编辑主屏幕式抖动编辑态。
+  // 开着时可拖项抖动+虚线框，点击不打开面板（防止想拖却点开）。不持久化。
+  railEditMode: false,
 })
 
 export const railSortMethods = {
@@ -52,6 +55,17 @@ export const railSortMethods = {
     const unknown = list.filter((p) => !idx.has(p.key))
     known.sort((a, b) => idx.get(a.key) - idx.get(b.key))
     return [...known, ...unknown]
+  },
+
+  toggleRailEditMode() {
+    this.railEditMode = !this.railEditMode
+    if (this.railEditMode) track('ui.railEditMode', {})
+  },
+
+  /** rail 项点击：整理模式下不打开面板（iPhone 抖动态下点 app 也不启动）。 */
+  onRailBtnTap(key) {
+    if (this.railEditMode) return
+    this.toggleLeftPane(key)
   },
 
   onRailDragStart(key, evt) {

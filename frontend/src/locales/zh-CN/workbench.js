@@ -80,6 +80,8 @@ export default {
   newOrCopy: '新建/复制',
   emptyWorkspace: '选择文件开始工作',
   emptyWorkspaceHint: '从左侧资源管理器打开文件，或新建一份文档',
+  railEditEnter: '整理侧栏（拖动排序或停靠）',
+  railEditDone: '完成整理',
   leftPaneIdle: '左侧空闲',
   rightPaneIdle: '右侧空闲',
   // 底部工具面板

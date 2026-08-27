@@ -303,6 +303,27 @@ FilePickerDialog :298 / EasyVoicePane :537 / DesensitizePane :543 / SearchPanel 
 - **权益失效不等于把人锁在外面**：`applyOnStartup` 无条件应用自选存储根（权益失效后数据照常读写），因此 `GET /api/storage/location` 与「恢复默认位置」都**不设权益闸**——否则 Key 被吊销 + 外置盘拔掉的用户既看不到自己数据在哪，也换不回默认位置。付费闸只加在「改到新的自选位置」这个动作上。
 - `StorageException` 默认落到通用异常处理器会被替换成「服务器内部错误」（防路径回显）。存储位置那几条用户语言文案是在 `StorageLocationController` 里转成 `IllegalArgumentException` 才送出去的，新增可回显文案要走同一条路且确保不含路径。
 
+## 变量库（2026-08-27 已前端隐藏，dev-board#216）
+
+维护者裁决「不稳定、不好理解，干掉」，执行口径是**前端隐藏、深层保留休眠**（拆除
+牵连 LOWA 变量书签胶水，风险大于收益）。隐藏的唯一开关是
+`config/panelRegistry.js` 摘掉 `'variables'` 条目 + `config/commands/view.js` 摘掉
+`view.toolVariables` 菜单项（`menuCommands.js` 的 `toolVariables` 状态键同删）——
+底栏 tab、三档停靠、菜单、状态条入口全部随之消失，存量 `awd_panel_docks` override
+由 `sanitizeDockOverrides` 自动清掉。
+
+**仍然活着、动别的功能时别误伤的休眠件**：
+- `project-overview.vue` 三处 `VariablePanel` 宿主是**不可达死分支**（left/bottom/right
+  host 的 `=== 'variables'` 判断永远不命中），import 与 `getLibreVariableBridge` /
+  `handleOpenCreateVariable` / `handleSyncVariable` 三个方法都还在；
+- `/pages/variable-library` 独立页仍可直链打开（app-e2e J7 钉着它能渲染）；
+- 后端 `/api/variables*`、`/api/file-variables` 端点与数据表原样保留（用户数据不动）；
+- LOWA 变量书签胶水（`libreofficeExecutorClient.js` / `office_thread.js` 里的
+  variable 函数）一行没动——引擎胶水是高危区。
+
+恢复 = 把注册表条目与菜单项加回来；彻底拆除 = 以上清单倒着清，并同步
+`tests/panel-dock/dock-resolve.test.mjs`（已按隐藏后的成员改写）与 e2e J7。
+
 ## 验证
 
 - desktop 服务栈：`cd desktop && npm test`（service-manager/model-manager/pysvc-runtime/**browser-views**）。
