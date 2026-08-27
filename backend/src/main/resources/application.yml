@@ -105,6 +105,43 @@ mcp:
     # 企查查智能体数据平台：模糊搜索（get_company_by_query），把文中的简称解析成
     # 工商全称，再交给 REST 的 ECIInfoVerify/GetInfo（那条只认全称，非全称回 201 无结果）。
     # 与 external.qichacha.key/secret 是两套凭证，别混用。
+    # 法宝其余五个 server（2026-08-27 维护者从官网控制台抄来完整清单，逐一实测可用；
+    # 与法规/案例五件套同一把 token）。工具面：
+    #   pkulaw-fatiao            get_law_item_content(title, tiao_num 数字)  按数字条号取法条
+    #   pkulaw-doc-link          get_linked_content(message)                为文本加法宝超链接
+    #   pkulaw-citation-validator adjust_provisions(userlaw/answerlaw/prompt) 引用校验与幻觉修正，返回权威原文
+    #   pkulaw-case-number       anhao_recognition(text)                    案号识别+标准化（带法院/判决书标题/法宝链接/GID）
+    #   pkulaw-agg               聚合 server：以 server.tool 命名空间挂全部 10 个工具（URL 带 /mcp 后缀，别掉）
+    - name: pkulaw-fatiao
+      url: https://apim-gateway.pkulaw.com/mcp-fatiao
+      token: ${PKULAW_TOKEN:}
+      token-setting-key: external.pkulaw.token
+      timeout-seconds: 60
+      enabled: true
+    - name: pkulaw-doc-link
+      url: https://apim-gateway.pkulaw.com/add-doc-link
+      token: ${PKULAW_TOKEN:}
+      token-setting-key: external.pkulaw.token
+      timeout-seconds: 60
+      enabled: true
+    - name: pkulaw-citation-validator
+      url: https://apim-gateway.pkulaw.com/pku_citation_validator
+      token: ${PKULAW_TOKEN:}
+      token-setting-key: external.pkulaw.token
+      timeout-seconds: 60
+      enabled: true
+    - name: pkulaw-case-number
+      url: https://apim-gateway.pkulaw.com/case_number_recognition
+      token: ${PKULAW_TOKEN:}
+      token-setting-key: external.pkulaw.token
+      timeout-seconds: 60
+      enabled: true
+    - name: pkulaw-agg
+      url: https://apim-gateway.pkulaw.com/mcp-law-agg/mcp
+      token: ${PKULAW_TOKEN:}
+      token-setting-key: external.pkulaw.token
+      timeout-seconds: 60
+      enabled: true
     - name: qichacha-company
       url: https://agent.qcc.com/mcp/company/stream
       token: ${QICHACHA_MCP_TOKEN:}

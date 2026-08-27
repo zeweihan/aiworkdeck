@@ -155,7 +155,7 @@ USCC_INVALID 的 detail 形状不同（没有 claims）：
 
 ## 已知地雷
 
-1. **法宝点数已于 2026-08-27 恢复**（新 token 在 `backend/.env` 的 `PKULAW_TOKEN`，法宝 MCP 控制台 mcp.pkulaw.com；五个 server 六个工具当天逐一 `tools/call` 实测有真数据）。若再见 `tools/call` 401「checking remaining points」= 点数又耗尽，是账务问题不是回归：LAW/CASE 实体一律 UNAVAILABLE + note 带上游原话，先查点数不要改代码。
+1. **法宝点数已于 2026-08-27 恢复**（新 token 在 `backend/.env` 的 `PKULAW_TOKEN`，法宝 MCP 控制台 mcp.pkulaw.com；**全部 10 个 server 当天逐一 `tools/call` 实测有真数据**，完整清单与工具面见 application.yml mcp.servers 注释与 EXTERNAL_SERVICES.md 法宝行）。管线当前只用其中四个（semantic/keyword/case-semantic + qichacha），另外几个是现成的升级件：`pkulaw-case-number` 的 `anhao_recognition(text)` 能把案号标准化并直接给出判决书标题/法院/法宝链接（可作 CASE 实体的先导步，替代裸语义搜）；`pkulaw-citation-validator` 的 `adjust_provisions` 返回权威法条原文（可做「文档引用条号配错」的校验维度）；`pkulaw-doc-link` 能为整段文本加法宝超链接。接入时按 InsightProperties 的配置化先例来。若再见 `tools/call` 401「checking remaining points」= 点数又耗尽，是账务问题不是回归：LAW/CASE 实体一律 UNAVAILABLE + note 带上游原话，先查点数不要改代码。
    同理 `QICHACHA_MCP_TOKEN` 缺省时企业模糊搜索静默降级为「只认工商全称」——不报错，只是简称查不到。
 2. **`PlatformAiUserScope` 不跟随线程池**。管线跑在自己的池里，`startParse` 提交时必须
    `PlatformAiUserScope.run(userId, …)` 包住**整段**（不只是模型调用那一行）；`refreshEntity` 在控制器线程上跑，同样要包。
