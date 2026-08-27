@@ -95,6 +95,7 @@ export default {
   paidEdition: '正式版',
   trialEdition: '试用版',
   activatedAtLabel: '激活时间',
+  deactivateHint: '只清除本机的解锁票据、回到启动解锁页，不影响账户本身。想换账号登录用「退出登录」即可，一般不需要点这里。',
   deactivateBtn: '解除授权',
   deactivateContent: '解除后应用将回到解锁页，需要重新输入试用码或账户 Key 才能继续使用。确定解除吗？',
   confirmDeactivateBtn: '确认解除',

@@ -45,6 +45,10 @@ description: 用户反馈闭环领域。任务涉及右下角反馈浮窗、反�
 
 **看板**：`frontend/src/components/admin/AdminPane.vue` 的 `activeNav === 'feedback'` 分区
 （`pages/admin/admin.vue` 只是薄壳）——这是桌面端本地库的入口。
+**「优化者」卡 2026-08-27（dev-board#202）起 `v-if="optimizer.enabled"`**：桌面单机版
+人人 isAdmin，按管理员身份门控挡不住普通用户；真正的判据是「这台机器的后端配没配
+optimizer.*」——普通用户永远 enabled=false，只看得到下面的「反馈记录」卡。
+维护者机器配上 optimizer.* 后卡片自然出现。
 
 **反馈控制台（云端收件箱的浏览器入口，2026-08-25 dev-board#151）**
 - `backend/src/main/resources/static/feedback-console/index.html` — 自包含单页，

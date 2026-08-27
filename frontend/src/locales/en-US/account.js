@@ -96,6 +96,7 @@ export default {
   paidEdition: 'Full Edition',
   trialEdition: 'Trial Edition',
   activatedAtLabel: 'Activated At',
+  deactivateHint: 'Only clears the unlock ticket on this machine and returns to the activation screen; your account is unaffected. To switch accounts, use "Log Out" instead — you rarely need this.',
   deactivateBtn: 'Deactivate License',
   deactivateContent: 'After deactivation, the app returns to the unlock screen and you will need to re-enter a trial code or account key to continue. Deactivate?',
   confirmDeactivateBtn: 'Confirm Deactivation',

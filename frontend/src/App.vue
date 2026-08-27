@@ -258,10 +258,12 @@ html.is-desktop .project-header .header-center,
 html.is-desktop .project-header .header-tools,
 html.is-desktop .project-header .top-bar-btn,
 html.is-desktop .project-header .icon-btn,
-/* 右上角头像（2026-08-19 从 rail 底部搬上来；2026-08-21 起点击直接开设置标签，
-   下拉已撤）。 */
+/* 右上角头像（2026-08-19 从 rail 底部搬上来；2026-08-27 下拉恢复成两项：
+   设置 / 退出登录，dev-board#205——菜单与全屏 mask 都要能点）。 */
 html.is-desktop .project-header .header-account,
-html.is-desktop .project-header .avatar-btn {
+html.is-desktop .project-header .avatar-btn,
+html.is-desktop .project-header .avatar-menu,
+html.is-desktop .project-header .avatar-menu-mask {
     -webkit-app-region: no-drag;
 }
 

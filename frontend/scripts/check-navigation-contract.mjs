@@ -460,18 +460,25 @@ check('工作台「全部项目」用 reLaunch 去项目列表页，且离开前
   return null
 })
 
-check('顶栏头像直接开设置标签，没有下拉（2026-08-21，dev-board#96）', () => {
-  // 2026-08-20 个人中心并进设置后下拉只剩一项，2026-08-21 连这个只有一项的下拉也撤了：
-  // 点头像 = goToSystemSettings，同一条路径。个人内容是设置页里的「个人」组。
+check('顶栏头像下拉恰好两项：设置 + 退出登录（2026-08-27，dev-board#205）', () => {
+  // 沿革：2026-08-20 个人中心并进设置后下拉只剩一项，2026-08-21（dev-board#96）撤下拉、
+  // 点头像直开设置；2026-08-27（dev-board#205）「退出登录」要有一级入口，下拉恢复成
+  // 两项——恢复的判据正是当年撤它的判据（不止一项了）。个人中心标签那套仍然是死代码。
   const src = readVue('src/pages/project-overview/project-overview.vue')
-  for (const dead of ['avatar-menu', 'avatarMenuOpen', 'toggleAvatarMenu',
-    'openUserProfileTab', 'goToUserProfile', "workbench.profile", "'user-profile'"]) {
-    if (src.includes(dead)) return '还残留头像下拉/个人中心标签那一套: ' + dead
+  for (const dead of ['openUserProfileTab', 'goToUserProfile', "workbench.profile", "'user-profile'"]) {
+    if (src.includes(dead)) return '还残留个人中心标签那一套: ' + dead
   }
   const i = src.indexOf('class="avatar-btn"')
   if (i < 0) return '找不到 .avatar-btn'
   const btn = src.slice(i, i + 200)
-  if (!btn.includes('goToSystemSettings')) return '头像没有直接指向 goToSystemSettings'
+  if (!btn.includes('avatarMenuOpen')) return '头像没有开下拉（avatarMenuOpen）'
+  const menuIdx = src.indexOf('class="avatar-menu"')
+  if (menuIdx < 0) return '找不到 .avatar-menu 下拉'
+  const menu = src.slice(menuIdx, menuIdx + 700)
+  if (!menu.includes('onAvatarMenuSettings')) return '下拉里没有「设置」项（onAvatarMenuSettings）'
+  if (!menu.includes('onAvatarMenuSignOut')) return '下拉里没有「退出登录」项（onAvatarMenuSignOut）'
+  // 退出必须走唯一编排，不许在页面里自拼 disconnect/deactivate
+  if (!src.includes("from '@/utils/signOut.js'")) return '退出登录没有走 utils/signOut.js 唯一编排'
   // 客户也要进得去：个人组的工作记录/账号安全对他一样成立，收系统组是面板自己的事
   const block = src.slice(src.indexOf('class="header-account"'), i + 600)
   if (block.includes('isClientView')) return '设置入口不该按 isClientView 藏起来（客户也有自己的个人组）'

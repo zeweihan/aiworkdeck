@@ -235,13 +235,23 @@
              2026-08-20：个人中心并进了「设置」，下拉只剩这一项——两个入口各开一个
              整面板、彼此还互相跳的形态是用户明确抱怨过的。客户同样要能进（个人组
              的工作记录/账号安全对他一样成立），面板内的「系统」组自己按 isAdmin 收。
-             2026-08-21（dev-board#96）：只剩一项的下拉没有存在的理由，点头像直接开
-             设置标签（同一条 goToSystemSettings 路径），下拉与它的 state/样式一并撤掉。
+             2026-08-21（dev-board#96）：只剩一项时下拉曾撤掉、点头像直开设置。
+             2026-08-27（dev-board#205）：「退出登录」要有一个找得到的一级入口，
+             下拉恢复成两项（设置 / 退出登录）——恢复的判据正是当年撤它的判据。
              顶栏里每一个能点的东西都必须在 App.vue 的 no-drag 名单里。 -->
         <view class="header-account">
-          <view class="avatar-btn" @tap.stop="goToSystemSettings" :title="$t('workbench.accountMenu')">
+          <view class="avatar-btn" @tap.stop="avatarMenuOpen = !avatarMenuOpen" :title="$t('workbench.accountMenu')">
             <image v-if="currentUser && currentUser.avatarUrl" :src="currentUser.avatarUrl" class="avatar-img" />
             <text v-else class="avatar-text">{{ getInitial(userDisplayName || currentUser?.displayName) || 'U' }}</text>
+          </view>
+          <view v-if="avatarMenuOpen" class="avatar-menu-mask" @tap.stop="avatarMenuOpen = false"></view>
+          <view v-if="avatarMenuOpen" class="avatar-menu">
+            <view class="avatar-menu-item" @tap.stop="onAvatarMenuSettings">
+              <text>{{ $t('workbench.settingsTabName') }}</text>
+            </view>
+            <view class="avatar-menu-item danger" @tap.stop="onAvatarMenuSignOut">
+              <text>{{ $t('account.logoutBtn') }}</text>
+            </view>
           </view>
         </view>
       </view>
@@ -259,12 +269,13 @@
           v-for="p in LEFT_SIDEBAR_PLUGINS"
           :key="p.key"
           class="rail-btn"
-          :class="{ active: (leftPaneKey === p.key && !sidebarCollapsed) || (p.key === 'staging' && stagingPinned), 'is-movable': isMovablePanel(p.key) }"
+          :class="{ active: (leftPaneKey === p.key && !sidebarCollapsed) || (p.key === 'staging' && stagingPinned), 'is-movable': isMovablePanel(p.key), 'rail-dragging': draggingRailKey === p.key }"
           :title="p.label"
-          :draggable="isMovablePanel(p.key)"
+          :draggable="!isClientView"
           @tap="toggleLeftPane(p.key)"
-          @dragstart="onPanelDragStart(p.key, $event)"
-          @dragend="onPanelDragEnd"
+          @dragstart="onRailDragStart(p.key, $event)"
+          @dragover="onRailDragOver(p.key, $event)"
+          @dragend="onRailDragEnd"
           @contextmenu="openDockMenu(p.key, $event)"
         >
           <view v-if="p.svgPaths" class="rail-icon-wrapper">
@@ -890,8 +901,11 @@
               <!-- 初始空状态 (仅当左侧也没有文件时) -->
               <view v-if="leftFiles.length === 0 && !splitMode" class="empty-workspace">
                 <view class="empty-content">
-                  <image src="/static/iconmark_v2.png" class="empty-state-img" mode="aspectFit" />
-                  <text class="empty-text">{{ $t('workbench.emptyWorkspace') }}</text>
+                  <view class="empty-logo-tile">
+                    <image src="/static/iconmark_v2.png" class="empty-state-img" mode="aspectFit" />
+                  </view>
+                  <text class="empty-title">{{ $t('workbench.emptyWorkspace') }}</text>
+                  <text class="empty-sub">{{ $t('workbench.emptyWorkspaceHint') }}</text>
                 </view>
               </view>
 
@@ -1955,6 +1969,7 @@ import {
   getCurrentUser as getCurrentUserApi // 顶栏头像：补一次真实接口，本地缓存只是首屏兜底
 } from '@/services/api.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
+import { signOut } from '@/utils/signOut.js'
 import { loadSiteLinks, siteBaseUrl, siteLinks } from '@/utils/siteLinks.js'
 import { getCurrentUser } from '@/utils/auth.js'
 import { getInitial } from '@/utils/textInitial.js'
@@ -2000,6 +2015,7 @@ import { stagingAreaMethods } from './stagingArea.js'
 import { evidenceLinkData, evidenceLinkMethods } from './evidenceLinkActions.js'
 import { tabDragSplitMethods } from './tabDragSplit.js'
 import { panelDockingData, panelDockingMethods } from './panelDocking.js'
+import { railSortData, railSortMethods } from './railSort.js'
 import { fileOpenTabsMethods } from './fileOpenTabs.js'
 import { clipboardBridgeMethods } from './clipboardBridge.js'
 import { ocrActionMethods } from './ocrActions.js'
@@ -2101,7 +2117,8 @@ export default {
       // 会议录音那个 tab 是 skill 门控的，记住它会让停用 skill 之后再进来落在
       // 一个不渲染的 tab 上（v-else 兜底能救，但 tab 条上没有高亮项，看着像坏了）。
       voiceTab: 'tts',
-      // 顶栏右上角头像下拉（只有「设置」一项）
+      // 顶栏右上角头像下拉（设置 / 退出登录，dev-board#205）
+      avatarMenuOpen: false,
       // 单文件历史：右键「这份文件的历史」时设置，version 面板据此只显示这份文件的版本
       versionFileFilter: null,
       // 有一次采纳停在待裁决状态（/status 的 adoptConflict）。版本面板之外也要提示，
@@ -2230,6 +2247,7 @@ export default {
       ...evidenceLinkData(),
       // 面板停靠（dev-board#180）：panelDockOverrides / rightPaneKey / 拖拽与右键菜单状态
       ...panelDockingData(),
+      ...railSortData(),
       // Desensitize Callback
       desensitizeFileSelectCallback: null,
       // 诉讼可视化面板的材料范围选择回调（复用同一个 FilePickerDialog）
@@ -2460,14 +2478,16 @@ export default {
       // 宁可多显示一瞬，也不要让用户以为功能没了。
       // applyPanelDocks：把搬去别的 dock 的面板（语音移到右侧）从 rail 摘掉，
       // 把搬到左侧的工具面板（变量库/收藏夹/剪贴板）追加在数组之后（dev-board#180）
-      if (this.enabledSkillIds === null) return this.applyPanelDocks(base)
+      // applyRailOrder：最外层再套用户拖出来的顺序（dev-board#204），
+      // 排序只改先后、不增删项，所以套在所有过滤/停靠之后
+      if (this.enabledSkillIds === null) return this.applyRailOrder(this.applyPanelDocks(base))
       const filtered = filterPluginsByEnabledSkills(base, this.enabledSkillIds)
       // 「语音」rail 位本身没有 requiresSkill（门控在面板内部按两个 tab 分别做），
       // 两个 tab 都停用时才整个位隐藏，判据复用同一份 ttsEnabled/meetingRecorderEnabled。
       if (!this.ttsEnabled && !this.meetingRecorderEnabled) {
-        return this.applyPanelDocks(filtered.filter(p => p.key !== 'voice'))
+        return this.applyRailOrder(this.applyPanelDocks(filtered.filter(p => p.key !== 'voice')))
       }
-      return this.applyPanelDocks(filtered)
+      return this.applyRailOrder(this.applyPanelDocks(filtered))
     },
     // 版本记录 2026-08-19 挪出 rail 数组、独立渲染在「项目成员」与「暂存区」之间，
     // 模板拿不到裸导入的 VERSION_PLUGIN，包一层 computed 才能在模板里用它的 svgPaths。
@@ -2819,6 +2839,10 @@ export default {
       uni.$off('awd:open-settings', this._onOpenSettings)
       this._onOpenSettings = null
     }
+    if (this._onEntitlementsChanged) {
+      uni.$off('awd:entitlements-changed', this._onEntitlementsChanged)
+      this._onEntitlementsChanged = null
+    }
     // IDE 化聚焦刷新监听清理（本实例自己加的，直接摘）
     if (typeof window !== 'undefined' && this._localFocusRefresh) {
       window.removeEventListener('focus', this._localFocusRefresh)
@@ -2999,6 +3023,8 @@ export default {
     // 面板停靠位（dev-board#180）是本机习惯、不分项目，必须在恢复 leftPaneKey 之前读，
     // 下面的 normalizeDockSelections 才知道存量的 leftPaneKey 还在不在左栏。
     this.loadPanelDocks()
+    // rail 图标顺序（dev-board#204）：同为本机习惯，跟停靠位一起在首帧前恢复
+    this.loadRailOrder()
 
     const savedKey = uni.getStorageSync(`project_${this.projectId}_leftPaneKey`)
     if (savedKey && user && user.role === 'CLIENT') {
@@ -3123,6 +3149,13 @@ export default {
     // beforeUnmount 必须按引用 $off，否则每回来一次多一份订阅。
     this._onWalletRefresh = () => this.loadWalletBalance()
     uni.$on('awd:wallet-refresh', this._onWalletRefresh)
+    // SKU 解锁成功（UnlockHint 广播）：暂存区用量条的 limited 是后端算的，重拉一次
+    // 才会摘掉「立即解锁」横幅（与剪贴板同病，dev-board#201）
+    this._onEntitlementsChanged = () => {
+      if (!this.isActiveOverviewInstance()) return
+      if (this.stagingFolderId) this.loadStagingUsage()
+    }
+    uni.$on('awd:entitlements-changed', this._onEntitlementsChanged)
     // UnlockHint 应用内化（dev-board#187）：解锁引导不再外跳官网，改为打开设置
     // 「账户与用量」标签。只让活跃实例响应——openSettingsTab 会动本实例的标签列表。
     this._onOpenSettings = (opts) => {
@@ -3543,6 +3576,7 @@ export default {
     ...fileOpenTabsMethods,
     // 面板停靠（dev-board#180）
     ...panelDockingMethods,
+    ...railSortMethods,
     // Phase 3a 外置的方法组
     ...clipboardBridgeMethods,
     // Phase 3b 外置的方法组
@@ -4797,6 +4831,18 @@ export default {
       this[targetPane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'] = tabId
       this.focusedPane = targetPane
       this.$nextTick(() => this.triggerWorkbenchResize())
+    },
+    // 头像下拉两项（dev-board#205）。退出走 utils/signOut.js 唯一编排，确认弹窗与
+    // 状态判定都在它里面，这里只负责收起菜单。注意位置：不能插在 goToSystemSettings
+    // 与 openSettingsTab 之间——check-navigation-contract 的方法提取按
+    // 「call site 后第一个 {」配对，中间夹方法会截断它的窗口。
+    onAvatarMenuSettings() {
+      this.avatarMenuOpen = false
+      this.goToSystemSettings()
+    },
+    async onAvatarMenuSignOut() {
+      this.avatarMenuOpen = false
+      await signOut()
     },
     goToPluginMarket() {
       // VS Code 扩展栏形态：rail 按钮开左栏列表面板（保留标签页与编辑区），

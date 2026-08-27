@@ -106,6 +106,16 @@ export default {
   },
   mounted() {
     this.refresh()
+    // 解锁购买成功（UnlockHint 广播）后重拉列表：hiddenCount 是后端算的，
+    // 不重拉的话横幅会停在购买前的旧值上（dev-board#201）
+    this._onEntitlementsChanged = () => this.refresh()
+    uni.$on('awd:entitlements-changed', this._onEntitlementsChanged)
+  },
+  beforeUnmount() {
+    if (this._onEntitlementsChanged) {
+      uni.$off('awd:entitlements-changed', this._onEntitlementsChanged)
+      this._onEntitlementsChanged = null
+    }
   },
   watch: {
     query() {
