@@ -441,7 +441,7 @@
              </view>
           </view>
           <view v-else class="history-empty-placeholder">
-             <text>Your recent chats will appear here</text>
+             <text>{{ $t('chat.recentChatsEmpty') }}</text>
           </view>
           <view class="history-disclaimer">{{ $t('chat.aiDisclaimer') }}</view>
        </view>
