@@ -1,6 +1,6 @@
 ---
 name: office-addin
-description: Microsoft Office 插件领域。任务涉及 Word/Excel/PPT 任务窗格插件（office-addin/）、manifest、Office.js、插件与后端的对话/上下文契约、sideload 调试时，先读本文档再动代码。
+description: Microsoft Office 与 WPS 插件领域。任务涉及 Word/Excel/PPT 任务窗格插件（office-addin/）、manifest、Office.js、WPS 加载项（wps/ 壳、wpsExecutor、publish 安装页）、插件与后端的对话/上下文契约、sideload 调试时，先读本文档再动代码。
 ---
 
 # Office 插件 领域地图
@@ -98,3 +98,38 @@ description: Microsoft Office 插件领域。任务涉及 Word/Excel/PPT 任务�
 - sideload 手测清单与步骤全在 `office-addin/README.md`（Word 工具桥场景 + Excel/PPT 场景 + 断线重连/awdk 连接场景）。
 - 后端单测（JDK 21）：`mvn test -Dtest='ContextAssemblerServiceTest,InlineContentCacheTest,OfficeBridgeServiceTest,OfficeResultControllerTest,ToolRegistryCapabilityFilterTest,OfficeEditToolsTest'`；连接/登录链路是 `mvn test -Dtest='AwdkLoginServiceTest,AuthControllerHardeningTest,AccountServiceTest'`。
 - **设置页的连接链路要走完整条 UI**（原语级测试盖不住 Vue 的接线，见 feedback「验证要走完 UI 链路」）：`npm run build` 后用 `python3 -m http.server` 静态托管 `dist/`（`base:'./'` 决定了它在任何路径下都能开），另起一个桩后端实现 `/api/auth/account-login{,/send-code}`、`/api/auth/awdk-login`、`/api/projects/my` 并带 CORS 头，在浏览器里逐条跑「发验证码（含滑块）→ 错码 → 正确码 → 邮箱口令 → 粘 Key」（桩后端要实现 `/api/auth/account-login/captcha-config`——回真实的 `{provider:'aliyun',sceneId,prefix}` 才能验到滑块真的弹出来，回 `{provider:null}` 只能验到降级分支），判据是 `localStorage.awd_addin_token` 与视图是否切走。`main.js` 在没有 Office 全局时直接挂载，所以不需要真宿主。
+
+## WPS 加载项（2026-08-28，dev-board#244）
+
+同一套任务窗格 Vue 源码构建出的第二个宿主家族：WPS 文字/表格/演示（Windows/Linux 版 WPS；**Mac 版 WPS 不支持加载项**）。后端零改动——officeHost 仍是 word/excel/powerpoint 三值、clientCapability 仍是 'office'、office_command 契约与回传路径完全一致。
+
+### 关键文件
+
+- `taskpane/lib/hostBridge.js` — **Vue 层唯一宿主入口**：按运行环境分发到 Office 面（wordDoc/officeExecutor）或 WPS 面（wpsDoc/wpsExecutor）。chatSession/ChatView 只许 import 这里，不许直连两个家族的实现文件。detectHost/readDocumentMeta 走「officeDetectHost 优先 + 全局对象兜底」的判定顺序（office.js 半初始化窗口期 + 既有测试钉着，别改成 hostFamily 一刀切）。
+- `taskpane/lib/wpsDoc.js` — WPS 三宿主文档读取（契约同 wordDoc.js）。表格读取必须 Value2 批量（跨进程桥约 0.2ms/调用，逐格会拖死任务窗格）。
+- `taskpane/lib/wpsExecutor.js` + `wpsWordHandlers.js` / `wpsEtHandlers.js` / `wpsWppHandlers.js` — office_command 的 WPS 执行器（分发器 + 三张宿主 HANDLERS 表）。**命令名与参数/返回值契约以 officeExecutor.js 为准绳**；宿主守卫按前缀（excel_*/ppt_*/其余归 word）。
+- `taskpane-wps.html` — WPS 构建入口（不含 office.js；window.wps 由宿主注入）。与 taskpane.html 同出一个 dist（vite 双入口），build.target 压 es2018 给参差的 CEF 内核留余量。
+- `wps/` — ribbon 薄壳（vanilla JS，不进 Vite）：ribbon.xml（三宿主共用）+ index.html/main.js/js/*（在线模式 WPS 启动拉 url/index.html）+ `vendor/publish-template.html`（官方 wpsjs@2.2.3 publish.html 原样 vendor，构建脚本只做 PUBLISH_REPLACE_STRING/SERVERID_REPLEASE_STRING 两处替换 + 标题品牌化，**机制代码不许手改**）。
+- `scripts/build-wps.mjs` — `npm run build:wps` 出 dist-wps/（wps/ 壳 + wps/ui/=dist 拷贝 + install.html + jsplugins.xml）。默认部署地址 https://addin.aiworkdeck.com/wps-addin。
+
+### 分发契约
+
+- **在线模式**：加载项 url = `<baseUrl>/wps/`（必须以 / 结尾，`GET url+ribbon.xml` 裸可达）；发版 = 覆盖静态目录，用户无需重装。壳文件（ribbon.xml/index.html/main.js/js/*）必须 no-cache，ui/assets/* 带 hash 长缓存。
+- **个人版安装唯一通路**：install.html 经本机 WPS 常驻服务 127.0.0.1:58890 `/deployaddons/runParams` 写用户 `%APPDATA%\kingsoft\wps\jsaddons\publish.xml`（个人版 12.1.0.16910 起 oem.ini/jsplugins.xml 被禁）。企业版私有部署仍走 jsplugins.xml + oem.ini `JSPluginsServer`。
+- 三宿主 = publish.xml 里三条记录（type=wps/et/wpp，同一 url、同名 aiworkdeck）。
+
+### 已知地雷（WPS 面）
+
+- **不许依赖 wps.Enum**：枚举表在旧宿主上不存在（官方模板都是手工 WPS_Enum 兜底）。三张 HANDLERS 表一律用本地数值常量（VBA 同值）。
+- JSAPI 三折算规则（表格面最易踩）：集合 `.Item()` 函数调用；带参属性按函数调（`Address(false,false)`/`Cells.Item(r,c)`）；**赋值走 Value2**（Value 在 JSAPI 是只读方法）。
+- 颜色是 BGR 打包数值（低字节红），与 #RRGGBB 互转必须过转换函数；表格列宽单位是字符宽不是磅（1 字符≈5.69 磅）。
+- WPS 批注/修订只有 1-based 序号无 GUID；表格批注是老式单条（reply 降级文本追加、resolve 不支持）；文字 `insert_image` 本版不支持（无 base64 直插路）。
+- 文字面比 Office.js 强的三处（别照抄 Office 版降级）：行距最小值原生支持（wdLineSpaceAtLeast）、NameFarEast/NameAscii 无门槛、中文编号 wdListNumberStyleSimpChinNum* 原生支持；PPT AddSlide(Index, CustomLayout) 原生带插入位置。
+- `sse.js` 双通道：流式 fetch 探测不过（或 resp.body 缺失）整条降级 XHR onprogress。**XHR abort 是同步收尾**——close() 里必须先记 wasReading 再 abort，否则 onClose 双触发（已修，sse.test.js 钉住）。
+- 官方模板 index.html 的角色：本地模式下 WPS 自动生成 index.html、开发者不许自建；**在线模式相反**，WPS 从服务器拉 url/index.html，我们必须提供。两句话都对，别拿一句去改另一边。
+- 真机验证欠账（写代码时留意勿固化错误假设）：install.html 在最新个人版的 enable 是否有 2024 整改后的额外校验（头号风险）；CEF 内核 fetch/ReadableStream 实测；字符偏移口径（Document.Range(start,end) 与 JS 字符串索引）；12.1.0.26895+ 停靠任务窗格挡 ribbon 鼠标的平台 bug（bbs 93291）。
+
+### 验证
+
+- `npm test`（含 wps*Handlers 单测与 sse XHR 通道用例）+ `npm run build` + `npm run build:wps`。
+- 真机清单见 office-addin/README.md「WPS 加载项」章（Windows 虚拟机装个人版 WPS）。

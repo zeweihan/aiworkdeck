@@ -294,8 +294,7 @@ import {
   toggleSkill, loadConversationList, switchConversation, attachedFiles, toggleAttachedFile,
   loadProjectFiles, removeConversation, retitleConversation
 } from '../lib/chatSession.js'
-import { readDocumentMeta, detectHost } from '../lib/wordDoc.js'
-import { locateInDocument } from '../lib/officeExecutor.js'
+import { readDocumentMeta, detectHost, locateInDocument } from '../lib/hostBridge.js'
 import { micSupported, startRecording, MAX_RECORD_MS } from '../lib/wavRecorder.js'
 import { postDictate } from '../lib/api.js'
 import { t } from '../lib/i18n.js'

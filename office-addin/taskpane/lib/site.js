@@ -33,7 +33,8 @@ export function rechargeUrl(serverUrl) {
 /**
  * 在系统浏览器打开外链。Office 任务窗格里 window.open 在部分宿主（Mac Word 的
  * WKWebView）会被吞，官方姿势是 Office.context.ui.openBrowserWindow；
- * 老宿主没有该 API 时回退 window.open。
+ * WPS 任务窗格的对应姿势是 wps.OAAssist.ShellExecute（官方 wpsjs 模板 util.js
+ * 同款用法）；两者都没有时回退 window.open。
  */
 export function openExternal(url) {
   if (!url) return
@@ -41,6 +42,15 @@ export function openExternal(url) {
     if (typeof Office !== 'undefined' && Office.context && Office.context.ui
         && typeof Office.context.ui.openBrowserWindow === 'function') {
       Office.context.ui.openBrowserWindow(url)
+      return
+    }
+  } catch (e) {
+    // 落到下一条通路
+  }
+  try {
+    if (typeof wps !== 'undefined' && wps && wps.OAAssist
+        && typeof wps.OAAssist.ShellExecute === 'function') {
+      wps.OAAssist.ShellExecute(url)
       return
     }
   } catch (e) {

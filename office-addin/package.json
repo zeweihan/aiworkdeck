@@ -10,6 +10,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "build:deploy": "node scripts/build-manifest.mjs",
+    "build:wps": "node scripts/build-wps.mjs",
     "test": "node --test taskpane/lib/*.test.js",
     "build:installers": "node installer/build-installers.mjs"
   },
