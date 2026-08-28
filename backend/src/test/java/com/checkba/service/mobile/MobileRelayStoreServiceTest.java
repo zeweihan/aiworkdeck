@@ -1,6 +1,8 @@
 package com.checkba.service.mobile;
 
+import com.checkba.model.entity.MobileDeviceState;
 import com.checkba.model.entity.MobileMediaInbox;
+import com.checkba.repository.MobileDeviceStateRepository;
 import com.checkba.repository.MobileMediaInboxRepository;
 import com.checkba.repository.MobileProjectDirRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -50,6 +52,8 @@ class MobileRelayStoreServiceTest {
     private MobileProjectDirRepository dirRepository;
     @Autowired
     private MobileMediaInboxRepository inboxRepository;
+    @Autowired
+    private MobileDeviceStateRepository deviceStateRepository;
 
     @TempDir
     Path blobRoot;
@@ -60,7 +64,7 @@ class MobileRelayStoreServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new MobileRelayStoreService(dirRepository, inboxRepository,
+        service = new MobileRelayStoreService(dirRepository, inboxRepository, deviceStateRepository,
                 new MobileRelayLocalBlobStore(blobRoot.toString()));
         // storeMedia 撞唯一约束时的重试经 self 转发到 storeMediaTx（新事务）；生产环境里 self
         // 是 Spring 注入的 @Lazy 代理，这里手工 new 没有容器，直接把 service 自己接上去——
@@ -291,5 +295,84 @@ class MobileRelayStoreServiceTest {
 
         service.ack(1L, item.getId());
         assertEquals(0L, service.usage(1L).get("usedBytes"), "ACK 之后配额应释放");
+    }
+
+    @Test
+    @DisplayName("touchDevice：首次调用建行，再次调用刷新 lastSeenAt")
+    void touchDeviceCreatesAndRefreshesRow() {
+        service.touchDevice(1L, "dev-a");
+        MobileDeviceState first = deviceStateRepository.findByUserIdAndDeviceId(1L, "dev-a").orElseThrow();
+        assertNotNull(first.getLastSeenAt());
+
+        // 人为把心跳打到过去，再 touch 一次应该刷新到当前时刻
+        first.setLastSeenAt(LocalDateTime.now().minusHours(1));
+        deviceStateRepository.save(first);
+        service.touchDevice(1L, "dev-a");
+        MobileDeviceState refreshed = deviceStateRepository.findByUserIdAndDeviceId(1L, "dev-a").orElseThrow();
+        assertTrue(refreshed.getLastSeenAt().isAfter(LocalDateTime.now().minusMinutes(1)),
+                "再次 touch 必须把 lastSeenAt 刷新到当前时刻，而不是新建一行");
+        assertEquals(1, deviceStateRepository.findByUserIdAndDeviceIdIn(1L, List.of("dev-a")).size(),
+                "同一 (userId, deviceId) 只应有一行");
+    }
+
+    @Test
+    @DisplayName("touchDevice：deviceId 为空白时不落库、不抛异常")
+    void touchDeviceIgnoresBlankDeviceId() {
+        service.touchDevice(1L, "");
+        service.touchDevice(1L, null);
+        assertTrue(deviceStateRepository.findByUserIdAndDeviceId(1L, "").isEmpty());
+    }
+
+    @Test
+    @DisplayName("在线判定：180 秒窗口内 online，窗口外 offline，从没心跳过也是 offline")
+    void isDeviceOnlineRespectsWindow() {
+        assertFalse(service.isDeviceOnline(1L, "dev-never-seen"), "从没心跳过的设备一律离线");
+
+        service.touchDevice(1L, "dev-a");
+        assertTrue(service.isDeviceOnline(1L, "dev-a"), "刚 touch 过应该在线");
+
+        MobileDeviceState row = deviceStateRepository.findByUserIdAndDeviceId(1L, "dev-a").orElseThrow();
+        row.setLastSeenAt(LocalDateTime.now().minusSeconds(179));
+        deviceStateRepository.save(row);
+        assertTrue(service.isDeviceOnline(1L, "dev-a"), "179 秒前的心跳仍在 180 秒窗口内");
+
+        row.setLastSeenAt(LocalDateTime.now().minusSeconds(181));
+        deviceStateRepository.save(row);
+        assertFalse(service.isDeviceOnline(1L, "dev-a"), "181 秒前的心跳应判离线");
+    }
+
+    @Test
+    @DisplayName("listDevices：按设备分组，deviceName 取组内第一个非空值，排序 online 优先")
+    void listDevicesGroupsByDeviceAndPrefersOnlineFirst() {
+        // dev-a：两行目录，第一行 deviceName 为空，第二行才有值——分组后应回落到第二行的名字
+        service.replaceDirectory(1L, "dev-a", null, List.of(
+                new MobileRelayStoreService.DirEntry("42", "金冠纾困")));
+        service.replaceDirectory(1L, "dev-a", "Mac", List.of(
+                new MobileRelayStoreService.DirEntry("42", "金冠纾困"),
+                new MobileRelayStoreService.DirEntry("43", "probe")));
+        service.replaceDirectory(1L, "dev-b", "Win", List.of(
+                new MobileRelayStoreService.DirEntry("1", "另一台机的项目")));
+
+        // dev-b 心跳在线，dev-a 从没心跳过（离线）——离线的 dev-a 应排在在线的 dev-b 之后
+        service.touchDevice(1L, "dev-b");
+
+        List<Map<String, Object>> devices = service.listDevices(1L);
+        assertEquals(2, devices.size());
+        assertEquals("dev-b", devices.get(0).get("deviceId"), "在线设备必须排在离线设备前面");
+        assertEquals(Boolean.TRUE, devices.get(0).get("online"));
+        assertEquals("dev-a", devices.get(1).get("deviceId"));
+        assertEquals(Boolean.FALSE, devices.get(1).get("online"));
+        assertEquals("Mac", devices.get(1).get("deviceName"), "deviceName 回落到组内第一个非空值");
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> devAProjects = (List<Map<String, Object>>) devices.get(1).get("projects");
+        assertEquals(2, devAProjects.size());
+
+        // 没有目录行的设备（哪怕心跳在线）不出现
+        service.touchDevice(1L, "dev-c");
+        assertEquals(2, service.listDevices(1L).size(), "没有项目目录的设备不该出现在清单里");
+
+        // 别的用户看不到
+        assertTrue(service.listDevices(2L).isEmpty());
     }
 }

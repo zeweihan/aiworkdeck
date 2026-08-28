@@ -207,6 +207,24 @@ export async function fetchProjectFiles({ serverUrl, token }, projectId) {
 }
 
 /**
+ * 该账号全部设备清单（GET /api/mobile/devices，dev-board#250）。每台设备带在线态
+ * 与其在该机上的项目列表，供项目下拉渲染远程设备分组。旧后端没有该端点（404）
+ * 或任何失败/非数组响应一律返回 null，由调用方隐藏这组下拉项，不影响主链路。
+ */
+export async function fetchMobileDevices({ serverUrl, token }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base || !token) return null
+  try {
+    const resp = await fetch(`${base}/api/mobile/devices`, { headers: headers(token) })
+    if (!resp.ok) return null
+    const data = await resp.json()
+    return Array.isArray(data) ? data : null
+  } catch (e) {
+    return null
+  }
+}
+
+/**
  * 语音听写（POST /api/voice/dictate，dev-board#153）。失败抛错（透传服务端文案）。
  */
 export async function postDictate({ serverUrl, token }, { audioBase64, format, durationMs }) {

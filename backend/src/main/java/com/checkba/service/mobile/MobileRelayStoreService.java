@@ -1,7 +1,9 @@
 package com.checkba.service.mobile;
 
+import com.checkba.model.entity.MobileDeviceState;
 import com.checkba.model.entity.MobileMediaInbox;
 import com.checkba.model.entity.MobileProjectDir;
+import com.checkba.repository.MobileDeviceStateRepository;
 import com.checkba.repository.MobileMediaInboxRepository;
 import com.checkba.repository.MobileProjectDirRepository;
 import com.checkba.service.LangText;
@@ -59,9 +61,16 @@ public class MobileRelayStoreService {
     static final Duration TTL = Duration.ofDays(30);
     /** 每用户中转区配额：3GB，只计未投递的 blob（ACK 即删 = 释放配额）。 */
     static final long QUOTA_BYTES = 3L * 1024 * 1024 * 1024;
+    /**
+     * 在线判定窗口（dev-board#250）：桌面端 60 秒轮询一次 inbox，3 个周期没有心跳
+     * 才判离线，容忍单次轮询抖动。isDeviceOnline（#251 跨设备传输复用）与 listDevices
+     * 共用这一个常量。
+     */
+    static final Duration ONLINE_WINDOW = Duration.ofSeconds(180);
 
     private final MobileProjectDirRepository dirRepository;
     private final MobileMediaInboxRepository inboxRepository;
+    private final MobileDeviceStateRepository deviceStateRepository;
     private final MobileRelayBlobStore blobStore;
 
     /**
@@ -77,9 +86,11 @@ public class MobileRelayStoreService {
     @Autowired
     public MobileRelayStoreService(MobileProjectDirRepository dirRepository,
                                    MobileMediaInboxRepository inboxRepository,
+                                   MobileDeviceStateRepository deviceStateRepository,
                                    MobileRelayBlobStore blobStore) {
         this.dirRepository = dirRepository;
         this.inboxRepository = inboxRepository;
+        this.deviceStateRepository = deviceStateRepository;
         this.blobStore = blobStore;
     }
 
@@ -150,6 +161,122 @@ public class MobileRelayStoreService {
         }
         return out;
     }
+
+    // ==================== 设备心跳与在线判定 ====================
+
+    /**
+     * 心跳落点（dev-board#250）：GET /inbox（桌面端真实 60 秒轮询）与
+     * PUT /projects（目录推送）各调一次。故意不要求调用方处理异常——心跳失败
+     * 不能挡住这两个主请求，任何问题（含并发首建撞约束以外的意外错误）都吞掉只记日志。
+     */
+    public void touchDevice(Long userId, String deviceId) {
+        if (deviceId == null || deviceId.isBlank()) return;
+        try {
+            self.touchDeviceTx(userId, deviceId);
+        } catch (DataIntegrityViolationException | UnexpectedRollbackException e) {
+            // 并发首建撞唯一约束：对方那笔已经提交，重查更新一次（写法同 storeMedia）
+            try {
+                self.touchDeviceTx(userId, deviceId);
+            } catch (Exception e2) {
+                log.warn("手机同步：设备心跳更新失败（不影响主请求）: userId={}, deviceId={}, err={}",
+                        userId, deviceId, e2.toString());
+            }
+        } catch (Exception e) {
+            log.warn("手机同步：设备心跳更新失败（不影响主请求）: userId={}, deviceId={}, err={}",
+                    userId, deviceId, e.toString());
+        }
+    }
+
+    /** {@link #touchDevice} 的事务体：find→update，无则 insert。必须经 {@link #self} 代理。 */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void touchDeviceTx(Long userId, String deviceId) {
+        LocalDateTime now = LocalDateTime.now();
+        Optional<MobileDeviceState> existing = deviceStateRepository.findByUserIdAndDeviceId(userId, deviceId);
+        if (existing.isPresent()) {
+            existing.get().setLastSeenAt(now);
+            deviceStateRepository.save(existing.get());
+            return;
+        }
+        MobileDeviceState row = new MobileDeviceState();
+        row.setUserId(userId);
+        row.setDeviceId(deviceId);
+        row.setLastSeenAt(now);
+        deviceStateRepository.save(row);
+    }
+
+    /** 在线判定：ONLINE_WINDOW 窗口内有心跳。没心跳记录（从没上过线）一律离线。 */
+    public boolean isDeviceOnline(Long userId, String deviceId) {
+        return deviceStateRepository.findByUserIdAndDeviceId(userId, deviceId)
+                .map(s -> Duration.between(s.getLastSeenAt(), LocalDateTime.now()).compareTo(ONLINE_WINDOW) <= 0)
+                .orElse(false);
+    }
+
+    /**
+     * 该账号全部设备清单：目录行按 deviceId 分组（deviceName 取该组第一个非空值），
+     * join 心跳表拿 lastSeenAt/online。没有目录行的设备不出现——没有项目就没有可见/
+     * 可传的东西。排序 online 优先，其次按 lastSeenAt（无心跳的设备退化用目录最近
+     * updatedAt）倒序。
+     */
+    public List<Map<String, Object>> listDevices(Long userId) {
+        List<MobileProjectDir> dirRows = dirRepository.findByUserIdOrderByUpdatedAtDesc(userId);
+        if (dirRows.isEmpty()) return List.of();
+
+        // dirRows 已按 updatedAt 倒序，LinkedHashMap 分组后每组第一条就是该设备最新一次
+        // 推送的行，可直接当作无心跳时的排序兜底时间戳。
+        Map<String, List<MobileProjectDir>> byDevice = new LinkedHashMap<>();
+        for (MobileProjectDir row : dirRows) {
+            byDevice.computeIfAbsent(row.getDeviceId(), k -> new ArrayList<>()).add(row);
+        }
+
+        Map<String, MobileDeviceState> stateByDevice = new HashMap<>();
+        for (MobileDeviceState s : deviceStateRepository.findByUserIdAndDeviceIdIn(userId, byDevice.keySet())) {
+            stateByDevice.put(s.getDeviceId(), s);
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        List<DeviceRow> built = new ArrayList<>();
+        for (Map.Entry<String, List<MobileProjectDir>> entry : byDevice.entrySet()) {
+            String deviceId = entry.getKey();
+            List<MobileProjectDir> rows = entry.getValue();
+            String deviceName = rows.stream().map(MobileProjectDir::getDeviceName)
+                    .filter(n -> n != null && !n.isBlank()).findFirst().orElse(null);
+            MobileDeviceState state = stateByDevice.get(deviceId);
+            LocalDateTime lastSeenAt = state != null ? state.getLastSeenAt() : null;
+            boolean online = lastSeenAt != null
+                    && Duration.between(lastSeenAt, now).compareTo(ONLINE_WINDOW) <= 0;
+            LocalDateTime sortAt = lastSeenAt != null ? lastSeenAt : rows.get(0).getUpdatedAt();
+
+            List<Map<String, Object>> projects = new ArrayList<>();
+            for (MobileProjectDir row : rows) {
+                Map<String, Object> p = new LinkedHashMap<>();
+                p.put("key", row.getProjectKey());
+                p.put("name", row.getName());
+                projects.add(p);
+            }
+            built.add(new DeviceRow(deviceId, deviceName, lastSeenAt, online, sortAt, projects));
+        }
+
+        built.sort((a, b) -> {
+            if (a.online() != b.online()) return a.online() ? -1 : 1;
+            return b.sortAt().compareTo(a.sortAt());
+        });
+
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (DeviceRow d : built) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("deviceId", d.deviceId());
+            m.put("deviceName", d.deviceName());
+            m.put("lastSeenAt", d.lastSeenAt() != null ? d.lastSeenAt().toString() : null);
+            m.put("online", d.online());
+            m.put("projects", d.projects());
+            out.add(m);
+        }
+        return out;
+    }
+
+    /** listDevices 内部排序用的中间结构，不对外暴露。 */
+    private record DeviceRow(String deviceId, String deviceName, LocalDateTime lastSeenAt,
+                              boolean online, LocalDateTime sortAt, List<Map<String, Object>> projects) {}
 
     // ==================== 影像中转 ====================
 

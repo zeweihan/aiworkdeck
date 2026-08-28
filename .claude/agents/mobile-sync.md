@@ -33,7 +33,9 @@ dev-board#30）；更早的产品设计 `2026-08-17-mobile-clients-design.md`。
   用本机 awdk_ 到云端换 awdt_（存 `~/.aiworkdeck/mobile-relay.json`，0600，含
   deviceId 与账户指纹）、每 10 分钟推项目目录（清单哈希不变则跳过）、每 60 秒
   轮询取件落盘 + ACK。
-- `model/entity/MobileProjectDir.java` / `MobileMediaInbox.java` + 对应 repository。
+- `model/entity/MobileProjectDir.java` / `MobileMediaInbox.java` / `MobileDeviceState.java`
+  （dev-board#250，设备心跳落点，每 (userId, deviceId) 一行只记 lastSeenAt）+ 对应
+  repository。
 - `service/UserService.claimPhoneFromWebsite` + `AwdkLoginService.login` 的认领调用 —
   桥接时把官网账户的手机号认领到桥接用户名下（占用者转移、已有异号不覆盖、永不抛出），
   使手机端 sms-login 的 `findOrCreateByPhone` 解析到同一账号。官网 `/api/account/me`
@@ -59,6 +61,11 @@ dev-board#30）；更早的产品设计 `2026-08-17-mobile-clients-design.md`。
   「同名已在 → 只补 ACK」。
 - 客户端换账号守卫：state 里的账户指纹与 `AccountService.accountFingerprintOrNull()`
   不一致即作废令牌重桥接（平台 AI key 在 PR#334 栽过同形状的坑）。
+- **在线判定**（dev-board#250，`MobileRelayStoreService.ONLINE_WINDOW = 180s`）：桌面端
+  `GET /inbox`（真心跳，60 秒轮询）与 `PUT /projects` 各调一次 `touchDevice`，180 秒内有
+  心跳即在线。`GET /api/mobile/devices`（裸数组）给插件端账号级设备清单：目录行按
+  deviceId 分组、deviceName 取组内第一个非空值、join 心跳表出 `online`，排序 online 优先。
+  没有目录行的设备不出现。#251 跨设备文件传输的在线闸复用同一个 `isDeviceOnline`。
 
 ## 已知地雷
 

@@ -15,6 +15,13 @@
       >
         <option value="" disabled>{{ t('selectProject') }}</option>
         <option v-for="p in projects" :key="p.id" :value="String(p.id)">{{ p.name }}</option>
+        <!-- 远程设备项目（dev-board#250）：只读展示，value 带 remote:: 哨兵前缀，
+             onProjectSelect 拦截后恢复本地选中值 + 弹提示（#251 会改为打开传输面板） -->
+        <optgroup v-for="d in remoteDevices" :key="d.deviceId" :label="deviceGroupLabel(d)">
+          <option v-for="p in d.projects" :key="d.deviceId + '::' + p.key" :value="`remote::${d.deviceId}::${p.key}`">
+            {{ p.name }}
+          </option>
+        </optgroup>
         <!-- 新建项目（dev-board#196）：哨兵值，onProjectSelect 拦截后弹输入面板 -->
         <option value="__new__">{{ t('newProjectOption') }}</option>
       </select>
@@ -61,6 +68,9 @@
       </template>
       <button v-else class="icon-btn" @click="view = 'chat'">{{ t('back') }}</button>
     </header>
+
+    <!-- 远程项目边界提示（dev-board#250）：选中 remote:: 项后 4 秒自隐 -->
+    <p v-if="remoteHintVisible" class="remote-hint glass">{{ t('remoteProjectNotice') }}</p>
 
     <!-- 账户菜单（dev-board#194）：展示账户基本信息与 AI 额度，不再挂「高级设置」入口——
          那个入口把已登录用户带回登录表单，看起来像是被登出了 -->
@@ -138,7 +148,7 @@ import {
 } from './lib/settings.js'
 import {
   fetchMyProjects, ensureAddinDefaultProject, fetchMe, postLogout,
-  createProject, fetchPlatformAiStatus
+  createProject, fetchPlatformAiStatus, fetchMobileDevices
 } from './lib/api.js'
 import { t, getLang, setLang } from './lib/i18n.js'
 import { rechargeUrl, openExternal } from './lib/site.js'
@@ -149,6 +159,11 @@ const settings = reactive(loadSettings())
 const configured = computed(() => isConfigured(settings))
 const view = ref(configured.value ? 'chat' : 'settings')
 const projects = ref([])
+/** 该账号其它设备的项目目录（dev-board#250），供下拉渲染远程设备分组 */
+const remoteDevices = ref([])
+/** 选中 remote:: 项时的边界提示，4 秒自隐 */
+const remoteHintVisible = ref(false)
+let remoteHintTimer = null
 const projectId = ref(settings.projectId || '')
 const langKey = ref(getLang())
 const me = ref(null)
@@ -232,6 +247,9 @@ const quotaText = computed(() => {
  */
 async function refreshProjects() {
   if (!configured.value) return
+  // 远程设备目录（dev-board#250）：与本项目列表并行拉，null 容忍——拿不到就没有
+  // 这组下拉项，不影响本服务项目的正常选择
+  fetchMobileDevices(settings).then((devices) => { remoteDevices.value = devices || [] })
   try {
     const list = await fetchMyProjects(settings)
     projects.value = list
@@ -264,7 +282,7 @@ function onProjectChange(id) {
   saveProjectId(id)
 }
 
-/** 下拉换项目：拦下「新建项目」哨兵项，其余走正常切换 */
+/** 下拉换项目：拦下「新建项目」与「远程设备项目」两种哨兵值，其余走正常切换 */
 function onProjectSelect(ev) {
   const value = ev.target.value
   if (value === '__new__') {
@@ -273,7 +291,27 @@ function onProjectSelect(ev) {
     openNewProject()
     return
   }
+  if (value.startsWith('remote::')) {
+    // #250 阶段远程设备项目只读——只作跨设备文件传输的来源/目标（#251 待做），
+    // 显示值退回当前本地项目，给一条 4 秒自隐提示讲清边界
+    ev.target.value = projectId.value || ''
+    showRemoteHint()
+    return
+  }
   onProjectChange(value)
+}
+
+/** 远程项目边界提示：4 秒自隐，重复选中重新计时 */
+function showRemoteHint() {
+  remoteHintVisible.value = true
+  if (remoteHintTimer) clearTimeout(remoteHintTimer)
+  remoteHintTimer = setTimeout(() => { remoteHintVisible.value = false }, 4000)
+}
+
+/** 设备分组的下拉 label：设备名 +（在线/离线），设备名缺失时给「未知设备」占位 */
+function deviceGroupLabel(d) {
+  const name = d.deviceName || t('unknownDevice')
+  return d.online ? t('remoteGroupOnline', { name }) : t('remoteGroupOffline', { name })
 }
 
 function openNewProject() {
@@ -319,6 +357,7 @@ async function logout() {
   me.value = null
   aiQuota.value = null
   projects.value = []
+  remoteDevices.value = []
   view.value = 'settings'
 }
 
@@ -403,6 +442,22 @@ onMounted(async () => {
 }
 
 .project-select:hover { border-color: var(--awd-accent); }
+
+.remote-hint {
+  position: absolute;
+  top: 44px;
+  left: 8px;
+  right: 8px;
+  z-index: 25;
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--awd-border);
+  border-radius: var(--awd-radius-sm);
+  box-shadow: var(--awd-shadow-soft);
+  color: var(--awd-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
 
 .icon-btn {
   padding: 3px 10px;
