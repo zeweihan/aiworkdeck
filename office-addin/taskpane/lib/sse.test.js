@@ -9,7 +9,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createTagStreamParser } from './sse.js'
+import { createTagStreamParser, createSseConnection } from './sse.js'
 
 /** 把整段文本喂给解析器，返回三路输出 */
 function parse(chunks) {
@@ -109,4 +109,104 @@ test('同一输入逐字节喂入（实时流式）结果一致', () => {
 test('正文数值比较 <80%> 原样放行（数字开头不像协议标签）', () => {
   const { main } = parse('<final>担保比例<80%>时豁免</final>')
   assert.equal(main, '担保比例<80%>时豁免')
+})
+
+// ==================== XHR 降级通道（WPS 老内核，无流式 fetch） ====================
+// createSseConnection 在建连时探测流式 fetch 能力，探测不过整条走 XHR onprogress。
+// 这里临时抹掉 ReadableStream 迫使降级，验证：行协议解析一致、增量消费、
+// close() 只触发一次 onClose（XHR abort 是同步收尾，曾有双触发隐患）。
+
+test('XHR 降级通道：增量消费事件、请求头带令牌、close 单次收尾', async () => {
+  const savedRS = globalThis.ReadableStream
+  const savedXHR = globalThis.XMLHttpRequest
+  const instances = []
+  class FakeXhr {
+    constructor() {
+      instances.push(this)
+      this.readyState = 0
+      this.status = 0
+      this.responseText = ''
+      this.headers = {}
+      this.aborted = false
+    }
+    open(method, url) { this.url = url }
+    setRequestHeader(k, v) { this.headers[k] = v }
+    send() {
+      setTimeout(() => {
+        this.status = 200
+        this.readyState = 2
+        this.onreadystatechange && this.onreadystatechange()
+        this.pushChunk('event: text_delta\ndata: {"a":1}\n\n')
+      }, 0)
+    }
+    pushChunk(t) {
+      this.readyState = 3
+      this.responseText += t
+      this.onreadystatechange && this.onreadystatechange()
+    }
+    abort() {
+      this.aborted = true
+      this.readyState = 4
+      this.onabort && this.onabort()
+    }
+  }
+  globalThis.ReadableStream = undefined
+  globalThis.XMLHttpRequest = FakeXhr
+  try {
+    const events = []
+    let closes = 0
+    const conn = createSseConnection({
+      baseUrl: 'https://x.example',
+      token: 'awdt_xhr',
+      conversationId: 'conv-xhr-1',
+      onEvent: (name, data) => events.push([name, data]),
+      onClose: () => { closes++ }
+    })
+    await conn.ready
+    await new Promise((r) => setTimeout(r, 5))
+    const xhr = instances[0]
+    assert.equal(xhr.url, 'https://x.example/api/agent/connect/conv-xhr-1')
+    assert.equal(xhr.headers['X-Session-Id'], 'awdt_xhr')
+    assert.deepEqual(events[0], ['text_delta', '{"a":1}'])
+    // 多字节分段推进：跨 chunk 的半行要接得上
+    xhr.pushChunk('event: bubble_end\ndata: {"do')
+    xhr.pushChunk('ne":true}\n\n')
+    assert.deepEqual(events[1], ['bubble_end', '{"done":true}'])
+    conn.close()
+    assert.ok(xhr.aborted, 'close 必须 abort 掉 XHR')
+    assert.equal(closes, 1, 'onClose 只许触发一次（同步 abort 曾有双触发隐患）')
+  } finally {
+    globalThis.ReadableStream = savedRS
+    globalThis.XMLHttpRequest = savedXHR
+  }
+})
+
+test('XHR 降级通道：非 200 首连 ready 即拒绝并带状态码（自愈判定依赖它）', async () => {
+  const savedRS = globalThis.ReadableStream
+  const savedXHR = globalThis.XMLHttpRequest
+  class Fake403 {
+    open() {}
+    setRequestHeader() {}
+    send() {
+      setTimeout(() => {
+        this.status = 403
+        this.readyState = 2
+        this.onreadystatechange && this.onreadystatechange()
+      }, 0)
+    }
+    abort() { this.readyState = 4 }
+  }
+  globalThis.ReadableStream = undefined
+  globalThis.XMLHttpRequest = Fake403
+  try {
+    const conn = createSseConnection({
+      baseUrl: 'https://x.example', token: 't', conversationId: 'c',
+      onEvent: () => {}, onClose: () => {}
+    })
+    await assert.rejects(conn.ready, (e) => e.status === 403)
+    conn.close()
+  } finally {
+    globalThis.ReadableStream = savedRS
+    globalThis.XMLHttpRequest = savedXHR
+  }
 })

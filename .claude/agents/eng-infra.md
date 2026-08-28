@@ -29,6 +29,10 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
    （`AI-WorkDeck-Office-Addin.dmg/.exe`）。安装器只带 manifest，但版本号要与
    桌面端同步，用户侧才对得上号。不做这步 = 发版没发插件端，维护者原话
    「不然用户不会弄」。
+   **WPS 加载项（2026-08-28 起）随同一步发**：`cd office-addin && npm run build &&
+   npm run build:wps`，把 dist-wps/ 覆盖上传两台 addin 服务器的
+   `/opt/aiworkdeck/cloud/web/wps-addin/`（在线模式无安装器概念，覆盖静态目录即
+   全量用户生效；壳文件 no-cache 的 nginx 口径见 office-addin/README.md「WPS 加载项」章）。
 5. **EN 走查（打 tag 前必过）**：① 以英文语言设置跑 app-e2e 全量（含 J12 英文旅程：切 en-US 断言工作台四列英文锚点 + AI 过程卡工具名无中文，语言键 `awd_app_language`，切语言必须整页 reload）；② 编辑器 boot 用 `?uilang=en-US` 并以 office_thread.js 的 ooLocale 诊断确认 en-US 生效（issue #66 的诊断口径）；③ 人工过一遍英文主界面截图（工作台/设置/AI 面板）。
 6. DMG 安装窗口视觉（PR#204）：`build.dmg` 里的 `contents` 坐标是**图标中心、原点在窗口内容区左上角（不含标题栏）**；窗口尺寸由背景图 1x 像素尺寸决定（660x420），所以没写 `window`。背景图 `desktop/build/background.png` + `background@2x.png` 由 electron-builder 自动合成 hidpi TIFF，源文件是 `desktop/build/dmg-background.html`（顶部注释有 headless Chrome 重新生成命令）。改图标落位必须同步改 HTML 里的光晕/箭头位置，否则错位。
 

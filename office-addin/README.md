@@ -5,6 +5,9 @@ office.js 从微软官方 CDN 以 script 标签引入，不打包进 bundle。
 宿主支持 Word（全功能，含原生修订）、Excel（区域读写/查找 + 单元格格式/边框/行列/合并/排序/工作表/冻结窗格/公式），
 PowerPoint（页文本读取/跨页替换，需 PowerPointApi 1.4）。
 
+**同一套任务窗格源码也构建为 WPS 加载项**（文字/表格/演示三宿主，Windows/Linux
+版 WPS；Mac 版 WPS 不支持加载项），见文末「WPS 加载项」一章。
+
 插件独立连接后端实例（律所自建服务器 / 官方云 / 同机桌面版 `http://127.0.0.1:5269`）。
 常规形态是**用 AI WorkDeck 账户登录**（手机号+验证码，或邮箱+口令），与桌面版同一个账户；
 私有部署与团队服务器可在「高级设置」里改用官网账户 Key（awdk_）或手工粘贴的设备令牌。
@@ -380,3 +383,68 @@ npx office-addin-manifest validate dist-deploy/manifest.xml    # 校验生产 ma
   静默回退客户端生成 `conv-<毫秒>`。
 - 流式文本按 XML 标签轻量分流：`<final>` 与标签外文本为主回复、`<thinking>` 折叠展示，
   `<process>`/`<artifact>` 等暂不渲染。
+
+## WPS 加载项
+
+同一套 Vue 任务窗格另出一个 WPS 构建（`taskpane-wps.html` 入口，不含 office.js，
+`window.wps` 由 WPS 宿主注入）。宿主家族在运行时由 `taskpane/lib/hostBridge.js`
+判定：文档读取走 `wpsDoc.js`，office_command 执行走 `wpsExecutor.js`
+（文字/表格/演示三张 HANDLERS 表：`wpsWordHandlers.js` / `wpsEtHandlers.js` /
+`wpsWppHandlers.js`，命令名与参数/返回值契约同 `officeExecutor.js`——后端与模型
+看不出两个家族的差别，officeHost 仍是 word/excel/powerpoint 三值）。
+
+### 结构
+
+```
+wps/
+  ribbon.xml            功能区（三宿主共用，一个「AI 助手」按钮开关任务窗格）
+  index.html main.js    在线模式入口（WPS 启动拉 url/index.html → main.js → js/*）
+  js/ribbon.js util.js  ribbon 薄壳（vanilla JS，不进 Vite；回调按全局函数名查找）
+  vendor/publish-template.html
+                        官方 wpsjs@2.2.3 的 publish.html 原样 vendor（安装页模板，
+                        金山许可允许再分发；勿手改机制代码，构建脚本只做两处
+                        字符串替换 + 标题品牌化）
+scripts/build-wps.mjs   部署产物生成器（见下）
+```
+
+### 构建与部署
+
+```bash
+npm run build        # 先出 dist/（含 taskpane-wps.html）
+npm run build:wps    # 拼 dist-wps/（默认 --url https://addin.aiworkdeck.com/wps-addin）
+```
+
+`dist-wps/` 整体上传到服务器 `<baseUrl>` 对应路径。要点：
+
+- 在线模式：WPS 启动时直接从服务器拉 `wps/ribbon.xml` 与 `wps/index.html`，
+  **发版 = 覆盖静态目录，用户无需重装**；`wps/` 下的壳文件（ribbon.xml/index.html/
+  main.js/js/*）响应头要 no-cache，`wps/ui/assets/*` 带 hash 可长缓存。
+- `GET <baseUrl>/wps/ribbon.xml` 必须裸可达（别过 SPA 回退/鉴权），安装页的
+  「状态」列就是拿它验的。
+- 用户安装：浏览器打开 `<baseUrl>/install.html` → 点「安装」。页面经本机 WPS
+  常驻服务（127.0.0.1:58890，`ksoWPSCloudSvr://` 协议可拉起）把三条记录
+  （文字/表格/演示）写进用户 `%APPDATA%\kingsoft\wps\jsaddons\publish.xml`，
+  重启 WPS 生效。个人版 12.1.0.16910 起这是唯一受支持的安装通路。
+- 企业版私有部署：`dist-wps/jsplugins.xml` 部署到内网，客户端 `office6/cfgs/oem.ini`
+  配 `JSPluginsServer=<jsplugins.xml 地址>`；之后增删改只动服务器。
+
+### 已知差异与降级（对 Office 版）
+
+- 文字：行距「最小值 16 磅」原生支持（Office.js 只能固定值）；中西文分设字体、
+  中文编号（一、二、）原生支持；批注/修订定位符只有序号（无 GUID）；
+  `insert_image` 本版不支持（WPS JSAPI 无 base64 直插路）。
+- 表格：批注是老式单条（`reply_comment` 降级为文本追加，`resolve_comment` 不支持）；
+  列宽单位是字符宽（磅换算按 1 字符≈5.69 磅）；颜色 BGR 数值与 #RRGGBB 互转。
+- 演示：`ppt_add_slide` 原生带插入位置（无需 Office.js 那套「追加再挪」）；
+  下划线只有开/关；子串挂链失败降级整段。
+- SSE：老内核探测不到流式 fetch 时自动降级 XHR onprogress（`sse.js`），语义一致。
+
+### 真机验证清单（Windows 虚拟机装个人版 WPS 最新版）
+
+1. `install.html` 一键安装是否成功写入 publish.xml（2024-06 整改后的头号机制风险）；
+2. 任务窗格能开、`window.wps` 有值、能登录能对话（fetch/ReadableStream 实测，
+   Alt+F12 开 devtools 看 `[Addin]` 日志）；
+3. 文字宿主跑一轮改文档（修订可见、接受/拒绝正常）、表格 Value2 批量读写、
+   演示加页挪页；
+4. `wps.Enum` 缺失时本地常量表是否够用（三张 HANDLERS 表都不依赖 wps.Enum）；
+5. 已知平台坑回归：12.1.0.26895/28043 停靠任务窗格挡 ribbon 鼠标（bbs 93291）。

@@ -1,0 +1,11 @@
+<customUI xmlns="http://schemas.microsoft.com/office/2006/01/customui" onLoad="OnAddinLoad">
+    <ribbon startFromScratch="false">
+        <tabs>
+            <tab id="awdTab" label="AI WorkDeck">
+                <group id="awdGroup" label="AI WorkDeck">
+                    <button id="btnAwdPane" label="AI 助手" onAction="OnAction" getImage="GetImage" visible="true" size="large"/>
+                </group>
+            </tab>
+        </tabs>
+    </ribbon>
+</customUI>

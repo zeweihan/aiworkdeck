@@ -1,6 +1,9 @@
 /**
  * SSE 消费：与主前端 useAgentStream 同一方式——fetch + ReadableStream 手工解析
  * `event:`/`data:` 行（不用 EventSource，因为要携带 X-Session-Id 请求头）。
+ * 老内核降级：WPS 任务窗格的 CEF 内核版本参差，探测不到流式 fetch 能力
+ * （或运行时拿不到 resp.body 读流）时整条降级为 XHR onprogress 增量读，
+ * 行协议解析、心跳看门狗、重连语义两条通道完全一致。
  *
  * 断线自动重连：
  * - 首次建连失败：ready reject，不重连（保持「后端不可达」的即时报错体验）；
@@ -18,6 +21,23 @@ const RECONNECT_MAX_MS = 30000
 const DEAD_CONNECTION_MS = 40000
 const WATCHDOG_TICK_MS = 5000
 
+/**
+ * fetch 流式消费的能力探测。WPS 任务窗格跑在随宿主版本参差的 CEF 内核里，
+ * 老内核可能没有 ReadableStream/AbortController（fetch 本身也可能没有）——
+ * 探测不过就整条降级到 XHR onprogress 通道（任何年代的内核都有）。
+ * Office 家族的现代 webview 恒走 fetch 主路，行为不变。
+ */
+function streamFetchSupported() {
+  try {
+    return typeof fetch === 'function'
+      && typeof AbortController === 'function'
+      && typeof TextDecoder === 'function'
+      && typeof ReadableStream !== 'undefined'
+  } catch (e) {
+    return false
+  }
+}
+
 export function createSseConnection({ baseUrl, token, conversationId, onEvent, onClose, onStatus }) {
   let controller = null
   let closed = false
@@ -26,24 +46,61 @@ export function createSseConnection({ baseUrl, token, conversationId, onEvent, o
   let watchdogTimer = null
   let lastActivity = Date.now()
   let reading = false
+  // fetch 主路在运行时发现拿不到读流（个别内核 resp.body 为空）时永久翻到 XHR
+  let forceXhr = !streamFetchSupported()
 
   const notifyStatus = (status) => {
     try { if (onStatus) onStatus(status) } catch (e) { /* ignore */ }
   }
 
+  const connectUrl = () => `${baseUrl}/api/agent/connect/${conversationId}`
+
+  function httpError(status) {
+    const err = new Error(`SSE 建连失败（HTTP ${status}）：令牌无效或后端拒绝了请求`)
+    // 挂上状态码：403（会话不归当前用户/签发登记已丢）是调用方能自愈的，其余不能
+    err.status = status
+    return err
+  }
+
+  /** `event:`/`data:` 行协议的增量解析（fetch 与 XHR 两条读流通道共用） */
+  function createLineParser() {
+    let buffer = ''
+    let eventName = null
+    let eventData = ''
+    const flush = () => {
+      if (eventData) {
+        try { onEvent(eventName, eventData) } catch (e) { console.error('[Addin] onEvent 异常', e) }
+      }
+      eventName = null
+      eventData = ''
+    }
+    return {
+      feed(text) {
+        buffer += text
+        const lines = buffer.split(/\r?\n/)
+        buffer = lines.pop() // 保留最后一段不完整行
+        for (const line of lines) {
+          if (!line.trim()) { flush(); continue }
+          if (line.startsWith('event:')) {
+            eventName = line.substring(6).trim()
+          } else if (line.startsWith('data:')) {
+            let v = line.substring(5)
+            if (v.startsWith(' ')) v = v.substring(1)
+            eventData += (eventData ? '\n' : '') + v
+          }
+        }
+      }
+    }
+  }
+
   async function connectOnce() {
     controller = new AbortController()
-    const resp = await fetch(`${baseUrl}/api/agent/connect/${conversationId}`, {
+    const resp = await fetch(connectUrl(), {
       method: 'GET',
       headers: { 'X-Session-Id': token || '' },
       signal: controller.signal
     })
-    if (!resp.ok) {
-      const err = new Error(`SSE 建连失败（HTTP ${resp.status}）：令牌无效或后端拒绝了请求`)
-      // 挂上状态码：403（会话不归当前用户/签发登记已丢）是调用方能自愈的，其余不能
-      err.status = resp.status
-      throw err
-    }
+    if (!resp.ok) throw httpError(resp.status)
     return resp
   }
 
@@ -63,50 +120,116 @@ export function createSseConnection({ baseUrl, token, conversationId, onEvent, o
     if (watchdogTimer) { clearInterval(watchdogTimer); watchdogTimer = null }
   }
 
+  /** 读流收尾（两条通道共用）：主动关闭→通知，意外断流→重连 */
+  function finishReading() {
+    reading = false
+    stopWatchdog()
+    if (closed) {
+      if (onClose) onClose()
+    } else {
+      scheduleReconnect()
+    }
+  }
+
   async function readLoop(resp) {
     reading = true
     const reader = resp.body.getReader()
     const decoder = new TextDecoder('utf-8')
-    let buffer = ''
-    let eventName = null
-    let eventData = ''
-    const flush = () => {
-      if (eventData) {
-        try { onEvent(eventName, eventData) } catch (e) { console.error('[Addin] onEvent 异常', e) }
-      }
-      eventName = null
-      eventData = ''
-    }
+    const parser = createLineParser()
     try {
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
         lastActivity = Date.now()
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split(/\r?\n/)
-        buffer = lines.pop() // 保留最后一段不完整行
-        for (const line of lines) {
-          if (!line.trim()) { flush(); continue }
-          if (line.startsWith('event:')) {
-            eventName = line.substring(6).trim()
-          } else if (line.startsWith('data:')) {
-            let v = line.substring(5)
-            if (v.startsWith(' ')) v = v.substring(1)
-            eventData += (eventData ? '\n' : '') + v
-          }
-        }
+        parser.feed(decoder.decode(value, { stream: true }))
       }
     } catch (e) {
       if (e.name !== 'AbortError' || !closed) console.warn('[Addin] SSE 读流中断', e)
     } finally {
-      reading = false
-      stopWatchdog()
-      if (closed) {
-        if (onClose) onClose()
-      } else {
-        scheduleReconnect()
-      }
+      finishReading()
     }
+  }
+
+  /**
+   * XHR 降级通道：onreadystatechange 里增量读 responseText。
+   * 返回 Promise，语义与 connectOnce 对齐——头部到达且 200 时 resolve（此时
+   * reading 已置起、读流由回调驱动），非 200/网络失败时 reject。整条响应会
+   * 累积在 responseText 里，后端每轮结束主动关流，单轮体量有限，可接受。
+   */
+  function connectAndReadXhr() {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      controller = { abort() { try { xhr.abort() } catch (e) { /* 已关 */ } } }
+      let seen = 0
+      let opened = false
+      let settled = false
+      const parser = createLineParser()
+      const consumeNew = () => {
+        let text = ''
+        try { text = xhr.responseText || '' } catch (e) { return /* abort 后个别引擎不让读 */ }
+        if (text.length > seen) {
+          lastActivity = Date.now()
+          parser.feed(text.slice(seen))
+          seen = text.length
+        }
+      }
+      xhr.onreadystatechange = () => {
+        if (!opened && xhr.readyState >= 2 && xhr.status) {
+          if (xhr.status === 200) {
+            opened = true
+            reading = true
+            if (!settled) { settled = true; resolve() }
+          } else {
+            const err = httpError(xhr.status)
+            try { xhr.abort() } catch (e) { /* ignore */ }
+            if (!settled) { settled = true; reject(err) }
+            return
+          }
+        }
+        if (opened && (xhr.readyState === 3 || xhr.readyState === 4)) consumeNew()
+        if (xhr.readyState === 4 && opened) finishReading()
+      }
+      xhr.onerror = xhr.ontimeout = () => {
+        if (!settled) {
+          settled = true
+          reject(new Error('SSE 建连失败：网络不可达'))
+          return
+        }
+        // 已在读流中失败：走统一收尾（重连或关闭）
+        if (opened && reading) finishReading()
+      }
+      // abort（看门狗/close 主动掐）在部分引擎只触发 onabort 不触发 readystatechange，
+      // 两边都挂收尾；finishReading 内 reading 置 false，双触发也只收尾一次
+      xhr.onabort = () => {
+        if (opened && reading) finishReading()
+      }
+      try {
+        xhr.open('GET', connectUrl(), true)
+        xhr.setRequestHeader('X-Session-Id', token || '')
+        xhr.send()
+      } catch (e) {
+        if (!settled) { settled = true; reject(e) }
+      }
+    })
+  }
+
+  /**
+   * 建连一次（通道自适应）：fetch 主路拿不到读流（老内核 resp.body 缺失）时
+   * 永久翻到 XHR 再试本次。resolve 即已连上且读流开始维护。
+   */
+  async function connectAndRead() {
+    if (!forceXhr) {
+      const resp = await connectOnce()
+      if (resp.body && typeof resp.body.getReader === 'function') {
+        startWatchdog()
+        readLoop(resp)
+        return
+      }
+      console.warn('[Addin] fetch 响应无读流，SSE 降级到 XHR 通道')
+      forceXhr = true
+    }
+    await connectAndReadXhr()
+    startWatchdog()
   }
 
   let connecting = false
@@ -115,11 +238,9 @@ export function createSseConnection({ baseUrl, token, conversationId, onEvent, o
     if (closed || connecting) return
     connecting = true
     try {
-      const resp = await connectOnce()
+      await connectAndRead()
       backoffMs = RECONNECT_BASE_MS
       notifyStatus('connected')
-      startWatchdog()
-      readLoop(resp)
     } catch (e) {
       if (!closed) {
         console.warn('[Addin] SSE 重连失败，继续退避', e)
@@ -142,11 +263,9 @@ export function createSseConnection({ baseUrl, token, conversationId, onEvent, o
   }
 
   const ready = (async () => {
-    // 首连失败直接抛给调用方（不进重连循环）；成功后交给 readLoop 维护
-    const resp = await connectOnce()
+    // 首连失败直接抛给调用方（不进重连循环）；成功后由读流通道维护
+    await connectAndRead()
     notifyStatus('connected')
-    startWatchdog()
-    readLoop(resp)
   })()
 
   return {
@@ -168,9 +287,12 @@ export function createSseConnection({ baseUrl, token, conversationId, onEvent, o
       closed = true
       stopWatchdog()
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+      // 先记住 abort 前是否有活跃读流：XHR 通道的 abort 会**同步**触发 finishReading
+      // （其中已含 onClose），abort 后再看 reading 会误判成「没有读流」而二次 onClose
+      const wasReading = reading
       if (controller) controller.abort()
-      // 没有活跃读流（重连等待期/首连未成）时不会再有 finally 收尾，这里直接通知关闭
-      if (!reading && onClose) onClose()
+      // 没有活跃读流（重连等待期/首连未成）时不会再有收尾回调，这里直接通知关闭
+      if (!wasReading && onClose) onClose()
     }
   }
 }

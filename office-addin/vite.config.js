@@ -47,8 +47,15 @@ export default defineConfig(({ command }) => ({
     https: devHttps()
   },
   build: {
+    // WPS 任务窗格跑在随宿主版本参差的 CEF 内核里（可能低至 Chromium 7x），
+    // 语法降到 es2018 消掉可选链等新语法的硬解析错；Office 家族的现代 webview
+    // 跑降级产物无差别。运行时能力（fetch/ReadableStream）转译不了，真机验证。
+    target: 'es2018',
     rollupOptions: {
-      input: path.resolve(rootDir, 'taskpane.html')
+      input: {
+        taskpane: path.resolve(rootDir, 'taskpane.html'),
+        'taskpane-wps': path.resolve(rootDir, 'taskpane-wps.html')
+      }
     }
   }
 }))

@@ -5,8 +5,10 @@ import {
   deleteConversation as apiDeleteConversation, renameConversation as apiRenameConversation
 } from './api.js'
 import { createSseConnection, createTagStreamParser } from './sse.js'
-import { readActiveDocument, readDocumentMeta, detectHost, hashContent } from './wordDoc.js'
-import { executeOfficeCommand, commandDisplayName } from './officeExecutor.js'
+import {
+  readActiveDocument, readDocumentMeta, detectHost, hashContent,
+  executeCommand, commandDisplayName
+} from './hostBridge.js'
 import {
   loadConversationId, saveConversationId, isConfigured, loadModelChoice, saveModelChoice
 } from './settings.js'
@@ -583,7 +585,7 @@ async function handleClientAction(dataStr) {
   // 光标一直闪。失败要落在 chip 上（错误详情给用户看，不只回传给模型）。
   let result
   try {
-    result = await executeOfficeCommand(action.command, action.args)
+    result = await executeCommand(action.command, action.args)
   } catch (e) {
     result = { ok: false, error: (e && e.message) || String(e) }
   }
