@@ -109,7 +109,7 @@ description: Microsoft Office 与 WPS 插件领域。任务涉及 Word/Excel/PPT
 - `taskpane/lib/wpsDoc.js` — WPS 三宿主文档读取（契约同 wordDoc.js）。表格读取必须 Value2 批量（跨进程桥约 0.2ms/调用，逐格会拖死任务窗格）。
 - `taskpane/lib/wpsExecutor.js` + `wpsWordHandlers.js` / `wpsEtHandlers.js` / `wpsWppHandlers.js` — office_command 的 WPS 执行器（分发器 + 三张宿主 HANDLERS 表）。**命令名与参数/返回值契约以 officeExecutor.js 为准绳**；宿主守卫按前缀（excel_*/ppt_*/其余归 word）。
 - `taskpane-wps.html` — WPS 构建入口（不含 office.js；window.wps 由宿主注入）。与 taskpane.html 同出一个 dist（vite 双入口），build.target 压 es2018 给参差的 CEF 内核留余量。
-- `wps/` — ribbon 薄壳（vanilla JS，不进 Vite）：ribbon.xml（三宿主共用）+ index.html/main.js/js/*（在线模式 WPS 启动拉 url/index.html）+ `vendor/publish-template.html`（官方 wpsjs@2.2.3 publish.html 原样 vendor，构建脚本只做 PUBLISH_REPLACE_STRING/SERVERID_REPLEASE_STRING 两处替换 + 标题品牌化，**机制代码不许手改**）。
+- `wps/` — ribbon 薄壳（vanilla JS，不进 Vite）：ribbon.xml（三宿主共用）+ index.html/main.js/js/*（在线模式 WPS 启动拉 url/index.html）+ `vendor/publish-template.html`（官方 wpsjs@2.2.3 publish.html 原样 vendor，构建脚本只做 PUBLISH_REPLACE_STRING/SERVERID_REPLEASE_STRING 两处替换 + 标题品牌化 + 追加 BRAND_STYLE 覆盖样式（对齐官网 DESIGN.md，选择器钉在模板既有类名上，dev-board#246），**机制代码不许手改**——「验证中/正常/无效」状态色是机制 JS 写 inline 的，样式层刻意不碰）。
 - `scripts/build-wps.mjs` — `npm run build:wps` 出 dist-wps/（wps/ 壳 + wps/ui/=dist 拷贝 + install.html + jsplugins.xml）。默认部署地址 https://addin.aiworkdeck.com/wps-addin。
 
 ### 分发契约

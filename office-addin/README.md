@@ -403,7 +403,7 @@ wps/
   vendor/publish-template.html
                         官方 wpsjs@2.2.3 的 publish.html 原样 vendor（安装页模板，
                         金山许可允许再分发；勿手改机制代码，构建脚本只做两处
-                        字符串替换 + 标题品牌化）
+                        字符串替换 + 标题品牌化 + 注入品牌覆盖样式）
 scripts/build-wps.mjs   部署产物生成器（见下）
 ```
 
