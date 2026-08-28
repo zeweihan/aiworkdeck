@@ -298,10 +298,15 @@ public class ContextAssemblerService {
             systemText.append("用户说\"修订一下\"\"这个文档\"\"当前文档\"或未指明对象时，默认就是指它。\n");
             switch (capability) {
                 case OFFICE -> {
+                    // 产出去向的默认规则（dev-board#244 真机复测：模型曾把「写一份简报」落成
+                    // 新建项目文件，用户面前的文档纹丝不动——插件用户看着的是文档，不是项目文件列表）
+                    systemText.append("用户要求起草/撰写/生成内容（合同、简报、函件、清单等）时，");
+                    systemText.append("默认把产出**直接写进这份打开的文档**（用本会话的 office_* 编辑工具），");
+                    systemText.append("不要创建项目文件来保存产出；只有用户明确要求「保存到项目」「另存为文件」时才使用项目文件类工具。\n");
                     // 宿主细分（Word/Excel/PowerPoint）：三类宿主的工具集互不相通，点错就是死路径
                     switch (clientCapabilityService.officeHostOf(conversationId)) {
                         case EXCEL -> {
-                            systemText.append("该工作簿在用户本机的 Microsoft Excel 中打开，活动工作表内容已随本请求内联注入下方。");
+                            systemText.append("该工作簿在用户本机的表格软件（Microsoft Excel 或 WPS 表格）中打开，活动工作表内容已随本请求内联注入下方。");
                             systemText.append("读取/修改它一律使用 office_excel_* 工具（office_excel_get_range / ");
                             systemText.append("office_excel_set_values / office_excel_search），写入直接生效");
                             systemText.append("（Excel 没有修订机制）。表格格式/结构调整（单元格格式/边框/行列/合并/排序/工作表/冻结/公式）");
@@ -318,7 +323,7 @@ public class ContextAssemblerService {
                             systemText.append("本会话没有 doc_* / sheet_* 工具，也没有 Word 面的 office_* 工具。\n\n");
                         }
                         case POWERPOINT -> {
-                            systemText.append("该演示文稿在用户本机的 Microsoft PowerPoint 中打开，各页文本已随本请求内联注入下方。");
+                            systemText.append("该演示文稿在用户本机的演示软件（Microsoft PowerPoint 或 WPS 演示）中打开，各页文本已随本请求内联注入下方。");
                             systemText.append("读取/修改它一律使用 office_ppt_* 工具（office_ppt_get_slides / office_ppt_replace_text / ");
                             systemText.append("office_ppt_format_text 排版文字、office_ppt_add_slide / office_ppt_delete_slide / ");
                             systemText.append("office_ppt_move_slide 管理页面、office_ppt_add_text_box / office_ppt_add_shape 插入文本框与形状、");
@@ -329,7 +334,7 @@ public class ContextAssemblerService {
                             systemText.append("本会话没有 doc_* 工具，也没有 Word 面的 office_* 工具。\n\n");
                         }
                         default -> {
-                            systemText.append("该文档在用户本机的 Microsoft Word 中打开，正文已随本请求内联注入下方。");
+                            systemText.append("该文档在用户本机的文字处理软件（Microsoft Word 或 WPS 文字）中打开，正文已随本请求内联注入下方。");
                             systemText.append("读取/修改它一律使用 office_* 工具（office_get_text / office_search / ");
                             systemText.append("office_replace_text / office_insert_text / office_add_comment / ");
                             systemText.append("office_format_text / office_set_paragraph_format / office_get_formatting / ");
@@ -1045,7 +1050,7 @@ You are in Agent mode, the default full-capability mode:
 
     // 活跃文档指引（system prompt 段）的英文分支文本，与中文 switch 各分支逐条对应
     private static final String EN_GUIDE_OFFICE_EXCEL = """
-This workbook is open in Microsoft Excel on the user's machine; the active worksheet's content is inlined below with this request.
+This workbook is open in the user's spreadsheet application (Microsoft Excel or WPS Spreadsheets); the active worksheet's content is inlined below with this request.
 Read and modify it exclusively with the office_excel_* tools (office_excel_get_range / office_excel_set_values / office_excel_search); writes take effect immediately (Excel has no track-changes mechanism).
 For formatting and structural changes (cell formats / borders / rows and columns / merging / sorting / worksheets / freezing / formulas), use the corresponding office_excel_* tools (office_excel_format_cells / office_excel_set_borders / office_excel_edit_rows_cols / office_excel_merge_cells / office_excel_sort_range / office_excel_manage_sheets / office_excel_freeze_panes / office_excel_set_formulas / office_excel_set_autofilter / office_excel_conditional_format).
 Before changing the sheet you may first call office_excel_get_overview to see the worksheet list and each sheet's dimensions; office_excel_select_range can move the user's view to a location.
@@ -1055,7 +1060,7 @@ This session has no doc_* / sheet_* tools, and none of the Word-side office_* to
 """;
 
     private static final String EN_GUIDE_OFFICE_PPT = """
-This presentation is open in Microsoft PowerPoint on the user's machine; the text of each slide is inlined below with this request.
+This presentation is open in the user's presentation application (Microsoft PowerPoint or WPS Presentation); the text of each slide is inlined below with this request.
 Read and modify it exclusively with the office_ppt_* tools (office_ppt_get_slides / office_ppt_replace_text / office_ppt_format_text for text and formatting; office_ppt_add_slide / office_ppt_delete_slide / office_ppt_move_slide for slide management; office_ppt_add_text_box / office_ppt_add_shape to insert text boxes and shapes; office_ppt_get_slide_details / office_ppt_delete_shape to locate precisely and delete shapes); writes take effect immediately (PowerPoint has no track-changes mechanism - deletions and edits cannot be undone from a review panel).
 Tables: office_ppt_add_table to insert, office_ppt_table_read / office_ppt_table_set_cell to read and write cells; hyperlinks: office_ppt_set_hyperlink.
 This session has no doc_* tools, and none of the Word-side office_* tools.
@@ -1063,7 +1068,7 @@ This session has no doc_* tools, and none of the Word-side office_* tools.
 """;
 
     private static final String EN_GUIDE_OFFICE_WORD = """
-This document is open in Microsoft Word on the user's machine; its body text is inlined below with this request.
+This document is open in the user's word processor (Microsoft Word or WPS Writer); its body text is inlined below with this request.
 Read and modify it exclusively with the office_* tools (office_get_text / office_search / office_replace_text / office_insert_text / office_add_comment / office_format_text / office_set_paragraph_format / office_get_formatting / office_set_numbering / office_format_table / office_apply_standard_format, etc.); edits appear as native Word tracked changes.
 Document formatting (font / size / line spacing / indentation / alignment / underline / strikethrough / automatic numbering / table borders; to format the whole document to the firm's house style use office_apply_standard_format) is done with office_format_text and office_set_paragraph_format.
 Tables are built and edited with office_insert_table / office_table_read / office_table_set_cell / office_table_add_row / office_table_delete_row / office_table_add_col / office_table_delete_col (call office_table_read first to see the exact coordinates; row and column deletions are NOT tracked as revisions and can only be reversed by undo).
@@ -1114,6 +1119,11 @@ All doc_* editing and reading tools act directly on this document. You need NOT 
         sb.append("When the user says \"revise this\", \"this document\", \"the current document\", or gives no target, they mean this document by default.\n");
         switch (capability) {
             case OFFICE -> {
+                // 与中文版同源的产出去向默认规则（dev-board#244）
+                sb.append("When the user asks you to draft or produce content (a contract, briefing, letter, list, ...), ")
+                  .append("write it directly into this open document with the office_* editing tools by default - ")
+                  .append("do NOT create a project file to hold the output. Only use project-file tools when the user ")
+                  .append("explicitly asks to save to the project or export a file.\n");
                 switch (clientCapabilityService.officeHostOf(conversationId)) {
                     case EXCEL -> sb.append(EN_GUIDE_OFFICE_EXCEL);
                     case POWERPOINT -> sb.append(EN_GUIDE_OFFICE_PPT);
@@ -1166,7 +1176,7 @@ All doc_* editing and reading tools act directly on this document. You need NOT 
         return switch (capability) {
             case OFFICE -> switch (officeHost) {
                 case EXCEL -> "\n\n[System reminder] The user currently has the workbook " + docLabel
-                        + " open in Microsoft Excel; the active worksheet's content is inlined in the system prompt's "
+                        + " open in Microsoft Excel or WPS Spreadsheets; the active worksheet's content is inlined in the system prompt's "
                         + "<active_document> and can be read and analyzed directly. "
                         + "Unless the user names another file, \"this\", \"the current spreadsheet\", \"change it\", "
                         + "and the like refer to this workbook - read and modify it exclusively via the office_excel_* tools "
@@ -1184,7 +1194,7 @@ All doc_* editing and reading tools act directly on this document. You need NOT 
                         + "office_excel_add_chart / office_excel_define_name / office_excel_protect_sheet / "
                         + "office_excel_group_rows_cols / office_excel_add_pivot_table.";
                 case POWERPOINT -> "\n\n[System reminder] The user currently has the presentation " + docLabel
-                        + " open in Microsoft PowerPoint; the text of each slide is inlined in the system prompt's "
+                        + " open in Microsoft PowerPoint or WPS Presentation; the text of each slide is inlined in the system prompt's "
                         + "<active_document> and can be read and analyzed directly. "
                         + "Unless the user names another file, \"this\", \"the current deck\", \"change it\", "
                         + "and the like refer to this presentation - read and modify it exclusively via the office_ppt_* tools "
@@ -1195,7 +1205,7 @@ All doc_* editing and reading tools act directly on this document. You need NOT 
                         + "Tables use office_ppt_add_table / office_ppt_table_read / office_ppt_table_set_cell; "
                         + "hyperlinks use office_ppt_set_hyperlink.";
                 default -> "\n\n[System reminder] The user currently has the document " + docLabel
-                        + " open in Microsoft Word; its body text is inlined in the system prompt's <active_document> "
+                        + " open in Microsoft Word or WPS Writer; its body text is inlined in the system prompt's <active_document> "
                         + "and can be read and analyzed directly. "
                         + "Unless the user names another document, \"this\", \"the current document\", \"revise it\", "
                         + "and the like refer to this document - to modify it, call the office_* tools "

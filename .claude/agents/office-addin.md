@@ -127,7 +127,9 @@ description: Microsoft Office 与 WPS 插件领域。任务涉及 Word/Excel/PPT
 - 文字面比 Office.js 强的三处（别照抄 Office 版降级）：行距最小值原生支持（wdLineSpaceAtLeast）、NameFarEast/NameAscii 无门槛、中文编号 wdListNumberStyleSimpChinNum* 原生支持；PPT AddSlide(Index, CustomLayout) 原生带插入位置。
 - `sse.js` 双通道：流式 fetch 探测不过（或 resp.body 缺失）整条降级 XHR onprogress。**XHR abort 是同步收尾**——close() 里必须先记 wasReading 再 abort，否则 onClose 双触发（已修，sse.test.js 钉住）。
 - 官方模板 index.html 的角色：本地模式下 WPS 自动生成 index.html、开发者不许自建；**在线模式相反**，WPS 从服务器拉 url/index.html，我们必须提供。两句话都对，别拿一句去改另一边。
-- 真机验证欠账（写代码时留意勿固化错误假设）：install.html 在最新个人版的 enable 是否有 2024 整改后的额外校验（头号风险）；CEF 内核 fetch/ReadableStream 实测；字符偏移口径（Document.Range(start,end) 与 JS 字符串索引）；12.1.0.26895+ 停靠任务窗格挡 ribbon 鼠标的平台 bug（bbs 93291）。
+- **停靠任务窗格冻住 ribbon 是真机实锤**（2026-08-28 复测，bbs 93291 平台 bug，官方未修、社区全部规避手段无效）：窗格打开期间整条 ribbon 拒收鼠标，而关窗格按钮在 ribbon 上=死锁。解法：App.vue 头部有 WPS 家族专属「收起面板」按钮（hostBridge.hidePanel → wpsDoc.hideWpsTaskPane，经 PluginStorage 共享键 awd_taskpane_id 取窗格句柄自藏），收起即解锁、重开走 ribbon「AI 助手」。**别把这颗按钮当冗余删掉**。
+- office 会话的产出去向规则在 ContextAssemblerService（中英两处）：起草/生成类请求默认写进当前打开的文档，不许新建项目文件保存（2026-08-28 真机复测教训：模型曾把「写简报」落成建空项目文件）。宿主措辞已中性化（「Microsoft Word 或 WPS 文字」等六处），别改回单提微软。
+- 真机已验：install.html 一键安装、任务窗格 window.wps、登录、SSE 流式全通（2026-08-28，WPS 365/Win）。仍欠：字符偏移口径（Document.Range 直切 vs JS 索引，含表格文档）；Replies.Add/透视表/子串挂链三个类推 API。
 
 ### 验证
 

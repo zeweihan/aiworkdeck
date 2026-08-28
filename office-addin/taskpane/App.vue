@@ -19,6 +19,19 @@
         <option value="__new__">{{ t('newProjectOption') }}</option>
       </select>
       <span class="header-spacer"></span>
+      <!-- 收起面板（仅 WPS 宿主，dev-board#244）：WPS 停靠任务窗格期间 ribbon 被平台
+           bug 冻住（bbs 93291），窗格内的这颗按钮是用户唯一的解锁通路 -->
+      <button
+        v-if="isWpsHost"
+        class="icon-btn"
+        :title="t('collapsePaneTitle')"
+        @click="collapsePane"
+      >
+        <svg class="lang-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M7 5l7 7-7 7"/>
+          <path d="M14 5l7 7-7 7"/>
+        </svg>
+      </button>
       <!-- 语言切换（dev-board#177/#193）：未登录也要能切，所以放头部而不是账户菜单里；
            地球图标 + 目标语言缩写，让它一眼可读为「切换语言」而不是一个谜之汉字按钮 -->
       <button
@@ -129,6 +142,7 @@ import {
 } from './lib/api.js'
 import { t, getLang, setLang } from './lib/i18n.js'
 import { rechargeUrl, openExternal } from './lib/site.js'
+import { hostFamily, hidePanel } from './lib/hostBridge.js'
 import { popIn } from './lib/motion.js'
 
 const settings = reactive(loadSettings())
@@ -154,6 +168,15 @@ const newProjectInputEl = ref(null)
 // Logo 走运行时相对路径（动态绑定绕开 vite 的静态资源改写）：
 // 部署在 /office-addin/ 子路径与 dev 根路径下都能落到 dist 根的图标
 const logoSrc = 'icon-32.png'
+
+// WPS 宿主专属的「收起面板」按钮（dev-board#244 复测）：WPS 平台 bug（bbs 93291）
+// 会在停靠任务窗格打开期间冻住整条 ribbon，而关窗格的按钮在 ribbon 上——
+// 窗格内必须有自己的收起通路，否则用户被锁死。收起后 ribbon 恢复，
+// 重开走 ribbon 的「AI 助手」按钮。
+const isWpsHost = hostFamily() === 'wps'
+function collapsePane() {
+  hidePanel()
+}
 
 const currentProjectName = computed(() => {
   const hit = projects.value.find(p => String(p.id) === projectId.value)

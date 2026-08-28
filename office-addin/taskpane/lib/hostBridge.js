@@ -28,7 +28,8 @@ import {
   wpsAvailable,
   detectWpsHost,
   readWpsActiveDocument,
-  readWpsDocumentMeta
+  readWpsDocumentMeta,
+  hideWpsTaskPane
 } from './wpsDoc.js'
 import { executeWpsCommand, locateInWpsDocument } from './wpsExecutor.js'
 
@@ -93,6 +94,16 @@ export async function executeCommand(command, args) {
 /** 命令中文名表两个家族共用（officeExecutor 里的纯数据表，不碰宿主 API） */
 export function commandDisplayName(command) {
   return sharedCommandDisplayName(command)
+}
+
+/**
+ * 收起任务窗格（仅 WPS 家族有意义）：WPS 平台 bug 会在窗格停靠期间冻住 ribbon
+ * （bbs 93291），窗格内的收起按钮是用户唯一的解锁通路。Office 家族无此问题也
+ * 没有对应 API，返回 false（界面按 hostFamily 隐藏按钮，正常不会调到）。
+ */
+export function hidePanel() {
+  if (hostFamily() === 'wps') return hideWpsTaskPane()
+  return false
 }
 
 /** 引用定位（正文引文 chip 点击选中），仅 Word/文字宿主 */
