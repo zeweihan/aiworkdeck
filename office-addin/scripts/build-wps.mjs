@@ -34,6 +34,87 @@ const DEFAULT_BASE_URL = 'https://addin.aiworkdeck.com/wps-addin'
 /** 加载项注册名（写进用户本机 publish.xml；三宿主同名不同 type） */
 const ADDON_NAME = 'aiworkdeck'
 
+/**
+ * 安装页品牌覆盖样式（对齐官网 DESIGN.md：纸面底 + 衬线标题/眉标 + 白卡 + 品牌绿）。
+ * 只追加 <style>，vendor 模板与机制 JS 一行不改；选择器全部钉在模板既有类名上。
+ * 衬线字体走系统栈（Songti/SimSun 兜底），不引外部字体——安装页要在离线/内网可用。
+ */
+const BRAND_STYLE = `    <style id="awd-brand">
+        body {
+            margin: 0;
+            padding: 48px 24px 64px;
+            background: #F8F9FA;
+            color: #212529;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Inter", sans-serif;
+            -webkit-font-smoothing: antialiased;
+        }
+        .awd-eyebrow {
+            max-width: 760px;
+            margin: 0 auto 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.22em;
+            color: #1A5336;
+        }
+        .awd-eyebrow-line { width: 32px; height: 1px; background: #1A5336; }
+        .divTitle {
+            max-width: 760px;
+            margin: 0 auto 28px;
+            font-family: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "SimSun", serif;
+            font-size: 32px;
+            font-weight: 700;
+            color: #123A26;
+        }
+        .addonList {
+            max-width: 760px !important; /* 机制 JS 会写 inline 800*dpr，压回 */
+            margin: 0 auto;
+            padding: 8px 24px 16px;
+            background: #fff;
+            border: 1px solid rgba(233, 236, 239, 0.9);
+            border-radius: 12px;
+            box-shadow: 0 18px 40px -18px rgba(18, 58, 38, 0.12);
+        }
+        .addonItem { font-size: 13px; line-height: 40px; margin-bottom: 0; border-radius: 6px; }
+        .addonItem .addonItemName4 { font-size: 12px; line-height: 1.6; color: #868E96; word-break: break-all; }
+        .addonItem:hover { border: 0; border-radius: 6px; background: #F1F3F5; }
+        .addonItemTitle,
+        .addonItemTitle:hover {
+            background: transparent;
+            border: 0;
+            border-bottom: 1px solid #E9ECEF;
+            border-radius: 0;
+            font-size: 11px;
+            letter-spacing: 0.08em;
+            color: #868E96;
+        }
+        .addonItemButton { padding: 5px 14px; background-color: #1A5336; border-radius: 6px; font-size: 12px; }
+        .addonItemButton:hover { background-color: #123A26; }
+        .ClearAll {
+            max-width: 760px !important;
+            margin: 24px auto 0;
+            box-sizing: border-box;
+            font-size: 13px;
+            line-height: 40px;
+            color: #868E96;
+            background: #fff;
+            border: 1px solid #E9ECEF;
+            border-radius: 8px;
+        }
+        .ClearAll:hover { border-radius: 8px; border-color: #ADB5BD; background: #F1F3F5; color: #C0392B; }
+        /* 空态：WPS 本地服务没连上时表格只剩表头，给一句解释（纯 CSS，不动机制） */
+        .addonList:has(.addonItemTitle:only-child)::after {
+            content: "未检测到已发布的加载项。请确认本机已安装并启动过 WPS Office，并允许浏览器打开 WPS 以连接本地服务。";
+            display: block;
+            padding: 28px 0 20px;
+            text-align: center;
+            font-size: 13px;
+            color: #868E96;
+        }
+    </style>`
+
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 function parseArgs(argv) {
@@ -107,10 +188,16 @@ if (!installHtml.includes('PUBLISH_REPLACE_STRING') || !installHtml.includes('SE
 installHtml = installHtml.replace(/PUBLISH_REPLACE_STRING/, JSON.stringify(addons))
 // multiUser=true 对应 CLI 的 getServerId() 分支（Linux 多用户场景，Windows 单用户无副作用）
 installHtml = installHtml.replace(/SERVERID_REPLEASE_STRING/, 'getServerId()')
-// 轻量品牌化：只动标题文案，不碰任何机制代码
+// 轻量品牌化：只动标题文案 + 注入覆盖样式，不碰任何机制代码。
+// 样式对齐官网 DESIGN.md（dev-board#246）：纸面底色 + 衬线大标题/眉标 + 白卡 +
+// 品牌绿按钮；vendor 模板保持原样，全部覆盖走这里追加的 <style>。
+// 机制 JS 会往 .addonList/.ClearAll 写 inline maxWidth（800*dpr），只能用
+// !important 压回；「验证中/正常/无效」状态色也是 inline 写入，刻意不动。
 installHtml = installHtml
   .replace('<title>WPS加载项配置</title>', '<title>AI WorkDeck - WPS 加载项安装</title>')
-  .replace('>WPS加载项配置</div>', '>AI WorkDeck - WPS 加载项安装</div>')
+  .replace('>WPS加载项配置</div>', '>WPS 加载项安装</div>')
+  .replace('<div class="divTitle">', '<div class="awd-eyebrow"><span class="awd-eyebrow-line"></span>AI WORKDECK</div>\n    <div class="divTitle">')
+  .replace('</head>', `${BRAND_STYLE}\n</head>`)
 fs.writeFileSync(path.join(outDir, 'install.html'), installHtml)
 
 // 4) 企业版私有部署模板（oem.ini 的 JSPluginsServer 指向这份文件的部署地址）

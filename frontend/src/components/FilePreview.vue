@@ -9,7 +9,7 @@
         <view class="preview-title-row">
           <text class="preview-title">{{ file.name }}</text>
           <button
-            v-if="canEdit"
+            v-if="canEdit && showEditBtn"
             class="btn-edit"
             type="primary"
             size="mini"
@@ -311,6 +311,11 @@ export default {
     locator: {
       type: Object,
       default: null
+    },
+    // 调用点若不接 @edit 就传 false 藏掉编辑按钮，否则会渲染一个点了没反应的死按钮
+    showEditBtn: {
+      type: Boolean,
+      default: true
     }
   },
   data() {
