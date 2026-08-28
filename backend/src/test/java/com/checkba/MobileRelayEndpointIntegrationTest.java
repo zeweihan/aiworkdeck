@@ -64,6 +64,9 @@ class MobileRelayEndpointIntegrationTest {
         mvc.perform(get("/api/mobile/projects"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(4010));
+        mvc.perform(get("/api/mobile/devices"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(4010));
 
         // 1. 桌面推目录（嵌套 DTO 绑定）
         String dir = """
@@ -105,6 +108,15 @@ class MobileRelayEndpointIntegrationTest {
                 .andExpect(jsonPath("$[0].projectKey").value("42"))
                 .andReturn();
         long itemId = om.readTree(inbox.getResponse().getContentAsString()).get(0).path("id").asLong();
+
+        // 4.5 插件端设备清单（dev-board#250）：inbox 轮询已经打过心跳，dev-a 应显示在线，
+        // 且带上第 1 步推送的两个项目
+        mvc.perform(get("/api/mobile/devices").header("X-Session-Id", desktop))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].deviceId").value("dev-a"))
+                .andExpect(jsonPath("$[0].online").value(true))
+                .andExpect(jsonPath("$[0].projects.length()").value(2));
 
         // 5. 内容字节 + Content-Type（客户端靠它区分字节与信封）
         MvcResult content = mvc.perform(get("/api/mobile/inbox/" + itemId + "/content")

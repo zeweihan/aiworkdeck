@@ -89,6 +89,12 @@ export const ZH = {
   creating: '创建中...',
   createProjectFailed: '项目创建失败',
 
+  // ---- App.vue：远程设备（dev-board#250）----
+  remoteGroupOnline: '{name}（在线）',
+  remoteGroupOffline: '{name}（离线）',
+  unknownDevice: '未知设备',
+  remoteProjectNotice: '该项目在远程设备上，仅可作为跨设备文件传输的来源或目标，AI 会话请选择本服务上的项目。',
+
   // ---- ChatView.vue：空态 ----
   emptyHint: '与 AI 讨论当前文档或项目事务。',
   connectionNotReady: '尚未登录：点击右上角「登录」连接账户。',
@@ -375,6 +381,12 @@ export const EN = {
   create: 'Create',
   creating: 'Creating...',
   createProjectFailed: 'Failed to create project',
+
+  // ---- App.vue：远程设备（dev-board#250）----
+  remoteGroupOnline: '{name} (online)',
+  remoteGroupOffline: '{name} (offline)',
+  unknownDevice: 'Unknown device',
+  remoteProjectNotice: 'This project lives on a remote device. It can only be used as a source or target for cross-device file transfer; for AI conversations, please select a project on this server.',
 
   // ---- ChatView.vue：空态 ----
   emptyHint: 'Ask AI about the current document or project.',

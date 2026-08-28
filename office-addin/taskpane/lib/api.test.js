@@ -13,7 +13,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { getAccountLoginCaptchaConfig, postAccountLoginSendCode } from './api.js'
+import { getAccountLoginCaptchaConfig, postAccountLoginSendCode, fetchMobileDevices } from './api.js'
 
 /** 替换 globalThis.fetch，返回 {calls, restore} */
 function stubFetch(handler) {
@@ -111,6 +111,58 @@ test('后端地址为空时不发请求，直接当未启用', async () => {
   try {
     const config = await getAccountLoginCaptchaConfig({ serverUrl: '' })
     assert.equal(config.provider, null)
+    assert.equal(f.calls.length, 0)
+  } finally {
+    f.restore()
+  }
+})
+
+// ==================== fetchMobileDevices（dev-board#250）====================
+
+test('fetchMobileDevices：正常返回数组时原样透传，带上会话头', async () => {
+  const devices = [{ deviceId: 'dev-a', deviceName: 'Mac', online: true, projects: [{ key: '42', name: '某项目' }] }]
+  const f = stubFetch(() => jsonReply(devices))
+  try {
+    const result = await fetchMobileDevices({ serverUrl: 'https://addin.example.com', token: 'awdt_xxx' })
+    assert.deepEqual(result, devices)
+    assert.ok(f.calls[0].url.endsWith('/api/mobile/devices'))
+    assert.equal(f.calls[0].options.headers['X-Session-Id'], 'awdt_xxx')
+  } finally {
+    f.restore()
+  }
+})
+
+test('fetchMobileDevices：旧后端 404 静默降级为 null', async () => {
+  const f = stubFetch(() => jsonReply({ error: 'not found' }, false, 404))
+  try {
+    const result = await fetchMobileDevices({ serverUrl: 'https://addin.example.com', token: 'awdt_xxx' })
+    assert.equal(result, null)
+  } finally {
+    f.restore()
+  }
+})
+
+test('fetchMobileDevices：响应非数组或网络异常也一律降级为 null', async () => {
+  const f = stubFetch(() => jsonReply({ code: 0 }))
+  try {
+    assert.equal(await fetchMobileDevices({ serverUrl: 'https://addin.example.com', token: 'awdt_xxx' }), null)
+  } finally {
+    f.restore()
+  }
+
+  const f2 = stubFetch(() => { throw new Error('offline') })
+  try {
+    assert.equal(await fetchMobileDevices({ serverUrl: 'https://addin.example.com', token: 'awdt_xxx' }), null)
+  } finally {
+    f2.restore()
+  }
+})
+
+test('fetchMobileDevices：没有 token 或地址时不发请求，直接返回 null', async () => {
+  const f = stubFetch(() => jsonReply([]))
+  try {
+    assert.equal(await fetchMobileDevices({ serverUrl: '', token: 'awdt_xxx' }), null)
+    assert.equal(await fetchMobileDevices({ serverUrl: 'https://addin.example.com', token: '' }), null)
     assert.equal(f.calls.length, 0)
   } finally {
     f.restore()

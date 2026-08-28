@@ -59,6 +59,7 @@ public class MobileRelayController {
             @RequestBody DirectoryRequest request,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = requireUser(sessionId);
+        store.touchDevice(userId, request.getDeviceId());
         List<MobileRelayStoreService.DirEntry> entries = new ArrayList<>();
         if (request.getProjects() != null) {
             for (DirectoryRequest.Entry e : request.getProjects()) {
@@ -78,6 +79,16 @@ public class MobileRelayController {
     public List<Map<String, Object>> listDirectory(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         return store.listDirectory(requireUser(sessionId));
+    }
+
+    /**
+     * 插件端（dev-board#250）：该账号全部设备清单，每台设备带在线态与其项目列表。
+     * 裸数组，鉴权同组。
+     */
+    @GetMapping("/devices")
+    public List<Map<String, Object>> listDevices(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        return store.listDevices(requireUser(sessionId));
     }
 
     /** 手机端：上传一件现场影像到中转区（幂等键 clientMediaId）。 */
@@ -137,6 +148,8 @@ public class MobileRelayController {
             @RequestParam("deviceId") String deviceId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = requireUser(sessionId);
+        // 真心跳（dev-board#250）：桌面端 60 秒轮询这个端点，据此判定设备在线态。
+        store.touchDevice(userId, deviceId);
         List<Map<String, Object>> out = new ArrayList<>();
         for (MobileMediaInbox item : store.pendingForDevice(userId, deviceId)) {
             Map<String, Object> m = new LinkedHashMap<>();
