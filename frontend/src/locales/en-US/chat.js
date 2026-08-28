@@ -57,6 +57,7 @@ export default {
   inputPlaceholderEmpty: 'Ask a question, drag files or folders here, or paste contract text...',
   inputPlaceholder: 'Ask anything or describe a task',
   recentChats: 'Recent Conversations',
+  recentChatsEmpty: 'Your recent chats will appear here',
   aiDisclaimer: 'AI-generated content is for reference only and does not constitute a formal legal opinion. Use at your own risk.',
   newConversation: 'New Conversation',
   justNow: 'Just now',
