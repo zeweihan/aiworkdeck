@@ -306,9 +306,17 @@ chmod +x restart-all.sh
 - [ ] 面向律所与企业私有化部署的更好的自托管指南
 - [ ] 社区版双语文档
 
+## 治理
+
+AI WorkDeck 以开放方式开发：贡献者 → 评审者 → 维护者的晋升阶梯、重大变更走 RFC 流程、每月一次社区例会——详见 [GOVERNANCE.md](GOVERNANCE.md) 与 [MAINTAINERS.md](MAINTAINERS.md)。项目由北京京微资易科技有限公司作为 steward 运营（海外发行由真善美承泽有限公司 Zhen Shan Mei Grace Legacy Limited 承担），商标与商业授权集中于公司；治理角色承载技术权限，不附带任何经济权利。
+
+### 社区基金
+
+我们承诺将**商业授权净收入的 20%** 注入社区基金，用于 issue 悬赏（[BOUNTIES.md](BOUNTIES.md)）、Skill 创作补贴与社区活动。这是公司单方面的公开政策，不构成对任何个人的合同承诺；比例与规则可能随项目发展前瞻性调整。
+
 ## 参与贡献
 
-欢迎 issue、讨论、文档改进、集成笔记和目标明确的 PR。提交 PR 前请先阅读 [CONTRIBUTING.md](.github/CONTRIBUTING.md)。
+欢迎 issue、讨论、文档改进、集成笔记和目标明确的 PR。提交 PR 前请先阅读 [CONTRIBUTING.md](.github/CONTRIBUTING.md)。代码贡献需要一次性签署 [CLA](legal/CLA.md)，首个 PR 上由机器人自动引导完成。带 `bounty` 标签的 issue 合并即有现金悬赏——见 [BOUNTIES.md](BOUNTIES.md)。
 
 适合上手的第一批贡献：
 
@@ -341,7 +349,7 @@ AI WorkDeck 社区版基于 GNU Affero General Public License v3.0 发布。
 
 详见 [LICENSE](legal/LICENSE) 与 [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md)。商业许可请联系 [hi@aiworkdeck.com](mailto:hi@aiworkdeck.com)。
 
-**AI WorkDeck™** 是我们的未注册文字商标；AI WorkDeck 标识已在中国注册（第 9 类，注册号 89857424）。欢迎在上述许可下基于内核构建产品，但将 **AI WorkDeck** 名称或标识用于商业产品需要品牌或认证协议——见 [TRADEMARKS.md](legal/TRADEMARKS.md) 与 [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md) 中的**品牌与认证计划**。
+**AI WorkDeck 标识**（K 形图形）已在中国注册为商标（第 9 类，注册号 89857424；第 35、42 类申请已过初审公告、待核准注册）。「**AI WorkDeck**」作为商号与未注册文字商标使用（标 ™），与 aiworkdeck.com 域名一起受反不正当竞争法保护。欢迎在上述许可下基于内核构建产品，但将 **AI WorkDeck** 名称或标识用于商业产品的营销需要品牌或认证协议——见 [TRADEMARKS.md](legal/TRADEMARKS.md) 与 [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md) 中的**品牌与认证计划**。
 
 ## 背景
 

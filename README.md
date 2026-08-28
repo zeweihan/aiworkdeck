@@ -308,9 +308,17 @@ Shipped since this list was first written: the public plugin SDK with examples, 
 - [ ] Better self-hosting guides for private law-firm and enterprise deployments
 - [ ] Bilingual documentation for the community edition
 
+## Governance
+
+AI WorkDeck is developed in the open, with a contributor → reviewer → maintainer ladder, an RFC process for substantial changes, and a monthly community call — see [GOVERNANCE.md](GOVERNANCE.md) and [MAINTAINERS.md](MAINTAINERS.md). The project is stewarded by 北京京微资易科技有限公司 (with 真善美承泽有限公司 / Zhen Shan Mei Grace Legacy Limited operating the international offering), which holds the trademarks and is the sole commercial licensor. Governance roles carry technical authority, not economic rights.
+
+### Community Fund
+
+We commit **20% of net commercial-licensing revenue** to a community fund that pays issue bounties ([BOUNTIES.md](BOUNTIES.md)), Skill-creation grants, and community events. This is a unilateral public policy of the steward company, not a contractual promise to any individual; the percentage and rules may be adjusted prospectively as the project grows.
+
 ## Contributing
 
-We welcome issues, discussions, docs improvements, integration notes, and focused pull requests. Please read [CONTRIBUTING.md](.github/CONTRIBUTING.md) before submitting a PR.
+We welcome issues, discussions, docs improvements, integration notes, and focused pull requests. Please read [CONTRIBUTING.md](.github/CONTRIBUTING.md) before submitting a PR. Code contributions require a one-time [CLA signature](legal/CLA.md), handled automatically by a bot on your first PR. Issues labeled `bounty` pay cash on merge — see [BOUNTIES.md](BOUNTIES.md).
 
 Useful first contributions:
 
@@ -343,7 +351,7 @@ Commercial licensing is available for:
 
 See [LICENSE](legal/LICENSE) and [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md). For commercial licensing, contact [hi@aiworkdeck.com](mailto:hi@aiworkdeck.com).
 
-**AI WorkDeck™** is our unregistered word mark; the AI WorkDeck logo is a registered trademark in China (Class 9, reg. no. 89857424). Building on the kernel is welcome under the licenses above, but using the **AI WorkDeck** name or logo for a commercial offering requires a brand or certification agreement — see [TRADEMARKS.md](legal/TRADEMARKS.md) and the **Brand & Certification Programs** in [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md).
+The **AI WorkDeck logo** (the "K" mark) is a registered trademark in China (Class 9, reg. no. 89857424; the Class 35 and 42 applications have cleared publication and are pending registration). "**AI WorkDeck**" is used as a trade name and unregistered word mark ("AI WorkDeck™"), protected together with the aiworkdeck.com domain under applicable unfair-competition law. Building on the kernel is welcome under the licenses above, but using the **AI WorkDeck** name or logo to market a commercial offering requires a brand or certification agreement — see [TRADEMARKS.md](legal/TRADEMARKS.md) and the **Brand & Certification Programs** in [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md).
 
 ## Background
 
