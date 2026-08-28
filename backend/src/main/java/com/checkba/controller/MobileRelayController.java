@@ -6,7 +6,7 @@ import com.checkba.service.LangText;
 import com.checkba.service.mobile.MobileRelayStoreService;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.InputStreamResource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -153,16 +153,20 @@ public class MobileRelayController {
         return out;
     }
 
-    /** 桌面端：取件字节流。 */
+    /**
+     * 桌面端：取件字节流。契约红线（MobileRelayClientService 硬校验）：成功必须是
+     * 2xx + Content-Type application/octet-stream + 裸字节，不许 302 到签名 URL。
+     */
     @GetMapping("/inbox/{id}/content")
-    public ResponseEntity<FileSystemResource> content(
+    public ResponseEntity<InputStreamResource> content(
             @PathVariable("id") Long id,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = requireUser(sessionId);
-        FileSystemResource resource = new FileSystemResource(store.contentPath(userId, id));
+        MobileRelayStoreService.ContentBlob blob = store.openContent(userId, id);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_OCTET_STREAM_VALUE)
-                .body(resource);
+                .contentLength(blob.length())
+                .body(new InputStreamResource(blob.stream()));
     }
 
     /** 桌面端：确认落盘。置 deliveredAt 并立即删除 blob。 */
