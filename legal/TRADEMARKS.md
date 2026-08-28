@@ -14,16 +14,16 @@ The AI WorkDeck logo — the stylised "K" device — is filed with the China Nat
 | Class | Goods / services | Reg. or app. no. | Status |
 |---|---|---|---|
 | 9 | Computer software (downloadable software, file and database management software, OCR, chatbot software) | 89857424 | **Registered** 2026-07-27; exclusive right runs to 2036-07-26 |
-| 35 | Advertising and business services | 89857389 | Preliminarily approved and published 2026-05-27; **application pending** |
-| 42 | SaaS, PaaS, software design and hosting | 89857390 | Preliminarily approved and published 2026-05-27; **application pending** |
+| 35 | Advertising and business services | 89857389 | Preliminarily approved and published 2026-05-27; three-month opposition window closed 2026-08-27; **registration pending confirmation** |
+| 42 | SaaS, PaaS, software design and hosting | 89857390 | Preliminarily approved and published 2026-05-27; three-month opposition window closed 2026-08-27; **registration pending confirmation** |
 
-The ® symbol is used with the device mark only for the Class 9 goods on which it is registered. The Class 35 and 42 applications have cleared examination but are not yet registered, and we do not mark them ®.
+The ® symbol is used with the device mark only for the Class 9 goods on which it is registered. The Class 35 and 42 applications have cleared examination and their opposition windows, but until the registrations are formally confirmed and published we do not mark them ®. This table is updated as the register changes.
 
 ### 2.2 The name (word mark)
 
-**AI WorkDeck™** and **AI WorkDeck Kernel™** are unregistered trademarks used in commerce to identify this software and the related services we provide. There is no word-mark registration, so we mark them ™ rather than ®.
+**AI WorkDeck™** and **AI WorkDeck Kernel™** are unregistered trademarks used in commerce to identify this software and the related services we provide. There is no word-mark registration, so we mark them ™ rather than ®. "AI WorkDeck" is also our trade name, used and protected together with the **aiworkdeck.com** domain.
 
-Unregistered marks are still protectable. Unauthorized commercial use that causes confusion as to the source of goods or services may infringe our rights under the Anti-Unfair Competition Law, independently of any registration.
+Unregistered marks are still protectable. Unauthorized commercial use that causes confusion as to the source of goods or services — including confusingly similar names or domains — may infringe our rights under the Anti-Unfair Competition Law, independently of any registration.
 
 ## 3. Trade Dress & Look and Feel
 In addition to the name, the **distinctive visual appearance and user experience (UX/UI) flow** of the AI WorkDeck IDE constitutes our **Trade Dress**.

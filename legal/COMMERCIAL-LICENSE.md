@@ -26,7 +26,7 @@ Please contact our licensing team to discuss your specific use case and pricing:
 - **Website:** [www.aiworkdeck.com](https://www.aiworkdeck.com)
 
 ## Brand & Certification Programs
-**AI WorkDeck™** is our word mark and the AI WorkDeck logo is a registered trademark (see [`TRADEMARKS.md`](TRADEMARKS.md) for the per-class status). We license the brand to partners who meet our quality bar, so customers can trust that a deployment, plugin, or integration is genuinely compatible and supported.
+**AI WorkDeck™** is our unregistered word mark and trade name; the AI WorkDeck logo (the "K" mark) is a registered trademark in China in Class 9 (see [`TRADEMARKS.md`](TRADEMARKS.md) for the per-class status). We license the brand to partners who meet our quality bar, so customers can trust that a deployment, plugin, or integration is genuinely compatible and supported.
 
 | Program | What you get |
 |---|---|
