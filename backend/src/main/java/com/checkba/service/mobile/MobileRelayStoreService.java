@@ -6,6 +6,7 @@ import com.checkba.model.entity.MobileProjectDir;
 import com.checkba.repository.MobileDeviceStateRepository;
 import com.checkba.repository.MobileMediaInboxRepository;
 import com.checkba.repository.MobileProjectDirRepository;
+import com.checkba.repository.MobileTransferRequestRepository;
 import com.checkba.service.LangText;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -72,6 +73,11 @@ public class MobileRelayStoreService {
     private final MobileMediaInboxRepository inboxRepository;
     private final MobileDeviceStateRepository deviceStateRepository;
     private final MobileRelayBlobStore blobStore;
+    /**
+     * 配额共池（dev-board#251）：3GB 配额现在是影像中转 + 跨设备传输两张表未投递 blob
+     * 之和，不再是本表单独的字节数——跨设备传输占用会挤掉影像中转的可用额度，反之亦然。
+     */
+    private final MobileTransferRequestRepository transferRequestRepository;
 
     /**
      * 本 bean 的懒加载自身代理，只为让 storeMedia 撞约束后的重试真正经过 Spring 的事务代理
@@ -87,11 +93,13 @@ public class MobileRelayStoreService {
     public MobileRelayStoreService(MobileProjectDirRepository dirRepository,
                                    MobileMediaInboxRepository inboxRepository,
                                    MobileDeviceStateRepository deviceStateRepository,
-                                   MobileRelayBlobStore blobStore) {
+                                   MobileRelayBlobStore blobStore,
+                                   MobileTransferRequestRepository transferRequestRepository) {
         this.dirRepository = dirRepository;
         this.inboxRepository = inboxRepository;
         this.deviceStateRepository = deviceStateRepository;
         this.blobStore = blobStore;
+        this.transferRequestRepository = transferRequestRepository;
     }
 
     public record DirEntry(String key, String name) {}
@@ -340,7 +348,8 @@ public class MobileRelayStoreService {
 
         // 配额检查在写盘之前、按声明大小做（controller 传 MultipartFile.getSize()，就是实际
         // 字节数）。只计未投递的 blob：桌面端收走（ACK）即释放，空间循环利用。
-        long usedBytes = inboxRepository.sumPendingBytes(userId);
+        // dev-board#251：配额是共池，跨设备传输（MobileTransferRequest）未投递的 blob 也占这份 3GB。
+        long usedBytes = inboxRepository.sumPendingBytes(userId) + transferRequestRepository.sumPendingBytes(userId);
         if (usedBytes + Math.max(0, declaredSize) > QUOTA_BYTES) {
             throw new IllegalArgumentException(LangText.of(
                     "云端空间已满（3GB）：请在桌面端打开 AI WorkDeck 收取已上传的文件后重试",

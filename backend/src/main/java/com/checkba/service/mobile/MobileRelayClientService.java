@@ -31,11 +31,18 @@ import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 桌面侧手机同步客户端（spec：aiworkdeck_mobile docs/specs/2026-08-20-project-sync-relay.md）。
@@ -46,6 +53,9 @@ import java.util.UUID;
  *   <li>周期把本机项目清单 {key, name} 推到云端目录（手机端「选择项目」的数据源）；</li>
  *   <li>轮询中转区取回现场影像，落到项目「现场影像/YYYY-MM-DD/」，落盘成功即 ACK
  *       （云端 ACK 后立即删 blob——落地即删）。</li>
+ *   <li>跟在同一轮询节奏后响应跨设备文件传输命令（dev-board#251 B 侧）：LIST 回清单、
+ *       PULL 把本机文件流式回传、PUSH 把对方投来的文件落到「跨设备文件/YYYY-MM-DD/」；
+ *       命中传输往来时进入 5 秒一次的热窗口短轮询，见 {@link #pollTransferCommands()}。</li>
  * </ul>
  *
  * <p>只在 {@code security.local-mode=true}（单机桌面版）活动：云后端与团队服务器
@@ -77,6 +87,19 @@ public class MobileRelayClientService {
 
     private final Object stateLock = new Object();
     private RelayState state;
+
+    /** /transfer/commands 404（旧服务器没有这条路由）：进程内记住不再徒劳打它——服务器
+     *  升级后要重启桌面端才恢复，这里权衡为可接受（spec 2.3）。 */
+    private volatile boolean transferCommandsUnsupported = false;
+    /** 热窗口截止时间戳（epoch millis）：命中传输命令或服务端 hot=true 时顺延。 */
+    private volatile long transferHotUntil = 0L;
+    /** 防止 pollInbox 的常规调用与热循环自身重入出两条并行循环。 */
+    private final AtomicBoolean hotLoopRunning = new AtomicBoolean(false);
+    /** 热窗口专用单线程 executor（daemon，惰性创建），不占用 @Scheduled 的调度线程。 */
+    private volatile ExecutorService hotExecutor;
+    /** 热窗口时长与轮询间隔：包可见非 final，测试用短值覆盖，避免真睡 120 秒。 */
+    static long TRANSFER_HOT_WINDOW_MS = 120_000L;
+    static long TRANSFER_HOT_POLL_INTERVAL_MS = 5_000L;
 
     /** 持久化结构：~/.aiworkdeck/mobile-relay.json */
     public static class RelayState {
@@ -181,6 +204,12 @@ public class MobileRelayClientService {
             }
         } catch (Exception e) {
             log.warn("手机同步：取件轮询异常（下轮重试）", e);
+        } finally {
+            // 跨设备文件传输（dev-board#251 B 侧）跟在同一轮询节奏后面，不单独占一个
+            // @Scheduled——放 finally 而不是紧跟 try-catch 之后，是因为上面 try 块里
+            // 有好几处 return（空收件箱/响应异常），那些 return 会直接跳出整个方法，
+            // 不放 finally 的话大多数轮次（收件箱通常是空的）根本轮不到这一句。
+            pollTransferCommands();
         }
     }
 
@@ -190,6 +219,8 @@ public class MobileRelayClientService {
     private static final String MEDIA_ROOT_FOLDER = "现场影像";
     /** 录音（mediaType=audio）落这个根目录——律师找录音不该去翻「现场影像」。 */
     private static final String AUDIO_ROOT_FOLDER = "现场录音";
+    /** 跨设备投送（PUSH）落盘根目录名，与「现场影像/现场录音」并列。 */
+    private static final String TRANSFER_ROOT_FOLDER = "跨设备文件";
 
     private void landAndAck(JsonNode item) throws IOException, InterruptedException {
         long itemId = item.path("id").asLong();
@@ -312,6 +343,323 @@ public class MobileRelayClientService {
         return LocalDate.now().toString();
     }
 
+    // ==================== 跨设备文件传输（dev-board#251 B 侧） ====================
+
+    /**
+     * 传输命令轮询：跟在 pollInbox 每轮末尾；命中热窗口后由独立线程以短间隔连续追加调用
+     * （见 {@link #enterHotWindow()}）。逐条处理，单条失败不影响其余。
+     */
+    void pollTransferCommands() {
+        if (!active()) return;
+        if (transferCommandsUnsupported) return;
+        try {
+            HttpResponse<String> resp = authed("GET",
+                    "/api/mobile/transfer/commands?deviceId=" + deviceId(), null);
+            if (resp == null) return;
+            if (resp.statusCode() == 404) {
+                transferCommandsUnsupported = true;
+                log.info("手机同步：服务器未开通跨设备传输（/transfer/commands 404），"
+                        + "本次运行不再轮询（服务器升级后重启桌面端恢复）");
+                return;
+            }
+            if (resp.statusCode() < 200 || resp.statusCode() >= 300) return;
+            JsonNode body = mapper.readTree(resp.body());
+            JsonNode commands = body.path("commands");
+            boolean handledAny = false;
+            if (commands.isArray()) {
+                for (JsonNode cmd : commands) {
+                    try {
+                        handleTransferCommand(cmd);
+                    } catch (Exception e) {
+                        log.warn("手机同步：传输命令 {} 处理失败（不影响其余命令）",
+                                cmd.path("id").asLong(), e);
+                    }
+                    handledAny = true;
+                }
+            }
+            if (body.path("hot").asBoolean(false) || handledAny) {
+                enterHotWindow();
+            }
+        } catch (Exception e) {
+            log.warn("手机同步：传输命令轮询异常（下轮重试）", e);
+        }
+    }
+
+    private void handleTransferCommand(JsonNode cmd) throws IOException, InterruptedException {
+        long id = cmd.path("id").asLong();
+        String kind = cmd.path("kind").asText("");
+        switch (kind) {
+            case "LIST":
+                handleListCommand(id, cmd);
+                break;
+            case "PULL":
+                handlePullCommand(id, cmd);
+                break;
+            case "PUSH":
+                handlePushCommand(id, cmd);
+                break;
+            default:
+                // 前向兼容：服务端以后加新 kind，旧桌面端不该炸，跳过就好
+                log.debug("手机同步：未知传输命令类型 {}（id={}），跳过", kind, id);
+        }
+    }
+
+    /** LIST：组本机项目的文件清单（不含文件夹）上报；项目不存在/不属本机用户则 /fail。 */
+    private void handleListCommand(long id, JsonNode cmd) {
+        Long userId = localIdentityService.localUserId();
+        Long projectId = parseLongOrNull(cmd.path("projectKey").asText());
+        Project project = projectId == null ? null : projectRepository.findById(projectId).orElse(null);
+        if (project == null || !userId.equals(project.getUserId())) {
+            failTransfer(id, "项目不存在或已删除");
+            return;
+        }
+        List<ProjectFile> tree = projectFileService.getFileTree(projectId);
+        Map<Long, ProjectFile> byId = new HashMap<>();
+        for (ProjectFile f : tree) {
+            if (f.getId() != null) byId.put(f.getId(), f);
+        }
+        ObjectNode body = mapper.createObjectNode();
+        ArrayNode files = body.putArray("files");
+        int count = 0;
+        for (ProjectFile f : tree) {
+            if (Boolean.TRUE.equals(f.getIsFolder())) continue;
+            if (count >= 2000) break; // 服务端也会截断，这里提前止损，别白传超出部分
+            ObjectNode e = files.addObject();
+            e.put("id", String.valueOf(f.getId()));
+            e.put("name", f.getName());
+            e.put("path", listEntryPath(f, byId));
+            e.put("size", f.getFileSize() == null ? 0L : f.getFileSize());
+            count++;
+        }
+        String payload;
+        try {
+            payload = mapper.writeValueAsString(body);
+        } catch (Exception e) {
+            log.warn("手机同步：传输命令 {} 清单序列化失败", id, e);
+            return;
+        }
+        HttpResponse<String> resp = authed("POST", "/api/mobile/transfer/" + id + "/files", payload);
+        if (!okEnvelope(resp)) {
+            log.warn("手机同步：传输命令 {} 清单上报失败", id);
+        }
+    }
+
+    /** 清单条目的 path：按 parentId 逐级拼文件夹名以 "/" 连接，根下就是文件名。 */
+    private static String listEntryPath(ProjectFile file, Map<Long, ProjectFile> byId) {
+        Deque<String> segments = new ArrayDeque<>();
+        segments.addFirst(file.getName());
+        Long parentId = file.getParentId();
+        int depth = 0;
+        while (parentId != null && depth++ < 32) {
+            ProjectFile parent = byId.get(parentId);
+            if (parent == null) break;
+            segments.addFirst(parent.getName());
+            parentId = parent.getParentId();
+        }
+        return String.join("/", segments);
+    }
+
+    /**
+     * PULL：把本机 remoteFileId 对应的文件流式回传。校验不过（文件/项目不存在或不属本机
+     * 用户、文件与命令所在项目不一致）是确定性失败 → /fail；网络/IO 失败（含读盘失败）
+     * 不报 fail，留待下轮重试——两者不能混为一谈，否则瞬态故障会被误判成永久失败退款。
+     */
+    private void handlePullCommand(long id, JsonNode cmd) {
+        Long userId = localIdentityService.localUserId();
+        Long projectId = parseLongOrNull(cmd.path("projectKey").asText());
+        Long remoteFileId = parseLongOrNull(cmd.path("remoteFileId").asText());
+        ProjectFile file = null;
+        if (remoteFileId != null) {
+            try {
+                file = projectFileService.getFile(remoteFileId);
+            } catch (Exception e) {
+                file = null;
+            }
+        }
+        Project project = projectId == null ? null : projectRepository.findById(projectId).orElse(null);
+        boolean valid = file != null && project != null && userId.equals(project.getUserId())
+                && projectId.equals(file.getProjectId()) && !Boolean.TRUE.equals(file.getIsFolder());
+        if (!valid) {
+            failTransfer(id, "文件不存在或已移动");
+            return;
+        }
+        String fileName = cmd.path("fileName").asText(file.getName());
+        try {
+            var resource = storageServiceFactory.getStorageService().load(file.getFilePath());
+            try (InputStream in = resource.getInputStream()) {
+                uploadPulledFile(id, fileName, in);
+            }
+        } catch (Exception e) {
+            log.warn("手机同步：传输命令 {} 拉取上传失败，留待下轮重试", id, e);
+        }
+    }
+
+    /** PULL 上传：60 秒的默认超时不够传 200MB，单独给 10 分钟；multipart 真流式，不缓冲整份文件。 */
+    private void uploadPulledFile(long id, String fileName, InputStream fileStream)
+            throws IOException, InterruptedException {
+        String token = currentToken();
+        if (token == null) return;
+        String boundary = MultipartBody.newBoundary();
+        HttpRequest req = request("/api/mobile/transfer/" + id + "/upload", Duration.ofMinutes(10))
+                .header("X-Session-Id", token)
+                .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                .POST(MultipartBody.filePublisher(boundary, "file", fileName, fileStream))
+                .build();
+        HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+        if (authRejected(resp)) {
+            // 文件流已经读过一次没法重放：作废令牌，交给下一轮用新令牌重新发起整条 PULL
+            invalidateToken();
+            log.warn("手机同步：传输命令 {} 上传鉴权被拒，令牌已作废，下轮重新拉取", id);
+            return;
+        }
+        if (!okEnvelope(resp)) {
+            log.warn("手机同步：传输命令 {} 上传响应异常 status={}", id, resp.statusCode());
+        }
+    }
+
+    /**
+     * PUSH：下载对方投来的内容，落到本机 projectKey 对应项目「跨设备文件/YYYY-MM-DD/」。
+     * 与 landAndAck 的现场影像不同：PUSH 有退款通道，项目确定不存在要 /fail 触发云端退款，
+     * 不能像 media 那样只告警留置。
+     */
+    private void handlePushCommand(long id, JsonNode cmd) throws IOException, InterruptedException {
+        Long userId = localIdentityService.localUserId();
+        Long projectId = parseLongOrNull(cmd.path("projectKey").asText());
+        Project project = projectId == null ? null : projectRepository.findById(projectId).orElse(null);
+        if (project == null || !userId.equals(project.getUserId())) {
+            failTransfer(id, "项目不存在或已删除");
+            return;
+        }
+        String token = currentToken();
+        if (token == null) return;
+        HttpResponse<InputStream> content;
+        try {
+            HttpRequest req = request("/api/mobile/transfer/" + id + "/content", Duration.ofMinutes(10))
+                    .header("X-Session-Id", token).GET().build();
+            content = http.send(req, HttpResponse.BodyHandlers.ofInputStream());
+        } catch (IOException e) {
+            log.warn("手机同步：传输命令 {} 内容下载异常，留待下轮重试", id, e);
+            return;
+        }
+        // 拒绝响应也是 HTTP 200（JSON 信封）——不验 Content-Type 就落盘，同 landAndAck 的地雷
+        String contentType = content.headers().firstValue("Content-Type").orElse("");
+        if (content.statusCode() < 200 || content.statusCode() >= 300
+                || !contentType.startsWith("application/octet-stream")) {
+            try (InputStream in = content.body()) { in.transferTo(OutputStream.nullOutputStream()); }
+            log.warn("手机同步：传输命令 {} 内容下载失败 status={} contentType={}",
+                    id, content.statusCode(), contentType);
+            return;
+        }
+
+        String fileName = landedPushFileName(cmd.path("fileName").asText("file"), id);
+        String dateStr = LocalDate.now().toString();
+        ProjectFile root = ensureFolder(projectId, null, TRANSFER_ROOT_FOLDER, userId);
+        ProjectFile day = ensureFolder(projectId, root.getId(), dateStr, userId);
+
+        // 幂等判据同 landAndAck：同 parent 下同名已在 = 上轮字节已经落好，只是 ACK 丢了
+        boolean already = projectFileService.getFilesByParent(projectId, day.getId()).stream()
+                .anyMatch(f -> !Boolean.TRUE.equals(f.getIsFolder()) && fileName.equals(f.getName()));
+        if (!already) {
+            // 字节先落盘、元数据后落库，顺序同 landAndAck：createFile 一旦提交救不回来，
+            // 落盘失败必须在建库之前发生，下一轮才能按幂等判据正确判定"未落地"重新下载。
+            String storagePath = String.format("projects/%d/%s/%s/%s",
+                    projectId, TRANSFER_ROOT_FOLDER, dateStr, fileName);
+            try (InputStream in = content.body()) {
+                storageServiceFactory.getStorageService().save(storagePath, in);
+            } catch (Exception e) {
+                log.warn("手机同步：传输命令 {} 落盘失败，留待下轮重试", id, e);
+                return;
+            }
+            String ext = "";
+            int dot = fileName.lastIndexOf('.');
+            if (dot > 0 && dot < fileName.length() - 1) ext = fileName.substring(dot + 1).toLowerCase();
+            projectFileService.createFile(projectId, day.getId(), fileName, ext,
+                    cmd.path("fileSize").asLong(0), storagePath, null, userId);
+            log.info("手机同步：投送命令 {} 已落盘 项目={} 文件={}/{}/{}",
+                    id, projectId, TRANSFER_ROOT_FOLDER, dateStr, fileName);
+        } else {
+            try (InputStream in = content.body()) { in.transferTo(OutputStream.nullOutputStream()); }
+        }
+
+        HttpResponse<String> ack = authed("POST", "/api/mobile/transfer/" + id + "/ack", "{}");
+        if (!okEnvelope(ack)) {
+            log.warn("手机同步：传输命令 {} ACK 失败（已落盘，下轮按同名幂等补 ACK）", id);
+        }
+    }
+
+    /** PUSH 落盘文件名 = 原名 + t<命令 id>：命令没有 requestId，命令 id 本身就是稳定的跨轮幂等锚点。 */
+    static String landedPushFileName(String fileName, long commandId) {
+        String n = fileName == null ? "" : fileName.replace('\\', '/');
+        n = n.substring(n.lastIndexOf('/') + 1).trim();
+        if (n.isEmpty()) n = "file";
+        String marker = "t" + commandId;
+        int dot = n.lastIndexOf('.');
+        return dot > 0 ? n.substring(0, dot) + "-" + marker + n.substring(dot) : n + "-" + marker;
+    }
+
+    /** B 报确定性失败（文件/项目不存在）：触发云端 FAILED + 退款（如已扣）。 */
+    private void failTransfer(long id, String message) {
+        try {
+            ObjectNode body = mapper.createObjectNode();
+            body.put("message", message);
+            HttpResponse<String> resp = authed("POST", "/api/mobile/transfer/" + id + "/fail",
+                    mapper.writeValueAsString(body));
+            if (!okEnvelope(resp)) {
+                log.warn("手机同步：传输命令 {} 上报失败也没能成功（下轮重试）", id);
+            }
+        } catch (Exception e) {
+            log.warn("手机同步：传输命令 {} 上报失败异常", id, e);
+        }
+    }
+
+    private static Long parseLongOrNull(String value) {
+        try {
+            return Long.parseLong(value);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 命中传输往来（服务端 hot=true 或本轮处理过任意命令）：顺延热窗口截止时间，
+     * 并确保热循环线程在跑。AtomicBoolean 防重入——循环自身调用 pollTransferCommands 时
+     * 再次命中热窗口只会顺延 transferHotUntil，不会再启动第二条循环。
+     */
+    private void enterHotWindow() {
+        transferHotUntil = System.currentTimeMillis() + TRANSFER_HOT_WINDOW_MS;
+        if (hotLoopRunning.compareAndSet(false, true)) {
+            ensureHotExecutor().submit(this::runHotLoop);
+        }
+    }
+
+    private synchronized ExecutorService ensureHotExecutor() {
+        if (hotExecutor == null) {
+            hotExecutor = Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "mobile-transfer-hot-poll");
+                t.setDaemon(true);
+                return t;
+            });
+        }
+        return hotExecutor;
+    }
+
+    private void runHotLoop() {
+        try {
+            while (true) {
+                try {
+                    Thread.sleep(TRANSFER_HOT_POLL_INTERVAL_MS);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                if (!active() || System.currentTimeMillis() >= transferHotUntil) return;
+                pollTransferCommands();
+            }
+        } finally {
+            hotLoopRunning.set(false);
+        }
+    }
+
     // ==================== 凭据与传输 ====================
 
     private boolean active() {
@@ -381,8 +729,12 @@ public class MobileRelayClientService {
     }
 
     private HttpRequest.Builder request(String path) {
-        return HttpRequest.newBuilder(URI.create(baseUrl + path))
-                .timeout(Duration.ofSeconds(60));
+        return request(path, Duration.ofSeconds(60));
+    }
+
+    /** 自定义超时的重载：PULL 上传 / PUSH 内容下载最大 200MB，60 秒默认超时不够用。 */
+    private HttpRequest.Builder request(String path, Duration timeout) {
+        return HttpRequest.newBuilder(URI.create(baseUrl + path)).timeout(timeout);
     }
 
     /** 取当前令牌；没有或账户已换人则（重新）桥接。 */

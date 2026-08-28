@@ -4,6 +4,7 @@ import com.checkba.model.entity.MobileMediaInbox;
 import com.checkba.repository.MobileDeviceStateRepository;
 import com.checkba.repository.MobileMediaInboxRepository;
 import com.checkba.repository.MobileProjectDirRepository;
+import com.checkba.repository.MobileTransferRequestRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -46,7 +47,8 @@ class MobileRelayStoreServiceConcurrentStoreTest {
         inboxRepository = mock(MobileMediaInboxRepository.class);
         service = new MobileRelayStoreService(dirRepository, inboxRepository,
                 mock(MobileDeviceStateRepository.class),
-                new MobileRelayLocalBlobStore(blobRoot.toString()));
+                new MobileRelayLocalBlobStore(blobRoot.toString()),
+                mock(MobileTransferRequestRepository.class));
         service.self = service;
     }
 

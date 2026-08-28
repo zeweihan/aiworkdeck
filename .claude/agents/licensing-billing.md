@@ -950,6 +950,18 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     两者混成 0 的后果是：刚跑完一场两小时转写的用户看到「本月 0 Credits」，
     他的下一步是来问账是不是没记上。
 
+## 跨设备传输的内部记账口（2026-08-28，dev-board#251）
+
+云后端对已桥接用户没有任何 awdk_（明文不落库），官网也否决过「凭 accountId 换 key」的
+S2S 主凭据——跨设备文件传输的扣费因此走**窄权限内部记账口**：官网
+`POST /api/internal/transfer`（quote/charge/refund，只能按 accountId 对 transfer/relay
+一种计价项扣/退 `service_spend`，金额由服务端按 service_pricing 现算），鉴权 =
+env `AWD_TRANSFER_BILLING_SECRET` 恒定时间比较（未配恒 404）+ nginx `^~ /api/internal/`
+return 404 兜底，云后端从 127.0.0.1 直连 Next。云侧唯一出口
+`service/mobile/TransferBillingClient`（DISABLED/UNAVAILABLE/NO_CREDITS 三 Kind，
+失败绝不免费放行）。**没有新增 ledger kind**（service_spend + meta.service=transfer）。
+细节见 mobile-sync.md「跨设备文件传输」节与官网仓 DEPLOY.md §7.4。
+
 ## 验证
 
 - 后端：`cd backend && mvn test`（**JDK 21，系统默认 25 会 SIGBUS**）。本领域相关用例：

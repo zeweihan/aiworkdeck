@@ -121,6 +121,30 @@ dev-board#30）；更早的产品设计 `2026-08-17-mobile-clients-design.md`。
    `MobileRelayClientHttpTest.pushDirectoryTruncationIsLoudlyWarned`（客户端 WARN 日志，
    Logback `ListAppender` 断言，写法同 `AuthControllerGetUsernameLoggingTest`）。
 
+## 跨设备文件传输（dev-board#251，spec：docs/superpowers/specs/2026-08-28-cross-device-transfer.md）
+
+- 文件：`MobileTransferService`/`MobileTransferController`（`/api/mobile/transfer/*`，鉴权同组）、
+  `MobileTransferRequest`（unique(user_id, request_id)，requestId=UUID 围栏；**storagePath
+  非空=占配额**，与 media 同第二重身份）、`TransferBillingClient` + Http 实现（POST 官网
+  `/api/internal/transfer`，`X-Internal-Secret`；配置 `mobile.transfer.billing.base-url/secret`
+  两个 env，未配=DISABLED 可读拒绝，绝不免费放行）。
+- 两条链路：**拉取**（LIST PENDING→DONE 出清单；PULL 建行即扣费 PENDING→B 上传 STAGED→A
+  save-to-project 落云项目「跨设备文件/日期/名+requestId前8位」DELIVERED，字节先落盘后
+  createFile 的顺序红线同 landAndAck；LIST/PULL 建行要求 B 在线 180 秒窗口）；**投送**
+  （PUSH 建行即扣费+从云项目文件复制入 blob STAGED→B 落盘「跨设备文件/日期/名-t<id>」
+  +ack DELIVERED，B 可离线）。FAILED/EXPIRED/cancel 一律退款（幂等键 xferrf-requestId，
+  失败留 refundedAt 空由每小时 TTL 清扫重试）；TTL：LIST 10 分钟/PULL PENDING 24h/
+  PULL STAGED 7 天/PUSH STAGED 30 天。单文件上限 200MB（nginx 同款）；**配额与手机中转
+  共池 3GB**（storeMediaTx 与 transfer 两侧都算两表之和）。
+- 桌面端 B 侧：`pollInbox()` 末尾 **finally** 里挂 `pollTransferCommands()`（该方法有多个
+  early return，直接追加会漏跑）；GET /commands 404=旧服务器进程内静默钉死；hot=true 或
+  处理过命令→独立 daemon 线程 5 秒短轮询 120 秒热窗口（常量包可见供测试缩短）。PUSH 落盘
+  项目不存在要 POST /fail 触发退款——**与 media 地雷 3 的留置相反**，PUSH 有退款通道。
+- 计费官网侧：`/api/internal/transfer`（quote/charge/refund，同机 127.0.0.1 直连 Next，env
+  `AWD_TRANSFER_BILLING_SECRET` 未配恒 404 + nginx `^~ /api/internal/` return 404 兜底）；
+  定价 `service_pricing` 行 transfer/relay=60 Credits/GB（迁移 24）；流水 kind 仍是
+  `service_spend`（meta.service=transfer），**没有新增 ledger kind**。
+
 ## 排查「手机端一个项目都读不到」的顺序（dev-board#75 实测路径）
 
 空数组是**合法响应**，没有报错也没有 4010，所以必须按下面的顺序把「哪一环是空的」逐段夹出来：

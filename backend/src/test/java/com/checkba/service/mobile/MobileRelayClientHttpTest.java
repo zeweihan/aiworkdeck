@@ -15,6 +15,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.core.io.ByteArrayResource;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -23,6 +24,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -71,6 +73,19 @@ class MobileRelayClientHttpTest {
     private final AtomicLong fileSeq = new AtomicLong(100);
     private final List<String> savedStorageKeys = new ArrayList<>();
     private final List<byte[]> savedBytes = new ArrayList<>();
+    // save/createFile 的相对调用顺序：验证 PUSH「字节先落盘后 createFile」的顺序红线
+    private final List<String> callOrder = new CopyOnWriteArrayList<>();
+
+    // ==================== 传输命令（dev-board#251 B 侧）测试夹具 ====================
+    private volatile String transferCommandsJson = "{\"code\":0,\"commands\":[],\"hot\":false}";
+    private volatile int transferCommandsStatus = 200;
+    private final AtomicInteger transferCommandsRequests = new AtomicInteger();
+    private final List<String> transferFilesBodies = new CopyOnWriteArrayList<>();
+    private final List<byte[]> transferUploadBodies = new CopyOnWriteArrayList<>();
+    private final List<String> transferFailBodies = new CopyOnWriteArrayList<>();
+    private final List<String> transferAcked = new CopyOnWriteArrayList<>();
+    private volatile String pushContentType = "application/octet-stream";
+    private volatile String pushContentBody = "PUSH-BYTES";
 
     @BeforeEach
     void setUp() throws Exception {
@@ -93,6 +108,34 @@ class MobileRelayClientHttpTest {
                 respond(ex, 200, "{\"code\":0}");
             } else {
                 respond(ex, 200, inboxJson);
+            }
+        });
+        server.createContext("/api/mobile/transfer", ex -> {
+            String path = ex.getRequestURI().getPath();
+            if (path.equals("/api/mobile/transfer/commands")) {
+                transferCommandsRequests.incrementAndGet();
+                if (transferCommandsStatus != 200) {
+                    respond(ex, transferCommandsStatus, "not found");
+                } else {
+                    respond(ex, 200, transferCommandsJson);
+                }
+            } else if (path.endsWith("/files")) {
+                transferFilesBodies.add(readBody(ex.getRequestBody()));
+                respond(ex, 200, "{\"code\":0}");
+            } else if (path.endsWith("/upload")) {
+                transferUploadBodies.add(ex.getRequestBody().readAllBytes());
+                respond(ex, 200, "{\"code\":0}");
+            } else if (path.endsWith("/content")) {
+                ex.getResponseHeaders().add("Content-Type", pushContentType);
+                respond(ex, 200, pushContentBody);
+            } else if (path.endsWith("/ack")) {
+                transferAcked.add(path);
+                respond(ex, 200, "{\"code\":0}");
+            } else if (path.endsWith("/fail")) {
+                transferFailBodies.add(readBody(ex.getRequestBody()));
+                respond(ex, 200, "{\"code\":0}");
+            } else {
+                respond(ex, 404, "not found");
             }
         });
         server.start();
@@ -124,10 +167,17 @@ class MobileRelayClientHttpTest {
                     }
                     return out;
                 });
+        when(projectFileService.getFileTree(anyLong())).thenAnswer(inv -> new ArrayList<>(tree));
+        when(projectFileService.getFile(anyLong())).thenAnswer(inv -> {
+            Long fileId = inv.getArgument(0);
+            return tree.stream().filter(f -> fileId.equals(f.getId())).findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException("文件不存在: " + fileId));
+        });
         when(projectFileService.createFolder(anyLong(), any(), anyString(), anyLong()))
                 .thenAnswer(inv -> addNode(inv.getArgument(1), inv.getArgument(2), true));
         when(projectFileService.createFile(anyLong(), any(), anyString(), anyString(), anyLong(), any(), any(), anyLong()))
                 .thenAnswer(inv -> {
+                    callOrder.add("createFile:" + inv.getArgument(2));
                     ProjectFile f = addNode(inv.getArgument(1), inv.getArgument(2), false);
                     f.setFilePath("projects/42/" + f.getName());
                     return f;
@@ -135,6 +185,7 @@ class MobileRelayClientHttpTest {
 
         storageService = mock(StorageService.class);
         when(storageService.save(anyString(), any(InputStream.class))).thenAnswer(inv -> {
+            callOrder.add("save:" + inv.getArgument(0));
             savedStorageKeys.add(inv.getArgument(0));
             ByteArrayOutputStream buf = new ByteArrayOutputStream();
             inv.getArgument(1, InputStream.class).transferTo(buf);
@@ -148,6 +199,9 @@ class MobileRelayClientHttpTest {
     @AfterEach
     void tearDown() {
         server.stop(0);
+        // 热窗口测试会调低这两个包可见常量，不重置会污染后面的测试（真等 120 秒才退出循环）
+        MobileRelayClientService.TRANSFER_HOT_WINDOW_MS = 120_000L;
+        MobileRelayClientService.TRANSFER_HOT_POLL_INTERVAL_MS = 5_000L;
     }
 
     private ProjectFile addNode(Long parentId, String name, boolean folder) {
@@ -413,5 +467,129 @@ class MobileRelayClientHttpTest {
                 projectFileService, storageServiceFactory);
         notLocal.pushDirectory();
         assertTrue(dirBodies.isEmpty(), "非 local-mode（云端/团队服务器）绝不出站");
+    }
+
+    // ==================== 跨设备文件传输（dev-board#251 B 侧） ====================
+
+    @Test
+    @DisplayName("传输命令 LIST：清单按 parentId 逐级拼路径上报，文件夹本身不进清单")
+    void transferListCommandReportsFileTreeWithPaths() {
+        ProjectFile folder = addNode(null, "合同", true);
+        ProjectFile f1 = addNode(folder.getId(), "结算书.docx", false);
+        f1.setFileSize(2048L);
+        ProjectFile f2 = addNode(null, "备忘录.txt", false);
+        f2.setFileSize(100L);
+
+        transferCommandsJson = "{\"code\":0,\"commands\":[{\"id\":1,\"kind\":\"LIST\",\"projectKey\":\"42\"}],\"hot\":false}";
+        service().pollInbox();
+
+        assertEquals(1, transferFilesBodies.size());
+        String body = transferFilesBodies.get(0);
+        assertTrue(body.contains("\"path\":\"合同/结算书.docx\""), body);
+        assertTrue(body.contains("\"size\":2048"), body);
+        assertTrue(body.contains("\"path\":\"备忘录.txt\""), body);
+        assertTrue(body.contains("\"size\":100"), body);
+        assertFalse(body.contains("\"name\":\"合同\""), "文件夹本身不该进清单: " + body);
+    }
+
+    @Test
+    @DisplayName("传输命令 PULL：本机文件流式回传，multipart 请求体含文件字节与 filename")
+    void transferPullCommandUploadsFileBytes() {
+        ProjectFile file = addNode(null, "合同.docx", false);
+        file.setFilePath("projects/42/合同.docx");
+        when(storageService.load("projects/42/合同.docx"))
+                .thenReturn(new ByteArrayResource("CONTRACT-BYTES".getBytes(StandardCharsets.UTF_8)));
+
+        transferCommandsJson = "{\"code\":0,\"commands\":[{\"id\":2,\"kind\":\"PULL\",\"projectKey\":\"42\","
+                + "\"remoteFileId\":\"" + file.getId() + "\",\"fileName\":\"合同.docx\",\"fileSize\":14}],\"hot\":false}";
+        service().pollInbox();
+
+        assertEquals(1, transferUploadBodies.size());
+        String raw = new String(transferUploadBodies.get(0), StandardCharsets.UTF_8);
+        assertTrue(raw.contains("filename=\"合同.docx\""), raw);
+        assertTrue(raw.contains("CONTRACT-BYTES"), raw);
+    }
+
+    @Test
+    @DisplayName("传输命令 PUSH：落两级目录、字节先落盘后 createFile、成功后 ACK")
+    void transferPushCommandLandsFileThenAcks() {
+        pushContentType = "application/octet-stream";
+        pushContentBody = "PUSH-BYTES";
+        transferCommandsJson = "{\"code\":0,\"commands\":[{\"id\":3,\"kind\":\"PUSH\",\"projectKey\":\"42\","
+                + "\"fileName\":\"report.docx\",\"fileSize\":10}],\"hot\":false}";
+        service().pollInbox();
+
+        String today = LocalDate.now().toString();
+        assertTrue(tree.stream().anyMatch(f -> Boolean.TRUE.equals(f.getIsFolder()) && "跨设备文件".equals(f.getName())));
+        assertTrue(tree.stream().anyMatch(f -> Boolean.TRUE.equals(f.getIsFolder()) && today.equals(f.getName())));
+        assertTrue(tree.stream().anyMatch(f -> !Boolean.TRUE.equals(f.getIsFolder())
+                && "report-t3.docx".equals(f.getName())));
+        assertEquals(1, savedBytes.size());
+        assertEquals("PUSH-BYTES", new String(savedBytes.get(0), StandardCharsets.UTF_8));
+        assertTrue(savedStorageKeys.get(0).startsWith("projects/42/跨设备文件/" + today + "/"),
+                savedStorageKeys.get(0));
+        assertEquals(List.of("/api/mobile/transfer/3/ack"), transferAcked);
+
+        int saveIdx = callOrder.indexOf("save:" + savedStorageKeys.get(0));
+        int createIdx = callOrder.indexOf("createFile:report-t3.docx");
+        assertTrue(saveIdx >= 0 && createIdx >= 0 && saveIdx < createIdx,
+                "字节必须先落盘再 createFile，实际顺序: " + callOrder);
+    }
+
+    @Test
+    @DisplayName("传输命令：项目不存在或不属本机用户，POST /fail 触发云端退款（不是留置）")
+    void transferCommandProjectNotFoundReportsFail() {
+        transferCommandsJson = "{\"code\":0,\"commands\":[{\"id\":4,\"kind\":\"PUSH\",\"projectKey\":\"999\","
+                + "\"fileName\":\"x.docx\",\"fileSize\":1}],\"hot\":false}";
+        service().pollInbox();
+
+        assertEquals(1, transferFailBodies.size());
+        assertTrue(transferFailBodies.get(0).contains("项目不存在或已删除"), transferFailBodies.get(0));
+        assertTrue(transferAcked.isEmpty());
+    }
+
+    @Test
+    @DisplayName("传输命令 PUSH：/content 返回非 octet-stream（JSON 信封）不落盘不 ACK 不 FAIL")
+    void transferPushCommandRejectsNonOctetStreamContent() {
+        pushContentType = "application/json";
+        pushContentBody = "{\"code\":4010,\"message\":\"请先登录\"}";
+        transferCommandsJson = "{\"code\":0,\"commands\":[{\"id\":5,\"kind\":\"PUSH\",\"projectKey\":\"42\","
+                + "\"fileName\":\"x.docx\",\"fileSize\":1}],\"hot\":false}";
+        service().pollInbox();
+
+        assertTrue(savedBytes.isEmpty(), "JSON 信封绝不能被当成文件字节落盘");
+        assertTrue(transferAcked.isEmpty());
+        assertTrue(transferFailBodies.isEmpty(), "内容下载失败是瞬态问题，不该报确定性失败");
+    }
+
+    @Test
+    @DisplayName("/transfer/commands 404（旧服务器）：静默跳过，进程内记住不再打这个端点")
+    void transferCommands404IsSilentlySkippedAfterFirstAttempt() {
+        transferCommandsStatus = 404;
+        MobileRelayClientService svc = service();
+        svc.pollInbox();
+        svc.pollInbox();
+        svc.pollInbox();
+
+        assertEquals(1, transferCommandsRequests.get(), "404 后不该再打这个端点");
+    }
+
+    @Test
+    @DisplayName("hot=true：进入热窗口短轮询，至少再拉一次 /commands（不真等 120 秒）")
+    void hotFlagTriggersShortPolling() throws Exception {
+        MobileRelayClientService.TRANSFER_HOT_WINDOW_MS = 300L;
+        MobileRelayClientService.TRANSFER_HOT_POLL_INTERVAL_MS = 30L;
+        transferCommandsJson = "{\"code\":0,\"commands\":[],\"hot\":true}";
+
+        service().pollInbox();
+        assertEquals(1, transferCommandsRequests.get());
+
+        // 热循环在独立后台线程按 30ms 间隔追加轮询；轮询到 hot:true 会不断顺延窗口，
+        // 这里只等到看见第二次请求就够，不需要等窗口真正过期。
+        long deadline = System.currentTimeMillis() + 2000;
+        while (transferCommandsRequests.get() < 2 && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20);
+        }
+        assertTrue(transferCommandsRequests.get() >= 2, "热窗口内应至少再拉一次 /commands");
     }
 }
