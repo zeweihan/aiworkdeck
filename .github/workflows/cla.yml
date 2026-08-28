@@ -25,4 +25,4 @@ jobs:
           path-to-document: 'https://github.com/zeweihan/aiworkdeck/blob/master/legal/CLA.md'
           # signatures live on an unprotected branch; master requires PRs and would reject the bot's push
           branch: 'cla-signatures'
-          allowlist: zeweihan,*[bot]
+          allowlist: zeweihan,claude,*[bot]
