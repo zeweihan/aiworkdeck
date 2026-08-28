@@ -61,7 +61,7 @@ AI WorkDeck 社区版是 AI WorkDeck 的开源内核，不等于完整的商业 
 
 > Intel 芯片 Mac 的构建已停止（上游 Python 依赖不再提供 x86_64 版本），旧版本 Release 中仍保留最后一个 Intel dmg。
 
-双击安装。首次启动会有配置向导，选择一个 AI 提供方即可：填一个云端 API Key，或用 [Ollama](https://ollama.com) 跑完全本地的模型（零 Key，数据不出本机）。无需 Java、Docker 或 PostgreSQL——后端、精简版 JRE 和本地数据库都已打进安装包。
+双击安装、登录账户即可开始工作。官方桌面版**不需要任何 API Key、不需要任何基础设施**：AI 与外部服务统一走 AI WorkDeck 平台通道、按用量（Credits）计费；后端、精简版 JRE 和本地数据库都已打进安装包，无需 Java、Docker 或 PostgreSQL。（想从源码构建？自部署服务栈保留了可配置的模型提供方，包括用 [Ollama](https://ollama.com) 跑完全本地的模型——见下方[快速开始](#快速开始)。）
 
 > 桌面版是体验 AI WorkDeck 最快的方式。想自部署完整服务栈或参与开发，请看下方[快速开始](#快速开始)。
 
@@ -99,25 +99,29 @@ security:
 
 ## 界面截图
 
-顶部工作区为**真实产品截图**（演示项目，数据为虚构）。下面两张分别是插件 / Skill 广场，以及文档工作台的设计预览稿（后续版本的方向）。
+全部为**真实产品截图**（演示项目，人名与文档内容均为虚构）。下面两张：应用内插件 / Skill 广场（列表为在线 registry 实拉的真实条目），以及带 AI 署名修订与审阅面板的文档工作台。
 
 <p align="center">
-  <img src=".github/assets/plugin-marketplace.png" alt="插件与 Skill 广场（设计预览）" width="900">
+  <img src=".github/assets/marketplace-live.png" alt="应用内插件与 Skill 广场（真实产品截图）" width="900">
 </p>
 <p align="center">
-  <img src=".github/assets/workdeck-vision.png" alt="带 AI 修订的文档工作台（设计预览）" width="900">
+  <img src=".github/assets/workdeck-redline.png" alt="文档工作台：AI 署名修订与审阅面板（真实产品截图）" width="900">
 </p>
 
 ## 核心能力
 
 | 领域 | 开源内核提供什么 |
 |---|---|
-| **工作区** | 项目 / 文件树、文档暂存、收藏、剪贴板记忆、工作记录 |
+| **工作区** | 项目 / 文件树、文档暂存、收藏、剪贴板记忆、工作记录、日历与任务管理、浅色 / 深色主题 |
 | **AI 文档工作** | 起草、审查、要素抽取、脱敏、Markdown 与文档预览 |
 | **智能体层** | 主智能体界面、流式回复、上下文文件标签、MCP 式工具编排 |
-| **文档编辑** | 内嵌 LibreOffice（WASM）编辑器（原生中文界面）、本地 DOCX 修订编辑、AI 编辑器原语、文档内链、差异对比 |
-| **解析与生成** | MinerU 文档解析、AI PPT 生成、语音合成工作流 |
-| **插件面** | 左栏插件、工具配置、垂直工作流专属面板 |
+| **文档编辑** | 内嵌 LibreOffice（WASM）编辑器（原生中文界面）、本地 DOCX 修订编辑、审阅面板（逐条接受 / 拒绝修订与批注）、AI 编辑器原语（docx/xlsx/pptx/pdf）、文档内链、差异对比 |
+| **版本记录** | 基于 Git 的项目级版本系统：时间线、逐版本差异、退回、里程碑、多稿并行 |
+| **文档解析与依据** | 实体抽取（企业 / 法规 / 案例）、外部库检索、文档内部一致性校验、依据窗格 |
+| **法律工作流** | 尽职调查工作台、股东会核查、诉讼可视化（时间轴 / 流程图 / 当事人关系图） |
+| **解析与生成** | MinerU 文档解析、AI PPT 生成、本机语音合成、会议录音转写 |
+| **插件面** | 应用内插件 / Skill 广场、左栏插件、公开插件 SDK 与示例（`sdk/`、`examples/`）、垂直工作流专属面板 |
+| **伴生端** | Microsoft Office 插件（Word/Excel/PPT 任务窗格）、手机端拍摄与项目同步中转 |
 | **部署** | Java/Spring 后端、Vue/uni-app 前端、Electron 桌面壳、Docker 化服务 |
 | **治理** | 私有化部署路径、可审计的工作记录、商业授权路径 |
 
@@ -166,7 +170,7 @@ AI WorkDeck 为**自托管、私有化部署**而设计。下图标注了哪些�
 
 | 组件 | 默认位置 | 可完全本地？ | 说明 |
 |---|---|---|---|
-| AI 推理（对话 / 智能体） | 本地（Ollama） | ✅ 可以 | 默认 localhost:11434 |
+| AI 推理（对话 / 智能体） | 自部署构建默认本地（Ollama） | ✅ 可以 | 官方桌面版走平台通道（Credits）；自部署默认 localhost:11434 |
 | RAG / 向量化 | 本地（Apache Tika） | ✅ 可以 | InMemoryEmbeddingStore |
 | 文档解析（MinerU） | 本地（Docker） | ✅ 可以 | 无外部调用 |
 | PPTX 生成 | 本地（Docker） | ✅ 可以 | 无外部调用 |
@@ -183,10 +187,11 @@ AI WorkDeck 为**自托管、私有化部署**而设计。下图标注了哪些�
 
 ## 证据链与审计现状
 
-> **现状**：基础已就位，密码学级溯源在路线图上。
+> **现状**：版本记录与关系型审计日志已就位，密码学级溯源在路线图上。
 
-社区版目前提供**关系型审计日志**：
+社区版目前提供：
 
+- **版本记录**：基于 Git 的项目级版本系统（`com.checkba.version`），含时间线、逐版本文件差异、退回、里程碑与多稿并行
 - **行为日志**：`UserActivityLog` 记录每个用户动作（登录、打开文件、页面访问等），带 Hibernate `@CreationTimestamp` 时间戳与 JSON 元数据
 - **尽调追踪**：`DdItem` 记录状态流转（待上传 → 已上传 → 通过/退回），含 `uploadedAt` 与 `uploadedBy`
 - **会话审计**：`ConversationFileChange` 按会话记录文档新增与修改
@@ -195,7 +200,6 @@ AI WorkDeck 为**自托管、私有化部署**而设计。下图标注了哪些�
 **尚未实现**（在路线图上）：
 - 文档密码学哈希（SHA-256 校验和）
 - 防篡改审计链（Merkle 链或签名日志）
-- 文件版本历史与差异追踪
 - 不可变的只追加证据日志
 
 插件架构在设计上已为这些能力预留了位置。如果你的合规或诉讼支持场景需要密码学级溯源，欢迎开 issue 描述需求——这会直接影响我们的优先级排序。
@@ -273,7 +277,8 @@ chmod +x restart-all.sh
 | 后端 | `http://localhost:9696` |
 | PPTX 服务 | `http://localhost:5001` |
 | MinerU 服务 | `http://localhost:8001` |
-| EasyVoice | `http://localhost:9549` |
+
+语音合成在本机运行（随包 Kokoro 引擎）；`restart-all.sh` 已不再启动旧的 EasyVoice Docker 服务（定义仍保留在 `docker-compose.yml` 中）。
 
 常见可选提供方：OpenRouter、Gemini、企查查、Tushare、北大法宝、阿里云（OCR 与听悟转写）与对象存储。审查代码或运行基础工作台并不要求配齐所有提供方。
 
@@ -292,11 +297,13 @@ chmod +x restart-all.sh
 
 ## 路线图
 
+这份清单最初写下后已交付的：公开插件 SDK 与示例插件、尽职调查与股东会核查工作流、诉讼可视化、基于 Git 的版本历史与差异。仍在前方的：
+
 - [ ] 更干净的一键本地演示（带示例数据）
-- [ ] 公开插件 SDK 与示例插件
-- [ ] 更多法律文书工作流：尽职调查、股东会审查、合同审查、证据时间线
+- [ ] 密码学级溯源：文档哈希、防篡改审计链
+- [ ] 本机会议转写引擎（当前默认档经平台服务器中转）
+- [ ] 更多法律文书工作流：合同审查、独立的证据时间线
 - [ ] 面向律所与企业私有化部署的更好的自托管指南
-- [ ] 更可审计的工作记录：版本历史、差异、引注与审查日志
 - [ ] 社区版双语文档
 
 ## 参与贡献
@@ -310,6 +317,14 @@ chmod +x restart-all.sh
 - 添加插件示例
 - 为文档解析、智能体工具调用和前端工作流补测试
 - 改进中英文文档
+
+### 投稿 Skill、上架插件——不用提 PR
+
+参与共建最快的方式是走广场，你发布的内容会直达每一台桌面端：
+
+- **投稿 Skill**（可复用的提示词工作流：审合同、写文书、做核查）：[aiworkdeck.com/zh/skills](https://www.aiworkdeck.com/zh/skills)。登录即发布，表单里的 AI 辅助能把一句话想法扩写成完整 Skill。
+- **上架插件**（基于[插件 SDK](sdk/plugin-sdk/README.md) 的 JAR 或 Web 插件，可从 [`examples/`](examples/) 起步）：在[插件广场](https://www.aiworkdeck.com/zh/plugins)提交。每个插件都经人工审核并以 Ed25519 签名后上架，付费插件与作者分成。
+- **提需求**：开一个 [GitHub issue](https://github.com/zeweihan/aiworkdeck/issues)，或用官网的[需求提交表单](https://www.aiworkdeck.com/zh/feature-request)——提交会直接进入我们的分诊队列。
 
 ## 许可
 

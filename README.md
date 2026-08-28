@@ -62,7 +62,7 @@ Just want to try it? You don't need to build from source.
 
 > Intel mac builds are discontinued (upstream Python dependencies no longer ship x86_64 wheels). The last Intel dmg remains available in older releases.
 
-Double-click to install. On first launch, a setup wizard lets you pick one AI provider — a cloud API key, or a fully local model via [Ollama](https://ollama.com) (zero key, data never leaves your machine). No Java, Docker, or PostgreSQL required: the backend, a trimmed JRE, and a local database are bundled in.
+Double-click to install, sign in, and start working. The official desktop build needs **no API keys and no infrastructure**: AI and external services run through the AI WorkDeck platform channel and are billed by usage (Credits), and the backend, a trimmed JRE, and a local database are bundled in — no Java, Docker, or PostgreSQL required. (Building from source instead? The self-hosted stack keeps configurable providers, including fully local models via [Ollama](https://ollama.com) — see [Quick Start](#quick-start).)
 
 > The desktop build is the fastest way to evaluate AI WorkDeck. To self-host the full stack or contribute code, see [Quick Start](#quick-start) below.
 
@@ -99,25 +99,29 @@ in `backend/src/main/resources/application-desktop.yml` to `true` and the previo
 
 ## Screenshots
 
-The workspace above is a real product screenshot (demo project with fictitious data). Below: the plugin & skill marketplace, and a design preview of where the document workbench is heading.
+All real product screenshots (demo project, every name and document fictitious). Below: the in-app plugin & skill marketplace pulling live entries from the online registry, and the document workbench with AI-authored tracked changes and the review panel.
 
 <p align="center">
-  <img src=".github/assets/plugin-marketplace.png" alt="Plugin and skill marketplace (design preview)" width="900">
+  <img src=".github/assets/marketplace-live.png" alt="In-app plugin and skill marketplace (real product screenshot)" width="900">
 </p>
 <p align="center">
-  <img src=".github/assets/workdeck-vision.png" alt="Document workbench with AI redlines (design preview)" width="900">
+  <img src=".github/assets/workdeck-redline.png" alt="Document workbench: AI-authored tracked changes with the review panel (real product screenshot)" width="900">
 </p>
 
 ## Core Capabilities
 
 | Area | What the kernel provides |
 |---|---|
-| **Workspace** | Project/file tree, document staging, favorites, clipboard memory, work logs |
+| **Workspace** | Project/file tree, document staging, favorites, clipboard memory, work logs, calendar and task management, light/dark themes |
 | **AI document work** | Drafting, review, extraction, desensitization, Markdown and document preview |
 | **Agent layer** | Main agent interface, streaming responses, contextual file tags, MCP-oriented orchestration |
-| **Document editing** | Embedded LibreOffice (WASM) editor with native zh-CN UI, local DOCX editing with tracked changes, AI editor primitives, document links, diff viewing |
-| **Parsing and generation** | MinerU document parsing, AI PPT generation, text-to-speech workflows |
-| **Plugin surface** | Left-sidebar plugins, tool configuration, dedicated panes for vertical workflows |
+| **Document editing** | Embedded LibreOffice (WASM) editor with native zh-CN UI, local DOCX editing with tracked changes, a review panel for accepting/rejecting redlines and comments, AI editor primitives (docx/xlsx/pptx/pdf), document links, diff viewing |
+| **Version history** | Git-backed per-project version records: timeline, per-version diffs, revert, milestones, parallel drafts |
+| **Document insight** | Entity extraction (companies, statutes, cases), external registry lookups, internal consistency checks, an evidence/reference pane |
+| **Legal workflows** | Due-diligence workbench, shareholder-meeting verification, litigation visualization (timelines, flowcharts, party graphs) |
+| **Parsing and generation** | MinerU document parsing, AI PPT generation, on-device text-to-speech, meeting-recording transcription |
+| **Plugin surface** | In-app plugin & skill marketplace, left-sidebar plugins, a public plugin SDK with examples (`sdk/`, `examples/`), dedicated panes for vertical workflows |
+| **Companions** | Microsoft Office add-in (Word/Excel/PowerPoint task pane), mobile capture & project sync relay |
 | **Deployment** | Java/Spring backend, Vue/uni-app frontend, Electron desktop shell, Dockerized services |
 | **Governance** | Private deployment path, audit-friendly workflow records, commercial licensing path |
 
@@ -168,7 +172,7 @@ AI WorkDeck is designed for **self-hosted, private deployment**. The following d
 
 | Component | Default Location | Can Run Locally? | Notes |
 |---|---|---|---|
-| AI inference (chat/agent) | Local (Ollama) | ✅ Yes | Default is localhost:11434 |
+| AI inference (chat/agent) | Local (Ollama) in self-hosted builds | ✅ Yes | Official desktop builds use the platform channel (Credits) instead; self-hosted default is localhost:11434 |
 | RAG / embeddings | Local (Apache Tika) | ✅ Yes | InMemoryEmbeddingStore |
 | Document parsing (MinerU) | Local (Docker) | ✅ Yes | No external call |
 | PPTX generation | Local (Docker) | ✅ Yes | No external call |
@@ -185,10 +189,11 @@ AI WorkDeck is designed for **self-hosted, private deployment**. The following d
 
 ## Evidence Chain & Audit Status
 
-> **Status**: Foundation in place, cryptographic provenance is on the roadmap.
+> **Status**: Version history and relational audit logging are in place; cryptographic provenance is on the roadmap.
 
-The Community Edition currently provides **relational audit logging**:
+The Community Edition currently provides:
 
+- **Version history**: a Git-backed per-project version system (`com.checkba.version`) with a timeline, per-version file diffs, revert, milestones, and parallel draft branches
 - **Activity logging**: `UserActivityLog` records every user action (LOGIN, OPEN_FILE, PAGE_VIEW, etc.) with timestamps via Hibernate `@CreationTimestamp` and metadata stored as JSON
 - **Due-diligence tracking**: `DdItem` records state transitions (PENDING → UPLOADED → APPROVED/REJECTED) with `uploadedAt` and `uploadedBy`
 - **Conversation audit**: `ConversationFileChange` logs document additions and modifications per session
@@ -197,7 +202,6 @@ The Community Edition currently provides **relational audit logging**:
 **What is NOT yet implemented** (on the roadmap):
 - Cryptographic document hashing (SHA-256 checksums)
 - Tamper-evident audit trails (Merkle chains or signed logs)
-- File version history and diff tracking
 - Immutable append-only evidence log
 
 The architecture's plugin surface is designed to accommodate these features. If you need cryptographic provenance for compliance or litigation support, please open an issue describing your requirements — it helps us prioritize.
@@ -275,7 +279,8 @@ chmod +x restart-all.sh
 | Backend | `http://localhost:9696` |
 | PPTX service | `http://localhost:5001` |
 | MinerU service | `http://localhost:8001` |
-| EasyVoice | `http://localhost:9549` |
+
+Text-to-speech runs on-device (bundled Kokoro engine); `restart-all.sh` no longer starts the legacy EasyVoice Docker service, though its definition remains in `docker-compose.yml`.
 
 Common optional providers: OpenRouter, Gemini, Qichacha, Tushare, PKULaw, Aliyun (OCR and Tingwu transcription), and object storage. Not every provider is required to inspect the code or run the basic workbench.
 
@@ -294,11 +299,13 @@ Common optional providers: OpenRouter, Gemini, Qichacha, Tushare, PKULaw, Aliyun
 
 ## Roadmap
 
+Shipped since this list was first written: the public plugin SDK with examples, due-diligence and shareholder-meeting workflows, litigation visualization, and Git-backed version history with diffs. Still ahead:
+
 - [ ] Cleaner one-command local demo with sample data
-- [ ] Public plugin SDK and example plugins
-- [ ] More legal-document workflows: due diligence, shareholder meeting review, contract review, evidence timelines
+- [ ] Cryptographic provenance: document hashing, tamper-evident audit trails
+- [ ] On-device meeting-transcription engine (today's default relays through platform servers)
+- [ ] More legal-document workflows: contract review, standalone evidence timelines
 - [ ] Better self-hosting guides for private law-firm and enterprise deployments
-- [ ] More auditable work records: version history, diff, citations, and review logs
 - [ ] Bilingual documentation for the community edition
 
 ## Contributing
@@ -312,6 +319,14 @@ Useful first contributions:
 - Add plugin examples
 - Add tests around document parsing, agent tool calls, and frontend workflows
 - Improve English and Chinese documentation
+
+### Share a Skill or publish a plugin — no PR needed
+
+The fastest way to contribute is through the marketplace, and what you publish reaches every desktop install:
+
+- **Submit a Skill** (a reusable prompt-based workflow — contract review, drafting, verification): [aiworkdeck.com/zh/skills](https://www.aiworkdeck.com/zh/skills) (China) or [workdeck.ai/en/skills](https://www.workdeck.ai/en/skills) (international). Skills go live immediately after sign-in, and an AI assistant on the form helps turn a one-line idea into a complete skill.
+- **Publish a plugin** (JAR or web plugin built on the [plugin SDK](sdk/plugin-sdk/README.md), starting from [`examples/`](examples/)): submit it at [aiworkdeck.com/zh/plugins](https://www.aiworkdeck.com/zh/plugins) or [workdeck.ai/en/plugins](https://www.workdeck.ai/en/plugins) — every plugin is human-reviewed and Ed25519-signed before it is listed, and paid listings on the China site share revenue with the author.
+- **Request a feature**: open a [GitHub issue](https://github.com/zeweihan/aiworkdeck/issues), or use the [feature-request form](https://www.aiworkdeck.com/en/feature-request) on the website — submissions land directly in our triage queue.
 
 ## Licensing
 
