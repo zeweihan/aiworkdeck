@@ -43,7 +43,8 @@ class MobileRelayStoreServiceConcurrentStoreTest {
     void setUp() {
         dirRepository = mock(MobileProjectDirRepository.class);
         inboxRepository = mock(MobileMediaInboxRepository.class);
-        service = new MobileRelayStoreService(dirRepository, inboxRepository, blobRoot.toString());
+        service = new MobileRelayStoreService(dirRepository, inboxRepository,
+                new MobileRelayLocalBlobStore(blobRoot.toString()));
         service.self = service;
     }
 

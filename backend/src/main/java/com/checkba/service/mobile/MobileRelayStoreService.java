@@ -7,7 +7,6 @@ import com.checkba.repository.MobileProjectDirRepository;
 import com.checkba.service.LangText;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -18,9 +17,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -66,7 +62,7 @@ public class MobileRelayStoreService {
 
     private final MobileProjectDirRepository dirRepository;
     private final MobileMediaInboxRepository inboxRepository;
-    private final Path relayRoot;
+    private final MobileRelayBlobStore blobStore;
 
     /**
      * 本 bean 的懒加载自身代理，只为让 storeMedia 撞约束后的重试真正经过 Spring 的事务代理
@@ -81,10 +77,10 @@ public class MobileRelayStoreService {
     @Autowired
     public MobileRelayStoreService(MobileProjectDirRepository dirRepository,
                                    MobileMediaInboxRepository inboxRepository,
-                                   @Value("${storage.local.root-path:data}") String storageRoot) {
+                                   MobileRelayBlobStore blobStore) {
         this.dirRepository = dirRepository;
         this.inboxRepository = inboxRepository;
-        this.relayRoot = Path.of(storageRoot, "mobile-relay").toAbsolutePath().normalize();
+        this.blobStore = blobStore;
     }
 
     public record DirEntry(String key, String name) {}
@@ -224,12 +220,10 @@ public class MobileRelayStoreService {
                     "Cloud relay storage is full (3GB). Open AI WorkDeck on your desktop to collect pending items, then retry."));
         }
 
-        Path blob = relayRoot.resolve(String.valueOf(userId)).resolve(clientMediaId);
-        long size;
+        MobileRelayBlobStore.StoredBlob stored;
         try {
-            Files.createDirectories(blob.getParent());
-            size = Files.copy(content, blob, StandardCopyOption.REPLACE_EXISTING);
-        } catch (IOException e) {
+            stored = blobStore.put(userId, clientMediaId, content, declaredSize);
+        } catch (Exception e) {
             throw new IllegalStateException(LangText.of("影像暂存失败", "Failed to store media"), e);
         }
 
@@ -240,8 +234,8 @@ public class MobileRelayStoreService {
         row.setClientMediaId(clientMediaId);
         row.setFileName(sanitizeFileName(fileName));
         row.setMediaType(mediaType);
-        row.setFileSize(size);
-        row.setStoragePath(blob.toString());
+        row.setFileSize(stored.size());
+        row.setStoragePath(stored.locator());
         row.setCapturedAt(capturedAt);
         row.setCreatedAt(LocalDateTime.now());
         return inboxRepository.save(row);
@@ -252,29 +246,31 @@ public class MobileRelayStoreService {
         return inboxRepository.findByUserIdAndDeviceIdAndDeliveredAtIsNullOrderByCreatedAtAsc(userId, deviceId);
     }
 
+    /** openContent 的返回：内容流（调用方/Spring 负责关闭）+ 字节数（Content-Length 用）。 */
+    public record ContentBlob(InputStream stream, long length) {}
+
     /** 取件内容：只有属主且尚未投递的能读。 */
-    public Path contentPath(Long userId, Long itemId) {
+    public ContentBlob openContent(Long userId, Long itemId) {
         MobileMediaInbox item = owned(userId, itemId);
         if (item.getDeliveredAt() != null || item.getStoragePath() == null) {
             throw new IllegalArgumentException(LangText.of("该影像已投递", "This media item has already been delivered"));
         }
-        Path p = Path.of(item.getStoragePath());
-        if (!Files.exists(p)) {
+        if (!blobStore.exists(item.getStoragePath())) {
             throw new IllegalArgumentException(LangText.of("影像内容不存在", "Media content not found"));
         }
-        return p;
+        try {
+            return new ContentBlob(blobStore.open(item.getStoragePath()), item.getFileSize());
+        } catch (IOException e) {
+            throw new IllegalArgumentException(LangText.of("影像内容不存在", "Media content not found"), e);
+        }
     }
 
     @Transactional
     public void ack(Long userId, Long itemId) {
         MobileMediaInbox item = owned(userId, itemId);
         if (item.getStoragePath() != null) {
-            try {
-                Files.deleteIfExists(Path.of(item.getStoragePath()));
-            } catch (IOException e) {
-                // blob 删不掉不该挡住投递确认：行先标记，残留 blob 由 TTL 清理兜底
-                log.warn("ACK 删除 blob 失败，留给 TTL 清理: item={}, path={}", itemId, item.getStoragePath(), e);
-            }
+            // blob 删不掉不该挡住投递确认（deleteQuietly 只 warn）：行先标记，残留由 TTL/桶生命周期兜底
+            blobStore.deleteQuietly(item.getStoragePath());
             item.setStoragePath(null);
         }
         if (item.getDeliveredAt() == null) {
@@ -319,11 +315,7 @@ public class MobileRelayStoreService {
         List<MobileMediaInbox> expired = inboxRepository.findByCreatedAtBefore(LocalDateTime.now().minus(TTL));
         for (MobileMediaInbox item : expired) {
             if (item.getStoragePath() != null) {
-                try {
-                    Files.deleteIfExists(Path.of(item.getStoragePath()));
-                } catch (IOException e) {
-                    log.warn("TTL 清理 blob 失败: item={}, path={}", item.getId(), item.getStoragePath(), e);
-                }
+                blobStore.deleteQuietly(item.getStoragePath());
             }
             inboxRepository.delete(item);
         }

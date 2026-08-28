@@ -525,6 +525,19 @@ optimizer:
     to: ${OPTIMIZER_MAIL_TO:}
     subject-prefix: "[AI WorkDeck 优化者]"
 
+# 手机端云中转（/api/mobile/*）的 blob 存储（dev-board#236）。
+# 默认本地盘（storage.local.root-path/mobile-relay）；云后端配齐 MOBILE_RELAY_OSS_*
+# 环境变量即切 OSS 私有桶（中转是短生命周期暂存，与下方 storage.oss 的文档存储无关）。
+mobile:
+  relay:
+    oss:
+      enabled: ${MOBILE_RELAY_OSS_ENABLED:false}
+      endpoint: ${MOBILE_RELAY_OSS_ENDPOINT:}
+      bucket: ${MOBILE_RELAY_OSS_BUCKET:}
+      access-key-id: ${MOBILE_RELAY_OSS_AK_ID:}
+      access-key-secret: ${MOBILE_RELAY_OSS_AK_SECRET:}
+      key-prefix: mobile-relay/
+
 # 文件存储配置
 storage:
   # 存储类型：local（本地文件系统）或 oss（对象存储）

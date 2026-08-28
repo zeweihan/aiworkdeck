@@ -16,8 +16,16 @@ dev-board#30）；更早的产品设计 `2026-08-17-mobile-clients-design.md`。
 
 - `service/mobile/MobileRelayStoreService.java` — 云端（server 侧）：目录按 (userId,
   deviceId) 整批替换、影像入库（幂等键 userId+clientMediaId）、ACK（置 deliveredAt +
-  **立即删 blob**、行保留供 status）、每日 TTL 清理。blob 落
-  `{storage.local.root-path}/mobile-relay/{userId}/{clientMediaId}`。
+  **立即删 blob**、行保留供 status）、每日 TTL 清理。blob 存取经
+  `MobileRelayBlobStore` 接缝（dev-board#236）：本地实现落
+  `{storage.local.root-path}/mobile-relay/{userId}/{clientMediaId}`（desktop/测试默认）；
+  云后端配齐 `MOBILE_RELAY_OSS_*` 环境变量则走 OSS 私有桶（北京 `awd-mobile-relay`/
+  国际站 `awd-mobile-relay-intl`，key = `mobile-relay/{userId}/{clientMediaId}`，
+  桶生命周期 35 天兜底）。storagePath 存定位符（本地=绝对路径，OSS=object key），
+  其「非空=占配额」的第二重身份不变；存量本地行按 `/` 前缀双读兼容。
+  下载契约红线：`GET /inbox/{id}/content` 必须 2xx + `application/octet-stream` +
+  裸字节，**不许 302 到签名 URL**——桌面端 `MobileRelayClientService` 不跟随重定向
+  且硬校验 Content-Type。
 - `controller/MobileRelayController.java` — `/api/mobile/*` 全组端点。鉴权一律
   `X-Session-Id`：手机端带登录会话，桌面端带 awdt_ 设备令牌（`AuthController.
   getUserIdFromSession` 两种都解析）。响应风格同 `/api/projects/my`（裸数组）。

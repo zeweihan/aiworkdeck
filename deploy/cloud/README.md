@@ -81,6 +81,18 @@
 
 - 日志：`journalctl -u aiworkdeck-cloud -f`
 - 更新后端：本地重新 package → scp 覆盖 backend.jar → `systemctl restart aiworkdeck-cloud`
+
+## 手机影像云中转的 OSS 存储（dev-board#236）
+
+- blob 不再落 ECS 本地盘，走平台私有桶：北京 `awd-mobile-relay`（cn-beijing），
+  国际站 `awd-mobile-relay-intl`（ap-southeast-1，国际站账号）。桶生命周期 35 天
+  过期 + 7 天清失败分片，只是兜底——主删除机制仍是桌面端 ACK 即删（代码 TTL 30 天次之）。
+- RAM 子用户 `awd-mobile-relay`：仅该桶 Get/Put/Delete/List/HeadObject + GetBucketStat，
+  secret 位置见 EXTERNAL_SERVICES.md §1.1。
+- 开关与凭证 = env 里的 `MOBILE_RELAY_OSS_*` 五项（见 env.example）；不配即回落本地盘
+  （desktop/团队服务器形态）。enabled=true 而配置不全会拒绝启动，属刻意设计。
+- 存量本地 blob 无需搬迁：storagePath 以 `/` 开头的旧行走双读兼容，最迟 30 天被
+  ACK/TTL 消化。
   （会话已 DB 落库，重启不掉浏览器登录态）
 - 更新插件任务窗格：office-addin `npm run build:deploy -- --url https://addin.aiworkdeck.com/office-addin`
   → 覆盖 web/office-addin/（**不要**动 web/ 根下的重定向 index.html，也不要再铺 h5）
