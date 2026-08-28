@@ -99,13 +99,13 @@ in `backend/src/main/resources/application-desktop.yml` to `true` and the previo
 
 ## Screenshots
 
-The workspace above is a real product screenshot (demo project with fictitious data). Below: the plugin & skill marketplace, and a design preview of where the document workbench is heading.
+All real product screenshots (demo project, every name and document fictitious). Below: the in-app plugin & skill marketplace pulling live entries from the online registry, and the document workbench with AI-authored tracked changes and the review panel.
 
 <p align="center">
-  <img src=".github/assets/plugin-marketplace.png" alt="Plugin and skill marketplace (design preview)" width="900">
+  <img src=".github/assets/marketplace-live.png" alt="In-app plugin and skill marketplace (real product screenshot)" width="900">
 </p>
 <p align="center">
-  <img src=".github/assets/workdeck-vision.png" alt="Document workbench with AI redlines (design preview)" width="900">
+  <img src=".github/assets/workdeck-redline.png" alt="Document workbench: AI-authored tracked changes with the review panel (real product screenshot)" width="900">
 </p>
 
 ## Core Capabilities

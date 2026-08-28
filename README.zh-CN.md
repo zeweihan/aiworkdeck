@@ -99,13 +99,13 @@ security:
 
 ## 界面截图
 
-顶部工作区为**真实产品截图**（演示项目，数据为虚构）。下面两张分别是插件 / Skill 广场，以及文档工作台的设计预览稿（后续版本的方向）。
+全部为**真实产品截图**（演示项目，人名与文档内容均为虚构）。下面两张：应用内插件 / Skill 广场（列表为在线 registry 实拉的真实条目），以及带 AI 署名修订与审阅面板的文档工作台。
 
 <p align="center">
-  <img src=".github/assets/plugin-marketplace.png" alt="插件与 Skill 广场（设计预览）" width="900">
+  <img src=".github/assets/marketplace-live.png" alt="应用内插件与 Skill 广场（真实产品截图）" width="900">
 </p>
 <p align="center">
-  <img src=".github/assets/workdeck-vision.png" alt="带 AI 修订的文档工作台（设计预览）" width="900">
+  <img src=".github/assets/workdeck-redline.png" alt="文档工作台：AI 署名修订与审阅面板（真实产品截图）" width="900">
 </p>
 
 ## 核心能力
