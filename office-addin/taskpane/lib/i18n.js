@@ -334,7 +334,47 @@ export const ZH = {
   cmdPptTableRead: '读取表格',
   cmdPptTableSetCell: '修改表格单元格',
   cmdPptSetHyperlink: '设置超链接',
-  cmdFallback: '文档操作（{command}）'
+  cmdFallback: '文档操作（{command}）',
+
+  // ---- lib/transfer.js（dev-board#251）----
+  transferHttpFailed: '连接失败（HTTP {status}）',
+  transferBadResponse: '服务器返回的数据无法识别',
+  transferBackendUnreachable: '连接不到后端服务器，请检查网络',
+  transferPollTimeout: '等待超时，请稍后重试',
+
+  // ---- TransferPanel.vue（dev-board#251）----
+  menuTransfer: '跨设备文件',
+  transferPanelTitle: '跨设备文件传输',
+  transferTabPull: '拉取',
+  transferTabPush: '投送',
+  transferDeviceLabel: '设备',
+  transferProjectLabel: '项目',
+  transferChooseDevicePlaceholder: '选择设备',
+  transferChooseProjectPlaceholder: '选择项目',
+  transferDeviceOfflineReason: '设备离线，待其上线后再试',
+  transferFetchListBtn: '获取文件清单',
+  transferListWaitingHint: '对方设备约每分钟检查一次请求，首次响应通常需要 1-3 分钟。',
+  transferListLoading: '正在获取文件清单…',
+  transferNoFilesFound: '该项目下没有可传输的文件',
+  transferFileSizeTooLarge: '超过 200MB 上限，暂不支持传输',
+  transferQuoteLoading: '正在计算费用…',
+  transferQuoteLine: '预计扣除 {credits} Credits（按文件大小计）· 经官网服务器中转，费用从账户余额扣除',
+  transferConfirmPull: '确认拉取',
+  transferConfirmPush: '确认投送',
+  transferWaitingUpload: '正在等待对方设备上传，请保持面板打开…',
+  transferSavingToProject: '正在存入项目…',
+  transferPullDone: '已存入项目：{name}',
+  transferAttachToChat: '附加到对话',
+  transferAttachedDone: '已附加到对话',
+  transferCancelBtn: '取消传输',
+  transferCancelling: '正在取消…',
+  transferPushLocalFilesTitle: '当前项目文件',
+  transferTargetDeviceLabel: '目标设备',
+  transferTargetProjectLabel: '目标项目',
+  transferPushOfflineNotice: '对方设备当前离线，上线后会自动收取该文件',
+  transferPushSubmitted: '已提交投送：费用已扣除，若长期未送达将自动退回',
+  transferLoadingFiles: '正在加载文件…',
+  transferSelectAFile: '请先选择一个文件'
 }
 
 export const EN = {
@@ -628,7 +668,47 @@ export const EN = {
   cmdPptTableRead: 'Read table',
   cmdPptTableSetCell: 'Edit table cell',
   cmdPptSetHyperlink: 'Set hyperlink',
-  cmdFallback: 'Document action ({command})'
+  cmdFallback: 'Document action ({command})',
+
+  // ---- lib/transfer.js（dev-board#251）----
+  transferHttpFailed: 'Connection failed (HTTP {status})',
+  transferBadResponse: 'Could not parse the server response',
+  transferBackendUnreachable: 'Could not reach the backend server; check your network',
+  transferPollTimeout: 'Timed out waiting; please try again later',
+
+  // ---- TransferPanel.vue（dev-board#251）----
+  menuTransfer: 'Cross-device file',
+  transferPanelTitle: 'Cross-device file transfer',
+  transferTabPull: 'Pull',
+  transferTabPush: 'Push',
+  transferDeviceLabel: 'Device',
+  transferProjectLabel: 'Project',
+  transferChooseDevicePlaceholder: 'Choose a device',
+  transferChooseProjectPlaceholder: 'Choose a project',
+  transferDeviceOfflineReason: 'This device is offline; try again once it is online',
+  transferFetchListBtn: 'Get file list',
+  transferListWaitingHint: 'The other device checks for requests roughly once a minute; the first response usually takes 1-3 minutes.',
+  transferListLoading: 'Fetching file list…',
+  transferNoFilesFound: 'No transferable files in this project',
+  transferFileSizeTooLarge: 'Exceeds the 200MB limit; not supported yet',
+  transferQuoteLoading: 'Calculating cost…',
+  transferQuoteLine: 'Estimated cost: {credits} Credits (based on file size) · Relayed through the website server; charged from your account balance',
+  transferConfirmPull: 'Confirm pull',
+  transferConfirmPush: 'Confirm push',
+  transferWaitingUpload: 'Waiting for the other device to upload, keep this panel open…',
+  transferSavingToProject: 'Saving to project…',
+  transferPullDone: 'Saved to project: {name}',
+  transferAttachToChat: 'Attach to chat',
+  transferAttachedDone: 'Attached to chat',
+  transferCancelBtn: 'Cancel transfer',
+  transferCancelling: 'Cancelling…',
+  transferPushLocalFilesTitle: 'Files in this project',
+  transferTargetDeviceLabel: 'Target device',
+  transferTargetProjectLabel: 'Target project',
+  transferPushOfflineNotice: 'The target device is offline; it will pick up the file automatically once online',
+  transferPushSubmitted: 'Push submitted: charged now, auto-refunded if never delivered',
+  transferLoadingFiles: 'Loading files…',
+  transferSelectAFile: 'Select a file first'
 }
 
 export const currentLang = detectLang()

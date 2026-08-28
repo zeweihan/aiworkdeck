@@ -143,7 +143,8 @@ test('语言判定：Office 与 navigator 都拿不到语言时默认英文', as
 const SCAN_FILES = [
   '../App.vue',
   '../components/ChatView.vue',
-  '../components/SettingsView.vue'
+  '../components/SettingsView.vue',
+  '../components/TransferPanel.vue'
 ]
 
 const HAN_RE = /[一-鿿]/

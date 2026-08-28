@@ -16,7 +16,7 @@
         <option value="" disabled>{{ t('selectProject') }}</option>
         <option v-for="p in projects" :key="p.id" :value="String(p.id)">{{ p.name }}</option>
         <!-- 远程设备项目（dev-board#250）：只读展示，value 带 remote:: 哨兵前缀，
-             onProjectSelect 拦截后恢复本地选中值 + 弹提示（#251 会改为打开传输面板） -->
+             onProjectSelect 拦截后恢复本地选中值 + 打开跨设备传输面板并预选该设备/项目（dev-board#251） -->
         <optgroup v-for="d in remoteDevices" :key="d.deviceId" :label="deviceGroupLabel(d)">
           <option v-for="p in d.projects" :key="d.deviceId + '::' + p.key" :value="`remote::${d.deviceId}::${p.key}`">
             {{ p.name }}
@@ -68,9 +68,6 @@
       </template>
       <button v-else class="icon-btn" @click="view = 'chat'">{{ t('back') }}</button>
     </header>
-
-    <!-- 远程项目边界提示（dev-board#250）：选中 remote:: 项后 4 秒自隐 -->
-    <p v-if="remoteHintVisible" class="remote-hint glass">{{ t('remoteProjectNotice') }}</p>
 
     <!-- 账户菜单（dev-board#194）：展示账户基本信息与 AI 额度，不再挂「高级设置」入口——
          那个入口把已登录用户带回登录表单，看起来像是被登出了 -->
@@ -136,6 +133,16 @@
         @need-settings="view = 'settings'"
       />
     </main>
+
+    <!-- 跨设备文件传输面板（dev-board#251）：remote:: 下拉入口与 ChatView「+」菜单
+         共用同一个模块级单例状态（lib/transfer.js），挂在顶层盖住整个任务窗格 -->
+    <TransferPanel
+      v-if="transferOpen"
+      :devices="remoteDevices"
+      :settings="settings"
+      :project-id="projectId"
+      @close="closeTransfer()"
+    />
   </div>
 </template>
 
@@ -143,6 +150,7 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import SettingsView from './components/SettingsView.vue'
 import ChatView from './components/ChatView.vue'
+import TransferPanel from './components/TransferPanel.vue'
 import {
   loadSettings, saveProjectId, isConfigured, hydrateSettings, clearToken, mirrorLang
 } from './lib/settings.js'
@@ -154,6 +162,7 @@ import { t, getLang, setLang } from './lib/i18n.js'
 import { rechargeUrl, openExternal } from './lib/site.js'
 import { hostFamily, hidePanel } from './lib/hostBridge.js'
 import { popIn } from './lib/motion.js'
+import { transferOpen, openTransfer, closeTransfer } from './lib/transfer.js'
 
 const settings = reactive(loadSettings())
 const configured = computed(() => isConfigured(settings))
@@ -161,9 +170,6 @@ const view = ref(configured.value ? 'chat' : 'settings')
 const projects = ref([])
 /** 该账号其它设备的项目目录（dev-board#250），供下拉渲染远程设备分组 */
 const remoteDevices = ref([])
-/** 选中 remote:: 项时的边界提示，4 秒自隐 */
-const remoteHintVisible = ref(false)
-let remoteHintTimer = null
 const projectId = ref(settings.projectId || '')
 const langKey = ref(getLang())
 const me = ref(null)
@@ -292,20 +298,14 @@ function onProjectSelect(ev) {
     return
   }
   if (value.startsWith('remote::')) {
-    // #250 阶段远程设备项目只读——只作跨设备文件传输的来源/目标（#251 待做），
-    // 显示值退回当前本地项目，给一条 4 秒自隐提示讲清边界
+    // 远程设备项目只读——只作跨设备文件传输的来源/目标（dev-board#251）：
+    // 显示值退回当前本地项目，改为打开传输面板并预选该设备/项目
     ev.target.value = projectId.value || ''
-    showRemoteHint()
+    const parts = value.split('::')
+    openTransfer({ deviceId: parts[1] || '', projectKey: parts[2] || '' })
     return
   }
   onProjectChange(value)
-}
-
-/** 远程项目边界提示：4 秒自隐，重复选中重新计时 */
-function showRemoteHint() {
-  remoteHintVisible.value = true
-  if (remoteHintTimer) clearTimeout(remoteHintTimer)
-  remoteHintTimer = setTimeout(() => { remoteHintVisible.value = false }, 4000)
 }
 
 /** 设备分组的下拉 label：设备名 +（在线/离线），设备名缺失时给「未知设备」占位 */
@@ -358,6 +358,7 @@ async function logout() {
   aiQuota.value = null
   projects.value = []
   remoteDevices.value = []
+  closeTransfer()
   view.value = 'settings'
 }
 
@@ -442,22 +443,6 @@ onMounted(async () => {
 }
 
 .project-select:hover { border-color: var(--awd-accent); }
-
-.remote-hint {
-  position: absolute;
-  top: 44px;
-  left: 8px;
-  right: 8px;
-  z-index: 25;
-  margin: 0;
-  padding: 8px 12px;
-  border: 1px solid var(--awd-border);
-  border-radius: var(--awd-radius-sm);
-  box-shadow: var(--awd-shadow-soft);
-  color: var(--awd-text-secondary);
-  font-size: 12px;
-  line-height: 1.5;
-}
 
 .icon-btn {
   padding: 3px 10px;

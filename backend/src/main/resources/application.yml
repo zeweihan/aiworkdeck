@@ -537,6 +537,12 @@ mobile:
       access-key-id: ${MOBILE_RELAY_OSS_AK_ID:}
       access-key-secret: ${MOBILE_RELAY_OSS_AK_SECRET:}
       key-prefix: mobile-relay/
+  # 跨设备文件传输的计费口（dev-board#251）：base-url 默认空 = 本服务器未开通，
+  # 全组 /api/mobile/transfer/* 端点给可读 code:1「跨设备传输未在此服务器开通」。
+  transfer:
+    billing:
+      base-url: ${TRANSFER_BILLING_BASE_URL:}
+      secret: ${TRANSFER_BILLING_SECRET:}
 
 # 文件存储配置
 storage:

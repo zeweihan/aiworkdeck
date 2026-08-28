@@ -2,9 +2,11 @@ package com.checkba.service.mobile;
 
 import com.checkba.model.entity.MobileDeviceState;
 import com.checkba.model.entity.MobileMediaInbox;
+import com.checkba.model.entity.MobileTransferRequest;
 import com.checkba.repository.MobileDeviceStateRepository;
 import com.checkba.repository.MobileMediaInboxRepository;
 import com.checkba.repository.MobileProjectDirRepository;
+import com.checkba.repository.MobileTransferRequestRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -54,6 +56,8 @@ class MobileRelayStoreServiceTest {
     private MobileMediaInboxRepository inboxRepository;
     @Autowired
     private MobileDeviceStateRepository deviceStateRepository;
+    @Autowired
+    private MobileTransferRequestRepository transferRequestRepository;
 
     @TempDir
     Path blobRoot;
@@ -65,7 +69,7 @@ class MobileRelayStoreServiceTest {
     @BeforeEach
     void setUp() {
         service = new MobileRelayStoreService(dirRepository, inboxRepository, deviceStateRepository,
-                new MobileRelayLocalBlobStore(blobRoot.toString()));
+                new MobileRelayLocalBlobStore(blobRoot.toString()), transferRequestRepository);
         // storeMedia 撞唯一约束时的重试经 self 转发到 storeMediaTx（新事务）；生产环境里 self
         // 是 Spring 注入的 @Lazy 代理，这里手工 new 没有容器，直接把 service 自己接上去——
         // 写法与理由同 ProjectProfileServiceTest。
@@ -374,5 +378,41 @@ class MobileRelayStoreServiceTest {
 
         // 别的用户看不到
         assertTrue(service.listDevices(2L).isEmpty());
+    }
+
+    /**
+     * dev-board#251：配额从「只计影像中转」改成「影像中转 + 跨设备传输两表未投递 blob 之和」
+     * 共池——跨设备传输占用的空间会挤掉影像中转的可用额度，反之亦然，两条业务线抢的是
+     * 同一份 3GB，不是各自 3GB。
+     */
+    @Test
+    @DisplayName("配额共池：跨设备传输占用的字节会挤掉影像中转的可用额度")
+    void quotaIsSharedWithTransferRequests() {
+        MobileTransferRequest transfer = new MobileTransferRequest();
+        transfer.setUserId(1L);
+        transfer.setRequestId("ffffffff-0000-4000-8000-0000000000bb");
+        transfer.setKind("PULL");
+        transfer.setStatus("STAGED");
+        transfer.setDeviceId("dev-a");
+        transfer.setProjectKey("42");
+        transfer.setFileName("huge.mov");
+        // 跨设备传输占满配额（未投递=storagePath 非空），哪怕本身没写真字节
+        transfer.setFileSize(MobileRelayStoreService.QUOTA_BYTES);
+        transfer.setStoragePath("some/blob/locator");
+        LocalDateTime now = LocalDateTime.now();
+        transfer.setCreatedAt(now);
+        transfer.setUpdatedAt(now);
+        transferRequestRepository.saveAndFlush(transfer);
+
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> store(MEDIA_ID, "one-more-byte"));
+        assertTrue(e.getMessage().contains("云端空间已满"),
+                "跨设备传输占满配额时，影像中转的上传也该被拒，实际: " + e.getMessage());
+
+        // 传输请求投递后释放配额（storagePath 置空），影像中转的上传应恢复
+        transfer.setStoragePath(null);
+        transferRequestRepository.saveAndFlush(transfer);
+        MobileMediaInbox landed = store(MEDIA_ID, "fits-now");
+        assertNotNull(landed.getId());
     }
 }

@@ -202,6 +202,11 @@
             <span v-if="selectedSkillIds.length" class="row-badge">{{ selectedSkillIds.length }}</span>
             <span class="row-chevron">›</span>
           </button>
+          <!-- 跨设备文件传输（dev-board#251）：与 App.vue 项目下拉的 remote:: 入口共用同一个面板 -->
+          <button class="menu-row" @click="fromMore(() => openTransfer())">
+            <span class="row-label">{{ t('menuTransfer') }}</span>
+            <span class="row-chevron">›</span>
+          </button>
           <!-- 历史与模型不再收在这里：它们是高频入口，常驻 composer 一行（dev-board#195） -->
         </template>
         <template v-else>
@@ -294,6 +299,7 @@ import {
   toggleSkill, loadConversationList, switchConversation, attachedFiles, toggleAttachedFile,
   loadProjectFiles, removeConversation, retitleConversation
 } from '../lib/chatSession.js'
+import { openTransfer } from '../lib/transfer.js'
 import { readDocumentMeta, detectHost, locateInDocument } from '../lib/hostBridge.js'
 import { micSupported, startRecording, MAX_RECORD_MS } from '../lib/wavRecorder.js'
 import { postDictate } from '../lib/api.js'
