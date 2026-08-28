@@ -62,6 +62,8 @@ export const ZH = {
   logout: '退出登录',
   accountTitle: '账户',
   languageLabel: '界面语言',
+  // WPS 宿主专属：停靠窗格期间 ribbon 被平台 bug 冻住，收起按钮是解锁通路（dev-board#244）
+  collapsePaneTitle: '收起面板（重开用功能区的「AI 助手」按钮）',
   langZh: '中文',
   langEn: 'English',
   connectionSettings: '连接与高级设置',
@@ -348,6 +350,7 @@ export const EN = {
   logout: 'Sign out',
   accountTitle: 'Account',
   languageLabel: 'Language',
+  collapsePaneTitle: 'Hide panel (reopen via the AI Assistant ribbon button)',
   langZh: '中文',
   langEn: 'English',
   connectionSettings: 'Connection & advanced settings',

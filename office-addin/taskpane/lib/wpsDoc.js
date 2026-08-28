@@ -134,6 +134,29 @@ function readWppSlides() {
   return { text: out, name: documentDisplayName('当前 WPS 演示文稿'), fileType: 'pptx' }
 }
 
+/**
+ * 从任务窗格内部把自己收起（Visible=false）。
+ * 为什么需要：WPS 平台 bug（bbs 93291，12.1.0.26895 起）——JS 停靠任务窗格打开
+ * 期间整条 ribbon 拒收鼠标事件，而关窗格的按钮恰恰在 ribbon 上，用户会被锁死。
+ * 窗格页自己有 window.wps，从内部藏掉窗格即可解锁 ribbon；重开走 ribbon 的
+ * 「AI 助手」按钮（toggle）。窗格 ID 与 ribbon 壳共享 PluginStorage 同一键
+ * （wps/js/ribbon.js 的 AWD_PANE_KEY）。
+ */
+export function hideWpsTaskPane() {
+  try {
+    const id = wps.PluginStorage.getItem('awd_taskpane_id')
+    if (!id) return false
+    const pane = wps.GetTaskPane(id)
+    if (pane) {
+      pane.Visible = false
+      return true
+    }
+  } catch (e) {
+    console.warn('[Addin] 收起 WPS 任务窗格失败', e)
+  }
+  return false
+}
+
 /** 只取文档元信息（名字/类型），不读正文——契约同 wordDoc.readDocumentMeta */
 export function readWpsDocumentMeta() {
   const host = detectWpsHost()
