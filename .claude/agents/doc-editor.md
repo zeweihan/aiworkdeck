@@ -102,6 +102,7 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - **`.uno:Grow` / `.uno:Shrink` 在本引擎是哑弹**（派发不报错，CharHeight 纹丝不动）。字号步进走 `get_ui_state` 读当前值 + `format_selection {fontSize}`。参数名不对称是既有契约：读回叫 `sizePt`，写入叫 `fontSize`，别改。
 - 撤销/重做可用性走 `xModel.getUndoManager()`（XUndoManagerSupplier 的**方法**）；`getPropertyValue('UndoManager')` 抛 UnknownPropertyException。
 - `XSelectionChangeListener` 装得上、选区变化每次触发，但**纯光标移动基本不触发**——工具栏状态刷新必须是「事件 + 聚焦时轮询」混合。
+- **工具栏弹层（样式/字体/字色/高亮/插入五个下拉）必须 fixed 定位**（dev-board#245）：工具栏行是横向 scroll-view（竖向 overflow hidden），外面又套 pane/workbench 一串 `overflow:hidden`，绝对定位的菜单会被裁得只剩顶边、看起来就是「点了打不开」——从自建工具栏诞生（#356）起就裁死，任何 e2e 都没点过下拉所以一直漏网。现行实现：`toggleMenu`/`openInsert` 打开瞬间 `capturePopPos` 取触发器视口坐标，`popStyle(width)` 内联 `position:fixed` + z 900（弹窗遮罩 1000+ 之下、窗格与编辑器 webview 之上）；`popPos` 取不到时退回原 absolute（会被裁，属降级）。新增弹层照抄这套，别再放回文档流。desktop-e2e 有「还原病灶即转红」的回归步骤（真实鼠标点开 → hit-test 命中菜单 → 选「标题 1」引擎样式真变）。
 - `format_selection` 拒绝空选区，工具栏「先设格式再打字」这条路目前是断的（P2 待补）。
 - **本引擎不支持尾注**：`insert_endnote` 设 `IsEndnote` 时抛 IllegalArgumentException（脚注正常）。工具栏刻意没有这一项；e2e 组 26 锁住「明确拒绝且给出可读原因」，将来引擎支持了那条会红，提醒把菜单项加回去。
 - **`insert_footnote` 之后视图光标停在脚注区里**：紧接着的 `select_all`/`replace_selection` 会打在脚注上而不是正文。

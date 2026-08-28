@@ -823,6 +823,59 @@ try {
     console.log('      加粗: ' + r.beforeBold + ' → ' + r.afterBold + '，按钮已高亮')
   })
 
+  await step('工具栏下拉真的能打开并选中（dev-board#245 回归）', async () => {
+    // 病灶形态：样式/字体/颜色下拉曾被工具栏横向 scroll-view 的竖向 overflow +
+    // 窗格一串 overflow:hidden 裁死——菜单状态开了、DOM 也在，画面上一条都看不
+    // 见，用户看到的就是「点了打不开」。修法是打开时 fixed 定位逃出裁剪上下文。
+    // 断言三件事：① 真实鼠标点开；② 菜单中心 hit-test 命中菜单自己（没被裁剪/
+    // 遮挡，还原病灶这里立刻转红）；③ 点「标题 1」后引擎里的段落样式真的变了。
+    const box = await page.evaluate(() => {
+      const el = document.querySelector('.etb-field.w110')
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+    })
+    if (!box) throw new Error('找不到段落样式下拉触发器')
+    await page.mouse.click(box.x, box.y)
+    await sleep(600)
+    const st = await page.evaluate(() => {
+      const el = document.querySelector('.etb-menu')
+      if (!el) return { present: false }
+      const r = el.getBoundingClientRect()
+      const top = document.elementFromPoint(r.x + r.width / 2, r.y + Math.min(r.height / 2, 40))
+      return { present: true, covered: top ? !(el === top || el.contains(top)) : true,
+        topEl: top ? top.tagName + '.' + String(top.className).slice(0, 50) : 'none',
+        rect: { y: Math.round(r.y), h: Math.round(r.height) } }
+    })
+    if (!st.present) throw new Error('点了下拉但 .etb-menu 没出现')
+    if (st.covered) throw new Error('下拉菜单被裁剪/遮挡（hit-test 未命中菜单）: ' + JSON.stringify(st))
+    const item = await page.evaluate(() => {
+      for (const it of document.querySelectorAll('.etb-menu .etb-item')) {
+        const t = it.querySelector('.etb-item-t')
+        if (t && /标题 1|Heading 1/.test(t.textContent)) {
+          const r = it.getBoundingClientRect()
+          return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+        }
+      }
+      return null
+    })
+    if (!item) throw new Error('样式清单里找不到「标题 1」')
+    await page.mouse.click(item.x, item.y)
+    await sleep(900)
+    const after = await page.evaluate(async (finder) => {
+      const ed = eval(finder + '; findEditor()')
+      const ui = await ed.executor.executeCommand('get_ui_state', {})
+      return ui && ui.paragraph ? ui.paragraph.styleName : null
+    }, FIND_EDITOR)
+    if (!/Heading 1|标题 1/.test(String(after))) throw new Error('点了「标题 1」但引擎样式还是: ' + after)
+    // 换回正文，别让后面的保存链路步骤带着标题样式跑
+    await page.evaluate(async (finder) => {
+      const ed = eval(finder + '; findEditor()')
+      await ed.executor.executeCommand('set_style', { name: 'Standard' })
+    }, FIND_EDITOR)
+    console.log('      下拉可开可选：段落样式 → ' + after)
+  })
+
   await step('宿主执行器插入标记文本', async () => {
     const r = await page.evaluate(async (finder, marker) => {
       const ed = eval(finder + '; findEditor()')

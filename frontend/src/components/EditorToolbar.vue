@@ -15,11 +15,11 @@
 
         <!-- 段落样式 -->
         <view class="etb-drop" :class="{ open: menu === 'style' }">
-          <view class="etb-field w110" :title="$t('editor.toolbar.paraStyle')" @tap.stop="toggleMenu('style')">
+          <view ref="trig_style" class="etb-field w110" :title="$t('editor.toolbar.paraStyle')" @tap.stop="toggleMenu('style')">
             <text class="etb-field-t">{{ styleLabel }}</text>
             <text class="etb-caret">⌄</text>
           </view>
-          <scroll-view v-if="menu === 'style'" class="etb-menu w160" scroll-y @tap.stop>
+          <scroll-view v-if="menu === 'style'" class="etb-menu w160" :style="popStyle(160)" scroll-y @tap.stop>
             <view v-for="s in styleOptions" :key="s.name" class="etb-item"
                   :class="{ on: s.name === state.paragraph.styleName }" @tap.stop="applyStyle(s.name)">
               <text class="etb-item-t">{{ s.label }}</text>
@@ -29,11 +29,11 @@
 
         <!-- 字体 -->
         <view class="etb-drop" :class="{ open: menu === 'font' }">
-          <view class="etb-field w110" :title="$t('editor.toolbar.font')" @tap.stop="toggleMenu('font')">
+          <view ref="trig_font" class="etb-field w110" :title="$t('editor.toolbar.font')" @tap.stop="toggleMenu('font')">
             <text class="etb-field-t">{{ fontLabel }}</text>
             <text class="etb-caret">⌄</text>
           </view>
-          <scroll-view v-if="menu === 'font'" class="etb-menu w180" scroll-y @tap.stop>
+          <scroll-view v-if="menu === 'font'" class="etb-menu w180" :style="popStyle(180)" scroll-y @tap.stop>
             <view v-for="f in fontOptions" :key="f" class="etb-item"
                   :class="{ on: f === state.character.font }" @tap.stop="applyFont(f)">
               <text class="etb-item-t">{{ f }}</text>
@@ -59,21 +59,21 @@
 
         <!-- 字色 / 高亮 -->
         <view class="etb-drop" :class="{ open: menu === 'color' }">
-          <view class="etb-btn" :title="$t('editor.toolbar.textColor')" @tap.stop="toggleMenu('color')">
+          <view ref="trig_color" class="etb-btn" :title="$t('editor.toolbar.textColor')" @tap.stop="toggleMenu('color')">
             <text class="etb-tx">A</text>
             <view class="etb-swatch" :style="{ background: state.character.color === 'auto' ? '#2C3338' : state.character.color }"></view>
           </view>
-          <view v-if="menu === 'color'" class="etb-palette" @tap.stop>
+          <view v-if="menu === 'color'" class="etb-palette" :style="popStyle(128)" @tap.stop>
             <view v-for="c in TEXT_COLORS" :key="c.v" class="etb-chip" :style="{ background: c.v === 'auto' ? '#2C3338' : c.v }"
                   :title="$t('editor.toolbar.colors.' + c.t)" @tap.stop="applyColor('color', c.v)"></view>
           </view>
         </view>
         <view class="etb-drop" :class="{ open: menu === 'hl' }">
-          <view class="etb-btn" :title="$t('editor.toolbar.highlight')" @tap.stop="toggleMenu('hl')">
+          <view ref="trig_hl" class="etb-btn" :title="$t('editor.toolbar.highlight')" @tap.stop="toggleMenu('hl')">
             <svg class="etb-ico" viewBox="0 0 24 24" fill="none"><path v-for="(d,i) in ICONS.marker" :key="i" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
             <view class="etb-swatch" :style="{ background: state.character.highlight === 'none' ? 'transparent' : state.character.highlight }"></view>
           </view>
-          <view v-if="menu === 'hl'" class="etb-palette" @tap.stop>
+          <view v-if="menu === 'hl'" class="etb-palette" :style="popStyle(128)" @tap.stop>
             <view v-for="c in HL_COLORS" :key="c.v" class="etb-chip" :class="{ none: c.v === 'none' }"
                   :style="{ background: c.v === 'none' ? '#fff' : c.v }" :title="$t('editor.toolbar.colors.' + c.t)" @tap.stop="applyColor('highlight', c.v)"></view>
           </view>
@@ -104,11 +104,11 @@
 
         <!-- 插入 -->
         <view class="etb-drop" :class="{ open: menu === 'insert' }">
-          <view class="etb-field w72" :title="$t('editor.toolbar.insert')" @tap.stop="openInsert">
+          <view ref="trig_insert" class="etb-field w72" :title="$t('editor.toolbar.insert')" @tap.stop="openInsert">
             <text class="etb-field-t">{{ $t('editor.toolbar.insert') }}</text>
             <text class="etb-caret">⌄</text>
           </view>
-          <view v-if="menu === 'insert'" class="etb-menu w200 pad" @tap.stop>
+          <view v-if="menu === 'insert'" class="etb-menu w200 pad" :style="popStyle(200)" @tap.stop>
             <!-- 一级清单 -->
             <template v-if="!insertMode">
               <view class="etb-item" @tap.stop="insertMode = 'table'"><text class="etb-item-t">{{ $t('editor.toolbar.insertTable') }}</text></view>
@@ -344,7 +344,7 @@ export default {
   },
   data() {
     return {
-      state: EMPTY(), styleList: [], fontList: [], menu: '', formattingMarks: false,
+      state: EMPTY(), styleList: [], fontList: [], menu: '', popPos: null, formattingMarks: false,
       // 插入菜单：'' | 'table' | 'link' | 'comment'
       insertMode: '', insertErr: '', grid: { r: 0, c: 0 }, linkUrl: '', commentText: '', formText: '', selText: '',
       // 查找替换
@@ -443,7 +443,28 @@ export default {
     },
     ui(name) { this.closeMenus(); return this.call('ui_command', { name }).then((r) => this.after(r)) },
     run(action) { this.closeMenus(); return this.call(action, {}).then((r) => this.after(r)) },
-    toggleMenu(name) { this.menu = this.menu === name ? '' : name },
+    toggleMenu(name) {
+      const opening = this.menu !== name
+      this.menu = opening ? name : ''
+      if (opening) this.capturePopPos(name)
+    },
+    // 弹层不能留在文档流里定位：工具栏行是横向 scroll-view（overflow 竖向 hidden），
+    // 外面还套着 pane/workbench 一串 overflow:hidden，绝对定位的菜单会被裁得只剩
+    // 顶边一条、看起来就是「点了打不开」（dev-board#245）。打开瞬间取触发器视口
+    // 坐标，用 fixed 逃出所有裁剪上下文；z 序压在弹窗遮罩（1000+）之下、窗格与
+    // 编辑器 webview 之上。
+    capturePopPos(name) {
+      const ref = this.$refs['trig_' + name]
+      const el = ref && (ref.$el || ref)
+      const rect = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null
+      this.popPos = rect ? { left: rect.left, top: rect.bottom + 4 } : null
+    },
+    popStyle(width) {
+      if (!this.popPos) return {}
+      const vw = (typeof window !== 'undefined' && window.innerWidth) || 0
+      const left = vw ? Math.min(this.popPos.left, Math.max(8, vw - width - 8)) : this.popPos.left
+      return { position: 'fixed', left: left + 'px', top: this.popPos.top + 'px', zIndex: 900 }
+    },
     closeMenus() { this.menu = ''; this.insertMode = ''; this.insertErr = '' },
 
     // ---- 插入菜单 ----
@@ -451,6 +472,7 @@ export default {
       const opening = this.menu !== 'insert'
       this.insertMode = ''; this.insertErr = ''; this.grid = { r: 0, c: 0 }
       this.menu = opening ? 'insert' : ''
+      if (opening) this.capturePopPos('insert')
       // 选区文字要现读：菜单里要显示「给『xxx』加链接」，而 get_ui_state 只回
       // collapsed 布尔值。顺带刷新一次状态，免得按上一次的选区判空。
       if (opening) {
