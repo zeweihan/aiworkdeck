@@ -351,7 +351,7 @@ Commercial licensing is available for:
 
 See [LICENSE](legal/LICENSE) and [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md). For commercial licensing, contact [hi@aiworkdeck.com](mailto:hi@aiworkdeck.com).
 
-The **AI WorkDeck logo** (the "K" mark) is a registered trademark in China (Class 9, reg. no. 89857424; the Class 35 and 42 applications have cleared publication and are pending registration). "**AI WorkDeck**" is used as a trade name and unregistered word mark ("AI WorkDeck™"), protected together with the aiworkdeck.com domain under applicable unfair-competition law. Building on the kernel is welcome under the licenses above, but using the **AI WorkDeck** name or logo to market a commercial offering requires a brand or certification agreement — see [TRADEMARKS.md](legal/TRADEMARKS.md) and the **Brand & Certification Programs** in [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md).
+The **AI WorkDeck logo** (the "K" mark) is a registered trademark in China (Classes 9, 35, and 42; reg. nos. 89857424, 89857389, 89857390). "**AI WorkDeck**" is used as a trade name and unregistered word mark ("AI WorkDeck™"), protected together with the aiworkdeck.com domain under applicable unfair-competition law. Building on the kernel is welcome under the licenses above, but using the **AI WorkDeck** name or logo to market a commercial offering requires a brand or certification agreement — see [TRADEMARKS.md](legal/TRADEMARKS.md) and the **Brand & Certification Programs** in [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md).
 
 ## Background
 

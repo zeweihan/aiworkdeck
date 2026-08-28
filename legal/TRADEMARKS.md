@@ -9,15 +9,15 @@ All marks below are held by 北京京微资易科技有限公司, the entity beh
 
 ### 2.1 The logo (device mark)
 
-The AI WorkDeck logo — the stylised "K" device — is filed with the China National Intellectual Property Administration in three classes, one of which has issued:
+The AI WorkDeck logo — the stylised "K" device — is registered with the China National Intellectual Property Administration in three classes:
 
-| Class | Goods / services | Reg. or app. no. | Status |
+| Class | Goods / services | Reg. no. | Status |
 |---|---|---|---|
 | 9 | Computer software (downloadable software, file and database management software, OCR, chatbot software) | 89857424 | **Registered** 2026-07-27; exclusive right runs to 2036-07-26 |
-| 35 | Advertising and business services | 89857389 | Preliminarily approved and published 2026-05-27; three-month opposition window closed 2026-08-27; **registration pending confirmation** |
-| 42 | SaaS, PaaS, software design and hosting | 89857390 | Preliminarily approved and published 2026-05-27; three-month opposition window closed 2026-08-27; **registration pending confirmation** |
+| 35 | Advertising and business services | 89857389 | **Registered**; published 2026-05-27, unopposed; exclusive right runs from 2026-08-27 |
+| 42 | SaaS, PaaS, software design and hosting | 89857390 | **Registered**; published 2026-05-27, unopposed; exclusive right runs from 2026-08-27 |
 
-The ® symbol is used with the device mark only for the Class 9 goods on which it is registered. The Class 35 and 42 applications have cleared examination and their opposition windows, but until the registrations are formally confirmed and published we do not mark them ®. This table is updated as the register changes.
+The ® symbol is used with the device mark for the classes in which it is registered. This table is updated as the register changes.
 
 ### 2.2 The name (word mark)
 
