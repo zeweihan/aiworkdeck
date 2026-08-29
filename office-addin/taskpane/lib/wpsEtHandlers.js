@@ -145,6 +145,22 @@ function usedRangeIsEmpty(used) {
 const MAX_EXCEL_RESULT_ROWS = 500
 /** excel_search 展示的命中上限（与 officeExecutor.MAX_SEARCH_HITS 同值） */
 const MAX_SEARCH_HITS = 20
+/**
+ * excel_search 一次最多扫多少行。原先没有上限，几万行的台账会把整片已用区域
+ * 一次性编组过同步桥，WPS 表格白屏数十秒。超限时如实在返回值里交代扫到哪儿，
+ * 不假装搜完了。
+ */
+const MAX_SEARCH_SCAN_ROWS = 5000
+
+/**
+ * XlSortOrientation / XlSortMethod。**命名反直觉**：xlSortColumns=1 才是「数据行上下
+ * 重排」（Excel 默认），xlSortRows=2 是「列左右重排」。
+ * Range.Sort 的 Header/Order/Orientation/SortMethod 是**会被保存复用的持久设置**
+ * （MS 官方明文），不显式传就继承用户上一次手动排序的选择——律师手动做过一次
+ * 「按行排序」之后，AI 的每次排序都会把表横着重排。与 Word 面 Find 宽松度是同一类地雷。
+ */
+const xlSortColumns = 1
+const xlPinYin = 1
 
 /** XlHAlign：horizontalAlignment 小写短名 → 数值 */
 const ET_H_ALIGN = { left: -4131, center: -4108, right: -4152 }
@@ -204,11 +220,106 @@ const ET_FREEZE_ACTIONS = ['freeze_rows', 'freeze_cols', 'freeze_at', 'unfreeze'
 const ET_AUTOFILTER_ACTIONS = ['apply', 'clear', 'remove']
 
 /**
- * 列宽单位换算：Office 版契约 size 单位是磅，WPS ColumnWidth 单位是标准字体
- * 字符宽（VBA 语义）。换算依据：Excel 默认列宽 8.43 字符 = 48 磅，
- * 即 1 字符 ≈ 48 / 8.43 ≈ 5.69 磅。行高两边都是磅，直落无需换算。
+ * 列宽单位换算：契约 size 单位是磅（对齐 Office 版），WPS 的 ColumnWidth 单位是
+ * 标准字体字符宽。真机实测（WPS 12.1.0.28043，2026-08-29）两者是**仿射**关系而不是
+ * 正比——字符宽 5 → 31.5 磅、10 → 59.6、20 → 115.85、40 → 228.35，
+ * 解得 `磅 ≈ 5.625 × 字符宽 + 3.35`（截距是单元格左右内边距）。
+ * 原先按正比 5.69 折算，宽列还凑合、窄列偏得厉害（要 30 磅实得约 33 磅，差 10%）。
+ * 斜率随工作簿标准字体会变，所以 setColumnWidthPoints 落笔后读回一次就地校正。
  */
-const POINTS_PER_CHAR = 5.69
+const POINTS_PER_CHAR = 5.625
+const COLUMN_WIDTH_PADDING_PT = 3.35
+
+/** SpecialCells 的两个常量：xlCellTypeFormulas / xlErrors */
+const xlCellTypeFormulas = -4123
+const xlErrors = 16
+/** 一次写入最多报几个公式错误（错误单元格通常极少，设个上限防止病态输入刷屏） */
+const MAX_FORMULA_ERRORS = 50
+
+/**
+ * 把列宽设成指定磅数。先按实测仿射式给初值，再读回一次实际磅数、就地解出本工作簿
+ * 真实的内边距回代修正一次——一次性命令，多两三次跨桥调用换来准确的列宽。
+ */
+function setColumnWidthPoints(range, points) {
+  let chars = Math.max(0, (points - COLUMN_WIDTH_PADDING_PT) / POINTS_PER_CHAR)
+  range.ColumnWidth = chars
+  let actual = null
+  try {
+    actual = Number(range.Width)
+  } catch (e) { /* 读不回实际宽度就用初值收工 */ }
+  if (Number.isFinite(actual) && actual > 0 && Math.abs(actual - points) > 0.5) {
+    const padding = actual - POINTS_PER_CHAR * chars
+    chars = Math.max(0, (points - padding) / POINTS_PER_CHAR)
+    range.ColumnWidth = chars
+    try {
+      actual = Number(range.Width)
+    } catch (e) { /* 保留上一次读数 */ }
+  }
+  return { chars, actualPoints: Number.isFinite(actual) ? actual : null }
+}
+
+/**
+ * 找出区域里的公式错误单元格。
+ *
+ * 真机实测（WPS 12.1.0.28043，2026-08-29）：错误值经 `Value2` 回来的是 **CVErr 数值码**
+ * （`#DIV/0!` 是 -2146826281，即 0x800A07D7，低位 2007），**不是** Office.js 那种
+ * `'#DIV/0!'` 字符串——所以原先「Value2 里字符串以 # 开头」的判据在 WPS 上永远
+ * 不成立，公式写错了也恒报成功，模型据此以为算式没问题。
+ *
+ * 改为直接问宿主要错误单元格（`SpecialCells(xlCellTypeFormulas, xlErrors)`，与绑定
+ * 形态无关），显示文本取 `Range.Text`（实测给的正是 `#DIV/0!` / `#NAME?`）。
+ *
+ * 两个坑：
+ * - **单格区间不能用 SpecialCells**：VBA 语义下它会改为搜索整张表（实测确认），
+ *   会把别处的旧错误算到本次写入头上；单格直接读 Text 判。
+ * - 无错误单元格时 SpecialCells 抛异常，这是正常路径不是故障。
+ * 收集到的每个单元格再用 Text 复核一次以 `#` 开头，宿主行为异常时也不会误报。
+ */
+function collectFormulaErrors(rng) {
+  const out = []
+  const pushIfError = (cell) => {
+    let t = ''
+    try {
+      t = String(cell.Text == null ? '' : cell.Text)
+    } catch (e) {
+      return
+    }
+    if (!t.startsWith('#')) return
+    out.push({ address: cell.Address(false, false), value: t })
+  }
+  if (rng.Rows.Count === 1 && rng.Columns.Count === 1) {
+    pushIfError(rng)
+    return out
+  }
+  let errs = null
+  try {
+    errs = rng.SpecialCells(xlCellTypeFormulas, xlErrors)
+  } catch (e) {
+    return out // 区域内没有错误单元格
+  }
+  if (!errs) return out
+  let areas = null
+  let areaCount = 1
+  try {
+    areas = errs.Areas
+    areaCount = areas.Count
+  } catch (e) {
+    areas = null
+    areaCount = 1
+  }
+  for (let a = 1; a <= areaCount; a++) {
+    const area = areas ? areas.Item(a) : errs
+    const rowsN = area.Rows.Count
+    const colsN = area.Columns.Count
+    for (let r = 1; r <= rowsN; r++) {
+      for (let c = 1; c <= colsN; c++) {
+        pushIfError(area.Cells.Item(r, c))
+        if (out.length >= MAX_FORMULA_ERRORS) return out
+      }
+    }
+  }
+  return out
+}
 
 /** colorScale 默认三色刻度色（低到高：红-黄-绿），与 Office 版视觉口径一致 */
 const ET_CF_COLOR_SCALE_HEX = ['#F8696B', '#FFEB84', '#63BE7B']
@@ -229,17 +340,19 @@ export const WPS_ET_HANDLERS = {
       return { sheet: name, address: '', rows: 0, cols: 0, values: [], note: '工作表为空' }
     }
     if (!rng) throw new Error(`无法解析区域：${rangeAddress}`)
-    let values = read2D(rng)
-    let truncated = false
-    if (values.length > MAX_EXCEL_RESULT_ROWS) {
-      values = values.slice(0, MAX_EXCEL_RESULT_ROWS)
-      truncated = true
-    }
+    const totalRows = rng.Rows.Count
+    const totalCols = rng.Columns.Count
+    // **先 Resize 再取值**：只回 MAX_EXCEL_RESULT_ROWS 行，却把整片区域编组过同步桥
+    // 就是白搬——几万行的台账会把 WPS 表格拖到长时间无响应。原先的 slice 只保护了
+    // 回给模型的 token 预算，一点也没保护跨桥载荷。
+    const truncated = totalRows > MAX_EXCEL_RESULT_ROWS
+    const source = truncated ? rng.Resize(MAX_EXCEL_RESULT_ROWS, totalCols) : rng
+    const values = read2D(source)
     return {
       sheet: name,
       address: rng.Address(false, false),
-      rows: rng.Rows.Count,
-      cols: rng.Columns.Count,
+      rows: totalRows,
+      cols: totalCols,
       values,
       truncated
     }
@@ -278,7 +391,11 @@ export const WPS_ET_HANDLERS = {
     const name = String(sheet.Name)
     const used = sheet.UsedRange
     if (usedRangeIsEmpty(used)) return { sheet: name, count: 0, matches: [] }
-    const values = read2D(used)
+    const totalRows = used.Rows.Count
+    // 同 excel_get_range：先限行再过桥，否则几万行的台账一搜就白屏几十秒
+    const scanRows = Math.min(totalRows, MAX_SEARCH_SCAN_ROWS)
+    const scanned = scanRows < totalRows ? used.Resize(scanRows, used.Columns.Count) : used
+    const values = read2D(scanned)
     // WPS 的 Row/Column 是 1 起，cellAddress 收 0 起——先归零再拼
     const baseRow = used.Row - 1
     const baseCol = used.Column - 1
@@ -299,7 +416,15 @@ export const WPS_ET_HANDLERS = {
         }
       }
     }
-    return { sheet: name, count, shown: matches.length, matches }
+    const out = { sheet: name, count, shown: matches.length, matches }
+    if (scanRows < totalRows) {
+      // 如实交代只搜到哪儿，不假装搜完了整张表
+      out.truncated = true
+      out.scannedRows = scanRows
+      out.totalRows = totalRows
+      out.note = `工作表共 ${totalRows} 行，本次只扫描了前 ${scanRows} 行；如需搜索靠后的数据，请指定更小的区域分批搜索`
+    }
+    return out
   },
 
   // ==================== 格式/结构 ====================
@@ -401,10 +526,11 @@ export const WPS_ET_HANDLERS = {
     else if (action === 'insert_cols') range.Insert(xlShiftToRight)
     else if (action === 'delete_cols') range.Delete(xlShiftToLeft)
     else if (action === 'set_width') {
-      // 契约 size 单位是磅（对齐 Office 版），WPS ColumnWidth 是字符宽——按 1 字符≈5.69 磅折算
-      range.ColumnWidth = size / POINTS_PER_CHAR
+      // 契约 size 单位是磅（对齐 Office 版），WPS ColumnWidth 是字符宽——仿射折算并回读校正
+      const applied = setColumnWidthPoints(range, size)
       result.size = size
-      result.note = `列宽已按 1 字符宽≈${POINTS_PER_CHAR} 磅折算写入（${size} 磅 ≈ ${(size / POINTS_PER_CHAR).toFixed(2)} 字符宽）`
+      result.note = `列宽 ${size} 磅 ≈ ${applied.chars.toFixed(2)} 字符宽` +
+        (applied.actualPoints == null ? '' : `（实际 ${applied.actualPoints.toFixed(1)} 磅）`)
     } else if (action === 'set_height') {
       // 行高两边单位都是磅，直落
       range.RowHeight = size
@@ -443,10 +569,13 @@ export const WPS_ET_HANDLERS = {
     const rng = sheet.Range(rangeAddress)
     // Key1 收 Range 对象（不收数字下标）：区域内相对列 0 起 → Columns.Item 1 起
     const keyRng = rng.Columns.Item(keyColumn + 1)
-    // Range.Sort(Key1, Order1, Key2, Type, Order2, Key3, Order3, Header, ...)，可选参数 null 占位
+    // Range.Sort(Key1, Order1, Key2, Type, Order2, Key3, Order3, Header,
+    //           OrderCustom, MatchCase, Orientation, SortMethod, ...)
+    // 后四位必须显式传：它们是被保存复用的持久设置，留空就继承用户上次手动排序的选择
     rng.Sort(keyRng, ascending ? xlAscending : xlDescending,
       null, null, null, null, null,
-      hasHeader ? xlYes : xlNo)
+      hasHeader ? xlYes : xlNo,
+      null, false, xlSortColumns, xlPinYin)
     return { address: rng.Address(false, false), keyColumn, ascending, hasHeader }
   },
 
@@ -483,9 +612,18 @@ export const WPS_ET_HANDLERS = {
       } else if (action === 'move') {
         const position = Math.floor(Number(args.position))
         if (!Number.isFinite(position) || position < 0) throw new Error('position 不能为负')
-        // Move 必须给 Before/After 之一（都不给会移到新工作簿）；position 0 起
-        if (position === 0) target.Move(sheets.Item(1))
-        else target.Move(null, sheets.Item(Math.min(position, sheets.Count)))
+        // 契约的 position 是「最终落点」的 0 起下标（Office.js 语义：先摘掉自己再插入），
+        // 而 WPS 只有 Move(Before, After)，参照物取自**移动前**的集合。往后挪时自己会
+        // 先被摘掉、后面的表全体前移一格，所以不能直接拿 position 当 After 下标用
+        // ——[A,B,C] 把 A 挪到 position=2，直接用会得到 [B,A,C] 而不是 [B,C,A]。
+        const total = sheets.Count
+        const current = Number(target.Index) // 1 起
+        const dest = Math.min(position + 1, total) // 目标位次，1 起
+        if (dest !== current) {
+          if (dest <= 1) target.Move(sheets.Item(1)) // 挪到最前：Before 第一张
+          else if (dest < current) target.Move(sheets.Item(dest)) // 往前挪：Before 目标位
+          else target.Move(null, sheets.Item(dest)) // 往后挪：摘掉自己后目标位就是 After 参照
+        }
       } else if (action === 'activate') {
         target.Activate()
       }
@@ -552,20 +690,9 @@ export const WPS_ET_HANDLERS = {
     }
     // Formula 属性走 en-US 文法（逗号分隔、英文函数名、跨表 'Sheet name'!A1），与 Office 版直通
     rng.Formula = formulas
-    // 写入后读回 Value2 批量扫描 # 开头的错误值（#DIV/0! 等），契约同 officeExecutor
-    const values = read2D(rng)
-    const baseRow = rng.Row - 1
-    const baseCol = rng.Column - 1
-    const formulaErrors = []
-    for (let r = 0; r < values.length; r++) {
-      const row = values[r] || []
-      for (let c = 0; c < row.length; c++) {
-        const v = row[c]
-        if (typeof v === 'string' && v.startsWith('#')) {
-          formulaErrors.push({ address: cellAddress(baseRow + r, baseCol + c), value: v })
-        }
-      }
-    }
+    // 写入后找错误单元格。**不能扫 Value2 的 '#' 开头字符串**——WPS 的 Value2 回的是
+    // CVErr 数值码，那样判永远为假（见 collectFormulaErrors 的实测说明）
+    const formulaErrors = collectFormulaErrors(rng)
     const result = { written: rows * cols, address: rng.Address(false, false) }
     if (formulaErrors.length) result.formulaErrors = formulaErrors
     return result
@@ -638,17 +765,33 @@ export const WPS_ET_HANDLERS = {
       fcs.Delete()
       return { action: 'clearAll' }
     }
-    // apply：每次先清空该区域现有规则再套用新规则，不叠加（与 Office 版同口径）
-    fcs.Delete()
+    // **全部入参先校验完再动手**：Delete() 清空的是律师自己配好的条件格式，
+    // 而 WPS 是同步桥、当场生效（Office.js 那边写入排队到 sync 才落地，抛异常天然回滚）。
+    // 原先边校验边写，模型把 operator 拼错一次就把用户的规则全删了还报错退出。
     const ruleType = String(args.ruleType || '').trim().toLowerCase()
+    let cfOperator = null
+    let cfFillBgr = null
     if (ruleType === 'cellvalue') {
-      const operator = ET_CF_OPERATORS[String(args.operator || '').trim().toLowerCase()]
-      if (!operator) throw new Error(`operator 值非法：${args.operator}（合法值：greaterThan/lessThan/between/equalTo）`)
-      const fc = operator === xlBetween
-        ? fcs.Add(xlCellValue, operator, String(args.value1), String(args.value2))
-        : fcs.Add(xlCellValue, operator, String(args.value1))
-      fc.Interior.Color = hexToBgr(String(args.fillColor || '#FFC7CE'))
-    } else if (ruleType === 'colorscale') {
+      cfOperator = ET_CF_OPERATORS[String(args.operator || '').trim().toLowerCase()]
+      if (!cfOperator) throw new Error(`operator 值非法：${args.operator}（合法值：greaterThan/lessThan/between/equalTo）`)
+      if (args.value1 == null || String(args.value1) === '') {
+        throw new Error('cellValue 规则需要 value1（比较的阈值）')
+      }
+      if (cfOperator === xlBetween && (args.value2 == null || String(args.value2) === '')) {
+        throw new Error('between 规则需要 value1 与 value2 两个边界值')
+      }
+      cfFillBgr = hexToBgr(String(args.fillColor || '#FFC7CE')) // 颜色非法也要在删之前抛
+    } else if (ruleType !== 'colorscale') {
+      throw new Error(`ruleType 值非法：${args.ruleType}（合法值：cellValue/colorScale）`)
+    }
+    // 校验全过，到这里才允许破坏既有规则
+    fcs.Delete()
+    if (ruleType === 'cellvalue') {
+      const fc = cfOperator === xlBetween
+        ? fcs.Add(xlCellValue, cfOperator, String(args.value1), String(args.value2))
+        : fcs.Add(xlCellValue, cfOperator, String(args.value1))
+      fc.Interior.Color = cfFillBgr
+    } else {
       const cs = fcs.AddColorScale(3)
       // ColorScaleCriteria 精调是类推用法，真机若不通降级为 ET 默认三色刻度
       try {
@@ -658,8 +801,6 @@ export const WPS_ET_HANDLERS = {
       } catch (e) {
         // 保持 ET 默认三色刻度，视觉与桌面端略有偏差
       }
-    } else {
-      throw new Error(`ruleType 值非法：${args.ruleType}（合法值：cellValue/colorScale）`)
     }
     return { action: 'apply', ruleType }
   },
@@ -753,32 +894,44 @@ export const WPS_ET_HANDLERS = {
     const action = String(args.action || 'apply').trim().toLowerCase()
     if (!rangeAddress) throw new Error('区域地址不能为空')
     const sheet = resolveSheet(sheetName)
+    if (action !== 'apply' && action !== 'clear') {
+      // 收严 action：原先除 clear 外的任何值（含拼错的）都会掉进 apply 分支先删规则
+      throw new Error(`action 值非法：${args.action}（合法值：apply/clear）`)
+    }
     const rng = sheet.Range(rangeAddress)
     const v = rng.Validation
     if (action === 'clear') {
       v.Delete()
       return { action: 'clear' }
     }
+    // **先把要下发的参数全部算完再删旧规则**（同 excel_conditional_format 的理由）：
+    // 律师那一列的下拉列表是他自己配的，模型把 type 拼错一次不能把它删掉还报错退出
     const type = String(args.type || '').trim().toLowerCase()
-    // 已有规则时 Add 会报错，先删旧规则
-    v.Delete()
+    let addArgs = null
     if (type === 'list') {
       const source = String(args.listSource || '')
       if (!source) throw new Error('type=list 时 listSource 不能为空')
       // Formula1 = 逗号分隔值列表 或 "=$A$1:$A$5" 工作表引用；Operator 对 list 无实义，按官方示例传 xlBetween 占位
-      v.Add(ET_DV_TYPES.list, xlValidAlertStop, xlBetween, source)
-      v.InCellDropdown = true
+      addArgs = [ET_DV_TYPES.list, xlValidAlertStop, xlBetween, source]
     } else if (type === 'wholenumber' || type === 'date') {
       const operator = ET_CF_OPERATORS[String(args.operator || '').trim().toLowerCase()]
       if (!operator) throw new Error(`operator 值非法：${args.operator}`)
-      if (operator === ET_CF_OPERATORS.between) {
-        v.Add(ET_DV_TYPES[type], xlValidAlertStop, operator, String(args.value1), String(args.value2))
-      } else {
-        v.Add(ET_DV_TYPES[type], xlValidAlertStop, operator, String(args.value1))
+      if (args.value1 == null || String(args.value1) === '') {
+        throw new Error(`type=${type} 需要 value1（比较的阈值）`)
       }
+      if (operator === ET_CF_OPERATORS.between && (args.value2 == null || String(args.value2) === '')) {
+        throw new Error('between 规则需要 value1 与 value2 两个边界值')
+      }
+      addArgs = operator === ET_CF_OPERATORS.between
+        ? [ET_DV_TYPES[type], xlValidAlertStop, operator, String(args.value1), String(args.value2)]
+        : [ET_DV_TYPES[type], xlValidAlertStop, operator, String(args.value1)]
     } else {
       throw new Error(`type 值非法：${args.type}（合法值：wholeNumber/list/date）`)
     }
+    // 校验全过，到这里才允许破坏既有规则
+    v.Delete()
+    v.Add(...addArgs)
+    if (type === 'list') v.InCellDropdown = true
     return { action: 'apply', type, address: rng.Address(false, false) }
   },
 

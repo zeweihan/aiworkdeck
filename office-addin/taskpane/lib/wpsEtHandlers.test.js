@@ -315,7 +315,9 @@ test('excel_set_borders：none 走六边清空；非法值报错', async () => {
 
 /* ==================== excel_edit_rows_cols ==================== */
 
-test('excel_edit_rows_cols：列宽按 1 字符≈5.69 磅折算并 note 交底', async () => {
+test('excel_edit_rows_cols：列宽按实测仿射式折算（磅 = 5.625×字符 + 3.35）', async () => {
+  // 真机实测（WPS 12.1.0.28043）：字符宽 5→31.5 磅、10→59.6、20→115.85、40→228.35，
+  // 是仿射关系不是正比。旧口径按 48/5.69 折算，窄列偏差可达 10%。
   const colRange = {}
   let colKey = null
   const { restore } = makeSingleSheetEnv({
@@ -324,9 +326,29 @@ test('excel_edit_rows_cols：列宽按 1 字符≈5.69 磅折算并 note 交底'
   try {
     const out = await WPS_ET_HANDLERS.excel_edit_rows_cols({ action: 'set_width', index: 2, size: 48 })
     assert.equal(colKey, 'C:C')
-    assert.ok(Math.abs(colRange.ColumnWidth - 48 / 5.69) < 1e-9)
+    assert.ok(Math.abs(colRange.ColumnWidth - (48 - 3.35) / 5.625) < 1e-9)
     assert.equal(out.size, 48)
-    assert.match(out.note, /5\.69 磅/)
+    assert.match(out.note, /字符宽/)
+  } finally { restore() }
+})
+
+test('excel_edit_rows_cols：列宽落笔后读回实际磅数并就地校正一次', async () => {
+  // 斜率随工作簿标准字体会变，所以落笔后读回 Width、解出真实内边距再回代。
+  // 这个 mock 的内边距是 10 磅（不是常量里的 3.35），校正后必须命中目标。
+  const PAD = 10
+  const colRange = {
+    _cw: 0,
+    get ColumnWidth() { return this._cw },
+    set ColumnWidth(v) { this._cw = v },
+    get Width() { return 5.625 * this._cw + PAD }
+  }
+  const { restore } = makeSingleSheetEnv({
+    Columns: { Item() { return colRange } }
+  })
+  try {
+    const out = await WPS_ET_HANDLERS.excel_edit_rows_cols({ action: 'set_width', index: 0, size: 60 })
+    assert.ok(Math.abs(colRange.Width - 60) < 0.01, `校正后应命中 60 磅，实际 ${colRange.Width}`)
+    assert.match(out.note, /实际 60\.0 磅/)
   } finally { restore() }
 })
 
@@ -362,7 +384,10 @@ test('excel_merge_cells：Merge 前抑制弹窗、结束后恢复', async () => 
 
 /* ==================== excel_sort_range ==================== */
 
-test('excel_sort_range：Key1 传区域内相对列 Range，Order/Header 用 VBA 数值', async () => {
+test('excel_sort_range：Key1 传区域内相对列 Range，且把持久排序设置钉死', async () => {
+  // Header/Order/Orientation/SortMethod 是被保存复用的持久设置（MS 官方明文）。
+  // 不显式传就继承用户上一次手动排序的选择——律师手动做过一次「按行排序（从左到右）」
+  // 之后，AI 的每次排序都会把整张表横着重排。与 Word 面 Find 宽松度是同一类地雷。
   let sortArgs = null
   const keyRng = { _tag: 'keyRange' }
   const rng = makeRange({
@@ -379,11 +404,13 @@ test('excel_sort_range：Key1 传区域内相对列 Range，Order/Header 用 VBA
     assert.equal(sortArgs[1], 2)     // xlDescending
     assert.deepEqual(sortArgs.slice(2, 7), [null, null, null, null, null])
     assert.equal(sortArgs[7], 1)     // xlYes
+    assert.equal(sortArgs[9], false) // MatchCase：不区分大小写
+    assert.equal(sortArgs[10], 1)    // xlSortColumns：数据行上下重排（不是列左右重排）
+    assert.equal(sortArgs[11], 1)    // xlPinYin：中文按拼音
     assert.deepEqual(out, { address: 'A1:C5', keyColumn: 1, ascending: false, hasHeader: true })
   } finally { restore() }
 })
 
-/* ==================== excel_manage_sheets ==================== */
 
 test('excel_manage_sheets：最后一张表拒删（可读中文错误）', async () => {
   const { restore } = makeSingleSheetEnv({})
@@ -464,14 +491,21 @@ test('excel_freeze_panes：freeze_rows / freeze_at / unfreeze 三态', async () 
 
 /* ==================== excel_set_formulas ==================== */
 
-test('excel_set_formulas：Formula 写入后读回 Value2 收集 # 错误值', async () => {
+test('excel_set_formulas：用 SpecialCells 找错误单元格，显示文本取 Range.Text', async () => {
+  // 真机实测：错误值经 Value2 回来的是 CVErr 数值码（#DIV/0! 是 -2146826281），
+  // **不是** '#DIV/0!' 字符串——旧写法扫 Value2 的 '#' 开头，在 WPS 上永远判不出错误。
+  const errCell = { Text: '#DIV/0!', Address() { return 'A1' } }
+  let specialArgs = null
   const rng = makeRange({
     Rows: { Count: 1 },
     Columns: { Count: 2 },
-    Row: 1,
-    Column: 1,
-    get Value2() { return ['#DIV/0!', 6] },   // 写入后的读回形态（单行一维，练归一化）
-    Address() { return 'A1:B1' }
+    Address() { return 'A1:B1' },
+    SpecialCells(type, value) {
+      specialArgs = [type, value]
+      return {
+        Areas: { Count: 1, Item() { return { Rows: { Count: 1 }, Columns: { Count: 1 }, Cells: { Item: () => errCell } } } }
+      }
+    }
   })
   const { restore } = makeSingleSheetEnv({ Range: () => rng })
   try {
@@ -480,7 +514,46 @@ test('excel_set_formulas：Formula 写入后读回 Value2 收集 # 错误值', a
     })
     assert.deepEqual(rng.Formula, [['=1/0', '=2*3']])
     assert.equal(out.written, 2)
+    assert.deepEqual(specialArgs, [-4123, 16]) // xlCellTypeFormulas / xlErrors
     assert.deepEqual(out.formulaErrors, [{ address: 'A1', value: '#DIV/0!' }])
+  } finally { restore() }
+})
+
+test('excel_set_formulas：区域内没有错误单元格时 SpecialCells 抛异常属正常路径', async () => {
+  const rng = makeRange({
+    Rows: { Count: 1 },
+    Columns: { Count: 2 },
+    Address() { return 'A1:B1' },
+    SpecialCells() { throw new Error('未找到单元格') }
+  })
+  const { restore } = makeSingleSheetEnv({ Range: () => rng })
+  try {
+    const out = await WPS_ET_HANDLERS.excel_set_formulas({
+      rangeAddress: 'A1:B1', formulas: [['=1+1', '=2*3']]
+    })
+    assert.equal(out.written, 2)
+    assert.equal(out.formulaErrors, undefined)
+  } finally { restore() }
+})
+
+test('excel_set_formulas：单格区间不许走 SpecialCells（它会改为搜索整张表）', async () => {
+  // VBA 语义实测确认：对单格调用 SpecialCells 会搜索整个已用区域，
+  // 会把别处的旧错误算到本次写入头上。单格必须直接读 Text 判。
+  let specialCalled = false
+  const rng = makeRange({
+    Rows: { Count: 1 },
+    Columns: { Count: 1 },
+    Text: '#NAME?',
+    Address() { return 'A1' },
+    SpecialCells() { specialCalled = true; throw new Error('不该被调用') }
+  })
+  const { restore } = makeSingleSheetEnv({ Range: () => rng })
+  try {
+    const out = await WPS_ET_HANDLERS.excel_set_formulas({
+      rangeAddress: 'A1', formulas: [['=NOSUCHFN(1)']]
+    })
+    assert.equal(specialCalled, false)
+    assert.deepEqual(out.formulaErrors, [{ address: 'A1', value: '#NAME?' }])
   } finally { restore() }
 })
 
@@ -795,5 +868,146 @@ test('excel_select_range：指定表先 Activate 再 Select', async () => {
     const out = await WPS_ET_HANDLERS.excel_select_range({ sheetName: '明细', rangeAddress: 'B2:C3' })
     assert.deepEqual(calls, ['activate', 'select'])
     assert.deepEqual(out, { address: 'B2:C3' })
+  } finally { restore() }
+})
+
+/* ============ 本轮主动排查补的用例（真机测量 + 审计确认的问题）============ */
+
+test('excel_manage_sheets(move)：往后挪要补偿「自己先被摘掉」这一格', async () => {
+  // 契约的 position 是最终落点的 0 起下标（Office.js 语义：先摘掉自己再插入）。
+  // WPS 只有 Move(Before, After)，参照物取自移动前的集合——[A,B,C] 把 A 挪到
+  // position=2，不补偿会得到 [B,A,C] 而不是 [B,C,A]。
+  const order = ['A', 'B', 'C']
+  const sheets = order.map((n) => ({ Name: n }))
+  let moveCall = null
+  const target = sheets[0]
+  target.Index = 1
+  target.Move = (before, after) => { moveCall = { before: before ? before.Name : null, after: after ? after.Name : null } }
+  const collection = {
+    get Count() { return sheets.length },
+    Item(k) { return typeof k === 'number' ? sheets[k - 1] : sheets.find((x) => x.Name === k) }
+  }
+  const workbook = { ActiveSheet: sheets[0], Worksheets: collection }
+  const restore = installWps(makeApp({ workbook }))
+  try {
+    await WPS_ET_HANDLERS.excel_manage_sheets({ action: 'move', sheetName: 'A', position: 2 })
+    // 目标位次 3（0 起的 2）；A 在第 1 位，往后挪 → After = 第 3 张（C）
+    assert.deepEqual(moveCall, { before: null, after: 'C' })
+  } finally { restore() }
+})
+
+test('excel_manage_sheets(move)：挪到原位不发指令', async () => {
+  const sheets = [{ Name: 'A' }, { Name: 'B' }]
+  let moved = false
+  sheets[1].Index = 2
+  sheets[1].Move = () => { moved = true }
+  const collection = {
+    get Count() { return sheets.length },
+    Item(k) { return typeof k === 'number' ? sheets[k - 1] : sheets.find((x) => x.Name === k) }
+  }
+  const restore = installWps(makeApp({ workbook: { ActiveSheet: sheets[0], Worksheets: collection } }))
+  try {
+    await WPS_ET_HANDLERS.excel_manage_sheets({ action: 'move', sheetName: 'B', position: 1 })
+    assert.equal(moved, false)
+  } finally { restore() }
+})
+
+test('excel_conditional_format：入参非法时不许删掉用户已有的条件格式', async () => {
+  // 律师那套辛苦配好的规则不能因为模型把 operator 拼错一次就没了
+  let deleted = false
+  const fcs = { Delete() { deleted = true }, Add() { throw new Error('不该走到这里') } }
+  const { restore } = makeSingleSheetEnv({ Range: () => makeRange({ FormatConditions: fcs }) })
+  try {
+    await assert.rejects(
+      WPS_ET_HANDLERS.excel_conditional_format({ rangeAddress: 'A1:C9', ruleType: 'cellValue', operator: 'greater_than', value1: 1 }),
+      /operator 值非法/
+    )
+    assert.equal(deleted, false, '校验失败时一条既有规则都不许删')
+  } finally { restore() }
+})
+
+test('excel_conditional_format：缺 value1 也在删之前拦住', async () => {
+  let deleted = false
+  const fcs = { Delete() { deleted = true }, Add() { throw new Error('不该走到这里') } }
+  const { restore } = makeSingleSheetEnv({ Range: () => makeRange({ FormatConditions: fcs }) })
+  try {
+    await assert.rejects(
+      WPS_ET_HANDLERS.excel_conditional_format({ rangeAddress: 'A1:C9', ruleType: 'cellValue', operator: 'greaterThan' }),
+      /需要 value1/
+    )
+    assert.equal(deleted, false)
+  } finally { restore() }
+})
+
+test('excel_set_data_validation：type 非法时不许删掉用户已有的下拉列表', async () => {
+  let deleted = false
+  const v = { Delete() { deleted = true }, Add() { throw new Error('不该走到这里') } }
+  const { restore } = makeSingleSheetEnv({ Range: () => makeRange({ Validation: v }) })
+  try {
+    await assert.rejects(
+      WPS_ET_HANDLERS.excel_set_data_validation({ rangeAddress: 'D2:D99', type: 'whole_number', operator: 'greaterThan', value1: 0 }),
+      /type 值非法/
+    )
+    assert.equal(deleted, false)
+  } finally { restore() }
+})
+
+test('excel_set_data_validation：action 拼错不许掉进 apply 分支去删规则', async () => {
+  let deleted = false
+  const v = { Delete() { deleted = true }, Add() {} }
+  const { restore } = makeSingleSheetEnv({ Range: () => makeRange({ Validation: v }) })
+  try {
+    await assert.rejects(
+      WPS_ET_HANDLERS.excel_set_data_validation({ rangeAddress: 'D2:D99', action: 'reset', type: 'list', listSource: 'a,b' }),
+      /action 值非法/
+    )
+    assert.equal(deleted, false)
+  } finally { restore() }
+})
+
+test('excel_get_range：超出返回上限时先 Resize 再过桥，不整片搬运', async () => {
+  // 只回 500 行却把几万行整片编组过同步桥，是「一问就把 WPS 卡死」的根因
+  let resizedTo = null
+  const big = makeRange({
+    Rows: { Count: 30000 },
+    Columns: { Count: 4 },
+    Value2: [['a', 'b', 'c', 'd']],
+    Address() { return 'A1:D30000' },
+    Resize(r, c) {
+      resizedTo = [r, c]
+      return makeRange({ Rows: { Count: r }, Columns: { Count: c }, Value2: [['a', 'b', 'c', 'd']], Address() { return 'A1:D500' } })
+    }
+  })
+  const { restore } = makeSingleSheetEnv({ Range: () => big })
+  try {
+    const out = await WPS_ET_HANDLERS.excel_get_range({ rangeAddress: 'A1:D30000' })
+    assert.deepEqual(resizedTo, [500, 4])
+    assert.equal(out.truncated, true)
+    assert.equal(out.rows, 30000) // 报的仍是真实尺寸
+  } finally { restore() }
+})
+
+test('excel_search：超大表只扫前若干行并如实交代', async () => {
+  let resizedTo = null
+  const used = makeRange({
+    Rows: { Count: 40000 },
+    Columns: { Count: 2 },
+    Row: 1,
+    Column: 1,
+    Value2: [['张三', '原告']],
+    Address() { return 'A1:B40000' },
+    Resize(r, c) {
+      resizedTo = [r, c]
+      return makeRange({ Rows: { Count: r }, Columns: { Count: c }, Row: 1, Column: 1, Value2: [['张三', '原告']] })
+    }
+  })
+  const { restore } = makeSingleSheetEnv({ UsedRange: used })
+  try {
+    const out = await WPS_ET_HANDLERS.excel_search({ query: '张三' })
+    assert.deepEqual(resizedTo, [5000, 2])
+    assert.equal(out.truncated, true)
+    assert.equal(out.scannedRows, 5000)
+    assert.equal(out.totalRows, 40000)
+    assert.match(out.note, /只扫描了前 5000 行/)
   } finally { restore() }
 })
