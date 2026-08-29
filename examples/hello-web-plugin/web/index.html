@@ -63,6 +63,17 @@
     <pre id="evidence-out" hidden></pre>
   </section>
 
+  <section>
+    <h2>文档与 AI（规范 v2.7，需宿主 0.28+）</h2>
+    <button id="doc-read">读当前文档全文（doc.exec）</button>
+    <button id="doc-insert">光标处插入一句话（走修订）</button>
+    <button id="ai-summary">AI 一句话总结全文（ai.request）</button>
+    <label style="display:inline-flex;align-items:center;gap:6px;margin-left:4px;">
+      <input type="checkbox" id="watch-files"> 订阅文件变化（events）
+    </label>
+    <pre id="doc-out" hidden></pre>
+  </section>
+
   <!-- SDK 必须同步引入且排在业务脚本之前：宿主在 iframe load 后立刻发 init，
        晚注册监听会错过握手，ready() 将永远挂起。 -->
   <script src="awd-plugin-sdk.js"></script>
@@ -136,6 +147,47 @@
         n = Number(n) + 1;
         await awd.storage.set('clicks', n);
         await awd.ui.toast('累计点击 ' + n + ' 次');
+      };
+
+      // ==== 规范 v2.7：doc.* / events / ai.request（老宿主回 unknown_method，如实显示即可）====
+      var docOut = document.getElementById('doc-out');
+      function showDoc(text) { docOut.hidden = false; docOut.textContent = text; }
+
+      document.getElementById('doc-read').onclick = async function () {
+        try {
+          var r = await awd.doc.getText();
+          showDoc(JSON.stringify(r, null, 2).slice(0, 2000));
+        } catch (e) { showDoc('读取失败：' + (e.code || '') + ' ' + e.message); }
+      };
+
+      document.getElementById('doc-insert').onclick = async function () {
+        try {
+          await awd.doc.insertText('（来自 Hello Web 插件的问候）');
+          showDoc('已插入——Writer 文档里这是一条署名 AI WorkDeck 的修订，可接受/拒绝');
+        } catch (e) { showDoc('插入失败：' + (e.code || '') + ' ' + e.message); }
+      };
+
+      document.getElementById('ai-summary').onclick = async function () {
+        showDoc('AI 请求中…');
+        try {
+          var r = await awd.doc.getText();
+          var text = JSON.stringify(r).slice(0, 8000);
+          var out = await awd.ai.request('用一句话概括这份文档内容：' + text, { purpose: 'demo-summary' });
+          showDoc(out || '（空响应）');
+        } catch (e) { showDoc('AI 请求失败：' + (e.code || '') + ' ' + e.message); }
+      };
+
+      var offFiles = null;
+      document.getElementById('watch-files').onchange = function (ev) {
+        if (ev.target.checked) {
+          offFiles = awd.events.on('files.changed', function () {
+            awd.ui.toast('项目文件有变化（files.changed）');
+          });
+          showDoc('已订阅 files.changed：文件树任何刷新都会收到通知');
+        } else if (offFiles) {
+          offFiles(); offFiles = null;
+          showDoc('已退订 files.changed');
+        }
       };
     })();
   </script>

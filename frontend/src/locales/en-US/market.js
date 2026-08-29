@@ -68,6 +68,7 @@ export default {
   loadingLocalPlugins: 'Reading local plugins',
   noLocalPlugins: 'No plugins installed locally yet',
   noLocalPluginsHint: 'Drop a plugin directory (with manifest.json) into the server\'s plugins/ folder, then click "Rescan"',
+  revokedPrefix: 'Removed by platform: ',
   enabledTag: 'Enabled',
   disabledTag: 'Disabled',
   sectionSkillSub: 'Prompt-based capabilities: take effect in conversation, with configurable activation',

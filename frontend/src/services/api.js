@@ -634,6 +634,17 @@ export function invokePluginTool(pluginId, toolName, projectId, args) {
   });
 }
 
+// Web 插件桥 ai.request 的服务端落点（规范 v2.7 P2）：插件经平台 Credits 通道调辅助模型。
+// 返回 { code, text, modelId } 或 { code:1, errorCode, message }
+export function pluginAiComplete(pluginId, projectId, payload) {
+  return request({
+    url: `/api/plugins/${pluginId}/ai/complete`,
+    method: 'POST',
+    data: Object.assign({ projectId }, payload || {}),
+    header: { 'Content-Type': 'application/json' },
+  });
+}
+
 // 重新扫描 plugins/ 目录（仅管理员）
 export function rescanPlugins() {
   return request({

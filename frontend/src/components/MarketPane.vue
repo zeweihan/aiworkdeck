@@ -266,6 +266,10 @@
               </view>
 
               <text class="card-desc">{{ p.description || $t('market.noDescription') }}</text>
+              <!-- 治理提示（规范 v2.7 P0）：平台封禁与宿主版本不兼容都在这里说清原因，
+                   否则用户只看到一个翻不动的开关 -->
+              <text v-if="p.revokedReason" class="card-blocked">{{ $t('market.revokedPrefix') }}{{ p.revokedReason }}</text>
+              <text v-else-if="p.incompatibleReason" class="card-blocked">{{ p.incompatibleReason }}</text>
               <text class="card-caps">{{ capabilityLine(p) }}</text>
 
               <view class="tool-list" v-if="p.tools && p.tools.length">
@@ -1321,6 +1325,15 @@ $gray-light: #E9ECEF;
 
 .kicker-off {
   color: var(--awd-text-3);
+}
+
+/* 治理提示（规范 v2.7 P0）：封禁/版本不兼容的原因行 */
+.card-blocked {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--awd-danger, #b3261e);
 }
 
 .card-title {

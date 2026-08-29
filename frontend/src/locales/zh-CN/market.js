@@ -70,6 +70,7 @@ export default {
   loadingLocalPlugins: '正在读取本机插件',
   noLocalPlugins: '本机还没有插件',
   noLocalPluginsHint: '把插件目录（含 manifest.json）放进服务端 plugins/ 后点「重新扫描」',
+  revokedPrefix: '已被平台下架：',
   enabledTag: '已启用',
   disabledTag: '已停用',
   sectionSkillSub: '提示词能力：在对话中生效，可设置生效方式',

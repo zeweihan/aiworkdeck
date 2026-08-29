@@ -429,6 +429,75 @@ class PluginServiceTest {
     }
 
     /** 写一个真正合法的 JAR（含两个 class 条目，字节内容不必是合法字节码——不测加载，只测 loader 生命周期）。 */
+    // ==== minHostVersion 与 dev 标记（规范 v2.7 P0）====
+
+    @Test
+    @DisplayName("宿主达标：声明 minHostVersion 的插件正常生效")
+    void minHostVersionSatisfied() throws IOException {
+        writeManifest("p1", """
+                {"id": "p1", "name": "P1", "version": "1.0.0", "minHostVersion": "0.28.0"}
+                """);
+        service.appVersion = "0.28.1";
+        service.init();
+        assertTrue(service.isEnabled("p1"));
+        assertNull(service.incompatibleReason("p1"));
+    }
+
+    @Test
+    @DisplayName("宿主低于 minHostVersion：元数据登记但不生效，enable 明确拒绝")
+    void minHostVersionUnsatisfied() throws IOException {
+        writeManifest("p1", """
+                {"id": "p1", "name": "P1", "version": "1.0.0", "minHostVersion": "0.29.0"}
+                """);
+        service.appVersion = "0.28.0";
+        service.init();
+        assertEquals(1, service.getPlugins().size(), "元数据仍要登记，管理页要能展示原因");
+        assertFalse(service.isEnabled("p1"));
+        assertNotNull(service.incompatibleReason("p1"));
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> service.setEnabled("p1", true));
+        assertTrue(e.getMessage().contains("0.29.0"));
+    }
+
+    @Test
+    @DisplayName("dev 态宿主（appVersion 非 semver）跳过 minHostVersion 校验")
+    void minHostVersionSkippedOnDevHost() throws IOException {
+        writeManifest("p1", """
+                {"id": "p1", "name": "P1", "version": "1.0.0", "minHostVersion": "99.0.0"}
+                """);
+        service.appVersion = "dev";
+        service.init();
+        assertTrue(service.isEnabled("p1"));
+        assertNull(service.incompatibleReason("p1"));
+    }
+
+    @Test
+    @DisplayName("minHostVersion 格式非法：视为缺省（只警不拒），插件照常生效")
+    void invalidMinHostVersionIgnored() throws IOException {
+        writeManifest("p1", """
+                {"id": "p1", "name": "P1", "version": "1.0.0", "minHostVersion": "next-release"}
+                """);
+        service.appVersion = "0.28.0";
+        service.init();
+        assertTrue(service.isEnabled("p1"));
+        assertNull(service.getPlugins().get(0).getMinHostVersion());
+    }
+
+    @Test
+    @DisplayName("目录带 .awd-dev 标记的插件 isDevInstalled=true（实验 API 闸的依据）")
+    void devInstalledMarkerDetected() throws IOException {
+        writeManifest("p1", """
+                {"id": "p1", "name": "P1", "version": "1.0.0"}
+                """);
+        Files.writeString(pluginsDir.resolve("p1").resolve(".awd-dev"), "{}");
+        writeManifest("p2", """
+                {"id": "p2", "name": "P2", "version": "1.0.0"}
+                """);
+        service.init();
+        assertTrue(service.isDevInstalled("p1"));
+        assertFalse(service.isDevInstalled("p2"));
+    }
+
     private void writeRealJar(Path jarPath) throws IOException {
         try (java.util.jar.JarOutputStream jos = new java.util.jar.JarOutputStream(Files.newOutputStream(jarPath))) {
             jos.putNextEntry(new java.util.jar.JarEntry("hello/Foo.class"));
@@ -594,7 +663,9 @@ class PluginServiceTest {
         assertEquals("web/index.html", meta.getFrontendEntry(),
                 "frontendEntry 被置空说明 web/index.html 缺失或路径写错");
         assertTrue(service.hasWebEntry("hello-web-plugin"));
-        assertEquals(List.of("file_read"), meta.getPermissions());
+        // v2.7 起示例演示 doc.exec（editor）与 ai.request（ai），并声明 minHostVersion
+        assertEquals(List.of("file_read", "editor", "ai"), meta.getPermissions());
+        assertEquals("0.28.0", meta.getMinHostVersion());
         assertNotNull(service.resolveWebFile(service.getPluginDir("hello-web-plugin"), "awd-plugin-sdk.js"),
                 "index.html 同步引入的 SDK 副本必须在包内");
     }

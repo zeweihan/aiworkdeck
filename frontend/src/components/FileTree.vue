@@ -1417,6 +1417,9 @@ export default {
           this.files = files.filter(f => !hiddenNames.has(f.name))
         }
         this.scheduleRefCountsFetch({ reload: true })
+        // 插件事件通道（规范 v2.7）：文件清单刷新的单一汇聚点——SSE refresh_files、
+        // 窗口 focus 兜底、用户增删改、目录/项目切换全部流经这里；PluginPane 按订阅转发
+        uni.$emit('awd:files-changed', { projectId })
         console.log('加载文件列表成功:', this.files)
       } catch (error) {
         // 完整打印错误信息，包括堆栈、响应数据等

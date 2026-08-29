@@ -38,3 +38,11 @@ test('SDK 暴露 v2.5 的 tools.invoke / chat.send / ui.openFile', () => {
     assert.ok(text.indexOf("call('" + m + "'") >= 0, '缺 ' + m)
   }
 })
+
+test('SDK 暴露 v2.7 的 doc.exec / doc.active / events.* / ai.request', () => {
+  const text = source.toString('utf8')
+  for (const m of ['doc.exec', 'doc.active', 'events.subscribe', 'events.unsubscribe', 'ai.request']) {
+    assert.ok(text.indexOf("call('" + m + "'") >= 0 || text.indexOf("'" + m + "'") >= 0, '缺 ' + m)
+  }
+  assert.ok(text.indexOf('1.3.0') >= 0, 'SDK 版本号应为 1.3.0')
+})

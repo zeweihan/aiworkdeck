@@ -1,9 +1,13 @@
-# 插件规范 v2.6（Plugin Spec v2.6）
+# 插件规范 v2.7（Plugin Spec v2.7）
 
 > 适用版本：v1 自 0.4.x；v2（权限执行 + 启停过滤）自 Phase 3A；v2.1（插件携带 Skill）自 Phase 3B；
 > v2.3（Web 插件 + `packs` 依赖）自 native pack Phase B；v2.4（宿主 SPI `plugin-api` + 后台任务）自尽调 P1；
 > v2.5（Web 插件直调工具端点 + 桥新增 `tools.invoke`/`chat.send`/`ui.openFile`）自尽调 P1 补充。
 > v2.6（主题通道：`init` 带 `themeTokens`、宿主推送 `type:"theme"`、SDK 自动注入 CSS 变量）随深色模式收口（dev-board#274）加入。
+> v2.7（生态路线 P0-P2，宿主 0.28 起，dev-board#280/281/282）：治理地基（`minHostVersion` + 实验 API
+> `x-` 前缀 + §12 只加不改章程）、文档读写权（桥 `doc.exec`/`doc.active` + 事件通道 `type:"event"`）、
+> AI 调用权（桥 `ai.request` 走平台 Credits + 权限值 `ai`）。设计定稿见 docs/superpowers/specs/
+> 2026-08-29-plugin-p0/p1/p2 三篇；生态总路线 docs/PLUGIN_API_ROADMAP.md。
 > 示例插件：[examples/hello-plugin/](../examples/hello-plugin/)（JAR 工具）、
 > [examples/hello-web-plugin/](../examples/hello-web-plugin/)（纯前端）。
 > 后端实现：`PluginService`（扫描/解析/启停）、`PluginController`（HTTP API）、
@@ -70,6 +74,7 @@ plugins/
 | `permissions` | string[] | 否 | 插件**自行声明**会用到的能力，见 §3。缺省视为不需要任何敏感能力。注意这是作者的自述，不是运行时授权。 |
 | `tools` | object[] | 否 | 工具清单（`name` + 中文 `description` + 可选 `permissions`），用于插件广场展示、人工审查与 v2 权限校验。`name` 应与 JAR 中 `@Tool` 方法名一致；`permissions` 声明**该工具运行所需**的能力（v2 新增，见 §3）。 |
 | `frontendEntry` | string | 否 | **v2.3 起激活**：`web/index.html` 这样的相对路径 = Web 插件（见 §8）；`http(s)://` 绝对 URL = 旧形态，宿主直接 iframe 打开外部页面。 |
+| `minHostVersion` | string | 否 | **v2.7 新增**：本插件需要的最低宿主版本（semver）。宿主低于它时插件登记但**不生效**（不加载 JAR、不注册工具、不服务 web/），管理页提示「需要宿主 ≥ X，请升级客户端」，enable 明确拒绝；广场安装与 dev 直装在装前就拦。非法格式视为缺省并 WARN。dev 态宿主（版本 `dev`）跳过校验。注意它保护不了 0.27.x 及更老的宿主（它们不认识这个字段）——用了 v2.7 能力的插件应声明 `"0.28.0"`，缺口随存量宿主升级自然收敛。 |
 | `backendJars` | string[] | 否 | 相对插件目录的 JAR 文件名列表，启动/重扫时加载其中带 `@Tool` 注解的类。 |
 | `skills` | string[] | 否 | **v2.1 新增**：插件携带的 Skill 子目录名列表（相对插件目录），见 §7。 |
 | `packs` | string[] | 否 | **v2.3 新增**：依赖的原生资源包 id 列表，见 §9 与 [NATIVE_PACK_DISTRIBUTION.md](NATIVE_PACK_DISTRIBUTION.md)。 |
@@ -84,6 +89,7 @@ plugins/
 | `file_write` | 创建 / 修改 / 删除项目文件 |
 | `network` | 访问外部网络（HTTP 等出站请求） |
 | `editor` | 操作文档编辑器（LOWA/LibreOffice 相关原语） |
+| `ai` | **v2.7 新增**：经宿主平台通道调用 AI 模型（桥 `ai.request`，消耗**用户的** Credits）。广场受理时的人工审查重点项 |
 
 > **先读这一段，否则会高估它的作用。**
 >
@@ -269,6 +275,7 @@ plugins/
 请求  插件 -> 宿主   { awd: 1, type: "call", seq, method, params }
 响应  宿主 -> 插件   { awd: 1, type: "result", seq, ok, result | error: { code, message } }
 主题  宿主 -> 插件   { awd: 1, type: "theme", theme: "light"|"dark", tokens: { "--awd-*": "..." } }   (v2.6)
+事件  宿主 -> 插件   { awd: 1, type: "event", event, data }   (v2.7，需先 events.subscribe，见 §8.8)
 ```
 
 **主题通道（v2.6，宿主 0.27.4 起）**：照 VS Code 给 webview 注入 `--vscode-*` 变量的机制。
@@ -340,6 +347,40 @@ opaque origin 使然，不能靠 `event.origin` 判断。
 插件级 KV 存在宿主的 `localStorage`，键为 `awd_plugin_kv_<pluginId>`，
 每个插件总量上限 64 KB。
 
+**v2.7 新增方法**（宿主 0.28 起；老宿主一律回 `unknown_method`，SDK 已内置降级）：
+
+| 方法 | 参数 | 返回 | 权限 |
+|---|---|---|---|
+| `doc.exec` | `{ action, params? }` | `{ result }`，result 是原语的原始返回对象 | `editor` |
+| `doc.active` | `{}` | `{ fileId, kind }`，kind ∈ writer/calc/impress；没有打开的文档时 `fileId: null` | `editor` |
+| `events.subscribe` | `{ events: [名字…] }` | `{ subscribed: [当前生效集合] }` | 按事件（§8.8） |
+| `events.unsubscribe` | `{ events: [名字…] }` | 同上 | — |
+| `ai.request` | `{ prompt, system?, purpose? }` | `{ text, modelId }` | `ai` |
+
+`doc.exec`（对位 VS Code TextDocument，生态路线 P1）：
+
+- 目标恒为**当前聚焦窗格打开的文档**（与 `evidence.link` 同口径），没有 → `no_active_document`；
+- `action`/`params` 与 AI 工具面的下发名**同一套**（doc_\*/sheet_\*/slide_\* 的安全子集）。
+  白名单 = 宿主 SPI `PluginHostImpl.DOC_ACTIONS` 的同一份清单（§11.2 `Docs.exec` 行有全文）——
+  JAR 与 Web 插件同一张能力面，不另造子集；前端镜像在 `frontend/src/config/pluginDocActions.js`，
+  parity 测试 `doc-actions-parity.test.mjs` 对拍两份清单，漏一个就红。白名单外 → `action_not_allowed`；
+- 写入自动带 `__agent` 标记：Writer 文档走修订、署名 "AI WorkDeck"，用户可逐条接受/拒绝；
+  **Calc/Impress 没有修订机制，插件写入直接生效**——批量写入前插件应在自己的 UI 上先请用户确认；
+- doc.exec 之后还有 executor 层 `EDITOR_ACTIONS` 第二道既有闸，插件绕不过。
+
+`ai.request`（对位 `vscode.lm`，生态路线 P2）：
+
+- 经平台 Credits 通道调**辅助模型**（便宜档，与自动打标签同一条），插件免带 Key；
+  计费记在发起用户头上，日志带 pluginId 与 `purpose`（≤64 字符的用途自述）；
+- `prompt + system` 合计 ≤ 16000 字符；每插件 **10 次/分钟**（`quota_exceeded`）；
+- 服务端落点 `POST /api/plugins/{id}/ai/complete`（§8.7 同款安全闸：登录 → 插件启用未封禁 →
+  manifest 声明 `ai` → 项目写权限 → 长度/频控 → 平台通道余额闸与记账全部继承既有链路）；
+- v1 刻意不开模型选择与流式——放宽走 `x-` 实验通道（§12.4）验证后再转正；
+- 分工：**要工具、要落文档、要让用户看见过程 → `chat.send`；面板内一次性静默推理 → `ai.request`**。
+
+对应新错误码：`action_not_allowed`（doc.exec 原语不对插件开放）、`ai_failed`（模型调用失败）、
+`experimental_not_allowed`（x- 实验方法仅对 dev 安装开放，§12.4）。
+
 ### 8.5 SDK 表面
 
 源头在 [sdk/plugin-sdk/awd-plugin-sdk.js](../sdk/plugin-sdk/awd-plugin-sdk.js)；
@@ -371,6 +412,12 @@ opaque origin 使然，不能靠 `event.origin` 判断。
 `cb(mode, tokens)` 在宿主推送主题切换时触发）。主题的自动应用（data-theme/class/CSS 变量）
 不需要调用任何 API，SDK 收到消息即做。
 
+**v2.7**：SDK 版本号 `1.2.0` → `1.3.0`。新增 `awd.doc.exec(action, params)`（解包糖衣，直接返回
+原语结果）、`awd.doc.active()`、五个高频糖衣 `awd.doc.getText()/getSelection()/find(text)/
+insertText(text)/addComment(anchorText, text)`、`awd.events.on(name, cb)`（返回退订函数，
+自动向宿主 subscribe/unsubscribe；老宿主上照常返回退订函数、永不触发，插件不用写版本分支）、
+`awd.ai.request(prompt, { system?, purpose? })`（解包糖衣，直接返回输出文本）。
+
 ### 8.6 开发工作流
 
 官网插件模板 zip 带一份 `dev/host-simulator.html`——一个假扮宿主桥的静态页，
@@ -398,6 +445,33 @@ opaque origin 使然，不能靠 `event.origin` 判断。
 5. 落到 `ToolRegistry.execute`：manifest `permissions` 校验（§3）、宿主 SPI 配额（§11.1）、
    `ToolContext` 的 `projectId`/`userId` 以服务端解析结果为准（不信任请求体里的用户身份）——
    与 AI 编排器调用同一插件工具时完全同一套闸，直调端点只是换了个触发源。
+
+### 8.8 事件通道（v2.7）
+
+对位 VS Code 的 `onDid*` 事件系统——此前插件感知不到宿主里发生的任何变化（尽调工作台
+只能打开时拉一次）。显式订阅制：宿主只向订阅了的 iframe 推送，默认全静音。
+
+```
+订阅  插件 -> 宿主   events.subscribe   { events: [...] }  ->  { subscribed: [...] }
+退订  插件 -> 宿主   events.unsubscribe { events: [...] }  ->  { subscribed: [...] }
+推送  宿主 -> 插件   { awd: 1, type: "event", event, data }
+```
+
+首批三事件：
+
+| 事件 | 订阅所需权限 | data | 触发时机 | 宿主侧节流 |
+|---|---|---|---|---|
+| `files.changed` | `file_read` | `{ projectId }` | 项目文件清单任何刷新（AI 建改文件、用户增删改、外部改动对账后） | 500ms 合并 |
+| `selection.changed` | `editor` | `{ fileId }` | 编辑器光标/选区变化 | 300ms 合并 |
+| `project.switched` | 无 | `{ projectId }` | 面板存活期间项目切换（当前架构下切项目会重建面板重新握手，此事件为未来面板持久化预留语义） | 无 |
+
+- **payload 刻意为空/极小**：事件是「该重拉了」的信号，不是数据通道——选区内容、文件清单
+  由插件经 `doc.exec get_selection` / `files.list` 按各自权限闸拉取，推送本身不成为权限旁路；
+- 权限不足或未知的事件名在 subscribe 时**静默剔除**（不报错），以回声的 `subscribed` 集合为准；
+  未知事件名的宽容是向前兼容：新事件名发给老宿主不炸；
+- 换插件（面板复用换 src）时订阅集合清零，新插件必须自己重新订阅；
+- 宿主侧事件源：`FileTree.loadFiles()` 成功后与 `LibreOfficeEditor` 的 selection 中继各发一个
+  应用级 `uni.$emit`（`awd:files-changed` / `awd:selection-changed`），`PluginPane` 按订阅转发。
 
 ## 9. 插件依赖原生资源包（packs，v2.3）
 
@@ -432,9 +506,16 @@ opaque origin 使然，不能靠 `event.origin` 判断。
   （`backend/plugin-api/`，纯接口、无第三方依赖、版本独立于桌面端、只加不破），`HostAware` 注入（§4），
   `PluginHost` 八个子接口（§11），后台任务 `plugin_job` 表 + `/api/plugin-jobs` + SSE
   `client_action: plugin_job_progress`，每插件每分钟 60 次宿主调用配额。manifest 无新增字段。
-- **v2.5（当前）**：Web 插件直调工具端点 `POST /api/plugins/{id}/tools/{tool}`（§8.7），
+- **v2.5**：Web 插件直调工具端点 `POST /api/plugins/{id}/tools/{tool}`（§8.7），
   服务端落点在 `PluginController.invokeTool`；桥/SDK 新增 `tools.invoke`/`chat.send`/`ui.openFile`
   三个方法（§8.4、§8.5），SDK 版本号 `1.0.0` → `1.1.0`。manifest 无新增字段。
+- **v2.6**：主题通道（§8.3/§8.5）——`init.context.themeTokens`、宿主推送 `type:"theme"`、
+  SDK 自动注入 CSS 变量与 `awd.theme.*`。SDK `1.1.0` → `1.2.0`。manifest 无新增字段。
+- **v2.7（当前，宿主 0.28 起）**：生态路线 P0-P2 同批落地（dev-board#280/281/282）。
+  P0 治理：manifest 新增 `minHostVersion`（§2）、实验 API `x-` 前缀机制与只加不改章程（§12）、
+  管理页展示不兼容/封禁原因；P1 文档读写权：桥 `doc.exec`/`doc.active`（§8.4）+ 事件通道
+  `events.*` 与 `type:"event"` 推送（§8.8）；P2 AI 调用权：桥 `ai.request` + 权限值 `ai`（§3）+
+  端点 `POST /api/plugins/{id}/ai/complete`。SDK `1.2.0` → `1.3.0`。
 - 规划中：进程外插件形态（MCP server）为不需要独立 UI 的插件提供真正的隔离边界。
   **进程内沙箱不在规划中**——Java 侧无此能力（§3），不要再把它列为待办；
   Web 插件那条路已经用「不同源 + 桥」拿到了同等效果，代价是能力必须逐个显式开放。
@@ -509,3 +590,55 @@ public record ToolCall(Long projectId, String conversationId, Long userId, Strin
 
 `examples/hello-plugin` 的 `helloListFiles`：实现 `HostAware`，经 `host.files().list(projectId, null, false)`
 列项目根目录；manifest 为它声明 `file_read`。
+
+## 12. 演进章程（v2.7 起，只加不改）
+
+生态路线（docs/PLUGIN_API_ROADMAP.md）P0 的落地条款。VS Code 十几年不破坏兼容靠的是
+流程不是天赋——本章是那套流程的本仓版本，**对规范本身的修改也受本章约束**。
+
+### 12.1 只加不改
+
+已发布即冻结：桥方法名/参数/返回字段/错误码、manifest 字段、SPI 方法签名与 record 字段，
+发布后不改语义、不删除。扩展一律新增——新方法、新可选参数、record 末位追加字段
+（`FileInfo.updatedAt` 先例）。
+
+### 12.2 破坏性变更 = 新名字
+
+语义变了就换名字、双轨共存（`editor_command`/`wps_command`、`evidence.retrieve.v1`→v2 先例）；
+旧名至少保留一个发行周期，并在 §10 版本史标注摘除计划。
+
+### 12.3 版本声明与降级
+
+- 宿主每次扩桥：PLUGIN_SPEC 升小版本 + SDK 升版本号（两者独立，见 §8.5）；
+- 插件用新能力：manifest 声明 `minHostVersion`（§2），官网模板默认生成；
+- 老宿主对新方法回 `unknown_method` 是**契约**而非缺陷，SDK 的既定降级行为
+  （events 静默、其余如实抛错）插件可以依赖。
+
+### 12.4 实验 API（x- 前缀）
+
+- 未定稿的桥方法一律带 `x-` 前缀（如 `x-ai.requestStream`）；`x-` 方法**可改可删**，不承诺兼容；
+- **运行时闸**：宿主只对本机 dev 免签直装（`.awd-dev` 标记）的插件放行 `x-` 方法，
+  其余一律 `experimental_not_allowed`——广场装的插件物理上调不到实验方法；
+- **受理规则**：广场拒收调用 `x-` 方法的投稿（审核清单项；自动扫描是后续增强）；
+- 转正流程（照抄 VS Code finalization）：有真实插件用过 + 有能跑的示例 + 形状复核
+  （过窄/过宽三问）→ 去前缀进 §8.4 正式方法表 + SDK 出正式包装。
+
+### 12.5 桥变更四处同步纪律
+
+桥协议（§8.3-§8.8）任何变更，同一个 PR 里必须改齐：
+
+1. 宿主端 `frontend/src/components/PluginPane.vue`；
+2. SDK 源头 `sdk/plugin-sdk/awd-plugin-sdk.js` 及两份仓内逐字节副本
+   （`examples/hello-web-plugin/web/`、`backend/src/main/resources/plugin-dev/`，
+   parity 测试守着：前端 `sdk-parity.test.mjs`、后端 `PluginDevSdkParityTest`）；
+3. 官网仓 `lib/plugin-template.ts`（SDK 内联副本 + `WEB_SDK_METHODS` + `dev/host-simulator.html`
+   模拟器实现，**无自动对拍**，靠同批 PR 纪律——2026-08-29 实测漂移过一处注释，别再犯）；
+4. `backend/skills/plugin-dev/prompt.md`（AI 写插件的权威 spec，不同步它 AI 就按旧契约写插件）。
+
+外加：本规范升版（§10 记条目）；涉及 doc.exec 白名单时同步 `PluginHostImpl.DOC_ACTIONS`
+与 `frontend/src/config/pluginDocActions.js`（`doc-actions-parity.test.mjs` 守着）。
+
+### 12.6 官方吃狗粮
+
+新官方面板能力先问「插件 API 能不能做」；做不了，优先补 API 而不是走私有通道。
+不留私有超级 API，第三方才相信「官方能做的我也能做」。
