@@ -168,6 +168,12 @@ export const ZH = {
   skillsButton: '技能',
   defaultModelOption: '默认模型',
   modelSelectTitle: '本轮使用的模型',
+  // 模型的视觉能力（后端 /api/ai/models 的 vision 字段）：只有明确 false 才提示，
+  // 字段缺失（旧后端）一律不提示
+  modelNoVisionTag: '不支持读图',
+  visionDowngradeTag: '将按文字识别处理',
+  visionModelPicked: '该模型不支持直接读图，图片将按文字识别处理。',
+  visionImagesDowngraded: '当前模型不支持直接读图，已附的图片将按文字识别处理。',
   historyPillTitle: '查看本项目的历史对话',
   historyButton: '历史',
   newConversationTitle: '开始新对话',
@@ -511,6 +517,10 @@ export const EN = {
   skillsButton: 'Skills',
   defaultModelOption: 'Default model',
   modelSelectTitle: 'Model for this turn',
+  modelNoVisionTag: 'No image reading',
+  visionDowngradeTag: 'will be read as text',
+  visionModelPicked: 'This model cannot read images directly; images will be processed as recognized text.',
+  visionImagesDowngraded: 'The current model cannot read images directly; attached images will be processed as recognized text.',
   historyPillTitle: 'View conversation history for this project',
   historyButton: 'History',
   newConversationTitle: 'Start a new conversation',

@@ -425,7 +425,12 @@ public class AgentOrchestrator {
         java.util.Map<String, Object> turnAttrs = new java.util.HashMap<>();
         turnAttrs.put("mode", agentMode == null ? null : agentMode.name());
         turnAttrs.put("model", request.getModel());
-        turnAttrs.put("attachmentCount", request.getFileIds() == null ? 0 : request.getFileIds().size());
+        // 附件数按真正生效的那条通道数：contextItems 是今天的主路径（桌面端与插件端都发它），
+        // 只数 legacy 的 fileIds 会把绝大多数带附件的轮次记成 0——图片直送上线后，
+        // 「有多少轮带了附件」正是要看的东西。字段名与口径不变，不涉及埋点白名单。
+        turnAttrs.put("attachmentCount", request.getContextItems() != null
+                ? request.getContextItems().size()
+                : (request.getFileIds() == null ? 0 : request.getFileIds().size()));
         turnAttrs.put("hasPinnedSkill", request.getPinnedSkillId() != null && !request.getPinnedSkillId().isEmpty());
         telemetryTurnTracker.startTurn(conversationId, turnAttrs);
         // 状态登记：循环开跑（会话列表状态点/切回续流判断都依赖它）。
@@ -510,7 +515,14 @@ public class AgentOrchestrator {
             log.info("Message assembly complete. Total messages: {}", messages.size());
             log.debug("Detailed Message Stack:");
             for (dev.langchain4j.data.message.ChatMessage m : messages) {
-                log.debug("  - Role: {}, Content length: {}", m.type(), m.text().length());
+                // 绝不能用 m.text()：langchain4j 0.36 里 UserMessage.text() 就是 singleText()，
+                // 「文本 + 图片」的多模态消息会直接抛 RuntimeException。而 slf4j 的参数是
+                // **提前求值**的，日志级别停在 INFO 也照样执行——图片一上线，本轮就死在
+                // assemble 返回之后、generate 之前，被下面的兜底 catch 变成一句
+                // 没头没尾的 "Internal Error"，日志里没有任何指向图片的线索。
+                log.debug("  - Role: {}, Content length: {}, Images: {}", m.type(),
+                        com.checkba.service.ai.context.ChatMessageText.of(m).length(),
+                        com.checkba.service.ai.context.ChatMessageText.imageCountOf(m));
             }
 
             // 3. 获取流式模型
@@ -1214,9 +1226,16 @@ public class AgentOrchestrator {
             if (replayable && failoverProperties.isEnabled() && kind.failoverable()) {
                 guard.triedModels.add(modelId == null ? "" : modelId.toLowerCase(java.util.Locale.ROOT));
                 // 地域拒绝（403 region）时候选必须收窄成区域无关模型：境内从一个国际档模型
-                // 切到另一个国际档只会再撞一次同样的 403，白花一次请求还把 triedModels 填满
+                // 切到另一个国际档只会再撞一次同样的 403，白花一次请求还把 triedModels 填满。
+                //
+                // 消息栈里有图像内容块时同样要收窄成支持视觉的候选：故障转移**只换 modelId、
+                // 不换消息栈**（switchToFailoverModel 拿同一个 messages 引用重放），切到读不了图的
+                // 备用模型会把 image 块原样重发，换来一个上游 400，而第一个模型的图像 token
+                // 已经花掉了；更坏的是这个 400 会被当成新一轮错误继续往下切，一次烧完整条链。
+                // 收窄后一个候选都不剩就走终态处置——比白花几次请求诚实。
                 String next = nextFailoverModel(failoverProperties.getModels(), modelId, guard.triedModels,
-                        kind.requiresRegionAgnosticFailover());
+                        kind.requiresRegionAgnosticFailover(),
+                        com.checkba.service.ai.context.ChatMessageText.containsImage(messages));
                 if (next != null && switchToFailoverModel(next, kind, err, messages, conversationId,
                         projectId, userId, modelId, depth, executionLog, agentMode, guard)) {
                     return;
@@ -1613,18 +1632,25 @@ public class AgentOrchestrator {
      * 平台通道（AWD_CLOUD）永远拿平台密钥，不存在被切回 BYOK 花用户自己 key 的路径。
      */
     static String nextFailoverModel(List<String> candidates, String currentModel, Set<String> tried) {
-        return nextFailoverModel(candidates, currentModel, tried, false);
+        return nextFailoverModel(candidates, currentModel, tried, false, false);
+    }
+
+    static String nextFailoverModel(List<String> candidates, String currentModel, Set<String> tried,
+                                    boolean regionAgnosticOnly) {
+        return nextFailoverModel(candidates, currentModel, tried, regionAgnosticOnly, false);
     }
 
     /**
-     * 同上，额外支持把候选收窄成「区域无关」模型（{@link AllowedModels.Region#GLOBAL}）。
+     * 同上，额外支持两维收窄。
      *
      * @param regionAgnosticOnly true 时只接受 Region.GLOBAL 的候选。地域拒绝（403 region）就必须这样：
      *                           境内网络下换一个同样是 INTERNATIONAL 的模型只会再撞一次 403。
      *                           收窄后可能一个候选都不剩——那就走终态处置，比白花几次请求诚实。
+     * @param visionOnly         true 时只接受支持视觉输入的候选。消息栈里有图像内容块时必须这样：
+     *                           故障转移只换 modelId 不换消息栈，切给读不了图的模型是一个必然的 400。
      */
     static String nextFailoverModel(List<String> candidates, String currentModel, Set<String> tried,
-                                    boolean regionAgnosticOnly) {
+                                    boolean regionAgnosticOnly, boolean visionOnly) {
         if (candidates == null) {
             return null;
         }
@@ -1644,6 +1670,9 @@ public class AgentOrchestrator {
                 continue;
             }
             if (regionAgnosticOnly && allowed.getRegion() != AllowedModels.Region.GLOBAL) {
+                continue;
+            }
+            if (visionOnly && !allowed.isVision()) {
                 continue;
             }
             return model;

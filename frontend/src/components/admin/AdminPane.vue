@@ -2257,7 +2257,11 @@ export default {
         options.push({
           value: m.id,
           label: this.$t('admin.modelOption', { name: m.name, vendor: m.vendor })
-            + price + (m.tiered ? this.$t('admin.tieredSuffix') : ''),
+            + price + (m.tiered ? this.$t('admin.tieredSuffix') : '')
+            // 只有默认模型会接到用户贴的图，辅助模型与子 Agent 这两档拿不到图片附件——
+            // 给它们也标视觉，只会让人以为那两档的选择会影响读图。
+            // 严格判 false：缺字段是「未知」（旧后端 / 清单没读到），不许标成不支持。
+            + (field === 'defaultModel' && m.vision === false ? this.$t('admin.noVisionSuffix') : ''),
         })
       })
       const current = this.form.ai[field] || ''

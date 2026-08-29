@@ -43,6 +43,8 @@ class ContextAssemblerServiceTest {
     private ClientCapabilityService capabilityService;
     private InlineContentCache inlineContentCache;
     private com.checkba.service.AppLanguageService appLanguageService;
+    private ChatModelFactory chatModelFactory;
+    private com.checkba.service.ProjectFileService projectFileService;
 
     @BeforeEach
     void setUp() {
@@ -64,10 +66,14 @@ class ContextAssemblerServiceTest {
         inlineContentCache = new InlineContentCache();
         // 应用语言：mock 默认 isEnglish()=false，即 zh-CN——既有断言全部走中文路径（行为保持）
         appLanguageService = mock(com.checkba.service.AppLanguageService.class);
+        // 视觉能力默认关：既有断言全部走「模型不支持视觉」这条既有行为路径，行为保持
+        chatModelFactory = mockedChatModelFactory();
+        projectFileService = mock(com.checkba.service.ProjectFileService.class);
         assembler = new ContextAssemblerService(
                 legalTools, messageService, fileContextLoader,
                 new AiContextProperties(), skillRouter, capabilityService, inlineContentCache,
-                memoryManager, contextCompressor, appLanguageService);
+                memoryManager, contextCompressor, appLanguageService,
+                chatModelFactory, projectFileService);
     }
 
     private List<ChatMessage> assembleMessages(AiAgentController.ContextItem activeContext) {
@@ -83,7 +89,9 @@ class ContextAssemblerServiceTest {
     /** 末位消息（用户消息）的文本——注意力最高的位置。 */
     private String assembleLastUserText(AiAgentController.ContextItem activeContext) {
         List<ChatMessage> messages = assembleMessages(activeContext);
-        return ((dev.langchain4j.data.message.UserMessage) messages.get(messages.size() - 1)).singleText();
+        // 不能用 singleText()：本轮消息带图片时它会抛异常，测试挂掉的形态会长得像
+        // 「改坏了别的东西」而不是「断言失败」。取文本一律走同一个口径。
+        return com.checkba.service.ai.context.ChatMessageText.of(messages.get(messages.size() - 1));
     }
 
     private static AiAgentController.ContextItem activeDoc() {
@@ -206,7 +214,8 @@ class ContextAssemblerServiceTest {
                 legalTools, mockedMessageService(), mock(FileContextLoader.class),
                 props, mockedSkillRouter(), new ClientCapabilityService(), new InlineContentCache(),
                 mockedMemoryManager(), mockedCompressor(),
-                mock(com.checkba.service.AppLanguageService.class));
+                mock(com.checkba.service.AppLanguageService.class),
+                mockedChatModelFactory(), mock(com.checkba.service.ProjectFileService.class));
 
         String huge = "甲".repeat(200_001);
         List<ChatMessage> messages = bigLimitAssembler.assemble(
@@ -260,7 +269,8 @@ class ContextAssemblerServiceTest {
                 legalTools, mockedMessageService(), mock(FileContextLoader.class),
                 new AiContextProperties(), realRouter, new ClientCapabilityService(),
                 new InlineContentCache(), mockedMemoryManager(), mockedCompressor(),
-                mock(com.checkba.service.AppLanguageService.class));
+                mock(com.checkba.service.AppLanguageService.class),
+                mockedChatModelFactory(), mock(com.checkba.service.ProjectFileService.class));
         return new Object[]{realAssembler, realRouter};
     }
 
@@ -552,7 +562,8 @@ class ContextAssemblerServiceTest {
                 legalTools, msgSvc, mock(FileContextLoader.class),
                 new AiContextProperties(), mockedSkillRouter(), new ClientCapabilityService(),
                 new InlineContentCache(), mockedMemoryManager(), mockedCompressor(),
-                mock(com.checkba.service.AppLanguageService.class));
+                mock(com.checkba.service.AppLanguageService.class),
+                mockedChatModelFactory(), mock(com.checkba.service.ProjectFileService.class));
 
         List<ChatMessage> messages = assertDoesNotThrow(() -> withBlankHistory.assemble(
                 "conv-1", "帮我修订一下", null, null, null, null, "88", AgentMode.AGENT, 1L, null),
@@ -560,7 +571,7 @@ class ContextAssemblerServiceTest {
 
         boolean hasValidHistoryText = messages.stream()
                 .filter(m -> m instanceof dev.langchain4j.data.message.UserMessage)
-                .map(m -> ((dev.langchain4j.data.message.UserMessage) m).singleText())
+                .map(com.checkba.service.ai.context.ChatMessageText::of)
                 .anyMatch("这是一条正常的历史消息"::equals);
         assertTrue(hasValidHistoryText, "跳过坏数据的同时，同一批次里有效的历史消息应正常保留");
     }
@@ -599,6 +610,202 @@ class ContextAssemblerServiceTest {
     }
 
     // ---- 供自建 assembler 的 mock 工厂（与 setUp 同配方）----
+
+    // ==================== 项目上下文的设置时机 ====================
+
+    @Test
+    @DisplayName("项目上下文必须在任何一次读文件之前设置——否则附件正文被替换成 fail-closed 的报错串")
+    void projectContextIsSetBeforeAnyFileRead() {
+        // 病灶：ProjectContextHolder 的三行 set 原来排在附件注入与活跃文档注入之后。
+        // 它是 ThreadLocal，而 ToolFileGuard.rejectIfOutsideProject 的项目归属就从它取，
+        // 于是 read_document 在编排器的 @Async 线程上要么拿到 null（fail closed，返回
+        // "Error: no project context ..."，这句话被原样当成文件正文注进 <file> CDATA），
+        // 要么拿到上一轮遗留的**别的项目**的 id（taskExecutor 是池化复用的，assemble 从不 clear）。
+        // 两种坏法都不报错，用户看到的是「AI 说读不了我的附件」。
+        //
+        // 生产代码里 LegalTools 是真的、会去查 holder；单测里它是 mock，所以这个顺序错误
+        // 在单测中完全不可见——只能像这样把「调用发生时 holder 里是什么」直接钉住。
+        java.util.concurrent.atomic.AtomicReference<String> seen = new java.util.concurrent.atomic.AtomicReference<>("<never called>");
+        when(legalTools.read_document(anyString())).thenAnswer(inv -> {
+            seen.set(com.checkba.service.ai.context.ProjectContextHolder.getProjectId());
+            return "附件正文";
+        });
+
+        // 干净线程起跑，排除「上一个用例刚好留了个值」这种伪绿
+        com.checkba.service.ai.context.ProjectContextHolder.clear();
+
+        AiAgentController.ContextItem attachment = new AiAgentController.ContextItem();
+        attachment.setId("777");
+        attachment.setName("补充协议.docx");
+        attachment.setFileType("docx");
+
+        assembler.assemble("conv-1", "看看这份补充协议", List.of(attachment), null,
+                null, null, "88", AgentMode.AGENT, 1L, null);
+
+        assertEquals("88", seen.get(),
+                "读附件时 ProjectContextHolder 里必须已经是本轮的 projectId；"
+                        + "为 null 说明 set 排在了读文件之后（ToolFileGuard 会 fail closed）");
+    }
+
+    // ==================== 图片：视觉直送 vs OCR 降级 ====================
+
+    private static AiAgentController.ContextItem imageItem(String id, String name) {
+        AiAgentController.ContextItem item = new AiAgentController.ContextItem();
+        item.setId(id);
+        item.setName(name);
+        item.setFileType("image");
+        return item;
+    }
+
+    /** 装一个「模型支持视觉、图片字节读得到」的组装器。 */
+    private ContextAssemblerService visionAssembler(byte[] bytes) throws Exception {
+        ChatModelFactory factory = mock(ChatModelFactory.class);
+        when(factory.effectiveModelSupportsVision(any())).thenReturn(true);
+        com.checkba.service.ProjectFileService fileService = mock(com.checkba.service.ProjectFileService.class);
+        com.checkba.model.entity.ProjectFile file = new com.checkba.model.entity.ProjectFile();
+        file.setId(555L);
+        file.setProjectId(88L);
+        file.setName("现场照片.png");
+        when(fileService.getFile(555L)).thenReturn(file);
+        when(fileService.getFileBytes(555L)).thenReturn(bytes);
+        return new ContextAssemblerService(
+                legalTools, mockedMessageService(), mock(FileContextLoader.class),
+                new AiContextProperties(), mockedSkillRouter(), new ClientCapabilityService(),
+                new InlineContentCache(), mockedMemoryManager(), mockedCompressor(),
+                mock(com.checkba.service.AppLanguageService.class), factory, fileService);
+    }
+
+    @Test
+    @DisplayName("模型支持视觉：图片进末位用户消息的 ImageContent，且不再走 OCR")
+    void visionCapableModelGetsImageContentInsteadOfOcr() throws Exception {
+        ContextAssemblerService a = visionAssembler(new byte[]{1, 2, 3, 4});
+
+        List<ChatMessage> messages = a.assemble("conv-1", "这张照片里写了什么",
+                List.of(imageItem("555", "现场照片.png")), null,
+                null, null, "88", AgentMode.AGENT, 1L, "moonshotai/kimi-k3");
+
+        dev.langchain4j.data.message.UserMessage last =
+                (dev.langchain4j.data.message.UserMessage) messages.get(messages.size() - 1);
+        assertEquals(1, com.checkba.service.ai.context.ChatMessageText.imageCountOf(last),
+                "图片应作为 ImageContent 挂在末位用户消息上");
+        assertTrue(com.checkba.service.ai.context.ChatMessageText.of(last).startsWith("这张照片里写了什么"),
+                "文本内容块必须排在图片之前——末位提醒的注意力位置是既有结论");
+
+        // 同一张图绝不能既进视觉又进 OCR：那会既付图像 token 又付 OCR 的钱
+        org.mockito.Mockito.verify(legalTools, org.mockito.Mockito.never()).read_document(anyString());
+
+        String systemText = ((SystemMessage) messages.get(0)).text();
+        assertTrue(systemText.contains("<image id=\"555\""),
+                "system 里应留一条图片标识，让模型知道这张图随消息发了、不要再调读取工具");
+    }
+
+    @Test
+    @DisplayName("模型不支持视觉：走既有 OCR 路径，且必须在上下文里明写降级原因")
+    void textOnlyModelFallsBackToOcrWithExplicitNotice() {
+        when(legalTools.read_document("555")).thenReturn("识别出来的文字");
+
+        String systemText = assembleSystemTextWith(List.of(imageItem("555", "现场照片.png")));
+
+        assertTrue(systemText.contains("识别出来的文字"), "应保留既有 OCR 正文注入");
+        assertTrue(systemText.contains("当前模型不支持视觉输入"),
+                "必须明写降级原因——不写的话模型会把 OCR 的识别误差当成原文事实");
+        assertTrue(systemText.contains("source=\"ocr\""), "应标出正文来源是 OCR");
+    }
+
+    @Test
+    @DisplayName("EN 应用语言下降级说明也必须是英文——协议面 zh/en 逐条一致是硬约束")
+    void ocrFallbackNoticeFollowsAppLanguage() {
+        when(legalTools.read_document("555")).thenReturn("recognized text");
+        com.checkba.service.AppLanguageService en = mock(com.checkba.service.AppLanguageService.class);
+        when(en.isEnglish()).thenReturn(true);
+        ContextAssemblerService english = new ContextAssemblerService(
+                legalTools, mockedMessageService(), mock(FileContextLoader.class),
+                new AiContextProperties(), mockedSkillRouter(), new ClientCapabilityService(),
+                new InlineContentCache(), mockedMemoryManager(), mockedCompressor(),
+                en, mockedChatModelFactory(), mock(com.checkba.service.ProjectFileService.class));
+
+        String systemText = ((SystemMessage) english.assemble("conv-1", "read it",
+                List.of(imageItem("555", "photo.png")), null,
+                null, null, "88", AgentMode.AGENT, 1L, "deepseek/deepseek-v4-flash").get(0)).text();
+
+        assertTrue(systemText.contains("does not accept image input"), "英文界面下降级原因应是英文");
+        assertFalse(systemText.contains("当前模型不支持视觉输入"), "英文界面下不该冒出中文说明");
+    }
+
+    @Test
+    @DisplayName("超过单张体积上限的图片降级走 OCR，不是静默丢弃")
+    void oversizedImageFallsBackToOcr() throws Exception {
+        when(legalTools.read_document("555")).thenReturn("识别出来的文字");
+        AiContextProperties props = new AiContextProperties();
+        props.getVision().setMaxImageBytes(2);
+        ChatModelFactory factory = mock(ChatModelFactory.class);
+        when(factory.effectiveModelSupportsVision(any())).thenReturn(true);
+        com.checkba.service.ProjectFileService fileService = mock(com.checkba.service.ProjectFileService.class);
+        com.checkba.model.entity.ProjectFile file = new com.checkba.model.entity.ProjectFile();
+        file.setId(555L);
+        file.setProjectId(88L);
+        when(fileService.getFile(555L)).thenReturn(file);
+        when(fileService.getFileBytes(555L)).thenReturn(new byte[]{1, 2, 3, 4, 5});
+
+        ContextAssemblerService a = new ContextAssemblerService(
+                legalTools, mockedMessageService(), mock(FileContextLoader.class),
+                props, mockedSkillRouter(), new ClientCapabilityService(),
+                new InlineContentCache(), mockedMemoryManager(), mockedCompressor(),
+                mock(com.checkba.service.AppLanguageService.class), factory, fileService);
+
+        List<ChatMessage> messages = a.assemble("conv-1", "看图",
+                List.of(imageItem("555", "现场照片.png")), null,
+                null, null, "88", AgentMode.AGENT, 1L, "moonshotai/kimi-k3");
+
+        assertEquals(0, com.checkba.service.ai.context.ChatMessageText.imageCountOf(
+                messages.get(messages.size() - 1)), "超限的图不应直送");
+        assertTrue(((SystemMessage) messages.get(0)).text().contains("识别出来的文字"),
+                "超限应降级到 OCR，而不是把这张图整个丢掉");
+    }
+
+    @Test
+    @DisplayName("PDF 永远不走视觉直送——open-ai 0.36 只认 Text/Image 两种内容块")
+    void pdfNeverGoesThroughVisionChannel() throws Exception {
+        when(legalTools.read_document("555")).thenReturn("PDF 文字层");
+        ContextAssemblerService a = visionAssembler(new byte[]{1, 2, 3, 4});
+
+        AiAgentController.ContextItem pdf = new AiAgentController.ContextItem();
+        pdf.setId("555");
+        pdf.setName("判决书.pdf");
+        pdf.setFileType("pdf");
+
+        List<ChatMessage> messages = a.assemble("conv-1", "看这份判决", List.of(pdf), null,
+                null, null, "88", AgentMode.AGENT, 1L, "moonshotai/kimi-k3");
+
+        assertEquals(0, com.checkba.service.ai.context.ChatMessageText.imageCountOf(
+                messages.get(messages.size() - 1)), "PDF 不许当图片直送");
+        assertTrue(((SystemMessage) messages.get(0)).text().contains("PDF 文字层"),
+                "PDF 应继续走既有抽取/OCR 路径");
+    }
+
+    @Test
+    @DisplayName("没有图片时用户消息保持纯文本构造，不退化成单元素内容块列表")
+    void noImagesKeepsPlainTextUserMessage() {
+        List<ChatMessage> messages = assembler.assemble("conv-1", "帮我修订一下", null, null,
+                null, null, "88", AgentMode.AGENT, 1L, null);
+        dev.langchain4j.data.message.UserMessage last =
+                (dev.langchain4j.data.message.UserMessage) messages.get(messages.size() - 1);
+        assertEquals("帮我修订一下", last.singleText(),
+                "无图片时必须仍是单文本消息——全仓还有一批 singleText() 调用点靠这条");
+    }
+
+    private String assembleSystemTextWith(List<AiAgentController.ContextItem> items) {
+        List<ChatMessage> messages = assembler.assemble("conv-1", "看图", items, null,
+                null, null, "88", AgentMode.AGENT, 1L, "deepseek/deepseek-v4-flash");
+        return ((SystemMessage) messages.get(0)).text();
+    }
+
+    /** 默认「不支持视觉」的工厂桩：既有用例全部走既有的 OCR 路径，行为保持不变。 */
+    private static ChatModelFactory mockedChatModelFactory() {
+        ChatModelFactory factory = mock(ChatModelFactory.class);
+        when(factory.effectiveModelSupportsVision(any())).thenReturn(false);
+        return factory;
+    }
 
     private static ProjectAiMessageService mockedMessageService() {
         ProjectAiMessageService svc = mock(ProjectAiMessageService.class);

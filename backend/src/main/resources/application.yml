@@ -351,6 +351,18 @@ ai:
       chat-selection-max-chars: 1500
     # 支持 OCR 的文件扩展名
     ocr-extensions: [jpg, jpeg, png, gif, bmp, webp, pdf]
+    # 图片视觉直送（模型支持视觉输入时，图片作为 image 内容块直接给模型看，不再转 OCR 文本）。
+    # 模型是否支持视觉由 AllowedModels 的 vision 位决定，不支持时自动降级回 ocr-extensions 那条路。
+    vision:
+      # 可直送的图片扩展名。**刻意不含 pdf**：langchain4j-open-ai 0.36 只认 Text/Image 两种内容块，
+      # PdfFileContent 会抛 Unknown content type；PDF 继续走 PDFBox 逐页渲染 + OCR。
+      extensions: [jpg, jpeg, png, gif, bmp, webp]
+      # 单张图上限，与 files.max-file-size-bytes 的 OCR 闸对齐；超限的降级走 OCR 并明示
+      max-image-bytes: 10485760
+      # 单轮最多直送几张（base64 会把体积再放大约 1.33 倍）；多出来的降级走 OCR 并明示
+      max-images-per-turn: 4
+      # 压缩阈值判断时每张图折算的 token 数（估算只累加文本，不给值的话图片等于 0 token）
+      token-estimate-per-image: 1200
   # 子 Agent（dispatch_subtask 委派子任务）配置（对应 SubAgentProperties，以下均为默认值）
   subagent:
     # 单个子任务的循环轮数上限

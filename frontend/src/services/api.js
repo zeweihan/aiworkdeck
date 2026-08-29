@@ -523,9 +523,13 @@ export function getAiConfig() {
  * 用户看不到、前端写的 id 被工厂静默回落成默认模型」。唯一事实来源是后端白名单。
  *
  * 响应：{ networkRegion, networkRegionMode, networkRegionBasis, defaultModel,
- *        models: [{ id, name, vendor, region, contextLength,
+ *        models: [{ id, name, vendor, region, contextLength, vision,
  *                   inputPricePerM, outputPricePerM, tiered }] }
  * models 只含当前网络区域实测可用的模型（境内拿不到国际档，OpenRouter 会返 403 region）。
+ *
+ * vision（boolean）= 该模型能否直接读图。不支持时后端自动把图片降级成 OCR 转写文本，
+ * 前端不需要拦截，但必须在选模型的那一刻就把降级说清楚。**缺字段要当「未知」处理**：
+ * 旧后端与拉取失败都会让它是 undefined，当成 false 会对所有模型误报「不支持读图」。
  */
 export function fetchAiModels() {
   return request({

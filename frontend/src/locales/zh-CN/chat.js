@@ -23,6 +23,7 @@ export default {
   pleaseSelectFiles: '请选择要上传的文件',
   projectIdMissing: '项目ID未设置',
   filesAdded: '已添加 {count} 个文件',
+  uploadContentFailed: '{names} 内容上传失败，未加入附件（重新上传后再试）',
   uploadFailed: '上传失败',
   // ---- 回退 ----
   rollbackConfirmTitle: '确认回退',
@@ -68,6 +69,8 @@ export default {
   selectModel: '选择模型',
   intlNetworkRequired: '需国际网络',
   tieredPricing: '长上下文单价更高',
+  noVisionTag: '不支持读图',
+  modelNoVisionToast: '该模型不支持直接读图，图片将按文字识别（OCR）处理',
   noModels: '暂无可用模型，到设置页检查 AI 供应商配置',
   networkBasis: '网络判定：{basis}',
   priceLabel: '输入 ${input} / 输出 ${output} 每百万 tokens',
@@ -92,7 +95,10 @@ export default {
   // ---- 发送 / 中断 / 续跑 ----
   emptyMessageToast: '请输入消息内容',
   imageNeedsCaptionTitle: '图片需要配一句说明',
-  imageNeedsCaptionContent: '图片会以 OCR 识别出的文字形式加入上下文，模型看不到图像本身。补充一句要做什么（例如「把这张图里的条款整理成表格」），再发送。',
+  imageNeedsCaptionContent: '图片会随消息一起发送：当前模型支持读图时模型直接看图，不支持时按文字识别（OCR）处理。补充一句要做什么（例如「把这张图里的条款整理成表格」），再发送。',
+  imageOcrFallbackNote: '当前模型不支持直接读图，图片将按文字识别（OCR）处理',
+  pastedImageName: '粘贴图片-{stamp}',
+  pastedImageUploadFailed: '{count} 张粘贴图片上传失败，未随本条消息发送',
   gotIt: '知道了',
   busyToast: 'AI 正在执行其他任务，请稍后再试',
   abortToast: '正在停止，在途的调用可能还会回一小段',

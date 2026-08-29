@@ -105,8 +105,17 @@ export async function fetchConversations({ serverUrl, token }, projectId) {
 }
 
 /**
- * 可用模型清单（GET /api/ai/models → {models:[{id,name,vendor,...}], defaultModel}）。
+ * 可用模型清单（GET /api/ai/models → {models:[{id,name,vendor,vision,...}], defaultModel}）。
  * 失败回 null：模型选择器隐藏，发消息不带 model 字段走后端默认，不影响主链路。
+ *
+ * models 元素原样透传，字段随后端演进；界面用到的三个：
+ *   - id / name：选择器的值与显示名；
+ *   - vision（boolean）：该模型支不支持视觉输入（直接看图）。支持则图片附件作为
+ *     image 内容块直送模型，不支持则后端自动降级走 OCR 抽文本——降级全自动，
+ *     插件端不拦截任何东西，只负责让用户在选模型那一刻就知道。
+ *     **字段缺失（旧后端）要与 false 区分开**：当成 false 会对所有模型误报
+ *     「不支持读图」，未知时什么都别提示（判定见 chatSession.activeModelVision）。
+ * defaultModel 是 selectedModel='' 时实际生效的模型 id。
  */
 export async function fetchModels({ serverUrl, token }) {
   const base = normalizeBaseUrl(serverUrl)

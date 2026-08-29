@@ -16,6 +16,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -266,5 +267,59 @@ class RunLoopCompactorTest {
         List<ChatMessage> messages = longRun(6, 100);
         assertSame(messages, compactor.forceCompact(messages, null),
                 "折叠后更大 = 净负资产，溢出恢复会拿着更大的栈白撞一次 400");
+    }
+
+    // ==================== 图片（视觉直送）====================
+
+    private static UserMessage withImage(String text) {
+        return UserMessage.from(List.of(
+                dev.langchain4j.data.message.TextContent.from(text),
+                dev.langchain4j.data.message.ImageContent.from("aGVsbG8=", "image/png",
+                        dev.langchain4j.data.message.ImageContent.DetailLevel.HIGH)));
+    }
+
+    @Test
+    @DisplayName("图片必须折算成 token：按 0 计的话带大图的栈永远触发不了压缩，只能等服务商 400")
+    void imagesContributeToTokenEstimate() {
+        List<ChatMessage> withoutImage = List.of(UserMessage.from("看这张图"));
+        List<ChatMessage> withImage = List.of(withImage("看这张图"));
+
+        int delta = compactor.estimateTokens(withImage) - compactor.estimateTokens(withoutImage);
+        assertEquals(properties.getVision().getTokenEstimatePerImage(), delta,
+                "一张图应恰好折算成配置的固定 token 数——不能按 base64 长度算，"
+                        + "那会让一张 500KB 的图估成 33 万 token、每轮都强制压缩");
+    }
+
+    @Test
+    @DisplayName("强制压缩兜底会摘掉图像块——否则带图的长会话一旦超窗就每次必死")
+    void forceCompactStripsImagesAsLastResort() {
+        // 短栈：剪枝与折叠都无从下手，唯一还能缩小的就是图片
+        List<ChatMessage> messages = List.of(
+                SystemMessage.from("系统"),
+                withImage("这张合同签署页写了什么"));
+
+        List<ChatMessage> compacted = compactor.forceCompact(messages, null);
+
+        assertNotSame(messages, compacted, "还有图可摘时不许报「压不动」——那会让本轮直接终态");
+        assertFalse(ChatMessageText.containsImage(compacted), "图像块应已摘除");
+        String text = ChatMessageText.of(compacted.get(compacted.size() - 1));
+        assertTrue(text.contains("这张合同签署页写了什么"), "原文必须保留");
+        assertTrue(text.contains("已被移除"),
+                "必须留一行说明：模型得知道图没了、要看图就让用户重发，而不是凭猜测作答");
+    }
+
+    @Test
+    @DisplayName("没有图片时摘图路径返回原实例——「返回原实例 == 没压动」是重试凭证，不能破坏")
+    void stripImagesKeepsIdentityWhenNoImages() {
+        List<ChatMessage> messages = List.of(SystemMessage.from("系统"), UserMessage.from("纯文本"));
+        assertSame(messages, compactor.forceCompact(messages, null));
+    }
+
+    @Test
+    @DisplayName("非强制压缩不摘图：那是无谓的能力降级")
+    void normalCompactNeverStripsImages() {
+        List<ChatMessage> messages = List.of(SystemMessage.from("系统"), withImage("看图"));
+        assertSame(messages, compactor.compact(messages, null),
+                "未超阈值时应原样返回，更不该摘图");
     }
 }

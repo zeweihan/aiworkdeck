@@ -23,6 +23,7 @@ export default {
   pleaseSelectFiles: 'Please select files to upload',
   projectIdMissing: 'Project ID is not set',
   filesAdded: '{count} files added',
+  uploadContentFailed: '{names} failed to upload and was not attached. Upload again and retry.',
   uploadFailed: 'Upload failed',
   // ---- Rollback ----
   rollbackConfirmTitle: 'Confirm Rollback',
@@ -68,6 +69,8 @@ export default {
   selectModel: 'Select Model',
   intlNetworkRequired: 'Requires international network',
   tieredPricing: 'Higher rates for long context',
+  noVisionTag: 'No image input',
+  modelNoVisionToast: 'This model cannot read images directly. Images will be processed as recognized text (OCR).',
   noModels: 'No models available. Check the AI provider settings.',
   networkBasis: 'Network check: {basis}',
   priceLabel: 'Input ${input} / output ${output} per 1M tokens',
@@ -92,7 +95,10 @@ export default {
   // ---- Send / abort / resume ----
   emptyMessageToast: 'Please enter a message',
   imageNeedsCaptionTitle: 'Add a note to your image',
-  imageNeedsCaptionContent: 'Images join the context as OCR-extracted text; the model cannot see the image itself. Add a sentence describing what to do (for example, "Turn the clauses in this image into a table"), then send.',
+  imageNeedsCaptionContent: 'Images are sent along with your message: if the current model can read images, it sees them directly; if not, they are processed as recognized text (OCR). Add a sentence describing what to do (for example, "Turn the clauses in this image into a table"), then send.',
+  imageOcrFallbackNote: 'The current model cannot read images directly. Images will be processed as recognized text (OCR).',
+  pastedImageName: 'pasted-image-{stamp}',
+  pastedImageUploadFailed: '{count} pasted image(s) failed to upload and were not sent with this message.',
   gotIt: 'Got it',
   busyToast: 'The AI is running another task. Please try again later.',
   abortToast: 'Stopping. In-flight calls may still return briefly.',

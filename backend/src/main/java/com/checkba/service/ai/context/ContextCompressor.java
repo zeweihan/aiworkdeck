@@ -138,7 +138,9 @@ public class ContextCompressor {
      */
     private String extractText(ChatMessage msg) {
         if (msg instanceof UserMessage um) {
-            return um.singleText();
+            // 不能用 singleText()：多模态消息（文本 + 图片）会直接抛 RuntimeException，
+            // 而本方法整条链路没有 try/catch，异常会一路冒到上下文组装、整轮对话挂掉。
+            return ChatMessageText.of(um);
         } else if (msg instanceof AiMessage am) {
             return am.text();
         } else if (msg instanceof SystemMessage sm) {
@@ -173,8 +175,10 @@ public class ContextCompressor {
             seenContent.add(normalized);
             
             // 重建消息
-            if (msg instanceof UserMessage) {
-                result.add(UserMessage.from(text));
+            if (msg instanceof UserMessage um) {
+                // 含图像内容块的用户消息**原样保留、不重建**：UserMessage.from(text) 只装得下文本，
+                // 重建等于把图片静默剥掉——不报错、不留日志，表现是「有时候能看图有时候看不见」。
+                result.add(ChatMessageText.imageCountOf(um) > 0 ? um : UserMessage.from(text));
             } else if (msg instanceof AiMessage) {
                 result.add(AiMessage.from(text));
             } else {
@@ -231,8 +235,10 @@ public class ContextCompressor {
             }
             
             // 重建消息
-            if (msg instanceof UserMessage) {
-                result.add(UserMessage.from(text));
+            if (msg instanceof UserMessage um) {
+                // 含图像内容块的用户消息**原样保留、不重建**：UserMessage.from(text) 只装得下文本，
+                // 重建等于把图片静默剥掉——不报错、不留日志，表现是「有时候能看图有时候看不见」。
+                result.add(ChatMessageText.imageCountOf(um) > 0 ? um : UserMessage.from(text));
             } else if (msg instanceof AiMessage) {
                 result.add(AiMessage.from(text));
             } else {

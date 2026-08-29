@@ -52,6 +52,11 @@ public class ContextAssemblerService {
     // zh-CN 路径的代码与文本一字不动（中文版行为保持逐字节一致是硬约束）。
     private final com.checkba.service.AppLanguageService appLanguageService;
 
+    // 图片视觉直送：判「本轮真正生效的模型能不能看图」要问工厂（请求里的 modelId 会被静默改写），
+    // 直送的图片字节要自己读盘（既有的 read_document 只回文本）。
+    private final ChatModelFactory chatModelFactory;
+    private final com.checkba.service.ProjectFileService projectFileService;
+
     /**
      * Assembles the full message stack for the LLM.
      * 1. System Message (Prompt + State + File Context + Mode Constraints)
@@ -75,6 +80,24 @@ public class ContextAssemblerService {
             String modelKey) {
 
         java.util.List<dev.langchain4j.data.message.ChatMessage> messages = new java.util.ArrayList<>();
+
+        // 项目上下文必须**最先**设置，早于本方法里任何一次读文件。
+        //
+        // 它是 ThreadLocal，而 ToolFileGuard.rejectIfOutsideProject 的项目归属就从它取。
+        // 这三行原来排在附件注入与活跃文档注入的**后面**，于是那两处的 read_document 在
+        // 编排器的 @Async 线程上拿到的 projectId 是 null（fail closed，返回
+        // "Error: no project context for this request; refusing to access file N."）
+        // 或者更糟——taskExecutor 是池化复用的，上一轮 assemble 设完从没清过，
+        // 下一轮就可能拿着**上一个项目**的 id 去做归属校验。
+        // 两种坏法都不报错：那句 Error 会被原样当成文件正文注进 <file> CDATA，
+        // 用户看到的是「AI 说读不了我的附件」，日志里只有一行 read_document 的常规记录。
+        // （测试里 LegalTools 是 mock 的，所以这个顺序错误在单测中完全不可见，
+        //  ContextAssemblerServiceTest 的 projectContextIsSetBeforeAnyFileRead 就是钉这个顺序的。）
+        ProjectContextHolder.setProjectId(projectId);
+        ProjectContextHolder.setConversationId(conversationId);
+        if (userId != null) {
+            ProjectContextHolder.setUserId(userId);
+        }
 
         // 应用语言：本次组装全程按它二选一（协议面 zh/en 完全一致，只有措辞与 Language 行不同）
         final boolean english = appLanguageService.isEnglish();
@@ -223,6 +246,17 @@ public class ContextAssemblerService {
         }
 
         // [Injection] Context Items (Files & Folders)
+        //
+        // 图片走两条路二选一，判据是**本轮真正生效的模型**支不支持视觉（见 visionAttachments 的注释）：
+        //  - 支持：图片不在这里注入任何文本，改为收进 visionAttachments，在末位用户消息里以
+        //    ImageContent 内容块直送模型（OpenAI 兼容协议只在 user 消息里接受 image_url，
+        //    所以它不能像别的附件那样待在 system message 里）；
+        //  - 不支持：完全保持既有行为（read_document → OCR → <file> CDATA），
+        //    但在 <file> 段里明写「这是 OCR 转写文本、当前模型看不到图像本身」——
+        //    这是产品口径要求的「明示降级」，也让模型知道文字可能有识别误差。
+        // 同一张图绝不允许两条路都走：那会既付图像 token 又付 OCR 的钱，还给模型两份可能打架的输入。
+        List<VisionAttachment> visionAttachments = new java.util.ArrayList<>();
+        boolean visionCapable = resolveVisionCapable(modelKey);
         if (contextItems != null && !contextItems.isEmpty()) {
             systemText.append("\n\n# User Context Files\n");
             systemText.append("The user has provided the following files/folders for context:\n");
@@ -256,6 +290,28 @@ public class ContextAssemblerService {
                     // precisely here unless we return a count object.
                     // For simplicity, we assume a folder consumes slots.
                     // Better: Pass proper AtomicInteger to buildFolderContext.
+                } else if (isVisionCandidate(item)) {
+                    // 图片：能直送就直送，直送不了（模型不支持 / 超张数或体积上限 / 读盘失败）
+                    // 一律落回 OCR，绝不静默丢弃——用户挂了附件却什么都没发生是最坏的形态。
+                    VisionAttachment attachment = visionCapable
+                                    && visionAttachments.size() < contextProperties.getVision().getMaxImagesPerTurn()
+                            ? loadVisionAttachment(item)
+                            : null;
+                    if (attachment != null) {
+                        visionAttachments.add(attachment);
+                        // 让模型知道这张图确实随本条消息发了、以及它叫什么名字（图像块本身不带文件名）。
+                        // 正文一个字都不注入：图在末位用户消息里。
+                        systemText.append("<image id=\"").append(item.getId())
+                                  .append("\" name=\"").append(attrSafe(item.getName()))
+                                  .append("\" note=\"").append(english ? VISION_NOTE_EN : VISION_NOTE_ZH)
+                                  .append("\"/>\n");
+                    } else {
+                        appendOcrFallbackFile(systemText, item, maxCharsPerFile, english
+                                ? (visionCapable ? OCR_FALLBACK_LIMIT_EN : OCR_FALLBACK_NO_VISION_EN)
+                                : (visionCapable ? OCR_FALLBACK_LIMIT_ZH : OCR_FALLBACK_NO_VISION_ZH),
+                                english);
+                        totalFileCount++;
+                    }
                 } else {
                     // Single File Logic
                     String content = legalTools.read_document(item.getId());
@@ -444,13 +500,6 @@ public class ContextAssemblerService {
             }
         }
 
-        // 设置上下文（供 MemoryTools 使用）
-        ProjectContextHolder.setProjectId(projectId);
-        ProjectContextHolder.setConversationId(conversationId);
-        if (userId != null) {
-            ProjectContextHolder.setUserId(userId);
-        }
-
         // 2. 注入项目记忆（如果存在）
         Long projectIdLong = null;
         try {
@@ -560,12 +609,194 @@ public class ContextAssemblerService {
         // 活跃文档提醒挂在**用户消息尾部**而非只留在 system prompt：system prompt 里的同类
         // 声明被弱模型（如 DeepSeek Flash）稳定无视——实测注入了正文仍先调 doc_list_project_files
         // 重新发现文档。末位消息是注意力最高的位置，这里再说一次才真正生效。
-        messages.add(dev.langchain4j.data.message.UserMessage.from(
-                userPrompt + activeDocumentReminder(activeContext,
-                        clientCapabilityService.capabilityOf(conversationId),
-                        clientCapabilityService.officeHostOf(conversationId))));
+        String userText = userPrompt + activeDocumentReminder(activeContext,
+                clientCapabilityService.capabilityOf(conversationId),
+                clientCapabilityService.officeHostOf(conversationId));
+
+        if (visionAttachments.isEmpty()) {
+            // 没有图片时**保持旧构造**。语义上「只含一个 TextContent 的 list」与纯文本等价
+            // （0.36 的 hasSingleText 对它仍返 true），但全仓有一批 singleText()/text() 调用点，
+            // 没必要为了统一写法把它们的行为变化范围放大。
+            messages.add(dev.langchain4j.data.message.UserMessage.from(userText));
+        } else {
+            java.util.List<dev.langchain4j.data.message.Content> contents = new java.util.ArrayList<>();
+            // 文本排第一：末位提醒的注意力位置是上面那段注释用真机日志换来的结论，
+            // 把图片插到文本前面等于把它挤走。
+            contents.add(dev.langchain4j.data.message.TextContent.from(userText));
+            for (VisionAttachment a : visionAttachments) {
+                // DetailLevel 必须显式给 HIGH。langchain4j 0.36 所有不带 DetailLevel 的
+                // ImageContent 重载都在构造器里硬塞 LOW（字节码实证），而 LOW 会让上游把图
+                // 缩到单块低分辨率——扫描件、合同签署页上的字直接糊掉，读文书还不如现有 OCR，
+                // 而且不报错不告警，只是模型开始胡说。
+                contents.add(dev.langchain4j.data.message.ImageContent.from(
+                        a.base64(), a.mimeType(),
+                        dev.langchain4j.data.message.ImageContent.DetailLevel.HIGH));
+            }
+            messages.add(dev.langchain4j.data.message.UserMessage.from(contents));
+            // 排障时要能一眼看出「这一轮到底把哪几张图发出去了」——只记条数的话，
+            // 「模型看不见图」这类反馈没法区分是没发、发错了、还是模型没看懂。
+            log.info("[Vision] Attached {} image(s) directly to model={} conversation={}: {}",
+                    visionAttachments.size(), modelKey, conversationId,
+                    visionAttachments.stream()
+                            .map(a -> a.name() + "(id=" + a.fileId() + "," + a.mimeType() + ")")
+                            .toList());
+        }
 
         return messages;
+    }
+
+    /** 一张已经读好、可以直送模型的图片。 */
+    private record VisionAttachment(String fileId, String name, String mimeType, String base64) {
+    }
+
+    /**
+     * 本轮真正生效的模型支不支持视觉。
+     *
+     * <p><b>必须问工厂，不能直接拿 modelKey 去查白名单。</b>请求里的 modelId 不等于实际发出去的
+     * 模型：非白名单会被回落成默认模型、显式本地档会忽略云端模型，两条都只 warn 一行日志。
+     * 按请求里那个 id 判，就会把 image 内容块发给一个读不了图的模型，换来一个英文 400。
+     */
+    private boolean resolveVisionCapable(String modelKey) {
+        try {
+            return chatModelFactory.effectiveModelSupportsVision(modelKey);
+        } catch (Exception e) {
+            // 能力探测不许掀翻整轮组装：判不出来就当不支持，降级走已经存在的 OCR 路径。
+            log.warn("[Vision] Capability probe failed for model '{}', falling back to OCR", modelKey, e);
+            return false;
+        }
+    }
+
+    /**
+     * 这个附件算不算「可以考虑直送的图片」。
+     *
+     * <p><b>双判据，与 lowaDocKind 同一套路数</b>：fileType 优先、缺失退回文件名后缀。
+     * 只认其一会打出「既不走视觉也不走 OCR」的空洞——ContextItem.fileType 是客户端自填、
+     * 原样落库、无任何校验，而 OCR 那条路判的是文件名扩展名。一个 fileType="image" 但文件名
+     * 没有扩展名的条目，两边都不命中的话注进去的是空 CDATA。
+     *
+     * <p>PDF **刻意不在这里命中**（vision.extensions 不含 pdf），它继续走 OCR：
+     * langchain4j-open-ai 0.36 只认 Text/Image 两种内容块，PdfFileContent 会抛 Unknown content type。
+     */
+    private boolean isVisionCandidate(com.checkba.controller.ai.AiAgentController.ContextItem item) {
+        List<String> exts = contextProperties.getVision().getExtensions();
+        String name = item.getName();
+        if (name != null) {
+            int dot = name.lastIndexOf('.');
+            if (dot >= 0 && dot < name.length() - 1) {
+                String ext = name.substring(dot + 1).toLowerCase(java.util.Locale.ROOT);
+                if (exts.stream().anyMatch(e -> e.equalsIgnoreCase(ext))) {
+                    return true;
+                }
+                // 有扩展名但不是图片扩展名：以文件名为准，不让 fileType 反悔
+                // （否则一个被标成 image 的 .docx 会被当图片直送，读出来是一堆二进制）
+                return false;
+            }
+        }
+        return "image".equalsIgnoreCase(item.getFileType());
+    }
+
+    /**
+     * 读一张图的字节并编码成 base64。走不通返回 null（调用方据此降级回 OCR）。
+     *
+     * <p>四件必做的事：① 过 {@code ToolFileGuard} 的项目边界校验——contextItems 里的 id 来自
+     * HTTP 请求体，可信度不比 LLM 参数高，少这一道就是一条新的跨项目读文件入口
+     * （它读的是 {@code ProjectContextHolder}，所以本方法必须跑在 holder 已设置之后，
+     * 见 assemble 开头那段「必须最先设置」的注释）；
+     * ② 自己加大小闸——{@code getFileBytes} 一路 readAllBytes 没有任何上限，
+     * 今天图片不撑爆堆全靠 OCR 前面那道 10MB 闸，跳过 OCR 等于绕开它；
+     * ③ mimeType 由扩展名推导并把 jpg 归一化成 image/jpeg（拼成 image/jpg 上游不认）；
+     * ④ 任何失败只 log + 返回 null，绝不掀翻整轮组装。
+     */
+    private VisionAttachment loadVisionAttachment(
+            com.checkba.controller.ai.AiAgentController.ContextItem item) {
+        try {
+            Long fileId = Long.parseLong(item.getId().trim());
+            com.checkba.model.entity.ProjectFile file = projectFileService.getFile(fileId);
+            if (file == null) {
+                log.warn("[Vision] File not found: id={}", item.getId());
+                return null;
+            }
+            String denied = com.checkba.service.ai.tools.ToolFileGuard.rejectIfOutsideProject(file);
+            if (denied != null) {
+                log.warn("[Vision] Refusing image attachment id={}: {}", item.getId(), denied);
+                return null;
+            }
+
+            byte[] bytes = projectFileService.getFileBytes(fileId);
+            if (bytes == null || bytes.length == 0) {
+                log.warn("[Vision] Empty bytes for file id={} name={}", item.getId(), item.getName());
+                return null;
+            }
+            long limit = contextProperties.getVision().getMaxImageBytes();
+            if (bytes.length > limit) {
+                log.info("[Vision] Image {} is {} bytes (> {}), falling back to OCR",
+                        item.getName(), bytes.length, limit);
+                return null;
+            }
+            return new VisionAttachment(item.getId(), item.getName(), imageMimeType(item.getName()),
+                    java.util.Base64.getEncoder().encodeToString(bytes));
+        } catch (Exception e) {
+            log.warn("[Vision] Failed to load image attachment id={} name={}, falling back to OCR",
+                    item.getId(), item.getName(), e);
+            return null;
+        }
+    }
+
+    // 视觉通道注入给模型的几句话。zh/en 必须成对——协议面两版逐条一致是本服务的硬约束
+    // （见类内其他 EN_* 常量），漏一条就会在英文界面下冒出中文。
+    private static final String VISION_NOTE_ZH =
+            "已作为图像随本条消息直接提供给你，直接看图即可，不要再调读取工具";
+    private static final String VISION_NOTE_EN =
+            "Provided to you as an image with this message. Look at it directly; do not call any read tool.";
+    private static final String OCR_FALLBACK_NO_VISION_ZH = "当前模型不支持视觉输入";
+    private static final String OCR_FALLBACK_NO_VISION_EN = "the current model does not accept image input";
+    private static final String OCR_FALLBACK_LIMIT_ZH =
+            "这一张图未能直送（超出本轮张数或单张体积上限，或读取失败）";
+    private static final String OCR_FALLBACK_LIMIT_EN =
+            "this image could not be sent directly (per-turn count or per-image size limit, or a read failure)";
+
+    /**
+     * 图片降级走 OCR 时的 {@code <file>} 段：与普通附件同形，但**必须明写降级原因**。
+     * 不写的话模型会把 OCR 的识别误差当成原文事实，用户也不知道自己看到的结论是基于转写文本。
+     */
+    private void appendOcrFallbackFile(StringBuilder systemText,
+                                       com.checkba.controller.ai.AiAgentController.ContextItem item,
+                                       int maxCharsPerFile, String reason, boolean english) {
+        String content = legalTools.read_document(item.getId());
+        if (content != null && content.length() > maxCharsPerFile) {
+            content = truncateAtCharBoundary(content, maxCharsPerFile) + "\n... [TRUNCATED - File too long]";
+        }
+        systemText.append("<file id=\"").append(item.getId())
+                  .append("\" name=\"").append(attrSafe(item.getName()))
+                  .append("\" source=\"ocr\" reason=\"").append(attrSafe(reason))
+                  .append("\"><![CDATA[\n");
+        systemText.append(english
+                ? "[The text below was extracted from an image by OCR because " + reason
+                        + ". You cannot see the image itself; recognition may be wrong, "
+                        + "so ask the user to check the original whenever a key number or name matters]\n"
+                : "[以下正文由文字识别（OCR）从图片转写而来，" + reason
+                        + "；你看不到图像本身，识别结果可能有误，涉及关键数字/名称时请提示用户核对原图]\n");
+        systemText.append(content != null && !content.isBlank()
+                ? fenceSafe(content) : "[Empty or unreadable file]");
+        systemText.append("\n]]></file>\n");
+    }
+
+    /** 扩展名 → image/* MIME。jpg 必须归一化成 image/jpeg，拼成 image/jpg 上游不认。 */
+    private static String imageMimeType(String fileName) {
+        String ext = "";
+        if (fileName != null) {
+            int dot = fileName.lastIndexOf('.');
+            if (dot >= 0 && dot < fileName.length() - 1) {
+                ext = fileName.substring(dot + 1).toLowerCase(java.util.Locale.ROOT);
+            }
+        }
+        return switch (ext) {
+            case "png" -> "image/png";
+            case "gif" -> "image/gif";
+            case "bmp" -> "image/bmp";
+            case "webp" -> "image/webp";
+            default -> "image/jpeg";
+        };
     }
     
     /**

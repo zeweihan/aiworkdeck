@@ -185,6 +185,8 @@
             @change="toggleAttachedFile(f)"
           />
           <span class="skill-name">{{ f.name }}</span>
+          <!-- 当前模型看不了图时，图片条目当场明示会降级成文字识别 -->
+          <span v-if="imageDowngraded(f)" class="downgrade-tag">{{ t('visionDowngradeTag') }}</span>
         </label>
       </div>
     </div>
@@ -223,8 +225,15 @@
             <span class="row-chevron back">‹</span>
             <span class="row-label">{{ t('menuModel') }}</span>
           </button>
+          <!-- 「默认模型」这一行也要交代它是谁、能不能看图：它是没显式选过模型时
+               实际生效的那个，也就是绝大多数用户的状态。vision 字段缺失（旧后端）
+               时不标角标——未知不等于不支持 -->
           <button class="menu-row" @click="pickModel('')">
-            <span class="row-label">{{ t('defaultModelOption') }}</span>
+            <span class="row-stack">
+              <span class="row-label">{{ t('defaultModelOption') }}</span>
+              <span v-if="defaultModelInfo" class="row-meta">{{ defaultModelInfo.name }}</span>
+            </span>
+            <span v-if="defaultModelInfo && defaultModelInfo.vision === false" class="row-tag">{{ t('modelNoVisionTag') }}</span>
             <span v-if="!selectedModel" class="row-check">✓</span>
           </button>
           <button
@@ -234,6 +243,7 @@
             @click="pickModel(m.id)"
           >
             <span class="row-label">{{ m.name }}</span>
+            <span v-if="m.vision === false" class="row-tag">{{ t('modelNoVisionTag') }}</span>
             <span v-if="selectedModel === m.id" class="row-check">✓</span>
           </button>
         </template>
@@ -271,6 +281,7 @@
         <span v-for="u in uploadingFiles" :key="u.key" class="upload-pill" :class="u.status" :title="u.error || u.name">
           <span v-if="u.status === 'uploading'" class="chip-spinner"></span>
           <span class="upload-name">{{ u.name }}</span>
+          <span v-if="u.status !== 'failed' && imageDowngraded(u)" class="downgrade-tag">{{ t('visionDowngradeTag') }}</span>
           <template v-if="u.status === 'failed'">
             <span class="upload-err">{{ u.error }}</span>
             <button class="upload-act" :title="t('uploadRetry')" @click="retryUpload(u.key)">{{ t('uploadRetry') }}</button>
@@ -316,6 +327,10 @@
       <p v-if="reconnecting" class="banner conn">{{ t('reconnectingBanner') }}</p>
       <p v-else-if="notice" class="banner conn">{{ notice }}</p>
       <p v-if="banner" class="banner">{{ banner }}</p>
+      <!-- 「当前模型看不了图」：常驻在 composer 里，不挂在模型 pill 上——拉不到清单时
+           pill 整个消失，而那时用户正走后端默认模型，恰恰最需要知道这件事。
+           自成一条独立通道：notice/banner 都会被 send() 清掉（dev-board#264） -->
+      <p v-if="visionNotice" class="banner conn">{{ visionNotice }}</p>
     </footer>
   </div>
 </template>
@@ -328,7 +343,8 @@ import {
   answerQuestion, modelCatalog, selectedModel, chooseModel, skillList, selectedSkillIds,
   toggleSkill, loadConversationList, switchConversation, attachedFiles, toggleAttachedFile,
   loadProjectFiles, removeConversation, retitleConversation,
-  uploadingFiles, uploadLocalFiles, removeUpload, retryUpload
+  uploadingFiles, uploadLocalFiles, removeUpload, retryUpload,
+  activeModelVision, defaultModelInfo, visionNotice, isImageAttachment
 } from '../lib/chatSession.js'
 import { openTransfer } from '../lib/transfer.js'
 import { readDocumentMeta, detectHost, locateInDocument } from '../lib/hostBridge.js'
@@ -482,6 +498,14 @@ function fromMore(action) {
 function pickModel(id) {
   chooseModel(id)
   closeMore()
+}
+
+/**
+ * 这个附件/上传条目是图片，且当前模型看不了图 → 条目旁明示会降级成文字识别。
+ * activeModelVision 是三态：undefined（旧后端不返回 vision）时恒 false，什么都不标。
+ */
+function imageDowngraded(item) {
+  return activeModelVision.value === false && isImageAttachment(item)
 }
 
 const docLabel = computed(() => {
@@ -1126,6 +1150,20 @@ async function confirmDelete(c) {
 
 .back-row .row-label { flex: none; }
 
+/* 「默认模型」一行装得下四件事（名目 / 真名 / 能力角标 / 勾）只能靠两行：
+   230px 的面板横排必然挤爆 */
+.row-stack {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}
+
+.row-stack .row-label,
+.row-stack .row-meta { flex: none; max-width: 100%; }
+
 .row-meta {
   max-width: 45%;
   overflow: hidden;
@@ -1144,6 +1182,19 @@ async function confirmDelete(c) {
   color: #fff;
   font-size: 10px;
   line-height: 16px;
+}
+
+/* 能力角标（「不支持读图」）：中性灰底，不是错误——降级是后端自动完成的正常路径 */
+.row-tag,
+.downgrade-tag {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--awd-mint-pale);
+  color: var(--awd-text-secondary);
+  font-size: 10px;
+  line-height: 16px;
+  white-space: nowrap;
 }
 
 .row-chevron {

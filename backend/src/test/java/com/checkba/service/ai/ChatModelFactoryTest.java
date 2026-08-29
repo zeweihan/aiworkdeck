@@ -173,6 +173,63 @@ class ChatModelFactoryTest {
     // 留着只会在每次换代时报假警。替代护栏在模型目录端点的测试里：
     // 它断言端点下发的清单等于 AllowedModels.availableIn(当前区域)，方向是双向的。
 
+    // ==================== 生效模型解析与视觉能力 ====================
+    //
+    // 这组的意义：请求里带的 modelId **不等于**实际发出去的模型（三条静默改写路径）。
+    // 视觉判定必须建立在「真正生效的那个 id」上，否则会把 image 内容块发给读不了图的模型。
+
+    @Test
+    @DisplayName("resolveEffectiveModelId：白名单模型原样生效")
+    void effectiveModelKeepsWhitelistedId() {
+        properties.setProvider(AiModelProperties.Provider.OPENROUTER);
+        assertEquals("moonshotai/kimi-k3", factory.resolveEffectiveModelId("moonshotai/kimi-k3"));
+    }
+
+    @Test
+    @DisplayName("resolveEffectiveModelId：非白名单被回落成默认模型——这正是不能按请求 id 判能力的原因")
+    void effectiveModelReflectsSilentFallback() {
+        properties.setProvider(AiModelProperties.Provider.OPENROUTER);
+        when(systemSettingService.get(eq("ai.defaultModel"), any())).thenReturn("deepseek/deepseek-v4-flash");
+
+        assertEquals("deepseek/deepseek-v4-flash", factory.resolveEffectiveModelId("some/unknown-vision-model"));
+        // 请求里那个名字听着像视觉模型，实际发出去的是纯文本的默认模型
+        assertFalse(factory.effectiveModelSupportsVision("some/unknown-vision-model"),
+                "按请求 id 判会判成支持视觉，按生效 id 判才是对的");
+    }
+
+    @Test
+    @DisplayName("effectiveModelSupportsVision：显式本地档恒 false——Ollama 走另一套图片编组，本次不接")
+    void localProviderNeverReportsVision() {
+        when(systemSettingService.get(eq("ai.activeProvider"), any())).thenReturn("OLLAMA");
+        // 请求的是支持视觉的云端模型，但显式本地档会忽略它、改用本机模型
+        assertFalse(factory.effectiveModelSupportsVision("moonshotai/kimi-k3"));
+        assertEquals(properties.getOllama().getModelName(),
+                factory.resolveEffectiveModelId("moonshotai/kimi-k3"));
+    }
+
+    @Test
+    @DisplayName("effectiveModelSupportsVision：白名单里的视觉/非视觉模型各自如实回答")
+    void visionCapabilityMatchesCatalog() {
+        properties.setProvider(AiModelProperties.Provider.OPENROUTER);
+        assertTrue(factory.effectiveModelSupportsVision("moonshotai/kimi-k3"));
+        assertFalse(factory.effectiveModelSupportsVision("deepseek/deepseek-v4-flash"));
+    }
+
+    @Test
+    @DisplayName("resolveTarget 与 getStreamingChatModel 落到同一个通道——两份解析漂移会让同步路和流式路发给不同模型")
+    void resolveTargetAgreesWithStreamingDispatch() {
+        properties.setProvider(AiModelProperties.Provider.OPENROUTER);
+        assertEquals(AiModelProperties.Provider.OPENROUTER,
+                factory.resolveTarget("moonshotai/kimi-k3", false).channel());
+        assertInstanceOf(OpenAiStreamingChatModel.class, factory.getStreamingChatModel("moonshotai/kimi-k3"));
+
+        when(systemSettingService.get(eq("ai.activeProvider"), any())).thenReturn("OLLAMA");
+        factory.clearCache();
+        assertEquals(AiModelProperties.Provider.OLLAMA,
+                factory.resolveTarget("moonshotai/kimi-k3", false).channel());
+        assertInstanceOf(OllamaStreamingChatModel.class, factory.getStreamingChatModel("moonshotai/kimi-k3"));
+    }
+
     // ==================== 默认模型与辅助模型（本次改造新增） ====================
 
     @Test

@@ -632,7 +632,10 @@ public class ConversationSummarizer {
         // 从第一条用户消息提取
         for (ChatMessage msg : messages) {
             if (msg instanceof UserMessage um) {
-                String text = um.singleText();
+                // 不能用 singleText()：多模态消息（文本 + 图片）会抛 RuntimeException，
+                // 而异常在 MemoryPipelineService 里被 catch 吞成一行日志——表现是
+                // 「带图的会话从此不再生成 episode 摘要」，功能静默退化、无任何用户可见信号。
+                String text = ChatMessageText.of(um);
                 if (text != null && text.length() > 0) {
                     text = cleanXmlTags(text);
                     if (text.length() > 30) {
