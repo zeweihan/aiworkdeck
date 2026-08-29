@@ -721,7 +721,7 @@ jobs:
             - **macOS · Apple Silicon (M 系列)** — `AI WorkDeck-<ver>-arm64.dmg`（已签名公证 / signed & notarized）
             - **Windows · x64** — `AI WorkDeck Setup <ver>.exe`（暂未签名，首次运行 SmartScreen 提示属正常 / not yet code-signed; a SmartScreen prompt on first run is expected）
 
-            > 自本版本起不再提供 Intel Mac 安装包（依赖生态已停发 x86_64 预编译组件）。/ Intel mac builds are discontinued as of this release.
+            > 不提供 Intel Mac 安装包（依赖生态已停发 x86_64 预编译组件，2026-07-03 起）。/ No Intel Mac build (upstream dependencies no longer ship x86_64 binaries; since 2026-07-03).
 
             官网 / Website: https://www.aiworkdeck.com
 

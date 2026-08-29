@@ -183,8 +183,17 @@ for (const f of ['manifest.xml', 'ribbon.xml', 'index.html', 'main.js']) {
 fs.cpSync(path.join(shellDir, 'js'), path.join(outDir, 'wps', 'js'), { recursive: true })
 fs.copyFileSync(path.join(rootDir, 'assets', 'icon-32.png'), path.join(outDir, 'wps', 'images', 'icon-32.png'))
 
-// 2) 任务窗格：Vite 产物整份进 ui/
+// 2) 任务窗格：Vite 产物整份进 ui/。
+// 但 dist/ 是双入口（taskpane.html = Office 面，taskpane-wps.html = WPS 面），
+// 整份拷会把 Office 那个入口也带进 WPS 分发包——它没人引用，却是一个能被公网取到的
+// 第二入口，而且 <script> 引的是微软全球 CDN 的 office.js（国内慢/不通）、在 WPS 里
+// 打开必然白屏。删掉它：WPS 面只认 taskpane-wps.html。
 fs.cpSync(distDir, path.join(outDir, 'wps', 'ui'), { recursive: true })
+const officeEntry = path.join(outDir, 'wps', 'ui', 'taskpane.html')
+if (fs.existsSync(officeEntry)) fs.rmSync(officeEntry)
+if (!fs.existsSync(path.join(outDir, 'wps', 'ui', 'taskpane-wps.html'))) {
+  fail('ui/taskpane-wps.html 不在产物里（vite 双入口配置被改动？）')
+}
 
 // 3) install.html：官方 publish.html 模板 + 我们的清单（对拍 wpsjs publish.js 的两处替换）
 const addons = ['wps', 'et', 'wpp'].map((type) => ({
