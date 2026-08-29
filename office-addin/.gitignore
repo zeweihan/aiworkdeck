@@ -2,3 +2,5 @@ node_modules/
 dist/
 dist-deploy*/
 dist-wps/
+# 分站安装器变体输出（installer/dist-intl 等，--dist 指定）
+dist-intl/
