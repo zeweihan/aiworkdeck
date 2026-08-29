@@ -121,6 +121,8 @@ description: Microsoft Office 与 WPS 插件领域。任务涉及 Word/Excel/PPT
 - **在线模式**：加载项 url = `<baseUrl>/wps/`（必须以 / 结尾，`GET url+ribbon.xml` 裸可达）；发版 = 覆盖静态目录，用户无需重装。壳文件（ribbon.xml/index.html/main.js/js/*）必须 no-cache，ui/assets/* 带 hash 长缓存。
 - **个人版安装唯一通路**：install.html 经本机 WPS 常驻服务 127.0.0.1:58890 `/deployaddons/runParams` 写用户 `%APPDATA%\kingsoft\wps\jsaddons\publish.xml`（个人版 12.1.0.16910 起 oem.ini/jsplugins.xml 被禁）。企业版私有部署仍走 jsplugins.xml + oem.ini `JSPluginsServer`。
 - 三宿主 = publish.xml 里三条记录（type=wps/et/wpp，同一 url、同名 aiworkdeck）。
+- **每个宿主首次加载各弹一次「是否信任」**（2026-08-29 实测）：安装页一次写三条记录，但授信是**按宿主**发生的，不点「确定」那个宿主就不出「AI WorkDeck」选项卡。用户会以为「表格/演示的插件没装上」——排查这类反馈先问有没有在那个宿主里点过确定。
+- **`awd_taskpane_id` 这个 PluginStorage 键是三个宿主共用的**（`wps/js/ribbon.js` 的 `AWD_PANE_KEY`，`wpsDoc.hideWpsTaskPane` 读同一个）。`ToggleAwdPane` 拿到 id 后只要 `GetTaskPane(id)` 返回真值就 toggle 并 return，**不会为当前宿主新建**——先在文字里开过窗格，再去表格点「AI 助手」就可能什么都不发生（toggle 的是另一个宿主的窗格）。2026-08-29 在表格里实测到「选项卡有、点了没反应」，这是首要嫌疑。修法是把键按宿主分（ribbon 侧用 `Application.Documents/Workbooks/Presentations` 三者之一判宿主，任务窗格侧用已验证的 `detectWpsHost()`），**改完必须真机三宿主各开一次验过再发**——别在没验证的情况下动这个壳，文字/演示两个宿主目前是好的。
 
 ### 已知地雷（WPS 面）
 

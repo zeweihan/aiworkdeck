@@ -421,6 +421,11 @@ npm run build:wps    # 拼 dist-wps/（默认 --url https://addin.aiworkdeck.com
   main.js/js/*）响应头要 no-cache，`wps/ui/assets/*` 带 hash 可长缓存。
 - `GET <baseUrl>/wps/ribbon.xml` 必须裸可达（别过 SPA 回退/鉴权），安装页的
   「状态」列就是拿它验的。
+- **每个宿主首次加载会各弹一次「是否信任」**（2026-08-29 实测）：安装页把三条记录
+  （文字/表格/演示）一次写进 publish.xml，但 WPS 是**在各宿主第一次真正加载加载项时**
+  才弹「加载项"aiworkdeck"（位于 …）首次加载，是否信任？」。**不点「确定」，那个宿主的
+  ribbon 里就不会出现「AI WorkDeck」选项卡**——看起来像「表格/演示的插件没装上」，
+  其实只是没授信。装完记得三个宿主各开一次并点确定。
 - 用户安装：浏览器打开 `<baseUrl>/install.html` → 点「安装」。页面经本机 WPS
   常驻服务（127.0.0.1:58890，`ksoWPSCloudSvr://` 协议可拉起）把三条记录
   （文字/表格/演示）写进用户 `%APPDATA%\kingsoft\wps\jsaddons\publish.xml`，
