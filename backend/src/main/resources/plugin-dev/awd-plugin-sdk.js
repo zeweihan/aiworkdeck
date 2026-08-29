@@ -22,7 +22,7 @@
  *   evidence.locate { linkKey, targetId? }
  *                                     -> {}                需 editor；有 targetId 打开底稿定位，否则跳到文档里的锚点
  *
- * v2.6 新增（宿主 0.28 起）——主题通道，照 VS Code 给 webview 注入主题的机制：
+ * v2.6 新增（宿主 0.27.4 起）——主题通道，照 VS Code 给 webview 注入主题的机制：
  *   推送  宿主 -> 插件   { awd: 1, type: "theme", theme: "light"|"dark", tokens: { "--awd-*": "..." } }
  *   init 的 context 也带 theme 与 themeTokens 两个字段（老宿主只有 theme 字符串，
  *   没有 themeTokens——SDK 会降级为只挂 data-theme，不注入变量）。

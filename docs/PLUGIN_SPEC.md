@@ -271,7 +271,7 @@ plugins/
 主题  宿主 -> 插件   { awd: 1, type: "theme", theme: "light"|"dark", tokens: { "--awd-*": "..." } }   (v2.6)
 ```
 
-**主题通道（v2.6，宿主 0.28 起）**：照 VS Code 给 webview 注入 `--vscode-*` 变量的机制。
+**主题通道（v2.6，宿主 0.27.4 起）**：照 VS Code 给 webview 注入 `--vscode-*` 变量的机制。
 `init.context.themeTokens` 与 `theme` 推送里的 `tokens` 是同一张表——宿主当前生效主题的全部
 语义色令牌（`--awd-bg` / `--awd-surface` / `--awd-text` / `--awd-border` / `--awd-accent` 等，
 名单以宿主 `frontend/src/utils/appTheme.js` 的 `THEME_TOKEN_NAMES` 为准）。SDK 收到即自动：
