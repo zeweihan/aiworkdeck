@@ -10,9 +10,10 @@
 # 报告去向：剪贴板（前缀 WPSPROBE>>>）+ %USERPROFILE%\wps-probe-report.json
 #
 # 环境坑（2026-08-29 实测，见 .claude/agents/office-addin.md「WPS 加载项」章）：
-#   - 若同机装了 Microsoft Word，ProgID `Word.Application` 解析到的是 Word 不是 WPS，
-#     所以本脚本自解析 ProgID 并拒收 Name 含 Microsoft 的宿主；
-#   - Parallels 共享的 \\Mac\Home 对 guest 只读，报告不能往那里写。
+#   - 同机装了 Microsoft Office 时，`Word.Application` 与 `kwps.Application` 会双双
+#     解析到微软 Word（Office 覆盖了 WPS 的 ProgID），`wps.Application` 未注册。
+#     本脚本因此自解析 ProgID 并拒收 Name 含 Microsoft 的宿主，把证据留在
+#     progIdAttempts 字段里；这种机器上 COM 走不通，改走 JS 宏或任务窗格 devtools。
 #
 # 脚本主体刻意全 ASCII：Windows PowerShell 5.1 读不带 BOM 的 UTF-8 脚本会把非 ASCII
 # 字符读乱，所以文中每个中文串都由 U() 按码位拼出来（注释行不参与执行，不受影响）。

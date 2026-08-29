@@ -455,5 +455,9 @@ npm run build:wps    # 拼 dist-wps/（默认 --url https://addin.aiworkdeck.com
    替换参数时能否重定义 Range 完成定位；Find 的 255/跨段/`^` 边界；以及修订开着时
    Find 会不会命中被标删的旧文。**这四组结果决定写入类命令的 Find 兜底是常态路径
    还是例外路径**，没有它就不要给 insert_text/format_text/add_comment/set_hyperlink
-   扩面。注意：同机若装了 Microsoft Word，`Word.Application` 会解析到 Word 而不是
-   WPS（脚本已自解析 ProgID 并拒收）；Parallels 的 `\\Mac\Home` 对 guest 只读。
+   扩面。
+   **已知限制**：同机装了 Microsoft Office 时，`Word.Application` 与 `kwps.Application`
+   会**双双解析到微软 Word**（Office 覆盖了 WPS 的 ProgID），`wps.Application` 未注册
+   ——脚本会拒收并在 `progIdAttempts` 里交代，此时 COM 这条路走不通，改走 WPS 的
+   JS 宏（工具 → JS 宏）或任务窗格 devtools。注意任务窗格开着时 ribbon 会拒收鼠标
+   （bbs 93291），进 JS 宏前先关掉窗格或重启 WPS。
