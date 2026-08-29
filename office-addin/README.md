@@ -448,3 +448,12 @@ npm run build:wps    # 拼 dist-wps/（默认 --url https://addin.aiworkdeck.com
    演示加页挪页；
 4. `wps.Enum` 缺失时本地常量表是否够用（三张 HANDLERS 表都不依赖 wps.Enum）；
 5. 已知平台坑回归：12.1.0.26895/28043 停靠任务窗格挡 ribbon 鼠标（bbs 93291）。
+6. **字符偏移口径**（dev-board#264 的前置测量，尚未完成）：跑 `scripts/wps-offset-probe.ps1`
+   （`powershell -NoProfile -ExecutionPolicy Bypass -File <路径>`，报告落剪贴板与
+   `%USERPROFILE%\wps-probe-report.json`）。它测四组：`doc.Range().Text` 的 JS 下标与
+   `doc.Range(s,e)` 在含表格/批注/脚注/超链接的文档上是否同口径、错位多少；Find 不带
+   替换参数时能否重定义 Range 完成定位；Find 的 255/跨段/`^` 边界；以及修订开着时
+   Find 会不会命中被标删的旧文。**这四组结果决定写入类命令的 Find 兜底是常态路径
+   还是例外路径**，没有它就不要给 insert_text/format_text/add_comment/set_hyperlink
+   扩面。注意：同机若装了 Microsoft Word，`Word.Application` 会解析到 Word 而不是
+   WPS（脚本已自解析 ProgID 并拒收）；Parallels 的 `\\Mac\Home` 对 guest 只读。
