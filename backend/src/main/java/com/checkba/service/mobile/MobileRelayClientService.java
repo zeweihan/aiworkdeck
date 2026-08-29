@@ -154,6 +154,13 @@ public class MobileRelayClientService {
                 e.put("key", String.valueOf(p.getId()));
                 e.put("name", p.getName());
             }
+            // 空清单不推送：同一台机器上 e2e/dev/优化者等多个后端实例共享同一份
+            // ~/.aiworkdeck/mobile-relay.json 的 relay 身份，测试实例本地库是空的，
+            // 推空清单会把真桌面端的云端目录整批顶成 0 行（服务端也有守卫，这里从源头掐掉）。
+            if (arr.isEmpty()) {
+                log.info("手机同步：本机项目清单为空，跳过目录推送（防空清单顶掉云端目录）");
+                return;
+            }
             String payload = mapper.writeValueAsString(body);
             String hash = sha256(payload);
             if (hash.equals(lastPushedHash)) return;

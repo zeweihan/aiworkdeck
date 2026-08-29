@@ -11,19 +11,21 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createTagStreamParser, createSseConnection } from './sse.js'
 
-/** 把整段文本喂给解析器，返回三路输出 */
+/** 把整段文本喂给解析器，返回三路输出（外加 tool_code 进出事件序列） */
 function parse(chunks) {
   let main = ''
   let thinking = ''
   const questions = []
+  const prep = []
   const p = createTagStreamParser({
     onMainText: (t) => { main += t },
     onThinkingText: (t) => { thinking += t },
-    onQuestion: (q) => { questions.push(q) }
+    onQuestion: (q) => { questions.push(q) },
+    onToolPrep: (v) => { prep.push(v) }
   })
   for (const c of [].concat(chunks)) p.feed(c)
   p.flush()
-  return { main, thinking, questions }
+  return { main, thinking, questions, prep }
 }
 
 test('反问：正文进主文本、选项单独交出、标签不外漏', () => {
@@ -109,6 +111,32 @@ test('同一输入逐字节喂入（实时流式）结果一致', () => {
 test('正文数值比较 <80%> 原样放行（数字开头不像协议标签）', () => {
   const { main } = parse('<final>担保比例<80%>时豁免</final>')
   assert.equal(main, '担保比例<80%>时豁免')
+})
+
+// ==================== 工具参数生成期回调 onToolPrep ====================
+// 模型在 <tool_code> 里逐 token 生成整篇写入内容时（长备忘录要一两分钟），
+// 界面此前毫无反应——直到 client_action 下发才出现 chip。onToolPrep 在进入/
+// 退出 tool_code 时各回调一次，界面据此显示「正在准备文档内容」提示。
+
+const TOOL_PREP_CASE = '<thinking>先想结构</thinking><process name="写入">' +
+  '<tool_code>office_insert_text({"text":"备忘录正文…"})</tool_code></process><final>已写入。</final>'
+
+test('onToolPrep：进入/退出 tool_code 各回调一次，其余通道不受影响（一次性喂入=历史回放）', () => {
+  const { main, thinking, prep } = parse(TOOL_PREP_CASE)
+  assert.deepEqual(prep, [true, false])
+  assert.equal(main, '已写入。')
+  assert.equal(thinking, '先想结构')
+})
+
+test('onToolPrep：同一输入逐字节喂入（实时流式）结果一致', () => {
+  const { main, prep } = parse(TOOL_PREP_CASE.split(''))
+  assert.deepEqual(prep, [true, false])
+  assert.equal(main, '已写入。')
+})
+
+test('onToolPrep：流在 tool_code 中途断掉时 flush 补退出，提示不悬着', () => {
+  const { prep } = parse('<process name="x"><tool_code>office_insert_text({"tex')
+  assert.deepEqual(prep, [true, false])
 })
 
 // ==================== XHR 降级通道（WPS 老内核，无流式 fetch） ====================

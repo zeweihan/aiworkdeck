@@ -21,24 +21,16 @@
           <option v-for="p in d.projects" :key="d.deviceId + '::' + p.key" :value="`remote::${d.deviceId}::${p.key}`">
             {{ p.name }}
           </option>
+          <!-- 目录行为 0 的设备（如目录被顶掉但心跳还在）也要露脸：无子项的 optgroup
+               在部分浏览器里不可见，补一条 disabled 占位让设备名一定渲染出来 -->
+          <option v-if="!d.projects || !d.projects.length" disabled value="">
+            {{ t('remoteNoProjects') }}
+          </option>
         </optgroup>
         <!-- 新建项目（dev-board#196）：哨兵值，onProjectSelect 拦截后弹输入面板 -->
         <option value="__new__">{{ t('newProjectOption') }}</option>
       </select>
       <span class="header-spacer"></span>
-      <!-- 收起面板（仅 WPS 宿主，dev-board#244）：WPS 停靠任务窗格期间 ribbon 被平台
-           bug 冻住（bbs 93291），窗格内的这颗按钮是用户唯一的解锁通路 -->
-      <button
-        v-if="isWpsHost"
-        class="icon-btn"
-        :title="t('collapsePaneTitle')"
-        @click="collapsePane"
-      >
-        <svg class="lang-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M7 5l7 7-7 7"/>
-          <path d="M14 5l7 7-7 7"/>
-        </svg>
-      </button>
       <!-- 语言切换（dev-board#177/#193）：未登录也要能切，所以放头部而不是账户菜单里；
            地球图标 + 目标语言缩写，让它一眼可读为「切换语言」而不是一个谜之汉字按钮 -->
       <button
@@ -133,6 +125,17 @@
         @need-settings="view = 'settings'"
       />
     </main>
+
+    <!-- 收起面板条（仅 WPS 宿主，dev-board#244/#260）：WPS 停靠任务窗格期间 ribbon 被
+         平台 bug 冻住（bbs 93291），窗格内的这条通路是用户唯一的解锁手段。
+         放底部而不是头部——WPS 会用自己的顶栏遮住任务窗格顶端，头部按钮点不到
+         等于开了插件就锁死（dev-board#260 真机实锤）。别删。 -->
+    <button v-if="isWpsHost" class="collapse-bar" :title="t('collapsePaneTitle')" @click="collapsePane">
+      <svg class="collapse-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M5 7l7 7 7-7"/>
+      </svg>
+      <span>{{ t('collapsePaneLabel') }}</span>
+    </button>
 
     <!-- 跨设备文件传输面板（dev-board#251）：remote:: 下拉入口与 ChatView「+」菜单
          共用同一个模块级单例状态（lib/transfer.js），挂在顶层盖住整个任务窗格 -->
@@ -695,5 +698,34 @@ onMounted(async () => {
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+/* WPS 专属收起条（dev-board#260）：静态排在 main 之下、贴窗格底边，
+   不设 z-index（overlay 面板 20/捕获层 24/菜单 26 的层级约定不受影响） */
+.collapse-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: 100%;
+  flex-shrink: 0;
+  padding: 5px 0;
+  border: none;
+  border-top: 1px solid var(--awd-border);
+  background: var(--awd-surface);
+  color: var(--awd-text-secondary);
+  font-size: 11px;
+  transition: color 0.2s ease, background 0.2s ease;
+}
+
+.collapse-bar:hover {
+  color: var(--awd-accent);
+  background: var(--awd-mint-pale);
+}
+
+.collapse-icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
 }
 </style>

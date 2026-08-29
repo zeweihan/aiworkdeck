@@ -372,12 +372,73 @@ class MobileRelayStoreServiceTest {
         List<Map<String, Object>> devAProjects = (List<Map<String, Object>>) devices.get(1).get("projects");
         assertEquals(2, devAProjects.size());
 
-        // 没有目录行的设备（哪怕心跳在线）不出现
+        // 有心跳但没有目录行的设备也要出现（projects 空数组）——目录被空清单顶掉的
+        // 真桌面端不能从清单里消失
         service.touchDevice(1L, "dev-c");
-        assertEquals(2, service.listDevices(1L).size(), "没有项目目录的设备不该出现在清单里");
+        List<Map<String, Object>> withHeartbeatOnly = service.listDevices(1L);
+        assertEquals(3, withHeartbeatOnly.size(), "有心跳但无目录行的设备也该出现在清单里");
+        Map<String, Object> devC = withHeartbeatOnly.stream()
+                .filter(m -> "dev-c".equals(m.get("deviceId"))).findFirst().orElseThrow();
+        assertEquals(Boolean.TRUE, devC.get("online"));
+        assertEquals("", devC.get("deviceName"), "心跳行没有设备名时给空串（插件端有 unknownDevice 兜底）");
+        assertTrue(((List<?>) devC.get("projects")).isEmpty());
 
         // 别的用户看不到
         assertTrue(service.listDevices(2L).isEmpty());
+    }
+
+    /**
+     * 线上实测形态（userId=3 / 设备 33766e71）：真桌面端推过 10 个项目的目录，被同一台
+     * 机器上第二个后端实例（e2e/dev/优化者，共享 ~/.aiworkdeck/mobile-relay.json 的 relay
+     * 身份）用空清单 PUT 整批顶掉成 0 行，设备随之从 listDevices 消失。语义权衡已裁决：
+     * 用户真删光全部项目时目录短暂陈旧可接受，被测试实例清空目录不可接受。
+     */
+    @Test
+    @DisplayName("空清单防顶掉守卫：空 projects + 现存目录行非空时跳过整批替换，保留现有行")
+    void emptyDirectoryPushDoesNotWipeExistingRows() {
+        service.replaceDirectory(1L, "dev-a", "MacBook", List.of(
+                new MobileRelayStoreService.DirEntry("42", "金冠纾困"),
+                new MobileRelayStoreService.DirEntry("43", "probe")));
+
+        MobileRelayStoreService.DirectoryReplaceResult result =
+                service.replaceDirectory(1L, "dev-a", "e2e-instance", List.of());
+
+        assertEquals(0, result.storedCount());
+        assertFalse(result.truncated());
+        assertEquals(2, service.listDirectory(1L).size(),
+                "空清单不许顶掉现存目录行——多实例共享 relay 身份时这就是真桌面端的目录");
+
+        // 从没推过目录的设备推空清单：无行可保，正常走替换路径（0 行进 0 行出，不抛异常）
+        MobileRelayStoreService.DirectoryReplaceResult fresh =
+                service.replaceDirectory(1L, "dev-new", "Win", List.of());
+        assertEquals(0, fresh.storedCount());
+        assertEquals(2, service.listDirectory(1L).size(), "别的设备的行不受影响");
+
+        // 非空清单行为不变：照常整批替换
+        service.replaceDirectory(1L, "dev-a", "MacBook", List.of(
+                new MobileRelayStoreService.DirEntry("44", "新项目")));
+        List<Map<String, Object>> after = service.listDirectory(1L);
+        assertEquals(1, after.size());
+        assertEquals("44", after.get(0).get("key"));
+    }
+
+    @Test
+    @DisplayName("touchDevice 带 deviceName：写入心跳行，listDevices 对无目录行设备用它当名字")
+    void touchDeviceStoresDeviceNameForHeartbeatOnlyDevices() {
+        service.touchDevice(1L, "dev-a", "MacBook");
+        MobileDeviceState row = deviceStateRepository.findByUserIdAndDeviceId(1L, "dev-a").orElseThrow();
+        assertEquals("MacBook", row.getDeviceName());
+
+        // 后续不带名字的心跳（GET /inbox 那条只有 deviceId）不许把已有名字抹掉
+        service.touchDevice(1L, "dev-a");
+        assertEquals("MacBook", deviceStateRepository.findByUserIdAndDeviceId(1L, "dev-a")
+                .orElseThrow().getDeviceName(), "无名心跳不该清空已存的设备名");
+
+        List<Map<String, Object>> devices = service.listDevices(1L);
+        assertEquals(1, devices.size());
+        assertEquals("MacBook", devices.get(0).get("deviceName"),
+                "目录行为 0 的设备 deviceName 应取心跳行的");
+        assertTrue(((List<?>) devices.get(0).get("projects")).isEmpty());
     }
 
     /**

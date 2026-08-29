@@ -207,6 +207,67 @@ export async function fetchProjectFiles({ serverUrl, token }, projectId) {
 }
 
 /**
+ * 创建项目文件记录（POST /api/projects/{pid}/files/file，本地附件上传第一步，dev-board#262）。
+ * 参数对齐桌面端 createFile（frontend/src/services/api.js）：body 是
+ * {parentId, name, fileType, fileSize, wpsFileId}，存储键由服务端生成（filePath 不上送）。
+ * 服务端直接返回 ProjectFile 对象本体（无 {code,data} 信封）；失败抛错由界面提示。
+ */
+export async function createProjectFile({ serverUrl, token }, projectId, { name, fileType, size, wpsFileId }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) throw new Error(t('apiServerUrlEmpty'))
+  let resp
+  try {
+    resp = await fetch(`${base}/api/projects/${encodeURIComponent(projectId)}/files/file`, {
+      method: 'POST',
+      headers: headers(token),
+      body: JSON.stringify({ parentId: null, name, fileType, fileSize: size, wpsFileId })
+    })
+  } catch (e) {
+    throw new Error(t('apiBackendUnreachable'))
+  }
+  if (!resp.ok) throw new Error(t('apiCreateFileFailedHttp', { status: resp.status }))
+  let data = null
+  try { data = await resp.json() } catch (e) { throw new Error(t('apiBadResponseFormat')) }
+  if (data && data.id != null) return data
+  throw new Error(t('apiBadResponseFormat'))
+}
+
+/**
+ * 上传文件字节（POST /api/files/{fileId}/upload，本地附件上传第二步）。
+ * 与桌面端 uploadFileContent（ChatInterface.vue）同一套头：裸 octet-stream 单块，
+ * X-File-Offset:0 + X-File-Total-Size + X-Session-Id（三个头都在后端 CORS 白名单里）。
+ * fileId 用数字 id 或 wpsFileId 均可（后端 resolveProjectFileForUpload 双查）。
+ * 失败抛错：后端守卫类错误（403/400/404）带 {code:-1,message} 可读文案，透传给用户。
+ */
+export async function uploadFileBytes({ serverUrl, token }, fileId, blob, totalSize) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) throw new Error(t('apiServerUrlEmpty'))
+  let resp
+  try {
+    resp = await fetch(`${base}/api/files/${encodeURIComponent(fileId)}/upload`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Session-Id': token || '',
+        'X-File-Offset': '0',
+        'X-File-Total-Size': String(totalSize)
+      },
+      body: blob
+    })
+  } catch (e) {
+    throw new Error(t('apiBackendUnreachable'))
+  }
+  if (!resp.ok) {
+    let msg = t('apiUploadFailedHttp', { status: resp.status })
+    try {
+      const data = await resp.json()
+      if (data && data.message) msg = String(data.message)
+    } catch (e) { /* 保底文案 */ }
+    throw new Error(msg)
+  }
+}
+
+/**
  * 该账号全部设备清单（GET /api/mobile/devices，dev-board#250）。每台设备带在线态
  * 与其在该机上的项目列表，供项目下拉渲染远程设备分组。旧后端没有该端点（404）
  * 或任何失败/非数组响应一律返回 null，由调用方隐藏这组下拉项，不影响主链路。

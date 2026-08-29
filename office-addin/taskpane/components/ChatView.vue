@@ -53,14 +53,17 @@
               <button class="option-btn" @click="focusInput">{{ t('proposeChanges') }}</button>
             </div>
           </div>
-          <!-- 首 token 前不再是「空气泡+光标」：给一句状态，别让人以为卡死了 -->
+          <!-- 首 token 前不再是「空气泡+光标」：给一句状态，别让人以为卡死了。
+               工具参数生成期（toolPrep，<tool_code> 内逐 token 出整篇写入内容，可长达
+               一两分钟）优先明示，此前这段是渲染盲区、伪装成卡死 -->
           <div v-if="msg.streaming && !msg.text" class="bubble assistant-bubble pending-bubble">
-            {{ msg.tools && msg.tools.length ? t('workingOnDocument') : t('thinkingEllipsis') }}
+            {{ toolPrep ? t('preparingDocumentContent') : (msg.tools && msg.tools.length ? t('workingOnDocument') : t('thinkingEllipsis')) }}
           </div>
           <!-- Markdown 渲染（dev-board#197）：加粗/列表/代码不再以星号裸奔；
                renderMarkdown 先整体 HTML 转义再套标签，v-html 无注入面 -->
           <div v-else class="bubble assistant-bubble">
             <div class="md" :class="{ 'md-streaming': msg.streaming }" v-html="renderMarkdown(msg.text)"></div>
+            <div v-if="msg.streaming && toolPrep" class="prep-line">{{ t('preparingDocumentContent') }}</div>
           </div>
           <!-- 引用定位：回答里引用的原文片段可点击，在文档中选中滚动到位（仅 Word 宿主） -->
           <div v-if="citations(msg).length" class="cite-row">
@@ -197,6 +200,11 @@
             <span v-if="attachedFiles.length" class="row-badge">{{ attachedFiles.length }}</span>
             <span class="row-chevron">›</span>
           </button>
+          <!-- 本地文件附件（dev-board#262）：选本机文件上传成项目文件后附进对话 -->
+          <button class="menu-row" @click="fromMore(pickLocalFiles)">
+            <span class="row-label">{{ t('menuUploadLocal') }}</span>
+            <span class="row-chevron">›</span>
+          </button>
           <button v-if="skillList.length" class="menu-row" @click="fromMore(() => { skillsOpen = true })">
             <span class="row-label">{{ t('menuSkills') }}</span>
             <span v-if="selectedSkillIds.length" class="row-badge">{{ selectedSkillIds.length }}</span>
@@ -257,6 +265,28 @@
         <span class="context-spacer"></span>
         <button class="pill" :title="t('newConversationTitle')" :disabled="streaming" @click="newConversation">{{ t('newConversationButton') }}</button>
       </div>
+      <!-- 本地文件上传中间态（dev-board#262）：上传中转圈、失败标红可重试/移除；
+           成功的条目撤下并入附件（「+」pill 的徽标随之 +1） -->
+      <div v-if="uploadingFiles.length" class="upload-row">
+        <span v-for="u in uploadingFiles" :key="u.key" class="upload-pill" :class="u.status" :title="u.error || u.name">
+          <span v-if="u.status === 'uploading'" class="chip-spinner"></span>
+          <span class="upload-name">{{ u.name }}</span>
+          <template v-if="u.status === 'failed'">
+            <span class="upload-err">{{ u.error }}</span>
+            <button class="upload-act" :title="t('uploadRetry')" @click="retryUpload(u.key)">{{ t('uploadRetry') }}</button>
+            <button class="upload-act" :title="t('delete')" @click="removeUpload(u.key)">x</button>
+          </template>
+        </span>
+      </div>
+      <!-- 隐藏的文件选择器：菜单「上传本地文件」触发 -->
+      <input
+        ref="fileInputEl"
+        type="file"
+        multiple
+        class="file-input-hidden"
+        :accept="uploadAccept"
+        @change="onFilesPicked"
+      />
       <div class="input-row">
         <textarea
           v-model="input"
@@ -293,11 +323,12 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch, TransitionGroup } from 'vue'
 import {
-  messages, input, streaming, reconnecting, banner, notice, includeDocument, scrollSignal,
+  messages, input, streaming, toolPrep, reconnecting, banner, notice, includeDocument, scrollSignal,
   activateSession, send as sendMessage, stop as stopRun, newConversation,
   answerQuestion, modelCatalog, selectedModel, chooseModel, skillList, selectedSkillIds,
   toggleSkill, loadConversationList, switchConversation, attachedFiles, toggleAttachedFile,
-  loadProjectFiles, removeConversation, retitleConversation
+  loadProjectFiles, removeConversation, retitleConversation,
+  uploadingFiles, uploadLocalFiles, removeUpload, retryUpload
 } from '../lib/chatSession.js'
 import { openTransfer } from '../lib/transfer.js'
 import { readDocumentMeta, detectHost, locateInDocument } from '../lib/hostBridge.js'
@@ -571,6 +602,24 @@ async function openAttach() {
   }
 }
 
+// ==================== 本地文件上传（dev-board#262） ====================
+
+const fileInputEl = ref(null)
+/** 覆盖后端能抽文本的面：图片/PDF 走 OCR（ai.context.ocr-extensions），其余走 Tika/纯文本 */
+const uploadAccept = '.jpg,.jpeg,.png,.gif,.bmp,.webp,.pdf,.txt,.md,.csv,.doc,.docx,.xls,.xlsx,.ppt,.pptx'
+
+function pickLocalFiles() {
+  if (fileInputEl.value) fileInputEl.value.click()
+}
+
+function onFilesPicked(ev) {
+  const files = ev.target.files
+  // 不 await：上传在 store 里异步跑，中间态经 uploadingFiles 渲染
+  uploadLocalFiles(files)
+  // 清空选择值：同一个文件（失败后修好再选）要能再次触发 change
+  ev.target.value = ''
+}
+
 async function sendQuick(text) {
   const result = await sendMessage(text)
   scrollToBottom(true)
@@ -795,6 +844,14 @@ async function confirmDelete(c) {
 .pending-bubble { color: var(--awd-text-secondary); animation: pulse 1.6s ease-in-out infinite; }
 
 @keyframes pulse { 50% { opacity: 0.55; } }
+
+/* 工具参数生成期的轻量提示：正文已开张但模型转去生成写入内容时，挂在气泡尾部 */
+.prep-line {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--awd-text-secondary);
+  animation: pulse 1.6s ease-in-out infinite;
+}
 
 .done-line {
   margin-top: 3px;
@@ -1099,6 +1156,60 @@ async function confirmDelete(c) {
 .row-check {
   color: var(--awd-accent);
   font-weight: 700;
+}
+
+/* 本地文件上传中间态（dev-board#262） */
+.file-input-hidden { display: none; }
+
+.upload-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.upload-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--awd-border);
+  background: var(--awd-surface);
+  color: var(--awd-text-secondary);
+  font-size: 11px;
+}
+
+.upload-pill.uploading { border-color: var(--awd-primary); }
+
+.upload-pill.failed {
+  color: var(--awd-danger);
+  border-color: var(--awd-danger);
+}
+
+.upload-name {
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-err {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-act {
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0 2px;
+  text-decoration: underline;
 }
 
 .input-row {

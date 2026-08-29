@@ -176,12 +176,28 @@ function installWps(opts = {}) {
   const listTemplate = { ListLevels: { Item: () => listLevel } }
   const appObj = {
     ActiveDocument: doc,
-    Selection: {
-      get Text() { return '' },
-      set Text(v) { state.calls.push({ name: 'Selection.Text=', value: v }) },
-      get Range() { return makeRange(opts.selStart || 0, opts.selEnd || opts.selStart || 0) },
-      Type: opts.selType
-    },
+    Selection: (() => {
+      // 带状态的选区 mock，忠于 VBA/WPS 语义：Text 赋值把选区文本替换成新值，
+      // **赋值后选区扩展覆盖新文本**（这正是连续无锚点插入互相覆盖的病灶）；
+      // Collapse(0)=折叠到末尾、Collapse(1)=折叠到起点。
+      let selS = opts.selStart || 0
+      let selE = opts.selEnd || opts.selStart || 0
+      return {
+        get Text() { return state.text.slice(selS, selE) },
+        set Text(v) {
+          state.calls.push({ name: 'Selection.Text=', value: v })
+          state.text = state.text.slice(0, selS) + v + state.text.slice(selE)
+          selE = selS + v.length
+        },
+        Collapse(dir) {
+          state.calls.push({ name: 'Selection.Collapse', dir })
+          if (dir === 1) selE = selS
+          else selS = selE
+        },
+        get Range() { return makeRange(selS, selE) },
+        Type: opts.selType
+      }
+    })(),
     get ListGalleries() {
       if (opts.listGalleriesBroken) throw new Error('mock：ListGalleries 不可用')
       return { Item: () => ({ ListTemplates: { Item: () => listTemplate } }) }
@@ -295,6 +311,16 @@ test('insert_text：TrackRevisions 不可用时降级直改并标 tracked:false'
   const data = await H.insert_text({ text: '（补充）', anchorText: '合同正文', position: 'after' })
   assert.equal(state.text, '合同正文（补充）。\r')
   assert.equal(data.tracked, false)
+})
+
+test('insert_text：连续两次无锚点插入不互相覆盖（Selection.Text 赋值后折叠到末尾）', async () => {
+  // WPS 语义下 Selection.Text 赋值后选区覆盖新文本：不折叠的话第二次插入会把
+  // 第一次整段替换（真机表现为第一段变红色删除线）。修法是每次赋值后 Collapse(0)。
+  const { state } = installWps({ text: '' })
+  await H.insert_text({ text: '第一段\n' })
+  await H.insert_text({ text: '第二段' })
+  assert.equal(state.text, '第一段\r第二段')
+  assert.ok(state.calls.some((c) => c.name === 'Selection.Collapse' && c.dir === 0))
 })
 
 /* ==================== add_comment ==================== */

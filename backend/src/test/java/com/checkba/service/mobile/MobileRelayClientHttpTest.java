@@ -288,6 +288,22 @@ class MobileRelayClientHttpTest {
                         .collect(java.util.stream.Collectors.joining(" | ")));
     }
 
+    /**
+     * 空清单防顶掉（线上实测）：本机常态跑着 e2e/dev/优化者多个后端实例，凡是不改
+     * user.home 的实例都共享同一份 ~/.aiworkdeck/mobile-relay.json 的 relay 身份——
+     * 测试实例本地库是空的，一次空清单推送就把真桌面端在云端的目录整批顶成 0 行。
+     * 本地项目列表为空时干脆不出站（服务端另有同语义守卫，双保险）。
+     */
+    @Test
+    @DisplayName("本地项目列表为空：跳过目录推送，一条出站都不发")
+    void pushDirectorySkipsWhenLocalProjectListEmpty() {
+        when(projectRepository.findByUserIdOrderByCreatedAtDesc(7L)).thenReturn(List.of());
+        service().pushDirectory();
+
+        assertTrue(dirBodies.isEmpty(), "空清单不该出站——那会顶掉真桌面端的云端目录");
+        assertTrue(bridgeBodies.isEmpty(), "没有出站需求就不该触发桥接");
+    }
+
     @Test
     @DisplayName("取件全链路：下载→现场影像/日期两级目录→createFile+写字节→ACK")
     void pollInboxLandsAndAcks() {

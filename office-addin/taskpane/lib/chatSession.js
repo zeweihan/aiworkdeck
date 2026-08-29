@@ -2,6 +2,7 @@ import { reactive, ref } from 'vue'
 import {
   postChat, postCancel, postOfficeResult, createConversation, fetchConversationHistory,
   fetchConversations, fetchModels, fetchSkills, fetchProjectFiles,
+  createProjectFile, uploadFileBytes, ensureAddinDefaultProject,
   deleteConversation as apiDeleteConversation, renameConversation as apiRenameConversation
 } from './api.js'
 import { createSseConnection, createTagStreamParser } from './sse.js'
@@ -31,6 +32,12 @@ export const messages = ref([])
 export const input = ref('')
 export const streaming = ref(false)
 export const reconnecting = ref(false)
+/**
+ * 模型正在 <tool_code> 里生成工具参数（如整篇要写入文档的内容）：这段可长达
+ * 一两分钟且不产生任何可见正文，此前是渲染盲区——界面据此显示「正在准备文档内容」，
+ * 别让盲区伪装成卡死。由流式解析器的 onToolPrep 进出回调驱动。
+ */
+export const toolPrep = ref(false)
 /** 错误类提示（红） */
 export const banner = ref('')
 /** 中性提示（灰），如「上一次的任务仍在进行中」 */
@@ -53,6 +60,10 @@ export const skillList = ref([])
 export const selectedSkillIds = ref([])
 /** 附加的项目文件（随每条消息以 contextItems 上送，后端按 fileId 读内容） */
 export const attachedFiles = ref([])
+/** 本地文件上传的中间态条目（上传中/失败；成功即撤下并入 attachedFiles，dev-board#262） */
+export const uploadingFiles = ref([])
+/** 客户端单文件上限：超限直接标失败，不发起请求 */
+export const UPLOAD_MAX_BYTES = 20 * 1024 * 1024
 
 // ==================== 内部状态 ====================
 
@@ -155,12 +166,14 @@ export async function activateSession({ settings, projectId }) {
   currentAssistant = null
   parser = null
   streaming.value = false
+  toolPrep.value = false
   reconnecting.value = false
   everReconnected = false
   banner.value = ''
   notice.value = ''
   conversationId = null
   attachedFiles.value = []
+  uploadingFiles.value = []
   resetDocCache()
 
   if (!pid || !settings || !isConfigured(settings)) return
@@ -242,6 +255,103 @@ export function toggleAttachedFile(file) {
   attachedFiles.value = cur.some((f) => String(f.id) === String(file.id))
     ? cur.filter((f) => String(f.id) !== String(file.id))
     : [...cur, { id: file.id, name: file.name, fileType: file.fileType || '' }]
+}
+
+/** 扩展名 → 后端 fileType（与桌面端 ChatInterface.vue 的 getFileTypeFromName 同一张表） */
+function fileTypeFromName(name) {
+  const ext = String(name || '').split('.').pop().toLowerCase()
+  const map = {
+    doc: 'word', docx: 'word',
+    xls: 'excel', xlsx: 'excel',
+    pdf: 'pdf',
+    txt: 'txt',
+    ppt: 'ppt', pptx: 'ppt',
+    jpg: 'image', jpeg: 'image', png: 'image', gif: 'image', webp: 'image', bmp: 'image',
+    md: 'markdown'
+  }
+  return map[ext] || 'other'
+}
+
+let uploadSeq = 0
+
+/**
+ * 上传本机文件成项目文件并附进对话（dev-board#262）。两步走，参数对齐桌面端
+ * confirmUploadAndAddContext：先 createProjectFile 建记录，再 uploadFileBytes 传字节；
+ * 成功的文件并入 attachedFiles（真实 fileId，contextItems 契约不变——图片/PDF 由
+ * 后端既有 OCR/Tika 抽文本进模型）。期间每个文件在 uploadingFiles 里挂一条中间态，
+ * 失败标可读错误、可重试/移除。超限（20MB）直接标失败，不发起请求。
+ *
+ * 目标项目：未选项目时先懒建「插件临时项目」（App.vue 启动时通常已做过，这里兜底；
+ * 账号已有项目但没选中时 ensure 会返回 null，退回「请选择项目」提示）。
+ */
+export async function uploadLocalFiles(fileList) {
+  if (!ctx.settings || !isConfigured(ctx.settings)) return
+  const files = Array.from(fileList || []).filter(Boolean)
+  if (!files.length) return
+  let pid = ctx.projectId
+  if (!pid) {
+    const created = await ensureAddinDefaultProject(ctx.settings)
+    if (created) pid = String(created.id)
+  }
+  if (!pid) {
+    banner.value = t('noProjectBanner')
+    return
+  }
+  const tasks = []
+  for (const file of files) {
+    const entry = reactive({
+      key: ++uploadSeq, name: file.name || t('uploadUnnamedFile'),
+      status: 'uploading', error: '', file, projectId: pid
+    })
+    uploadingFiles.value = [...uploadingFiles.value, entry]
+    if ((file.size || 0) > UPLOAD_MAX_BYTES) {
+      entry.status = 'failed'
+      entry.error = t('uploadTooLarge')
+      continue
+    }
+    tasks.push(runUpload(entry))
+  }
+  await Promise.all(tasks)
+}
+
+/** 单个文件的两步上传。永不 reject——失败全部落在条目上给用户看 */
+async function runUpload(entry) {
+  const settings = ctx.settings
+  try {
+    const created = await createProjectFile(settings, entry.projectId, {
+      name: entry.name,
+      fileType: fileTypeFromName(entry.name),
+      size: entry.file.size || 0,
+      wpsFileId: `project_${entry.projectId}_doc_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
+    })
+    await uploadFileBytes(settings, created.id, entry.file, entry.file.size || 0)
+    // 成功：中间态撤下，正式并入附件。createFile 失败时什么都没发生（无半截状态）；
+    // 字节上传失败时记录已在服务端但内容为空，同样不并入——附一个空文件比不附更糟，
+    // 条目留在失败态可重试（重试会另建一条记录，空记录由用户在项目里自行清理）。
+    uploadingFiles.value = uploadingFiles.value.filter((e) => e !== entry)
+    if (!attachedFiles.value.some((f) => String(f.id) === String(created.id))) {
+      attachedFiles.value = [...attachedFiles.value, {
+        id: created.id, name: created.name || entry.name, fileType: created.fileType || ''
+      }]
+    }
+  } catch (e) {
+    entry.status = 'failed'
+    entry.error = (e && e.message) || t('uploadFailed')
+  }
+}
+
+export function removeUpload(key) {
+  uploadingFiles.value = uploadingFiles.value.filter((e) => e.key !== key)
+}
+
+export async function retryUpload(key) {
+  const entry = uploadingFiles.value.find((e) => e.key === key)
+  if (!entry || entry.status !== 'failed') return
+  // 超限的重试没有意义（文件没变），保持失败态等用户移除
+  if ((entry.file.size || 0) > UPLOAD_MAX_BYTES) return
+  entry.status = 'uploading'
+  entry.error = ''
+  await runUpload(entry)
 }
 
 /** 删除会话：删的是当前会话时就地转为新对话（清本地 ID 与消息） */
@@ -373,6 +483,7 @@ function toLocalMessage(row) {
 function finishStreaming() {
   if (currentAssistant) currentAssistant.streaming = false
   streaming.value = false
+  toolPrep.value = false
   notice.value = ''
   perfEnd()
 }
@@ -427,6 +538,12 @@ function attachParser(assistant) {
     // 用户直接在输入框回答）。一轮里问第二次时后一次覆盖前一次——可点的只有最后一问。
     onQuestion: (q) => {
       assistant.question = q.options.length ? { options: q.options, answered: false } : null
+    },
+    // 工具参数生成期（<tool_code> 进/出）：期间没有任何可见正文，据此点亮
+    // 「正在准备文档内容」提示（历史回灌用的 toLocalMessage 解析器刻意不传本回调）
+    onToolPrep: (active) => {
+      toolPrep.value = !!active
+      if (active) bumpScroll()
     }
   })
 }
@@ -800,6 +917,7 @@ export function newConversation() {
   reconnecting.value = false
   everReconnected = false
   streaming.value = false
+  toolPrep.value = false
   resetDocCache()
   // 立刻预连新会话（签发新 ID + 建 SSE），让下一条消息零建连成本；
   // 这条连接没有轮次在跑，其 run_state 不产生任何副作用（见 handleRunState 第 2 种来源）

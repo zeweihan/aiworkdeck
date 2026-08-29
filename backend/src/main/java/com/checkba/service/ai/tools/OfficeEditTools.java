@@ -245,7 +245,8 @@ public class OfficeEditTools implements AgentToolComponent {
     // ==================== 修改（Word 原生修订） ====================
 
     @Tool("在当前 Word 文档中查找并替换文本，修改以 Word 原生修订（Track Changes）形式呈现。" +
-          "searchText 必须与文档中的文本精确一致；replaceAll=false 时只替换第一处。")
+          "searchText 必须与文档中的文本精确一致；replaceAll=false 时只替换第一处。" +
+          "replaceText 必须是纯文本，不要携带 Markdown 记号（---、**、# 等）——它们只会成为文档里的字面字符，排版请改用格式化工具。")
     @ToolMeta(displayName = "替换文本（修订）", category = "office", fileEffect = "MODIFIED")
     public String office_replace_text(
             @P("会话ID（系统自动注入）") String conversationId,
@@ -271,7 +272,8 @@ public class OfficeEditTools implements AgentToolComponent {
     }
 
     @Tool("在当前 Word 文档中插入文本，插入以 Word 原生修订（Track Changes）形式呈现。" +
-          "提供 anchorText 时在该锚点前/后插入（锚点须与文档精确一致）；不提供时在用户当前光标/选区处插入。")
+          "提供 anchorText 时在该锚点前/后插入（锚点须与文档精确一致）；不提供时在用户当前光标/选区处插入。" +
+          "text 必须是纯文本，不要携带 Markdown 记号（---、**、# 等）——它们只会成为文档里的字面字符，排版请改用格式化工具。")
     @ToolMeta(displayName = "插入文本（修订）", category = "office", fileEffect = "MODIFIED")
     public String office_insert_text(
             @P("会话ID（系统自动注入）") String conversationId,
