@@ -22,6 +22,7 @@ function installWps(opts = {}) {
     trackLog: [],
     writes: [], // {kind, prop, value, start, end}
     calls: [], // {name, ...}
+    findProps: {}, // Find 对象上被显式钉死的匹配宽松度属性
     selected: null
   }
 
@@ -90,8 +91,11 @@ function installWps(opts = {}) {
       get Start() { return s },
       get End() { return e },
       get Text() {
-        // readSkew：模拟「文档含占位符导致偏移口径失准」——非全文 Range 的读带偏移
-        const skew = opts.readSkew && !(s === 0 && e === fullLen()) ? opts.readSkew : 0
+        // readSkew：模拟「文档含占位符导致偏移口径失准」——非全文 Range 的读带偏移。
+        // readSkewAfter：只让起点 >= 该值的 Range 失准，用来构造「前几处校验通过、
+        // 后面某处才失败」——半写入类 bug 只有这种形状才暴露得出来。
+        const inSkewZone = opts.readSkewAfter == null || s >= opts.readSkewAfter
+        const skew = opts.readSkew && inSkewZone && !(s === 0 && e === fullLen()) ? opts.readSkew : 0
         return state.text.slice(s + skew, e + skew)
       },
       set Text(v) {
@@ -126,8 +130,11 @@ function installWps(opts = {}) {
         state.writes.push({ kind: 'range', prop: 'Style', value: v, start: s, end: e })
       },
       get Find() {
-        return {
+        const find = {
           ClearFormatting() {},
+          ClearAllFuzzyOptions() {
+            state.calls.push({ name: 'Find.ClearAllFuzzyOptions' })
+          },
           Execute: (...a) => {
             state.calls.push({ name: 'Find.Execute', args: a })
             const findText = a[0]
@@ -139,6 +146,15 @@ function installWps(opts = {}) {
             return false
           }
         }
+        // 记录匹配宽松度属性的写入：这几项不在 Execute 的 15 参签名里，会从用户
+        // 上一次手动查找继承，必须由代码显式钉死
+        return new Proxy(find, {
+          set(t, prop, v) {
+            state.findProps[prop] = v
+            t[prop] = v
+            return true
+          }
+        })
       }
     }
   }
@@ -508,6 +524,81 @@ test('HANDLERS 覆盖任务书列出的全部 Word 面命令', () => {
   for (const name of expected) {
     assert.equal(typeof H[name], 'function', `缺少 handler：${name}`)
   }
+})
+
+/* ============ Find 兜底路的前置守卫（能力边界落差，宁可报错不要猜） ============ */
+
+test('Find 兜底：拦截「replaceText 里含 searchText」——否则会反复替换刚生成的文本', async () => {
+  // 兜底是「循环替换最靠前一处」。'AA'→'AA补' 时第一轮的产物里仍含 'AA' 且位置最靠前，
+  // 第二轮会替换自己刚写出来的内容，堆出嵌套垃圾，而第二处原始命中一个没动。
+  const { state } = installWps({ text: '甲AA乙AA丙', readSkew: 1 })
+  await assert.rejects(
+    H.replace_text({ searchText: 'AA', replaceText: 'AA补', replaceAll: true }),
+    /replaceText 里包含了 searchText/
+  )
+  assert.equal(state.text, '甲AA乙AA丙') // 一个字都没动
+  assert.equal(state.calls.filter((c) => c.name === 'Find.Execute').length, 0)
+})
+
+test('Find 兜底：单处替换时不拦「replaceText 含 searchText」（只有循环才会自噬）', async () => {
+  const { state } = installWps({ text: '甲AA乙', readSkew: 1 })
+  const data = await H.replace_text({ searchText: 'AA', replaceText: 'AA补' })
+  assert.equal(state.text, '甲AA补乙')
+  assert.equal(data.via, 'fullReplace')
+})
+
+test('Find 兜底：拦截跨段落的 replaceText（查找替换的替换框不认裸段落符）', async () => {
+  const { state } = installWps({ text: '本条待定。', readSkew: 1 })
+  await assert.rejects(
+    H.replace_text({ searchText: '本条待定', replaceText: '第一行\n第二行' }),
+    /不支持跨段落的替换文本/
+  )
+  assert.equal(state.text, '本条待定。')
+})
+
+test('Find 兜底：拦截超 255 字的 searchText（查找引擎硬上限）', async () => {
+  const needle = 'A'.repeat(300)
+  const { state } = installWps({ text: '甲' + needle + '乙', readSkew: 1 })
+  await assert.rejects(
+    H.replace_text({ searchText: needle, replaceText: '短文本' }),
+    /超过查找引擎 255 字上限/
+  )
+  assert.equal(state.text, '甲' + needle + '乙')
+})
+
+test('Find 兜底：拦截含 ^ 的 searchText（^ 是查找语法的转义前导符）', async () => {
+  const { state } = installWps({ text: '公式 a^b 结尾', readSkew: 1 })
+  await assert.rejects(
+    H.replace_text({ searchText: 'a^b', replaceText: 'x' }),
+    /含 \^ 字符/
+  )
+  assert.equal(state.text, '公式 a^b 结尾')
+})
+
+test('Find 兜底：显式钉死匹配宽松度，不继承用户上次手动查找的设置', async () => {
+  // IgnorePunct/IgnoreSpace/MatchFuzzy/MatchByte 不在 Execute 的 15 参签名里，
+  // ClearFormatting() 也不清它们——不钉死的话同一份文档在两台机器上命中范围会不同。
+  const { state } = installWps({ text: 'ABCDEFGH', readSkew: 1 })
+  await H.replace_text({ searchText: 'CDE', replaceText: 'XYZ' })
+  assert.deepEqual(state.findProps, {
+    IgnorePunct: false,
+    IgnoreSpace: false,
+    MatchFuzzy: false,
+    MatchByte: true // 极性与其余三个相反：true 才是「区分全角/半角」
+  })
+  assert.ok(state.calls.some((c) => c.name === 'Find.ClearAllFuzzyOptions'))
+})
+
+test('format_text：applyToAll 任一命中校验失败时不留半写入', async () => {
+  // 前一处校验通过、后一处失准。边校验边写的旧写法会先把第一处加粗再抛错，
+  // 用户拿到「半篇改了格式 + 一条报错」，还留着一片修订。
+  const { state } = installWps({ text: '甲AA乙AA丙', readSkew: 1, readSkewAfter: 4 })
+  await assert.rejects(
+    H.format_text({ anchorText: 'AA', bold: true, applyToAll: true }),
+    /定位校验失败/
+  )
+  assert.equal(state.writes.length, 0)
+  assert.equal(state.track, false) // withTracking 的 finally 仍把修订开关恢复了
 })
 
 test('replace_text：replaceAll + 偏移失准 = 整体切纯 Find 循环，计数正确不误报（混跑病灶回归）', async () => {
