@@ -113,16 +113,17 @@ description: Microsoft Office 与 WPS 插件领域。任务涉及 Word/Excel/PPT
 - `taskpane/lib/wpsDoc.js` — WPS 三宿主文档读取（契约同 wordDoc.js）。表格读取必须 Value2 批量（跨进程桥约 0.2ms/调用，逐格会拖死任务窗格）。
 - `taskpane/lib/wpsExecutor.js` + `wpsWordHandlers.js` / `wpsEtHandlers.js` / `wpsWppHandlers.js` — office_command 的 WPS 执行器（分发器 + 三张宿主 HANDLERS 表）。**命令名与参数/返回值契约以 officeExecutor.js 为准绳**；宿主守卫按前缀（excel_*/ppt_*/其余归 word）。
 - `taskpane-wps.html` — WPS 构建入口（不含 office.js；window.wps 由宿主注入）。与 taskpane.html 同出一个 dist（vite 双入口），build.target 压 es2018 给参差的 CEF 内核留余量。
-- `wps/` — ribbon 薄壳（vanilla JS，不进 Vite）：ribbon.xml（三宿主共用）+ index.html/main.js/js/*（在线模式 WPS 启动拉 url/index.html）+ `vendor/publish-template.html`（官方 wpsjs@2.2.3 publish.html 原样 vendor，构建脚本只做 PUBLISH_REPLACE_STRING/SERVERID_REPLEASE_STRING 两处替换 + 标题品牌化 + 追加 BRAND_STYLE 覆盖样式（对齐官网 DESIGN.md，选择器钉在模板既有类名上，dev-board#246），**机制代码不许手改**——「验证中/正常/无效」状态色是机制 JS 写 inline 的，样式层刻意不碰）。
-- `scripts/build-wps.mjs` — `npm run build:wps` 出 dist-wps/（wps/ 壳 + wps/ui/=dist 拷贝 + install.html + jsplugins.xml）。默认部署地址 https://addin.aiworkdeck.com/wps-addin。
+- `wps/` — ribbon 薄壳（vanilla JS，不进 Vite）：manifest.xml + ribbon.xml（都三宿主共用）+ index.html/main.js/js/*（在线模式 WPS 启动拉 url/index.html）+ `vendor/publish-template.html`（官方 wpsjs@2.2.3 publish.html 原样 vendor，构建脚本只做 PUBLISH_REPLACE_STRING/SERVERID_REPLEASE_STRING 两处替换 + 标题品牌化 + 追加 BRAND_STYLE 覆盖样式（对齐官网 DESIGN.md，选择器钉在模板既有类名上，dev-board#246），**机制代码不许手改**——「验证中/正常/无效」状态色是机制 JS 写 inline 的，样式层刻意不碰）。
+- `scripts/build-wps.mjs` — `npm run build:wps` 出 dist-wps/（wps/ 壳含 manifest.xml + wps/ui/=dist 拷贝 + install.html + jsplugins.xml）。默认部署地址 https://addin.aiworkdeck.com/wps-addin。
 
 ### 分发契约
 
-- **在线模式**：加载项 url = `<baseUrl>/wps/`（必须以 / 结尾，`GET url+ribbon.xml` 裸可达）；发版 = 覆盖静态目录，用户无需重装。壳文件（ribbon.xml/index.html/main.js/js/*）必须 no-cache，ui/assets/* 带 hash 长缓存。
+- **在线模式**：加载项 url = `<baseUrl>/wps/`（必须以 / 结尾）。WPS **每次启动宿主都成对拉 `url/manifest.xml` 与 `url/ribbon.xml`**，两者都得裸可达（别过 SPA 回退/鉴权）；`index.html` 要等用户点按钮才拉。`manifest.xml` 照 wpsjs 脚手架模板（`<JsPlugin><ApiVersion>/<Name>/<Description>`，`<Name>` 与 `ADDON_NAME` 同源），三宿主共用一份——2026-08-29 之前构建脚本从没产出过它，线上一直 404。发版 = 覆盖静态目录，用户无需重装。壳文件（manifest.xml/ribbon.xml/index.html/main.js/js/*）必须 no-cache，ui/assets/* 带 hash 长缓存。
 - **个人版安装唯一通路**：install.html 经本机 WPS 常驻服务 127.0.0.1:58890 `/deployaddons/runParams` 写用户 `%APPDATA%\kingsoft\wps\jsaddons\publish.xml`（个人版 12.1.0.16910 起 oem.ini/jsplugins.xml 被禁）。企业版私有部署仍走 jsplugins.xml + oem.ini `JSPluginsServer`。
 - 三宿主 = publish.xml 里三条记录（type=wps/et/wpp，同一 url、同名 aiworkdeck）。
 - **每个宿主首次加载各弹一次「是否信任」**（2026-08-29 实测）：安装页一次写三条记录，但授信是**按宿主**发生的，不点「确定」那个宿主就不出「AI WorkDeck」选项卡。用户会以为「表格/演示的插件没装上」——排查这类反馈先问有没有在那个宿主里点过确定。
-- **`awd_taskpane_id` 这个 PluginStorage 键是三个宿主共用的**（`wps/js/ribbon.js` 的 `AWD_PANE_KEY`，`wpsDoc.hideWpsTaskPane` 读同一个）。`ToggleAwdPane` 拿到 id 后只要 `GetTaskPane(id)` 返回真值就 toggle 并 return，**不会为当前宿主新建**——先在文字里开过窗格，再去表格点「AI 助手」就可能什么都不发生（toggle 的是另一个宿主的窗格）。2026-08-29 在表格里实测到「选项卡有、点了没反应」，这是首要嫌疑。修法是把键按宿主分（ribbon 侧用 `Application.Documents/Workbooks/Presentations` 三者之一判宿主，任务窗格侧用已验证的 `detectWpsHost()`），**改完必须真机三宿主各开一次验过再发**——别在没验证的情况下动这个壳，文字/演示两个宿主目前是好的。
+- **任务窗格 id 的 PluginStorage 键按宿主分**（`wps/js/ribbon.js` 的 `AwdPaneKey()` 与 `wpsDoc.taskPaneKey()` 后缀同源 wps/et/wpp，改一边就得改另一边）。理由：三宿主共用一份 PluginStorage，而窗格 id 是各宿主进程内从 1 开始自增的——共用一个键的话，文字里存下的 `id=1` 会被表格拿去 `GetTaskPane(1)`，那是表格自己的 1 号窗格（很可能是别家加载项的），于是点我们的按钮开/关了别人的窗格。ribbon 侧判宿主用 `Application.Presentations/Workbooks/Documents`（三者恰好各有一个非空），**不能用 `Application.Name`**——见下面「Name 判不了是不是 WPS」那条。
+- **「选项卡在、图标空白、点了没反应」= 本机注册态坏掉，不是代码问题**（dev-board#270，2026-08-29 定案）。判据看服务器访问日志：坏的时候 WPS 每次启动宿主都成对拉到 `manifest.xml` + `ribbon.xml`（UA 为空、HTTP/1.1，都是 200，所以**网络是通的**），但**从不去拉 `index.html`/`main.js`/`js/*`**——JS 入口没加载，`OnAddinLoad`/`GetImage`/`OnAction` 一个都没执行，所以图标空白、点击零请求。恢复办法只有一个：**重新走一遍 install.html 安装**。已逐个排除的假根因，别再走一遍：`publish.xml` 的 `enable="enable_dev"`（表格那条至今仍是 `enable_dev` 且工作正常，WPS 自己就这么写）、`jsaddinblockhost.ini`、PluginStorage 共用键、per-host 授信（`authaddin.json` 三个宿主都是 `enable:true,isload:true`）、COM 启动方式、整机重启。
 
 ### 已知地雷（WPS 面）
 
@@ -151,7 +152,7 @@ description: Microsoft Office 与 WPS 插件领域。任务涉及 Word/Excel/PPT
 - **演示稿的正文常常不在 TextFrame 里**：表格形状（对比表、时间表、条款对照）的文字在 `Table.Cell(r,c).Shape` 里、组合形状（图示+标注、SmartArt 转出来的）的文字在子形状里。只看 `TextFrame` 会把整页读成「（无文本）」——用户看着满屏字，AI 说这页没内容。`wpsDoc.collectShapeText` 已按「表格 → 组合递归 → 普通文本框」三条路收，单个形状读失败只跳过它、不许拖垮整篇。
 - **同步桥的循环纪律（ET/WPP 同样适用）**：`Count` 不许写在 for 的条件位（每轮都要跨桥重取）、`TextFrame`/`Range` 取一次存局部变量。`shapeHasText` 原先连取三次 `TextFrame`，上百页的演示稿光这一处就是几千次白跑。
 - 官方模板 index.html 的角色：本地模式下 WPS 自动生成 index.html、开发者不许自建；**在线模式相反**，WPS 从服务器拉 url/index.html，我们必须提供。两句话都对，别拿一句去改另一边。
-- **停靠任务窗格冻住 ribbon 是真机实锤**（2026-08-28 复测，bbs 93291 平台 bug，官方未修、社区全部规避手段无效）：窗格打开期间整条 ribbon 拒收鼠标，而关窗格按钮在 ribbon 上=死锁。解法：App.vue 头部有 WPS 家族专属「收起面板」按钮（hostBridge.hidePanel → wpsDoc.hideWpsTaskPane，经 PluginStorage 共享键 awd_taskpane_id 取窗格句柄自藏），收起即解锁、重开走 ribbon「AI 助手」。**别把这颗按钮当冗余删掉**。
+- **停靠任务窗格冻住 ribbon 是真机实锤**（2026-08-28 复测，bbs 93291 平台 bug，官方未修、社区全部规避手段无效）：窗格打开期间整条 ribbon 拒收鼠标，而关窗格按钮在 ribbon 上=死锁。解法：App.vue 头部有 WPS 家族专属「收起面板」按钮（hostBridge.hidePanel → wpsDoc.hideWpsTaskPane，经 PluginStorage 的**按宿主分键** `awd_taskpane_id_{wps,et,wpp}` 取窗格句柄自藏），收起即解锁、重开走 ribbon「AI 助手」。**别把这颗按钮当冗余删掉**。
 - office 会话的产出去向规则在 ContextAssemblerService（中英两处）：起草/生成类请求默认写进当前打开的文档，不许新建项目文件保存（2026-08-28 真机复测教训：模型曾把「写简报」落成建空项目文件）。宿主措辞已中性化（「Microsoft Word 或 WPS 文字」等六处），别改回单提微软。
 - 真机已验：install.html 一键安装、任务窗格 window.wps、登录、SSE 流式全通（2026-08-28，WPS 365/Win）。仍欠：Replies.Add/透视表/子串挂链三个类推 API。
 - **字符偏移口径已实测定案（2026-08-29，WPS 12.1.0.28043，原始报告在 `office-addin/scripts/measurements/`）**——这是 dev-board#264「含表格文档成片死路」的根因：

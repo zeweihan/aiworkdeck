@@ -2,14 +2,15 @@
 /**
  * WPS 加载项部署产物生成器（仅用 node 内置模块，无新依赖）。
  *
- * WPS 侧没有 manifest.xml——分发走「在线模式」：WPS 启动时从我们服务器拉
- * url/ribbon.xml 与 url/index.html；安装动作由 install.html（官方 publish.html
- * 模板的定制版）经本机 WPS 常驻服务（127.0.0.1:58890）把加载项记录写进用户的
- * jsaddons/publish.xml。个人版 12.1.0.16910 起这是唯一受支持的安装通路；
- * 企业版私有部署另出一份 jsplugins.xml（配 oem.ini 的 JSPluginsServer 用）。
+ * 分发走「在线模式」：WPS 启动宿主时从我们服务器成对拉 url/manifest.xml 与
+ * url/ribbon.xml，用户点按钮时再拉 url/index.html；安装动作由 install.html
+ * （官方 publish.html 模板的定制版）经本机 WPS 常驻服务（127.0.0.1:58890）把加载项
+ * 记录写进用户的 jsaddons/publish.xml。个人版 12.1.0.16910 起这是唯一受支持的
+ * 安装通路；企业版私有部署另出一份 jsplugins.xml（配 oem.ini 的 JSPluginsServer 用）。
  *
  * 产物布局（--out 目录，默认 dist-wps/，整体上传到 <baseUrl> 对应路径）：
  *   wps/                加载项本体（在线模式的 url 指这里，必须以 / 结尾可达）
+ *     manifest.xml      加载项清单（三宿主共用；WPS 每次启动宿主都会拉）
  *     ribbon.xml        功能区（三宿主共用）
  *     index.html        入口页（引 main.js）
  *     main.js  js/      ribbon 薄壳（vanilla JS，不进 Vite）
@@ -163,7 +164,7 @@ fs.mkdirSync(path.join(outDir, 'wps', 'images'), { recursive: true })
 
 // 1) ribbon 薄壳
 const shellDir = path.join(rootDir, 'wps')
-for (const f of ['ribbon.xml', 'index.html', 'main.js']) {
+for (const f of ['manifest.xml', 'ribbon.xml', 'index.html', 'main.js']) {
   fs.copyFileSync(path.join(shellDir, f), path.join(outDir, 'wps', f))
 }
 fs.cpSync(path.join(shellDir, 'js'), path.join(outDir, 'wps', 'js'), { recursive: true })
@@ -209,6 +210,6 @@ jsplugins.push('</jsplugins>', '')
 fs.writeFileSync(path.join(outDir, 'jsplugins.xml'), jsplugins.join('\n'))
 
 console.log(`[build-wps] 完成：${outDir}`)
-console.log(`  加载项 url：${addonUrl}（部署后 GET ${addonUrl}ribbon.xml 必须直接可达，别过 SPA 回退/鉴权）`)
+console.log(`  加载项 url：${addonUrl}（部署后 GET ${addonUrl}manifest.xml 与 ${addonUrl}ribbon.xml 都必须直接可达，别过 SPA 回退/鉴权）`)
 console.log(`  安装页：${baseUrl}/install.html`)
-console.log('  缓存口径：ribbon.xml / index.html / main.js / js/* 建议 no-cache；ui/assets/* 带 hash 可长缓存')
+console.log('  缓存口径：manifest.xml / ribbon.xml / index.html / main.js / js/* 建议 no-cache；ui/assets/* 带 hash 可长缓存')
