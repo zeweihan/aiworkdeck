@@ -870,8 +870,13 @@ export const WPS_WORD_HANDLERS = {
         if (position === 'before') range.InsertBefore(content)
         else range.InsertAfter(content)
       } else {
-        // 无锚点：落在用户当前光标/选区处（选区被替换，与光标插入语义一致）
-        app().Selection.Text = content
+        // 无锚点：落在用户当前光标/选区处（选区被替换，与光标插入语义一致）。
+        // VBA/WPS 语义：Selection.Text 赋值后**选区扩展覆盖新文本**——不折叠的话，
+        // 连续两次无锚点插入时第二次会把第一次整段替换（修订态下第一段变红色删除线）。
+        // 立刻把选区折叠到插入内容末尾（wdCollapseEnd=0），让连续插入成为追加。
+        const sel = app().Selection
+        sel.Text = content
+        try { sel.Collapse(0) } catch (e) { /* 旧宿主缺 Collapse：保持原行为，单次插入不受影响 */ }
       }
       return { inserted: true, anchored: !!anchorText, position: anchorText ? position : 'selection' }
     })

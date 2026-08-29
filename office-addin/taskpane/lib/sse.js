@@ -328,7 +328,7 @@ const PARTIAL_TAG_RE = /^<\/?[a-zA-Z_]?[\w-]*(\s[^>]*)?$/
 // 未知但符合这个形状的标签按「像协议标签」处理，其余尖括号一律当正文。
 const PROTOCOL_TAG_SHAPE_RE = /^[a-z][a-z0-9_]{0,23}$/
 
-export function createTagStreamParser({ onMainText, onThinkingText, onQuestion, onArtifact }) {
+export function createTagStreamParser({ onMainText, onThinkingText, onQuestion, onArtifact, onToolPrep }) {
   let pending = ''
   const stack = []
   // 当前 <question> 块（未闭合时非空）与正在累积的 <option> 文案
@@ -391,7 +391,11 @@ export function createTagStreamParser({ onMainText, onThinkingText, onQuestion, 
         if (name === 'option') finishOption()
         else if (name === 'question') emitQuestion()
         else if (name === 'artifact') emitArtifact()
+        // 退出工具参数区（tool_code 内容不渲染，但生成期可能长达一两分钟——
+        // 界面据此撤下「正在准备文档内容」提示，别让盲区伪装成卡死）
+        else if (name === 'tool_code' && onToolPrep && !stack.includes('tool_code')) onToolPrep(false)
       } else if (!candidate.endsWith('/>')) {
+        if (name === 'tool_code' && onToolPrep && !stack.includes('tool_code')) onToolPrep(true)
         stack.push(name)
         if (name === 'question') question = { options: [] }
         else if (name === 'option') optionBuf = ''
@@ -431,6 +435,8 @@ export function createTagStreamParser({ onMainText, onThinkingText, onQuestion, 
       if (stack.includes('option')) finishOption()
       if (question) emitQuestion()
       emitArtifact()
+      // tool_code 没闭合就断流：提示不能悬着
+      if (onToolPrep && stack.includes('tool_code')) onToolPrep(false)
     }
   }
 }

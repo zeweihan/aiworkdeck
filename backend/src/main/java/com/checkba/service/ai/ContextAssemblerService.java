@@ -355,6 +355,11 @@ public class ContextAssemblerService {
                             systemText.append("本会话没有 doc_* 工具。\n\n");
                         }
                     }
+                    // 写入内容纯文本约束，刻意挂在本指引段末尾（约束放前面会被弱模型无视，
+                    // 见「约束要挂消息末位」经验）：模型曾把 Markdown 记号当正文写进文档，
+                    // 用户看到的是「---」横线等字面字符（dev-board WPS 真机实况）
+                    systemText.append("所有写进文档的内容必须是纯文本：不要携带 Markdown 记号（--- 分隔线、**加粗**、# 标题、``` 等），");
+                    systemText.append("它们不会被渲染、只会成为文档里的字面字符；需要标题、加粗、列表等排版效果时改用相应的格式化工具。\n\n");
                 }
                 case NONE -> {
                     systemText.append("当前客户端没有文档编辑执行器：正文仅供阅读分析，");
@@ -1129,6 +1134,10 @@ All doc_* editing and reading tools act directly on this document. You need NOT 
                     case POWERPOINT -> sb.append(EN_GUIDE_OFFICE_PPT);
                     default -> sb.append(EN_GUIDE_OFFICE_WORD);
                 }
+                // 与中文版同源的纯文本约束，同样挂段末（「约束要挂消息末位」经验）
+                sb.append("Everything you write into the document must be plain text: never include Markdown markup ")
+                  .append("(--- rules, **bold**, # headings, ``` fences, ...) - it is not rendered and lands as literal ")
+                  .append("characters in the document; use the formatting tools for headings, emphasis, or lists instead.\n\n");
             }
             case NONE -> sb.append(EN_GUIDE_NONE);
             default -> {

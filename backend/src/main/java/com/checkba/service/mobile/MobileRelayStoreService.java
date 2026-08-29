@@ -124,6 +124,18 @@ public class MobileRelayStoreService {
     public DirectoryReplaceResult replaceDirectory(Long userId, String deviceId, String deviceName, List<DirEntry> projects) {
         requireDeviceId(deviceId);
         if (projects == null) projects = List.of();
+
+        // 空清单防顶掉守卫（dev-board#75 后续实测的系统性风险）：同一台机器上多个后端实例
+        // （e2e/dev/优化者）会共享同一份 ~/.aiworkdeck/mobile-relay.json 的 relay 身份，测试
+        // 实例本地库是空的，一次空清单 PUT 就把真桌面端推过的目录整批顶成 0 行。语义权衡
+        // 已裁决：用户真删光全部项目时目录短暂陈旧可接受，被测试实例清空目录不可接受——
+        // 空清单 + 现存目录行非空时跳过整批替换，保留现有行（心跳在控制器里已照常 touch）。
+        if (projects.isEmpty() && !dirRepository.findByUserIdAndDeviceId(userId, deviceId).isEmpty()) {
+            log.info("手机同步：收到空项目清单但该设备已有目录行，跳过整批替换（防多实例共享 relay 身份互相顶掉）: userId={}, deviceId={}",
+                    userId, deviceId);
+            return new DirectoryReplaceResult(0, 0, false);
+        }
+
         int totalCount = projects.size();
         boolean truncated = totalCount > MAX_DIR_ENTRIES;
         List<DirEntry> toStore = truncated ? projects.subList(0, MAX_DIR_ENTRIES) : projects;
@@ -178,13 +190,18 @@ public class MobileRelayStoreService {
      * 不能挡住这两个主请求，任何问题（含并发首建撞约束以外的意外错误）都吞掉只记日志。
      */
     public void touchDevice(Long userId, String deviceId) {
+        touchDevice(userId, deviceId, null);
+    }
+
+    /** deviceName 非空白时顺带更新心跳行的设备名（PUT /projects 的 payload 里带着）。 */
+    public void touchDevice(Long userId, String deviceId, String deviceName) {
         if (deviceId == null || deviceId.isBlank()) return;
         try {
-            self.touchDeviceTx(userId, deviceId);
+            self.touchDeviceTx(userId, deviceId, deviceName);
         } catch (DataIntegrityViolationException | UnexpectedRollbackException e) {
             // 并发首建撞唯一约束：对方那笔已经提交，重查更新一次（写法同 storeMedia）
             try {
-                self.touchDeviceTx(userId, deviceId);
+                self.touchDeviceTx(userId, deviceId, deviceName);
             } catch (Exception e2) {
                 log.warn("手机同步：设备心跳更新失败（不影响主请求）: userId={}, deviceId={}, err={}",
                         userId, deviceId, e2.toString());
@@ -197,11 +214,13 @@ public class MobileRelayStoreService {
 
     /** {@link #touchDevice} 的事务体：find→update，无则 insert。必须经 {@link #self} 代理。 */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void touchDeviceTx(Long userId, String deviceId) {
+    public void touchDeviceTx(Long userId, String deviceId, String deviceName) {
         LocalDateTime now = LocalDateTime.now();
+        String name = deviceName != null && !deviceName.isBlank() ? truncate(deviceName, 128) : null;
         Optional<MobileDeviceState> existing = deviceStateRepository.findByUserIdAndDeviceId(userId, deviceId);
         if (existing.isPresent()) {
             existing.get().setLastSeenAt(now);
+            if (name != null) existing.get().setDeviceName(name);
             deviceStateRepository.save(existing.get());
             return;
         }
@@ -209,6 +228,7 @@ public class MobileRelayStoreService {
         row.setUserId(userId);
         row.setDeviceId(deviceId);
         row.setLastSeenAt(now);
+        row.setDeviceName(name);
         deviceStateRepository.save(row);
     }
 
@@ -221,13 +241,15 @@ public class MobileRelayStoreService {
 
     /**
      * 该账号全部设备清单：目录行按 deviceId 分组（deviceName 取该组第一个非空值），
-     * join 心跳表拿 lastSeenAt/online。没有目录行的设备不出现——没有项目就没有可见/
-     * 可传的东西。排序 online 优先，其次按 lastSeenAt（无心跳的设备退化用目录最近
-     * updatedAt）倒序。
+     * join 心跳表拿 lastSeenAt/online。有心跳但没有目录行的设备也要出现（projects 为空
+     * 数组，deviceName 取心跳行的、取不到给空串）——线上出现过真桌面端的目录被同机
+     * 测试实例用空清单顶掉的形态，隐藏这种设备会让用户以为桌面端彻底掉线。排序 online
+     * 优先，其次按 lastSeenAt（无心跳的设备退化用目录最近 updatedAt）倒序。
      */
     public List<Map<String, Object>> listDevices(Long userId) {
         List<MobileProjectDir> dirRows = dirRepository.findByUserIdOrderByUpdatedAtDesc(userId);
-        if (dirRows.isEmpty()) return List.of();
+        List<MobileDeviceState> states = deviceStateRepository.findByUserId(userId);
+        if (dirRows.isEmpty() && states.isEmpty()) return List.of();
 
         // dirRows 已按 updatedAt 倒序，LinkedHashMap 分组后每组第一条就是该设备最新一次
         // 推送的行，可直接当作无心跳时的排序兜底时间戳。
@@ -237,7 +259,7 @@ public class MobileRelayStoreService {
         }
 
         Map<String, MobileDeviceState> stateByDevice = new HashMap<>();
-        for (MobileDeviceState s : deviceStateRepository.findByUserIdAndDeviceIdIn(userId, byDevice.keySet())) {
+        for (MobileDeviceState s : states) {
             stateByDevice.put(s.getDeviceId(), s);
         }
 
@@ -262,6 +284,19 @@ public class MobileRelayStoreService {
                 projects.add(p);
             }
             built.add(new DeviceRow(deviceId, deviceName, lastSeenAt, online, sortAt, projects));
+        }
+
+        // 有心跳但没有目录行的设备：projects 空数组照样露脸，deviceName 只有心跳行这一个
+        // 来源（取不到给空串，插件端有 unknownDevice 兜底文案）。
+        for (MobileDeviceState state : states) {
+            if (byDevice.containsKey(state.getDeviceId())) continue;
+            LocalDateTime lastSeenAt = state.getLastSeenAt();
+            boolean online = lastSeenAt != null
+                    && Duration.between(lastSeenAt, now).compareTo(ONLINE_WINDOW) <= 0;
+            String deviceName = state.getDeviceName() != null && !state.getDeviceName().isBlank()
+                    ? state.getDeviceName() : "";
+            built.add(new DeviceRow(state.getDeviceId(), deviceName, lastSeenAt, online,
+                    lastSeenAt, new ArrayList<>()));
         }
 
         built.sort((a, b) -> {

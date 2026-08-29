@@ -59,7 +59,9 @@ public class MobileRelayController {
             @RequestBody DirectoryRequest request,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = requireUser(sessionId);
-        store.touchDevice(userId, request.getDeviceId());
+        // deviceName 顺带写进心跳行：目录行为 0 的设备（空清单守卫保下来的形态）在
+        // listDevices 里也要有名字可用
+        store.touchDevice(userId, request.getDeviceId(), request.getDeviceName());
         List<MobileRelayStoreService.DirEntry> entries = new ArrayList<>();
         if (request.getProjects() != null) {
             for (DirectoryRequest.Entry e : request.getProjects()) {

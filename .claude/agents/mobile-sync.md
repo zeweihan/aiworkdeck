@@ -34,7 +34,9 @@ dev-board#30）；更早的产品设计 `2026-08-17-mobile-clients-design.md`。
   deviceId 与账户指纹）、每 10 分钟推项目目录（清单哈希不变则跳过）、每 60 秒
   轮询取件落盘 + ACK。
 - `model/entity/MobileProjectDir.java` / `MobileMediaInbox.java` / `MobileDeviceState.java`
-  （dev-board#250，设备心跳落点，每 (userId, deviceId) 一行只记 lastSeenAt）+ 对应
+  （dev-board#250，设备心跳落点，每 (userId, deviceId) 一行记 lastSeenAt + nullable 的
+  device_name——`PUT /projects` 的 touchDevice 顺带更新，目录行为 0 的设备在 listDevices
+  里靠它出名字；表结构走 Hibernate `ddl-auto: update` 自动建，没有手写迁移）+ 对应
   repository。
 - `service/UserService.claimPhoneFromWebsite` + `AwdkLoginService.login` 的认领调用 —
   桥接时把官网账户的手机号认领到桥接用户名下（占用者转移、已有异号不覆盖、永不抛出），
@@ -65,7 +67,10 @@ dev-board#30）；更早的产品设计 `2026-08-17-mobile-clients-design.md`。
   `GET /inbox`（真心跳，60 秒轮询）与 `PUT /projects` 各调一次 `touchDevice`，180 秒内有
   心跳即在线。`GET /api/mobile/devices`（裸数组）给插件端账号级设备清单：目录行按
   deviceId 分组、deviceName 取组内第一个非空值、join 心跳表出 `online`，排序 online 优先。
-  没有目录行的设备不出现。#251 跨设备文件传输的在线闸复用同一个 `isDeviceOnline`。
+  **有心跳但没有目录行的设备也出现**（projects 空数组，deviceName 取心跳行的 device_name、
+  取不到给空串；插件端对空 optgroup 渲染一条 disabled 占位 option，i18n 键
+  `remoteNoProjects`）——见地雷 8 的多实例顶目录形态。#251 跨设备文件传输的在线闸复用
+  同一个 `isDeviceOnline`。
 
 ## 已知地雷
 
@@ -120,6 +125,20 @@ dev-board#30）；更早的产品设计 `2026-08-17-mobile-clients-design.md`。
    `MobileRelayStoreServiceTest.directoryOverLimitIsTruncatedNotRejected`（服务端截断）、
    `MobileRelayClientHttpTest.pushDirectoryTruncationIsLoudlyWarned`（客户端 WARN 日志，
    Logback `ListAppender` 断言，写法同 `AuthControllerGetUsernameLoggingTest`）。
+8. **多后端实例共享 relay 身份会互相顶目录**（2026-08-29 线上实测，userId=3 / 设备
+   33766e71）：本机常态跑着 e2e/dev/优化者多个后端实例，凡不改 `user.home` 的实例都读写
+   同一份 `~/.aiworkdeck/mobile-relay.json`——同一个 deviceId。测试实例本地库是空的，
+   一次空清单 `PUT /projects` 就把真桌面端推过的目录整批顶成 0 行，设备随之从
+   `listDevices` 消失（插件项目下拉只剩别的设备）。三重防线：
+   （a）桌面端 `pushDirectory` 本地项目列表为空时不出站（log.info 跳过）；
+   （b）服务端 `replaceDirectory` 收到空清单且该 (userId,deviceId) 现存目录行非空时跳过
+   整批替换、保留现有行（语义权衡已裁决：真删光全部项目时目录短暂陈旧可接受，被测试
+   实例清空不可接受；心跳照常 touch）；
+   （c）`listDevices` 不再隐藏「有心跳但无目录行」的设备（projects 空数组 +
+   心跳表 device_name）。deviceId 机器指纹轮换是另案，尚未做。护栏
+   `MobileRelayStoreServiceTest.emptyDirectoryPushDoesNotWipeExistingRows` /
+   `.touchDeviceStoresDeviceNameForHeartbeatOnlyDevices`、
+   `MobileRelayClientHttpTest.pushDirectorySkipsWhenLocalProjectListEmpty`。
 
 ## 跨设备文件传输（dev-board#251，spec：docs/superpowers/specs/2026-08-28-cross-device-transfer.md）
 

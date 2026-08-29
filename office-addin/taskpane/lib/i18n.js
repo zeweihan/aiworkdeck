@@ -64,11 +64,13 @@ export const ZH = {
   languageLabel: '界面语言',
   // WPS 宿主专属：停靠窗格期间 ribbon 被平台 bug 冻住，收起按钮是解锁通路（dev-board#244）
   collapsePaneTitle: '收起面板（重开用功能区的「AI 助手」按钮）',
+  collapsePaneLabel: '收起面板',
   langZh: '中文',
   langEn: 'English',
   connectionSettings: '连接与高级设置',
   moreMenuTitle: '更多操作',
   menuAttach: '附加项目文件',
+  menuUploadLocal: '上传本地文件',
   menuSkills: '技能',
   menuModel: '模型',
   menuHistory: '历史对话',
@@ -93,6 +95,7 @@ export const ZH = {
   remoteGroupOnline: '{name}（在线）',
   remoteGroupOffline: '{name}（离线）',
   unknownDevice: '未知设备',
+  remoteNoProjects: '（暂无项目）',
   remoteProjectNotice: '该项目在远程设备上，仅可作为跨设备文件传输的来源或目标，AI 会话请选择本服务上的项目。',
 
   // ---- ChatView.vue：空态 ----
@@ -120,6 +123,7 @@ export const ZH = {
   proceedWithPlan: '按此计划推进',
   proposeChanges: '提出修改意见',
   workingOnDocument: '正在操作文档…',
+  preparingDocumentContent: '正在准备文档内容…',
   thinkingEllipsis: '正在思考…',
   locateInDocumentTitle: '在文档中定位：{text}',
   locateQuoteButton: '定位「{text}」',
@@ -148,6 +152,10 @@ export const ZH = {
   // ---- ChatView.vue：附件面板 ----
   attachFilesTitle: '附加项目文件',
   noProjectFiles: '项目里还没有文件',
+  uploadTooLarge: '超过 20MB 上限',
+  uploadFailed: '上传失败',
+  uploadRetry: '重试',
+  uploadUnnamedFile: '未命名文件',
 
   // ---- ChatView.vue：composer ----
   docPillOnTitle: '每条消息附带当前文档正文（点击改为不附带）',
@@ -244,6 +252,8 @@ export const ZH = {
   apiBadResponseFormat: '后端响应格式异常',
   apiDeleteFailedHttp: '删除失败（HTTP {status}）',
   apiRenameFailedHttp: '重命名失败（HTTP {status}）',
+  apiCreateFileFailedHttp: '创建文件失败（HTTP {status}）',
+  apiUploadFailedHttp: '上传失败（HTTP {status}）',
   apiAccountVerifyFailed: '账户校验未通过，请重试',
   apiAccountLoginUnsupported: '该服务器不支持账户直接连接，请在「高级设置」中改用 API Key 或设备令牌',
   apiAccountConnectFailedHttp: '账户连接失败（HTTP {status}）',
@@ -397,11 +407,13 @@ export const EN = {
   accountTitle: 'Account',
   languageLabel: 'Language',
   collapsePaneTitle: 'Hide panel (reopen via the AI Assistant ribbon button)',
+  collapsePaneLabel: 'Hide panel',
   langZh: '中文',
   langEn: 'English',
   connectionSettings: 'Connection & advanced settings',
   moreMenuTitle: 'More actions',
   menuAttach: 'Attach project files',
+  menuUploadLocal: 'Upload local files',
   menuSkills: 'Skills',
   menuModel: 'Model',
   menuHistory: 'Conversation history',
@@ -426,6 +438,7 @@ export const EN = {
   remoteGroupOnline: '{name} (online)',
   remoteGroupOffline: '{name} (offline)',
   unknownDevice: 'Unknown device',
+  remoteNoProjects: '(no projects yet)',
   remoteProjectNotice: 'This project lives on a remote device. It can only be used as a source or target for cross-device file transfer; for AI conversations, please select a project on this server.',
 
   // ---- ChatView.vue：空态 ----
@@ -453,6 +466,7 @@ export const EN = {
   proceedWithPlan: 'Proceed with this plan',
   proposeChanges: 'Suggest changes',
   workingOnDocument: 'Working on the document…',
+  preparingDocumentContent: 'Preparing document content…',
   thinkingEllipsis: 'Thinking…',
   locateInDocumentTitle: 'Locate in document: {text}',
   locateQuoteButton: 'Locate "{text}"',
@@ -481,6 +495,10 @@ export const EN = {
   // ---- ChatView.vue：附件面板 ----
   attachFilesTitle: 'Attach project files',
   noProjectFiles: 'No files in this project yet',
+  uploadTooLarge: 'Exceeds the 20MB limit',
+  uploadFailed: 'Upload failed',
+  uploadRetry: 'Retry',
+  uploadUnnamedFile: 'Unnamed file',
 
   // ---- ChatView.vue：composer ----
   docPillOnTitle: 'The current document is included with every message (click to exclude)',
@@ -578,6 +596,8 @@ export const EN = {
   apiBadResponseFormat: 'Unexpected response format from backend',
   apiDeleteFailedHttp: 'Delete failed (HTTP {status})',
   apiRenameFailedHttp: 'Rename failed (HTTP {status})',
+  apiCreateFileFailedHttp: 'Failed to create the file record (HTTP {status})',
+  apiUploadFailedHttp: 'Upload failed (HTTP {status})',
   apiAccountVerifyFailed: 'Account verification failed, please try again',
   apiAccountLoginUnsupported: 'This server does not support direct account connection; use an API key or device token under "Advanced settings"',
   apiAccountConnectFailedHttp: 'Account connection failed (HTTP {status})',
