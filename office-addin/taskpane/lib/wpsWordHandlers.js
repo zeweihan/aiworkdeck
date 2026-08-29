@@ -583,6 +583,31 @@ const HOUSE = houseFromProfile(houseProfile)
 /** 小标题启发式（抄自 officeExecutor，与 LOWA 规范一致） */
 const HEADING_RE = /^(第[一二三四五六七八九十百千零〇\d]+[条章节款项]|[一二三四五六七八九十]+[、.．]|[（(][一二三四五六七八九十\d]+[)）]|\d+[、.．])/
 
+/**
+ * 把 HOUSE 规范落到一个区间上。区间可以是单个段落，也可以是「连续同类段落」
+ * 合并出来的 run——两种情形的写入内容逐字相同，差别只在跨桥往返次数与修订颗粒度。
+ * 用 `Range.ParagraphFormat`（作用于区间内全部段落）而不是 `Paragraph.Format`，
+ * 与 edit_header_footer 的既有用法同源。
+ */
+function applyHouseFormat(range, kind) {
+  const f = range.Font
+  // 中西文分设字体（NameFarEast/NameAscii/NameOther）在 WPS 无版本门槛
+  f.NameFarEast = HOUSE.fontAsian
+  f.NameAscii = HOUSE.fontWestern
+  f.NameOther = HOUSE.fontWestern
+  f.Size = kind === 'title' ? HOUSE.titlePt : HOUSE.bodyPt
+  f.Bold = kind !== 'body' ? msoTrue : msoFalse
+  f.Color = 0 // 黑色（BGR）
+  const pf = range.ParagraphFormat
+  pf.Alignment = kind === 'title' ? wdAlignParagraphCenter : wdAlignParagraphJustify
+  // 真·最小值行距（wdLineSpaceAtLeast + LineSpacing 两件套）——Office 面做不到
+  pf.LineSpacingRule = wdLineSpaceAtLeast
+  pf.LineSpacing = HOUSE.lineSpacingPt
+  pf.SpaceBefore = 0
+  pf.SpaceAfter = HOUSE.spaceAfterPt
+  pf.FirstLineIndent = kind === 'body' ? HOUSE.firstLineIndentPt : 0
+}
+
 /* ==================== 中文数字（编号降级用） ==================== */
 
 const CHINESE_DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九']
@@ -1091,6 +1116,12 @@ export const WPS_WORD_HANDLERS = {
     const doc = activeDoc()
     const needle = normalizeNewlines(anchorText)
     return withTracking(doc, () => {
+      // 先在全文快照里判存在（1 次跨桥）。锚点根本不在文档里时，下面的逐段扫描
+      // 要跑满 3×总段数次跨桥调用才发现——5000 段的文书上就是好几秒纯粹为了报错。
+      // 段落文本都是全文的子串，所以「全文里没有」必然「哪一段里都没有」，无漏判。
+      if (!bodyText(doc).includes(needle)) {
+        throw new Error('未找到锚点段落，请确认 anchorText 与文档内容精确一致（可先用 search 命令核对）')
+      }
       const paras = doc.Paragraphs
       const total = paras.Count
       let start = -1
@@ -1225,13 +1256,55 @@ export const WPS_WORD_HANDLERS = {
       let titles = 0
       let headings = 0
       let bodies = 0
+      // 分类仍然逐段做（纯 JS 状态机，判定粒度不变），只把「写」按连续同类段落
+      // 合并成 run 落笔。这样做对律师的好处不止是不卡：审阅窗格里的格式修订从
+      // 「每段一条」变成「每个 run 一条」，一份数百段的文书从几百条噪音降到几十条，
+      // 他真正要看的实质性红线不再被埋掉——格式修订本来就没人逐条接受/拒绝。
+      let run = null // { kind, ranges: [] }
+      let writeBatches = 0
+      let degradedRuns = 0
+      const flushRun = () => {
+        if (!run || !run.ranges.length) return
+        const ranges = run.ranges
+        if (ranges.length === 1) {
+          applyHouseFormat(ranges[0], run.kind)
+          writeBatches++
+        } else {
+          const merged = doc.Range(ranges[0].Start, ranges[ranges.length - 1].End)
+          // 安全阀：合并区间必须恰好覆盖这几段，多一段少一段都退回逐段落笔。
+          // 字符偏移口径在真机上还没验（领域文档头号验证项），这一次校验把
+          // 「静默把格式刷到别的段落上」变成「诚实降级、结果不变」。
+          let exact = false
+          try {
+            exact = Number(merged.Paragraphs.Count) === ranges.length
+          } catch (e) {
+            exact = false
+          }
+          if (exact) {
+            applyHouseFormat(merged, run.kind)
+            writeBatches++
+          } else {
+            for (const r of ranges) applyHouseFormat(r, run.kind)
+            writeBatches += ranges.length
+            degradedRuns++
+          }
+        }
+        run = null
+      }
+
       for (let k = 1; k <= limit; k++) {
         const p = paras.Item(k)
         // Range 只取一次：同步桥下每个属性访问都是一次跨进程往返，重复取 p.Range
         // 在 500 段文档上就是 500 次白跑（format_table 缓存 table.Borders 同款手法）
         const pr = p.Range
-        const text = String(pr.Text || '').replace(/\r$/, '').trim()
-        if (!text) continue
+        const raw = String(pr.Text || '')
+        const text = raw.replace(/\r$/, '').trim()
+        if (!text) {
+          // 空段落断 run：现状是完全不碰空段，合并区间会把它一起格式化，
+          // 段后 18 磅 + 最小值行距落到空行上是肉眼可见的版面变化
+          flushRun()
+          continue
+        }
         let kind = 'body'
         if (!firstNonEmptySeen) {
           firstNonEmptySeen = true
@@ -1239,26 +1312,22 @@ export const WPS_WORD_HANDLERS = {
         } else if (text.length <= HOUSE_HEADING_MAX_CHARS && HEADING_RE.test(text)) {
           kind = 'heading'
         }
-        const f = pr.Font
-        // 中西文分设字体（NameFarEast/NameAscii/NameOther）在 WPS 无版本门槛
-        f.NameFarEast = HOUSE.fontAsian
-        f.NameAscii = HOUSE.fontWestern
-        f.NameOther = HOUSE.fontWestern
-        f.Size = kind === 'title' ? HOUSE.titlePt : HOUSE.bodyPt
-        f.Bold = kind !== 'body' ? msoTrue : msoFalse
-        f.Color = 0 // 黑色（BGR）
-        const pf = p.Format
-        pf.Alignment = kind === 'title' ? wdAlignParagraphCenter : wdAlignParagraphJustify
-        // 真·最小值行距（wdLineSpaceAtLeast + LineSpacing 两件套）——Office 面做不到
-        pf.LineSpacingRule = wdLineSpaceAtLeast
-        pf.LineSpacing = HOUSE.lineSpacingPt
-        pf.SpaceBefore = 0
-        pf.SpaceAfter = HOUSE.spaceAfterPt
-        pf.FirstLineIndent = kind === 'body' ? HOUSE.firstLineIndentPt : 0
+        // 表格单元格里的段落（尾部带 \x07 结束符）一律单独落笔，不与正文合并：
+        // 合并区间横跨表格边界的行为没有真机验证过，不值得为几次往返去赌
+        const inTableCell = raw.indexOf('\x07') >= 0
+        if (run && (run.kind !== kind || inTableCell)) flushRun()
+        if (inTableCell) {
+          applyHouseFormat(pr, kind)
+          writeBatches++
+        } else {
+          if (!run) run = { kind, ranges: [] }
+          run.ranges.push(pr)
+        }
         if (kind === 'title') titles++
         else if (kind === 'heading') headings++
         else bodies++
       }
+      flushRun()
 
       // 表格字号只在全文范围处理（选区里的表格不在 v1 范围，与 Office 面一致）
       let tableCount = 0
@@ -1278,13 +1347,23 @@ export const WPS_WORD_HANDLERS = {
         tables: tableCount,
         fontSplit: true,
         // WPS 原生支持「行距最小值 16 磅」（Office 面被迫降成 exact）
-        lineSpacingMode: 'atLeast'
+        lineSpacingMode: 'atLeast',
+        // 连续同类段落合并成一次写入：修订按 run 记而不是按段记（审阅窗格里
+        // 是几十条而不是几百条），向模型交底实际落笔了多少批
+        writeBatches
+      }
+      // note 可能有多条来源，逐条追加——别用赋值，会把前一条顶掉
+      const notes = []
+      if (degradedRuns) {
+        result.degradedRuns = degradedRuns
+        notes.push('部分段落的合并区间与段落边界对不上（文档可能含表格、域等占位内容），这些段落已逐段落笔，格式结果不受影响')
       }
       if (truncated) {
         result.truncated = true
         result.totalParagraphs = total
       }
-      if (scope === 'selection') result.note = '选区范围不处理表格字号'
+      if (scope === 'selection') notes.push('选区范围不处理表格字号')
+      if (notes.length) result.note = notes.join('；')
       return result
     }))
   },
