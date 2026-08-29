@@ -120,7 +120,11 @@ function getSlideOrThrow(pres, slideNumber) {
  */
 function shapeHasText(sp) {
   try {
-    return !!(sp.HasTextFrame && sp.TextFrame && sp.TextFrame.HasText)
+    if (!sp.HasTextFrame) return false
+    // TextFrame 只取一次：同步桥下每个属性访问都是一次跨进程往返，原先这里连取三次，
+    // 上百页的演示稿里光这一处就是几千次白跑
+    const frame = sp.TextFrame
+    return !!(frame && frame.HasText)
   } catch (e) {
     return false
   }
@@ -193,7 +197,8 @@ export const WPS_WPP_HANDLERS = {
     for (let i = 1; i <= count; i++) {
       const shapes = pres.Slides.Item(i).Shapes
       const texts = []
-      for (let j = 1; j <= shapes.Count; j++) {
+      const shapeCount = shapes.Count // 提出循环条件：写在条件位每轮都要跨桥重取
+      for (let j = 1; j <= shapeCount; j++) {
         const sp = shapes.Item(j)
         if (!shapeHasText(sp)) continue
         const t = shapeText(sp).trim()
@@ -211,23 +216,38 @@ export const WPS_WPP_HANDLERS = {
     const pres = activePresentation()
     let replaced = 0
     const touchedSlides = []
-    for (let i = 1; i <= pres.Slides.Count; i++) {
+    const slideCount = pres.Slides.Count // 循环条件里重取 Count 是白跑跨桥调用
+    for (let i = 1; i <= slideCount; i++) {
       let slideTouched = false
       const shapes = pres.Slides.Item(i).Shapes
-      for (let j = 1; j <= shapes.Count; j++) {
+      const shapeCount = shapes.Count
+      for (let j = 1; j <= shapeCount; j++) {
         const sp = shapes.Item(j)
         if (!shapeHasText(sp)) continue
         // TextRange.Replace 原生保留其余文字格式（优于整串回写 .Text）；
         // 找不到返回 null 而非抛错。MatchCase 传 msoTrue 对齐 Office 面的区分大小写口径。
-        let tr = sp.TextFrame.TextRange
-        let hit = tr.Replace(searchText, replaceText, 0, msoTrue, msoFalse)
-        let guard = 0
-        while (hit != null && ++guard <= MAX_REPLACE_PER_FRAME) {
+        //
+        // 续查必须用**形状内绝对游标**，不能照官方示例那样拿上一次的命中去切子区间：
+        // `TextRange.Start` 是相对形状首字符的绝对位置，而 `Characters(start, len)` 的
+        // start 是相对被调用区间的。第一轮两者恰好相等所以看不出来，第二轮起就串坐标系
+        // ——真机实测第三处直接抛 COM E_FAIL（2026-08-29，WPS 12.1.0.28043）。
+        // 「把甲方改成乙方」这种全篇替换，同一个文本框里第三处起就漏替而工具报成功，
+        // 靠肉眼根本发现不了。
+        const frame = sp.TextFrame
+        let cursor = 1
+        for (let guard = 0; guard < MAX_REPLACE_PER_FRAME; guard++) {
+          const full = frame.TextRange
+          const total = Number(full.Length)
+          if (!Number.isFinite(total) || cursor > total) break
+          const rest = full.Characters(cursor, total - cursor + 1)
+          const hit = rest.Replace(searchText, replaceText, 0, msoTrue, msoFalse)
+          if (hit == null) break
           replaced++
           slideTouched = true
-          // 官方示例的续查法：从命中末尾切出剩余 range 再 Replace
-          tr = tr.Characters(hit.Start + hit.Length, tr.Length)
-          hit = tr.Replace(searchText, replaceText, 0, msoTrue, msoFalse)
+          // 游标跳到刚写进去的内容之后：replaceText 里再含 searchText 时（「甲」→「甲方」
+          // 这类改写）才不会反复替换自己刚生成的文本
+          const next = Number(hit.Start) + replaceText.length
+          cursor = Number.isFinite(next) && next > cursor ? next : cursor + 1
         }
       }
       if (slideTouched) touchedSlides.push(i)
@@ -264,10 +284,12 @@ export const WPS_WPP_HANDLERS = {
     // JS 侧在整串文本上找偏移，宿主侧只做 Characters 切片（每次属性访问都是跨进程
     // RPC，别在宿主对象上逐字符遍历）。格式不改文本长度，多目标无须从右到左应用。
     const targets = []
+    const slideTotal = pres.Slides.Count
     outer:
-    for (let i = 1; i <= pres.Slides.Count; i++) {
+    for (let i = 1; i <= slideTotal; i++) {
       const shapes = pres.Slides.Item(i).Shapes
-      for (let j = 1; j <= shapes.Count; j++) {
+      const shapeTotal = shapes.Count
+      for (let j = 1; j <= shapeTotal; j++) {
         const sp = shapes.Item(j)
         if (!shapeHasText(sp)) continue
         const text = shapeText(sp)

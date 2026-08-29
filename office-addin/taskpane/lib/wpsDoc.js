@@ -74,20 +74,43 @@ function rangeAddress(range) {
   }
 }
 
+/**
+ * Value2 读回的形状归一成 rows x cols 二维数组。
+ * 单格是标量；**单行/单列是否降成一维，官方未成文**（wpsEtHandlers.read2D 同款防御）。
+ * 不归一的话，一行数据的工作表会只读到第一格——「随消息附带表格内容」直接丢数据，
+ * 而且丢得无声无息。
+ */
+function normalizeValues(v, rows, cols) {
+  if (!Array.isArray(v)) return [[v]]
+  if (!Array.isArray(v[0])) {
+    if (rows === 1) return [v]
+    if (cols === 1) return v.map((x) => [x])
+  }
+  return v
+}
+
 function readEtSheet() {
   const app = wps.EtApplication()
   const sheet = app.ActiveSheet
   if (!sheet) throw new Error('当前没有打开的工作簿')
   const used = sheet.UsedRange
   const name = String(sheet.Name || '')
-  if (!used) return { text: `工作表「${name}」为空`, name: documentDisplayName('当前 WPS 工作簿'), fileType: 'xlsx' }
+  const emptyResult = { text: `工作表「${name}」为空`, name: documentDisplayName('当前 WPS 工作簿'), fileType: 'xlsx' }
+  if (!used) return emptyResult
   const rowCount = used.Rows.Count
   const colCount = used.Columns.Count
+  // 空表的 UsedRange 不是空引用而是 A1 单格（VBA 口径，真机实测确认）——不这样判的话
+  // 空工作表会被描述成「区域 A1」外加一个空单元格，而不是老实说「为空」
+  if (rowCount === 1 && colCount === 1) {
+    const only = used.Value2
+    if (only == null || only === '') return emptyResult
+  }
   const shownRows = Math.min(rowCount, MAX_EXCEL_ROWS)
-  // 跨进程桥逐格取值极慢（官方性能口径约 0.2ms/调用），必须 Value2 批量读；
-  // 单格时 Value2 是标量，归一成二维再统一处理
-  let values = used.Value2
-  if (!Array.isArray(values)) values = [[values]]
+  // 跨进程桥逐格取值极慢（约 0.2ms/调用），必须 Value2 批量读。
+  // **先 Resize 到要展示的行数再取值**：既然只展示前 MAX_EXCEL_ROWS 行，把整片已用
+  // 区域搬过桥就是白搬——十万行的工作簿会把任务窗格拖到长时间无响应。
+  const source = rowCount > shownRows ? used.Resize(shownRows, colCount) : used
+  const values = normalizeValues(source.Value2, shownRows, colCount)
   const lines = []
   for (let r = 0; r < shownRows && r < values.length; r++) {
     const row = Array.isArray(values[r]) ? values[r] : [values[r]]
@@ -105,6 +128,56 @@ function readEtSheet() {
   return { text: out, name: documentDisplayName('当前 WPS 工作簿'), fileType: 'xlsx' }
 }
 
+/** MsoShapeType：组合 */
+const MSO_GROUP = 6
+
+/**
+ * 收一个形状里的全部文字。除了普通文本框，还要管两类——**演示稿里承载正文的
+ * 恰恰常常是它们**：
+ * - 表格形状（对比表、时间表、条款对照）：文字在 Table.Cell(r,c).Shape 里，
+ *   父形状的 TextFrame 是空的，只看 TextFrame 会把整页读成「（无文本）」；
+ * - 组合形状（图示+标注、SmartArt 转出来的组合）：文字在子形状里，要递归。
+ * 任何一步失败都只跳过这一个形状，不能让整篇文稿读不出来。
+ */
+function collectShapeText(shape, out, depth = 0) {
+  if (depth > 4) return // 组合套组合，防病态嵌套
+  try {
+    if (shape.HasTable) {
+      const table = shape.Table
+      const rows = table.Rows.Count
+      const cols = table.Columns.Count
+      const cells = []
+      for (let r = 1; r <= rows; r++) {
+        const row = []
+        for (let c = 1; c <= cols; c++) {
+          try {
+            row.push(String(table.Cell(r, c).Shape.TextFrame.TextRange.Text || '').replace(/\r/g, ' ').trim())
+          } catch (e) { row.push('') }
+        }
+        cells.push(row.join('\t'))
+      }
+      const joined = cells.join('\n').trim()
+      if (joined) out.push(joined)
+      return
+    }
+  } catch (e) { /* 没有 HasTable 属性的宿主版本，按普通形状继续 */ }
+  try {
+    if (shape.Type === MSO_GROUP) {
+      const items = shape.GroupItems
+      const n = items.Count
+      for (let k = 1; k <= n; k++) collectShapeText(items.Item(k), out, depth + 1)
+      return
+    }
+  } catch (e) { /* 取不到组合子项就按普通形状处理 */ }
+  try {
+    const frame = shape.TextFrame
+    if (frame && frame.HasText) {
+      const t = String(frame.TextRange.Text || '').replace(/\r/g, ' ').trim()
+      if (t) out.push(t)
+    }
+  } catch (e) { /* 个别形状没有文本框架 */ }
+}
+
 function readWppSlides() {
   const app = wps.WppApplication()
   const pres = app.ActivePresentation
@@ -115,15 +188,10 @@ function readWppSlides() {
   for (let i = 1; i <= shown; i++) {
     const slide = pres.Slides.Item(i)
     const texts = []
-    const shapeCount = slide.Shapes.Count
+    const shapes = slide.Shapes
+    const shapeCount = shapes.Count
     for (let s = 1; s <= shapeCount; s++) {
-      const shape = slide.Shapes.Item(s)
-      try {
-        if (shape.TextFrame && shape.TextFrame.HasText) {
-          const t = String(shape.TextFrame.TextRange.Text || '').trim()
-          if (t) texts.push(t)
-        }
-      } catch (e) { /* 个别形状没有文本框架 */ }
+      collectShapeText(shapes.Item(s), texts)
     }
     lines.push(`第${i}页：${texts.join(' | ') || '（无文本）'}`)
   }

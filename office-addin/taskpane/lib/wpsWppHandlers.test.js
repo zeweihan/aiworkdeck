@@ -31,6 +31,10 @@ function makeRange(state, offset, length, ctx, isSub = false) {
     get Length() { return end() - offset },
     Characters(start, len) {
       const abs = offset + (start - 1)
+      // 真机实测：起点越界不是静默塌到末尾，而是抛 COM E_FAIL
+      if (start < 1 || abs > state.text.length) {
+        throw new Error('mock：Characters 起点越界（真机是 COM E_FAIL）')
+      }
       const sub = makeRange(state, abs, len, ctx, true)
       ctx.log.push({ start, len, absStart: abs, range: sub })
       return sub
@@ -47,7 +51,9 @@ function makeRange(state, offset, length, ctx, isSub = false) {
       if (p === -1) return null
       state.text = state.text.slice(0, offset + p) + replaceWhat +
         state.text.slice(offset + p + findWhat.length)
-      return { Start: p + 1, Length: String(replaceWhat).length }
+      // Start 是**形状内绝对位置**（1 基），不是相对本 range 的——真机实测确认
+      // （原先这个 mock 返回相对位置，正好把「续查串坐标系」那个 bug 掩盖住了）
+      return { Start: offset + p + 1, Length: String(replaceWhat).length }
     }
   }
   return self
@@ -217,6 +223,25 @@ test('ppt_replace_text：TextRange.Replace 续查多命中，跨页统计', asyn
   assert.deepEqual(out.slides, [1, 2])
   assert.equal(pres.Slides.Item(1).Shapes.Item(1)._state.text, '乙方与乙方')
   assert.equal(pres.Slides.Item(2).Shapes.Item(1)._state.text, '乙方代表签字')
+})
+
+test('ppt_replace_text：同一文本框里三处以上全部替换（续查用形状内绝对游标）', async () => {
+  // 旧写法拿上一次命中的 Start（形状内绝对）去切子区间（相对坐标），第一轮恰好相等
+  // 看不出来，第二轮起就串坐标系——真机第三处直接抛 COM E_FAIL。
+  // 「把甲方改成乙方」这种全篇替换，第三处起漏替而工具报成功，肉眼发现不了。
+  const pres = install(makeDeck([[{ text: 'AA甲方BB甲方CC甲方DD' }]]))
+  const out = await H.ppt_replace_text({ searchText: '甲方', replaceText: '乙方' })
+  assert.equal(pres.Slides.Item(1).Shapes.Item(1)._state.text, 'AA乙方BB乙方CC乙方DD')
+  assert.equal(out.replaced, 3)
+})
+
+test('ppt_replace_text：replaceText 里含 searchText 时不自噬', async () => {
+  // 「甲」→「甲方」是律师最常做的改写之一。游标跳到刚写进去的内容之后，
+  // 否则会反复替换自己刚生成的文本，把一页撑成「甲方方方方…」
+  const pres = install(makeDeck([[{ text: '第一条 甲负责，第二条 甲配合' }]]))
+  const out = await H.ppt_replace_text({ searchText: '甲', replaceText: '甲方' })
+  assert.equal(pres.Slides.Item(1).Shapes.Item(1)._state.text, '第一条 甲方负责，第二条 甲方配合')
+  assert.equal(out.replaced, 2)
 })
 
 test('ppt_replace_text：未命中抛错、searchText 空抛错', async () => {
