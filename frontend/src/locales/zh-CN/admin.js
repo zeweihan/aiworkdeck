@@ -50,6 +50,7 @@ export default {
   modelOption: '{name}（{vendor}）',
   modelPrice: ' · ${in}/${out} 每 1M token',
   tieredSuffix: ' · 分档计价',
+  noVisionSuffix: ' · 不支持读图（图片按 OCR 处理）',
   modelUnavailableInRegion: '{model}（当前网络区域不可用）',
   modelSaved: '{model}（已保存）',
   catalogLoadFailedWithMsg: '模型清单暂时读取不到：{msg}',

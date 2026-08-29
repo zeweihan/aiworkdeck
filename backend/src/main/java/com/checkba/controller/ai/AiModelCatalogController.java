@@ -30,6 +30,12 @@ import java.util.Map;
  * OpenRouter 返回 403 region，OpenRouter 的 API 没有任何字段能提前告知，只能靠本机信号判定
  * （见 {@link NetworkRegionService}）。清单里只放当前区域实测可用的，
  * 同时回传判定模式与依据，好让设置页解释「国际模型为什么不见了」并给出手动覆盖入口。
+ *
+ * <p><b>为什么每条要带 vision</b>：产品口径是「模型不支持看图就在**选定模型的时候**告诉用户」，
+ * 而不是等他发完图才说。这个判断的数据只能从这里来——{@link AllowedModels} 是唯一事实来源，
+ * 前端不许自建「哪些模型能看图」的表。注意这是**预览性提示**：真正生效的模型由
+ * {@code ChatModelFactory.resolveEffectiveModelId} 决定（有三条静默改写路径），
+ * 所以后端在组装消息时还会再判一次，两者不一致时以后端那次为准。
  */
 @RestController
 @RequestMapping("/api/ai")
@@ -68,6 +74,9 @@ public class AiModelCatalogController {
             dto.put("vendor", m.getVendor().getDisplayName());
             dto.put("region", m.getRegion().name());
             dto.put("contextLength", m.getContextLength());
+            // 视觉能力：前端在「选模型的那一刻」就据此提示「这个模型看不了图，图片会按 OCR 文本处理」。
+            // 不下发这个字段，前端只能自己维护一张模型 → 支持视觉的表，正好踩回上面那条历史债。
+            dto.put("vision", m.isVision());
             dto.put("inputPricePerM", first.inputPricePerM());
             dto.put("outputPricePerM", first.outputPricePerM());
             dto.put("tiered", m.getPriceTiers().size() > 1);

@@ -64,10 +64,17 @@ public class RunLoopCompactor {
      */
     public int estimateTokens(List<ChatMessage> messages) {
         int chars = 0;
+        int images = 0;
         for (ChatMessage m : messages) {
             chars += textOf(m).length();
+            images += ChatMessageText.imageCountOf(m);
         }
-        return (int) (chars / properties.getCharsPerToken());
+        // 图片必须折算成 token，否则它在阈值判断里等于 0：带大图的栈永远触发不了主动压缩，
+        // 只能等服务商 400，而超限恢复通道剪不动图片会判「压不动」直接终态——
+        // 表现是带图的长会话到某个点开始每次必死。**绝不能拿 base64 长度算**：
+        // 一张 500KB 的图按 charsPerToken=2.0 算出来是 33 万 token，会让每轮都强制压缩。
+        return (int) (chars / properties.getCharsPerToken())
+                + images * properties.getVision().getTokenEstimatePerImage();
     }
 
     /**
@@ -116,7 +123,48 @@ public class RunLoopCompactor {
         } catch (Exception e) {
             log.warn("Last-resort tail pruning failed, keeping the original message stack", e);
         }
+        // 再兜一层：图片。剪枝与折叠都碰不到 ImageContent（它不产生字符），所以带图的栈
+        // 一旦撞上下文超限，上面两条路都会返回原实例 → 编排器判「压不动」→ 整轮终态，
+        // 而且**每次重试都必然再撞同一个 400**。此刻的选择同样不是「摘不摘图」而是
+        // 「摘一张还是整轮直接死」：摘掉图像块、原地留一行说明，让模型知道图没了、
+        // 需要看图就让用户重发。只在 force 分支做——非 force 时摘图是无谓的能力降级。
+        try {
+            List<ChatMessage> withoutImages = stripImages(messages);
+            if (withoutImages != messages) {
+                log.warn("Context compaction last resort: dropped image content block(s), {} -> {} tokens",
+                        estimateTokens(messages), estimateTokens(withoutImages));
+                return withoutImages;
+            }
+        } catch (Exception e) {
+            log.warn("Last-resort image stripping failed, keeping the original message stack", e);
+        }
         return messages;
+    }
+
+    /**
+     * 摘掉全部图像内容块，原地换成一行说明。没有图片时返回入参实例
+     * （「返回原实例 == 没压动」是本类与编排器之间的重试凭证，不能破坏）。
+     *
+     * <p>只重建含图的 UserMessage，其余消息原样保留——AiMessage 的 tool_calls 与
+     * ToolExecutionResultMessage 的配对绝不能被碰（拆散会让 OpenAI 兼容通道直接 400）。
+     */
+    private static List<ChatMessage> stripImages(List<ChatMessage> messages) {
+        if (!ChatMessageText.containsImage(messages)) {
+            return messages;
+        }
+        List<ChatMessage> out = new java.util.ArrayList<>(messages.size());
+        for (ChatMessage m : messages) {
+            int images = ChatMessageText.imageCountOf(m);
+            if (images == 0) {
+                out.add(m);
+                continue;
+            }
+            String text = ChatMessageText.of(m);
+            out.add(UserMessage.from(text + "\n\n[系统提醒] 本条消息原本附了 " + images
+                    + " 张图片，因上下文超出模型窗口已被移除。如果回答依赖图片内容，"
+                    + "请告诉用户重新发送图片，不要凭猜测作答。"));
+        }
+        return out;
     }
 
     private List<ChatMessage> compactCore(List<ChatMessage> messages, String modelId, boolean force) {
@@ -299,35 +347,6 @@ public class RunLoopCompactor {
 
     /** 统一取文本（含工具调用参数与工具结果），估算与折叠共用同一口径。 */
     private static String textOf(ChatMessage m) {
-        if (m instanceof UserMessage um) {
-            // 不能用 singleText()：多模态消息（图片 + 文本）会直接抛异常
-            StringBuilder sb = new StringBuilder();
-            for (dev.langchain4j.data.message.Content c : um.contents()) {
-                if (c instanceof dev.langchain4j.data.message.TextContent tc) {
-                    sb.append(nullToEmpty(tc.text()));
-                }
-            }
-            return sb.toString();
-        }
-        if (m instanceof SystemMessage sm) {
-            return nullToEmpty(sm.text());
-        }
-        if (m instanceof ToolExecutionResultMessage tr) {
-            return nullToEmpty(tr.text());
-        }
-        if (m instanceof AiMessage ai) {
-            StringBuilder sb = new StringBuilder(nullToEmpty(ai.text()));
-            if (ai.hasToolExecutionRequests()) {
-                for (ToolExecutionRequest r : ai.toolExecutionRequests()) {
-                    sb.append(r.name()).append(nullToEmpty(r.arguments()));
-                }
-            }
-            return sb.toString();
-        }
-        return "";
-    }
-
-    private static String nullToEmpty(String s) {
-        return s == null ? "" : s;
+        return ChatMessageText.of(m);
     }
 }

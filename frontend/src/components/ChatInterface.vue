@@ -316,9 +316,11 @@
                <!-- Image Thumbnails Preview (top-left) -->
                <view v-if="pastedImages.length > 0" class="input-images-preview">
                   <view v-for="(img, index) in pastedImages" :key="index" class="preview-image-item">
-                     <image :src="img.path" mode="aspectFill" class="preview-thumb" />
+                     <image v-if="img.path" :src="img.path" mode="aspectFill" class="preview-thumb" />
                      <text class="preview-remove" @tap="removePastedImage(index)">×</text>
                   </view>
+                  <!-- 能力未知时不出这行：只有明确 vision===false 才说会降级 -->
+                  <text v-if="currentModelVision === false" class="input-images-note">{{ $t('chat.imageOcrFallbackNote') }}</text>
                </view>
               <div
                 ref="richInput"
@@ -382,6 +384,8 @@
                                 <view class="model-option-head">
                                    <text class="model-option-name">{{ m.name }}</text>
                                    <text v-if="m.tiered" class="model-tier-tag">{{ $t('chat.tieredPricing') }}</text>
+                                   <!-- 严格判 false：vision 缺字段是「未知」，标出来等于造谣 -->
+                                   <text v-if="m.vision === false" class="model-novision-tag">{{ $t('chat.noVisionTag') }}</text>
                                 </view>
                                 <text class="model-option-price">{{ priceLabel(m) }}</text>
                              </view>
@@ -517,9 +521,11 @@
            <!-- Image Thumbnails Preview (top-left) -->
            <view v-if="pastedImages.length > 0" class="input-images-preview">
               <view v-for="(img, index) in pastedImages" :key="index" class="preview-image-item">
-                 <image :src="img.path" mode="aspectFill" class="preview-thumb" />
+                 <image v-if="img.path" :src="img.path" mode="aspectFill" class="preview-thumb" />
                  <text class="preview-remove" @tap="removePastedImage(index)">×</text>
               </view>
+              <!-- 能力未知时不出这行：只有明确 vision===false 才说会降级 -->
+              <text v-if="currentModelVision === false" class="input-images-note">{{ $t('chat.imageOcrFallbackNote') }}</text>
            </view>
           <div
             ref="richInput"
@@ -583,6 +589,8 @@
                             <view class="model-option-head">
                                <text class="model-option-name">{{ m.name }}</text>
                                <text v-if="m.tiered" class="model-tier-tag">{{ $t('chat.tieredPricing') }}</text>
+                               <!-- 严格判 false：vision 缺字段是「未知」，标出来等于造谣 -->
+                               <text v-if="m.vision === false" class="model-novision-tag">{{ $t('chat.noVisionTag') }}</text>
                             </view>
                             <text class="model-option-price">{{ priceLabel(m) }}</text>
                          </view>
@@ -731,6 +739,8 @@ export default {
 
     // Pasted Images (for paste/drop images)
     const pastedImages = ref([])
+    // 发送时把粘贴图片上传成项目文件的那一小段窗口（此时 isStreaming 还是 false）
+    const isUploadingPasted = ref(false)
 
     // Model Selection
     const showModelDropdown = ref(false)
@@ -804,11 +814,29 @@ export default {
       currentModelName.value = hit ? hit.name : (id || t('chat.selectModel'))
     }
 
+    // 当前模型能不能直接读图。**三态**：true 支持 / false 不支持 / null 未知。
+    // 「未知」不许并到 false：拉不到模型目录时 availableModels 是空数组而 currentModelId
+    // 还留着上次的值，applyModelSelection 也允许选中清单外的旧 id——把 undefined 当不支持，
+    // 就会在这两种情况下对所有模型误报「不支持读图」。未知一律不提示。
+    const currentModelVision = computed(() => {
+      const hit = availableModels.value.find(m => m.id === currentModelId.value)
+      if (!hit || typeof hit.vision !== 'boolean') return null
+      return hit.vision
+    })
+
+    // 选中读不了图的模型时说一声：降级是后端自动做的，不说用户会以为模型看到了图
+    const noticeIfNoVision = (m) => {
+      if (!m || m.vision !== false) return
+      uni.showToast({ title: t('chat.modelNoVisionToast'), icon: 'none', duration: 3000 })
+    }
+
     const selectModel = (m) => {
       console.log('Switching model to:', m.name)
       applyModelSelection(m.id)
       persistModelId(m.id)
       showModelDropdown.value = false
+      // 只提示不换模型：静默改用户的计价对象是这个面板治理过一轮的老毛病
+      noticeIfNoVision(m)
     }
 
     const loadModelCatalog = async () => {
@@ -847,6 +875,11 @@ export default {
             icon: 'none',
             duration: 3000
           })
+        } else {
+          // 用户从没手动选过，默认模型是自动落到他头上的——今天的默认档恰好读不了图，
+          // 「不支持看图」是常态而不是边缘情况，第一次落定就得说清楚。
+          // 与上面那条互斥：两条 toast 叠在一起，后一条会顶掉前一条。
+          noticeIfNoVision(list.find(m => m.id === fallbackId))
         }
       } catch (e) {
         // 拉不到目录不该让面板不可用：保留上次选择（可能为空），由发送时的后端校验兜底
@@ -1311,7 +1344,7 @@ export default {
     const handleSubmit = async () => {
       // 流式进行中禁止再发送（回车路径不走发送按钮的 abort 分支）：
       // 必须在清空输入框之前拦截，否则用户输入会被静默丢弃
-      if (isStreaming.value) return
+      if (isStreaming.value || isUploadingPasted.value) return
       // Create a clone to safely manipulate and extract text without tags
       let text = ''
       let contentHtml = ''
@@ -1367,9 +1400,9 @@ export default {
         return
       }
 
-      // 只有图片、没有文字：产品没有原生图像输入通道（/api/agent/chat 的请求体里
-      // 根本没有图像字段），粘贴的图片只用于气泡展示，「图片进 AI」全靠 OCR 转文本。
-      // 这种消息发出去 prompt 是空串，用户看着自己的图片气泡等回答，模型收到一条空消息。
+      // 只有图片、没有文字：图片本身现在会随消息真的发出去（模型支持读图就直送、
+      // 不支持则降级 OCR），但 prompt 是空串——用户看着自己的图片气泡等回答，
+      // 模型收到的是一条没说要做什么的空消息。先问清楚要干嘛。
       if (!text && hasImages && typeof uni !== 'undefined') {
         uni.showModal({
           title: t('chat.imageNeedsCaptionTitle'),
@@ -1382,20 +1415,52 @@ export default {
 
       const prompt = text
 
+      // 先定住本次要带走的那几张，再去上传：上传要走网络，其间用户还可能继续粘贴，
+      // 拿 pastedImages 的实时值会一边漏掉新贴的、一边把它顺手清掉。
+      const pastedBatch = pastedImages.value.slice()
+      let pastedFileList = []
+      if (pastedBatch.length) {
+        // 上传这段时间里 isStreaming 还是 false、输入框也还没清空，再按一次回车
+        // 会把同一批图重复上传、同一条消息发两遍——自己上一道闩。
+        // 上传结束到 sendMessage 之间只有同步代码，而 sendMessage 是同步置起
+        // isStreaming 的，所以这道闩到这里就可以撤。
+        isUploadingPasted.value = true
+        try {
+          const uploaded = await uploadPastedImages(pastedBatch)
+          pastedFileList = uploaded.files
+          if (uploaded.failed > 0) {
+            // 上传失败的不并入附件，这条提示是用户唯一能知道「模型没收到图」的地方
+            uni.showToast({
+              title: t('chat.pastedImageUploadFailed', { count: uploaded.failed }),
+              icon: 'none',
+              duration: 3000
+            })
+          }
+        } finally {
+          isUploadingPasted.value = false
+        }
+      }
+
       if (richInput.value) richInput.value.innerHTML = ''
       inputPrompt.value = ''
 
-      // Use context files as fileList
+      // Use context files as fileList；粘贴的图片走同一条 contextItems 通道
       const fileListToSend = contextFiles.value.map(f => ({
         id: f.id,  // useAgentStream.js uses f.id to extract fileIds
         fileName: f.name,
         fileType: f.fileType,
         wpsFileId: f.wpsFileId,
         isDir: f.isDir
-      }))
+      })).concat(pastedFileList.map(f => ({
+        id: f.id,
+        fileName: f.name,
+        fileType: f.fileType,
+        wpsFileId: f.wpsFileId,
+        isDir: false
+      })))
 
       // Save images and context files for user bubble display
-      const imagesToShow = pastedImages.value.map(img => ({ path: img.path }))
+      const imagesToShow = pastedBatch.map(img => ({ path: img.path }))
       const contextFilesToShow = contextFiles.value.map(f => ({
         id: f.id,
         name: f.name,
@@ -1404,7 +1469,8 @@ export default {
 
       // Clear context files and images after sending
       contextFiles.value = []
-      pastedImages.value = []
+      // 只清掉本次带走的那几张，上传期间新粘的留给下一条消息
+      pastedImages.value = pastedImages.value.filter(img => !pastedBatch.includes(img))
 
       // Build activeContext from props.activeTab (only if no manual context provided)
       // Priority: manual contextFiles > activeContext
@@ -1855,12 +1921,15 @@ export default {
             const file = items[i].getAsFile()
             if (file) {
               hasProcessedImage = true
+              // 同步先占位、再异步补 path：path 只用来画缩略图，真正要发出去的是 file 这份 blob。
+              // 原来整条 push 都压在 FileReader.onload 里，粘完立刻回车时 onload 还没触发，
+              // 这张图就整个丢了——以前丢的只是一张缩略图，现在丢的是要发给模型的附件。
+              pastedImages.value.push({ file: file, path: '' })
+              // 必须取回数组里那个响应式代理：直接改 push 进去的原对象不会触发视图更新
+              const entry = pastedImages.value[pastedImages.value.length - 1]
               const reader = new FileReader()
               reader.onload = (evt) => {
-                pastedImages.value.push({
-                  file: file,
-                  path: evt.target.result
-                })
+                entry.path = evt.target.result
               }
               reader.readAsDataURL(file)
             }
@@ -2180,7 +2249,9 @@ export default {
         pdf: 'pdf',
         txt: 'txt',
         ppt: 'ppt', pptx: 'ppt',
-        jpg: 'image', jpeg: 'image', png: 'image', gif: 'image', webp: 'image',
+        // bmp 是补的：后端的 ocr-extensions 与 vision.extensions 都含 bmp，
+        // 这里漏掉会让 .bmp 落成 'other'，与另外两处判图口径对不上
+        jpg: 'image', jpeg: 'image', png: 'image', gif: 'image', webp: 'image', bmp: 'image',
         md: 'markdown'
       }
       return typeMap[ext] || 'other'
@@ -2207,6 +2278,10 @@ export default {
       showUploadDialog.value = false
       uploadSelectedFiles.value = []
 
+      // 字节上传失败的文件名：这些不并入附件，收尾时要点名告诉用户
+      const failedUploads = []
+      let addedCount = 0
+
       try {
         for (const file of filesToUpload) {
           const fileType = getFileTypeFromName(file.name)
@@ -2231,7 +2306,14 @@ export default {
               try {
                 await uploadFileContent(createdFile.id, wpsFileId, file.fileObject, file.size)
               } catch (uploadErr) {
-                console.warn('[ChatInterface] File content upload failed, file record created:', uploadErr)
+                // 字节没传上去就**不并入附件**。原来这里只 console.warn 然后照样 addFile，
+                // 结果是 contextItems 里挂着一个服务器上没有内容的 id：模型收到的是
+                // 「文件在这儿但里面什么都没有」，只会回一句「我看不到这份文件」，
+                // 而用户以为自己已经把文件发过去了。图片接上视觉直送后这条更要命——
+                // 一张没有字节的图既走不了直送也走不了 OCR。
+                console.warn('[ChatInterface] File content upload failed, not attaching:', uploadErr)
+                failedUploads.push(file.name)
+                continue
               }
             }
 
@@ -2243,10 +2325,19 @@ export default {
               wpsFileId: createdFile.wpsFileId,
               isDir: false
             })
+            addedCount++
           }
         }
 
-        uni.showToast({ title: t('chat.filesAdded', { count: filesToUpload.length }), icon: 'success' })
+        if (failedUploads.length) {
+          uni.showToast({
+            title: t('chat.uploadContentFailed', { names: failedUploads.join('、') }),
+            icon: 'none',
+            duration: 3000
+          })
+        } else {
+          uni.showToast({ title: t('chat.filesAdded', { count: addedCount }), icon: 'success' })
+        }
       } catch (error) {
         console.error('[ChatInterface] Upload failed:', error)
         uni.showToast({ title: error.message || t('chat.uploadFailed'), icon: 'none' })
@@ -2285,6 +2376,63 @@ export default {
         resolve() // Non-H5 platforms skip direct upload
         // #endif
       })
+    }
+
+    // 剪贴板 MIME → 扩展名。后端判「这是不是可直送的图」先看文件名后缀
+    // （ai.context.vision.extensions = jpg/jpeg/png/gif/bmp/webp），后看 fileType，
+    // 所以后缀必须与真实字节一致；认不出的 MIME 按 png 落名，不凭空造后缀。
+    const PASTED_IMAGE_EXT = {
+      'image/png': 'png',
+      'image/jpeg': 'jpg',
+      'image/gif': 'gif',
+      'image/bmp': 'bmp',
+      'image/webp': 'webp'
+    }
+
+    // 把粘贴进来的图片落成真实项目文件，返回 { files, failed }。
+    //
+    // 在此之前，粘贴的图片只有一份 dataURL 用来画气泡缩略图，blob 从没上过服务器：
+    // 既没进 contextItems，也就既没走视觉直送、也没走 OCR——模型其实什么都没收到。
+    // 这里让它走「+」上传的同一条链路（createFile + 字节直传），汇进同一份 fileList，
+    // 由后端按模型能力决定直送还是降级。
+    const uploadPastedImages = async (images) => {
+      const projectId = typeof props.projectId === 'string' ? Number(props.projectId) : props.projectId
+      if (!projectId) return { files: [], failed: images.length }
+
+      const d = new Date()
+      const p2 = (n) => String(n).padStart(2, '0')
+      const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`
+
+      const files = []
+      let failed = 0
+      for (let i = 0; i < images.length; i++) {
+        const blob = images[i] && images[i].file
+        if (!blob) { failed++; continue }
+        const ext = PASTED_IMAGE_EXT[String(blob.type).toLowerCase()] || 'png'
+        // 同一秒里贴多张会重名，带上序号
+        const suffix = images.length > 1 ? `${stamp}-${i + 1}` : stamp
+        const name = `${t('chat.pastedImageName', { stamp: suffix })}.${ext}`
+        const wpsFileId = `project_${projectId}_doc_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`
+        try {
+          // 落在项目根目录：粘贴没有「选目标文件夹」这一步，不该替用户猜一个
+          const created = await createFile(projectId, null, name, getFileTypeFromName(name), blob.size, null, wpsFileId)
+          if (!created || !created.id) throw new Error('createFile returned no id')
+          // 字节没传上去就绝不并入附件：contextItems 里挂一个服务器上没有内容的 id，
+          // 模型只会回「我看不到这张图」，而用户以为自己已经把图发过去了。
+          await uploadFileContent(created.id, wpsFileId, blob, blob.size)
+          files.push({
+            id: created.id,
+            name: created.name,
+            fileType: created.fileType,
+            wpsFileId: created.wpsFileId,
+            isDir: false
+          })
+        } catch (e) {
+          console.warn('[ChatInterface] 粘贴图片上传失败:', e)
+          failed++
+        }
+      }
+      return { files, failed }
     }
 
     // 外部面板（如股东大会核查）注入预设 prompt：强制 AGENT 模式发送
@@ -2388,6 +2536,7 @@ export default {
        modelGroups,
        priceLabel,
        networkRegionBasis,
+       currentModelVision,
        // Agent Mode
        currentModeId,
        currentModeName,
@@ -3192,6 +3341,14 @@ export default {
   border-radius: 3px;
   padding: 1px 4px;
 }
+/* 与 tier tag 同一档中性灰，刻意不用告警色：读不了图会自动降级 OCR，是能力差异不是错误 */
+.model-novision-tag {
+  font-size: 10px;
+  color: var(--awd-text-2);
+  background: rgba(100, 116, 139, 0.1);
+  border-radius: 3px;
+  padding: 1px 4px;
+}
 .model-option-price {
   font-size: 11px;
   color: var(--awd-text-3);
@@ -3313,6 +3470,15 @@ export default {
   gap: 8px;
   margin-bottom: 12px;
   padding-bottom: 8px;
+}
+
+/* flex-basis 100% 让它在缩略图行下面另起一行，紧贴着图走（预览区自己的
+   margin-bottom 在整块之外，说明与图之间只隔容器的 gap） */
+.input-images-note {
+  flex-basis: 100%;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--awd-text-3);
 }
 
 .preview-image-item {

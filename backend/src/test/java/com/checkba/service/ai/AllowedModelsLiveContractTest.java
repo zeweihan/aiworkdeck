@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -78,6 +79,34 @@ class AllowedModelsLiveContractTest {
         }
         assertTrue(supportsTools,
                 model.getModelId() + " 已不支持 tools，supported_parameters=" + params);
+
+        // 视觉能力：来源是 architecture.input_modalities 是否含 "image"。
+        // 这一位和单价一样是人手抄的、会在我们背后变，所以必须对拍。
+        // 两个方向的严重性不同：
+        //   我们标 true 而上游没有 image → 我们会把 image 内容块发给一个读不了图的模型，
+        //     换来一个必然的 400，用户看到的是一句英文报错。这是必须红的。
+        //   我们标 false 而上游有 image → 只是少给了能力（图片走 OCR，功能仍可用），
+        //     所以也断言，但错误信息要说清楚这是「漏标」而不是「会坏」。
+        JsonNode modalities = entry.path("architecture").path("input_modalities");
+        assertTrue(modalities.isArray(),
+                model.getModelId() + " 的 architecture.input_modalities 不是数组，实际节点=" + modalities
+                        + "。上游改了字段结构，vision 位从此无人看守，先确认新字段名再改这条断言。");
+        boolean upstreamVision = false;
+        for (JsonNode mod : modalities) {
+            if ("image".equals(mod.asText())) {
+                upstreamVision = true;
+                break;
+            }
+        }
+        if (model.isVision()) {
+            assertTrue(upstreamVision, model.getModelId()
+                    + " 我们标了支持视觉，上游 input_modalities 却没有 image（实际=" + modalities
+                    + "）。这条必须改 AllowedModels：不改的话选到它的用户一发图就是一个上游 400。");
+        } else {
+            assertFalse(upstreamVision, model.getModelId()
+                    + " 上游已支持图像输入（input_modalities=" + modalities
+                    + "），我们还标着不支持——用户的图片被白白降级成 OCR 文本。把 vision 位改成 true。");
+        }
 
         // OpenRouter 的 pricing 是「每 token 的美元数」字符串，我们记的是 $/1M tokens
         AllowedModels.PriceTier first = model.getPriceTiers().get(0);

@@ -50,6 +50,7 @@ export default {
   modelOption: '{name} ({vendor})',
   modelPrice: ' · ${in}/${out} per 1M tokens',
   tieredSuffix: ' · Tiered pricing',
+  noVisionSuffix: ' · No image input (images processed via OCR)',
   modelUnavailableInRegion: '{model} (unavailable in the current network region)',
   modelSaved: '{model} (saved)',
   catalogLoadFailedWithMsg: 'Model list temporarily unavailable: {msg}',

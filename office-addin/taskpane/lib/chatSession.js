@@ -1,4 +1,4 @@
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import {
   postChat, postCancel, postOfficeResult, createConversation, fetchConversationHistory,
   fetchConversations, fetchModels, fetchSkills, fetchProjectFiles,
@@ -55,6 +55,16 @@ export const lastPerf = ref(null)
 /** 模型清单（null=未拉到/后端不支持，界面隐藏选择器）与当前选择（空串=后端默认） */
 export const modelCatalog = ref(null)
 export const selectedModel = ref(loadModelChoice())
+/**
+ * 用户是否显式选中过一个「看不了图」的模型（chooseModel 维护）。
+ *
+ * 为什么是常驻标记而不是一次性提示：选模型是**常驻配置**不是瞬时事件——做成一次性
+ * toast，用户「先选模型、过一会儿才加图片」时就静默了；反过来「先加图片、后换模型」
+ * 由 visionNotice 里的附件条件覆盖。两个时机各自会漏一半，所以两条都要有。
+ * 也正因为要常驻，刻意不复用 notice/banner：那两个被 send() 与 finishStreaming()
+ * 无条件清空，发一条消息提示就没了。选到支持视觉的模型时自行落下。
+ */
+const nonVisionModelPicked = ref(false)
 /** 已启用的 skill 清单与本会话勾选的 skillIds（随每条消息上送，后端按并集激活） */
 export const skillList = ref([])
 export const selectedSkillIds = ref([])
@@ -174,6 +184,8 @@ export async function activateSession({ settings, projectId }) {
   conversationId = null
   attachedFiles.value = []
   uploadingFiles.value = []
+  // 换了账户/项目就要重新拉清单，旧清单上做出的「刚选了看不了图的模型」提示随之作废
+  nonVisionModelPicked.value = false
   resetDocCache()
 
   if (!pid || !settings || !isConfigured(settings)) return
@@ -229,6 +241,8 @@ async function refreshCatalogs() {
 export function chooseModel(modelId) {
   selectedModel.value = modelId || ''
   saveModelChoice(selectedModel.value)
+  // 选定的那一刻就告诉用户这个模型看不了图（三态里只有明确的 false 才算数）
+  nonVisionModelPicked.value = activeModelVision.value === false
 }
 
 export function toggleSkill(skillId) {
@@ -271,6 +285,72 @@ function fileTypeFromName(name) {
   }
   return map[ext] || 'other'
 }
+
+// ==================== 模型的视觉能力（能不能直接看图） ====================
+
+/**
+ * 当前生效模型支不支持视觉输入。**三态**，undefined 是真实的一档：
+ *   true      支持，图片附件作为 image 内容块直送模型；
+ *   false     不支持，后端自动降级走既有 OCR 抽文本（降级全自动，客户端不拦截）；
+ *   undefined 未知——清单还没拉到，或后端根本不返回 vision 字段。
+ *
+ * 插件连的是用户自填的服务器地址，很可能是旧后端：把 undefined 当 false 会对**所有**
+ * 模型误报「不支持读图」，所以未知时界面什么都不提示。
+ *
+ * 「当前生效模型」= 显式选中的那个；selectedModel 为空串的语义是「跟随后端默认」，
+ * 此时生效的是 modelCatalog.defaultModel——那是绝大多数用户的状态，只对显式选中的
+ * 模型判能力等于对多数人永远静默。
+ *
+ * 用 computed 而非一次性赋值的 ref：refreshCatalogs 在模型下线时会把 selectedModel
+ * 静默改回空串，赋值式的 ref 会僵在一个已经不生效的模型上。
+ */
+export const activeModelVision = computed(() => {
+  const cat = modelCatalog.value
+  if (!cat || !Array.isArray(cat.models)) return undefined
+  const id = selectedModel.value || cat.defaultModel
+  if (!id) return undefined
+  const hit = cat.models.find((m) => m && m.id === id)
+  if (!hit || typeof hit.vision !== 'boolean') return undefined
+  return hit.vision
+})
+
+/**
+ * 后端默认模型在清单里的条目（null=清单里没有它/没拉到）。
+ * 模型菜单的「默认模型」那一行据此显示真名与能力角标——那一行此前完全不知道
+ * 默认模型是谁，而它恰恰是默认状态。
+ */
+export const defaultModelInfo = computed(() => {
+  const cat = modelCatalog.value
+  if (!cat || !cat.defaultModel || !Array.isArray(cat.models)) return null
+  return cat.models.find((m) => m && m.id === cat.defaultModel) || null
+})
+
+/**
+ * 这个条目是不是图片。**不能只看 fileType**：项目树里的 fileType 是后端原样透传的，
+ * 桌面端那张扩展名映射表没有 bmp，从桌面端传上来的 .bmp 在项目树里是 'other'；
+ * 本模块的 fileTypeFromName 含 bmp，两条判据取并集。
+ * 收 {name, fileType} 形状——项目文件、已附附件、上传中间态条目都能直接传。
+ */
+export function isImageAttachment(item) {
+  if (!item) return false
+  if (String(item.fileType || '').toLowerCase() === 'image') return true
+  return fileTypeFromName(item.name) === 'image'
+}
+
+/**
+ * 「当前模型看不了图」的一句中性提示（空串=不提示），合并两个各自会漏一半的时机：
+ *   - 已经附了图片：条件恒真，用户后来才换模型也照样提示（附件跨轮不清空，
+ *     「加图片时提示一次」在换模型后就失效了）；
+ *   - 只是刚选了看不了图的模型、还没加图片：由 nonVisionModelPicked 兜住
+ *     （「选模型时提示一次」在用户后来才加图片时同样失效）。
+ * 不是报错——降级本身是后端自动完成的正常路径，用户只是有权提前知道。
+ */
+export const visionNotice = computed(() => {
+  if (activeModelVision.value !== false) return ''
+  // 上传中间态由 upload-row 的条目角标自己交代，这里只看已经附上的
+  if (attachedFiles.value.some(isImageAttachment)) return t('visionImagesDowngraded')
+  return nonVisionModelPicked.value ? t('visionModelPicked') : ''
+})
 
 let uploadSeq = 0
 

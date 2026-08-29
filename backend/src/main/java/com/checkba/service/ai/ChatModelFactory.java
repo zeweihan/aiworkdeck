@@ -221,61 +221,98 @@ public class ChatModelFactory {
     }
 
     /**
-     * 获取或创建 ChatLanguageModel。
-     * @param modelId 前端传来的模型ID (e.g. "anthropic/claude-3.5-sonnet")。如果是 null，使用默认配置。
-     * @return ChatLanguageModel 实例
+     * 本轮真正会被发出去的通道与模型 id。
+     *
+     * <p><b>为什么要有这个方法</b>：请求里带的 modelId **不等于**实际发出去的模型。本类有三条
+     * 静默改写路径（非白名单回落默认模型、显式本地档忽略云端模型、平台通道回落），每条都只
+     * {@code log.warn} 一行。凡是「按模型能力做决定」的调用方（视觉判定、故障转移收窄）如果按
+     * 请求里那个 id 判，就会得出与实际不符的结论——把 image 内容块发给一个读不了图的模型，
+     * 换来一个英文 400。这正是三档改造要消灭的「显示与实际不一致」。
+     *
+     * <p><b>零漂移是硬要求</b>：{@link #getChatModel(String)} 与
+     * {@link #getStreamingChatModel(String)} 都改成先调本方法再按通道分派，所以判定顺序
+     * （平台通道短路 → 显式本地短路 → 白名单短路 → provider 分流）只有这一份实现。
+     * 不许在别处复制一份「和工厂一样的解析」。
+     *
+     * @param logFallback 是否打回落警告。只有真的要建模型时才打；纯能力探测传 false，
+     *                    否则同一轮会把同一条警告打两遍。
      */
-    public ChatLanguageModel getChatModel(String modelId) {
-        // 1. Determine Provider and Normalized Model Name
+    public ResolvedTarget resolveTarget(String modelId, boolean logFallback) {
         AiModelProperties.Provider provider = resolveProvider();
-        String targetModel = modelId;
-
-        if (targetModel == null || targetModel.isEmpty()) {
-            targetModel = "default";
-        }
+        String targetModel = (modelId == null || modelId.isEmpty()) ? "default" : modelId;
 
         // 平台通道必须先于白名单短路判定：白名单模型走的是 BYOK 的 OpenRouter key，
         // 而平台通道用的是官网 provision 的 key，两者不能混
         if (provider == AiModelProperties.Provider.AWD_CLOUD) {
-            return getOrCreatePlatformModel(resolvePlatformModel(targetModel));
+            return new ResolvedTarget(AiModelProperties.Provider.AWD_CLOUD,
+                    resolvePlatformModel(targetModel, logFallback));
         }
-
-        // Logic to switch provider based on modelId pattern if Provider is set to OPENROUTER or dynamic
-        // For now, if modelId contains "/", we assume it's OpenRouter style
-
-        // Strategy:
-        // - If modelID is "default" or local-looking => use Configured Provider (Ollama) properties.
-        // - If modelID looks like "provider/model" (e.g. "anthropic/claude") => Force OpenRouter if generic, or check allowed list.
 
         // 显式选了本地档时必须先于白名单短路判定：那是在明确表达「内容不出这台机器」，
         // 法律文书场景下那是产品承诺、不是偏好。而白名单判定原本排在前面，只要 modelId
         // 恰好在白名单里就一律被拽去 OpenRouter；更要命的是辅助模型的默认 id
         // （qwen/qwen3.7-flash）本身就在白名单里——OLLAMA 档下每一次辅助调用都在走云端。
         if (isExplicitLocalProvider()) {
-            if (!"default".equals(targetModel) && AllowedModels.isAllowed(targetModel)) {
-                log.warn("供应商为本地 OLLAMA，忽略云端模型 '{}'，改用本地模型 {}",
-                        targetModel, resolveOllamaModelName());
+            String local = resolveOllamaModelName();
+            if (logFallback && !"default".equals(targetModel) && AllowedModels.isAllowed(targetModel)) {
+                log.warn("供应商为本地 OLLAMA，忽略云端模型 '{}'，改用本地模型 {}", targetModel, local);
             }
-            return getOrCreateOllamaModel(resolveOllamaModelName());
+            return new ResolvedTarget(AiModelProperties.Provider.OLLAMA, local);
         }
 
         if (AllowedModels.isAllowed(targetModel)) {
-            // It's a valid OpenRouter/Cloud model
-            return getOrCreateOpenRouterModel(targetModel);
+            return new ResolvedTarget(AiModelProperties.Provider.OPENROUTER, targetModel);
         }
 
         // 供应商为 OPENROUTER 时，空/非白名单的 modelId 统一走 OpenRouter 默认模型，
         // 不能回退本地 Ollama（用户可能根本没装，导致 Connection refused）
         if (provider == AiModelProperties.Provider.OPENROUTER) {
             String defaultModel = resolveDefaultModel();
-            if (!"default".equals(targetModel)) {
-                log.warn("Model '{}' is not in the allowed list, falling back to OpenRouter default: {}", targetModel, defaultModel);
+            if (logFallback && !"default".equals(targetModel)) {
+                log.warn("Model '{}' is not in the allowed list, falling back to OpenRouter default: {}",
+                        targetModel, defaultModel);
             }
-            return getOrCreateOpenRouterModel(defaultModel);
+            return new ResolvedTarget(AiModelProperties.Provider.OPENROUTER, defaultModel);
         }
 
         // 剩下只有 OLLAMA 一档（本地/实验，只支持 ASK 模式）
-        return getOrCreateOllamaModel(resolveOllamaModelName());
+        return new ResolvedTarget(AiModelProperties.Provider.OLLAMA, resolveOllamaModelName());
+    }
+
+    /** 本轮真正生效的模型 id（不打回落警告）。能力判定一律用它，不要用请求里那个。 */
+    public String resolveEffectiveModelId(String modelId) {
+        return resolveTarget(modelId, false).modelId();
+    }
+
+    /**
+     * 本轮真正生效的模型支不支持视觉输入。
+     *
+     * <p>本地 Ollama 档恒返回 false：它的模型 id 不在 {@link AllowedModels} 白名单里
+     * （{@code llama3} 之类），而且 langchain4j-ollama 走的是另一套图片编组，与 OpenAI 兼容层
+     * 不共享代码，本次不接。
+     */
+    public boolean effectiveModelSupportsVision(String modelId) {
+        ResolvedTarget target = resolveTarget(modelId, false);
+        return target.channel() != AiModelProperties.Provider.OLLAMA
+                && AllowedModels.supportsVision(target.modelId());
+    }
+
+    /** 解析结果：本轮走哪个通道、用哪个模型 id。 */
+    public record ResolvedTarget(AiModelProperties.Provider channel, String modelId) {
+    }
+
+    /**
+     * 获取或创建 ChatLanguageModel。
+     * @param modelId 前端传来的模型ID (e.g. "anthropic/claude-3.5-sonnet")。如果是 null，使用默认配置。
+     * @return ChatLanguageModel 实例
+     */
+    public ChatLanguageModel getChatModel(String modelId) {
+        ResolvedTarget target = resolveTarget(modelId, true);
+        return switch (target.channel()) {
+            case AWD_CLOUD -> getOrCreatePlatformModel(target.modelId());
+            case OLLAMA -> getOrCreateOllamaModel(target.modelId());
+            default -> getOrCreateOpenRouterModel(target.modelId());
+        };
     }
 
     private ChatLanguageModel getOrCreateOpenRouterModel(String modelId) {
@@ -293,7 +330,8 @@ public class ChatModelFactory {
                     .baseUrl(baseUrl)
                     .modelName(modelId)
                     .timeout(config.getTimeout())
-                    .logRequests(true)
+                    // logRequests 必须为 false，理由见 streamingBuilder 的 javadoc（请求体物化）
+                    .logRequests(false)
                     .logResponses(true)
                     // Custom Headers for OpenRouter
                     // .defaultRequestProperties(Map.of(
@@ -307,10 +345,10 @@ public class ChatModelFactory {
     // ==================== 平台通道「AI WorkDeck 云端」 ====================
 
     /** 平台通道仍是 OpenRouter 后端，模型口径与 BYOK 一致：非白名单一律回落默认模型。 */
-    private String resolvePlatformModel(String targetModel) {
+    private String resolvePlatformModel(String targetModel, boolean logFallback) {
         if (AllowedModels.isAllowed(targetModel)) return targetModel;
         String defaultModel = resolveDefaultModel();
-        if (!"default".equals(targetModel)) {
+        if (logFallback && !"default".equals(targetModel)) {
             log.warn("Model '{}' is not in the allowed list, platform channel falls back to: {}",
                     targetModel, defaultModel);
         }
@@ -388,7 +426,8 @@ public class ChatModelFactory {
                     .baseUrl(config.getBaseUrl())
                     .modelName(modelId)
                     .timeout(config.getTimeout())
-                    .logRequests(true)
+                    // logRequests 必须为 false，理由见 streamingBuilder 的 javadoc（请求体物化）
+                    .logRequests(false)
                     .logResponses(true)
                     .build();
         });
@@ -413,6 +452,16 @@ public class ChatModelFactory {
      * 但 slf4j 的参数是提前求值的，所以 NPE 照抛。
      *
      * <p>非流式的 {@code OpenAiChatModel} 走 SyncRequestExecutor，没有这条路径，故不受影响。
+     *
+     * <p><b>logRequests 也必须为 false（2026-08-29，随图片多模态一起改的）。</b>
+     * openai4j 0.23 的 {@code RequestLoggingInterceptor.logDebug} 在把参数交给
+     * {@code Logger.debug} <b>之前</b>先执行 {@code getBody(request)}（字节码实证：
+     * {@code invokestatic getBody} 在 {@code invokeinterface Logger.debug} 之前），
+     * 而这个版本的 getBody <b>不截断 base64</b>（截断是 1.x 之后才加的）。
+     * 也就是说日志级别停在 INFO 一行都不打印，却每次请求都把整个请求体物化成一个 String。
+     * 纯文本时代这只是浪费；接上视觉后一张 5MB 的图 base64 后约 6.7MB，
+     * 一轮工具循环最多 30 轮，等于每次对话白造几百 MB 的一次性字符串垃圾。
+     * 同理由三处构建口径（本方法 + 两个非流式 OpenAiChatModel）一起关掉。
      */
     static dev.langchain4j.model.openai.OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder
             streamingBuilder(String apiKey, String baseUrl, String modelId, java.time.Duration timeout) {
@@ -421,7 +470,7 @@ public class ChatModelFactory {
                 .baseUrl(baseUrl)
                 .modelName(modelId)
                 .timeout(timeout)
-                .logRequests(true)
+                .logRequests(false)
                 .logResponses(false);
     }
 
@@ -456,41 +505,15 @@ public class ChatModelFactory {
     private final Map<String, dev.langchain4j.model.chat.StreamingChatLanguageModel> streamingModelCache = boundedCache();
 
     public dev.langchain4j.model.chat.StreamingChatLanguageModel getStreamingChatModel(String modelId) {
-        String targetModel = (modelId == null || modelId.isEmpty()) ? "default" : modelId;
-        AiModelProperties.Provider provider = resolveProvider();
-
-        // 同 getChatModel：平台通道先于白名单短路
-        if (provider == AiModelProperties.Provider.AWD_CLOUD) {
-            return getOrCreatePlatformStreamingModel(resolvePlatformModel(targetModel));
-        }
-
-        // 显式选了本地档时必须先于白名单短路判定：那是在明确表达「内容不出这台机器」，
-        // 法律文书场景下那是产品承诺、不是偏好。而白名单判定原本排在前面，只要 modelId
-        // 恰好在白名单里就一律被拽去 OpenRouter；更要命的是辅助模型的默认 id
-        // （qwen/qwen3.7-flash）本身就在白名单里——OLLAMA 档下每一次辅助调用都在走云端。
-        if (isExplicitLocalProvider()) {
-            if (!"default".equals(targetModel) && AllowedModels.isAllowed(targetModel)) {
-                log.warn("供应商为本地 OLLAMA，忽略云端模型 '{}'，改用本地模型 {}",
-                        targetModel, resolveOllamaModelName());
-            }
-            return getOrCreateOllamaStreamingModel(resolveOllamaModelName());
-        }
-
-        if (AllowedModels.isAllowed(targetModel)) {
-            return getOrCreateOpenRouterStreamingModel(targetModel);
-        }
-
-        // 同 getChatModel：OPENROUTER 供应商下不回退本地 Ollama
-        if (provider == AiModelProperties.Provider.OPENROUTER) {
-            String defaultModel = resolveDefaultModel();
-            if (!"default".equals(targetModel)) {
-                log.warn("Model '{}' is not in the allowed list, falling back to OpenRouter default: {}", targetModel, defaultModel);
-            }
-            return getOrCreateOpenRouterStreamingModel(defaultModel);
-        }
-
-        // 剩下只有 OLLAMA 一档；它的流式实现没有三参 generate，AGENT/PLAN 模式会在编排层抛异常
-        return getOrCreateOllamaStreamingModel(resolveOllamaModelName());
+        // 判定顺序与 getChatModel 共用同一份实现（resolveTarget），不许在这里再抄一遍：
+        // 两份会漂移，而漂移的表现是「同步路和流式路发给不同的模型」。
+        // OLLAMA 档的流式实现没有三参 generate，AGENT/PLAN 模式会在编排层抛异常。
+        ResolvedTarget target = resolveTarget(modelId, true);
+        return switch (target.channel()) {
+            case AWD_CLOUD -> getOrCreatePlatformStreamingModel(target.modelId());
+            case OLLAMA -> getOrCreateOllamaStreamingModel(target.modelId());
+            default -> getOrCreateOpenRouterStreamingModel(target.modelId());
+        };
     }
 
     private dev.langchain4j.model.chat.StreamingChatLanguageModel getOrCreateOpenRouterStreamingModel(String modelId) {

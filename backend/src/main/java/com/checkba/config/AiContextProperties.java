@@ -57,6 +57,57 @@ public class AiContextProperties {
     /** 支持 OCR 的文件扩展名列表 */
     private List<String> ocrExtensions = Arrays.asList("jpg", "jpeg", "png", "gif", "bmp", "webp", "pdf");
 
+    /** 图片视觉直送（多模态）配置 */
+    private Vision vision = new Vision();
+
+    /**
+     * 图片视觉直送。
+     *
+     * <p><b>为什么 extensions 不复用 ocrExtensions</b>：两张表**真的不一样**——ocrExtensions 含 pdf，
+     * 而 PDF 不能直送。langchain4j-open-ai 0.36 的 {@code InternalOpenAiHelper.toOpenAiContent}
+     * 只认 TextContent / ImageContent 两种，{@code PdfFileContent} 会抛
+     * {@code IllegalArgumentException: Unknown content type}（真 jar 探针实测）；
+     * 而且 PDF 现有的 OCR 路径是 PDFBox 逐页渲染再逐页 OCR、上限 20 页，行为差异巨大。
+     * 所以 PDF 一律继续走 OCR，两张表分开维护、各自写清楚，而不是拿一张表打包两件事。
+     */
+    public static class Vision {
+        /** 可以直送模型的图片扩展名。**刻意不含 pdf**，理由见 {@link Vision} 的类注释。 */
+        private List<String> extensions = Arrays.asList("jpg", "jpeg", "png", "gif", "bmp", "webp");
+
+        /**
+         * 单张图片的字节上限，超限的那张降级走 OCR 并明示。
+         *
+         * <p>必须自己设闸：{@code ProjectFileService.getFileBytes} 一路 readAllBytes 没有任何上限，
+         * 今天图片不会撑爆堆纯粹是因为 {@code FileContentExtractorService} 那道 10MB 闸挡在 OCR 前面——
+         * 跳过 OCR 直读字节等于绕开它。取值与那道闸对齐（10MB），别在这里另立一个数。
+         */
+        private long maxImageBytes = 10 * 1024 * 1024L;
+
+        /** 单轮最多直送几张图，多出来的降级走 OCR 并明示。base64 会把体积再放大约 1.33 倍。 */
+        private int maxImagesPerTurn = 4;
+
+        /**
+         * 压缩阈值判断时每张图片折算多少 token。
+         *
+         * <p>**必须给一个非零值**：{@code RunLoopCompactor} 的估算只累加 TextContent，图片贡献 0 字符，
+         * 于是带大图的栈永远触发不了主动压缩、只能等服务商 400；而超限恢复通道剪不动图片，
+         * 会判「压不动」直接终态——表现是带图的长会话到某个点开始每次必死。
+         * **也绝不能拿 base64 字符串长度去算**：一张 500KB 的图按 charsPerToken=2.0 算出来是
+         * 33 万 token，会让每一轮都强制压缩、把真正的上下文全折没。
+         * 1200 是 HIGH detail 下的量级估计，方向刻意偏高（早压缩好过撞 400）。
+         */
+        private int tokenEstimatePerImage = 1200;
+
+        public List<String> getExtensions() { return extensions; }
+        public void setExtensions(List<String> extensions) { this.extensions = extensions; }
+        public long getMaxImageBytes() { return maxImageBytes; }
+        public void setMaxImageBytes(long maxImageBytes) { this.maxImageBytes = maxImageBytes; }
+        public int getMaxImagesPerTurn() { return maxImagesPerTurn; }
+        public void setMaxImagesPerTurn(int maxImagesPerTurn) { this.maxImagesPerTurn = maxImagesPerTurn; }
+        public int getTokenEstimatePerImage() { return tokenEstimatePerImage; }
+        public void setTokenEstimatePerImage(int v) { this.tokenEstimatePerImage = v; }
+    }
+
     /**
      * 解析指定模型的上下文总 token 预算：
      * 1. 精确匹配 modelTokenBudgets 的 key（不区分大小写）
@@ -213,4 +264,6 @@ public class AiContextProperties {
     public void setFiles(Files files) { this.files = files; }
     public List<String> getOcrExtensions() { return ocrExtensions; }
     public void setOcrExtensions(List<String> ocrExtensions) { this.ocrExtensions = ocrExtensions; }
+    public Vision getVision() { return vision; }
+    public void setVision(Vision vision) { this.vision = vision; }
 }
