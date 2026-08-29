@@ -203,16 +203,27 @@ function readWppSlides() {
 }
 
 /**
+ * 任务窗格 id 在 PluginStorage 里的键。**必须按宿主分**：三个宿主共用同一个加载项
+ * 注册与一份 PluginStorage，而窗格 id 是各宿主进程内从 1 开始自增的——同一个键会让
+ * 文字里存下的 id 被表格拿去开关它自己的同号窗格（可能是别家加载项的）。
+ * 后缀与 ribbon 壳的 `AwdHostTag()` 严格同源——两边改一个就得改另一个。
+ */
+const WPS_HOST_TAG = { word: 'wps', excel: 'et', powerpoint: 'wpp' }
+function taskPaneKey() {
+  return 'awd_taskpane_id_' + (WPS_HOST_TAG[detectWpsHost()] || 'unknown')
+}
+
+/**
  * 从任务窗格内部把自己收起（Visible=false）。
  * 为什么需要：WPS 平台 bug（bbs 93291，12.1.0.26895 起）——JS 停靠任务窗格打开
  * 期间整条 ribbon 拒收鼠标事件，而关窗格的按钮恰恰在 ribbon 上，用户会被锁死。
  * 窗格页自己有 window.wps，从内部藏掉窗格即可解锁 ribbon；重开走 ribbon 的
- * 「AI 助手」按钮（toggle）。窗格 ID 与 ribbon 壳共享 PluginStorage 同一键
- * （wps/js/ribbon.js 的 AWD_PANE_KEY）。
+ * 「AI 助手」按钮（toggle）。窗格 id 从 ribbon 壳写进 PluginStorage 的同一个
+ * 按宿主键里取（wps/js/ribbon.js 的 `AwdPaneKey()`）。
  */
 export function hideWpsTaskPane() {
   try {
-    const id = wps.PluginStorage.getItem('awd_taskpane_id')
+    const id = wps.PluginStorage.getItem(taskPaneKey())
     if (!id) return false
     const pane = wps.GetTaskPane(id)
     if (pane) {

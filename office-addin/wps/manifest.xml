@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  加载项清单。结构照 wpsjs@2.2.3 脚手架模板（packages/@wps-jsapi/{wps,et,wpp}/manifest.xml）。
+
+  为什么必须有这份文件：WPS 每次启动宿主都会先 GET <url>/manifest.xml，再 GET
+  <url>/ribbon.xml——2026-08-29 真机访问日志实测，两个请求成对出现在每一次宿主启动。
+  我们此前从未产出过它，线上一直 404（dev-board#270 排查时发现）。
+
+  三宿主共用同一个 url，所以只有这一份；Name 与 build-wps.mjs 的 ADDON_NAME 同源。
+  官方 et 模板里的 <Functions> 段是给自定义表格函数用的，我们没有，不写。
+-->
+<JsPlugin>
+  <ApiVersion>1.0.0</ApiVersion>
+  <Name>aiworkdeck</Name>
+  <Description>AI WorkDeck 法律 AI 工作台</Description>
+</JsPlugin>

@@ -10,7 +10,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { readWpsActiveDocument, detectWpsHost } from './wpsDoc.js'
+import { readWpsActiveDocument, detectWpsHost, hideWpsTaskPane } from './wpsDoc.js'
 
 /** 安装只有表格宿主的 globalThis.wps，返回 { calls, restore } */
 function installEt(sheet) {
@@ -185,5 +185,65 @@ test('演示：单个形状读失败不许拖垮整篇', async () => {
   try {
     const out = await readWpsActiveDocument()
     assert.ok(out.inlineContent.includes('后面这段还在'), out.inlineContent)
+  } finally { restore() }
+})
+
+/* ==================== 任务窗格自收起（按宿主分键） ==================== */
+
+/**
+ * 造一份三宿主共用的 PluginStorage：文字与表格各自存过自己的窗格 id，
+ * 另外还有一个别家加载项占着的同号窗格——这正是分键要防的场面。
+ */
+function installPaneEnv(host, storage, panes) {
+  const original = globalThis.wps
+  const hostEntry = { word: 'WpsApplication', excel: 'EtApplication', powerpoint: 'WppApplication' }[host]
+  const base = {
+    WpsApplication() { throw new Error('非文字宿主') },
+    EtApplication() { throw new Error('非表格宿主') },
+    WppApplication() { throw new Error('非演示宿主') },
+    PluginStorage: { getItem: (k) => (k in storage ? storage[k] : null) },
+    GetTaskPane: (id) => panes[id] || null
+  }
+  base[hostEntry] = () => ({ ActiveDocument: {}, ActiveWorkbook: {}, ActivePresentation: {} })
+  globalThis.wps = base
+  return () => {
+    if (original === undefined) delete globalThis.wps
+    else globalThis.wps = original
+  }
+}
+
+test('收起窗格：表格宿主收的是表格自己的窗格，不是文字那个', () => {
+  // 窗格 id 在各宿主进程内从 1 开始自增，三宿主又共用一份 PluginStorage。
+  // 不按宿主分键的话，文字存下的 id 会被表格拿去 GetTaskPane——关掉的是表格里
+  // 碰巧同号的那个窗格（很可能是别家加载项的），我们自己的窗格纹丝不动。
+  const wordPane = { Visible: true }
+  const etPane = { Visible: true }
+  const storage = { awd_taskpane_id_wps: 'W', awd_taskpane_id_et: 'E' }
+  const restore = installPaneEnv('excel', storage, { W: wordPane, E: etPane })
+  try {
+    assert.equal(hideWpsTaskPane(), true)
+    assert.equal(etPane.Visible, false, '应当收起表格宿主自己的窗格')
+    assert.equal(wordPane.Visible, true, '不许去动文字宿主的窗格')
+  } finally { restore() }
+})
+
+test('收起窗格：文字宿主读文字的键', () => {
+  const wordPane = { Visible: true }
+  const etPane = { Visible: true }
+  const storage = { awd_taskpane_id_wps: 'W', awd_taskpane_id_et: 'E' }
+  const restore = installPaneEnv('word', storage, { W: wordPane, E: etPane })
+  try {
+    assert.equal(hideWpsTaskPane(), true)
+    assert.equal(wordPane.Visible, false)
+    assert.equal(etPane.Visible, true)
+  } finally { restore() }
+})
+
+test('收起窗格：本宿主没存过 id 时老实返回 false，不去乱猜别的键', () => {
+  const etPane = { Visible: true }
+  const restore = installPaneEnv('powerpoint', { awd_taskpane_id_et: 'E' }, { E: etPane })
+  try {
+    assert.equal(hideWpsTaskPane(), false)
+    assert.equal(etPane.Visible, true)
   } finally { restore() }
 })
