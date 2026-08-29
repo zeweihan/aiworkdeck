@@ -206,6 +206,33 @@ function withTrackingOff(doc, fn) {
   }
 }
 
+/**
+ * 关掉宿主重绘跑 fn，结束后恢复原值。WPS JSAPI 是同步跨进程桥，逐段循环里每一次
+ * Font/Format 写入都会触发宿主重绘；关掉重绘是这类长循环里代价最低的一项优化
+ * （零语义变化）。属性不可用时照常执行，不假装成功。fn 为同步函数。
+ */
+function withoutScreenUpdating(fn) {
+  let a = null
+  let prev = null
+  let toggled = false
+  try {
+    a = app()
+    prev = a.ScreenUpdating
+    a.ScreenUpdating = false
+    toggled = true
+  } catch (e) { /* 宿主不支持 ScreenUpdating：照常执行 */ }
+  try {
+    return fn()
+  } finally {
+    if (toggled) {
+      try {
+        // 读不出原值时恢复成 true——绝不能把宿主留在停止重绘的状态
+        a.ScreenUpdating = prev == null ? true : prev
+      } catch (e) { /* 恢复失败不掩盖主结果 */ }
+    }
+  }
+}
+
 /** needle 在 hay 中的全部非重叠命中偏移（升序） */
 function allIndexes(hay, needle) {
   const out = []
@@ -691,6 +718,54 @@ function applyHit(doc, hitStart, needle, newText, multiline) {
   return { via: 'full' }
 }
 
+/** Find 兜底路能接受的最长查找串（Word/WPS 查找引擎的硬上限） */
+const FIND_MAX_NEEDLE_CHARS = 255
+
+/**
+ * 把 Find 的「匹配宽松度」逐项钉死。`ClearFormatting()` 只清格式——
+ * IgnorePunct / IgnoreSpace / MatchFuzzy / MatchByte 是 Find 对象上的持久属性
+ * （对应查找对话框里的「忽略标点符号」「忽略空格」等复选框），既不在 Execute 的
+ * 15 参签名里，也会从用户上一次手动查找继承下来。不钉死的话同一份文档在两台机器上
+ * 命中范围可能不同，而兜底路的命中会被直接拿去替换，是最难复现的一类错。
+ * MatchByte 的极性与其余三个相反：true 才表示「区分全角/半角」。
+ * 各自 try/catch：WPS 未必暴露全部属性，取不到就维持宿主默认。
+ */
+function pinFindStrictness(find) {
+  try {
+    if (typeof find.ClearAllFuzzyOptions === 'function') find.ClearAllFuzzyOptions()
+  } catch (e) { /* 旧宿主无此方法 */ }
+  for (const [prop, value] of [['IgnorePunct', false], ['IgnoreSpace', false], ['MatchFuzzy', false], ['MatchByte', true]]) {
+    try {
+      find[prop] = value
+    } catch (e) { /* 该属性不可写即跳过 */ }
+  }
+}
+
+/**
+ * 进 Find 兜底前的硬拦截。Find 与 indexOf 偏移路径的能力边界不同，落差全在这里，
+ * 越界时宁可报一条模型能照着改的错，也不要让 Find 去猜——猜错是静默改错文档。
+ */
+function assertFindFallbackUsable(searchText, newText, hitCount) {
+  if (searchText.length > FIND_MAX_NEEDLE_CHARS) {
+    throw new Error(`替换失败：文档字符偏移与文本快照不一致，需走查找替换兜底，但 searchText 有 ${searchText.length} 个字符、超过查找引擎 ${FIND_MAX_NEEDLE_CHARS} 字上限。请改用更短的一段独特文本作为 searchText。`)
+  }
+  if (searchText.includes('^')) {
+    // FindText 里 ^ 是特殊字符转义前导符（^p 段落标记、^t 制表符……），
+    // 即使关掉通配符也仍然生效，会命中到别处
+    throw new Error('替换失败：文档字符偏移与文本快照不一致，需走查找替换兜底，但 searchText 含 ^ 字符（查找语法的转义前导符）。请换一段不含 ^ 的文本作为 searchText。')
+  }
+  if (/\r/.test(newText)) {
+    // 查找替换的「替换为」只认 ^p，塞裸段落符要么抛异常要么写进一个字面控制字符
+    throw new Error('替换失败：文档字符偏移与文本快照不一致，需走查找替换兜底，但兜底路不支持跨段落的替换文本。请拆成逐段替换：每次只替换一个段落内的文本。')
+  }
+  if (hitCount > 1 && newText.includes(searchText)) {
+    // 兜底是「循环替换最靠前一处」，替换产物里再含 searchText 就会反复替换自己
+    // 刚生成的文本（「甲方」→「甲方（以下简称甲方）」这类律师常做的改写就是），
+    // 结果是第一处堆出嵌套垃圾、其余各处一个没动，返回值还报全部成功
+    throw new Error('替换失败：文档字符偏移与文本快照不一致，需走查找替换兜底，但 replaceText 里包含了 searchText，多处替换会反复命中刚替换出来的文本。请改为逐处替换（replaceAll 置否，并用更长的上下文区分每一处）。')
+  }
+}
+
 /** 偏移口径失准时的兜底：Find.Execute 位置传参整替一处（官方 15 参签名的前 11 参） */
 function findReplaceOnce(doc, needle, replaceText) {
   let find
@@ -702,6 +777,7 @@ function findReplaceOnce(doc, needle, replaceText) {
   if (!find || typeof find.Execute !== 'function') return false
   try {
     if (typeof find.ClearFormatting === 'function') find.ClearFormatting()
+    pinFindStrictness(find)
     // Execute(FindText, MatchCase, MatchWholeWord, MatchWildcards, MatchSoundsLike,
     //         MatchAllWordForms, Forward, Wrap, Format, ReplaceWith, Replace)
     return !!find.Execute(needle, true, false, false, false, false, true, wdFindStop, false, replaceText, wdReplaceOne)
@@ -814,6 +890,7 @@ export const WPS_WORD_HANDLERS = {
         (start) => String(doc.Range(start, start + searchText.length).Text) === searchText
       )
       if (!allVerified) {
+        assertFindFallbackUsable(searchText, newText, targets.length)
         let replaced = 0
         for (let k = 0; k < targets.length; k++) {
           if (!findReplaceOnce(doc, searchText, newText)) break
@@ -908,11 +985,12 @@ export const WPS_WORD_HANDLERS = {
     return withTracking(doc, () => {
       const { offsets, needle } = locateAnchorAll(doc, anchorText)
       const targetOffsets = args.applyToAll ? offsets : [offsets[0]]
-      for (const offset of targetOffsets) {
-        const range = verifiedRange(doc, offset, needle)
-        applyFontPlan(range.Font, plan)
-      }
-      return { formatted: targetOffsets.length, totalMatches: offsets.length, applied: plan.applied }
+      // 全部命中先校验完再落笔：边校验边写的话，第 k 处校验失败时前 k-1 处已经改了，
+      // 用户拿到的是「半篇改了格式 + 一条报错」，还留着一片修订。与 set_paragraph_format /
+      // apply_style 的预取同口径，也与 replace_text 的「全有全无」门同理由。
+      const ranges = targetOffsets.map((offset) => verifiedRange(doc, offset, needle))
+      for (const range of ranges) applyFontPlan(range.Font, plan)
+      return { formatted: ranges.length, totalMatches: offsets.length, applied: plan.applied }
     })
   },
 
@@ -1051,9 +1129,11 @@ export const WPS_WORD_HANDLERS = {
         lf.ApplyListTemplateWithLevel(lt, false, wdListApplyToWholeList, wdWord9ListBehavior, 1)
         return { paragraphs: targetCount, kind, via: 'listTemplate' }
       } catch (e) {
-        // 从后往前写前缀：前面段落的插入不会推移未写段落的定位
+        // 从后往前写前缀：前面段落的插入不会推移未写段落的定位。
+        // 复用循环外已取的 paras（插入前缀不改变段落数，序号仍有效）——每次
+        // doc.Paragraphs 都是一次跨进程往返，放循环里是白跑。
         for (let k = last; k >= start; k--) {
-          doc.Paragraphs.Item(k).Range.InsertBefore(chineseNumeral(k - start + 1) + '、')
+          paras.Item(k).Range.InsertBefore(chineseNumeral(k - start + 1) + '、')
         }
         return {
           paragraphs: targetCount,
@@ -1134,7 +1214,8 @@ export const WPS_WORD_HANDLERS = {
   async apply_standard_format(args) {
     const scope = String(args.scope || 'document').trim().toLowerCase() === 'selection' ? 'selection' : 'document'
     const doc = activeDoc()
-    return withTracking(doc, () => {
+    // 长循环：先关宿主重绘再进 withTracking（每段十余次跨桥写入，重绘开销可观）
+    return withoutScreenUpdating(() => withTracking(doc, () => {
       const paras = scope === 'selection' ? app().Selection.Range.Paragraphs : doc.Paragraphs
       const total = paras.Count
       const truncated = total > MAX_STANDARD_FORMAT_PARAGRAPHS
@@ -1146,7 +1227,10 @@ export const WPS_WORD_HANDLERS = {
       let bodies = 0
       for (let k = 1; k <= limit; k++) {
         const p = paras.Item(k)
-        const text = String(p.Range.Text || '').replace(/\r$/, '').trim()
+        // Range 只取一次：同步桥下每个属性访问都是一次跨进程往返，重复取 p.Range
+        // 在 500 段文档上就是 500 次白跑（format_table 缓存 table.Borders 同款手法）
+        const pr = p.Range
+        const text = String(pr.Text || '').replace(/\r$/, '').trim()
         if (!text) continue
         let kind = 'body'
         if (!firstNonEmptySeen) {
@@ -1155,7 +1239,7 @@ export const WPS_WORD_HANDLERS = {
         } else if (text.length <= HOUSE_HEADING_MAX_CHARS && HEADING_RE.test(text)) {
           kind = 'heading'
         }
-        const f = p.Range.Font
+        const f = pr.Font
         // 中西文分设字体（NameFarEast/NameAscii/NameOther）在 WPS 无版本门槛
         f.NameFarEast = HOUSE.fontAsian
         f.NameAscii = HOUSE.fontWestern
@@ -1202,7 +1286,7 @@ export const WPS_WORD_HANDLERS = {
       }
       if (scope === 'selection') result.note = '选区范围不处理表格字号'
       return result
-    })
+    }))
   },
 
   // ==================== 表格结构 ====================
