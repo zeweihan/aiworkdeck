@@ -173,7 +173,7 @@ $brand-dark: #212629;    /* Dark BG */
 /* Card Variants：差异只落在类型徽章的浅色 tint 上，不再用顶部色条区分 */
 .card-style-restructuring {
   .project-type-badge-new {
-      background: rgba($brand-dark, 0.08);
+      background: var(--awd-surface-3);
       color: var(--awd-text);
   }
   .info-val-new.highlight {
@@ -184,7 +184,7 @@ $brand-dark: #212629;    /* Dark BG */
 
 .card-style-refinancing {
   .project-type-badge-new {
-      background: rgba(46, 204, 113, 0.1);
+      background: var(--awd-accent-soft);
       color: var(--awd-accent-text);
   }
   .info-val-new.highlight {

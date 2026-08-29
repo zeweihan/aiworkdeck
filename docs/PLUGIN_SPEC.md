@@ -1,8 +1,9 @@
-# 插件规范 v2.5（Plugin Spec v2.5）
+# 插件规范 v2.6（Plugin Spec v2.6）
 
 > 适用版本：v1 自 0.4.x；v2（权限执行 + 启停过滤）自 Phase 3A；v2.1（插件携带 Skill）自 Phase 3B；
 > v2.3（Web 插件 + `packs` 依赖）自 native pack Phase B；v2.4（宿主 SPI `plugin-api` + 后台任务）自尽调 P1；
 > v2.5（Web 插件直调工具端点 + 桥新增 `tools.invoke`/`chat.send`/`ui.openFile`）自尽调 P1 补充。
+> v2.6（主题通道：`init` 带 `themeTokens`、宿主推送 `type:"theme"`、SDK 自动注入 CSS 变量）随深色模式收口（dev-board#274）加入。
 > 示例插件：[examples/hello-plugin/](../examples/hello-plugin/)（JAR 工具）、
 > [examples/hello-web-plugin/](../examples/hello-web-plugin/)（纯前端）。
 > 后端实现：`PluginService`（扫描/解析/启停）、`PluginController`（HTTP API）、
@@ -264,10 +265,27 @@ plugins/
 协议（宿主端、SDK、官网模板与宿主模拟器共用同一份契约，任何一方单独改动都会让插件跑不起来）：
 
 ```
-握手  宿主 -> 插件   { awd: 1, type: "init", context: { pluginId, projectId, language, theme } }
+握手  宿主 -> 插件   { awd: 1, type: "init", context: { pluginId, projectId, language, theme, themeTokens } }
 请求  插件 -> 宿主   { awd: 1, type: "call", seq, method, params }
 响应  宿主 -> 插件   { awd: 1, type: "result", seq, ok, result | error: { code, message } }
+主题  宿主 -> 插件   { awd: 1, type: "theme", theme: "light"|"dark", tokens: { "--awd-*": "..." } }   (v2.6)
 ```
+
+**主题通道（v2.6，宿主 0.27.4 起）**：照 VS Code 给 webview 注入 `--vscode-*` 变量的机制。
+`init.context.themeTokens` 与 `theme` 推送里的 `tokens` 是同一张表——宿主当前生效主题的全部
+语义色令牌（`--awd-bg` / `--awd-surface` / `--awd-text` / `--awd-border` / `--awd-accent` 等，
+名单以宿主 `frontend/src/utils/appTheme.js` 的 `THEME_TOKEN_NAMES` 为准）。SDK 收到即自动：
+`documentElement` 挂 `data-theme="light|dark"`、`body` 挂 `awd-theme-light`/`awd-theme-dark`
+class、逐个令牌写成 iframe 内的 CSS 自定义属性。插件因此**写 CSS 就能跟随主题**：
+
+```css
+body { background: var(--awd-surface, #fff); color: var(--awd-text, #1a1a1a); }
+```
+
+（fallback 值是给老宿主准备的：老宿主的 `init` 只有 `theme` 字符串没有 `themeTokens`，
+SDK 降级为只挂 `data-theme`/class，不注入变量；老宿主也不发 `theme` 推送，面板停在握手
+快照。老 SDK 遇到新宿主的 `theme` 推送则静默忽略——两个方向都不会坏。）
+需要脚本联动的用 `awd.theme.onChange(cb)`（见 §8.5）。
 
 来源校验是双向的：宿主校验 `event.source === iframe.contentWindow`，插件校验
 `event.source === window.parent`。两侧 `postMessage` 的 targetOrigin 都只能是 `'*'`——
@@ -347,6 +365,11 @@ opaque origin 使然，不能靠 `event.origin` 判断。
 **v2.5**：SDK 版本号 `1.0.0` → `1.1.0`（`awd.version`，与桥协议版本 `PROTOCOL` 无关），新增
 `awd.tools.invoke(name, args)`（解包糖衣，直接返回 `output` 字符串）、`awd.chat.send(prompt)`、
 `awd.ui.openFile(path)`，均为对应新方法的直通/糖衣包装。
+
+**v2.6**：SDK 版本号 `1.1.0` → `1.2.0`。新增 `awd.theme.get()`（返回
+`{ mode: 'light'|'dark', tokens }`）与 `awd.theme.onChange(cb)`（返回退订函数；
+`cb(mode, tokens)` 在宿主推送主题切换时触发）。主题的自动应用（data-theme/class/CSS 变量）
+不需要调用任何 API，SDK 收到消息即做。
 
 ### 8.6 开发工作流
 

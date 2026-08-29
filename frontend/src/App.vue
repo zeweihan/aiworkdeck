@@ -210,6 +210,8 @@ html[data-theme='light'] {
     --awd-accent-soft: #E6F9F0;
     --awd-accent-wash: rgba(26, 83, 54, 0.04);
     --awd-mint: #5BD197;
+    /* mint 亮绿底上的文字：两个主题下 mint 都是亮色，配对文字恒为深墨 */
+    --awd-text-on-mint: #14301F;
     /* 语义状态 */
     --awd-danger: #E74C3C;
     --awd-danger-text: #C53030;
@@ -263,6 +265,7 @@ html[data-theme='dark'] {
     --awd-accent-soft: rgba(91, 209, 151, 0.13);
     --awd-accent-wash: rgba(91, 209, 151, 0.06);
     --awd-mint: #5BD197;
+    --awd-text-on-mint: #14301F;
     --awd-danger: #E05A4E;
     --awd-danger-text: #FF8A80;
     --awd-danger-soft: rgba(231, 76, 60, 0.15);

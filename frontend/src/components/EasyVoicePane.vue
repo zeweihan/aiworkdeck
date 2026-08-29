@@ -112,9 +112,9 @@
           max="150"
           step="5"
           block-size="12"
-          activeColor="#1A5336"
-          backgroundColor="#e5e7eb"
-          block-color="#1A5336"
+          activeColor="var(--awd-accent)"
+          backgroundColor="var(--awd-border)"
+          block-color="var(--awd-accent)"
         />
       </view>
     </view>

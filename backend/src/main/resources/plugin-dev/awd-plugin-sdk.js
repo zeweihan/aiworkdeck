@@ -22,6 +22,15 @@
  *   evidence.locate { linkKey, targetId? }
  *                                     -> {}                需 editor；有 targetId 打开底稿定位，否则跳到文档里的锚点
  *
+ * v2.6 新增（宿主 0.27.4 起）——主题通道，照 VS Code 给 webview 注入主题的机制：
+ *   推送  宿主 -> 插件   { awd: 1, type: "theme", theme: "light"|"dark", tokens: { "--awd-*": "..." } }
+ *   init 的 context 也带 theme 与 themeTokens 两个字段（老宿主只有 theme 字符串，
+ *   没有 themeTokens——SDK 会降级为只挂 data-theme，不注入变量）。
+ *   SDK 收到即自动：documentElement 挂 data-theme="light|dark"、body 挂
+ *   awd-theme-light / awd-theme-dark class、把 tokens 逐个写成 CSS 自定义属性。
+ *   插件 CSS 因此可以直接用 var(--awd-surface) 这类语义令牌，零 JS 跟随主题；
+ *   需要脚本联动的用 awd.theme.onChange(cb)。
+ *
  * v2.5 新增（宿主 0.27 起；老宿主返回 unknown_method，插件要能降级）：
  *   tools.invoke  { name, args? }     -> { output }        直调本插件 manifest 声明的 JAR 工具；
  *                                        output 是工具原始字符串输出（通常为 JSON）。权限/配额/项目归属
@@ -60,7 +69,13 @@
 
     if (msg.type === 'init') {
       awd.context = msg.context || {};
+      applyTheme(awd.context.theme, awd.context.themeTokens);
       resolveReady(awd.context);
+      return;
+    }
+
+    if (msg.type === 'theme') {
+      applyTheme(msg.theme, msg.tokens);
       return;
     }
 
@@ -78,6 +93,30 @@
     }
   });
 
+  // ---- 主题（v2.6）----------------------------------------------------------
+  // 自动应用 + 回调通知。tokens 缺席（老宿主）时只挂 data-theme/class，
+  // 插件的 var(--awd-*) 走自己 CSS 里的 fallback 值。
+  var themeState = { mode: 'light', tokens: {} };
+  var themeListeners = [];
+  function applyTheme(mode, tokens) {
+    themeState.mode = mode === 'dark' ? 'dark' : 'light';
+    if (tokens && typeof tokens === 'object') themeState.tokens = tokens;
+    try {
+      var rootEl = document.documentElement;
+      rootEl.setAttribute('data-theme', themeState.mode);
+      Object.keys(themeState.tokens).forEach(function (k) {
+        if (k.indexOf('--') === 0) rootEl.style.setProperty(k, String(themeState.tokens[k]));
+      });
+      if (document.body) {
+        document.body.classList.toggle('awd-theme-dark', themeState.mode === 'dark');
+        document.body.classList.toggle('awd-theme-light', themeState.mode !== 'dark');
+      }
+    } catch (e) { /* 无 DOM 环境静默 */ }
+    themeListeners.forEach(function (cb) {
+      try { cb(themeState.mode, themeState.tokens); } catch (e) { /* 插件回调抛错不打断其余 */ }
+    });
+  }
+
   function call(method, params) {
     return new Promise(function (resolve, reject) {
       var id = ++seq;
@@ -88,7 +127,7 @@
 
   var awd = {
     /** SDK 版本，与桥协议版本无关 */
-    version: '1.1.0',
+    version: '1.2.0',
     /** 握手拿到的上下文；ready() 之前为 null */
     context: null,
     /** 等待宿主握手，resolve 值即 awd.context */
@@ -128,6 +167,21 @@
         });
       },
       set: function (key, value) { return call('storage.set', { key: key, value: value }); }
+    },
+    theme: {
+      /** 当前主题：{ mode: 'light'|'dark', tokens: { '--awd-*': '...' } }。
+       *  SDK 已自动把 data-theme/class/CSS 变量挂到本页，多数插件写 CSS 即可，
+       *  不需要碰这个 API。 */
+      get: function () { return { mode: themeState.mode, tokens: themeState.tokens }; },
+      /** 主题切换回调 cb(mode, tokens)，返回退订函数。init 时已应用的主题不补发。 */
+      onChange: function (cb) {
+        if (typeof cb !== 'function') return function () {};
+        themeListeners.push(cb);
+        return function () {
+          var i = themeListeners.indexOf(cb);
+          if (i >= 0) themeListeners.splice(i, 1);
+        };
+      }
     },
     evidence: {
       /** -> { linkKey, targetIds } */

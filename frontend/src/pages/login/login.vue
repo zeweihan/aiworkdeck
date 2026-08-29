@@ -485,7 +485,6 @@ export default {
 
 <style lang="scss" scoped>
 /* Color Config */
-$color-primary: #1A5336; // Forest Green
 // 毛玻璃走令牌：深色下要变成半透明深底，写死白色在深色页面上会糊成一块灰
 $glass-white: var(--awd-glass);
 $glass-border: var(--awd-glass-border);
@@ -804,7 +803,7 @@ $glass-border: var(--awd-glass-border);
 .auth-tabs {
   display: flex;
   position: relative;
-  border-bottom: 2px solid rgba(0,0,0,0.05);
+  border-bottom: 2px solid var(--awd-border-subtle);
   margin-bottom: 28px;
 }
 .tab-btn {
@@ -842,7 +841,7 @@ $glass-border: var(--awd-glass-border);
 .glass-input {
   height: 48px;
   background: var(--awd-surface);
-  border: 1px solid rgba(0,0,0,0.1);
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   padding: 0 16px;
   font-size: 15px;
@@ -901,7 +900,7 @@ $glass-border: var(--awd-glass-border);
   cursor: pointer;
   transition: background 0.2s;
   &:active {
-    background: darken($color-primary, 5%);
+    background: var(--awd-accent-hover);
   }
   &::after { border: none; } // uni-app button reset
 }

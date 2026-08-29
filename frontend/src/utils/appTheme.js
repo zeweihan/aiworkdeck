@@ -17,6 +17,35 @@ export const APP_THEME_KEY = 'awd_theme'
 export const APP_THEME_EVENT = 'awd-theme-changed'
 export const THEME_MODES = ['light', 'dark', 'system']
 
+// 语义色令牌全名单（与 App.vue 里 html[data-theme] 的 --awd-* 定义一一对应）。
+// 用途：PluginPane 把当前主题的令牌值序列化后注入插件 iframe（照 VS Code 给
+// webview 注入 --vscode-* 变量的机制）。App.vue 新增令牌时这里要同步补名——
+// 漏了不报错，只是插件侧 var() 落空走 fallback。
+export const THEME_TOKEN_NAMES = [
+  'bg', 'surface', 'surface-2', 'surface-3',
+  'text', 'text-2', 'text-3', 'text-on-accent', 'text-on-mint',
+  'border-subtle', 'border', 'border-strong',
+  'accent', 'accent-hover', 'accent-text', 'accent-soft', 'accent-wash', 'mint',
+  'danger', 'danger-text', 'danger-soft',
+  'warning', 'warning-text', 'warning-soft',
+  'info', 'info-text', 'info-soft',
+  'shadow-sm', 'shadow-md', 'shadow-lg', 'overlay',
+  'halo-1', 'halo-2', 'halo-page', 'glass', 'glass-border', 'canvas'
+]
+
+/** 当前生效主题的令牌表：{ '--awd-*': '值' }。非浏览器环境返回空表。 */
+export function collectThemeTokens() {
+  const out = {}
+  try {
+    const cs = window.getComputedStyle(document.documentElement)
+    for (const name of THEME_TOKEN_NAMES) {
+      const v = cs.getPropertyValue('--awd-' + name)
+      if (v) out['--awd-' + name] = v.trim()
+    }
+  } catch (e) { /* 小程序端等无 DOM 环境 */ }
+  return out
+}
+
 // 默认浅色而不是跟随系统：深色是本版新加的，先让它是「选进去」的而不是
 // 「升级后被切过去」的；等深色跑顺了再考虑把默认改成 system。
 const DEFAULT_MODE = 'light'

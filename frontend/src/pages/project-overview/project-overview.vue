@@ -1546,16 +1546,16 @@
             <view v-if="showHistoryDrawer" class="ai-dropdown-panel" @tap.stop style="top: 36px; border-radius: 0 0 8px 8px;">
                 <view class="menu-item header">{{ $t('workbench.historyConversations') }}</view>
                 <scroll-view scroll-y class="drawer-list" style="max-height: 350px;">
-                    <view v-if="loadingHistory" class="menu-item" style="color:#999;">{{ $t('workbench.loadingText') }}</view>
-                    <view v-else-if="chatHistoryList.length === 0" class="menu-item" style="color:#999;">{{ $t('workbench.noHistory') }}</view>
+                    <view v-if="loadingHistory" class="menu-item" style="color:var(--awd-text-3);">{{ $t('workbench.loadingText') }}</view>
+                    <view v-else-if="chatHistoryList.length === 0" class="menu-item" style="color:var(--awd-text-3);">{{ $t('workbench.noHistory') }}</view>
                     <view v-else v-for="chat in chatHistoryList" :key="chat.id" class="menu-item" @tap="loadHistoryChat(chat)">
                         <view v-if="convDotClass(chat)" class="conv-dot" :class="convDotClass(chat)"></view>
                         <view style="flex:1; overflow:hidden;">
-                            <text class="item-title" style="display:block; font-size:13px; color:#333; margin-bottom:2px;">{{ chat.title || $t('workbench.unnamedConversation') }}</text>
-                            <text class="item-preview" style="display:block; font-size:11px; color:#999; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ chat.lastMessage }}</text>
+                            <text class="item-title" style="display:block; font-size:13px; color:var(--awd-text); margin-bottom:2px;">{{ chat.title || $t('workbench.unnamedConversation') }}</text>
+                            <text class="item-preview" style="display:block; font-size:11px; color:var(--awd-text-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ chat.lastMessage }}</text>
                         </view>
                         <view style="display:flex; flex-direction:column; align-items:flex-end; margin-left:8px; flex-shrink:0;">
-                            <text class="item-time" style="font-size:10px; color:#ccc;">{{ formatTime(chat.updatedAt) }}</text>
+                            <text class="item-time" style="font-size:10px; color:var(--awd-text-3);">{{ formatTime(chat.updatedAt) }}</text>
                             <text v-if="convStatusLabel(chat)" class="conv-status-label" :class="convDotClass(chat)">{{ convStatusLabel(chat) }}</text>
                         </view>
                     </view>

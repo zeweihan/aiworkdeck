@@ -755,12 +755,12 @@
     <view
         v-if="isBatchUploading || Object.keys(uploadStatusMap).length > 0"
         class="upload-status-footer-fixed"
-        style="padding: 10px; border-top: 1px solid #eee; background: white; position: relative; flex-shrink: 0;"
+        style="padding: 10px; border-top: 1px solid var(--awd-border); background: var(--awd-surface); position: relative; flex-shrink: 0;"
         @mouseenter="showUploadDetails = true"
         @mouseleave="showUploadDetails = false"
     >
         <!-- 悬浮详情列表 -->
-        <view v-if="showUploadDetails" class="upload-details-popover" style="position: absolute; bottom: 100%; left: 0; right: 0; background: white; border: 1px solid #eee; border-radius: 4px; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); max-height: 200px; overflow-y: auto; z-index: 100;">
+        <view v-if="showUploadDetails" class="upload-details-popover" style="position: absolute; bottom: 100%; left: 0; right: 0; background: var(--awd-surface); border: 1px solid var(--awd-border); border-radius: 4px; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); max-height: 200px; overflow-y: auto; z-index: 100;">
             <view class="popover-header" style="padding: 8px 12px; border-bottom: 1px solid #f0f0f0; display: flex; justify-content: space-between; align-items: center; background: #f9fafb;">
                 <text style="font-size: 12px; font-weight: bold; color: #333;">{{ $t('fileTree.uploadListCount', { count: Object.keys(uploadStatusMap).length }) }}</text>
                 <view style="display: flex; align-items: center; gap: 12px;">
@@ -3953,11 +3953,6 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-$brand-primary: $brand-color-primary;
-$brand-border: $brand-border-light;
-$bg: $uni-bg-color;
-$bg-grey: $uni-bg-color-grey;
-
 .file-tree {
   height: 100%;
   display: flex;
@@ -4006,22 +4001,22 @@ $bg-grey: $uni-bg-color-grey;
 }
 
 .btn-new-folder {
-  background-color: $bg;
-  border-color: $brand-primary;
-  color: $brand-primary;
+  background-color: var(--awd-surface);
+  border-color: var(--awd-accent);
+  color: var(--awd-accent-text);
 }
 
 .btn-new-folder:active {
-  background-color: rgba($brand-primary, 0.06);
+  background-color: var(--awd-accent-wash);
 }
 
 .btn-new-word {
-  background-color: $brand-primary;
-  color: $uni-text-color-inverse;
+  background-color: var(--awd-accent);
+  color: var(--awd-text-on-accent);
 }
 
 .btn-new-word:active {
-  background-color: rgba($brand-primary, 0.92);
+  background-color: var(--awd-accent-hover);
 }
 
 .tree-content {
@@ -4127,7 +4122,7 @@ $bg-grey: $uni-bg-color-grey;
   position: fixed;
   z-index: 999;
   border: 1px solid var(--awd-info);
-  background: rgba(37, 99, 235, 0.10);
+  background: var(--awd-info-soft);
   pointer-events: none;
   border-radius: 6px;
 }
@@ -4256,8 +4251,8 @@ $bg-grey: $uni-bg-color-grey;
 }
 
 .checkbox-box.checked {
-  border-color: $brand-primary;
-  background: $brand-primary;
+  border-color: var(--awd-accent);
+  background: var(--awd-accent);
   position: relative;
 }
 
@@ -4274,8 +4269,8 @@ $bg-grey: $uni-bg-color-grey;
 }
 
 .checkbox-box.indeterminate {
-  border-color: $brand-primary;
-  background: rgba($brand-primary, 0.10);
+  border-color: var(--awd-accent);
+  background: var(--awd-accent-soft);
   position: relative;
 }
 
@@ -4286,7 +4281,7 @@ $bg-grey: $uni-bg-color-grey;
   top: 6px;
   width: 8px;
   height: 2px;
-  background: $brand-primary;
+  background: var(--awd-accent);
   border-radius: 2px;
 }
 
@@ -4342,8 +4337,8 @@ $bg-grey: $uni-bg-color-grey;
 
 .tree-footer {
   padding: 10rpx 12rpx;
-  border-top: 1rpx solid rgba($brand-border, 0.9);
-  background-color: $bg;
+  border-top: 1rpx solid var(--awd-border);
+  background-color: var(--awd-surface);
   display: flex;
   flex-direction: column;
   gap: 8rpx;
@@ -4390,12 +4385,12 @@ $bg-grey: $uni-bg-color-grey;
   border-radius: 10rpx;
   border: 1px solid transparent;
   transition: all 0.2s;
-  background-color: $brand-primary;
-  color: $uni-text-color-inverse;
+  background-color: var(--awd-accent);
+  color: var(--awd-text-on-accent);
 }
 
 .btn-upload:active {
-  background-color: rgba($brand-primary, 0.92);
+  background-color: var(--awd-accent-hover);
 }
 
 .btn-recycle-bin {
@@ -4655,6 +4650,13 @@ $bg-grey: $uni-bg-color-grey;
   background-color: var(--awd-mint) !important;
 }
 
+/* mint 亮绿底两个主题下都是亮色，行内文字必须钉配对的深墨色，
+   不能跟 --awd-text 走（深色主题下它是浅色，浮在亮底上读不出来） */
+.tree-list .tree-item.tree-item-selected .tree-item-name,
+.tree-list .tree-item.tree-item-multi-selected .tree-item-name {
+  color: var(--awd-text-on-mint);
+}
+
 /* Removed vertical bar indicators to avoid conflict with Tag Strip */
 .tree-item-multi-selected .tree-item-actions {
   opacity: 1;
@@ -4708,7 +4710,7 @@ $bg-grey: $uni-bg-color-grey;
   left: 0;
   top: 0;
   bottom: 0;
-  background-color: rgba(64, 158, 255, 0.2);
+  background-color: var(--awd-info-soft);
   transition: width 0.3s ease;
   z-index: 0;
 }
@@ -4792,7 +4794,7 @@ $bg-grey: $uni-bg-color-grey;
 .tree-item-name {
   flex: 1;
   font-size: 26rpx;
-  color: $uni-text-color;
+  color: var(--awd-text);
   letter-spacing: 0.2px;
   display: block;
   min-width: 0;
@@ -5476,7 +5478,7 @@ $bg-grey: $uni-bg-color-grey;
 }
 .selected-file-tag {
   font-size: 12px;
-  background: white;
+  background: var(--awd-surface);
   padding: 4px 8px;
   border-radius: 4px;
   border: 1px solid var(--awd-border);
