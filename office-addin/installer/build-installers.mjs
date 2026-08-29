@@ -9,10 +9,18 @@
  * 两个安装器只携带一份指向托管地址的 manifest（任务窗格本体在服务端），
  * 所以功能更新全部在服务端完成，安装器基本一次安装终身有效，manifest 变更才需要重装。
  *
+ * **安装器不是「与站点无关」的**（2026-08-29 发版后核对纠正的一条误解）：托管地址被
+ * 焙进包里的 manifest，装哪个包就决定了任务窗格从哪个站加载、用哪个 office.js CDN。
+ * 双主站各要一份自己的安装器：
+ *   国内 --url https://addin.aiworkdeck.com/office-addin   （任务窗格走世纪互联 CDN）
+ *   国际 --url https://addin.workdeck.ai/office-addin      （任务窗格走全球版 CDN）
+ * 两份产物文件名相同（下载地址靠 host 区分），所以**必须用 --dist 分开输出目录**，
+ * 否则后构建的那份会静默覆盖前一份。
+ *
  * 用法：
  *   node installer/build-installers.mjs [--url https://addin.aiworkdeck.com/office-addin]
- *                                       [--skip-mac] [--skip-win]
- * 版本号取 desktop/package.json（单一来源）。产物在 installer/dist/。
+ *                                       [--dist installer/dist] [--skip-mac] [--skip-win]
+ * 版本号取 desktop/package.json（单一来源）。产物默认在 installer/dist/。
  * makensis 缺失时提示 brew install makensis。签名：.app 需 Developer ID Application 证书，
  * 本机没有则产出未签名 app（下载后需右键打开/系统设置放行）。
  */
@@ -26,10 +34,11 @@ const addinDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const repoDir = path.resolve(addinDir, '..')
 
 function parseArgs(argv) {
-  const args = { url: 'https://addin.aiworkdeck.com/office-addin', skipMac: false, skipWin: false }
+  const args = { url: 'https://addin.aiworkdeck.com/office-addin', dist: '', skipMac: false, skipWin: false }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--url') args.url = argv[++i] || args.url
+    else if (a === '--dist') args.dist = argv[++i] || args.dist
     else if (a === '--skip-mac') args.skipMac = true
     else if (a === '--skip-win') args.skipWin = true
     else {
@@ -46,7 +55,7 @@ const version = JSON.parse(fs.readFileSync(path.join(repoDir, 'desktop', 'packag
 // 异步给 .app 重新挂 FinderInfo 等 xattr，hdiutil 封进 DMG 后严格校验必挂、
 // LaunchServices 拒启（-10810）。系统临时目录不受 iCloud 管
 const buildDir = path.join(os.tmpdir(), 'awd-office-addin-installer-build')
-const distDir = path.join(addinDir, 'installer', 'dist')
+const distDir = args.dist ? path.resolve(repoDir, args.dist) : path.join(addinDir, 'installer', 'dist')
 fs.rmSync(buildDir, { recursive: true, force: true })
 fs.mkdirSync(buildDir, { recursive: true })
 fs.mkdirSync(distDir, { recursive: true })
