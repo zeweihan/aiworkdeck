@@ -286,25 +286,106 @@ function locateAnchorAll(doc, anchorText, { position = null, message } = {}) {
       : ''
     throw new Error((message || '未找到目标文本，请确认 anchorText 与文档内容精确一致（可先用 search 命令核对）') + suffix)
   }
-  return { offsets, needle, degraded }
+  // coords 与 offsets 出自同一份快照，必须一起传给落笔方——分开取会用错坐标系
+  return { offsets, needle, degraded, coords: makeDocCoords(body) }
 }
 
 /**
- * 按偏移切 Range 并校验其 Text 与预期一致（偏移口径安全阀）。
- * 不一致说明文档含占位符（表格结束符/域/批注标记），偏移直切不可信。
+ * 文档坐标映射。真机实测（WPS 12.1.0.28043，2026-08-29，原始报告存
+ * `scripts/measurements/2026-08-29-offset-verify.json`）：`doc.Range().Text` 与
+ * `doc.Range(start, end)` 是**两套坐标系**——表格的单元格结束符与行结束符在文本里
+ * 是 `\r\x07` 两个 UTF-16 单元，在 Range 坐标系里只占 1 个位置（`\r` 占、`\x07` 不占）。
+ * 于是：
+ *
+ *     文档位置 = JS 下标 − 该下标之前的 \x07 个数
+ *
+ * 26 个锚点的实测对照：直接拿 JS 下标去切只有 2 个对得上，按本式换算 26 个全对
+ * （含跨两张表格、含一个装了两段文字的单元格）。这正是「含表格文档成片死路」的
+ * 根因——表格之前的锚点碰巧对齐，之后的全错，错的量等于中间的 `\x07` 个数。
+ *
+ * 推算不出来的两类仍然存在，靠逐笔校验兜住、再退 Find：批注引用标记（占文档位置
+ * 但不进文本，实测每条 +1 起）与域（超链接的域代码占一大段位置）；修订开着改过一轮
+ * 之后也会漂。
  */
-function verifiedRange(doc, start, expected) {
-  const r = doc.Range(start, start + expected.length)
-  if (String(r.Text) !== expected) {
-    throw new Error('定位校验失败：按字符偏移取到的文本与预期不一致（文档可能含表格、域等占位内容），请换一段更独特的锚点文本重试')
+function makeDocCoords(body) {
+  const bells = []
+  for (let i = 0; i < body.length; i++) {
+    if (body.charCodeAt(i) === 7) bells.push(i)
   }
-  return r
+  return {
+    body,
+    hasPlaceholders: bells.length > 0,
+    /** JS 下标 → 文档字符位置 */
+    pos(jsIndex) {
+      let lo = 0
+      let hi = bells.length
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1
+        if (bells[mid] < jsIndex) lo = mid + 1
+        else hi = mid
+      }
+      return jsIndex - lo
+    }
+  }
 }
 
-/** 单命中锚点（写入类命令通用）：取第一处命中并校验偏移 */
+/** 按坐标映射取 Range 并逐笔校验文本；对不上返回 null，由调用方决定兜底 */
+function rangeAtJsOffset(doc, coords, jsStart, expected) {
+  try {
+    const r = doc.Range(coords.pos(jsStart), coords.pos(jsStart + expected.length))
+    return String(r.Text) === expected ? r : null
+  } catch (e) {
+    return null
+  }
+}
+
+/**
+ * Find 定位（只定位、不替换）。真机实测：`Execute` 不带替换参数时会把调用它的
+ * Range **重定义为命中区间**（Word VBA 同款语义，WPS 侧已实测确认），且 WPS 没有
+ * Word 那条 255 字上限、也能跨段匹配（都是带文本校验实测的，见 measurements/）。
+ *
+ * **命中后必须逐笔校验 `rng.Text` 与锚点逐字相同**——有了这道校验，兜底就不是「猜」：
+ * 对不上就当没找到，绝不落笔。skip 用来取第 N 处命中（每次命中后折叠到末尾再找，
+ * 否则会永远命中最靠前那一处——这就是 replace_text 早年踩过的 leftmost-repeat 坑）。
+ */
+function findRange(doc, needle, skip = 0) {
+  let rng
+  try {
+    rng = doc.Range()
+  } catch (e) {
+    return null
+  }
+  const find = rng && rng.Find
+  if (!find || typeof find.Execute !== 'function') return null
+  try {
+    if (typeof find.ClearFormatting === 'function') find.ClearFormatting()
+    pinFindStrictness(find)
+    for (let n = 0; n <= skip; n++) {
+      if (!find.Execute(needle, true, false, false, false, false, true, wdFindStop, false)) return null
+      if (n < skip) rng.Collapse(0) // wdCollapseEnd：折叠到命中末尾再找下一处
+    }
+    return String(rng.Text) === needle ? rng : null
+  } catch (e) {
+    return null
+  }
+}
+
+/**
+ * 锚点 → Range 安全阀：先按坐标映射直切，映射也对不上（域/批注/修订漂移）再退
+ * Find 定位。两条路都以「取到的文本与锚点逐字相同」为通过条件，任何一条都不会猜。
+ */
+function verifiedRange(doc, coords, jsStart, expected, occurrence = 0) {
+  const direct = rangeAtJsOffset(doc, coords, jsStart, expected)
+  if (direct) return direct
+  const found = findRange(doc, expected, occurrence)
+  if (found) return found
+  throw new Error('定位校验失败：按字符偏移与查找定位都没能取到与锚点逐字相同的文本（文档可能含域、批注等无法推算的占位内容，或该处已被修订标记打断），请换一段更独特的锚点文本重试')
+}
+
+/** 单命中锚点（写入类命令通用）：取第一处命中并校验 */
 function anchorRange(doc, anchorText, opts = {}) {
-  const { offsets, needle } = locateAnchorAll(doc, anchorText, opts)
-  return { range: verifiedRange(doc, offsets[0], needle), start: offsets[0], needle, total: offsets.length }
+  const { offsets, needle, coords } = locateAnchorAll(doc, anchorText, opts)
+  return { range: verifiedRange(doc, coords, offsets[0], needle), start: offsets[0], needle, total: offsets.length, coords }
 }
 
 /* ==================== 枚举映射（小写短名 ↔ VBA 数值） ==================== */
@@ -708,8 +789,8 @@ function toIso(raw) {
  * 全部校验在任何写入之前完成；应用从右到左（修订开着时被删文本仍留在正文占位，
  * 左侧偏移不动——这也是右到左顺序的保险）。
  */
-function applyHit(doc, hitStart, needle, newText, multiline) {
-  const hitRange = doc.Range(hitStart, hitStart + needle.length)
+function applyHit(doc, coords, hitStart, needle, newText, multiline) {
+  const hitRange = doc.Range(coords.pos(hitStart), coords.pos(hitStart + needle.length))
   if (String(hitRange.Text) !== needle) return null
   if (!multiline) {
     const edits = minimalEdits(needle, newText)
@@ -719,7 +800,7 @@ function applyHit(doc, hitStart, needle, newText, multiline) {
       let verified = true
       for (const e of edits) {
         if (e.start === e.end) continue // 纯插入段没有旧文可校
-        const seg = doc.Range(hitStart + e.start, hitStart + e.end)
+        const seg = doc.Range(coords.pos(hitStart + e.start), coords.pos(hitStart + e.end))
         if (String(seg.Text) !== e.oldText) {
           verified = false
           break
@@ -729,10 +810,10 @@ function applyHit(doc, hitStart, needle, newText, multiline) {
         for (let k = edits.length - 1; k >= 0; k--) {
           const e = edits[k]
           if (e.start === e.end) {
-            doc.Range(hitStart + e.start, hitStart + e.start).InsertBefore(e.newText)
+            doc.Range(coords.pos(hitStart + e.start), coords.pos(hitStart + e.start)).InsertBefore(e.newText)
           } else {
             // 替换或删除（newText 为空即删除；修订开着时表现为删除修订标记）
-            doc.Range(hitStart + e.start, hitStart + e.end).Text = e.newText
+            doc.Range(coords.pos(hitStart + e.start), coords.pos(hitStart + e.end)).Text = e.newText
           }
         }
         return { via: 'minimal', edits: edits.length }
@@ -742,9 +823,6 @@ function applyHit(doc, hitStart, needle, newText, multiline) {
   hitRange.Text = newText
   return { via: 'full' }
 }
-
-/** Find 兜底路能接受的最长查找串（Word/WPS 查找引擎的硬上限） */
-const FIND_MAX_NEEDLE_CHARS = 255
 
 /**
  * 把 Find 的「匹配宽松度」逐项钉死。`ClearFormatting()` 只清格式——
@@ -771,9 +849,10 @@ function pinFindStrictness(find) {
  * 越界时宁可报一条模型能照着改的错，也不要让 Find 去猜——猜错是静默改错文档。
  */
 function assertFindFallbackUsable(searchText, newText, hitCount) {
-  if (searchText.length > FIND_MAX_NEEDLE_CHARS) {
-    throw new Error(`替换失败：文档字符偏移与文本快照不一致，需走查找替换兜底，但 searchText 有 ${searchText.length} 个字符、超过查找引擎 ${FIND_MAX_NEEDLE_CHARS} 字上限。请改用更短的一段独特文本作为 searchText。`)
-  }
+  // 曾经这里还拦「searchText 超 255 字」（Word 查找引擎的经典上限）。
+  // 2026-08-29 真机实测把它证伪了：WPS 对 300 字的查找串照样命中，且回读的命中
+  // 文本逐字相同、长度也是 300（没有截断后匹配）。律师的锚点常常是一整条条款，
+  // 留着这条守卫等于把最需要兜底的长锚点挡在门外，所以撤掉。
   if (searchText.includes('^')) {
     // FindText 里 ^ 是特殊字符转义前导符（^p 段落标记、^t 制表符……），
     // 即使关掉通配符也仍然生效，会命中到别处
@@ -839,7 +918,8 @@ export async function locateInWpsDocument(text) {
       }
     }
     if (i < 0) return { found: false }
-    doc.Range(i, i + probe.length).Select()
+    const coords = makeDocCoords(body)
+    doc.Range(coords.pos(i), coords.pos(i + probe.length)).Select()
     return { found: true, count: allIndexes(lower, probe).length }
   } catch (e) {
     return { found: false, error: (e && e.message) || String(e) }
@@ -900,6 +980,7 @@ export const WPS_WORD_HANDLERS = {
     const doc = activeDoc()
     return withTracking(doc, () => {
       const body = bodyText(doc)
+      const coords = makeDocCoords(body)
       const offsets = allIndexes(body, searchText)
       if (!offsets.length) {
         throw new Error('未找到目标文本，请确认 searchText 与文档内容精确一致（可先用 search 命令核对）')
@@ -912,7 +993,7 @@ export const WPS_WORD_HANDLERS = {
       // Find.Execute 永远替换文档里最靠前的命中，与右到左循环当前处理的那处
       // 错位，replaceAll 下会提前吃掉左侧命中、最后一轮反过来报「未命中」。
       const allVerified = targets.every(
-        (start) => String(doc.Range(start, start + searchText.length).Text) === searchText
+        (start) => rangeAtJsOffset(doc, coords, start, searchText) != null
       )
       if (!allVerified) {
         assertFindFallbackUsable(searchText, newText, targets.length)
@@ -935,7 +1016,7 @@ export const WPS_WORD_HANDLERS = {
       let editSegments = 0
       // 多个命中从右到左处理：前一处的写入不会推移后面命中的定位（与 Office 面同理由）
       for (let k = targets.length - 1; k >= 0; k--) {
-        const applied = applyHit(doc, targets[k], searchText, newText, multiline)
+        const applied = applyHit(doc, coords, targets[k], searchText, newText, multiline)
         if (applied == null || applied.via === 'full') {
           // 预检通过后 applyHit 不应再返回 null；防御性并入整替计数
           fallbacks++
@@ -1008,12 +1089,12 @@ export const WPS_WORD_HANDLERS = {
     }
     const doc = activeDoc()
     return withTracking(doc, () => {
-      const { offsets, needle } = locateAnchorAll(doc, anchorText)
+      const { offsets, needle, coords } = locateAnchorAll(doc, anchorText)
       const targetOffsets = args.applyToAll ? offsets : [offsets[0]]
       // 全部命中先校验完再落笔：边校验边写的话，第 k 处校验失败时前 k-1 处已经改了，
       // 用户拿到的是「半篇改了格式 + 一条报错」，还留着一片修订。与 set_paragraph_format /
       // apply_style 的预取同口径，也与 replace_text 的「全有全无」门同理由。
-      const ranges = targetOffsets.map((offset) => verifiedRange(doc, offset, needle))
+      const ranges = targetOffsets.map((offset, k) => verifiedRange(doc, coords, offset, needle, k))
       for (const range of ranges) applyFontPlan(range.Font, plan)
       return { formatted: ranges.length, totalMatches: offsets.length, applied: plan.applied }
     })
@@ -1031,9 +1112,9 @@ export const WPS_WORD_HANDLERS = {
     }
     const doc = activeDoc()
     return withTracking(doc, () => {
-      const { offsets, needle } = locateAnchorAll(doc, anchorText)
+      const { offsets, needle, coords } = locateAnchorAll(doc, anchorText)
       const targetOffsets = args.applyToAll ? offsets : [offsets[0]]
-      const paragraphs = targetOffsets.map((offset) => verifiedRange(doc, offset, needle).Paragraphs.Item(1))
+      const paragraphs = targetOffsets.map((offset, k) => verifiedRange(doc, coords, offset, needle, k).Paragraphs.Item(1))
       // 套内置样式会把段落格式重置成样式自带的那套，必须先落样式再落其余参数
       if (styleBuiltIn != null) {
         for (const p of paragraphs) p.Range.Style = styleBuiltIn
@@ -1794,9 +1875,9 @@ export const WPS_WORD_HANDLERS = {
     if (!styleName) throw new Error('样式名不能为空')
     const doc = activeDoc()
     return withTracking(doc, () => {
-      const { offsets, needle } = locateAnchorAll(doc, anchorText)
+      const { offsets, needle, coords } = locateAnchorAll(doc, anchorText)
       const targetOffsets = args.applyToAll ? offsets : [offsets[0]]
-      const paragraphs = targetOffsets.map((offset) => verifiedRange(doc, offset, needle).Paragraphs.Item(1))
+      const paragraphs = targetOffsets.map((offset, k) => verifiedRange(doc, coords, offset, needle, k).Paragraphs.Item(1))
       for (const p of paragraphs) {
         try {
           // Range.Style 接受本地化样式名/整数常量/样式对象（官方原文）

@@ -448,16 +448,18 @@ npm run build:wps    # 拼 dist-wps/（默认 --url https://addin.aiworkdeck.com
    演示加页挪页；
 4. `wps.Enum` 缺失时本地常量表是否够用（三张 HANDLERS 表都不依赖 wps.Enum）；
 5. 已知平台坑回归：12.1.0.26895/28043 停靠任务窗格挡 ribbon 鼠标（bbs 93291）。
-6. **字符偏移口径**（dev-board#264 的前置测量，尚未完成）：跑 `scripts/wps-offset-probe.ps1`
-   （`powershell -NoProfile -ExecutionPolicy Bypass -File <路径>`，报告落剪贴板与
-   `%USERPROFILE%\wps-probe-report.json`）。它测四组：`doc.Range().Text` 的 JS 下标与
-   `doc.Range(s,e)` 在含表格/批注/脚注/超链接的文档上是否同口径、错位多少；Find 不带
-   替换参数时能否重定义 Range 完成定位；Find 的 255/跨段/`^` 边界；以及修订开着时
-   Find 会不会命中被标删的旧文。**这四组结果决定写入类命令的 Find 兜底是常态路径
-   还是例外路径**，没有它就不要给 insert_text/format_text/add_comment/set_hyperlink
-   扩面。
-   **已知限制**：同机装了 Microsoft Office 时，`Word.Application` 与 `kwps.Application`
-   会**双双解析到微软 Word**（Office 覆盖了 WPS 的 ProgID），`wps.Application` 未注册
-   ——脚本会拒收并在 `progIdAttempts` 里交代，此时 COM 这条路走不通，改走 WPS 的
-   JS 宏（工具 → JS 宏）或任务窗格 devtools。注意任务窗格开着时 ribbon 会拒收鼠标
-   （bbs 93291），进 JS 宏前先关掉窗格或重启 WPS。
+6. **字符偏移口径**（dev-board#264，**已于 2026-08-29 测完定案**，原始报告在
+   `scripts/measurements/`）：`doc.Range().Text` 与 `doc.Range(s,e)` 是两套坐标系，
+   表格的单元格/行结束符在文本里是 `\r\x07` 两个 UTF-16 单元、在 Range 坐标里只占
+   1 个位置，换算式 `文档位置 = JS 下标 − 之前的 \x07 个数`（已实现在
+   `wpsWordHandlers.js` 的 `makeDocCoords`）。批注引用标记、域、修订漂移这三档推算
+   不出来，退 Find 定位。要复测或换版本重测，跑：
+
+   ```
+   powershell -NoProfile -ExecutionPolicy Bypass -File <仓库>\office-addin\scripts\wps-offset-probe.ps1
+   powershell -NoProfile -ExecutionPolicy Bypass -File <仓库>\office-addin\scripts\wps-offset-verify.ps1
+   ```
+
+   报告落剪贴板与 `%USERPROFILE%`。两个坑：**`Application.Name` 判不了宿主**（WPS 为
+   兼容 Word VBA 直接返回 "Microsoft Word"，要按 `Application.Path` 判）；**含中文注释
+   的 .ps1 必须存成带 BOM 的 UTF-8**，否则 PowerShell 5.1 读乱后报语法错。

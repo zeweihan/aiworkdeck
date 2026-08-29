@@ -4,9 +4,15 @@
  * 批注回复降级与若干错误路径。
  *   node --test office-addin/taskpane/lib/wpsWordHandlers.test.js
  *
- * mock 的文档主体是一根 JS 字符串：Range(s,e) 直接切片读写，段落按 \r 派生
- * ——这与 WPS 的字符偏移口径同构，天然能验证「右到左应用」的偏移稳定性
- * （mock 的写入会真实推移右侧偏移，应用顺序错了测试就会红）。
+ * mock 的文档主体是一根 JS 字符串，段落按 \r 派生；写入会真实推移右侧偏移，
+ * 所以「右到左应用」的顺序错了测试就会红。
+ *
+ * **mock 刻意模拟两套坐标系**（真机实测 WPS 12.1.0.28043，2026-08-29）：
+ * `state.text` 是 `doc.Range().Text` 那根 JS 串，而 `Range(s,e)` 收的是**文档字符
+ * 位置**。表格的单元格/行结束符在文本里是 "\r\x07" 两个 UTF-16 单元，在文档坐标
+ * 里只占 1 个位置。不含表格时两套坐标恒等，所以不带 \x07 的用例照旧。
+ * `hiddenMarkAtJs` 再模拟「占文档位置但不进文本」的隐藏标记（批注引用、域），
+ * 那一档推算不出来，必须退 Find 定位。
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -27,17 +33,57 @@ function installWps(opts = {}) {
     selected: null
   }
 
-  function fullLen() {
+  // ---- 两套坐标系（真机实测，WPS 12.1.0.28043，2026-08-29）----
+  // state.text 是 doc.Range().Text 那根 JS 串；Range(s,e) 收的却是**文档字符位置**。
+  // 表格的单元格/行结束符在文本里是 "\r\x07" 两个 UTF-16 单元，在文档坐标里只占
+  // 1 个位置（\r 占，\x07 不占）。不含表格时两套坐标恒等，所以既有用例不受影响。
+  // hiddenMarkAtJs：在该 JS 下标处埋一个「占文档位置但不出现在文本里」的隐藏标记
+  // （批注引用标记就是这样，实测每条至少 +1；域更狠）。这类占位**推算不出来**，
+  // 是坐标映射管不住、必须退 Find 定位的那一档。
+  const hiddenAt = opts.hiddenMarkAtJs
+  const hiddenSize = opts.hiddenMarkSize == null ? 1 : opts.hiddenMarkSize
+  function jsToDoc(j) {
+    let d = 0
+    const n = Math.min(j, state.text.length)
+    for (let i = 0; i < n; i++) if (state.text.charCodeAt(i) !== 7) d++
+    if (hiddenAt != null && j > hiddenAt) d += hiddenSize
+    return d
+  }
+  function docToJs(d) {
+    for (let i = 0; i <= state.text.length; i++) {
+      if (jsToDoc(i) >= d) {
+        let j = i
+        // 落点压在 \x07 上时跳到它后面：\r\x07 在文档坐标里是一个位置、文本里是两个
+        while (j < state.text.length && state.text.charCodeAt(j) === 7) j++
+        return j
+      }
+    }
     return state.text.length
   }
+  function docLen() {
+    return jsToDoc(state.text.length)
+  }
+  function fullLen() {
+    return docLen()
+  }
 
-  function makeRecorder(kind, start, end) {
+  // start/end 是文档坐标；jsStart/jsEnd 是同一区间在 state.text 里的 JS 下标
+  // （断言按段落折算时要用 JS 那一对，否则含表格的文档上会对不齐）
+  function makeRecorder(kind, start, end, jsStart, jsEnd) {
     return new Proxy({}, {
       set(t, prop, v) {
         if (opts.throwOnWrite && opts.throwOnWrite.kind === kind && opts.throwOnWrite.prop === prop) {
           throw new Error(`mock：拒绝写 ${kind}.${prop}`)
         }
-        state.writes.push({ kind, prop, value: v, start, end })
+        state.writes.push({
+          kind,
+          prop,
+          value: v,
+          start,
+          end,
+          jsStart: jsStart == null ? start : jsStart,
+          jsEnd: jsEnd == null ? end : jsEnd
+        })
         t[prop] = v
         return true
       },
@@ -54,7 +100,7 @@ function installWps(opts = {}) {
     for (let k = 0; k < parts.length; k++) {
       const segStart = pos
       const segEnd = pos + parts[k].length + (k < parts.length - 1 ? 1 : 0)
-      segs.push({ start: segStart, end: segEnd })
+      segs.push({ jsStart: segStart, jsEnd: segEnd, start: jsToDoc(segStart), end: jsToDoc(segEnd) })
       pos = segEnd
     }
     return segs
@@ -67,7 +113,7 @@ function installWps(opts = {}) {
         return makeRange(seg.start, seg.end)
       },
       get Format() {
-        return makeRecorder('paraFormat', seg.start, seg.end)
+        return makeRecorder('paraFormat', seg.start, seg.end, seg.jsStart, seg.jsEnd)
       }
     }
   }
@@ -89,41 +135,54 @@ function installWps(opts = {}) {
     ApplyListTemplateWithLevel: (...a) => state.calls.push({ name: 'ApplyListTemplateWithLevel', args: a })
   }
 
+  /** s/e 是**文档字符位置**（不是 JS 下标），与真机 Range(s,e) 同口径 */
   function makeRange(start, end) {
     let s = start
     let e = end
+    const js = () => [docToJs(s), docToJs(e)]
     return {
       get Start() { return s },
       get End() { return e },
       get Text() {
-        // readSkew：模拟「文档含占位符导致偏移口径失准」——非全文 Range 的读带偏移。
+        // readSkew：模拟「批注引用标记/域这类推算不出来的占位」——非全文 Range 的读带偏移。
         // readSkewAfter：只让起点 >= 该值的 Range 失准，用来构造「前几处校验通过、
         // 后面某处才失败」——半写入类 bug 只有这种形状才暴露得出来。
         const inSkewZone = opts.readSkewAfter == null || s >= opts.readSkewAfter
         const skew = opts.readSkew && inSkewZone && !(s === 0 && e === fullLen()) ? opts.readSkew : 0
-        return state.text.slice(s + skew, e + skew)
+        const [a, b] = js()
+        return state.text.slice(a + skew, b + skew)
       },
       set Text(v) {
-        state.text = state.text.slice(0, s) + v + state.text.slice(e)
-        e = s + v.length
+        const [a, b] = js()
+        state.text = state.text.slice(0, a) + v + state.text.slice(b)
+        e = jsToDoc(a + v.length)
       },
       InsertBefore(t) {
-        state.text = state.text.slice(0, s) + t + state.text.slice(s)
+        const [a] = js()
+        state.text = state.text.slice(0, a) + t + state.text.slice(a)
       },
       InsertAfter(t) {
-        state.text = state.text.slice(0, e) + t + state.text.slice(e)
+        const [, b] = js()
+        state.text = state.text.slice(0, b) + t + state.text.slice(b)
       },
       Select() {
         state.selected = [s, e]
+      },
+      Collapse(kind) {
+        // wdCollapseEnd=0 / wdCollapseStart=1
+        if (kind === 0) s = e
+        else e = s
       },
       InsertBreak(type) {
         state.calls.push({ name: 'InsertBreak', type, start: s })
       },
       get Font() {
-        return makeRecorder('font', s, e)
+        const [a, b] = js()
+        return makeRecorder('font', s, e, a, b)
       },
       get ParagraphFormat() {
-        return makeRecorder('paraFormat', s, e)
+        const [a, b] = js()
+        return makeRecorder('paraFormat', s, e, a, b)
       },
       get Paragraphs() {
         return paragraphsIn(s, e)
@@ -144,8 +203,17 @@ function installWps(opts = {}) {
             state.calls.push({ name: 'Find.Execute', args: a })
             const findText = a[0]
             const replaceWith = a[9]
+            if (replaceWith == null) {
+              // 只定位不替换：从本区间起点往后找，命中则把**本 Range 重定义为命中
+              // 区间**（VBA 语义，已在 WPS 真机确认），返回 true
+              const at = state.text.indexOf(findText, docToJs(s))
+              if (at < 0) return false
+              s = jsToDoc(at)
+              e = jsToDoc(at + findText.length)
+              return true
+            }
             if (state.text.includes(findText)) {
-              state.text = state.text.replace(findText, replaceWith == null ? '' : replaceWith)
+              state.text = state.text.replace(findText, replaceWith)
               return true
             }
             return false
@@ -534,6 +602,98 @@ test('HANDLERS 覆盖任务书列出的全部 Word 面命令', () => {
   }
 })
 
+/* ============ 含表格文档的锚点定位（真机实测的两套坐标系）============ */
+
+// 一段正文 + 一张 1×2 表格 + 一段正文。表格结构照真机实测的形状：每个单元格
+// 以 "\r\x07" 结束、整行再以 "\r\x07" 结束——这两个字符在 doc.Range().Text 里
+// 是 2 个 UTF-16 单元，在 Range(s,e) 坐标系里只占 1 个位置。
+const DOC_WITH_TABLE = '合同标题\r' + '甲方\r\x07乙方\r\x07\r\x07' + '本合同自签署之日起生效。\r'
+
+test('含表格文档：表格之前的锚点不受影响', async () => {
+  const { state } = installWps({ text: DOC_WITH_TABLE })
+  await H.insert_text({ anchorText: '合同标题', text: '（草案）', position: 'after' })
+  assert.ok(state.text.startsWith('合同标题（草案）\r'))
+})
+
+test('含表格文档：表格之后的锚点也能定位（坐标换算）', async () => {
+  // 这是 dev-board#264 说的「成片死路」：JS 下标 15，文档位置 12（前面 3 个 \x07），
+  // 直接拿 JS 下标去切会读到错位的文本，旧实现在这里直接报「定位校验失败」。
+  const { state } = installWps({ text: DOC_WITH_TABLE })
+  const data = await H.insert_text({ anchorText: '本合同自签署之日起生效。', text: '（本条为效力条款）', position: 'after' })
+  assert.equal(data.inserted, true)
+  assert.ok(state.text.includes('本合同自签署之日起生效。（本条为效力条款）'), state.text)
+})
+
+test('含表格文档：单元格内的锚点也能定位', async () => {
+  const { state } = installWps({ text: DOC_WITH_TABLE })
+  await H.replace_text({ searchText: '乙方', replaceText: '乙方（受让方）' })
+  assert.ok(state.text.includes('乙方（受让方）\r\x07'), state.text)
+})
+
+test('含表格文档：add_comment 落在表格之后的锚点上', async () => {
+  const { state } = installWps({ text: DOC_WITH_TABLE })
+  const data = await H.add_comment({ anchorText: '本合同自签署之日起生效。', comment: '请确认生效条件' })
+  assert.equal(data.commented, true)
+  const added = state.calls.find((c) => c.name === 'Comments.Add')
+  assert.ok(added, '应当真的调了 Comments.Add')
+  assert.equal(added.start, 12) // 文档坐标 12 = JS 下标 15 − 3 个 \x07
+})
+
+test('含表格文档：format_text 的 applyToAll 覆盖表格前后的多处命中', async () => {
+  const text = '甲方概况\r甲方\r\x07乙方\r\x07\r\x07甲方应当履行义务。\r'
+  const { state } = installWps({ text })
+  const data = await H.format_text({ anchorText: '甲方', bold: true, applyToAll: true })
+  assert.equal(data.totalMatches, 3)
+  assert.equal(data.formatted, 3)
+  // 三处命中的 JS 下标是 0 / 5 / 15，换算成文档坐标是 0 / 5 / 12
+  // （第三处之前有 3 个 \x07：单元格 ×2 + 行结束 ×1）
+  const bolds = state.writes.filter((w) => w.kind === 'font' && w.prop === 'Bold')
+  assert.deepEqual(bolds.map((w) => w.start).sort((a, b) => a - b), [0, 5, 12])
+})
+
+/* ====== 坐标推算不出来时（批注引用标记/域/修订漂移）退 Find 定位 ====== */
+// readSkew 让「按坐标直切」读到错位文本，模拟这一档
+
+test('Find 兜底：insert_text 在坐标推算不出来时改用 Find 定位并落笔', async () => {
+  // 第一条后面埋一个隐藏标记（批注引用），后面所有锚点的坐标推算就都偏了
+  const { state } = installWps({ text: '第一条 定金条款。\r第二条 违约责任。\r', hiddenMarkAtJs: 9 })
+  const data = await H.insert_text({ anchorText: '第二条 违约责任。', text: '（另见附件三）', position: 'after' })
+  assert.equal(data.inserted, true)
+  assert.ok(state.text.includes('第二条 违约责任。（另见附件三）'), state.text)
+  assert.ok(state.calls.some((c) => c.name === 'Find.Execute'))
+})
+
+test('Find 兜底：只定位不替换——不传 ReplaceWith，原文一个字不改', async () => {
+  const { state } = installWps({ text: '甲方与乙方签署本协议。\r', hiddenMarkAtJs: 1 })
+  await H.add_comment({ anchorText: '乙方', comment: '确认主体资格' })
+  assert.equal(state.text, '甲方与乙方签署本协议。\r') // 定位不许动文档
+  const exec = state.calls.filter((c) => c.name === 'Find.Execute')
+  assert.ok(exec.length >= 1)
+  assert.equal(exec[0].args[9], undefined, '定位调用不许传 ReplaceWith')
+})
+
+test('Find 兜底：applyToAll 逐处取第 N 个命中，不是恒定最靠前那处', async () => {
+  const { state } = installWps({ text: '甲方甲方甲方', hiddenMarkAtJs: 0 })
+  const data = await H.format_text({ anchorText: '甲方', bold: true, applyToAll: true })
+  assert.equal(data.formatted, 3)
+  const starts = state.writes.filter((w) => w.kind === 'font' && w.prop === 'Bold').map((w) => w.start)
+  // 三处必须落在三个不同位置——照 findReplaceOnce 那样每次新建 Range 重搜的话，
+  // 三次都会命中最靠前那一处（#261 的 leftmost-repeat 覆辙），而格式写入是幂等的、
+  // 不会报错，返回值照样是 formatted:3，属于静默撒谎。
+  // 这里第一处走坐标直切、后两处退 Find（隐藏标记之后坐标才失准）——格式写入不改
+  // 文本，所以两条路混用不会像 replace_text 那样互相错位。
+  assert.deepEqual(starts.sort((a, b) => a - b), [0, 3, 5])
+})
+
+test('Find 兜底：两条路都取不到逐字相同的文本时仍然报错，绝不猜', async () => {
+  // readSkew 让坐标路失准，锚点又不在文档里 → Find 也找不到
+  installWps({ text: '本协议一式两份。\r', hiddenMarkAtJs: 1 })
+  await assert.rejects(
+    H.add_comment({ anchorText: '不存在的条款', comment: 'x' }),
+    /未找到批注目标文本/
+  )
+})
+
 /* ==================== apply_standard_format ==================== */
 
 /** 按 \r 切段，与 mock 的 paragraphSegs 同口径 */
@@ -559,7 +719,7 @@ function effectiveFormat(state) {
   return paraSegsOf(state.text).map((seg) => {
     const props = {}
     for (const w of state.writes) {
-      if (w.start < seg.end && seg.start < w.end) props[`${w.kind}.${w.prop}`] = w.value
+      if (w.jsStart < seg.end && seg.start < w.jsEnd) props[`${w.kind}.${w.prop}`] = w.value
     }
     return { text: seg.text, props }
   })
@@ -636,7 +796,7 @@ test('apply_standard_format：表格单元格段落单独落笔，不与正文�
   const rows = effectiveFormat(state)
   assert.ok(rows[2].props['font.Size'] > 0, '单元格段落仍然被格式化了')
   // 没有任何一次写入同时盖住表格前后的两段正文
-  const spanning = state.writes.filter((w) => w.start < rows[1].end && rows[3].start < w.end)
+  const spanning = state.writes.filter((w) => w.jsStart < rows[1].end && rows[3].start < w.jsEnd)
   assert.equal(spanning.length, 0)
 })
 
@@ -680,14 +840,14 @@ test('Find 兜底：拦截跨段落的 replaceText（查找替换的替换框不
   assert.equal(state.text, '本条待定。')
 })
 
-test('Find 兜底：拦截超 255 字的 searchText（查找引擎硬上限）', async () => {
+test('Find 兜底：不再拦长锚点（真机实测 WPS 没有 255 字上限）', async () => {
+  // 律师的锚点常常是一整条条款，几百字是常态。Word 的 255 字上限在 WPS 上不成立
+  // （2026-08-29 实测：300 字查找串命中且回读文本逐字相同、长度也是 300）。
   const needle = 'A'.repeat(300)
   const { state } = installWps({ text: '甲' + needle + '乙', readSkew: 1 })
-  await assert.rejects(
-    H.replace_text({ searchText: needle, replaceText: '短文本' }),
-    /超过查找引擎 255 字上限/
-  )
-  assert.equal(state.text, '甲' + needle + '乙')
+  const data = await H.replace_text({ searchText: needle, replaceText: '短文本' })
+  assert.equal(state.text, '甲短文本乙')
+  assert.equal(data.via, 'fullReplace')
 })
 
 test('Find 兜底：拦截含 ^ 的 searchText（^ 是查找语法的转义前导符）', async () => {

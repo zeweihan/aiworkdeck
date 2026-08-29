@@ -33,20 +33,43 @@ function Emit($obj) {
 }
 
 # ------------------------------------------------ resolve a WPS application
+# 判宿主必须看可执行文件路径，不能看 Application.Name：**WPS 的 COM 层为了让
+# 针对 Word 写的 VBA 宏原样能跑，Name 属性直接返回 "Microsoft Word"**（2026-08-29
+# 实测：机器上 Word 已卸载，kwps.Application 建出来的对象 Name 仍是 Microsoft Word）。
+# 按 Name 拒收会把 WPS 自己挡在门外。
 $app = $null
+$appVia = $null
+$fallback = $null
+$fallbackVia = $null
 $tried = New-Object System.Collections.ArrayList
 foreach ($pg in @('kwps.Application', 'wps.Application', 'KWPS.Application')) {
   foreach ($how in @('active', 'create')) {
     if ($app) { break }
     try {
       $o = if ($how -eq 'active') { [Runtime.InteropServices.Marshal]::GetActiveObject($pg) } else { New-Object -ComObject $pg }
-      $nm = [string]$o.Name
-      [void]$tried.Add("$pg/$how => $nm")
-      if ($nm -and $nm -notmatch 'Microsoft') { $app = $o }
+      $nm = ''
+      $pth = ''
+      try { $nm = [string]$o.Name } catch { }
+      try { $pth = [string]$o.Path } catch { }
+      [void]$tried.Add("$pg/$how => name='$nm' path='$pth'")
+      if ($pth -match '(?i)wps|kingsoft') {
+        $app = $o
+        $appVia = "$pg/$how (path)"
+      } elseif ($pth -notmatch '(?i)Microsoft Office' -and -not $fallback) {
+        # 路径认不出来（旧版可能不暴露 Path），先留作备胎：kwps.Application 这个
+        # ProgID 本来就是 WPS 的，只要不是明确指向 Microsoft Office 就可以用
+        $fallback = $o
+        $fallbackVia = "$pg/$how (progid only, path unverified)"
+      }
     } catch { [void]$tried.Add("$pg/$how => ERR $($_.Exception.Message.Split("`n")[0])") }
   }
 }
+if (-not $app -and $fallback) {
+  $app = $fallback
+  $appVia = $fallbackVia
+}
 $report.progIdAttempts = $tried
+$report.hostResolvedVia = $appVia
 if (-not $app) {
   $report.fatal = 'no WPS application object'
   $report.errors = $errors
@@ -54,8 +77,10 @@ if (-not $app) {
   exit 1
 }
 $report.appName = [string]$app.Name
+try { $report.appPath = [string]$app.Path } catch { }
 try { $report.appVersion = [string]$app.Version } catch { }
 try { $report.appBuild = [string]$app.Build } catch { }
+try { $app.Visible = $true } catch { }
 
 # ------------------------------------------------------------- probe helper
 function Probe($doc, [string]$body, [string]$probe, [string]$label) {
