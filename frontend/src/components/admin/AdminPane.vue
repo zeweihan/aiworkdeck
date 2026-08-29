@@ -2788,12 +2788,9 @@ export default {
 
 <style lang="scss" scoped>
 /* AI WorkDeck Color System */
-$brand-forest: #1A5336;
 $brand-mint: #5BD197;
 
-$brand-primary: $brand-forest;
 $brand-accent: $brand-mint;
-$text-secondary: #6C757D; // Gray-Medium
 
 .page-admin {
   min-height: 100vh;
@@ -2899,7 +2896,7 @@ $text-secondary: #6C757D; // Gray-Medium
 
 .role-text {
     font-size: 12px;
-    color: $brand-primary;
+    color: var(--awd-accent-text);
     font-weight: 500;
 }
 
@@ -2961,7 +2958,7 @@ $text-secondary: #6C757D; // Gray-Medium
 }
 
 .nav-item:hover {
-    background-color: rgba(0,0,0, 0.02);
+    background-color: var(--awd-bg);
 }
 
 .nav-item.active {
@@ -2975,7 +2972,7 @@ $text-secondary: #6C757D; // Gray-Medium
 }
 
 .nav-item.active .nav-text {
-  color: $brand-primary;
+  color: var(--awd-accent-text);
   font-weight: 600;
 }
 
@@ -3065,7 +3062,7 @@ $text-secondary: #6C757D; // Gray-Medium
   transition: border-color 0.2s;
   
   &:focus {
-      border-color: $brand-primary;
+      border-color: var(--awd-accent);
       outline: none;
   }
 }
@@ -3110,11 +3107,11 @@ $text-secondary: #6C757D; // Gray-Medium
 }
 
 .radio-item:hover {
-    border-color: $text-secondary;
+    border-color: var(--awd-border-strong);
 }
 
 .radio-item.checked {
-  border-color: $brand-primary;
+  border-color: var(--awd-accent);
   background: var(--awd-accent-soft);
 }
 
@@ -3123,7 +3120,7 @@ $text-secondary: #6C757D; // Gray-Medium
   height: 14px;
   border-radius: 50%;
   border: 4px solid var(--awd-surface);
-  box-shadow: 0 0 0 1px $text-secondary;
+  box-shadow: 0 0 0 1px var(--awd-border-strong);
   margin-right: 8px;
 }
 
@@ -3149,7 +3146,7 @@ $text-secondary: #6C757D; // Gray-Medium
 
 .btn-primary {
     font-size: 14px;
-    background: $brand-primary;
+    background: var(--awd-accent);
     color: var(--awd-text-on-accent);
     border: none;
     padding: 6px 16px;
@@ -3159,8 +3156,8 @@ $text-secondary: #6C757D; // Gray-Medium
 }
 
 .radio-item.checked .radio-dot {
-  background: $brand-primary;
-  box-shadow: 0 0 0 1px $brand-primary;
+  background: var(--awd-accent);
+  box-shadow: 0 0 0 1px var(--awd-accent);
 }
 
 .radio-label {
@@ -3178,7 +3175,7 @@ $text-secondary: #6C757D; // Gray-Medium
   min-width: 140px;
   height: 40px;
   line-height: 40px;
-  background: $brand-primary;
+  background: var(--awd-accent);
   color: var(--awd-text-on-accent);
   border-radius: 6px; // Slightly rounded
   font-size: 14px;
@@ -3215,7 +3212,7 @@ $text-secondary: #6C757D; // Gray-Medium
   align-items: center;
   justify-content: space-between;
   padding: 14px 0;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  border-bottom: 1px solid var(--awd-border-subtle);
 }
 
 .comp-main {
@@ -3244,7 +3241,7 @@ $text-secondary: #6C757D; // Gray-Medium
   margin-top: 8px;
   height: 6px;
   border-radius: 3px;
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--awd-surface-3);
   overflow: hidden;
 }
 
@@ -3442,7 +3439,7 @@ $text-secondary: #6C757D; // Gray-Medium
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  background: $brand-primary;
+  background: var(--awd-accent);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3506,7 +3503,7 @@ $text-secondary: #6C757D; // Gray-Medium
 .wallet-balance-value {
   font-size: 28px;
   font-weight: 700;
-  color: $brand-primary;
+  color: var(--awd-accent-text);
   font-variant-numeric: tabular-nums;
 }
 
@@ -3522,7 +3519,7 @@ $text-secondary: #6C757D; // Gray-Medium
   flex-direction: column;
   gap: 8px;
   padding: 12px 14px;
-  border: 1px solid rgba(0, 0, 0, 0.06);
+  border: 1px solid var(--awd-border-subtle);
   border-radius: 6px;
   background: var(--awd-bg);
 }
@@ -3537,7 +3534,7 @@ $text-secondary: #6C757D; // Gray-Medium
   font-size: 12px;
   font-weight: 600;
   color: var(--awd-text-on-accent);
-  background: $brand-primary;
+  background: var(--awd-accent);
   border-radius: 4px;
   padding: 2px 8px;
 }
@@ -3550,14 +3547,14 @@ $text-secondary: #6C757D; // Gray-Medium
 .wallet-progress-bar {
   height: 6px;
   border-radius: 3px;
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--awd-surface-3);
   overflow: hidden;
 }
 
 .wallet-progress-fill {
   height: 100%;
   border-radius: 3px;
-  background: $brand-primary;
+  background: var(--awd-accent);
 }
 
 .wallet-progress-text {
@@ -3585,7 +3582,7 @@ $text-secondary: #6C757D; // Gray-Medium
 .wallet-rules-toggle {
   font-size: 12px;
   font-weight: 500;
-  color: $brand-primary;
+  color: var(--awd-accent-text);
   cursor: pointer;
 }
 
@@ -3678,7 +3675,7 @@ $text-secondary: #6C757D; // Gray-Medium
   align-items: center;
   justify-content: space-between;
   padding: 12px 0;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  border-bottom: 1px solid var(--awd-border-subtle);
 }
 
 .usage-main {

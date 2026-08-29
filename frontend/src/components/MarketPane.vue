@@ -1176,7 +1176,7 @@ $gray-light: #E9ECEF;
 
   &:focus-within {
     border-color: var(--awd-mint);
-    box-shadow: 0 0 0 3px rgba(91, 209, 151, 0.15);
+    box-shadow: 0 0 0 3px var(--awd-accent-soft);
   }
 }
 
@@ -1394,7 +1394,7 @@ $gray-light: #E9ECEF;
 
   &:hover {
     color: var(--awd-danger-text);
-    border-color: rgba(192, 57, 43, 0.4);
+    border-color: var(--awd-danger);
   }
 }
 
@@ -1517,7 +1517,7 @@ $gray-light: #E9ECEF;
 .empty-icon {
   width: 38px;
   height: 38px;
-  color: rgba(108, 117, 125, 0.45);
+  color: var(--awd-text-3);
   margin-bottom: 10px;
 }
 

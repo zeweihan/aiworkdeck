@@ -1,7 +1,5 @@
 /* Color Config - AI WorkDeck Palette */
 $color-accent: #5BD197; // Mint Green
-$color-border: #E9ECEF; // Gray-Light
-$bg-pale: #F8F9FA; // Pale BG
 
 /* Mixins */
 @mixin flex-center {
@@ -669,7 +667,7 @@ $bg-pale: #F8F9FA; // Pale BG
   display: flex;
   align-items: center;
   justify-content: center;
-  color: white;
+  color: var(--awd-text-on-accent);
   font-size: 14px;
   cursor: pointer;
 }
@@ -990,7 +988,7 @@ $bg-pale: #F8F9FA; // Pale BG
   justify-content: space-between;
   padding: 0 12px;
   background-color: var(--awd-bg);
-  border-bottom: 1px solid darken($bg-pale, 5%);
+  border-bottom: 1px solid var(--awd-border);
 }
 
 .sidebar-title {
@@ -1057,7 +1055,7 @@ $bg-pale: #F8F9FA; // Pale BG
   min-width: 0; /* Allow flex shrinking */
   background: var(--awd-surface);
   border: none;
-  border-left: 1px solid rgba(18, 52, 77, 0.08);
+  border-left: 1px solid var(--awd-border);
   border-radius: 0;
   box-shadow: none;
   display: flex;
@@ -1082,7 +1080,7 @@ $bg-pale: #F8F9FA; // Pale BG
   flex-shrink: 0;
   min-height: 0;
   background: var(--awd-bg);
-  border-top: 1px solid rgba(18, 52, 77, 0.08);
+  border-top: 1px solid var(--awd-border);
   border-radius: 0;
   box-shadow: none;
   display: flex;
@@ -1401,7 +1399,7 @@ $bg-pale: #F8F9FA; // Pale BG
   width: 260px;
   background: var(--awd-surface);
   border: none;
-  border-right: 1px solid rgba(18, 52, 77, 0.08);
+  border-right: 1px solid var(--awd-border);
   border-radius: 0;
   box-shadow: none;
   display: flex;
@@ -1474,7 +1472,7 @@ $bg-pale: #F8F9FA; // Pale BG
 .sidebar-actions-divider {
   width: 1px;
   height: 14px;
-  background: rgba(18, 52, 77, 0.12);
+  background: var(--awd-border);
   margin: 0 4px;
   flex-shrink: 0;
 }
@@ -1649,12 +1647,12 @@ $bg-pale: #F8F9FA; // Pale BG
 }
 
 .sidebar-plugin-btn:hover {
-  background: rgba(18, 52, 77, 0.06);
+  background: var(--awd-surface-2);
 }
 
 .sidebar-plugin-btn.active {
-  background: rgba(18, 52, 77, 0.08);
-  border-color: rgba(18, 52, 77, 0.12);
+  background: var(--awd-surface-3);
+  border-color: var(--awd-border);
   box-shadow: inset 0 -2px 0 $color-accent;
 }
 
@@ -1763,7 +1761,7 @@ $bg-pale: #F8F9FA; // Pale BG
 .resize-handle:hover,
 .side-resize-handle:hover,
 .bottom-resize-handle:hover {
-  background-color: rgba(18, 52, 77, 0.06);
+  background-color: var(--awd-surface-2);
 }
 
 /* 中间内容区 */
@@ -1783,7 +1781,7 @@ $bg-pale: #F8F9FA; // Pale BG
 .tabs-bar {
   height: 36px;
   background: var(--awd-bg);
-  border-bottom: 1px solid rgba(18, 52, 77, 0.08);
+  border-bottom: 1px solid var(--awd-border);
   backdrop-filter: none;
   display: flex;
   align-items: center;
@@ -1894,7 +1892,7 @@ $bg-pale: #F8F9FA; // Pale BG
   align-items: center;
   gap: 6px;
   background: transparent;
-  border-right: 1px solid rgba(18, 52, 77, 0.08);
+  border-right: 1px solid var(--awd-border);
   cursor: pointer;
   max-width: 200px;
   user-select: none;
@@ -1938,7 +1936,7 @@ $bg-pale: #F8F9FA; // Pale BG
     transition: background-color 0.12s ease;
 
     &:hover {
-      background: rgba(18, 52, 77, 0.1);
+      background: var(--awd-surface-2);
       color: var(--awd-text);
     }
   }
@@ -1995,7 +1993,7 @@ $bg-pale: #F8F9FA; // Pale BG
   align-items: center;
   justify-content: center;
   border-radius: 8px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
+  border: 1px solid var(--awd-border);
   cursor: pointer;
   color: var(--awd-text-2);
   background: rgba(15, 23, 42, 0.02);
@@ -2266,7 +2264,7 @@ $bg-pale: #F8F9FA; // Pale BG
   flex: 3;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid rgba($color-border, 0.7);
+  border-right: 1px solid var(--awd-border);
   min-width: 0;
   overflow: hidden; /* Prevent children from overflowing */
   box-sizing: border-box;
@@ -2281,7 +2279,7 @@ $bg-pale: #F8F9FA; // Pale BG
 
 .ai-context-card {
   padding: 10px 10px;
-  border: 1px solid rgba($color-border, 0.85);
+  border: 1px solid var(--awd-border);
   background: var(--awd-info-soft);
   border-radius: 12px;
   margin: 0 10px 8px;
@@ -2340,7 +2338,7 @@ $bg-pale: #F8F9FA; // Pale BG
   padding: 0 10px;
   height: 24px;
   border-radius: 999px;
-  border: 1px solid rgba($color-border, 0.75);
+  border: 1px solid var(--awd-border);
   background: rgba(15, 23, 42, 0.02);
   font-size: 12px;
   color: var(--awd-accent-text);
@@ -3055,7 +3053,7 @@ $bg-pale: #F8F9FA; // Pale BG
 .ocr-selection {
   position: fixed;
   border: 2px solid var(--awd-info);
-  background: rgba(37, 99, 235, 0.12);
+  background: var(--awd-info-soft);
   border-radius: 6px;
   pointer-events: none;
 }

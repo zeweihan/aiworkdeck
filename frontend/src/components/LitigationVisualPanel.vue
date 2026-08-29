@@ -360,11 +360,11 @@ export default {
   margin: var(--awd-panel-gap) var(--awd-panel-pad-x) 0;
   padding: 6px 8px;
   border-radius: var(--awd-panel-radius);
-  background: #FDF3F2;
-  border: 1px solid #F3D9D6;
+  background: var(--awd-danger-soft);
+  border: 1px solid var(--awd-danger);
 }
-.lv-notice.subtle { background: var(--awd-bg); border-color: #E8EAED; }
-.lv-notice-text { font-size: var(--awd-panel-fs-meta); line-height: 1.55; color: #6B6560; }
+.lv-notice.subtle { background: var(--awd-bg); border-color: var(--awd-border); }
+.lv-notice-text { font-size: var(--awd-panel-fs-meta); line-height: 1.55; color: var(--awd-text-2); }
 
 /* 原生资源包状态条：常态是中性下载提示，失败态借用 .lv-notice 同一套暖红 */
 .lv-pack-bar {
@@ -375,7 +375,7 @@ export default {
   background: var(--awd-panel-hover);
   border-bottom: 1px solid var(--awd-panel-border);
 }
-.lv-pack-bar.failed { background: #FDF3F2; border-color: #F3D9D6; }
+.lv-pack-bar.failed { background: var(--awd-danger-soft); border-color: var(--awd-danger); }
 .lv-pack-text {
   flex: 1;
   min-width: 0;
@@ -383,7 +383,7 @@ export default {
   color: var(--awd-panel-text-2);
   line-height: 1.5;
 }
-.lv-pack-bar.failed .lv-pack-text { color: #6B6560; }
+.lv-pack-bar.failed .lv-pack-text { color: var(--awd-text-2); }
 .lv-pack-retry {
   flex-shrink: 0;
   padding: 2px 8px;
@@ -459,7 +459,7 @@ export default {
   padding: 3px 8px; font-size: var(--awd-panel-fs-meta); border-radius: 4px; cursor: pointer;
   border: 1px solid var(--awd-panel-border); color: var(--awd-panel-text-2); background: var(--awd-surface);
 }
-.lv-kind:hover { border-color: #C9CED6; }
+.lv-kind:hover { border-color: var(--awd-border-strong); }
 .lv-kind.active {
   border-color: var(--awd-panel-accent); color: var(--awd-panel-accent); background: var(--awd-accent-wash);
 }
@@ -474,7 +474,7 @@ export default {
   border-radius: var(--awd-panel-radius); cursor: pointer; user-select: none;
 }
 .lv-btn.primary { background: var(--awd-panel-accent); color: var(--awd-text-on-accent); font-weight: 500; }
-.lv-btn.primary:hover { background: #16482E; }
+.lv-btn.primary:hover { background: var(--awd-accent-hover); }
 .lv-btn.disabled { opacity: .5; pointer-events: none; }
 
 .lv-empty { padding: 14px var(--awd-panel-pad-x); text-align: center; }
@@ -497,7 +497,7 @@ export default {
   flex-shrink: 0; padding: 0 5px; font-size: 10px; line-height: 15px; border-radius: 3px;
 }
 .lv-badge.edited { color: var(--awd-panel-accent); background: var(--awd-accent-soft); }
-.lv-badge.draft { color: #8A5A2B; background: #FDF6EC; }
+.lv-badge.draft { color: var(--awd-warning-text); background: var(--awd-warning-soft); }
 
 .lv-row-actions {
   display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
@@ -520,5 +520,5 @@ export default {
 .lv-mode.disabled { opacity: .5; pointer-events: none; }
 
 .lv-credit { padding: var(--awd-panel-gap-lg) var(--awd-panel-pad-x); }
-.lv-credit-text { display: block; font-size: 10px; color: #C4C9CE; text-align: center; line-height: 1.5; }
+.lv-credit-text { display: block; font-size: 10px; color: var(--awd-text-3); text-align: center; line-height: 1.5; }
 </style>

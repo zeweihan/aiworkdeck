@@ -3319,7 +3319,7 @@ export default {
 .model-region-tag {
   font-size: 10px;
   color: var(--awd-warning-text);
-  background: rgba(180, 83, 9, 0.1);
+  background: var(--awd-warning-soft);
   border-radius: 3px;
   padding: 1px 4px;
 }
@@ -3337,7 +3337,7 @@ export default {
 .model-tier-tag {
   font-size: 10px;
   color: var(--awd-text-2);
-  background: rgba(100, 116, 139, 0.1);
+  background: var(--awd-surface-3);
   border-radius: 3px;
   padding: 1px 4px;
 }
@@ -3345,7 +3345,7 @@ export default {
 .model-novision-tag {
   font-size: 10px;
   color: var(--awd-text-2);
-  background: rgba(100, 116, 139, 0.1);
+  background: var(--awd-surface-3);
   border-radius: 3px;
   padding: 1px 4px;
 }
@@ -4146,7 +4146,7 @@ export default {
 
 .selected-file-tag {
   font-size: 12px;
-  background: white;
+  background: var(--awd-surface);
   padding: 4px 8px;
   border-radius: 4px;
   border: 1px solid var(--awd-border);
@@ -4442,7 +4442,7 @@ export default {
   left: 0;
   margin-bottom: 8px; /* Gap */
   width: 200px;
-  background: white;
+  background: var(--awd-surface);
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.15);
   padding: 4px 0;
@@ -4647,7 +4647,7 @@ export default {
 
 .awd-btn-danger {
   background-color: var(--awd-danger);
-  color: white;
+  color: var(--awd-text-on-accent);
   border: none;
 }
 

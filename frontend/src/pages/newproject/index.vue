@@ -243,7 +243,6 @@ export default {
 
 <style lang="scss" scoped>
 /* 品牌配色变量 - AI WorkDeck Palette */
-$brand-primary: #1A5336; /* Forest Green */
 $brand-dark: #212629;    /* Dark BG */
 
 .page-new-project {
@@ -586,7 +585,7 @@ $brand-dark: #212629;    /* Dark BG */
   box-shadow: 0 4px 12px rgba(26, 83, 54, 0.2);
 
   &:hover {
-    background-color: lighten($brand-primary, 5%);
+    background-color: var(--awd-accent-hover);
     box-shadow: 0 6px 16px rgba(26, 83, 54, 0.3);
     transform: translateY(-1px);
   }

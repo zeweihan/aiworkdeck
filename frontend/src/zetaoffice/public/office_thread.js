@@ -2569,6 +2569,35 @@ const EXEC = {
     try { applied = Number(vs.getPropertyValue('ZoomValue')) || next; } catch (e) {}
     return { success: true, zoom: applied };
   },
+  // ---- [主题] 纸外工作区配色（dev-board#273）------------------------------
+  // 宿主深浅主题切换时把 LO 的 AppBackground（纸张周围的工作区底色）跟着切；
+  // DocColor（纸张本身）刻意不动——文档以打印观感为准，深色下纸仍是纸白。
+  // 配置项运行时可写（与 setRedlineAuthor 同一机制）；色值与宿主 --awd-canvas
+  // 令牌同源（light #F1F3F5 / dark #101214），两边不一致会在 iframe 底与画布
+  // 之间露出一圈异色缝。
+  set_app_theme(p) {
+    const mode = p && p.mode === 'dark' ? 'dark' : 'light';
+    const color = mode === 'dark' ? 0x101214 : 0xF1F3F5;
+    try {
+      const provider = context.getServiceManager().createInstanceWithContext(
+        'com.sun.star.configuration.ConfigurationProvider', context);
+      let schemeName = 'LibreOffice';
+      try {
+        const cur = provider.createInstanceWithArguments(
+          'com.sun.star.configuration.ConfigurationAccess',
+          [mkProp('nodepath', '/org.openoffice.Office.UI/ColorScheme')]);
+        const n = cur.getByName('CurrentColorScheme');
+        if (n) schemeName = String(n);
+      } catch (e) { /* 读不到就用默认方案名 */ }
+      const root = provider.createInstanceWithArguments(
+        'com.sun.star.configuration.ConfigurationUpdateAccess',
+        [mkProp('nodepath', '/org.openoffice.Office.UI/ColorScheme/ColorSchemes')]);
+      const scheme = root.getByName(schemeName);
+      scheme.getByName('AppBackground').replaceByName('Color', color);
+      root.commitChanges();
+      return { success: true, mode, scheme: schemeName };
+    } catch (e) { return { success: false, message: 'set_app_theme 失败: ' + errStr(e) }; }
+  },
   // ---- [P1 自建工具栏] 状态回读 / 样式清单 / chrome 开关 -------------------
   // 工具栏的激活态（B 是否高亮、当前字体字号样式对齐、能不能撤销）一次拿全。
   // 高频调用（选区事件 + 400ms 聚焦轮询），实测整套读一遍约 6ms——每个字段各自

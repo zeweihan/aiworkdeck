@@ -54,7 +54,7 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 ## 画布配色（知识存档：深色化已否决回退，勿再启用）
 
 - PR#243 曾做「深绿画布上浮纸页」并已随配色回退撤销（维护者否决深色）。**引擎画布保持默认浅色**。
-- 存档结论（将来若需改画布色可复用，不重烧引擎）：LO 应用配色在 `/org.openoffice.Office.UI/ColorScheme`（AppBackground/DocColor），可在 bootDoc 用 ConfigurationUpdateAccess（同 setRedlineAuthor 机制）运行时写入；工具栏 chrome 精确配色 LO 24.2 无注册表口，须 QPalette 补丁重烧。
+- 应用配色（dev-board#273 已落地）：`set_app_theme` 命令（office_thread.js，非 AI 白名单，宿主经 lo-relay `set-theme` 消息触发）用 ConfigurationUpdateAccess 写 `/org.openoffice.Office.UI/ColorScheme` 的 AppBackground——深浅主题下纸外工作区分别 #101214/#F1F3F5（与宿主 `--awd-canvas` 同源，改一处必须同步 editor.html 的 CSS 与 office_thread 的常量）；DocColor（纸张）刻意不动，深色下纸仍是纸白。初值走 editor URL `?theme=` 参数（editor.html 头部内联脚本防白闪），ready 后 LibreOfficeEditor.pushTheme() 补发一次盖住保活池过继的旧参数。工具栏 chrome 精确配色 LO 24.2 无注册表口，须 QPalette 补丁重烧（未做）。
 
 ## zetajs 编组硬规则（office_thread.js，PR#107）
 

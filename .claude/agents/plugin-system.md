@@ -57,6 +57,8 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
 
 **v2.5 新增三方法**（`PluginPane.handleCall`，SDK 版本 `1.0.0`→`1.1.0`，老宿主对新方法一律回 `unknown_method`，插件要能降级）：`tools.invoke {name, args?}` -> `{output}`——经直调端点 `POST /api/plugins/{id}/tools/{tool}`（`PluginController.invokeTool`）调本插件自己的 JAR 工具，安全闸自上而下是登录会话 → 项目写权限（`ProjectMemberService.hasWritePermission`）→ 工具名必须是该插件 manifest `tools` 声明的 → 插件启用未封禁，再落到 `ToolRegistry.execute` 走 manifest permissions/宿主 SPI 配额/`ToolContext` 服务端定 projectId·userId 这套 AI 链路同款闸；`chat.send {prompt}`（≤4000 字）-> `{}`——把 prompt 当可见用户消息发进 AI 对话，与 PluginGuidePane quickActions 同一条 kickoff 路；`ui.openFile {path}` -> `{}`（需 `file_read`）——复用 `awd:open-evidence-target` 事件链把项目文件开到工作台中栏。新增错误码 `invalid_params` / `invoke_failed`。设计意图：Web 面板做结构化操作时直调自家工具绕过模型，但一步都不绕过安全闸。
 
+**v2.6 主题通道**（dev-board#274，SDK `1.1.0`→`1.2.0`，照 VS Code 给 webview 注入 `--vscode-*` 的机制）：`init.context` 新增 `themeTokens`（当前主题全部 `--awd-*` 令牌值，名单=宿主 `utils/appTheme.js` 的 `THEME_TOKEN_NAMES`）；宿主切主题时 `PluginPane.pushTheme()` 推 `{awd:1, type:'theme', theme, tokens}`。SDK 收到即自动挂 `data-theme`/body class 并把令牌写成 iframe 内 CSS 变量——插件写 `var(--awd-surface, #fff)` 即可跟随主题（fallback 兼容老宿主）；脚本联动用 `awd.theme.get()/onChange(cb)`。双向兼容：老 SDK 忽略未知 type，老宿主下新 SDK 停在握手快照（无 themeTokens 则只挂 data-theme）。
+
 **这是 manifest permissions 第一次成为真实边界**：缺 `file_read` 时 `files.*` 直接 `permission_denied`；`network` 决定 PluginWebController 下发的 CSP 是 `connect-src 'none'` 还是 `connect-src https:`。JAR 插件同 JVM 同权限，做不到这一点。
 
 插件级 KV 存宿主 `localStorage` 的 `awd_plugin_kv_<pluginId>`，总量 64 KB；`files.read` 文本上限 5 MB（超限截断且 `truncated:true`，不报错），扩展名不在可抽取文本白名单里的按二进制拒绝。

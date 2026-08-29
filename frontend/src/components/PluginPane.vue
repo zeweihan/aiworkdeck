@@ -31,15 +31,17 @@
 //
 // 桥协议（与 sdk/plugin-sdk/awd-plugin-sdk.js 及官网模板/宿主模拟器同一份契约，
 // 三处任何一处单独改动都会让插件跑不起来）：
-//   握手  宿主 -> 插件   { awd: 1, type: 'init', context: { pluginId, projectId, language, theme } }
+//   握手  宿主 -> 插件   { awd: 1, type: 'init', context: { pluginId, projectId, language, theme, themeTokens } }
 //   请求  插件 -> 宿主   { awd: 1, type: 'call', seq, method, params }
 //   响应  宿主 -> 插件   { awd: 1, type: 'result', seq, ok, result | error: { code, message } }
+//   主题  宿主 -> 插件   { awd: 1, type: 'theme', theme, tokens }（v2.6，切换时推送；
+//   老 SDK 不认识这个 type 会静默忽略，新 SDK 在老宿主上收不到推送则停在握手快照）
 import {
   getProjectFiles, getFileText, invokePluginTool,
   createEvidenceLink, addEvidenceTargets, getEvidenceLink, listEvidenceLinks
 } from '@/services/api.js'
 import { getAppLanguage } from '@/utils/appLanguage.js'
-import { getResolvedTheme } from '@/utils/appTheme.js'
+import { getResolvedTheme, collectThemeTokens, APP_THEME_EVENT } from '@/utils/appTheme.js'
 import { resolveAnchor, toPluginLink, toTargetInputs } from '@/utils/pluginEvidence.js'
 import { createEvidenceLinkForSelection } from '@/pages/project-overview/evidenceLinkCore.js'
 import { WPS_INTERNAL_HTTP_LINK_BASE } from '@/config/workbenchActions.js'
@@ -133,9 +135,12 @@ export default {
   },
   mounted() {
     window.addEventListener('message', this.onMessage)
+    this._onThemeChanged = () => this.pushTheme()
+    uni.$on(APP_THEME_EVENT, this._onThemeChanged)
   },
   beforeUnmount() {
     window.removeEventListener('message', this.onMessage)
+    if (this._onThemeChanged) { uni.$off(APP_THEME_EVENT, this._onThemeChanged); this._onThemeChanged = null }
   },
   methods: {
     onFrameLoad() {
@@ -155,8 +160,22 @@ export default {
         projectId: this.projectId == null ? '' : String(this.projectId),
         language: getAppLanguage(),
         // 外壳自 dev-board#223 起有深浅两态，握手把当前生效的那个告诉插件
-        theme: getResolvedTheme()
+        theme: getResolvedTheme(),
+        // v2.6：语义色令牌整表随握手注入（SDK 收到即写成 iframe 里的 CSS 变量，
+        // 照 VS Code 给 webview 注入 --vscode-* 的机制）。切换时走 pushTheme 推送。
+        themeTokens: collectThemeTokens()
       }
+    },
+
+    /** 主题切换推送（v2.6）：插件面板开着时切深浅色，iframe 里的令牌跟着换 */
+    pushTheme() {
+      if (!this.isWebPlugin) return
+      const frame = this.$refs.pluginFrame
+      if (!frame || !frame.contentWindow) return
+      frame.contentWindow.postMessage(
+        { awd: PROTOCOL, type: 'theme', theme: getResolvedTheme(), tokens: collectThemeTokens() },
+        '*'
+      )
     },
 
     async onMessage(event) {
