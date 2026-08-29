@@ -39,7 +39,7 @@
  *                                        （与启动面板快捷按钮同一条路），上限 4000 字
  *   ui.openFile   { path }            -> {}                需 file_read；把项目文件打开到工作台中栏
  *
- * v2.7 新增（宿主 0.28 起；老宿主对新方法返回 unknown_method，SDK 已按下述说明降级）：
+ * v2.7 新增（宿主 0.27.4 起；老宿主对新方法返回 unknown_method，SDK 已按下述说明降级）：
  *   doc.exec      { action, params? }  -> { result }        需 editor；对当前聚焦文档执行编辑原语，
  *                                        action/params 与 AI 工具面的下发名同一套（doc_/sheet_/slide_ 全集
  *                                        的安全子集，白名单外返回 action_not_allowed）。写入走修订（Writer），

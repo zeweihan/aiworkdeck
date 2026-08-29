@@ -665,7 +665,7 @@ class PluginServiceTest {
         assertTrue(service.hasWebEntry("hello-web-plugin"));
         // v2.7 起示例演示 doc.exec（editor）与 ai.request（ai），并声明 minHostVersion
         assertEquals(List.of("file_read", "editor", "ai"), meta.getPermissions());
-        assertEquals("0.28.0", meta.getMinHostVersion());
+        assertEquals("0.27.4", meta.getMinHostVersion());
         assertNotNull(service.resolveWebFile(service.getPluginDir("hello-web-plugin"), "awd-plugin-sdk.js"),
                 "index.html 同步引入的 SDK 副本必须在包内");
     }

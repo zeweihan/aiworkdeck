@@ -6,7 +6,7 @@
   "author": "AI WorkDeck",
   "homepage": "https://github.com/zeweihan/checkba_cloud",
   "permissions": ["file_read", "editor", "ai"],
-  "minHostVersion": "0.28.0",
+  "minHostVersion": "0.27.4",
   "frontendEntry": "web/index.html",
   "tools": [],
   "backendJars": []

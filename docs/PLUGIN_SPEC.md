@@ -4,7 +4,7 @@
 > v2.3（Web 插件 + `packs` 依赖）自 native pack Phase B；v2.4（宿主 SPI `plugin-api` + 后台任务）自尽调 P1；
 > v2.5（Web 插件直调工具端点 + 桥新增 `tools.invoke`/`chat.send`/`ui.openFile`）自尽调 P1 补充。
 > v2.6（主题通道：`init` 带 `themeTokens`、宿主推送 `type:"theme"`、SDK 自动注入 CSS 变量）随深色模式收口（dev-board#274）加入。
-> v2.7（生态路线 P0-P2，宿主 0.28 起，dev-board#280/281/282）：治理地基（`minHostVersion` + 实验 API
+> v2.7（生态路线 P0-P2，宿主 0.27.4 起（v0.27.4 发版恰在 #659 合并后切出，v2.7 随它发布），dev-board#280/281/282）：治理地基（`minHostVersion` + 实验 API
 > `x-` 前缀 + §12 只加不改章程）、文档读写权（桥 `doc.exec`/`doc.active` + 事件通道 `type:"event"`）、
 > AI 调用权（桥 `ai.request` 走平台 Credits + 权限值 `ai`）。设计定稿见 docs/superpowers/specs/
 > 2026-08-29-plugin-p0/p1/p2 三篇；生态总路线 docs/PLUGIN_API_ROADMAP.md。
@@ -74,7 +74,7 @@ plugins/
 | `permissions` | string[] | 否 | 插件**自行声明**会用到的能力，见 §3。缺省视为不需要任何敏感能力。注意这是作者的自述，不是运行时授权。 |
 | `tools` | object[] | 否 | 工具清单（`name` + 中文 `description` + 可选 `permissions`），用于插件广场展示、人工审查与 v2 权限校验。`name` 应与 JAR 中 `@Tool` 方法名一致；`permissions` 声明**该工具运行所需**的能力（v2 新增，见 §3）。 |
 | `frontendEntry` | string | 否 | **v2.3 起激活**：`web/index.html` 这样的相对路径 = Web 插件（见 §8）；`http(s)://` 绝对 URL = 旧形态，宿主直接 iframe 打开外部页面。 |
-| `minHostVersion` | string | 否 | **v2.7 新增**：本插件需要的最低宿主版本（semver）。宿主低于它时插件登记但**不生效**（不加载 JAR、不注册工具、不服务 web/），管理页提示「需要宿主 ≥ X，请升级客户端」，enable 明确拒绝；广场安装与 dev 直装在装前就拦。非法格式视为缺省并 WARN。dev 态宿主（版本 `dev`）跳过校验。注意它保护不了 0.27.x 及更老的宿主（它们不认识这个字段）——用了 v2.7 能力的插件应声明 `"0.28.0"`，缺口随存量宿主升级自然收敛。 |
+| `minHostVersion` | string | 否 | **v2.7 新增**：本插件需要的最低宿主版本（semver）。宿主低于它时插件登记但**不生效**（不加载 JAR、不注册工具、不服务 web/），管理页提示「需要宿主 ≥ X，请升级客户端」，enable 明确拒绝；广场安装与 dev 直装在装前就拦。非法格式视为缺省并 WARN。dev 态宿主（版本 `dev`）跳过校验。注意它保护不了 0.27.3 及更老的宿主（它们不认识这个字段）——用了 v2.7 能力的插件应声明 `"0.27.4"`，缺口随存量宿主升级自然收敛。 |
 | `backendJars` | string[] | 否 | 相对插件目录的 JAR 文件名列表，启动/重扫时加载其中带 `@Tool` 注解的类。 |
 | `skills` | string[] | 否 | **v2.1 新增**：插件携带的 Skill 子目录名列表（相对插件目录），见 §7。 |
 | `packs` | string[] | 否 | **v2.3 新增**：依赖的原生资源包 id 列表，见 §9 与 [NATIVE_PACK_DISTRIBUTION.md](NATIVE_PACK_DISTRIBUTION.md)。 |
@@ -347,7 +347,7 @@ opaque origin 使然，不能靠 `event.origin` 判断。
 插件级 KV 存在宿主的 `localStorage`，键为 `awd_plugin_kv_<pluginId>`，
 每个插件总量上限 64 KB。
 
-**v2.7 新增方法**（宿主 0.28 起；老宿主一律回 `unknown_method`，SDK 已内置降级）：
+**v2.7 新增方法**（宿主 0.27.4 起；老宿主一律回 `unknown_method`，SDK 已内置降级）：
 
 | 方法 | 参数 | 返回 | 权限 |
 |---|---|---|---|
@@ -511,7 +511,7 @@ insertText(text)/addComment(anchorText, text)`、`awd.events.on(name, cb)`（返
   三个方法（§8.4、§8.5），SDK 版本号 `1.0.0` → `1.1.0`。manifest 无新增字段。
 - **v2.6**：主题通道（§8.3/§8.5）——`init.context.themeTokens`、宿主推送 `type:"theme"`、
   SDK 自动注入 CSS 变量与 `awd.theme.*`。SDK `1.1.0` → `1.2.0`。manifest 无新增字段。
-- **v2.7（当前，宿主 0.28 起）**：生态路线 P0-P2 同批落地（dev-board#280/281/282）。
+- **v2.7（宿主 0.27.4 起）**：生态路线 P0-P2 同批落地（dev-board#280/281/282）。
   P0 治理：manifest 新增 `minHostVersion`（§2）、实验 API `x-` 前缀机制与只加不改章程（§12）、
   管理页展示不兼容/封禁原因；P1 文档读写权：桥 `doc.exec`/`doc.active`（§8.4）+ 事件通道
   `events.*` 与 `type:"event"` 推送（§8.8）；P2 AI 调用权：桥 `ai.request` + 权限值 `ai`（§3）+
