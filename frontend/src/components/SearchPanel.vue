@@ -290,9 +290,9 @@ export default {
             };
         } else {
             return {
-                backgroundColor: '#FFFFFF',
-                borderColor: '#E9ECEF', // Neutral border
-                color: '#6C757D' // Neutral text
+                backgroundColor: 'var(--awd-surface)',
+                borderColor: 'var(--awd-border)', // Neutral border
+                color: 'var(--awd-text-2)' // Neutral text
             };
         }
     },
@@ -471,7 +471,7 @@ $brand-mint: #5BD197;
 
     &.focused {
       border-color: var(--awd-mint);
-      box-shadow: 0 0 0 3px rgba($brand-mint, 0.15);
+      box-shadow: 0 0 0 3px var(--awd-accent-soft);
     }
 
     .search-icon {
@@ -758,7 +758,7 @@ $brand-mint: #5BD197;
   font-family: "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
 
   &:hover {
-    background-color: rgba($brand-mint, 0.05);
+    background-color: var(--awd-accent-wash);
     .match-highlight {
         background-color: rgba($brand-mint, 0.3);
     }
@@ -791,7 +791,7 @@ $brand-mint: #5BD197;
      text-overflow: ellipsis;
 
      .match-highlight {
-         background-color: rgba($brand-mint, 0.15);
+         background-color: var(--awd-accent-soft);
          color: var(--awd-accent-text);
          border-radius: 2px;
          padding: 0 1px;

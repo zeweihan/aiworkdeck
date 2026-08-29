@@ -143,6 +143,7 @@ import { anchorHash } from '@/utils/anchorHash.js'
 import { StaleQueue } from '@/utils/evidenceStaleQueue.js'
 import { createAnchorChecker, resolveKeepText } from '@/composables/useEvidenceAnchors.js'
 import { EVIDENCE_CHANGED_EVENT } from '@/utils/evidenceEvents.js'
+import { getResolvedTheme, APP_THEME_EVENT } from '@/utils/appTheme.js'
 
 let seq = 0
 
@@ -282,7 +283,7 @@ export default {
     // 菜单栏读勾选/置灰的三个信号。合并在这个 watch 里而不是另起一块——
     // 选项对象里两个同名 key，后写的会把先写的整个覆盖掉。
     reviewOpen() { this.$emit('menu-state') },
-    ready(v) { this.$emit('menu-state'); if (v) { this.consumeLocator(); this.pushInsightSub() } },
+    ready(v) { this.$emit('menu-state'); if (v) { this.consumeLocator(); this.pushInsightSub(); this.pushTheme() } },
     // 「依据」窗格开合 → 客体页的光标上报订阅（dev-board#182）
     insightSubscribed() { this.pushInsightSub() },
     docKind() { this.$emit('menu-state') },
@@ -298,6 +299,8 @@ export default {
     this._onEvidenceDragEnd = () => { this.evidenceDropArmed = false; this.evidenceDropOver = false; this._dragEndedAt = Date.now() }
     uni.$on('file-drag-start', this._onEvidenceDragStart)
     uni.$on('file-drag-end', this._onEvidenceDragEnd)
+    this._onThemeChanged = () => this.pushTheme()
+    uni.$on(APP_THEME_EVENT, this._onThemeChanged)
     try {
       const api = host.zetaoffice
       if (!api || typeof api.getEditor !== 'function') {
@@ -321,6 +324,7 @@ export default {
   beforeUnmount() {
     uni.$off('file-drag-start', this._onEvidenceDragStart)
     uni.$off('file-drag-end', this._onEvidenceDragEnd)
+    if (this._onThemeChanged) { uni.$off(APP_THEME_EVENT, this._onThemeChanged); this._onThemeChanged = null }
     // Autosave timers die with the instance. Any still-dirty edits were flushed
     // by the closer (closeFile / evictLibreInstance await flushSave first) —
     // export needs the live webview, so saving from here is already too late.
@@ -458,6 +462,17 @@ export default {
         this._transportSend({ __lo: 'lo-relay', type: 'insight-sub', enabled: !!this.insightSubscribed })
       } catch (e) { /* 通道没起来：ready 时还会补发一次 */ }
     },
+    /**
+     * 深浅主题下发（dev-board#273）：客体页收到后切页面底色并调引擎的
+     * AppBackground。ready 时补发一次覆盖保活池过继（预热实例的 URL 参数
+     * 可能是旧主题）。
+     */
+    pushTheme() {
+      if (!this._transportSend) return
+      try {
+        this._transportSend({ __lo: 'lo-relay', type: 'set-theme', theme: getResolvedTheme() })
+      } catch (e) { /* 通道没起来：ready 时还会补发一次 */ }
+    },
     menuOpenFind() {
       const tb = this.$refs.toolbar
       if (tb && !tb.findOpen) return tb.toggleFind()
@@ -562,6 +577,15 @@ export default {
     mountEditor(info) {
       const mountEl = document.getElementById(this.hostId)
       if (!mountEl) { this.appendLog('host element missing'); return }
+      // 深浅主题初值随 URL 进客体页（editor.html 据此防白闪）；后续切换走
+      // pushTheme 的 lo-relay 推送
+      try {
+        if (info && info.url) {
+          info = Object.assign({}, info, {
+            url: info.url + (info.url.indexOf('?') >= 0 ? '&' : '?') + 'theme=' + getResolvedTheme()
+          })
+        }
+      } catch (e) { /* ignore */ }
       const el = info.kind === 'iframe' ? this.createIframe(info) : this.createWebview(info)
       el.style.width = '100%'
       el.style.height = '100%'

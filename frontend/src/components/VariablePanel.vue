@@ -498,9 +498,6 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-/* Color Config - AI WorkDeck Palette */
-$color-primary: #1A5336; // Forest Green
-
 .variable-panel {
   display: flex;
   flex-direction: column;
@@ -917,7 +914,7 @@ $color-primary: #1A5336; // Forest Green
   border-color: transparent; 
   
   &:hover {
-    background: mix($color-primary, #000, 90%);
+    background: var(--awd-accent-hover);
   }
   
   &:disabled {

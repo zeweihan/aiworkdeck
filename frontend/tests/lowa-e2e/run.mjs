@@ -72,6 +72,25 @@ const DEBUG_ACTIONS = `
     xModel.setPropertyValue('RecordChanges', !!p.on);
     return { success: true, recordChanges: xModel.getPropertyValue('RecordChanges') };
   },
+  // 组 30 探针：读回当前配色方案的 AppBackground（set_app_theme 的落点）
+  debug_app_bg() {
+    try {
+      const provider = context.getServiceManager().createInstanceWithContext(
+        'com.sun.star.configuration.ConfigurationProvider', context);
+      let name = 'LibreOffice';
+      try {
+        const cur = provider.createInstanceWithArguments(
+          'com.sun.star.configuration.ConfigurationAccess',
+          [mkProp('nodepath', '/org.openoffice.Office.UI/ColorScheme')]);
+        name = String(cur.getByName('CurrentColorScheme') || name);
+      } catch (e) {}
+      const schemes = provider.createInstanceWithArguments(
+        'com.sun.star.configuration.ConfigurationAccess',
+        [mkProp('nodepath', '/org.openoffice.Office.UI/ColorScheme/ColorSchemes')]);
+      const c = schemes.getByName(name).getByName('AppBackground').getByName('Color');
+      return { success: true, scheme: name, color: Number(c) };
+    } catch (e) { return { success: false, message: errStr(e) }; }
+  },
   debug_char_prop(p) {
     const vc = ctrl.getViewCursor();
     return { success: true, value: vc.getPropertyValue(String(p.prop)), selected: (vc.getString() || '').slice(0, 40) };
@@ -288,8 +307,8 @@ function patchServed(urlPath, content) {
   if (/^\/assets\/editor-.*\.js$/.test(urlPath)) {
     const s = content.toString('utf8')
     return Buffer.from(
-      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments','debug_fresh_document','debug_table_info','debug_fresh_calc','debug_sheet_cell_info','debug_sheet_doc_info','debug_slide_shape_info','debug_slide_char_prop','debug_lock_state','debug_modified_count','debug_footer_info','debug_para_style_info'")
-        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments","debug_fresh_document","debug_table_info","debug_fresh_calc","debug_sheet_cell_info","debug_sheet_doc_info","debug_slide_shape_info","debug_slide_char_prop","debug_lock_state","debug_modified_count","debug_footer_info","debug_para_style_info"'),
+      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments','debug_fresh_document','debug_table_info','debug_fresh_calc','debug_sheet_cell_info','debug_sheet_doc_info','debug_slide_shape_info','debug_slide_char_prop','debug_lock_state','debug_modified_count','debug_footer_info','debug_para_style_info','debug_app_bg'")
+        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments","debug_fresh_document","debug_table_info","debug_fresh_calc","debug_sheet_cell_info","debug_sheet_doc_info","debug_slide_shape_info","debug_slide_char_prop","debug_lock_state","debug_modified_count","debug_footer_info","debug_para_style_info","debug_app_bg"'),
       'utf8')
   }
   return content
@@ -1939,6 +1958,35 @@ try {
     // 复位画像，后续（以及下次复用本 worker 的组）回到 house-default
     const rs = await exec('set_style_profile', { reset: true })
     check('reset 回到 house-default（Arial / 首行 24 磅）', rs.success === true && rs.reset === true && rs.body.fontWestern === 'Arial' && Math.abs(rs.body.firstLineIndentPt - 24) < 1, JSON.stringify(rs))
+  }
+
+  // ---- 组 30：set_app_theme（深浅主题的纸外工作区配色，dev-board#273）------
+  // 断言两层：配置真的写进 ColorScheme（debug_app_bg 读回），且引擎真的重绘
+  // （左缘中部像素亮度深浅两态拉开——那里是纸外工作区，不是纸）。
+  {
+    console.log('\n== 组 30：set_app_theme 应用配色 ==')
+    const { PNG } = await import('pngjs')
+    const probeLum = async () => {
+      const vp = page.viewport() || { width: 1280, height: 800 }
+      const shot = await page.screenshot({ clip: { x: 3, y: Math.floor(vp.height * 0.55), width: 6, height: 6 } })
+      const png = PNG.sync.read(Buffer.from(shot))
+      let sum = 0
+      for (let i = 0; i < png.data.length; i += 4) sum += (png.data[i] + png.data[i + 1] + png.data[i + 2]) / 3
+      return Math.round(sum / (png.data.length / 4))
+    }
+    const dark = await exec('set_app_theme', { mode: 'dark' })
+    check('set_app_theme dark 成功', dark.success === true && dark.mode === 'dark', JSON.stringify(dark))
+    const bgDark = await exec('debug_app_bg')
+    check('AppBackground 配置写入 0x101214', bgDark.success === true && bgDark.color === 0x101214, JSON.stringify(bgDark))
+    await new Promise((r) => setTimeout(r, 900))
+    const darkLum = await probeLum()
+    const light = await exec('set_app_theme', { mode: 'light' })
+    check('set_app_theme light 成功', light.success === true && light.mode === 'light', JSON.stringify(light))
+    const bgLight = await exec('debug_app_bg')
+    check('AppBackground 配置回到 0xF1F3F5', bgLight.success === true && bgLight.color === 0xF1F3F5, JSON.stringify(bgLight))
+    await new Promise((r) => setTimeout(r, 900))
+    const lightLum = await probeLum()
+    check('纸外区域真的重绘（深色亮度显著低于浅色）', darkLum < lightLum - 80, JSON.stringify({ darkLum, lightLum }))
   }
 
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')

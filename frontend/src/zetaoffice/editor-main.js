@@ -77,6 +77,21 @@ function pickTransport() {
 const q = new URLSearchParams(location.search)
 const VERIFY = q.get('verify') === '1'
 
+// ---- 深浅主题（dev-board#273）----------------------------------------------
+// 初值来自 ?theme=（editor.html 头部内联脚本已抢先挂了 class，防白闪）；宿主
+// 切换主题时经 lo-relay 推 {type:'set-theme'}。页面底色走 class，引擎的
+// AppBackground 走 set_app_theme 命令——executor 就绪前先记账，ready 后补一发。
+let currentTheme = q.get('theme') === 'dark' ? 'dark' : 'light'
+let themeExecutor = null
+function applyTheme(theme) {
+  currentTheme = theme === 'dark' ? 'dark' : 'light'
+  try { document.documentElement.classList.toggle('theme-dark', currentTheme === 'dark') } catch (e) { /* ignore */ }
+  if (themeExecutor) {
+    themeExecutor.executeCommand('set_app_theme', { mode: currentTheme })
+      .catch((e) => console.warn('[zeta-editor] set_app_theme failed:', e))
+  }
+}
+
 // Standalone verification panel (?verify=1): a few buttons + an IME field that
 // drive the booted executor DIRECTLY (no host), so the editor can be exercised
 // inside the dedicated verification window (desktop/main/zetaoffice-verify.js)
@@ -241,6 +256,7 @@ let cursorInFlight = false
 try {
   hostTransport.subscribe((msg) => {
     if (!msg || msg.__lo !== 'lo-relay') return
+    if (msg.type === 'set-theme') { applyTheme(msg.theme); return }
     if (msg.type !== 'insight-sub') return
     insightSub = !!msg.enabled
   })
@@ -323,6 +339,10 @@ startEditorEndpoint({
   // and the worker returns '' for non-collapsed cursors (double-click selection).
   // 光标邻域上报要用同一个 executor（订阅打开后才会真的调用它）
   insightExecutor = endpoint.executor
+  // 引擎起来后把 AppBackground 调成当前主题的工作区色（浅色也要调：LO 默认灰
+  // 与宿主 --awd-canvas 不同色，会在画布边缘露出异色缝）
+  themeExecutor = endpoint.executor
+  applyTheme(currentTheme)
   try {
     const canvas = document.getElementById('qtcanvas')
     let downAt = null
