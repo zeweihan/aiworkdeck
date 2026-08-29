@@ -70,7 +70,11 @@ class PluginControllerInvokeToolTest {
                 mock(com.checkba.repository.UserRepository.class),
                 mock(com.checkba.service.AdminAccessService.class),
                 mock(com.checkba.service.telemetry.TelemetryService.class),
-                toolRegistry, projectMemberService);
+                toolRegistry, projectMemberService,
+                mock(com.checkba.service.plugin.PluginHostFactory.class),
+                mock(com.checkba.service.ai.ChatModelFactory.class),
+                mock(com.checkba.service.ai.AuxModelResolver.class),
+                mock(com.checkba.service.ai.TokenUsageService.class));
     }
 
     private Map<String, Object> body(Long projectId) {

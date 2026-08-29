@@ -641,7 +641,12 @@ export default {
           this.onDocModified()
         } else if (msg.type === 'selection') {
           // 光标/选区动了：工具栏重读激活态。不标脏——移动光标不是修改文档。
-          if (this.ready) this.uiRefreshKey++
+          if (this.ready) {
+            this.uiRefreshKey++
+            // 插件事件通道（规范 v2.7）：PluginPane 按订阅转发 selection.changed（自带节流）。
+            // payload 只给 fileId——选区内容由插件经 doc.exec get_selection 按 editor 权限拉取
+            uni.$emit('awd:selection-changed', { fileId: this.file && this.file.id })
+          }
         } else if (msg.type === 'evidence-drop') {
           this.onGuestEvidenceDrop(msg.payload)
         } else if (msg.type === 'cursor-context') {

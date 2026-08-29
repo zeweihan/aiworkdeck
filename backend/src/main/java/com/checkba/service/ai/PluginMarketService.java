@@ -65,6 +65,10 @@ public class PluginMarketService {
     private final PluginService pluginService;
     private final MarketPurchaseGate purchaseGate;
 
+    /** 宿主版本（规范 v2.7 P0：安装前 minHostVersion 闸的比较基准；dev 态 "dev" 非 semver 时跳过） */
+    @org.springframework.beans.factory.annotation.Value("${telemetry.app-version:${AWD_APP_VERSION:dev}}")
+    String appVersion = "dev";
+
     /**
      * 插件 manifest 声明的 pack 依赖由它去装。setter 注入而非构造器参数：
      * pack 联动是安装后的可选副作用，缺了它安装链路必须照常工作（既有单测直接
@@ -239,6 +243,9 @@ public class PluginMarketService {
                 Files.createDirectories(dest.getParent());
                 Files.write(dest, data);
             }
+
+            // minHostVersion 闸（规范 v2.7 P0）：staging 落齐后、上位前校验——宁可装不上，不可装成半残
+            checkMinHostVersion(staging);
 
             File target = new File(pluginsDir, id);
             FileUtil.del(target);
@@ -415,6 +422,36 @@ public class PluginMarketService {
             if (seg.equals("..") || seg.equals(".") || seg.isBlank()) return false;
         }
         return true;
+    }
+
+    /**
+     * 安装前的 minHostVersion 闸（规范 v2.7 P0）：读 staging 里的 manifest.json，
+     * 宿主低于要求时抛异常中止安装（staging 由调用方清理）。manifest 缺失/解析失败
+     * 不在这里拦——那是既有验签与 rescan 链路的职责。
+     */
+    void checkMinHostVersion(java.nio.file.Path staging) {
+        java.nio.file.Path manifestPath = staging.resolve("manifest.json");
+        if (!Files.isRegularFile(manifestPath)) {
+            return;
+        }
+        String min;
+        try {
+            min = cn.hutool.json.JSONUtil.parseObj(Files.readString(manifestPath)).getStr("minHostVersion", null);
+        } catch (Exception e) {
+            return;
+        }
+        if (min == null || min.isBlank() || !com.checkba.util.Semver.isSemver(min)) {
+            return;
+        }
+        if (!com.checkba.util.Semver.isSemver(appVersion)) {
+            log.warn("Host version '{}' is not semver, skip minHostVersion install gate", appVersion);
+            return;
+        }
+        if (com.checkba.util.Semver.compare(appVersion, min) < 0) {
+            throw new IllegalStateException(LangText.of(
+                    "插件需要宿主版本 ≥ " + min + "（当前 " + appVersion + "），请先升级客户端再安装",
+                    "Plugin requires host >= " + min + " (current " + appVersion + "); upgrade the app first"));
+        }
     }
 
     static int compareSemver(String a, String b) {

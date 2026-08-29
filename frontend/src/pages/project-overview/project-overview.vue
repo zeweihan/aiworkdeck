@@ -808,6 +808,7 @@
             :permissions="activeDynamicPlugin.permissions || []"
             :project-id="projectId"
             :get-active-editor="getPluginActiveEditor"
+            :dev-installed="!!activeDynamicPlugin.devInstalled"
             @kickoff="onPluginQuickAction"
           />
           <PluginGuidePane
@@ -1116,6 +1117,7 @@
                       :permissions="activeFileLeft.permissions || []"
                       :project-id="projectId"
                       :get-active-editor="getPluginActiveEditor"
+                      :dev-installed="!!activeFileLeft.devInstalled"
                     />
                     <!-- .drawio：诉讼可视化四份产物里唯一的可继续编辑版，走内嵌
                          draw.io。没有这条分支它会落进 FilePreview 的「暂不支持
@@ -1262,6 +1264,7 @@
                       :permissions="activeFileRight.permissions || []"
                       :project-id="projectId"
                       :get-active-editor="getPluginActiveEditor"
+                      :dev-installed="!!activeFileRight.devInstalled"
                     />
                     <DrawioEditor
                       v-else-if="isDrawioFile(activeFileRight)"
@@ -5795,6 +5798,8 @@ export default {
               triggers: Array.isArray(p.triggers) ? p.triggers : [],
               // manifest.permissions：PluginPane 的桥按它逐调用裁剪能力
               permissions: p.permissions || [],
+              // 本机 dev 免签直装标记（规范 v2.7）：实验 API（x- 前缀桥方法）只对它开放
+              devInstalled: !!p.devInstalled,
               // web/ 相对路径映射成后端静态服务地址；绝对 URL 原样保留（旧形态）
               frontendEntry
             }

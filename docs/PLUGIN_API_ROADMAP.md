@@ -69,33 +69,36 @@ VS Code 让渡给插件的不是「UI 挂件」，而是三样核心资产——
 原则：**抄机制不抄规模**——声明式优先、协议层杠杆、只加不改、实验隔离、官方功能
 插件化（狗粮）。插件作者画像是「专业人士 + AI 写插件」，API 面要 AI 一次能写对。
 
-### P0 治理地基（随下一个插件规范版本，先立规矩再扩面）
-- manifest 加 `minHostVersion`（老宿主给明确提示，不静默半残）；
-- 实验 API 机制：`x-` 前缀桥方法 + 广场拒收使用实验方法的投稿，转正去前缀；
-- 「只加不改」写进 PLUGIN_SPEC 作为章程；每次桥变更四处同步（宿主/SDK/官网模板/模拟器）的纪律固化。
+### P0 治理地基 ——【已落地，规范 v2.7，dev-board#280】
+设计定稿：`docs/superpowers/specs/2026-08-29-plugin-p0-governance-foundation.md`。
+- manifest `minHostVersion`（PLUGIN_SPEC §2）：不达标登记不生效 + 装前拦 + 管理页提示升级；
+- 实验 API：`x-` 前缀桥方法，运行时只对 dev 免签直装插件放行（§12.4）；
+- 「只加不改」章程 + 四处同步纪律固化为 PLUGIN_SPEC §12。
 
-### P1 开放文档读写权（对位 TextDocument，生态的第一根主干）
-- 桥新增 `doc.*` 命名空间：把既有编辑原语的**安全子集**（读文本/查找/选区/插入/
-  格式化/批注/书签）暴露给 Web 插件，走既有 `editor` 权限与 EDITOR_ACTIONS 白名单，
-  AI 管线与插件同闸；
-- 事件通道：`{type:'event'}` 推送 + `awd.events.on()`，首批 `files.changed` /
-  `selection.changed` / `project.switched`（尽调工作台现在靠轮询，就是第一个用户）。
+### P1 开放文档读写权 ——【已落地，规范 v2.7，dev-board#281】
+设计定稿：`docs/superpowers/specs/2026-08-29-plugin-p1-doc-api-and-events.md`。
+- 桥 `doc.exec`/`doc.active`（§8.4）：白名单 = 宿主 SPI DOC_ACTIONS 同一份清单（JAR 与
+  Web 插件同一张能力面），写入带修订署名，executor 层 EDITOR_ACTIONS 仍是第二道闸；
+- 事件通道（§8.8）：`events.subscribe` + `type:'event'` 推送，首批 `files.changed` /
+  `selection.changed` / `project.switched`；尽调工作台插件升级 SDK 1.3.0 后即可接。
 
-### P2 开放 AI 调用权（对位 lm.* / Chat Participant）
-- `ai.request`：插件经平台 Credits 通道调模型（用户已付费授权，插件免带 Key——
-  计费/配额/审计全在宿主，照搬 lm.* 的逻辑）；
-- Skill 注册已等价于 Chat Participant 的「@技能」，补齐插件面板与对话面板的双向
-  联动（对话里产出 → 插件面板可订阅）。
+### P2 开放 AI 调用权 ——【ai.request 已落地，规范 v2.7，dev-board#282】
+设计定稿：`docs/superpowers/specs/2026-08-29-plugin-p2-ai-request.md`。
+- `ai.request` 走平台 Credits 辅助模型（§8.4），16000 字符 + 10 次/分钟，权限值 `ai`；
+  流式与选模型走 `x-` 实验通道验证后再转正；
+- 【未做】插件面板与对话面板双向联动（对话产出 → 面板订阅）：等 P1 事件通道在真实
+  插件上跑熟后另开卡。
 
-### P3 开放数据源接入权（对位 FileSystemProvider/LSP，杠杆层）
-- 把 evidence.retrieve.v1 升格为**公开 Provider 协议**：第三方按协议接新数据源
-  （工商/裁判文书/财务数据库/行业库），插件声明 provider、宿主统一检索与展示；
-  这是「协议层杠杆」的直接复刻——数据源接一次，所有依据/尽调/核查场景全能用。
+### P3 开放数据源接入权（对位 FileSystemProvider/LSP，杠杆层）——【设计已定稿，待实施】
+设计定稿：`docs/superpowers/specs/2026-08-29-plugin-p3-evidence-provider-protocol.md`（dev-board#283）。
+- evidence.retrieve.v1 原样升格公开 Provider 协议：JAR SPI（plugin-api 1.2.0 `EvidenceProvider`）+
+  manifest `contributes.evidenceSources`（MCP 声明式接入）两条通道；conformance 测试基类随
+  plugin-api 发布；第一个狗粮 = 判决书通道重构为官方插件。
 
-### P4 声明式长尾（对位 languages/snippets/themes 的生态大头）
-- 文书体裁/模板/HOUSE 格式画像的声明式贡献点（零代码插件形态，AI 最容易批量产出，
-  也最贴近会计师/文员等非开发者作者）；
-- 设置贡献点（manifest.settings → 广场渲染表单 → 桥 `settings.get`）；l10n 字符串表。
+### P4 声明式长尾（对位 languages/snippets/themes 的生态大头）——【设计已定稿，按贡献点分期实施】
+设计定稿：`docs/superpowers/specs/2026-08-29-plugin-p4-declarative-contributions.md`（dev-board#284）。
+- `contributes.templates` / `contributes.styleProfiles` / `settings` / l10n 四个贡献点各自独立发布；
+  第一个狗粮 = HR 用工模板包 30 份打成纯声明式插件。
 
 ### 持续项
 - 隔离策略复审：Web 插件（sandbox）保持默认推荐形态；JAR 插件长期看要么进程隔离

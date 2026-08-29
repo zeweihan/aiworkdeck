@@ -98,6 +98,30 @@ class PluginMarketServiceTest {
     }
 
     @Test
+    @DisplayName("minHostVersion 安装闸（规范 v2.7 P0）：宿主达标放行、不达标抛异常、dev 态与无声明放行")
+    void minHostVersionInstallGate() throws Exception {
+        PluginMarketService svc = service("");
+        java.nio.file.Path staging = pluginsDir.resolve("staging-test");
+        java.nio.file.Files.createDirectories(staging);
+
+        // 无 manifest：不拦（既有验签链路的职责）
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> svc.checkMinHostVersion(staging));
+
+        java.nio.file.Files.writeString(staging.resolve("manifest.json"),
+                "{\"id\":\"x\",\"minHostVersion\":\"0.29.0\"}");
+        svc.appVersion = "0.28.0";
+        IllegalStateException e = org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalStateException.class, () -> svc.checkMinHostVersion(staging));
+        org.junit.jupiter.api.Assertions.assertTrue(e.getMessage().contains("0.29.0"));
+
+        svc.appVersion = "0.29.0";
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> svc.checkMinHostVersion(staging));
+
+        svc.appVersion = "dev";
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> svc.checkMinHostVersion(staging));
+    }
+
+    @Test
     @DisplayName("签名验证：正确签名通过，篡改任一字段即失败")
     void signatureVerification() throws Exception {
         Map<String, String> files = new TreeMap<>();

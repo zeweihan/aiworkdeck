@@ -33,9 +33,9 @@ public class PluginService {
     /** system_setting 中存放被禁用插件 id 列表（JSON 数组）的 key */
     public static final String DISABLED_KEY = "ai.plugins.disabled";
 
-    /** manifest 规范 v1 已定义的权限值，未知值仅告警不拒绝（向前兼容） */
+    /** manifest 已定义的权限值（v1 四项 + v2.7 的 ai），未知值仅告警不拒绝（向前兼容） */
     private static final Set<String> KNOWN_PERMISSIONS =
-            Set.of("file_read", "file_write", "network", "editor");
+            Set.of("file_read", "file_write", "network", "editor", "ai");
 
     /** manifest.packs 里的 pack id 规则，与 NativePackService / PluginMarketService 同一套 */
     private static final java.util.regex.Pattern PACK_ID =
@@ -89,6 +89,20 @@ public class PluginService {
      */
     @Value("${ai.plugins.disabled-cache-ttl-ms:5000}")
     long disabledCacheTtlMs = 5000;
+
+    /**
+     * 宿主版本（规范 v2.7 P0：manifest.minHostVersion 的比较基准）。
+     * 桌面壳经 AWD_APP_VERSION 注入，单一来源 desktop/package.json；
+     * dev 态落 "dev"（非 semver）——比较时跳过并 WARN，与 NativePackService.checkCompatibility 同口径。
+     */
+    @Value("${telemetry.app-version:${AWD_APP_VERSION:dev}}")
+    String appVersion = "dev";
+
+    /** pluginId -> 不兼容原因（宿主版本低于 manifest.minHostVersion）；rescan 时重算 */
+    private final Map<String, String> incompatiblePluginIds = new ConcurrentHashMap<>();
+
+    /** 本机 dev 免签直装（目录带 .awd-dev 标记）的插件 id；实验 API（x- 前缀桥方法）只对它们开放 */
+    private final Set<String> devInstalledPluginIds = ConcurrentHashMap.newKeySet();
 
     private volatile long disabledStateRefreshedAt = 0L;
 
@@ -210,6 +224,12 @@ public class PluginService {
          * </ul>
          */
         private String frontendEntry;
+        /**
+         * 本插件需要的最低宿主版本（规范 v2.7 P0，可选）。缺省 = 不限；
+         * 非法格式解析时置空并 WARN。宿主低于此版本时插件登记但不生效（不加载 JAR、
+         * 不注册工具、不服务 web/），管理页经 incompatibleReason 提示升级。
+         */
+        private String minHostVersion;
         private List<String> backendJars;
         /**
          * 依赖的原生资源包 id 列表（规范 v2.3，见 docs/NATIVE_PACK_DISTRIBUTION.md §11.4）。
@@ -282,6 +302,8 @@ public class PluginService {
         toolToPluginId.clear();
         pluginSkillDirs.clear();
         pluginDirById.clear();
+        incompatiblePluginIds.clear();
+        devInstalledPluginIds.clear();
         loadDisabledState();
         loadPlugins();
         // 插件更新/卸载后 loadPlugins() 可能已经把同名工具换成了新 bean，
@@ -312,8 +334,42 @@ public class PluginService {
      * 供 PluginController 与 ToolRegistry 查询；内存缓存超过 TTL 时从配置表重读。
      */
     public boolean isEnabled(String pluginId) {
+        // 不兼容 = 有效未启用（规范 v2.7 P0）：用户的启停意愿位不动，宿主升级后自然恢复。
+        // 既有全部消费点（ToolRegistry 三处 / PluginWebController / invokeTool / skill isAvailable）
+        // 都查这里，于是「不加载、不注册、不服务」免改自动成立。
+        if (incompatiblePluginIds.containsKey(pluginId)) {
+            return false;
+        }
         maybeRefreshDisabledState();
         return !disabledPluginIds.contains(pluginId);
+    }
+
+    /** 宿主版本低于 manifest.minHostVersion 时的原因文案；兼容返回 null（供管理页提示升级） */
+    public String incompatibleReason(String pluginId) {
+        return incompatiblePluginIds.get(pluginId);
+    }
+
+    /** 该插件是否为本机 dev 免签直装（目录带 .awd-dev 标记）；实验 API 只对它们开放 */
+    public boolean isDevInstalled(String pluginId) {
+        return devInstalledPluginIds.contains(pluginId);
+    }
+
+    /** minHostVersion 与宿主版本比对；不达标返回原因文案，达标/无声明/dev 态宿主返回 null */
+    private String computeIncompatibleReason(PluginMetadata meta) {
+        String min = meta.getMinHostVersion();
+        if (min == null || min.isBlank()) {
+            return null;
+        }
+        if (!com.checkba.util.Semver.isSemver(appVersion)) {
+            // dev 态（appVersion="dev"）放行，与 NativePackService.checkCompatibility 同口径
+            log.warn("Host version '{}' is not semver, skip minHostVersion check for plugin {}",
+                    appVersion, meta.getId());
+            return null;
+        }
+        if (com.checkba.util.Semver.compare(appVersion, min) < 0) {
+            return "需要宿主版本 ≥ " + min + "（当前 " + appVersion + "），请升级客户端";
+        }
+        return null;
     }
 
     private void maybeRefreshDisabledState() {
@@ -375,6 +431,10 @@ public class PluginService {
         if (enabled && revokedPluginIds.containsKey(pluginId)) {
             throw new IllegalStateException(
                     "该插件已被平台下架：" + revokedPluginIds.get(pluginId) + "，无法启用，建议卸载");
+        }
+        // 版本不兼容时拒绝启用：不能静默翻一个不生效的位（规范 v2.7 P0）
+        if (enabled && incompatiblePluginIds.containsKey(pluginId)) {
+            throw new IllegalStateException(incompatiblePluginIds.get(pluginId));
         }
         if (enabled) {
             disabledPluginIds.remove(pluginId);
@@ -619,6 +679,21 @@ public class PluginService {
                 plugins.add(meta);
                 pluginDirById.put(meta.getId(), pluginDir);
 
+                // dev 免签直装标记（实验 API 只对这些插件开放，见规范 v2.7 §实验 API）
+                if (new File(pluginDir, ".awd-dev").exists()) {
+                    devInstalledPluginIds.add(meta.getId());
+                }
+
+                // minHostVersion 兼容闸（规范 v2.7 P0）：不达标的插件登记元数据但不生效。
+                // 必须在下面的 isEnabled 检查之前算好——isEnabled 会把不兼容视为未启用，
+                // 于是 JAR 加载 / 工具注册 / web 静态服务全部经既有消费点自动拦住。
+                String incompatible = computeIncompatibleReason(meta);
+                if (incompatible != null) {
+                    incompatiblePluginIds.put(meta.getId(), incompatible);
+                    log.warn("Plugin {} requires host >= {} (current {}), registered but inactive",
+                            meta.getId(), meta.getMinHostVersion(), appVersion);
+                }
+
                 // 收集插件携带的 skill 目录（规范 v2.1）：交给 SkillRegistry 注册，本服务不解析 skill.yml
                 if (meta.getSkills() != null) {
                     for (String skillSubdir : meta.getSkills()) {
@@ -711,6 +786,12 @@ public class PluginService {
                             meta.getId(), p, KNOWN_PERMISSIONS);
                 }
             }
+        }
+        // minHostVersion（规范 v2.7 P0）：非法格式视为缺省（与 permissions 未知值同口径，只警不拒）
+        if (meta.getMinHostVersion() != null && !meta.getMinHostVersion().isBlank()
+                && !com.checkba.util.Semver.isSemver(meta.getMinHostVersion())) {
+            log.warn("Plugin {} declares invalid minHostVersion '{}', ignored", meta.getId(), meta.getMinHostVersion());
+            meta.setMinHostVersion(null);
         }
         // guide（规范 v2.5）：quickActions 里 label 与 prompt 缺一不可——没有 prompt 的按钮点了没反应，
         // 没有 label 的按钮画不出来；直接丢弃而不是整个 guide 作废。

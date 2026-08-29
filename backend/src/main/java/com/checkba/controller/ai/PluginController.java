@@ -47,6 +47,11 @@ public class PluginController {
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
     private final ToolRegistry toolRegistry;
     private final com.checkba.service.ProjectMemberService projectMemberService;
+    // 以下四个只服务 aiComplete（规范 v2.7 P2 桥 ai.request 的服务端落点）
+    private final com.checkba.service.plugin.PluginHostFactory pluginHostFactory;
+    private final com.checkba.service.ai.ChatModelFactory chatModelFactory;
+    private final com.checkba.service.ai.AuxModelResolver auxModelResolver;
+    private final com.checkba.service.ai.TokenUsageService tokenUsageService;
 
     @lombok.Data
     public static class PluginView {
@@ -66,6 +71,12 @@ public class PluginController {
         private PluginService.PluginGuide guide;
         /** 被平台封禁时的原因；非空表示该插件已下架，界面应标红并禁止启用 */
         private String revokedReason;
+        /** manifest.minHostVersion（规范 v2.7 P0）；null = 不限 */
+        private String minHostVersion;
+        /** 宿主版本低于 minHostVersion 时的原因文案；非空表示插件不生效，界面应提示升级客户端 */
+        private String incompatibleReason;
+        /** 是否本机 dev 免签直装（.awd-dev 标记）；实验 API（x- 前缀桥方法）只对它开放 */
+        private boolean devInstalled;
     }
 
     @GetMapping("/list")
@@ -237,6 +248,92 @@ public class PluginController {
         return ResponseEntity.ok(out);
     }
 
+    /** ai.request 的 prompt+system 合计上限（字符）：面板内一次性辅助推理，不是对话通道 */
+    static final int AI_REQUEST_MAX_CHARS = 16000;
+
+    /**
+     * Web 插件桥 ai.request 的服务端落点（规范 v2.7 P2）：插件经平台 Credits 通道调辅助模型，
+     * 免带 Key——计费/配额/审计全在宿主。安全闸自上而下对齐 invokeTool：
+     * 登录会话 → 插件启用未封禁 → manifest 声明 {@code ai} 权限（服务端是权威）→ 项目写权限
+     * → 长度上限 → 每插件 10 次/分钟频控 → PlatformAiUserScope 里调辅助模型并记账。
+     * 响应恒 200：{@code {code:0, text, modelId}} 或 {@code {code:1, error}}。
+     */
+    @PostMapping("/{id}/ai/complete")
+    public ResponseEntity<Map<String, Object>> aiComplete(
+            @PathVariable("id") String pluginId,
+            @org.springframework.web.bind.annotation.RequestBody(required = false) Map<String, Object> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (userId == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(LangText.of("请先登录", "Please sign in first")));
+        }
+        PluginService.PluginMetadata meta = pluginService.getPlugin(pluginId);
+        if (meta == null || !pluginService.isEnabled(pluginId) || pluginService.revokedReason(pluginId) != null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error(LangText.of("插件不存在或未启用: ", "Plugin not found or disabled: ") + pluginId));
+        }
+        if (meta.getPermissions() == null || !meta.getPermissions().contains("ai")) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(error(LangText.of("插件未声明 ai 权限", "Plugin does not declare the 'ai' permission")));
+        }
+        Object pidRaw = body == null ? null : body.get("projectId");
+        Long projectId = pidRaw instanceof Number n ? n.longValue() : null;
+        if (projectId == null || !projectMemberService.hasWritePermission(projectId, userId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("无权限访问该项目", "No access to this project")));
+        }
+        String prompt = body.get("prompt") instanceof String s ? s : null;
+        String system = body.get("system") instanceof String s ? s : null;
+        String purpose = body.get("purpose") instanceof String s ? s : "";
+        if (prompt == null || prompt.isBlank()) {
+            return ResponseEntity.ok(errorCoded("invalid_params", LangText.of("prompt 不能为空", "prompt is required")));
+        }
+        int total = prompt.length() + (system == null ? 0 : system.length());
+        if (total > AI_REQUEST_MAX_CHARS) {
+            return ResponseEntity.ok(errorCoded("quota_exceeded",
+                    LangText.of("prompt+system 超过 " + AI_REQUEST_MAX_CHARS + " 字符上限",
+                            "prompt+system exceeds the " + AI_REQUEST_MAX_CHARS + " character limit")));
+        }
+        try {
+            pluginHostFactory.acquireAiQuota(pluginId);
+        } catch (com.checkba.plugin.api.HostQuotaException e) {
+            return ResponseEntity.ok(errorCoded("quota_exceeded", e.getMessage()));
+        }
+        try {
+            String modelId = auxModelResolver.auxModelId();
+            java.util.List<dev.langchain4j.data.message.ChatMessage> messages = new java.util.ArrayList<>();
+            if (system != null && !system.isBlank()) {
+                messages.add(dev.langchain4j.data.message.SystemMessage.from(system));
+            }
+            messages.add(dev.langchain4j.data.message.UserMessage.from(prompt));
+            dev.langchain4j.model.output.Response<dev.langchain4j.data.message.AiMessage> r =
+                    com.checkba.service.ai.PlatformAiUserScope.call(userId,
+                            () -> chatModelFactory.getAuxChatModel().generate(messages));
+            try {
+                if (r.tokenUsage() != null) {
+                    tokenUsageService.recordUsage(projectId, userId, modelId, r.tokenUsage(), null);
+                }
+            } catch (Exception e) {
+                org.slf4j.LoggerFactory.getLogger(PluginController.class)
+                        .warn("plugin {} ai.request usage record failed: {}", pluginId, e.getMessage());
+            }
+            org.slf4j.LoggerFactory.getLogger(PluginController.class)
+                    .info("plugin {} ai.request purpose={} model={} tokens={}", pluginId, purpose, modelId, r.tokenUsage());
+            Map<String, Object> out = ok();
+            out.put("text", r.content() == null ? "" : r.content().text());
+            out.put("modelId", modelId);
+            return ResponseEntity.ok(out);
+        } catch (Exception e) {
+            return ResponseEntity.ok(errorCoded("ai_failed", e.getMessage()));
+        }
+    }
+
+    private static Map<String, Object> errorCoded(String errorCode, String message) {
+        Map<String, Object> result = new HashMap<>();
+        result.put("code", 1);
+        result.put("errorCode", errorCode);
+        result.put("message", message);
+        return result;
+    }
+
     private PluginView toView(PluginService.PluginMetadata meta) {
         PluginView view = new PluginView();
         view.setId(meta.getId());
@@ -253,6 +350,9 @@ public class PluginController {
         view.setGuide(meta.getGuide());
         view.setEnabled(pluginService.isEnabled(meta.getId()));
         view.setRevokedReason(pluginService.revokedReason(meta.getId()));
+        view.setMinHostVersion(meta.getMinHostVersion());
+        view.setIncompatibleReason(pluginService.incompatibleReason(meta.getId()));
+        view.setDevInstalled(pluginService.isDevInstalled(meta.getId()));
         return view;
     }
 

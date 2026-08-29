@@ -59,7 +59,7 @@ public class PluginDevService {
     /** 开发安装的来源标记文件名（JSON：projectId / folderId / installedAt） */
     static final String DEV_MARKER = ".awd-dev";
 
-    private static final Set<String> ALLOWED_PERMISSIONS = Set.of("file_read", "file_write", "network", "editor");
+    private static final Set<String> ALLOWED_PERMISSIONS = Set.of("file_read", "file_write", "network", "editor", "ai");
     private static final int MAX_FILES = 200;
     private static final long MAX_FILE_BYTES = 5L * 1024 * 1024;
     private static final long MAX_TOTAL_BYTES = 20L * 1024 * 1024;
@@ -69,6 +69,10 @@ public class PluginDevService {
     private final StorageServiceFactory storageServiceFactory;
     private final PluginService pluginService;
     private final String pluginsDir;
+
+    /** 宿主版本（规范 v2.7 P0：minHostVersion 校验基准；dev 态 "dev" 非 semver 时跳过比较） */
+    @Value("${telemetry.app-version:${AWD_APP_VERSION:dev}}")
+    String appVersion = "dev";
 
     public PluginDevService(ProjectFileRepository projectFileRepository,
                             ProjectFileService projectFileService,
@@ -326,9 +330,23 @@ public class PluginDevService {
             for (Object p : permissions) {
                 if (!ALLOWED_PERMISSIONS.contains(String.valueOf(p))) {
                     errors.add(LangText.of("未知权限: ", "Unknown permission: ") + p
-                            + LangText.of("（可用: file_read / file_write / network / editor）",
-                                          " (allowed: file_read / file_write / network / editor)"));
+                            + LangText.of("（可用: file_read / file_write / network / editor / ai）",
+                                          " (allowed: file_read / file_write / network / editor / ai)"));
                 }
+            }
+        }
+        // minHostVersion（规范 v2.7 P0）：格式非法报错；宿主可比且不达标也报错（dev 态宿主 "dev" 跳过）
+        String minHost = manifest.getStr("minHostVersion", null);
+        if (minHost != null && !minHost.isBlank()) {
+            if (!com.checkba.util.Semver.isSemver(minHost)) {
+                errors.add(LangText.of(
+                        "minHostVersion 不是合法的语义化版本号: " + minHost,
+                        "minHostVersion is not a valid semver: " + minHost));
+            } else if (com.checkba.util.Semver.isSemver(appVersion)
+                    && com.checkba.util.Semver.compare(appVersion, minHost) < 0) {
+                errors.add(LangText.of(
+                        "插件要求宿主版本 ≥ " + minHost + "，当前宿主是 " + appVersion + "，请先升级客户端",
+                        "Plugin requires host >= " + minHost + " but current host is " + appVersion));
             }
         }
         // 开发安装只收纯 Web 插件：以下字段任一非空即拒装（安全模型见类注释）

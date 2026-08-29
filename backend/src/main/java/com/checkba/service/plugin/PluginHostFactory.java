@@ -129,6 +129,11 @@ public class PluginHostFactory {
         this.quota = quota != null ? quota : new PluginHostQuota();
     }
 
+    /** 桥 ai.request 的频控入口（规范 v2.7 P2）：超限抛 HostQuotaException，PluginController 消费 */
+    public void acquireAiQuota(String pluginId) {
+        quota.acquireAi(pluginId);
+    }
+
     public PluginHost forPlugin(String pluginId) {
         if (pluginId == null || pluginId.isBlank()) {
             throw new IllegalArgumentException("pluginId required");
