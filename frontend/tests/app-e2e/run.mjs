@@ -13,6 +13,15 @@
 //       （打包版常驻即可）；冷启动联调可用新 jar 在 9797 顶班
 //       （SPRING_PROFILES_ACTIVE=desktop + 隔离 user.home/H2/cwd）。
 //
+//       **裸 jar 顶班时必须补两样内置资源，否则会打出两条像回归的假失败**
+//       （2026-08-29 发 v0.27.3 时踩到，排查了一轮才发现是跑法缺件）：
+//         AI_SKILLS_BUILTIN_DIR=<repo>/backend/skills   # 内置 skill（脱敏/语音合成/会议录音…）
+//         cp -R <repo>/backend/plugins <cwd>/plugins    # ai.plugins.dir 是相对 cwd 的
+//       这两样在打包态由安装包的 Resources/ 提供，裸 jar 不带。缺了的话
+//       `/api/skills/list` 返回 `[]`，于是「广场安装（启用）脱敏后入口出现」与
+//       「语音面板里是两个 tab」必然超时失败——**症状长得像 UI 回归，其实是环境缺件**。
+//       判断方法：先 `curl <backend>/api/skills/list`，空数组就是这个坑。
+//
 //       **冷启动的新后端必须先有解锁起点**（2026-08 官方版必须账户登录之后的新约束）：
 //       发版默认值关掉了试用码，全新 user.home 起来的后端是 mode=none，而本套件
 //       没有任何办法把它解锁——唯一的路是账户凭据，要真实手机号与官网。

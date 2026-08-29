@@ -30,9 +30,11 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
    桌面端同步，用户侧才对得上号。不做这步 = 发版没发插件端，维护者原话
    「不然用户不会弄」。
    **WPS 加载项（2026-08-28 起）随同一步发**：`cd office-addin && npm run build &&
-   npm run build:wps`，把 dist-wps/ 覆盖上传两台 addin 服务器的
+   npm run build:wps`，把 dist-wps/ 覆盖上传**北京**一台的
    `/opt/aiworkdeck/cloud/web/wps-addin/`（在线模式无安装器概念，覆盖静态目录即
    全量用户生效；壳文件 no-cache 的 nginx 口径见 office-addin/README.md「WPS 加载项」章）。
+   **新加坡刻意不铺 WPS 壳**（2026-08-29 实地核对：SG 只有 office-addin/，没有
+   wps-addin/）——WPS 是国内市场的产品，国际站不提供；别照 Office 插件那样"两台对齐"。
 5. **EN 走查（打 tag 前必过）**：① 以英文语言设置跑 app-e2e 全量（含 J12 英文旅程：切 en-US 断言工作台四列英文锚点 + AI 过程卡工具名无中文，语言键 `awd_app_language`，切语言必须整页 reload）；② 编辑器 boot 用 `?uilang=en-US` 并以 office_thread.js 的 ooLocale 诊断确认 en-US 生效（issue #66 的诊断口径）；③ 人工过一遍英文主界面截图（工作台/设置/AI 面板）。
 6. DMG 安装窗口视觉（PR#204）：`build.dmg` 里的 `contents` 坐标是**图标中心、原点在窗口内容区左上角（不含标题栏）**；窗口尺寸由背景图 1x 像素尺寸决定（660x420），所以没写 `window`。背景图 `desktop/build/background.png` + `background@2x.png` 由 electron-builder 自动合成 hidpi TIFF，源文件是 `desktop/build/dmg-background.html`（顶部注释有 headless Chrome 重新生成命令）。改图标落位必须同步改 HTML 里的光晕/箭头位置，否则错位。
 
@@ -47,7 +49,7 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 | `npm run test:commands` | frontend/ | 命令注册表守卫（tests/commands/，17 条）：加速键查重、编辑器保留键黑名单、Esc/Enter/Tab、macOS 系统截图键、客户视图过滤、菜单树可序列化。**已进 CI**，改 config/commands/ 会被它拦 |
 | `npm run test:lowa-e2e` | frontend/ | LOWA 真引擎+键盘链路（tests/lowa-e2e/run.mjs，puppeteer-core 无头，基线 19 组 169 断言；不经应用页面，天然无登录前置） |
 | `npm run test:lowa-big` | frontend/ | LOWA 大文档基线组（tests/lowa-e2e/big-doc.mjs：150 页/30 表/20 图夹具由 fixtures/gen-big-doc.py 生成到 $TMPDIR，需 python-docx+pillow；六项硬阈三次中位数，约 6 分钟；与 run.mjs 共用 _boot.mjs）。改 office_thread.js 全文路径（枚举/修订/格式化/导出）后必跑 |
-| `npm run test:app-e2e` | frontend/ | 全应用真人模拟（tests/app-e2e/run.mjs；PR-A 去登录后 J1=首启解锁门（试用码），其余旅程 local-mode 免登直达，不再注册 qa_bot_*；需 dev:h5 **5174** + local-mode 后端（默认 9696，冷启动可用新 jar 9797 顶班 + 隔离 user.home/H2/cwd，APP_E2E_JAR 供 J11）。**发版前必跑**（含 J12 英文旅程） |
+| `npm run test:app-e2e` | frontend/ | 全应用真人模拟（tests/app-e2e/run.mjs；PR-A 去登录后 J1=首启解锁门（试用码），其余旅程 local-mode 免登直达，不再注册 qa_bot_*；需 dev:h5 **5174** + local-mode 后端（默认 9696，冷启动可用新 jar 9797 顶班 + 隔离 user.home/H2/cwd，APP_E2E_JAR 供 J11，**J11/J13 还要 JAVA_HOME**）。**裸 jar 顶班必须补内置资源**：`AI_SKILLS_BUILTIN_DIR=<repo>/backend/skills` + 把 `backend/plugins` 拷进 cwd——缺了 `/api/skills/list` 返回 `[]`，脱敏与语音两步必然超时，**症状长得像 UI 回归**（2026-08-29 踩过，run.mjs 头注释有判别法）。**发版前必跑**（含 J12 英文旅程） |
   - **冷启动全配方（2026-08-19 实测走通）**：① 隔离后端起法必须 `cd backend/` 再起 jar——`ai.skills.dir: skills` 是相对 cwd 的，cwd 落在仓库根会把内置 skill 全丢掉（症状：`Skill 不存在: desensitize`）；② 全新 H2 未解锁会让套件卡死在解锁门，按 `tests/_lib/license-gate.mjs` 的 SEED_RECIPE 往隔离 `user.home/.aiworkdeck/license.json` 播存量 trial 票据（宽限期内合法，别开 trial-code 开关）；③ 5174 可能被别的 worktree 的旧 dev 服务占着（症状：断言全打在旧代码上），自起专用端口并设 `APP_E2E_BASE`；④ `APP_E2E_JAR` 一律绝对路径（runner 在临时目录 spawn，相对路径必挂 J11）；⑤ **自起专用端口的 dev server 必须同时带 `VITE_API_BASE_URL` 指向同一个隔离后端**（`npx uni --port 5175` 若不带这个环境变量，编译进浏览器包的 `api.js` 在 `localhost`/`127.0.0.1` 场景会硬编码回退到 `http://localhost:9696`——跟 `APP_E2E_BASE`/`APP_E2E_BACKEND` 完全是两码事，后两个只管 Node 脚本自己的 fetch 与 `page.goto` 目标；漏了这一步的症状是浏览器控制台刷屏「网络请求失败…端口 9696」，J1-J10 因为多数步骤不硬依赖响应内容而看着照样绿，到 J11 云端协作因为真的要读写数据才开始大面积报错，很容易误判成回归）。
   - **J13（资源包安装）另起隔离后端时，同一台隔离后端不能只改 `ai.packs.base-urls`/`ai.plugins.registry-public-key` 就完事**：`--ai.skills.dir` 也必须显式给绝对路径（指向 `backend/skills` 的一份拷贝，不要指向原路径，防意外写入污染仓库文件）——隔离后端的 cwd 不是 `backend/`，相对路径解析不到内置 skill；命令行覆盖用 Spring 的 `--ai.packs.base-urls[0]=` 这种下标写法实测可行（`-D` 系统属性同理），构建测试用 pack 源与签名密钥对的公用逻辑在 `frontend/tests/_lib/pack-stub.mjs`（`startPackStub()`）。UI 侧把浏览器指到隔离后端不需要另起一个 dev server，新开一个 `browser.newPage()` 并在 `evaluateOnNewDocument` 里注入 `window.checkbaDesktop.apiBaseUrl`（`host.js` 的 `getApiBaseUrl()` 对它的优先级高于 `VITE_API_BASE_URL`，与真实 Electron 壳换后端端口同一条注入路径）即可。
 | `npm run test:feedback-e2e` | frontend/ | 反馈浮窗全链路（dev Electron + CDP：真走主进程框选截图、Chromium 假麦克风录音、提交后从 API 回读附件字节）。需 dev:h5 + local-mode 后端，同 desktop-e2e 的端口约定 |
