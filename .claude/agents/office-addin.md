@@ -121,9 +121,13 @@ description: Microsoft Office 与 WPS 插件领域。任务涉及 Word/Excel/PPT
 - **在线模式**：加载项 url = `<baseUrl>/wps/`（必须以 / 结尾）。WPS **每次启动宿主都成对拉 `url/manifest.xml` 与 `url/ribbon.xml`**，两者都得裸可达（别过 SPA 回退/鉴权）；`index.html` 要等用户点按钮才拉。`manifest.xml` 照 wpsjs 脚手架模板（`<JsPlugin><ApiVersion>/<Name>/<Description>`，`<Name>` 与 `ADDON_NAME` 同源），三宿主共用一份——2026-08-29 之前构建脚本从没产出过它，线上一直 404。发版 = 覆盖静态目录，用户无需重装。壳文件（manifest.xml/ribbon.xml/index.html/main.js/js/*）必须 no-cache，ui/assets/* 带 hash 长缓存。
 - **个人版安装唯一通路**：install.html 经本机 WPS 常驻服务 127.0.0.1:58890 `/deployaddons/runParams` 写用户 `%APPDATA%\kingsoft\wps\jsaddons\publish.xml`（个人版 12.1.0.16910 起 oem.ini/jsplugins.xml 被禁）。企业版私有部署仍走 jsplugins.xml + oem.ini `JSPluginsServer`。
 - 三宿主 = publish.xml 里三条记录（type=wps/et/wpp，同一 url、同名 aiworkdeck）。
-- **每个宿主首次加载各弹一次「是否信任」**（2026-08-29 实测）：安装页一次写三条记录，但授信是**按宿主**发生的，不点「确定」那个宿主就不出「AI WorkDeck」选项卡。用户会以为「表格/演示的插件没装上」——排查这类反馈先问有没有在那个宿主里点过确定。
+- **每个宿主首次加载各弹一次「是否信任」，而且点完还得重启那个宿主**（2026-08-29 三宿主实测）：安装页一次写三条记录，但授信是**按宿主**发生的；不点「允许」那个宿主不出「AI WorkDeck」选项卡，**点了「允许」当次会话也照样不出**——加载项要到该宿主下次启动才真正加载。用户会以为「表格/演示的插件没装上」或者「点了允许也没用」。给用户的话术必须带上重启这一步。
 - **任务窗格 id 的 PluginStorage 键按宿主分**（`wps/js/ribbon.js` 的 `AwdPaneKey()` 与 `wpsDoc.taskPaneKey()` 后缀同源 wps/et/wpp，改一边就得改另一边）。理由：三宿主共用一份 PluginStorage，而窗格 id 是各宿主进程内从 1 开始自增的——共用一个键的话，文字里存下的 `id=1` 会被表格拿去 `GetTaskPane(1)`，那是表格自己的 1 号窗格（很可能是别家加载项的），于是点我们的按钮开/关了别人的窗格。ribbon 侧判宿主用 `Application.Presentations/Workbooks/Documents`（三者恰好各有一个非空），**不能用 `Application.Name`**——见下面「Name 判不了是不是 WPS」那条。
-- **「选项卡在、图标空白、点了没反应」= 本机注册态坏掉，不是代码问题**（dev-board#270，2026-08-29 定案）。判据看服务器访问日志：坏的时候 WPS 每次启动宿主都成对拉到 `manifest.xml` + `ribbon.xml`（UA 为空、HTTP/1.1，都是 200，所以**网络是通的**），但**从不去拉 `index.html`/`main.js`/`js/*`**——JS 入口没加载，`OnAddinLoad`/`GetImage`/`OnAction` 一个都没执行，所以图标空白、点击零请求。恢复办法只有一个：**重新走一遍 install.html 安装**。已逐个排除的假根因，别再走一遍：`publish.xml` 的 `enable="enable_dev"`（表格那条至今仍是 `enable_dev` 且工作正常，WPS 自己就这么写）、`jsaddinblockhost.ini`、PluginStorage 共用键、per-host 授信（`authaddin.json` 三个宿主都是 `enable:true,isload:true`）、COM 启动方式、整机重启。
+- **「选项卡不见了 / 图标空白 / 点了没反应」= 该宿主的授信没落地，不是代码问题**（dev-board#270，2026-08-29 三宿主真机定案）。
+  - **机器可读的判据在 `%APPDATA%\kingsoft\wps\jsaddons\authaddin.json`**：每个宿主一条 `{enable, isload}`。**`isload:false` 就是这个病**——实测演示宿主 `enable:true, isload:false` 时，每次启动都重弹授信框、选项卡始终不出现；三个宿主都 `isload:true` 时一切正常。`publish.xml` 只说注册了什么，说明不了加载与否，别拿它当判据。
+  - 服务器访问日志的对应形态：坏的时候 WPS 每次启动宿主仍会成对拉到 `manifest.xml` + `ribbon.xml`（UA 为空、HTTP/1.1、200，**所以网络是通的**），但**不拉 `index.html`/`main.js`/`js/*`**——JS 入口没加载，三个回调一个都没执行。
+  - **恢复办法（就是给用户的话术）**：到安装页把该宿主那条**先「卸载」再「安装」，然后重启这个宿主**。两步缺一不可——单独重启不管用，装完不重启也不管用（**授信框弹出的那一次会话不会加载加载项**，实测三个宿主都这样：点完允许当次仍无选项卡，重启才有）。
+  - 已逐个排除的假根因，别再走一遍：`publish.xml` 的 `enable="enable_dev"`（表格那条至今仍是 `enable_dev` 且工作正常，WPS 自己写的就是这个值；反倒是被手工改成 `enable` 的演示那条一直 `isload:false`）、`jsaddinblockhost.ini`、PluginStorage 共用键、COM 启动方式、整机重启、虚拟机网络不通。
 
 ### 已知地雷（WPS 面）
 
