@@ -23,6 +23,7 @@ function installWps(opts = {}) {
     writes: [], // {kind, prop, value, start, end}
     calls: [], // {name, ...}
     findProps: {}, // Find 对象上被显式钉死的匹配宽松度属性
+    paraRangeReads: 0, // Paragraph.Range 被取过几次（逐段扫描的跨桥代价代理指标）
     selected: null
   }
 
@@ -62,6 +63,7 @@ function installWps(opts = {}) {
   function makeParagraph(seg) {
     return {
       get Range() {
+        state.paraRangeReads++
         return makeRange(seg.start, seg.end)
       },
       get Format() {
@@ -74,7 +76,10 @@ function installWps(opts = {}) {
     let list = paragraphSegs().filter((g) => g.start < e && s < g.end)
     if (!list.length) list = paragraphSegs().filter((g) => s >= g.start && s <= g.end)
     const items = list.map(makeParagraph)
-    return { Count: items.length, Item: (i) => items[i - 1] }
+    // paragraphCountLie：只让「非全文区间」的 Paragraphs.Count 多报一个，用来触发
+    // 合并落笔的安全阀（全文区间不能骗，那是 apply_standard_format 的总段数来源）
+    const lie = opts.paragraphCountLie && !(s === 0 && e === fullLen()) ? 1 : 0
+    return { Count: items.length + lie, Item: (i) => items[i - 1] }
   }
 
   const listFormat = {
@@ -181,6 +186,9 @@ function installWps(opts = {}) {
       Item: () => { throw new Error('mock：无批注') },
       Add: (r, t) => state.calls.push({ name: 'Comments.Add', start: r.Start, end: r.End, text: t })
     },
+    // 默认无表格（apply_standard_format 的表格字号块要读 Tables.Count）；
+    // 要测表格分支就用 opts.docExtras 覆盖
+    Tables: { Count: 0, Item: () => { throw new Error('mock：无表格') } },
     ...(opts.docExtras || {})
   }
   // add_comment 的默认 Comments 也要有 Add
@@ -524,6 +532,122 @@ test('HANDLERS 覆盖任务书列出的全部 Word 面命令', () => {
   for (const name of expected) {
     assert.equal(typeof H[name], 'function', `缺少 handler：${name}`)
   }
+})
+
+/* ==================== apply_standard_format ==================== */
+
+/** 按 \r 切段，与 mock 的 paragraphSegs 同口径 */
+function paraSegsOf(text) {
+  const parts = text.split('\r')
+  const segs = []
+  let pos = 0
+  for (let k = 0; k < parts.length; k++) {
+    const start = pos
+    const end = pos + parts[k].length + (k < parts.length - 1 ? 1 : 0)
+    segs.push({ start, end, text: parts[k] })
+    pos = end
+  }
+  return segs
+}
+
+/**
+ * 把区间写入折算成「每个段落最终拿到的格式」。断言用这个而不是 state.writes 原样，
+ * 才能让同一组期望值在「逐段落笔」和「按 run 合并落笔」两种实现下都成立——
+ * 这正是本次改动必须保持不变的东西。
+ */
+function effectiveFormat(state) {
+  return paraSegsOf(state.text).map((seg) => {
+    const props = {}
+    for (const w of state.writes) {
+      if (w.start < seg.end && seg.start < w.end) props[`${w.kind}.${w.prop}`] = w.value
+    }
+    return { text: seg.text, props }
+  })
+}
+
+const DOC_OPINION = [
+  '法律意见书',
+  '一、背景',
+  '本所律师根据委托进行了尽职调查。',
+  '经核查，目标公司股权结构清晰。',
+  '目标公司不存在重大未决诉讼。',
+  '',
+  '二、结论',
+  '综上所述，本所认为不存在实质性法律障碍。',
+  ''
+].join('\r')
+
+/** 标题/小标题/正文三类各自该拿到的格式特征（不写死 HOUSE 数值，只钉住区分度） */
+function assertHouseShape(rows) {
+  const [title, h1, b1, b2, b3, blank, h2, b4] = rows
+  for (const t of [title, h1, h2]) {
+    assert.equal(t.props['font.Bold'], -1, `${t.text}：标题/小标题应加粗`)
+    assert.equal(t.props['paraFormat.FirstLineIndent'], 0, `${t.text}：标题/小标题不缩进`)
+  }
+  for (const b of [b1, b2, b3, b4]) {
+    assert.equal(b.props['font.Bold'], 0, `${b.text}：正文不加粗`)
+    assert.ok(b.props['paraFormat.FirstLineIndent'] > 0, `${b.text}：正文首行缩进`)
+    assert.equal(b.props['paraFormat.Alignment'], 3, `${b.text}：正文两端对齐`)
+  }
+  assert.equal(title.props['paraFormat.Alignment'], 1, '主标题居中')
+  assert.ok(title.props['font.Size'] > b1.props['font.Size'], '主标题字号大于正文')
+  assert.equal(h1.props['font.Size'], b1.props['font.Size'], '小标题与正文同字号，仅靠加粗区分')
+  // 空段落一个属性都不该被写到——合并区间若跨过它，段后间距和行距会落到空行上
+  assert.deepEqual(blank.props, {}, '空段落不应被格式化')
+}
+
+test('apply_standard_format：标题/小标题/正文分类与落笔结果（特征化）', async () => {
+  const { state } = installWps({ text: DOC_OPINION })
+  const data = await H.apply_standard_format({})
+  assertHouseShape(effectiveFormat(state))
+  assert.equal(data.paragraphs, 7) // 1 标题 + 2 小标题 + 4 正文，空段不计
+  assert.equal(data.titles, 1)
+  assert.equal(data.headings, 2)
+  assert.equal(data.tracked, true)
+  assert.deepEqual(state.trackLog, [true, false])
+})
+
+test('apply_standard_format：连续同类段落合并成一次写入（审阅窗格里少几百条格式修订）', async () => {
+  const { state } = installWps({ text: DOC_OPINION })
+  const data = await H.apply_standard_format({})
+  // run 划分：[标题][一、背景][正文×3][二、结论][正文] = 5 批，而不是 7 段各写一次
+  assert.equal(data.writeBatches, 5)
+  assert.equal(state.writes.filter((w) => w.kind === 'font' && w.prop === 'Size').length, 5)
+  assert.equal(data.degradedRuns, undefined)
+  // 合并没有改变任何一段拿到的格式
+  assertHouseShape(effectiveFormat(state))
+})
+
+test('apply_standard_format：合并区间与段落边界对不上时诚实降级、结果不变', async () => {
+  // paragraphCountLie 模拟「偏移口径失准导致合并区间多盖了一段」
+  const { state } = installWps({ text: DOC_OPINION, paragraphCountLie: true })
+  const data = await H.apply_standard_format({})
+  assert.equal(data.degradedRuns, 1) // 只有正文那个 3 段的 run 会走合并校验
+  assert.equal(data.writeBatches, 7) // 降级后该 run 逐段落笔：4 + 3
+  assert.match(data.note, /逐段落笔/)
+  assertHouseShape(effectiveFormat(state)) // 降级路径给出完全相同的格式
+})
+
+test('apply_standard_format：表格单元格段落单独落笔，不与正文合并成区间', async () => {
+  // 单元格文本尾部带 \x07（VBA 结束符）——合并区间横跨表格边界没有真机验证过
+  const { state } = installWps({ text: '甲文书\r正文一。\r单元格\x07\r正文二。\r' })
+  const data = await H.apply_standard_format({})
+  assert.equal(data.writeBatches, 4) // 四段各写一次，没有任何合并
+  const rows = effectiveFormat(state)
+  assert.ok(rows[2].props['font.Size'] > 0, '单元格段落仍然被格式化了')
+  // 没有任何一次写入同时盖住表格前后的两段正文
+  const spanning = state.writes.filter((w) => w.start < rows[1].end && rows[3].start < w.end)
+  assert.equal(spanning.length, 0)
+})
+
+test('set_numbering：锚点不在文档里时立刻报错，不做逐段扫描', async () => {
+  const { state } = installWps({ text: '第一段\r第二段\r第三段\r' })
+  await assert.rejects(
+    H.set_numbering({ anchorText: '根本不存在的锚点', kind: 'decimal' }),
+    /未找到锚点段落/
+  )
+  // 全文快照 1 次跨桥就能判定；旧写法要逐段取 Range+Text，5000 段的文书上是好几秒
+  assert.equal(state.paraRangeReads, 0)
 })
 
 /* ============ Find 兜底路的前置守卫（能力边界落差，宁可报错不要猜） ============ */
