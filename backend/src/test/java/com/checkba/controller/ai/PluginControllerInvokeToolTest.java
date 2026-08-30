@@ -71,6 +71,7 @@ class PluginControllerInvokeToolTest {
                 mock(com.checkba.service.AdminAccessService.class),
                 mock(com.checkba.service.telemetry.TelemetryService.class),
                 toolRegistry, projectMemberService,
+                mock(com.checkba.service.ai.PluginContributionService.class),
                 mock(com.checkba.service.plugin.PluginHostFactory.class),
                 mock(com.checkba.service.ai.ChatModelFactory.class),
                 mock(com.checkba.service.ai.AuxModelResolver.class),

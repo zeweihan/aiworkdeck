@@ -92,6 +92,8 @@ export default {
   projectIdMissingCreateFolder: 'Project ID not set, cannot create a folder',
   createSuccess: 'Created',
   createFailed: 'Failed to create',
+  blankDocOption: 'Blank document',
+  templateCreateFailed: 'Failed to create from template',
   projectIdMissingCreateFile: 'Project ID not set, cannot create a file',
   createFileFailedRetry: 'Failed to create the file, please try again',
   copiedAndDuplicated: 'Duplicate created',

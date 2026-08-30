@@ -12,6 +12,7 @@ import com.checkba.service.ai.tools.LitigationVisualTools;
 import com.checkba.service.ai.tools.MeetingTools;
 import com.checkba.service.ai.tools.MemoryTools;
 import com.checkba.service.ai.tools.OfficeEditTools;
+import com.checkba.service.ai.tools.ContributedTemplateTools;
 import com.checkba.service.ai.tools.PdfTools;
 import com.checkba.service.ai.tools.PluginDevTools;
 import com.checkba.service.ai.tools.PptxTools;
@@ -48,6 +49,7 @@ final class RealToolBeans {
     /** 与生产 Spring 容器中注册的 AgentToolComponent 集合保持一致 */
     static List<AgentToolComponent> instantiateAll() {
         List<Class<? extends AgentToolComponent>> toolClasses = List.of(
+                ContributedTemplateTools.class,
                 DdExportTools.class,
                 DocumentEditTools.class,
                 EnterpriseDataTools.class,

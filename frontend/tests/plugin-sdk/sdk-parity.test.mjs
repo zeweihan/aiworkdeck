@@ -44,5 +44,11 @@ test('SDK 暴露 v2.7 的 doc.exec / doc.active / events.* / ai.request', () => 
   for (const m of ['doc.exec', 'doc.active', 'events.subscribe', 'events.unsubscribe', 'ai.request']) {
     assert.ok(text.indexOf("call('" + m + "'") >= 0 || text.indexOf("'" + m + "'") >= 0, '缺 ' + m)
   }
-  assert.ok(text.indexOf('1.3.0') >= 0, 'SDK 版本号应为 1.3.0')
+})
+
+test('SDK 暴露 v2.9 的 settings.get，版本号 1.4.0', () => {
+  const text = source.toString('utf8')
+  assert.ok(text.indexOf("call('settings.get'") >= 0, '缺 settings.get')
+  assert.ok(text.indexOf("'settings.changed'") >= 0 || text.indexOf('settings.changed') >= 0, '缺 settings.changed 事件说明')
+  assert.ok(text.indexOf('1.4.0') >= 0, 'SDK 版本号应为 1.4.0')
 })

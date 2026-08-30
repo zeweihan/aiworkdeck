@@ -42,7 +42,7 @@
 // v2.7 实验 API：x- 前缀方法只对本机 dev 免签直装的插件开放（devInstalled prop），
 // 广场装的插件调用一律 experimental_not_allowed——运行时闸是真保证，受理扫描只是辅助。
 import {
-  getProjectFiles, getFileText, invokePluginTool, pluginAiComplete,
+  getProjectFiles, getFileText, invokePluginTool, pluginAiComplete, getPluginSettings,
   createEvidenceLink, addEvidenceTargets, getEvidenceLink, listEvidenceLinks
 } from '@/services/api.js'
 import { PLUGIN_DOC_ACTIONS } from '@/config/pluginDocActions.js'
@@ -74,7 +74,9 @@ const AI_REQUEST_MAX_CHARS = 16000
 const PLUGIN_EVENTS = {
   'files.changed': { permission: 'file_read', throttleMs: 500 },
   'selection.changed': { permission: 'editor', throttleMs: 300 },
-  'project.switched': { permission: null, throttleMs: 0 }
+  'project.switched': { permission: null, throttleMs: 0 },
+  // v2.9：宿主设置表单保存后推送（只推给设置所属的插件，见 mounted 里的过滤）
+  'settings.changed': { permission: null, throttleMs: 0 }
 }
 
 // files.read 允许读取的扩展名。后端 /api/files/{id}/text 会对 docx/pdf 这类做文本抽取，
@@ -177,14 +179,20 @@ export default {
     // 这里按插件的订阅集合转发进 iframe（未订阅不推，见 forwardEvent）
     this._onFilesChanged = () => this.forwardEvent('files.changed', {})
     this._onSelectionChanged = () => this.forwardEvent('selection.changed', {})
+    // v2.9：设置变更只推给设置所属的插件——别的插件订阅了也收不到别人的
+    this._onPluginSettingsChanged = (e) => {
+      if (e && e.pluginId === this.pluginId) this.forwardEvent('settings.changed', {})
+    }
     uni.$on('awd:files-changed', this._onFilesChanged)
     uni.$on('awd:selection-changed', this._onSelectionChanged)
+    uni.$on('awd:plugin-settings-changed', this._onPluginSettingsChanged)
   },
   beforeUnmount() {
     window.removeEventListener('message', this.onMessage)
     if (this._onThemeChanged) { uni.$off(APP_THEME_EVENT, this._onThemeChanged); this._onThemeChanged = null }
     if (this._onFilesChanged) { uni.$off('awd:files-changed', this._onFilesChanged); this._onFilesChanged = null }
     if (this._onSelectionChanged) { uni.$off('awd:selection-changed', this._onSelectionChanged); this._onSelectionChanged = null }
+    if (this._onPluginSettingsChanged) { uni.$off('awd:plugin-settings-changed', this._onPluginSettingsChanged); this._onPluginSettingsChanged = null }
     this.resetEventChannel()
   },
   methods: {
@@ -391,6 +399,24 @@ export default {
             else this._subscribedEvents.delete(name)
           })
           return { ok: true, result: { subscribed: Array.from(this._subscribedEvents) } }
+        }
+
+        case 'settings.get': {
+          // v2.9：只读本插件声明过的设置项（secret 的键不进桥，服务端返回 null → not_found）
+          const key = String(params.key == null ? '' : params.key).trim()
+          if (!key) return { ok: false, error: { code: 'invalid_params', message: '缺少 key' } }
+          let res
+          try {
+            res = await getPluginSettings(this.pluginId)
+          } catch (e) {
+            return { ok: false, error: { code: 'internal_error', message: (e && e.message) || '设置读取失败' } }
+          }
+          const body = res && res.settings !== undefined ? res : (res && res.data) || {}
+          const rows = Array.isArray(body.settings) ? body.settings : []
+          const hit = rows.find(r => r.key === key)
+          if (!hit) return { ok: false, error: { code: 'not_found', message: '未声明的设置项：' + key } }
+          if (hit.secret) return { ok: false, error: { code: 'permission_denied', message: 'secret 设置项不提供给插件页面' } }
+          return { ok: true, result: { key, value: hit.value == null ? '' : String(hit.value) } }
         }
 
         case 'ai.request': {

@@ -84,6 +84,7 @@ class PluginControllerAiCompleteTest {
                 mock(com.checkba.service.AdminAccessService.class),
                 mock(com.checkba.service.telemetry.TelemetryService.class),
                 mock(com.checkba.service.ai.ToolRegistry.class), projectMemberService,
+                mock(com.checkba.service.ai.PluginContributionService.class),
                 pluginHostFactory, chatModelFactory, auxModelResolver, tokenUsageService);
     }
 

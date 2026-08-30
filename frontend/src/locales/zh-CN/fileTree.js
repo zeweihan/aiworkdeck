@@ -92,6 +92,8 @@ export default {
   projectIdMissingCreateFolder: '项目ID未设置，无法创建文件夹',
   createSuccess: '创建成功',
   createFailed: '创建失败',
+  blankDocOption: '空白文档',
+  templateCreateFailed: '从模板创建失败',
   projectIdMissingCreateFile: '项目ID未设置，无法创建文件',
   createFileFailedRetry: '文件创建失败，请重试',
   copiedAndDuplicated: '已复制并创建副本',

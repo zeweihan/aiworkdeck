@@ -47,6 +47,8 @@ public class PluginController {
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
     private final ToolRegistry toolRegistry;
     private final com.checkba.service.ProjectMemberService projectMemberService;
+    /** 声明式贡献点（规范 v2.9 P4）：模板/画像/设置 */
+    private final com.checkba.service.ai.PluginContributionService contributionService;
     // 以下四个只服务 aiComplete（规范 v2.7 P2 桥 ai.request 的服务端落点）
     private final com.checkba.service.plugin.PluginHostFactory pluginHostFactory;
     private final com.checkba.service.ai.ChatModelFactory chatModelFactory;
@@ -334,6 +336,110 @@ public class PluginController {
         result.put("errorCode", errorCode);
         result.put("message", message);
         return result;
+    }
+
+    // ==================== 声明式贡献点（规范 v2.9 P4）====================
+
+    /** 全部已启用插件贡献的文书模板（新建入口与 AI 工具面共用这份清单） */
+    @GetMapping("/contributed/templates")
+    public ResponseEntity<Map<String, Object>> listContributedTemplates(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        if (AuthController.getUserIdFromSession(sessionId) == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(LangText.of("请先登录", "Please sign in first")));
+        }
+        Map<String, Object> result = ok();
+        result.put("templates", contributionService.listTemplates());
+        return ResponseEntity.ok(result);
+    }
+
+    /** 从贡献模板创建项目文件：登录 + 项目写权限（与 invokeTool 同档） */
+    @PostMapping("/contributed/templates/create")
+    public ResponseEntity<Map<String, Object>> createFromTemplate(
+            @org.springframework.web.bind.annotation.RequestBody Map<String, Object> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (userId == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(LangText.of("请先登录", "Please sign in first")));
+        }
+        Object pidRaw = body.get("projectId");
+        Long projectId = pidRaw instanceof Number n ? n.longValue() : null;
+        if (projectId == null || !projectMemberService.hasWritePermission(projectId, userId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("无权限访问该项目", "No access to this project")));
+        }
+        Object parentRaw = body.get("parentId");
+        Long parentId = parentRaw instanceof Number n ? n.longValue() : null;
+        try {
+            var file = contributionService.createFromTemplate(projectId, userId,
+                    String.valueOf(body.get("pluginId")), String.valueOf(body.get("templateId")),
+                    parentId, body.get("name") == null ? null : String.valueOf(body.get("name")));
+            Map<String, Object> result = ok();
+            result.put("fileId", file.getId());
+            result.put("name", file.getName());
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            return ResponseEntity.ok(error(e.getMessage()));
+        }
+    }
+
+    /** 已启用插件贡献的样式画像清单 + 当前选中项 */
+    @GetMapping("/contributed/style-profiles")
+    public ResponseEntity<Map<String, Object>> listContributedStyleProfiles(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        if (AuthController.getUserIdFromSession(sessionId) == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(LangText.of("请先登录", "Please sign in first")));
+        }
+        Map<String, Object> result = ok();
+        result.put("profiles", contributionService.listStyleProfiles());
+        return ResponseEntity.ok(result);
+    }
+
+    /** 选定/清除全局默认画像（admin，与启停同口径）；ref 形如 "<pluginId>:<profileId>"，空 = 清除 */
+    @PostMapping("/contributed/style-profiles/select")
+    public ResponseEntity<Map<String, Object>> selectContributedStyleProfile(
+            @org.springframework.web.bind.annotation.RequestBody(required = false) Map<String, String> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        if (!isAdmin(sessionId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("仅管理员可操作", "Administrator permission required")));
+        }
+        try {
+            contributionService.selectStyleProfile(body == null ? null : body.get("ref"));
+            return ResponseEntity.ok(ok());
+        } catch (Exception e) {
+            return ResponseEntity.ok(error(e.getMessage()));
+        }
+    }
+
+    /** 插件设置：声明 + 当前值（secret 只回显尾 4 位） */
+    @GetMapping("/{id}/settings")
+    public ResponseEntity<Map<String, Object>> getPluginSettings(
+            @PathVariable("id") String pluginId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        if (AuthController.getUserIdFromSession(sessionId) == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(LangText.of("请先登录", "Please sign in first")));
+        }
+        if (pluginService.getPlugin(pluginId) == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error(LangText.of("插件不存在: ", "Plugin not found: ") + pluginId));
+        }
+        Map<String, Object> result = ok();
+        result.put("settings", contributionService.settingsView(pluginId));
+        return ResponseEntity.ok(result);
+    }
+
+    /** 保存插件设置（admin，与启停同口径；按声明校验类型，未声明的键拒绝） */
+    @PostMapping("/{id}/settings")
+    public ResponseEntity<Map<String, Object>> savePluginSettings(
+            @PathVariable("id") String pluginId,
+            @org.springframework.web.bind.annotation.RequestBody Map<String, Object> values,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        if (!isAdmin(sessionId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("仅管理员可操作", "Administrator permission required")));
+        }
+        try {
+            contributionService.saveSettings(pluginId, values);
+            return ResponseEntity.ok(ok());
+        } catch (Exception e) {
+            return ResponseEntity.ok(error(e.getMessage()));
+        }
     }
 
     private PluginView toView(PluginService.PluginMetadata meta) {

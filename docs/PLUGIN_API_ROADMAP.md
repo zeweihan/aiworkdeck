@@ -96,10 +96,13 @@ VS Code 让渡给插件的不是「UI 挂件」，而是三样核心资产——
   conformance 执行器 `EvidenceProviderConformanceKit`（零依赖）随 plugin-api 发布；
   示例 examples/hello-evidence-plugin 全绿。后续狗粮：判决书通道重构为官方插件（另开卡）。
 
-### P4 声明式长尾（对位 languages/snippets/themes 的生态大头）——【设计已定稿，按贡献点分期实施】
+### P4 声明式长尾（对位 languages/snippets/themes 的生态大头）——【已落地，规范 v2.9，dev-board#284】
 设计定稿：`docs/superpowers/specs/2026-08-29-plugin-p4-declarative-contributions.md`（dev-board#284）。
-- `contributes.templates` / `contributes.styleProfiles` / `settings` / l10n 四个贡献点各自独立发布；
-  第一个狗粮 = HR 用工模板包 30 份打成纯声明式插件。
+- 已落地（PLUGIN_SPEC §14）：`contributes.templates`（新建入口选择 + AI 工具两枚）/
+  `contributes.styleProfiles`（解析链插档 + 广场详情页选默认）/ 顶层 `settings`
+  （广场表单 + 桥 settings.get + settings.changed 事件，secret 不进桥）/ l10n（%key% 机制）。
+  与设计稿的差异：四贡献点同批落地（不分四个 PR）、设置值直存 plugin.<id>.<key>、dev 直装仍要求 frontendEntry（纯声明插件走广场/手动安装）。
+  示例 examples/hello-declarative-plugin；狗粮 = HR 用工模板包插件化（包产物见卡 #284）。
 
 ### 持续项
 - 隔离策略复审：Web 插件（sandbox）保持默认推荐形态；JAR 插件长期看要么进程隔离

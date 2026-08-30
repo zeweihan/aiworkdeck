@@ -645,6 +645,53 @@ export function pluginAiComplete(pluginId, projectId, payload) {
   });
 }
 
+// ==== 声明式贡献点（规范 v2.9 P4）====
+
+// 已启用插件贡献的文书模板清单 -> { code, templates: [{pluginId, id, name, genre, description, fileExt}] }
+export function getContributedTemplates() {
+  return request({ url: '/api/plugins/contributed/templates', method: 'GET' });
+}
+
+// 从贡献模板创建项目文件（登录 + 项目写权限）-> { code, fileId, name }
+export function createFileFromContributedTemplate(pluginId, templateId, projectId, parentId, name) {
+  return request({
+    url: '/api/plugins/contributed/templates/create',
+    method: 'POST',
+    data: { pluginId, templateId, projectId, parentId, name },
+    header: { 'Content-Type': 'application/json' },
+  });
+}
+
+// 插件设置：声明 + 当前值（secret 只回显尾 4 位）-> { code, settings: [...] }
+export function getPluginSettings(pluginId) {
+  return request({ url: `/api/plugins/${pluginId}/settings`, method: 'GET' });
+}
+
+// 保存插件设置（仅管理员；按声明校验类型）
+export function savePluginSettings(pluginId, values) {
+  return request({
+    url: `/api/plugins/${pluginId}/settings`,
+    method: 'POST',
+    data: values,
+    header: { 'Content-Type': 'application/json' },
+  });
+}
+
+// 插件贡献的样式画像清单 -> { code, profiles: [{pluginId, id, name, selected}] }
+export function getContributedStyleProfiles() {
+  return request({ url: '/api/plugins/contributed/style-profiles', method: 'GET' });
+}
+
+// 选定/清除全局默认画像（仅管理员）；ref 形如 "<pluginId>:<profileId>"，空 = 清除
+export function selectContributedStyleProfile(ref) {
+  return request({
+    url: '/api/plugins/contributed/style-profiles/select',
+    method: 'POST',
+    data: { ref: ref || '' },
+    header: { 'Content-Type': 'application/json' },
+  });
+}
+
 // 重新扫描 plugins/ 目录（仅管理员）
 export function rescanPlugins() {
   return request({

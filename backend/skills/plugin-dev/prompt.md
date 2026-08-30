@@ -44,6 +44,7 @@
 ```
 
 - `permissions` 可用值：`file_read`（读项目文件）、`file_write`（预留）、`network`（放开 fetch 到 https）、`editor`（文档读写：doc.*/evidence.*，v2.7 起真实生效）、`ai`（面板内静默调平台模型 ai.request，v2.7 起，烧用户 Credits——真用得上才声明）。未声明 `file_read` 时调 `files.*` 会得到 `permission_denied`；未声明 `network` 时 CSP 是 `connect-src 'none'`，fetch 一律被浏览器拦截。权限最小化：用不到的不要声明。
+- **v2.9 声明式贡献点**：manifest 顶层 `settings`（用户可配置项，广场详情页渲染表单）与 `contributes.templates`/`contributes.styleProfiles`（文书模板/样式画像，纯数据文件）对开发安装开放；`contributes.evidenceSources` 不收（数据源接入要走广场审核）。字段形状见 docs/PLUGIN_SPEC.md §13/§14。
 - **开发安装只收纯 Web 插件**：`backendJars` / `tools` / `skills` / `packs` 任一非空会被拒装。需要后端代码的插件必须走插件广场的人工审核 + 签名流程，不要试图绕开。
 
 ## 运行环境（沙箱边界，写代码前必须知道）
@@ -77,6 +78,7 @@
 | `awd.doc.active()` | - | `{ fileId, kind }` | **v2.7**：当前聚焦文档；kind ∈ writer/calc/impress，没打开文档时 fileId 为 null；需 `editor` |
 | `awd.events.on(name, cb)` | 事件名 + 回调 | 退订函数 | **v2.7**：订阅宿主事件——`files.changed`（需 `file_read`）/`selection.changed`（需 `editor`）/`project.switched`。事件只是「该重拉了」的信号（data 为空或极小），数据自己用 files.list/doc.exec 拉；老宿主上不报错、只是永不触发 |
 | `awd.ai.request(prompt, opts?)` | 字符串 + `{ system?, purpose? }` | AI 输出文本 | **v2.7**：面板内一次性静默推理，走平台 Credits 的辅助模型（插件免带 Key）；prompt+system ≤ 16000 字符、每分钟 10 次；需 `ai` 权限。**要工具、要落文档、要让用户看见过程的场景用 `awd.chat.send`，不用这条** |
+| `awd.settings.get(key)` | 设置键 | 字符串值 | **v2.9（宿主 0.28+）**：读 manifest 顶层 `settings` 声明的配置项——用户在插件广场详情页填写，插件只读；secret 项拿不到（permission_denied）；配置变更会推 `settings.changed` 事件（用 `awd.events.on('settings.changed', cb)` 接）。与 `awd.storage` 的区别：settings 是用户配置，storage 是插件自己的 KV |
 | `awd.call(method, params)` | 任意方法 | 宿主的 result | 底层通道，上面的都是它的封装 |
 
 错误处理：reject 的 Error 带 `code` 字段——`permission_denied`（manifest 没声明所需权限）、`unknown_method`（宿主不认识的方法，多见于老宿主还不支持新方法，插件要能降级处理）、`quota_exceeded`（KV 超限 / `chat.send` 超 4000 字 / `ai.request` 超长或超频）、`not_found`（文件/链接不存在）、`invalid_params`（参数缺失或形状不对）、`invoke_failed`（`tools.invoke` 目标工具未声明或执行出错）、`no_active_document`（doc.*/evidence.* 需要聚焦文档但没有）、`action_not_allowed`（`doc.exec` 的原语不对插件开放）、`ai_failed`（模型调用失败）、`experimental_not_allowed`（`x-` 前缀实验方法只对开发安装的插件开放）。给用户看的报错要转成中文人话。
