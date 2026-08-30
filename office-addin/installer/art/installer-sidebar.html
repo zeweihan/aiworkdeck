@@ -1,0 +1,82 @@
+<!--
+  Office 插件 Windows 安装器 Welcome/Finish 侧栏（MUI2，164x314，24 位 BMP）。
+  与桌面端 desktop/build/win/installer-sidebar.html 同一套视觉语言，只换副标。
+  改完跑 `node installer/render-art.mjs` 重新生成（依赖维护者 Mac 的 Chrome + ImageMagick，产物入库）。
+-->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 164px; height: 314px; overflow: hidden; }
+  body {
+    position: relative;
+    background:
+      radial-gradient(210px 200px at -18% 112%, rgba(91, 209, 151, 0.30) 0%, rgba(91, 209, 151, 0) 66%),
+      radial-gradient(190px 150px at 118% -12%, rgba(91, 209, 151, 0.22) 0%, rgba(91, 209, 151, 0) 62%),
+      linear-gradient(168deg, #0E3320 0%, #174C31 52%, #1D6440 100%);
+    font-family: -apple-system, "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  svg.traces { position: absolute; left: 0; }
+  svg.traces.top { top: 10px; }
+  svg.traces.bottom { bottom: 12px; }
+  .wordmark {
+    position: absolute; top: 112px; left: 0; width: 100%;
+    text-align: center;
+    font-size: 19px; font-weight: 600; letter-spacing: 0.01em;
+    color: #FFFFFF;
+  }
+  .rule {
+    position: absolute; top: 144px; left: 42px;
+    width: 80px; height: 2px;
+    background: linear-gradient(90deg,
+      rgba(91,209,151,0) 0%, #5BD197 30%, #A6EFCA 50%, #5BD197 70%, rgba(91,209,151,0) 100%);
+  }
+  .tagline {
+    position: absolute; top: 156px; left: 0; width: 100%;
+    text-align: center;
+    font-size: 11px; font-weight: 400; letter-spacing: 0.30em;
+    text-indent: 0.30em;
+    color: rgba(220, 248, 234, 0.80);
+  }
+  .sub {
+    position: absolute; top: 178px; left: 0; width: 100%;
+    text-align: center; white-space: nowrap;
+    font-size: 9px; font-weight: 400; letter-spacing: 0.10em;
+    text-indent: 0.10em;
+    color: rgba(220, 248, 234, 0.55);
+  }
+</style>
+</head>
+<body>
+  <svg class="traces top" width="164" height="64" viewBox="0 0 164 64" fill="none"
+       stroke="rgba(255,255,255,0.16)" stroke-width="1" stroke-linecap="round">
+    <path d="M-6 14 H44 L54 24 H96"/>
+    <path d="M-6 38 H26 L36 28 H78"/>
+    <path d="M170 22 H128 L118 32 H86"/>
+    <path d="M170 50 H140 L130 40 H104"/>
+    <g fill="rgba(166,239,202,0.45)" stroke="none">
+      <circle cx="96" cy="24" r="2"/>
+      <circle cx="78" cy="28" r="2"/>
+      <circle cx="86" cy="32" r="2"/>
+    </g>
+  </svg>
+
+  <div class="wordmark">AI WorkDeck</div>
+  <div class="rule"></div>
+  <div class="tagline">OFFICE 插件</div>
+  <div class="sub">WORD · EXCEL · POWERPOINT</div>
+
+  <svg class="traces bottom" width="164" height="56" viewBox="0 0 164 56" fill="none"
+       stroke="rgba(255,255,255,0.13)" stroke-width="1" stroke-linecap="round">
+    <path d="M-6 16 H52 L62 26 H108"/>
+    <path d="M170 34 H120 L110 44 H62"/>
+    <g fill="rgba(166,239,202,0.38)" stroke="none">
+      <circle cx="108" cy="26" r="2"/>
+      <circle cx="62" cy="44" r="2"/>
+    </g>
+  </svg>
+</body>
+</html>

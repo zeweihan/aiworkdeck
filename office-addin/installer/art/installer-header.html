@@ -1,0 +1,40 @@
+<!--
+  Office 插件 Windows 安装器内页页眉图（MUI2 header，150x57，24 位 BMP）。
+  改完跑 `node installer/render-art.mjs` 重新生成。
+-->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 150px; height: 57px; overflow: hidden; }
+  body {
+    position: relative;
+    background: #FFFFFF;
+    font-family: -apple-system, "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wordmark {
+    position: absolute; top: 13px; left: 16px;
+    font-size: 15px; font-weight: 600; letter-spacing: 0.01em;
+    color: #1A5336;
+  }
+  .sub {
+    position: absolute; top: 33px; left: 17px;
+    font-size: 9px; letter-spacing: 0.22em;
+    color: #868E96;
+  }
+  .accent {
+    position: absolute; top: 46px; left: 17px;
+    width: 30px; height: 2px;
+    background: linear-gradient(90deg, #1A5336 0%, #5BD197 100%);
+  }
+</style>
+</head>
+<body>
+  <div class="wordmark">AI WorkDeck</div>
+  <div class="sub">OFFICE 插件</div>
+  <div class="accent"></div>
+</body>
+</html>
