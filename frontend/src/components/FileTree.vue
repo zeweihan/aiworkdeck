@@ -919,7 +919,7 @@
 </template>
 
 <script>
-import { getProjectFiles, createFolder, createFile, renameFile, deleteFile, deleteFilePerm, restoreFile as restoreFileApi, getRecycleBinFiles, moveFile, batchDeleteFiles, batchMoveFiles, batchCopyFiles, getApiBaseUrl } from '@/services/api.js'
+import { getProjectFiles, createFolder, createFile, renameFile, deleteFile, deleteFilePerm, restoreFile as restoreFileApi, getRecycleBinFiles, moveFile, batchDeleteFiles, batchMoveFiles, batchCopyFiles, getApiBaseUrl, getContributedTemplates, createFileFromContributedTemplate } from '@/services/api.js'
 import { getAuthHeaders, getSessionId } from '@/utils/auth.js'
 import { host } from '@/services/host.js'
 import { findTopmostDeletedAncestor, summarizeDeleteResults } from '@/utils/fileTreeRecycle.js'
@@ -1504,7 +1504,50 @@ export default {
         })
       }
     },
+    // 「新建 Word」入口（规范 v2.9 P4）：装了带模板的插件时先给选择，「空白文档」永远第一项；
+    // 没有贡献模板/清单拉取失败则与老行为逐字一致（直接建空白）。
     async handleCreateWord() {
+      let templates = []
+      try {
+        const res = await getContributedTemplates()
+        const body = res && res.templates !== undefined ? res : (res && res.data) || {}
+        templates = Array.isArray(body.templates) ? body.templates : []
+      } catch (e) {
+        templates = []
+      }
+      if (!templates.length) {
+        return this.createBlankWord()
+      }
+      // actionsheet 项数有限：只列前 5 份，更多模板走 AI 对话（list_contributed_templates）
+      const shown = templates.slice(0, 5)
+      uni.showActionSheet({
+        itemList: [this.$t('fileTree.blankDocOption'), ...shown.map(t => t.name || t.id)],
+        success: async (r) => {
+          if (r.tapIndex === 0) {
+            this.createBlankWord()
+            return
+          }
+          const t = shown[r.tapIndex - 1]
+          try {
+            const res2 = await createFileFromContributedTemplate(
+              t.pluginId, t.id, Number(this.projectId), this.parentId || null, null)
+            const body2 = res2 && res2.code !== undefined ? res2 : (res2 && res2.data) || {}
+            if (body2.code !== 0) {
+              throw new Error(body2.message || this.$t('fileTree.templateCreateFailed'))
+            }
+            await this.loadFiles()
+            uni.showToast({ title: String(body2.name || ''), icon: 'none' })
+          } catch (e) {
+            uni.showToast({
+              title: (e && e.message) || this.$t('fileTree.templateCreateFailed'),
+              icon: 'none'
+            })
+          }
+        }
+      })
+    },
+
+    async createBlankWord() {
       if (!this.projectId) {
         uni.showToast({
           title: this.$t('fileTree.projectIdMissingCreateFile'),

@@ -72,6 +72,12 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
 - conformance：`EvidenceProviderConformanceKit`（plugin-api 内零依赖执行器，返回空列表=通过）；示例 `examples/hello-evidence-plugin/`（SPI+conformance 全绿）。dev 免签直装**不收** evidenceSources（PluginDevService 校验直接报错）。
 - 地雷：插件别实现内部接口 `service.ai.evidence.EvidenceRetriever`（不是契约）；`registerDeclaredMcpEvidenceSources` 在元数据阶段注册（不兼容插件跳过）、SPI 的随 JAR 加载注册——两条路都吃 registry 判空（直接 new PluginService 的测试不受影响）。
 
+**v2.9 生态路线 P4（dev-board#284，宿主 0.28 起）**：声明式长尾四贡献点（PLUGIN_SPEC §14）。要点：
+- **落点**：`PluginContributionService`（模板清单/落地、画像选择与降级、设置校验与掩码、声明文件 canonical 逃逸闸）+ `PluginService.localize`（l10n %key%，表在 `pluginL10n`，rescan 重建）+ `StyleProfileResolver` 插档（可选注入，选中的插件画像在「项目画像」与「系统默认」之间）。
+- **模板**：`FileTree.handleCreateWord` 变成选择（空白永远第一项，actionsheet 只列前 5；老行为在 `createBlankWord`）；AI 工具 `ContributedTemplateTools`（list/create 两枚，已进 RealToolBeans 与 toolDisplayNames）。
+- **设置**：值直存 `plugin.<id>.<key>`（与 SPI Settings 同命名空间，JAR 免转接）；写入只经广场详情页表单（`MarketDetailPane.loadContribution/doSaveSettings`，admin 同启停口径）；保存后 `uni.$emit('awd:plugin-settings-changed')` → PluginPane 只转发给设置所属插件的 `settings.changed` 事件；**secret 不进桥**（桥 settings.get 回 permission_denied），表单里掩码值原样未动 = 不回写。
+- **地雷**：manifest `settings[].default` 是 Java 关键字，PluginSettingDecl 用 Hutool `@Alias("default")` 映射（`PluginContributionServiceTest.settingsRoundTrip` 钉着）；dev 直装仍要求 frontendEntry，纯声明插件走广场/手动安装。SDK `1.4.0`；示例 `examples/hello-declarative-plugin/`。
+
 **这是 manifest permissions 第一次成为真实边界**：缺 `file_read` 时 `files.*` 直接 `permission_denied`；`network` 决定 PluginWebController 下发的 CSP 是 `connect-src 'none'` 还是 `connect-src https:`。JAR 插件同 JVM 同权限，做不到这一点。
 
 插件级 KV 存宿主 `localStorage` 的 `awd_plugin_kv_<pluginId>`，总量 64 KB；`files.read` 文本上限 5 MB（超限截断且 `truncated:true`，不报错），扩展名不在可抽取文本白名单里的按二进制拒绝。

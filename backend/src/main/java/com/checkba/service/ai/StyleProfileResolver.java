@@ -35,6 +35,19 @@ public class StyleProfileResolver {
     private final StorageServiceFactory storageServiceFactory;
     private final SystemSettingService systemSettingService;
 
+    /**
+     * 插件贡献画像（规范 v2.9 P4）：用户显式选中的插件画像插在「项目画像」与「系统默认」
+     * 之间。可选注入（@Lazy + required=false）：直接 new 的既有测试停留 null，判空跳过。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private PluginContributionService pluginContributionService;
+
+    /** 供测试直接装配。 */
+    void setPluginContributionService(PluginContributionService svc) {
+        this.pluginContributionService = svc;
+    }
+
     public StyleProfile resolve(Long projectId, String explicitJson) {
         StyleProfile house = StyleProfiles.houseDefault();
         if (explicitJson != null && !explicitJson.isBlank()) {
@@ -50,6 +63,16 @@ public class StyleProfileResolver {
                 if (json != null) return house.merge(StyleProfiles.parse(json));
             } catch (Exception e) {
                 log.warn("项目 {} 的 {}/{} 读取失败，退到系统默认: {}", projectId, TEMPLATE_FOLDER, PROFILE_FILE, e.getMessage());
+            }
+        }
+        // 插件贡献画像（规范 v2.9 P4）：用户选中的才生效；不可用时 selectedStyleProfileJson
+        // 已自带 WARN 并返回 null，这里静默退下一级
+        if (pluginContributionService != null) {
+            try {
+                String json = pluginContributionService.selectedStyleProfileJson();
+                if (json != null) return house.merge(StyleProfiles.parse(json));
+            } catch (Exception e) {
+                log.warn("插件画像解析失败，退到系统默认: {}", e.getMessage());
             }
         }
         try {

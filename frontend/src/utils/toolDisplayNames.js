@@ -40,6 +40,8 @@ const NAMES = {
   read_file: { zh: '读取文件', en: 'Read file' },
   extract_file_text: { zh: '提取文档全文', en: 'Extract document text' },
   list_files: { zh: '列出文件', en: 'List files' },
+  list_contributed_templates: { zh: '列出插件模板', en: 'List contributed templates' },
+  create_file_from_template: { zh: '从模板新建文件', en: 'Create file from template' },
   write_file: { zh: '写入文件', en: 'Write file' },
   write_docx: { zh: '生成Word文档', en: 'Create Word doc' },
   // 模板画像（TemplateTools，dev-board#110）

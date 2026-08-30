@@ -59,6 +59,13 @@
  *   payload 刻意为空——事件是「该重拉了」的信号，数据由插件按各自权限的方法拉取。
  *   用 awd.events.on(name, cb) 即可（自动订阅/退订；老宿主上 on 照常返回退订函数，只是永不触发）。
  *
+ * v2.9 新增（宿主 0.28 起）：
+ *   settings.get  { key }              -> { key, value }    读 manifest.settings 声明的配置项
+ *                                        （值统一是字符串；用户在插件广场详情页填写，插件只读）。
+ *                                        secret 的项不提供给插件页面（permission_denied）；
+ *                                        未声明的键 not_found
+ *   事件 settings.changed：宿主设置表单保存后推送（只推给设置所属的插件），收到后重新 get
+ *
  * 错误码：permission_denied（manifest 未声明所需权限）、unknown_method（宿主不认识的方法）、
  *   anchor_ambiguous（引文 0 或多处命中 / anchor 形状不对）、no_selection（要求选区但当前没有）、
  *   not_found（链接或文件不存在）、no_active_document（当前没有打开的 Word 文档）、
@@ -168,7 +175,7 @@
 
   var awd = {
     /** SDK 版本，与桥协议版本无关 */
-    version: '1.3.0',
+    version: '1.4.0',
     /** 握手拿到的上下文；ready() 之前为 null */
     context: null,
     /** 等待宿主握手，resolve 值即 awd.context */
@@ -208,6 +215,18 @@
         });
       },
       set: function (key, value) { return call('storage.set', { key: key, value: value }); }
+    },
+    settings: {
+      /**
+       * 读 manifest.settings 声明的配置项 -> 字符串值（v2.9，宿主 0.28+）。
+       * 与 storage 的区别：settings 是用户在插件广场详情页填写的配置（插件只读），
+       * storage 是插件自己的 KV。secret 项拿不到；配置变更会推 settings.changed 事件。
+       */
+      get: function (key) {
+        return call('settings.get', { key: key }).then(function (r) {
+          return r && r.value != null ? r.value : '';
+        });
+      }
     },
     theme: {
       /** 当前主题：{ mode: 'light'|'dark', tokens: { '--awd-*': '...' } }。

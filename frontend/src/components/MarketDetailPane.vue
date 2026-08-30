@@ -167,6 +167,53 @@
           <text class="mdp-sec-note">{{ $t('market.pluginPermissionNote') }}</text>
         </view>
 
+        <!-- 插件设置（规范 v2.9 P4）：manifest.settings 声明的配置项，写入只经这张表单 -->
+        <view v-if="spec.kind === 'plugin' && installedInfo && pluginSettings.length" class="mdp-section">
+          <text class="mdp-sec-title">{{ $t('market.pluginSettingsTitle') }}</text>
+          <view v-for="s in pluginSettings" :key="s.key" class="mdp-set-row">
+            <view class="mdp-set-head">
+              <text class="mdp-set-label">{{ s.label || s.key }}</text>
+              <AwdSwitch
+                v-if="s.type === 'boolean'"
+                :checked="settingsDraft[s.key] === 'true'"
+                @change="v => { settingsDraft[s.key] = v ? 'true' : 'false' }"
+              />
+            </view>
+            <view v-if="s.type === 'select'" class="mdp-set-options">
+              <text
+                v-for="o in (s.options || [])"
+                :key="o"
+                class="mdp-set-opt"
+                :class="{ on: settingsDraft[s.key] === o }"
+                @tap="settingsDraft[s.key] = o"
+              >{{ o }}</text>
+            </view>
+            <input
+              v-else-if="s.type !== 'boolean'"
+              class="mdp-set-input"
+              :password="!!s.secret"
+              v-model="settingsDraft[s.key]"
+              :placeholder="s.description || ''"
+            />
+            <text v-if="s.description && (s.type === 'boolean' || s.type === 'select')" class="mdp-sec-note">{{ s.description }}</text>
+          </view>
+          <view class="mdp-btn primary mdp-set-save" :class="{ busy: settingsBusy }" @tap="doSaveSettings">
+            <text>{{ settingsBusy ? $t('market.savingEllipsis') : $t('market.saveSettings') }}</text>
+          </view>
+        </view>
+
+        <!-- 样式画像（规范 v2.9 P4）：插件贡献的画像可设为全局默认（写端导出走它） -->
+        <view v-if="spec.kind === 'plugin' && installedInfo && ownStyleProfiles.length" class="mdp-section">
+          <text class="mdp-sec-title">{{ $t('market.styleProfilesTitle') }}</text>
+          <view v-for="p in ownStyleProfiles" :key="p.id" class="mdp-kv-row">
+            <text class="mdp-k">{{ p.name || p.id }}</text>
+            <text class="mdp-v mdp-link" @tap="toggleStyleProfile(p)">
+              {{ p.selected ? $t('market.profileSelected') : $t('market.profileSelect') }}
+            </text>
+          </view>
+          <text class="mdp-sec-note">{{ $t('market.styleProfileNote') }}</text>
+        </view>
+
         <!-- 详细信息：工具权限压缩为一行人话摘要，不再枚举内部工具名 -->
         <view class="mdp-section">
           <text class="mdp-sec-title">{{ $t('market.detailInfo') }}</text>
@@ -202,7 +249,7 @@
 // 插件广场详情 tab（VS Code 扩展详情页形态）。spec = { kind: 'skill'|'plugin', id, name }
 // 由左栏 MarketSidebarPanel 点行打开。自行拉取市场与已安装两份数据合成视图，
 // 装/卸/启停后通过 uni.$emit('awd:market-changed') 通知左栏刷新。
-import { getPlugins, getSkills, getSkillMarket, getPluginMarket, installMarketSkill, uninstallMarketSkill, installMarketPlugin, uninstallMarketPlugin, setPluginEnabled, setSkillActivation, packStatus, packInfo, packInstall, packUninstall } from '@/services/api.js'
+import { getPlugins, getSkills, getSkillMarket, getPluginMarket, installMarketSkill, uninstallMarketSkill, installMarketPlugin, uninstallMarketPlugin, setPluginEnabled, setSkillActivation, packStatus, packInfo, packInstall, packUninstall, getPluginSettings, savePluginSettings, getContributedStyleProfiles, selectContributedStyleProfile } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
 import { isPanelSkill, buildVoiceGroupSkill } from '@/config/leftSidebarPlugins.js'
 import { formatPrice, isPaid, paidState, priceCentsOf, priceLabel, purchaseUrl } from '@/utils/marketPricing.js'
@@ -266,6 +313,11 @@ export default {
       packStatusInfo: null, // packStatus() 结果 {state, bytesDownloaded, bytesTotal, error}
       packBusy: false,
       packTimer: null,
+      // 声明式贡献点（规范 v2.9 P4）
+      pluginSettings: [],   // manifest.settings 声明 + 当前值（secret 已掩码）
+      settingsDraft: {},    // 表单草稿；secret 项只保存被用户改过的（掩码值原样 = 未改）
+      settingsBusy: false,
+      ownStyleProfiles: [], // 本插件贡献的样式画像 + 是否被选为全局默认
     }
   },
   computed: {
@@ -484,6 +536,8 @@ export default {
       } finally {
         this.loading = false
       }
+      // 声明式贡献点（规范 v2.9）：设置表单与画像清单随详情一起拉
+      await this.loadContribution()
       // 挂着资源包的面板型 skill：拉一次现状——可能是用户上次没装完，也可能是
       // 老版本升级后端自动补下载中，两种都要接着轮询而不是回到「安装」按钮
       if (this.packId) {
@@ -501,6 +555,71 @@ export default {
     },
     notifyChanged() {
       uni.$emit('awd:market-changed')
+    },
+
+    // ---- 声明式贡献点（规范 v2.9 P4）：设置表单 + 样式画像 ----
+
+    async loadContribution() {
+      if (this.spec.kind !== 'plugin' || !this.installedInfo) {
+        this.pluginSettings = []
+        this.ownStyleProfiles = []
+        return
+      }
+      try {
+        const res = await getPluginSettings(this.spec.id)
+        const body = res && res.settings !== undefined ? res : (res && res.data) || {}
+        this.pluginSettings = Array.isArray(body.settings) ? body.settings : []
+        const draft = {}
+        this.pluginSettings.forEach(s => { draft[s.key] = s.value == null ? '' : String(s.value) })
+        this.settingsDraft = draft
+      } catch (e) {
+        this.pluginSettings = []
+      }
+      try {
+        const res = await getContributedStyleProfiles()
+        const body = res && res.profiles !== undefined ? res : (res && res.data) || {}
+        const all = Array.isArray(body.profiles) ? body.profiles : []
+        this.ownStyleProfiles = all.filter(p => p.pluginId === this.spec.id)
+      } catch (e) {
+        this.ownStyleProfiles = []
+      }
+    },
+
+    async doSaveSettings() {
+      if (this.settingsBusy) return
+      this.settingsBusy = true
+      try {
+        const values = {}
+        this.pluginSettings.forEach(s => {
+          const v = this.settingsDraft[s.key]
+          // secret 项的掩码回显（****xxxx）原样未动 = 用户没改，不回写
+          if (s.secret && v === s.value) return
+          values[s.key] = v == null ? '' : String(v)
+        })
+        const res = await savePluginSettings(this.spec.id, values)
+        const body = res && res.code !== undefined ? res : (res && res.data) || {}
+        if (body.code !== 0) throw new Error(body.message || this.$t('market.saveFailed'))
+        uni.showToast({ title: this.$t('market.settingsSaved'), icon: 'none' })
+        // 通知打开中的插件面板（PluginPane 只转发给设置所属的插件）
+        uni.$emit('awd:plugin-settings-changed', { pluginId: this.spec.id })
+        await this.loadContribution()
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || this.$t('market.saveFailed'), icon: 'none' })
+      } finally {
+        this.settingsBusy = false
+      }
+    },
+
+    async toggleStyleProfile(p) {
+      try {
+        const ref = p.selected ? '' : (p.pluginId + ':' + p.id)
+        const res = await selectContributedStyleProfile(ref)
+        const body = res && res.code !== undefined ? res : (res && res.data) || {}
+        if (body.code !== 0) throw new Error(body.message || this.$t('market.saveFailed'))
+        await this.loadContribution()
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || this.$t('market.saveFailed'), icon: 'none' })
+      }
     },
     // ---- 原生资源包（native pack）：见 docs/NATIVE_PACK_DISTRIBUTION.md §4.3 ----
     async loadPackMetaLazy() {
@@ -1031,6 +1150,56 @@ export default {
   font-size: 13px;
   line-height: 20px;
   color: var(--awd-text);
+}
+
+/* 插件设置表单（规范 v2.9 P4） */
+.mdp-set-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--awd-border-subtle);
+}
+.mdp-set-row:last-of-type { border-bottom: 0; }
+.mdp-set-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.mdp-set-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--awd-text);
+}
+.mdp-set-input {
+  font-size: 13px;
+  padding: 6px 10px;
+  border: 1px solid var(--awd-border-strong);
+  border-radius: 6px;
+  background: var(--awd-surface);
+  color: var(--awd-text);
+}
+.mdp-set-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.mdp-set-opt {
+  font-size: 12px;
+  padding: 4px 12px;
+  border: 1px solid var(--awd-border-strong);
+  border-radius: 999px;
+  color: var(--awd-text-2);
+  cursor: pointer;
+}
+.mdp-set-opt.on {
+  border-color: var(--awd-accent);
+  color: var(--awd-accent-text);
+  font-weight: 600;
+}
+.mdp-set-save {
+  margin-top: 10px;
+  align-self: flex-start;
 }
 
 .mdp-sec-note {

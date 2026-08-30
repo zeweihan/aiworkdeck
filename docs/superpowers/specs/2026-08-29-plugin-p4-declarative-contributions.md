@@ -99,3 +99,11 @@
 2. PR-b：`settings` + 广场表单渲染 + 桥 `settings.get` + `settings.changed` 事件；
 3. PR-c：`contributes.styleProfiles` + Resolver 插档；
 4. PR-d：l10n 字符串表。每个 PR 各自升 PLUGIN_SPEC 小版本。
+
+## 9. 落地实况（2026-08-30 追记）
+
+已随规范 v2.9 一次性落地（未按 §8 分四个 PR——四点共用同一套解析/服务/表单基建，拆开反而重复）。
+与本设计稿的实现差异：设置值直存 `plugin.<id>.<key>`（与 SPI Settings 同命名空间，JAR 免转接，
+废弃 §4 的 settings. 子前缀）；新增 `settings.changed` 桥事件；dev 直装仍要求 frontendEntry
+（§6 的「纯声明插件 dev 放行」未做——走广场/手动安装，需求出现再补）。权威形状以
+PLUGIN_SPEC §14 为准。

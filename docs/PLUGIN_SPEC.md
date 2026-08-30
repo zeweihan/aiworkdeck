@@ -1,4 +1,4 @@
-# 插件规范 v2.8（Plugin Spec v2.8）
+# 插件规范 v2.9（Plugin Spec v2.9）
 
 > 适用版本：v1 自 0.4.x；v2（权限执行 + 启停过滤）自 Phase 3A；v2.1（插件携带 Skill）自 Phase 3B；
 > v2.3（Web 插件 + `packs` 依赖）自 native pack Phase B；v2.4（宿主 SPI `plugin-api` + 后台任务）自尽调 P1；
@@ -11,6 +11,9 @@
 > v2.8（生态路线 P3，宿主 0.28 起，dev-board#283）：evidence.retrieve.v1 升格公开 Provider 协议——
 > manifest 新增 `contributes.evidenceSources`（§13），plugin-api 1.2.0 新增 `evidence` 包
 > （EvidenceProvider SPI + conformance 执行器）。
+> v2.9（生态路线 P4，宿主 0.28 起，dev-board#284）：声明式长尾——`contributes.templates` /
+> `contributes.styleProfiles` / 顶层 `settings` / l10n 字符串表四个贡献点（§14），
+> 桥新增 `settings.get` 与 `settings.changed` 事件，SDK 1.4.0。
 > 示例插件：[examples/hello-plugin/](../examples/hello-plugin/)（JAR 工具）、
 > [examples/hello-web-plugin/](../examples/hello-web-plugin/)（纯前端）。
 > 后端实现：`PluginService`（扫描/解析/启停）、`PluginController`（HTTP API）、
@@ -81,7 +84,8 @@ plugins/
 | `backendJars` | string[] | 否 | 相对插件目录的 JAR 文件名列表，启动/重扫时加载其中带 `@Tool` 注解的类。 |
 | `skills` | string[] | 否 | **v2.1 新增**：插件携带的 Skill 子目录名列表（相对插件目录），见 §7。 |
 | `packs` | string[] | 否 | **v2.3 新增**：依赖的原生资源包 id 列表，见 §9 与 [NATIVE_PACK_DISTRIBUTION.md](NATIVE_PACK_DISTRIBUTION.md)。 |
-| `contributes` | object | 否 | **v2.8 新增**：向宿主贡献的声明式内容。当前只有 `evidenceSources`（证据来源，见 §13）；后续贡献点（templates/styleProfiles 等）按只加不改逐个进来。 |
+| `contributes` | object | 否 | **v2.8 新增**：向宿主贡献的声明式内容——`evidenceSources`（证据来源，§13）；**v2.9 起**再加 `templates`（文书模板）与 `styleProfiles`（样式画像），见 §14。按只加不改逐个扩展。 |
+| `settings` | object[] | 否 | **v2.9 新增**：用户可配置项声明（§14.3，上限 20 条）。广场详情页渲染成表单，值存宿主侧；插件只读（JAR 经 SPI `Settings.get`、Web 经桥 `settings.get`）。 |
 
 未知字段被忽略（向前兼容）；`permissions` 中出现 v1 未定义的值仅记录 WARN，不拒绝加载。
 
@@ -360,6 +364,7 @@ opaque origin 使然，不能靠 `event.origin` 判断。
 | `events.subscribe` | `{ events: [名字…] }` | `{ subscribed: [当前生效集合] }` | 按事件（§8.8） |
 | `events.unsubscribe` | `{ events: [名字…] }` | 同上 | — |
 | `ai.request` | `{ prompt, system?, purpose? }` | `{ text, modelId }` | `ai` |
+| `settings.get` | `{ key }` | `{ key, value }`，值统一是字符串 | 无（v2.9；只认 manifest.settings 声明的键，secret 的键回 `permission_denied`，未声明回 `not_found`） |
 
 `doc.exec`（对位 VS Code TextDocument，生态路线 P1）：
 
@@ -468,6 +473,7 @@ insertText(text)/addComment(anchorText, text)`、`awd.events.on(name, cb)`（返
 | `files.changed` | `file_read` | `{ projectId }` | 项目文件清单任何刷新（AI 建改文件、用户增删改、外部改动对账后） | 500ms 合并 |
 | `selection.changed` | `editor` | `{ fileId }` | 编辑器光标/选区变化 | 300ms 合并 |
 | `project.switched` | 无 | `{ projectId }` | 面板存活期间项目切换（当前架构下切项目会重建面板重新握手，此事件为未来面板持久化预留语义） | 无 |
+| `settings.changed` | 无 | `{}` | **v2.9**：宿主设置表单保存后（只推给设置所属的插件），收到后重新 `settings.get` | 无 |
 
 - **payload 刻意为空/极小**：事件是「该重拉了」的信号，不是数据通道——选区内容、文件清单
   由插件经 `doc.exec get_selection` / `files.list` 按各自权限闸拉取，推送本身不成为权限旁路；
@@ -515,7 +521,12 @@ insertText(text)/addComment(anchorText, text)`、`awd.events.on(name, cb)`（返
   三个方法（§8.4、§8.5），SDK 版本号 `1.0.0` → `1.1.0`。manifest 无新增字段。
 - **v2.6**：主题通道（§8.3/§8.5）——`init.context.themeTokens`、宿主推送 `type:"theme"`、
   SDK 自动注入 CSS 变量与 `awd.theme.*`。SDK `1.1.0` → `1.2.0`。manifest 无新增字段。
-- **v2.8（当前，宿主 0.28 起）**：生态路线 P3（dev-board#283）——evidence.retrieve.v1 升格公开
+- **v2.9（当前，宿主 0.28 起）**：生态路线 P4（dev-board#284）——声明式长尾四贡献点（§14）：
+  `contributes.templates`（新建入口 + AI 工具 `list_contributed_templates`/`create_file_from_template`）、
+  `contributes.styleProfiles`（可选为全局默认，插在解析链「项目画像」与「系统默认」之间）、
+  顶层 `settings`（广场详情页表单 + 桥 `settings.get` + `settings.changed` 事件）、
+  l10n 字符串表（`l10n/<lang>.json` + `%key%` 引用）。SDK `1.3.0` → `1.4.0`。
+- **v2.8（宿主 0.28 起）**：生态路线 P3（dev-board#283）——evidence.retrieve.v1 升格公开
   Provider 协议：manifest 新增 `contributes.evidenceSources`（§13），plugin-api 1.1.0 → 1.2.0
   新增 `com.checkba.plugin.api.evidence` 包（EvidenceProvider / EvidenceQuery / EvidenceItem /
   EvidenceProviderConformanceKit）；宿主侧 EvidenceRetrieverRegistry 开放外部注册。
@@ -719,3 +730,69 @@ public class MyRegistryProvider implements EvidenceProvider {
 conformance 自测全绿）。宿主落点：`PluginService.registerEvidenceProvider` /
 `registerDeclaredMcpEvidenceSources`、`EvidenceRetrieverRegistry.registerExternal`、
 适配器 `PluginSpiEvidenceRetriever`。
+
+## 14. 声明式长尾贡献点（v2.9）
+
+对位 VS Code 的 languages/snippets/themes——生态数量大头是**零代码声明式插件**。
+纯数据文件（JSON/docx/md），不进 JVM、不跑脚本，风险量级最低。设计定稿
+`docs/superpowers/specs/2026-08-29-plugin-p4-declarative-contributions.md`（本节为实施后的权威形状，
+与设计稿差异：设置值直接存 `plugin.<id>.<key>`——与 SPI Settings 同一命名空间，JAR 免转接；
+新增 `settings.changed` 事件）。
+
+### 14.1 文书模板（contributes.templates）
+
+```json
+"contributes": {
+  "templates": [
+    { "id": "labor-contract", "name": "%tpl.labor%", "genre": "contract",
+      "file": "templates/labor.docx", "description": "适配 2026 劳动法修订", "language": "zh-CN" }
+  ]
+}
+```
+
+- `file` 相对插件目录（docx/md 等），解析期过相对路径守卫、读取期再过 canonical path 闸，20MB 上限；
+- 入口：「新建 Word」按钮变成选择（「空白文档」永远第一项，actionsheet 只列前 5 份）；
+  AI 工具 `list_contributed_templates` / `create_file_from_template`（同一条服务链路，
+  RENAME 冲突策略）；
+- `genre` 自由字符串（contract/pleading/opinion/report/letter…），不做硬枚举；
+  `language` 声明后只在对应应用语言下出现。
+
+### 14.2 样式画像（contributes.styleProfiles）
+
+`file` 指向插件目录内的 styleProfile v1 JSON。用户在广场详情页「设为默认画像」后，
+写端解析链变为：工具显式 JSON > 项目 `_模板/画像.json` > **选中的插件画像** >
+SystemSetting `dd.styleProfile.default` > house-default（选择位 `ai.styleProfile.selected`，
+值 `<pluginId>:<profileId>`；插件禁用/文件损坏自动退下一级并 WARN，坏 JSON 在选定时就被拒绝）。
+
+### 14.3 设置（顶层 settings）
+
+```json
+"settings": [
+  { "key": "region", "type": "select", "label": "%set.region%", "options": ["cn", "intl"], "default": "cn" },
+  { "key": "apiToken", "type": "string", "label": "访问令牌", "secret": true }
+]
+```
+
+- `type` ∈ `string | boolean | number | select`（select 必须给 `options`）；上限 20 条；
+  key 过 `[A-Za-z0-9][A-Za-z0-9_.-]{0,63}`；非法条目解析期丢弃并 WARN；
+- 存储：`system_setting` 的 `plugin.<id>.<key>`（与宿主 SPI `Settings` 同一命名空间——
+  JAR 直接 `host.settings().get(key)` 读到用户配置）；值统一按字符串存取；
+- **写入只经宿主表单**（广场详情页，admin 同启停口径；端点
+  `GET/POST /api/plugins/{id}/settings`）——配置权在用户手里；保存后向该插件的面板推
+  `settings.changed` 事件；
+- `secret: true`：表单渲染密码框、回显只给尾 4 位、**不进插件桥**（桥 `settings.get`
+  对 secret 键回 `permission_denied`）——密钥给宿主侧服务用，不给 iframe。主线方向是
+  免配置（全走平台 Credits），secret 项主要服务自部署数据源类插件。
+
+### 14.4 l10n 字符串表
+
+插件目录 `l10n/zh-CN.json` / `l10n/en-US.json`（单文件 ≤256KB，值必须是字符串）。
+manifest 与 contributes/settings 里的 `name`/`description`/`label` 值**整值**形如 `%key%`
+时按当前应用语言查表；缺键回退 zh-CN 表，再缺回退 `%key%` 字面量（让作者看见漏了哪个键）。
+
+### 14.5 形态与受理
+
+声明式贡献点可叠加在任何插件形态上；**纯声明插件**（无 backendJars/frontendEntry/skills，
+只有 manifest + 数据文件）风险量级最低，广场受理走最轻审核档。宿主落点：
+`PluginContributionService`（模板/画像/设置）+ `PluginService.localize`（l10n）+
+`StyleProfileResolver` 插档；示例 [examples/hello-declarative-plugin/](../examples/hello-declarative-plugin/)。

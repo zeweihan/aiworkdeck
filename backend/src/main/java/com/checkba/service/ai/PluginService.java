@@ -273,6 +273,13 @@ public class PluginService {
         private PluginGuide guide;
         /** 向宿主贡献的内容（规范 v2.8 起）：证据来源等，见各内部类 */
         private Contributes contributes;
+        /**
+         * 用户可配置项声明（规范 v2.9 P4，可选，上限 20 条）：广场详情页渲染成表单，
+         * 值存 system_setting 的 {@code plugin.<id>.<key>}（与宿主 SPI Settings 同一命名空间，
+         * JAR 经 {@code host.settings().get(key)}、Web 经桥 {@code settings.get} 读取）。
+         * 写入只经宿主表单——配置权在用户手里。
+         */
+        private List<PluginSettingDecl> settings;
     }
 
     /** manifest.contributes：插件向宿主贡献的声明式内容（规范 v2.8 P3 起，只加不改） */
@@ -280,6 +287,45 @@ public class PluginService {
     public static class Contributes {
         /** 证据来源（evidence.retrieve.v1 公开协议，规范 v2.8）：SPI 实现的自述 + MCP 声明式接入 */
         private List<EvidenceSourceDecl> evidenceSources;
+        /** 文书模板（规范 v2.9 P4）：docx/md 文件，宿主在「新建」入口与 AI 工具面列出 */
+        private List<TemplateDecl> templates;
+        /** 样式画像（规范 v2.9 P4）：styleProfile v1 JSON，可被选为全局默认画像 */
+        private List<StyleProfileDecl> styleProfiles;
+    }
+
+    /** 一条文书模板声明（file 相对插件目录，读取时按 canonical path 校验不逃逸） */
+    @lombok.Data
+    public static class TemplateDecl {
+        private String id;
+        private String name;
+        /** 体裁：自由字符串（contract/pleading/opinion/report/letter…），宿主不做硬枚举 */
+        private String genre;
+        private String file;
+        private String description;
+        /** 适用应用语言（zh-CN / en-US），缺省不限 */
+        private String language;
+    }
+
+    /** 一条样式画像声明（file 指向插件目录内的 styleProfile v1 JSON） */
+    @lombok.Data
+    public static class StyleProfileDecl {
+        private String id;
+        private String name;
+        private String file;
+    }
+
+    /** 一条设置声明。type ∈ string/boolean/number/select；secret 的值只回显尾 4 位、不进插件桥 */
+    @lombok.Data
+    public static class PluginSettingDecl {
+        private String key;
+        private String type;
+        private String label;
+        private String description;
+        /** JSON 字段名是 default（Java 关键字），经 Hutool @Alias 映射；统一按字符串存取 */
+        @cn.hutool.core.annotation.Alias("default")
+        private Object defaultValue;
+        private List<String> options;
+        private Boolean secret;
     }
 
     /**
@@ -361,6 +407,7 @@ public class PluginService {
         pluginDirById.clear();
         incompatiblePluginIds.clear();
         devInstalledPluginIds.clear();
+        pluginL10n.clear();
         // 插件证据来源整批清空重建（规范 v2.8 P3）；内置来源不动
         if (evidenceRetrieverRegistry != null) {
             evidenceRetrieverRegistry.clearExternal();
@@ -413,6 +460,73 @@ public class PluginService {
     /** 该插件是否为本机 dev 免签直装（目录带 .awd-dev 标记）；实验 API 只对它们开放 */
     public boolean isDevInstalled(String pluginId) {
         return devInstalledPluginIds.contains(pluginId);
+    }
+
+    /** 相对路径守卫（模板/画像文件声明）：非空、不以 / 开头、不含 ..、不含反斜杠 */
+    private static boolean isSafeRelFile(String file) {
+        return file != null && !file.isBlank() && !file.startsWith("/") && !file.contains("..")
+                && !file.contains("\\");
+    }
+
+    // ==== l10n 字符串表（规范 v2.9 P4）====
+
+    /** pluginId -> (lang -> (key -> 文案))；来自插件目录 l10n/<lang>.json，rescan 重建 */
+    private final Map<String, Map<String, Map<String, String>>> pluginL10n = new ConcurrentHashMap<>();
+
+    private static final Set<String> L10N_LANGS = Set.of("zh-CN", "en-US");
+    private static final long L10N_MAX_BYTES = 256 * 1024;
+
+    private void loadL10n(String pluginId, File pluginDir) {
+        File dir = new File(pluginDir, "l10n");
+        if (!dir.isDirectory()) {
+            return;
+        }
+        Map<String, Map<String, String>> tables = new HashMap<>();
+        for (String lang : L10N_LANGS) {
+            File f = new File(dir, lang + ".json");
+            if (!f.isFile() || f.length() > L10N_MAX_BYTES) {
+                continue;
+            }
+            try {
+                cn.hutool.json.JSONObject obj = cn.hutool.json.JSONUtil.parseObj(
+                        cn.hutool.core.io.FileUtil.readUtf8String(f));
+                Map<String, String> table = new HashMap<>();
+                for (String k : obj.keySet()) {
+                    Object v = obj.get(k);
+                    if (v instanceof String s) {
+                        table.put(k, s);
+                    }
+                }
+                tables.put(lang, table);
+            } catch (Exception e) {
+                log.warn("Plugin {} l10n/{}.json 解析失败，忽略: {}", pluginId, lang, e.getMessage());
+            }
+        }
+        if (!tables.isEmpty()) {
+            pluginL10n.put(pluginId, tables);
+        }
+    }
+
+    /**
+     * 解析 manifest 字符串里的 {@code %key%} 引用（规范 v2.9 P4，VS Code package.nls 机制）：
+     * 整值形如 %key% 才解析；按当前应用语言查表，缺键回退 zh-CN 表，再缺回退原文
+     * （保留 %key% 字面量让作者看见漏了哪个键）。
+     */
+    public String localize(String pluginId, String raw) {
+        if (raw == null || raw.length() < 3 || raw.charAt(0) != '%' || raw.charAt(raw.length() - 1) != '%') {
+            return raw;
+        }
+        Map<String, Map<String, String>> tables = pluginL10n.get(pluginId);
+        if (tables == null) {
+            return raw;
+        }
+        String key = raw.substring(1, raw.length() - 1);
+        String lang = com.checkba.service.LangText.isEnglish() ? "en-US" : "zh-CN";
+        String v = tables.getOrDefault(lang, Map.of()).get(key);
+        if (v == null) {
+            v = tables.getOrDefault("zh-CN", Map.of()).get(key);
+        }
+        return v != null ? v : raw;
     }
 
     /** minHostVersion 与宿主版本比对；不达标返回原因文案，达标/无声明/dev 态宿主返回 null */
@@ -745,6 +859,9 @@ public class PluginService {
                     devInstalledPluginIds.add(meta.getId());
                 }
 
+                // l10n 字符串表（规范 v2.9 P4）
+                loadL10n(meta.getId(), pluginDir);
+
                 // minHostVersion 兼容闸（规范 v2.7 P0）：不达标的插件登记元数据但不生效。
                 // 必须在下面的 isEnabled 检查之前算好——isEnabled 会把不兼容视为未启用，
                 // 于是 JAR 加载 / 工具注册 / web 静态服务全部经既有消费点自动拦住。
@@ -902,6 +1019,60 @@ public class PluginService {
                 valid.add(d);
             }
             meta.getContributes().setEvidenceSources(valid);
+        }
+        // contributes.templates / styleProfiles（规范 v2.9 P4）：id 过 kebab 正则、file 必须是
+        // 不逃逸的相对路径（读取时还有 canonical path 第二道闸）。非法条目丢弃并告警。
+        if (meta.getContributes() != null) {
+            if (meta.getContributes().getTemplates() != null) {
+                List<TemplateDecl> valid = new ArrayList<>();
+                for (TemplateDecl t : meta.getContributes().getTemplates()) {
+                    if (t == null || t.getId() == null || !PACK_ID.matcher(t.getId()).matches()
+                            || !isSafeRelFile(t.getFile())) {
+                        log.warn("Plugin {} template with invalid id/file ({}), dropped",
+                                meta.getId(), t == null ? null : t.getId());
+                        continue;
+                    }
+                    valid.add(t);
+                }
+                meta.getContributes().setTemplates(valid);
+            }
+            if (meta.getContributes().getStyleProfiles() != null) {
+                List<StyleProfileDecl> valid = new ArrayList<>();
+                for (StyleProfileDecl sp : meta.getContributes().getStyleProfiles()) {
+                    if (sp == null || sp.getId() == null || !PACK_ID.matcher(sp.getId()).matches()
+                            || !isSafeRelFile(sp.getFile())) {
+                        log.warn("Plugin {} styleProfile with invalid id/file ({}), dropped",
+                                meta.getId(), sp == null ? null : sp.getId());
+                        continue;
+                    }
+                    valid.add(sp);
+                }
+                meta.getContributes().setStyleProfiles(valid);
+            }
+        }
+        // settings（规范 v2.9 P4）：上限 20 条；key/type 校验；select 必须给 options。非法条目丢弃并告警。
+        if (meta.getSettings() != null) {
+            List<PluginSettingDecl> valid = new ArrayList<>();
+            for (PluginSettingDecl d : meta.getSettings()) {
+                if (valid.size() >= 20) {
+                    log.warn("Plugin {} declares more than 20 settings, extras dropped", meta.getId());
+                    break;
+                }
+                String type = d == null || d.getType() == null || d.getType().isBlank() ? "string" : d.getType();
+                boolean keyOk = d != null && d.getKey() != null
+                        && d.getKey().matches("[A-Za-z0-9][A-Za-z0-9_.-]{0,63}");
+                boolean typeOk = Set.of("string", "boolean", "number", "select").contains(type);
+                boolean selectOk = !"select".equals(type)
+                        || (d.getOptions() != null && !d.getOptions().isEmpty());
+                if (!keyOk || !typeOk || !selectOk) {
+                    log.warn("Plugin {} setting with invalid key/type/options ({}), dropped",
+                            meta.getId(), d == null ? null : d.getKey());
+                    continue;
+                }
+                d.setType(type);
+                valid.add(d);
+            }
+            meta.setSettings(valid);
         }
         // packs（规范 v2.3）：id 必须过与 pack / 插件同一套正则，非法项丢弃并告警——
         // 这串字符会被拼进注册表 URL 与磁盘路径，不能放行任意输入。
