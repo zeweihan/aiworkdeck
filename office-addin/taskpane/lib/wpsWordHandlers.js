@@ -1702,19 +1702,31 @@ export const WPS_WORD_HANDLERS = {
 
   async edit_header_footer(args) {
     const part = args.part === 'footer' ? 'footer' : 'header'
-    const text = args.text == null ? '' : String(args.text)
+    // **没给 text 就不许动文字**（dev-board#288）：旧写法无条件整替，
+    // 模型只想改对齐方式（不传 text）时，text 兜底成空串，一调用就把用户的页眉清空，
+    // 返回值还报成功。显式传空串仍然是「清空」这个合法意图，两者必须分开。
+    const hasText = args.text != null
+    const text = hasText ? String(args.text) : ''
     const alignment = args.alignment == null ? null : toEnumValue(ALIGNMENTS, args.alignment, 'alignment')
+    if (!hasText && !alignment) {
+      throw new Error('edit_header_footer 需要至少给 text（要写入的文字，传空串表示清空）或 alignment 之一')
+    }
     const doc = activeDoc()
     return withTracking(doc, () => {
       const section = doc.Sections.Item(1)
       const hf = (part === 'footer' ? section.Footers : section.Headers).Item(wdHeaderFooterPrimary)
       // 页眉/页脚在独立 story，偏移与正文互不相干；整替与 Office 面 insertText(replace) 同语义
-      hf.Range.Text = normalizeNewlines(text)
+      if (hasText) hf.Range.Text = normalizeNewlines(text)
       if (alignment != null) {
         // 一把设全部段落（ParagraphFormat 作用于 Range 内所有段落）
         hf.Range.ParagraphFormat.Alignment = alignment
       }
-      return { part, textLength: text.length, alignment: args.alignment || null }
+      return {
+        part,
+        textUpdated: hasText,
+        textLength: hasText ? text.length : null,
+        alignment: args.alignment || null
+      }
     })
   },
 

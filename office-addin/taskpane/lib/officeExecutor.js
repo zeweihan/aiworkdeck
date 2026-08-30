@@ -1403,16 +1403,25 @@ const HANDLERS = {
 
   async edit_header_footer(args) {
     const part = args.part === 'footer' ? 'footer' : 'header'
-    const text = args.text == null ? '' : String(args.text)
+    // **没给 text 就不许动文字**（dev-board#288）：旧写法无条件整替，
+    // 模型只想改对齐方式（不传 text）时，text 兜底成空串，一调用就把用户的页眉清空，
+    // 返回值还报成功。显式传空串仍然是「清空」这个合法意图，两者必须分开。
+    const hasText = args.text != null
+    const text = hasText ? String(args.text) : ''
     const alignment = args.alignment == null ? null : toEnumValue(ALIGNMENTS, args.alignment, 'alignment')
+    if (!hasText && !alignment) {
+      throw new Error('edit_header_footer 需要至少给 text（要写入的文字，传空串表示清空）或 alignment 之一')
+    }
     return Word.run(async (context) => {
       return withTracking(context, async () => {
         const section = context.document.sections.getFirst()
         const body = part === 'footer'
           ? section.getFooter(Word.HeaderFooterType.primary)
           : section.getHeader(Word.HeaderFooterType.primary)
-        body.insertText(text, Word.InsertLocation.replace)
-        await context.sync()
+        if (hasText) {
+          body.insertText(text, Word.InsertLocation.replace)
+          await context.sync()
+        }
         if (alignment) {
           const paragraphs = body.paragraphs
           paragraphs.load('items')
@@ -1420,7 +1429,12 @@ const HANDLERS = {
           paragraphs.items.forEach((p) => { p.alignment = alignment })
           await context.sync()
         }
-        return { part, textLength: text.length, alignment: args.alignment || null }
+        return {
+          part,
+          textUpdated: hasText,
+          textLength: hasText ? text.length : null,
+          alignment: args.alignment || null
+        }
       })
     })
   },
@@ -2395,13 +2409,27 @@ const HANDLERS = {
     if (action !== 'protect' && action !== 'unprotect') throw new Error(`action 值非法：${args.action}（合法值：protect/unprotect）`)
     return Excel.run(async (context) => {
       const sheet = resolveSheet(context, sheetName)
+      // **密码是 ExcelApi 1.7 那一档**（dev-board#288）：旧宿主上第二个参数会被
+      // 直接忽略——工作表照样被保护，但**没有密码**，返回值还报成功。
+      // 安全动作不许半途而废：要么真的加上密码，要么明说做不到，绝不静默降级。
+      if (action === 'protect' && password !== undefined && !excelApiSupported('1.7')) {
+        throw new Error('当前 Excel 版本不支持给工作表保护设置密码（需要 ExcelApi 1.7）。'
+          + '不带密码的保护仍然可用——去掉 password 参数重试即可，'
+          + '但必须明确告诉用户这层保护是没有密码的。')
+      }
       if (action === 'protect') {
         sheet.protection.protect(undefined, password)
       } else {
         sheet.protection.unprotect(password)
       }
+      // 回读真实状态，别只报"我发过这条命令"
+      sheet.protection.load('protected')
       await context.sync()
-      return { action }
+      return {
+        action,
+        protected: sheet.protection.protected,
+        passwordApplied: action === 'protect' && password !== undefined
+      }
     })
   },
 
@@ -2443,21 +2471,46 @@ const HANDLERS = {
     return Excel.run(async (context) => {
       const sheet = resolveSheet(context, sheetName)
       const source = sheet.getRange(sourceRangeAddress)
-      const destination = sheet.getRange(destinationCellAddress)
+      // **目标地址允许跨表**（dev-board#288）：工具描述一直承诺可以把透视表放到另一张
+      // 工作表，代码却把 "报表!A1" 整个丢给源表的 getRange，跨表落点根本到不了。
+      const dest = splitSheetQualifiedAddress(destinationCellAddress)
+      const destSheet = dest.sheetName ? resolveSheet(context, dest.sheetName) : sheet
+      const destination = destSheet.getRange(dest.address)
       const name = args.pivotName ? String(args.pivotName) : `PivotTable_${Date.now()}`
       const pivot = sheet.pivotTables.add(name, source, destination)
       pivot.load('name')
+      // 字段名要在**落笔之前**校验完（dev-board#288）：旧写法先建表、再逐个
+      // hierarchies.getItem(字段)，字段名拼错时抛的是英文 ItemNotFound，
+      // 而那张空透视表已经留在用户的工作表上了。层级名只有建表后才拿得到，
+      // 所以改成「建表 → 读层级名 → 全部对得上才继续，对不上就把表删掉再报错」。
+      pivot.hierarchies.load('items/name')
       await context.sync()
+      const available = (pivot.hierarchies.items || []).map((h) => String(h.name))
+      const wanted = rowFields.concat(valueFields).map(String)
+      const missing = wanted.filter((f) => !available.includes(f))
+      if (missing.length) {
+        try {
+          pivot.delete()
+          await context.sync()
+        } catch (e) { /* 删不掉也要把错误说清楚，不能吞掉 */ }
+        throw new Error(`透视表字段不存在：${missing.join('、')}。`
+          + `源区域 ${sourceRangeAddress} 可用字段：${available.join('、') || '（无——请确认源区域第一行是标题行）'}。`
+          + '请用其中之一重试；已自动清除刚建出的空透视表。')
+      }
       for (const field of rowFields) {
-        const hierarchy = pivot.hierarchies.getItem(String(field))
-        pivot.rowHierarchies.add(hierarchy)
+        pivot.rowHierarchies.add(pivot.hierarchies.getItem(String(field)))
       }
       for (const field of valueFields) {
-        const hierarchy = pivot.hierarchies.getItem(String(field))
-        pivot.dataHierarchies.add(hierarchy)
+        pivot.dataHierarchies.add(pivot.hierarchies.getItem(String(field)))
       }
       await context.sync()
-      return { added: true, name: pivot.name, rowFields, valueFields }
+      return {
+        added: true,
+        name: pivot.name,
+        rowFields,
+        valueFields,
+        destinationSheet: dest.sheetName || sheet.name
+      }
     })
   },
 
@@ -2917,6 +2970,19 @@ const HANDLERS = {
 
 /** excel_get_range 返回值的行数上限（防超长工具输出撑爆模型上下文） */
 const MAX_EXCEL_RESULT_ROWS = 500
+
+/**
+ * 拆 "工作表!地址" 形式的限定地址。没有 `!` 时 sheetName 为空（表示用当前表）。
+ * 支持 Excel 对含空格表名的单引号包裹（'我的 表'!A1）。
+ */
+function splitSheetQualifiedAddress(raw) {
+  const text = String(raw || '')
+  const at = text.lastIndexOf('!')
+  if (at === -1) return { sheetName: '', address: text }
+  let name = text.slice(0, at)
+  if (name.startsWith("'") && name.endsWith("'")) name = name.slice(1, -1).replace(/''/g, "'")
+  return { sheetName: name, address: text.slice(at + 1) }
+}
 
 /** 按名取工作表；名为空取活动工作表 */
 function resolveSheet(context, sheetName) {
