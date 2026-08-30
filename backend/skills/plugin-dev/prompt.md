@@ -43,7 +43,7 @@
 }
 ```
 
-- `permissions` 可用值：`file_read`（读项目文件）、`file_write`（预留）、`network`（放开 fetch 到 https）、`editor`（预留）。未声明 `file_read` 时调 `files.*` 会得到 `permission_denied`；未声明 `network` 时 CSP 是 `connect-src 'none'`，fetch 一律被浏览器拦截。权限最小化：用不到的不要声明。
+- `permissions` 可用值：`file_read`（读项目文件）、`file_write`（预留）、`network`（放开 fetch 到 https）、`editor`（文档读写：doc.*/evidence.*，v2.7 起真实生效）、`ai`（面板内静默调平台模型 ai.request，v2.7 起，烧用户 Credits——真用得上才声明）。未声明 `file_read` 时调 `files.*` 会得到 `permission_denied`；未声明 `network` 时 CSP 是 `connect-src 'none'`，fetch 一律被浏览器拦截。权限最小化：用不到的不要声明。
 - **开发安装只收纯 Web 插件**：`backendJars` / `tools` / `skills` / `packs` 任一非空会被拒装。需要后端代码的插件必须走插件广场的人工审核 + 签名流程，不要试图绕开。
 
 ## 运行环境（沙箱边界，写代码前必须知道）
@@ -72,7 +72,7 @@
 | `awd.evidence.list(params)` | `{ docPath?, path?, status? }` | `{ links: [...] }` | 列底稿关联；需 `file_read` |
 | `awd.evidence.locate(params)` | `{ linkKey, targetId? }` | `{}` | 有 targetId 打开底稿定位，否则跳到文档锚点；需 `editor` |
 | `awd.theme.get()` / `awd.theme.onChange(cb)` | - / 回调 | `{ mode, tokens }` / 退订函数 | **v2.6**：主题跟随其实不用调 API——SDK 自动把宿主的 `--awd-*` 令牌写成本页 CSS 变量并挂 `data-theme`，插件 CSS 写 `var(--awd-surface, #fff)` 即可；这两个只给需要脚本联动的场景 |
-| `awd.doc.exec(action, params?)` | 原语名 + 参数 | 原语的原始返回对象 | **v2.7（宿主 0.28+）**：对**当前聚焦文档**执行编辑原语，action/params 与 AI 工具面的下发名同一套（doc_/sheet_/slide_ 安全子集）；白名单外报 `action_not_allowed`；Writer 写入走修订（署名 AI WorkDeck，用户可逐条接受/拒绝），**表格/演示没有修订、写入直接生效**——批量写前先在面板里请用户确认；需 `editor` |
+| `awd.doc.exec(action, params?)` | 原语名 + 参数 | 原语的原始返回对象 | **v2.7（宿主 0.27.4+）**：对**当前聚焦文档**执行编辑原语，action/params 与 AI 工具面的下发名同一套（doc_/sheet_/slide_ 安全子集）；白名单外报 `action_not_allowed`；Writer 写入走修订（署名 AI WorkDeck，用户可逐条接受/拒绝），**表格/演示没有修订、写入直接生效**——批量写前先在面板里请用户确认；需 `editor` |
 | `awd.doc.getText()` / `getSelection()` / `find(text)` / `insertText(text)` / `addComment(anchorText, text)` | - | 原语结果 | **v2.7** 高频糖衣，等价于对应的 `doc.exec` |
 | `awd.doc.active()` | - | `{ fileId, kind }` | **v2.7**：当前聚焦文档；kind ∈ writer/calc/impress，没打开文档时 fileId 为 null；需 `editor` |
 | `awd.events.on(name, cb)` | 事件名 + 回调 | 退订函数 | **v2.7**：订阅宿主事件——`files.changed`（需 `file_read`）/`selection.changed`（需 `editor`）/`project.switched`。事件只是「该重拉了」的信号（data 为空或极小），数据自己用 files.list/doc.exec 拉；老宿主上不报错、只是永不触发 |
@@ -81,7 +81,7 @@
 
 错误处理：reject 的 Error 带 `code` 字段——`permission_denied`（manifest 没声明所需权限）、`unknown_method`（宿主不认识的方法，多见于老宿主还不支持新方法，插件要能降级处理）、`quota_exceeded`（KV 超限 / `chat.send` 超 4000 字 / `ai.request` 超长或超频）、`not_found`（文件/链接不存在）、`invalid_params`（参数缺失或形状不对）、`invoke_failed`（`tools.invoke` 目标工具未声明或执行出错）、`no_active_document`（doc.*/evidence.* 需要聚焦文档但没有）、`action_not_allowed`（`doc.exec` 的原语不对插件开放）、`ai_failed`（模型调用失败）、`experimental_not_allowed`（`x-` 前缀实验方法只对开发安装的插件开放）。给用户看的报错要转成中文人话。
 
-manifest 建议：用到 v2.7 能力（doc.*/events/ai.request）时声明 `"minHostVersion": "0.28.0"`——老宿主不认识新方法，声明后 0.28+ 的宿主能在装的时候就给出「请升级客户端」的明确提示，而不是运行期一堆 `unknown_method`。
+manifest 建议：用到 v2.7 能力（doc.*/events/ai.request）时声明 `"minHostVersion": "0.27.4"`——老宿主不认识新方法，声明后 0.27.4+ 的宿主能在装的时候就给出「请升级客户端」的明确提示，而不是运行期一堆 `unknown_method`。
 
 `awd.tools.invoke` 提醒：**开发安装的插件 manifest `tools` 必须为空**（见上文「开发安装只收纯 Web 插件」），所以这个方法在本地自测环境下永远拿不到工具、只会收 `invoke_failed`；只有走插件广场审核上架、且插件确实声明了 JAR 工具时才会真正生效。给用户写代码前先确认这一点，别承诺一个本机测不出效果的功能。
 

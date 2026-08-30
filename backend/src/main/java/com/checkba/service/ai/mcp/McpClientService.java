@@ -63,6 +63,23 @@ public class McpClientService {
         return provider.callTool(server, resolveToken(server), toolName, args);
     }
 
+    /**
+     * 用调用方自带的服务器配置调工具（规范 v2.8 P3：插件 manifest 声明的远程 MCP
+     * 证据来源不在 mcp.servers 静态表里，宿主按声明现构 ServerConfig 走这里）。
+     * token 解析与 provider 分发与静态表路径完全一致。
+     */
+    public String callTool(McpProperties.ServerConfig server, String toolName, Map<String, Object> args) {
+        log.info("MCP callTool (ad-hoc): server={}, tool={}", server.getName(), toolName);
+        if (!server.isEnabled()) {
+            return "Error: MCP server is disabled: " + server.getName();
+        }
+        McpProvider provider = providersByTransport.get(server.getTransport());
+        if (provider == null) {
+            return "Error: Unsupported MCP transport: " + server.getTransport();
+        }
+        return provider.callTool(server, resolveToken(server), toolName, args);
+    }
+
     /** token 解析：配置了 token-setting-key 时优先取系统设置（在线覆盖），否则用配置值 */
     private String resolveToken(McpProperties.ServerConfig server) {
         String configured = server.getToken() == null ? "" : server.getToken();

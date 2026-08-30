@@ -59,11 +59,18 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
 
 **v2.6 主题通道**（dev-board#274，SDK `1.1.0`→`1.2.0`，照 VS Code 给 webview 注入 `--vscode-*` 的机制）：`init.context` 新增 `themeTokens`（当前主题全部 `--awd-*` 令牌值，名单=宿主 `utils/appTheme.js` 的 `THEME_TOKEN_NAMES`）；宿主切主题时 `PluginPane.pushTheme()` 推 `{awd:1, type:'theme', theme, tokens}`。SDK 收到即自动挂 `data-theme`/body class 并把令牌写成 iframe 内 CSS 变量——插件写 `var(--awd-surface, #fff)` 即可跟随主题（fallback 兼容老宿主）；脚本联动用 `awd.theme.get()/onChange(cb)`。双向兼容：老 SDK 忽略未知 type，老宿主下新 SDK 停在握手快照（无 themeTokens 则只挂 data-theme）。
 
-**v2.7 生态路线 P0-P2（dev-board#280/281/282，宿主 0.28 起）**：设计定稿在 `docs/superpowers/specs/2026-08-29-plugin-p0/p1/p2` 三篇，总路线 `docs/PLUGIN_API_ROADMAP.md`。要点：
+**v2.7 生态路线 P0-P2（dev-board#280/281/282，宿主 0.27.4 起）**：设计定稿在 `docs/superpowers/specs/2026-08-29-plugin-p0/p1/p2` 三篇，总路线 `docs/PLUGIN_API_ROADMAP.md`。要点：
 - **P0 治理**：manifest `minHostVersion`（`PluginService.computeIncompatibleReason`，不兼容 = `isEnabled` 返回 false——既有全部消费点免改自动生效；enable/市场安装/dev 直装三处明确拒绝；宿主版本来自 `telemetry.app-version`←`AWD_APP_VERSION`，dev 态 `"dev"` 跳过）；实验 API `x-` 前缀（`PluginPane.handleCall` 只对 `devInstalled` 放行，`.awd-dev` 标记经 PluginView 透传）；只加不改章程与四处同步纪律 = PLUGIN_SPEC §12。semver 比较用新建的 `com.checkba.util.Semver`（另两份包私有旧拷贝不动）。
 - **P1 doc.\*+事件**：桥 `doc.exec`（白名单 `frontend/src/config/pluginDocActions.js` = `PluginHostImpl.DOC_ACTIONS` 同一份，`doc-actions-parity.test.mjs` 对拍；写入带 `__agent`）、`doc.active`；事件通道 `events.subscribe`/`type:'event'`（`PLUGIN_EVENTS` 表：files.changed 需 file_read/500ms、selection.changed 需 editor/300ms、project.switched；事件源 = `FileTree.loadFiles()` 发 `uni.$emit('awd:files-changed')`、`LibreOfficeEditor` selection 分支发 `awd:selection-changed`，PluginPane 按订阅转发，payload 刻意为空）。
 - **P2 ai.request**：桥 → `POST /api/plugins/{id}/ai/complete`（`PluginController.aiComplete`，闸序同 invokeTool + `ai` 权限 + 16000 字符 + `PluginHostQuota.acquireAi` 10 次/分钟）→ `PlatformAiUserScope` 里调辅助模型 + `TokenUsageService` 记账（pluginId 只进日志）。manifest 权限值新增 `ai`（KNOWN_PERMISSIONS 与 PluginDevService.ALLOWED_PERMISSIONS 两处都加了）。
 - SDK `1.3.0`；测试：`PluginServiceTest`（minHostVersion 五条+dev 标记）、`PluginControllerAiCompleteTest`、`PluginHostQuotaTest`、`events-channel.test.mjs`。
+
+**v2.8 生态路线 P3（dev-board#283，宿主 0.28 起）**：evidence.retrieve.v1 升格公开 Provider 协议（PLUGIN_SPEC §13）。要点：
+- **两条通道**：JAR 实现 `com.checkba.plugin.api.evidence.EvidenceProvider`（plugin-api 1.1.0→1.2.0 新增 evidence 包，`loadJar` 扫描 `isAssignableFrom` 检出并实例化）；manifest `contributes.evidenceSources` 声明远程 MCP（transport=mcp，只收 http(s) url——**本地命令型子进程不受理**，现有 MCP 设施也只有 streamable-http）。
+- **双校验**：`sourceId()` 必须 `<pluginId>.<name>` 且与 manifest 声明（transport=spi）逐字一致，否则拒注册记 ERROR（`PluginService.registerEvidenceProvider`）。
+- **适配层**：`PluginSpiEvidenceRetriever`（10s 超时+异常降级空列表+启用位闸——禁用插件的来源静默）；MCP 走 `McpEvidenceRetriever` 新增的 ad-hoc ServerConfig 构造器 + `McpClientService.callTool(ServerConfig,...)` 新重载。`EvidenceRetrieverRegistry` 新增 registerExternal/unregisterExternal/clearExternal（外部来源独立 ConcurrentHashMap，内置表不动；rescan 整批清空重建）。
+- conformance：`EvidenceProviderConformanceKit`（plugin-api 内零依赖执行器，返回空列表=通过）；示例 `examples/hello-evidence-plugin/`（SPI+conformance 全绿）。dev 免签直装**不收** evidenceSources（PluginDevService 校验直接报错）。
+- 地雷：插件别实现内部接口 `service.ai.evidence.EvidenceRetriever`（不是契约）；`registerDeclaredMcpEvidenceSources` 在元数据阶段注册（不兼容插件跳过）、SPI 的随 JAR 加载注册——两条路都吃 registry 判空（直接 new PluginService 的测试不受影响）。
 
 **这是 manifest permissions 第一次成为真实边界**：缺 `file_read` 时 `files.*` 直接 `permission_denied`；`network` 决定 PluginWebController 下发的 CSP 是 `connect-src 'none'` 还是 `connect-src https:`。JAR 插件同 JVM 同权限，做不到这一点。
 

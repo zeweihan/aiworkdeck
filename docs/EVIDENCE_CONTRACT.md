@@ -14,8 +14,14 @@ EvidenceRetrieverRegistry（能力发现）
    │
    ├─ MemoryEvidenceRetriever      本地：记忆证据账本（PR#155）
    ├─ McpEvidenceRetriever          MCP 传输适配（ai.evidence.mcp-sources 配置驱动）
-   └─ （插件 JAR 实现 EvidenceRetriever 接口即可接入）
+   └─ 插件来源（插件规范 v2.8 §13，公开协议）：
+        · JAR 实现 com.checkba.plugin.api.evidence.EvidenceProvider（plugin-api 1.2.0）
+        · manifest contributes.evidenceSources 声明远程 MCP（transport: mcp，仅 http(s) url）
 ```
+
+> 注意插件**不要**实现内部接口 `com.checkba.service.ai.evidence.EvidenceRetriever`——
+> 那不是契约（v2.4 起插件只许引用 `com.checkba.plugin.api.*`）；公开 SPI 是上面的
+> `EvidenceProvider`，一致性自测用 `EvidenceProviderConformanceKit`。
 
 代码位置：`backend/src/main/java/com/checkba/service/ai/evidence/`。
 LLM 入口：工具 `retrieve_evidence`（`EvidenceTools`）。
