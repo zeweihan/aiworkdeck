@@ -48,8 +48,23 @@ NOTARY_KEY_PATH=/Users/zewei/Documents/2024-2044/5-Tech/5-BQT_Global/fastlane/AS
 NOTARY_KEY_ID=<ASC_KEY_ID> NOTARY_ISSUER_ID=<ASC_ISSUER_ID> npm run build:installers
 ```
 
-（两个 ID 的值在 `5-BQT_Global/fastlane/.env`。）验证：`spctl --assess --type open -v <dmg>`
-或挂载后 `spctl --assess -v <app>` 应输出 `source=Notarized Developer ID`。
+（两个 ID 的值在 `5-BQT_Global/fastlane/.env`。）
+
+**验证只认「挂载后评估 .app」这一条**（2026-08-30 修正）：
+
+```bash
+hdiutil attach -nobrowse -mountpoint /tmp/m <dmg>
+spctl --assess -v "/tmp/m/安装 AI WorkDeck Office 插件.app"   # 期望 accepted / source=Notarized Developer ID
+xcrun stapler validate <dmg>                                  # 期望 The validate action worked!
+hdiutil detach /tmp/m
+```
+
+**不要对 dmg 本身跑 `spctl --assess`**：我们的 DMG 是公证并装订了票据、但**自身不签名**
+（票据贴在 dmg 上，Gatekeeper 在用户打开 .app 时校验里面那个签名）。所以
+`spctl --assess --type open -v <dmg>` 恒回 `rejected / source=no usable signature`，
+`--type install` 同理——**这不是故障**。2026-08-30 照旧文案验收时曾据此误判成签名坏了，
+把线上现役 0.27.4 的包拉下来一比，行为一模一样，才确认是文案错了不是产物坏了。
+判据永远是里面那个 .app。
 
 ## 测试口径红线（dev-board#68 血泪）
 
