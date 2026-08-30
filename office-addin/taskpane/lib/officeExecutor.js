@@ -1739,23 +1739,28 @@ const HANDLERS = {
       const range = rangeAddress
         ? sheet.getRange(rangeAddress)
         : sheet.getUsedRangeOrNullObject(true)
-      range.load('values,address,rowCount,columnCount,isNullObject')
+      // **先只取尺寸，值等截断之后再取**（dev-board#288）：返回值最多给
+      // MAX_EXCEL_RESULT_ROWS 行，把整片区域的 values 编组过桥就是白搬。
+      // 几万行的台账上，这一趟能让任务窗格无响应几十秒。与 wordDoc.readExcelSheet
+      // 同一条纪律：截断必须发生在过桥之前。
+      range.load('address,rowCount,columnCount,isNullObject,rowIndex,columnIndex')
       await context.sync()
       if (range.isNullObject) {
         return { sheet: sheet.name, address: '', rows: 0, cols: 0, values: [], note: '工作表为空' }
       }
-      let values = range.values
-      let truncated = false
-      if (values.length > MAX_EXCEL_RESULT_ROWS) {
-        values = values.slice(0, MAX_EXCEL_RESULT_ROWS)
-        truncated = true
-      }
+      const totalRows = range.rowCount
+      const truncated = totalRows > MAX_EXCEL_RESULT_ROWS
+      const target = truncated
+        ? sheet.getRangeByIndexes(range.rowIndex, range.columnIndex, MAX_EXCEL_RESULT_ROWS, range.columnCount)
+        : range
+      target.load('values')
+      await context.sync()
       return {
         sheet: sheet.name,
         address: range.address,
-        rows: range.rowCount,
+        rows: totalRows,
         cols: range.columnCount,
-        values,
+        values: target.values || [],
         truncated
       }
     })
@@ -3069,14 +3074,64 @@ function getSlideOrThrow(slides, slideNumber) {
 }
 
 /** 载入全部幻灯片各形状的 TextFrame（含 hasText 与 textRange.text），返回按页分组的数组 */
+/** 组合形状递归的深度上限（每一层多一次 sync，与 WPS 面同口径） */
+const PPT_GROUP_MAX_DEPTH = 4
+
+/**
+ * 逐页收集**所有承载文字的 TextFrame**，含组合形状（group）里的子形状。
+ *
+ * 为什么要递归（dev-board#288）：演示稿里图示+标注、SmartArt 转出来的内容都是组合形状，
+ * 文字在子形状上；只看顶层 `getTextFrameOrNullObject()` 的话，这些字既读不到也改不了——
+ * 用户看着满屏字，AI 说这页没这段内容。WPS 面（wpsWppHandlers.textBearingShapes）已经
+ * 按「表格 → 组合递归 → 普通文本框」三条路收，Office 面此前只有第三条。
+ *
+ * 版本门槛：`Shape.group` / `ShapeGroup.shapes` 是 **PowerPointApi 1.8**（官方文档核实，
+ * 与本文件表格三件套同档）；`ShapeType.group` 本身是 1.4。**1.8 不支持时不报错**，
+ * 退化成「只收顶层」——与改造前逐字一致，不该因为想多读一点就把老宿主整条打死。
+ *
+ * 表格文字不在这里收：Office 面有 ppt_table_read / ppt_table_set_cell 专门通道
+ * （WPS 面没有那条通道，所以它把表格并进了遍历）。
+ */
 async function loadPptTextFrames(context) {
   const slides = context.presentation.slides
   slides.load('items')
   await context.sync()
-  slides.items.forEach((slide) => slide.shapes.load('items'))
+  slides.items.forEach((slide) => slide.shapes.load('items/type'))
   await context.sync()
-  const frames = slides.items.map((slide) =>
-    slide.shapes.items.map((shape) => {
+
+  const perSlide = slides.items.map((slide) => slide.shapes.items.slice())
+  if (pptApiSupported('1.8')) {
+    // 逐层展开组合：只在这一层真的有组合时才多花一次 sync
+    for (let depth = 0; depth < PPT_GROUP_MAX_DEPTH; depth++) {
+      const pending = []
+      perSlide.forEach((shapes, si) => {
+        shapes.forEach((shape) => {
+          if (String(shape.type) !== 'Group') return
+          try {
+            const inner = shape.group.shapes
+            inner.load('items/type')
+            pending.push({ si, inner })
+          } catch (e) { /* 个别形状取不到子集合，跳过它 */ }
+        })
+      })
+      if (!pending.length) break
+      await context.sync()
+      // 展开后的子形状替换掉本层的组合壳（组合壳自身没有文字）
+      const nextLevel = perSlide.map(() => [])
+      pending.forEach(({ si, inner }) => {
+        try {
+          for (const child of inner.items) nextLevel[si].push(child)
+        } catch (e) { /* 子集合读失败只丢这一个组合 */ }
+      })
+      perSlide.forEach((shapes, si) => {
+        const kept = shapes.filter((sp) => String(sp.type) !== 'Group')
+        perSlide[si] = kept.concat(nextLevel[si])
+      })
+    }
+  }
+
+  const frames = perSlide.map((shapes) =>
+    shapes.map((shape) => {
       const tf = shape.getTextFrameOrNullObject()
       tf.load('hasText,isNullObject')
       tf.textRange.load('text')

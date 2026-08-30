@@ -62,14 +62,26 @@ async function readExcelSheet() {
     const sheet = context.workbook.worksheets.getActiveWorksheet()
     sheet.load('name')
     const used = sheet.getUsedRangeOrNullObject(true)
-    used.load('values,address,isNullObject')
+    // **先只取尺寸，不取值**（dev-board#288）：既然只展示前 MAX_EXCEL_ROWS 行，
+    // 把整片已用区域的 values 编组过桥就是白搬——几万行的台账「一问就卡死几十秒」，
+    // 而且卡的是同步桥上的任务窗格。WPS 面（wpsDoc.readEtSheet）早就是「先 Resize
+    // 再取 Value2」，Office 面一直没跟。截断必须发生在过桥之前。
+    used.load('address,isNullObject,rowIndex,columnIndex,rowCount,columnCount')
     await context.sync()
     if (used.isNullObject) return `工作表「${sheet.name}」为空`
-    const rows = used.values.slice(0, MAX_EXCEL_ROWS)
+    const totalRows = used.rowCount
+    const shownRows = Math.min(totalRows, MAX_EXCEL_ROWS)
+    // getRangeByIndexes 是 ExcelApi 1.1，无版本门槛
+    const slice = shownRows < totalRows
+      ? sheet.getRangeByIndexes(used.rowIndex, used.columnIndex, shownRows, used.columnCount)
+      : used
+    slice.load('values')
+    await context.sync()
+    const rows = slice.values || []
     const lines = rows.map((row) => row.map((v) => (v == null ? '' : String(v))).join('\t'))
     let out = `工作表「${sheet.name}」（区域 ${used.address}）：\n` + lines.join('\n')
-    if (used.values.length > MAX_EXCEL_ROWS) {
-      out += `\n...（共 ${used.values.length} 行，仅附前 ${MAX_EXCEL_ROWS} 行）`
+    if (totalRows > MAX_EXCEL_ROWS) {
+      out += `\n...（共 ${totalRows} 行，仅附前 ${MAX_EXCEL_ROWS} 行）`
     }
     return out
   })
