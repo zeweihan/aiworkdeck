@@ -50,8 +50,21 @@ public class ClientCapabilityService {
         POWERPOINT
     }
 
+    /**
+     * Office 会话的宿主家族（仅 Capability.OFFICE 有意义，dev-board#298）。
+     * 工具可见性不区分家族（office_command 契约两家族同构），只用于对话镜像的来源标注
+     * （桌面端要能区分「Word 插件」与「WPS 文字插件」）。
+     */
+    public enum OfficeFamily {
+        /** Microsoft Office 任务窗格（默认，兼容不上送 officeFamily 的存量插件）。 */
+        OFFICE,
+        /** WPS 加载项任务窗格。 */
+        WPS
+    }
+
     private final ConcurrentHashMap<String, Capability> byConversation = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, OfficeHost> hostByConversation = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, OfficeFamily> familyByConversation = new ConcurrentHashMap<>();
 
     /**
      * 记录一次 chat 请求声明的客户端能力（不带宿主细分，宿主按 WORD 兜底）。
@@ -66,6 +79,13 @@ public class ClientCapabilityService {
      * officeHostRaw 为空或无法识别时按 WORD 处理（存量 Word 插件不上送该字段）。
      */
     public void record(String conversationId, String raw, String officeHostRaw) {
+        record(conversationId, raw, officeHostRaw, null);
+    }
+
+    /**
+     * 全参重载：再带宿主家族（office / wps）。familyRaw 为空或无法识别时按 OFFICE 处理。
+     */
+    public void record(String conversationId, String raw, String officeHostRaw, String familyRaw) {
         if (conversationId == null || conversationId.isBlank()) {
             return;
         }
@@ -79,6 +99,15 @@ public class ClientCapabilityService {
         if (previousHost != null && previousHost != parsedHost) {
             log.info("Office host changed for conversation {}: {} -> {}", conversationId, previousHost, parsedHost);
         }
+        familyByConversation.put(conversationId, parseFamily(familyRaw));
+    }
+
+    /** Office 会话的宿主家族；未登记（含 conversationId 为 null）时默认 OFFICE。 */
+    public OfficeFamily officeFamilyOf(String conversationId) {
+        if (conversationId == null) {
+            return OfficeFamily.OFFICE;
+        }
+        return familyByConversation.getOrDefault(conversationId, OfficeFamily.OFFICE);
     }
 
     /** 会话能力；未登记（含 conversationId 为 null）时默认 LOWA。 */
@@ -142,6 +171,18 @@ public class ClientCapabilityService {
         } catch (IllegalArgumentException e) {
             log.warn("Unknown clientCapability '{}', falling back to LOWA", raw);
             return Capability.LOWA;
+        }
+    }
+
+    private static OfficeFamily parseFamily(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return OfficeFamily.OFFICE;
+        }
+        try {
+            return OfficeFamily.valueOf(raw.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            log.warn("Unknown officeFamily '{}', falling back to OFFICE", raw);
+            return OfficeFamily.OFFICE;
         }
     }
 

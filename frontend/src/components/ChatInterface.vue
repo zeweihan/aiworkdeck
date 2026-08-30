@@ -453,6 +453,13 @@
 
     <!-- 4. Regular Bottom Input -->
     <view v-else class="input-area-wrapper">
+       <!-- 插件镜像会话只读（dev-board#298）：输入区整体换成说明条，
+            唯一动作是「另起分支继续」（fork 后由宿主切到新会话并解除只读） -->
+       <view v-if="externalReadOnly" class="readonly-bar">
+          <text class="readonly-text">{{ $t('chat.pluginReadOnlyNotice', { source: externalReadOnly }) }}</text>
+          <view class="readonly-fork-btn" @tap="$emit('fork-conversation')">{{ $t('chat.forkToContinue') }}</view>
+       </view>
+       <template v-else>
        <!-- 任务清单进度卡已随消息流内联展示（RootBubble），不再常驻输入框上方，
             避免与气泡内的步骤分组重复（用户反馈：线性时序结构） -->
        <!-- 步数超限暂停 / 上次进程被杀：一键继续，免得用户手动输入「继续」 -->
@@ -637,6 +644,7 @@
           </view>
           <view v-if="showModelDropdown || showModeDropdown || showSkillDropdown" class="dropdown-mask" @tap="showModelDropdown = false; showModeDropdown = false; showSkillDropdown = false"></view>
        </view>
+       </template>
     </view>
 
     <!-- Background Task Progress Indicator -->
@@ -684,6 +692,13 @@ export default {
     activeTabPane: {
       type: String,
       default: null // 'left' | 'right' | null
+    },
+    // 插件镜像会话只读态（dev-board#298）：非空 = 当前会话是插件同步过来的镜像，
+    // 值是来源文案（如「Word 插件」，由宿主用 utils/conversationSource.js 算好传入）。
+    // 输入区整体换成说明条 +「另起分支继续」按钮（emit 'fork-conversation'）。
+    externalReadOnly: {
+      type: String,
+      default: ''
     }
   },
   setup(props, { emit, expose }) {
@@ -1342,6 +1357,9 @@ export default {
     }
 
     const handleSubmit = async () => {
+      // 插件镜像会话只读（dev-board#298）：输入区已换成说明条，这里再拦一道
+      // 兜住空态输入框等旁路（后端对镜像会话追加也会拒，这是省一次报错）
+      if (props.externalReadOnly) return
       // 流式进行中禁止再发送（回车路径不走发送按钮的 abort 分支）：
       // 必须在清空输入框之前拦截，否则用户输入会被静默丢弃
       if (isStreaming.value || isUploadingPasted.value) return
@@ -3414,6 +3432,36 @@ export default {
   flex-shrink: 0;
   min-width: 0;
   box-sizing: border-box;
+}
+
+/* 插件镜像会话只读条（dev-board#298） */
+.readonly-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--awd-accent-wash);
+  border: 1px solid var(--awd-border);
+  border-radius: 8px;
+}
+.readonly-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--awd-text-2);
+}
+.readonly-fork-btn {
+  flex-shrink: 0;
+  padding: 5px 12px;
+  font-size: 12px;
+  color: var(--awd-text-on-accent);
+  background: var(--awd-accent);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.readonly-fork-btn:hover {
+  background: var(--awd-accent-hover);
 }
 
 /* Context Files Styles */

@@ -7,16 +7,16 @@
       <!-- 项目归属必须一直可见且可切换（dev-board#148/#173）：只要有项目就渲染下拉，
            单项目也渲染——旧版单项目只给只读名牌，用户以为不能选择项目 -->
       <select
-        v-if="view === 'chat' && projects.length"
+        v-if="view === 'chat' && (projects.length || remoteDevices.length || boundOrphanOption)"
         class="project-select"
-        :value="projectId"
+        :value="selectValue"
         :title="currentProjectName ? t('currentProjectTitle', { name: currentProjectName }) : t('selectProject')"
         @change="onProjectSelect($event)"
       >
         <option value="" disabled>{{ t('selectProject') }}</option>
         <option v-for="p in projects" :key="p.id" :value="String(p.id)">{{ p.name }}</option>
-        <!-- 远程设备项目（dev-board#250）：只读展示，value 带 remote:: 哨兵前缀，
-             onProjectSelect 拦截后恢复本地选中值 + 打开跨设备传输面板并预选该设备/项目（dev-board#251） -->
+        <!-- 远程设备项目（dev-board#250/#297）：选中 = 归档绑定——云端建影子容器项目，
+             这里的对话与文档副本自动归档回那台桌面机的该项目（onProjectSelect 的 remote:: 分支） -->
         <optgroup v-for="d in remoteDevices" :key="d.deviceId" :label="deviceGroupLabel(d)">
           <option v-for="p in d.projects" :key="d.deviceId + '::' + p.key" :value="`remote::${d.deviceId}::${p.key}`">
             {{ p.name }}
@@ -27,6 +27,11 @@
             {{ t('remoteNoProjects') }}
           </option>
         </optgroup>
+        <!-- 已绑定但设备目录里暂时找不到的孤儿项（设备离线/目录被顶）：补一个选项
+             让当前选中态仍然可见，否则 select 会显示成空白 -->
+        <option v-if="boundOrphanOption" :value="boundOrphanOption.value">
+          {{ boundOrphanOption.label }}
+        </option>
         <!-- 新建项目（dev-board#196）：哨兵值，onProjectSelect 拦截后弹输入面板 -->
         <option value="__new__">{{ t('newProjectOption') }}</option>
       </select>
@@ -60,6 +65,9 @@
       </template>
       <button v-else class="icon-btn" @click="view = 'chat'">{{ t('back') }}</button>
     </header>
+
+    <!-- 归档绑定提示（dev-board#297）：绑定成功/失败的一次性反馈，几秒自隐 -->
+    <div v-if="archiveHint" class="archive-hint" :class="{ error: archiveHintError }">{{ archiveHint }}</div>
 
     <!-- 账户菜单（dev-board#194）：展示账户基本信息与 AI 额度，不再挂「高级设置」入口——
          那个入口把已登录用户带回登录表单，看起来像是被登出了 -->
@@ -155,17 +163,19 @@ import SettingsView from './components/SettingsView.vue'
 import ChatView from './components/ChatView.vue'
 import TransferPanel from './components/TransferPanel.vue'
 import {
-  loadSettings, saveProjectId, isConfigured, hydrateSettings, clearToken, mirrorLang
+  loadSettings, saveProjectId, isConfigured, hydrateSettings, clearToken, mirrorLang,
+  loadArchiveLinks, saveArchiveLink, mergeArchiveLinks
 } from './lib/settings.js'
 import {
   fetchMyProjects, ensureAddinDefaultProject, fetchMe, postLogout,
-  createProject, fetchPlatformAiStatus, fetchMobileDevices
+  createProject, fetchPlatformAiStatus, fetchMobileDevices,
+  ensureAddinLink, fetchAddinLinks
 } from './lib/api.js'
 import { t, getLang, setLang } from './lib/i18n.js'
 import { rechargeUrl, openExternal } from './lib/site.js'
 import { hostFamily, hidePanel } from './lib/hostBridge.js'
 import { popIn } from './lib/motion.js'
-import { transferOpen, openTransfer, closeTransfer } from './lib/transfer.js'
+import { transferOpen, closeTransfer } from './lib/transfer.js'
 
 const settings = reactive(loadSettings())
 const configured = computed(() => isConfigured(settings))
@@ -174,6 +184,11 @@ const projects = ref([])
 /** 该账号其它设备的项目目录（dev-board#250），供下拉渲染远程设备分组 */
 const remoteDevices = ref([])
 const projectId = ref(settings.projectId || '')
+/** 归档绑定映射（dev-board#297）：影子项目 id → {deviceId, projectKey, name, deviceName} */
+const archiveLinks = ref(loadArchiveLinks())
+const archiveHint = ref('')
+const archiveHintError = ref(false)
+let archiveHintTimer = null
 const langKey = ref(getLang())
 const me = ref(null)
 const accountOpen = ref(false)
@@ -203,9 +218,65 @@ function collapsePane() {
 }
 
 const currentProjectName = computed(() => {
+  const binding = archiveLinks.value[projectId.value]
+  if (binding && binding.name) return binding.name
   const hit = projects.value.find(p => String(p.id) === projectId.value)
   return hit ? hit.name : ''
 })
+
+/**
+ * select 的显示值（dev-board#297）：当前项目有归档绑定时选中态落在远程条目上
+ * （影子项目已从「我的项目」列表滤掉，直接用 projectId 会显示成空白）。
+ */
+const selectValue = computed(() => {
+  const binding = archiveLinks.value[projectId.value]
+  return binding ? `remote::${binding.deviceId}::${binding.projectKey}` : projectId.value
+})
+
+/** 绑定选中态在远程设备目录里找不到对应条目（设备离线/目录被顶）时的兜底选项 */
+const boundOrphanOption = computed(() => {
+  const binding = archiveLinks.value[projectId.value]
+  if (!binding) return null
+  const present = remoteDevices.value.some(d => d.deviceId === binding.deviceId
+    && (d.projects || []).some(p => String(p.key) === String(binding.projectKey)))
+  if (present) return null
+  return {
+    value: `remote::${binding.deviceId}::${binding.projectKey}`,
+    label: binding.name || t('unknownDevice')
+  }
+})
+
+function showArchiveHint(text, isError) {
+  archiveHint.value = text
+  archiveHintError.value = Boolean(isError)
+  if (archiveHintTimer) clearTimeout(archiveHintTimer)
+  archiveHintTimer = setTimeout(() => { archiveHint.value = '' }, isError ? 8000 : 6000)
+}
+
+/**
+ * 归档绑定（dev-board#297）：选中远程设备分组的桌面项目 = 云端 find-or-create 影子
+ * 容器项目并切换过去。会话/附件照常挂影子项目；对话镜像与文档镜像按绑定路由回桌面。
+ */
+async function bindRemoteProject(deviceId, projectKey) {
+  const device = remoteDevices.value.find(d => d.deviceId === deviceId)
+  const remote = device && (device.projects || []).find(p => String(p.key) === String(projectKey))
+  const name = (remote && remote.name) || ''
+  showArchiveHint(t('archiveBinding'), false)
+  try {
+    const link = await ensureAddinLink(settings, { deviceId, projectKey, name })
+    saveArchiveLink(link.projectId, {
+      deviceId: link.deviceId,
+      projectKey: link.projectKey,
+      name: name || String(link.projectId),
+      deviceName: (device && device.deviceName) || ''
+    })
+    archiveLinks.value = loadArchiveLinks()
+    onProjectChange(String(link.projectId))
+    showArchiveHint(t('archiveBoundHint', { name: name || String(link.projectId) }), false)
+  } catch (e) {
+    showArchiveHint((e && e.message) || t('archiveLinkUnsupported'), true)
+  }
+}
 
 // 按钮显示「切过去」的语言名（在中文界面显示 EN，反之显示中）；
 // 字面量放 script 里——i18n 静态扫描只盯模板段的裸中文
@@ -260,10 +331,16 @@ async function refreshProjects() {
   // 这组下拉项，不影响本服务项目的正常选择
   fetchMobileDevices(settings).then((devices) => { remoteDevices.value = devices || [] })
   try {
+    // 归档绑定权威清单先到位（dev-board#297）：webview 清过缓存时靠它重建本地映射，
+    // 否则下面的「记住的项目已不存在」判定会把绑定的影子项目误清掉
+    const serverLinks = await fetchAddinLinks(settings)
+    if (serverLinks.length) archiveLinks.value = mergeArchiveLinks(serverLinks)
+
     const list = await fetchMyProjects(settings)
     projects.value = list
-    // 记住的项目已不存在时清空选择
-    if (projectId.value && !list.some(p => String(p.id) === projectId.value)) {
+    // 记住的项目已不存在时清空选择——绑定的影子项目刻意不在列表里，豁免
+    if (projectId.value && !list.some(p => String(p.id) === projectId.value)
+        && !archiveLinks.value[projectId.value]) {
       projectId.value = ''
       saveProjectId('')
     }
@@ -272,6 +349,8 @@ async function refreshProjects() {
       return
     }
 
+    // 已有选中（含绑定的影子项目）就不再懒建临时项目
+    if (projectId.value) return
     const created = await ensureAddinDefaultProject(settings)
     if (created) {
       projects.value = [created]
@@ -301,11 +380,12 @@ function onProjectSelect(ev) {
     return
   }
   if (value.startsWith('remote::')) {
-    // 远程设备项目只读——只作跨设备文件传输的来源/目标（dev-board#251）：
-    // 显示值退回当前本地项目，改为打开传输面板并预选该设备/项目
-    ev.target.value = projectId.value || ''
+    // 归档绑定（dev-board#297，取代 #251 的「打开传输面板」旧语义）：选中桌面项目 =
+    // 这份工作归属那个案件。显示值先退回当前值（绑定成功后 selectValue 会落到远程条目），
+    // 跨设备传输面板入口仍在「+」菜单。
+    ev.target.value = selectValue.value || ''
     const parts = value.split('::')
-    openTransfer({ deviceId: parts[1] || '', projectKey: parts[2] || '' })
+    bindRemoteProject(parts[1] || '', parts[2] || '')
     return
   }
   onProjectChange(value)
@@ -446,6 +526,23 @@ onMounted(async () => {
 }
 
 .project-select:hover { border-color: var(--awd-accent); }
+
+/* 归档绑定提示（dev-board#297）：头部下方一次性反馈条 */
+.archive-hint {
+  margin: 6px 10px 0;
+  padding: 6px 10px;
+  border-radius: var(--awd-radius-sm);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--awd-accent);
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
+}
+
+.archive-hint.error {
+  color: var(--awd-danger, #b23a3a);
+  border-color: var(--awd-danger, #b23a3a);
+}
 
 .icon-btn {
   padding: 3px 10px;

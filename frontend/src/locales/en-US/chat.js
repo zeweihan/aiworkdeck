@@ -57,6 +57,8 @@ export default {
   welcomeSubtitle: 'Ask questions, draft documents, or analyze data anytime.',
   inputPlaceholderEmpty: 'Ask a question, drag files or folders here, or paste contract text...',
   inputPlaceholder: 'Ask anything or describe a task',
+  pluginReadOnlyNotice: 'Add-in conversation ({source}) is read-only. Fork it to continue here.',
+  forkToContinue: 'Fork to continue',
   recentChats: 'Recent Conversations',
   recentChatsEmpty: 'Your recent chats will appear here',
   aiDisclaimer: 'AI-generated content is for reference only and does not constitute a formal legal opinion. Use at your own risk.',

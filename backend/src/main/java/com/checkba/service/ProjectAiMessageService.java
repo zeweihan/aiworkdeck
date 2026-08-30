@@ -19,6 +19,20 @@ public class ProjectAiMessageService {
     /** 概览页会话列表的发起人显示名。 */
     private final com.checkba.repository.UserRepository userRepository;
 
+    /**
+     * 插件对话镜像（dev-board#298）旁路挂钩。可选注入（field 注入而非构造器参数）：
+     * 五处手工 {@code new ProjectAiMessageService(...)} 的测试不受牵连，null 即整条旁路关闭。
+     * 每个落库口保存后调 {@link #mirror(ProjectAiMessage)}——绑定项目的消息进 outbox。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.addin.AddinConvSyncService addinConvSyncService;
+
+    private void mirror(ProjectAiMessage msg) {
+        if (addinConvSyncService != null) {
+            addinConvSyncService.record(msg);
+        }
+    }
+
     public void saveUserAndAssistantMessage(String projectIdStr, Long userId, String conversationId, String userContent, String assistantContent) {
         if (projectIdStr == null) {
             return;
@@ -48,6 +62,8 @@ public class ProjectAiMessageService {
         aiMsg.setConversationId(conversationId);
         aiMsg.setCreatedAt(LocalDateTime.now());
         repository.save(aiMsg);
+        mirror(userMsg);
+        mirror(aiMsg);
     }
 
     // Deprecated or Legacy support
@@ -94,6 +110,7 @@ public class ProjectAiMessageService {
         msg.setConversationId(conversationId);
         msg.setCreatedAt(java.time.LocalDateTime.now());
         repository.save(msg);
+        mirror(msg);
     }
 
     /**
@@ -123,6 +140,7 @@ public class ProjectAiMessageService {
                 ProjectAiMessage existing = existingOpt.get();
                 existing.setContent(content);
                 repository.save(existing);
+                mirror(existing);
                 return existing.getId();
             }
         }
@@ -135,6 +153,7 @@ public class ProjectAiMessageService {
         msg.setConversationId(conversationId);
         msg.setCreatedAt(java.time.LocalDateTime.now());
         repository.save(msg);
+        mirror(msg);
         return msg.getId();
     }
 
@@ -151,6 +170,18 @@ public class ProjectAiMessageService {
 
     public List<ProjectAiMessage> listByConversationId(String conversationId) {
         return repository.findByConversationIdOrderByCreatedAtAsc(conversationId);
+    }
+
+    /**
+     * 是否为插件镜像会话（dev-board#298）：首条消息带 sourceChannel。
+     * 镜像会话在桌面端只读——插件那头还在续写同一条时间线，桌面直接续写会双头交错；
+     * 续聊走 {@link #forkConversation}。云端原生会话的 sourceChannel 恒为 null，不受影响。
+     */
+    public boolean isMirroredConversation(String conversationId) {
+        if (conversationId == null) return false;
+        return repository.findFirstByConversationId(conversationId)
+                .map(m -> m.getSourceChannel() != null && !m.getSourceChannel().isBlank())
+                .orElse(false);
     }
 
     /** 校验会话是否属于该用户（用于回滚等破坏性操作的越权防护），据首条消息的 userId 判定。 */
@@ -203,9 +234,108 @@ public class ProjectAiMessageService {
                         preview = truncatePreview(firstUserMessage.replaceAll("<[^>]+>", "").replaceAll("\\s+", " ").trim());
                     }
                     map.put("lastMessage", preview);
+                    // 来源通道（首条消息的）：镜像导入的会话非空，前端据此渲染角标 + 只读态
+                    map.put("sourceChannel", row.length > 5 && row[5] != null ? row[5].toString() : null);
                     return map;
                 })
                 .collect(java.util.stream.Collectors.toList());
+    }
+
+    /**
+     * 插件对话镜像导入（dev-board#298，桌面侧）：按 (conversationId, sourceMessageId) 幂等 upsert。
+     *
+     * <p>三条不变式：content 空白直接跳过（langchain4j 对空白消息抛异常，脏数据能报废整条会话）；
+     * role 归一大写且只认 USER/ASSISTANT（其余值上下文组装会静默丢弃，不如导入时就拒）；
+     * createdAt 必须严格递增——历史回放只按 created_at ASC 排序、没有 id tiebreaker，
+     * 同刻多条的顺序是未定义的，这里以「同会话现存最大时间戳 + 1ms」为下限逐条钳。
+     *
+     * @return 落库的行；跳过（空白/坏 role）时返回 null
+     */
+    public ProjectAiMessage importExternalMessage(Long projectId, Long userId, String conversationId,
+                                                  String role, String content, String displayContent,
+                                                  String sourceChannel, Long sourceMessageId,
+                                                  LocalDateTime originalCreatedAt) {
+        if (projectId == null || conversationId == null || sourceMessageId == null) return null;
+        if (content == null || content.isBlank()) return null;
+        String normalizedRole = role == null ? "" : role.trim().toUpperCase();
+        if (!"USER".equals(normalizedRole) && !"ASSISTANT".equals(normalizedRole)) return null;
+
+        java.util.Optional<ProjectAiMessage> existing =
+                repository.findByConversationIdAndSourceMessageId(conversationId, sourceMessageId);
+        if (existing.isPresent()) {
+            ProjectAiMessage row = existing.get();
+            row.setContent(content);
+            row.setDisplayContent(displayContent == null || displayContent.isBlank() ? null : displayContent);
+            return repository.save(row);
+        }
+
+        LocalDateTime createdAt = originalCreatedAt != null ? originalCreatedAt : LocalDateTime.now();
+        LocalDateTime maxExisting = repository.maxCreatedAtByConversationId(conversationId);
+        if (maxExisting != null && !createdAt.isAfter(maxExisting)) {
+            createdAt = maxExisting.plusNanos(1_000_000);
+        }
+
+        ProjectAiMessage msg = new ProjectAiMessage();
+        msg.setProjectId(projectId);
+        msg.setUserId(userId);
+        msg.setRole(normalizedRole);
+        msg.setContent(content);
+        msg.setDisplayContent(displayContent == null || displayContent.isBlank() ? null : displayContent);
+        msg.setConversationId(conversationId);
+        msg.setSourceChannel(sourceChannel);
+        msg.setSourceMessageId(sourceMessageId);
+        msg.setCreatedAt(createdAt);
+        return repository.save(msg);
+    }
+
+    /**
+     * fork-from-here（dev-board#298）：把整条会话的消息复制成一条新的本地会话继续聊。
+     * 镜像导入的会话在桌面端只读（插件那头还在续写同一条，双头写会让下次同步交错成一锅粥），
+     * 想续聊就走这条——分叉是显式动作，原件不被污染。
+     *
+     * <p>复制行保留原始 createdAt（回放顺序不变）；sourceChannel/sourceMessageId 置空
+     * （分叉出来的是普通本地会话，可写、不再接收镜像更新）；userId 改成发起 fork 的用户。
+     *
+     * @return 新会话 id（conv-毫秒，桌面自造格式）
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public String forkConversation(String conversationId, Long userId) {
+        List<ProjectAiMessage> source = repository.findByConversationIdOrderByCreatedAtAsc(conversationId);
+        if (source.isEmpty()) {
+            throw new IllegalArgumentException(LangText.of("会话不存在或为空", "Conversation not found or empty"));
+        }
+        String newConversationId = "conv-" + System.currentTimeMillis();
+        String baseTitle = null;
+        for (ProjectAiMessage m : source) {
+            if (baseTitle == null && m.getConversationTitle() != null && !m.getConversationTitle().isBlank()) {
+                baseTitle = m.getConversationTitle();
+            }
+        }
+        if (baseTitle == null || baseTitle.isBlank()) {
+            baseTitle = cleanTitle(source.get(source.size() - 1).getContent());
+        }
+        String suffix = LangText.of("（分支）", " (branch)");
+        String forkTitle = baseTitle + suffix;
+        if (forkTitle.length() > 100) {
+            forkTitle = baseTitle.substring(0, Math.max(0, 100 - suffix.length())) + suffix;
+        }
+        boolean first = true;
+        for (ProjectAiMessage m : source) {
+            ProjectAiMessage copy = new ProjectAiMessage();
+            copy.setProjectId(m.getProjectId());
+            copy.setUserId(userId);
+            copy.setRole(m.getRole());
+            copy.setContent(m.getContent());
+            copy.setDisplayContent(m.getDisplayContent());
+            copy.setConversationId(newConversationId);
+            copy.setCreatedAt(m.getCreatedAt());
+            if (first) {
+                copy.setConversationTitle(forkTitle);
+                first = false;
+            }
+            repository.save(copy);
+        }
+        return newConversationId;
     }
 
     /**
@@ -483,6 +613,8 @@ public class ProjectAiMessageService {
             item.put("runStatus", statusByConversation.get(conversationId));
             item.put("ownerUserId", ownerUserId);
             item.put("ownerName", ownerUserId == null ? null : nameByUserId.get(ownerUserId));
+            // 来源通道（首条消息的）：镜像导入的会话非空，概览页据此渲染来源角标
+            item.put("sourceChannel", row.length > 6 && row[6] != null ? row[6].toString() : null);
             conversations.add(item);
         }
 

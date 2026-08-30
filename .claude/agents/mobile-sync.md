@@ -140,6 +140,26 @@ dev-board#30）；更早的产品设计 `2026-08-17-mobile-clients-design.md`。
    `.touchDeviceStoresDeviceNameForHeartbeatOnlyDevices`、
    `MobileRelayClientHttpTest.pushDirectorySkipsWhenLocalProjectListEmpty`。
 
+## 插件归档双镜像（dev-board#297/#298/#299，spec：docs/superpowers/specs/2026-08-30-addin-project-binding-and-mirrors-design.md）
+
+Office/WPS 插件里选中远程设备分组的桌面项目 = **归档绑定**（`AddinProjectLink`：
+(userId, deviceId, projectKey) → 云端影子容器项目；`POST /api/projects/ensure-addin-link`
+find-or-create，影子项目从 `/api/projects/my` 滤掉）。绑定后两条镜像流复用本领域的中转模式：
+
+- **对话镜像**：云端 `AddinConvSyncOutbox`（每消息一行，刷新=删旧插新，30 天 TTL）→
+  `GET /api/mobile/conversations/inbox?deviceId=` + `POST /api/mobile/conversations/ack`
+  （鉴权/风格同 /api/mobile/*）→ 桌面 `pollConversationSync()`（挂在 pollInbox 的 **finally**，
+  与 pollTransferCommands 同款；404 进程内钉死）。项目缺失的行**留置不 ACK**（同 media 地雷 3）；
+  content 空白/坏 role 的行导入被拒但照样 ACK（永远导不进去，留着堵队列）。
+- **文档镜像**：`mediaType='document'`（storeMediaTx 白名单第四值），走既有 media inbox
+  （幂等键/配额 3GB 共池/ACK 即删/TTL 全复用）。桌面落盘**与其它类型语义相反**：
+  「插件文档/<原名>」**固定路径覆盖**（无日期层、无 marker——路径唯一是覆盖语义的锚点，
+  历史交给版本记录），`landDocumentAndAck`：字节先写同目录临时 key → `StorageService.move`
+  原子顶替（本地 Files.move，同卷原子；接口新增 default 实现）→ `createOrUpdateFile`。
+  写失败旧文件完好、不 ACK、下轮重试；同字节重放无害。**字节先落、库后动的红线不变**。
+  插件端采集在 office-addin 领域（docSnapshot.js：Office getFileAsync(Compressed)/WPS
+  FileSystem 探测链，拿不到只提示不硬凑）。
+
 ## 跨设备文件传输（dev-board#251，spec：docs/superpowers/specs/2026-08-28-cross-device-transfer.md）
 
 - 文件：`MobileTransferService`/`MobileTransferController`（`/api/mobile/transfer/*`，鉴权同组）、

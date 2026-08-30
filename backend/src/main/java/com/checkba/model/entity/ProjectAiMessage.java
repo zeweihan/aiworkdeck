@@ -72,6 +72,20 @@ public class ProjectAiMessage {
     @Column(length = 100)
     private String conversationTitle;
 
+    /**
+     * 来源通道（dev-board#298，可空 = 本地产生）。插件对话镜像导入的会话在首条消息上带
+     * office-word / wps-excel 等值，桌面端据此渲染来源角标并把会话置为只读（续聊走 fork）。
+     */
+    @Column(name = "source_channel", length = 32)
+    private String sourceChannel;
+
+    /**
+     * 来源侧消息 id（可空 = 本地产生）：镜像导入的幂等键，同一条云端消息重复投递时按
+     * (conversationId, sourceMessageId) upsert 而不是插重复行。
+     */
+    @Column(name = "source_message_id")
+    private Long sourceMessageId;
+
     @Column
     private LocalDateTime createdAt;
 
@@ -91,6 +105,10 @@ public class ProjectAiMessage {
     public void setConversationId(String conversationId) { this.conversationId = conversationId; }
     public String getConversationTitle() { return conversationTitle; }
     public void setConversationTitle(String conversationTitle) { this.conversationTitle = conversationTitle; }
+    public String getSourceChannel() { return sourceChannel; }
+    public void setSourceChannel(String sourceChannel) { this.sourceChannel = sourceChannel; }
+    public Long getSourceMessageId() { return sourceMessageId; }
+    public void setSourceMessageId(Long sourceMessageId) { this.sourceMessageId = sourceMessageId; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 

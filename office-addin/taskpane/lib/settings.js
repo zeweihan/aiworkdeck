@@ -195,6 +195,43 @@ export function saveConversationId(projectId, conversationId, hostTag) {
   else safeRemoveItem(key)
 }
 
+// 归档绑定映射（dev-board#297）：云端影子项目 id → {deviceId, projectKey, name, deviceName}。
+// 权威源在服务端（GET /api/projects/addin-links），这里只是显示用缓存——
+// webview 清缓存后由服务端清单重建（App.vue refreshProjects）。
+const KEY_ARCHIVE_LINKS = 'awd_addin_archive_links'
+
+export function loadArchiveLinks() {
+  try {
+    const raw = safeGetItem(KEY_ARCHIVE_LINKS)
+    const parsed = raw ? JSON.parse(raw) : null
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+export function saveArchiveLink(projectId, info) {
+  const map = loadArchiveLinks()
+  map[String(projectId)] = info
+  const raw = JSON.stringify(map)
+  safeSetItem(KEY_ARCHIVE_LINKS, raw)
+  mirrorSet(KEY_ARCHIVE_LINKS, raw)
+}
+
+/** 用服务端清单整体重建（保留本地已有条目的 name/deviceName 展示字段）。 */
+export function mergeArchiveLinks(serverLinks) {
+  const map = loadArchiveLinks()
+  for (const link of serverLinks || []) {
+    if (!link || link.projectId == null) continue
+    const key = String(link.projectId)
+    map[key] = { ...(map[key] || {}), deviceId: link.deviceId, projectKey: link.projectKey }
+  }
+  const raw = JSON.stringify(map)
+  safeSetItem(KEY_ARCHIVE_LINKS, raw)
+  mirrorSet(KEY_ARCHIVE_LINKS, raw)
+  return map
+}
+
 const KEY_MODEL = 'awd_addin_model'
 
 /** 模型选择持久化（空串=跟随后端默认）。 */

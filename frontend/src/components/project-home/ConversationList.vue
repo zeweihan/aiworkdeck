@@ -16,6 +16,8 @@
       >
         <view class="conv-card-head">
           <text class="conv-title">{{ c.title }}</text>
+          <!-- 插件镜像会话来源角标（dev-board#298）：sourceChannel 非空才渲染 -->
+          <text v-if="c.sourceChannel" class="conv-source-chip">{{ sourceLabel(c.sourceChannel) }}</text>
           <text v-if="statusLabel(c.runStatus)" class="conv-status" :class="dotClass(c.runStatus)">
             {{ statusLabel(c.runStatus) }}
           </text>
@@ -40,6 +42,7 @@
 // 两个已知展示坑的兜底：lastMessage 可能是空串（不留空行）；title 可能是字面量
 // 「新对话」（清洗兜底与 LLM 生成失败同文案，无法区分，照常显示不特判）。
 import { formatDateTime, runStatusLabel, runStatusDotClass, hasConversationPreview } from '@/utils/projectHomeFormat.js'
+import { sourceChannelLabel } from '@/utils/conversationSource.js'
 
 export default {
   name: 'ConversationList',
@@ -58,6 +61,9 @@ export default {
     },
     dotClass(status) {
       return runStatusDotClass(status)
+    },
+    sourceLabel(sourceChannel) {
+      return sourceChannelLabel(sourceChannel)
     },
     metaOf(c) {
       return [c.ownerName, formatDateTime(c.updatedAt)].filter(Boolean).join(' · ')
@@ -128,6 +134,17 @@ export default {
   flex: none;
   font-size: 11px;
   color: var(--awd-text-2);
+}
+
+/* 插件镜像会话来源角标（dev-board#298），与工作台历史抽屉的 .conv-source-chip 同形 */
+.conv-source-chip {
+  flex: none;
+  font-size: 10px;
+  line-height: 15px;
+  padding: 0 5px;
+  border-radius: 3px;
+  color: var(--awd-accent-text);
+  background: var(--awd-accent-soft);
 }
 
 .conv-status.dot-running {

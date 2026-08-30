@@ -447,6 +447,18 @@ export function getConversationMetadata(conversationId) {
 }
 
 /**
+ * 把一条插件镜像会话（sourceChannel 非空，只读）整体复制成一条可写的本地会话
+ * （dev-board#298）。后端返回 {code:0, data:{conversationId}}，这里剥掉信封
+ * 直接给 {conversationId}。
+ */
+export function forkAiConversation(conversationId) {
+  return request({
+    url: `/api/ai/conversation/${conversationId}/fork`,
+    method: 'POST'
+  }).then(unwrapEnvelope);
+}
+
+/**
  * 执行 PPT 生成
  * payload: { topic, projectId, parentId, fileName, style, language, modelId, conversationId, exportEditable }
  */

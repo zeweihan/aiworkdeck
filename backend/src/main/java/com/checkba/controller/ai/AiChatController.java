@@ -140,6 +140,23 @@ public class AiChatController {
     }
 
     /**
+     * fork-from-here（dev-board#298）：整条会话复制成新的本地会话继续聊。
+     * 镜像导入的插件会话在桌面端只读，续聊走这条——分叉显式、原件不被污染。
+     * 归属校验同 history；返回 {code:0, data:{conversationId}}。
+     */
+    @PostMapping("/conversation/{conversationId}/fork")
+    public ResponseEntity<?> forkConversation(@PathVariable String conversationId,
+                                              @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (!projectAiMessageService.canUseConversation(conversationId, userId)) {
+            return ResponseEntity.status(403).body(LangText.of("无权操作该会话", "You do not have permission to modify this conversation"));
+        }
+        String newConversationId = projectAiMessageService.forkConversation(conversationId, userId);
+        return ResponseEntity.ok(java.util.Map.of("code", 0,
+                "data", java.util.Map.of("conversationId", newConversationId)));
+    }
+
+    /**
      * Get conversation metadata: file changes and token usage for historical display.
      */
     @GetMapping("/conversation/{conversationId}/metadata")

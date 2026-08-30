@@ -52,4 +52,12 @@ export default {
   statusError: '出错',
   hintFromCreationTime: '取自建档时间',
   hintAiInferred: 'AI 读文件得出，请核对',
+  // 插件镜像会话的来源角标（dev-board#298），映射在 utils/conversationSource.js
+  sourceChannelOfficeWord: 'Word 插件',
+  sourceChannelOfficeExcel: 'Excel 插件',
+  sourceChannelOfficePowerpoint: 'PowerPoint 插件',
+  sourceChannelWpsWord: 'WPS 文字',
+  sourceChannelWpsExcel: 'WPS 表格',
+  sourceChannelWpsPowerpoint: 'WPS 演示',
+  sourceChannelPlugin: '插件',
 }

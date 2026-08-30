@@ -369,9 +369,12 @@ public class MobileRelayStoreService {
         if (fileName == null || fileName.isBlank()) {
             throw new IllegalArgumentException(LangText.of("缺少文件名", "Missing file name"));
         }
-        if (!"image".equals(mediaType) && !"video".equals(mediaType) && !"audio".equals(mediaType)) {
-            throw new IllegalArgumentException(LangText.of("影像类型只能是 image、video 或 audio",
-                    "Media type must be image, video or audio"));
+        // document 自 dev-board#299（插件文档镜像）：桌面端落「插件文档/<原名>」固定路径覆盖，
+        // 其余类型落「现场影像/录音」的日期目录，见 MobileRelayClientService.landAndAck
+        if (!"image".equals(mediaType) && !"video".equals(mediaType) && !"audio".equals(mediaType)
+                && !"document".equals(mediaType)) {
+            throw new IllegalArgumentException(LangText.of("影像类型只能是 image、video、audio 或 document",
+                    "Media type must be image, video, audio or document"));
         }
 
         Optional<MobileMediaInbox> existing = inboxRepository.findByUserIdAndClientMediaId(userId, clientMediaId);

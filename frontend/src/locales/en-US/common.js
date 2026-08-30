@@ -52,4 +52,12 @@ export default {
   statusError: 'Error',
   hintFromCreationTime: 'Based on the project creation date',
   hintAiInferred: 'Inferred by AI from your files; please verify',
+  // Source badge for add-in mirrored conversations (dev-board#298); mapping in utils/conversationSource.js
+  sourceChannelOfficeWord: 'Word add-in',
+  sourceChannelOfficeExcel: 'Excel add-in',
+  sourceChannelOfficePowerpoint: 'PowerPoint add-in',
+  sourceChannelWpsWord: 'WPS Writer',
+  sourceChannelWpsExcel: 'WPS Spreadsheets',
+  sourceChannelWpsPowerpoint: 'WPS Presentation',
+  sourceChannelPlugin: 'Add-in',
 }

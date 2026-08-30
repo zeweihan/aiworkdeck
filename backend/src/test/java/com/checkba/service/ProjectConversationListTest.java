@@ -224,8 +224,9 @@ class ProjectConversationListTest {
         Map<String, Object> item = conversationsOf(service.listProjectConversations(1L, null, null, 20, 7L)).get(0);
 
         assertEquals(java.util.Set.of("conversationId", "title", "lastMessage", "updatedAt",
-                        "runStatus", "ownerUserId", "ownerName"), item.keySet(),
-                "键集合固定；正文层仍走 canUseConversation，列表层不许多出 content/messages 之类的键");
+                        "runStatus", "ownerUserId", "ownerName", "sourceChannel"), item.keySet(),
+                "键集合固定；正文层仍走 canUseConversation，列表层不许多出 content/messages 之类的键"
+                        + "（sourceChannel 是 dev-board#298 合法新增的来源元数据，不是正文）");
     }
 
     // ==================== 问题③：非本人会话不下发正文（spec §6.4） ====================

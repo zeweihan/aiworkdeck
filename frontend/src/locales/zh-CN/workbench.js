@@ -104,6 +104,7 @@ export default {
   newConversation: '新对话',
   loadHistoryFailed: '加载历史失败',
   loadConversationFailed: '加载对话失败',
+  forkConversationFailed: '另起分支失败',
   statusRunning: '运行中',
   statusPaused: '待继续',
   statusInterrupted: '已中断',

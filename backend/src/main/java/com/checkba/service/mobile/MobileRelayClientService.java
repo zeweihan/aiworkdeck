@@ -77,6 +77,7 @@ public class MobileRelayClientService {
     private final ProjectRepository projectRepository;
     private final ProjectFileService projectFileService;
     private final StorageServiceFactory storageServiceFactory;
+    private final com.checkba.service.ProjectAiMessageService projectAiMessageService;
     private final ObjectMapper mapper = new ObjectMapper();
     private final Path stateFile;
     private final HttpClient http = HttpClient.newBuilder()
@@ -91,6 +92,8 @@ public class MobileRelayClientService {
     /** /transfer/commands 404（旧服务器没有这条路由）：进程内记住不再徒劳打它——服务器
      *  升级后要重启桌面端才恢复，这里权衡为可接受（spec 2.3）。 */
     private volatile boolean transferCommandsUnsupported = false;
+    /** /conversations/inbox 404（旧服务器）：同款进程内静默钉死（dev-board#298）。 */
+    private volatile boolean convSyncUnsupported = false;
     /** 热窗口截止时间戳（epoch millis）：命中传输命令或服务端 hot=true 时顺延。 */
     private volatile long transferHotUntil = 0L;
     /** 防止 pollInbox 的常规调用与热循环自身重入出两条并行循环。 */
@@ -119,7 +122,8 @@ public class MobileRelayClientService {
             LocalIdentityService localIdentityService,
             ProjectRepository projectRepository,
             ProjectFileService projectFileService,
-            StorageServiceFactory storageServiceFactory) {
+            StorageServiceFactory storageServiceFactory,
+            com.checkba.service.ProjectAiMessageService projectAiMessageService) {
         this.enabled = enabled;
         this.localMode = localMode;
         // 国际站账户连到国际中转，大陆站连大陆中转——跟着账户走，别让尽调影像跨境
@@ -132,6 +136,7 @@ public class MobileRelayClientService {
         this.projectRepository = projectRepository;
         this.projectFileService = projectFileService;
         this.storageServiceFactory = storageServiceFactory;
+        this.projectAiMessageService = projectAiMessageService;
         this.stateFile = Path.of(stateDir, "mobile-relay.json");
     }
 
@@ -217,6 +222,8 @@ public class MobileRelayClientService {
             // 有好几处 return（空收件箱/响应异常），那些 return 会直接跳出整个方法，
             // 不放 finally 的话大多数轮次（收件箱通常是空的）根本轮不到这一句。
             pollTransferCommands();
+            // 插件对话镜像（dev-board#298）同理挂在 finally：早 return 不能把它饿死。
+            pollConversationSync();
         }
     }
 
@@ -228,6 +235,8 @@ public class MobileRelayClientService {
     private static final String AUDIO_ROOT_FOLDER = "现场录音";
     /** 跨设备投送（PUSH）落盘根目录名，与「现场影像/现场录音」并列。 */
     private static final String TRANSFER_ROOT_FOLDER = "跨设备文件";
+    /** 插件文档镜像（dev-board#299）落盘根目录名：固定路径覆盖，不带日期层。 */
+    private static final String ADDIN_DOC_ROOT_FOLDER = "插件文档";
 
     private void landAndAck(JsonNode item) throws IOException, InterruptedException {
         long itemId = item.path("id").asLong();
@@ -243,6 +252,10 @@ public class MobileRelayClientService {
         if (project.isEmpty() || !userId.equals(project.get().getUserId())) {
             // 项目已删或不属于本机用户：不 ACK（云端 7 天 TTL 兜底），只告警
             log.warn("手机同步：影像 {} 指向的项目 {} 不存在或不属于本机用户，留置", itemId, projectId);
+            return;
+        }
+        if ("document".equals(item.path("mediaType").asText(""))) {
+            landDocumentAndAck(item, itemId, projectId, userId);
             return;
         }
 
@@ -317,6 +330,73 @@ public class MobileRelayClientService {
         }
     }
 
+    /**
+     * 插件文档镜像落盘（dev-board#299）：「插件文档/<原名>」固定路径**覆盖**，历史交给版本记录。
+     *
+     * <p>与 media 的日期目录 + marker 文件名相反：镜像语义的锚点是路径唯一，同名新快照顶替旧内容。
+     * 覆盖的原子化：字节先写同目录临时 key，再 {@code storage.move} 顶替（本地实现 Files.move
+     * 同卷原子）——写失败旧文件完好、不 ACK、下轮重试；同字节重放（ACK 丢失的重试）无害。
+     * 库侧 createOrUpdateFile：行已在则只更新 fileSize/updatedAt，不在则建行。顺序仍是
+     * 字节先落、库后动（与 landAndAck 同一数据安全红线）。
+     */
+    private void landDocumentAndAck(JsonNode item, long itemId, long projectId, Long userId)
+            throws IOException, InterruptedException {
+        String landedName = sanitizedDocName(item.path("fileName").asText());
+        ProjectFile root = ensureFolder(projectId, null, ADDIN_DOC_ROOT_FOLDER, userId);
+
+        String token = currentToken();
+        if (token == null) return;
+        HttpRequest req = request("/api/mobile/inbox/" + itemId + "/content")
+                .header("X-Session-Id", token).GET().build();
+        HttpResponse<InputStream> content = http.send(req, HttpResponse.BodyHandlers.ofInputStream());
+        String contentType = content.headers().firstValue("Content-Type").orElse("");
+        if (content.statusCode() < 200 || content.statusCode() >= 300
+                || !contentType.startsWith("application/octet-stream")) {
+            try (InputStream in = content.body()) { in.transferTo(OutputStream.nullOutputStream()); }
+            log.warn("手机同步：插件文档 {} 内容下载失败 status={} contentType={}",
+                    itemId, content.statusCode(), contentType);
+            return;
+        }
+
+        String finalPath = String.format("projects/%d/%s/%s", projectId, ADDIN_DOC_ROOT_FOLDER, landedName);
+        String marker = item.path("clientMediaId").asText("");
+        String tmpPath = String.format("projects/%d/%s/.tmp-%s-%s", projectId, ADDIN_DOC_ROOT_FOLDER,
+                marker.length() >= 8 ? marker.substring(0, 8) : "part", landedName);
+        try {
+            try (InputStream in = content.body()) {
+                storageServiceFactory.getStorageService().save(tmpPath, in);
+            }
+            storageServiceFactory.getStorageService().move(tmpPath, finalPath);
+        } catch (Exception e) {
+            log.warn("手机同步：插件文档 {} 落盘失败，留待下轮重试", itemId, e);
+            try {
+                storageServiceFactory.getStorageService().delete(tmpPath);
+            } catch (Exception ignored) {
+                // 临时文件残留无害，TTL/人工清理兜底
+            }
+            return;
+        }
+        String ext = "";
+        int dot = landedName.lastIndexOf('.');
+        if (dot > 0 && dot < landedName.length() - 1) ext = landedName.substring(dot + 1).toLowerCase();
+        projectFileService.createOrUpdateFile(projectId, root.getId(), landedName, ext,
+                item.path("fileSize").asLong(0), finalPath, null, userId);
+        log.info("手机同步：插件文档 {} 已镜像 项目={} 文件={}/{}", itemId, projectId,
+                ADDIN_DOC_ROOT_FOLDER, landedName);
+
+        HttpResponse<String> ack = authed("POST", "/api/mobile/inbox/" + itemId + "/ack", "{}");
+        if (!okEnvelope(ack)) {
+            log.warn("手机同步：插件文档 {} ACK 失败（已落盘，重放覆盖无害）", itemId);
+        }
+    }
+
+    /** 镜像文件名：剥路径、trim、空名兜底（无 marker——路径唯一正是覆盖语义的锚点）。 */
+    static String sanitizedDocName(String fileName) {
+        String n = fileName == null ? "" : fileName.replace('\\', '/');
+        n = n.substring(n.lastIndexOf('/') + 1).trim();
+        return n.isEmpty() ? "document" : n;
+    }
+
     private ProjectFile ensureFolder(Long projectId, Long parentId, String name, Long userId) {
         Optional<ProjectFile> existing = projectFileService.getFilesByParent(projectId, parentId).stream()
                 .filter(f -> Boolean.TRUE.equals(f.getIsFolder()) && name.equals(f.getName()))
@@ -348,6 +428,91 @@ public class MobileRelayClientService {
             }
         }
         return LocalDate.now().toString();
+    }
+
+    // ==================== 插件对话镜像（dev-board#298 桌面侧） ====================
+
+    /**
+     * 拉取绑定项目里插件对话的消息增量并导入本地库。跟在 pollInbox 每轮末尾（finally）。
+     *
+     * <p>逐行导入：projectKey 解析不到本地项目（已删/不属本机用户）的行留置不 ACK（云端
+     * 30 天 TTL 兜底，与 media 地雷 3 同口径）；content 空白/坏 role 的行导入被拒但照样
+     * ACK——它们永远导不进去，留着只会把队列堵死。导入完成的行按 id 批量 ACK；
+     * 会话标题以云端下发的为准（LLM 起名/插件端改名都发生在云端）。
+     */
+    void pollConversationSync() {
+        if (!active()) return;
+        if (convSyncUnsupported) return;
+        try {
+            HttpResponse<String> resp = authed("GET",
+                    "/api/mobile/conversations/inbox?deviceId=" + deviceId(), null);
+            if (resp == null) return;
+            if (resp.statusCode() == 404) {
+                convSyncUnsupported = true;
+                log.info("手机同步：服务器未开通插件对话镜像（/conversations/inbox 404），"
+                        + "本次运行不再轮询（服务器升级后重启桌面端恢复）");
+                return;
+            }
+            if (resp.statusCode() < 200 || resp.statusCode() >= 300) return;
+            JsonNode rows = mapper.readTree(resp.body());
+            if (!rows.isArray() || rows.isEmpty()) return;
+            Long userId = localIdentityService.localUserId();
+            List<Long> ackIds = new ArrayList<>();
+            Map<String, String> titles = new HashMap<>();
+            int imported = 0;
+            for (JsonNode row : rows) {
+                long rowId = row.path("id").asLong();
+                Long projectId = parseLongOrNull(row.path("projectKey").asText());
+                Project project = projectId == null ? null : projectRepository.findById(projectId).orElse(null);
+                if (project == null || !userId.equals(project.getUserId())) {
+                    // 留置：项目不存在/不属本机用户，云端 TTL 兜底
+                    continue;
+                }
+                LocalDateTime createdAt = null;
+                try {
+                    String ts = row.path("messageCreatedAt").asText(null);
+                    if (ts != null && !ts.isBlank()) createdAt = LocalDateTime.parse(ts);
+                } catch (Exception ignored) {
+                    // 时间戳是保序元数据，坏了退回导入时刻
+                }
+                var saved = projectAiMessageService.importExternalMessage(
+                        projectId, userId,
+                        row.path("conversationId").asText(null),
+                        row.path("role").asText(null),
+                        row.path("content").asText(null),
+                        row.path("displayContent").asText(null),
+                        row.path("sourceChannel").asText(null),
+                        row.path("sourceMessageId").isNumber() ? row.path("sourceMessageId").asLong() : null,
+                        createdAt);
+                if (saved != null) {
+                    imported++;
+                    String title = row.path("title").asText(null);
+                    if (title != null && !title.isBlank()) {
+                        titles.put(saved.getConversationId(), title);
+                    }
+                }
+                // 导入成功或被拒（空白/坏 role，永远导不进去）都 ACK；只有项目缺失留置
+                ackIds.add(rowId);
+            }
+            for (Map.Entry<String, String> e : titles.entrySet()) {
+                projectAiMessageService.updateConversationTitle(e.getKey(), e.getValue());
+            }
+            if (!ackIds.isEmpty()) {
+                ObjectNode body = mapper.createObjectNode();
+                ArrayNode arr = body.putArray("ids");
+                for (Long id : ackIds) arr.add(id);
+                HttpResponse<String> ack = authed("POST", "/api/mobile/conversations/ack",
+                        mapper.writeValueAsString(body));
+                if (!okEnvelope(ack)) {
+                    log.warn("手机同步：对话镜像 ACK 失败（已导入 {} 条，下轮按幂等键去重）", imported);
+                }
+            }
+            if (imported > 0) {
+                log.info("手机同步：插件对话镜像导入 {} 条消息", imported);
+            }
+        } catch (Exception e) {
+            log.warn("手机同步：对话镜像轮询异常（下轮重试）", e);
+        }
     }
 
     // ==================== 跨设备文件传输（dev-board#251 B 侧） ====================
