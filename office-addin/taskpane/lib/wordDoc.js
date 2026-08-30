@@ -10,6 +10,8 @@ const MAX_BODY_CHARS = 200_000
 const MAX_EXCEL_ROWS = 2000
 // PPT 内容读取的页数上限
 const MAX_PPT_SLIDES = 100
+/** 内联正文的装饰说明（两个 PPT 宿主面同一份文案） */
+const PPT_INLINE_NOTE = '（以下由插件读取当前演示文稿生成。行首的「第N页：」与形状之间的「 | 」是插件加的分隔标记，不是文稿里的字；查找/替换/锚点请只用分隔标记之间的正文，不要把标记本身抄进去。）\n'
 
 export function officeAvailable() {
   return typeof Office !== 'undefined' && typeof Office.context !== 'undefined'
@@ -108,7 +110,8 @@ async function readPptSlides() {
         .filter(Boolean)
       return `第${i + 1}页：${texts.join(' | ') || '（无文本）'}`
     })
-    let out = lines.join('\n')
+    // 装饰文字必须交代清楚（dev-board#286），口径与 wpsDoc.readWppSlides 同源
+    let out = PPT_INLINE_NOTE + lines.join('\n')
     if (slides.items.length > MAX_PPT_SLIDES) {
       out += `\n...（共 ${slides.items.length} 页，仅附前 ${MAX_PPT_SLIDES} 页）`
     }

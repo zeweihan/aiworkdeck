@@ -12,6 +12,8 @@
 const MAX_BODY_CHARS = 200_000
 const MAX_EXCEL_ROWS = 2000
 const MAX_PPT_SLIDES = 100
+/** 内联正文的装饰说明（两个 PPT 宿主面同一份文案） */
+const PPT_INLINE_NOTE = '（以下由插件读取当前演示文稿生成。行首的「第N页：」与形状之间的「 | 」是插件加的分隔标记，不是文稿里的字；查找/替换/锚点请只用分隔标记之间的正文，不要把标记本身抄进去。）\n'
 
 export function wpsAvailable() {
   return typeof wps !== 'undefined' && wps != null
@@ -236,7 +238,9 @@ function readWppSlides() {
     }
     lines.push(`第${i}页：${texts.join(' | ') || '（无文本）'}`)
   }
-  let out = lines.join('\n')
+  // 装饰文字必须交代清楚（dev-board#286）：模型抄锚点时抄的就是这份正文，
+  // 「第N页：」与「 | 」是我们加的，文稿里根本不存在，照抄进 searchText 就恒不命中。
+  let out = PPT_INLINE_NOTE + lines.join('\n')
   if (total > MAX_PPT_SLIDES) {
     out += `\n...（共 ${total} 页，仅附前 ${MAX_PPT_SLIDES} 页）`
   }

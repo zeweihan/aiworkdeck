@@ -2526,12 +2526,9 @@ const HANDLERS = {
         for (const tf of slideFrames) {
           if (tf.isNullObject || !tf.hasText) continue
           const text = tf.textRange.text || ''
-          let from = 0
-          while (true) {
-            const idx = text.indexOf(searchText, from)
-            if (idx === -1) break
-            targets.push({ tf, start: idx, len: searchText.length })
-            from = idx + searchText.length
+          // 归一化定位（dev-board#286）：命中区间是原文坐标，长度按命中原文算
+          for (const h of findAllNormalized(text, searchText)) {
+            targets.push({ tf, start: h.start, len: h.end - h.start })
             if (!args.applyToAll) break outer
           }
         }
@@ -2887,9 +2884,9 @@ const HANDLERS = {
       for (const tf of frames) {
         if (tf.isNullObject || !tf.hasText) continue
         const text = tf.textRange.text || ''
-        const idx = text.indexOf(searchText)
-        if (idx === -1) continue
-        const sub = tf.textRange.getSubstring(idx, searchText.length)
+        const hit = findAllNormalized(text, searchText)[0]
+        if (!hit) continue
+        const sub = tf.textRange.getSubstring(hit.start, hit.end - hit.start)
         sub.setHyperlink({ address: url })
         await context.sync()
         return { slideNumber, linked: true, url }

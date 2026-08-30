@@ -28,6 +28,7 @@ const msoShapeRectangle = 1
 const msoShapeIsoscelesTriangle = 7
 const msoShapeOval = 9
 /** MsoShapeType（识别用） */
+import { findAllNormalized, describeAnchorFailure } from './textMatch.js'
 const msoTable = 19
 /** MsoShapeType：组合（与 wpsDoc.collectShapeText 同一常量） */
 const msoGroup = 6
@@ -350,12 +351,11 @@ export const WPS_WPP_HANDLERS = {
         const sp = shapes.Item(j)
         if (!shapeHasText(sp)) continue
         const text = shapeText(sp)
-        let from = 0
-        while (true) {
-          const idx = text.indexOf(searchText, from)
-          if (idx === -1) break
-          targets.push({ slide: i, shape: j, start: idx + 1 }) // Characters 的 Start 是 1 基
-          from = idx + searchText.length
+        // 归一化定位（dev-board#286）：模型抄的是我们拼给它的正文（页码行、' | ' 分隔、
+        // 段内 \r 已被换成空格），逐字 indexOf 必然失配。命中区间是**原文坐标**，
+        // 长度按命中原文算而不是按 searchText 算——两者可能不等长（全角 vs 半角）。
+        for (const h of findAllNormalized(text, searchText)) {
+          targets.push({ slide: i, shape: j, start: h.start + 1, len: h.end - h.start }) // Characters 的 Start 是 1 基
           if (!args.applyToAll) break outer
         }
       }
@@ -365,7 +365,7 @@ export const WPS_WPP_HANDLERS = {
     }
     for (const t of targets) {
       const sub = pres.Slides.Item(t.slide).Shapes.Item(t.shape)
-        .TextFrame.TextRange.Characters(t.start, searchText.length)
+        .TextFrame.TextRange.Characters(t.start, t.len)
       const font = sub.Font
       if (applied.name) {
         font.Name = applied.name
@@ -614,12 +614,12 @@ export const WPS_WPP_HANDLERS = {
       const sp = shapes.Item(j)
       if (!shapeHasText(sp)) continue
       const text = shapeText(sp)
-      const idx = text.indexOf(searchText)
-      if (idx === -1) continue
+      const hit = findAllNormalized(text, searchText)[0]
+      if (!hit) continue
       const whole = sp.TextFrame.TextRange
       try {
         // 首选：Characters 切出的精确子串挂链（VBA 类推路线，真机可能不支持）
-        applyHyperlink(whole.Characters(idx + 1, searchText.length), url)
+        applyHyperlink(whole.Characters(hit.start + 1, hit.end - hit.start), url)
         return { slideNumber, linked: true, url }
       } catch (e) {
         // 降级：整个文本框文字挂链，并在返回值交底
