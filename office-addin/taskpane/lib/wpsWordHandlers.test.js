@@ -232,7 +232,24 @@ function installWps(opts = {}) {
     }
   }
 
+  // 页眉/页脚（独立 story）。state.hf 记录被写过什么，用来钉住
+  // 「只给 alignment 时不许动文字」这条（dev-board#288）。
+  state.hf = { header: { text: opts.headerText || '原页眉', writes: 0, alignment: null } }
+  const headerRange = {
+    get Text() { return state.hf.header.text },
+    set Text(v) { state.hf.header.writes++; state.hf.header.text = String(v) },
+    ParagraphFormat: {
+      set Alignment(v) { state.hf.header.alignment = v },
+      get Alignment() { return state.hf.header.alignment }
+    }
+  }
+  const sectionObj = {
+    Headers: { Item: () => ({ Range: headerRange }) },
+    Footers: { Item: () => ({ Range: headerRange }) }
+  }
+
   const doc = {
+    Sections: { Item: () => sectionObj },
     get TrackRevisions() {
       if (opts.trackBroken) throw new Error('mock：TrackRevisions 不可用')
       return state.track
@@ -927,4 +944,29 @@ test('replace_text：replaceAll + 偏移失准 = 整体切纯 Find 循环，计�
   assert.equal(data.via, 'fullReplace')
   assert.equal(data.fallbacks, 3)
   assert.equal(state.calls.filter((c) => c.name === 'Find.Execute').length, 3)
+})
+
+/* ============ edit_header_footer：只给 alignment 不许清空页眉（dev-board#288） ============ */
+
+test('edit_header_footer：只改对齐方式时绝不许动页眉文字', async () => {
+  // 旧写法无条件整替，text 兜底成空串——模型只想改对齐，一调用就把用户的页眉清空，
+  // 返回值还报成功。律师的页眉常是所名/文号，清掉了很难第一时间发现。
+  const { state } = installWps({ text: '正文\r', headerText: '某某律师事务所' })
+  const out = await H.edit_header_footer({ part: 'header', alignment: 'center' })
+  assert.equal(state.hf.header.text, '某某律师事务所', '页眉文字不该被动')
+  assert.equal(state.hf.header.writes, 0, `不该对页眉 Range.Text 赋值，实际写了 ${state.hf.header.writes} 次`)
+  assert.equal(out.textUpdated, false, '返回值要如实说没改文字')
+  assert.ok(state.hf.header.alignment != null, '对齐方式应当改到')
+})
+
+test('edit_header_footer：显式传空串仍然是「清空」这个合法意图', async () => {
+  const { state } = installWps({ text: '正文\r', headerText: '某某律师事务所' })
+  const out = await H.edit_header_footer({ part: 'header', text: '' })
+  assert.equal(state.hf.header.text, '')
+  assert.equal(out.textUpdated, true)
+})
+
+test('edit_header_footer：text 与 alignment 都不给时报错，而不是静默清空', async () => {
+  installWps({ text: '正文\r', headerText: '某某律师事务所' })
+  await assert.rejects(H.edit_header_footer({ part: 'header' }), /至少给 text.*或 alignment/)
 })

@@ -1403,16 +1403,25 @@ const HANDLERS = {
 
   async edit_header_footer(args) {
     const part = args.part === 'footer' ? 'footer' : 'header'
-    const text = args.text == null ? '' : String(args.text)
+    // **没给 text 就不许动文字**（dev-board#288）：旧写法无条件整替，
+    // 模型只想改对齐方式（不传 text）时，text 兜底成空串，一调用就把用户的页眉清空，
+    // 返回值还报成功。显式传空串仍然是「清空」这个合法意图，两者必须分开。
+    const hasText = args.text != null
+    const text = hasText ? String(args.text) : ''
     const alignment = args.alignment == null ? null : toEnumValue(ALIGNMENTS, args.alignment, 'alignment')
+    if (!hasText && !alignment) {
+      throw new Error('edit_header_footer 需要至少给 text（要写入的文字，传空串表示清空）或 alignment 之一')
+    }
     return Word.run(async (context) => {
       return withTracking(context, async () => {
         const section = context.document.sections.getFirst()
         const body = part === 'footer'
           ? section.getFooter(Word.HeaderFooterType.primary)
           : section.getHeader(Word.HeaderFooterType.primary)
-        body.insertText(text, Word.InsertLocation.replace)
-        await context.sync()
+        if (hasText) {
+          body.insertText(text, Word.InsertLocation.replace)
+          await context.sync()
+        }
         if (alignment) {
           const paragraphs = body.paragraphs
           paragraphs.load('items')
@@ -1420,7 +1429,12 @@ const HANDLERS = {
           paragraphs.items.forEach((p) => { p.alignment = alignment })
           await context.sync()
         }
-        return { part, textLength: text.length, alignment: args.alignment || null }
+        return {
+          part,
+          textUpdated: hasText,
+          textLength: hasText ? text.length : null,
+          alignment: args.alignment || null
+        }
       })
     })
   },
@@ -1739,23 +1753,28 @@ const HANDLERS = {
       const range = rangeAddress
         ? sheet.getRange(rangeAddress)
         : sheet.getUsedRangeOrNullObject(true)
-      range.load('values,address,rowCount,columnCount,isNullObject')
+      // **先只取尺寸，值等截断之后再取**（dev-board#288）：返回值最多给
+      // MAX_EXCEL_RESULT_ROWS 行，把整片区域的 values 编组过桥就是白搬。
+      // 几万行的台账上，这一趟能让任务窗格无响应几十秒。与 wordDoc.readExcelSheet
+      // 同一条纪律：截断必须发生在过桥之前。
+      range.load('address,rowCount,columnCount,isNullObject,rowIndex,columnIndex')
       await context.sync()
       if (range.isNullObject) {
         return { sheet: sheet.name, address: '', rows: 0, cols: 0, values: [], note: '工作表为空' }
       }
-      let values = range.values
-      let truncated = false
-      if (values.length > MAX_EXCEL_RESULT_ROWS) {
-        values = values.slice(0, MAX_EXCEL_RESULT_ROWS)
-        truncated = true
-      }
+      const totalRows = range.rowCount
+      const truncated = totalRows > MAX_EXCEL_RESULT_ROWS
+      const target = truncated
+        ? sheet.getRangeByIndexes(range.rowIndex, range.columnIndex, MAX_EXCEL_RESULT_ROWS, range.columnCount)
+        : range
+      target.load('values')
+      await context.sync()
       return {
         sheet: sheet.name,
         address: range.address,
-        rows: range.rowCount,
+        rows: totalRows,
         cols: range.columnCount,
-        values,
+        values: target.values || [],
         truncated
       }
     })
@@ -2390,13 +2409,27 @@ const HANDLERS = {
     if (action !== 'protect' && action !== 'unprotect') throw new Error(`action 值非法：${args.action}（合法值：protect/unprotect）`)
     return Excel.run(async (context) => {
       const sheet = resolveSheet(context, sheetName)
+      // **密码是 ExcelApi 1.7 那一档**（dev-board#288）：旧宿主上第二个参数会被
+      // 直接忽略——工作表照样被保护，但**没有密码**，返回值还报成功。
+      // 安全动作不许半途而废：要么真的加上密码，要么明说做不到，绝不静默降级。
+      if (action === 'protect' && password !== undefined && !excelApiSupported('1.7')) {
+        throw new Error('当前 Excel 版本不支持给工作表保护设置密码（需要 ExcelApi 1.7）。'
+          + '不带密码的保护仍然可用——去掉 password 参数重试即可，'
+          + '但必须明确告诉用户这层保护是没有密码的。')
+      }
       if (action === 'protect') {
         sheet.protection.protect(undefined, password)
       } else {
         sheet.protection.unprotect(password)
       }
+      // 回读真实状态，别只报"我发过这条命令"
+      sheet.protection.load('protected')
       await context.sync()
-      return { action }
+      return {
+        action,
+        protected: sheet.protection.protected,
+        passwordApplied: action === 'protect' && password !== undefined
+      }
     })
   },
 
@@ -2438,21 +2471,46 @@ const HANDLERS = {
     return Excel.run(async (context) => {
       const sheet = resolveSheet(context, sheetName)
       const source = sheet.getRange(sourceRangeAddress)
-      const destination = sheet.getRange(destinationCellAddress)
+      // **目标地址允许跨表**（dev-board#288）：工具描述一直承诺可以把透视表放到另一张
+      // 工作表，代码却把 "报表!A1" 整个丢给源表的 getRange，跨表落点根本到不了。
+      const dest = splitSheetQualifiedAddress(destinationCellAddress)
+      const destSheet = dest.sheetName ? resolveSheet(context, dest.sheetName) : sheet
+      const destination = destSheet.getRange(dest.address)
       const name = args.pivotName ? String(args.pivotName) : `PivotTable_${Date.now()}`
       const pivot = sheet.pivotTables.add(name, source, destination)
       pivot.load('name')
+      // 字段名要在**落笔之前**校验完（dev-board#288）：旧写法先建表、再逐个
+      // hierarchies.getItem(字段)，字段名拼错时抛的是英文 ItemNotFound，
+      // 而那张空透视表已经留在用户的工作表上了。层级名只有建表后才拿得到，
+      // 所以改成「建表 → 读层级名 → 全部对得上才继续，对不上就把表删掉再报错」。
+      pivot.hierarchies.load('items/name')
       await context.sync()
+      const available = (pivot.hierarchies.items || []).map((h) => String(h.name))
+      const wanted = rowFields.concat(valueFields).map(String)
+      const missing = wanted.filter((f) => !available.includes(f))
+      if (missing.length) {
+        try {
+          pivot.delete()
+          await context.sync()
+        } catch (e) { /* 删不掉也要把错误说清楚，不能吞掉 */ }
+        throw new Error(`透视表字段不存在：${missing.join('、')}。`
+          + `源区域 ${sourceRangeAddress} 可用字段：${available.join('、') || '（无——请确认源区域第一行是标题行）'}。`
+          + '请用其中之一重试；已自动清除刚建出的空透视表。')
+      }
       for (const field of rowFields) {
-        const hierarchy = pivot.hierarchies.getItem(String(field))
-        pivot.rowHierarchies.add(hierarchy)
+        pivot.rowHierarchies.add(pivot.hierarchies.getItem(String(field)))
       }
       for (const field of valueFields) {
-        const hierarchy = pivot.hierarchies.getItem(String(field))
-        pivot.dataHierarchies.add(hierarchy)
+        pivot.dataHierarchies.add(pivot.hierarchies.getItem(String(field)))
       }
       await context.sync()
-      return { added: true, name: pivot.name, rowFields, valueFields }
+      return {
+        added: true,
+        name: pivot.name,
+        rowFields,
+        valueFields,
+        destinationSheet: dest.sheetName || sheet.name
+      }
     })
   },
 
@@ -2487,9 +2545,22 @@ const HANDLERS = {
         for (const tf of slideFrames) {
           if (tf.isNullObject || !tf.hasText) continue
           const text = tf.textRange.text || ''
-          if (!text.includes(searchText)) continue
-          replaced += text.split(searchText).length - 1
-          tf.textRange.text = text.split(searchText).join(replaceText)
+          // 归一化定位（dev-board#286）：命中区间是原文坐标
+          const hits = findAllNormalized(text, searchText)
+          if (!hits.length) continue
+          // **只改命中的那一段，不整框回写**（dev-board#288）：
+          // 旧写法 `tf.textRange.text = 整段新文本` 会把这个文本框里所有分段字符格式
+          // （加粗、字号、颜色）与超链接一并抹平，然后报成功——用户看到的是"改是改了，
+          // 但这一页的排版全没了"。TextRange.text 可写、getSubstring 都是 PowerPointApi 1.4
+          // （官方文档核实），与本命令既有的版本门槛同档，不需要额外守卫。
+          //
+          // **从右到左应用**：所有 getSubstring 的偏移都是按原文算的，右边先改不会推移
+          // 左边的坐标；反过来则第二处起全部错位（与 Word 面 replace_text 同一条纪律）。
+          for (let k = hits.length - 1; k >= 0; k--) {
+            const h = hits[k]
+            tf.textRange.getSubstring(h.start, h.end - h.start).text = replaceText
+          }
+          replaced += hits.length
           slideTouched = true
         }
         if (slideTouched) touchedSlides.push(i + 1)
@@ -2498,7 +2569,8 @@ const HANDLERS = {
         throw new Error('未找到目标文本，请确认 searchText 与幻灯片文本精确一致（可先用 ppt_get_slides 核对）')
       }
       await context.sync()
-      return { replaced, slides: touchedSlides }
+      // via 交底用的是哪条路：substring 表示只改了命中段、框内其余格式与超链接保持原样
+      return { replaced, slides: touchedSlides, via: 'substring' }
     })
   },
 
@@ -2899,6 +2971,19 @@ const HANDLERS = {
 /** excel_get_range 返回值的行数上限（防超长工具输出撑爆模型上下文） */
 const MAX_EXCEL_RESULT_ROWS = 500
 
+/**
+ * 拆 "工作表!地址" 形式的限定地址。没有 `!` 时 sheetName 为空（表示用当前表）。
+ * 支持 Excel 对含空格表名的单引号包裹（'我的 表'!A1）。
+ */
+function splitSheetQualifiedAddress(raw) {
+  const text = String(raw || '')
+  const at = text.lastIndexOf('!')
+  if (at === -1) return { sheetName: '', address: text }
+  let name = text.slice(0, at)
+  if (name.startsWith("'") && name.endsWith("'")) name = name.slice(1, -1).replace(/''/g, "'")
+  return { sheetName: name, address: text.slice(at + 1) }
+}
+
 /** 按名取工作表；名为空取活动工作表 */
 function resolveSheet(context, sheetName) {
   return sheetName
@@ -3069,14 +3154,64 @@ function getSlideOrThrow(slides, slideNumber) {
 }
 
 /** 载入全部幻灯片各形状的 TextFrame（含 hasText 与 textRange.text），返回按页分组的数组 */
+/** 组合形状递归的深度上限（每一层多一次 sync，与 WPS 面同口径） */
+const PPT_GROUP_MAX_DEPTH = 4
+
+/**
+ * 逐页收集**所有承载文字的 TextFrame**，含组合形状（group）里的子形状。
+ *
+ * 为什么要递归（dev-board#288）：演示稿里图示+标注、SmartArt 转出来的内容都是组合形状，
+ * 文字在子形状上；只看顶层 `getTextFrameOrNullObject()` 的话，这些字既读不到也改不了——
+ * 用户看着满屏字，AI 说这页没这段内容。WPS 面（wpsWppHandlers.textBearingShapes）已经
+ * 按「表格 → 组合递归 → 普通文本框」三条路收，Office 面此前只有第三条。
+ *
+ * 版本门槛：`Shape.group` / `ShapeGroup.shapes` 是 **PowerPointApi 1.8**（官方文档核实，
+ * 与本文件表格三件套同档）；`ShapeType.group` 本身是 1.4。**1.8 不支持时不报错**，
+ * 退化成「只收顶层」——与改造前逐字一致，不该因为想多读一点就把老宿主整条打死。
+ *
+ * 表格文字不在这里收：Office 面有 ppt_table_read / ppt_table_set_cell 专门通道
+ * （WPS 面没有那条通道，所以它把表格并进了遍历）。
+ */
 async function loadPptTextFrames(context) {
   const slides = context.presentation.slides
   slides.load('items')
   await context.sync()
-  slides.items.forEach((slide) => slide.shapes.load('items'))
+  slides.items.forEach((slide) => slide.shapes.load('items/type'))
   await context.sync()
-  const frames = slides.items.map((slide) =>
-    slide.shapes.items.map((shape) => {
+
+  const perSlide = slides.items.map((slide) => slide.shapes.items.slice())
+  if (pptApiSupported('1.8')) {
+    // 逐层展开组合：只在这一层真的有组合时才多花一次 sync
+    for (let depth = 0; depth < PPT_GROUP_MAX_DEPTH; depth++) {
+      const pending = []
+      perSlide.forEach((shapes, si) => {
+        shapes.forEach((shape) => {
+          if (String(shape.type) !== 'Group') return
+          try {
+            const inner = shape.group.shapes
+            inner.load('items/type')
+            pending.push({ si, inner })
+          } catch (e) { /* 个别形状取不到子集合，跳过它 */ }
+        })
+      })
+      if (!pending.length) break
+      await context.sync()
+      // 展开后的子形状替换掉本层的组合壳（组合壳自身没有文字）
+      const nextLevel = perSlide.map(() => [])
+      pending.forEach(({ si, inner }) => {
+        try {
+          for (const child of inner.items) nextLevel[si].push(child)
+        } catch (e) { /* 子集合读失败只丢这一个组合 */ }
+      })
+      perSlide.forEach((shapes, si) => {
+        const kept = shapes.filter((sp) => String(sp.type) !== 'Group')
+        perSlide[si] = kept.concat(nextLevel[si])
+      })
+    }
+  }
+
+  const frames = perSlide.map((shapes) =>
+    shapes.map((shape) => {
       const tf = shape.getTextFrameOrNullObject()
       tf.load('hasText,isNullObject')
       tf.textRange.load('text')

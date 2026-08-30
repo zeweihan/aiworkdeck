@@ -1578,13 +1578,13 @@ public class OfficeEditTools implements AgentToolComponent {
     }
 
     @Tool("在当前 PowerPoint 演示文稿中新增一页幻灯片，可选写入标题与正文文本框。" +
-          "position 指定插入到第几页之后（1 起；不传则追加到末尾）——PowerPoint JS API 只能把新页加到末尾" +
+          "position 指定新页插入后成为第几页（1 起，即插在原第 position 页之前；不传则追加到末尾）——PowerPoint JS API 只能把新页加到末尾" +
           "再挪动位置，挪动需要 PowerPointApi 1.8（较新 Microsoft 365），旧版宿主上会追加到末尾但不挪动位置，" +
           "返回值 moved/note 字段说明实际情况。title/body 用文本框承载（需要 PowerPointApi 1.4），位置尺寸用固定默认值。")
     @ToolMeta(displayName = "新增幻灯片", category = "office", fileEffect = "MODIFIED")
     public String office_ppt_add_slide(
             @P("会话ID（系统自动注入）") String conversationId,
-            @P("插入到第几页之后（1 起；不传则追加到末尾）") Integer position,
+            @P("新页插入后成为第几页（1 起，即插在原第 position 页之前；不传则追加到末尾）") Integer position,
             @P("标题文本（可选）") String title,
             @P("正文文本（可选）") String body
     ) {
