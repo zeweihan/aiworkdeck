@@ -1481,10 +1481,26 @@ public class AgentOrchestrator {
     /**
      * 通过 text_delta 事件向前端推送一段内容（与流式 token 走同一渲染管线）。
      */
+    /**
+     * 推一段正文。
+     *
+     * <p>信封必须用真正的 JSON 序列化器拼（dev-board#288）：手写的四条 replace
+     * 只处理了 \\ " \n \r，**漏掉了制表符与其余控制字符**。模型从表格/代码块里带出一个
+     * Tab（法律文书里的表格内容极常见），这条 text_delta 就是非法 JSON——
+     * 客户端 `JSON.parse` 抛错后按原文渲染，用户看到的是 `{"content":"…` 这一串信封本身。
+     * Jackson 的 writeValueAsString 会把 U+0000-U+001F 全部转义，这类问题一次性绝迹。
+     */
     private void sendTextDelta(String conversationId, String content) {
-        String esc = content.replace("\\", "\\\\").replace("\"", "\\\"")
-                .replace("\n", "\\n").replace("\r", "\\r");
-        sseEmitterService.send(conversationId, "text_delta", "{\"content\":\"" + esc + "\"}");
+        sseEmitterService.send(conversationId, "text_delta", jsonContentEnvelope(content));
+    }
+
+    /** {"content": "..."} 信封，转义交给 Jackson。序列化失败时退回不带正文的空信封而不是发出非法 JSON。 */
+    static String jsonContentEnvelope(String content) {
+        try {
+            return "{\"content\":" + SKILL_UPDATE_MAPPER.writeValueAsString(content == null ? "" : content) + "}";
+        } catch (Exception e) {
+            return "{\"content\":\"\"}";
+        }
     }
 
     static String truncate(String s, int max) {

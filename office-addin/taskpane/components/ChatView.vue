@@ -95,6 +95,10 @@
             >{{ opt }}</button>
             <span v-if="msg.question.answered" class="option-answered">{{ t('answered') }}</span>
           </div>
+          <!-- 本轮正文在断线期间丢过（dev-board#287）：补回来了要说一声，没补回来
+               更要说——空白气泡配「已完成」是最伤人的一种失败。不走 msg.error
+               是因为它不是执行失败，红字会误导用户以为文档没改成。 -->
+          <div v-if="msg.notice" class="msg-notice">{{ msg.notice }}</div>
           <div v-if="msg.error" class="msg-error">{{ msg.error }}</div>
           <!-- 额度耗尽的充值入口（dev-board#198）：付费在官网账户页完成，浏览器打开 -->
           <button
@@ -254,7 +258,7 @@
         <button
           class="pill doc-pill"
           :class="{ off: !includeDocument }"
-          :title="includeDocument ? t('docPillOnTitle') : t('docPillOffTitle')"
+          :title="docPillTitle + '\n' + (includeDocument ? t('docPillOnTitle') : t('docPillOffTitle'))"
           @click="includeDocument = !includeDocument"
         >{{ docLabel }}</button>
         <button
@@ -336,7 +340,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref, watch, TransitionGroup } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, TransitionGroup } from 'vue'
 import {
   messages, input, streaming, toolPrep, reconnecting, banner, notice, includeDocument, scrollSignal,
   activateSession, send as sendMessage, stop as stopRun, newConversation,
@@ -443,7 +447,28 @@ const skillsPanelEl = ref(null)
 const attachPanelEl = ref(null)
 const quickPromptsEl = ref(null)
 
-onMounted(() => { docMeta.value = readDocumentMeta() })
+/**
+ * 文档 pill 的信息源。**必须持续刷新**（dev-board#288）：只在挂载时读一次的话，
+ * 用户切了文档、或在另一个宿主里打开了别的文件之后，pill 上还写着上一份的名字——
+ * 而这颗 pill 是用户判断「插件现在连着哪一份文件」的唯一线索。2026-08-29 的真机
+ * 事故里，用户正是在两份文件之间来回，误以为 AI 面对的是他正在看的那一份。
+ *
+ * 两个时机：挂载、窗口重新获得焦点（用户从别的宿主切回来）。
+ * 发送路径不需要额外刷——chatSession 每次 send 都自己现读 readDocumentMeta()，
+ * 这里只负责让**显示**不落后于事实。
+ */
+function refreshDocMeta() {
+  try { docMeta.value = readDocumentMeta() } catch (e) { /* 宿主未就绪，保留上次的值 */ }
+}
+
+onMounted(() => {
+  refreshDocMeta()
+  window.addEventListener('focus', refreshDocMeta)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('focus', refreshDocMeta)
+})
 
 // ==================== 动效（有动机才动，reduced-motion 自动退化） ====================
 
@@ -511,6 +536,14 @@ function imageDowngraded(item) {
 const docLabel = computed(() => {
   const name = docMeta.value && docMeta.value.name ? docMeta.value.name : t('currentDocument')
   return (includeDocument.value ? '' : t('docPillOffPrefix')) + name
+})
+
+/** pill 的悬停说明：连着哪个宿主的哪一份文件（多开时用户唯一能自查的线索） */
+const docPillTitle = computed(() => {
+  const name = docMeta.value && docMeta.value.name ? docMeta.value.name : t('currentDocument')
+  const host = detectHost()
+  const hostLabel = host === 'excel' ? t('hostExcel') : host === 'powerpoint' ? t('hostPpt') : t('hostWord')
+  return t('docPillTitle', { host: hostLabel, name })
 })
 
 async function openHistory() {
@@ -979,6 +1012,14 @@ async function confirmDelete(c) {
   margin-top: 4px;
   color: var(--awd-danger);
   font-size: 12px;
+}
+
+/* 连接层的说明（不是执行失败），用次要文字色，别染成报错红 */
+.msg-notice {
+  margin-top: 4px;
+  color: var(--awd-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .recharge-btn {

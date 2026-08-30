@@ -12,27 +12,70 @@
 const MAX_BODY_CHARS = 200_000
 const MAX_EXCEL_ROWS = 2000
 const MAX_PPT_SLIDES = 100
+/** 内联正文的装饰说明（两个 PPT 宿主面同一份文案） */
+const PPT_INLINE_NOTE = '（以下由插件读取当前演示文稿生成。行首的「第N页：」与形状之间的「 | 」是插件加的分隔标记，不是文稿里的字；查找/替换/锚点请只用分隔标记之间的正文，不要把标记本身抄进去。）\n'
 
 export function wpsAvailable() {
   return typeof wps !== 'undefined' && wps != null
 }
 
+/** 任务窗格里的宿主 Application 对象。官方 wpsjs 模板的任务窗格用的就是 window.Application。 */
+function topApplication() {
+  try {
+    if (typeof wps !== 'undefined' && wps && wps.Application) return wps.Application
+  } catch (e) { /* 个别版本没有 wps.Application */ }
+  try {
+    if (typeof window !== 'undefined' && window.Application) return window.Application
+  } catch (e) { /* 非 WPS 环境 */ }
+  return null
+}
+
 /**
  * 当前 WPS 宿主：'word' | 'excel' | 'powerpoint' | ''。
- * 三个 Application 入口只有当前宿主的可用，其余的不存在或调用即抛——
- * 逐个 try 是官方示例的标准姿势。
+ *
+ * **判据是三个宿主各自独有的顶层集合**（文字有 Documents、表格有 Workbooks、演示有
+ * Presentations），与 ribbon 壳 `wps/js/ribbon.js` 的 `AwdHostTag()` 严格同源——那一套
+ * 是 WPS 12.1.0.28043 真机实测过的，官方 wpsjs 2.2.3 模板的任务窗格也是直接用
+ * `window.Application.ActivePresentation` 这套对象模型。
+ *
+ * 为什么改（dev-board#285）：旧实现按「`wps.WpsApplication()` 不抛异常就是文字宿主」判定，
+ * 而这三个工厂函数**并不是官方模板里的宿主判据**（官方三套脚手架各自只服务一个宿主，
+ * 从不需要判），它们在非本宿主里是否为假从未在真机验证过。壳与窗格用两套判据本身
+ * 就是缺陷：ribbon 那套先问 Presentations、窗格这套先问 WpsApplication，顺序还正好相反。
+ * 判错的代价是整场会话拿到错误宿主的工具面（用户看到「PPT 文件不在可编辑列表中」）。
+ *
+ * 工厂函数保留为最后兜底，但**逐个自校验**——只有返回的对象带着该宿主的标志性集合才认，
+ * 这样即使三个工厂在任何宿主里都返回真值，也不会再误判。
  */
 export function detectWpsHost() {
   if (!wpsAvailable()) return ''
-  try {
-    if (typeof wps.WpsApplication === 'function' && wps.WpsApplication()) return 'word'
-  } catch (e) { /* 非文字宿主 */ }
-  try {
-    if (typeof wps.EtApplication === 'function' && wps.EtApplication()) return 'excel'
-  } catch (e) { /* 非表格宿主 */ }
-  try {
-    if (typeof wps.WppApplication === 'function' && wps.WppApplication()) return 'powerpoint'
-  } catch (e) { /* 非演示宿主 */ }
+  const app = topApplication()
+  if (app) {
+    try { if (app.Presentations) return 'powerpoint' } catch (e) { /* 非演示宿主 */ }
+    try { if (app.Workbooks) return 'excel' } catch (e) { /* 非表格宿主 */ }
+    try { if (app.Documents) return 'word' } catch (e) { /* 非文字宿主 */ }
+    // Application.Name 判不了「是不是 WPS」（为兼容 Word VBA 宏恒报 Microsoft Word），
+    // 但判「是哪个宿主」是准的——与 ribbon 壳同款兜底
+    try {
+      const n = String(app.Name || '')
+      if (n.indexOf('PowerPoint') >= 0) return 'powerpoint'
+      if (n.indexOf('Excel') >= 0) return 'excel'
+      if (n.indexOf('Word') >= 0) return 'word'
+    } catch (e) { /* 连 Name 都取不到 */ }
+  }
+  // 兜底：三个工厂函数各自自校验（拿到的对象必须带本宿主的标志性集合）
+  const probes = [
+    ['powerpoint', 'WppApplication', 'Presentations'],
+    ['excel', 'EtApplication', 'Workbooks'],
+    ['word', 'WpsApplication', 'Documents']
+  ]
+  for (const [host, factory, marker] of probes) {
+    try {
+      if (typeof wps[factory] !== 'function') continue
+      const a = wps[factory]()
+      if (a && a[marker]) return host
+    } catch (e) { /* 非该宿主 */ }
+  }
   return ''
 }
 
@@ -195,7 +238,9 @@ function readWppSlides() {
     }
     lines.push(`第${i}页：${texts.join(' | ') || '（无文本）'}`)
   }
-  let out = lines.join('\n')
+  // 装饰文字必须交代清楚（dev-board#286）：模型抄锚点时抄的就是这份正文，
+  // 「第N页：」与「 | 」是我们加的，文稿里根本不存在，照抄进 searchText 就恒不命中。
+  let out = PPT_INLINE_NOTE + lines.join('\n')
   if (total > MAX_PPT_SLIDES) {
     out += `\n...（共 ${total} 页，仅附前 ${MAX_PPT_SLIDES} 页）`
   }

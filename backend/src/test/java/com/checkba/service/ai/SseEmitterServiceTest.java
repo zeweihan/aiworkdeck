@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
@@ -49,5 +50,73 @@ class SseEmitterServiceTest {
 
         assertThrows(IllegalStateException.class, () -> emitter.send("dead"),
                 "epoch 与当前一致时 close() 必须照常 complete 掉这个 emitter");
+    }
+
+    /**
+     * 断线空档里的事件必须进补发缓冲，而不是被静默丢弃（dev-board#287）。
+     *
+     * <p>还原病灶：2026-08-29 生产实证——两个任务窗格抢同一条 SSE 通道互相顶掉，
+     * 期间 send() 对"当前没有 emitter"的会话只打一行 log 就把事件扔了。用户拿到的是
+     * 一个标着"已完成 · 111 秒"的空白气泡；落在空档里的 client_action 还会让
+     * OfficeBridgeService 实打实空等满 30 秒再报"操作超时"。
+     */
+    @Test
+    void eventsSentWhileDisconnectedAreBufferedForReplay() {
+        SseEmitterService svc = new SseEmitterService();
+        String id = "conv-replay-1";
+
+        // 建连 → 拿到 id=1 的 text_delta（connected 不进缓冲）
+        svc.createConnection(id, "paneA");
+        svc.send(id, "text_delta", "{\"content\":\"甲\"}");
+
+        // 断线：emitter 没了，但这一轮还在跑，事件继续产生
+        svc.close(id, svc.currentEpoch(id));
+        svc.send(id, "text_delta", "{\"content\":\"方\"}");
+        svc.send(id, "client_action", "{\"tool\":\"office_command\"}");
+        svc.send(id, "bubble_end", "{\"status\":\"completed\"}");
+
+        // 断线期间的三条都得留着——尤其 client_action，丢了就是 30 秒空等
+        assertEquals(java.util.List.of("text_delta", "client_action", "bubble_end"),
+                svc.bufferedEventNamesSince(id, 1),
+                "断线空档里的事件必须进补发缓冲");
+    }
+
+    @Test
+    void reconnectWithLastEventIdReplaysOnlyTheMissedEvents() {
+        SseEmitterService svc = new SseEmitterService();
+        String id = "conv-replay-2";
+
+        svc.createConnection(id, "paneA");
+        svc.send(id, "text_delta", "a");   // id=1，客户端收到了
+        svc.close(id, svc.currentEpoch(id));
+        svc.send(id, "text_delta", "b");   // id=2，断线期间
+        svc.send(id, "bubble_end", "c");   // id=3，断线期间
+
+        // 同一个窗格带着游标 1 重连：只补 2、3 两条，不重发已经渲染过的 1
+        svc.createConnection(id, "paneA", "1");
+        assertEquals(2, svc.lastReplayCount(id), "只应补发游标之后的事件");
+    }
+
+    @Test
+    void heartbeatsAreNotBuffered() {
+        SseEmitterService svc = new SseEmitterService();
+        String id = "conv-replay-3";
+        svc.createConnection(id, "paneA");
+        for (int i = 0; i < 50; i++) svc.send(id, "heartbeat", "{\"ts\":1}");
+        svc.send(id, "text_delta", "real");
+        // 心跳补发没有意义，只会把真正需要补的内容从窗口里挤出去
+        assertEquals(java.util.List.of("text_delta"), svc.bufferedEventNamesSince(id, 0));
+    }
+
+    @Test
+    void noLastEventIdReplaysNothing() {
+        SseEmitterService svc = new SseEmitterService();
+        String id = "conv-replay-4";
+        svc.createConnection(id, "paneA");
+        svc.send(id, "text_delta", "a");
+        svc.close(id, svc.currentEpoch(id));
+        // 旧版插件与桌面端不带这个头：行为必须与改造前逐字一致（什么都不补）
+        svc.createConnection(id, "paneA", null);
+        assertEquals(0, svc.lastReplayCount(id));
     }
 }

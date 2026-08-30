@@ -94,6 +94,78 @@ description: Microsoft Office 与 WPS 插件领域。任务涉及 Word/Excel/PPT
 - `office_get_comments` 的定位符是 `index`（数组序号，同一轮请求内稳定）与 `id`（`Word.Comment.id`，跨请求稳定）；`reply_comment`/`resolve_comment` 两者都收，id 优先——先用 index 简单场景够用，id 是给多轮对话跨消息引用同一条批注用的。
 - **批次 9（插件侧能力矩阵补齐清单全 15 项，issue 见 `docs/superpowers/specs/2026-08-07-document-capability-matrix.md` 4.1 节）**：`office_insert_image` 给 `OfficeEditTools` 新增了 `ProjectFileRepository`/`StorageServiceFactory` 两个构造器依赖（读项目文件转 base64），改这个工具或再加依赖要同步测试的 `new OfficeEditTools(...)` 调用点。`manage_content_control` 的 insert 分支包裹粒度是**锚点所在整段**（`Paragraph.insertContentControl()`），不是仅锚点文本——`Range.insertContentControl()` 在 Microsoft Learn 检索中未查到确证，改用官方示例明确支持的段落级 API，工具描述已向模型说明这条限制。`get_revisions`/`accept_revision`/`reject_revision` 的 `revisionIndex` 每次都要重新读（Word 修订顺序随接受/拒绝变化，不能缓存旧序号跨轮复用）。Excel 批注定位统一走 `Range` 对象传给 `getItemByCell`（不拼 `"Sheet!A1"` 字符串），三个改批注状态的 command（reply/resolve/delete）保持这一致路径。PPT 表格三件套实测门槛是 PowerPointApi **1.8**（`rowCount`/`columnCount`/`values`/`getCellOrNullObject` 本身在 1.8 已够用），矩阵调研时按 `TableRowCollection` 猜测的 1.9 偏保守——只有真要枚举行列集合对象才需要 1.9，本批次未用到；别把这几个工具的版本门槛错设过高。
 
+### 2026-08-30 三端双边根因修复（dev-board#285/#286/#287/#288）
+
+孙川真机反馈的三个症状（「PPT 文件不在可编辑列表中」/「未找到锚点文本」/空白气泡标「已完成 · 111 秒」），
+经北京云后端**生产日志实证**是同一个根因，不是三个 bug：
+
+- **两个任务窗格共用一个 conversationId 在后端抢同一条 SSE 通道，互相顶掉**。
+  实证：2026-08-29 21:24:30–21:33:2x 约 9 分钟，`SSE connection established` 稳定 58 次/分钟；
+  nginx access log 每条 `GET /api/agent/connect/... 200 95`（只发出 `connected` 就断）。
+  同一会话的 officeHost 在 21:25:25 `WORD -> POWERPOINT`、21:33:11 `POWERPOINT -> WORD`。
+  成因：`awd_addin_conv_{projectId}` 不带宿主，而三宿主任务窗格同一个页面地址、同一个源，
+  localStorage 共享——与 2026-08-28 已修的 PluginStorage 窗格 id 共用键是**同一类地雷**，当时漏了会话 id。
+
+**新增契约**
+- **会话 ID 存储键按宿主分作用域**：`awd_addin_conv_{host}_{projectId}`（`settings.loadConversationId/saveConversationId`
+  收第三个参数 hostTag，`chatSession.hostScope()` 提供）。旧键只由 word 宿主一次性认领后删除。
+  **hostScope() 取不到宿主时用 'unknown'，绝不能回落 'word'**——回落就是把三个宿主并回一个会话。
+- **任务窗格实例身份**：`chatSession.paneId`（每次窗格载入生成、不持久化）经 `X-Client-Instance`
+  请求头上送。后端 `SseEmitterService.createConnection(id, clientId, lastEventId)` 认出「换了窗格」时
+  先给旧连接发 `superseded` 事件再关，客户端收到即**停止重连**并提示——把无限互顶变成一次性移交。
+- **SSE 断点续传**（SSE 规范内建那一套）：后端每个事件带自增 `id:`，每会话环形缓冲
+  （`REPLAY_MAX_EVENTS=512` / `REPLAY_MAX_BYTES=128KB` 双上限，`REPLAY_PURGE_THRESHOLD=200` 按规模清理），
+  connect 读 `Last-Event-ID` 补发。**心跳与 connected/superseded 不入缓冲**。
+  客户端 `sse.js` 记游标、重连时带上；旧后端不发 id 时游标恒空，行为与改造前一致。
+- **`state_recovery` 必须消费**：后端对仍在 RUNNING 的会话推本轮全量快照
+  （`AgentOrchestrator.activeStreamContent`，按用户轮次初始化、跨步骤累加）。桌面端一直在用，
+  插件端此前整个忽略——这是「空白气泡标已完成」的直接成因。快照是**全量不是增量**，
+  必须先清空气泡与解析器状态再整块喂。
+- **锚点定位统一走 `taskpane/lib/textMatch.js`**：逐字符归一（NFKC 全角半角、弯直引号、NBSP/表意空格/
+  零宽字符/软连字符、各式连字符、连续空白折叠、WPS 的 `\x07`、大小写）+ **显式偏移映射**，
+  命中一律换算回**原文坐标**。三条纪律：① 归一只用于「找」，落笔用原文区间；
+  ② Office 面取 Range 仍交给宿主 `body.search`（拿命中处的**原文**再搜一次），**绝不自造坐标**；
+  ③ WPS 面命中后用 `hit.text`（文档原文）当 needle，保住 `verifiedRange` 的逐笔校验不变式。
+  失败报错走 `describeAnchorFailure`：给出文档里最接近的原文片段 + 相似度 + 下一步。
+
+**新增地雷**
+- **退避复位不能放在「建连成功」那一刻**：真实故障形态是「每次都连得上、连上就被立刻断开」，
+  那样写指数退避永远不生效（实测被打成 1 Hz）。改为连接活满 `STABLE_CONNECTION_MS=5s` 才复位，
+  另有 60s/8 次熔断（`onStatus('unstable')`）。**写这条的回归用例观察窗口必须跨过第 4 次重连**
+  ——只看 3.4 秒的话，还原病灶后前三次时刻与修好后一模一样，用例会假绿（第一版就是这么错的）。
+- **后端每轮结束会主动关流**，客户端把它当意外断线：旧代码每一轮正常收尾都闪一次
+  「连接中断，正在自动重连……」。现在有 3 秒宽限（`RECONNECT_NOTICE_GRACE_MS`）。
+  **看到这条横幅不等于真的断过**——判断真断线要看服务端建连速率，不是看横幅。
+  同理 `everReconnected` 只在**轮次中途**断线时置起，否则 run_state 兜底从第一轮结束起就被永久武装。
+- **`bubble_end` 的 status 有五种**：finished / paused(max_depth|max_tokens) / awaiting_approval /
+  awaiting_input / 空信封。**只有 finished 与空信封算「写完了」**；`PAUSED` 在 run_state 里
+  也**不算「还在生成」**——插件没有「继续」按钮，并进 generating 会把输入框永久锁死。
+- **零正文终态必须兜底**：`bubble_end` 时若无可见正文，先去 `/api/ai/history` 补取本轮助手消息，
+  补不回来也要给一句人话（`msg.notice`，走 `.msg-notice` 次要色，不是 `msg.error` 的红字）。
+- **标签流解析器的 salvage**：模型不输出 `<final>`、把正文写在 `process/step/walkthrough` 里时，
+  整轮会被逐字丢弃。`flush()` 里**仅当本气泡一个字都没进正文**才把这些散文捞回来（工具载荷除外）。
+- **`sendTextDelta` 的信封必须用 Jackson 序列化**：手写 replace 漏制表符与控制字符，
+  模型从表格里带出一个 Tab 就让整条 text_delta 变非法 JSON，客户端 parse 失败后按原文渲染，
+  用户看到 `{"content":"…` 这一串信封本身。
+- **office_command 超时不等于没做**：命令已下发、宿主端很可能已经落笔。
+  `OfficeBridgeService` 的超时文案现在明确禁止直接重试写入、要求先读取核对——
+  旧文案只说「超时」，模型原样重试就把同一段内容写进文档两遍。
+- **WPS 宿主判定用 `Application` 的标志性集合**（Presentations/Workbooks/Documents），
+  与 `wps/js/ribbon.js` 的 `AwdHostTag()` 同源、也是官方 wpsjs 2.2.3 模板任务窗格的用法。
+  `wps.WpsApplication()/EtApplication()/WppApplication()` **不是官方模板里的宿主判据**
+  （三套脚手架各服务一个宿主，从不需要判），降为**自校验兜底**：返回的对象必须带该宿主的标志性集合才认。
+- **`Range.Width` 在多列区间上是总宽不是单列宽**（WPS 表格面）：拿它解单列内边距会算出负数，
+  被夹成 0 —— `ColumnWidth = 0` 等于**把这几列藏起来**，返回值还报成功。回读只许量第一列，且有永不写 0 的合理性闸。
+- **演示面写入侧要走递归形状遍历**（`wpsWppHandlers.textBearingShapes`）：表格单元格与组合子形状里的文字，
+  读取侧 `wpsDoc.collectShapeText` 早就按三条路收，写入侧此前只看顶层 TextFrame——
+  模型在上下文里读得到那些字，一改就报「未找到」。Office/ppt 面同款问题**尚未修**（见 dev-board#288）。
+- **PPT 内联正文里的「第N页：」与「 | 」是插件加的装饰**，已在正文开头加一行交底；
+  改这两个读取器时装饰与说明要一起改（`wpsDoc.PPT_INLINE_NOTE` 与 `wordDoc.PPT_INLINE_NOTE` 同源两份）。
+
+**已知未修**：对抗式复核确认但本轮未修的 11 条（Office/ppt 组合形状不可达、
+Office 面 apply_standard_format 无 run 合并、Excel 整表过桥、页眉页脚整体覆写等）
+与未验证的中低危 115 条，清单在 dev-board#288 的评论里。
+
 ## 验证
 
 - `cd office-addin && npm install && npm run build`；manifest 校验（dev 与 dist-deploy 两份）见上。

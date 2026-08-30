@@ -21,6 +21,11 @@ globalThis.localStorage = {
   removeItem: (k) => { store.delete(k) }
 }
 
+// 宿主桩：wordDoc.detectHost() 的兜底路径是「有 Word 全局即判 word 宿主」。
+// 会话 ID 的存储键按宿主分作用域（dev-board#285），不打这个桩就落在 'unknown' 上，
+// 用例读到的键与真实产品路径不是同一个。
+globalThis.Word = {}
+
 const { activateSession, messages, stop } = await import('./chatSession.js')
 const { createConversation } = await import('./api.js')
 
@@ -51,7 +56,7 @@ function stubFetch(handler) {
 }
 
 test('存量会话 connect 403 时自愈：丢弃死 ID → 重新签发 → 重连成功', async () => {
-  store.set('awd_addin_conv_7', 'conv-dead-123')
+  store.set('awd_addin_conv_word_7', 'conv-dead-123')
   const f = stubFetch((url) => {
     if (url.includes('/api/ai/history')) return jsonReply([])
     if (url.includes('/api/agent/connect/conv-dead-123')) return jsonReply({}, false, 403)
@@ -65,7 +70,7 @@ test('存量会话 connect 403 时自愈：丢弃死 ID → 重新签发 → 重
       projectId: '7'
     })
     // 死 ID 已被换成服务端新签发的 ID，并落回 localStorage
-    assert.equal(store.get('awd_addin_conv_7'), 'conv-fresh-456')
+    assert.equal(store.get('awd_addin_conv_word_7'), 'conv-fresh-456')
     // 完整自愈链：403 建连 → 重签发 → 新 ID 建连
     const urls = f.calls.map(c => c.url)
     assert.ok(urls.some(u => u.includes('/connect/conv-dead-123')))
@@ -78,7 +83,7 @@ test('存量会话 connect 403 时自愈：丢弃死 ID → 重新签发 → 重
 })
 
 test('签发被拒（403）不回退自造 conv-* ID，更不落盘', async () => {
-  store.delete('awd_addin_conv_9')
+  store.delete('awd_addin_conv_word_9')
   const f = stubFetch((url) => {
     if (url.includes('/api/ai/history')) return jsonReply([])
     if (url.endsWith('/api/agent/conversations')) return jsonReply({ message: 'denied' }, false, 403)
@@ -91,7 +96,7 @@ test('签发被拒（403）不回退自造 conv-* ID，更不落盘', async () =
       projectId: '9'
     })
     // 预连失败被吞掉（不打断用户），但绝不能把自造 ID 写进 localStorage 锁死后续
-    assert.equal(store.get('awd_addin_conv_9') || '', '')
+    assert.equal(store.get('awd_addin_conv_word_9') || '', '')
     assert.ok(!f.calls.some(c => c.url.includes('/api/agent/connect/conv-')))
   } finally {
     await stop()
@@ -115,7 +120,7 @@ test('createConversation：404（旧后端）回退 null，403 抛错带状态�
 })
 
 test('自愈只针对空会话：有历史消息的会话 403 不重签（那是权限/账号问题）', async () => {
-  store.set('awd_addin_conv_11', 'conv-history-1')
+  store.set('awd_addin_conv_word_11', 'conv-history-1')
   let issuedCalls = 0
   const f = stubFetch((url) => {
     if (url.includes('/api/ai/history')) {
@@ -133,7 +138,7 @@ test('自愈只针对空会话：有历史消息的会话 403 不重签（那是
     })
     assert.equal(issuedCalls, 0)
     // 历史消息还在，会话 ID 没被丢
-    assert.equal(store.get('awd_addin_conv_11'), 'conv-history-1')
+    assert.equal(store.get('awd_addin_conv_word_11'), 'conv-history-1')
     assert.ok(messages.value.length >= 1)
   } finally {
     await stop()

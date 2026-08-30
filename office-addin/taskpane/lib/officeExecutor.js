@@ -24,6 +24,7 @@
 
 import { officeAvailable, detectHost } from './wordDoc.js'
 import { minimalEdits } from './minimalEdit.js'
+import { findAllNormalized, describeAnchorFailure } from './textMatch.js'
 import { t } from './i18n.js'
 // 律所标准格式（HOUSE）单源：backend/src/main/resources/style-profiles/house-default.json 的字节副本，
 // 由 frontend/scripts/sync-house-profile.mjs 同步（npm run build 前自动跑），构建时内联进产物；
@@ -140,12 +141,99 @@ async function withTracking(context, fn) {
   }
 }
 
-/** body.search 定位锚点，返回命中 Range 数组（未命中返回空数组） */
-async function searchRanges(context, needle, matchCase) {
+/** body.search 一次，返回命中 Range 数组（未命中返回空数组）。不做任何降级。 */
+async function searchExact(context, needle, matchCase) {
   const results = context.document.body.search(needle, { matchCase: !!matchCase })
   results.load('items')
   await context.sync()
   return results.items
+}
+
+/**
+ * 定位锚点，返回命中 Range 数组（未命中返回空数组）。
+ *
+ * 两级（dev-board#286）：
+ *  1. 宿主原生 `body.search` 精确找；
+ *  2. 找不到时**归一化重定位**——把正文与锚点都按 textMatch.js 的规则归一
+ *     （全角半角、弯直引号、NBSP/零宽字符、连续空白、各式连字符、大小写），
+ *     在归一化文本上命中后，取命中处的**文档原文**再问一次宿主的 search。
+ *
+ * 为什么第二步还要绕回宿主 search：Office.js 没有「按字符下标取 Range」的 API，
+ * 而我们**绝不自己造坐标**——归一化只负责把模型给的串换成「文档里真实存在的串」，
+ * 取 Range 仍旧由宿主完成。这样归一化最坏只是找不到，不会把「找不到」变成「改错地方」。
+ * （WPS 面 dev-board#264 用的是同一条纪律：兜底必须可验证。）
+ */
+async function searchRanges(context, needle, matchCase) {
+  const direct = await searchExact(context, needle, matchCase)
+  if (direct.length) return direct
+  const relocated = await relocateByNormalization(context, needle)
+  return relocated ? relocated.items : []
+}
+
+/**
+ * 归一化重定位。返回 { items, matchedText } 或 null。
+ * 命中处的原文若跨段（含 \r/\n，Word 的 search 不跨段），退而取其中最长的一段
+ * ——仍旧是文档里逐字存在的串，宿主照样能定位。
+ */
+async function relocateByNormalization(context, needle) {
+  const raw = String(needle || '')
+  if (!raw.trim()) return null
+  let bodyText = ''
+  try {
+    const body = context.document.body
+    body.load('text')
+    await context.sync()
+    bodyText = body.text || ''
+  } catch (e) {
+    return null
+  }
+  if (!bodyText) return null
+  const hits = findAllNormalized(bodyText, raw)
+  for (const hit of hits) {
+    for (const candidate of searchableVariants(hit.text)) {
+      const items = await searchExact(context, candidate, true)
+      if (items.length) return { items, matchedText: hit.text }
+    }
+  }
+  return null
+}
+
+/**
+ * 把一段文档原文拆成「宿主 search 吃得下」的候选串：整串优先，
+ * 跨段时退到最长的单段。`searchable()` 已经挡掉超长、含 ^、码元不完整三种情况。
+ */
+function searchableVariants(text) {
+  const out = []
+  const whole = String(text || '')
+  if (searchable(whole)) out.push(whole)
+  if (/[\r\n]/.test(whole)) {
+    const longest = whole.split(/\r\n|\n|\r/)
+      .map((x) => x.trim())
+      .filter((x) => x.length >= ANCHOR_FALLBACK_MIN_CHARS)
+      .reduce((a, b) => (b.length > a.length ? b : a), '')
+    if (longest && searchable(longest)) out.push(longest)
+  }
+  return out
+}
+
+/**
+ * 定位失败时的报错：**带证据**。
+ * 只回一句「请确认 anchorText 与文档内容精确一致」对模型毫无信息量——它只会把锚点
+ * 越猜越短，越短越容易命中多处，最后越改越乱（dev-board#286 用户实况）。
+ * 这里把文档里最接近的一段原文摆出来，让模型能一次改对。
+ */
+async function anchorNotFound(context, kind, needle) {
+  let bodyText = ''
+  try {
+    const body = context.document.body
+    body.load('text')
+    await context.sync()
+    bodyText = body.text || ''
+  } catch (e) { /* 读不到正文就退回不带证据的说明 */ }
+  if (!bodyText) {
+    return new Error(`${kind}：在文档中未找到该文本，请先用读取类工具确认文档当前内容。`)
+  }
+  return new Error(describeAnchorFailure(kind, needle, bodyText))
 }
 
 /** 降级选段时要求的最短长度：太短容易在全文里误命中别处（dev-board#149） */
@@ -616,7 +704,7 @@ const HANDLERS = {
         }
         const items = await searchRanges(context, searchText, true)
         if (!items.length) {
-          throw new Error('未找到目标文本，请确认 searchText 与文档内容精确一致（可先用 search 命令核对）')
+          throw await anchorNotFound(context, '替换文本', searchText)
         }
         const targets = replaceAll ? items : [items[0]]
         for (const range of targets) range.load('text')
@@ -671,19 +759,36 @@ const HANDLERS = {
             if (fallback) items = await searchRanges(context, boundForSearch(fallback), true)
           }
           if (!items.length) {
-            const suffix = /[\r\n]/.test(anchorText)
-              ? `；锚点跨段，已尝试按段内文本降级仍未命中：${anchorText.slice(0, 40)}`
-              : ''
-            throw new Error(`未找到锚点文本，请确认 anchorText 与文档内容精确一致${suffix}`)
+            throw await anchorNotFound(context, '插入文本（修订）', anchorText)
           }
           const location = position === 'before' ? Word.InsertLocation.before : Word.InsertLocation.after
           items[0].insertText(text, location)
-        } else {
-          // 无锚点：落在用户当前光标/选区处（选区被替换，与光标插入语义一致）
-          context.document.getSelection().insertText(text, Word.InsertLocation.replace)
+          await context.sync()
+          // 锚点命中多处时**如实交代用了第一处**（dev-board#286）：此前是静默取 items[0]，
+          // 模型以为插在了自己想的那一条，实际可能落在了另一条同名条款后面，
+          // 而返回值一个字都不提——这类"静默改到别处"比报错难查得多。
+          const out = { inserted: true, anchored: true, position }
+          if (items.length > 1) {
+            out.totalMatches = items.length
+            out.note = `锚点在文档中命中 ${items.length} 处，已插入到第 1 处之${position === 'before' ? '前' : '后'}；`
+              + '若不是你要的位置，请换一段在全文唯一的锚点重试。'
+          }
+          return out
         }
+        // 无锚点：落在用户当前光标/选区处。**选区会被替换**——用户正选着一段文字时，
+        // 这一下就是把他选中的内容删掉换成新文本，所以返回值要说清楚（dev-board#286）。
+        const selection = context.document.getSelection()
+        selection.load('text')
         await context.sync()
-        return { inserted: true, anchored: !!anchorText, position: anchorText ? position : 'selection' }
+        const replacedText = String(selection.text || '')
+        selection.insertText(text, Word.InsertLocation.replace)
+        await context.sync()
+        const out = { inserted: true, anchored: false, position: 'selection' }
+        if (replacedText.trim()) {
+          out.replacedSelection = replacedText.length > 80 ? replacedText.slice(0, 80) + '…' : replacedText
+          out.note = '未提供 anchorText，内容插入在用户当前选区处，并替换掉了原本选中的文字（见 replacedSelection）。'
+        }
+        return out
       })
     })
   },
@@ -700,7 +805,7 @@ const HANDLERS = {
     return Word.run(async (context) => {
       const items = await searchRanges(context, anchorText, true)
       if (!items.length) {
-        throw new Error('未找到批注目标文本，请确认 anchorText 与文档内容精确一致')
+        throw await anchorNotFound(context, '插入批注', anchorText)
       }
       items[0].insertComment(comment)
       await context.sync()
@@ -721,7 +826,7 @@ const HANDLERS = {
       return withTracking(context, async () => {
         const items = await searchRanges(context, anchorText, true)
         if (!items.length) {
-          throw new Error('未找到目标文本，请确认 anchorText 与文档内容精确一致（可先用 search 命令核对）')
+          throw await anchorNotFound(context, '定位锚点', anchorText)
         }
         const targets = args.applyToAll ? items : [items[0]]
         for (const range of targets) applyProps(range.font, font)
@@ -748,7 +853,7 @@ const HANDLERS = {
       return withTracking(context, async () => {
         const items = await searchRanges(context, anchorText, true)
         if (!items.length) {
-          throw new Error('未找到目标文本，请确认 anchorText 与文档内容精确一致（可先用 search 命令核对）')
+          throw await anchorNotFound(context, '定位锚点', anchorText)
         }
         const targets = args.applyToAll ? items : [items[0]]
         const paragraphs = targets.map((range) => range.paragraphs.getFirst())
@@ -774,7 +879,7 @@ const HANDLERS = {
       if (anchorText) {
         const items = await searchRanges(context, anchorText, true)
         if (!items.length) {
-          throw new Error('未找到目标文本，请确认 anchorText 与文档内容精确一致（可先用 search 命令核对）')
+          throw await anchorNotFound(context, '定位锚点', anchorText)
         }
         range = items[0]
       } else {
@@ -841,7 +946,7 @@ const HANDLERS = {
         const items = paragraphs.items
         const start = items.findIndex((p) => String(p.text || '').includes(anchorText))
         if (start < 0) {
-          throw new Error('未找到锚点段落，请确认 anchorText 与文档内容精确一致（可先用 search 命令核对）')
+          throw await anchorNotFound(context, '定位段落', anchorText)
         }
         const targets = items.slice(start, start + count)
 
@@ -1033,7 +1138,7 @@ const HANDLERS = {
         let table
         if (anchorText) {
           const items = await searchRanges(context, anchorText, true)
-          if (!items.length) throw new Error('未找到锚点文本，请确认 anchorText 与文档内容精确一致')
+          if (!items.length) throw await anchorNotFound(context, '定位锚点', anchorText)
           const location = position === 'before' ? Word.InsertLocation.before : Word.InsertLocation.after
           table = items[0].insertTable(rowCount, colCount, location, rows)
         } else {
@@ -1266,7 +1371,7 @@ const HANDLERS = {
         const location = position === 'before' ? Word.InsertLocation.before : Word.InsertLocation.after
         if (anchorText) {
           const items = await searchRanges(context, anchorText, true)
-          if (!items.length) throw new Error('未找到锚点文本，请确认 anchorText 与文档内容精确一致')
+          if (!items.length) throw await anchorNotFound(context, '定位锚点', anchorText)
           items[0].insertBreak(breakType, location)
         } else {
           context.document.getSelection().insertBreak(breakType, location)
@@ -1287,7 +1392,7 @@ const HANDLERS = {
       return withTracking(context, async () => {
         const items = await searchRanges(context, anchorText, true)
         if (!items.length) {
-          throw new Error('未找到目标文本，请确认 anchorText 与文档内容精确一致（可先用 search 命令核对）')
+          throw await anchorNotFound(context, '定位锚点', anchorText)
         }
         items[0].hyperlink = url
         await context.sync()
@@ -1479,7 +1584,7 @@ const HANDLERS = {
     return Word.run(async (context) => {
       return withTracking(context, async () => {
         const items = await searchRanges(context, anchorText, true)
-        if (!items.length) throw new Error('未找到目标文本，请确认 anchorText 与文档内容精确一致')
+        if (!items.length) throw await anchorNotFound(context, '定位锚点', anchorText)
         items[0].insertFootnote(text)
         await context.sync()
         return { inserted: true }
@@ -1496,7 +1601,7 @@ const HANDLERS = {
     return Word.run(async (context) => {
       return withTracking(context, async () => {
         const items = await searchRanges(context, anchorText, true)
-        if (!items.length) throw new Error('未找到目标文本，请确认 anchorText 与文档内容精确一致')
+        if (!items.length) throw await anchorNotFound(context, '定位锚点', anchorText)
         items[0].insertEndnote(text)
         await context.sync()
         return { inserted: true }
@@ -1516,7 +1621,7 @@ const HANDLERS = {
         let picture
         if (anchorText) {
           const items = await searchRanges(context, anchorText, true)
-          if (!items.length) throw new Error('未找到锚点文本，请确认 anchorText 与文档内容精确一致')
+          if (!items.length) throw await anchorNotFound(context, '定位锚点', anchorText)
           const location = position === 'before' ? Word.InsertLocation.before : Word.InsertLocation.after
           picture = items[0].insertInlinePictureFromBase64(base64, location)
         } else {
@@ -1543,7 +1648,7 @@ const HANDLERS = {
       return withTracking(context, async () => {
         const items = await searchRanges(context, anchorText, true)
         if (!items.length) {
-          throw new Error('未找到目标文本，请确认 anchorText 与文档内容精确一致（可先用 search 命令核对）')
+          throw await anchorNotFound(context, '定位锚点', anchorText)
         }
         const targets = args.applyToAll ? items : [items[0]]
         const paragraphs = targets.map((range) => range.paragraphs.getFirst())
@@ -1566,7 +1671,7 @@ const HANDLERS = {
         if (!anchorText) throw new Error('insert 需要 anchorText')
         return withTracking(context, async () => {
           const items = await searchRanges(context, anchorText, true)
-          if (!items.length) throw new Error('未找到锚点文本，请确认 anchorText 与文档内容精确一致')
+          if (!items.length) throw await anchorNotFound(context, '定位锚点', anchorText)
           // 包裹整段（Paragraph.insertContentControl，比 Range 级更明确支持），锚点定位所在段落
           const paragraph = items[0].paragraphs.getFirst()
           const cc = paragraph.insertContentControl()
@@ -2421,12 +2526,9 @@ const HANDLERS = {
         for (const tf of slideFrames) {
           if (tf.isNullObject || !tf.hasText) continue
           const text = tf.textRange.text || ''
-          let from = 0
-          while (true) {
-            const idx = text.indexOf(searchText, from)
-            if (idx === -1) break
-            targets.push({ tf, start: idx, len: searchText.length })
-            from = idx + searchText.length
+          // 归一化定位（dev-board#286）：命中区间是原文坐标，长度按命中原文算
+          for (const h of findAllNormalized(text, searchText)) {
+            targets.push({ tf, start: h.start, len: h.end - h.start })
             if (!args.applyToAll) break outer
           }
         }
@@ -2782,9 +2884,9 @@ const HANDLERS = {
       for (const tf of frames) {
         if (tf.isNullObject || !tf.hasText) continue
         const text = tf.textRange.text || ''
-        const idx = text.indexOf(searchText)
-        if (idx === -1) continue
-        const sub = tf.textRange.getSubstring(idx, searchText.length)
+        const hit = findAllNormalized(text, searchText)[0]
+        if (!hit) continue
+        const sub = tf.textRange.getSubstring(hit.start, hit.end - hit.start)
         sub.setHyperlink({ address: url })
         await context.sync()
         return { slideNumber, linked: true, url }
@@ -3170,8 +3272,48 @@ export async function executeOfficeCommand(command, args) {
     const data = await handler(args || {})
     return { ok: true, data: data == null ? {} : data }
   } catch (e) {
-    const message = (e && e.message) || String(e)
     console.warn('[Addin] office_command 执行失败', command, e)
-    return { ok: false, error: message }
+    return { ok: false, error: await describeExecutionError(e, command, args || {}) }
+  }
+}
+
+/**
+ * 把宿主原生异常翻成模型能据以自纠的说明（dev-board#288）。
+ *
+ * 两件事：
+ * 1. **别丢 code 与 errorLocation**。Office.js 的 OfficeExtension.Error 上带
+ *    `code`（如 ItemNotFound / InvalidArgument）与 `debugInfo.errorLocation`
+ *    （出错的那一句 API 调用），只透传 message 等于把最有用的两条线索扔掉。
+ * 2. **工作表名写错要报出实际有哪些表**。26 个 excel_* 命令共用同一个 resolveSheet，
+ *    名字打错时抛的是一句英文 ItemNotFound，模型只能瞎猜；把工作簿里真实的表名列出来，
+ *    它一次就能改对。
+ */
+async function describeExecutionError(e, command, args) {
+  let message = (e && e.message) || String(e)
+  const code = e && e.code ? String(e.code) : ''
+  const where = e && e.debugInfo && e.debugInfo.errorLocation ? String(e.debugInfo.errorLocation) : ''
+  if (code === 'ItemNotFound' && command.startsWith('excel_') && args.sheetName) {
+    const names = await listWorksheetNames()
+    if (names.length) {
+      return `未找到名为「${args.sheetName}」的工作表。本工作簿现有工作表：${names.join('、')}。`
+        + '请用其中之一重试（名称区分空格与全角半角），或留空 sheetName 表示活动工作表。'
+    }
+  }
+  if (code) message += `（宿主错误码 ${code}${where ? '，出错位置 ' + where : ''}）`
+  else if (where) message += `（出错位置 ${where}）`
+  return message
+}
+
+/** 工作簿里现有的工作表名；取不到就返回空数组（只用于把报错说清楚，失败不该再抛） */
+async function listWorksheetNames() {
+  try {
+    return await Excel.run(async (context) => {
+      const sheets = context.workbook.worksheets
+      sheets.load('items/name')
+      await context.sync()
+      return sheets.items.map((w) => w.name)
+    })
+  } catch (err) {
+    return []
   }
 }

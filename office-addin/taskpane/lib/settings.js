@@ -9,8 +9,21 @@ const KEY_SERVER = 'awd_addin_server_url'
 const KEY_TOKEN = 'awd_addin_token'
 const KEY_PROJECT = 'awd_addin_project_id'
 // 会话 ID 按项目分别存：切文档/重开任务窗格会整个重建 webview，
-// 会话 ID 只活在内存里就等于每次都从空白开始
+// 会话 ID 只活在内存里就等于每次都从空白开始。
+// **而且必须再按宿主分一层**（2026-08-30，dev-board#285）：WPS 文字/表格/演示（以及
+// Office 三宿主）的任务窗格是同一个页面地址、同一个源，localStorage 是共享的。
+// 只按项目分键的话，同时开着两个宿主的窗格会拿到同一个 conversationId，于是
+//   (a) 两个窗格在后端抢同一条 SSE 通道，互相顶掉（实测 1 Hz 无限互顶，正文全丢）；
+//   (b) 每次发消息都把会话的 officeHost 覆盖成自己那个宿主，模型的工具面在两轮之间
+//       来回翻，用户看到「PPT 文件不在可编辑列表中」。
+// 这与 2026-08-28 已修的 PluginStorage 窗格 id 共用键是同一类地雷，当时漏了会话 id。
 const KEY_CONVERSATION_PREFIX = 'awd_addin_conv_'
+// v0.27.4 及更早只按项目分键的旧键前缀，用于一次性迁移（见 loadConversationId）
+const LEGACY_CONVERSATION_PREFIX = 'awd_addin_conv_'
+
+function conversationKey(projectId, hostTag) {
+  return KEY_CONVERSATION_PREFIX + (hostTag || 'unknown') + '_' + projectId
+}
 
 /**
  * 构建期注入的默认后端地址（见 vite.config.js 的 define）。
@@ -150,19 +163,34 @@ export function saveProjectId(projectId) {
 }
 
 /**
- * 取该项目上次的会话 ID（无则空串）。
+ * 取该项目在该宿主下上次的会话 ID（无则空串）。
+ *
+ * 升级迁移：旧版本只按项目分键，那个键在语义上属于**文字/Word 宿主**
+ * （officeHost 缺省即 WORD）。所以只有 word 宿主认领它，认领后立刻删掉旧键——
+ * 留着的话表格/演示窗格下次还会读到它，等于把刚分开的会话又并回去。
  */
-export function loadConversationId(projectId) {
+export function loadConversationId(projectId, hostTag) {
   if (!projectId) return ''
-  return safeGetItem(KEY_CONVERSATION_PREFIX + projectId) || ''
+  const key = conversationKey(projectId, hostTag)
+  const current = safeGetItem(key) || ''
+  if (current) return current
+  if (hostTag === 'word') {
+    const legacy = safeGetItem(LEGACY_CONVERSATION_PREFIX + projectId) || ''
+    if (legacy) {
+      safeSetItem(key, legacy)
+      safeRemoveItem(LEGACY_CONVERSATION_PREFIX + projectId)
+      return legacy
+    }
+  }
+  return ''
 }
 
 /**
- * 记住该项目的会话 ID；传空值即清除（「新对话」）。
+ * 记住该项目在该宿主下的会话 ID；传空值即清除（「新对话」）。
  */
-export function saveConversationId(projectId, conversationId) {
+export function saveConversationId(projectId, conversationId, hostTag) {
   if (!projectId) return
-  const key = KEY_CONVERSATION_PREFIX + projectId
+  const key = conversationKey(projectId, hostTag)
   if (conversationId) safeSetItem(key, String(conversationId))
   else safeRemoveItem(key)
 }
