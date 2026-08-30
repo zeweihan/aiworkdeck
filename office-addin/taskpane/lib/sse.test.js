@@ -238,3 +238,131 @@ test('XHR 降级通道：非 200 首连 ready 即拒绝并带状态码（自愈�
     globalThis.XMLHttpRequest = savedXHR
   }
 })
+
+// ===================== 重连风暴与断点续传（dev-board#285 / #287） =====================
+// 2026-08-29 生产实测的病灶：两个任务窗格（WPS 文字 + WPS 演示）共用一个 conversationId，
+// 在后端抢同一条 SSE 通道互相顶掉。每次建连**都成功**、成功后立刻被顶断，而旧代码
+// 在「建连成功」那一刻就把退避复位成 1s——指数退避于是永远不生效，实测 1 Hz 打满 9 分钟，
+// 那一轮的正文全丢，用户看到标着「已完成 · 111 秒」的空白气泡。
+// 三条用例分别钉住三处修复；把任何一处改回原样都会转红。
+//
+// 这里刻意用真实计时器而不是 mock：被测对象正是「多久之后才重连」这件事本身，
+// 换成假时钟就等于把要验的常量换成自己写的常量（假绿的经典形状）。
+// 代价是这一组用例要跑约 5 秒。
+
+/** 建连即断的 XHR 桩：每次 send() 都先 200 建连、再立刻收流（模拟被另一个窗格顶掉） */
+function makeFlappingXhr(instances, opts = {}) {
+  return class FlappingXhr {
+    constructor() {
+      instances.push({ xhr: this, at: Date.now(), headers: this.headers = {} })
+      this.readyState = 0
+      this.status = 0
+      this.responseText = ''
+    }
+    open(method, url) { this.url = url }
+    setRequestHeader(k, v) { this.headers[k] = v }
+    send() {
+      this.status = 200
+      this.readyState = 2
+      this.onreadystatechange && this.onreadystatechange()
+      if (opts.chunk) {
+        this.readyState = 3
+        this.responseText += opts.chunk
+        this.onreadystatechange && this.onreadystatechange()
+      }
+      // 立刻收流：readyState 4 走 finishReading → 排一次重连
+      this.readyState = 4
+      this.onreadystatechange && this.onreadystatechange()
+    }
+    abort() { this.readyState = 4; this.onabort && this.onabort() }
+  }
+}
+
+function withFakeXhr(instances, opts) {
+  const savedRS = globalThis.ReadableStream
+  const savedXHR = globalThis.XMLHttpRequest
+  globalThis.ReadableStream = undefined
+  globalThis.XMLHttpRequest = makeFlappingXhr(instances, opts)
+  return () => {
+    globalThis.ReadableStream = savedRS
+    globalThis.XMLHttpRequest = savedXHR
+  }
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+test('重连退避：连上就被顶断时必须继续翻倍，不许每次复位成 1 秒', async () => {
+  const instances = []
+  const restore = withFakeXhr(instances)
+  try {
+    const conn = createSseConnection({
+      baseUrl: 'https://x.example', token: 't', conversationId: 'c-flap',
+      onEvent: () => {}, onClose: () => {}
+    })
+    await conn.ready
+    assert.equal(instances.length, 1, '首连一次')
+
+    // 观察 5.2 秒。修好之后退避是 1s → 2s → 4s，建连时刻 0 / 1.0 / 3.0，第四次要等到 7.0s，
+    // 所以窗口内恰好 3 次。
+    // **窗口必须跨过第 4 次**：还原病灶（建连成功即复位 backoff）后的序列是
+    // 0 / 1.0 / 3.0 / 4.0 / 5.0……前三次与修好之后一模一样，只看 3.4 秒会假绿
+    // （本用例第一版就是这么写的，还原病灶照样通过）。
+    await sleep(5200)
+    const gaps = instances.slice(1).map((x, i) => x.at - instances[i].at)
+    assert.equal(instances.length, 3,
+      `5.2s 内应只重连 2 次（1s、2s，下一次要到 7s），实际建连 ${instances.length} 次，间隔 ${JSON.stringify(gaps)}`)
+    assert.ok(gaps[0] >= 900 && gaps[0] < 1600, `第一次退避应约 1s，实际 ${gaps[0]}ms`)
+    assert.ok(gaps[1] >= 1800, `第二次退避应翻倍到约 2s，实际 ${gaps[1]}ms`)
+    conn.close()
+  } finally {
+    restore()
+  }
+})
+
+test('superseded：被另一个窗格接管后停止重连，并把状态交给界面', async () => {
+  const instances = []
+  const restore = withFakeXhr(instances, {
+    chunk: 'event: superseded\ndata: {"reason":"another_pane"}\n\n'
+  })
+  try {
+    const statuses = []
+    const conn = createSseConnection({
+      baseUrl: 'https://x.example', token: 't', conversationId: 'c-super',
+      onEvent: () => {}, onClose: () => {}, onStatus: (s) => statuses.push(s)
+    })
+    await conn.ready
+    assert.equal(instances.length, 1)
+    assert.ok(statuses.includes('superseded'), '必须把接管状态告诉界面')
+    // 互顶循环的另一半就是「被顶掉还一直重连」——这里必须彻底收手
+    await sleep(1500)
+    assert.equal(instances.length, 1, '被接管后不许再重连')
+    conn.close()
+  } finally {
+    restore()
+  }
+})
+
+test('断点续传：事件 id 记进游标，重连时经 Last-Event-ID 上送；窗格身份随请求头带出', async () => {
+  const instances = []
+  const restore = withFakeXhr(instances, {
+    chunk: 'id: 42\nevent: text_delta\ndata: {"content":"甲"}\n\n'
+  })
+  try {
+    const events = []
+    const conn = createSseConnection({
+      baseUrl: 'https://x.example', token: 'awdt_x', conversationId: 'c-resume',
+      clientId: 'pane-abc', onEvent: (n, d) => events.push([n, d]), onClose: () => {}
+    })
+    await conn.ready
+    assert.deepEqual(events[0], ['text_delta', '{"content":"甲"}'], 'id 行不许污染 data')
+    assert.equal(instances[0].headers['X-Client-Instance'], 'pane-abc')
+    assert.equal(instances[0].headers['Last-Event-ID'], undefined, '首连没有游标可带')
+    await sleep(1300)
+    assert.equal(instances.length, 2)
+    assert.equal(instances[1].headers['Last-Event-ID'], '42', '重连必须带上最后收到的事件 id')
+    assert.equal(instances[1].headers['X-Client-Instance'], 'pane-abc')
+    conn.close()
+  } finally {
+    restore()
+  }
+})

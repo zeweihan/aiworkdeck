@@ -16,6 +16,28 @@ import {
 import { t } from './i18n.js'
 
 /**
+ * 本窗格的宿主标签，用作会话 ID 存储键的一层作用域（settings.loadConversationId）。
+ * **取不到时用 'unknown'，绝不能回落成 'word'**——回落成 word 正好把三个宿主的
+ * 窗格并回同一个会话，也就是 dev-board#285 那个 1 Hz 互顶风暴的成因。
+ */
+function hostScope() {
+  return detectHost() || 'unknown'
+}
+
+/**
+ * 任务窗格实例身份：每次窗格载入生成一次，**不持久化**。
+ * 后端据它区分「同一个窗格重连」与「另一个窗格来抢同一个会话」，
+ * 后者做一次性移交（superseded）而不是无声互顶。
+ */
+function makePaneId() {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  } catch (e) { /* 老内核没有 randomUUID */ }
+  return 'pane-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10)
+}
+export const paneId = makePaneId()
+
+/**
  * 对话会话的模块级单例状态（import 即共享）。
  *
  * 为什么不放在 ChatView 内：任务窗格切到「设置」视图时 ChatView 被卸载，
@@ -89,9 +111,24 @@ let conversationId = null
 let connection = null
 let parser = null
 let currentAssistant = null
-// SSE 是否发生过断线重连：只有重连后的 run_state 才用于兜底解锁
-// （首连的 run_state 在 send 已置 streaming 之后到达，不能当终态看）
+// SSE 是否发生过**轮次中途**的断线重连：只有这种重连之后的 run_state 才用于兜底解锁
+// （首连的 run_state 在 send 已置 streaming 之后到达，不能当终态看）。
+//
+// 判据必须带上「轮次中途」（dev-board#285）：后端每轮结束都会主动关流，
+// 客户端随即排一次重连——把那次也算成「断线过」，等于从第一轮结束起就把
+// run_state 兜底永久武装上，此后任何一条迟到的 run_state 都能把正在跑的轮次
+// 判成已完成并解锁输入框。
 let everReconnected = false
+// 「连接中断，正在自动重连……」的宽限计时器：正常收尾造成的那一秒重连不该报警，
+// 否则每一轮结束都闪一次断线横幅，真故障反而淹没在狼来了里（用户录屏里的那条
+// 横幅就分不清是哪种）。
+let reconnectNoticeTimer = null
+const RECONNECT_NOTICE_GRACE_MS = 3000
+
+function clearReconnectNotice() {
+  if (reconnectNoticeTimer) { clearTimeout(reconnectNoticeTimer); reconnectNoticeTimer = null }
+  reconnecting.value = false
+}
 // 本次建连是否由「回灌」触发（任务窗格重建后恢复既有会话）。
 // 建连有三种来源，run_state 的读法各不相同（详见 handleRunState）：
 //   - 回灌触发（本标记位为 true）：首个 run_state 就是当前运行状态的权威答案；
@@ -177,7 +214,7 @@ export async function activateSession({ settings, projectId }) {
   parser = null
   streaming.value = false
   toolPrep.value = false
-  reconnecting.value = false
+  clearReconnectNotice()
   everReconnected = false
   banner.value = ''
   notice.value = ''
@@ -194,7 +231,7 @@ export async function activateSession({ settings, projectId }) {
   refreshCatalogs()
 
   // 任务窗格重建（切文档、重开窗格）后：接着上次的会话，而不是从空白开始
-  const stored = loadConversationId(pid)
+  const stored = loadConversationId(pid, hostScope())
   if (stored) {
     conversationId = stored
     const history = await fetchConversationHistory(settings, stored)
@@ -460,13 +497,13 @@ export async function switchConversation(convId) {
   messages.value = []
   currentAssistant = null
   parser = null
-  reconnecting.value = false
+  clearReconnectNotice()
   everReconnected = false
   banner.value = ''
   notice.value = ''
   resetDocCache()
   conversationId = convId
-  saveConversationId(ctx.projectId, convId)
+  saveConversationId(ctx.projectId, convId, hostScope())
   const history = await fetchConversationHistory(ctx.settings, convId)
   if (gen !== generation) return
   if (history.length) {
@@ -498,7 +535,7 @@ async function preconnect() {
     const issued = await createConversation(ctx.settings, parseInt(ctx.projectId, 10))
     if (gen !== generation) return
     conversationId = issued || `conv-${Date.now()}`
-    saveConversationId(ctx.projectId, conversationId)
+    saveConversationId(ctx.projectId, conversationId, hostScope())
   }
   try {
     await ensureConnection()
@@ -511,11 +548,11 @@ async function preconnect() {
     const gen = generation
     console.warn('[Addin] 存量会话已失效（connect 403），丢弃并重新签发', conversationId)
     conversationId = null
-    saveConversationId(ctx.projectId, '')
+    saveConversationId(ctx.projectId, '', hostScope())
     const issued = await createConversation(ctx.settings, parseInt(ctx.projectId, 10))
     if (gen !== generation) return
     conversationId = issued || `conv-${Date.now()}`
-    saveConversationId(ctx.projectId, conversationId)
+    saveConversationId(ctx.projectId, conversationId, hostScope())
     await ensureConnection()
   }
 }
@@ -652,6 +689,79 @@ function adoptLastAssistantBubble() {
   attachParser(last)
 }
 
+/**
+ * 断线重连续流（与桌面端 `useAgentStream.handleStateRecovery` 同语义）。
+ *
+ * 后端 `AiAgentController.connect` 对仍在 RUNNING 的会话推来本轮**从头到现在的全量快照**
+ * （`AgentOrchestrator.activeStreamContent`，按用户轮次初始化、跨步骤累加）。
+ * 桌面端一直在消费它，**插件端此前整个忽略这个事件**——于是断线期间的正文永久丢失，
+ * 而收尾事件照常到达，界面渲染成「已完成 · N 秒」的空白气泡
+ * （dev-board#287，2026-08-29 生产日志实证：9 分钟 1 Hz 重连风暴期间跑的那一轮）。
+ *
+ * 语义要点：快照是全量不是增量，所以必须**先清空气泡与解析器状态再整块喂**——
+ * 直接追加会把断线前已渲染的部分变成两份；不重建解析器则旧标签栈会把快照劈错。
+ */
+function handleStateRecovery(dataStr) {
+  let content = ''
+  try { content = String(JSON.parse(dataStr).content || '') } catch (e) { /* 空快照也要走重建 */ }
+  const bubble = ensureAssistantBubble()
+  bubble.text = ''
+  bubble.thinking = ''
+  bubble.artifact = ''
+  bubble.question = null
+  bubble.error = ''
+  bubble.notice = ''
+  bubble.done = false
+  bubble.streaming = true
+  attachParser(bubble)
+  // 后端认为这一轮还在跑，本地状态跟上（预连/回灌路径上 streaming 可能还没置起）
+  streaming.value = true
+  if (content) parser.feed(content)
+  bumpScroll()
+}
+
+/**
+ * 这条助手消息对用户来说有没有内容。思考区不算——只有思考没有正文，用户看到的
+ * 就是一个空白气泡。计划卡（artifact）与反问按钮算，它们本身就是可见产出。
+ */
+function hasVisibleContent(msg) {
+  if (!msg) return false
+  return Boolean((msg.text && msg.text.trim()) || msg.artifact || msg.question)
+}
+
+/**
+ * 终态却零正文时的补救：后端每轮都会把助手消息落库，去 /api/ai/history 取回最后
+ * 一条助手消息补进这个气泡。取不到就明说这一轮丢了，并提示先看文档
+ * ——工具调用是直接落到文档里的，正文丢了不代表活没干。
+ */
+async function recoverEmptyBubble(target) {
+  const gen = generation
+  const convId = conversationId
+  let recovered = false
+  if (ctx.settings && isConfigured(ctx.settings) && convId) {
+    try {
+      const history = await fetchConversationHistory(ctx.settings, convId)
+      if (gen !== generation || conversationId !== convId) return
+      for (let i = history.length - 1; i >= 0; i--) {
+        if (String(history[i].role || '').toUpperCase() !== 'ASSISTANT') continue
+        const local = toLocalMessage(history[i])
+        if (local && local.text && local.text.trim()) {
+          target.text = local.text
+          if (local.thinking && !target.thinking) target.thinking = local.thinking
+          recovered = true
+        }
+        break // 只认最后一条助手消息，再往前就是上一轮了
+      }
+    } catch (e) {
+      console.warn('[Addin] 空气泡补取历史失败', e)
+    }
+  }
+  target.notice = recovered ? t('emptyAnswerRecovered') : t('emptyAnswerLost')
+  if (!recovered) target.text = ''
+  target.done = true
+  bumpScroll()
+}
+
 function handleEvent(evt, dataStr) {
   if (evt === 'text_delta') {
     let content = dataStr
@@ -674,8 +784,16 @@ function handleEvent(evt, dataStr) {
     // 显式完成态（dev-board#147）：光标消失太隐晦，「写完了没」要有明示。
     // 只有正常收尾才标——error/cancelled 各有自己的可见反馈。
     if (finished && !finished.error && status.toLowerCase() !== 'awaiting_input') {
-      finished.done = true
       finished.durationMs = lastPerf.value ? lastPerf.value.totalMs : 0
+      if (hasVisibleContent(finished)) {
+        finished.done = true
+      } else {
+        // 「已完成 · N 秒」配一个空气泡是本轮最伤人的一种失败（dev-board#287 实测）：
+        // 断线期间服务端对没有 emitter 的会话是静默丢事件的，正文就此永久消失，
+        // 而收尾事件照样到达，于是界面言之凿凿地宣布完成。
+        // 后端按轮次落库，先去历史里把这一轮补回来；补不回来也要说人话，不许留白。
+        recoverEmptyBubble(finished)
+      }
     }
     // awaiting_input：编排器为了反问主动停机，球在用户这边。输入框此时已解锁
     // （答案就是新一轮普通用户消息），只补一行状态提示，别让人以为回答被吞了。
@@ -701,6 +819,8 @@ function handleEvent(evt, dataStr) {
     finishStreaming()
   } else if (evt === 'client_action') {
     handleClientAction(dataStr)
+  } else if (evt === 'state_recovery') {
+    handleStateRecovery(dataStr)
   } else if (evt === 'run_state') {
     handleRunState(dataStr)
   }
@@ -815,19 +935,37 @@ async function ensureConnection() {
     baseUrl: ctx.settings.serverUrl,
     token: ctx.settings.token,
     conversationId,
+    clientId: paneId,
     onEvent: handleEvent,
     onStatus: (status) => {
       if (connection !== conn) return
       if (status === 'reconnecting') {
-        everReconnected = true
-        reconnecting.value = true
+        // 轮次中途断的才算「断线过」；每轮结束那次是后端主动收尾，不是故障
+        if (streaming.value) everReconnected = true
+        if (!reconnectNoticeTimer) {
+          reconnectNoticeTimer = setTimeout(() => {
+            reconnectNoticeTimer = null
+            if (connection === conn) reconnecting.value = true
+          }, RECONNECT_NOTICE_GRACE_MS)
+        }
       } else if (status === 'connected') {
-        reconnecting.value = false
+        clearReconnectNotice()
+      } else if (status === 'unstable') {
+        // 一分钟内反复建连：不再走宽限期，立刻交底。退避已顶到上限，
+        // 这里只负责让用户知道发生了什么，别让界面停在「正在自动重连……」像正常等待
+        if (reconnectNoticeTimer) { clearTimeout(reconnectNoticeTimer); reconnectNoticeTimer = null }
+        reconnecting.value = true
+        banner.value = t('connectionUnstable')
+      } else if (status === 'superseded') {
+        // 同一个会话被另一个任务窗格接管：不再重连，也不要装作还连着
+        clearReconnectNotice()
+        if (streaming.value) finishStreaming()
+        banner.value = t('conversationTakenOver')
       }
     },
     onClose: () => {
       if (connection === conn) connection = null
-      reconnecting.value = false
+      clearReconnectNotice()
       // 连接彻底关闭时不静默卡死输入框（断线重连由 sse.js 内部处理，不走这里）
       if (streaming.value) finishStreaming()
     }
@@ -987,14 +1125,14 @@ export async function stop() {
 
 export function newConversation() {
   closeConnection()
-  if (ctx.projectId) saveConversationId(ctx.projectId, '')
+  if (ctx.projectId) saveConversationId(ctx.projectId, '', hostScope())
   conversationId = null
   messages.value = []
   currentAssistant = null
   parser = null
   banner.value = ''
   notice.value = ''
-  reconnecting.value = false
+  clearReconnectNotice()
   everReconnected = false
   streaming.value = false
   toolPrep.value = false

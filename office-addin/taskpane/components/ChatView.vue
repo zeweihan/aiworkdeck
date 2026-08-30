@@ -95,6 +95,10 @@
             >{{ opt }}</button>
             <span v-if="msg.question.answered" class="option-answered">{{ t('answered') }}</span>
           </div>
+          <!-- 本轮正文在断线期间丢过（dev-board#287）：补回来了要说一声，没补回来
+               更要说——空白气泡配「已完成」是最伤人的一种失败。不走 msg.error
+               是因为它不是执行失败，红字会误导用户以为文档没改成。 -->
+          <div v-if="msg.notice" class="msg-notice">{{ msg.notice }}</div>
           <div v-if="msg.error" class="msg-error">{{ msg.error }}</div>
           <!-- 额度耗尽的充值入口（dev-board#198）：付费在官网账户页完成，浏览器打开 -->
           <button
@@ -979,6 +983,14 @@ async function confirmDelete(c) {
   margin-top: 4px;
   color: var(--awd-danger);
   font-size: 12px;
+}
+
+/* 连接层的说明（不是执行失败），用次要文字色，别染成报错红 */
+.msg-notice {
+  margin-top: 4px;
+  color: var(--awd-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .recharge-btn {

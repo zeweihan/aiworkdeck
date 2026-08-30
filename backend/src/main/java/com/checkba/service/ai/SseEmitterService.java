@@ -24,6 +24,10 @@ public class SseEmitterService {
     // close(connectionId, epoch) 靠它判断"要关的是不是这一次连接"，见 close() 的注释。
     private final Map<String, Long> epochs = new ConcurrentHashMap<>();
 
+    // Key: connectionId -> 当前持有连接的客户端实例 id（任务窗格每次载入生成一个）。
+    // 用来区分"同一个窗格断线重连"与"另一个窗格来抢同一个会话"，见 createConnection。
+    private final Map<String, String> clientByConnection = new ConcurrentHashMap<>();
+
     /** 代次表的清理阈值：远大于任何真实并发会话数，触到才动手，正常运行期间等于不清理。 */
     private static final int EPOCH_PURGE_THRESHOLD = 10_000;
 
@@ -41,8 +45,21 @@ public class SseEmitterService {
     @jakarta.annotation.PostConstruct
     void startHeartbeat() {
         heartbeatScheduler.scheduleWithFixedDelay(() -> {
-            for (String id : emitters.keySet()) {
-                send(id, "heartbeat", "{\"ts\":" + System.currentTimeMillis() + "}");
+            // 整个任务体必须吞掉 Throwable：scheduleWithFixedDelay 的语义是"任务抛出即
+            // 永久取消后续执行"。心跳一旦停摆，全体在线客户端 40 秒后同时判死连接、
+            // 齐刷刷重连，而且直到进程重启都好不了——单点故障放大成全局故障。
+            // send() 内部只捕获 Exception，Error（OOM/StackOverflow）会漏出来。
+            try {
+                for (String id : emitters.keySet()) {
+                    try {
+                        send(id, "heartbeat", "{\"ts\":" + System.currentTimeMillis() + "}");
+                    } catch (Throwable t) {
+                        // 单个会话的心跳失败不许连累其余会话
+                        log.debug("Heartbeat failed for {}", id);
+                    }
+                }
+            } catch (Throwable t) {
+                log.warn("Heartbeat sweep failed, continuing", t);
             }
         }, HEARTBEAT_INTERVAL_SECONDS, HEARTBEAT_INTERVAL_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
     }
@@ -58,6 +75,25 @@ public class SseEmitterService {
      * @return SseEmitter 实例
      */
     public SseEmitter createConnection(String connectionId) {
+        return createConnection(connectionId, null);
+    }
+
+    /**
+     * 创建连接（带客户端实例身份）。
+     *
+     * <p><b>为什么需要 clientId</b>（dev-board#285，2026-08-29 生产实测）：emitter 表只按
+     * conversationId 索引，同 ID 后来者无声顶掉先来者。当两个任务窗格（WPS 文字 + WPS 演示）
+     * 因为共用 localStorage 而拿到同一个 conversationId 时，就形成了互顶循环——
+     * A 被顶掉 → 1 秒后重连 → 顶掉 B → B 重连 → ……实测稳定 1 Hz 持续 9 分钟，
+     * 期间这一轮的 text_delta 有一半落进了另一个窗格、另一半落进了没有 emitter 的空档
+     * （send() 对无 emitter 的会话是静默丢弃），用户拿到一个标着"已完成"的空白气泡。
+     *
+     * <p>客户端侧已按宿主拆开会话存储键，正常不会再撞；这里是兜底：认出"换了一个窗格"时
+     * 先给旧连接发一个 {@code superseded} 事件再关掉它，把无限互顶变成一次性移交——
+     * 旧窗格收到后停止重连并明确告诉用户"这场对话已在另一个窗格继续"。
+     * 同一个 clientId 的重连（含 clientId 缺失的旧版插件）行为与改造前完全一致。
+     */
+    public SseEmitter createConnection(String connectionId, String clientId) {
         // 代次自增：本次建连之后，任何持有旧代次的 close() 调用都不再匹配当前连接
         epochs.merge(connectionId, 1L, Long::sum);
         purgeEpochsIfOversized();
@@ -82,6 +118,18 @@ public class SseEmitterService {
             emitters.remove(connectionId, emitter);
             log.warn("SSE connection error: {}", connectionId, e);
         });
+
+        // 换了客户端实例（不是同一个窗格重连）时，先向旧连接交代一句再关，
+        // 否则旧窗格只看到"流断了"，会立刻重连回来，两边无限互顶。
+        String previousClient = clientId == null || clientId.isBlank()
+                ? clientByConnection.get(connectionId)
+                : clientByConnection.put(connectionId, clientId);
+        boolean takenOverFromOther = clientId != null && !clientId.isBlank()
+                && previousClient != null && !previousClient.equals(clientId);
+        if (takenOverFromOther) {
+            log.info("SSE connection taken over for {}: client {} -> {}", connectionId, previousClient, clientId);
+            send(connectionId, "superseded", "{\"reason\":\"another_pane\"}");
+        }
 
         // 同 ID 重复建连（断线重连）：先 complete 旧 emitter 释放其 Tomcat 异步上下文，
         // 否则旧连接悬空挂到 30 分钟超时才释放（F-12）
@@ -136,6 +184,8 @@ public class SseEmitterService {
     private void purgeEpochsIfOversized() {
         if (epochs.size() <= EPOCH_PURGE_THRESHOLD) return;
         epochs.keySet().removeIf(id -> !emitters.containsKey(id));
+        // 客户端归属表与代次表同生命周期，一起按规模兜底清理
+        clientByConnection.keySet().removeIf(id -> !emitters.containsKey(id));
     }
 
     public long currentEpoch(String connectionId) {

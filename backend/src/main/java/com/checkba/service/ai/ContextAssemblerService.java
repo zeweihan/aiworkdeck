@@ -416,6 +416,17 @@ public class ContextAssemblerService {
                     // 用户看到的是「---」横线等字面字符（dev-board WPS 真机实况）
                     systemText.append("所有写进文档的内容必须是纯文本：不要携带 Markdown 记号（--- 分隔线、**加粗**、# 标题、``` 等），");
                     systemText.append("它们不会被渲染、只会成为文档里的字面字符；需要标题、加粗、列表等排版效果时改用相应的格式化工具。\n\n");
+                    // 编辑范围的硬边界（dev-board#285，2026-08-29 真机）：任务窗格一次只连着一个宿主的
+                    // 一份文档。用户在另一个 Office/WPS 窗口里开着别的文件时，模型此前会「知道自己看不到，
+                    // 但仍旧动手」——真实案例：用户要求「在 PPT 里加一页」，模型回「PPT 文件不在可编辑列表中」，
+                    // 转头把那一页的内容写进了当前这份 Word 文档。含糊其辞比做不到更伤人，所以把
+                    // 「说清楚 + 指路」写成硬规则，并且挂在本段末位（约束放前面会被弱模型无视）。
+                    systemText.append("**本会话能直接编辑的只有上面这一份打开的文档。** ");
+                    systemText.append("用户提到的其他文件（另一个 Office/WPS 窗口里打开的演示稿/工作簿/文档，或仅存在于项目里的文件）");
+                    systemText.append("都不在本会话的编辑范围内：不要凭上一轮的印象替它作答，更不要把本该写进那个文件的内容");
+                    systemText.append("改写进当前这份文档。遇到这种请求，直接说明当前连着的是哪一个软件里的哪一份文件、");
+                    systemText.append("并告诉用户在对应的软件（WPS 文字/表格/演示，或 Word/Excel/PowerPoint）里打开目标文件后，");
+                    systemText.append("在那边打开 AI WorkDeck 任务窗格即可；然后停下来等用户，不要自行找替代做法。\n\n");
                 }
                 case NONE -> {
                     systemText.append("当前客户端没有文档编辑执行器：正文仅供阅读分析，");
@@ -855,7 +866,7 @@ public class ContextAssemblerService {
         String docLabel = activeDocDisplayName(activeContext.getName());
         return switch (capability) {
             case OFFICE -> switch (officeHost) {
-                case EXCEL -> "\n\n[系统提醒] 用户此刻在 Microsoft Excel 中打开着工作簿" + docLabel + "，"
+                case EXCEL -> "\n\n[系统提醒] 用户此刻在表格软件（Microsoft Excel 或 WPS 表格）中打开着工作簿" + docLabel + "，"
                         + "活动工作表内容已内联注入 system prompt 的 <active_document>，可直接阅读分析。"
                         + "用户未指明别的文件时，「这个」「当前表格」「改一下」等都指它——"
                         + "读取/修改一律调用 office_excel_* 工具（office_excel_get_range / "
@@ -869,7 +880,7 @@ public class ContextAssemblerService {
                         + "基础透视表分别用 office_excel_add_comment 等批注四件套 / office_excel_set_data_validation / "
                         + "office_excel_add_chart / office_excel_define_name / office_excel_protect_sheet / "
                         + "office_excel_group_rows_cols / office_excel_add_pivot_table。";
-                case POWERPOINT -> "\n\n[系统提醒] 用户此刻在 Microsoft PowerPoint 中打开着演示文稿" + docLabel + "，"
+                case POWERPOINT -> "\n\n[系统提醒] 用户此刻在演示软件（Microsoft PowerPoint 或 WPS 演示）中打开着演示文稿" + docLabel + "，"
                         + "各页文本已内联注入 system prompt 的 <active_document>，可直接阅读分析。"
                         + "用户未指明别的文件时，「这个」「当前演示文稿」「改一下」等都指它——"
                         + "读取/修改一律调用 office_ppt_* 工具（office_ppt_get_slides / office_ppt_replace_text / "
@@ -879,7 +890,7 @@ public class ContextAssemblerService {
                         + "写入直接生效（PowerPoint 没有修订机制，删改无法通过审阅面板撤销）。"
                         + "表格用 office_ppt_add_table / office_ppt_table_read / office_ppt_table_set_cell；"
                         + "超链接用 office_ppt_set_hyperlink。";
-                default -> "\n\n[系统提醒] 用户此刻在 Microsoft Word 中打开着文档" + docLabel + "，"
+                default -> "\n\n[系统提醒] 用户此刻在文字处理软件（Microsoft Word 或 WPS 文字）中打开着文档" + docLabel + "，"
                         + "其正文已内联注入 system prompt 的 <active_document>，可直接阅读分析。"
                         + "用户未指明别的文档时，「这个」「当前文档」「修订一下」等都指它——"
                         + "需要修改文档时调用 office_* 工具（office_replace_text / office_insert_text / "
@@ -1369,6 +1380,15 @@ All doc_* editing and reading tools act directly on this document. You need NOT 
                 sb.append("Everything you write into the document must be plain text: never include Markdown markup ")
                   .append("(--- rules, **bold**, # headings, ``` fences, ...) - it is not rendered and lands as literal ")
                   .append("characters in the document; use the formatting tools for headings, emphasis, or lists instead.\n\n");
+                // Editing-scope boundary - mirrors the Chinese branch (dev-board#285).
+                sb.append("**The only document this session can edit is the one described above.** ")
+                  .append("Any other file the user mentions - a presentation, workbook, or document open in a different ")
+                  .append("Office/WPS window, or a file that only exists in the project - is outside this session's reach: ")
+                  .append("do not answer for it from an earlier impression, and never write content meant for that file ")
+                  .append("into the current document instead. When asked, say plainly which application and which file ")
+                  .append("you are attached to, tell the user to open the target file in the matching application ")
+                  .append("(WPS Writer/Spreadsheets/Presentation, or Word/Excel/PowerPoint) and open the AI WorkDeck ")
+                  .append("task pane there, then stop and wait - do not improvise a substitute.\n\n");
             }
             case NONE -> sb.append(EN_GUIDE_NONE);
             default -> {

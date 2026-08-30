@@ -16,13 +16,16 @@ import { readWpsActiveDocument, detectWpsHost, hideWpsTaskPane } from './wpsDoc.
 function installEt(sheet) {
   const original = globalThis.wps
   const calls = []
+  const etApp = { Workbooks: {}, ActiveSheet: sheet, ActiveWorkbook: { Name: '测算表.xlsx' } }
   globalThis.wps = {
-    // 文字/演示入口在表格宿主里调用即抛（官方示例的标准形态）
+    // 真实任务窗格里 wps.Application 就是当前宿主的 Application（官方 wpsjs 模板同款），
+    // 宿主判定的第一判据就是它身上的标志性集合
+    Application: etApp,
     WpsApplication() { throw new Error('非文字宿主') },
     WppApplication() { throw new Error('非演示宿主') },
     EtApplication() {
       calls.push('EtApplication')
-      return { ActiveSheet: sheet, ActiveWorkbook: { Name: '测算表.xlsx' } }
+      return etApp
     }
   }
   return {
@@ -47,6 +50,44 @@ function makeUsed({ rows, cols, value2, onResize }) {
     }
   }
 }
+
+test('detectWpsHost：三个工厂函数都返回真值时，仍按 Application 的标志性集合判对宿主', () => {
+  // dev-board#285 的病灶形态：旧实现按「WpsApplication() 不抛就是文字宿主」判定，
+  // 而这三个工厂并不是官方模板里的宿主判据，它们在非本宿主里是否为假从未真机验证过。
+  // 一旦都为真，演示/表格宿主会整体被判成文字面，用户拿到 Word 面工具集
+  //（真机表现：模型回「PPT 文件不在可编辑列表中」，转头把内容写进当前 Word 文档）。
+  const original = globalThis.wps
+  const wppApp = { Presentations: {}, ActivePresentation: { Name: 'x.pptx' } }
+  const anything = { Name: 'Microsoft Word' } // 工厂函数一律返回一个"看着像样"的对象
+  globalThis.wps = {
+    Application: wppApp,
+    WpsApplication: () => anything,
+    EtApplication: () => anything,
+    WppApplication: () => anything
+  }
+  try {
+    assert.equal(detectWpsHost(), 'powerpoint')
+  } finally {
+    if (original === undefined) delete globalThis.wps
+    else globalThis.wps = original
+  }
+})
+
+test('detectWpsHost：连 Application 都拿不到时，工厂兜底也必须自校验标志性集合', () => {
+  const original = globalThis.wps
+  globalThis.wps = {
+    // 没有 Application；三个工厂都返回对象，只有演示那个带 Presentations
+    WpsApplication: () => ({}),
+    EtApplication: () => ({}),
+    WppApplication: () => ({ Presentations: {} })
+  }
+  try {
+    assert.equal(detectWpsHost(), 'powerpoint')
+  } finally {
+    if (original === undefined) delete globalThis.wps
+    else globalThis.wps = original
+  }
+})
 
 test('detectWpsHost：只有表格入口可用时判为 excel', () => {
   const { restore } = installEt(makeUsed({ rows: 1, cols: 1, value2: 'x' }))
@@ -118,17 +159,18 @@ test('表格：超出展示上限时只把要展示的行数搬过桥', async ()
 /** 安装只有演示宿主的 globalThis.wps */
 function installWpp(slides) {
   const original = globalThis.wps
+  const wppApp = {
+    Presentations: {},
+    ActivePresentation: {
+      Name: '方案.pptx',
+      Slides: { Count: slides.length, Item: (i) => slides[i - 1] }
+    }
+  }
   globalThis.wps = {
+    Application: wppApp,
     WpsApplication() { throw new Error('非文字宿主') },
     EtApplication() { throw new Error('非表格宿主') },
-    WppApplication() {
-      return {
-        ActivePresentation: {
-          Name: '方案.pptx',
-          Slides: { Count: slides.length, Item: (i) => slides[i - 1] }
-        }
-      }
-    }
+    WppApplication() { return wppApp }
   }
   return () => {
     if (original === undefined) delete globalThis.wps
@@ -197,14 +239,18 @@ test('演示：单个形状读失败不许拖垮整篇', async () => {
 function installPaneEnv(host, storage, panes) {
   const original = globalThis.wps
   const hostEntry = { word: 'WpsApplication', excel: 'EtApplication', powerpoint: 'WppApplication' }[host]
+  const marker = { word: 'Documents', excel: 'Workbooks', powerpoint: 'Presentations' }[host]
+  const hostApp = { ActiveDocument: {}, ActiveWorkbook: {}, ActivePresentation: {} }
+  hostApp[marker] = {}
   const base = {
+    Application: hostApp,
     WpsApplication() { throw new Error('非文字宿主') },
     EtApplication() { throw new Error('非表格宿主') },
     WppApplication() { throw new Error('非演示宿主') },
     PluginStorage: { getItem: (k) => (k in storage ? storage[k] : null) },
     GetTaskPane: (id) => panes[id] || null
   }
-  base[hostEntry] = () => ({ ActiveDocument: {}, ActiveWorkbook: {}, ActivePresentation: {} })
+  base[hostEntry] = () => hostApp
   globalThis.wps = base
   return () => {
     if (original === undefined) delete globalThis.wps
