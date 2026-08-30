@@ -160,3 +160,31 @@ test('desktop-build.yml：marker 必须有 always() 的清理步骤，否则失�
   assert.equal(String(cleanup.if || '').trim(), 'always()',
     '清理步骤必须 if: always()——只在成功时清等于「失败那次留下的残留最坏」')
 })
+
+// drawio-server 测试在 Windows runner 上被 Defender 锁临时文件、清理钩子报 EPERM，
+// 已经拦过 v0.25.1 / #609 / v0.26.0 / v0.27.5 / v0.28.0 五次发版（dev-board#146）。
+// PR 上靠「没碰 drawio 就跳过」绕开，而 tag 发版永远全量跑——所以它专挑发版咬。
+// 治本的一手是给 runner 的 Temp 目录加 Defender 排除项，且必须排在跑测试之前。
+test('desktop-build.yml：Windows 腿必须在跑单元测试之前给 Temp 加 Defender 排除项', () => {
+  const doc = loadWorkflow('desktop-build.yml')
+  const build = doc.jobs && doc.jobs.build
+  assert.ok(build, 'build job 应存在')
+  const steps = build.steps || []
+  const exclusionIdx = steps.findIndex((s) =>
+    typeof s.name === 'string' && /Defender/i.test(s.name))
+  const testIdx = steps.findIndex((s) =>
+    typeof s.name === 'string' && /Desktop unit tests/i.test(s.name))
+
+  assert.ok(exclusionIdx >= 0, '缺少 Defender 排除项步骤——它是 Windows EPERM 拦发版的治本手')
+  assert.ok(testIdx >= 0, '找不到 Desktop unit tests 步骤')
+  assert.ok(exclusionIdx < testIdx,
+    `Defender 排除项必须排在单元测试之前（实际 ${exclusionIdx} vs ${testIdx}）`)
+
+  const step = steps[exclusionIdx]
+  assert.match(String(step.if || ''), /runner\.os\s*==\s*'Windows'/,
+    'Defender 排除项只该在 Windows 腿跑')
+  // 加排除项失败不许拦构建：部分 runner 镜像禁用了 Defender 或不给加，
+  // 那种情况下退回测试侧的 EPERM 兜底即可，不该因此把发版拦了。
+  assert.equal(step['continue-on-error'], true,
+    'Defender 排除项失败不许中断构建（continue-on-error 必须为 true）')
+})

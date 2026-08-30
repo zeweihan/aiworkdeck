@@ -74,6 +74,38 @@ async function rmrf(dir) {
   }
 }
 
+/**
+ * **teardown 专用**的目录清理：删不掉时不掀掉整场发版。
+ *
+ * 为什么单开一个而不是改 rmrf：rmrf 是「诚实重试」，语义不能动——真删不掉就该抛。
+ * 但抛在 `t.after` 里就是 hookFailed，而这时**断言已经全部通过了**，
+ * 失败的只是「Windows 让不让你删这个临时文件」，与被测行为毫无关系。
+ * 这个坑已经拦过 v0.25.1 / #609 / v0.26.0 / v0.27.5 / v0.28.0 五次发版（dev-board#146）：
+ * PR 上靠「没碰 drawio 就跳过」绕开了，而 tag 发版永远全量跑，于是它专挑发版咬。
+ * 治本的一手在 CI 侧（desktop-build.yml 给 runner Temp 加 Defender 排除项），
+ * 这里是那一手不生效时的兜底。
+ *
+ * 放行范围卡到最窄，别把它变成「清理失败一律不管」：
+ *   - 只在 win32 且 CI 上放行（本机开发照旧抛，免得真有句柄泄漏被埋掉）；
+ *   - 只放行 EPERM / EBUSY（Defender 锁文件的形态），其余错误码原样抛；
+ *   - 放行时大声打日志，留下痕迹。
+ * 一次性 runner 上留个临时目录是无害的；把发版拦住不是。
+ */
+const TOLERATE_CLEANUP_EPERM = process.platform === 'win32' && !!process.env.CI
+
+async function cleanupDir(dir) {
+  try {
+    return await rmrf(dir)
+  } catch (e) {
+    if (TOLERATE_CLEANUP_EPERM && (e.code === 'EPERM' || e.code === 'EBUSY')) {
+      console.warn('[drawio-test] 清理临时目录失败但不阻断（Windows CI 上 Defender 锁文件）：'
+        + `${dir} — ${e.code}: ${e.message}`)
+      return undefined
+    }
+    throw e
+  }
+}
+
 function get(origin, urlPath) {
   return new Promise((resolve, reject) => {
     http
@@ -115,7 +147,7 @@ test('烙好之后能起、能取文件、挡得住路径穿越', async (t) => {
     // 不关服务的话 node --test 的事件循环永远不空，测试跑完也不退出
     await stopDrawioServer()
     fs.rmSync(outside, { force: true })
-    await rmrf(root)
+    await cleanupDir(root)
   })
 
   assert.strictEqual(await isAvailable(), true)
@@ -146,8 +178,8 @@ test('pack 根命中：内置资源缺失时从 pack 提供文件', async (t) =>
   process.env.AIWORKDECK_PACKS_DIR = packsDir
   t.after(async () => {
     await stopDrawioServer()
-    await rmrf(emptyBuiltin)
-    await rmrf(packsDir)
+    await cleanupDir(emptyBuiltin)
+    await cleanupDir(packsDir)
   })
 
   assert.strictEqual(await isAvailable(), true, '内置根没有 index.html，应当落到 pack 根')
@@ -165,8 +197,8 @@ test('revoked:true 的 pack 版本不参与解析', async (t) => {
   process.env.AIWORKDECK_DRAWIO_DIR = emptyBuiltin
   process.env.AIWORKDECK_PACKS_DIR = packsDir
   t.after(async () => {
-    await rmrf(emptyBuiltin)
-    await rmrf(packsDir)
+    await cleanupDir(emptyBuiltin)
+    await cleanupDir(packsDir)
   })
 
   assert.strictEqual(await isAvailable(), false, 'current.json 标了 revoked，pack 根不该被当成可用')
@@ -180,8 +212,8 @@ test('版本目录缺 .pack-complete 时不参与解析', async (t) => {
   process.env.AIWORKDECK_DRAWIO_DIR = emptyBuiltin
   process.env.AIWORKDECK_PACKS_DIR = packsDir
   t.after(async () => {
-    await rmrf(emptyBuiltin)
-    await rmrf(packsDir)
+    await cleanupDir(emptyBuiltin)
+    await cleanupDir(packsDir)
   })
 
   assert.strictEqual(await isAvailable(), false, '没有 .pack-complete 说明安装事务未完成，不该被当成可用')
@@ -197,8 +229,8 @@ test('内置根优先于 pack 根', async (t) => {
   process.env.AIWORKDECK_PACKS_DIR = packsDir
   t.after(async () => {
     await stopDrawioServer()
-    await rmrf(builtinDir)
-    await rmrf(packsDir)
+    await cleanupDir(builtinDir)
+    await cleanupDir(packsDir)
   })
 
   const { origin } = await startDrawioServer()
@@ -230,8 +262,8 @@ test('读流中途出错只失败这一个请求，不能掀掉整个进程', as
   t.after(async () => {
     await stopDrawioServer()
     fs.chmodSync(locked, 0o600)
-    await rmrf(dir)
-    await rmrf(emptyPacks)
+    await cleanupDir(dir)
+    await cleanupDir(emptyPacks)
   })
 
   const { origin } = await startDrawioServer()
