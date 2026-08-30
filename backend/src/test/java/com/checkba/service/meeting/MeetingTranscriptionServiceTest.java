@@ -151,8 +151,14 @@ class MeetingTranscriptionServiceTest {
         a.start();
         assertTrue(aPaused.await(5, TimeUnit.SECONDS), "线程 A 应该先卡在 findById 里");
 
-        AtomicReference<MeetingRecording> bResult = new AtomicReference<>();
-        Thread b = new Thread(() -> bResult.set(svc.startTranscription(7L)));
+        // **状态要在 B 线程里当场取快照**，不能把共享的 MeetingRecording 对象存下来、
+        // 等两个线程都 join 完再读 getStatus()：A 的异步后续（executor.submit 里的
+        // 转码/建任务/失败落库）跑在同一个对象上，join 之后再读，读到的可能是 A 后来
+        // 写进去的 FAILED，与 B 当时短路返回时看到的值无关。
+        // 2026-08-30 这条在 CI 上真的翻红过（expected TRANSCRIBING but was FAILED），
+        // 与被测的「并发只提交一次」语义毫无关系，纯粹是断言取值时机写错了。
+        AtomicReference<String> bStatus = new AtomicReference<>();
+        Thread b = new Thread(() -> bStatus.set(svc.startTranscription(7L).getStatus()));
         b.start();
 
         Thread.sleep(300); // 有锁的话 B 这时候应该还卡在方法入口，等 A 彻底做完
@@ -164,7 +170,7 @@ class MeetingTranscriptionServiceTest {
 
         // 只应该有一次真正走到校验+提交；B 命中的是方法开头既有的幂等短路分支
         verify(lastResolver, times(1)).resolve(anyString());
-        assertEquals(MeetingRecording.STATUS_TRANSCRIBING, bResult.get().getStatus());
+        assertEquals(MeetingRecording.STATUS_TRANSCRIBING, bStatus.get());
     }
 
     @Test
