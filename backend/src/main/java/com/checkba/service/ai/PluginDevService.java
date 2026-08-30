@@ -358,6 +358,17 @@ public class PluginDevService {
                         "Dev install only accepts pure web plugins; manifest." + forbidden + " must be empty"));
             }
         }
+        // 证据来源不走 dev 免签直装（规范 v2.8 P3 红线）：SPI 要 JAR、MCP 是数据源接入，
+        // 都属于要人工审核的档位
+        JSONObject contributes = manifest.getJSONObject("contributes");
+        if (contributes != null) {
+            JSONArray evidenceSources = contributes.getJSONArray("evidenceSources");
+            if (evidenceSources != null && !evidenceSources.isEmpty()) {
+                errors.add(LangText.of(
+                        "开发安装不支持 contributes.evidenceSources（证据数据源需经插件广场审核签名）",
+                        "Dev install does not accept contributes.evidenceSources; publish via the marketplace review flow"));
+            }
+        }
     }
 
     /** DFS 收集子树文件（相对路径用 '/'），路径段复核 + 深度熔断。 */

@@ -1,4 +1,4 @@
-# 插件规范 v2.7（Plugin Spec v2.7）
+# 插件规范 v2.8（Plugin Spec v2.8）
 
 > 适用版本：v1 自 0.4.x；v2（权限执行 + 启停过滤）自 Phase 3A；v2.1（插件携带 Skill）自 Phase 3B；
 > v2.3（Web 插件 + `packs` 依赖）自 native pack Phase B；v2.4（宿主 SPI `plugin-api` + 后台任务）自尽调 P1；
@@ -8,6 +8,9 @@
 > `x-` 前缀 + §12 只加不改章程）、文档读写权（桥 `doc.exec`/`doc.active` + 事件通道 `type:"event"`）、
 > AI 调用权（桥 `ai.request` 走平台 Credits + 权限值 `ai`）。设计定稿见 docs/superpowers/specs/
 > 2026-08-29-plugin-p0/p1/p2 三篇；生态总路线 docs/PLUGIN_API_ROADMAP.md。
+> v2.8（生态路线 P3，宿主 0.28 起，dev-board#283）：evidence.retrieve.v1 升格公开 Provider 协议——
+> manifest 新增 `contributes.evidenceSources`（§13），plugin-api 1.2.0 新增 `evidence` 包
+> （EvidenceProvider SPI + conformance 执行器）。
 > 示例插件：[examples/hello-plugin/](../examples/hello-plugin/)（JAR 工具）、
 > [examples/hello-web-plugin/](../examples/hello-web-plugin/)（纯前端）。
 > 后端实现：`PluginService`（扫描/解析/启停）、`PluginController`（HTTP API）、
@@ -78,6 +81,7 @@ plugins/
 | `backendJars` | string[] | 否 | 相对插件目录的 JAR 文件名列表，启动/重扫时加载其中带 `@Tool` 注解的类。 |
 | `skills` | string[] | 否 | **v2.1 新增**：插件携带的 Skill 子目录名列表（相对插件目录），见 §7。 |
 | `packs` | string[] | 否 | **v2.3 新增**：依赖的原生资源包 id 列表，见 §9 与 [NATIVE_PACK_DISTRIBUTION.md](NATIVE_PACK_DISTRIBUTION.md)。 |
+| `contributes` | object | 否 | **v2.8 新增**：向宿主贡献的声明式内容。当前只有 `evidenceSources`（证据来源，见 §13）；后续贡献点（templates/styleProfiles 等）按只加不改逐个进来。 |
 
 未知字段被忽略（向前兼容）；`permissions` 中出现 v1 未定义的值仅记录 WARN，不拒绝加载。
 
@@ -511,6 +515,10 @@ insertText(text)/addComment(anchorText, text)`、`awd.events.on(name, cb)`（返
   三个方法（§8.4、§8.5），SDK 版本号 `1.0.0` → `1.1.0`。manifest 无新增字段。
 - **v2.6**：主题通道（§8.3/§8.5）——`init.context.themeTokens`、宿主推送 `type:"theme"`、
   SDK 自动注入 CSS 变量与 `awd.theme.*`。SDK `1.1.0` → `1.2.0`。manifest 无新增字段。
+- **v2.8（当前，宿主 0.28 起）**：生态路线 P3（dev-board#283）——evidence.retrieve.v1 升格公开
+  Provider 协议：manifest 新增 `contributes.evidenceSources`（§13），plugin-api 1.1.0 → 1.2.0
+  新增 `com.checkba.plugin.api.evidence` 包（EvidenceProvider / EvidenceQuery / EvidenceItem /
+  EvidenceProviderConformanceKit）；宿主侧 EvidenceRetrieverRegistry 开放外部注册。
 - **v2.7（宿主 0.27.4 起）**：生态路线 P0-P2 同批落地（dev-board#280/281/282）。
   P0 治理：manifest 新增 `minHostVersion`（§2）、实验 API `x-` 前缀机制与只加不改章程（§12）、
   管理页展示不兼容/封禁原因；P1 文档读写权：桥 `doc.exec`/`doc.active`（§8.4）+ 事件通道
@@ -522,7 +530,8 @@ insertText(text)/addComment(anchorText, text)`、`awd.events.on(name, cb)`（返
 
 ## 11. 宿主 SPI（`plugin-api`，v2.4）
 
-工件 `com.checkba:plugin-api:1.0.0`（源码 `backend/plugin-api/`，Java 21，无第三方依赖）。
+工件 `com.checkba:plugin-api`（当前 **1.2.0**：1.1.0 加 `Evidence.linkAtQuote`，1.2.0 加
+`evidence` 包——见 §13；源码 `backend/plugin-api/`，Java 21，无第三方依赖）。
 不在远端仓库：本地 `mvn -q -f backend/plugin-api/pom.xml install` 后，插件以 `provided` 依赖它
 （示例 `examples/hello-plugin/pom.xml`）。**只加不破**：已发布的方法签名与 record 字段不改不删，
 新增能力走新方法 / 新 record 字段追加。
@@ -642,3 +651,71 @@ public record ToolCall(Long projectId, String conversationId, Long userId, Strin
 
 新官方面板能力先问「插件 API 能不能做」；做不了，优先补 API 而不是走私有通道。
 不留私有超级 API，第三方才相信「官方能做的我也能做」。
+
+## 13. 证据来源贡献点（contributes.evidenceSources，v2.8）
+
+evidence.retrieve.v1（[docs/EVIDENCE_CONTRACT.md](EVIDENCE_CONTRACT.md)）升格为公开 Provider
+协议：第三方按契约接新数据源（工商/裁判文书/财务库/行业库），宿主统一检索与展示——
+数据源接一次，所有依据/尽调/核查场景全能用。设计定稿
+`docs/superpowers/specs/2026-08-29-plugin-p3-evidence-provider-protocol.md`。
+
+### 13.1 两条接入通道
+
+**通道 A：JAR SPI**（plugin-api 1.2.0，包 `com.checkba.plugin.api.evidence`）
+
+```java
+public class MyRegistryProvider implements EvidenceProvider {
+    public String sourceId() { return "my-plugin.company-registry"; }
+    public List<EvidenceItem> retrieve(EvidenceQuery query) { ... }
+}
+```
+
+- 宿主扫描 JAR 时自动实例化（无参构造 + `HostAware` 注入照旧）并注册进证据注册表；
+- **双校验**：`sourceId()` 必须是 `<pluginId>.<name>`，且与 manifest 声明逐字一致——
+  任一不满足拒绝注册并记 ERROR（声明是审查对象，必须真实）；
+- 宿主侧每次调用 10 秒超时；异常/超时/返回 null 一律空列表降级，不炸编排主流程；
+- 三必填（evidenceId/sourceUri/locator）由 `EvidenceItem` 构造器强制——缺定位符即丢弃、
+  不得编造是契约红线，公开 record 与宿主内部各拦一道。
+
+**通道 B：远程 MCP 声明**（零 Java 代码）
+
+```json
+"contributes": {
+  "evidenceSources": [
+    { "sourceId": "my-plugin.caselaw", "name": "判例库", "transport": "mcp",
+      "server": { "url": "https://mcp.example.com/sse", "tokenSettingKey": "plugin.my-plugin.mcpToken" },
+      "tool": "retrieve_evidence" }
+  ]
+}
+```
+
+- 只收 `http(s)` 的 `server.url`（streamable-http 传输）；远端工具收契约 §2 的
+  snake_case 请求字段，返回 `{"items":[EvidenceItem...]}`，缺三必填的条目适配层丢弃并告警；
+- **本地命令型（子进程）MCP 不受理**：那是 JAR 档的风险量级，等进程外插件形态立项后
+  按其安全模型开放；声明了 `transport: "mcp"` 但没给合法 url 的条目解析时丢弃并 WARN；
+- token 建议走 `tokenSettingKey`（`plugin.<id>.` 前缀的系统设置，可在线改），
+  不要把密钥写死进 manifest。
+
+### 13.2 声明字段
+
+`contributes.evidenceSources[]`：`sourceId`（必填，`<pluginId>.<name>`，名段
+`[A-Za-z0-9][A-Za-z0-9_-]*`）、`name`/`description`（广场展示与审查）、`transport`
+（`spi` 缺省 / `mcp`）、`server{url, token?, tokenSettingKey?, timeoutSeconds?}` 与
+`tool`（仅 mcp）。非法条目解析时丢弃并 WARN。
+
+### 13.3 治理规则
+
+| 规则 | 内容 |
+|---|---|
+| 冲突 | 同 sourceId 重复注册先到先得，后来的拒绝并记 ERROR |
+| 启停 | 插件禁用/版本不兼容 → 其来源静默返回空列表（适配器自带启用位闸），重新启用即恢复 |
+| rescan | 插件来源整批清空重建；内置来源（memory / ai.evidence.mcp-sources 配置的）不动 |
+| dev 直装 | **不收** evidenceSources（数据源接入需广场人工审核；dev 校验直接报错） |
+| conformance | `EvidenceProviderConformanceKit.run(provider, query)`（零依赖，任何测试框架可调）返回空列表 = 通过；广场受理要求附全绿运行记录 |
+| 红线 | 自动爬取类 provider 不受理（验证码/合规风险，2026-08-21 拍板口径不变） |
+| 版本 | 协议就是 evidence.retrieve.v1：字段只增不改，破坏性变更升 v2 双轨共存 |
+
+示例插件：[examples/hello-evidence-plugin/](../examples/hello-evidence-plugin/)（SPI 实现 +
+conformance 自测全绿）。宿主落点：`PluginService.registerEvidenceProvider` /
+`registerDeclaredMcpEvidenceSources`、`EvidenceRetrieverRegistry.registerExternal`、
+适配器 `PluginSpiEvidenceRetriever`。

@@ -137,6 +137,20 @@ public class PluginService {
     private com.checkba.service.ai.skill.SkillRegistry skillRegistry;
 
     /**
+     * 证据检索注册表（规范 v2.8 P3）：插件的 EvidenceProvider（SPI）与 manifest 声明的
+     * 远程 MCP 来源都经这里注册。注入方式与上面两个同款（@Lazy + required=false）：
+     * 直接 new PluginService(...) 的既有测试停留 null，注册逻辑判空跳过。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.checkba.service.ai.evidence.EvidenceRetrieverRegistry evidenceRetrieverRegistry;
+
+    /** manifest 声明的远程 MCP 证据来源要用它调远端（规范 v2.8 P3），同款可选注入 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.checkba.service.ai.mcp.McpClientService mcpClientService;
+
+    /**
      * 插件宿主 SPI（规范 v2.4 §4/§11）：实例化出的工具类若实现 HostAware，注入按插件 id 绑定的 PluginHost。
      * 用 ObjectProvider 懒取——PluginHostFactory 背后挂着 EditorBridgeService/ProjectFileService 一串，
      * 构造器注入会把本类拖进启动死环；required=false 让直接 new 的测试照旧。
@@ -196,6 +210,16 @@ public class PluginService {
         this.skillRegistry = skillRegistry;
     }
 
+    /** 供测试直接装配证据注册表（规范 v2.8 P3；生产由 Spring 字段注入）。 */
+    void setEvidenceRetrieverRegistry(com.checkba.service.ai.evidence.EvidenceRetrieverRegistry registry) {
+        this.evidenceRetrieverRegistry = registry;
+    }
+
+    /** 供测试直接装配 MCP 客户端（规范 v2.8 P3；生产由 Spring 字段注入）。 */
+    void setMcpClientService(com.checkba.service.ai.mcp.McpClientService mcpClientService) {
+        this.mcpClientService = mcpClientService;
+    }
+
     /** 供测试查看当前这一代插件 JAR ClassLoader 的快照。 */
     List<URLClassLoader> loadedClassLoaders() {
         return new ArrayList<>(loadedClassLoaders);
@@ -247,6 +271,39 @@ public class PluginService {
          * 左栏打开的是宿主渲染的「启动面板」，内容就来自这里。缺省 null，前端按描述与工具清单兜底。
          */
         private PluginGuide guide;
+        /** 向宿主贡献的内容（规范 v2.8 起）：证据来源等，见各内部类 */
+        private Contributes contributes;
+    }
+
+    /** manifest.contributes：插件向宿主贡献的声明式内容（规范 v2.8 P3 起，只加不改） */
+    @lombok.Data
+    public static class Contributes {
+        /** 证据来源（evidence.retrieve.v1 公开协议，规范 v2.8）：SPI 实现的自述 + MCP 声明式接入 */
+        private List<EvidenceSourceDecl> evidenceSources;
+    }
+
+    /**
+     * 一条证据来源声明。{@code transport} 缺省 "spi"（JAR 实现 EvidenceProvider，声明用于
+     * 广场展示/审查，且必须与实现类 sourceId() 一致）；"mcp" = 远程 MCP 服务器
+     * （需 {@code server.url} + {@code tool}，本地命令型不受理——进程外插件形态另案）。
+     */
+    @lombok.Data
+    public static class EvidenceSourceDecl {
+        private String sourceId;
+        private String name;
+        private String description;
+        private String transport;
+        private McpServerRef server;
+        private String tool;
+    }
+
+    /** MCP 远程服务器引用（只收 http(s) URL；token 走 tokenSettingKey 时可在线覆盖） */
+    @lombok.Data
+    public static class McpServerRef {
+        private String url;
+        private String token;
+        private String tokenSettingKey;
+        private Integer timeoutSeconds;
     }
 
     /** manifest.guide：简介 + 步骤 + 一键动作（动作 = 把 prompt 以 AGENT 模式发进 AI 对话） */
@@ -304,6 +361,10 @@ public class PluginService {
         pluginDirById.clear();
         incompatiblePluginIds.clear();
         devInstalledPluginIds.clear();
+        // 插件证据来源整批清空重建（规范 v2.8 P3）；内置来源不动
+        if (evidenceRetrieverRegistry != null) {
+            evidenceRetrieverRegistry.clearExternal();
+        }
         loadDisabledState();
         loadPlugins();
         // 插件更新/卸载后 loadPlugins() 可能已经把同名工具换成了新 bean，
@@ -692,6 +753,10 @@ public class PluginService {
                     incompatiblePluginIds.put(meta.getId(), incompatible);
                     log.warn("Plugin {} requires host >= {} (current {}), registered but inactive",
                             meta.getId(), meta.getMinHostVersion(), appVersion);
+                } else {
+                    // MCP 声明式证据来源在元数据阶段注册（SPI 的随 JAR 加载注册，规范 v2.8 P3）；
+                    // 适配器自带启用位闸，禁用插件的来源静默返回空
+                    registerDeclaredMcpEvidenceSources(meta);
                 }
 
                 // 收集插件携带的 skill 目录（规范 v2.1）：交给 SkillRegistry 注册，本服务不解析 skill.yml
@@ -807,6 +872,37 @@ public class PluginService {
             }
             meta.getGuide().setQuickActions(valid);
         }
+        // contributes.evidenceSources（规范 v2.8 P3）：sourceId 必须是 <pluginId>.<后缀>；
+        // transport 缺省 spi；mcp 必须给 http(s) 的 server.url 与 tool（本地命令型不受理）。
+        // 非法条目丢弃并告警——声明是审查对象，必须真实可注册。
+        if (meta.getContributes() != null && meta.getContributes().getEvidenceSources() != null) {
+            List<EvidenceSourceDecl> valid = new ArrayList<>();
+            for (EvidenceSourceDecl d : meta.getContributes().getEvidenceSources()) {
+                if (d == null || d.getSourceId() == null
+                        || !d.getSourceId().matches(java.util.regex.Pattern.quote(meta.getId()) + "\\.[A-Za-z0-9][A-Za-z0-9_-]*")) {
+                    log.warn("Plugin {} evidence source with invalid sourceId '{}' (must be <pluginId>.<name>), dropped",
+                            meta.getId(), d == null ? null : d.getSourceId());
+                    continue;
+                }
+                String transport = (d.getTransport() == null || d.getTransport().isBlank()) ? "spi" : d.getTransport();
+                d.setTransport(transport);
+                if ("mcp".equals(transport)) {
+                    String url = d.getServer() == null ? null : d.getServer().getUrl();
+                    boolean urlOk = url != null && (url.startsWith("https://") || url.startsWith("http://"));
+                    if (!urlOk || d.getTool() == null || d.getTool().isBlank()) {
+                        log.warn("Plugin {} mcp evidence source '{}' needs server.url (http/https) and tool; "
+                                + "local command-style MCP is not accepted. Dropped", meta.getId(), d.getSourceId());
+                        continue;
+                    }
+                } else if (!"spi".equals(transport)) {
+                    log.warn("Plugin {} evidence source '{}' has unknown transport '{}', dropped",
+                            meta.getId(), d.getSourceId(), transport);
+                    continue;
+                }
+                valid.add(d);
+            }
+            meta.getContributes().setEvidenceSources(valid);
+        }
         // packs（规范 v2.3）：id 必须过与 pack / 插件同一套正则，非法项丢弃并告警——
         // 这串字符会被拼进注册表 URL 与磁盘路径，不能放行任意输入。
         if (meta.getPacks() != null) {
@@ -841,13 +937,25 @@ public class PluginService {
                         // Check if class has methods with @Tool annotation
                         boolean hasTools = Arrays.stream(cls.getDeclaredMethods())
                                 .anyMatch(m -> m.isAnnotationPresent(dev.langchain4j.agent.tool.Tool.class));
+                        // 证据 Provider（规范 v2.8 P3）：实现公开 SPI 的具体类也实例化并注册
+                        boolean isEvidenceProvider =
+                                com.checkba.plugin.api.evidence.EvidenceProvider.class.isAssignableFrom(cls)
+                                        && !cls.isInterface()
+                                        && !java.lang.reflect.Modifier.isAbstract(cls.getModifiers());
 
-                        if (hasTools) {
-                            log.info("Found tool class in plugin: {}", className);
-                            // Instantiate and register
+                        if (hasTools || isEvidenceProvider) {
+                            log.info("Found {} class in plugin: {}",
+                                    hasTools ? "tool" : "evidence-provider", className);
+                            // Instantiate and register（同一实例可同时是工具类与 Provider）
                             Object instance = cls.getDeclaredConstructor().newInstance();
                             injectHostIfAware(instance, pluginId);
-                            registerToolObject(instance, pluginId);
+                            if (hasTools) {
+                                registerToolObject(instance, pluginId);
+                            }
+                            if (isEvidenceProvider) {
+                                registerEvidenceProvider(
+                                        (com.checkba.plugin.api.evidence.EvidenceProvider) instance, pluginId);
+                            }
                         }
                     } catch (Throwable e) {
                         // Skip classes that can't be loaded (e.g. missing dependencies)
@@ -857,6 +965,84 @@ public class PluginService {
             }
         } catch (Exception e) {
             log.error("Error scanning JAR {}: {}", jar.getName(), e.getMessage());
+        }
+    }
+
+    /**
+     * JAR 里的 EvidenceProvider 实现 → 证据注册表（规范 v2.8 P3）。
+     * 双校验：sourceId 必须带 {@code <pluginId>.} 前缀，且与 manifest
+     * {@code contributes.evidenceSources}（transport=spi）的声明逐字一致——
+     * 任一不满足拒绝注册并记 ERROR（声明是审查对象，必须真实）。
+     */
+    void registerEvidenceProvider(com.checkba.plugin.api.evidence.EvidenceProvider provider,
+                                          String pluginId) {
+        if (evidenceRetrieverRegistry == null) {
+            log.warn("EvidenceRetrieverRegistry unavailable, evidence provider from plugin {} not registered", pluginId);
+            return;
+        }
+        String sourceId;
+        try {
+            sourceId = provider.sourceId();
+        } catch (Throwable t) {
+            log.error("Plugin {} evidence provider sourceId() threw, not registered: {}", pluginId, t.toString());
+            return;
+        }
+        if (sourceId == null || !sourceId.startsWith(pluginId + ".") || sourceId.length() <= pluginId.length() + 1) {
+            log.error("Plugin {} evidence provider sourceId '{}' must be '<pluginId>.<name>', not registered",
+                    pluginId, sourceId);
+            return;
+        }
+        PluginMetadata meta = getPlugin(pluginId);
+        final String sid = sourceId;
+        boolean declared = meta != null && meta.getContributes() != null
+                && meta.getContributes().getEvidenceSources() != null
+                && meta.getContributes().getEvidenceSources().stream()
+                        .anyMatch(d -> "spi".equals(d.getTransport()) && sid.equals(d.getSourceId()));
+        if (!declared) {
+            log.error("Plugin {} evidence provider '{}' not declared in manifest contributes.evidenceSources "
+                    + "(transport spi), not registered", pluginId, sourceId);
+            return;
+        }
+        evidenceRetrieverRegistry.registerExternal(new com.checkba.service.ai.evidence.PluginSpiEvidenceRetriever(
+                sourceId, provider, () -> isEnabled(pluginId)));
+    }
+
+    /** manifest 声明的远程 MCP 证据来源 → 证据注册表（规范 v2.8 P3）；transport=spi 的走 JAR 加载路径 */
+    void registerDeclaredMcpEvidenceSources(PluginMetadata meta) {
+        if (evidenceRetrieverRegistry == null || mcpClientService == null
+                || meta.getContributes() == null || meta.getContributes().getEvidenceSources() == null) {
+            return;
+        }
+        String pluginId = meta.getId();
+        for (EvidenceSourceDecl d : meta.getContributes().getEvidenceSources()) {
+            if (!"mcp".equals(d.getTransport())) {
+                continue;
+            }
+            com.checkba.service.ai.mcp.McpProperties.ServerConfig cfg =
+                    new com.checkba.service.ai.mcp.McpProperties.ServerConfig();
+            cfg.setName("plugin:" + pluginId + ":" + d.getSourceId());
+            cfg.setUrl(d.getServer().getUrl());
+            cfg.setToken(d.getServer().getToken());
+            cfg.setTokenSettingKey(d.getServer().getTokenSettingKey());
+            if (d.getServer().getTimeoutSeconds() != null) {
+                cfg.setTimeoutSeconds(d.getServer().getTimeoutSeconds());
+            }
+            com.checkba.service.ai.evidence.EvidenceRetriever inner =
+                    new com.checkba.service.ai.evidence.McpEvidenceRetriever(
+                            d.getSourceId(), cfg, d.getTool(), mcpClientService);
+            // 启用位闸：与 SPI 适配器同语义，禁用插件的来源静默返回空
+            evidenceRetrieverRegistry.registerExternal(new com.checkba.service.ai.evidence.EvidenceRetriever() {
+                @Override
+                public String sourceId() {
+                    return inner.sourceId();
+                }
+
+                @Override
+                public java.util.List<com.checkba.service.ai.evidence.EvidenceItem> retrieve(
+                        com.checkba.service.ai.evidence.EvidenceQuery query) {
+                    return isEnabled(pluginId) ? inner.retrieve(query) : java.util.List.of();
+                }
+            });
         }
     }
 

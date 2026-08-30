@@ -89,11 +89,12 @@ VS Code 让渡给插件的不是「UI 挂件」，而是三样核心资产——
 - 【未做】插件面板与对话面板双向联动（对话产出 → 面板订阅）：等 P1 事件通道在真实
   插件上跑熟后另开卡。
 
-### P3 开放数据源接入权（对位 FileSystemProvider/LSP，杠杆层）——【设计已定稿，待实施】
+### P3 开放数据源接入权（对位 FileSystemProvider/LSP，杠杆层）——【已落地，规范 v2.8，dev-board#283】
 设计定稿：`docs/superpowers/specs/2026-08-29-plugin-p3-evidence-provider-protocol.md`（dev-board#283）。
-- evidence.retrieve.v1 原样升格公开 Provider 协议：JAR SPI（plugin-api 1.2.0 `EvidenceProvider`）+
-  manifest `contributes.evidenceSources`（MCP 声明式接入）两条通道；conformance 测试基类随
-  plugin-api 发布；第一个狗粮 = 判决书通道重构为官方插件。
+- 已落地（PLUGIN_SPEC §13）：JAR SPI（plugin-api 1.2.0 `EvidenceProvider`）+ manifest
+  `contributes.evidenceSources`（远程 MCP 声明式接入，本地命令型不受理）两条通道；
+  conformance 执行器 `EvidenceProviderConformanceKit`（零依赖）随 plugin-api 发布；
+  示例 examples/hello-evidence-plugin 全绿。后续狗粮：判决书通道重构为官方插件（另开卡）。
 
 ### P4 声明式长尾（对位 languages/snippets/themes 的生态大头）——【设计已定稿，按贡献点分期实施】
 设计定稿：`docs/superpowers/specs/2026-08-29-plugin-p4-declarative-contributions.md`（dev-board#284）。

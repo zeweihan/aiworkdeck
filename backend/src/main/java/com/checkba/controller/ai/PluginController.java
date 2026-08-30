@@ -77,6 +77,8 @@ public class PluginController {
         private String incompatibleReason;
         /** 是否本机 dev 免签直装（.awd-dev 标记）；实验 API（x- 前缀桥方法）只对它开放 */
         private boolean devInstalled;
+        /** manifest.contributes（规范 v2.8 起）：广场展示与审查用，null = 无贡献内容 */
+        private PluginService.Contributes contributes;
     }
 
     @GetMapping("/list")
@@ -353,6 +355,7 @@ public class PluginController {
         view.setMinHostVersion(meta.getMinHostVersion());
         view.setIncompatibleReason(pluginService.incompatibleReason(meta.getId()));
         view.setDevInstalled(pluginService.isDevInstalled(meta.getId()));
+        view.setContributes(meta.getContributes());
         return view;
     }
 

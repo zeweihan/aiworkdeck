@@ -5,6 +5,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.ArgumentCaptor;
 
 import java.io.File;
 import java.io.IOException;
@@ -496,6 +497,94 @@ class PluginServiceTest {
         service.init();
         assertTrue(service.isDevInstalled("p1"));
         assertFalse(service.isDevInstalled("p2"));
+    }
+
+    // ==== contributes.evidenceSources（规范 v2.8 P3）====
+
+    private static final String EVIDENCE_MANIFEST = """
+            {"id": "p1", "name": "P1", "version": "1.0.0",
+             "contributes": {"evidenceSources": [
+               {"sourceId": "p1.registry", "name": "工商", "transport": "spi"},
+               {"sourceId": "wrong-prefix.x", "name": "坏前缀"},
+               {"sourceId": "p1.no-url", "transport": "mcp", "tool": "retrieve_evidence"},
+               {"sourceId": "p1.caselaw", "transport": "mcp", "tool": "retrieve_evidence",
+                "server": {"url": "https://mcp.example.com/sse"}}
+             ]}}
+            """;
+
+    @Test
+    @DisplayName("evidenceSources 解析：前缀非法/mcp 缺 url 丢弃，transport 缺省 spi")
+    void parsesEvidenceSourcesAndDropsInvalid() throws IOException {
+        writeManifest("p1", EVIDENCE_MANIFEST);
+        service.init();
+        var sources = service.getPlugin("p1").getContributes().getEvidenceSources();
+        assertEquals(2, sources.size());
+        assertEquals("p1.registry", sources.get(0).getSourceId());
+        assertEquals("spi", sources.get(0).getTransport());
+        assertEquals("p1.caselaw", sources.get(1).getSourceId());
+        assertEquals("mcp", sources.get(1).getTransport());
+    }
+
+    @Test
+    @DisplayName("SPI Provider 注册闸：声明+前缀双合格才注册，任一不满足拒绝")
+    void registerEvidenceProviderEnforcesDeclaration() throws IOException {
+        var registry = mock(com.checkba.service.ai.evidence.EvidenceRetrieverRegistry.class);
+        service.setEvidenceRetrieverRegistry(registry);
+        writeManifest("p1", EVIDENCE_MANIFEST);
+        service.init();
+
+        service.registerEvidenceProvider(fakeProvider("p1.registry"), "p1");
+        verify(registry).registerExternal(any());
+
+        service.registerEvidenceProvider(fakeProvider("p1.undeclared"), "p1");
+        service.registerEvidenceProvider(fakeProvider("other.registry"), "p1");
+        verify(registry, times(1)).registerExternal(any());
+    }
+
+    @Test
+    @DisplayName("MCP 声明式来源随扫描注册，带启用位闸：禁用后静默空列表且不触达远端")
+    void mcpDeclaredSourceRegisteredWithGate() throws IOException {
+        var registry = mock(com.checkba.service.ai.evidence.EvidenceRetrieverRegistry.class);
+        var mcp = mock(com.checkba.service.ai.mcp.McpClientService.class);
+        when(mcp.callTool(any(com.checkba.service.ai.mcp.McpProperties.ServerConfig.class), anyString(), any()))
+                .thenReturn("{\"items\":[]}");
+        service.setEvidenceRetrieverRegistry(registry);
+        service.setMcpClientService(mcp);
+        writeManifest("p1", EVIDENCE_MANIFEST);
+        service.init();
+
+        var captor = ArgumentCaptor.forClass(com.checkba.service.ai.evidence.EvidenceRetriever.class);
+        verify(registry).registerExternal(captor.capture());
+        var retriever = captor.getValue();
+        assertEquals("p1.caselaw", retriever.sourceId());
+
+        var query = new com.checkba.service.ai.evidence.EvidenceQuery(
+                "1", "q", null, java.util.List.of(), java.util.Map.of(), 5);
+        retriever.retrieve(query);
+        verify(mcp, times(1)).callTool(any(com.checkba.service.ai.mcp.McpProperties.ServerConfig.class), anyString(), any());
+
+        service.setEnabled("p1", false);
+        assertEquals(java.util.List.of(), retriever.retrieve(query));
+        verify(mcp, times(1)).callTool(any(com.checkba.service.ai.mcp.McpProperties.ServerConfig.class), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("rescan 先清空插件证据来源再重建")
+    void rescanClearsExternalEvidenceSources() throws IOException {
+        var registry = mock(com.checkba.service.ai.evidence.EvidenceRetrieverRegistry.class);
+        service.setEvidenceRetrieverRegistry(registry);
+        writeManifest("p1", "{\"id\": \"p1\", \"name\": \"P1\", \"version\": \"1.0.0\"}");
+        service.init();
+        service.rescan();
+        verify(registry, atLeastOnce()).clearExternal();
+    }
+
+    private static com.checkba.plugin.api.evidence.EvidenceProvider fakeProvider(String sourceId) {
+        return new com.checkba.plugin.api.evidence.EvidenceProvider() {
+            @Override public String sourceId() { return sourceId; }
+            @Override public java.util.List<com.checkba.plugin.api.evidence.EvidenceItem> retrieve(
+                    com.checkba.plugin.api.evidence.EvidenceQuery query) { return java.util.List.of(); }
+        };
     }
 
     private void writeRealJar(Path jarPath) throws IOException {
