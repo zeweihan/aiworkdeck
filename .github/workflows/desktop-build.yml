@@ -129,6 +129,28 @@ jobs:
           fi
           [ "$SKIP" = "1" ] && echo "SKIP_DRAWIO_TESTS=1" >> "$GITHUB_ENV"
           echo "drawio tests: $([ "$SKIP" = "1" ] && echo SKIPPED || echo FULL)"
+      # Windows runner 上 Defender 实时扫描会给刚落盘的临时文件加排他句柄，
+      # drawio-server 测试的 t.after 删临时目录时报 EPERM（hookFailed），
+      # 断言全过、只有清理失败，却把整个发版拦下——v0.25.1/#609/v0.26.0/v0.27.5/v0.28.0
+      # 都被咬过（dev-board#146）。PR 上靠「没碰 drawio 就跳过」绕开了，
+      # 而 tag 发版永远全量跑，于是这个坑专挑发版咬。
+      #
+      # 这一步直接治病根：把 runner 的 Temp 目录加进 Defender 排除项。
+      # **失败不许中断构建**（|| true）：部分 runner 镜像本来就禁用了 Defender，
+      # 或者不给加排除项——那种情况下退回测试侧的 EPERM 兜底（drawio-server.test.js
+      # 的 rmrf），不该因为"加排除项没成功"就把发版拦了。
+      - name: Exclude runner Temp from Defender (Windows EPERM guard)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          try {
+            Add-MpPreference -ExclusionPath $env:RUNNER_TEMP -ErrorAction Stop
+            Add-MpPreference -ExclusionPath $env:TEMP -ErrorAction Stop
+            Write-Host "Defender exclusions added: $env:RUNNER_TEMP ; $env:TEMP"
+          } catch {
+            Write-Host "Defender exclusion not applied (harmless): $($_.Exception.Message)"
+          }
       - name: Desktop unit tests
         working-directory: desktop
         # drawio 测试曾在 Windows 上锁死 110 分钟不退出（v0.26.0 首发 run）：
