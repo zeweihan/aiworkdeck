@@ -162,9 +162,42 @@ description: Microsoft Office 与 WPS 插件领域。任务涉及 Word/Excel/PPT
 - **PPT 内联正文里的「第N页：」与「 | 」是插件加的装饰**，已在正文开头加一行交底；
   改这两个读取器时装饰与说明要一起改（`wpsDoc.PPT_INLINE_NOTE` 与 `wordDoc.PPT_INLINE_NOTE` 同源两份）。
 
-**已知未修**：对抗式复核确认但本轮未修的 11 条（Office/ppt 组合形状不可达、
-Office 面 apply_standard_format 无 run 合并、Excel 整表过桥、页眉页脚整体覆写等）
-与未验证的中低危 115 条，清单在 dev-board#288 的评论里。
+### 2026-08-30 下午：审计剩余项（dev-board#288，10 条确认项修掉 9 条）
+
+- **Excel 读取路径的截断必须发生在过桥之前**（`wordDoc.readExcelSheet` 与
+  `officeExecutor.excel_get_range`）：先只 load 尺寸，再用 `getRangeByIndexes`
+  （ExcelApi 1.1，无门槛）取截断后的区间。此前是把整片已用区域的 values 编组过桥再切前
+  2000 / 500 行，几万行的台账能让任务窗格无响应几十秒。WPS 面早就是「先 Resize 再取 Value2」。
+- **Office/PPT `loadPptTextFrames` 支持组合形状递归**：`Shape.group` / `ShapeGroup.shapes`
+  是 **PowerPointApi 1.8**（微软官方文档核实；`ShapeType.group` 本身是 1.4）。
+  **1.8 不可用时静默退化成只收顶层、绝不报错**。表格文字不并进来——Office 面有
+  `ppt_table_read` / `ppt_table_set_cell` 专门通道（WPS 面没有，所以它把表格并进了遍历）。
+- **`ppt_replace_text` 只改命中段**：整框回写 `textRange.text` 会抹平框内所有分段字符格式
+  与超链接还报成功。改逐处 `getSubstring` 并**从右到左应用**（偏移按原文算，右边先改
+  不推移左边）。`TextRange.text` 可写与 `getSubstring` 都是 PowerPointApi 1.4，无需新守卫。
+- **`edit_header_footer` 没给 text 就不许动文字**（两个家族同修）：旧写法无条件整替、
+  text 兜底成空串，模型只想改对齐就把用户页眉清空。显式传空串仍是「清空」这个合法意图，
+  两者分开；都不给时报错。返回值加 `textUpdated`。
+- **`excel_add_pivot_table`**：目标地址支持跨表（`splitSheetQualifiedAddress`，
+  含 `'带空格 表'!A1` 的引号包裹）；字段名改成「建表 → 读层级名 → 全对得上才继续，
+  对不上就把刚建的表删掉再报错并列出可用字段」，不留空透视表。
+- **`excel_protect_sheet` 的密码是 ExcelApi 1.7 那一档**：旧宿主上参数被直接忽略，
+  表被保护但**没有密码**还报成功。安全动作不许静默降级——不支持时明确报错，
+  并回读 `protection.protected` 报真实状态。
+- `office_ppt_add_slide` 的工具描述与实现对齐（实现是「新页成为第 N 页」，描述写的是
+  「插到第 N 页之后」，差一位；两个执行器一致，改的是描述）。
+
+**唯一没修的一条，以及为什么**：`standard-format-revision-flood`（Office 面
+`apply_standard_format` 逐段落笔，WPS 面已按 run 合并）。不修的理由不是没时间——
+**这条在 Office 面缺一个真机判据**：WPS 那次合并是维护者按真机观察到的「每段一条修订」
+裁决的，而 Word 是否会把相邻的同款格式修订自动合并，本机无法验证。
+而且 Office.js 里 `Range` 只能整段设 `font`，`lineSpacing`/`spaceAfter`/`firstLineIndent`
+仍须逐段设——照搬 WPS 的 `doc.Range(首段.Start, 末段.End)` 一次落笔在 Office 面没有对应写法，
+`expandTo` 拼出来的区间又缺少 WPS 那条「`merged.Paragraphs.Count === run 段数`」安全阀。
+在整篇文档的格式路径上照着未经验证的假设改，风险是「半篇文档格式被刷坏」，
+比多几十条格式修订严重得多。要做先补真机观察 + 同款安全阀。
+
+**未验证的中低危 115 条**（从未做过对抗式复核）清单在 dev-board#288 的评论里。
 
 ## 验证
 
