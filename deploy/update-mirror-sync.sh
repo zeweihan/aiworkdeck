@@ -49,6 +49,40 @@ notify_website() {
   done
 }
 
+# ---- OSS 直传（dev-board#290）------------------------------------------------
+# 官网下载直链走 dl.aiworkdeck.com（阿里云 CDN，源站 awd-downloads 桶）；ECS 只当
+# 同步中转，出口带宽不再扛 GB 级下载。凭证与端点在 /etc/aiworkdeck/mirror-sync.env
+# （DOWNLOADS_OSS_*，RAM 子用户 awd-downloads-sync 仅有该桶权限），走内网 endpoint 免流量费。
+# 顺序红线：**必须在 latest.json 落地之前把安装包推上 OSS**——官网按 latest.json 渲染
+# dl 直链，文件晚于清单就位就是用户点下载 404。推失败则本次不换 latest.json（不发半套）。
+oss_args() {
+  echo -e "-e\n$DOWNLOADS_OSS_ENDPOINT\n-i\n$DOWNLOADS_OSS_AK_ID\n-k\n$DOWNLOADS_OSS_AK_SECRET"
+}
+push_installers_to_oss() {
+  if [ -z "${DOWNLOADS_OSS_BUCKET:-}" ]; then
+    echo "[mirror-sync] 未配置 DOWNLOADS_OSS_*，跳过 OSS 直传（dl 直链会指向缺失文件！）" >&2
+    return 1
+  fi
+  command -v ossutil >/dev/null || { echo "[mirror-sync] 未装 ossutil" >&2; return 1; }
+  local args; mapfile -t args < <(oss_args)
+  # --exclude "*.part"：断点续传半成品是 GB 级垃圾，不上桶
+  ossutil cp -r -u --exclude "*.part" "$WEB_ROOT/installers/" \
+    "oss://$DOWNLOADS_OSS_BUCKET/update/desktop/installers/" "${args[@]}" >/dev/null \
+    && ossutil cp -f "$1" "oss://$DOWNLOADS_OSS_BUCKET/update/desktop/installers/latest.json" \
+         "${args[@]}" >/dev/null
+}
+# 本地 prune 之后把 OSS 镜像成同样状态（删掉更老版本省存储）。失败只告警：
+# OSS 上多留几份旧包无害，下一轮会再试。
+prune_oss_installers() {
+  [ -n "${DOWNLOADS_OSS_BUCKET:-}" ] || return 0
+  command -v ossutil >/dev/null || return 0
+  local args; mapfile -t args < <(oss_args)
+  ossutil sync "$WEB_ROOT/installers/" \
+    "oss://$DOWNLOADS_OSS_BUCKET/update/desktop/installers/" \
+    --delete --force --exclude "*.part" "${args[@]}" >/dev/null \
+    || echo "[mirror-sync] OSS 旧包清理失败（无害，下轮重试）" >&2
+}
+
 # 清理旧安装包：只删「比上一版更老的」，当前版与上一版都留着。
 #
 # 为什么不能一换 latest.json 就把旧包全删——2026-08-18 发 v0.18.0 时实测到的 404 窗口：
@@ -283,12 +317,20 @@ out = {
 }
 json.dump(out, sys.stdout, ensure_ascii=False)
 EOF
-    mv "$TMP/latest.json" "$WEB_ROOT/installers/latest.json"
-    echo "[mirror-sync] installers/latest.json updated -> $TAG"
-    notify_website
+    # 先上 OSS 再换本地清单（顺序红线见 push_installers_to_oss 注释）
+    if push_installers_to_oss "$TMP/latest.json"; then
+      echo "[mirror-sync] installers pushed to oss://$DOWNLOADS_OSS_BUCKET（dl.aiworkdeck.com 直链就位）"
+      mv "$TMP/latest.json" "$WEB_ROOT/installers/latest.json"
+      echo "[mirror-sync] installers/latest.json updated -> $TAG"
+      notify_website
 
-    # 清理旧安装包与过期半成品（只删 .dmg/.exe/.part，不碰 latest.json）
-    prune_old_installers "${TAG#v}" "$TMP/installers.tsv"
+      # 清理旧安装包与过期半成品（只删 .dmg/.exe/.part，不碰 latest.json）
+      prune_old_installers "${TAG#v}" "$TMP/installers.tsv"
+      prune_oss_installers
+    else
+      echo "[mirror-sync] OSS 直传失败，latest.json 不更新（官网继续发上一版）；重跑本脚本重试" >&2
+      INSTALLERS_FAILED=1
+    fi
   else
     echo "[mirror-sync] 安装包未全部就位，latest.json 不更新（官网继续发上一版）；重跑本脚本可续传补齐" >&2
   fi
