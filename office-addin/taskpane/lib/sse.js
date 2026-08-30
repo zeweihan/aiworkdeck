@@ -64,6 +64,11 @@ export function createSseConnection({ baseUrl, token, conversationId, clientId, 
   let reading = false
   // 后端已把本会话移交给另一个窗格：置起后不再重连（见文件头 superseded 那条）
   let superseded = false
+  // 本次建连是否还活着。**稳定计时器只许给活着的连接上**：两条通道里
+  // 「读流结束」与「建连 promise 兑现」的先后并不固定（同步收尾的实现会先收尾后兑现），
+  // 不看这个标记的话，会给一条已经断掉的连接留下一个 5 秒后复位退避的计时器，
+  // 退避于是又永远长不起来——正是本次要修的那个病，绕了个弯回来。
+  let connectionLive = false
   // 断点续传游标：收到的最后一个事件 id，重连时经 Last-Event-ID 上送要回漏掉的事件
   let lastEventId = ''
   // 建连时刻的滚动记录，用于熔断（见 CHURN_LIMIT）
@@ -154,10 +159,12 @@ export function createSseConnection({ baseUrl, token, conversationId, clientId, 
    */
   function markConnected() {
     clearStableTimer()
-    stableTimer = setTimeout(() => {
-      stableTimer = null
-      backoffMs = RECONNECT_BASE_MS
-    }, STABLE_CONNECTION_MS)
+    if (connectionLive) {
+      stableTimer = setTimeout(() => {
+        stableTimer = null
+        backoffMs = RECONNECT_BASE_MS
+      }, STABLE_CONNECTION_MS)
+    }
     const now = Date.now()
     connectTimes.push(now)
     while (connectTimes.length && now - connectTimes[0] > CHURN_WINDOW_MS) connectTimes.shift()
@@ -191,6 +198,7 @@ export function createSseConnection({ baseUrl, token, conversationId, clientId, 
   /** 读流收尾（两条通道共用）：主动关闭→通知，意外断流→重连 */
   function finishReading() {
     reading = false
+    connectionLive = false
     stopWatchdog()
     clearStableTimer()
     if (closed) {
@@ -293,6 +301,7 @@ export function createSseConnection({ baseUrl, token, conversationId, clientId, 
    * 永久翻到 XHR 再试本次。resolve 即已连上且读流开始维护。
    */
   async function connectAndRead() {
+    connectionLive = true
     if (!forceXhr) {
       const resp = await connectOnce()
       if (resp.body && typeof resp.body.getReader === 'function') {

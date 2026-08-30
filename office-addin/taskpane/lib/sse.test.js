@@ -366,3 +366,31 @@ test('断点续传：事件 id 记进游标，重连时经 Last-Event-ID 上送�
     restore()
   }
 })
+
+test('稳定计时器不许给已经断掉的连接上：否则退避涨到 5 秒以上时会被悄悄复位', async () => {
+  // 两条读流通道里「读流结束」与「建连 promise 兑现」的先后并不固定：同步收尾的
+  // 实现会先收尾、后兑现。不看「连接是否还活着」就上稳定计时器的话，会给一条
+  // 已经断掉的连接留下一个 5 秒后复位退避的定时器。
+  //
+  // **判据必须等到退避超过 5 秒那一拍**：退避是 1/2/4 秒时，下一次建连总在计时器
+  // 到点之前发生、顺手把它清掉，带病与修好完全看不出差别（第一版用例只看到 8.6 秒，
+  // 还原病灶照样通过——又一次假绿，是自己抓出来的）。退避涨到 8 秒后，
+  // 那个 12 秒的计时器才真的烧出来：带病序列 0/1/3/7/15/16，修好后 0/1/3/7/15。
+  const instances = []
+  const restore = withFakeXhr(instances)
+  try {
+    const conn = createSseConnection({
+      baseUrl: 'https://x.example', token: 't', conversationId: 'c-stale-timer',
+      onEvent: () => {}, onClose: () => {}
+    })
+    await conn.ready
+    await sleep(16500)
+    const gaps = instances.slice(1).map((x, i) => x.at - instances[i].at)
+    assert.equal(instances.length, 5,
+      `16.5s 内应建连 5 次（0/1/3/7/15s），实际 ${instances.length} 次，间隔 ${JSON.stringify(gaps)}`)
+    assert.ok(gaps[3] >= 7000, `第四次退避应到约 8s，实际 ${gaps[3]}ms`)
+    conn.close()
+  } finally {
+    restore()
+  }
+})
