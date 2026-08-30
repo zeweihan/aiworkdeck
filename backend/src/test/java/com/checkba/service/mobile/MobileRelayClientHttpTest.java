@@ -631,7 +631,10 @@ class MobileRelayClientHttpTest {
         transferCommandsJson = "{\"code\":0,\"commands\":[],\"hot\":true}";
 
         service().pollInbox();
-        assertEquals(1, transferCommandsRequests.get());
+        // 只断言下限不断言恰好一次：pollInbox 的 finally 里 pollTransferCommands 之后还有
+        // pollConversationSync（dev-board#298），热循环后台线程在这段间隙里可能已经抢跑了
+        // 第二次 /commands——「恰好 1」在 CI 上是时序赌博（2026-08-30 实红过）。
+        assertTrue(transferCommandsRequests.get() >= 1);
 
         // 热循环在独立后台线程按 30ms 间隔追加轮询；轮询到 hot:true 会不断顺延窗口，
         // 这里只等到看见第二次请求就够，不需要等窗口真正过期。
