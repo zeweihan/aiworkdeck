@@ -15,17 +15,32 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
+/**
+ * 带状态的文本形状：记录「整框回写」与「子串替换」两种写入，
+ * 用来钉住 ppt_replace_text 不许再整框回写（会抹平框内格式与超链接）。
+ */
 function textShape(text) {
-  return {
-    type: 'TextBox',
-    getTextFrameOrNullObject() {
+  const st = { text, wholeWrites: 0, subWrites: [] }
+  const range = {
+    get text() { return st.text },
+    set text(v) { st.wholeWrites++; st.text = String(v) },
+    load() {},
+    getSubstring(start, length) {
       return {
-        isNullObject: false,
-        hasText: !!text,
-        textRange: { text, load() {} },
-        load() {}
+        load() {},
+        get text() { return st.text.slice(start, start + length) },
+        set text(v) {
+          st.subWrites.push({ start, length, value: String(v) })
+          st.text = st.text.slice(0, start) + String(v) + st.text.slice(start + length)
+        }
       }
     }
+  }
+  const frame = { isNullObject: false, get hasText() { return !!st.text }, textRange: range, load() {} }
+  return {
+    type: 'TextBox',
+    _state: st,
+    getTextFrameOrNullObject() { return frame }
   }
 }
 
@@ -114,5 +129,34 @@ test('PowerPointApi 1.8 不可用时静默退化成只收顶层，绝不报错',
     assert.equal(out.ok, true, `老宿主上不该报错：${out.error}`)
     const texts = out.data.slides[0].texts
     assert.deepEqual(texts, ['本页标题'], '1.8 缺失时只收顶层，与改造前一致')
+  } finally { restore() }
+})
+
+test('ppt_replace_text：只改命中的那一段，不许整框回写（整框回写会抹平框内格式与超链接）', async () => {
+  const shape = textShape('甲方应向乙方支付，甲方另行承担税费')
+  const restore = install({ supports18: true, slides: [[shape]] })
+  try {
+    const out = await executeOfficeCommand('ppt_replace_text', { searchText: '甲方', replaceText: '委托人' })
+    assert.equal(out.ok, true, out.error)
+    assert.equal(out.data.replaced, 2)
+    assert.equal(shape._state.text, '委托人应向乙方支付，委托人另行承担税费')
+    assert.equal(shape._state.wholeWrites, 0,
+      `不许对整个 TextRange 赋值（会抹平框内所有分段格式与超链接），实际整框写了 ${shape._state.wholeWrites} 次`)
+    assert.equal(shape._state.subWrites.length, 2, '应当逐处走 getSubstring')
+    // 从右到左：先改靠后那一处，左边的偏移才不会被推移
+    assert.ok(shape._state.subWrites[0].start > shape._state.subWrites[1].start,
+      `必须从右到左应用，实际顺序 ${JSON.stringify(shape._state.subWrites.map((w) => w.start))}`)
+  } finally { restore() }
+})
+
+test('ppt_replace_text：全角半角差异也要命中（锚点归一化）', async () => {
+  const shape = textShape('违约责任（含逾期利息）由甲方承担')
+  const restore = install({ supports18: true, slides: [[shape]] })
+  try {
+    const out = await executeOfficeCommand('ppt_replace_text', {
+      searchText: '违约责任(含逾期利息)', replaceText: '违约责任'
+    })
+    assert.equal(out.ok, true, out.error)
+    assert.equal(shape._state.text, '违约责任由甲方承担')
   } finally { restore() }
 })

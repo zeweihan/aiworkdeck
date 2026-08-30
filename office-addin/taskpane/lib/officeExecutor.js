@@ -2492,9 +2492,22 @@ const HANDLERS = {
         for (const tf of slideFrames) {
           if (tf.isNullObject || !tf.hasText) continue
           const text = tf.textRange.text || ''
-          if (!text.includes(searchText)) continue
-          replaced += text.split(searchText).length - 1
-          tf.textRange.text = text.split(searchText).join(replaceText)
+          // 归一化定位（dev-board#286）：命中区间是原文坐标
+          const hits = findAllNormalized(text, searchText)
+          if (!hits.length) continue
+          // **只改命中的那一段，不整框回写**（dev-board#288）：
+          // 旧写法 `tf.textRange.text = 整段新文本` 会把这个文本框里所有分段字符格式
+          // （加粗、字号、颜色）与超链接一并抹平，然后报成功——用户看到的是"改是改了，
+          // 但这一页的排版全没了"。TextRange.text 可写、getSubstring 都是 PowerPointApi 1.4
+          // （官方文档核实），与本命令既有的版本门槛同档，不需要额外守卫。
+          //
+          // **从右到左应用**：所有 getSubstring 的偏移都是按原文算的，右边先改不会推移
+          // 左边的坐标；反过来则第二处起全部错位（与 Word 面 replace_text 同一条纪律）。
+          for (let k = hits.length - 1; k >= 0; k--) {
+            const h = hits[k]
+            tf.textRange.getSubstring(h.start, h.end - h.start).text = replaceText
+          }
+          replaced += hits.length
           slideTouched = true
         }
         if (slideTouched) touchedSlides.push(i + 1)
@@ -2503,7 +2516,8 @@ const HANDLERS = {
         throw new Error('未找到目标文本，请确认 searchText 与幻灯片文本精确一致（可先用 ppt_get_slides 核对）')
       }
       await context.sync()
-      return { replaced, slides: touchedSlides }
+      // via 交底用的是哪条路：substring 表示只改了命中段、框内其余格式与超链接保持原样
+      return { replaced, slides: touchedSlides, via: 'substring' }
     })
   },
 
