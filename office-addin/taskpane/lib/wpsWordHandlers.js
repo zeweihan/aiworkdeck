@@ -31,6 +31,7 @@
  */
 
 import { minimalEdits } from './minimalEdit.js'
+import { findAllNormalized, describeAnchorFailure } from './textMatch.js'
 // 律所标准格式（HOUSE）单源：backend/src/main/resources/style-profiles/house-default.json
 // 的字节副本，由 frontend/scripts/sync-house-profile.mjs 同步（与 officeExecutor 同一份）。
 import houseProfile from './house-default.json' with { type: 'json' }
@@ -281,10 +282,26 @@ function locateAnchorAll(doc, anchorText, { position = null, message } = {}) {
     }
   }
   if (!offsets.length) {
-    const suffix = /\r/.test(needle)
-      ? `；锚点跨段，已尝试按段内文本降级仍未命中：${needle.slice(0, 40)}`
-      : ''
-    throw new Error((message || '未找到目标文本，请确认 anchorText 与文档内容精确一致（可先用 search 命令核对）') + suffix)
+    // 第三级：归一化重定位（dev-board#286）。全角/半角、弯直引号、NBSP、零宽字符、
+    // 连续空白、各式连字符、大小写——这些差异在屏幕上看不出来，逐字比较却必然失配，
+    // 而 WPS 文字上送给模型的正文里还带着表格的 \x07 结束符，模型照抄就更没戏。
+    //
+    // **命中之后用的是文档原文（hit.text）而不是模型给的锚点**：后面的 verifiedRange
+    // 要拿它逐笔校验取到的文本，用归一化后的串会当场判失败。取原文既让匹配变宽松，
+    // 又保住了「取到的文本必须与预期逐字相同」这条不变式。
+    const hits = findAllNormalized(body, anchorText)
+    if (hits.length) {
+      // 各处命中的原文可能不完全相同（这处是 NBSP、那处是普通空格）。offsets 与
+      // needle 是一对一配套往下传的，所以只收与第一处原文完全一致的那些，
+      // 宁可少改几处、也不能拿一个串去当另一个串的坐标（total 会如实报数）。
+      const first = hits[0].text
+      offsets = hits.filter((h) => h.text === first).map((h) => h.start)
+      needle = first
+      degraded = true
+    }
+  }
+  if (!offsets.length) {
+    throw new Error(describeAnchorFailure(message || '定位锚点', anchorText, body))
   }
   // coords 与 offsets 出自同一份快照，必须一起传给落笔方——分开取会用错坐标系
   return { offsets, needle, degraded, coords: makeDocCoords(body) }

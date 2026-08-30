@@ -61,16 +61,26 @@ function makeRange(state, offset, length, ctx, isSub = false) {
 
 function makeTableObj(rowsData) {
   const cells = rowsData.map((r) => r.map((t) => ({ text: String(t) })))
+  // 单元格里的 Shape 要长得跟真形状一样（HasTextFrame + TextFrame.HasText + 完整
+  // TextRange），否则写入侧的遍历看不见它们——真机上它们就是普通形状
+  const cellShapes = cells.map((row) => row.map((st) => {
+    const ctx = { log: [], subActionThrows: false }
+    return {
+      HasTextFrame: -1,
+      HasTable: 0,
+      Type: 17,
+      TextFrame: {
+        get HasText() { return st.text ? -1 : 0 },
+        TextRange: makeRange(st, 0, null, ctx)
+      }
+    }
+  }))
   return {
     Rows: { get Count() { return cells.length } },
     Columns: { get Count() { return cells[0].length } },
     Cell(r, c) {
       if (r < 1 || r > cells.length || c < 1 || c > cells[0].length) throw new Error('mock: cell 越界')
-      const st = cells[r - 1][c - 1]
-      return { Shape: { TextFrame: { TextRange: {
-        get Text() { return st.text },
-        set Text(v) { st.text = String(v) }
-      } } } }
+      return { Shape: cellShapes[r - 1][c - 1] }
     },
     _cells: cells
   }
@@ -103,6 +113,15 @@ function makeShape(spec, parentArr) {
     shape.Type = 19
     shape.HasTable = -1
     shape.Table = makeTableObj(spec.table)
+  }
+  if (spec.group) {
+    shape.Type = 6 // msoGroup
+    const children = []
+    for (const childSpec of spec.group) children.push(makeShape(childSpec, children))
+    shape.GroupItems = {
+      get Count() { return children.length },
+      Item(i) { return children[i - 1] }
+    }
   }
   return shape
 }
@@ -191,6 +210,38 @@ test('hexToComRgb/comRgbToHex：BGR 打包（低字节红）与往返', () => {
   assert.equal(comRgbToHex(hexToComRgb('#0a1b2c')), '#0a1b2c')
   assert.throws(() => hexToComRgb('#f00'), /颜色值非法/)
   assert.throws(() => hexToComRgb('红色'), /颜色值非法/)
+})
+
+// ==================== 表格 / 组合里的文字（dev-board#288） ====================
+
+test('ppt_get_slides：表格单元格与组合子形状里的文字必须读得到', async () => {
+  // 演示稿的正文常常不在顶层文本框里——对比表在表格里、图示标注在组合里。
+  // 读取侧（wpsDoc 的内联正文）早就按三条路收，写入侧此前只看顶层 TextFrame：
+  // 模型在上下文里看得到那些字，一改就说「未找到」。
+  install(makeDeck([[
+    { text: '本页标题' },
+    { table: [['条款', '约定'], ['违约金', '合同总价百分之五']] },
+    { group: [{ text: '图示标注甲' }, { group: [{ text: '嵌套标注乙' }] }] }
+  ]]))
+  const out = await H.ppt_get_slides({})
+  const texts = out.slides[0].texts
+  assert.ok(texts.includes('本页标题'))
+  assert.ok(texts.includes('违约金'), `表格单元格文字应读到，实际 ${JSON.stringify(texts)}`)
+  assert.ok(texts.includes('合同总价百分之五'))
+  assert.ok(texts.includes('图示标注甲'), '组合子形状文字应读到')
+  assert.ok(texts.includes('嵌套标注乙'), '组合套组合也要递归')
+})
+
+test('ppt_replace_text：改得到表格单元格里的文字（此前只能改顶层文本框）', async () => {
+  const pres = install(makeDeck([[
+    { table: [['甲方', '乙方'], ['甲方应付款', '见附件']] }
+  ]]))
+  const out = await H.ppt_replace_text({ searchText: '甲方', replaceText: '委托人' })
+  assert.equal(out.replaced, 2, `两处「甲方」都在表格里，都要替换到，实际 ${out.replaced}`)
+  const cells = pres.Slides.Item(1).Shapes.Item(1).Table._cells
+  assert.equal(cells[0][0].text, '委托人')
+  assert.equal(cells[1][0].text, '委托人应付款')
+  assert.equal(cells[0][1].text, '乙方', '不该动到别的单元格')
 })
 
 // ==================== ppt_get_slides ====================

@@ -300,6 +300,37 @@ function installWps(opts = {}) {
   return { state, doc, listTemplate }
 }
 
+/* ============ 锚点归一化与带证据的报错（dev-board#286） ============ */
+
+test('锚点归一化：文档里是全角括号+弯引号，模型给半角+直引号也要命中', async () => {
+  // 律师核对时"两边一模一样"，逐字比较却必然失配——这正是用户反复看到
+  // 「未找到锚点文本，请确认 anchorText 与文档内容精确一致」的那一类。
+  const { state } = installWps({ text: '第三条　违约责任（含“逾期利息”）由甲方承担。\r' })
+  const out = await H.insert_text({ anchorText: '违约责任(含"逾期利息")', text: '【补充】', position: 'after' })
+  assert.equal(out.inserted, true)
+  assert.ok(state.text.includes('【补充】'), `应已插入，实际正文：${state.text}`)
+})
+
+test('锚点归一化：不间断空格与零宽字符（PDF 转出来的文书里成片都是）不该毁掉匹配', async () => {
+  const { state } = installWps({ text: '合计\u00A0壹​佰万元整，于交割日支付。\r' })
+  const out = await H.insert_text({ anchorText: '合计 壹佰万元整', text: '（大写）', position: 'after' })
+  assert.equal(out.inserted, true)
+  assert.ok(state.text.includes('（大写）'), state.text)
+})
+
+test('锚点未命中的报错必须带证据：给出文档里最接近的原文与下一步', async () => {
+  installWps({ text: '第八条 甲方应于每月十五日前向乙方支付服务费。\r' })
+  await assert.rejects(
+    H.insert_text({ anchorText: '甲方应于每月十日前向乙方支付服务费', text: 'x', position: 'after' }),
+    (e) => {
+      assert.ok(/最接近的一段原文/.test(e.message), `报错要摆出候选：${e.message}`)
+      assert.ok(/十五日/.test(e.message), '候选片段要是文档原文')
+      assert.ok(/重试|重新读取/.test(e.message), '要告诉模型下一步做什么')
+      return true
+    }
+  )
+})
+
 /* ==================== get_text / get_selection / search ==================== */
 
 test('get_text：返回全文与截断标记', async () => {

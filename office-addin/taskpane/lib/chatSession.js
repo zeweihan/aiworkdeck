@@ -778,12 +778,29 @@ function handleEvent(evt, dataStr) {
     }
     commitDocHash()
     let status = ''
-    try { status = String(JSON.parse(dataStr).status || '') } catch (e) { /* 无 status 按普通收尾 */ }
+    let reason = ''
+    try {
+      const d = JSON.parse(dataStr)
+      status = String(d.status || '')
+      reason = String(d.reason || '')
+    } catch (e) { /* 无 status 按普通收尾 */ }
+    const lower = status.toLowerCase()
+    // 后端的 bubble_end 有五种 status：finished / paused(max_depth|max_tokens) /
+    // awaiting_approval / awaiting_input / 无（空信封）。
+    // **只有 finished 与空信封算"写完了"**——paused 是编排器撞上步数或长度预算主动停机，
+    // awaiting_* 是球在用户这边。此前它们统统被渲染成「已完成 · N 秒」，
+    // 用户以为活干完了，其实还差一半（dev-board#288）。
+    const stoppedEarly = lower === 'paused'
+    const ballWithUser = lower === 'awaiting_input' || lower === 'awaiting_approval'
     const finished = currentAssistant
     finishStreaming()
+    if (stoppedEarly && finished) {
+      finished.notice = reason === 'max_tokens' ? t('pausedMaxTokens') : t('pausedMaxDepth')
+    }
+    if (ballWithUser && lower === 'awaiting_approval') notice.value = t('awaitingConfirmation')
     // 显式完成态（dev-board#147）：光标消失太隐晦，「写完了没」要有明示。
-    // 只有正常收尾才标——error/cancelled 各有自己的可见反馈。
-    if (finished && !finished.error && status.toLowerCase() !== 'awaiting_input') {
+    // 只有正常收尾才标——error/cancelled/paused/awaiting_* 各有自己的可见反馈。
+    if (finished && !finished.error && !stoppedEarly && !ballWithUser) {
       finished.durationMs = lastPerf.value ? lastPerf.value.totalMs : 0
       if (hasVisibleContent(finished)) {
         finished.done = true
@@ -798,7 +815,7 @@ function handleEvent(evt, dataStr) {
     // awaiting_input：编排器为了反问主动停机，球在用户这边。输入框此时已解锁
     // （答案就是新一轮普通用户消息），只补一行状态提示，别让人以为回答被吞了。
     // notice 由 finishStreaming 清空，所以要放在它之后。
-    if (status.toLowerCase() === 'awaiting_input') notice.value = t('awaitingAnswer')
+    if (lower === 'awaiting_input') notice.value = t('awaitingAnswer')
   } else if (evt === 'error') {
     let msg = t('executionError')
     try { msg = JSON.parse(dataStr).message || msg } catch (e) { /* ignore */ }
@@ -850,11 +867,16 @@ function handleRunState(dataStr) {
   let status = null
   try { status = JSON.parse(dataStr).status } catch (e) { /* ignore */ }
   const name = status ? String(status).toUpperCase() : ''
-  const generating = name === 'RUNNING' || name === 'PAUSED'
-  const awaitingUser = name === 'AWAITING_APPROVAL' || name === 'AWAITING_INPUT'
-  const awaitingHint = name === 'AWAITING_INPUT'
-    ? t('awaitingAnswer')
-    : t('awaitingConfirmation')
+  // **PAUSED 不算「还在生成」**（dev-board#288）：它是编排器撞上步数/长度预算主动停机，
+  // 后端此刻什么都没在跑。桌面端有「继续」按钮，任务窗格没有——把它并进 generating
+  // 会把输入框永久锁死，用户既等不到下文也答不上话。与 AWAITING_* 同一条纪律
+  //（「等用户的状态不许锁输入」），只是提示语不同。
+  const generating = name === 'RUNNING'
+  const stoppedEarly = name === 'PAUSED'
+  const awaitingUser = name === 'AWAITING_APPROVAL' || name === 'AWAITING_INPUT' || stoppedEarly
+  const awaitingHint = stoppedEarly
+    ? t('pausedMaxDepth')
+    : (name === 'AWAITING_INPUT' ? t('awaitingAnswer') : t('awaitingConfirmation'))
 
   if (restorePending) {
     restorePending = false
@@ -875,8 +897,15 @@ function handleRunState(dataStr) {
     const finished = currentAssistant
     finishStreaming()
     // 断线期间漏掉了 bubble_end：解锁之后把「等用户」这一档的提示补回来
-    if (awaitingUser) notice.value = awaitingHint
-    else if (finished && !finished.error) finished.done = true
+    if (awaitingUser) {
+      notice.value = awaitingHint
+    } else if (name === 'COMPLETED' || name === 'FINISHED') {
+      if (finished && !finished.error) finished.done = true
+    } else if (finished && !finished.error) {
+      // ERROR、或后端重启后拿不到状态（name 为空）：**不许标「已完成」**。
+      // 这一轮多半没跑完，标成完成等于替后端把话说满（dev-board#288）。
+      finished.notice = t('runEndedUnknown')
+    }
   }
 }
 

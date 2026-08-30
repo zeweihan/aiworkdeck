@@ -90,8 +90,16 @@ public class OfficeBridgeService {
 
         } catch (TimeoutException e) {
             log.warn("Office command timed out: command={}, requestId={}", command, requestId);
-            return errorJson("操作超时：Office 插件未在 " + timeoutSeconds
-                    + " 秒内返回结果。请确认 Word 中的插件任务窗格处于打开状态。");
+            // **超时不等于没做**（dev-board#288）：命令已经下发给任务窗格，宿主那边很可能
+            // 已经落笔了，只是回执没能在窗口期内回来（断线空档、大文档慢命令都会）。
+            // 旧文案只说「超时」，模型的自然反应就是原样重试一次——于是同一段内容
+            // 被写进文档两遍，律师拿到的是重复条款。所以这里必须明确禁止直接重试，
+            // 并指出先核对。写入类命令尤其要说死。
+            return errorJson("操作超时：插件未在 " + timeoutSeconds + " 秒内返回结果。"
+                    + "注意：命令已经下发，宿主端**可能已经执行成功**，只是回执没回来。"
+                    + "请不要直接重试这条写入命令（会写入两遍），"
+                    + "先用读取类工具核对文档当前内容，确认没生效再重试。"
+                    + "若反复超时，请提示用户确认 Word/WPS 里的任务窗格仍然打开着。");
         } catch (Exception e) {
             log.error("Failed to execute office command: command={}", command, e);
             return errorJson("Office 命令执行异常：" + e.getMessage());

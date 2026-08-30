@@ -78,6 +78,7 @@ public class AiAgentController {
     public ResponseEntity<SseEmitter> connect(@PathVariable String conversationId,
                               @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
                               @RequestHeader(value = "X-Client-Instance", required = false) String clientInstance,
+                              @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId,
                               HttpServletResponse response) {
         // 归属校验：emitter 表只按 conversationId 索引且新连接直接覆盖旧连接，
         // 此前 userId 仅用于打日志，任何人猜到会话 ID 即可劫持他人的整条输出流
@@ -96,7 +97,8 @@ public class AiAgentController {
         log.info("Client connecting to SSE: conversationId={}, userId={}", conversationId, userId);
         // clientInstance = 任务窗格实例身份（缺省 null：桌面端与旧版插件不上送，行为不变）。
         // 换了实例时后端做一次性移交而不是无声互顶，见 SseEmitterService.createConnection。
-        SseEmitter emitter = sseEmitterService.createConnection(conversationId, clientInstance);
+        // lastEventId = SSE 规范的断点续传游标（缺省 null：桌面端与旧版插件不上送，行为不变）。
+        SseEmitter emitter = sseEmitterService.createConnection(conversationId, clientInstance, lastEventId);
         
         // Check for active stream recovery
         String snapshot = agentOrchestrator.getRecoverySnapshot(conversationId);

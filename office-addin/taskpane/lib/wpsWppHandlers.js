@@ -29,6 +29,10 @@ const msoShapeIsoscelesTriangle = 7
 const msoShapeOval = 9
 /** MsoShapeType（识别用） */
 const msoTable = 19
+/** MsoShapeType：组合（与 wpsDoc.collectShapeText 同一常量） */
+const msoGroup = 6
+/** 组合套组合的递归深度上限，防病态嵌套 */
+const MAX_SHAPE_DEPTH = 4
 /** ActionSettings 索引与动作类型 */
 const ppMouseClick = 1
 const ppActionHyperlink = 7
@@ -135,6 +139,65 @@ function shapeText(sp) {
   return String(sp.TextFrame.TextRange.Text || '')
 }
 
+/**
+ * 一页上**所有承载文字的形状**，含表格单元格与组合子形状。
+ *
+ * 为什么必须递归（dev-board#288）：演示稿的正文常常不在顶层文本框里——对比表、
+ * 条款对照、时间表的文字在 `Table.Cell(r,c).Shape` 里，图示+标注、SmartArt 转出来的
+ * 组合的文字在子形状里。读取侧（`wpsDoc.collectShapeText`）早就按"表格 → 组合递归 →
+ * 普通文本框"三条路收，**写入侧一直只看顶层 TextFrame**：模型在上下文里读得到那些字，
+ * 一改就报"未找到"，用户看着满屏字，AI 说这页没有这段内容。
+ *
+ * 任何一步失败只跳过该形状，不许拖垮整页（与读取侧同一条纪律）。
+ *
+ * @returns {Array<{shape:object, label:string}>} label 形如 "3"、"3[2,1]"（表格第 2 行 1 列）、
+ *          "5/2"（组合内第 2 个子形状），用于返回值里说清改到了哪儿
+ */
+function textBearingShapes(shapes, depth = 0, prefix = '') {
+  const out = []
+  let count = 0
+  try { count = Number(shapes.Count) || 0 } catch (e) { return out }
+  for (let j = 1; j <= count; j++) {
+    let sp = null
+    try { sp = shapes.Item(j) } catch (e) { continue }
+    if (!sp) continue
+    const label = prefix ? `${prefix}/${j}` : String(j)
+    let isTable = false
+    try { isTable = shapeIsTable(sp) } catch (e) { /* 无 HasTable 属性的宿主版本 */ }
+    if (isTable) {
+      let collected = false
+      try {
+        const table = sp.Table
+        const rows = Number(table.Rows.Count) || 0
+        const cols = Number(table.Columns.Count) || 0
+        for (let r = 1; r <= rows; r++) {
+          for (let c = 1; c <= cols; c++) {
+            try {
+              const cell = table.Cell(r, c).Shape
+              if (shapeHasText(cell)) out.push({ shape: cell, label: `${label}[${r},${c}]` })
+            } catch (e) { /* 合并单元格等取不到，跳过这一格 */ }
+          }
+        }
+        collected = true
+      } catch (e) { /* 取不到表格结构就按普通形状继续 */ }
+      if (collected) continue
+    }
+    let isGroup = false
+    try { isGroup = Number(sp.Type) === msoGroup } catch (e) { /* 取不到 Type */ }
+    if (isGroup && depth < MAX_SHAPE_DEPTH) {
+      let collected = false
+      try {
+        const children = textBearingShapes(sp.GroupItems, depth + 1, label)
+        for (const child of children) out.push(child)
+        collected = true
+      } catch (e) { /* 取不到子项就按普通形状处理 */ }
+      if (collected) continue
+    }
+    if (shapeHasText(sp)) out.push({ shape: sp, label })
+  }
+  return out
+}
+
 /** 段落分隔符归一：WPS/VBA 的 TextRange.Text 段落间是 \r，统一成 \n 再比对 */
 function normalizeBreaks(text) {
   return String(text).replace(/\r\n?/g, '\n')
@@ -195,13 +258,11 @@ export const WPS_WPP_HANDLERS = {
     const count = pres.Slides.Count
     const slides = []
     for (let i = 1; i <= count; i++) {
-      const shapes = pres.Slides.Item(i).Shapes
       const texts = []
-      const shapeCount = shapes.Count // 提出循环条件：写在条件位每轮都要跨桥重取
-      for (let j = 1; j <= shapeCount; j++) {
-        const sp = shapes.Item(j)
-        if (!shapeHasText(sp)) continue
-        const t = shapeText(sp).trim()
+      // 表格单元格与组合子形状里的文字也要读到——否则模型在这里看到「这页没内容」，
+      // 而随消息内联上送的正文里明明有（两边口径不一致比两边都读不到更糟）
+      for (const { shape } of textBearingShapes(pres.Slides.Item(i).Shapes)) {
+        const t = shapeText(shape).trim()
         if (t) texts.push(t)
       }
       slides.push({ slide: i, texts })
@@ -219,11 +280,7 @@ export const WPS_WPP_HANDLERS = {
     const slideCount = pres.Slides.Count // 循环条件里重取 Count 是白跑跨桥调用
     for (let i = 1; i <= slideCount; i++) {
       let slideTouched = false
-      const shapes = pres.Slides.Item(i).Shapes
-      const shapeCount = shapes.Count
-      for (let j = 1; j <= shapeCount; j++) {
-        const sp = shapes.Item(j)
-        if (!shapeHasText(sp)) continue
+      for (const { shape: sp } of textBearingShapes(pres.Slides.Item(i).Shapes)) {
         // TextRange.Replace 原生保留其余文字格式（优于整串回写 .Text）；
         // 找不到返回 null 而非抛错。MatchCase 传 msoTrue 对齐 Office 面的区分大小写口径。
         //

@@ -236,24 +236,44 @@ const xlErrors = 16
 /** 一次写入最多报几个公式错误（错误单元格通常极少，设个上限防止病态输入刷屏） */
 const MAX_FORMULA_ERRORS = 50
 
+/** 列宽字符数的下限：0 等于把列藏起来，绝不能是折算误差的落点 */
+const MIN_COLUMN_WIDTH_CHARS = 0.1
+
 /**
  * 把列宽设成指定磅数。先按实测仿射式给初值，再读回一次实际磅数、就地解出本工作簿
  * 真实的内边距回代修正一次——一次性命令，多两三次跨桥调用换来准确的列宽。
+ *
+ * **回读必须只量一列**（dev-board#288）：`Range.Width` 是整片区域的总宽，
+ * 一次设三列时读回来的是三列之和。旧实现拿它当单列宽去解内边距，算出的
+ * padding 大得离谱，回代后的 chars 变成负数、被 `Math.max(0, ...)` 夹成 **0**——
+ * `ColumnWidth = 0` 在 Excel/WPS 语义里就是**把这几列藏起来**，
+ * 而返回值照报成功。用户的表格凭空少了三列，还以为是自己手滑。
  */
 function setColumnWidthPoints(range, points) {
-  let chars = Math.max(0, (points - COLUMN_WIDTH_PADDING_PT) / POINTS_PER_CHAR)
+  const initialChars = Math.max(MIN_COLUMN_WIDTH_CHARS, (points - COLUMN_WIDTH_PADDING_PT) / POINTS_PER_CHAR)
+  let chars = initialChars
   range.ColumnWidth = chars
+  // 只量第一列：多列区间的 Width 是总和，拿来解内边距必然算错
+  let probe = range
+  try {
+    if (range.Columns && typeof range.Columns.Item === 'function') probe = range.Columns.Item(1)
+  } catch (e) { /* 取不到单列就退回整段，下面的合理性闸会兜住 */ }
   let actual = null
   try {
-    actual = Number(range.Width)
+    actual = Number(probe.Width)
   } catch (e) { /* 读不回实际宽度就用初值收工 */ }
   if (Number.isFinite(actual) && actual > 0 && Math.abs(actual - points) > 0.5) {
     const padding = actual - POINTS_PER_CHAR * chars
-    chars = Math.max(0, (points - padding) / POINTS_PER_CHAR)
-    range.ColumnWidth = chars
-    try {
-      actual = Number(range.Width)
-    } catch (e) { /* 保留上一次读数 */ }
+    const corrected = (points - padding) / POINTS_PER_CHAR
+    // 合理性闸：回代结果必须是个正常列宽。折算一旦跑偏（探针没取到单列、
+    // 宿主 Width 语义不同、字体特殊），宁可保留初值也不能把列宽写成 0。
+    if (Number.isFinite(corrected) && corrected >= MIN_COLUMN_WIDTH_CHARS) {
+      chars = corrected
+      range.ColumnWidth = chars
+      try {
+        actual = Number(probe.Width)
+      } catch (e) { /* 保留上一次读数 */ }
+    }
   }
   return { chars, actualPoints: Number.isFinite(actual) ? actual : null }
 }

@@ -352,6 +352,36 @@ test('excel_edit_rows_cols：列宽落笔后读回实际磅数并就地校正一
   } finally { restore() }
 })
 
+test('excel_edit_rows_cols：一次设多列时不许把列宽算成 0（Range.Width 是总宽，不是单列宽）', async () => {
+  // dev-board#288：`Range.Width` 在多列区间上返回的是**这几列的总和**。旧实现拿它当
+  // 单列宽去解内边距，算出的 padding 大得离谱，回代后的 chars 变成负数被夹成 0——
+  // `ColumnWidth = 0` 在 Excel/WPS 语义里就是**把这几列藏起来**，返回值还照报成功。
+  // 用户的表格凭空少三列，最难查的那一类。
+  const PAD = 10
+  const COUNT = 3
+  const state = { cw: 0 }
+  const singleCol = { get Width() { return 5.625 * state.cw + PAD } }
+  const colRange = {
+    get ColumnWidth() { return state.cw },
+    set ColumnWidth(v) { state.cw = v },
+    // 多列区间的 Width = 各列之和
+    get Width() { return COUNT * (5.625 * state.cw + PAD) },
+    Columns: { Item(i) { return i === 1 ? singleCol : singleCol } }
+  }
+  const { restore } = makeSingleSheetEnv({
+    Columns: { Item() { return colRange } }
+  })
+  try {
+    const out = await WPS_ET_HANDLERS.excel_edit_rows_cols({
+      action: 'set_width', index: 0, count: COUNT, size: 60
+    })
+    assert.ok(state.cw > 0, `列宽绝不能被写成 0（会把列藏起来），实际 ${state.cw}`)
+    assert.ok(Math.abs(singleCol.Width - 60) < 0.01,
+      `按单列校正后应命中 60 磅，实际 ${singleCol.Width}`)
+    assert.equal(out.size, 60)
+  } finally { restore() }
+})
+
 test('excel_edit_rows_cols：插行走 Rows.Item + Insert(xlShiftDown)', async () => {
   let insertArg = null
   let rowKey = null
