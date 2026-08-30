@@ -98,6 +98,12 @@ export const ZH = {
   remoteNoProjects: '（暂无项目）',
   remoteProjectNotice: '该项目在远程设备上，仅可作为跨设备文件传输的来源或目标，AI 会话请选择本服务上的项目。',
 
+  // ---- App.vue / chatSession：归档绑定与文档镜像（dev-board#297/#298/#299）----
+  archiveBoundHint: '已绑定桌面项目「{name}」：这里的对话与文档副本将自动归档到该项目',
+  archiveBinding: '正在绑定桌面项目...',
+  archiveLinkUnsupported: '此服务器暂不支持归档绑定（需升级云后端）',
+  archiveCaptureUnsupported: '当前环境无法读取文档文件，文档副本不会归档（对话记录仍会同步）',
+
   // ---- ChatView.vue：空态 ----
   emptyHint: '与 AI 讨论当前文档或项目事务。',
   connectionNotReady: '尚未登录：点击右上角「登录」连接账户。',
@@ -458,6 +464,12 @@ export const EN = {
   unknownDevice: 'Unknown device',
   remoteNoProjects: '(no projects yet)',
   remoteProjectNotice: 'This project lives on a remote device. It can only be used as a source or target for cross-device file transfer; for AI conversations, please select a project on this server.',
+
+  // ---- App.vue / chatSession：归档绑定与文档镜像（dev-board#297/#298/#299）----
+  archiveBoundHint: 'Bound to desktop project "{name}": conversations and document copies here will be archived to it automatically',
+  archiveBinding: 'Binding desktop project...',
+  archiveLinkUnsupported: 'This server does not support archive binding yet (cloud backend upgrade required)',
+  archiveCaptureUnsupported: 'This environment cannot read the document file, so document copies will not be archived (conversation history still syncs)',
 
   // ---- ChatView.vue：空态 ----
   emptyHint: 'Ask AI about the current document or project.',

@@ -282,6 +282,23 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
 - **`project_ai_message` 的索引是 2026-08 随项目概览页 A 期才补上的**：`idx_ai_message_project_created (project_id, created_at)` 与 `idx_ai_message_conversation_created (conversation_id, created_at)`，定义在实体的 `@Table(indexes = {...})` 上，由 `ProjectAiMessageIndexTest` 读 INFORMATION_SCHEMA 钉住。在此之前这张表零 `@Index`、线上只有主键索引，项目级会话汇总是全表扫描套全表扫描。四个 profile 全是 `ddl-auto: update`、无 flyway/liquibase、无 schema.sql，**索引被谁顺手删掉不会报错、只会悄悄变慢**——所以才用测试守着。（配套的「删项目清 AI 数据」级联清理仍属后续批次。）
 - **会话列表有两条通道，改一条前先确认改的是哪条**：user-scoped 的 `/api/ai/conversations`（裸数组、内存态 runStatus、AI 面板历史下拉在用）与 project-scoped 的 `/api/projects/{id}/conversations`（信封、表态 runStatus、复合游标、项目概览页在用）。两者的 SQL、鉴权口径、返回形状全都不同，**共用的只有 `ProjectAiMessageService` 那三个 private 清洗方法**。改清洗逻辑会同时影响两条，改 SQL/鉴权只影响一条。
 
+- **插件对话镜像与只读会话（dev-board#298，2026-08-30）**：`project_ai_message` 新增可空列
+  `sourceChannel`（office-word / wps-excel 等六值）与 `sourceMessageId`（云端消息 id，导入幂等键）。
+  云后端上，绑定项目（addin_project_link 有映射）的每条消息落库后经
+  `AddinConvSyncService.record` 进 outbox（挂在 `ProjectAiMessageService` 三个落库口的
+  `mirror()`，**可选 field 注入**，桌面端 link 表恒空零成本）；桌面端 `MobileRelayClientService.
+  pollConversationSync` 拉取并经 `importExternalMessage` 导入（幂等 upsert、content 空白/坏 role
+  拒收、**createdAt 严格递增钳制**——历史回放只按 created_at 排序无 tiebreaker）。
+  两条会话列表通道的 summary 都多了 `sourceChannel` 尾列（JPQL 各加一个标量子查询）。
+  **镜像会话在桌面端只读**：`/api/agent/chat` 对 `isMirroredConversation` 的会话回 409
+  （插件那头还在续写，双头写会交错）；续聊走 `POST /api/ai/conversation/{id}/fork`
+  （`forkConversation`：整条复制成 conv-毫秒 新会话，标题加「（分支）」、来源字段清空、
+  userId 改发起者、原始时间保留）。前端只读态在 ChatInterface 的 `externalReadOnly` prop
+  （值=来源文案，`utils/conversationSource.js` 是 sourceChannel→文案的唯一映射）。
+  `officeFamily`（office/wps）随 chat 请求上送，ClientCapabilityService 内存登记，
+  只用于镜像来源标注、不参与工具过滤。护栏：`ProjectAiMessageImportForkTest` /
+  `AddinConvSyncServiceTest` / `MobileRelayClientHttpTest` 的对话镜像组。
+
 ## 辅助模型、子 Agent 与身份作用域（2026-08 供应商三档改造）
 
 - **辅助模型（便宜档）**：`ChatModelFactory.getAuxChatModel()` 是「用户看不见但每轮都在跑」的调用的唯一入口，

@@ -1425,6 +1425,8 @@
                 :history-badge="historyBadge"
                 :active-tab="currentActiveTab"
                 :active-tab-pane="focusedPane"
+                :external-read-only="pluginReadOnlyLabel"
+                @fork-conversation="forkPluginConversation"
                 @close="toggleAiPanel"
                 @toggle-history="toggleHistoryDrawer"
                 @new-chat="startNewChat"
@@ -1554,7 +1556,11 @@
                     <view v-else v-for="chat in chatHistoryList" :key="chat.id" class="menu-item" @tap="loadHistoryChat(chat)">
                         <view v-if="convDotClass(chat)" class="conv-dot" :class="convDotClass(chat)"></view>
                         <view style="flex:1; overflow:hidden;">
-                            <text class="item-title" style="display:block; font-size:13px; color:var(--awd-text); margin-bottom:2px;">{{ chat.title || $t('workbench.unnamedConversation') }}</text>
+                            <view style="display:flex; align-items:center; gap:6px; margin-bottom:2px;">
+                                <text class="item-title" style="font-size:13px; color:var(--awd-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ chat.title || $t('workbench.unnamedConversation') }}</text>
+                                <!-- 插件镜像会话来源角标（dev-board#298） -->
+                                <text v-if="chat.sourceChannel" class="conv-source-chip">{{ convSourceLabel(chat) }}</text>
+                            </view>
                             <text class="item-preview" style="display:block; font-size:11px; color:var(--awd-text-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ chat.lastMessage }}</text>
                         </view>
                         <view style="display:flex; flex-direction:column; align-items:flex-end; margin-left:8px; flex-shrink:0;">
@@ -1998,6 +2004,7 @@ import {
   getAiHistory,
 
   getAiConversations,
+  forkAiConversation, // 插件镜像会话「另起分支继续」（dev-board#298）
   getPlugins, // Added
   resolvePluginEntryUrl,
   getSkills,
@@ -2022,6 +2029,7 @@ import { getCurrentUser } from '@/utils/auth.js'
 import { getInitial } from '@/utils/textInitial.js'
 import { recordProjectVisit, getRecentProjectIds, syncRecentToMenuFetching } from '@/utils/recentProjects.js'
 import { markdownToPlainText } from '@/utils/markdownPlain.js'
+import { sourceChannelLabel } from '@/utils/conversationSource.js'
 import { FILE_BATCH_ACTIONS, FILE_TREE_QUICK_ACTIONS } from '@/config/fileActions.js'
 import {
   DOCKS,
@@ -2232,6 +2240,10 @@ export default {
       loadingHistory: false,
       chatHistoryList: [],
       currentConversationId: null, // Added for tracking current session
+      // 插件镜像会话只读态（dev-board#298）：当前会话的 sourceChannel（null=本地可写）。
+      // 状态跟着会话走：loadHistoryChat/startNewChat 都会重设，不做全局粘住。
+      pluginReadOnlySource: null,
+      forkingConversation: false, // fork 请求在飞时防连点
       // 后台任务状态点：上次轮询的 {conversationId: runStatus} 快照 + 跑完未读集合
       convStatusSnapshot: {},
       unreadConversations: [],
@@ -2405,6 +2417,10 @@ export default {
     ...themeSwitchComputed,
     GLYPHS() {
       return GLYPHS
+    },
+    /** 当前会话是插件镜像时的来源文案（如「Word 插件」），空串 = 可写本地会话。 */
+    pluginReadOnlyLabel() {
+      return sourceChannelLabel(this.pluginReadOnlySource)
     },
     /**
      * 顶栏宽限 chip 与说明弹窗的文案。两种宽限共用一个壳，只有文案与主按钮不同：
@@ -6003,6 +6019,7 @@ export default {
     startNewChat() {
       this.aiMessages = []
       this.currentConversationId = null
+      this.pluginReadOnlySource = null // 新对话必然可写，清掉插件只读态
       this.scrollToBottom()
       this.aiContextPreview = null
       // Retain current assistant/model settings? Yes.
@@ -6044,8 +6061,16 @@ export default {
               lastMessage: item.lastMessage ? item.lastMessage.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').substring(0, 60) + (item.lastMessage.length > 60 ? '...' : '') : '',
               conversationId: item.conversationId,
               runStatus: item.runStatus || null,
+              // 插件镜像会话来源（dev-board#298）：null=本地会话，非空=office-word 等通道值
+              sourceChannel: item.sourceChannel || null,
               unread: this.unreadConversations.includes(item.conversationId)
           }))
+          // 只读态跟列表刷新对齐：深链/onLoad 会先 loadHistoryChat 后拿到列表，
+          // 那时查不到 sourceChannel，这里补上（不在列表里的会话不动，避免误清）
+          if (this.currentConversationId) {
+              const cur = this.chatHistoryList.find(c => c.conversationId === this.currentConversationId)
+              if (cur) this.pluginReadOnlySource = cur.sourceChannel || null
+          }
       } catch (e) {
         console.error('Fetch history failed', e)
         if (!quiet) uni.showToast({ title: this.$t('workbench.loadHistoryFailed'), icon: 'none' })
@@ -6057,6 +6082,11 @@ export default {
     async loadHistoryChat(chat) {
         if (!chat || !chat.conversationId) return
         this.currentConversationId = chat.conversationId
+        // 插件镜像会话只读态（dev-board#298）：跟着会话走。深链只带 conversationId
+        // 时从历史列表补查；两处都查不到按可写处理，fetchChatHistory 回来会再对齐。
+        this.pluginReadOnlySource = chat.sourceChannel !== undefined
+            ? (chat.sourceChannel || null)
+            : (((this.chatHistoryList || []).find(c => c.conversationId === chat.conversationId) || {}).sourceChannel || null)
         // 点开即视为已读：清掉「后台跑完未读」蓝点
         const unreadIdx = this.unreadConversations.indexOf(chat.conversationId)
         if (unreadIdx >= 0) this.unreadConversations.splice(unreadIdx, 1)
@@ -6090,6 +6120,35 @@ export default {
             uni.showToast({ title: this.$t('workbench.loadConversationFailed'), icon: 'none' })
         } finally {
             this.loadingHistory = false
+        }
+    },
+    /** 历史抽屉里的来源角标文案（映射唯一出处：utils/conversationSource.js）。 */
+    convSourceLabel(chat) {
+        return sourceChannelLabel(chat && chat.sourceChannel)
+    },
+    /**
+     * 插件镜像会话「另起分支继续」（dev-board#298）：把当前只读会话复制成一条
+     * 可写本地会话，切过去并解除只读。ChatInterface 的 readonly-bar 按钮触发。
+     */
+    async forkPluginConversation() {
+        const sourceId = this.currentConversationId
+        if (!sourceId || this.forkingConversation) return
+        this.forkingConversation = true
+        try {
+            const data = await forkAiConversation(sourceId)
+            const newId = data && data.conversationId
+            if (!newId) throw new Error(this.$t('workbench.forkConversationFailed'))
+            // 先刷历史列表（quiet），loadHistoryChat 会从列表查新会话的
+            // sourceChannel（本地分支为 null）从而解除只读
+            await this.fetchChatHistory(true)
+            // 用户等 fork 的间隙切走了会话就不抢占（同 loadHistoryChat 的竞态口径）
+            if (this.currentConversationId !== sourceId) return
+            await this.loadHistoryChat({ conversationId: newId })
+        } catch (e) {
+            console.error('Fork conversation failed', e)
+            uni.showToast({ title: (e && e.message) || this.$t('workbench.forkConversationFailed'), icon: 'none' })
+        } finally {
+            this.forkingConversation = false
         }
     },
     // 会话状态 → 状态点样式类。黄=等用户（暂停/待审批）、蓝=后台跑完未读、

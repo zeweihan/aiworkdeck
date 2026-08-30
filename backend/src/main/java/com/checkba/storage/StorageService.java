@@ -54,11 +54,28 @@ public interface StorageService {
 
     /**
      * 删除文件
-     * 
+     *
      * @param fileId 文件ID
      * @throws StorageException 存储异常
      */
     void delete(String fileId) throws StorageException;
+
+    /**
+     * 把 fromId 的内容挪到 toId（目标已存在则覆盖），成功后 fromId 不复存在。
+     *
+     * <p>「先写临时 key、再 move 顶替」是覆盖式落盘的原子化手段（插件文档镜像，
+     * dev-board#299）：直接 save 到最终 key 中途失败会留半截文件。本地实现用
+     * {@code Files.move}（同卷原子）；默认实现退化为 load→save→delete 流拷贝
+     * （对象存储没有原子 move，覆盖窗口收窄到对象存储自身的 put 原子性）。
+     */
+    default void move(String fromId, String toId) throws StorageException {
+        try (InputStream in = load(fromId).getInputStream()) {
+            save(toId, in);
+        } catch (java.io.IOException e) {
+            throw new StorageException("文件移动失败: " + e.getMessage(), e);
+        }
+        delete(fromId);
+    }
 
     /**
      * 检查文件是否存在

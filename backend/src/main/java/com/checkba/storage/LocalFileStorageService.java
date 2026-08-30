@@ -122,6 +122,24 @@ public class LocalFileStorageService implements StorageService {
         return Files.exists(filePath);
     }
 
+    /** 原子 move（同卷）：覆盖式落盘的收尾步。ATOMIC_MOVE 不支持时退化为普通 REPLACE move。 */
+    @Override
+    public void move(String fromId, String toId) throws StorageException {
+        Path from = resolveFilePath(fromId);
+        Path to = resolveFilePath(toId);
+        try {
+            Files.createDirectories(to.getParent());
+            try {
+                Files.move(from, to, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+                Files.move(from, to, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (IOException e) {
+            log.error("文件移动失败: {} -> {}", from, to, e);
+            throw new StorageException("文件移动失败: " + e.getMessage(), e);
+        }
+    }
+
     @Override
     public String getUrl(String fileId) {
         return null;

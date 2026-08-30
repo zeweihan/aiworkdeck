@@ -3,16 +3,19 @@ import {
   postChat, postCancel, postOfficeResult, createConversation, fetchConversationHistory,
   fetchConversations, fetchModels, fetchSkills, fetchProjectFiles,
   createProjectFile, uploadFileBytes, ensureAddinDefaultProject,
-  deleteConversation as apiDeleteConversation, renameConversation as apiRenameConversation
+  deleteConversation as apiDeleteConversation, renameConversation as apiRenameConversation,
+  uploadRelayDocument
 } from './api.js'
 import { createSseConnection, createTagStreamParser } from './sse.js'
 import {
   readActiveDocument, readDocumentMeta, detectHost, hashContent,
-  executeCommand, commandDisplayName
+  executeCommand, commandDisplayName, hostFamily
 } from './hostBridge.js'
 import {
-  loadConversationId, saveConversationId, isConfigured, loadModelChoice, saveModelChoice
+  loadConversationId, saveConversationId, isConfigured, loadModelChoice, saveModelChoice,
+  loadArchiveLinks
 } from './settings.js'
+import { isReadOnlyCommand, captureDocumentBytes, sha256Hex } from './docSnapshot.js'
 import { t } from './i18n.js'
 
 /**
@@ -603,6 +606,83 @@ function finishStreaming() {
   toolPrep.value = false
   notice.value = ''
   perfEnd()
+  // 文档镜像（dev-board#299）：本轮真的写过文档且项目有归档绑定才触发；
+  // finishStreaming 是所有轮次终态（bubble_end/error/cancelled/run_state 兜底）的
+  // 单一汇合点，挂这里保证「写了就有机会归档」，maybeArchiveSnapshot 自身全程无害降级
+  maybeArchiveSnapshot()
+}
+
+// ==================== 文档镜像（dev-board#299） ====================
+
+/** 本轮是否执行过成功的写入类 office_command（handleClientAction 置位，快照触发后清零） */
+let turnHadWrite = false
+let snapshotInFlight = false
+let snapshotQueued = false
+/** 每个 (设备|项目|文件) 上一次成功上传的内容哈希：没变就不重复上传 */
+const lastSnapshotHash = new Map()
+/** 「此环境拿不到文档字节」只提示一次（拍板点 4：只提示不硬凑） */
+let archiveUnsupportedNotified = false
+
+function randomId() {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  } catch (e) { /* 老内核 */ }
+  // 服务端 clientMediaId 只收 UUID 形态（路径穿越围栏），手工拼一个合规的
+  const hex = () => Math.floor(Math.random() * 0xffff).toString(16).padStart(4, '0')
+  return `${hex()}${hex()}-${hex()}-4${hex().slice(1)}-8${hex().slice(1)}-${hex()}${hex()}${hex()}`
+}
+
+function maybeArchiveSnapshot() {
+  if (!turnHadWrite) return
+  const pid = ctx && ctx.projectId ? String(ctx.projectId) : ''
+  const binding = pid ? loadArchiveLinks()[pid] : null
+  if (!binding || !binding.deviceId || !binding.projectKey) {
+    turnHadWrite = false
+    return
+  }
+  turnHadWrite = false
+  if (snapshotInFlight) {
+    snapshotQueued = true
+    return
+  }
+  runArchiveSnapshot(binding)
+}
+
+async function runArchiveSnapshot(binding) {
+  snapshotInFlight = true
+  try {
+    const cap = await captureDocumentBytes()
+    if (!cap) {
+      // 网页版 Word/Excel、未保存过的 WPS 新文档、或 WPS FileSystem 链不可用：
+      // 诚实降级，绝不上传文本重构的假文档
+      if (!archiveUnsupportedNotified) {
+        archiveUnsupportedNotified = true
+        if (!notice.value) notice.value = t('archiveCaptureUnsupported')
+      }
+      return
+    }
+    const hash = await sha256Hex(cap.bytes)
+    const key = binding.deviceId + '|' + binding.projectKey + '|' + cap.fileName
+    if (hash && lastSnapshotHash.get(key) === hash) return
+    await uploadRelayDocument(ctx.settings, {
+      bytes: cap.bytes,
+      fileName: cap.fileName,
+      deviceId: binding.deviceId,
+      projectKey: binding.projectKey,
+      clientMediaId: randomId()
+    })
+    // 哈希在上传成功后才提交：失败时下一轮写入会连同本轮内容一起重传
+    if (hash) lastSnapshotHash.set(key, hash)
+    console.info('[AddinArchive] 文档快照已归档', cap.fileName)
+  } catch (e) {
+    console.warn('[AddinArchive] 文档快照归档失败（下次写入后重试）', e)
+  } finally {
+    snapshotInFlight = false
+    if (snapshotQueued) {
+      snapshotQueued = false
+      runArchiveSnapshot(binding)
+    }
+  }
 }
 
 /** 轮次正常收尾：本轮上送的正文哈希可以作为下一轮省传的依据了 */
@@ -937,6 +1017,9 @@ async function handleClientAction(dataStr) {
   }
   chip.status = result.ok ? 'done' : 'failed'
   if (!result.ok) chip.error = result.error || ''
+  // 文档镜像触发条件（dev-board#299）：本轮有成功的写入类命令。读命令不算——
+  // 不在只读名单里的一律按写处理（多拍无害：内容哈希不变时上传会被跳过）
+  if (result.ok && !isReadOnlyCommand(action.command)) turnHadWrite = true
   try {
     await postOfficeResult(ctx.settings, {
       requestId: action.requestId,
@@ -1118,9 +1201,12 @@ export async function send(overrideText) {
         contextItems: attachedFiles.value.map((f) => ({ id: String(f.id), name: f.name, fileType: f.fileType || '' }))
       } : {}),
       // 声明客户端能力（Phase C）：后端据此让本会话只见 office_* 工具、隐藏 doc_*；
-      // officeHost 再按宿主细分（word/excel/powerpoint），点名对应工具面
+      // officeHost 再按宿主细分（word/excel/powerpoint），点名对应工具面；
+      // officeFamily（dev-board#298）只用于对话镜像的来源标注（Word 插件 vs WPS 文字），
+      // 不参与工具过滤，旧后端不认识该字段也无害
       clientCapability: 'office',
-      officeHost: detectHost() || 'word'
+      officeHost: detectHost() || 'word',
+      officeFamily: hostFamily() === 'wps' ? 'wps' : 'office'
     })
     if (perfRound) perfRound.chatAcceptedMs = perfSince()
   } catch (e) {

@@ -104,6 +104,7 @@ export default {
   newConversation: 'New Conversation',
   loadHistoryFailed: 'Failed to load history',
   loadConversationFailed: 'Failed to load conversation',
+  forkConversationFailed: 'Failed to fork conversation',
   statusRunning: 'Running',
   statusPaused: 'Paused',
   statusInterrupted: 'Interrupted',

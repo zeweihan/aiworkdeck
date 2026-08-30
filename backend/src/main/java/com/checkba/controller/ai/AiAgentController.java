@@ -157,6 +157,14 @@ public class AiAgentController {
             return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"" +
                     LangText.of("无权操作该会话", "You do not have permission for this conversation") + "\"}");
         }
+        // 插件镜像会话只读（dev-board#298）：镜像那头（插件端）还在续写同一条时间线，
+        // 桌面端直接续写会双头交错。前端已把输入区换成「另起分支继续」，这里是防旁路的
+        // 服务端护栏——续聊必须走 fork（POST /api/ai/conversation/{id}/fork）。
+        if (messageService.isMirroredConversation(request.getConversationId())) {
+            return ResponseEntity.status(409).body("{\"status\":\"error\", \"message\":\"" +
+                    LangText.of("插件同步的会话为只读，请「另起分支」后继续",
+                            "Plugin-synced conversations are read-only; fork it to continue") + "\"}");
+        }
         // message 为空/纯空白必须在入口拒绝：一旦落库，ContextAssemblerService 回放历史时
         // langchain4j 的 UserMessage.from(text) 会对空白文本抛异常——存量脏数据已经在
         // ContextAssemblerService 里加了容错，但新请求应该在这里就被挡下，不该先污染会话。
@@ -171,7 +179,7 @@ public class AiAgentController {
         // 会话级客户端能力登记（Phase C）：lowa（默认，主前端）/ office（Office 插件）/ none（纯对话）；
         // office 会话再按宿主细分（word / excel / powerpoint，缺省 word），工具可见性按宿主过滤
         clientCapabilityService.record(request.getConversationId(), request.getClientCapability(),
-                request.getOfficeHost());
+                request.getOfficeHost(), request.getOfficeFamily());
 
         agentOrchestrator.handleUserMessage(request, userId);
         
@@ -475,6 +483,12 @@ public class AiAgentController {
          */
         private String clientCapability;
         /**
+         * 可选：clientCapability=office 时的宿主家族（office / wps，缺省 office）。
+         * 只用于对话镜像的来源标注（dev-board#298），不参与工具可见性过滤——
+         * 两家族的 office_command 契约同构。
+         */
+        private String officeFamily;
+        /**
          * 可选：clientCapability=office 时的宿主细分（word / excel / powerpoint）。
          * 缺省按 word 处理，兼容不发送该字段的存量 Word 插件。
          */
@@ -513,6 +527,8 @@ public class AiAgentController {
         public void setClientCapability(String clientCapability) { this.clientCapability = clientCapability; }
         public String getOfficeHost() { return officeHost; }
         public void setOfficeHost(String officeHost) { this.officeHost = officeHost; }
+        public String getOfficeFamily() { return officeFamily; }
+        public void setOfficeFamily(String officeFamily) { this.officeFamily = officeFamily; }
     }
     
     /**

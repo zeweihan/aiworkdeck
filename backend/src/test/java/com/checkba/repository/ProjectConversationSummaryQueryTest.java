@@ -84,10 +84,12 @@ class ProjectConversationSummaryQueryTest {
     }
 
     @Test
-    void 行形状与类型固定为六列() {
+    void 行形状与类型固定为七列() {
         Object[] row = messageRepository.findProjectConversationSummaries(1L, null, null).get(3); // c-old
 
-        assertEquals(6, row.length);
+        // 第七列 sourceChannel 是 dev-board#298（插件对话镜像）加的：首条消息的来源通道，
+        // 本地会话恒 null。列宽护栏跟着升——服务层按下标取值，加列只许追加在尾部。
+        assertEquals(7, row.length);
         assertEquals("c-old", row[0]);
         assertInstanceOf(LocalDateTime.class, row[1], "updatedAt 必须是 LocalDateTime，服务层要直接强转");
         assertEquals(BASE.plusMinutes(1), row[1], "updatedAt = 该会话最后一条消息的时间");
@@ -96,6 +98,7 @@ class ProjectConversationSummaryQueryTest {
         assertEquals("股东会通知的届次对不对", row[4], "firstUserMessage = 最早那条 USER 消息");
         assertInstanceOf(Long.class, row[5], "ownerUserId 必须是 Long，服务层要直接强转");
         assertEquals(7L, row[5]);
+        assertNull(row[6], "本地会话的 sourceChannel 恒为 null（只有镜像导入的会话非空）");
     }
 
     @Test

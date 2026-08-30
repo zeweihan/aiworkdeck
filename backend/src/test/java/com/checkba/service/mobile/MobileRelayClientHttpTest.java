@@ -57,6 +57,7 @@ class MobileRelayClientHttpTest {
     private ProjectFileService projectFileService;
     private StorageServiceFactory storageServiceFactory;
     private StorageService storageService;
+    private com.checkba.service.ProjectAiMessageService projectAiMessageService;
 
     @TempDir
     Path stateDir;
@@ -86,6 +87,12 @@ class MobileRelayClientHttpTest {
     private final List<String> transferAcked = new CopyOnWriteArrayList<>();
     private volatile String pushContentType = "application/octet-stream";
     private volatile String pushContentBody = "PUSH-BYTES";
+
+    // ==================== 插件对话镜像（dev-board#298）测试夹具 ====================
+    private volatile String convSyncJson = "[]";
+    private volatile int convSyncStatus = 200;
+    private final AtomicInteger convSyncRequests = new AtomicInteger();
+    private final List<String> convAckBodies = new CopyOnWriteArrayList<>();
 
     @BeforeEach
     void setUp() throws Exception {
@@ -136,6 +143,20 @@ class MobileRelayClientHttpTest {
                 respond(ex, 200, "{\"code\":0}");
             } else {
                 respond(ex, 404, "not found");
+            }
+        });
+        server.createContext("/api/mobile/conversations", ex -> {
+            String path = ex.getRequestURI().getPath();
+            if (path.endsWith("/ack")) {
+                convAckBodies.add(readBody(ex.getRequestBody()));
+                respond(ex, 200, "{\"code\":0,\"deleted\":1}");
+            } else {
+                convSyncRequests.incrementAndGet();
+                if (convSyncStatus != 200) {
+                    respond(ex, convSyncStatus, "not found");
+                } else {
+                    respond(ex, 200, convSyncJson);
+                }
             }
         });
         server.start();
@@ -192,8 +213,20 @@ class MobileRelayClientHttpTest {
             savedBytes.add(buf.toByteArray());
             return inv.getArgument(0);
         });
+        doAnswer(inv -> {
+            callOrder.add("move:" + inv.getArgument(0) + "->" + inv.getArgument(1));
+            return null;
+        }).when(storageService).move(anyString(), anyString());
+        when(projectFileService.createOrUpdateFile(anyLong(), any(), anyString(), anyString(), anyLong(), any(), any(), anyLong()))
+                .thenAnswer(inv -> {
+                    callOrder.add("createOrUpdateFile:" + inv.getArgument(2));
+                    ProjectFile f = addNode(inv.getArgument(1), inv.getArgument(2), false);
+                    f.setFilePath(inv.getArgument(5));
+                    return f;
+                });
         storageServiceFactory = mock(StorageServiceFactory.class);
         when(storageServiceFactory.getStorageService()).thenReturn(storageService);
+        projectAiMessageService = mock(com.checkba.service.ProjectAiMessageService.class);
     }
 
     @AfterEach
@@ -219,7 +252,7 @@ class MobileRelayClientHttpTest {
         return new MobileRelayClientService(true, true, baseUrl,
                 "https://www.aiworkdeck.com", stateDir.toString(),
                 accountService, localIdentityService, projectRepository,
-                projectFileService, storageServiceFactory);
+                projectFileService, storageServiceFactory, projectAiMessageService);
     }
 
     private static String readBody(InputStream in) throws java.io.IOException {
@@ -480,7 +513,7 @@ class MobileRelayClientHttpTest {
         MobileRelayClientService notLocal = new MobileRelayClientService(true, false, baseUrl,
                 "https://www.aiworkdeck.com", stateDir.toString(),
                 accountService, localIdentityService, projectRepository,
-                projectFileService, storageServiceFactory);
+                projectFileService, storageServiceFactory, projectAiMessageService);
         notLocal.pushDirectory();
         assertTrue(dirBodies.isEmpty(), "非 local-mode（云端/团队服务器）绝不出站");
     }
@@ -598,7 +631,10 @@ class MobileRelayClientHttpTest {
         transferCommandsJson = "{\"code\":0,\"commands\":[],\"hot\":true}";
 
         service().pollInbox();
-        assertEquals(1, transferCommandsRequests.get());
+        // 只断言下限不断言恰好一次：pollInbox 的 finally 里 pollTransferCommands 之后还有
+        // pollConversationSync（dev-board#298），热循环后台线程在这段间隙里可能已经抢跑了
+        // 第二次 /commands——「恰好 1」在 CI 上是时序赌博（2026-08-30 实红过）。
+        assertTrue(transferCommandsRequests.get() >= 1);
 
         // 热循环在独立后台线程按 30ms 间隔追加轮询；轮询到 hot:true 会不断顺延窗口，
         // 这里只等到看见第二次请求就够，不需要等窗口真正过期。
@@ -607,5 +643,81 @@ class MobileRelayClientHttpTest {
             Thread.sleep(20);
         }
         assertTrue(transferCommandsRequests.get() >= 2, "热窗口内应至少再拉一次 /commands");
+    }
+
+    // ==================== 插件文档镜像（dev-board#299） ====================
+
+    @Test
+    @DisplayName("document 类型：落「插件文档/<原名>」固定路径，temp save → 原子 move → 建/更库 → ACK 的顺序")
+    void documentMirrorLandsWithAtomicOverwrite() {
+        inboxJson = "[{\"id\":21,\"projectKey\":\"42\",\"clientMediaId\":\"" + MEDIA_ID + "\","
+                + "\"fileName\":\"股权转让协议.docx\",\"mediaType\":\"document\",\"fileSize\":9}]";
+        service().pollInbox();
+
+        assertEquals(1, savedStorageKeys.size());
+        String tmpKey = savedStorageKeys.get(0);
+        assertTrue(tmpKey.startsWith("projects/42/插件文档/.tmp-"), "字节必须先写临时 key：" + tmpKey);
+        String moveStep = callOrder.stream().filter(s -> s.startsWith("move:")).findFirst().orElse("");
+        assertEquals("move:" + tmpKey + "->projects/42/插件文档/股权转让协议.docx", moveStep,
+                "move 必须从临时 key 顶替到无 marker 的最终路径（路径唯一是覆盖语义的锚点）");
+        int saveIdx = callOrder.indexOf("save:" + tmpKey);
+        int moveIdx = callOrder.indexOf(moveStep);
+        int dbIdx = callOrder.indexOf("createOrUpdateFile:股权转让协议.docx");
+        assertTrue(saveIdx >= 0 && moveIdx > saveIdx && dbIdx > moveIdx,
+                "顺序必须是 save→move→createOrUpdateFile（字节先落、库后动），实际：" + callOrder);
+        assertEquals(1, acked.size(), "落盘完成才 ACK");
+    }
+
+    @Test
+    @DisplayName("document 落盘失败：不 ACK、不动库，旧文件因走临时 key 而完好")
+    void documentMirrorSaveFailureLeavesOldFileAndNoAck() throws Exception {
+        when(storageService.save(anyString(), any(InputStream.class)))
+                .thenThrow(new com.checkba.storage.StorageException("disk full"));
+        inboxJson = "[{\"id\":22,\"projectKey\":\"42\",\"clientMediaId\":\"" + MEDIA_ID + "\","
+                + "\"fileName\":\"a.docx\",\"mediaType\":\"document\",\"fileSize\":9}]";
+        service().pollInbox();
+
+        assertTrue(acked.isEmpty(), "没落成不许 ACK（留在中转区下轮重试）");
+        assertTrue(callOrder.stream().noneMatch(s -> s.startsWith("createOrUpdateFile:")),
+                "字节没落好绝不动库");
+    }
+
+    // ==================== 插件对话镜像（dev-board#298 桌面侧） ====================
+
+    @Test
+    @DisplayName("对话镜像：可导入的行导入并 ACK，项目缺失的行留置不 ACK，标题以云端下发为准")
+    void conversationSyncImportsAcksAndLeavesOrphans() {
+        convSyncJson = "[{\"id\":1,\"projectKey\":\"42\",\"conversationId\":\"conv-1-abc\","
+                + "\"sourceMessageId\":11,\"role\":\"USER\",\"content\":\"问\",\"sourceChannel\":\"wps-word\","
+                + "\"title\":\"合同审查\",\"messageCreatedAt\":\"2026-08-30T10:00:00\"},"
+                + "{\"id\":2,\"projectKey\":\"999\",\"conversationId\":\"conv-2-def\","
+                + "\"sourceMessageId\":12,\"role\":\"USER\",\"content\":\"孤儿\",\"sourceChannel\":\"office-word\","
+                + "\"messageCreatedAt\":\"2026-08-30T10:00:01\"}]";
+        com.checkba.model.entity.ProjectAiMessage saved = new com.checkba.model.entity.ProjectAiMessage();
+        saved.setConversationId("conv-1-abc");
+        when(projectAiMessageService.importExternalMessage(anyLong(), anyLong(), anyString(), anyString(),
+                anyString(), any(), any(), any(), any())).thenReturn(saved);
+
+        service().pollInbox();
+
+        verify(projectAiMessageService).importExternalMessage(eq(42L), eq(7L), eq("conv-1-abc"),
+                eq("USER"), eq("问"), any(), eq("wps-word"), eq(11L),
+                eq(java.time.LocalDateTime.of(2026, 8, 30, 10, 0, 0)));
+        verify(projectAiMessageService, never()).importExternalMessage(eq(999L), anyLong(), anyString(),
+                anyString(), anyString(), any(), any(), any(), any());
+        verify(projectAiMessageService).updateConversationTitle("conv-1-abc", "合同审查");
+        assertEquals(1, convAckBodies.size());
+        assertTrue(convAckBodies.get(0).contains("[1]"),
+                "只 ACK 导入过的行（id=1），项目缺失的 id=2 留置：" + convAckBodies.get(0));
+    }
+
+    @Test
+    @DisplayName("/conversations/inbox 404（旧服务器）：静默跳过，进程内记住不再打这个端点")
+    void conversationSync404IsSilentlySkippedAfterFirstAttempt() {
+        convSyncStatus = 404;
+        MobileRelayClientService svc = service();
+        svc.pollInbox();
+        svc.pollInbox();
+        assertEquals(1, convSyncRequests.get(), "404 后不该再打这个端点");
     }
 }

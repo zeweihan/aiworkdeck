@@ -15,13 +15,15 @@ public interface ProjectAiMessageRepository extends JpaRepository<ProjectAiMessa
 
     /**
      * 获取会话列表，包含 conversationTitle 和用户第一条消息
-     * Returns: [conversationId, updatedAt, lastContent, conversationTitle, firstUserMessage]
+     * Returns: [conversationId, updatedAt, lastContent, conversationTitle, firstUserMessage, sourceChannel]
+     * sourceChannel 取首条消息的（镜像导入的会话在首条上带 office-word 等值，dev-board#298）。
      */
     @org.springframework.data.jpa.repository.Query(
         "SELECT m.conversationId, MAX(m.createdAt), " +
         "(SELECT m2.content FROM ProjectAiMessage m2 WHERE m2.conversationId = m.conversationId ORDER BY m2.createdAt DESC LIMIT 1), " +
         "(SELECT m3.conversationTitle FROM ProjectAiMessage m3 WHERE m3.conversationId = m.conversationId AND m3.conversationTitle IS NOT NULL ORDER BY m3.createdAt ASC LIMIT 1), " +
-        "(SELECT m4.content FROM ProjectAiMessage m4 WHERE m4.conversationId = m.conversationId AND m4.role = 'USER' ORDER BY m4.createdAt ASC LIMIT 1) " +
+        "(SELECT m4.content FROM ProjectAiMessage m4 WHERE m4.conversationId = m.conversationId AND m4.role = 'USER' ORDER BY m4.createdAt ASC LIMIT 1), " +
+        "(SELECT m6.sourceChannel FROM ProjectAiMessage m6 WHERE m6.conversationId = m.conversationId ORDER BY m6.createdAt ASC LIMIT 1) " +
         "FROM ProjectAiMessage m WHERE m.projectId = :projectId AND m.userId = :userId " +
         "GROUP BY m.conversationId ORDER BY MAX(m.createdAt) DESC")
     List<Object[]> findConversationSummaries(@org.springframework.data.repository.query.Param("projectId") Long projectId, @org.springframework.data.repository.query.Param("userId") Long userId);
@@ -39,14 +41,15 @@ public interface ProjectAiMessageRepository extends JpaRepository<ProjectAiMessa
      * limit 只能在 Java 层做 —— 这条 JPQL 有 4 个标量子查询 + GROUP BY + HAVING，
      * 套 Pageable 会逼出手写 countQuery 或改两段式。
      *
-     * Returns: [conversationId, updatedAt, lastContent, conversationTitle, firstUserMessage, ownerUserId]
+     * Returns: [conversationId, updatedAt, lastContent, conversationTitle, firstUserMessage, ownerUserId, sourceChannel]
      */
     @org.springframework.data.jpa.repository.Query(
         "SELECT m.conversationId, MAX(m.createdAt), " +
         "(SELECT m2.content FROM ProjectAiMessage m2 WHERE m2.conversationId = m.conversationId ORDER BY m2.createdAt DESC LIMIT 1), " +
         "(SELECT m3.conversationTitle FROM ProjectAiMessage m3 WHERE m3.conversationId = m.conversationId AND m3.conversationTitle IS NOT NULL ORDER BY m3.createdAt ASC LIMIT 1), " +
         "(SELECT m4.content FROM ProjectAiMessage m4 WHERE m4.conversationId = m.conversationId AND m4.role = 'USER' ORDER BY m4.createdAt ASC LIMIT 1), " +
-        "(SELECT m5.userId FROM ProjectAiMessage m5 WHERE m5.conversationId = m.conversationId ORDER BY m5.createdAt ASC LIMIT 1) " +
+        "(SELECT m5.userId FROM ProjectAiMessage m5 WHERE m5.conversationId = m.conversationId ORDER BY m5.createdAt ASC LIMIT 1), " +
+        "(SELECT m6.sourceChannel FROM ProjectAiMessage m6 WHERE m6.conversationId = m.conversationId ORDER BY m6.createdAt ASC LIMIT 1) " +
         "FROM ProjectAiMessage m WHERE m.projectId = :projectId " +
         "GROUP BY m.conversationId " +
         "HAVING (:before IS NULL OR MAX(m.createdAt) < :before " +
@@ -66,6 +69,13 @@ public interface ProjectAiMessageRepository extends JpaRepository<ProjectAiMessa
      */
     @org.springframework.data.jpa.repository.Query("SELECT m FROM ProjectAiMessage m WHERE m.conversationId = :conversationId ORDER BY m.createdAt ASC LIMIT 1")
     java.util.Optional<ProjectAiMessage> findFirstByConversationId(@org.springframework.data.repository.query.Param("conversationId") String conversationId);
+
+    /** 镜像导入的幂等查找（dev-board#298）。 */
+    java.util.Optional<ProjectAiMessage> findByConversationIdAndSourceMessageId(String conversationId, Long sourceMessageId);
+
+    /** 同会话当前最大 createdAt（镜像导入保序：新导入行的时间戳必须严格递增）。 */
+    @org.springframework.data.jpa.repository.Query("SELECT MAX(m.createdAt) FROM ProjectAiMessage m WHERE m.conversationId = :conversationId")
+    java.time.LocalDateTime maxCreatedAtByConversationId(@org.springframework.data.repository.query.Param("conversationId") String conversationId);
 }
 
 

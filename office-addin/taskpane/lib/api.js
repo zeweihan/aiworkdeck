@@ -117,6 +117,69 @@ export async function fetchConversations({ serverUrl, token }, projectId) {
  *     「不支持读图」，未知时什么都别提示（判定见 chatSession.activeModelVision）。
  * defaultModel 是 selectedModel='' 时实际生效的模型 id。
  */
+/**
+ * 归档绑定（dev-board#297）：选中远程设备分组的桌面项目时 find-or-create 云端影子容器项目。
+ * 返回 {projectId, deviceId, projectKey}；旧后端 404 或任何失败抛错（调用方给可读提示）。
+ */
+export async function ensureAddinLink({ serverUrl, token }, { deviceId, projectKey, name }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) throw new Error(t('apiServerUrlEmpty'))
+  let resp
+  try {
+    resp = await fetch(`${base}/api/projects/ensure-addin-link`, {
+      method: 'POST',
+      headers: headers(token),
+      body: JSON.stringify({ deviceId, projectKey, name })
+    })
+  } catch (e) {
+    throw new Error(t('apiBackendUnreachable'))
+  }
+  if (!resp.ok) throw new Error(t('archiveLinkUnsupported'))
+  const data = await resp.json()
+  if (!data || data.projectId == null) throw new Error(t('archiveLinkUnsupported'))
+  return data
+}
+
+/** 当前用户全部归档绑定（服务端权威清单；旧后端/失败返回空数组静默降级）。 */
+export async function fetchAddinLinks({ serverUrl, token }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) return []
+  try {
+    const resp = await fetch(`${base}/api/projects/addin-links`, { headers: headers(token) })
+    if (!resp.ok) return []
+    const data = await resp.json()
+    return Array.isArray(data) ? data : []
+  } catch (e) {
+    return []
+  }
+}
+
+/**
+ * 文档镜像上传（dev-board#299）：当前文档原始字节送云端中转区（mediaType=document），
+ * 桌面端落「插件文档/<原名>」固定路径覆盖。复用手机影像中转端点与 3GB 共池配额。
+ */
+export async function uploadRelayDocument({ serverUrl, token }, { bytes, fileName, deviceId, projectKey, clientMediaId }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) throw new Error(t('apiServerUrlEmpty'))
+  const form = new FormData()
+  form.append('file', new Blob([bytes], { type: 'application/octet-stream' }), fileName)
+  form.append('deviceId', deviceId)
+  form.append('projectKey', projectKey)
+  form.append('clientMediaId', clientMediaId)
+  form.append('fileName', fileName)
+  form.append('mediaType', 'document')
+  const resp = await fetch(`${base}/api/mobile/media`, {
+    method: 'POST',
+    // multipart 边界由浏览器生成，不能手写 Content-Type
+    headers: { 'X-Session-Id': token || '' },
+    body: form
+  })
+  if (!resp.ok) throw new Error(t('apiConnectFailedHttp', { status: resp.status }))
+  const data = await resp.json()
+  if (!data || data.code !== 0) throw new Error((data && data.message) || t('apiBadResponseFormat'))
+  return data
+}
+
 export async function fetchModels({ serverUrl, token }) {
   const base = normalizeBaseUrl(serverUrl)
   if (!base) return null
