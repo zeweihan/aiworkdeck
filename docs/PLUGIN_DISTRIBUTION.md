@@ -81,6 +81,8 @@ sandbox iframe 里、能力经 postMessage 桥按 manifest 权限裁剪——风
 | version | 必须严格大于该 id 已有的最高版本 |
 | backendJars | 声明的每个文件都必须在包内且落在包根之下 |
 | frontendEntry | 非空且非 `http(s)://` 时必须是 `web/` 之下的相对路径且文件在包内 |
+| 声明式内容 | `contributes.templates` / `styleProfiles` 声明的文件必须在包内（缺失即 `contributed_file_missing`） |
+| 载荷 | JAR、`frontendEntry`、声明式内容（templates/styleProfiles/settings/evidenceSources，规范 v2.9 §14）**至少其一**非空；全空 = `no_payload` 拒收。纯声明式插件（只有 manifest + 数据文件）自 v2.9 起是合法形态，走最轻审核档 |
 
 ## 4. 自动扫描（审核辅助，不做判定）
 
