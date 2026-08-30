@@ -152,11 +152,78 @@ if (!args.skipMac) {
 
   const dmgOut = path.join(distDir, `AI-WorkDeck-Office-Addin-${version}.dmg`)
   fs.rmSync(dmgOut, { force: true })
+
+  // DMG 视觉：品牌背景（hidpi TIFF，系统 tiffutil 合成入库的 1x/2x PNG）+ Finder 图标排版。
+  // .DS_Store 让本机 Finder 自己写——这是兼容面最广的做法：electron-builder 内嵌 dmgbuild
+  // 生成的 pBBk 背景书签在 macOS 26.2+ 被 Finder 拒读导致背景消失（electron-builder#9072），
+  // Finder 亲手写的没这个问题。Finder 自动化被拒/超时则降级为无排版朴素 DMG，不阻断构建。
+  const volName = 'AI WorkDeck Office 插件'
+  const bgDir = path.join(stageDir, '.background')
+  fs.mkdirSync(bgDir, { recursive: true })
+  execFileSync('tiffutil', ['-cathidpicheck',
+    path.join(addinDir, 'installer', 'mac', 'dmg-background.png'),
+    path.join(addinDir, 'installer', 'mac', 'dmg-background@2x.png'),
+    '-out', path.join(bgDir, 'background.tiff')], { stdio: 'inherit' })
+
   // 打包前兜底再清一次 xattr（签名内容不含 xattr，清掉不破坏签名），并严格校验后再封盘
   execFileSync('xattr', ['-cr', stageDir], { stdio: 'inherit' })
   if (identity) execFileSync('codesign', ['-v', '--strict', '--deep', appDir], { stdio: 'inherit' })
-  execFileSync('hdiutil', ['create', '-volname', 'AI WorkDeck Office 插件',
-    '-srcfolder', stageDir, '-ov', '-format', 'UDZO', dmgOut], { stdio: 'inherit' })
+
+  const rwDmg = path.join(buildDir, 'addin-rw.dmg')
+  execFileSync('hdiutil', ['create', '-volname', volName,
+    '-srcfolder', stageDir, '-ov', '-format', 'UDRW', rwDmg], { stdio: 'inherit' })
+  try { execFileSync('hdiutil', ['detach', `/Volumes/${volName}`, '-force'], { stdio: 'ignore' }) } catch { /* 没挂载 */ }
+  execFileSync('hdiutil', ['attach', rwDmg, '-readwrite', '-noverify', '-noautoopen'], { stdio: 'inherit' })
+  try {
+    // 窗口 660x442（内容区 660x420 = 背景图逻辑尺寸 + 22 标题栏）；图标中心与
+    // art/dmg-background.html 的光晕/文案联动：安装器 app (330, 200)，manifest 兜底 (566, 350)
+    execFileSync('osascript', ['-e', `
+      tell application "Finder"
+        tell disk "${volName}"
+          open
+          set current view of container window to icon view
+          set toolbar visible of container window to false
+          set statusbar visible of container window to false
+          set the bounds of container window to {200, 120, 860, 562}
+          set viewOpts to the icon view options of container window
+          set arrangement of viewOpts to not arranged
+          set icon size of viewOpts to 112
+          set text size of viewOpts to 13
+          set background picture of viewOpts to file ".background:background.tiff"
+          set position of item "${appName}" to {330, 200}
+          set position of item "manifest.xml" to {572, 316}
+          update without registering applications
+          delay 2
+          close
+        end tell
+      end tell`], { stdio: 'inherit', timeout: 60000 })
+    // Finder 的视图设置是异步落盘的（close 之后才写 .DS_Store），立刻 detach 会把空壳
+    // .DS_Store 封进只读 DMG——排版白做且无报错（首建实测踩过）。轮询到 icvp 记录出现
+    // 才继续；中途 nudge 一次（再开再关触发 flush）；最终没等到就明确告警降级。
+    const dsPath = `/Volumes/${volName}/.DS_Store`
+    let styled = false
+    for (let i = 0; i < 20; i++) {
+      execFileSync('sleep', ['1'])
+      try { if (fs.readFileSync(dsPath).includes('icvp')) { styled = true; break } } catch { /* 还没写出来 */ }
+      if (i === 6) {
+        try {
+          execFileSync('osascript', ['-e',
+            `tell application "Finder" to open disk "${volName}"`, '-e',
+            'delay 1', '-e',
+            `tell application "Finder" to close every window whose name is "${volName}"`,
+          ], { stdio: 'inherit', timeout: 30000 })
+        } catch { /* nudge 失败不致命，继续等 */ }
+      }
+    }
+    if (!styled) console.warn('[installer] Finder 视图设置未落盘（.DS_Store 无 icvp），本次产物为朴素 DMG')
+    else console.log('[installer] DMG 背景与图标排版已落盘')
+  } catch (err) {
+    console.warn(`[installer] Finder 排版失败（自动化权限/锁屏？），降级为朴素 DMG：${err.message}`)
+  }
+  execFileSync('sync')
+  execFileSync('hdiutil', ['detach', `/Volumes/${volName}`], { stdio: 'inherit' })
+  execFileSync('hdiutil', ['convert', rwDmg, '-format', 'UDZO', '-o', dmgOut], { stdio: 'inherit' })
+  fs.rmSync(rwDmg, { force: true })
 
   // 公证（可选）：环境变量给齐 ASC API key 三件套才做。维护者本机来源：
   //   5-Tech/5-BQT_Global/fastlane/.env（ASC_KEY_ID / ASC_ISSUER_ID / ASCKey.p8）
@@ -183,6 +250,7 @@ if (!args.skipWin) {
       `-DVERSION=${version}`,
       `-DMANIFEST=${manifestPath}`,
       `-DOUTFILE=${exeOut}`,
+      `-DARTDIR=${path.join(addinDir, 'installer', 'win')}`,
       path.join(addinDir, 'installer', 'win', 'installer.nsi'),
     ], { stdio: 'inherit', env: { ...process.env, LC_ALL: 'en_US.UTF-8', LANG: 'en_US.UTF-8' } })
     made.push(exeOut)

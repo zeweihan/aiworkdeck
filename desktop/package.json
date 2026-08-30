@@ -6,6 +6,7 @@
   "author": "AI WorkDeck contributors",
   "main": "main/main.js",
   "scripts": {
+    "postinstall": "node scripts/patch-dmg-builder.js",
     "clean": "node scripts/clean.js",
     "predev": "node scripts/brand-dev-electron.js",
     "dev": "cross-env AIWORKDECK_DESKTOP_DEV=1 electron .",
@@ -117,6 +118,17 @@
           ]
         }
       ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerSidebar": "build/win/installerSidebar.bmp",
+      "uninstallerSidebar": "build/win/installerSidebar.bmp",
+      "installerHeader": "build/win/installerHeader.bmp",
+      "shortcutName": "AI WorkDeck",
+      "include": "build/installer.nsh",
+      "deleteAppDataOnUninstall": false
     }
   }
 }

@@ -7,8 +7,8 @@
 
 | 平台 | 产物 | 机制 |
 |---|---|---|
-| macOS | `AI-WorkDeck-Office-Addin-<版本>.dmg`（内含用户态安装器 .app，swiftc 编译） | 双击 app，把 manifest 拷进 Word/Excel/PowerPoint 容器的 `~/Library/Containers/com.microsoft.*/Data/Documents/wef/`；首次写入系统弹「访问其他 App 的数据」授权，拒绝时 app 给手动拖拽指引（DMG 根目录带一份 manifest.xml 兜底） |
-| Windows | `AI-WorkDeck-Office-Addin-<版本>.exe`（NSIS，免管理员） | manifest 拷到 `%LOCALAPPDATA%\AIWorkDeck\OfficeAddin\`，写 `HKCU\Software\Microsoft\Office\16.0\WEF\Developer` sideload 键；带 uninstall.exe 并注册到「应用和功能」 |
+| macOS | `AI-WorkDeck-Office-Addin-<版本>.dmg`（内含用户态安装器 .app，swiftc 编译） | 单窗口 AppKit UI（三宿主状态行 + 按钮触发安装），把 manifest 拷进 Word/Excel/PowerPoint 容器的 `~/Library/Containers/com.microsoft.*/Data/Documents/wef/`；首次写入系统弹「访问其他 App 的数据」授权，拒绝时窗口内给指引（DMG 根目录带一份 manifest.xml 兜底可手动拖拽） |
+| Windows | `AI-WorkDeck-Office-Addin-<版本>.exe`（NSIS + MUI2 品牌向导，免管理员） | manifest 拷到 `%LOCALAPPDATA%\AIWorkDeck\OfficeAddin\`，写 `HKCU\Software\Microsoft\Office\16.0\WEF\Developer` sideload 键；带 uninstall.exe 并注册到「应用和功能」；中英双语按系统语言自动选，刻意不设目录选择页 |
 
 > 历史教训（dev-board#68）：v0.21 前 macOS 走 payload-free pkg + root postinstall 写容器，
 > macOS 26 起被应用容器保护直接拒绝（EPERM、无授权弹窗），Installer 必然失败；
@@ -23,6 +23,21 @@ cd office-addin && npm run build:installers
 
 版本号取 `desktop/package.json`（单一来源）。产物在 `installer/dist/`。
 Windows 侧需要 `brew install makensis`。`--url` 可换托管地址（律所私有部署）。
+
+DMG 会带背景图与图标排版（Finder osascript 自动化，窗口内 app/manifest.xml 各就位）；
+自动化被拒绝或系统锁屏时自动降级为无排版的朴素 DMG，不会中断构建。
+
+### 改美术资产
+
+侧栏/页眉 BMP、Windows 图标、DMG 背景图都是从 `installer/art/` 下的 HTML 源文件渲染出来的，
+产物入库，改美术后要重新生成并提交：
+
+```bash
+brew install imagemagick   # 还需要本机已装 Google Chrome
+node installer/render-art.mjs
+```
+
+只有维护者改美术时手动跑，日常 `npm run build:installers` 不需要 Chrome/ImageMagick。
 
 ## 发布
 

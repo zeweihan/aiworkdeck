@@ -1,17 +1,8 @@
 <!--
-  macOS DMG 安装窗口的背景图源文件。改完这里，在本目录下重新生成两张 PNG：
-
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-gpu \
-    --hide-scrollbars --force-device-scale-factor=1 --window-size=660,420 \
-    --screenshot="$PWD/background.png" "file://$PWD/dmg-background.html"
-
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-gpu \
-    --hide-scrollbars --force-device-scale-factor=2 --window-size=660,420 \
-    --screenshot="$PWD/background@2x.png" "file://$PWD/dmg-background.html"
-
-  electron-builder 会自动把 background.png 与 background@2x.png 合成 hidpi TIFF（tiffutil）。
-  DMG 窗口尺寸取自 1x 图的像素尺寸（660x420）；图标落位见 package.json 的 build.dmg.contents，
-  两者必须一起改：图标中心为 (170, 238) 与 (490, 238)，iconSize 128。
+  Office 插件 DMG 安装窗口背景（660x420，1x/2x PNG 入库，构建时 tiffutil 合成 hidpi TIFF）。
+  与桌面端 desktop/build/dmg-background.html 同一套视觉语言。改完跑 `node installer/render-art.mjs`。
+  图标落位见 build-installers.mjs 的 Finder 排版脚本：安装器 app 居中 (330, 200)，
+  manifest.xml 兜底文件收在右侧 (572, 316)。两者必须与本图的光晕/文案一起改。
 -->
 <!doctype html>
 <html lang="zh-CN">
@@ -31,7 +22,6 @@
     -webkit-font-smoothing: antialiased;
   }
 
-  /* 顶部品牌带 */
   .band {
     position: absolute; top: 0; left: 0;
     width: 660px; height: 104px;
@@ -46,7 +36,6 @@
     background: linear-gradient(90deg,
       rgba(91,209,151,0) 0%, #5BD197 24%, #A6EFCA 50%, #5BD197 76%, rgba(91,209,151,0) 100%);
   }
-  /* 电路走线，呼应 logo 底座；中间留白避开文字 */
   .band-traces {
     position: absolute; left: 0; top: 4px;
     -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 14%, transparent 32%, transparent 68%, #000 86%, #000 100%);
@@ -65,25 +54,34 @@
     color: rgba(220, 248, 234, 0.78);
   }
 
-  /* 图标落位光晕：把图标从底色上托起来 */
+  /* 安装器图标落位光晕（图标中心 330, 200，iconSize 112） */
   .halo {
-    position: absolute; top: 126px;
-    width: 224px; height: 224px; border-radius: 50%;
+    position: absolute; top: 96px; left: 226px;
+    width: 208px; height: 208px; border-radius: 50%;
     background: radial-gradient(circle,
       rgba(255,255,255,0.98) 0%, rgba(255,255,255,0.80) 40%, rgba(255,255,255,0) 70%);
   }
-  .halo.app  { left: 58px; }
-  .halo.apps { left: 378px; }
 
-  /* 拖拽指向，中心与图标中心同高 */
-  .arrow { position: absolute; top: 226px; left: 274px; }
-
-  /* 底部留出 Finder 状态栏（新系统即使 bwsp 关掉也可能画一条），文字别贴底 */
   .caption {
-    position: absolute; top: 336px; left: 0; width: 100%;
+    position: absolute; top: 296px; left: 0; width: 100%;
     text-align: center;
-    font-size: 12.5px; letter-spacing: 0.04em;
+    font-size: 14px; font-weight: 500; letter-spacing: 0.04em;
+    color: #1A5336;
+  }
+  .caption-sub {
+    position: absolute; top: 320px; left: 0; width: 100%;
+    text-align: center;
+    font-size: 11.5px; letter-spacing: 0.03em;
     color: rgba(15, 46, 30, 0.5);
+  }
+
+  /* manifest.xml 兜底文件的注脚：放在图标正上方（图标中心 572, 316，上缘约 260），
+     与居中的 caption/caption-sub 两行错开，也避开 Finder 底部状态栏 */
+  .fallback-note {
+    position: absolute; top: 226px; right: 24px;
+    width: 130px; text-align: center;
+    font-size: 10px; line-height: 1.5; letter-spacing: 0.02em;
+    color: rgba(15, 46, 30, 0.38);
   }
 </style>
 </head>
@@ -104,26 +102,16 @@
         <circle cx="474" cy="74" r="2"/>
       </g>
     </svg>
-    <div class="wordmark">AI WorkDeck</div>
-    <div class="tagline">面向法律与文档密集型团队的 AI 原生工作台</div>
+    <div class="wordmark">AI WorkDeck Office 插件</div>
+    <div class="tagline">在 WORD · EXCEL · POWERPOINT 中使用 AI WORKDECK</div>
   </div>
   <div class="band-rule"></div>
 
-  <div class="halo app"></div>
-  <div class="halo apps"></div>
+  <div class="halo"></div>
 
-  <svg class="arrow" width="112" height="24" viewBox="0 0 112 24" fill="none">
-    <defs>
-      <linearGradient id="stem" x1="0" y1="0" x2="112" y2="0" gradientUnits="userSpaceOnUse">
-        <stop offset="0" stop-color="#5BD197" stop-opacity="0"/>
-        <stop offset="0.36" stop-color="#4CBF89" stop-opacity="0.92"/>
-        <stop offset="1" stop-color="#1A5336"/>
-      </linearGradient>
-    </defs>
-    <path d="M2 12 H88" stroke="url(#stem)" stroke-width="3" stroke-linecap="round"/>
-    <path d="M85 3 L110 12 L85 21 L92 12 Z" fill="#1A5336"/>
-  </svg>
+  <div class="caption">双击上方图标，开始安装</div>
+  <div class="caption-sub">安装器会引导完成全部步骤；如遇系统授权提示，按窗口内指引操作即可</div>
 
-  <div class="caption">将 AI WorkDeck 拖入右侧 Applications 文件夹即可完成安装</div>
+  <div class="fallback-note">手动安装兜底文件<br>一般无需理会</div>
 </body>
 </html>
