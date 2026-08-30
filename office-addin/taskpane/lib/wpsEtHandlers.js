@@ -38,7 +38,21 @@ function app() {
 function resolveSheet(sheetName) {
   const wb = app().ActiveWorkbook
   if (!wb) throw new Error('当前没有打开的工作簿')
-  return sheetName ? wb.Worksheets.Item(sheetName) : wb.ActiveSheet
+  if (!sheetName) return wb.ActiveSheet
+  try {
+    const sheet = wb.Worksheets.Item(sheetName)
+    if (sheet) return sheet
+  } catch (e) { /* 名字不存在时 JSAPI 抛原生错，下面换成能自纠的说明 */ }
+  // 名字打错时把工作簿里真实的表名列出来（dev-board#288）：
+  // 原先透传的是一句宿主原生英文错误，模型只能瞎猜，用户看到一连串失败的工具卡
+  let names = []
+  try {
+    const total = Number(wb.Worksheets.Count) || 0
+    for (let i = 1; i <= total; i++) names.push(String(wb.Worksheets.Item(i).Name))
+  } catch (e) { /* 连表名都枚举不出来就只报名字不存在 */ }
+  throw new Error(`未找到名为「${sheetName}」的工作表。`
+    + (names.length ? `本工作簿现有工作表：${names.join('、')}。` : '')
+    + '请用其中之一重试（名称区分空格与全角半角），或留空 sheetName 表示活动工作表。')
 }
 
 /** 0 起的行列号转 A1 地址（与 officeExecutor.cellAddress 同实现） */

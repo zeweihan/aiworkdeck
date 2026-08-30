@@ -3272,8 +3272,48 @@ export async function executeOfficeCommand(command, args) {
     const data = await handler(args || {})
     return { ok: true, data: data == null ? {} : data }
   } catch (e) {
-    const message = (e && e.message) || String(e)
     console.warn('[Addin] office_command 执行失败', command, e)
-    return { ok: false, error: message }
+    return { ok: false, error: await describeExecutionError(e, command, args || {}) }
+  }
+}
+
+/**
+ * 把宿主原生异常翻成模型能据以自纠的说明（dev-board#288）。
+ *
+ * 两件事：
+ * 1. **别丢 code 与 errorLocation**。Office.js 的 OfficeExtension.Error 上带
+ *    `code`（如 ItemNotFound / InvalidArgument）与 `debugInfo.errorLocation`
+ *    （出错的那一句 API 调用），只透传 message 等于把最有用的两条线索扔掉。
+ * 2. **工作表名写错要报出实际有哪些表**。26 个 excel_* 命令共用同一个 resolveSheet，
+ *    名字打错时抛的是一句英文 ItemNotFound，模型只能瞎猜；把工作簿里真实的表名列出来，
+ *    它一次就能改对。
+ */
+async function describeExecutionError(e, command, args) {
+  let message = (e && e.message) || String(e)
+  const code = e && e.code ? String(e.code) : ''
+  const where = e && e.debugInfo && e.debugInfo.errorLocation ? String(e.debugInfo.errorLocation) : ''
+  if (code === 'ItemNotFound' && command.startsWith('excel_') && args.sheetName) {
+    const names = await listWorksheetNames()
+    if (names.length) {
+      return `未找到名为「${args.sheetName}」的工作表。本工作簿现有工作表：${names.join('、')}。`
+        + '请用其中之一重试（名称区分空格与全角半角），或留空 sheetName 表示活动工作表。'
+    }
+  }
+  if (code) message += `（宿主错误码 ${code}${where ? '，出错位置 ' + where : ''}）`
+  else if (where) message += `（出错位置 ${where}）`
+  return message
+}
+
+/** 工作簿里现有的工作表名；取不到就返回空数组（只用于把报错说清楚，失败不该再抛） */
+async function listWorksheetNames() {
+  try {
+    return await Excel.run(async (context) => {
+      const sheets = context.workbook.worksheets
+      sheets.load('items/name')
+      await context.sync()
+      return sheets.items.map((w) => w.name)
+    })
+  } catch (err) {
+    return []
   }
 }

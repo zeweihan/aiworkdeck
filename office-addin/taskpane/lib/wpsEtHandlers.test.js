@@ -313,6 +313,43 @@ test('excel_set_borders：none 走六边清空；非法值报错', async () => {
   } finally { restore() }
 })
 
+/* ==================== 工作表名报错（dev-board#288） ==================== */
+
+test('resolveSheet：工作表名写错时报出工作簿里实际有哪些表，而不是透传原生英文异常', async () => {
+  // 26 个 excel_* 命令共用这一个入口。名字打错时旧实现抛的是宿主原生英文错，
+  // 模型只能瞎猜，用户看到的是一连串失败的工具卡。
+  const original = globalThis.wps
+  globalThis.wps = {
+    EtApplication: () => ({
+      ActiveWorkbook: {
+        ActiveSheet: {},
+        Worksheets: {
+          Count: 3,
+          Item(k) {
+            const names = ['测算表', '底稿', 'Sheet3']
+            if (typeof k === 'number') return { Name: names[k - 1] }
+            throw new Error('mock: Invalid index (原生英文异常)')
+          }
+        }
+      }
+    })
+  }
+  try {
+    await assert.rejects(
+      WPS_ET_HANDLERS.excel_get_range({ sheetName: '测算 表', rangeAddress: 'A1' }),
+      (e) => {
+        assert.ok(/未找到名为「测算 表」的工作表/.test(e.message), e.message)
+        assert.ok(/测算表、底稿、Sheet3/.test(e.message), `要列出实际表名：${e.message}`)
+        assert.ok(!/Invalid index/.test(e.message), '不许把原生英文异常透传给模型')
+        return true
+      }
+    )
+  } finally {
+    if (original === undefined) delete globalThis.wps
+    else globalThis.wps = original
+  }
+})
+
 /* ==================== excel_edit_rows_cols ==================== */
 
 test('excel_edit_rows_cols：列宽按实测仿射式折算（磅 = 5.625×字符 + 3.35）', async () => {
