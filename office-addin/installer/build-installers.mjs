@@ -248,7 +248,7 @@ if (!args.skipWin) {
     const genArt = path.join(addinDir, 'installer', 'win', 'generated')
     execFileSync(process.execPath, [
       path.join(repoDir, 'desktop', 'scripts', 'render-oneclick-art.mjs'),
-      '--product', 'addin', '--out', genArt,
+      '--product', 'addin', '--out', genArt, '--version', version,
     ], { stdio: 'inherit' })
     // 法务页跟随安装器变体的站点：国际包（addin.workdeck.ai）链到 workdeck.ai
     const legalBase = args.url.includes('workdeck.ai') ? 'https://www.workdeck.ai' : 'https://www.aiworkdeck.com'

@@ -20,8 +20,8 @@ jobs:
       - name: Render one-click art (Chrome + ImageMagick, runner 自带)
         shell: pwsh
         run: |
-          node desktop/scripts/render-oneclick-art.mjs --product desktop --out desktop/build/win/generated
-          node desktop/scripts/render-oneclick-art.mjs --product addin --out office-addin/installer/win/generated
+          node desktop/scripts/render-oneclick-art.mjs --product desktop --out desktop/build/win/generated --version 9.9.9
+          node desktop/scripts/render-oneclick-art.mjs --product addin --out office-addin/installer/win/generated --version 9.9.9
 
       - name: Ensure NSIS
         shell: pwsh

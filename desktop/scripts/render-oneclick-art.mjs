@@ -9,7 +9,8 @@
  * 多 DPI 靠 --force-device-scale-factor 放大渲染，NSIS 侧按系统 DPI 选文件。
  * 依赖：Google Chrome（mac 自装 / GitHub runner 自带）、ImageMagick（同上）。
  *
- * 用法：node render-oneclick-art.mjs --product desktop|addin --out <目录>
+ * 用法：node render-oneclick-art.mjs --product desktop|addin --out <目录> [--version x.y.z]
+ *（--version 烧进进度小卡右侧的版本号，空则不显示）
  */
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -27,6 +28,7 @@ function argOf(name) {
 }
 const product = argOf('--product')
 const outDir = argOf('--out')
+const version = argOf('--version')
 if (!['desktop', 'addin'].includes(product) || !outDir) {
   console.error('用法：node render-oneclick-art.mjs --product desktop|addin --out <目录>')
   process.exit(1)
@@ -62,7 +64,10 @@ const scales = [[1, 100], [1.25, 125], [1.5, 150], [2, 200]]
 
 fs.mkdirSync(outDir, { recursive: true })
 
-// 新鲜检查：全部产物都比源（html + 本脚本 + 图标）新就跳过，别拖慢每次构建
+// 新鲜检查：全部产物都比源（html + 本脚本 + 图标）新、且版本戳一致就跳过，别拖慢每次构建
+const stampFile = path.join(outDir, '.stamp')
+const stamp = `${product}|${version}`
+const stampFresh = fs.existsSync(stampFile) && fs.readFileSync(stampFile, 'utf8') === stamp
 const srcMtime = Math.max(
   ...assets.map(a => fs.statSync(path.join(srcDir, a.html)).mtimeMs),
   fs.statSync(fileURLToPath(import.meta.url)).mtimeMs,
@@ -71,7 +76,7 @@ const srcMtime = Math.max(
 const wanted = []
 for (const a of assets) for (const lang of langs) for (const [, tag] of scales)
   wanted.push(`${a.base}-${lang}-${tag}.bmp`)
-if (wanted.every(f => {
+if (stampFresh && wanted.every(f => {
   const p = path.join(outDir, f)
   return fs.existsSync(p) && fs.statSync(p).mtimeMs > srcMtime
 })) {
@@ -85,7 +90,7 @@ for (const a of assets) {
   for (const lang of langs) {
     for (const [factor, tag] of scales) {
       const png = path.join(tmpDir, `${a.base}-${lang}-${tag}.png`)
-      const url = `file://${path.join(srcDir, a.html)}?lang=${lang}&product=${product}`
+      const url = `file://${path.join(srcDir, a.html)}?lang=${lang}&product=${product}&ver=${encodeURIComponent(version)}`
       execFileSync(chrome, [
         '--headless=new', '--disable-gpu', '--hide-scrollbars',
         `--force-device-scale-factor=${factor}`, `--window-size=${a.w},${a.h}`,
@@ -110,4 +115,5 @@ for (const a of assets) {
   }
 }
 fs.rmSync(tmpDir, { recursive: true, force: true })
+fs.writeFileSync(stampFile, stamp)
 console.log(`[oneclick-art] ${product}: 渲染 ${n} 张位图 → ${outDir}`)

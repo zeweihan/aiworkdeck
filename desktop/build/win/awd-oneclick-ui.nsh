@@ -78,9 +78,9 @@ ManifestDPIAware true
 !define AWDUI_SPACE_H 20
 ; 角落小卡片
 !define AWDUI_BAR_X 20
-!define AWDUI_BAR_Y 96
+!define AWDUI_BAR_Y 100
 !define AWDUI_BAR_W 320
-!define AWDUI_BAR_H 10
+!define AWDUI_BAR_H 6
 !define AWDUI_DONEBTN_X 236
 !define AWDUI_DONEBTN_Y 80
 !define AWDUI_DONEBTN_W 104
@@ -207,6 +207,11 @@ Function AwdGuiInit
   System::Call 'user32::SetWindowLong(p $HWNDPARENT, i -16, i r0)'
   System::Call '*(i 2) p .r1'
   System::Call 'dwmapi::DwmSetWindowAttribute(p $HWNDPARENT, i 33, p r1, i 4)'
+  System::Free $1
+  ; 无边框窗口默认没有投影，向客户区各延展 1px 玻璃帧换来 DWM 投影，
+  ; 玻璃边缘被我们满幅的位图盖住，只剩卡片外的影子（老系统调用失败无害）
+  System::Call '*(i 1, i 1, i 1, i 1) p .r1'
+  System::Call 'dwmapi::DwmExtendFrameIntoClientArea(p $HWNDPARENT, p r1)'
   System::Free $1
 
   ; 大卡片尺寸并在工作区居中
@@ -475,13 +480,18 @@ Function AwdInstFilesShow
   SendMessage $4 0x0172 0 $5
   System::Call 'user32::SetWindowPos(p r4, p 1, i 0, i 0, i 0, i 0, i 0x13)'
 
-  ; 进度条挪进卡片布局位
+  ; 进度条挪进卡片布局位，并剥掉系统主题换品牌配色：
+  ; 主题态的绿块条既土又不可调色，SetWindowTheme("","") 退回经典绘制后
+  ; PBM_SETBARCOLOR/PBM_SETBKCOLOR 生效，得到扁平细条（叠在位图画的圆角轨道上）
   GetDlgItem $0 $1 1004
   ${AwdPx} $R1 ${AWDUI_BAR_X}
   ${AwdPx} $R2 ${AWDUI_BAR_Y}
   ${AwdPx} $R3 ${AWDUI_BAR_W}
   ${AwdPx} $R4 ${AWDUI_BAR_H}
   System::Call 'user32::SetWindowPos(p r0, i 0, i R1, i R2, i R3, i R4, i 0x14)'
+  System::Call 'uxtheme::SetWindowTheme(p r0, w "", w "")'
+  SendMessage $0 0x0409 0 0x004C7A1E    ; PBM_SETBARCOLOR = 品牌绿 #1E7A4C（COLORREF BGR）
+  SendMessage $0 0x2001 0 0x00EEF2EC    ; PBM_SETBKCOLOR = 轨道浅薄荷 #ECF2EE
 FunctionEnd
 
 ; ---------- 完成页：角落完成卡 ----------

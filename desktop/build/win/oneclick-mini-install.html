@@ -20,15 +20,25 @@
     position: absolute; left: 0; top: 0; width: 360px; height: 3px;
     background: linear-gradient(90deg, #1D6440 0%, #5BD197 60%, #A6EFCA 100%);
   }
-  .logo { position: absolute; left: 20px; top: 18px; width: 26px; height: 26px; border-radius: 6px; }
+  .logo { position: absolute; left: 20px; top: 17px; width: 24px; height: 24px; border-radius: 6px; }
   .brand {
-    position: absolute; left: 54px; top: 21px;
-    font-size: 15px; font-weight: 600; color: #14301F; letter-spacing: 0.01em;
+    position: absolute; left: 52px; top: 20px;
+    font-size: 14px; font-weight: 600; color: #17301F; letter-spacing: 0.02em;
   }
-  .status { position: absolute; left: 20px; top: 62px; font-size: 13px; color: #566158; }
+  /* 状态行：主文案 + 右侧弱化的版本号（?ver= 传入，空则隐藏） */
+  .status {
+    position: absolute; left: 20px; top: 60px;
+    font-size: 13px; color: #44524A; letter-spacing: 0.02em;
+  }
+  .hint {
+    position: absolute; right: 20px; top: 61px;
+    font-size: 11px; color: #9DAFA3; letter-spacing: 0.14em;
+  }
+  /* 轨道 (20,100,320,6)=AWDUI_BAR：真进度条剥掉系统主题后是扁平色块，
+     叠在这条圆角浅薄荷轨道上 */
   .track {
-    position: absolute; left: 20px; top: 96px; width: 320px; height: 10px;
-    border-radius: 5px; background: #E9F0EB;
+    position: absolute; left: 20px; top: 100px; width: 320px; height: 6px;
+    border-radius: 3px; background: #ECF2EE;
   }
 </style>
 </head>
@@ -37,8 +47,9 @@
   <img class="logo" src="../icon.png" alt="">
   <div class="brand">AI WorkDeck</div>
   <div class="status"
-       data-zh-desktop="正在安装，请稍候…" data-en-desktop="Installing, this may take a moment…"
-       data-zh-addin="正在安装 Office 插件…" data-en-addin="Installing the Office add-in…"></div>
+       data-zh-desktop="正在安装，请稍候" data-en-desktop="Installing, just a moment"
+       data-zh-addin="正在安装 Office 插件" data-en-addin="Installing the Office add-in"></div>
+  <div class="hint"></div>
   <div class="track"></div>
   <div class="frame"></div>
 <script>
@@ -46,6 +57,8 @@
   const lang = q.get('lang') === 'en' ? 'en' : 'zh';
   const product = q.get('product') === 'addin' ? 'Addin' : 'Desktop';
   for (const el of document.querySelectorAll('[data-zh-desktop]')) el.textContent = el.dataset[lang + product];
+  const ver = q.get('ver');
+  if (ver) document.querySelector('.hint').textContent = 'V ' + ver;
 </script>
 </body>
 </html>
