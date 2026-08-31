@@ -35,6 +35,21 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
    全量用户生效；壳文件 no-cache 的 nginx 口径见 office-addin/README.md「WPS 加载项」章）。
    **新加坡刻意不铺 WPS 壳**（2026-08-29 实地核对：SG 只有 office-addin/，没有
    wps-addin/）——WPS 是国内市场的产品，国际站不提供；别照 Office 插件那样"两台对齐"。
+4.6. **插件云后端 jar 随发版同步部署（`backend/` 在发版区间有任何改动就必须做；
+   2026-08-31 v0.29.0 漏发实锤后定为硬步骤）**：addin.aiworkdeck.com 与
+   addin.workdeck.ai 两台跑的就是**主仓 backend jar 本体**（application-cloud.yml
+   profile），不是 deploy/cloud/ 里另有一套代码——deploy/cloud/ 只是 nginx/systemd/
+   env 模板。**判据是 `git diff v<上一版>..v<本版> -- backend/` 非空**，别再只看
+   deploy/cloud/ 没变就跳过（v0.29.0 就是这么漏的：插件端换了新版、后端 jar 还是
+   旧的，PR#671 的 `POST /api/projects/ensure-addin-link` 端点不存在，插件弹
+   「需升级云后端」降级提示）。配方（memory cloud-backend-deployed 同源）：
+   `cd backend && rm -f target/backend-*.jar && JAVA_HOME=<jdk21> mvn -B -DskipTests
+   -Djavacpp.platform=linux-x86_64 clean package`（瘦包 ~424M，先删旧产物防脏包坑）
+   → rsync --partial **串行**传两台 `/opt/aiworkdeck/cloud/backend.jar.new` →
+   sha256 对账 → 旧件备份 `backend.jar.rollback-<date>` → mv 换入 →
+   `systemctl restart aiworkdeck-cloud` → 冒烟：journal 无 ERROR、新端点返回体
+   不再与「不存在的端点」相同（后者恒为 `{"code":1,"message":"服务器内部错误"}` + 200，
+   这也是判「接口没上」最快的探法）。表结构靠 `ddl-auto: update` 自动建，无手动迁移。
 5. **EN 走查（打 tag 前必过）**：① 以英文语言设置跑 app-e2e 全量（含 J12 英文旅程：切 en-US 断言工作台四列英文锚点 + AI 过程卡工具名无中文，语言键 `awd_app_language`，切语言必须整页 reload）；② 编辑器 boot 用 `?uilang=en-US` 并以 office_thread.js 的 ooLocale 诊断确认 en-US 生效（issue #66 的诊断口径）；③ 人工过一遍英文主界面截图（工作台/设置/AI 面板）。
 6. DMG 安装窗口视觉（PR#204）：`build.dmg` 里的 `contents` 坐标是**图标中心、原点在窗口内容区左上角（不含标题栏）**；窗口尺寸由背景图 1x 像素尺寸决定（660x420），所以没写 `window`。背景图 `desktop/build/background.png` + `background@2x.png` 由 electron-builder 自动合成 hidpi TIFF，源文件是 `desktop/build/dmg-background.html`（顶部注释有 headless Chrome 重新生成命令）。改图标落位必须同步改 HTML 里的光晕/箭头位置，否则错位。
 6.5. **win 安装器美术管线**（`desktop/scripts/render-win-installer-art.mjs`，安装器 UI 重设计新增）：`build/win/*.html`（美术源文件）→ headless Chrome 截图 → ImageMagick 转 24 位 BMP3 入库为 `installerSidebar.bmp`/`installerHeader.bmp`。**sips 只能出 32 位 BMP，NSIS/MUI2 只认无 alpha 的经典 BMP，必须用 `magick`**——这是个地雷，脚本会校验 BM 头与色深不合格宁可失败也不入库。只有维护者改美术时手动跑一次，产物入库后 CI 与用户构建都不需要 Chrome/ImageMagick。
