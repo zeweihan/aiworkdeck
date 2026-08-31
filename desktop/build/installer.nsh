@@ -18,8 +18,10 @@
 !define AWD_UI_PRIVACY_URL "https://www.aiworkdeck.com/zh/legal/privacy"
 
 !macro AwdUiOnLaunch
-  ; 与 assisted 模板 StartApp 同款：以桌面用户身份启动，避免继承安装器的提权上下文
-  ${StdUtils.ExecShellAsUser} $0 "$launchLink" "open" ""
+  ; 与 assisted 模板 StartApp 同款：以桌面用户身份启动，避免继承安装器的提权上下文。
+  ; 不用 $launchLink：本 include 在 installer.nsi 声明该 Var 之前编译，引用会吃
+  ; warning 6000（-WX 下即失败）；installSection 里它的值就是这个表达式
+  ${StdUtils.ExecShellAsUser} $0 "$INSTDIR\${APP_EXECUTABLE_FILENAME}" "open" ""
 !macroend
 
 !include "win\awd-oneclick-ui.nsh"
