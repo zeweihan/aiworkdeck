@@ -12,6 +12,7 @@ using System;
 using System.Runtime.InteropServices;
 public class W {
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int w, int ht, uint f);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, UIntPtr e);
@@ -29,6 +30,10 @@ while ((Get-Date) -lt $deadline) {
 }
 if ($p.MainWindowHandle -eq [IntPtr]::Zero) { throw "installer window never appeared" }
 $h = $p.MainWindowHandle
+# 置顶：ARM runner 的桌面盖着一层 OOBE 隐私设置全屏窗（真机 run 实锤：点击全打在
+# 它身上，还顺手关了微软的墨迹开关）。TOPMOST 后点击与截图必然落在安装器上，
+# 不用管背后是什么。HWND_TOPMOST=-1，SWP_NOMOVE|SWP_NOSIZE=0x3
+[W]::SetWindowPos($h, [IntPtr](-1), 0, 0, 0, 0, 0x3) | Out-Null
 [W]::SetForegroundWindow($h) | Out-Null
 Start-Sleep -Milliseconds 800
 
