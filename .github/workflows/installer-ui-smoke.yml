@@ -51,6 +51,12 @@ jobs:
         shell: pwsh
         run: pwsh -File desktop/scripts/installer-smoke.ps1 -Exe harness-en.exe -OutDir shots/en
 
+      - name: Drive addin installer (无目录展开分支的实跑覆盖)
+        shell: pwsh
+        # 插件端不开 AWD_UI_DIR_CHOICE，欢迎页少一组控件、安装秒完——点自定义安装
+        # 的那一下落在空白处无害，其余流程同款；在 runner 上写 HKCU sideload 键无碍
+        run: pwsh -File desktop/scripts/installer-smoke.ps1 -Exe addin-smoke.exe -OutDir shots/addin
+
       - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v4
