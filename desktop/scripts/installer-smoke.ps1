@@ -16,7 +16,11 @@ public class W {
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, UIntPtr e);
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT pt);
+  [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint flags);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   public struct RECT { public int L, T, R, B; }
+  public struct POINT { public int x, y; }
 }
 "@
 
@@ -30,12 +34,31 @@ while ((Get-Date) -lt $deadline) {
 }
 if ($p.MainWindowHandle -eq [IntPtr]::Zero) { throw "installer window never appeared" }
 $h = $p.MainWindowHandle
-# 置顶：ARM runner 的桌面盖着一层 OOBE 隐私设置全屏窗（真机 run 实锤：点击全打在
-# 它身上，还顺手关了微软的墨迹开关）。TOPMOST 后点击与截图必然落在安装器上，
-# 不用管背后是什么。HWND_TOPMOST=-1，SWP_NOMOVE|SWP_NOSIZE=0x3
+# 置顶 + 反遮挡：ARM runner 桌面盖着一层 OOBE 隐私设置全屏窗，且它自己也是
+# 置顶层（TOPMOST 压不过，真机两轮实锤）。用 WindowFromPoint 探测卡片中心
+# 实际最上层归属，不是我们就杀掉那个进程（runner 一次性虚机，无副作用），
+# 循环直到视线畅通。HWND_TOPMOST=-1，SWP_NOMOVE|SWP_NOSIZE=0x3
 [W]::SetWindowPos($h, [IntPtr](-1), 0, 0, 0, 0, 0x3) | Out-Null
 [W]::SetForegroundWindow($h) | Out-Null
 Start-Sleep -Milliseconds 800
+for ($try = 0; $try -lt 6; $try++) {
+  $r0 = New-Object W+RECT
+  [W]::GetWindowRect($h, [ref]$r0) | Out-Null
+  $pt = New-Object W+POINT
+  $pt.x = [int](($r0.L + $r0.R) / 2); $pt.y = [int](($r0.T + $r0.B) / 2)
+  $top = [W]::GetAncestor([W]::WindowFromPoint($pt), 2)   # GA_ROOT
+  if ($top -eq $h) { Write-Host "line of sight clear (try $try)"; break }
+  $tpid = [uint32]0
+  [W]::GetWindowThreadProcessId($top, [ref]$tpid) | Out-Null
+  if ($tpid -ne 0 -and $tpid -ne $PID -and $tpid -ne $p.Id) {
+    $blocker = Get-Process -Id $tpid -ErrorAction SilentlyContinue
+    Write-Host "killing overlay process: $($blocker.ProcessName) (pid $tpid)"
+    Stop-Process -Id $tpid -Force -ErrorAction SilentlyContinue
+  }
+  Start-Sleep -Seconds 1
+  [W]::SetWindowPos($h, [IntPtr](-1), 0, 0, 0, 0, 0x3) | Out-Null
+  [W]::SetForegroundWindow($h) | Out-Null
+}
 
 function Get-Rect {
   $r = New-Object W+RECT
