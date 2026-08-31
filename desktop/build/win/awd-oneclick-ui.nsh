@@ -356,22 +356,24 @@ FunctionEnd
 !ifdef AWD_UI_DIR_CHOICE
 Function AwdToggleCustom
   Pop $0
-  ${AwdPx} $2 ${AWDUI_W}
   ${If} $AwdExpanded = 0
     StrCpy $AwdExpanded 1
-    ${AwdPx} $3 ${AWDUI_H_EXP}
     ShowWindow $AwdDirEdit ${SW_SHOW}
     ShowWindow $AwdBrowseBtn ${SW_SHOW}
     ShowWindow $AwdSpaceLabel ${SW_SHOW}
     Call AwdUpdateSpace
+    ; 尺寸必须在 AwdUpdateSpace 之后算：它的输出寄存器会踩 $0-$2
+    ;（CI 实锤：剩余 32GB 把窗口宽度写成 32px）
+    ${AwdPx} $R6 ${AWDUI_H_EXP}
   ${Else}
     StrCpy $AwdExpanded 0
-    ${AwdPx} $3 ${AWDUI_H}
     ShowWindow $AwdDirEdit ${SW_HIDE}
     ShowWindow $AwdBrowseBtn ${SW_HIDE}
     ShowWindow $AwdSpaceLabel ${SW_HIDE}
+    ${AwdPx} $R6 ${AWDUI_H}
   ${EndIf}
-  System::Call 'user32::SetWindowPos(p $HWNDPARENT, i 0, i $AwdWinX, i $AwdWinY, i r2, i r3, i 0x24)'
+  ${AwdPx} $R5 ${AWDUI_W}
+  System::Call 'user32::SetWindowPos(p $HWNDPARENT, i 0, i $AwdWinX, i $AwdWinY, i R5, i R6, i 0x24)'
 FunctionEnd
 
 Function AwdBrowseClick
