@@ -78,7 +78,9 @@ jobs:
       - name: Assert native arch detection reads ARM64
         shell: pwsh
         run: |
-          $out = reg query 'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' /v PROCESSOR_ARCHITECTURE
+          # reg query 输出是行数组：-notmatch 对数组做过滤不是布尔，必须先拼成串
+          #（首轮真机 run 实锤：值明明是 ARM64 断言却红）
+          $out = (reg query 'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' /v PROCESSOR_ARCHITECTURE) | Out-String
           if ($out -notmatch 'ARM64') { throw "native arch not ARM64: $out" }
           Write-Host 'detection ok: ARM64'
 
