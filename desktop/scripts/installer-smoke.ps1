@@ -19,6 +19,7 @@ public class W {
   [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT pt);
   [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint flags);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
   public struct RECT { public int L, T, R, B; }
   public struct POINT { public int x, y; }
 }
@@ -41,24 +42,36 @@ $h = $p.MainWindowHandle
 [W]::SetWindowPos($h, [IntPtr](-1), 0, 0, 0, 0, 0x3) | Out-Null
 [W]::SetForegroundWindow($h) | Out-Null
 Start-Sleep -Milliseconds 800
-for ($try = 0; $try -lt 6; $try++) {
-  $r0 = New-Object W+RECT
-  [W]::GetWindowRect($h, [ref]$r0) | Out-Null
-  $pt = New-Object W+POINT
-  $pt.x = [int](($r0.L + $r0.R) / 2); $pt.y = [int](($r0.T + $r0.B) / 2)
-  $top = [W]::GetAncestor([W]::WindowFromPoint($pt), 2)   # GA_ROOT
-  if ($top -eq $h) { Write-Host "line of sight clear (try $try)"; break }
-  $tpid = [uint32]0
-  [W]::GetWindowThreadProcessId($top, [ref]$tpid) | Out-Null
-  if ($tpid -ne 0 -and $tpid -ne $PID -and $tpid -ne $p.Id) {
-    $blocker = Get-Process -Id $tpid -ErrorAction SilentlyContinue
-    Write-Host "killing overlay process: $($blocker.ProcessName) (pid $tpid)"
-    Stop-Process -Id $tpid -Force -ErrorAction SilentlyContinue
+# 视线清障：目标点被别的窗口盖住时——先 ESC（关掉开始菜单/弹出层，杀 OOBE 的
+# 副作用就是弹开始菜单，真机实锤），仍在就杀掉遮挡进程，再置顶重探
+function Clear-Overlay([int]$x, [int]$y) {
+  for ($try = 0; $try -lt 6; $try++) {
+    $pt = New-Object W+POINT
+    $pt.x = $x; $pt.y = $y
+    $top = [W]::GetAncestor([W]::WindowFromPoint($pt), 2)   # GA_ROOT
+    if ($top -eq $h) { if ($try -gt 0) { Write-Host "line of sight restored (try $try)" }; return }
+    [W]::keybd_event(0x1B, 0, 0, [UIntPtr]::Zero)   # ESC down
+    [W]::keybd_event(0x1B, 0, 2, [UIntPtr]::Zero)   # ESC up
+    Start-Sleep -Milliseconds 500
+    $top2 = [W]::GetAncestor([W]::WindowFromPoint($pt), 2)
+    if ($top2 -ne $h -and $top2 -ne [IntPtr]::Zero) {
+      $tpid = [uint32]0
+      [W]::GetWindowThreadProcessId($top2, [ref]$tpid) | Out-Null
+      if ($tpid -ne 0 -and $tpid -ne $PID -and $tpid -ne $p.Id) {
+        $blocker = Get-Process -Id $tpid -ErrorAction SilentlyContinue
+        Write-Host "killing overlay process: $($blocker.ProcessName) (pid $tpid)"
+        Stop-Process -Id $tpid -Force -ErrorAction SilentlyContinue
+      }
+    }
+    Start-Sleep -Seconds 1
+    [W]::SetWindowPos($h, [IntPtr](-1), 0, 0, 0, 0, 0x3) | Out-Null
+    [W]::SetForegroundWindow($h) | Out-Null
   }
-  Start-Sleep -Seconds 1
-  [W]::SetWindowPos($h, [IntPtr](-1), 0, 0, 0, 0, 0x3) | Out-Null
-  [W]::SetForegroundWindow($h) | Out-Null
+  Write-Warning "line of sight still blocked at ($x,$y)"
 }
+$r0 = New-Object W+RECT
+[W]::GetWindowRect($h, [ref]$r0) | Out-Null
+Clear-Overlay ([int](($r0.L + $r0.R) / 2)) ([int](($r0.T + $r0.B) / 2))
 
 function Get-Rect {
   $r = New-Object W+RECT
@@ -80,6 +93,8 @@ function Shot([string]$name) {
 }
 
 function ClickAt([int]$bx, [int]$by) {
+  $r = Get-Rect
+  Clear-Overlay ($r.L + $bx) ($r.T + $by)
   $r = Get-Rect
   [W]::SetCursorPos($r.L + $bx, $r.T + $by) | Out-Null
   Start-Sleep -Milliseconds 120
