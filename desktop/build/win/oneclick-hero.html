@@ -1,0 +1,164 @@
+<!--
+  一键安装器大卡片背景（760x568 桌面端 / 760x500 插件端，24 位 BMP）。
+  按钮/链接/展开开关都只是画在这张图上，命中靠 awd-oneclick-ui.nsh 里的透明热区；
+  下方坐标注释与 nsh 里的 AWDUI_* 常量一一对应，改布局必须两处同步。
+  参数：?lang=zh|en&product=desktop|addin
+  渲染：desktop/scripts/render-oneclick-art.mjs（多 DPI 由 force-device-scale-factor 出）。
+  字体栈刻意用「雅黑优先」：CI 在 Windows 渲染=用户所见；Mac 渲染落到 PingFang 也协调。
+-->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 760px; height: 568px; overflow: hidden; }
+  body.addin { height: 500px; }
+  body {
+    position: relative;
+    background: #FFFFFF;
+    font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Helvetica Neue", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* 整卡 1px 描边：无边框窗口在浅色桌面上需要轮廓 */
+  .frame {
+    position: absolute; inset: 0;
+    border: 1px solid #DCE5DF;
+    pointer-events: none; z-index: 9;
+  }
+
+  /* ---- 品牌视觉区 0..400 ---- */
+  .hero {
+    position: absolute; left: 0; top: 0; width: 760px; height: 400px;
+    background:
+      radial-gradient(420px 340px at -6% 108%, rgba(91, 209, 151, 0.28) 0%, rgba(91, 209, 151, 0) 64%),
+      radial-gradient(380px 300px at 106% -10%, rgba(91, 209, 151, 0.20) 0%, rgba(91, 209, 151, 0) 60%),
+      linear-gradient(160deg, #0E3320 0%, #174C31 55%, #1D6440 100%);
+  }
+  svg.traces { position: absolute; }
+  .logo {
+    position: absolute; left: 332px; top: 92px; width: 96px; height: 96px;
+    border-radius: 22px;
+    box-shadow: 0 10px 30px rgba(6, 26, 16, 0.45);
+  }
+  .wordmark {
+    position: absolute; top: 212px; left: 0; width: 760px;
+    text-align: center;
+    font-size: 34px; font-weight: 600; letter-spacing: 0.02em;
+    color: #FFFFFF;
+  }
+  .rule {
+    position: absolute; top: 268px; left: 310px; width: 140px; height: 2px;
+    background: linear-gradient(90deg,
+      rgba(91,209,151,0) 0%, #5BD197 30%, #A6EFCA 50%, #5BD197 70%, rgba(91,209,151,0) 100%);
+  }
+  .tagline {
+    position: absolute; top: 284px; left: 0; width: 760px;
+    text-align: center;
+    font-size: 14px; letter-spacing: 0.22em; text-indent: 0.22em;
+    color: rgba(220, 248, 234, 0.82);
+  }
+
+  /* 窗控：最小化 (668,8,40,32)=AWDUI_MIN，关闭 (712,8,40,32)=AWDUI_CLOSE */
+  .winbtn {
+    position: absolute; top: 8px; width: 40px; height: 32px;
+    display: flex; align-items: center; justify-content: center;
+    color: rgba(230, 246, 238, 0.75);
+    font-size: 17px; font-weight: 300;
+  }
+  .winbtn.min { left: 668px; }
+  .winbtn.close { left: 712px; font-size: 16px; }
+
+  /* ---- 操作带 400..500 ---- */
+  .band {
+    position: absolute; left: 0; top: 400px; width: 760px; height: 100px;
+    background: #FFFFFF;
+  }
+  /* 协议行：前缀 x44；条款热区 (146,416,54,24)=AWDUI_TERMS；隐私热区 (232,416,54,24)=AWDUI_PRIV */
+  .agree { position: absolute; top: 420px; font-size: 13px; color: #8A9590; }
+  .agree.prefix { left: 44px; }
+  .agree.link1 { left: 146px; width: 54px; text-align: center; color: #1D6440; }
+  .agree.mid { left: 210px; }
+  .agree.link2 { left: 232px; width: 54px; text-align: center; color: #1D6440; }
+  .agree.link1, .agree.link2 { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: rgba(29,100,64,.4); }
+
+  /* 自定义安装开关 (44,448,130,26)=AWDUI_TOGGLE，仅桌面端 */
+  .custom {
+    position: absolute; left: 44px; top: 452px;
+    font-size: 13px; color: #566158;
+  }
+  .custom .chev { font-size: 10px; color: #9AA69E; margin-left: 4px; }
+  body.addin .custom, body.addin .dirlabel { display: none; }
+
+  /* 主按钮 (460,414,260,72)=AWDUI_CTA */
+  .cta {
+    position: absolute; left: 460px; top: 414px; width: 260px; height: 72px;
+    border-radius: 12px;
+    background: linear-gradient(175deg, #1E7A4C 0%, #16603B 78%, #135634 100%);
+    box-shadow: 0 8px 22px rgba(22, 96, 59, 0.32), inset 0 1px 0 rgba(255,255,255,0.14);
+    display: flex; align-items: center; justify-content: center;
+    color: #FFFFFF; font-size: 23px; font-weight: 600; letter-spacing: 0.12em; text-indent: 0.12em;
+  }
+
+  /* ---- 自定义安装展开行 500..568（仅桌面端；编辑框/浏览按钮是真控件，区域留白） ---- */
+  .dirrow {
+    position: absolute; left: 0; top: 500px; width: 760px; height: 68px;
+    background: #F7F9F8;
+    border-top: 1px solid #E8EEE9;
+  }
+  /* 标签「安装位置」(44,530)；编辑框 (128,522,396,30)；浏览 (540,521,88,32)；空间 (644,527) */
+  .dirlabel { position: absolute; left: 44px; top: 530px; font-size: 13px; color: #566158; }
+  body.addin .dirrow { display: none; }
+</style>
+</head>
+<body>
+  <div class="hero">
+    <svg class="traces" style="left:18px; top:20px;" width="200" height="120" viewBox="0 0 200 120" fill="none">
+      <path d="M8 110 V56 Q8 48 16 48 H70 Q78 48 78 40 V14" stroke="rgba(91,209,151,0.35)" stroke-width="1.6"/>
+      <path d="M30 110 V78 Q30 70 38 70 H120" stroke="rgba(91,209,151,0.22)" stroke-width="1.6"/>
+      <circle cx="78" cy="12" r="3" fill="rgba(166,239,202,0.65)"/>
+      <circle cx="122" cy="70" r="3" fill="rgba(166,239,202,0.45)"/>
+    </svg>
+    <svg class="traces" style="right:16px; bottom:14px;" width="220" height="130" viewBox="0 0 220 130" fill="none">
+      <path d="M212 10 V70 Q212 78 204 78 H140 Q132 78 132 86 V120" stroke="rgba(91,209,151,0.32)" stroke-width="1.6"/>
+      <path d="M186 10 V44 Q186 52 178 52 H96" stroke="rgba(91,209,151,0.20)" stroke-width="1.6"/>
+      <circle cx="132" cy="122" r="3" fill="rgba(166,239,202,0.6)"/>
+      <circle cx="94" cy="52" r="3" fill="rgba(166,239,202,0.42)"/>
+    </svg>
+    <img class="logo" src="../icon.png" alt="">
+    <div class="wordmark">AI WorkDeck</div>
+    <div class="rule"></div>
+    <div class="tagline" data-zh-desktop="AI 原生工作台" data-en-desktop="THE AI-NATIVE WORKDECK"
+         data-zh-addin="OFFICE 任务窗格插件" data-en-addin="OFFICE TASK PANE ADD-IN"></div>
+    <div class="winbtn min">─</div>
+    <div class="winbtn close">✕</div>
+  </div>
+
+  <!-- 背景条与内容分离：内容元素全部挂 body 层，坐标即页面绝对坐标（与热区常量同基准） -->
+  <div class="band"></div>
+  <div class="dirrow"></div>
+  <span class="agree prefix" data-zh="安装即代表同意" data-en="You accept the"></span>
+  <span class="agree link1" data-zh="服务条款" data-en="Terms"></span>
+  <span class="agree mid" data-zh="与" data-en="and"></span>
+  <span class="agree link2" data-zh="隐私政策" data-en="Privacy"></span>
+  <div class="custom"><span data-zh="自定义安装" data-en="Custom install"></span><span class="chev">▾</span></div>
+  <div class="cta" data-zh="立即安装" data-en="Install Now"></div>
+  <div class="dirlabel" data-zh="安装位置" data-en="Location"></div>
+
+<script>
+  const q = new URLSearchParams(location.search);
+  const lang = q.get('lang') === 'en' ? 'en' : 'zh';
+  const product = q.get('product') === 'addin' ? 'addin' : 'desktop';
+  document.body.classList.add(product);
+  for (const el of document.querySelectorAll('[data-zh]')) el.textContent = el.dataset[lang];
+  for (const el of document.querySelectorAll('[data-zh-desktop]')) el.textContent = el.dataset[lang + capitalize(product)] ?? el.dataset[lang + 'Desktop'];
+  function capitalize(s) { return s[0].toUpperCase() + s.slice(1); }
+  if (lang === 'en') {
+    // 英文按钮字距收紧，避免长词溢出
+    document.querySelector('.cta').style.letterSpacing = '0.02em';
+    document.querySelector('.cta').style.textIndent = '0.02em';
+    document.querySelector('.cta').style.fontSize = '22px';
+  }
+</script>
+</body>
+</html>
