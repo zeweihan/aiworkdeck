@@ -1,0 +1,66 @@
+# 一键安装器 UI 冒烟（dev-board#339）：在 Windows runner 上渲染位图、编译
+# awd-oneclick-ui.nsh 的测试壳与插件安装器，真跑一遍「大卡片 → 角落进度卡 →
+# 完成卡」并逐阶段截图上传。开发期在专用分支上按推自动跑；平时手动触发。
+# 不依赖桌面完整打包（那是 desktop-build.yml 的事），几分钟出结果，
+# 是没有 Windows 真机时唯一的视觉回归手段。
+name: installer-ui-smoke
+
+on:
+  push:
+    branches: [claude/installer-oneclick-ui]
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Render one-click art (Chrome + ImageMagick, runner 自带)
+        shell: pwsh
+        run: |
+          node desktop/scripts/render-oneclick-art.mjs --product desktop --out desktop/build/win/generated --version 9.9.9
+          node desktop/scripts/render-oneclick-art.mjs --product addin --out office-addin/installer/win/generated --version 9.9.9
+
+      - name: Ensure NSIS
+        shell: pwsh
+        run: |
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
+            choco install nsis -y --no-progress
+            Add-Content $env:GITHUB_PATH 'C:\Program Files (x86)\NSIS'
+          }
+
+      - name: Compile harness (zh/en) and addin installer
+        shell: pwsh
+        # NSIS 的相对 File 路径是相对脚本所在目录解析的，所有 -D 路径一律给绝对路径
+        run: |
+          $ws = $env:GITHUB_WORKSPACE
+          New-Item -ItemType Directory -Force payload | Out-Null
+          1..4 | ForEach-Object { fsutil file createnew ("payload\blob$_.bin") 41943040 }
+          makensis /INPUTCHARSET UTF8 /DHARNESS_LANG=SimpChinese "/DGENART=$ws\desktop\build\win\generated" "/DPAYLOAD=$ws\payload" "/DOUTFILE=$ws\harness-zh.exe" desktop\build\win\ui-harness.nsi
+          makensis /INPUTCHARSET UTF8 /DHARNESS_LANG=English "/DGENART=$ws\desktop\build\win\generated" "/DPAYLOAD=$ws\payload" "/DOUTFILE=$ws\harness-en.exe" desktop\build\win\ui-harness.nsi
+          Set-Content -Path dummy-manifest.xml -Value '<?xml version="1.0"?><OfficeApp/>'
+          makensis /INPUTCHARSET UTF8 /DVERSION=0.0.1 "/DMANIFEST=$ws\dummy-manifest.xml" "/DOUTFILE=$ws\addin-smoke.exe" "/DARTDIR=$ws\office-addin\installer\win" "/DAWD_UI_ENGINE=$ws\desktop\build\win\awd-oneclick-ui.nsh" "/DGENART=$ws\office-addin\installer\win\generated" /DLEGALBASE=https://www.aiworkdeck.com office-addin\installer\win\installer.nsi
+
+      - name: Drive zh harness with screenshots
+        shell: pwsh
+        run: pwsh -File desktop/scripts/installer-smoke.ps1 -Exe harness-zh.exe -OutDir shots/zh
+
+      - name: Drive en harness with screenshots
+        shell: pwsh
+        run: pwsh -File desktop/scripts/installer-smoke.ps1 -Exe harness-en.exe -OutDir shots/en
+
+      - name: Drive addin installer (无目录展开分支的实跑覆盖)
+        shell: pwsh
+        # 插件端不开 AWD_UI_DIR_CHOICE，欢迎页少一组控件、安装秒完——点自定义安装
+        # 的那一下落在空白处无害，其余流程同款；在 runner 上写 HKCU sideload 键无碍
+        run: pwsh -File desktop/scripts/installer-smoke.ps1 -Exe addin-smoke.exe -OutDir shots/addin
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-ui-shots
+          path: shots/
+          if-no-files-found: warn

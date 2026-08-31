@@ -122,7 +122,7 @@
     "nsis": {
       "oneClick": false,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
+      "allowToChangeInstallationDirectory": false,
       "installerSidebar": "build/win/installerSidebar.bmp",
       "uninstallerSidebar": "build/win/installerSidebar.bmp",
       "installerHeader": "build/win/installerHeader.bmp",

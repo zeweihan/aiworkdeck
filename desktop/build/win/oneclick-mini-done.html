@@ -1,0 +1,74 @@
+<!--
+  安装完成的右上角小卡片背景（360x132，24 位 BMP）。
+  「立即体验/完成」按钮画在 (236,80,104,36)=AWDUI_DONEBTN，关闭 ✕ 在 (320,6,34,28)=AWDUI_MCLOSE，
+  命中靠 awd-oneclick-ui.nsh 的透明热区。
+  参数：?lang=zh|en&product=desktop|addin
+-->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 360px; height: 132px; overflow: hidden; }
+  body {
+    position: relative; background: #FFFFFF;
+    font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Helvetica Neue", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .frame { position: absolute; inset: 0; border: 1px solid #DCE5DF; z-index: 9; }
+  .accent {
+    position: absolute; left: 0; top: 0; width: 360px; height: 3px;
+    background: linear-gradient(90deg, #1D6440 0%, #5BD197 60%, #A6EFCA 100%);
+  }
+  .logo { position: absolute; left: 20px; top: 17px; width: 24px; height: 24px; border-radius: 6px; }
+  .brand {
+    position: absolute; left: 52px; top: 20px;
+    font-size: 14px; font-weight: 600; color: #17301F; letter-spacing: 0.02em;
+  }
+  .close {
+    position: absolute; left: 320px; top: 6px; width: 34px; height: 28px;
+    display: flex; align-items: center; justify-content: center;
+    color: #9AA69E; font-size: 14px;
+  }
+  .check {
+    position: absolute; left: 20px; top: 60px; width: 20px; height: 20px;
+    border-radius: 50%; background: #E3F5EB;
+    display: flex; align-items: center; justify-content: center;
+    color: #16603B; font-size: 12px; font-weight: 700;
+  }
+  .done { position: absolute; left: 48px; top: 61px; font-size: 14px; font-weight: 600; color: #14301F; }
+  .sub { position: absolute; left: 20px; top: 88px; width: 210px; font-size: 11px; line-height: 1.5; color: #93A099; letter-spacing: 0.01em; }
+  .btn {
+    position: absolute; left: 236px; top: 80px; width: 104px; height: 36px;
+    border-radius: 9px;
+    background: linear-gradient(175deg, #1E7A4C 0%, #16603B 85%);
+    box-shadow: 0 5px 14px rgba(22, 96, 59, 0.28);
+    display: flex; align-items: center; justify-content: center;
+    color: #FFFFFF; font-size: 14px; font-weight: 600; letter-spacing: 0.06em; text-indent: 0.06em;
+  }
+</style>
+</head>
+<body>
+  <div class="accent"></div>
+  <img class="logo" src="../icon.png" alt="">
+  <div class="brand">AI WorkDeck</div>
+  <div class="close">✕</div>
+  <div class="check">✓</div>
+  <div class="done" data-zh="安装完成" data-en="Install complete"></div>
+  <div class="sub"
+       data-zh-desktop="快捷方式已加入开始菜单与桌面" data-en-desktop="Shortcuts added to Start menu and desktop"
+       data-zh-addin="重新打开 Word / Excel / PowerPoint 生效" data-en-addin="Reopen Word / Excel / PowerPoint to finish"></div>
+  <div class="btn"
+       data-zh-desktop="立即体验" data-en-desktop="Open Now"
+       data-zh-addin="完 成" data-en-addin="Done"></div>
+  <div class="frame"></div>
+<script>
+  const q = new URLSearchParams(location.search);
+  const lang = q.get('lang') === 'en' ? 'en' : 'zh';
+  const product = q.get('product') === 'addin' ? 'Addin' : 'Desktop';
+  for (const el of document.querySelectorAll('[data-zh]')) el.textContent = el.dataset[lang];
+  for (const el of document.querySelectorAll('[data-zh-desktop]')) el.textContent = el.dataset[lang + product];
+</script>
+</body>
+</html>

@@ -663,6 +663,14 @@ jobs:
         run: |
           # 与 macOS 同构：安装包只带一个 pysvc.tar.gz（文件数大降、安装更快），首启解压
           node desktop/scripts/pack-pysvc.js --bundle desktop/bundled/win-x64
+      - name: Render one-click installer art (Windows)
+        # 一键安装 UI（awd-oneclick-ui.nsh，dev-board#339）的位图构建现场渲染、
+        # 不入库；缺了这步 NSIS 编译会因 File 找不到 generated/*.bmp 直接失败
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $v = node -p "require('./desktop/package.json').version"
+          node desktop/scripts/render-oneclick-art.mjs --product desktop --out desktop/build/win/generated --version $v
       - name: Package installers (Windows, unsigned)
         if: runner.os == 'Windows'
         working-directory: desktop

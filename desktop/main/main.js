@@ -1437,8 +1437,13 @@ async function ensurePysvcReady() {
   // 成功：不销毁，切文案继续等后端等服务起来；调用方在 createMainWindow 后收尾
   try {
     if (splash && !splash.isDestroyed()) {
+      // ARM 版 Windows（Mac 虚拟机）转译运行时首启以分钟计，明说，免得像卡死（dev-board#340）
+      const emulated = require('./services/win-arch').isWinArmEmulated()
+      const subtitle = emulated
+        ? '检测到 ARM 版 Windows（转译运行），首次启动可能需要几分钟'
+        : '首次启动准备就绪，即将打开窗口'
       splash.webContents.executeJavaScript(
-        `window.__setPhase && window.__setPhase(${JSON.stringify('正在启动本地服务…')}, ${JSON.stringify('首次启动准备就绪，即将打开窗口')})`
+        `window.__setPhase && window.__setPhase(${JSON.stringify('正在启动本地服务…')}, ${JSON.stringify(subtitle)})`
       ).catch(() => {})
     }
   } catch (e) { /* ignore */ }
@@ -1488,7 +1493,9 @@ function createServices() {
     packaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
     pysvcRoot,
-    dataDir
+    dataDir,
+    // ARM 版 Windows（Mac 虚拟机）上 x64 转译运行，服务启动看门狗要放宽（dev-board#340）
+    winEmulated: require('./services/win-arch').isWinArmEmulated()
   })
   mgr.register(createBackendDescriptor())
   mgr.register(createPptxDescriptor())

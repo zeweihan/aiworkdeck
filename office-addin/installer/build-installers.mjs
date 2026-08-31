@@ -244,6 +244,14 @@ if (!args.skipMac) {
 if (!args.skipWin) {
   const exeOut = path.join(distDir, `AI-WorkDeck-Office-Addin-${version}.exe`)
   try {
+    // 一键安装 UI（dev-board#339）：引擎与位图渲染器都在桌面模块，位图构建现场生成不入库
+    const genArt = path.join(addinDir, 'installer', 'win', 'generated')
+    execFileSync(process.execPath, [
+      path.join(repoDir, 'desktop', 'scripts', 'render-oneclick-art.mjs'),
+      '--product', 'addin', '--out', genArt, '--version', version,
+    ], { stdio: 'inherit' })
+    // 法务页跟随安装器变体的站点：国际包（addin.workdeck.ai）链到 workdeck.ai
+    const legalBase = args.url.includes('workdeck.ai') ? 'https://www.workdeck.ai' : 'https://www.aiworkdeck.com'
     // LC_ALL 必须是 UTF-8 locale：locale 为空时 makensis 的 iconv 对非 ASCII 直接
     // 报 Bad text encoding，纯 ASCII 也会 std::bad_alloc（Homebrew nsis 3.12 实测）
     execFileSync('makensis', [
@@ -251,6 +259,9 @@ if (!args.skipWin) {
       `-DMANIFEST=${manifestPath}`,
       `-DOUTFILE=${exeOut}`,
       `-DARTDIR=${path.join(addinDir, 'installer', 'win')}`,
+      `-DAWD_UI_ENGINE=${path.join(repoDir, 'desktop', 'build', 'win', 'awd-oneclick-ui.nsh')}`,
+      `-DGENART=${genArt}`,
+      `-DLEGALBASE=${legalBase}`,
       path.join(addinDir, 'installer', 'win', 'installer.nsi'),
     ], { stdio: 'inherit', env: { ...process.env, LC_ALL: 'en_US.UTF-8', LANG: 'en_US.UTF-8' } })
     made.push(exeOut)

@@ -120,7 +120,11 @@ class ServiceManager {
     if (postPrepare === 'foreign') throw new Error(`${name} port ${port} 被未知进程占用`)
     if (this.procs.get(name)) await this.stop(name)
 
-    const timeoutMs = d.startTimeoutMs(this.ctx)
+    let timeoutMs = d.startTimeoutMs(this.ctx)
+    // Windows-on-ARM 转译环境（Mac 虚拟机等）：x64 JVM/Python 首启慢一个数量级，
+    // 60 秒级看门狗会把还在预热的进程杀在半路进入杀-重试死循环（dev-board#340）。
+    // 统一放大等待窗口，而不是各服务自己猜。
+    if (this.ctx.winEmulated) timeoutMs *= 8
     // 关闭上一次 start 遗留的日志流，避免每次重启/崩溃-重启累积文件描述符泄漏
     const prevStream = this.logStreams.get(name)
     if (prevStream) { try { prevStream.end() } catch (e) { /* ignore */ } this.logStreams.delete(name) }

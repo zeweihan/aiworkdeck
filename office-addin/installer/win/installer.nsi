@@ -1,9 +1,13 @@
-; AI WorkDeck Office 插件 Windows 安装器（NSIS + MUI2 品牌向导）。
+; AI WorkDeck Office 插件 Windows 安装器（搜狗式一键安装 UI，dev-board#339）。
 ; 机制：把生产 manifest 拷到 %LOCALAPPDATA%，再写 HKCU\...\WEF\Developer 注册表
 ; sideload 键（微软官方 Windows sideload 路径）。全程 HKCU / 当前用户，免管理员。
-; 构建期由 build-installers.mjs 传入 -DVERSION= -DMANIFEST= -DOUTFILE= -DARTDIR=。
-; 美术资产（侧栏/页眉 BMP、图标 ico）在 win/ 下入库，由 installer/render-art.mjs 生成。
-; 刻意不设目录选择页：装的只是一份清单文件，位置是实现细节，少一步是一步。
+; UI 引擎与桌面端共用 desktop/build/win/awd-oneclick-ui.nsh：单张大卡片一键安装，
+; 点击后收起为右上角小进度卡，完成卡提示重开 Office。位图在构建时由
+; render-oneclick-art.mjs 渲染（build-installers.mjs 负责调用，产物不入库）。
+; 构建期由 build-installers.mjs 传入：
+;   -DVERSION= -DMANIFEST= -DOUTFILE= -DARTDIR=（图标所在目录）
+;   -DAWD_UI_ENGINE=（引擎 nsh 绝对路径） -DGENART=（渲染位图目录） -DLEGALBASE=（法务页站点）
+; 刻意不设目录选择：装的只是一份清单文件，位置是实现细节（引擎不开 AWD_UI_DIR_CHOICE）。
 
 Unicode true
 !include "MUI2.nsh"
@@ -27,33 +31,25 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "AI WorkDeck"
 
 !define MUI_ICON "${ARTDIR}\installer.ico"
 !define MUI_UNICON "${ARTDIR}\installer.ico"
+; 卸载器仍走 MUI 经典页，页眉沿用品牌位图
 !define MUI_HEADERIMAGE
 !define MUI_HEADERIMAGE_BITMAP "${ARTDIR}\installerHeader.bmp"
-!define MUI_WELCOMEFINISHPAGE_BITMAP "${ARTDIR}\installerSidebar.bmp"
-!define MUI_UNWELCOMEFINISHPAGE_BITMAP "${ARTDIR}\installerSidebar.bmp"
-!define MUI_WELCOMEPAGE_TITLE "$(WelcomeTitle)"
-!define MUI_WELCOMEPAGE_TEXT "$(WelcomeText)"
-!define MUI_FINISHPAGE_TITLE "$(FinishTitle)"
-!define MUI_FINISHPAGE_TEXT "$(FinishText)"
 
-!insertmacro MUI_PAGE_WELCOME
+; ---- 一键安装 UI ----
+!define AWD_UI_ART "${GENART}"
+!define AWD_UI_TERMS_URL "${LEGALBASE}/zh/legal/terms"
+!define AWD_UI_PRIVACY_URL "${LEGALBASE}/zh/legal/privacy"
+!include "${AWD_UI_ENGINE}"
+
+!insertmacro AWD_UI_PAGE_WELCOME
 !insertmacro MUI_PAGE_INSTFILES
-!insertmacro MUI_PAGE_FINISH
+!insertmacro AWD_UI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 
 ; 语言：按系统语言自动选择（默认中文优先）
 !insertmacro MUI_LANGUAGE "SimpChinese"
 !insertmacro MUI_LANGUAGE "English"
-
-LangString WelcomeTitle ${LANG_SIMPCHINESE} "欢迎安装 AI WorkDeck Office 插件"
-LangString WelcomeText ${LANG_SIMPCHINESE} "本向导会把 AI WorkDeck 任务窗格安装到 Microsoft Word、Excel 与 PowerPoint。$\r$\n$\r$\n安装仅写入一份插件清单文件，不会修改 Office 本身，也不需要管理员权限。$\r$\n$\r$\n点击「下一步」开始。"
-LangString FinishTitle ${LANG_SIMPCHINESE} "安装完成"
-LangString FinishText ${LANG_SIMPCHINESE} "完全退出并重新打开 Word / Excel / PowerPoint 后，在「开始」选项卡右侧点击「打开 AI WorkDeck」。$\r$\n$\r$\n如需卸载，随时可在「设置 → 应用」中完成。"
-LangString WelcomeTitle ${LANG_ENGLISH} "Welcome to AI WorkDeck for Office"
-LangString WelcomeText ${LANG_ENGLISH} "This wizard installs the AI WorkDeck task pane for Microsoft Word, Excel and PowerPoint.$\r$\n$\r$\nOnly a single add-in manifest file is written. Office itself is not modified, and no administrator rights are required.$\r$\n$\r$\nClick Next to begin."
-LangString FinishTitle ${LANG_ENGLISH} "Installation Complete"
-LangString FinishText ${LANG_ENGLISH} "Fully quit and reopen Word / Excel / PowerPoint, then click 'Open AI WorkDeck' on the right side of the Home tab.$\r$\n$\r$\nYou can uninstall anytime from Settings > Apps."
 
 Section "Install"
   SetOutPath "$INSTDIR"
