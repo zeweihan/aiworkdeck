@@ -7,7 +7,7 @@ name: installer-ui-smoke
 
 on:
   push:
-    branches: [claude/installer-oneclick-ui]
+    branches: [claude/installer-oneclick-ui, claude/win-dual-arch]
   workflow_dispatch:
 
 jobs:
@@ -63,4 +63,70 @@ jobs:
         with:
           name: installer-ui-shots
           path: shots/
+          if-no-files-found: warn
+
+      - name: Upload rendered art for the ARM job
+        uses: actions/upload-artifact@v4
+        with:
+          name: oneclick-art-desktop
+          path: desktop/build/win/generated/
+          retention-days: 1
+
+  # 真 ARM64 Windows（public 仓才有的 windows-11-arm runner）：验证一键 UI 在
+  # ARM 上的实际表现（NSIS 产物是 x86，走系统转译层），并断言双架构检测判据
+  #（dev-board#341 的 customInstall 用同一注册表位）。探索性 job，失败不拦主 job。
+  smoke-arm:
+    needs: smoke
+    runs-on: windows-11-arm
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert native arch detection reads ARM64
+        shell: pwsh
+        run: |
+          # reg query 输出是行数组：-notmatch 对数组做过滤不是布尔，必须先拼成串
+          #（首轮真机 run 实锤：值明明是 ARM64 断言却红）
+          $out = (reg query 'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' /v PROCESSOR_ARCHITECTURE) | Out-String
+          if ($out -notmatch 'ARM64') { throw "native arch not ARM64: $out" }
+          Write-Host 'detection ok: ARM64'
+
+      - name: Ensure NSIS
+        shell: pwsh
+        run: |
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
+            choco install nsis -y --no-progress
+            Add-Content $env:GITHUB_PATH 'C:\Program Files (x86)\NSIS'
+          }
+
+      # 位图复用 x64 job 的渲染产物：ARM runner 镜像的 ImageMagick 缺模块注册表
+      #（RegistryKeyLookupFailed，连 PNG 都解不了，首轮真机 run 实锤），而位图
+      # 本来就与架构无关，没必要在 ARM 上再渲染一遍
+      - name: Download rendered art from x64 job
+        uses: actions/download-artifact@v4
+        with:
+          name: oneclick-art-desktop
+          path: desktop/build/win/generated/
+
+      - name: Compile harness (zh)
+        shell: pwsh
+        run: |
+          $ws = $env:GITHUB_WORKSPACE
+          New-Item -ItemType Directory -Force payload | Out-Null
+          1..4 | ForEach-Object { fsutil file createnew ("payload\blob$_.bin") 41943040 }
+          makensis /INPUTCHARSET UTF8 /DHARNESS_LANG=SimpChinese "/DGENART=$ws\desktop\build\win\generated" "/DPAYLOAD=$ws\payload" "/DOUTFILE=$ws\harness-zh.exe" desktop\build\win\ui-harness.nsi
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
+          if (-not (Test-Path "$ws\harness-zh.exe")) { throw 'harness exe missing' }
+
+      - name: Drive harness with screenshots (ARM real machine)
+        shell: pwsh
+        run: pwsh -File desktop/scripts/installer-smoke.ps1 -Exe harness-zh.exe -OutDir shots-arm/zh
+
+      - name: Upload ARM screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-ui-shots-arm
+          path: shots-arm/
           if-no-files-found: warn

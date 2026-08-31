@@ -42,3 +42,23 @@
 !macro customFinishPage
   !insertmacro AWD_UI_PAGE_FINISH
 !macroend
+
+!macro customInstall
+  ; Windows 单包双架构（dev-board#341）：主体照旧是 x64 全量（后端 javacv 无
+  ; windows-arm64 natives，Python 侧同样，只能留在转译层跑）；安装器额外携带一份
+  ; 纯 arm64 Electron 壳（app.asar 零原生依赖、双架构通用，壳只有运行时文件，
+  ; 压缩后约 +45MB）。装到 ARM64 Windows 时覆盖到 $INSTDIR，渲染与 LOWA WASM
+  ; 走原生，重计算留在转译层由 #340 的看门狗兜住。x64 机器上这段不执行。
+  ; 壳目录由 desktop-build.yml 在打包前用 electron-builder --dir --arm64 生成并
+  ; 剪掉 resources/；本地无此目录时降级为纯 x64 安装器（只提示不报错，-WX 下
+  ; !warning 会打断编译）。
+  !if /FileExists "${BUILD_RESOURCES_DIR}\win\arm64-shell\AI WorkDeck.exe"
+    ReadRegStr $0 HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "PROCESSOR_ARCHITECTURE"
+    ${If} $0 == "ARM64"
+      SetOutPath $INSTDIR
+      File /r "${BUILD_RESOURCES_DIR}\win\arm64-shell\*"
+    ${EndIf}
+  !else
+    !echo "arm64-shell 缺席：本次产物为纯 x64 安装器（CI 之外的构建路径属正常）"
+  !endif
+!macroend
