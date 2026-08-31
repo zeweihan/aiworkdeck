@@ -180,9 +180,10 @@ Function AwdGuiInit
   !macro _AwdArtSet L S
     ${If} $AwdLang == "${L}"
     ${AndIf} $AwdScale = ${S}
-      File "/oname=$PLUGINSDIR\awd-hero.bmp" "${AWD_UI_ART}/oneclick-hero-${L}-${S}.bmp"
-      File "/oname=$PLUGINSDIR\awd-mini-install.bmp" "${AWD_UI_ART}/oneclick-mini-install-${L}-${S}.bmp"
-      File "/oname=$PLUGINSDIR\awd-mini-done.bmp" "${AWD_UI_ART}/oneclick-mini-done-${L}-${S}.bmp"
+      ; 路径必须用反斜杠：Windows makensis 的 File 不吃混合斜杠（mac makensis 两种都认）
+      File "/oname=$PLUGINSDIR\awd-hero.bmp" "${AWD_UI_ART}\oneclick-hero-${L}-${S}.bmp"
+      File "/oname=$PLUGINSDIR\awd-mini-install.bmp" "${AWD_UI_ART}\oneclick-mini-install-${L}-${S}.bmp"
+      File "/oname=$PLUGINSDIR\awd-mini-done.bmp" "${AWD_UI_ART}\oneclick-mini-done-${L}-${S}.bmp"
     ${EndIf}
   !macroend
   !insertmacro _AwdArtSet zh 100
