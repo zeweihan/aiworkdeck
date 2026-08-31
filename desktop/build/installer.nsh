@@ -18,12 +18,14 @@
 !define AWD_UI_PRIVACY_URL "https://www.aiworkdeck.com/zh/legal/privacy"
 
 !macro AwdUiOnLaunch
-  ; 与 assisted 模板 StartApp 同款：以桌面用户身份启动，避免继承安装器的提权上下文。
-  ; 不用 $launchLink 也不用 APP_EXECUTABLE_FILENAME：本 include 在 installer.nsi
-  ; 的 Var 声明与 common.nsh 的 define 之前编译，引用哪个都吃 warning 6000
-  ;（-WX 下即失败，CI 两连实锤）。PRODUCT_FILENAME 走命令行 -D，include 时刻就有；
-  ; common.nsh 里 APP_EXECUTABLE_FILENAME 的定义式就是它拼 .exe
-  ${StdUtils.ExecShellAsUser} $0 "$INSTDIR\${PRODUCT_FILENAME}.exe" "open" ""
+  ; 这段宏在 electron-builder 生成脚本的最前部展开，晚于它的一切都引用不得：
+  ; $launchLink（Var 未声明）、APP_EXECUTABLE_FILENAME（common.nsh 未 include）、
+  ; StdUtils 插件（!addplugindir 未执行）在 -WX 下都是三连实锤的编译失败。
+  ; 用核心指令 ExecShell + 命令行 -D 阶段就存在的 PRODUCT_FILENAME。
+  ; 语义：本安装器 RequestExecutionLevel user 且强制按当前用户装、全程不提权，
+  ; ExecShell 继承的就是桌面用户上下文，assisted 模板用 ExecShellAsUser 防的
+  ;（提权后启动落在 admin 身份）在这条路径上不存在。
+  ExecShell "open" "$INSTDIR\${PRODUCT_FILENAME}.exe"
 !macroend
 
 !include "win\awd-oneclick-ui.nsh"
