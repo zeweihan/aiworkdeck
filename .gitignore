@@ -69,4 +69,5 @@ desktop/bundled/
 
 # 一键安装器位图（构建现场渲染，几十 MB 不入库，dev-board#339）
 desktop/build/win/generated/
+desktop/build/win/arm64-shell/
 office-addin/installer/win/generated/

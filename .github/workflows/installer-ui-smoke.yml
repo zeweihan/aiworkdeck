@@ -7,7 +7,7 @@ name: installer-ui-smoke
 
 on:
   push:
-    branches: [claude/installer-oneclick-ui]
+    branches: [claude/installer-oneclick-ui, claude/win-dual-arch]
   workflow_dispatch:
 
 jobs:
@@ -63,4 +63,56 @@ jobs:
         with:
           name: installer-ui-shots
           path: shots/
+          if-no-files-found: warn
+
+  # 真 ARM64 Windows（public 仓才有的 windows-11-arm runner）：验证一键 UI 在
+  # ARM 上的实际表现（NSIS 产物是 x86，走系统转译层），并断言双架构检测判据
+  #（dev-board#341 的 customInstall 用同一注册表位）。探索性 job，失败不拦主 job。
+  smoke-arm:
+    runs-on: windows-11-arm
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert native arch detection reads ARM64
+        shell: pwsh
+        run: |
+          $out = reg query 'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' /v PROCESSOR_ARCHITECTURE
+          if ($out -notmatch 'ARM64') { throw "native arch not ARM64: $out" }
+          Write-Host 'detection ok: ARM64'
+
+      - name: Ensure Chrome / ImageMagick / NSIS
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'C:\Program Files\Google\Chrome\Application\chrome.exe')) {
+            choco install googlechrome -y --no-progress --ignore-checksums
+          }
+          if (-not (Get-Command magick -ErrorAction SilentlyContinue)) {
+            choco install imagemagick -y --no-progress
+          }
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
+            choco install nsis -y --no-progress
+            Add-Content $env:GITHUB_PATH 'C:\Program Files (x86)\NSIS'
+          }
+
+      - name: Render art + compile harness (zh)
+        shell: pwsh
+        run: |
+          $ws = $env:GITHUB_WORKSPACE
+          node desktop/scripts/render-oneclick-art.mjs --product desktop --out desktop/build/win/generated --version 9.9.9
+          New-Item -ItemType Directory -Force payload | Out-Null
+          1..4 | ForEach-Object { fsutil file createnew ("payload\blob$_.bin") 41943040 }
+          makensis /INPUTCHARSET UTF8 /DHARNESS_LANG=SimpChinese "/DGENART=$ws\desktop\build\win\generated" "/DPAYLOAD=$ws\payload" "/DOUTFILE=$ws\harness-zh.exe" desktop\build\win\ui-harness.nsi
+
+      - name: Drive harness with screenshots (ARM real machine)
+        shell: pwsh
+        run: pwsh -File desktop/scripts/installer-smoke.ps1 -Exe harness-zh.exe -OutDir shots-arm/zh
+
+      - name: Upload ARM screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-ui-shots-arm
+          path: shots-arm/
           if-no-files-found: warn

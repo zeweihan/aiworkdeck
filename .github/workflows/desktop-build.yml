@@ -663,6 +663,23 @@ jobs:
         run: |
           # 与 macOS 同构：安装包只带一个 pysvc.tar.gz（文件数大降、安装更快），首启解压
           node desktop/scripts/pack-pysvc.js --bundle desktop/bundled/win-x64
+      - name: Build arm64 Electron shell overlay (Windows)
+        # Windows 单包双架构（dev-board#341）：产出纯 arm64 壳目录供 NSIS
+        # customInstall 覆盖用。app.asar 无原生依赖双架构通用，剪掉 resources/
+        #（几 GB 的 x64 重资源）后只剩 Electron 运行时约 120MB。
+        if: runner.os == 'Windows'
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        shell: pwsh
+        run: |
+          npx electron-builder --dir --arm64
+          if (-not (Test-Path 'release\win-arm64-unpacked\AI WorkDeck.exe')) { throw 'arm64 unpacked dir missing' }
+          Remove-Item -Recurse -Force 'release\win-arm64-unpacked\resources'
+          New-Item -ItemType Directory -Force 'build\win\arm64-shell' | Out-Null
+          Move-Item 'release\win-arm64-unpacked\*' 'build\win\arm64-shell\'
+          Remove-Item -Recurse -Force 'release\win-arm64-unpacked'
+          "arm64 shell files: $((Get-ChildItem -Recurse 'build\win\arm64-shell' | Measure-Object Length -Sum).Sum / 1MB) MB"
       - name: Render one-click installer art (Windows)
         # 一键安装 UI（awd-oneclick-ui.nsh，dev-board#339）的位图构建现场渲染、
         # 不入库；缺了这步 NSIS 编译会因 File 找不到 generated/*.bmp 直接失败
