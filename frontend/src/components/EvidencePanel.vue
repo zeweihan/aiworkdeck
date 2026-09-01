@@ -255,8 +255,13 @@ export default {
         const r = await getProjectFiles(this.pid, null, true)
         const tree = Array.isArray(r) ? r : (r && Array.isArray(r.data) ? r.data : [])
         this.fileTags = collectFileTags(tree)
+        this.error = ''
       } catch (e) {
-        this.fileTags = new Map()
+        // 不落成空 Map：ensureFileTags 的重入守卫是 `if (this.fileTags) return`，
+        // 落空 Map 会被当成"已加载"，用户切走再切回也不会重试，「按主体」视图会把
+        // 全部条目误判成"未归属"而不是"加载失败"。保持 fileTags 为 null 以便重试，
+        // 复用同组件既有的 error 提示条让失败可见。
+        this.error = (e && e.message) || this.$t('evidence.fileTagsLoadFailed')
       }
     },
     async setView(v) {

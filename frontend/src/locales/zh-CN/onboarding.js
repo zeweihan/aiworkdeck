@@ -100,5 +100,8 @@ export default {
     cannotConnect: '无法连接本地服务，请稍后重试',
     retry: '重试',
     bootingLocal: '正在启动本地服务',
+    // ARM 版 Windows（Mac 虚拟机）转译运行首启以分钟计，明说，免得用户反复点重试（dev-board#341）
+    bootingEmulated: '检测到虚拟化/转译环境，首次启动可能需要几分钟，请耐心等待',
+    detailLabel: '详细信息：',
   },
 }
