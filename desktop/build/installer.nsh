@@ -28,6 +28,29 @@
   ExecShell "open" "$INSTDIR\${PRODUCT_FILENAME}.exe"
 !macroend
 
+; 磁盘空间闸（dev-board#350）：所需空间不手抄数字，直接用 electron-builder 的
+; APP_64_UNPACKED_SIZE——它是打包时对 win-unpacked 整个目录（含 extraResources：
+; backend/jre/python/frontend dist/skills…）实测的解包体积，单位 KB，由 electron-builder
+; 以 makensis 命令行 -D 传入，在生成脚本的第一行就已经存在。这一点与 $launchLink /
+; APP_EXECUTABLE_FILENAME / StdUtils 那些「晚于本 include 才出现」的东西不同（见下面
+; AwdUiOnLaunch 的注释），所以这里引用它是安全的。手抄常量才是错的：包体每次发版都在长。
+;
+; 余量 512MB 的构成：① ARM64 机器上 customInstall 还要再铺一份纯 arm64 Electron 壳
+;（约 260MB 未压缩，不在 APP_64_UNPACKED_SIZE 里）；② NSIS/7z 解压过程本身的临时占用；
+; ③ 不能装完就把盘塞到 0 字节。刻意没给更大：闸设得过严会把「其实装得下」的用户挡在
+; 门外，那比不设闸更糟。
+!ifndef BUILD_UNINSTALLER
+  !ifdef APP_64_UNPACKED_SIZE
+    !define AWD_UI_REQUIRED_KB "${APP_64_UNPACKED_SIZE}"
+    !define AWD_UI_REQUIRED_EXTRA_KB 524288
+  !else
+    ; 宁可编译失败也不静默少一道闸：electron-builder 只有在 USE_NSIS_BUILT_IN_COMPRESSOR
+    ; 打开（源码里硬编码 false）或改了 defines 契约时才会不给这个值。真撞上就来这里
+    ; 换成新的体积来源，别直接删掉这段。
+    !error "APP_64_UNPACKED_SIZE 未定义：磁盘空间闸拿不到所需体积（dev-board#350）。electron-builder 的 defines 契约变了，去 desktop/build/installer.nsh 换体积来源。"
+  !endif
+!endif
+
 !include "win\awd-oneclick-ui.nsh"
 
 !macro customWelcomePage

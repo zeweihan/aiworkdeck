@@ -54,6 +54,21 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 6. DMG 安装窗口视觉（PR#204）：`build.dmg` 里的 `contents` 坐标是**图标中心、原点在窗口内容区左上角（不含标题栏）**；窗口尺寸由背景图 1x 像素尺寸决定（660x420），所以没写 `window`。背景图 `desktop/build/background.png` + `background@2x.png` 由 electron-builder 自动合成 hidpi TIFF，源文件是 `desktop/build/dmg-background.html`（顶部注释有 headless Chrome 重新生成命令）。改图标落位必须同步改 HTML 里的光晕/箭头位置，否则错位。
 6.5. **win 安装器美术管线**（`desktop/scripts/render-win-installer-art.mjs`，安装器 UI 重设计新增）：`build/win/*.html`（美术源文件）→ headless Chrome 截图 → ImageMagick 转 24 位 BMP3 入库为 `installerSidebar.bmp`/`installerHeader.bmp`。**sips 只能出 32 位 BMP，NSIS/MUI2 只认无 alpha 的经典 BMP，必须用 `magick`**——这是个地雷，脚本会校验 BM 头与色深不合格宁可失败也不入库。只有维护者改美术时手动跑一次，产物入库后 CI 与用户构建都不需要 Chrome/ImageMagick。
 6.5.1. **一键安装 UI 位图管线**（`desktop/scripts/render-oneclick-art.mjs`，dev-board#339）：`build/win/oneclick-*.html` → Chrome（`--force-device-scale-factor`）→ 24 位 BMP3，zh/en × 100/125/150/200% 共 24 张/产品，**产物不入库**（gitignore `generated/`），构建现场渲染：桌面端由 desktop-build.yml 的「Render one-click installer art」步骤（缺了它 NSIS 编译 File 找不到位图直接失败）、插件端由 build-installers.mjs 调用。三个地雷：makensis 的相对 File 路径按**脚本所在目录**解析（所有 -D 路径给绝对路径）；直接调 makensis 必须 `-INPUTCHARSET UTF8`（脚本内含中文字符串）；BMP 尺寸校验必须是基准×倍率，错一像素热区全歪。视觉回归用 `.github/workflows/installer-ui-smoke.yml`（Windows runner 编译 `build/win/ui-harness.nsi` 测试壳真跑全流程，`desktop/scripts/installer-smoke.ps1` 按基准坐标点击热区逐阶段截图上传 artifact）——没有 Windows 真机时唯一的视觉验证手段。
+   **本机 makensis 不能用来预检**（2026-09-01 实测，Darwin 27）：homebrew 的 v3.12 与
+   electron-builder 缓存的 v3.04 两个 mac 构建都一样——非 ASCII 源码报 `Bad text encoding`，
+   纯 ASCII 脚本走到写产物时 `std::bad_alloc` 崩。**未改动的 HEAD 文件同样复现**，不是谁改坏的，
+   别在这上面查半天。改 NSIS 只能靠 installer-ui-smoke。
+6.5.2. **磁盘空间闸**（dev-board#350）：引擎新增两个可选契约 `AWD_UI_REQUIRED_KB` /
+   `AWD_UI_REQUIRED_EXTRA_KB`，只有设了前者才编译出闸（插件端装的是一份清单，不设）。
+   桌面端在 `build/installer.nsh` 里直接把 **electron-builder 的 `-D APP_64_UNPACKED_SIZE`**
+   接过来——那是打包时对 win-unpacked 整个目录实测的解包体积（KB），**不许手抄常量**，
+   包体每次发版都在长；这个 define 是命令行 `-D` 传的，在生成脚本第一行就存在，和
+   `$launchLink`/`StdUtils` 那批「晚于 include 才出现」的东西不是一回事。余量 512MB
+   （ARM64 壳 260MB + 解压临时占用 + 不把盘塞到 0）。取不到可用空间时**一律放行**——
+   闸设得过严会把装得下的用户挡在门外，比不设闸更糟。反向用例在 CI 里实跑：
+   `ui-harness.nsi` 收 `-DREQUIRED_KB`，smoke 工作流多编一个所需空间约 858GB 的
+   `harness-nospace.exe`，用 `installer-smoke.ps1 -ExpectBlocked` 断言「弹了提示框 +
+   进程没退 + 窗口还是 760 宽的大卡片（开装了会缩成 360×132 的角落进度卡）」。
 6.6. **`dmg-builder` 补丁（`desktop/scripts/patch-dmg-builder.js` + package.json `postinstall`，安装器 UI 重设计新增）**：macOS 26.2+ 起 Finder 拒读 dmgbuild 写入 `.DS_Store` 的 `pBBk` 背景书签，导致桌面端主 DMG 背景不显示（electron-builder#9072 / dmgbuild#273，同版 Obsidian/Podman Desktop 同期中招）。`npm ci`/`npm install` 后自动对 `node_modules/dmg-builder/vendor/dmgbuild/core.py` 做定点补丁（跳过 Bookmark 生成，`icvp` 里的 alias 通道保留，老系统照常工作）。**升级 electron-builder 后若补丁脚本报「结构已变」**：先确认新版是否已自带该修复，再决定要不要删掉本补丁，不要盲目跳过。
 
 ## 测试命令总表

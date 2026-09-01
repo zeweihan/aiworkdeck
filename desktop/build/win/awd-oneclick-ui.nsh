@@ -11,6 +11,9 @@
 ;   !define AWD_UI_ART "<已渲染位图目录>"      ; render-oneclick-art.mjs 的产物目录
 ;   !define AWD_UI_DIR_CHOICE                  ; 可选：启用「自定义安装」路径展开（桌面端）
 ;   !define AWD_UI_DIR_LEAF "AI WorkDeck"      ; DIR_CHOICE 时必填：自选目录强制追加的子目录名
+;   !define AWD_UI_REQUIRED_KB "<n>"           ; 可选：安装所需磁盘空间（KB）。设了才有磁盘闸；
+;                                              ;   桌面端直接给 electron-builder 的 APP_64_UNPACKED_SIZE
+;   !define AWD_UI_REQUIRED_EXTRA_KB "<n>"     ; 可选：所需空间之外的余量（KB），默认 0
 ;   !define AWD_UI_TERMS_URL / AWD_UI_PRIVACY_URL
 ;   !macro AwdUiOnLaunch                       ; 可选：完成卡「立即体验」的动作（缺省=仅关闭）
 ; 然后在页面序列里插：
@@ -130,6 +133,11 @@ Var AwdSpaceLabel
 !endif
 Var AwdWinX       ; 大卡片左上角（展开时保持不动）
 Var AwdWinY
+!ifdef AWD_UI_REQUIRED_KB
+Var AwdFreeMb     ; 目标盘可用空间（MB）；"" = 读不出来
+Var AwdNeedMb     ; 本次安装所需空间（MB）
+Var AwdDriveRoot  ; 目标盘根（如 "C:"），只为提示文案
+!endif
 
 ; px = base * scale / 100
 !macro _AwdPx var base
@@ -414,6 +422,96 @@ Function AwdUpdateSpace
 FunctionEnd
 !endif
 
+; ---------- 磁盘空间闸（dev-board#350）----------
+; 以前只把可用空间显示成「可用 X GB」，不足照装不误：NSIS 在解压中途报
+; 「Error opening file for writing」，留下一个残缺安装。这里在真正开装之前拦一道。
+; 只有调用方给了 AWD_UI_REQUIRED_KB 才编译进来（插件端装的是一份清单，不设闸）。
+; 静默安装（/S，自动更新路径）不进 GUI 代码，这道闸对它不生效——那条路的失败处理
+; 归更新器自己管，此处不越界。
+!ifdef AWD_UI_REQUIRED_KB
+!ifndef AWD_UI_REQUIRED_EXTRA_KB
+  !define AWD_UI_REQUIRED_EXTRA_KB 0
+!endif
+
+; MB → "X.Y"（GB，保留一位小数）。整数取整会把「需要 4 / 可用 3」显示成只差 1 GB，
+; 实际可能差 1.9 GB——差多少是用户要不要去清盘的唯一依据，不能糊。
+!macro _AwdGbText outvar mb
+  IntOp $R5 ${mb} / 1024
+  IntOp $R6 ${mb} % 1024
+  IntOp $R6 $R6 * 10
+  IntOp $R6 $R6 / 1024
+  StrCpy ${outvar} "$R5.$R6"
+!macroend
+!define AwdGbText "!insertmacro _AwdGbText"
+
+; 读 $INSTDIR 所在盘的可用空间 → $AwdFreeMb / $AwdDriveRoot，读不到留空串。
+; FileFunc 的 GetRoot/DriveSpace 会踩调用方的 $0-$2（引擎里已有实锤记录，见
+; AwdToggleCustom 的注释：剩余 32GB 把窗口宽度写成 32px），所以进出各存取一次，
+; 结果一律落在 Var 上——调用方拿到的 $0-$2 与调用前逐字节一致。
+Function AwdReadFreeSpace
+  Push $0
+  Push $1
+  Push $2
+  StrCpy $AwdFreeMb ""
+  StrCpy $AwdDriveRoot ""
+  StrCpy $0 "$INSTDIR"
+  ${GetRoot} $0 $1
+  ${If} $1 != ""
+    StrCpy $AwdDriveRoot $1
+    ${DriveSpace} "$1\" "/D=F /S=M" $2
+    StrCpy $AwdFreeMb $2
+  ${EndIf}
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; 空间够不够。出参：$AwdNeedMb 恒为所需 MB；栈顶 1=不足 / 0=可以装。
+; **读不出可用空间时一律放行**：宁可让 NSIS 自己在解压时报错，也不能因为一次读盘
+; 失败（网络盘、UNC 路径、DriveSpace 在某些卷上返回空）把装得下的用户挡在门外。
+; 同理，读出 0 或非数字也按「读不出来」处理——IntCmp 会把非数字当 0，那会误判成不足。
+Function AwdSpaceShort
+  IntOp $AwdNeedMb ${AWD_UI_REQUIRED_KB} + ${AWD_UI_REQUIRED_EXTRA_KB}
+  IntOp $AwdNeedMb $AwdNeedMb / 1024
+  Call AwdReadFreeSpace
+  ${If} $AwdFreeMb == ""
+    Push 0
+  ${ElseIf} $AwdFreeMb <= 0
+    Push 0
+  ${ElseIf} $AwdFreeMb < $AwdNeedMb
+    Push 1
+  ${Else}
+    Push 0
+  ${EndIf}
+FunctionEnd
+
+; 就地拦下并说清楚差多少。
+; 提示只走对话框，**没有**去染红展开行里那个「可用 X GB」标签：试过
+; SetCtlColors + InvalidateRect、再试 SetCtlColors + RedrawWindow(同步重绘)，
+; 两轮 installer-ui-smoke 截图都证明运行期改这个控件的颜色不生效（文案对、标签还是灰的）。
+; 没有 Windows 真机可调，而对话框已经把「需要多少 / 该盘有多少 / 怎么办」说全了，
+; 与其留一段看着像生效其实没生效的代码，不如不留。要改文案也不行：标签宽
+; ${AWDUI_SPACE_W} 是按「可用 XX GB」排的版，加字会溢出，且文案与美术位图、热区坐标
+; 是同一套 96dpi 基准，改一处要改三处。
+Function AwdSpaceRefused
+  ${AwdGbText} $R3 $AwdNeedMb
+  ${AwdGbText} $R4 $AwdFreeMb
+  ${If} $AwdLang == "zh"
+    !ifdef AWD_UI_DIR_CHOICE
+      MessageBox MB_OK|MB_ICONEXCLAMATION "可用空间不足，暂时无法安装。$\n$\n安装需要约 $R3 GB，$AwdDriveRoot 盘当前可用 $R4 GB。$\n可以点「自定义安装」换一个磁盘，或清理后重试。"
+    !else
+      MessageBox MB_OK|MB_ICONEXCLAMATION "可用空间不足，暂时无法安装。$\n$\n安装需要约 $R3 GB，$AwdDriveRoot 盘当前可用 $R4 GB。$\n请清理磁盘后重试。"
+    !endif
+  ${Else}
+    !ifdef AWD_UI_DIR_CHOICE
+      MessageBox MB_OK|MB_ICONEXCLAMATION "Not enough free disk space.$\n$\nSetup needs about $R3 GB; drive $AwdDriveRoot has $R4 GB free.$\nUse Custom install to pick another drive, or free up space and try again."
+    !else
+      MessageBox MB_OK|MB_ICONEXCLAMATION "Not enough free disk space.$\n$\nSetup needs about $R3 GB; drive $AwdDriveRoot has $R4 GB free.$\nFree up space and try again."
+    !endif
+  ${EndIf}
+FunctionEnd
+!endif
+
 Function AwdInstallClick
   Pop $0
   !ifdef AWD_UI_DIR_CHOICE
@@ -432,6 +530,16 @@ Function AwdInstallClick
         StrCpy $0 "$0\${AWD_UI_DIR_LEAF}"
       ${EndIf}
       StrCpy $INSTDIR $0
+    ${EndIf}
+  !endif
+  !ifdef AWD_UI_REQUIRED_KB
+    ; 必须在 $INSTDIR 定下来之后再算——用户可能刚在「自定义安装」里换过盘。
+    ; AwdSpaceShort 内部完整保存/恢复 $0-$2，上面那段路径处理的结果不受影响。
+    Call AwdSpaceShort
+    Pop $1
+    ${If} $1 = 1
+      Call AwdSpaceRefused
+      Return
     ${EndIf}
   !endif
   ; 等价于按下「下一步」，交回 NSIS 页面机
