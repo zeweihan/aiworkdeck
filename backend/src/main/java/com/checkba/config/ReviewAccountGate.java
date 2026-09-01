@@ -7,6 +7,10 @@ import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * App 审核专用账号的固定验证码。
@@ -20,21 +24,26 @@ import java.security.MessageDigest;
  * <p><b>这是一个认证旁路，按认证旁路对待：</b>
  * <ul>
  *   <li>默认关。两个配置项任意一个为空即全关，不存在「配了一半」的中间态。</li>
- *   <li>只对<b>配置里那一个</b>标识生效，别的手机号/邮箱一律走原路。</li>
+ *   <li>只对<b>配置里列出的</b>标识生效，别的手机号/邮箱一律走原路。</li>
  *   <li>只开在免密登录（signin）那条路上，绑定手机号/绑定邮箱不走这里。</li>
  *   <li>码写错格式就<b>拒绝启动</b>——照 {@link PhoneLoginGuard} 的同一口径。
  *       一个配歪了的旁路比没有旁路更糟：它会以「审核员登不进去」的形式在
  *       几天后才暴露，而那时排查方向已经跑到客户端去了。</li>
  * </ul>
  *
- * <p><b>运维要求：</b>审核账号里不要放真实数据。谁拿到那 6 位码就能登进这一个
- * 账号，而这个码是写在 ASC 备注里给外部人看的。审核结束后把
+ * <p><b>运维要求：</b>审核账号里不要放真实数据。谁拿到那 6 位码就能登进这些
+ * 账号，而这个码是写在审核备注里给外部人看的。审核结束后把
  * {@code auth.review-account.identity} 清空即可关掉。
+ *
+ * <p><b>为什么标识是一个列表。</b>各家审核同时在跑，且要的形状不一样：Apple 要
+ * 邮箱（国际版），微信小程序审核要中国大陆手机号（小程序只有短信登录一条路）。
+ * 一次只能配一个的话，两家撞档期就得二选一，而「临时改成另一家」意味着前一家
+ * 的审核员会在毫无预兆的情况下登不进去。多个标识共用同一个码即可。
  *
  * <p>配置（服务器 env / application.yml，别入库）：
  * <pre>
- *   auth.review-account.identity: appreview@example.com   # 手机号或邮箱，写规范化后的形式
- *   auth.review-account.code: "246813"                    # 6 位数字
+ *   auth.review-account.identity: appreview@example.com,13800138000   # 逗号分隔，写规范化后的形式
+ *   auth.review-account.code: "246813"                                # 6 位数字，所有标识共用
  * </pre>
  */
 @Component
@@ -42,18 +51,22 @@ public class ReviewAccountGate {
 
     private static final Logger log = LoggerFactory.getLogger(ReviewAccountGate.class);
 
-    private final String identity;
+    private final Set<String> identities;
     private final byte[] code;
 
     public ReviewAccountGate(
             @Value("${auth.review-account.identity:}") String identity,
             @Value("${auth.review-account.code:}") String code) {
 
-        String id = identity == null ? "" : identity.trim().toLowerCase();
+        Set<String> ids = identity == null ? Set.of()
+                : Arrays.stream(identity.split(","))
+                        .map(s -> s.trim().toLowerCase())
+                        .filter(s -> !s.isEmpty())
+                        .collect(Collectors.toCollection(LinkedHashSet::new));
         String cd = code == null ? "" : code.trim();
 
-        if (id.isEmpty() || cd.isEmpty()) {
-            this.identity = null;
+        if (ids.isEmpty() || cd.isEmpty()) {
+            this.identities = Set.of();
             this.code = null;
             return;
         }
@@ -63,11 +76,12 @@ public class ReviewAccountGate {
                             + "客户端的验证码输入框只收 6 位数字，配成别的形式等于这条旁路"
                             + "永远走不通，而症状要等审核员登不进去才看得见。");
         }
-        this.identity = id;
+        this.identities = ids;
         this.code = cd.getBytes(StandardCharsets.UTF_8);
         // 生产上开着这条口子是有意为之还是配漏了，只能靠这行日志区分。
         log.warn("App 审核账号旁路已启用：{} 可用固定验证码登录。审核结束后清空 "
-                + "auth.review-account.identity 关闭。", masked(id));
+                + "auth.review-account.identity 关闭。",
+                ids.stream().map(ReviewAccountGate::masked).collect(Collectors.joining(", ")));
     }
 
     /**
@@ -81,7 +95,7 @@ public class ReviewAccountGate {
 
     /** 这条旁路是否开着。 */
     public boolean enabled() {
-        return identity != null;
+        return !identities.isEmpty();
     }
 
     /**
@@ -95,7 +109,7 @@ public class ReviewAccountGate {
         if (!enabled() || normalizedIdentity == null) {
             return false;
         }
-        return identity.equals(normalizedIdentity.trim().toLowerCase());
+        return identities.contains(normalizedIdentity.trim().toLowerCase());
     }
 
     /**
