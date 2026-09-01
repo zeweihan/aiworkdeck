@@ -1,11 +1,15 @@
-# Product Hunt 发布物料（2026-09-01）
+# Product Hunt 发布物料（2026-09-01，全套齐备）
 
 国际渠道补充（对应 workdeck.ai，不在原六周矩阵内，作为国际线并行动作）。
 理论底座：书《大模型时代的法律科技——从历史困局到平台跃迁》（工具孤岛→系统平台、
 人肉总线、让专业回归判断）+ IDE 集成价值与行为经济学报告（摩擦成本、认知负荷、
 算法厌恶、人在回路、延伸认知外骨骼）。
 
-## Tagline（60 字符内，备用）
+## Name of the launch（40 字符内）
+
+AI WorkDeck
+
+## Tagline（56/60 字符）
 
 Your whole case in one window — an IDE for document work
 
@@ -40,6 +44,23 @@ What AI WorkDeck does:
 It's desktop-first and files stay on your machine; confidentiality is non-negotiable in this profession. The community edition is free and AGPL open source.
 
 We started with lawyers, but the ambition is broader: IDEs are for coders, AI WorkDeck is for doc-ers — anyone whose final output is a document. If you've ever felt like the human middleware between windows, I'd genuinely love your feedback.
+
+## 图片物料（ph-assets/，已生成）
+
+- `thumbnail-240.png`：240x240 缩略图（来源 desktop/build/icon.png）。
+- `gallery-01-hero.png` 至 `gallery-05-opensource.png`：五张画廊图，2540x1520
+  （= PH 推荐比例 1270x760 的 2 倍图）。顺序：主视觉（真截图内嵌）→ 修订 →
+  可视化 → 手机取证 → 开源。第一张同时是社交分享预览图。
+- 生成管线：`ph-cards.html`（HTML → 无头 Chrome 截图），改图只改 HTML 重渲。
+- 画廊内真截图取自官网 hero-dashboard.png（中文界面）；日后可用截图流水线
+  换 EN 界面版，卡片版式不变。
+
+## 表单其余字段
+
+- Links：主链接 https://workdeck.ai ，附加链接 GitHub 仓库。
+- Pricing：选 Free（开源，另有付费商业授权可在评论里答）。
+- 视频（可选）：预告片成片后补挂 YouTube 链接。
+- Makers：标记维护者本人为 maker。
 
 ## 发布操作要点
 
