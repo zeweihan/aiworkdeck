@@ -59,6 +59,29 @@ We started with lawyers, but the ambition is broader: IDEs are for coders, AI Wo
 - 画廊内真截图取自官网 hero-dashboard.png（中文界面）；日后可用截图流水线
   换 EN 界面版，卡片版式不变。
 
+## Shoutouts（点名帮我们造出产品的其他产品）
+
+机制：每条 shoutout 会变成一条创始人评价，挂在对方产品评价区最前面并回链本
+launch；PH 明示带 shoutout 的 launch 更易被 featured（首页精选决定 PH 成败），
+所以必填。操作：Add shoutout → 搜产品名 → 选中 → 附一句说明。
+
+**只点真用过的**——这是以维护者名义发出的评价，虚构点名违反「只说真实」红线。
+
+首选三条（真实技术栈 + PH 上有活跃页面）：
+
+- **Claude**：AI WorkDeck was written with Claude Code, and Claude is one of the
+  models our users run inside it. I'm a practicing lawyer, not a professional
+  engineer — this is the tool that made building a real desktop product possible.
+- **OpenRouter**：One key, every model. OpenRouter lets us route each task to the
+  right model without shipping a dozen provider integrations, and lets our users
+  pay for what they actually use.
+- **LibreOffice**：We compile LibreOffice to WebAssembly so our users get a genuine
+  Office-grade editor inside the workbench — tracked changes, comments, real .docx.
+  Decades of work we could never have built ourselves.
+
+备选（想多点几条时按序）：Electron（桌面外壳=文件留本机的前提）、Vue.js（前端）、
+DeepSeek（模型）、Stripe（支付）、Cloudflare（Turnstile）。
+
 ## 表单其余字段
 
 - Links：主链接 https://workdeck.ai ，附加链接 GitHub 仓库。
