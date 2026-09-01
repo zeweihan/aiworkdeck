@@ -93,6 +93,32 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
    一发 `WM_COMMAND`/`IDCANCEL`，证明**退出通道本身是通的**——两条对照一起把结论
    钉死在「关窗动作写错了」而不是「点击没命中」。用例：`installer-smoke.ps1 -CloseOnly`
    （smoke 工作流的「Drive zh harness close button」步骤），是这条路径唯一的覆盖。
+6.5.5. **NSIS 地雷：`MUI_PAGE_CUSTOMFUNCTION_SHOW` 会被「路过的页」在编译期抢走**
+   （dev-board#356，实机翻车、CI 全绿）：MUI2 的 `Pages.nsh` 里
+   `MUI_PAGE_FUNCTION_CUSTOM` 展开成 `Call <fn>` **紧跟一句 `!undef`**——这个 define
+   是「谁先展开谁吃掉」的一次性货。一键 UI 原先把安装页的 SHOW 回调
+   （`AwdInstFilesShow`，负责把主窗收成 360×132 角落进度卡）挂在 `AWD_UI_PAGE_WELCOME`
+   宏里，赌「紧随其后的就是 `MUI_PAGE_INSTFILES`」。ui-harness 里确实如此，
+   **桌面端真产物不是**：electron-builder 的 `assistedInstaller.nsh` 页序是
+   `customWelcomePage → [licensePage] → PAGE_INSTALL_MODE → [MUI_PAGE_DIRECTORY]
+   → customPageAfterChangeDir → MUI_PAGE_INSTFILES`，中间那张「安装模式」页
+   （`perMachine=false` 才有）先把 SHOW 吃掉；更阴的是它自己又被我们的
+   `customInstallMode`（`$isForceCurrentInstall=1`）在 PRE 里 `Abort` 跳过，
+   那句 `Call` 连跑都不会跑。两头都不响 = 安装页塌回 NSIS 原生向导
+   （进度条贴顶、原生「上一步」飘在窗口中间、装完停在「已完成」不走完成卡）。
+   现在的写法：引擎导出 `AWD_UI_INSTFILES_HOOK`（只 define）与
+   `AWD_UI_PAGE_INSTFILES`（钩子 + 页的原子宏）。**自己掌握页序的调用方
+   （ui-harness、Office 插件安装器）一律用原子宏**；桌面端页序在 electron-builder
+   手里，钩子挂 `customPageAfterChangeDir`——那是唯一紧贴 INSTFILES 之前的钩子，
+   **升级 electron-builder 要回头核一眼这个页序还成不成立**。
+   回归护栏：`ui-harness.nsi` 的 `-DEB_PAGE_ORDER` 复刻那张「运行期被 Abort 跳过、
+   编译期照吃 MUI 定义」的页，smoke 工作流多编一个 `harness-eborder.exe` 实跑；
+   同时 `installer-smoke.ps1` 在「点完立即安装」后**真做断言**了（此前只截图：
+   窗口宽度必须缩到小卡片、原生「上一步」按钮 IDC 3 必须不可见）——
+   老坑之所以能瞒过八个月，就是因为那一步只截图不断言。
+   **教训**：`ui-harness` 只覆盖引擎，不覆盖「引擎怎么被真产物接线」；
+   凡是与 electron-builder 模板契约有关的改动，用例必须复刻它的页序。
+
 6.6. **`dmg-builder` 补丁（`desktop/scripts/patch-dmg-builder.js` + package.json `postinstall`，安装器 UI 重设计新增）**：macOS 26.2+ 起 Finder 拒读 dmgbuild 写入 `.DS_Store` 的 `pBBk` 背景书签，导致桌面端主 DMG 背景不显示（electron-builder#9072 / dmgbuild#273，同版 Obsidian/Podman Desktop 同期中招）。`npm ci`/`npm install` 后自动对 `node_modules/dmg-builder/vendor/dmgbuild/core.py` 做定点补丁（跳过 Bookmark 生成，`icvp` 里的 alias 通道保留，老系统照常工作）。**升级 electron-builder 后若补丁脚本报「结构已变」**：先确认新版是否已自带该修复，再决定要不要删掉本补丁，不要盲目跳过。
 
 ## 测试命令总表

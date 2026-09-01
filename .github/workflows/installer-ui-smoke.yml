@@ -45,6 +45,10 @@ jobs:
           makensis /INPUTCHARSET UTF8 /DHARNESS_LANG=English /DREQUIRED_KB=204800 "/DGENART=$ws\desktop\build\win\generated" "/DPAYLOAD=$ws\payload" "/DOUTFILE=$ws\harness-en.exe" desktop\build\win\ui-harness.nsi
           # 反向用例：所需空间约 858 GB，runner 上必然不足，走「拦下」分支
           makensis /INPUTCHARSET UTF8 /DHARNESS_LANG=SimpChinese /DREQUIRED_KB=900000000 "/DGENART=$ws\desktop\build\win\generated" "/DPAYLOAD=$ws\payload" "/DOUTFILE=$ws\harness-nospace.exe" desktop\build\win\ui-harness.nsi
+          # electron-builder 页序复刻（dev-board#356）：欢迎页与 INSTFILES 之间夹一张
+          # 运行期被 Abort 跳过、编译期照吃 MUI 定义的「安装模式」页。上面几个 harness
+          # 是欢迎页紧贴 INSTFILES 的理想页序，测不出这个坑；桌面端真产物走的是这一种。
+          makensis /INPUTCHARSET UTF8 /DHARNESS_LANG=SimpChinese /DREQUIRED_KB=204800 /DEB_PAGE_ORDER "/DGENART=$ws\desktop\build\win\generated" "/DPAYLOAD=$ws\payload" "/DOUTFILE=$ws\harness-eborder.exe" desktop\build\win\ui-harness.nsi
           Set-Content -Path dummy-manifest.xml -Value '<?xml version="1.0"?><OfficeApp/>'
           makensis /INPUTCHARSET UTF8 /DVERSION=0.0.1 "/DMANIFEST=$ws\dummy-manifest.xml" "/DOUTFILE=$ws\addin-smoke.exe" "/DARTDIR=$ws\office-addin\installer\win" "/DAWD_UI_ENGINE=$ws\desktop\build\win\awd-oneclick-ui.nsh" "/DGENART=$ws\office-addin\installer\win\generated" /DLEGALBASE=https://www.aiworkdeck.com office-addin\installer\win\installer.nsi
 
@@ -58,6 +62,12 @@ jobs:
         # 失败时日志里会带两条对照（同排的最小化热区是否生效、外部发 IDCANCEL 是否能关），
         # 直接分辨「点击没落到热区上」还是「关窗动作没生效」。
         run: pwsh -File desktop/scripts/installer-smoke.ps1 -Exe harness-zh.exe -OutDir shots/close -CloseOnly
+
+      - name: Drive eborder harness (electron-builder 页序，dev-board#356)
+        shell: pwsh
+        # 与桌面端真产物同一种页序。走的是正常流程，断言在 installer-smoke.ps1 里：
+        # 点完「立即安装」窗口必须缩成角落小进度卡、原生「上一步」按钮必须不可见。
+        run: pwsh -File desktop/scripts/installer-smoke.ps1 -Exe harness-eborder.exe -OutDir shots/eborder
 
       - name: Drive en harness with screenshots
         shell: pwsh
