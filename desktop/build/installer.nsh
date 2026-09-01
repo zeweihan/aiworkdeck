@@ -57,6 +57,22 @@
   !insertmacro AWD_UI_PAGE_WELCOME
 !macroend
 
+; 安装页的 SHOW 回调（点「立即安装」后主窗收成角落小进度卡）必须挂在
+; electron-builder 生成脚本里那一句 !insertmacro MUI_PAGE_INSTFILES 上。
+; assistedInstaller.nsh 的页序是：
+;   customWelcomePage → [licensePage] → PAGE_INSTALL_MODE → [MUI_PAGE_DIRECTORY]
+;   → customPageAfterChangeDir → MUI_PAGE_INSTFILES → customFinishPage
+; customPageAfterChangeDir 是**唯一紧贴 INSTFILES 之前**的钩子，所以挂这里。
+; 挂在 customWelcomePage 里不行（dev-board#356 实机翻车）：中间那张
+; 「安装模式」页（perMachine=false 才有）会在编译期把 MUI_PAGE_CUSTOMFUNCTION_SHOW
+; 吃掉，而它自己又被我们的 customInstallMode 在 PRE 里 Abort 跳过——回调既没挂到
+; 安装页、也没被跳过的那页跑到，安装页于是露出 NSIS 原生向导（进度条贴顶、
+; 「上一步」按钮飘在中间）。这一段是与 electron-builder 模板的契约，升级
+; electron-builder 后要回头核一眼 assistedInstaller.nsh 的页序还是不是这样。
+!macro customPageAfterChangeDir
+  !insertmacro AWD_UI_INSTFILES_HOOK
+!macroend
+
 !macro customInstallMode
   ; 桌面端始终按当前用户安装（历史默认即 perMachine=false），跳过安装模式选择页
   StrCpy $isForceCurrentInstall "1"

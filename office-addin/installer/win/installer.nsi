@@ -42,7 +42,10 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "AI WorkDeck"
 !include "${AWD_UI_ENGINE}"
 
 !insertmacro AWD_UI_PAGE_WELCOME
-!insertmacro MUI_PAGE_INSTFILES
+; AWD_UI_PAGE_INSTFILES = 「角落进度卡的 SHOW 钩子 + MUI_PAGE_INSTFILES」原子宏。
+; 别拆成两句、更别把钩子挪到欢迎页宏里：夹在中间的任何 MUI 页都会在编译期把
+; MUI_PAGE_CUSTOMFUNCTION_SHOW 吃掉（dev-board#356）。
+!insertmacro AWD_UI_PAGE_INSTFILES
 !insertmacro AWD_UI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES

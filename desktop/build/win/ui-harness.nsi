@@ -50,7 +50,7 @@ InstallDir "$LOCALAPPDATA\AWDUIHarness"
     Caption " "
   PageExEnd
 !endif
-!insertmacro MUI_PAGE_INSTFILES
+!insertmacro AWD_UI_PAGE_INSTFILES
 !insertmacro AWD_UI_PAGE_FINISH
 !insertmacro MUI_LANGUAGE "${HARNESS_LANG}"
 

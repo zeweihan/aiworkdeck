@@ -17,10 +17,12 @@
 ;   !define AWD_UI_TERMS_URL / AWD_UI_PRIVACY_URL
 ;   !macro AwdUiOnLaunch                       ; 可选：完成卡「立即体验」的动作（缺省=仅关闭）
 ; 然后在页面序列里插：
-;   !insertmacro AWD_UI_PAGE_WELCOME           ; 大卡片首页（内部给紧随其后的 MUI_PAGE_INSTFILES
-;                                              ;   挂 SHOW 回调，把窗口变成角落小卡片）
-;   <MUI_PAGE_INSTFILES 由调用方/electron-builder 插入>
+;   !insertmacro AWD_UI_PAGE_WELCOME           ; 大卡片首页
+;   !insertmacro AWD_UI_PAGE_INSTFILES         ; 角落进度卡（= SHOW 钩子 + MUI_PAGE_INSTFILES）
 ;   !insertmacro AWD_UI_PAGE_FINISH            ; 角落完成卡
+; 页序由 electron-builder 之类的外部模板掌握、MUI_PAGE_INSTFILES 不归调用方插时，
+; 改插 !insertmacro AWD_UI_INSTFILES_HOOK，且**必须紧贴那句 MUI_PAGE_INSTFILES 之前**
+;（原因见文件末尾 AWD_UI_INSTFILES_HOOK 的注释，dev-board#356）。
 ;
 ; 坐标契约：所有热区坐标必须与 oneclick-*.html 里的绝对定位一致（两边都以 96dpi
 ; 基准像素书写，运行期统一乘 $AwdScale）。改布局要两处同步改。
@@ -654,8 +656,24 @@ FunctionEnd
 ; ---------- 页面插入宏 ----------
 !macro AWD_UI_PAGE_WELCOME
   Page custom AwdWelcomeCreate
-  ; 紧随其后的 MUI_PAGE_INSTFILES 会消费这个 SHOW 回调（自定义 Page 不消费 MUI 定义）
+!macroend
+
+; 安装页的 SHOW 回调（把窗口变成角落小进度卡）。
+;
+; **必须紧贴 MUI_PAGE_INSTFILES 之前插，中间不许再夹任何 MUI 页**——
+; MUI_PAGE_CUSTOMFUNCTION_SHOW 是「谁先展开谁吃掉」的一次性 define：MUI2 的
+; Pages.nsh 里 MUI_PAGE_FUNCTION_CUSTOM 展开成 `Call <fn>` + 紧跟一句 `!undef`，
+; 所以夹在中间的任何 MUI 页都会在**编译期**把它抢走，安装页就此没有 SHOW 回调。
+; 更阴的是抢走它的那个页在运行期还可能被 Abort 跳过（electron-builder 的「安装模式」
+; 页就是），于是那句 Call 连跑都不会跑——两头都不响，界面塌成原生向导（dev-board#356）。
+!macro AWD_UI_INSTFILES_HOOK
   !define MUI_PAGE_CUSTOMFUNCTION_SHOW AwdInstFilesShow
+!macroend
+
+; 自己掌握页序的调用方（测试壳、插件安装器）用这个：钩子和页在同一个宏里，抢不走。
+!macro AWD_UI_PAGE_INSTFILES
+  !insertmacro AWD_UI_INSTFILES_HOOK
+  !insertmacro MUI_PAGE_INSTFILES
 !macroend
 
 !macro AWD_UI_PAGE_FINISH
@@ -665,6 +683,8 @@ FunctionEnd
 !else
 ; 卸载器构建通道：一键 UI 只作用于安装器，卸载器保持 MUI 经典页（仍受益于 DPI 声明）
 !macro AWD_UI_PAGE_WELCOME
+!macroend
+!macro AWD_UI_INSTFILES_HOOK
 !macroend
 !macro AWD_UI_PAGE_FINISH
 !macroend
