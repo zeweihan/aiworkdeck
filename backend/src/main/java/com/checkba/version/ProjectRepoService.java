@@ -1,5 +1,6 @@
 package com.checkba.version;
 
+import com.checkba.service.LocalIdentityService;
 import com.checkba.storage.ProjectStorageResolver;
 import org.eclipse.jgit.api.CreateBranchCommand;
 import org.eclipse.jgit.api.DiffCommand;
@@ -364,7 +365,13 @@ public class ProjectRepoService {
         return new VersionEntry(
                 c.getName(),
                 c.getShortMessage(),
-                c.getAuthorIdent().getName(),
+                // 提交作者名是**写进 Git 历史的快照**，读时本地化只能落在出参上：历史永不
+                // 重写，作者名还派生了提交邮箱（WorkSessionService.email），改写入侧等于同一个
+                // 人在中英文界面下留下两种署名，把版本库里的身份劈成两半。单机模式下作者名
+                // 就是库里那个中文哨兵「本机用户」，英文界面的时间线会照原样显示中文
+                // （dev-board#351）；这里按当前界面语言替换后再交给 UI，真实用户名（含云端
+                // 协作方的署名）一个字都不动，Git 对象一字节都没碰。
+                LocalIdentityService.displayNameOf(c.getAuthorIdent().getName()),
                 Instant.ofEpochSecond(c.getCommitTime()),
                 kind == null ? "auto" : kind,
                 note,

@@ -154,6 +154,14 @@ description: 项目级版本记录领域。任务涉及版本记录/工作段（
 
   `unionApply` 保留两参版本（`base` 隐式传 `null`，委托三参版本）——v1 语义原样不变，`TreeManifestSyncTest.unionApplyRestoresFromRecycleBinButNeverSendsAnActiveRowThere` 是它的护栏，护栏测试 `UnionReviveGuardTest`（`handDeletedFileSurvivesSessionEndMerge` 是被否决场景的直接回归；`draftCreatedFileStillRevivesOnAdopt` 是 v1 关键场景不回归的回归；`genuineReviveByPeerIsApplied`/`twoArgUnionApplyKeepsV1Semantics` 分别钉矩阵与两参路径）。
 
+**时间线署名是读时本地化的，不是存储值**（dev-board#351）：`ProjectRepoService.toEntry()` 把
+`c.getAuthorIdent().getName()` 过一道 `LocalIdentityService.displayNameOf` 再放进 `VersionEntry.authorName`。
+单机模式的提交作者名就是库里那个中文哨兵「本机用户」，它随提交写进了 Git 对象；历史永不重写，
+作者名还派生了提交邮箱（`WorkSessionService.email`），所以**只能在出参侧换**，写入侧一字不动——
+否则同一个人在中英文界面下会往版本库里留下两种署名。真实用户名（含云端协作方）原样透传。
+护栏测试：`ProjectRepoHistoryTest.localUserAuthorIsLocalizedOnReadWithoutRewritingHistory`
+（同一个仓库中/英/中读三遍，值必须来回切得回去，证明提交对象没被改写）。
+
 ## 已知地雷
 
 1. **历史永不重写**——硬不变量，理由与 Git 自己一致，为将来推云端仓库（v2）打基础。唯一例外是删除从未合并进主线的工作段分支（`discardSession`/`deleteBranch(force=true)`）。护栏测试：`RepoMaintenanceTest.gcPreservesEveryReachableVersion`，GC 前后逐条比对每个 `VersionEntry.sha()`。

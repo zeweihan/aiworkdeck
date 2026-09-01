@@ -47,6 +47,14 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - `backend/src/main/java/com/checkba/config/LocalModeAccessFilter.java` — 免登模式的每请求准入闸（回环校验 + 反代痕迹拒绝 + 跨站 Origin 硬拦截）。
 - `backend/src/main/java/com/checkba/config/LocalModeLoopbackGuard.java` — 启动强不变式：local-mode 必须绑回环地址，否则拒绝启动。
 - `AuthController.getUserIdFromSession()` 在 local-mode 下把任何请求解析为本机用户（90 余处调用方一行未改）。
+- **「本机用户」是库里恒存的中文哨兵，界面语言只在读出来时替换**（`LocalIdentityService.displayNameOf`，
+  v0.30.0 + dev-board#351）。库里存的值一个字都不动——改写入侧会让同一个人在中英文界面下留下两种身份。
+  出口全集（新增读出口要跟着补，别再漏）：`/api/auth/me`、`/api/local-identity/{status,candidates}`、
+  项目成员与 owner（`ProjectMemberController`）、项目列表 `managerName`（`ProjectService`）、
+  变量库创建者（`ProjectVariableController.VariableView`）、版本时间线署名（`ProjectRepoService.toEntry`）。
+  后两处是**快照**——名字被抄进了 project_variables / Git 提交对象，读时本地化是唯一够得着的修法。
+  **不许就地改实体的 `creatorName`**：实体在 OSIV 会话里受管，一旦被脏检查刷回库，库里就成了
+  「Local user」，中文界面反过来看到英文，且不可逆——所以那条路走的是只读视图 `VariableView`。
 
 **账户连接（PR-B）**
 - `backend/src/main/java/com/checkba/service/account/AccountService.java` — 与官网账户的唯一连接方式是 `awdk_` Key。
