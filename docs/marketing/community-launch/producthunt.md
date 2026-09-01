@@ -1,0 +1,51 @@
+# Product Hunt 发布物料（2026-09-01）
+
+国际渠道补充（对应 workdeck.ai，不在原六周矩阵内，作为国际线并行动作）。
+理论底座：书《大模型时代的法律科技——从历史困局到平台跃迁》（工具孤岛→系统平台、
+人肉总线、让专业回归判断）+ IDE 集成价值与行为经济学报告（摩擦成本、认知负荷、
+算法厌恶、人在回路、延伸认知外骨骼）。
+
+## Tagline（60 字符内，备用）
+
+Your whole case in one window — an IDE for document work
+
+## Description of the launch（479/500 字符）
+
+Coders have IDEs. Document workers still juggle a dozen windows. AI WorkDeck is an open-source desktop workbench that puts the whole case in one window: an Office-grade editor where AI edits with character-level tracked changes you accept or reject, due-diligence checks, litigation timelines and relationship graphs, phone-to-desktop evidence capture, and a plugin ecosystem. Files stay local, human stays in the loop. Built by a practicing lawyer. AGPL, free community edition.
+
+## Launch tags（三选）
+
+Artificial Intelligence / Productivity / Open Source
+（若搜索框里有 Legal 类目，可用 Legal 替换 Productivity）
+
+## First comment（maker 首评）
+
+Hi Product Hunt — I'm Zewei, a practicing lawyer in Beijing.
+
+I co-authored a book on legal tech in the LLM era. Its core observation: coders got IDEs — one environment where code, tools, and now AI live together — while document workers never did. A lawyer running a case works as the human message bus: copying text between Word, a PDF viewer, twenty browser tabs, and an AI chatbot in yet another window, saving files named "final_v15". Behavioral economics calls this friction and cognitive load. We call it a normal workday.
+
+Chatbots don't fix it. Pasting a contract into a chat and pasting the answer back is still fragmentation. And a black-box agent that rewrites documents unsupervised is nothing a professional can sign their name under — in law, the signature is the product.
+
+So I built the tool I wanted, on the thesis of the book: AI shouldn't replace the workbench. It should be built into one.
+
+What AI WorkDeck does:
+
+- A real Office-grade editor (LibreOffice compiled to WebAssembly) running locally. AI edits appear as character-level tracked changes you accept or reject — like reviewing a colleague's redline.
+- The whole case in one window: files, AI conversation, evidence pane, browser, all cross-linked.
+- Fact checking where every claim links back to a source document.
+- Litigation timelines, process flows and party-relationship graphs generated from your files.
+- A phone app that captures evidence photos straight into the project folder.
+- A plugin system — lawyers are already building their own.
+
+It's desktop-first and files stay on your machine; confidentiality is non-negotiable in this profession. The community edition is free and AGPL open source.
+
+We started with lawyers, but the ambition is broader: IDEs are for coders, AI WorkDeck is for doc-ers — anyone whose final output is a document. If you've ever felt like the human middleware between windows, I'd genuinely love your feedback.
+
+## 发布操作要点
+
+- 全表单一律英文（当前 Description 里的中文句子要替换掉）。
+- 链接指 workdeck.ai（国际站），不要挂 aiworkdeck.com。
+- 发布时点：太平洋时间 00:01（北京时间 15:01/16:01）上榜整天曝光最长；选周二至周四。
+- PH 带来的不是中国律师用户，是国际技术圈曝光、GitHub star 与潜在报道——预期要摆对。
+- 画廊图（gallery）与 logo 也要备：可用官网截图流水线出图，需要时另行生产。
+- 全物料无 emoji（品牌红线，PH 惯例虽爱用，我们不用）。
