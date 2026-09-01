@@ -240,9 +240,7 @@ public class ProjectService {
             // Owner is the manager
             userRepository.findById(p.getUserId()).ifPresent(u -> {
                 dto.setManagerId(u.getId());
-                // local-mode 下 owner 可能是库里存了中文哨兵值的本机用户，按界面语言本地化
-                // （项目列表页「Lead: {name}」提示读的就是这个字段）
-                dto.setManagerName(LocalIdentityService.displayNameOf(u.getDisplayName()));
+                dto.setManagerName(u.getDisplayName());
                 dto.setManagerAvatarUrl(u.getAvatarUrl());
             });
 

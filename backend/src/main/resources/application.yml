@@ -191,16 +191,6 @@ auth:
   # 格式非法会回落默认值而不是无限期放行——配错就静默延期是最难发现的失效。
   # **与官网 lib/phone-policy.ts 的 DEFAULT_BINDING_DEADLINE 同值，改一边就要改另一边。**
   phone-binding-deadline: ${AUTH_PHONE_BINDING_DEADLINE:2026-09-30}
-  # App 审核专用账号的固定验证码。见 config/ReviewAccountGate。
-  # 存在的理由：iOS 两个 App 的登录只有验证码一条路，Apple 审核员既没有中国
-  # 号码收短信、也打不开我们的邮箱，没有这条口子会卡在首屏被判 2.1。
-  # **这是认证旁路**：两项任一为空即全关；只对配置里那一个标识生效；只开在
-  # 免密登录上，绑定流程不走它；码不是 6 位数字直接拒绝启动。
-  # 审核账号里别放真实数据——那 6 位码是写在 ASC 审核备注里给外部人看的。
-  # 审核结束后把 identity 清空即可关闭。
-  review-account:
-    identity: ${AUTH_REVIEW_ACCOUNT_IDENTITY:}
-    code: ${AUTH_REVIEW_ACCOUNT_CODE:}
 
 sms:
   enabled: ${SMS_AUTH_ENABLED:false}

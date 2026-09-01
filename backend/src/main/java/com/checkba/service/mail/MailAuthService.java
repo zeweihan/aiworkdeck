@@ -1,10 +1,8 @@
 package com.checkba.service.mail;
 
-import com.checkba.config.ReviewAccountGate;
 import com.checkba.model.entity.User;
 import com.checkba.repository.UserRepository;
 import com.checkba.service.LangText;
-import com.checkba.service.UserService;
 import com.checkba.service.auth.VerificationCodeStore;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -42,23 +40,17 @@ public class MailAuthService {
     private final UserRepository userRepository;
     private final boolean localMode;
     private final boolean passwordlessEnabled;
-    private final ReviewAccountGate reviewAccount;
-    private final UserService userService;
 
     @Autowired
     public MailAuthService(VerificationCodeStore codeStore, MailRouter mailRouter,
                            UserRepository userRepository,
                            @Value("${security.local-mode:false}") boolean localMode,
-                           @Value("${mail.passwordless-login-enabled:false}") boolean passwordlessEnabled,
-                           ReviewAccountGate reviewAccount,
-                           UserService userService) {
+                           @Value("${mail.passwordless-login-enabled:false}") boolean passwordlessEnabled) {
         this.codeStore = codeStore;
         this.mailRouter = mailRouter;
         this.userRepository = userRepository;
         this.localMode = localMode;
         this.passwordlessEnabled = passwordlessEnabled;
-        this.reviewAccount = reviewAccount;
-        this.userService = userService;
     }
 
     /** 邮箱验证在本部署形态下是否启用（非 local-mode 且至少一条发信通道配齐）。 */
@@ -142,11 +134,6 @@ public class MailAuthService {
             throw new IllegalArgumentException(LangText.of("邮箱登录未启用", "Passwordless email sign-in is not enabled"));
         }
         String normalized = MailRouter.normalize(email);
-        // 审核账号的码是固定的，没有信要发。与「未注册」走同一条静默返回，
-        // 回包对外完全一致。
-        if (reviewAccount.matches(normalized)) {
-            return;
-        }
         if (userRepository.findByVerifiedEmail(normalized).isEmpty()) {
             return;
         }
@@ -162,13 +149,6 @@ public class MailAuthService {
             throw new IllegalArgumentException(LangText.of("邮箱登录未启用", "Passwordless email sign-in is not enabled"));
         }
         String normalized = MailRouter.normalize(email);
-        // 审核账号没有就建一个专用空账号。**这是这条旁路唯一会建号的地方**，
-        // 且只对配置里那一个标识。理由见 UserService#findOrCreateReviewAccount：
-        // verified_email 只能靠「登录后绑定」写上去，要求事先绑好等于把审核邮箱
-        // 挂到某个真人账号上，那个固定码就成了进真账号的钥匙。
-        if (reviewAccount.accepts(normalized, code)) {
-            return userService.findOrCreateReviewAccount(normalized);
-        }
         if (!codeStore.verify(SCENE_SIGNIN, normalized, code)) {
             throw new IllegalArgumentException(LangText.of("验证码错误或已过期", "Incorrect or expired verification code"));
         }

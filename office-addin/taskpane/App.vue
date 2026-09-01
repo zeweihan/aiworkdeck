@@ -35,15 +35,6 @@
         <!-- 新建项目（dev-board#196）：哨兵值，onProjectSelect 拦截后弹输入面板 -->
         <option value="__new__">{{ t('newProjectOption') }}</option>
       </select>
-      <!-- 项目列表拉取失败（网络不通/服务端 500）时下拉渲染不出来：不能让用户对着
-           一个不存在的下拉发呆，这里给出可读提示 + 重试入口 -->
-      <div
-        v-else-if="view === 'chat' && projectsError"
-        class="project-error"
-      >
-        <span>{{ t('projectsLoadError') }}</span>
-        <button class="project-retry-btn" @click="refreshProjects">{{ t('uploadRetry') }}</button>
-      </div>
       <span class="header-spacer"></span>
       <!-- 语言切换（dev-board#177/#193）：未登录也要能切，所以放头部而不是账户菜单里；
            地球图标 + 目标语言缩写，让它一眼可读为「切换语言」而不是一个谜之汉字按钮 -->
@@ -190,8 +181,6 @@ const settings = reactive(loadSettings())
 const configured = computed(() => isConfigured(settings))
 const view = ref(configured.value ? 'chat' : 'settings')
 const projects = ref([])
-/** 项目列表拉取失败（网络不通/服务端 500）：下拉渲染不出来时给用户一个可读提示 + 重试入口 */
-const projectsError = ref(false)
 /** 该账号其它设备的项目目录（dev-board#250），供下拉渲染远程设备分组 */
 const remoteDevices = ref([])
 const projectId = ref(settings.projectId || '')
@@ -341,7 +330,6 @@ async function refreshProjects() {
   // 远程设备目录（dev-board#250）：与本项目列表并行拉，null 容忍——拿不到就没有
   // 这组下拉项，不影响本服务项目的正常选择
   fetchMobileDevices(settings).then((devices) => { remoteDevices.value = devices || [] })
-  projectsError.value = false
   try {
     // 归档绑定权威清单先到位（dev-board#297）：webview 清过缓存时靠它重建本地映射，
     // 否则下面的「记住的项目已不存在」判定会把绑定的影子项目误清掉
@@ -370,7 +358,6 @@ async function refreshProjects() {
     }
   } catch (e) {
     console.warn('[Addin] 项目列表拉取失败', e)
-    projectsError.value = true
   }
 }
 
@@ -539,26 +526,6 @@ onMounted(async () => {
 }
 
 .project-select:hover { border-color: var(--awd-accent); }
-
-/* 项目列表拉取失败：占位在原下拉的位置，避免头部布局跳动 */
-.project-error {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 220px;
-  padding: 3px 6px;
-  font-size: 12px;
-  color: var(--awd-danger, #b23a3a);
-}
-
-.project-retry-btn {
-  padding: 2px 8px;
-  border: 1px solid var(--awd-danger, #b23a3a);
-  border-radius: var(--awd-radius-sm);
-  background: var(--awd-surface);
-  color: var(--awd-danger, #b23a3a);
-  flex-shrink: 0;
-}
 
 /* 归档绑定提示（dev-board#297）：头部下方一次性反馈条 */
 .archive-hint {

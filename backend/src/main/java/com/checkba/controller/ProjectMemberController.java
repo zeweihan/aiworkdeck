@@ -2,7 +2,6 @@ package com.checkba.controller;
 
 import com.checkba.model.entity.ProjectMember;
 import com.checkba.model.entity.User;
-import com.checkba.service.LocalIdentityService;
 import com.checkba.service.ProjectMemberService;
 import com.checkba.service.ClientInvitationService;
 import lombok.Data;
@@ -49,8 +48,7 @@ public class ProjectMemberController {
             map.put("joinedAt", member.getJoinedAt());
             if (user != null) {
                 map.put("username", user.getUsername());
-                // local-mode 下项目 owner/成员可能是库里存了中文哨兵值的本机用户，按界面语言本地化
-                map.put("displayName", LocalIdentityService.displayNameOf(user.getDisplayName()));
+                map.put("displayName", user.getDisplayName());
                 map.put("avatarUrl", user.getAvatarUrl());
             }
             return map;
@@ -66,7 +64,7 @@ public class ProjectMemberController {
                 ownerMap.put("role", "ADMIN");
                 ownerMap.put("joinedAt", null);
                 ownerMap.put("username", owner.getUsername());
-                ownerMap.put("displayName", LocalIdentityService.displayNameOf(owner.getDisplayName()));
+                ownerMap.put("displayName", owner.getDisplayName());
                 ownerMap.put("avatarUrl", owner.getAvatarUrl());
                 resultList.add(0, ownerMap); // Add to top
             }

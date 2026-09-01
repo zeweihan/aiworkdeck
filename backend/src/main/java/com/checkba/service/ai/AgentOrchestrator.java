@@ -184,17 +184,6 @@ public class AgentOrchestrator {
     }
 
     /**
-     * 终止路径专用的落库：落库失败只记日志，不能盖掉原始异常，也不能让后续收尾动作被跳过。
-     */
-    private void saveAssistantMessageQuietly(String conversationId, String projectId, Long userId, String content) {
-        try {
-            saveAssistantMessage(conversationId, projectId, userId, content);
-        } catch (Exception persistError) {
-            log.warn("Failed to persist terminal assistant message for conversation {}", conversationId, persistError);
-        }
-    }
-
-    /**
      * 处理取消：保存已生成的部分内容
      */
     private void handleCancellation(String conversationId, String projectId, Long userId) {
@@ -566,17 +555,11 @@ public class AgentOrchestrator {
             log.info("平台通道不可用 [{}]，会话 {}: {}", e.getKind(), conversationId, e.getMessage());
             agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
             sseEmitterService.send(conversationId, "error", e.getMessage());
-            // 用户消息在本方法开头已落库：这里不补一条 ASSISTANT，刷新页面后这一轮就只剩用户
-            // 自己的问题，看起来像 AI 完全没回应。落的正是推给用户的那句文案（不加前缀）。
-            saveAssistantMessageQuietly(conversationId, projectId, userId, e.getMessage());
             closeSse(conversationId);
         } catch (Exception e) {
             log.error("Agent Loop Error for conversation: " + conversationId, e);
-            String errorText = "Internal Error: " + e.getMessage();
             agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
-            sseEmitterService.send(conversationId, "error", errorText);
-            // 同上：历史里必须留下这一轮出过错的痕迹，且与 SSE 推出去的是同一串文本
-            saveAssistantMessageQuietly(conversationId, projectId, userId, errorText);
+            sseEmitterService.send(conversationId, "error", "Internal Error: " + e.getMessage());
             closeSse(conversationId);
         }
     }

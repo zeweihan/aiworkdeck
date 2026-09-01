@@ -87,9 +87,6 @@ export function useAgentStream() {
     let heartbeatMonitor = null
     let lastSseActivityAt = 0 // 任何 SSE 字节到达都刷新（后端心跳 15s 一跳兜底保活）
     const HEARTBEAT_STALE_MS = 45000 // 连续 3 个心跳周期无任何字节判定连接已死
-    // 被断线截断的助手气泡。正常收尾也不清 currentAssistantBubble 指针，
-    // 所以「这条是不是断线截断的」只能在断开那一刻记下来，不能事后推断。
-    let disconnectedBubble = null
 
     const stopHeartbeatMonitor = () => {
         if (heartbeatMonitor) { clearInterval(heartbeatMonitor); heartbeatMonitor = null }
@@ -228,8 +225,6 @@ export function useAgentStream() {
         })
         // Clear bubble pointer (will be set fresh on next send)
         currentAssistantBubble.value = null
-        // 切会话即丢弃断线截断指针：旧连接的终态 run_state 迟到时不许写到新会话的气泡上
-        disconnectedBubble = null
     }
 
     // --- CLEAR BUBBLES ---
@@ -426,12 +421,7 @@ export function useAgentStream() {
                         // 仍在流式状态但连接已结束 = 意外断开。后台 @Async 循环并不依赖
                         // SSE，多半还在跑——自动重连续流（run_state/state_recovery 恢复气泡）。
                         console.warn('[AgentStream] SSE connection ended while still streaming, scheduling reconnect')
-                        if (currentAssistantBubble.value) {
-                            currentAssistantBubble.value.isStreaming = false
-                            // 重连后若拿到的是终态 run_state（断线期间那一轮已跑完），
-                            // 终态事件早随旧连接丢了，靠这个指针把提示补到被截断的那条上
-                            disconnectedBubble = currentAssistantBubble.value
-                        }
+                        if (currentAssistantBubble.value) currentAssistantBubble.value.isStreaming = false
                         isStreaming.value = false
                         scheduleReconnect('stream-ended')
                     }
@@ -463,8 +453,6 @@ export function useAgentStream() {
         agentPaused.value = null
         agentRunStatus.value = 'RUNNING'
         agentAwaitingInput.value = false
-        // 上一轮的断线截断指针到此作废：新一轮的终态不该往旧气泡上补提示
-        disconnectedBubble = null
         // 这一轮就是上一问的答案（点选项或自己打字都算）：封掉历史上所有未作答的问题卡，
         // 只有最新一条助手消息上的反问可操作——与审批卡「仅最新一条可操作」同口径。
         bubbles.value.forEach(b => {
@@ -685,28 +673,6 @@ export function useAgentStream() {
                     // 模型反问后停机等答案：切回会话时要看得出「AI 在等你回答」。
                     // 不置 isStreaming——后台没有任何东西在跑，输入框必须可用。
                     agentAwaitingInput.value = true
-                } else if (d.status === 'FINISHED' || d.status === 'ERROR' || d.status === 'CANCELLED') {
-                    // 断线期间那一轮已在后台结束：bubble_end/error/cancelled 随旧连接一起丢了，
-                    // 重连后只剩这条 run_state。不认它的话，被截断的气泡永远停在断线那一刻的
-                    // 半截文字上——输入框已解锁看着像「说完了」，完整回复其实躺在库里。
-                    // 只补一条提示、不做历史回灌：历史的拉取与回灌整条链
-                    // （getAiHistory → ChatInterface.loadMessages）都在组件侧，本 composable
-                    // 够不着，而 loadMessages 末尾还会 reattachSSE，从这里回调会绕成重连环。
-                    if (disconnectedBubble) {
-                        // 顶层 thinking 与执行卡一并归位：这一轮的 bubble_end/error/cancelled
-                        // 随旧连接丢了，正常收尾里的归零逻辑没有人执行——漏掉它计时器就
-                        // 永远读秒、工具卡永远停在"执行中"（与 dev-board#211 同族病灶）。
-                        const th = disconnectedBubble.thinking
-                        if (th && th.status === 'thinking') {
-                            th.status = 'done'
-                            if (!th.duration || th.duration === 0) {
-                                th.duration = (Date.now() - th.startTime) / 1000
-                            }
-                        }
-                        finalizeProcesses(d.status === 'FINISHED' ? 'success' : 'error', disconnectedBubble)
-                        disconnectedBubble.content += '\n\n' + t('agentStream.interruptedRunEndedNotice') + '\n'
-                        disconnectedBubble = null
-                    }
                 }
             } catch (e) {
                 console.error('Failed to parse run_state', e)
@@ -1059,8 +1025,6 @@ export function useAgentStream() {
                 currentAssistantBubble.value = bubble
                 currentAssistantBubble.value.isStreaming = true
                 isStreaming.value = true
-                // 快照续流已把这条气泡整段重填，断线截断的账在这里一笔勾销
-                disconnectedBubble = null
 
                 // 2. Reset Parser State
                 resetParser()
@@ -1105,10 +1069,8 @@ export function useAgentStream() {
      * 终态收敛：流结束（正常/出错/取消）时，把所有仍处于进行中的条目落到终态。
      * finalToolStatus: 'success'（正常结束）| 'error'（出错/取消）
      */
-    // targetBubble 缺省是当前气泡；重连后给「断线截断的那条」收敛时要显式传，
-    // 那时 currentAssistantBubble 已经是 null。
-    const finalizeProcesses = (finalToolStatus, targetBubble) => {
-        const bubble = targetBubble || currentAssistantBubble.value
+    const finalizeProcesses = (finalToolStatus) => {
+        const bubble = currentAssistantBubble.value
         if (!bubble || !bubble.processes) return
         bubble.processes.forEach(proc => {
             const items = proc.items || []

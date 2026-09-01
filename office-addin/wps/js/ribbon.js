@@ -65,11 +65,7 @@ function OnAction(control) {
     try { id = control.Id } catch (e) { /* 取不到 id 就当没点中 */ }
     try {
         if (id === "btnAwdPane") ToggleAwdPane()
-    } catch (e) {
-        // 异常冒出回调只会被宿主静默吞掉，用户与我们都拿不到线索——弹一个最简提示，
-        // 至少让用户知道点击没生效以及为什么
-        try { window.alert("AI 助手窗格打开失败：" + ((e && e.message) || e)) } catch (e2) { /* alert 也不可用就放弃 */ }
-    }
+    } catch (e) { /* 异常冒出回调只会被宿主静默吞掉，用户与我们都拿不到线索 */ }
     return true
 }
 

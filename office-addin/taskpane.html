@@ -5,28 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>AI WorkDeck</title>
   <!-- office.js 必须从微软官方 CDN 以 script 标签引入，不打包进 bundle -->
-  <!-- CDN 加载失败/挂起时任务窗格会永久白屏：onerror + 超时兜底渲染一段静态双语提示。
-       此处早于 i18n 模块初始化，不能依赖 t()，文案直接内联。 -->
-  <script>
-    (function () {
-      var shown = false
-      function showOfficeLoadFailure() {
-        if (shown) return
-        shown = true
-        var app = document.getElementById('app')
-        if (!app) return
-        app.innerHTML = '<div style="padding:24px;font-family:-apple-system,\'Segoe UI\',sans-serif;font-size:13px;line-height:1.6;color:#333;">'
-          + '<p>Office 组件加载失败，请检查网络或代理设置后重新打开任务窗格。</p>'
-          + '<p>Failed to load the Office component. Check your network or proxy settings, then reopen the task pane.</p>'
-          + '</div>'
-      }
-      window.__awdOfficeLoadFailed = showOfficeLoadFailure
-      window.setTimeout(function () {
-        if (typeof window.Office === 'undefined') showOfficeLoadFailure()
-      }, 8000)
-    })()
-  </script>
-  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js" onerror="window.__awdOfficeLoadFailed && window.__awdOfficeLoadFailed()"></script>
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
 </head>
 <body>
   <div id="app"></div>
