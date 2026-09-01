@@ -356,9 +356,16 @@ Function AwdPrivacyClick
   ExecShell "open" "${AWD_UI_PRIVACY_URL}"
 FunctionEnd
 
+; 大卡片右上角 ✕。**这里不能用 Quit**（dev-board#354，CI 实锤）：Quit 只是
+; g_quit_flag++ 加一发 PostQuitMessage，而此刻正处在 nsDialogs::Show 自己的消息
+; 循环里——那个循环只看对话框句柄还在不在，不看 GetMessage 的返回值，WM_QUIT 被它
+; 取走后直接丢弃，循环照转，安装器就此关不掉，用户只能去任务管理器杀。
+; 改走「取消」（IDCANCEL=2）交回 NSIS 页面机：页面机会销毁对话框，Show 的循环
+; 随之退出。与完成卡两个按钮用的 SendMessage WM_COMMAND 同族，那条路已被
+; zh/en 两条冒烟流程实跑覆盖。三个安装器都没定义 MUI_ABORTWARNING，不会多弹确认框。
 Function AwdCloseClick
   Pop $0
-  Quit
+  SendMessage $HWNDPARENT ${WM_COMMAND} 2 0
 FunctionEnd
 
 Function AwdMinClick

@@ -6,7 +6,12 @@ param(
   [Parameter(Mandatory = $true)][string]$OutDir,
   # 磁盘空间闸（dev-board#350）的反向用例：用一个所需空间大到不可能满足的
   # harness 产物驱动，断言「点了立即安装，但没开装」。
-  [switch]$ExpectBlocked
+  [switch]$ExpectBlocked,
+  # 关窗路径专用（dev-board#354）：欢迎大卡片右上角 ✕ 点下去安装器就该退出。
+  # 这条路径原先没有任何用例覆盖过（zh/en 正常流程关的是完成卡的 ✕，走的是另一个
+  # 函数），且必须单独跑——接在别的点击或对话框后面会被焦点/ESC 干扰，分不清
+  # 「点击没落到热区上」还是「关窗动作本身没生效」。
+  [switch]$CloseOnly
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
@@ -25,6 +30,9 @@ public class W {
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
+  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr wp, IntPtr lp);
   public struct RECT { public int L, T, R, B; }
   public struct POINT { public int x, y; }
 }
@@ -122,6 +130,49 @@ function ClickAt([int]$bx, [int]$by) {
 
 # 1. 大卡片首页
 Shot '01-welcome'
+
+if ($CloseOnly) {
+  # 先把视线清障单独做掉再断言进程还活着：Clear-Overlay 挡不住视线时会按 ESC，
+  # 而 NSIS 下 ESC 本身就等于「取消」，安装器会因此退出——那样点都没点就绿了。
+  # 这一步把这个假绿口子堵上；清完障后 ClickAt 里那次 Clear-Overlay 会在第 0 轮
+  # 直接返回，不会再按 ESC。
+  $rc = Get-Rect
+  Clear-Overlay ($rc.L + 732) ($rc.T + 24)
+  if ($p.HasExited) { throw "installer exited before the close click was issued (line-of-sight cleanup interfered)" }
+  # 点右上角 ✕（AWDUI_CLOSE 712,8,40,32 → 中心 732,24）。欢迎卡刚出来、没弹过任何
+  # 对话框、没点过任何别的热区，是这条路径最干净的一次点击。
+  ClickAt 732 24
+  Start-Sleep -Seconds 3
+  if ($p.HasExited) {
+    Write-Host 'close flow completed: welcome card close button exited the installer'
+    exit 0
+  }
+  # 没退出。下面两条对照都跑一遍并把结论留在日志里，回归时不用再猜是哪一头坏了。
+  Shot '02-still-open'
+  # 对照一：同一行、左边 44px 的最小化热区（AWDUI_MIN 668,8,40,32 → 中心 688,24），
+  # 走的是 ShowWindow，与关窗机制无关。它生效 = 这一行热区确实被点中了，
+  # 那么 ✕ 关不掉就只能是 AwdCloseClick 里的关窗动作没生效。
+  ClickAt 688 24
+  Start-Sleep -Milliseconds 800
+  $iconic = [W]::IsIconic($h)
+  Write-Host "diag: minimize hotspot (688,24) -> IsIconic=$iconic"
+  if ($iconic) {
+    [W]::ShowWindow($h, 9) | Out-Null    # SW_RESTORE
+    Start-Sleep -Milliseconds 500
+    [W]::SetWindowPos($h, [IntPtr](-1), 0, 0, 0, 0, 0x3) | Out-Null
+    [W]::SetForegroundWindow($h) | Out-Null
+    Start-Sleep -Milliseconds 500
+  }
+  # 对照二：从外部发一次「取消」（WM_COMMAND，IDCANCEL=2），即走 NSIS 页面机自己的
+  # 退出通道——完成卡的 ✕ 用的就是同族的 WM_COMMAND，已知可用。它能关掉、而 ✕ 关不掉，
+  # 就把结论钉死在「AwdCloseClick 用的退出方式不对」上。
+  [W]::PostMessage($h, 0x0111, [IntPtr]2, [IntPtr]::Zero) | Out-Null
+  Start-Sleep -Seconds 3
+  Write-Host "diag: WM_COMMAND IDCANCEL from outside -> HasExited=$($p.HasExited)"
+  if (-not $p.HasExited) { $p.Kill() }
+  throw "installer did not exit after clicking the welcome card close button"
+}
+
 # 2. 展开自定义安装（AWDUI_TOGGLE 44,448,130,26 → 中心 109,461）
 ClickAt 109 461
 Start-Sleep -Milliseconds 600
@@ -147,9 +198,9 @@ if ($ExpectBlocked) {
   # 开装了窗口会缩成 360x132 的角落小进度卡；还是 760 宽就说明确实没开装
   if ($wb -lt 700) { throw "installer proceeded to the progress card despite insufficient space (window width $wb)" }
   # 收尾直接杀进程，不点大卡片的 ✕。本用例要断言的是「闸拦住了、没开装」，上面
-  # 三条断言已经全覆盖；关窗行为由 zh/en 两条正常流程在完成卡上覆盖。首轮 CI 实跑里
-  # 这一步点 ✕ 后进程 2 秒内没退（AwdCloseClick 是 Quit，从 nsDialogs::Show 的回调里
-  # 调用是否即时生效没有验证过），拿一条与本闸无关的路径把用例判红不值当。
+  # 三条断言已经全覆盖；大卡片 ✕ 的关窗行为由 -CloseOnly 那条独立用例覆盖，
+  # 不在这里重复点——首轮实跑就是因为把两件事绑在一根流程上，点 ✕ 没退出时
+  # 分不清是闸的问题还是关窗的问题（dev-board#354，根因已确认并修掉）。
   $p.Kill()
   Write-Host 'blocked flow completed: gate fired, install never started'
   exit 0

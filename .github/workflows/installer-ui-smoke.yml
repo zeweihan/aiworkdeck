@@ -52,6 +52,13 @@ jobs:
         shell: pwsh
         run: pwsh -File desktop/scripts/installer-smoke.ps1 -Exe harness-zh.exe -OutDir shots/zh
 
+      - name: Drive zh harness close button (欢迎卡右上角 ✕ 必须退出，dev-board#354)
+        shell: pwsh
+        # 单独起一个进程只测这一下：欢迎卡一出来就点 ✕，不经过任何对话框或别的热区。
+        # 失败时日志里会带两条对照（同排的最小化热区是否生效、外部发 IDCANCEL 是否能关），
+        # 直接分辨「点击没落到热区上」还是「关窗动作没生效」。
+        run: pwsh -File desktop/scripts/installer-smoke.ps1 -Exe harness-zh.exe -OutDir shots/close -CloseOnly
+
       - name: Drive en harness with screenshots
         shell: pwsh
         run: pwsh -File desktop/scripts/installer-smoke.ps1 -Exe harness-en.exe -OutDir shots/en
