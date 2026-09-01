@@ -447,10 +447,6 @@ startEditorEndpoint({
     window.__loExecutor = endpoint.executor
   }
 }).catch((e) => {
-  const reason = e && e.message ? e.message : String(e)
   console.error('[zeta-editor] boot failed:', e)
-  if (VERIFY) vlog('boot failed: ' + reason)
-  // boot 挂了（WASM/CDN 拉不到、防火墙拦截、字体加载失败）必须告诉宿主：
-  // 否则 'ready' 永远不来，宿主的进度条会一直走下去，用户看不到任何原因。
-  try { hostTransport.send({ __lo: 'lo-relay', type: 'boot-failed', message: reason }) } catch (err) { /* ignore */ }
+  if (VERIFY) vlog('boot failed: ' + (e && e.message ? e.message : e))
 })

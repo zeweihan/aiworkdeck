@@ -9,8 +9,7 @@
       </view>
       <view v-else class="launch-error">
         <text class="launch-error-text">{{ errorText }}</text>
-        <text v-if="backendDetail" class="launch-error-detail">{{ $t('onboarding.launch.detailLabel') }}{{ backendDetail }}</text>
-        <button class="launch-retry-btn" @tap="retry">{{ $t('onboarding.launch.retry') }}</button>
+        <button class="launch-retry-btn" @tap="boot">{{ $t('onboarding.launch.retry') }}</button>
       </view>
     </view>
   </view>
@@ -23,7 +22,7 @@ import {
   getMyProjects,
 } from '@/services/api.js'
 import { syncRecentToMenu } from '@/utils/recentProjects.js'
-import { isDesktopHost, host } from '@/services/host.js'
+import { isDesktopHost } from '@/services/host.js'
 
 export default {
   name: 'LaunchPage',
@@ -32,35 +31,14 @@ export default {
       failed: false,
       statusText: this.$t('onboarding.launch.starting'),
       errorText: this.$t('onboarding.launch.cannotConnect'),
-      // 后端启动失败的诊断信息（desktop 端 backend.onStatus 推送），浏览器态始终为空
-      backendDetail: '',
-      unsubscribeBackendStatus: null,
     }
   },
   onLoad() {
-    this.subscribeBackendStatus()
     this.boot()
-  },
-  beforeUnmount() {
-    if (this.unsubscribeBackendStatus) this.unsubscribeBackendStatus()
   },
   methods: {
     isDesktop() {
       return isDesktopHost()
-    },
-    // 订阅后端启动状态推送，失败态下作为诊断信息补充展示（dev-board#341）
-    subscribeBackendStatus() {
-      if (!this.isDesktop() || !(host.backend && host.backend.onStatus)) return
-      this.unsubscribeBackendStatus = host.backend.onStatus((data) => {
-        if (data && data.ok === false) this.backendDetail = data.message || ''
-      })
-    },
-    // 失败态重试：桌面端先让主进程重启后端服务，再重新走一遍启动分流
-    async retry() {
-      if (this.isDesktop() && host.backend && host.backend.restart) {
-        try { await host.backend.restart() } catch (e) { /* 忽略，照常重新轮询 */ }
-      }
-      this.boot()
     },
     async boot() {
       this.failed = false
@@ -117,21 +95,16 @@ export default {
         this.failed = true
       }
     },
-    // 打包版后端随应用启动需要几秒，轮询直到可达（上限 90 秒）。
-    // ARM 版 Windows（Mac 虚拟机）转译运行时主进程看门狗已放宽 8 倍（dev-board#340），
-    // 这里同步放宽死线，否则后端还在正常预热就会被判超时（dev-board#341）
+    // 打包版后端随应用启动需要几秒，轮询直到可达（上限 90 秒）
     async waitLicenseStatus() {
-      const emulated = this.isDesktop() && !!host.winEmulated
-      const deadline = Date.now() + (emulated ? 90000 * 8 : 90000)
+      const deadline = Date.now() + 90000
       let shownBooting = false
       while (Date.now() < deadline) {
         try {
           return await getLicenseStatus()
         } catch (e) {
           if (!shownBooting) {
-            this.statusText = emulated
-              ? this.$t('onboarding.launch.bootingEmulated')
-              : this.$t('onboarding.launch.bootingLocal')
+            this.statusText = this.$t('onboarding.launch.bootingLocal')
             shownBooting = true
           }
           await new Promise((resolve) => setTimeout(resolve, 1500))
@@ -203,11 +176,6 @@ export default {
 .launch-error-text {
   font-size: 13px;
   color: var(--awd-text-2);
-}
-
-.launch-error-detail {
-  font-size: 12px;
-  color: var(--awd-text-3);
 }
 
 .launch-retry-btn {

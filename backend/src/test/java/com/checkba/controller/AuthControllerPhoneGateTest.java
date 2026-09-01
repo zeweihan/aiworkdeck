@@ -1,7 +1,6 @@
 package com.checkba.controller;
 
 import com.checkba.config.PhoneLoginGuard;
-import com.checkba.config.ReviewAccountGate;
 import com.checkba.model.entity.User;
 import com.checkba.repository.UserRepository;
 import com.checkba.service.AuthAbuseGuard;
@@ -62,8 +61,7 @@ class AuthControllerPhoneGateTest {
     private static PhoneLoginGuard guard(boolean required, String deadline) {
         SmsAuthService sms = new SmsAuthService(
                 List.of(new SmsService(OK_TRANSPORT, true, "ak", "sk", "sign", "tpl")),
-                new VerificationCodeStore(), mock(UserRepository.class), false,
-                ReviewAccountGate.disabled());
+                new VerificationCodeStore(), mock(UserRepository.class), false);
         return new PhoneLoginGuard(sms, required, false, deadline);
     }
 

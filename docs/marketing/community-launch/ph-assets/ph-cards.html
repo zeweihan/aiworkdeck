@@ -15,7 +15,7 @@
   .card { display: none; width: 1270px; height: 760px; position: relative;
     padding: 64px 72px; flex-direction: column; }
   body[data-card="1"] #c1, body[data-card="2"] #c2, body[data-card="3"] #c3,
-  body[data-card="4"] #c4, body[data-card="5"] #c5 { display: flex; }
+  body[data-card="4"] #c4, body[data-card="5"] #c5, body[data-card="6"] #c6 { display: flex; }
   .card::before { content: ""; position: absolute; top: 0; left: 0; right: 0;
     height: 6px; background: var(--green); }
   .brand { position: absolute; top: 44px; left: 72px; }
@@ -109,14 +109,29 @@
   .folder .row.hl .fico { background: var(--green); }
   .folder .path { font-size: 14px; color: var(--muted); margin-bottom: 14px; }
 
-  /* Card 5 open source */
-  #c5 .center { margin-top: 100px; max-width: 900px; }
-  #c5 h1 { font-size: 60px; }
-  #c5 .rows { margin-top: 48px; display: grid; grid-template-columns: 1fr 1fr; gap: 26px 56px; }
-  #c5 .item { display: flex; gap: 16px; align-items: flex-start; }
-  #c5 .sq { width: 14px; height: 14px; background: var(--green); margin-top: 8px; flex: none; }
-  #c5 .item b { font-size: 22px; display: block; }
-  #c5 .item span { font-size: 17px; color: var(--muted); line-height: 1.5; display: block; margin-top: 4px; }
+  /* Card 5 plugins */
+  .plugrid { display: grid; grid-template-columns: 300px 300px; gap: 20px; }
+  .plug { background: var(--card-bg); border: 1px solid var(--rule); border-radius: 10px;
+    padding: 22px 24px; box-shadow: 0 12px 34px rgba(20,60,45,.09); }
+  .plug .ph-ico { width: 34px; height: 34px; border-radius: 8px; background: var(--mint);
+    border: 2px solid var(--green); margin-bottom: 14px; }
+  .plug b { font-size: 18.5px; display: block; }
+  .plug .desc { font-size: 14.5px; color: var(--muted); line-height: 1.5; margin-top: 6px;
+    min-height: 44px; }
+  .plug .foot { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; }
+  .plug .ver { font-size: 13px; color: var(--muted); }
+  .plug .inst { font-size: 13.5px; font-weight: 700; color: #fff; background: var(--green);
+    border-radius: 4px; padding: 5px 14px; }
+  .signednote { grid-column: 1 / -1; font-size: 14px; color: var(--muted); margin-top: 4px; }
+
+  /* Card 6 open source */
+  #c6 .center { margin-top: 100px; max-width: 900px; }
+  #c6 h1 { font-size: 60px; }
+  #c6 .rows { margin-top: 48px; display: grid; grid-template-columns: 1fr 1fr; gap: 26px 56px; }
+  #c6 .item { display: flex; gap: 16px; align-items: flex-start; }
+  #c6 .sq { width: 14px; height: 14px; background: var(--green); margin-top: 8px; flex: none; }
+  #c6 .item b { font-size: 22px; display: block; }
+  #c6 .item span { font-size: 17px; color: var(--muted); line-height: 1.5; display: block; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -223,6 +238,34 @@
 </div>
 
 <div class="card" id="c5">
+  <div class="brand"><img src="LOGO_SRC"></div>
+  <div class="split">
+    <div class="text">
+      <h1>An ecosystem, not a feature list.</h1>
+      <div class="sub">Signed plugins extend the workbench — and an SDK lets practitioners build their own. Authors keep their copyright.</div>
+    </div>
+    <div class="visual">
+      <div class="plugrid">
+        <div class="plug"><div class="ph-ico"></div><b>Due Diligence Workbench</b>
+          <div class="desc">Evidence-linked DD reports. Every stated fact traces to a source document.</div>
+          <div class="foot"><span class="ver">v0.6.1</span><span class="inst">Install</span></div></div>
+        <div class="plug"><div class="ph-ico"></div><b>Litigation Visuals</b>
+          <div class="desc">Timelines, process flows and party graphs, rendered natively.</div>
+          <div class="foot"><span class="ver">native pack</span><span class="inst">Install</span></div></div>
+        <div class="plug"><div class="ph-ico"></div><b>Meeting Transcription</b>
+          <div class="desc">Record hearings and calls, transcribe and summarize into the project.</div>
+          <div class="foot"><span class="ver">v1.x</span><span class="inst">Install</span></div></div>
+        <div class="plug"><div class="ph-ico"></div><b>File De-identification</b>
+          <div class="desc">Strip names and identifiers from documents before they leave your desk.</div>
+          <div class="foot"><span class="ver">v1.x</span><span class="inst">Install</span></div></div>
+        <div class="signednote">Ed25519-signed packages · open SDK · marketplace on the web and in-app</div>
+      </div>
+    </div>
+  </div>
+  <div class="site">workdeck.ai</div>
+</div>
+
+<div class="card" id="c6">
   <div class="brand"><img src="LOGO_SRC"></div>
   <div class="center">
     <h1>Open source. Desktop-first. Yours.</h1>

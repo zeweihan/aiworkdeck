@@ -71,7 +71,6 @@ export default {
   confidence: '置信 {value}',
   loading: '加载中…',
   loadFailed: '加载关联失败',
-  fileTagsLoadFailed: '加载主体标签失败，「按主体」视图可能不准确',
   opFailed: '操作未成功',
   deleteConfirm: '删除这条关联？底稿文件不会被删除。',
   deleteTargetConfirm: '移除这份底稿？',

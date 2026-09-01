@@ -1,7 +1,6 @@
 package com.checkba.service.sms;
 
 import com.checkba.config.PhoneLoginGuard;
-import com.checkba.config.ReviewAccountGate;
 import com.checkba.repository.UserRepository;
 import com.checkba.service.auth.VerificationCodeStore;
 import org.junit.jupiter.api.DisplayName;
@@ -27,8 +26,7 @@ class SmsSigninTest {
 
     private static SmsAuthService svc(SmsTransport t) {
         return new SmsAuthService(List.of(enabled(t)), new VerificationCodeStore(),
-                mock(UserRepository.class), false,
-                ReviewAccountGate.disabled());
+                mock(UserRepository.class), false);
     }
 
     @Test
@@ -73,8 +71,7 @@ class SmsSigninTest {
     void scenesAreIsolated() {
         SmsAuthService s = svc(OK);
         VerificationCodeStore store = new VerificationCodeStore();
-        SmsAuthService s2 = new SmsAuthService(List.of(enabled(OK)), store,
-                mock(UserRepository.class), false, ReviewAccountGate.disabled());
+        SmsAuthService s2 = new SmsAuthService(List.of(enabled(OK)), store, mock(UserRepository.class), false);
         s2.sendSigninCode("13800000000");
         // 用 signin 的码去核销 bind 场景应当失败
         assertFalse(store.verify("bind", "13800000000",
@@ -99,8 +96,7 @@ class SmsSigninTest {
     void guardRefusesToStartWithDarkGateway() {
         SmsService dark = new SmsService(OK, false, "", "", "sign", "tpl");
         SmsAuthService inactive = new SmsAuthService(List.of(dark), new VerificationCodeStore(),
-                mock(UserRepository.class), false,
-                ReviewAccountGate.disabled());
+                mock(UserRepository.class), false);
         assertFalse(inactive.active());
 
         IllegalStateException e = assertThrows(IllegalStateException.class,
@@ -117,8 +113,7 @@ class SmsSigninTest {
 
         SmsService dark = new SmsService(OK, false, "", "", "sign", "tpl");
         SmsAuthService inactive = new SmsAuthService(List.of(dark), new VerificationCodeStore(),
-                mock(UserRepository.class), false,
-                ReviewAccountGate.disabled());
+                mock(UserRepository.class), false);
         // 没开强制：网关暗着也该正常启动
         assertDoesNotThrow(() -> new PhoneLoginGuard(inactive, false, false, "2026-09-30"));
         // local-mode 根本没有登录环节

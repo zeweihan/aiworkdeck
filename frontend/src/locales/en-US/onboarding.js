@@ -100,7 +100,5 @@ export default {
     cannotConnect: 'Could not connect to the local service. Please try again later.',
     retry: 'Retry',
     bootingLocal: 'Starting the local service',
-    bootingEmulated: 'Virtualized/emulated environment detected. First launch may take a few minutes, please wait.',
-    detailLabel: 'Details: ',
   },
 }

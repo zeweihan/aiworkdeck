@@ -942,15 +942,6 @@ import {
   createTask
 } from '@/services/api.js'
 
-// 移动接口失败时会在服务端把 parentId 回滚再照常返回成功（物理文件被占用，常见于
-// Windows 上文件正被 Word/编辑器打开，见 ProjectFileService.moveSingleFileWithPhysical）——
-// 前端只能靠比对响应里的 parentId 与本次请求的目标 parentId 识别"其实没移成"。
-// 根目录用 null 表示，但请求参数和响应字段可能是 string/number，这里统一转字符串再比较。
-function parentIdsEqual(a, b) {
-  const norm = (v) => (v === null || v === undefined || v === '') ? null : String(v)
-  return norm(a) === norm(b)
-}
-
 export default {
   name: 'FileTree',
   components: {
@@ -2321,19 +2312,8 @@ export default {
         const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
         const targetParentId = this.batchTargetParentId
         if (action === 'move' || action === 'cut') {
-          const res = await batchMoveFiles(projectId, ids, targetParentId)
-          const movedFiles = (res && res.data && Array.isArray(res.data.files)) ? res.data.files : []
-          const occupiedCount = movedFiles.filter((f) => !parentIdsEqual(f && f.parentId, targetParentId)).length
-          if (occupiedCount > 0) {
-            uni.showToast({
-              title: occupiedCount === 1
-                ? this.$t('workbenchOps.fileMoveOccupied')
-                : this.$t('workbenchOps.filesMoveOccupiedCount', { count: occupiedCount }),
-              icon: 'none'
-            })
-          } else {
-            uni.showToast({ title: this.$t('fileTree.moveSuccess'), icon: 'success' })
-          }
+          await batchMoveFiles(projectId, ids, targetParentId)
+          uni.showToast({ title: this.$t('fileTree.moveSuccess'), icon: 'success' })
         } else if (action === 'copy') {
           await batchCopyFiles(projectId, ids, targetParentId)
           uni.showToast({ title: this.$t('fileTree.copySuccess'), icon: 'success' })
@@ -2761,13 +2741,9 @@ export default {
             // Prevent self-parenting or no-op moves if needed check
             if (draggedItem.id === targetParentId) return
 
-            const moved = await moveFile(projectId, draggedItem.id, targetParentId, newSortOrder)
+            await moveFile(projectId, draggedItem.id, targetParentId, newSortOrder)
             await this.loadFiles()
-            if (parentIdsEqual(moved && moved.parentId, targetParentId)) {
-              uni.showToast({ title: this.$t('fileTree.moveSuccess'), icon: 'success' })
-            } else {
-              uni.showToast({ title: this.$t('workbenchOps.fileMoveOccupied'), icon: 'none' })
-            }
+            uni.showToast({ title: this.$t('fileTree.moveSuccess'), icon: 'success' })
           } catch (error) {
             console.error('移动文件失败:', error)
             uni.showToast({ title: error.message || this.$t('fileTree.moveFailed'), icon: 'none' })
@@ -2803,13 +2779,9 @@ export default {
 
           if (droppedFileId) {
              try {
-                 const moved = await moveFile(projectId, droppedFileId, targetParentId, newSortOrder)
+                 await moveFile(projectId, droppedFileId, targetParentId, newSortOrder)
                  await this.loadFiles()
-                 if (parentIdsEqual(moved && moved.parentId, targetParentId)) {
-                   uni.showToast({ title: this.$t('fileTree.moveSuccess'), icon: 'success' })
-                 } else {
-                   uni.showToast({ title: this.$t('workbenchOps.fileMoveOccupied'), icon: 'none' })
-                 }
+                 uni.showToast({ title: this.$t('fileTree.moveSuccess'), icon: 'success' })
 
                  // If Staging Area listens to file changes (it does via project-overview reloading),
                  // it will update automatically.
@@ -2869,13 +2841,9 @@ export default {
             }
 
             // If already in root (parentId is null or matches), we might still want to allow movement if subfolder -> root
-            const moved = await moveFile(projectId, draggedItem.id, targetParentId, newSortOrder)
+            await moveFile(projectId, draggedItem.id, targetParentId, newSortOrder)
             await this.loadFiles()
-            if (parentIdsEqual(moved && moved.parentId, targetParentId)) {
-              uni.showToast({ title: this.$t('fileTree.moveToRootSuccess'), icon: 'success' })
-            } else {
-              uni.showToast({ title: this.$t('workbenchOps.fileMoveOccupied'), icon: 'none' })
-            }
+            uni.showToast({ title: this.$t('fileTree.moveToRootSuccess'), icon: 'success' })
             this.draggedIndex = -1
             this.draggedFileId = null
           } catch (error) {
@@ -2903,13 +2871,9 @@ export default {
 
           if (droppedFileId) {
              try {
-                 const moved = await moveFile(projectId, droppedFileId, targetParentId, newSortOrder)
+                 await moveFile(projectId, droppedFileId, targetParentId, newSortOrder)
                  await this.loadFiles()
-                 if (parentIdsEqual(moved && moved.parentId, targetParentId)) {
-                   uni.showToast({ title: this.$t('fileTree.moveToRootSuccess'), icon: 'success' })
-                 } else {
-                   uni.showToast({ title: this.$t('workbenchOps.fileMoveOccupied'), icon: 'none' })
-                 }
+                 uni.showToast({ title: this.$t('fileTree.moveToRootSuccess'), icon: 'success' })
                  this.$emit('files-changed')
              } catch (error) {
                 console.error('从外部移动到根目录失败:', error)
@@ -2962,19 +2926,12 @@ export default {
              targetParentId = this.showTree ? targetItem.parentId : this.parentId
           }
 
-          const moved = await moveFile(projectId, draggedItem.id, targetParentId, newSortOrder)
+          await moveFile(projectId, draggedItem.id, targetParentId, newSortOrder)
           await this.loadFiles()
-          if (parentIdsEqual(moved && moved.parentId, targetParentId)) {
-            uni.showToast({
-              title: this.$t('fileTree.moveSuccess'),
-              icon: 'success'
-            })
-          } else {
-            uni.showToast({
-              title: this.$t('workbenchOps.fileMoveOccupied'),
-              icon: 'none'
-            })
-          }
+          uni.showToast({
+            title: this.$t('fileTree.moveSuccess'),
+            icon: 'success'
+          })
         } catch (error) {
           console.error('移动文件失败:', error)
           uni.showToast({

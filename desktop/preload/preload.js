@@ -4,13 +4,9 @@ const { contextBridge, ipcRenderer } = require('electron')
 // 打包态默认 5269，冲突自动降级）。同步可读，供渲染层 api.js 首选。
 const apiBaseArg = process.argv.find((a) => a.startsWith('--checkba-api-base='))
 const apiBaseUrl = apiBaseArg ? apiBaseArg.slice('--checkba-api-base='.length) : null
-// ARM 版 Windows（Mac 虚拟机）转译运行：主进程看门狗超时已放宽 8 倍（dev-board#340），
-// 渲染层的等待死线要同步放宽，否则会在后端仍在正常预热时判超时（dev-board#341）
-const winEmulated = process.argv.includes('--checkba-win-emulated=1')
 
 contextBridge.exposeInMainWorld('checkbaDesktop', {
   apiBaseUrl,
-  winEmulated,
   // 窗口外壳：无边框窗口下渲染层要自己让出交通灯/窗口控件的位置，
   // 得知道跑在哪个平台、以及此刻是不是全屏（全屏时交通灯隐藏）。
   chrome: {

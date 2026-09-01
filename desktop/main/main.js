@@ -362,12 +362,7 @@ function createMainWindow() {
       : {}),
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
-      additionalArguments: [
-        '--checkba-api-base=http://127.0.0.1:' + backendPort,
-        // ARM 版 Windows（Mac 虚拟机）转译运行时启动看门狗已放宽 8 倍（dev-board#340），
-        // 渲染层的等待死线要跟着放大，否则前端仍按 90 秒判超时（dev-board#341）
-        ...(require('./services/win-arch').isWinArmEmulated() ? ['--checkba-win-emulated=1'] : [])
-      ],
+      additionalArguments: ['--checkba-api-base=http://127.0.0.1:' + backendPort],
       contextIsolation: true,
       nodeIntegration: false,
       // 允许跨域 Cookie（历史：为第三方在线编辑器 SameSite Cookie 而设；行为保留以兼容其它跨域资源）

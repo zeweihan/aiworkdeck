@@ -71,7 +71,6 @@ export default {
   confidence: 'Confidence {value}',
   loading: 'Loading…',
   loadFailed: 'Failed to load links',
-  fileTagsLoadFailed: 'Failed to load party tags; the "By Party" view may be inaccurate',
   opFailed: 'Operation failed',
   deleteConfirm: 'Delete this link? The source file will not be deleted.',
   deleteTargetConfirm: 'Remove this source?',

@@ -57,7 +57,6 @@ export const clipboardBridgeMethods = {
                return saved
              } catch (e) {
                console.error('Image upload failed', e)
-               uni.showToast({ title: this.$t('workbenchOps.imageCaptureFailed'), icon: 'none' })
                return null
              }
            } else if (payload.type === 'FILE' && payload.filePath) {
@@ -85,7 +84,6 @@ export const clipboardBridgeMethods = {
                }
              } catch (e) {
                console.error('File upload failed', e)
-               uni.showToast({ title: this.$t('workbenchOps.fileCaptureFailed'), icon: 'none' })
              }
              return null
            }
@@ -126,7 +124,6 @@ export const clipboardBridgeMethods = {
           return saved
         } catch (saveErr) {
           console.error('记录剪贴板失败:', saveErr)
-          uni.showToast({ title: this.$t('workbenchOps.clipboardRecordFailed'), icon: 'none' })
           return null
         }
       }

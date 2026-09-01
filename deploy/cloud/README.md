@@ -82,16 +82,6 @@
 - 日志：`journalctl -u aiworkdeck-cloud -f`
 - 更新后端：本地重新 package → scp 覆盖 backend.jar → `systemctl restart aiworkdeck-cloud`
 
-  **package 必须带 `-Djavacpp.platform=linux-x86_64`**：
-  ```bash
-  cd backend && JAVA_HOME=$(/usr/libexec/java_home -v 21) \
-    mvn -B -DskipTests -Djavacpp.platform=linux-x86_64 package
-  ```
-  `javacv-platform` 不加这个属性会把**所有**平台的 natives 都打进去
-  （windows / macosx / ios / ppc64le…），产物从 424 MB 涨到 1.04 GB。
-  多出来的 600 MB 在 Linux 上一行都用不到，纯粹白传白占盘。
-  产物大小可以当校验：和线上那份差不多（±1 MB）才对。
-
 ## 手机影像云中转的 OSS 存储（dev-board#236）
 
 - blob 不再落 ECS 本地盘，走平台私有桶：北京 `awd-mobile-relay`（cn-beijing），
