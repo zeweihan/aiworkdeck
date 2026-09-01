@@ -57,7 +57,16 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
    **本机 makensis 不能用来预检**（2026-09-01 实测，Darwin 27）：homebrew 的 v3.12 与
    electron-builder 缓存的 v3.04 两个 mac 构建都一样——非 ASCII 源码报 `Bad text encoding`，
    纯 ASCII 脚本走到写产物时 `std::bad_alloc` 崩。**未改动的 HEAD 文件同样复现**，不是谁改坏的，
-   别在这上面查半天。改 NSIS 只能靠 installer-ui-smoke。
+   别在这上面查半天。改 NSIS 只能靠 installer-ui-smoke。**要出插件安装器 exe 走
+   `.github/workflows/addin-installer.yml`**（workflow_dispatch，Windows runner 上跑
+   `build-installers.mjs --skip-mac`，按 `desktop/package.json` 的版本号出国内/国际两份，
+   分目录上传避免同名覆盖）——v0.31.0 发版实测：引擎修好了本机却出不了包，这条路是补上的。
+   mac 那一半（swiftc + Developer ID 签名 + 公证）仍只能在维护者 Mac 上跑 `--skip-win`。
+   **两份变体必须分别上架到两台机**：北京 `8.152.169.44` 与新加坡 `8.219.94.204` 各有一份
+   `/opt/aiworkdeck/cloud/web/office-addin/dl/`，托管地址焙进包内 manifest，不是通用包；
+   0.30.0 那次两台挂的是同一份（字节数一模一样），国际用户装到的包指向 addin.aiworkdeck.com，
+   已在 0.31.0 纠正。**核对法：两站 `curl -L .../AI-WorkDeck-Office-Addin.exe` 的字节数应当不同**
+   （URL 长度差压缩后约 2 字节），一样就是挂错了。
 6.5.2. **磁盘空间闸**（dev-board#350）：引擎新增两个可选契约 `AWD_UI_REQUIRED_KB` /
    `AWD_UI_REQUIRED_EXTRA_KB`，只有设了前者才编译出闸（插件端装的是一份清单，不设）。
    桌面端在 `build/installer.nsh` 里直接把 **electron-builder 的 `-D APP_64_UNPACKED_SIZE`**
