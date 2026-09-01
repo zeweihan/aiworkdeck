@@ -122,6 +122,29 @@ public class UserService {
         return new PhoneAccount(userRepository.save(user), true);
     }
 
+    /**
+     * App 审核账号：按已验证邮箱找，没有就建一个**专用空账号**。
+     *
+     * <p>只给 {@link com.checkba.config.ReviewAccountGate} 那条路调用。
+     *
+     * <p>为什么要建号而不是要求事先绑好：{@code verified_email} 全仓只有
+     * {@code MailAuthService.confirmBind} 一处写入，而它要求先登录——也就是说
+     * 「事先绑好」等于把审核邮箱绑到某个真人账号上，那个固定验证码就成了进
+     * 真人账号的钥匙。单独建一个空账号，那把码就只开得了这一个空房间。
+     *
+     * <p>手机号那条不需要这个方法：{@link #findOrCreateByPhone} 本来就建号。
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public User findOrCreateReviewAccount(String verifiedEmail) {
+        return userRepository.findByVerifiedEmail(verifiedEmail).orElseGet(() -> {
+            User user = registerExternal(allocatePhoneUsername(), "App Review");
+            user.setEmail(verifiedEmail);
+            user.setVerifiedEmail(verifiedEmail);
+            user.setUpdatedAt(LocalDateTime.now());
+            return userRepository.save(user);
+        });
+    }
+
     public record PhoneAccount(User user, boolean created) {}
 
     private static final org.slf4j.Logger claimLog = org.slf4j.LoggerFactory.getLogger(UserService.class);

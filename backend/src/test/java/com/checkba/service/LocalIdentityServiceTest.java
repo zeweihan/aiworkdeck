@@ -329,4 +329,44 @@ class LocalIdentityServiceTest {
         assertNull(AuthController.getUserIdFromSession("session_garbage"));
         assertNull(AuthController.getUserIdFromSession(null));
     }
+
+    // ==================== displayNameOf：读取/输出时本地化哨兵值 ====================
+    // v0.30.0 发版前修复：LOCAL_DISPLAY_NAME 这个中文常量被写进数据库当 displayName，
+    // 界面语言切到英文后所有读它的响应都要经这个 helper 本地化，不改库里存的值。
+
+    @AfterEach
+    void resetLangText() {
+        LangText.reset();
+    }
+
+    @Test
+    void displayNameOf_sentinelInChinese_returnsChinese() {
+        // 未登记 AppLanguageService 时 LangText 回退中文，与「未初始化=中文」的既有默认态一致
+        LangText.reset();
+        assertEquals(LocalIdentityService.LOCAL_DISPLAY_NAME,
+                LocalIdentityService.displayNameOf(LocalIdentityService.LOCAL_DISPLAY_NAME));
+    }
+
+    @Test
+    void displayNameOf_sentinelInEnglish_returnsEnglish() {
+        AppLanguageService en = mock(AppLanguageService.class);
+        when(en.isEnglish()).thenReturn(true);
+        LangText.register(en);
+        assertEquals("Local user",
+                LocalIdentityService.displayNameOf(LocalIdentityService.LOCAL_DISPLAY_NAME));
+    }
+
+    @Test
+    void displayNameOf_realUserName_passesThroughUnchanged() {
+        // 云端多用户场景：真实用户的 displayName 一个字都不能动，哪怕界面语言是英文
+        AppLanguageService en = mock(AppLanguageService.class);
+        when(en.isEnglish()).thenReturn(true);
+        LangText.register(en);
+        assertEquals("韩泽伟", LocalIdentityService.displayNameOf("韩泽伟"));
+    }
+
+    @Test
+    void displayNameOf_null_passesThroughUnchanged() {
+        assertNull(LocalIdentityService.displayNameOf(null));
+    }
 }

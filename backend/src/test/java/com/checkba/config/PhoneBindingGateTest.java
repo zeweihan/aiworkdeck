@@ -1,5 +1,6 @@
 package com.checkba.config;
 
+import com.checkba.config.ReviewAccountGate;
 import com.checkba.model.entity.User;
 import com.checkba.repository.UserRepository;
 import com.checkba.service.auth.VerificationCodeStore;
@@ -32,7 +33,8 @@ class PhoneBindingGateTest {
     private static SmsAuthService activeSms() {
         return new SmsAuthService(
                 List.of(new SmsService(OK_TRANSPORT, true, "ak", "sk", "sign", "tpl")),
-                new VerificationCodeStore(), mock(UserRepository.class), false);
+                new VerificationCodeStore(), mock(UserRepository.class), false,
+                ReviewAccountGate.disabled());
     }
 
     private static PhoneLoginGuard guard(boolean required, String deadline) {

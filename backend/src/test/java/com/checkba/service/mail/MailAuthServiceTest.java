@@ -1,7 +1,9 @@
 package com.checkba.service.mail;
 
+import com.checkba.config.ReviewAccountGate;
 import com.checkba.model.entity.User;
 import com.checkba.repository.UserRepository;
+import com.checkba.service.UserService;
 import com.checkba.service.auth.VerificationCodeStore;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -53,12 +55,39 @@ class MailAuthServiceTest {
         UserRepository repo = mock(UserRepository.class);
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
         MailAuthService svc = new MailAuthService(
-                new VerificationCodeStore(), new MailRouter(List.of(gw)), repo, localMode, passwordless);
+                new VerificationCodeStore(), new MailRouter(List.of(gw)), repo, localMode, passwordless,
+                ReviewAccountGate.disabled(), mock(UserService.class));
         return new Fixture(svc, gw, repo);
     }
 
     private static Fixture fixture() {
         return fixture(false, true);
+    }
+
+    @Test
+    @DisplayName("审核账号：固定码放行并落到专用账号，不经验证码 store")
+    void reviewAccountBypassesCodeStoreAndLandsOnItsOwnAccount() {
+        MailGateway gw = new RecordingGateway();
+        UserRepository repo = mock(UserRepository.class);
+        UserService users = mock(UserService.class);
+        User reviewer = new User();
+        reviewer.setId(999L);
+        reviewer.setUsername("appreview");
+        when(users.findOrCreateReviewAccount("appreview@example.com")).thenReturn(reviewer);
+
+        MailAuthService svc = new MailAuthService(
+                new VerificationCodeStore(), new MailRouter(List.of(gw)), repo, false, true,
+                new ReviewAccountGate("appreview@example.com", "246813"), users);
+
+        // 没发过任何码，直接用固定码换账号
+        assertSame(reviewer, svc.verifySigninCode("appreview@example.com", "246813"));
+
+        // 码错就不该放行，也不该退化成「查已验证邮箱」
+        assertThrows(IllegalArgumentException.class,
+                () -> svc.verifySigninCode("appreview@example.com", "000000"));
+        // 别的地址即使拿到那把码也不放行
+        assertThrows(IllegalArgumentException.class,
+                () -> svc.verifySigninCode("someoneelse@example.com", "246813"));
     }
 
     @Test
@@ -69,7 +98,8 @@ class MailAuthServiceTest {
 
         MailRouter empty = new MailRouter(List.of());
         assertFalse(new MailAuthService(new VerificationCodeStore(), empty,
-                mock(UserRepository.class), false, true).active(), "没有通道就不算启用");
+                mock(UserRepository.class), false, true,
+                ReviewAccountGate.disabled(), mock(UserService.class)).active(), "没有通道就不算启用");
     }
 
     @Test

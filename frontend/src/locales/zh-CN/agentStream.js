@@ -19,6 +19,7 @@ export default {
   regionBlockedNotice: '> **该模型在当前网络环境不可用**：境外模型在境内网络会被服务商按地域拒绝。可在设置中改用 AI WorkDeck 云端通道，或换成标注「境内外均可用」的模型后重新发送。',
   quotaExhaustedNotice: '> **AI 服务额度不足**：当前通道的余额或配额已用完。使用自备 Key 时请到服务商（如 OpenRouter）充值；使用 AI WorkDeck 云端通道时请到官网账户页检查额度分配。',
   contextOverflowNotice: '> **对话上下文超出模型窗口**：已尝试自动压缩仍超限。建议开启新对话继续，或减少一次携带的文件数量与长度。',
+  interruptedRunEndedNotice: '> **连接曾中断**：断线期间这一轮已在后台结束，上面显示的内容可能不完整。刷新页面或重新打开这个会话可查看完整记录。',
   internalErrorNotice: '> **本轮执行被内部错误中断**：已完成的操作与工具执行过程都已保存，可在历史里查看。请再发一次消息继续；如果反复出现，请通过右下角反馈把这段对话发给我们。',
   // 子任务进度行
   subtaskStarted: '子任务开始',
