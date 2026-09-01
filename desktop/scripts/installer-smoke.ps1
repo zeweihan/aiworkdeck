@@ -33,6 +33,8 @@ public class W {
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr wp, IntPtr lp);
+  [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr h, int id);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
   public struct RECT { public int L, T, R, B; }
   public struct POINT { public int x, y; }
 }
@@ -208,6 +210,23 @@ if ($ExpectBlocked) {
 
 Start-Sleep -Milliseconds 1500
 Shot '03-progress'
+# 断言真的进了「角落小进度卡」形态（dev-board#356）。此前这一步只截图不断言，
+# 于是真机上安装页塌回 NSIS 原生向导、流水线照样全绿。两条判据各堵一头：
+#   宽度——大卡片 760、小进度卡 360，没缩就是 AwdInstFilesShow 根本没跑；
+#   原生「上一步」按钮（IDC 3）——AwdHideChrome 每页都压一遍，它可见就说明
+#   这一页压根没经过我们的 SHOW 回调（用户实机截图上飘在窗口中间的就是它）。
+$rp = Get-Rect
+$wp = $rp.R - $rp.L
+$hp = $rp.B - $rp.T
+$back = [W]::GetDlgItem($h, 3)
+$backVisible = ($back -ne [IntPtr]::Zero) -and [W]::IsWindowVisible($back)
+Write-Host "progress card: $wp x $hp, native back button visible=$backVisible"
+if ($wp -gt 700) {
+  throw "install started but the window never shrank to the corner progress card ($wp x $hp, expected 360x132) - AwdInstFilesShow did not run"
+}
+if ($backVisible) {
+  throw "native wizard chrome is showing on the install page (back button visible) - AwdInstFilesShow did not run"
+}
 Start-Sleep -Milliseconds 2500
 Shot '04-progress2'
 # 4. 等安装收尾进完成卡（payload + 3x2s Sleep，10 秒余量）
