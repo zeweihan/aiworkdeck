@@ -406,9 +406,6 @@ Function AwdBrowseClick
 FunctionEnd
 
 Function AwdUpdateSpace
-  ; 先把颜色复位：磁盘闸拦下时 AwdSpaceRefused 会把这个标签染红（dev-board#350），
-  ; 用户改完路径再进来必须变回常态，否则换到大盘上了标签还红着，反而误导。
-  SetCtlColors $AwdSpaceLabel 0x8A9590 0xFFFFFF
   ${NSD_GetText} $AwdDirEdit $0
   ${GetRoot} $0 $1
   ${If} $1 == ""
@@ -489,19 +486,14 @@ Function AwdSpaceShort
 FunctionEnd
 
 ; 就地拦下并说清楚差多少。
+; 提示只走对话框，**没有**去染红展开行里那个「可用 X GB」标签：试过
+; SetCtlColors + InvalidateRect、再试 SetCtlColors + RedrawWindow(同步重绘)，
+; 两轮 installer-ui-smoke 截图都证明运行期改这个控件的颜色不生效（文案对、标签还是灰的）。
+; 没有 Windows 真机可调，而对话框已经把「需要多少 / 该盘有多少 / 怎么办」说全了，
+; 与其留一段看着像生效其实没生效的代码，不如不留。要改文案也不行：标签宽
+; ${AWDUI_SPACE_W} 是按「可用 XX GB」排的版，加字会溢出，且文案与美术位图、热区坐标
+; 是同一套 96dpi 基准，改一处要改三处。
 Function AwdSpaceRefused
-  !ifdef AWD_UI_DIR_CHOICE
-    ; 展开态下把「可用 X GB」染红（收起态这个标签本来就不可见，只靠下面的对话框）。
-    ; 只改颜色不改文案：标签宽 ${AWDUI_SPACE_W} 是按「可用 XX GB」排的版，加字会溢出，
-    ; 而文案与美术位图、热区坐标是同一套基准，改一处要改三处。
-    SetCtlColors $AwdSpaceLabel 0xC0392B 0xFFFFFF
-    ; 必须 RedrawWindow 同步重绘，不能只 InvalidateRect：提示框在卡片中部、盖不住
-    ; 右下角这个标签，关框时不会顺带擦除重画它，只打脏标记的话颜色一直是旧的
-    ;（首轮 CI 截图实锤：文案对了、标签还是灰的）。
-    ; RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW = 0x1|0x4|0x100
-    System::Call 'user32::RedrawWindow(p $AwdSpaceLabel, p 0, p 0, i 0x105)'
-  !endif
-
   ${AwdGbText} $R3 $AwdNeedMb
   ${AwdGbText} $R4 $AwdFreeMb
   ${If} $AwdLang == "zh"
