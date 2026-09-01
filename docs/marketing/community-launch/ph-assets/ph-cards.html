@@ -1,0 +1,243 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --paper: #FAFAF6; --ink: #1C211D; --muted: #5F675F;
+    --green: #1E6B4F; --green-deep: #14503A; --mint: #BFE6D2;
+    --rule: #E2E0D5; --card-bg: #FFFFFF;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { width: 1270px; height: 760px; overflow: hidden; }
+  body { background: var(--paper); color: var(--ink);
+    font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; }
+  .card { display: none; width: 1270px; height: 760px; position: relative;
+    padding: 64px 72px; flex-direction: column; }
+  body[data-card="1"] #c1, body[data-card="2"] #c2, body[data-card="3"] #c3,
+  body[data-card="4"] #c4, body[data-card="5"] #c5 { display: flex; }
+  .card::before { content: ""; position: absolute; top: 0; left: 0; right: 0;
+    height: 6px; background: var(--green); }
+  .brand { position: absolute; top: 44px; left: 72px; }
+  .brand img { height: 40px; display: block; }
+  .site { position: absolute; bottom: 40px; right: 72px; font-size: 17px;
+    color: var(--muted); letter-spacing: .04em; }
+  .foot-tag { position: absolute; bottom: 40px; left: 72px; font-size: 15px;
+    color: var(--green); font-weight: 700; letter-spacing: .14em; }
+  h1 { font-family: Georgia, "Times New Roman", serif; font-weight: 700;
+    color: var(--ink); line-height: 1.14; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); line-height: 1.5; }
+
+  /* Card 1 hero */
+  #c1 .headline { margin-top: 84px; max-width: 660px; }
+  #c1 h1 { font-size: 66px; }
+  #c1 .sub { font-size: 24px; margin-top: 22px; max-width: 560px; }
+  #c1 .shot { position: absolute; right: -60px; bottom: -120px; width: 640px;
+    border: 1px solid var(--rule); border-radius: 12px; overflow: hidden;
+    box-shadow: 0 30px 80px rgba(20,60,45,.28); background: #fff; }
+  #c1 .shot img { width: 100%; display: block; }
+  #c1 .badge { display: inline-block; margin-bottom: 20px; background: var(--green);
+    color: #fff; font-size: 15px; font-weight: 700; letter-spacing: .16em;
+    padding: 7px 14px; border-radius: 4px; }
+
+  /* generic split layout */
+  .split { display: flex; gap: 64px; align-items: center; height: 100%; padding-top: 60px; }
+  .split .text { flex: 0 0 460px; }
+  .split h1 { font-size: 52px; }
+  .split .sub { font-size: 21px; margin-top: 18px; }
+  .visual { flex: 1; display: flex; align-items: center; justify-content: center; }
+
+  /* Card 2 redline */
+  .docmock { background: var(--card-bg); border: 1px solid var(--rule);
+    border-radius: 10px; box-shadow: 0 18px 50px rgba(20,60,45,.12);
+    width: 620px; padding: 36px 40px; }
+  .docmock .bar { display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid var(--rule); padding-bottom: 14px; margin-bottom: 22px; }
+  .docmock .bar .fn { font-size: 15px; color: var(--muted); }
+  .chip { font-size: 13.5px; font-weight: 700; border-radius: 4px; padding: 5px 12px; }
+  .chip.a { background: var(--green); color: #fff; margin-left: 8px; }
+  .chip.r { background: #fff; color: var(--muted); border: 1px solid var(--rule); }
+  .docmock p { font-family: Georgia, serif; font-size: 21px; line-height: 1.9; }
+  .docmock del { color: #B0433A; text-decoration: line-through;
+    text-decoration-thickness: 1.5px; background: #F9ECEA; }
+  .docmock ins { color: var(--green-deep); text-decoration: underline;
+    text-underline-offset: 4px; background: #E9F4EE; }
+  .docmock .meta { margin-top: 22px; font-size: 15px; color: var(--muted); }
+
+  /* Card 3 visuals */
+  .vizwrap { display: flex; gap: 36px; }
+  .panel { background: var(--card-bg); border: 1px solid var(--rule); border-radius: 10px;
+    box-shadow: 0 18px 50px rgba(20,60,45,.10); padding: 28px; }
+  .panel .cap { font-size: 14px; font-weight: 700; letter-spacing: .1em;
+    color: var(--green); margin-bottom: 18px; }
+  .tl { position: relative; padding-left: 26px; width: 250px; }
+  .tl::before { content: ""; position: absolute; left: 7px; top: 6px; bottom: 6px;
+    width: 2px; background: var(--mint); }
+  .tl .ev { position: relative; margin-bottom: 26px; }
+  .tl .ev:last-child { margin-bottom: 0; }
+  .tl .ev::before { content: ""; position: absolute; left: -25px; top: 4px;
+    width: 12px; height: 12px; border-radius: 50%; background: var(--green); }
+  .tl .d { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .tl .t { font-size: 16.5px; font-weight: 600; margin-top: 2px; }
+  .graph { width: 300px; height: 262px; position: relative; }
+  .node { position: absolute; background: #fff; border: 2px solid var(--green);
+    border-radius: 8px; padding: 9px 14px; font-size: 15px; font-weight: 600;
+    color: var(--ink); white-space: nowrap; }
+  .edge { position: absolute; font-size: 12.5px; color: var(--muted); }
+  svg.wires { position: absolute; inset: 0; }
+  svg.wires line { stroke: var(--mint); stroke-width: 2; }
+
+  /* Card 4 phone to desktop */
+  .flow { display: flex; align-items: center; gap: 28px; }
+  .phone { width: 170px; height: 330px; border: 3px solid var(--ink); border-radius: 26px;
+    background: #fff; position: relative; padding: 16px 12px;
+    box-shadow: 0 18px 50px rgba(20,60,45,.12); }
+  .phone .notch { width: 60px; height: 8px; background: var(--ink); border-radius: 4px;
+    margin: 0 auto 14px; }
+  .phone .vf { height: 200px; border: 2px dashed var(--mint); border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--muted); font-size: 13px; text-align: center; line-height: 1.5; }
+  .phone .snap { margin: 16px auto 0; width: 54px; height: 54px; border-radius: 50%;
+    border: 4px solid var(--green); background: #fff; }
+  .arrow { font-size: 44px; color: var(--green); font-weight: 700; }
+  .folder { width: 330px; }
+  .folder .row { display: flex; align-items: center; gap: 12px; background: #fff;
+    border: 1px solid var(--rule); border-radius: 8px; padding: 13px 18px;
+    margin-bottom: 10px; font-size: 16px; box-shadow: 0 6px 18px rgba(20,60,45,.06); }
+  .folder .row.hl { border-color: var(--green); background: #F2FAF6; }
+  .fico { width: 14px; height: 14px; border-radius: 3px; background: var(--mint); flex: none; }
+  .folder .row.hl .fico { background: var(--green); }
+  .folder .path { font-size: 14px; color: var(--muted); margin-bottom: 14px; }
+
+  /* Card 5 open source */
+  #c5 .center { margin-top: 100px; max-width: 900px; }
+  #c5 h1 { font-size: 60px; }
+  #c5 .rows { margin-top: 48px; display: grid; grid-template-columns: 1fr 1fr; gap: 26px 56px; }
+  #c5 .item { display: flex; gap: 16px; align-items: flex-start; }
+  #c5 .sq { width: 14px; height: 14px; background: var(--green); margin-top: 8px; flex: none; }
+  #c5 .item b { font-size: 22px; display: block; }
+  #c5 .item span { font-size: 17px; color: var(--muted); line-height: 1.5; display: block; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<div class="card" id="c1">
+  <div class="brand"><img src="LOGO_SRC"></div>
+  <div class="headline">
+    <div class="badge">OPEN SOURCE · AGPL</div>
+    <h1>Your whole case, in one window.</h1>
+    <div class="sub">An AI workbench for lawyers and every document worker. Like an IDE — but the output is documents.</div>
+  </div>
+  <div class="shot"><img src="SHOT_SRC"></div>
+  <div class="foot-tag">AI WORKDECK</div>
+</div>
+
+<div class="card" id="c2">
+  <div class="brand"><img src="LOGO_SRC"></div>
+  <div class="split">
+    <div class="text">
+      <h1>AI edits. You sign.</h1>
+      <div class="sub">Every AI change lands as character-level tracked changes in a real Office-grade editor. Accept or reject — like reviewing a colleague's redline.</div>
+    </div>
+    <div class="visual">
+      <div class="docmock">
+        <div class="bar">
+          <span class="fn">Service_Agreement_v7.docx</span>
+          <span><span class="chip r">Reject all</span><span class="chip a">Accept all</span></span>
+        </div>
+        <p>The Employee's employment may be terminated <del>at any time without cause</del> <ins>only for cause as defined in Section 8.2</ins>, upon <del>three (3)</del> <ins>thirty (30)</ins> days' written notice.</p>
+        <div class="meta">2 insertions · 2 deletions · proposed by AI, decided by you</div>
+      </div>
+    </div>
+  </div>
+  <div class="site">workdeck.ai</div>
+</div>
+
+<div class="card" id="c3">
+  <div class="brand"><img src="LOGO_SRC"></div>
+  <div class="split">
+    <div class="text">
+      <h1>See the case, not just the files.</h1>
+      <div class="sub">Timelines, process flows and party-relationship graphs, generated from the documents in your project.</div>
+    </div>
+    <div class="visual">
+      <div class="vizwrap">
+        <div class="panel">
+          <div class="cap">TIMELINE</div>
+          <div class="tl">
+            <div class="ev"><div class="d">2023-03-14</div><div class="t">Contract signed</div></div>
+            <div class="ev"><div class="d">2024-01-08</div><div class="t">Payment default</div></div>
+            <div class="ev"><div class="d">2024-02-19</div><div class="t">Demand letter sent</div></div>
+            <div class="ev"><div class="d">2024-06-30</div><div class="t">Case filed</div></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="cap">PARTY GRAPH</div>
+          <div class="graph">
+            <svg class="wires">
+              <line x1="80" y1="40" x2="80" y2="120"></line>
+              <line x1="80" y1="150" x2="80" y2="225"></line>
+              <line x1="110" y1="135" x2="240" y2="60"></line>
+            </svg>
+            <div class="node" style="left:18px; top:8px;">Holding Co.</div>
+            <div class="node" style="left:18px; top:120px;">Star Tech Ltd.</div>
+            <div class="node" style="left:190px; top:30px;">Founder</div>
+            <div class="node" style="left:18px; top:222px;">Shell Co. #3</div>
+            <div class="edge" style="left:92px; top:72px;">100%</div>
+            <div class="edge" style="left:92px; top:182px;">commingled</div>
+            <div class="edge" style="left:180px; top:96px;">de facto control</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="site">workdeck.ai</div>
+</div>
+
+<div class="card" id="c4">
+  <div class="brand"><img src="LOGO_SRC"></div>
+  <div class="split">
+    <div class="text">
+      <h1>Evidence, phone to case file.</h1>
+      <div class="sub">Shoot on site with the companion app. Photos land in the right project folder on your desktop — named, timestamped, in order.</div>
+    </div>
+    <div class="visual">
+      <div class="flow">
+        <div class="phone">
+          <div class="notch"></div>
+          <div class="vf">site inspection<br>camera</div>
+          <div class="snap"></div>
+        </div>
+        <div class="arrow">&#8594;</div>
+        <div class="folder">
+          <div class="path">Cases / Lin v. Xinglan / Evidence</div>
+          <div class="row"><span class="fico"></span>site-photo_0912_0932.jpg</div>
+          <div class="row"><span class="fico"></span>site-photo_0912_0933.jpg</div>
+          <div class="row hl"><span class="fico"></span>site-photo_0912_0941.jpg &nbsp;· just now</div>
+          <div class="row"><span class="fico"></span>voice-note_0912.m4a</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="site">workdeck.ai</div>
+</div>
+
+<div class="card" id="c5">
+  <div class="brand"><img src="LOGO_SRC"></div>
+  <div class="center">
+    <h1>Open source. Desktop-first. Yours.</h1>
+    <div class="rows">
+      <div class="item"><span class="sq"></span><div><b>Free community edition</b><span>AGPL-licensed, full workbench, no seat fees.</span></div></div>
+      <div class="item"><span class="sq"></span><div><b>Files stay on your machine</b><span>Desktop-native. Confidentiality is not a setting, it's the architecture.</span></div></div>
+      <div class="item"><span class="sq"></span><div><b>Plugin marketplace</b><span>Build and ship your own tools — practitioners already do.</span></div></div>
+      <div class="item"><span class="sq"></span><div><b>Community-funded future</b><span>20% of net commercial revenue goes to a community fund.</span></div></div>
+    </div>
+  </div>
+  <div class="site">workdeck.ai</div>
+</div>
+
+<script>
+  document.body.dataset.card = (location.hash || "#1").slice(1);
+</script>
+</body>
+</html>
