@@ -1,5 +1,6 @@
 package com.checkba.service.sms;
 
+import com.checkba.config.ReviewAccountGate;
 import com.checkba.model.entity.User;
 import com.checkba.repository.UserRepository;
 import com.checkba.service.LangText;
@@ -43,14 +44,17 @@ public class SmsAuthService {
     private final VerificationCodeStore codeStore;
     private final UserRepository userRepository;
     private final boolean localMode;
+    private final ReviewAccountGate reviewAccount;
 
     @Autowired
     public SmsAuthService(List<SmsGateway> gateways, VerificationCodeStore codeStore, UserRepository userRepository,
-                          @Value("${security.local-mode:false}") boolean localMode) {
+                          @Value("${security.local-mode:false}") boolean localMode,
+                          ReviewAccountGate reviewAccount) {
         this.gateways = gateways;
         this.codeStore = codeStore;
         this.userRepository = userRepository;
         this.localMode = localMode;
+        this.reviewAccount = reviewAccount;
     }
 
     /** 短信验证在本部署形态下是否启用（任一通道可用即算启用）。 */
@@ -101,7 +105,13 @@ public class SmsAuthService {
      */
     public void sendSigninCode(String phone) {
         requireActive();
-        sendWithRollback(SCENE_SIGNIN, normalizePhone(phone));
+        String normalized = normalizePhone(phone);
+        // 审核账号的码是固定的，没有可发的东西。照常返回：回包必须与普通号码
+        // 一模一样，否则这个端点就成了「这个号是不是审核号」的探测器。
+        if (reviewAccount.matches(normalized)) {
+            return;
+        }
+        sendWithRollback(SCENE_SIGNIN, normalized);
     }
 
     /**
@@ -111,6 +121,9 @@ public class SmsAuthService {
     public String verifySigninCode(String phone, String code) {
         requireActive();
         String normalized = normalizePhone(phone);
+        if (reviewAccount.accepts(normalized, code)) {
+            return normalized;
+        }
         if (!codeStore.verify(SCENE_SIGNIN, normalized, code)) {
             throw new IllegalArgumentException(
                     LangText.of("验证码错误或已过期", "Incorrect or expired verification code"));
