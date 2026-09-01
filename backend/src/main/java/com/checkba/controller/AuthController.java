@@ -852,7 +852,10 @@ public class AuthController {
         result.put("data", Map.ofEntries(
                 Map.entry("id", user.getId()),
                 Map.entry("username", user.getUsername()),
-                Map.entry("displayName", user.getDisplayName()),
+                // local-mode 免登下 displayName 可能是库里的中文哨兵值（LocalIdentityService.
+                // LOCAL_DISPLAY_NAME），经 displayNameOf 按界面语言本地化，不动库里存的值
+                // ——顶栏「Lead:」、设置页个人区（AdminPane.vue）都读这个字段。
+                Map.entry("displayName", com.checkba.service.LocalIdentityService.displayNameOf(user.getDisplayName())),
                 Map.entry("avatarUrl", user.getAvatarUrl() != null ? user.getAvatarUrl() : ""),
                 Map.entry("role", user.getRole()),
                 Map.entry("subscriptionType", user.getSubscriptionType()),
