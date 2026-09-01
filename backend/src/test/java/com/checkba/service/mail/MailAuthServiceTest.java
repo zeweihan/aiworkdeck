@@ -1,5 +1,6 @@
 package com.checkba.service.mail;
 
+import com.checkba.config.ReviewAccountGate;
 import com.checkba.model.entity.User;
 import com.checkba.repository.UserRepository;
 import com.checkba.service.auth.VerificationCodeStore;
@@ -53,7 +54,8 @@ class MailAuthServiceTest {
         UserRepository repo = mock(UserRepository.class);
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
         MailAuthService svc = new MailAuthService(
-                new VerificationCodeStore(), new MailRouter(List.of(gw)), repo, localMode, passwordless);
+                new VerificationCodeStore(), new MailRouter(List.of(gw)), repo, localMode, passwordless,
+                ReviewAccountGate.disabled());
         return new Fixture(svc, gw, repo);
     }
 
@@ -69,7 +71,8 @@ class MailAuthServiceTest {
 
         MailRouter empty = new MailRouter(List.of());
         assertFalse(new MailAuthService(new VerificationCodeStore(), empty,
-                mock(UserRepository.class), false, true).active(), "没有通道就不算启用");
+                mock(UserRepository.class), false, true,
+                ReviewAccountGate.disabled()).active(), "没有通道就不算启用");
     }
 
     @Test

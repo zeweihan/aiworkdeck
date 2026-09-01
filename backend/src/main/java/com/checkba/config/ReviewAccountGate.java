@@ -70,6 +70,15 @@ public class ReviewAccountGate {
                 + "auth.review-account.identity 关闭。", masked(id));
     }
 
+    /**
+     * 明确关闭的一个实例。给不关心这条旁路的构造点用（测试基本都是），
+     * 比 {@code new ReviewAccountGate("", "")} 读起来清楚：一眼看得出这里
+     * 是「没有旁路」，而不是「参数忘了填」。
+     */
+    public static ReviewAccountGate disabled() {
+        return new ReviewAccountGate("", "");
+    }
+
     /** 这条旁路是否开着。 */
     public boolean enabled() {
         return identity != null;
