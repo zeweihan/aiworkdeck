@@ -2,6 +2,7 @@
   "name": "uni-preset-vue",
   "version": "0.0.0",
   "scripts": {
+    "postinstall": "node scripts/patch-uni-h5-scrollview.mjs",
     "check:emits": "node scripts/check-emit-bindings.mjs",
     "check:locales": "node scripts/check-locale-parity.mjs",
     "check:nav": "node scripts/check-navigation-contract.mjs",

@@ -2389,4 +2389,18 @@ fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify(report, null, 2))
 console.log('\n===== 结果 =====')
 console.log('步骤: ' + passed + ' 通过, ' + stepFails + ' 失败; 异常信号 ' + issues.length + ' 条 (截图/报告: ' + OUT + ')')
 for (const i of issues) console.log('  - [' + i.sev + '] ' + i.what)
-process.exit(stepFails ? 1 : 0)
+
+// dev-board#349 的定点护栏。scroll-view 在卸载后仍被框架补写一次 scrollTop，曾经让
+// 产线控制台常驻两条（TypeError + 未处理的 Promise rejection，同一个根因），复现路径
+// 就是本套件走的「项目列表页 → 统一设置页」。修法是给 uni-h5 补空判
+//（frontend/scripts/patch-uni-h5-scrollview.mjs，npm postinstall 自动打）。
+// **控制台异常信号整体不判死**（历史噪音很多，一刀切会天天红），所以这一条单拎出来判死：
+// 补丁没打上（换了 uni-h5 版本、跳过了 postinstall）它立刻回来，不单独判死的话
+// 就只是报告里多两行没人看。
+const scrollTopRegression = issues.filter((i) => /setting 'scrollTop'/.test(i.what))
+if (scrollTopRegression.length) {
+  console.log('\n[dev-board#349] scroll-view 卸载后写 scrollTop 的异常又出现了 ' + scrollTopRegression.length + ' 条。')
+  console.log('  先确认 frontend/node_modules/@dcloudio/uni-h5 上的空判补丁是否还在：')
+  console.log('  cd frontend && node scripts/patch-uni-h5-scrollview.mjs')
+}
+process.exit(stepFails || scrollTopRegression.length ? 1 : 0)
