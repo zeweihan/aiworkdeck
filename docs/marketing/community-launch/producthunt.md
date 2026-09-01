@@ -89,6 +89,17 @@ DeepSeek（模型）、Stripe（支付）、Cloudflare（Turnstile）。
 - 视频（可选）：预告片成片后补挂 YouTube 链接。
 - Makers：标记维护者本人为 maker。
 
+## 左侧栏其余各屏口径
+
+- **Funding information**：勾 **Bootstrapped**（未拿 VC），YC/Venture backed 不勾；
+  Team size 选 1-10；**Crunchbase URL 留空**（选填，无条目不必专门去注册）。
+  注：bootstrapped 在 PH 是加分项——社区偏爱独立开发者，正好接「执业律师自己
+  写了个开源软件」的叙事。
+- **Extras**：给 PH 用户的专属优惠码/福利。社区版本免费，跳过。
+- **Connect with Investors**：把 launch 推送给平台投资人。不在融资，跳过或勾上皆可
+  （勾上无害，可能带来国际投资人关注）。
+- **Launch checklist**：PH 自己的完成度清单，提交前照着核一遍漏项。
+
 ## 发布操作要点
 
 - 全表单一律英文（当前 Description 里的中文句子要替换掉）。
