@@ -1,6 +1,10 @@
 package com.checkba.version;
 
+import com.checkba.service.AppLanguageService;
+import com.checkba.service.LangText;
+import com.checkba.service.LocalIdentityService;
 import com.checkba.storage.StorageProperties;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -10,6 +14,8 @@ import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class ProjectRepoHistoryTest {
 
@@ -171,5 +177,50 @@ class ProjectRepoHistoryTest {
         byte[] old = s.readBlobAtCommit(7L, first, "合同.txt");
         assertEquals("初稿", new String(old, StandardCharsets.UTF_8));
         assertNull(s.readBlobAtCommit(7L, first, "不存在.txt"));
+    }
+
+    // ==================== 时间线署名的读时本地化（dev-board#351）====================
+    // 单机模式的提交作者名就是库里那个中文哨兵「本机用户」，它随提交写进了 Git 历史。
+    // 历史永不重写，作者名还派生了提交邮箱，所以只能在**读出来交给 UI 时**按界面语言换，
+    // Git 对象一字节都不许动——下面两条用同一个仓库分别以中/英文读一遍来钉死这一点。
+
+    @AfterEach
+    void resetLangText() {
+        LangText.reset();
+    }
+
+    private void useEnglish() {
+        AppLanguageService en = mock(AppLanguageService.class);
+        when(en.isEnglish()).thenReturn(true);
+        LangText.register(en);
+    }
+
+    @Test
+    void localUserAuthorIsLocalizedOnReadWithoutRewritingHistory(@TempDir Path root) throws Exception {
+        Files.createDirectories(root.resolve("projects/7"));
+        Files.writeString(root.resolve("projects/7/合同.txt"), "初稿");
+        ProjectRepoService s = svc(root);
+        // 提交侧照旧写哨兵值：写入语义不动，历史里永远是同一个署名
+        s.init(7L, LocalIdentityService.LOCAL_DISPLAY_NAME, "本机用户@aiworkdeck.local");
+
+        LangText.reset();
+        assertEquals(LocalIdentityService.LOCAL_DISPLAY_NAME, s.log(7L, "HEAD", 1).get(0).authorName(),
+                "中文界面下时间线署名应保持哨兵原值");
+
+        useEnglish();
+        assertEquals("Local user", s.log(7L, "HEAD", 1).get(0).authorName(),
+                "英文界面下时间线署名应本地化");
+
+        LangText.reset();
+        assertEquals(LocalIdentityService.LOCAL_DISPLAY_NAME, s.log(7L, "HEAD", 1).get(0).authorName(),
+                "切回中文又变了 = 提交对象被改写了，本地化必须只作用于出参");
+    }
+
+    @Test
+    void realAuthorNameIsNeverTouchedEvenInEnglishUi(@TempDir Path root) throws Exception {
+        ProjectRepoService s = seeded(root);   // 作者是真实姓名「韩泽伟」
+        useEnglish();
+        assertEquals("韩泽伟", s.log(7L, "HEAD", 1).get(0).authorName(),
+                "云端协作方的真实署名在英文界面下也一个字都不能动");
     }
 }
