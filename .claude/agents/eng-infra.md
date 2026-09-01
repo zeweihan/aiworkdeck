@@ -81,6 +81,18 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
    frontend job 与 desktop-build.yml 的 Build frontend 步骤都会跑到）。
    回归护栏在 `tests/app-e2e/run.mjs` 结尾：**控制台异常信号整体不判死**（历史噪音多），
    但 `setting 'scrollTop'` 这一条单拎出来判死。
+6.5.4. **NSIS 地雷：`Quit` 在 nsDialogs 回调里不生效**（dev-board#354，CI 实锤）：
+   `nsDialogs::Show` 跑的是它自己的消息循环——`while (g_dialog.hwDialog) { GetMessage(...); ... }`，
+   **不看 `GetMessage` 的返回值**，只看对话框句柄还在不在。而 NSIS 的 `Quit` 编译成
+   `g_quit_flag++` + `PostQuitMessage(0)`，那条 `WM_QUIT` 被这个循环取走后直接丢弃，
+   循环照转，安装器关不掉。所以**自定义页的任何 `${NSD_OnClick}` 回调里都不要用 `Quit`**，
+   一律 `SendMessage $HWNDPARENT ${WM_COMMAND} <id> 0` 交回 NSIS 页面机
+   （1 = 下一步，2 = 取消/退出），由页面机销毁对话框、Show 的循环才会退出。
+   引擎里三处按钮都是这个写法。诊断配方（当时靠它一轮 CI 定案，值得复用）：
+   同一行相邻热区点一下看 `IsIconic`，证明**点击落到了热区上**；再从外部 `PostMessage`
+   一发 `WM_COMMAND`/`IDCANCEL`，证明**退出通道本身是通的**——两条对照一起把结论
+   钉死在「关窗动作写错了」而不是「点击没命中」。用例：`installer-smoke.ps1 -CloseOnly`
+   （smoke 工作流的「Drive zh harness close button」步骤），是这条路径唯一的覆盖。
 6.6. **`dmg-builder` 补丁（`desktop/scripts/patch-dmg-builder.js` + package.json `postinstall`，安装器 UI 重设计新增）**：macOS 26.2+ 起 Finder 拒读 dmgbuild 写入 `.DS_Store` 的 `pBBk` 背景书签，导致桌面端主 DMG 背景不显示（electron-builder#9072 / dmgbuild#273，同版 Obsidian/Podman Desktop 同期中招）。`npm ci`/`npm install` 后自动对 `node_modules/dmg-builder/vendor/dmgbuild/core.py` 做定点补丁（跳过 Bookmark 生成，`icvp` 里的 alias 通道保留，老系统照常工作）。**升级 electron-builder 后若补丁脚本报「结构已变」**：先确认新版是否已自带该修复，再决定要不要删掉本补丁，不要盲目跳过。
 
 ## 测试命令总表
