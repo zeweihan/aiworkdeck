@@ -145,6 +145,29 @@ public class UserService {
         });
     }
 
+    /**
+     * 邮箱免密登录/注册：按已验证邮箱找，没有就建号。
+     *
+     * <p>与 {@link #findOrCreateByPhone} 同一口径——验证码验过就是对该邮箱的控制权
+     * 证明，和短信那条没有本质区别。国际版只有邮箱这一条路能走（境外收不到中国
+     * 短信），如果邮箱只登录不建号，境外用户就**没有任何**注册入口。
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public EmailAccount findOrCreateByEmail(String verifiedEmail) {
+        java.util.Optional<User> existing = userRepository.findByVerifiedEmail(verifiedEmail);
+        if (existing.isPresent()) {
+            return new EmailAccount(existing.get(), false);
+        }
+        User user = registerExternal(allocatePhoneUsername(),
+                com.checkba.service.mail.MailAuthService.maskEmail(verifiedEmail));
+        user.setEmail(verifiedEmail);
+        user.setVerifiedEmail(verifiedEmail);
+        user.setUpdatedAt(LocalDateTime.now());
+        return new EmailAccount(userRepository.save(user), true);
+    }
+
+    public record EmailAccount(User user, boolean created) {}
+
     public record PhoneAccount(User user, boolean created) {}
 
     private static final org.slf4j.Logger claimLog = org.slf4j.LoggerFactory.getLogger(UserService.class);
