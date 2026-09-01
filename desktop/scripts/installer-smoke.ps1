@@ -3,10 +3,14 @@
 # 只在 100% DPI 的 runner 上跑，基准坐标即物理像素；窗口无边框，客户区 == 窗口矩形。
 param(
   [Parameter(Mandatory = $true)][string]$Exe,
-  [Parameter(Mandatory = $true)][string]$OutDir
+  [Parameter(Mandatory = $true)][string]$OutDir,
+  # 磁盘空间闸（dev-board#350）的反向用例：用一个所需空间大到不可能满足的
+  # harness 产物驱动，断言「点了立即安装，但没开装」。
+  [switch]$ExpectBlocked
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.Windows.Forms
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
@@ -20,6 +24,7 @@ public class W {
   [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint flags);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   public struct RECT { public int L, T, R, B; }
   public struct POINT { public int x, y; }
 }
@@ -92,6 +97,18 @@ function Shot([string]$name) {
   Write-Host "shot $name ($w x $ht at $($r.L),$($r.T))"
 }
 
+function ShotFull([string]$name) {
+  # 磁盘不足提示是独立的 MessageBox 顶层窗，位置不受卡片矩形约束，只能整屏截
+  $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+  $bmp = New-Object System.Drawing.Bitmap($b.Width, $b.Height)
+  $g = [System.Drawing.Graphics]::FromImage($bmp)
+  $g.CopyFromScreen($b.X, $b.Y, 0, 0, $bmp.Size)
+  $g.Dispose()
+  $bmp.Save((Join-Path $OutDir "$name.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+  $bmp.Dispose()
+  Write-Host "shot $name (full screen $($b.Width) x $($b.Height))"
+}
+
 function ClickAt([int]$bx, [int]$by) {
   $r = Get-Rect
   Clear-Overlay ($r.L + $bx) ($r.T + $by)
@@ -111,6 +128,32 @@ Start-Sleep -Milliseconds 600
 Shot '02-expanded'
 # 3. 点「立即安装」（AWDUI_CTA 460,414,260,72 → 中心 590,450）
 ClickAt 590 450
+
+if ($ExpectBlocked) {
+  # 磁盘空间闸应当在这一步就拦下：弹提示框、留在大卡片上、一个字节都不该开始拷
+  Start-Sleep -Milliseconds 1500
+  $fg = [W]::GetForegroundWindow()
+  ShotFull '03-blocked'
+  if ($fg -eq $h) { throw "disk-space gate did not fire: no modal appeared after clicking install" }
+  # MB_OK 用回车关掉
+  [W]::SetForegroundWindow($fg) | Out-Null
+  [W]::keybd_event(0x0D, 0, 0, [UIntPtr]::Zero)
+  [W]::keybd_event(0x0D, 0, 2, [UIntPtr]::Zero)
+  Start-Sleep -Milliseconds 1000
+  if ($p.HasExited) { throw "installer exited instead of staying on the welcome card" }
+  Shot '04-still-welcome'
+  $rb = Get-Rect
+  $wb = $rb.R - $rb.L
+  # 开装了窗口会缩成 360x132 的角落小进度卡；还是 760 宽就说明确实没开装
+  if ($wb -lt 700) { throw "installer proceeded to the progress card despite insufficient space (window width $wb)" }
+  # 从大卡片右上角 ✕ 退出（AWDUI_CLOSE 712,8,40,32 → 中心 732,24）
+  ClickAt 732 24
+  Start-Sleep -Seconds 2
+  if (-not $p.HasExited) { $p.Kill(); throw "installer did not exit after closing the welcome card" }
+  Write-Host 'blocked flow completed: gate fired, install never started, installer closed cleanly'
+  exit 0
+}
+
 Start-Sleep -Milliseconds 1500
 Shot '03-progress'
 Start-Sleep -Milliseconds 2500

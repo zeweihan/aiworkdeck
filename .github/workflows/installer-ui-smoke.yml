@@ -38,8 +38,13 @@ jobs:
           $ws = $env:GITHUB_WORKSPACE
           New-Item -ItemType Directory -Force payload | Out-Null
           1..4 | ForEach-Object { fsutil file createnew ("payload\blob$_.bin") 41943040 }
-          makensis /INPUTCHARSET UTF8 /DHARNESS_LANG=SimpChinese "/DGENART=$ws\desktop\build\win\generated" "/DPAYLOAD=$ws\payload" "/DOUTFILE=$ws\harness-zh.exe" desktop\build\win\ui-harness.nsi
-          makensis /INPUTCHARSET UTF8 /DHARNESS_LANG=English "/DGENART=$ws\desktop\build\win\generated" "/DPAYLOAD=$ws\payload" "/DOUTFILE=$ws\harness-en.exe" desktop\build\win\ui-harness.nsi
+          # REQUIRED_KB 打开磁盘空间闸（dev-board#350）。200MB：payload 只有 160MB，
+          # runner 盘上剩几十 GB，走的是「够用、正常放行」那条分支——这一路本身就是
+          # 「闸没把正常安装挡住」的回归证据。
+          makensis /INPUTCHARSET UTF8 /DHARNESS_LANG=SimpChinese /DREQUIRED_KB=204800 "/DGENART=$ws\desktop\build\win\generated" "/DPAYLOAD=$ws\payload" "/DOUTFILE=$ws\harness-zh.exe" desktop\build\win\ui-harness.nsi
+          makensis /INPUTCHARSET UTF8 /DHARNESS_LANG=English /DREQUIRED_KB=204800 "/DGENART=$ws\desktop\build\win\generated" "/DPAYLOAD=$ws\payload" "/DOUTFILE=$ws\harness-en.exe" desktop\build\win\ui-harness.nsi
+          # 反向用例：所需空间约 858 GB，runner 上必然不足，走「拦下」分支
+          makensis /INPUTCHARSET UTF8 /DHARNESS_LANG=SimpChinese /DREQUIRED_KB=900000000 "/DGENART=$ws\desktop\build\win\generated" "/DPAYLOAD=$ws\payload" "/DOUTFILE=$ws\harness-nospace.exe" desktop\build\win\ui-harness.nsi
           Set-Content -Path dummy-manifest.xml -Value '<?xml version="1.0"?><OfficeApp/>'
           makensis /INPUTCHARSET UTF8 /DVERSION=0.0.1 "/DMANIFEST=$ws\dummy-manifest.xml" "/DOUTFILE=$ws\addin-smoke.exe" "/DARTDIR=$ws\office-addin\installer\win" "/DAWD_UI_ENGINE=$ws\desktop\build\win\awd-oneclick-ui.nsh" "/DGENART=$ws\office-addin\installer\win\generated" /DLEGALBASE=https://www.aiworkdeck.com office-addin\installer\win\installer.nsi
 
@@ -50,6 +55,12 @@ jobs:
       - name: Drive en harness with screenshots
         shell: pwsh
         run: pwsh -File desktop/scripts/installer-smoke.ps1 -Exe harness-en.exe -OutDir shots/en
+
+      - name: Drive nospace harness (磁盘空间闸必须拦下，dev-board#350)
+        shell: pwsh
+        # 断言三件事：弹了提示框、进程没退出、窗口还是 760 宽的大卡片（开装了会
+        # 缩成 360x132 的角落小进度卡）。截图落 shots/nospace/03-blocked.png。
+        run: pwsh -File desktop/scripts/installer-smoke.ps1 -Exe harness-nospace.exe -OutDir shots/nospace -ExpectBlocked
 
       - name: Drive addin installer (无目录展开分支的实跑覆盖)
         shell: pwsh
@@ -115,7 +126,7 @@ jobs:
           $ws = $env:GITHUB_WORKSPACE
           New-Item -ItemType Directory -Force payload | Out-Null
           1..4 | ForEach-Object { fsutil file createnew ("payload\blob$_.bin") 41943040 }
-          makensis /INPUTCHARSET UTF8 /DHARNESS_LANG=SimpChinese "/DGENART=$ws\desktop\build\win\generated" "/DPAYLOAD=$ws\payload" "/DOUTFILE=$ws\harness-zh.exe" desktop\build\win\ui-harness.nsi
+          makensis /INPUTCHARSET UTF8 /DHARNESS_LANG=SimpChinese /DREQUIRED_KB=204800 "/DGENART=$ws\desktop\build\win\generated" "/DPAYLOAD=$ws\payload" "/DOUTFILE=$ws\harness-zh.exe" desktop\build\win\ui-harness.nsi
           if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
           if (-not (Test-Path "$ws\harness-zh.exe")) { throw 'harness exe missing' }
 
