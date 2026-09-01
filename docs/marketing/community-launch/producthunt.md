@@ -48,9 +48,10 @@ We started with lawyers, but the ambition is broader: IDEs are for coders, AI Wo
 ## 图片物料（ph-assets/，已生成）
 
 - `thumbnail-240.png`：240x240 缩略图（来源 desktop/build/icon.png）。
-- `gallery-01-hero.png` 至 `gallery-06-opensource.png`：六张画廊图，2540x1520
+- `gallery-01-hero.png` 至 `gallery-07-opensource.png`：七张画廊图，2540x1520
   （= PH 推荐比例 1270x760 的 2 倍图）。顺序：主视觉（真截图内嵌）→ 修订 →
-  可视化 → 手机取证 → 插件生态 → 开源。第一张同时是社交分享预览图。
+  可视化 → 手机取证 → 插件生态 → Office/WPS 插件 → 开源。第一张同时是
+  社交分享预览图。
   插件卡只列真实已上架插件（尽调 v0.6.1/诉讼可视化/会议转写/脱敏），不用
   官网 plugin-marketplace.png 那张愿景图——其内容（247 skills/安装量/课程）
   是虚构的，违反「只公布真实数据」红线。

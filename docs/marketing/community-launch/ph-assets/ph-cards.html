@@ -15,7 +15,8 @@
   .card { display: none; width: 1270px; height: 760px; position: relative;
     padding: 64px 72px; flex-direction: column; }
   body[data-card="1"] #c1, body[data-card="2"] #c2, body[data-card="3"] #c3,
-  body[data-card="4"] #c4, body[data-card="5"] #c5, body[data-card="6"] #c6 { display: flex; }
+  body[data-card="4"] #c4, body[data-card="5"] #c5, body[data-card="6"] #c6,
+  body[data-card="7"] #c7 { display: flex; }
   .card::before { content: ""; position: absolute; top: 0; left: 0; right: 0;
     height: 6px; background: var(--green); }
   .brand { position: absolute; top: 44px; left: 72px; }
@@ -124,14 +125,45 @@
     border-radius: 4px; padding: 5px 14px; }
   .signednote { grid-column: 1 / -1; font-size: 14px; color: var(--muted); margin-top: 4px; }
 
-  /* Card 6 open source */
-  #c6 .center { margin-top: 100px; max-width: 900px; }
-  #c6 h1 { font-size: 60px; }
-  #c6 .rows { margin-top: 48px; display: grid; grid-template-columns: 1fr 1fr; gap: 26px 56px; }
-  #c6 .item { display: flex; gap: 16px; align-items: flex-start; }
-  #c6 .sq { width: 14px; height: 14px; background: var(--green); margin-top: 8px; flex: none; }
-  #c6 .item b { font-size: 22px; display: block; }
-  #c6 .item span { font-size: 17px; color: var(--muted); line-height: 1.5; display: block; margin-top: 4px; }
+  /* Card 6 office add-in */
+  .winmock { width: 640px; background: var(--card-bg); border: 1px solid var(--rule);
+    border-radius: 10px; box-shadow: 0 18px 50px rgba(20,60,45,.12); overflow: hidden; }
+  .winmock .titlebar { background: #F3F2EC; border-bottom: 1px solid var(--rule);
+    padding: 10px 16px; font-size: 13.5px; color: var(--muted); display: flex; gap: 8px;
+    align-items: center; }
+  .winmock .dot { width: 10px; height: 10px; border-radius: 50%; background: #D8D6CB; }
+  .winmock .ribbon { display: flex; gap: 18px; padding: 8px 16px; font-size: 12.5px;
+    color: var(--muted); border-bottom: 1px solid var(--rule); }
+  .winmock .ribbon .on { color: var(--green-deep); font-weight: 700;
+    border-bottom: 2px solid var(--green); padding-bottom: 4px; }
+  .winmock .split2 { display: flex; }
+  .winmock .docarea { flex: 1; padding: 24px 26px; font-family: Georgia, serif;
+    font-size: 15px; line-height: 1.8; color: var(--ink); }
+  .winmock .docarea .ln { height: 9px; background: #EDEBE2; border-radius: 4px; margin: 12px 0; }
+  .winmock .docarea .ln.w80 { width: 80%; } .winmock .docarea .ln.w60 { width: 60%; }
+  .winmock .docarea ins { color: var(--green-deep); background: #E9F4EE;
+    text-decoration: underline; text-underline-offset: 3px; }
+  .winmock .pane { width: 240px; border-left: 1px solid var(--rule); background: #FBFAF6;
+    display: flex; flex-direction: column; }
+  .winmock .pane .phead { background: var(--green); color: #fff; font-size: 13.5px;
+    font-weight: 700; padding: 10px 14px; letter-spacing: .04em; }
+  .winmock .pane .bubble { margin: 14px 12px 0; background: #fff; border: 1px solid var(--rule);
+    border-radius: 8px; padding: 10px 12px; font-size: 13px; line-height: 1.55; color: var(--ink); }
+  .winmock .pane .bubble.user { background: #EDF6F1; border-color: var(--mint); }
+  .winmock .pane .act { margin: 14px 12px 16px; background: var(--green); color: #fff;
+    text-align: center; font-size: 13px; font-weight: 700; border-radius: 6px; padding: 9px 0; }
+  .hostrow { display: flex; gap: 10px; margin-top: 22px; }
+  .hostchip { font-size: 13.5px; font-weight: 700; color: var(--green-deep);
+    background: #EDF6F1; border: 1px solid var(--mint); border-radius: 999px; padding: 6px 14px; }
+
+  /* Card 7 open source */
+  #c7 .center { margin-top: 100px; max-width: 900px; }
+  #c7 h1 { font-size: 60px; }
+  #c7 .rows { margin-top: 48px; display: grid; grid-template-columns: 1fr 1fr; gap: 26px 56px; }
+  #c7 .item { display: flex; gap: 16px; align-items: flex-start; }
+  #c7 .sq { width: 14px; height: 14px; background: var(--green); margin-top: 8px; flex: none; }
+  #c7 .item b { font-size: 22px; display: block; }
+  #c7 .item span { font-size: 17px; color: var(--muted); line-height: 1.5; display: block; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -266,6 +298,40 @@
 </div>
 
 <div class="card" id="c6">
+  <div class="brand"><img src="LOGO_SRC"></div>
+  <div class="split">
+    <div class="text">
+      <h1>It lives inside Word, too.</h1>
+      <div class="sub">Companion add-ins bring the same AI into Microsoft Office and WPS Office — task panes for documents, spreadsheets and slides, with edits landing as tracked changes.</div>
+      <div class="hostrow">
+        <span class="hostchip">Word</span><span class="hostchip">Excel</span>
+        <span class="hostchip">PowerPoint</span><span class="hostchip">WPS</span>
+      </div>
+    </div>
+    <div class="visual">
+      <div class="winmock">
+        <div class="titlebar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;Employment_Contract.docx</div>
+        <div class="ribbon"><span>Home</span><span>Insert</span><span>Review</span><span class="on">AI WorkDeck</span></div>
+        <div class="split2">
+          <div class="docarea">
+            <div class="ln"></div><div class="ln w80"></div>
+            <p>… termination requires <ins>thirty (30) days'</ins> written notice …</p>
+            <div class="ln w60"></div><div class="ln"></div><div class="ln w80"></div>
+          </div>
+          <div class="pane">
+            <div class="phead">AI WorkDeck</div>
+            <div class="bubble user">Align the notice period with the local labor code.</div>
+            <div class="bubble">Two clauses need updating. Inserting as tracked changes for your review.</div>
+            <div class="act">Applied as tracked changes</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="site">workdeck.ai</div>
+</div>
+
+<div class="card" id="c7">
   <div class="brand"><img src="LOGO_SRC"></div>
   <div class="center">
     <h1>Open source. Desktop-first. Yours.</h1>
