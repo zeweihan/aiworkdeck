@@ -69,6 +69,18 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
    `ui-harness.nsi` 收 `-DREQUIRED_KB`，smoke 工作流多编一个所需空间约 858GB 的
    `harness-nospace.exe`，用 `installer-smoke.ps1 -ExpectBlocked` 断言「弹了提示框 +
    进程没退 + 窗口还是 760 宽的大卡片（开装了会缩成 360×132 的角落进度卡）」。
+6.5.3. **`uni-h5` 补丁（`frontend/scripts/patch-uni-h5-scrollview.mjs` + frontend `package.json` 的 `postinstall`，dev-board#349）**：
+   uni-h5 的 scroll-view 在 `onMounted` 里排一个 `nextTick` 补写 scrollTop/scrollLeft，
+   回调对元素 ref **没有空判**；组件在同一批 flush 里被卸载（`v-if` 分支翻转、路由离开）时
+   `main.value` 已是 null，控制台常驻两条同根因的错误（`TypeError: Cannot set properties
+   of null (setting 'scrollTop')` + 我们 main.js 全局兜底打出的「未处理的 Promise rejection」）。
+   补丁给 `uni-h5.es.js`/`uni-h5.cjs.js` 各加三处真值判断（两条 `_scroll*Changed` 的直写 +
+   动画分支 `scrollTo` 的入口），锚点在文件内必须唯一，**对不上就 exit 1 让安装失败**——
+   升级 `@dcloudio/uni-h5` 后若报「结构已变」，先搜新版的 `_scrollTopChanged` 看是否已自带
+   空判，是就删掉补丁与 postinstall 钩子。产物侧靠 `npm ci` 触发 postinstall（ci.yml 的
+   frontend job 与 desktop-build.yml 的 Build frontend 步骤都会跑到）。
+   回归护栏在 `tests/app-e2e/run.mjs` 结尾：**控制台异常信号整体不判死**（历史噪音多），
+   但 `setting 'scrollTop'` 这一条单拎出来判死。
 6.6. **`dmg-builder` 补丁（`desktop/scripts/patch-dmg-builder.js` + package.json `postinstall`，安装器 UI 重设计新增）**：macOS 26.2+ 起 Finder 拒读 dmgbuild 写入 `.DS_Store` 的 `pBBk` 背景书签，导致桌面端主 DMG 背景不显示（electron-builder#9072 / dmgbuild#273，同版 Obsidian/Podman Desktop 同期中招）。`npm ci`/`npm install` 后自动对 `node_modules/dmg-builder/vendor/dmgbuild/core.py` 做定点补丁（跳过 Bookmark 生成，`icvp` 里的 alias 通道保留，老系统照常工作）。**升级 electron-builder 后若补丁脚本报「结构已变」**：先确认新版是否已自带该修复，再决定要不要删掉本补丁，不要盲目跳过。
 
 ## 测试命令总表
