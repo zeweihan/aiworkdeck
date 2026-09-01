@@ -495,7 +495,11 @@ Function AwdSpaceRefused
     ; 只改颜色不改文案：标签宽 ${AWDUI_SPACE_W} 是按「可用 XX GB」排的版，加字会溢出，
     ; 而文案与美术位图、热区坐标是同一套基准，改一处要改三处。
     SetCtlColors $AwdSpaceLabel 0xC0392B 0xFFFFFF
-    System::Call 'user32::InvalidateRect(p $AwdSpaceLabel, p 0, i 1)'
+    ; 必须 RedrawWindow 同步重绘，不能只 InvalidateRect：提示框在卡片中部、盖不住
+    ; 右下角这个标签，关框时不会顺带擦除重画它，只打脏标记的话颜色一直是旧的
+    ;（首轮 CI 截图实锤：文案对了、标签还是灰的）。
+    ; RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW = 0x1|0x4|0x100
+    System::Call 'user32::RedrawWindow(p $AwdSpaceLabel, p 0, p 0, i 0x105)'
   !endif
 
   ${AwdGbText} $R3 $AwdNeedMb
