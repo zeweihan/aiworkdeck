@@ -6,6 +6,7 @@ export default {
     unsupported: '当前环境不支持文档编辑',
     loadingDoc: '加载文档中…',
     initFailed: '初始化失败',
+    bootFailed: '文档引擎启动失败',
     loadFailed: '文档加载失败',
     ready: '就绪',
     reloading: '重新加载中…',
@@ -30,6 +31,7 @@ export default {
   dlLoadedOnly: '已下载文档内容 {size}',
   firstOpenHint: '首次打开需初始化文档引擎，大文档会稍慢，请稍候',
   retryLoad: '一直卡着？点此重试',
+  bootFailedHint: '文档引擎启动失败：{reason}。可能是网络或公司防火墙拦截了引擎资源，请检查网络后重试。',
   review: {
     revTab: '修订 {count}',
     cmtTab: '批注 {count}',

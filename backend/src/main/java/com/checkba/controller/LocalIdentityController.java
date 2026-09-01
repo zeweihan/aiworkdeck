@@ -63,7 +63,8 @@ public class LocalIdentityController {
             var user = userService.getUserById(resolution.userId());
             if (user != null) {
                 result.put("username", user.getUsername());
-                result.put("displayName", user.getDisplayName());
+                // 库里可能存的是中文哨兵值 LOCAL_DISPLAY_NAME，按界面语言本地化后再展示
+                result.put("displayName", LocalIdentityService.displayNameOf(user.getDisplayName()));
             }
         } catch (Exception e) {
             log.debug("本机身份展示信息读取失败（忽略）: {}", e.getMessage());
@@ -85,7 +86,8 @@ public class LocalIdentityController {
             Map<String, Object> item = new HashMap<>();
             item.put("userId", c.userId());
             item.put("username", c.username());
-            item.put("displayName", c.displayName());
+            // 候选账号里可能有一个是已被改名为 LOCAL_DISPLAY_NAME 哨兵值的本机用户
+            item.put("displayName", LocalIdentityService.displayNameOf(c.displayName()));
             item.put("projectCount", c.projectCount());
             item.put("fileCount", c.fileCount());
             list.add(item);

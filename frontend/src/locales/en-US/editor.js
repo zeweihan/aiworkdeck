@@ -6,6 +6,7 @@ export default {
     unsupported: 'Document editing is not supported in this environment',
     loadingDoc: 'Loading document…',
     initFailed: 'Initialization failed',
+    bootFailed: 'The document engine failed to start',
     loadFailed: 'Failed to load the document',
     ready: 'Ready',
     reloading: 'Reloading…',
@@ -30,6 +31,7 @@ export default {
   dlLoadedOnly: 'Downloaded {size} of document content',
   firstOpenHint: 'The first open initializes the document engine; large documents may take a moment',
   retryLoad: 'Stuck? Tap to retry',
+  bootFailedHint: 'The document engine failed to start: {reason}. The network or a corporate firewall may be blocking the engine files; check the connection and retry.',
   review: {
     revTab: 'Tracked Changes {count}',
     cmtTab: 'Comments {count}',

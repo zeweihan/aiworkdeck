@@ -624,11 +624,16 @@ export async function refreshPlatformAiKey({ serverUrl, token }, key) {
  */
 export async function createConversation({ serverUrl, token }, projectId) {
   const base = normalizeBaseUrl(serverUrl)
-  const resp = await fetch(`${base}/api/agent/conversations`, {
-    method: 'POST',
-    headers: headers(token),
-    body: JSON.stringify({ projectId })
-  })
+  let resp
+  try {
+    resp = await fetch(`${base}/api/agent/conversations`, {
+      method: 'POST',
+      headers: headers(token),
+      body: JSON.stringify({ projectId })
+    })
+  } catch (e) {
+    throw new Error(t('apiBackendUnreachable'))
+  }
   // 只有 404（旧后端没有签发端点）允许回退客户端自造 ID——那种后端也不校验签发。
   // 403/5xx 一律抛出：强制签发的云后端上，自造 ID 生来就是死的，落盘等于把用户锁死
   // （2026-08-24 mac 插件「SSE 403」事故的根因之一）。

@@ -143,10 +143,17 @@ export const fileOpenTabsMethods = {
       activityTracker.trackActivePage('OPEN_FILE', file.id, file.name, this.project && this.project.id, meta)
 
       // 1. 如果已经在某个 pane 打开，则聚焦该 pane
-      const existingLeft = this.leftFiles.find(f => f.id === file.id)
       // - 如果当前聚焦窗格未打开该文件，则在当前窗格打开
       // - 若当前窗格已打开，则仅激活
-      const targetPane = this.splitMode ? this.focusedPane : 'left'
+      let targetPane = this.splitMode ? this.focusedPane : 'left'
+      // 分屏时同一份文档绝不能在两个窗格各开一份：两个 LibreOfficeEditor 实例
+      // 各自维护 dirty/autoSave（纯实例内状态，互不知晓），谁后保存谁就整体
+      // 覆盖后端文件，先编辑那一侧的修改被静默丢弃。另一侧已经开着就聚焦过去。
+      if (this.splitMode) {
+        const otherPane = targetPane === 'left' ? 'right' : 'left'
+        const otherList = otherPane === 'left' ? this.leftFiles : this.rightFiles
+        if (otherList.some(f => f.id === file.id)) targetPane = otherPane
+      }
       const targetList = targetPane === 'left' ? this.leftFiles : this.rightFiles
       const targetIdProp = targetPane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'
 

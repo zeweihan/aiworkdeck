@@ -34,6 +34,8 @@
         </view>
         <text v-if="dlText" class="libre-loading-dl">{{ dlText }}</text>
         <text v-if="!stuck" class="libre-loading-hint">{{ $t('editor.firstOpenHint') }}</text>
+        <!-- 引擎 boot 失败：说清楚原因，否则用户只看得到一根不动的进度条。 -->
+        <text v-if="bootFailReason" class="libre-loading-error">{{ $t('editor.bootFailedHint', { reason: bootFailReason }) }}</text>
         <!-- 同一阶段长时间无进展（大概率是下载/装载卡住）：给出可点的出路，
              而不是让用户对着一根不动的进度条干等。 -->
         <view v-if="stuck" class="libre-loading-retry" @click="retryLoad">
@@ -221,6 +223,8 @@ export default {
       previewFailed: false,
       // 同一 bootStageKey 停留超过约 30s（下载挂起等场景）时置位，露出重试按钮。
       stuck: false,
+      // 客体页 boot 失败时的原因串（lo-relay 'boot-failed'），显示在加载面板上。
+      bootFailReason: '',
       // 改字 stale 提示条当前展示的条目 [{linkKey, text, link}]（合并规则见 StaleQueue）
       staleItems: [],
     }
@@ -247,7 +251,9 @@ export default {
       return this.$t('editor.boot.' + this.bootStageKey)
     },
     loadingOverlayVisible() {
-      // 「仅桌面版可用」是终态（h5 预览等场景），不是加载中——不展示进度面板
+      // 「仅桌面版可用」是终态（h5 预览等场景），不是加载中——不展示进度面板。
+      // boot 失败是唯一保留面板的失败态：原因与重试按钮都只有这块地方能放。
+      if (this.statusKey === 'bootFailed') return !this.ready
       return !this.ready && !this.isError && this.statusKey !== 'desktopOnly'
     },
     loadingTitle() {
@@ -536,9 +542,15 @@ export default {
     // 手动重试：引擎已就绪的话就是文档下载/装载卡住了，重新走一次装载路径
     // （与备胎过继 watch:file 那条路同形制）；引擎自己还没起来则没有可重放的
     // 下载动作，只重置计时器继续等待，30s 后按钮会再次出现。
+    // 例外是 boot 已经明确失败（'boot-failed'）：等下去不会有结果，整个承载
+    // 引擎的元素重建一次才是真的重试。
     retryLoad() {
       this.stuck = false
       this._stageChangedAt = Date.now()
+      if (!this._endpointUp && this.statusKey === 'bootFailed') {
+        this.remountEditor()
+        return
+      }
       if (this._endpointUp) {
         this.appendLog('用户点击重试 / retry requested')
         this._bytesPromise = null
@@ -553,6 +565,32 @@ export default {
         this.startBootTrickle()
       }
     },
+    // 引擎重启：拆掉 boot 失败的那个 webview/iframe，重新走一遍 mounted 里的
+    // 建元素流程。文档字节的预取结果仍然有效（失败的是引擎不是下载），留着。
+    async remountEditor() {
+      this.appendLog('用户点击重试（重启引擎）/ retry requested (engine remount)')
+      try { if (this._eventUnsub) this._eventUnsub() } catch (e) { /* ignore */ }
+      this._eventUnsub = null
+      this._transportSend = null
+      try { if (this.executor && typeof this.executor.dispose === 'function') this.executor.dispose() } catch (e) { /* ignore */ }
+      this.executor = null
+      try { if (this.webviewEl && this.webviewEl.remove) this.webviewEl.remove() } catch (e) { /* ignore */ }
+      this.webviewEl = null
+      this.bootFailReason = ''
+      this.statusKey = 'booting'
+      this.bootPct = 3
+      this.bootCap = 12
+      this.bootStageKey = 'engineStarting'
+      this._stageChangedAt = Date.now()
+      this.startBootTrickle()
+      try {
+        const info = await host.zetaoffice.getEditor()
+        this.mountEditor(info)
+      } catch (e) {
+        this.statusKey = 'initFailed'
+        this.appendLog('init failed: ' + (e && e.message ? e.message : e))
+      }
+    },
     // 注意：这里匹配的是引擎 boot-log 的原始消息（含中文），是引擎侧判据，
     // 不随界面语言变化——匹配串一个字都不能动。
     onBootLog(m) {
@@ -565,6 +603,19 @@ export default {
       } else if (m.indexOf('load_document: 已加载真实文档') !== -1) {
         this.bootMilestone(96, 99, 'rendering')
       }
+    },
+    // 客体页 boot 失败（引擎/字体拉不下来、跨源隔离缺失…）。没有这条信号时
+    // 'ready' 永远不来，进度条会一直空转——这里落成一个明确的失败态。
+    // 引擎已经就绪之后到达的（.catch 也兜 then 体里的异常）一概不理会：
+    // 已经能编辑的实例不该被推回失败态。
+    onBootFailed(reason) {
+      if (this._endpointUp || this.ready) return
+      this.bootFailReason = reason
+      this.statusKey = 'bootFailed'
+      clearInterval(this._bootTimer)
+      // 失败态下重试按钮就是唯一出路，不必再等 30s 的 stuck 判据
+      this.stuck = true
+      this.appendLog('boot failed: ' + reason)
     },
     appendLog(m) {
       // Mirror to devtools so the product variant (overlay hidden) stays diagnosable.
@@ -655,6 +706,8 @@ export default {
           this.$emit('cursor-context', Object.assign({ fileId: this.file && this.file.id }, msg.payload || {}))
         } else if (msg.type === 'boot-log') {
           this.onBootLog(String(msg.msg || ''))
+        } else if (msg.type === 'boot-failed') {
+          this.onBootFailed(String(msg.message || ''))
         }
       })
       // 下行通道：relay executor 只发命令，订阅开关这类「非命令」消息要自己送。
@@ -1282,6 +1335,7 @@ export default {
 .libre-loading-pct { font-size: 12px; color: var(--awd-accent-text); font-weight: 600; }
 .libre-loading-dl { font-size: 11px; color: var(--awd-text-2); }
 .libre-loading-hint { font-size: 11px; color: var(--awd-text-3); margin-top: 6px; }
+.libre-loading-error { font-size: 11px; color: var(--awd-danger); margin-top: 6px; text-align: center; }
 .libre-loading-retry { margin-top: 8px; padding: 6px 16px; border-radius: 999px; background: var(--awd-accent);
   color: var(--awd-text-on-accent); font-size: 12px; cursor: pointer; }
 .libre-loading-retry:hover { background: var(--awd-accent-hover); }
