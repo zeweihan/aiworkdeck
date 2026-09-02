@@ -95,6 +95,9 @@ const findDarkChromeBackground = (css) => {
   return null
 }
 
+// 标签可见性纯函数（dev-board#394），供下面「系统设置是中栏标签」那条直接询问
+const { isTabVisibleInPane } = await import('../src/pages/project-overview/tabVisibility.js')
+
 const failures = []
 const check = (name, fn) => {
   let msg
@@ -526,9 +529,16 @@ check('系统设置在工作台里是中栏标签，不是跳页', () => {
   if (!tab.includes('opts.nav') || !tab.includes('opts.service')) {
     return 'openSettingsTab 没有接 nav/service，?nav=platform&service=ocr 的逃生门在工作台里就断了'
   }
+  // 标签可见性 2026-09-02 起收敛成纯函数 tabVisibility.js（dev-board#394：标签常驻、
+  // 与左栏面板解耦）。这里直接问那个函数，而不是 grep 组件里的分支——分支已经没了。
   const vis = extractMethodBody(src, 'isTabVisible(file) {')
-  if (!vis || !vis.includes("file.tabType === 'admin-settings'")) {
-    return "isTabVisible 没放行 admin-settings 标签，点菜单会开一个被 v-show 藏死的标签"
+  if (!vis || !vis.includes('isTabVisibleInPane(')) {
+    return 'isTabVisible 不再委托 tabVisibility.js 的 isTabVisibleInPane，可见性契约失去单测覆盖'
+  }
+  for (const pane of ['files', 'home', 'market', 'version']) {
+    if (!isTabVisibleInPane({ id: 'admin', tabType: 'admin-settings' }, pane)) {
+      return `isTabVisibleInPane 在左栏 ${pane} 面板下藏了 admin-settings 标签，点菜单会开一个被 v-show 藏死的标签`
+    }
   }
   return null
 })
