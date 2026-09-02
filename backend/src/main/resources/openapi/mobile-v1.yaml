@@ -1,0 +1,343 @@
+openapi: 3.0.3
+info:
+  title: AI Workdeck Mobile Relay API
+  version: "1.0.0"
+  description: |
+    手机端（iOS / 小程序 / 安卓 / 鸿蒙）与桌面端共用的中转接口。真源在本文件；
+    移动仓 contract/api/mobile-v1.yaml 是钉版副本。鉴权一律请求头 X-Session-Id。
+    未登录不是 401，而是 HTTP 200 + {code: 4010} 信封——客户端按信封判鉴权失败。
+
+    校验器（swagger-request-validator）默认 additionalProperties: false：本文件是响应字段的
+    **穷举白名单**，服务端新增任何响应字段都必须先写进这里，否则契约测试红。
+servers:
+  - url: https://addin.aiworkdeck.com
+    description: 大陆版（北京）
+  - url: https://addin.workdeck.ai
+    description: 国际版（新加坡）
+components:
+  parameters:
+    SessionId:
+      name: X-Session-Id
+      in: header
+      required: false
+      schema: { type: string }
+      description: 登录会话或 awdt_ 设备令牌。缺失或失效 → 200 + Envelope(code 4010)。
+  schemas:
+    Envelope:
+      type: object
+      required: [code]
+      properties:
+        code: { type: integer, description: "0 成功；4010 未登录；1 业务错误" }
+        message: { type: string, nullable: true }
+        data: { nullable: true }
+        feature: { type: string, description: "GlobalExceptionHandler code=4001/4003 附带的功能 id" }
+        configured: { type: boolean, description: "code=4001（功能未配置）附带" }
+        usage: { type: object, additionalProperties: true, description: "code=4003（额度已满）附带的用量明细" }
+        gatewayKind: { type: string, description: "code=1（平台网关失败）附带" }
+        canUseOwnKey: { type: boolean, description: "code=1（平台网关失败）附带，是否可用自备 Key 绕过" }
+    RelayProject:
+      type: object
+      required: [deviceId, key, name]
+      properties:
+        deviceId: { type: string, description: 桌面机 UUID }
+        deviceName: { type: string, nullable: true }
+        key: { type: string, description: 桌面机本地库项目 id；跨机同号不同物，必须连 deviceId }
+        name: { type: string }
+    MediaStatus:
+      type: object
+      required: [clientMediaId, delivered, waitingSeconds]
+      properties:
+        clientMediaId: { type: string }
+        delivered: { type: boolean, description: 桌面端已 ACK 落盘（中转区已删） }
+        waitingSeconds: { type: integer, format: int64, description: 已投递为 0 }
+        expiresAt: { type: string, description: 中转区到期时刻（ISO 本地时间），仅未投递件带 }
+    MediaUsage:
+      type: object
+      required: [usedBytes, quotaBytes]
+      description: |
+        usedBytes 只统计 inbox 待取件字节（sumPendingBytes）；而配额执行（storeMedia 时的 3GB 判断）
+        同时计入 inbox 与 transfer。手机端设置页显示的用量可能低于实际被计费的量。服务端行为，本轮不改。
+      properties:
+        usedBytes: { type: integer, format: int64 }
+        quotaBytes: { type: integer, format: int64 }
+    UploadResult:
+      type: object
+      required: [code, id, clientMediaId, delivered]
+      properties:
+        code: { type: integer, enum: [0] }
+        id: { type: integer, format: int64 }
+        clientMediaId: { type: string }
+        delivered: { type: boolean, description: 幂等重传命中已投递记录时为 true }
+    AccountUser:
+      type: object
+      required: [id, username, displayName]
+      properties:
+        id: { type: integer, format: int64 }
+        username: { type: string }
+        displayName: { type: string }
+        avatarUrl: { type: string, description: 无头像时为空串 }
+        role: { type: string }
+        subscriptionType: { type: string, nullable: true }
+    LoginData:
+      type: object
+      required: [sessionId, isNewUser, user]
+      description: |
+        sms-login/verify 成功时的 data。isNewUser 由服务端恒返回（account.created）。
+      properties:
+        sessionId: { type: string }
+        isNewUser: { type: boolean }
+        mustBindPhone: { type: boolean, description: 由 account-login / mail-login 等门控登录流设置；sms-login/verify 不返回 }
+        user: { $ref: '#/components/schemas/AccountUser' }
+    LoginEnvelope:
+      type: object
+      required: [code]
+      properties:
+        code: { type: integer }
+        message: { type: string, nullable: true }
+        data: { $ref: '#/components/schemas/LoginData' }
+    CaptureManifest:
+      type: object
+      description: |
+        客户端随影像生成的取证清单（与 iOS CaptureManifest.swift 逐字段一致）。当前服务端只接收
+        clientMediaId / capturedAt / fileName / mediaType 四个字段（multipart 参数），其余留在客户端；
+        接 TSA 后 tsaToken 上行，结构不变。
+      required: [clientMediaId, sha256, capturedAt, deviceModel, osVersion, appVersion, fromCamera]
+      properties:
+        clientMediaId: { type: string, format: uuid, description: 幂等键 }
+        sha256: { type: string, minLength: 64, maxLength: 64 }
+        capturedAt: { type: string, format: date-time, description: 设备时钟 }
+        serverReceivedAt: { type: string, format: date-time, nullable: true }
+        latitude: { type: number, nullable: true }
+        longitude: { type: number, nullable: true }
+        horizontalAccuracy: { type: number, nullable: true, description: 米 }
+        deviceModel: { type: string }
+        osVersion: { type: string }
+        appVersion: { type: string }
+        fromCamera: { type: boolean, description: 是否强制来自相机 }
+        tsaToken: { type: string, nullable: true, description: 可信时间戳，当前恒 null }
+paths:
+  /api/auth/sms-login/send-code:
+    post:
+      summary: 发送短信验证码
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone]
+              properties: { phone: { type: string, pattern: '^1\d{10}$' } }
+      responses:
+        "200":
+          description: code 0 已发送；code 1 业务拒绝（频率、号码格式、人机门）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+  /api/auth/sms-login/verify:
+    post:
+      summary: 校验验证码并签发会话
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone, code]
+              properties:
+                phone: { type: string }
+                code: { type: string }
+      responses:
+        "200":
+          description: code 0 带 data；否则 code 非 0 且 data 缺失
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginEnvelope' }
+  /api/mobile/projects:
+    get:
+      summary: 手机端：该账号全部设备的项目目录并集（裸数组）
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      responses:
+        "200":
+          description: 裸数组；未登录为 Envelope(4010)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: array
+                    items: { $ref: '#/components/schemas/RelayProject' }
+                  - $ref: '#/components/schemas/Envelope'
+    put:
+      summary: 桌面端：项目目录全量替换（本期不校验）
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [deviceId, projects]
+              properties:
+                deviceId: { type: string }
+                deviceName: { type: string, nullable: true }
+                projects:
+                  type: array
+                  items:
+                    type: object
+                    required: [key, name]
+                    properties: { key: { type: string }, name: { type: string } }
+      responses:
+        "200":
+          description: code 0 + count/totalCount/truncated
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required: [code, count, totalCount, truncated]
+                    properties:
+                      code: { type: integer, enum: [0] }
+                      count: { type: integer }
+                      totalCount: { type: integer }
+                      truncated: { type: boolean }
+                  - $ref: '#/components/schemas/Envelope'
+  /api/mobile/media:
+    post:
+      summary: 手机端：上传一件现场影像到中转区（幂等键 clientMediaId）
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, deviceId, projectKey, clientMediaId, fileName, mediaType]
+              properties:
+                file: { type: string, format: binary }
+                deviceId: { type: string }
+                projectKey: { type: string }
+                clientMediaId: { type: string }
+                fileName: { type: string }
+                mediaType: { type: string, enum: [image, video, audio] }
+                capturedAt: { type: string, description: ISO-8601，可选 }
+      responses:
+        "200":
+          description: 成功 UploadResult；未登录 Envelope(4010)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/UploadResult'
+                  - $ref: '#/components/schemas/Envelope'
+  /api/mobile/media/status:
+    get:
+      summary: 手机端：查询影像投递状态（裸数组）
+      parameters:
+        - { $ref: '#/components/parameters/SessionId' }
+        - name: clientMediaIds
+          in: query
+          required: true
+          schema: { type: string }
+          description: 逗号分隔
+      responses:
+        "200":
+          description: 裸数组；未登录 Envelope(4010)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: array
+                    items: { $ref: '#/components/schemas/MediaStatus' }
+                  - $ref: '#/components/schemas/Envelope'
+  /api/mobile/media/usage:
+    get:
+      summary: 手机端：中转区用量与配额（裸对象）
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      responses:
+        "200":
+          description: 裸对象；未登录 Envelope(4010)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/MediaUsage'
+                  - $ref: '#/components/schemas/Envelope'
+  /api/mobile/devices:
+    get:
+      summary: 插件端：设备清单（本期不校验）
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      responses:
+        "200":
+          description: 裸数组
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: array
+                    items:
+                      type: object
+                      required: [deviceId, online, projects]
+                      properties:
+                        deviceId: { type: string }
+                        deviceName: { type: string, nullable: true }
+                        lastSeenAt: { type: string, nullable: true, description: 最后心跳时刻（ISO 本地时间），无心跳为 null }
+                        online: { type: boolean }
+                        projects:
+                          type: array
+                          items:
+                            type: object
+                            required: [key, name]
+                            properties: { key: { type: string }, name: { type: string } }
+                  - $ref: '#/components/schemas/Envelope'
+  /api/mobile/inbox:
+    get:
+      summary: 桌面端：本设备待取件（本期不校验）
+      parameters:
+        - { $ref: '#/components/parameters/SessionId' }
+        - { name: deviceId, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: 裸数组
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: array
+                    items:
+                      type: object
+                      required: [id, projectKey, clientMediaId, fileName, mediaType, fileSize, createdAt]
+                      properties:
+                        id: { type: integer, format: int64 }
+                        projectKey: { type: string }
+                        clientMediaId: { type: string }
+                        fileName: { type: string }
+                        mediaType: { type: string }
+                        fileSize: { type: integer, format: int64 }
+                        capturedAt: { type: string, nullable: true }
+                        createdAt: { type: string }
+                  - $ref: '#/components/schemas/Envelope'
+  /api/mobile/inbox/{id}/content:
+    get:
+      summary: 桌面端：取件字节流。契约红线：成功必须 2xx + application/octet-stream 裸字节，不许 302（本期不校验）
+      parameters:
+        - { $ref: '#/components/parameters/SessionId' }
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        "200":
+          description: 字节流；未登录为 JSON Envelope(4010)
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+  /api/mobile/inbox/{id}/ack:
+    post:
+      summary: 桌面端：确认落盘，置 deliveredAt 并立即删 blob（本期不校验）
+      parameters:
+        - { $ref: '#/components/parameters/SessionId' }
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        "200":
+          description: code 0
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
