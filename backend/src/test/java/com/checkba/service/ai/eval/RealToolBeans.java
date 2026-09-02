@@ -2,6 +2,7 @@ package com.checkba.service.ai.eval;
 
 import com.checkba.service.ai.tools.AgentToolComponent;
 import com.checkba.service.ai.tools.DdExportTools;
+import com.checkba.service.ai.tools.DocumentAuditTools;
 import com.checkba.service.ai.tools.DocumentEditTools;
 import com.checkba.service.ai.tools.EvidenceTools;
 import com.checkba.service.ai.tools.FileTools;
@@ -51,6 +52,7 @@ final class RealToolBeans {
         List<Class<? extends AgentToolComponent>> toolClasses = List.of(
                 ContributedTemplateTools.class,
                 DdExportTools.class,
+                DocumentAuditTools.class,
                 DocumentEditTools.class,
                 EnterpriseDataTools.class,
                 EvidenceTools.class,

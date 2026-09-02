@@ -33,6 +33,23 @@ description: AI↔文档编辑桥接领域。任务涉及 doc_*/sheet_*/slide_* 
 **描述里挂着做不到的能力 = 模型反复往死路上撞、白烧步数预算**。已收窄成只宣告 start/end，
 并指向 `doc_select_paragraph` / `doc_select_anchor`。
 
+## 结构审计工具 `doc_audit_structure`（dev-board#375）
+
+`service/ai/tools/DocumentAuditTools.java` → 纯函数 `service/ai/review/ContractStructureAudit.java`（+ `ChineseNumerals`）。
+只读：自己用既有 worker action `get_document_text` 按 500 段/页分页拉完全文（worker 每页另有 15000 字符预算，
+所以要循环到 `truncated` 消失，上限 60 页），再 `list_revisions {limit:500}`，**不新增 worker 契约**。报告七节，只报事实：
+① 字形（繁/简特征字对照表 `SCRIPT_PAIRS`，偶数位简体奇数位繁體，只收两边都不合法的一对一字，避开 后/後、台/臺、于/於）
+与混入段落（异体字 ≥2 且多于本体字才报，单个错别字不报）；② 各套编号连续性（第X条 / N. / N.M / (一) / (a) / (1)，
+三层作用域：条·章·无条时的「一、」为顶层，N./N.M 为次层，括号编号在次层内要求连续——第 8 条的 (a)…(k) 与第 9 条重新 (a) 起
+都正常，同条 (b)→(d) 才报）；③ 正文引用的「第X条」「第X.Y条」「附表X」有没有定义（条款标题本身不算引用）；
+④ 空白与待定（下划线/空括号含全角空格/【】/暫定/TBD）；⑤ 金额台账 + 同段「股数×每股价=总价」算术（差整数倍时点明
+「多半是万元/元单位写错」——序文 C 940,670 萬元那种病灶）；⑥ 币种并存；⑦ 前一轮修订按作者/类型汇总，≥40 字的删除
+单独点名（`LARGE_DELETION_CHARS`，worker 把 text 截到 120，所以「删残」靠这段 + paragraph 上下文看）。
+测试：`ContractStructureAuditTest`（病灶取自那份台湾合约实审，每项都配「没病灶不报」的反例）、`DocumentAuditToolsTest`
+（分页到底、桥 `{"error"}` 转 Error、修订读失败不掀翻报告）。新增工具类要同步 `RealToolBeans`（EvalToolBeanParityTest 守）。
+**system prompt 第 7 节表里已登记**（zh/en 同步），Precise Execution 加了第 4 条「审查类任务的边界是整份文件」，
+Operational Rules 第 2 条那句「revision mode disabled、改动立即生效」是陈年错话，已改成修订痕迹口径。
+
 ## 关键文件
 
 **后端工具原语**
