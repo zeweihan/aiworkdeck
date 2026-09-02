@@ -179,6 +179,22 @@ dev-board#97 的「中键关闭标签」就这么静默失效了一整轮：auxc
 先确认这一类在不在上面那四个补字段分支里；`tabDragSplit.js` 的 `onTabDragStart`
 就是靠 `if (evt && evt.dataTransfer)` 兜住的（拖拽状态记在组件上，不依赖 dataTransfer）。
 
+**drag 系事件是重灾区（dev-board#363，2026-09-02）**：`dragover/drop/dragleave` 的
+`dataTransfer` / `relatedTarget` 在 `<view>` 上一律拿不到——文件树内部拖拽一直是靠
+`document.__checkbaDraggedFile` 那个全局兜底在跑，`FileStagingArea.onDrop` 为 #74 加的
+「第 3 分支读 `e.dataTransfer.files`」在真机上也是死的。统一修法在
+`utils/fileTreeExternalDrop.js`：`nativeDataTransfer(e)`（回调自带优先，否则 `window.event`）
++ `isExternalFileDrag(dt)`（dragover 阶段 `files` 恒空，只能看 `types` 含 `'Files'`）+
+`collectDroppedFiles(dt)`（`webkitGetAsEntry` 递归展开目录、给 `relativePath`；快照必须在
+drop 的同步阶段取）+ `claimExternalDrop(native)`（同一原生事件在节点与容器各到一次，只认领一次）。
+**Finder / 微信文件拖进资源管理器**就靠它：`FileTree.handleDrop` / `onRootDrop` 各加了 Case 0、
+`.tree-content` 上新加容器级 `onTree*` 四个处理器（空白区落项目根、`externalDragActive`
+点亮根投放区与容器描边），落点定了统一走 `uploadExternalDrop` → **复用 `confirmUpload`**
+（读 `selectedFiles` / `selectedUploadParent`，与上传对话框、暂存区 `onStagingDropFiles`
+同一条通道，不另起一套）。App.vue 那条「拖单个文件夹到窗口 = 打开为项目」的 capture 段
+drop 现在**对落点在 `.file-tree` 里的事件让路**——拖文件夹进目录节点是上传进去。
+单测 `tests/project-home/file-tree-external-drop.test.mjs`（`npm run test:project-home`）。
+
 ## 顶栏头像与统一「设置」标签（2026-08-19 立，2026-08-20 并，2026-08-21 撤下拉）
 
 rail 底部的**齿轮与用户头像都撤了**，收进顶栏右上角「活动记录」右侧的

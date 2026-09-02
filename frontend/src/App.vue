@@ -86,6 +86,10 @@ export default {
       window.addEventListener('dragover', (e) => { e.preventDefault() }, false)
       window.addEventListener('drop', (e) => {
         try {
+          // 落点在文件树里的一律让给文件树（dev-board#363：拖文件夹进目录节点 = 上传进去，
+          // 不是「打开为项目」）；窗口其余位置照旧接管。
+          const t = e.target
+          if (t && typeof t.closest === 'function' && t.closest('.file-tree')) return
           const items = e.dataTransfer && e.dataTransfer.items
           if (!items || items.length !== 1) return
           const entry = items[0].webkitGetAsEntry && items[0].webkitGetAsEntry()

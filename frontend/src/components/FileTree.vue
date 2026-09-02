@@ -373,7 +373,12 @@
       </view>
     </view>
 
-    <view class="tree-content" @mousedown="onMarqueeStart" @mousemove="onMarqueeMove" @mouseup="onMarqueeEnd" @tap="closeContextMenu">
+    <view
+      class="tree-content"
+      :class="{ 'external-drag-over': externalDragActive }"
+      @mousedown="onMarqueeStart" @mousemove="onMarqueeMove" @mouseup="onMarqueeEnd" @tap="closeContextMenu"
+      @dragenter="onTreeDragEnter" @dragover="onTreeDragOver" @dragleave="onTreeDragLeave" @drop="onTreeDrop"
+    >
       <!-- Recycle Bin Header -->
       <view v-if="viewMode === 'recycle'" class="tree-toolbar" style="background: #E8F3ED; border-bottom: 1px solid #E9ECEF; justify-content: space-between;">
          <svg class="recycle-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -411,14 +416,14 @@
         <!-- Root Drop Zone for empty folders -->
         <!-- #ifdef H5 -->
         <view
-          v-if="isAnyDragging"
+          v-if="isAnyDragging || externalDragActive"
           class="root-drop-zone-empty"
           :class="{ 'drop-active': rootDropActive }"
           @dragover.prevent="onRootDragOver"
           @dragleave="onRootDragLeave"
           @drop.prevent="onRootDrop"
         >
-          <text>{{ $t('fileTree.dropToRoot') }}</text>
+          <text>{{ $t(externalDragActive ? 'fileTree.dropFilesToRoot' : 'fileTree.dropToRoot') }}</text>
         </view>
         <!-- #endif -->
       </view>
@@ -737,14 +742,14 @@
         <!-- Root Drop Zone: 拖拽到此区域可移动到根目录 -->
         <!-- #ifdef H5 -->
         <view
-          v-if="isAnyDragging"
+          v-if="isAnyDragging || externalDragActive"
           class="root-drop-zone"
           :class="{ 'drop-active': rootDropActive }"
           @dragover.prevent="onRootDragOver"
           @dragleave="onRootDragLeave"
           @drop.prevent="onRootDrop"
         >
-          <text>{{ $t('fileTree.dropToRoot') }}</text>
+          <text>{{ $t(externalDragActive ? 'fileTree.dropFilesToRoot' : 'fileTree.dropToRoot') }}</text>
         </view>
         <!-- #endif -->
       </view> <!-- Close tree-list -->
@@ -928,6 +933,7 @@ import { evidenceRefCounts } from '@/services/api.js'
 import { createRefCountsFetcher } from '@/utils/fileTreeRefCounts.js'
 import CircularProgress from '@/components/CircularProgress.vue'
 import { warmDragImage, applyDragImage } from '@/utils/dragImage.js'
+import { nativeDataTransfer, isExternalFileDrag, collectDroppedFiles, claimExternalDrop } from '@/utils/fileTreeExternalDrop.js'
 import FileTypeIcon from '@/components/FileTypeIcon.vue'
 import TagChip from '@/components/TagChip.vue'
 import TagSelector from '@/components/TagSelector.vue'
@@ -1052,6 +1058,8 @@ export default {
 
       // New Features State
       rootDropActive: false,
+      // 外部（Finder/资源管理器/微信）文件正拖在树上：根投放区据此出现、容器点亮（dev-board#363）
+      externalDragActive: false,
       activeFolderId: null,
       lastClickTime: 0,
       lastClickItemId: null,
@@ -2732,6 +2740,15 @@ export default {
          targetParentId = this.showTree ? targetItem.parentId : this.parentId
       }
 
+      // Case 0: 外部（Finder/资源管理器/微信）文件（dev-board#363）——磁盘上有、项目里没有，
+      // 走上传通道而不是移动。dataTransfer 要从原生事件上取（uni 重建的 <view> 事件没有它）。
+      const externalDt = nativeDataTransfer(e)
+      if (isExternalFileDrag(externalDt)) {
+          if (e.stopPropagation) e.stopPropagation()
+          await this.uploadExternalDrop(externalDt, targetParentId)
+          return
+      }
+
       // Case 1: Internal FileTree Drag (Reordering)
       if (this.draggedIndex !== -1) {
           if (this.draggedIndex === index) {
@@ -2854,6 +2871,14 @@ export default {
       const targetParentId = null // Move to root
       const newSortOrder = 0
 
+      // Case 0: 外部文件落到根投放区 → 上传到项目根（同 handleDrop 的 Case 0）
+      const externalDt = nativeDataTransfer(e)
+      if (isExternalFileDrag(externalDt)) {
+          if (e.stopPropagation) e.stopPropagation()
+          await this.uploadExternalDrop(externalDt, targetParentId)
+          return
+      }
+
       // Case 1: Internal FileTree Drag
       if (this.draggedIndex !== -1) {
           try {
@@ -2917,6 +2942,64 @@ export default {
              }
           }
       }
+    },
+    // ---- 外部文件拖入（dev-board#363）：容器级 dragenter/over/leave/drop ----
+    // 节点上的 handleDragOver 已经负责 dragOverIndex 高亮；这里管的是「根投放区出现 / 容器点亮 /
+    // 树空白区落根 / 拖出窗口复位」。四个事件都从原生事件上取 dataTransfer / relatedTarget。
+    onTreeDragEnter(e) {
+      if (this.viewMode === 'recycle') return
+      if (isExternalFileDrag(nativeDataTransfer(e))) this.externalDragActive = true
+    },
+    onTreeDragOver(e) {
+      if (this.viewMode === 'recycle') return
+      const dt = nativeDataTransfer(e)
+      if (!isExternalFileDrag(dt)) return
+      this.externalDragActive = true
+      if (e.preventDefault) e.preventDefault()
+      try { dt.dropEffect = 'copy' } catch (err) { /* ignore */ }
+    },
+    onTreeDragLeave(e) {
+      if (!this.externalDragActive) return
+      // dragleave 在每个子元素边界都会触发；只有 relatedTarget 不在容器里（或为 null =
+      // 拖出了窗口）才算真正离开。取不到容器时只认 null 那一档，误判会在下一次 dragover 自愈。
+      const native = (e && 'relatedTarget' in e) ? e : (typeof window !== 'undefined' ? window.event : null)
+      const related = native ? native.relatedTarget : null
+      if (related) {
+        const container = this.$el && this.$el.querySelector ? this.$el.querySelector('.tree-content') : null
+        if (!container || container.contains(related)) return
+      }
+      this.resetExternalDrag()
+    },
+    async onTreeDrop(e) {
+      const dt = nativeDataTransfer(e)
+      if (this.viewMode === 'recycle' || !isExternalFileDrag(dt)) {
+        this.resetExternalDrag()
+        return
+      }
+      if (e.preventDefault) e.preventDefault()
+      // 树空白区 = 项目根（与 onRootDrop 同口径）
+      await this.uploadExternalDrop(dt, null)
+    },
+    resetExternalDrag() {
+      this.externalDragActive = false
+      this.rootDropActive = false
+      this.dragOverIndex = -1
+    },
+    // 落点确定之后统一走这里：复用 confirmUpload（读 selectedFiles / selectedUploadParent，
+    // 上传对话框与暂存区 onStagingDropFiles 走的也是它），分片续传/并发/建目录/完成后
+    // loadFiles 全在那条通道里，不另起一套。
+    async uploadExternalDrop(dt, targetParentId) {
+      const native = typeof window !== 'undefined' ? window.event : null
+      if (!claimExternalDrop(native)) return
+      this.resetExternalDrag()
+      // webkitGetAsEntry / files 必须在 drop 的同步阶段取，collectDroppedFiles 内部先快照再递归
+      const items = await collectDroppedFiles(dt)
+      if (!items.length) return
+      if (targetParentId != null && this.showTree) this.expandedFolders.add(targetParentId)
+      this.selectedFiles = items
+      this.selectedUploadParent = targetParentId
+      this.isFolderUpload = items.some(f => f.relativePath && f.relativePath.indexOf('/') !== -1)
+      await this.confirmUpload()
     },
     // 非H5端触摸拖拽方法
     handleTouchStart(e, index) {
@@ -4766,6 +4849,11 @@ export default {
 .tree-item-drop-target {
   outline: 2rpx dashed var(--awd-info);
   background-color: var(--awd-info-soft);
+}
+
+/* 外部文件正拖在树上：整个容器描一圈，提示「松手即上传」（dev-board#363） */
+.tree-content.external-drag-over {
+  box-shadow: inset 0 0 0 2px var(--awd-info);
 }
 
 .tree-item[draggable="true"]:hover {
