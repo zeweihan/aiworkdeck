@@ -146,6 +146,7 @@ Var AwdFont       ; 高 DPI 适配的雅黑句柄（真控件用）
 Var AwdDialog
 Var AwdImgHero
 Var AwdImgMini
+Var AwdBgWnd      ; 当前 nsDialogs 页的背景位图控件（建完所有控件后压底用）
 Var AwdExpanded
 !ifdef AWD_UI_DIR_CHOICE
 Var AwdDirEdit
@@ -307,16 +308,18 @@ Function AwdWelcomeCreate
   System::Call 'user32::SetWindowPos(p $AwdDialog, i 0, i 0, i 0, i R7, i R8, i 0x14)'
 
   ; 背景大图（含按钮/文案的全部视觉）。带 SS_NOTIFY 是为了拖动：按在热区之外的任何
-  ; 地方，位图的 STN_CLICKED 把这一按交给 AwdDragClick。显式压到 z 序最底，别赌
-  ; 创建顺序——没有 SS_NOTIFY 的 static 对命中测试是透明的，有了就不是，位图一旦
-  ; 浮到热区之上会把「立即安装」的点击吃掉。
+  ; 地方，位图的 STN_CLICKED 把这一按交给 AwdDragClick。
+  ; **z 序地雷**：子窗口创建时是插到 z 序**最底**的（后建的在下面，不是在上面），
+  ; 以前位图没有 SS_NOTIFY、对命中测试透明，点击穿过它落到下面的热区，所以没露馅；
+  ; 一加 SS_NOTIFY 位图就变成 HTCLIENT，会把「立即安装」的点击整个吃掉
+  ;（installer-ui-smoke 实锤：拖动通了、随后所有热区全哑）。所以位图必须在
+  ; **所有控件都建完之后**再压到 HWND_BOTTOM（见 nsDialogs::Show 之前那句）。
   nsDialogs::CreateControl STATIC ${WS_VISIBLE}|${WS_CHILD}|${WS_CLIPSIBLINGS}|${SS_BITMAP}|${SS_NOTIFY} 0 0 0 $R7 $R8 ""
-  Pop $1
-  ${NSD_SetImage} $1 "$PLUGINSDIR\awd-hero.bmp" $AwdImgHero
-  System::Call 'user32::SetWindowPos(p r1, p 1, i 0, i 0, i 0, i 0, i 0x13)'
-  ${NSD_OnClick} $1 AwdDragClick
+  Pop $AwdBgWnd
+  ${NSD_SetImage} $AwdBgWnd "$PLUGINSDIR\awd-hero.bmp" $AwdImgHero
+  ${NSD_OnClick} $AwdBgWnd AwdDragClick
 
-  ; 热区（创建序在位图之后 = z 序在其上）
+  ; 热区（都建在位图之后，最后再把位图压底）
   ${AwdHotspot} $2 ${AWDUI_CTA_X} ${AWDUI_CTA_Y} ${AWDUI_CTA_W} ${AWDUI_CTA_H}
   ${NSD_OnClick} $2 AwdInstallClick
   ${AwdHotspot} $2 ${AWDUI_TERMS_X} ${AWDUI_TERMS_Y} ${AWDUI_LINK_W} ${AWDUI_LINK_H}
@@ -365,6 +368,8 @@ Function AwdWelcomeCreate
     SetCtlColors $AwdSpaceLabel 0x8A9590 0xFFFFFF
   !endif
 
+  ; 位图压到 z 序最底：所有热区/真控件都已建好，这一句之后它们才真的在位图之上
+  System::Call 'user32::SetWindowPos(p $AwdBgWnd, p 1, i 0, i 0, i 0, i 0, i 0x13)'
   nsDialogs::Show
 FunctionEnd
 
@@ -696,18 +701,18 @@ Function AwdFinishCreate
   SetCtlColors $AwdDialog "" 0xFFFFFF
   System::Call 'user32::SetWindowPos(p $AwdDialog, i 0, i 0, i 0, i R7, i R8, i 0x14)'
 
-  ; 背景位图同欢迎卡：SS_NOTIFY + 压底 + OnClick 拖动
+  ; 背景位图同欢迎卡：SS_NOTIFY + OnClick 拖动，热区建完再压底（z 序地雷见欢迎卡）
   nsDialogs::CreateControl STATIC ${WS_VISIBLE}|${WS_CHILD}|${WS_CLIPSIBLINGS}|${SS_BITMAP}|${SS_NOTIFY} 0 0 0 $R7 $R8 ""
-  Pop $1
-  ${NSD_SetImage} $1 "$PLUGINSDIR\awd-mini-done.bmp" $AwdImgHero
-  System::Call 'user32::SetWindowPos(p r1, p 1, i 0, i 0, i 0, i 0, i 0x13)'
-  ${NSD_OnClick} $1 AwdDragClick
+  Pop $AwdBgWnd
+  ${NSD_SetImage} $AwdBgWnd "$PLUGINSDIR\awd-mini-done.bmp" $AwdImgHero
+  ${NSD_OnClick} $AwdBgWnd AwdDragClick
 
   ${AwdHotspot} $2 ${AWDUI_DONEBTN_X} ${AWDUI_DONEBTN_Y} ${AWDUI_DONEBTN_W} ${AWDUI_DONEBTN_H}
   ${NSD_OnClick} $2 AwdLaunchClick
   ${AwdHotspot} $2 ${AWDUI_MCLOSE_X} ${AWDUI_MCLOSE_Y} ${AWDUI_MCLOSE_W} ${AWDUI_MCLOSE_H}
   ${NSD_OnClick} $2 AwdFinishCloseClick
 
+  System::Call 'user32::SetWindowPos(p $AwdBgWnd, p 1, i 0, i 0, i 0, i 0, i 0x13)'
   nsDialogs::Show
 FunctionEnd
 
