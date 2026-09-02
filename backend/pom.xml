@@ -123,6 +123,12 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>com.atlassian.oai</groupId>
+            <artifactId>swagger-request-validator-mockmvc</artifactId>
+            <version>2.44.9</version>
+            <scope>test</scope>
+        </dependency>
 
         <!-- LangChain4j + Ollama -->
         <dependency>
