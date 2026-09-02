@@ -173,13 +173,34 @@ public class ToolRegistry {
     @PostConstruct
     public void init() {
         for (AgentToolComponent bean : toolComponents) {
-            registerBean(bean);
+            boolean available = componentAvailable(bean);
+            if (!available) {
+                log.info("Tool component {} reports itself unavailable on this machine — "
+                        + "its tools stay registered but are not offered to the model",
+                        bean.getClass().getSimpleName());
+            }
+            registerBean(bean, available);
         }
         log.info("ToolRegistry initialized: {} built-in tools from {} components",
                 builtinTools.size(), toolComponents.size());
     }
 
-    private void registerBean(Object bean) {
+    /** 组件自报可用性绝不能掀翻启动：探测里抛出来的一律当"可用"，最坏只是多下发一个工具。 */
+    private boolean componentAvailable(AgentToolComponent bean) {
+        try {
+            return bean.isAvailable();
+        } catch (Exception e) {
+            log.warn("isAvailable() threw for {}, treating the component as available",
+                    bean.getClass().getSimpleName(), e);
+            return true;
+        }
+    }
+
+    /**
+     * @param offerToModel false 时只登记不下发：工具仍可被 resolve/execute 调到（拿到的是它自己
+     *                     那句可行动的错误），但不会出现在给 LLM 的 spec 清单里。
+     */
+    private void registerBean(Object bean, boolean offerToModel) {
         for (Method method : bean.getClass().getDeclaredMethods()) {
             if (!method.isAnnotationPresent(Tool.class)) {
                 continue;
@@ -193,7 +214,7 @@ public class ToolRegistry {
                     log.warn("Duplicate tool name '{}' — {} overrides {}",
                             spec.name(), bean.getClass().getSimpleName(),
                             previous.bean().getClass().getSimpleName());
-                } else {
+                } else if (offerToModel) {
                     builtinSpecifications.add(spec);
                 }
             } catch (Exception e) {

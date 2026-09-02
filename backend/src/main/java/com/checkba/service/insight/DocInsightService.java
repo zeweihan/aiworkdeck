@@ -17,6 +17,7 @@ import com.checkba.service.ai.ChatModelFactory;
 import com.checkba.service.ai.PlatformAiUserScope;
 import com.checkba.service.ai.TokenUsageService;
 import com.checkba.service.ai.mcp.McpClientService;
+import com.checkba.service.ai.mcp.McpProvider;
 import com.checkba.service.insight.DocInsightChecks.Claim;
 import com.checkba.service.insight.DocInsightExtraction.Mention;
 import com.checkba.service.insight.DocInsightExtraction.Parsed;
@@ -27,6 +28,7 @@ import com.checkba.service.insight.DocInsightViews.InsightView;
 import com.checkba.service.insight.DocInsightViews.MentionView;
 import com.checkba.service.insight.DocInsightViews.RunView;
 import com.checkba.service.insight.DocInsightViews.StartResult;
+import com.checkba.service.legal.PkulawChannel;
 import com.checkba.service.platform.GatewayException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -67,10 +69,19 @@ import java.util.regex.Pattern;
  *       （只读成员看得到结果，但不能替项目花钱）。</li>
  *   <li><b>外部通道不可用是一等状态，不是失败</b>。法宝点数耗尽、企查查未开放、
  *       案例通道未配置，一律 {@code UNAVAILABLE} + 可读原因写进 retrievalNote；
- *       整轮解析照常跑完。一个通道挂了不该让另外两类实体也查不成。</li>
+ *       整轮解析照常跑完。一个通道挂了不该让另外两类实体也查不成。
+ *       <b>「查完了，上游说没有」是另一回事</b>（{@code NOT_FOUND}）：那是一次成功的检索，
+ *       摘要里按完成计数，note 里也不许出现「稍后重试 / 联系客服」。</li>
  *   <li><b>逐个实体检索完就落库</b>。前端轮询看到的是一个个点亮的过程，
  *       而不是等三分钟后一次性出现。</li>
  * </ol>
+ *
+ * <h3>法宝走哪条路</h3>
+ * 法宝的四个通道（法规 / 案号识别 / 判决书 / 引用校验）一律经
+ * {@link PkulawChannel}：平台档走官网网关，自备 Key 档才直连 MCP。
+ * 直接打 {@link McpClientService} 等于在用户机器上发一个空 Bearer——
+ * 打包态的桌面端没有 {@code PKULAW_TOKEN}，换回来的是 401 Missing Credentials（dev-board#395）。
+ * 企查查的模糊搜索（{@link #resolveFullNameViaMcp}）仍直连：网关目前没有对应的 op。
  *
  * <h3>跨线程红线</h3>
  * 管线跑在自己的线程池里，而平台通道的身份（{@link PlatformAiUserScope}）是 ThreadLocal、
@@ -120,6 +131,7 @@ public class DocInsightService {
     private final TokenUsageService tokenUsageService;
     private final QichachaService qichachaService;
     private final McpClientService mcpClientService;
+    private final PkulawChannel pkulawChannel;
     private final InsightProperties props;
     private final ObjectMapper om;
 
@@ -217,11 +229,11 @@ public class DocInsightService {
             List<RawEntity> merged = DocInsightExtraction.merge(raw, props.getMaxMentions(), props.getMaxEntities());
             List<DocInsightEntity> rows = persistEntities(runId, projectId, file.getId(), merged);
 
-            int ok = retrieveAll(runId, rows);
+            Retrieved retrieved = retrieveAll(runId, rows);
             List<DocInsightChecks.Finding> citations = validateCitations(runId, rows);
             int found = persistFindings(runId, projectId, file.getId(), claims, text, citations);
 
-            done(runId, summary(rows.size(), ok, found, truncated));
+            done(runId, summary(rows.size(), retrieved, found, truncated));
         } catch (Throwable t) {
             log.warn("文档解析失败 runId={} fileId={}: {}", runId, file.getId(), t.toString());
             fail(runId, readable(t));
@@ -290,8 +302,12 @@ public class DocInsightService {
         return out;
     }
 
-    private int retrieveAll(Long runId, List<DocInsightEntity> rows) {
+    /** 一轮检索的完成情况。NOT_FOUND 也算<b>跑完了</b>——上游明确回「没有这一项」，不是故障。 */
+    private record Retrieved(int ok, int notFound) {}
+
+    private Retrieved retrieveAll(Long runId, List<DocInsightEntity> rows) {
         int ok = 0;
+        int notFound = 0;
         for (int i = 0; i < rows.size(); i++) {
             phase(runId, LangText.of("检索外部库 ", "Querying external sources ") + (i + 1) + "/" + rows.size());
             DocInsightEntity row = rows.get(i);
@@ -305,8 +321,9 @@ public class DocInsightService {
             }
             entities.save(row);   // 逐个落库：窗格轮询看到的是一个个点亮
             if (DocInsightEntity.RETRIEVAL_OK.equals(row.getRetrievalStatus())) ok++;
+            else if (DocInsightEntity.RETRIEVAL_NOT_FOUND.equals(row.getRetrievalStatus())) notFound++;
         }
-        return ok;
+        return new Retrieved(ok, notFound);
     }
 
     /** @param extra 引用校验步产生的发现（{@link #validateCitations}），与文档内部校验的发现一起落库 */
@@ -366,6 +383,9 @@ public class DocInsightService {
     /**
      * 企业：先打企查查 REST（只认工商全称），查不到再用企查查 MCP 做模糊搜索把简称解析成全称、
      * 拿全称重打一次 REST。<b>网关失败一律 UNAVAILABLE + userHint</b>，不当成「查无此企业」。
+     *
+     * <p>唯一的例外是上游说「查询无结果」：那是一次跑完的检索，落 <b>NOT_FOUND 而不是 UNAVAILABLE</b>，
+     * 也不该摆一句「请联系 hi@aiworkdeck.com」——对着一家文中虚构的公司让用户去找客服（dev-board#395）。
      */
     private void retrieveCompany(DocInsightEntity row) {
         String name = row.getName();
@@ -377,17 +397,19 @@ public class DocInsightService {
                 return;
             }
         } catch (GatewayException ge) {
-            unavailable(row, join(ge.getMessage(), ge.userHint()));
-            return;
+            // 「查询无结果」继续往下走模糊搜索：文中写的多半是简称，那条路正是为它准备的
+            if (!emptyUpstream(ge.getMessage())) {
+                unavailable(row, join(ge.getMessage(), ge.userHint()));
+                return;
+            }
+            first = ge.getMessage();
         } catch (Exception e) {
             first = readable(e);
         }
 
         String fullName = resolveFullNameViaMcp(name);
         if (fullName == null || fullName.equals(name)) {
-            row.setRetrievalStatus(DocInsightEntity.RETRIEVAL_ERROR);
-            row.setRetrievalSource("qichacha");
-            row.setRetrievalNote(join(first, LangText.of(
+            notFound(row, "qichacha", join(first, LangText.of(
                     "未查询到该企业（企查查只认工商全称，文中可能写的是简称）",
                     "Company not found (the registry only accepts the full registered name)")));
             return;
@@ -398,12 +420,14 @@ public class DocInsightService {
                 okCompany(row, json, "qichacha+mcp");
                 return;
             }
-            row.setRetrievalStatus(DocInsightEntity.RETRIEVAL_ERROR);
-            row.setRetrievalSource("qichacha+mcp");
-            row.setRetrievalNote(LangText.of("按全称「", "Full name \"") + fullName
+            notFound(row, "qichacha+mcp", LangText.of("按全称「", "Full name \"") + fullName
                     + LangText.of("」仍未查询到工商信息", "\" still returned no registry record"));
         } catch (GatewayException ge) {
-            unavailable(row, join(ge.getMessage(), ge.userHint()));
+            if (emptyUpstream(ge.getMessage())) {
+                notFound(row, "qichacha+mcp", ge.getMessage());
+            } else {
+                unavailable(row, join(ge.getMessage(), ge.userHint()));
+            }
         } catch (Exception e) {
             row.setRetrievalStatus(DocInsightEntity.RETRIEVAL_ERROR);
             row.setRetrievalSource("qichacha+mcp");
@@ -526,7 +550,9 @@ public class DocInsightService {
                 ? Map.of("title", title, "number", article)
                 : Map.of("title", title);
         callAndStore(row, server, tool, args,
-                LangText.of("法规检索本次不可用：", "Statute lookup is unavailable this time: "));
+                LangText.of("法规检索本次不可用：", "Statute lookup is unavailable this time: "),
+                LangText.of("未检索到该法规条文（可能条号有误或法规名不准）",
+                        "No matching statute article was found (the number or the title may be wrong)"));
     }
 
     /**
@@ -555,7 +581,8 @@ public class DocInsightService {
         }
         boolean ok = callAndStore(row, server, props.getCaseTool(),
                 Map.of(props.getCaseArg(), caseQuery(recognition, row.getName())),
-                LangText.of("判决书检索本次不可用：", "Judgment lookup is unavailable this time: "));
+                LangText.of("判决书检索本次不可用：", "Judgment lookup is unavailable this time: "),
+                LangText.of("未检索到相关判决书", "No matching judgment was found"));
         if (recognition == null) return;
         if (ok) {
             mergeRetrievalField(row, "recognition", recognition);
@@ -574,7 +601,7 @@ public class DocInsightService {
         if (!StringUtils.hasText(server)) return null;
         String raw;
         try {
-            raw = mcpClientService.callTool(server, props.getCaseNumberTool(),
+            raw = pkulawChannel.callTool(server, props.getCaseNumberTool(),
                     Map.of("text", recognitionText(row)));
         } catch (Exception e) {
             log.warn("案号识别失败（跳过，不影响判决书检索）name={}: {}", row.getName(), e.getMessage());
@@ -627,23 +654,46 @@ public class DocInsightService {
     }
 
     /**
-     * 打一次 MCP 并落结果。返回 "Error..." 前缀或空白一律判通道不可用（{@link McpClientService} 的既有约定）。
+     * 打一次法宝（平台档走网关、自备 Key 直连 MCP，见 {@link PkulawChannel}）并落结果。
+     *
+     * <p>三种不成的分法，别混：
+     * <ul>
+     *   <li><b>本机没这项凭证</b>（{@link McpProvider#NO_CREDENTIAL_PREFIX}）→ UNAVAILABLE，
+     *       note 写「未配置」。绝不用「本次不可用」这种像是暂时故障的话：没走网关的打包态桌面端
+     *       这就是恒定状态，让用户等下去等不来（dev-board#395）；</li>
+     *   <li><b>上游明确回空</b>（空数组）→ NOT_FOUND，那是一次跑完的检索；</li>
+     *   <li>其余（"Error" 前缀、空白、抛异常、网关分类失败）→ UNAVAILABLE + 可读原因。</li>
+     * </ul>
      *
      * @return true = 拿到结果并已落进 retrievalJson
      */
     private boolean callAndStore(DocInsightEntity row, String server, String tool,
-                                 Map<String, Object> args, String unavailablePrefix) {
+                                 Map<String, Object> args, String unavailablePrefix, String notFoundNote) {
         row.setRetrievalSource(server);
         String raw;
         try {
-            raw = mcpClientService.callTool(server, tool, args);
+            raw = pkulawChannel.callTool(server, tool, args);
+        } catch (GatewayException ge) {
+            unavailable(row, unavailablePrefix + join(ge.getMessage(), ge.userHint()));
+            return false;
         } catch (Exception e) {
             unavailable(row, unavailablePrefix + readable(e));
+            return false;
+        }
+        if (StringUtils.hasText(raw) && raw.startsWith(McpProvider.NO_CREDENTIAL_PREFIX)) {
+            unavailable(row, LangText.of("本机未配置该检索通道的凭证（",
+                    "This machine has no credential for this lookup channel (")
+                    + server + LangText.of("），本次未检索", "); nothing was queried"));
             return false;
         }
         if (!StringUtils.hasText(raw) || raw.startsWith(ERROR_PREFIX)) {
             unavailable(row, unavailablePrefix
                     + (StringUtils.hasText(raw) ? raw : LangText.of("上游返回空结果", "empty response")));
+            return false;
+        }
+        JsonNode unwrapped = unwrapMcp(raw);
+        if (unwrapped != null && unwrapped.isArray() && unwrapped.isEmpty()) {
+            notFound(row, server, notFoundNote);   // 上游把话说清楚了：没有这一条
             return false;
         }
         ObjectNode out = om.createObjectNode();
@@ -698,6 +748,19 @@ public class DocInsightService {
     private void unavailable(DocInsightEntity row, String note) {
         row.setRetrievalStatus(DocInsightEntity.RETRIEVAL_UNAVAILABLE);
         row.setRetrievalNote(note);
+    }
+
+    /** 查完了、上游说没有。note 里<b>不带任何「稍后重试 / 联系客服」</b>：这不是故障。 */
+    private void notFound(DocInsightEntity row, String source, String note) {
+        row.setRetrievalStatus(DocInsightEntity.RETRIEVAL_NOT_FOUND);
+        row.setRetrievalSource(source);
+        row.setRetrievalNote(note);
+    }
+
+    /** 上游那句话是不是「查完了，没有」。企查查的原话是「【有效请求】查询无结果」。 */
+    private static boolean emptyUpstream(String message) {
+        if (!StringUtils.hasText(message)) return false;
+        return message.contains("查询无结果") || message.contains("未查询到") || message.contains("无相关结果");
     }
 
     // ---------------------------------------------------------------- 法条引用校验
@@ -764,7 +827,7 @@ public class DocInsightService {
             args.put("answerlaw", List.of(Map.of("title", title, "text", clue)));
             args.put("prompt", quote);
         }
-        String raw = mcpClientService.callTool(server, props.getCitationTool(), args);
+        String raw = pkulawChannel.callTool(server, props.getCitationTool(), args);
         if (!StringUtils.hasText(raw) || raw.startsWith(ERROR_PREFIX)) return null;
         JsonNode node = unwrapMcp(raw);
         if (node == null || !node.isArray()) return null;   // 形状不认得 = 校验不可用，不当成引用有错
@@ -982,10 +1045,16 @@ public class DocInsightService {
         });
     }
 
-    private String summary(int entityCount, int ok, int findingCount, boolean truncated) {
+    private String summary(int entityCount, Retrieved retrieved, int findingCount, boolean truncated) {
+        // 未命中单列一项：把「查完了，上游说没有」并进「检索成功 0 个」，
+        // 用户读到的是「一次都没查成」——那是通道故障的话术（dev-board#395）
+        String notFound = retrieved.notFound() > 0
+                ? LangText.of("，未命中 ", ", ") + retrieved.notFound() + LangText.of(" 个", " not found")
+                : "";
         String s = LangText.of("完成：实体 ", "Done: ") + entityCount
-                + LangText.of(" 个，检索成功 ", " entities, ") + ok
-                + LangText.of(" 个，发现 ", " retrieved, ") + findingCount
+                + LangText.of(" 个，检索成功 ", " entities, ") + retrieved.ok()
+                + LangText.of(" 个", " retrieved") + notFound
+                + LangText.of("，发现 ", ", ") + findingCount
                 + LangText.of(" 处不一致", " inconsistencies");
         return truncated ? s + LangText.of("（文档过长，只解析了前 ", " (document truncated to the first ")
                 + props.getMaxChars() + LangText.of(" 字）", " characters)") : s;

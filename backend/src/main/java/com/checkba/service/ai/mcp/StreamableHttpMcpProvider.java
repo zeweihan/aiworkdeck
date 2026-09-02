@@ -44,6 +44,12 @@ public class StreamableHttpMcpProvider implements McpProvider {
 
     @Override
     public String callTool(McpProperties.ServerConfig server, String token, String toolName, Map<String, Object> args) {
+        // 凭证为空就不发这一趟：空 Bearer 只会换回上游的 401 Missing Credentials，
+        // 把「这台机器没配凭证」说成一次上游故障（见 NO_CREDENTIAL_PREFIX）
+        if (token == null || token.isBlank()) {
+            log.warn("MCP server 没有可用凭证，跳过调用: server={}, tool={}", server.getName(), toolName);
+            return NO_CREDENTIAL_PREFIX + server.getName();
+        }
         try {
             JSONObject params = new JSONObject();
             params.set("name", toolName);

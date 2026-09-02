@@ -224,11 +224,11 @@ public class PptxTools implements AgentToolComponent {
             if (healthy) {
                 return "PPTX 生成服务运行正常，可以开始生成 PPT。";
             } else {
-                return "PPTX 生成服务不可用。请确保已启动 Docker 服务：docker-compose up -d pptx-service";
+                return "PPTX 生成服务当前不可用（本机的 PPT 服务组件没有就绪）。请稍后重试；这只影响 PPT 生成，不影响读文件与 OCR。";
             }
         } catch (Exception e) {
             log.error("Failed to check PPTX service", e);
-            return "检查服务状态失败: " + e.getMessage() + "。请确保 Docker 服务已启动。";
+            return "检查服务状态失败: " + e.getMessage() + "。这只影响 PPT 生成，不影响读文件与 OCR。";
         }
     }
 
@@ -311,7 +311,7 @@ public class PptxTools implements AgentToolComponent {
         try {
             // 检查服务
             if (!pptxServiceClient.isHealthy()) {
-                return "错误：PPTX 生成服务不可用。请先启动 Docker 服务：docker-compose up -d pptx-service";
+                return "错误：PPTX 生成服务当前不可用（本机的 PPT 服务组件没有就绪）。请稍后重试；这只影响 PPT 生成，不影响读文件与 OCR。";
             }
             
             // 验证父文件夹存在（如果指定）
@@ -508,7 +508,7 @@ public class PptxTools implements AgentToolComponent {
         try {
             // 检查服务
             if (!pptxServiceClient.isHealthy()) {
-                return "错误：PPTX 生成服务不可用。请先启动 Docker 服务。";
+                return "错误：PPTX 生成服务当前不可用（本机的 PPT 服务组件没有就绪）。请稍后重试。";
             }
             
             // 创建项目

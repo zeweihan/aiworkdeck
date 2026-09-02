@@ -356,11 +356,14 @@ The `law_*` tools are backed by a **PRC (Mainland China) law database**. They co
 | `move_file(source, dest)` | **Move or Rename files** (e.g. rename: `move_file("a.txt", "b.txt")`) |
 | `delete_file(path)` | **DISABLED** - AI cannot delete files |
 
+**Images and scans are readable**: for images in the project (jpg/png/bmp/webp...) and scanned PDFs with no text layer, just call `read_document` / `extract_file_text` (by file ID) or `read_file` (by path) - they are recognised automatically by the cloud OCR service. There is no other OCR route to look for, no script to write and nothing to install locally. When recognition fails, the tool tells you the real reason (insufficient Credits, OCR not enabled, ...); relay that reason to the user verbatim instead of inferring one yourself.
+
 **MANDATORY**: For "Draft/Create NEW" requests (draft / write / prepare a new document), you MUST use `write_docx`. DO NOT use it for "Revise/Modify" requests.
 
 <!-- zh § "5. Python Analysis (run_python)" (L322-336) — NOTE: heading number duplicated in zh original; kept for alignment -->
 ## 5. Python Analysis (`run_python`)
 - Runs in **isolated Docker container** (python:3.9)
+- On a machine without Docker this tool **does not appear in your tool list at all**. If it is not listed, this machine cannot run scripts - use the first-class tools instead, and never treat it as a fallback route for reading files or OCR.
 - **CAN call backend tools** via `default_api` object
 - Available libraries: pandas, tushare, requests, matplotlib, hashlib
 

@@ -18,7 +18,11 @@ import com.checkba.service.ai.mcp.McpClientService;
 import com.checkba.service.insight.DocInsightViews.EntityView;
 import com.checkba.service.insight.DocInsightViews.InsightView;
 import com.checkba.service.insight.DocInsightViews.StartResult;
+import com.checkba.service.legal.PkulawChannel;
+import com.checkba.service.platform.ExternalProviderResolver;
+import com.checkba.service.platform.ExternalServiceProvider;
 import com.checkba.service.platform.GatewayException;
+import com.checkba.service.platform.PlatformGatewayClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.model.chat.ChatLanguageModel;
@@ -46,11 +50,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -104,7 +110,11 @@ class DocInsightServiceTest {
     TokenUsageService tokenUsageService = mock(TokenUsageService.class);
     QichachaService qichacha = mock(QichachaService.class);
     McpClientService mcp = mock(McpClientService.class);
+    ExternalProviderResolver providerResolver = mock(ExternalProviderResolver.class);
+    PlatformGatewayClient gateway = mock(PlatformGatewayClient.class);
     ChatLanguageModel model = mock(ChatLanguageModel.class);
+    /** 真件而非 mock：这条分发本身就是被测契约（平台档走网关 / 自备 Key 直连）。 */
+    PkulawChannel pkulaw = new PkulawChannel(mcp, providerResolver, gateway);
 
     final Map<Long, DocInsightRun> runStore = new ConcurrentHashMap<>();
     final Map<Long, DocInsightEntity> entityStore = new ConcurrentHashMap<>();
@@ -118,6 +128,10 @@ class DocInsightServiceTest {
     void setUp() throws Exception {
         props.setChunkChars(100000);   // 一块跑完，断言不受切块影响
         props.setCaseServer("");       // 默认没有判决书检索通道
+
+        // 默认自备 Key 档：既有用例里那一堆 mcp.callTool 的 stub 照旧生效
+        when(providerResolver.resolve(ExternalServiceProvider.PKULAW))
+                .thenReturn(ExternalServiceProvider.BYOK);
 
         when(members.hasReadPermission(PID, UID)).thenReturn(true);
         when(members.hasWritePermission(PID, UID)).thenReturn(true);
@@ -181,7 +195,8 @@ class DocInsightServiceTest {
 
     private DocInsightService newService() {
         return new DocInsightService(runs, entityRepo, findingRepo, files, members, docText,
-                chatModelFactory, auxModelResolver, tokenUsageService, qichacha, mcp, props, new ObjectMapper());
+                chatModelFactory, auxModelResolver, tokenUsageService, qichacha, mcp, pkulaw, props,
+                new ObjectMapper());
     }
 
     private static ProjectFile doc() {
@@ -299,7 +314,8 @@ class DocInsightServiceTest {
 
         awaitStatus(svc.startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
         DocInsightEntity company = entityOf(DocInsightEntity.KIND_COMPANY);
-        assertEquals(DocInsightEntity.RETRIEVAL_ERROR, company.getRetrievalStatus());
+        assertEquals(DocInsightEntity.RETRIEVAL_NOT_FOUND, company.getRetrievalStatus(),
+                "查完了、上游说没有 ≠ 通道故障");
         assertTrue(company.getRetrievalNote().contains("未查询到该企业"), company.getRetrievalNote());
     }
 
@@ -682,6 +698,97 @@ class DocInsightServiceTest {
     }
 
     // ---------------------------------------------------------------- 辅助
+
+    // ---------------------------------------------------------------- 平台网关（dev-board#395）
+
+    /** 网关回包与 BYOK 档同形：JSON-RPC 正文放在 data.raw 里，由桌面端既有解析器解析。 */
+    private void stubGatewayRaw(String raw) {
+        try {
+            com.fasterxml.jackson.databind.node.ObjectNode data = new ObjectMapper().createObjectNode();
+            data.put("raw", raw);
+            when(gateway.call(eq("pkulaw"), anyString(), anyMap(), anyInt()))
+                    .thenReturn(new PlatformGatewayClient.Result(data, 1, 1, "call"));
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    @Test
+    @DisplayName("平台档：法规/案号识别/判决书/引用校验全部走网关，一次法宝 MCP 都不打")
+    void 平台档法宝全部走网关() throws Exception {
+        when(qichacha.queryEciInfoJson(anyString())).thenReturn(QCC_FULL);
+        when(providerResolver.resolve(ExternalServiceProvider.PKULAW))
+                .thenReturn(ExternalServiceProvider.PLATFORM);
+        stubCaseChannel();
+        props.setCitationServer(CITATION_SERVER);
+        props.setCitationTool("adjust_provisions");
+        stubGatewayRaw(ANHAO_HIT);
+
+        awaitStatus(newService().startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+
+        // op 就是法宝的工具名；端点写死在网关服务端
+        verify(gateway).call(eq("pkulaw"), eq("get_article"), anyMap(), anyInt());
+        verify(gateway).call(eq("pkulaw"), eq("anhao_recognition"), anyMap(), anyInt());
+        verify(gateway).call(eq("pkulaw"), eq("search_case"), anyMap(), anyInt());
+        verify(gateway).call(eq("pkulaw"), eq("adjust_provisions"), anyMap(), anyInt());
+        // 打包态的桌面端没有法宝 token，直连 MCP 只会换回 401 Missing Credentials
+        verify(mcp, never()).callTool(startsWith("pkulaw"), anyString(), anyMap());
+
+        assertEquals(DocInsightEntity.RETRIEVAL_OK, entityOf(DocInsightEntity.KIND_LAW).getRetrievalStatus());
+        assertEquals(DocInsightEntity.RETRIEVAL_OK, entityOf(DocInsightEntity.KIND_CASE).getRetrievalStatus());
+    }
+
+    @Test
+    @DisplayName("平台档网关失败：UNAVAILABLE 且带「下一步」，不当成查无此条文")
+    void 平台档网关失败落不可用() throws Exception {
+        when(qichacha.queryEciInfoJson(anyString())).thenReturn(QCC_FULL);
+        when(providerResolver.resolve(ExternalServiceProvider.PKULAW))
+                .thenReturn(ExternalServiceProvider.PLATFORM);
+        when(gateway.call(eq("pkulaw"), anyString(), anyMap(), anyInt()))
+                .thenThrow(new GatewayException(GatewayException.Kind.NO_CREDITS, "账户 Credits 余额不足"));
+
+        awaitStatus(newService().startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+
+        DocInsightEntity law = entityOf(DocInsightEntity.KIND_LAW);
+        assertEquals(DocInsightEntity.RETRIEVAL_UNAVAILABLE, law.getRetrievalStatus());
+        assertTrue(law.getRetrievalNote().contains("充值"), law.getRetrievalNote());
+    }
+
+    @Test
+    @DisplayName("本机没有该通道凭证：note 说「未配置」，不说「本次不可用」（那是等不来的等待）")
+    void 未配置凭证不说本次不可用() throws Exception {
+        when(qichacha.queryEciInfoJson(anyString())).thenReturn(QCC_FULL);
+        when(mcp.callTool(eq(DocInsightService.PKULAW_SEMANTIC), anyString(), anyMap()))
+                .thenReturn(com.checkba.service.ai.mcp.McpProvider.NO_CREDENTIAL_PREFIX
+                        + DocInsightService.PKULAW_SEMANTIC);
+
+        awaitStatus(svc.startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+
+        DocInsightEntity law = entityOf(DocInsightEntity.KIND_LAW);
+        assertEquals(DocInsightEntity.RETRIEVAL_UNAVAILABLE, law.getRetrievalStatus());
+        assertTrue(law.getRetrievalNote().contains("未配置"), law.getRetrievalNote());
+        assertFalse(law.getRetrievalNote().contains("本次不可用"), law.getRetrievalNote());
+    }
+
+    @Test
+    @DisplayName("上游明确回空 = NOT_FOUND，且按「跑完了」计进摘要（不是检索成功 0 个）")
+    void 未命中算跑完的检索() throws Exception {
+        when(qichacha.queryEciInfoJson(anyString()))
+                .thenThrow(new RuntimeException("未查询到相关企业信息"));
+        when(mcp.callTool(eq(DocInsightService.QICHACHA_MCP_SERVER), anyString(), anyMap()))
+                .thenReturn("Error: Unknown MCP server: qichacha-company");
+        when(mcp.callTool(eq(DocInsightService.PKULAW_SEMANTIC), anyString(), anyMap())).thenReturn("[]");
+
+        DocInsightRun done = awaitStatus(svc.startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+
+        assertEquals(DocInsightEntity.RETRIEVAL_NOT_FOUND, entityOf(DocInsightEntity.KIND_LAW).getRetrievalStatus());
+        assertEquals(DocInsightEntity.RETRIEVAL_NOT_FOUND,
+                entityOf(DocInsightEntity.KIND_COMPANY).getRetrievalStatus());
+        assertTrue(done.getPhase().contains("未命中 2 个"),
+                "未命中必须单列，否则用户读到的是「一次都没查成」：" + done.getPhase());
+        assertFalse(entityOf(DocInsightEntity.KIND_LAW).getRetrievalNote().contains("hi@aiworkdeck.com"),
+                "查无此条文不该指向客服");
+    }
 
     private void stubExternalsOk() {
         when(qichacha.queryEciInfoJson(anyString())).thenReturn(QCC_FULL);

@@ -760,6 +760,32 @@ try {
     await shot('j5-open')
   })
 
+  // dev-board#394：中栏标签常驻，与左栏面板解耦。此前 isTabVisible 是一张按
+  // leftPaneKey 放行的白名单，切到项目概览/插件中心等面板时全部文档标签被
+  // v-show 藏死、编辑区退成「左侧空闲」。断言标签有真实布局盒（display:none
+  // 祖先会让 getClientRects() 为空），而不是只看 leftFiles 里还有没有。
+  const assertTabsStayRendered = async (where) => {
+    const ok = await page.evaluate(() => {
+      const tabs = Array.from(document.querySelectorAll('.tabs-pane-left .tab-item'))
+      if (!tabs.length) return 'no-tab'
+      if (tabs.some((t) => t.getClientRects().length === 0)) return 'hidden'
+      if (document.querySelector('.pane-empty')) return 'pane-empty'
+      return 'ok'
+    })
+    if (ok !== 'ok') throw new Error(`切到「${where}」后中栏标签状态异常: ${ok}`)
+  }
+  await step('切到项目概览、插件中心，中栏标签与文档都不许消失（dev-board#394）', async () => {
+    await mouseClickSel('[title="项目概览"]')
+    await sleep(600)
+    await assertTabsStayRendered('项目概览')
+    await mouseClickSel('[title="插件中心"]')
+    await sleep(600)
+    await assertTabsStayRendered('插件中心')
+    await mouseClickSel('[title="资源管理器"]')
+    await sleep(400)
+    await assertTabsStayRendered('资源管理器')
+  })
+
   // ============ J6 左栏功能区（title 定位图标） ============
   console.log('== J6 左栏功能区 ==')
   // 标题取自 config/leftSidebarPlugins.js 的 label（i18n 键 config.sidebar.*）——

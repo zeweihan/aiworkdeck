@@ -419,6 +419,40 @@ public class XmlToolCallParser {
             java.util.regex.Pattern.compile("[A-Za-z_][A-Za-z0-9_.]*");
 
     /**
+     * 从 start（指向 '[' 或 '{'）起按括号深度扫到配对的闭括号，返回闭括号之后的下标；
+     * 引号内的内容（含转义）不参与计数。找不到配对时返回 -1，由调用方退回旧规则。
+     */
+    static int findJsonLiteralEnd(String code, int start) {
+        int depth = 0;
+        char quote = 0;
+        boolean escaped = false;
+        for (int i = start; i < code.length(); i++) {
+            char c = code.charAt(i);
+            if (quote != 0) {
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == quote) {
+                    quote = 0;
+                }
+                continue;
+            }
+            if (c == '"' || c == '\'') {
+                quote = c;
+            } else if (c == '[' || c == '{') {
+                depth++;
+            } else if (c == ']' || c == '}') {
+                depth--;
+                if (depth == 0) {
+                    return i + 1;
+                }
+            }
+        }
+        return -1;
+    }
+
+    /**
      * 从代码文本中提取字符串参数值。
      * 处理顺序：ctrl46 定界符 → 三引号 → 单/双引号（含转义）→ 无引号值。
      */
@@ -469,6 +503,17 @@ public class XmlToolCallParser {
                     int valueStart = unquotedStart + key.length() + 1;
                     if (valueStart < code.length()) {
                         char firstChar = code.charAt(valueStart);
+                        // 裸 JSON 字面量：key=[{...},{...}] / key={...}（dev-board#393）。
+                        // Kimi K3 会在「带引号转义」与「裸数组」两种写法间随机切换，
+                        // 后者若按下面的标量规则扫到第一个逗号就截断，todo_write 拿到
+                        // 半截 JSON、模型收到「传参格式错误」再试一轮再错一轮。
+                        // 这里按括号深度取到配对的闭括号（字符串内的逗号/括号不算）。
+                        if (firstChar == '[' || firstChar == '{') {
+                            int literalEnd = findJsonLiteralEnd(code, valueStart);
+                            if (literalEnd > valueStart) {
+                                return code.substring(valueStart, literalEnd);
+                            }
+                        }
                         if (firstChar != '"' && firstChar != '\'') {
                             int valueEnd = valueStart;
                             while (valueEnd < code.length()) {

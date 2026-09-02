@@ -76,6 +76,9 @@ jobs:
       - name: Test command registry (加速键归属与 when 求值)
         working-directory: frontend
         run: npm run test:commands
+      - name: Tab visibility contract (dev-board#394)
+        working-directory: frontend
+        run: npm run test:tab-visibility
       - name: Build H5
         working-directory: frontend
         run: npm run build:h5

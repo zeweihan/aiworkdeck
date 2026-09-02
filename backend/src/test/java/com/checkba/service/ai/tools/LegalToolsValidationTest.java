@@ -38,8 +38,10 @@ class LegalToolsValidationTest {
         ExternalProviderResolver externalProviderResolver = mock(ExternalProviderResolver.class);
         PlatformGatewayClient platformGatewayClient = mock(PlatformGatewayClient.class);
         DocumentTextService documentTextService = mock(DocumentTextService.class);
-        tools = new LegalTools(projectFileService, mcpClientService, fileContentExtractorService,
-                externalProviderResolver, platformGatewayClient, documentTextService);
+        tools = new LegalTools(projectFileService,
+                new com.checkba.service.legal.PkulawChannel(
+                        mcpClientService, externalProviderResolver, platformGatewayClient),
+                fileContentExtractorService, documentTextService);
     }
 
     @Test

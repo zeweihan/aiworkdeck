@@ -31,7 +31,10 @@ dev-board#181（后端部分）+ #182。
 - `service/DocumentTextService.extractText(ProjectFile)` — 全文抽取唯一入口（PDF 走 PDFBox3、其余 Tika）。
 - `service/ai/ChatModelFactory.getAuxChatModel()` + `service/ai/AuxModelResolver.auxModelId()` — 辅助模型与记账口径。
 - `service/QichachaService.queryEciInfoJson(searchKey)` — 企查查 REST（平台代采/自备 Key 双档在它内部分）。
-- `service/ai/mcp/McpClientService.callTool(server, tool, args)` — MCP 唯一入口。
+- `service/legal/PkulawChannel.callTool(server, tool, args)` — **法宝检索的双档分发唯一出口**
+  （平台档走官网网关、自备 Key 直连 MCP）。本领域四条法宝通道与 ai-chat 的 `LegalTools` 共用它。
+  **别绕过它直接打 `McpClientService`**——见「已知地雷」第 1 条。
+- `service/ai/mcp/McpClientService.callTool(server, tool, args)` — MCP 唯一入口（本领域只剩企查查模糊搜索走它）。
 - `service/evidence/EvidenceChecks` — `usccValid` / `usccPattern()` / `compact` / `stripOrgSuffix`。
   **这四个是本次为复用而放开的**（`usccPattern()` 与 `stripOrgSuffix` 是新增、`compact` 由包私有改公有），
   代码形状与后缀表全仓只此一份，别抄第二份出去。
@@ -49,16 +52,22 @@ dev-board#181（后端部分）+ #182。
 `doc_insight_entity.retrieval_json` 里除检索结果外还可能有两个**并列**字段（法宝升级件补的，与 `result` 无关、检索没命中时可能是仅有的内容）：
 LAW 的 `authoritative`（权威条文原文）、CASE 的 `recognition`（案号识别结果）。
 
-**`retrieval_status` 四态的语义分工（最容易写错的一处）**
+**`retrieval_status` 五态的语义分工（最容易写错的一处）**
 | 值 | 含义 | 典型来源 |
 |---|---|---|
 | PENDING | 还没轮到它 | 实体刚落库 |
 | OK | 拿到结果 | 上游 200 |
-| **UNAVAILABLE** | **通道不可用**——不是「查无此项」 | 法宝点数耗尽（401，2026-08-27 已续）、案例通道未配置、`GatewayException` |
-| ERROR | 打了但失败 / 确实查无 | 企查查两条路都没查到 |
+| **NOT_FOUND** | **查完了，上游明确说没有**——一次成功的检索 | 企查查两条路都没查到、网关回「【有效请求】查询无结果」、法宝回空数组 |
+| **UNAVAILABLE** | **通道不可用**——不是「查无此项」 | 本机没凭证、法宝点数耗尽（401）、案例通道未配置、`GatewayException`（NOT_FOUND 那一类除外） |
+| ERROR | 打了但失败（异常、形状不认得） | 企查查全称重打时抛的非网关异常 |
 
-UNAVAILABLE 与 ERROR **必须**写 `retrieval_note`（可读中文）。窗格里显示「法宝检索本次不可用：账号点数耗尽」远好过一个空白格子——
-这条正是本领域最常发生的状态（见「已知地雷」第 1 条）。
+后三态**必须**写 `retrieval_note`（可读中文）。窗格里显示「法规检索本次不可用：账号点数耗尽」远好过一个空白格子。
+
+**NOT_FOUND 与 UNAVAILABLE 分开是硬要求**（dev-board#395）：用户的下一步完全不同——
+前者是「文档里这家公司/这个条号可能写错了」，后者是「过一会儿再试 / 去查账」。
+把「查无此企业」混进 UNAVAILABLE，窗格就会对着一家文中虚构的公司摆一句
+「请稍后重试；若持续失败请联系 hi@aiworkdeck.com」。**NOT_FOUND 的 note 里绝不许出现客服/重试字样**。
+摘要也据此分开数：「检索成功 N 个，未命中 M 个」——把未命中并进「检索成功 0 个」读起来就是「一次都没查成」。
 
 ## 管线阶段
 
@@ -85,6 +94,10 @@ startParse（同步）：写权限 → 文件校验 → 单飞闸 → 落 RUNNIN
 - CASE：案号（全角括号转半角 + 去空白）；没案号时用标题。
 
 **检索路由**
+法宝那三行（LAW / CASE / 引用校验）**一律经 `PkulawChannel`**：平台档下 op = 法宝工具名、
+service = `pkulaw`，端点写死在官网网关；自备 Key 档才落到 `McpClientService`。
+企查查模糊搜索是唯一还直连 MCP 的一条（网关目前没有对应 op，见「已知地雷」第 1 条）。
+
 | kind | 通道 | 备注 |
 |---|---|---|
 | COMPANY | `QichachaService.queryEciInfoJson` → 查不到再 `qichacha-company` MCP 的 `get_company_by_query` 模糊搜索拿全称 → 用全称重打 REST | REST 只认工商全称，非全称回 Status 201 无结果；MCP 那把是**另一套凭证** |
@@ -211,8 +224,30 @@ USCC_INVALID 的 detail 形状不同（没有 claims）：
 
 ## 已知地雷
 
-1. **法宝点数已于 2026-08-27 恢复**（新 token 在 `backend/.env` 的 `PKULAW_TOKEN`，法宝 MCP 控制台 mcp.pkulaw.com；**全部 10 个 server 当天逐一 `tools/call` 实测有真数据**，完整清单与工具面见 application.yml mcp.servers 注释与 EXTERNAL_SERVICES.md 法宝行）。管线当前用其中六个：semantic / keyword / case-semantic / qichacha，外加 **2026-08-27 接入的两个升级件**——`pkulaw-case-number` 的 `anhao_recognition(text)`（CASE 检索先导步，见检索路由表 CASE 行）与 `pkulaw-citation-validator` 的 `adjust_provisions`（法条引用校验，见专节）。仍未接的：`pkulaw-doc-link` 能为整段文本加法宝超链接；`pkulaw-fatiao` 的 `get_law_item_content` 是按数字条号取法条的另一条路。接入时按 InsightProperties 的配置化先例来。若再见 `tools/call` 401「checking remaining points」= 点数又耗尽，是账务问题不是回归：LAW/CASE 实体一律 UNAVAILABLE + note 带上游原话，先查点数不要改代码。
-   同理 `QICHACHA_MCP_TOKEN` 缺省时企业模糊搜索静默降级为「只认工商全称」——不报错，只是简称查不到。
+1. **桌面端上法宝凭证不在用户机器上，必须走平台网关**（dev-board#395 的病灶）。
+   `PKULAW_TOKEN` / 系统设置 `external.pkulaw.token` 只在开发机与自建部署上有；打包发出去的桌面端两个都是空的。
+   直连 MCP 的后果是发一个 `Authorization: Bearer `（空 token）出去，换回
+   `Error calling MCP server (401) 900902 Missing Credentials`——**看起来像上游故障，其实是这台机器根本没凭证**。
+   所以：**本领域所有法宝调用一律经 `service/legal/PkulawChannel`**（平台档 → 官网
+   `POST /api/gateway/pkulaw/{工具名}`；自备 Key 档 → `McpClientService`）。新接法宝通道照此办理，别再写 `mcpClientService.callTool`。
+   兜底在传输层：`StreamableHttpMcpProvider` 见到空 token **一个字节都不发**，返回
+   `McpProvider.NO_CREDENTIAL_PREFIX`（"Error: MCP server has no credential: <name>"），
+   窗格据此写「本机未配置该检索通道的凭证」而不是「本次不可用」。
+   **网关侧接受的 pkulaw op 是白名单**（官网仓 `1-1 aiworkdeckweb` 的 `lib/gateway/adapters/pkulaw.ts` 的 `OPS`）。
+   已部署的四个：`search_article` / `get_article` / `get_law_list` / `law_recognition`——
+   本领域的 LAW 检索（`get_article` / `get_law_list`）落在里面，开箱即用。
+   **还没进白名单的三个**：`search_case`（`mcp-case-search-service`）、
+   `anhao_recognition`（`case_number_recognition`）、`adjust_provisions`（`pku_citation_validator`）——
+   官网加上那三行之前，平台档下这三步会拿到网关的 `BAD_REQUEST` 并落 UNAVAILABLE（不连坐其余实体）。
+   加新法宝工具**必须同时改那张表**，客户端编不出 op 来。
+   企查查模糊搜索（`get_company_by_query`）**网关没有对应 op，仍直连 MCP**：
+   `QICHACHA_MCP_TOKEN` 缺省时它静默降级为「只认工商全称」——不报错，只是简称查不到（打包态的常态）。
+   法宝 token 本身（`backend/.env` 的 `PKULAW_TOKEN`，控制台 mcp.pkulaw.com）2026-08-27 已续，
+   **全部 10 个 server 当天逐一 `tools/call` 实测有真数据**，完整清单与工具面见 application.yml mcp.servers 注释与 EXTERNAL_SERVICES.md 法宝行。
+   管线当前用其中六个：semantic / keyword / case-semantic / case-number / citation-validator / qichacha。
+   仍未接的：`pkulaw-doc-link` 能为整段文本加法宝超链接；`pkulaw-fatiao` 的 `get_law_item_content` 是按数字条号取法条的另一条路。接入时按 InsightProperties 的配置化先例来。
+   **「点数耗尽」不是桌面端的失败模式**：若在开发机/自建部署上见 `tools/call` 401「checking remaining points」才是点数问题，
+   是账务不是回归——LAW/CASE 一律 UNAVAILABLE + note 带上游原话，先查点数不要改代码。
 2. **`PlatformAiUserScope` 不跟随线程池**。管线跑在自己的池里，`startParse` 提交时必须
    `PlatformAiUserScope.run(userId, …)` 包住**整段**（不只是模型调用那一行）；`refreshEntity` 在控制器线程上跑，同样要包。
    漏了的表现是云多租户下抛「本次 AI 调用未携带用户身份」——一个与真实原因毫无关系的提示。
@@ -276,7 +311,9 @@ USCC_INVALID 的 detail 形状不同（没有 claims）：
 - **工具栏「解析」对已经解析过的文档不重跑**（一次解析 = 一次 LLM + 一串外部库调用），只把面板开出来；`status==='FAILED'` 那次不算结论，照样重跑。面板里的「重新解析」是用户明示的，force 重跑。
 - `parseRequest` **必须带 fileId**：面板是 v-if 挂载的，点完解析才挂出来（watch 看不到变化，所以 mounted 也认一次）；不带 fileId 会让「在 A 文档点过解析、随后切到 B 开面板」把 B 也解析掉。
 - 列表瘦身的另一半在前端：`detail` 展开时才 `GET /entities/{id}` 并缓存在组件里；`hasDetail:false` 的一次都不打。
-- UNAVAILABLE / ERROR 的 `retrievalNote` **必须显示**（`.ip-note`），旁边给「重试」（`POST /entities/{id}/refresh`，要写权限）。
+- NOT_FOUND / UNAVAILABLE / ERROR 的 `retrievalNote` **必须显示**（`.ip-note`），旁边给「重试」（`POST /entities/{id}/refresh`，要写权限）。
+  NOT_FOUND 用**中性灰**（`.ip-dot.st-NOT_FOUND` / `.ip-note.st-NOT_FOUND`），不用告警色：
+  文档里写了一家不存在的公司，是文档的问题，不是我们的故障。
 - 两类引用发现（CITATION_*）在一致性 tab 里只列不改：`fixSuggestions` 看的是 `detail.claims`，引用 detail 没有这一段，天然落不到「修改建议」那一支；点条目仍按 `detail.quote` 定位。CITATION_MISMATCH 的「引用条文」是折叠段（`citedOpen`）。
 - 法宝外链（权威条文 / 案号识别 / 引用候选）走 `@open-url` → 宿主 `openBrowserTab`（与 MarketDetailPane 同一条既有事件），**面板自己不 `window.open`**：桌面端要走内置浏览器面板。
 - 视觉：浅色 + `--awd-panel-*` 密度令牌；**面板不自画标题**（左栏由外壳 `.sidebar-header` 出、右栏由 dock tab 出）。
@@ -285,7 +322,7 @@ USCC_INVALID 的 detail 形状不同（没有 claims）：
 ### 前端验证
 
 ```
-cd frontend && npm run test:insight        # 83 条（纯函数 58 + 组件级 25）
+cd frontend && npm run test:insight        # 84 条（纯函数 58 + 组件级 26）
 cd frontend && npm run test:panel-dock     # 注册表自洽 + 停靠回落
 cd frontend && npm run check:emits && npm run check:nav && npm run check:locales
 cd frontend && npm run build:h5 && npm run build:zetaoffice   # 改 editor-main.js 后必须重建 glue
@@ -300,14 +337,17 @@ cd frontend && npm run build:h5 && npm run build:zetaoffice   # 改 editor-main.
 ## 验证
 
 ```
-cd backend && mvn test -Dtest='DocInsight*,LawArticle*'   # 58 条
+cd backend && mvn test -Dtest='DocInsight*,LawArticle*'   # 62 条
+cd backend && mvn test -Dtest='*Mcp*Test'                 # 含 StreamableHttpMcpProviderCredentialTest（空凭证不发请求）
 cd backend && mvn clean test                      # 全量（跨类常量内联，验证阶段一律 clean）
 ```
 - `DocInsightChecksTest`（19）：数字归一（千分位/万/亿）、同主体命中、不同主体与不同基准单位不误报、
   后缀剥离等价、USCC 校验位与去重、**fixable 三条降级分支**、空输入。
 - `LawArticleNumbersTest`（7）：十/百/千组合与「零」、`之N`、已是阿拉伯数字（含全角）、
   **转不动一律 null**、引文剥引用字样取内容线索。
-- `DocInsightServiceTest`（26）：RUNNING 中间态（CountDownLatch）、单飞、企查查降级链、网关失败落 UNAVAILABLE、
+- `DocInsightServiceTest`（30）：RUNNING 中间态（CountDownLatch）、单飞、企查查降级链、网关失败落 UNAVAILABLE、
+  **平台档法宝四条通道全部走网关且一次法宝 MCP 都不打 / 网关失败仍 UNAVAILABLE / 本机没凭证说「未配置」不说「本次不可用」/
+  上游明确回空 = NOT_FOUND 且按「跑完了」计进摘要**、
   法宝不可用不连坐、案例通道从「未配置」到「配上就接入」、**案号识别命中改用标题检索 / 识别失败静默走原路 /
   识别命中但全文失败仍 OK**、**引用校验三种判定 + 通道未配置整步跳过 + 通道报错不报发现 + 上限 30**、
   7 天缓存与 refresh 绕过、列表瘦身/发现不瘦身、

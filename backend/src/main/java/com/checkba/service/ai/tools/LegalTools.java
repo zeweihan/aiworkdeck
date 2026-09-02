@@ -1,8 +1,6 @@
 package com.checkba.service.ai.tools;
 
 import com.checkba.service.ProjectFileService;
-import com.checkba.service.ai.mcp.McpClientService;
-import com.checkba.service.ai.mcp.McpResponseParser;
 import com.checkba.model.entity.ProjectFile;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
@@ -25,14 +23,9 @@ import java.util.Map;
 @Slf4j
 public class LegalTools implements AgentToolComponent {
 
-    /** 法宝的三个 MCP server 都配了 60 秒超时，网关这条要留出同样的余量。 */
-    private static final int PKULAW_TIMEOUT_SECONDS = 60;
-
     private final ProjectFileService projectFileService;
-    private final McpClientService mcpClientService;
+    private final com.checkba.service.legal.PkulawChannel pkulawChannel;
     private final com.checkba.service.ai.context.FileContentExtractorService fileContentExtractorService;
-    private final com.checkba.service.platform.ExternalProviderResolver externalProviderResolver;
-    private final com.checkba.service.platform.PlatformGatewayClient platformGatewayClient;
     private final com.checkba.service.DocumentTextService documentTextService;
 
     // --- File Operations ---
@@ -89,8 +82,9 @@ public class LegalTools implements AgentToolComponent {
             }
 
             if (!StringUtils.hasText(result)) {
-                return "Warning: no text extracted from '" + name + "' — the file may be a scanned image "
-                        + "or empty; try extract_file_text, or read_file with OCR for image PDFs.";
+                return "Warning: no text extracted from '" + name + "' — the file may be empty, or an image "
+                        + "whose OCR recognised nothing (images and scanned PDFs are OCR'd automatically here); "
+                        + "you can also try extract_file_text with its database file ID.";
             }
             // 上限与 extract_file_text 同源：不截断的话，一份几 MB 的合同会变成一条几十万
             // 字符的工具结果，下一轮必然上下文超限，且它落在 compactor 尾区剪不掉 = 整轮死
@@ -164,29 +158,16 @@ public class LegalTools implements AgentToolComponent {
     }
 
     /**
-     * 法宝检索的双档分发。
-     *
-     * <p>平台档下 MCP 客户端拿不到 token（token 是订阅主体的，我们不会下发给每台机器），
-     * 所以走网关：官网持 token 打同一个 MCP 端点，把 JSON-RPC 响应正文原样带回来。
-     * <b>解析仍用 {@link McpResponseParser}</b>——两档共用一个解析器，
-     * 法宝改格式只会改一处；在网关侧解析等于把这份格式知识抄成两份。
+     * 法宝检索的双档分发，分发本身在
+     * {@link com.checkba.service.legal.PkulawChannel}（依据窗格与本工具共用，dev-board#395）。
      *
      * <p>网关失败<b>不抛异常打断整轮对话</b>：这是给模型看的文本，
      * 说清楚发生了什么、下一步是什么，让它基于已有信息继续——
      * 与「未配置」那条既有分支同一口径（licensing-billing 地雷 27）。
      */
     private String callPkulaw(String server, String tool, Map<String, Object> args) {
-        if (externalProviderResolver.resolve(
-                com.checkba.service.platform.ExternalServiceProvider.PKULAW)
-                != com.checkba.service.platform.ExternalServiceProvider.PLATFORM) {
-            return mcpClientService.callTool(server, tool, args);
-        }
         try {
-            // 网关的 op 就是法宝的工具名；MCP 端点写死在服务端，客户端点不了别处
-            com.checkba.service.platform.PlatformGatewayClient.Result result =
-                    platformGatewayClient.call("pkulaw", tool, Map.of("args", args),
-                            PKULAW_TIMEOUT_SECONDS);
-            return McpResponseParser.parse(result.data().path("raw").asText(""));
+            return pkulawChannel.callTool(server, tool, args);
         } catch (com.checkba.service.platform.GatewayException e) {
             log.warn("平台法规检索失败 kind={}: {}", e.getKind(), e.getMessage());
             return "法规检索本次不可用：" + e.getMessage() + e.userHint()
