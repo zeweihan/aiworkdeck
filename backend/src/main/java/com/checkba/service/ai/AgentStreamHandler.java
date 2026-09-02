@@ -1,7 +1,6 @@
 package com.checkba.service.ai;
 
 import dev.langchain4j.model.output.Response;
-import dev.langchain4j.model.StreamingResponseHandler;
 import dev.langchain4j.data.message.AiMessage;
 
 import java.util.UUID;
@@ -10,7 +9,7 @@ import java.util.UUID;
  * 负责将 LLM 的流式回调转换为前端 SSE 协议事件。
  * 并收集最终完整的回复用于存储和计费。
  */
-public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
+public class AgentStreamHandler implements ReasoningStreamingHandler {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AgentStreamHandler.class);
 
@@ -38,7 +37,12 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
             new java.util.concurrent.atomic.AtomicBoolean(false);
     // 是否已有 token 流出（重试决策依据：零 token 的失败轮可安全重放，不会给用户看重复内容）
     private volatile boolean streamedAnyToken = false;
-    // 最近一次流活动时间（onNext 刷新），看门狗据此判定"流停滞"
+    // 是否已有思考增量流出（思考型模型）。刻意与 streamedAnyToken 分开：
+    //  - 看门狗选时限时两者任一为真都算「流已开始」，改用停滞时限（思考几分钟是正常的）；
+    //  - 编排器判「可安全重放」仍只看 streamedAnyToken——思考文本重放一遍用户只是再看一次
+    //    思考卡，正文重放才会出现重复内容。
+    private volatile boolean streamedAnyReasoning = false;
+    // 最近一次流活动时间（onNext / onReasoning / onKeepAlive 刷新），看门狗据此判定"流停滞"
     private volatile long lastActivityNanos = System.nanoTime();
     private volatile java.util.concurrent.ScheduledFuture<?> watchdogFuture;
 
@@ -75,7 +79,7 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
         watchdogFuture = WATCHDOG.scheduleWithFixedDelay(() -> {
             if (terminated.get()) return;
             long idleSec = (System.nanoTime() - lastActivityNanos) / 1_000_000_000L;
-            boolean started = streamedAnyToken;
+            boolean started = streamedAnyToken || streamedAnyReasoning;
             int limitSec = started ? inactivitySeconds : firstTokenSeconds;
             if (idleSec >= limitSec) {
                 log.warn("Stream {} for {}s (limit {}s) for {}, terminating round via watchdog",
@@ -138,6 +142,32 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
         }
     }
     
+    /**
+     * 思考增量（dev-board#364）：原样转发成 SSE {@code reasoning_delta}，前端实时渲染进思考卡。
+     *
+     * <p>刻意不进 {@link #fullContentBuilder}、不进编辑器流、不过标签解析：思考文本不是模型正文，
+     * 不落库、不回喂模型（契约 D：模型只看 content），也不该被写进文档。
+     */
+    @Override
+    public void onReasoning(String reasoningDelta) {
+        if (terminated.get() || reasoningDelta == null || reasoningDelta.isEmpty()) return;
+        lastActivityNanos = System.nanoTime();
+        streamedAnyReasoning = true;
+        sseEmitterService.send(conversationId, "reasoning_delta",
+                "{\"content\":\"" + escapeJson(reasoningDelta) + "\"}");
+    }
+
+    /** 传输层保活注释：只刷新看门狗，不产生任何事件。 */
+    @Override
+    public void onKeepAlive() {
+        if (terminated.get()) return;
+        lastActivityNanos = System.nanoTime();
+    }
+
+    public boolean hasStreamedReasoning() {
+        return streamedAnyReasoning;
+    }
+
     // ==================== Editor Stream Filtering Logic（过滤后实时写入编辑器文档；SSE 事件名双轨 doc_stream_data/wps_stream_data，见 AgentOrchestrator） ====================
     
     // Buffer for editor stream parser to handle split tags

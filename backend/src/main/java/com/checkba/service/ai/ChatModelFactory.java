@@ -330,7 +330,7 @@ public class ChatModelFactory {
                     .baseUrl(baseUrl)
                     .modelName(modelId)
                     .timeout(config.getTimeout())
-                    // logRequests 必须为 false，理由见 streamingBuilder 的 javadoc（请求体物化）
+                    // logRequests 必须为 false，理由见 streamingModel 的 javadoc（请求体物化）
                     .logRequests(false)
                     .logResponses(true)
                     // Custom Headers for OpenRouter
@@ -426,7 +426,7 @@ public class ChatModelFactory {
                     .baseUrl(config.getBaseUrl())
                     .modelName(modelId)
                     .timeout(config.getTimeout())
-                    // logRequests 必须为 false，理由见 streamingBuilder 的 javadoc（请求体物化）
+                    // logRequests 必须为 false，理由见 streamingModel 的 javadoc（请求体物化）
                     .logRequests(false)
                     .logResponses(true)
                     .build();
@@ -434,44 +434,25 @@ public class ChatModelFactory {
     }
 
     /**
-     * 两个流式通道（平台通道 / OpenRouter BYOK）共用的构建口径。
+     * 两个流式通道（平台通道 / OpenRouter BYOK）共用的构建口径：自有的
+     * {@link OpenRouterStreamingChatModel}，不再是 langchain4j 0.36 的 OpenAiStreamingChatModel。
+     * 换实现的原因（思考增量被 openai4j 的 Delta 丢掉、保活注释被吞）写在那个类的 javadoc 里，
+     * dev-board#364。
      *
-     * <p><b>logResponses 必须为 false，这是可靠性契约不是调优。</b>openai4j 0.23 的
-     * {@code StreamingRequestExecutor$2.onFailure} 在该开关打开时，会先对 response 调
-     * {@code ResponseLoggingInterceptor.log(...)}，之后才走 errorHandler；而 okhttp-sse 的
-     * {@code RealEventSource.onFailure(call, e)} 在「连接失败/被断、压根没拿到响应」这条路径上
-     * 传的 response <b>恒为 null</b>，于是 log() 里的 {@code response.code()} 抛 NPE，
-     * 而 onFailure 只 catch IOException —— 异常掀掉 OkHttp Dispatcher 线程，
-     * <b>紧随其后的 errorHandler 那一行永远走不到</b>。
-     * 表现是本轮既不 onComplete 也不 onError：传输层错误被整条吞掉，
-     * 只能等 {@link AgentStreamHandler} 的看门狗兜底（AGENT 模式下用户干等三分钟）。
-     * 关掉后 onFailure 直接走 errorHandler，错误正常传到编排器的分类重试（IOException → TRANSIENT）。
-     *
-     * <p>顺带一提这两行 DEBUG 日志本来也没人看：全仓没有任何 logging 级别配置，
-     * {@code dev.ai4j.openai4j} 停在 Spring 默认的 INFO，一行都不会打印；
-     * 但 slf4j 的参数是提前求值的，所以 NPE 照抛。
-     *
-     * <p>非流式的 {@code OpenAiChatModel} 走 SyncRequestExecutor，没有这条路径，故不受影响。
-     *
-     * <p><b>logRequests 也必须为 false（2026-08-29，随图片多模态一起改的）。</b>
-     * openai4j 0.23 的 {@code RequestLoggingInterceptor.logDebug} 在把参数交给
-     * {@code Logger.debug} <b>之前</b>先执行 {@code getBody(request)}（字节码实证：
-     * {@code invokestatic getBody} 在 {@code invokeinterface Logger.debug} 之前），
-     * 而这个版本的 getBody <b>不截断 base64</b>（截断是 1.x 之后才加的）。
-     * 也就是说日志级别停在 INFO 一行都不打印，却每次请求都把整个请求体物化成一个 String。
-     * 纯文本时代这只是浪费；接上视觉后一张 5MB 的图 base64 后约 6.7MB，
-     * 一轮工具循环最多 30 轮，等于每次对话白造几百 MB 的一次性字符串垃圾。
-     * 同理由三处构建口径（本方法 + 两个非流式 OpenAiChatModel）一起关掉。
+     * <p>历史地雷备忘（仍适用于下面两个<b>非流式</b> {@code OpenAiChatModel}）：
+     * <b>logRequests 必须为 false</b>（2026-08-29，随图片多模态一起改的）——openai4j 0.23 的
+     * {@code RequestLoggingInterceptor.logDebug} 在把参数交给 {@code Logger.debug} <b>之前</b>
+     * 先执行 {@code getBody(request)}（字节码实证），且这个版本不截断 base64。日志级别停在 INFO
+     * 一行都不打印，却每次请求都把整个请求体物化成一个 String；一张 5MB 的图 base64 后约 6.7MB，
+     * 一轮工具循环最多 30 轮。
+     * 旧的流式通道还有一条 <b>logResponses 必须为 false</b> 的地雷（{@code StreamingRequestExecutor$2.onFailure}
+     * 在 response==null 时先调 {@code ResponseLoggingInterceptor.log} 抛 NPE，errorHandler 永远走不到，
+     * 传输层错误被整条吞掉只能等看门狗）——自有实现持有 HTTP 层后这条路径不存在了，
+     * 但 {@code StreamingTransportFailureTest} 仍守着「连不上必须回调 onError」这条契约。
      */
-    static dev.langchain4j.model.openai.OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder
-            streamingBuilder(String apiKey, String baseUrl, String modelId, java.time.Duration timeout) {
-        return dev.langchain4j.model.openai.OpenAiStreamingChatModel.builder()
-                .apiKey(apiKey)
-                .baseUrl(baseUrl)
-                .modelName(modelId)
-                .timeout(timeout)
-                .logRequests(false)
-                .logResponses(false);
+    static dev.langchain4j.model.chat.StreamingChatLanguageModel
+            streamingModel(String apiKey, String baseUrl, String modelId, java.time.Duration timeout) {
+        return new OpenRouterStreamingChatModel(apiKey, baseUrl, modelId, timeout);
     }
 
     private dev.langchain4j.model.chat.StreamingChatLanguageModel getOrCreatePlatformStreamingModel(String modelId) {
@@ -481,8 +462,7 @@ public class ChatModelFactory {
         return streamingModelCache.computeIfAbsent(cacheKey, k -> {
             log.info("Creating new AWD Cloud StreamingChatModel for: {}", modelId);
             AiModelProperties.OpenRouter config = aiModelProperties.getOpenRouter();
-            return streamingBuilder(apiKey, config.getBaseUrl(), modelId, config.getTimeout())
-                    .build();
+            return streamingModel(apiKey, config.getBaseUrl(), modelId, config.getTimeout());
         });
     }
 
@@ -526,12 +506,7 @@ public class ChatModelFactory {
             String apiKey = resolveOpenRouterApiKey();
             String baseUrl = resolveOpenRouterBaseUrl();
             
-            return streamingBuilder(apiKey, baseUrl, modelId, config.getTimeout())
-                    // .defaultRequestProperties(Map.of(
-                    //         "HTTP-Referer", "https://checkba.com",
-                    //         "X-Title", "Checkba AI WorkDeck"
-                    // ))
-                    .build();
+            return streamingModel(apiKey, baseUrl, modelId, config.getTimeout());
         });
     }
 

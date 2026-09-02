@@ -28,6 +28,11 @@ export function useAgentStream() {
     const bubbles = ref([])
     const isConnected = ref(false)
     const isStreaming = ref(false)
+    // SSE 链路状态（dev-board#364）：'live' = 连接活着（心跳在跳，等模型是正常的）；
+    // 'reconnecting' = 心跳超时/流断了，正在退避重连（attempt 是第几次）。
+    // 之前断线重连只写 console.warn，用户看到的是计时器一直走、什么都不发生——
+    // 分不清「模型在想」和「连接死了」。这个状态给输入区一条明确的提示条。
+    const linkStatus = ref({ state: 'live', attempt: 0 })
     const error = ref(null)
     const currentConversationId = ref(null)
     // STATE: Token Usage Tracking (Session Cumulative)
@@ -115,6 +120,7 @@ export function useAgentStream() {
         if (!currentConversationId.value) return
         const delay = Math.min(30000, 1000 * Math.pow(2, reconnectAttempts))
         reconnectAttempts++
+        linkStatus.value = { state: 'reconnecting', attempt: reconnectAttempts }
         console.warn(`[AgentStream] SSE 断开（${reason}），${delay}ms 后自动重连（第 ${reconnectAttempts} 次）`)
         reconnectTimer = setTimeout(async () => {
             reconnectTimer = null
@@ -202,6 +208,7 @@ export function useAgentStream() {
         // Reset connection states
         isConnected.value = false
         isStreaming.value = false
+        linkStatus.value = { state: 'live', attempt: 0 }
         // Reset parser state
         resetParser()
         // Reset event parser state
@@ -360,6 +367,7 @@ export function useAgentStream() {
 
                 isConnected.value = true
                 reconnectAttempts = 0
+                linkStatus.value = { state: 'live', attempt: 0 }
                 lastSseActivityAt = Date.now()
                 startHeartbeatMonitor()
                 // 网络恢复/回前台时经模块级单例回调触发本实例重连
@@ -831,7 +839,17 @@ export function useAgentStream() {
             return
         }
 
-        if (evt === 'text_delta') {
+        if (evt === 'reasoning_delta') {
+            // 思考型模型的 reasoning 增量（dev-board#364）：后端按 OpenRouter 的 delta.reasoning
+            // 原样转发，这里直接写进思考卡，**不过标签解析器**——思考文本不是协议正文，
+            // 里面出现 <final>/<tool_code> 字样只是模型在自言自语，不能当成标签处理。
+            try {
+                const d = JSON.parse(dataStr)
+                appendReasoning(d.content || '')
+            } catch (e) {
+                appendReasoning(dataStr)
+            }
+        } else if (evt === 'text_delta') {
             try {
                 const d = JSON.parse(dataStr)
                 // 调试日志：显示 text_delta 内容
@@ -1149,6 +1167,30 @@ export function useAgentStream() {
         }
     }
 
+    // 思考增量的落点与 <thinking> 标签同一套：还没有过程卡时写顶层思考卡（ghost 态实时
+    // 滚动显示），已经有工具过程后（多轮工具循环中间的再思考）挂到最后一个过程卡的
+    // 思考条目上——与 flushContent 的 thinking 分支同口径，否则第二轮起的思考会被
+    // 记到首轮的顶层卡上、把首轮的时长越算越长。
+    const appendReasoning = (text) => {
+        const bubble = currentAssistantBubble.value
+        if (!bubble || !text) return
+        if (bubble.processes.length > 0) {
+            const lastProc = bubble.processes[bubble.processes.length - 1]
+            const lastItem = lastProc.items.length > 0 ? lastProc.items[lastProc.items.length - 1] : null
+            if (!lastItem || lastItem.type !== 'thinking' || lastItem.status === 'done') {
+                lastProc.items.push({ type: 'thinking', status: 'thinking', content: text, startTime: Date.now(), fromReasoning: true })
+            } else {
+                lastItem.content += text
+            }
+            return
+        }
+        if (bubble.thinking.status !== 'thinking') {
+            bubble.thinking.status = 'thinking'
+            if (!bubble.thinking.startTime) bubble.thinking.startTime = Date.now()
+        }
+        bubble.thinking.content += text
+    }
+
     const flushContent = (text) => {
         const bubble = currentAssistantBubble.value
         if (!bubble || !text) return
@@ -1272,6 +1314,18 @@ export function useAgentStream() {
             th.status = 'done'
             th.endTime = Date.now()
             th.duration = th.startTime ? (th.endTime - th.startTime) / 1000 : 0
+        }
+        // reasoning_delta 在过程卡里建的思考条目没有 </thinking> 来收尾：正文/下一个标签
+        // 一到就算想完了，否则那张过程卡会一直显示「运行中」到整轮结束
+        const procs = bubble && bubble.processes
+        if (procs && procs.length > 0) {
+            const items = procs[procs.length - 1].items || []
+            const last = items[items.length - 1]
+            if (last && last.type === 'thinking' && last.status === 'thinking' && last.fromReasoning) {
+                last.status = 'done'
+                last.endTime = Date.now()
+                last.duration = last.startTime ? (last.endTime - last.startTime) / 1000 : 0
+            }
         }
     }
 
@@ -1654,6 +1708,8 @@ export function useAgentStream() {
         agentPaused,
         agentRunStatus,
         agentAwaitingInput,
+        // SSE 链路状态：'live' / 'reconnecting'（含第几次），输入区据此显示断连提示条
+        linkStatus,
         // 本轮生效的 Skill 与「刚自动加载了一个技能」的轻提示
         activeSkills,
         skillNotice,
