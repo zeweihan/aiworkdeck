@@ -1565,7 +1565,9 @@ public class AgentOrchestrator {
      * 放宽只影响 SSE 载荷大小，不进上下文、不影响 token 与计费。
      */
     private static final Set<String> RESULT_HEAVY_TOOLS =
-            Set.of("dispatch_subtask", "extract_file_text", "pdf_inspect");
+            Set.of("dispatch_subtask", "extract_file_text", "pdf_inspect",
+                    // 结构审计报告本身就是给用户核对的成果（编号/引用/算术/修订清单），砍到 4000 用户看不到后半
+                    "doc_audit_structure");
 
     /** 该工具的面板展示上限。前端截断提示按 {@code ...(截断)} 后缀判定，不要在文案里写死字数。 */
     static int toolOutputDisplayLimit(String toolName) {

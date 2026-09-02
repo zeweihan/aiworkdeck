@@ -141,10 +141,20 @@
     ],
     "expect": {
       "toolCalls": [],
-      "structureContains": ["<final>"],
+      "structureContains": [
+        "<final>"
+      ],
       "bubbleEndStatus": "finished",
-      "offeredToolsInclude": ["todo_write", "dispatch_subtask", "law_search"],
-      "offeredToolsExclude": ["pptx_generate", "doc_open_file", "run_python"]
+      "offeredToolsInclude": [
+        "todo_write",
+        "dispatch_subtask",
+        "law_search"
+      ],
+      "offeredToolsExclude": [
+        "pptx_generate",
+        "doc_open_file",
+        "run_python"
+      ]
     }
   },
   {
@@ -170,6 +180,66 @@
         "pptx_generate",
         "write_docx",
         "search_web"
+      ]
+    }
+  },
+  {
+    "id": "skill-contract-review-audit-and-comment-tools-visible",
+    "title": "合同审查 Skill 命中：结构审计与批注/修订工具都在可见集里，法律检索保留，PPT/Python 裁掉（dev-board#375）",
+    "category": "skill",
+    "protocol": "xml",
+    "userInput": "站在发行人立场帮我审查这份股份认购合约，问题以修订和批注落到文档里。",
+    "turns": [
+      {
+        "text": "<process name=\"识别条款结构\"><tool_code>doc_get_clauses()</tool_code></process>"
+      },
+      {
+        "text": "<process name=\"结构审计\"><tool_code>doc_audit_structure()</tool_code></process>"
+      },
+      {
+        "text": "<final>本次审查以发行人立场、台湾法为假设。1. 法律用语与法源：序文 B「私募」应改「洽特定人」（已修订，公司法 266/267/268 条）…… 4. 数字、币种与空白：序文 C 940,670 万元单位差 10 倍（仅批注，14,039,850 × 67 = 940,669,950 元）。</final>"
+      }
+    ],
+    "toolStubs": {
+      "doc_get_clauses": "{\"success\":true,\"clauseCount\":23,\"granularity\":\"第X条\",\"clauses\":[{\"no\":\"第一條\",\"startParagraph\":12,\"endParagraph\":18}]}",
+      "doc_audit_structure": "# 结构审计报告\n段落总数：312\n## 1. 字形\n主体字形：繁體中文\n## 2. 条款编号\n编号异常：\n- [段 201] 第9条之后直接是第11条，中间缺 1 条\n## 5. 金额与数量\n- [段 9] 14,039,850股 × 每股 67 = 940,669,950 元，但文中写的是「940,670 萬元」，差 10 倍"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "doc_get_clauses"
+        },
+        {
+          "name": "doc_audit_structure"
+        }
+      ],
+      "structureContains": [
+        "<process",
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished",
+      "offeredToolsInclude": [
+        "doc_audit_structure",
+        "doc_get_clauses",
+        "doc_get_document_text",
+        "doc_list_revisions",
+        "doc_get_comments",
+        "doc_find_text",
+        "doc_replace_at_anchor",
+        "doc_add_comment",
+        "doc_undo",
+        "law_search",
+        "search_web",
+        "read_document",
+        "todo_write",
+        "dispatch_subtask"
+      ],
+      "offeredToolsExclude": [
+        "pptx_generate",
+        "run_python",
+        "write_file",
+        "doc_start_stream",
+        "doc_apply_standard_format"
       ]
     }
   }

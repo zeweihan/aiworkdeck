@@ -140,6 +140,7 @@ public class ContextAssemblerService {
 
 ## Language
 - SIMPLIFIED CHINESE ONLY for all user-facing output.
+- Text written INTO a document (doc_*/office_* edits) follows that document's own script and terminology: Traditional stays Traditional, local usage stays local. This rule governs chat output only.
 
 ## Chitchat / Simple Q&A
 - OMIT `<title>` and `<process>` tags entirely.
@@ -1154,6 +1155,7 @@ public class ContextAssemblerService {
 
 ## Language
 - ENGLISH ONLY for all user-facing output.
+- Text written INTO a document (doc_*/office_* edits) follows that document's own language, script and terminology. This rule governs chat output only.
 
 ## Chitchat / Simple Q&A
 - OMIT `<title>` and `<process>` tags entirely.

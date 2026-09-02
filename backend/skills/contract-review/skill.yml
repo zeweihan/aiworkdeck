@@ -1,0 +1,146 @@
+# 合同审查 Skill（打包格式见 docs/SKILL_SPEC.md；立项 dev-board#375）
+#
+# 为什么要有它：同一份台湾认购合约，工作台只报了 6 项、Claude Code 报了 24 处。差距不在模型，
+# 在工作流——system prompt 第 7 节教的是「看→找→改，步数越少越好」和「只做用户明确要求的那一处」，
+# 那是给单点修改用的纪律；审查恰好相反：边界是整份文件，要多遍过、要机械核对、要成批落批注。
+# 这个 skill 把审查的工作流（立场/法域先定 → 通读+结构审计 → 六遍清单 → 批量落实 → 分类交付）
+# 注入本轮，并把审查需要的感知/编辑/检索工具全部放进可见集。
+id: contract-review
+name: 合同审查
+description: 站在指定一方立场对合同/协议做全文逐条审查：先定立场与适用法域，通读全文并做机械结构审计（编号、交叉引用、空白、金额算术、繁简字形、前一轮修订），再按「法律用语与法源 / 立场保护 / 遗留硬伤 / 数字与空白 / 商业条款不越权」多遍过，成批以修订+批注落到文档里，最后分类交付清单。
+
+# 法律事项类别（匿名统计用，枚举见 MatterCategory）
+category: 合同审查起草
+
+# 可用语言：审查工作流本身不绑定法域（法域由文档自己决定），英文版可用；
+# 英文侧 name_en / triggers_en / output_en 见下，英文 prompt 在 prompt.en.md。
+languages:
+  - zh-CN
+  - en-US
+
+name_en: Contract Review
+
+# 触发条件：用户输入包含任一关键词即命中（不区分大小写）。
+# 刻意不用单字「审查」「审阅」——它们会命中「尽调审查」「审阅笔录」这类别的任务，
+# 而 skill 命中会把可见工具裁成本清单，等于把别的业务工具藏起来。
+triggers:
+  - 审查合同
+  - 审查合约
+  - 审查协议
+  - 审阅合同
+  - 审阅合约
+  - 审阅协议
+  - 审核合同
+  - 审核协议
+  - 合同审查
+  - 合同审阅
+  - 合约审查
+  - 协议审查
+  - 审查这份
+  - 审阅这份
+  - 审一下这份
+  - 帮我审
+  - 法律审查
+  - 審查合約
+  - 審閱合約
+  - 審查契約
+  - 審閱契約
+  - 審查這份
+  - 幫我審
+
+triggers_en:
+  - review the contract
+  - review this contract
+  - review the agreement
+  - review this agreement
+  - contract review
+  - review the draft
+  - mark up the agreement
+  - redline the agreement
+  - redline this
+
+# prompt 模板文件名（相对本目录）
+prompt: prompt.md
+
+# 工具白名单：命中后本轮 LLM 可见工具
+#   = allowed_tools ∪ 基础工具集（ai.skills.base-tools）∪ 编排类工具（SkillRouter.ORCHESTRATION_TOOLS）
+# 基础工具集只有 read_document / list_files / query_memory；审查要用的每个工具都得逐个列出，
+# 漏了 = 模型看不见 = 不会调用（原生 function calling 下尤其如此）。
+# doc_* 与 office_* 两族同时列出：ClientCapabilityService 会按会话客户端只放行其中一族
+# （工作台 LOWA 会话见 doc_*，Word 插件会话见 office_*），这里不需要也不能替它挑。
+# 编排类工具（todo_write / dispatch_subtask）恒定可见，不要为「保险」抄进来——
+# 回放用例 skill-orchestration-tools-not-trimmed 靠「不在清单里却仍可见」守这条不变式。
+allowed_tools:
+  # 看：通读、条款结构、机械审计、既有修订与批注
+  - doc_get_clauses
+  - doc_get_document_text
+  - doc_get_outline
+  - doc_get_paragraph
+  - doc_audit_structure
+  - doc_list_revisions
+  - doc_get_comments
+  - doc_table_read
+  # 找
+  - doc_find_text
+  # 选
+  - doc_select_anchor
+  - doc_select_paragraph
+  - doc_collapse_cursor
+  # 改（全部带修订痕迹）
+  - doc_replace_at_anchor
+  - doc_replace_nth_match
+  - doc_find_replace
+  - doc_modify_paragraph
+  - doc_insert_at_cursor
+  - doc_insert_under_heading
+  - doc_delete_selection
+  - doc_delete_match
+  - doc_table_set_cell
+  # 批注：说明与风险提示的唯一去处
+  - doc_add_comment
+  - doc_reply_comment
+  # 安全网
+  - doc_undo
+  - doc_restore_checkpoint
+  # Word 插件会话的对应面
+  - office_get_text
+  - office_search
+  - office_replace_text
+  - office_insert_text
+  - office_add_comment
+  - office_get_comments
+  - office_get_revisions
+  - office_table_read
+  - office_table_set_cell
+  # 法源核实：law_* 只覆盖中国大陆法；其他法域用 search_web / browse_url 查权威来源
+  - law_search
+  - law_search_keyword
+  - get_law_article
+  - search_web
+  - browse_url
+  # 对照附件/底稿
+  - extract_file_text
+  - search_project_files
+  # 逐条核法源这类多轮检索只需要结论，可委派
+  - dispatch_subtask
+
+# 输出结构约定（随 prompt 注入）
+output: |
+  文档本身是交付物：所有改动以修订痕迹落在原文档，每处改动或风险点配一条批注（问题 + 依据 + 处置），
+  说明文字一律不进正文；数字空白不代填，批注里写应填的值与依据条款。
+  <final> 只给分类清单（法律用语与法源 / 立场保护 / 遗留硬伤 / 数字、币种与空白 / 仅提示未改的商业条款），
+  每条一行：条款号 + 问题 + 处置（已修订 / 仅批注 / 待核实）+ 依据；开头一句写明本次审查的立场与适用法域假设。
+  例外：立场或适用法域推不出且影响结论时，本轮只输出一个 <question>（给 option）并停下，不要先按猜的立场审。
+  达到步数预算被系统暂停不是结束：清单里未完成的项接着做，不要为了省步数缩小审查范围。
+
+output_en: |
+  The document itself is the deliverable: every change lands as a tracked change in the original file, each change
+  or risk point carries one comment (issue + authority + disposition); explanatory prose never goes into the body;
+  blank figures are not filled in, the comment states what should be filled and which clause it must match.
+  <final> gives only a categorized list (terminology and legal basis / position protection / leftover defects /
+  figures, currency and blanks / commercial terms flagged but not changed), one line each: clause number + issue +
+  disposition (revised / comment only / to verify) + authority; open with one sentence stating the assumed
+  position and governing law.
+  Exception: when the position or governing law cannot be inferred and would change the conclusions, output a single
+  <question> (with options) and stop; do not review on a guessed position.
+  Hitting the step budget is a pause, not the end: continue the unfinished items; never shrink the scope to save steps.
