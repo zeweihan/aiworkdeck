@@ -11,19 +11,12 @@
 // 复用 review-panel-double-tap.test.mjs 的抽取套路：<script> 剥壳当 this 调 methods。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { makeReviewVm } from '../_lib/review-panel-vm.mjs'
 
-const SRC = readFileSync(new URL('../../src/components/ReviewPanel.vue', import.meta.url), 'utf8')
 
 function makeVm(executor) {
-  const script = SRC.match(/<script>([\s\S]*?)<\/script>/)[1]
-    .replace(/^import .*$/gm, '')
-  // eslint-disable-next-line no-new-func
-  const component = new Function('EvidencePanel', script.replace('export default', 'return'))({})
-  const base = { $t: (k, p) => k + (p ? JSON.stringify(p) : ''), $emit: () => {}, executor }
-  return Object.assign(base, component.data.call(base), component.methods, {
-    revisionGroups: component.computed.revisionGroups,
-  })
+  // 组件的纯函数层（utils/reviewGrouping.js）与子组件桩由共享底座喂进去。
+  return makeReviewVm(executor)
 }
 
 // 假引擎：记录每次 executeCommand 的调用（action + params），供断言"发了几次、发的什么"。
@@ -68,7 +61,7 @@ test('批量接受一组 K>1 的修订：只发一次批量命令，不逐条调
   const engine = makeEngine(['A', 'B', 'C', 'D', 'E'], ['C'])
   const vm = makeVm(engine)
   await vm.reload()
-  const g = vm.revisionGroups.call(vm).find((x) => x.items.length > 1)
+  const g = vm.revisionGroups.find((x) => x.items.length > 1)
   assert.deepEqual(g.items.map((r) => r.index), [1, 2], '前置条件：卡片覆盖索引 1 与 2')
 
   engine.calls.length = 0 // 只看这次处置发生的调用，不算 reload 那两条
@@ -92,7 +85,7 @@ test('大组（10 个条目）同样只发一次批量命令——不随组大�
   const engine = makeEngine(ids, contiguous)
   const vm = makeVm(engine)
   await vm.reload()
-  const g = vm.revisionGroups.call(vm).find((x) => x.items.length === 10)
+  const g = vm.revisionGroups.find((x) => x.items.length === 10)
   assert.ok(g, '前置条件：应有一张覆盖 10 条的卡片')
 
   engine.calls.length = 0
@@ -118,7 +111,7 @@ test('组内部分条目处置失败：error 提示与既有口径一致（total
   }
   const vm = makeVm(engine)
   await vm.reload()
-  const g = vm.revisionGroups.call(vm).find((x) => x.items.length > 1)
+  const g = vm.revisionGroups.find((x) => x.items.length > 1)
   // reload() 内部还会再跑两次 run()（list_revisions/list_comments），成功时各自把
   // this.error 复位成 ''——与本用例要断言的"处置完那一刻的 error"是两回事，隔离掉。
   vm.reload = async () => {}

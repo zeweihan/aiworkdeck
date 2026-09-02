@@ -2,7 +2,7 @@
   <view class="rp">
     <view class="rp-head">
       <view class="rp-tabs">
-        <text class="rp-tab" :class="{ on: tab === 'rev' }" @tap="tab = 'rev'">{{ $t('editor.review.revTab', { count: revisionGroups.length }) }}</text>
+        <text class="rp-tab" :class="{ on: tab === 'rev' }" @tap="tab = 'rev'">{{ $t('editor.review.revTab', { count: allGroups.length }) }}</text>
         <text class="rp-tab" :class="{ on: tab === 'cmt' }" @tap="tab = 'cmt'">{{ $t('editor.review.cmtTab', { count: comments.length }) }}</text>
         <text class="rp-tab" :class="{ on: tab === 'evd' }" @tap="tab = 'evd'">{{ $t('editor.review.evidenceTab', { count: evidenceCount }) }}</text>
       </view>
@@ -13,6 +13,16 @@
       <text class="rp-bulk-btn" @tap="resolveAll('accept')">{{ $t('editor.review.acceptAll') }}</text>
       <text class="rp-bulk-btn" @tap="resolveAll('reject')">{{ $t('editor.review.rejectAll') }}</text>
     </view>
+
+    <!-- 作者筛选：多方修订混在一份文档里时，先按「谁改的」收窄再逐条看。
+         四个桶的数字恒按未筛选的全量算，切了筛选也不变（否则没法用它判断
+         「还有几条别人的改动没看」）。 -->
+    <scroll-view v-if="tab === 'rev' && revisions.length" class="rp-filter" scroll-x>
+      <view class="rp-filter-row">
+        <text v-for="f in authorFilters" :key="f.kind" class="rp-chip" :class="[f.kind, { on: authorFilter === f.kind }]"
+              @tap="authorFilter = f.kind">{{ f.label }}</text>
+      </view>
+    </scroll-view>
 
     <view v-if="error && tab !== 'evd'" class="rp-error">{{ error }}</view>
 
@@ -34,16 +44,28 @@
           <text class="rp-empty-t">{{ $t('editor.review.emptyRevTitle') }}</text>
           <text class="rp-empty-s">{{ $t('editor.review.emptyRevSub') }}</text>
         </view>
-        <view v-for="g in revisionGroups" :key="g.key" class="rp-card" @tap="goto(g)">
+        <view v-else-if="!revisionGroups.length" class="rp-empty">
+          <text class="rp-empty-t">{{ $t('editor.review.emptyFilteredTitle') }}</text>
+          <text class="rp-empty-s">{{ $t('editor.review.emptyFilteredSub') }}</text>
+        </view>
+        <view v-for="g in revisionGroups" :key="g.key" class="rp-card" :class="'k-' + g.authorKind" @tap="goto(g)">
           <view class="rp-card-top">
-            <text class="rp-tag" :class="g.type === 'Delete' ? 'del' : 'ins'">{{ g.type === 'Delete' ? $t('editor.review.deletion') : $t('editor.review.insertion') }}</text>
+            <text class="rp-who" :class="g.authorKind">{{ authorLabel(g) }}</text>
+            <text class="rp-tag" :class="typeClass(g)">{{ typeLabel(g) }}</text>
             <text v-if="g.inTable" class="rp-tag tbl">{{ $t('editor.review.table') }}</text>
             <text v-if="g.items.length > 1" class="rp-tag cnt">{{ $t('editor.review.contiguousCount', { count: g.items.length }) }}</text>
-            <text class="rp-author">{{ g.author || $t('editor.review.unknownAuthor') }}</text>
             <text class="rp-date">{{ g.date || '' }}</text>
           </view>
-          <text class="rp-text" :class="{ del: g.type === 'Delete' }">{{ g.text || $t('editor.review.emptyText') }}</text>
+          <text class="rp-text" :class="{ del: g.typeKey === 'delete' }">{{ g.text || $t('editor.review.emptyText') }}</text>
+          <!-- 引擎给的说明只对格式类（正文是空的、光看文字说不出改了什么）有信息量；
+               插入/删除卡上文字本身已经说明一切，不再重复一行。 -->
+          <text v-if="g.description && g.typeKey !== 'insert' && g.typeKey !== 'delete'" class="rp-desc">{{ g.description }}</text>
           <text v-if="g.paragraph" class="rp-ctx">{{ g.paragraph }}</text>
+          <!-- 修订理由：位置上与本条修订重叠/相接的批注（AI 把改动理由挂成批注）。 -->
+          <view v-for="c in g.reasons" :key="'r' + c.index" class="rp-reason">
+            <text class="rp-reason-h">{{ $t('editor.review.reasonBy', { author: c.author || $t('editor.review.unknownAuthor') }) }}</text>
+            <text class="rp-reason-t">{{ c.content }}</text>
+          </view>
           <view class="rp-acts">
             <text class="rp-act ok" @tap.stop="resolveGroup(g, 'accept')">{{ $t('editor.review.accept') }}</text>
             <text class="rp-act no" @tap.stop="resolveGroup(g, 'reject')">{{ $t('editor.review.reject') }}</text>
@@ -57,11 +79,12 @@
           <text class="rp-empty-t">{{ $t('editor.review.emptyCmtTitle') }}</text>
           <text class="rp-empty-s">{{ $t('editor.review.emptyCmtSub') }}</text>
         </view>
-        <view v-for="c in comments" :key="'c' + c.index" class="rp-card" :class="{ done: c.resolved }" @tap="gotoComment(c)">
+        <view v-for="c in commentRows" :key="'c' + c.index" class="rp-card" :class="{ done: c.resolved }" @tap="gotoComment(c)">
           <view class="rp-card-top">
-            <text class="rp-author">{{ c.author || $t('editor.review.unknownAuthor') }}</text>
-            <text class="rp-date">{{ c.date || '' }}</text>
+            <text class="rp-who" :class="c.authorKind">{{ c.author || $t('editor.review.unknownAuthor') }}</text>
+            <text v-if="c.linkedCount" class="rp-tag link">{{ $t('editor.review.linkedToRev', { count: c.linkedCount }) }}</text>
             <text v-if="c.resolved" class="rp-tag done">{{ $t('editor.review.resolved') }}</text>
+            <text class="rp-date">{{ c.date || '' }}</text>
           </view>
           <text class="rp-text">{{ c.content }}</text>
           <text v-if="c.anchorText" class="rp-ctx">{{ $t('editor.review.anchor', { text: c.anchorText }) }}</text>
@@ -88,7 +111,25 @@
 // resolve_revisions（批量） / resolve_all_revisions 与 list_comments 一族），
 // executor 由宿主编辑器注入。
 // 每次处置后重新拉清单——redline 的索引就是枚举序，处置一条后其余会前移。
+//
+// dev-board#377 补齐成 Word 式审阅窗格的三个维度（判定全在
+// utils/reviewGrouping.js 的纯函数里，本组件只渲染与发命令）：
+//   作者  卡片带色条 + 作者标识，顶部四桶筛选（全部/AI/我/其他人）；
+//   类型  引擎 RedlineType 如实映射成 插入/删除/格式/段落格式，认不出的原样显示；
+//   理由  位置上与修订重叠/相接的批注挂进卡片，处置后顺手标记为已解决。
 import EvidencePanel from '@/components/EvidencePanel.vue'
+import {
+  groupRevisions, countByAuthorKind, filterByAuthorKind, linkCommentsToRevisions, authorKind,
+} from '@/utils/reviewGrouping.js'
+
+// RedlineType 归一后的显示键 → i18n 键。插入/删除沿用旧键（文案不变）。
+const TYPE_I18N = {
+  insert: 'editor.review.insertion',
+  delete: 'editor.review.deletion',
+  format: 'editor.review.typeFormat',
+  paraFormat: 'editor.review.typeParaFormat',
+}
+const TYPE_CLASS = { insert: 'ins', delete: 'del', format: 'fmt', paraFormat: 'pfmt', other: 'oth' }
 
 export default {
   name: 'ReviewPanel',
@@ -102,37 +143,43 @@ export default {
     // 「底稿」页要的：项目与当前文档（ProjectFile.id）。缺省时底稿页为空。
     projectId: { type: [Number, String], default: null },
     docFileId: { type: [Number, String], default: null },
+    // 当前登录用户名——「我」这一桶的判据。与宿主 load_document 传给引擎的
+    // authorName 同源（LibreOfficeEditor.currentAuthorName），拿不到时任何
+    // 非 AI 的作者都算「其他人」，不把未署名的修订算到自己头上。
+    selfAuthor: { type: String, default: '' },
   },
   data() {
-    return { tab: 'rev', revisions: [], comments: [], error: '', resolving: false, evidenceCount: 0 }
+    return {
+      tab: 'rev', revisions: [], comments: [], error: '', resolving: false, evidenceCount: 0,
+      authorFilter: 'all',
+    }
   },
   computed: {
-    // 引擎按「一次编辑操作」记一条 redline：连按 Backspace 删掉一个词，就是一个字
-    // 一条（页边模式下每次删除还各自带走一段内容，引擎也不会替我们合并）。面板是
-    // 修订的权威视图，就得按人的理解呈现——把**位置上首尾相接、且同类型同作者同
-    // 分钟**的相邻条目并成一条卡片，接受/拒绝作用于整组。
-    // contiguous 由 worker 的 list_revisions 用区间比较给出（同段落里相隔很远的
-    // 两处删除不会被误并）；拿不到该字段的旧 worker 退化成不合并，行为与从前一致。
-    revisionGroups() {
-      const groups = []
-      for (const r of this.revisions) {
-        const last = groups[groups.length - 1]
-        const joins = last && r.contiguous
-          && last.type === r.type
-          && (last.author || '') === (r.author || '')
-          && (last.date || '') === (r.date || '')
-        if (joins) {
-          last.items.push(r)
-          last.text += (r.text || '')
-        } else {
-          groups.push({
-            key: 'g' + r.index, type: r.type, author: r.author, date: r.date,
-            inTable: r.inTable, paragraph: r.paragraph, text: r.text || '', items: [r],
-          })
-        }
-      }
-      for (const g of groups) if (g.text.length > 120) g.text = g.text.slice(0, 120) + '…'
-      return groups
+    // 批注 ↔ 修订的双向关联（同段落 + 区间相交/相接）。坐标由 worker 回传，
+    // 表格单元格等跨 story 的区间定位不到（paraKey -1）时一律不关联。
+    links() { return linkCommentsToRevisions(this.revisions, this.comments) },
+    // 未筛选的全量分组——筛选与计数都基于它，tab 上的数字也用它。
+    allGroups() {
+      return groupRevisions(this.revisions, { reasons: this.links.reasons, selfAuthor: this.selfAuthor })
+    },
+    authorCounts() { return countByAuthorKind(this.allGroups) },
+    authorFilters() {
+      const c = this.authorCounts
+      return [
+        { kind: 'all', label: this.$t('editor.review.filterAll', { count: c.all }) },
+        { kind: 'ai', label: this.$t('editor.review.filterAi', { count: c.ai }) },
+        { kind: 'me', label: this.$t('editor.review.filterMe', { count: c.me }) },
+        { kind: 'other', label: this.$t('editor.review.filterOther', { count: c.other }) },
+      ]
+    },
+    revisionGroups() { return filterByAuthorKind(this.allGroups, this.authorFilter) },
+    // 批注清单：标出「这条批注已经挂到 N 条修订上」，并按同一口径给出作者归类。
+    commentRows() {
+      const linked = this.links.linked
+      return this.comments.map((c) => Object.assign({}, c, {
+        linkedCount: (linked.get(c.index) || []).length,
+        authorKind: authorKind(c.author, this.selfAuthor),
+      }))
     },
   },
   watch: {
@@ -140,6 +187,15 @@ export default {
     refreshKey() { this.reload() },
   },
   methods: {
+    typeLabel(g) {
+      // 认不出的类型原样显示引擎给的字符串——不猜，也不硬塞进「插入」。
+      return TYPE_I18N[g.typeKey] ? this.$t(TYPE_I18N[g.typeKey]) : (g.type || this.$t('editor.review.typeOther'))
+    },
+    typeClass(g) { return TYPE_CLASS[g.typeKey] || 'oth' },
+    authorLabel(g) {
+      if (g.authorKind === 'me') return this.$t('editor.review.selfAuthor', { name: g.author })
+      return g.author || this.$t('editor.review.unknownAuthor')
+    },
     async run(action, params) {
       if (!this.executor) return null
       try {
@@ -179,12 +235,26 @@ export default {
         const res = await this.run('resolve_revisions', { indices, action })
         const results = (res && res.results) || []
         const done = results.filter((r) => r && r.success).length
-        if (done) this.$emit('changed')
+        if (done) {
+          // 处置联动（dev-board#377）：这条修订的理由批注已经没有待办意义了，
+          // 标记为已解决——**不删除**（删除会让「当初为什么这么改」永久消失，
+          // 而且 .uno:DeleteComment 在宿主上下文里本来也够不着）。
+          // 一条都没命中时不动批注：修订还在文档里，理由也还得留着。
+          // 按 id 定位，不按 index——修订处置完重拉清单前，批注 index 未必仍对得上。
+          await this.resolveReasons(g.reasons)
+          this.$emit('changed')
+        }
         // 引擎没命中的如实说，别让用户以为整组都处理完了
         if (done < indices.length) this.error = this.$t('editor.review.groupPartialFail', { total: indices.length, failed: indices.length - done })
         await this.reload()
       } finally {
         this.resolving = false
+      }
+    },
+    async resolveReasons(reasons) {
+      for (const c of (reasons || [])) {
+        if (c.resolved) continue
+        await this.run('set_comment_resolved', { id: c.id, index: c.index, resolved: true })
       }
     },
     async resolveAll(action) {
@@ -193,7 +263,7 @@ export default {
       await this.reload()
     },
     async toggleResolved(c) {
-      const res = await this.run('set_comment_resolved', { index: c.index, resolved: !c.resolved })
+      const res = await this.run('set_comment_resolved', { id: c.id, index: c.index, resolved: !c.resolved })
       if (res) this.$emit('changed')
       await this.reload()
     },
@@ -213,26 +283,45 @@ export default {
 .rp-bulk { display: flex; gap: 6px; padding: 8px 10px 0; }
 .rp-bulk-btn { flex: 1; text-align: center; padding: 4px 0; border: 1px solid var(--awd-border); border-radius: 6px;
   font-size: 12px; color: var(--awd-text-2); background: var(--awd-surface); }
+.rp-filter { padding: 8px 10px 0; white-space: nowrap; }
+.rp-filter-row { display: flex; gap: 5px; }
+.rp-chip { flex: none; padding: 2px 8px; border: 1px solid var(--awd-border); border-radius: 999px;
+  font-size: 11px; color: var(--awd-text-2); background: var(--awd-surface); }
+.rp-chip.on { background: var(--awd-accent-soft); border-color: var(--awd-accent); color: var(--awd-accent-text); font-weight: 600; }
 .rp-error { margin: 8px 10px 0; padding: 6px 8px; border-radius: 6px; background: var(--awd-danger-soft); color: var(--awd-danger-text); font-size: 12px; }
 .rp-list { flex: 1; min-height: 0; padding: 8px 10px; }
 .rp-empty { padding: 28px 6px; display: flex; flex-direction: column; gap: 6px; }
 .rp-empty-t { font-size: 13px; color: var(--awd-text-2); }
 .rp-empty-s { font-size: 12px; color: var(--awd-text-3); line-height: 1.5; }
 .rp-card { margin-bottom: 8px; padding: 8px 9px; background: var(--awd-surface); border: 1px solid var(--awd-border); border-radius: 8px; }
+/* 作者色条：一眼分出「AI 改的 / 我改的 / 别人改的」 */
+.rp-card.k-ai { border-left: 3px solid var(--awd-accent); }
+.rp-card.k-me { border-left: 3px solid var(--awd-info); }
+.rp-card.k-other { border-left: 3px solid var(--awd-border-strong); }
 .rp-card.done { opacity: 0.6; }
 .rp-card-top { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; flex-wrap: wrap; }
+.rp-who { padding: 1px 6px; border-radius: 4px; font-size: 11px; background: var(--awd-surface-2); color: var(--awd-text-2); }
+.rp-who.ai { background: var(--awd-accent-soft); color: var(--awd-accent-text); font-weight: 600; }
+.rp-who.me { background: var(--awd-info-soft); color: var(--awd-info-text); }
 .rp-tag { padding: 1px 6px; border-radius: 4px; font-size: 11px; }
 .rp-tag.ins { background: var(--awd-accent-soft); color: var(--awd-accent-text); }
 .rp-tag.del { background: var(--awd-danger-soft); color: var(--awd-danger-text); }
+.rp-tag.fmt, .rp-tag.pfmt { background: var(--awd-warning-soft); color: var(--awd-warning-text); }
+.rp-tag.oth { background: var(--awd-surface-2); color: var(--awd-text-2); }
 .rp-tag.tbl { background: var(--awd-info-soft); color: var(--awd-info-text); }
 .rp-tag.cnt { background: var(--awd-surface-2); color: var(--awd-text-2); }
+.rp-tag.link { background: var(--awd-accent-wash); color: var(--awd-accent-text); }
 .rp-tag.done { background: var(--awd-surface-2); color: var(--awd-text-2); }
-.rp-author { font-size: 12px; color: var(--awd-text-2); }
 .rp-date { font-size: 11px; color: var(--awd-text-3); margin-left: auto; }
 .rp-text { display: block; font-size: 13px; color: var(--awd-text); line-height: 1.5; word-break: break-all; }
 .rp-text.del { text-decoration: line-through; color: var(--awd-danger-text); }
+.rp-desc { display: block; margin-top: 3px; font-size: 11px; color: var(--awd-text-2); }
 .rp-ctx { display: block; margin-top: 4px; font-size: 11px; color: var(--awd-text-3); line-height: 1.4;
   overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.rp-reason { margin-top: 6px; padding: 5px 7px; border-radius: 6px; background: var(--awd-surface-2);
+  border-left: 2px solid var(--awd-accent); }
+.rp-reason-h { display: block; font-size: 10px; color: var(--awd-text-3); margin-bottom: 2px; }
+.rp-reason-t { display: block; font-size: 12px; color: var(--awd-text-2); line-height: 1.45; }
 .rp-acts { display: flex; gap: 6px; margin-top: 7px; }
 .rp-act { padding: 2px 10px; border: 1px solid var(--awd-border); border-radius: 6px; font-size: 12px; color: var(--awd-text-2); }
 .rp-act.ok { border-color: var(--awd-mint); color: var(--awd-accent-text); }

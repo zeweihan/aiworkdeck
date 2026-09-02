@@ -26,6 +26,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 // server / puppeteer 启动件与 big-doc.mjs（大文档基线组）共用，抽在 _boot.mjs。
 import { here, preflight, loadPuppeteer, startServer, launchBrowser, openEditor } from './_boot.mjs'
+// 审阅面板的纯函数层（宿主侧）。组 33 拿真引擎回传的 RedlineType / 坐标直接喂它，
+// 证明「引擎给的串 → 面板显示的类型」「引擎给的坐标 → 批注挂到哪条修订」这两段
+// 映射在真数据上成立——单测里用的是手写夹具，只有这里能验夹具本身没编错。
+import { revisionTypeKey, linkCommentsToRevisions } from '../../src/utils/reviewGrouping.js'
 
 // ---------- preflight ----------
 preflight()
@@ -2318,6 +2322,91 @@ try {
     check('最终稿导出件的 settings.xml 里没有 w:revisionView',
       marksFinal.settings.indexOf('revisionView') < 0, marksFinal.settings.slice(0, 300))
     await exec('set_revision_view', { mode: 'all' })
+  }
+
+  // ---- 组 33：审阅窗格的作者/类型/理由三维度（dev-board#377）----------------
+  // 面板要能回答律师的三个问题：这条是谁改的、改的是什么（插入/删除/格式）、
+  // 为什么这么改。前两个靠 list_revisions 如实回传 RedlineAuthor / RedlineType，
+  // 第三个靠「批注锚区与修订区间重叠或相接」——坐标由 worker 回传，判定在宿主
+  // 纯函数里（本组直接调那个真函数，不另写一份判定）。
+  {
+    console.log('\n== 组 33：审阅窗格 作者/类型/理由 ==')
+    check('换回 Writer 可见文档', (await exec('debug_fresh_document', { visible: true })).success === true)
+    await exec('debug_set_record_changes', { on: false })
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: '甲方应于三十日内向乙方支付服务费。' })
+    await exec('collapse_selection', { to: 'end' })
+    await exec('insert_at_cursor', { text: '\n乙方应在验收后交付全部成果。' })
+    check('准备：两段正文', (await doc()) === '甲方应于三十日内向乙方支付服务费。|乙方应在验收后交付全部成果。', await doc())
+    await exec('load_document', { authorName: '韩律师' })      // 只注入作者名
+    await exec('debug_set_record_changes', { on: true })
+
+    // (1) 作者：AI 的改动署 AI WorkDeck，用户自己的署当前用户名——面板的作者
+    //     筛选完全建立在这两个串上，署错了整个筛选就是错的。
+    await exec('find_replace', { findText: '三十日', replaceText: '六十日', replaceAll: true, __agent: true })
+    await exec('find_replace', { findText: '全部成果', replaceText: '全部工作成果', replaceAll: true })
+    let lr = await exec('list_revisions')
+    const authors = new Set((lr.revisions || []).map((r) => r.author))
+    check('list_revisions 同时带回 AI 与用户两个作者',
+      authors.has('AI WorkDeck') && authors.has('韩律师'), JSON.stringify([...authors]))
+
+    // (2) 坐标：每条修订都能定位到正文段落（paraKey >= 0）且带区间偏移；
+    //     两段里的修订必须落在不同的 paraKey，否则关联判定形同虚设。
+    check('每条修订都带可比坐标（paraKey/start/end）',
+      (lr.revisions || []).length >= 2 && lr.revisions.every((r) => r.paraKey >= 0 && Number.isFinite(r.start) && Number.isFinite(r.end)),
+      JSON.stringify(lr.revisions.map((r) => ({ t: r.type, k: r.paraKey, s: r.start, e: r.end }))))
+    const aiParas = new Set(lr.revisions.filter((r) => r.author === 'AI WorkDeck').map((r) => r.paraKey))
+    const myParas = new Set(lr.revisions.filter((r) => r.author === '韩律师').map((r) => r.paraKey))
+    check('两段的修订落在不同段落键上',
+      aiParas.size === 1 && myParas.size === 1 && [...aiParas][0] !== [...myParas][0],
+      JSON.stringify({ ai: [...aiParas], me: [...myParas] }))
+
+    // (3) 类型：格式类修订不许再被当成插入。这里做的是纯字符格式改动（加粗），
+    //     引擎按 RedlineType 记成 Format 一族；断言走宿主的真映射函数。
+    const before = lr.count
+    const loc = await exec('find_text_locations', { keyword: '服务费' })
+    await exec('set_selection', { anchor: loc.matches[0].anchorId })
+    await exec('format_selection', { bold: true })
+    lr = await exec('list_revisions')
+    const fmt = (lr.revisions || []).filter((r) => r.type !== 'Insert' && r.type !== 'Delete')
+    check('加粗产生了非插入/删除型的修订（引擎按格式类记录）',
+      lr.count > before && fmt.length >= 1,
+      JSON.stringify({ before, after: lr.count, types: lr.revisions.map((r) => r.type) }))
+    // 严到「映射成格式类」而不只是「不是插入」：认不出的类型会落 'other'、面板
+    // 原样显示引擎串，那是兜底不是正确标注。引擎哪天改了 RedlineType 的取值，
+    // 这条会红并把真串打出来，提醒同步 utils/reviewGrouping.js 的 TYPE_KEYS。
+    check('格式类修订经宿主映射后标成「格式 / 段落格式」（不是插入、也不是兜底）',
+      fmt.length >= 1 && fmt.every((r) => ['format', 'paraFormat'].includes(revisionTypeKey(r.type))),
+      JSON.stringify(fmt.map((r) => ({ type: r.type, key: revisionTypeKey(r.type), desc: r.description }))))
+
+    // (4) 理由：把 AI 的修订理由挂成批注，坐标喂进宿主的关联函数——批注必须挂到
+    //     第一段那几条 AI 修订上，不能挂到第二段用户改的那条上。
+    const ftc = await exec('find_text_locations', { keyword: '六十日' })
+    await exec('add_comment', { anchor: ftc.matches[0].anchorId, comment: '【修訂理由】账期与主协议不一致', __agent: true })
+    lr = await exec('list_revisions')
+    const lc = await exec('list_comments')
+    check('list_comments 也带回同一坐标系的 paraKey/start/end',
+      lc.count >= 1 && lc.comments.every((c) => c.paraKey >= 0 && Number.isFinite(c.start) && Number.isFinite(c.end)),
+      JSON.stringify(lc.comments.map((c) => ({ k: c.paraKey, s: c.start, e: c.end }))))
+    const { reasons, linked } = linkCommentsToRevisions(lr.revisions, lc.comments)
+    const cmt = lc.comments.find((c) => (c.content || '').includes('修訂理由'))
+    const hit = (linked.get(cmt.index) || []).map((i) => lr.revisions[i])
+    check('理由批注挂到了第一段的 AI 修订上',
+      hit.length >= 1 && hit.every((r) => r.author === 'AI WorkDeck'),
+      JSON.stringify({ hit: hit.map((r) => ({ t: r.type, a: r.author, k: r.paraKey })), all: lr.revisions.map((r) => ({ t: r.type, a: r.author, k: r.paraKey, s: r.start, e: r.end })), cmt: { k: cmt.paraKey, s: cmt.start, e: cmt.end } }))
+    const mine = lr.revisions.filter((r) => r.author === '韩律师')
+    check('第二段（用户自己改的）没有被误挂上这条理由',
+      mine.length >= 1 && mine.every((r) => !reasons.has(r.index)),
+      JSON.stringify(mine.map((r) => ({ t: r.type, k: r.paraKey, s: r.start, e: r.end }))))
+
+    // (5) 处置联动的引擎侧前提：批注按 id 标记已解决后仍留在清单里（面板只标记、
+    //     不删除——删掉就再也读不到「当初为什么这么改」）。
+    const setR = await exec('set_comment_resolved', { id: cmt.id, resolved: true })
+    const lc2 = await exec('list_comments')
+    check('按 id 标记已解决后批注仍在清单里（标记不是删除）',
+      setR.resolved === true && lc2.count === lc.count &&
+      (lc2.comments.find((c) => c.id === cmt.id) || {}).resolved === true,
+      JSON.stringify({ setR, count: lc2.count }))
   }
 
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')

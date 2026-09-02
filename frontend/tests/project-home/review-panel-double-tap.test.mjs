@@ -7,20 +7,12 @@
 // 再用普通对象当 this 调 methods（同 personal-settings-reentrancy.test.mjs 的路子）。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { makeReviewVm } from '../_lib/review-panel-vm.mjs'
 
-const SRC = readFileSync(new URL('../../src/components/ReviewPanel.vue', import.meta.url), 'utf8')
 
 function makeVm(executor) {
-  // 组件带 @/ 别名的 import（证据页子组件）进不来：剥掉 import 行，子组件用形参喂桩。
-  const script = SRC.match(/<script>([\s\S]*?)<\/script>/)[1]
-    .replace(/^import .*$/gm, '')
-  // eslint-disable-next-line no-new-func
-  const component = new Function('EvidencePanel', script.replace('export default', 'return'))({})
-  const base = { $t: (k) => k, $emit: () => {}, executor }
-  return Object.assign(base, component.data.call(base), component.methods, {
-    revisionGroups: component.computed.revisionGroups,
-  })
+  // 组件的纯函数层（utils/reviewGrouping.js）与子组件桩由共享底座喂进去。
+  return makeReviewVm(executor)
 }
 
 // 假引擎：live 是当前修订列表，index 就是数组下标；处置一条后其余前移——与真引擎一致。
@@ -71,7 +63,7 @@ test('修订卡片连点两次接受，只处置本组的修订，不误伤别�
   const engine = makeEngine(['A', 'B', 'C', 'D', 'E'])
   const vm = makeVm(engine)
   await vm.reload()
-  const groups = vm.revisionGroups.call(vm)
+  const groups = vm.revisionGroups
   const g = groups.find((x) => x.items.length > 1)
   assert.deepEqual(g.items.map((r) => r.index), [1, 2], '前置条件：卡片覆盖索引 1 与 2')
 
@@ -85,9 +77,9 @@ test('处置完成后闸要放开，允许接着处置下一张卡片', async ()
   const engine = makeEngine(['A', 'B', 'C', 'D', 'E'])
   const vm = makeVm(engine)
   await vm.reload()
-  const g1 = vm.revisionGroups.call(vm).find((x) => x.items.length > 1)
+  const g1 = vm.revisionGroups.find((x) => x.items.length > 1)
   await vm.resolveGroup(g1, 'accept')
-  const g2 = vm.revisionGroups.call(vm)[0]
+  const g2 = vm.revisionGroups[0]
   await vm.resolveGroup(g2, 'reject')
   assert.deepEqual(engine.live, ['D', 'E'], '闸没放开的话第二张卡片就点不动了')
 })
