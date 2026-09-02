@@ -215,6 +215,20 @@
       <view class="etb-btn wide" :class="{ on: state.view.recordChanges }" :title="$t('editor.toolbar.trackChanges')" @tap.stop="toggleTrack">
         <text class="etb-tx sm">{{ $t('editor.toolbar.trackChangesShort') }}</text>
       </view>
+      <!-- 修订显示方式三态（dev-board#368）。当前态取自 get_ui_state 的真实读回，
+           不是本地记的；引擎不支持页边显示时中间项自动消失（退成两态）。 -->
+      <view v-if="state.view.revisionView" class="etb-drop" :class="{ open: menu === 'revview' }">
+        <view ref="trig_revview" class="etb-field w96" :title="$t('editor.toolbar.revisionView')" @tap.stop="toggleMenu('revview')">
+          <text class="etb-field-t">{{ revisionViewLabel }}</text>
+          <text class="etb-caret">⌄</text>
+        </view>
+        <view v-if="menu === 'revview'" class="etb-menu w150" :style="popStyle(150)" @tap.stop>
+          <view v-for="o in revisionViewOptions" :key="o.k" class="etb-item"
+                :class="{ on: o.k === state.view.revisionView }" @tap.stop="pickRevisionView(o.k)">
+            <text class="etb-item-t">{{ $t('editor.toolbar.' + o.t) }}</text>
+          </view>
+        </view>
+      </view>
       <view class="etb-btn wide" :class="{ on: reviewOpen }" :title="$t('editor.toolbar.reviewPanel')" @tap.stop="$emit('toggle-review')">
         <text class="etb-tx sm">{{ $t('editor.toolbar.reviewShort') }}</text>
       </view>
@@ -321,6 +335,14 @@ const TEXT_FORMS = {
   header: { title: 'headerTitle', ph: 'headerPlaceholder', action: 'edit_header_footer', arg: 'text', extra: { target: 'header' } },
   footer: { title: 'footerTitle', ph: 'footerPlaceholder', action: 'edit_header_footer', arg: 'text', extra: { target: 'footer' } },
 }
+// 修订显示三态（dev-board#368）。k 与 worker 的 REVISION_VIEWS 一字不差：
+// all=正文内联标记 / margin=删除文字挪页边 / final=痕迹全隐只看结果。
+// 引擎读不到 ShowChangesInMargin（旧构建）时 margin 那项自动去掉，退成两态。
+const REVISION_VIEWS = [
+  { k: 'all', t: 'revisionViewAll' },
+  { k: 'margin', t: 'revisionViewMargin' },
+  { k: 'final', t: 'revisionViewFinal' },
+]
 const SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72]
 // 插入表格的网格选择器：8 行 × 8 列够覆盖手工建表的绝大多数情形，再大的表
 // 律师是从 Excel 粘过来或让 AI 生成的，不是在这里点出来的。
@@ -360,6 +382,17 @@ export default {
     TEXT_COLORS: () => TEXT_COLORS, HL_COLORS: () => HL_COLORS, GRID_CELLS: () => GRID_CELLS,
     TEXT_FORMS: () => TEXT_FORMS,
     inTable() { return this.state.selection.inTable === true },
+    // 页边显示要引擎支持（LO 7.1+ 且我们的 r3 表格补丁）。worker 读不到那个视图
+    // 设置时回 revisionMarginSupported:false，这里把中间项摘掉——不放做不到的选项。
+    revisionViewOptions() {
+      const marginOk = this.state.view.revisionMarginSupported !== false
+      return REVISION_VIEWS.filter((o) => o.k !== 'margin' || marginOk)
+    },
+    revisionViewLabel() {
+      const cur = this.state.view.revisionView
+      const hit = REVISION_VIEWS.find((o) => o.k === cur)
+      return hit ? this.$t('editor.toolbar.' + hit.t) : this.$t('editor.toolbar.revisionView')
+    },
     // 单元格名如 "B2" → {row:2, col:'B'}。table_* 原语收 1 起的行号与列字母。
     cellPos() {
       const m = /^([A-Z]+)(\d+)$/.exec(String(this.state.selection.cellName || ''))
@@ -603,6 +636,12 @@ export default {
       const next = !this.state.view.recordChanges
       return this.call('set_track_changes', { on: next }).then((r) => this.after(r, false))
     },
+    // 修订显示方式。changed=false：一个字节都没改，别把文档标脏触发自动保存。
+    // 高亮不在这里本地置位——after() 会重跑 get_ui_state，按引擎读回的真实态刷新。
+    pickRevisionView(mode) {
+      this.closeMenus()
+      return this.call('set_revision_view', { mode }).then((r) => this.after(r, false))
+    },
     // LO chrome 开关。hideElement 的返回值不可信，原语内部用 isElementVisible
     // 复核后回报，这里只按结果记状态。
     async applyChrome(hide) {
@@ -719,11 +758,13 @@ export default {
 .etb-field-t { font-size: 12px; color: var(--awd-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .etb-caret { font-size: 11px; color: var(--awd-text-3); }
 .w110 { width: 110px; }
+.w96 { width: 96px; }
 
 .etb-drop { position: relative; flex-shrink: 0; }
 .etb-menu { position: absolute; top: 30px; left: 0; z-index: 40; max-height: 280px;
   padding: 4px; background: var(--awd-surface); border: 1px solid var(--awd-border); border-radius: 8px;
   box-shadow: 0 6px 20px rgba(15, 23, 42, 0.12); }
+.w150 { width: 150px; }
 .w160 { width: 160px; }
 .w180 { width: 180px; }
 .w200 { width: 200px; }

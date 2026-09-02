@@ -914,6 +914,10 @@ export default {
       this.appendLog('  ← ' + (Date.now() - t0) + 'ms ' + JSON.stringify(res))
       if (!res || !res.success) throw new Error((res && res.message) || 'load_document returned no success')
       if (res.kind) this.docKind = res.kind
+      // 换文档后工具栏必须重读一次激活态：worker 的 retarget 会把修订显示方式
+      // 复位到默认（上一份文档设过「最终稿」就在这一步被打回来），工具栏若还
+      // 端着上一份的读数，显示的态就跟画布对不上。
+      this.uiRefreshKey++
       return true
     },
     // 后端就地覆盖了本文件的内容（版本退回 / 检查点恢复 / AI 直接改文件），而
