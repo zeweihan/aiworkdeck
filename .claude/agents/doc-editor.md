@@ -110,6 +110,30 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - **LO 对话框在本 WASM 构建上不可靠，不许挂进自建菜单**（真机审计）：`.uno:TableDialog`/`.uno:InsertSymbol`/`.uno:SpellDialog` 派发**完全没反应**；`SearchDialog`/`FontDialog`/`ParagraphDialog`/`InsertTable`/`HyperlinkDialog`/`PageStyleName`/`InsertGraphic`/`BulletsAndNumberingDialog`/`WordCountDialog` 弹得出来但**键盘关不掉**（把 IME 覆盖层 blur、焦点还给画布后按 Esc 同样无效——所以不是覆盖层抢焦点造成的）。需要对话框的功能一律自建 DOM 面板。今天 LO 菜单栏还露着，用户点开「查找和替换」就可能卡住；P4 隐藏 chrome 顺带消除这个坑。
 - **查找导航不要用 `find_text_locations`**：它每个匹配插一个锚点书签，书签会跟着文档存进 docx（用户只是搜个词）。用 `find_navigate`（findFirst/findNext + `compareRegionStarts` 定位当前序号，只动视图光标）。
 
+## 修订视图三态与对应 .uno: 命令（dev-board#368）
+
+工具栏右侧「修订显示方式」下拉，纯显示切换——**不改一个字节的内容、不动 `RecordChanges`、不处置任何 redline**（e2e 组 32 用 redline 条数守着）。
+
+| 态 | 文案（zh/en） | `ShowChanges`（只读判据） | `ShowChangesInMargin` | 对应 LO 命令 / 真正的写法 |
+|---|---|---|---|---|
+| `all` | 全部修订 / All markup | true | false | `.uno:ShowTrackedChanges` 开 = `RedlineDisplayType` 写 2 |
+| `margin` | 简洁标记 / Simple markup | true | true | `.uno:ShowChangesInMargin` 开（LO 7.1+，tdf#34355）= ViewSettings 直写 |
+| `final` | 最终稿 / Final | false | false | `.uno:ShowTrackedChanges` 关 = `RedlineDisplayType` 写 `shortAny(0)` |
+
+- 引擎支持实锤（2026-09-02 真机，24.2.8-zhcn-r4，e2e 组 32 用 `debug_revision_view_raw` 绕开原语直读复核）：页边显示读写都通；隐藏修订走 `RedlineDisplayType`。`revisionMarginSupported:false`（读不到 `ShowChangesInMargin`）时工具栏自动摘掉中间项退成两态。
+- **`ShowChanges` 属性写不进去**（本引擎实证）：`setPropertyValue('ShowChanges', false)` **不抛异常也不生效**——静默空写。隐藏修订的唯一可用路线是 `RedlineDisplayType`（`com.sun.star.document.RedlineDisplayType`：0=NONE / 1=INSERTED / 2=INSERTED_AND_REMOVED），**且必须 `shortAny()` 带类型 Any**（裸 number 未验证）。e2e 组 32 锁住这条空写，引擎哪天修好了那条会红，提醒把实现简化回属性直写。
+- **`RedlineDisplayType` 的读回值不能当判据**：写 NONE(0) 之后读回来是 INSERTED(1)（插入文字本来就得留在版面里，引擎自己归一）。判「现在到底显不显示」一律读 `ShowChanges`——它**读**是诚实的（rdt=2 → true，rdt=1 → false），只是不能写。
+- **两个开关分属不同层**：`ShowChanges` 是**模型属性**（跟着文档走），`ShowChangesInMargin` 是**控制器的视图设置**（跟着控制器走）。所以 `bootDoc` 与 `load_document` 的 `retarget` 都必须调 `resetRevisionView()`——保活池里一个 worker 连开好几份文档，不复位就是「上一份设了最终稿、下一份打开修订痕迹默默不见」。lowa-e2e 的 `debug_fresh_document` 探针同样要跟着调它（原 `showDeletionsInMargin()` 已并入）。
+- **产品默认 `DEFAULT_REVISION_VIEW = 'margin'`（页边），理由是 AI 文本读取契约，不是观感偏好**：页边模式把删除的文字移出正文流，于是 `get_document_text` / `get_paragraph` 读到的正文就是「改后的样子」，`find_text_locations` / `replace_nth_match` 的 matchIndex **只数可见匹配**（dev-board#369 的用例明写了这条靠页边成立）。换成内联，AI 多轮改稿读到的正文会混进被删的旧字、按可见匹配的计数会错位——那是 AI 编辑契约的回归，不是测试口径问题。曾按「对齐 Word 默认」把它改成 `'all'`，正是撞在这上面被推翻的。**改这个常量 = 改上述契约**，别顺手动。
+- **AI 命令另有守卫，让用户可以放心切内联**（`runAgentCommandInMarginView`，execCommand 里对带 `__agent` 的命令生效）：当前视图是 `all` 时，执行前临时切页边 + `refresh()`，执行完切回用户所选的态 + `refresh()`；页边态与最终稿态的正文本来就不含删除文字，直接放行零开销（默认路径因此没有任何额外成本）。豁免 `set_revision_view` / `export_document` / `load_document`（前者会打架，后两者自带包装）。非 Writer 一个属性都不碰。原语可能是 async（分批的 `find_replace` / `apply_house_style`），恢复必须等它 settle，同步抛异常也要还原。**还原病灶即转红**：摘掉守卫后，内联态下 `get_document_text` 读回 `甲方一、甲方二、甲方三。`（混着被删的字）、`find_text_locations` 数出 3 处而不是 2 处（e2e 组 32 的守卫段 3 条转红），装回即绿。
+- **不要在非 Writer 模型上问 Writer 专属属性——哪怕包在 try/catch 里**（本轮踩到的最贵一条，七次全量 e2e 才定位）：`withInlineMarkupForExport` 早期版本对**每次**导出都先 `xModel.getPropertyValue('ShowChanges')`，在 Impress 模型上这一问会把引擎搞坏——**紧随其后的 pptx 重新打开要么超过 `load_document` 的 180s 预算超时，要么抛 emscripten 的 `operation does not support unaligned accesses`**（lowa-e2e 组 23，五跑五中；把默认换回页边照样中，说明与三态无关；父提交不问这个属性就全绿）。修法是函数头上 `if (!isWriterDoc()) return fn();`——一个属性都不碰。`get_ui_state` / `set_revision_view` / `retarget` 早就有这个守卫，唯独导出包装漏了。
+- `.uno:ShowTrackedChanges` 只当兜底：它是**切换**语义，要设成确定状态就得先读再判；`applyShowChanges` 只在读得回 `ShowChanges` 时才敢退到派发，读不回就如实报失败——不许蒙着切。
+- 原语 `set_revision_view {mode}`（已入 `EDITOR_ACTIONS`，宿主发起非 AI 管线）：不带 `mode` = 只读查询；返回的是**读回来的真实状态**（`mode/showChanges/showChangesInMargin/marginSupported`，另带 `requested` 与 `warnings`），不是把入参抄回去。`get_ui_state` 的 `view` 段同样带这三个字段——工具栏高亮读的就是它，不许本地记一份猜。
+- 非 Writer 文档不给字段也不给控件（Calc/Impress 没有修订机制）；`set_revision_view` 对它们明确拒绝。
+- **处置修订的光标摆位必须跟着显示模式分支**（`selectRedlineRange`，真机红绿实证）：删除型在**页边**模式下塌陷到区间起点、在**内联**模式下必须跨选整段区间（删除文字就在正文流里）。把默认切成内联试跑时，摆位没跟着改的那一版让 lowa-e2e 组 18 的「resolve_revision 拒绝删除型」立刻转红（`修订未被处置（引擎未命中该条）`、redline 条数不减），加上 `readShowChangesInMargin() === true` 的分支后转绿。默认虽已改回页边，这条分支必须留着——用户在工具栏切到内联后，审阅面板的逐条处置走的就是内联那一支（e2e 组 32 显式切到内联跑一遍删除型/插入型 accept）。插入型两种模式下都是跨选，不分支。
+- **定点取样的像素断言会被显示模式挪掉**：显示模式改变纸在画布里的落位（页边模式在纸侧留出那条边，内联不留），lowa-e2e 组 30 的 `set_app_theme` 探针原本定点取画布左缘中部那一小块当「纸外工作区」——把默认切成内联试跑时那一点变成纸白，深浅两态都读 255、断言必红（跟主题毫无关系；缩到 50% 再取也一样红）。探针已改成**整幅前后对比**：同一块画布在深/浅两态各截一张，逐像素比亮度，变暗超过阈值的像素占比 >5% 即判定重绘——纸和文字两态不变、天然不参与计数，不用再猜纸在哪。新的像素断言照这个路子写，别再定点取样。
+- **内联态下读不出「结果文本」**：正文里旧字新字同框（把「三十」改成「六十」，`get_document_text` 读回「六三十」；表格单元格同理）。所以默认态才是页边（见上）；**用户手工切到内联之后，凡是「改完读回来核对」的逻辑都要留意这条**——AI 侧由 `runAgentCommandInMarginView` 兜住，宿主侧自己发的读取命令（工具栏、审阅面板）看到的就是用户所选的语义。lowa-e2e 里切模式的断言集中在组 31/32，组 23 之前的用例一律跑在默认的页边语义上。
+
 ## 已知地雷
 
 - boot 三地雷勿回退（canvas 必须 id=qtcanvas 且禁 border/padding；COOP/COEP 缺失 SharedArrayBuffer 不可用；locale shim）。
@@ -127,12 +151,12 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - **保存状态胶囊只在「慢」和「失败」时出声**：成功保存不报「已保存」（维护者反馈：经常闪变、打扰）。浮层要钉在**画布**上而不是编辑器外层——审阅面板是并排挤宽的，钉外层会压住面板标题行。
 - `npm run build:zetaoffice` 会清空 dist 并删掉已 fetch 的引擎——本地反复跑 e2e 用 `LOWA_ENGINE_DIR` 规避，或从兄弟 worktree 复制引擎（CDN 挂时的配方）。
 - 修订作者：params 带 `__agent:true` → 署名 "AI WorkDeck"（worker `execCommand` 每条命令前按标记切 `/org.openoffice.UserProfile/Data` 的 givenname，`setRedlineAuthor`；引擎 `SwModule` 收到配置变更通知即重取作者，真机实证双向切换即时生效）。**宿主每一条 AI 发起的写命令都要带标记**：`handleEditorCommand` 与 PluginPane 一直带，流式落字 `flushDocStreamBuffer`/`handleDocStreamEnd`（`stream_insert`/`stream_flush`）曾漏掉，AI 起草的整篇内容全记在用户名下（dev-board#367）；单测 `tests/project-home/doc-stream-agent-author.test.mjs` 锁住。用户自己的 IME 输入 / 快捷键 / 工具栏不带标记，署当前登录用户名（`load_document` 的 `authorName`）。
-- **页边模式下 `export_document` 必须临时关页边 + `xModel.refresh()`**（`withMarginOff`，dev-board#367 真机探针）：ShowChangesInMargin=true 时删除文本被并出版面，docx 导出器却按并合后的正文套修订区间——字符级替换（删「乙」插「丁」）导出成「丁」被删、「乙」消失，多段文档还会把别处的插入标成删除；重新打开 / Word 里看到的修订是错的，且自动保存、版本记录、对比全走这条导出。只关不 `refresh()` 仍错位（探针 R2），导完要恢复页边再 `refresh()` 一次。e2e 组 30 锁住导出→重开的修订与正文一致。
+- **`export_document` 必须临时切成内联「全部修订」再导**（`withInlineMarkupForExport`，原 `withMarginOff`，dev-board#367 真机探针 + #368 三态）：ShowChangesInMargin=true 时删除文本被并出版面，docx 导出器却按并合后的正文套修订区间——字符级替换（删「乙」插「丁」）导出成「丁」被删、「乙」消失，多段文档还会把别处的插入标成删除；重新打开 / Word 里看到的修订是错的，且自动保存、版本记录、对比全走这条导出。只关不 `refresh()` 仍错位（探针 R2），导完要恢复用户原来选的显示态再 `refresh()` 一次。**最终稿（`final`）同样要临时恢复显示再导**——隐藏态可能随 `settings.xml` 的 `w:revisionView` 写进 docx，别人在 Word 里打开就看不见修订。**函数头必须 `if (!isWriterDoc()) return fn();`**（见上一节最后一条：漏了这个守卫会把 Impress 导出后的重新打开搞崩）。e2e 组 31 锁住导出→重开的修订与正文一致（该组自己显式切到页边跑），组 32 锁住最终稿导出件里 `w:ins`/`w:del` 与内联导出一条不差、且 `settings.xml` 里没有 `w:revisionView`（真机实测：本引擎两种模式导出的 `w:ins`/`w:del` 计数一致，`settings.xml` 里从来没写过 `w:revisionView`，包装是兜底不是补漏）。
 - **`.uno:InsertAnnotation` 必须在 RecordChanges 关闭下派发**（`withRecordChangesOff`，`add_comment` / `add_comment_at_selection` / `reply_comment` 三处）：修订记录开着时引擎把批注字段本身记成一条空文本插入修订（说明字段「已添加批注」），导出成包着批注标记的 `<w:ins>`——Word 里是一条作者 AI WorkDeck、正文为空、时间与真批注相同的幽灵气泡；审阅面板也多一张「插入（空）」卡。关掉派发不影响批注的区间标记 / 作者 / 内容（探针 Q5）。`set_comment_resolved` 走 API 属性，不产生修订。
 - **`.uno:InsertAnnotation` 之后视图光标失效**（真机探针 R3/S4）：焦点进了批注窗口，`ctrl.getViewCursor()` 的 `getText()`/`gotoRange()`/插入一律抛 RuntimeException，`ctrl.getSelection()` 为 null——`insert_at_cursor` / `goto` / `replace_selection` / `stream_insert`（都走视图光标）在用户点一下画布之前全部失败；锚点/段落索引类原语（`replace_at_position`、`modify_paragraph`、`add_comment`）不受影响。`set_selection`、`ctrl.select()`、重取 controller、给窗口 setFocus、派发 `.uno:Escape`/`.uno:GoToStartOfDoc` 都救不回来；唯一试出来的恢复手段是派发两次 `.uno:ShowAnnotations`（藏再显）。未上线——只有一次探针实证，先记在这里。
 - **批注边栏宽度与锚线在引擎里没有配置项**：宽度 = 缩放比 × 1.8 px 硬编码（`sw/source/uibase/docvw/PostItMgr.cxx` `GetSidebarWidth`，60% 缩放 ≈ 108px），r4 引擎注册表里只有 `ShowNotes`/`ShowChangesInMargin`，没有任何 Sidebar/Notes 宽度键；锚线由 `AnchorOverlayObject` 恒画（`AnnotationWin2.cxx` `SetAnchorState(All)`），只有「隐藏全部批注」时才退成三角。适合页宽会把边栏算进页宽（`viewmdi.cxx` `SetZoom_` 在 `HasNotes && ShowNotes` 时 `AdjustWidth(GetSidebarWidth)`）。要更宽只能改缩放，或在自建引擎里改这个系数重烧。
-- **ShowChangesInMargin 依赖自建引擎 ≥24.2.8-zhcn-r3**：原生 LO 把页边删除文本画在锚点所在 frame 左侧，表格内 frame=单元格会叠画左邻格正文；r3 焙入 frmpaint.cxx 表格锚点补丁（`desktop/lowa-build/patches`，锚 FindTabFrame 整表左缘）后才能开。页边模式非纯视图设置：开=删除文本移入 redline 对象（getString 可取、正文不含），关=留正文流且 redline getString 抛异常——debug_revisions 已带 RedlineText/区间双路取回，两种模式都能读。已知残留局限：同一表格行多格删除会在页边同 Y 相互叠（上游按行画、无跨格协调）。批注侧栏与此设置无关。
-- **审阅面板原语的光标摆位是硬约束**（`resolve_revision`，真机逐个试出来）：插入型修订必须**跨选**整个 redline 区间才被 `.uno:AcceptTrackedChange` 命中；删除型（页边模式下文本不在正文流）必须**塌陷**到区间起点，跨选反而打空。摆错不报错——dispatch 静默失效甚至凭空多一条空插入修订，所以处置一律用 redline 条数变化复核，别信 dispatch 的返回。
+- **ShowChangesInMargin 依赖自建引擎 ≥24.2.8-zhcn-r3**：原生 LO 把页边删除文本画在锚点所在 frame 左侧，表格内 frame=单元格会叠画左邻格正文；r3 焙入 frmpaint.cxx 表格锚点补丁（`desktop/lowa-build/patches`，锚 FindTabFrame 整表左缘）后才能开。页边模式非纯视图设置：开=删除文本移入 redline 对象（getString 可取、正文不含），关=留正文流且 redline getString 抛异常——debug_revisions 已带 RedlineText/区间双路取回，两种模式都能读。已知残留局限：同一表格行多格删除会在页边同 Y 相互叠（上游按行画、无跨格协调）。批注侧栏与此设置无关。**这个开关现在是「修订视图三态」的一半**，直接调 `ctrl.getViewSettings().setPropertyValue(...)` 的新代码一律改走 `applyRevisionView()`，见上一节。
+- **审阅面板原语的光标摆位是硬约束，且跟着显示模式走**（`resolve_revision` / `selectRedlineRange`，真机逐个试出来）：插入型修订必须**跨选**整个 redline 区间才被 `.uno:AcceptTrackedChange` 命中（两种模式都一样）；删除型**只在页边模式下**必须**塌陷**到区间起点（那时删除文本不在正文流，跨选反而打空），**内联模式（现在的默认）下删除文本就在流里，同样必须跨选**——沿用塌陷会「引擎未命中该条」。摆错不报错——dispatch 静默失效甚至凭空多一条空插入修订，所以处置一律用 redline 条数变化复核，别信 dispatch 的返回。
 - **批注删除三个前提**（`delete_comment`）：`.uno:DeleteComment` 必须带 `Id`（批注的 `Name` 属性）；文档必须**可见**（Hidden 打开的文档没有批注窗口，按 Id 找不到）；已解决（Resolved）的批注要先取消解决态。API 路线 `dispose()` / `removeTextContent()` 在有些上下文里是「不抛异常也不生效」的假成功，不能据其返回值报成功。
 - e2e 探针换文档（`debug_fresh_document`）要跟着生产 retarget 做 `showDeletionsInMargin()`，否则后续断言跑在行内语义下；组 18 还需 `{visible:true}`（批注删除依赖注释窗口）。
 - webview/uni 存储格式坑与宿主侧 e2e 配方见 lowa-keepalive 记录（PR#159）。
@@ -180,7 +204,8 @@ HOUSE 不再是常量：`buildHouse(profile)` 从画像 JSON 派生写端常量�
 
 ## 验证
 
-- 核心回归：`cd frontend && npm run test:lowa-e2e`（真引擎 puppeteer-core 无头，30 组人机模拟，2026-09-02 基线 479 步；前置 `npm run build:zetaoffice` + `node ../desktop/scripts/fetch-lowa-assets.js` 或设 LOWA_ENGINE_DIR）。
+- 核心回归：`cd frontend && npm run test:lowa-e2e`（真引擎 puppeteer-core 无头，32 组人机模拟；前置 `npm run build:zetaoffice` + `node ../desktop/scripts/fetch-lowa-assets.js` 或设 LOWA_ENGINE_DIR）。
+- 修订视图三态的接线契约（白名单 / 三态命令序列 / 换文档复位）：`npm run test:revision-view`（node --test，不需要引擎）。
 - 大文档性能：`npm run test:lowa-big`（同一套启动件 `tests/lowa-e2e/_boot.mjs`；端口被别的 worktree 占着时设 `LOWA_E2E_PORT`）。
 - 涉桌面壳/webview：`npm run test:desktop-e2e`（弹 dev Electron 窗口，验证保存落盘链路）。
 - 全应用：`npm run test:app-e2e`。改编辑器三件套（原语/白名单/worker）必跑 lowa-e2e。

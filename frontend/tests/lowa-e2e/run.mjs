@@ -91,6 +91,27 @@ const DEBUG_ACTIONS = `
       return { success: true, scheme: name, color: Number(c) };
     } catch (e) { return { success: false, message: errStr(e) }; }
   },
+  // 组 31 探针：绕开 set_revision_view 自己直读两个引擎开关（不让断言变成
+  // 「原语说什么就信什么」的自证），外加正文文字与 redline 条数。
+  debug_revision_view_raw() {
+    const out = { success: true };
+    try { out.showChanges = xModel.getPropertyValue('ShowChanges'); } catch (e) { out.showChangesErr = errStr(e); }
+    try { out.inMargin = ctrl.getViewSettings().getPropertyValue('ShowChangesInMargin'); } catch (e) { out.inMarginErr = errStr(e); }
+    // rdt 只作诊断：写 NONE(0) 后引擎归一成 INSERTED(1)，不能当判据。
+    try { out.rdt = unoEnumVal(xModel.getPropertyValue('RedlineDisplayType')); } catch (e) {}
+    try { out.body = xModel.getText().getString(); } catch (e) { out.bodyErr = errStr(e); }
+    try { out.redlines = xModel.getRedlines().getCount(); } catch (e) { out.redlineErr = errStr(e); }
+    return out;
+  },
+  // 组 31 探针：锁住「ShowChanges 属性写不进去」这条真机结论——它是 worker 绕道
+  // RedlineDisplayType 的全部理由。将来引擎修好了这条会红，提醒把实现简化回去。
+  debug_try_write_show_changes(p) {
+    const out = { success: true };
+    try { out.before = xModel.getPropertyValue('ShowChanges'); } catch (e) { out.beforeErr = errStr(e); }
+    try { xModel.setPropertyValue('ShowChanges', !!p.on); } catch (e) { out.setErr = errStr(e); }
+    try { out.after = xModel.getPropertyValue('ShowChanges'); } catch (e) { out.afterErr = errStr(e); }
+    return out;
+  },
   debug_char_prop(p) {
     const vc = ctrl.getViewCursor();
     return { success: true, value: vc.getPropertyValue(String(p.prop)), selected: (vc.getString() || '').slice(0, 40) };
@@ -116,15 +137,22 @@ const DEBUG_ACTIONS = `
     try {
       // p.visible：批注删除要走引擎的注释窗口（.uno:DeleteComment 按 Id 找的是
       // 活动批注窗口），Hidden 文档里根本没有——组 18 因此要一份可见文档。
+      const prev = xModel;
       const loaded = desktop.loadComponentFromURL('private:factory/swriter', '_blank', 0,
         (p && p.visible) ? [] : [mkProp('Hidden', true)]);
       if (!loaded) return { success: false, message: 'loadComponentFromURL returned null' };
       xModel = loaded;
       ctrl = loaded.getCurrentController();
+      // 顺手关掉上一份文档：整跑要开二十来份，一份都不关地攒在 WASM 堆里没有好处。
+      // （注：这不是组 23 那次崩溃的原因——那次是导出包装去问 Impress 模型要
+      // Writer 专属属性，见 office_thread.js 的 withInlineMarkupForExport。）
+      // setModified(false) 是为了不让 close 被「有未保存修改」否掉；失败就算了，
+      // 别拖累用例本身。
+      try { if (prev && prev !== loaded) { try { prev.setModified(false); } catch (e) {} prev.close(true); } } catch (e) {}
       try { xModel.setPropertyValue('RecordChanges', false); } catch (e) {}
-      // 生产的 retarget（load_document）会重置这个视图设置——探针换文档也要跟着
-      // 做，否则后续断言跑在行内显示语义下，与真实产品形态不符。
-      showDeletionsInMargin();
+      // 生产的 retarget（load_document）会把修订显示方式复位到默认——探针换文档
+      // 也要跟着做，否则后续断言跑在与真实产品不同的显示语义下。
+      resetRevisionView();
       return { success: true };
     } catch (e) { return { success: false, message: errStr(e) }; }
   },
@@ -307,8 +335,8 @@ function patchServed(urlPath, content) {
   if (/^\/assets\/editor-.*\.js$/.test(urlPath)) {
     const s = content.toString('utf8')
     return Buffer.from(
-      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments','debug_fresh_document','debug_table_info','debug_fresh_calc','debug_sheet_cell_info','debug_sheet_doc_info','debug_slide_shape_info','debug_slide_char_prop','debug_lock_state','debug_modified_count','debug_footer_info','debug_para_style_info','debug_app_bg'")
-        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments","debug_fresh_document","debug_table_info","debug_fresh_calc","debug_sheet_cell_info","debug_sheet_doc_info","debug_slide_shape_info","debug_slide_char_prop","debug_lock_state","debug_modified_count","debug_footer_info","debug_para_style_info","debug_app_bg"'),
+      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments','debug_fresh_document','debug_table_info','debug_fresh_calc','debug_sheet_cell_info','debug_sheet_doc_info','debug_slide_shape_info','debug_slide_char_prop','debug_lock_state','debug_modified_count','debug_footer_info','debug_para_style_info','debug_app_bg','debug_revision_view_raw','debug_try_write_show_changes'")
+        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments","debug_fresh_document","debug_table_info","debug_fresh_calc","debug_sheet_cell_info","debug_sheet_doc_info","debug_slide_shape_info","debug_slide_char_prop","debug_lock_state","debug_modified_count","debug_footer_info","debug_para_style_info","debug_app_bg","debug_revision_view_raw","debug_try_write_show_changes"'),
       'utf8')
   }
   return content
@@ -867,6 +895,8 @@ try {
     lr = await exec('list_revisions')
     const delIdx = lr.revisions.findIndex((r) => r.type === 'Delete')
     const rej = await exec('resolve_revision', { index: delIdx, action: 'reject' })
+    // 摆位按显示模式分支（dev-board#368）：页边默认态下删除型塌陷到区间起点；
+    // 内联态下删除文字在正文流里，必须跨选整段区间。见 selectRedlineRange。
     check('resolve_revision 拒绝删除型（条数真的减少）', rej.success === true && rej.remaining === lr.count - 1, JSON.stringify(rej))
     check('拒绝删除后原字「三」回到正文', (await doc()).includes('三'), await doc())
 
@@ -2009,42 +2039,63 @@ try {
   // ---- 组 30：set_app_theme（深浅主题的纸外工作区配色，dev-board#273）------
   // 断言两层：配置真的写进 ColorScheme（debug_app_bg 读回），且引擎真的重绘
   // （左缘中部像素亮度深浅两态拉开——那里是纸外工作区，不是纸）。
+  //
+  // 「真的重绘了」这一层原来靠**定点取样**（画布左缘中部一小块，认定那里是纸外
+  // 工作区）。取样点落在哪，取决于纸在画布里的位置——缩放、页面设置、显示模式
+  // 都会挪动它：dev-board#368 把默认显示态从页边改成内联之后，页边不再占那条边，
+  // 纸铺到了左缘，那一小块变成纸白，深浅两态都是 255，断言必红（跟主题毫无关系）。
+  // 现在改成**整幅前后对比**：同一块画布在深/浅两态各截一张，逐像素比亮度，
+  // 只要有足够比例的像素明显变暗，就说明纸外那片区域真的被重绘了——纸和文字
+  // 在两态下不变，天然不参与计数，也就不用再猜纸在哪。
   {
     console.log('\n== 组 30：set_app_theme 应用配色 ==')
     const { PNG } = await import('pngjs')
-    const probeLum = async () => {
+    const shotOf = async () => {
       const vp = page.viewport() || { width: 1280, height: 800 }
-      const shot = await page.screenshot({ clip: { x: 3, y: Math.floor(vp.height * 0.55), width: 6, height: 6 } })
-      const png = PNG.sync.read(Buffer.from(shot))
-      let sum = 0
-      for (let i = 0; i < png.data.length; i += 4) sum += (png.data[i] + png.data[i + 1] + png.data[i + 2]) / 3
-      return Math.round(sum / (png.data.length / 4))
+      const buf = await page.screenshot({ clip: { x: 0, y: 0, width: vp.width, height: vp.height } })
+      return PNG.sync.read(Buffer.from(buf))
+    }
+    // 变暗像素占比：深色态相对浅色态亮度掉 80 以上的像素比例
+    const darkenedRatio = (a, b) => {
+      const n = Math.min(a.data.length, b.data.length) / 4
+      let hit = 0
+      for (let i = 0; i < n; i++) {
+        const o = i * 4
+        const la = (a.data[o] + a.data[o + 1] + a.data[o + 2]) / 3
+        const lb = (b.data[o] + b.data[o + 1] + b.data[o + 2]) / 3
+        if (lb - la > 80) hit++
+      }
+      return hit / n
     }
     const dark = await exec('set_app_theme', { mode: 'dark' })
     check('set_app_theme dark 成功', dark.success === true && dark.mode === 'dark', JSON.stringify(dark))
     const bgDark = await exec('debug_app_bg')
     check('AppBackground 配置写入 0x101214', bgDark.success === true && bgDark.color === 0x101214, JSON.stringify(bgDark))
     await new Promise((r) => setTimeout(r, 900))
-    const darkLum = await probeLum()
+    const shotDark = await shotOf()
     const light = await exec('set_app_theme', { mode: 'light' })
     check('set_app_theme light 成功', light.success === true && light.mode === 'light', JSON.stringify(light))
     const bgLight = await exec('debug_app_bg')
     check('AppBackground 配置回到 0xF1F3F5', bgLight.success === true && bgLight.color === 0xF1F3F5, JSON.stringify(bgLight))
     await new Promise((r) => setTimeout(r, 900))
-    const lightLum = await probeLum()
-    check('纸外区域真的重绘（深色亮度显著低于浅色）', darkLum < lightLum - 80, JSON.stringify({ darkLum, lightLum }))
+    const shotLight = await shotOf()
+    const ratio = darkenedRatio(shotDark, shotLight)
+    check('纸外区域真的重绘（深色态有成片像素明显变暗）', ratio > 0.05, '变暗像素占比 ' + ratio.toFixed(3))
   }
 
-  // ---------- 组 30：页边模式导出保真 / 批注不记修订 / 流式署名（dev-board#367）----------
+  // ---------- 组 31：页边模式导出保真 / 批注不记修订 / 流式署名（dev-board#367）----------
   // 真机探针（2026-09-02）实锤三件事：① ShowChangesInMargin 开着时 export_document
   // 把字符级替换导出成「新字被删、旧字消失」（多段文档还会把别处的插入标成删除），
   // 重新打开 / Word 里修订全是错的——export 现在导出期间临时关页边 + refresh；
   // ② RecordChanges 开着时 .uno:InsertAnnotation 多记一条空插入修订（「已添加批注」），
   // Word 里是一条作者 AI WorkDeck、正文为空的幽灵气泡；③ stream_insert 按 __agent 署名。
-  console.log('\n[30] 页边模式导出保真 / 批注不记修订 / 流式署名（dev-board#367）')
+  console.log('\n[31] 页边模式导出保真 / 批注不记修订 / 流式署名（dev-board#367）')
   {
     const fresh30 = await exec('debug_fresh_document', { visible: true })
     check('换新文档成功', fresh30 && fresh30.success === true, JSON.stringify(fresh30))
+    // 默认显示态已改成内联（dev-board#368），而本组测的就是**页边模式**下的导出
+    // 保真——显式切过去，换文档/重新装载后都要再切一次（retarget 会复位到默认）。
+    await exec('set_revision_view', { mode: 'margin' })
     const setText30 = async (t) => {
       await exec('debug_set_record_changes', { on: false })
       await exec('ui_command', { name: 'select_all' })
@@ -2071,10 +2122,13 @@ try {
     await exec('debug_fresh_document', { visible: true })
     const ld30 = await exec('load_document', { bytes: bytes30, name: 'margin-roundtrip.docx', authorName: '测试用户' })
     check('导出件可重新打开', ld30.success === true, JSON.stringify(ld30))
+    await exec('set_revision_view', { mode: 'margin' })   // load_document 的 retarget 复位到了默认
     const after30 = sig(await exec('debug_revisions'))
     check('重新打开后修订与改前一致（页边模式导出不再错位）', after30 === before30, after30 + ' vs ' + before30)
     const docR = await docText()
     check('重新打开后正文正确', docR[0] === '第一条 甲方应于四十五日内付款。' && docR[1] === '第二条 乙方应当按期交付全部货物。', JSON.stringify(docR))
+
+    await exec('set_revision_view', { mode: 'all' })   // 页边那一段测完，回到默认显示态
 
     // ② 批注不记修订
     const c30 = await exec('find_text_locations', { keyword: '付款' })
@@ -2100,6 +2154,170 @@ try {
     const authorOf = (t) => ((rvS.redlines || []).find((r) => (r.text || '').includes(t)) || {}).author
     check('stream_insert 带 __agent → 署名 AI WorkDeck', authorOf('流式带标记') === 'AI WorkDeck', JSON.stringify(rvS.redlines))
     check('stream_insert 不带标记 → 署当前用户名', authorOf('流式无标记') === '测试用户', JSON.stringify(rvS.redlines))
+  }
+
+  // ---- 组 32：修订显示三态（dev-board#368）---------------------------------
+  // 全部修订 / 简洁标记（页边） / 最终稿。断言两层：两个引擎开关真的被写进去
+  // （debug_revision_view_raw 绕开原语自己读，不做自证），以及**正文文字真的跟着
+  // 变**——页边与最终稿都把删除文字移出正文流，全部修订留在正文里。
+  // 全程 redline 条数必须一条不少：这是显示切换，不是处置修订。
+  {
+    console.log('\n== 组 32：修订显示三态 ==')
+    await exec('debug_fresh_document', {})
+    await exec('debug_set_record_changes', { on: false })
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: '甲方乙方丙方' })
+    await exec('debug_set_record_changes', { on: true })
+    const del = await exec('find_replace', { findText: '乙方', replaceText: '', replaceAll: true })
+    const base = await exec('debug_revision_view_raw')
+    check('准备：删除「乙方」留下修订', del.success === true && base.redlines >= 1, JSON.stringify({ del, base }))
+
+    // 本引擎地雷：ShowChanges 属性读得回但**写不进去**（不抛异常的静默空写）。
+    // 这是 worker 绕道 RedlineDisplayType 的全部理由；引擎哪天修好了这条会红，
+    // 提醒把实现简化回属性直写。
+    const rw = await exec('debug_try_write_show_changes', { on: false })
+    check('ShowChanges 属性是静默空写（写 false 后仍读回 true）',
+      rw.before === true && rw.after === true && rw.setErr === undefined, JSON.stringify(rw))
+
+    const seen = {}
+    for (const mode of ['all', 'margin', 'final', 'all']) {
+      const r = await exec('set_revision_view', { mode })
+      const raw = await exec('debug_revision_view_raw')
+      seen[mode] = { r, raw }
+      check(mode + '：原语回报的态 = 引擎读回的态', r.success === true && r.mode === mode
+        && r.showChanges === (mode !== 'final') && r.showChangesInMargin === (mode === 'margin'),
+      JSON.stringify(r))
+      check(mode + '：两个引擎开关真的写进去了', raw.showChanges === (mode !== 'final') && raw.inMargin === (mode === 'margin'),
+        JSON.stringify(raw))
+      check(mode + '：redline 一条没少（显示切换不处置修订）', raw.redlines === base.redlines,
+        JSON.stringify({ now: raw.redlines, was: base.redlines }))
+    }
+    check('全部修订：删除的「乙方」留在正文流里（内联删除线）', seen.all.raw.body.indexOf('乙方') >= 0, JSON.stringify(seen.all.raw.body))
+    check('简洁标记：删除文字移出正文（挪到页边）', seen.margin.raw.body.indexOf('乙方') < 0, JSON.stringify(seen.margin.raw.body))
+    check('最终稿：正文即结果，删除文字不在', seen.final.raw.body.indexOf('乙方') < 0, JSON.stringify(seen.final.raw.body))
+
+    // get_ui_state 是工具栏的唯一数据来源——三态必须能从这里读到真值
+    await exec('set_revision_view', { mode: 'final' })
+    const ui = await exec('get_ui_state')
+    check('get_ui_state 带回真实三态', ui.view.revisionView === 'final' && ui.view.showChanges === false
+      && ui.view.revisionMarginSupported === true, JSON.stringify(ui.view))
+    check('非法 mode 被明确拒绝', (await exec('set_revision_view', { mode: 'balloon' })).success === false)
+    const q = await exec('set_revision_view', {})
+    check('不带 mode = 只读查询，不改状态', q.success === true && q.mode === 'final' && q.requested === undefined, JSON.stringify(q))
+
+    // 换文档必须复位：上一份停在「最终稿」，下一份打开不许还是隐着的
+    await exec('debug_fresh_document', {})
+    const after = await exec('debug_revision_view_raw')
+    check('换文档复位到默认（页边显示、修订可见）',
+      after.showChanges === true && after.inMargin === true, JSON.stringify(after))
+
+    // ---- 第 3 项：内联默认态下审阅面板的处置摆位 ----------------------------
+    // doc-editor.md 的硬约束原本是按**页边模式**逐个试出来的（删除型必须塌陷到区间
+    // 起点、插入型必须跨选）。默认改成内联之后，删除文字回到了正文流里，摆位是否
+    // 还命中必须实测。摆错不报错——dispatch 静默失效甚至凭空多一条空插入修订，
+    // 所以一律用 redline 条数变化复核，不信 dispatch 的返回。
+    await exec('debug_fresh_document', {})
+    await exec('debug_set_record_changes', { on: false })
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: '甲方乙方丙方' })
+    await exec('debug_set_record_changes', { on: true })
+    await exec('find_replace', { findText: '乙方', replaceText: '', replaceAll: true })  // 删除型
+    await exec('goto', { type: 'end' })
+    await exec('insert_at_cursor', { text: '（补充）' })                                   // 插入型
+    await exec('set_revision_view', { mode: 'all' })   // 用户把视图切成内联
+    const viewR = await exec('debug_revision_view_raw')
+    check('处置摆位测试跑在内联态上', viewR.showChanges === true && viewR.inMargin === false, JSON.stringify(viewR))
+    const lr = await exec('list_revisions')
+    const iDel = (lr.revisions || []).findIndex((r) => String(r.type) === 'Delete')
+    const iIns0 = (lr.revisions || []).findIndex((r) => String(r.type) === 'Insert')
+    check('内联态下删除型 / 插入型修订各就位', iDel >= 0 && iIns0 >= 0, JSON.stringify(lr.revisions))
+    const totalR = lr.count
+    const rDel = await exec('resolve_revision', { index: iDel, action: 'accept' })
+    check('内联态：删除型 accept 真命中（redline 条数 -1）',
+      rDel.success === true && rDel.remaining === totalR - 1, JSON.stringify(rDel))
+    const lr2 = await exec('list_revisions')
+    const iIns = (lr2.revisions || []).findIndex((r) => String(r.type) === 'Insert')
+    const rIns = await exec('resolve_revision', { index: iIns, action: 'accept' })
+    check('内联态：插入型 accept 真命中（redline 条数 -1）',
+      rIns.success === true && rIns.remaining === totalR - 2, JSON.stringify(rIns))
+    const bodyR = (await exec('get_document_text')).paragraphs.map((x) => x.text).join('|')
+    check('两条都接受后正文 = 最终结果', bodyR === '甲方丙方（补充）', bodyR)
+    await exec('set_revision_view', { mode: 'margin' })   // 回默认
+
+    // ---- AI 工具面守卫：用户切成内联时，__agent 命令仍按页边语义执行 ----------
+    // WHY：AI 多轮改稿依赖「正文 = 改后的样子」与「只数可见匹配」（dev-board#369）。
+    // 用户把视图切成内联后，正文里混着被删的旧字——不兜住的话 AI 读到的就是错的。
+    // 断言四件事：正文不含被删的字、find_text_locations 只计可见匹配、matchIndex 仍 0 起、
+    // 命令跑完视图**还是用户选的内联**（守卫用完即还原，不许偷改用户的显示态）。
+    await exec('debug_fresh_document', {})
+    await exec('debug_set_record_changes', { on: false })
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: '甲方一、甲方二、甲方三。' })
+    await exec('debug_set_record_changes', { on: true })
+    const dmA = await exec('delete_match', { findText: '甲方', matchIndex: 1, __agent: true })
+    check('准备：以 __agent 删掉第二处「甲方」', dmA.success === true, JSON.stringify(dmA))
+    await exec('set_revision_view', { mode: 'all' })     // 用户切成内联
+    const rawInline = await exec('debug_revision_view_raw')
+    check('守卫用例起点：视图是内联，正文里确实混着被删的字',
+      rawInline.showChanges === true && rawInline.inMargin === false && rawInline.body.indexOf('甲方二') >= 0,
+      JSON.stringify({ mode: rawInline, body: rawInline.body }))
+    const gdA = await exec('get_document_text', { __agent: true })
+    const bodyA = (gdA.paragraphs || []).map((x) => x.text).join('|')
+    check('内联态下 __agent 读正文：不含被删的字（按页边语义）', bodyA === '甲方一、二、甲方三。', bodyA)
+    const ftA = await exec('find_text_locations', { keyword: '甲方', __agent: true })
+    check('内联态下 __agent 查找：只计可见匹配（2 处，不是 3 处）', ftA.success === true && ftA.count === 2, JSON.stringify(ftA))
+    check('内联态下 __agent 查找：matchIndex 仍 0 起',
+      (ftA.matches || []).map((m) => m.matchIndex).join(',') === '0,1', JSON.stringify((ftA.matches || []).map((m) => m.matchIndex)))
+    const uiA = await exec('get_ui_state')
+    check('守卫用完即还原：视图仍是用户选的内联', uiA.view.revisionView === 'all', JSON.stringify(uiA.view))
+    const gdU = await exec('get_document_text')
+    check('对照：不带 __agent 的读取按用户所选的内联语义（正文含被删的字）',
+      ((gdU.paragraphs || []).map((x) => x.text).join('|')).indexOf('甲方二') >= 0,
+      (gdU.paragraphs || []).map((x) => x.text).join('|'))
+    await exec('set_revision_view', { mode: 'margin' })   // 回默认
+
+    // ---- 第 4 项：最终稿模式下导出，修订不许少、隐藏态不许写进文件 ----------
+    // export_document 的 withInlineMarkupForExport 会在导出期间临时切回内联全显。
+    // 断言两件事：① 最终稿导出件里的 w:ins/w:del 与内联导出件**一模一样**（一条不少）；
+    // ② settings.xml 里没有 w:revisionView（否则别人在 Word 里打开就看不见修订）。
+    await exec('debug_fresh_document', { visible: true })
+    await exec('debug_set_record_changes', { on: false })
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: '第一条 甲方应于三十日内付款。' })
+    await exec('debug_set_record_changes', { on: true })
+    const aF = await exec('find_text_locations', { keyword: '三十' })
+    await exec('replace_at_position', { anchor: aF.matches[0].anchorId, newText: '四十五', __agent: true })
+    const exportBytes = () => page.evaluate(async () => {
+      const r = await window.__loExecutor.executeCommand('export_document', {})
+      return r && r.bytes ? Array.from(r.bytes) : null
+    })
+    const { default: JSZip } = await import('jszip')
+    const countMarks = async (bytes) => {
+      const zip = await JSZip.loadAsync(Buffer.from(bytes.map((b) => b & 0xff)))
+      const docXml = await zip.file('word/document.xml').async('string')
+      const setFile = zip.file('word/settings.xml')
+      return {
+        ins: (docXml.match(/<w:ins[ >]/g) || []).length,
+        del: (docXml.match(/<w:del[ >]/g) || []).length,
+        settings: setFile ? await setFile.async('string') : '',
+      }
+    }
+    const bytesAll = await exportBytes()
+    const marksAll = await countMarks(bytesAll)
+    check('内联态导出件里有修订标记（基线）', marksAll.ins >= 1 && marksAll.del >= 1, JSON.stringify(marksAll).slice(0, 200))
+    await exec('set_revision_view', { mode: 'final' })
+    const bytesFinal = await exportBytes()
+    check('最终稿模式下导出成功', Array.isArray(bytesFinal) && bytesFinal.length > 0)
+    const keptFinal = await exec('debug_revision_view_raw')
+    check('导出后仍是用户选的最终稿（导出包装用完即还原）',
+      keptFinal.showChanges === false, JSON.stringify(keptFinal))
+    const marksFinal = await countMarks(bytesFinal)
+    check('最终稿导出件里 w:ins/w:del 与内联导出一条不少',
+      marksFinal.ins === marksAll.ins && marksFinal.del === marksAll.del,
+      JSON.stringify({ marksAll: { ins: marksAll.ins, del: marksAll.del }, marksFinal: { ins: marksFinal.ins, del: marksFinal.del } }))
+    check('最终稿导出件的 settings.xml 里没有 w:revisionView',
+      marksFinal.settings.indexOf('revisionView') < 0, marksFinal.settings.slice(0, 300))
+    await exec('set_revision_view', { mode: 'all' })
   }
 
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')

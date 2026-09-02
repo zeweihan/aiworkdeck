@@ -276,22 +276,26 @@ function rangeStartsEqual(a, b) {
   if (!a || !b) return false;
   try { return a.getText().compareRegionStarts(a, b) === 0; } catch (e) { return false; }
 }
-// 把视图光标摆到 .uno:Accept/RejectTrackedChange 能命中的位置。**两种修订
-// 类型要求相反的摆法**（真机探针逐一试出来的，别凭直觉改）：
-//   - 插入型：文本在正文流里，光标必须**跨选**整个区间才命中；
-//   - 删除型：页边模式下删除文本不在正文流，必须**塌陷**到区间起点；跨选
-//     反而落进那段隐藏文本、dispatch 打空。
+// 把视图光标摆到 .uno:Accept/RejectTrackedChange 能命中的位置。摆法**跟着当前
+// 的修订显示模式走**（真机探针逐一试出来的，别凭直觉改）：
+//   - 插入型：文本一直在正文流里，光标必须**跨选**整个区间才命中；
+//   - 删除型 + 页边模式：删除文本被移出正文流，必须**塌陷**到区间起点，跨选
+//     反而落进那段隐藏文本、dispatch 打空；
+//   - 删除型 + 内联模式（默认，dev-board#368）：删除文本就在正文流里带删除线，
+//     和插入型一样必须跨选——内联态下沿用塌陷会「引擎未命中该条」（真机实证：
+//     resolve_revision 返回失败、redline 条数不减）。
 // 摆错不会报错——dispatch 静默不生效，甚至凭空多出一条空插入修订，所以调用
-// 方（resolve_revision）一律用条数变化复核。
+// 方（resolve_revision / resolve_revisions）一律用条数变化复核。
 function selectRedlineRange(r, forDispatch) {
   try {
     const rs = r.getPropertyValue('RedlineStart'), re = r.getPropertyValue('RedlineEnd');
     if (!rs || !re) return false;
     let isDelete = false;
     try { isDelete = String(r.getPropertyValue('RedlineType')) === 'Delete'; } catch (e) {}
+    const collapse = forDispatch && isDelete && readShowChangesInMargin() === true;
     const vc = ctrl.getViewCursor();
     vc.gotoRange(rs, false);
-    if (!(forDispatch && isDelete)) vc.gotoRange(re, true);
+    if (!collapse) vc.gotoRange(re, true);
     return true;
   } catch (e) { return false; }
 }
@@ -1810,35 +1814,121 @@ function streamWriteLine(line) {
   streamParagraph(parseInlineRuns(trimmed), 'body', null);
 }
 
-// LO 7.1+ (tdf#34355): tracked DELETIONS render in the page margin next to the
-// changed-line mark instead of inline strikethrough — the body stays readable
-// (original text + colored insertions only). REQUIRES engine >= 24.2.8-zhcn-r3:
-// stock LO paints the margin text left of the anchor's frame, which inside a
-// table is the CELL — deleted text landed on the neighboring cell's content.
-// r3 carries our frmpaint.cxx patch anchoring at the table frame's left edge
-// (desktop/lowa-build/patches). This is a VIEW setting on the controller, not
-// the model, so it must be re-applied whenever the controller changes (boot
-// AND load_document retarget).
-function showDeletionsInMargin() {
-  try { ctrl.getViewSettings().setPropertyValue('ShowChangesInMargin', true); }
-  catch (e) { log('ShowChangesInMargin 设置失败 / failed: ' + errStr(e)); }
+// ---- 修订显示三态（Word 式，dev-board#368）---------------------------------
+// all    全部修订：正文内联删除线/下划线   ShowChanges=true  ShowChangesInMargin=false
+// margin 简洁标记：删除文字挪到页边       ShowChanges=true  ShowChangesInMargin=true
+// final  最终稿：修订痕迹全隐             ShowChanges=false
+//
+// 三态**只改显示**：RecordChanges（还记不记修订）与 redline 数据本身一律不动，
+// 导出的 docx 里修订一条不少。两个开关分属不同层：
+//   ShowChanges         → 模型属性（跟着文档走）
+//   ShowChangesInMargin → 控制器的视图设置（跟着控制器走，换文档必须重设）
+// 所以 boot 与 load_document 的 retarget 都要 resetRevisionView()。
+//
+// 页边显示 (LO 7.1+, tdf#34355) REQUIRES engine >= 24.2.8-zhcn-r3：原生 LO 把
+// 页边文字画在锚点 frame 左侧，表格里 frame = 单元格，删除文字会叠到左邻格正文
+// 上；r3 焙入了 frmpaint.cxx 补丁（锚整表左缘，desktop/lowa-build/patches）。
+const REVISION_VIEWS = ['all', 'margin', 'final'];
+// 产品默认 = 页边显示。**这不是观感偏好，是 AI 文本读取契约的地基**：页边模式下
+// 删除的文字被移出正文流，所以 get_document_text / get_paragraph 读到的正文就是
+// 「改后的样子」，find_text_locations / replace_nth_match 的 matchIndex 只数**可见**
+// 匹配（dev-board#369 的用例明写了这一条靠页边成立）。换成内联，AI 多轮编辑时读到的
+// 正文会混进被删的旧字、按可见匹配计数也会错位——那是 AI 编辑契约的回归。
+// 用户可以在工具栏把显示切成内联或最终稿（dev-board#368），AI 命令另有守卫兜住，
+// 见 runAgentCommandInMarginView。改这个常量 = 改上述契约，别顺手动。
+const DEFAULT_REVISION_VIEW = 'margin';
+
+function readShowChanges() {
+  try { return !!xModel.getPropertyValue('ShowChanges'); } catch (e) { return null; }
 }
-// 页边模式下 docx 导出会错位（dev-board#367 真机探针，2026-09-02）：ShowChangesInMargin
-// 开着时删除文本被并出版面，而导出器按并合后的正文套用修订区间——字符级替换
-// （删「乙」插「丁」）导出成「丁」被删、「乙」消失；多段文档里更会把别处的插入标成
-// 删除。重新打开 / Word 里看到的修订就是错的。导出期间临时关掉页边显示并 refresh()
-// 强制重排（只关不重排仍错位，探针 R2 实证），导完恢复并再重排一次，让后续
-// get_document_text 等读取仍按页边语义（正文不含删除文本）。非 Writer 文档没有
-// 这个视图设置，原样执行。
-function withMarginOff(fn) {
-  let vs = null, was = false;
-  try { vs = ctrl.getViewSettings(); was = !!vs.getPropertyValue('ShowChangesInMargin'); } catch (e) { vs = null; }
-  if (!vs || !was) return fn();
-  vs.setPropertyValue('ShowChangesInMargin', false);
+function readShowChangesInMargin() {
+  try { return !!ctrl.getViewSettings().getPropertyValue('ShowChangesInMargin'); } catch (e) { return null; }
+}
+// 两个布尔 → 三态名。读不回来（null）时不猜「隐了」，归到看得见的那一侧。
+function revisionModeOf(showChanges, inMargin) {
+  if (showChanges === false) return 'final';
+  if (inMargin === true) return 'margin';
+  return 'all';
+}
+function revisionViewState() {
+  const showChanges = readShowChanges();
+  const inMargin = readShowChangesInMargin();
+  return {
+    mode: revisionModeOf(showChanges, inMargin),
+    showChanges: showChanges,
+    showChangesInMargin: inMargin,
+    // 属性在本构建上根本不存在时读会抛（→ null），宿主据此把中间项去掉退成两态。
+    marginSupported: inMargin !== null,
+    hideSupported: showChanges !== null,
+  };
+}
+// com.sun.star.document.RedlineDisplayType：0=NONE、1=INSERTED、2=INSERTED_AND_REMOVED。
+const REDLINE_DISPLAY_NONE = 0, REDLINE_DISPLAY_ALL = 2;
+// 显示/隐藏修订痕迹。**不能写 ShowChanges**——真机实证（本引擎 24.2.8-zhcn）
+// 那个属性读得回但写不进去：setPropertyValue('ShowChanges', false) 不抛异常也
+// 纹丝不动，是个静默空写。真正管用的是 RedlineDisplayType，且**必须带类型 Any**
+// （shortAny；裸 number 没验证过）。
+// 另一个坑：写 NONE(0) 之后读回来是 INSERTED(1)——插入的文字本来就必须留在版面
+// 里，引擎会自己归一。所以**不能拿 RedlineDisplayType 的读回值当判据**，一律用
+// ShowChanges 复核（它读回来是诚实的：rdt=2 → true，rdt=1 → false）。
+// 兜底才用 .uno:ShowTrackedChanges：它是**切换**语义，想设成确定状态必须先读再
+// 判；读不回来就不敢派发（那等于蒙着切），宁可如实报失败。
+function applyShowChanges(on) {
+  let err = null;
+  try { xModel.setPropertyValue('RedlineDisplayType', shortAny(on ? REDLINE_DISPLAY_ALL : REDLINE_DISPLAY_NONE)); }
+  catch (e) { err = errStr(e); }
+  if (readShowChanges() === !!on) return null;
+  if (readShowChanges() === null) return err || 'ShowChanges 不可读';
+  try { dispatchUno('.uno:ShowTrackedChanges'); } catch (e) { return errStr(e); }
+  return readShowChanges() === !!on ? null : (err || 'ShowChanges 未生效');
+}
+function applyShowChangesInMargin(on) {
+  try { ctrl.getViewSettings().setPropertyValue('ShowChangesInMargin', !!on); }
+  catch (e) { return errStr(e); }
+  return readShowChangesInMargin() === !!on ? null : 'ShowChangesInMargin 未生效';
+}
+// 返回的是**读回来的真实状态**（另带 requested/warnings），不是把入参原样抄回去。
+function applyRevisionView(mode) {
+  const want = REVISION_VIEWS.indexOf(mode) >= 0 ? mode : DEFAULT_REVISION_VIEW;
+  const warnings = [];
+  const e1 = applyShowChangesInMargin(want === 'margin');
+  if (e1) warnings.push('ShowChangesInMargin: ' + e1);
+  const e2 = applyShowChanges(want !== 'final');
+  if (e2) warnings.push('ShowChanges: ' + e2);
+  const st = revisionViewState();
+  st.requested = want;
+  if (warnings.length) st.warnings = warnings;
+  return st;
+}
+// 启动 / 换文档时复位。不只是把页边开关重新打开（视图设置跟着控制器走），更是
+// 把上一份文档可能留下的「最终稿」隐藏态显式打回来——保活池里同一个 worker 会
+// 连着开好几份文档，不复位就是「上一份设了最终稿、下一份打开修订痕迹默默不见」。
+function resetRevisionView() { return applyRevisionView(DEFAULT_REVISION_VIEW); }
+// 导出期间**强制切成「全部修订」内联视图**（dev-board#367 的 withMarginOff + #368 三态）。
+// 两种非默认显示态都会把 docx 导坏，而自动保存 / 版本记录 / 版本对比全走这条导出：
+//   页边（margin）——ShowChangesInMargin 开着时删除文本被并出版面，导出器却按并合后的
+//     正文套用修订区间：字符级替换（删「乙」插「丁」）导出成「丁」被删、「乙」消失，
+//     多段文档里更会把别处的插入标成删除（#367 真机探针）。**只关不重排仍错位**
+//     （探针 R2 实证），所以必须 refresh() 强制重排。
+//   最终稿（final）——RedlineDisplayType 处于隐藏态时导出，隐藏的显示态有可能随
+//     settings.xml（w:revisionView）写进 docx，别人在 Word 里打开就看不见修订了。
+// 导完恢复原来的显示态并再重排一次，让后续 get_document_text 等读取仍按用户所选
+// 的语义走。
+function withInlineMarkupForExport(fn) {
+  // **非 Writer 文档直接放行，一个属性都不许碰**：修订是 Writer 独有的机制，
+  // Calc/Impress 的模型上根本没有 ShowChanges。原来这里靠 try/catch 兜住那次
+  // 无谓的 getPropertyValue，代价是每次 Impress 导出都要在模型上问一个不存在的
+  // 属性——真机实证会把引擎搞坏：紧随其后的 pptx 重新打开要么超过 load_document
+  // 的 180s 预算，要么直接抛 emscripten 的「operation does not support unaligned
+  // accesses」，lowa-e2e 组 23 五次五中（换成页边默认同样中，改回本守卫后转绿）。
+  if (!isWriterDoc()) return fn();
+  const before = revisionViewState().mode;
+  if (before === 'all') return fn();
+  applyRevisionView('all');
   try { xModel.refresh(); } catch (e) {}
   try { return fn(); }
   finally {
-    try { vs.setPropertyValue('ShowChangesInMargin', true); } catch (e) {}
+    applyRevisionView(before);
     try { xModel.refresh(); } catch (e) {}
   }
 }
@@ -1871,7 +1961,7 @@ function bootDoc() {
   // change the lawyer can accept/reject. Set once here (and on retarget) instead
   // of per-command, so no edit path can slip through untracked.
   try { xModel.setPropertyValue('RecordChanges', true); } catch {}
-  showDeletionsInMargin();
+  resetRevisionView();
 
   installKeyHandler();
   try { installModifyListener(xModel); } catch (e) { log('XModifyListener 安装失败 / install failed: ' + errStr(e)); }
@@ -2723,6 +2813,17 @@ const EXEC = {
     const view = {};
     try { view.zoom = ctrl.getViewSettings().getPropertyValue('ZoomValue'); } catch (e) {}
     try { view.recordChanges = !!xModel.getPropertyValue('RecordChanges'); } catch (e) {}
+    // 修订显示三态（dev-board#368）。工具栏的当前态读的就是这里——真实读回引擎，
+    // 不给宿主留本地猜测的余地。Calc/Impress 没有修订机制，字段整个不给。
+    if (isWriterDoc()) {
+      try {
+        const rv = revisionViewState();
+        view.revisionView = rv.mode;
+        view.showChanges = rv.showChanges;
+        view.showChangesInMargin = rv.showChangesInMargin;
+        view.revisionMarginSupported = rv.marginSupported;
+      } catch (e) {}
+    }
     out.view = view;
     const sel = {};
     try { sel.collapsed = (vc.getString() || '').length === 0; } catch (e) {}
@@ -2854,6 +2955,26 @@ const EXEC = {
     let on = null;
     try { on = !!xModel.getPropertyValue('RecordChanges'); } catch (e) {}
     return { success: true, recordChanges: on };
+  },
+  // 修订显示三态（Word 的「所有标记 / 简洁标记 / 无标记」，dev-board#368）。
+  // **只切显示**：不改一个字节的内容、不动 RecordChanges、不处置任何 redline。
+  // 不带 mode = 只读回当前真实状态（宿主据此高亮，不许本地猜）。
+  set_revision_view(p) {
+    if (!isWriterDoc()) {
+      return tableFail('当前打开的不是 Word 文档：修订显示方式仅对 doc/docx 生效（表格与演示文稿没有修订机制）。');
+    }
+    if (p && p.mode != null && String(p.mode) !== '') {
+      const mode = String(p.mode);
+      if (REVISION_VIEWS.indexOf(mode) < 0) {
+        return tableFail('未知的修订显示方式: ' + mode + '（可选 ' + REVISION_VIEWS.join(' / ') + '）');
+      }
+      const applied = applyRevisionView(mode);
+      applied.success = true;
+      return applied;
+    }
+    const cur = revisionViewState();
+    cur.success = true;
+    return cur;
   },
   // [spike] Phase B: raw measurements for mapping the view cursor to canvas
   // pixels. We DELIBERATELY return primitives (not a final px rect) so the
@@ -2991,7 +3112,7 @@ const EXEC = {
       if (isWriterDoc()) {
         // Revisions default ON for the real document too (same as bootDoc).
         try { xModel.setPropertyValue('RecordChanges', true); } catch (e) {}
-        showDeletionsInMargin();
+        resetRevisionView();
       }
     };
 
@@ -3078,7 +3199,7 @@ const EXEC = {
     const wasModified = (() => { try { return !!xModel.isModified(); } catch (e) { return false; } })();
     exportInFlight = true;
     try {
-      withMarginOff(function () { xModel.storeToURL('private:stream', props); });
+      withInlineMarkupForExport(function () { xModel.storeToURL('private:stream', props); });
     } finally {
       exportInFlight = false;
       try { if (!!xModel.isModified() !== wasModified) xModel.setModified(wasModified); } catch (e) { /* 只读文档等场景可能拒绝，忽略 */ }
@@ -4467,10 +4588,10 @@ const EXEC = {
       : { success: false, message: 'could not select revision range' };
   },
   // 逐条处置。**光标摆放是硬要求**（真机探针实证）：视图光标必须跨过 redline
-  // 区间——插入型这样才选中正文里的新增文本，删除型（页边模式下正文流里是
-  // 零宽）退化成定位到起点，两者都能被 dispatch 命中。摆错位置（collapse 到
-  // 起点再右移、或用 selectVisibly 传区间游标）会让 dispatch 打空，甚至凭空
-  // 多出一条空插入修订。
+  // 区间——插入型这样才选中正文里的新增文本；删除型按显示模式分支（页边模式下
+  // 正文流里是零宽，退化成定位到起点；内联模式下删除文字就在流里，同样要跨选），
+  // 见 selectRedlineRange。摆错位置（collapse 到起点再右移、或用 selectVisibly
+  // 传区间游标）会让 dispatch 打空，甚至凭空多出一条空插入修订。
   resolve_revision(p) {
     const action = String((p && p.action) || 'accept').toLowerCase();
     if (action !== 'accept' && action !== 'reject') return tableFail("action must be accept|reject");
@@ -6535,6 +6656,38 @@ const EXEC = {
   },
 };
 
+// AI 工具面（宿主打 __agent 标记的命令）一律按**页边语义**执行。
+// WHY：AI 多轮改稿依赖「正文 = 改后的样子」——get_document_text / get_paragraph 读到的
+// 不能混进被删的旧字，find_text_locations / replace_nth_match 的计数只能数可见匹配
+// （dev-board#369）。默认显示态本来就是页边，这条守卫只在**用户自己把视图切成内联
+// 「全部修订」**时才起作用：执行前临时切页边 + refresh，执行完切回去 + refresh。
+// 最终稿态与页边态的正文本来就不含删除文字，直接放行，零开销。
+// 非 Writer 文档一个属性都不碰（Impress 上问 Writer 专属属性会把引擎搞坏，
+// 见 withInlineMarkupForExport 头上的注释）。
+// 原语可能是 async（分批的 find_replace / apply_house_style），恢复必须等它 settle；
+// 分批命令在批间会让出事件循环，那期间插进来的别的命令会看到页边语义——与「批间允许
+// 别的命令插进来」这条既有约定同源，不额外收窄。
+const AGENT_VIEW_EXEMPT = { set_revision_view: 1, export_document: 1, load_document: 1 };
+function runAgentCommandInMarginView(action, fn) {
+  if (AGENT_VIEW_EXEMPT[action] || !isWriterDoc()) return fn();
+  const before = revisionViewState().mode;
+  if (before !== 'all') return fn();
+  applyRevisionView('margin');
+  try { xModel.refresh(); } catch (e) {}
+  const restore = function () {
+    applyRevisionView(before);
+    try { xModel.refresh(); } catch (e) {}
+  };
+  let out;
+  try { out = fn(); }
+  catch (e) { restore(); throw e; }
+  if (out && typeof out.then === 'function') {
+    return out.then(function (r) { restore(); return r; }, function (e) { restore(); throw e; });
+  }
+  restore();
+  return out;
+}
+
 function execCommand(reqId, action, params) {
   // 原语可以是 async（分批的 find_replace / apply_house_style）：返回 Promise 就等它，
   // 期间 worker 事件循环继续处理别的命令；同步原语路径与从前完全一样。
@@ -6553,7 +6706,9 @@ function execCommand(reqId, action, params) {
     try { setRedlineAuthor(p.__agent ? AI_AUTHOR : humanAuthor); }
     catch (e) { log('修订作者设置失败 / redline author failed: ' + errStr(e)); }
     const fn = EXEC[action];
-    result = fn ? fn(p) : { success: false, message: 'not implemented in LibreOffice worker yet: ' + action };
+    result = fn
+      ? (p.__agent ? runAgentCommandInMarginView(action, function () { return fn(p); }) : fn(p))
+      : { success: false, message: 'not implemented in LibreOffice worker yet: ' + action };
   } catch (e) {
     result = { success: false, message: errStr(e) };
   }

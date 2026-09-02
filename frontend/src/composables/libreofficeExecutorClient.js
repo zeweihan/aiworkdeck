@@ -42,6 +42,9 @@ export const EDITOR_ACTIONS = [
   // [自建工具栏 P1] 工具栏状态一次性回读、样式下拉数据、LO chrome 开关、修订开关。
   // 全部宿主发起（EditorToolbar → executor），不是 AI 管线。
   'get_ui_state', 'list_styles', 'set_chrome', 'set_track_changes',
+  // [修订显示三态 dev-board#368] 全部修订 / 简洁标记（页边） / 最终稿。纯显示切换，
+  // 不改内容也不动 RecordChanges；不带 mode 就是只读回引擎的真实状态。
+  'set_revision_view',
   // [自建工具栏 P2b] 用户对当前选区加批注（署名用户本人；AI 管线走 add_comment）
   'add_comment_at_selection',
   // [自建查找栏 P3] 上一个/下一个匹配。不留书签——只动视图光标。
