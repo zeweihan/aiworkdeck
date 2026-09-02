@@ -69,13 +69,13 @@ components:
         subscriptionType: { type: string, nullable: true }
     LoginData:
       type: object
-      required: [sessionId, user]
+      required: [sessionId, isNewUser, user]
       description: |
-        注意：服务端不返回 isNewUser。小程序 api.ts 的 LoginResult 声明了 isNewUser，
-        实际永远 undefined；iOS 侧已是可选。客户端应按可选处理（记录于 2026-09-02，不在服务端改）。
+        sms-login/verify 成功时的 data。isNewUser 由服务端恒返回（account.created）。
       properties:
         sessionId: { type: string }
-        mustBindPhone: { type: boolean }
+        isNewUser: { type: boolean }
+        mustBindPhone: { type: boolean, description: 由 account-login / mail-login 等门控登录流设置；sms-login/verify 不返回 }
         user: { $ref: '#/components/schemas/AccountUser' }
     LoginEnvelope:
       type: object
@@ -269,7 +269,12 @@ paths:
                         deviceId: { type: string }
                         deviceName: { type: string, nullable: true }
                         online: { type: boolean }
-                        projects: { type: array, items: { $ref: '#/components/schemas/RelayProject' } }
+                        projects:
+                          type: array
+                          items:
+                            type: object
+                            required: [key, name]
+                            properties: { key: { type: string }, name: { type: string } }
                   - $ref: '#/components/schemas/Envelope'
   /api/mobile/inbox:
     get:
@@ -306,10 +311,12 @@ paths:
         - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
       responses:
         "200":
-          description: 字节流
+          description: 字节流；未登录为 JSON Envelope(4010)
           content:
             application/octet-stream:
               schema: { type: string, format: binary }
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
   /api/mobile/inbox/{id}/ack:
     post:
       summary: 桌面端：确认落盘，置 deliveredAt 并立即删 blob（本期不校验）
