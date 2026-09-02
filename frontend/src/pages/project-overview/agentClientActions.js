@@ -119,7 +119,9 @@ export const agentClientActionMethods = {
         try {
             // stream_insert：worker 端按行剥离 markdown 标记并按标准格式落字
             //（楷体_GB2312/Arial、段后 18 磅、首行缩进 2 字符、表格 Grid 1.5 磅等）
-            await this.libreOfficeExecutor.executeCommand('stream_insert', { text })
+            // __agent：流式落字是 AI 写的，修订要署名 AI WorkDeck——与 handleEditorCommand
+            // 同一标记；漏了它，这一路的修订全记在用户名下（dev-board#367）。
+            await this.libreOfficeExecutor.executeCommand('stream_insert', { text, __agent: true })
         } catch (e) {
             console.error('[ProjectOverview] doc stream insert error:', e)
         } finally {
@@ -146,7 +148,8 @@ export const agentClientActionMethods = {
         }
         if (this.libreOfficeActive && this.libreOfficeExecutor) {
             try {
-                await this.libreOfficeExecutor.executeCommand('stream_flush', {})
+                // 收尾会把未换行的尾行/尾表真正写进文档，同样是 AI 的笔迹
+                await this.libreOfficeExecutor.executeCommand('stream_flush', { __agent: true })
             } catch (e) {
                 console.error('[ProjectOverview] doc stream flush error:', e)
             }

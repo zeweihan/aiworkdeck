@@ -1787,6 +1787,37 @@ function showDeletionsInMargin() {
   try { ctrl.getViewSettings().setPropertyValue('ShowChangesInMargin', true); }
   catch (e) { log('ShowChangesInMargin 设置失败 / failed: ' + errStr(e)); }
 }
+// 页边模式下 docx 导出会错位（dev-board#367 真机探针，2026-09-02）：ShowChangesInMargin
+// 开着时删除文本被并出版面，而导出器按并合后的正文套用修订区间——字符级替换
+// （删「乙」插「丁」）导出成「丁」被删、「乙」消失；多段文档里更会把别处的插入标成
+// 删除。重新打开 / Word 里看到的修订就是错的。导出期间临时关掉页边显示并 refresh()
+// 强制重排（只关不重排仍错位，探针 R2 实证），导完恢复并再重排一次，让后续
+// get_document_text 等读取仍按页边语义（正文不含删除文本）。非 Writer 文档没有
+// 这个视图设置，原样执行。
+function withMarginOff(fn) {
+  let vs = null, was = false;
+  try { vs = ctrl.getViewSettings(); was = !!vs.getPropertyValue('ShowChangesInMargin'); } catch (e) { vs = null; }
+  if (!vs || !was) return fn();
+  vs.setPropertyValue('ShowChangesInMargin', false);
+  try { xModel.refresh(); } catch (e) {}
+  try { return fn(); }
+  finally {
+    try { vs.setPropertyValue('ShowChangesInMargin', true); } catch (e) {}
+    try { xModel.refresh(); } catch (e) {}
+  }
+}
+// 批注插入不该被记成修订：RecordChanges 开着时 .uno:InsertAnnotation 会额外记一条
+// 空文本的插入修订（说明字段「已添加批注」），导出 docx 后成了包着批注标记的
+// <w:ins>——Word 里就是那条作者 AI WorkDeck、正文为空的幽灵气泡（dev-board#367
+// 第 6 项），审阅面板也会多一张「插入（空）」卡。派发期间关掉修订记录，完了恢复；
+// 批注本身（区间标记、作者、内容）不受影响，真机探针 Q5 实证。
+function withRecordChangesOff(fn) {
+  let was = false;
+  try { was = !!xModel.getPropertyValue('RecordChanges'); } catch (e) {}
+  if (was) { try { xModel.setPropertyValue('RecordChanges', false); } catch (e) { was = false; } }
+  try { return fn(); }
+  finally { if (was) { try { xModel.setPropertyValue('RecordChanges', true); } catch (e) {} } }
+}
 
 // ---- boot: open a fresh BLANK Writer doc ----------------------------------
 // Production: a brand-new / empty document must show a clean blank page (the
@@ -3005,7 +3036,7 @@ const EXEC = {
     const wasModified = (() => { try { return !!xModel.isModified(); } catch (e) { return false; } })();
     exportInFlight = true;
     try {
-      xModel.storeToURL('private:stream', props);
+      withMarginOff(function () { xModel.storeToURL('private:stream', props); });
     } finally {
       exportInFlight = false;
       try { if (!!xModel.isModified() !== wasModified) xModel.setModified(wasModified); } catch (e) { /* 只读文档等场景可能拒绝，忽略 */ }
@@ -4089,9 +4120,11 @@ const EXEC = {
     const annotatedText = (range.getString() || '').slice(0, 120);
     // 拟人：选中并滚动到被批注的位置——选区同时就是批注的附着区间
     if (!selectVisibly(range)) return { success: false, message: 'could not select anchor: ' + anchorId };
-    css.frame.DispatchHelper.create(context).executeDispatch(
-      ctrl.getFrame(), '.uno:InsertAnnotation', '', 0,
-      [mkProp('Text', comment), mkProp('Author', AI_AUTHOR)]);
+    withRecordChangesOff(function () {
+      css.frame.DispatchHelper.create(context).executeDispatch(
+        ctrl.getFrame(), '.uno:InsertAnnotation', '', 0,
+        [mkProp('Text', comment), mkProp('Author', AI_AUTHOR)]);
+    });
     return {
       success: true, anchor: anchorId, author: AI_AUTHOR, comment: comment,
       annotatedText: annotatedText,
@@ -4111,9 +4144,11 @@ const EXEC = {
     if (!annotatedText.length) return tableFail('请先选中要批注的文字');
     const author = humanAuthor || '';
     const before = countComments();
-    css.frame.DispatchHelper.create(context).executeDispatch(
-      ctrl.getFrame(), '.uno:InsertAnnotation', '', 0,
-      [mkProp('Text', comment), mkProp('Author', author)]);
+    withRecordChangesOff(function () {
+      css.frame.DispatchHelper.create(context).executeDispatch(
+        ctrl.getFrame(), '.uno:InsertAnnotation', '', 0,
+        [mkProp('Text', comment), mkProp('Author', author)]);
+    });
     // 派发不报错也可能没命中——用批注条数变化确认，别对用户谎报成功
     const after = countComments();
     if (after <= before) return tableFail('批注未被插入（引擎未命中）');
@@ -4562,9 +4597,11 @@ const EXEC = {
       }
     } catch (e) {}
     const replyContent = (parentAuthor ? ('回复 ' + parentAuthor + '：') : '') + text;
-    css.frame.DispatchHelper.create(context).executeDispatch(
-      ctrl.getFrame(), '.uno:InsertAnnotation', '', 0,
-      [mkProp('Text', replyContent), mkProp('Author', AI_AUTHOR)]);
+    withRecordChangesOff(function () {
+      css.frame.DispatchHelper.create(context).executeDispatch(
+        ctrl.getFrame(), '.uno:InsertAnnotation', '', 0,
+        [mkProp('Text', replyContent), mkProp('Author', AI_AUTHOR)]);
+    });
     let newField = null, newName = '';
     try {
       const en2 = xModel.getTextFields().createEnumeration();
