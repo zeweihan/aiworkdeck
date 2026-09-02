@@ -21,4 +21,6 @@ public interface DeviceTokenRepository extends JpaRepository<DeviceToken, Long> 
             "(t.lastUsedAt IS NOT NULL AND t.lastUsedAt < :cutoff) OR " +
             "(t.lastUsedAt IS NULL AND t.createdAt < :cutoff)")
     int deleteIdleBefore(@Param("cutoff") LocalDateTime cutoff);
+
+    long deleteByUserId(Long userId);
 }

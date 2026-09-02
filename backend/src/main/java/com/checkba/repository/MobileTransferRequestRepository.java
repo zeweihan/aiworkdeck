@@ -33,4 +33,6 @@ public interface MobileTransferRequestRepository extends JpaRepository<MobileTra
     @Query("select coalesce(sum(t.fileSize), 0) from MobileTransferRequest t"
             + " where t.userId = :userId and t.storagePath is not null")
     long sumPendingBytes(@Param("userId") Long userId);
+
+    long deleteByUserId(Long userId);
 }

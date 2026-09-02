@@ -63,7 +63,8 @@ class AuthControllerGetUsernameLoggingTest {
                 mock(com.checkba.repository.UserSessionRepository.class), 365);
         // 构造即注册 staticUserService（构造器里的既有副作用，其它测试同样依赖这个模式）
         new AuthController(userService, null, null, null, null, null, null, null, null,
-                sessions, true, null);
+                sessions, true, null,
+                mock(com.checkba.service.account.AccountDeletionService.class));
 
         ch.qos.logback.classic.Logger logbackLogger =
                 (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(AuthController.class);

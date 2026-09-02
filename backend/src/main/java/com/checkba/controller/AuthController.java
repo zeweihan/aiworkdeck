@@ -25,6 +25,7 @@ public class AuthController {
     private final com.checkba.service.AdminAccessService adminAccessService;
     private final com.checkba.service.DeviceTokenService deviceTokenService;
     private final com.checkba.service.AuthAbuseGuard authAbuseGuard;
+    private final com.checkba.service.account.AccountDeletionService accountDeletionService;
     private final com.checkba.service.account.AwdkLoginService awdkLoginService;
     private final com.checkba.service.sms.SmsAuthService smsAuthService;
     private final com.checkba.service.mail.MailAuthService mailAuthService;
@@ -102,12 +103,14 @@ public class AuthController {
                           com.checkba.service.UserSessionService userSessionService,
                           @org.springframework.beans.factory.annotation.Value("${security.local-mode:false}")
                           boolean localMode,
-                          PhoneLoginGuard phoneLoginGuard) {
+                          PhoneLoginGuard phoneLoginGuard,
+                          com.checkba.service.account.AccountDeletionService accountDeletionService) {
         this.userService = userService;
         this.clientInvitationService = clientInvitationService;
         this.adminAccessService = adminAccessService;
         this.deviceTokenService = deviceTokenService;
         this.authAbuseGuard = authAbuseGuard;
+        this.accountDeletionService = accountDeletionService;
         this.awdkLoginService = awdkLoginService;
         this.smsAuthService = smsAuthService;
         this.mailAuthService = mailAuthService;
@@ -475,6 +478,34 @@ public class AuthController {
      * 开始绑定认证器（需已登录）：返回手工录入的密钥与扫码用的 otpauth URI。
      * 此时尚未启用，必须再调 activate 验一次码才生效。
      */
+    /**
+     * 注销账号：删掉当前会话对应的用户及其云端全部数据。
+     *
+     * <p>App Store 审核指南 5.1.1(v) 要求支持注册的 App 必须在 App 内提供删除账号
+     * （2026-09-02 两端因 Guideline 2.1 被退回时点名）。删除范围与「不碰手机本地影像」
+     * 的取舍见 {@link com.checkba.service.account.AccountDeletionService}。
+     *
+     * <p>要求已登录；删完会话即失效，客户端拿到 code 0 后直接回登录页。
+     * 幂等：重复调用第二次会因为查不到用户而回 code 1，不会 500。
+     */
+    @PostMapping("/account/delete")
+    public Map<String, Object> deleteAccount(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = getUserIdFromSession(sessionId);
+        if (userId == null) {
+            return Map.of("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED, "message", "未登录");
+        }
+        try {
+            var r = accountDeletionService.deleteAccount(userId);
+            return Map.of("code", 0,
+                    "message", LangText.of("账号已注销", "Account deleted"),
+                    "data", Map.of("media", r.media(), "projects", r.projects(),
+                            "devices", r.devices(), "transfers", r.transfers()));
+        } catch (IllegalArgumentException e) {
+            return Map.of("code", 1, "message", e.getMessage());
+        }
+    }
+
     @PostMapping("/totp/setup")
     public Map<String, Object> totpSetup(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {

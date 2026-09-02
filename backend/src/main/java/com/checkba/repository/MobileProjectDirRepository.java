@@ -14,4 +14,6 @@ public interface MobileProjectDirRepository extends JpaRepository<MobileProjectD
     List<MobileProjectDir> findByUserIdAndDeviceId(Long userId, String deviceId);
 
     void deleteByUserIdAndDeviceId(Long userId, String deviceId);
+
+    long deleteByUserId(Long userId);
 }

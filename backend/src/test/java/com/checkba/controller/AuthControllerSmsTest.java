@@ -59,7 +59,8 @@ class AuthControllerSmsTest {
         com.checkba.service.UserSessionService sessions = new com.checkba.service.UserSessionService(
                 mock(com.checkba.repository.UserSessionRepository.class), 365);
         return new AuthController(userService, null, null, null, guard, null, smsAuthService,
-                mock(com.checkba.service.mail.MailAuthService.class), secondFactor, sessions, false, null);
+                mock(com.checkba.service.mail.MailAuthService.class), secondFactor, sessions, false, null,
+                mock(com.checkba.service.account.AccountDeletionService.class));
     }
 
     @Test

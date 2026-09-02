@@ -47,7 +47,8 @@ class AuthControllerMailTest {
     private static AuthController controller(UserService userService, AuthAbuseGuard guard,
                                              MailAuthService mailAuthService) {
         return new AuthController(userService, null, null, null, guard, null, null,
-                mailAuthService, null, sessions(), false, null);
+                mailAuthService, null, sessions(), false, null,
+                mock(com.checkba.service.account.AccountDeletionService.class));
     }
 
     private static AuthController.MailSendCodeRequest sendCodeRequest(String scene, String email) {
