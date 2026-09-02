@@ -56,6 +56,7 @@
     "test:evidence": "node --test tests/evidence/*.test.mjs",
     "test:plugin-sdk": "node --test tests/plugin-sdk/*.test.mjs",
     "test:panel-dock": "node --test tests/panel-dock/*.test.mjs",
+    "test:tab-visibility": "node --test tests/tab-visibility/*.test.mjs",
     "test:insight": "node --test tests/insight/*.test.mjs",
     "test:revision-view": "node --test tests/revision-view/*.test.mjs"
   },

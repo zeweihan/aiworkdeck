@@ -89,12 +89,35 @@ public class TodoListService {
         return confirmation;
     }
 
+    /**
+     * 状态归一化（dev-board#393）：done/finished/已完成 → completed，doing/进行中 → in_progress，
+     * todo/待办 → pending。这些写法都不是「不合法」，拒掉只会让模型再试一轮、再错一轮。
+     */
+    static String normalizeStatus(String raw) {
+        String s = raw == null ? "" : raw.trim().toLowerCase();
+        if (VALID_STATUSES.contains(s)) return s;
+        switch (s) {
+            case "done": case "finished": case "complete": case "已完成": case "完成":
+                return "completed";
+            case "doing": case "active": case "in-progress": case "inprogress": case "running": case "进行中": case "正在进行":
+                return "in_progress";
+            case "error": case "失败": case "cancelled": case "canceled":
+                return "failed";
+            default:
+                return "pending";
+        }
+    }
+
     /** 解析 + 归一化。写入路径与重启回填路径共用，回填的 JSON 因此也过一遍不变式。 */
     private ParsedTodos parse(String todosJson) {
         List<TodoItem> todos = new ArrayList<>();
         boolean demotedExtraInProgress = false;
         try {
             com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(todosJson);
+            // 容错（dev-board#393）：模型偶尔把数组包成 {"todos":[...]}，拆开即可
+            if (root.isObject() && root.path("todos").isArray()) {
+                root = root.path("todos");
+            }
             if (!root.isArray()) {
                 return new ParsedTodos(List.of(), false,
                         LangText.of("Error: todos 必须是 JSON 数组，元素形如 {\"content\":\"...\",\"activeForm\":\"...\",\"status\":\"pending\"}",
@@ -106,8 +129,7 @@ public class TodoListService {
                 if (content.isEmpty()) continue;
                 String activeForm = n.path("activeForm").asText("").trim();
                 if (activeForm.isEmpty()) activeForm = content;
-                String status = n.path("status").asText("pending").trim().toLowerCase();
-                if (!VALID_STATUSES.contains(status)) status = "pending";
+                String status = normalizeStatus(n.path("status").asText("pending"));
                 // 不变式：最多一项 in_progress，多余的降级为 pending
                 if ("in_progress".equals(status)) {
                     if (seenInProgress) {

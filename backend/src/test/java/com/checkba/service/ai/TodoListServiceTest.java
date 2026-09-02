@@ -150,7 +150,8 @@ class TodoListServiceTest {
 
     @Test
     void update_invalidStatus_fallsBackToPending() {
-        service.update(CONV, "[{\"content\":\"A\",\"status\":\"doing\"}]");
+        // "doing" 自 dev-board#393 起是 in_progress 的同义词，这里换一个真正认不出的值
+        service.update(CONV, "[{\"content\":\"A\",\"status\":\"whatever\"}]");
         String reminder = service.reminder(CONV);
         assertNotNull(reminder);
         assertTrue(reminder.contains("待办：A"));
@@ -255,5 +256,21 @@ class TodoListServiceTest {
     void purge_dbFailureDoesNotThrow() {
         doThrow(new RuntimeException("db down")).when(repository).findByUpdatedAtBefore(any(LocalDateTime.class));
         assertDoesNotThrow(() -> service.purgeStaleLists());
+    }
+
+    // dev-board#393：模型偶尔把数组包一层 {"todos":[...]}，或用 done/已完成 这类同义状态。
+    // 这些都不是「不合法」，拒掉只会让它再试一轮、再错一轮。
+    @Test
+    @DisplayName("容错：{\"todos\":[...]} 包装与状态同义词都能落库")
+    void acceptsWrappedObjectAndStatusSynonyms() {
+        String result = service.update(CONV,
+                "{\"todos\":[{\"content\":\"A\",\"status\":\"done\"},{\"content\":\"B\",\"status\":\"进行中\"},{\"content\":\"C\",\"status\":\"todo\"}]}");
+        assertFalse(result.startsWith("Error"), result);
+        AgentTodoList row = table.get(CONV);
+        assertNotNull(row);
+        cn.hutool.json.JSONArray arr = cn.hutool.json.JSONUtil.parseArray(row.getTodosJson());
+        assertEquals("completed", arr.getJSONObject(0).getStr("status"));
+        assertEquals("in_progress", arr.getJSONObject(1).getStr("status"));
+        assertEquals("pending", arr.getJSONObject(2).getStr("status"));
     }
 }

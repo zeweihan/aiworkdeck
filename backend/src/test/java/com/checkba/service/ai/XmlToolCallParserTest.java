@@ -50,6 +50,11 @@ class XmlToolCallParserTest {
         public String pptx_generate_outline(@P("topic") String topic, @P("lang") String language) {
             return "";
         }
+
+        @Tool("todo write")
+        public String todo_write(@P("todos") String todos) {
+            return "";
+        }
     }
 
     private XmlToolCallParser parser;
@@ -267,5 +272,44 @@ class XmlToolCallParserTest {
         assertTrue(parser.containsToolCall("<code>x()</code>"));
         assertFalse(parser.containsToolCall("纯文本回答"));
         assertFalse(parser.containsToolCall(null));
+    }
+
+    // dev-board#393：Kimi K3 在同一会话里两种写法随机切换——
+    //   todos="[{\"content\":...}]"（带引号转义）能过，
+    //   todos=[{"content":...},{...}]（裸 JSON 字面量）走到「无引号值」分支，
+    // 扫到第一个逗号就截断，TodoListService 拿到半截 JSON 报「传参格式错误」。
+    // 下面的载荷逐字取自 2026-09-02 18:18 backend.log（催款函三处修订那一轮）。
+    @Test
+    @DisplayName("裸 JSON 数组字面量参数：todos=[{...},{...}] 整段取回")
+    void unquotedJsonArrayLiteralIsTakenWhole() {
+        String payload = "<tool_code>todo_write(todos=[{\"content\":\"付款期限15日改为10日\",\"activeForm\":\"正在修改付款期限\",\"status\":\"in_progress\"},"
+                + "{\"content\":\"补充逾期利息条款\",\"activeForm\":\"正在补充利息条款\",\"status\":\"pending\"},"
+                + "{\"content\":\"落款日期改为11月12日\",\"activeForm\":\"正在改落款日期\",\"status\":\"pending\"}])</tool_code>";
+        XmlToolCallParser.ParsedCall call = single(payload);
+        assertEquals("todo_write", call.toolName());
+        String todos = cn.hutool.json.JSONUtil.parseObj(call.argsJson()).getStr("todos");
+        cn.hutool.json.JSONArray arr = cn.hutool.json.JSONUtil.parseArray(todos);
+        assertEquals(3, arr.size(), "数组被截断: " + todos);
+        assertEquals("落款日期改为11月12日", arr.getJSONObject(2).getStr("content"));
+    }
+
+    @Test
+    @DisplayName("裸 JSON 对象字面量参数：值里含逗号、右括号与转义引号都不截断")
+    void unquotedJsonObjectLiteralHandlesNestedDelimiters() {
+        String payload = "<tool_code>todo_write(todos=[{\"content\":\"a) 第一步, 含\\\"引号\\\"\",\"status\":\"pending\"}])</tool_code>";
+        XmlToolCallParser.ParsedCall call = single(payload);
+        String todos = cn.hutool.json.JSONUtil.parseObj(call.argsJson()).getStr("todos");
+        cn.hutool.json.JSONArray arr = cn.hutool.json.JSONUtil.parseArray(todos);
+        assertEquals(1, arr.size());
+        assertEquals("a) 第一步, 含\"引号\"", arr.getJSONObject(0).getStr("content"));
+    }
+
+    @Test
+    @DisplayName("无引号标量值仍按旧规则截断：key=123, other=true")
+    void unquotedScalarStillStopsAtComma() {
+        XmlToolCallParser.ParsedCall call = single("<tool_code>doc_find_replace(findText=甲方, replaceText=乙方, replaceAll=true)</tool_code>");
+        cn.hutool.json.JSONObject args = cn.hutool.json.JSONUtil.parseObj(call.argsJson());
+        assertEquals("甲方", args.getStr("findText"));
+        assertEquals("乙方", args.getStr("replaceText"));
     }
 }

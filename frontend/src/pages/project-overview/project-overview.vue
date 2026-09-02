@@ -1945,6 +1945,7 @@
 <script>
 import { defineAsyncComponent } from 'vue'
 import { flushDirtyEditors } from './flushDirtyEditors.js'
+import { isTabVisibleInPane } from './tabVisibility.js'
 import LibreOfficeEditor from '@/components/LibreOfficeEditor.vue'
 import { host, isDesktopHost } from '@/services/host.js'
 import BrowserPane from '@/components/BrowserPane.vue'
@@ -4250,45 +4251,8 @@ export default {
       return !!activeFile && Number(activeFile.id) === pinnedNum
     },
     isTabVisible(file) {
-      if (!file) return false
-      // dd-request 或者 fileType 为 dd 的属于尽调清单类标签
-      const isDd = file.type === 'dd-request' || file.fileType === 'dd'
-      if (isDd) {
-        return this.leftPaneKey === 'dd-files'
-      }
-      // 其他文件标签（资源管理器打开的文件、浏览器标签等）仅在资源管理器模式下显示
-      // 插件标签也只在插件模式下显示
-      const isPlugin = file.fileType === 'plugin'
-      if (isPlugin) {
-        return this.leftPaneKey === file.id // Assuming plugin ID is its key
-      }
-      // 版本对比标签（修订稿 / 文本降级两种）：唯一入口是版本面板里的「和上一版
-      // 对比」，所以必须在 version 面板下可见——否则点开的标签被 v-show 藏死，
-      // 编辑区显示空闲态，功能等于不存在。同时也在资源管理器面板下保持可见：
-      // 它展示的是项目文档的衍生视图，律师切回文件树不该让对比凭空消失。
-      if (file.tabType === 'version-compare' || file.tabType === 'version-text-diff') {
-        return this.leftPaneKey === 'version' || this.leftPaneKey === 'files'
-      }
-      // 插件广场详情 tab：与左栏模式无关，常显（VS Code 扩展详情页语义）
-      if (file.tabType === 'market-detail') {
-        return true
-      }
-      // 「设置」tab：同理常显。它的入口是顶栏头像下拉，不属于任何左栏模式，
-      // 被 v-show 藏死的话点了菜单什么也不会发生。
-      if (file.tabType === 'admin-settings') {
-        return true
-      }
-      // 普通文件在资源管理器、搜索或语音模式下都可见（语音合成要在编辑器里
-      // 取正文，看不见文档就没法用）。
-      // 诉讼可视化面板也要放行：图廊的「打开」是那个面板唯一的出图入口，
-      // 不放行的话点了之后标签被 v-show 藏死、编辑区显示空闲态，功能等于不存在
-      // （与上面版本对比标签同一类问题）。
-      // 停靠到左栏的工具面板（变量库/收藏夹/剪贴板，dev-board#180）同样必须放行：
-      // 它们的每个动作都是「往当前文档里插入」或「从当前文档取值」
-      // （VariablePanel 的 :get-editor 直接要活的编辑器），看不见文档就没法用。
-      return this.leftPaneKey === 'files' || this.leftPaneKey === 'search'
-        || this.leftPaneKey === 'voice' || this.leftPaneKey === 'litigation-visual'
-        || this.isMovablePanel(this.leftPaneKey)
+      // 标签常驻，与左栏面板解耦（dev-board#394），契约与理由见 tabVisibility.js
+      return isTabVisibleInPane(file, this.leftPaneKey)
     },
     startRenameProject() {
       this.renameProjectName = this.project.name || ''
