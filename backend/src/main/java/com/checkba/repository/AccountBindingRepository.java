@@ -9,4 +9,6 @@ public interface AccountBindingRepository extends JpaRepository<AccountBinding, 
     Optional<AccountBinding> findByExternalAccountId(String externalAccountId);
 
     Optional<AccountBinding> findByUserId(Long userId);
+
+    long deleteByUserId(Long userId);
 }

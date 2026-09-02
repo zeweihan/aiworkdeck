@@ -51,7 +51,8 @@ class AuthControllerLocalDeviceTokenTest {
         com.checkba.service.UserSessionService sessions = new com.checkba.service.UserSessionService(
                 org.mockito.Mockito.mock(com.checkba.repository.UserSessionRepository.class), 365);
         return new AuthController(userService, null, null, deviceTokenService,
-                null, null, null, null, null, sessions, localMode, null);
+                null, null, null, null, null, sessions, localMode, null,
+                mock(com.checkba.service.account.AccountDeletionService.class));
     }
 
     private static User user(long id, String username, String displayName) {

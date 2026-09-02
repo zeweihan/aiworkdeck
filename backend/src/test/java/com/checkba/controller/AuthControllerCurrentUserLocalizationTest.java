@@ -54,7 +54,8 @@ class AuthControllerCurrentUserLocalizationTest {
                 mock(com.checkba.repository.UserSessionRepository.class), 365);
         AdminAccessService adminAccessService = mock(AdminAccessService.class);
         return new AuthController(userService, null, adminAccessService, null,
-                null, null, null, null, null, sessions, localMode, null);
+                null, null, null, null, null, sessions, localMode, null,
+                mock(com.checkba.service.account.AccountDeletionService.class));
     }
 
     private static User user(long id, String username, String displayName) {

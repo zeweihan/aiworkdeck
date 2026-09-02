@@ -16,4 +16,6 @@ public interface MobileDeviceStateRepository extends JpaRepository<MobileDeviceS
     List<MobileDeviceState> findByUserIdAndDeviceIdIn(Long userId, Collection<String> deviceIds);
 
     List<MobileDeviceState> findByUserId(Long userId);
+
+    long deleteByUserId(Long userId);
 }

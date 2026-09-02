@@ -26,4 +26,8 @@ public interface MobileMediaInboxRepository extends JpaRepository<MobileMediaInb
     @Query("select coalesce(sum(m.fileSize), 0) from MobileMediaInbox m"
             + " where m.userId = :userId and m.storagePath is not null")
     long sumPendingBytes(@Param("userId") Long userId);
+
+    /** 账号注销时按用户清空（blob 由调用方先删，见 AccountDeletionService）。 */
+    java.util.List<MobileMediaInbox> findByUserId(Long userId);
+    long deleteByUserId(Long userId);
 }
