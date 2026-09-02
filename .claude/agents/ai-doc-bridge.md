@@ -21,6 +21,8 @@ description: AI↔文档编辑桥接领域。任务涉及 doc_*/sheet_*/slide_* 
 `Number(p.index) || 0` 会把 null／非数字静默当成第 0 段，「没给段落号」于是变成「改第一段」。
 回归用例 `ParagraphIndexBaseTest`（反射扫 `@P`，写成 1 基即转红）。
 
+**matchIndex 是唯一的例外：模型面 1 基、worker 0 基，在后端归一**（2026-09-02 顺带修掉）。`doc_replace_nth_match` / `doc_delete_match` 的描述、system prompt 第 7 节第 3 条、`ToolRegistry.LEGACY_DEFAULTS`（缺省 1）都对模型说「第 N 处，从 1 开始」，而 worker 的 `replace_nth_match` / `delete_match` 与它的其它整数定位一样从 `i = 0` 起数——原先后端原样透传，模型说第 1 处改的是第 2 处。归一落在 `DocumentEditTools` 下发前减 1，**不改 worker**：JAR/Web 插件经 `PluginHostImpl.DOC_ACTIONS` / `pluginDocActions.js` 直接按 worker 契约调这两个 action。回归 `MatchIndexBaseTest`（后端换算）+ lowa-e2e 组 11 末两步（worker 0 基钉住）。
+
 同类：`doc_goto` 的描述曾宣告 `paragraph/bookmark/line` 三种定位，而 `office_thread.js` 的
 `goto()` 只实现 `start/end`，其余一律返回 "goto type not supported yet"——
 **描述里挂着做不到的能力 = 模型反复往死路上撞、白烧步数预算**。已收窄成只宣告 start/end，
@@ -54,7 +56,16 @@ description: AI↔文档编辑桥接领域。任务涉及 doc_*/sheet_*/slide_* 
 - `frontend/src/utils/toolDisplayNames.js` — 工具名→中文显示名映射表（NAMES 表 :8-97）。**新增工具必须同步加中文名**。
 
 **修订机制（redline）**
-- `office_thread.js` 内：`minimalEdits()`（~:212-266，公共前后缀裁剪+有界 LCS 的字符级最小编辑）与 `applyMinimalRedline()`（~:270-307，从右到左应用，只对差异段打修订）；`setRedlineAuthor`（~:1467）：`__agent` → 署名 "AI WorkDeck"，否则用户名。
+- `office_thread.js` 内：`minimalEdits()`（公共前后缀裁剪 + `myersEdits()` 字符级 Myers diff）与 `applyMinimalRedline()`（从右到左应用，只对差异段打修订）；`setRedlineAuthor`：`__agent` → 署名 "AI WorkDeck"，否则用户名。
+- **颗粒度契约（dev-board#365，PR#188 的续篇）**：
+  - **在哪层**：只在 worker（最靠近引擎的一层）做 diff。后端 `DocumentEditTools` 只透传 `findText/replaceText/newText`，不做任何拆分；前端执行器不碰文本。修订对象只有引擎能造，diff 离引擎越近，越不会被中间层的字符串处理（trim/换行归一）带歪。
+  - **什么粒度**：**字符**（JS code unit），中文不分词、不按行/按段。`range.setString(newText)` 在 RecordChanges 下是「整段删 + 整段插」，所以每个替换类原语（`find_replace` 逐命中路径 / `replace_nth_match` / `modify_paragraph` / `replace_at_position` / `replace_selection`）都先 `minimalEdits(old, new)` 拿到 `[{start, delLen, insText}]`（旧串坐标、**降序**），再逐条 `goRight(start)` + `goRight(delLen, true)` + `setString(insText)`：每条片段落成一对「删 X 插 Y」真修订；纯插入走 `insertString`。从右到左应用是硬约束——左边先改会让右边片段的偏移全部失效。
+  - **为什么是 Myers 不是 LCS DP**：PR#188 的 LCS DP 有 500x500 上限（`oMid.length * nMid.length > 250000` 直接整块替换），法律条款一段动辄六七百字，首尾各改一个字就整段删了重写——这就是 #365 用户看到的「整段删除后重写」。Myers 的代价是 O((N+M)·D)，只随差异步数 D 增长，段落再长、只改两个字也只产出两条片段；D 超过 `MINIMAL_EDITS_MAX_D`（2000）说明整段面目全非，退化成「掐掉公共前后缀后整块替换」——那本来就是重写。
+  - **碎片化的折中**：两条片段之间只隔一个巧合相同字（中文里常捞到「的/、/方」）时并成一条（`甲方三→乙方五` 是一条，不是两条夹一个「方」）；隔两个字以上保持分开。不做更激进的合并——那会把整句吞掉，正是要修的病。
+  - **`find_replace` 全部替换的分流**：默认 `replaceAll=true` 走引擎原生 `XReplaceable.replaceAll`（`nativeTrackedReplaceAll`，150 命中 0.2s），它只能把「掐掉公共前后缀的中段」整块替换。`replaceAllIsSingleBlock(findText, replaceText)`（= `minimalEdits` 结果 ≤ 1 条）为 false 时（一句里两处散点改动）**不走原生路径**，改逐命中 `applyMinimalRedline`（命中 > 50 分批 + 进度 + 可取消）；单块差异（甲方→买方、我爱你→我恨你、纯插入）仍走快路径，大文档批量替换的性能不受影响。
+  - **回退到整块的情形（不是 bug）**：旧/新文本含段落符或代理对（`goRight` 与 `getString` 的计数口径不一致）、纯插入到空 range、全量替换（脚本只有一条且覆盖整段）。
+  - **模型层**：`DocumentEditTools.REDLINE_GRANULARITY_NOTE` 挂在五个替换类工具描述**末尾**，system prompt 第 7 节第 5 条同款——「未改动的文字逐字照抄原文，不要顺手改标点/润色」。引擎再细的 diff 也救不了模型把整句重新措辞。
+  - **回归**：`frontend/tests/lowa-unit/minimalEdits.test.mjs`（`npm run test:lowa-unit`，抠 worker 纯函数在 node 里跑：我爱你→我恨你一删一插、一句三处改动三组片段、> 500 字段落首尾各一字只两条片段、随机小改动脚本套回恒等）；真引擎形态 lowa-e2e 组 11（含 `find_replace replaceAll` 三处散点、长段落、同段第二轮改动）；后端 `RedlineGranularityContractTest`（描述末位约束 + prompt 双语）。
 
 ## 核心数据流（以 doc_find_replace 为例）
 
@@ -259,6 +270,7 @@ txt/md/markdown 自 dev-board#37 起不进 LOWA（前端走 PlainTextEditor.vue�
 - **表格删行/删列不进修订**（真机实测 LO 24.2）：`XTableRows/XTableColumns.removeByIndex` 走 API 路线直接删除，RecordChanges 开着也是 `redlineDelta=0`——AI 删表格行的安全网是 doc_undo 与文档检查点，不是修订面板，工具描述里已对模型明说。生效判定仍按"行列数变化 OR 修订条数变化"双口径（防将来引擎改口径），别只看 `getRows().getCount()`。
 - **区间批注必须走 `.uno:InsertAnnotation` 派发**；LO API 路线（addAnnotation）会抛虚假异常且只批注锚点（PR#191）。
 - **replace_selection 仅在 RecordChanges 开启时启用最小修订路径**；修订应用必须从右到左，否则前面的编辑使后面的偏移失效（PR#188）。
+- **`minimalEdits` 不许再加长度上限、`find_replace` 的原生 replaceAll 不许绕过 `replaceAllIsSingleBlock`**（dev-board#365）：两条都会把「一句两处改动/长段落首尾各改一字」退化成整段删除重写，用户一眼就看得出。改这块前先跑 `npm run test:lowa-unit`（长段落用例）与 lowa-e2e 组 11。
 - **office 线程会被 export 冻结**：长 export 期间同步命令假死是已知模式，autoSave 需让路（PR#182）。
 - **桥超时按 action 分级**（dev-board#108）：`EditorBridgeService.ACTION_TIMEOUT_SECONDS`（doc_open_file_sync/export_document 180s，find_replace/apply_house_style/apply_style_profile/resolve_all_revisions/resolve_revisions 120s，其余 30s），与前端两处 `ACTION_BUDGET_MS` 同表。新增会跑很久的批量原语要三处一起加，否则后端先放弃、模型重发一次造成双改。`find_replace` 全部替换走引擎原生 replaceAll 一次完成（150 命中 0.2s），纯插入型回退逐命中路径并在命中 > 50 时分批回传进度；`apply_house_style` 在 worker 内分批并回传进度（契约见 doc-editor.md），结果可能带 `cancelled:true`（用户中途取消）——工具描述里已告诉模型不要重复调用。
 - **工具位置参数按签名映射为命名参数**（PR#193），改工具签名要考虑旧会话回放。
@@ -287,7 +299,8 @@ txt/md/markdown 自 dev-board#37 起不进 LOWA（前端走 PlainTextEditor.vue�
 
 ## 验证
 
-- 编辑器三件套（原语/白名单/worker）改动后必跑：`cd frontend && npm run test:lowa-e2e`（基线随批次增长，2026-08-08 slide_* Phase 3 落地后为 324 步全绿，含组 21 Impress 冒烟 27 步 + 组 22 Impress 结构 44 步 + 组 23 Impress 格式与表格约 59 步）。**改 `office_thread.js` 后必须先 `npm run build:zetaoffice` 再跑 e2e**——测试服务器serve 的是 `frontend/dist/zetaoffice/office_thread.js`（构建产物），不是 `frontend/src/zetaoffice/public/office_thread.js`（源文件）；只改源文件不重新构建，e2e 会静默测着旧代码（本次 Phase 2 debugging 踩过一次，白跑了好几轮"改代码→跑测试→结果一模一样"才发现）。跑之前先 `diff frontend/src/zetaoffice/public/office_thread.js frontend/dist/zetaoffice/office_thread.js` 确认两边一致。
+- worker 纯函数（`minimalEdits` 一族）改动后先跑秒级用例：`cd frontend && npm run test:lowa-unit`（`tests/lowa-unit/`，靠 `_workerFns.mjs` 从 `office_thread.js` 里按函数名抠出顶层纯函数在 node 里执行——被抠的函数不能碰 UNO 对象、字符串/注释里不能有花括号）。
+- 编辑器三件套（原语/白名单/worker）改动后必跑：`cd frontend && npm run test:lowa-e2e`（基线随批次增长，2026-09-02 dev-board#365 组 11 补七步 + matchIndex 契约两步后为 475 步全绿；2026-08-08 slide_* Phase 3 落地后为 324 步，含组 21 Impress 冒烟 27 步 + 组 22 Impress 结构 44 步 + 组 23 Impress 格式与表格约 59 步）。**改 `office_thread.js` 后必须先 `npm run build:zetaoffice` 再跑 e2e**——测试服务器serve 的是 `frontend/dist/zetaoffice/office_thread.js`（构建产物），不是 `frontend/src/zetaoffice/public/office_thread.js`（源文件）；只改源文件不重新构建，e2e 会静默测着旧代码（本次 Phase 2 debugging 踩过一次，白跑了好几轮"改代码→跑测试→结果一模一样"才发现）。跑之前先 `diff frontend/src/zetaoffice/public/office_thread.js frontend/dist/zetaoffice/office_thread.js` 确认两边一致。
 - 全链路回归：`npm run test:app-e2e`；前端事件契约 `npm run check:emits`。
 - 后端：`cd backend && mvn test`（JDK 21，默认 25 会 SIGBUS）；EvalHarness 回放评测在其中。
 - 原语级测试不够，必须走完 UI 链路验证（用户明确要求过）。

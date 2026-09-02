@@ -120,6 +120,15 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    /**
+     * 修订颗粒度约束（dev-board#365），挂在每个替换类工具描述的<b>末尾</b>：
+     * 字符级最小 diff 在编辑器 worker 里做（office_thread.js minimalEdits），只把真正变化的字落成修订；
+     * 但模型顺手润色/改标点会让 diff 无路可走，整句呈现为删除重写。回归 RedlineGranularityContractTest。
+     */
+    static final String REDLINE_GRANULARITY_NOTE =
+            "修订颗粒度：引擎按字符做最小 diff，只把真正变化的字落成修订痕迹；新文本里未改动的部分必须逐字照抄原文"
+            + "（标点、空格、数字写法都不要顺手改），否则会呈现为整句删除重写。";
+
     // ==================== 流式写入 ====================
 
     private static final Long AGENT_USER_ID = 10001L;
@@ -319,7 +328,8 @@ public class DocumentEditTools implements AgentToolComponent {
     @ToolMeta(displayName = "查找替换", category = "document", fileEffect = "MODIFIED")
     @Tool("在文档中查找并替换文本。所有修改将以修订模式进行，用户可以审阅后接受或拒绝。" +
           "全文替换一次调用即可完成（大量命中也很快；纯插入型替换会分批处理并回传进度），不要因为耗时较长而重复调用；" +
-          "返回 replaced（已替换数）与 total（命中数），cancelled=true 表示用户中途取消、done 为已完成数。")
+          "返回 replaced（已替换数）与 total（命中数），cancelled=true 表示用户中途取消、done 为已完成数。" +
+          REDLINE_GRANULARITY_NOTE)
     public String doc_find_replace(
             @P("要查找的文本") String findText,
             @P("替换为的文本") String replaceText,
@@ -344,7 +354,8 @@ public class DocumentEditTools implements AgentToolComponent {
 
     @Tool("将文档中第 N 个可见匹配项替换为新文本。" +
           "索引从 1 开始，只计算用户可见的匹配（排除修订模式下被删除的内容）。" +
-          "如果要删除文本，将 replaceText 设置为空字符串即可。")
+          "如果要删除文本，将 replaceText 设置为空字符串即可。" +
+          REDLINE_GRANULARITY_NOTE)
     public String doc_replace_nth_match(
             @P("要查找的文本") String findText,
             @P("替换为的文本") String replaceText,
@@ -355,11 +366,14 @@ public class DocumentEditTools implements AgentToolComponent {
             if (matchIndex == null || matchIndex < 1) {
                 return "Error: matchIndex 必须是从 1 开始的正整数";
             }
-            return editorBridgeService.executeEditorCommand("replace_nth_match", 
+            // 模型面 1 基（描述/prompt/LEGACY_DEFAULTS 一致），worker 的 replace_nth_match 与它的
+            // 其它整数定位一样 0 基，且插件经 PluginHostImpl.DOC_ACTIONS 直接按 worker 契约调用——
+            // 归一只能落在这里：下发前减 1（MatchIndexBaseTest 钉着）。
+            return editorBridgeService.executeEditorCommand("replace_nth_match",
                     java.util.Map.of(
-                            "findText", findText, 
-                            "replaceText", replaceText, 
-                            "matchIndex", matchIndex
+                            "findText", findText,
+                            "replaceText", replaceText,
+                            "matchIndex", matchIndex - 1
                     ));
         } catch (Exception e) {
             log.error("Failed to replace nth match", e);
@@ -377,10 +391,11 @@ public class DocumentEditTools implements AgentToolComponent {
             if (matchIndex == null || matchIndex < 1) {
                 return "Error: matchIndex 必须是从 1 开始的正整数";
             }
-            return editorBridgeService.executeEditorCommand("delete_match", 
+            // 同 doc_replace_nth_match：模型面 1 基 → worker 0 基，下发前减 1。
+            return editorBridgeService.executeEditorCommand("delete_match",
                     java.util.Map.of(
-                            "findText", findText, 
-                            "matchIndex", matchIndex
+                            "findText", findText,
+                            "matchIndex", matchIndex - 1
                     ));
         } catch (Exception e) {
             log.error("Failed to delete match", e);
@@ -406,7 +421,8 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
-    @Tool("替换当前选区（或光标位置）的文本内容。如果选区非空，则替换选区；如果只是光标，则插入文本。")
+    @Tool("替换当前选区（或光标位置）的文本内容。如果选区非空，则替换选区；如果只是光标，则插入文本。" +
+          REDLINE_GRANULARITY_NOTE)
     public String doc_replace_selection(
             @P("用于替换的文本内容") String text
     ) {
@@ -476,7 +492,8 @@ public class DocumentEditTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "修改段落", category = "document", fileEffect = "MODIFIED")
-    @Tool("修改文档中指定段落的文本内容。修改将以修订模式进行，用户可以审阅后接受或拒绝。")
+    @Tool("修改文档中指定段落的文本内容。修改将以修订模式进行，用户可以审阅后接受或拒绝。" +
+          REDLINE_GRANULARITY_NOTE)
     public String doc_modify_paragraph(
             @P("段落号（0 开始，用 doc_get_document_text / doc_read_paragraphs 返回的 index）") Integer paragraphIndex,
             @P("新的段落文本") String newText
@@ -672,7 +689,8 @@ public class DocumentEditTools implements AgentToolComponent {
     }
 
     @Tool("【改】把某个锚点（anchorId）处的文本替换为新文本，以修订模式进行。会自动把编辑器视图滚动到该处；返回改动后所在段落的实际文本，核对该返回值即完成验证——不需要先 doc_select_anchor，也不需要改后再读文档。" +
-          "先 doc_find_text 拿到带上下文的匹配列表，选定目标的 anchorId 后用本工具替换；多处独立替换在同一轮连续输出多个调用。")
+          "先 doc_find_text 拿到带上下文的匹配列表，选定目标的 anchorId 后用本工具替换；多处独立替换在同一轮连续输出多个调用。" +
+          REDLINE_GRANULARITY_NOTE)
     public String doc_replace_at_anchor(
             @P("doc_find_text 返回的 anchorId") String anchorId,
             @P("新文本") String newText
