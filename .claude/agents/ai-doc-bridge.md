@@ -268,7 +268,9 @@ txt/md/markdown 自 dev-board#37 起不进 LOWA（前端走 PlainTextEditor.vue�
 - **新增 doc_* 工具四件套**：DocumentEditTools 加 @Tool + EDITOR_ACTIONS 白名单加 action + office_thread.js 加实现 + toolDisplayNames.js 加中文名。漏任何一环都是静默失败（PR#180 教训）。
 - **worker 失败返回必须带 `error` 字段**：前端 `handleEditorCommand` 只把 `result.error` 回传后端（`result.message` 不看），只写 `message` 的话模型收到 `{"error": "null"}`——判得出失败但拿不到原因，白白浪费一轮。`doc_table_*` 用 `tableFail()` 统一写两个字段。
 - **表格删行/删列不进修订**（真机实测 LO 24.2）：`XTableRows/XTableColumns.removeByIndex` 走 API 路线直接删除，RecordChanges 开着也是 `redlineDelta=0`——AI 删表格行的安全网是 doc_undo 与文档检查点，不是修订面板，工具描述里已对模型明说。生效判定仍按"行列数变化 OR 修订条数变化"双口径（防将来引擎改口径），别只看 `getRows().getCount()`。
-- **区间批注必须走 `.uno:InsertAnnotation` 派发**；LO API 路线（addAnnotation）会抛虚假异常且只批注锚点（PR#191）。
+- **区间批注必须走 `.uno:InsertAnnotation` 派发**；LO API 路线（addAnnotation）会抛虚假异常且只批注锚点（PR#191）。派发要在 RecordChanges 关闭下做（worker `withRecordChangesOff`，dev-board#367）：否则引擎把批注字段记成一条空插入修订，Word 里多出一条作者 AI WorkDeck、正文为空的幽灵气泡。
+- **`doc_add_comment` 之后视图光标失效**（dev-board#367 真机探针）：焦点落进批注窗口，之后 `doc_insert_at_cursor` / `doc_goto` / `doc_replace_selection` / 流式落字都会以 RuntimeException 失败，直到用户点一下画布；`doc_replace_at_anchor` / `doc_modify_paragraph` / 再加批注不受影响。模型在同一轮里应先做正文改动、最后再挂批注，或全程用锚点定位。
+- **「【修訂理由】…」不是我们加的前缀**：代码里没有这段文字（后端/前端/prompt 全 grep 过），是模型自己写进 `doc_add_comment` 的 comment 里的（system_prompt.md §"解释类文字用批注" 只要求把理由挂成批注，没规定格式）。
 - **replace_selection 仅在 RecordChanges 开启时启用最小修订路径**；修订应用必须从右到左，否则前面的编辑使后面的偏移失效（PR#188）。
 - **`minimalEdits` 不许再加长度上限、`find_replace` 的原生 replaceAll 不许绕过 `replaceAllIsSingleBlock`**（dev-board#365）：两条都会把「一句两处改动/长段落首尾各改一字」退化成整段删除重写，用户一眼就看得出。改这块前先跑 `npm run test:lowa-unit`（长段落用例）与 lowa-e2e 组 11。
 - **office 线程会被 export 冻结**：长 export 期间同步命令假死是已知模式，autoSave 需让路（PR#182）。

@@ -2023,6 +2023,73 @@ try {
     check('纸外区域真的重绘（深色亮度显著低于浅色）', darkLum < lightLum - 80, JSON.stringify({ darkLum, lightLum }))
   }
 
+  // ---------- 组 30：页边模式导出保真 / 批注不记修订 / 流式署名（dev-board#367）----------
+  // 真机探针（2026-09-02）实锤三件事：① ShowChangesInMargin 开着时 export_document
+  // 把字符级替换导出成「新字被删、旧字消失」（多段文档还会把别处的插入标成删除），
+  // 重新打开 / Word 里修订全是错的——export 现在导出期间临时关页边 + refresh；
+  // ② RecordChanges 开着时 .uno:InsertAnnotation 多记一条空插入修订（「已添加批注」），
+  // Word 里是一条作者 AI WorkDeck、正文为空的幽灵气泡；③ stream_insert 按 __agent 署名。
+  console.log('\n[30] 页边模式导出保真 / 批注不记修订 / 流式署名（dev-board#367）')
+  {
+    const fresh30 = await exec('debug_fresh_document', { visible: true })
+    check('换新文档成功', fresh30 && fresh30.success === true, JSON.stringify(fresh30))
+    const setText30 = async (t) => {
+      await exec('debug_set_record_changes', { on: false })
+      await exec('ui_command', { name: 'select_all' })
+      await exec('replace_selection', { text: t })
+      await exec('goto', { type: 'end' })
+      await exec('debug_set_record_changes', { on: true })
+    }
+    const sig = (rv) => (rv.redlines || []).map((r) => String(r.type)[0] + ':' + r.text).sort().join(' ')
+    const docText = async () => (await exec('get_document_text')).paragraphs.map((x) => x.text)
+    await setText30('第一条 甲方应于三十日内付款。\n第二条 乙方应当按期交付货物。')
+    const a30 = await exec('find_text_locations', { keyword: '三十' })
+    await exec('replace_at_position', { anchor: a30.matches[0].anchorId, newText: '四十五', __agent: true })
+    const b30 = await exec('find_text_locations', { keyword: '按期交付货物' })
+    await exec('replace_at_position', { anchor: b30.matches[0].anchorId, newText: '按期交付全部货物', __agent: true })
+    const before30 = sig(await exec('debug_revisions'))
+    check('改前修订：删「三十」/ 插「四十五」/ 插「全部」', before30 === ['D:三十', 'I:四十五', 'I:全部'].sort().join(' '), before30)
+    const bytes30 = await page.evaluate(async () => {
+      const r = await window.__loExecutor.executeCommand('export_document', {})
+      return r && r.bytes ? Array.from(r.bytes) : null
+    })
+    check('页边模式下导出成功', Array.isArray(bytes30) && bytes30.length > 0)
+    const docAfterExport = await docText()
+    check('导出后正文仍按页边语义（不含被删的「三十」）', docAfterExport[0] === '第一条 甲方应于四十五日内付款。', JSON.stringify(docAfterExport))
+    await exec('debug_fresh_document', { visible: true })
+    const ld30 = await exec('load_document', { bytes: bytes30, name: 'margin-roundtrip.docx', authorName: '测试用户' })
+    check('导出件可重新打开', ld30.success === true, JSON.stringify(ld30))
+    const after30 = sig(await exec('debug_revisions'))
+    check('重新打开后修订与改前一致（页边模式导出不再错位）', after30 === before30, after30 + ' vs ' + before30)
+    const docR = await docText()
+    check('重新打开后正文正确', docR[0] === '第一条 甲方应于四十五日内付款。' && docR[1] === '第二条 乙方应当按期交付全部货物。', JSON.stringify(docR))
+
+    // ② 批注不记修订
+    const c30 = await exec('find_text_locations', { keyword: '付款' })
+    const nBefore = (await exec('debug_revisions')).redlines.length
+    const cm30 = await exec('add_comment', { anchor: c30.matches[0].anchorId, comment: '【修订理由】测试', __agent: true })
+    check('add_comment 成功', cm30.success === true, JSON.stringify(cm30))
+    const rvC = await exec('debug_revisions')
+    check('add_comment 不新增修订（无「已添加批注」幽灵插入）',
+      rvC.redlines.length === nBefore && !rvC.redlines.some((r) => r.comment === '已添加批注'), JSON.stringify(rvC.redlines))
+    check('修订记录开关在批注后恢复开启', (await exec('set_track_changes')).recordChanges === true)
+    const lc30 = await exec('list_comments')
+    check('批注本身正常（署名 / 内容 / 锚定区间）',
+      lc30.success && lc30.count === 1 && lc30.comments[0].author === 'AI WorkDeck'
+        && lc30.comments[0].content === '【修订理由】测试' && lc30.comments[0].anchorText === '付款', JSON.stringify(lc30))
+
+    // ③ 流式署名（宿主 flushDocStreamBuffer / handleDocStreamEnd 打 __agent，单测锁住；这里锁 worker 侧语义）
+    await exec('debug_fresh_document', { visible: true })
+    await exec('load_document', { authorName: '测试用户' })   // 只注入作者名
+    await setText30('署名。')
+    await exec('stream_insert', { text: '流式无标记\n' }); await exec('stream_flush', {})
+    await exec('stream_insert', { text: '流式带标记\n', __agent: true }); await exec('stream_flush', { __agent: true })
+    const rvS = await exec('debug_revisions')
+    const authorOf = (t) => ((rvS.redlines || []).find((r) => (r.text || '').includes(t)) || {}).author
+    check('stream_insert 带 __agent → 署名 AI WorkDeck', authorOf('流式带标记') === 'AI WorkDeck', JSON.stringify(rvS.redlines))
+    check('stream_insert 不带标记 → 署当前用户名', authorOf('流式无标记') === '测试用户', JSON.stringify(rvS.redlines))
+  }
+
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')
 } finally {
   await browser.close()
