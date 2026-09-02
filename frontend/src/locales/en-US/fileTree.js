@@ -66,6 +66,7 @@ export default {
   loading: 'Loading...',
   noFiles: 'No files yet',
   dropToRoot: 'Drop here to move to the root directory',
+  dropFilesToRoot: 'Release to upload to the project root',
   // Windowed rendering + reference count badge (dev-board#107 unit F3)
   loadMoreItems: 'Show more ({count} more items)',
   referencedCount: 'Referenced {count}',

@@ -350,7 +350,12 @@ export default {
       //    磁盘文件进来时两步都取不出数据，以前到这里就直接什么都不做——遮罩
       //    消失、用户以为暂存了，其实什么也没发生。dataTransfer.files 是浏览器
       //    给的原生 File 列表，交给宿主走真正的上传通道。
-      const osFiles = e && e.dataTransfer && e.dataTransfer.files
+      //    地雷（dev-board#363）：uni-h5 重建 <view> 上的事件对象时 drag 系事件的
+      //    dataTransfer 会丢，这里必须回落到正在派发的原生事件 window.event 上取。
+      const nativeDt = (e && e.dataTransfer)
+        || (typeof window !== 'undefined' && window.event && window.event.dataTransfer)
+        || null
+      const osFiles = nativeDt && nativeDt.files
       if (osFiles && osFiles.length > 0) {
           this.$emit('drop-files', Array.from(osFiles))
       }
