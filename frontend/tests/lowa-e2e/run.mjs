@@ -2059,7 +2059,12 @@ try {
       const buf = await page.screenshot({ clip: { x: 0, y: 0, width: vp.width, height: vp.height } })
       return PNG.sync.read(Buffer.from(buf))
     }
-    // 变暗像素占比：深色态相对浅色态亮度掉 80 以上的像素比例
+    // 变暗像素占比：深色态相对浅色态亮度掉 80 以上的像素比例。
+    // 阈值 0.02 是量出来的，不是拍的（2026-09-02 发 v0.32.0 时标定）：无头视口 800x600，
+    // A4 在 100% 缩放下约 794px 宽，纸几乎铺满整幅，能变暗的只有标尺/侧栏/左右两条窄
+    // 纸外带——干净树上稳定 0.044（换过引擎、换过 #708 前后的 glue 都是这个数）。
+    // 反向对照：两张都截浅色态时是 0.0008。所以 0.02 把「真重绘」与「压根没重绘」
+    // 分得很开，而原来的 0.05 卡在正常值上方，clean checkout 必红。
     const darkenedRatio = (a, b) => {
       const n = Math.min(a.data.length, b.data.length) / 4
       let hit = 0
@@ -2084,7 +2089,7 @@ try {
     await new Promise((r) => setTimeout(r, 900))
     const shotLight = await shotOf()
     const ratio = darkenedRatio(shotDark, shotLight)
-    check('纸外区域真的重绘（深色态有成片像素明显变暗）', ratio > 0.05, '变暗像素占比 ' + ratio.toFixed(3))
+    check('纸外区域真的重绘（深色态有成片像素明显变暗）', ratio > 0.02, '变暗像素占比 ' + ratio.toFixed(3))
   }
 
   // ---------- 组 31：页边模式导出保真 / 批注不记修订 / 流式署名（dev-board#367）----------
