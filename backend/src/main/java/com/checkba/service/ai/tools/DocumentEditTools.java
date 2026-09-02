@@ -307,7 +307,7 @@ public class DocumentEditTools implements AgentToolComponent {
 
     // ==================== 查找和替换 ====================
 
-    @Tool("【找】在文档中查找文本。每个匹配返回：anchorId（稳定锚点，编辑后依然有效）、前后文 contextBefore/contextAfter、所在段落 paragraph。" +
+    @Tool("【找】在文档中查找文本。每个匹配返回：matchIndex（序号，从 1 开始，可直接作为 doc_replace_nth_match / doc_delete_match 的 matchIndex）、anchorId（稳定锚点，编辑后依然有效）、前后文 contextBefore/contextAfter、所在段落 paragraph。" +
           "有多个匹配时先根据上下文确认哪一个才是目标，再用 anchorId 直接 doc_replace_at_anchor（精准替换，会自动滚动定位并返回改后段落）。" +
           "多处独立修改：拿到各自 anchorId 后在同一轮连续输出多个替换调用。目标文本全文唯一时不必先找，直接 doc_find_replace。")
     public String doc_find_text(
@@ -317,11 +317,35 @@ public class DocumentEditTools implements AgentToolComponent {
         log.info("Tool: doc_find_text called keyword={}", keyword);
         try {
             // Updated to call 'find_text_locations' which returns detailed positions
-            return editorBridgeService.executeEditorCommand("find_text_locations", 
+            String raw = editorBridgeService.executeEditorCommand("find_text_locations", 
                     java.util.Map.of("keyword", keyword, "matchCase", matchCase != null ? matchCase : false));
+            return oneBasedMatchIndexes(raw);
         } catch (Exception e) {
             log.error("Failed to find text", e);
             return "Error: " + e.getMessage();
+        }
+    }
+
+    /**
+     * worker 的 find_text_locations 返回 matchIndex: i（0 起）；模型面的 matchIndex 一律 1 基
+     * （doc_replace_nth_match / doc_delete_match 下发前减 1）。回给模型前加 1，模型从这里看到的
+     * 序号才能原样喂给 doc_replace_nth_match——否则「第二个匹配 matchIndex=1」传过去减一改的是第一个。
+     * 解析失败（error / 非 JSON）原样透传。
+     */
+    static String oneBasedMatchIndexes(String raw) {
+        if (raw == null || !raw.contains("\"matchIndex\"")) return raw;
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = EVIDENCE_JSON.readTree(raw);
+            com.fasterxml.jackson.databind.JsonNode matches = root.get("matches");
+            if (matches == null || !matches.isArray()) return raw;
+            for (com.fasterxml.jackson.databind.JsonNode m : matches) {
+                if (m instanceof com.fasterxml.jackson.databind.node.ObjectNode obj && obj.has("matchIndex") && obj.get("matchIndex").isInt()) {
+                    obj.put("matchIndex", obj.get("matchIndex").asInt() + 1);
+                }
+            }
+            return EVIDENCE_JSON.writeValueAsString(root);
+        } catch (Exception e) {
+            return raw;
         }
     }
 

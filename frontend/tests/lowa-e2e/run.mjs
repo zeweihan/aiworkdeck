@@ -522,6 +522,18 @@ try {
   await reset('甲方一、甲方二、甲方三。', true)
   const dm = await exec('delete_match', { findText: '甲方', matchIndex: 1 })
   check('worker delete_match matchIndex:1 删的是第二个匹配（0 基）', dm.success && (await doc()) === '甲方一、二、甲方三。', JSON.stringify(dm) + ' ' + (await doc()))
+  // dev-board#369 补钉三件事，都是后端「下发减一 / 回传加一」赖以成立的 worker 事实：
+  // (a) 0 基边界：matchIndex = 命中数-1 是最后一处、= 命中数 越界且不动文档；
+  // (b) find_text_locations 返回的 matchIndex 也是 0 起（后端 doc_find_text 回给模型前加 1）；
+  // (c) 「只计可见匹配」靠页边模式成立：上一步删掉的第二处已成删除型修订、不在正文流，再找只剩两处，
+  //     replace_nth_match 的计数也跟着只数可见的——关掉 ShowChangesInMargin 这条就不再成立。
+  const ftn = await exec('find_text_locations', { keyword: '甲方' })
+  check('find_text_locations 只计可见匹配（删除型修订不计）', ftn.success && ftn.count === 2, JSON.stringify(ftn))
+  check('find_text_locations 的 matchIndex 0 起（0,1），由后端回传时加 1', ftn.success && (ftn.matches || []).map((m) => m.matchIndex).join(',') === '0,1', JSON.stringify((ftn.matches || []).map((m) => m.matchIndex)))
+  const nmLast = await exec('replace_nth_match', { findText: '甲方', replaceText: '丙方', matchIndex: 1 })
+  check('replace_nth_match 按可见匹配计数：0 基的 1 = 原第三处', nmLast.success && (await doc()) === '甲方一、二、丙方三。', JSON.stringify(nmLast) + ' ' + (await doc()))
+  const nmOver = await exec('replace_nth_match', { findText: '甲方', replaceText: '丁方', matchIndex: 1 })
+  check('matchIndex = 可见命中数 越界：拒绝且不动文档', !nmOver.success && (await doc()) === '甲方一、二、丙方三。', JSON.stringify(nmOver) + ' ' + (await doc()))
 
   console.log('== 12) add_comment 批注：解释文字挂批注、不进正文 ==')
   await reset('本合同自签署之日起生效。', true)
