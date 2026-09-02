@@ -15,10 +15,16 @@ import java.time.LocalDateTime;
 /**
  * 文档里抽出来的一个实体（企业 / 法规 / 案例）及其外部库检索结果（dev-board#182）。
  *
- * <p><b>检索状态四态</b>：PENDING（还没打上游）、OK（拿到结果）、UNAVAILABLE（通道不可用——
- * 未配置、点数耗尽、网关未开放；<b>不是查无此项</b>）、ERROR（打了但失败）。
- * UNAVAILABLE 与 ERROR 都必须把可读原因写进 {@link #retrievalNote}：窗格里显示
+ * <p><b>检索状态五态</b>：PENDING（还没打上游）、OK（拿到结果）、NOT_FOUND（<b>查完了，上游明确说没有</b>——
+ * 这是一次成功的检索，不是故障）、UNAVAILABLE（通道不可用——未配置、点数耗尽、网关未开放；
+ * <b>不是查无此项</b>）、ERROR（打了但失败）。
+ * 后三态都必须把可读原因写进 {@link #retrievalNote}：窗格里显示
  * 「法宝检索本次不可用：账号点数耗尽」远好过一个空白格子。
+ *
+ * <p>NOT_FOUND 与 UNAVAILABLE 分开是因为用户的下一步完全不同：
+ * 前者「文档里这家公司/这个条号可能写错了」，后者「过一会儿再试/去查账」。
+ * 把「查无此企业」混进 UNAVAILABLE 会让窗格摆出一句「请联系 hi@aiworkdeck.com」——
+ * 对着一家虚构公司让用户去找客服（dev-board#395）。
  */
 @Entity
 @Table(name = "doc_insight_entity", indexes = {
@@ -36,6 +42,8 @@ public class DocInsightEntity {
 
     public static final String RETRIEVAL_PENDING = "PENDING";
     public static final String RETRIEVAL_OK = "OK";
+    /** 查完了，上游明确回「没有这一项」。是一次完成的检索，摘要里按完成计数。 */
+    public static final String RETRIEVAL_NOT_FOUND = "NOT_FOUND";
     /** 通道不可用（未配置 / 点数耗尽 / 未开放）。与「查了但没查到」是两回事。 */
     public static final String RETRIEVAL_UNAVAILABLE = "UNAVAILABLE";
     public static final String RETRIEVAL_ERROR = "ERROR";

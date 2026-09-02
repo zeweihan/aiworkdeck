@@ -361,3 +361,26 @@ test('run=null 是「没解析过」而不是错误态', async () => {
   assert.equal(vm.runLine, '')
   assert.equal(vm.isRunning, false)
 })
+
+
+// ————————————————— 检索状态五态（dev-board#395） —————————————————
+
+test('NOT_FOUND 是中性态：note 照常显示，且样式表里为它单列一条中性色', async () => {
+  const notFound = {
+    id: 5, kind: 'COMPANY', name: '不存在的公司', retrievalStatus: 'NOT_FOUND',
+    retrievalNote: '未查询到该企业（企查查只认工商全称，文中可能写的是简称）',
+    hasDetail: false, mentions: [{ quote: '不存在的公司' }],
+  }
+  const { vm } = makeVm({ latest: { run: { status: 'DONE' }, entities: [notFound], findings: [] } })
+  await vm.load()
+  const e = vm.entityGroups.flatMap((g) => g.items).find((x) => x.id === 5)
+  assert.equal(e.retrievalStatus, 'NOT_FOUND')
+  assert.ok(e.retrievalNote, 'note 必须下发并显示——空白格子什么都说明不了')
+  assert.ok(!/hi@aiworkdeck\.com/.test(e.retrievalNote), '查无此项不该指向客服')
+
+  // 模板按 `st-<状态>` 出 class；样式表漏一条 = 未命中被渲染成默认告警色
+  const scss = readFileSync(new URL('../../src/components/insight-pane.scss', import.meta.url), 'utf8')
+  assert.ok(/\.ip-dot\.st-NOT_FOUND\s*\{/.test(scss), 'ip-dot 缺 NOT_FOUND 一档')
+  assert.ok(/\.ip-note\.st-NOT_FOUND\s*\{/.test(scss), 'ip-note 缺 NOT_FOUND 一档')
+  assert.ok(!/\.ip-note\.st-NOT_FOUND[^\n]*awd-warning/.test(scss), 'NOT_FOUND 不该用告警色')
+})

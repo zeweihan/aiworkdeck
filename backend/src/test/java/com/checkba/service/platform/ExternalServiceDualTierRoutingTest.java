@@ -286,8 +286,10 @@ class ExternalServiceDualTierRoutingTest {
 
         private LegalTools tools(ExternalServiceProvider tier, PlatformGatewayClient gateway,
                                  McpClientService mcp) {
-            return new LegalTools(null, mcp, null,
-                    resolverWith(ExternalServiceProvider.PKULAW, tier), gateway, null);
+            return new LegalTools(null,
+                    new com.checkba.service.legal.PkulawChannel(
+                            mcp, resolverWith(ExternalServiceProvider.PKULAW, tier), gateway),
+                    null, null);
         }
 
         @Test
