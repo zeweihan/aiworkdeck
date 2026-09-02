@@ -488,6 +488,31 @@ try {
     rv11.success && delTexts(rv11).includes('三') && delTexts(rv11).every((t2) => (t2 || '').length === 1), JSON.stringify(rv11))
   check('两处插入各自成修订（六 / 全部）', mine(rv11).filter((r) => r.type === 'Insert').length === 2, JSON.stringify(mine(rv11)))
   check('改后段落实文正确', (await doc()) === '甲方应于六十日内向乙方支付全部服务费。', await doc())
+  // dev-board#365：整段删除重写的两条来路——
+  // (a) find_replace 全部替换默认走引擎原生 replaceAll，它只会把「掐掉公共前后缀的中段」
+  //     整块替换：一句里两处散点改动会把两处之间没改的字一起删了重打；
+  // (b) 长段落（> 500 字）首尾各改一字，旧 LCS DP 超上限直接整段一块替换。
+  const noBlock = (rv2) => delTexts(rv2).every((t2) => (t2 || '').length === 1)
+  await reset('甲方应于三日内向乙方支付服务费。', true)
+  const fr3 = await exec('find_replace', { findText: '甲方应于三日内向乙方', replaceText: '买方应于五日内向卖方', replaceAll: true })
+  rv11 = await exec('debug_revisions')
+  check('find_replace replaceAll 一句三处散点改动：只删「甲/三/乙」各一字，不整块重打',
+    fr3.success && fr3.replaced === 1 && ['甲', '三', '乙'].every((t2) => delTexts(rv11).includes(t2)) && noBlock(rv11), JSON.stringify(rv11))
+  check('三处插入各自成修订（买 / 五 / 卖）', mine(rv11).filter((r) => r.type === 'Insert').length === 3, JSON.stringify(mine(rv11)))
+  check('改后正文正确', (await doc()) === '买方应于五日内向卖方支付服务费。', await doc())
+  const longBody = '乙方应当按照本合同约定的时间、地点和方式向甲方交付货物，并保证所交付货物的品种、规格、数量、质量符合本合同附件一的要求；'.repeat(12)
+  await reset('甲方' + longBody + '三十日内付清。', true)
+  await exec('modify_paragraph', { index: 0, newText: '买方' + longBody + '六十日内付清。' })
+  rv11 = await exec('debug_revisions')
+  check('modify_paragraph 长段落（' + (longBody.length + 9) + ' 字）首尾各改一字：只删「甲/三」，不整段重写',
+    ['甲', '三'].every((t2) => delTexts(rv11).includes(t2)) && noBlock(rv11), JSON.stringify(mine(rv11).map((r) => [r.type, (r.text || '').length])))
+  check('长段落改后正文正确', (await doc()) === '买方' + longBody + '六十日内付清。', (await doc()).slice(-20))
+  // (c) 在已带修订的同一段上再改一处（模型常见：同一条款多轮微调）——偏移不能被前一轮的
+  //     修订对象带歪，仍只删一字。
+  const fr4 = await exec('find_replace', { findText: '六十日内付清', replaceText: '六十日内结清', replaceAll: false })
+  rv11 = await exec('debug_revisions')
+  check('同段第二轮改动仍只删「付」插「结」', fr4.success && fr4.replaced === 1 && delTexts(rv11).includes('付') && noBlock(rv11), JSON.stringify(mine(rv11).map((r) => [r.type, r.text])))
+  check('两轮改动后正文正确', (await doc()) === '买方' + longBody + '六十日内结清。', (await doc()).slice(-20))
 
   console.log('== 12) add_comment 批注：解释文字挂批注、不进正文 ==')
   await reset('本合同自签署之日起生效。', true)

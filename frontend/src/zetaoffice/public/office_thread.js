@@ -360,6 +360,64 @@ function insertTextAtCursor(vc, text) {
 // Returns [{start, delLen, insText}] in OLD-string coordinates, ordered
 // RIGHT-TO-LEFT (descending start) so applying them in order never shifts the
 // offsets of the edits still pending.
+//
+// 颗粒度契约（dev-board#365）：按字符（JS code unit）diff，中文不分词——分词/按行
+// 都会把「三十日→六十日」退化成整句。diff 用 Myers O((N+M)·D)，代价只随差异步数 D
+// 增长，段落再长、只改两个字也只产出两条片段（旧实现是 500x500 的 LCS DP，超过
+// 上限就整段一块替换，长条款首尾各改一字会呈现为「整段删除重写」——就是 #365 的病灶）。
+// 差异步数上限：Myers 的回溯快照约 D² 个整数。D 超过它说明整段已面目全非（几千字
+// 的改写），退化成「掐掉公共前后缀后整块替换」——那本来就是重写。
+const MINIMAL_EDITS_MAX_D = 2000;
+// Myers 差异（字符级）：返回 [{start, delLen, insText}]（a 的坐标、降序），相邻的
+// 删/插已并成一条替换型片段；差异步数超过 maxD 时返回 null。
+function myersEdits(a, b, maxD) {
+  const N = a.length, M = b.length;
+  const limit = Math.min(N + M, maxD);
+  const off = limit + 1;
+  const v = new Int32Array(2 * limit + 3);
+  const snaps = []; // 每一步 d 的 v 快照（k 从 -d-1 到 d+1，下标 = k + d + 1），回溯用
+  let D = -1;
+  v[off + 1] = 0;
+  for (let d = 0; d <= limit && D < 0; d++) {
+    for (let k = -d; k <= d; k += 2) {
+      let x;
+      if (k === -d || (k !== d && v[off + k - 1] < v[off + k + 1])) x = v[off + k + 1];
+      else x = v[off + k - 1] + 1;
+      let y = x - k;
+      while (x < N && y < M && a.charCodeAt(x) === b.charCodeAt(y)) { x++; y++; }
+      v[off + k] = x;
+      if (x >= N && y >= M) { D = d; break; }
+    }
+    snaps.push(v.slice(off - d - 1, off + d + 2));
+  }
+  if (D < 0) return null;
+  // 回溯：从终点沿快照往回走，产出降序的单字操作，顺手把相邻操作并成片段。
+  const edits = [];
+  let cur = null;
+  const pushDel = function (at) {
+    if (cur && cur.start === at + 1) { cur.start = at; cur.delLen++; }
+    else { if (cur) edits.push(cur); cur = { start: at, delLen: 1, insText: '' }; }
+  };
+  const pushIns = function (at, ch) {
+    if (cur && cur.start === at) cur.insText = ch + cur.insText;
+    else { if (cur) edits.push(cur); cur = { start: at, delLen: 0, insText: ch }; }
+  };
+  let x = N, y = M;
+  for (let d = D; d > 0; d--) {
+    const vp = snaps[d - 1], po = d; // 快照 d-1 的下标 = k + (d-1) + 1 = k + d
+    const k = x - y;
+    let prevK;
+    if (k === -d || (k !== d && vp[po + k - 1] < vp[po + k + 1])) prevK = k + 1; else prevK = k - 1;
+    const prevX = vp[po + prevK], prevY = prevX - prevK;
+    const down = prevK === k + 1; // down = 插入 b[prevY]；right = 删除 a[prevX]
+    const midX = down ? prevX : prevX + 1;
+    while (x > midX) { x--; y--; } // 对角线：相同字，不产出操作
+    if (down) pushIns(prevX, b.charAt(prevY)); else pushDel(prevX);
+    x = prevX; y = prevY;
+  }
+  if (cur) edits.push(cur);
+  return edits;
+}
 function minimalEdits(oldStr, newStr) {
   const oLen = oldStr.length, nLen = newStr.length;
   let p = 0;
@@ -369,38 +427,10 @@ function minimalEdits(oldStr, newStr) {
   while (s < maxP - p && oldStr.charCodeAt(oLen - 1 - s) === newStr.charCodeAt(nLen - 1 - s)) s++;
   const oMid = oldStr.slice(p, oLen - s), nMid = newStr.slice(p, nLen - s);
   if (!oMid && !nMid) return [];
-  // Pure insert/delete, or a middle too big for the DP (500x500 chars — far
-  // beyond any single clause edit): one contiguous replace of the trimmed
-  // middle is already minimal enough.
-  if (!oMid || !nMid || oMid.length * nMid.length > 250000) {
-    return [{ start: p, delLen: oMid.length, insText: nMid }];
-  }
-  // LCS DP over the trimmed middle (lengths <= 500, so Uint16 lengths are safe).
-  const m = oMid.length, n = nMid.length, W = n + 1;
-  const dp = new Uint16Array((m + 1) * W);
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      dp[i * W + j] = oMid.charCodeAt(i - 1) === nMid.charCodeAt(j - 1)
-        ? dp[(i - 1) * W + (j - 1)] + 1
-        : Math.max(dp[(i - 1) * W + j], dp[i * W + (j - 1)]);
-    }
-  }
-  // Backtrack from the end, coalescing adjacent del+ins into single replaces.
-  const edits = [];
-  let i = m, j = n, curDel = 0, curIns = '';
-  const flush = function (atOld) {
-    if (curDel || curIns) { edits.push({ start: p + atOld, delLen: curDel, insText: curIns }); curDel = 0; curIns = ''; }
-  };
-  while (i > 0 || j > 0) {
-    if (i > 0 && j > 0 && oMid.charCodeAt(i - 1) === nMid.charCodeAt(j - 1)) {
-      flush(i); i--; j--;
-    } else if (j > 0 && (i === 0 || dp[i * W + (j - 1)] >= dp[(i - 1) * W + j])) {
-      curIns = nMid.charAt(j - 1) + curIns; j--;
-    } else {
-      curDel++; i--;
-    }
-  }
-  flush(0);
+  // 纯插入/纯删除本身就是一条片段；差异步数超上限（面目全非）也退化成整块替换。
+  const edits = (!oMid || !nMid) ? null : myersEdits(oMid, nMid, MINIMAL_EDITS_MAX_D);
+  if (!edits) return [{ start: p, delLen: oMid.length, insText: nMid }];
+  for (let k = 0; k < edits.length; k++) edits[k].start += p;
   // Cleanup: a SINGLE stray equal char sandwiched between two edits (LCS 在中文
   // 里常捞到巧合的"的/、"之类) makes choppy, confusing redlines — fold it into
   // one combined edit. edits is descending; [k+1] is the LEFT neighbor.
@@ -414,6 +444,12 @@ function minimalEdits(oldStr, newStr) {
     } else k++;
   }
   return edits;
+}
+// find_replace 全部替换的分流判据：原生 replaceAll 一次只能把「掐掉公共前后缀的中段」
+// 整块替换；差异不止一块（甲方→乙方 与 三日→五日 两处）时整块替换会把两处之间没改的
+// 字一起删了重打，必须走逐命中的 applyMinimalRedline 路径。
+function replaceAllIsSingleBlock(findText, replaceText) {
+  return minimalEdits(String(findText == null ? '' : findText), String(replaceText == null ? '' : replaceText)).length <= 1;
 }
 // Apply newText onto range as char-granular tracked edits. Returns true when
 // handled (caller must NOT also setString), false when the caller should fall
@@ -2055,7 +2091,8 @@ function unlockModel() {
 //（我爱你→我恨你 只删"爱"加"恨"），先把 findText/replaceText 的公共前后缀掐掉，
 // 用正则 (?<=前缀)中段(?=后缀) 只替换差异中段。引擎不接受零宽匹配（纯插入，
 // 如 验收后→验收合格后），这种回退到逐命中路径（分批 + 进度 + 取消）。
-// 返回 {n} 或 null（= 走回退路径）。
+// 差异不止一块（见 replaceAllIsSingleBlock）的调用方在进来之前就已分流到逐命中路径，
+// 这里只会收到「中段就是唯一差异」的替换。返回 {n} 或 null（= 走回退路径）。
 function regexEscape(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 function replaceEscape(s) { return String(s).replace(/\\/g, '\\\\').replace(/&/g, '\\&').replace(/\$/g, '\\$'); }
 function nativeTrackedReplaceAll(findText, replaceText, matchCase) {
@@ -2196,7 +2233,12 @@ const EXEC = {
     const all = p.replaceAll !== false;
     const replaceText = String(p.replaceText || '');
     if (all) {
-      const fast = nativeTrackedReplaceAll(String(p.findText || ''), replaceText, !!p.matchCase);
+      // 颗粒度门槛（dev-board#365）：findText→replaceText 的差异不止一块时，原生
+      // replaceAll 只能整块替换中段，会把两处改动之间没改的字一起删了重打；
+      // 这种改走下面的逐命中路径，每处 applyMinimalRedline 按字符落修订。
+      const fast = replaceAllIsSingleBlock(p.findText, replaceText)
+        ? nativeTrackedReplaceAll(String(p.findText || ''), replaceText, !!p.matchCase)
+        : null;
       if (fast) {
         invalidateParaIndex();
         return { success: true, replaced: fast.n, total: fast.n, recordChanges: true };
