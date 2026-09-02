@@ -127,6 +127,48 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
    老坑之所以能瞒过八个月，就是因为那一步只截图不断言。
    **教训**：`ui-harness` 只覆盖引擎，不覆盖「引擎怎么被真产物接线」；
    凡是与 electron-builder 模板契约有关的改动，用例必须复刻它的页序。
+6.5.6. **无边框卡片的拖动：nsDialogs 页靠 STN_CLICKED，instfiles 页只能靠真标题带**
+   （dev-board#366）。用户反馈「进度卡不能拖、点不了、像卡死」，两个症状一个根：
+   `AwdGuiInit` 把 `WS_CAPTION` 剥掉做无边框，系统从此不给任何可拖的区域，而进度卡的
+   位图上本来就一个可点的东西都没有（mini-install 美术只有品牌行、状态行、进度轨道），
+   于是「点不了」=「拖不了」。**消息泵不是嫌疑人**：Section 跑在 NSIS 自己开的
+   `install_thread` 上（`Source/exehead/Ui.c` 的 `WM_NOTIFY_START` → `CreateThread`），
+   UI 线程照常泵消息，1.7GB 解压期间进度条也是这么动起来的；红一轮的日志里
+   `SendMessageTimeout(WM_NULL)` 在安装期间 3 秒内有应答，把这条钉死了。
+   两条路各自的约束：
+   - **欢迎卡/完成卡是 nsDialogs 页**，脚本能跑。背景位图加 `SS_NOTIFY`，static 控件的
+     `STN_CLICKED` 是在 `WM_LBUTTONDOWN` 里发的（与 BUTTON 抬起才发 `BN_CLICKED` 不同，
+     Wine `static.c` 与 Windows 同款），回调里鼠标还按着，`ReleaseCapture` +
+     `SendMessage $HWNDPARENT WM_NCLBUTTONDOWN HTCAPTION 0` 就把这一按交给系统的模态
+     拖动循环，抬起才回来。**z 序地雷（第二轮 CI 实锤）**：Win32 子窗口创建时插在
+     z 序**最底**（Wine `win32u/window.c`：`insert_after = WS_CHILD ? HWND_BOTTOM : HWND_TOP`，
+     注释原话「yes, even if the CBT hook was called with HWND_TOP」），也就是后建的在
+     **下面**——引擎里原先那句「创建序在位图之后 = z 序在其上」是反的，此前没露馅只因
+     没 `SS_NOTIFY` 的 static 对命中测试是 `HTTRANSPARENT`，点击穿过位图落到下面的热区。
+     一加 `SS_NOTIFY` 位图变 `HTCLIENT`，拖动通了、随后「自定义安装」「立即安装」全哑
+     （run 33576325194）。所以位图的 `SetWindowPos(HWND_BOTTOM)` 必须放在**所有控件建完
+     之后、`nsDialogs::Show` 之前**，建完位图立刻压底是无效的（那时它本来就在底）。
+   - **进度卡（instfiles 页）脚本一行都不能跑**：同一套执行引擎、同一个栈，UI 线程若在
+     Section 执行期间再进 NSIS 代码就是两条线程并发踩 `$0`-`$9`；nsDialogs 在这一页也没有
+     落脚点。所以 `AwdInstFilesShow` 把 `WS_CAPTION` 加回来当拖动带（不带 `WS_SYSMENU`，
+     无图标无按钮），Win11 用 `DwmSetWindowAttribute` 35/36/34 把标题带、文字、边框染成
+     卡片色（看起来只是卡片顶上多一条空白），Win10 显示系统标题带；外框尺寸用
+     `AdjustWindowRectEx` 实算别手抄；`SetWindowPos` 必须带 `SWP_FRAMECHANGED`。
+     进完成卡 `AwdFinishCreate` 再剥掉，先 `ClientToScreen` 记下客户区原点再换样式，
+     卡片内容不跳。
+   - 「自定义安装」展开改 `SWP_NOMOVE`：原先用初始化时记的坐标重定位，卡片能拖之后
+     那就成了「一点自定义安装就弹回屏幕中央」。
+   **否决过的路**：System 插件的回调是同线程协程（只在 `System::Call` 里等着的那次调用
+   能收到），做不了 WndProc 子类化；往 RWX 内存写一段 x86 WndProc 能跑但等于在未签名
+   安装器里放 shellcode；自编插件 DLL 要三条 workflow 各加编译步骤。
+   回归护栏：`installer-smoke.ps1` 的 `DragAssert` 对三张卡各拖一次（真实鼠标
+   `mouse_event` 按下、分步绝对移动、抬起，断言窗口矩形位移 ≥ 指针位移一半、进程活着）、
+   `AssertResponsive` 在安装期间发 `WM_NULL`、展开自定义安装后断言左上角没动。
+   三轮 CI 同一份测试脚本（f9af58b0 之后 `installer-smoke.ps1` 一字未动）：红
+   https://github.com/zeweihan/aiworkdeck/actions/runs/33575900306（三张卡 `moved (0,0)`）、
+   半红 https://github.com/zeweihan/aiworkdeck/actions/runs/33576325194（欢迎卡拖动
+   `moved (100,40)` 但热区被位图挡住、进不了进度卡——就是上面的 z 序地雷）、
+   绿 https://github.com/zeweihan/aiworkdeck/actions/runs/33576754273 。
 
 6.6. **`dmg-builder` 补丁（`desktop/scripts/patch-dmg-builder.js` + package.json `postinstall`，安装器 UI 重设计新增）**：macOS 26.2+ 起 Finder 拒读 dmgbuild 写入 `.DS_Store` 的 `pBBk` 背景书签，导致桌面端主 DMG 背景不显示（electron-builder#9072 / dmgbuild#273，同版 Obsidian/Podman Desktop 同期中招）。`npm ci`/`npm install` 后自动对 `node_modules/dmg-builder/vendor/dmgbuild/core.py` 做定点补丁（跳过 Bookmark 生成，`icvp` 里的 alias 通道保留，老系统照常工作）。**升级 electron-builder 后若补丁脚本报「结构已变」**：先确认新版是否已自带该修复，再决定要不要删掉本补丁，不要盲目跳过。
 
