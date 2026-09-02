@@ -46,6 +46,7 @@ export default {
   rename: '重命名',
   fileHistory: '这份文件的历史',
   revealInFinder: '在访达中显示',
+  sendFile: '发送…',
   delete: '删除',
   copy: '复制',
   // 回收站

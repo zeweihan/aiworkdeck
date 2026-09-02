@@ -169,6 +169,9 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
     showOpenDialog: (options) => ipcRenderer.invoke('fs:showOpenDialog', options),
     // 在 Finder/资源管理器里高亮一个已有路径（IDE 化项目「在 Finder 中显示」）
     showItemInFolder: (path) => ipcRenderer.invoke('fs:showItemInFolder', { path }),
+    // 「发送…」：macOS 唤起系统分享面板（微信/邮件/隔空投送），Windows 退化为剪贴板粘贴
+    // （dev-board#382）。返回 { ok, mode: 'share-sheet' | 'clipboard', reason? }。
+    shareFile: (path) => ipcRenderer.invoke('fs:shareFile', { path }),
     // 拖放的 File 对象 → 绝对路径（Electron 32 起 File.path 移除，webUtils 是正途）
     getPathForFile: (file) => {
       try {

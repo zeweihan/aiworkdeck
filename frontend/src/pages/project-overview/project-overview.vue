@@ -626,6 +626,7 @@
             @file-deleted="handleFileDeleted"
             @file-history="onFileHistory"
             @reveal-file="onRevealFile"
+            @share-file="onShareFile"
             :transcribe-enabled="meetingRecorderEnabled"
             @transcribe-audio="onTranscribeAudio"
           />
@@ -3812,6 +3813,33 @@ export default {
         if (path) await host.fs.showItemInFolder(path)
       } catch (e) {
         uni.showToast({ title: (e && e.message) || this.$t('workbench.revealFailed'), icon: 'none' })
+      }
+    },
+    // 文件树右键「发送…」/ 菜单「文件 > 发送…」（dev-board#382）：后端解析物理路径，
+    // 桌面壳分平台处理——macOS 弹系统分享面板（微信在里面，选中后微信自己弹对话选择），
+    // Windows 只能把文件放进剪贴板再提示去微信里粘贴。
+    async onShareFile(file) {
+      if (!file || file.isFolder) return
+      const shareApi = host.fs && host.fs.shareFile
+      if (!shareApi) return
+      try {
+        const r = await getFileLocalPath(file.id)
+        const path = r && r.data && r.data.path
+        if (!(r && r.data && r.data.exists) || !path) {
+          uni.showToast({ title: this.$t('workbench.fileNotOnDisk'), icon: 'none' })
+          return
+        }
+        const res = await host.fs.shareFile(path)
+        if (!res || !res.ok) {
+          const key = res && res.reason === 'unsupported' ? 'workbench.shareUnsupported' : 'workbench.shareFailed'
+          uni.showToast({ title: this.$t(key), icon: 'none' })
+          return
+        }
+        if (res.mode === 'clipboard') {
+          uni.showToast({ title: this.$t('workbench.shareClipboardHint'), icon: 'none', duration: 4000 })
+        }
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || this.$t('workbench.shareFailed'), icon: 'none' })
       }
     },
     // 「有一次采纳等待处理」固定条的入口：切到版本面板，AdoptConflictDialog 会随

@@ -151,6 +151,7 @@ export const menuCommandsMethods = {
       case 'prevTab': this.cycleTab(-1); break
       case 'importFiles': this.toggleLeftPane('files'); this.menuToast(this.$t('workbench.menuImportHint')); break
       case 'revealInFinder': await this.menuRevealProject(); break
+      case 'shareFile': await this.menuShareFile(); break
 
       // —— 导航
       case 'quickOpen': this.quickOpenVisible = true; break
@@ -220,5 +221,12 @@ export const menuCommandsMethods = {
     const f = this.activeFileLeft
     if (f && !f.isFolder) return this.onRevealFile(f)
     return this.onRevealFile({ isFolder: true })
+  },
+
+  /** 「文件 > 发送…」：把当前活跃标签的文件交给系统分享（复用文件树右键那条 onShareFile）。 */
+  async menuShareFile() {
+    const f = this.activeFileLeft
+    if (!f || f.isFolder) { this.menuToast(this.$t('workbench.openDocFirst')); return }
+    return this.onShareFile(f)
   },
 }
