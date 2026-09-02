@@ -513,6 +513,15 @@ try {
   rv11 = await exec('debug_revisions')
   check('同段第二轮改动仍只删「付」插「结」', fr4.success && fr4.replaced === 1 && delTexts(rv11).includes('付') && noBlock(rv11), JSON.stringify(mine(rv11).map((r) => [r.type, r.text])))
   check('两轮改动后正文正确', (await doc()) === '买方' + longBody + '六十日内结清。', (await doc()).slice(-20))
+  // worker 侧 matchIndex 契约钉住：replace_nth_match / delete_match 与 worker 其它整数定位一样
+  // **0 基**（matchIndex:1 = 第二个匹配）。模型面的「第 N 处（从 1 开始）」由后端下发前减 1
+  // 归一（MatchIndexBaseTest）；两端合起来才是「模型说第 2 处，改的就是第二个」。
+  await reset('甲方一、甲方二、甲方三。', true)
+  const nth = await exec('replace_nth_match', { findText: '甲方', replaceText: '买方', matchIndex: 1 })
+  check('worker replace_nth_match matchIndex:1 命中第二个匹配（0 基）', nth.success && (await doc()) === '甲方一、买方二、甲方三。', JSON.stringify(nth) + ' ' + (await doc()))
+  await reset('甲方一、甲方二、甲方三。', true)
+  const dm = await exec('delete_match', { findText: '甲方', matchIndex: 1 })
+  check('worker delete_match matchIndex:1 删的是第二个匹配（0 基）', dm.success && (await doc()) === '甲方一、二、甲方三。', JSON.stringify(dm) + ' ' + (await doc()))
 
   console.log('== 12) add_comment 批注：解释文字挂批注、不进正文 ==')
   await reset('本合同自签署之日起生效。', true)

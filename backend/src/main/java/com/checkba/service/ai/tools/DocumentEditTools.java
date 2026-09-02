@@ -366,11 +366,14 @@ public class DocumentEditTools implements AgentToolComponent {
             if (matchIndex == null || matchIndex < 1) {
                 return "Error: matchIndex 必须是从 1 开始的正整数";
             }
-            return editorBridgeService.executeEditorCommand("replace_nth_match", 
+            // 模型面 1 基（描述/prompt/LEGACY_DEFAULTS 一致），worker 的 replace_nth_match 与它的
+            // 其它整数定位一样 0 基，且插件经 PluginHostImpl.DOC_ACTIONS 直接按 worker 契约调用——
+            // 归一只能落在这里：下发前减 1（MatchIndexBaseTest 钉着）。
+            return editorBridgeService.executeEditorCommand("replace_nth_match",
                     java.util.Map.of(
-                            "findText", findText, 
-                            "replaceText", replaceText, 
-                            "matchIndex", matchIndex
+                            "findText", findText,
+                            "replaceText", replaceText,
+                            "matchIndex", matchIndex - 1
                     ));
         } catch (Exception e) {
             log.error("Failed to replace nth match", e);
@@ -388,10 +391,11 @@ public class DocumentEditTools implements AgentToolComponent {
             if (matchIndex == null || matchIndex < 1) {
                 return "Error: matchIndex 必须是从 1 开始的正整数";
             }
-            return editorBridgeService.executeEditorCommand("delete_match", 
+            // 同 doc_replace_nth_match：模型面 1 基 → worker 0 基，下发前减 1。
+            return editorBridgeService.executeEditorCommand("delete_match",
                     java.util.Map.of(
-                            "findText", findText, 
-                            "matchIndex", matchIndex
+                            "findText", findText,
+                            "matchIndex", matchIndex - 1
                     ));
         } catch (Exception e) {
             log.error("Failed to delete match", e);
