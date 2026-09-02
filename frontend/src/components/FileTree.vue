@@ -361,6 +361,16 @@
           </view>
           <text class="context-menu-text">{{ $t('fileTree.revealInFinder') }}</text>
         </view>
+        <view v-if="contextMenu.targetItem && !contextMenu.targetItem.isFolder && canShareFile" class="context-menu-item"
+          @tap="$emit('share-file', contextMenu.targetItem); closeContextMenu()">
+          <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 2L11 13" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M22 2L15 22l-4-9-9-4z" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </view>
+          <text class="context-menu-text">{{ $t('fileTree.sendFile') }}</text>
+        </view>
         <view v-if="contextMenu.targetItem" class="context-menu-item context-menu-item-danger" @tap="handleDelete(contextMenu.targetItem); closeContextMenu()">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1125,6 +1135,10 @@ export default {
     ICONS() { return ICONS },
     isDesktopShell() {
       return !!(host.fs && host.fs.showItemInFolder)
+    },
+    // 「发送…」只在桌面壳且壳版本带 shareFile 时出现（dev-board#382）
+    canShareFile() {
+      return !!(host.fs && host.fs.shareFile)
     },
     sortLabel() {
       const map = { name: this.$t('fileTree.sortName'), date: this.$t('fileTree.sortModifiedTime'), type: this.$t('fileTree.sortType') }

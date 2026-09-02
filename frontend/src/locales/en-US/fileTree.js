@@ -46,6 +46,7 @@ export default {
   rename: 'Rename',
   fileHistory: 'File History',
   revealInFinder: 'Reveal in Finder',
+  sendFile: 'Send…',
   delete: 'Delete',
   copy: 'Copy',
   // Recycle bin

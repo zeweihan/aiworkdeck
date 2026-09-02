@@ -39,6 +39,13 @@ export const FILE_COMMANDS = [
     when: ['workbench', 'project'],
     run: 'wb:revealInFinder',
   },
+  {
+    id: 'file.share',
+    label: { zh: '发送…', en: 'Send…' },
+    menu: 'file', group: 3,
+    when: ['workbench', 'tab'],
+    run: 'wb:shareFile',
+  },
 
   {
     id: 'file.closeTab',
