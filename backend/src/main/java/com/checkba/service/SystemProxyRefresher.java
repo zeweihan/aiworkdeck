@@ -17,7 +17,8 @@ import java.util.concurrent.TimeUnit;
  * 于是全部出站流量被送去本地代理端口。而桌面后端是**长命 JVM**（开 app 起、连跑数天），
  * 把端口冻在启动那一刻；用户的代理软件换端口或重启后（实测 1235 → 8234），
  * 后端一直在拨那个已经没人监听的旧端口，**每一个 AI 请求都 ConnectException**。
- * 修复前这个失败还会被 openai4j 吞掉（见 {@code ChatModelFactory.streamingBuilder}），
+ * 修复前这个失败还会被 openai4j 吞掉（旧流式通道的 logResponses NPE 地雷，
+ * 见 {@code ChatModelFactory.streamingModel} 的 javadoc；流式通道已换成自有实现），
  * 用户看到的是"点了发送三分钟没反应"。
  *
  * <p><b>为什么必须改属性而不是开 {@code java.net.useSystemProxies}</b>：那个开关在

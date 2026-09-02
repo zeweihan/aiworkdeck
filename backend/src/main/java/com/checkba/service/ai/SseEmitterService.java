@@ -82,24 +82,39 @@ public class SseEmitterService {
 
     @jakarta.annotation.PostConstruct
     void startHeartbeat() {
-        heartbeatScheduler.scheduleWithFixedDelay(() -> {
-            // 整个任务体必须吞掉 Throwable：scheduleWithFixedDelay 的语义是"任务抛出即
-            // 永久取消后续执行"。心跳一旦停摆，全体在线客户端 40 秒后同时判死连接、
-            // 齐刷刷重连，而且直到进程重启都好不了——单点故障放大成全局故障。
-            // send() 内部只捕获 Exception，Error（OOM/StackOverflow）会漏出来。
-            try {
-                for (String id : emitters.keySet()) {
-                    try {
-                        send(id, "heartbeat", "{\"ts\":" + System.currentTimeMillis() + "}");
-                    } catch (Throwable t) {
-                        // 单个会话的心跳失败不许连累其余会话
-                        log.debug("Heartbeat failed for {}", id);
-                    }
+        heartbeatScheduler.scheduleWithFixedDelay(this::heartbeatSweep,
+                HEARTBEAT_INTERVAL_SECONDS, HEARTBEAT_INTERVAL_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
+    }
+
+    /**
+     * 一轮心跳广播；返回本轮推送到的连接数（回归用例的观察口）。
+     * 从调度 lambda 里提出来是为了能不等 15 秒就测「每个在线连接都收到 heartbeat」。
+     */
+    int heartbeatSweep() {
+        // 整个任务体必须吞掉 Throwable：scheduleWithFixedDelay 的语义是"任务抛出即
+        // 永久取消后续执行"。心跳一旦停摆，全体在线客户端 40 秒后同时判死连接、
+        // 齐刷刷重连，而且直到进程重启都好不了——单点故障放大成全局故障。
+        // send() 内部只捕获 Exception，Error（OOM/StackOverflow）会漏出来。
+        int sent = 0;
+        try {
+            for (String id : emitters.keySet()) {
+                try {
+                    send(id, "heartbeat", "{\"ts\":" + System.currentTimeMillis() + "}");
+                    sent++;
+                } catch (Throwable t) {
+                    // 单个会话的心跳失败不许连累其余会话
+                    log.debug("Heartbeat failed for {}", id);
                 }
-            } catch (Throwable t) {
-                log.warn("Heartbeat sweep failed, continuing", t);
             }
-        }, HEARTBEAT_INTERVAL_SECONDS, HEARTBEAT_INTERVAL_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (Throwable t) {
+            log.warn("Heartbeat sweep failed, continuing", t);
+        }
+        return sent;
+    }
+
+    /** 心跳间隔（秒）。前端 useAgentStream 的 HEARTBEAT_STALE_MS 按它的 3 倍设，改这里要同步那边。 */
+    static long heartbeatIntervalSeconds() {
+        return HEARTBEAT_INTERVAL_SECONDS;
     }
 
     @jakarta.annotation.PreDestroy

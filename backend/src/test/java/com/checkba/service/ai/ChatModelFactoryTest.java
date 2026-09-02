@@ -7,7 +7,6 @@ import dev.langchain4j.model.chat.StreamingChatLanguageModel;
 import dev.langchain4j.model.ollama.OllamaChatModel;
 import dev.langchain4j.model.ollama.OllamaStreamingChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
-import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -74,7 +73,7 @@ class ChatModelFactoryTest {
                 "供应商切到 OPENROUTER 后空 modelId 不应回退本地 Ollama");
 
         StreamingChatLanguageModel streaming = factory.getStreamingChatModel(null);
-        assertInstanceOf(OpenAiStreamingChatModel.class, streaming);
+        assertInstanceOf(OpenRouterStreamingChatModel.class, streaming);
     }
 
     @Test
@@ -86,7 +85,7 @@ class ChatModelFactoryTest {
         assertInstanceOf(OpenAiChatModel.class, model);
 
         StreamingChatLanguageModel streaming = factory.getStreamingChatModel("vendor/some-unlisted-model");
-        assertInstanceOf(OpenAiStreamingChatModel.class, streaming);
+        assertInstanceOf(OpenRouterStreamingChatModel.class, streaming);
     }
 
     @Test
@@ -221,7 +220,7 @@ class ChatModelFactoryTest {
         properties.setProvider(AiModelProperties.Provider.OPENROUTER);
         assertEquals(AiModelProperties.Provider.OPENROUTER,
                 factory.resolveTarget("moonshotai/kimi-k3", false).channel());
-        assertInstanceOf(OpenAiStreamingChatModel.class, factory.getStreamingChatModel("moonshotai/kimi-k3"));
+        assertInstanceOf(OpenRouterStreamingChatModel.class, factory.getStreamingChatModel("moonshotai/kimi-k3"));
 
         when(systemSettingService.get(eq("ai.activeProvider"), any())).thenReturn("OLLAMA");
         factory.clearCache();
@@ -342,7 +341,7 @@ class ChatModelFactoryTest {
         when(platformAiChannel.keyFingerprint()).thenReturn("abc123");
 
         assertInstanceOf(OpenAiChatModel.class, factory.getChatModel("anthropic/claude-sonnet-5"));
-        assertInstanceOf(OpenAiStreamingChatModel.class, factory.getStreamingChatModel("anthropic/claude-sonnet-5"));
+        assertInstanceOf(OpenRouterStreamingChatModel.class, factory.getStreamingChatModel("anthropic/claude-sonnet-5"));
         // 白名单短路分支绝不能先命中——那条路用的是 BYOK 的 key
         verify(platformAiChannel, atLeastOnce()).apiKey();
         verify(systemSettingService, never()).get(eq("external.openrouter.apiKey"), any());
@@ -372,7 +371,7 @@ class ChatModelFactoryTest {
         when(platformAiChannel.keyFingerprint()).thenReturn("abc123");
 
         // 编排器故障转移就是拿备选 modelId 再调一次工厂——通道由 provider 决定，与 modelId 无关
-        assertInstanceOf(OpenAiStreamingChatModel.class,
+        assertInstanceOf(OpenRouterStreamingChatModel.class,
                 factory.getStreamingChatModel("qwen/qwen3.7-flash"));
         verify(platformAiChannel, atLeastOnce()).apiKey();
         verify(systemSettingService, never()).get(eq("external.openrouter.apiKey"), any());

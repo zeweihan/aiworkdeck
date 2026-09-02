@@ -38,8 +38,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *   at okhttp3.internal.sse.RealEventSource.onFailure(RealEventSource.kt:91)
  * </pre>
  *
- * <p>本用例走 {@link ChatModelFactory#streamingBuilder} —— 必须是工厂那份真实口径，
- * 用例里自己拼一个 builder 就永远是绿的，起不到守护作用。
+ * <p>本用例走 {@link ChatModelFactory#streamingModel} —— 必须是工厂那份真实口径，
+ * 用例里自己拼一个模型就永远是绿的，起不到守护作用。
+ * 流式通道 2026-09 换成自有的 {@link OpenRouterStreamingChatModel}（dev-board#364）之后，
+ * 上面那条 NPE 路径已不存在，但「连不上必须 onError」的契约不变，本用例继续守着它。
  */
 class StreamingTransportFailureTest {
 
@@ -53,11 +55,11 @@ class StreamingTransportFailureTest {
     @Test
     @DisplayName("连不上时必须回调 onError，而不是把异常吞在 OkHttp Dispatcher 上让本轮静默挂死")
     void transportFailureReachesOnError() throws Exception {
-        StreamingChatLanguageModel model = ChatModelFactory.streamingBuilder(
+        StreamingChatLanguageModel model = ChatModelFactory.streamingModel(
                 "test-key",
                 "http://127.0.0.1:" + portWithNothingListening() + "/api/v1",
                 "deepseek/deepseek-v4-flash",
-                Duration.ofSeconds(5)).build();
+                Duration.ofSeconds(5));
 
         CountDownLatch settled = new CountDownLatch(1);
         AtomicReference<Throwable> captured = new AtomicReference<>();

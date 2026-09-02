@@ -467,6 +467,11 @@
           <text class="continue-hint">{{ continueHint }}</text>
           <view class="continue-btn" @tap="handleContinue">{{ $t('chat.continueRun') }}</view>
        </view>
+       <!-- SSE 断连提示（dev-board#364）：心跳 45s 没到或流意外结束时后台在自动重连；
+            之前只写 console.warn，用户看到的是思考计时器一直走、分不清模型在想还是连接死了 -->
+       <view v-if="linkStatus && linkStatus.state === 'reconnecting'" class="link-bar">
+          <text class="link-hint">{{ $t('chat.linkReconnecting', { attempt: linkStatus.attempt }) }}</text>
+       </view>
        <!-- 长任务可控：进度条在浮窗里（BackgroundTaskIndicator），控制放在输入框上方——
             用户想停的时候手在输入区，不该先去浮窗里找按钮。
             文案只说「正在停止」：取消打不断已经发出去的调用（PPT 服务那边还会跑完）。 -->
@@ -719,6 +724,7 @@ export default {
       fileChanges,
       agentPaused,
       agentRunStatus,
+      linkStatus,
       activeSkills,
       skillNotice,
       reattachSSE,
@@ -2531,6 +2537,7 @@ export default {
        cleanTitle,
        recentDotClass,
        agentRunStatus,
+       linkStatus,
        addFile,
        removeContextFile,
        removePastedImage,
@@ -4335,6 +4342,22 @@ export default {
 
 .continue-btn:hover {
   background: var(--awd-accent-hover);
+}
+
+/* SSE 断连提示条：外形对齐 continue-bar，只有一行文字、没有按钮（重连是自动的） */
+.link-bar {
+  display: flex;
+  align-items: center;
+  margin: 0 12px 6px;
+  padding: 6px 12px;
+  background: var(--awd-bg);
+  border: 1px solid var(--awd-warning);
+  border-radius: 8px;
+}
+
+.link-hint {
+  font-size: 11px;
+  color: var(--awd-warning-text);
 }
 
 /* 后台任务控制条（停止）：外形对齐 continue-bar，但用中性底色——

@@ -105,6 +105,8 @@ export default {
   busyToast: 'The AI is running another task. Please try again later.',
   abortToast: 'Stopping. In-flight calls may still return briefly.',
   continueRun: 'Resume',
+  // SSE reconnect bar (dev-board#364): heartbeat timed out or the stream ended unexpectedly
+  linkReconnecting: 'Connection to the server was lost; reconnecting automatically (attempt {attempt}). The AI keeps running in the background and will resume once reconnected.',
   continueHintInterrupted: 'The app was closed during the last run. The task was interrupted.',
   continueHintPaused: 'Step limit reached for this run. The task is paused.',
   continuePrompt: 'Continue',

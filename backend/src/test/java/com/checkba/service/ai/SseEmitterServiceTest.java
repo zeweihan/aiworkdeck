@@ -109,6 +109,18 @@ class SseEmitterServiceTest {
     }
 
     @Test
+    void heartbeatSweepReachesEveryLiveConnection() {
+        // 心跳是前端区分「连接活着、模型还在想」与「连接断了」的唯一依据（dev-board#364）。
+        // 调度器每 15s 调一次 heartbeatSweep；这里直接调，不等真实间隔。
+        SseEmitterService svc = new SseEmitterService();
+        svc.createConnection("conv-hb-1", "paneA");
+        svc.createConnection("conv-hb-2", "paneA");
+        assertEquals(2, svc.heartbeatSweep(), "每个在线连接都要收到一次 heartbeat");
+        // 前端 useAgentStream 的 HEARTBEAT_STALE_MS=45000 按「3 个心跳周期」设：改间隔要同步那边
+        assertEquals(15L, SseEmitterService.heartbeatIntervalSeconds());
+    }
+
+    @Test
     void noLastEventIdReplaysNothing() {
         SseEmitterService svc = new SseEmitterService();
         String id = "conv-replay-4";

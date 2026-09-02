@@ -105,6 +105,8 @@ export default {
   busyToast: 'AI 正在执行其他任务，请稍后再试',
   abortToast: '正在停止，在途的调用可能还会回一小段',
   continueRun: '继续执行',
+  // SSE 断连提示条（dev-board#364）：心跳超时或流意外结束，后台在自动重连
+  linkReconnecting: '与服务器的连接已断开，正在自动重连（第 {attempt} 次）。AI 仍在后台运行，重连后会续上。',
   continueHintInterrupted: '上次任务执行中应用被关闭，任务已中断',
   continueHintPaused: '已达单轮执行步数上限，任务已暂停',
   continuePrompt: '继续',
