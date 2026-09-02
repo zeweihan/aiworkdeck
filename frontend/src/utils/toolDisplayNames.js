@@ -76,6 +76,7 @@ const NAMES = {
   doc_start_stream: { zh: '流式写入文档', en: 'Stream to document' },
   doc_get_document_text: { zh: '通读文档', en: 'Read document text' },
   doc_get_clauses: { zh: '识别合同条款', en: 'Map contract clauses' },
+  doc_audit_structure: { zh: '结构审计', en: 'Audit contract structure' },
   doc_get_outline: { zh: '获取文档大纲', en: 'Get outline' },
   doc_get_selection: { zh: '读取选区', en: 'Read selection' },
   doc_get_cursor_context: { zh: '查看光标位置', en: 'Inspect cursor' },

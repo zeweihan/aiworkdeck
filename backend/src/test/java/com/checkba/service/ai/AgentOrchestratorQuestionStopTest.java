@@ -283,6 +283,8 @@ class AgentOrchestratorQuestionStopTest {
                 "子任务结果是 JSON，截断后前端结构化卡片直接解析失败");
         assertEquals(16000, AgentOrchestrator.toolOutputDisplayLimit("extract_file_text"));
         assertEquals(16000, AgentOrchestrator.toolOutputDisplayLimit("pdf_inspect"));
+        assertEquals(16000, AgentOrchestrator.toolOutputDisplayLimit("doc_audit_structure"),
+                "结构审计报告是给用户核对的成果，面板不能只显示前 4000 字");
         assertEquals(4000, AgentOrchestrator.toolOutputDisplayLimit("doc_replace_text"));
         assertEquals(4000, AgentOrchestrator.toolOutputDisplayLimit(null));
     }
