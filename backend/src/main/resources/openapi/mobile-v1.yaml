@@ -6,6 +6,9 @@ info:
     手机端（iOS / 小程序 / 安卓 / 鸿蒙）与桌面端共用的中转接口。真源在本文件；
     移动仓 contract/api/mobile-v1.yaml 是钉版副本。鉴权一律请求头 X-Session-Id。
     未登录不是 401，而是 HTTP 200 + {code: 4010} 信封——客户端按信封判鉴权失败。
+
+    校验器（swagger-request-validator）默认 additionalProperties: false：本文件是响应字段的
+    **穷举白名单**，服务端新增任何响应字段都必须先写进这里，否则契约测试红。
 servers:
   - url: https://addin.aiworkdeck.com
     description: 大陆版（北京）
@@ -27,6 +30,11 @@ components:
         code: { type: integer, description: "0 成功；4010 未登录；1 业务错误" }
         message: { type: string, nullable: true }
         data: { nullable: true }
+        feature: { type: string, description: "GlobalExceptionHandler code=4001/4003 附带的功能 id" }
+        configured: { type: boolean, description: "code=4001（功能未配置）附带" }
+        usage: { type: object, additionalProperties: true, description: "code=4003（额度已满）附带的用量明细" }
+        gatewayKind: { type: string, description: "code=1（平台网关失败）附带" }
+        canUseOwnKey: { type: boolean, description: "code=1（平台网关失败）附带，是否可用自备 Key 绕过" }
     RelayProject:
       type: object
       required: [deviceId, key, name]
@@ -46,6 +54,9 @@ components:
     MediaUsage:
       type: object
       required: [usedBytes, quotaBytes]
+      description: |
+        usedBytes 只统计 inbox 待取件字节（sumPendingBytes）；而配额执行（storeMedia 时的 3GB 判断）
+        同时计入 inbox 与 transfer。手机端设置页显示的用量可能低于实际被计费的量。服务端行为，本轮不改。
       properties:
         usedBytes: { type: integer, format: int64 }
         quotaBytes: { type: integer, format: int64 }
@@ -268,6 +279,7 @@ paths:
                       properties:
                         deviceId: { type: string }
                         deviceName: { type: string, nullable: true }
+                        lastSeenAt: { type: string, nullable: true, description: 最后心跳时刻（ISO 本地时间），无心跳为 null }
                         online: { type: boolean }
                         projects:
                           type: array
