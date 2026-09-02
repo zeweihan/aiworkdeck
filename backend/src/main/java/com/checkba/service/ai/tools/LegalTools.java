@@ -89,8 +89,9 @@ public class LegalTools implements AgentToolComponent {
             }
 
             if (!StringUtils.hasText(result)) {
-                return "Warning: no text extracted from '" + name + "' — the file may be a scanned image "
-                        + "or empty; try extract_file_text, or read_file with OCR for image PDFs.";
+                return "Warning: no text extracted from '" + name + "' — the file may be empty, or an image "
+                        + "whose OCR recognised nothing (images and scanned PDFs are OCR'd automatically here); "
+                        + "you can also try extract_file_text with its database file ID.";
             }
             // 上限与 extract_file_text 同源：不截断的话，一份几 MB 的合同会变成一条几十万
             // 字符的工具结果，下一轮必然上下文超限，且它落在 compactor 尾区剪不掉 = 整轮死

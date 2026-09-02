@@ -46,6 +46,91 @@ public class PythonTools implements AgentToolComponent {
 
     private static final String DOCKER_IMAGE = "python:3.9-slim";
 
+    /** Docker 探测的等待上限。跑在 ToolRegistry 的 @PostConstruct 上，不能让后端启动卡在这里。 */
+    private static final long DOCKER_PROBE_TIMEOUT_SECONDS = 3;
+
+    /** 测试注入的探测结果，非 null 时优先于真实探测。 */
+    private volatile Boolean dockerAvailable;
+
+    /**
+     * 本机 Docker 是否可用。null = 还没探测过。
+     *
+     * <p>缓存到进程结束、且是<b>进程级</b>而不是每个实例一份：Docker 装没装是机器的属性，
+     * 而 fork 一个 docker 子进程有实打实的代价（Docker Desktop 装了没开的机器上
+     * {@code docker version} 要等上一两秒）。用户中途装上 Docker 的话重启后端即可。
+     */
+    private static volatile Boolean dockerProbeResult;
+
+    /**
+     * 没有 Docker 就不要把 run_python 摆到模型面前。
+     *
+     * <p>病灶（dev-board#396）：用户让 AI 读项目里的一张 jpg，模型抽不到文字后把 run_python
+     * 当成"另找一条 OCR 路子"，拿到的是 "Cannot run program docker"，于是它自己下结论
+     * 「OCR 环境（docker）不可用」并这样告诉用户——而图片其实一直能读（read_file /
+     * extract_file_text 自动走云端 OCR）。模型看不见这个工具，就不会走上这条死路。
+     */
+    @Override
+    public boolean isAvailable() {
+        return dockerReady();
+    }
+
+    /** 探测结果（带缓存）。绝不抛异常：调用方在启动路径上。 */
+    boolean dockerReady() {
+        Boolean override = dockerAvailable;
+        if (override != null) {
+            return override;
+        }
+        Boolean cached = dockerProbeResult;
+        if (cached != null) {
+            return cached;
+        }
+        synchronized (PythonTools.class) {
+            if (dockerProbeResult == null) {
+                dockerProbeResult = probeDocker();
+                log.info("Docker probe: {}",
+                        dockerProbeResult ? "available" : "unavailable (run_python is hidden)");
+            }
+            return dockerProbeResult;
+        }
+    }
+
+    /** 供测试直接注入探测结果，生产路径不调用（真实探测在 probeDocker）。 */
+    void overrideDockerAvailable(boolean available) {
+        this.dockerAvailable = available;
+    }
+
+    /**
+     * 判据是「docker 可执行文件在 且 docker version 成功」——只判可执行文件存在不够：
+     * Docker Desktop 装了没开的机器上 CLI 在、守护进程不在，run 一样起不来。
+     *
+     * <p>输出直接丢弃（不接管道）：接了管道又不读，输出撑满 OS 缓冲区时子进程会阻塞在 write 上，
+     * 探测就永远等不到退出。
+     */
+    private static boolean probeDocker() {
+        Process process = null;
+        try {
+            process = new ProcessBuilder("docker", "version")
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .redirectError(ProcessBuilder.Redirect.DISCARD)
+                    .start();
+            if (!process.waitFor(DOCKER_PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                return false;
+            }
+            return process.exitValue() == 0;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (Exception e) {
+            // 找不到 docker 可执行文件时 start() 抛 IOException，这就是绝大多数用户机器的情形
+            return false;
+        } finally {
+            if (process != null && process.isAlive()) {
+                process.destroyForcibly();
+            }
+        }
+    }
+
     /**
      * stdout/stderr 排空缓冲区的字符数上限。本类自己定的默认值（非产品要求）：
      * 病灶是子进程输出无上限地堆进 JVM 堆里的 StringBuilder——AI 脚本一次
@@ -135,6 +220,14 @@ default_api = _ToolAPI()
     public String run_python(String code) {
         if (code == null || code.isBlank()) {
             return "Error: code is required.";
+        }
+        if (!dockerReady()) {
+            // 这句话会被原样转述给用户，所以必须把边界划清楚：缺的只是"跑脚本的沙箱"。
+            // 不写最后一句的话，模型会把它推广成「这台机器的 OCR/文件读取不可用」（#396 的原病灶）。
+            return "Error: 本机没有可用的 Docker，Python 沙箱跑不起来，run_python 这条路走不通。"
+                    + "这只影响执行脚本，不影响读文件：项目里的图片和扫描件用 read_file 或 "
+                    + "extract_file_text 就能读，会自动走云端 OCR；企业工商信息用 qichacha_query、"
+                    + "财务数据用 tushare_query，都不需要脚本。";
         }
         log.info("Tool: run_python called. Code length={}", code.length());
 
@@ -286,7 +379,10 @@ default_api = _ToolAPI()
 
         } catch (Exception e) {
             log.error("Docker Python Error", e);
-            return "System Error executing Python in Docker: " + e.getMessage();
+            // 前缀必须是 "Error"：ToolResult.success() 只认前缀，"System Error ..." 会被判成成功，
+            // 失败熔断计数被清零、过程卡打绿勾（见 ToolFailureClassificationTest）
+            return "Error: Python 沙箱执行失败（依赖本机 Docker）: " + e.getMessage()
+                    + "。这只影响执行脚本，不影响读文件与 OCR。";
         } finally {
             if (process != null && process.isAlive()) {
                 process.destroyForcibly();

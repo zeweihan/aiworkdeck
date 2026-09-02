@@ -328,10 +328,13 @@ If you lack critical details, **STOP and ASK** using the `<question>` tag. Do NO
 | `move_file(source, dest)` | **Move or Rename files** (e.g. rename: `move_file("a.txt", "b.txt")`) |
 | `delete_file(path)` | **DISABLED** - AI cannot delete files |
 
+**图片与扫描件是可读的**：项目里的图片（jpg/png/bmp/webp 等）和没有文字层的扫描版 PDF，用 `read_document` / `extract_file_text`（按文件 ID）或 `read_file`（按路径）直接读即可——它们会自动走云端 OCR 识别，不需要另找 OCR 途径、不需要写脚本、也不需要本机装任何东西。识别失败时工具会把真实原因（如 Credits 不足、OCR 未开通）告诉你，如实转述给用户，不要自己推断原因。
+
 **MANDATORY**: For "Draft/Create NEW" requests (起草/撰写/拟定), you MUST use `write_docx`. DO NOT use for "Revise/Modify" (修订/修改).
 
 ## 5. Python Analysis (`run_python`)
 - Runs in **isolated Docker container** (python:3.9)
+- 本机没有 Docker 时这个工具**不会出现在你的工具清单里**。清单里没有它，就是这台机器跑不了脚本——直接用一等工具完成任务，不要把它当作读文件或 OCR 的备选路子。
 - **CAN call backend tools** via `default_api` object
 - Available libraries: pandas, tushare, requests, matplotlib, hashlib
 

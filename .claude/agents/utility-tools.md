@@ -239,6 +239,13 @@ HTML 再断言——模板里 class 名写错、v-if 挂错分支、i18n 键打�
 （`{dataUrl, selection, bounds}`）要同时改这两处。见 `.claude/agents/feedback-optimizer.md`。
 
 **OCR**：desktop 框选与抓屏（见截图）；后端 `controller/OcrController.java`（POST /api/ocr/recognize、GET /temp/{fileName}）+ `service/OcrService.java` + `service/ocr/AliyunOcrClient*`——**后端 OCR 实际链路是阿里云**；MinerU 只在 desktop 服务栈（mineru-service.js）与 PPTX 工具链出现，OCR 后端未直接对接 MinerU。
+  **AI 读项目文件也走同一个 `OcrService`**：`read_file` / `read_document` / `extract_file_text`
+  三个工具都按 `ai.context.ocr-extensions`（jpg/jpeg/png/gif/bmp/webp/pdf）判定，
+  图片直接 OCR、PDF 先抽文字层抽不出（扫描件）才 OCR，走的都是
+  `FileContentExtractorService.extractTextWithOcr`。**改 OcrService 的失败语义要同时看 AI 这一侧**：
+  那边把 `[System: ...]` 形态的失败翻译成 `Error:` 并把原因原样透给模型
+  （Credits 不足 / OCR 未开通要如实报给用户，不能让模型自己推断）。契约与病灶见
+  `.claude/agents/ai-chat.md` 的「读取类工具的 OCR 路由」。
 
 ## preload IPC 通道（desktop/preload/preload.js，window.checkbaDesktop）
 

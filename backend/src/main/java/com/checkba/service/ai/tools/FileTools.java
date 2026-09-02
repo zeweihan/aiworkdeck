@@ -154,7 +154,9 @@ public class FileTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "读取文件", category = "file")
-    @Tool("Read the content of a file. Provide path (absolute or relative to project root).")
+    @Tool("Read the content of a file. Provide path (absolute or relative to project root). "
+            + "Images (jpg/png/bmp/webp...) and scanned PDFs are recognised automatically by the cloud OCR "
+            + "service — no local OCR setup, no Docker and no script is needed to read them.")
     public String read_file(String filePath) {
         log.info("Tool: read_file called for {}", filePath);
         try {
@@ -178,8 +180,8 @@ public class FileTools implements AgentToolComponent {
                 }
             }
             if (!StringUtils.hasText(content)) {
-                return "Warning: no text extracted from '" + file.getName() + "' — the file may be a scanned "
-                        + "image or empty; try extract_file_text with its database file ID.";
+                return "Warning: no text extracted from '" + file.getName() + "' — the file may be empty, "
+                        + "or an image whose OCR recognised nothing; try extract_file_text with its database file ID.";
             }
             // 同 extract_file_text 的上限（单一来源见 ToolFileGuard）：超长单条工具结果
             // 会把整轮顶进上下文超限，而且落在 compactor 尾区剪不掉
@@ -257,7 +259,7 @@ public class FileTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "提取文档全文", category = "file")
-    @Tool("Extract the full plain text of a project file (pdf/docx/xlsx/doc etc.) by its database file ID. Use this to read Word/Excel/PDF documents from the project file tree. Returns extracted text (may be truncated for very large files). If the ID is a FOLDER, returns a listing of its direct children (id + name + type) instead of an error, so you can then read each file in turn.")
+    @Tool("Extract the full plain text of a project file (pdf/docx/xlsx/doc, images etc.) by its database file ID. Use this to read Word/Excel/PDF documents from the project file tree. Images (jpg/png/bmp/webp...) and scanned PDFs with no text layer are recognised automatically by the cloud OCR service — no local OCR setup, no Docker and no script is needed to read them. Returns extracted text (may be truncated for very large files). If the ID is a FOLDER, returns a listing of its direct children (id + name + type) instead of an error, so you can then read each file in turn.")
     public String extract_file_text(
             @P("Project file database ID (from doc_list_project_files / material list). May also be a folder ID — you get its contents listed.") Long fileId
     ) {
@@ -284,9 +286,24 @@ public class FileTools implements AgentToolComponent {
             return describeFolder(pf);
         }
         try {
-            String text = documentTextService.extractText(pf);
-            if (text == null || text.isBlank()) {
-                return "Warning: No text extracted from '" + pf.getName() + "'. The file may be a scanned image; try read_file with OCR for image PDFs.";
+            String name = pf.getName();
+            boolean ocrSupported = fileContentExtractorService != null
+                    && fileContentExtractorService.isOcrSupported(name);
+            // 图片没有文字层可抽，直接 OCR；PDF 先抽文字层，抽不出（扫描件）才 OCR
+            String text = ocrSupported && !hasTextLayerCandidate(pf)
+                    ? null
+                    : documentTextService.extractText(pf);
+            if (!StringUtils.hasText(text) && ocrSupported) {
+                String ocr = extractWithOcr(pf);
+                if (ocr.startsWith("Error")) return ocr;
+                text = ocr;
+            }
+            if (!StringUtils.hasText(text)) {
+                return ocrSupported
+                        ? "Warning: cloud OCR ran on '" + name + "' but recognised no text — the image may be "
+                                + "blank, or too blurred to read. Tell the user what you tried."
+                        : "Warning: no text extracted from '" + name + "'. The file may be empty, or its format "
+                                + "carries no extractable text (OCR only covers images and PDF).";
             }
             String capped = ToolFileGuard.capToolText(pf.getName(), text);
             // 未截断时保留原有的「[文件 X]」抬头（模型据此知道正文属于哪个文件）
@@ -295,6 +312,58 @@ public class FileTools implements AgentToolComponent {
             log.warn("extract_file_text failed for fileId={}", fileId, e);
             return "Error extracting text: " + e.getMessage();
         }
+    }
+
+    /** PDF 可能带文字层，值得先抽一次；其余 OCR 格式（jpg/png/...）没有文字层，抽也是空。 */
+    private static boolean hasTextLayerCandidate(ProjectFile pf) {
+        String name = pf.getName() == null ? "" : pf.getName().toLowerCase();
+        return "pdf".equalsIgnoreCase(pf.getFileType()) || name.endsWith(".pdf");
+    }
+
+    /**
+     * 走与 {@code read_file} 完全相同的 OCR 分支（isOcrSupported → extractTextWithOcr → OcrService）。
+     *
+     * <p>此前 extract_file_text 只有 Tika 一条路，图片恒抽不出正文，返回的提示又只提
+     * 「image PDFs」——模型据此认定项目里的图片读不了，转头去调 run_python 找 OCR，
+     * 撞上「Cannot run program docker」后自己得出「OCR 环境不可用」的结论告诉用户。
+     * 其实图片一直是可读的，云端 OCR 就在 read_file 那条路上。
+     *
+     * <p>失败一律返回 {@code Error:} 开头并<b>把底层原因原样带出</b>（Credits 不足、OCR 未开放、
+     * 上游报错都长得不一样），模型才能把真实原因转述给用户，而不是自己编一个。
+     */
+    private String extractWithOcr(ProjectFile pf) {
+        Path tempPath = null;
+        try {
+            byte[] bytes = projectFileService.getFileBytes(pf.getId());
+            if (bytes == null || bytes.length == 0) {
+                return "Error: file '" + pf.getName() + "' is empty on disk, nothing to recognise.";
+            }
+            tempPath = Files.createTempFile("checkba_ocr_" + pf.getId() + "_", ocrTempSuffix(pf));
+            Files.write(tempPath, bytes);
+            String result = fileContentExtractorService.extractTextWithOcr(tempPath.toFile());
+            // extractTextWithOcr 的失败以 "[System: ...]" 形态返回（非空、无 Error 前缀），
+            // 直接透传会被判成成功并当作正文喂给模型
+            if (result != null && result.startsWith("[System:")) {
+                return "Error: cloud OCR failed on '" + pf.getName() + "' — "
+                        + result.substring("[System:".length()).replace("]", "").trim();
+            }
+            return result == null ? "" : result;
+        } catch (Exception e) {
+            log.warn("OCR extraction failed for fileId={}", pf.getId(), e);
+            return "Error: cloud OCR failed on '" + pf.getName() + "' — " + e.getMessage();
+        } finally {
+            if (tempPath != null) {
+                try { Files.deleteIfExists(tempPath); } catch (Exception ignore) {}
+            }
+        }
+    }
+
+    /** 临时文件必须保留原扩展名：extractTextWithOcr 按文件名判断走图片还是 PDF 分支。 */
+    private static String ocrTempSuffix(ProjectFile pf) {
+        String name = pf.getName() == null ? "" : pf.getName();
+        int dot = name.lastIndexOf('.');
+        if (dot > 0 && dot < name.length() - 1) return name.substring(dot);
+        return StringUtils.hasText(pf.getFileType()) ? "." + pf.getFileType() : ".tmp";
     }
 
     /**
