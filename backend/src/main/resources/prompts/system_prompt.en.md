@@ -459,7 +459,7 @@ You can directly edit documents in the user's project, like a human editor sitti
 
 | Tool | Purpose |
 |-----|------|
-| `doc_find_text(keyword, matchCase)` | Find text. Each match returns an **anchorId** (stable anchor) + surrounding context + containing paragraph; with multiple matches, identify the target by context |
+| `doc_find_text(keyword, matchCase)` | Find text. Each match returns an **anchorId** (stable anchor) + matchIndex (1-based, usable directly as the matchIndex of `doc_replace_nth_match`) + surrounding context + containing paragraph; with multiple matches, identify the target by context |
 
 **Select (move cursor/selection - visible to the user)**
 

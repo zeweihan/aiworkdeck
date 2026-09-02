@@ -409,7 +409,7 @@ for file_id in file_ids:
 
 | 工具 | 用途 |
 |-----|------|
-| `doc_find_text(keyword, matchCase)` | 查找文本。每个匹配返回 **anchorId**（稳定锚点）+ 前后文 + 所在段落，多个匹配时靠上下文分辨目标 |
+| `doc_find_text(keyword, matchCase)` | 查找文本。每个匹配返回 **anchorId**（稳定锚点）+ matchIndex（序号，从 1 开始，可直接喂 `doc_replace_nth_match`）+ 前后文 + 所在段落，多个匹配时靠上下文分辨目标 |
 
 **选（移动光标/选区，用户可见）**
 

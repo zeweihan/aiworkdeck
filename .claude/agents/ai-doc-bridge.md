@@ -22,6 +22,11 @@ description: AI↔文档编辑桥接领域。任务涉及 doc_*/sheet_*/slide_* 
 回归用例 `ParagraphIndexBaseTest`（反射扫 `@P`，写成 1 基即转红）。
 
 **matchIndex 是唯一的例外：模型面 1 基、worker 0 基，在后端归一**（2026-09-02 顺带修掉）。`doc_replace_nth_match` / `doc_delete_match` 的描述、system prompt 第 7 节第 3 条、`ToolRegistry.LEGACY_DEFAULTS`（缺省 1）都对模型说「第 N 处，从 1 开始」，而 worker 的 `replace_nth_match` / `delete_match` 与它的其它整数定位一样从 `i = 0` 起数——原先后端原样透传，模型说第 1 处改的是第 2 处。归一落在 `DocumentEditTools` 下发前减 1，**不改 worker**：JAR/Web 插件经 `PluginHostImpl.DOC_ACTIONS` / `pluginDocActions.js` 直接按 worker 契约调这两个 action。回归 `MatchIndexBaseTest`（后端换算）+ lowa-e2e 组 11 末两步（worker 0 基钉住）。
+**归一必须两个方向都做**（dev-board#369）：worker 的 `find_text_locations` 返回的 `matchIndex` 同样 0 起，
+`doc_find_text` 回给模型前在 `DocumentEditTools.oneBasedMatchIndexes` 加 1——否则模型从查找结果看到
+「第二个匹配 matchIndex=1」照传给 `doc_replace_nth_match`，减一后改的是第一个。描述里「只计算用户可见的匹配」
+不是 worker 过滤出来的，靠页边模式成立：删除型修订文本不在正文流、`XSearchable` 搜不到（e2e 组 11 实测
+删掉第二处后再找只剩两处），关掉 ShowChangesInMargin 就不再成立。
 
 同类：`doc_goto` 的描述曾宣告 `paragraph/bookmark/line` 三种定位，而 `office_thread.js` 的
 `goto()` 只实现 `start/end`，其余一律返回 "goto type not supported yet"——
@@ -302,7 +307,7 @@ txt/md/markdown 自 dev-board#37 起不进 LOWA（前端走 PlainTextEditor.vue�
 ## 验证
 
 - worker 纯函数（`minimalEdits` 一族）改动后先跑秒级用例：`cd frontend && npm run test:lowa-unit`（`tests/lowa-unit/`，靠 `_workerFns.mjs` 从 `office_thread.js` 里按函数名抠出顶层纯函数在 node 里执行——被抠的函数不能碰 UNO 对象、字符串/注释里不能有花括号）。
-- 编辑器三件套（原语/白名单/worker）改动后必跑：`cd frontend && npm run test:lowa-e2e`（基线随批次增长，2026-09-02 dev-board#365 组 11 补七步 + matchIndex 契约两步后为 475 步全绿；2026-08-08 slide_* Phase 3 落地后为 324 步，含组 21 Impress 冒烟 27 步 + 组 22 Impress 结构 44 步 + 组 23 Impress 格式与表格约 59 步）。**改 `office_thread.js` 后必须先 `npm run build:zetaoffice` 再跑 e2e**——测试服务器serve 的是 `frontend/dist/zetaoffice/office_thread.js`（构建产物），不是 `frontend/src/zetaoffice/public/office_thread.js`（源文件）；只改源文件不重新构建，e2e 会静默测着旧代码（本次 Phase 2 debugging 踩过一次，白跑了好几轮"改代码→跑测试→结果一模一样"才发现）。跑之前先 `diff frontend/src/zetaoffice/public/office_thread.js frontend/dist/zetaoffice/office_thread.js` 确认两边一致。
+- 编辑器三件套（原语/白名单/worker）改动后必跑：`cd frontend && npm run test:lowa-e2e`（基线随批次增长，2026-09-02 dev-board#369 组 11 再补 matchIndex 四步后为 479 步全绿；2026-09-02 dev-board#365 组 11 补七步 + matchIndex 契约两步后为 475 步；2026-08-08 slide_* Phase 3 落地后为 324 步，含组 21 Impress 冒烟 27 步 + 组 22 Impress 结构 44 步 + 组 23 Impress 格式与表格约 59 步）。**改 `office_thread.js` 后必须先 `npm run build:zetaoffice` 再跑 e2e**——测试服务器serve 的是 `frontend/dist/zetaoffice/office_thread.js`（构建产物），不是 `frontend/src/zetaoffice/public/office_thread.js`（源文件）；只改源文件不重新构建，e2e 会静默测着旧代码（本次 Phase 2 debugging 踩过一次，白跑了好几轮"改代码→跑测试→结果一模一样"才发现）。跑之前先 `diff frontend/src/zetaoffice/public/office_thread.js frontend/dist/zetaoffice/office_thread.js` 确认两边一致。
 - 全链路回归：`npm run test:app-e2e`；前端事件契约 `npm run check:emits`。
 - 后端：`cd backend && mvn test`（JDK 21，默认 25 会 SIGBUS）；EvalHarness 回放评测在其中。
 - 原语级测试不够，必须走完 UI 链路验证（用户明确要求过）。
