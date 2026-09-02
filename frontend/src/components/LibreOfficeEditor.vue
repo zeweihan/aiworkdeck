@@ -113,6 +113,7 @@
         :refresh-key="reviewRefreshKey"
         :project-id="projectId"
         :doc-file-id="file && file.id"
+        :self-author="selfAuthor"
         @close="reviewOpen = false"
         @changed="onReviewChanged"
         @locate="onEvidenceLocate"
@@ -148,6 +149,14 @@ import { EVIDENCE_CHANGED_EVENT } from '@/utils/evidenceEvents.js'
 import { getResolvedTheme, APP_THEME_EVENT } from '@/utils/appTheme.js'
 
 let seq = 0
+
+// 当前登录用户名。两个地方要用同一个串：随 load_document 传给引擎（用户本人的
+// 修订以此署名）与审阅面板的「我」这一桶（dev-board#377）。抽成一处，免得哪天
+// 一边加了兜底另一边没加，用户自己的修订被归成「其他人」。
+function currentAuthorName() {
+  const u = getCurrentUser() || {}
+  return String(u.name || u.nickname || u.username || '')
+}
 
 export default {
   name: 'LibreOfficeEditor',
@@ -190,6 +199,10 @@ export default {
       // 审阅面板（修订/批注）开关与刷新信号
       reviewOpen: false,
       reviewRefreshKey: 0,
+      // 当前登录用户名。审阅面板的「我」这一桶按它归类作者（dev-board#377），
+      // 与下面 load_document 传给引擎的 authorName 同源（currentAuthorName），
+      // 两处必须是同一个字符串——否则用户自己的修订会被归成「其他人」。
+      selfAuthor: currentAuthorName(),
       // 自建工具栏的激活态刷新信号。由「选区/光标动了」和「文档改了」驱动——
       // 没有轮询：编辑器页把 worker 的选区监听与 IME 覆盖层的光标移动合流成
       // 一个 selection 事件送过来，覆盖了用户能让光标动起来的所有途径。
@@ -907,8 +920,7 @@ export default {
       this.bootMilestone(86, 95, 'openingDoc')
       // 当前登录用户名随文档传给 worker：用户本人编辑的修订以用户名署名，
       // AI 命令产生的修订署名 AI WorkDeck（worker execCommand 按 __agent 切换）。
-      const u = getCurrentUser() || {}
-      const authorName = String(u.name || u.nickname || u.username || '')
+      const authorName = currentAuthorName()
       const t0 = Date.now()
       const res = await this.executor.executeCommand('load_document', { bytes, name, authorName })
       this.appendLog('  ← ' + (Date.now() - t0) + 'ms ' + JSON.stringify(res))

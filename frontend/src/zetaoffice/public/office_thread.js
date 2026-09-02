@@ -276,6 +276,47 @@ function rangeStartsEqual(a, b) {
   if (!a || !b) return false;
   try { return a.getText().compareRegionStarts(a, b) === 0; } catch (e) { return false; }
 }
+// ---- 批注↔修订的可比坐标（dev-board#377）-----------------------------------
+// 审阅面板要判「这条批注是不是在解释这条修订」。判定本身放在宿主的纯函数里做
+// （utils/reviewGrouping.js，好写单测），worker 只负责把两边可比的坐标如实回传：
+//   paraKey   正文段落枚举序（走 paraIndex 缓存二分定位，O(log n) 次区间比较）
+//   start/end 区间两端在该段落内的字符偏移
+// **不按批注正文的前缀识别**（「【修訂理由】」是模型自己写的，不固定），只按位置。
+// 表格单元格、页眉页脚里的区间跨 story，body.compareRegionStarts 会抛
+// IllegalArgumentException——那种情况回 null，宿主据此不做关联（宁可不挂，不猜）。
+function paraKeyOf(body, start) {
+  return withParaIndex(function (ix) {
+    if (!ix.total) return -1;
+    let lo = 0, hi = ix.total - 1;
+    // compareRegionStarts(A, B) === 1 表示 A 在 B 之前（与 headingChainOf 同口径）：
+    // 找「起点不晚于 start」的最后一段。
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (body.compareRegionStarts(ix.ranges[mid].getStart(), start) >= 0) lo = mid; else hi = mid - 1;
+    }
+    return body.compareRegionEnds(ix.ranges[lo].getEnd(), start) <= 0 ? lo : -1;
+  });
+}
+function rangeLocator(start, end) {
+  try {
+    const paraKey = paraKeyOf(xModel.getText(), start);
+    if (!(paraKey >= 0)) return null;
+    const txt = start.getText();
+    const head = txt.createTextCursorByRange(start);
+    head.gotoStartOfParagraph(true);
+    const off = String(head.getString() || '').length;
+    let len = 0;
+    // 正文流里的宽度。页边显示模式下删除型在流里是零宽（文本被移进 redline
+    // 对象），start === end 是正常结果，不是取失败。
+    try { const span = txt.createTextCursorByRange(start); span.gotoRange(end, true); len = String(span.getString() || '').length; } catch (e) {}
+    return { paraKey: paraKey, start: off, end: off + len };
+  } catch (e) { return null; }
+}
+function applyLocator(it, start, end) {
+  const loc = rangeLocator(start, end);
+  it.paraKey = loc ? loc.paraKey : -1;
+  if (loc) { it.start = loc.start; it.end = loc.end; }
+}
 // 把视图光标摆到 .uno:Accept/RejectTrackedChange 能命中的位置。摆法**跟着当前
 // 的修订显示模式走**（真机探针逐一试出来的，别凭直觉改）：
 //   - 插入型：文本一直在正文流里，光标必须**跨选**整个区间才命中；
@@ -4542,9 +4583,14 @@ const EXEC = {
       while (en.hasMoreElements() && out.length < limit) {
         const r = en.nextElement();
         const it = { index: out.length };
-        try { it.type = r.getPropertyValue('RedlineType'); } catch (e) {}
+        // RedlineType 如实回传引擎原串（Insert / Delete / Format / ParagraphFormat /
+        // TextTable …）。改造前面板只分「Delete 与其余」，格式类修订被当成插入显示
+        // （dev-board#377）；面板的类型映射认不出的一律原样展示，不再硬塞进「插入」。
+        try { it.type = String(r.getPropertyValue('RedlineType')); } catch (e) {}
         try { it.author = r.getPropertyValue('RedlineAuthor'); } catch (e) {}
         try { it.comment = r.getPropertyValue('RedlineComment'); } catch (e) {}
+        // 格式类修订正文是空的，引擎给的说明（「属性已更改」之类）是唯一能读的信息
+        try { it.description = String(r.getPropertyValue('RedlineDescription') || ''); } catch (e) {}
         try {
           const d = r.getPropertyValue('RedlineDateTime');
           if (d) it.date = d.Year + '-' + pad2(d.Month) + '-' + pad2(d.Day) + ' ' + pad2(d.Hours) + ':' + pad2(d.Minutes);
@@ -4571,6 +4617,7 @@ const EXEC = {
             try { pc.gotoStartOfParagraph(false); pc.gotoEndOfParagraph(true); it.paragraph = String(pc.getString() || '').slice(0, 120); } catch (e) {}
             // 表格内的修订：面板要标出来（页边互叠的正是这一类）
             try { it.inTable = !!rs.getPropertyValue('Cell'); } catch (e) { it.inTable = false; }
+            applyLocator(it, rs, re);   // 批注关联用的可比坐标
           }
         } catch (e) {}
         prevEnd = curEnd;
@@ -4679,6 +4726,7 @@ const EXEC = {
           const a = f.getAnchor();
           it.anchorText = String(a.getString() || '').slice(0, 80);
           it.paragraph = (paragraphTextOf(a) || '').slice(0, 120);
+          applyLocator(it, a.getStart(), a.getEnd());   // 与 list_revisions 同一坐标系
         } catch (e) {}
         out.push(it);
       }
