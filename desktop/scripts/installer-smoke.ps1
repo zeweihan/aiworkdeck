@@ -35,6 +35,7 @@ public class W {
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr wp, IntPtr lp);
   [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr h, int id);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] public static extern IntPtr SendMessageTimeout(IntPtr h, uint msg, IntPtr wp, IntPtr lp, uint flags, uint timeout, out IntPtr result);
   public struct RECT { public int L, T, R, B; }
   public struct POINT { public int x, y; }
 }
@@ -130,6 +131,56 @@ function ClickAt([int]$bx, [int]$by) {
   Start-Sleep -Milliseconds 250
 }
 
+# 绝对坐标的真实鼠标移动（MOUSEEVENTF_MOVE|ABSOLUTE，归一到主屏 0..65535）。拖窗必须走
+# 真输入：无边框窗口的移动靠系统的模态拖动循环，它只认输入队列里的鼠标消息，
+# SetWindowPos 之类从外部挪窗口证明不了「用户能拖」。
+$screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+function MoveAbs([int]$x, [int]$y) {
+  $nx = [uint32][math]::Round($x * 65535 / ($screen.Width - 1))
+  $ny = [uint32][math]::Round($y * 65535 / ($screen.Height - 1))
+  [W]::mouse_event(0x8001, $nx, $ny, 0, [UIntPtr]::Zero)
+}
+
+# 可拖动断言（dev-board#366）：在窗口相对点 (bx,by) 按下真实鼠标、分步拖 (dx,dy)、抬起，
+# 断言窗口矩形跟着走了，且进程全程活着。失败不当场 throw——三张卡各拖一次，
+# 一次红就中断会把后面两张卡的结论一起吞掉，全部记下来最后一并报。
+$dragFailures = @()
+function DragAssert([string]$stage, [int]$bx, [int]$by, [int]$dx, [int]$dy) {
+  $r = Get-Rect
+  Clear-Overlay ($r.L + $bx) ($r.T + $by)
+  $r = Get-Rect
+  $sx = $r.L + $bx; $sy = $r.T + $by
+  MoveAbs $sx $sy
+  Start-Sleep -Milliseconds 150
+  [W]::mouse_event(2, 0, 0, 0, [UIntPtr]::Zero)   # LEFTDOWN
+  Start-Sleep -Milliseconds 200
+  for ($i = 1; $i -le 10; $i++) {
+    MoveAbs ($sx + [int]($dx * $i / 10)) ($sy + [int]($dy * $i / 10))
+    Start-Sleep -Milliseconds 40
+  }
+  Start-Sleep -Milliseconds 200
+  [W]::mouse_event(4, 0, 0, 0, [UIntPtr]::Zero)   # LEFTUP
+  Start-Sleep -Milliseconds 500
+  if ($p.HasExited) { throw "installer exited during the $stage card drag" }
+  $r2 = Get-Rect
+  $mx = $r2.L - $r.L; $my = $r2.T - $r.T
+  Write-Host "drag[$stage]: pressed at ($bx,$by), dragged ($dx,$dy) -> window moved ($mx,$my)"
+  # 位移至少要走到指针位移的一半：绝对坐标归一有 1px 级误差，但「一动不动」就是没接上
+  if ([math]::Abs($mx) -lt [math]::Abs($dx) / 2 -or [math]::Abs($my) -lt [math]::Abs($dy) / 2) {
+    $script:dragFailures += "$stage card did not follow the mouse drag (moved $mx,$my; expected about $dx,$dy)"
+  }
+}
+
+# UI 线程活着的判据：SendMessageTimeout(WM_NULL, SMTO_ABORTIFHUNG) 3 秒内有应答。
+# 安装期间的 Section 跑在 NSIS 自己开的 install_thread 上（Ui.c 的 WM_NOTIFY_START），
+# 消息泵本来就不会停——这条把它钉成用例，免得下次再往「消息泵卡死」上猜。
+function AssertResponsive([string]$stage) {
+  $res = [IntPtr]::Zero
+  $ok = [W]::SendMessageTimeout($h, 0, [IntPtr]::Zero, [IntPtr]::Zero, 0x2, 3000, [ref]$res)
+  if ($ok -eq [IntPtr]::Zero) { throw "$stage card: UI thread did not answer WM_NULL within 3s (message pump stalled)" }
+  Write-Host "$stage card: UI thread answered WM_NULL"
+}
+
 # 1. 大卡片首页
 Shot '01-welcome'
 
@@ -175,10 +226,22 @@ if ($CloseOnly) {
   throw "installer did not exit after clicking the welcome card close button"
 }
 
+# 1b. 拖大卡片（dev-board#366）：按在没有任何热区的空白处（380,240），拖 (100,40)。
+# 位移刻意小：runner 常见 1024x768，大卡片 760 宽居中后右侧只剩百来像素余量。
+DragAssert 'welcome' 380 240 100 40
+Shot '01b-welcome-dragged'
+
 # 2. 展开自定义安装（AWDUI_TOGGLE 44,448,130,26 → 中心 109,461）
+# 展开只许向下长高，不许把刚拖走的卡片弹回初始居中位（引擎里曾用初始化时记下的坐标
+# 重定位，拖动接上之后那就成了「一点自定义安装卡片就跳回去」）。
+$rBeforeToggle = Get-Rect
 ClickAt 109 461
 Start-Sleep -Milliseconds 600
 Shot '02-expanded'
+$rAfterToggle = Get-Rect
+if ($rAfterToggle.L -ne $rBeforeToggle.L -or $rAfterToggle.T -ne $rBeforeToggle.T) {
+  $dragFailures += "expanding custom install moved the welcome card from ($($rBeforeToggle.L),$($rBeforeToggle.T)) to ($($rAfterToggle.L),$($rAfterToggle.T)); it must only grow downward"
+}
 # 3. 点「立即安装」（AWDUI_CTA 460,414,260,72 → 中心 590,450）
 ClickAt 590 450
 
@@ -227,11 +290,18 @@ if ($wp -gt 700) {
 if ($backVisible) {
   throw "native wizard chrome is showing on the install page (back button visible) - AwdInstFilesShow did not run"
 }
-Start-Sleep -Milliseconds 2500
+# 3b. 进度卡期间（Section 还在 install_thread 上跑）：UI 线程必须有应答，且卡片必须能被
+# 真实鼠标拖走（dev-board#366：用户反馈的「像卡死了」就是这张卡既没标题栏也拖不动）。
+# 按在窗口顶部 12px 处、向左下拖：卡片钉在工作区右上角，往右上拖会出屏。
+AssertResponsive 'progress'
+DragAssert 'progress' 180 12 -200 120
+Start-Sleep -Milliseconds 1500
 Shot '04-progress2'
 # 4. 等安装收尾进完成卡（payload + 3x2s Sleep，10 秒余量）
 Start-Sleep -Seconds 10
 Shot '05-done'
+# 4b. 完成卡也要能拖：按在副标题文字上（120,60，不在「立即体验」与 ✕ 的热区里）
+DragAssert 'done' 120 60 -150 100
 # 5. 点完成卡右上角 ✕（AWDUI_MCLOSE 320,6,34,28 → 中心 337,20）
 ClickAt 337 20
 Start-Sleep -Seconds 2
@@ -239,5 +309,8 @@ if (-not $p.HasExited) {
   Shot '06-should-have-closed'
   $p.Kill()
   throw "installer did not exit after closing finish card"
+}
+if ($dragFailures.Count -gt 0) {
+  throw ("drag assertions failed (dev-board#366):`n - " + ($dragFailures -join "`n - "))
 }
 Write-Host 'smoke flow completed, installer exited cleanly'

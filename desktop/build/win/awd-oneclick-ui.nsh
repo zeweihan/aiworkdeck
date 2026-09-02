@@ -27,6 +27,19 @@
 ; 坐标契约：所有热区坐标必须与 oneclick-*.html 里的绝对定位一致（两边都以 96dpi
 ; 基准像素书写，运行期统一乘 $AwdScale）。改布局要两处同步改。
 ;
+; 可拖动契约（dev-board#366）：三张卡都是去掉了 WS_CAPTION 的无边框窗，系统不再给
+; 任何可拖的标题带，所以「能拖」要自己接：
+;   - 欢迎卡 / 完成卡是 nsDialogs 页，背景位图带 SS_NOTIFY，STN_CLICKED 在鼠标**按下**
+;     那一刻就发（static 控件对 WM_LBUTTONDOWN 的处理，与 BUTTON 抬起才发 BN_CLICKED
+;     不同），回调里 ReleaseCapture + 给主窗发 WM_NCLBUTTONDOWN/HTCAPTION，把还按着的
+;     这一下交给系统的模态拖动循环——按在任何热区之外的地方都能拖走整张卡；
+;   - 进度卡期间脚本一个字都跑不了（Section 在 NSIS 的 install_thread 上执行，UI 线程
+;     的消息泵是活的、但同一套执行引擎不许两条线程并发进 NSIS 代码，nsDialogs 在
+;     instfiles 页也没有落脚点），所以这一段把 WS_CAPTION 加回来当拖动带：无 WS_SYSMENU
+;     即无图标无按钮，Win11 用 DWM 把标题带与文字染成卡片白（看起来只是卡片顶上多了
+;     一条空白），老系统显示系统标题带。进完成卡再去掉。
+;   installer-ui-smoke 对三张卡各拖一次并断言窗口矩形跟着走。
+;
 ; 静默安装（/S，桌面端自动更新走这条路）不进任何 GUI 代码，行为不受影响。
 
 !ifndef AWD_ONECLICK_UI_INCLUDED
@@ -118,6 +131,12 @@ ManifestDPIAware true
 !ifndef WS_BORDER
   !define WS_BORDER 0x00800000
 !endif
+!ifndef WM_NCLBUTTONDOWN
+  !define WM_NCLBUTTONDOWN 0x00A1
+!endif
+; WS_CAPTION（= WS_BORDER|WS_DLGFRAME）：初始化时剥掉，进度卡期间加回当拖动带
+!define AWDUI_WS_CAPTION 0x00C00000
+!define AWDUI_HTCAPTION 2
 
 !define MUI_CUSTOMFUNCTION_GUIINIT AwdGuiInit
 
@@ -127,14 +146,13 @@ Var AwdFont       ; 高 DPI 适配的雅黑句柄（真控件用）
 Var AwdDialog
 Var AwdImgHero
 Var AwdImgMini
+Var AwdBgWnd      ; 当前 nsDialogs 页的背景位图控件（建完所有控件后压底用）
 Var AwdExpanded
 !ifdef AWD_UI_DIR_CHOICE
 Var AwdDirEdit
 Var AwdBrowseBtn
 Var AwdSpaceLabel
 !endif
-Var AwdWinX       ; 大卡片左上角（展开时保持不动）
-Var AwdWinY
 !ifdef AWD_UI_REQUIRED_KB
 Var AwdFreeMb     ; 目标盘可用空间（MB）；"" = 读不出来
 Var AwdNeedMb     ; 本次安装所需空间（MB）
@@ -239,8 +257,6 @@ Function AwdGuiInit
   IntOp $R0 $R0 - $3
   IntOp $R0 $R0 / 2
   IntOp $R0 $R0 + $6
-  StrCpy $AwdWinX $9
-  StrCpy $AwdWinY $R0
   System::Call 'user32::SetWindowPos(p $HWNDPARENT, i 0, i r9, i R0, i r2, i r3, i 0x24)'
 FunctionEnd
 
@@ -291,12 +307,19 @@ Function AwdWelcomeCreate
   SetCtlColors $AwdDialog "" 0xFFFFFF
   System::Call 'user32::SetWindowPos(p $AwdDialog, i 0, i 0, i 0, i R7, i R8, i 0x14)'
 
-  ; 背景大图（含按钮/文案的全部视觉）
-  nsDialogs::CreateControl STATIC ${WS_VISIBLE}|${WS_CHILD}|${WS_CLIPSIBLINGS}|${SS_BITMAP} 0 0 0 $R7 $R8 ""
-  Pop $1
-  ${NSD_SetImage} $1 "$PLUGINSDIR\awd-hero.bmp" $AwdImgHero
+  ; 背景大图（含按钮/文案的全部视觉）。带 SS_NOTIFY 是为了拖动：按在热区之外的任何
+  ; 地方，位图的 STN_CLICKED 把这一按交给 AwdDragClick。
+  ; **z 序地雷**：子窗口创建时是插到 z 序**最底**的（后建的在下面，不是在上面），
+  ; 以前位图没有 SS_NOTIFY、对命中测试透明，点击穿过它落到下面的热区，所以没露馅；
+  ; 一加 SS_NOTIFY 位图就变成 HTCLIENT，会把「立即安装」的点击整个吃掉
+  ;（installer-ui-smoke 实锤：拖动通了、随后所有热区全哑）。所以位图必须在
+  ; **所有控件都建完之后**再压到 HWND_BOTTOM（见 nsDialogs::Show 之前那句）。
+  nsDialogs::CreateControl STATIC ${WS_VISIBLE}|${WS_CHILD}|${WS_CLIPSIBLINGS}|${SS_BITMAP}|${SS_NOTIFY} 0 0 0 $R7 $R8 ""
+  Pop $AwdBgWnd
+  ${NSD_SetImage} $AwdBgWnd "$PLUGINSDIR\awd-hero.bmp" $AwdImgHero
+  ${NSD_OnClick} $AwdBgWnd AwdDragClick
 
-  ; 热区（创建序在位图之后 = z 序在其上）
+  ; 热区（都建在位图之后，最后再把位图压底）
   ${AwdHotspot} $2 ${AWDUI_CTA_X} ${AWDUI_CTA_Y} ${AWDUI_CTA_W} ${AWDUI_CTA_H}
   ${NSD_OnClick} $2 AwdInstallClick
   ${AwdHotspot} $2 ${AWDUI_TERMS_X} ${AWDUI_TERMS_Y} ${AWDUI_LINK_W} ${AWDUI_LINK_H}
@@ -345,6 +368,8 @@ Function AwdWelcomeCreate
     SetCtlColors $AwdSpaceLabel 0x8A9590 0xFFFFFF
   !endif
 
+  ; 位图压到 z 序最底：所有热区/真控件都已建好，这一句之后它们才真的在位图之上
+  System::Call 'user32::SetWindowPos(p $AwdBgWnd, p 1, i 0, i 0, i 0, i 0, i 0x13)'
   nsDialogs::Show
 FunctionEnd
 
@@ -375,6 +400,17 @@ Function AwdMinClick
   ShowWindow $HWNDPARENT ${SW_MINIMIZE}
 FunctionEnd
 
+; 无边框卡片的拖动（dev-board#366）。挂在背景位图的 OnClick 上：static 控件的
+; STN_CLICKED 是在 WM_LBUTTONDOWN 里发的，回调跑到这里时鼠标还按着，
+; ReleaseCapture 后给主窗发 WM_NCLBUTTONDOWN/HTCAPTION，DefWindowProc 就当用户按住了
+; 标题栏，进入系统自己的模态拖动循环，抬起才回来——与 WinForms 无边框窗的经典写法
+; 同一条路。SendMessage 是同步的，整段拖动都在这一句里完成。
+Function AwdDragClick
+  Pop $0
+  System::Call 'user32::ReleaseCapture()'
+  SendMessage $HWNDPARENT ${WM_NCLBUTTONDOWN} ${AWDUI_HTCAPTION} 0
+FunctionEnd
+
 !ifdef AWD_UI_DIR_CHOICE
 Function AwdToggleCustom
   Pop $0
@@ -395,7 +431,9 @@ Function AwdToggleCustom
     ${AwdPx} $R6 ${AWDUI_H}
   ${EndIf}
   ${AwdPx} $R5 ${AWDUI_W}
-  System::Call 'user32::SetWindowPos(p $HWNDPARENT, i 0, i $AwdWinX, i $AwdWinY, i R5, i R6, i 0x24)'
+  ; SWP_NOMOVE：只改高度，左上角留在原地。卡片现在能拖，用初始化时记的坐标重定位
+  ; 会把用户刚拖走的卡片弹回屏幕中央。
+  System::Call 'user32::SetWindowPos(p $HWNDPARENT, i 0, i 0, i 0, i R5, i R6, i 0x26)'
 FunctionEnd
 
 Function AwdBrowseClick
@@ -561,18 +599,43 @@ Function AwdInstFilesShow
   ; 拷完直接滑到完成卡，不停在「已完成，请点下一步」
   SetAutoClose true
 
-  ; 缩到小卡片并钉到工作区右上角
+  ; 缩到小卡片并钉到工作区右上角。进度卡期间脚本一行都跑不了（见文件头「可拖动契约」），
+  ; 拖动带只能是真标题栏：把初始化时剥掉的 WS_CAPTION 加回来（不带 WS_SYSMENU，
+  ; 无图标无按钮）。外框 = 客户区 + 标题带 + 边框，由 AdjustWindowRectEx 按当前样式
+  ; 实算，别手抄 31px——不同系统、不同 DPI 都不一样。
   ${AwdPx} $2 ${AWDUI_MINI_W}
   ${AwdPx} $3 ${AWDUI_MINI_H}
+  System::Call 'user32::GetWindowLong(p $HWNDPARENT, i -16) i .r0'
+  IntOp $0 $0 | ${AWDUI_WS_CAPTION}
+  System::Call 'user32::SetWindowLong(p $HWNDPARENT, i -16, i r0)'
+  ; Win11：标题带与文字染成卡片白、边框染成位图自带的 1px 框色 #DCE5DF，看起来只是
+  ; 卡片顶上多了一条空白。DWMWA_CAPTION_COLOR=35 / TEXT_COLOR=36 / BORDER_COLOR=34，
+  ; 值是 COLORREF（BGR）；Win10 及更早不认这几个属性，调用失败无害，显示系统标题带。
+  System::Call '*(i 0x00FFFFFF) p .r1'
+  System::Call 'dwmapi::DwmSetWindowAttribute(p $HWNDPARENT, i 35, p r1, i 4)'
+  System::Call 'dwmapi::DwmSetWindowAttribute(p $HWNDPARENT, i 36, p r1, i 4)'
+  System::Free $1
+  System::Call '*(i 0x00DFE5DC) p .r1'
+  System::Call 'dwmapi::DwmSetWindowAttribute(p $HWNDPARENT, i 34, p r1, i 4)'
+  System::Free $1
+  System::Call 'user32::GetWindowLong(p $HWNDPARENT, i -20) i .r1'
+  System::Call '*(i 0, i 0, i r2, i r3) p .r4'
+  System::Call 'user32::AdjustWindowRectEx(p r4, i r0, i 0, i r1)'
+  System::Call '*$4(i .r5, i .r6, i .r7, i .r8)'
+  System::Free $4
+  IntOp $R1 $7 - $5     ; 外框宽
+  IntOp $R2 $8 - $6     ; 外框高
   System::Call '*(i, i, i, i) p .r4'
   System::Call 'user32::SystemParametersInfo(i 0x30, i 0, p r4, i 0)'
   System::Call '*$4(i .r5, i .r6, i .r7, i .r8)'
   System::Free $4
   ${AwdPx} $0 16
-  IntOp $9 $7 - $2
+  IntOp $9 $7 - $R1
   IntOp $9 $9 - $0
   IntOp $R0 $6 + $0
-  System::Call 'user32::SetWindowPos(p $HWNDPARENT, i 0, i r9, i R0, i r2, i r3, i 0x24)'
+  ; 0x34 = SWP_FRAMECHANGED|SWP_NOACTIVATE|SWP_NOZORDER：改过样式必须带 FRAMECHANGED，
+  ; 否则非客户区不重算，标题带画不出来
+  System::Call 'user32::SetWindowPos(p $HWNDPARENT, i 0, i r9, i R0, i R1, i R2, i 0x34)'
 
   StrCpy $R7 $2
   StrCpy $R8 $3
@@ -615,9 +678,19 @@ FunctionEnd
 Function AwdFinishCreate
   Call AwdHideChrome
 
-  ; 尺寸位置沿用安装页（重申一遍，防御直接跳到本页的路径）
+  ; 去掉进度卡期间加回的标题带，回到无边框（直接跳到本页的路径上它本来就没有，
+  ; 再剥一次无害）。客户区左上角留在原地——用户可能已经把进度卡拖到别处，
+  ; 卡片内容不该因为标题带消失而跳一下。
+  System::Call '*(i 0, i 0) p .r1'
+  System::Call 'user32::ClientToScreen(p $HWNDPARENT, p r1)'
+  System::Call '*$1(i .r2, i .r3)'
+  System::Free $1
+  System::Call 'user32::GetWindowLong(p $HWNDPARENT, i -16) i .r0'
+  IntOp $0 $0 & 0xFF37FFFF
+  System::Call 'user32::SetWindowLong(p $HWNDPARENT, i -16, i r0)'
   ${AwdPx} $R7 ${AWDUI_MINI_W}
   ${AwdPx} $R8 ${AWDUI_MINI_H}
+  System::Call 'user32::SetWindowPos(p $HWNDPARENT, i 0, i r2, i r3, i R7, i R8, i 0x34)'
   Call AwdFillPageArea
 
   nsDialogs::Create 1018
@@ -628,15 +701,18 @@ Function AwdFinishCreate
   SetCtlColors $AwdDialog "" 0xFFFFFF
   System::Call 'user32::SetWindowPos(p $AwdDialog, i 0, i 0, i 0, i R7, i R8, i 0x14)'
 
-  nsDialogs::CreateControl STATIC ${WS_VISIBLE}|${WS_CHILD}|${WS_CLIPSIBLINGS}|${SS_BITMAP} 0 0 0 $R7 $R8 ""
-  Pop $1
-  ${NSD_SetImage} $1 "$PLUGINSDIR\awd-mini-done.bmp" $AwdImgHero
+  ; 背景位图同欢迎卡：SS_NOTIFY + OnClick 拖动，热区建完再压底（z 序地雷见欢迎卡）
+  nsDialogs::CreateControl STATIC ${WS_VISIBLE}|${WS_CHILD}|${WS_CLIPSIBLINGS}|${SS_BITMAP}|${SS_NOTIFY} 0 0 0 $R7 $R8 ""
+  Pop $AwdBgWnd
+  ${NSD_SetImage} $AwdBgWnd "$PLUGINSDIR\awd-mini-done.bmp" $AwdImgHero
+  ${NSD_OnClick} $AwdBgWnd AwdDragClick
 
   ${AwdHotspot} $2 ${AWDUI_DONEBTN_X} ${AWDUI_DONEBTN_Y} ${AWDUI_DONEBTN_W} ${AWDUI_DONEBTN_H}
   ${NSD_OnClick} $2 AwdLaunchClick
   ${AwdHotspot} $2 ${AWDUI_MCLOSE_X} ${AWDUI_MCLOSE_Y} ${AWDUI_MCLOSE_W} ${AWDUI_MCLOSE_H}
   ${NSD_OnClick} $2 AwdFinishCloseClick
 
+  System::Call 'user32::SetWindowPos(p $AwdBgWnd, p 1, i 0, i 0, i 0, i 0, i 0x13)'
   nsDialogs::Show
 FunctionEnd
 
