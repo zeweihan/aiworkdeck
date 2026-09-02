@@ -1,5 +1,6 @@
 package com.checkba.service.ai.tools;
 
+import com.checkba.service.LangText;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -224,10 +225,16 @@ default_api = _ToolAPI()
         if (!dockerReady()) {
             // 这句话会被原样转述给用户，所以必须把边界划清楚：缺的只是"跑脚本的沙箱"。
             // 不写最后一句的话，模型会把它推广成「这台机器的 OCR/文件读取不可用」（#396 的原病灶）。
-            return "Error: 本机没有可用的 Docker，Python 沙箱跑不起来，run_python 这条路走不通。"
-                    + "这只影响执行脚本，不影响读文件：项目里的图片和扫描件用 read_file 或 "
-                    + "extract_file_text 就能读，会自动走云端 OCR；企业工商信息用 qichacha_query、"
-                    + "财务数据用 tushare_query，都不需要脚本。";
+            return LangText.of(
+                    "Error: 本机没有可用的 Docker，Python 沙箱跑不起来，run_python 这条路走不通。"
+                            + "这只影响执行脚本，不影响读文件：项目里的图片和扫描件用 read_file 或 "
+                            + "extract_file_text 就能读，会自动走云端 OCR；企业工商信息用 qichacha_query、"
+                            + "财务数据用 tushare_query，都不需要脚本。",
+                    "Error: Docker is not available on this machine, so the Python sandbox cannot run and "
+                            + "run_python is not an option here. This only affects running scripts, not reading files: "
+                            + "images and scanned PDFs in the project are readable via read_file or extract_file_text "
+                            + "(cloud OCR runs automatically); company registry data via qichacha_query and financial "
+                            + "data via tushare_query need no script.");
         }
         log.info("Tool: run_python called. Code length={}", code.length());
 
@@ -381,8 +388,10 @@ default_api = _ToolAPI()
             log.error("Docker Python Error", e);
             // 前缀必须是 "Error"：ToolResult.success() 只认前缀，"System Error ..." 会被判成成功，
             // 失败熔断计数被清零、过程卡打绿勾（见 ToolFailureClassificationTest）
-            return "Error: Python 沙箱执行失败（依赖本机 Docker）: " + e.getMessage()
-                    + "。这只影响执行脚本，不影响读文件与 OCR。";
+            return LangText.of("Error: Python 沙箱执行失败（依赖本机 Docker）: ",
+                    "Error: Python sandbox failed (it depends on local Docker): ") + e.getMessage()
+                    + LangText.of("。这只影响执行脚本，不影响读文件与 OCR。",
+                    ". This only affects running scripts, not reading files or OCR.");
         } finally {
             if (process != null && process.isAlive()) {
                 process.destroyForcibly();
