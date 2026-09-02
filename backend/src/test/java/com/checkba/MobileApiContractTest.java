@@ -24,12 +24,15 @@ import static com.atlassian.oai.validator.mockmvc.OpenApiValidationMatchers.open
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
  * API 契约测试：手机端调用的六个端点，真实响应必须合 src/main/resources/openapi/mobile-v1.yaml。
  * 只校验响应（请求级别 IGNORE，multipart 请求校验在该库里不稳）。
  * 环境配方同 MobileRelayEndpointIntegrationTest。移动仓 contract/api/ 钉的是这份 YAML 的副本。
+ * <p>校验器（swagger-request-validator）默认 additionalProperties: false：mobile-v1.yaml 是响应字段的
+ * 穷举白名单，服务端新增任何响应字段都必须先写进那份 YAML，否则本测试红。
  */
 @SpringBootTest(properties = {
         "spring.datasource.url=jdbc:h2:mem:mobile-api-contract;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;NON_KEYWORDS=VALUE;DB_CLOSE_DELAY=-1",
@@ -77,6 +80,7 @@ class MobileApiContractTest {
         // 未登录信封也在契约里
         mvc.perform(get("/api/mobile/projects"))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(4010))
                 .andExpect(openApi().isValid(validator));
 
         // 桌面推目录，让 GET /projects 有内容
@@ -84,10 +88,12 @@ class MobileApiContractTest {
                         .contentType(APPLICATION_JSON)
                         .content("""
                                 {"deviceId":"dev-c","deviceName":"Mac","projects":[{"key":"1","name":"契约项目"}]}"""))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0));
 
         mvc.perform(get("/api/mobile/projects").header("X-Session-Id", sid))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].key").value("1"))
                 .andExpect(openApi().isValid(validator));
 
         MockMultipartFile file = new MockMultipartFile(
@@ -100,15 +106,18 @@ class MobileApiContractTest {
                         .param("capturedAt", "2026-09-02T17:00:00Z")
                         .header("X-Session-Id", sid))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0))
                 .andExpect(openApi().isValid(validator));
 
         mvc.perform(get("/api/mobile/media/status").param("clientMediaIds", mediaId)
                         .header("X-Session-Id", sid))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].clientMediaId").value(mediaId))
                 .andExpect(openApi().isValid(validator));
 
         mvc.perform(get("/api/mobile/media/usage").header("X-Session-Id", sid))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.quotaBytes").isNumber())
                 .andExpect(openApi().isValid(validator));
     }
 
