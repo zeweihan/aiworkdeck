@@ -158,3 +158,18 @@ LibreOffice，AI 修改全部以字符级修订留痕、由人接受或拒绝，
 - 每次爆点后 48 小时看 traffic.jsonl 的 referrer，用数据决定下一次投哪。
 - 对 PH 的公平判断：PH 是 09-02 15:01 上线的，判断它对仓库的影响至少等 7 天；
   但结构性结论（定投 ≈ 0）不依赖 PH。
+
+## 执行记录（2026-09-03，维护者批准后执行）
+
+| 渠道 | 结果 | 备注 |
+|---|---|---|
+| 阮一峰周刊 | 已提交 [ruanyf/weekly#11482](https://github.com/ruanyf/weekly/issues/11482) | 「【开源自荐】」题式，附截图；被选中一般在下一到两期周五刊出 |
+| HelloGitHub | 已提交 [HelloGitHub#3632](https://github.com/521xueweihan/HelloGitHub/issues/3632) | 按其 issue 模板七个字段填写；收录会在 issue 内通知 |
+| awesome-mcp-clients | PR [#301](https://github.com/punkpeye/awesome-mcp-clients/pull/301) | 表格 + 特性 + 截图（screenshots/ai-workdeck/），字母序插在 AIaW 前；MCP 客户端能力已核实（McpClientService / mcp.servers） |
+| awesome-ai-agents | PR [#1497](https://github.com/e2b-dev/awesome-ai-agents/pull/1497) | Category：Productivity, Supports open-source models；字母序在 AI Legion 与 Aider 之间 |
+| awesome-legaltech | PR [#102](https://github.com/Vaquill-AI/awesome-legaltech/pull/102) | Full-Stack 节 [Open Source] 尾部；理由按其三条标准：开源 / 区域代表（首个中国条目）/ 独特技术路径；维护者 SLA 7 天 |
+| awesome-electron | **推迟** | 硬门槛「仓库 ≥ 100 星」，当前 79；过百当天投（Apps → Open Source → Other，尾部追加，描述不含 Electron、不以 A/An 开头） |
+| awesome-selfhosted | **推迟到 2026-09-17 之后** | 硬门槛「首个 release 满 4 个月」，v0.1.0 是 2026-05-17；到期投 awesome-selfhosted-data 的 software/ai-workdeck.yml（tags: Document Management；platforms: Java, Nodejs, Docker；描述 ≤250 字符、不写 open-source/free/self-hosted） |
+| Show HN | 待维护者本人发 | 稿在上文；周二至周四北京 20:00-21:00 |
+
+fork 均在 zeweihan 名下，分支 add-ai-workdeck；被要求修改时直接在 fork 分支改后推送即可。
