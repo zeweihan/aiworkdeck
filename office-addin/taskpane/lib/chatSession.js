@@ -63,6 +63,12 @@ export const reconnecting = ref(false)
  * 别让盲区伪装成卡死。由流式解析器的 onToolPrep 进出回调驱动。
  */
 export const toolPrep = ref(false)
+/**
+ * 整篇分段过卷的进度（dev-board#422）：{ chunk, total, replaced }，没在过卷时为 null。
+ * 后端每次 office_pass_step 返回后推一条 pass_progress，界面据此把「正在操作文档…」
+ * 换成「校对 3/12 段 · 已改 7 处」——整篇校对要跑十几分钟，一个不动的转圈跟卡死没区别。
+ */
+export const passProgress = ref(null)
 /** 错误类提示（红） */
 export const banner = ref('')
 /** 中性提示（灰），如「上一次的任务仍在进行中」 */
@@ -217,6 +223,7 @@ export async function activateSession({ settings, projectId }) {
   parser = null
   streaming.value = false
   toolPrep.value = false
+  passProgress.value = null
   clearReconnectNotice()
   everReconnected = false
   banner.value = ''
@@ -604,6 +611,7 @@ function finishStreaming() {
   if (currentAssistant) currentAssistant.streaming = false
   streaming.value = false
   toolPrep.value = false
+  passProgress.value = null
   notice.value = ''
   perfEnd()
   // 文档镜像（dev-board#299）：本轮真的写过文档且项目有归档绑定才触发；
@@ -842,6 +850,30 @@ async function recoverEmptyBubble(target) {
   bumpScroll()
 }
 
+/**
+ * 整篇分段过卷的进度（dev-board#422）。后端每次 office_pass_step 返回后推一条。
+ * done 之后立刻归位——过卷结束了还挂着「校对 12/12 段」，用户会以为还在跑。
+ * 载荷坏掉不影响这一轮，静默忽略即可（纯展示）。
+ */
+function handlePassProgress(dataStr) {
+  try {
+    const d = JSON.parse(dataStr)
+    if (d && d.done) {
+      passProgress.value = null
+      return
+    }
+    const total = Number(d && d.total) || 0
+    const chunk = Number(d && d.chunk) || 0
+    if (!total || !chunk) {
+      passProgress.value = null
+      return
+    }
+    passProgress.value = { chunk, total, replaced: Number(d.replaced) || 0 }
+  } catch (e) {
+    console.warn('[Addin] pass_progress 载荷无法解析', e)
+  }
+}
+
 function handleEvent(evt, dataStr) {
   if (evt === 'text_delta') {
     let content = dataStr
@@ -914,6 +946,8 @@ function handleEvent(evt, dataStr) {
   } else if (evt === 'cancelled') {
     if (currentAssistant && !currentAssistant.text) currentAssistant.text = t('stoppedPlaceholder')
     finishStreaming()
+  } else if (evt === 'pass_progress') {
+    handlePassProgress(dataStr)
   } else if (evt === 'client_action') {
     handleClientAction(dataStr)
   } else if (evt === 'state_recovery') {
@@ -1251,6 +1285,7 @@ export function newConversation() {
   everReconnected = false
   streaming.value = false
   toolPrep.value = false
+  passProgress.value = null
   resetDocCache()
   // 立刻预连新会话（签发新 ID + 建 SSE），让下一条消息零建连成本；
   // 这条连接没有轮次在跑，其 run_state 不产生任何副作用（见 handleRunState 第 2 种来源）

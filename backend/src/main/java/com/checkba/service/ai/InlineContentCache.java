@@ -73,6 +73,33 @@ public class InlineContentCache {
         return entry.hash().equalsIgnoreCase(hash.trim()) ? entry.content() : null;
     }
 
+    /**
+     * 本会话这一轮实际使用的内联正文（不带哈希校验，直接取）。
+     *
+     * <p>供 office_pass_step 切块用：切的必须是<b>模型看到的那一份字节</b>，
+     * 段落序号才能和模型上下文里的正文对得上。没有缓存（首轮之前、已被 LRU 驱逐、
+     * 正文超 20 万字符没入缓存）时返回 null，调用方按「没有内联正文」报错。
+     */
+    public String contentOf(String conversationId) {
+        if (conversationId == null || conversationId.isBlank()) {
+            return null;
+        }
+        CachedBody entry = byConversation.get(conversationId);
+        return entry == null ? null : entry.content();
+    }
+
+    /**
+     * 本会话缓存正文的哈希（后端自算的那一份）。
+     * 过卷用它判「文档中途被换」：建态时记下，每一步比对。
+     */
+    public String hashOf(String conversationId) {
+        if (conversationId == null || conversationId.isBlank()) {
+            return null;
+        }
+        CachedBody entry = byConversation.get(conversationId);
+        return entry == null ? null : entry.hash();
+    }
+
     /** SHA-256 十六进制小写，口径与插件端 crypto.subtle.digest('SHA-256') 一致。 */
     static String sha256Hex(String text) {
         try {
