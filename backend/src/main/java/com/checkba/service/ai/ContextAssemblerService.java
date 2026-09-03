@@ -393,7 +393,7 @@ public class ContextAssemblerService {
                         default -> {
                             systemText.append("该文档在用户本机的文字处理软件（Microsoft Word 或 WPS 文字）中打开，正文已随本请求内联注入下方。");
                             systemText.append("读取/修改它一律使用 office_* 工具（office_get_text / office_search / ");
-                            systemText.append("office_replace_text / office_replace_batch / office_insert_text / office_add_comment / ");
+                            systemText.append("office_replace_text / office_replace_batch / office_pass_step / office_insert_text / office_add_comment / ");
                             systemText.append("office_format_text / office_set_paragraph_format / office_get_formatting / ");
                             systemText.append("office_set_numbering / office_format_table / office_apply_standard_format 等），");
                             systemText.append("修改会以 Word 原生修订形式呈现。");
@@ -423,6 +423,17 @@ public class ContextAssemblerService {
                         systemText.append("正确做法：先通读内联正文把要改的地方一次性列全，再分批调用 office_replace_batch；");
                         systemText.append("每批返回的 failed 里若有条目，只针对那几条换更长、更唯一的原文重试，");
                         systemText.append("**绝不要整批重发**——已成功的那些会被改第二遍。\n\n");
+                        // 整篇任务改走分段过卷（dev-board#422）。#419 让「一批 50 处」成为可能，
+                        // 但模型仍要在一轮里把整篇几十上百处一次列全——长文档下要么漏、
+                        // 要么单次输出超长被截断整轮丢弃。过卷把它变成「一块一步」，
+                        // 每块聚焦、每块落笔、进度对用户可见。紧接 #419 那段之后，仍在末位。
+                        systemText.append("**用户要求对整篇/全文/所有内容做逐处修改时（整篇校对错别字与病句、整篇润色、");
+                        systemText.append("统一称谓、全文替换某类表述），必须用 office_pass_step 分块推进，");
+                        systemText.append("不要试图一轮列全整篇的修改。** ");
+                        systemText.append("首次调用 editsJson 传 [] 拿第一块；看完这一块后把该块的修改清单传给下一次调用，");
+                        systemText.append("同时拿到下一块；本块不需要改就传 []；想提前结束传 stop=true。");
+                        systemText.append("清单按全文查找落笔而不限于当前块——处理某一块时发现别处需要连带修改，可以一并写进同一份清单。");
+                        systemText.append("单处、几处或选区内的修改仍用 office_replace_text / office_replace_batch，不必过卷。\n\n");
                     }
                     // 写入内容纯文本约束，刻意挂在本指引段末尾（约束放前面会被弱模型无视，
                     // 见「约束要挂消息末位」经验）：模型曾把 Markdown 记号当正文写进文档，

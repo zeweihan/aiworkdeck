@@ -57,7 +57,7 @@
                工具参数生成期（toolPrep，<tool_code> 内逐 token 出整篇写入内容，可长达
                一两分钟）优先明示，此前这段是渲染盲区、伪装成卡死 -->
           <div v-if="msg.streaming && !msg.text" class="bubble assistant-bubble pending-bubble">
-            {{ toolPrep ? t('preparingDocumentContent') : (msg.tools && msg.tools.length ? t('workingOnDocument') : t('thinkingEllipsis')) }}
+            {{ pendingStatusText(msg) }}
           </div>
           <!-- Markdown 渲染（dev-board#197）：加粗/列表/代码不再以星号裸奔；
                renderMarkdown 先整体 HTML 转义再套标签，v-html 无注入面 -->
@@ -342,7 +342,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, TransitionGroup } from 'vue'
 import {
-  messages, input, streaming, toolPrep, reconnecting, banner, notice, includeDocument, scrollSignal,
+  messages, input, streaming, toolPrep, passProgress, reconnecting, banner, notice, includeDocument, scrollSignal,
   activateSession, send as sendMessage, stop as stopRun, newConversation,
   answerQuestion, modelCatalog, selectedModel, chooseModel, skillList, selectedSkillIds,
   toggleSkill, loadConversationList, switchConversation, attachedFiles, toggleAttachedFile,
@@ -358,6 +358,22 @@ import { t } from '../lib/i18n.js'
 import { renderMarkdown } from '../lib/markdown.js'
 import { rechargeUrl, openExternal } from '../lib/site.js'
 import { riseIn, panelUp, popIn, staggerIn } from '../lib/motion.js'
+
+/**
+ * 首 token 前的那一行状态文案。四档，越具体越优先：
+ * 过卷进度（dev-board#422，整篇校对一跑十几分钟，必须逐块动起来）
+ * > 工具参数生成期 > 已调过工具 > 纯思考。
+ */
+function pendingStatusText(msg) {
+  const p = passProgress.value
+  if (p) {
+    return p.replaced > 0
+      ? t('passProgressWithEdits', { chunk: p.chunk, total: p.total, replaced: p.replaced })
+      : t('passProgress', { chunk: p.chunk, total: p.total })
+  }
+  if (toolPrep.value) return t('preparingDocumentContent')
+  return msg && msg.tools && msg.tools.length ? t('workingOnDocument') : t('thinkingEllipsis')
+}
 
 /**
  * 纯渲染与交互层：会话态、SSE 连接与 office_command 执行链都在 lib/chatSession.js。

@@ -3,6 +3,8 @@ package com.checkba.service.ai.tools;
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
 import com.checkba.service.ai.OfficeBridgeService;
+import com.checkba.service.ai.OfficePassChunker;
+import com.checkba.service.ai.OfficePassStateStore;
 import com.checkba.storage.StorageServiceFactory;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
@@ -39,6 +41,12 @@ public class OfficeEditTools implements AgentToolComponent {
     /** office_insert_image 读取项目文件字节用（批次 9） */
     private final ProjectFileRepository projectFileRepository;
     private final StorageServiceFactory storageServiceFactory;
+    /** office_pass_step 切块用：切的必须是模型看到的那一份内联正文（dev-board#422） */
+    private final com.checkba.service.ai.InlineContentCache inlineContentCache;
+    /** office_pass_step 的游标状态（内存态、按会话、TTL 30 分钟） */
+    private final com.checkba.service.ai.OfficePassStateStore officePassStateStore;
+    /** office_pass_step 的进度事件（pass_progress），只为任务窗格的可见进度 */
+    private final com.checkba.service.ai.SseEmitterService sseEmitterService;
 
     /** Excel 区域地址（A1 表示法，不带工作表名）：A1 或 A1:B10 */
     private static final java.util.regex.Pattern RANGE_ADDRESS =
@@ -287,23 +295,55 @@ public class OfficeEditTools implements AgentToolComponent {
             @P("修改清单，JSON 数组：[{\"searchText\":\"原文\",\"replaceText\":\"新文\"}, ...]") String editsJson
     ) {
         log.info("Tool: office_replace_batch called");
+        BatchEdits parsed = parseBatchEdits(editsJson, false);
+        if (parsed.error() != null) {
+            return parsed.error();
+        }
+        return officeBridgeService.executeOfficeCommand(conversationId, "replace_batch",
+                Map.of("items", parsed.items()));
+    }
+
+    /**
+     * 批量清单的解析结果：要么是可下发的条目，要么是给模型的 {@code Error:} 串（二者必有其一）。
+     * 抽出来是为了让 {@link #office_pass_step} 与 {@link #office_replace_batch} 共用同一套校验——
+     * 后端只有一个 office_replace_batch 工具描述，两个入口对模型说的话不能有出入。
+     */
+    private record BatchEdits(java.util.List<java.util.Map<String, Object>> items, String error) {
+        static BatchEdits ok(java.util.List<java.util.Map<String, Object>> items) {
+            return new BatchEdits(items, null);
+        }
+
+        static BatchEdits fail(String message) {
+            return new BatchEdits(java.util.List.of(), message);
+        }
+    }
+
+    /**
+     * 解析并校验一份批量修改清单。校验<b>全部前置</b>：任何一条不合法都不下发，
+     * 避免一次 30 秒起步的空等过桥，也避免「改了一半又报错」的半成品文档。
+     *
+     * @param allowEmpty 空清单是否合法。office_replace_batch 不允许（空批就是白调一次工具）；
+     *                   office_pass_step 允许（首次调用与「本块不需要改」都传 []）。
+     */
+    private BatchEdits parseBatchEdits(String editsJson, boolean allowEmpty) {
         if (editsJson == null || editsJson.isBlank()) {
-            return "Error: editsJson 不能为空，示例：[{\"searchText\":\"违约责仁\",\"replaceText\":\"违约责任\"}]";
+            return allowEmpty ? BatchEdits.ok(java.util.List.of())
+                    : BatchEdits.fail("Error: editsJson 不能为空，示例：[{\"searchText\":\"违约责仁\",\"replaceText\":\"违约责任\"}]");
         }
         java.util.List<java.util.Map<String, Object>> raw;
         try {
             raw = objectMapper.readValue(editsJson,
                     new com.fasterxml.jackson.core.type.TypeReference<java.util.List<java.util.Map<String, Object>>>() {});
         } catch (Exception e) {
-            return "Error: editsJson 不是合法的 JSON 数组，示例：[{\"searchText\":\"违约责仁\",\"replaceText\":\"违约责任\"}]";
+            return BatchEdits.fail("Error: editsJson 不是合法的 JSON 数组，示例：[{\"searchText\":\"违约责仁\",\"replaceText\":\"违约责任\"}]");
         }
         if (raw == null || raw.isEmpty()) {
-            return "Error: editsJson 至少要有一条修改";
+            return allowEmpty ? BatchEdits.ok(java.util.List.of())
+                    : BatchEdits.fail("Error: editsJson 至少要有一条修改");
         }
         if (raw.size() > MAX_BATCH_EDITS) {
-            return "Error: 一批最多 " + MAX_BATCH_EDITS + " 处，本次给了 " + raw.size() + " 处，请拆成多批分次提交";
+            return BatchEdits.fail("Error: 一批最多 " + MAX_BATCH_EDITS + " 处，本次给了 " + raw.size() + " 处，请拆成多批分次提交");
         }
-        // 校验全部前置：任何一条不合法都不下发，避免一次 30 秒起步的空等过桥
         java.util.List<java.util.Map<String, Object>> items = new java.util.ArrayList<>();
         java.util.Set<String> seen = new java.util.HashSet<>();
         for (int i = 0; i < raw.size(); i++) {
@@ -313,19 +353,19 @@ public class OfficeEditTools implements AgentToolComponent {
             Object replace = item == null ? null : item.get("replaceText");
             String searchText = search == null ? "" : String.valueOf(search);
             if (searchText.isBlank()) {
-                return "Error: 第 " + index + " 条的 searchText 为空";
+                return BatchEdits.fail("Error: 第 " + index + " 条的 searchText 为空");
             }
             if (replace == null) {
-                return "Error: 第 " + index + " 条缺少 replaceText（删除请传空字符串）";
+                return BatchEdits.fail("Error: 第 " + index + " 条缺少 replaceText（删除请传空字符串）");
             }
             if (searchText.length() > 255) {
-                return "Error: 第 " + index + " 条的 searchText 过长（Word 查找上限 255 字符），请缩短";
+                return BatchEdits.fail("Error: 第 " + index + " 条的 searchText 过长（Word 查找上限 255 字符），请缩短");
             }
             if (searchText.indexOf('\n') >= 0 || searchText.indexOf('\r') >= 0) {
-                return "Error: 第 " + index + " 条的 searchText 跨段落（含换行），Word 的查找不支持跨段匹配，请拆成同一段内的多条";
+                return BatchEdits.fail("Error: 第 " + index + " 条的 searchText 跨段落（含换行），Word 的查找不支持跨段匹配，请拆成同一段内的多条");
             }
             if (!seen.add(searchText)) {
-                return "Error: 第 " + index + " 条的 searchText 与前面某条重复（同一处会被改两遍），请合并成一条";
+                return BatchEdits.fail("Error: 第 " + index + " 条的 searchText 与前面某条重复（同一处会被改两遍），请合并成一条");
             }
             java.util.Map<String, Object> normalized = new HashMap<>();
             normalized.put("searchText", searchText);
@@ -341,13 +381,209 @@ public class OfficeEditTools implements AgentToolComponent {
                 String outer = String.valueOf(items.get(a).get("searchText"));
                 String inner = String.valueOf(items.get(b).get("searchText"));
                 if (outer.contains(inner)) {
-                    return "Error: 第 " + (b + 1) + " 条的 searchText 是第 " + (a + 1)
-                            + " 条的一部分，两处会重叠、同一段文字被改两遍。请合并成一条，或把两条都换成互不包含的原文";
+                    return BatchEdits.fail("Error: 第 " + (b + 1) + " 条的 searchText 是第 " + (a + 1)
+                            + " 条的一部分，两处会重叠、同一段文字被改两遍。请合并成一条，或把两条都换成互不包含的原文");
                 }
             }
         }
-        return officeBridgeService.executeOfficeCommand(conversationId, "replace_batch",
-                Map.of("items", items));
+        return BatchEdits.ok(items);
+    }
+
+    // ==================== 整篇过卷（dev-board#422） ====================
+
+    @Tool("整篇分段过卷：把「整篇/全文/所有」的逐处修改任务按块推进，一次处理一块。" +
+          "【用户要求对整篇做逐处修改（校对错别字与病句、整篇润色、统一称谓、全文替换某类表述）时，必须用本工具分块推进，" +
+          "不要试图一轮列全整篇的修改。】单处、几处或选区内的修改仍用 office_replace_text / office_replace_batch。" +
+          "用法：首次调用 editsJson 传 [] 拿第一块；看完这一块后把该块的修改清单传给下一次调用，同时拿到下一块；" +
+          "本块不需要改就传 []；想提前结束传 stop=true。" +
+          "editsJson 的格式与校验口径与 office_replace_batch 完全一致（每条 {\"searchText\":\"原文\",\"replaceText\":\"新文\"}，" +
+          "一批最多 " + MAX_BATCH_EDITS + " 处，searchText 须与文档精确一致、不跨段落、不超 255 字，各条之间不得重复或互相包含）。" +
+          "清单按【全文查找】落笔而不限于当前块——处理某一块时发现别处需要连带修改，可以一并写进同一份清单。" +
+          "返回值里 pass 是进度（chunk/total/done），applied 是上一份清单的落笔结果，paragraphs 是本块正文（带段落号）。" +
+          "applied.failed 里的条目不阻塞推进：下一次调用时换更长、更唯一的原文重试即可，不要整批重发。")
+    @ToolMeta(displayName = "分段过卷", category = "office", fileEffect = "MODIFIED")
+    public String office_pass_step(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("对上一块（或任意位置）的修改清单，JSON 数组：[{\"searchText\":\"原文\",\"replaceText\":\"新文\"}, ...]；"
+                    + "首次调用与本块无需修改时传 []") String editsJson,
+            @P("提前结束过卷（true=落笔后返回汇总并结束；缺省 false）") Boolean stop
+    ) {
+        log.info("Tool: office_pass_step called");
+        // 切的必须是模型看到的那一份字节——段落序号才能和模型上下文里的正文对得上
+        String content = inlineContentCache.contentOf(conversationId);
+        if (content == null || content.isBlank()) {
+            return "Error: 当前会话没有内联正文，请先确认文档已在 Word 中打开；"
+                    + "也可以改用 office_get_text 读取正文后逐批调用 office_replace_batch。";
+        }
+        String contentHash = inlineContentCache.hashOf(conversationId);
+
+        OfficePassStateStore.PassState state = officePassStateStore.get(conversationId);
+        // 文档中途被换：块边界是按旧正文的段落序号算的，继续下去就是拿错块号问模型
+        if (state != null && contentHash != null && !contentHash.equals(state.contentHash())) {
+            officePassStateStore.clear(conversationId);
+            return "Error: 文档内容已变化，过卷已终止，请重新开始（再调用一次本工具即可从第 1 块起）。";
+        }
+
+        // 校验失败：返回 Error 且**游标不前进**，模型修正后重试即可
+        BatchEdits parsed = parseBatchEdits(editsJson, true);
+        if (parsed.error() != null) {
+            return parsed.error();
+        }
+
+        // 先落笔再动游标：桥失败（超时/插件断开）时状态必须原地不动，
+        // 否则模型重试同一份清单会从下一块开始，被跳过的那一块永远没人看
+        int replaced = 0;
+        java.util.List<java.util.Map<String, Object>> failed = java.util.List.of();
+        java.util.Map<String, Object> applied = null;
+        if (!parsed.items().isEmpty()) {
+            String bridgeResult = officeBridgeService.executeOfficeCommand(
+                    conversationId, "replace_batch", Map.of("items", parsed.items()));
+            com.fasterxml.jackson.databind.JsonNode node = readJsonOrNull(bridgeResult);
+            if (node == null || node.hasNonNull("error")) {
+                return bridgeResult;
+            }
+            replaced = node.path("replaced").asInt(0);
+            failed = readFailedEntries(node);
+            applied = new java.util.LinkedHashMap<>();
+            applied.put("replaced", replaced);
+            applied.put("requested", node.path("requested").asInt(parsed.items().size()));
+            applied.put("failed", failed);
+        }
+
+        boolean stopping = Boolean.TRUE.equals(stop);
+        boolean first = state == null;
+        if (first) {
+            if (stopping) {
+                // 本来就没有进行中的过卷，stop 只是把这份清单落了笔
+                return renderDone(conversationId, applied, 0, replaced, failed, 0);
+            }
+            java.util.List<OfficePassChunker.Chunk> chunks = OfficePassChunker.chunk(content);
+            if (chunks.isEmpty()) {
+                return "Error: 当前文档没有可过卷的正文（全是空段）。";
+            }
+            state = officePassStateStore.start(conversationId, chunks, contentHash);
+        }
+
+        // 首次调用只建态不推进（第 1 块还没给过模型）；其余每次调用推进一块
+        state = first
+                ? officePassStateStore.record(conversationId, replaced, failed)
+                : officePassStateStore.advance(conversationId, replaced, failed);
+        if (state == null) {
+            // TTL 到期等极端情况：状态没了就当没有过卷，让模型重新开始
+            return "Error: 过卷状态已失效（超时或已被清理），请重新调用一次本工具从第 1 块开始。";
+        }
+
+        int total = state.chunks().size();
+        if (stopping || state.cursor() >= total) {
+            int processed = Math.min(stopping ? state.cursor() + 1 : state.cursor(), total);
+            return renderDone(conversationId, applied, total, state.replacedTotal(), state.failedAll(), processed);
+        }
+
+        OfficePassChunker.Chunk chunk = state.chunks().get(state.cursor());
+        int chunkNo = state.cursor() + 1;
+        java.util.List<OfficePassChunker.Paragraph> body = OfficePassChunker.paragraphsOf(content, chunk);
+
+        java.util.Map<String, Object> pass = new java.util.LinkedHashMap<>();
+        pass.put("chunk", chunkNo);
+        pass.put("total", total);
+        pass.put("chunkChars", OfficePassChunker.chunkChars(content, chunk));
+        pass.put("done", false);
+
+        java.util.List<java.util.Map<String, Object>> paragraphs = new java.util.ArrayList<>();
+        for (OfficePassChunker.Paragraph p : body) {
+            java.util.Map<String, Object> one = new java.util.LinkedHashMap<>();
+            one.put("no", p.no());
+            one.put("text", p.text());
+            paragraphs.add(one);
+        }
+
+        java.util.Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("pass", pass);
+        result.put("applied", applied);
+        result.put("paragraphs", paragraphs);
+        result.put("hint", "这是第 " + chunkNo + "/" + total + " 块（第 " + chunk.fromNo() + "–" + chunk.toNo() + " 段）。"
+                + "请只针对这一块判断是否需要修改；发现其它块需要连带修改也可一并写入，清单按全文查找落笔。"
+                + "改完把清单传给下一次 office_pass_step；本块不需要改就传 []；想提前结束传 stop=true。");
+
+        emitPassProgress(conversationId, chunkNo, total, state.replacedTotal(), false);
+        return writeJson(result);
+    }
+
+    /** 收尾（末块走完 / stop=true）：返回汇总并清状态。 */
+    private String renderDone(String conversationId, java.util.Map<String, Object> applied,
+                              int total, int replacedTotal,
+                              java.util.List<java.util.Map<String, Object>> failedAll, int processed) {
+        officePassStateStore.clear(conversationId);
+
+        java.util.Map<String, Object> pass = new java.util.LinkedHashMap<>();
+        pass.put("chunk", processed);
+        pass.put("total", total);
+        pass.put("done", true);
+
+        java.util.Map<String, Object> summary = new java.util.LinkedHashMap<>();
+        summary.put("chunks", total);
+        summary.put("replaced", replacedTotal);
+        summary.put("failed", failedAll == null ? java.util.List.of() : failedAll);
+
+        java.util.Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("pass", pass);
+        result.put("applied", applied);
+        result.put("summary", summary);
+        result.put("paragraphs", java.util.List.of());
+        result.put("hint", "过卷已结束，共处理 " + processed + "/" + total + " 块、成功改动 " + replacedTotal + " 处。"
+                + "failed 里若仍有条目，可用 office_replace_batch 单独补改；随后向用户汇报本次改了什么。");
+
+        emitPassProgress(conversationId, processed, total, replacedTotal, true);
+        return writeJson(result);
+    }
+
+    /**
+     * 进度事件（dev-board#422）：任务窗格据此把「正在操作文档…」换成「校对 3/12 段 · 已改 7 处」。
+     * 纯展示用，发不出去不影响工具结果——所以整段吞异常。
+     */
+    private void emitPassProgress(String conversationId, int chunk, int total, int replaced, boolean done) {
+        try {
+            java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
+            payload.put("chunk", chunk);
+            payload.put("total", total);
+            payload.put("replaced", replaced);
+            payload.put("done", done);
+            sseEmitterService.send(conversationId, "pass_progress", objectMapper.writeValueAsString(payload));
+        } catch (Exception e) {
+            log.warn("Failed to emit pass_progress for conversation {}", conversationId, e);
+        }
+    }
+
+    private com.fasterxml.jackson.databind.JsonNode readJsonOrNull(String json) {
+        try {
+            return objectMapper.readTree(json);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** 从 replace_batch 的返回值里取失败条目（结构由插件端 officeExecutor 决定，这里只做搬运）。 */
+    private java.util.List<java.util.Map<String, Object>> readFailedEntries(
+            com.fasterxml.jackson.databind.JsonNode node) {
+        com.fasterxml.jackson.databind.JsonNode arr = node.path("failed");
+        if (!arr.isArray() || arr.isEmpty()) {
+            return java.util.List.of();
+        }
+        try {
+            return objectMapper.convertValue(arr,
+                    new com.fasterxml.jackson.core.type.TypeReference<java.util.List<java.util.Map<String, Object>>>() {});
+        } catch (Exception e) {
+            return java.util.List.of();
+        }
+    }
+
+    private String writeJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception e) {
+            log.error("Failed to serialize office_pass_step result", e);
+            return "Error: 过卷结果序列化失败";
+        }
     }
 
     @Tool("在当前 Word 文档中插入文本，插入以 Word 原生修订（Track Changes）形式呈现。" +

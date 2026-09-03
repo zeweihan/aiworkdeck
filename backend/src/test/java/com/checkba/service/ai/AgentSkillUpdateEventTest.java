@@ -131,7 +131,8 @@ class AgentSkillUpdateEventTest {
                 new RunLoopCompactor(contextProperties, new ContextCompressor(null, null, contextProperties)),
                 mock(com.checkba.service.telemetry.TelemetryService.class),
                 mock(com.checkba.service.telemetry.TelemetryTurnTracker.class),
-                mock(com.checkba.service.telemetry.MatterClassifierService.class));
+                mock(com.checkba.service.telemetry.MatterClassifierService.class),
+                new com.checkba.service.ai.OfficePassStateStore());
     }
 
     private void run(String conversationId, AgentMode mode, List<String> skillIds) {

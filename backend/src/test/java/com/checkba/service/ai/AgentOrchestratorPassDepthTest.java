@@ -10,13 +10,11 @@ import com.checkba.service.ai.context.ContextCompressor;
 import com.checkba.service.ai.context.RunLoopCompactor;
 import com.checkba.service.ai.memory.MemoryPipelineService;
 import com.checkba.service.ai.skill.SkillRouter;
-import com.checkba.service.ai.tools.ToolMeta;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
-import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.StreamingResponseHandler;
 import dev.langchain4j.model.chat.StreamingChatLanguageModel;
@@ -24,7 +22,6 @@ import dev.langchain4j.model.output.Response;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -32,58 +29,43 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 「工具执行成功」不等于「文件被改过」。
+ * 整篇过卷的步数预算（dev-board#422）。
  *
- * <p>病灶：{@code @ToolMeta(fileEffect="MODIFIED")} 是写死的常量，编排器的
- * applyToolSideEffects 只看 success()，于是 text_find_replace 一次都没命中、
- * 明确返回「文件未改动」时，照样发一条 file_change(MODIFIED) 并写进会话的
- * 文件变更历史——用户被告知「本轮改了这个文件」，去找却找不到任何改动。
+ * <p>MAX_LOOP_DEPTH=30 是给「常规多步任务」定的。分段过卷是刻意的多步推进：
+ * 一块一步，块数由文档长度决定。恒 30 会让一份长文档的过卷跑到一半被迫暂停——
+ * 这正是 #419 要根治的那种「一路正在操作文档到撞上限」的形态换了个位置复发。
+ * 所以过卷进行中把预算抬到 {@code min(30 + total, 120)}，没有过卷时一切照旧。
+ *
+ * <p>本用例走真实 runLoop（不是只测那个算式）：把深度规则改回恒 30 就会转红。
  */
-class AgentOrchestratorNoOpFileChangeTest {
+class AgentOrchestratorPassDepthTest {
 
     private static final String MODEL = "qwen/qwen3.7-flash";
 
     private ChatModelFactory chatModelFactory;
-    private SseEmitterService sse;
-    private AgentRunStateService runState;
-    private ProjectAiMessageService messageService;
-    private ToolRegistry toolRegistry;
-    private TodoListService todoListService;
+    private OfficePassStateStore passStateStore;
     private List<String> sseEvents;
     private List<String> sseData;
     private AgentOrchestrator orchestrator;
 
-    /** 按脚本逐轮吐内容的模型，同时留下最后一轮收到的完整消息栈 */
-    private static final class ScriptModel implements StreamingChatLanguageModel {
-        private final List<AiMessage> script;
+    /** 永远回一个工具调用的模型：让循环一路跑到步数预算耗尽。参数每轮不同，避开打转干预。 */
+    private static final class LoopingModel implements StreamingChatLanguageModel {
         final AtomicInteger calls = new AtomicInteger();
-        volatile List<ChatMessage> lastMessages = List.of();
-
-        ScriptModel(List<AiMessage> script) {
-            this.script = script;
-        }
 
         @Override
         public void generate(List<ChatMessage> messages, StreamingResponseHandler<AiMessage> handler) {
-            lastMessages = new ArrayList<>(messages);
-            int idx = calls.getAndIncrement();
-            AiMessage msg = script.get(Math.min(idx, script.size() - 1));
-            if (msg.text() != null && !msg.text().isEmpty()) {
-                handler.onNext(msg.text());
-            }
-            handler.onComplete(Response.from(msg));
+            int n = calls.incrementAndGet();
+            handler.onComplete(Response.from(AiMessage.from(List.of(ToolExecutionRequest.builder()
+                    .id("t" + n).name("office_pass_step")
+                    .arguments("{\"editsJson\":\"[]\",\"round\":" + n + "}").build()))));
         }
 
         @Override
@@ -98,14 +80,14 @@ class AgentOrchestratorNoOpFileChangeTest {
         chatModelFactory = mock(ChatModelFactory.class);
         sseEvents = new CopyOnWriteArrayList<>();
         sseData = new CopyOnWriteArrayList<>();
-        sse = mock(SseEmitterService.class);
+        SseEmitterService sse = mock(SseEmitterService.class);
         doAnswer(inv -> {
             sseEvents.add(inv.getArgument(1));
             sseData.add(String.valueOf((Object) inv.getArgument(2)));
             return null;
         }).when(sse).send(any(), any(), any());
 
-        messageService = mock(ProjectAiMessageService.class);
+        ProjectAiMessageService messageService = mock(ProjectAiMessageService.class);
         when(messageService.listByConversationId(any()))
                 .thenReturn(List.of(mock(ProjectAiMessage.class), mock(ProjectAiMessage.class)));
         when(messageService.upsertAssistantMessage(any(), any(), any(), any(), any())).thenReturn(1L);
@@ -113,11 +95,13 @@ class AgentOrchestratorNoOpFileChangeTest {
         ContextAssemblerService assembler = mock(ContextAssemblerService.class);
         when(assembler.assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenAnswer(inv -> new ArrayList<ChatMessage>(List.of(
-                        SystemMessage.from("system"), UserMessage.from("读一下这份合同"))));
+                        SystemMessage.from("system"), UserMessage.from("请校对全文"))));
 
-        toolRegistry = mock(ToolRegistry.class);
+        ToolRegistry toolRegistry = mock(ToolRegistry.class);
         when(toolRegistry.getAllSpecifications(any())).thenReturn(List.of());
         when(toolRegistry.resolve(anyString())).thenReturn(java.util.Optional.empty());
+        when(toolRegistry.execute(any(), any(), any()))
+                .thenAnswer(inv -> new ToolRegistry.ToolResult("{\"pass\":{\"done\":false}}", null, true));
 
         SkillRouter skillRouter = mock(SkillRouter.class);
         when(skillRouter.visibleTools(any(), any())).thenAnswer(inv -> inv.getArgument(1));
@@ -125,40 +109,35 @@ class AgentOrchestratorNoOpFileChangeTest {
         XmlToolCallParser parser = mock(XmlToolCallParser.class);
         when(parser.containsToolCall(any())).thenReturn(false);
 
-        todoListService = mock(TodoListService.class);
         AiContextProperties contextProperties = new AiContextProperties();
-        runState = new AgentRunStateService(
+        AgentRunStateService runState = new AgentRunStateService(
                 mock(com.checkba.repository.AgentRunRecordRepository.class),
                 mock(com.checkba.service.telemetry.TelemetryTurnTracker.class));
+        passStateStore = new OfficePassStateStore();
         orchestrator = new AgentOrchestrator(
                 chatModelFactory, messageService, sse, mock(TokenUsageService.class), assembler,
                 toolRegistry, skillRouter, parser, mock(MemoryPipelineService.class),
                 mock(ProjectFileService.class), mock(EditorBridgeService.class),
-                mock(ConversationFileChangeService.class), todoListService,
+                mock(ConversationFileChangeService.class), mock(TodoListService.class),
                 mock(DocumentCheckpointService.class), runState,
                 mock(com.checkba.version.WorkSessionService.class), new AiFailoverProperties(),
                 new RunLoopCompactor(contextProperties, new ContextCompressor(null, null, contextProperties)),
                 mock(com.checkba.service.telemetry.TelemetryService.class),
                 mock(com.checkba.service.telemetry.TelemetryTurnTracker.class),
                 mock(com.checkba.service.telemetry.MatterClassifierService.class),
-                new com.checkba.service.ai.OfficePassStateStore());
+                passStateStore);
     }
 
-    private ScriptModel run(String conversationId, AiMessage... script) {
-        ScriptModel model = new ScriptModel(List.of(script));
+    private LoopingModel run(String conversationId) {
+        LoopingModel model = new LoopingModel();
         when(chatModelFactory.getStreamingChatModel(MODEL)).thenReturn(model);
         AiAgentController.AgentChatRequest request = new AiAgentController.AgentChatRequest();
         request.setProjectId(1L);
         request.setConversationId(conversationId);
-        request.setMessage("读一下这份合同");
+        request.setMessage("请校对全文");
         request.setModel(MODEL);
         orchestrator.handleUserMessage(request, 7L);
         return model;
-    }
-
-    private static AiMessage readDocumentCall() {
-        return AiMessage.from(List.of(ToolExecutionRequest.builder()
-                .id("t1").name("read_document").arguments("{\"fileId\":\"12\"}").build()));
     }
 
     private String bubbleEndData() {
@@ -168,52 +147,48 @@ class AgentOrchestratorNoOpFileChangeTest {
         return null;
     }
 
-    private String eventData(String event) {
-        for (int i = 0; i < sseEvents.size(); i++) {
-            if (event.equals(sseEvents.get(i))) return sseData.get(i);
-        }
-        return null;
-    }
+    @Test
+    @DisplayName("没有过卷：步数预算仍是 30（depth 0..30 各调一次模型，第 31 步暂停）")
+    void withoutPassBudgetStaysAtThirty() {
+        LoopingModel model = run("conv-nopass");
 
-    @ToolMeta(displayName = "文本查找替换", category = "file", fileEffect = "MODIFIED")
-    public void fakeTextFindReplace() {
-    }
-
-    private ToolRegistry.RegisteredTool fileEffectTool() throws Exception {
-        java.lang.reflect.Method m = getClass().getDeclaredMethod("fakeTextFindReplace");
-        return new ToolRegistry.RegisteredTool(this, m,
-                ToolSpecification.builder().name("text_find_replace").build(),
-                m.getAnnotation(ToolMeta.class), false);
-    }
-
-    private static AiMessage findReplaceCall() {
-        return AiMessage.from(List.of(ToolExecutionRequest.builder()
-                .id("t1").name("text_find_replace")
-                .arguments("{\"fileId\":\"12\",\"find\":\"甲方\",\"replace\":\"乙方\"}").build()));
+        assertEquals(31, model.calls.get(), "无过卷时预算恒为 30 步");
+        assertTrue(String.valueOf(bubbleEndData()).contains("max_depth"), "撞预算应按 paused 收尾");
     }
 
     @Test
-    @DisplayName("一次都没命中：不许发 file_change 声称文件被改过")
-    void noOpReplaceMustNotClaimTheFileChanged() throws Exception {
-        when(toolRegistry.execute(any(), any(), any())).thenReturn(new ToolRegistry.ToolResult(
-                com.checkba.service.ai.tools.TextFileEditTools.noHitMessage("甲方", 1200),
-                fileEffectTool(), true));
+    @DisplayName("过卷进行中：预算抬到 min(30 + 块数, 120)")
+    void passInProgressRaisesBudgetByChunkCount() {
+        passStateStore.start("conv-pass", List.of(
+                new OfficePassChunker.Chunk(1, 10),
+                new OfficePassChunker.Chunk(11, 20),
+                new OfficePassChunker.Chunk(21, 30),
+                new OfficePassChunker.Chunk(31, 40),
+                new OfficePassChunker.Chunk(41, 50)), "hash-a");
 
-        run("conv-noop", findReplaceCall(), AiMessage.from("<final>没找到这段文字。</final>"));
+        LoopingModel model = run("conv-pass");
 
-        assertFalse(sseEvents.contains("file_change"),
-                "什么都没改却报「已修改」，用户会去找一个不存在的改动：" + sseEvents);
+        assertEquals(36, model.calls.get(), "5 块过卷 → 预算 35 步");
+        assertTrue(String.valueOf(bubbleEndData()).contains("max_depth"));
     }
 
     @Test
-    @DisplayName("真的替换成功时 file_change 照发（护栏：别把正常通知一起关掉）")
-    void realReplaceStillNotifies() throws Exception {
-        when(toolRegistry.execute(any(), any(), any())).thenReturn(new ToolRegistry.ToolResult(
-                "已在 a.txt 中替换 3 处（命中 3 处）。改动已进入版本记录。",
-                fileEffectTool(), true));
+    @DisplayName("步数预算的算式：无过卷 30；有过卷 min(30+total,120)")
+    void budgetFormula() {
+        assertEquals(30, AgentOrchestrator.maxLoopDepthFor(passStateStore, "conv-none"));
 
-        run("conv-real", findReplaceCall(), AiMessage.from("<final>已替换。</final>"));
+        passStateStore.start("conv-a", List.of(new OfficePassChunker.Chunk(1, 10)), "h");
+        assertEquals(31, AgentOrchestrator.maxLoopDepthFor(passStateStore, "conv-a"));
 
-        assertTrue(sseEvents.contains("file_change"), "真改了就得通知：" + sseEvents);
+        List<OfficePassChunker.Chunk> sixty = new ArrayList<>();
+        for (int i = 0; i < 60; i++) sixty.add(new OfficePassChunker.Chunk(i * 10 + 1, i * 10 + 10));
+        passStateStore.start("conv-b", sixty, "h");
+        assertEquals(90, AgentOrchestrator.maxLoopDepthFor(passStateStore, "conv-b"));
+
+        // 60 块是切块器的上限，但算式本身也要在更大的输入上收敛到 120
+        List<OfficePassChunker.Chunk> huge = new ArrayList<>();
+        for (int i = 0; i < 200; i++) huge.add(new OfficePassChunker.Chunk(i * 10 + 1, i * 10 + 10));
+        passStateStore.start("conv-c", huge, "h");
+        assertEquals(120, AgentOrchestrator.maxLoopDepthFor(passStateStore, "conv-c"));
     }
 }
