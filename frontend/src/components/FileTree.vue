@@ -934,7 +934,7 @@
 </template>
 
 <script>
-import { getProjectFiles, createFolder, createFile, renameFile, deleteFile, deleteFilePerm, restoreFile as restoreFileApi, getRecycleBinFiles, moveFile, batchDeleteFiles, batchMoveFiles, batchCopyFiles, getApiBaseUrl, getContributedTemplates, createFileFromContributedTemplate } from '@/services/api.js'
+import { getProjectFiles, createFolder, createFile, renameFile, deleteFile, deleteFilePerm, restoreFile as restoreFileApi, getRecycleBinFiles, moveFile, batchDeleteFiles, batchMoveFiles, batchCopyFiles, getApiBaseUrl, getContributedTemplates, createFileFromContributedTemplate, importLocalFile } from '@/services/api.js'
 import { getAuthHeaders, getSessionId } from '@/utils/auth.js'
 import { host } from '@/services/host.js'
 import { findTopmostDeletedAncestor, summarizeDeleteResults } from '@/utils/fileTreeRecycle.js'
@@ -2185,6 +2185,15 @@ export default {
     handleItemClick(item, event) {
       if (!item) return
 
+      // 上传中的占位行不许打开（dev-board#409）：字节还没到，磁盘上躺着的是 createFile
+      // 物化出来的空白模板，编辑器会把它当正文加载、自动保存再把空白写回去。模板里那条
+      // text-muted 只是视觉提示，真正的闸必须在这里——它才是 file-select 的唯一出口。
+      const uploading = this.uploadStatusMap[item.id]
+      if (uploading && uploading.progress < 100) {
+        uni.showToast({ title: this.$t('fileTree.uploadingCannotOpen'), icon: 'none' })
+        return
+      }
+
       const now = Date.now()
       // Double Click Detection: Toggle Folder
       if (this.lastClickItemId === item.id && (now - this.lastClickTime < 350)) {
@@ -2999,9 +3008,16 @@ export default {
       this.rootDropActive = false
       this.dragOverIndex = -1
     },
-    // 落点确定之后统一走这里：复用 confirmUpload（读 selectedFiles / selectedUploadParent，
-    // 上传对话框与暂存区 onStagingDropFiles 走的也是它），分片续传/并发/建目录/完成后
-    // loadFiles 全在那条通道里，不另起一套。
+    // 落点确定之后统一走这里。分两条路：
+    // ① 桌面端（拿得到本机绝对路径）→ import-local，后端把那个文件复制进项目目录。
+    //    桌面端的项目就是本机的一个文件夹，「拖入 = 复制进来」本来就是用户的心理模型；
+    //    而走 HTTP 上传会先建一份空白模板行、再把已经失效的临时 blob 传上去——微信/
+    //    Finder 的拖拽临时文件在 createFile 那一趟往返之后常常就没了，Chromium 报
+    //    ERR_UPLOAD_FILE_CHANGED、xhr 只给一句 Network Error，三次重试全挂，用户目录里
+    //    留下一份 5KB 空白 docx（dev-board#409）。
+    // ② 其余（浏览器 H5、拿不到路径、整个文件夹拖进来）→ 仍走 confirmUpload（读
+    //    selectedFiles / selectedUploadParent，与上传对话框、暂存区 onStagingDropFiles
+    //    同一条路），分片续传/并发/建目录/完成后 loadFiles 全在那条通道里。
     async uploadExternalDrop(dt, targetParentId) {
       const native = typeof window !== 'undefined' ? window.event : null
       if (!claimExternalDrop(native)) return
@@ -3010,10 +3026,62 @@ export default {
       const items = await collectDroppedFiles(dt)
       if (!items.length) return
       if (targetParentId != null && this.showTree) this.expandedFolders.add(targetParentId)
-      this.selectedFiles = items
+
+      const localEntries = []
+      const rest = []
+      for (const item of items) {
+        // 整个文件夹拖进来的（relativePath 带目录前缀）一律留给 confirmUpload：
+        // import-local 一次只收一个文件、不建目录，让它们走这条路会把目录结构拍平。
+        const nested = !!(item.relativePath && item.relativePath.indexOf('/') !== -1)
+        const path = nested ? '' : this.resolveDroppedFilePath(item.fileObject)
+        if (path) localEntries.push({ item, path })
+        else rest.push(item)
+      }
+
+      if (localEntries.length) {
+        await this.importDroppedLocalFiles(localEntries, targetParentId)
+      }
+      if (!rest.length) return
+      this.selectedFiles = rest
       this.selectedUploadParent = targetParentId
-      this.isFolderUpload = items.some(f => f.relativePath && f.relativePath.indexOf('/') !== -1)
+      this.isFolderUpload = rest.some(f => f.relativePath && f.relativePath.indexOf('/') !== -1)
       await this.confirmUpload()
+    },
+    // File → 本机绝对路径。只有桌面壳给得出（Electron 32 起 File.path 没了，走 webUtils），
+    // 浏览器端 host.fs 整个缺席，恒返回空串 = 退回上传通道。
+    resolveDroppedFilePath(fileObject) {
+      try {
+        if (!fileObject || !host.fs || typeof host.fs.getPathForFile !== 'function') return ''
+        return host.fs.getPathForFile(fileObject) || ''
+      } catch (e) {
+        return ''
+      }
+    },
+    // 逐个调 import-local。不做乐观插行：这条路径没有「传输中」这个阶段，
+    // 后端返回时字节已经在项目目录里，loadFiles 一刷就是最终形态。
+    async importDroppedLocalFiles(entries, targetParentId) {
+      const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
+      let successCount = 0
+      let failCount = 0
+      let lastError = ''
+      for (const entry of entries) {
+        try {
+          await importLocalFile(projectId, entry.path, targetParentId)
+          successCount++
+        } catch (e) {
+          failCount++
+          lastError = (e && e.message) || ''
+          console.error('导入本机文件失败:', entry.item.name, e)
+        }
+      }
+      await this.loadFiles()
+      if (failCount === 0) {
+        uni.showToast({ title: this.$t('fileTree.uploadSuccessCount', { count: successCount }), icon: 'success', duration: 2000 })
+      } else if (successCount === 0) {
+        this.showErrorModal(lastError || this.$t('fileTree.uploadFileFailedRetry'), this.$t('fileTree.uploadFailed'))
+      } else {
+        uni.showToast({ title: this.$t('fileTree.uploadPartialResult', { success: successCount, fail: failCount }), icon: 'none', duration: 2500 })
+      }
     },
     // 非H5端触摸拖拽方法
     handleTouchStart(e, index) {
@@ -3802,8 +3870,14 @@ export default {
 
                    xhr.open('POST', `${this.getApiBaseUrl()}/api/files/${status.wpsFileId}/upload`)
 
+                   // getAuthHeaders() 里带着 application/json（它是给 uni.request 的
+                   // JSON 接口用的）。XHR 的 setRequestHeader 对同名头是「追加」不是
+                   // 「覆盖」，照抄一遍再设 octet-stream 会发出
+                   // "application/json, application/octet-stream" 这种自相矛盾的头。
+                   // 与 api.js 里其余裸 body 请求同口径：只带 X-Session-Id。
                    const headers = this.getAuthHeaders()
                    for (const key in headers) {
+                       if (key.toLowerCase() === 'content-type') continue
                        xhr.setRequestHeader(key, headers[key])
                    }
                    xhr.setRequestHeader('Content-Type', 'application/octet-stream')
@@ -3872,12 +3946,30 @@ export default {
            // 显示具体的错误信息（使用模态对话框）
            const errorMessage = error.message || this.$t('fileTree.uploadInterruptedRetry')
            this.showErrorModal(errorMessage, this.$t('fileTree.uploadFailed'))
-           // 不要删除 status，保留进度条以允许重试
            status.error = true
            status.errorMessage = errorMessage
-           // 保存失败状态
            this.saveUploadState()
+           // 重试用尽了才走到这里：createFile 已经按模板物化出一份空白 docx，留着它
+           // 就是在用户的项目目录里放一个 5KB 的假文件（点开还能被编辑器当正文加载、
+           // 自动保存再写回磁盘）。行删掉，重传由上传对话框重新走一遍 createFile。
+           // dev-board#409。
+           await this.discardFailedUpload(fileId)
        }
+    },
+
+    // 上传彻底失败后的清理：删占位行 + 清进度状态 + 从两个列表里摘掉。
+    async discardFailedUpload(fileId) {
+        try {
+            const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
+            // 占位行从来没有过正文，直接永久删，别让一份空白 docx 再躺进回收站
+            if (projectId && fileId) await deleteFilePerm(projectId, fileId)
+        } catch (e) {
+            console.warn('清理上传失败的占位文件时出错:', e)
+        }
+        delete this.uploadStatusMap[fileId]
+        this.files = this.files.filter(f => f.id !== fileId)
+        this.allFiles = this.allFiles.filter(f => f.id !== fileId)
+        this.saveUploadState()
     },
 
     updateProgress(fileId, uploaded, total) {
