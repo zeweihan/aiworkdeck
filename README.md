@@ -47,7 +47,7 @@ Star AI WorkDeck if you care about any of these problems:
 
 ## What It Is
 
-AI WorkDeck Community Edition is the open-source kernel of AI WorkDeck. It is not the full commercial SaaS product. The kernel is published so developers, law firms, legal-tech builders, and document-AI teams can inspect, self-host, integrate, and extend the core workflow infrastructure.
+AI WorkDeck Community Edition is the full workbench, AGPL-licensed: the same desktop app, editor, agents and plugin runtime that ship in the official build. Commercial licensing exists for firms that need relief from AGPL obligations; it does not gate features. The source is published so developers, law firms, legal-tech builders, and document-AI teams can inspect, self-host, integrate, and extend it.
 
 ## Download & Run
 
@@ -110,7 +110,7 @@ All real product screenshots (demo project, every name and document fictitious).
 
 ## Core Capabilities
 
-| Area | What the kernel provides |
+| Area | What the community edition provides |
 |---|---|
 | **Workspace** | Project/file tree, document staging, favorites, clipboard memory, work logs, calendar and task management, light/dark themes |
 | **AI document work** | Drafting, review, extraction, desensitization, Markdown and document preview |

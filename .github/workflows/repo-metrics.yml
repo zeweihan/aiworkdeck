@@ -1,0 +1,47 @@
+# 每周把仓库流量（views/clones/referrers/paths + star/fork）快照追加到 repo-metrics 分支的
+# metrics/traffic.jsonl。GitHub traffic API 只留 14 天，不存就永远看不出哪个渠道带来了人。
+# 读法：git fetch origin repo-metrics && git show origin/repo-metrics:metrics/traffic.jsonl | jq
+# 与 star-history.yml 分开存放：那条每周用 orphan 分支 force-push 重建，会抹掉追加的文件。
+name: repo-metrics
+
+on:
+  schedule:
+    - cron: '41 2 * * 1' # 每周一 02:41 UTC，紧随 star-history
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Capture snapshot
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STAR_TOKEN: ${{ secrets.STAR_TOKEN }}
+          METRICS_FILE: /tmp/snapshot.jsonl
+        run: node scripts/repo-metrics.mjs
+      - name: Append to repo-metrics branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin repo-metrics >/dev/null; then
+            git fetch origin repo-metrics
+            git checkout -B repo-metrics FETCH_HEAD
+          else
+            git checkout --orphan repo-metrics
+            git rm -rfq . || true
+          fi
+          mkdir -p metrics
+          cat /tmp/snapshot.jsonl >> metrics/traffic.jsonl
+          git add metrics/traffic.jsonl
+          git commit -m "chore(metrics): weekly traffic snapshot $(date -u +%Y-%m-%d)"
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo-metrics
