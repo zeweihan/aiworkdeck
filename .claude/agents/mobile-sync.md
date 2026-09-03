@@ -52,6 +52,10 @@ dev-board#30）；更早的产品设计 `2026-08-17-mobile-clients-design.md`。
 - `mediaType ∈ {image, video, audio}`（audio 自 dev-board#228）。桌面落盘根目录由它推导：
   audio → 「现场录音」，其余 → 「现场影像」；rootFolder 同时参与幂等判据与 storagePath
   拼接，改动必须两处同源（`MobileRelayClientService.landAndAck`）。
+  **但 `mediaType` 只决定目录，绝不能当 `project_file.file_type` 落库**（dev-board#417，
+  见地雷 9）：file_type 全仓语义是**文件扩展名**，落盘时一律走
+  `MobileRelayClientService.fileTypeOf(landedName, mediaType)`（有扩展名取扩展名，
+  没有才退回 mediaType）。
 - **每用户 3GB 配额**（dev-board#226）：只计未投递 blob（storagePath 非空行）的 fileSize
   之和，ACK 即删 = 释放配额。检查在写盘前按声明大小做（幂等重传先于配额检查，不占新
   空间不得拒）；并发上传可略超上限（最多一件，接受的软度）。拒绝走
@@ -139,6 +143,32 @@ dev-board#30）；更早的产品设计 `2026-08-17-mobile-clients-design.md`。
    `MobileRelayStoreServiceTest.emptyDirectoryPushDoesNotWipeExistingRows` /
    `.touchDeviceStoresDeviceNameForHeartbeatOnlyDevices`、
    `MobileRelayClientHttpTest.pushDirectorySkipsWhenLocalProjectListEmpty`。
+9. **`project_file.file_type` 是扩展名，不是 mediaType**（dev-board#417，2026-09-03 实测）：
+   `landAndAck` 原来把 `mediaType`（image/video/audio）直接当 fileType 落库，而全仓
+   （含 `ProjectFile` 的字段注释）对这一列只有一个语义——**文件扩展名**。后果不是报错，
+   是**静默的"证据丢了"**：字节完好躺在项目目录里，用户在文件树里点开手机传来的 jpg
+   只弹「无法打开文件：暂不支持打开此类型文件…文件类型：image」——前端
+   `fileOpenTabs.isFileTypeSupported` 的白名单里是 jpg/png/mp4，没有 image/video/audio。
+   同一个错还让 `FileTree.isAudioFile` 恒 false，资源管理器右键的「转写」
+   （dev-board#228）在手机传来的录音上**永远不出现**，等于那张卡白做。
+   现场取证：本机 H2 里 id=2248 的 `现场影像-20260902-191122-D160-d16044f3.jpg`
+   file_type='image'，而 `file` 看字节是货真价实的 iPhone JPEG。
+   同一个类里其余三条落地路径（`landDocumentAndAck`、传输 PUSH、
+   `MobileTransferService.saveToProject`）本来就落扩展名，**只有 landAndAck 落错**——
+   新增任何落盘路径都要照 `fileTypeOf(landedName, fallback)` 取值。
+   **存量脏行只能靠启动期对账救**：影像早已 ACK、中转区 blob 早已删除，取件轮询再也
+   不会碰它；本地目录项目的 `LocalProjectService` 重扫走 `createOrUpdateFile`，那个方法
+   只更新 fileSize/updatedAt，**不改 fileType**，也救不回来。于是有
+   `MediaFileTypeReconciler`（照 `OrphanPhoneSessionReconciler` 的成例做的
+   `CommandLineRunner`，只在 local-mode 跑）：把 file_type ∈ {image,video,audio} 且名字
+   带扩展名的文件行改回扩展名，幂等。护栏 `MobileRelayClientHttpTest.
+   pollInboxStoresExtensionNotMediaTypeAsFileType` / `.pollInboxStoresAudioExtensionAsFileType`
+   / `.pollInboxFallsBackToMediaTypeWhenNameHasNoExtension`、`MediaFileTypeReconcilerTest`、
+   `ProjectFileRepositoryTreeSkeletonTest.findsFilesByFileTypeExcludingFoldersAndDeletedRows`
+   （派生查询名真能被 Spring Data 解析，mock 证明不了这一点）。
+   唯一还认 fileType="image" 的消费方是 `ContextAssemblerService.isVisionCandidate`，
+   而它**只在文件名没有扩展名时**才看这一列——所以「有扩展名取扩展名、没有才退回
+   mediaType」的兜底不能省。
 
 ## 插件归档双镜像（dev-board#297/#298/#299，spec：docs/superpowers/specs/2026-08-30-addin-project-binding-and-mirrors-design.md）
 
@@ -209,6 +239,6 @@ find-or-create，影子项目从 `/api/projects/my` 滤掉）。绑定后两条�
 
 ## 验证
 
-- `mvn test -Dtest='MobileRelay*Test,AwdkLoginServiceTest'`（JDK 21）。
+- `mvn test -Dtest='MobileRelay*Test,AwdkLoginServiceTest,MediaFileTypeReconcilerTest'`（JDK 21）。
 - 云端冒烟：`curl https://addin.aiworkdeck.com/api/mobile/projects` 无凭据应 401。
 - iOS 侧改动跑 `aiworkdeck_mobile` 仓的构建 + TestFlight 通道（fastlane）。

@@ -308,9 +308,17 @@ public class MobileRelayClientService {
             try (InputStream in = content.body()) {
                 storageServiceFactory.getStorageService().save(storagePath, in);
             }
+            // fileType 落**扩展名**，不是 mediaType（dev-board#417）。project_file.file_type
+            // 在全仓的语义只有一个：文件扩展名。前端整条「这份文件能怎么用」的判定都读它——
+            // isFileTypeSupported（白名单里是 jpg/png/mp4…，没有 image/video/audio）、
+            // isAudioFile（右键「转写」，dev-board#228）、FileTypeIcon。写成 "image" 的后果
+            // 是手机传上来的照片在文件树里点开只弹「无法打开文件：暂不支持打开此类型文件…
+            // 文件类型：image」，而字节本身完好无损——用户看到的是"证据丢了"。
+            // 同一文件的其余三条落地路径（landDocumentAndAck / 传输 PUSH / MobileTransferService
+            // .saveToProject）本来就落扩展名，只有这里落错。
             ProjectFile record = projectFileService.createFile(
                     projectId, day.getId(), landedName,
-                    mediaType,
+                    fileTypeOf(landedName, mediaType),
                     item.path("fileSize").asLong(0),
                     storagePath, null, userId);
             // storagePath 是照着 ProjectFileService.buildPhysicalPath 的格式手拼的，
@@ -402,6 +410,20 @@ public class MobileRelayClientService {
                 .filter(f -> Boolean.TRUE.equals(f.getIsFolder()) && name.equals(f.getName()))
                 .findFirst();
         return existing.orElseGet(() -> projectFileService.createFolder(projectId, parentId, name, userId));
+    }
+
+    /**
+     * 落库的 fileType：文件名的扩展名（小写）；名字没有扩展名时退回 fallback（mediaType），
+     * 不写空串——ContextAssemblerService 那条「无扩展名时才认 fileType=image」的视觉判定
+     * 正好靠它兜底。
+     */
+    static String fileTypeOf(String fileName, String fallback) {
+        if (fileName == null) return fallback;
+        int dot = fileName.lastIndexOf('.');
+        if (dot > 0 && dot < fileName.length() - 1) {
+            return fileName.substring(dot + 1).toLowerCase();
+        }
+        return fallback;
     }
 
     /** 落盘文件名 = 原名 + clientMediaId 前 8 位：既可读，又是跨轮重试的幂等锚点。 */

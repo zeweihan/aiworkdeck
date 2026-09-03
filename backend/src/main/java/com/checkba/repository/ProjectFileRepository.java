@@ -143,5 +143,14 @@ public interface ProjectFileRepository extends JpaRepository<ProjectFile, Long> 
             + "WHERE pf.projectId = :projectId AND pf.isDeleted = false")
     List<Object[]> findTreeSkeletonByProjectId(
             @org.springframework.data.repository.query.Param("projectId") Long projectId);
+
+    /**
+     * 按 fileType 精确取文件行（不含文件夹与软删除）。
+     *
+     * <p>只有一个用处：{@code MediaFileTypeReconciler} 修 dev-board#417 留下的存量脏行
+     * （file_type 被写成 image/video/audio 这类 mediaType 而不是扩展名）。
+     * fileType 是扩展名，正常值里不可能出现这三个词，所以按它取行既精确又不会误伤。
+     */
+    List<ProjectFile> findByFileTypeInAndIsFolderFalseAndIsDeletedFalse(List<String> fileTypes);
 }
 
