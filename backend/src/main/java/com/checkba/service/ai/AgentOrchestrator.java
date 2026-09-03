@@ -37,11 +37,37 @@ public class AgentOrchestrator {
     // 循环步数预算：达到上限时优雅收尾（保存进度 + 告知用户可继续），而不是静默中断
     private static final int MAX_LOOP_DEPTH = 30;
 
+    /**
+     * 整篇分段过卷进行中的步数预算硬上限（dev-board#422）。
+     *
+     * <p>30 步是给「常规多步任务」定的。分段过卷是<b>刻意的</b>多步推进——一块一步，
+     * 块数由文档长度决定（切块器上限 60 块）。恒 30 会让一份长文档的过卷跑到一半被迫暂停，
+     * 正是 #419 要根治的那种「一路正在操作文档到撞上限」换个位置复发。
+     * 所以过卷进行中把预算抬到 {@code min(30 + 块数, 120)}——抬得动，但仍有硬上限：
+     * 模型在过卷里打转时不能变成无限跑。达到上限仍走既有 paused/max_depth 语义，
+     * 过卷状态保留，用户点「继续」可接着跑。
+     */
+    private static final int PASS_MAX_LOOP_DEPTH = 120;
+
+    /** 本轮允许的步数预算：没有进行中的过卷时恒为 30。 */
+    static int maxLoopDepthFor(OfficePassStateStore passStateStore, String conversationId) {
+        int total = passStateStore == null ? 0 : passStateStore.totalChunks(conversationId);
+        if (total <= 0) {
+            return MAX_LOOP_DEPTH;
+        }
+        return Math.min(MAX_LOOP_DEPTH + total, PASS_MAX_LOOP_DEPTH);
+    }
+
     /** 步数预算耗尽的用户提示（抽成方法便于按应用语言断言，见 AgentTextLanguageTest）。 */
     static String maxDepthNotice() {
+        return maxDepthNotice(MAX_LOOP_DEPTH);
+    }
+
+    /** 同上，但按本轮实际生效的预算报数——过卷把预算抬高后，提示里的数字也要说实话。 */
+    static String maxDepthNotice(int budget) {
         return LangText.of(
-                "\n\n> 本轮已达最大执行步数（" + MAX_LOOP_DEPTH + " 步），先暂停。已完成的修改均已生效，点击下方「继续」按钮可接着执行剩余任务。",
-                "\n\n> This run reached the maximum step budget (" + MAX_LOOP_DEPTH + " steps) and is paused. All completed changes have taken effect; click the Continue button below to carry on with the remaining work.");
+                "\n\n> 本轮已达最大执行步数（" + budget + " 步），先暂停。已完成的修改均已生效，点击下方「继续」按钮可接着执行剩余任务。",
+                "\n\n> This run reached the maximum step budget (" + budget + " steps) and is paused. All completed changes have taken effect; click the Continue button below to carry on with the remaining work.");
     }
     // 工具连续失败达到该次数后，向模型注入强提示要求收敛
     private static final int CONSECUTIVE_FAILURE_NUDGE = 3;
@@ -135,6 +161,8 @@ public class AgentOrchestrator {
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
     private final com.checkba.service.telemetry.TelemetryTurnTracker telemetryTurnTracker;
     private final com.checkba.service.telemetry.MatterClassifierService matterClassifierService;
+    // 整篇分段过卷的游标状态（dev-board#422）：编排器只读它算本轮步数预算，取消时顺手清掉
+    private final OfficePassStateStore officePassStateStore;
 
     // ==================== 取消功能相关方法 ====================
 
@@ -212,6 +240,10 @@ public class AgentOrchestrator {
         }
         
         agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.CANCELLED);
+        // 用户点了停止：进行中的过卷也就此作废（dev-board#422）。
+        // 刻意只挂在取消路径上，不放进 clearCancelledState——那个方法每轮正常收尾都会调，
+        // 放进去会让「撞步数上限暂停、用户点继续」的续跑丢掉游标，从第 1 块重来。
+        officePassStateStore.clear(conversationId);
         // 发送取消事件
         sseEmitterService.send(conversationId, "cancelled",
                 "{\"message\":\"" + LangText.of("用户已停止生成", "Generation stopped by the user") + "\"}");
@@ -593,10 +625,12 @@ public class AgentOrchestrator {
             return;
         }
 
-        if (depth > MAX_LOOP_DEPTH) {
+        // 步数预算：常规 30 步；整篇分段过卷进行中抬到 min(30+块数,120)（dev-board#422）
+        int loopBudget = maxLoopDepthFor(officePassStateStore, conversationId);
+        if (depth > loopBudget) {
             // 步数预算耗尽：不是报错，而是"存档 + 请示"——保存进度、明确告知用户、干净收尾。
-            log.warn("Agent loop reached max depth {} for conversation {}, stopping gracefully", MAX_LOOP_DEPTH, conversationId);
-            String notice = maxDepthNotice();
+            log.warn("Agent loop reached max depth {} for conversation {}, stopping gracefully", loopBudget, conversationId);
+            String notice = maxDepthNotice(loopBudget);
             sendTextDelta(conversationId, notice);
             String persisted = (executionLog.length() > 0 ? executionLog.toString() : "") + notice;
             saveAssistantMessage(conversationId, projectId, userId, persisted);

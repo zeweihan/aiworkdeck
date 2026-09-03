@@ -435,6 +435,25 @@ class ContextAssemblerServiceTest {
     }
 
     @Test
+    @DisplayName("office+word 会话：整篇任务被要求走分段过卷 office_pass_step（dev-board#422）")
+    void wordSessionIsToldToUsePassStepForWholeDocumentWork() {
+        capabilityService.record("conv-1", "office", "word");
+
+        String systemText = assembleSystemText(officeDoc("第一条 甲方应承担违约责仁……"));
+        assertTrue(systemText.contains("office_pass_step"), "Word 面应点名分段过卷工具");
+        assertTrue(systemText.indexOf("必须用 office_pass_step 分块推进") > systemText.indexOf("绝不要整批重发"),
+                "过卷指引挂在 #419 那段之后（约束要挂末位）");
+
+        // Excel / PPT 宿主没有这个工具，不能对它们说
+        capabilityService.record("conv-1", "office", "excel");
+        assertFalse(assembleSystemText(officeDoc("名称\t金额")).contains("office_pass_step"),
+                "excel 会话不应点名 Word 面的过卷工具");
+        capabilityService.record("conv-1", "office", "powerpoint");
+        assertFalse(assembleSystemText(officeDoc("第1页：项目介绍")).contains("office_pass_step"),
+                "powerpoint 会话不应点名 Word 面的过卷工具");
+    }
+
+    @Test
     @DisplayName("office+excel 会话：提醒与活跃文档段改用 office_excel_* 口径，不点名 Word 面工具")
     void wordingSwitchesToExcelToolsForExcelHost() {
         capabilityService.record("conv-1", "office", "excel");

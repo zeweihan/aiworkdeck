@@ -204,7 +204,8 @@ public final class EvalHarness {
                         mock(com.checkba.repository.AgentRunRecordRepository.class), turnTracker),
                 workSessionService, failoverProperties, runLoopCompactor,
                 telemetry, turnTracker,
-                mock(com.checkba.service.telemetry.MatterClassifierService.class));
+                mock(com.checkba.service.telemetry.MatterClassifierService.class),
+                new com.checkba.service.ai.OfficePassStateStore());
 
         AiAgentController.AgentChatRequest request = new AiAgentController.AgentChatRequest();
         request.setProjectId(1L);

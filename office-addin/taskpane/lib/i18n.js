@@ -121,7 +121,9 @@ export const ZH = {
     + '按批注要求以修订模式修改其锚定的文字，改完用 reply_comment 回复说明改动；'
     + '全部处理完给我一张处理清单。',
   quickProofreadLabel: '校对错别字与病句',
-  quickProofreadText: '请校对当前文档的错别字与病句，以修订模式逐处修改，不改变原意。',
+  quickProofreadText:
+    '请分段过卷校对全文的错别字与病句，以修订模式逐处修改，不改变原意；'
+    + '每处理完一段就落笔，处理完再继续下一段，直到全文过完。',
 
   // ---- ChatView.vue：消息气泡 ----
   thinkingProcess: '思考过程',
@@ -130,6 +132,8 @@ export const ZH = {
   proceedWithPlan: '按此计划推进',
   proposeChanges: '提出修改意见',
   workingOnDocument: '正在操作文档…',
+  passProgress: '校对 {chunk}/{total} 段',
+  passProgressWithEdits: '校对 {chunk}/{total} 段 · 已改 {replaced} 处',
   preparingDocumentContent: '正在准备文档内容…',
   thinkingEllipsis: '正在思考…',
   locateInDocumentTitle: '在文档中定位：{text}',
@@ -300,6 +304,7 @@ export const ZH = {
   cmdSearch: '查找文本',
   cmdReplaceText: '替换文本（修订）',
   cmdReplaceBatch: '批量替换（修订）',
+  cmdPassStep: '分段过卷',
   cmdInsertText: '插入文本（修订）',
   cmdAddComment: '插入批注',
   cmdFormatText: '设置文字格式',
@@ -490,7 +495,10 @@ export const EN = {
     + 'edit the anchored text in track-changes mode as the comment requests, reply with reply_comment '
     + 'to explain the change, and give me a checklist once you\'re done with all of them.',
   quickProofreadLabel: 'Proofread for typos and grammar',
-  quickProofreadText: 'Please proofread the current document for typos and awkward phrasing, making edits in track-changes mode without changing the meaning.',
+  quickProofreadText:
+    'Please proofread the whole document for typos and awkward phrasing section by section, '
+    + 'making edits in track-changes mode without changing the meaning; apply the edits for each '
+    + 'section before moving on to the next, until the whole document is covered.',
 
   // ---- ChatView.vue：消息气泡 ----
   thinkingProcess: 'Thinking',
@@ -499,6 +507,8 @@ export const EN = {
   proceedWithPlan: 'Proceed with this plan',
   proposeChanges: 'Suggest changes',
   workingOnDocument: 'Working on the document…',
+  passProgress: 'Reviewing section {chunk} of {total}',
+  passProgressWithEdits: 'Reviewing section {chunk} of {total} · {replaced} edits applied',
   preparingDocumentContent: 'Preparing document content…',
   thinkingEllipsis: 'Thinking…',
   locateInDocumentTitle: 'Locate in document: {text}',
@@ -667,6 +677,7 @@ export const EN = {
   cmdSearch: 'Search text',
   cmdReplaceText: 'Replace text (tracked)',
   cmdReplaceBatch: 'Batch replace (tracked)',
+  cmdPassStep: 'Section-by-section pass',
   cmdInsertText: 'Insert text (tracked)',
   cmdAddComment: 'Add comment',
   cmdFormatText: 'Set text formatting',
