@@ -133,6 +133,7 @@ export default {
   uploadPartialResult: '{success} succeeded, {fail} failed',
   uploadFileFailedRetry: 'Failed to upload the file, please try again',
   uploadFailed: 'Upload failed',
+  uploadingCannotOpen: 'This file is still uploading; it can be opened once the upload finishes',
   chunkUnsupportedNonH5: 'Chunked resumable upload is not supported on this platform',
   uploadInterruptedRetry: 'Upload interrupted, please try again',
   uploadCanceled: 'Upload canceled',

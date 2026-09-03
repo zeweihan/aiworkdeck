@@ -35,7 +35,7 @@ const IMPORT_NAMES = [
   'groupByParent', 'buildTreeFromGroups', 'evidenceRefCounts', 'createRefCountsFetcher',
   'CircularProgress', 'warmDragImage', 'applyDragImage', 'FileTypeIcon', 'TagChip', 'TagSelector',
   'TagManager', 'AwdDatePicker', 'ICONS', 'getProjectTags', 'addTagToFile', 'removeTagFromFile',
-  'createTag', 'createTask',
+  'createTag', 'createTask', 'importLocalFile',
   'nativeDataTransfer', 'isExternalFileDrag', 'collectDroppedFiles', 'claimExternalDrop',
 ]
 
@@ -48,13 +48,22 @@ function loadOptions(stubs) {
   return factory(...args)
 }
 
-function makeVm({ moveFile, createFolder } = {}) {
-  const calls = { moveFile: [], confirmUpload: 0 }
+// desktopPaths: File 对象 → 本机绝对路径的映射（桌面壳 host.fs.getPathForFile 的桩）。
+// 不传 = 浏览器态，host.fs 整个缺席，恒退回 confirmUpload。
+function makeVm({ moveFile, createFolder, desktopPaths, importLocalFails } = {}) {
+  const calls = { moveFile: [], confirmUpload: 0, importLocal: [], loadFiles: 0, emits: [] }
   const stubs = {
     moveFile: async (...a) => { calls.moveFile.push(a); return { parentId: a[2] } },
     createFolder: createFolder || (async () => ({ id: 999 })),
     ICONS: {},
-    host: {},
+    host: desktopPaths
+      ? { fs: { getPathForFile: (f) => desktopPaths.get(f) || '' } }
+      : {},
+    importLocalFile: async (...a) => {
+      calls.importLocal.push(a)
+      if (importLocalFails) throw new Error('boom')
+      return { id: 100 + calls.importLocal.length }
+    },
     nativeDataTransfer, isExternalFileDrag, collectDroppedFiles, claimExternalDrop,
   }
   if (moveFile) stubs.moveFile = moveFile
@@ -63,10 +72,11 @@ function makeVm({ moveFile, createFolder } = {}) {
   for (const [k, fn] of Object.entries(options.methods)) vm[k] = fn.bind(vm)
   vm.projectId = 42
   vm.$t = (k) => k
-  vm.$emit = () => {}
+  vm.$emit = (...a) => { calls.emits.push(a) }
   vm.$el = null
-  vm.loadFiles = async () => {}
+  vm.loadFiles = async () => { calls.loadFiles += 1 }
   vm.confirmUpload = async () => { calls.confirmUpload += 1 }
+  vm.showErrorModal = () => {}
   vm.calls = calls
   return vm
 }
@@ -300,5 +310,116 @@ test('dragenter 带外部文件时点亮 externalDragActive（根投放区据此
     globalThis.window.event = { relatedTarget: null }
     vm.onTreeDragLeave(wrappedEvent())
     assert.equal(vm.externalDragActive, false)
+  } finally { restore() }
+})
+
+// ---------- 桌面端：拖入 = 复制进项目目录（dev-board#409） ----------
+
+test('桌面端拖入单个文件：走 import-local 复制进项目目录，不碰 confirmUpload，也不插乐观行', async () => {
+  const restore = installGlobals()
+  try {
+    const file = osFile('证据.pdf')
+    const vm = makeVm({ desktopPaths: new Map([[file, '/Users/me/tmp/证据.pdf']]) })
+    vm.windowedDisplayFiles = [folder, doc]
+    vm.displayFiles = [folder, doc]
+    vm.files = []
+    vm.allFiles = []
+
+    await vm.handleDrop(wrappedEvent({ dataTransfer: osDataTransfer([file]) }), 0)
+
+    assert.deepEqual(vm.calls.importLocal, [[42, '/Users/me/tmp/证据.pdf', 7]],
+      'projectId / 绝对路径 / 落点目录三样都要传对')
+    assert.equal(vm.calls.confirmUpload, 0, '不许再走 HTTP 上传那条路')
+    assert.equal(vm.calls.loadFiles, 1, '复制完刷新文件树')
+    assert.deepEqual(vm.files, [], '没有传输阶段就没有占位行')
+    assert.deepEqual(vm.allFiles, [])
+    assert.equal(Object.keys(vm.uploadStatusMap).length, 0, '不进上传列表')
+    assert.equal(vm.expandedFolders.has(7), true)
+  } finally { restore() }
+})
+
+test('桌面端拖到根投放区：parentId 传 null', async () => {
+  const restore = installGlobals()
+  try {
+    const file = osFile('a.pdf')
+    const vm = makeVm({ desktopPaths: new Map([[file, '/Users/me/a.pdf']]) })
+    await vm.onRootDrop(wrappedEvent({ dataTransfer: osDataTransfer([file]) }))
+    assert.deepEqual(vm.calls.importLocal, [[42, '/Users/me/a.pdf', null]])
+    assert.equal(vm.calls.confirmUpload, 0)
+  } finally { restore() }
+})
+
+test('浏览器端（拿不到路径）与 getPathForFile 返回空串：原样退回 confirmUpload', async () => {
+  const restore = installGlobals()
+  try {
+    // 浏览器：host.fs 整个缺席
+    const vm = makeVm()
+    vm.windowedDisplayFiles = [folder]
+    vm.displayFiles = [folder]
+    await vm.handleDrop(wrappedEvent({ dataTransfer: osDataTransfer([osFile('a.pdf')]) }), 0)
+    assert.equal(vm.calls.confirmUpload, 1)
+    assert.deepEqual(vm.calls.importLocal, [])
+
+    // 桌面壳在，但这个 File 解析不出路径（webUtils 返回空串）
+    const file = osFile('b.pdf')
+    const vm2 = makeVm({ desktopPaths: new Map() })
+    vm2.windowedDisplayFiles = [folder]
+    vm2.displayFiles = [folder]
+    await vm2.handleDrop(wrappedEvent({ dataTransfer: osDataTransfer([file]) }), 0)
+    assert.equal(vm2.calls.confirmUpload, 1)
+    assert.deepEqual(vm2.calls.importLocal, [])
+  } finally { restore() }
+})
+
+test('桌面端拖入整个文件夹：仍走 confirmUpload 建目录，不被 import-local 拍平', async () => {
+  const restore = installGlobals()
+  try {
+    const inner = osFile('1.pdf')
+    const entry = {
+      isFile: false, isDirectory: true, name: '证据',
+      createReader: () => {
+        let served = false
+        return { readEntries: (ok) => { const b = served ? [] : [{ isFile: true, isDirectory: false, name: '1.pdf', file: (cb) => cb(inner) }]; served = true; ok(b) } }
+      },
+    }
+    const vm = makeVm({ desktopPaths: new Map([[inner, '/Users/me/证据/1.pdf']]) })
+    vm.windowedDisplayFiles = [folder]
+    vm.displayFiles = [folder]
+    const dt = osDataTransfer([osFile('证据')], [{ kind: 'file', webkitGetAsEntry: () => entry }])
+    await vm.handleDrop(wrappedEvent({ dataTransfer: dt }), 0)
+    assert.deepEqual(vm.calls.importLocal, [], '带目录前缀的条目不能走 import-local')
+    assert.equal(vm.calls.confirmUpload, 1)
+    assert.deepEqual(vm.selectedFiles.map(f => f.relativePath), ['证据/1.pdf'])
+    assert.equal(vm.isFolderUpload, true)
+  } finally { restore() }
+})
+
+test('import-local 失败：照样刷新文件树，且不偷偷退回 HTTP 上传', async () => {
+  const restore = installGlobals()
+  try {
+    const file = osFile('证据.pdf')
+    const vm = makeVm({ desktopPaths: new Map([[file, '/Users/me/证据.pdf']]), importLocalFails: true })
+    await vm.onRootDrop(wrappedEvent({ dataTransfer: osDataTransfer([file]) }))
+    assert.equal(vm.calls.importLocal.length, 1)
+    assert.equal(vm.calls.confirmUpload, 0)
+    assert.equal(vm.calls.loadFiles, 1)
+  } finally { restore() }
+})
+
+// ---------- 上传中的占位行不许打开（dev-board#409） ----------
+
+test('上传进度 < 100 的行点不开：不发 file-select', () => {
+  const restore = installGlobals()
+  try {
+    const vm = makeVm()
+    vm.uploadStatusMap[doc.id] = { progress: 42 }
+    vm.handleItemClick(doc, {})
+    assert.deepEqual(vm.calls.emits.filter(e => e[0] === 'file-select'), [], '字节还没到，不许交给编辑器打开')
+    assert.notEqual(vm.selectedFileId, doc.id)
+
+    // 传完了照常能打开
+    vm.uploadStatusMap[doc.id] = { progress: 100 }
+    vm.handleItemClick(doc, {})
+    assert.equal(vm.calls.emits.filter(e => e[0] === 'file-select').length, 1)
   } finally { restore() }
 })

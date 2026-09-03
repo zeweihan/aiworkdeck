@@ -23,12 +23,23 @@ import java.util.stream.Collectors;
 @RestController
 @RequestMapping("/api/projects/{projectId}/files")
 @RequiredArgsConstructor
+@lombok.extern.slf4j.Slf4j
 public class ProjectFileController {
 
     private final ProjectFileService projectFileService;
     private final ProjectMemberService projectMemberService;
     private final FileTagService fileTagService;
     private final com.checkba.service.quota.StageQuotaService stageQuotaService;
+    /** 导入本机文件后的后置钩子，与 FileController.uploadFile 上传完成时同源。 */
+    private final com.checkba.service.ai.ProjectRagService projectRagService;
+    private final com.checkba.service.ai.AutoTaggingService autoTaggingService;
+
+    /**
+     * 单机模式判别位。import-local 让调用方指名服务器磁盘上的绝对路径，
+     * 只有「服务器就是用户这台电脑」时才成立，故仅 desktop profile 打开。
+     */
+    @org.springframework.beans.factory.annotation.Value("${security.local-mode:false}")
+    private boolean localMode;
 
     /**
      * 文件缓存区用量（前端顶部用量条的数据源）。
@@ -237,6 +248,56 @@ public class ProjectFileController {
                 request.getWpsFileId(),
                 userId
         );
+    }
+
+    /**
+     * 从本机绝对路径复制一个文件进项目（桌面端「拖入资源管理器 = 复制进项目目录」，dev-board#409）。
+     * POST /api/projects/{projectId}/files/import-local  body: { sourcePath, parentId }
+     *
+     * <p>只在单机模式（{@code security.local-mode=true}）开放。这条接口让调用方指名一个
+     * 服务器上的绝对路径去读，只有在「服务器就是用户自己这台电脑」时才成立——local-mode
+     * 由 {@code LocalModeLoopbackGuard} 强制绑回环、{@code LocalModeAccessFilter} 逐请求
+     * 校验来源，请求只可能来自本机。团队服务器上开着它，等于让任意成员把服务器磁盘上的
+     * 任意文件复制进自己的项目（同 open-local 那道闸的理由）。
+     *
+     * <p>返回创建出来的文件行；后置钩子（RAG 增量索引 + 自动打标签）与
+     * {@code FileController.uploadFile} 上传完成时完全一致。
+     */
+    @PostMapping("/import-local")
+    public ProjectFile importLocal(
+            @PathVariable Long projectId,
+            @RequestBody ImportLocalRequest request,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = getUserIdFromSession(sessionId);
+        if (userId == null) {
+            throw new UnauthorizedException("请先登录");
+        }
+        if (!localMode) {
+            throw new IllegalArgumentException(com.checkba.service.LangText.of(
+                    "当前部署不支持从本机路径导入文件", "This deployment does not support importing files from a local path"));
+        }
+        checkFileWriteAccess(projectId, userId);
+        checkParentFolder(request.getParentId(), projectId);
+
+        ProjectFile created = projectFileService.importLocalFile(
+                projectId, request.getParentId(), request.getSourcePath(), userId);
+
+        // 与上传完成后同一套异步钩子（同步跑会把大文档的索引耗时挂在这次请求上）
+        final String storagePath = created.getFilePath();
+        final Long fileId = created.getId();
+        java.util.concurrent.CompletableFuture.runAsync(() -> {
+            try {
+                projectRagService.refreshProjectKnowledgeIncremental(String.valueOf(projectId), storagePath);
+            } catch (Exception e) {
+                log.error("导入本机文件后 RAG 索引失败: {}", storagePath, e);
+            }
+            try {
+                autoTaggingService.autoTagFile(projectId, fileId, storagePath, userId);
+            } catch (Exception e) {
+                log.error("导入本机文件后自动打标签失败: {}", storagePath, e);
+            }
+        });
+        return created;
     }
 
     /**
@@ -479,6 +540,16 @@ public class ProjectFileController {
         public void setFileSize(Long fileSize) { this.fileSize = fileSize; }
         public String getWpsFileId() { return wpsFileId; }
         public void setWpsFileId(String wpsFileId) { this.wpsFileId = wpsFileId; }
+    }
+
+    static class ImportLocalRequest {
+        private String sourcePath;
+        private Long parentId;
+
+        public String getSourcePath() { return sourcePath; }
+        public void setSourcePath(String sourcePath) { this.sourcePath = sourcePath; }
+        public Long getParentId() { return parentId; }
+        public void setParentId(Long parentId) { this.parentId = parentId; }
     }
 
     static class RenameRequest {

@@ -133,6 +133,7 @@ export default {
   uploadPartialResult: '成功 {success} 个，失败 {fail} 个',
   uploadFileFailedRetry: '文件上传失败，请重试',
   uploadFailed: '上传失败',
+  uploadingCannotOpen: '文件还在上传中，传完才能打开',
   chunkUnsupportedNonH5: '非H5端暂不支持分片断点续传',
   uploadInterruptedRetry: '上传中断，请重试',
   uploadCanceled: '已取消上传',

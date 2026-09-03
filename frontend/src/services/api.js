@@ -1697,6 +1697,22 @@ export function createFile(projectId, parentId, name, fileType, fileSize, filePa
   });
 }
 
+// 从本机绝对路径复制一个文件进项目目录（桌面端拖入资源管理器，dev-board#409）。
+// 只有单机模式的后端接受它；浏览器端拿不到路径，走 createFile + /upload 那条老路。
+export function importLocalFile(projectId, sourcePath, parentId) {
+  return request({
+    url: `/api/projects/${projectId}/files/import-local`,
+    method: 'POST',
+    data: {
+      sourcePath,
+      parentId,
+    },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
 // 重命名文件或文件夹
 export function renameFile(projectId, fileId, name) {
   return request({
@@ -2683,6 +2699,7 @@ export default {
   getProjectFiles,
   createFolder,
   createFile,
+  importLocalFile,
   renameFile,
   deleteFile,
   moveFile,

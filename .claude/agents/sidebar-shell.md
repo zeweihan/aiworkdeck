@@ -195,6 +195,34 @@ drop 的同步阶段取）+ `claimExternalDrop(native)`（同一原生事件在�
 drop 现在**对落点在 `.file-tree` 里的事件让路**——拖文件夹进目录节点是上传进去。
 单测 `tests/project-home/file-tree-external-drop.test.mjs`（`npm run test:project-home`）。
 
+**落点定了之后分两条路（dev-board#409，2026-09-03）**：桌面端凡是能解析出本机绝对路径的
+单个文件（`host.fs.getPathForFile`，Electron 的 webUtils），走
+**`POST /api/projects/{id}/files/import-local`**（`{sourcePath, parentId}`，
+`ProjectFileController.importLocal` → `ProjectFileService.importLocalFile`），
+让后端把那个文件**复制**进项目目录；其余（浏览器 H5、解析不出路径、**整个文件夹拖进来**
+——`relativePath` 带目录前缀的一律留给 confirmUpload，import-local 一次只收一个文件、
+不建目录，走它会把目录结构拍平）仍走 `confirmUpload`。
+理由是老路那两颗雷：① 微信/Finder 拖过来的 File 指向那一次拖拽的临时目录，等
+`createFile` 那一趟往返回来 blob 常常已经失效（Chromium `ERR_UPLOAD_FILE_CHANGED`，
+xhr 只给一句 `Network Error`，后端看到 `ClientAbortException`），三次重试全挂；
+② `createFile` 早就按模板物化出一份空白 docx 躺在用户目录里，那行还点得开，
+编辑器把空白模板当正文加载、自动保存再写回磁盘——同名时是**静默的内容丢失**。
+桌面端项目本来就是本机的一个文件夹，同机 copy 既没有这个窗口，也不必让 5GB 证据包
+绕一圈 HTTP。import-local **只在 `security.local-mode=true` 开放**（它让调用方指名
+服务器磁盘上的绝对路径，只有「服务器就是用户这台电脑」时才成立；同 open-local 那道闸的
+理由），拒符号链接/目录/不存在的路径，同名仍是**报错**（与普通上传逐字一致，不改名不覆盖），
+行由 `createFile` 建、后置钩子（RAG 增量索引 + 自动打标签）与上传完成时同源。
+**这条路径不插乐观行**——没有传输阶段，返回时字节已经在目录里，`loadFiles()` 一刷即最终形态。
+
+**分片上传通道（H5/远端仍在用）同轮加固两处**：重试用尽后 `discardFailedUpload` 会把
+`createFile` 建出的**空白占位行删掉**（此前刻意保留以便重试，代价是用户目录里长期躺着
+5KB 假文件）；`handleItemClick` 顶部新增闸——`uploadStatusMap[id].progress < 100` 的行
+**不发 `file-select`**（模板里那条 `text-muted` 只是视觉提示，闸必须在唯一出口上）。
+另外裸 body 分片请求不再把 `getAuthHeaders()` 的 `application/json` 一起抄进去
+（XHR 的 `setRequestHeader` 对同名头是追加不是覆盖，此前实际发出的是
+`application/json, application/octet-stream`）。
+后端测试 `ProjectFileServiceImportLocalTest` / `ProjectFileControllerImportLocalTest`。
+
 ## 顶栏头像与统一「设置」标签（2026-08-19 立，2026-08-20 并，2026-08-21 撤下拉）
 
 rail 底部的**齿轮与用户头像都撤了**，收进顶栏右上角「活动记录」右侧的
