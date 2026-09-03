@@ -42,7 +42,12 @@ import java.util.List;
  *
  * <p><b>刻意不建模的两件事</b>：① 提示缓存命中价（{@code input_cache_read}，本枚举里多数模型都有，
  * 约为输入价的 1/10）——langchain4j 0.36 的 TokenUsage 只回 input/output 两个数，
- * 拿不到命中 token 数，无法建模，因此估算值对命中缓存的轮次会偏高；
+ * 因此估算值对命中缓存的轮次会偏高。
+ * <b>2026-09-03 更新</b>：流式通道已经能拿到命中 token 数了
+ * （{@code OpenRouterStreamingChatModel} 从原始 JSON 读 {@code prompt_tokens_details.cached_tokens}，
+ * 经 {@code ReasoningStreamingHandler.onCacheUsage} 打 info 日志），但**只是可观测，没有接进计费**——
+ * 非流式的辅助模型调用仍然拿不到，且要建模就得把「写入价 1.25x / 读取价 0.1x」两档一起加进
+ * {@link PriceTier}，是单独一张卡。别因为日志里有这个数就以为估算已经算准了；
  * ② {@code toolCalling} 字段——白名单里全部支持 tools 是构造性保证，
  * 由联网对拍测试 {@code AllowedModelsLiveContractTest} 守（需 {@code RUN_LIVE_MODEL_CHECK=1}），
  * 加一个恒为 true 的字段没有消费者。

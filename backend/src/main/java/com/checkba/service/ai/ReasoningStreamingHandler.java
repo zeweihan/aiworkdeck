@@ -28,4 +28,23 @@ public interface ReasoningStreamingHandler extends StreamingResponseHandler<AiMe
      */
     default void onKeepAlive() {
     }
+
+    /**
+     * 本轮的提示缓存用量（只在上游真的回了缓存字段时调一次）。
+     *
+     * <p>为什么不走 {@code Response.tokenUsage()}：langchain4j 0.36 的 {@code TokenUsage}
+     * 只有 input/output/total 三个数，openai4j 0.23 的 {@code Usage} 也只多一个
+     * {@code completion_tokens_details}——{@code prompt_tokens_details.cached_tokens}
+     * 在反序列化那一刻就被丢掉了，只能从原始 JSON 里读。
+     *
+     * <p>为什么挂在 handler 上而不在通道里直接打日志：模型实例按
+     * (key, baseUrl, modelId) 缓存、跨会话共享，拿不到 conversationId；
+     * 而 {@code AgentStreamHandler} 每轮新建，会话 id 就在它手里。
+     *
+     * @param promptTokens     本轮输入 token 总数
+     * @param cachedTokens     其中从缓存读到的（按缓存读价计，约为输入价的 1/10）
+     * @param cacheWriteTokens 本轮写入缓存的（5 分钟 TTL 按输入价 1.25x 计）
+     */
+    default void onCacheUsage(int promptTokens, int cachedTokens, int cacheWriteTokens) {
+    }
 }
