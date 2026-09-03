@@ -285,6 +285,91 @@ public class ProjectFileService {
         return savedFile;
     }
 
+    /** 单个项目的文件总量上限，与 FileController.uploadFile 那道闸同一个数（20GB）。 */
+    private static final long PROJECT_TOTAL_SIZE_LIMIT = 20L * 1024 * 1024 * 1024;
+
+    /**
+     * 从本机绝对路径复制一份进项目目录（dev-board#409：桌面端「拖入 = 复制进来」）。
+     *
+     * <p>为什么不走 HTTP 上传：桌面端项目就是本机的一个文件夹，而微信/Finder 拖过来的
+     * File 对象指向的是那一次拖拽的临时目录——等 createFile 那一趟往返回来，blob 常常
+     * 已经失效（Chromium 报 ERR_UPLOAD_FILE_CHANGED，xhr 只给一句 Network Error），
+     * 于是三次重试全挂，而 createFile 已经按模板物化出的空白 docx 就那么留在用户目录里。
+     * 同一台机器上把字节 copy 过去既没有这个窗口，也不必让 5GB 的证据包在本机绕一圈 HTTP。
+     *
+     * <p>除了字节来源，其余一律与「一次传完的上传」等同：行由 {@link #createFile} 建
+     * （filePath 服务端生成、同名仍是 FAIL、signalChange 照发），随后覆盖模板落盘并回写
+     * 大小与修改时间。落盘失败时把模板文件删掉再抛——事务回滚掉数据库行，用户目录里
+     * 也不留空白占位。
+     */
+    @Transactional
+    public ProjectFile importLocalFile(Long projectId, Long parentId, String sourcePath, Long userId) {
+        if (projectId == null) {
+            throw new IllegalArgumentException(LangText.of("项目 ID 不能为空", "Project ID must not be empty"));
+        }
+        if (userId == null) {
+            throw new IllegalArgumentException(LangText.of("用户 ID 不能为空", "User ID must not be empty"));
+        }
+        if (!StringUtils.hasText(sourcePath)) {
+            throw new IllegalArgumentException(LangText.of("源文件路径不能为空", "Source path must not be empty"));
+        }
+        java.nio.file.Path source;
+        try {
+            source = java.nio.file.Paths.get(sourcePath).normalize();
+        } catch (Exception e) {
+            throw new IllegalArgumentException(LangText.of("源文件路径非法: ", "Invalid source path: ") + sourcePath);
+        }
+        if (!source.isAbsolute()) {
+            throw new IllegalArgumentException(LangText.of("源文件路径必须是绝对路径: ", "Source path must be absolute: ") + sourcePath);
+        }
+        // 符号链接不跟随：跟随了就等于允许调用方拿一个链接把项目目录外的任意文件复制进来。
+        // 只看末段——祖先目录是链接是常态（macOS 的 /var -> /private/var 就是），拿
+        // toRealPath 去比会把正常的临时目录路径一并误伤。
+        if (java.nio.file.Files.isSymbolicLink(source)) {
+            throw new IllegalArgumentException(LangText.of("不支持导入符号链接: ", "Symbolic links are not supported: ") + sourcePath);
+        }
+        if (!java.nio.file.Files.isRegularFile(source, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            // 目录与不存在的路径都落在这里：这条通道一次只收一个普通文件
+            throw new IllegalArgumentException(LangText.of("源文件不存在或不是普通文件: ", "Source file does not exist or is not a regular file: ") + sourcePath);
+        }
+        long size;
+        try {
+            size = java.nio.file.Files.size(source);
+        } catch (java.io.IOException e) {
+            throw new IllegalArgumentException(LangText.of("无法读取源文件: ", "Cannot read source file: ") + sourcePath);
+        }
+        Long total = projectFileRepository.sumSizeByProjectId(projectId);
+        if (total != null && total + size > PROJECT_TOTAL_SIZE_LIMIT) {
+            throw new IllegalArgumentException(LangText.of("项目文件总大小超过20GB限制", "Project file storage exceeds the 20GB limit"));
+        }
+
+        String name = source.getFileName().toString();
+        int dot = name.lastIndexOf('.');
+        String ext = dot > 0 ? name.substring(dot + 1).toLowerCase() : "";
+        // wpsFileId 的形状与前端上传通道生成的一致（project_{pid}_doc_{ts}_{rand}），
+        // 编辑器/上传接口的双查逻辑对两条路径没有区别
+        String wpsFileId = "project_" + projectId + "_doc_" + System.currentTimeMillis()
+                + "_" + UUID.randomUUID().toString().substring(0, 7);
+
+        ProjectFile created = createFile(projectId, parentId, name, ext, size, null, wpsFileId, userId);
+
+        try (java.io.InputStream in = java.nio.file.Files.newInputStream(source)) {
+            storageServiceFactory.getStorageService().save(created.getFilePath(), in);
+        } catch (Exception e) {
+            log.warn("导入本机文件失败，回滚: source={}, target={}", sourcePath, created.getFilePath(), e);
+            try {
+                storageServiceFactory.getStorageService().delete(created.getFilePath());
+            } catch (Exception ignored) {
+                // 删不掉不影响「这次导入失败」这个结论
+            }
+            throw new IllegalArgumentException(LangText.of("复制文件失败: ", "Failed to copy file: ") + name);
+        }
+
+        created.setFileSize(size);
+        created.setUpdatedAt(LocalDateTime.now());
+        return projectFileRepository.save(created);
+    }
+
     /**
      * RENAME 策略：同名时在扩展名前插入 " (n)" 直到不冲突，上限 1000 次尝试
      * （超出后大概率是查询本身有问题，抛错比死循环/无限重试更安全）。
