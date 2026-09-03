@@ -1,0 +1,124 @@
+# Python 运行时 / pysvc / graphviz 缓存的「暖桶」作业。
+#
+# ## 为什么需要单独一个 workflow
+# GitHub Actions 的缓存**按 ref 隔离**：一次运行只能读到「同一分支」或「默认分支」
+# 产生的缓存。而 desktop-build.yml 只在 tag 与 PR 上触发，从不在 master 上跑——
+# 于是它写出来的缓存全都挂在 tag 或 PR 的 ref 上，**对后续 PR 一个都读不到**。
+# 2026-08-18 加完缓存后实测就是这样：缓存写入成功、体积也对，但没有任何 PR 命中过。
+#
+# 这个作业专门在 master 上把缓存写进默认分支，之后所有 PR 才真的能命中。
+#
+# ## 触发条件为什么这么窄
+# 缓存内容只由 requirements.lock 与两个打包脚本决定（与 desktop-build.yml 里那条
+# cache 的 key 完全一致）。这些文件很少动，所以这个作业平时根本不跑；
+# 一旦动了就重建一次，之后的 PR 全部受益。
+#
+# ## 与 desktop-build.yml 的关系
+# **path 与 key 必须与那边的 cache 步骤逐字一致**，否则写进来的桶那边读不到。
+# 改任一边都要同步改另一边——这是这两个文件之间唯一的耦合点。
+name: 暖缓存（master）
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '*/requirements.lock'
+      - 'desktop/scripts/prepare-python-service.js'
+      - 'desktop/scripts/prepare-graphviz.js'
+      - '.github/workflows/cache-warm.yml'
+  workflow_dispatch:
+
+jobs:
+  warm:
+    name: 暖缓存 (${{ matrix.plat }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, plat: mac-arm64 }
+          - { os: windows-latest, plat: win-x64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # 命中就整个作业没事干——说明当前 lock 对应的桶已经在默认分支上了
+      - name: Cache python runtime / pysvc / graphviz
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            desktop/bundled/${{ matrix.plat }}/python
+            desktop/bundled/${{ matrix.plat }}/pysvc
+            desktop/bundled/${{ matrix.plat }}/graphviz
+          key: v1-${{ matrix.plat }}-pybundle-${{ hashFiles('*/requirements.lock', 'desktop/scripts/prepare-python-service.js', 'desktop/scripts/prepare-graphviz.js') }}
+
+      # 从 desktop-build.yml **解析**出各服务的真实参数再执行，不在这里另写一份。
+      # 手抄必然漂：写这个文件时我就把 pptx 的 --src 抄错了（它是 pptx-service/backend
+      # 不是 pptx-service），而漂掉的后果是暖出来的桶与构建期需要的不是同一个东西——
+      # CI 全绿，只是缓存永远命不中，或者更糟：命中了但内容不对。
+      - name: Bundle python services（参数取自 desktop-build.yml）
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -e
+          node -e '
+            const fs = require("fs");
+            const wf = fs.readFileSync(".github/workflows/desktop-build.yml", "utf8");
+            const plat = process.argv[1];
+            // 取该平台那一组 Bundle <svc>-service 步骤里的 --service / --src / --requirements
+            const suffix = plat === "mac-arm64" ? "macOS arm64" : "Windows x64";
+            const re = new RegExp(
+              "- name: Bundle ([a-z]+-service) \\(" + suffix.replace(/[()]/g, "\\$&") + "\\)([\\s\\S]*?)--out",
+              "g");
+            const cmds = [];
+            let m;
+            while ((m = re.exec(wf)) !== null) {
+              const body = m[2];
+              const grab = (flag) => (body.match(new RegExp("--" + flag + "\\s+(\\S+)")) || [])[1];
+              cmds.push({ service: grab("service"), src: grab("src"), requirements: grab("requirements") });
+            }
+            if (cmds.length !== 4) {
+              console.error("从 desktop-build.yml 解析出 " + cmds.length + " 个服务，期望 4——两边结构已漂，先对齐再跑");
+              process.exit(1);
+            }
+            for (const c of cmds) {
+              const args = ["--service", c.service];
+              if (c.src) args.push("--src", c.src);
+              args.push("--requirements", c.requirements, "--out", "desktop/bundled/" + plat);
+              console.log("prepare-python-service " + args.join(" "));
+              require("child_process").execFileSync("node",
+                ["desktop/scripts/prepare-python-service.js", ...args], { stdio: "inherit" });
+            }
+          ' "${{ matrix.plat }}"
+
+      - name: Bundle graphviz (macOS)
+        if: steps.cache.outputs.cache-hit != 'true' && runner.os == 'macOS'
+        run: |
+          brew install graphviz
+          node desktop/scripts/prepare-graphviz.js --out desktop/bundled/${{ matrix.plat }}
+
+      - name: Bundle graphviz (Windows)
+        if: steps.cache.outputs.cache-hit != 'true' && runner.os == 'Windows'
+        shell: bash
+        run: |
+          # choco 社区源对 CI runner 限流严重，带退避重试（同 desktop-build.yml）
+          for attempt in 1 2 3 4 5; do
+            choco install graphviz --no-progress -y && break
+            [ "$attempt" = "5" ] && { echo "choco 重试耗尽"; exit 1; }
+            sleep $((attempt * 15))
+          done
+          node desktop/scripts/prepare-graphviz.js --out desktop/bundled/${{ matrix.plat }}
+
+      - name: 结果
+        shell: bash
+        run: |
+          if [ "${{ steps.cache.outputs.cache-hit }}" = "true" ]; then
+            echo "缓存已在默认分支上，无需重建"
+          else
+            echo "已重建并写入默认分支的缓存桶，后续 PR 可命中"
+            du -sh desktop/bundled/${{ matrix.plat }}/* 2>/dev/null || true
+          fi
