@@ -164,6 +164,20 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
         lastActivityNanos = System.nanoTime();
     }
 
+    /**
+     * 提示缓存命中情况：只打一条 info 日志，<b>不参与计费</b>。
+     *
+     * <p>BYOK 的成本估算仍按 {@link AllowedModels} 的单价表算全价，命中缓存的轮次会偏高
+     * （已知偏差，见 {@code TokenUsageService.calculateCost} 的注释）；平台通道走真实扣费对账，
+     * 天然精确。把缓存读价建模进单价表是另一张卡，这里只提供「到底有没有命中」的判据——
+     * 没有它，system prompt 里任何一个每轮变化的字节都会让缓存永久不命中而无人知晓。
+     */
+    @Override
+    public void onCacheUsage(int promptTokens, int cachedTokens, int cacheWriteTokens) {
+        log.info("Prompt cache conv={} model={} promptTokens={} cachedTokens={} cacheWriteTokens={}",
+                conversationId, modelId, promptTokens, cachedTokens, cacheWriteTokens);
+    }
+
     public boolean hasStreamedReasoning() {
         return streamedAnyReasoning;
     }

@@ -37,6 +37,23 @@ public class ContextAssemblerService {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ContextAssemblerService.class);
 
     private final LegalTools legalTools;
+    /**
+     * 系统消息里「稳定段 / 易变段」的分界标记，恰好出现一次。
+     *
+     * <p><b>唯一消费者是通道层</b>：{@link OpenRouterStreamingChatModel} 按它把 system 拆成两个
+     * content block，只给第一块（指令主体 + 内联正文）打 Anthropic/Qwen 的
+     * {@code cache_control: ephemeral}；标记本身在发出前被摘掉，模型永远看不到它。
+     *
+     * <p><b>为什么必须有这条线</b>：提示缓存按前缀逐字节匹配。而 system 里注入的当前时间是
+     * <b>秒级</b>的，还有会话阶段、任务/计划 id、以及按 userPrompt 现查的相关记忆——
+     * 这些每轮都不一样。它们只要待在前缀里，缓存就永远不命中，
+     * <b>而且不会报错、只会静默按全价计费</b>。所以规矩是：
+     * <b>凡是每轮可能变的内容，一律 append 到这个标记之后。</b>
+     *
+     * <p>取值刻意长成 HTML 注释：万一哪天漏摘了发给模型，它也只是一段无害的注释。
+     */
+    public static final String SYSTEM_VOLATILE_SEPARATOR = "\n\n<!-- awd:volatile -->\n";
+
     private final ProjectAiMessageService messageService;
     private final FileContextLoader fileContextLoader;
     private final AiContextProperties contextProperties;
@@ -204,45 +221,51 @@ public class ContextAssemblerService {
         }
 
         // [Injection] State with Phase
-        systemText.append("\n\n# Current Context\n[SYSTEM INJECTION]");
-        
+        //
+        // **这一段以下全部写进 volatileText，不写 systemText**：秒级时间戳、会话阶段、
+        // 任务/计划 id 每轮都变，留在前缀里会让 Anthropic/Qwen 的提示缓存永远不命中
+        // （静默多花钱，不报错）。volatileText 在最后跟着 SYSTEM_VOLATILE_SEPARATOR 一起拼到末尾。
+        // 拼接顺序不变（这一段仍在指令主体之后），只是整体挪到了 system 的末尾。
+        StringBuilder volatileText = new StringBuilder();
+        volatileText.append("\n\n# Current Context\n[SYSTEM INJECTION]");
+
         // CRITICAL: Inject current system time (important for legal/financial data accuracy)
         // 时区两版都固定 Asia/Shanghai（英文版改用户时区是另一个问题，本 PR 不扩权）。
         java.time.ZonedDateTime now = java.time.ZonedDateTime.now(java.time.ZoneId.of("Asia/Shanghai"));
         if (english) {
             String formattedTime = now.format(java.time.format.DateTimeFormatter.ofPattern("MMMM d, yyyy HH:mm:ss (EEEE)", java.util.Locale.ENGLISH));
-            systemText.append("\n- **Current System Time**: ").append(formattedTime);
-            systemText.append("\n  - This is the actual current time. Every query involving \"latest\", \"recent\", or \"current\" data must be judged against it.");
-            systemText.append("\n  - If retrieved data is dated materially earlier than this time (e.g. a stock closing price should be from the most recent trading day), state the data's actual date explicitly to the user.");
+            volatileText.append("\n- **Current System Time**: ").append(formattedTime);
+            volatileText.append("\n  - This is the actual current time. Every query involving \"latest\", \"recent\", or \"current\" data must be judged against it.");
+            volatileText.append("\n  - If retrieved data is dated materially earlier than this time (e.g. a stock closing price should be from the most recent trading day), state the data's actual date explicitly to the user.");
         } else {
         String formattedTime = now.format(java.time.format.DateTimeFormatter.ofPattern("yyyy年MM月dd日 HH:mm:ss (EEEE)", java.util.Locale.CHINESE));
-        systemText.append("\n- **Current System Time**: ").append(formattedTime);
-        systemText.append("\n  - 这是当前真实时间，所有涉及\"最新\"、\"最近\"、\"当前\"的数据查询必须基于此时间判断。");
-        systemText.append("\n  - 如果查询的数据日期早于此时间超过合理范围（如股票收盘价应为最近交易日），请明确告知用户数据的实际日期。");
+        volatileText.append("\n- **Current System Time**: ").append(formattedTime);
+        volatileText.append("\n  - 这是当前真实时间，所有涉及\"最新\"、\"最近\"、\"当前\"的数据查询必须基于此时间判断。");
+        volatileText.append("\n  - 如果查询的数据日期早于此时间超过合理范围（如股票收盘价应为最近交易日），请明确告知用户数据的实际日期。");
         }
         
-        systemText.append("\n- **Current Agent Mode**: ").append(agentMode != null ? agentMode.name() : "AGENT");
-        systemText.append("\n- Current Phase: ").append(currentPhase);
-        systemText.append("\n- Current Project ID: ").append(projectId != null ? projectId : "unknown");
-        systemText.append("\n- Current Task List ID: ").append(taskListId != null ? taskListId : "null");
-        systemText.append("\n- Current Plan ID: ").append(planId != null ? planId : "null");
+        volatileText.append("\n- **Current Agent Mode**: ").append(agentMode != null ? agentMode.name() : "AGENT");
+        volatileText.append("\n- Current Phase: ").append(currentPhase);
+        volatileText.append("\n- Current Project ID: ").append(projectId != null ? projectId : "unknown");
+        volatileText.append("\n- Current Task List ID: ").append(taskListId != null ? taskListId : "null");
+        volatileText.append("\n- Current Plan ID: ").append(planId != null ? planId : "null");
 
         // Phase-specific instructions
-        systemText.append("\n\n## Phase Instructions\n");
+        volatileText.append("\n\n## Phase Instructions\n");
         switch (currentPhase) {
             case "PLAN":
-                systemText.append("- You are in PLANNING phase. Output `implementation_plan` if task is complex, then STOP.\n");
-                systemText.append("- Do NOT execute tools until user approves the plan.\n");
+                volatileText.append("- You are in PLANNING phase. Output `implementation_plan` if task is complex, then STOP.\n");
+                volatileText.append("- Do NOT execute tools until user approves the plan.\n");
                 break;
             case "EXECUTE":
-                systemText.append("- You are in EXECUTION phase. The plan has been approved.\n");
-                systemText.append("- Output `task_list` first (optional), then execute tools.\n");
-                systemText.append("- After completion, output `<final>` with main answer.\n");
+                volatileText.append("- You are in EXECUTION phase. The plan has been approved.\n");
+                volatileText.append("- Output `task_list` first (optional), then execute tools.\n");
+                volatileText.append("- After completion, output `<final>` with main answer.\n");
                 break;
             case "CHAT":
             default:
-                systemText.append("- Simple chat/Q&A mode. Just respond directly.\n");
-                systemText.append("- If task becomes complex, switch to PLAN phase.\n");
+                volatileText.append("- Simple chat/Q&A mode. Just respond directly.\n");
+                volatileText.append("- If task becomes complex, switch to PLAN phase.\n");
                 break;
         }
 
@@ -536,6 +559,11 @@ public class ContextAssemblerService {
         }
 
         // 2. 注入项目记忆（如果存在）
+        //
+        // **记忆三段也全部写 volatileText**：retrieveMemories 是按 userPrompt 现查的
+        // （每轮问题不同结果就不同），且排序带随机项，所以同一个问题两次的结果都可能不一样。
+        // 留在稳定前缀里等于「有记忆的项目永远命中不了缓存」——正是本次要治的病。
+        // 位置仍是 system 末尾，模型读到的相对顺序没变。
         Long projectIdLong = null;
         try {
             projectIdLong = projectId != null ? Long.parseLong(projectId) : null;
@@ -547,16 +575,16 @@ public class ContextAssemblerService {
             Optional<ProjectMemory> projectMemoryOpt = memoryManager.getProjectMemory(projectIdLong);
             if (projectMemoryOpt.isPresent()) {
                 ProjectMemory pm = projectMemoryOpt.get();
-                systemText.append(english ? "\n\n# Project Memory (long-term)\n" : "\n\n# 项目记忆（长期记忆）\n");
-                systemText.append(pm.toCoreContext());
+                volatileText.append(english ? "\n\n# Project Memory (long-term)\n" : "\n\n# 项目记忆（长期记忆）\n");
+                volatileText.append(pm.toCoreContext());
             }
             
             // 注入相关的结构化记忆
             List<MemoryEntry> relevantMemories = memoryManager.retrieveMemories(
                     projectIdLong, userPrompt, null, 5);
             if (!relevantMemories.isEmpty()) {
-                systemText.append(english ? "\n\n# Relevant Memories (evidence ledger)\n" : "\n\n# 相关记忆（证据账本）\n");
-                systemText.append(memoryManager.formatAsEvidenceLedger(relevantMemories));
+                volatileText.append(english ? "\n\n# Relevant Memories (evidence ledger)\n" : "\n\n# 相关记忆（证据账本）\n");
+                volatileText.append(memoryManager.formatAsEvidenceLedger(relevantMemories));
             }
         }
 
@@ -564,21 +592,26 @@ public class ContextAssemblerService {
         if (userId != null) {
             List<MemoryEntry> userMemories = memoryManager.retrieveUserMemories(userId, 5);
             if (!userMemories.isEmpty()) {
-                systemText.append(english
+                volatileText.append(english
                         ? "\n\n# User Preferences and Habits (cross-project memory)\n"
                         : "\n\n# 用户偏好与习惯（跨项目记忆）\n");
-                systemText.append(english
+                volatileText.append(english
                         ? "The following are this user's long-standing preferences and habits; follow them in your output:\n"
                         : "以下是该用户长期积累的偏好与习惯，输出时应遵循：\n");
                 for (MemoryEntry mem : userMemories) {
-                    systemText.append("- ");
+                    volatileText.append("- ");
                     if (mem.getMemoryKey() != null) {
-                        systemText.append(mem.getMemoryKey()).append(": ");
+                        volatileText.append(mem.getMemoryKey()).append(": ");
                     }
-                    systemText.append(mem.getMemoryValue()).append("\n");
+                    volatileText.append(mem.getMemoryValue()).append("\n");
                 }
             }
         }
+
+        // 稳定段（指令主体 + skill + 附件正文 + 活跃文档）与易变段之间放一个分界标记，
+        // 通道层按它拆 content block 并只缓存前半段。标记恰好一次，且必须在最后拼——
+        // 任何在这行之后再往 systemText 追加的内容都会掉进被缓存的前缀里。
+        systemText.append(SYSTEM_VOLATILE_SEPARATOR).append(volatileText);
 
         messages.add(dev.langchain4j.data.message.SystemMessage.from(systemText.toString()));
 

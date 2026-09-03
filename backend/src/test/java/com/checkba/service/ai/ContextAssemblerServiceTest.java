@@ -872,4 +872,49 @@ class ContextAssemblerServiceTest {
         when(cc.needsCompression(any(), any())).thenReturn(false);
         return cc;
     }
+
+    // ==== 易变段分隔标记（提示缓存跨轮次命中的前提） ====
+    // 通道层按这个标记把 system 拆成两个 content block，只给第一块打 cache_control。
+    // 标记之前的一切必须逐字节稳定，否则 Anthropic/Qwen 的缓存永远不命中——
+    // 而这件事不会报错、只会静默多花钱，所以由测试钉住。
+
+    @Test
+    @DisplayName("system 恰好带一个易变段分隔标记，每轮变化的字段全在标记之后")
+    void volatileFieldsLiveAfterTheSeparator() {
+        String systemText = assembleSystemText(activeDoc());
+
+        String sep = ContextAssemblerService.SYSTEM_VOLATILE_SEPARATOR;
+        int at = systemText.indexOf(sep);
+        assertTrue(at >= 0, "system 必须带易变段分隔标记");
+        assertEquals(at, systemText.lastIndexOf(sep), "分隔标记只许出现一次，否则通道层拆错位置");
+
+        String stable = systemText.substring(0, at);
+        String volatilePart = systemText.substring(at + sep.length());
+
+        assertFalse(stable.contains("Current System Time"), "秒级时间戳留在稳定块 = 缓存永不命中");
+        assertFalse(stable.contains("Current Phase:"), "阶段状态每轮可变，必须在标记之后");
+        assertFalse(stable.contains("## Phase Instructions"), "阶段指引跟随 Current Phase 一起走");
+
+        assertTrue(volatilePart.contains("Current System Time"), "时间戳应落在易变块");
+        assertTrue(volatilePart.contains("Current Phase:"), "阶段状态应落在易变块");
+        assertTrue(volatilePart.contains("## Phase Instructions"), "阶段指引应落在易变块");
+
+        // 稳定块仍然装着真正值得缓存的东西：指令主体 + 内联正文
+        assertTrue(stable.contains("<active_document id=\"123\""), "内联正文必须留在被缓存的那一半");
+    }
+
+    @Test
+    @DisplayName("同一会话连续两次组装：标记之前的字节完全相同（缓存命中的充分条件）")
+    void stablePrefixIsByteIdenticalAcrossTurns() {
+        when(legalTools.read_document("123")).thenReturn("第一条 合作范围……");
+
+        String sep = ContextAssemblerService.SYSTEM_VOLATILE_SEPARATOR;
+        String first = assembleSystemText(activeDoc());
+        String second = assembleSystemText(activeDoc());
+
+        String stableFirst = first.substring(0, first.indexOf(sep));
+        String stableSecond = second.substring(0, second.indexOf(sep));
+        assertEquals(stableFirst, stableSecond,
+                "标记之前只要差一个字节，Anthropic/Qwen 就整段重新写缓存");
+    }
 }
