@@ -129,12 +129,24 @@ class MeetingTranscriptionServiceTest {
     void concurrentStartTranscriptionOnlySubmitsOnce() throws Exception {
         MeetingRecording m = meeting(MeetingRecording.STATUS_RECORDED);
         Thread[] threadA = new Thread[1];
+        Thread[] threadB = new Thread[1];
         CountDownLatch aPaused = new CountDownLatch(1);
         CountDownLatch releaseA = new CountDownLatch(1);
+        // A 的后台续程（executor 里的 submitToTingwu）第一步就是 findById，之后会因为
+        // 桩里没有音频文件而立刻走 failMeeting 把状态写成 FAILED。它跑在 A 释放锁之后、
+        // 与 B 拿锁抢跑：B 若晚一步进锁，读到的就是 FAILED 而非 TRANSCRIBING——那是
+        // 合法的「失败后重提」，B 会再走一遍校验+提交，resolve 就被调了两次。
+        // 2026-09-03 CI 上正是这样翻红的（Wanted 1 time, But was 2 times），本机机器快、
+        // B 总是先进锁所以从不复现。把后台线程卡在 findById 上直到断言做完，
+        // 这个与被测语义无关的写入就进不来。
+        CountDownLatch releaseBackground = new CountDownLatch(1);
         when(meetingRepository.findById(7L)).thenAnswer(inv -> {
-            if (Thread.currentThread() == threadA[0]) {
+            Thread cur = Thread.currentThread();
+            if (cur == threadA[0]) {
                 aPaused.countDown();
                 assertTrue(releaseA.await(5, TimeUnit.SECONDS), "测试主线程应该及时放行 A");
+            } else if (cur != threadB[0]) {
+                releaseBackground.await(5, TimeUnit.SECONDS);
             }
             return Optional.of(m);
         });
@@ -158,7 +170,10 @@ class MeetingTranscriptionServiceTest {
         // 2026-08-30 这条在 CI 上真的翻红过（expected TRANSCRIBING but was FAILED），
         // 与被测的「并发只提交一次」语义毫无关系，纯粹是断言取值时机写错了。
         AtomicReference<String> bStatus = new AtomicReference<>();
-        Thread b = new Thread(() -> bStatus.set(svc.startTranscription(7L).getStatus()));
+        Thread b = new Thread(() -> {
+            threadB[0] = Thread.currentThread();
+            bStatus.set(svc.startTranscription(7L).getStatus());
+        });
         b.start();
 
         Thread.sleep(300); // 有锁的话 B 这时候应该还卡在方法入口，等 A 彻底做完
@@ -171,6 +186,7 @@ class MeetingTranscriptionServiceTest {
         // 只应该有一次真正走到校验+提交；B 命中的是方法开头既有的幂等短路分支
         verify(lastResolver, times(1)).resolve(anyString());
         assertEquals(MeetingRecording.STATUS_TRANSCRIBING, bStatus.get());
+        releaseBackground.countDown();
     }
 
     @Test
