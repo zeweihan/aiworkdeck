@@ -36,10 +36,11 @@
       linear-gradient(160deg, #0E3320 0%, #174C31 55%, #1D6440 100%);
   }
   svg.traces { position: absolute; }
+  /* 图标 png 自带白色圆角底板与 100/1024 透明边距，盒子按 1024/824 放大到 120px
+     让底板视觉上仍是 96px；阴影用 drop-shadow 贴着底板走，不打在透明边距上 */
   .logo {
-    position: absolute; left: 332px; top: 92px; width: 96px; height: 96px;
-    border-radius: 22px;
-    box-shadow: 0 10px 30px rgba(6, 26, 16, 0.45);
+    position: absolute; left: 320px; top: 80px; width: 120px; height: 120px;
+    filter: drop-shadow(0 10px 18px rgba(6, 26, 16, 0.45));
   }
   .wordmark {
     position: absolute; top: 212px; left: 0; width: 760px;
