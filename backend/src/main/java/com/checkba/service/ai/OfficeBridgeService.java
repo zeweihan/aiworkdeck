@@ -40,14 +40,33 @@ public class OfficeBridgeService {
     /** 挂起的请求：requestId -> (conversationId, future)。conversationId 供回传端点做归属校验。 */
     private final ConcurrentHashMap<String, PendingRequest> pendingRequests = new ConcurrentHashMap<>();
 
-    /** Office 插件操作超时（秒）。独立常量，不与 LOWA 的 EDITOR_ACTION_TIMEOUT 共享。 */
+    /** Office 插件操作的默认超时（秒）。独立常量，不与 LOWA 的 EDITOR_ACTION_TIMEOUT 共享。 */
     private static final int OFFICE_ACTION_TIMEOUT_SECONDS = 30;
 
-    /** 实际生效的超时秒数（测试用包内可见 setter 覆盖，生产恒为常量值）。 */
-    private volatile int timeoutSeconds = OFFICE_ACTION_TIMEOUT_SECONDS;
+    /**
+     * 跑得久的命令按 command 分级放宽超时（dev-board#419），与
+     * {@link EditorBridgeService#ACTION_TIMEOUT_SECONDS} 同一条纪律：
+     * <b>平超时是「后端先放弃、模型重发一次造成双改」的成因</b>。
+     *
+     * <p>凡是「一次调用做 N 件事」的原语都必须进这张表——它们在真机上必然
+     * 跑得比单处修改久（批量改写要在一个 Word.run 里定位并落笔几十处，
+     * 整篇套用标准格式是逐段落笔）。新增这类原语忘了加，症状不是报错而是
+     * 内容被写两遍，最难查。
+     */
+    static final Map<String, Integer> ACTION_TIMEOUT_SECONDS = Map.of(
+            "replace_batch", 120,
+            "apply_standard_format", 120);
+
+    static int timeoutSecondsFor(String command) {
+        if (command == null) return OFFICE_ACTION_TIMEOUT_SECONDS; // Map.of 对 null 键抛 NPE
+        return ACTION_TIMEOUT_SECONDS.getOrDefault(command, OFFICE_ACTION_TIMEOUT_SECONDS);
+    }
+
+    /** 测试覆盖用的超时（>0 时压过分级表；生产恒为 0，走 timeoutSecondsFor）。 */
+    private volatile int timeoutOverrideSeconds = 0;
 
     void setTimeoutSecondsForTest(int seconds) {
-        this.timeoutSeconds = seconds;
+        this.timeoutOverrideSeconds = seconds;
     }
 
     private record PendingRequest(String conversationId, CompletableFuture<OfficeActionResult> future) {
@@ -67,6 +86,7 @@ public class OfficeBridgeService {
         }
 
         String requestId = UUID.randomUUID().toString();
+        int timeoutSeconds = timeoutOverrideSeconds > 0 ? timeoutOverrideSeconds : timeoutSecondsFor(command);
         CompletableFuture<OfficeActionResult> future = new CompletableFuture<>();
         pendingRequests.put(requestId, new PendingRequest(conversationId, future));
 
