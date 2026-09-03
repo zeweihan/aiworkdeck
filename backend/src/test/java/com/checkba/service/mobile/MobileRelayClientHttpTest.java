@@ -200,6 +200,9 @@ class MobileRelayClientHttpTest {
                 .thenAnswer(inv -> {
                     callOrder.add("createFile:" + inv.getArgument(2));
                     ProjectFile f = addNode(inv.getArgument(1), inv.getArgument(2), false);
+                    // 第 4 个入参就是落库的 fileType，假树必须原样记下来：前端整条
+                    // 「能不能打开」的判定读的就是它（dev-board#417）
+                    f.setFileType(inv.getArgument(3));
                     f.setFilePath("projects/42/" + f.getName());
                     return f;
                 });
@@ -221,6 +224,7 @@ class MobileRelayClientHttpTest {
                 .thenAnswer(inv -> {
                     callOrder.add("createOrUpdateFile:" + inv.getArgument(2));
                     ProjectFile f = addNode(inv.getArgument(1), inv.getArgument(2), false);
+                    f.setFileType(inv.getArgument(3));
                     f.setFilePath(inv.getArgument(5));
                     return f;
                 });
@@ -370,6 +374,50 @@ class MobileRelayClientHttpTest {
         assertTrue(savedStorageKeys.get(0).startsWith("projects/42/现场录音/2026-08-19/"),
                 "storagePath 必须与 ensureFolder 的目录同构，实际: " + savedStorageKeys.get(0));
         assertEquals(List.of("/api/mobile/inbox/11/ack"), acked);
+    }
+
+    @Test
+    @DisplayName("落库 fileType 必须是扩展名而不是 mediaType（dev-board#417）：写成 image/video/audio 时前端整条打开链路判定不支持，点开只弹「无法打开文件」")
+    void pollInboxStoresExtensionNotMediaTypeAsFileType() {
+        inboxJson = "[{\"id\":9,\"projectKey\":\"42\",\"clientMediaId\":\"" + MEDIA_ID + "\","
+                + "\"fileName\":\"IMG_0001.jpg\",\"mediaType\":\"image\",\"fileSize\":10,"
+                + "\"capturedAt\":\"2026-08-19T21:00:00\"}]";
+        service().pollInbox();
+
+        ProjectFile landed = tree.stream()
+                .filter(f -> "IMG_0001-0a1b2c3d.jpg".equals(f.getName()))
+                .findFirst().orElseThrow(() -> new AssertionError("影像没落库"));
+        assertEquals("jpg", landed.getFileType(),
+                "project_file.file_type 全仓语义是扩展名（前端 isFileTypeSupported / isAudioFile / "
+                        + "FileTypeIcon 都按扩展名判），落 mediaType 会让手机传来的照片点不开");
+    }
+
+    @Test
+    @DisplayName("落库 fileType（音频）：m4a 而不是 audio，否则资源管理器右键「转写」永远不出现（dev-board#228 白做）")
+    void pollInboxStoresAudioExtensionAsFileType() {
+        inboxJson = "[{\"id\":11,\"projectKey\":\"42\",\"clientMediaId\":\"" + MEDIA_ID + "\","
+                + "\"fileName\":\"现场谈话.m4a\",\"mediaType\":\"audio\",\"fileSize\":10,"
+                + "\"capturedAt\":\"2026-08-19T21:00:00\"}]";
+        service().pollInbox();
+
+        ProjectFile landed = tree.stream()
+                .filter(f -> "现场谈话-0a1b2c3d.m4a".equals(f.getName()))
+                .findFirst().orElseThrow(() -> new AssertionError("录音没落库"));
+        assertEquals("m4a", landed.getFileType());
+    }
+
+    @Test
+    @DisplayName("落库 fileType：文件名没有扩展名时退回 mediaType，不写空串")
+    void pollInboxFallsBackToMediaTypeWhenNameHasNoExtension() {
+        inboxJson = "[{\"id\":12,\"projectKey\":\"42\",\"clientMediaId\":\"" + MEDIA_ID + "\","
+                + "\"fileName\":\"noext\",\"mediaType\":\"image\",\"fileSize\":10,"
+                + "\"capturedAt\":\"2026-08-19T21:00:00\"}]";
+        service().pollInbox();
+
+        ProjectFile landed = tree.stream()
+                .filter(f -> "noext-0a1b2c3d".equals(f.getName()))
+                .findFirst().orElseThrow(() -> new AssertionError("影像没落库"));
+        assertEquals("image", landed.getFileType());
     }
 
     @Test
