@@ -430,6 +430,92 @@ test('replace_text：未命中报错（错误路径）', async () => {
   )
 })
 
+/* ==================== replace_batch（dev-board#419） ==================== */
+
+test('replace_batch：一次改 N 处，全文快照只读一次、修订开关只开关一次', async () => {
+  const { state } = installWps({ text: '见附件一。见附件二。见附件三。\r' })
+  const data = await H.replace_batch({
+    items: [
+      { searchText: '附件一', replaceText: '附件甲' },
+      { searchText: '附件二', replaceText: '附件乙' },
+      { searchText: '附件三', replaceText: '附件丙' }
+    ]
+  })
+  assert.equal(state.text, '见附件甲。见附件乙。见附件丙。\r')
+  assert.equal(data.replaced, 3)
+  assert.equal(data.requested, 3)
+  assert.deepEqual(data.failed, [])
+  assert.equal(data.via, 'minimalRedline')
+  // 现状逐条 replace_text 会把修订开关开关 N 次；批量整批只开关一次
+  assert.deepEqual(state.trackLog, [true, false])
+})
+
+test('replace_batch：整批从右到左落笔——左侧改动不推移右侧坐标', async () => {
+  // 第一处的替换文本比原文长，若按从左到右应用，后两处的偏移会整体右移而改错位置
+  const { state } = installWps({ text: '甲方付款。乙方收款。丙方担保。' })
+  const data = await H.replace_batch({
+    items: [
+      { searchText: '甲方付款', replaceText: '甲方按期足额付款' },
+      { searchText: '乙方收款', replaceText: '乙方及时收款' },
+      { searchText: '丙方担保', replaceText: '丙方连带担保' }
+    ]
+  })
+  assert.equal(state.text, '甲方按期足额付款。乙方及时收款。丙方连带担保。')
+  assert.equal(data.replaced, 3)
+})
+
+test('replace_batch：一条定位不到只失败它自己，其余照常落笔', async () => {
+  const { state } = installWps({ text: '见附件一。见附件二。\r' })
+  const data = await H.replace_batch({
+    items: [
+      { searchText: '附件一', replaceText: '附件甲' },
+      { searchText: '并不存在的条款', replaceText: 'x' },
+      { searchText: '附件二', replaceText: '附件乙' }
+    ]
+  })
+  assert.equal(state.text, '见附件甲。见附件乙。\r')
+  assert.equal(data.replaced, 2)
+  assert.equal(data.failed.length, 1)
+  assert.equal(data.failed[0].index, 2)
+  assert.ok(data.failed[0].error, '失败条目必须带可自纠的说明')
+})
+
+test('replace_batch：偏移口径失准时整批改走 Find，不与偏移路径混跑', async () => {
+  const { state } = installWps({ text: 'ABCDEFGH', readSkew: 1 })
+  const data = await H.replace_batch({
+    items: [
+      { searchText: 'CDE', replaceText: 'XYZ' },
+      { searchText: 'GH', replaceText: 'PQ' }
+    ]
+  })
+  assert.equal(data.via, 'fullReplace')
+  assert.equal(data.replaced, 2)
+  assert.equal(data.edits, 0)
+  assert.equal(state.text, 'ABXYZFPQ')
+  assert.ok(state.calls.some((c) => c.name === 'Find.Execute'))
+})
+
+test('replace_batch：searchText 重复 / 跨段 / 空批，整批拒绝且文档不动', async () => {
+  const before = '见附件一。见附件二。\r'
+  const { state } = installWps({ text: before })
+  await assert.rejects(
+    H.replace_batch({ items: [{ searchText: '附件一', replaceText: 'a' }, { searchText: '附件一', replaceText: 'b' }] }),
+    /重复/
+  )
+  await assert.rejects(H.replace_batch({ items: [] }), /不能为空/)
+  await assert.rejects(
+    H.replace_batch({ items: [{ searchText: '第一段\n第二段', replaceText: 'x' }] }),
+    /跨段落/
+  )
+  // 一条是另一条的子串：两处命中必然重叠，落笔两遍是乱码而不是报错
+  await assert.rejects(
+    H.replace_batch({ items: [{ searchText: '见附件一。', replaceText: 'a' }, { searchText: '附件一', replaceText: 'b' }] }),
+    /一部分|重叠/
+  )
+  assert.equal(state.text, before)
+  assert.deepEqual(state.trackLog, [], '整批拒绝时连修订开关都不该动')
+})
+
 /* ==================== insert_text ==================== */
 
 test('insert_text：锚点后插与前插，\\n 归一为 \\r', async () => {
@@ -635,7 +721,7 @@ test('locateInWpsDocument：命中即 Select，未命中返回 found:false', asy
 
 test('HANDLERS 覆盖任务书列出的全部 Word 面命令', () => {
   const expected = [
-    'get_text', 'get_selection', 'search', 'replace_text', 'insert_text', 'add_comment',
+    'get_text', 'get_selection', 'search', 'replace_text', 'replace_batch', 'insert_text', 'add_comment',
     'format_text', 'set_paragraph_format', 'get_formatting', 'set_numbering', 'format_table',
     'apply_standard_format', 'insert_table', 'table_read', 'table_set_cell', 'table_add_row',
     'table_delete_row', 'table_add_col', 'table_delete_col', 'insert_break', 'set_hyperlink',
@@ -644,7 +730,8 @@ test('HANDLERS 覆盖任务书列出的全部 Word 面命令', () => {
     'apply_style', 'manage_content_control', 'set_document_properties'
   ]
   // 任务书写「33 个」但逐条列举实为 34 条（get_text..set_document_properties），以列举为准
-  assert.equal(expected.length, 34)
+  // 34 条既有 + replace_batch（dev-board#419）
+  assert.equal(expected.length, 35)
   for (const name of expected) {
     assert.equal(typeof H[name], 'function', `缺少 handler：${name}`)
   }

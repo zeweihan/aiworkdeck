@@ -25,6 +25,7 @@
 import { officeAvailable, detectHost } from './wordDoc.js'
 import { minimalEdits } from './minimalEdit.js'
 import { findAllNormalized, describeAnchorFailure } from './textMatch.js'
+import { normalizeBatchItems, sortByIndex } from './batchEdits.js'
 import { t } from './i18n.js'
 // 律所标准格式（HOUSE）单源：backend/src/main/resources/style-profiles/house-default.json 的字节副本，
 // 由 frontend/scripts/sync-house-profile.mjs 同步（npm run build 前自动跑），构建时内联进产物；
@@ -239,6 +240,41 @@ async function anchorNotFound(context, kind, needle) {
 /** 降级选段时要求的最短长度：太短容易在全文里误命中别处（dev-board#149） */
 const ANCHOR_FALLBACK_MIN_CHARS = 4
 
+/* ==================== 批量改写（replace_batch）的入参与定位辅助 ==================== */
+
+/** 读一次正文（读不到返回空串——它只用于把报错说清楚，不该再抛） */
+async function readBodyText(context) {
+  try {
+    const body = context.document.body
+    body.load('text')
+    await context.sync()
+    return body.text || ''
+  } catch (e) {
+    return ''
+  }
+}
+
+/**
+ * 归一化重定位的**首个**候选串（批量路径专用）。
+ * 与 relocateByNormalization 同一条纪律——归一化只负责把模型给的串换成「文档里
+ * 逐字存在的串」，取 Range 仍旧交给宿主 search，绝不自造坐标。差别只在这里只取
+ * 第一个候选：批量路径要把所有漏网条目的重试排进同一次 sync，不能逐个候选试。
+ */
+function firstRelocateCandidate(bodyText, needle) {
+  const hits = findAllNormalized(bodyText, needle)
+  for (const hit of hits) {
+    for (const candidate of searchableVariants(hit.text)) return candidate
+  }
+  return ''
+}
+
+/** 定位失败说明：有正文就带证据，没有就退回一句可执行的提示 */
+function anchorFailureText(kind, needle, bodyText) {
+  if (!bodyText) return `${kind}：在文档中未找到该文本，请先用读取类工具确认文档当前内容。`
+  return describeAnchorFailure(kind, needle, bodyText)
+}
+
+
 /**
  * 锚点跨段（含 \n/\r）时 body.search 匹配不到——search 不跨段落，模型从内联正文
  * 摘的 anchorText/target 若跨段会首次必然报「未找到」，此前只能靠模型换短锚点
@@ -377,14 +413,17 @@ function buildLocator(rangeText, edit) {
 }
 
 /**
- * 把 newText 以字符级最小修订写入命中 Range。
- * @returns {Promise<number|null>} 实际落笔的编辑段数（0 = 新旧文一致，不留痕迹）；
- *   null = 无法最小化，调用方回退整段 insertText(replace)。返回 null 时保证
- *   一个字都还没写。
+ * 最小修订的**纯 JS 规划阶段**（不碰 Office.js，不排队任何请求）。
+ * 拆出来是为了让批量改写（replace_batch）能把 N 处的定位排进同一次
+ * `context.sync()`——单处路径 applyMinimalRedline 的行为一字未变。
+ *
+ * @returns {{plans:Array}|{plans:[],edits:0}|null}
+ *   null = 无法最小化，调用方回退整段 insertText(replace)；
+ *   plans 为空数组 = 新旧文一致，不必落笔。
  */
-async function applyMinimalRedline(context, range, rangeText, newText) {
+function planMinimalRedline(rangeText, newText) {
   const edits = minimalEdits(rangeText, newText)
-  if (!edits.length) return 0
+  if (!edits.length) return { plans: [] }
   // 差异覆盖整段：没有比整段替换更细的写法了
   if (edits.length === 1 && edits[0].start === 0 && edits[0].end === rangeText.length) return null
 
@@ -394,33 +433,46 @@ async function applyMinimalRedline(context, range, rangeText, newText) {
     if (!loc) return null
     plans.push({ edit, loc })
   }
+  return { plans }
+}
 
-  // 第一轮定位：direct/纯插入的锚串，window 模式的外层窗口
+/** 第一轮定位：把 direct/纯插入的锚串与 window 模式的外层窗口排进请求队列（不 sync） */
+function queuePrimaryLocate(range, plans) {
   for (const plan of plans) {
     plan.primary = range.search(plan.loc.mode === 'window' ? plan.loc.window : plan.loc.needle, { matchCase: true })
     plan.primary.load('items')
   }
-  await context.sync()
+}
+
+/** 第一轮结果检查。返回 false = 定位不唯一（此时一个字都还没写） */
+function resolvePrimaryLocate(plans) {
   for (const plan of plans) {
-    if (plan.primary.items.length !== 1) return null
+    if (plan.primary.items.length !== 1) return false
     plan.target = plan.primary.items[0]
   }
+  return true
+}
 
-  // 第二轮定位：window 模式在唯一窗口内再切出差异段
+/** 第二轮定位：window 模式在唯一窗口内再切出差异段（不 sync） */
+function queueWindowLocate(plans) {
   const windowed = plans.filter((plan) => plan.loc.mode === 'window')
-  if (windowed.length) {
-    for (const plan of windowed) {
-      plan.inner = plan.target.search(plan.loc.needle, { matchCase: true })
-      plan.inner.load('items')
-    }
-    await context.sync()
-    for (const plan of windowed) {
-      if (plan.inner.items.length !== 1) return null
-      plan.target = plan.inner.items[0]
-    }
+  for (const plan of windowed) {
+    plan.inner = plan.target.search(plan.loc.needle, { matchCase: true })
+    plan.inner.load('items')
   }
+  return windowed
+}
 
-  // 应用：从右到左。左侧编辑的定位不会被右侧的写入推移（与 LOWA 同理由）。
+function resolveWindowLocate(windowed) {
+  for (const plan of windowed) {
+    if (plan.inner.items.length !== 1) return false
+    plan.target = plan.inner.items[0]
+  }
+  return true
+}
+
+/** 落笔（不 sync）。从右到左：左侧编辑的定位不会被右侧的写入推移（与 LOWA 同理由）。 */
+function queueRedlineWrites(plans) {
   for (let i = plans.length - 1; i >= 0; i--) {
     const { edit, loc, target } = plans[i]
     if (loc.mode === 'insertAfter') target.insertText(edit.newText, Word.InsertLocation.after)
@@ -428,8 +480,33 @@ async function applyMinimalRedline(context, range, rangeText, newText) {
     else if (edit.newText) target.insertText(edit.newText, Word.InsertLocation.replace)
     else target.delete()
   }
+}
+
+/**
+ * 把 newText 以字符级最小修订写入命中 Range。
+ * @returns {Promise<number|null>} 实际落笔的编辑段数（0 = 新旧文一致，不留痕迹）；
+ *   null = 无法最小化，调用方回退整段 insertText(replace)。返回 null 时保证
+ *   一个字都还没写。
+ */
+async function applyMinimalRedline(context, range, rangeText, newText) {
+  const planned = planMinimalRedline(rangeText, newText)
+  if (planned == null) return null
+  const plans = planned.plans
+  if (!plans.length) return 0
+
+  queuePrimaryLocate(range, plans)
   await context.sync()
-  return edits.length
+  if (!resolvePrimaryLocate(plans)) return null
+
+  const windowed = queueWindowLocate(plans)
+  if (windowed.length) {
+    await context.sync()
+    if (!resolveWindowLocate(windowed)) return null
+  }
+
+  queueRedlineWrites(plans)
+  await context.sync()
+  return plans.length
 }
 
 /* ==================== Word 格式（字符面 + 段落面） ====================
@@ -738,6 +815,144 @@ const HANDLERS = {
         }
         if (fallbacks) result.fallbacks = fallbacks
         if (!editSegments && !fallbacks) result.note = '新旧文本一致，未产生修订'
+        return result
+      })
+    })
+  },
+
+  /**
+   * 批量改写（dev-board#419）：一次调用改 N 处，语义等同于连续 N 次 replace_text
+   * 的「只改第一处」分支，但过桥量与 N 无关。
+   *
+   * 为什么必须有它：整篇校对/整篇润色是「一处一处改」的工作负载，一份合同几十到
+   * 上百处。逐处走 replace_text 的代价是每处一整轮 LLM + 一次 SSE 下发 + 一个
+   * Word.run + 七次 context.sync()（其中四次只为把修订开关开了又关），后端
+   * MAX_LOOP_DEPTH=30 又把一轮的步数封死在 30——整篇校对结构上跑不完，用户看到
+   * 的就是「正在操作文档」几分钟不回来。
+   *
+   * 阶段划分即安全不变式：**所有定位都在任何一次写入之前完成**。任何一条定位不到，
+   * 只有它自己被记为失败并逐条回报（模型只需重试失败的那几条），已定位的其余条目
+   * 照常落笔——绝不会出现「改了一半又抛异常」的半成品文档。
+   */
+  async replace_batch(args) {
+    const items = normalizeBatchItems(args)
+    return Word.run(async (context) => {
+      return withTracking(context, async () => {
+        // 阶段 A：N 次查找排进同一次 sync（现状是 N 次往返）
+        const collections = items.map((it) => {
+          const c = context.document.body.search(it.searchText, { matchCase: true })
+          c.load('items')
+          return c
+        })
+        await context.sync()
+
+        const located = []
+        const missing = []
+        items.forEach((it, i) => {
+          const hits = collections[i].items
+          if (hits.length) located.push({ ...it, range: hits[0], totalMatches: hits.length })
+          else missing.push(it)
+        })
+
+        // 阶段 B：漏网的一起做归一化重定位——正文只读一次（现状是每条漏网各读两次）
+        let bodyText = ''
+        const failed = []
+        if (missing.length) {
+          bodyText = await readBodyText(context)
+          const retries = []
+          for (const it of missing) {
+            const candidate = bodyText ? firstRelocateCandidate(bodyText, it.searchText) : ''
+            if (!candidate) {
+              failed.push({ index: it.index, searchText: it.searchText, error: anchorFailureText('批量替换', it.searchText, bodyText) })
+              continue
+            }
+            const c = context.document.body.search(candidate, { matchCase: true })
+            c.load('items')
+            retries.push({ it, collection: c })
+          }
+          if (retries.length) {
+            await context.sync()
+            for (const { it, collection } of retries) {
+              if (collection.items.length) located.push({ ...it, range: collection.items[0], totalMatches: collection.items.length })
+              else failed.push({ index: it.index, searchText: it.searchText, error: anchorFailureText('批量替换', it.searchText, bodyText) })
+            }
+          }
+        }
+
+        if (!located.length) {
+          return { replaced: 0, failed: sortByIndex(failed), edits: 0, via: 'none' }
+        }
+
+        // 阶段 C：命中区间的原文一起 load（最小修订要按原文算差分）
+        for (const entry of located) entry.range.load('text')
+        await context.sync()
+
+        // 阶段 D：所有条目的最小修订定位排进同一次 sync
+        for (const entry of located) {
+          const rangeText = entry.range.text == null ? '' : String(entry.range.text)
+          entry.rangeText = rangeText
+          const multiline = /[\r\n]/.test(entry.searchText) || /[\r\n]/.test(entry.replaceText)
+          const planned = multiline || !rangeText ? null : planMinimalRedline(rangeText, entry.replaceText)
+          if (planned == null) { entry.mode = 'full'; continue }
+          if (!planned.plans.length) { entry.mode = 'noop'; continue }
+          entry.mode = 'minimal'
+          entry.plans = planned.plans
+          queuePrimaryLocate(entry.range, entry.plans)
+        }
+        const minimalEntries = located.filter((e) => e.mode === 'minimal')
+        if (minimalEntries.length) {
+          await context.sync()
+          for (const entry of minimalEntries) {
+            if (!resolvePrimaryLocate(entry.plans)) entry.mode = 'full'
+          }
+          // 阶段 E：window 模式的第二轮定位，同样合并成一次 sync
+          const windowedByEntry = []
+          for (const entry of minimalEntries) {
+            if (entry.mode !== 'minimal') continue
+            const windowed = queueWindowLocate(entry.plans)
+            if (windowed.length) windowedByEntry.push({ entry, windowed })
+          }
+          if (windowedByEntry.length) {
+            await context.sync()
+            for (const { entry, windowed } of windowedByEntry) {
+              if (!resolveWindowLocate(windowed)) entry.mode = 'full'
+            }
+          }
+        }
+
+        // 阶段 F：全部落笔排进同一次 sync。定位到此为止已全部完成——这就是
+        // 「不留半成品」的保证所在。
+        let minimal = 0
+        let fallbacks = 0
+        let editSegments = 0
+        let unchanged = 0
+        for (const entry of located) {
+          if (entry.mode === 'noop') { unchanged++; continue }
+          if (entry.mode === 'minimal') {
+            queueRedlineWrites(entry.plans)
+            minimal++
+            editSegments += entry.plans.length
+          } else {
+            entry.range.insertText(entry.replaceText, Word.InsertLocation.replace)
+            fallbacks++
+          }
+        }
+        await context.sync()
+
+        const result = {
+          replaced: located.length,
+          requested: items.length,
+          edits: editSegments,
+          via: fallbacks === 0 ? 'minimalRedline' : (minimal === 0 ? 'fullReplace' : 'mixed')
+        }
+        if (fallbacks) result.fallbacks = fallbacks
+        if (unchanged) result.unchanged = unchanged
+        result.failed = sortByIndex(failed)
+        const ambiguous = located.filter((e) => e.totalMatches > 1)
+        if (ambiguous.length) {
+          result.note = `其中 ${ambiguous.length} 条的 searchText 在文档中命中多处，已按第 1 处处理；`
+            + '若不是你要的位置，请换成在全文唯一的原文重试。'
+        }
         return result
       })
     })
@@ -3228,6 +3443,7 @@ export const COMMAND_DISPLAY_NAMES = {
   get_selection: t('cmdGetSelection'),
   search: t('cmdSearch'),
   replace_text: t('cmdReplaceText'),
+  replace_batch: t('cmdReplaceBatch'),
   insert_text: t('cmdInsertText'),
   add_comment: t('cmdAddComment'),
   format_text: t('cmdFormatText'),
@@ -3306,6 +3522,7 @@ const COMMAND_HOSTS = {
   get_selection: 'word',
   search: 'word',
   replace_text: 'word',
+  replace_batch: 'word',
   insert_text: 'word',
   add_comment: 'word',
   format_text: 'word',

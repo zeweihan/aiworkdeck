@@ -415,6 +415,26 @@ class ContextAssemblerServiceTest {
     }
 
     @Test
+    @DisplayName("office+word 会话：多处修改必须成批（office_replace_batch），且只对 Word 宿主说（dev-board#419）")
+    void wordSessionIsToldToBatchMultiEdits() {
+        capabilityService.record("conv-1", "office", "word");
+
+        String systemText = assembleSystemText(officeDoc("第一条 甲方应承担违约责仁……"));
+        assertTrue(systemText.contains("office_replace_batch"), "Word 面活跃文档段应点名批量改写工具");
+        assertTrue(systemText.contains("不要逐处调用 office_replace_text"),
+                "必须明说逐处调用会撞上步数上限——这正是「正在操作文档卡住」的成因");
+        assertTrue(systemText.contains("绝不要整批重发"), "必须明说失败条目单独重试，否则成功的会被改第二遍");
+
+        // Excel / PPT 宿主没有这个工具，不能对它们说
+        capabilityService.record("conv-1", "office", "excel");
+        assertFalse(assembleSystemText(officeDoc("名称\t金额")).contains("office_replace_batch"),
+                "excel 会话不应点名 Word 面的批量改写工具");
+        capabilityService.record("conv-1", "office", "powerpoint");
+        assertFalse(assembleSystemText(officeDoc("第1页：项目介绍")).contains("office_replace_batch"),
+                "powerpoint 会话不应点名 Word 面的批量改写工具");
+    }
+
+    @Test
     @DisplayName("office+excel 会话：提醒与活跃文档段改用 office_excel_* 口径，不点名 Word 面工具")
     void wordingSwitchesToExcelToolsForExcelHost() {
         capabilityService.record("conv-1", "office", "excel");

@@ -198,6 +198,7 @@ const NAMES = {
   office_get_selection: { zh: '读取选区', en: 'Read selection' },
   office_search: { zh: '查找文本', en: 'Find in document' },
   office_replace_text: { zh: '替换文本（修订）', en: 'Replace text (tracked)' },
+  office_replace_batch: { zh: '批量替换（修订）', en: 'Batch replace (tracked)' },
   office_insert_text: { zh: '插入文本（修订）', en: 'Insert text (tracked)' },
   office_add_comment: { zh: '插入批注', en: 'Add comment' },
   office_format_text: { zh: '设置文字格式', en: 'Format text' },

@@ -271,6 +271,85 @@ public class OfficeEditTools implements AgentToolComponent {
         return officeBridgeService.executeOfficeCommand(conversationId, "replace_text", args);
     }
 
+    /** 一次 office_replace_batch 最多改多少处（与插件端 batchEdits.MAX_BATCH_ITEMS 同值） */
+    private static final int MAX_BATCH_EDITS = 50;
+
+    @Tool("在当前 Word 文档中一次完成多处查找替换，全部以 Word 原生修订（Track Changes）形式呈现。" +
+          "editsJson 是 JSON 数组，每个元素形如 {\"searchText\":\"原文\",\"replaceText\":\"新文\"}，一批最多 " + MAX_BATCH_EDITS + " 处。" +
+          "【整篇校对、整篇润色、批量改称谓这类要改很多处的任务，必须用本工具成批提交，不要逐处调用 office_replace_text】" +
+          "——逐处调用每处都要占一整个执行步（单轮上限 30 步），一份合同改不完就会中途暂停。" +
+          "每条的 searchText 须与文档精确一致、不得跨段落、不超 255 字；各条之间不得重复、也不得互相包含（会把同一段文字改两遍）；" +
+          "replaceText 必须是纯文本，不要携带 Markdown 记号。" +
+          "返回值里 replaced 是成功处数，failed 逐条列出没定位到的条目——只需针对 failed 里的条目换锚点重试，不要整批重发（会写入两遍）。")
+    @ToolMeta(displayName = "批量替换（修订）", category = "office", fileEffect = "MODIFIED")
+    public String office_replace_batch(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("修改清单，JSON 数组：[{\"searchText\":\"原文\",\"replaceText\":\"新文\"}, ...]") String editsJson
+    ) {
+        log.info("Tool: office_replace_batch called");
+        if (editsJson == null || editsJson.isBlank()) {
+            return "Error: editsJson 不能为空，示例：[{\"searchText\":\"违约责仁\",\"replaceText\":\"违约责任\"}]";
+        }
+        java.util.List<java.util.Map<String, Object>> raw;
+        try {
+            raw = objectMapper.readValue(editsJson,
+                    new com.fasterxml.jackson.core.type.TypeReference<java.util.List<java.util.Map<String, Object>>>() {});
+        } catch (Exception e) {
+            return "Error: editsJson 不是合法的 JSON 数组，示例：[{\"searchText\":\"违约责仁\",\"replaceText\":\"违约责任\"}]";
+        }
+        if (raw == null || raw.isEmpty()) {
+            return "Error: editsJson 至少要有一条修改";
+        }
+        if (raw.size() > MAX_BATCH_EDITS) {
+            return "Error: 一批最多 " + MAX_BATCH_EDITS + " 处，本次给了 " + raw.size() + " 处，请拆成多批分次提交";
+        }
+        // 校验全部前置：任何一条不合法都不下发，避免一次 30 秒起步的空等过桥
+        java.util.List<java.util.Map<String, Object>> items = new java.util.ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (int i = 0; i < raw.size(); i++) {
+            int index = i + 1;
+            java.util.Map<String, Object> item = raw.get(i);
+            Object search = item == null ? null : item.get("searchText");
+            Object replace = item == null ? null : item.get("replaceText");
+            String searchText = search == null ? "" : String.valueOf(search);
+            if (searchText.isBlank()) {
+                return "Error: 第 " + index + " 条的 searchText 为空";
+            }
+            if (replace == null) {
+                return "Error: 第 " + index + " 条缺少 replaceText（删除请传空字符串）";
+            }
+            if (searchText.length() > 255) {
+                return "Error: 第 " + index + " 条的 searchText 过长（Word 查找上限 255 字符），请缩短";
+            }
+            if (searchText.indexOf('\n') >= 0 || searchText.indexOf('\r') >= 0) {
+                return "Error: 第 " + index + " 条的 searchText 跨段落（含换行），Word 的查找不支持跨段匹配，请拆成同一段内的多条";
+            }
+            if (!seen.add(searchText)) {
+                return "Error: 第 " + index + " 条的 searchText 与前面某条重复（同一处会被改两遍），请合并成一条";
+            }
+            java.util.Map<String, Object> normalized = new HashMap<>();
+            normalized.put("searchText", searchText);
+            normalized.put("replaceText", String.valueOf(replace));
+            items.add(normalized);
+        }
+        // 一条 searchText 是另一条的子串时两处命中必然重叠，各自落笔＝同一段文字被改两遍
+        // （后一笔盖在前一笔的产物上），产物是乱码而不是报错。校对场景里模型很容易同时给出
+        // 「违约责仁」和「承担违约责仁。」这样一短一长的两条。
+        for (int a = 0; a < items.size(); a++) {
+            for (int b = 0; b < items.size(); b++) {
+                if (a == b) continue;
+                String outer = String.valueOf(items.get(a).get("searchText"));
+                String inner = String.valueOf(items.get(b).get("searchText"));
+                if (outer.contains(inner)) {
+                    return "Error: 第 " + (b + 1) + " 条的 searchText 是第 " + (a + 1)
+                            + " 条的一部分，两处会重叠、同一段文字被改两遍。请合并成一条，或把两条都换成互不包含的原文";
+                }
+            }
+        }
+        return officeBridgeService.executeOfficeCommand(conversationId, "replace_batch",
+                Map.of("items", items));
+    }
+
     @Tool("在当前 Word 文档中插入文本，插入以 Word 原生修订（Track Changes）形式呈现。" +
           "提供 anchorText 时在该锚点前/后插入（锚点须与文档精确一致）；不提供时在用户当前光标/选区处插入。" +
           "text 必须是纯文本，不要携带 Markdown 记号（---、**、# 等）——它们只会成为文档里的字面字符，排版请改用格式化工具。")
