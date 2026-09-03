@@ -32,6 +32,7 @@
 
 import { minimalEdits } from './minimalEdit.js'
 import { findAllNormalized, describeAnchorFailure } from './textMatch.js'
+import { normalizeBatchItems, sortByIndex } from './batchEdits.js'
 // 律所标准格式（HOUSE）单源：backend/src/main/resources/style-profiles/house-default.json
 // 的字节副本，由 frontend/scripts/sync-house-profile.mjs 同步（与 officeExecutor 同一份）。
 import houseProfile from './house-default.json' with { type: 'json' }
@@ -1050,6 +1051,119 @@ export const WPS_WORD_HANDLERS = {
       }
       if (fallbacks) result.fallbacks = fallbacks
       if (!editSegments && !fallbacks) result.note = '新旧文本一致，未产生修订'
+      return result
+    })
+  },
+
+  /**
+   * 批量改写（dev-board#419）：一次调用改 N 处，语义等同于连续 N 次 replace_text
+   * 的「只改第一处」分支。Office 面省的是 context.sync() 往返，WPS 面省的是
+   * **全文快照**——现状每条 replace_text 都要 bodyText(doc) 读一遍整篇正文、
+   * 重建一次坐标映射，几十处改动就是几十次全文过同步桥。
+   *
+   * 两条纪律照搬 replace_text，一条都不能少：
+   * 1. **不许偏移路径与 Find 兜底混跑**（dev-board#264）——整批统一走一条路，
+   *    只要有一条偏移校验不通过，整批改走 Find；
+   * 2. **整批从右到左落笔**——WPS 用的是裸字符偏移，左侧的写入会推移右侧的坐标，
+   *    跨条目同样成立（Office 面靠宿主的活 Range 免疫这一条，这里不行）。
+   */
+  async replace_batch(args) {
+    const items = normalizeBatchItems(args)
+    const doc = activeDoc()
+    return withTracking(doc, () => {
+      const body = bodyText(doc)
+      const coords = makeDocCoords(body)
+      const failed = []
+      const located = []
+      for (const it of items) {
+        const wanted = normalizeNewlines(it.searchText)
+        let needle = wanted
+        let offsets = allIndexes(body, needle)
+        if (!offsets.length) {
+          // 归一化重定位：命中后用**文档原文**当 needle，逐笔校验才不会当场判失败
+          const hits = findAllNormalized(body, wanted)
+          if (hits.length) {
+            needle = hits[0].text
+            offsets = allIndexes(body, needle)
+          }
+        }
+        if (!offsets.length) {
+          failed.push({ index: it.index, searchText: it.searchText, error: describeAnchorFailure('批量替换', it.searchText, body) })
+          continue
+        }
+        located.push({
+          index: it.index,
+          searchText: it.searchText,
+          needle,
+          start: offsets[0],
+          totalMatches: offsets.length,
+          newText: normalizeNewlines(it.replaceText)
+        })
+      }
+      if (!located.length) {
+        return { replaced: 0, requested: items.length, edits: 0, via: 'none', failed: sortByIndex(failed) }
+      }
+
+      // 偏移口径预检：**整批一致**才走偏移路径，否则整批改走 Find（不许混跑）
+      const allVerified = located.every((e) => rangeAtJsOffset(doc, coords, e.start, e.needle) != null)
+      if (!allVerified) {
+        // 可用性检查全部前置，检完再落笔——半批改完再抛异常是最难收拾的状态
+        const usable = []
+        for (const e of located) {
+          try {
+            assertFindFallbackUsable(e.needle, e.newText, 1)
+            usable.push(e)
+          } catch (err) {
+            failed.push({ index: e.index, searchText: e.searchText, error: (err && err.message) || String(err) })
+          }
+        }
+        let replaced = 0
+        for (const e of usable) {
+          if (findReplaceOnce(doc, e.needle, e.newText)) replaced++
+          else failed.push({ index: e.index, searchText: e.searchText, error: '查找替换兜底未命中，请先用 search 命令核对该处原文' })
+        }
+        return {
+          replaced,
+          requested: items.length,
+          edits: 0,
+          via: 'fullReplace',
+          fallbacks: replaced,
+          failed: sortByIndex(failed),
+          note: '本文档的字符偏移与文本快照不一致（含表格/域等占位内容），整批按查找替换兜底完成'
+        }
+      }
+
+      // 偏移路径：整批按文档位置从右到左，左侧命中的坐标不会被右侧的写入推移
+      const ordered = located.slice().sort((a, b) => b.start - a.start)
+      let minimal = 0
+      let fallbacks = 0
+      let editSegments = 0
+      let unchanged = 0
+      for (const e of ordered) {
+        const applied = applyHit(doc, coords, e.start, e.needle, e.newText, /\r/.test(e.newText))
+        if (applied == null || applied.via === 'full') {
+          // 预检通过后 applyHit 不应再返回 null；防御性并入整替计数
+          fallbacks++
+        } else {
+          minimal++
+          editSegments += applied.edits
+          if (!applied.edits) unchanged++
+        }
+      }
+      const result = {
+        replaced: located.length,
+        requested: items.length,
+        edits: editSegments,
+        via: fallbacks === 0 ? 'minimalRedline' : (minimal === 0 ? 'fullReplace' : 'mixed'),
+        failed: sortByIndex(failed)
+      }
+      if (fallbacks) result.fallbacks = fallbacks
+      if (unchanged) result.unchanged = unchanged
+      const ambiguous = located.filter((e) => e.totalMatches > 1)
+      if (ambiguous.length) {
+        result.note = `其中 ${ambiguous.length} 条的 searchText 在文档中命中多处，已按第 1 处处理；`
+          + '若不是你要的位置，请换成在全文唯一的原文重试。'
+      }
       return result
     })
   },

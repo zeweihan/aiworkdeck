@@ -58,6 +58,61 @@ class OfficeEditToolsTest {
     }
 
     @Test
+    @DisplayName("office_replace_batch：整批下发 replace_batch，条目原样透传（dev-board#419）")
+    void replaceBatchDispatches() {
+        when(bridge.executeOfficeCommand(eq("conv-1"), eq("replace_batch"), anyMap()))
+                .thenReturn("{\"replaced\":2,\"failed\":[]}");
+
+        String json = "[{\"searchText\":\"违约责仁\",\"replaceText\":\"违约责任\"},"
+                + "{\"searchText\":\"帐户\",\"replaceText\":\"账户\"}]";
+        String result = tools.office_replace_batch("conv-1", json);
+
+        assertEquals("{\"replaced\":2,\"failed\":[]}", result);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("replace_batch"), args.capture());
+        @SuppressWarnings("unchecked")
+        java.util.List<Map<String, Object>> items =
+                (java.util.List<Map<String, Object>>) args.getValue().get("items");
+        assertEquals(2, items.size());
+        assertEquals("违约责仁", items.get(0).get("searchText"));
+        assertEquals("账户", items.get(1).get("replaceText"));
+    }
+
+    @Test
+    @DisplayName("office_replace_batch：非法入参一律后端拦下，不产生一次空等的过桥（dev-board#419）")
+    void replaceBatchValidationFailuresDoNotTouchBridge() {
+        assertTrue(tools.office_replace_batch("conv-1", null).startsWith("Error"));
+        assertTrue(tools.office_replace_batch("conv-1", "不是 JSON").startsWith("Error"));
+        assertTrue(tools.office_replace_batch("conv-1", "[]").startsWith("Error"));
+        // searchText 为空 / 缺 replaceText / 超 255 字 / 跨段 / 重复
+        assertTrue(tools.office_replace_batch("conv-1",
+                "[{\"searchText\":\"\",\"replaceText\":\"x\"}]").startsWith("Error"));
+        assertTrue(tools.office_replace_batch("conv-1",
+                "[{\"searchText\":\"甲方\"}]").startsWith("Error"));
+        assertTrue(tools.office_replace_batch("conv-1",
+                "[{\"searchText\":\"" + "长".repeat(256) + "\",\"replaceText\":\"x\"}]").startsWith("Error"));
+        assertTrue(tools.office_replace_batch("conv-1",
+                "[{\"searchText\":\"甲\\n乙\",\"replaceText\":\"x\"}]").startsWith("Error"));
+        assertTrue(tools.office_replace_batch("conv-1",
+                "[{\"searchText\":\"甲方\",\"replaceText\":\"x\"},{\"searchText\":\"甲方\",\"replaceText\":\"y\"}]")
+                .startsWith("Error"));
+        // 一条 searchText 是另一条的子串：两处命中必然重叠，落笔两遍
+        assertTrue(tools.office_replace_batch("conv-1",
+                "[{\"searchText\":\"承担违约责仁。\",\"replaceText\":\"承担违约责任。\"},"
+                        + "{\"searchText\":\"违约责仁\",\"replaceText\":\"违约责任\"}]").startsWith("Error"));
+        // 超过一批上限
+        StringBuilder tooMany = new StringBuilder("[");
+        for (int i = 0; i < 51; i++) {
+            if (i > 0) tooMany.append(',');
+            tooMany.append("{\"searchText\":\"第").append(i).append("条\",\"replaceText\":\"x\"}");
+        }
+        tooMany.append(']');
+        assertTrue(tools.office_replace_batch("conv-1", tooMany.toString()).startsWith("Error"));
+        verifyNoInteractions(bridge);
+    }
+
+    @Test
     @DisplayName("参数校验失败：返回 Error 前缀且不触碰桥（不产生 30 秒空等）")
     void validationFailuresDoNotTouchBridge() {
         assertTrue(tools.office_search("conv-1", " ").startsWith("Error"));

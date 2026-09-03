@@ -393,7 +393,7 @@ public class ContextAssemblerService {
                         default -> {
                             systemText.append("该文档在用户本机的文字处理软件（Microsoft Word 或 WPS 文字）中打开，正文已随本请求内联注入下方。");
                             systemText.append("读取/修改它一律使用 office_* 工具（office_get_text / office_search / ");
-                            systemText.append("office_replace_text / office_insert_text / office_add_comment / ");
+                            systemText.append("office_replace_text / office_replace_batch / office_insert_text / office_add_comment / ");
                             systemText.append("office_format_text / office_set_paragraph_format / office_get_formatting / ");
                             systemText.append("office_set_numbering / office_format_table / office_apply_standard_format 等），");
                             systemText.append("修改会以 Word 原生修订形式呈现。");
@@ -411,6 +411,18 @@ public class ContextAssemblerService {
                             systemText.append("内容控件用 office_manage_content_control；文档属性（标题/作者等）用 office_set_document_properties。");
                             systemText.append("本会话没有 doc_* 工具。\n\n");
                         }
+                    }
+                    // 多处修改必须成批提交（dev-board#419）。这条不是效率偏好，是**能不能跑完**的问题：
+                    // 逐处 office_replace_text 每处占一整个执行步（AgentOrchestrator.MAX_LOOP_DEPTH=30），
+                    // 整篇校对一份合同几十上百处，走逐处路径结构上跑不完，只会一路「正在操作文档」
+                    // 到撞上步数上限暂停——2026-09-03 用户真机实况正是如此。挂在末位（约束放前面会被弱模型无视）。
+                    if (clientCapabilityService.officeHostOf(conversationId) == ClientCapabilityService.OfficeHost.WORD) {
+                        systemText.append("**要改很多处时（整篇校对错别字与病句、整篇润色、批量替换称谓/条款编号等），");
+                        systemText.append("必须用 office_replace_batch 一次提交一批（每批最多 50 处），不要逐处调用 office_replace_text。** ");
+                        systemText.append("逐处调用每处要占一整个执行步（单轮上限 30 步），改到一半就会被迫暂停，用户会一直等在「正在操作文档」上。");
+                        systemText.append("正确做法：先通读内联正文把要改的地方一次性列全，再分批调用 office_replace_batch；");
+                        systemText.append("每批返回的 failed 里若有条目，只针对那几条换更长、更唯一的原文重试，");
+                        systemText.append("**绝不要整批重发**——已成功的那些会被改第二遍。\n\n");
                     }
                     // 写入内容纯文本约束，刻意挂在本指引段末尾（约束放前面会被弱模型无视，
                     // 见「约束要挂消息末位」经验）：模型曾把 Markdown 记号当正文写进文档，
