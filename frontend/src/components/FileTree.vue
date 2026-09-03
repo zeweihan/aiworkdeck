@@ -3961,7 +3961,8 @@ export default {
     async discardFailedUpload(fileId) {
         try {
             const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
-            if (projectId && fileId) await deleteFile(projectId, fileId)
+            // 占位行从来没有过正文，直接永久删，别让一份空白 docx 再躺进回收站
+            if (projectId && fileId) await deleteFilePerm(projectId, fileId)
         } catch (e) {
             console.warn('清理上传失败的占位文件时出错:', e)
         }
