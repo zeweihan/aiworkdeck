@@ -214,6 +214,107 @@ find-or-create，影子项目从 `/api/projects/my` 滤掉）。绑定后两条�
   定价 `service_pricing` 行 transfer/relay=60 Credits/GB（迁移 24）；流水 kind 仍是
   `service_spend`（meta.service=transfer），**没有新增 ledger kind**。
 
+## 统一账户余额与充值（dev-board#425，spec：aiworkdeck_mobile docs/specs/2026-09-04-mobile-recharge-design.md §3.2）
+
+**本期只有服务端通路，没有任何客户端支付界面**（iOS 内购 #426 / 小程序虚拟支付 #427 /
+安卓微信支付 #428 是后面几期）。余额权威只在官网仓（credit_lots + wallet_ledger），
+云后端一个字都不存。
+
+- `service/mobile/MobileBillingClient` + `HttpMobileBillingClient` — POST 官网
+  `/api/internal/account`，头 `X-Internal-Secret`，四个 action：`resolve`（按已验证
+  手机号或邮箱换 accountId，二选一恰好一个，**带 `create` 位**）/ `balance` /
+  `create-recharge` / `query`。
+  形状照抄 `HttpTransferBillingClient`：配置 `mobile.billing.base-url/secret`
+  （env `MOBILE_BILLING_BASE_URL`/`MOBILE_BILLING_SECRET`，**与 TRANSFER_BILLING_SECRET
+  是两把不同的密钥**），任一未配 → DISABLED 短路，不发请求。
+- **充值总开关 `mobile.billing.recharge-enabled`（env `MOBILE_BILLING_RECHARGE_ENABLED`），
+  默认 false，落在 `MobileBillingService`**（复审 N1）。关时 `createRecharge` / `queryRecharge`
+  在做任何别的事情之前抛 `DISABLED`——不校参数、不解析身份、**不会走到 `create=true`**、
+  不发上游请求。`GET /balance` 是只读的（`create=false`，永不建号），**不受这个开关影响**。
+  **这个开关要等 dev-board#434（官网账户注销传导）落地后才允许打开**，理由见红线 8。
+- `service/mobile/MobileBillingKind` — **失败判别位的唯一来源**，八个值同时是
+  `openapi/mobile-v1.yaml` 里 `Envelope.kind` 的取值集合，四端按它分支。
+  `service/mobile/MobileBillingFailureException` 带 kind + outTradeNo，
+  `GlobalExceptionHandler.handleMobileBilling` 压成 `{code:1, kind, outTradeNo?, message}`。
+- `service/mobile/MobileBillingService` — 身份解析与红线，见下。余额带 30 秒 TTL 缓存，
+  **键是 userId**；`query` 查到 paid 即作废该用户缓存。
+- `controller/MobileBillingController` — `/api/mobile/billing/{balance,recharge,recharge/status}`，
+  鉴权与响应风格同 `MobileRelayController`（`X-Session-Id`；成功裸对象，业务错误
+  200 + `{code:1,kind,message}`，未登录 4010）。契约写进 `openapi/mobile-v1.yaml`，
+  `MobileApiContractTest.billingEndpointsMatchSpec` 守着。
+
+### 失败分类：判据是「响应体里有没有 `error` 字段」，不是状态码
+
+官网对**鉴权/配置失败**（`AWD_MOBILE_BILLING_SECRET` 未配、header 不符）刻意回**空体 404**
+而不是 401/403（对外部探测者与「路由不存在」不可区分）。它与「accountId 查无此人」曾经是
+同一个响应，于是**密钥配错一个字符 → 全量用户被告知「还没关联统一账户」，日志里一条痕迹都没有**。
+现在两类分开：
+
+| 上游响应 | kind | 备注 |
+|---|---|---|
+| 空体 / 非 JSON 的 404 | `UNAVAILABLE` | **必须 `log.warn` 并点名密钥/env**，这是运维唯一的线索 |
+| 带 `{error:…}` 的 404 | `NOT_FOUND` | 真业务查无此物；resolve 那条再翻成 `NOT_CONNECTED` |
+| 409 `order_already_paid` | `ALREADY_PAID` | **连 `outTradeNo` 一起带走**，客户端据此转去查单 |
+| 409 `idempotency_conflict` | `IDEMPOTENCY_CONFLICT` | 同上 |
+| 其余 4xx | `REJECTED` | `error` 串只进日志 |
+| 5xx / 网络 / 解析失败 | `UNAVAILABLE` | **只有 create-recharge 带同一幂等键重试一次** |
+
+### 红线（护栏 `MobileBillingServiceTest`）
+
+1. **绝不复用 `AccountController`/`AccountService`/`MachineAccountGuard` 那条路**：那是机器级
+   单例（`~/.aiworkdeck/account.json`），充的是「这台服务器连的那个账户」，与调用者 userId
+   无关，server 模式只对 admin 开放。手机端是多租户，复用等于把 A 的钱记到 B 头上。
+2. **accountId 只有两个来源**：`account_binding` 里已有的绑定，或用**服务端 User 实体上
+   已验证的** phone/verifiedEmail 向官网 resolve 换来的。**绝不接受请求体传入**——
+   否则等于对外开了手机号枚举/任意建号的口子（做法同
+   `MobileTransferService.requireAccountId`）。资料字段 `email` 不算，只认 `verifiedEmail`。
+3. **User 既无手机号也无已验证邮箱 → 报错，不回落任何机器级账户**（licensing-billing.md
+   第 17 条的口径，充值比 AI 额度更不能有回落分支）。
+4. **审核账号（`ReviewAccountGate`，`auth.review-account.identity`）不许桥接、不许充值**，
+   且判定排在绑定查询**之前**——放它去 resolve 等于按审核员的手机号/邮箱在官网建出一个真
+   账户，之后那把写在 ASC 审核备注里给外部人看的 6 位固定码就成了进真账户的钥匙。
+5. **resolve 出的 accountId 已绑给别的 userId → 拒绝，绝不改绑**（`account_binding` 对
+   external_account_id 有唯一约束）。撞唯一约束的并发首调读回对方已提交的行；`saveBinding`
+   刻意不带 `@Transactional`，理由同地雷 6（外层事务会被标 rollback-only）。
+6. **`idempotencyKey` 必须客户端传入**（发起前落盘，扛 App 被杀），缺失即报错，
+   **服务端不代生成**——代生成等于没有幂等键，弱网重试会在官网留下一串各自绑着独立二维码的
+   悬挂 pending 单，而官网**没有**针对充值 pending 单的过期回收任务。桌面端
+   `AccountController.recharge` 每次 `UUID.randomUUID()` 现生成的写法**不要照抄**。
+7. **上游故障绝不能被吞成「余额 0」或「没有账户」**：八个 kind 各有各的用户可读文案，
+   失败不写缓存。空体 404 归 UNAVAILABLE 就是这条的直接落点。
+8. **读余额永不建号**（dev-board#425 复审 C1）。`resolve` 的 `create` 位只在
+   `createRecharge`（用户显式发起充值）为 true，`balance`/`queryRecharge` 一律 false。
+   第一版是无条件建号的，而 iOS 设置页的 `.task` 无条件读一次余额——「新用户打开设置页」
+   这个纯读动作就会在官网建出一行含明文手机号的真账户，用户全程无感知、未同意；
+   而 App 的注销流程（`AccountDeletionService`）只删 Java 侧的 `app_users` 与
+   `account_binding`，**从不通知官网**，内部口也没有 delete action，于是 App 自己建的账号
+   App 内没有任何路径能删掉——直接撞 App Store 5.1.1(v) 与个人信息保护法的删除权。
+   第二期做充值界面时，`create=true` 的那条路要同时补上「注销时通知官网」或
+   「建号前明确告知并取得同意」，否则这条红线只是被推迟了。
+
+   **二轮复审 N1 补的护栏**：上面这句「本期没有充值界面所以一次号都不会建」**不是护栏**——
+   `POST /api/mobile/billing/recharge` 是随本期一起上线的活端点，也是全站唯一的 `create=true`
+   调用方，任何持有有效 `X-Session-Id` 的人直接打它就会在官网建出真账户并发注册赠额，
+   触发点只是从「打开设置页」搬到了「直接打这个端点」。所以加了服务端开关
+   `mobile.billing.recharge-enabled`（默认 **false**）：关时下单与查单在到达 `create=true`
+   之前短路成 `DISABLED`，不发任何上游请求。
+   **打开的前提是 dev-board#434（官网账户注销传导）已落地**：注销能传导到官网、官网内部口有
+   delete action 之后，才把它置 true。在那之前打开 = 把 App Store 5.1.1(v) 重新放出来。
+   护栏：`MobileBillingRechargeDisabledTest`（不配这个键，走 application.yml 的生产默认值）
+   与 `MobileBillingServiceTest`（显式 `=true`，测开关开着时行为不变）。
+9. **失败一律带机器可读的 `kind`，客户端禁止匹配 message 措辞**。message 经 `LangText`
+   在英文部署下会整条变成英文，`code` 又恒为 1——第一版只送 message，于是安卓逐字硬编码
+   中文串做分支、小程序判 `code === -1`（云后端业务失败一律 200+code:1，那个分支永远进不去），
+   两套都判错。新增失败情形先往 `MobileBillingKind` 加值并同步 yaml 与移动仓
+   `contract/fixtures/billing.json`，别在 message 里塞标记。
+10. **标识选择要能回退，绑定要能自愈**。同时有手机号与已验证邮箱的用户，手机号被官网按
+   站点能力拒（`400 phone_not_supported_on_site`）时改用邮箱再试一次；
+   **只在 REJECTED 时回退，NOT_FOUND 绝不回退**——那是官网权威地回答「按这个身份没有账户」，
+   回退过去等于把用户悄悄关联到另一个官网账户上。绑定指向的官网账户被注销后，
+   `balance`/`createRecharge` 收到 NOT_FOUND 会清掉那行绑定重解析一次
+   （`AwdkLoginService.resolveUser` 早有同款自愈分支，方向相反）；`queryRecharge` 不自愈，
+   它的 404 分不出是「账户没了」还是「单号不属于你」。
+
 ## 排查「手机端一个项目都读不到」的顺序（dev-board#75 实测路径）
 
 空数组是**合法响应**，没有报错也没有 4010，所以必须按下面的顺序把「哪一环是空的」逐段夹出来：
@@ -240,5 +341,9 @@ find-or-create，影子项目从 `/api/projects/my` 滤掉）。绑定后两条�
 ## 验证
 
 - `mvn test -Dtest='MobileRelay*Test,AwdkLoginServiceTest,MediaFileTypeReconcilerTest'`（JDK 21）。
+- 统一账户充值（JDK 21）：`JAVA_HOME=$(/usr/libexec/java_home -v 21) mvn test -Dtest='MobileBillingServiceTest,MobileBillingRechargeDisabledTest,HttpMobileBillingClientTest,MobileApiContractTest'`。
+  本机 `mvn` 默认走 Homebrew JDK 26，Byte Buddy 不支持，带 @MockBean 的 Spring 上下文会全部加载失败、看起来像代码坏了。
+  `HttpMobileBillingClientTest` 用 JDK 自带 `HttpServer` 起本机桩服务回真状态码——空体 404 与
+  带 body 的 404 的判据就在 HTTP 层，用 mock 绕过去等于没测。
 - 云端冒烟：`curl https://addin.aiworkdeck.com/api/mobile/projects` 无凭据应 401。
 - iOS 侧改动跑 `aiworkdeck_mobile` 仓的构建 + TestFlight 通道（fastlane）。

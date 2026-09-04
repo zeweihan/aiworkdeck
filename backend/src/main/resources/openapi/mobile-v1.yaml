@@ -35,6 +35,41 @@ components:
         usage: { type: object, additionalProperties: true, description: "code=4003（额度已满）附带的用量明细" }
         gatewayKind: { type: string, description: "code=1（平台网关失败）附带" }
         canUseOwnKey: { type: boolean, description: "code=1（平台网关失败）附带，是否可用自备 Key 绕过" }
+        kind:
+          type: string
+          enum: [DISABLED, UNAVAILABLE, NOT_CONNECTED, NOT_FOUND, REJECTED, REVIEW_ACCOUNT, ALREADY_PAID, IDEMPOTENCY_CONFLICT]
+          description: |
+            code=1 时 /api/mobile/billing/* 附带的**机器可读判别位**（dev-board#425）。
+            **四端一律按它分支，禁止匹配 message 措辞**——message 经服务端 LangText 在英文部署下
+            会整条变成英文，按中文串做分支必然落空；code 也永远是 1，判 code 分不出这八种情况。
+            message 只用于兜底展示。
+
+            每条末尾方括号里是**余额那一行**的渲染裁定，唯一来源是移动仓
+            contract/schema/billing.schema.json 的说明段（四端逐条对齐，各自有测试钉住）。
+            判据是**这一态会不会自己恢复**：终态一律整行不渲染，绝不能渲染成
+            「余额暂时读不到，稍后再试」——那是让用户去重试一句永不改变的报错。
+              DISABLED             本服务器没配 mobile.billing.*，压根没开通
+                                   [整行不渲染，充值入口一并收起]。**未配 env 即此态，也就是四端一发版时的默认生产状态**
+              UNAVAILABLE          上游不可用（网络/5xx/官网空体 404 即密钥或 env 配错）
+                                   [显示 balance.unavailable，稍后重试]，**绝不能显示成「没有账户」或「余额 0」**
+              NOT_CONNECTED        这个登录账号还没有统一账户（无已验证身份，或官网按该身份查无账户）
+                                   [整行不渲染]。读余额一律 create=false，服务端不会替用户建号
+              NOT_FOUND            官网明确回「查无此物」（accountId 已注销 / 单号不属于该账户）
+                                   [显示 balance.unavailable]
+              REJECTED             官网明确拒绝的业务错误，或统一账户已绑给别的登录账号
+                                   [显示 balance.unavailable]
+              REVIEW_ACCOUNT       App 审核演示账号，余额与充值一律不可用
+                                   [整行不渲染]。审核员进设置页看到的必须是干净的一页，不是一行报错
+              ALREADY_PAID         该幂等键的单子已支付 → 带 outTradeNo 转去查单，别重新下单
+                                   [与余额无关：只出现在下单/查单路径]
+              IDEMPOTENCY_CONFLICT 同一把幂等键换了金额/类型 → 带 outTradeNo [同上]
+              （kind 缺席）        非 billing 专有的失败走通用 handler
+                                   [显示 balance.unavailable]，不得当成「没有账户」
+        outTradeNo:
+          type: string
+          description: |
+            仅 kind=ALREADY_PAID / IDEMPOTENCY_CONFLICT 时出现：官网连同 409 一起回的既有商户订单号。
+            这是「App 被杀、本地没存下单号」的恢复路径，客户端拿它调 /recharge/status 查单。
     RelayProject:
       type: object
       required: [deviceId, key, name]
@@ -95,6 +130,46 @@ components:
         code: { type: integer }
         message: { type: string, nullable: true }
         data: { $ref: '#/components/schemas/LoginData' }
+    BillingBalance:
+      type: object
+      description: |
+        统一账户余额（dev-board#425）。权威在官网仓（credit_lots + wallet_ledger），
+        云后端经内部记账口 POST /api/internal/account 读取，服务端带 30 秒 TTL 缓存。
+
+        **展示口径（四端逐字符一致）**：符号 + balanceCents/100 固定两位小数、**不带千分位**、
+        **不跟随设备 locale**；符号按 currency 取（CNY→¥、USD→$），任何一端都不得写死 ¥。
+        唯一来源是移动仓 contract/schema/billing.schema.json，期望串在 fixtures/billing.json
+        的 balance[].display（三端各自的格式化函数与它对拍）。
+      required: [balanceCents, currency, plan]
+      properties:
+        balanceCents: { type: integer, format: int64, description: 余额，整数分（Credits 1 元 = 100 分） }
+        currency: { type: string, enum: [CNY, USD], description: 站点币种，由部署站点决定 }
+        plan:
+          type: string
+          nullable: true
+          description: |
+            计费档位，权威侧 lib/wallet.ts 的 getPlan() 只返回 `paid` / `free`——**不是套餐名**，
+            也基本不会为 null（只有上游没给这个字段时才是 null）。任何一端都不要把它当套餐名直接渲染。
+    RechargeOrder:
+      type: object
+      description: |
+        充值单。present=qrcode 时 codeUrl/qrCode 有值，present=redirect 时 redirectUrl 有值；
+        不适用的字段不出现在响应里。
+      required: [present, outTradeNo, amountCents]
+      properties:
+        present: { type: string, enum: [qrcode, redirect] }
+        outTradeNo: { type: string, description: 商户订单号，查状态用 }
+        amountCents: { type: integer, format: int64, description: 下单金额，整数分 }
+        codeUrl: { type: string, description: present=qrcode：支付链接原文 }
+        qrCode: { type: string, description: present=qrcode：二维码图（data URI） }
+        redirectUrl: { type: string, description: present=redirect：跳转地址 }
+    RechargeStatus:
+      type: object
+      required: [status, paid, amountCents]
+      properties:
+        status: { type: string, enum: [pending, paid, closed, expired] }
+        paid: { type: boolean, description: 已到账；置 true 后服务端作废该用户的余额缓存 }
+        amountCents: { type: integer, format: int64 }
     CaptureManifest:
       type: object
       description: |
@@ -341,3 +416,63 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Envelope' }
+  /api/mobile/billing/balance:
+    get:
+      summary: 手机端：统一账户余额（裸对象）
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      responses:
+        "200":
+          description: |
+            裸对象；未登录 Envelope(4010)；未绑定/无已验证身份/审核账号/官网不可达
+            一律 Envelope(code 1) + kind + 可读 message（绝不用余额 0 冒充）。
+            **读余额永不在官网建号**（内部口 resolve 传 create=false）：查无此账户回
+            kind=NOT_CONNECTED，客户端据此不渲染余额那一行。建号只发生在用户显式发起充值时。
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/BillingBalance'
+                  - $ref: '#/components/schemas/Envelope'
+  /api/mobile/billing/recharge:
+    post:
+      summary: 手机端：创建充值单（裸对象）
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amountCents, idempotencyKey]
+              properties:
+                amountCents: { type: integer, format: int64, description: 充值金额，整数分，须 > 0 }
+                idempotencyKey:
+                  type: string
+                  pattern: '^[A-Za-z0-9_-]{8,64}$'
+                  description: |
+                    **客户端生成并落盘后传入**（扛 App 被杀）。服务端不代生成，缺失即 code 1。
+                    官网 orders 表有 UNIQUE(userId, idempotencyKey) 兜底。
+      responses:
+        "200":
+          description: 裸对象；未登录 Envelope(4010)；业务错误 Envelope(code 1)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/RechargeOrder'
+                  - $ref: '#/components/schemas/Envelope'
+  /api/mobile/billing/recharge/status:
+    get:
+      summary: 手机端：查充值单状态（裸对象）
+      parameters:
+        - { $ref: '#/components/parameters/SessionId' }
+        - { name: outTradeNo, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: 裸对象；未登录 Envelope(4010)；业务错误 Envelope(code 1)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/RechargeStatus'
+                  - $ref: '#/components/schemas/Envelope'

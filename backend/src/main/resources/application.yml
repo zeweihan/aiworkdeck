@@ -565,6 +565,24 @@ mobile:
     billing:
       base-url: ${TRANSFER_BILLING_BASE_URL:}
       secret: ${TRANSFER_BILLING_SECRET:}
+  # 手机端统一账户余额/充值的内部记账口（dev-board#425）：官网
+  # POST {base-url}/api/internal/account，头 X-Internal-Secret。两个键任一为空 = 本服务器
+  # 未开通，/api/mobile/billing/* 一律给可读 code:1「此服务器未开通统一账户充值」且不发请求。
+  # secret 与 TRANSFER_BILLING_SECRET 是两把不同的密钥，不要复用（官网侧
+  # AWD_MOBILE_BILLING_SECRET，只在服务器 env 里配，别入库）。
+  billing:
+    base-url: ${MOBILE_BILLING_BASE_URL:}
+    secret: ${MOBILE_BILLING_SECRET:}
+    # 充值下单/查单的总开关（dev-board#425 二轮复审 N1）。默认关，且在
+    # **dev-board#434（官网账户注销传导）落地之前一律不许打开**。
+    # 理由：POST /api/mobile/billing/recharge 是全站唯一 create=true 的调用方——任何持有
+    # 有效 X-Session-Id 的人直接打它，就会在官网建出一行含明文手机号的真账户并发注册赠额；
+    # 而 AccountDeletionService 只删 Java 侧本地表、不通知官网，官网内部口也还没有 delete
+    # action，于是「App 自己建的账号 App 内删不掉」，直接撞 App Store 5.1.1(v) 与个人信息
+    # 保护法的删除权。本期四端都没有充值界面，靠「没人调」挡不住，所以要有这个服务端开关。
+    # 关时 /recharge 与 /recharge/status 在到达 create=true 之前短路成 kind=DISABLED，
+    # 不发任何上游请求；GET /balance 是只读的（create=false，永不建号），不受本开关影响。
+    recharge-enabled: ${MOBILE_BILLING_RECHARGE_ENABLED:false}
 
 # 文件存储配置
 storage:

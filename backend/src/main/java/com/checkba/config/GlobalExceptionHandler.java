@@ -96,6 +96,33 @@ public class GlobalExceptionHandler {
         return ResponseEntity.ok().body(result);
     }
 
+    /**
+     * 手机端统一账户余额/充值失败：{@code code=1} + <b>机器可读的 {@code kind}</b>
+     * （dev-board#425 复审 C2）。
+     *
+     * <p>不接这条的话，这一族错误会落到下面的 IllegalArgumentException handler，
+     * 只剩一句 message——而 message 经 {@link com.checkba.service.LangText} 在英文部署下
+     * 会变成英文，客户端拿它做分支必然落空（安卓那版逐字硬编码中文串、小程序判 code===-1，
+     * 两套都判错了）。八个 kind 的取值集合钉在
+     * {@link com.checkba.service.mobile.MobileBillingKind} 与 {@code openapi/mobile-v1.yaml}。
+     *
+     * <p>{@code outTradeNo} 只在 ALREADY_PAID / IDEMPOTENCY_CONFLICT 时出现：官网连同 409
+     * 一起回的既有单号，是「App 被杀后没存下单号」的恢复路径，客户端据此转去查单。
+     */
+    @ExceptionHandler(com.checkba.service.mobile.MobileBillingFailureException.class)
+    public ResponseEntity<Map<String, Object>> handleMobileBilling(
+            com.checkba.service.mobile.MobileBillingFailureException e) {
+        log.warn("手机端统一账户失败 kind={} outTradeNo={}: {}", e.getKind(), e.getOutTradeNo(), e.getMessage());
+        Map<String, Object> result = new HashMap<>();
+        result.put("code", 1);
+        result.put("kind", e.getKind().name());
+        if (e.getOutTradeNo() != null && !e.getOutTradeNo().isEmpty()) {
+            result.put("outTradeNo", e.getOutTradeNo());
+        }
+        result.put("message", e.getMessage());
+        return ResponseEntity.ok().body(result);
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, Object>> handleIllegalArgumentException(IllegalArgumentException e) {
         log.warn("GlobalExceptionHandler caught IllegalArgumentException: {}", e.getMessage());
