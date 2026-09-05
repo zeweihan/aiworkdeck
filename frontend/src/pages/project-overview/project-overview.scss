@@ -3063,15 +3063,19 @@ $color-accent: #5BD197; // Mint Green
 .ocr-selection {
   position: fixed;
   border: 2px solid var(--awd-info);
-  background: var(--awd-info-soft);
+  /* 选区叠在冻结帧上，必须半透明；--awd-info-soft 浅色下是不透明 #EFF6FF，会把框住的内容整块盖掉（dev-board#474） */
+  background: rgba(37, 99, 235, 0.12);
   border-radius: 6px;
   pointer-events: none;
 }
 
 .ocr-overlay-hintline {
   position: fixed;
-  left: 14px;
-  top: 14px;
+  /* 贴底居中：左上角是交通灯与项目标题，提示条压上去像界面坏了（dev-board#474） */
+  left: 50%;
+  bottom: 40px;
+  transform: translateX(-50%);
+  white-space: nowrap;
   padding: 6px 10px;
   background: var(--awd-surface);
   border: 1px solid var(--awd-border);

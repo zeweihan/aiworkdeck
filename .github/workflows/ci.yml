@@ -82,6 +82,9 @@ jobs:
       - name: Clipboard capture gate + delete chain (dev-board#455)
         working-directory: frontend
         run: npm run test:clipboard
+      - name: OCR overlay style contract (dev-board#474)
+        working-directory: frontend
+        run: npm run test:ocr-overlay
       - name: Build H5
         working-directory: frontend
         run: npm run build:h5
