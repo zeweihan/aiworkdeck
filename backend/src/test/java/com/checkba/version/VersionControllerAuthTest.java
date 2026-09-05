@@ -39,8 +39,6 @@ class VersionControllerAuthTest {
     @Mock
     private ProjectFileService projectFileService;
     @Mock
-    private ProjectTreeManifestService manifestService;
-    @Mock
     private com.checkba.service.telemetry.TelemetryService telemetryService;
     @Mock
     private VersionLifecycleService lifecycleService;

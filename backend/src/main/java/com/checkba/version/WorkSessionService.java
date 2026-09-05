@@ -208,6 +208,58 @@ public class WorkSessionService {
     }
 
     /**
+     * 团队服务器侧 {@code prepare-remote} 的仓库侧动作（{@code VersionController.prepareRemote}
+     * 唯一的实现），返回 true 表示留下的是「等待首推的空仓」。
+     *
+     * <p><b>整段必须与自动开启（{@link VersionLifecycleService#autoEnableNow}）互斥</b>，
+     * 所以它整个跑在本项目的 {@code repoLock} 内、连「有没有初始化过」这个判断也在锁里：
+     * {@code shareToCloud} 先在服务器上 POST 建项目（于是被自动开启，异步建仓 + 落初始版本），
+     * 紧接着就打 prepare-remote，两条路径并发建同一个 JGit 仓库、互相踩 refs 目录。
+     * 判断与动作分开在锁外做同样不行——中间落地一次自动开启，就会走成「未初始化 →
+     * initEmptyForReceive 幂等 no-op」，留下一个带着孤立「初始版本」的仓库，首推照样被拒。
+     *
+     * <p>未初始化这一支同样要清掉工作区里的 {@code .awd/}：留着的话
+     * {@link #dockDirtyMainlineForReceive} 会在 pre-receive 里把它当脏区提交成一个根提交，
+     * 首推被拒（错误码从 REJECTED_NONFASTFORWARD 变成 REJECTED_OTHER_REASON，同一个病）。
+     * 「等待首推的空仓」这个状态必须与「从没开过版本记录」逐字相同，两条分支都要守。
+     */
+    public boolean prepareRemoteRepository(long projectId, Long userId, String userName) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            if (!repoService.isInitialized(projectId)) {
+                deleteManifestDirQuietly(projectId);
+                repoService.initEmptyForReceive(projectId);
+                return true;
+            }
+            // 自动开启（dev-board#438）会给刚在服务器上建出来的项目落一笔空的「初始版本」，
+            // 而共享方紧接着要带着完整历史首推；两段历史没有共同祖先，push 被整体拒绝。
+            // 这种从没真正用过的仓库换成等待首推的空仓（详见方法注释）。
+            if (resetToReceiveReadyIfNeverUsed(projectId)) return true;
+            // 老项目补开云端协作：清单还是 v1 就落一笔升级提交——capture 出来的清单
+            // 已经是 v2，任一次提交都会把 HEAD 清单升到 v2。
+            TreeManifest head = readHeadManifestSafely(projectId);
+            if (head != null && head.version() < 2) {
+                commitNow(projectId, userId, userName,
+                        LangText.of("升级版本记录格式", "Upgraded version history format"));
+            }
+            return false;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** readAtRef(HEAD) 的容错包装：异常回 null，不让一次读取失败挡住 prepare-remote 的整体成功。 */
+    private TreeManifest readHeadManifestSafely(long projectId) {
+        try {
+            return manifestService.readAtRef(projectId, "HEAD");
+        } catch (Exception e) {
+            log.warn("读取云端准备前的清单失败: project={}", projectId, e);
+            return null;
+        }
+    }
+
+    /**
      * 团队服务器侧 {@code prepare-remote} 专用：这个仓库「建出来就没真正用过」的话，
      * 把它整个换成等待首推的空仓，返回 true；否则什么都不做，返回 false。
      *

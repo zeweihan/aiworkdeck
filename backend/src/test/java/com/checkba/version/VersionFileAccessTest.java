@@ -112,12 +112,10 @@ class VersionFileAccessTest {
     private UserService userService;
     @Mock
     private ProjectFileService projectFileService;
-    @Mock
-    private ProjectTreeManifestService manifestService;
 
     private VersionController newController() {
         return new VersionController(repoService, sessionService, projectMemberService, userService,
-                projectFileService, manifestService,
+                projectFileService,
                 org.mockito.Mockito.mock(com.checkba.service.telemetry.TelemetryService.class),
                 org.mockito.Mockito.mock(VersionLifecycleService.class));
     }

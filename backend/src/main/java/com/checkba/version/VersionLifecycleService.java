@@ -141,17 +141,26 @@ public class VersionLifecycleService {
      * 真正的自动开启：三道闸 → 开。任何异常都吞掉——版本记录是保险，
      * 开不起来也绝不能影响律师手上的事；下一个变更信号会再试一次。
      * 包内可见，供测试直接调（不必绕异步）。
+     *
+     * <p><b>整段跑在本项目的仓库锁内</b>（{@link WorkSessionService#runLocked}，可重入，
+     * 里面的 {@code enableVersionRecording} 再拿一次没关系），连「有没有初始化过」这个
+     * 判断也在锁里：团队服务器上 {@code shareToCloud} 建完项目就打 prepare-remote，
+     * 那条路与本方法并发建同一个 JGit 仓库、互相踩 refs 目录——三种坏法（prepare-remote
+     * 直接报错 / 侥幸成功 / 建成了但工作区残留 .awd/ 让首推被拒）都出现过，
+     * 而且只有 e2e 才抓得到：本进程内单跑任一条路径都是绿的。
      */
     void autoEnableNow(long projectId, Long userId, String userName) {
         try {
-            if (repoService.isInitialized(projectId)) return;
-            Project project = projectRepository.findById(projectId).orElse(null);
-            if (project == null) return;          // 事务还没提交/项目已删：下一个信号再说
-            if (Boolean.TRUE.equals(project.getVersionOptOut())) return;
-            if (!withinGuardrail(projectId)) return;
-            sessionService.enableVersionRecording(projectId,
-                    authorName(userId, userName, project), authorEmail(userId));
-            log.info("已自动开启版本记录: project={}", projectId);
+            sessionService.runLocked(projectId, () -> {
+                if (repoService.isInitialized(projectId)) return;
+                Project project = projectRepository.findById(projectId).orElse(null);
+                if (project == null) return;      // 事务还没提交/项目已删：下一个信号再说
+                if (Boolean.TRUE.equals(project.getVersionOptOut())) return;
+                if (!withinGuardrail(projectId)) return;
+                sessionService.enableVersionRecording(projectId,
+                        authorName(userId, userName, project), authorEmail(userId));
+                log.info("已自动开启版本记录: project={}", projectId);
+            });
         } catch (Exception e) {
             log.warn("自动开启版本记录失败（已忽略）: project={}", projectId, e);
         }

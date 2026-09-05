@@ -30,7 +30,6 @@ public class VersionController {
     private final ProjectMemberService projectMemberService;
     private final UserService userService;
     private final ProjectFileService projectFileService;
-    private final ProjectTreeManifestService manifestService;
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
     private final VersionLifecycleService lifecycleService;
 
@@ -44,7 +43,6 @@ public class VersionController {
                              ProjectMemberService projectMemberService,
                              UserService userService,
                              ProjectFileService projectFileService,
-                             ProjectTreeManifestService manifestService,
                              com.checkba.service.telemetry.TelemetryService telemetryService,
                              VersionLifecycleService lifecycleService) {
         this.repoService = repoService;
@@ -52,7 +50,6 @@ public class VersionController {
         this.projectMemberService = projectMemberService;
         this.userService = userService;
         this.projectFileService = projectFileService;
-        this.manifestService = manifestService;
         this.telemetryService = telemetryService;
         this.lifecycleService = lifecycleService;
     }
@@ -237,39 +234,19 @@ public class VersionController {
 
     /**
      * 让本项目可作为云端仓库：未初始化则建空仓等首推（共享方带完整历史进来）；
-     * 已初始化但清单还是 v1（老项目补开的云端协作）则落一笔升级提交——capture
-     * 出来的清单已经是 v2，任一次提交都会把 HEAD 清单升到 v2。
+     * 已初始化但清单还是 v1（老项目补开的云端协作）则落一笔升级提交。
+     *
+     * <p>决策与动作整段都在 {@link WorkSessionService#prepareRemoteRepository} 里、
+     * 跑在本项目的仓库锁内——这条路与自动开启（dev-board#438）并发建同一个仓库，
+     * 拆在控制器里做「先判断、再动手」必然留出竞态窗口（详见那个方法的注释）。
      */
     @PostMapping("/prepare-remote")
     public ResponseEntity<Map<String, Object>> prepareRemote(
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = requireWriteMember(projectId, sessionId);
-        if (!repoService.isInitialized(projectId)) {
-            repoService.initEmptyForReceive(projectId);
-            return ok(Map.of("prepared", true, "fresh", true));
-        }
-        // 自动开启（dev-board#438）会给刚在服务器上建出来的项目落一笔空的「初始版本」，
-        // 而共享方紧接着要带着完整历史首推；两段历史没有共同祖先，push 被整体拒绝。
-        // 这种从没真正用过的仓库换成等待首推的空仓（详见方法注释）。
-        if (sessionService.resetToReceiveReadyIfNeverUsed(projectId)) {
-            return ok(Map.of("prepared", true, "fresh", true));
-        }
-        TreeManifest head = manifestServiceReadHeadSafely(projectId);
-        if (head != null && head.version() < 2) {
-            sessionService.commitNow(projectId, userId, userName(userId), LangText.of("升级版本记录格式", "Upgraded version history format"));
-        }
-        return ok(Map.of("prepared", true, "fresh", false));
-    }
-
-    /** readAtRef(HEAD) 的容错包装：异常回 null，不让一次读取失败挡住 prepare-remote 的整体成功。 */
-    private TreeManifest manifestServiceReadHeadSafely(long projectId) {
-        try {
-            return manifestService.readAtRef(projectId, "HEAD");
-        } catch (Exception e) {
-            log.warn("读取云端准备前的清单失败: project={}", projectId, e);
-            return null;
-        }
+        boolean fresh = sessionService.prepareRemoteRepository(projectId, userId, userName(userId));
+        return ok(Map.of("prepared", true, "fresh", fresh));
     }
 
     @GetMapping("/timeline")
