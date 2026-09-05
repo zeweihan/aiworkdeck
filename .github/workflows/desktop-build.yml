@@ -532,7 +532,9 @@ jobs:
           # 与打包步骤同一把 ASC API Key（境内主体 8WKHZVR2W8）。API Key 认证不接
           # --team-id（团队由 issuer 唯一确定）；旧写法用 Apple ID + App 专用密码时
           # 才需要它，且当时必须写死 team id——APPLE_TEAM_ID secret 会让 history API
-          # 报 403。团队号现在只在 package.json mac.notarize.teamId 一处。
+          # 报 403。API Key 模式下团队由 issuer 唯一确定：package.json 的 mac.notarize 必须是 true，
+          # 不能带 teamId——@electron/notarize 把 teamId 归为密码凭据，与 API Key 并存直接报
+          # "Cannot use password credentials, API key credentials ... at once"（v0.34.0 首次 tag 构建实证）。
           APPLE_API_KEY_B64: ${{ secrets.APPLE_API_KEY_B64 }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
