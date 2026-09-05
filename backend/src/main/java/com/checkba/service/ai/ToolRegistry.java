@@ -51,7 +51,11 @@ public class ToolRegistry {
             "fileName", List.of("name", "filename"),
             "markdownContent", List.of("markdown_content", "content"),
             "filePath", List.of("path"),
-            "fileId", List.of("id")
+            "fileId", List.of("id"),
+            // dev-board#466 真机实况：模型第一次就按 name/parentId 调 create_folder，
+            // 被判缺参后重试才对上——整理文件的任务本来就卡在 30 步预算上，白烧两步
+            "folderName", List.of("name", "folder_name"),
+            "parentFolderId", List.of("parentId", "parent_folder_id", "parent_id")
     );
 
     /** 旧编排器为部分工具提供的缺省参数值（行为保持；键为别名解析后的真实工具名） */

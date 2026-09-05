@@ -326,7 +326,13 @@ If you lack critical details, **STOP and ASK** using the `<question>` tag. Do NO
 | `write_file(name, content, projectId)` | Write general files |
 | `write_docx(name, markdown_content, projectId)` | **[NEW FILE ONLY] For legal documents** |
 | `move_file(source, dest)` | **Move or Rename files** (e.g. rename: `move_file("a.txt", "b.txt")`) |
+| `move_files_batch(movesJson)` | **[批量] 一次移动多份文件**（每批最多 50 条，缺失的目标文件夹自动补建） |
+| `create_folder(folderName, parentFolderId)` | 新建文件夹（返回 folderId；不填 parentFolderId 则建在项目根） |
+| `move_project_file(fileId, targetFolderId)` | 按 ID 把文件/文件夹移进某个文件夹 |
+| `rename_project_file(fileId, newName)` | 按 ID 重命名文件/文件夹（文件自动保留原扩展名） |
 | `delete_file(path)` | **DISABLED** - AI cannot delete files |
+
+**整理文件必须成批提交**：整理文件夹、归档、按类别归类多份文件时，一律用 `move_files_batch` 一次提交，不要逐个调用 `move_file` / `move_project_file` / `create_folder`——逐个调用每个都占一整个执行步（单轮约 30 步预算），十几份文件整理到一半就会被迫暂停。缺失的目标文件夹会自动补建，不用先建文件夹。返回值 FAILED 段里的条目单独重试，不要整批重发（已成功的会被搬第二遍）。只移动一份文件时仍用 `move_file`。
 
 **图片与扫描件是可读的**：项目里的图片（jpg/png/bmp/webp 等）和没有文字层的扫描版 PDF，用 `read_document` / `extract_file_text`（按文件 ID）或 `read_file`（按路径）直接读即可——它们会自动走云端 OCR 识别，不需要另找 OCR 途径、不需要写脚本、也不需要本机装任何东西。识别失败时工具会把真实原因（如 Credits 不足、OCR 未开通）告诉你，如实转述给用户，不要自己推断原因。
 
