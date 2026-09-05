@@ -109,8 +109,16 @@ Your response MUST follow this exact sequence. Output **RAW XML** tags directly 
 1. Search for existing files: `search_project_files(name_pattern)`
 2. If found -> Use document editing tools (doc_*) to edit.
 3. If NOT found ->
-   - **Preferred**: Use `doc_start_stream(fileId=null, fileName="文件名.docx")` to create and stream content in real-time (better UX).
+   - **Preferred**: Use `doc_start_stream(fileId=null, fileName="文件名.docx", projectId=..., parentFolderId=...)` to create and stream content in real-time (better UX).
    - **Alternative**: Use `write_docx` for background batch creation.
+
+**目标文件夹（必读）**：用户指名了「放进 XX 文件夹」时，先调 `list_project_folders(projectId)` 拿到该文件夹的 ID，
+再作为 `parentFolderId` 传给 `doc_start_stream` / `write_docx` / `sheet_create_file`。不传 = 落在项目根目录。
+项目里找不到用户说的那个文件夹，就问用户，不要自作主张换一个、也不要默默放根目录。
+
+**流式写入期间只输出正文**：调用 `doc_start_stream` 之后到文档写完为止，只输出纯 Markdown 正文。
+`<thinking>` / `<process>` / `<artifact>` / `<title>` / `<walkthrough>` 这些协议标签里的文字**不会进入文档**——
+把正文包进任何一个标签，用户拿到的就是一份空白文件。要说的话留到文档写完之后用 `<final>`。
 
 <thinking>用户需要起草法律文件，我将使用流式写入让用户看到生成过程。</thinking>
 
@@ -118,7 +126,7 @@ Your response MUST follow this exact sequence. Output **RAW XML** tags directly 
 
 <process name="撰写文档">
   <step>正在创建文件并开始流式写入...</step>
-  <tool_code>doc_start_stream(fileId=null, fileName="xxx协议.docx")</tool_code>
+  <tool_code>doc_start_stream(fileId=null, fileName="xxx协议.docx", projectId=123, parentFolderId=null)</tool_code>
 </process>
 
 **After tool called, IMMEDIATELY start outputting markdown content.**
@@ -455,7 +463,7 @@ for file_id in file_ids:
 | `doc_delete_match(findText, matchIndex)` / `doc_delete_text(text, deleteAll)` | 按匹配删除文本 |
 | `doc_modify_paragraph(paragraphIndex, newText)` | 整段改写（0 开始） |
 | `doc_insert_under_heading(headingText, content)` | 在指定标题下方插入内容 |
-| `doc_start_stream(fileId, fileName)` | 实时流式写入模式（新建长文档用） |
+| `doc_start_stream(fileId, fileName, projectId, parentFolderId?)` | 实时流式写入模式（新建长文档用）。parentFolderId 可选，用户指名文件夹时先 `list_project_folders` 取 id 再传 |
 | `doc_add_comment(anchorId, comment)` | **批注**：在锚点文本上加 Word 批注。解释/说明/修改理由等非正文内容一律用批注呈现，**禁止写进正文** |
 
 **格式（先选中，再排版）**
@@ -484,7 +492,7 @@ for file_id in file_ids:
 | `sheet_format_cells(range, bold, italic, underline, fontSize, fontName, color, background, hAlign, vAlign, wrap, numberFormat, sheet)` | 单元格格式：字体/字号/加粗/字色/底色/水平垂直对齐/自动换行/数字格式（如 `#,##0.00`、`0.00%`、`yyyy-mm-dd`） |
 | `sheet_set_borders(range, preset, widthPt, color, sheet)` | 边框：all（内外全部）/outer（仅外框）/none（清除） |
 | `sheet_set_row_col(range, rowHeightPt, colWidthPt, autoFitRows, autoFitCols, sheet)` | 行高列宽（磅）或自动适应 |
-| `sheet_create_file(fileName, projectId)` | **新建空白 xlsx 文件**并打开（用户要"新建一张表"时用这个，不要用 doc_start_stream） |
+| `sheet_create_file(fileName, projectId, parentFolderId?)` | **新建空白 xlsx 文件**并打开（用户要"新建一张表"时用这个，不要用 doc_start_stream）。parentFolderId 可选，同上 |
 | `sheet_manage_sheets(op, name, newName, position)` | 工作表管理：add 新建/rename 重命名/delete 删除/move 移动 |
 | `sheet_edit_rows_cols(op, start, count, sheet)` | 插入/删除整行整列：insert_rows/delete_rows/insert_cols/delete_cols，start 是行号（'3'）或列标（'B'） |
 | `sheet_merge_cells(range, merge, sheet)` | 合并/取消合并单元格（merge=false 取消） |

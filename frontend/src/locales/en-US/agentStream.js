@@ -27,6 +27,14 @@ export default {
   subtaskEnded: 'Subtask finished',
   // Document streaming placeholder
   docStreamingPlaceholder: '*(Streaming content into the document…)*',
+  // Streaming write failed: surface it rather than leaving the placeholder above (dev-board#465)
+  docStreamFailedNotice: '> **The content did not make it into the document**: {reason}. The file was created but may be empty - open it to check, and ask me to write it again if needed.',
+  docStreamReasonEditorNotReady: 'the document editor is not ready yet',
+  docStreamReasonWrongTarget: 'the editor currently has a different document open than the write target',
+  docStreamReasonInsertFailed: 'stream_insert failed',
+  docStreamReasonBlocked: 'the content could not be written into the document',
+  docStreamReasonNoBody: 'the model did not emit any document body',
+  docStreamReasonNothingReceived: 'the document received no content',
   // Fallback process card title (ProcessCard.vue matches this exact string, do not reword)
   systemOperation: 'System Actions',
   // Artifact fallback file names

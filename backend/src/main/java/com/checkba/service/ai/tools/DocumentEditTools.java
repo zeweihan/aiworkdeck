@@ -133,16 +133,107 @@ public class DocumentEditTools implements AgentToolComponent {
 
     private static final Long AGENT_USER_ID = 10001L;
 
+    /** {@link #createAgentFile} 的落盘回调：拿到最终物理路径后把字节写出去。 */
+    @FunctionalInterface
+    interface FileBytesWriter {
+        void write(java.nio.file.Path target) throws Exception;
+    }
+
+    /**
+     * AI 新建项目文件的唯一落点（dev-board#465）：doc_start_stream 与 sheet_create_file 共用。
+     *
+     * <p>病灶：这两个工具此前各自手拼 {@code "projects/" + projectId + "/" + fileName} 并把
+     * parentId 写死成 null，用户说的「放进 08-尽调清单与工作底稿」在结构上就无法表达，
+     * 文件必然落在项目根目录、且没有任何报错。
+     *
+     * <p>统一后只有一条规则：parentId 由 {@link #resolveParentFolderId} 解析（可为 null =
+     * 项目根目录），行由 {@link ProjectFileService#createFile} 建（filePath 由它按文件夹层级
+     * 生成，同名走 ConflictPolicy.RENAME 自动加 " (n)"），物理路径由 storageResolver 反解，
+     * <b>路径穿越围栏保留</b>：最终物理路径必须仍在项目根目录内。
+     */
+    private ProjectFile createAgentFile(Long projectId, Long parentFolderId, String fileName,
+                                        String fileType, String wpsIdPrefix, FileBytesWriter writer) throws Exception {
+        Long parentId = resolveParentFolderId(projectId, parentFolderId);
+
+        // fileName 由 LLM 填写：名字里带路径分隔符会被 buildPhysicalPath 逐级拼进物理路径，
+        // "../42/补充协议.docx" 就把伪造文档落进别家项目的目录
+        String trimmed = fileName == null ? "" : fileName.trim();
+        if (trimmed.contains("/") || trimmed.contains("\\") || ".".equals(trimmed) || "..".equals(trimmed)) {
+            throw new IllegalArgumentException("非法文件名，路径越出项目目录: " + fileName);
+        }
+
+        String wpsId = wpsIdPrefix + "_" + System.currentTimeMillis()
+                + "_" + java.util.UUID.randomUUID().toString().substring(0, 8);
+        ProjectFile file = projectFileService.createFile(
+                projectId, parentId, trimmed, fileType, null, null, wpsId, AGENT_USER_ID,
+                ProjectFileService.ConflictPolicy.RENAME);
+
+        java.nio.file.Path projectDataDir = storageResolver.projectRoot(projectId).normalize();
+        java.nio.file.Path targetPath = storageResolver.resolve(file.getFilePath()).normalize();
+        if (!targetPath.startsWith(projectDataDir)) {
+            throw new IllegalArgumentException("非法文件名，路径越出项目目录: " + file.getFilePath());
+        }
+        if (targetPath.getParent() != null) {
+            java.nio.file.Files.createDirectories(targetPath.getParent());
+        }
+        writer.write(targetPath);
+
+        // createFile 建行时还没有字节，大小在这里补回（否则文件树显示 0 字节）
+        try {
+            file.setFileSize(targetPath.toFile().length());
+            ProjectFile persisted = projectFileRepository.save(file);
+            if (persisted != null) file = persisted;
+        } catch (Exception e) {
+            log.warn("回写新建文件大小失败: fileId={}", file.getId(), e);
+        }
+        return file;
+    }
+
+    /**
+     * 目标文件夹 ID 校验（dev-board#465）：解析不出来就明确报错，<b>绝不静默落回根目录</b>——
+     * 那正是这张卡的症状（用户指名了文件夹，文件却出现在根目录且无任何提示）。也不自动建文件夹：
+     * 名字对不上时该问用户，而不是凭模型的猜测在项目里多长出一层目录。
+     *
+     * <p>0 与负数按「项目根目录」处理（与 dev-board#457 将在 ProjectFileService 落地的
+     * resolveParentId 同口径，合并时以那边为准）。
+     */
+    private Long resolveParentFolderId(Long projectId, Long parentFolderId) {
+        if (parentFolderId == null || parentFolderId <= 0) {
+            return null;
+        }
+        ProjectFile folder = projectFileRepository.findById(parentFolderId).orElse(null);
+        if (folder == null || Boolean.TRUE.equals(folder.getIsDeleted())) {
+            throw new IllegalArgumentException("目标文件夹不存在：parentFolderId=" + parentFolderId
+                    + "。请调用 list_project_folders 取正确的文件夹 ID；确实没有这个文件夹就问用户，不要凭空填。");
+        }
+        if (!Boolean.TRUE.equals(folder.getIsFolder())) {
+            throw new IllegalArgumentException("parentFolderId=" + parentFolderId
+                    + " 指向的是文件而不是文件夹：" + folder.getName()
+                    + "。文件夹 ID 用 list_project_folders 取。");
+        }
+        if (projectId != null && !projectId.equals(folder.getProjectId())) {
+            throw new IllegalArgumentException("目标文件夹 " + parentFolderId
+                    + " 不属于项目 " + projectId + "，拒绝在跨项目的文件夹里建文件。");
+        }
+        return folder.getId();
+    }
+
     @Tool("开始实时流式写入文档。使用此工具后，模型生成的后续内容将直接写入打开的文档中。" +
           "**重要：创建新文件时必须提供 fileName 和 projectId 参数。** " +
+          "用户指名了要放进哪个文件夹时，先调 list_project_folders 拿到该文件夹的 ID，再作为 parentFolderId 传进来；" +
+          "不传就落在项目根目录——不要在用户指定了文件夹时省略它。" +
           "调用此工具后，你必须立即开始生成文档内容，并且必须使用严格的 Markdown 格式（Markdown Heading #, ##, ### 等）。" +
-          "不要在调用此工具后输出任何非文档内容的闲聊，直接开始输出文档标题和正文。")
+          "不要在调用此工具后输出任何非文档内容的闲聊，也不要把正文包进 <artifact>/<process>/<thinking> 等协议标签"
+          + "（标签内的文字不会进入文档，会得到一份空白文件），直接开始输出文档标题和正文。")
     public String doc_start_stream(
             @P("要打开的文件ID (如果是新建文件则传 null)") Long fileId,
             @P("新建文件名 (如 '法律意见书.docx')，仅当 fileId=null 时必填") String fileName,
-            @P("项目ID，仅当 fileId=null 时必填") Long projectId
+            @P("项目ID，仅当 fileId=null 时必填") Long projectId,
+            @P(value = "目标文件夹ID（可选，不填则放项目根目录）。用户指名文件夹时必须传，ID 用 list_project_folders 取。",
+               required = false) Long parentFolderId
     ) {
-        log.info("Tool: doc_start_stream called fileId={}, fileName={}, projectId={}", fileId, fileName, projectId);
+        log.info("Tool: doc_start_stream called fileId={}, fileName={}, projectId={}, parentFolderId={}",
+                fileId, fileName, projectId, parentFolderId);
         try {
             String conversationId = editorBridgeService.getCurrentConversationId();
             if (conversationId == null) {
@@ -165,55 +256,18 @@ public class DocumentEditTools implements AgentToolComponent {
                     fileName = fileName + ".docx";
                 }
 
-                // 创建空白 docx 文件（localRoot 感知；旧实现无条件 getParent() 在打包态
-                // cwd=~/.aiworkdeck 下会错误解析到 ~/data/projects/）
-                java.nio.file.Path projectDataDir = storageResolver.projectRoot(projectId);
-                if (!java.nio.file.Files.exists(projectDataDir)) {
-                    java.nio.file.Files.createDirectories(projectDataDir);
-                }
-                // fileName 由 LLM 填写：不做归一化围栏的话，"../42/补充协议.docx"
-                // 会把伪造文档直接落进别家项目的目录
-                java.nio.file.Path targetPath = projectDataDir.resolve(fileName).normalize();
-                if (!targetPath.startsWith(projectDataDir.normalize())) {
-                    return "Error: 非法文件名，路径越出项目目录";
-                }
+                // 建行 + 落盘走 createAgentFile 这一条路（dev-board#465）：parentFolderId
+                // 为空即根目录，非空即该文件夹，规则完全一致，不按参数是否为空分叉。
+                file = createAgentFile(projectId, parentFolderId, fileName, "docx", "stream", target -> {
+                    // 空白 Word 文档：保持 docx4j 裸 createPackage()，不要改走 flexmark 渲染——
+                    // worker 的 streamEnsureActive 靠「文档接近空」判定首个 # 是主标题
+                    org.docx4j.openpackaging.packages.WordprocessingMLPackage wordDoc =
+                            org.docx4j.openpackaging.packages.WordprocessingMLPackage.createPackage();
+                    wordDoc.save(target.toFile());
+                });
 
-                // 检查文件是否已存在，如果存在则自动重命名
-                String originalFileName = fileName;
-                String baseName = originalFileName;
-                String extension = ".docx";
-                if (originalFileName.toLowerCase().endsWith(".docx")) {
-                    baseName = originalFileName.substring(0, originalFileName.length() - 5);
-                }
-
-                int counter = 1;
-                while (java.nio.file.Files.exists(targetPath)) {
-                    fileName = baseName + " (" + counter + ")" + extension;
-                    targetPath = projectDataDir.resolve(fileName);
-                    counter++;
-                }
-                
-                if (counter > 1) {
-                    log.info("File '{}' already exists. Renamed to '{}'", originalFileName, fileName);
-                    // Update fileName argument effectively for the rest of the method? 
-                    // No, 'fileName' variable is used below, so we are good.
-                }
-
-                // 创建空白 Word 文档
-                org.docx4j.openpackaging.packages.WordprocessingMLPackage wordDoc = 
-                        org.docx4j.openpackaging.packages.WordprocessingMLPackage.createPackage();
-                wordDoc.save(targetPath.toFile());
-
-                // 注册到数据库
-                String wpsId = "stream_" + System.currentTimeMillis() + "_" + java.util.UUID.randomUUID().toString().substring(0, 8);
-                String storageRelativePath = "projects/" + projectId + "/" + fileName;
-                
-                file = projectFileService.createOrUpdateFile(
-                        projectId, null, fileName, "docx", targetPath.toFile().length(),
-                        storageRelativePath, wpsId, AGENT_USER_ID
-                );
-                
-                log.info("Created new docx file for streaming: id={}, name={}", file.getId(), file.getName());
+                log.info("Created new docx file for streaming: id={}, name={}, parentId={}",
+                        file.getId(), file.getName(), file.getParentId());
                 
                 // 通知前端刷新文件列表
                 editorBridgeService.sendRefreshFilesAction();
@@ -2028,12 +2082,17 @@ public class DocumentEditTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "新建表格文件", category = "document", fileEffect = "ADDED")
     @Tool("【表格·建】在项目中新建一个空白 Excel 表格文件（.xlsx）并在编辑器中打开。" +
-          "创建后用 sheet_write_cells 写入数据、sheet_format_cells 等做格式。重名会自动加序号。")
+          "创建后用 sheet_write_cells 写入数据、sheet_format_cells 等做格式。重名会自动加序号。" +
+          "用户指名了要放进哪个文件夹时，先调 list_project_folders 拿到该文件夹的 ID 再传 parentFolderId；" +
+          "不传就落在项目根目录。")
     public String sheet_create_file(
             @P("文件名，如 '费用明细表.xlsx'（.xlsx 后缀可省略）") String fileName,
-            @P("项目ID") Long projectId
+            @P("项目ID") Long projectId,
+            @P(value = "目标文件夹ID（可选，不填则放项目根目录）。用户指名文件夹时必须传，ID 用 list_project_folders 取。",
+               required = false) Long parentFolderId
     ) {
-        log.info("Tool: sheet_create_file called fileName={}, projectId={}", fileName, projectId);
+        log.info("Tool: sheet_create_file called fileName={}, projectId={}, parentFolderId={}",
+                fileName, projectId, parentFolderId);
         if (fileName == null || fileName.isBlank()) {
             return "Error: 缺少 fileName 参数";
         }
@@ -2044,34 +2103,17 @@ public class DocumentEditTools implements AgentToolComponent {
             if (!fileName.toLowerCase().endsWith(".xlsx")) {
                 fileName = fileName + ".xlsx";
             }
-            java.nio.file.Path projectDataDir = storageResolver.projectRoot(projectId);
-            if (!java.nio.file.Files.exists(projectDataDir)) {
-                java.nio.file.Files.createDirectories(projectDataDir);
-            }
-            // 重名自动加序号（与 doc_start_stream 的新建 docx 同一策略）
-            String baseName = fileName.substring(0, fileName.length() - 5);
-            java.nio.file.Path targetPath = projectDataDir.resolve(fileName);
-            int counter = 1;
-            while (java.nio.file.Files.exists(targetPath)) {
-                fileName = baseName + " (" + counter + ").xlsx";
-                targetPath = projectDataDir.resolve(fileName);
-                counter++;
-            }
-
-            // POI 生成最小空白工作簿（引擎按 .xlsx 扩展名自动选 Calc 过滤器加载）
-            try (org.apache.poi.xssf.usermodel.XSSFWorkbook wb = new org.apache.poi.xssf.usermodel.XSSFWorkbook();
-                 java.io.OutputStream os = java.nio.file.Files.newOutputStream(targetPath)) {
-                wb.createSheet("Sheet1");
-                wb.write(os);
-            }
-
-            String wpsId = "sheet_" + System.currentTimeMillis() + "_" + java.util.UUID.randomUUID().toString().substring(0, 8);
-            String storageRelativePath = "projects/" + projectId + "/" + fileName;
-            ProjectFile file = projectFileService.createOrUpdateFile(
-                    projectId, null, fileName, "xlsx", targetPath.toFile().length(),
-                    storageRelativePath, wpsId, AGENT_USER_ID
-            );
-            log.info("Created new xlsx file: id={}, name={}", file.getId(), file.getName());
+            // 建行 + 落盘与 doc_start_stream 共用同一条路（dev-board#465）
+            ProjectFile file = createAgentFile(projectId, parentFolderId, fileName, "xlsx", "sheet", target -> {
+                // POI 生成最小空白工作簿（引擎按 .xlsx 扩展名自动选 Calc 过滤器加载）
+                try (org.apache.poi.xssf.usermodel.XSSFWorkbook wb = new org.apache.poi.xssf.usermodel.XSSFWorkbook();
+                     java.io.OutputStream os = java.nio.file.Files.newOutputStream(target)) {
+                    wb.createSheet("Sheet1");
+                    wb.write(os);
+                }
+            });
+            log.info("Created new xlsx file: id={}, name={}, parentId={}",
+                    file.getId(), file.getName(), file.getParentId());
 
             editorBridgeService.sendRefreshFilesAction();
             editorBridgeService.sendOpenFileAction(file);

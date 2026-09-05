@@ -181,14 +181,14 @@ class DocumentEditToolsStyleTest {
         when(bridge.executeEditorCommand(eq("doc_open_file_sync"), any())).thenReturn("{\"status\":\"ready\"}");
         when(bridge.getCurrentConversationId()).thenReturn("conv");
         DocumentEditTools bare = new DocumentEditTools(pfs, null, bridge, null, null, null, null, null);
-        bare.doc_start_stream(100L, null, null);
+        bare.doc_start_stream(100L, null, null, null);
         assertFalse(paramsOf("doc_open_file_sync").containsKey("styleProfile"));
 
         Mockito.clearInvocations(bridge);
         when(resolver.resolve(7L, null)).thenReturn(StyleProfiles.houseDefault().merge(StyleProfiles.parse(
                 "{\"body\":{\"font\":{\"western\":\"Times New Roman\"}}}")));
         DocumentEditTools withResolver = new DocumentEditTools(pfs, null, bridge, null, null, null, null, resolver);
-        withResolver.doc_start_stream(100L, null, null);
+        withResolver.doc_start_stream(100L, null, null, null);
         assertTrue(paramsOf("doc_open_file_sync").containsKey("styleProfile"));
     }
 }
