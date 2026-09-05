@@ -42,6 +42,8 @@ public class ProjectService {
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
     private final com.checkba.storage.ProjectStorageResolver storageResolver;
     private final com.checkba.version.ProjectRepoService projectRepoService;
+    private final com.checkba.version.memory.MemoryRepoService memoryRepoService;
+    private final com.checkba.repository.MemoryRemoteRepository memoryRemoteRepository;
 
     @jakarta.persistence.PersistenceContext
     private jakarta.persistence.EntityManager entityManager;
@@ -59,7 +61,7 @@ public class ProjectService {
     private static final List<String> PROJECT_SCOPED_ENTITIES = List.of(
             "ProjectMember", "ProjectFile", "ProjectVariable", "ProjectProfileField",
             "ProjectMemory", "ProjectInvitation", "ProjectRemote", "ProjectTask",
-            "ProjectAiMessage", "EvidenceLink");
+            "ProjectAiMessage", "EvidenceLink", "WorkSession");
 
     @Transactional
     public Project createProject(ProjectCreateRequest request, Long userId) {
@@ -258,8 +260,8 @@ public class ProjectService {
     /**
      * 删除项目：连带清掉项目级的库行与磁盘目录。
      *
-     * 「删除项目」对律师意味着这个项目的材料不再留存，所以文档目录与版本记录仓库
-     * 都要一并抹掉，不能只删 project 行。
+     * 「删除项目」对律师意味着这个项目的材料不再留存，所以文档目录、版本记录仓库、
+     * 记忆仓库（裸库 + 物化工作树）都要一并抹掉，不能只删 project 行。
      */
     @Transactional
     public void deleteProject(Long id) {
@@ -271,6 +273,11 @@ public class ProjectService {
         // IDE 化本地文件夹项目的目录是用户自己的文件夹，只解绑不删。
         Path projectDir = storageResolver.hasLocalRoot(id) ? null : storageResolver.projectRoot(id);
         Path gitDir = projectRepoService.gitDir(id);
+        // 记忆仓库是独立于文档仓库的第二套目录（裸库 + 可弃的物化工作树），
+        // 既不在 projectDir 下也不在 gitDir 下，得单独算、单独删。
+        String memoryRepoKey = com.checkba.version.memory.MemoryRealm.project(id).repoKey();
+        Path memoryGitDir = memoryRepoService.gitDir(memoryRepoKey);
+        Path memoryWorkTree = memoryRepoService.workTree(memoryRepoKey);
 
         // evidence_link_target 没有 project_id 列，只能先按 link id 级联，再删 evidence_link 本身。
         entityManager.createQuery(
@@ -282,6 +289,9 @@ public class ProjectService {
                     .setParameter("pid", id)
                     .executeUpdate();
         }
+        // memory_remote 按 repoKey 建索引、没有 projectId 列，上面那套
+        // 「delete from E where e.projectId = :pid」批量语句吃不到它。
+        memoryRemoteRepository.findByRepoKey(memoryRepoKey).ifPresent(memoryRemoteRepository::delete);
         projectRepository.deleteById(id);
         storageResolver.invalidate(id);
 
@@ -289,6 +299,8 @@ public class ProjectService {
         // 为它报错反而会让用户以为项目没删掉。
         deleteDirectoryQuietly(projectDir);
         deleteDirectoryQuietly(gitDir);
+        deleteDirectoryQuietly(memoryGitDir);
+        deleteDirectoryQuietly(memoryWorkTree);
     }
 
     /** 递归删目录，失败只记日志。 */

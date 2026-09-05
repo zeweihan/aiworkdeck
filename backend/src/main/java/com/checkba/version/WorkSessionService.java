@@ -648,6 +648,7 @@ public class WorkSessionService {
                 s.setEndedAt(LocalDateTime.now());
                 s.setTitle(finalTitle);
                 sessionRepository.save(s);
+                deleteMergedBranchQuietly(projectId, s.getBranchName());
                 log.info("结束一段工作: project={}, branch={}, title={}",
                         projectId, s.getBranchName(), finalTitle);
                 retryPendingIngest(projectId);
@@ -709,11 +710,30 @@ public class WorkSessionService {
         s.setStatus(WorkSession.Status.MERGED);
         s.setEndedAt(LocalDateTime.now());
         sessionRepository.save(s);
-        repoService.deleteBranch(projectId, s.getBranchName(), true);
+        deleteMergedBranchQuietly(projectId, s.getBranchName());
         retryPendingIngest(projectId);
         log.info("结束一段工作（真合并）: project={}, title={}", projectId, s.getTitle());
         publishMainlineMerged(projectId);
         return new SessionEndResult(sha, null, null);
+    }
+
+    /**
+     * 删掉已经并进主线的工作分支。删的是引用不是历史：NO_FF 合并让这段工作的每一笔
+     * 提交都从 master 可达，分支名对律师本来也不可见，留着只会年复一年地攒
+     * refs/heads/work/*（本机 project-228.git 实测残留 22 条，全部已合并进 master）。
+     *
+     * 删失败只记日志、不阻断：合并已经成功、工作段状态也已落库，为一条没清掉的引用
+     * 抛异常，律师看到的是「结束失败」而后台其实已经结束了——同一条纪律见
+     * {@link #publishMainlineMerged}，以及 {@link SessionEndResult} 的类注释
+     * 「改了状态还要报信的路径一律用返回值，不用异常」。残留的引用不影响任何行为，
+     * 下次还能再删。
+     */
+    private void deleteMergedBranchQuietly(long projectId, String branchName) {
+        try {
+            repoService.deleteBranch(projectId, branchName, true);
+        } catch (Exception e) {
+            log.warn("删除已合并的工作分支失败（不阻断）: project={}, branch={}", projectId, branchName, e);
+        }
     }
 
     /** 发布失败不阻断结束工作——版本记录是保险，不是主流程（同一条纪律见类注释）。 */
