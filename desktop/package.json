@@ -88,7 +88,7 @@
         "NSMicrophoneUsageDescription": "麦克风用于两件事：会议录音插件录制会议音频（保存到你的项目文件，用于转写与纪要），以及反馈浮窗“说一段”的语音留言。均为你主动点击才开始，不会在后台采集。 The microphone is used for the meeting-recording plugin (audio saved to your project for transcription and minutes) and for the in-app feedback voice note. Recording starts only when you click, never in the background."
       },
       "notarize": {
-        "teamId": "X9B97KVA84"
+        "teamId": "8WKHZVR2W8"
       }
     },
     "dmg": {
