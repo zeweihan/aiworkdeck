@@ -104,4 +104,69 @@ class ProjectRepoServiceTest {
         assertNotNull(sha, "陈旧锁应被识别并清理，提交应该正常成功而不是抛 VersionException");
         assertFalse(Files.exists(lockFile), "陈旧锁清理后不该再留在磁盘上");
     }
+
+    /**
+     * Word/WPS 打开 .docx 会在同目录落一个 `~$合同.docx` 锁文件（dev-board#463）。
+     * 它进版本历史的后果不只是噪声：一次「退回」会把这份陈旧锁文件还原回律师的
+     * 文件夹，Word 可能据此认为文档「正被他人占用」。排除规则写在
+     * $GIT_DIR/info/exclude（gitDir 在工作区之外），不往律师文件夹里写 .gitignore。
+     */
+    @Test
+    void officeLockFilesNeverEnterTheVersionHistory(@TempDir Path root) throws Exception {
+        Files.createDirectories(root.resolve("projects/7"));
+        Files.writeString(root.resolve("projects/7/合同.docx"), "正文");
+        Files.writeString(root.resolve("projects/7/~$合同.docx"), "word lock");
+
+        ProjectRepoService s = svc(root);
+        s.init(7L, "韩泽伟", "hzw@example.com");
+
+        java.util.List<String> paths = s.listPaths(7L, "HEAD");
+        assertTrue(paths.contains("合同.docx"), "基准：普通文档必须被收录: " + paths);
+        assertFalse(paths.contains("~$合同.docx"), "Office 锁文件不得进初始版本: " + paths);
+        assertFalse(Files.exists(root.resolve("projects/7/.gitignore")),
+                "排除规则不得写进律师自己的文件夹");
+
+        // 增量路径：init 之后新出现的锁文件同样不该触发一笔提交
+        Files.writeString(root.resolve("projects/7/~$备忘录.docx"), "word lock 2");
+        assertNull(s.commitAll(7L, "自动存档", "auto", null, "韩泽伟", "hzw@example.com"),
+                "只有 Office 锁文件变化时不该产生新版本");
+    }
+
+    /**
+     * 排除规则必须对**已经存在**的仓库也生效，不能只在 init 那一条路上写。
+     * 建仓有三条入口（init / initEmptyForReceive / cloneFromRemote），而
+     * prepare-remote 还会删掉整个 gitDir 重建；一切读写又都汇进 open()，
+     * 所以 open() 是唯一能覆盖全部情况的落点。幂等：反复打开只留一行。
+     */
+    @Test
+    void excludeRuleIsEnsuredWhenOpeningAPreExistingRepository(@TempDir Path root) throws Exception {
+        Files.createDirectories(root.resolve("projects/7"));
+        Files.writeString(root.resolve("projects/7/合同.docx"), "正文");
+
+        ProjectRepoService s = svc(root);
+        s.init(7L, "韩泽伟", "hzw@example.com");
+
+        Path exclude = s.gitDir(7L).resolve("info").resolve("exclude");
+        assertTrue(Files.readString(exclude).contains("~$*"), "init 后应有排除规则");
+
+        // 模拟本次修复之前建出来的老仓库：规则不存在
+        Files.writeString(exclude, "# 用户自己加的\n*.bak\n");
+        try (Repository repo = s.open(7L)) {
+            assertNotNull(repo);
+        }
+        String restored = Files.readString(exclude);
+        assertTrue(restored.contains("~$*"), "打开既有仓库时应补上排除规则: " + restored);
+        assertTrue(restored.contains("*.bak"), "不得覆盖已有的排除规则: " + restored);
+
+        try (Repository repo = s.open(7L)) {
+            assertNotNull(repo);
+        }
+        long lines = Files.readString(exclude).lines().filter(l -> l.trim().equals("~$*")).count();
+        assertEquals(1, lines, "幂等：反复打开只留一行");
+
+        // 老仓库补上规则后，锁文件同样不再进历史
+        Files.writeString(root.resolve("projects/7/~$合同.docx"), "word lock");
+        assertNull(s.commitAll(7L, "自动存档", "auto", null, "韩泽伟", "hzw@example.com"),
+                "补上规则后 Office 锁文件不该产生新版本");
+    }
 }
