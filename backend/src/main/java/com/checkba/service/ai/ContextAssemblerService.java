@@ -608,6 +608,39 @@ public class ContextAssemblerService {
             }
         }
 
+        // 整理/归类多份文件必须成批提交（dev-board#466）。与 #419 的 office_replace_batch 同一道题：
+        // 文件树的变更原语全是单项的，而步数预算按 LLM 轮数计（AgentOrchestrator.MAX_LOOP_DEPTH=30），
+        // 弱模型一轮只发一个调用时，「14 份文件归进 8 个文件夹」干到一半就撞上限暂停
+        // ——2026-09-05 用户真机实况正是如此。挂在稳定段末位（约束放前面会被弱模型无视，见 PR#209）。
+        //
+        // 只对有项目文件树可整理的会话说：Office/WPS 任务窗格会话的编辑范围就是打开的那一份文档
+        // （见上面 :471 那段硬边界），而且 Word 面的 #419/#422 末位块靠「排在最后」生效，
+        // 在它后面再压一段无关指引等于把它挤走。
+        if (clientCapabilityService.capabilityOf(conversationId) != ClientCapabilityService.Capability.OFFICE) {
+            if (english) {
+                systemText.append("**When organising, archiving or re-filing SEVERAL project files, you MUST submit them in one ");
+                systemText.append("`move_files_batch` call (up to 50 entries per batch); do NOT call `move_file` / ");
+                systemText.append("`move_project_file` / `create_folder` once per file.** ");
+                systemText.append("Every single-item call costs a whole execution step (about 30 steps per turn), so a dozen files ");
+                systemText.append("run out of budget half way and the task is paused with the tidy-up unfinished. ");
+                systemText.append("Missing destination folders are created automatically, so you do not need `create_folder` first. ");
+                systemText.append("Retry only the entries the report lists under FAILED - never resend the whole batch. ");
+                systemText.append("Moving a single file still uses `move_file`. ");
+                systemText.append("More generally: tool calls that do not depend on each other's results belong in the SAME turn ");
+                systemText.append("(emit several `<tool_code>` blocks back to back); one call per turn burns the step budget.\n\n");
+            } else {
+                systemText.append("**整理文件夹、归档、把多份文件按类别归类时，必须用 `move_files_batch` 一次提交一批");
+                systemText.append("（每批最多 50 条），不要逐个调用 `move_file` / `move_project_file` / `create_folder`。** ");
+                systemText.append("逐个调用每个都要占一整个执行步（单轮上限 30 步），十几份文件整理到一半就会被迫暂停，");
+                systemText.append("用户看到的是「文件整理了一半停住了」。");
+                systemText.append("缺失的目标文件夹会自动补建，不需要先调 `create_folder`。");
+                systemText.append("返回值里 FAILED 段列出的条目单独重试，**绝不要整批重发**——已成功的会被搬第二遍。");
+                systemText.append("只移动一份文件时仍用 `move_file`。");
+                systemText.append("同理，彼此之间不需要看对方结果的工具调用要放在同一轮里并行发出");
+                systemText.append("（连续输出多个 `<tool_code>` 块），一轮一个地挤牙膏会白白烧掉步数预算。\n\n");
+            }
+        }
+
         // 稳定段（指令主体 + skill + 附件正文 + 活跃文档）与易变段之间放一个分界标记，
         // 通道层按它拆 content block 并只缓存前半段。标记恰好一次，且必须在最后拼——
         // 任何在这行之后再往 systemText 追加的内容都会掉进被缓存的前缀里。

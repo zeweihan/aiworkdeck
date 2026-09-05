@@ -41,6 +41,12 @@ class ToolRegistryTest {
             return fileName + "::" + markdownContent + "::" + projectId;
         }
 
+        @Tool("Create a folder (alias binding test)")
+        public String create_folder(@P("folder name") String folderName, Long projectId,
+                                    @P("parent") Long parentFolderId) {
+            return folderName + "::" + projectId + "::" + parentFolderId;
+        }
+
         @Tool("Numeric conversion test")
         public String numbers(@P("an int") Integer a, @P("a long") Long b, @P("a bool") boolean c) {
             return a + "/" + b + "/" + c;
@@ -85,7 +91,7 @@ class ToolRegistryTest {
     @Test
     @DisplayName("注册：@Tool 方法全部进入规格列表")
     void registersAllTools() {
-        assertEquals(8, registry.getAllSpecifications().size());
+        assertEquals(9, registry.getAllSpecifications().size());
         assertTrue(registry.hasTool("echo"));
         assertTrue(registry.hasTool("doc_find_replace"));
         assertFalse(registry.hasTool("nonexistent"));
@@ -115,6 +121,16 @@ class ToolRegistryTest {
         ToolRegistry.ToolResult r = registry.execute("write_docx",
                 "{\"name\":\"a.docx\",\"markdown_content\":\"# 标题\"}", ctx);
         assertEquals("a.docx::# 标题::5", r.output());
+    }
+
+    @Test
+    @DisplayName("兼容：create_folder 参数别名 name→folderName, parentId→parentFolderId（dev-board#466）")
+    void bindsCreateFolderAliasedArgs() {
+        // 真机实况：模型第一次就按 name/parentId 调 create_folder，被判缺参后重试才对上，
+        // 白烧两个执行步——而整理文件的任务本来就卡在 30 步预算上
+        ToolRegistry.ToolResult r = registry.execute("create_folder",
+                "{\"name\":\"01 诉讼文书\",\"parentId\":88}", ctx);
+        assertEquals("01 诉讼文书::5::88", r.output());
     }
 
     @Test

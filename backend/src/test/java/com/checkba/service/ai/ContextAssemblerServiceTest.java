@@ -454,6 +454,44 @@ class ContextAssemblerServiceTest {
     }
 
     @Test
+    @DisplayName("整理文件类任务：稳定段末位强制 move_files_batch 一次提交（dev-board#466）")
+    void fileOrganisingIsToldToBatchMoves() {
+        // 无活跃文档的普通桌面会话（整理文件树的典型形态）
+        String systemText = assembleSystemText(null);
+
+        String sep = ContextAssemblerService.SYSTEM_VOLATILE_SEPARATOR;
+        int at = systemText.indexOf(sep);
+        assertTrue(at >= 0, "system 必须带易变段分隔标记");
+        String stable = systemText.substring(0, at);
+
+        // 注意：system_prompt.md 的 §5 工具表里也有 move_files_batch（那是工具目录），
+        // 这里要断言的是**注入在稳定段末位**的那段强制指引
+        assertTrue(stable.contains("文件整理了一半停住了"), "稳定段末位应有文件整理的批量指引");
+        assertTrue(stable.contains("不要逐个调用"),
+                "必须明说逐个调用会撞上步数上限——这正是「整理到一半停住」的成因");
+        int guidance = stable.indexOf("文件整理了一半停住了");
+        assertTrue(guidance > stable.indexOf("# CORE PROTOCOL"),
+                "批量指引要挂在稳定段末位，不能只埋在 system_prompt.md 的工具表中间（约束要挂末位）");
+        assertTrue(stable.length() - guidance < 1200,
+                "批量指引应贴着稳定段末尾，后面不该再压一大段别的指令");
+    }
+
+    @Test
+    @DisplayName("office 会话不发文件整理指引：Word 面的 #419/#422 末位块不能被挤走")
+    void officeSessionKeepsItsOwnLastPositionBlock() {
+        capabilityService.record("conv-1", "office", "word");
+
+        String systemText = assembleSystemText(officeDoc("第一条 甲方应承担违约责仁……"));
+        assertFalse(systemText.contains("文件整理了一半停住了"),
+                "任务窗格会话只编辑当前这一份文档，不该再注入项目文件整理指引");
+        // Word 面的 #419/#422 末位块靠「排在最后」生效：在它后面压别的指引等于把它挤走
+        assertTrue(systemText.contains("office_pass_step"), "Word 面自己的末位块要原样保留");
+        assertTrue(systemText.lastIndexOf("必须用 office_pass_step 分块推进")
+                        > systemText.lastIndexOf("move_files_batch"),
+                "Word 面的末位块必须仍排在（基底 prompt 工具表里的）文件工具之后");
+    }
+
+    @Test
     @DisplayName("office+excel 会话：提醒与活跃文档段改用 office_excel_* 口径，不点名 Word 面工具")
     void wordingSwitchesToExcelToolsForExcelHost() {
         capabilityService.record("conv-1", "office", "excel");

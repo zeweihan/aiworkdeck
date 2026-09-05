@@ -647,50 +647,188 @@ public class FileTools implements AgentToolComponent {
             return "Error: Access denied. Paths must stay inside the project directory (no '..').";
         }
         try {
-            var index = dbPathIndex(projectId);
-            ProjectFile source = index.get(src);
-            if (source == null) {
-                return "Error: '" + src + "' is not registered in the project file tree. "
-                        + "Run scan_files first to register it, then retry.";
-            }
-
-            // destPath 指向已有文件夹 → 移入该文件夹并保留原名
-            String parentDir;
-            String newName;
-            ProjectFile destEntry = index.get(dest);
-            if (destEntry != null && Boolean.TRUE.equals(destEntry.getIsFolder())) {
-                parentDir = dest;
-                newName = source.getName();
-            } else {
-                int slash = dest.lastIndexOf('/');
-                parentDir = slash < 0 ? null : dest.substring(0, slash);
-                newName = slash < 0 ? dest : dest.substring(slash + 1);
-            }
-
-            Long targetFolderId = null;
-            if (parentDir != null) {
-                ProjectFile folder = index.get(parentDir);
-                if (folder == null) {
-                    // 逐段补建缺失的目标文件夹（某段已存在但是文件时抛 IllegalArgumentException，下面统一转成 Error 返回）
-                    targetFolderId = projectFileService.ensureFolderPath(projectId, toolUserId(),
-                            java.util.Arrays.asList(parentDir.split("/"))).getId();
-                } else if (!Boolean.TRUE.equals(folder.getIsFolder())) {
-                    return "Error: '" + parentDir + "' exists but is a file, not a folder.";
-                } else {
-                    targetFolderId = folder.getId();
-                }
-            }
-
-            ProjectFile moved = projectFileService.move(source.getId(), targetFolderId, null, toolUserId());
-            if (!newName.equals(moved.getName())) {
-                moved = projectFileService.rename(moved.getId(), newName, toolUserId());
-            }
-            return "Successfully moved '" + src + "' to '" + (parentDir == null ? moved.getName() : parentDir + "/" + moved.getName())
-                    + "' (fileId=" + moved.getId() + ").";
+            MoveOutcome outcome = moveOnePath(projectId, dbPathIndex(projectId), src, dest);
+            return "Successfully moved '" + src + "' to '" + outcome.path()
+                    + "' (fileId=" + outcome.file().getId() + ").";
+        } catch (IllegalArgumentException e) {
+            // 可行动的拒绝（源未登记、目标那段是文件…）：原样把理由交给模型，文案与拆出共用实现前逐字一致
+            return "Error: " + e.getMessage();
         } catch (Exception e) {
             log.warn("move_file failed {} -> {}", sourcePath, destPath, e);
             return "Error moving file: " + e.getMessage();
         }
+    }
+
+    /** 一次 move_files_batch 最多移动多少份（与 office_replace_batch 的 MAX_BATCH_EDITS 同值同口径） */
+    private static final int MAX_BATCH_MOVES = 50;
+
+    /**
+     * 批量清单的解析器。刻意用类级静态实例而不是构造注入：FileTools 已有 8 个协作者、
+     * 被多处直接 new，为一处 readValue 再加一个构造参数会把改动扩散到一堆无关文件。
+     * ObjectMapper 的读路径是线程安全的。
+     */
+    private static final com.fasterxml.jackson.databind.ObjectMapper BATCH_MAPPER =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /** 一条已通过前置校验的移动。 */
+    private record PlannedMove(String src, String dest) {}
+
+    /** 一次成功移动的结果：DB 记录 + 移动后的项目内相对路径。 */
+    private record MoveOutcome(ProjectFile file, String path) {}
+
+    @ToolMeta(displayName = "批量移动文件", category = "file", refreshFiles = true)
+    @Tool("Move MANY project files/folders in ONE call (file tree and storage stay in sync). " +
+            "movesJson is a JSON array of {\"sourcePath\":\"a.docx\",\"destPath\":\"01 Pleadings/a.docx\"}, " +
+            "at most " + MAX_BATCH_MOVES + " entries per batch; paths are relative to the project root. " +
+            "[Organising a folder, archiving, sorting several files into categories MUST go through this tool in one call - " +
+            "do NOT call move_file / move_project_file / create_folder once per file] " +
+            "because every single-item call costs a whole execution step (about 30 steps per turn), so a dozen files " +
+            "run out of budget half way and the task is paused. " +
+            "Missing destination folders are created automatically - you do NOT need create_folder first. " +
+            "If destPath is an existing folder the file keeps its name; otherwise the last segment becomes the new name " +
+            "(so a move can rename at the same time). " +
+            "The report gives 'moved: N' plus a per-item list; retry ONLY the entries under FAILED, never resend the whole " +
+            "batch (the ones that succeeded would be moved twice). For a single file keep using move_file.")
+    public String move_files_batch(
+            @P("Move list, JSON array: [{\"sourcePath\":\"...\",\"destPath\":\"...\"}, ...]") String movesJson
+    ) {
+        // dev-board#466：文件树的变更原语全是单项的，而步数预算按 LLM 轮数计
+        // （AgentOrchestrator.MAX_LOOP_DEPTH=30）。弱模型一轮只发一个调用时，
+        // 「14 份文件归进 8 个文件夹」光变更就要十几二十轮，撞上限暂停。
+        // 修法照抄 #419 的 office_replace_batch：一个真正的批量原语 + 末位强制指引。
+        log.info("Tool: move_files_batch called");
+        Long projectId = com.checkba.service.ai.context.ProjectContextHolder.getProjectIdAsLong();
+        if (projectId == null) {
+            return "Error: no project context for this request.";
+        }
+        if (!StringUtils.hasText(movesJson)) {
+            return "Error: movesJson 不能为空，示例：[{\"sourcePath\":\"会议记录.txt\",\"destPath\":\"归档/会议记录.txt\"}]";
+        }
+        List<java.util.Map<String, Object>> raw;
+        try {
+            raw = BATCH_MAPPER.readValue(movesJson,
+                    new com.fasterxml.jackson.core.type.TypeReference<List<java.util.Map<String, Object>>>() {});
+        } catch (Exception e) {
+            return "Error: movesJson 不是合法的 JSON 数组，示例："
+                    + "[{\"sourcePath\":\"会议记录.txt\",\"destPath\":\"归档/会议记录.txt\"}]";
+        }
+        if (raw == null || raw.isEmpty()) {
+            return "Error: movesJson 至少要有一条移动";
+        }
+        if (raw.size() > MAX_BATCH_MOVES) {
+            return "Error: 一批最多 " + MAX_BATCH_MOVES + " 份，本次给了 " + raw.size() + " 份，请拆成多批分次提交";
+        }
+
+        // 形状校验全部前置：任何一条不合法就整批不动手，不留半成品文件树。
+        // （目标文件夹存不存在不在这里判——缺的会在执行时自动补建，且批内先建的对后面可见。）
+        List<PlannedMove> plan = new ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (int i = 0; i < raw.size(); i++) {
+            int index = i + 1;
+            java.util.Map<String, Object> item = raw.get(i);
+            Object s = item == null ? null : item.get("sourcePath");
+            Object d = item == null ? null : item.get("destPath");
+            String srcRaw = s == null ? "" : String.valueOf(s);
+            String destRaw = d == null ? "" : String.valueOf(d);
+            if (!StringUtils.hasText(srcRaw)) {
+                return "Error: 第 " + index + " 条的 sourcePath 为空";
+            }
+            if (!StringUtils.hasText(destRaw)) {
+                return "Error: 第 " + index + " 条的 destPath 为空";
+            }
+            String src = normalizeRelPath(srcRaw);
+            String dest = normalizeRelPath(destRaw);
+            if (src == null || dest == null) {
+                return "Error: 第 " + index + " 条越界。Access denied: 路径必须留在项目目录内（不能含 '..'）："
+                        + srcRaw + " -> " + destRaw;
+            }
+            if (!seen.add(src)) {
+                return "Error: 第 " + index + " 条的 sourcePath 在本批里重复：" + src
+                        + "（同一份文件一批只能移动一次；连着搬两次请分两批）";
+            }
+            plan.add(new PlannedMove(src, dest));
+        }
+
+        // 索引一次建、每成功一项后重建：批内新建的文件夹、改过的路径对后续条目可见，
+        // 拿旧索引接着走会把后面的条目解析到过时的位置上（不报错、静默搬错）。
+        java.util.Map<String, ProjectFile> index = dbPathIndex(projectId);
+        List<String> ok = new ArrayList<>();
+        List<String> failed = new ArrayList<>();
+        for (PlannedMove m : plan) {
+            try {
+                MoveOutcome outcome = moveOnePath(projectId, index, m.src(), m.dest());
+                ok.add(m.src() + " -> " + outcome.path() + " (fileId=" + outcome.file().getId() + ")");
+                index = dbPathIndex(projectId);
+            } catch (Exception e) {
+                // 单条失败不掀翻整批：物理文件已经搬走的那些回滚不了，
+                // 逐条如实回报远好过让模型整批重发（成功的会被搬第二遍）
+                log.warn("move_files_batch entry failed {} -> {}", m.src(), m.dest(), e);
+                failed.add(m.src() + " -> " + m.dest() + " : " + e.getMessage());
+            }
+        }
+
+        StringBuilder report = new StringBuilder();
+        report.append("moved: ").append(ok.size()).append("; failed: ").append(failed.size()).append('\n');
+        for (String line : ok) {
+            report.append("- ").append(line).append('\n');
+        }
+        if (!failed.isEmpty()) {
+            report.append("FAILED (retry only these, do NOT resend the whole batch):\n");
+            for (String line : failed) {
+                report.append("- ").append(line).append('\n');
+            }
+        }
+        return report.toString().trim();
+    }
+
+    /**
+     * 单条路径移动的实现，{@link #move_file} 与 {@link #move_files_batch} 共用——
+     * 两个入口对同一件事的行为与拒绝理由不能有出入。
+     *
+     * @param index 调用方持有的路径索引（批量时每成功一项后重建）
+     * @return 移动后的 DB 记录与项目内相对路径
+     * @throws IllegalArgumentException 可行动的拒绝，message 直接给模型看
+     */
+    private MoveOutcome moveOnePath(Long projectId, java.util.Map<String, ProjectFile> index,
+                                    String src, String dest) {
+        ProjectFile source = index.get(src);
+        if (source == null) {
+            throw new IllegalArgumentException("'" + src + "' is not registered in the project file tree. "
+                    + "Run scan_files first to register it, then retry.");
+        }
+
+        // destPath 指向已有文件夹 → 移入该文件夹并保留原名
+        String parentDir;
+        String newName;
+        ProjectFile destEntry = index.get(dest);
+        if (destEntry != null && Boolean.TRUE.equals(destEntry.getIsFolder())) {
+            parentDir = dest;
+            newName = source.getName();
+        } else {
+            int slash = dest.lastIndexOf('/');
+            parentDir = slash < 0 ? null : dest.substring(0, slash);
+            newName = slash < 0 ? dest : dest.substring(slash + 1);
+        }
+
+        Long targetFolderId = null;
+        if (parentDir != null) {
+            ProjectFile folder = index.get(parentDir);
+            if (folder == null) {
+                // 逐段补建缺失的目标文件夹（某段已存在但是文件时 ensureFolderPath 抛 IllegalArgumentException）
+                targetFolderId = projectFileService.ensureFolderPath(projectId, toolUserId(),
+                        java.util.Arrays.asList(parentDir.split("/"))).getId();
+            } else if (!Boolean.TRUE.equals(folder.getIsFolder())) {
+                throw new IllegalArgumentException("'" + parentDir + "' exists but is a file, not a folder.");
+            } else {
+                targetFolderId = folder.getId();
+            }
+        }
+
+        ProjectFile moved = projectFileService.move(source.getId(), targetFolderId, null, toolUserId());
+        if (!newName.equals(moved.getName())) {
+            moved = projectFileService.rename(moved.getId(), newName, toolUserId());
+        }
+        return new MoveOutcome(moved, parentDir == null ? moved.getName() : parentDir + "/" + moved.getName());
     }
 
     // ==================== 文件树管理原语（DB 感知：文件树/物理文件同步更新） ====================
