@@ -583,6 +583,8 @@ public class AgentOrchestrator {
             RunGuard guard = new RunGuard();
             // 记录活跃文档 ID（修改前自动检查点的目标）；每轮一个独立检查点
             documentCheckpointService.clearForNewRun(conversationId);
+            // 本轮的整段插入去重闸也一并重置（dev-board#464）——闸只在一轮内有效
+            editorBridgeService.clearForNewRun(conversationId);
             if (request.getActiveContext() != null && request.getActiveContext().getId() != null) {
                 try {
                     guard.activeFileId = Long.parseLong(request.getActiveContext().getId().trim());

@@ -163,6 +163,10 @@ export const ACTION_BUDGET_MS = {
   // resolve_revisions（批量处置一张审阅卡片）最坏情况下 K 接近全文 redline 总数 N
   // （一次连续大范围编辑落在同一分钟、同一作者），与 resolve_all_revisions 同量级预算。
   resolve_revisions: 120000,
+  // 整段插入类（dev-board#464）：一份十几页的报告经修订逐行落字远超 30s，超时后
+  // 后端把「不再等」报成失败，模型重发一次 —— 同一份报告插了两遍。
+  insert_at_cursor: 120000, insert_under_heading: 120000,
+  replace_selection: 120000, modify_paragraph: 120000,
 }
 
 /**
