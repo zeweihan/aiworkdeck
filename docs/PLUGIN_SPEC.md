@@ -6,7 +6,7 @@
 > v2.6（主题通道：`init` 带 `themeTokens`、宿主推送 `type:"theme"`、SDK 自动注入 CSS 变量）随深色模式收口（dev-board#274）加入。
 > v2.7（生态路线 P0-P2，宿主 0.27.4 起（v0.27.4 发版恰在 #659 合并后切出，v2.7 随它发布），dev-board#280/281/282）：治理地基（`minHostVersion` + 实验 API
 > `x-` 前缀 + §12 只加不改章程）、文档读写权（桥 `doc.exec`/`doc.active` + 事件通道 `type:"event"`）、
-> AI 调用权（桥 `ai.request` 走平台 Credits + 权限值 `ai`）。设计定稿见 docs/superpowers/specs/
+> AI 调用权（桥 `ai.request` 走平台 Credits + 权限值 `ai`）。设计定稿见 docs/dev-notes/superpowers/specs/
 > 2026-08-29-plugin-p0/p1/p2 三篇；生态总路线 docs/PLUGIN_API_ROADMAP.md。
 > v2.8（生态路线 P3，宿主 0.28 起，dev-board#283）：evidence.retrieve.v1 升格公开 Provider 协议——
 > manifest 新增 `contributes.evidenceSources`（§13），plugin-api 1.2.0 新增 `evidence` 包
@@ -668,7 +668,7 @@ public record ToolCall(Long projectId, String conversationId, Long userId, Strin
 evidence.retrieve.v1（[docs/EVIDENCE_CONTRACT.md](EVIDENCE_CONTRACT.md)）升格为公开 Provider
 协议：第三方按契约接新数据源（工商/裁判文书/财务库/行业库），宿主统一检索与展示——
 数据源接一次，所有依据/尽调/核查场景全能用。设计定稿
-`docs/superpowers/specs/2026-08-29-plugin-p3-evidence-provider-protocol.md`。
+`docs/dev-notes/superpowers/specs/2026-08-29-plugin-p3-evidence-provider-protocol.md`。
 
 ### 13.1 两条接入通道
 
@@ -735,7 +735,7 @@ conformance 自测全绿）。宿主落点：`PluginService.registerEvidenceProv
 
 对位 VS Code 的 languages/snippets/themes——生态数量大头是**零代码声明式插件**。
 纯数据文件（JSON/docx/md），不进 JVM、不跑脚本，风险量级最低。设计定稿
-`docs/superpowers/specs/2026-08-29-plugin-p4-declarative-contributions.md`（本节为实施后的权威形状，
+`docs/dev-notes/superpowers/specs/2026-08-29-plugin-p4-declarative-contributions.md`（本节为实施后的权威形状，
 与设计稿差异：设置值直接存 `plugin.<id>.<key>`——与 SPI Settings 同一命名空间，JAR 免转接；
 新增 `settings.changed` 事件）。
 

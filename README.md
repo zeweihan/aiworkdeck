@@ -284,6 +284,14 @@ Text-to-speech runs on-device (bundled Kokoro engine); `restart-all.sh` no longe
 
 Common optional providers: OpenRouter, Gemini, Qichacha, Tushare, PKULaw, Aliyun (OCR and Tingwu transcription), and object storage. Not every provider is required to inspect the code or run the basic workbench.
 
+## Documentation
+
+- [Architecture](docs/architecture.md) — system layout and how the pieces fit
+- [Getting started](docs/getting-started.md) — local stack for contributors and self-hosters
+- [Plugin guide](docs/plugin-guide.md) — JAR tools, web panes, SDK, marketplace
+
+Internal design notes, PRDs, and implementation logs are in [docs/dev-notes/](docs/dev-notes/).
+
 ## Repository Map
 
 | Path | Purpose |
@@ -294,7 +302,7 @@ Common optional providers: OpenRouter, Gemini, Qichacha, Tushare, PKULaw, Aliyun
 | `pptx-service/` | AI-native PPT generation service |
 | `mineru-service/` | MinerU-based document parsing service |
 | `easyvoice/` | Text-to-speech service |
-| `docs/` | Engineering notes, editor migration notes, storage and workflow docs |
+| `docs/` | Contributor docs (architecture, setup, plugins); internal notes in `docs/dev-notes/` |
 | `legal/` | AGPLv3 license, CLA, commercial license, trademark terms |
 
 ## Roadmap

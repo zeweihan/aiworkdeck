@@ -282,6 +282,14 @@ chmod +x restart-all.sh
 
 常见可选提供方：OpenRouter、Gemini、企查查、Tushare、北大法宝、阿里云（OCR 与听悟转写）与对象存储。审查代码或运行基础工作台并不要求配齐所有提供方。
 
+## 文档
+
+- [架构](docs/architecture.md) — 系统怎么拆、各层职责
+- [上手](docs/getting-started.md) — 从源码跑本地栈
+- [插件指南](docs/plugin-guide.md) — JAR / Web 插件、SDK、上架
+
+内部设计稿、PRD 和实现记录在 [docs/dev-notes/](docs/dev-notes/)。
+
 ## 仓库结构
 
 | 路径 | 用途 |
@@ -292,7 +300,7 @@ chmod +x restart-all.sh
 | `pptx-service/` | AI 原生 PPT 生成服务 |
 | `mineru-service/` | 基于 MinerU 的文档解析服务 |
 | `easyvoice/` | 语音合成服务 |
-| `docs/` | 工程笔记、编辑器迁移笔记、存储与工作流文档 |
+| `docs/` | 面向贡献者的文档（架构、上手、插件）；内部笔记在 `docs/dev-notes/` |
 | `legal/` | AGPLv3 许可、CLA、商业许可、商标条款 |
 
 ## 路线图

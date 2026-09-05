@@ -33,7 +33,7 @@ AI WorkDeck（checkba_cloud）：面向法律行业的 AI 工作台。Java Sprin
 
 ## 全局约定
 
-- `docs/` 目录在 .gitignore 里，向其中添加需入库的文件要 `git add -f`。
+- 面向贡献者的文档在 `docs/`（architecture / getting-started / plugin-guide）；内部笔记在 `docs/dev-notes/`。
 - worktree 有独立的 src/，编辑与构建必须在同一棵树内，不要误用主仓库路径。
 - 本机跑 `mvn` 必须 JDK 21（系统默认 25 会 SIGBUS）。
 - 前端包管理用 npm（不是 pnpm）。
