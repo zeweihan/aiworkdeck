@@ -837,17 +837,24 @@
             </view>
           </view> -->
           <!-- 圆形进度条 -->
-          <CircularProgress
-            :percentage="globalUploadProgress || 0"
-            :size="48"
-            :strokeWidth="4"
-            color="#2563eb"
-          >
-            <text style="font-size: 12px; font-weight: bold;">{{ Math.floor(globalUploadProgress || 0) }}%</text>
-          </CircularProgress>
-          <view class="upload-status-text" style="display: flex; flex-direction: column; flex: 1;">
-             <text class="status-title" style="font-size: 12px; color: #333;">{{ $t('fileTree.uploadingProgress', { done: uploadedCount, total: totalUploadCount }) }}</text>
-             <text class="status-detail" v-if="globalUploadProgress !== null" style="font-size: 10px; color: #666;">{{ Math.floor(globalUploadProgress) }}%</text>
+          <!-- dev-board#462：队列里只剩已中断的任务时不画进度环、也不说「正在上传」 -->
+          <template v-if="!showInterruptedOnly">
+            <CircularProgress
+              :percentage="globalUploadProgress || 0"
+              :size="48"
+              :strokeWidth="4"
+              color="#2563eb"
+            >
+              <text style="font-size: 12px; font-weight: bold;">{{ Math.floor(globalUploadProgress || 0) }}%</text>
+            </CircularProgress>
+            <view class="upload-status-text" style="display: flex; flex-direction: column; flex: 1;">
+               <text class="status-title" style="font-size: 12px; color: #333;">{{ $t('fileTree.uploadingProgress', { done: uploadedCount, total: totalUploadCount }) }}</text>
+               <text class="status-detail" v-if="globalUploadProgress !== null" style="font-size: 10px; color: #666;">{{ Math.floor(globalUploadProgress) }}%</text>
+            </view>
+          </template>
+          <view v-else class="upload-status-text" style="display: flex; flex-direction: column; flex: 1;">
+             <text class="status-title" style="font-size: 12px; color: #ef4444;">{{ $t('fileTree.uploadsInterrupted', { count: interruptedUploadCount }) }}</text>
+             <text class="status-detail" style="font-size: 10px; color: #666;">{{ $t('fileTree.uploadsInterruptedHint') }}</text>
           </view>
           <text
             style="font-size: 11px; color: #ef4444; cursor: pointer; padding: 4px 10px; border: 1px solid #fecaca; border-radius: 4px; background: #fef2f2; flex-shrink: 0;"
@@ -1208,11 +1215,25 @@ export default {
     checkedCount() {
       return this.checkedIds.length
     },
+    // dev-board#462：已中断/出错的任务不算「正在上传」。此前计数直接数整张 uploadStatusMap，
+    // 队列里只剩死任务时底栏就永远停在「正在上传... (0/1)」+ 那个假的 0%。
+    // globalUploadProgress 早就是这么过滤的，计数与它同一个口径。
+    activeUploads() {
+        return Object.values(this.uploadStatusMap).filter(s => !s.error && s.status !== 'interrupted')
+    },
     uploadedCount() {
-        return Object.values(this.uploadStatusMap).filter(s => s.progress === 100).length
+        return this.activeUploads.filter(s => s.progress === 100).length
     },
     totalUploadCount() {
-        return Object.keys(this.uploadStatusMap).length
+        return this.activeUploads.length
+    },
+    // 底栏在没有活跃任务时改说「N 个上传已中断」，条目本身留着（↻ 重试 / × 删除仍要够得着）
+    interruptedUploadCount() {
+        return Object.keys(this.uploadStatusMap).length - this.activeUploads.length
+    },
+    // 队列里只剩死任务时才换文案；批量上传途中队列瞬时清空（条目延迟 1s 删）仍走进度环
+    showInterruptedOnly() {
+        return this.totalUploadCount === 0 && this.interruptedUploadCount > 0
     },
     marqueeStyle() {
       const m = this.marquee
@@ -1299,20 +1320,13 @@ export default {
         return Math.min(100, (this.batchUploadFinishedSize + currentUploaded) * 100 / this.batchUploadTotalSize)
       }
 
-      const keys = Object.keys(this.uploadStatusMap).filter(k => {
-          const item = this.uploadStatusMap[k]
-          // Filter out interrupted items from "active" progress calculation?
-          // If we show them in the list, we might want to count them or not.
-          // User says "indicator shows 0/23 but not starting".
-          // Better to filter them out of the "Active" count.
-          return !item.error && item.status !== 'interrupted'
-      })
-      if (keys.length === 0) return null
+      // 已中断/出错的任务不参与进度计算（与 uploadedCount / totalUploadCount 同一个口径）
+      const active = this.activeUploads
+      if (active.length === 0) return null
 
       let total = 0
       let uploaded = 0
-      keys.forEach(key => {
-        const info = this.uploadStatusMap[key]
+      active.forEach(info => {
         total += info.size
         uploaded += info.uploaded
       })
@@ -4179,18 +4193,27 @@ export default {
             const state = JSON.parse(data)
             // 恢复时，检查是否有正在进行的任务。由于刷新导致 File 对象丢失，无法自动继续。
             // 必须将这些任务标记为中断/失败，避免 UI 假死。
+            let dropped = 0
             for (const fileId in state) {
                 const item = state[fileId]
-                // 如果任务未完成 (progress < 100)，标记为 error
-                if (item.progress < 100) {
-                    item.error = true
-                    item.status = 'interrupted' // Add explicitly status
-                    item.errorMessage = this.$t('fileTree.refreshInterrupted')
-                    // 确保 xhr 是空的
-                    item.xhr = null
+                // dev-board#462：progress 已经 100 的条目没有「可恢复」的东西
+                //（completeUpload 那 1s 延迟删除没赶上而已），留着只会让底栏永远说「正在上传」。
+                if (item.progress >= 100) {
+                    delete state[fileId]
+                    dropped += 1
+                    continue
                 }
+                // 未完成的任务（含 status:'pending' 的排队项）：内存里的 File 对象随页面一起没了，
+                // 一律标成中断，等用户点 ↻ 重选文件续传。
+                item.error = true
+                item.status = 'interrupted' // Add explicitly status
+                item.errorMessage = this.$t('fileTree.refreshInterrupted')
+                // 确保 xhr 是空的
+                item.xhr = null
             }
             this.uploadStatusMap = state
+            // 丢掉的条目要同步落盘，否则下次挂载又被原样复活（「常驻不消失」的另一半）
+            if (dropped > 0) this.saveUploadState()
         } catch (e) {}
     },
 

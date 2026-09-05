@@ -223,6 +223,27 @@ xhr 只给一句 `Network Error`，后端看到 `ClientAbortException`），三�
 `application/json, application/octet-stream`）。
 后端测试 `ProjectFileServiceImportLocalTest` / `ProjectFileControllerImportLocalTest`。
 
+**上传底栏不许把死任务算成「正在上传」（dev-board#462，2026-09-05）**：左下角那条
+`.upload-status-footer-fixed` 是 FileTree 自己的上传队列，**与手机端中转无关**
+（`frontend/src` 里没有一行 mobile-relay 代码，手机落盘全在后端 `MobileRelayClientService`）。
+此前 `uploadedCount` / `totalUploadCount` 直接数整张 `uploadStatusMap`，队列里只剩
+已中断/出错的任务时就得到「正在上传... (0/1)」，而 `globalUploadProgress` 明明过滤掉了
+死任务返回 `null`，模板那句 `Math.floor(globalUploadProgress || 0)` 又把它画成 0%。
+现在三个计数统一走新的 `activeUploads`（`!error && status !== 'interrupted'`，与
+`globalUploadProgress` 同一个口径），只剩死任务时（`showInterruptedOnly`）底栏不画进度环、
+改说「N 个上传已中断」——**条目本身留着**，悬浮列表里的 ↻ 重试与 × 删除、常驻的
+「取消全部」一个都没动。批量上传途中队列瞬时清空（条目延迟 1s 删）仍走进度环，
+所以判据是 `totalUploadCount === 0 && interruptedUploadCount > 0` 而不是单看前者。
+`restoreUploadState` 同时补两条：`progress >= 100` 的恢复条目**直接丢弃并落盘**
+（`completeUpload` 那 1s 延迟删除没赶上而已，留着会让底栏永远说「正在上传 (1/1)」，
+且 `saveUploadState` 不落 error 标志，下次挂载又原样复活）；未完成的条目（含
+`status:'pending'` 的排队项）一律标 interrupted。**刻意不做**启动时自动
+`deleteFilePerm` 删占位文件——那会毁掉跨重启续传（`resumeUpload` 策略 2 的重选文件
++ `processChunkedUpload` 开头的服务端 offset 探测是设计好的能力），而且
+`projectId` watcher（`immediate: true`）与 `FilePickerDialog` 里的第二个 FileTree 实例
+共用同一个 `upload_state_v2_project_<id>` 键，删除动作会在项目来回切时误伤在传的文件。
+单测 `frontend/tests/project-home/file-tree-upload-zombie.test.mjs`（`npm run test:project-home`）。
+
 ## 顶栏头像与统一「设置」标签（2026-08-19 立，2026-08-20 并，2026-08-21 撤下拉）
 
 rail 底部的**齿轮与用户头像都撤了**，收进顶栏右上角「活动记录」右侧的
