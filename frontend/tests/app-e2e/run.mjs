@@ -1922,11 +1922,58 @@ try {
       if (!hasBase) throw new Error('S 上未见到基线文件: ' + JSON.stringify(files).slice(0, 200))
     })
 
-    await step('服务器：lawyer_a 把 lawyer_b 加为项目参与者', async () => {
-      const r = await sApi('/api/projects/' + remoteProjectId + '/members', {
-        method: 'POST', body: { username: 'lawyer_b', role: 'PARTICIPANT' },
+    // dev-board#444：加人从「输账号名 → 点加进来」改成「输手机号/邮箱 → 查找 →
+    // 看人卡 → 确认加进来」两步。这一步因此从裸 REST 换成真实 UI 驱动——那张人卡
+    // 是整条加人链上唯一一个人工核对环节（打错一位就把陌生人加进客户案卷），只在
+    // 服务端 REST 上验证等于把新加的这半个界面完全放空。
+    // 这里输的是用户名 lawyer_b，走的是 resolveMemberUser 的用户名兜底分支：S 上两个
+    // 账号都是裸用户名注册的，没有手机号/邮箱可用（本套件不碰真实号码）。手机号/邮箱
+    // 两条主分支由后端单测 ProjectMemberLookupTest / ProjectMemberAddByContactTest 覆盖。
+    await step('A：协作抽屉里查出 lawyer_b 的人卡并确认加进案卷（UI 两步加人）', async () => {
+      await mouseClickSel('[title="资源管理器"]')
+      await mouseClickSel('[title="版本"]')
+      await page.waitForSelector('.cloud-dot', { timeout: 15000 })
+      await mouseClickText('打开协作')
+      await page.waitForSelector('.collab-dialog', { timeout: 10000 })
+      await mouseClickText('案件参与人')
+      await page.waitForSelector('.collab-add-row .uni-input-input', { timeout: 10000 })
+      const contact = await page.$('.collab-add-row .uni-input-input')
+      await contact.click(); await contact.type('lawyer_b', { delay: 15 })
+      await sleep(300) // v-model 去抖定居延迟，同本文件其余命名弹窗
+      await mouseClickText('查找')
+      await page.waitForSelector('.member-candidate', { timeout: 15000 })
+      const card = await page.evaluate(() => {
+        const el = document.querySelector('.member-candidate')
+        const nameEl = el.querySelector('.member-candidate-name')
+        const initial = el.querySelector('.member-candidate-initial')
+        return {
+          name: nameEl ? nameEl.innerText.trim() : '',
+          fallback: !!initial,
+          initial: initial ? initial.innerText.trim() : '',
+        }
       })
-      if (!r || r.code !== 0) throw new Error('加成员失败: ' + JSON.stringify(r).slice(0, 200))
+      if (card.name !== '律师乙') throw new Error('人卡展示名不对: ' + JSON.stringify(card))
+      // S 上的账号没传过头像、也没绑官网账户（avatarUrl 为 null），必须降级成首字母
+      // 方块而不是留一个碎图标——这是这张卡在真实测试账号上唯一会走到的形态。
+      if (!card.fallback || card.initial !== '律') {
+        throw new Error('人卡头像没有降级成首字母方块: ' + JSON.stringify(card))
+      }
+      await shot('j11-member-candidate')
+      await mouseClickText('协作人') // 角色单选：此刻案卷里还没有 PARTICIPANT，这个文案唯一
+      await mouseClickText('确认加进来')
+      await page.waitForFunction(() => {
+        const rows = [...document.querySelectorAll('.collab-member-row')]
+        return rows.some((r) => r.innerText.includes('律师乙') && r.innerText.includes('协作人'))
+      }, { timeout: 15000 })
+      await closeCollabDialog()
+    })
+
+    await step('服务器侧：lawyer_b 真的成了 PARTICIPANT（不只是界面上看着加上了）', async () => {
+      const r = await sApi('/api/projects/' + remoteProjectId + '/members')
+      const list = (r && r.data) || []
+      const b = (Array.isArray(list) ? list : []).find((m) => m.username === 'lawyer_b')
+      if (!b) throw new Error('S 上没有 lawyer_b: ' + JSON.stringify(list).slice(0, 300))
+      if (b.role !== 'PARTICIPANT') throw new Error('lawyer_b 角色不对: ' + b.role)
     })
 
     // B 的桌面后端是 local-mode 免登：不再注册本地账号（登录已不存在），
@@ -2152,6 +2199,60 @@ try {
       const names = (Array.isArray(files) ? files : []).map((f) => f.name)
       if (!names.includes('qa-J11协作文件.txt') || !names.includes('qa-J11协作文件（来自：团队案件库）.txt')) {
         throw new Error('S 上文件列表没有同步裁决结果: ' + JSON.stringify(names))
+      }
+    })
+
+    // dev-board#439 第 5 环（换机器取回的查重）+ 取回列表的角色标签。
+    // 入口说明：项目列表页的「从团队案件库取一份案卷」按钮被 SHOW_CLOUD_ACCEPT=false
+    // 刻意收起（project-list.vue :358），真实鼠标点不到，只能把页面组件的
+    // showCloudAccept 直接置真。这是**把被收起的入口打开**，不是伪造被测对象：
+    // 弹窗本身、它的 connections/remote-projects 两串请求、点「取到本机」之后的
+    // accept 整条链全部照真跑，断言的也是真实回包驱动出来的界面。
+    await step('取回弹窗：列表带「我在这份案卷里的角色」，同一份案卷再取一次不造第二个项目', async () => {
+      const before = await api('/api/projects/my')
+      const beforeCount = (Array.isArray(before) ? before : []).length
+      await page.goto(BASE + '/#/pages/project-list/project-list', { waitUntil: 'networkidle2', timeout: 30000 })
+      await page.waitForSelector('.project-item-card', { timeout: 20000 })
+      const opened = await page.evaluate(() => {
+        const seen = new Set()
+        for (const el of document.querySelectorAll('*')) {
+          let c = el.__vueParentComponent
+          while (c && !seen.has(c)) {
+            seen.add(c)
+            const name = c.type && (c.type.name || c.type.__name)
+            if (name === 'ProjectList' && c.proxy) { c.proxy.showCloudAccept = true; return true }
+            c = c.parent
+          }
+        }
+        return false
+      })
+      if (!opened) throw new Error('没能拿到项目列表页组件实例（uni h5 内部结构变了？）')
+      await page.waitForSelector('.cloud-project-list', { timeout: 20000 })
+      const rows = await page.evaluate(() => [...document.querySelectorAll('.cloud-project-row')].map((r) => ({
+        name: ((r.querySelector('.cloud-project-name') || {}).innerText || '').trim(),
+        role: ((r.querySelector('.cloud-project-role') || {}).innerText || '').trim(),
+      })))
+      await shot('j11-cloud-accept-roles')
+      const mine = rows.find((r) => r.name === QA.project)
+      if (!mine) throw new Error('取回弹窗里没有这份案卷: ' + JSON.stringify(rows))
+      // A 是这份远端案卷的负责人（S 上的 lawyer_a 建的），列表要当场说清这一点
+      if (mine.role !== '负责人') throw new Error('取回弹窗没有显示我的角色: ' + JSON.stringify(rows))
+      // 再取一次：cloneFromCloud 认 (connectionId, remoteProjectId) 查重，应当回既有的
+      // 本机项目（就是 A 自己那个），而不是造出第二个同名项目。判据取两条：
+      // ① 弹窗回调 goToProject 落到的就是 QA.projectId；② 本机项目数一个没多。
+      await mouseClickText('取到本机')
+      await page.waitForFunction((pid) => location.hash.includes('id=' + pid),
+        { timeout: 20000 }, String(QA.projectId))
+      const after = await api('/api/projects/my')
+      const afterCount = (Array.isArray(after) ? after : []).length
+      if (afterCount !== beforeCount) {
+        throw new Error('同一份案卷第二次取回造出了新项目: ' + beforeCount + ' -> ' + afterCount)
+      }
+      // 契约字段本身也断一次（界面不显示它，但桌面端/换机器路径靠它判断"已经在本机了"）
+      const acc = await api('/api/cloud/accept', { method: 'POST', body: { connectionId: aConnectionId, remoteProjectId } })
+      if (!acc || acc.code !== 0 || !acc.data || acc.data.alreadyLocal !== true
+          || String(acc.data.localProjectId) !== String(QA.projectId)) {
+        throw new Error('查重没有回既有项目: ' + JSON.stringify(acc).slice(0, 200))
       }
     })
   }

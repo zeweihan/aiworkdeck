@@ -23,7 +23,17 @@
             <view class="collab-lead">
               {{ $t('version.collabLeadNotLinked', { name: projectName }) }}
             </view>
-            <view v-if="!connections.length" class="collab-empty-action">
+            <!-- 一条连接都没有、但本站有官方案件库：直接给「放进去」，后端用本机的
+                 AI WorkDeck 账户自动连上——律师不该被要求填一个他不知道的服务器地址。 -->
+            <view v-if="!connections.length && official.available" class="collab-empty-action">
+              <text class="collab-note">{{ $t('version.addToOfficialLibraryNote') }}</text>
+              <view
+                class="awd-btn awd-btn-primary"
+                :class="{ 'awd-btn-disabled': busy }"
+                @tap="onShare"
+              >{{ $t('version.addToOfficialLibraryTitle') }}</view>
+            </view>
+            <view v-else-if="!connections.length" class="collab-empty-action">
               <text class="collab-note">{{ $t('version.noLibraryConnectedNote') }}</text>
               <view class="awd-btn awd-btn-primary" @tap="switchTab('library')">{{ $t('version.goConnectLibrary') }}</view>
             </view>
@@ -105,28 +115,79 @@
               </view>
             </view>
 
+            <!-- 加人分两步：先按手机号/邮箱查出是谁，看清头像姓名再确认加入。
+                 号码打错一位就把陌生人加进案卷，而案卷里是客户材料——这一步是唯一的可核对环节。 -->
             <view class="collab-field">
               <text class="collab-label">{{ $t('version.addColleagueLabel') }}</text>
               <view class="collab-add-row">
-                <input v-model="addUsername" class="awd-input" :placeholder="$t('version.colleagueUsernamePlaceholder')" />
+                <input
+                  v-model="addContact"
+                  class="awd-input"
+                  :placeholder="$t('version.colleagueContactPlaceholder')"
+                  @confirm="onLookup"
+                />
                 <view
-                  class="awd-btn awd-btn-primary"
-                  :class="{ 'awd-btn-disabled': memberBusy || !addUsername }"
-                  @tap="onAddMember"
-                >{{ $t('version.addAction') }}</view>
+                  class="awd-btn awd-btn-secondary"
+                  :class="{ 'awd-btn-disabled': lookupBusy || !addContact }"
+                  @tap="onLookup"
+                >{{ lookupBusy ? $t('version.lookingUp') : $t('version.lookupAction') }}</view>
               </view>
-              <view class="collab-role-picker">
-                <view
-                  v-for="r in ASSIGNABLE_ROLES"
-                  :key="r.value"
-                  class="collab-picker-item"
-                  :class="{ checked: addRole === r.value }"
-                  @tap="addRole = r.value"
-                >
-                  <view class="collab-radio-dot"></view>
-                  <text class="collab-picker-text">{{ r.label }}</text>
-                  <text class="collab-picker-hint">{{ r.hint }}</text>
+              <text v-if="lookupMessage" class="collab-note">{{ lookupMessage }}</text>
+              <text v-else-if="!candidate" class="collab-note">{{ $t('version.addColleagueByContactNote') }}</text>
+
+              <view v-if="candidate" class="member-candidate">
+                <view class="member-candidate-head">
+                  <image
+                    v-if="candidate.avatarUrl && !avatarBroken"
+                    :src="candidate.avatarUrl"
+                    class="member-candidate-avatar"
+                    @error="avatarBroken = true"
+                  />
+                  <view v-else class="member-candidate-avatar member-candidate-initial">
+                    {{ getInitial(candidate.displayName) || 'U' }}
+                  </view>
+                  <view class="member-candidate-id">
+                    <text class="member-candidate-name">{{ candidate.displayName || candidate.maskedContact }}</text>
+                    <!-- 手机号注册的账号展示名就是脱敏号，重复渲染一遍看着像出了错 -->
+                    <text
+                      v-if="candidate.maskedContact && candidate.maskedContact !== candidate.displayName"
+                      class="member-candidate-contact"
+                    >{{ candidate.maskedContact }}</text>
+                  </view>
                 </view>
+
+                <template v-if="candidate.alreadyMember">
+                  <text class="collab-note">
+                    {{ $t('version.alreadyInCaseFileAs', { role: roleLabel(candidate.currentRole) }) }}
+                  </text>
+                  <view class="collab-actions">
+                    <view class="awd-btn awd-btn-secondary awd-btn-disabled">{{ $t('version.alreadyAMember') }}</view>
+                    <view class="awd-btn awd-btn-secondary" @tap="clearCandidate">{{ $t('version.lookupAnother') }}</view>
+                  </view>
+                </template>
+                <template v-else>
+                  <view class="collab-role-picker">
+                    <view
+                      v-for="r in ASSIGNABLE_ROLES"
+                      :key="r.value"
+                      class="collab-picker-item"
+                      :class="{ checked: addRole === r.value }"
+                      @tap="addRole = r.value"
+                    >
+                      <view class="collab-radio-dot"></view>
+                      <text class="collab-picker-text">{{ r.label }}</text>
+                      <text class="collab-picker-hint">{{ r.hint }}</text>
+                    </view>
+                  </view>
+                  <view class="collab-actions">
+                    <view
+                      class="awd-btn awd-btn-primary"
+                      :class="{ 'awd-btn-disabled': memberBusy }"
+                      @tap="onAddMember"
+                    >{{ $t('version.confirmAddMember') }}</view>
+                    <view class="awd-btn awd-btn-secondary" @tap="clearCandidate">{{ $t('version.lookupAnother') }}</view>
+                  </view>
+                </template>
               </view>
             </view>
 
@@ -186,9 +247,10 @@
 import {
   listCloudConnections, cloudConnect, disconnectCloudConnection,
   shareProjectToCloud, uploadToCloud, updateFromCloud, checkCloud,
-  getCloudMembers, addCloudMember,
+  getCloudMembers, addCloudMember, lookupCloudMember, getOfficialCloud,
 } from '@/services/api.js'
 import { roleLabel, ASSIGNABLE_ROLES } from '@/config/memberRoles.js'
+import { getInitial } from '@/utils/textInitial.js'
 
 export default {
   name: 'CollabDialog',
@@ -217,11 +279,20 @@ export default {
       busy: false,
       members: [],
       membersLoading: false,
-      addUsername: '',
+      addContact: '',
       addRole: 'PARTICIPANT',
       memberBusy: false,
+      // 查人结果：null=还没查/已清空；对象=查到的那个人（只带展示名、头像、打码联系方式）
+      candidate: null,
+      lookupMessage: '',
+      lookupBusy: false,
+      // 官网头像 404（对方没传过头像）时降级成首字母方块，不留一个碎图标
+      avatarBroken: false,
       form: { serverUrl: '', username: '', password: '' },
       connectBusy: false,
+      // 官方团队案件库：{available, connected, serverUrl}。available=false（国际站）时
+      // 界面回到「先连一个自建案件库」那条老路。
+      official: { available: false, connected: false, serverUrl: '' },
       ASSIGNABLE_ROLES,
     }
   },
@@ -263,7 +334,15 @@ export default {
     inviteText() {
       const url = (this.cloud && this.cloud.serverUrl) || ''
       const inviter = this.inviterName || ''
+      // 官方案件库的第 2 步（填地址、用账号密码连库）对同事根本不存在——他用自己的
+      // AI WorkDeck 账号登录桌面端就有这个库。照旧话术发过去会让他去找一个不需要填的地址。
+      const isOfficial = !!(this.official.serverUrl && url && this.official.serverUrl === url)
       // 有/无邀请人分两个键：英文人名后要空格，单键拼 {inviter} 在两种语言里无法同时成立。
+      if (isOfficial) {
+        return inviter
+          ? this.$t('version.inviteTextOfficial', { inviter, project: this.projectName })
+          : this.$t('version.inviteTextOfficialNoInviter', { project: this.projectName })
+      }
       return inviter
         ? this.$t('version.inviteText', { inviter, project: this.projectName, url })
         : this.$t('version.inviteTextNoInviter', { project: this.projectName, url })
@@ -273,6 +352,9 @@ export default {
     visible(v) {
       if (!v) return
       this.activeTab = this.initialTab || 'casefile'
+      // 上次查的那个人不能跟着弹窗一起回来——律师会以为这是这次要加的人
+      this.addContact = ''
+      this.clearCandidate()
       this.loadConnections()
       if (this.linked && this.activeTab === 'people') this.loadMembers()
     },
@@ -297,18 +379,27 @@ export default {
         this.connections = []
         this.shareConnectionId = null
       }
+      // 官方案件库状态独立失败：读不到就当没有，界面退回自建案件库那条路，不拖累连接列表
+      try {
+        const res = await getOfficialCloud()
+        this.official = (res && res.data) || { available: false, connected: false, serverUrl: '' }
+      } catch (e) {
+        this.official = { available: false, connected: false, serverUrl: '' }
+      }
     },
     async onShare() {
       if (this.busy) return
-      // 多个案件库时必须由律师指名放进哪一个：拿列表第一条会在存量死连接（服务器早已
-      // 不在、令牌早已失效）排在前面时，拿着死令牌去连一个不存在的后端。
-      if (!this.shareConnectionId) {
+      // 连接一条都没有：不传 connectionId，让后端连官方案件库再共享（零配置直连）。
+      // 已经连了案件库时反过来必须由律师指名放进哪一个：拿列表第一条会在存量死连接
+      // （服务器早已不在、令牌早已失效）排在前面时，拿着死令牌去连一个不存在的后端。
+      const connectionId = this.connections.length ? this.shareConnectionId : null
+      if (this.connections.length && !connectionId) {
         uni.showToast({ title: this.$t('version.noLibrarySelectedToast'), icon: 'none' })
         return
       }
       this.busy = true
       try {
-        await shareProjectToCloud(this.projectId, this.shareConnectionId)
+        await shareProjectToCloud(this.projectId, connectionId)
         uni.showToast({ title: this.$t('version.sharedToLibrary'), icon: 'none' })
         this.$emit('changed')
       } catch (e) {
@@ -389,14 +480,42 @@ export default {
         this.membersLoading = false
       }
     },
+    // Options API 模板拿不到裸导入函数，包一层 method 才能在模板里当 getInitial(...) 调用
+    getInitial,
+    clearCandidate() {
+      this.candidate = null
+      this.lookupMessage = ''
+      this.avatarBroken = false
+    },
+    async onLookup() {
+      if (this.lookupBusy || !this.addContact) return
+      this.lookupBusy = true
+      this.clearCandidate()
+      try {
+        const res = await lookupCloudMember(this.projectId, this.addContact)
+        const person = (res && res.data) || {}
+        if (person.found) {
+          this.candidate = person
+        } else {
+          // 「这个号还没人用过」是正常结果，就地显示那句话，不弹成像故障的提示
+          this.lookupMessage = person.message || this.$t('version.colleagueNotFound')
+        }
+      } catch (e) {
+        this.lookupMessage = (e && e.message) || this.$t('version.lookupFailed')
+      } finally {
+        this.lookupBusy = false
+      }
+    },
     async onAddMember() {
-      if (this.memberBusy || !this.addUsername) return
+      if (this.memberBusy || !this.candidate || this.candidate.alreadyMember) return
       this.memberBusy = true
       try {
-        await addCloudMember(this.projectId, this.addUsername, this.addRole)
-        this.addUsername = ''
+        await addCloudMember(this.projectId, this.addContact, this.addRole)
+        this.addContact = ''
+        this.clearCandidate()
         uni.showToast({ title: this.$t('version.addedSuccess'), icon: 'none' })
         await this.loadMembers()
+        this.$emit('changed')
       } catch (e) {
         uni.showToast({ title: (e && e.message) || this.$t('version.addMemberFailed'), icon: 'none' })
       } finally {
@@ -504,6 +623,23 @@ export default {
 .collab-picker-item.checked .collab-radio-dot { border-color: var(--awd-accent); background: var(--awd-accent); }
 .collab-picker-text { font-size: 13.5px; color: var(--awd-text); word-break: break-all; }
 .collab-picker-hint { font-size: 12px; color: var(--awd-text-3); margin-left: 4px; }
+
+.member-candidate {
+  margin-top: 12px; padding: 14px; border: 1px solid var(--awd-border); border-radius: 8px;
+  display: flex; flex-direction: column; gap: 10px; background: var(--awd-bg);
+}
+.member-candidate-head { display: flex; align-items: center; gap: 12px; }
+.member-candidate-avatar {
+  width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0; overflow: hidden;
+}
+.member-candidate-initial {
+  display: flex; align-items: center; justify-content: center;
+  background: var(--awd-accent-soft); color: var(--awd-accent-text);
+  font-size: 16px; font-weight: 600;
+}
+.member-candidate-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.member-candidate-name { font-size: 15px; font-weight: 600; color: var(--awd-text); }
+.member-candidate-contact { font-size: 12.5px; color: var(--awd-text-3); }
 
 .collab-member-list { display: flex; flex-direction: column; }
 .collab-member-row {

@@ -42,6 +42,15 @@ public class CloudConnection {
     @Column
     private Long tokenId;
 
+    /**
+     * 签发这条连接的官网账户指纹（{@code AccountService.accountFingerprintOrNull}）。
+     * 只有官方案件库这条零配置直连路径会写：设备令牌是替某个官网账户换来的，
+     * 换了账号必须重桥换令牌，否则新账号会顶着上一个账号的身份往案件库里交稿。
+     * 手工填地址账号密码连的那条路上恒为空（那里的身份不是从官网账户派生的）。
+     */
+    @Column(length = 64)
+    private String accountFingerprint;
+
     @Column(nullable = false)
     private LocalDateTime createdAt;
 }

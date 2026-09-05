@@ -16,7 +16,7 @@ import java.util.function.LongSupplier;
  * server 模式此前是内网团队服务器假设：开放注册、无限流。官方要托管一个 server 实例
  * 作为 Office 插件云后端，公网暴露后这两条都要闸住。
  *
- * <h3>三道闸，全部只在 server 模式生效（local-mode 一律旁路）</h3>
+ * <h3>四道闸，全部只在 server 模式生效（local-mode 一律旁路）</h3>
  * <ul>
  *   <li><b>注册闸</b>：{@code security.registration-mode: open|closed}，默认 open 保持
  *       团队服务器现状；closed 时注册返回业务错误。</li>
@@ -24,6 +24,9 @@ import java.util.function.LongSupplier;
  *       失败锁 {@code LOCKOUT} 分钟。锁定期内的请求在校验凭据之前就被拒绝，不再计数
  *       （否则轮询会把锁无限续期）。</li>
  *   <li><b>注册限频</b>：按 IP 每小时最多 {@value #MAX_REGISTRATIONS_PER_WINDOW} 个新账号。</li>
+ *   <li><b>成员查询限频</b>：按发起的项目管理员，每 10 分钟最多
+ *       {@value #MAX_MEMBER_LOOKUPS_PER_WINDOW} 次「按手机号找同事」——查人与加人
+ *       共用这一个计数（dev-board#444）。</li>
  * </ul>
  *
  * <h3>实现边界（刻意接受）</h3>
@@ -53,6 +56,9 @@ public class AuthAbuseGuard {
     static final int MAX_CODE_SENDS_PER_WINDOW = 20;
     static final Duration CODE_WINDOW = Duration.ofHours(1);
 
+    static final int MAX_MEMBER_LOOKUPS_PER_WINDOW = 30;
+    static final Duration MEMBER_LOOKUP_WINDOW = Duration.ofMinutes(10);
+
     /** 内存兜底：超过该条数触发一次过期清理，防止被海量伪造维度撑爆内存。 */
     private static final int PURGE_THRESHOLD = 10_000;
 
@@ -63,6 +69,7 @@ public class AuthAbuseGuard {
     private final Map<String, FailureState> loginFailures = new ConcurrentHashMap<>();
     private final Map<String, WindowCounter> registrations = new ConcurrentHashMap<>();
     private final Map<String, WindowCounter> codeSends = new ConcurrentHashMap<>();
+    private final Map<String, WindowCounter> memberLookups = new ConcurrentHashMap<>();
 
     @Autowired
     public AuthAbuseGuard(
@@ -176,7 +183,49 @@ public class AuthAbuseGuard {
         });
     }
 
+    // ==================== 成员查询限频（按发起的项目管理员，查人与加人共用） ====================
+    //
+    // 「按手机号把同事加进案卷」这件事顺带造出一个探测口：换着号码调一次就知道
+    // 那个号有没有注册过 AI WorkDeck。查人端点（回头像姓名）与加人端点是同一个
+    // 探测面，**必须共用一个计数**——分开计等于把额度翻倍，交替调两个端点即可绕开。
+    //
+    // 维度是发起人（项目管理员）而不是 IP：这条路必须先过项目管理员权限，攻击者拿到的
+    // 是一个具体账号，IP 可以随便换，账号不能。基线部署 nginx 与后端同机时 IP 维度
+    // 本来也会退化成全局（见类注释）。
+
+    public void checkMemberLookupRate(Long requesterId) {
+        if (localMode) return;
+        WindowCounter counter = memberLookups.get(memberLookupKey(requesterId));
+        long now = nowMillis.getAsLong();
+        if (counter != null
+                && now - counter.windowStart <= MEMBER_LOOKUP_WINDOW.toMillis()
+                && counter.count >= MAX_MEMBER_LOOKUPS_PER_WINDOW) {
+            // 文案红线（见类注释）：不含「登录」「未授权」「请先」
+            throw new IllegalArgumentException(com.checkba.service.LangText.of(
+                    "查找同事过于频繁，稍后再试",
+                    "Too many colleague lookups just now - try again in a few minutes"));
+        }
+    }
+
+    public void recordMemberLookup(Long requesterId) {
+        if (localMode) return;
+        purgeIfOversized();
+        long now = nowMillis.getAsLong();
+        memberLookups.compute(memberLookupKey(requesterId), (k, counter) -> {
+            if (counter == null || now - counter.windowStart > MEMBER_LOOKUP_WINDOW.toMillis()) {
+                counter = new WindowCounter();
+                counter.windowStart = now;
+            }
+            counter.count++;
+            return counter;
+        });
+    }
+
     // ==================== 内部 ====================
+
+    private static String memberLookupKey(Long requesterId) {
+        return requesterId == null ? "-" : String.valueOf(requesterId);
+    }
 
     private static String loginKey(String ip, String username) {
         return (ip == null ? "-" : ip) + "|" + (username == null ? "-" : username);
@@ -196,6 +245,10 @@ public class AuthAbuseGuard {
         if (codeSends.size() > PURGE_THRESHOLD) {
             codeSends.entrySet().removeIf(e ->
                     now - e.getValue().windowStart > CODE_WINDOW.toMillis());
+        }
+        if (memberLookups.size() > PURGE_THRESHOLD) {
+            memberLookups.entrySet().removeIf(e ->
+                    now - e.getValue().windowStart > MEMBER_LOOKUP_WINDOW.toMillis());
         }
     }
 

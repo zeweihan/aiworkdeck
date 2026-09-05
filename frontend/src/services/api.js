@@ -3108,9 +3108,23 @@ export function listRemoteProjects(connectionId) {
   return request({ url: `/api/cloud/connections/${connectionId}/remote-projects`, method: 'GET' })
 }
 
+// connectionId 可省：不传就由后端连官方案件库再共享（零配置直连）。
+// 显式传 undefined/null 时不要把这个键发上去——后端按「有没有这个键」分流。
 export function shareProjectToCloud(projectId, connectionId) {
-  return request({ url: `/api/cloud/projects/${projectId}/share`, method: 'POST',
-    data: { connectionId } })
+  const data = {}
+  if (connectionId !== undefined && connectionId !== null) data.connectionId = connectionId
+  return request({ url: `/api/cloud/projects/${projectId}/share`, method: 'POST', data })
+}
+
+// 官方团队案件库：{available, connected, serverUrl, username}。available=false 表示
+// 本站暂不提供（国际站），界面就只留自建案件库那条路。
+export function getOfficialCloud() {
+  return request({ url: '/api/cloud/official', method: 'GET' })
+}
+
+// 用本机的官网账户一键连上官方案件库（幂等，重复调不会多建连接）。
+export function connectOfficialCloud() {
+  return request({ url: '/api/cloud/connect-official', method: 'POST' })
 }
 
 export function acceptCloudProject(connectionId, remoteProjectId) {
@@ -3158,9 +3172,21 @@ export function getCloudMembers(projectId) {
   return request({ url: `/api/cloud/projects/${projectId}/members`, method: 'GET' })
 }
 
-export function addCloudMember(projectId, username, role) {
+// 先查人：回 {found, displayName, avatarUrl, maskedContact, alreadyMember, currentRole, message}。
+// found=false 也是 code=0 的正常回包（message 里是「让对方先登录一次再加」那句话），
+// 界面就地显示即可，不要弹成故障提示。
+export function lookupCloudMember(projectId, identifier) {
+  return request({
+    url: `/api/cloud/projects/${projectId}/members/lookup?identifier=${encodeURIComponent(identifier || '')}`,
+    method: 'GET',
+  })
+}
+
+// identifier：同事的手机号或邮箱（律师不知道对方在案件库里的账号名，那是桥接自动生成的）。
+// 用户名仍可传，服务端把它当兜底。
+export function addCloudMember(projectId, identifier, role) {
   return request({ url: `/api/cloud/projects/${projectId}/members`, method: 'POST',
-    data: { username, role } })
+    data: { identifier, role } })
 }
 
 // ==================== 记忆同步（Phase A 桌面配置 UI）====================

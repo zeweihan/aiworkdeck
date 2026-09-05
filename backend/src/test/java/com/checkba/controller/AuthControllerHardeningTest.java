@@ -126,11 +126,11 @@ class AuthControllerHardeningTest {
     }
 
     @Test
-    @DisplayName("awdk-login 成功：返回 token/userId/username 信封")
+    @DisplayName("awdk-login 成功：返回 token/userId/username/displayName/tokenId 信封")
     void awdkLoginSuccessEnvelope() {
         AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
         when(awdkLoginService.login(anyString()))
-                .thenReturn(new AwdkLoginService.BridgeSession("awdt_x", 7L, "awd_hanzewei"));
+                .thenReturn(new AwdkLoginService.BridgeSession("awdt_x", 7L, "awd_hanzewei", "韩泽伟", 31L));
         AuthController controller = new AuthController(
                 null, null, null, null, serverGuard("open"), awdkLoginService, null, null, null, sessions(), false, null,
                 mock(com.checkba.service.account.AccountDeletionService.class));
@@ -143,6 +143,29 @@ class AuthControllerHardeningTest {
         assertEquals("awdt_x", data.get("token"));
         assertEquals(7L, data.get("userId"));
         assertEquals("awd_hanzewei", data.get("username"));
+        // 桌面端把这条桥的结果存成一条团队案件库连接：没有 tokenId 就撤不掉远端那枚
+        // 长期设备令牌，「退出这个案件库」只会做成本地断开，凭据留在服务器上继续有效。
+        assertEquals(31L, data.get("tokenId"));
+        assertEquals("韩泽伟", data.get("displayName"));
+    }
+
+    /** tokenId 缺失时**整个键不下发**——回落成 0 会让调用方存下一个不存在的令牌行 id。 */
+    @Test
+    @DisplayName("awdk-login：没有 tokenId 就不下发这个键，绝不回落 0")
+    void awdkLoginOmitsTokenIdWhenAbsent() {
+        AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
+        when(awdkLoginService.login(anyString()))
+                .thenReturn(new AwdkLoginService.BridgeSession("awdt_x", 7L, "awd_hanzewei", null, null));
+        AuthController controller = new AuthController(
+                null, null, null, null, serverGuard("open"), awdkLoginService, null, null, null, sessions(), false, null,
+                mock(com.checkba.service.account.AccountDeletionService.class));
+
+        Map<String, Object> result = controller.awdkLogin(Map.of("key", "awdk_abc"), http());
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) result.get("data");
+        assertFalse(data.containsKey("tokenId"));
+        assertEquals("awd_hanzewei", data.get("displayName"), "displayName 缺失时回落用户名");
     }
 
     @Test
@@ -198,7 +221,7 @@ class AuthControllerHardeningTest {
     void accountLoginPhoneSuccessEnvelope() {
         AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
         when(awdkLoginService.loginWithPhone("13800138000", "123456"))
-                .thenReturn(new AwdkLoginService.BridgeSession("awdt_x", 7L, "awd_hanzewei"));
+                .thenReturn(new AwdkLoginService.BridgeSession("awdt_x", 7L, "awd_hanzewei", "韩泽伟", 31L));
         AuthController controller = controller(awdkLoginService, serverGuard("open"));
 
         Map<String, Object> result = controller.accountLogin(
@@ -218,7 +241,7 @@ class AuthControllerHardeningTest {
     void accountLoginFallsBackToPasswordBranch() {
         AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
         when(awdkLoginService.loginWithPassword("hi@example.com", "pw12345678"))
-                .thenReturn(new AwdkLoginService.BridgeSession("awdt_y", 8L, "awd_hi"));
+                .thenReturn(new AwdkLoginService.BridgeSession("awdt_y", 8L, "awd_hi", "Hi", 32L));
         AuthController controller = controller(awdkLoginService, serverGuard("open"));
 
         Map<String, Object> result = controller.accountLogin(

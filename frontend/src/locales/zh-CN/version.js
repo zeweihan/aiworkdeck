@@ -173,10 +173,23 @@ export default {
   onlyYouInCaseFile: '这份案卷目前只有你一个人。',
   addColleagueLabel: '把同事加进来',
   colleagueUsernamePlaceholder: '输入同事在案件库里的账号',
+  colleagueContactPlaceholder: '同事的手机号或邮箱',
+  addColleagueByContactNote: '填同事登录 AI WorkDeck 用的手机号或邮箱；对方还没登录过的话，让他先登录一次再加。',
   addAction: '加进来',
+  // 先查再加：号码打错一位就把陌生人加进案卷，看清姓名头像这一步不能省
+  lookupAction: '查找',
+  lookingUp: '查找中…',
+  lookupAnother: '换一个人',
+  confirmAddMember: '确认加进来',
+  alreadyAMember: '已是案件参与人',
+  alreadyInCaseFileAs: '这个人已经在案卷里了，现在是{role}。',
+  colleagueNotFound: '没找到这个人，确认一下手机号或邮箱有没有写错。',
+  lookupFailed: '没能查到这个人，稍后再试一次。',
   inviteInstructionsLabel: '发给同事的加入说明',
   copyThisText: '复制这段话',
   inviteFooterNote: '同事还要有这个案件库的账号；加进来之后，他在自己电脑上按这几步就能取到案卷。',
+  addToOfficialLibraryTitle: '放进团队案件库',
+  addToOfficialLibraryNote: '用你登录 AI WorkDeck 的账号就能放进去，不用填服务器地址。放进去之后，把同事加进来，各自取一份到本机办案。',
   libraryIntro: '团队案件库是律所自己的一台服务器，案卷放在上面，所里同事各自取一份到本机办； 没有它也能照常办案，只是这份案卷只在你这台电脑上。',
   disconnectLibrary: '退出这个案件库',
   libraryUrlPlaceholder: '案件库地址，例如 https://team.example.com',
@@ -207,6 +220,9 @@ export default {
   // 有/无邀请人两个键：英文的人名后面要有空格（"{name} invites you"），单键靠拼
   // {inviter} 没法在两种语言里同时成立；zh 两键渲染结果与原拼接分支逐字节一致。
   inviteText: '{inviter}邀你一起办《{project}》。\n\n在 AI WorkDeck 里这样加入：\n1. 打开项目列表，点「从团队案件库取一份案卷」；\n2. 第一次用要先连库：点「去连一个」，填地址 {url}，用你的账号密码连上；\n3. 回到「从团队案件库取一份案卷」，选《{project}》，点「取到本机」。\n\n之后你改你的、我改我的，各自点「交稿」就能合到一起。',
+  // 官方案件库版：同事不需要连任何服务器地址，用自己的 AI WorkDeck 账号登录桌面端即可。
+  inviteTextOfficial: '{inviter}邀你一起办《{project}》。\n\n在 AI WorkDeck 里这样加入：\n1. 用你自己的 AI WorkDeck 账号登录桌面端；\n2. 打开项目列表，点「从团队案件库取一份案卷」；\n3. 选《{project}》，点「取到本机」。\n\n之后你改你的、我改我的，各自点「交稿」就能合到一起。',
+  inviteTextOfficialNoInviter: '邀你一起办《{project}》。\n\n在 AI WorkDeck 里这样加入：\n1. 用你自己的 AI WorkDeck 账号登录桌面端；\n2. 打开项目列表，点「从团队案件库取一份案卷」；\n3. 选《{project}》，点「取到本机」。\n\n之后你改你的、我改我的，各自点「交稿」就能合到一起。',
   inviteTextNoInviter: '邀你一起办《{project}》。\n\n在 AI WorkDeck 里这样加入：\n1. 打开项目列表，点「从团队案件库取一份案卷」；\n2. 第一次用要先连库：点「去连一个」，填地址 {url}，用你的账号密码连上；\n3. 回到「从团队案件库取一份案卷」，选《{project}》，点「取到本机」。\n\n之后你改你的、我改我的，各自点「交稿」就能合到一起。',
 
   // ---- InviteMemberDialog.vue ----

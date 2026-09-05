@@ -550,6 +550,15 @@ optimizer:
 # 手机端云中转（/api/mobile/*）的 blob 存储（dev-board#236）。
 # 默认本地盘（storage.local.root-path/mobile-relay）；云后端配齐 MOBILE_RELAY_OSS_*
 # 环境变量即切 OSS 私有桶（中转是短生命周期暂存，与下方 storage.oss 的文档存储无关）。
+# 团队案件库（协作）。留空 = 官方案件库地址按 ai.account.base-url 所属站点派生
+# （大陆站 → https://case.aiworkdeck.com；国际站暂不提供，只留本地版本记录）。
+# 填了就原样用——自建与私有部署靠它把「官方案件库」指到自己的服务器上。
+# 必须 https（回环 http 例外供本地联调）：这条通道上跑的是长期设备令牌。
+# 派生规则的唯一出口是 com.checkba.version.OfficialCloudEndpoint。
+cloud:
+  collab:
+    base-url: ${CLOUD_COLLAB_BASE_URL:}
+
 mobile:
   relay:
     oss:
