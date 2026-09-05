@@ -220,13 +220,15 @@ test('AdminPane.loadFeedbackList: 切筛选档太快，陈旧档位的响应不�
 })
 
 // ======================================================================
-// 4. AdminPane.vue onNavTap()：重点「记忆同步」丢弃未保存表单（文档现址 969，原始行号误标 906）
+// 4. AdminPane.vue onNavTap()：切进「账户与安全」要把那一屏的东西都拉起来
+//    （原来这一组钉的是「记忆同步」页的防重拉守卫；该分区已随 dev-board#440 整块撤掉，
+//     连同 wasAlreadyOnMemory 那道守卫一起没了，护栏改钉仍在的那条分支。）
 // ======================================================================
 
 function makeOnNavTapVm() {
   const body = extractMethod(AP_SRC, 'onNavTap(nav) {')
   const calls = {
-    loadMemoryRepos: 0, loadCloudConnections: 0, loadPlatformServices: 0,
+    loadPlatformServices: 0,
     loadSite: 0, loadAccount: 0, loadWallet: 0, loadStorageLocation: 0,
     loadIdentityCandidates: 0, reloadFeedbackPanel: 0, refreshEntitlements: 0,
   }
@@ -236,8 +238,6 @@ function makeOnNavTapVm() {
   )(() => { calls.refreshEntitlements++ })
   const vm = {
     activeNav: 'ai',
-    loadMemoryRepos() { calls.loadMemoryRepos++ },
-    loadCloudConnections() { calls.loadCloudConnections++ },
     loadPlatformServices() { calls.loadPlatformServices++ },
     loadSite() { calls.loadSite++ },
     loadAccount() { calls.loadAccount++ },
@@ -250,23 +250,26 @@ function makeOnNavTapVm() {
   return { vm, calls }
 }
 
-test('onNavTap: 已经在记忆同步页时再点一次同一个导航项，不重新触发 loadMemoryRepos', () => {
+test('onNavTap: 切进「账户与安全」把那一屏依赖的六项都拉起来', () => {
   const { vm, calls } = makeOnNavTapVm()
-  vm.onNavTap({ key: 'memory' })
-  assert.equal(calls.loadMemoryRepos, 1, '第一次进入必须加载')
-  vm.onNavTap({ key: 'memory' })
-  assert.equal(calls.loadMemoryRepos, 1, '已经在该页时再点一次不该重新拉，否则会冲掉未保存的表单')
+  vm.onNavTap({ key: 'account' })
+  assert.equal(vm.activeNav, 'account')
+  assert.equal(calls.loadSite, 1)
+  assert.equal(calls.loadAccount, 1)
+  assert.equal(calls.loadWallet, 1)
+  assert.equal(calls.loadStorageLocation, 1)
+  assert.equal(calls.loadIdentityCandidates, 1)
+  assert.equal(calls.loadPlatformServices, 1)
+  assert.equal(calls.refreshEntitlements, 1)
 })
 
-test('onNavTap: 从别的导航项切进记忆同步页仍要正常加载，别的导航项行为不受影响', () => {
+test('onNavTap: 各导航项只触发自己那一份加载，互不牵连', () => {
   const { vm, calls } = makeOnNavTapVm()
   vm.onNavTap({ key: 'feedback' })
-  vm.onNavTap({ key: 'memory' })
   assert.equal(calls.reloadFeedbackPanel, 1)
-  assert.equal(calls.loadMemoryRepos, 1)
-  vm.onNavTap({ key: 'account' })
-  vm.onNavTap({ key: 'memory' }) // 离开又回来：正常重新加载
-  assert.equal(calls.loadMemoryRepos, 2)
+  assert.equal(calls.loadAccount, 0, '切到反馈不该顺带拉账户')
+  vm.onNavTap({ key: 'ai' })
+  assert.equal(calls.reloadFeedbackPanel, 1, '切到 AI 不该再拉一次反馈')
 })
 
 // ======================================================================

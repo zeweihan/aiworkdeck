@@ -250,11 +250,13 @@ check('项目列表页删掉了写死 0 的两张统计卡', () => {
   return cards === 1 ? null : '统计条应当只剩「全部项目」一张卡，实际 ' + cards + ' 张'
 })
 
-check('项目列表页「从团队案件库取一份案卷」暂时收起（用户反馈 5），但方法与组件没删', () => {
+check('项目列表页「从团队案件库取一份案卷」入口开放（官方案件库 dev-board#439/#440），仍经 SHOW_CLOUD_ACCEPT 门控', () => {
+  // 曾因自建案件库令人困惑而收起（用户反馈 5，SHOW_CLOUD_ACCEPT=false）；官方案件库零配置直连后
+  // 它是被邀请方取回案卷的唯一入口（#444 邀请话术第 2 步指的就是它），必须开着。
   const src = readVue('src/pages/project-list/project-list.vue')
   if (!src.includes('<CloudAcceptDialog')) return '弹窗组件没搬过来'
-  if (!/const\s+SHOW_CLOUD_ACCEPT\s*=\s*false/.test(src)) {
-    return '两个入口应当用 SHOW_CLOUD_ACCEPT 门控收起，不是把整段删掉——日后要开回只改这一个常量'
+  if (!/const\s+SHOW_CLOUD_ACCEPT\s*=\s*true/.test(src)) {
+    return '两个入口应当经 SHOW_CLOUD_ACCEPT 门控且为 true——被邀请的同事没有别的取回入口'
   }
   // 1 处 method 定义 + 2 处入口绑定（有项目态顶部按钮 / 空项目态入口）；门控只加在
   // 各自的 v-if 上，openCloudAccept 这个方法名出现的次数不会因此减少

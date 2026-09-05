@@ -4,26 +4,12 @@
       <view class="awd-header"><text class="awd-title">{{ $t('version.pullFromLibraryTitle') }}</text></view>
       <view class="awd-body">
         <view v-if="loading" class="cloud-accept-hint">{{ $t('version.loadingGeneric') }}</view>
+        <!-- 走到这里 = 本站没有官方案件库、本机也没有连接（国际站）。没有「去连一个」
+             那条路了：手填地址的入口已撤，自建部署由 cloud.collab.base-url 指过来。 -->
         <view v-else-if="noConnection" class="cloud-accept-empty">
-          <text class="cloud-accept-hint">{{ $t('version.noLibraryConnectedShort') }}</text>
-          <text class="cloud-accept-goto-settings" @tap="gotoSettings">{{ $t('version.goConnectOne') }}</text>
+          <text class="cloud-accept-hint">{{ $t('version.noLibraryAvailableShort') }}</text>
         </view>
         <template v-else>
-          <!-- 连了多个案件库时必须由律师指名去哪一个取：拿列表第一条会在存量死连接
-               排在前面时对着一个早已不在的服务器发请求。 -->
-          <view v-if="connections.length > 1" class="cloud-accept-picker">
-            <text class="cloud-accept-picker-label">{{ $t('version.chooseLibrarySourceShortLabel') }}</text>
-            <view
-              v-for="c in connections"
-              :key="c.id"
-              class="cloud-accept-picker-item"
-              :class="{ checked: connectionId === c.id }"
-              @tap="selectConnection(c.id)"
-            >
-              <view class="cloud-accept-radio"></view>
-              <text class="cloud-accept-picker-text">{{ c.serverUrl }}</text>
-            </view>
-          </view>
           <view v-if="!projects.length" class="cloud-accept-hint">{{ $t('version.noSharedProjects') }}</view>
           <view v-else class="cloud-project-list">
             <view v-for="p in projects" :key="p.id" class="cloud-project-row">
@@ -65,7 +51,8 @@ export default {
     return {
       loading: false,
       noConnection: false,
-      connections: [],
+      // 本机只认一个案件库（官方，或 cloud.collab.base-url 指过来的自建库），
+      // 界面上不再有「从哪个案件库取」的选择器
       connectionId: null,
       projects: [],
       busy: false,
@@ -107,8 +94,7 @@ export default {
     roleLabel,
     async fetchConnections() {
       const res = await listCloudConnections()
-      this.connections = (res && res.data && res.data.connections) || []
-      return this.connections
+      return (res && res.data && res.data.connections) || []
     },
     async officialAvailable() {
       try {
@@ -121,19 +107,6 @@ export default {
     async loadProjects() {
       const pres = await listRemoteProjects(this.connectionId)
       this.projects = (pres && pres.data && pres.data.projects) || []
-    },
-    async selectConnection(id) {
-      if (this.connectionId === id) return
-      this.connectionId = id
-      this.projects = []
-      this.loading = true
-      try {
-        await this.loadProjects()
-      } catch (e) {
-        uni.showToast({ title: (e && e.message) || this.$t('version.loadRemoteProjectsFailed'), icon: 'none' })
-      } finally {
-        this.loading = false
-      }
     },
     async onAccept(project) {
       if (this.busy) return
@@ -148,10 +121,6 @@ export default {
       } finally {
         this.busy = false
       }
-    },
-    gotoSettings() {
-      this.close()
-      uni.navigateTo({ url: '/pages/admin/admin' })
     },
     close() {
       this.$emit('update:visible', false)
@@ -180,20 +149,6 @@ export default {
 
 .cloud-accept-hint { font-size: 26rpx; color: var(--awd-text-2); line-height: 1.6; }
 .cloud-accept-empty { display: flex; flex-direction: column; gap: 12rpx; align-items: flex-start; }
-.cloud-accept-goto-settings { font-size: 25rpx; color: var(--awd-text); text-decoration: underline; }
-.cloud-accept-picker { display: flex; flex-direction: column; gap: 8rpx; margin-bottom: 20rpx; }
-.cloud-accept-picker-label { font-size: 24rpx; color: var(--awd-text-2); }
-.cloud-accept-picker-item {
-  display: flex; align-items: center; gap: 10rpx;
-  padding: 10rpx 12rpx; border: 1px solid var(--awd-border); border-radius: 8rpx;
-}
-.cloud-accept-picker-item.checked { border-color: var(--awd-info); background: var(--awd-info-soft); }
-.cloud-accept-radio {
-  width: 18rpx; height: 18rpx; border-radius: 50%; border: 1px solid var(--awd-border-strong);
-  box-sizing: border-box; flex-shrink: 0;
-}
-.cloud-accept-picker-item.checked .cloud-accept-radio { border-color: var(--awd-info); background: var(--awd-info); }
-.cloud-accept-picker-text { font-size: 24rpx; color: var(--awd-text); word-break: break-all; }
 .cloud-project-list {}
 .cloud-project-row {
   display: flex; align-items: center; justify-content: space-between;

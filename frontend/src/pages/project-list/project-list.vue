@@ -32,8 +32,8 @@
                 </svg>
               </view>
             </view>
-            <!-- 「从团队案件库取一份案卷」暂时收起（SHOW_CLOUD_ACCEPT=false）：
-                 方法与弹窗组件原样保留，日后要开回只改这一个常量。 -->
+            <!-- 「从团队案件库取一份案卷」：被邀请的同事取回案卷的唯一入口（dev-board#444 邀请话术第 2 步指的就是它）。
+                 曾因自建案件库令人困惑而收起（SHOW_CLOUD_ACCEPT=false），官方案件库零配置直连（#439）后重新给出。 -->
             <template v-if="SHOW_CLOUD_ACCEPT && !isClientUser && projects.length > 0">
               <button class="btn-secondary-small" @tap="openCloudAccept">{{ $t('projects.pullFromTeamLibrary') }}</button>
             </template>
@@ -354,8 +354,8 @@ import CloudAcceptDialog from '@/components/CloudAcceptDialog.vue'
 const VIEW_MODE_KEY = 'checkba_project_list_view'
 
 // 「从团队案件库取一份案卷」入口暂时收起（用户反馈 5）。方法 openCloudAccept 与
-// CloudAcceptDialog 组件原样保留——只是先不给入口，日后要开回只改这一个常量。
-const SHOW_CLOUD_ACCEPT = false
+// 「从团队案件库取一份案卷」入口开关：官方案件库上线后必须为 true（被邀请方没有别的取回入口）。
+const SHOW_CLOUD_ACCEPT = true
 
 export default {
   name: 'ProjectList',

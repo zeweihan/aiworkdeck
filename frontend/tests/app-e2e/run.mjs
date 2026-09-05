@@ -1817,61 +1817,31 @@ try {
     await step('A：上传协作文件并结束一段命名工作（云端协作基线）', () =>
       runWorkSession(j11Base, 'qa-J11协作文件', 'J11 垫底工作'))
 
-    await step('A：设置页连接团队服务器 S（admin cloud 分区表单）', async () => {
-      // admin.vue 的「云端协作」nav item 是 desktopOnly（isDesktop 计算属性认
-      // window.checkbaDesktop.model 是否存在），浏览器目标不是 Electron，天然拿不到。
-      // 注入一个最小桩，只满足 mounted() 里 loadComponents()/onProgress 两处调用不抛异常
-      // （读过 admin.vue :711-743 确认过这两处是唯一用到 window.checkbaDesktop.model 的地方），
-      // 不影响其余断言——J11 是全套旅程最后一段，这个桩留到会话结束也无副作用。
-      // 两个坑都是现场调试实证抓到的，缺一步都进不去：
-      // ① evaluateOnNewDocument 只在「真的产生新 document」时才重放，project-overview
-      //   跳到 admin 走的是 uni-app 的 hash 路由，同一份 document 没重新加载，
-      //   单独注册不会生效；page.evaluate 直接对当前已加载的 document 写 window
-      //   属性能带过去，两处都注入才稳。
-      // ② uni-app 的 H5 页面栈是常驻的——J7 更早已经只读访问过一次 admin 页（那次还
-      //   没有这个桩），isDesktop 是没有响应式依赖的计算属性，那次挂载算出 false 后
-      //   就一直缓存，之后再怎么切 hash 回来都不会重算（单独跑这一步能过，接在 J7
-      //   后面跑就再也不出现「云端协作」）。唯一可靠办法是这里强制来一次真实整页
-      //   reload，把 uni-app 页面栈里那个旧 admin.vue 实例连着一起清空重来——reload
-      //   时 evaluateOnNewDocument 注册的桩会在新文档最早的脚本执行前就位，这次挂载
-      //   从第一次求值起就是 true。
-      const stubDesktop = () => {
-        // 合并进全局最小桩（shell.openExternal），不要整体覆盖——userprofile 等
-        // 页面靠 window.checkbaDesktop 存在性判定免登语境，J1 起全程依赖它。
-        window.checkbaDesktop = Object.assign({}, window.checkbaDesktop, {
-          model: {
-            status: async () => ({ components: [] }),
-            onProgress: () => () => {},
-          },
-        })
-      }
-      await page.evaluateOnNewDocument(stubDesktop)
-      await page.evaluate(stubDesktop)
-      await page.goto(BASE + '/#/pages/admin/admin', { waitUntil: 'networkidle2', timeout: 20000 })
-      await page.reload({ waitUntil: 'networkidle2', timeout: 20000 })
-      await waitText('团队案件库')
-      await mouseClickText('团队案件库')
-      await waitText('连接团队案件库')
-      await page.waitForSelector('.form-input .uni-input-input', { timeout: 8000 })
-      const inputs = await page.$$('.form-input .uni-input-input')
-      if (inputs.length < 3) throw new Error('团队案件库表单输入框数量不对: ' + inputs.length)
-      await inputs[0].click({ clickCount: 3 }); await inputs[0].type(S, { delay: 10 })
-      await inputs[1].click({ clickCount: 3 }); await inputs[1].type('lawyer_a', { delay: 10 })
-      await inputs[2].click({ clickCount: 3 }); await inputs[2].type('PwLawyerA123', { delay: 10 })
-      await sleep(300) // 同款 v-model 去抖定居延迟，见本文件其余命名弹窗的注释
-      await mouseClickText('连接')
-      await page.waitForSelector('.cloud-conn-header', { timeout: 15000 })
+    await step('A：连接团队服务器 S（POST /api/cloud/connect）', async () => {
+      // dev-board#440 起界面上没有「填服务器地址」的入口了（admin 的「团队案件库」
+      // 分区整块撤掉，协作抽屉的连库表单也撤掉）：普通用户一律连官方案件库，自建部署
+      // 靠 cloud.collab.base-url 把「官方」指到自己的服务器。A 是外部起好的长驻进程，
+      // 测试改不了它的环境变量，所以这里改走后端仍然保留的账号口令端点。
+      //
+      // 换掉的那一步原来是「注入 checkbaDesktop 桩 → 整页 reload admin → 填三个框」，
+      // 那套体操连同它的两个页面栈坑一起随分区消失；桩本身也不必留（J12 自己另注一份）。
+      const r = await api('/api/cloud/connect', { method: 'POST',
+        body: { serverUrl: S, username: 'lawyer_a', password: 'PwLawyerA123', deviceName: '桌面端' } })
+      if (!r || r.code !== 0) throw new Error('A 连接 S 失败: ' + JSON.stringify(r).slice(0, 200))
       // 记下这次连接的 id，finally 里断开——A 的桌面后端是长驻真实数据（不像 S/B 是
-      // 跑完就扔的临时进程），CloudConnection 不清理会跨多次 e2e 运行累积。这不只是
-      // 测试卫生问题：PR-E 之前 CloudSyncBar.onShare() 直接拿 listCloudConnections()
-      // 的 list[0]，累积的旧连接（服务器早已不在、设备令牌早已失效）一旦排在最前面，
-      // 「放进团队案件库」就会拿着死令牌去连一个死后端，POST /api/projects 应答里没有
-      // "id"，服务端侧 shareToCloud 对着空结果取 .getLong("id") 直接 NPE——现场调试
-      // 真踩过这个坑（连续跑几轮不清理，第二轮起必现），不是假设性风险。现在协作抽屉
-      // 让律师指名选哪一个案件库（多于一个时才渲染选择器），这条路径已经堵上。
+      // 跑完就扔的临时进程），CloudConnection 不清理会跨多次 e2e 运行累积。
       const connList = await api('/api/cloud/connections')
       const conns = (connList && connList.data && connList.data.connections) || []
       aConnectionId = conns.length ? conns[conns.length - 1].id : null
+      // 「放进团队案件库」现在不再让律师指名放进哪一个库：恰好一条连接时用那一条，
+      // 否则不传 connectionId、由后端连官方案件库（case.aiworkdeck.com）。A 上残留
+      // 别的连接时这一步之后的共享就会推去官方而不是 S，后面的断言会以看不懂的方式
+      // 崩掉——所以在这里把前提写成一条明确的失败信息，而不是让它静默走偏。
+      if (conns.length !== 1) {
+        throw new Error('A 上有 ' + conns.length + ' 条云端连接，J11 需要恰好 1 条（就是刚连上的 S）。'
+          + '先把残留的连接断开再重跑：'
+          + conns.map((c) => 'POST /api/cloud/connections/' + c.id + '/disconnect').join('；'))
+      }
     })
 
     await page.goto(BASE + '/#/pages/project-overview/project-overview?id=' + QA.projectId,
@@ -2583,9 +2553,10 @@ try {
   // 清理：删除本次运行的 QA 项目（账号无删除接口，qa_bot_* 会留存，可在管理页清）
   try { await api('/api/projects/' + QA.projectId, { method: 'DELETE' }) } catch {}
   // J11 在 A（长驻真实桌面后端，不像 S/B 是跑完就扔的进程）上建的 CloudConnection 同样
-  // 要清掉——不清理会跨多次运行累积死连接。PR-E 起「放进团队案件库」由协作抽屉让律师
-  // 指名选哪一个库（不再拿 list[0]），死连接不会再静默炸 NPE，但累积本身仍是测试卫生
-  // 问题（选择列表会越来越长）。aConnectionId 为 null（J11 被跳过或连接步骤没走到）
+  // 要清掉——不清理会跨多次运行累积死连接。dev-board#440 之后这件事更要紧了：界面上
+  // 已经没有「放进哪个案件库」的选择器，onShare 只在**恰好一条**连接时用那一条，多于
+  // 一条就改推官方案件库；J11 连接那一步因此把「恰好一条」写成了硬前提，残留连接会让
+  // 下一次运行直接在那里失败。aConnectionId 为 null（J11 被跳过或连接步骤没走到）
   // 时这里是无操作的空转。
   if (aConnectionId) {
     try { await api('/api/cloud/connections/' + aConnectionId + '/disconnect', { method: 'POST' }) } catch {}

@@ -33,26 +33,13 @@
                 @tap="onShare"
               >{{ $t('version.addToOfficialLibraryTitle') }}</view>
             </view>
+            <!-- 官方案件库不可得（国际站）且本机也没有经配置连上的库：这台机器上没有
+                 任何可放进去的案件库，界面上如实说一句就够——手填服务器地址的入口已经
+                 撤掉，自建部署改由 cloud.collab.base-url 指过来（见 deploy/web/README.md）。 -->
             <view v-else-if="!connections.length" class="collab-empty-action">
-              <text class="collab-note">{{ $t('version.noLibraryConnectedNote') }}</text>
-              <view class="awd-btn awd-btn-primary" @tap="switchTab('library')">{{ $t('version.goConnectLibrary') }}</view>
+              <text class="collab-note">{{ $t('version.noLibraryAvailableNote') }}</text>
             </view>
             <template v-else>
-              <view v-if="connections.length > 1" class="collab-field">
-                <text class="collab-label">{{ $t('version.chooseLibraryLabel') }}</text>
-                <view class="collab-picker">
-                  <view
-                    v-for="c in connections"
-                    :key="c.id"
-                    class="collab-picker-item"
-                    :class="{ checked: shareConnectionId === c.id }"
-                    @tap="shareConnectionId = c.id"
-                  >
-                    <view class="collab-radio-dot"></view>
-                    <text class="collab-picker-text">{{ c.serverUrl }}</text>
-                  </view>
-                </view>
-              </view>
               <view class="collab-actions">
                 <view
                   class="awd-btn awd-btn-primary"
@@ -70,7 +57,6 @@
             </view>
             <view class="collab-meta">
               <text class="collab-meta-line">{{ $t('version.caseFileLabel', { name: projectName }) }}</text>
-              <text class="collab-meta-line">{{ $t('version.libraryUrlLabel', { url: cloud.serverUrl }) }}</text>
             </view>
             <view class="collab-actions">
               <view
@@ -203,37 +189,6 @@
             </view>
           </template>
         </template>
-
-        <!-- ==================== 团队案件库 ==================== -->
-        <template v-else>
-          <view v-if="!connections.length" class="collab-lead">
-            {{ $t('version.libraryIntro') }}
-          </view>
-          <view v-else class="collab-conn-list">
-            <view v-for="c in connections" :key="c.id" class="collab-conn-row">
-              <view class="collab-conn-info">
-                <text class="collab-conn-url">{{ c.serverUrl }}</text>
-                <text class="collab-conn-user">{{ c.displayName || c.username }}</text>
-              </view>
-              <view class="awd-btn awd-btn-danger" @tap="onDisconnect(c)">{{ $t('version.disconnectLibrary') }}</view>
-            </view>
-          </view>
-
-          <view class="collab-field">
-            <text class="collab-label">{{ $t('version.connectLibrary') }}</text>
-            <input v-model="form.serverUrl" class="awd-input" :placeholder="$t('version.libraryUrlPlaceholder')" />
-            <text v-if="serverUrlIsHttp" class="collab-warn">{{ $t('version.httpWarning') }}</text>
-            <input v-model="form.username" class="awd-input" :placeholder="$t('version.libraryUsernamePlaceholder')" />
-            <input v-model="form.password" class="awd-input" :placeholder="$t('version.passwordPlaceholder')" password />
-            <view class="collab-actions">
-              <view
-                class="awd-btn awd-btn-primary"
-                :class="{ 'awd-btn-disabled': connectBusy || !form.serverUrl || !form.username }"
-                @tap="onConnect"
-              >{{ connectBusy ? $t('version.connecting') : $t('version.connect') }}</view>
-            </view>
-          </view>
-        </template>
       </view>
 
       <view class="awd-footer">
@@ -245,7 +200,7 @@
 
 <script>
 import {
-  listCloudConnections, cloudConnect, disconnectCloudConnection,
+  listCloudConnections,
   shareProjectToCloud, uploadToCloud, updateFromCloud, checkCloud,
   getCloudMembers, addCloudMember, lookupCloudMember, getOfficialCloud,
 } from '@/services/api.js'
@@ -275,7 +230,6 @@ export default {
     return {
       activeTab: 'casefile',
       connections: [],
-      shareConnectionId: null,
       busy: false,
       members: [],
       membersLoading: false,
@@ -288,11 +242,9 @@ export default {
       lookupBusy: false,
       // 官网头像 404（对方没传过头像）时降级成首字母方块，不留一个碎图标
       avatarBroken: false,
-      form: { serverUrl: '', username: '', password: '' },
-      connectBusy: false,
-      // 官方团队案件库：{available, connected, serverUrl}。available=false（国际站）时
-      // 界面回到「先连一个自建案件库」那条老路。
-      official: { available: false, connected: false, serverUrl: '' },
+      // 官方团队案件库（GET /api/cloud/official）。只用 available 这一位：为假（国际站）
+      // 且本机也没有连接时，这份案卷放不进任何案件库，界面如实说明。地址不给律师看。
+      official: { available: false },
       ASSIGNABLE_ROLES,
     }
   },
@@ -301,14 +253,10 @@ export default {
       return [
         { key: 'casefile', label: this.$t('version.tabCaseFile') },
         { key: 'people', label: this.$t('version.tabCaseMembers') },
-        { key: 'library', label: this.$t('version.tabTeamLibrary') },
       ]
     },
     linked() {
       return !!(this.cloud && this.cloud.linked)
-    },
-    serverUrlIsHttp() {
-      return /^http:\/\//i.test((this.form.serverUrl || '').trim())
     },
     // 优先级与页面上的状态 chip 同源同序（口径见 project-overview.collabStateText）：
     // 待选择 > 连不上 > 同事交了新稿 > 有改动还没交稿 > 一致。
@@ -328,24 +276,15 @@ export default {
       return 'collab-dot-green'
     },
     // 这段话是发给一个此刻手上还没有这份案卷的人的，每一步必须指向他真能看见的入口：
-    // 他打开软件停在项目列表页，那里唯一的协作入口就是「从团队案件库取一份案卷」，
-    // 连案件库也要从这个弹窗里的「去连一个」进。别写「打开设置」——项目列表页的
-    // 「设置」面板里没有团队案件库，照着点会找不着。
+    // 他打开软件停在项目列表页，那里唯一的协作入口就是「从团队案件库取一份案卷」。
+    // 界面上已经没有「填服务器地址」这一步（自建部署由 cloud.collab.base-url 指过来），
+    // 所以话术只剩一种：同事用自己的 AI WorkDeck 账号登录桌面端就有这个库。
     inviteText() {
-      const url = (this.cloud && this.cloud.serverUrl) || ''
       const inviter = this.inviterName || ''
-      // 官方案件库的第 2 步（填地址、用账号密码连库）对同事根本不存在——他用自己的
-      // AI WorkDeck 账号登录桌面端就有这个库。照旧话术发过去会让他去找一个不需要填的地址。
-      const isOfficial = !!(this.official.serverUrl && url && this.official.serverUrl === url)
       // 有/无邀请人分两个键：英文人名后要空格，单键拼 {inviter} 在两种语言里无法同时成立。
-      if (isOfficial) {
-        return inviter
-          ? this.$t('version.inviteTextOfficial', { inviter, project: this.projectName })
-          : this.$t('version.inviteTextOfficialNoInviter', { project: this.projectName })
-      }
       return inviter
-        ? this.$t('version.inviteText', { inviter, project: this.projectName, url })
-        : this.$t('version.inviteTextNoInviter', { project: this.projectName, url })
+        ? this.$t('version.inviteTextOfficial', { inviter, project: this.projectName })
+        : this.$t('version.inviteTextOfficialNoInviter', { project: this.projectName })
     },
   },
   watch: {
@@ -372,31 +311,30 @@ export default {
       try {
         const res = await listCloudConnections()
         this.connections = (res && res.data && res.data.connections) || []
-        if (!this.connections.some((c) => c.id === this.shareConnectionId)) {
-          this.shareConnectionId = this.connections.length ? this.connections[0].id : null
-        }
       } catch (e) {
         this.connections = []
-        this.shareConnectionId = null
       }
-      // 官方案件库状态独立失败：读不到就当没有，界面退回自建案件库那条路，不拖累连接列表
+      // 官方案件库状态独立失败：读不到就当没有（界面退到「当前没有可用的案件库」那句话），
+      // 不拖累连接列表——本机已经连过库的人不该因为这一次读取失败就点不了「放进去」。
       try {
         const res = await getOfficialCloud()
-        this.official = (res && res.data) || { available: false, connected: false, serverUrl: '' }
+        this.official = { available: !!(res && res.data && res.data.available) }
       } catch (e) {
-        this.official = { available: false, connected: false, serverUrl: '' }
+        this.official = { available: false }
       }
     },
     async onShare() {
       if (this.busy) return
-      // 连接一条都没有：不传 connectionId，让后端连官方案件库再共享（零配置直连）。
-      // 已经连了案件库时反过来必须由律师指名放进哪一个：拿列表第一条会在存量死连接
-      // （服务器早已不在、令牌早已失效）排在前面时，拿着死令牌去连一个不存在的后端。
-      const connectionId = this.connections.length ? this.shareConnectionId : null
-      if (this.connections.length && !connectionId) {
-        uni.showToast({ title: this.$t('version.noLibrarySelectedToast'), icon: 'none' })
+      // 本机只认一个案件库：官方那个，或 cloud.collab.base-url 指过来的自建库。
+      // 恰好只有一条连接时指名用它（省掉一次重新桥接）；没有连接时不传 connectionId，
+      // 让后端连官方案件库再共享。多于一条（只可能是运维经 API 连出来的历史状态，
+      // 界面上已无从消歧义）时直接拒绝——绝不"拿列表第一条"也绝不静默改推官方：
+      // 前者会拿着失效令牌去推一个早已不在的服务器，后者会把案卷推去用户没选的地方。
+      if (this.connections.length > 1) {
+        uni.showToast({ title: this.$t('version.tooManyLibraries'), icon: 'none' })
         return
       }
+      const connectionId = this.connections.length === 1 ? this.connections[0].id : null
       this.busy = true
       try {
         await shareProjectToCloud(this.projectId, connectionId)
@@ -528,37 +466,6 @@ export default {
         success: () => uni.showToast({ title: this.$t('version.copiedPasteToColleague'), icon: 'none' }),
       })
     },
-    async onConnect() {
-      if (this.connectBusy || !this.form.serverUrl || !this.form.username) return
-      this.connectBusy = true
-      try {
-        await cloudConnect(
-          this.form.serverUrl.trim(), this.form.username.trim(), this.form.password, '桌面端')
-        this.form = { serverUrl: '', username: '', password: '' }
-        await this.loadConnections()
-        uni.showToast({ title: this.$t('version.connectedToLibrary'), icon: 'none' })
-        this.$emit('changed')
-      } catch (e) {
-        uni.showToast({ title: (e && e.message) || this.$t('version.connectFailed'), icon: 'none' })
-      } finally {
-        this.connectBusy = false
-      }
-    },
-    async onDisconnect(conn) {
-      const ok = await new Promise((r) => uni.showModal({
-        title: this.$t('version.disconnectLibrary'),
-        content: this.$t('version.disconnectLibraryConfirmContent'),
-        success: (res) => r(res.confirm),
-      }))
-      if (!ok) return
-      try {
-        await disconnectCloudConnection(conn.id)
-        await this.loadConnections()
-        this.$emit('changed')
-      } catch (e) {
-        uni.showToast({ title: (e && e.message) || this.$t('version.disconnectFailed'), icon: 'none' })
-      }
-    },
   },
 }
 </script>
@@ -653,16 +560,6 @@ export default {
   background: var(--awd-bg); border: 1px solid var(--awd-border); border-radius: 8px; padding: 12px;
 }
 .collab-invite-text { font-size: 13px; color: var(--awd-text); line-height: 1.8; white-space: pre-wrap; }
-
-.collab-conn-list { display: flex; flex-direction: column; gap: 10px; }
-.collab-conn-row {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 12px; border: 1px solid var(--awd-border); border-radius: 8px;
-}
-.collab-conn-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.collab-conn-url { font-size: 13.5px; color: var(--awd-text); word-break: break-all; }
-.collab-conn-user { font-size: 12px; color: var(--awd-text-3); }
-.collab-warn { font-size: 12px; color: var(--awd-warning-text); }
 
 .awd-input {
   width: 100%; height: 38px; padding: 0 12px; border: 1px solid var(--awd-border-strong);
