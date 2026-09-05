@@ -24,8 +24,14 @@ import com.checkba.repository.ProjectRemoteRepository;
 import com.checkba.repository.ProjectRepository;
 import com.checkba.repository.ProjectTaskRepository;
 import com.checkba.repository.ProjectVariableRepository;
+import com.checkba.model.entity.MemoryRemote;
+import com.checkba.repository.MemoryRemoteRepository;
 import com.checkba.storage.ProjectStorageResolver;
 import com.checkba.version.ProjectRepoService;
+import com.checkba.version.WorkSession;
+import com.checkba.version.WorkSessionRepository;
+import com.checkba.version.memory.MemoryRealm;
+import com.checkba.version.memory.MemoryRepoService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -70,6 +76,9 @@ class ProjectDeleteCascadeTest {
     @Autowired private EvidenceLinkTargetRepository evidenceLinkTargetRepository;
     @Autowired private ProjectStorageResolver storageResolver;
     @Autowired private ProjectRepoService projectRepoService;
+    @Autowired private WorkSessionRepository workSessionRepository;
+    @Autowired private MemoryRemoteRepository memoryRemoteRepository;
+    @Autowired private MemoryRepoService memoryRepoService;
 
     @Test
     void deleteProject_clearsEveryProjectScopedTableAndOnDiskDirectory() throws IOException {
@@ -98,6 +107,54 @@ class ProjectDeleteCascadeTest {
 
         assertFalse(Files.exists(projectDir), "项目目录仍留在磁盘上: " + projectDir);
         assertFalse(Files.exists(gitDir), "版本记录仓库仍留在磁盘上: " + gitDir);
+    }
+
+    /**
+     * 版本管理留下的东西同样要跟着项目一起走：work_session 库行、记忆仓库的两个磁盘
+     * 目录（裸库 + 物化工作树）、memory_remote 绑定行。
+     *
+     * <p>三样都不在既有清理范围里：work_session 没进 PROJECT_SCOPED_ENTITIES（本机实测
+     * 315 行里 272 行是已删项目的孤儿），记忆仓库路径不在 projectRoot/gitDir 之下，
+     * memory_remote 按 repoKey 建索引、没有 projectId 列，{@code delete from E where
+     * e.projectId = :pid} 那套批量语句根本吃不到它。
+     */
+    @Test
+    void deleteProject_clearsVersionControlRowsAndMemoryRepositories() throws IOException {
+        Long projectId = seedProject();
+
+        WorkSession session = new WorkSession();
+        session.setProjectId(projectId);
+        session.setBranchName("work/1001");
+        session.setStartedAt(LocalDateTime.now());
+        session.setStatus(WorkSession.Status.MERGED);
+        session.setUserId(9000L);
+        session.setSessionType(WorkSession.SessionType.WORK);
+        workSessionRepository.save(session);
+
+        String repoKey = MemoryRealm.project(projectId).repoKey();
+        Path memoryGitDir = memoryRepoService.gitDir(repoKey);
+        Path memoryWorkTree = memoryRepoService.workTree(repoKey);
+        Files.createDirectories(memoryGitDir.resolve("objects"));
+        Files.createDirectories(memoryWorkTree.resolve("project"));
+        Files.writeString(memoryWorkTree.resolve("project").resolve("m1.md"), "记住这件事");
+
+        MemoryRemote remote = new MemoryRemote();
+        remote.setRepoKey(repoKey);
+        remote.setUrl("https://example.invalid/git/" + repoKey + ".git");
+        remote.setUsername("hzw");
+        remote.setSecret("awdt_xxx");
+        remote.setPendingUpload(false);
+        remote.setCreatedAt(LocalDateTime.now());
+        memoryRemoteRepository.save(remote);
+
+        projectService.deleteProject(projectId);
+
+        assertTrue(workSessionRepository.findByProjectIdOrderByStartedAtDesc(projectId).isEmpty(),
+                "work_session 残留孤儿行");
+        assertTrue(memoryRemoteRepository.findByRepoKey(repoKey).isEmpty(),
+                "memory_remote 残留孤儿行（按 repoKey 建索引，projectId 批量删语句吃不到）");
+        assertFalse(Files.exists(memoryGitDir), "记忆仓库仍留在磁盘上: " + memoryGitDir);
+        assertFalse(Files.exists(memoryWorkTree), "记忆仓库工作树仍留在磁盘上: " + memoryWorkTree);
     }
 
     /** localRoot 非空的 IDE 化项目，目录是用户自己的文件夹，只能解绑不能删。 */

@@ -67,9 +67,11 @@ public class ProjectRepoService {
 
     /**
      * 单个历史版本文件读入内存的体积闸（{@link #blobAt}）。可达性不需要特殊操作：
-     * workTree 就是项目存储根目录，commitAll 是 {@code git.add().addFilepattern(".")}
-     * 全量入库，没有任何 gitignore/体积过滤——会议录音的 webm/mp3、手机端回传的现场影像
-     * 视频、扫描件全都会进版本历史。云端/团队服务器部署的堆上限只有 1.5GB
+     * workTree 就是项目存储根目录，commitAll 把工作区里没被 gitignore 挡掉的文件整体
+     * 入库——会议录音的 webm/mp3、手机端回传的现场影像视频、扫描件全都会进版本历史。
+     * 写侧后来加了体积过滤（{@link #maxTrackedFileSizeBytes}），但它只拦**这次新增/
+     * 修改**的超限文件，管不到过滤上线之前就已经在库里的大文件，读侧这道闸因此照样
+     * 必须存在。云端/团队服务器部署的堆上限只有 1.5GB
      * （deploy/cloud/aiworkdeck-cloud.service 的 {@code -Xmx1536m}），blobAt 原来整份
      * 读进 ByteArrayOutputStream 没有任何体积闸，几个并发请求各读一份大文件就能把堆打爆。
      * 50MB 是这个闸的取值：普通法律文档（docx/pdf/xlsx，含内嵌高清扫描件）几乎不会到这个

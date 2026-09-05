@@ -138,6 +138,41 @@ class WorkSessionServiceTest {
                 sessions.values().iterator().next().getStatus());
     }
 
+    /**
+     * 结束工作必须把已经并进主线的工作分支删掉。
+     *
+     * v1 单机路径（主线没被同事推进，绝大多数结束工作走这里）曾经漏了这一步，
+     * 而其它五条路径（空工作段、真合并收尾 closeMergedSession、丢弃工作、
+     * 采纳一稿、放弃一稿）都删——结果是每结束一次工作就在仓库里留下一条
+     * refs/heads/work/*（本机 project-228.git 实测残留 22 条，全部已合并进 master）。
+     *
+     * 删的是引用，不是历史：NO_FF 合并让这段工作的每一笔提交都从 master 可达，
+     * 所以这里同时断言时间线上那个命名节点还在——「历史永不重写」是本领域硬不变量，
+     * 清理引用绝不能顺手动到它。
+     */
+    @Test
+    void endSessionDeletesTheMergedWorkBranchWithoutLosingHistory() throws Exception {
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        String branch = svc.activeSession(7L).orElseThrow().getBranchName();
+        Files.writeString(root.resolve("projects/7/合同.txt"), "二稿");
+        svc.commitNow(7L, 1L, "韩泽伟", "改了");
+
+        WorkSessionService.SessionEndResult r = svc.endSession(7L, 1L, "韩泽伟", "发客户第一稿");
+
+        assertFalse(repoSvc.listBranches(7L).contains(branch),
+                "已并进主线的工作分支必须被删除，不能残留: " + repoSvc.listBranches(7L));
+        assertFalse(repoSvc.listBranches(7L).stream().anyMatch(b -> b.startsWith("work/")),
+                "仓库里不该再有任何 work/* 分支: " + repoSvc.listBranches(7L));
+
+        List<VersionEntry> log = repoSvc.log(7L, repoSvc.mainBranch(), 100);
+        assertTrue(log.stream().anyMatch(e -> r.sha().equals(e.sha())),
+                "删分支不能连带丢掉这段工作的合并节点");
+        assertTrue(log.stream().anyMatch(e -> "发客户第一稿".equals(e.message())),
+                "时间线上这段工作的命名节点必须还在: "
+                        + log.stream().map(VersionEntry::message).toList());
+        assertEquals("二稿", Files.readString(root.resolve("projects/7/合同.txt")));
+    }
+
     @Test
     void endSessionGeneratesTitleWhenNotProvided() throws Exception {
         svc.onChangeSignal(7L, 1L, "韩泽伟");
