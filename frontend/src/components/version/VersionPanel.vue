@@ -53,6 +53,10 @@
         @compare-file="$emit('compare-file', $event)"
         @draft-created="onReload"
       />
+      <view class="version-footer">
+        <text class="version-footer-size">{{ $t('version.repoSize', { size: repoSizeText }) }}</text>
+        <text class="version-footer-off" @tap="confirmDisable">{{ $t('version.disable') }}</text>
+      </view>
       <!-- 三语境冲突弹窗：/status 判定链 sessionEndConflict > cloudConflict > adoptConflict，
            互斥挂载（后端保证命中前两者中任一个时第三个必为 null，前端按同序取。含崩溃后
            重开面板的场景。 -->
@@ -98,7 +102,7 @@
 
 <script>
 import {
-  getVersionStatus, enableVersionControl, listDrafts,
+  getVersionStatus, enableVersionControl, disableVersionControl, listDrafts,
   getCloudStatus, checkCloud, listCloudConnections,
 } from '@/services/api.js'
 import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
@@ -142,10 +146,22 @@ export default {
       sessionEndConflict: null,
       cloud: null,
       hasConnection: false,
+      repoSizeBytes: 0,
       timelineKey: 0,
       busy: false,
       refreshSeq: 0,
     }
+  },
+  computed: {
+    // 仓里没有公共的字节格式化工具（FilePreview/FileStagingArea/MarketPane 各写各的），
+    // 这里照 FileStagingArea.formatSize 的口径写一份，不为一处新造公共模块。
+    repoSizeText() {
+      const n = Number(this.repoSizeBytes) || 0
+      if (n >= 1024 * 1024 * 1024) return (n / 1024 / 1024 / 1024).toFixed(1) + 'GB'
+      if (n >= 1024 * 1024) return Math.round(n / 1024 / 1024) + 'MB'
+      if (n >= 1024) return Math.round(n / 1024) + 'KB'
+      return n + 'B'
+    },
   },
   watch: {
     collabRefreshToken() {
@@ -176,6 +192,7 @@ export default {
         this.enabled = !!d.enabled
         this.working = !!d.working
         this.changedCount = d.changedCount || 0
+        this.repoSizeBytes = d.repoSizeBytes || 0
         this.onDraft = d.onDraft || null
         this.adoptConflict = d.adoptConflict || null
         this.cloudConflict = d.cloudConflict || null
@@ -239,6 +256,29 @@ export default {
       this.refresh()
       this.$emit('reload-files', affectedFileIds || [])
     },
+    // 二次确认照 VersionNodeDetail「退回到这一版」的写法（uni.showModal）。
+    // 这一步不可撤销，且会把整条时间线一次性删掉，措辞要把后果说全。
+    confirmDisable() {
+      if (this.busy) return
+      uni.showModal({
+        title: this.$t('version.disable'),
+        content: this.$t('version.disableConfirmContent'),
+        confirmText: this.$t('version.disableConfirmOk'),
+        success: async (r) => {
+          if (!r.confirm) return
+          this.busy = true
+          try {
+            await disableVersionControl(this.projectId)
+            uni.showToast({ title: this.$t('version.disabled'), icon: 'none' })
+            await this.refresh()
+          } catch (e) {
+            uni.showToast({ title: (e && e.message) || this.$t('version.disableFailed'), icon: 'none' })
+          } finally {
+            this.busy = false
+          }
+        },
+      })
+    },
     async enable() {
       if (this.busy) return
       this.busy = true
@@ -269,6 +309,12 @@ export default {
   font-size: 24rpx; color: var(--awd-text-2);
 }
 .version-file-filter-clear { color: var(--awd-text); text-decoration: underline; }
+.version-footer {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8rpx;
+  padding: 12rpx 24rpx; border-top: 1px solid var(--awd-border);
+  font-size: 22rpx; color: var(--awd-text-3);
+}
+.version-footer-off { color: var(--awd-text-3); text-decoration: underline; flex-shrink: 0; }
 
 /* awd-* 没有集中定义，各组件 scoped 内各自定义 */
 .awd-btn {

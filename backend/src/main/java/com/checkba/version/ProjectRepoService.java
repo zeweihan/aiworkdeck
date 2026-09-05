@@ -120,6 +120,57 @@ public class ProjectRepoService {
         return Files.isDirectory(gitDir(projectId).resolve("objects"));
     }
 
+    /**
+     * 版本历史在磁盘上占了多少（gitDir 递归求和；仓库不存在或读不动一律回 0）。
+     * 只给 /status 展示用——律师要能看见"留底占了多少地方"才敢放心让它默认开着。
+     * 不做缓存：/status 本身已经在跑两次 {@code git add "."}（见 pendingChanges），
+     * 相比之下走一遍 gitDir 的目录项可以忽略。
+     */
+    public long repoSizeBytes(long projectId) {
+        Path dir = gitDir(projectId);
+        if (!Files.isDirectory(dir)) return 0L;
+        try (java.util.stream.Stream<Path> walk = Files.walk(dir)) {
+            return walk.filter(Files::isRegularFile).mapToLong(p -> {
+                try {
+                    return Files.size(p);
+                } catch (IOException e) {
+                    return 0L;
+                }
+            }).sum();
+        } catch (IOException e) {
+            log.warn("统计版本记录占用失败: project={}", projectId, e);
+            return 0L;
+        }
+    }
+
+    /**
+     * 删掉整个版本库目录（关闭版本记录用，dev-board#438）。
+     *
+     * <p><b>只动 gitDir，绝不碰工作区</b>——工作区里是律师自己的文件，关闭版本记录
+     * 不该改动其中任何一个字节（也包括不做"切回主线"这类还原：律师此刻磁盘上看到的
+     * 就是他要留下的那一份）。这是本方法与「历史永不重写」那条铁律唯一的例外口子：
+     * 律师显式要求把留底整个删掉，删的是整座仓库，不是改写其中某段历史。
+     */
+    public void deleteRepository(long projectId) {
+        Path dir = gitDir(projectId);
+        if (!Files.isDirectory(dir)) return;
+        try (java.util.stream.Stream<Path> walk = Files.walk(dir)) {
+            walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                try {
+                    Files.deleteIfExists(p);
+                } catch (IOException e) {
+                    log.warn("删除版本库文件失败: {}", p, e);
+                }
+            });
+        } catch (IOException e) {
+            throw new VersionException("删除版本库失败: project=" + projectId, e);
+        }
+        if (Files.exists(dir)) {
+            throw new VersionException("删除版本库失败（目录仍在）: project=" + projectId);
+        }
+        log.info("版本记录已关闭，历史已删除: project={}", projectId);
+    }
+
     public Repository open(long projectId) {
         try {
             return new FileRepositoryBuilder()

@@ -184,6 +184,9 @@ if (!fs.existsSync(bigFile) || fs.statSync(bigFile).size < 6_000_000) {
 fs.writeFileSync(versionFileA, 'QA 版本记录旅程测试文件 A\n')
 fs.writeFileSync(versionFileB, 'QA 版本记录旅程测试文件 B\n')
 fs.writeFileSync(versionFileC, 'QA 版本记录旅程测试文件（单文件历史/MODIFY 用）\n')
+// dev-board#438：关闭版本记录之后用来发一个真实变更信号，验证 opt-out 不会被自动开回来。
+const versionOptOutFile = path.join(OUT, 'qa-438关闭后改动.txt')
+fs.writeFileSync(versionOptOutFile, 'QA dev-board#438 关闭版本记录之后的改动信号\n')
 
 // ---------- issue collection ----------
 const issues = []
@@ -1182,16 +1185,98 @@ try {
     { waitUntil: 'networkidle2', timeout: 30000 })
   await sleep(1500)
 
-  await step('打开版本面板并看到未开启引导', async () => {
+  // ---- dev-board#438：版本记录默认开启 ----
+  // 旧基线是「打开面板看到未开启引导 → 点开启」。自动开启落地后那两步永远失败：
+  // 本套件的 QA 项目是启动时经 POST /api/projects 建出来的，ProjectCreatedEvent →
+  // VersionLifecycleService 在事务提交后异步开启，等 J1-J8 跑完这里，早已是开启态。
+  // 于是把这两步换成「默认已开启」的正断言，并把「关闭并删除历史 → opt-out 不被开回来
+  // → 手动再开」这条新增的拒绝链补成三步——手动开启这一步同时把旅程接回旧基线的
+  // 起点（已开启的空仓），后面 runWorkSession 那一串一个字都不用改。
+  await step('打开版本面板即已是开启态（默认开启，无需手动点开启）', async () => {
     await mouseClickSel('[title="版本"]')
-    await waitText('本项目还没有开启版本记录')
+    // 认已开启态的**结构**，不认「空闲/工作中」哪一种：VersionPanel 的 v-else 分支
+    // （WorkSessionBar + footer）只在 enabled 为真时渲染。这里刻意不断言 .session-idle
+    // ——默认开启之后，J4 那两次上传本身就是变更信号，会在这个项目上隐式开一段工作，
+    // 律师第一次点开版本面板看到的正常形态是「工作中」而不是空闲（这是 dev-board#438
+    // 带来的真实行为变化，不是缺陷；写死 .session-idle 会假红）。
+    await page.waitForSelector('.session-bar', { timeout: 15000 })
+    // 反面同样要立：未开启引导（含那颗「开启版本记录」按钮）必须不在 DOM 里，
+    // 否则「已开启」这条断言可能只是页面上恰好有别的元素。
+    const intro = await page.evaluate(() => !!document.querySelector('.version-intro'))
+    if (intro) throw new Error('已开启态下仍渲染了未开启引导 .version-intro')
+    // 自动开启会落一笔「初始版本」——时间线里看得见它，才算真开出了一个仓库。
+    await page.waitForFunction(() => [...document.querySelectorAll('.timeline-node .node-title')]
+      .some((e) => (e.innerText || '').includes('初始版本')), { timeout: 15000 })
   })
 
-  await step('开启版本记录后回到空闲态', async () => {
-    // brief 原断言是 waitText('主线')；实际 WorkSessionBar.vue 空闲态文案是
-    // "当前没有进行中的工作"，全仓没有"主线"这个用户可见文案（唯一命中是
-    // VersionTimeline.vue 里一行代码注释）。以实际组件模板为准改断言，不改产品文案。
+  await step('面板 footer 显示留底占用与关闭入口（窄侧栏不换行错位）', async () => {
+    const m = await page.evaluate(() => {
+      const f = document.querySelector('.version-footer')
+      if (!f) return { err: '没有 .version-footer' }
+      const size = f.querySelector('.version-footer-size')
+      const off = f.querySelector('.version-footer-off')
+      if (!size || !off) return { err: '.version-footer 里缺 size/off 子元素' }
+      const fr = f.getBoundingClientRect(), sr = size.getBoundingClientRect(), or = off.getBoundingClientRect()
+      return {
+        sizeText: size.innerText.trim(), offText: off.innerText.trim(),
+        footer: { x: fr.x, y: fr.y, w: fr.width, h: fr.height },
+        sameRow: Math.abs(sr.y - or.y) < 2,
+        // 溢出裁切（地雷 #23 的同款形态：窄侧栏里按钮行被切掉就点不着了）
+        overflowX: f.scrollWidth - f.clientWidth,
+        insideViewport: or.right <= document.documentElement.clientWidth && or.left >= 0,
+      }
+    })
+    if (m.err) throw new Error(m.err)
+    if (!/^留底占用 \d+(\.\d+)?(B|KB|MB|GB)$/.test(m.sizeText)) {
+      throw new Error('留底占用文案不对: ' + JSON.stringify(m.sizeText))
+    }
+    if (m.offText !== '关闭版本记录并删除历史') throw new Error('关闭入口文案不对: ' + m.offText)
+    if (m.overflowX > 1) throw new Error('footer 横向溢出被裁切: ' + m.overflowX + 'px')
+    if (!m.insideViewport) throw new Error('关闭入口跑出可视区，点不着')
+    // 截图存证：footer 及其上方一段（窄侧栏里的真实排布）。
+    const clip = {
+      x: Math.max(0, Math.floor(m.footer.x) - 4),
+      y: Math.max(0, Math.floor(m.footer.y) - 90),
+      width: Math.ceil(m.footer.w) + 8,
+      height: Math.ceil(m.footer.h) + 100,
+    }
+    await page.screenshot({ path: path.join(OUT, 'j9-version-footer.png'), clip })
+      .catch((e) => note('shotFail', 'j9-version-footer: ' + String(e.message || e).slice(0, 120)))
+    console.log('    footer: ' + m.sizeText + ' | ' + m.offText
+      + ' | sameRow=' + m.sameRow + ' | 截图 ' + path.join(OUT, 'j9-version-footer.png'))
+  })
+
+  await step('关闭版本记录并删除历史（二次确认）后回到未开启态', async () => {
+    await mouseClickSel('.version-footer-off')
+    // uni.showModal：confirmText 传的是「删除全部留底」；H5 裸浏览器下 uni 仍尊重
+    // confirmText，但 J9 既有步骤已经踩过「浏览器目标退回英文 OK」的坑，双试兜底。
+    try { await mouseClickText('删除全部留底') } catch { await mouseClickText('OK') }
+    await waitText('这个项目没有开启版本记录', 20000)
+    const st = await api('/api/projects/' + QA.projectId + '/version/status')
+    if (!st || !st.data || st.data.enabled !== false) {
+      throw new Error('/status 仍是已开启: ' + JSON.stringify(st).slice(0, 200))
+    }
+  })
+
+  await step('关掉之后的改动信号不会把它自动开回来（opt-out 生效）', async () => {
+    await mouseClickSel('[title="资源管理器"]')
+    await uploadOne(versionOptOutFile, 'qa-438关闭后改动')
+    await waitText('qa-438关闭后改动', 20000)
+    // 自动开启是异步的（taskExecutor），给它足够时间真跑一遍再判。
+    await sleep(5000)
+    const st = await api('/api/projects/' + QA.projectId + '/version/status')
+    if (!st || !st.data || st.data.enabled !== false) {
+      throw new Error('改动信号把已 opt-out 的项目又开回来了: ' + JSON.stringify(st).slice(0, 200))
+    }
+    // 面板只在挂载时读一次 /status，靠切出/切回侧栏挂载点强制重新挂载（既有手法）。
+    await mouseClickSel('[title="版本"]')
+    await waitText('这个项目没有开启版本记录', 15000)
+  })
+
+  await step('手动开启清掉 opt-out 后回到已开启空闲态', async () => {
     await mouseClickText('开启版本记录')
+    await page.waitForSelector('.session-bar .session-idle', { timeout: 15000 })
+    // 旧基线的文案断言原样保留（空闲态文案是「当前没有进行中的工作」）。
     await waitText('当前没有进行中的工作')
   })
 

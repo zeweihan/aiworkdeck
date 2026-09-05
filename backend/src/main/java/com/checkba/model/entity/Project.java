@@ -76,6 +76,13 @@ public class Project {
     private String localRoot;
 
     /**
+     * 律师明确关掉过版本记录（dev-board#438）。为空 = 从没关过。
+     * 关闭并删除历史之后，两个自动开启触发点都必须认这一列——否则下一次改动信号
+     * 又把它开回来，「关掉」形同虚设。手动开启（POST /version/enable）会清掉它。
+     */
+    private Boolean versionOptOut;
+
+    /**
      * 创建时间
      */
     private LocalDateTime createdAt;
@@ -155,6 +162,14 @@ public class Project {
 
     public void setUserId(Long userId) {
         this.userId = userId;
+    }
+
+    public Boolean getVersionOptOut() {
+        return versionOptOut;
+    }
+
+    public void setVersionOptOut(Boolean versionOptOut) {
+        this.versionOptOut = versionOptOut;
     }
 
     public LocalDateTime getCreatedAt() {

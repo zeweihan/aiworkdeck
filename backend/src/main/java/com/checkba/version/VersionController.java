@@ -30,8 +30,8 @@ public class VersionController {
     private final ProjectMemberService projectMemberService;
     private final UserService userService;
     private final ProjectFileService projectFileService;
-    private final ProjectTreeManifestService manifestService;
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
+    private final VersionLifecycleService lifecycleService;
 
     /** 埋点：版本记录关键动作计数（op 是端点枚举名，不带任何项目/版本信息） */
     private void trackOp(String op) {
@@ -43,15 +43,15 @@ public class VersionController {
                              ProjectMemberService projectMemberService,
                              UserService userService,
                              ProjectFileService projectFileService,
-                             ProjectTreeManifestService manifestService,
-                             com.checkba.service.telemetry.TelemetryService telemetryService) {
+                             com.checkba.service.telemetry.TelemetryService telemetryService,
+                             VersionLifecycleService lifecycleService) {
         this.repoService = repoService;
         this.sessionService = sessionService;
         this.projectMemberService = projectMemberService;
         this.userService = userService;
         this.projectFileService = projectFileService;
-        this.manifestService = manifestService;
         this.telemetryService = telemetryService;
+        this.lifecycleService = lifecycleService;
     }
 
     @GetMapping("/status")
@@ -81,6 +81,9 @@ public class VersionController {
             // 同时弹出多种裁决弹窗。
             data.put("adoptConflict", (sessionEndConflict != null || cloudConflict != null)
                     ? null : adoptConflictStatus(projectId));
+            // 留底占了多少磁盘。版本记录现在默认开着，律师要能随时看见它的代价，
+            // 才谈得上「知情之后决定要不要关」。
+            data.put("repoSizeBytes", repoService.repoSizeBytes(projectId));
         } else {
             data.put("working", false);
             data.put("changedCount", 0);
@@ -89,6 +92,7 @@ public class VersionController {
             data.put("adoptConflict", null);
             data.put("sessionEndConflict", null);
             data.put("cloudConflict", null);
+            data.put("repoSizeBytes", 0L);
         }
         return ok(data);
     }
@@ -202,40 +206,47 @@ public class VersionController {
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = requireWriteMember(projectId, sessionId);
+        // 手动开启不受大文件夹护栏管——护栏只拦"我们替他做主"的那两个自动触发点，
+        // 律师自己按下去就是他自己的决定。同时清掉 opt-out，否则下次自动触发点
+        // 还会被旧标记拦住。
+        lifecycleService.clearOptOut(projectId);
         sessionService.enableVersionRecording(projectId, userName(userId), email(userId));
         trackOp("enable");
         return ok(Map.of("enabled", true));
     }
 
     /**
+     * 关闭版本记录并删除全部历史（dev-board#438）。默认自动开启之后必须有这条拒绝的路。
+     *
+     * <p>只有项目负责人/管理员能关：这是把整个项目的留底一次性删掉，且不可撤销。
+     * 关掉之后写下 opt-out，自动开启不会再把它开回来（律师随时可以手动再开）。
+     * 工作区里的文件一个都不动。
+     */
+    @PostMapping("/disable")
+    public ResponseEntity<Map<String, Object>> disable(
+            @PathVariable Long projectId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireAdminMember(projectId, sessionId);
+        lifecycleService.disableVersionRecording(projectId);
+        trackOp("disable");
+        return ok(Map.of("enabled", false));
+    }
+
+    /**
      * 让本项目可作为云端仓库：未初始化则建空仓等首推（共享方带完整历史进来）；
-     * 已初始化但清单还是 v1（老项目补开的云端协作）则落一笔升级提交——capture
-     * 出来的清单已经是 v2，任一次提交都会把 HEAD 清单升到 v2。
+     * 已初始化但清单还是 v1（老项目补开的云端协作）则落一笔升级提交。
+     *
+     * <p>决策与动作整段都在 {@link WorkSessionService#prepareRemoteRepository} 里、
+     * 跑在本项目的仓库锁内——这条路与自动开启（dev-board#438）并发建同一个仓库，
+     * 拆在控制器里做「先判断、再动手」必然留出竞态窗口（详见那个方法的注释）。
      */
     @PostMapping("/prepare-remote")
     public ResponseEntity<Map<String, Object>> prepareRemote(
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = requireWriteMember(projectId, sessionId);
-        if (!repoService.isInitialized(projectId)) {
-            repoService.initEmptyForReceive(projectId);
-            return ok(Map.of("prepared", true, "fresh", true));
-        }
-        TreeManifest head = manifestServiceReadHeadSafely(projectId);
-        if (head != null && head.version() < 2) {
-            sessionService.commitNow(projectId, userId, userName(userId), LangText.of("升级版本记录格式", "Upgraded version history format"));
-        }
-        return ok(Map.of("prepared", true, "fresh", false));
-    }
-
-    /** readAtRef(HEAD) 的容错包装：异常回 null，不让一次读取失败挡住 prepare-remote 的整体成功。 */
-    private TreeManifest manifestServiceReadHeadSafely(long projectId) {
-        try {
-            return manifestService.readAtRef(projectId, "HEAD");
-        } catch (Exception e) {
-            log.warn("读取云端准备前的清单失败: project={}", projectId, e);
-            return null;
-        }
+        boolean fresh = sessionService.prepareRemoteRepository(projectId, userId, userName(userId));
+        return ok(Map.of("prepared", true, "fresh", fresh));
     }
 
     @GetMapping("/timeline")
@@ -610,6 +621,22 @@ public class VersionController {
         Long userId = requireMember(projectId, sessionId);
         if (!projectMemberService.hasWritePermission(projectId, userId)) {
             throw new IllegalArgumentException(LangText.of("无权修改该项目", "You don't have permission to modify this project"));
+        }
+        return userId;
+    }
+
+    /**
+     * 最严的一档：在写权限之上再要求项目负责人/管理员（{@code checkAdminPermission}）。
+     * 目前只有「关闭版本记录并删除历史」用得到——那是不可撤销的整项目级操作。
+     * 注意参数序 (projectId, userId)，两参数同为 Long，写反了能编译（地雷 #3 同款）。
+     */
+    private Long requireAdminMember(Long projectId, String sessionId) {
+        Long userId = requireWriteMember(projectId, sessionId);
+        try {
+            projectMemberService.checkAdminPermission(projectId, userId);
+        } catch (RuntimeException e) {
+            // checkAdminPermission 的原文没走 LangText，英文界面会看到中文；换成本地化措辞。
+            throw new IllegalArgumentException(LangText.of("只有项目负责人可以执行此操作", "Only the project lead can do this"));
         }
         return userId;
     }

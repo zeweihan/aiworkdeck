@@ -2927,6 +2927,14 @@ export function enableVersionControl(projectId) {
   });
 }
 
+// 关闭版本记录并删除全部历史（dev-board#438）。只有项目负责人能调；工作区里的文件一个不动。
+export function disableVersionControl(projectId) {
+  return request({
+    url: `/api/projects/${projectId}/version/disable`,
+    method: 'POST'
+  });
+}
+
 export function getVersionTimeline(projectId, limit = 50, fileId) {
   let url = `/api/projects/${projectId}/version/timeline?limit=${limit}`
   if (fileId) url += `&fileId=${fileId}`
