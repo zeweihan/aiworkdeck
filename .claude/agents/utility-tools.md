@@ -105,6 +105,7 @@ IP 拦回环/内网，而 app-e2e 要用本机起的两页小站验这条链路�
 local-mode 下本机后端把每个请求都当本机用户，等于把本机管理端口暴露给被访问的网页。
 
 **截图**：入口 `checkbaDesktop.ocr.captureScreen`；desktop main.js 透明覆盖框选窗 ~:389-571（BrowserView 模式仅限其区域内框选 ~:426）、capturePage 抓取 ~:577/:585/:709、IPC：ocr-capture-screen/desktop/window/view + ocr-start-selection。**推荐链路是 ocr-capture-view（当前 BrowserView，免 macOS 录屏权限）**；无独立后端端点，产物统一走 OCR。
+  渲染层浮层（project-overview.vue `.ocr-overlay`，样式在 project-overview.scss）的底图是一张冻结帧截图，叠在上面的 `.ocr-selection` / 提示条**必须用半透明字面量**，不能引用 `--awd-*-soft` 这类主题令牌（浅色下是不透明色，PR#657 令牌化曾把选区变成一整块 #EFF6FF，框住的内容全没了，dev-board#474）；提示条贴底居中，别钉左上角压交通灯与项目名。契约测试 `npm run test:ocr-overlay`。
 
 **剪贴板**：`ClipboardPanel.vue`；desktop main.js 轮询监听 clipboardWatchTimer ~:117-232（指纹去重 ~:110，首 tick 只记指纹）、推送 `checkba:clipboard-copied`；后端 `controller/ClipboardController.java`（/api/clipboard：GET /、POST /text、POST /file、GET /{id}/file、DELETE /{id}）。
   **采集链路的登录态红线（dev-board#455）**：**桌面免登（PR-A 去登录）后 `checkba_user`

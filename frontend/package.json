@@ -60,7 +60,8 @@
     "test:insight": "node --test tests/insight/*.test.mjs",
     "test:clipboard": "node --test tests/clipboard/*.test.mjs",
     "test:revision-view": "node --test tests/revision-view/*.test.mjs",
-    "test:md-table": "node --test tests/markdown-table/*.test.mjs"
+    "test:md-table": "node --test tests/markdown-table/*.test.mjs",
+    "test:ocr-overlay": "node --test tests/ocr-overlay/*.test.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",
