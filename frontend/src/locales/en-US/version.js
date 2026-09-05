@@ -142,9 +142,10 @@ export default {
 
   // ---- CloudSyncBar.vue ----
   notInLibrary: 'This case file hasn’t been added to the Team Case Library yet',
-  noConnectionLocalOnly: 'Not connected to a Team Case Library yet — this case file only exists on this computer',
+  // hasConnection false = no official library and no connection on this machine (international
+  // site). There is no "connect a library" entry any more, so don't word it as a call to action.
+  noConnectionLocalOnly: 'No team case library is available — this case file only exists on this computer',
   addToLibrary: 'Add to Case Library',
-  connectLibrary: 'Connect to Team Case Library',
   openCollab: 'Open Collaboration',
   pendingChoice: 'Files are waiting for you to choose',
   libraryUnreachable: 'Can’t reach the case library right now',
@@ -156,14 +157,9 @@ export default {
   collabTitle: 'Collaborate',
   tabCaseFile: 'This Case File',
   tabCaseMembers: 'Case Members',
-  tabTeamLibrary: 'Team Case Library',
   collabLeadNotLinked: '{name} currently only exists on your own computer. Once added to the Team Case Library, colleagues with access can pull this case file; you each work on your own copy and merge them when submitting drafts.',
-  noLibraryConnectedNote: 'You haven’t connected to a Team Case Library yet.',
-  goConnectLibrary: 'Connect to a Team Case Library',
-  chooseLibraryLabel: 'Add to which case library',
   addToTeamLibrary: 'Add to Team Case Library',
   caseFileLabel: 'Case File: {name}',
-  libraryUrlLabel: 'Case Library: {url}',
   submitDraftAction: 'Submit Draft',
   pullLatestAction: 'Pull Latest',
   refreshStatus: 'Refresh Status',
@@ -173,7 +169,6 @@ export default {
   loadingGeneric: 'Loading…',
   onlyYouInCaseFile: 'You’re currently the only person on this case file.',
   addColleagueLabel: 'Add a Colleague',
-  colleagueUsernamePlaceholder: 'Enter your colleague’s case library account',
   colleagueContactPlaceholder: 'Colleague’s phone number or email',
   addColleagueByContactNote: 'Use the phone number or email your colleague signs in to AI WorkDeck with. If they have never signed in, ask them to do that once before you add them.',
   addAction: 'Add',
@@ -191,18 +186,12 @@ export default {
   inviteFooterNote: 'Your colleague also needs an account for this case library; once added, they can follow these steps on their own computer to pull the case file.',
   addToOfficialLibraryTitle: 'Add to Team Case Library',
   addToOfficialLibraryNote: 'Your AI WorkDeck account is all you need - no server address to type. Once it is in, add your colleagues and everyone pulls their own copy to work on.',
-  libraryIntro: 'A Team Case Library is a server run by your own firm, where case files are stored so colleagues can each pull a copy to work on locally. You can keep working without one — the case file will just stay on this computer only.',
-  disconnectLibrary: 'Disconnect from This Case Library',
-  libraryUrlPlaceholder: 'Case library address, e.g. https://team.example.com',
-  httpWarning: 'An unencrypted address is recommended only on your firm’s internal network',
-  libraryUsernamePlaceholder: 'Your case library account',
-  passwordPlaceholder: 'Password',
-  connecting: 'Connecting…',
-  connect: 'Connect',
-  disconnectLibraryConfirmContent: 'After disconnecting, this device will no longer sync with this case library; any case files already added to it will need to be reconnected before you can submit drafts again. Content already in the case library is unaffected.',
-  noLibrarySelectedToast: 'Please choose a Team Case Library first',
+  // No official library on this site and no connection on this machine: the hand-typed
+  // address entry is gone, so the UI says so plainly instead of offering a dead link.
+  noLibraryAvailableNote: 'No team case library is available yet, so this case file stays on this computer only.',
   sharedToLibrary: 'Added to the Team Case Library',
   shareToLibraryFailed: 'Couldn’t add to the case library',
+  tooManyLibraries: 'This computer is linked to more than one case library — disconnect the extra ones first',
   submitted: 'Draft submitted',
   submitFailedNotice: 'Couldn’t submit the draft right now',
   submitFailed: 'Failed to submit draft',
@@ -214,16 +203,13 @@ export default {
   addedSuccess: 'Added',
   addMemberFailed: 'Couldn’t add',
   copiedPasteToColleague: 'Copied — paste it to your colleague',
-  connectedToLibrary: 'Connected to the Team Case Library',
   connectFailed: 'Connection failed',
-  disconnectFailed: 'Action failed',
   // Invite text: the full message sent to a colleague, extracted as one key.
   // Two keys (with/without an inviter name) so English can put a space after {inviter}.
-  inviteText: '{inviter} invites you to work on {project} together on AI WorkDeck.\n\nHere’s how to join:\n1. Open the project list and click “Pull a Case File from the Team Case Library”;\n2. First time? Connect to the library first: click “Connect One”, enter the address {url}, and sign in with your account;\n3. Go back to “Pull a Case File from the Team Case Library”, select {project}, and click “Pull to This Device”.\n\nAfter that, we each work on our own copy and click “Submit Draft” to merge changes together.',
-  // Official library: the colleague never types a server address - their own AI WorkDeck account is enough.
+  // Since dev-board#440 this is the only variant: the colleague never types a server address
+  // (that step is gone from the UI) - their own AI WorkDeck account is enough.
   inviteTextOfficial: '{inviter} invites you to work on {project} together on AI WorkDeck.\n\nHere’s how to join:\n1. Sign in to the desktop app with your own AI WorkDeck account;\n2. Open the project list and click “Pull a Case File from the Team Case Library”;\n3. Select {project} and click “Pull to This Device”.\n\nAfter that, we each work on our own copy and click “Submit Draft” to merge changes together.',
   inviteTextOfficialNoInviter: 'You’re invited to work on {project} together on AI WorkDeck.\n\nHere’s how to join:\n1. Sign in to the desktop app with your own AI WorkDeck account;\n2. Open the project list and click “Pull a Case File from the Team Case Library”;\n3. Select {project} and click “Pull to This Device”.\n\nAfter that, we each work on our own copy and click “Submit Draft” to merge changes together.',
-  inviteTextNoInviter: 'You’re invited to work on {project} together on AI WorkDeck.\n\nHere’s how to join:\n1. Open the project list and click “Pull a Case File from the Team Case Library”;\n2. First time? Connect to the library first: click “Connect One”, enter the address {url}, and sign in with your account;\n3. Go back to “Pull a Case File from the Team Case Library”, select {project}, and click “Pull to This Device”.\n\nAfter that, we each work on our own copy and click “Submit Draft” to merge changes together.',
 
   // ---- InviteMemberDialog.vue ----
   addPeopleTitle: 'Add People to This Case File',
@@ -247,9 +233,7 @@ export default {
 
   // ---- CloudAcceptDialog.vue ----
   pullFromLibraryTitle: 'Pull a Case File from the Team Case Library',
-  noLibraryConnectedShort: 'You haven’t connected to a Team Case Library yet',
-  goConnectOne: 'Connect One',
-  chooseLibrarySourceShortLabel: 'Pull from which case library',
+  noLibraryAvailableShort: 'No team case library is available yet',
   noSharedProjects: 'No case files have been shared with you in this case library yet',
   pullToDevice: 'Pull to This Device',
   loadRemoteProjectsFailed: 'Failed to load case files in the case library',

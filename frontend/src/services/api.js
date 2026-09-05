@@ -3091,6 +3091,9 @@ export function getDraftTimeline(projectId, draftId, limit = 50) {
 // ==================== 云端协作（v2）====================
 // 术语：push=上传到云端 pull=从云端更新 clone=从云端接一个项目。界面零 Git 术语。
 
+// 账号口令连一个案件库。dev-board#440 起**界面上没有调用方**了：普通用户一律连官方
+// 案件库，自建部署把 cloud.collab.base-url 指到自己的服务器。端点本身保留（自建用户
+// 可直接调，app-e2e J11 也走它连测试用的团队服务器），所以这个包装一并留着，别当死代码清掉。
 export function cloudConnect(serverUrl, username, password, deviceName) {
   return request({ url: '/api/cloud/connect', method: 'POST',
     data: { serverUrl, username, password, deviceName } })
@@ -3100,6 +3103,8 @@ export function listCloudConnections() {
   return request({ url: '/api/cloud/connections', method: 'GET' })
 }
 
+// 同 cloudConnect：dev-board#440 撤掉「退出这个案件库」按钮后界面上没有调用方，
+// 端点保留给自建用户与 e2e 清场（run.mjs 的 finally）。
 export function disconnectCloudConnection(connectionId) {
   return request({ url: `/api/cloud/connections/${connectionId}/disconnect`, method: 'POST' })
 }
@@ -3116,8 +3121,8 @@ export function shareProjectToCloud(projectId, connectionId) {
   return request({ url: `/api/cloud/projects/${projectId}/share`, method: 'POST', data })
 }
 
-// 官方团队案件库：{available, connected, serverUrl, username}。available=false 表示
-// 本站暂不提供（国际站），界面就只留自建案件库那条路。
+// 官方团队案件库：{available, connected, serverUrl, username}。界面只读 available 这一位
+// （地址不给律师看）：为假表示本站暂不提供（国际站），此时界面上就没有可放进去的案件库。
 export function getOfficialCloud() {
   return request({ url: '/api/cloud/official', method: 'GET' })
 }
@@ -3189,9 +3194,11 @@ export function addCloudMember(projectId, identifier, role) {
     data: { identifier, role } })
 }
 
-// ==================== 记忆同步（Phase A 桌面配置 UI）====================
+// ==================== 记忆同步 ====================
 // repoKey：user-{userId}-memory / project-{projectId}-memory。
 // 凭据只写不读：status 只回打码后的 secretMasked；保存时 secret 留空表示沿用已存令牌。
+// dev-board#440 起 admin 里的「记忆同步」分区（自填 Git 地址/账号/令牌）已撤，这四个
+// 包装暂时没有界面调用方；后端 MemorySyncController 一字未动，自建用户直接调端点配置。
 
 export function getMemorySyncStatus(repoKey) {
   return request({ url: `/api/memory-sync/${repoKey}/status`, method: 'GET' })

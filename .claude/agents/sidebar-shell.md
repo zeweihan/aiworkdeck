@@ -259,7 +259,7 @@ rail 底部的**齿轮与用户头像都撤了**，收进顶栏右上角「活�
 | 组 | key | 内容 |
 |---|---|---|
 | 个人 | `work_log` / `favorites` / `todos` / `personal_settings` | 原个人中心四栏；内容各自成组件，在 `components/userprofile/Personal*Panel.vue` |
-| 系统 | `ai` / `platform` / `account` / `components` / `updates` / `cloud` / `memory` / `telemetry` / `feedback` / `plugins` | 原样未动 |
+| 系统 | `ai` / `platform` / `account` / `components` / `updates` / `telemetry` / `feedback` / `plugins` | `cloud`（团队案件库）与 `memory`（记忆同步）2026-09-05 已撤，见下 |
 
 - **个人组的 key 刻意避开 `account`**（系统组的「账户与用量」已经占了这个 key）。
 - **可见性只有 `visibleNavItems` 一处**：`desktopOnly && !isDesktop` 收起，
@@ -289,10 +289,10 @@ MarketSidebarPanel / CloudAcceptDialog / api.js 的 401 兜底）同样原样保
 
 ## 协作入口（PR-E，2026-08-06）
 
-顶栏项目名区在 `.work-status-chip` 旁新增 `.collab-chip`（`collab-chip-green/-blue/-amber` 三态），底部 `.status-bar` 同源加一格，两处都 `v-if="collabLinked"`——**只有这份案卷真的放进过团队案件库才渲染任何协作元素**，没连案件库的律师在界面上看不到一个协作字样（「以自己工作为主」的定位要求零打扰）。点开的是页面级 `components/collab/CollabDialog.vue`（三 tab：这份案卷 / 案件参与人 / 团队案件库），交稿、取回最新稿、放进案件库、加人、连/退案件库全部收在这里，是**唯一**动作入口；版本面板的 `CloudSyncBar` 只剩一行只读状态 + 一个 `open-collab` 链接。admin 页的「团队案件库」分区保留给多库管理与浏览器端。
+顶栏项目名区在 `.work-status-chip` 旁新增 `.collab-chip`（`collab-chip-green/-blue/-amber` 三态），底部 `.status-bar` 同源加一格，两处都 `v-if="collabLinked"`——**只有这份案卷真的放进过团队案件库才渲染任何协作元素**，没连案件库的律师在界面上看不到一个协作字样（「以自己工作为主」的定位要求零打扰）。点开的是页面级 `components/collab/CollabDialog.vue`（**两 tab**：这份案卷 / 案件参与人；第三个 tab「团队案件库」连同连库表单随 dev-board#440 撤掉），交稿、取回最新稿、放进案件库、加人全部收在这里，是**唯一**动作入口；版本面板的 `CloudSyncBar` 只剩一行只读状态 + 一个 `open-collab` 链接。admin 页的「团队案件库」分区同期整块撤掉（见本文件 admin 分区那一节）。
 没有动 rail 配置、没有动 `leftPaneKey` 状态机、没有拆 `VersionPanel` 组件树——`LEFT_SIDEBAR_PLUGINS` 仍是纯静态数组，rail 上有哪些入口不依赖运行时状态。角色展示文案的唯一来源是 `frontend/src/config/memberRoles.js`（`ROLE_LABELS`/`ASSIGNABLE_ROLES`/`MEMBER_GROUP_LABELS`），`CloudSyncBar`/`InviteMemberDialog`/`groupedMembers` 三处各写各的历史已清；**枚举键名是后端 `ProjectMember.Role` 的值也是接口字段值，只改 label 不改 key**。协作状态口径与刷新机制见 `.claude/agents/version-control.md`。
 **「加人」是两条轨，界面上必须说破**：顶栏成员堆叠的 `InviteMemberDialog` 走 `addProjectMember`（本机这份案卷的参与人表），协作抽屉「案件参与人」tab 走 `addCloudMember`（代理到团队案件库那边的成员表，`api.js` 注释已自陈「不是本地项目成员」）。双轨是既有机制、本 PR 不动，但两处现在共用同一套 `memberRoles.js` 标签后界面上再无区别信号——只在一侧加人的律师会让同事白等且毫无提示，所以 `InviteMemberDialog` 的「所里同事」tab 底部常驻一句「这里加的是本机的参与人，案卷进了案件库还要在顶栏协作里再加一次」。改这两个弹窗的文案时别把它删了。
-**邀请话术里的每一步都要指向收件人真看得见的入口**：`CollabDialog.inviteText` 是发给一个此刻手上还没有这份案卷的人的，他打开软件停在项目列表页——那里的协作入口只有「从团队案件库取一份案卷」（空项目态与有项目态都渲染），连库也要从那个弹窗里的「去连一个」进。别写「打开左下角设置」：项目列表页左侧的「设置」面板里没有团队案件库（那是设置页的分区，入口叫「设置」、「系统」组只对管理员渲染）。
+**邀请话术里的每一步都要指向收件人真看得见的入口**：`CollabDialog.inviteText` 是发给一个此刻手上还没有这份案卷的人的，他打开软件停在项目列表页——那里的协作入口只有「从团队案件库取一份案卷」（空项目态与有项目态都渲染）。dev-board#440 之后话术只剩官方那一版（同事用自己的 AI WorkDeck 账号登录桌面端就有这个库，不必连任何服务器），带「填地址」的两个键已删；「去连一个」那条路也没了（目的地是已撤的连库表单）。别写「打开左下角设置」：项目列表页左侧的「设置」面板里没有团队案件库。
 
 ## 页面路由（frontend/src/pages.json，全部 navigationStyle: custom）
 
@@ -554,7 +554,7 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 - `frontend/src/services/host.js` — **访问桌面壳能力的唯一出口**（浏览器面板/截图/剪贴板/组件下载/自动更新/本地文件对话框/应用菜单等）。业务代码一律 `import { host } from '@/services/host.js'`，**不要再写 `window.checkbaDesktop`**；「是不是桌面壳」用 `isDesktopHost()`。桌面态逐字段透传、Web 态缺席，所以既有的 `if (host.browser && ...)` 子对象守卫必须保留（守卫就是能力探测）。详见 doc-editor.md 的「宿主能力层与编辑器容器」。
 - `frontend/src/config/panelRegistry.js` — 可停靠面板注册表（**取代了原 `config/tools.js` 的 `WORKBENCH_TOOLS`，那个文件已删**，底栏三项现在是「停在 bottom 档的面板」）；`fileActions.js` — 文件树批量操作；`workbenchActions.js` — OCR/内链 scheme 常量。
 - `frontend/src/components/FileTree.vue`（5225 行）— 左栏文件树。
-- 各页面（行数实测）：login.vue(931)、newproject/index.vue(680)、wizard.vue(1007，重跑语义见 PR#134)、userprofile.vue（**已是薄壳页**，2026-08-20 起挂 `AdminPane initial-nav="work_log"`，个人中心的四栏内容在 `components/userprofile/Personal*Panel.vue`）、variable-library.vue(543)、admin.vue(**已是薄壳页 ~30 行**，实体在 `components/admin/AdminPane.vue`，含插件广场入口与「记忆同步」面板——nav key `memory`、desktopOnly，配置记忆 Git 远端，见 version-control.md)、plugin-market.vue(22，**已是薄壳页**，实体在 `MarketPane`)。
+- 各页面（行数实测）：login.vue(931)、newproject/index.vue(680)、wizard.vue(1007，重跑语义见 PR#134)、userprofile.vue（**已是薄壳页**，2026-08-20 起挂 `AdminPane initial-nav="work_log"`，个人中心的四栏内容在 `components/userprofile/Personal*Panel.vue`）、variable-library.vue(543)、admin.vue(**已是薄壳页 ~30 行**，实体在 `components/admin/AdminPane.vue`，含插件广场入口；原来的「记忆同步」面板 nav key `memory` 已随 dev-board#440 撤掉，见 version-control.md)、plugin-market.vue(22，**已是薄壳页**，实体在 `MarketPane`)。
 - **项目列表页** `frontend/src/pages/project-list/project-list.vue` + 同目录 `project-list.scss`（样式 `@import` 引入，照 project-overview.vue + .scss 的既有形制）。整块搬自 `userprofile.vue` 的 projects tab，卡片类名 `.project-item-card` 保持不变（e2e 锚点）；页面根 `.page-project-list`。**新建入口在列表下方**（`.create-section`，两张 `.create-card`：打开文件夹 / 新建项目文件夹，走 `utils/ideOpen.js` 的 `openFolderFlow`/`createFolderFlow`，命名弹窗同页）；「单独打开一个文件」已去掉——它造出的是没有归属的临时项目（`openFileFlow` 仍留给应用菜单与拖拽）。浏览器版没有系统文件夹对话框，降级为 navigateTo `newproject` 页填表建托管空白项目。承载 `InviteMemberDialog` 与 `CloudAcceptDialog`（**这两个必须一起搬**，`CloudAcceptDialog` 的两个入口是协作唯一入口，`CollabDialog.vue:271` 的邀请话术还指着它）。CLIENT 隐藏「+ 新建项目」「从团队案件库取一份案卷」与卡片上的删除/重命名/邀请。角色文案唯一来源是 `config/memberRoles.js`（搬迁时把原来硬编码的 `getRoleLabel` 映射表换掉）。**不要搬**「进行中/已完成」那两张统计卡——它们是写死的字面量 0，Project 实体根本没有状态字段。
 **双视图（2026-08-18）**：页头右侧 `.view-toggle` 两个按钮切 `viewMode`（`'grid'`/`'list'`），
 选择记在 `uni.storage` 的 `checkba_project_list_view`（本机习惯，不进后端）。默认仍是 grid，
@@ -608,10 +608,16 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
   面板是一条 `v-if`/`v-else-if` 长链，删掉链头那块会让编译期直接报
   「v-else/v-else-if has no adjacent v-if」，现在链头是 `platform`。
   app-e2e J7 的 admin 断言文案也从「系统配置」改成了「系统管理」（左侧导航卡标题，不随分区增减变化）。
-- admin 的「团队案件库」面板（nav key `cloud`）在**没有任何连接时**多渲染一张说明卡
-  （`.cloud-help-card`，`admin.cloudNoServerTitle` 起五条文案）：说清案件库是律所自建的一台
-  服务器、三个框分别填什么、账号不是 aiworkdeck.com 那个、以及本机只存令牌不存密码。
-  在此之前界面对这些只字未提，没部署过服务器的人打开只会发呆（维护者 2026-08-18 亲自问到）。
+- **「团队案件库」（nav key `cloud`）与「记忆同步」（nav key `memory`）两个分区 2026-09-05 整块撤掉
+  （dev-board#440）**，连同 2026-08-18 才加的那张 `.cloud-help-card` 空态说明卡。那张卡当初是为了
+  回答「这三个框到底填什么」；现在的答案是**律师根本不该看见那三个框**——他用自己的 AI WorkDeck
+  账号就有官方案件库，自建部署由 `cloud.collab.base-url` 指过来，记忆同步远端直接调
+  `POST /api/memory-sync/{repoKey}/remote`。后端能力一字未砍，配方在 `deploy/web/README.md`。
+  撤这两块动到的地方与上一条「撤分区要一起改的三处」同款，外加：`cloudForm`/`memoryRepos` 等 data、
+  `cloudServerUrlIsHttp` computed、`onNavTap` 里的两个分支与 `wasAlreadyOnMemory` 守卫、
+  `api.js` 六个导入、`.cloud-*`/`.memory-*` 样式、两语言各 56 个 i18n 键。
+  护栏：`tests/project-home/audit-rf-fe2-batch.test.mjs` 里原来钉「记忆同步页防重拉」的那组
+  已改钉仍在的 `account` 分支。
 - admin 的「AI 功能设置」面板（nav key `ai`）是 AI 模型设置的唯一入口。**2026-08-21 起产品只有
   官方版（dev-board#98）：前端不露 BYOK，后端分支与设置键原样保留**。面板里只剩
   默认/辅助/子 Agent 三个模型下拉（清单来自 `GET /api/ai/models`，前端不许硬编码）、网络区域三选一

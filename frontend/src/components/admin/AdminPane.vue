@@ -712,183 +712,6 @@
           </view>
         </scroll-view>
 
-        <!-- 团队案件库（仅桌面端：连接案件库、管理已连的库）。项目里的协作抽屉是同一批动作的
-             主入口，这里保留给「一台机器连多个库」与浏览器端的管理场景。 -->
-        <scroll-view
-          v-else-if="activeNav === 'cloud'"
-          scroll-y
-          class="config-scroll"
-        >
-          <view class="section-card">
-            <view class="section-header">
-              <text class="section-title">{{ $t('admin.navCloud') }}</text>
-              <text class="section-subtitle">
-                {{ $t('admin.cloudSubtitle') }}
-              </text>
-            </view>
-            <view class="section-body">
-              <view
-                v-for="conn in cloudConnections"
-                :key="conn.id"
-                class="provider-card"
-              >
-                <view class="provider-header cloud-conn-header">
-                  <view class="cloud-conn-info">
-                    <text class="provider-name">{{ conn.serverUrl }}</text>
-                    <text class="cloud-conn-user">{{ conn.displayName || conn.username }}</text>
-                  </view>
-                  <button class="comp-btn danger" @tap="onDisconnectCloud(conn)">{{ $t('admin.cloudDisconnectButton') }}</button>
-                </view>
-              </view>
-
-              <!-- 「这三个框到底填什么」。没部署过服务器的人打开这一页只会发呆——
-                   地址不是我们的域名、账号不是 aiworkdeck.com 那个，而界面上此前
-                   一个字都没说。**没有连接时才展开**：已经连上的人不需要再看一遍。 -->
-              <view v-if="!cloudConnections.length" class="provider-card cloud-help-card">
-                <view class="provider-header">
-                  <text class="provider-name">{{ $t('admin.cloudNoServerTitle') }}</text>
-                </view>
-                <text class="cloud-help-body">{{ $t('admin.cloudNoServerBody') }}</text>
-                <text class="cloud-help-sub">{{ $t('admin.cloudFieldsTitle') }}</text>
-                <text class="cloud-help-li">{{ $t('admin.cloudFieldsAddress') }}</text>
-                <text class="cloud-help-li">{{ $t('admin.cloudFieldsAccount') }}</text>
-                <text class="cloud-help-li">{{ $t('admin.cloudFieldsToken') }}</text>
-                <text class="cloud-help-note">{{ $t('admin.cloudDeployHint') }}</text>
-              </view>
-
-              <view class="provider-card">
-                <view class="provider-header">
-                  <text class="provider-name">{{ $t('admin.cloudConnectTitle') }}</text>
-                </view>
-                <view class="form-row">
-                  <text class="form-label">{{ $t('admin.cloudServerLabel') }}</text>
-                  <input
-                    v-model="cloudForm.serverUrl"
-                    class="form-input"
-                    :placeholder="$t('admin.cloudServerPlaceholder')"
-                  />
-                </view>
-                <text v-if="cloudServerUrlIsHttp" class="cloud-http-warn">
-                  {{ $t('admin.cloudHttpWarn') }}
-                </text>
-                <view class="form-row">
-                  <text class="form-label">{{ $t('admin.usernameLabel') }}</text>
-                  <input
-                    v-model="cloudForm.username"
-                    class="form-input"
-                    :placeholder="$t('admin.cloudUsernamePlaceholder')"
-                  />
-                </view>
-                <view class="form-row">
-                  <text class="form-label">{{ $t('admin.passwordLabel') }}</text>
-                  <input
-                    v-model="cloudForm.password"
-                    class="form-input"
-                    :placeholder="$t('admin.passwordLabel')"
-                    password
-                  />
-                </view>
-                <view class="cloud-connect-actions">
-                  <button class="btn-primary" :disabled="cloudBusy" @tap="onConnectCloud">
-                    {{ cloudBusy ? $t('admin.cloudConnecting') : $t('admin.connectButton') }}
-                  </button>
-                </view>
-              </view>
-            </view>
-          </view>
-        </scroll-view>
-
-        <!-- 记忆同步（仅桌面端）：AI 记忆经独立 Git 仓库跨机器同步。
-             与案卷的版本记录互不相干——记忆仓库绝不进项目文档仓库主线（领域红线）。 -->
-        <scroll-view
-          v-else-if="activeNav === 'memory'"
-          scroll-y
-          class="config-scroll"
-        >
-          <view class="section-card">
-            <view class="section-header">
-              <text class="section-title">{{ $t('admin.navMemory') }}</text>
-              <text class="section-subtitle">
-                {{ $t('admin.memorySubtitle') }}
-              </text>
-            </view>
-            <view class="section-body">
-              <view v-if="memoryLoading && !memoryRepos.length" class="empty">
-                <text class="empty-text">{{ $t('admin.loadingDots') }}</text>
-              </view>
-              <view
-                v-for="repo in memoryRepos"
-                :key="repo.repoKey"
-                class="provider-card"
-              >
-                <view class="provider-header memory-repo-header">
-                  <view class="memory-repo-info">
-                    <text class="provider-name">{{ repo.title }}</text>
-                    <text class="memory-repo-sub">{{ repo.subtitle }}</text>
-                  </view>
-                  <text class="memory-status" :class="memoryStatusClass(repo)">
-                    {{ memoryStatusLabel(repo) }}
-                  </text>
-                </view>
-                <view class="form-row">
-                  <text class="form-label">{{ $t('admin.memoryUrlLabel') }}</text>
-                  <input
-                    v-model="repo.form.url"
-                    class="form-input"
-                    :placeholder="$t('admin.memoryUrlPlaceholder', { repoKey: repo.repoKey })"
-                  />
-                </view>
-                <view class="form-row">
-                  <text class="form-label">{{ $t('admin.usernameLabel') }}</text>
-                  <input
-                    v-model="repo.form.username"
-                    class="form-input"
-                    :placeholder="$t('admin.memoryUsernamePlaceholder')"
-                  />
-                </view>
-                <view class="form-row">
-                  <text class="form-label">{{ $t('admin.memorySecretLabel') }}</text>
-                  <input
-                    v-model="repo.form.secret"
-                    class="form-input"
-                    password
-                    :placeholder="memorySecretPlaceholder(repo)"
-                  />
-                </view>
-                <view class="account-connect-actions">
-                  <button
-                    v-if="repo.status && repo.status.configured"
-                    class="comp-btn danger"
-                    :disabled="repo.busy"
-                    @tap="onDisconnectMemory(repo)"
-                  >
-                    {{ $t('admin.disconnect') }}
-                  </button>
-                  <button
-                    v-if="repo.status && repo.status.configured"
-                    class="comp-btn"
-                    :disabled="repo.busy"
-                    @tap="onSyncMemoryNow(repo)"
-                  >
-                    {{ $t('admin.syncNowButton') }}
-                  </button>
-                  <button class="btn-primary" :disabled="repo.busy" @tap="onSaveMemoryRemote(repo)">
-                    {{ repo.busy ? $t('admin.processing') : $t('admin.saveAndSyncButton') }}
-                  </button>
-                </view>
-                <text
-                  v-if="repo.feedback"
-                  class="memory-feedback"
-                  :class="{ 'memory-feedback-warn': repo.feedbackError }"
-                >{{ repo.feedback }}</text>
-              </view>
-              <view v-if="!memoryLoading && !memoryRepos.length" class="empty">
-                <text class="empty-text">{{ $t('admin.noMemoryRepos') }}</text>
-              </view>
-            </view>
-          </view>
-        </scroll-view>
-
         <!-- 数据统计（匿名使用统计开关 + 本地使用统计） -->
         <scroll-view
           v-else-if="activeNav === 'telemetry'"
@@ -1144,13 +967,11 @@
 <script>
 import {
   getAdminConfig, saveAdminConfig,
-  cloudConnect, listCloudConnections, disconnectCloudConnection,
   getAccountStatus, connectAccount, getAccountUsage,
   getAccountBalance, getAccountMembership,
   getStorageLocation, moveStorageLocation, resetStorageLocation,
   getLocalIdentityCandidates, selectLocalIdentity,
-  getMemorySyncStatus, setMemorySyncRemote, removeMemorySyncRemote, syncMemoryNow,
-  getCurrentUser as fetchCurrentUser, getMyProjects, uploadAvatar,
+  getCurrentUser as fetchCurrentUser, uploadAvatar,
   getTelemetrySettings, updateTelemetrySettings, getTelemetrySummary,
   fetchAiModels,
   getFeedbackList, getFeedbackDetail, getOptimizerStatus, runOptimizer, getApiBaseUrl,
@@ -1159,7 +980,6 @@ import {
 } from '@/services/api.js'
 import { getCurrentUser, getSessionId, setSessionUser } from '@/utils/auth.js'
 import { getInitial } from '@/utils/textInitial.js'
-import { getLastProjectId } from '@/utils/recentProjects.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { accountPageUrl, siteBaseUrl, siteLinks, loadSiteLinks, resetSiteLinks } from '@/utils/siteLinks.js'
 import { host } from '@/services/host.js'
@@ -1233,8 +1053,6 @@ export default {
         { key: 'ai', label: this.$t('admin.navAi'), group: 'system' },
         { key: 'updates', label: this.$t('admin.navUpdates'), group: 'system', desktopOnly: true },
         { key: 'components', label: this.$t('admin.navComponents'), group: 'system', desktopOnly: true },
-        { key: 'cloud', label: this.$t('admin.navCloud'), group: 'system', desktopOnly: true },
-        { key: 'memory', label: this.$t('admin.navMemory'), group: 'system', desktopOnly: true },
         { key: 'telemetry', label: this.$t('admin.navTelemetry'), group: 'system' },
         { key: 'feedback', label: this.$t('admin.navFeedback'), group: 'system' },
         // 'plugins'（插件广场）2026-08-27 已撤——入口统一收敛到左 rail 的插件中心，
@@ -1327,9 +1145,6 @@ export default {
       budgetForm: { lowBalance: '0' },
       budgetBusy: false,
       saving: false,
-      cloudConnections: [],
-      cloudForm: { serverUrl: '', username: '', password: '' },
-      cloudBusy: false,
       // 当前站点（双主站）。displayName 为空 = 还没取到 / 旧后端没有该端点，整块不渲染
       site: { current: '', displayName: '', pinned: false, multiSite: false, sites: [] },
       siteBusy: false,
@@ -1360,10 +1175,6 @@ export default {
       identityCandidates: [],
       identityCurrentId: null,
       identityBusy: false,
-      // 记忆同步（Phase A 桌面配置 UI）：两张卡——用户记忆仓 + 当前案卷记忆仓。
-      // 每项 { repoKey, title, subtitle, status, form:{url,username,secret}, busy, feedback, feedbackError }
-      memoryRepos: [],
-      memoryLoading: false,
     }
   },
   computed: {
@@ -1439,10 +1250,6 @@ export default {
         credits: ((usage.totalCents || 0) / 100).toFixed(2),
         month: usage.month || '',
       })
-    },
-    // 未加密地址提醒：仅按前缀判断，不做完整 URL 校验（连接失败自会有报错）。
-    cloudServerUrlIsHttp() {
-      return /^http:\/\//i.test((this.cloudForm.serverUrl || '').trim())
     },
     // 后端回来的 activeProvider 不是官方通道（老用户以前切过 OLLAMA / OPENROUTER）。
     // '' 是还没拉到，不算旧设置。
@@ -1842,15 +1649,7 @@ export default {
       })
     },
     onNavTap(nav) {
-      // 记忆同步卡的 v-model 直接绑在 this.memoryRepos[i].form 上，loadMemoryRepos()
-      // 每次都用全新对象整体替换这个数组。已经在记忆同步页时再点一次同一个导航项
-      // （双击，或切走又立刻切回同一项），不该触发重拉——否则正在卡片里敲还没保存的
-      // URL/密钥会被这次重拉悄悄冲掉，用户毫无察觉。
-      const wasAlreadyOnMemory = this.activeNav === 'memory'
       this.activeNav = nav.key
-      if (nav.key === 'cloud') {
-        this.loadCloudConnections()
-      }
       if (nav.key === 'account') {
         this.loadSite()
         this.loadAccount()
@@ -1861,9 +1660,6 @@ export default {
         refreshEntitlements()
         // 花费闸门 + 预扣/低余额提醒（原「平台服务」分区搬来的部分）
         this.loadPlatformServices()
-      }
-      if (nav.key === 'memory' && !wasAlreadyOnMemory) {
-        this.loadMemoryRepos()
       }
       if (nav.key === 'feedback') {
         this.reloadFeedbackPanel()
@@ -2049,170 +1845,6 @@ export default {
         uni.showToast({ title: (e && e.message) || this.$t('admin.switchFailed'), icon: 'none' })
       } finally {
         this.identityBusy = false
-      }
-    },
-    // ---------- 记忆同步 ----------
-    // 两张卡都不是硬前提：用户信息拿不到就只显示案卷卡，最近没开过案卷就只显示用户卡。
-    async loadMemoryRepos() {
-      this.memoryLoading = true
-      const repos = []
-      try {
-        const me = await fetchCurrentUser()
-        const uid = me && me.data && me.data.id
-        if (uid) {
-          repos.push(this.newMemoryRepo(
-            `user-${uid}-memory`, this.$t('admin.myMemoryTitle'),
-            this.$t('admin.myMemorySubtitle'),
-          ))
-        }
-      } catch (e) {
-        // 用户信息读不到就不显示这张卡，不拦整个面板
-      }
-      const projectId = getLastProjectId()
-      if (projectId) {
-        let name = ''
-        try {
-          const res = await getMyProjects()
-          const list = (res && res.data) || []
-          const hit = list.find((p) => Number(p.id) === projectId)
-          if (hit && hit.name) name = hit.name
-        } catch (e) {
-          // 名字取不到就不带名字，不拦路
-        }
-        repos.push(this.newMemoryRepo(
-          `project-${projectId}-memory`,
-          name ? this.$t('admin.caseMemoryTitleNamed', { name }) : this.$t('admin.caseMemoryTitle'),
-          this.$t('admin.caseMemorySubtitle'),
-        ))
-      }
-      this.memoryRepos = repos
-      // 注意用 this.memoryRepos 里的响应式代理逐个刷新，改裸对象不触发渲染
-      await Promise.all(this.memoryRepos.map((r) => this.refreshMemoryStatus(r)))
-      this.memoryLoading = false
-    },
-    newMemoryRepo(repoKey, title, subtitle) {
-      return {
-        repoKey,
-        title,
-        subtitle,
-        status: null,
-        form: { url: '', username: '', secret: '' },
-        busy: false,
-        feedback: '',
-        feedbackError: false,
-      }
-    },
-    async refreshMemoryStatus(repo) {
-      try {
-        const res = await getMemorySyncStatus(repo.repoKey)
-        const d = (res && res.data) || {}
-        repo.status = d
-        repo.form.url = d.url || ''
-        repo.form.username = d.username || ''
-        // 凭据只写不读：令牌永远不回填输入框，占位符提示「已保存，留空沿用」
-        repo.form.secret = ''
-      } catch (e) {
-        repo.status = { configured: false }
-        repo.feedback = (e && e.message) || this.$t('admin.statusReadFailed')
-        repo.feedbackError = true
-      }
-    },
-    memoryStatusLabel(repo) {
-      const s = repo.status
-      if (!s) return ''
-      if (!s.configured) return this.$t('admin.memoryNotConfigured')
-      if (s.pendingUpload) return this.$t('admin.memoryConfiguredPending')
-      return s.lastSyncAt ? this.$t('admin.memoryLastSync', { time: this.formatUsageTime(s.lastSyncAt) }) : this.$t('admin.memoryConfigured')
-    },
-    memoryStatusClass(repo) {
-      const s = repo.status
-      return {
-        'memory-status-on': !!(s && s.configured && !s.pendingUpload),
-        'memory-status-warn': !!(s && s.configured && s.pendingUpload),
-      }
-    },
-    memorySecretPlaceholder(repo) {
-      const masked = repo.status && repo.status.secretMasked
-      return masked
-        ? this.$t('admin.memorySecretSaved', { masked })
-        : this.$t('admin.memorySecretPlaceholderText')
-    },
-    async onSaveMemoryRemote(repo) {
-      const url = (repo.form.url || '').trim()
-      if (!url) {
-        repo.feedback = this.$t('admin.memoryUrlRequired')
-        repo.feedbackError = true
-        return
-      }
-      repo.busy = true
-      repo.feedback = ''
-      try {
-        const res = await setMemorySyncRemote(repo.repoKey, {
-          url,
-          username: (repo.form.username || '').trim(),
-          secret: repo.form.secret || '',
-        })
-        const sync = res && res.data && res.data.sync
-        this.applyMemorySyncResult(repo, sync, this.$t('admin.memorySaved'))
-        await this.refreshMemoryStatus(repo)
-      } catch (e) {
-        repo.feedback = (e && e.message) || this.$t('admin.saveFailedRetry')
-        repo.feedbackError = true
-      } finally {
-        repo.busy = false
-      }
-    },
-    async onSyncMemoryNow(repo) {
-      repo.busy = true
-      repo.feedback = ''
-      try {
-        const res = await syncMemoryNow(repo.repoKey)
-        this.applyMemorySyncResult(repo, res && res.data, this.$t('admin.syncDone'))
-        await this.refreshMemoryStatus(repo)
-      } catch (e) {
-        repo.feedback = (e && e.message) || this.$t('admin.syncFailedAutoRetry')
-        repo.feedbackError = true
-      } finally {
-        repo.busy = false
-      }
-    },
-    // 同步结果统一转成一句话反馈：离线与推送未成不是致命错误，后台会自动重试
-    applyMemorySyncResult(repo, sync, okText) {
-      if (!sync) {
-        repo.feedback = okText
-        repo.feedbackError = false
-        return
-      }
-      if (sync.offline) {
-        repo.feedback = this.$t('admin.syncOffline', { ok: okText })
-        repo.feedbackError = true
-      } else if (sync.pendingUpload) {
-        repo.feedback = this.$t('admin.syncPendingPush', { ok: okText })
-        repo.feedbackError = true
-      } else {
-        repo.feedback = this.$t('admin.syncInSync', { ok: okText })
-        repo.feedbackError = false
-      }
-    },
-    async onDisconnectMemory(repo) {
-      const ok = await new Promise((r) => uni.showModal({
-        title: this.$t('admin.memoryDisconnectTitle'),
-        content: this.$t('admin.memoryDisconnectContent'),
-        confirmText: this.$t('admin.disconnect'),
-        success: (res) => r(res.confirm),
-      }))
-      if (!ok) return
-      repo.busy = true
-      try {
-        await removeMemorySyncRemote(repo.repoKey)
-        await this.refreshMemoryStatus(repo)
-        repo.feedback = this.$t('admin.memoryDisconnected')
-        repo.feedbackError = false
-      } catch (e) {
-        repo.feedback = (e && e.message) || this.$t('admin.disconnectFailedRetry')
-        repo.feedbackError = true
-      } finally {
-        repo.busy = false
       }
     },
     async loadPlatformAiAvailability() {
@@ -2622,45 +2254,6 @@ export default {
     formatUsageTime(ts) {
       if (!ts) return ''
       return String(ts).replace('T', ' ').slice(0, 16)
-    },
-    async loadCloudConnections() {
-      try {
-        const res = await listCloudConnections()
-        this.cloudConnections = (res.data && res.data.connections) || []
-      } catch (e) {
-        this.cloudConnections = []
-      }
-    },
-    async onConnectCloud() {
-      if (!this.cloudForm.serverUrl || !this.cloudForm.username) return
-      this.cloudBusy = true
-      try {
-        await cloudConnect(
-          this.cloudForm.serverUrl.trim(), this.cloudForm.username.trim(),
-          this.cloudForm.password, '桌面端'
-        )
-        this.cloudForm = { serverUrl: '', username: '', password: '' }
-        await this.loadCloudConnections()
-        uni.showToast({ title: this.$t('admin.cloudConnectedToast'), icon: 'none' })
-      } catch (e) {
-        uni.showToast({ title: e.message || this.$t('admin.connectFailed'), icon: 'none' })
-      } finally {
-        this.cloudBusy = false
-      }
-    },
-    async onDisconnectCloud(conn) {
-      const ok = await new Promise((r) => uni.showModal({
-        title: this.$t('admin.cloudDisconnectButton'),
-        content: this.$t('admin.cloudDisconnectContent'),
-        success: (res) => r(res.confirm),
-      }))
-      if (!ok) return
-      try {
-        await disconnectCloudConnection(conn.id)
-        await this.loadCloudConnections()
-      } catch (e) {
-        uni.showToast({ title: e.message || this.$t('common.failed'), icon: 'none' })
-      }
     },
     // ---------- 花费闸门（原「平台服务」分区） ----------
     // 阈值以 Credits（元）编辑、以分存库。空串按 0（不启用）处理；
@@ -3275,124 +2868,6 @@ $brand-accent: $brand-mint;
 .comp-btn.danger {
   background: var(--awd-bg);
   color: var(--awd-danger-text);
-}
-
-/* 团队案件库 */
-.cloud-conn-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 0;
-}
-
-.cloud-conn-info {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.cloud-conn-user {
-  font-size: 12px;
-  color: var(--awd-text-2);
-}
-
-.cloud-http-warn {
-  display: block;
-  margin: -8px 0 16px;
-  font-size: 12px;
-  color: var(--awd-warning-text);
-}
-
-/* 「还没有团队案件库？」说明卡：只在没有任何连接时出现 */
-.cloud-help-card {
-  background: var(--awd-surface);
-  border: 1px solid var(--awd-border);
-}
-
-.cloud-help-body {
-  display: block;
-  margin-bottom: 12px;
-  font-size: 13px;
-  line-height: 1.7;
-  color: var(--awd-text-2);
-}
-
-.cloud-help-sub {
-  display: block;
-  margin-bottom: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--awd-text);
-}
-
-.cloud-help-li {
-  display: block;
-  margin-bottom: 6px;
-  padding-left: 12px;
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--awd-text-2);
-  border-left: 2px solid var(--awd-border);
-}
-
-.cloud-help-note {
-  display: block;
-  margin-top: 10px;
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--awd-text-2);
-}
-
-.cloud-connect-actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 8px;
-}
-
-/* 记忆同步 */
-.memory-repo-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.memory-repo-info {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-.memory-repo-sub {
-  font-size: 12px;
-  color: var(--awd-text-2);
-}
-
-.memory-status {
-  font-size: 12px;
-  color: var(--awd-text-2);
-  white-space: nowrap;
-}
-
-.memory-status-on {
-  color: var(--awd-accent-text);
-}
-
-.memory-status-warn {
-  color: var(--awd-warning-text);
-}
-
-.memory-feedback {
-  display: block;
-  margin-top: 10px;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--awd-accent-text);
-}
-
-.memory-feedback-warn {
-  color: var(--awd-warning-text);
 }
 
 .btn-primary:disabled {

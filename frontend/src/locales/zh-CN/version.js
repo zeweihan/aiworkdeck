@@ -141,9 +141,10 @@ export default {
 
   // ---- CloudSyncBar.vue ----
   notInLibrary: '这份案卷还没放进团队案件库',
-  noConnectionLocalOnly: '还没连团队案件库，这份案卷只在你这台电脑上',
+  // hasConnection 为假 = 没有官方案件库、本机也没有连接（国际站）。界面上没有连库入口了，
+  // 措辞就不能暗示「你去连一下」。
+  noConnectionLocalOnly: '当前没有可用的团队案件库，这份案卷只在你这台电脑上',
   addToLibrary: '放进案件库',
-  connectLibrary: '连接团队案件库',
   openCollab: '打开协作',
   pendingChoice: '有文件等你做选择',
   libraryUnreachable: '暂时连不上案件库',
@@ -155,14 +156,9 @@ export default {
   collabTitle: '协作',
   tabCaseFile: '这份案卷',
   tabCaseMembers: '案件参与人',
-  tabTeamLibrary: '团队案件库',
   collabLeadNotLinked: '《{name}》还只在你自己的电脑上。放进团队案件库之后，库里的同事就能取到这份案卷； 你们各自改各自的，交稿时再合到一起。',
-  noLibraryConnectedNote: '你还没有连过团队案件库。',
-  goConnectLibrary: '去连接团队案件库',
-  chooseLibraryLabel: '放进哪个案件库',
   addToTeamLibrary: '放进团队案件库',
   caseFileLabel: '案卷：{name}',
-  libraryUrlLabel: '案件库：{url}',
   submitDraftAction: '交稿',
   pullLatestAction: '取回最新稿',
   refreshStatus: '刷新状态',
@@ -172,7 +168,6 @@ export default {
   loadingGeneric: '正在读取…',
   onlyYouInCaseFile: '这份案卷目前只有你一个人。',
   addColleagueLabel: '把同事加进来',
-  colleagueUsernamePlaceholder: '输入同事在案件库里的账号',
   colleagueContactPlaceholder: '同事的手机号或邮箱',
   addColleagueByContactNote: '填同事登录 AI WorkDeck 用的手机号或邮箱；对方还没登录过的话，让他先登录一次再加。',
   addAction: '加进来',
@@ -190,18 +185,11 @@ export default {
   inviteFooterNote: '同事还要有这个案件库的账号；加进来之后，他在自己电脑上按这几步就能取到案卷。',
   addToOfficialLibraryTitle: '放进团队案件库',
   addToOfficialLibraryNote: '用你登录 AI WorkDeck 的账号就能放进去，不用填服务器地址。放进去之后，把同事加进来，各自取一份到本机办案。',
-  libraryIntro: '团队案件库是律所自己的一台服务器，案卷放在上面，所里同事各自取一份到本机办； 没有它也能照常办案，只是这份案卷只在你这台电脑上。',
-  disconnectLibrary: '退出这个案件库',
-  libraryUrlPlaceholder: '案件库地址，例如 https://team.example.com',
-  httpWarning: '未加密地址仅建议在律所内网使用',
-  libraryUsernamePlaceholder: '你在案件库里的账号',
-  passwordPlaceholder: '密码',
-  connecting: '连接中…',
-  connect: '连接',
-  disconnectLibraryConfirmContent: '退出后本机不再和这个案件库同步；已经放进去的案卷要重新连上才能继续交稿。案件库里的内容不受影响。',
-  noLibrarySelectedToast: '请先选一个团队案件库',
+  // 本站没有官方案件库、本机也没有连接：手填地址的入口已撤，界面上如实说一句，不给走不通的链接
+  noLibraryAvailableNote: '当前还没有可用的团队案件库，这份案卷只留在你这台电脑上。',
   sharedToLibrary: '已放进团队案件库',
   shareToLibraryFailed: '没能放进案件库',
+  tooManyLibraries: '这台电脑连着不止一个案件库，请先断开多余的再放进去',
   submitted: '已交稿',
   submitFailedNotice: '暂时没能交稿',
   submitFailed: '交稿失败',
@@ -213,17 +201,14 @@ export default {
   addedSuccess: '已加进来',
   addMemberFailed: '没能加进来',
   copiedPasteToColleague: '已复制，粘贴给同事即可',
-  connectedToLibrary: '已连上团队案件库',
   connectFailed: '连接失败',
-  disconnectFailed: '操作失败',
   // 邀请话术：整段发给同事的邀请文本（含具体操作步骤），一个键完整抽出。
   // 有/无邀请人两个键：英文的人名后面要有空格（"{name} invites you"），单键靠拼
-  // {inviter} 没法在两种语言里同时成立；zh 两键渲染结果与原拼接分支逐字节一致。
-  inviteText: '{inviter}邀你一起办《{project}》。\n\n在 AI WorkDeck 里这样加入：\n1. 打开项目列表，点「从团队案件库取一份案卷」；\n2. 第一次用要先连库：点「去连一个」，填地址 {url}，用你的账号密码连上；\n3. 回到「从团队案件库取一份案卷」，选《{project}》，点「取到本机」。\n\n之后你改你的、我改我的，各自点「交稿」就能合到一起。',
-  // 官方案件库版：同事不需要连任何服务器地址，用自己的 AI WorkDeck 账号登录桌面端即可。
+  // {inviter} 没法在两种语言里同时成立。
+  // dev-board#440 起只剩这一版：同事不需要连任何服务器地址（界面上已经没有填地址这一步），
+  // 用自己的 AI WorkDeck 账号登录桌面端就有这个库。
   inviteTextOfficial: '{inviter}邀你一起办《{project}》。\n\n在 AI WorkDeck 里这样加入：\n1. 用你自己的 AI WorkDeck 账号登录桌面端；\n2. 打开项目列表，点「从团队案件库取一份案卷」；\n3. 选《{project}》，点「取到本机」。\n\n之后你改你的、我改我的，各自点「交稿」就能合到一起。',
   inviteTextOfficialNoInviter: '邀你一起办《{project}》。\n\n在 AI WorkDeck 里这样加入：\n1. 用你自己的 AI WorkDeck 账号登录桌面端；\n2. 打开项目列表，点「从团队案件库取一份案卷」；\n3. 选《{project}》，点「取到本机」。\n\n之后你改你的、我改我的，各自点「交稿」就能合到一起。',
-  inviteTextNoInviter: '邀你一起办《{project}》。\n\n在 AI WorkDeck 里这样加入：\n1. 打开项目列表，点「从团队案件库取一份案卷」；\n2. 第一次用要先连库：点「去连一个」，填地址 {url}，用你的账号密码连上；\n3. 回到「从团队案件库取一份案卷」，选《{project}》，点「取到本机」。\n\n之后你改你的、我改我的，各自点「交稿」就能合到一起。',
 
   // ---- InviteMemberDialog.vue ----
   addPeopleTitle: '把人加进这份案卷',
@@ -247,9 +232,7 @@ export default {
 
   // ---- CloudAcceptDialog.vue ----
   pullFromLibraryTitle: '从团队案件库取一份案卷',
-  noLibraryConnectedShort: '你还没有连过团队案件库',
-  goConnectOne: '去连一个',
-  chooseLibrarySourceShortLabel: '从哪个案件库取',
+  noLibraryAvailableShort: '当前还没有可用的团队案件库',
   noSharedProjects: '这个案件库里还没有共享给你的案卷',
   pullToDevice: '取到本机',
   loadRemoteProjectsFailed: '读取案件库里的案卷失败',

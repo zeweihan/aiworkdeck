@@ -2,8 +2,11 @@
   <view class="cloud-bar">
     <template v-if="!linked">
       <text class="cloud-text cloud-unlinked">{{ unlinkedText }}</text>
-      <text class="cloud-open-link" @tap="open(hasConnection ? 'casefile' : 'library')">
-        {{ hasConnection ? $t('version.addToLibrary') : $t('version.connectLibrary') }}
+      <!-- hasConnection 为假 = 本站没有官方案件库、本机也没有连接（国际站）。此时没有
+           任何可点的下一步：手填服务器地址的入口已经撤掉，自建部署改由部署配置
+           cloud.collab.base-url 指过来，界面上不给一个走不通的链接。 -->
+      <text v-if="hasConnection" class="cloud-open-link" @tap="open('casefile')">
+        {{ $t('version.addToLibrary') }}
       </text>
     </template>
     <template v-else>
