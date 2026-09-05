@@ -48,6 +48,20 @@ public class DocInsightEntity {
     public static final String RETRIEVAL_UNAVAILABLE = "UNAVAILABLE";
     public static final String RETRIEVAL_ERROR = "ERROR";
 
+    /**
+     * {@link #retrievalHint} 的四个配置类取值（dev-board#458）。
+     *
+     * <p>它们和其余失败的分别在于：<b>重试一次也不会变</b>。窗格据此把「下一步」摆成
+     * 一个按钮（去连接账户 / 去充值），而不是一句散文加一个没用的「重试」。
+     * 判定必须走这个码，不许在前端拿 retrievalNote 做中文子串匹配——note 是双语的
+     * （LangText），英文版一上线子串判定整条失效。
+     */
+    public static final String HINT_NOT_CONNECTED = "NOT_CONNECTED";
+    public static final String HINT_NO_CREDITS = "NO_CREDITS";
+    public static final String HINT_UNAUTHORIZED = "UNAUTHORIZED";
+    /** 本机（自建部署 / 非 local-mode）没有该通道凭证：只能由部署管理员在服务端补。 */
+    public static final String HINT_NO_CREDENTIAL = "NO_CREDENTIAL";
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -91,6 +105,14 @@ public class DocInsightEntity {
     /** 不可用/失败的可读原因，直接显示给用户。 */
     @Column(name = "retrieval_note", length = 1000)
     private String retrievalNote;
+
+    /**
+     * 结构化的失败原因码（dev-board#458），只在配置类失败时非空：
+     * NOT_CONNECTED / NO_CREDITS / UNAUTHORIZED / NO_CREDENTIAL。
+     * 为空 = 瞬时错误或成功，窗格照旧只显示 note + 「重试」。
+     */
+    @Column(name = "retrieval_hint", length = 32)
+    private String retrievalHint;
 
     @Column(name = "fetched_at")
     private LocalDateTime fetchedAt;

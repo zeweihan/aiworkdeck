@@ -18,6 +18,14 @@ export default {
   refreshFailed: '重新检索失败',
   retry: '重试',
 
+  // 配置类检索失败的「下一步」（dev-board#458）。这四种重试不了，给的是路不是按钮上的安慰。
+  goConnectAccount: '去连接账户',
+  goRecharge: '去充值',
+  hint: {
+    // 官方版没有法宝凭据输入框（BYOK 界面已撤），自建部署只能由管理员在服务端补。
+    NO_CREDENTIAL: '该检索通道的凭据需要由部署管理员在服务端配置。',
+  },
+
   tab: {
     retrieval: '外部检索',
     checks: '一致性校验',

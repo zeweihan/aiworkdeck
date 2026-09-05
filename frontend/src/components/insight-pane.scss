@@ -106,7 +106,10 @@
 .ip-note.st-NOT_FOUND { background: var(--awd-bg); border-color: var(--awd-border); }
 .ip-note.st-NOT_FOUND .ip-note-t { color: var(--awd-text-2); }
 .ip-note.st-ERROR { background: var(--awd-danger-soft); border-color: var(--awd-danger); }
+.ip-note-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .ip-note-t { flex: 1; min-width: 0; font-size: 11px; color: var(--awd-text); line-height: 1.5; }
+// 没有按钮可给的那一档（自建部署缺服务端凭据）：多说一句「找谁」，弱化一级。
+.ip-note-h { font-size: 10px; color: var(--awd-text-2); line-height: 1.5; }
 .ip-note.st-ERROR .ip-note-t { color: var(--awd-danger-text); }
 .ip-act {
   flex: none; padding: 0 7px; border-radius: 10px; font-size: 10px;

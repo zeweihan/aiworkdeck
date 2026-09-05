@@ -350,6 +350,7 @@ public class DocInsightService {
 
     /** @param force true = 绕过 7 天缓存（单实体「重新检索」用） */
     private void retrieveOne(DocInsightEntity row, boolean force) {
+        row.setRetrievalHint(null);   // 上一轮的原因码不许挂到这一轮（重新检索 / 缓存复用都走这里）
         if (!force && copyFromCache(row)) return;
         row.setFetchedAt(LocalDateTime.now());
         switch (row.getKind()) {
@@ -399,7 +400,7 @@ public class DocInsightService {
         } catch (GatewayException ge) {
             // 「查询无结果」继续往下走模糊搜索：文中写的多半是简称，那条路正是为它准备的
             if (!emptyUpstream(ge.getMessage())) {
-                unavailable(row, join(ge.getMessage(), ge.userHint()));
+                unavailableGateway(row, ge, "");
                 return;
             }
             first = ge.getMessage();
@@ -426,7 +427,7 @@ public class DocInsightService {
             if (emptyUpstream(ge.getMessage())) {
                 notFound(row, "qichacha+mcp", ge.getMessage());
             } else {
-                unavailable(row, join(ge.getMessage(), ge.userHint()));
+                unavailableGateway(row, ge, "");
             }
         } catch (Exception e) {
             row.setRetrievalStatus(DocInsightEntity.RETRIEVAL_ERROR);
@@ -651,6 +652,9 @@ public class DocInsightService {
         row.setRetrievalSource(props.getCaseNumberServer());
         row.setRetrievalJson(writeJson(out));
         row.setRetrievalNote(note);
+        // 全文检索那一半刚落过原因码（可能是余额不足），但这一行最终是 OK：
+        // 留着它窗格就会对着一条拿到结果的案例摆「去充值」。
+        row.setRetrievalHint(null);
     }
 
     /**
@@ -674,7 +678,7 @@ public class DocInsightService {
         try {
             raw = pkulawChannel.callTool(server, tool, args);
         } catch (GatewayException ge) {
-            unavailable(row, unavailablePrefix + join(ge.getMessage(), ge.userHint()));
+            unavailableGateway(row, ge, unavailablePrefix);
             return false;
         } catch (Exception e) {
             unavailable(row, unavailablePrefix + readable(e));
@@ -683,7 +687,8 @@ public class DocInsightService {
         if (StringUtils.hasText(raw) && raw.startsWith(McpProvider.NO_CREDENTIAL_PREFIX)) {
             unavailable(row, LangText.of("本机未配置该检索通道的凭证（",
                     "This machine has no credential for this lookup channel (")
-                    + server + LangText.of("），本次未检索", "); nothing was queried"));
+                    + server + LangText.of("），本次未检索", "); nothing was queried"),
+                    DocInsightEntity.HINT_NO_CREDENTIAL);
             return false;
         }
         if (!StringUtils.hasText(raw) || raw.startsWith(ERROR_PREFIX)) {
@@ -708,6 +713,7 @@ public class DocInsightService {
         row.setRetrievalStatus(DocInsightEntity.RETRIEVAL_OK);
         row.setRetrievalJson(writeJson(out));
         row.setRetrievalNote(null);
+        row.setRetrievalHint(null);
         return true;
     }
 
@@ -745,9 +751,41 @@ public class DocInsightService {
         return new String[]{s, ""};
     }
 
+    /** 通道不可用，但原因是瞬时的（上游故障 / 网关不可达 / 通道没配）：只有可读原因，没有原因码。 */
     private void unavailable(DocInsightEntity row, String note) {
+        unavailable(row, note, null);
+    }
+
+    private void unavailable(DocInsightEntity row, String note, String hint) {
         row.setRetrievalStatus(DocInsightEntity.RETRIEVAL_UNAVAILABLE);
         row.setRetrievalNote(note);
+        row.setRetrievalHint(hint);
+    }
+
+    /**
+     * 网关分类失败落 UNAVAILABLE（dev-board#458）。
+     *
+     * <p>分两档写，别再压成一句散文：
+     * <ul>
+     *   <li><b>配置类</b>（未连接账户 / 余额不足 / Key 失效）→ 带原因码，note <b>只写原因</b>：
+     *       不加「本次不可用」前缀（那是等不来的等待），也不拼 {@code userHint()}——
+     *       「去连接账户 / 去充值」由窗格摆成一个可点的按钮，散文里再说一遍只是噪音；</li>
+     *   <li><b>瞬时类</b>（服务未开放 / 上游故障 / 网关不可达 / 请求不合法）→ 无原因码，
+     *       保留前缀与 {@code userHint()} 的「稍后重试」提示，窗格照旧给「重试」。</li>
+     * </ul>
+     */
+    private void unavailableGateway(DocInsightEntity row, GatewayException ge, String transientPrefix) {
+        String hint = switch (ge.getKind()) {
+            case NOT_CONNECTED -> DocInsightEntity.HINT_NOT_CONNECTED;
+            case NO_CREDITS -> DocInsightEntity.HINT_NO_CREDITS;
+            case UNAUTHORIZED -> DocInsightEntity.HINT_UNAUTHORIZED;
+            default -> null;
+        };
+        if (hint != null) {
+            unavailable(row, ge.getMessage(), hint);
+        } else {
+            unavailable(row, transientPrefix + join(ge.getMessage(), ge.userHint()));
+        }
     }
 
     /** 查完了、上游说没有。note 里<b>不带任何「稍后重试 / 联系客服」</b>：这不是故障。 */
@@ -755,6 +793,7 @@ public class DocInsightService {
         row.setRetrievalStatus(DocInsightEntity.RETRIEVAL_NOT_FOUND);
         row.setRetrievalSource(source);
         row.setRetrievalNote(note);
+        row.setRetrievalHint(null);
     }
 
     /** 上游那句话是不是「查完了，没有」。企查查的原话是「【有效请求】查询无结果」。 */
@@ -985,7 +1024,7 @@ public class DocInsightService {
         boolean hasDetail = StringUtils.hasText(e.getRetrievalJson());
         return new EntityView(e.getId(), e.getKind(), e.getName(), e.getNormKey(),
                 e.getRetrievalStatus(), e.getRetrievalSource(), e.getRetrievalNote(),
-                hasDetail, e.getFetchedAt(), mentions(e.getMentionsJson()),
+                e.getRetrievalHint(), hasDetail, e.getFetchedAt(), mentions(e.getMentionsJson()),
                 withDetail ? readJson(e.getRetrievalJson()) : null);
     }
 

@@ -61,7 +61,7 @@ class DocInsightControllerTest {
                         "qwen/qwen3.7-flash", LocalDateTime.of(2026, 8, 27, 10, 0),
                         LocalDateTime.of(2026, 8, 27, 10, 2)),
                 List.of(new EntityView(31L, "COMPANY", "京微资易科技有限公司", "京微资易科技",
-                        "OK", "qichacha+mcp", null, true, LocalDateTime.of(2026, 8, 27, 10, 1),
+                        "OK", "qichacha+mcp", null, null, true, LocalDateTime.of(2026, 8, 27, 10, 1),
                         List.of(new MentionView("由京微资易科技持有", null)), null)),
                 List.of(new FindingView(41L, "COUNT_MISMATCH", "warn", "标的公司 的「房产」前后不一致：58项 / 39项",
                         om.readTree("""
@@ -144,7 +144,7 @@ class DocInsightControllerTest {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(9L);
             EntityView detail = new EntityView(31L, "LAW", "《中华人民共和国公司法》第二十条", "中华人民共和国公司法#第二十条",
                     "UNAVAILABLE", "pkulaw-semantic", "法规检索本次不可用：401 checking remaining points",
-                    false, LocalDateTime.of(2026, 8, 27, 10, 1), List.of(), null);
+                    null, false, LocalDateTime.of(2026, 8, 27, 10, 1), List.of(), null);
             when(svc.entityDetail(9L, 1L, 31L)).thenReturn(detail);
             when(svc.refreshEntity(9L, 1L, 31L)).thenReturn(detail);
 

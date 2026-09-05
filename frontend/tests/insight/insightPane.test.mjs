@@ -384,3 +384,78 @@ test('NOT_FOUND 是中性态：note 照常显示，且样式表里为它单列�
   assert.ok(/\.ip-note\.st-NOT_FOUND\s*\{/.test(scss), 'ip-note 缺 NOT_FOUND 一档')
   assert.ok(!/\.ip-note\.st-NOT_FOUND[^\n]*awd-warning/.test(scss), 'NOT_FOUND 不该用告警色')
 })
+
+
+// ————————————————— 配置类失败的引导（dev-board#458） —————————————————
+//
+// 「重试」对「没连账户 / 余额不足 / Key 失效 / 本机没凭据」一点用都没有：那四种是恒定状态，
+// 再点一百次还是同一句话。判定必须走后端下发的结构化 retrievalHint，**不许拿 retrievalNote
+// 做中文子串匹配**——note 是双语的，英文版一上线子串判定整条失效（api.js:285 的同款教训）。
+
+function unavailableEntity(hint, note = '原因一句话') {
+  return {
+    id: 6, kind: 'LAW', name: '《中华人民共和国公司法》第二十条', retrievalStatus: 'UNAVAILABLE',
+    retrievalHint: hint, retrievalNote: note, hasDetail: false, mentions: [],
+  }
+}
+
+async function loadWith(entity) {
+  const made = makeVm({ latest: { run: { status: 'DONE' }, entities: [entity], findings: [] } })
+  await made.vm.load()
+  made.entity = made.vm.entities[0]
+  return made
+}
+
+test('未连接账户：给「去连接账户」按钮，且不给「重试」', async () => {
+  const { vm, entity, emitted } = await loadWith(unavailableEntity('NOT_CONNECTED'))
+  const act = vm.noteAction(entity)
+  assert.ok(act, '配置类失败必须给一个可点的下一步')
+  assert.equal(act.label, 'insight.goConnectAccount')
+  assert.equal(vm.showRetry(entity), false, '重试改不了「没连账户」')
+  vm.runNoteAction(entity)
+  assert.deepEqual(emitted.filter((e) => e[0] === 'open-settings'), [['open-settings', { nav: 'account' }]])
+})
+
+test('账户 Key 失效：同样指向账户设置', async () => {
+  const { vm, entity, emitted } = await loadWith(unavailableEntity('UNAUTHORIZED'))
+  assert.equal(vm.noteAction(entity).label, 'insight.goConnectAccount')
+  assert.equal(vm.showRetry(entity), false)
+  vm.runNoteAction(entity)
+  assert.deepEqual(emitted.filter((e) => e[0] === 'open-settings'), [['open-settings', { nav: 'account' }]])
+})
+
+test('余额不足：按钮是「去充值」，不是「重试」', async () => {
+  const { vm, entity, emitted } = await loadWith(unavailableEntity('NO_CREDITS'))
+  assert.equal(vm.noteAction(entity).label, 'insight.goRecharge')
+  assert.equal(vm.showRetry(entity), false)
+  vm.runNoteAction(entity)
+  assert.deepEqual(emitted.filter((e) => e[0] === 'open-settings'), [['open-settings', { nav: 'account' }]])
+})
+
+test('本机没凭据（自建部署）：只给文案，既不给按钮也不给重试', async () => {
+  const { vm, entity, emitted } = await loadWith(unavailableEntity('NO_CREDENTIAL'))
+  assert.equal(vm.noteAction(entity), null, '官方版没有法宝凭据输入框，指一条不存在的路比不指更糟')
+  assert.equal(vm.showRetry(entity), false)
+  assert.equal(vm.noteHint(entity), 'insight.hint.NO_CREDENTIAL')
+  vm.runNoteAction(entity)
+  assert.equal(emitted.filter((e) => e[0] === 'open-settings').length, 0)
+})
+
+test('瞬时失败（没有原因码）：照旧只给「重试」', async () => {
+  const { vm, entity } = await loadWith(unavailableEntity(null, '法规检索本次不可用：上游超时'))
+  assert.equal(vm.noteAction(entity), null)
+  assert.equal(vm.noteHint(entity), '')
+  assert.equal(vm.showRetry(entity), true, '上游故障重试是真出路')
+})
+
+test('只读成员：配置类引导仍显示，重试仍然没有（权限与原因是两回事）', async () => {
+  const { vm, entity } = await loadWith(unavailableEntity('NO_CREDITS'))
+  vm.canWrite = false
+  assert.ok(vm.noteAction(entity))
+  assert.equal(vm.showRetry(entity), false)
+})
+
+test('open-settings 必须在 emits 里声明，否则宿主的 @open-settings 收不到', () => {
+  const { component } = makeVm()
+  assert.ok(component.emits.includes('open-settings'))
+})

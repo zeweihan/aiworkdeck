@@ -28,9 +28,15 @@ public final class DocInsightViews {
     public record MentionView(String quote, Integer paragraph) {
     }
 
+    /**
+     * {@code retrievalHint}：配置类失败的结构化原因码（dev-board#458），
+     * 取值 NOT_CONNECTED / NO_CREDITS / UNAUTHORIZED / NO_CREDENTIAL，其余情况为 null。
+     * 前端据它把「下一步」摆成按钮（去连接账户 / 去充值），<b>不许拿 retrievalNote 做子串匹配</b>
+     * ——note 双语，英文版一上线子串判定就失效。
+     */
     public record EntityView(Long id, String kind, String name, String normKey,
                              String retrievalStatus, String retrievalSource, String retrievalNote,
-                             boolean hasDetail, LocalDateTime fetchedAt,
+                             String retrievalHint, boolean hasDetail, LocalDateTime fetchedAt,
                              List<MentionView> mentions, JsonNode detail) {
     }
 
