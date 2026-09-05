@@ -1,0 +1,173 @@
+# case.aiworkdeck.com —— 官方案件库（dev-board#441）
+# 部署在北京 ECS（8.152.169.44），与官网、插件云后端共机。只新增本 server 块，
+# 不改任何既有配置。宝塔机上落 /www/server/panel/vhost/nginx/case.aiworkdeck.com.conf。
+#
+# 与 nginx-addin.conf.example 的根本差异：**这台不服务浏览器**。
+# 没有 h5、没有 LOWA 编辑器、没有 office-addin 静态页、没有 feedback-console，
+# 因此也就没有 COOP/COEP 全站头 —— addin 那边"location 里出现任意 add_header
+# 就会丢弃上层继承的 add_header"的坑在这里天然不存在。
+# 反过来说：将来若在本文件里加了任何全站 add_header，每个带 add_header 的
+# location 都必须把它重复一遍，否则会漏。
+#
+# 宝塔坑：不要往本 server 块里 include 宝塔的默认片段（enable-php.conf、
+# 防盗链/防恶意 UA 规则）。git 客户端的 User-Agent 形如 `git/2.43.0` 或 `JGit/6.x`，
+# 命中 UA 黑名单的表现是 clone 直接 403 —— 而不是 git 客户端认识的 401，
+# 用户看到的是"没有权限"而不是"要输凭据"，极难往 nginx 上想。
+
+server {
+    listen 80;
+    server_name case.aiworkdeck.com;
+    # certbot webroot 验证
+    location /.well-known/acme-challenge/ {
+        root /opt/aiworkdeck/case/acme;
+    }
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name case.aiworkdeck.com;
+    ssl_certificate     /etc/letsencrypt/live/case.aiworkdeck.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/case.aiworkdeck.com/privkey.pem;
+
+    # 后端 Spring Boot 只监听 127.0.0.1:9797（9696 是同机的插件云后端）
+    # 本站没有 root/index：不服务任何静态文件。
+
+    # ================= git smart-HTTP =================
+    # 端点：GitHttpController
+    #   GET  /git/{repo}.git/info/refs?service=git-upload-pack|git-receive-pack
+    #   POST /git/{repo}.git/git-upload-pack     （clone / fetch，长响应）
+    #   POST /git/{repo}.git/git-receive-pack    （push，大请求体）
+    # {repo} = 纯数字（项目文档仓库）| user-{id}-memory | project-{id}-memory
+    location /git/ {
+        proxy_pass http://127.0.0.1:9797;
+
+        # 必须 1.1：git 的 pack 请求体用 chunked 传输编码。上游若是 HTTP/1.0，
+        # nginx 为了算出 Content-Length 会**照样把整个请求体缓冲下来**——
+        # 下面那条 proxy_request_buffering off 会被静默忽略（不报错，只是不生效），
+        # 大案卷首推依旧会先落一份盘。这是最容易漏掉一行就白配的地方。
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # ---- Authorization 透传（这一条是 git 能不能用的开关）----
+        # nginx 默认就会把 Authorization 传给上游，这里显式写出来是为了：
+        #   1) 自我说明——读配置的人一眼看到凭据是要透传的，别顺手清掉；
+        #   2) 免疫上层 server/http 块里可能存在的 proxy_set_header Authorization ""。
+        # 配套两条红线：
+        #   - 本 location **绝不能**加 auth_basic。加了等于 nginx 自己把 Basic
+        #     凭据吃掉，后端永远收不到设备令牌。
+        #   - **绝不能**开 proxy_intercept_errors / 给 401 配 error_page。
+        #     后端的 401 带着 WWW-Authenticate: Basic realm="AIWorkdeck Git"，
+        #     git 客户端就是靠这个头才回头重发带凭据的请求；被 nginx 改写成自定义
+        #     错误页之后，客户端会直接放弃，表现为"输了密码也没用"。
+        proxy_set_header Authorization $http_authorization;
+
+        # ---- 请求体：不缓冲 ----
+        # push 时整个 pack 走一个 POST。开着请求缓冲的话 nginx 会先把它整份落到
+        # client_body_temp 再转发：多一份磁盘 I/O、多一倍时延，而且大案卷首推
+        # 能把 /var 的临时盘写满。关掉之后 nginx 直接边收边转。
+        # 附带的安全收益：后端在读 body 之前就先做鉴权（GitHttpController 先
+        # authorizeTarget 再进 ReceivePack），未授权的巨大推送不会先在本机落一份盘。
+        proxy_request_buffering off;
+
+        # ---- 响应体：不缓冲 ----
+        # clone 的响应是后端一边打包一边吐的流。开着缓冲会先攒到 proxy_temp 再发，
+        # 用户侧表现为"卡住不动很久然后突然跑完"，大案卷还会把临时盘写满。
+        proxy_buffering off;
+        proxy_cache off;
+
+        # ---- 体积上限 ----
+        # 首次"放进案件库"推的是整段历史（shareToCloud → pushMainlineToOrigin），
+        # 一个带扫描件的案卷首推几百 MB 到几 GB 都正常，addin 那边的 200m 远远不够。
+        # 给 4g 而不是 0（不限）：有限值超出时客户端拿到的是明确的 413，
+        # 不限则是一条谁也说不清上限在哪的通道。真的撞上 413 就在这里往上调，
+        # 并同步核一眼数据盘余量。
+        # 注意宝塔的 http 块里通常有一条全局 client_max_body_size（常见 50m），
+        # 本 location 的值会覆盖它——但只覆盖本 location，别指望它管到 /api/。
+        client_max_body_size 4g;
+
+        # ---- 超时 ----
+        # clone 一份大案卷是长响应：后端要遍历历史、做 delta 打包，
+        # 期间可能长时间没有字节流出。默认 60s 会在打包阶段就把连接掐了。
+        proxy_read_timeout  3600s;
+        proxy_send_timeout  3600s;
+        proxy_connect_timeout 30s;
+        # 慢上行链路（律所网络上传常年只有几 Mbps）下的读间隔容忍
+        client_body_timeout 300s;
+
+        # git 送出来的已经是压缩过的 pack，再 gzip 一遍纯耗 CPU
+        gzip off;
+    }
+
+    # ================= 后端 API =================
+    # 桌面端要打的：/api/auth/awdk-login、/api/auth/device-token、/api/projects/*、
+    # /api/cloud/*、/api/projects/{id}/version/prepare-remote、/api/admin/wizard（探活）
+    location /api/ {
+        proxy_pass http://127.0.0.1:9797;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        # 文件上传（案卷附件走 API 而非 git 的路径）
+        client_max_body_size 2g;
+    }
+
+    # ---- 登录/桥接端点限频 ----
+    # 三条都是"用凭据换长期设备令牌"的入口，是这台机器上唯一值得爆破的面。
+    # AuthAbuseGuard 在应用层还有一道按 IP 的失败锁定，这里是它的前置闸
+    # （前提是 server.forward-headers-strategy=native 已开，否则应用层看到的
+    #  IP 恒为 127.0.0.1，那道锁会退化成全站共享一把）。
+    location = /api/auth/awdk-login {
+        limit_req zone=awd_auth burst=5 nodelay;
+        proxy_pass http://127.0.0.1:9797;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    # 桌面端「连接团队案件库」当前走的就是这条（CloudSyncService.connect），
+    # 它发出去的是**长期**凭据，限频比普通登录更要紧。
+    location = /api/auth/device-token {
+        limit_req zone=awd_auth burst=5 nodelay;
+        proxy_pass http://127.0.0.1:9797;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    location = /api/auth/login {
+        limit_req zone=awd_auth burst=5 nodelay;
+        proxy_pass http://127.0.0.1:9797;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # ================= 其余一律 404 =================
+    # 案件库没有任何面向浏览器的内容。根路径不给重定向、不给欢迎页，
+    # 不留任何"这台机器上有什么"的探测面。
+    location / {
+        return 404;
+    }
+}
+
+# 放到 http{} 级别的限频 zone。**与插件云后端共用同一个 zone 名**：
+# 宝塔机上 addin 那次已经加过下面这一行，不要重复定义（nginx -t 会报 duplicate）。
+# 没加过才加（进 /www/server/nginx/conf/nginx.conf 的 http 块，或单独 conf.d 文件）：
+#   limit_req_zone $binary_remote_addr zone=awd_auth:10m rate=10r/m;

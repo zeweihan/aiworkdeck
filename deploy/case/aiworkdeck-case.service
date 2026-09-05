@@ -1,0 +1,64 @@
+# /etc/systemd/system/aiworkdeck-case.service
+# 官方案件库（case.aiworkdeck.com）。dev-board#441。
+#
+# 与同机的插件云后端（aiworkdeck-cloud.service）是**两个独立实例**：
+# 不同系统账号、不同端口、不同 PG 库、不同数据根。共用的只有 backend.jar 的代码。
+#
+# 为什么不复用 aiworkdeck 账号（cloud 用的那个）：
+#   1. 数据敏感度不同。案件库里是律师的案卷全文与全部历史，是这台机器上最敏感的
+#      资产；同 uid 意味着插件云后端一旦被攻破，攻击者直接读得到案卷与 case 的 env。
+#      分账号 + /data/aiworkdeck-case 0700 是一道零成本的隔离。
+#   2. 迁移时新机只要建一个账号，不用连带把 addin 那套身份也搬过去。
+
+[Unit]
+Description=AI WorkDeck Case Library (case.aiworkdeck.com)
+After=network.target postgresql@14-main.service
+Wants=postgresql@14-main.service
+
+[Service]
+Type=simple
+User=aiworkdeck-case
+Group=aiworkdeck-case
+# WorkingDirectory 决定 ai.plugins.dir / ai.packs.dir / ai.skills.dir 这几个
+# **相对路径**落在哪。放进数据根，rsync 一次就把它们一起带走。
+# （程序与配置仍在 /opt/aiworkdeck/case/，那边是可重建的。）
+WorkingDirectory=/data/aiworkdeck-case/var
+# 密钥全走 EnvironmentFile（0600，root:aiworkdeck-case 属主），不进 unit 文件
+EnvironmentFile=/opt/aiworkdeck/case/env
+ExecStart=/usr/bin/java -Xms256m -Xmx1024m \
+  -XX:+ExitOnOutOfMemoryError \
+  -jar /opt/aiworkdeck/case/backend.jar --spring.profiles.active=case
+Restart=always
+RestartSec=5
+
+# ---- 共享 4c8G 机器上的资源护栏 ----
+# 同机还有：官网 Next.js(PM2 :3000)、globalventure(:3001)、插件云后端(MemoryMax 2560M)、
+# PostgreSQL 14、MySQL、宝塔面板。所以这里刻意给小。
+#
+# 堆为什么是 768m：JGit 的常驻内存不是大头（core.packedGitLimit 默认只有 10MB，
+# 换出去的 pack 窗口很小），真正的峰值在 UploadPack 打包时的 delta 搜索——
+# PackConfig 默认 window=10 / depth=50 / **windowMemory=0（不限）**，
+# 一个大案卷的首次 clone 能把堆吃穿。所以堆给小，同时在服务账号的 ~/.gitconfig 里
+# 把 pack.windowMemory 钉死（见 deploy/case/README.md「JGit 内存护栏」，这是必做步骤，
+# 不是可选调优）。
+#
+# MemoryHigh 先做回收压制，MemoryMax 才是硬杀。留这道台阶是为了让"案件库自己变慢"
+# 优先于"cgroup 直接 OOM 掉整个 unit"。
+MemoryHigh=1280M
+MemoryMax=1536M
+CPUWeight=70
+# JGit 会同时开着多个 pack/idx 文件；仓库多了以后默认 1024 不够用
+LimitNOFILE=65535
+
+# ---- 文件系统收口：只有数据根与自己的 acme 目录可写 ----
+ProtectSystem=full
+PrivateTmp=true
+NoNewPrivileges=true
+ReadWritePaths=/data/aiworkdeck-case
+
+# 日志走 journald：journalctl -u aiworkdeck-case
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

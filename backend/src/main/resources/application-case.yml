@@ -1,0 +1,99 @@
+# 官方案件库（case.aiworkdeck.com）专用 profile —— dev-board#441。
+#
+# 它是**第三个**部署形态，与另外两个的关系：
+#   application-cloud.yml  插件云后端（addin.aiworkdeck.com）：Office/WPS 插件的桥接与
+#                          AI 对话、反馈收件箱、手机影像中转。
+#   application-prod.yml   团队服务器（MySQL，restart-backend.sh 在用）。
+#   application-case.yml   本文件。团队案件库：只做 git smart-HTTP 托管 + 项目/成员/
+#                          设备令牌。不跑 AI、不收反馈、不做手机中转。
+#
+# 为什么不复用 cloud profile + 环境变量覆盖（决策记录）：
+#   1. 两个实例跑在同一台机器上、同一份 backend.jar。复用意味着任何一次为 addin 改
+#      application-cloud.yml 的动作都会静默改到案件库——而案件库存的是律师的案卷，
+#      是这台机器上最不该被"顺手改到"的东西。
+#   2. 复用要靠 env 覆盖 10 项以上（端口、库、存储根、CORS、反馈开关…），
+#      读配置时得在 yml 与 env 之间来回对照才知道生效值是什么，审计成本高。
+#   3. cloud 里 feedback.ingest.enabled=true 是"这台是收件箱"的语义，
+#      漏关一次就会出现两个收件箱。显式独立文件不会漏。
+#
+# 启动方式：java -jar backend.jar --spring.profiles.active=case
+#
+# 必配环境变量（见 deploy/case/env.example）：
+#   DB_PASSWORD               PostgreSQL 专用账号 aiworkdeck_case 的口令
+#   AWD_PLATFORM_KEY_SECRET   per-user 平台 AI key 的落库加密密钥。
+#                             awdk-login-enabled=true 时缺失 → PlatformAiKeyCipher
+#                             直接拒绝启动（刻意的强不变式，不做明文降级）。
+#                             **迁移时必须原样带走**：换了值，已落库的 key 全部解不开。
+
+server:
+  port: 9797
+  # 只监听回环。对外一律经 nginx 反代（TLS 终结在 nginx）。
+  # 9696 已被同机的插件云后端（cloud profile）占用，不能撞。
+  address: 127.0.0.1
+  # 反代后还原真实客户端 IP（RemoteIpValve，只信回环来源的 X-Forwarded-For）。
+  # 不开的话 getRemoteAddr() 恒为 127.0.0.1，AuthAbuseGuard 的按 IP 失败锁定
+  # 会退化成全站共享一把锁：任何人连错 5 次口令，所有律师的连接都被锁 10 分钟。
+  forward-headers-strategy: native
+
+spring:
+  datasource:
+    driver-class-name: org.postgresql.Driver
+    url: jdbc:postgresql://localhost:5432/aiworkdeck_case
+    username: aiworkdeck_case
+    password: ${DB_PASSWORD}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+
+security:
+  # server 模式（多租户）：local-mode 的免登/回环闸整套不生效。
+  # 顺带效果：EntitlementService 按本机权益的额度全部不执行（StageQuotaService /
+  # ClipboardService 的既有口径——本机权益对服务器成员没有意义）。
+  local-mode: false
+  # 关闭自助注册：账号只经 awdk_ 桥接（官网账户）建立。
+  registration-mode: closed
+  # 官网账户 Key（awdk_）一键桥接。案件库的用户身份来源就是官网账号，
+  # 桥接签发的是 awdt_ 设备令牌，与 /api/auth/device-token 出的是同一种凭据，
+  # git Basic 的 password 位吃的也是它（GitAccessService.resolveUser）。
+  awdk-login-enabled: true
+  # 浏览器会话滑动过期。案件库没有浏览器客户端，这项几乎用不到，
+  # 但与 cloud 保持同一姿态：公网实例不用桌面的 365 天"常驻"语义。
+  session-idle-days: 7
+  # conversationId 强制服务端签发（公网多租户防空会话抢占）
+  conversation-issuance-required: true
+  cors:
+    # 案件库不服务任何浏览器：桌面端是本机后端做服务端到服务端调用（无 Origin 头），
+    # git 客户端也不带 Origin。所以白名单留空即可（CorsConfig 仍默认放行 localhost，
+    # 那条是开发态兜底，不构成对外开放面）。allow-all 绝不能开。
+    allowed-origins: ""
+
+storage:
+  type: local
+  # 全部数据落在一个可整体搬走的根下（迁移单元，见 deploy/case/README.md）。
+  # repos/（裸库）、projects/（托管工作区）、template.docx 都在 root-path 之下：
+  #   ProjectRepoService: gitDir  = {globalRoot}/repos/project-{id}.git
+  #   MemoryRepoService:  gitDir  = {globalRoot}/repos/{repoKey}.git
+  #   ProjectStorageResolver:     = {globalRoot}/projects/{id}
+  local:
+    root-path: /data/aiworkdeck-case/store
+    template-path: /data/aiworkdeck-case/store/template.docx
+
+ai:
+  packs:
+    # 案件库不跑 AI，也就不需要原生资源包。关掉总开关 = 安装、自动补下载、
+    # 封禁表同步全部旁路，这台机器不会为了 pack 去连官网。
+    enabled: false
+
+# 反馈收件箱在插件云后端那台（addin.aiworkdeck.com），不是这台。
+# 两台都开 = 同一条反馈落两份记录。
+feedback:
+  ingest:
+    enabled: false
+  upload:
+    enabled: false
+
+# 优化者跑在维护者自己的机器上（deploy/optimizer/README.md），任何服务器实例都不开。
+optimizer:
+  enabled: false
