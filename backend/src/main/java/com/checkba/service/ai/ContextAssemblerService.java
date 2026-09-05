@@ -997,7 +997,12 @@ public class ContextAssemblerService {
                         + "直接调用 doc_* 工具操作，**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它。"
                         + "写入任何事实陈述（数字、日期、主体、权属等可被核对的内容）后必须立即调用 doc_link_evidence"
                         + "（docFileId=" + activeContext.getId() + "）把它与底稿文件关联；找不到底稿的事实不得直接写成定论，"
-                        + "改写成【待补：……】并说明缺什么材料。";
+                        + "改写成【待补：……】并说明缺什么材料。"
+                        // dev-board#464：核查报告被整篇以修订写进用户打开的原始底稿。
+                        + "若本轮是核查、比对、分析、汇总等以「报告」为交付物的任务，且用户没有要求修改这份文档、"
+                        + "也没有命中审查类技能（如「合同审查」——命中时一律以技能指引为准），"
+                        + "则把结论写在对话里；用户要文档形式时用 write_docx 新建文件，"
+                        + "**不要**把报告正文写进当前文档。被当作材料、依据引用的文件是输入，不是写入目标。";
             };
         };
     }
@@ -1582,7 +1587,14 @@ All doc_* editing and reading tools act directly on this document. You need NOT 
                         + "After writing any factual statement (figures, dates, parties, ownership - anything verifiable), "
                         + "immediately call doc_link_evidence (docFileId=" + activeContext.getId() + ") to tie it to its "
                         + "source file; a fact with no source must not be stated as settled - write it as "
-                        + "[TO BE SUPPLEMENTED: ...] and say what material is missing.";
+                        + "[TO BE SUPPLEMENTED: ...] and say what material is missing. "
+                        // dev-board#464: a verification report was written into the user's own draft as tracked changes.
+                        + "If this turn is a check, comparison, analysis, or summary whose deliverable is a report, "
+                        + "and the user has not asked you to modify this document and no review skill (such as "
+                        + "Contract Review - when one is triggered its guidance governs) has been matched, then give "
+                        + "the conclusions in the conversation; if the user wants a document, create a new file with "
+                        + "write_docx, and do **NOT** write the report body into the current document. A file cited as "
+                        + "material or evidence is an input, not a write target.";
             };
         };
     }

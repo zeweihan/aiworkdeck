@@ -156,6 +156,35 @@ class ContextAssemblerServiceTest {
     }
 
     @Test
+    @DisplayName("末位提醒要说清输出目标：核查/分析类报告不写进当前文档（dev-board#464）")
+    void reportStyleTasksAreNotTargetedAtTheActiveDocument() {
+        when(legalTools.read_document("123")).thenReturn("第一条 合作范围……");
+
+        String lastUser = assembleLastUserText(activeDoc());
+
+        assertTrue(lastUser.contains("核查"), "要点名核查这类以报告为交付物的任务");
+        assertTrue(lastUser.contains("write_docx"), "要给出新建文件的出口");
+        assertTrue(lastUser.contains("不要"), "要明确禁止把报告写进当前文档");
+        assertTrue(lastUser.contains("合同审查"), "命中审查类技能时以技能指引为准，不能与它打架");
+        assertTrue(lastUser.contains("doc_link_evidence"), "底稿关联那句必须原样保留");
+    }
+
+    @Test
+    @DisplayName("英文模式下同一条输出目标规则也在（zh/en 必须同步）")
+    void englishReminderCarriesTheSameOutputTargetRule() {
+        when(appLanguageService.isEnglish()).thenReturn(true);
+        when(legalTools.read_document("123")).thenReturn("Article 1 Scope of Cooperation...");
+
+        String lastUser = assembleLastUserText(activeDoc());
+
+        assertTrue(lastUser.contains("[System reminder]"), "英文口径");
+        assertTrue(lastUser.contains("write_docx"), "英文版也要给出新建文件的出口");
+        assertTrue(lastUser.contains("Contract Review"), "英文版也要给审查类技能让路");
+        assertTrue(lastUser.contains("not a write target"), "英文版要点明被引用的材料是输入不是写入目标");
+        assertTrue(lastUser.contains("doc_link_evidence"), "底稿关联那句必须原样保留");
+    }
+
+    @Test
     @DisplayName("正文读取失败也要挂末位提醒——模型至少知道该操作哪个文档")
     void reminderPresentEvenWhenContentUnreadable() {
         when(legalTools.read_document("123")).thenReturn(null);

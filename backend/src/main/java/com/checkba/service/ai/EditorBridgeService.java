@@ -103,19 +103,127 @@ public class EditorBridgeService {
      * 后端放弃等待就停下——超时后模型被告知失败可能重发一次，造成双改。
      * 与前端 libreofficeExecutorClient.js / zetaOfficeRelay.js 的 ACTION_BUDGET_MS 三处同表。
      */
-    static final Map<String, Integer> ACTION_TIMEOUT_SECONDS = Map.of(
-            "doc_open_file_sync", 180,
-            "find_replace", 120,
-            "apply_house_style", 120,
-            "resolve_all_revisions", 120,
-            "resolve_revisions", 120,
-            "insert_table", 120,
-            "apply_style_profile", 120,
-            "export_document", 180);
+    static final Map<String, Integer> ACTION_TIMEOUT_SECONDS = Map.ofEntries(
+            Map.entry("doc_open_file_sync", 180),
+            Map.entry("find_replace", 120),
+            Map.entry("apply_house_style", 120),
+            Map.entry("resolve_all_revisions", 120),
+            Map.entry("resolve_revisions", 120),
+            Map.entry("insert_table", 120),
+            Map.entry("apply_style_profile", 120),
+            Map.entry("export_document", 180),
+            // 整段插入类（dev-board#464）：一份十几页的报告经修订逐行落字远超 30s，
+            // worker 那边照旧写完，后端却已经放弃等待。
+            Map.entry("insert_at_cursor", 120),
+            Map.entry("insert_under_heading", 120),
+            Map.entry("replace_selection", 120),
+            Map.entry("modify_paragraph", 120));
+
+    /**
+     * 超时回执（dev-board#464）。「后端不再等」不等于「没执行」——worker 打不断，
+     * 超时那一刻内容很可能已经落进文档。旧文案（"操作超时。请确保编辑器已打开并可用。"）
+     * 被模型读成失败，原样重发一次，用户看到同一份长报告以修订插了两遍。
+     */
+    static final String TIMEOUT_RESULT_JSON = "{\"error\": \"操作超时：编辑器可能仍在执行该命令，"
+            + "内容可能已写入。不要重发同一命令，先用读取工具（如 doc_get_document_text）确认文档状态。\"}";
+
+    /**
+     * 本轮（run）内已下发过的整段插入：conversationId -> 指纹集合。
+     * {@link #clearForNewRun} 在每条新用户消息开始时清空。
+     */
+    private final ConcurrentHashMap<String, java.util.Set<String>> dispatchedBulkInserts = new ConcurrentHashMap<>();
+
+    /** 会话当前在编辑的文档（去重闸的作用域）：同一段条款插进两份不同合同不算重复。 */
+    private final ConcurrentHashMap<String, String> activeDocKeys = new ConcurrentHashMap<>();
+
+    /** 进闸的插入类 action -> 承载正文的参数名。与 ACTION_TIMEOUT_SECONDS 里那四条同一批。 */
+    private static final Map<String, String> BULK_INSERT_TEXT_PARAM = Map.of(
+            "insert_at_cursor", "text",
+            "insert_under_heading", "content",
+            "replace_selection", "text",
+            "modify_paragraph", "newText");
+
+    /** 短于此长度不进闸：逐条补编号、逐格填表这类重复短插入是正常操作。 */
+    static final int BULK_INSERT_MIN_CHARS = 200;
 
     static int timeoutSecondsFor(String action) {
         if (action == null) return EDITOR_ACTION_TIMEOUT; // Map.of 对 null 键抛 NPE
         return ACTION_TIMEOUT_SECONDS.getOrDefault(action, EDITOR_ACTION_TIMEOUT);
+    }
+
+    /** 记住这个会话此刻在编辑哪份文档（去重闸的作用域键）。 */
+    void noteActiveDocument(String conversationId, Object fileId) {
+        if (conversationId == null || fileId == null) return;
+        activeDocKeys.put(conversationId, String.valueOf(fileId));
+    }
+
+    /** 新一轮（新用户消息）开始：清空本轮的整段插入登记。 */
+    public void clearForNewRun(String conversationId) {
+        if (conversationId != null) dispatchedBulkInserts.remove(conversationId);
+    }
+
+    /**
+     * 本轮重复整段插入的确定性去重闸（dev-board#464）。
+     *
+     * <p>提示词层面拦不住：超时被 ToolRegistry 归类成失败、编排器还在末位追一句
+     * "the operation did NOT take effect"，模型于是原样重发，而 worker 早已把第一份写完——
+     * 用户看到同一份长报告以修订插了两遍。这里照 {@code AgentOrchestrator} 拦 doc_open_file
+     * 的先例在分发层直接拦下，不再指望模型自觉。
+     *
+     * <p>命中条件收得很紧，只挡真正的重复：同一会话、同一轮、同一文档、同一 action，
+     * 且**整组参数逐字节相同**（换标题、换段落号、换内容都算另一处插入），正文长度还要
+     * 达到 {@link #BULK_INSERT_MIN_CHARS}。
+     *
+     * @return 命中返回给模型的结构化错误；不命中返回 null，并把这次登记下来。
+     */
+    String duplicateInsertRejection(String conversationId, String action, Map<String, Object> params) {
+        String fingerprint = bulkInsertFingerprint(conversationId, action, params);
+        if (fingerprint == null) return null;
+
+        boolean fresh = dispatchedBulkInserts
+                .computeIfAbsent(conversationId, k -> java.util.concurrent.ConcurrentHashMap.newKeySet())
+                .add(fingerprint);
+        if (fresh) return null;
+
+        log.warn("拦下本轮重复整段插入: action={}, conversationId={}", action, conversationId);
+        return "{\"error\": \"相同内容本轮已插入过（" + action + "），不要重复插入。"
+                + "若上一次调用返回超时，内容很可能已经写入文档——"
+                + "请先用 doc_get_document_text / doc_read_paragraphs 读回确认，确认没写入再重试。\"}";
+    }
+
+    /**
+     * 编辑器**明确报错**（不是超时）时把这次登记撤掉：那一次确实没写进文档，
+     * 模型换个参数或等编辑器就绪后重试同一段内容不该被闸拦。超时不走这里——
+     * 超时的结局未知，宁可挡住重发。
+     */
+    private void forgetBulkInsert(String conversationId, String action, Map<String, Object> params) {
+        String fingerprint = bulkInsertFingerprint(conversationId, action, params);
+        if (fingerprint == null) return;
+        java.util.Set<String> seen = dispatchedBulkInserts.get(conversationId);
+        if (seen != null) seen.remove(fingerprint);
+    }
+
+    /** 进闸的整段插入指纹（文档 + action + 整组参数）；不该进闸时返回 null。 */
+    private String bulkInsertFingerprint(String conversationId, String action, Map<String, Object> params) {
+        if (conversationId == null || action == null || params == null) return null;
+        String textParam = BULK_INSERT_TEXT_PARAM.get(action);
+        if (textParam == null) return null;
+        Object text = params.get(textParam);
+        if (!(text instanceof String body) || body.length() < BULK_INSERT_MIN_CHARS) return null;
+        return sha256(activeDocKeys.getOrDefault(conversationId, "-")
+                + "|" + action + "|" + new java.util.TreeMap<>(params));
+    }
+
+    private static String sha256(String s) {
+        try {
+            byte[] d = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(s.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(d.length * 2);
+            for (byte b : d) sb.append(Character.forDigit((b >> 4) & 0xF, 16)).append(Character.forDigit(b & 0xF, 16));
+            return sb.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e); // JDK 保证有
+        }
     }
 
     /**
@@ -177,6 +285,7 @@ public class EditorBridgeService {
             // worker 上，不能在这里直接发 editor_command（会落到上一份文档或"编辑器未就绪"）。
             Map<String, Object> profile = styleProfileFor(file);
             if (profile != null) fields.put("styleProfile", profile);
+            noteActiveDocument(conversationId, file.getId());
             sendDualNamedAction("doc_open_file", "wps_open_file", conversationId, fields);
             log.info("Sent doc_open_file action for file: {} (id={}, styleProfile={})", file.getName(), file.getId(), profile != null);
 
@@ -333,6 +442,16 @@ public class EditorBridgeService {
             return "{\"error\": \"No active conversation. Please ensure a document is open.\"}";
         }
 
+        // 本轮重复整段插入直接拦下，一个 worker 命令都不发（dev-board#464）
+        String duplicate = duplicateInsertRejection(conversationId, action, params);
+        if (duplicate != null) {
+            recordBridge(action, "duplicate", conversationId, System.currentTimeMillis());
+            return duplicate;
+        }
+        if ("doc_open_file_sync".equals(action) && params != null) {
+            noteActiveDocument(conversationId, params.get("fileId"));
+        }
+
         String requestId = UUID.randomUUID().toString();
         CompletableFuture<EditorActionResult> future = new CompletableFuture<>();
         pendingRequests.put(requestId, new PendingAction(conversationId, future));
@@ -363,13 +482,15 @@ public class EditorBridgeService {
                 return objectMapper.writeValueAsString(result.getData());
             } else {
                 recordBridge(action, "error", conversationId, bridgeStartMs);
+                // 编辑器明确报错 = 这段确实没写进去，撤掉去重登记（超时不撤，结局未知）
+                forgetBulkInsert(conversationId, action, params);
                 return "{\"error\": \"" + result.getError() + "\"}";
             }
 
         } catch (TimeoutException e) {
             log.warn("Editor command timed out: action={}, requestId={}", action, requestId);
             recordBridge(action, "timeout", conversationId, bridgeStartMs);
-            return "{\"error\": \"操作超时。请确保编辑器已打开并可用。\"}";
+            return TIMEOUT_RESULT_JSON;
 
         } catch (Exception e) {
             log.error("Failed to execute editor command: action={}", action, e);
