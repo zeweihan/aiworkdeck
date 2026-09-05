@@ -83,6 +83,7 @@ public class ProjectFileService {
         if (projectId == null) {
             throw new IllegalArgumentException(LangText.of("项目 ID 不能为空", "Project ID must not be empty"));
         }
+        parentId = resolveParentId(projectId, parentId);
         if (!StringUtils.hasText(name)) {
             throw new IllegalArgumentException(LangText.of("文件夹名称不能为空", "Folder name must not be empty"));
         }
@@ -112,6 +113,41 @@ public class ProjectFileService {
         ProjectFile savedFolder = projectFileRepository.save(folder);
         signalChange(projectId, userId);
         return savedFolder;
+    }
+
+    /**
+     * 归一并校验父节点 ID：{@code null} 与 {@code 0} 都是「项目根」，其余必须是本项目里
+     * 一个活着的文件夹，否则当场报错。
+     *
+     * <p>为什么必须放在服务层（dev-board#457）：同样的检查此前只长在
+     * {@code ProjectFileController.checkParentFolder} 上，AI 工具、插件宿主、内部落盘服务
+     * 都不经过 HTTP 那一层。Agent 的 {@code create_folder} 把「放根目录」写成
+     * {@code parentFolderId=0}（LLM 的惯用写法），库里并没有 id=0 这一行，于是：
+     * 前端 {@code normalizeParentId} 把 0 当根画出来，看着是一个普通的根文件夹；
+     * 后端的同名查重 {@code (:parentId IS NULL AND pf.parentId IS NULL OR pf.parentId = :parentId)}
+     * 却把 0 与 NULL 当两个不同的父节点，根下同名的那个不算冲突。本地文件夹对账器
+     * 随后按 {@code rowKey("root/名字")} 找不到这条 parent_id=0 的行，就再建一条真正的根行
+     * ——资源管理器顶部于是多出一个重复节点，刷新重启都在（孤儿那条的物理路径在断链处
+     * 落回根目录，目录确实存在，删除同步就判它「还在」，永不清理）。
+     *
+     * <p>0 归一成 null 而不是报错：它表达的意思本来就是「根」，报错只会让模型再猜一轮。
+     * 不存在/别的项目/不是文件夹/已删除的父节点则一律拒绝——那些落库之后都是谁也点不开
+     * 的孤儿行。
+     */
+    public Long resolveParentId(Long projectId, Long parentId) {
+        if (parentId == null || parentId == 0L) {
+            return null;
+        }
+        ProjectFile parent = projectFileRepository.findById(parentId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        LangText.of("目标文件夹不存在或已被删除: ", "Target folder does not exist or has been deleted: ") + parentId));
+        if (!Objects.equals(projectId, parent.getProjectId())
+                || !Boolean.TRUE.equals(parent.getIsFolder())
+                || Boolean.TRUE.equals(parent.getIsDeleted())) {
+            throw new IllegalArgumentException(
+                    LangText.of("目标文件夹不存在或已被删除: ", "Target folder does not exist or has been deleted: ") + parentId);
+        }
+        return parentId;
     }
 
     /**
@@ -231,6 +267,7 @@ public class ProjectFileService {
         if (projectId == null) {
             throw new IllegalArgumentException(LangText.of("项目 ID 不能为空", "Project ID must not be empty"));
         }
+        parentId = resolveParentId(projectId, parentId);
         if (!StringUtils.hasText(name)) {
             throw new IllegalArgumentException(LangText.of("文件名不能为空", "File name must not be empty"));
         }
@@ -640,6 +677,10 @@ public class ProjectFileService {
 
         // 权限检查已移至 Controller 层，这里不再检查创建者身份
 
+        // 目标父节点归一并校验（0/null 都是根）。要取到 file 才知道项目 ID，所以不在方法首行，
+        // 但必须早于下面每一处用到 newParentId 的地方——额度闸、同名查重、落库都读它。
+        newParentId = resolveParentId(file.getProjectId(), newParentId);
+
         // 文件缓存区免费额度：单文件移入同样要过闸。此前额度只挂在 batchMove 上，
         // 而这条路径也能把文件移进 __staging_area__——一次拖一个就能无限塞，
         // 付费闸等于没有。目标不是缓存区时 checkAdmission 直接放行，其它移动不受影响。
@@ -757,6 +798,11 @@ public class ProjectFileService {
             // 防御性校验
             throw new IllegalArgumentException(LangText.of("projectId 不能为空", "projectId must not be empty"));
         }
+        // 复制这条路径自己拼行、不经过 createFolder/createFile，父节点归一得在这里做一次
+        // （dev-board#457）。顺带修掉一个连带问题：targetParentId=0 时下面那句
+        // Objects.equals(source.getParentId(), targetParentId) 对根下的源文件恒为 false，
+        // 「【副本】」前缀不会加，复制出来的就是一个同名行。
+        Long targetParentId = resolveParentId(projectId, request.getTargetParentId());
         List<ProjectFile> createdRoots = new ArrayList<>();
         for (Long id : request.getFileIds()) {
             if (id == null) continue;
@@ -765,7 +811,7 @@ public class ProjectFileService {
             if (!Objects.equals(source.getProjectId(), projectId)) {
                 throw new IllegalArgumentException(LangText.of("跨项目复制不支持", "Cross-project copy is not supported"));
             }
-            createdRoots.add(copyRecursive(projectId, source, request.getTargetParentId(), userId));
+            createdRoots.add(copyRecursive(projectId, source, targetParentId, userId));
         }
         signalChange(projectId, userId);
         return createdRoots;

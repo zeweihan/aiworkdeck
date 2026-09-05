@@ -19,6 +19,7 @@ import org.springframework.core.io.ByteArrayResource;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -56,6 +57,13 @@ class ProjectFileServiceArchiveTest {
 
     private static final long ARCHIVE_ID = 10L;
     private static final long PROJECT_ID = 1L;
+
+    /**
+     * 假的「库里现有的行」。解压建出来的文件夹要能被 findById 查到——
+     * 真库里 save 完当然查得到，父节点校验（ProjectFileService.resolveParentId，
+     * dev-board#457）与 buildPhysicalPath 都要走这一步。
+     */
+    private final Map<Long, ProjectFile> rows = new HashMap<>();
 
     // ---- fixtures -----------------------------------------------------------
 
@@ -125,7 +133,9 @@ class ProjectFileServiceArchiveTest {
         pf.setFileType(type);
         pf.setFileSize((long) bytes.length);
         pf.setFilePath("projects/1/" + name);
-        when(projectFileRepository.findById(ARCHIVE_ID)).thenReturn(Optional.of(pf));
+        rows.put(ARCHIVE_ID, pf);
+        when(projectFileRepository.findById(anyLong()))
+                .thenAnswer(inv -> Optional.ofNullable(rows.get(inv.<Long>getArgument(0))));
         when(storageServiceFactory.getStorageService()).thenReturn(storageService);
         try {
             when(storageService.load("projects/1/" + name)).thenReturn(new ByteArrayResource(bytes));
@@ -212,6 +222,7 @@ class ProjectFileServiceArchiveTest {
             ProjectFile f = inv.getArgument(0);
             if (f.getId() == null) f.setId(ids.incrementAndGet());
             saved.add(f);
+            rows.put(f.getId(), f);
             return f;
         });
         // createFile 里的 load（模板物化）与解压时的 save 都打到 mock 上
@@ -260,6 +271,7 @@ class ProjectFileServiceArchiveTest {
             ProjectFile f = inv.getArgument(0);
             if (f.getId() == null) f.setId(ids.incrementAndGet());
             saved.add(f);
+            rows.put(f.getId(), f);
             return f;
         });
         lenient().when(storageService.save(any(), any(java.io.InputStream.class))).thenAnswer(inv -> inv.getArgument(0));

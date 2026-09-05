@@ -76,6 +76,13 @@ class ProjectFileServiceIdorTest {
         own.setIsFolder(false);
         own.setName("a.docx");
         when(projectFileRepository.findById(42L)).thenReturn(Optional.of(own));
+        // 目标缓存区文件夹得真在库里——移动前先过父节点校验（resolveParentId，dev-board#457）
+        ProjectFile staging = new ProjectFile();
+        staging.setId(9L);
+        staging.setProjectId(1L);
+        staging.setIsFolder(true);
+        staging.setName("__staging_area__");
+        when(projectFileRepository.findById(9L)).thenReturn(Optional.of(staging));
         doThrow(new com.checkba.exception.StageQuotaExceededException("超额", 20, 0, 20, 1L))
                 .when(stageQuotaService).checkAdmission(eq(9L), anyList());
 

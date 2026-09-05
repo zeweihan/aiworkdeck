@@ -377,6 +377,32 @@ class LocalProjectServiceTest {
         }
     }
 
+    /**
+     * dev-board#457：Agent 的 create_folder 把「放项目根目录」写成 parentFolderId=0，
+     * 库里没有 id=0 这一行。前端 normalizeParentId 把 0 当根画出来，后端的查重却把
+     * 0 当成另一个父节点——文件一落进磁盘上那个目录，对账按 rowKey("root/名字") 找不到
+     * 这条 parent_id=0 的行，就再建一条真正的根行，资源管理器顶部于是多出一个重复节点，
+     * 刷新/重启都在（孤儿那条的物理路径解析在缺失的父节点处断链，正好落回根，
+     * 目录存在 → 删除同步判它「还在」→ 永不清理）。
+     */
+    @Test
+    void zeroParentFolderDoesNotSpawnDuplicateRootRow(@TempDir Path folder) throws Exception {
+        Long projectId = svc.openLocalFolder(folder.toString(), false, null, null, 1L).project().getId();
+
+        projectFileService.createFolder(projectId, 0L, "01-主体资格与章程", 1L);
+        Files.createDirectories(folder.resolve("01-主体资格与章程"));
+        Files.writeString(folder.resolve("01-主体资格与章程/公司章程.docx"), "x");
+
+        svc.reconcileProject(projectId);
+
+        List<ProjectFile> live = projectFileRepository.findByProjectId(projectId).stream()
+                .filter(f -> !Boolean.TRUE.equals(f.getIsDeleted()))
+                .filter(f -> "01-主体资格与章程".equals(f.getName()))
+                .toList();
+        assertEquals(1, live.size(), "同一个文件夹在资源管理器里只能有一个节点: " + live);
+        assertNull(live.get(0).getParentId(), "它就该是一条普通的根行，parent_id 必须是 null");
+    }
+
     @Test
     void rejectsRelativeAndRootPaths() {
         assertThrows(IllegalArgumentException.class, () -> svc.openLocalFolder("relative/path", false, null, null, 1L));

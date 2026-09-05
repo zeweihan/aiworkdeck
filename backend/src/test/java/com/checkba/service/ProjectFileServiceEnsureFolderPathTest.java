@@ -58,6 +58,8 @@ class ProjectFileServiceEnsureFolderPathTest {
     void reusesExistingAndCreatesMissing() {
         ProjectFile a = node(10L, null, "a", true);
         when(repo.findByProjectIdAndParentIdAndNameAndIsDeletedFalse(1L, null, "a")).thenReturn(Optional.of(a));
+        // 父节点校验（resolveParentId，dev-board#457）会 findById 确认 a 真的是本项目的活文件夹
+        when(repo.findById(10L)).thenReturn(Optional.of(a));
         when(repo.findByProjectIdAndParentIdAndNameAndIsDeletedFalse(1L, 10L, "b")).thenReturn(Optional.empty());
         when(repo.maxSortOrder(anyLong(), any())).thenReturn(null);
         when(repo.save(any(ProjectFile.class))).thenAnswer(inv -> {

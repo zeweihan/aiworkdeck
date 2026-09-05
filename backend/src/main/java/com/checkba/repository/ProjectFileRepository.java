@@ -152,5 +152,30 @@ public interface ProjectFileRepository extends JpaRepository<ProjectFile, Long> 
      * fileType 是扩展名，正常值里不可能出现这三个词，所以按它取行既精确又不会误伤。
      */
     List<ProjectFile> findByFileTypeInAndIsFolderFalseAndIsDeletedFalse(List<String> fileTypes);
+
+    /**
+     * 按父节点 ID 取行（含软删除）。给 {@code OrphanParentReconciler} 用：
+     * 取 parent_id=0 的孤儿行（dev-board#457），以及取某个孤儿文件夹下的子项。
+     * 注意与上面那些 {@code (:parentId IS NULL AND ...)} 的查询不同，这里的
+     * parentId 必须是非 null 的具体值。
+     */
+    List<ProjectFile> findByParentId(Long parentId);
+
+    /**
+     * 同一项目内被多条存活文件行共用的物理路径，返回 [projectId, filePath]。
+     *
+     * <p>正常情况下路径由「父链 + 文件名」算出来，不可能撞；撞了就说明某条父链断了
+     * （dev-board#457 的 parent_id=0 孤儿就是这样：路径解析在缺失的父节点处断链、
+     * 落回项目根，与根下那条真行算出同一个路径），两条行从此指向同一份字节，
+     * 改名/删除任何一条都会影响另一条。用聚合查询挑出来，不整表 hydrate。
+     */
+    @org.springframework.data.jpa.repository.Query(
+            "SELECT pf.projectId, pf.filePath FROM ProjectFile pf "
+            + "WHERE pf.isFolder = false AND pf.isDeleted = false AND pf.filePath IS NOT NULL "
+            + "GROUP BY pf.projectId, pf.filePath HAVING COUNT(pf.id) > 1")
+    List<Object[]> findDuplicateLiveFilePaths();
+
+    /** 上一条挑出来的路径对应的那几行（存活的文件行）。 */
+    List<ProjectFile> findByProjectIdAndFilePathAndIsDeletedFalse(Long projectId, String filePath);
 }
 
