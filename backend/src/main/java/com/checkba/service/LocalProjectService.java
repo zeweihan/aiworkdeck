@@ -374,7 +374,7 @@ public class LocalProjectService {
 
                 @Override
                 public FileVisitResult visitFile(Path f, BasicFileAttributes attrs) {
-                    if (f.getFileName().toString().startsWith(".")) return FileVisitResult.CONTINUE;
+                    if (isIgnoredEntryName(f.getFileName().toString())) return FileVisitResult.CONTINUE;
                     if (!attrs.isRegularFile() && !attrs.isDirectory()) return FileVisitResult.CONTINUE;
                     return tally();
                 }
@@ -391,11 +391,29 @@ public class LocalProjectService {
     }
 
     /**
+     * 磁盘扫描时要跳过的条目名（dev-board#463）。两类：
+     * <ul>
+     *   <li>点开头的隐藏项——{@code .git}/{@code .awd}/{@code .DS_Store} 一并覆盖；</li>
+     *   <li>{@code ~$} 开头的 Office 锁文件——Word/WPS 打开 {@code 合同.docx} 时会在
+     *       同目录落一个 {@code ~$合同.docx}，它不以点开头，旧规则拦不住：进了资源
+     *       管理器，等 Word 关闭把它删掉，对账又把这行软删进回收站，一次开关文档就
+     *       留一个幽灵，还顺带触发一次没有意义的版本记录存档。</li>
+     * </ul>
+     * <b>只用在文件站点</b>：目录站点仍按点开头判断——一个名字以 {@code ~$} 开头的
+     * 目录（Office 从不创建）若被 SKIP_SUBTREE，整棵子树会从文件树上消失却照样进
+     * 版本库，白添一种"看不见但被收录"的不对称。
+     */
+    static boolean isIgnoredEntryName(String name) {
+        return name.startsWith(".") || name.startsWith("~$");
+    }
+
+    /**
      * 把文件夹现有内容登记进数据库文件树。幂等：
      * - 已有同名同大小同路径的行一字不动（避免 DB 行翻搅与版本记录噪声）；
      * - **回收站里的行（isDeleted）不复活**——软删除不动磁盘文件，重扫时把磁盘上
      *   仍存在的它当「新文件」再导入会静默撤销律师刚做的删除；
-     * - 跳过点开头的隐藏项（.git/.awd/.DS_Store 等一并覆盖）。
+     * - 跳过噪声条目（{@link #isIgnoredEntryName}）：点开头的隐藏项（.git/.awd/.DS_Store
+     *   等一并覆盖），以及 Office 打开文档时落在同目录的 {@code ~$} 锁文件。
      */
     private ImportStats importFolder(Long projectId, Path root, Long userId) {
         ImportStats stats = new ImportStats();
@@ -456,7 +474,7 @@ public class LocalProjectService {
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
                     String fileName = file.getFileName().toString();
-                    if (fileName.startsWith(".")) return FileVisitResult.CONTINUE;
+                    if (isIgnoredEntryName(fileName)) return FileVisitResult.CONTINUE;
                     if (attrs.isDirectory()) {
                         // walkFileTree 到达 maxDepth=MAX_IMPORT_DEPTH 时，正卡在边界上的目录
                         // 不会走 preVisitDirectory（那样就得再往下探一层，超出 maxDepth），

@@ -118,6 +118,37 @@ class LocalProjectServiceTest {
         assertEquals("projects/" + r.project().getId() + "/sub/备忘录.txt", memo.getFilePath());
     }
 
+
+    /**
+     * Word/WPS 打开 .docx 时会在同目录落一个 `~$合同.docx` 锁文件（dev-board#463）。
+     * 它不以点开头，旧的隐藏项规则拦不住，于是：进资源管理器 → Word 关闭删掉它 →
+     * 对账把它软删进回收站，一次开关文档就留一个幽灵，还顺带触发一次版本记录空转。
+     * 这里两半都要断：首次导入不进库，watcher 驱动的 reconcile 也不进库。
+     */
+    @Test
+    void skipsOfficeLockFilesOnImportAndReconcile(@TempDir Path folder) throws Exception {
+        Files.writeString(folder.resolve("合同.docx"), "x");
+        Files.writeString(folder.resolve("~$合同.docx"), "lock");
+
+        LocalProjectService.OpenLocalResult r = svc.openLocalFolder(
+                folder.toString(), false, null, "合同.docx", 1L);
+        Long pid = r.project().getId();
+
+        List<ProjectFile> rows = projectFileRepository.findByProjectId(pid);
+        assertTrue(rows.stream().noneMatch(f -> f.getName().startsWith("~$")),
+                "Office 锁文件不得进库: " + rows);
+        assertEquals(1, rows.size(), "只有 合同.docx 一行: " + rows);
+
+        // watcher 路径：Word 再开一次文档，对账不能把新的锁文件收进来
+        Files.writeString(folder.resolve("~$备忘录.docx"), "lock2");
+        svc.reconcileProject(pid);
+
+        List<ProjectFile> after = projectFileRepository.findByProjectId(pid);
+        assertTrue(after.stream().noneMatch(f -> f.getName().startsWith("~$")),
+                "对账同样不得把 Office 锁文件收进来: " + after);
+        assertEquals(1, after.size(), "对账后仍只有 合同.docx 一行: " + after);
+    }
+
     @Test
     void reopeningSameFolderReusesProjectWithoutDuplicates(@TempDir Path folder) throws Exception {
         Files.writeString(folder.resolve("a.txt"), "1");
