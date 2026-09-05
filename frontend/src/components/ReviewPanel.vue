@@ -208,11 +208,30 @@ export default {
         return null
       }
     },
+    // 重读清单。两条纪律，都是 dev-board#460 的病灶：
+    // ① **读失败不许清零**。run() 在超时 / success:false / 抛错时返回 null，旧实现
+    //    无条件写 `|| []`，一次读失败就把 tab 打成「修订 0 / 批注 0」，而文档里
+    //    躺着 AI 刚做的几十条修订——律师据此以为 AI 什么都没改。保留上一次的清单
+    //    （过期但真实），错误照常置位由红条说出来。同款口径见 EvidencePanel.load()。
+    // ② **重入 defer 而不是并发**。AI 改稿期间 modified 一次接一次，旧实现每次都
+    //    再发一轮两条读命令，全堆到单事件循环的 office 线程上排在写命令后面，
+    //    越忙越读不回来。在飞时只记一笔 _again，收尾时补跑一次——最后一次触发
+    //    一定被读到（照 useEvidenceAnchors 的 state.recheck 写法）。
     async reload() {
       if (!this.executor) { this.revisions = []; this.comments = []; return }
-      const [rv, cm] = await Promise.all([this.run('list_revisions', {}), this.run('list_comments', {})])
-      this.revisions = (rv && rv.revisions) || []
-      this.comments = (cm && cm.comments) || []
+      if (this._loading) { this._again = true; return }
+      this._loading = true
+      try {
+        do {
+          this._again = false
+          const [rv, cm] = await Promise.all([this.run('list_revisions', {}), this.run('list_comments', {})])
+          if (rv) this.revisions = rv.revisions || []
+          if (cm) this.comments = cm.comments || []
+        } while (this._again)
+      } finally {
+        this._loading = false
+        this._again = false
+      }
     },
     goto(g) { this.run('goto_revision', { index: g.items[0].index }) },
     gotoComment(c) { this.run('goto_comment', { index: c.index }) },

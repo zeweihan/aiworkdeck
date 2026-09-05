@@ -17,6 +17,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createSerialQueue } from '../../src/utils/asyncSerialize.js'
+// dev-board#460：写入完成通知的依赖同样要喂进来（剥壳后 import 行被去掉）
+import { DOC_MUTATED_EVENT, DOC_MUTATED_DEBOUNCE_MS, isDocMutatingAction } from '../../src/utils/docEvents.js'
 
 const SRC = readFileSync(
   new URL('../../src/pages/project-overview/agentClientActions.js', import.meta.url), 'utf8')
@@ -26,8 +28,10 @@ function loadMethods(sendEditorResultImpl, getFileDetailImpl) {
     .replace(/^import .*$/gm, '')
     .replace(/export function shouldFlushDocStream[\s\S]*?\n\}\n/, '')
     .replace(/export const agentClientActionMethods = \{/, 'return {')
-  const factory = new Function('sendEditorResult', 'getFileDetail', 'createSerialQueue', 'uni', body)
-  return factory(sendEditorResultImpl, getFileDetailImpl, createSerialQueue, { showToast: () => {} })
+  const factory = new Function('sendEditorResult', 'getFileDetail', 'createSerialQueue', 'uni',
+    'DOC_MUTATED_EVENT', 'DOC_MUTATED_DEBOUNCE_MS', 'isDocMutatingAction', body)
+  return factory(sendEditorResultImpl, getFileDetailImpl, createSerialQueue, { showToast: () => {} },
+    DOC_MUTATED_EVENT, DOC_MUTATED_DEBOUNCE_MS, isDocMutatingAction)
 }
 
 function makeVm(methods) {
