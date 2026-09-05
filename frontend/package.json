@@ -58,7 +58,8 @@
     "test:panel-dock": "node --test tests/panel-dock/*.test.mjs",
     "test:tab-visibility": "node --test tests/tab-visibility/*.test.mjs",
     "test:insight": "node --test tests/insight/*.test.mjs",
-    "test:revision-view": "node --test tests/revision-view/*.test.mjs"
+    "test:revision-view": "node --test tests/revision-view/*.test.mjs",
+    "test:md-table": "node --test tests/markdown-table/*.test.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",

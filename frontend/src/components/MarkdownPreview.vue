@@ -27,14 +27,19 @@ export default {
     }
   },
   data() {
+    const md = new MarkdownIt({
+      // 渲染结果直接进 v-html，而内容来自他人上传的 .md 与模型输出，
+      // 放行原始 HTML 等于存储型 XSS，故禁用
+      html: false,
+      linkify: true,
+      typographer: true
+    })
+    // 裸 <table> 没有滚动容器，宽表格会被上游面板的 overflow:hidden 直接裁掉且不出滚动条，
+    // 这里包一层可横向滚动的 div（dev-board#467）
+    md.renderer.rules.table_open = () => '<div class="md-table-scroll"><table>'
+    md.renderer.rules.table_close = () => '</table></div>'
     return {
-      md: new MarkdownIt({
-        // 渲染结果直接进 v-html，而内容来自他人上传的 .md 与模型输出，
-        // 放行原始 HTML 等于存储型 XSS，故禁用
-        html: false,
-        linkify: true,
-        typographer: true
-      }),
+      md,
       loadedContent: '',
       loading: false
     }
@@ -179,6 +184,20 @@ export default {
   margin: 12px 0;
   color: var(--awd-text-2);
   font-style: italic;
+}
+
+.markdown-body :deep(.md-table-scroll) {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.markdown-body :deep(.md-table-scroll)::-webkit-scrollbar {
+  height: 8px;
+}
+
+.markdown-body :deep(.md-table-scroll)::-webkit-scrollbar-thumb {
+  background: var(--awd-border);
+  border-radius: 4px;
 }
 
 .markdown-body :deep(table) {
