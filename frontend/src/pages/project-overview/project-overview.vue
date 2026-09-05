@@ -799,6 +799,7 @@
             :cursor-context="insightCursorContext"
             @entities="onInsightEntities"
             @open-url="openBrowserTab($event)"
+            @open-settings="openSettingsTab($event || {})"
           />
           <!-- 有真前端入口（Web 插件）走 iframe 沙箱；纯工具/skill 插件走宿主渲染的
                启动面板（介绍 + 怎么用 + 一键动作发进 AI 对话），不再是「未配置入口地址」。 -->
@@ -1534,6 +1535,7 @@
                 :cursor-context="insightCursorContext"
                 @entities="onInsightEntities"
                 @open-url="openBrowserTab($event)"
+                @open-settings="openSettingsTab($event || {})"
               />
             </view>
 

@@ -44,7 +44,7 @@ dev-board#181（后端部分）+ #182。
 `doc_insight_run`：id / project_id / doc_file_id / status(RUNNING|DONE|FAILED) / phase（可读进度短语，前端直接显示）/ error / model / started_at / finished_at。
 索引 `(project_id, doc_file_id, started_at)`。
 
-`doc_insight_entity`：id / run_id / project_id / doc_file_id / kind(COMPANY|LAW|CASE) / name（展示名）/ norm_key（归一键，去重与缓存都按它）/ mentions_json / retrieval_status / retrieval_source / retrieval_json(TEXT) / retrieval_note / fetched_at。
+`doc_insight_entity`：id / run_id / project_id / doc_file_id / kind(COMPANY|LAW|CASE) / name（展示名）/ norm_key（归一键，去重与缓存都按它）/ mentions_json / retrieval_status / retrieval_source / retrieval_json(TEXT) / retrieval_note / retrieval_hint / fetched_at。
 索引 `(run_id)` 与 `(project_id, kind, norm_key, fetched_at)`（后者是 7 天缓存命中查询）。
 
 `doc_insight_finding`：id / run_id / project_id / doc_file_id / kind(COUNT_MISMATCH|USCC_INVALID|CITATION_NOT_FOUND|CITATION_MISMATCH) / severity(warn|error) / title / detail_json(TEXT) / created_at。
@@ -62,6 +62,23 @@ LAW 的 `authoritative`（权威条文原文）、CASE 的 `recognition`（案�
 | ERROR | 打了但失败（异常、形状不认得） | 企查查全称重打时抛的非网关异常 |
 
 后三态**必须**写 `retrieval_note`（可读中文）。窗格里显示「法规检索本次不可用：账号点数耗尽」远好过一个空白格子。
+
+**`retrieval_hint`：配置类失败的结构化原因码**（dev-board#458，length 32，可空，一路上到 REST 的 `retrievalHint`）。
+UNAVAILABLE 里还有第二刀要切：**重试有用的**（上游故障、网关不可达）与**重试一百次也没用的**（配置状态）。
+后者带原因码，前端据它把「下一步」摆成一个可点的按钮：
+
+| hint | 来源 | 窗格给什么 |
+|---|---|---|
+| NOT_CONNECTED | `GatewayException.Kind.NOT_CONNECTED`（本机没连账户，打包态桌面端的常态） | 「去连接账户」→ `open-settings {nav:'account'}` |
+| NO_CREDITS | `Kind.NO_CREDITS`（法宝与企查查两条路都会来） | 「去充值」→ 同一个设置页 |
+| UNAUTHORIZED | `Kind.UNAUTHORIZED`（账户 Key 无效/被吊销） | 「去连接账户」 |
+| NO_CREDENTIAL | `McpProvider.NO_CREDENTIAL_PREFIX`（自建部署缺服务端 `PKULAW_TOKEN`） | **只给文案**「凭据需由部署管理员在服务端配置」，不给按钮 |
+| null | 其余一切（含 SERVICE_DISABLED / UPSTREAM_FAILED / GATEWAY_UNREACHABLE / BAD_REQUEST，以及成功与 NOT_FOUND） | 照旧 note + 「重试」 |
+
+带 hint 的四种，note **只写原因**：不加「本次不可用」前缀（那是等不来的等待），也不拼 `userHint()` 的散文
+（「请先在设置中连接…」变成按钮，散文里再说一遍是噪音）。落点是 `DocInsightService.unavailableGateway`。
+判定必须走这个码，**前端绝不许拿 `retrievalNote` 做中文子串匹配**——note 双语（LangText），英文版一上线子串判定整条失效。
+NO_CREDENTIAL 不给按钮是刻意的：官方版没有法宝凭据输入框（BYOK 界面 #533 已撤），指一条不存在的路比不指更糟。
 
 **NOT_FOUND 与 UNAVAILABLE 分开是硬要求**（dev-board#395）：用户的下一步完全不同——
 前者是「文档里这家公司/这个条号可能写错了」，后者是「过一会儿再试 / 去查账」。
@@ -120,7 +137,7 @@ service = `pkulaw`，端点写死在官网网关；自备 Key 档才落到 `McpC
           "startedAt":"2026-08-27T10:00:00","finishedAt":"2026-08-27T10:02:00"},
   "entities": [
     {"id":31,"kind":"COMPANY","name":"京微资易科技有限公司","normKey":"京微资易科技",
-     "retrievalStatus":"OK","retrievalSource":"qichacha+mcp","retrievalNote":null,
+     "retrievalStatus":"OK","retrievalSource":"qichacha+mcp","retrievalNote":null,"retrievalHint":null,
      "hasDetail":true,"fetchedAt":"2026-08-27T10:01:00",
      "mentions":[{"quote":"由京微资易科技持有","paragraph":null}],
      "detail":null}
@@ -257,8 +274,13 @@ USCC_INVALID 的 detail 形状不同（没有 claims）：
    同理任何新加的提示词模板都别用 `formatted`。
 4. **工具/上游返回的失败判据是 `"Error"` 前缀**（`McpClientService.callTool` 找不到 server / 未启用 / 传输失败都返回该前缀的字符串而**不抛异常**）。
    新接通道时照 `callAndStore` 的判据走，别只判异常。
-5. **`GatewayException` 不能被压成「查无此企业」**：它是平台代采网关的分类失败（余额不足 / 未开放 / 网关不可达），
-   必须落 UNAVAILABLE 并把 `userHint()` 带上。`QichachaService` 刻意没把它裹进自己的 `catch(Exception)`，本领域也别裹。
+5. **`GatewayException` 不能被压成「查无此企业」，`Kind` 也不能压成一句散文**：它是平台代采网关的分类失败
+   （余额不足 / 未开放 / 网关不可达），必须落 UNAVAILABLE。`QichachaService` 刻意没把它裹进自己的 `catch(Exception)`，本领域也别裹。
+   写法唯一出口是 `unavailableGateway(row, ge, prefix)`（dev-board#458）：
+   **配置类三档**（NOT_CONNECTED / NO_CREDITS / UNAUTHORIZED）→ 写 `retrieval_hint`、note 只留原因，
+   **不带**「本次不可用」前缀、**不拼** `userHint()`；**其余档**才照旧带前缀 + `userHint()` 的「稍后重试」。
+   别再写 `unavailable(row, prefix + join(ge.getMessage(), ge.userHint()))` ——`Kind` 一丢，窗格就只能对着一个
+   恒定状态摆「重试」，用户点一百次还是同一句话（#458 的病灶）。
 6. **崩溃会留下僵尸 RUNNING**。`reapOrReject` 按 `insight.stale-minutes`（30 分钟）收尸，
    否则一次进程崩溃会让这份文档**永远**解析不了。改单飞逻辑时别把这段删了。
 7. **测试断 RUNNING 中间态必须用 CountDownLatch 卡住后台 mock**（先落中间态再 submit 的服务，
@@ -311,7 +333,11 @@ USCC_INVALID 的 detail 形状不同（没有 claims）：
 - **工具栏「解析」对已经解析过的文档不重跑**（一次解析 = 一次 LLM + 一串外部库调用），只把面板开出来；`status==='FAILED'` 那次不算结论，照样重跑。面板里的「重新解析」是用户明示的，force 重跑。
 - `parseRequest` **必须带 fileId**：面板是 v-if 挂载的，点完解析才挂出来（watch 看不到变化，所以 mounted 也认一次）；不带 fileId 会让「在 A 文档点过解析、随后切到 B 开面板」把 B 也解析掉。
 - 列表瘦身的另一半在前端：`detail` 展开时才 `GET /entities/{id}` 并缓存在组件里；`hasDetail:false` 的一次都不打。
-- NOT_FOUND / UNAVAILABLE / ERROR 的 `retrievalNote` **必须显示**（`.ip-note`），旁边给「重试」（`POST /entities/{id}/refresh`，要写权限）。
+- NOT_FOUND / UNAVAILABLE / ERROR 的 `retrievalNote` **必须显示**（`.ip-note`）。旁边那个动作分两支（dev-board#458）：
+  带 `retrievalHint` 的**不给「重试」**，给引导按钮（`noteAction` → `open-settings {nav:'account'}`，NO_CREDENTIAL 只出一行 `.ip-note-h` 文案）；
+  没有 hint 的才给「重试」（`showRetry` = `canParse && !retrievalHint`，`POST /entities/{id}/refresh`，要写权限）。
+  面板自己不 `uni.navigateTo`：设置由宿主 `openSettingsTab` 就地开中栏标签（与 `@open-url` 同一条口径），
+  **两处挂载点（左栏 / 右 dock）都要绑 `@open-settings`**，漏一处 `check:emits` 直接红。
   NOT_FOUND 用**中性灰**（`.ip-dot.st-NOT_FOUND` / `.ip-note.st-NOT_FOUND`），不用告警色：
   文档里写了一家不存在的公司，是文档的问题，不是我们的故障。
 - 两类引用发现（CITATION_*）在一致性 tab 里只列不改：`fixSuggestions` 看的是 `detail.claims`，引用 detail 没有这一段，天然落不到「修改建议」那一支；点条目仍按 `detail.quote` 定位。CITATION_MISMATCH 的「引用条文」是折叠段（`citedOpen`）。
@@ -322,7 +348,7 @@ USCC_INVALID 的 detail 形状不同（没有 claims）：
 ### 前端验证
 
 ```
-cd frontend && npm run test:insight        # 84 条（纯函数 58 + 组件级 26）
+cd frontend && npm run test:insight        # 91 条（纯函数 58 + 组件级 33）
 cd frontend && npm run test:panel-dock     # 注册表自洽 + 停靠回落
 cd frontend && npm run check:emits && npm run check:nav && npm run check:locales
 cd frontend && npm run build:h5 && npm run build:zetaoffice   # 改 editor-main.js 后必须重建 glue
@@ -337,7 +363,7 @@ cd frontend && npm run build:h5 && npm run build:zetaoffice   # 改 editor-main.
 ## 验证
 
 ```
-cd backend && mvn test -Dtest='DocInsight*,LawArticle*'   # 62 条
+cd backend && mvn test -Dtest='DocInsight*,LawArticle*'   # 65 条
 cd backend && mvn test -Dtest='*Mcp*Test'                 # 含 StreamableHttpMcpProviderCredentialTest（空凭证不发请求）
 cd backend && mvn clean test                      # 全量（跨类常量内联，验证阶段一律 clean）
 ```
@@ -345,11 +371,12 @@ cd backend && mvn clean test                      # 全量（跨类常量内联�
   后缀剥离等价、USCC 校验位与去重、**fixable 三条降级分支**、空输入。
 - `LawArticleNumbersTest`（7）：十/百/千组合与「零」、`之N`、已是阿拉伯数字（含全角）、
   **转不动一律 null**、引文剥引用字样取内容线索。
-- `DocInsightServiceTest`（30）：RUNNING 中间态（CountDownLatch）、单飞、企查查降级链、网关失败落 UNAVAILABLE、
+- `DocInsightServiceTest`（33）：RUNNING 中间态（CountDownLatch）、单飞、企查查降级链、网关失败落 UNAVAILABLE、
   **平台档法宝四条通道全部走网关且一次法宝 MCP 都不打 / 网关失败仍 UNAVAILABLE / 本机没凭证说「未配置」不说「本次不可用」/
   上游明确回空 = NOT_FOUND 且按「跑完了」计进摘要**、
   法宝不可用不连坐、案例通道从「未配置」到「配上就接入」、**案号识别命中改用标题检索 / 识别失败静默走原路 /
   识别命中但全文失败仍 OK**、**引用校验三种判定 + 通道未配置整步跳过 + 通道报错不报发现 + 上限 30**、
-  7 天缓存与 refresh 绕过、列表瘦身/发现不瘦身、
+  7 天缓存与 refresh 绕过、列表瘦身/发现不瘦身、**配置类失败带结构化 `retrievalHint`（未连接账户 / 余额不足 / 本机没凭据）
+  且 note 不说「本次不可用」，瞬时失败不带原因码**、
   读不出文字与辅助模型未配置 → FAILED、单块坏输出不炸整轮、鉴权与跨项目 IDOR。
 - `DocInsightControllerTest`（6）：4010 信封、code=1、参数透传、响应形状、路由不互相吃。

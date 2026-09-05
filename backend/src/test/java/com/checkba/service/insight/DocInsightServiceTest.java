@@ -320,7 +320,7 @@ class DocInsightServiceTest {
     }
 
     @Test
-    @DisplayName("网关失败是 UNAVAILABLE（不是查无此企业），并带上「下一步」提示")
+    @DisplayName("网关失败是 UNAVAILABLE（不是查无此企业），并带结构化原因码 hint=NO_CREDITS")
     void 网关失败落不可用() throws Exception {
         when(qichacha.queryEciInfoJson(anyString()))
                 .thenThrow(new GatewayException(GatewayException.Kind.NO_CREDITS, "账户 Credits 余额不足"));
@@ -329,7 +329,8 @@ class DocInsightServiceTest {
         awaitStatus(svc.startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
         DocInsightEntity company = entityOf(DocInsightEntity.KIND_COMPANY);
         assertEquals(DocInsightEntity.RETRIEVAL_UNAVAILABLE, company.getRetrievalStatus());
-        assertTrue(company.getRetrievalNote().contains("充值"), company.getRetrievalNote());
+        assertEquals(DocInsightEntity.HINT_NO_CREDITS, company.getRetrievalHint());
+        assertTrue(company.getRetrievalNote().contains("余额不足"), company.getRetrievalNote());
         verify(mcp, never()).callTool(eq(DocInsightService.QICHACHA_MCP_SERVER), anyString(), anyMap());
     }
 
@@ -443,6 +444,24 @@ class DocInsightServiceTest {
         assertEquals("pkulaw-case-number", c.getRetrievalSource());
         assertTrue(c.getRetrievalNote().contains("仅返回案号识别结果"), c.getRetrievalNote());
         assertTrue(c.getRetrievalJson().contains("https://www.pkulaw.com/pfnl/abc"), c.getRetrievalJson());
+    }
+
+    @Test
+    @DisplayName("全文检索因余额不足失败、识别命中 → 记 OK 且原因码清掉（别对一条有结果的案例摆「去充值」）")
+    void 识别命中后不留旧原因码() throws Exception {
+        when(qichacha.queryEciInfoJson(anyString())).thenReturn(QCC_FULL);
+        when(providerResolver.resolve(ExternalServiceProvider.PKULAW))
+                .thenReturn(ExternalServiceProvider.PLATFORM);
+        stubCaseChannel();
+        stubGatewayRaw(ANHAO_HIT);
+        when(gateway.call(eq("pkulaw"), eq("search_case"), anyMap(), anyInt()))
+                .thenThrow(new GatewayException(GatewayException.Kind.NO_CREDITS, "账户 Credits 余额不足"));
+
+        awaitStatus(newService().startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+
+        DocInsightEntity c = entityOf(DocInsightEntity.KIND_CASE);
+        assertEquals(DocInsightEntity.RETRIEVAL_OK, c.getRetrievalStatus());
+        assertNull(c.getRetrievalHint(), "这一行最终是 OK，配置类引导不该挂在它上面");
     }
 
     // ---------------------------------------------------------------- 法条引用校验
@@ -739,7 +758,7 @@ class DocInsightServiceTest {
     }
 
     @Test
-    @DisplayName("平台档网关失败：UNAVAILABLE 且带「下一步」，不当成查无此条文")
+    @DisplayName("平台档余额不足：UNAVAILABLE + hint=NO_CREDITS，原因保留，不当成查无此条文")
     void 平台档网关失败落不可用() throws Exception {
         when(qichacha.queryEciInfoJson(anyString())).thenReturn(QCC_FULL);
         when(providerResolver.resolve(ExternalServiceProvider.PKULAW))
@@ -751,7 +770,27 @@ class DocInsightServiceTest {
 
         DocInsightEntity law = entityOf(DocInsightEntity.KIND_LAW);
         assertEquals(DocInsightEntity.RETRIEVAL_UNAVAILABLE, law.getRetrievalStatus());
-        assertTrue(law.getRetrievalNote().contains("充值"), law.getRetrievalNote());
+        assertEquals(DocInsightEntity.HINT_NO_CREDITS, law.getRetrievalHint());
+        assertTrue(law.getRetrievalNote().contains("余额不足"), law.getRetrievalNote());
+        assertFalse(law.getRetrievalNote().contains("本次不可用"), law.getRetrievalNote());
+        assertEquals(DocInsightEntity.HINT_NO_CREDITS, lawView().retrievalHint(), "原因码必须上到 REST 视图");
+    }
+
+    @Test
+    @DisplayName("平台档未连接账户：配置类失败不说「本次不可用」（恒定状态，等不来）")
+    void 未连接账户不说本次不可用() throws Exception {
+        when(qichacha.queryEciInfoJson(anyString())).thenReturn(QCC_FULL);
+        when(providerResolver.resolve(ExternalServiceProvider.PKULAW))
+                .thenReturn(ExternalServiceProvider.PLATFORM);
+        when(gateway.call(eq("pkulaw"), anyString(), anyMap(), anyInt()))
+                .thenThrow(new GatewayException(GatewayException.Kind.NOT_CONNECTED, "尚未连接 AI WorkDeck 账户"));
+
+        awaitStatus(newService().startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+
+        DocInsightEntity law = entityOf(DocInsightEntity.KIND_LAW);
+        assertEquals(DocInsightEntity.RETRIEVAL_UNAVAILABLE, law.getRetrievalStatus());
+        assertFalse(law.getRetrievalNote().contains("本次不可用"), law.getRetrievalNote());
+        assertEquals(DocInsightEntity.HINT_NOT_CONNECTED, lawView().retrievalHint());
     }
 
     @Test
@@ -768,6 +807,7 @@ class DocInsightServiceTest {
         assertEquals(DocInsightEntity.RETRIEVAL_UNAVAILABLE, law.getRetrievalStatus());
         assertTrue(law.getRetrievalNote().contains("未配置"), law.getRetrievalNote());
         assertFalse(law.getRetrievalNote().contains("本次不可用"), law.getRetrievalNote());
+        assertEquals(DocInsightEntity.HINT_NO_CREDENTIAL, lawView().retrievalHint());
     }
 
     @Test
@@ -788,6 +828,30 @@ class DocInsightServiceTest {
                 "未命中必须单列，否则用户读到的是「一次都没查成」：" + done.getPhase());
         assertFalse(entityOf(DocInsightEntity.KIND_LAW).getRetrievalNote().contains("hi@aiworkdeck.com"),
                 "查无此条文不该指向客服");
+    }
+
+    @Test
+    @DisplayName("瞬时失败（上游故障）不带原因码：窗格照旧给「本次不可用」+ 重试")
+    void 瞬时失败不带原因码() throws Exception {
+        when(qichacha.queryEciInfoJson(anyString())).thenReturn(QCC_FULL);
+        when(providerResolver.resolve(ExternalServiceProvider.PKULAW))
+                .thenReturn(ExternalServiceProvider.PLATFORM);
+        when(gateway.call(eq("pkulaw"), anyString(), anyMap(), anyInt()))
+                .thenThrow(new GatewayException(GatewayException.Kind.UPSTREAM_FAILED, "上游供应商超时"));
+
+        awaitStatus(newService().startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+
+        DocInsightEntity law = entityOf(DocInsightEntity.KIND_LAW);
+        assertEquals(DocInsightEntity.RETRIEVAL_UNAVAILABLE, law.getRetrievalStatus());
+        assertNull(law.getRetrievalHint(), "瞬时故障重试是真出路，不许摆成配置引导");
+        assertTrue(law.getRetrievalNote().contains("本次不可用"), law.getRetrievalNote());
+        assertTrue(law.getRetrievalNote().contains("稍后重试"), law.getRetrievalNote());
+    }
+
+    /** 法规实体的 REST 视图（原因码是给前端的契约，只断言实体字段不够）。 */
+    private EntityView lawView() {
+        return svc.latest(UID, PID, DOC).entities().stream()
+                .filter(e -> DocInsightEntity.KIND_LAW.equals(e.kind())).findFirst().orElseThrow();
     }
 
     private void stubExternalsOk() {

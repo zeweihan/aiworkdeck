@@ -17,6 +17,13 @@ export default {
   refreshFailed: 'Could not re-run the lookup',
   retry: 'Retry',
 
+  // Next step for configuration failures (dev-board#458). Retrying cannot fix any of these.
+  goConnectAccount: 'Connect account',
+  goRecharge: 'Add credits',
+  hint: {
+    NO_CREDENTIAL: 'This lookup channel needs a credential configured on the server by your administrator.',
+  },
+
   tab: {
     retrieval: 'Lookups',
     checks: 'Consistency',

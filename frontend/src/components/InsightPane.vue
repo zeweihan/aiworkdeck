@@ -60,10 +60,16 @@
           </view>
 
           <!-- 通道不可用/查无：note 必须显示出来（「法宝检索本次不可用：账号点数耗尽」
-               远好过一个空白格子），并给一个重试。 -->
+               远好过一个空白格子）。旁边那个动作分两种：**配置类失败**（没连账户 / 余额不足 /
+               Key 失效 / 本机没凭据）给一条走得通的引导，其余才给「重试」——对一个恒定状态
+               摆「重试」，用户点一百次还是同一句话（dev-board#458）。 -->
           <view v-if="e.retrievalNote" class="ip-note" :class="'st-' + (e.retrievalStatus || 'PENDING')">
-            <text class="ip-note-t">{{ e.retrievalNote }}</text>
-            <text v-if="canParse" class="ip-act" @tap.stop="refreshEntity(e)">{{ $t('insight.retry') }}</text>
+            <view class="ip-note-body">
+              <text class="ip-note-t">{{ e.retrievalNote }}</text>
+              <text v-if="noteHint(e)" class="ip-note-h">{{ $t(noteHint(e)) }}</text>
+            </view>
+            <text v-if="noteAction(e)" class="ip-act" @tap.stop="runNoteAction(e)">{{ $t(noteAction(e).label) }}</text>
+            <text v-else-if="showRetry(e)" class="ip-act" @tap.stop="refreshEntity(e)">{{ $t('insight.retry') }}</text>
           </view>
 
           <view v-if="expandedId === e.id" class="ip-detail">
@@ -260,7 +266,9 @@ export default {
   // 不知道用户点了画布哪里，宿主不知道有哪些实体——索引必须交给宿主一份）。
   // open-url：法宝链接（权威条文 / 案号识别 / 引用候选）交给宿主的浏览器面板打开，
   // 与 MarketDetailPane / ProjectFavoritesPanel 同一条既有事件。
-  emits: ['entities', 'open-url'],
+  // open-settings：配置类检索失败（未连接账户 / 余额不足 / Key 失效）的「下一步」。
+  // 面板自己不碰 uni.navigateTo，交给宿主 openSettingsTab —— 与 open-url 同一条口径。
+  emits: ['entities', 'open-url', 'open-settings'],
   props: {
     projectId: { type: [Number, String], default: null },
     // 当前活跃的 writer 文档；换文档时面板整体重载（跟随，不留旧结论）
@@ -451,6 +459,37 @@ export default {
         this.detailLoading = { ...this.detailLoading, [e.id]: false }
       }
     },
+    /**
+     * 配置类失败的「下一步」（dev-board#458）。判定只看后端下发的结构化 retrievalHint，
+     * **绝不拿 retrievalNote 做中文子串匹配**：note 是双语的（后端 LangText），
+     * 英文版一上线子串判定整条失效（api.js 里那条「只认 code 不认中文子串」的教训）。
+     *
+     * NO_CREDENTIAL 不给按钮：官方版没有法宝凭据输入框（BYOK 界面 #533 已撤），
+     * 那是自建部署的服务端 PKULAW_TOKEN，只能由部署管理员补——指一条不存在的路比不指更糟。
+     */
+    noteAction(e) {
+      switch (e && e.retrievalHint) {
+        case 'NOT_CONNECTED':
+        case 'UNAUTHORIZED':
+          return { label: 'insight.goConnectAccount', nav: 'account' }
+        case 'NO_CREDITS':
+          return { label: 'insight.goRecharge', nav: 'account' }
+        default:
+          return null
+      }
+    },
+    /** 没有按钮可给、但要多说一句的那一档（目前只有 NO_CREDENTIAL）。 */
+    noteHint(e) {
+      return e && e.retrievalHint === 'NO_CREDENTIAL' ? 'insight.hint.NO_CREDENTIAL' : ''
+    },
+    /** 配置类失败重试不了：那四种是恒定状态，再打一次上游只是白花一次额度。 */
+    showRetry(e) {
+      return this.canParse && !(e && e.retrievalHint)
+    },
+    runNoteAction(e) {
+      const act = this.noteAction(e)
+      if (act) this.$emit('open-settings', { nav: act.nav })
+    },
     async refreshEntity(e) {
       if (!this.pid || !e || !e.id || !this.canWrite) return
       this.detailLoading = { ...this.detailLoading, [e.id]: true }
@@ -458,7 +497,7 @@ export default {
       try {
         const v = unwrap(await refreshDocInsightEntity(this.pid, e.id)) || {}
         const next = this.entities.map((x) => (x.id === e.id
-          ? { ...x, retrievalStatus: v.retrievalStatus, retrievalSource: v.retrievalSource, retrievalNote: v.retrievalNote, hasDetail: v.hasDetail, fetchedAt: v.fetchedAt }
+          ? { ...x, retrievalStatus: v.retrievalStatus, retrievalSource: v.retrievalSource, retrievalNote: v.retrievalNote, retrievalHint: v.retrievalHint || null, hasDetail: v.hasDetail, fetchedAt: v.fetchedAt }
           : x))
         this.entities = next
         this.details = { ...this.details, [e.id]: v.detail || null }
