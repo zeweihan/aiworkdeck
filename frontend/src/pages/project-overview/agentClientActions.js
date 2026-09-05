@@ -3,6 +3,7 @@
 // 经展开进组件 methods（纯搬移，Phase 1 外置），`this` 即 project-overview 页面实例。
 import { sendEditorResult, getFileDetail } from '@/services/api.js'
 import { createSerialQueue } from '@/utils/asyncSerialize.js'
+import { DOC_MUTATED_EVENT, DOC_MUTATED_DEBOUNCE_MS, isDocMutatingAction } from '@/utils/docEvents.js'
 
 // CRITICAL（审计 dev-board#74）：流式缓冲与它究竟该写进哪个文档必须绑在一起才能判断
 // "现在还能不能落字"。syncLibreExecutor（librePool.js）会把 libreOfficeExecutor 重指到
@@ -154,6 +155,25 @@ export const agentClientActionMethods = {
                 console.error('[ProjectOverview] doc stream flush error:', e)
             }
         }
+        // 整篇起草走的正是这一路：落完最后一笔要告诉编辑器刷新审阅面板（dev-board#460）
+        this.notifyDocMutated()
+    },
+
+    // AI 写完一笔之后告诉编辑器（dev-board#460）。面板的计数原本只挂在引擎广播的
+    // modified 边沿上，那条信号服务的是自动保存、刻意做成有损（editor-main.js 里
+    // 500ms 前沿节流、无尾随），一批写入的最后一次常常被丢弃，于是"写完不刷、
+    // 切一次标签才对"。这里用的是宿主自己的无损接缝：命令返回 = 这一笔确定写完了。
+    // 300ms 防抖：一轮改稿几十条命令，每条各打一轮 list_revisions + list_comments
+    // 会把单事件循环的 office 线程读死；只在停笔后补一发（尾随语义，最后一次必到）。
+    notifyDocMutated() {
+        clearTimeout(this._docMutatedTimer)
+        this._docMutatedTimer = setTimeout(() => {
+            this._docMutatedTimer = null
+            // fileId：保活池里同时挂着好几个编辑器实例，只有写的那份该重读
+            const fileId = typeof this.resolveLibreExecutorFileId === 'function'
+                ? this.resolveLibreExecutorFileId(this.libreOfficeExecutor) : null
+            try { uni.$emit(DOC_MUTATED_EVENT, { fileId }) } catch (e) { /* ignore */ }
+        }, DOC_MUTATED_DEBOUNCE_MS)
     },
 
     /**
@@ -481,6 +501,9 @@ export const agentClientActionMethods = {
             //（如 delete_match 的「match index out of range」），只取 error 的话模型收到的是
             // {"error": "null"}，等于没告诉它哪里错了，它只能瞎猜着重试。
             const failReason = result ? (result.error || result.message || null) : null
+            // 写入类命令写完了 → 通知编辑器刷新审阅面板（dev-board#460）。只读命令
+            // 不发（白费一轮往返），失败的也不发（什么都没写成）。
+            if (successFlag && isDocMutatingAction(commandAction)) this.notifyDocMutated()
             await sendEditorResult(conversationId, requestId, successFlag, result, successFlag ? (result && result.error) || null : failReason)
         } catch (e) {
             console.error('[ProjectOverview] LibreOffice command error:', e)

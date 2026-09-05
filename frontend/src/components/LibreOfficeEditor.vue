@@ -146,6 +146,7 @@ import { anchorHash } from '@/utils/anchorHash.js'
 import { StaleQueue } from '@/utils/evidenceStaleQueue.js'
 import { createAnchorChecker, resolveKeepText } from '@/composables/useEvidenceAnchors.js'
 import { EVIDENCE_CHANGED_EVENT } from '@/utils/evidenceEvents.js'
+import { DOC_MUTATED_EVENT } from '@/utils/docEvents.js'
 import { getResolvedTheme, APP_THEME_EVENT } from '@/utils/appTheme.js'
 
 let seq = 0
@@ -320,6 +321,11 @@ export default {
     uni.$on('file-drag-end', this._onEvidenceDragEnd)
     this._onThemeChanged = () => this.pushTheme()
     uni.$on(APP_THEME_EVENT, this._onThemeChanged)
+    // AI 写完一笔的无损通知（dev-board#460）：引擎的 modified 边沿是有损的
+    // （500ms 前沿节流、无尾随），一批写入的最后一次常被丢弃，面板就端着写入
+    // 之前的清单。宿主在命令返回时补这一发，面板不必再依赖那条边沿。
+    this._onDocMutated = (p) => this.onDocMutatedEvent(p)
+    uni.$on(DOC_MUTATED_EVENT, this._onDocMutated)
     try {
       const api = host.zetaoffice
       if (!api || typeof api.getEditor !== 'function') {
@@ -344,6 +350,7 @@ export default {
     uni.$off('file-drag-start', this._onEvidenceDragStart)
     uni.$off('file-drag-end', this._onEvidenceDragEnd)
     if (this._onThemeChanged) { uni.$off(APP_THEME_EVENT, this._onThemeChanged); this._onThemeChanged = null }
+    if (this._onDocMutated) { uni.$off(DOC_MUTATED_EVENT, this._onDocMutated); this._onDocMutated = null }
     // Autosave timers die with the instance. Any still-dirty edits were flushed
     // by the closer (closeFile / evictLibreInstance await flushSave first) —
     // export needs the live webview, so saving from here is already too late.
@@ -930,6 +937,9 @@ export default {
       // 复位到默认（上一份文档设过「最终稿」就在这一步被打回来），工具栏若还
       // 端着上一份的读数，显示的态就跟画布对不上。
       this.uiRefreshKey++
+      // 审阅面板同理（dev-board#460）：版本退回 / 检查点恢复 / AI 直改文件都经
+      // reloadFromBackend → loadDocument 换文档，面板不刷就端着上一份的修订清单。
+      if (this.reviewOpen) this.reviewRefreshKey++
       return true
     },
     // 后端就地覆盖了本文件的内容（版本退回 / 检查点恢复 / AI 直接改文件），而
@@ -1154,6 +1164,15 @@ export default {
     onEvidenceLocate(payload) {
       if (!payload || !payload.fileId) return
       this.$emit('open-evidence-target', payload)
+    },
+    // 宿主广播「这份文档刚被 AI 写过一笔」（dev-board#460）。只刷自己这一份：
+    // 保活池里同时挂着好几个编辑器实例，别的实例跟着重读纯属浪费 office 线程。
+    // 面板是 v-if，没开就没有要刷的东西。
+    onDocMutatedEvent(payload) {
+      if (!this.reviewOpen || !this.file) return
+      const fid = payload && payload.fileId
+      if (fid != null && String(fid) !== String(this.file.id)) return
+      this.reviewRefreshKey++
     },
     onDocModified() {
       // docLoadFailed：画布上是空白 boot 文档，标脏会引发空文档覆盖真文件

@@ -127,7 +127,8 @@ const DEPS = {
   sectionOptions, partyOptions, statusCounts, collectFileTags, GROUP_NONE, STATUS_KEYS,
   locatorSummary, locatorQuote, buildFileLinkUrl,
   ulid: () => 'X'.repeat(26), WPS_INTERNAL_HTTP_LINK_BASE: 'https://checkba-internal.local/open',
-  EVIDENCE_CHANGED_EVENT: 'awd:evidence-changed', resolveKeepText: async () => ({ text: '', gone: false }),
+  EVIDENCE_CHANGED_EVENT: 'awd:evidence-changed', DOC_MUTATED_EVENT: 'awd:doc-mutated',
+  resolveKeepText: async () => ({ text: '', gone: false }),
 }
 
 async function makeVm(links, tags) {
@@ -226,4 +227,18 @@ test('组件：视图/筛选按项目落盘并能读回（uni 存储不可用时
   } finally {
     delete globalThis.uni
   }
+})
+
+// dev-board#460：AI 写完一笔（doc_link_evidence 那一路是 worker 打书签 + 后端建
+// EvidenceLink，后端那半边不会发 awd:evidence-changed）之后，底稿计数也要跟着重拉。
+test('组件：收到 awd:doc-mutated 且是自己这份文档就重拉底稿清单', async () => {
+  const vm = await makeVm(LINKS, TAGS)
+  let loads = 0
+  vm.load = () => { loads++ }
+  vm.onDocMutated({ fileId: 9 })
+  assert.equal(loads, 1)
+  vm.onDocMutated({ fileId: 10 })
+  assert.equal(loads, 1, '别人那份文档的写入不该让本面板重拉')
+  vm.onDocMutated({})
+  assert.equal(loads, 2, '不带 fileId 的一律重拉')
 })

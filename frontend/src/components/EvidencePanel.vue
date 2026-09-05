@@ -117,6 +117,7 @@ import { locatorSummary, locatorQuote, buildFileLinkUrl } from '@/utils/evidence
 import { ulid } from '@/utils/ulid.js'
 import { WPS_INTERNAL_HTTP_LINK_BASE } from '@/config/workbenchActions.js'
 import { EVIDENCE_CHANGED_EVENT } from '@/utils/evidenceEvents.js'
+import { DOC_MUTATED_EVENT } from '@/utils/docEvents.js'
 import { resolveKeepText } from '@/composables/useEvidenceAnchors.js'
 
 const STATUSES = ['all', ...STATUS_KEYS]
@@ -205,11 +206,16 @@ export default {
     this.restoreViewState()
     this._onChanged = (p) => { if (!p || !p.docFileId || Number(p.docFileId) === this.did) this.load() }
     try { uni.$on(EVIDENCE_CHANGED_EVENT, this._onChanged) } catch (e) { /* ignore */ }
+    // AI 写完一笔（含 doc_link_evidence 那一路：worker 打书签 + 后端建 EvidenceLink）
+    // 之后底稿清单也变了，而后端那半边不会发 awd:evidence-changed（dev-board#460）。
+    this._onDocMutated = (p) => this.onDocMutated(p)
+    try { uni.$on(DOC_MUTATED_EVENT, this._onDocMutated) } catch (e) { /* ignore */ }
     this.load()
     if (this.view === 'party') this.ensureFileTags()
   },
   beforeUnmount() {
     try { uni.$off(EVIDENCE_CHANGED_EVENT, this._onChanged) } catch (e) { /* ignore */ }
+    try { uni.$off(DOC_MUTATED_EVENT, this._onDocMutated) } catch (e) { /* ignore */ }
   },
   methods: {
     // 视图/筛选按项目记住（与工作台左栏面板同一套 uni.setStorageSync 约定，
@@ -235,6 +241,12 @@ export default {
       try {
         uni.setStorageSync(key, JSON.stringify({ view: this.view, status: this.status, sectionKey: this.sectionKey, partyKey: this.partyKey }))
       } catch (e) { /* ignore */ }
+    },
+    // 只认自己这份文档（保活池里同时挂着好几个编辑器实例）；不带 fileId 的一律重拉。
+    onDocMutated(payload) {
+      const fid = payload && payload.fileId
+      if (fid != null && Number(fid) !== this.did) return
+      this.load()
     },
     async load() {
       if (!this.pid || !this.did) { this.links = []; return }
