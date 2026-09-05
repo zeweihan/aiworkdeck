@@ -3,7 +3,7 @@
 > 目标：让 AI panel 像一个坐在文档前的人类编辑那样操作嵌入式 LibreOffice——移动光标、选中、
 > 修改、排版，用户全程看得见。本文是原语集的设计依据与协议契约。
 >
-> 关联：docs/LIBREOFFICE_MIGRATION_PLAN.md（RFC v2，§0.2 锚点论）、frontend/src/zetaoffice/README.md（管线架构）。
+> 关联：docs/dev-notes/LIBREOFFICE_MIGRATION_PLAN.md（RFC v2，§0.2 锚点论）、frontend/src/zetaoffice/README.md（管线架构）。
 
 ## 1. 为什么 WPS 时代"找不到 / 替换错"
 

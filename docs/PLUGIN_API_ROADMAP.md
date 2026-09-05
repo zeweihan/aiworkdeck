@@ -70,34 +70,34 @@ VS Code 让渡给插件的不是「UI 挂件」，而是三样核心资产——
 插件化（狗粮）。插件作者画像是「专业人士 + AI 写插件」，API 面要 AI 一次能写对。
 
 ### P0 治理地基 ——【已落地，规范 v2.7，dev-board#280】
-设计定稿：`docs/superpowers/specs/2026-08-29-plugin-p0-governance-foundation.md`。
+设计定稿：`docs/dev-notes/superpowers/specs/2026-08-29-plugin-p0-governance-foundation.md`。
 - manifest `minHostVersion`（PLUGIN_SPEC §2）：不达标登记不生效 + 装前拦 + 管理页提示升级；
 - 实验 API：`x-` 前缀桥方法，运行时只对 dev 免签直装插件放行（§12.4）；
 - 「只加不改」章程 + 四处同步纪律固化为 PLUGIN_SPEC §12。
 
 ### P1 开放文档读写权 ——【已落地，规范 v2.7，dev-board#281】
-设计定稿：`docs/superpowers/specs/2026-08-29-plugin-p1-doc-api-and-events.md`。
+设计定稿：`docs/dev-notes/superpowers/specs/2026-08-29-plugin-p1-doc-api-and-events.md`。
 - 桥 `doc.exec`/`doc.active`（§8.4）：白名单 = 宿主 SPI DOC_ACTIONS 同一份清单（JAR 与
   Web 插件同一张能力面），写入带修订署名，executor 层 EDITOR_ACTIONS 仍是第二道闸；
 - 事件通道（§8.8）：`events.subscribe` + `type:'event'` 推送，首批 `files.changed` /
   `selection.changed` / `project.switched`；尽调工作台插件升级 SDK 1.3.0 后即可接。
 
 ### P2 开放 AI 调用权 ——【ai.request 已落地，规范 v2.7，dev-board#282】
-设计定稿：`docs/superpowers/specs/2026-08-29-plugin-p2-ai-request.md`。
+设计定稿：`docs/dev-notes/superpowers/specs/2026-08-29-plugin-p2-ai-request.md`。
 - `ai.request` 走平台 Credits 辅助模型（§8.4），16000 字符 + 10 次/分钟，权限值 `ai`；
   流式与选模型走 `x-` 实验通道验证后再转正；
 - 【未做】插件面板与对话面板双向联动（对话产出 → 面板订阅）：等 P1 事件通道在真实
   插件上跑熟后另开卡。
 
 ### P3 开放数据源接入权（对位 FileSystemProvider/LSP，杠杆层）——【已落地，规范 v2.8，dev-board#283】
-设计定稿：`docs/superpowers/specs/2026-08-29-plugin-p3-evidence-provider-protocol.md`（dev-board#283）。
+设计定稿：`docs/dev-notes/superpowers/specs/2026-08-29-plugin-p3-evidence-provider-protocol.md`（dev-board#283）。
 - 已落地（PLUGIN_SPEC §13）：JAR SPI（plugin-api 1.2.0 `EvidenceProvider`）+ manifest
   `contributes.evidenceSources`（远程 MCP 声明式接入，本地命令型不受理）两条通道；
   conformance 执行器 `EvidenceProviderConformanceKit`（零依赖）随 plugin-api 发布；
   示例 examples/hello-evidence-plugin 全绿。后续狗粮：判决书通道重构为官方插件（另开卡）。
 
 ### P4 声明式长尾（对位 languages/snippets/themes 的生态大头）——【已落地，规范 v2.9，dev-board#284】
-设计定稿：`docs/superpowers/specs/2026-08-29-plugin-p4-declarative-contributions.md`（dev-board#284）。
+设计定稿：`docs/dev-notes/superpowers/specs/2026-08-29-plugin-p4-declarative-contributions.md`（dev-board#284）。
 - 已落地（PLUGIN_SPEC §14）：`contributes.templates`（新建入口选择 + AI 工具两枚）/
   `contributes.styleProfiles`（解析链插档 + 广场详情页选默认）/ 顶层 `settings`
   （广场表单 + 桥 settings.get + settings.changed 事件，secret 不进桥）/ l10n（%key% 机制）。
