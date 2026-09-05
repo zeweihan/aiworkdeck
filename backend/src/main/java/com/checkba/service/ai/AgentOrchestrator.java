@@ -680,6 +680,10 @@ public class AgentOrchestrator {
         // 前端以"先见新名"判定新后端并丢弃旧名去重；一个发布周期后摘旧名，见 docs/AI_ARCHITECTURE.md Phase 3）
         handler.setOnEditorStream(token -> {
             if (editorBridgeService.isStreamingMode(conversationId)) {
+                // 记一笔「确实送出过正文」（dev-board#465）：模型把正文包进 <artifact>/<process>
+                // 等标签时 AgentStreamHandler 会整段吞掉，这里只剩标签之间漏出的空白——
+                // 收尾时据此判定「一个字都没进文档」并如实报错，而不是静默 finished
+                editorBridgeService.noteStreamContent(conversationId, token);
                 sseEmitterService.send(conversationId, "doc_stream_data", java.util.Map.of("content", token));
                 sseEmitterService.send(conversationId, "wps_stream_data", java.util.Map.of("content", token));
             }
@@ -697,11 +701,20 @@ public class AgentOrchestrator {
             // onComplete，在判定前清零会让它每次都从第 1 次重试起步，变成无限重试循环。
             // Unconditionally turn off streaming mode when generation ends
             boolean wasStreaming = editorBridgeService.isStreamingMode(conversationId);
+            // 读要在 setStreamingMode(false) 之前：关闭流式不清这个标记，但顺序摆错了容易被后来人改坏
+            boolean streamWrote = editorBridgeService.hasStreamedContent(conversationId);
             editorBridgeService.setStreamingMode(conversationId, false);
             // 通知前端流式写入结束：消费端冲掉缓冲后命令 worker 收尾
             //（写掉未换行的尾行/未闭合的尾表并复位 markdown 转换状态机）
+            // wrote=false 表示这一轮一个字的正文都没送出去（dev-board#465），前端据此
+            // 把「正在向文档流式写入内容…」换成明确的失败提示，而不是永远停在占位符上
             if (wasStreaming) {
-                sseEmitterService.send(conversationId, "doc_stream_end", java.util.Map.of("status", "finished"));
+                if (!streamWrote) {
+                    log.warn("Streaming round for {} produced no document text (model likely wrapped the body "
+                            + "in a hidden protocol tag or never emitted it)", conversationId);
+                }
+                sseEmitterService.send(conversationId, "doc_stream_end",
+                        java.util.Map.of("status", "finished", "wrote", streamWrote));
             }
 
             // 检查是否被取消
@@ -1402,10 +1415,12 @@ public class AgentOrchestrator {
         sseEmitterService.send(conversationId, "error", ssePayload);
         agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
         boolean wasStreamingOnError = editorBridgeService.isStreamingMode(conversationId);
+        boolean streamWroteOnError = editorBridgeService.hasStreamedContent(conversationId);
         editorBridgeService.setStreamingMode(conversationId, false);
         // 出错也要让 worker 收尾（否则 markdown 状态机残留半行/半张表），须在 close 之前发
         if (wasStreamingOnError) {
-            sseEmitterService.send(conversationId, "doc_stream_end", java.util.Map.of("status", "error"));
+            sseEmitterService.send(conversationId, "doc_stream_end",
+                    java.util.Map.of("status", "error", "wrote", streamWroteOnError));
         }
         // 保存已生成的部分内容，避免"当时看到了回复、历史里却没有"
         StringBuilder sb = activeStreamContent.get(conversationId);

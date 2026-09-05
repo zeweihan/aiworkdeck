@@ -249,9 +249,22 @@ public class EditorBridgeService {
         currentConversationId.remove();
     }
 
+    /**
+     * 本轮流式写入到底有没有往文档里送出过正文（dev-board#465）。
+     *
+     * <p>「AI 说写好了、文档一片空白、全程无报错」有一半出在这里：模型把正文包进
+     * {@code <artifact>}/{@code <process>} 之类协议标签（AgentStreamHandler 的
+     * HIDDEN_CONTENT_TAGS 会整段吞掉），或者压根没输出文档正文，doc_stream_data 就只剩
+     * 标签之间漏出来的空白——前端照样点亮「正在向文档流式写入内容…」，收尾照样报 finished。
+     * 这个标记让编排器在流结束时能判定「一个字都没送出去」，把它当失败讲出来。
+     */
+    private final ConcurrentHashMap<String, Boolean> streamWroteContent = new ConcurrentHashMap<>();
+
     public void setStreamingMode(String conversationId, boolean enabled) {
         if (enabled) {
             streamingModes.put(conversationId, true);
+            // 开启流式即重置本轮的「送出过正文」标记
+            streamWroteContent.remove(conversationId);
         } else {
             streamingModes.remove(conversationId);
         }
@@ -259,6 +272,17 @@ public class EditorBridgeService {
 
     public boolean isStreamingMode(String conversationId) {
         return streamingModes.getOrDefault(conversationId, false);
+    }
+
+    /** 记一笔「这个 token 里有非空白正文」；空白/空串不算（标签之间漏出来的换行不能算写过）。 */
+    public void noteStreamContent(String conversationId, String token) {
+        if (conversationId == null || token == null || token.isBlank()) return;
+        streamWroteContent.put(conversationId, true);
+    }
+
+    /** 本轮流式写入是否送出过非空白正文。 */
+    public boolean hasStreamedContent(String conversationId) {
+        return streamWroteContent.getOrDefault(conversationId, false);
     }
 
     /**

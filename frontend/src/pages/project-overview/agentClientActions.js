@@ -5,6 +5,11 @@ import { sendEditorResult, getFileDetail } from '@/services/api.js'
 import { createSerialQueue } from '@/utils/asyncSerialize.js'
 import { DOC_MUTATED_EVENT, DOC_MUTATED_DEBOUNCE_MS, isDocMutatingAction } from '@/utils/docEvents.js'
 
+// 落字被挡住（编辑器未就绪/目标不匹配）时的重试节奏：300ms 一次、最多 100 次（约 30 秒）。
+// 有上限是为了不把定时器无限期挂在页面上；上限用尽后缓冲仍然留着，流结束时还会再试一次。
+const DOC_STREAM_RETRY_MS = 300
+const DOC_STREAM_MAX_RETRIES = 100
+
 // CRITICAL（审计 dev-board#74）：流式缓冲与它究竟该写进哪个文档必须绑在一起才能判断
 // "现在还能不能落字"。syncLibreExecutor（librePool.js）会把 libreOfficeExecutor 重指到
 // "当前活动文件"——生成期间用户切一次 tab，flush 就会把 AI 写的内容悄悄插进一份无关文档。
@@ -84,9 +89,16 @@ export const agentClientActionMethods = {
         else if (action.action === 'doc_stream_data' || action.action === 'wps_stream_data') {
             this.handleDocStreamData(action.content || '')
         }
-        // 后端流式写入结束：冲掉本地缓冲后让 worker 收尾（写掉尾行/尾表并复位状态机）
+        // 后端流式写入结束：冲掉本地缓冲后让 worker 收尾（写掉尾行/尾表并复位状态机）。
+        // 失败原因经 action.report 回传给 useAgentStream 摆进对话（dev-board#465）——
+        // 这条链路中间隔着 ChatInterface 的 emit('client-action')，emit 恒返回 undefined，
+        // 所以不能只靠返回值往回传；返回值仍保留，供直接接线的调用方（含测试）使用。
         else if (action.action === 'doc_stream_end') {
-            this.handleDocStreamEnd()
+            const done = this.handleDocStreamEnd(action.payload)
+            if (typeof action.report === 'function') {
+                done.then(action.report).catch(e => action.report((e && e.message) || String(e)))
+            }
+            return done
         }
     },
 
@@ -102,18 +114,46 @@ export const agentClientActionMethods = {
             }, 150)
         }
     },
-    async flushDocStreamBuffer() {
-        if (!this._docStreamBuffer || this._docStreamBusy) return
-        if (!this.libreOfficeActive || !this.libreOfficeExecutor) return
-        // CRITICAL：落字前核对这份 executor 现在服务的是不是流式会话自己打开的那个
-        // 文件——不一致说明用户切走了/换文档了，缓冲原样保留（不丢数据，等切回来
-        // 或被下一次 open_sync 的 reset 清掉），如实报告，绝不写进错的文档。
+    /**
+     * 此刻能不能往文档里落字：返回 null = 能，否则返回一句人话的原因。
+     *
+     * 两种不能落的情形都<b>不是</b>「丢掉这段内容」的理由（dev-board#465）：编辑器还在 boot、
+     * 或用户把标签切走了，缓冲都该原样留着等下一次重试。CRITICAL（dev-board#74）：目标核对
+     * 一步不许省——executor 指针会被 syncLibreExecutor 重指到当前活动文件，对不上就把 AI
+     * 写的内容插进了一份无关文档。
+     */
+    docStreamBlockReason() {
+        if (!this.libreOfficeActive || !this.libreOfficeExecutor) return this._docStreamText('docStreamReasonEditorNotReady', '文档编辑器尚未就绪')
         const currentFileId = this.resolveLibreExecutorFileId(this.libreOfficeExecutor)
         if (!shouldFlushDocStream(this._docStreamTargetFileId, currentFileId)) {
-            console.error('[ProjectOverview] doc stream target mismatch, refusing to write into unrelated document:',
-                { targetFileId: this._docStreamTargetFileId, currentFileId })
+            return this._docStreamText('docStreamReasonWrongTarget', '编辑器当前打开的不是本次写入的目标文档')
+        }
+        return null
+    },
+    async flushDocStreamBuffer() {
+        if (!this._docStreamBuffer || this._docStreamBusy) return
+        const blocked = this.docStreamBlockReason()
+        if (blocked) {
+            // 缓冲原样保留 + 重排一次重试。此前这里是静默 return 且<b>不</b>重排定时器，
+            // 缓冲就烂在内存里：用户拿到一份空白文档，对话停在「正在向文档流式写入内容…」，
+            // 前后端谁都不知道出了事（dev-board#465）。
+            this._docStreamBlockedReason = blocked
+            this._docStreamRetries = (this._docStreamRetries || 0) + 1
+            if (this._docStreamRetries <= DOC_STREAM_MAX_RETRIES) {
+                if (!this._docStreamTimer) {
+                    this._docStreamTimer = setTimeout(() => {
+                        this._docStreamTimer = null
+                        this.flushDocStreamBuffer()
+                    }, DOC_STREAM_RETRY_MS)
+                }
+            } else {
+                console.error('[ProjectOverview] doc stream still blocked after retries:',
+                    { reason: blocked, targetFileId: this._docStreamTargetFileId })
+            }
             return
         }
+        this._docStreamBlockedReason = null
+        this._docStreamRetries = 0
         this._docStreamBusy = true
         const text = this._docStreamBuffer
         this._docStreamBuffer = ''
@@ -122,8 +162,18 @@ export const agentClientActionMethods = {
             //（楷体_GB2312/Arial、段后 18 磅、首行缩进 2 字符、表格 Grid 1.5 磅等）
             // __agent：流式落字是 AI 写的，修订要署名 AI WorkDeck——与 handleEditorCommand
             // 同一标记；漏了它，这一路的修订全记在用户名下（dev-board#367）。
-            await this.libreOfficeExecutor.executeCommand('stream_insert', { text, __agent: true })
+            const result = await this.libreOfficeExecutor.executeCommand('stream_insert', { text, __agent: true })
+            // worker 的失败一律 resolve（libreofficeExecutorClient 的 entry.resolve(d.result)），
+            // 不看返回值 = 永远不知道落字失败（dev-board#465）。口径与 handleEditorCommand 的
+            // successFlag 一致：只有显式 success === false 才算失败。
+            if (result && result.success === false) {
+                this._docStreamFailReason = result.error || result.message || this._docStreamText('docStreamReasonInsertFailed', 'stream_insert 失败')
+                console.error('[ProjectOverview] doc stream insert failed:', this._docStreamFailReason)
+            } else {
+                this._docStreamWroteAny = true
+            }
         } catch (e) {
+            this._docStreamFailReason = (e && e.message) || String(e)
             console.error('[ProjectOverview] doc stream insert error:', e)
         } finally {
             this._docStreamBusy = false
@@ -138,16 +188,24 @@ export const agentClientActionMethods = {
 
     // 流式结束：等在飞的 flush 落地、补冲残余缓冲，再让 worker stream_flush 收尾
     //（写掉未换行的尾行、未闭合的尾表，并复位 markdown 状态机）。
-    async handleDocStreamEnd() {
+    // 返回值：null = 内容确实写进文档了；否则是一句失败原因，由 useAgentStream 摆到对话里
+    //（dev-board#465：写入失败必须有人看得见，不能停在「正在向文档流式写入内容…」）。
+    async handleDocStreamEnd(payload) {
         if (this._docStreamTimer) { clearTimeout(this._docStreamTimer); this._docStreamTimer = null }
         for (let i = 0; i < 100 && this._docStreamBusy; i++) {
             await new Promise(resolve => setTimeout(resolve, 50))
         }
+        // 还有缓冲没落地就再等一等目标编辑器（首次 boot 慢、或用户刚切走标签），最多 10 秒。
+        // 等不到也不装作没事：下面 docStreamFailureReason 会把原因讲出来。
+        for (let i = 0; i < 40 && this._docStreamBuffer && this.docStreamBlockReason(); i++) {
+            await new Promise(resolve => setTimeout(resolve, 250))
+        }
+        this._docStreamRetries = 0
         await this.flushDocStreamBuffer()
         for (let i = 0; i < 100 && this._docStreamBusy; i++) {
             await new Promise(resolve => setTimeout(resolve, 50))
         }
-        if (this.libreOfficeActive && this.libreOfficeExecutor) {
+        if (!this.docStreamBlockReason()) {
             try {
                 // 收尾会把未换行的尾行/尾表真正写进文档，同样是 AI 的笔迹
                 await this.libreOfficeExecutor.executeCommand('stream_flush', { __agent: true })
@@ -157,6 +215,14 @@ export const agentClientActionMethods = {
         }
         // 整篇起草走的正是这一路：落完最后一笔要告诉编辑器刷新审阅面板（dev-board#460）
         this.notifyDocMutated()
+        const reason = this.docStreamFailureReason(payload)
+        if (this._docStreamTimer) { clearTimeout(this._docStreamTimer); this._docStreamTimer = null }
+        // 复位，下一轮流式重新计（缓冲本身留着：open_sync 第 5 步才是它的硬复位点）
+        this._docStreamFailReason = null
+        this._docStreamBlockedReason = null
+        this._docStreamWroteAny = false
+        this._docStreamRetries = 0
+        return reason
     },
 
     // AI 写完一笔之后告诉编辑器（dev-board#460）。面板的计数原本只挂在引擎广播的
@@ -174,6 +240,25 @@ export const agentClientActionMethods = {
                 ? this.resolveLibreExecutorFileId(this.libreOfficeExecutor) : null
             try { uni.$emit(DOC_MUTATED_EVENT, { fileId }) } catch (e) { /* ignore */ }
         }, DOC_MUTATED_DEBOUNCE_MS)
+    },
+
+    /**
+     * 这一轮流式写入到底成没成（dev-board#465）。三种失败各有各的话术，都要能落到对话里：
+     * worker 报错 / 缓冲没能落地 / 后端压根没送出正文（模型把正文包进了协议标签，
+     * 或干脆没写——AgentStreamHandler 的 HIDDEN_CONTENT_TAGS 会整段吞掉）。
+     */
+    // 失败原因要进对话气泡，得走 locale（EN 版不能露中文）；测试壳没有 $t 时退回中文
+    _docStreamText(key, fallback) {
+        const t = typeof this.$t === 'function' ? this.$t('agentStream.' + key) : null
+        return t && t !== 'agentStream.' + key ? t : fallback
+    },
+
+    docStreamFailureReason(payload) {
+        if (this._docStreamFailReason) return this._docStreamFailReason
+        if (this._docStreamBuffer) return this._docStreamBlockedReason || this._docStreamText('docStreamReasonBlocked', '内容没能写进文档')
+        if (payload && payload.wrote === false) return this._docStreamText('docStreamReasonNoBody', '模型没有向文档输出任何正文')
+        if (!this._docStreamWroteAny) return this._docStreamText('docStreamReasonNothingReceived', '文档没有收到任何内容')
+        return null
     },
 
     /**
@@ -242,6 +327,11 @@ export const agentClientActionMethods = {
             this._docStreamBuffer = ''
             if (this._docStreamTimer) { clearTimeout(this._docStreamTimer); this._docStreamTimer = null }
             this._docStreamBusy = false
+            // 上一轮的失败/重试计数一并清掉，否则会污染这一轮的成败判定（dev-board#465）
+            this._docStreamFailReason = null
+            this._docStreamBlockedReason = null
+            this._docStreamWroteAny = false
+            this._docStreamRetries = 0
             // 这条流式会话正式绑定到这份文件——flushDocStreamBuffer 落字前必须核对
             // executor 此刻服务的还是不是它，见文件头 shouldFlushDocStream。
             this._docStreamTargetFileId = file.id

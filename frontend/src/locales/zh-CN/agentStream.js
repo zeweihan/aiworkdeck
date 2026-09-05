@@ -26,6 +26,14 @@ export default {
   subtaskEnded: '子任务结束',
   // 文档流式写入占位
   docStreamingPlaceholder: '*（正在向文档流式写入内容…）*',
+  // 流式写入失败：宁可把失败摆出来，也不能停在上面那句「正在写入」（dev-board#465）
+  docStreamFailedNotice: '> **内容没能写进文档**：{reason}。文件已经建好但可能是空的，请打开确认；需要的话让我重写一次。',
+  docStreamReasonEditorNotReady: '文档编辑器尚未就绪',
+  docStreamReasonWrongTarget: '编辑器当前打开的不是本次写入的目标文档',
+  docStreamReasonInsertFailed: 'stream_insert 失败',
+  docStreamReasonBlocked: '内容没能写进文档',
+  docStreamReasonNoBody: '模型没有向文档输出任何正文',
+  docStreamReasonNothingReceived: '文档没有收到任何内容',
   // 过程卡兜底标题（ProcessCard.vue 按此串识别系统卡，勿改措辞）
   systemOperation: '系统操作',
   // artifact 兜底文件名

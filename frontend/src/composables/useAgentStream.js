@@ -936,9 +936,42 @@ export function useAgentStream() {
                 console.error('Failed to handle ' + evt, e)
             }
         } else if (evt === 'doc_stream_end') {
-            // 流式写入结束信号：让消费端冲缓冲并命令 worker 收尾（写尾行/建尾表/复位）
+            // 流式写入结束信号：让消费端冲缓冲并命令 worker 收尾（写尾行/建尾表/复位）。
+            // 消费端返回失败原因时必须摆到对话里——写入静默丢失（空白文档 + 气泡永远停在
+            // 「正在向文档流式写入内容…」+ 没有任何报错）正是 dev-board#465 的症状。
+            // payload.wrote === false 是后端侧的同一件事：这一轮一个字的正文都没送出去。
+            let streamEndPayload = {}
+            try { streamEndPayload = JSON.parse(dataStr) || {} } catch (e) { streamEndPayload = {} }
+            const streamBubble = currentAssistantBubble.value
+            let docStreamFailureShown = false
+            const surfaceDocStreamFailure = (reason) => {
+                if (!reason || !streamBubble || docStreamFailureShown) return
+                docStreamFailureShown = true
+                const notice = t('agentStream.docStreamFailedNotice', { reason: String(reason) })
+                // 占位符是"正在写入"的谎言，直接换掉；其余情况追加一行
+                if (streamBubble.content === t('agentStream.docStreamingPlaceholder')) {
+                    streamBubble.content = notice
+                } else {
+                    streamBubble.content = (streamBubble.content || '') + '\n\n' + notice
+                }
+                // 不清掉这个标记，后面的正文/提示会被 appendText 继续吞掉（见 bubble.isEditorStreaming）
+                streamBubble.isEditorStreaming = false
+            }
             if (clientActionHandler.value) {
-                clientActionHandler.value({ action: 'doc_stream_end' })
+                // report 回调而不是返回值：这条链路中间隔着 ChatInterface 的
+                // emit('client-action')，emit 恒返回 undefined，返回值传不回来
+                const ret = clientActionHandler.value({
+                    action: 'doc_stream_end', payload: streamEndPayload, report: surfaceDocStreamFailure,
+                })
+                if (ret && typeof ret.then === 'function') {
+                    ret.then(surfaceDocStreamFailure).catch(e => {
+                        console.error('[SSE] doc_stream_end handler failed', e)
+                        surfaceDocStreamFailure((e && e.message) || String(e))
+                    })
+                } else if (streamEndPayload.wrote === false) {
+                    // 消费端根本没接这条（旧实现）时，后端这一路仍然能报出"没写进去"
+                    surfaceDocStreamFailure(t('agentStream.docStreamReasonNoBody'))
+                }
             }
         } else if (evt === 'cancelled') {
             // 处理取消事件

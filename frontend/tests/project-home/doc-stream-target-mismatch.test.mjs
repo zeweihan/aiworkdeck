@@ -68,26 +68,35 @@ test('目标文件从未建立（理论上不会发生，流式协议恒先 open
 
 // ---- 2. 接线核实：flush 前确实调用了这个判定，且比对失败时不执行 stream_insert ----
 
-test('flushDocStreamBuffer 落字前必须调用 shouldFlushDocStream 比对，不一致时 return（不执行 stream_insert）', () => {
+// dev-board#465 起，这道比对从 flushDocStreamBuffer 里抽成了 docStreamBlockReason()
+//（同一处判定还要服务"被挡住时保留缓冲并重试"），本用例随之跟到新落点，判定本身一字未改。
+test('落字前必须调用 shouldFlushDocStream 比对，不一致时不执行 stream_insert', () => {
   const src = stripComments(read('pages/project-overview/agentClientActions.js'))
+  const guardStart = src.indexOf('docStreamBlockReason()')
+  assert.ok(guardStart > 0, '找不到 docStreamBlockReason')
+  const guardBody = src.slice(guardStart, guardStart + 800)
+
+  assert.match(guardBody, /resolveLibreExecutorFileId\(this\.libreOfficeExecutor\)/,
+    '必须反查 executor 此刻实际绑定的 fileId')
+  assert.match(guardBody, /shouldFlushDocStream\(this\._docStreamTargetFileId,\s*currentFileId\)/,
+    '必须用目标 fileId 与当前 fileId 调用判定函数')
+
   const start = src.indexOf('async flushDocStreamBuffer()')
   assert.ok(start > 0, '找不到 flushDocStreamBuffer')
   const end = src.indexOf('async handleDocStreamEnd', start)
-  const body = src.slice(start, end > 0 ? end : start + 2000)
+  const body = src.slice(start, end > 0 ? end : start + 3000)
 
-  assert.match(body, /resolveLibreExecutorFileId\(this\.libreOfficeExecutor\)/,
-    '必须反查 executor 此刻实际绑定的 fileId')
-  assert.match(body, /shouldFlushDocStream\(this\._docStreamTargetFileId,\s*currentFileId\)/,
-    '必须用目标 fileId 与当前 fileId 调用判定函数')
-
-  const guardIdx = body.indexOf('shouldFlushDocStream(')
+  const guardIdx = body.indexOf('this.docStreamBlockReason()')
   const insertIdx = body.indexOf("executeCommand('stream_insert'")
   assert.ok(guardIdx > 0 && insertIdx > guardIdx,
     '比对必须排在真正调用 stream_insert 之前，不能查完还是无条件写')
 
-  // 不一致分支必须 return，不能落到 busy=true / stream_insert
-  const mismatchBranch = body.slice(body.indexOf('if (!shouldFlushDocStream'), insertIdx)
-  assert.match(mismatchBranch, /return/, '比对不一致的分支必须提前 return')
+  // 被挡住的分支必须 return，不能落到 busy=true / stream_insert；
+  // 缓冲要留着重试（#465），但绝不许写进错的文档（#74）
+  const blockedBranch = body.slice(body.indexOf('if (blocked)'), insertIdx)
+  assert.match(blockedBranch, /return/, '被挡住的分支必须提前 return')
+  assert.ok(!blockedBranch.includes("executeCommand('stream_insert'"),
+    '被挡住的分支里不许出现落字')
 })
 
 test('doc_open_file_sync 建立流式会话时必须把目标 fileId 记下来，供 flush 前比对', () => {
