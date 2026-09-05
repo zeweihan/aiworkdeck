@@ -532,6 +532,27 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 - **awd-\* 类名约定**（King IDE 品牌清零后的通用弹窗/按钮样式，PR#171）：awd-dialog/-mask/-header/-title/-body/-footer、awd-btn/-primary/-secondary/-danger、awd-field/awd-input。**没有集中定义**——在 project-overview.vue（~:10180-10300）、ChatInterface.vue（~:2869 起）、FileTree.vue 各自 scoped 重复定义；改样式要多处同步。
 - 外壳布局类：.header-tools:6904、.rail-btn:7009、.sidebar-left:7403/7905、.workbench:7455、.bottom-panel:7283/7510、.compact-mode:7478、.is-resizing:7927。
 - **面板拖拽的跟手守卫是三件一套，删一件拖拽就会退化**（2026-08-20）：① `.is-resizing` 禁 transition；② `.is-resizing :deep(iframe)/:deep(webview)` 关 pointer-events——光标滑进嵌入文档父窗口就收不到 mousemove，拖拽会冻住；③ 桌面端浏览器 BrowserView 是原生层 CSS 管不到，靠 `desktopOverlayActive` 里那条 `resizing.active` 在拖拽期间隐藏。另外 `startResize/stopResize`（tabDragSplit.js）会锁/还原 body 的 cursor 与 user-select。编辑器窗格 `.editor-pane`/`.pane-content` 已拉平成方角（圆角卡片残留会在标签栏下沿与分栏缝露出底色弧口），别再给它们加 border-radius。
+- **面板拖拽的上限按「面板所在容器的实测宽」算，不按整窗宽算**（2026-09-05，dev-board#459）：
+  原来两支都是 `Math.floor(window.innerWidth * 0.75)`，可 `.side-panel-ai` 的父容器
+  `.workbench-main` 只拿到「整窗 − rail − 左栏」。`.side-panel{flex-shrink:0}` 让面板不肯
+  让宽、`.workbench{overflow:hidden}` 又把溢出裁掉，于是编辑区先塌成 0、面板右半边（输入框
+  与发送键）被裁在窗口右缘之外——**看上去就像 Electron 窗口被撑出了屏幕**，把窗口放大
+  正好能让它复原，所以很容易被报成窗口 bug。公式外置成零依赖纯函数
+  `pages/project-overview/panelWidthLimits.js`（`rightPanelMaxWidth` / `leftPanelMaxWidth` /
+  `EDITOR_MIN_WIDTH = 200`，同 `flushDirtyEditors.js` 的先例：本目录其余模块都 import 了
+  `@/` 别名，node 直接测不动）。容器几何在 `startResize` 里从 `element.parentElement` 实测
+  一次并缓存到 `this.resizing`（右侧量 `.workbench-main`；左栏量 `.main-layout` 再减去实测
+  的 `.left-rail` 与 `.side-panel-ai` 宽）——**不要改回硬编码 rail=50 一类常量**，边框、
+  紧凑模式与右侧 dock（#180）都会让常量漂。左右两支必须一起用新公式：只修右支的话，拖宽
+  左栏就能把同一个症状换个入口复现（接线用例钉着这一条）。**「遮挡就遮挡」的既有决策保留**：
+  只保证编辑区还剩 200px，不做窗口变窄时的回夹（`handleResponsiveResize` 一行未动）。
+  单测 `frontend/tests/project-home/panel-width-limits.test.mjs`（`npm run test:project-home`）。
+  同轮把桌面壳建窗尺寸夹进工作区（`desktop/main/main.js` 的 `createMainWindow`：
+  `Math.min(1400, screen.getPrimaryDisplay().workAreaSize.width)`，高度同理）——工作区窄于
+  1400x900 的屏上，裸常量会让窗口一出生就比屏幕大，而全仓没有任何 `mainWindow.setSize/
+  setBounds`，这是「窗口超出屏幕」唯一的代码成因。护栏 `desktop/tests/main-window-bounds.test.js`
+  （源码级断言，已挂进 `desktop/package.json` 的 test 脚本；main.js 一 require 就建窗拉服务，
+  只能照 `native-theme-light.test.js` 的口径测）。
 - **编辑器标签（`.tab-item`）在 project-overview.scss 里只有一份定义了**。此前有两份：
   靠前那份是 VS Code 式贴合标签，被靠后那份整个覆盖成死代码，实际生效的是一排
   10px 全圆角 + 四面描边 + `min-width:100px` 的「筛选 chip」，与下方编辑器完全断开。

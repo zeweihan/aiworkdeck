@@ -346,9 +346,13 @@ function createMainWindow() {
   // 渲染层 api.js 优先读它，取代原先写死的 9696。
   const backendPort = (services && services.ports && services.ports.backend)
     || Number(process.env.CHECKBA_BACKEND_PORT || (app.isPackaged ? 5269 : 9696))
+  // 出生尺寸夹在显示器工作区内（dev-board#459）：工作区窄于 1400x900 的屏上，
+  // 裸常量会让窗口一出生就比屏幕大，只能靠「窗口 → 缩放」救回来。
+  // workAreaSize 已经扣掉菜单栏/Dock，不要再自行减。
+  const workArea = screen.getPrimaryDisplay().workAreaSize
   mainWindow = new BrowserWindow({
-    width: 1400,
-    height: 900,
+    width: Math.min(1400, workArea.width),
+    height: Math.min(900, workArea.height),
     icon: path.join(__dirname, '../../frontend/src/static/icon.png'),
     // 无边框：窗口控件并进渲染层已有的 .project-header（42px），系统标题栏不再单占
     // 一条。设计见 docs/superpowers/specs/2026-08-16-desktop-chrome-and-command-menu.md。
