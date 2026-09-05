@@ -107,6 +107,24 @@ local-mode 下本机后端把每个请求都当本机用户，等于把本机管
 **截图**：入口 `checkbaDesktop.ocr.captureScreen`；desktop main.js 透明覆盖框选窗 ~:389-571（BrowserView 模式仅限其区域内框选 ~:426）、capturePage 抓取 ~:577/:585/:709、IPC：ocr-capture-screen/desktop/window/view + ocr-start-selection。**推荐链路是 ocr-capture-view（当前 BrowserView，免 macOS 录屏权限）**；无独立后端端点，产物统一走 OCR。
 
 **剪贴板**：`ClipboardPanel.vue`；desktop main.js 轮询监听 clipboardWatchTimer ~:117-232（指纹去重 ~:110，首 tick 只记指纹）、推送 `checkba:clipboard-copied`；后端 `controller/ClipboardController.java`（/api/clipboard：GET /、POST /text、POST /file、GET /{id}/file、DELETE /{id}）。
+  **采集链路的登录态红线（dev-board#455）**：**桌面免登（PR-A 去登录）后 `checkba_user`
+  这个本地存储恒空，任何面板都不能拿它当登录态判据**。`getCurrentUser()` 只是
+  `uni.getStorageSync('checkba_user')`，全前端只有登录页 `saveSession` 与设置页
+  `setSessionUser` 写它，桌面 launch → unlock → 工作台一次都不写。采集桥
+  `clipboardBridge.js` 的 `bindClipboardListener()` 开头曾是 `if (!user) return`，
+  于是整座桥（桌面 IPC 订阅 + H5 copy/paste/keydown 三路兜底）在第一行就关掉，
+  Cmd+C / pbcopy 一条都不入库；而后端在 local-mode 下无视 header 一律解析为本机用户
+  （`AuthController`），GET / 照常返回存量，症状伪装成「最新条目停在某一天」。
+  现在的闸是 `if (!isDesktopHost() && !getCurrentUser()) return`——浏览器态仍必须挡住，
+  否则未登录时每次复制都打一次 4010。**同一条闸也意味着桌面端入库失败不能直弹 toast**：
+  主进程是 1 秒轮询系统剪贴板、捕获的是机器级每一次复制，指向团队案件库服务器却没有
+  有效凭证时 401 在 `status !== 200` 处就被 reject，照直弹就是每按一次 Cmd+C 弹一个
+  toast——所以失败提示按 `window.__checkbaClipSaveFailNotified` 每会话只出一次。
+  **删除失败提示走 `host.app.confirm` 原生弹窗**（同收藏面板：toast 在 DOM 层、被原生
+  BrowserView 整个盖住），删除确认气泡也**不再 5 秒自动收起**——超时后用户点「确定」
+  点到的是卡片本身的 `@tap="copy(it.text)"`，表现正是「卡片仍在、什么也没发生」。
+  注意 `ProjectFavoritesPanel.vue` / `VariablePanel.vue` 的删除气泡仍是同款 5 秒自动收起，
+  是同一个坑的未修实例。回归用例 `frontend/tests/clipboard/`（`npm run test:clipboard`）。
   **免费额度（PR-C）**：未拥有 `clipboard.unlimited` 时 GET / 只返回「最近 20 条 且 3 天内」，两条同时生效取更严者。**实现是查询侧过滤，绝不删除记录**——超出的行留在库里，解锁后原样可见。GET / 返回体从裸数组改为 `{items, limited, hiddenCount, maxItems, retentionDays}`（`ClipboardListResult`），hiddenCount 只算「因额度看不见」的（= 总数 − min(3天内条数, 20)），不含被分页 limit 挡住的。常量在 `ClipboardService.FREE_MAX_ITEMS/FREE_RETENTION_DAYS`。**额度只在 local-mode（桌面单机版）执行**：`EntitlementService` 是按本机的（无 userId 维度），团队案件库服务器上权益恒为空集，照执行会把每个接入成员截到 20 条且永远无法解锁。
 
 **收藏夹**：`ProjectFavoritesPanel.vue`；网页选中收藏经 `checkba:webmark`（preload ~:26）→ project-overview 订阅入库（~:2003）；后端 `controller/WebFavoriteController.java`（/api/favorites/my、/api/projects/{id}/favorites、DELETE、image）。
@@ -290,6 +308,10 @@ FilePickerDialog :298 / EasyVoicePane :537 / DesensitizePane :543 / SearchPanel 
 - **给网页标签加保活池要分宿主**：Web 走组件池，桌面走 BrowserView detach；两边都开等于
   桌面端把多个 BrowserView 同时挂上窗口。
 - 剪贴板去重靠指纹+window 级状态，改动监听逻辑先读 PR#148/#151 教训。
+- **`checkba_user` 在桌面免登下恒空，不是登录态判据**：拿它当闸门会静默关掉整个功能，
+  而后端在 local-mode 无视 header 一律解析本机用户，读接口照常有数据，症状伪装成
+  「数据停在某一天」而不是「未登录」。剪贴板采集就这么断了半个月（dev-board#455），
+  详见上面剪贴板段的「采集链路的登录态红线」。
 - `checkba:fs-read-file` 有敏感路径拦截，别为新功能开任意路径读写。
 - Kokoro 大陆网络 401 = hf_xet 绕镜像问题，禁 xet 修（PR#142）。asr-models 的下载走同一条路，同样禁 xet。
 - **asr-service 不像 kokoro 那样把服务门在模型上**：kokoro 的 descriptor 有 `enabled`（没模型不起进程），asr-service **没有**。就绪探测必须能分开「服务没起」（重启应用）与「模型没下」（下 1.5GB），不起进程就只剩前一种结论，用户照提示重启一万次也不会有模型。
@@ -337,7 +359,10 @@ FilePickerDialog :298 / EasyVoicePane :537 / DesensitizePane :543 / SearchPanel 
   `browser-views.test.js` 钉住的就是上面那套记账：复用不重载、detach 不销毁、隐藏恢复只挂回前台、双开计数。
 - 后端相关单测：TtsServiceTest、FileControllerChunkedUploadTest、ProjectFileService*Test、
   **BrowserProxyControllerTest**（SSRF 例外名单默认关、注入脚本能解析、proxify 绝对地址 +
-  URL_CHANGED、JS 字面量转义、HTML 带 charset）等；剪贴板/收藏/搜索/OCR 暂无专属测试。
+  URL_CHANGED、JS 字面量转义、HTML 带 charset）等；收藏/搜索/OCR 暂无专属测试。
+- 剪贴板：`cd frontend && npm run test:clipboard`（`tests/clipboard/`，node:test）——采集桥的
+  登录态闸门（桌面免登下必须订阅、浏览器未登录仍不采集）、桌面失败提示每会话至多一次、
+  面板删除链路（DELETE → 重拉 → 列表不含该 id）、确认态不自动收起、失败走原生弹窗。
 - UI 链路：`cd frontend && npm run test:app-e2e`。其中 **J6.7 浏览器面板**覆盖 Web/H5 这条链路
   （harness 自起两页小站 → 开两个网页标签 → 页内点链接跳第二页 → 切走再切回来断言仍是同一个
   文档实例 + 地址正确）。跑它要给后端加

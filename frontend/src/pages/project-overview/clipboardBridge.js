@@ -7,14 +7,19 @@
 
 import { saveClipboardText, saveClipboardFile } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
-import { host } from '@/services/host.js'
+import { host, isDesktopHost } from '@/services/host.js'
 
 export const clipboardBridgeMethods = {
     bindClipboardListener() {
       // #ifdef H5
       if (this._clipboardBound) return
-      const user = getCurrentUser()
-      if (!user) return
+      // 登录态闸门只对纯浏览器态成立：桌面单机版免登后 checkba_user 这个本地存储
+      // 永远为空（project-overview.vue onLoad 里同一句注释写了两遍），拿它当判据
+      // 会把整座采集桥——桌面 IPC 订阅与下面的 H5 三路兜底——一起关掉，
+      // Cmd+C / pbcopy 一条都不入库（dev-board#455）。而后端在 local-mode 下无视
+      // header 一律解析为本机用户（AuthController），采集与列表用的是同一个身份，
+      // 前端再挡一道纯属多余。浏览器态仍必须挡住：没有会话时每次复制都会打一次 4010。
+      if (!isDesktopHost() && !getCurrentUser()) return
       this._clipboardBound = true
       // 统一的“写库 + 立即更新 UI”入口：避免 copy 事件多次触发导致重复入库
       // 去重状态挂 window 而非组件实例：本页经 navigateTo 反复进入时页面栈里会存在
@@ -126,7 +131,18 @@ export const clipboardBridgeMethods = {
           return saved
         } catch (saveErr) {
           console.error('记录剪贴板失败:', saveErr)
-          uni.showToast({ title: this.$t('workbenchOps.clipboardRecordFailed'), icon: 'none' })
+          // 桌面端每会话最多提示一次：主进程是 1 秒轮询系统剪贴板，捕获的是
+          // 机器级的每一次复制，后端一旦持续失败（如指向团队案件库服务器却没有
+          // 有效凭证，401 在 status !== 200 处就被 reject），照直弹就是每按一次
+          // Cmd+C 弹一个 toast。标志挂 window：页面栈里可能同时存在多个实例。
+          if (isDesktopHost()) {
+            if (typeof window !== 'undefined' && !window.__checkbaClipSaveFailNotified) {
+              window.__checkbaClipSaveFailNotified = true
+              uni.showToast({ title: this.$t('workbenchOps.clipboardRecordFailed'), icon: 'none' })
+            }
+          } else {
+            uni.showToast({ title: this.$t('workbenchOps.clipboardRecordFailed'), icon: 'none' })
+          }
           return null
         }
       }
