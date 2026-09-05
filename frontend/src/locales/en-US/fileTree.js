@@ -78,6 +78,8 @@ export default {
   resumeUploadTitle: 'Resume Upload',
   cancelUploadTitle: 'Cancel Upload',
   uploadingProgress: 'Uploading... ({done}/{total})',
+  uploadsInterrupted: '{count} upload(s) interrupted',
+  uploadsInterruptedHint: 'Open the list to retry or remove',
   etaAbout: 'about {time}',
   etaDone: 'done',
   // Document compare

@@ -78,6 +78,8 @@ export default {
   resumeUploadTitle: '继续上传',
   cancelUploadTitle: '取消上传',
   uploadingProgress: '正在上传... ({done}/{total})',
+  uploadsInterrupted: '{count} 个上传已中断',
+  uploadsInterruptedHint: '点开列表可重试或删除',
   etaAbout: '约 {time}',
   etaDone: '完成',
   // 文档对比
