@@ -702,6 +702,23 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
   页面路由埋点在 App.vue onLaunch 的 uni.addInterceptor（唯一收口，别在 50 处调用点逐个埋）；
   面板切换埋点在 panelSwitching.js 的 toggleLeftPane（区分 staging/收展/切换三分支）。
 - sed 子串替换改类名会误伤（king-*→awd-* 迁移教训，PR#171）。
+- **`parent_id` 的 `0` 与 `NULL` 在前后端不是一回事，归一只有服务层一个出处**
+  （dev-board#457）。前端 `utils/fileTreeBuild.js` 的 `normalizeParentId` 把
+  `null/undefined/0` 一律当「根」画；后端的同名查重却是
+  `(:parentId IS NULL AND pf.parentId IS NULL OR pf.parentId = :parentId)`——`0` 与 `NULL`
+  是两个不同的父节点，根下同名的那个不算冲突。Agent 的 `create_folder` 把「放根目录」
+  写成 `parentFolderId=0`（LLM 的惯用写法）就会落一批 `parent_id=0` 的孤儿行：
+  资源管理器顶部看着多出一个「空的」重复文件夹，刷新重启都在（孤儿那条的物理路径在
+  缺失的父节点处断链、正好落回根，目录确实存在，本地对账的删除同步就判它「还在」，
+  永不清理），而没能落到磁盘的那几个孤儿会在几十秒后被同一次对账静默软删除。
+  归一与校验现在只有 `ProjectFileService.resolveParentId` 一处（`createFolder` /
+  `createFile` / `move` 三个入口首行调用，`0`/`null` → 根，其余必须是本项目里一个活着的
+  文件夹）；`ProjectFileController.checkParentFolder` 只是 HTTP 路径上更早的一道，
+  AI 工具、插件宿主、内部落盘服务都不经过它。**新写「读了 parentId 再自己查同级」的
+  代码，先过一遍 `resolveParentId`**（`LitigationVisualTools.createFolderTolerant`
+  就是这么栽的：不归一的话兜底查同级永远查空，本该复用同名文件夹变成硬报错）。
+  存量脏行由启动期对账 `service/maintenance/OrphanParentReconciler` 一次性修复
+  （归位 / 并进根下同名文件夹 / 去掉指向同一份字节的重复行，只动数据库不碰磁盘）。
 - **左栏面板要给 AI 面板发 prompt，一律走 `resolveChatInterface()`**（工作台 methods）。
   它做三件事：`showAiPanel` 为 false 时先走既有的 `toggleAiPanel()`（顺带刷 AI 上下文 +
   拉历史，不能绕过去直接改标志位）→ 有界轮询 ~3s（30×100ms）等 `$refs.chatInterface`

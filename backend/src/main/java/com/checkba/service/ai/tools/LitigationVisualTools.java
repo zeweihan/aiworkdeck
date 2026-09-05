@@ -444,6 +444,10 @@ public class LitigationVisualTools implements AgentToolComponent {
 
     /** 同名文件夹已存在时复用而不是报错——同一张图重出一版是常态。 */
     ProjectFile createFolderTolerant(Long projectId, Long parentId, String name) {
+        // 先按 createFolder 的口径归一父节点（模型常把「根目录」写成 0，见 dev-board#457）：
+        // 不归一的话，下面那次兜底查同级会拿 parentId=0 去查，永远查空，
+        // 于是「同名已存在」这条本该复用的路径变成硬失败「出图失败」。
+        parentId = projectFileService.resolveParentId(projectId, parentId);
         try {
             return projectFileService.createFolder(projectId, parentId, name, AGENT_USER_ID);
         } catch (IllegalArgumentException e) {
