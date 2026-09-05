@@ -174,10 +174,23 @@ export default {
   onlyYouInCaseFile: 'You’re currently the only person on this case file.',
   addColleagueLabel: 'Add a Colleague',
   colleagueUsernamePlaceholder: 'Enter your colleague’s case library account',
+  colleagueContactPlaceholder: 'Colleague’s phone number or email',
+  addColleagueByContactNote: 'Use the phone number or email your colleague signs in to AI WorkDeck with. If they have never signed in, ask them to do that once before you add them.',
   addAction: 'Add',
+  // Look up first, then add: one wrong digit puts a stranger on the case file.
+  lookupAction: 'Find',
+  lookingUp: 'Finding…',
+  lookupAnother: 'Find Someone Else',
+  confirmAddMember: 'Confirm and Add',
+  alreadyAMember: 'Already on This Case File',
+  alreadyInCaseFileAs: 'This person is already on the case file, currently as {role}.',
+  colleagueNotFound: 'No one found — check the phone number or email for typos.',
+  lookupFailed: 'Couldn’t look that person up. Try again in a moment.',
   inviteInstructionsLabel: 'Instructions to Send Your Colleague',
   copyThisText: 'Copy This Text',
   inviteFooterNote: 'Your colleague also needs an account for this case library; once added, they can follow these steps on their own computer to pull the case file.',
+  addToOfficialLibraryTitle: 'Add to Team Case Library',
+  addToOfficialLibraryNote: 'Your AI WorkDeck account is all you need - no server address to type. Once it is in, add your colleagues and everyone pulls their own copy to work on.',
   libraryIntro: 'A Team Case Library is a server run by your own firm, where case files are stored so colleagues can each pull a copy to work on locally. You can keep working without one — the case file will just stay on this computer only.',
   disconnectLibrary: 'Disconnect from This Case Library',
   libraryUrlPlaceholder: 'Case library address, e.g. https://team.example.com',
@@ -207,6 +220,9 @@ export default {
   // Invite text: the full message sent to a colleague, extracted as one key.
   // Two keys (with/without an inviter name) so English can put a space after {inviter}.
   inviteText: '{inviter} invites you to work on {project} together on AI WorkDeck.\n\nHere’s how to join:\n1. Open the project list and click “Pull a Case File from the Team Case Library”;\n2. First time? Connect to the library first: click “Connect One”, enter the address {url}, and sign in with your account;\n3. Go back to “Pull a Case File from the Team Case Library”, select {project}, and click “Pull to This Device”.\n\nAfter that, we each work on our own copy and click “Submit Draft” to merge changes together.',
+  // Official library: the colleague never types a server address - their own AI WorkDeck account is enough.
+  inviteTextOfficial: '{inviter} invites you to work on {project} together on AI WorkDeck.\n\nHere’s how to join:\n1. Sign in to the desktop app with your own AI WorkDeck account;\n2. Open the project list and click “Pull a Case File from the Team Case Library”;\n3. Select {project} and click “Pull to This Device”.\n\nAfter that, we each work on our own copy and click “Submit Draft” to merge changes together.',
+  inviteTextOfficialNoInviter: 'You’re invited to work on {project} together on AI WorkDeck.\n\nHere’s how to join:\n1. Sign in to the desktop app with your own AI WorkDeck account;\n2. Open the project list and click “Pull a Case File from the Team Case Library”;\n3. Select {project} and click “Pull to This Device”.\n\nAfter that, we each work on our own copy and click “Submit Draft” to merge changes together.',
   inviteTextNoInviter: 'You’re invited to work on {project} together on AI WorkDeck.\n\nHere’s how to join:\n1. Open the project list and click “Pull a Case File from the Team Case Library”;\n2. First time? Connect to the library first: click “Connect One”, enter the address {url}, and sign in with your account;\n3. Go back to “Pull a Case File from the Team Case Library”, select {project}, and click “Pull to This Device”.\n\nAfter that, we each work on our own copy and click “Submit Draft” to merge changes together.',
 
   // ---- InviteMemberDialog.vue ----

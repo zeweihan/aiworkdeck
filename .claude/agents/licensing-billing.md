@@ -67,6 +67,7 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
   权益缓存 + 平台 AI 密钥缓存 + 余额判定 + 用量基线四样一起清，disconnect 还要 `demotePlatformProvider()`。
   连接账户有**两个**入口（设置页 `AccountController.connect`、解锁页 `LicenseController.activate` 粘 `awdk_`），
   动作抄两份必然漏（见地雷 22）。新增第三条连接路径时接这里。
+- **`currentKeyOrNull()` 的消费方现在有三处，不再是「只有广场付费项下载」**（dev-board#439）：广场付费项下载（`Authorization: Bearer awdk_` 直发官网）、`MobileRelayClientService` 的手机中转桥接、`com.checkba.version.OfficialCloudService` 的官方团队案件库桥接。后两者形状完全相同——拿 Key POST `{base}/api/auth/awdk-login` 换一枚 awdt_ 长期设备令牌存在本机，用 `accountFingerprintOrNull()` 判「还是不是同一个账户」，换了人就重桥。新增第四条这类通道时照抄这个形状，别自己发明一套令牌缓存。
 - `AccountService.accountFingerprintOrNull()` — 账户指纹（Key 的 SHA-256 前 12 位）的**唯一定义**。
   机器级缓存都是账户级内容，换账号必须作废；指纹单向、可比对可进日志，不受「别把 Key 拿出去传」的限制。
 - 前端：`frontend/src/pages/admin/admin.vue` 的「账户与用量」分区（连接/断开、余额、AI 额度、最近用量、
@@ -136,10 +137,11 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - 前端 `frontend/src/utils/marketPricing.js` — 价格展示与状态判定的唯一出口。
 
 **server 模式加固（插件云后端，2026-08-06）**
-- `backend/src/main/java/com/checkba/service/AuthAbuseGuard.java` — 注册闸（`security.registration-mode: open|closed`，默认 open）+ 登录失败锁定（IP+用户名 5 次失败锁 10 分钟）+ 注册按 IP 限频（10/小时）。进程内内存计数，**多实例部署必须前置 nginx limit_req**；local-mode 全部旁路。
+- `backend/src/main/java/com/checkba/service/AuthAbuseGuard.java` — 注册闸（`security.registration-mode: open|closed`，默认 open）+ 登录失败锁定（IP+用户名 5 次失败锁 10 分钟）+ 注册按 IP 限频（10/小时）+ **成员查询限频**（dev-board#444：按发起的项目管理员，10 分钟 30 次；`GET /api/projects/{id}/members/lookup` 与 `POST .../members` **共用这一个计数**——两者是同一个「这个手机号注册过没有」的探测面，分开计等于把额度翻倍，交替调两个端点即可绕开）。进程内内存计数，**多实例部署必须前置 nginx limit_req**；local-mode 全部旁路。新增维度记得同步 `purgeIfOversized`（否则伪造维度能把内存撑爆）。
 - `backend/src/main/java/com/checkba/service/account/AwdkLoginService.java` — 官网账户 → server 会话桥。核心一段：awdk_ Key 调官网 `/api/account/me` 实时校验 → `account_binding` 映射（键是官网稳定 `accountId`，官网侧已实施并进了权威契约与 contract-check）→ 首登 `UserService.registerExternal` 建无密码用户（`awd_` 前缀）→ `DeviceTokenService.issue` 签发 awdt_ → **顺手为该用户取一把 per-user 平台 AI key**（`PlatformAiKeyService.tryProvision`，失败绝不拖垮桥接）。
   Key 有两种来源，桥接之后完全相同：**账户登录**（`loginWithPhone`/`loginWithPassword`，先调官网 `/api/auth/exchange-key` 换出 Key，用户看不见它；配套 `sendLoginCode`）与**手工粘贴**（`login(key)`，私有部署与团队服务器）。两者共用开关 `security.awdk-login-enabled`（默认 false）——同一条桥的两个入口，**刻意不拆成两个开关**，否则会出现「登录能用但桥是关的」这种自相矛盾的配置。
   端点全在 `AuthController`，全部匿名：`POST /api/auth/awdk-login`、`POST /api/auth/account-login`、`POST /api/auth/account-login/send-code`。
+  **`/awdk-login` 的回包是跨端契约**（Office 插件云后端与桌面端的官方案件库直连都吃它）：`{token, userId, username, displayName, tokenId}`，`displayName`/`tokenId` 是 dev-board#439 加的（`BridgeSession` 同步加了两个分量）——桌面端存下 `tokenId` 才撤得掉远端那枚长期设备令牌，否则「退出这个案件库」只做成本地断开、凭据留在服务器上继续有效。**`tokenId` 缺失时整个键不下发**，回落成 0 会让调用方存下一个不存在的令牌行 id。
   与官网的出站在 `AccountLoginExchange`（桌面 `AccountService` 与云端 `AwdkLoginService` 共用一份 error code 表——`invalid_code`/`invalid_credentials`/`sms_not_supported_on_site`/`phone_binding_required` 等是与官网仓约定的字面量，写两份必漂）。
   换 Key 请求随凭据带可选 `deviceName`（2026-08-19，官网 PR#77/桌面 PR#429）：桌面端上报「主机名 (Mac/Windows)」（`AccountService.deviceName()`，截 64 字符），云端桥固定「Office 插件 / Office Add-in（按 baseUrl 分站）」；官网存进 `api_keys.label`，账户页「已连接的设备」按它显示。字段可选，不带时行为不变。
   **云侧不能复用 `/api/account/login`**：那条开头就 `requireUser(sessionId)`，local-mode 会自动解析成本机用户所以桌面端没事，`local-mode=false` 下「登录前得先有会话」是死循环。
@@ -311,6 +313,7 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - `security.local-mode`（`application-desktop.yml:36` 为 true，默认 false = 团队服务器模式）。
 - `ai.account.base-url`（`application.yml:97-98`，默认 `https://www.aiworkdeck.com`；**强制 https**，回环 http 例外供本地联调）。
 - `security.license.dir`（默认 `${user.home}/.aiworkdeck`）——license/account/entitlements/platform-ai-key/storage-location 五个状态文件都落这里。
+- `cloud.collab.base-url`（`CLOUD_COLLAB_BASE_URL`，默认空）——团队案件库地址。留空时按 `ai.account.base-url` 所属站点派生官方案件库（大陆站 `https://case.aiworkdeck.com`，国际站不提供）；派生与校验的唯一出口是 `com.checkba.version.OfficialCloudEndpoint`，机制见 version-control 领域文档。
 - `security.registration-mode`（默认 open）与 `security.awdk-login-enabled`(默认 false)——两者都只影响 server 模式；官方托管的插件云后端应配 closed + true。
 - **官方托管实例已上线**（2026-08-07）：addin.aiworkdeck.com，北京 ECS 与官网共机；专用 profile
   `application-cloud.yml`（PG + pgvector、RemoteIpValve——不开的话反代后按 IP 的失败锁定退化成全站一把锁）；

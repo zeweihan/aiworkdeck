@@ -150,8 +150,10 @@ public class AccountService {
     /**
      * 已连接则返回账户 Key 明文，否则 null。
      *
-     * 仅供**需要自行向官网发带鉴权请求**的服务使用（当前只有 PR-D 的广场付费项下载：
-     * registry bundle/file 端点要求 {@code Authorization: Bearer awdk_}）。
+     * 仅供**需要自行向官网/官方服务发带鉴权请求**的服务使用。当前有三处：PR-D 的广场付费项
+     * 下载（registry bundle/file 端点要求 {@code Authorization: Bearer awdk_}）、
+     * {@code MobileRelayClientService} 的手机中转桥接、{@code OfficialCloudService} 的
+     * 官方团队案件库桥接（后两者都是 POST {base}/api/auth/awdk-login 换 awdt_ 设备令牌）。
      * 其余场景一律走本类的 fetchXxx 方法，不要把 Key 拿出去到处传；
      * 尤其**不得**回给前端——{@link #status()} 只暴露掩码。
      */

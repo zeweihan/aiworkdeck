@@ -2,6 +2,7 @@ package com.checkba.version;
 
 import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
+import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.checkba.model.entity.CloudConnection;
@@ -25,6 +26,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.locks.ReentrantLock;
@@ -258,6 +260,17 @@ public class CloudSyncService {
     public Map<String, Object> cloneFromCloud(long connectionId, long remoteProjectId, Long localUserId) {
         CloudConnection conn = ownedConnection(connectionId, localUserId);
 
+        // 换机器取回的查重：这份案卷本机已经有了就把既有的本机 id 还回去，不再造第二个
+        // ——两份各带一个 origin 绑定，律师会在两个项目里各改一半而谁也不知道另一半的存在。
+        var alreadyHere = remoteRepository.findByConnectionIdAndRemoteProjectId(
+                connectionId, String.valueOf(remoteProjectId));
+        if (alreadyHere.isPresent()) {
+            Map<String, Object> existing = new HashMap<>();
+            existing.put("localProjectId", alreadyHere.get().getProjectId());
+            existing.put("alreadyLocal", true);
+            return existing;
+        }
+
         JSONObject prep = JSONUtil.parseObj(httpPost(
                 conn.getServerUrl() + "/api/projects/" + remoteProjectId + "/version/prepare-remote",
                 "{}", conn.getDeviceToken()));
@@ -366,6 +379,9 @@ public class CloudSyncService {
             m.put("id", id);
             m.put("name", j.getStr("name"));
             m.put("projectType", j.getStr("projectType"));
+            // 「取一份案卷」的列表里显示我在这份案卷里是什么身份（ProjectCardDTO 现成字段）：
+            // 被邀请进来的人在取之前就该看得见自己是协作人还是只读。
+            m.put("myRole", j.getStr("myRole"));
             out.add(m);
         }
         if (skipped > 0) {
@@ -531,6 +547,35 @@ public class CloudSyncService {
                 .orElseThrow(() -> VersionException.userFacing(LangText.of("请先把这份案卷放进团队案件库", "Please add this case file to the Team Case Library first")));
     }
 
+    /**
+     * 把 hutool 的 JSON 结构翻译成纯 Java 结构，供两个成员代理端点的返回值用。
+     *
+     * <p>hutool 把 JSON null 解析成 {@link cn.hutool.json.JSONNull} 单例，而 Jackson
+     * 没有它的序列化器——原样当控制器返回值的话，只要上游某个字段是 null，整条响应
+     * 就会 500（{@code No serializer found for class cn.hutool.json.JSONNull}）。
+     * 而 {@code avatarUrl} 为 null 正是没绑官网/没传头像的默认状态，即绝大多数账号。
+     */
+    private static Object toPlain(Object v) {
+        if (JSONUtil.isNull(v)) {
+            return null;
+        }
+        if (v instanceof JSONObject o) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            for (String k : o.keySet()) {
+                m.put(k, toPlain(o.get(k)));
+            }
+            return m;
+        }
+        if (v instanceof JSONArray a) {
+            List<Object> out = new ArrayList<>(a.size());
+            for (Object item : a) {
+                out.add(toPlain(item));
+            }
+            return out;
+        }
+        return v;
+    }
+
     /** 透传服务端 {@code GET /api/projects/{rid}/members}——{id, userId, role, joinedAt, username, displayName, avatarUrl} 原样带回。 */
     public List<Map<String, Object>> proxyMembers(long projectId) {
         ProjectRemote remote = requireRemoteBinding(projectId);
@@ -544,10 +589,42 @@ public class CloudSyncService {
                     "Failed to load case members: " + resp.getStr("message", "please try again")));
         }
         List<Map<String, Object>> out = new ArrayList<>();
-        for (Object o : resp.getJSONArray("data")) {
-            out.add((JSONObject) o);
+        JSONArray data = resp.getJSONArray("data");
+        if (data != null) {
+            for (Object o : data) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> plain = (Map<String, Object>) toPlain(o);
+                if (plain != null) {
+                    out.add(plain);
+                }
+            }
         }
         return out;
+    }
+
+    /**
+     * 透传服务端查人端点（dev-board#444）：回 {@code {found, displayName, avatarUrl,
+     * maskedContact, alreadyMember, currentRole, message}}。
+     *
+     * <p>{@code found:false} 是**正常结果**（服务端 code 仍是 0），原样带回给界面显示，
+     * 不在这里翻译成异常——那会让「这个号还没人用过」弹成一个像故障的提示。
+     */
+    public Map<String, Object> proxyMemberLookup(long projectId, String identifier) {
+        ProjectRemote remote = requireRemoteBinding(projectId);
+        CloudConnection conn = connectionOf(remote);
+        String url = conn.getServerUrl() + "/api/projects/" + remote.getRemoteProjectId()
+                + "/members/lookup?identifier="
+                + java.net.URLEncoder.encode(identifier == null ? "" : identifier,
+                        java.nio.charset.StandardCharsets.UTF_8);
+        JSONObject resp = JSONUtil.parseObj(httpGet(url, conn.getDeviceToken()));
+        if (resp.getInt("code", 1) != 0) {
+            throw VersionException.userFacing(LangText.of(
+                    "没能找到这位同事：" + resp.getStr("message", "请重试"),
+                    "Couldn't look up that colleague: " + resp.getStr("message", "please try again")));
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) toPlain(resp.getJSONObject("data"));
+        return data == null ? Map.of("found", false) : data;
     }
 
     /** 透传服务端加成员端点，role 缺省 PARTICIPANT（由调用方决定，这里只透传）。 */

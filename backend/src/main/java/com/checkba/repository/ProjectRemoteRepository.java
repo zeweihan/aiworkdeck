@@ -8,5 +8,7 @@ import java.util.Optional;
 
 public interface ProjectRemoteRepository extends JpaRepository<ProjectRemote, Long> {
     Optional<ProjectRemote> findByProjectId(Long projectId);
+    /** 换机器取回的查重键：这个案件库里的这份案卷，本机是不是已经有了。 */
+    Optional<ProjectRemote> findByConnectionIdAndRemoteProjectId(Long connectionId, String remoteProjectId);
     List<ProjectRemote> findByConnectionId(Long connectionId);
 }

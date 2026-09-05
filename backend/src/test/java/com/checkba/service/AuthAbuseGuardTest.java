@@ -147,4 +147,38 @@ class AuthAbuseGuardTest {
         advance(Duration.ofHours(1).plusMillis(1));
         assertDoesNotThrow(() -> guard.checkRegistrationRate("1.2.3.4"));
     }
+
+    // ==================== 成员查询限频（dev-board#444） ====================
+
+    /**
+     * lookup 与 addMember 是同一个探测面（「这个手机号注册过没有」），共用一个计数：
+     * 分开计就等于把额度翻倍，攻击者交替调两个端点即可。
+     */
+    @Test
+    @DisplayName("同一管理员查人超限被拒，窗口过后恢复；lookup 与 addMember 共用计数")
+    void memberLookupRateLimitPerRequester() {
+        AuthAbuseGuard guard = serverGuard("open");
+        for (int i = 0; i < 30; i++) {
+            assertDoesNotThrow(() -> guard.checkMemberLookupRate(77L));
+            guard.recordMemberLookup(77L);
+        }
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> guard.checkMemberLookupRate(77L));
+        assertNotMistakenForLogout(e.getMessage());
+        // 别的管理员不受影响
+        assertDoesNotThrow(() -> guard.checkMemberLookupRate(88L));
+
+        advance(Duration.ofMinutes(10).plusMillis(1));
+        assertDoesNotThrow(() -> guard.checkMemberLookupRate(77L));
+    }
+
+    @Test
+    @DisplayName("local-mode：查人不限频（单机产品没有探测面）")
+    void localModeBypassesMemberLookupRate() {
+        AuthAbuseGuard guard = new AuthAbuseGuard(true, "open", now::get);
+        for (int i = 0; i < 100; i++) {
+            guard.recordMemberLookup(77L);
+        }
+        assertDoesNotThrow(() -> guard.checkMemberLookupRate(77L));
+    }
 }

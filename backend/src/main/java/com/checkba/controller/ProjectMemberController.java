@@ -2,6 +2,7 @@ package com.checkba.controller;
 
 import com.checkba.model.entity.ProjectMember;
 import com.checkba.model.entity.User;
+import com.checkba.service.AuthAbuseGuard;
 import com.checkba.service.LocalIdentityService;
 import com.checkba.service.ProjectMemberService;
 import com.checkba.service.ClientInvitationService;
@@ -21,6 +22,7 @@ public class ProjectMemberController {
 
     private final ProjectMemberService projectMemberService;
     private final ClientInvitationService clientInvitationService;
+    private final AuthAbuseGuard authAbuseGuard;
 
     @GetMapping("/{projectId}/members")
     public Map<String, Object> getMembers(
@@ -78,6 +80,49 @@ public class ProjectMemberController {
         return result;
     }
 
+    /**
+     * 先查人再确认加入（dev-board#444）：回一张只带展示名 + 头像 + 打码联系方式的卡片。
+     *
+     * <p>查不到**不是错误**（{@code code=0} + {@code found:false} + 一句话），
+     * 界面就地显示那句话即可，不该弹一个像是出了故障的提示。
+     *
+     * <p>限频与加人共用一个计数（{@link AuthAbuseGuard#checkMemberLookupRate}）：
+     * 两个端点是同一个「这个手机号注册过没有」的探测面，分开计等于把额度翻倍。
+     */
+    @GetMapping("/{projectId}/members/lookup")
+    public Map<String, Object> lookupMember(
+            @PathVariable Long projectId,
+            @RequestParam(value = "identifier", required = false) String identifier,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (userId == null) {
+            throw new IllegalArgumentException("未登录");
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        try {
+            authAbuseGuard.checkMemberLookupRate(userId);
+            authAbuseGuard.recordMemberLookup(userId);
+            ProjectMemberService.MemberLookup lookup =
+                    projectMemberService.lookupMember(projectId, identifier, userId);
+            Map<String, Object> data = new HashMap<>();
+            data.put("found", lookup.found());
+            data.put("displayName", lookup.displayName());
+            data.put("avatarUrl", lookup.avatarUrl());
+            data.put("maskedContact", lookup.maskedContact());
+            data.put("alreadyMember", lookup.alreadyMember());
+            data.put("currentRole", lookup.currentRole());
+            data.put("message", lookup.message());
+            result.put("code", 0);
+            result.put("data", data);
+        } catch (IllegalArgumentException e) {
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+        }
+        return result;
+    }
+
     // X-Session-Id 一律 required=false（同 ActivityLogController 注释）：local-mode
     // 免登请求不带 header，required 会在进 controller 前被 Spring 500 掉。
     @PostMapping("/{projectId}/members")
@@ -92,6 +137,9 @@ public class ProjectMemberController {
         }
 
         try {
+            // 与 lookup 共用同一个计数：只挂在 lookup 上的话，交替调两个端点就能绕开限频
+            authAbuseGuard.checkMemberLookupRate(userId);
+            authAbuseGuard.recordMemberLookup(userId);
             projectMemberService.addMember(projectId, request.getUsername(), request.getRole(), userId);
             Map<String, Object> result = new HashMap<>();
             result.put("code", 0);

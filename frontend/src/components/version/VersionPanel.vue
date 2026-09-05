@@ -103,7 +103,7 @@
 <script>
 import {
   getVersionStatus, enableVersionControl, disableVersionControl, listDrafts,
-  getCloudStatus, checkCloud, listCloudConnections,
+  getCloudStatus, checkCloud, listCloudConnections, getOfficialCloud,
 } from '@/services/api.js'
 import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
 import WorkSessionBar from './WorkSessionBar.vue'
@@ -243,7 +243,16 @@ export default {
       try {
         const res = await listCloudConnections()
         const list = (res && res.data && res.data.connections) || []
-        this.hasConnection = list.length > 0
+        // 官方案件库一键即连（本机已连 AI WorkDeck 账户就够了），所以「设不设得出
+        // 共享入口」的判据不只是"已经有连接"——本站提供官方案件库时同样算有。
+        let officialAvailable = false
+        try {
+          const off = await getOfficialCloud()
+          officialAvailable = !!(off && off.data && off.data.available)
+        } catch (e) {
+          console.warn('[Version] 读取官方案件库状态失败', e)
+        }
+        this.hasConnection = list.length > 0 || officialAvailable
       } catch (e) {
         console.warn('[Version] 读取云端连接失败', e)
         this.hasConnection = false

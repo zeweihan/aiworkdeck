@@ -27,7 +27,11 @@
           <view v-if="!projects.length" class="cloud-accept-hint">{{ $t('version.noSharedProjects') }}</view>
           <view v-else class="cloud-project-list">
             <view v-for="p in projects" :key="p.id" class="cloud-project-row">
-              <text class="cloud-project-name">{{ p.name }}</text>
+              <view class="cloud-project-info">
+                <text class="cloud-project-name">{{ p.name }}</text>
+                <!-- 被邀请进来的人在取之前就该看得见自己在这份案卷里是什么身份 -->
+                <text v-if="p.myRole" class="cloud-project-role">{{ roleLabel(p.myRole) }}</text>
+              </view>
               <view
                 class="awd-btn awd-btn-secondary"
                 :class="{ 'awd-btn-disabled': busy }"
@@ -45,7 +49,11 @@
 </template>
 
 <script>
-import { listCloudConnections, listRemoteProjects, acceptCloudProject } from '@/services/api.js'
+import {
+  listCloudConnections, listRemoteProjects, acceptCloudProject,
+  getOfficialCloud, connectOfficialCloud,
+} from '@/services/api.js'
+import { roleLabel } from '@/config/memberRoles.js'
 
 export default {
   name: 'CloudAcceptDialog',
@@ -74,9 +82,18 @@ export default {
       this.noConnection = false
       this.projects = []
       try {
-        const res = await listCloudConnections()
-        const conns = (res && res.data && res.data.connections) || []
-        this.connections = conns
+        let conns = await this.fetchConnections()
+        // 一条连接都没有、但本站有官方案件库：用本机的 AI WorkDeck 账户当场连上再列。
+        // 这个弹窗的全部用途就是「取一份案卷」，先弹一个「去连一个」再让人回来点第二次
+        // 是白走一趟——连的还是他自己的账号，不是什么新授权。
+        if (!conns.length && await this.officialAvailable()) {
+          try {
+            await connectOfficialCloud()
+            conns = await this.fetchConnections()
+          } catch (e) {
+            uni.showToast({ title: (e && e.message) || this.$t('version.connectFailed'), icon: 'none' })
+          }
+        }
         if (!conns.length) { this.noConnection = true; return }
         this.connectionId = conns[0].id
         await this.loadProjects()
@@ -84,6 +101,21 @@ export default {
         uni.showToast({ title: (e && e.message) || this.$t('version.loadRemoteProjectsFailed'), icon: 'none' })
       } finally {
         this.loading = false
+      }
+    },
+    // Options API 模板拿不到裸导入函数，包一层 method 才能在模板里当 roleLabel(...) 调用
+    roleLabel,
+    async fetchConnections() {
+      const res = await listCloudConnections()
+      this.connections = (res && res.data && res.data.connections) || []
+      return this.connections
+    },
+    async officialAvailable() {
+      try {
+        const res = await getOfficialCloud()
+        return !!(res && res.data && res.data.available)
+      } catch (e) {
+        return false
       }
     },
     async loadProjects() {
@@ -167,5 +199,7 @@ export default {
   display: flex; align-items: center; justify-content: space-between;
   padding: 16rpx 0; border-bottom: 1px solid var(--awd-border-subtle);
 }
+.cloud-project-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.cloud-project-role { font-size: 12px; color: var(--awd-text-3); }
 .cloud-project-name { font-size: 26rpx; color: var(--awd-text); word-break: break-all; }
 </style>

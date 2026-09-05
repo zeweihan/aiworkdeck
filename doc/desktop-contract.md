@@ -10,6 +10,24 @@
 
 ## 已落地条目（留档，便于回溯当初的判断）
 
+### `GET /api/avatar/{accountId}` 公开头像（2026-09-05 核对，dev-board#444）
+
+「按手机号邀请同事」的确认卡片要显示对方的头像，好让律师在加人之前看清自己加的是谁
+（号码打错一位就把陌生人加进了案卷）。案件库服务器手上只有 `account_binding.external_account_id`
+（也就是官网的稳定 `accountId`），所以头像地址是本仓拼出来的：
+`{ai.account.base-url}/api/avatar/{accountId}`，由**浏览器直接去官网取**，不经服务端代理。
+
+对官网侧的要求，只有三条：
+
+- 匿名可访问（这个地址会出现在桌面端的 `<image src>` 里，不带任何凭据）；
+- 没设过头像时返回 404 或任意非图片响应即可——前端 `@error` 会降级成首字母方块，
+  **不需要**官网准备一张默认头像；
+- 只暴露头像本身，不得在响应头或响应体里带姓名、手机号、邮箱等任何其他账户信息。
+
+**已核对官网仓（aiworkdeckweb `app/api/avatar/[userId]/route.ts`）**：匿名 GET，路径参数就是 users.json 的
+uuid 主键（= `accountId`），文件恒为 `data/avatars/<id>.webp`，无头像 404，带 `?v=<avatarUpdatedAt>` 时才挂
+immutable 缓存。三条要求均已满足，无需官网改动。改动面收敛在 `ProjectMemberService.avatarUrlFor` 一处。
+
 ### `GET /api/account/me` 的稳定 `accountId`（2026-08-06 提出，官网侧已实施）
 
 官网已返回 `accountId`（`users.json` 的 uuid 主键），并已进入官网仓 `doc/desktop-contract.md`

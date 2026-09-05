@@ -300,10 +300,17 @@ public class AuthController {
             var session = awdkLoginService.login(body == null ? null : body.get("key"));
             authAbuseGuard.recordLoginSuccess(ip, AWDK_BRIDGE_RATE_KEY);
             result.put("code", 0);
-            result.put("data", Map.of(
-                    "token", session.token(),
-                    "userId", session.userId(),
-                    "username", session.username()));
+            // tokenId 让调用方（桌面端官方案件库连接）在断开时撤得掉这枚长期凭据；
+            // displayName 供成员列表与合并署名。用 HashMap 而不是 Map.of：tokenId
+            // 缺失时要**整个不下发**，回落成 0 会让调用方存下一个不存在的令牌行 id。
+            Map<String, Object> data = new HashMap<>();
+            data.put("token", session.token());
+            data.put("userId", session.userId());
+            data.put("username", session.username());
+            data.put("displayName",
+                    session.displayName() == null ? session.username() : session.displayName());
+            if (session.tokenId() != null) data.put("tokenId", session.tokenId());
+            result.put("data", data);
         } catch (com.checkba.service.account.AccountException e) {
             // 只有官网明确拒绝（Key 无效）才计失败；网络不可达不该消耗尝试次数
             if (e.getKind() == com.checkba.service.account.AccountException.Kind.UNAUTHORIZED) {
@@ -404,10 +411,17 @@ public class AuthController {
                             body == null ? null : body.get("password"));
             authAbuseGuard.recordLoginSuccess(ip, ACCOUNT_LOGIN_RATE_KEY);
             result.put("code", 0);
-            result.put("data", Map.of(
-                    "token", session.token(),
-                    "userId", session.userId(),
-                    "username", session.username()));
+            // tokenId 让调用方（桌面端官方案件库连接）在断开时撤得掉这枚长期凭据；
+            // displayName 供成员列表与合并署名。用 HashMap 而不是 Map.of：tokenId
+            // 缺失时要**整个不下发**，回落成 0 会让调用方存下一个不存在的令牌行 id。
+            Map<String, Object> data = new HashMap<>();
+            data.put("token", session.token());
+            data.put("userId", session.userId());
+            data.put("username", session.username());
+            data.put("displayName",
+                    session.displayName() == null ? session.username() : session.displayName());
+            if (session.tokenId() != null) data.put("tokenId", session.tokenId());
+            result.put("data", data);
         } catch (com.checkba.service.account.AccountException e) {
             // 只有官网明确拒绝凭据（验证码错/口令错）才计失败。网络不可达不该消耗尝试次数；
             // CONFLICT（补绑期已过）也不该——那个用户的凭据本来就是对的，锁他没有意义。

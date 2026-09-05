@@ -88,8 +88,15 @@ public class AwdkLoginService {
         this.platformAiKeyService = platformAiKeyService;
     }
 
-    /** 桥接结果：awdt_ 设备令牌 + 映射到的 server 用户。 */
-    public record BridgeSession(String token, Long userId, String username) {}
+    /**
+     * 桥接结果：awdt_ 设备令牌 + 映射到的 server 用户。
+     *
+     * <p>{@code tokenId} 是服务端设备令牌行的 id：调用方保存这条连接时一并存下来，
+     * 断开时才撤得掉远端那枚长期凭据（桌面端「退出这个案件库」走的正是这条路）。
+     * {@code displayName} 是这个账户在服务端的展示名，供成员列表与合并提交署名用。
+     */
+    public record BridgeSession(String token, Long userId, String username,
+                                 String displayName, Long tokenId) {}
 
     /**
      * @throws IllegalArgumentException 开关关闭（业务错误，非鉴权错误）
@@ -121,7 +128,8 @@ public class AwdkLoginService {
         platformAiKeyService.tryProvision(user.getId(), key);
         DeviceTokenService.IssuedToken issued =
                 deviceTokenService.issue(user.getId(), LangText.of("账户桥接", "Account bridging"));
-        return new BridgeSession(issued.plaintext(), user.getId(), user.getUsername());
+        return new BridgeSession(issued.plaintext(), user.getId(), user.getUsername(),
+                user.getDisplayName(), issued.id());
     }
 
     // ==================== 账户登录（手机号/邮箱直登，用户不必人肉搬运 Key） ====================
