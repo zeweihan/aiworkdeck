@@ -124,6 +124,28 @@ JSON 对不对，不取决于模型对像素多聪明——这是上游的核心
 **改 skill/工具时别把这两段话当文案删掉，它们是契约**，由
 `backend/src/test/java/com/checkba/service/ai/tools/LitigationVisualFlowTest.java` 钉住。
 
+**kickoff prompt 的两条形状约束**（`LitigationVisualPanelService.buildKickoffPrompt`，
+dev-board#456）：真机上点「股权结构」，模型读完材料在对话里给了一张 markdown 表格就收工，
+一个 `litigation_*` 都没调，追问才补出图。两个成因都在这段 prompt 的形状里：
+- **第一步必须落在工具上**。原来写的是「通读材料做抽取，在心里/回复里写出语义地图 JSON」——
+  按它自己的措辞，把抽取结果写进回复就算做完了第一步。现在改成
+  「用 extract_file_text / search_project_files 通读材料……不要把它写进回复；
+  材料摘要、来源对照表也不是本轮的交付物」，与时间轴分支的第 1 步同构。
+- **完成判据挂末位**。每次工具成功后编排器都在消息末位喊「任务完成就立刻输出 `<final>`」
+  （`AgentOrchestrator` 的 XML 兜底分支），而这段 prompt 原来的最后一句是 write_file 禁令，
+  「必须出图」埋在中间。现在两条分支的最后一段都是完成判据常量
+  （`COMPLETION_CRITERION_MAP` / `COMPLETION_CRITERION_TIMELINE`）。
+  **判据必须写成「两种合法结束方式」**：`litigation_checkpoint` 三问后停下等用户，
+  或 render 成功返回。写成「不出图不许结束」会把人工确认那一停也禁掉，逼出
+  「未经确认直接出草稿图」——草稿闸与红色授权制都挂在 checkpoint 上，那比少一张图更糟。
+  口径与 `LitigationVisualTools.CHECKPOINT_NEXT_STEPS` 第 1 条、prompt.md §3 一致。
+  由 `backend/src/test/java/com/checkba/service/LitigationKickoffPromptTest.java` 钉住
+  （连带钉住 write_file/read_file 禁令没被这轮改写顺手删掉）。
+  注意这仍是概率性的：`ContextAssemblerService` 会在用户消息后追加「当前已打开文档」提醒，
+  所以 prompt 的末位不等于整条用户消息的末位。确定性兜底仍然缺位——面板侧「本轮没出图」
+  的提示按钮做不了，因为 `sendExternalPrompt` 在 POST ack 就返回（真正的流走另一条 SSE），
+  面板拿不到「这一轮结束了、调了哪些工具」的信号。
+
 **会话级幂等**：`LitigationVisualTools.TURN_STATES`（conversationId → TurnState，LRU 封顶 200）。
 同一份地图重复调 checkpoint 不重跑脚本、返回同一份三问并计次提示；同一指纹
 （地图+图名+落点+模式+格式）重复调 render 直接回上次的交付说明、不重复出图。

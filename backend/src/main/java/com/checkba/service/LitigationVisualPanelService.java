@@ -345,6 +345,32 @@ public class LitigationVisualPanelService {
     }
 
     /**
+     * 末位完成判据（dev-board#456）。
+     *
+     * <p>真机上模型读完材料就在对话里给了一张 markdown 表格收工，一个 litigation_* 工具
+     * 都没调——每次工具成功后编排器都会在消息末位喊「任务完成就立刻输出 &lt;final&gt;」，
+     * 而这段 prompt 原来的最后一句是 write_file 禁令，「必须出图」埋在中间。仓内的经验是
+     * 约束要挂末位，所以把「本轮怎样才算结束」补在最后。
+     *
+     * <p><b>口径必须与人工确认那一停一致</b>：本功能的确认轮本来就是「三问发给用户后停下」，
+     * 写成「不出图不许结束」会把它一起禁掉，反而逼出「未经确认直接出草稿图」——那比少一张图
+     * 更糟（草稿闸与红色授权制都挂在 checkpoint 上）。所以这里给的是两种合法结束方式，
+     * 与 LitigationVisualTools.CHECKPOINT_NEXT_STEPS 第 1 条、skill prompt.md §3 同一口径。
+     */
+    private static final String COMPLETION_CRITERION_MAP =
+            "\n\n本轮只有两种正确的结束方式：一是调用 litigation_checkpoint 之后，"
+                    + "把它返回的三个确认问题原样发给我、停下等我回复；"
+                    + "二是我确认之后 litigation_render 成功返回，你再交付说明。"
+                    + "除此之外不要用总结、表格或 <final> 结束本轮。";
+
+    /** 时间轴大师那条管线的同款判据：中途的勾选清单同样是合法的停下点。 */
+    private static final String COMPLETION_CRITERION_TIMELINE =
+            "\n\n本轮只有两种正确的结束方式：一是把工具列出的勾选清单用 <question>+<option> "
+                    + "原样发给我、停下等我回复；"
+                    + "二是 litigation_timeline_render 成功返回，你再交付说明。"
+                    + "除此之外不要用总结、表格或 <final> 结束本轮。";
+
+    /**
      * 拼「开始出图」那句话。
      *
      * <p><b>触发词必须原样出现在正文里</b>——skill 注入靠 SkillRouter 在用户消息里
@@ -371,6 +397,7 @@ public class LitigationVisualPanelService {
             sb.append("\n3. 最后用 litigation_timeline_render 出图。");
             sb.append("\n中间产物（verdicts/parts/skeleton/items）一律经工具参数提交，"
                     + "不要用 write_file 存成项目文件。");
+            sb.append(COMPLETION_CRITERION_TIMELINE);
             return sb.toString();
         }
         // 工具链写成确定性的四步。这里不是啰嗦：真机上模型走过
@@ -378,7 +405,9 @@ public class LitigationVisualPanelService {
         // 也出现过确认完只更新地图、忘了调 litigation_render 就说"图好了"。
         // 语义地图本来就是两个工具的内联参数，用不着落文件。
         sb.append("\n\n请按这条工具链来，不要改顺序：");
-        sb.append("\n1. 通读材料做抽取，在心里/回复里写出语义地图 JSON。");
+        sb.append("\n1. 用 extract_file_text / search_project_files 通读材料做抽取，"
+                + "把语义地图 JSON 想清楚。它只作为下一步的工具参数存在，不要把它写进回复；"
+                + "材料摘要、来源对照表也不是本轮的交付物。");
         sb.append("\n2. 调 litigation_checkpoint（语义地图作参数直接传进去），");
         sb.append("把它返回的三个确认问题原样发给我，然后停下等我回复。");
         sb.append("\n3. 我回复后，把答复回填进同一份 JSON 的 checkpoint 字段，");
@@ -386,6 +415,7 @@ public class LitigationVisualPanelService {
         sb.append("\n4. 出图成功后再向我交付说明。");
         sb.append("\n\n语义地图全程作为工具参数内联传递：不要用 write_file 把它存成项目文件，");
         sb.append("也不要用 read_file 读回来。原文逐字保留，不要改动任何表述。");
+        sb.append(COMPLETION_CRITERION_MAP);
         return sb.toString();
     }
 
