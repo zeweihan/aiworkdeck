@@ -5,8 +5,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * 每日仓库维护。只做 GC（重打包 + 清理不可达对象），
- * 不做任何历史清理——spec 5.5。
+ * 每日仓库维护：先回收已经并进主线的工作分支（删的是引用不是历史，判据见
+ * {@link WorkSessionService#reclaimMergedWorkBranches}），再做 GC（重打包 +
+ * 清理不可达对象）。不做任何历史清理——spec 5.5。
  */
 @Component
 public class RepoMaintenanceJob {
@@ -30,6 +31,12 @@ public class RepoMaintenanceJob {
     public void runDaily() {
         projectRepository.findAll().forEach(p -> {
             if (p.getId() == null || !repoService.isInitialized(p.getId())) return;
+            try {
+                // 单独一个 try：分支回收整体失败也绝不能顺带把 GC 也跳掉。
+                workSessionService.reclaimMergedWorkBranches(p.getId());
+            } catch (Exception e) {
+                log.warn("回收已合并的工作分支失败: project={}", p.getId(), e);
+            }
             try {
                 // 走 WorkSessionService 的按项目锁，不直接调 repoService.gc——
                 // 线程池已从 1 提到 4，gc 不再是唯一的锁外仓库修改者，

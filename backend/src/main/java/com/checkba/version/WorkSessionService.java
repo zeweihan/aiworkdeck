@@ -13,9 +13,11 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.locks.ReentrantLock;
@@ -588,6 +590,71 @@ public class WorkSessionService {
                 return;
             }
             repoService.gc(projectId);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * 回收存量的、已经并进主线的工作分支（dev-board#443）。
+     *
+     * {@link #deleteMergedBranchQuietly} 让今后每次结束工作都顺手删掉自己那条分支，
+     * 但此前攒下的残留没人清——本机 project-228.git 实测残留 22 条 refs/heads/work/*，
+     * 全部已合并进 master，活跃项目每月还在增长十余条。每日维护顺手扫一遍。
+     *
+     * 三条判据同时成立才删，缺一不可：
+     * 1. 分支名是 {@code work/} 前缀——稿分支（{@code draft/}）是律师留着以后再决定的
+     *    平行方案，没有任何自动回收的语义；master 更不能碰。
+     * 2. 分支 tip 已经是 master 的祖先——保证删的是引用不是历史（地雷 #1）：这条分支
+     *    上的每一笔提交都仍从主线可达。
+     * 3. 库里按分支名反查到的工作段状态已经是 MERGED。只判前缀会误伤崩溃后没收尾的
+     *    ACTIVE 工作段——那条分支是律师这段改动的唯一容器；只判祖先会误伤「刚合并完、
+     *    状态还没落库」的那一瞬间。<b>查不到对应行一律不删</b>（宁可留着）。
+     *    只认 MERGED 不认 DISCARDED：丢弃工作/放弃一稿/空工作段收尾三条路径都是当场
+     *    删分支再落状态，DISCARDED 根本不会残留分支；而 DISCARDED 分支的提交本就
+     *    没打算并进主线，凭状态位去删它没有任何收益，风险却是真的。
+     *
+     * 与 {@link #gcLocked} 同样整段在按项目的可重入锁内，也同样在裁决窗口里整个跳过——
+     * 那期间仓库是律师还没做完选择的现场，每日维护晚跑一天毫无代价。
+     * 单条删除失败只记 WARN、继续下一条，不阻断后面的 GC。
+     *
+     * @return 这次真正删掉的分支条数
+     */
+    public int reclaimMergedWorkBranches(long projectId) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            if (awaitingAdoptResolution(projectId)) {
+                log.info("裁决进行中，跳过这次工作分支回收: project={}", projectId);
+                return 0;
+            }
+
+            // 同名分支在库里只要有一行不是 MERGED，就当它还活着，不删（宁可留着）。
+            Set<String> merged = new HashSet<>();
+            Set<String> alive = new HashSet<>();
+            for (WorkSession s : sessionRepository.findByProjectIdOrderByStartedAtDesc(projectId)) {
+                (s.getStatus() == WorkSession.Status.MERGED ? merged : alive)
+                        .add(s.getBranchName());
+            }
+
+            String main = repoService.mainBranch();
+            int removed = 0;
+            for (String branch : repoService.listBranches(projectId)) {
+                if (!branch.startsWith("work/")) continue;                       // 判据 1
+                if (!merged.contains(branch) || alive.contains(branch)) continue; // 判据 3
+                if (!repoService.isAncestor(projectId, branch, main)) continue;   // 判据 2
+                try {
+                    repoService.deleteBranch(projectId, branch, true);
+                    removed++;
+                } catch (Exception e) {
+                    log.warn("回收已合并的工作分支失败（不阻断）: project={}, branch={}",
+                            projectId, branch, e);
+                }
+            }
+            if (removed > 0) {
+                log.info("回收已合并的工作分支: project={}, 共 {} 条", projectId, removed);
+            }
+            return removed;
         } finally {
             lock.unlock();
         }
