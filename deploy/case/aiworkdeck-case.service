@@ -44,8 +44,8 @@ RestartSec=5
 #
 # MemoryHigh 先做回收压制，MemoryMax 才是硬杀。留这道台阶是为了让"案件库自己变慢"
 # 优先于"cgroup 直接 OOM 掉整个 unit"。
-MemoryHigh=1280M
-MemoryMax=1536M
+MemoryHigh=1536M
+MemoryMax=2048M
 CPUWeight=70
 # JGit 会同时开着多个 pack/idx 文件；仓库多了以后默认 1024 不够用
 LimitNOFILE=65535

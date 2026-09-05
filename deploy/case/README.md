@@ -160,12 +160,21 @@ journalctl -u aiworkdeck-case -f
 
 ```bash
 # DNS：case.aiworkdeck.com A -> 8.152.169.44，生效后
-certbot certonly --webroot -w /opt/aiworkdeck/case/acme -d case.aiworkdeck.com
+certbot certonly --webroot -w /opt/aiworkdeck/case/acme -d case.aiworkdeck.com \
+  --server https://acme-v02.api.letsencrypt.org/directory \
+  --account dc142203f2ccc978150941001d83e226   # 北京机 certbot 有两个账号，不指定会报 Please choose an account；
+                                               # --account 要完整 id 且必须同时给 --server，短 id dc14 会报 does not exist
 # 宝塔机上落 vhost 目录
 cp deploy/case/nginx-case.conf.example \
    /www/server/panel/vhost/nginx/case.aiworkdeck.com.conf
 nginx -t && nginx -s reload
 ```
+
+先只铺示例文件里的 80 端口块（`sed -n 1,28p`）签证书，证书落地后再铺完整文件——443 块引用的
+证书不存在时 `nginx -t` 直接失败，别把整份先放上去。
+
+2026-09-05 实录：DNS 记录经 Alidns API 加（`awd-dl-cert` 策略的 AK），证书到 2026-12-04；
+实例启动 15s，稳态 cgroup 内存约 750M（启动瞬间 1.27G 是 jar 页缓存计入 cgroup）。
 
 `limit_req_zone ... zone=awd_auth` 在装插件云后端时已经加过，**不要重复定义**
 （`nginx -t` 会报 duplicate）。本域续期完全在北京机本地闭环。
@@ -266,7 +275,7 @@ systemctl enable --now aiworkdeck-case
 | 项 | 共机（现在） | 专机 |
 |---|---|---|
 | `-Xmx` | 1024m | 4g |
-| `MemoryHigh` / `MemoryMax` | 1280M / 1536M | 去掉 MemoryHigh，MemoryMax 6g |
+| `MemoryHigh` / `MemoryMax` | 1536M / 2048M | 去掉 MemoryHigh，MemoryMax 6g |
 | `CPUWeight` | 70 | 去掉（不再需要给官网让路） |
 | `pack.windowMemory` | 32m | 256m |
 | `pack.threads` | 1 | 2–4 |
@@ -368,5 +377,5 @@ du -sh /data/aiworkdeck-case/store/repos              # 盘占用（长得最快
   awdk 桥接的连接方式，要么在案件库上另开口子。本目录只准备部署侧，
   这一条属于客户端改造，需要主会话确认由谁做、什么时候做——**在它落地之前，
   案件库对普通用户是连不上的**。
-- 8G 共机的内存余量是纸面推算（addin `MemoryMax=2560M` + case `1536M` + PG + MySQL +
+- 8G 共机的内存余量是纸面推算（addin `MemoryMax=2560M` + case `2048M` + PG + MySQL +
   Next.js），上线前需要在机器上 `free -m` / `systemd-cgtop` 实核一次。
