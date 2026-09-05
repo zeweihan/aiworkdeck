@@ -51,7 +51,7 @@ class GlobalExceptionHandlerAuthCodeTest {
     @DisplayName("VersionException.userFacing 含「请先」的业务文案不带 4010")
     void versionUserFacingMessageNever4010() {
         VersionController controller = new VersionController(null, null, null, null, null, null,
-                mock(com.checkba.service.telemetry.TelemetryService.class));
+                mock(com.checkba.service.telemetry.TelemetryService.class), null);
         Map<String, Object> body = controller.onVersionError(
                 VersionException.userFacing("请先结束当前工作段")).getBody();
         assertEquals(1, body.get("code"));

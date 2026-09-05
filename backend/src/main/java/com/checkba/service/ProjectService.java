@@ -44,6 +44,7 @@ public class ProjectService {
     private final com.checkba.version.ProjectRepoService projectRepoService;
     private final com.checkba.version.memory.MemoryRepoService memoryRepoService;
     private final com.checkba.repository.MemoryRemoteRepository memoryRemoteRepository;
+    private final org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     @jakarta.persistence.PersistenceContext
     private jakarta.persistence.EntityManager entityManager;
@@ -62,6 +63,12 @@ public class ProjectService {
             "ProjectMember", "ProjectFile", "ProjectVariable", "ProjectProfileField",
             "ProjectMemory", "ProjectInvitation", "ProjectRemote", "ProjectTask",
             "ProjectAiMessage", "EvidenceLink", "WorkSession");
+
+    /**
+     * 项目建好了（dev-board#438）。{@code VersionLifecycleService} 监听它自动开启版本记录——
+     * 事务提交之后再异步开，绝不占用建项目这次请求的线程。
+     */
+    public record ProjectCreatedEvent(long projectId, Long userId) {}
 
     @Transactional
     public Project createProject(ProjectCreateRequest request, Long userId) {
@@ -141,6 +148,7 @@ public class ProjectService {
             }
         }
 
+        eventPublisher.publishEvent(new ProjectCreatedEvent(savedProject.getId(), userId));
         return savedProject;
     }
 

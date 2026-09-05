@@ -97,3 +97,8 @@ feedback:
 # 优化者跑在维护者自己的机器上（deploy/optimizer/README.md），任何服务器实例都不开。
 optimizer:
   enabled: false
+
+version:
+  # 案件库自己永远不主动建仓：项目只经共享方 prepare-remote 建成等待首推的空仓（dev-board#438）。
+  # prepare-remote 侧本来就有 resetToReceiveReadyIfNeverUsed 兜底，这里是第二道保险。
+  auto-enable: false

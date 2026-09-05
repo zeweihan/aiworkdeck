@@ -93,6 +93,16 @@ public class WorkSessionService {
     /** 结束工作把工作段并回主线成功后发布，供 CloudSyncService（同包）监听触发自动上传。 */
     public record MainlineMergedEvent(long projectId) {}
 
+    /**
+     * 还没开版本记录的项目收到了第一个变更信号（dev-board#438）。由
+     * {@code VersionLifecycleService} 监听：判 opt-out、判大文件夹护栏、异步开启。
+     *
+     * <p>为什么用事件而不是直接注入那个服务：它要调 {@link #enableVersionRecording}，
+     * 反过来注入进来就是一圈构造器循环依赖。事件把方向捋直了——本服务只管发信号，
+     * 谁去开、开不开由那边裁决。
+     */
+    public record AutoEnableRequest(long projectId, Long userId, String userName) {}
+
     ReentrantLock repoLock(long projectId) {
         return repoLocks.computeIfAbsent(projectId, id -> new ReentrantLock());
     }
@@ -131,6 +141,110 @@ public class WorkSessionService {
             repoService.init(projectId, authorName, authorEmail);
         } finally {
             lock.unlock();
+        }
+    }
+
+    /** 发一个自动开启请求，绝不让它影响调用方（改动信号是主流程的旁路，见类注释）。 */
+    private void requestAutoEnable(long projectId, Long userId, String userName) {
+        try {
+            eventPublisher.publishEvent(new AutoEnableRequest(projectId, userId, userName));
+        } catch (Exception e) {
+            log.debug("发起自动开启版本记录失败（已忽略）: project={}", projectId, e);
+        }
+    }
+
+    /**
+     * 关闭版本记录并删除全部历史（dev-board#438）。默认开启之后必须有一条能拒绝它的路。
+     *
+     * <p>做四件事，一件不多：取消防抖/空闲定时器与内存待办、删掉本项目的
+     * work_session 行（进行中的工作段与稿一并作废）、删掉整个版本库目录、
+     * 删掉我们自己写进工作区的 {@code .awd/} 清单。
+     *
+     * <p><b>绝不动工作区里的用户文件</b>：不 checkout、不还原、不删除。律师此刻在
+     * 磁盘上看到的那一份就是他要留下的那一份——哪怕他正站在某一稿上。
+     *
+     * <p>裁决窗口（MERGING）期间拒绝：那时工作区是三选一的现场，删掉仓库等于把
+     * 「等你做选择」的两边一起抹掉，而律师只按了「关闭版本记录」。
+     */
+    public void disableVersionRecording(long projectId) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            if (repoService.isInitialized(projectId) && repoService.repositoryMerging(projectId)) {
+                throw VersionException.userFacing(LangText.of(
+                        "有文件正等你做选择，请先处理完再关闭",
+                        "Some files are waiting on your choice — please finish that first"));
+            }
+            cancelPending(projectId);
+            pendingIngestBase.remove(projectId);
+            autosaveFailureStreak.remove(projectId);
+            List<WorkSession> rows = sessionRepository.findByProjectIdOrderByStartedAtDesc(projectId);
+            if (!rows.isEmpty()) sessionRepository.deleteAll(rows);
+            repoService.deleteRepository(projectId);
+            deleteManifestDirQuietly(projectId);
+            log.info("已关闭版本记录并删除历史: project={}", projectId);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** 删掉工作区里的 .awd/（我们自己写的清单，不是律师的文件）。失败只记日志。 */
+    private void deleteManifestDirQuietly(long projectId) {
+        try {
+            Path awd = repoService.workTree(projectId).resolve(".awd");
+            if (!Files.isDirectory(awd)) return;
+            try (java.util.stream.Stream<Path> walk = Files.walk(awd)) {
+                walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                    try {
+                        Files.deleteIfExists(p);
+                    } catch (Exception e) {
+                        log.warn("删除文件树清单失败: {}", p, e);
+                    }
+                });
+            }
+        } catch (Exception e) {
+            log.warn("删除文件树清单目录失败: project={}", projectId, e);
+        }
+    }
+
+    /**
+     * 团队服务器侧 {@code prepare-remote} 专用：这个仓库「建出来就没真正用过」的话，
+     * 把它整个换成等待首推的空仓，返回 true；否则什么都不做，返回 false。
+     *
+     * <p>为什么需要它：自动开启（dev-board#438）会给刚在服务器上建出来的项目落一笔
+     * 空的「初始版本」，而共享方紧接着要带着完整历史首推——两段历史没有共同祖先，
+     * push 被整体拒绝，律师看到的是「没能放进团队案件库」。
+     *
+     * <p>「没真正用过」的判据：HEAD 上除了我们自己写的 {@code .awd/} 清单什么都没有，
+     * 且一条工作段/稿都没有。这种仓库里没有任何东西可丢，换掉之后的状态与
+     * 「从没开过版本记录」逐字相同（连工作区里的 {@code .awd/} 也一并清掉，
+     * 否则 {@link #dockDirtyMainlineForReceive} 会把它当脏区提交出一个根提交，
+     * 首推照样被拒）。判断失败一律按「用过」处理——宁可不动，也不能误删真有历史的仓库。
+     */
+    public boolean resetToReceiveReadyIfNeverUsed(long projectId) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            if (!repositoryNeverUsed(projectId)) return false;
+            repoService.deleteRepository(projectId);
+            deleteManifestDirQuietly(projectId);
+            repoService.initEmptyForReceive(projectId);
+            log.info("服务器上这个项目的版本库从没用过，已换成等待首推的空仓: project={}", projectId);
+            return true;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private boolean repositoryNeverUsed(long projectId) {
+        try {
+            if (!repoService.isInitialized(projectId)) return false;
+            if (!sessionRepository.findByProjectIdOrderByStartedAtDesc(projectId).isEmpty()) return false;
+            return repoService.listPaths(projectId, "HEAD").stream()
+                    .allMatch(path -> path.startsWith(".awd/"));
+        } catch (Exception e) {
+            log.warn("判断仓库是否从未使用过失败，按「用过」处理: project={}", projectId, e);
+            return false;
         }
     }
 
@@ -214,7 +328,14 @@ public class WorkSessionService {
      * 自动结束）。防抖自动存档仍然照排，稿上的改动也需要落盘存档。
      */
     public void onChangeSignal(long projectId, Long userId, String userName) {
-        if (!repoService.isInitialized(projectId)) return;
+        if (!repoService.isInitialized(projectId)) {
+            // 存量项目/还没开过版本记录：请求一次自动开启（dev-board#438）。
+            // 判定与开启都在监听方的异步线程上做（含遍历工作区估体积的护栏），
+            // 这里只发一个信号——改动信号这条路上绝不允许变慢，更不允许抛。
+            // 本次信号不追补：开启本身落的那笔「初始版本」就是此刻的状态。
+            requestAutoEnable(projectId, userId, userName);
+            return;
+        }
         // 采纳裁决期间连信号都不接：既不开段，也不排自动存档（见 awaitingAdoptResolution）。
         if (awaitingAdoptResolution(projectId)) return;
 
