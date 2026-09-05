@@ -77,6 +77,7 @@ import { getSessionId } from '@/utils/auth.js'
 import { ICONS } from '@/config/icons.js'
 import UnlockHint from '@/components/UnlockHint.vue'
 import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
+import { host } from '@/services/host.js'
 
 export default {
 
@@ -198,23 +199,20 @@ export default {
       uni.setClipboardData({ data: t })
       // #endif
     },
+    // 确认态刻意不自动收起：原先 5 秒后自己清空 confirmDeleteId，超时之后用户点
+    // 「确定」，点到的是卡片本身的 @tap="copy(it.text)"——表现正是「卡片仍在、
+    // 什么也没发生」（dev-board#455）。取消靠再点一次 ×、点「取消」，
+    // 或者点另一张卡片的 ×（confirmDeleteId 只认一个 id）。
     requestDelete(id) {
       if (this.confirmDeleteId === id) {
         this.confirmDeleteId = null
         return
       }
       this.confirmDeleteId = id
-      if (this._deleteTimer) clearTimeout(this._deleteTimer)
-      this._deleteTimer = setTimeout(() => {
-        if (this.confirmDeleteId === id) {
-          this.confirmDeleteId = null
-        }
-      }, 5000)
     },
-    
+
     cancelDelete() {
       this.confirmDeleteId = null
-      if (this._deleteTimer) clearTimeout(this._deleteTimer)
     },
 
     async confirmDelete(id) {
@@ -223,7 +221,13 @@ export default {
         await deleteClipboardItem(id)
         await this.refresh()
       } catch (e) {
-        uni.showToast({ title: this.$t('panels.cpDeleteFailed'), icon: 'none' })
+        // 失败提示走原生弹窗：工作台里开着浏览器标签时，toast 在 DOM 层、被原生
+        // BrowserView 整个盖住，删除失败等于毫无反馈（同 BrowserPane 收藏失败的修法）
+        if (host.app && host.app.confirm) {
+          host.app.confirm({ title: this.$t('panels.cpDeleteFailed'), content: (e && e.message) || '' }).catch(() => {})
+        } else {
+          uni.showToast({ title: (e && e.message) || this.$t('panels.cpDeleteFailed'), icon: 'none' })
+        }
       }
     },
     getImageUrl(it) {
