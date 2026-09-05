@@ -3,6 +3,7 @@
 // 经展开进组件 methods（纯搬移，Phase 2 外置），`this` 即 project-overview 页面实例。
 
 import { activityTracker } from '@/utils/activityTracker.js'
+import { rightPanelMaxWidth, leftPanelMaxWidth } from './panelWidthLimits.js'
 
 export const tabDragSplitMethods = {
     onTabDragStart(evt, file, fromPane) {
@@ -156,6 +157,24 @@ export const tabDragSplitMethods = {
          this.resizing.element = this.$refs.bottomPanel ? (this.$refs.bottomPanel.$el || this.$refs.bottomPanel) : null
       }
 
+      // 拖拽上限按面板真正所在的容器算（dev-board#459），几何在这里实测一次：
+      // 右侧面板的父容器是 .workbench-main（编辑区 + 面板），左栏的父容器是
+      // .main-layout（rail + 左栏 + workbench）。不写 rail 宽这类常量——边框、
+      // 紧凑模式、右侧 dock 都会让常量漂。
+      this.resizing.containerWidth = 0
+      this.resizing.railWidth = 0
+      this.resizing.otherPanelWidth = 0
+      const container = this.resizing.element ? this.resizing.element.parentElement : null
+      if (container) {
+        this.resizing.containerWidth = container.clientWidth || 0
+        if (target === 'left' && typeof container.querySelector === 'function') {
+          const rail = container.querySelector('.left-rail')
+          this.resizing.railWidth = rail ? rail.offsetWidth : 0
+          const aiPanel = container.querySelector('.side-panel-ai')
+          this.resizing.otherPanelWidth = aiPanel ? aiPanel.offsetWidth : 0
+        }
+      }
+
       if (evt && typeof evt.preventDefault === 'function') {
         evt.preventDefault()
       }
@@ -211,11 +230,17 @@ export const tabDragSplitMethods = {
         const vw = typeof window !== 'undefined' ? window.innerWidth : 1200
         const vh = typeof window !== 'undefined' ? window.innerHeight : 800
 
-        // Cursor 体验：拖动范围尽量大，不强行保证中间工作区可用（遮挡就遮挡）
+        // Cursor 体验：拖动范围尽量大，只给编辑区留最后一点可用宽（dev-board#459）。
+        // 上限按 startResize 实测到的容器宽算，不按整窗宽算——整窗里还有 rail、左栏
+        // 与另一侧面板，按 window.innerWidth 限宽会把面板推出容器右缘，被
+        // .workbench{overflow:hidden} 裁在窗口外面。量不到容器时退回整窗宽兜底。
+        // 「遮挡就遮挡」的既有取向保留：这里不做窗口变窄时的回夹。
+        const containerW = this.resizing.containerWidth || vw
         const leftMin = 160
-        const leftMax = Math.max(leftMin, Math.floor(vw * 0.75))
+        const leftMax = leftPanelMaxWidth(
+          containerW, this.resizing.railWidth, this.resizing.otherPanelWidth, leftMin)
         const rightMin = 240
-        const rightMax = Math.max(rightMin, Math.floor(vw * 0.75))
+        const rightMax = rightPanelMaxWidth(containerW, rightMin)
         const headerH = 56
         const tabsH = 40
         const bottomMin = 140
