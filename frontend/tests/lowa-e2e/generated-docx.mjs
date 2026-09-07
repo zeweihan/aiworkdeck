@@ -1,6 +1,7 @@
 // 实测清单 A7/B7/B13/C11：真引擎落字→导出 OOXML，不以 UNO setter 回声代替落盘结果。
 import assert from 'node:assert/strict'
 import JSZip from 'jszip'
+import { readFileSync } from 'node:fs'
 import { preflight, loadPuppeteer, startServer, launchBrowser, openEditor } from './_boot.mjs'
 
 preflight()
@@ -58,6 +59,26 @@ try {
       })
     })
   }
+
+  // fixtures/flexmark-table.md 由生产链 markdownOptions → addMissingStyles → render
+  // → applyProfile(houseDefault) 生成同名docx；不含用户原纪要。
+  // Java GeneratedDocxCompatibilityTest 同时守住引用样式定义，避免只测 worker 新建的表。
+  const expectedCells = [['事项', '负责方', '期限'], ...Array.from({ length: 5 }, (_, i) => [`任务${i + 1}`, `人员${i + 1}`, `期限${i + 1}`])]
+  assert.equal((await exec('load_document', { name: 'meeting.docx', bytes: Array.from(readFileSync(new URL('./fixtures/flexmark-table.docx', import.meta.url))) })).success, true)
+  assert.deepEqual((await exec('table_read', { tableIndex: 0 })).cells, expectedCells, '后端生成的18格文字在LOWA导入时不能落到表外')
+  const imported = await exported()
+  const structure = await page.evaluate(xml => {
+    const ns = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    const doc = new DOMParser().parseFromString(xml, 'application/xml')
+    const text = el => [...el.getElementsByTagNameNS(ns, 't')].map(t => t.textContent).join('')
+    return { cells: [...doc.getElementsByTagNameNS(ns, 'tc')].map(text),
+      paragraphs: [...doc.getElementsByTagNameNS(ns, 'body')[0].children].filter(el => el.localName === 'p').map(text) }
+  }, imported.document)
+  assert.deepEqual(structure.cells, expectedCells.flat(), 'LOWA保存后18格归属不变')
+  assert.ok(structure.paragraphs.some(text => text.includes('待办事项')), '表格标题仍在表外')
+  assert.ok(!structure.paragraphs.some(text => expectedCells.flat().includes(text)), '单元格内容不能被导出成表后散行')
+  grid(imported.document)
+  console.log('PASS 后端生成表格真实导入/导出：18格全部保留，标题在表外')
 
   await fresh()
   const rows = [['编号', '证据', '来源', '日期', '用途', '页码', '备注'], ...Array.from({ length: 16 }, (_, i) => [`${i + 1}`, '证据' + i, '案卷', '2026-09-07', '证明事实', '1', '待核'])]

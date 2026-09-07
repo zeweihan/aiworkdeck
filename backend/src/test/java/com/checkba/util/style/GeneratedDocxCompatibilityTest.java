@@ -19,6 +19,13 @@ class GeneratedDocxCompatibilityTest {
         byte[] bytes = DocxStyleHelperProfileTest.render(DocxStyleHelperProfileTest.MD, StyleProfiles.houseDefault());
         WordprocessingMLPackage saved = WordprocessingMLPackage.load(new ByteArrayInputStream(bytes));
         assertMode15(saved);
+        // LOWA 会把引用未定义 TableHeading/TableContents 的单元格段落拆到表外。
+        var styles = saved.getMainDocumentPart().getStyleDefinitionsPart().getJaxbElement().getStyle();
+        for (String id : java.util.List.of("TableHeading", "TableContents")) {
+            var style = styles.stream().filter(v -> id.equals(v.getStyleId())).findFirst().orElseThrow();
+            assertEquals("paragraph", style.getType());
+            assertEquals("Normal", style.getBasedOn().getVal());
+        }
         var table = saved.getMainDocumentPart().getContent().stream()
                 .map(org.docx4j.XmlUtils::unwrap).filter(org.docx4j.wml.Tbl.class::isInstance)
                 .map(org.docx4j.wml.Tbl.class::cast).findFirst().orElseThrow();

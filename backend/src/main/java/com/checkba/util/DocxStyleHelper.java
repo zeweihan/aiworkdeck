@@ -42,7 +42,7 @@ public class DocxStyleHelper {
     private static final Logger log = LoggerFactory.getLogger(DocxStyleHelper.class);
 
     /**
-     * Adds missing styles (BodyText, Quotations) to the WordprocessingMLPackage.
+     * Adds missing styles (BodyText, Quotations, TableHeading, TableContents) to the WordprocessingMLPackage.
      * This should be called after WordprocessingMLPackage.createPackage() and
      * before DocxRenderer.render().
      *
@@ -73,6 +73,10 @@ public class DocxStyleHelper {
                 styles.getStyle().add(createQuotationsStyle());
                 log.debug("Added Quotations style to document");
             }
+
+            // Flexmark 表格引用这两个段落样式；缺定义时 LOWA 会把单元格文字读到表外。
+            findOrCreateStyle(styles, "TableHeading");
+            findOrCreateStyle(styles, "TableContents");
 
             // Add ParagraphTextBody style if not present
             if (!hasStyle(styles, "ParagraphTextBody")) {
