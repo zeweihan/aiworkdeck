@@ -108,6 +108,13 @@ local-mode 下本机后端把每个请求都当本机用户，等于把本机管
   渲染层浮层（project-overview.vue `.ocr-overlay`，样式在 project-overview.scss）的底图是一张冻结帧截图，叠在上面的 `.ocr-selection` / 提示条**必须用半透明字面量**，不能引用 `--awd-*-soft` 这类主题令牌（浅色下是不透明色，PR#657 令牌化曾把选区变成一整块 #EFF6FF，框住的内容全没了，dev-board#474）；提示条贴底居中，别钉左上角压交通灯与项目名。契约测试 `npm run test:ocr-overlay`。
 
 **剪贴板**：`ClipboardPanel.vue`；desktop main.js 轮询监听 clipboardWatchTimer ~:117-232（指纹去重 ~:110，首 tick 只记指纹）、推送 `checkba:clipboard-copied`；后端 `controller/ClipboardController.java`（/api/clipboard：GET /、POST /text、POST /file、GET /{id}/file、DELETE /{id}）。
+  **重启后采集又停住（2026-09-07，dev-board#455）**：先区分「页面没订阅」与「主窗引用丢失」。
+  实机 0.35 已有 IPC 订阅但本会话无事件，既有窗口截图接口却报 `window not ready`：
+  macOS `activate` 可抢在异步启动链之前建窗，随后又建第二个；旧窗关闭回调无条件把
+  `mainWindow` 清空，仍可操作的另一个窗口便收不到复制事件，原生失败弹窗也无处显示。
+  `createMainWindow` 必须幂等、`closed` 必须校验自身身份，启动完成前的激活交给启动链建首窗。
+  回归 `desktop/tests/main-window-lifecycle.test.js` 执行真实建窗/监听函数，覆盖首 tick 不回灌、
+  复制目标、旧窗迟到关闭与 Dock 重开。不要把「没有新纪录」一律归咎于登录闸门。
   **采集链路的登录态红线（dev-board#455）**：**桌面免登（PR-A 去登录）后 `checkba_user`
   这个本地存储恒空，任何面板都不能拿它当登录态判据**。`getCurrentUser()` 只是
   `uni.getStorageSync('checkba_user')`，全前端只有登录页 `saveSession` 与设置页
