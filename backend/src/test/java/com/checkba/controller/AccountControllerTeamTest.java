@@ -90,16 +90,98 @@ class AccountControllerTeamTest {
     @Test
     @DisplayName("summary 的 range 只收 7/30/90，其余归一到 7——非法值不该打到官网")
     void summaryRangeIsNormalized() {
-        when(accountService.fetchTeamSummary(org.mockito.ArgumentMatchers.anyInt()))
-                .thenReturn(Map.of("range", 7));
+        when(accountService.fetchTeamSummary(org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyString())).thenReturn(Map.of("range", 7));
 
-        controller.teamSummary(30, null);
-        controller.teamSummary(999, null);
-        controller.teamSummary(null, null);
-        controller.teamSummary(-1, null);
+        controller.teamSummary(30, null, null);
+        controller.teamSummary(999, null, null);
+        controller.teamSummary(null, null, null);
+        controller.teamSummary(-1, null, null);
 
-        verify(accountService).fetchTeamSummary(30);
-        verify(accountService, org.mockito.Mockito.times(3)).fetchTeamSummary(7);
+        verify(accountService).fetchTeamSummary(30, "team");
+        verify(accountService, org.mockito.Mockito.times(3)).fetchTeamSummary(7, "team");
+    }
+
+    @Test
+    @DisplayName("summary 的 scope 只收 team/firm，其余归一到 team")
+    void summaryScopeIsNormalized() {
+        when(accountService.fetchTeamSummary(org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyString())).thenReturn(Map.of("range", 7));
+
+        controller.teamSummary(7, "firm", null);
+        controller.teamSummary(7, "FIRM", null);
+        controller.teamSummary(7, "everything", null);
+        controller.teamSummary(7, "", null);
+
+        verify(accountService).fetchTeamSummary(7, "firm");
+        verify(accountService, org.mockito.Mockito.times(3)).fetchTeamSummary(7, "team");
+    }
+
+    @Test
+    @DisplayName("scope 归一化不是鉴权：能不能看全所由官网判，桌面端照转不拦")
+    void firmScopeIsForwardedNotJudgedLocally() {
+        when(accountService.fetchTeamSummary(7, "firm")).thenReturn(Map.of("scope", "firm"));
+
+        // 本机这一层完全不知道调用者是不是总部管理者，也不该知道——
+        // 把角色判定抄一份到桌面端，等于给了「改本机一个值就看全所」的机会
+        Map<String, Object> envelope = controller.teamSummary(7, "firm", null);
+
+        assertEquals(0, envelope.get("code"));
+        verify(accountService).fetchTeamSummary(7, "firm");
+    }
+
+    // ==================== 层级与加入流程（设计 §10.3） ====================
+
+    @Test
+    @DisplayName("按邀请码加入：转发 code，并用官网回的 team 刷新本机缓存")
+    void joinTeamForwardsCodeAndRefreshesCache() {
+        when(accountService.joinTeam("ABCD1234"))
+                .thenReturn(Map.of("team", Map.of("id", "t9", "shareProjectNames", false)));
+
+        Map<String, Object> envelope = controller.joinTeam(Map.of("code", "ABCD1234"), null);
+
+        assertEquals(0, envelope.get("code"));
+        verify(accountService).joinTeam("ABCD1234");
+        verify(teamSettingsCache).remember(any());
+    }
+
+    @Test
+    @DisplayName("空邀请码 / 空律所名：拒绝，且服务层零触碰")
+    void blankHierarchyParametersAreRejected() {
+        assertThrows(IllegalArgumentException.class, () -> controller.joinTeam(Map.of("code", " "), null));
+        assertThrows(IllegalArgumentException.class, () -> controller.joinTeam(null, null));
+        assertThrows(IllegalArgumentException.class, () -> controller.joinFirm(Map.of("code", ""), null));
+        assertThrows(IllegalArgumentException.class, () -> controller.joinFirm(null, null));
+        assertThrows(IllegalArgumentException.class, () -> controller.createFirm(Map.of("name", "  "), null));
+        assertThrows(IllegalArgumentException.class, () -> controller.createFirm(null, null));
+        assertThrows(IllegalArgumentException.class, () -> controller.updateFirm(Map.of("name", ""), null));
+        assertThrows(IllegalArgumentException.class, () -> controller.updateFirm(null, null));
+        verifyNoInteractions(accountService);
+    }
+
+    @Test
+    @DisplayName("律所五个动作原样转发，不在桌面端判「你是不是总部管理者」")
+    void firmActionsAreForwardedVerbatim() {
+        when(accountService.createFirm(any())).thenReturn(Map.of("firm", Map.of("id", "f1")));
+        when(accountService.joinFirm(any())).thenReturn(Map.of("firm", Map.of("id", "f1")));
+        when(accountService.updateFirm(any())).thenReturn(Map.of("firm", Map.of("id", "f1")));
+        when(accountService.regenerateFirmJoinCode()).thenReturn(Map.of("joinCode", "ZZZZ9999"));
+        when(accountService.removeFirmTeam(any())).thenReturn(Map.of("ok", true));
+        when(accountService.regenerateTeamJoinCode()).thenReturn(Map.of("joinCode", "AAAA1111"));
+
+        controller.createFirm(Map.of("name", "某某律师事务所"), null);
+        controller.joinFirm(Map.of("code", "FIRMCODE"), null);
+        controller.updateFirm(Map.of("name", "改了名的所"), null);
+        controller.regenerateFirmJoinCode(null);
+        controller.removeFirmTeam("t7", null);
+        controller.regenerateTeamJoinCode(null);
+
+        verify(accountService).createFirm("某某律师事务所");
+        verify(accountService).joinFirm("FIRMCODE");
+        verify(accountService).updateFirm("改了名的所");
+        verify(accountService).regenerateFirmJoinCode();
+        verify(accountService).removeFirmTeam("t7");
+        verify(accountService).regenerateTeamJoinCode();
     }
 
     // ==================== 参数校验：业务信封，绝不 4xx/4010 ====================

@@ -44,6 +44,60 @@ test('TeamPanel 三态分支齐全：未连接账户 / 无团队 / 有团队', (
   assert.match(teamPanel, /<template v-else>/, '缺「有团队」态')
 })
 
+test('无团队态三条路都在同一屏上：创建 / 邀请码加入 / 收到的邀请（设计 §10.4 第 4 条）', () => {
+  const noTeam = teamPanel.slice(teamPanel.indexOf(`v-else-if="!team"`), teamPanel.indexOf('<!-- 态 3'))
+  assert.ok(noTeam.length > 0, '找不到无团队态')
+  for (const key of ['team.createTitle', 'team.joinTitle', 'team.invitesTitle']) {
+    assert.ok(noTeam.includes(key), `无团队态缺「${key}」这条路`)
+  }
+  assert.match(noTeam, /joinCodeInput/, '缺邀请码输入框')
+  assert.match(noTeam, /onJoinTeam/, '缺「加入团队」动作')
+  // 并排而不是竖着叠三张卡：三条路是平等的选项，叠起来第三条要滚一屏才看得到
+  assert.match(noTeam, /class="join-paths"/)
+  assert.match(teamPanel, /\.join-paths \{[^}]*display: flex/)
+})
+
+test('收到的邀请行显示被邀角色与过期时间（接受之前就该知道自己以什么身份进去）', () => {
+  assert.match(teamPanel, /team\.inviteRoleAs/)
+  assert.match(teamPanel, /expiryText\(inv\.expiresAt\)/)
+  // 服务端没给到期时间就明说取不到，不许自己按「7 天」算一个日期
+  assert.match(teamPanel, /team\.inviteExpiresUnknown/)
+  assert.ok(!/7 \* 24 \* 3600|addDays|\+ 7\)/.test(teamPanel), '前端不许自己推算邀请有效期')
+})
+
+test('律所区常显：未入所给创建/并入，入所后给团队列表与退出（设计 §10.4 第 5 条）', () => {
+  for (const key of ['team.firmTitle', 'team.createFirmTitle', 'team.joinFirmTitle',
+    'team.firmTeamsTitle', 'team.firmOwnerOnly', 'team.removeFirmTeam', 'team.leaveFirm',
+    'team.firmJoinCodeTitle']) {
+    assert.ok(teamPanel.includes(key), `律所区缺「${key}」`)
+  }
+  for (const fn of ['onCreateFirm', 'onJoinFirm', 'onRenameFirm', 'onResetFirmCode',
+    'onRemoveFirmTeam', 'onLeaveFirm']) {
+    assert.ok(teamPanel.includes(fn), `缺律所动作 ${fn}`)
+  }
+  // 「是不是总部」读服务端下发的 isHead，不拿 headTeamId === team.id 自己推
+  assert.match(teamPanel, /this\.firm && this\.firm\.isHead/)
+  // 退出律所要用自己的 teamId，取不到就不发——猜一个 id 会把别人的团队踢出去
+  assert.match(teamPanel, /const teamId = this\.team && this\.team\.id/)
+})
+
+test('看板范围切换只在入所后出现，并把 scope 传给 summary', () => {
+  assert.match(teamPanel, /v-if="firm" class="team-days-row"/, '范围切换必须挂在 firm 上')
+  assert.match(teamPanel, /team\.scopeTeam/)
+  assert.match(teamPanel, /team\.scopeFirm/)
+  assert.match(teamPanel, /getTeamSummary\(this\.range, this\.scope\)/)
+  // 退出律所后停在「全所」会一直打必然被拒的请求
+  assert.match(teamPanel, /if \(!this\.firm\) this\.scope = 'team'/)
+})
+
+test('团队邀请码在成员区顶部，仅管理者可见，且有复制与重置', () => {
+  const members = teamPanel.slice(teamPanel.indexOf('team.membersTitle'), teamPanel.indexOf('team.projectsTitle'))
+  assert.ok(members.includes('team.joinCodeTitle'), '邀请码不在成员区')
+  assert.match(members, /v-if="canManage" class="code-row"/, '邀请码必须只对 OWNER\/ADMIN 显示')
+  assert.match(members, /onCopyCode\(team\.joinCode\)/)
+  assert.match(members, /onResetJoinCode/)
+})
+
 test('有团队态的五个 KPI 磁贴都在，并复用 .stat-tile 形制', () => {
   for (const key of ['kpiActiveMembers', 'kpiProjectsCreated', 'kpiAppStarts',
     'kpiActiveMinutes', 'kpiSavedMinutes']) {
@@ -55,7 +109,55 @@ test('有团队态的五个 KPI 磁贴都在，并复用 .stat-tile 形制', () 
 
 test('7/30/90 天切换存在，并把 range 传给 summary', () => {
   assert.match(teamPanel, /v-for="d in \[7, 30, 90\]"/)
-  assert.match(teamPanel, /getTeamSummary\(this\.range\)/)
+  assert.match(teamPanel, /getTeamSummary\(this\.range, this\.scope\)/)
+})
+
+test('KPI 第一块不写死「本周」（档位可切 7\/30\/90），比例走 caption', () => {
+  assert.ok(teamPanel.includes('team.kpiActiveMembersCaption'),
+    'kpiActiveMembersCaption 是个死键：活跃人数必须给出「几人里有几人」的分母')
+  assert.match(teamPanel, /activeMembersCaption/)
+  // 分母取不到时整行不显示，不拿活跃数顶成分母
+  assert.match(teamPanel, /typeof k\.memberCount !== 'number'/)
+})
+
+test('五个 KPI 磁贴固定五列，不用任何会在某个宽度裂成 4+1 的弹性写法', () => {
+  const tiles = teamPanel.slice(teamPanel.indexOf('.stats-tiles {'), teamPanel.indexOf('.stat-value {'))
+  assert.match(tiles, /display: grid/)
+  assert.match(tiles, /grid-template-columns: repeat\(5, minmax\(0, 1fr\)\)/)
+  // 两种「聪明」写法都实测会在某个常见窗口宽度上裂成 4+1：
+  // flex 弹性基准在 1440 下裂，auto-fit 把断点挪到 1280 下裂
+  assert.ok(!/flex: 1 1 140px/.test(tiles), 'flex 弹性基准 140px 在 1440 宽下会把五块排成 4+1')
+  assert.ok(!/auto-fit/.test(tiles), 'auto-fit 在容器 600px（约合 1280 窗口）上仍是 4+1')
+  // minmax 下界必须是 0：auto 下界等于内容宽，长文案会把列撑开又变回换行
+  assert.ok(!/minmax\(auto/.test(tiles))
+})
+
+test('.team-btn 不撑满整卡：section-body 是竖向 flex，块级按钮会被拉满', () => {
+  const btn = teamPanel.slice(teamPanel.indexOf('.team-btn {'), teamPanel.indexOf('.team-btn.primary'))
+  assert.match(btn, /display: inline-flex/)
+  assert.match(btn, /align-self: flex-start/)
+  assert.match(btn, /width: auto/)
+})
+
+test('数据共享开关在看板顶部，且开关行不再把标题原样念第二遍', () => {
+  const hasTeam = teamPanel.slice(teamPanel.indexOf('<!-- 态 3'), teamPanel.indexOf('team.kpiTitle'))
+  assert.ok(hasTeam.includes('team.sharingTitle'), '数据共享开关必须排在 KPI 之前')
+  assert.ok(hasTeam.includes('team.uploadNow'), '「立即上报」跟着开关一起上来')
+  assert.match(teamPanel, /return this\.\$t\('team\.sharingSwitchDesc'\)/,
+    '开关行要给说明文案，不是把上面那行标题再抄一遍')
+})
+
+test('待接受邀请行里「撤销」与角色标签留够距离', () => {
+  assert.match(teamPanel, /class="link-action danger team-list-action"/)
+  assert.match(teamPanel, /\.team-list-action \{\s*margin-left: 16px;/)
+})
+
+test('项目已有别名时按钮说「改别名」', () => {
+  assert.match(teamPanel, /p\.label \? \$t\('team\.renameAlias'\) : \$t\('team\.setAlias'\)/)
+})
+
+test('面板底部留出反馈浮窗的高度，最后一行仍可点', () => {
+  assert.match(teamPanel, /\.team-pane \{[\s\S]*?padding-bottom: 72px/)
 })
 
 // ==================== 隐私与口径红线 ====================
@@ -91,7 +193,9 @@ test('别名弹窗在平台不支持 editable 时按取消处理，不把已有�
 test('api.js 导出团队相关函数，且全部走本地后端 /api/account/team*', () => {
   const fns = ['getTeam', 'createTeam', 'updateTeam', 'createTeamInvite', 'revokeTeamInvite',
     'acceptTeamInvite', 'updateTeamMemberRole', 'removeTeamMember', 'getTeamSummary',
-    'setTeamProjectAlias', 'getTeamUsageSharing', 'setTeamUsageSharing', 'uploadTeamUsageNow']
+    'setTeamProjectAlias', 'getTeamUsageSharing', 'setTeamUsageSharing', 'uploadTeamUsageNow',
+    'joinTeam', 'regenerateTeamJoinCode',
+    'createFirm', 'joinFirm', 'updateFirm', 'regenerateFirmJoinCode', 'removeFirmTeam']
   for (const fn of fns) {
     assert.ok(new RegExp(`export function ${fn}\\(`).test(api), `api.js 缺 ${fn}`)
   }
@@ -111,4 +215,27 @@ test('路径参数一律 encodeURIComponent（accountId / inviteId / projectKey 
     if (expr === 'range') continue // 数字，后端还会再归一一次
     assert.match(expr, /^encodeURIComponent\(/, `路径参数未编码：${expr}`)
   }
+})
+
+
+// ==================== 入口地图（设计 §10.4） ====================
+
+test('设置导航「团队」常显：不挂 desktopOnly、不落 system 组（那一组对非管理员整组收起）', () => {
+  const item = adminPane.match(/\{ key: 'team',[^}]*\}/)
+  assert.ok(item, 'navItems 里没有 team 一项')
+  assert.ok(!/desktopOnly/.test(item[0]), '「团队」不许挂 desktopOnly')
+  assert.ok(/group: 'personal'/.test(item[0]), '「团队」必须在 personal 组')
+  // visibleNavItems 的两条过滤规则之外没有第三条，personal 组恒可见
+  assert.match(adminPane, /if \(n\.desktopOnly && !this\.isDesktop\) return false/)
+  assert.match(adminPane, /if \(n\.group === 'system' && !this\.isAdminUser\) return false/)
+})
+
+test('「账户与用量」在已连接账户时给出团队一行 +「前往团队」，就地切到 team 分区', () => {
+  assert.match(adminPane, /team\.accountRowLabel/)
+  assert.match(adminPane, /\$t\('team\.goTeam'\)/)
+  assert.match(adminPane, /@tap="onNavTap\(\{ key: 'team' \}\)"/,
+    '「前往团队」要在设置页内切分区，不该跳到别的页面')
+  // 问不到时整行不渲染，不拿「未加入」冒充一个事实
+  assert.match(adminPane, /v-if="teamLine\.loaded"/)
+  assert.match(adminPane, /teamLine: \{ loaded: false, teamName: '', firmName: '' \}/)
 })

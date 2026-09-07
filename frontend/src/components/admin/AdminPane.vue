@@ -396,6 +396,17 @@
                   </text>
                   <!-- 购买在官网完成，桌面端拉一次即可看到新解锁的功能 -->
                   <text class="account-hint">{{ $t('admin.refreshEntitlementsHint') }}</text>
+                  <!-- 团队一行（设计 §10.4 第 2 条）：账户与团队是同一件事的两面，
+                       在这里看得见「我在不在团队里」，并且能一步走过去。
+                       取不到时整行不渲染——不拿「未加入」去顶「没问出来」。 -->
+                  <view v-if="teamLine.loaded" class="account-team-row">
+                    <text class="account-team-text">
+                      {{ $t('team.accountRowLabel') }}：{{ teamLineText }}
+                    </text>
+                    <text class="account-team-link" @tap="onNavTap({ key: 'team' })">
+                      {{ $t('team.goTeam') }}
+                    </text>
+                  </view>
                 </view>
               </view>
             </view>
@@ -1064,7 +1075,7 @@
 import {
   getAdminConfig, saveAdminConfig,
   getAccountStatus, connectAccount, getAccountUsage,
-  getAccountBalance, getAccountMembership,
+  getAccountBalance, getAccountMembership, getTeam,
   getStorageLocation, moveStorageLocation, resetStorageLocation,
   getLocalIdentityCandidates, selectLocalIdentity,
   getCurrentUser as fetchCurrentUser, uploadAvatar,
@@ -1275,6 +1286,10 @@ export default {
       // membershipData 来自 getAccountMembership（等级/成长值/七档表），分开取分开失败
       walletData: { loaded: false, available: true, balanceCents: null },
       membershipData: null,
+      // 账户卡里的「团队」一行（dev-board#496 设计 §10.4 第 2 条）。
+      // loaded 只在真的问到了之后才置 true——问不到时整行不渲染，
+      // 而不是显示「未加入」（那是在拿「不知道」冒充一个事实）
+      teamLine: { loaded: false, teamName: '', firmName: '' },
       showRecharge: false,
       tierRulesOpen: false,
       accountKeyInput: '',
@@ -1434,6 +1449,13 @@ export default {
     membershipTiers() {
       const tiers = this.membershipData && this.membershipData.tiers
       return Array.isArray(tiers) ? tiers : []
+    },
+    // 「未加入」/「团队名」/「团队名 · 律所名」。三种都是问到之后的事实，
+    // 「没问到」由 teamLine.loaded=false 表达，不混进这里
+    teamLineText() {
+      if (!this.teamLine.teamName) return this.$t('team.accountRowNone')
+      if (this.teamLine.firmName) return `${this.teamLine.teamName} · ${this.teamLine.firmName}`
+      return this.teamLine.teamName
     },
     accountPlanLabel() {
       const plan = this.accountPlatform && this.accountPlatform.plan
@@ -2267,8 +2289,28 @@ export default {
       }
       if (this.account.connected) {
         await this.loadAccountUsage()
+        this.loadTeamLine()
       } else {
         this.accountUsage = null
+        this.teamLine = { loaded: false, teamName: '', firmName: '' }
+      }
+    },
+    /**
+     * 账户卡的「团队」一行。刻意不 await 进 loadAccount 的主链：它要打一次官网，
+     * 慢或失败都不该拖住余额与用量的渲染；失败时这一行整块不出现。
+     */
+    async loadTeamLine() {
+      try {
+        const data = await getTeam()
+        const team = (data && data.team) || null
+        const firm = (data && data.firm) || null
+        this.teamLine = {
+          loaded: true,
+          teamName: (team && team.name) || '',
+          firmName: (firm && firm.name) || '',
+        }
+      } catch (e) {
+        this.teamLine = { loaded: false, teamName: '', firmName: '' }
       }
     },
     async loadAccountUsage() {
@@ -3232,6 +3274,27 @@ $brand-accent: $brand-mint;
 .account-sub {
   font-size: 12px;
   color: var(--awd-text-2);
+}
+
+.account-team-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--awd-border-subtle);
+}
+
+.account-team-text {
+  flex: 1;
+  font-size: 12px;
+  color: var(--awd-text-2);
+}
+
+.account-team-link {
+  font-size: 12px;
+  color: var(--awd-accent-text);
+  cursor: pointer;
 }
 
 .account-hint {

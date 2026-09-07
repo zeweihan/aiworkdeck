@@ -1028,6 +1028,73 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
 只写了 `{team, myRole, members[], pendingInvites[]}`。前端读 `data.myAccountId`，
 **取不到就不显示这个动作**——绝不自己编一个 `me` 之类的 id 去打 DELETE，猜错会把别人踢出团队。
 
+### 三层结构与加入流程（设计 §10）
+
+```
+个人（官网注册） → 团队 team（一人一团队；OWNER/ADMIN/MEMBER） → 律所 firm（多团队并入，由总部团队管理）
+```
+
+律所**没有独立人员名单**：管理者就是总部团队的 OWNER/ADMIN，这样不破坏「一人一团队」。
+桌面侧新增的透传端点（`AccountController` + `AccountService`，一律只转发）：
+`POST /team/join`、`POST /team/join-code/regenerate`、`POST /team/firm`、`POST /team/firm/join`、
+`PUT /team/firm`（**出站 PATCH**，同上面那处动词偏差）、`POST /team/firm/join-code/regenerate`、
+`DELETE /team/firm/teams/{teamId}`；`GET /team/summary` 多收一个 `scope=team|firm`。
+
+**归一化不是鉴权。** `range`（7/30/90）与 `scope`（team/firm）在桌面端只做「值在枚举内」的
+归一，**能不能看全所由官网按角色判**。把角色判定抄一份到桌面端，等于给了「改本机一个布尔值
+就看全所」的机会，而真正的闸本来就在服务端——`TeamPanel` 的 `canManage` / `canManageFirm`
+同理，只决定按钮显不显示。「是不是总部团队」读服务端下发的 `firm.isHead`，
+不拿 `firm.headTeamId === team.id` 自己推（两个字段哪个缺了都会推错）。
+
+**「退出律所」与「移出团队」是同一个端点**（`DELETE /team/firm/teams/{teamId}`），
+本团队退出时拿的是自己的 `team.id`——**取不到就不发**，猜一个 id 出去会把别人的团队踢出律所
+（同上面 `myAccountId` 那条）。
+
+### 入口地图（验收清单，缺一项算没做完；设计 §10.4）
+
+尽调插件的教训：核心能力做好了、UI 上没入口，用户不知道怎么用，只能重新发版。六条都有源码级护栏
+（`frontend/tests/team/team-panel-source.test.mjs`）：
+
+1. 设置导航「团队」**常显**——`navItems` 里那一项不挂 `desktopOnly`、落 `personal` 组
+   （`system` 组对非管理员整组收起，落进去等于对普通成员隐身）。
+2. 设置页「账户与用量」的账户卡里一行「团队：未加入 / 团队名 · 律所名」+「前往团队」，
+   点了在 `AdminPane` 内部 `onNavTap({key:'team'})` 切分区。**问不到时整行不渲染**
+   （`teamLine.loaded`），不拿「未加入」去顶「没问出来」。
+3. 官网账户页「我的团队」页签——官网侧，不在本仓。
+4. 无团队态三条路**并排**（`.join-paths` 是 flex）：创建团队 / 输入 8 位邀请码 / 收到的邀请。
+   竖着叠三张卡等于把第三条藏在一屏之外。
+5. 团队看板「律所」区**常显**：未入所给「创建律所」「输入律所邀请码并入」（仅 OWNER 可操作，
+   其余人看到的是「只有负责人可以」的说明，而不是这一层整个消失），入所后给律所名、团队列表
+   （总部标记 + 人数）、总部管理者可见律所邀请码与「移出团队」、子团队 OWNER 可「退出律所」；
+   看板顶部「本团队 / 全所」切换**只在入所后出现**（没律所时「全所」不是真实存在的视角），
+   退出律所时 `scope` 要复位回 `team`，否则会一直打必然被拒的请求。
+6. 数据共享开关与「立即上报」在看板**顶部**，不在最底下——它决定「这个团队有没有数据可看」，
+   压在底下等于让用户滚过两张空表才发现自己一直没开。
+
+团队邀请码在**成员区顶部**（邀请人的第一动作就是把码发出去），仅 OWNER/ADMIN 可见——
+码等于一张入场券。
+
+### 界面口径（走查 2026-09-07 修的一批，改 TeamPanel 前对一遍）
+
+- **KPI 磁贴用 `grid-template-columns: repeat(5, minmax(0, 1fr))`**，两种更「聪明」的写法实测都不行：
+  `flex: 1 1 140px`（改前的写法）在 1440 窗口下裂成 4+1，`auto-fit + minmax(120px,1fr)` 只是把
+  这个断点挪到容器 600px 附近——对应 1280 宽的窗口，最常见的笔记本尺寸，照样 4+1。
+  固定五列实测容器 600px 以上五块同排且文字零裁切。`minmax` 的下界必须是 `0`（`auto` 下界
+  等于内容宽，长文案会把列撑开又变回换行）。这一页整个没有 `@media`，别为这一处开先例：
+  容器宽 ≈ 窗口宽 − 628px 是量出来的经验值，不是契约。
+- **KPI 第一块叫「使用人数」不叫「本周使用人数」**：档位可切 7/30/90，写死「本周」在另外两档上是错的；
+  「几人里有几人」走 caption（`kpiActiveMembersCaption`），**分母取不到时整行不显示**，
+  不拿活跃数顶成分母。
+- **`.team-btn` 必须 `inline-flex` + `align-self: flex-start` + `width: auto`**：`.section-body`
+  是竖向 flex，块级按钮会被拉满整张卡。
+- **开关行不许把上面那行标题原样念第二遍**（`sharingSwitchDesc` 是说明不是标题）：同一张卡上
+  出现两遍同一句话，用户会以为这是两个不同的开关。
+- **服务端没给的值不编**：邀请到期时间取不到就说「以官网为准」（绝不自己按「7 天」算一个日期），
+  律所各团队合计只在 `summary.teams` 存在时才渲染（`firm.teams` 只有名册没有统计数字）。
+- 项目**已有别名时**按钮说「改别名」；待接受邀请行里「撤销」与角色标签至少隔 16px。
+- `.team-pane` 留 `padding-bottom: 72px`：右下角反馈浮窗是全局元素、不改，但要给它让出高度，
+  保证面板最后一行仍可点。
+
 ## 跨设备传输的内部记账口（2026-08-28，dev-board#251）
 
 云后端对已桥接用户没有任何 awdk_（明文不落库），官网也否决过「凭 accountId 换 key」的
@@ -1078,14 +1145,19 @@ return 404 兜底，云后端从 127.0.0.1 直连 Next。云侧唯一出口
   团队通道：`service/team/TeamUsageRollupServiceTest`（DRAFT/ACTIVE 排除、16h 上限、
   短码稳定且不泄露原 id、共享项目名默认关、六个计数的派生口径、token 分桶）、
   `service/team/TeamUsageUploadServiceTest`（四道闸 + 补传窗口 + 今天永不传）、
-  `controller/AccountControllerTeamTest`（透传不裁字段、range 归一、参数校验回业务信封、
-  usage-sharing 不打官网）、`service/account/AccountSwitchCleanupTest`（换账户清团队台账）；
+  `controller/AccountControllerTeamTest`（透传不裁字段、range/scope 归一、scope 归一不是鉴权、
+  层级七个动作原样转发、参数校验回业务信封、usage-sharing 不打官网）、
+  `service/account/AccountServiceTest`（层级动作的方法与路径逐条对齐官网契约、改律所名出站仍是
+  PATCH、路径段编码、summary 带 scope 且老签名默认 team）、
+  `service/account/AccountSwitchCleanupTest`（换账户清团队台账）；
   `controller/ExternalControllerEnvelopeTest`
   （网关失败原样抛出、回落不吞掉网关原因、查无结果是 code=1 不是 4010）。
 - 官网侧（`aiworkdeckweb`）：`scripts/verify-gateway.mts` 45 项 + `contract-check.mts` 的网关段，
   **必须在空目录里跑、必须用 nvm v22 全路径**（`/usr/bin/node` v20 碰库会段错误）。
 - 前端：`cd frontend && npm run check:emits` + `npm run build:h5`；
-  团队分区另跑 `npm run test:team`（已进 ci.yml frontend job）。
+  团队分区另跑 `npm run test:team`（已进 ci.yml frontend job）：文案红线（两语言键对拍、禁 emoji、
+  中文不含三个掉线子串、「估算」二字）+ 源码级契约（三态分支、入口地图六条、KPI 布局规则、
+  `.team-btn` 不撑满、邀请行显示角色与到期、scope 传参）。
 - 端到端（同样在 `frontend/` 下跑）：`cd frontend && npm run test:app-e2e`
   （**J1 就是首启解锁门旅程**，用试用码解锁；其余旅程 local-mode 免登直达）。
   `cd frontend && npm run test:desktop-e2e` 的 provision 会自动用试用码解锁并置向导。改解锁门/启动链必跑这两套。

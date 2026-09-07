@@ -1,16 +1,26 @@
 <!--
   「团队」分区（dev-board#496）。设置页「个人」组的一栏，三态：
     1. 未连接账户 —— 团队挂在官网账户上，先去「账户与用量」连接；
-    2. 已连接但没有团队 —— 创建团队表单 + 我手机号收到的邀请；
-    3. 有团队 —— KPI / 成员 / 项目 / 管理区 / 数据共享开关。
+    2. 已连接但没有团队 —— 创建团队 / 邀请码加入 / 收到的邀请，三条路并排；
+    3. 有团队 —— 数据共享开关 / KPI / 律所 / 成员 / 项目 / 管理区。
 
-  三条界面口径（改这个文件前逐条对一遍）：
+  层级是「个人 → 团队 → 律所」（设计 §10.1）。每一层都必须有看得见的入口，
+  这是维护者定的验收线（尽调插件的教训：能力做好了没入口，等于没做）：
+    - 无团队态三条路并排，一条都不藏在二级菜单里；
+    - 「律所」区常显——没入所时给「创建 / 并入」，入所后给团队列表与范围切换；
+    - 数据共享开关在看板顶部，不在最底下。
+
+  五条界面口径（改这个文件前逐条对一遍）：
     - 「节约时间」必须带「估算」二字并把公式摆出来。公式取自服务端下发的
       savedMinutesFormula，不在前端写死系数——写死的话服务端调了系数，
       界面上的脚注就开始骗人。取不到公式时只说「口径取不到」，不编一个。
     - 项目默认以匿名短码出现。项目名只有在团队显式打开「共享项目名」时才会存在，
       这里绝不拿本机的项目名去「补全」看板上的短码——那等于绕过团队设置把名字露出来。
     - 数据共享开关的可用性读后端下发的 available，不靠「有没有桌面壳」猜。
+    - 角色判定全在官网。这里的 canManage / canManageFirm 只决定「显不显示按钮」，
+      不是闸门——桌面端改一个布尔值不该换来任何权限。
+    - 服务端没给的值不编：邀请到期时间、活跃人数的分母、律所各团队合计，
+      取不到就不显示或明说取不到。
 -->
 <template>
   <view class="team-pane">
@@ -44,15 +54,17 @@
       </view>
     </view>
 
-    <!-- 态 2：已连接、没有团队 -->
+    <!-- 态 2：已连接、没有团队。
+         三条路并排，一条都不藏在二级菜单里（设计 §10.4 第 4 条）：
+         创建团队 / 输入邀请码加入 / 别人按手机号邀请我。 -->
     <template v-else-if="!team">
-      <view class="section-card">
-        <view class="section-header">
-          <text class="section-title">{{ $t('team.createTitle') }}</text>
-          <text class="section-subtitle">{{ $t('team.createDesc') }}</text>
-        </view>
-        <view class="section-body">
-          <view class="team-row">
+      <view class="join-paths">
+        <view class="section-card join-card">
+          <view class="section-header">
+            <text class="section-title">{{ $t('team.createTitle') }}</text>
+            <text class="section-subtitle">{{ $t('team.createDesc') }}</text>
+          </view>
+          <view class="section-body">
             <input
               v-model="newTeamName"
               class="team-input"
@@ -63,17 +75,41 @@
             </view>
           </view>
         </view>
-      </view>
 
-      <view class="section-card">
-        <view class="section-header">
-          <text class="section-title">{{ $t('team.invitesTitle') }}</text>
+        <view class="section-card join-card">
+          <view class="section-header">
+            <text class="section-title">{{ $t('team.joinTitle') }}</text>
+            <text class="section-subtitle">{{ $t('team.joinDesc') }}</text>
+          </view>
+          <view class="section-body">
+            <input
+              v-model="joinCodeInput"
+              class="team-input"
+              :placeholder="$t('team.joinCodePlaceholder')"
+            />
+            <view class="team-btn primary" :class="{ 'is-busy': busy }" @tap="onJoinTeam">
+              {{ $t('team.joinButton') }}
+            </view>
+          </view>
         </view>
-        <view class="section-body">
-          <text v-if="!receivedInvites.length" class="empty-line">{{ $t('team.invitesEmpty') }}</text>
-          <view v-for="inv in receivedInvites" :key="inv.id" class="team-list-row">
-            <text class="team-list-name">{{ $t('team.inviteFrom', { team: inv.teamName || inv.teamId }) }}</text>
-            <view class="team-btn small primary" @tap="onAcceptInvite(inv)">{{ $t('team.acceptInvite') }}</view>
+
+        <view class="section-card join-card">
+          <view class="section-header">
+            <text class="section-title">{{ $t('team.invitesTitle') }}</text>
+          </view>
+          <view class="section-body">
+            <text v-if="!receivedInvites.length" class="empty-line">{{ $t('team.invitesEmpty') }}</text>
+            <view v-for="inv in receivedInvites" :key="inv.id" class="team-list-row">
+              <view class="team-list-main">
+                <text class="team-list-name">{{ $t('team.inviteFrom', { team: inv.teamName || inv.teamId }) }}</text>
+                <!-- 被邀角色与到期时间：接受之前就该看得见自己会以什么身份进去、
+                     这条邀请还剩多久。两者都只显示服务端给的值，取不到就明说取不到。 -->
+                <text class="team-list-meta">
+                  {{ $t('team.inviteRoleAs', { role: roleLabel(inv.role) }) }} · {{ expiryText(inv.expiresAt) }}
+                </text>
+              </view>
+              <view class="team-btn small primary" @tap="onAcceptInvite(inv)">{{ $t('team.acceptInvite') }}</view>
+            </view>
           </view>
         </view>
       </view>
@@ -81,10 +117,51 @@
 
     <!-- 态 3：有团队 -->
     <template v-else>
+      <!-- 数据共享开关 + 立即上报：看板顶部（设计 §10.4 第 6 条）。
+           它决定「这个团队有没有数据可看」，压在最底下等于让用户滚过两张空表
+           才发现自己一直没开。 -->
+      <view class="section-card">
+        <view class="section-body">
+          <view class="switch-row">
+            <view class="switch-info">
+              <text class="switch-name">{{ $t('team.sharingTitle') }}</text>
+              <!-- 说明文案，不是把标题再抄一遍：同一张卡上出现两遍同一句话，
+                   用户会以为这是两个不同的开关 -->
+              <text class="switch-desc">{{ sharingHint }}</text>
+            </view>
+            <AwdSwitch
+              :checked="!!sharing.enabled"
+              :disabled="busy || sharing.available === false"
+              @change="onToggleSharing"
+            />
+          </view>
+          <view class="team-row">
+            <view class="team-btn" :class="{ 'is-busy': busy }" @tap="onUploadNow">
+              {{ $t('team.uploadNow') }}
+            </view>
+            <text class="team-footnote">{{ lastUploadText }}</text>
+          </view>
+        </view>
+      </view>
+
       <view class="section-card">
         <view class="section-header">
           <text class="section-title">{{ team.name || $t('team.kpiTitle') }}</text>
-          <text class="section-subtitle">{{ $t('team.kpiTitle') }}</text>
+          <text class="section-subtitle">{{ headerSubtitle }}</text>
+          <!-- 范围切换只在入所后出现：没有律所时「全所」不是一个真实存在的视角。
+               能不能看全所由官网按角色判，这里只负责把用户选的视角带上去。 -->
+          <view v-if="firm" class="team-days-row">
+            <text
+              class="team-days-btn"
+              :class="{ active: scope === 'team' }"
+              @tap="setScope('team')"
+            >{{ $t('team.scopeTeam') }}</text>
+            <text
+              class="team-days-btn"
+              :class="{ active: scope === 'firm' }"
+              @tap="setScope('firm')"
+            >{{ $t('team.scopeFirm') }}</text>
+          </view>
           <view class="team-days-row">
             <text
               v-for="d in [7, 30, 90]"
@@ -101,6 +178,9 @@
               <view class="stat-tile">
                 <text class="stat-value">{{ kpi.activeMembers || 0 }}</text>
                 <text class="stat-caption">{{ $t('team.kpiActiveMembers') }}</text>
+                <!-- 「几人里有几人在用」才是管理者真正想看的比例。档位可切
+                     7/30/90，所以标题不许写死「本周」。 -->
+                <text v-if="activeMembersCaption" class="stat-sub">{{ activeMembersCaption }}</text>
               </view>
               <view class="stat-tile">
                 <text class="stat-value">{{ kpi.projectsCreated || 0 }}</text>
@@ -125,12 +205,141 @@
         </view>
       </view>
 
+      <!-- 全所视角下服务端若给了 teams[]，按团队摊开一张表 -->
+      <view v-if="scope === 'firm' && firmTeamRows.length" class="section-card">
+        <view class="section-header">
+          <text class="section-title">{{ $t('team.firmTeamsTableTitle') }}</text>
+        </view>
+        <view class="section-body">
+          <view class="team-table">
+            <view class="team-table-head">
+              <text class="col col-name">{{ $t('team.colTeam') }}</text>
+              <text class="col">{{ $t('team.colTeamMembers') }}</text>
+              <text class="col">{{ $t('team.colTeamMinutes') }}</text>
+              <text class="col">{{ $t('team.colAiTurns') }}</text>
+            </view>
+            <view v-for="row in firmTeamRows" :key="row.id || row.name" class="team-table-row">
+              <text class="col col-name">
+                {{ row.name }}<text v-if="row.isHead" class="head-badge">{{ $t('team.firmHeadBadge') }}</text>
+              </text>
+              <text class="col">{{ row.memberCount || 0 }}</text>
+              <text class="col">{{ hoursLabel(row.activeMinutes) }}</text>
+              <text class="col">{{ row.aiTurns || 0 }}</text>
+            </view>
+          </view>
+        </view>
+      </view>
+
+      <!-- 律所区：常显（设计 §10.4 第 5 条）。未入所时也要看得见这一层存在，
+           否则「多个团队并成一家所」这条能力就没有任何入口。 -->
+      <view class="section-card">
+        <view class="section-header">
+          <text class="section-title">{{ $t('team.firmTitle') }}</text>
+          <text class="section-subtitle">{{ firm ? (firm.name || '') : $t('team.firmNoneDesc') }}</text>
+        </view>
+        <view class="section-body">
+          <template v-if="!firm">
+            <template v-if="isTeamOwner">
+              <text class="sub-title">{{ $t('team.createFirmTitle') }}</text>
+              <view class="team-row">
+                <input
+                  v-model="newFirmName"
+                  class="team-input"
+                  :placeholder="$t('team.firmNamePlaceholder')"
+                />
+                <view class="team-btn primary" :class="{ 'is-busy': busy }" @tap="onCreateFirm">
+                  {{ $t('team.createFirmButton') }}
+                </view>
+              </view>
+              <text class="sub-title">{{ $t('team.joinFirmTitle') }}</text>
+              <view class="team-row">
+                <input
+                  v-model="firmCodeInput"
+                  class="team-input"
+                  :placeholder="$t('team.firmCodePlaceholder')"
+                />
+                <view class="team-btn" :class="{ 'is-busy': busy }" @tap="onJoinFirm">
+                  {{ $t('team.joinFirmButton') }}
+                </view>
+              </view>
+            </template>
+            <!-- 不是负责人的人也要知道这一层存在、以及为什么自己点不了 -->
+            <text v-else class="empty-line">{{ $t('team.firmOwnerOnly') }}</text>
+          </template>
+
+          <template v-else>
+            <view v-if="canManageFirm" class="team-row">
+              <input
+                v-model="firmRenameDraft"
+                class="team-input"
+                :placeholder="$t('team.firmNameLabel')"
+              />
+              <view class="team-btn" :class="{ 'is-busy': busy }" @tap="onRenameFirm">
+                {{ $t('team.saveFirmName') }}
+              </view>
+            </view>
+
+            <view v-if="canManageFirm" class="code-row">
+              <view class="code-main">
+                <text class="code-label">{{ $t('team.firmJoinCodeTitle') }}</text>
+                <text class="code-value">{{ firm.joinCode || '—' }}</text>
+                <text class="code-desc">{{ $t('team.firmJoinCodeDesc') }}</text>
+              </view>
+              <view class="code-actions">
+                <view class="team-btn small" @tap="onCopyCode(firm.joinCode)">{{ $t('team.copyCode') }}</view>
+                <view class="team-btn small" :class="{ 'is-busy': busy }" @tap="onResetFirmCode">
+                  {{ $t('team.resetCode') }}
+                </view>
+              </view>
+            </view>
+
+            <text class="sub-title">{{ $t('team.firmTeamsTitle') }}</text>
+            <view v-for="t in firmTeams" :key="t.id" class="team-list-row">
+              <view class="team-list-main">
+                <text class="team-list-name">
+                  {{ t.name }}<text v-if="t.isHead" class="head-badge">{{ $t('team.firmHeadBadge') }}</text>
+                </text>
+              </view>
+              <text class="team-list-count">{{ t.memberCount || 0 }}</text>
+              <!-- 总部管理者可以移出别的团队；总部团队自己不可移出（官网也会拒） -->
+              <text
+                v-if="canManageFirm && !t.isHead"
+                class="link-action danger team-list-action"
+                @tap="onRemoveFirmTeam(t)"
+              >{{ $t('team.removeFirmTeam') }}</text>
+            </view>
+
+            <!-- 子团队负责人的退出口 -->
+            <view v-if="canLeaveFirm" class="team-row">
+              <text class="link-action danger" @tap="onLeaveFirm">{{ $t('team.leaveFirm') }}</text>
+            </view>
+          </template>
+        </view>
+      </view>
+
       <!-- 成员 -->
       <view class="section-card">
         <view class="section-header">
           <text class="section-title">{{ $t('team.membersTitle') }}</text>
         </view>
         <view class="section-body">
+          <!-- 团队邀请码摆在成员区顶部（设计 §10.2）：邀请人的第一动作就是把码发出去。
+               只对 OWNER/ADMIN 显示——码等于一张入场券。 -->
+          <view v-if="canManage" class="code-row">
+            <view class="code-main">
+              <text class="code-label">{{ $t('team.joinCodeTitle') }}</text>
+              <text class="code-value">{{ team.joinCode || '—' }}</text>
+              <text class="code-desc">{{ $t('team.joinCodeDesc') }}</text>
+            </view>
+            <view class="code-actions">
+              <view class="team-btn small" @tap="onCopyCode(team.joinCode)">{{ $t('team.copyCode') }}</view>
+              <view class="team-btn small" :class="{ 'is-busy': busy }" @tap="onResetJoinCode">
+                {{ $t('team.resetCode') }}
+              </view>
+            </view>
+          </view>
+          <text v-else class="empty-line">{{ $t('team.codeHidden') }}</text>
+
           <text v-if="!members.length" class="empty-line">{{ $t('team.membersEmpty') }}</text>
           <view v-else class="team-table">
             <view class="team-table-head">
@@ -180,7 +389,10 @@
               <text class="col">{{ p.members || 0 }}</text>
               <text class="col">{{ p.aiTurns || 0 }}</text>
               <view v-if="canManage" class="col col-actions">
-                <text class="link-action" @tap="onSetAlias(p)">{{ $t('team.setAlias') }}</text>
+                <!-- 已经有别名时说「改别名」：这时点下去是改，不是起 -->
+                <text class="link-action" @tap="onSetAlias(p)">
+                  {{ p.label ? $t('team.renameAlias') : $t('team.setAlias') }}
+                </text>
               </view>
             </view>
           </view>
@@ -214,9 +426,15 @@
           <text class="sub-title">{{ $t('team.pendingInvitesTitle') }}</text>
           <text v-if="!pendingInvites.length" class="empty-line">{{ $t('team.pendingInvitesEmpty') }}</text>
           <view v-for="inv in pendingInvites" :key="inv.id" class="team-list-row">
-            <text class="team-list-name">{{ inv.phone }}</text>
+            <view class="team-list-main">
+              <text class="team-list-name">{{ inv.phone }}</text>
+              <text class="team-list-meta">{{ expiryText(inv.expiresAt) }}</text>
+            </view>
             <text class="team-list-count">{{ roleLabel(inv.role) }}</text>
-            <text class="link-action danger" @tap="onRevokeInvite(inv)">{{ $t('team.revokeInvite') }}</text>
+            <!-- 撤销与角色标签之间留够距离：挨在一起时误点的是不可撤销的动作 -->
+            <text class="link-action danger team-list-action" @tap="onRevokeInvite(inv)">
+              {{ $t('team.revokeInvite') }}
+            </text>
           </view>
 
           <text class="sub-title">{{ $t('team.settingsTitle') }}</text>
@@ -238,32 +456,9 @@
         </view>
       </view>
 
-      <!-- 数据共享（本机开关） -->
-      <view class="section-card">
-        <view class="section-header">
-          <text class="section-title">{{ $t('team.sharingTitle') }}</text>
-          <text class="section-subtitle">{{ $t('team.sharingDesc') }}</text>
-        </view>
+      <view v-if="canLeave" class="section-card">
         <view class="section-body">
-          <view class="switch-row">
-            <view class="switch-info">
-              <text class="switch-name">{{ sharingHint }}</text>
-            </view>
-            <AwdSwitch
-              :checked="!!sharing.enabled"
-              :disabled="busy || sharing.available === false"
-              @change="onToggleSharing"
-            />
-          </view>
-          <view class="team-row">
-            <view class="team-btn" :class="{ 'is-busy': busy }" @tap="onUploadNow">
-              {{ $t('team.uploadNow') }}
-            </view>
-            <text class="team-footnote">{{ lastUploadText }}</text>
-          </view>
-          <view v-if="canLeave" class="team-row">
-            <text class="link-action danger" @tap="onLeaveTeam">{{ $t('team.leaveTeam') }}</text>
-          </view>
+          <text class="link-action danger" @tap="onLeaveTeam">{{ $t('team.leaveTeam') }}</text>
         </view>
       </view>
     </template>
@@ -280,6 +475,8 @@ import {
   updateTeamMemberRole, removeTeamMember,
   getTeamSummary, setTeamProjectAlias,
   getTeamUsageSharing, setTeamUsageSharing, uploadTeamUsageNow,
+  joinTeam, regenerateTeamJoinCode,
+  createFirm, joinFirm, updateFirm, regenerateFirmJoinCode, removeFirmTeam,
 } from '@/services/api.js'
 
 const ROLE_KEYS = ['ADMIN', 'MEMBER']
@@ -303,12 +500,21 @@ export default {
       members: [],
       pendingInvites: [],
       receivedInvites: [],
+      // 律所（设计 §10.1）。null = 本团队没有并入任何律所——这一层仍要在界面上
+      // 看得见，只是给的是「创建 / 并入」两个入口而不是看板
+      firm: null,
       summary: null,
       range: 7,
+      // 看板视角。入所之后才有「全所」这回事；能不能看由官网按角色判
+      scope: 'team',
       // available 初值刻意是 undefined 而不是 true/false：还没问过后端时既不该
       // 把开关点亮，也不该显示「不可用」的说明
       sharing: { enabled: false, lastUploadAt: '', available: undefined },
       newTeamName: '',
+      joinCodeInput: '',
+      newFirmName: '',
+      firmCodeInput: '',
+      firmRenameDraft: '',
       invitePhone: '',
       inviteRoleIndex: 1,
       renameDraft: '',
@@ -317,6 +523,40 @@ export default {
   computed: {
     canManage() {
       return this.myRole === 'OWNER' || this.myRole === 'ADMIN'
+    },
+    // 创建律所 / 并入律所都要求团队 OWNER（设计 §10.2）
+    isTeamOwner() {
+      return this.myRole === 'OWNER'
+    },
+    // 律所管理者 = 总部团队的 OWNER/ADMIN。isHead 由服务端下发，
+    // 不拿 firm.headTeamId === team.id 自己推——两个字段哪个缺了都会推错
+    canManageFirm() {
+      return !!(this.firm && this.firm.isHead) && this.canManage
+    },
+    // 子团队负责人可以带着团队退出律所；总部团队不可退出（官网也会拒）
+    canLeaveFirm() {
+      return !!this.firm && !this.firm.isHead && this.isTeamOwner && !!this.team
+    },
+    firmTeams() {
+      return (this.firm && Array.isArray(this.firm.teams) ? this.firm.teams : [])
+    },
+    // 全所视角下服务端按团队摊开的合计。没有就不渲染那张表，不拿 firm.teams 顶
+    // ——那份只有名册没有统计数字。
+    firmTeamRows() {
+      return (this.summary && Array.isArray(this.summary.teams) ? this.summary.teams : [])
+    },
+    headerSubtitle() {
+      if (this.firm && this.firm.name) return `${this.$t('team.kpiTitle')} · ${this.firm.name}`
+      return this.$t('team.kpiTitle')
+    },
+    // 「6 / 9 人」。总人数取不到时不显示这一行，不拿活跃数顶成分母
+    activeMembersCaption() {
+      const k = this.kpi
+      if (typeof k.memberCount !== 'number') return ''
+      return this.$t('team.kpiActiveMembersCaption', {
+        active: k.activeMembers || 0,
+        total: k.memberCount,
+      })
     },
     // OWNER 不能退出团队（退了就没人管了），界面上直接不给这个动作
     canLeave() {
@@ -347,9 +587,11 @@ export default {
       if (!at) return this.$t('team.lastUploadNever')
       return this.$t('team.lastUploadAt', { time: String(at).replace('T', ' ').slice(0, 16) })
     },
+    // 开关行的说明。不可用时说明原因，其余时候说这个开关到底会做什么——
+    // 绝不把上面那行标题原样再念一遍
     sharingHint() {
       if (this.sharing.available === false) return this.$t('team.sharingDesktopOnly')
-      return this.$t('team.sharingTitle')
+      return this.$t('team.sharingSwitchDesc')
     },
   },
   mounted() {
@@ -364,6 +606,12 @@ export default {
       if (role === 'OWNER') return this.$t('team.roleOwner')
       if (role === 'ADMIN') return this.$t('team.roleAdmin')
       return this.$t('team.roleMember')
+    },
+    // 邀请到期时间。服务端没给就明说「以官网为准」，绝不自己按「7 天」算一个
+    // 日期出来——那个数字看起来精确，但只要官网改了有效期就在骗人
+    expiryText(raw) {
+      if (!raw) return this.$t('team.inviteExpiresUnknown')
+      return this.$t('team.inviteExpires', { date: String(raw).replace('T', ' ').slice(0, 16) })
     },
     toast(title) {
       uni.showToast({ title, icon: 'none' })
@@ -386,7 +634,11 @@ export default {
         this.members = (data && data.members) || []
         this.pendingInvites = (data && data.pendingInvites) || []
         this.receivedInvites = (data && data.invites) || []
+        this.firm = (data && data.firm) || null
         this.renameDraft = this.team ? this.team.name || '' : ''
+        this.firmRenameDraft = this.firm ? this.firm.name || '' : ''
+        // 退出律所之后「全所」这个视角就不存在了，停在它上面会一直打一个必然被拒的请求
+        if (!this.firm) this.scope = 'team'
       } catch (e) {
         this.loadError = true
         return
@@ -408,7 +660,7 @@ export default {
     },
     async loadSummary() {
       try {
-        const data = await getTeamSummary(this.range)
+        const data = await getTeamSummary(this.range, this.scope)
         this.summary = data || null
         // summary 的成员行带统计数字，比 /team 那份更完整；有就用它
         if (data && Array.isArray(data.members) && data.members.length) {
@@ -421,6 +673,11 @@ export default {
     setRange(days) {
       if (this.range === days) return
       this.range = days
+      this.loadSummary()
+    },
+    setScope(next) {
+      if (this.scope === next) return
+      this.scope = next
       this.loadSummary()
     },
     async run(fn) {
@@ -449,10 +706,130 @@ export default {
         await this.reload()
       })
     },
+    onJoinTeam() {
+      const code = (this.joinCodeInput || '').trim()
+      if (!code) {
+        this.toast(this.$t('team.joinCodeEmpty'))
+        return
+      }
+      this.run(async () => {
+        await joinTeam(code)
+        this.joinCodeInput = ''
+        await this.reload()
+      })
+    },
     onAcceptInvite(invite) {
       this.run(async () => {
         await acceptTeamInvite(invite.id)
         await this.reload()
+      })
+    },
+    // ---- 邀请码：复制 / 重置 ----
+    onCopyCode(code) {
+      const value = (code || '').trim()
+      if (!value) {
+        this.toast(this.$t('team.copyFailed'))
+        return
+      }
+      uni.setClipboardData({
+        data: value,
+        success: () => this.toast(this.$t('team.codeCopied')),
+        fail: () => this.toast(this.$t('team.copyFailed')),
+      })
+    },
+    onResetJoinCode() {
+      uni.showModal({
+        title: this.$t('team.resetCode'),
+        content: this.$t('team.confirmResetCode'),
+        success: (res) => {
+          if (!res.confirm) return
+          this.run(async () => {
+            await regenerateTeamJoinCode()
+            await this.reload()
+          })
+        },
+      })
+    },
+    // ---- 律所 ----
+    onCreateFirm() {
+      const name = (this.newFirmName || '').trim()
+      if (!name) {
+        this.toast(this.$t('team.firmNameEmpty'))
+        return
+      }
+      this.run(async () => {
+        await createFirm(name)
+        this.newFirmName = ''
+        await this.reload()
+      })
+    },
+    onJoinFirm() {
+      const code = (this.firmCodeInput || '').trim()
+      if (!code) {
+        this.toast(this.$t('team.joinCodeEmpty'))
+        return
+      }
+      this.run(async () => {
+        await joinFirm(code)
+        this.firmCodeInput = ''
+        await this.reload()
+      })
+    },
+    onRenameFirm() {
+      const name = (this.firmRenameDraft || '').trim()
+      if (!name) {
+        this.toast(this.$t('team.firmNameEmpty'))
+        return
+      }
+      this.run(async () => {
+        await updateFirm(name)
+        await this.reload()
+      })
+    },
+    onResetFirmCode() {
+      uni.showModal({
+        title: this.$t('team.resetCode'),
+        content: this.$t('team.confirmResetCode'),
+        success: (res) => {
+          if (!res.confirm) return
+          this.run(async () => {
+            await regenerateFirmJoinCode()
+            await this.reload()
+          })
+        },
+      })
+    },
+    onRemoveFirmTeam(t) {
+      uni.showModal({
+        title: this.$t('team.removeFirmTeam'),
+        content: this.$t('team.confirmRemoveFirmTeam'),
+        success: (res) => {
+          if (!res.confirm) return
+          this.run(async () => {
+            await removeFirmTeam(t.id)
+            await this.reload()
+          })
+        },
+      })
+    },
+    // 本团队退出律所走的是同一个端点，只是拿自己的 teamId。
+    // team.id 取不到就不发——猜一个 id 出去会把别人的团队踢出律所。
+    onLeaveFirm() {
+      const teamId = this.team && this.team.id
+      if (!teamId) {
+        this.toast(this.$t('team.loadFailed'))
+        return
+      }
+      uni.showModal({
+        title: this.$t('team.leaveFirm'),
+        content: this.$t('team.confirmLeaveFirm'),
+        success: (res) => {
+          if (!res.confirm) return
+          this.run(async () => {
+            await removeFirmTeam(teamId)
+            await this.reload()
+          })
+        },
       })
     },
     onInviteRolePick(index) {
@@ -577,6 +954,22 @@ export default {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  /* 右下角的反馈浮窗是全局元素，会压住页面最后一行。这里给它让出高度，
+     保证面板最后一个可点控件不被盖住（改这个值前先看反馈浮窗的实际高度）。 */
+  padding-bottom: 72px;
+}
+
+/* 无团队态的三条路并排。窄了自动换行，但每条仍占满一列不塌成一行文字 */
+.join-paths {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.join-card {
+  flex: 1 1 240px;
+  min-width: 220px;
 }
 
 .section-card {
@@ -619,16 +1012,21 @@ export default {
   line-height: 18px;
 }
 
-/* KPI 磁贴：与 OverviewStatsBar 的 .stat-tile 同一形制 */
+/* KPI 磁贴：与 OverviewStatsBar 的 .stat-tile 同一形制。
+   刻意用固定五列的 grid，两种更「聪明」的写法都实测不行：
+     - flex `1 1 140px`（改前的写法）在 1440 窗口下把五块排成 4+1，最后一块独占整行；
+     - `auto-fit + minmax(120px, 1fr)` 只是把这个断点挪到容器 600px 附近，
+       而那对应 1280 宽的窗口——最常见的笔记本尺寸，照样 4+1。
+   `repeat(5, minmax(0, 1fr))` 实测在容器 600px 以上五块同排且文字零裁切
+   （量法：把这段样式搬进静态页，按容器宽逐档量 stat-tile 的 top 分组与 scrollWidth）。
+   minmax 的下界必须是 0：默认的 auto 下界等于内容宽，长文案会把列撑开又变回换行。 */
 .stats-tiles {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
 }
 
 .stat-tile {
-  flex: 1 1 140px;
-  min-width: 120px;
   padding: 10px 12px;
   background: var(--awd-bg);
   border-left: 3px solid var(--awd-mint);
@@ -648,6 +1046,14 @@ export default {
   margin-top: 2px;
   font-size: 11px;
   color: var(--awd-text-2);
+  line-height: 16px;
+}
+
+.stat-sub {
+  display: block;
+  margin-top: 1px;
+  font-size: 11px;
+  color: var(--awd-text-3);
   line-height: 16px;
 }
 
@@ -745,10 +1151,38 @@ export default {
   border-bottom: 1px solid var(--awd-border-subtle);
 }
 
+.team-list-main {
+  flex: 1;
+  min-width: 0;
+}
+
 .team-list-name {
+  display: block;
   flex: 1;
   font-size: 13px;
   color: var(--awd-text);
+}
+
+.team-list-meta {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--awd-text-3);
+  line-height: 16px;
+}
+
+/* 角色标签与「撤销」贴在一起时误点的是不可撤销的那个 */
+.team-list-action {
+  margin-left: 16px;
+}
+
+.head-badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 11px;
+  color: var(--awd-accent-text);
+  background: var(--awd-accent-wash);
+  border-radius: 3px;
 }
 
 .team-list-count {
@@ -779,7 +1213,14 @@ export default {
   flex: 0 0 120px;
 }
 
+/* .section-body 是竖向 flex，块级按钮会被拉满整张卡的宽度（走查 B1/B2）。
+   inline-flex + align-self 让它只占自己的内容宽度。 */
 .team-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  width: auto;
   padding: 6px 14px;
   font-size: 13px;
   color: var(--awd-text);
@@ -803,6 +1244,52 @@ export default {
 .team-btn.is-busy {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+/* 邀请码行：码本身要大到能一眼读出来、也能整串选中复制 */
+.code-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  background: var(--awd-bg);
+  border: 1px solid var(--awd-border-subtle);
+  border-radius: 4px;
+}
+
+.code-main {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.code-label {
+  display: block;
+  font-size: 12px;
+  color: var(--awd-text-2);
+}
+
+.code-value {
+  display: block;
+  margin-top: 2px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  color: var(--awd-text);
+  user-select: text;
+}
+
+.code-desc {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--awd-text-3);
+  line-height: 16px;
+}
+
+.code-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .switch-row {

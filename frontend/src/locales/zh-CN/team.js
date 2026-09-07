@@ -24,14 +24,22 @@ export default {
   teamNamePlaceholder: '团队名称，例如某某律师事务所',
   createButton: '创建团队',
   createFailedEmpty: '团队名称不能为空',
+  joinTitle: '用邀请码加入',
+  joinDesc: '向团队负责人要一串 8 位邀请码，粘进来即可加入。',
+  joinCodePlaceholder: '8 位团队邀请码',
+  joinButton: '加入团队',
+  joinCodeEmpty: '邀请码不能为空',
   invitesTitle: '收到的邀请',
   invitesEmpty: '当前没有收到任何团队邀请',
   inviteFrom: '来自 {team}',
+  inviteRoleAs: '加入后角色：{role}',
+  inviteExpires: '有效期至 {date}',
+  inviteExpiresUnknown: '有效期以官网为准',
   acceptInvite: '接受',
 
   // ---- KPI ----
   kpiTitle: '团队使用概览',
-  kpiActiveMembers: '本周使用人数',
+  kpiActiveMembers: '使用人数',
   kpiActiveMembersCaption: '{active} / {total} 人',
   kpiProjectsCreated: '新建项目',
   kpiAppStarts: '打开次数',
@@ -41,8 +49,18 @@ export default {
   savedFormula: '估算口径：每次 AI 编辑按 {perAgentEdit} 分钟、每轮 AI 对话按 {perAiTurn} 分钟折算，仅供横向比较',
   savedFormulaUnknown: '估算口径由服务端下发，当前取不到',
   rangeDays: '最近 {n} 天',
+  scopeTeam: '本团队',
+  scopeFirm: '全所',
 
   // ---- 成员 ----
+  joinCodeTitle: '团队邀请码',
+  joinCodeDesc: '把这串码给同事，他在「团队」分区粘贴即可加入。',
+  copyCode: '复制',
+  codeCopied: '邀请码已复制',
+  copyFailed: '复制失败，请手动选中这串码',
+  resetCode: '重置',
+  confirmResetCode: '重置后旧邀请码立刻失效，已加入的成员不受影响。确认重置？',
+  codeHidden: '邀请码只对负责人与管理员可见',
   membersTitle: '成员',
   membersEmpty: '暂无成员数据',
   colMember: '成员',
@@ -67,6 +85,7 @@ export default {
   colProject: '项目',
   colProjectMembers: '参与人数',
   setAlias: '起别名',
+  renameAlias: '改别名',
   aliasPlaceholder: '这个编号在团队里叫什么',
 
   // ---- 管理区 ----
@@ -85,8 +104,35 @@ export default {
   shareProjectNamesLabel: '共享项目名',
   shareProjectNamesDesc: '打开后，成员上报的统计里会带上项目名；关闭时团队面板只看得到匿名编号。这是整个团队的设置。',
 
+  // ---- 律所 ----
+  firmTitle: '律所',
+  firmNoneDesc: '把多个团队并入同一家律所后，总部团队可以看到全所汇总。团队仍然各管各的成员。',
+  firmOwnerOnly: '只有团队负责人可以创建律所或并入律所。',
+  createFirmTitle: '创建律所',
+  firmNamePlaceholder: '律所名称',
+  createFirmButton: '创建律所',
+  firmNameEmpty: '律所名称不能为空',
+  joinFirmTitle: '并入已有律所',
+  firmCodePlaceholder: '律所邀请码',
+  joinFirmButton: '并入律所',
+  firmNameLabel: '律所名称',
+  saveFirmName: '保存',
+  firmJoinCodeTitle: '律所邀请码',
+  firmJoinCodeDesc: '把这串码给其他团队的负责人，他在「律所」区粘贴即可并入。',
+  firmHeadBadge: '总部',
+  firmTeamsTitle: '律所内的团队',
+  colTeam: '团队',
+  colTeamMembers: '人数',
+  removeFirmTeam: '移出律所',
+  confirmRemoveFirmTeam: '确认把该团队移出律所？移出后它的统计不再计入全所汇总。',
+  leaveFirm: '退出律所',
+  confirmLeaveFirm: '确认让本团队退出律所？退出后看不到全所汇总。',
+  firmTeamsTableTitle: '各团队',
+  colTeamMinutes: '投入时长',
+
   // ---- 数据共享 ----
   sharingTitle: '向团队共享我的使用统计',
+  sharingSwitchDesc: '开启后每天上传一次当日计数',
   sharingDesc: '每天上传一条计数（投入时长、AI 轮次、编辑动作数、匿名项目编号），不含任何文档内容。默认关闭。',
   sharingDesktopOnly: '这台机器是团队服务器模式，使用统计按人区分不了，该开关不可用。',
   uploadNow: '立即上报',
@@ -98,6 +144,11 @@ export default {
   skipNotLocalMode: '团队服务器模式下不上报使用统计',
   skipNotConnected: '这台机器还没有连接账户',
   skipNoTeam: '你还不在任何团队里',
+
+  // ---- 账户分区的入口行 ----
+  accountRowLabel: '团队',
+  accountRowNone: '未加入',
+  goTeam: '前往团队',
 
   // ---- 空态 ----
   emptyData: '还没有统计数据。成员打开数据共享开关后，次日可以看到。',

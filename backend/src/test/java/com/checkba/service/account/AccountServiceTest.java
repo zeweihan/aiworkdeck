@@ -751,6 +751,51 @@ class AccountServiceTest {
         assertDoesNotThrow(() -> new AccountService(com.checkba.service.site.SiteProfileService.pinnedTo("http://127.0.0.1:3000"), tempDir.toString(), new StubTransport(), null));
     }
 
+    // ==================== 团队层级的出站形状（设计 §10.3） ====================
+
+    @Test
+    @DisplayName("层级动作的方法与路径逐条对齐官网契约；改律所名出站必须仍是 PATCH")
+    void teamHierarchyOutboundShape() {
+        AccountService service = connected();
+        for (int i = 0; i < 7; i++) transport.enqueue(200, "{\"ok\":true}");
+
+        service.joinTeam(" ABCD1234 ");
+        service.regenerateTeamJoinCode();
+        service.createFirm("某某律师事务所");
+        service.joinFirm("FIRMCODE");
+        service.updateFirm("改了名的所");
+        service.regenerateFirmJoinCode();
+        service.removeFirmTeam("t 7");
+
+        String base = "https://www.aiworkdeck.com/api/account/team";
+        assertEquals("POST " + base + "/join", transport.calls.get(1));
+        assertTrue(transport.bodies.get(1).contains("ABCD1234"), transport.bodies.get(1));
+        assertFalse(transport.bodies.get(1).contains(" ABCD1234"), "邀请码要去掉首尾空白，粘贴常带空格");
+        assertEquals("POST " + base + "/join-code/regenerate", transport.calls.get(2));
+        assertEquals("POST " + base + "/firm", transport.calls.get(3));
+        assertEquals("POST " + base + "/firm/join", transport.calls.get(4));
+        assertEquals("PATCH " + base + "/firm", transport.calls.get(5),
+                "本机那一跳是 PUT（uni.request 没有 PATCH），出站到官网必须仍是 PATCH");
+        assertEquals("POST " + base + "/firm/join-code/regenerate", transport.calls.get(6));
+        assertEquals("DELETE " + base + "/firm/teams/t+7", transport.calls.get(7),
+                "路径段必须编码：带 ../ 或 ? 的 teamId 会改写请求的目标端点");
+    }
+
+    @Test
+    @DisplayName("summary 带上 scope；老签名默认 team，不静默变成全所")
+    void teamSummaryCarriesScope() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"range\":7}").enqueue(200, "{\"range\":30}");
+
+        service.fetchTeamSummary(7);
+        service.fetchTeamSummary(30, "firm");
+
+        assertEquals("GET https://www.aiworkdeck.com/api/account/team/summary?range=7&scope=team",
+                transport.calls.get(1));
+        assertEquals("GET https://www.aiworkdeck.com/api/account/team/summary?range=30&scope=firm",
+                transport.calls.get(2));
+    }
+
     @Test
     @DisplayName("尾部斜杠归一化：不能拼出 //api/account/me")
     void trailingSlashStripped() {

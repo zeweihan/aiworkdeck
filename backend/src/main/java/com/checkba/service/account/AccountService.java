@@ -527,9 +527,60 @@ public class AccountService {
         return sendJson("DELETE", "/api/account/team/members/" + segment(accountId), null);
     }
 
-    /** GET /api/account/team/summary?range=7|30|90 —— 团队看板取数。 */
+    /** GET /api/account/team/summary?range=7|30|90 —— 团队看板取数（本团队视角）。 */
     public Map<String, Object> fetchTeamSummary(int range) {
-        return getJson("/api/account/team/summary?range=" + range, requireKey());
+        return fetchTeamSummary(range, "team");
+    }
+
+    /**
+     * GET /api/account/team/summary?range=&scope=team|firm —— 看板取数。
+     * scope=firm 只对已并入律所的团队有意义；**能不能看全所由官网按角色裁决**，
+     * 这一层不判——把角色判定抄到桌面端等于给了「改本机一个值就看全所」的机会。
+     */
+    public Map<String, Object> fetchTeamSummary(int range, String scope) {
+        String s = (scope == null || scope.isBlank()) ? "team" : scope.trim();
+        return getJson("/api/account/team/summary?range=" + range + "&scope=" + s, requireKey());
+    }
+
+    // ---- 层级与加入流程（设计 §10.3） ----
+
+    /** POST /api/account/team/join —— 用 8 位团队邀请码加入（已有团队时官网回 409）。 */
+    public Map<String, Object> joinTeam(String code) {
+        return sendJson("POST", "/api/account/team/join",
+                Map.of("code", code == null ? "" : code.trim()));
+    }
+
+    /** POST /api/account/team/join-code/regenerate —— 重置团队邀请码，旧码立刻失效。 */
+    public Map<String, Object> regenerateTeamJoinCode() {
+        return sendJson("POST", "/api/account/team/join-code/regenerate", Map.of());
+    }
+
+    /** POST /api/account/team/firm —— 创建律所，本团队成为总部团队。 */
+    public Map<String, Object> createFirm(String name) {
+        return sendJson("POST", "/api/account/team/firm",
+                Map.of("name", name == null ? "" : name.trim()));
+    }
+
+    /** POST /api/account/team/firm/join —— 本团队按律所邀请码并入律所。 */
+    public Map<String, Object> joinFirm(String code) {
+        return sendJson("POST", "/api/account/team/firm/join",
+                Map.of("code", code == null ? "" : code.trim()));
+    }
+
+    /** PATCH /api/account/team/firm —— 改律所名（总部 OWNER/ADMIN）。 */
+    public Map<String, Object> updateFirm(String name) {
+        return sendJson("PATCH", "/api/account/team/firm",
+                Map.of("name", name == null ? "" : name.trim()));
+    }
+
+    /** POST /api/account/team/firm/join-code/regenerate —— 重置律所邀请码。 */
+    public Map<String, Object> regenerateFirmJoinCode() {
+        return sendJson("POST", "/api/account/team/firm/join-code/regenerate", Map.of());
+    }
+
+    /** DELETE /api/account/team/firm/teams/{teamId} —— 移出团队，或该团队自己退出律所。 */
+    public Map<String, Object> removeFirmTeam(String teamId) {
+        return sendJson("DELETE", "/api/account/team/firm/teams/" + segment(teamId), null);
     }
 
     /** PUT /api/account/team/projects/{projectKey}/alias —— 管理者给项目短码起别名。 */

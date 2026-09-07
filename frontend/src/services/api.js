@@ -2473,11 +2473,81 @@ export function removeTeamMember(accountId) {
   }).then(unwrapEnvelope);
 }
 
-// range 只有 7 / 30 / 90 三档，其余值后端会归一到 7。
-export function getTeamSummary(range = 7) {
+// range 只有 7 / 30 / 90 三档，scope 只有 team / firm，其余值后端会归一。
+// scope=firm 能不能看由官网按角色判，前端只负责把用户选的视角带上去。
+export function getTeamSummary(range = 7, scope = 'team') {
   return request({
-    url: `/api/account/team/summary?range=${range}`,
+    url: `/api/account/team/summary?range=${range}&scope=${encodeURIComponent(scope)}`,
     method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// ---- 层级与加入流程（设计 §10.3）----
+
+// 用 8 位团队邀请码加入。已有团队时官网回 409，走业务信封。
+export function joinTeam(code) {
+  return request({
+    url: '/api/account/team/join',
+    method: 'POST',
+    data: { code },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 重置团队邀请码：旧码立刻失效，已加入的成员不受影响。
+export function regenerateTeamJoinCode() {
+  return request({
+    url: '/api/account/team/join-code/regenerate',
+    method: 'POST',
+    data: {},
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 创建律所，本团队成为总部团队。
+export function createFirm(name) {
+  return request({
+    url: '/api/account/team/firm',
+    method: 'POST',
+    data: { name },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 本团队按律所邀请码并入律所。
+export function joinFirm(code) {
+  return request({
+    url: '/api/account/team/firm/join',
+    method: 'POST',
+    data: { code },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 改律所名。本机这一跳是 PUT，出站到官网仍是 PATCH（后端负责）。
+export function updateFirm(name) {
+  return request({
+    url: '/api/account/team/firm',
+    method: 'PUT',
+    data: { name },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+export function regenerateFirmJoinCode() {
+  return request({
+    url: '/api/account/team/firm/join-code/regenerate',
+    method: 'POST',
+    data: {},
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 把某个团队移出律所，或本团队自己退出律所（总部团队不可退出，官网会拒）。
+export function removeFirmTeam(teamId) {
+  return request({
+    url: `/api/account/team/firm/teams/${encodeURIComponent(teamId)}`,
+    method: 'DELETE',
   }).then(unwrapEnvelope);
 }
 

@@ -447,14 +447,108 @@ public class AccountController {
         return ok(result);
     }
 
-    /** 看板取数。range 只收 7/30/90 三档，其余一律回落 7——非法值不该打到官网。 */
+    /**
+     * 看板取数。range 只收 7/30/90 三档，其余一律回落 7——非法值不该打到官网。
+     * scope 同理只收 team/firm，其余回落 team。
+     *
+     * <p>归一化不等于鉴权：{@code scope=firm} 能不能看由官网按角色判（设计 §10.3）。
+     * 桌面端只保证「发出去的值是枚举内的」，绝不在这里判「你是不是总部管理者」。
+     */
     @GetMapping("/team/summary")
     public Map<String, Object> teamSummary(
             @RequestParam(value = "range", required = false) Integer range,
+            @RequestParam(value = "scope", required = false) String scope,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         requireUser(sessionId);
         int normalized = (range != null && (range == 7 || range == 30 || range == 90)) ? range : 7;
-        return ok(accountService.fetchTeamSummary(normalized));
+        String normalizedScope = "firm".equals(scope) ? "firm" : "team";
+        return ok(accountService.fetchTeamSummary(normalized, normalizedScope));
+    }
+
+    // ---- 层级与加入流程（设计 §10.3）：同样只转发，角色判定全在官网 ----
+
+    /** 用 8 位团队邀请码加入：{@code {code}}。加入后刷新本机的团队设置缓存。 */
+    @PostMapping("/team/join")
+    public Map<String, Object> joinTeam(
+            @RequestBody(required = false) Map<String, String> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
+        String code = body == null ? null : body.get("code");
+        if (code == null || code.trim().isEmpty()) {
+            throw new IllegalArgumentException("邀请码不能为空");
+        }
+        Map<String, Object> joined = accountService.joinTeam(code);
+        if (joined.get("team") instanceof Map<?, ?> team) {
+            teamSettingsCache.remember(team);
+        }
+        return ok(joined);
+    }
+
+    /** 重置团队邀请码。旧码立刻失效，已加入的成员不受影响。 */
+    @PostMapping("/team/join-code/regenerate")
+    public Map<String, Object> regenerateTeamJoinCode(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
+        return ok(accountService.regenerateTeamJoinCode());
+    }
+
+    /** 创建律所：{@code {name}}。本团队成为总部团队。 */
+    @PostMapping("/team/firm")
+    public Map<String, Object> createFirm(
+            @RequestBody(required = false) Map<String, String> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
+        String name = body == null ? null : body.get("name");
+        if (name == null || name.trim().isEmpty()) {
+            throw new IllegalArgumentException("律所名称不能为空");
+        }
+        return ok(accountService.createFirm(name));
+    }
+
+    /** 本团队按律所邀请码并入律所：{@code {code}}。 */
+    @PostMapping("/team/firm/join")
+    public Map<String, Object> joinFirm(
+            @RequestBody(required = false) Map<String, String> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
+        String code = body == null ? null : body.get("code");
+        if (code == null || code.trim().isEmpty()) {
+            throw new IllegalArgumentException("邀请码不能为空");
+        }
+        return ok(accountService.joinFirm(code));
+    }
+
+    /**
+     * 改律所名：{@code {name}}。本机这一层用 PUT，出站仍是 PATCH——
+     * 理由同 {@link #updateTeam}：uni.request 的 method 枚举里没有 PATCH。
+     */
+    @PutMapping("/team/firm")
+    public Map<String, Object> updateFirm(
+            @RequestBody(required = false) Map<String, String> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
+        String name = body == null ? null : body.get("name");
+        if (name == null || name.trim().isEmpty()) {
+            throw new IllegalArgumentException("律所名称不能为空");
+        }
+        return ok(accountService.updateFirm(name));
+    }
+
+    /** 重置律所邀请码（总部 OWNER/ADMIN）。 */
+    @PostMapping("/team/firm/join-code/regenerate")
+    public Map<String, Object> regenerateFirmJoinCode(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
+        return ok(accountService.regenerateFirmJoinCode());
+    }
+
+    /** 把某个团队移出律所，或该团队自己退出律所。总部团队不可退出（官网判）。 */
+    @DeleteMapping("/team/firm/teams/{teamId}")
+    public Map<String, Object> removeFirmTeam(
+            @org.springframework.web.bind.annotation.PathVariable("teamId") String teamId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
+        return ok(accountService.removeFirmTeam(teamId));
     }
 
     /** 给项目短码起别名：{@code {label}}。空串表示清掉别名，退回显示短码。 */
