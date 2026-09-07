@@ -101,7 +101,7 @@
 | `editor.action` | `libreofficeExecutorClient.executeCommand`（前端，AI 与人工全收口） | action, agent(bool), success, durationMs, whitelistRejected |
 | `editor.bridge` | `EditorBridgeService.executeEditorCommand`（服务端往返与超时） | action, outcome(ok/timeout/error), durationMs |
 | `skill.activated` | `SkillRouter.activateForTurn` | skillId, how(pinned/matched) |
-| `skill.lifecycle` / `plugin.lifecycle` | `SkillRegistry.setEnabled`、`PluginController` 安装/卸载/启停 | id, op |
+| `skill.lifecycle` / `plugin.lifecycle` | `SkillRegistry.setEnabled`、`PluginController` 安装/卸载/启停、`PluginDevController` 开发形态脚手架/直装/卸载（op 取 `dev_scaffold` / `dev_install` / `dev_uninstall`，与市场安装区分；不另设事件名） | id, op |
 | `project.created` | `ProjectService.createProject` / `LocalProjectService.openLocalFolder` / `CloudSyncService.cloneFromCloud` | kind(managed/local/cloud), reused, importedCount |
 | `file.changed` | `ProjectFileService.signalChange` | （仅计数） |
 | `version.op` | `WorkSessionService.ensureSession/endSession` + `VersionController.onVersionError`（失败率） | op, ok |

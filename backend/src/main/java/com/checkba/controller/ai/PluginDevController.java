@@ -52,7 +52,7 @@ public class PluginDevController {
             String id = body.get("id") == null ? null : String.valueOf(body.get("id")).trim();
             String name = body.get("name") == null ? null : String.valueOf(body.get("name"));
             Long folderId = pluginDevService.scaffold(projectId, userId, id, name);
-            telemetryService.record("plugin.dev", Map.of("pluginId", id, "op", "scaffold"));
+            telemetryService.record("plugin.lifecycle", Map.of("pluginId", id, "op", "dev_scaffold"));
             Map<String, Object> result = ok();
             result.put("folderId", folderId);
             return ResponseEntity.ok(result);
@@ -87,7 +87,7 @@ public class PluginDevController {
         }
         try {
             String id = pluginDevService.install(asLong(body.get("projectId")), asLong(body.get("folderId")));
-            telemetryService.record("plugin.dev", Map.of("pluginId", id, "op", "install"));
+            telemetryService.record("plugin.lifecycle", Map.of("pluginId", id, "op", "dev_install"));
             Map<String, Object> result = ok();
             result.put("id", id);
             return ResponseEntity.ok(result);
@@ -108,7 +108,7 @@ public class PluginDevController {
             String id = body == null ? null : body.get("id");
             pluginDevService.uninstall(id);
             if (id != null) {
-                telemetryService.record("plugin.dev", Map.of("pluginId", id, "op", "uninstall"));
+                telemetryService.record("plugin.lifecycle", Map.of("pluginId", id, "op", "dev_uninstall"));
             }
             return ResponseEntity.ok(ok());
         } catch (Exception e) {

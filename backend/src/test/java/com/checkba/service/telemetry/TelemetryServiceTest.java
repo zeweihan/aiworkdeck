@@ -68,6 +68,24 @@ class TelemetryServiceTest {
     }
 
     @Test
+    void pluginDevOpsRideOnPluginLifecycleEvent() throws Exception {
+        // PluginDevController 的脚手架/直装/卸载共用 plugin.lifecycle，op 用 dev_ 前缀区分，
+        // 不另设事件名（否则官网仓 events 端点白名单也要跟着改）。dev-board#498
+        for (String op : new String[]{"dev_scaffold", "dev_install", "dev_uninstall"}) {
+            svc.record("plugin.lifecycle", Map.of("pluginId", "my-plugin", "op", op));
+        }
+        svc.flush();
+        ArgumentCaptor<TelemetryEvent> cap = ArgumentCaptor.forClass(TelemetryEvent.class);
+        verify(repo, times(3)).save(cap.capture());
+        for (TelemetryEvent ev : cap.getAllValues()) {
+            assertEquals("plugin.lifecycle", ev.getEventName());
+            assertTrue(ev.getAttrs().contains("\"op\":\"dev_"), ev.getAttrs());
+            assertTrue(ev.getAttrs().contains("my-plugin"));
+        }
+        assertEquals(0, svc.droppedCount());
+    }
+
+    @Test
     void overlongStringValueIsDropped() throws Exception {
         svc.record("ai.tool", Map.of("toolName", "x".repeat(65)));
         svc.flush();
