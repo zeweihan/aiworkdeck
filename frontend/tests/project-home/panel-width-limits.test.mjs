@@ -104,3 +104,34 @@ test('缩小窗口后已保存的左右栏宽度仍留在窗口内', async () =>
     }
   }
 })
+
+test('临时几何小于可见面板最小宽时保留原宽，不能把展开的面板夹成 0', async () => {
+  const { fitPanelWidths } = await import('../../src/pages/project-overview/panelWidthLimits.js')
+  for (const [left, right] of [[260, 0], [0, 360], [260, 360]]) {
+    assert.deepEqual(fitPanelWidths(1, 51, left, right), { left, right })
+    assert.deepEqual(fitPanelWidths(0, 51, left, right), { left, right })
+  }
+  // 刚好容纳两栏下限时仍需回夹，不能把整个窄窗处理都跳过。
+  assert.deepEqual(fitPanelWidths(651, 51, 1000, 1200), { left: 160, right: 240 })
+})
+
+test('真实 resize 方法：截图临时 1px → 恢复 1440px 后资源管理器仍可见', async () => {
+  const { fitPanelWidths } = await import('../../src/pages/project-overview/panelWidthLimits.js')
+  const page = readFileSync(new URL('../../src/pages/project-overview/project-overview.vue', import.meta.url), 'utf8')
+  const start = page.indexOf('    handleResponsiveResize() {')
+  const end = page.indexOf('    // 左栏面板切换方法组', start)
+  const window = { innerWidth: 1440 }
+  const layout = { clientWidth: 1440, querySelector: () => ({ offsetWidth: 51 }) }
+  const { handleResponsiveResize } = new Function('window', 'fitPanelWidths', 'return {' + page.slice(start, end) + '}')(window, fitPanelWidths)
+  for (const showAiPanel of [false, true]) {
+    const vm = { $refs: { sidebarLeft: { parentElement: layout } }, sidebarCollapsed: false,
+      sidebarWidth: 260, aiPanelWidth: 360, showAiPanel }
+    window.innerWidth = layout.clientWidth = 1
+    handleResponsiveResize.call(vm)
+    window.innerWidth = layout.clientWidth = 1440
+    handleResponsiveResize.call(vm)
+    assert.equal(vm.sidebarWidth, 260)
+    assert.equal(vm.aiPanelWidth, 360)
+    assert.equal(vm.isCompactLayout, false)
+  }
+})

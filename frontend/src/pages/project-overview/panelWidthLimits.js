@@ -49,6 +49,10 @@ export function leftPanelMaxWidth(layoutWidth, railWidth, aiPanelWidth, min = 16
 
 export function fitPanelWidths(layoutWidth, railWidth, leftWidth, rightWidth) {
   const available = Math.max(0, px(layoutWidth) - px(railWidth) - EDITOR_MIN_WIDTH)
+  // Chrome 区域截图会短暂发出 1px viewport 的 resize。装不下可见面板的
+  // 最小宽时保留原宽，否则写入 0 后，恢复正常窗口也只会继续保留 0。
+  const minimum = Math.min(px(leftWidth), 160) + Math.min(px(rightWidth), 240)
+  if (available < minimum) return { left: px(leftWidth), right: px(rightWidth) }
   const right = Math.min(px(rightWidth), Math.max(240, available - px(leftWidth)))
   const left = Math.min(px(leftWidth), Math.max(0, available - right))
   return { left, right: Math.min(right, Math.max(0, available - left)) }
