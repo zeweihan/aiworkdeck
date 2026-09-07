@@ -170,6 +170,18 @@ class ContextAssemblerServiceTest {
     }
 
     @Test
+    void newTablesAreInsertedAsOneBatchInBothLanguages() {
+        when(legalTools.read_document("123")).thenReturn("第一条 合作范围……");
+        for (boolean english : new boolean[] {false, true}) {
+            when(appLanguageService.isEnglish()).thenReturn(english);
+            String reminder = assembleLastUserText(activeDoc());
+            assertTrue(reminder.contains("doc_insert_table"));
+            assertTrue(reminder.contains("rowsJson"));
+            assertTrue(reminder.contains(english ? "one call" : "一次调用"));
+        }
+    }
+
+    @Test
     @DisplayName("英文模式下同一条输出目标规则也在（zh/en 必须同步）")
     void englishReminderCarriesTheSameOutputTargetRule() {
         when(appLanguageService.isEnglish()).thenReturn(true);

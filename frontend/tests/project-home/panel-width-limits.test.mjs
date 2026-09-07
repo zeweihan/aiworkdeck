@@ -88,3 +88,19 @@ test('接线：容器几何在 startResize 里实测，不硬编码 rail 宽等�
   assert.match(body, /clientWidth/, '要读实际渲染宽度')
   assert.match(body, /containerWidth/, '量到的宽度要缓存到 this.resizing 上给 applyResizeFrame 用')
 })
+
+test('缩小窗口后已保存的左右栏宽度仍留在窗口内', async () => {
+  const { fitPanelWidths } = await import('../../src/pages/project-overview/panelWidthLimits.js')
+  assert.equal(typeof fitPanelWidths, 'function')
+  for (const width of [800, 1000, 1400]) {
+    for (const left of [0, 260, 1000]) {
+      for (const right of [0, 360, 1200]) {
+        const fit = fitPanelWidths(width, 50, left, right)
+        assert.ok(fit.left + fit.right + 50 + EDITOR_MIN_WIDTH <= width)
+        assert.ok(fit.left <= left && fit.right <= right, '回夹不应放大面板')
+        if (!left) assert.equal(fit.left, 0)
+        if (!right) assert.equal(fit.right, 0)
+      }
+    }
+  }
+})

@@ -412,3 +412,8 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
 - Office 插件的标签解析：`node --test office-addin/taskpane/lib/sse.test.js`（零依赖，未进 CI）。
 
 - **工具参数太长会把模型输出撑到截断**（实测：一章起草里 4 次）。编排器检测到 `<tool_code>` 未闭合会回喂提示让模型重发，最多两轮；**两轮还截断就把原因写进最终正文**（「参数太长…没有执行完」），不再静默收尾。根治办法不是调 max_tokens，而是别让模型回抄大参数：让工具自己把内容写进文档（尽调插件 `dd_table`/`dd_phrases` 的 `docFileId` 就是这么做的）。截断守卫覆盖 `<tool_code>` / `<todo_write>` / `<final>` 三个「开了必须闭」的标签，且**开标签自己被切断也算**（实测最短一次只输出了 `<todo_write`）；只守 tool_code 的话模型在 todo 清单里被切断就静默收尾，一轮丢四个回合。回归用例 `cases-harness-recovery.json` 的 `truncated-tool-code-persists-tells-the-user` 与 `truncated-todo-write-also-corrected`。
+
+## 2026-09-07 实测回归（B4/B7）
+
+- 活跃文档提醒在中英两路明确要求新表整表 `doc_insert_table(rowsJson)` 一次提交，再做合并/格式，避免逐行写表耗尽 30 步；不放大全局步数限制。
+- 回答菜单「插入当前文档」复用 LOWA `stream_insert({text, complete:true})` 富文本路径，单命令冲出尾表；拒绝并行 Agent 写入，失败不显示成功。覆盖 `tests/project-home/ai-message-insert.test.mjs`；worker 契约见 ai-doc-bridge。
