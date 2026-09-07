@@ -56,7 +56,7 @@ function harness() {
     ${section("app.on('activate'", "app.on('before-quit'")}
     globalThis.create = createMainWindow;
     globalThis.current = () => mainWindow;
-    globalThis.finishStartup = () => { mainWindowStartupReady = true; createMainWindow() };
+    globalThis.finishStartup = () => { ${section('      mainWindowStartupReady = true', '      retireFirstLaunchSplash()')} };
   `, context)
   return { context, windows, intervals, app, clipboard }
 }
