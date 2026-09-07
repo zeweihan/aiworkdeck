@@ -46,7 +46,10 @@ class AccountControllerRechargeTest {
         MachineAccountGuard guard = mock(MachineAccountGuard.class); // requireMachineScope 默认放行（void no-op）
         controller = new AccountController(accountService, mock(PlatformAiChannel.class),
                 mock(AccountSwitchCleanup.class), mock(TokenUsageRepository.class), guard,
-                mock(com.checkba.service.entitlement.EntitlementService.class));
+                mock(com.checkba.service.entitlement.EntitlementService.class),
+                mock(com.checkba.service.team.TeamUsageSettings.class),
+                mock(com.checkba.service.team.TeamUsageUploadService.class),
+                mock(com.checkba.service.team.TeamSettingsCache.class));
     }
 
     // ==================== recharge 参数校验：拒绝但绝不 4xx/4010 ====================

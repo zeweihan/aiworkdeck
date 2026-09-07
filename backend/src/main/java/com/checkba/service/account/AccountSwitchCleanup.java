@@ -40,6 +40,8 @@ public class AccountSwitchCleanup {
     private final PlatformCreditsGate platformCreditsGate;
     private final PlatformUsageAccountant platformUsageAccountant;
     private final ChatModelFactory chatModelFactory;
+    private final com.checkba.service.team.TeamUsageSettings teamUsageSettings;
+    private final com.checkba.service.team.TeamSettingsCache teamSettingsCache;
 
     /** 刚连上一个（可能是不同的）账户：旧账户的一切当场作废，再异步拉新账户的权益。 */
     public void afterConnect() {
@@ -66,5 +68,10 @@ public class AccountSwitchCleanup {
         // /api/account/balance 的 profile/membership TTL 缓存也是账户级内容（dev-board#183/#184）：
         // 不清的话换一个没充值的新账号进来，顶栏会先展示上一个账号的余额/等级直到缓存自然过期
         accountService.clearBalanceCache();
+        // 团队台账同理（dev-board#496）：「哪些天已经传过了」记的是「传给<b>那个</b>账户」，
+        // 换了人必须从头传；「共享项目名」是上一个团队的设置，留着会让下一个团队的
+        // 日聚合按旧团队的口径带上项目名
+        teamUsageSettings.resetLedger();
+        teamSettingsCache.clear();
     }
 }

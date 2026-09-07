@@ -88,6 +88,9 @@ jobs:
       - name: Capability slots settings section contract (dev-board#497)
         working-directory: frontend
         run: npm run test:capabilities
+      - name: Team panel + locale contracts (dev-board#496)
+        working-directory: frontend
+        run: npm run test:team
       - name: Build H5
         working-directory: frontend
         run: npm run build:h5

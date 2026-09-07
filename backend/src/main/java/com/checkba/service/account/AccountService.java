@@ -477,6 +477,119 @@ public class AccountService {
         membershipSummaryCache = null;
     }
 
+    // ==================== 团队（dev-board#496） ====================
+    //
+    // 全部走 Bearer awdk_，官网按 Key 解析 accountId。桌面前端从不直连官网，
+    // 这一层与 membership 一样是**原样转发**：字段以官网 doc/desktop-contract.md 为准，
+    // 不在这里裁剪，也不在这里编造默认值——官网加一个字段，桌面端立刻就能用。
+
+    /** GET /api/account/team —— 我的团队；无团队时官网回 {@code {team:null, invites:[...]}}。 */
+    public Map<String, Object> fetchTeam() {
+        return getJson("/api/account/team", requireKey());
+    }
+
+    /** POST /api/account/team —— 创建团队（已有团队时官网回 409）。 */
+    public Map<String, Object> createTeam(String name) {
+        return sendJson("POST", "/api/account/team", Map.of("name", name == null ? "" : name.trim()));
+    }
+
+    /** PATCH /api/account/team —— 改团队名 / 「共享项目名」开关。只传要改的字段。 */
+    public Map<String, Object> updateTeam(Map<String, Object> patch) {
+        return sendJson("PATCH", "/api/account/team", patch == null ? Map.of() : patch);
+    }
+
+    /** POST /api/account/team/invites —— 按手机号邀请（被邀请人可以还没注册）。 */
+    public Map<String, Object> createTeamInvite(String phone, String role) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("phone", phone == null ? "" : phone.trim());
+        body.put("role", role == null || role.isBlank() ? "MEMBER" : role.trim());
+        return sendJson("POST", "/api/account/team/invites", body);
+    }
+
+    /** DELETE /api/account/team/invites/{id} —— 撤销尚未接受的邀请。 */
+    public Map<String, Object> revokeTeamInvite(String inviteId) {
+        return sendJson("DELETE", "/api/account/team/invites/" + segment(inviteId), null);
+    }
+
+    /** POST /api/account/team/invites/{id}/accept —— 被邀请手机号本人接受邀请。 */
+    public Map<String, Object> acceptTeamInvite(String inviteId) {
+        return sendJson("POST", "/api/account/team/invites/" + segment(inviteId) + "/accept", Map.of());
+    }
+
+    /** PATCH /api/account/team/members/{accountId} —— 改成员角色。 */
+    public Map<String, Object> updateTeamMember(String accountId, String role) {
+        return sendJson("PATCH", "/api/account/team/members/" + segment(accountId),
+                Map.of("role", role == null ? "" : role.trim()));
+    }
+
+    /** DELETE /api/account/team/members/{accountId} —— 移除成员，或本人退出（OWNER 不可退出）。 */
+    public Map<String, Object> removeTeamMember(String accountId) {
+        return sendJson("DELETE", "/api/account/team/members/" + segment(accountId), null);
+    }
+
+    /** GET /api/account/team/summary?range=7|30|90 —— 团队看板取数。 */
+    public Map<String, Object> fetchTeamSummary(int range) {
+        return getJson("/api/account/team/summary?range=" + range, requireKey());
+    }
+
+    /** PUT /api/account/team/projects/{projectKey}/alias —— 管理者给项目短码起别名。 */
+    public Map<String, Object> setTeamProjectAlias(String projectKey, String label) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("label", label == null ? "" : label);
+        return sendJson("PUT", "/api/account/team/projects/" + segment(projectKey) + "/alias", body);
+    }
+
+    /**
+     * POST /api/account/team/usage —— 上报一天的使用日聚合。
+     *
+     * <p>入参是**已经序列化好的 JSON 串**，不是 Map：payload 由
+     * {@code TeamUsageRollupService} 组装，那里才是「什么字段可以出本机」的唯一裁决点。
+     * 让它把成品交过来，这一层就没有再往里塞字段的机会。
+     */
+    public Map<String, Object> uploadTeamUsage(String payloadJson) {
+        String key = requireKey();
+        AccountTransport.Reply reply = transport.send(
+                "POST", baseUrl() + "/api/account/team/usage", key, payloadJson);
+        if (reply.networkFailure()) {
+            throw networkError();
+        }
+        return handle(reply);
+    }
+
+    /**
+     * 带 Key 的 POST/PATCH/PUT/DELETE 统一出口（GET 走 {@link #getJson}）。
+     * body 为 null 表示无请求体——DELETE 带体在部分反代上会被丢掉，不值得冒这个险。
+     */
+    private Map<String, Object> sendJson(String method, String path, Map<String, Object> body) {
+        String key = requireKey();
+        String json = null;
+        if (body != null) {
+            try {
+                json = objectMapper.writeValueAsString(body);
+            } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                throw new IllegalStateException(e); // 入参都是 String/Boolean，序列化不会失败
+            }
+        }
+        AccountTransport.Reply reply = transport.send(method, baseUrl() + path, key, json);
+        if (reply.networkFailure()) {
+            throw networkError();
+        }
+        return handle(reply);
+    }
+
+    /**
+     * 路径段编码。accountId / inviteId / projectKey 都来自前端传参，直接拼进 URL
+     * 会让一个带 {@code ../} 或 {@code ?} 的值改写请求的目标端点。
+     */
+    private static String segment(String raw) {
+        String value = raw == null ? "" : raw.trim();
+        if (value.isEmpty()) {
+            throw new AccountException(AccountException.Kind.MALFORMED,
+                    LangText.of("缺少必要的标识参数", "A required identifier is missing"));
+        }
+        return java.net.URLEncoder.encode(value, StandardCharsets.UTF_8);
+    }
+
     // ==================== 内部 ====================
 
     /**

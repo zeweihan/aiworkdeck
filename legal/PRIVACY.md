@@ -112,7 +112,28 @@
 
 设置（左栏齿轮）- 数据统计 - 关闭「分享匿名使用统计」。关闭立即生效，此后使用统计零外发请求。
 
-## 十一、联系
+## 十一、团队使用统计（可选，默认关闭）
+
+律所可以在应用内组建团队，让管理者看到全所的使用情况。这是**另一条通道**，与上面第五至第十节说的匿名使用统计完全分离：不同的开关、不同的接口、不同的存储，两者之间没有任何关联。上面那条通道的随机安装标识仍然与账户无关，这一节不改变它。
+
+**默认关闭。** 每台机器要由使用者本人在「设置 - 团队 - 向团队共享我的使用统计」里显式打开，管理者无法代为打开。关闭状态下这条通道零外发请求。
+
+打开后，应用每天上报**一条**记录，内容全部是计数、日期与不可逆编号：
+
+- 当日投入时长（分钟）、应用打开次数
+- AI 对话轮次、工具调用数、AI 编辑动作数、人工编辑动作数、新建项目数
+- token 用量合计（按结算口径分两类）
+- 按项目分的投入时长与 AI 使用量，项目以**不可逆的匿名编号**出现
+
+与匿名通道不同，这条记录带你的账户身份（用账户密钥鉴权），因为它的用途就是让团队管理者看到「谁用了多少」。
+
+**项目名默认不上传。** 团队面板上项目只显示匿名编号，管理者可以给编号起一个团队内部叫法（这个叫法存在服务器上，与你机器上的真实项目名无关）。只有团队管理者在「团队设置」里显式打开「共享项目名」后，成员的上报才会带上项目名——这是整个团队的设置，会影响全体成员。
+
+**仍然不会上传的**：文档内容、文件片段、AI 对话文本、文件名与路径、工作段标题、客户与当事人名称。第五节的清单在这条通道上同样成立。
+
+**如何关闭**：设置 - 团队 - 关闭「向团队共享我的使用统计」，或直接退出团队。关闭立即生效。
+
+## 十二、联系
 
 对本说明的任何疑问：hi@aiworkdeck.com
 
@@ -154,5 +175,21 @@ Last updated: 2026-08-17
 **Local ledger:** regardless of the switches, the app keeps a local-only usage ledger (enums and numbers only, 90-day rolling retention) powering the personal statistics page in Settings. Turning sharing off stops uploads immediately; local statistics keep working.
 
 **How to opt out:** Settings - Usage Statistics - turn off "Share anonymous usage statistics". Effective immediately.
+
+## Part 3 — Team usage statistics (optional, off by default)
+
+A firm can form a team inside the app so that whoever runs it can see firm-wide usage. This is a **separate channel**, fully split from the anonymous statistics of Part 2: different switch, different endpoint, different storage, no link between the two. The random install identifier of Part 2 remains unrelated to any account; nothing here changes that.
+
+**Off by default.** Each machine's own user must turn it on explicitly under Settings - Team - "Share my usage stats with the team"; a manager cannot turn it on for someone else. While it is off this channel makes zero outbound requests.
+
+When on, the app uploads **one record a day**, made entirely of counts, a date, and irreversible codes: minutes invested and app launches; AI turns, tool calls, AI edit actions, manual edit actions, projects created; token totals split by billing source; and per-project minutes and AI usage where each project appears as an **irreversible anonymous code**.
+
+Unlike the anonymous channel, this record carries your account identity (authenticated with your account key) — showing a manager who used how much is precisely its purpose.
+
+**Project names are not uploaded by default.** The team panel shows anonymous codes, and a manager may attach an internal label to a code (that label lives on the server and is unrelated to the real project name on your machine). Only after a team manager explicitly turns on "Share project names" in team settings do members' uploads carry project names; that is a team-wide setting affecting everyone.
+
+**Still never uploaded:** document content, text fragments, AI conversation text, file names and paths, work-session titles, client and counterparty names. The Part 2 exclusion list holds on this channel too.
+
+**How to opt out:** Settings - Team - turn off "Share my usage stats with the team", or leave the team. Effective immediately.
 
 Questions: hi@aiworkdeck.com

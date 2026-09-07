@@ -419,7 +419,7 @@ class AccountServiceTest {
         transport.enqueue(409, "{\"error\":\"no_allocation\"}");
         AccountException noAllocationEx = assertThrows(AccountException.class, service::fetchAiKey);
 
-        var accountController = new com.checkba.controller.AccountController(null, null, null, null, null, null);
+        var accountController = new com.checkba.controller.AccountController(null, null, null, null, null, null, null, null, null);
         var keyController = new com.checkba.controller.PlatformAiKeyController(null, null);
         for (AccountException e : new AccountException[] {notConnectedEx, noAllocationEx}) {
             assertEquals(1, accountController.handleAccountException(e).getBody().get("code"),

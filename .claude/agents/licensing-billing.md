@@ -965,6 +965,69 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     两者混成 0 的后果是：刚跑完一场两小时转写的用户看到「本月 0 Credits」，
     他的下一步是来问账是不是没记上。
 
+## 团队通道（2026-09-07，dev-board#496）
+
+律所管理者在 IDE 内看全所使用统计。设计 `docs/superpowers/specs/2026-09-07-law-firm-team-usage-design.md`
+（**与实现有出入以代码为准**；本节记的是桌面侧，官网侧的表与端点在官网仓）。
+
+**红线一条，先背下来：团队通道与匿名 telemetry 物理分离，永不合并。**
+`legal/PRIVACY.md`、README 两版、官网 `lib/db.ts` 的建表注释三处都公开承诺了
+「随机安装标识与设备、账户、个人身份无关」。团队统计恰恰相反——它带 `Bearer awdk_`、
+按 accountId 落库。两条通道的**端点、表、开关、上报体全部独立**：
+- 匿名：`telemetry.ingest-url` + `POST /rollup`，无鉴权，开关 `telemetry.rollup.enabled`（默认开）；
+- 团队：`POST {site}/api/account/team/usage`，Bearer，开关 `team.usage.enabled`（**默认关**）。
+给 `telemetry_event` 加 userId/projectId 来「省事」是这条红线最典型的破法——加了就毁掉匿名承诺，
+所以团队侧宁可重算一遍六个计数（见 `TeamUsageRollupService` 的类注释）。
+
+**文件**
+- `service/team/TeamUsageSettings.java` — 本机开关 + 上报台账（`team.usage.enabled` /
+  `.lastUploadAt` / `.uploadedDates`，都在 `system_setting`）。**刻意不复用 `TelemetrySettings`**。
+- `service/team/TeamUsageRollupService.java` — `rollupFor(date, userId)` 出日聚合 payload。
+  纯读、不写库、不发网络。数据源三处：`work_session`（投入时长，按 **startedAt 落日**，
+  排除 DRAFT 与 ACTIVE，总数与每个项目行都封顶 16 小时）、本机 `telemetry_event` 当日计数
+  （六个，派生口径与 `TelemetryRollupService` 逐条对齐，改那边要跟着改）、`token_usage`
+  （按 costSource 分 platform/estimate 两桶，**不得合并**）。
+- `service/team/TeamUsageUploadService.java` — 启动 + 24h，静默失败；`uploadNow()` 给设置页按钮用，
+  **如实回传跳过原因**（disabled / not_local_mode / not_connected / no_team）。
+- `service/team/TeamSettingsCache.java` — 本机只读缓存「共享项目名」，读不到一律 false。
+- `WorkSessionRepository.findByUserIdAndStartedAtBetween` — 新增 finder；状态与段类型的过滤
+  **刻意留在聚合层**，那是统计口径的一部分。
+- `InstallIdentityService.projectKey(projectId)` — `HMAC-SHA256(install-secret, "project:"+id)` 前 16 hex。
+- `AccountController` 的 `/team*` 一组透传（照 membership 模板）+ `AccountService` 的对应方法
+  （`sendJson` 是 POST/PUT/PATCH/DELETE 的统一出口，HTTP 缝仍是 `AccountTransport`）。
+- 前端 `components/admin/TeamPanel.vue`（设置页 personal 组的 `team` 分区，接在 `AdminPane`
+  `activeNav` 链尾）、`services/api.js` 的 13 个团队函数、`locales/{zh-CN,en-US}/team.js`。
+
+**上报四道闸，缺一不发**（`TeamUsageUploadService.run()`，顺序即判定顺序）：
+开关开 → **local-mode** → 账户已连接 → 确实在某个团队里。
+第二道最容易被当成多余：server 模式（团队案件库 / 插件云实例）下账户是**机器级**状态，
+而使用数据是**每个租户各自的**，照发等于把全服所有人的活动记在管理员账户名下。
+同理 `GET /api/account/team/usage-sharing` 回的 `available` 由后端下发，前端不许靠
+「有没有桌面壳」猜——猜错就是给用户一个永远不生效的开关。
+
+**换账户要清团队台账**（同地雷 22）：`AccountSwitchCleanup.invalidateAll()` 里加了
+`teamUsageSettings.resetLedger()` + `teamSettingsCache.clear()`。「哪些天传过了」记的是
+「传给**那个**账户」，换了人必须从头传；「共享项目名」是上一个团队的设置，留着会让
+下一个团队的日聚合按旧团队口径带上项目名。
+
+**动词的一处刻意偏差**：官网侧「改团队设置」「改成员角色」是 PATCH，本机透传层用 PUT。
+前端只有 `uni.request` 一个出口，它的 method 枚举里根本没有 PATCH。出站到官网那一跳仍是 PATCH。
+
+**已知口径缺口（写在代码注释里，不要当 bug 修掉）**：
+1. `telemetry_event` 没有 userId/projectId，所以六个计数是**整机口径**，一机多人时全记在当前本机用户名下；
+2. 项目行的 `editActions` 恒为 0（编辑动作只在匿名表里，那张表没有 projectId）；
+3. 项目行的 `aiTurns` 用当日该项目的 `token_usage` **行数**近似（一行 = 一次 LLM 调用），
+   带工具循环的一轮对话会产生多行，所以它偏大且各项目之和 ≠ 顶层 aiTurns。相对比较可信，绝对值不可信；
+4. 项目短码是 `HMAC(install-secret, localProjectId)`，**跨机器不可关联**——版本记录模块
+   今天没有远端仓标识（全仓 grep 零命中），所以同一个案件在两位律师机器上是两个短码。
+   将来有了远端标识改成 `HMAC(teamId, remoteId)` 即可聚成一行；
+5. 「节约时间」是带系数的估算，公式由**服务端下发**（`savedMinutesFormula`），
+   前端只负责把它印在脚注上。**绝不在前端写死系数**，也绝不把它做成一个看起来精确的数字。
+
+**待官网补的契约字段**：「退出团队」需要知道自己的 accountId，而设计 §6 的 `GET /api/account/team`
+只写了 `{team, myRole, members[], pendingInvites[]}`。前端读 `data.myAccountId`，
+**取不到就不显示这个动作**——绝不自己编一个 `me` 之类的 id 去打 DELETE，猜错会把别人踢出团队。
+
 ## 跨设备传输的内部记账口（2026-08-28，dev-board#251）
 
 云后端对已桥接用户没有任何 awdk_（明文不落库），官网也否决过「凭 accountId 换 key」的
@@ -1011,11 +1074,18 @@ return 404 兜底，云后端从 127.0.0.1 直连 Next。云侧唯一出口
   （byok 档行为不变的基线）、`service/meeting/MeetingRecordingNoticeTest`（告知默认未确认 /
   版本作废 / 正文说全四件事 / 三个掉线子串与 emoji）、
   `controller/PlatformServiceControllerTest`（另含用量 null≠0、两个阈值的往返与拒非法、
-  告知端点缺字段不算确认）、`controller/ExternalControllerEnvelopeTest`
+  告知端点缺字段不算确认）；
+  团队通道：`service/team/TeamUsageRollupServiceTest`（DRAFT/ACTIVE 排除、16h 上限、
+  短码稳定且不泄露原 id、共享项目名默认关、六个计数的派生口径、token 分桶）、
+  `service/team/TeamUsageUploadServiceTest`（四道闸 + 补传窗口 + 今天永不传）、
+  `controller/AccountControllerTeamTest`（透传不裁字段、range 归一、参数校验回业务信封、
+  usage-sharing 不打官网）、`service/account/AccountSwitchCleanupTest`（换账户清团队台账）；
+  `controller/ExternalControllerEnvelopeTest`
   （网关失败原样抛出、回落不吞掉网关原因、查无结果是 code=1 不是 4010）。
 - 官网侧（`aiworkdeckweb`）：`scripts/verify-gateway.mts` 45 项 + `contract-check.mts` 的网关段，
   **必须在空目录里跑、必须用 nvm v22 全路径**（`/usr/bin/node` v20 碰库会段错误）。
-- 前端：`cd frontend && npm run check:emits` + `npm run build:h5`。
+- 前端：`cd frontend && npm run check:emits` + `npm run build:h5`；
+  团队分区另跑 `npm run test:team`（已进 ci.yml frontend job）。
 - 端到端（同样在 `frontend/` 下跑）：`cd frontend && npm run test:app-e2e`
   （**J1 就是首启解锁门旅程**，用试用码解锁；其余旅程 local-mode 免登直达）。
   `cd frontend && npm run test:desktop-e2e` 的 provision 会自动用试用码解锁并置向导。改解锁门/启动链必跑这两套。

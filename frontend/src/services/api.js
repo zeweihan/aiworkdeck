@@ -2399,6 +2399,123 @@ export function saveAppLanguageRemote(language) {
   })
 }
 
+// ===================== 团队（dev-board#496） =====================
+//
+// 全部经本地后端 /api/account/team* 透传到官网（Bearer awdk_ 在后端加），
+// 前端从不直连官网。信封与全站一致：request() 解出 {code,data}，unwrapEnvelope 取 data。
+//
+// 动词说明：本机这一层用 GET/POST/PUT/DELETE，没有 PATCH——uni.request 的 method
+// 枚举里根本没有它。出站到官网那一跳仍是 PATCH（后端 AccountService 负责）。
+
+// 我的团队。无团队时回 { team: null, invites: [...] }（我手机号收到的邀请）。
+export function getTeam() {
+  return request({ url: '/api/account/team', method: 'GET' }).then(unwrapEnvelope);
+}
+
+export function createTeam(name) {
+  return request({
+    url: '/api/account/team',
+    method: 'POST',
+    data: { name },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 只传要改的字段：整表回传会把没碰过的开关一起改掉（后端也会拒空 patch）。
+export function updateTeam(patch) {
+  return request({
+    url: '/api/account/team',
+    method: 'PUT',
+    data: patch,
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+export function createTeamInvite(phone, role) {
+  return request({
+    url: '/api/account/team/invites',
+    method: 'POST',
+    data: { phone, role },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+export function revokeTeamInvite(inviteId) {
+  return request({
+    url: `/api/account/team/invites/${encodeURIComponent(inviteId)}`,
+    method: 'DELETE',
+  }).then(unwrapEnvelope);
+}
+
+export function acceptTeamInvite(inviteId) {
+  return request({
+    url: `/api/account/team/invites/${encodeURIComponent(inviteId)}/accept`,
+    method: 'POST',
+    data: {},
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+export function updateTeamMemberRole(accountId, role) {
+  return request({
+    url: `/api/account/team/members/${encodeURIComponent(accountId)}`,
+    method: 'PUT',
+    data: { role },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 移除成员，或本人退出团队（OWNER 不可退出，后端/官网会拒）。
+export function removeTeamMember(accountId) {
+  return request({
+    url: `/api/account/team/members/${encodeURIComponent(accountId)}`,
+    method: 'DELETE',
+  }).then(unwrapEnvelope);
+}
+
+// range 只有 7 / 30 / 90 三档，其余值后端会归一到 7。
+export function getTeamSummary(range = 7) {
+  return request({
+    url: `/api/account/team/summary?range=${range}`,
+    method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// 给项目短码起别名。空串表示清掉别名，退回显示短码。
+export function setTeamProjectAlias(projectKey, label) {
+  return request({
+    url: `/api/account/team/projects/${encodeURIComponent(projectKey)}/alias`,
+    method: 'PUT',
+    data: { label },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 本机的「向团队共享使用统计」开关（默认关）+ 上次上报时间。纯本机状态，不打官网。
+export function getTeamUsageSharing() {
+  return request({ url: '/api/account/team/usage-sharing', method: 'GET' }).then(unwrapEnvelope);
+}
+
+export function setTeamUsageSharing(enabled) {
+  return request({
+    url: '/api/account/team/usage-sharing',
+    method: 'PUT',
+    data: { enabled },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 立即上报。回 { uploaded, skipped, reason?, lastUploadAt }——skipped 时 reason 是
+// 机器可读的跳过原因（disabled / not_local_mode / not_connected / no_team）。
+export function uploadTeamUsageNow() {
+  return request({
+    url: '/api/account/team/usage-sharing/upload-now',
+    method: 'POST',
+    data: {},
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
 export function getTelemetrySettings() {
   return request({
     url: '/api/telemetry/settings',
