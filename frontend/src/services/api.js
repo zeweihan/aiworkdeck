@@ -751,6 +751,67 @@ export function pluginDevUninstall(id) {
   });
 }
 
+// ==================== 能力槽与能力包（设计稿 2026-09-07-capability-slots-self-upgrade-design） ====================
+// 一个「能力槽」= 一项可替换的能力（首期只有诉讼可视化出图引擎）。以下六个接口一律 admin。
+
+// 槽列表 + 候选实现 + 当前选择 + 开发者模式开关状态
+export function getCapabilities() {
+  return request({
+    url: '/api/capabilities',
+    method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// 切换某个槽的实现；ref 用候选里的原文（builtin / pack:<id> / plugin:<插件id>:<实现id>）
+export function selectCapability(slot, ref) {
+  return request({
+    url: `/api/capabilities/${encodeURIComponent(slot)}/select`,
+    method: 'POST',
+    data: { ref },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 回到上一次选择（再点一次又切回来）
+export function rollbackCapability(slot) {
+  return request({
+    url: `/api/capabilities/${encodeURIComponent(slot)}/rollback`,
+    method: 'POST',
+    data: {},
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 只拉取与校验，返回安装计划（不落盘）。真正安装要再调 applyCapabilityPlan
+export function planCapabilityInstall(url) {
+  return request({
+    url: '/api/capabilities/plan',
+    method: 'POST',
+    data: { url },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 按 planId 落盘并安装
+export function applyCapabilityPlan(planId) {
+  return request({
+    url: '/api/capabilities/apply',
+    method: 'POST',
+    data: { planId },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 开发者模式：打开后才允许安装未签名的 process 型能力包（默认关）
+export function setCapabilityDevMode(enabled) {
+  return request({
+    url: '/api/capabilities/dev-mode',
+    method: 'PUT',
+    data: { enabled },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
 // 获取 Skill 列表（规范见 docs/SKILL_SPEC.md）
 export function getSkills() {
   return request({

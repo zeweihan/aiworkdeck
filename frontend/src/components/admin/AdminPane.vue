@@ -955,6 +955,98 @@
         <scroll-view v-else-if="activeNav === 'personal_settings'" scroll-y class="config-scroll">
           <PersonalSettingsPanel />
         </scroll-view>
+
+        <!-- 能力升级（dev-board#497）：一项「能力」= 一个槽，槽有内置实现与若干候选，
+             切换即生效、可回滚。粘一个 GitHub 链接让 AI 去装，是这里唯一的写入口。
+             分支必须接在这条 v-if/v-else-if 长链的**末尾**，不能动链头。 -->
+        <scroll-view v-else-if="activeNav === 'capabilities'" scroll-y class="config-scroll">
+          <view class="section-card">
+            <view class="section-header">
+              <text class="section-title">{{ $t('admin.capabilityUpgradeTitle') }}</text>
+              <text class="section-subtitle">{{ $t('admin.capabilityUpgradeSubtitle') }}</text>
+            </view>
+            <view class="section-body">
+              <view class="cap-form">
+                <input
+                  v-model="capabilityUrl"
+                  class="cap-input"
+                  type="text"
+                  :placeholder="$t('admin.capabilityUrlPlaceholder')"
+                />
+                <input
+                  v-model="capabilityNote"
+                  class="cap-input"
+                  type="text"
+                  :placeholder="$t('admin.capabilityNotePlaceholder')"
+                />
+                <button
+                  class="comp-btn primary"
+                  :disabled="!capabilityUrl.trim()"
+                  @tap="onCapabilityAskAi"
+                >{{ $t('admin.capabilityAskAi') }}</button>
+              </view>
+              <text class="cap-hint">{{ $t('admin.capabilityAskAiHint') }}</text>
+            </view>
+          </view>
+
+          <view class="section-card">
+            <view class="section-header">
+              <text class="section-title">{{ $t('admin.capabilitySlotsTitle') }}</text>
+              <text class="section-subtitle">{{ $t('admin.capabilitySlotsSubtitle') }}</text>
+            </view>
+            <view class="section-body">
+              <!-- 拉失败时不能一直挂着「加载中…」——那是在骗人 -->
+              <view v-if="!capabilitySlots.length" class="empty">
+                <text class="empty-text">{{ capabilityError || $t('admin.loadingDots') }}</text>
+              </view>
+              <view v-for="slot in capabilitySlots" :key="slot.id" class="comp-row">
+                <view class="comp-main">
+                  <text class="comp-name">{{ slot.name }}</text>
+                  <text class="comp-sub">
+                    {{ slot.id }} · {{ $t('admin.capabilityCurrent') }}{{ capabilityCurrentLabel(slot) }}
+                    <text v-if="slot.degraded" class="comp-error"> · {{ $t('admin.capabilityDegraded') }}</text>
+                  </text>
+                </view>
+                <view class="comp-actions">
+                  <AwdSelect
+                    v-if="(slot.candidates || []).length > 1"
+                    :range="capabilityOptionLabels(slot)"
+                    :value="capabilitySelectedIndex(slot)"
+                    @change="onCapabilitySelect(slot, $event)"
+                  />
+                  <text v-else class="comp-readonly">{{ capabilityCurrentLabel(slot) }}</text>
+                  <button
+                    class="comp-btn"
+                    :disabled="!slot.previous"
+                    @tap="onCapabilityRollback(slot)"
+                  >{{ $t('admin.capabilityRollback') }}</button>
+                </view>
+              </view>
+            </view>
+          </view>
+
+          <view class="section-card">
+            <view class="section-header">
+              <text class="section-title">{{ $t('admin.capabilityDevModeTitle') }}</text>
+              <text class="section-subtitle">{{ $t('admin.capabilityDevModeSubtitle') }}</text>
+            </view>
+            <view class="section-body">
+              <view class="provider-card">
+                <view class="provider-header telemetry-switch-row">
+                  <view class="telemetry-switch-info">
+                    <text class="provider-name">{{ $t('admin.capabilityDevModeSwitch') }}</text>
+                    <text class="telemetry-switch-desc">{{ $t('admin.capabilityDevModeDesc') }}</text>
+                  </view>
+                  <AwdSwitch
+                    :checked="!!capabilityDevMode"
+                    :disabled="capabilityBusy || capabilityDevMode === null"
+                    @change="onToggleCapabilityDevMode($event)"
+                  />
+                </view>
+              </view>
+            </view>
+          </view>
+        </scroll-view>
       </view>
     </view>
 
@@ -973,6 +1065,7 @@ import {
   getLocalIdentityCandidates, selectLocalIdentity,
   getCurrentUser as fetchCurrentUser, uploadAvatar,
   getTelemetrySettings, updateTelemetrySettings, getTelemetrySummary,
+  getCapabilities, selectCapability, rollbackCapability, setCapabilityDevMode,
   fetchAiModels,
   getFeedbackList, getFeedbackDetail, getOptimizerStatus, runOptimizer, getApiBaseUrl,
   getSiteStatus, selectSite,
@@ -1014,6 +1107,11 @@ export default {
     UnlockHint, RechargeDialog, AwdSelect, AwdSwitch,
     PersonalWorkLogPanel, PersonalFavoritesPanel, PersonalTodosPanel, PersonalSettingsPanel,
   },
+  /**
+   * ai-prompt：把一句话交给工作台的 AI 对话（「能力升级」的「让 AI 升级」按钮）。
+   * 只有 embedded（工作台标签形态）时才发；薄壳页里没有对话面板，退化为复制到剪贴板。
+   */
+  emits: ['ai-prompt'],
   props: {
     /** true = 嵌在工作台中栏的标签里（去掉整页的 40px 外边距，自己滚动） */
     embedded: { type: Boolean, default: false },
@@ -1053,11 +1151,23 @@ export default {
         { key: 'ai', label: this.$t('admin.navAi'), group: 'system' },
         { key: 'updates', label: this.$t('admin.navUpdates'), group: 'system', desktopOnly: true },
         { key: 'components', label: this.$t('admin.navComponents'), group: 'system', desktopOnly: true },
+        // 能力升级（dev-board#497）：能力槽切换 + 从 GitHub 装能力包。桌面端才有意义
+        //（落盘到本机 plugins/ 目录、进程型引擎跑在本机）
+        { key: 'capabilities', label: this.$t('admin.navCapabilities'), group: 'system', desktopOnly: true },
         { key: 'telemetry', label: this.$t('admin.navTelemetry'), group: 'system' },
         { key: 'feedback', label: this.$t('admin.navFeedback'), group: 'system' },
         // 'plugins'（插件广场）2026-08-27 已撤——入口统一收敛到左 rail 的插件中心，
         // 独立页 /pages/plugin-market 仍保留给直链。
       ],
+      // 能力升级（dev-board#497）。capabilitySlots 里每条形如
+      // {id, name, protocol, selected, previous, degraded, candidates:[{ref,source,label,available,unsigned,reason}]}
+      capabilityUrl: '',
+      capabilityNote: '',
+      capabilitySlots: [],
+      // 初始 null：还没拿到后端返回前不认定「关」，避免默认开的开关在加载瞬间闪一下「关」
+      capabilityDevMode: null,
+      capabilityBusy: false,
+      capabilityError: '',
       // 用户反馈与优化者（右下角浮窗提交 → 优化者分诊 → 开 PR / 发邮件）
       feedbackList: [],
       feedbackDetail: null,
@@ -1664,6 +1774,133 @@ export default {
       if (nav.key === 'feedback') {
         this.reloadFeedbackPanel()
       }
+      if (nav.key === 'capabilities') {
+        this.loadCapabilities()
+      }
+    },
+
+    // ---- 能力升级（dev-board#497）----
+
+    async loadCapabilities() {
+      try {
+        const res = await getCapabilities()
+        this.capabilitySlots = Array.isArray(res.slots) ? res.slots : []
+        this.capabilityDevMode = !!res.devMode
+        this.capabilityError = ''
+      } catch (e) {
+        this.capabilitySlots = []
+        this.capabilityError = e.message || this.$t('admin.capabilityLoadFailed')
+        uni.showToast({ title: this.capabilityError, icon: 'none' })
+      }
+    },
+
+    /** 候选项的来源标签：内置 / 签名包 / 已签名插件 / 未签名（本机开发） */
+    capabilitySourceLabel(candidate) {
+      if (!candidate) return ''
+      if (candidate.source === 'builtin') return this.$t('admin.capabilitySourceBuiltin')
+      if (candidate.source === 'pack') return this.$t('admin.capabilitySourcePack')
+      return candidate.unsigned
+        ? this.$t('admin.capabilitySourceUnsigned')
+        : this.$t('admin.capabilitySourcePlugin')
+    },
+
+    capabilityOptionLabels(slot) {
+      return (slot.candidates || []).map((c) => {
+        const source = this.capabilitySourceLabel(c)
+        const name = c.source === 'builtin' ? source : `${c.label || c.ref}（${source}）`
+        return c.available ? name : `${name} · ${this.$t('admin.capabilityUnavailable')}`
+      })
+    },
+
+    capabilitySelectedIndex(slot) {
+      const i = (slot.candidates || []).findIndex((c) => c.ref === slot.selected)
+      return i < 0 ? 0 : i
+    },
+
+    capabilityCurrentLabel(slot) {
+      const c = (slot.candidates || []).find((x) => x.ref === slot.selected)
+      return c ? this.capabilityOptionLabels(slot)[this.capabilitySelectedIndex(slot)] : slot.selected
+    },
+
+    async onCapabilitySelect(slot, index) {
+      const candidate = (slot.candidates || [])[index]
+      if (!candidate || candidate.ref === slot.selected) return
+      // 不可用的候选不发请求：后端也会拒，但先给出它自己的 reason 更有用
+      if (!candidate.available) {
+        uni.showToast({ title: candidate.reason || this.$t('admin.capabilityUnavailable'), icon: 'none' })
+        return
+      }
+      try {
+        await selectCapability(slot.id, candidate.ref)
+        await this.loadCapabilities()
+      } catch (e) {
+        uni.showToast({ title: e.message || this.$t('admin.capabilitySwitchFailed'), icon: 'none' })
+      }
+    },
+
+    async onCapabilityRollback(slot) {
+      if (!slot.previous) return
+      try {
+        await rollbackCapability(slot.id)
+        await this.loadCapabilities()
+      } catch (e) {
+        uni.showToast({ title: e.message || this.$t('admin.capabilityRollbackFailed'), icon: 'none' })
+      }
+    },
+
+    /**
+     * 开发者模式二次确认：打开它 = 允许把从 GitHub 拉来的、未签名的 process 型实现
+     * 装到本机并由宿主起进程执行。这句风险必须在打开之前说清楚。
+     */
+    onToggleCapabilityDevMode(on) {
+      if (!on) {
+        this.applyCapabilityDevMode(false)
+        return
+      }
+      uni.showModal({
+        title: this.$t('admin.capabilityDevModeConfirmTitle'),
+        content: this.$t('admin.capabilityDevModeConfirmBody'),
+        confirmText: this.$t('admin.capabilityDevModeConfirmOk'),
+        cancelText: this.$t('common.cancel'),
+        success: (res) => {
+          if (res.confirm) this.applyCapabilityDevMode(true)
+          else this.capabilityDevMode = false
+        },
+      })
+    },
+
+    async applyCapabilityDevMode(on) {
+      this.capabilityBusy = true
+      try {
+        const res = await setCapabilityDevMode(on)
+        this.capabilityDevMode = !!res.enabled
+      } catch (e) {
+        uni.showToast({ title: e.message || this.$t('admin.capabilityDevModeFailed'), icon: 'none' })
+        await this.loadCapabilities()
+      } finally {
+        this.capabilityBusy = false
+      }
+    },
+
+    /**
+     * 「让 AI 升级」：把链接与一句话拼成一句中文发进当前对话。
+     * 工作台标签形态（embedded）走 ai-prompt 事件 → project-overview 的
+     * resolveChatInterface().sendExternalPrompt；薄壳页没有对话面板，退化为复制到剪贴板。
+     */
+    onCapabilityAskAi() {
+      const url = this.capabilityUrl.trim()
+      if (!url) return
+      const note = this.capabilityNote.trim() || this.$t('admin.capabilityAiPromptDefaultNote')
+      const noteClause = note ? this.$t('admin.capabilityAiPromptNoteClause', { note }) : ''
+      const prompt = this.$t('admin.capabilityAiPrompt', { url, note: noteClause })
+      if (this.embedded) {
+        this.$emit('ai-prompt', { prompt })
+        return
+      }
+      uni.setClipboardData({
+        data: prompt,
+        success: () => uni.showToast({ title: this.$t('admin.capabilityPromptCopied'), icon: 'none' }),
+      })
     },
 
     // ---- 用户反馈 / 优化者 ----
@@ -2868,6 +3105,47 @@ $brand-accent: $brand-mint;
 .comp-btn.danger {
   background: var(--awd-bg);
   color: var(--awd-danger-text);
+}
+
+/* 候选只有一个时不给个假装能选的下拉，直接摆当前实现名（dev-board#497） */
+.comp-readonly {
+  font-size: 12px;
+  line-height: 1;
+  padding: 8px 14px;
+  color: var(--awd-text-2);
+}
+
+/* 能力升级（dev-board#497）。按钮/行/开关全部复用上面 components 分区那套类，
+   这里只补输入表单与提示行；配色一律走令牌，外壳保持浅色 */
+.cap-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cap-input {
+  flex: 1 1 220px;
+  min-width: 180px;
+  height: 32px;
+  padding: 0 10px;
+  font-size: 13px;
+  color: var(--awd-text);
+  background: var(--awd-bg);
+  border: 1px solid var(--awd-border);
+  border-radius: 6px;
+}
+
+.cap-hint {
+  display: block;
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--awd-text-2);
+}
+
+.comp-btn[disabled] {
+  opacity: 0.5;
 }
 
 .btn-primary:disabled {

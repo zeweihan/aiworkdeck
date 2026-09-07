@@ -1111,6 +1111,7 @@
                       embedded
                       :initial-nav="activeFileLeft.adminNav || ''"
                       :initial-service="activeFileLeft.adminService || ''"
+                      @ai-prompt="onPluginQuickAction"
                     />
                     <PluginPane
                       v-else-if="activeFileLeft.fileType === 'plugin'"
@@ -1258,6 +1259,7 @@
                       embedded
                       :initial-nav="activeFileRight.adminNav || ''"
                       :initial-service="activeFileRight.adminService || ''"
+                      @ai-prompt="onPluginQuickAction"
                     />
                     <PluginPane
                       v-else-if="activeFileRight.fileType === 'plugin'"

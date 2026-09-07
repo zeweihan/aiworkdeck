@@ -88,6 +88,36 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
 
 示例：`examples/hello-web-plugin/`；SDK 源头 `sdk/plugin-sdk/`（官网模板里那份是分发副本，必须逐字节一致）。
 
+### 能力槽与能力包（v2.10 §15，dev-board#497，2026-09-07）
+
+第六种扩展形态**不是新形态**：能力包就是带 `contributes.capabilities` 的普通插件包，复用插件 id、
+启停、封禁、rescan、签名全套设施。新的只有「槽」这层间接：`com.checkba.service.capability`
+（`CapabilitySlotRegistry` 槽表+候选+选择位+降级、`CapabilitySourceFetchService` 从 GitHub 拉源码、
+`CapabilityInstallService` plan/apply 两步）+ `controller/CapabilityController`（`/api/capabilities`，
+admin 同 PluginDevController 口径）+ `service/ai/tools/CapabilityTools`（四枚工具）+ 设置页
+`AdminPane.vue` 的 `capabilities` 分区。首期只注册一个槽 `litigation.diagram`（协议 `litviz-cli/1`）。
+
+- **槽的消费方接法**：`@PostConstruct` 里 `slotRegistry.registerBuiltin(slotId, () -> 自己的内置链)`，
+  再在自己的资源解析链**最前面**插 `slotRegistry.resolve(slotId, includePack)`。`resolve` 只回答
+  「有没有选中一个非内置实现」——选了 builtin / 没选 / 选中的实现坏了都返回 empty，消费方接着走原有链。
+  **内置定位逻辑因此只有一份**，别在槽里再抄一遍。`LitigationVisualService` 是唯一先例。
+- **注入必须是 `@Autowired(required=false)` 字段注入**：`LitigationVisualService` 在单测与 EvalHarness
+  里是直接 `new` 出来的，构造器注入会让那些场景整片红；同时 `CapabilitySlotRegistry` 构造器持有
+  `PluginService`，改成构造器注入还会成环。
+- **三档形态决定谁能装**：`web`/`data` AI 可自动装，`process`（宿主机起进程）默认拒绝，只有
+  `system_setting` 的 `capability.dev-mode=true` 时才以 `.awd-dev` 标记安装并在 UI 上永远标「未签名」。
+  `backendJars`/`tools`/`skills`/`packs` 任一非空仍一律拒装——免签路径不许绕过签名闸。
+- **`PluginDevService.validateManifest` 的 frontendEntry 限制已放宽**（只在「无 frontendEntry 且声明了
+  至少一项声明式贡献」时放行）。这条同时惠及纯模板/画像包。改这里要记得 `installFiles` 是
+  项目内 dev 直装与「从本地目录装」（能力包）的**唯一**共用实现，两条路的校验必须永远同一套。
+- **地雷**：① `capability_install` 只做 plan，绝不落盘；模型必须 `<question>` 停机等用户确认后才调
+  `capability_apply`。② 这四枚工具的登录+admin 闸写在 `CapabilityTools.requireAdmin()` 里，
+  **不能靠 skill 的 allowed_tools**（只裁可见性不拦分发）。③ `CapabilitySourceFetchService` 是全系统
+  唯一「从任意 URL 取代码到宿主机」的路径，URL 白名单/SsrfGuard/限额/解包安全闸四条缺一不可；
+  测试注入 `setDownloader` 用本地 tar.gz，**永远不上网**。④ 选择位 `capability.<slot>.selected` 写空串
+  与写 `builtin` 语义相同，`effectiveRef()` 是唯一判据——回滚历史里存的必须是 effective 值，
+  否则从初始态切走一次之后就永远回不去。
+
 ### 插件开发形态（dev-board#61，2026-08-20）
 
 第五种信任路径：**本机用户自己写的插件免签直装**（区别于广场的审核+验签+装后默认禁用）。

@@ -57,7 +57,7 @@ public class PluginDevService {
     static final Pattern PLUGIN_ID = Pattern.compile("^[a-z0-9][a-z0-9-]{1,49}$");
 
     /** 开发安装的来源标记文件名（JSON：projectId / folderId / installedAt） */
-    static final String DEV_MARKER = ".awd-dev";
+    public static final String DEV_MARKER = ".awd-dev";
 
     private static final Set<String> ALLOWED_PERMISSIONS = Set.of("file_read", "file_write", "network", "editor", "ai");
     private static final int MAX_FILES = 200;
@@ -206,23 +206,76 @@ public class PluginDevService {
         // 不含路径分隔符，这里再复核一次并拒绝隐藏文件同名于安装标记的情况。
         Map<String, ProjectFile> files = new LinkedHashMap<>();
         collectSubtree(projectId, folder.getId(), "", files, errors, 0);
+        // 文件数上限的检查在共用入口 installFiles 里（两处都查会让同一条错误报两遍）
+
+        // 读成字节再交给共用安装入口：与「从本地目录装」（能力包）走同一条校验/落盘路径
+        LinkedHashMap<String, byte[]> payload = new LinkedHashMap<>();
+        for (Map.Entry<String, ProjectFile> e : files.entrySet()) {
+            payload.put(e.getKey(), readBytes(e.getValue()));
+        }
+
+        JSONObject marker = new JSONObject();
+        marker.set("projectId", projectId);
+        marker.set("folderId", folderId);
+
+        installFiles(id, payload, marker, InstallPolicy.DEV_DEFAULT, errors);
+        log.info("Dev plugin installed: id={} project={} folderId={} files={}", id, projectId, folderId, files.size());
+        return id;
+    }
+
+    /**
+     * 安装策略。{@code allowProcessCapabilities} 只在「能力包 + 开发者模式」这条路上为 true——
+     * process 型能力实现会被宿主用 ProcessBuilder 起起来，风险等同 JAR，默认与 JAR 同档拒绝。
+     */
+    public record InstallPolicy(boolean allowProcessCapabilities) {
+        public static final InstallPolicy DEV_DEFAULT = new InstallPolicy(false);
+    }
+
+    /**
+     * 从本机目录安装（能力包走这条：源码是从 GitHub 拉到临时目录的，不经项目文件树）。
+     * 校验规则与项目内 dev 直装完全同一套——{@link #installFiles} 是唯一实现。
+     */
+    public synchronized String installFromDirectory(File sourceDir, String id, JSONObject markerExtra,
+                                                    InstallPolicy policy) {
+        if (sourceDir == null || !sourceDir.isDirectory()) {
+            throw new IllegalArgumentException(LangText.of("源目录不存在", "Source directory does not exist"));
+        }
+        List<String> errors = new ArrayList<>();
+        if (!PLUGIN_ID.matcher(id == null ? "" : id).matches()) {
+            errors.add(LangText.of(
+                    "manifest.id 不是合法插件 id（小写字母/数字/连字符，2-50 位）: " + id,
+                    "manifest.id is not a valid plugin id (lowercase letters/digits/hyphens, 2-50 chars): " + id));
+        }
+        LinkedHashMap<String, byte[]> payload = new LinkedHashMap<>();
+        collectDirectory(sourceDir, sourceDir, payload, errors, 0);
+        installFiles(id, payload, markerExtra == null ? new JSONObject() : markerExtra, policy, errors);
+        log.info("Capability plugin installed from directory: id={} files={}", id, payload.size());
+        return id;
+    }
+
+    /**
+     * 共用安装入口：校验 manifest -> 限额 -> 落临时目录 -> 原子替换 -> rescan -> 启用。
+     *
+     * @param errors 调用方已经收集到的错误（id 非法等），与 manifest 校验错误一起逐条抛出
+     */
+    private void installFiles(String id, LinkedHashMap<String, byte[]> files, JSONObject marker,
+                              InstallPolicy policy, List<String> errors) {
         if (files.size() > MAX_FILES) {
             errors.add(LangText.of("文件数超限（最多 " + MAX_FILES + " 个）", "Too many files (max " + MAX_FILES + ")"));
         }
-
-        ProjectFile manifestFile = files.get("manifest.json");
+        byte[] manifestBytes = files.get("manifest.json");
         JSONObject manifest = null;
-        if (manifestFile == null) {
+        if (manifestBytes == null) {
             errors.add(LangText.of("缺少 manifest.json（必须在插件文件夹根部）", "manifest.json is missing at the plugin folder root"));
         } else {
             try {
-                manifest = JSONUtil.parseObj(new String(readBytes(manifestFile), StandardCharsets.UTF_8));
+                manifest = JSONUtil.parseObj(new String(manifestBytes, StandardCharsets.UTF_8));
             } catch (Exception e) {
                 errors.add(LangText.of("manifest.json 不是合法 JSON: ", "manifest.json is not valid JSON: ") + e.getMessage());
             }
         }
         if (manifest != null) {
-            validateManifest(manifest, id, files.keySet(), errors);
+            validateManifest(manifest, id, files.keySet(), errors, policy);
         }
         if (!errors.isEmpty()) {
             throw new IllegalArgumentException(String.join("\n", errors));
@@ -240,8 +293,8 @@ public class PluginDevService {
         File tmp = new File(pluginsRoot, ".dev-tmp-" + id + "-" + System.nanoTime());
         try {
             long total = 0;
-            for (Map.Entry<String, ProjectFile> e : files.entrySet()) {
-                byte[] bytes = readBytes(e.getValue());
+            for (Map.Entry<String, byte[]> e : files.entrySet()) {
+                byte[] bytes = e.getValue();
                 total += bytes.length;
                 if (bytes.length > MAX_FILE_BYTES || total > MAX_TOTAL_BYTES) {
                     throw new IllegalArgumentException(LangText.of(
@@ -252,9 +305,6 @@ public class PluginDevService {
                 FileUtil.mkdir(out.getParentFile());
                 Files.write(out.toPath(), bytes);
             }
-            JSONObject marker = new JSONObject();
-            marker.set("projectId", projectId);
-            marker.set("folderId", folderId);
             marker.set("installedAt", LocalDateTime.now().toString());
             Files.write(new File(tmp, DEV_MARKER).toPath(), marker.toString().getBytes(StandardCharsets.UTF_8));
 
@@ -277,8 +327,50 @@ public class PluginDevService {
             // 被平台封禁的 id 无法启用；装是装上了，如实上抛比静默装聋好
             throw new IllegalStateException(LangText.of("插件已拷贝但启用失败: ", "Plugin copied but enabling failed: ") + e.getMessage(), e);
         }
-        log.info("Dev plugin installed: id={} project={} folderId={} files={}", id, projectId, folderId, files.size());
-        return id;
+    }
+
+    /** DFS 收集本机目录（相对路径用 '/'）；跳过 {@code .awd-dev} 标记与非常规文件。 */
+    private void collectDirectory(File root, File dir, LinkedHashMap<String, byte[]> out,
+                                  List<String> errors, int depth) {
+        if (depth > 10) {
+            errors.add(LangText.of("目录层级过深（>10）", "Folder nesting too deep (>10)"));
+            return;
+        }
+        File[] children = dir.listFiles();
+        if (children == null) {
+            return;
+        }
+        java.util.Arrays.sort(children, java.util.Comparator.comparing(File::getName));
+        for (File child : children) {
+            if (DEV_MARKER.equals(child.getName())) {
+                continue;
+            }
+            if (child.isDirectory()) {
+                collectDirectory(root, child, out, errors, depth + 1);
+                continue;
+            }
+            if (!child.isFile()) {
+                continue;
+            }
+            String rel = root.toPath().relativize(child.toPath()).toString().replace(File.separatorChar, '/');
+            try {
+                out.put(rel, Files.readAllBytes(child.toPath()));
+            } catch (java.io.IOException e) {
+                errors.add(LangText.of("读取文件失败: ", "Failed to read file: ") + rel);
+            }
+        }
+    }
+
+    /**
+     * 本机是否已装有同名的<b>广场</b>插件（目录在但没有 {@code .awd-dev} 标记）。
+     * 免签安装不覆盖它——能力包安装在 plan 阶段就据此报「撞 id」，不等到落盘才失败。
+     */
+    public boolean isMarketplaceInstalled(String id) {
+        if (id == null || !PLUGIN_ID.matcher(id).matches()) {
+            return false;
+        }
+        File dir = new File(new File(pluginsDir), id);
+        return dir.isDirectory() && !new File(dir, DEV_MARKER).isFile();
     }
 
     // ==================== 卸载 ====================
@@ -310,21 +402,29 @@ public class PluginDevService {
 
     // ==================== 内部实现 ====================
 
-    private void validateManifest(JSONObject manifest, String folderName, Set<String> paths, List<String> errors) {
+    private void validateManifest(JSONObject manifest, String folderName, Set<String> paths, List<String> errors,
+                                  InstallPolicy policy) {
         String id = manifest.getStr("id", "");
         if (!folderName.equals(id)) {
             errors.add(LangText.of(
                     "manifest.id（" + id + "）必须与源码文件夹名（" + folderName + "）一致",
                     "manifest.id (" + id + ") must equal the source folder name (" + folderName + ")"));
         }
+        JSONObject contributes = manifest.getJSONObject("contributes");
         String entry = manifest.getStr("frontendEntry", "");
-        if (entry == null || !entry.startsWith("web/")) {
+        boolean hasEntry = entry != null && !entry.isBlank();
+        // 纯声明式包（只有 manifest + 数据文件，无前端入口）放行：这一档零执行面，
+        // 强制 frontendEntry 会把「AI 装一套模板/画像/能力实现」这类最低风险的包整个挡在门外。
+        if (!hasEntry && hasDeclarativeContribution(manifest, contributes)) {
+            // 无需 frontendEntry
+        } else if (entry == null || !entry.startsWith("web/")) {
             errors.add(LangText.of(
                     "frontendEntry 必须指向 web/ 目录内的文件（如 web/index.html），当前: " + entry,
                     "frontendEntry must point into web/ (e.g. web/index.html), got: " + entry));
         } else if (!paths.contains(entry)) {
             errors.add(LangText.of("frontendEntry 指向的文件不存在: ", "frontendEntry target file is missing: ") + entry);
         }
+        validateCapabilities(contributes, paths, errors, policy);
         JSONArray permissions = manifest.getJSONArray("permissions");
         if (permissions != null) {
             for (Object p : permissions) {
@@ -360,13 +460,76 @@ public class PluginDevService {
         }
         // 证据来源不走 dev 免签直装（规范 v2.8 P3 红线）：SPI 要 JAR、MCP 是数据源接入，
         // 都属于要人工审核的档位
-        JSONObject contributes = manifest.getJSONObject("contributes");
         if (contributes != null) {
             JSONArray evidenceSources = contributes.getJSONArray("evidenceSources");
             if (evidenceSources != null && !evidenceSources.isEmpty()) {
                 errors.add(LangText.of(
                         "开发安装不支持 contributes.evidenceSources（证据数据源需经插件广场审核签名）",
                         "Dev install does not accept contributes.evidenceSources; publish via the marketplace review flow"));
+            }
+        }
+    }
+
+    /** 是否声明了至少一项声明式贡献（模板/画像/能力/设置/l10n）——纯声明包据此免除 frontendEntry */
+    private static boolean hasDeclarativeContribution(JSONObject manifest, JSONObject contributes) {
+        JSONArray settings = manifest.getJSONArray("settings");
+        if (settings != null && !settings.isEmpty()) {
+            return true;
+        }
+        if (contributes == null) {
+            return false;
+        }
+        for (String key : List.of("templates", "styleProfiles", "capabilities")) {
+            JSONArray arr = contributes.getJSONArray(key);
+            if (arr != null && !arr.isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 能力实现声明的安装期校验（规范 v2.10 §15）：
+     * 声明本身合法（同 parseManifest 的规则）、entry 目录里有文件、process 档只在策略放行时受理。
+     */
+    private static void validateCapabilities(JSONObject contributes, Set<String> paths, List<String> errors,
+                                             InstallPolicy policy) {
+        if (contributes == null) {
+            return;
+        }
+        JSONArray caps = contributes.getJSONArray("capabilities");
+        if (caps == null || caps.isEmpty()) {
+            return;
+        }
+        for (Object o : caps) {
+            PluginService.CapabilityDecl decl;
+            try {
+                decl = JSONUtil.toBean(JSONUtil.parseObj(o), PluginService.CapabilityDecl.class);
+            } catch (Exception e) {
+                errors.add(LangText.of("contributes.capabilities 条目不是合法对象",
+                        "contributes.capabilities entry is not a valid object"));
+                continue;
+            }
+            String why = PluginService.validateCapabilityDecl(decl);
+            if (why != null) {
+                errors.add(LangText.of("能力声明不合法: ", "Invalid capability declaration: ") + why);
+                continue;
+            }
+            String prefix = decl.getEntry().endsWith("/") ? decl.getEntry() : decl.getEntry() + "/";
+            boolean anyFile = paths.stream().anyMatch(p -> p.startsWith(prefix));
+            if (!anyFile) {
+                errors.add(LangText.of("能力实现的 entry 目录里没有任何文件: ",
+                        "The capability entry directory contains no files: ") + decl.getEntry());
+            } else if ("process".equals(decl.getKind()) && !paths.contains(prefix + "cli.py")) {
+                errors.add(LangText.of("process 型能力实现的 entry 目录下必须有 cli.py: ",
+                        "A process capability entry directory must contain cli.py: ") + decl.getEntry());
+            }
+            if ("process".equals(decl.getKind()) && !policy.allowProcessCapabilities()) {
+                errors.add(LangText.of(
+                        "process 型能力实现会在本机起进程执行代码，免签安装不受理；请走签名资源包/插件广场，"
+                                + "或在设置页「能力升级」里打开开发者模式后重试。",
+                        "Process capabilities execute code on this machine and are not accepted by unsigned install; "
+                                + "use a signed pack/marketplace, or enable developer mode in Settings > Capability upgrade."));
             }
         }
     }

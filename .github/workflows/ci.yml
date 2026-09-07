@@ -85,6 +85,9 @@ jobs:
       - name: OCR overlay style contract (dev-board#474)
         working-directory: frontend
         run: npm run test:ocr-overlay
+      - name: Capability slots settings section contract (dev-board#497)
+        working-directory: frontend
+        run: npm run test:capabilities
       - name: Build H5
         working-directory: frontend
         run: npm run build:h5

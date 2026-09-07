@@ -50,6 +50,10 @@ const NAMES = {
   text_write_file: { zh: '写入文本文件', en: 'Write text file' },
   text_find_replace: { zh: '文本查找替换', en: 'Text find and replace' },
   // 插件开发形态（PluginDevTools，dev-board#61）
+  capability_list: { zh: '查看能力实现', en: 'List capabilities' },
+  capability_install: { zh: '准备能力升级', en: 'Prepare capability upgrade' },
+  capability_apply: { zh: '执行能力升级', en: 'Apply capability upgrade' },
+  capability_select: { zh: '切换能力实现', en: 'Switch capability' },
   plugin_dev_scaffold: { zh: '创建插件骨架', en: 'Scaffold plugin' },
   plugin_dev_install: { zh: '安装插件到本机', en: 'Install plugin locally' },
   scan_files: { zh: '扫描项目文件', en: 'Scan files' },
