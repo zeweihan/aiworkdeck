@@ -25,15 +25,15 @@
  */
 export async function flushDirtyEditors(libreRefs, plainTextRefs) {
   let flushed = 0
-  let failed = 0
+  const failed = new Set()
 
   const attempt = async (inst) => {
     try {
       const saved = await inst.flushSave({ timeoutMs: 10000 })
-      if (saved === false || inst.dirty || inst.saving) failed++
+      if (saved === false || inst.dirty || inst.saving) failed.add(inst)
       else flushed++
     } catch (e) {
-      failed++
+      failed.add(inst)
       console.warn('[ProjectOverview] leave flush-save failed:', e)
     }
   }
@@ -51,5 +51,13 @@ export async function flushDirtyEditors(libreRefs, plainTextRefs) {
     }
   }
 
-  return { flushed, failed }
+  // 前面的实例保存完后，用户仍可能在等待另一实例时编辑；也可能有新实例注册。
+  // 离开前同步重读当前注册表，不能用逐项保存时的旧状态放行导航。
+  for (const inst of Object.values(libreRefs || {})) {
+    if (inst && inst.ready && !inst.docLoadFailed && inst.file && (inst.dirty || inst.saving)) failed.add(inst)
+  }
+  for (const inst of Object.values(plainTextRefs || {})) {
+    if (inst && inst.file && (inst.dirty || inst.saving)) failed.add(inst)
+  }
+  return { flushed, failed: failed.size }
 }

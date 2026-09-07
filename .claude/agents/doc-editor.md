@@ -220,3 +220,5 @@ HOUSE 不再是常量：`buildHouse(profile)` 从画像 JSON 派生写端常量�
 - 大文档性能：`npm run test:lowa-big`（同一套启动件 `tests/lowa-e2e/_boot.mjs`；端口被别的 worktree 占着时设 `LOWA_E2E_PORT`）。
 - 涉桌面壳/webview：`npm run test:desktop-e2e`（弹 dev Electron 窗口，验证保存落盘链路）。
 - 全应用：`npm run test:app-e2e`。改编辑器三件套（原语/白名单/worker）必跑 lowa-e2e。
+
+- 离开工作台/退出登录前，`flushDirtyEditors` 逐个保存后必须同步重扫当前 Office/文本注册表；保存 B 期间重新编辑 A、原本干净实例变脏、或新注册实例变脏都应阻止导航（`flush-dirty-editors.test.mjs` 时序用例），不能只相信每个实例刚保存时的状态。

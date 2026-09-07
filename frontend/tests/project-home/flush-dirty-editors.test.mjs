@@ -117,3 +117,23 @@ for (const name of ['leaveWorkbench', 'handleLogout']) {
     })
   }
 }
+
+for (const change of ['saved-again', 'previously-clean', 'registered-later']) {
+  test(`保存另一文档期间 ${change} 的修改必须阻止离开`, async () => {
+    const a = libre({ dirty: change === 'saved-again' })
+    const b = libre({ dirty: true })
+    let finishB, enteredB
+    const startedB = new Promise(resolve => { enteredB = resolve })
+    const gateB = new Promise(resolve => { finishB = resolve })
+    b.flushSave = async () => { enteredB(); await gateB; b.dirty = false; return true }
+    const refs = { a, b }
+    const pending = flushDirtyEditors(refs, {})
+    await startedB
+    if (change === 'registered-later') refs.c = libre({ dirty: true })
+    else a.dirty = true
+    finishB()
+    const result = await pending
+    assert.equal(result.failed, 1, '最后一次同步检查必须看到保存期间的新改动')
+    assert.equal(change === 'registered-later' ? refs.c.dirty : a.dirty, true, '不能清脏标记来假装已保存')
+  })
+}
