@@ -1,6 +1,14 @@
 // Document editor domain: user-visible copy for LibreOfficeEditor / ReviewPanel /
 // DocDiffViewer / CompareDocDialog / VariablePanel / DrawioEditor.
 export default {
+  retrySave: 'Retry Save',
+  saveTimeout: 'Saving timed out. Check your connection and retry.',
+  saveCancelled: 'Saving cancelled.',
+  unsavedCloseTitle: 'Document has unsaved changes',
+  unsavedCloseBody: 'Saving has not completed. Keep editing and retry saving, or discard unsaved changes and close. Content already saved to disk will be kept.',
+  discardAndClose: 'Discard and Close',
+  keepEditing: 'Keep Editing',
+
   status: {
     booting: 'Starting…',
     unsupported: 'Document editing is not supported in this environment',

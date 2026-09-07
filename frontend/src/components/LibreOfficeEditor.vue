@@ -97,6 +97,7 @@
           <view v-if="displayStatus && !loadingOverlayVisible" class="libre-pill" :class="{ error: isError }">
             <view v-if="!isError && !ready" class="libre-spin"></view>
             <text>{{ displayStatus }}</text>
+            <text v-if="statusKey === 'saveFailed' && !saving" class="libre-save-retry" @tap="retrySave">{{ $t('editor.retrySave') }}</text>
           </view>
           <!-- 审阅面板开关：页边小字读不到作者/时间，面板才是修订的权威视图。
                Calc/Impress 都没有修订（redline）机制，按 docKind 隐藏——不能只是点了没反应。
@@ -1179,7 +1180,7 @@ export default {
       if (!this.ready || !this.file || this.docLoadFailed) return
       // 重载窗口期（版本退回 / 检查点恢复正在换文档）里的 modified 一律丢弃：
       // 它描述的是即将被替换掉的旧文档，标脏只会让 autosave 把旧内容传回去。
-      if (this._reloading) return
+      if (this._reloading || this._saveDiscarded) return
       this.dirty = true
       if (!this._dirtySince) this._dirtySince = Date.now()
       this.scheduleAutoSave()
@@ -1191,11 +1192,13 @@ export default {
     },
     scheduleAutoSave() {
       clearTimeout(this._saveTimer)
+      if (this._savePaused || this._saveDiscarded || this._flushPromise) return
       const elapsed = Date.now() - this._dirtySince
       const delay = Math.max(200, Math.min(2500, 15000 - elapsed))
       this._saveTimer = setTimeout(() => this.autoSave(), delay)
     },
     async autoSave() {
+      if (!this.dirty || this._savePaused || this._saveDiscarded || this._flushPromise) return
       if (this.saving) { this.scheduleAutoSave(); return } // a save is in flight — retry after it
       // 假死根因修复：export_document 是全文档同步序列化，跑在 office 线程上会把
       // Qt 事件循环（滚动/输入/重绘）整段冻住。AI 修订风暴期间 modify 不断，旧的
@@ -1212,28 +1215,57 @@ export default {
       this.dirty = false
       this._dirtySince = 0
       const ok = await this.saveDocument()
-      if (this.dirty) { this.scheduleAutoSave(); return } // edits arrived mid-save
-      if (!ok) {
-        // Transient failure (offline / backend hiccup): the edits are still
-        // unsaved — keep them marked dirty and retry on a slow cadence.
+      if (!ok && !this._saveDiscarded) {
+        // 引擎超时只代表宿主停止等待，后台可能仍在导出。暂停自动重试，
+        // 否则每 15 秒再排一笔，文档永远在「保存中 / 保存失败」间循环。
         this.dirty = true
-        this._dirtySince = Date.now()
-        clearTimeout(this._saveTimer)
-        this._saveTimer = setTimeout(() => this.autoSave(), 15000)
+        this._savePaused = true
       }
+      if (this.dirty) this.scheduleAutoSave()
     },
-    // Flush before unmount (tab close / LRU evict): export needs the live
-    // webview, so the closer awaits this BEFORE removing the instance.
-    async flushSave() {
+    async retrySave() {
+      if (this.saving || this._saveDiscarded) return false
+      this._savePaused = false
+      return this.flushSave()
+    },
+    // 用户明确放弃后关闭上传闸；迟到的导出不能把已关闭的旧副本写回磁盘。
+    discardPendingSave() {
+      this._saveDiscarded = true
+      this._savePaused = true
       clearTimeout(this._saveTimer)
-      // 关闭前把锚点状态也结一次账（文档即将离开内存，之后查不到了）
-      if (this._anchorChecker) { try { await this._anchorChecker.flush() } catch (e) { /* 结账失败不拦保存 */ } }
-      while (this.saving) await new Promise((r) => setTimeout(r, 100))
-      if (this.dirty) {
-        this.dirty = false
-        this._dirtySince = 0
-        await this.saveDocument()
+      if (this._saveXhr) this._saveXhr.abort()
+    },
+    // Flush before unmount. 关闭方可给等待预算；超时返回 false，不自动丢文档。
+    async flushSave({ timeoutMs } = {}) {
+      clearTimeout(this._saveTimer)
+      if (!this._flushPromise) {
+        this._flushPromise = (async () => {
+          while (this.saving && !this._saveDiscarded) await new Promise((r) => setTimeout(r, 100))
+          if (this._saveDiscarded) return false
+          if (this._anchorChecker) { try { await this._anchorChecker.flush() } catch (e) { /* 结账失败不拦保存 */ } }
+          if (this._saveDiscarded) return false
+          if (this.dirty) {
+            this.dirty = false
+            this._dirtySince = 0
+            const ok = await this.saveDocument()
+            if (!ok && !this._saveDiscarded) { this.dirty = true; this._savePaused = true }
+            return ok && !this.dirty
+          }
+          return !this._saveDiscarded
+        })().finally(() => {
+          this._flushPromise = null
+          // flush 等待期间的新输入曾被闸挡住排程；保留标签后必须补排。
+          if (this.dirty) this.scheduleAutoSave()
+        })
       }
+      if (!(timeoutMs > 0)) return this._flushPromise
+      let timer
+      try {
+        return await Promise.race([
+          this._flushPromise,
+          new Promise((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs) }),
+        ])
+      } finally { clearTimeout(timer) }
     },
     // Track E: save — export the edited document from the worker (storeToURL →
     // bytes) and persist via the backend upload endpoint (same fileId contract
@@ -1241,7 +1273,7 @@ export default {
     // returns true on success so autoSave can schedule failure retries.
     async saveDocument() {
       const f = this.file
-      if (!f || !this.executor || this.saving) return false
+      if (!f || !this.executor || this.saving || this._saveDiscarded) return false
       // 最后一道闸（onDocModified 之外的调用方也拦住）：文档没成功加载，
       // 导出的只会是空白 boot 文档——拒绝覆盖后端真文件。
       if (this.docLoadFailed) { this.appendLog('save blocked: 文档未成功加载，拒绝用空白文档覆盖后端文件'); return false }
@@ -1279,13 +1311,15 @@ export default {
         // 重载闸（版本退回 / 检查点恢复）：export 是在换文档之前启动的，导出的这份
         // 字节就是「后端已被改写掉的那个旧版本 + 用户的在途编辑」。上传出去就等于
         // 把律师刚做的退回覆盖回去——这是数据事故，不是体验问题。丢弃这一笔。
-        if (this._reloading) {
+        if (this._reloading || this._saveDiscarded) {
           this.appendLog('save aborted: 正在重载后端最新内容，丢弃这一笔在途导出')
           return false
         }
         this.appendLog('  ← exported ' + u8.length + ' bytes, uploading…')
         await this.uploadBytes(getFileUploadUrl(fileId), u8, name)
         this.appendLog('  ← saved to backend (fileId=' + fileId + ')')
+        this._savePaused = false
+        this.statusKey = prevStatusKey
         return true
       } catch (e) {
         this.statusKey = 'saveFailed'
@@ -1306,10 +1340,15 @@ export default {
         const form = new FormData()
         form.append('file', new Blob([u8]), filename)
         const xhr = new XMLHttpRequest()
+        this._saveXhr = xhr
         xhr.open('POST', url, true)
+        xhr.timeout = 60000
         Object.keys(headers).forEach((k) => { if (k.toLowerCase() !== 'content-type') xhr.setRequestHeader(k, headers[k]) })
         xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve(xhr.response) : reject(new Error('HTTP ' + xhr.status)))
         xhr.onerror = () => reject(new Error('网络错误 / network error'))
+        xhr.ontimeout = () => reject(new Error(this.$t('editor.saveTimeout')))
+        xhr.onabort = () => reject(new Error(this.$t('editor.saveCancelled')))
+        xhr.onloadend = () => { if (this._saveXhr === xhr) this._saveXhr = null }
         xhr.send(form)
       })
     },
@@ -1325,6 +1364,7 @@ export default {
 .libre-float { position: absolute; top: 6px; right: 16px; z-index: 20; display: flex; align-items: center; gap: 8px; }
 .libre-pill { display: flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
   background: var(--awd-info); color: var(--awd-info-text); font-size: 12px; backdrop-filter: blur(4px); }
+.libre-save-retry { cursor: pointer; text-decoration: underline; }
 .libre-pill.error { background: var(--awd-danger); color: var(--awd-danger-text); }
 .libre-spin { width: 10px; height: 10px; border: 2px solid rgba(229, 231, 235, 0.35); border-top-color: var(--awd-border);
   border-radius: 50%; animation: libre-rot 0.8s linear infinite; }
