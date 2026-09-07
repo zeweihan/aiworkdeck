@@ -341,5 +341,6 @@ export default {
   capabilityDevModeConfirmOk: 'I understand, turn it on',
   capabilityDevModeFailed: 'Failed to update the setting',
   capabilityAiPrompt: 'Please upgrade a capability from {url}. {note}First use capability_install to fetch and validate it, read the install plan back to me, and install only after I confirm.',
-  capabilityAiPromptDefaultNote: '',
+  capabilityAiPromptNoteClause: '{note}. ',
+  capabilityAiPromptDefaultNote: 'Install this repository as a capability and wire it into the matching capability slot',
 }

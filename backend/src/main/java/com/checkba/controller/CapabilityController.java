@@ -6,7 +6,6 @@ import com.checkba.service.LangText;
 import com.checkba.service.capability.CapabilityInstallService;
 import com.checkba.service.capability.CapabilitySlotRegistry;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -36,6 +35,10 @@ import java.util.Map;
  *
  * 鉴权与 {@code PluginDevController} 同口径：一律 admin（桌面单机全员管理员）。
  * 业务错误一律 {@code {code:1, message}}——校验失败不是掉线，绝不带 4010。
+ *
+ * 返回沿用全站信封 {@code {code:0,data:...}} / {@code {code:1,message:"中文"}}（HTTP 恒 200），
+ * 与 {@code AccountController}、frontend/src/services/api.js 的 unwrapEnvelope 约定一致；
+ * 管理员校验失败也走 200 + {@code {code:1,message}}，不借用 HTTP 403。
  */
 @RestController
 @RequestMapping("/api/capabilities")
@@ -77,10 +80,10 @@ public class CapabilityController {
             row.put("candidates", candidates);
             slots.add(row);
         }
-        Map<String, Object> result = ok();
-        result.put("slots", slots);
-        result.put("devMode", slotRegistry.devMode());
-        return ResponseEntity.ok(result);
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("slots", slots);
+        data.put("devMode", slotRegistry.devMode());
+        return ResponseEntity.ok(ok(data));
     }
 
     @PostMapping("/{slot}/select")
@@ -94,7 +97,7 @@ public class CapabilityController {
         try {
             String ref = body == null || body.get("ref") == null ? null : String.valueOf(body.get("ref"));
             slotRegistry.select(slot, ref);
-            return ResponseEntity.ok(ok());
+            return ResponseEntity.ok(ok(Map.of()));
         } catch (Exception e) {
             return ResponseEntity.ok(error(e.getMessage()));
         }
@@ -109,7 +112,7 @@ public class CapabilityController {
         }
         try {
             slotRegistry.rollback(slot);
-            return ResponseEntity.ok(ok());
+            return ResponseEntity.ok(ok(Map.of()));
         } catch (Exception e) {
             return ResponseEntity.ok(error(e.getMessage()));
         }
@@ -124,9 +127,9 @@ public class CapabilityController {
         }
         try {
             String url = body == null || body.get("url") == null ? "" : String.valueOf(body.get("url"));
-            Map<String, Object> result = ok();
-            result.put("plan", installService.plan(url));
-            return ResponseEntity.ok(result);
+            Map<String, Object> data = new HashMap<>();
+            data.put("plan", installService.plan(url));
+            return ResponseEntity.ok(ok(data));
         } catch (Exception e) {
             return ResponseEntity.ok(error(e.getMessage()));
         }
@@ -141,9 +144,9 @@ public class CapabilityController {
         }
         try {
             String planId = body == null || body.get("planId") == null ? "" : String.valueOf(body.get("planId"));
-            Map<String, Object> result = ok();
-            result.put("id", installService.apply(planId));
-            return ResponseEntity.ok(result);
+            Map<String, Object> data = new HashMap<>();
+            data.put("id", installService.apply(planId));
+            return ResponseEntity.ok(ok(data));
         } catch (Exception e) {
             return ResponseEntity.ok(error(e.getMessage()));
         }
@@ -155,9 +158,7 @@ public class CapabilityController {
         if (!isAdmin(sessionId)) {
             return forbidden();
         }
-        Map<String, Object> result = ok();
-        result.put("enabled", slotRegistry.devMode());
-        return ResponseEntity.ok(result);
+        return ResponseEntity.ok(ok(Map.of("enabled", slotRegistry.devMode())));
     }
 
     @PutMapping("/dev-mode")
@@ -169,9 +170,7 @@ public class CapabilityController {
         }
         boolean on = body != null && Boolean.parseBoolean(String.valueOf(body.get("enabled")));
         slotRegistry.setDevMode(on);
-        Map<String, Object> result = ok();
-        result.put("enabled", on);
-        return ResponseEntity.ok(result);
+        return ResponseEntity.ok(ok(Map.of("enabled", on)));
     }
 
     private boolean isAdmin(String sessionId) {
@@ -183,13 +182,13 @@ public class CapabilityController {
     }
 
     private ResponseEntity<Map<String, Object>> forbidden() {
-        return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                .body(error(LangText.of("仅管理员可操作", "Administrator permission required")));
+        return ResponseEntity.ok(error(LangText.of("仅管理员可操作", "Administrator permission required")));
     }
 
-    private static Map<String, Object> ok() {
+    private static Map<String, Object> ok(Object data) {
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
+        result.put("data", data);
         return result;
     }
 

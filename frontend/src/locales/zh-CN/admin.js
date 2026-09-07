@@ -340,5 +340,6 @@ export default {
   capabilityDevModeConfirmOk: '我明白，打开',
   capabilityDevModeFailed: '设置失败',
   capabilityAiPrompt: '帮我升级能力：{url}。{note}请先用 capability_install 拉取并校验，把安装计划念给我听，等我确认后再安装。',
-  capabilityAiPromptDefaultNote: '',
+  capabilityAiPromptNoteClause: '{note}。',
+  capabilityAiPromptDefaultNote: '把这个仓库装成一项能力并接到对应的能力槽',
 }

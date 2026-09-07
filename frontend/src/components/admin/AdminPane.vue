@@ -1009,10 +1009,12 @@
                 </view>
                 <view class="comp-actions">
                   <AwdSelect
+                    v-if="(slot.candidates || []).length > 1"
                     :range="capabilityOptionLabels(slot)"
                     :value="capabilitySelectedIndex(slot)"
                     @change="onCapabilitySelect(slot, $event)"
                   />
+                  <text v-else class="comp-readonly">{{ capabilityCurrentLabel(slot) }}</text>
                   <button
                     class="comp-btn"
                     :disabled="!slot.previous"
@@ -1887,8 +1889,9 @@ export default {
     onCapabilityAskAi() {
       const url = this.capabilityUrl.trim()
       if (!url) return
-      const note = this.capabilityNote.trim()
-      const prompt = this.$t('admin.capabilityAiPrompt', { url, note: note || this.$t('admin.capabilityAiPromptDefaultNote') })
+      const note = this.capabilityNote.trim() || this.$t('admin.capabilityAiPromptDefaultNote')
+      const noteClause = note ? this.$t('admin.capabilityAiPromptNoteClause', { note }) : ''
+      const prompt = this.$t('admin.capabilityAiPrompt', { url, note: noteClause })
       if (this.embedded) {
         this.$emit('ai-prompt', { prompt })
         return
@@ -3101,6 +3104,14 @@ $brand-accent: $brand-mint;
 .comp-btn.danger {
   background: var(--awd-bg);
   color: var(--awd-danger-text);
+}
+
+/* 候选只有一个时不给个假装能选的下拉，直接摆当前实现名（dev-board#497） */
+.comp-readonly {
+  font-size: 12px;
+  line-height: 1;
+  padding: 8px 14px;
+  color: var(--awd-text-2);
 }
 
 /* 能力升级（dev-board#497）。按钮/行/开关全部复用上面 components 分区那套类，
