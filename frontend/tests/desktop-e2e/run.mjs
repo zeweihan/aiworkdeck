@@ -369,7 +369,11 @@ try {
       await mouseClickSel('#qa-clipboard-copy-source')
       const modifier = process.platform === 'darwin' ? 'Meta' : 'Control'
       await page.keyboard.down(modifier)
-      try { await page.keyboard.press('KeyA'); await page.keyboard.press('KeyC') }
+      // CDP修饰键事件不会自动执行macOS原生编辑菜单；显式附带真实编辑命令。
+      try {
+        await page.keyboard.press('KeyA', { commands: ['selectAll'] })
+        await page.keyboard.press('KeyC', { commands: ['copy'] })
+      }
       finally { await page.keyboard.up(modifier) }
       await page.waitForFunction(marker => [...document.querySelectorAll('.clip-card')]
         .some(el => el.innerText.includes(marker)), { timeout: 15000 }, CLIP_MARKER)

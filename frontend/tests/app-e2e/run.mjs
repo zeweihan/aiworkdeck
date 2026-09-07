@@ -539,12 +539,9 @@ try {
     const t = await textOf()
     const m = t.match(/.{0,40}(undefined|NaN|\[object|服务器内部错误).{0,40}/)
     if (m) throw new Error('页面文本可疑: ' + m[0])
-    // 「从团队案件库取一份案卷」入口 2026-08-20 起有意收起（PR#457，
-    // project-list.vue 的 SHOW_CLOUD_ACCEPT=false 常量，方法与弹窗组件原样保留）。
-    // 这里断言它确实没渲染——谁把常量开回来，这行要一起翻回 includes 断言，
-    // 别让「收起」与「巡检」各说各话。
-    if (t.includes('从团队案件库取一份案卷')) {
-      throw new Error('SHOW_CLOUD_ACCEPT 已开回但 J2 巡检还是收起口径，两处要一起改')
+    // 官方案件库零配置直连（#439）后入口已恢复；验收与当前产品口径一致。
+    if (!t.includes('从团队案件库取一份案卷')) {
+      throw new Error('项目列表缺少团队案件库取回入口')
     }
   })
 
@@ -2173,30 +2170,13 @@ try {
     })
 
     // dev-board#439 第 5 环（换机器取回的查重）+ 取回列表的角色标签。
-    // 入口说明：项目列表页的「从团队案件库取一份案卷」按钮被 SHOW_CLOUD_ACCEPT=false
-    // 刻意收起（project-list.vue :358），真实鼠标点不到，只能把页面组件的
-    // showCloudAccept 直接置真。这是**把被收起的入口打开**，不是伪造被测对象：
-    // 弹窗本身、它的 connections/remote-projects 两串请求、点「取到本机」之后的
-    // accept 整条链全部照真跑，断言的也是真实回包驱动出来的界面。
+    // 入口已恢复，使用真实鼠标打开取回弹窗，验证完整交互链。
     await step('取回弹窗：列表带「我在这份案卷里的角色」，同一份案卷再取一次不造第二个项目', async () => {
       const before = await api('/api/projects/my')
       const beforeCount = (Array.isArray(before) ? before : []).length
       await page.goto(BASE + '/#/pages/project-list/project-list', { waitUntil: 'networkidle2', timeout: 30000 })
       await page.waitForSelector('.project-item-card', { timeout: 20000 })
-      const opened = await page.evaluate(() => {
-        const seen = new Set()
-        for (const el of document.querySelectorAll('*')) {
-          let c = el.__vueParentComponent
-          while (c && !seen.has(c)) {
-            seen.add(c)
-            const name = c.type && (c.type.name || c.type.__name)
-            if (name === 'ProjectList' && c.proxy) { c.proxy.showCloudAccept = true; return true }
-            c = c.parent
-          }
-        }
-        return false
-      })
-      if (!opened) throw new Error('没能拿到项目列表页组件实例（uni h5 内部结构变了？）')
+      await mouseClickText('从团队案件库取一份案卷')
       await page.waitForSelector('.cloud-project-list', { timeout: 20000 })
       const rows = await page.evaluate(() => [...document.querySelectorAll('.cloud-project-row')].map((r) => ({
         name: ((r.querySelector('.cloud-project-name') || {}).innerText || '').trim(),
