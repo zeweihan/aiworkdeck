@@ -3,8 +3,8 @@
  *
  * 这个分区的风险不在渲染细节，而在四个整合点：分区必须接在 AdminPane 那条
  * v-if/v-else-if 长链的**末尾**（接错位置是编译期错误，或者更糟——静默不渲染）、
- * api 函数与后端端点对得上、i18n 两语言成对、开发者模式默认关且打开前有二次确认。
- * 这四条都无法用纯函数覆盖，只能读源码钉住。
+ * api 函数与后端端点对得上、i18n 两语言成对、开发者模式默认开（dev-board#497 维护者裁决）
+ * 且打开前有二次确认。这四条都无法用纯函数覆盖，只能读源码钉住。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -13,9 +13,14 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '../../src')
+const ROOT = resolve(SRC, '../..')
 const adminPane = readFileSync(resolve(SRC, 'components/admin/AdminPane.vue'), 'utf8')
 const api = readFileSync(resolve(SRC, 'services/api.js'), 'utf8')
 const workbench = readFileSync(resolve(SRC, 'pages/project-overview/project-overview.vue'), 'utf8')
+const slotRegistry = readFileSync(
+  resolve(ROOT, 'backend/src/main/java/com/checkba/service/capability/CapabilitySlotRegistry.java'),
+  'utf8',
+)
 
 test('分区接在 activeNav 长链的末尾，且链头没有被动过', () => {
   const branches = [...adminPane.matchAll(/activeNav === '([a-z_]+)'/g)].map((m) => m[1])
@@ -60,8 +65,13 @@ test('AdminPane 只 import 它真正用到的四个能力接口（plan/apply 走
   }
 })
 
-test('开发者模式默认关，且打开前必须弹二次确认', () => {
-  assert.match(adminPane, /capabilityDevMode: false/, '默认必须是关')
+test('开发者模式默认开（维护者裁决 dev-board#497），且打开前必须弹二次确认', () => {
+  assert.match(adminPane, /capabilityDevMode: null/, '加载前不认定为关，避免开关闪一下「关」')
+  assert.match(
+    slotRegistry,
+    /systemSettingService\.get\(DEV_MODE_KEY,\s*"true"\)/,
+    '后端未设置时的默认字串必须是 "true"',
+  )
   const idx = adminPane.indexOf('onToggleCapabilityDevMode(on)')
   assert.ok(idx > 0)
   const body = adminPane.slice(idx, idx + 900)

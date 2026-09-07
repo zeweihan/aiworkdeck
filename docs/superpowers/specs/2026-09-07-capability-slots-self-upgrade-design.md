@@ -1,6 +1,6 @@
 # 功能原子化与 AI 自迭代升级：能力槽 + 能力包（初稿）
 
-dev-board#497。状态：初稿，待维护者拍板三处决策（见第 8 节）。
+dev-board#497。状态：三处决策已拍板（2026-09-08，见第 8 节）。
 
 ## 1. 问题
 
@@ -92,8 +92,9 @@ selected = "plugin:acme-litviz:engine"   存 system_setting  capability.litigati
   （200 文件 / 单文件 5MB / 总 20MB）；返回 `{owner, repo, ref, commit, manifest, fileList}`。
 - `CapabilityInstallService.plan(url)` → 只拉取与校验，返回「安装计划」
   （档位、权限、文件清单、会落到哪个槽、能否自动装、拒绝理由）；
-  `apply(planId)` → 落盘并安装。process 档：默认拒绝，返回「需签名 pack 或开启开发者模式」。
-  开发者模式（`capability.dev-mode=true`，默认 false，设置页显式开关 + 二次确认文案）
+  `apply(planId)` → 落盘并安装。process 档：默认放行（开发者模式默认开，dev-board#497
+  维护者裁决），关闭开发者模式后才拒绝，返回「需签名 pack 或开启开发者模式」。
+  开发者模式（`capability.dev-mode`，未设置时视为 `true`，设置页显式开关 + 打开前二次确认文案）
   下允许以 `.awd-dev` 标记安装，但候选项在 UI 上永远带「未签名」标签。
 - `LitigationVisualService.resolveLitvizDir` 最前面插一档：`slotRegistry.resolve("litigation.diagram")`。
 - 端点：`GET /api/capabilities`（槽 + 候选 + 当前选择）、
@@ -131,14 +132,14 @@ pack 版本追新：`NativePackService` 启动与每 24h 比对 registry 的 lat
 
 - 后端：`CapabilitySlotRegistryTest`（选择/降级/回滚）、`CapabilitySourceFetchServiceTest`
   （URL 白名单、限额、tarball 解包用本地 fixture 不上网）、`CapabilityInstallServiceTest`
-  （三档分流、dev-mode 关闭时 process 拒装）、`LitigationVisualService` 现有测试补一条
-  「槽选中目录优先于 cwd 爬升」。
+  （三档分流、dev-mode 关闭时 process 拒装、默认未设置时 process 档放行）、
+  `LitigationVisualService` 现有测试补一条「槽选中目录优先于 cwd 爬升」。
 - 前端：`frontend/tests/capabilities/*.test.mjs` 源码级断言（分区接在链尾、i18n 键成对、
-  开关默认关），接进 `ci.yml`。
+  开关默认开），接进 `ci.yml`。
 
-## 8. 待维护者拍板
+## 8. 已拍板（2026-09-08）：保留且默认开；首期一个槽；pack 版本追新立刻做（dev-board#499）
 
-1. 开发者模式是否保留。它让「从 GitHub 拉一个未签名 python 引擎」在本机可行，
-   代价是把宿主机执行权交给用户点的那个仓库。建议保留但默认关。
+1. 开发者模式保留，默认开。它让「从 GitHub 拉一个未签名 python 引擎」在本机可行，代价是把
+   宿主机执行权交给用户点的那个仓库；不需要时可在设置页关闭。
 2. 首期只做 `litigation.diagram` 一个槽。第二个槽候选：文书模板包、OCR 引擎、语音转写引擎。
-3. pack 版本追新是否立刻做（它才是画图时效性问题的最短路）。
+3. pack 版本追新立刻做（见 dev-board#499），不再作为独立后续项搁置。

@@ -136,6 +136,7 @@ class CapabilityInstallServiceTest {
     @Test
     @DisplayName("process 档在开发者模式关闭时拒装，理由指明怎么办")
     void processPackageRefusedWhenDevModeOff() throws Exception {
+        slotRegistry.setDevMode(false);
         givenRepo(processRepo());
         CapabilityInstallService.Plan plan = installService.plan(URL);
         assertEquals("process", plan.kind());
@@ -159,6 +160,18 @@ class CapabilityInstallServiceTest {
         assertEquals("demo-engine", installService.apply(plan.planId()));
         assertTrue(Files.isRegularFile(pluginsDir.resolve("demo-engine/engine/cli.py")));
         assertTrue(Files.isRegularFile(pluginsDir.resolve("demo-engine/" + PluginDevService.DEV_MARKER)));
+    }
+
+    @Test
+    @DisplayName("默认（未设置开发者模式）时 process 档允许以 .awd-dev 装，且 unsigned=true")
+    void processPackageInstallsByDefaultWhenDevModeUnset() throws Exception {
+        givenRepo(processRepo());
+        CapabilityInstallService.Plan plan = installService.plan(URL);
+        assertTrue(plan.canAutoInstall(), String.join("; ", plan.reasons()));
+        assertEquals("demo-engine", installService.apply(plan.planId()));
+        assertTrue(Files.isRegularFile(pluginsDir.resolve("demo-engine/engine/cli.py")));
+        assertTrue(Files.isRegularFile(pluginsDir.resolve("demo-engine/" + PluginDevService.DEV_MARKER)),
+                "默认未设置时也应视为开发者模式开，落盘 .awd-dev 标记");
     }
 
     @Test

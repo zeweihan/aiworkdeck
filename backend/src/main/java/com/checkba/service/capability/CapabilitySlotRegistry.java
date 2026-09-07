@@ -54,7 +54,7 @@ public class CapabilitySlotRegistry {
     /** 内置实现的候选引用 */
     public static final String REF_BUILTIN = "builtin";
 
-    /** 开发者模式开关（默认关）：打开后允许安装未签名的 process 型能力实现 */
+    /** 开发者模式开关（默认开）：关闭后禁止安装未签名的 process 型能力实现 */
     public static final String DEV_MODE_KEY = "capability.dev-mode";
 
     public static final String SOURCE_BUILTIN = "builtin";
@@ -366,10 +366,11 @@ public class CapabilitySlotRegistry {
 
     /**
      * 开发者模式：允许把从 GitHub 拉来的、未签名的 process 型实现装到本机。
-     * 默认关——打开它等于把宿主机的代码执行权交给用户点的那个仓库。
+     * 默认开——维护者裁决（dev-board#497）：这类能力包目前只有开发者自己会装，
+     * 默认开更贴合首期使用场景；不需要时可在设置页关闭。
      */
     public boolean devMode() {
-        return "true".equals(systemSettingService.get(DEV_MODE_KEY, "false"));
+        return "true".equals(systemSettingService.get(DEV_MODE_KEY, "true"));
     }
 
     public void setDevMode(boolean on) {

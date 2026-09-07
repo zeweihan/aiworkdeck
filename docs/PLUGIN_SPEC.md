@@ -862,15 +862,16 @@ selected = "plugin:acme-litviz:engine"
 |---|---|---|---|
 | `web` | 沙箱 iframe 前端 | AI / 设置页可自动装 | 免签直装（`.awd-dev` 标记） |
 | `data` | 模板 / 样式画像 / l10n / 声明式数据 | AI / 设置页可自动装 | 同上 |
-| `process` | 宿主机上起进程执行的引擎目录（python 等） | 仅签名 pack 或市场签名插件；**开发者模式例外** | pack / 市场；开发者模式下免签直装 |
+| `process` | 宿主机上起进程执行的引擎目录（python 等） | 签名 pack / 市场签名插件；开发者模式（默认开）下也放行免签 | pack / 市场；开发者模式下免签直装 |
 
 - **纯声明包免除 `frontendEntry`**（v2.10 起）：manifest 无 `frontendEntry` 但声明了
   至少一项声明式贡献（`contributes.templates` / `styleProfiles` / `capabilities` 或顶层
   `settings`）时，免签安装放行。此前强制 `frontendEntry` 把这一档最低风险的包整个挡在门外。
 - **`backendJars` / `tools` / `skills` / `packs` 任一非空仍一律拒装**：免签路径不许绕过签名闸。
-- **开发者模式**（`system_setting` 的 `capability.dev-mode`，默认 `false`，设置页显式开关
-  + 二次确认文案）：打开后 process 型实现可以以 `.awd-dev` 标记安装，候选项在 UI 上
-  **永远带「未签名」标签**。关掉它不会卸载已装的包，只影响后续安装。
+- **开发者模式**（`system_setting` 的 `capability.dev-mode`，未设置时视为 `true`——
+  维护者裁决 dev-board#497 保留且默认开，设置页显式开关 + 打开前二次确认文案）：
+  开着时 process 型实现可以以 `.awd-dev` 标记安装，候选项在 UI 上**永远带「未签名」标签**。
+  关掉它不会卸载已装的包，只影响后续安装。
 
 ### 15.4 从 GitHub 安装
 

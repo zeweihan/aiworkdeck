@@ -332,7 +332,7 @@ export default {
   capabilitySwitchFailed: '切换失败',
   capabilityRollbackFailed: '回滚失败',
   capabilityDevModeTitle: '开发者模式',
-  capabilityDevModeSubtitle: '默认关闭。只有你自己在写能力包、需要本机试跑时才打开',
+  capabilityDevModeSubtitle: '已默认开启：允许安装未签名的能力包，代码会在这台电脑上运行；不需要时可关闭',
   capabilityDevModeSwitch: '允许安装未签名的本机执行实现',
   capabilityDevModeDesc: '打开后，从 GitHub 拉来的 Python 等引擎可以直接装到本机并由本软件启动运行。',
   capabilityDevModeConfirmTitle: '打开开发者模式？',

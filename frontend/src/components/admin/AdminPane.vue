@@ -1038,8 +1038,8 @@
                     <text class="telemetry-switch-desc">{{ $t('admin.capabilityDevModeDesc') }}</text>
                   </view>
                   <AwdSwitch
-                    :checked="capabilityDevMode"
-                    :disabled="capabilityBusy"
+                    :checked="!!capabilityDevMode"
+                    :disabled="capabilityBusy || capabilityDevMode === null"
                     @change="onToggleCapabilityDevMode($event)"
                   />
                 </view>
@@ -1164,7 +1164,8 @@ export default {
       capabilityUrl: '',
       capabilityNote: '',
       capabilitySlots: [],
-      capabilityDevMode: false,
+      // 初始 null：还没拿到后端返回前不认定「关」，避免默认开的开关在加载瞬间闪一下「关」
+      capabilityDevMode: null,
       capabilityBusy: false,
       capabilityError: '',
       // 用户反馈与优化者（右下角浮窗提交 → 优化者分诊 → 开 PR / 发邮件）

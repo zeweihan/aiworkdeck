@@ -333,7 +333,7 @@ export default {
   capabilitySwitchFailed: 'Switch failed',
   capabilityRollbackFailed: 'Roll back failed',
   capabilityDevModeTitle: 'Developer mode',
-  capabilityDevModeSubtitle: 'Off by default. Turn it on only while authoring a capability package you want to try locally',
+  capabilityDevModeSubtitle: 'On by default: allows installing unsigned capability packages, whose code runs on this computer; turn it off if you do not need it',
   capabilityDevModeSwitch: 'Allow installing unsigned implementations that run locally',
   capabilityDevModeDesc: 'Once on, engines pulled from GitHub (Python and the like) can be installed on this machine and started by this app.',
   capabilityDevModeConfirmTitle: 'Turn on developer mode?',

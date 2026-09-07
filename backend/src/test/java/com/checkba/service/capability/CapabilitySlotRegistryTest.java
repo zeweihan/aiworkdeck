@@ -222,12 +222,12 @@ class CapabilitySlotRegistryTest {
     }
 
     @Test
-    @DisplayName("开发者模式默认关——打开它等于把宿主机执行权交给用户点的那个仓库")
-    void devModeDefaultsOff() {
-        assertFalse(registry.devMode());
-        registry.setDevMode(true);
+    @DisplayName("开发者模式默认开——维护者裁决（dev-board#497），不需要时可在设置页关闭")
+    void devModeDefaultsOn() {
         assertTrue(registry.devMode());
         registry.setDevMode(false);
         assertFalse(registry.devMode());
+        registry.setDevMode(true);
+        assertTrue(registry.devMode());
     }
 }
