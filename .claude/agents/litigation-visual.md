@@ -198,6 +198,23 @@ Python 下限 **3.11**（与打包运行时一致）。引擎原本要 3.12+，�
 
 ## 已知地雷
 
+- **出图引擎目录的解析链最前面多了一档「能力槽」**（v2.10 §15，dev-board#497）：
+  `LitigationVisualService.resolveLitvizDir(includePack)` 现在先问
+  `CapabilitySlotRegistry.resolve("litigation.diagram", includePack)`——用户在设置页
+  「能力升级」里选了某个能力包的实现时，那个目录赢过显式配置/环境变量/cwd 爬升/pack 全部四档。
+  原有四档整体搬进 `resolveBuiltinLitvizDir(includePack)`，它同时是槽登记给注册表的
+  builtin 探针（`registerPackProbe()` 里一并登记）。三条纪律：
+  ① `slotRegistry` 与 `packService` 一样是 `@Autowired(required=false)` **字段注入**——
+  本类在单测与 EvalHarness 里是直接 `new` 的，改成构造器注入会让那些场景整片红；
+  ② 探针必须指向 `resolveBuiltinLitvizDir` 而不是 `resolveLitvizDir`，否则「内置候选」
+  会指向当前选中的能力包，候选表自己咬自己；
+  ③ `resolved` 是只算一次的缓存，所以 `registerPackProbe()` 里除了登记探针还登记了
+  `slotRegistry.onSlotChanged(slot, this::invalidate)`——切槽是不重启后端的 live 操作，
+  不失效缓存的话「切换即生效」就是假的（pack 那条路 2026-08 已经踩过同一个坑）。
+- **能力包必须自带完整目录结构**：litviz 的两个 vendor 目录名不能改（时间轴脚本有十几处
+  兄弟目录硬引用，见上文「关键文件」），第三方替换引擎只换 `render.py` 是跑不起来的；
+  槽的可用性判据只查 entry 目录下有没有 `cli.py`，查不出这一类缺失。
+
 - **应用更新不等于 native pack 更新**（dev-board#477，v0.35.0 实测）：本机仍装着
   2026-08-20 的 1.0.1，只有旧 `engine/` 和四个 CLI 子命令，没有 `timeline`，所有材料
   都在 argparse 处 exit 2。发布新增引擎能力必须同步发 `pack-release.yml` 并签名上架。

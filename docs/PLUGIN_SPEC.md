@@ -1,4 +1,4 @@
-# 插件规范 v2.9（Plugin Spec v2.9）
+# 插件规范 v2.10（Plugin Spec v2.10）
 
 > 适用版本：v1 自 0.4.x；v2（权限执行 + 启停过滤）自 Phase 3A；v2.1（插件携带 Skill）自 Phase 3B；
 > v2.3（Web 插件 + `packs` 依赖）自 native pack Phase B；v2.4（宿主 SPI `plugin-api` + 后台任务）自尽调 P1；
@@ -14,6 +14,11 @@
 > v2.9（生态路线 P4，宿主 0.28 起，dev-board#284）：声明式长尾——`contributes.templates` /
 > `contributes.styleProfiles` / 顶层 `settings` / l10n 字符串表四个贡献点（§14），
 > 桥新增 `settings.get` 与 `settings.changed` 事件，SDK 1.4.0。
+> v2.10（能力槽与能力包，dev-board#497）：`contributes.capabilities`（§15）把插件目录里的一份实现
+> 挂进宿主的某个「能力槽」，用户/AI 可切换、可回滚；首期只注册 `litigation.diagram` 一个槽。
+> 配套后端 `com.checkba.service.capability`（槽注册表 / 源码拉取 / 安装计划）+ `/api/capabilities`
+> + AI 工具 `capability_list` / `capability_install` / `capability_apply` / `capability_select`。
+> 设计定稿见 docs/superpowers/specs/2026-09-07-capability-slots-self-upgrade-design.md。
 > 示例插件：[examples/hello-plugin/](../examples/hello-plugin/)（JAR 工具）、
 > [examples/hello-web-plugin/](../examples/hello-web-plugin/)（纯前端）。
 > 后端实现：`PluginService`（扫描/解析/启停）、`PluginController`（HTTP API）、
@@ -796,3 +801,89 @@ manifest 与 contributes/settings 里的 `name`/`description`/`label` 值**整�
 只有 manifest + 数据文件）风险量级最低，广场受理走最轻审核档。宿主落点：
 `PluginContributionService`（模板/画像/设置）+ `PluginService.localize`（l10n）+
 `StyleProfileResolver` 插档；示例 [examples/hello-declarative-plugin/](../examples/hello-declarative-plugin/)。
+
+## 15. 能力槽与能力包（contributes.capabilities，v2.10）
+
+一个**能力槽**（capability slot）= 宿主里一项可替换的能力。每个槽有若干候选实现，
+用户或 AI 可切换，切换即生效、可回滚。首期只注册一个槽：
+
+| 槽 id | 协议 | 含义 |
+|---|---|---|
+| `litigation.diagram` | `litviz-cli/1` | 诉讼可视化出图引擎（`litviz/cli.py` 的命令行协议） |
+
+### 15.1 声明
+
+```json
+"contributes": {
+  "capabilities": [{
+    "capability": "litigation.diagram",
+    "id": "engine",
+    "kind": "process",
+    "entry": "engine/",
+    "protocol": "litviz-cli/1",
+    "runtime": "python>=3.11"
+  }]
+}
+```
+
+- `capability` 是宿主注册的槽 id（点分小写）；宿主不认识的槽 = 拒装；
+- `id` 过 kebab 正则，与插件 id 拼成候选引用 `plugin:<pluginId>:<id>`（同一插件可提供多个实现）；
+- `entry` 是插件目录内的相对目录，`../` 逃逸沿用 `backendJars` 的同款拒绝
+  （解析期一道 + 读取期 canonical path 一道）；
+- `protocol` 必须与槽声明的协议**逐字一致**——这是能力包与槽之间唯一的契约点，
+  不匹配的实现会照常列在候选里（否则用户看不见「装了没生效」）但不可选；
+- `kind` ∈ `web | data | process`，决定谁能装（见 §15.3）；
+- `runtime` 只是自述，宿主展示不强制。
+- 非法条目解析期丢弃并 WARN，与其余 contributes 同口径。
+
+### 15.2 候选与选择位
+
+```
+capability slot  litigation.diagram
+  ├─ builtin                        随包内置那份（永远存在，兜底）
+  ├─ pack:<packId>                  签名原生资源包解出的组件目录
+  └─ plugin:<pluginId>:<capId>      能力包声明的实现目录
+selected = "plugin:acme-litviz:engine"
+```
+
+选择位存 `system_setting` 的 `capability.<slot>.selected`，上一次的值存 `.previous`（回滚用）。
+形状与降级链**照抄** `ai.styleProfile.selected`：插件被禁用、目录被删、entry 下没有协议要求的
+入口文件，一律静默降级到内置并记 WARN，`GET /api/capabilities` 里标 `degraded`。
+
+宿主落点：`CapabilitySlotRegistry`（`com.checkba.service.capability`）。消费方在
+`@PostConstruct` 里用 `registerBuiltin(slotId, supplier)` 登记「内置实现在哪」的探针，
+并在自己的资源解析链最前面插一档 `slotRegistry.resolve(slotId)`——`resolve` 只回答
+「有没有选中一个非内置实现」，选了内置/没选/选中的实现坏了都返回 empty，
+消费方接着走原有链。**内置定位逻辑因此只有一份**。
+
+### 15.3 三档形态与受理
+
+| kind | 内容 | 谁能装 | 安装路径 |
+|---|---|---|---|
+| `web` | 沙箱 iframe 前端 | AI / 设置页可自动装 | 免签直装（`.awd-dev` 标记） |
+| `data` | 模板 / 样式画像 / l10n / 声明式数据 | AI / 设置页可自动装 | 同上 |
+| `process` | 宿主机上起进程执行的引擎目录（python 等） | 仅签名 pack 或市场签名插件；**开发者模式例外** | pack / 市场；开发者模式下免签直装 |
+
+- **纯声明包免除 `frontendEntry`**（v2.10 起）：manifest 无 `frontendEntry` 但声明了
+  至少一项声明式贡献（`contributes.templates` / `styleProfiles` / `capabilities` 或顶层
+  `settings`）时，免签安装放行。此前强制 `frontendEntry` 把这一档最低风险的包整个挡在门外。
+- **`backendJars` / `tools` / `skills` / `packs` 任一非空仍一律拒装**：免签路径不许绕过签名闸。
+- **开发者模式**（`system_setting` 的 `capability.dev-mode`，默认 `false`，设置页显式开关
+  + 二次确认文案）：打开后 process 型实现可以以 `.awd-dev` 标记安装，候选项在 UI 上
+  **永远带「未签名」标签**。关掉它不会卸载已装的包，只影响后续安装。
+
+### 15.4 从 GitHub 安装
+
+`POST /api/capabilities/plan {url}` → 只拉取与校验，返回安装计划（仓库、ref、commit、
+manifest 摘要、档位、权限、文件数、目标槽、`canAutoInstall`、逐条 `reasons`）；
+`POST /api/capabilities/apply {planId}` → 落盘并安装。
+
+- 只收 `https://github.com/<owner>/<repo>[/tree/<ref>]`，实际出站地址过 `SsrfGuard`，
+  重定向逐跳复检；
+- 限额与免签直装同口径：200 文件 / 单文件 5MB / 总量 20MB；
+- 解包逐条目拒 symlink / hardlink / 绝对路径 / `..`；
+- 撞广场已装的 id 在 `plan` 阶段就报，不进入 `apply`。
+
+AI 工具 `capability_install(url)` 内部只做 `plan`；模型必须用 `<question>` 停机把计划
+念给用户听，确认后才调 `capability_apply(planId)`。**工具的登录 + admin 闸写在代码里**，
+不靠 skill 的 `allowed_tools`（那份白名单只裁可见性、不拦分发）。

@@ -169,6 +169,50 @@ class LitigationVisualServiceTest {
                 "packService 触发注册的回调后应该重新解析并命中刚落盘的 cli.py");
     }
 
+    /**
+     * 能力槽（规范 v2.10 §15）：用户在设置页把出图引擎换成某个能力包之后，
+     * 那份实现必须优先于全部内置档（显式配置 / 环境变量 / cwd 爬升 / pack）。
+     *
+     * <p>刻意把 configuredDir 也指到一个有 cli.py 的目录上——只有这样才能证明
+     * 「槽赢过了原有链的第一档」，而不是靠原有链解析不出来才碰巧走到槽。
+     */
+    @Test
+    @DisplayName("能力槽选中的实现目录优先于显式配置与 cwd 爬升")
+    void slotSelectionWinsOverBuiltinChain(@org.junit.jupiter.api.io.TempDir Path tempDir) throws Exception {
+        Path configured = tempDir.resolve("configured");
+        Path slotImpl = tempDir.resolve("slot-impl");
+        Files.createDirectories(configured);
+        Files.createDirectories(slotImpl);
+        Files.writeString(configured.resolve("cli.py"), "# configured\n", StandardCharsets.UTF_8);
+        Files.writeString(slotImpl.resolve("cli.py"), "# slot\n", StandardCharsets.UTF_8);
+
+        LitigationVisualService svcWithSlot = new LitigationVisualService();
+        ReflectionTestUtils.setField(svcWithSlot, "configuredDir", configured.toString());
+        ReflectionTestUtils.setField(svcWithSlot, "configuredPython", "");
+        ReflectionTestUtils.setField(svcWithSlot, "configuredGraphvizDir", "");
+
+        var slotRegistry = mock(com.checkba.service.capability.CapabilitySlotRegistry.class);
+        org.mockito.Mockito.when(slotRegistry.resolve(
+                        eq(com.checkba.service.capability.CapabilitySlotRegistry.SLOT_LITIGATION_DIAGRAM),
+                        org.mockito.ArgumentMatchers.anyBoolean()))
+                .thenReturn(java.util.Optional.of(slotImpl));
+        ReflectionTestUtils.setField(svcWithSlot, "slotRegistry", slotRegistry);
+
+        assertEquals(slotImpl.toAbsolutePath().normalize(),
+                svcWithSlot.runtime().litvizDir().toAbsolutePath().normalize(),
+                "能力槽选中的实现应赢过 litviz.dir 配置");
+
+        // 槽没选（resolve 返回 empty）时退回原有链的第一档
+        org.mockito.Mockito.when(slotRegistry.resolve(
+                        org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.anyBoolean()))
+                .thenReturn(java.util.Optional.empty());
+        svcWithSlot.invalidate();
+        assertEquals(configured.toAbsolutePath().normalize(),
+                svcWithSlot.runtime().litvizDir().toAbsolutePath().normalize(),
+                "槽未选中时应退回 litviz.dir 配置");
+    }
+
     // ==== 出图 ====
 
     @Test

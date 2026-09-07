@@ -291,6 +291,31 @@ public class PluginService {
         private List<TemplateDecl> templates;
         /** 样式画像（规范 v2.9 P4）：styleProfile v1 JSON，可被选为全局默认画像 */
         private List<StyleProfileDecl> styleProfiles;
+        /** 能力实现（规范 v2.10 §15）：把插件目录里的一份实现挂进宿主的某个能力槽 */
+        private List<CapabilityDecl> capabilities;
+    }
+
+    /**
+     * 一条能力实现声明（规范 v2.10 §15）。
+     *
+     * <p>{@code capability} 是宿主注册的槽 id（点分，如 {@code litigation.diagram}），
+     * {@code id} 是本插件内的实现 id（同一插件可为同一槽提供多个实现），
+     * 两者拼成候选引用 {@code plugin:<pluginId>:<id>}。{@code entry} 是插件目录内的
+     * 相对目录（{@code ../} 逃逸沿用 backendJars 那套拒绝），{@code protocol} 必须与
+     * 槽声明的协议逐字一致——这是能力包与槽之间唯一的契约点。
+     *
+     * <p>{@code kind} ∈ {@code web | data | process}，决定谁能装：process 型会在宿主机上
+     * 起进程执行 entry 下的脚本，风险等同 JAR，只有签名包或显式打开的开发者模式才放行。
+     */
+    @lombok.Data
+    public static class CapabilityDecl {
+        private String capability;
+        private String id;
+        private String kind;
+        private String entry;
+        private String protocol;
+        /** 运行时要求的自述（如 {@code python>=3.11}），宿主只展示不强制 */
+        private String runtime;
     }
 
     /** 一条文书模板声明（file 相对插件目录，读取时按 canonical path 校验不逃逸） */
@@ -466,6 +491,40 @@ public class PluginService {
     private static boolean isSafeRelFile(String file) {
         return file != null && !file.isBlank() && !file.startsWith("/") && !file.contains("..")
                 && !file.contains("\\");
+    }
+
+    /** 能力槽 id：点分小写段（如 litigation.diagram） */
+    private static final java.util.regex.Pattern CAPABILITY_SLOT_ID =
+            java.util.regex.Pattern.compile("^[a-z0-9]+(\\.[a-z0-9-]+)+$");
+
+    /** 能力实现的三档形态（规范 v2.10 §15）：谁能装由它决定 */
+    public static final Set<String> CAPABILITY_KINDS = Set.of("web", "data", "process");
+
+    /**
+     * 校验一条 {@code contributes.capabilities} 声明。
+     * @return 不合法时返回原因（给日志与安装计划复用），合法返回 null
+     */
+    public static String validateCapabilityDecl(CapabilityDecl c) {
+        if (c == null) {
+            return "empty declaration";
+        }
+        if (c.getCapability() == null || !CAPABILITY_SLOT_ID.matcher(c.getCapability()).matches()) {
+            return "invalid capability slot id: " + c.getCapability();
+        }
+        if (c.getId() == null || !PACK_ID.matcher(c.getId()).matches()) {
+            return "invalid implementation id: " + c.getId();
+        }
+        String kind = c.getKind() == null ? "" : c.getKind();
+        if (!CAPABILITY_KINDS.contains(kind)) {
+            return "kind must be one of web/data/process, got: " + kind;
+        }
+        if (!isSafeRelFile(c.getEntry())) {
+            return "entry must be a relative path inside the plugin directory: " + c.getEntry();
+        }
+        if (c.getProtocol() == null || c.getProtocol().isBlank()) {
+            return "protocol is required";
+        }
+        return null;
     }
 
     // ==== l10n 字符串表（规范 v2.9 P4）====
@@ -1048,6 +1107,22 @@ public class PluginService {
                     valid.add(sp);
                 }
                 meta.getContributes().setStyleProfiles(valid);
+            }
+            // contributes.capabilities（规范 v2.10 §15）：capability 槽 id 点分、id 过 kebab、
+            // kind 三选一、entry 是不逃逸的相对路径、protocol 必填。非法条目丢弃并告警——
+            // 声明是安装期的受理依据，必须真实可解析。
+            if (meta.getContributes().getCapabilities() != null) {
+                List<CapabilityDecl> valid = new ArrayList<>();
+                for (CapabilityDecl c : meta.getContributes().getCapabilities()) {
+                    String why = validateCapabilityDecl(c);
+                    if (why != null) {
+                        log.warn("Plugin {} capability declaration dropped ({}): {}",
+                                meta.getId(), why, c == null ? null : c.getId());
+                        continue;
+                    }
+                    valid.add(c);
+                }
+                meta.getContributes().setCapabilities(valid);
             }
         }
         // settings（规范 v2.9 P4）：上限 20 条；key/type 校验；select 必须给 options。非法条目丢弃并告警。

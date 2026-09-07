@@ -54,6 +54,13 @@ public class LitigationVisualService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.checkba.service.pack.NativePackService packService;
 
+    /**
+     * 能力槽注册表（规范 v2.10 §15）。**可选注入**，理由同上：单测直接 new 本类。
+     * 用户在设置页把出图引擎换成某个能力包时，选中的实现目录优先于下面全部四档。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.capability.CapabilitySlotRegistry slotRegistry;
+
     @Value("${litviz.dir:}")
     private String configuredDir;
 
@@ -110,6 +117,18 @@ public class LitigationVisualService {
             packService.registerBuiltinProbe(PACK_ID, this::isEngineAvailableWithoutPack);
             packService.onPackChanged(PACK_ID, this::invalidate);
         }
+        if (slotRegistry != null) {
+            // 「内置实现」= 不算能力槽也不算 pack 的那条链（显式配置 / 随包内置 / dev 目录爬升）。
+            // 探针必须绕开槽本身，否则 candidates() 会把当前选中的能力包当成内置候选。
+            slotRegistry.registerBuiltin(
+                    com.checkba.service.capability.CapabilitySlotRegistry.SLOT_LITIGATION_DIAGRAM,
+                    () -> resolveBuiltinLitvizDir(false));
+            // runtime() 的解析结果只算一次；切槽是不重启后端的 live 操作，
+            // 不失效缓存的话「切换即生效」就是假的（pack 那条路踩过同一个坑）
+            slotRegistry.onSlotChanged(
+                    com.checkba.service.capability.CapabilitySlotRegistry.SLOT_LITIGATION_DIAGRAM,
+                    this::invalidate);
+        }
     }
 
     /**
@@ -150,6 +169,21 @@ public class LitigationVisualService {
      * @param includePack false = 跳过资源包这一步（isEngineAvailableWithoutPack 用）
      */
     private Path resolveLitvizDir(boolean includePack) {
+        // 能力槽选中的实现优先于全部内置档（设计稿第 5.2 节）。选中内置/未选/选中的实现
+        // 已损坏时 resolve 返回 empty，继续走下面原有的四档链——降级逻辑只有一份。
+        if (slotRegistry != null) {
+            Path slotDir = slotRegistry.resolve(
+                    com.checkba.service.capability.CapabilitySlotRegistry.SLOT_LITIGATION_DIAGRAM,
+                    includePack).orElse(null);
+            if (slotDir != null && Files.isRegularFile(slotDir.resolve("cli.py"))) {
+                return slotDir;
+            }
+        }
+        return resolveBuiltinLitvizDir(includePack);
+    }
+
+    /** 原有的四档链：显式配置 → 环境变量 → cwd 爬升 → 资源包。也是能力槽的 builtin 探针。 */
+    private Path resolveBuiltinLitvizDir(boolean includePack) {
         for (String candidate : new String[]{configuredDir, System.getenv("LITVIZ_DIR")}) {
             if (candidate != null && !candidate.isBlank()) {
                 Path p = Paths.get(candidate).toAbsolutePath().normalize();
