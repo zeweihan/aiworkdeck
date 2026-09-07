@@ -125,8 +125,8 @@ public class LitigationTimelineTools implements AgentToolComponent {
             @P("Comma-separated project file IDs of the case materials") String materialFileIds
     ) {
         if (projectId == null) return "Error: projectId is required.";
-        String why = litviz.unavailableReason();
-        if (why != null) return "诉讼可视化不可用：" + why;
+        String why = litviz.timelineUnavailableReason();
+        if (why != null) return "Error: 诉讼可视化不可用：" + why;
         if (materialFileIds == null || materialFileIds.isBlank()) {
             return "Error: materialFileIds is required（用 doc_list_project_files / list_files 拿文件 ID）。";
         }
@@ -173,7 +173,7 @@ public class LitigationTimelineTools implements AgentToolComponent {
 
             LitigationVisualService.Result r = litviz.timeline(s.workdir, "read", relPaths, null);
             if (!r.ok()) {
-                return "读入材料失败：" + errorOf(r);
+                return "Error: 读入材料失败：" + errorOf(r);
             }
 
             String sentenceList = numberedSentences(s.workdir);
@@ -567,13 +567,12 @@ public class LitigationTimelineTools implements AgentToolComponent {
 
     private static String errorOf(LitigationVisualService.Result r) {
         String err = r.error();
-        if (err != null && !err.isBlank()) return err;
+        if (err != null && !err.isBlank()) return err.contains("stderr") ? err : err + tailStderr(r);
         return "（无输出）" + tailStderr(r);
     }
 
     private static String tailStderr(LitigationVisualService.Result r) {
-        return r.stderr() == null || r.stderr().isBlank()
-                ? "" : "\nstderr：" + LitigationVisualTools.tail(r.stderr(), 600);
+        return LitigationVisualService.diagnosticSummary(r.stderr());
     }
 
     private static void deleteTreeQuietly(Path dir) {
