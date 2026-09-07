@@ -13,7 +13,7 @@
  * 逐个 flush 还脏的编辑器实例。
  *
  * 判据与 closeFile 保持一致：
- * - Office 文档（LibreOfficeEditor）要求 ready 且非 isError——加载失败的实例画布是
+ * - Office 文档（LibreOfficeEditor）要求 ready 且非 docLoadFailed——加载失败的实例画布是
  *   空白原型，保存会拿空白覆盖真文件（同 evictLibreInstance 的取舍）；
  * - 纯文本（PlainTextEditor）只要求有 file。
  *
@@ -29,8 +29,9 @@ export async function flushDirtyEditors(libreRefs, plainTextRefs) {
 
   const attempt = async (inst) => {
     try {
-      await inst.flushSave()
-      flushed++
+      const saved = await inst.flushSave({ timeoutMs: 10000 })
+      if (saved === false || inst.dirty || inst.saving) failed++
+      else flushed++
     } catch (e) {
       failed++
       console.warn('[ProjectOverview] leave flush-save failed:', e)
@@ -38,7 +39,7 @@ export async function flushDirtyEditors(libreRefs, plainTextRefs) {
   }
 
   for (const inst of Object.values(libreRefs || {})) {
-    if (inst && inst.ready && !inst.isError && inst.file && (inst.dirty || inst.saving)
+    if (inst && inst.ready && !inst.docLoadFailed && inst.file && (inst.dirty || inst.saving)
         && typeof inst.flushSave === 'function') {
       await attempt(inst)
     }

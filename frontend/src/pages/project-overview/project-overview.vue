@@ -3765,13 +3765,18 @@ export default {
     // 2) 工作台参与的跳转一律 reLaunch：navigateTo 会把工作台留在页面栈里，
     //    从列表页再进另一个项目就出现两个存活的工作台实例（全局监听多实例地雷）。
     //
-    // 保存失败不阻断跳转（用户已经在走了），但会留一条日志；逐个实例 try/catch，
-    // 一个失败不拖累其它。
+    // 逐个保存；只要仍有未落盘的改动就留在工作台，让用户重试或先关闭该文档处理。
     async leaveWorkbench(url) {
       try {
-        await flushDirtyEditors(this._libreRefs, this._plainTextRefs)
+        const result = await flushDirtyEditors(this._libreRefs, this._plainTextRefs)
+        if (result.failed > 0) {
+          uni.showToast({ title: this.$t('editor.saveBeforeLeaving'), icon: 'none', duration: 4000 })
+          return false
+        }
       } catch (e) {
         console.warn('[project-overview] flush before leaving failed', e)
+        uni.showToast({ title: this.$t('editor.saveBeforeLeaving'), icon: 'none', duration: 4000 })
+        return false
       }
       uni.reLaunch({ url })
     },
@@ -4295,9 +4300,15 @@ export default {
       // 落盘必须排在 clearSession 之前：会话一清，保存请求就是未授权，
       // 用户「退出登录」等于顺手丢掉最后几秒的修改。
       try {
-        await flushDirtyEditors(this._libreRefs, this._plainTextRefs)
+        const result = await flushDirtyEditors(this._libreRefs, this._plainTextRefs)
+        if (result.failed > 0) {
+          uni.showToast({ title: this.$t('editor.saveBeforeLeaving'), icon: 'none', duration: 4000 })
+          return false
+        }
       } catch (e) {
         console.warn('[project-overview] flush before logout failed', e)
+        uni.showToast({ title: this.$t('editor.saveBeforeLeaving'), icon: 'none', duration: 4000 })
+        return false
       }
       try {
          clearSession()

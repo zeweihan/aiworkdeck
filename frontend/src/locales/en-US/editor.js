@@ -1,6 +1,7 @@
 // Document editor domain: user-visible copy for LibreOfficeEditor / ReviewPanel /
 // DocDiffViewer / CompareDocDialog / VariablePanel / DrawioEditor.
 export default {
+  saveBeforeLeaving: 'Some documents are not saved. Retry saving, or close those documents first to handle unsaved changes.',
   retrySave: 'Retry Save',
   saveTimeout: 'Saving timed out. Check your connection and retry.',
   saveCancelled: 'Saving cancelled.',
