@@ -202,3 +202,18 @@ test('useAgentStream 收到失败原因后必须换掉「正在写入」占位�
     '必须解掉 isEditorStreaming，否则提示会被 appendText 继续吞掉')
   assert.match(branch, /docStreamingPlaceholder/, '占位符要被换掉，不能停在「正在写入」')
 })
+
+for (const throws of [false, true]) {
+  test(`尾表收尾${throws ? '抛错' : '返回失败'}也必须报告到对话，不能把缓冲成功当成落字成功`, async () => {
+    const vm = makeVm({ libreOfficeExecutor: { executeCommand: async cmd => {
+      if (cmd === 'stream_flush') {
+        if (throws) throw new Error('尾表创建失败')
+        return { success: false, message: '尾表创建失败' }
+      }
+      return { success: true, buffered: 20 }
+    } } })
+    vm._docStreamBuffer = '| 事项 | 责任人 |'
+    const reason = await vm.handleDocStreamEnd({ status: 'finished', wrote: true })
+    assert.equal(reason, '尾表创建失败')
+  })
+}

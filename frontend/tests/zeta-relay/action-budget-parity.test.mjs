@@ -37,7 +37,7 @@ const relay = parseTable(
   'const ACTION_BUDGET_MS = {', '}')
 
 test('整段插入类 action 在两张前端预算表里都是 120s', () => {
-  for (const action of ['insert_at_cursor', 'insert_under_heading', 'replace_selection', 'modify_paragraph']) {
+  for (const action of ['insert_at_cursor', 'insert_under_heading', 'replace_selection', 'modify_paragraph', 'stream_insert', 'stream_flush']) {
     assert.equal(ACTION_BUDGET_MS[action], 120000, `libreofficeExecutorClient 缺 ${action}`)
     assert.equal(relay[action], 120000, `zetaOfficeRelay 缺 ${action}`)
   }

@@ -208,8 +208,12 @@ export const agentClientActionMethods = {
         if (!this.docStreamBlockReason()) {
             try {
                 // 收尾会把未换行的尾行/尾表真正写进文档，同样是 AI 的笔迹
-                await this.libreOfficeExecutor.executeCommand('stream_flush', { __agent: true })
+                const result = await this.libreOfficeExecutor.executeCommand('stream_flush', { __agent: true })
+                if (!result || result.success === false) {
+                    this._docStreamFailReason = result?.error || result?.message || this._docStreamText('docStreamReasonInsertFailed', 'stream_flush 失败')
+                }
             } catch (e) {
+                this._docStreamFailReason = (e && e.message) || String(e)
                 console.error('[ProjectOverview] doc stream flush error:', e)
             }
         }

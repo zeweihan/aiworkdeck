@@ -110,6 +110,8 @@ public class EditorBridgeService {
             Map.entry("resolve_all_revisions", 120),
             Map.entry("resolve_revisions", 120),
             Map.entry("insert_table", 120),
+            Map.entry("stream_insert", 120),
+            Map.entry("stream_flush", 120),
             Map.entry("apply_style_profile", 120),
             Map.entry("export_document", 180),
             // 整段插入类（dev-board#464）：一份十几页的报告经修订逐行落字远超 30s，

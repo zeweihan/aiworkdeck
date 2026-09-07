@@ -472,6 +472,8 @@ for file_id in file_ids:
 |-----|------|
 | `doc_format_selection(bold, italic, underline, strikeout, highlight, color, fontSize, fontName)` | 字符格式：加粗/斜体/下划线/删除线/**高亮**/字色/字号/字体，只传要改的参数 |
 | `doc_set_paragraph_format(alignment, headingLevel)` | 段落格式：对齐（left/right/center/justify）、标题级别（1-9，0=正文） |
+| `doc_set_numbering(preset, level)` | 自动编号与项目符号：bullet/decimal/chinese/multilevel；none 同时清除编号和项目符号。要把图注改成普通居中段落，先选中该段，设 preset=none，再设 headingLevel=0、alignment=center |
+| `doc_get_formatting()` | 读回选区的字符/段落格式。去掉列表后确认 paragraph.isNumbered=false、alignment 为目标对齐；只改字号、居中或标题级别不会清列表，未读回核验不得宣称完成 |
 
 **验/撤销（安全网）**
 

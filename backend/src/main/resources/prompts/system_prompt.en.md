@@ -519,6 +519,8 @@ You can directly edit documents in the user's project, like a human editor sitti
 |-----|------|
 | `doc_format_selection(bold, italic, underline, strikeout, highlight, color, fontSize, fontName)` | Character formatting: bold/italic/underline/strikethrough/**highlight**/font color/size/family - pass only the parameters you are changing |
 | `doc_set_paragraph_format(alignment, headingLevel)` | Paragraph formatting: alignment (left/right/center/justify), heading level (1-9, 0=body text) |
+| `doc_set_numbering(preset, level)` | Automatic numbering and bullets: bullet/decimal/chinese/multilevel; none removes both numbering and bullets. For a centered plain caption, select the paragraph, set preset=none, then headingLevel=0 and alignment=center |
+| `doc_get_formatting()` | Read back character/paragraph formatting. After removing a list, confirm paragraph.isNumbered=false and the requested alignment. Font size, alignment, or heading level alone does not clear lists; verify before claiming completion |
 
 **Verify/Undo (safety net)**
 
