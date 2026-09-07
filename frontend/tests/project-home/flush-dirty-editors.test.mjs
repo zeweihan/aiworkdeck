@@ -16,9 +16,9 @@ const PAGE = readFileSync(
 const stripComments = (s) =>
   s.replace(/<!--[\s\S]*?-->/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 
-function libre({ dirty = false, saving = false, ready = true, isError = false, file = { id: 1 } } = {}) {
-  const inst = { dirty, saving, ready, isError, file, flushed: 0 }
-  inst.flushSave = async () => { inst.flushed++ }
+function libre({ dirty = false, saving = false, ready = true, isError = false, docLoadFailed = false, file = { id: 1 } } = {}) {
+  const inst = { dirty, saving, ready, isError, docLoadFailed, file, flushed: 0 }
+  inst.flushSave = async () => { inst.flushed++; inst.dirty = false; inst.saving = false }
   return inst
 }
 
@@ -39,7 +39,7 @@ test('干净的实例不空存一次', async () => {
 })
 
 test('加载失败/未就绪的实例绝不保存——画布是空白原型，存下去等于清空真文件', async () => {
-  const broken = libre({ dirty: true, isError: true })
+  const broken = libre({ dirty: true, isError: true, docLoadFailed: true })
   const notReady = libre({ dirty: true, ready: false })
   await flushDirtyEditors({ 'left:1': broken, 'left:2': notReady }, {})
   assert.equal(broken.flushed, 0, '与 closeFile / evictLibreInstance 同一取舍')
@@ -87,3 +87,77 @@ test('退出登录时落盘排在 clearSession 之前，否则保存请求已经
   assert.ok(flushAt >= 0 && clearAt >= 0, 'handleLogout 里两者都应存在')
   assert.ok(flushAt < clearAt, '会话一清，保存就是未授权——落盘必须排在前面')
 })
+
+
+test('保存失败态仍要尝试；返回 false 或仍然 dirty 都属于未保存', async () => {
+  const failed = libre({ dirty: true, isError: true })
+  let calls = 0
+  failed.flushSave = async () => { calls++; return false }
+  const pending = libre({ dirty: true })
+  pending.flushSave = async () => undefined
+  const result = await flushDirtyEditors({ a: failed, b: pending }, {})
+  assert.equal(calls, 1, '保存错误不能被当成加载失败而跳过')
+  assert.deepEqual(result, { failed: 2, flushed: 0 })
+})
+
+for (const name of ['leaveWorkbench', 'handleLogout']) {
+  for (const outcome of ['failed', 'throws', 'saved']) {
+    test(`${name} ${outcome}：只有全部保存成功才能导航或清会话`, async () => {
+      const from = PAGE.indexOf(`    async ${name}(`)
+      const end = PAGE.indexOf(name === 'leaveWorkbench' ? '    goAllProjects()' : '    onFileTreeQuickAction(', from)
+      const calls = []
+      const methods = new Function('flushDirtyEditors', 'uni', 'clearSession',
+        'return {' + PAGE.slice(from, end) + '}')(
+        async () => { if (outcome === 'throws') throw new Error('offline'); return { failed: outcome === 'failed' ? 1 : 0 } },
+        { showToast: () => calls.push('toast'), reLaunch: () => calls.push('navigate') },
+        () => calls.push('clear'))
+      await methods[name].call({ $t: k => k }, '/target')
+      if (outcome === 'saved') assert.deepEqual(calls, name === 'handleLogout' ? ['clear', 'navigate'] : ['navigate'])
+      else assert.deepEqual(calls, ['toast'], '失败必须留在工作台并保留会话')
+    })
+  }
+}
+
+for (const change of ['saved-again', 'previously-clean', 'registered-later']) {
+  test(`保存另一文档期间 ${change} 的修改必须阻止离开`, async () => {
+    const a = libre({ dirty: change === 'saved-again' })
+    const b = libre({ dirty: true })
+    let finishB, enteredB
+    const startedB = new Promise(resolve => { enteredB = resolve })
+    const gateB = new Promise(resolve => { finishB = resolve })
+    b.flushSave = async () => { enteredB(); await gateB; b.dirty = false; return true }
+    const refs = { a, b }
+    const pending = flushDirtyEditors(refs, {})
+    await startedB
+    if (change === 'registered-later') refs.c = libre({ dirty: true })
+    else a.dirty = true
+    finishB()
+    const result = await pending
+    assert.equal(result.failed, 1, '最后一次同步检查必须看到保存期间的新改动')
+    assert.equal(change === 'registered-later' ? refs.c.dirty : a.dirty, true, '不能清脏标记来假装已保存')
+  })
+}
+
+for (const name of ['leaveWorkbench', 'handleLogout']) {
+  test(`${name} 等待文本保存时首次注册Office实例也必须阻止导航`, async () => {
+    const from = PAGE.indexOf(`    async ${name}(`)
+    const end = PAGE.indexOf(name === 'leaveWorkbench' ? '    goAllProjects()' : '    onFileTreeQuickAction(', from)
+    const calls = []
+    const methods = new Function('flushDirtyEditors', 'uni', 'clearSession',
+      'return {' + PAGE.slice(from, end) + '}')(
+      flushDirtyEditors,
+      { showToast: () => calls.push('toast'), reLaunch: () => calls.push('navigate') },
+      () => calls.push('clear'))
+    const text = libre({ dirty: true })
+    const vm = { $t: k => k, _plainTextRefs: { left: text } }
+    text.flushSave = async () => {
+      if (!vm._libreRefs) vm._libreRefs = {}
+      vm._libreRefs['right:2'] = libre({ dirty: true })
+      text.dirty = false
+      return true
+    }
+    await methods[name].call(vm, '/target')
+    assert.deepEqual(calls, ['toast'])
+    assert.equal(vm._libreRefs['right:2'].dirty, true)
+  })
+}

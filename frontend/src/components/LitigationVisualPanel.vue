@@ -25,6 +25,12 @@
   <view class="lv-notice subtle" v-else-if="status && !status.graphviz">
     <text class="lv-notice-text">{{ $t('panels.litNoGraphvizNotice') }}</text>
   </view>
+  <view class="lv-notice" v-if="status && status.available && status.timelineAvailable === false">
+    <text class="lv-notice-text">{{ $t('panels.litTimelineNeedsUpdate') }}</text>
+    <view class="lv-link" :class="{ disabled: litPackRetrying || (showPackBar && litPackStatus.state !== 'failed') }" @tap="updateTimelinePack">
+      <text>{{ $t('panels.litUpdatePack') }}</text>
+    </view>
+  </view>
 
   <!-- 出图 -->
   <view class="lv-sec-head">
@@ -207,14 +213,17 @@ export default {
     }
   },
   mounted() {
+    uni.$on('awd:litviz-restyled', this.onDiagramChanged)
     this.refreshPackStatus()
   },
   beforeUnmount() {
+    uni.$off('awd:litviz-restyled', this.onDiagramChanged)
     this.stopPackPoll()
   },
   methods: {
     // ---- 原生资源包（native pack）状态条 ----
     async refreshPackStatus() {
+      const previousState = this.litPackStatus && this.litPackStatus.state
       try {
         const res = await packStatus(PACK_ID)
         this.litPackStatus = (res && res.status) || null
@@ -227,6 +236,7 @@ export default {
       const state = this.litPackStatus && this.litPackStatus.state
       if (state === 'ready' || state === 'failed') {
         this.stopPackPoll()
+        if (state === 'ready' && previousState && previousState !== 'ready') await this.reload()
       } else if (state && !this.litPackTimer) {
         this.startPackPoll()
       }
@@ -244,11 +254,16 @@ export default {
       try {
         await packInstall(PACK_ID)
         await this.refreshPackStatus()
+        if (this.litPackStatus && this.litPackStatus.state === 'ready') await this.reload()
       } catch (e) {
         uni.showToast({ title: (e && e.message) || this.$t('panels.litPackRetryFailedFallback'), icon: 'none' })
       } finally {
         this.litPackRetrying = false
       }
+    },
+    async updateTimelinePack() {
+      if (this.litPackRetrying || (this.showPackBar && this.litPackStatus.state !== 'failed')) return
+      await this.retryPackInstall()
     },
     layoutLabel(layout) {
       const key = LAYOUT_LABEL_KEYS[layout]
@@ -315,32 +330,36 @@ export default {
       this.$emit('open-file', { fileId: d.svgFileId, name: d.name })
     },
 
+    onDiagramChanged(event) {
+      if (String(event.projectId) === String(this.projectId) && !event.failed) this.reload()
+    },
+
     async restyle(d, mode) {
       if (this.restylingId) return
-      // 换风格是拿语义地图重画，会整份覆盖产物。图在 draw.io 里手工改过的话，
-      // 那些改动不在地图里，重画就等于丢掉——必须先问一句。
-      if (d.handEdited) {
-        const ok = await new Promise((resolve) => {
-          uni.showModal({
-            title: this.$t('panels.litHandEditedConfirmTitle'),
-            content: this.$t('panels.litHandEditedConfirmBody', { mode }),
-            confirmText: this.$t('panels.litContinueRedraw'),
-            cancelText: this.$t('panels.litCancel'),
-            success: (res) => resolve(!!res.confirm),
-            fail: () => resolve(false)
-          })
+      // 地图无法反映当前画布；时间戳也不可靠，所以每次覆盖都需明确确认。
+      const ok = await new Promise((resolve) => {
+        uni.showModal({
+          title: this.$t('panels.litHandEditedConfirmTitle'),
+          content: this.$t('panels.litHandEditedConfirmBody', { mode }),
+          confirmText: this.$t('panels.litContinueRedraw'),
+          cancelText: this.$t('panels.litCancel'),
+          success: (res) => resolve(!!res.confirm),
+          fail: () => resolve(false)
         })
-        if (!ok) return
-      }
+      })
+      if (!ok) return
       this.restylingId = d.folderId
       uni.showLoading({ title: this.$t('panels.litRedrawing'), mask: true })
       try {
-        await restyleLitigationDiagram(this.projectId, d.folderId, mode)
-        await this.reload()
+        const pendingSaves = []
+        uni.$emit('awd:litviz-restyling', { projectId: this.projectId, folderId: d.folderId, pendingSaves })
+        await Promise.all(pendingSaves)
+        await restyleLitigationDiagram(this.projectId, d.folderId, mode, true)
         // 图变了但文件 ID 没变，已打开的标签要重新拉一次
-        uni.$emit('awd:litviz-restyled', { folderId: d.folderId, svgFileId: d.svgFileId })
+        uni.$emit('awd:litviz-restyled', { projectId: this.projectId, folderId: d.folderId, svgFileId: d.svgFileId, kind: 'restyle' })
         uni.showToast({ title: this.$t('panels.litRestyledTo', { mode }), icon: 'none' })
       } catch (e) {
+        uni.$emit('awd:litviz-restyled', { projectId: this.projectId, folderId: d.folderId, kind: 'restyle', failed: true })
         uni.showToast({ title: (e && e.message) || this.$t('panels.litRedrawFailedFallback'), icon: 'none' })
       } finally {
         uni.hideLoading()

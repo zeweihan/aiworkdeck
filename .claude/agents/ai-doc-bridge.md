@@ -285,6 +285,15 @@ txt/md/markdown 自 dev-board#37 起不进 LOWA（前端走 PlainTextEditor.vue�
 - 工具链：`docx_inspect_template` 产出并**自行落盘** `_模板/画像.json` → `doc_apply_style_profile` / `write_docx(..., styleProfileJson?)` 缺省自动取用（顺序见 `StyleProfileResolver`）。2026-08-22 前这一步靠模型 `write_file` 转抄，实测掉字段（黄金对照 B v6/v7 正文字体没套上）。
 - fixtures：`backend/src/test/resources/fixtures/gen-template-sample.py`（python-docx 生成 `template-sample.docx`，改 fixture 改脚本重跑）、`house-parity.md` + `house-before.json`（对拍基线）。
 
+## 插入回答、列表清除与新文档兼容级别（2026-09-07 实测回归）
+
+- 回答的「插入当前文档」走 `stream_insert {text, complete:true}`，同一 worker 命令里解析 Markdown 并收尾，保留真实表格/标题/粗体。仅此完整插入入口先在光标处隔出独立空段，保护原段前后文字的段落/字符格式；段首/段尾只插所需分隔，空白回复不改文档。普通 Agent chunk 不加分隔。`test:lowa-reply` 真引擎覆盖标题/居中段的中间与首尾插入、富文本/表格落盘，并以 `?uilang=en-US` 启动后核对 `get_ui_lang.ooLocale`。已有 Agent 流还在写时拒绝完整插入并保留其缓冲；完整插入和 `stream_flush` 都在 finally 复位，尾表失败不能吞掉。`stream_insert`/`stream_flush` 都可能一次建完整表，三处桥预算统一为 120 秒（同 insert_table），不对普通 chunk 提前截断。
+- `agentClientActions.handleDocStreamEnd` 必须同时检查 `stream_flush` 的失败返回与异常，并写入 `_docStreamFailReason`，交回对话展示。`stream_insert` 缓冲成功不等于尾表已经落字。
+- `doc_set_numbering(preset=none)` 同时清除自动编号和项目符号。字号/居中/headingLevel=0 不清列表；worker 派发后读 `NumberingIsNumber`，未明确变为 false 就不能声称成功。模型要选中图注→none→正文/居中→`doc_get_formatting` 核验。`set_paragraph_format` 同次给出样式/headingLevel与alignment时先切样式再应用对齐，否则 Standard 会把刚设置的居中重置为左对齐。
+- 新生成 docx 的 `DocxStyleHelper.applyProfile` 与空白 `doc_start_stream` 都调用 `setModernCompatibility`，只设置 compatibilityMode=15，不往空白文档添加正文，也不改用户上传文档。docx 导出单独使用 `Office Open XML Text`（Word 2010–365）；旧 `MS Word 2007 XML` 会把 15 降成 12，只改新建设置不能解决。现代过滤器保留用户原有较低兼容级别（实测 12→12、15→15），导入过滤器不变。见 LibreOffice 24.2 `sw/source/filter/ww8/docxexport.cxx` 的 `nTargetCompatibilityMode`/保留较低值逻辑。
+- A7 纪要散行根因是 flexmark 单元格引用 `TableHeading`/`TableContents`，而 styles.xml 缺这两个定义；LOWA 24.2 导入时已将单元格文字移到表外，甚至把前一标题移进末格。`DocxStyleHelper.addMissingStyles` 必须在 render 前补齐两个基于 Normal 的段落样式。真实原件 A/B：只补定义恢复18格；只补 tblGrid、tcW 或 compatibilityMode 都无效。已有网格完整，不要误改边框/列宽。合成 `fixtures/flexmark-table.docx` 经生产渲染链生成，专项同时检查导入和导出后的格内容归属及标题位置。
+- 真实引擎导出专项：`LOWA_E2E_PORT=8914 node frontend/tests/lowa-e2e/generated-docx.mjs`（需先 build:zetaoffice 和准备引擎）。覆盖 17×7 尾表、默认网格（LOWA 导出使用各单元格 `tcBorders`，没有 `tblBorders` 不等于无网格）、新旧兼容级别、完整插入串流与失败清理、项目符号图注清除。后端回读：`GeneratedDocxCompatibilityTest`；模型指引契约：`NumberingRemovalContractTest`。
+
 ## 命名双轨现状（PR#192，下个发布周期摘旧名）
 
 仍活着的 wps_* 旧名：后端 `sendDualNamedAction`（doc_open_file/wps_open_file、doc_reload_file/wps_reload_file）、executeEditorCommand 双发 editor_command/wps_command、doc_open_file_sync↔wps_open_file_sync、doc_stream_data/wps_stream_data 双发、`/wps-result` 路由别名；前端 handleClientAction 显式识别全部旧名+latch 去重、toolDisplayNames 把 wps_* 归一为 doc_*。

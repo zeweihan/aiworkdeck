@@ -263,6 +263,7 @@ public class DocumentEditTools implements AgentToolComponent {
                     // worker 的 streamEnsureActive 靠「文档接近空」判定首个 # 是主标题
                     org.docx4j.openpackaging.packages.WordprocessingMLPackage wordDoc =
                             org.docx4j.openpackaging.packages.WordprocessingMLPackage.createPackage();
+                    com.checkba.util.DocxStyleHelper.setModernCompatibility(wordDoc);
                     wordDoc.save(target.toFile());
                 });
 
@@ -865,7 +866,9 @@ public class DocumentEditTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "设置编号", category = "document", fileEffect = "MODIFIED")
     @Tool("【格式】给当前选区所在段落设置自动编号或项目符号（先选中段落，可跨多段）。" +
-          "preset: bullet(•)/decimal(1. 2. 3.)/chinese(一、二、)/multilevel(多级编号 1. → 1.1 → 1.1.1)/none(去掉编号)。" +
+          "preset: bullet(•)/decimal(1. 2. 3.)/chinese(一、二、)/multilevel(多级编号 1. → 1.1 → 1.1.1)/none(清除自动编号和项目符号)。" +
+          "用户要求普通段落或去掉项目符号时用 none；只改字号、居中或 headingLevel=0 不会清除列表。" +
+          "完成后用 doc_get_formatting 读回 paragraph.isNumbered=false 核验，不得只凭命令已发送就宣称完成。" +
           "level: 编号层级 1-9，默认 1；multilevel 配合不同 level 形成 1.1、1.1.1 结构。")
     public String doc_set_numbering(
             @P("编号类型：bullet/decimal/chinese/multilevel/none") String preset,

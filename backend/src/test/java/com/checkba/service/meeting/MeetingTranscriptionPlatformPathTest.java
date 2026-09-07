@@ -298,6 +298,26 @@ class MeetingTranscriptionPlatformPathTest {
     }
 
     @Test
+    @DisplayName("平台完成的静音元数据落 EMPTY，保留网关任务号用于计费提示")
+    void pollCompletesWithSilentAudioMetadata() {
+        MeetingRecording m = meeting(MeetingRecording.STATUS_TRANSCRIBING);
+        m.setGatewayTaskId("asr_silent");
+        String transcription = """
+                {"TaskId":"silent","AudioInfo":{"Size":712629,"Duration":118728,"SampleRate":16000}}
+                """;
+        transport.task.add(new PlatformGatewayTransport.Reply(200, """
+                {"status":"completed","taskId":"asr_silent","transcription":%s,
+                 "billing":{"chargedCents":20}}
+                """.formatted(quote(transcription))));
+        MeetingRecording out = service().refreshIfNeeded(m);
+        assertEquals(MeetingRecording.STATUS_EMPTY, out.getStatus());
+        assertEquals("asr_silent", out.getGatewayTaskId());
+        assertNull(out.getError());
+        verifyNoInteractions(oss, tingwu);
+        assertEquals(1, transport.calls.size(), "读结果不能另建任务或自行退款");
+    }
+
+    @Test
     @DisplayName("轮询失败：落 FAILED 带网关给的原因，一分钱不扣由服务端保证")
     void pollFailedIsTerminal() {
         MeetingRecording m = meeting(MeetingRecording.STATUS_TRANSCRIBING);

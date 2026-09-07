@@ -565,8 +565,14 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
   一次并缓存到 `this.resizing`（右侧量 `.workbench-main`；左栏量 `.main-layout` 再减去实测
   的 `.left-rail` 与 `.side-panel-ai` 宽）——**不要改回硬编码 rail=50 一类常量**，边框、
   紧凑模式与右侧 dock（#180）都会让常量漂。左右两支必须一起用新公式：只修右支的话，拖宽
-  左栏就能把同一个症状换个入口复现（接线用例钉着这一条）。**「遮挡就遮挡」的既有决策保留**：
-  只保证编辑区还剩 200px，不做窗口变窄时的回夹（`handleResponsiveResize` 一行未动）。
+  左栏就能把同一个症状换个入口复现（接线用例钉着这一条）。**2026-09-07 实测 C2/C7 更新**：
+  `handleResponsiveResize` 用同模块 `fitPanelWidths` 按实测布局宽回夹可见面板，窗口缩小及
+  恢复旧布局也保留编辑区 200px；正在拖动时仍由原拖拽公式接管。左栏手柄改为完全位于
+  容器内（`right:0`），避免 overflow 裁掉外侧热区，语音等所有左栏模式共用。
+  **区域截图的临时几何不能持久写入面板宽**：J9 footer 截图实测 Chrome 连发
+  `1px → 1440px` resize；旧回夹把展开左栏写成 0 后无法恢复。可用宽连可见面板
+  下限（左 160 / 右 240）都装不下时保留原宽，正常窄窗仍回夹；测试运行真实
+  `handleResponsiveResize` 的同一时序，不能只断言「左右宽之和不溢出」。
   单测 `frontend/tests/project-home/panel-width-limits.test.mjs`（`npm run test:project-home`）。
   同轮把桌面壳建窗尺寸夹进工作区（`desktop/main/main.js` 的 `createMainWindow`：
   `Math.min(1400, screen.getPrimaryDisplay().workAreaSize.width)`，高度同理）——工作区窄于

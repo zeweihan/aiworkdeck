@@ -1,6 +1,15 @@
 // 文档编辑器域：LibreOfficeEditor / ReviewPanel / DocDiffViewer /
 // CompareDocDialog / VariablePanel / DrawioEditor 的用户可见文案。
 export default {
+  saveBeforeLeaving: '仍有文档未保存，请重试保存，或先关闭该文档处理未保存的更改。',
+  retrySave: '重试保存',
+  saveTimeout: '保存超时，请检查网络后重试。',
+  saveCancelled: '保存已取消。',
+  unsavedCloseTitle: '文档尚未保存完成',
+  unsavedCloseBody: '保存未能完成。你可以继续编辑并重试保存，或放弃尚未保存的更改并关闭。已保存到磁盘的内容会保留。',
+  discardAndClose: '放弃并关闭',
+  keepEditing: '继续编辑',
+
   status: {
     booting: '启动中…',
     unsupported: '当前环境不支持文档编辑',

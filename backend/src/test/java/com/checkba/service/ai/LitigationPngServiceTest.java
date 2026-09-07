@@ -156,6 +156,56 @@ class LitigationPngServiceTest {
     }
 
     @Test
+    @DisplayName("draw.io HTML 标签使用已有 SVG 文字后备，PNG 不丢字且母版不改")
+    void drawioHtmlLabelsKeepTheirSvgFallback() throws Exception {
+        Path dir = Files.createTempDirectory("drawio-png-test-");
+        try {
+            Path svg = dir.resolve("edited.svg");
+            String body = """
+                    <svg xmlns="http://www.w3.org/2000/svg" width="400" height="100">
+                      <rect width="400" height="100" fill="white"/>
+                      <switch>
+                        <foreignObject width="400" height="100" requiredFeatures="http://www.w3.org/TR/SVG11/feature#Extensibility">
+                          <div xmlns="http://www.w3.org/1999/xhtml">Saved label</div>
+                        </foreignObject>
+                        <text x="20" y="60" font-family="sans-serif" font-size="32" fill="black">Saved label</text>
+                      </switch>
+                    </svg>
+                    """;
+            Files.writeString(svg, body);
+            Path png = svc.rasterize(svg);
+            assertNotNull(png);
+            BufferedImage img = ImageIO.read(png.toFile());
+            long ink = 0;
+            for (int y = 40; y < img.getHeight() - 40; y += 2) {
+                for (int x = 40; x < img.getWidth() - 40; x += 2) {
+                    if ((img.getRGB(x, y) & 0xFFFFFF) < 0x808080) ink++;
+                }
+            }
+            assertTrue(ink > 100, "文字区域没有墨迹：" + ink);
+            assertEquals(body, Files.readString(svg), "只适配 PNG 渲染，不改 SVG 母版");
+        } finally {
+            deleteTree(dir);
+        }
+    }
+
+    @Test
+    @DisplayName("转换失败保留用户上一版 PNG")
+    void failedConversionPreservesPreviousPng() throws Exception {
+        Path dir = Files.createTempDirectory("drawio-png-test-");
+        try {
+            Path svg = dir.resolve("edited.svg");
+            Path png = dir.resolve("edited.png");
+            Files.writeString(svg, "bad SVG");
+            Files.writeString(png, "previous PNG");
+            assertNull(svc.rasterize(svg, png));
+            assertEquals("previous PNG", Files.readString(png));
+        } finally {
+            deleteTree(dir);
+        }
+    }
+
+    @Test
     @DisplayName("真 SVG 转出一张能解码的 PNG，尺寸符合目标宽度")
     void rasterisesARealDiagram() throws Exception {
         requireFonts();

@@ -109,3 +109,15 @@ test('体积字段缺失（fileSize 为 undefined）按最小权重 1 处理，�
 
   assert.equal(vm.libreLruKeys.length, 3, '缺体积信息时退化成旧的"数量"语义，不该异常淘汰')
 })
+
+test('保存失败的脏文档即使超出内存预算也必须留在池中', async () => {
+  const files = [1, 2].map(id => ({ id, fileSize: 7 * MB }))
+  const vm = makeVm(files)
+  vm.libreLruKeys = ['left:2', 'left:1']
+  vm.activeFileIdLeft = 2
+  vm._libreRefs['left:1'] = { file: files[0], ready: true, isError: true,
+    dirty: true, flushSave: async () => false }
+  vm._libreRefs['left:2'] = mountable(files[1])
+  await vm.evictLibreInstance('left:1')
+  assert.ok(vm.libreLruKeys.includes('left:1'), '保存失败不能静默淘汰唯一含未保存内容的实例')
+})

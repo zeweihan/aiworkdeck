@@ -291,8 +291,21 @@ export const fileOpenTabsMethods = {
       // （画布是空白原型，保存会覆盖真文件，同 evictLibreInstance）。
       if (file && this.useLibreEditor(file)) {
         const inst = (this._libreRefs || {})[pane + ':' + fileId]
-        if (inst && inst.ready && !inst.isError && inst.file && (inst.dirty || inst.saving)) {
-          try { await inst.flushSave() } catch (e) { console.warn('[ProjectOverview] close flush-save failed:', e) }
+        if (inst && inst.ready && !inst.docLoadFailed && inst.file && (inst.dirty || inst.saving)) {
+          let saved = false
+          try { saved = (await inst.flushSave({ timeoutMs: 10000 })) !== false } catch (e) { console.warn('[ProjectOverview] close flush-save failed:', e) }
+          if (!saved) {
+            const discard = await new Promise((resolve) => uni.showModal({
+              title: this.$t('editor.unsavedCloseTitle'),
+              content: this.$t('editor.unsavedCloseBody'),
+              confirmText: this.$t('editor.discardAndClose'),
+              cancelText: this.$t('editor.keepEditing'),
+              success: (res) => resolve(!!res.confirm),
+              fail: () => resolve(false),
+            }))
+            if (!discard) return
+            inst.discardPendingSave()
+          }
         }
         // 落盘期间列表可能已变（并发关闭）——重新定位，已被移除则到此为止
         idx = list.findIndex(f => f.id === fileId)
@@ -303,7 +316,12 @@ export const fileOpenTabsMethods = {
       else if (file && this.isPlainTextFile(file)) {
         const inst = (this._plainTextRefs || {})[pane]
         if (inst && inst.file && inst.file.id === fileId && (inst.dirty || inst.saving)) {
-          try { await inst.flushSave() } catch (e) { console.warn('[ProjectOverview] close flush-save (text) failed:', e) }
+          let saved = false
+          try { saved = (await inst.flushSave()) !== false && !inst.dirty && !inst.saving } catch (e) { console.warn('[ProjectOverview] close flush-save (text) failed:', e) }
+          if (!saved) {
+            uni.showToast({ title: this.$t('editor.plainText.saveFailedRetry'), icon: 'none' })
+            return
+          }
         }
         idx = list.findIndex(f => f.id === fileId)
         if (idx === -1) return

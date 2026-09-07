@@ -88,3 +88,50 @@ test('接线：容器几何在 startResize 里实测，不硬编码 rail 宽等�
   assert.match(body, /clientWidth/, '要读实际渲染宽度')
   assert.match(body, /containerWidth/, '量到的宽度要缓存到 this.resizing 上给 applyResizeFrame 用')
 })
+
+test('缩小窗口后已保存的左右栏宽度仍留在窗口内', async () => {
+  const { fitPanelWidths } = await import('../../src/pages/project-overview/panelWidthLimits.js')
+  assert.equal(typeof fitPanelWidths, 'function')
+  for (const width of [800, 1000, 1400]) {
+    for (const left of [0, 260, 1000]) {
+      for (const right of [0, 360, 1200]) {
+        const fit = fitPanelWidths(width, 50, left, right)
+        assert.ok(fit.left + fit.right + 50 + EDITOR_MIN_WIDTH <= width)
+        assert.ok(fit.left <= left && fit.right <= right, '回夹不应放大面板')
+        if (!left) assert.equal(fit.left, 0)
+        if (!right) assert.equal(fit.right, 0)
+      }
+    }
+  }
+})
+
+test('临时几何小于可见面板最小宽时保留原宽，不能把展开的面板夹成 0', async () => {
+  const { fitPanelWidths } = await import('../../src/pages/project-overview/panelWidthLimits.js')
+  for (const [left, right] of [[260, 0], [0, 360], [260, 360]]) {
+    assert.deepEqual(fitPanelWidths(1, 51, left, right), { left, right })
+    assert.deepEqual(fitPanelWidths(0, 51, left, right), { left, right })
+  }
+  // 刚好容纳两栏下限时仍需回夹，不能把整个窄窗处理都跳过。
+  assert.deepEqual(fitPanelWidths(651, 51, 1000, 1200), { left: 160, right: 240 })
+})
+
+test('真实 resize 方法：截图临时 1px → 恢复 1440px 后资源管理器仍可见', async () => {
+  const { fitPanelWidths } = await import('../../src/pages/project-overview/panelWidthLimits.js')
+  const page = readFileSync(new URL('../../src/pages/project-overview/project-overview.vue', import.meta.url), 'utf8')
+  const start = page.indexOf('    handleResponsiveResize() {')
+  const end = page.indexOf('    // 左栏面板切换方法组', start)
+  const window = { innerWidth: 1440 }
+  const layout = { clientWidth: 1440, querySelector: () => ({ offsetWidth: 51 }) }
+  const { handleResponsiveResize } = new Function('window', 'fitPanelWidths', 'return {' + page.slice(start, end) + '}')(window, fitPanelWidths)
+  for (const showAiPanel of [false, true]) {
+    const vm = { $refs: { sidebarLeft: { parentElement: layout } }, sidebarCollapsed: false,
+      sidebarWidth: 260, aiPanelWidth: 360, showAiPanel }
+    window.innerWidth = layout.clientWidth = 1
+    handleResponsiveResize.call(vm)
+    window.innerWidth = layout.clientWidth = 1440
+    handleResponsiveResize.call(vm)
+    assert.equal(vm.sidebarWidth, 260)
+    assert.equal(vm.aiPanelWidth, 360)
+    assert.equal(vm.isCompactLayout, false)
+  }
+})

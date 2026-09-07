@@ -52,6 +52,7 @@ const pickFreePort = (from) => {
   throw new Error(from + '-' + (from + 59) + ' 全被占，挑不出空闲端口')
 }
 const MARKER = 'QA_SAVE_MARKER_' + Date.now()
+const CLIP_MARKER = 'QA_CLIPBOARD_455_' + Date.now()
 
 let puppeteer
 try { puppeteer = (await import('puppeteer-core')).default }
@@ -99,6 +100,13 @@ async function api(ep, opts = {}) {
   const proj = await api('/api/projects', { method: 'POST', body: { name: QA.project, projectType: 'BLANK' } })
   QA.projectId = proj.id
   console.log('本机用户（免登）/ 项目 #' + QA.projectId)
+}
+
+async function cleanupClipboardFixture() {
+  const result = await api('/api/clipboard?q=' + encodeURIComponent(CLIP_MARKER) + '&limit=80')
+  for (const item of (Array.isArray(result) ? result : result.items || [])) {
+    if (item.text === CLIP_MARKER) await api('/api/clipboard/' + item.id, { method: 'DELETE' })
+  }
 }
 
 // ---- launch dev Electron with CDP ----
@@ -326,6 +334,99 @@ try {
   })
   const pageErrs = []
   page.on('pageerror', (e) => pageErrs.push(String(e).slice(0, 160)))
+
+  // ---- 真系统剪贴板 → Electron IPC → 入库/显示 → 鼠标确认删除（#455） ----
+  await step('重启后的系统复制可见，确认删除后界面与数据库都消失', async () => {
+    await reassertFocusEmulation(page)
+    await browser.defaultBrowserContext().overridePermissions(new URL(DEVURL).origin,
+      ['clipboard-read', 'clipboard-write', 'clipboard-sanitized-write'])
+    let restorePending = false
+    let panelOpened = false
+    try {
+      // 快照只存在本轮渲染页内存，不输出原内容。保留浏览器支持的全部 MIME 类型，
+      // 不能只 readText/writeText 把用户的图片/富文本剪贴板变成纯文本。
+      await page.evaluate(async () => {
+        const items = await navigator.clipboard.read()
+        window.__qaClipboardBackup = await Promise.all(items.map(async item => {
+          const types = await Promise.all(item.types.map(async type => [type, await item.getType(type)]))
+          return new ClipboardItem(Object.fromEntries(types))
+        }))
+      })
+      restorePending = true
+      if (!(await page.$('.clip-panel'))) {
+        await mouseClickText('剪贴板')
+        panelOpened = true
+      }
+      await page.waitForSelector('.clip-panel', { visible: true, timeout: 10000 })
+      // 临时输入框只提供合成文本；按键走真实 Electron 输入通道，不调用采集桥或 POST。
+      await page.evaluate(marker => {
+        const input = document.createElement('textarea')
+        input.id = 'qa-clipboard-copy-source'
+        input.value = marker
+        input.style.cssText = 'position:fixed;left:100px;top:80px;width:240px;height:40px;z-index:99999'
+        document.body.appendChild(input)
+      }, CLIP_MARKER)
+      await mouseClickSel('#qa-clipboard-copy-source')
+      const modifier = process.platform === 'darwin' ? 'Meta' : 'Control'
+      await page.keyboard.down(modifier)
+      // CDP修饰键事件不会自动执行macOS原生编辑菜单；显式附带真实编辑命令。
+      try {
+        await page.keyboard.press('KeyA', { commands: ['selectAll'] })
+        await page.keyboard.press('KeyC', { commands: ['copy'] })
+      }
+      finally { await page.keyboard.up(modifier) }
+      await page.waitForFunction(marker => [...document.querySelectorAll('.clip-card')]
+        .some(el => el.innerText.includes(marker)), { timeout: 15000 }, CLIP_MARKER)
+      await page.evaluate(() => document.querySelector('#qa-clipboard-copy-source')?.remove())
+      const list = await api('/api/clipboard?q=' + encodeURIComponent(CLIP_MARKER) + '&limit=80')
+      const rows = Array.isArray(list) ? list : list.items || []
+      const matches = rows.filter(row => row.text === CLIP_MARKER)
+      if (matches.length !== 1) throw new Error('一次系统复制应入库一条，实际 ' + matches.length)
+      const id = matches[0].id
+      const clickClipboardAction = async selector => {
+        const box = await page.evaluate((check, marker, sel) => {
+          const card = [...document.querySelectorAll('.clip-card')].find(el => el.innerText.includes(marker))
+          const el = card?.querySelector(sel)
+          if (!el) return null
+          return eval(check + '; hitCheck(el)')
+        }, HIT_CHECK, CLIP_MARKER, selector)
+        await clickAt(box, '剪贴板 ' + selector)
+      }
+      await clickClipboardAction('.del-wrapper .cli-btn')
+      await page.waitForSelector('.clip-card .delete-popover', { visible: true, timeout: 5000 })
+      await clickClipboardAction('.delete-popover .pop-btn.danger')
+      await page.waitForFunction(marker => ![...document.querySelectorAll('.clip-card')]
+        .some(el => el.innerText.includes(marker)), { timeout: 10000 }, CLIP_MARKER)
+      const after = await api('/api/clipboard?q=' + encodeURIComponent(CLIP_MARKER) + '&limit=80')
+      if ((Array.isArray(after) ? after : after.items || []).some(row => row.id === id || row.text === CLIP_MARKER)) {
+        throw new Error('确认删除后后端仍返回合成记录 #' + id)
+      }
+    } finally {
+      await page.evaluate(() => document.querySelector('#qa-clipboard-copy-source')?.remove()).catch(() => {})
+      if (restorePending) {
+        // 如果用户在测试途中复制了别的内容，保留那次更新。恢复时暂时解绑测试页面，
+        // 等系统轮询记住原指纹再重绑，避免把用户原内容写进隔离测试库。
+        await page.evaluate(async marker => {
+          const vm = window.__checkbaActiveOverviewVm
+          try {
+            if (await navigator.clipboard.readText() === marker) {
+              vm?.unbindClipboardListener()
+              try {
+                const items = window.__qaClipboardBackup || []
+                if (items.length) await navigator.clipboard.write(items)
+                else await navigator.clipboard.writeText('')
+                await new Promise(resolve => setTimeout(resolve, 1200))
+              } finally { vm?.bindClipboardListener() }
+            }
+          } finally { delete window.__qaClipboardBackup }
+        }, CLIP_MARKER)
+      }
+      if (panelOpened && await page.$('.status-bar .status-tool.active')) {
+        await mouseClickSel('.status-bar .status-tool.active')
+      }
+      await cleanupClipboardFixture()
+    }
+  })
 
   // ---- 浏览器面板：切走标签再切回来必须还是原来那一页 ----
   // 修复前的行为：BrowserPane 一卸载就 destroy 掉 BrowserView（切个标签就把整个网页
@@ -977,6 +1078,8 @@ try {
     console.log('    docx ' + buf.length + ' 字节，标记命中')
   })
 } finally {
+  try { await cleanupClipboardFixture() }
+  catch (e) { failed++; console.error('清理合成剪贴板记录失败：' + e.message) }
   try { if (site) site.close() } catch {}
   // 以前这里是空 catch：清理失败（后端瞬时不可达/DELETE 4xx 等）完全无声无息，
   // QA_<timestamp> 项目连同真实生成的 docx 永久留在项目列表里，没有任何输出能

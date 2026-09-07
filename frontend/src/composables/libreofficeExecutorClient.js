@@ -160,6 +160,8 @@ export const ACTION_BUDGET_MS = {
   load_document: 180000, export_document: 180000,
   find_replace: 120000, apply_house_style: 120000, resolve_all_revisions: 120000, insert_table: 120000,
   apply_style_profile: 120000,
+  // 流式 chunk 和收尾都可能一次写完整表格；完整回答插入也复用 stream_insert。
+  stream_insert: 120000, stream_flush: 120000,
   // resolve_revisions（批量处置一张审阅卡片）最坏情况下 K 接近全文 redline 总数 N
   // （一次连续大范围编辑落在同一分钟、同一作者），与 resolve_all_revisions 同量级预算。
   resolve_revisions: 120000,

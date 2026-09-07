@@ -62,7 +62,7 @@ public class LitigationVisualPanelService {
             /**
              * 这张图在 draw.io 里被手工改过。判据是 .drawio 比 .map.json 新——
              * 语义地图只在出图/换风格时写，所以 .drawio 更新说明是人动的。
-             * 前端据此在「换风格」前提醒：重画会用语义地图覆盖手工改动。
+             * 仅供图廊提示；换风格一律确认，不能靠时间戳判断是否可以覆盖。
              */
             boolean handEdited,
             List<String> formats,
@@ -75,6 +75,9 @@ public class LitigationVisualPanelService {
         Map<String, Object> out = new HashMap<>();
         out.put("available", reason == null);
         out.put("reason", reason == null ? "" : reason);
+        String timelineReason = litviz.timelineUnavailableReason();
+        out.put("timelineAvailable", timelineReason == null);
+        out.put("timelineReason", timelineReason == null ? "" : timelineReason);
         out.put("python", rt.pythonVersion());
         // graphviz 只影响流程图一种布局。前端据此提示"这台机器画不了流程图"，
         // 而不是把整个功能说成不可用——六种布局照常能出。
@@ -176,10 +179,14 @@ public class LitigationVisualPanelService {
     /**
      * 用存下来的语义地图换一种视觉模式重画，原地替换同名产物。
      *
-     * <p>内容不会变——同一份地图、同一套几何，只有表层不同。这正是"换风格"应该
-     * 是一个按钮而不是一轮对话的原因。
+     * <p>地图不含 draw.io 的手工修改，因此必须明确确认覆盖当前图形。
      */
-    public Map<String, Object> restyle(Long projectId, Long folderId, String mode) {
+    public Map<String, Object> restyle(Long projectId, Long folderId, String mode, boolean confirmOverwrite) {
+        if (!confirmOverwrite) {
+            throw new IllegalArgumentException(LangText.of(
+                    "请先确认：换风格将根据语义地图重画并覆盖当前手工修改",
+                    "Confirm first: restyling redraws the semantic map and overwrites current manual edits."));
+        }
         String why = litviz.unavailableReason();
         if (why != null) throw new IllegalStateException(why);
 
@@ -222,6 +229,7 @@ public class LitigationVisualPanelService {
                 files.add(cn.hutool.json.JSONUtil.createObj().set("path", extra.toString()));
             }
             int replaced = 0;
+            var redrawnAt = java.time.LocalDateTime.now();
             for (int i = 0; i < files.size(); i++) {
                 Path src = Path.of(files.getJSONObject(i).getStr("path"));
                 String name = src.getFileName().toString();
@@ -238,12 +246,15 @@ public class LitigationVisualPanelService {
                 Files.createDirectories(dest.getParent());
                 Files.move(src, dest, StandardCopyOption.REPLACE_EXISTING);
                 target.setFileSize(Files.size(dest));
+                target.setUpdatedAt(redrawnAt);
                 projectFileRepository.save(target);
                 replaced++;
             }
 
             Map<String, Object> out = new HashMap<>();
             out.put("ok", true);
+            mapFile.setUpdatedAt(redrawnAt);
+            projectFileRepository.save(mapFile);
             out.put("mode", r.raw().getStr("mode", mode));
             out.put("replaced", replaced);
             return out;
@@ -291,6 +302,7 @@ public class LitigationVisualPanelService {
             Files.createDirectories(xmlPath.getParent());
             Files.writeString(xmlPath, xml, StandardCharsets.UTF_8);
             drawio.setFileSize(Files.size(xmlPath));
+            drawio.setUpdatedAt(java.time.LocalDateTime.now());
             projectFileRepository.save(drawio);
             out.put("drawioFileId", drawio.getId());
 
@@ -308,6 +320,7 @@ public class LitigationVisualPanelService {
             Path svgPath = storageResolver.resolve(svgFile.getFilePath());
             Files.writeString(svgPath, svg, StandardCharsets.UTF_8);
             svgFile.setFileSize(Files.size(svgPath));
+            svgFile.setUpdatedAt(java.time.LocalDateTime.now());
             projectFileRepository.save(svgFile);
             out.put("svgFileId", svgFile.getId());
 

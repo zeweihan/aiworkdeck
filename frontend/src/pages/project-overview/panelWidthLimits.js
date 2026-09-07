@@ -10,8 +10,7 @@
 // 父元素量一次（见 tabDragSplit.js）。这里刻意不写 rail 宽、边框宽这类常量——边框、
 // 紧凑模式、右侧 dock（dev-board#180）都会让常量漂。
 //
-// 保留的既有取向：只保证编辑区还剩 EDITOR_MIN_WIDTH，不做「窗口变窄时回夹面板」
-// （project-overview.vue handleResponsiveResize 那句「遮挡就遮挡」是既有产品决策）。
+// 窗口变窄或恢复旧布局时也回夹面板（2026-09-07 实测 C2/C7）。
 //
 // 零依赖纯函数、只收数值参数，好在 node:test 里真跑一遍（同目录 flushDirtyEditors.js
 // 的先例：本目录其余模块都 import 了 @/ 别名，node 直接 import 不动）。
@@ -46,4 +45,15 @@ export function leftPanelMaxWidth(layoutWidth, railWidth, aiPanelWidth, min = 16
   const floor = px(min)
   const avail = px(layoutWidth) - px(railWidth) - px(aiPanelWidth)
   return Math.max(floor, avail - EDITOR_MIN_WIDTH)
+}
+
+export function fitPanelWidths(layoutWidth, railWidth, leftWidth, rightWidth) {
+  const available = Math.max(0, px(layoutWidth) - px(railWidth) - EDITOR_MIN_WIDTH)
+  // Chrome 区域截图会短暂发出 1px viewport 的 resize。装不下可见面板的
+  // 最小宽时保留原宽，否则写入 0 后，恢复正常窗口也只会继续保留 0。
+  const minimum = Math.min(px(leftWidth), 160) + Math.min(px(rightWidth), 240)
+  if (available < minimum) return { left: px(leftWidth), right: px(rightWidth) }
+  const right = Math.min(px(rightWidth), Math.max(240, available - px(leftWidth)))
+  const left = Math.min(px(leftWidth), Math.max(0, available - right))
+  return { left, right: Math.min(right, Math.max(0, available - left)) }
 }

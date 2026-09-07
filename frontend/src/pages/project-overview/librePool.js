@@ -177,8 +177,8 @@ export const librePoolMethods = {
         const inst = (this._libreRefs || {})[key]
         // 未就绪/加载失败的实例跳过保存——画布上是空白原型，保存会覆盖真文件。
         // flushSave：等在途自动保存结束，仍有脏改动才再存（没改动就不空传）。
-        if (inst && inst.ready && !inst.isError && inst.file) {
-            try { await inst.flushSave() } catch (e) { console.warn('[ProjectOverview] evict auto-save failed:', e) }
+        if (inst && inst.ready && !inst.docLoadFailed && inst.file) {
+            try { if ((await inst.flushSave({ timeoutMs: 10000 })) === false) return } catch (e) { console.warn('[ProjectOverview] evict auto-save failed:', e); return }
         }
         // 保存耗时期间可能又被激活/关闭：按此刻的名次重新核验，累计权重仍在预算内
         // 或已是活动文件则不淘汰（与旧版"idx < LIBRE_KEEPALIVE_MAX"同一防线，只是

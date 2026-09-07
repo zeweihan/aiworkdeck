@@ -125,3 +125,24 @@ test('不脏也没有在途保存时不空存一次', async () => {
   await inst.flushSave()
   assert.equal(uploads.length, 0)
 })
+
+test('最后一笔文本保存失败必须返回 false 并保留脏内容', async () => {
+  const { inst, uploads, edit } = makeEditor()
+  edit('不能丢掉的文字')
+  const flush = inst.flushSave()
+  await tick()
+  uploads[0].reject(new Error('offline'))
+  assert.equal(await flush, false)
+  assert.equal(inst.dirty, true)
+})
+
+test('保存期间新增文本不能被当成全部落盘', async () => {
+  const { inst, uploads, edit } = makeEditor()
+  edit('第一笔')
+  const flush = inst.flushSave()
+  await tick()
+  edit('第一笔+后来输入')
+  uploads[0].resolve()
+  assert.equal(await flush, false)
+  assert.equal(inst.dirty, true)
+})

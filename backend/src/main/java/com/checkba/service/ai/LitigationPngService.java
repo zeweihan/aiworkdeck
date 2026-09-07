@@ -12,10 +12,22 @@ import java.awt.GraphicsEnvironment;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.OutputStream;
+import java.io.StringReader;
+import java.io.StringWriter;
+import javax.xml.XMLConstants;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.dom.DOMSource;
+import javax.xml.transform.stream.StreamResult;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+import org.xml.sax.InputSource;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -158,6 +170,44 @@ public class LitigationPngService {
         return out.toString();
     }
 
+    /** Batik does not render XHTML. Select draw.io's existing SVG text fallback. */
+    private String withSvgTextFallbacks(String svg) throws Exception {
+        if (!svg.contains("foreignObject")) return svg;
+        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+        factory.setNamespaceAware(true);
+        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+        factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+        factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+        factory.setXIncludeAware(false);
+        factory.setExpandEntityReferences(false);
+        var document = factory.newDocumentBuilder().parse(new InputSource(new StringReader(svg)));
+        NodeList htmlLabels = document.getElementsByTagNameNS("http://www.w3.org/2000/svg", "foreignObject");
+        while (htmlLabels.getLength() > 0) {
+            Node html = htmlLabels.item(0);
+            Node parent = html.getParentNode();
+            boolean hasFallback = false;
+            if ("switch".equals(parent.getLocalName())) {
+                for (Node sibling = parent.getFirstChild(); sibling != null; sibling = sibling.getNextSibling()) {
+                    if (sibling instanceof Element element && sibling != html
+                            && ("text".equals(element.getLocalName())
+                            || element.getElementsByTagNameNS("http://www.w3.org/2000/svg", "text").getLength() > 0)) {
+                        hasFallback = true;
+                        break;
+                    }
+                }
+            }
+            if (!hasFallback) throw new IllegalArgumentException("SVG HTML label has no SVG text fallback");
+            parent.removeChild(html);
+        }
+        TransformerFactory transformers = TransformerFactory.newDefaultInstance();
+        transformers.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+        transformers.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
+        transformers.setAttribute(XMLConstants.ACCESS_EXTERNAL_STYLESHEET, "");
+        StringWriter output = new StringWriter();
+        transformers.newTransformer().transform(new DOMSource(document), new StreamResult(output));
+        return output.toString();
+    }
+
     // ==================== 光栅化 ====================
 
     /**
@@ -172,23 +222,26 @@ public class LitigationPngService {
     public Path rasterize(Path svg, Path png) {
         if (svg == null || !Files.isRegularFile(svg)) return null;
         ensureFontsRegistered();
+        Path pending = null;
         try {
-            String body = withFallbackFonts(Files.readString(svg, StandardCharsets.UTF_8));
+            String body = withFallbackFonts(withSvgTextFallbacks(Files.readString(svg, StandardCharsets.UTF_8)));
             PNGTranscoder t = new PNGTranscoder();
             t.addTranscodingHint(PNGTranscoder.KEY_WIDTH, TARGET_WIDTH);
             Files.createDirectories(png.getParent());
-            try (OutputStream out = Files.newOutputStream(png)) {
+            pending = Files.createTempFile(png.getParent(), ".litviz-png-", ".png");
+            try (OutputStream out = Files.newOutputStream(pending)) {
                 t.transcode(new TranscoderInput(new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8))),
                         new TranscoderOutput(out));
             }
-            if (!Files.isRegularFile(png) || Files.size(png) == 0) {
-                Files.deleteIfExists(png);
+            if (Files.size(pending) == 0) {
+                Files.deleteIfExists(pending);
                 return null;
             }
+            Files.move(pending, png, StandardCopyOption.REPLACE_EXISTING);
             return png;
         } catch (Exception e) {
             log.warn("SVG 转 PNG 失败：{}", svg, e);
-            try { Files.deleteIfExists(png); } catch (Exception ignored) { }
+            try { if (pending != null) Files.deleteIfExists(pending); } catch (Exception ignored) { }
             return null;
         }
     }

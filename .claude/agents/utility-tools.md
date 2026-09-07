@@ -108,6 +108,13 @@ local-mode 下本机后端把每个请求都当本机用户，等于把本机管
   渲染层浮层（project-overview.vue `.ocr-overlay`，样式在 project-overview.scss）的底图是一张冻结帧截图，叠在上面的 `.ocr-selection` / 提示条**必须用半透明字面量**，不能引用 `--awd-*-soft` 这类主题令牌（浅色下是不透明色，PR#657 令牌化曾把选区变成一整块 #EFF6FF，框住的内容全没了，dev-board#474）；提示条贴底居中，别钉左上角压交通灯与项目名。契约测试 `npm run test:ocr-overlay`。
 
 **剪贴板**：`ClipboardPanel.vue`；desktop main.js 轮询监听 clipboardWatchTimer ~:117-232（指纹去重 ~:110，首 tick 只记指纹）、推送 `checkba:clipboard-copied`；后端 `controller/ClipboardController.java`（/api/clipboard：GET /、POST /text、POST /file、GET /{id}/file、DELETE /{id}）。
+  **重启后采集又停住（2026-09-07，dev-board#455）**：先区分「页面没订阅」与「主窗引用丢失」。
+  实机 0.35 已有 IPC 订阅但本会话无事件，既有窗口截图接口却报 `window not ready`：
+  macOS `activate` 可抢在异步启动链之前建窗，随后又建第二个；旧窗关闭回调无条件把
+  `mainWindow` 清空，仍可操作的另一个窗口便收不到复制事件，原生失败弹窗也无处显示。
+  `createMainWindow` 必须幂等、`closed` 必须校验自身身份，启动完成前的激活交给启动链建首窗。
+  回归 `desktop/tests/main-window-lifecycle.test.js` 执行真实建窗/监听函数，覆盖首 tick 不回灌、
+  复制目标、旧窗迟到关闭与 Dock 重开。不要把「没有新纪录」一律归咎于登录闸门。
   **采集链路的登录态红线（dev-board#455）**：**桌面免登（PR-A 去登录）后 `checkba_user`
   这个本地存储恒空，任何面板都不能拿它当登录态判据**。`getCurrentUser()` 只是
   `uni.getStorageSync('checkba_user')`，全前端只有登录页 `saveSession` 与设置页
@@ -204,6 +211,18 @@ NORMAL `#3B82F6`，`tagTypes.js` 与 TagService 两处同值）。分组展示�
 
 **录音（ASR 方向）**：会议录音插件的录音单例 `frontend/src/utils/meetingRecorder.js`（getUserMedia+MediaRecorder 配方源自 FeedbackWidget；分片追加上传走 /api/files/{id}/upload 的 X-File-Offset 协议；轨道必须 stop 否则 macOS 录音灯常亮）；转写三档 platform / byok / local，详见 `.claude/agents/licensing-billing.md`「平台服务网关」与 `.claude/agents/plugin-system.md` 会议录音条目。反馈浮窗的 `VoiceTranscriptionService`（OpenAI 兼容接口位）与它无关、各管各的。macOS 麦克风 entitlement 与 NSMicrophoneUsageDescription 已覆盖两个用途（desktop/package.json:103），**权限问题只在签名包暴露，dev 态测不出**。
   **`recorderState.projectId` 必须与 `status='starting'` 同步写入**（`startRecording()`）：不能等 `getUserMedia`+`createMeetingRecording` 两个 await 都过了才赋值——`MeetingRecordingPanel.vue` 的 `recordingHere` 计算属性同时判 `isRecordingActive()` 与 `recState.projectId === this.projectId`，projectId 还是 null 的窗口期会被误判成"别的项目在录音"（新机首次要等系统麦克风授权弹窗，窗口被拉长到必现；e2e 的假麦克风走 `--use-fake-device-for-media-stream` 秒过，覆盖不到这段）。`MeetingRecordingIndicator.vue` 的 `visible()` 也不许手写状态枚举，统一复用 `isRecordingActive()`——之前它漏了 `'starting'`，会出现"面板让你去顶部胶囊停止，胶囊却还没出现"的假象。
+
+**会议录音实测回归（dev-board#478/#483/#487）**：麦克风面板每次初开优先浏览器
+`deviceId='default'`，不再恢复历史 `awd_meeting_mic_device_id`；设备变化按当前选中的
+**设备 ID** 保留选择，离线才回默认，重新出现不能抢回来。两个改名输入框走 uni-input 的
+`@confirm`，与保存按钮共用方法（中文输入法组合态由 uni-input 处理）。听悟静音结果可能
+只有 `TaskId` + `AudioInfo.{Size,Duration,SampleRate}` 而没有 `Transcription.Paragraphs`；
+`MeetingTranscriptParser` 只认可这组有效音频元数据的缺段落结果，落既有 `EMPTY`，
+错误信封/坏 JSON/错误类型的 Paragraphs 仍是 `FAILED`。解析异常不回显原始 JSON，
+面板也遮住旧版本已落库的「转写结果处理失败: …」正文。平台档录前与 EMPTY 页给计费提示，
+**不承诺静音免扣**（结算在官网网关）；EMPTY 提示按落库 `gatewayTaskId` 判断，不能按当前
+档位推断那次任务是否收费。回归：`node --test frontend/tests/meeting-recorder/*.test.mjs`、
+`MeetingTranscriptParserTest` / `MeetingTranscriptionServiceTest`。
 
 **本地 ASR（`asr-service/`，P3 起）**：faster-whisper 的 OpenAI 兼容薄包装，形态与 `kokoro-service/` 同构（`app.py` + `requirements.in/lock`，进 pysvc 单包，定位走 `pysvcPath()`）。端点 `GET /health`（带 `modelReady`，不加载模型）+ `POST /v1/audio/transcriptions`。桌面侧 `desktop/main/services/asr-service.js` 分配端口并把 `EXTERNAL_ASR_LOCAL_BASE_URL` 注入后端；模型 `Systran/faster-whisper-medium`（约 1.5GB）走组件管理 `asr-models` 下载，运行时 `HF_HUB_OFFLINE=1`。后端 `service/meeting/LocalAsrClient.java` 探测 + 转写，`controller/LocalAsrProbeController.java` 出 `GET /api/asr/local/probe`（匿名窗口口径与 Ollama 探测共用 `WizardStateService`）。
 **Whisper 说普通话时稳定输出繁体**（本机实测两分钟会见录音整篇繁体），社区常用的 `initial_prompt` 偏置一个字都没纠正过来——所以在 `app.py` 里用 OpenCC 做确定性的繁转简后处理（`ASR_OUTPUT_SCRIPT=original` 可关）。

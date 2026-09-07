@@ -1,5 +1,7 @@
 // 工作台（pages/project-overview/project-overview.vue）文案。
 export default {
+  resizePanel: '拖动调整面板宽度',
+  waitForDocumentWrite: '请等待当前 AI 任务与文档写入完成后再插入。',
   // 菜单栏 / 命令面板
   menuNeedsDoc: '请先打开一个 Word 文档',
   menuSelectTextFirst: '请先选中要批注的文字',

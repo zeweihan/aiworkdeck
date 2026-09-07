@@ -70,6 +70,29 @@ class MeetingTranscriptParserTest {
     }
 
     @Test
+    @DisplayName("听悟静音结果只有任务与音频信息、不返回段落时是合法空结果")
+    void silenceWithAudioMetadataIsEmpty() {
+        String audio = "\"TaskId\":\"silent-task\",\"AudioInfo\":{\"Size\":712629,\"Duration\":118728,\"SampleRate\":16000}";
+        assertTrue(MeetingTranscriptParser.parseSegments("{" + audio + "}").isEmpty());
+        assertTrue(MeetingTranscriptParser.parseSegments("{" + audio + ",\"Transcription\":{}}").isEmpty());
+        assertThrows(MeetingTranscriptParser.UnparseableTranscriptException.class,
+                () -> MeetingTranscriptParser.parseSegments("{" + audio + ",\"Transcription\":{\"Paragraphs\":\"broken\"}}"));
+        assertThrows(MeetingTranscriptParser.UnparseableTranscriptException.class,
+                () -> MeetingTranscriptParser.parseSegments("{" + audio + ",\"error\":\"expired\"}"));
+        assertThrows(MeetingTranscriptParser.UnparseableTranscriptException.class,
+                () -> MeetingTranscriptParser.parseSegments("{\"TaskId\":\"incomplete\",\"AudioInfo\":{}}"));
+    }
+
+    @Test
+    @DisplayName("坏结果报错不回显上游 JSON、任务号或正文")
+    void malformedResultDoesNotExposePayload() {
+        var error = assertThrows(MeetingTranscriptParser.UnparseableTranscriptException.class,
+                () -> MeetingTranscriptParser.parseSegments("{\"error\":\"private-meeting-content\"}"));
+        assertTrue(!error.getMessage().contains("private-meeting-content"));
+        assertTrue(!error.getMessage().contains("{"));
+    }
+
+    @Test
     @DisplayName("增值结果聚合：章节/摘要/问答/待办/关键词各取所长")
     void buildSummaryJson() {
         String chapters = """

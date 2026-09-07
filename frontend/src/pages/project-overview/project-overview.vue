@@ -845,7 +845,7 @@
         <!-- Sidebar Footer moved to Left Rail -->
 
         <!-- 拖拽手柄 -->
-        <view class="resize-handle" @touchstart="startResize('left', $event)" @mousedown="startResize('left', $event)"></view>
+        <view class="resize-handle" :title="$t('workbench.resizePanel')" @touchstart="startResize('left', $event)" @mousedown="startResize('left', $event)"></view>
       </view>
 
       <!-- IDE 工作台：中(编辑) + 右(AI) + 底(工具) -->
@@ -2073,6 +2073,7 @@ import { librePoolMethods } from './librePool.js'
 import { stagingAreaMethods } from './stagingArea.js'
 import { evidenceLinkData, evidenceLinkMethods } from './evidenceLinkActions.js'
 import { tabDragSplitMethods } from './tabDragSplit.js'
+import { fitPanelWidths } from './panelWidthLimits.js'
 import { panelDockingData, panelDockingMethods } from './panelDocking.js'
 import { railSortData, railSortMethods } from './railSort.js'
 import { themeSwitchData, themeSwitchMethods, themeSwitchComputed } from './themeSwitch.js'
@@ -3765,13 +3766,19 @@ export default {
     // 2) 工作台参与的跳转一律 reLaunch：navigateTo 会把工作台留在页面栈里，
     //    从列表页再进另一个项目就出现两个存活的工作台实例（全局监听多实例地雷）。
     //
-    // 保存失败不阻断跳转（用户已经在走了），但会留一条日志；逐个实例 try/catch，
-    // 一个失败不拖累其它。
+    // 逐个保存；只要仍有未落盘的改动就留在工作台，让用户重试或先关闭该文档处理。
     async leaveWorkbench(url) {
       try {
-        await flushDirtyEditors(this._libreRefs, this._plainTextRefs)
+        const result = await flushDirtyEditors(
+          this._libreRefs || (this._libreRefs = {}), this._plainTextRefs || (this._plainTextRefs = {}))
+        if (result.failed > 0) {
+          uni.showToast({ title: this.$t('editor.saveBeforeLeaving'), icon: 'none', duration: 4000 })
+          return false
+        }
       } catch (e) {
         console.warn('[project-overview] flush before leaving failed', e)
+        uni.showToast({ title: this.$t('editor.saveBeforeLeaving'), icon: 'none', duration: 4000 })
+        return false
       }
       uni.reLaunch({ url })
     },
@@ -4295,9 +4302,16 @@ export default {
       // 落盘必须排在 clearSession 之前：会话一清，保存请求就是未授权，
       // 用户「退出登录」等于顺手丢掉最后几秒的修改。
       try {
-        await flushDirtyEditors(this._libreRefs, this._plainTextRefs)
+        const result = await flushDirtyEditors(
+          this._libreRefs || (this._libreRefs = {}), this._plainTextRefs || (this._plainTextRefs = {}))
+        if (result.failed > 0) {
+          uni.showToast({ title: this.$t('editor.saveBeforeLeaving'), icon: 'none', duration: 4000 })
+          return false
+        }
       } catch (e) {
         console.warn('[project-overview] flush before logout failed', e)
+        uni.showToast({ title: this.$t('editor.saveBeforeLeaving'), icon: 'none', duration: 4000 })
+        return false
       }
       try {
          clearSession()
@@ -4473,7 +4487,15 @@ export default {
       const viewportWidth = window.innerWidth || 1920
       const compact = viewportWidth <= 1360
       this.isCompactLayout = compact
-      // 按 Cursor 体验：不在窄屏时强行限制面板宽度（遮挡就遮挡），只切换样式密度
+      if (this.resizing?.active) return
+      const sidebar = this.$refs.sidebarLeft?.$el || this.$refs.sidebarLeft
+      const layout = sidebar?.parentElement
+      if (!layout?.clientWidth) return
+      const rail = layout.querySelector('.left-rail')
+      const fit = fitPanelWidths(layout.clientWidth, rail?.offsetWidth || 0,
+        this.sidebarCollapsed ? 0 : this.sidebarWidth, this.showAiPanel ? this.aiPanelWidth : 0)
+      if (!this.sidebarCollapsed) this.sidebarWidth = fit.left
+      if (this.showAiPanel) this.aiPanelWidth = fit.right
     },
     // 左栏面板切换方法组已外置 → ./panelSwitching.js（Phase 1）
     // OCR 采集与浮层生命周期方法组已外置（Phase 3c） → ./ocrCapture.js
@@ -5539,10 +5561,33 @@ export default {
 
     // --- 文件选择/上传 ---
 
-    insertAiMessageToDoc(message) {
+    async insertAiMessageToDoc(message) {
       if (!message || !message.content) return
-      // AI 回复是 Markdown，纯文本原语会把 **、# 原样落字——先剥离标记
-      this.insertPlainTextToWps(markdownToPlainText(message.content))
+      if (!this.libreOfficeActive || !this.libreOfficeExecutor) {
+        uni.showToast({ title: this.$t('workbench.openDocFirst'), icon: 'none' })
+        return
+      }
+      if (this._aiMessageInsertBusy) return
+      if (this._docStreamBusy || this._docStreamBuffer || this._docStreamTimer ||
+          this.$refs?.chatInterface?.menuState?.().aiRunning) {
+        uni.showToast({ title: this.$t('workbench.waitForDocumentWrite'), icon: 'none' })
+        return
+      }
+      this._aiMessageInsertBusy = true
+      const executor = this.libreOfficeExecutor
+      try {
+        // 一条命令内写正文并冲出尾表，避免两次调用之间混入另一轮 Agent 流。
+        const result = await executor.executeCommand('stream_insert', { text: message.content, complete: true })
+        if (!result || result.success === false) {
+          throw new Error(result?.error || result?.message || this.$t('workbench.insertFailed'))
+        }
+        this.notifyDocMutated()
+        uni.showToast({ title: this.$t('workbench.insertedToDoc'), icon: 'success' })
+      } catch (e) {
+        uni.showToast({ title: e.message || this.$t('workbench.insertFailed'), icon: 'none' })
+      } finally {
+        this._aiMessageInsertBusy = false
+      }
     },
     async applyAiMessageToSelection(message) {
       if (!message || !message.content) return

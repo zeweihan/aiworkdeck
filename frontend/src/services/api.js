@@ -3230,12 +3230,12 @@ export function getLitigationDiagrams(projectId) {
   return request({ url: `/api/litigation-visual/projects/${projectId}/diagrams`, method: 'GET' })
 }
 
-/** 换视觉模式重画。用存下来的语义地图，内容一个字不会变。 */
-export function restyleLitigationDiagram(projectId, folderId, mode) {
+/** 根据保存的语义地图重画；调用方必须先确认覆盖当前手工修改。 */
+export function restyleLitigationDiagram(projectId, folderId, mode, confirmOverwrite = false) {
   return request({
     url: `/api/litigation-visual/projects/${projectId}/restyle`,
     method: 'POST',
-    data: { folderId, mode },
+    data: { folderId, mode, confirmOverwrite },
     header: { 'Content-Type': 'application/json' }
   })
 }

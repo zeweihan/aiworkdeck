@@ -38,6 +38,16 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - `frontend/src/components/LibreOfficeEditor.vue` — 单文档编辑器组件：webview 创建、prefetch、load/export、autoSave、flushSave、reloadFromBackend。支持**备胎过继**（watch file 仅 null→文档；引擎已就绪走 finishDocLoad，未就绪由 onEndpointReady 接手）与**只读预览接力**（字节预取完成即 docx-preview 本地渲染，previewReady 后 overlay 变成可滚动阅读 + 顶部细进度条，ready 后整体消失）。
 - `frontend/src/pages/project-overview/librePool.js` — 保活池方法组（Phase 1 外置）：libreLruKeys/touchLibreLru/evictLibreInstance、syncLibreExecutor 活跃指针、`_libreRefs`/`_libreExecMap` 非响应式注册表、reloadActiveLibreInstances（版本退回/检查点恢复后就地重载）。**按文档体积计权**（尽调模块 P3 稳定性余项 #2，dev-board#100，取代旧的固定 `LIBRE_KEEPALIVE_MAX = 3`）：`LIBRE_SIZE_UNIT_BYTES`=2MB 是 1 个权重单位，`LIBRE_WEIGHT_BUDGET`=6 是总权重上限，`libreInstanceWeight(fileSize)` = `max(1, ceil(fileSize / 2MB))`（体积未知按最小权重 1，退化成旧的按数量语义）。`touchLibreLru(pane, fileId, fileSize)` 新增第三参——刚激活那份的体积由调用方 `onActiveOfficeFileChanged` 直接传入，池里其它 key 的体积经 `libreWeightOf(key)` 从 `_libreRefs` 已挂载实例的 `file.fileSize` 反查（未挂载按权重 1）；从最近使用往回累计权重，一旦超预算，该 key 起（含自身）全部是淘汰候选，交给 `evictLibreInstance` 逐个判活动文件保护再淘汰。150 页/6.6MB 级文档权重=4，两份即超预算，避免旧版"三个大文档同时驻留吃到约 2.4GB"（实测基线）；普通几百 KB 文档权重恒为 1，同时保活数量不降反升（旧固定 3 → 最多可到 6）。活动文件保护不变：`evictLibreInstance` 对 `left:activeFileIdLeft`/`right:activeFileIdRight` 一律跳过，与体积无关。**预热备胎**（PR#220）：libreSpares（{key, file}，file=null 是后台预 boot 的空白隐藏实例），onActiveOfficeFileChanged 里 maybeAdoptLibreSpare（须在 touchLibreLru 之前，靠"不在 lru 记账"识别无实例）过继给池外首开文档，过继后按 'left:fileId' 常规记账；补胎在过继 ready 后（scheduleLibreSpare，4s 延迟）。仅左窗格设备胎（webview 不能跨容器移动）；h5 无 checkbaDesktop 不建胎；常驻多一个空白实例内存（数百 MB）。
 
+## 保存失败与关闭（实测清单 A6/C10）
+
+- `LibreOfficeEditor.uploadBytes` 的 XHR 必须有 60s 超时与中止终态；导出沿用三层 180s 预算。
+- 失败保留 `dirty`，暂停自动重试并在状态胶囊给「重试保存」。引擎超时不代表导出已停止，不能每 15s 再排一笔。
+- `flushSave` 返回布尔结果，默认等完成；标签关闭与 LRU 显式给 10s 等待预算。超时仅返回 false，不并发另起保存，也不清掉在途操作。
+- `closeFile` 保存失败时让用户选「继续编辑 / 放弃并关闭」；不能用 `isError` 跳过保存（保存失败也算 isError）。只有 `docLoadFailed` 才表示空白 boot 文档，不得覆盖后端真文件。
+- 明确放弃走 `discardPendingSave`：关掉上传闸并中止当前 XHR，迟到导出不得再上传。LRU 遇到失败/超时保留实例。
+- flush 期间的修改暂缓自动保存；`_flushPromise` 清除后必须补排仍然 dirty 的内容，否则取消关闭后会永久停在 dirty + ready。
+- 时序回归：`frontend/tests/project-home/libre-save-recovery.test.mjs`；LRU 失败保留：`libre-pool-weighted-keepalive.test.mjs`。
+
 ## 纯文本分流（dev-board#37，不进 LOWA）
 
 - `txt/md/markdown` 走 `frontend/src/components/PlainTextEditor.vue`（CodeMirror 6），**不进 LOWA**。分流表 `fileOpenTabs.js` 的 `PLAIN_TEXT_TYPES`（模块顶部常量）+ `isPlainTextFile()`；判定在 `isEditorOpenableFile` 的 wpsFileId 兜底**之前**——上传文件都被合成了 wpsFileId，不先拦就会被兜底判成"可编辑"送进引擎。当前刻意只收这三种扩展名，别顺手加 json/js。
@@ -210,3 +220,6 @@ HOUSE 不再是常量：`buildHouse(profile)` 从画像 JSON 派生写端常量�
 - 大文档性能：`npm run test:lowa-big`（同一套启动件 `tests/lowa-e2e/_boot.mjs`；端口被别的 worktree 占着时设 `LOWA_E2E_PORT`）。
 - 涉桌面壳/webview：`npm run test:desktop-e2e`（弹 dev Electron 窗口，验证保存落盘链路）。
 - 全应用：`npm run test:app-e2e`。改编辑器三件套（原语/白名单/worker）必跑 lowa-e2e。
+
+- 离开工作台/退出登录前，`flushDirtyEditors` 逐个保存后必须同步重扫当前 Office/文本注册表；保存 B 期间重新编辑 A、原本干净实例变脏、或新注册实例变脏都应阻止导航（`flush-dirty-editors.test.mjs` 时序用例），不能只相信每个实例刚保存时的状态。
+- 文本标签关闭同样必须检查 `flushSave` 返回值及最终 dirty/saving；失败仅提示原有重试入口并保留标签。`PlainTextEditor.flushSave` 不得吞掉 `save()` 的 false，也不能在保存期间新增输入后报全已保存。

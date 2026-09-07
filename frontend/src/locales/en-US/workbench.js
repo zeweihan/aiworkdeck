@@ -1,5 +1,7 @@
 // Workbench copy (pages/project-overview/project-overview.vue).
 export default {
+  resizePanel: 'Drag to resize panel',
+  waitForDocumentWrite: 'Wait for the current AI task and document write to finish before inserting.',
   // 菜单栏 / 命令面板
   menuNeedsDoc: 'Open a Word document first',
   menuSelectTextFirst: 'Select the text you want to comment on first',

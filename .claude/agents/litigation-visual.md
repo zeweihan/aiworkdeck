@@ -198,6 +198,14 @@ Python 下限 **3.11**（与打包运行时一致）。引擎原本要 3.12+，�
 
 ## 已知地雷
 
+- **应用更新不等于 native pack 更新**（dev-board#477，v0.35.0 实测）：本机仍装着
+  2026-08-20 的 1.0.1，只有旧 `engine/` 和四个 CLI 子命令，没有 `timeline`，所有材料
+  都在 argparse 处 exit 2。发布新增引擎能力必须同步发 `pack-release.yml` 并签名上架。
+  `timelineUnavailableReason()` 在读材料前检查时间轴模块，`status` 分别返回
+  `available` / `timelineAvailable` / `timelineReason`；旧包不能禁掉仍可用的语义地图回退。
+  面板可主动更新 ready 的旧包，安装完成后重查能力；引擎无 JSON 的错误必须带退出码与
+  有界 stderr 摘要，工具层不能一见 error 字段非空就丢掉 stderr。
+
 - **GVBINDIR 必须运行时显式设**。graphviz 把插件目录**编译期焊死**在 libgvc 里，
   指向构建机的安装路径。构建机上那个路径真的存在，所以自检会假绿；用户机器上
   报 `Format: "plain" not recognized`。`litviz/cli.py` 负责设，`prepare-graphviz.js`

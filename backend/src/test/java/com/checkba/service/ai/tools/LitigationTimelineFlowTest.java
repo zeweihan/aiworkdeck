@@ -108,6 +108,21 @@ class LitigationTimelineFlowTest {
     }
 
     @Test
+    @DisplayName("时间轴旧包在读材料前报告为工具失败，并保留语义地图回退")
+    void unavailableTimelineStopsBeforeReadingMaterials() {
+        LitigationVisualService old = mock(LitigationVisualService.class);
+        when(old.timelineUnavailableReason()).thenReturn(
+                "请更新资源包；可用 litigation_checkpoint + litigation_render 回退。");
+        DocumentTextService docText = mock(DocumentTextService.class);
+        LitigationTimelineTools tools = new LitigationTimelineTools(old, null, docText, null, null, null, null);
+        String result = tools.litigation_timeline_start(7L, "101");
+        assertTrue(result.startsWith("Error:"), "必须被工具失败判据识别，不能当作成功继续重试");
+        assertTrue(result.contains("litigation_checkpoint"));
+        assertTrue(result.contains("litigation_render"));
+        Mockito.verifyNoInteractions(docText);
+    }
+
+    @Test
     @DisplayName("整条链路：start → 五问 → 模型产出 → render 交付（真管线）")
     void fullPipelineFlow() throws Exception {
         requireRuntime();

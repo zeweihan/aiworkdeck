@@ -51,6 +51,8 @@ function escapeHtml(s) {
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null
+// mac activate 可能早于异步服务启动完成；首窗统一由启动链创建。
+let mainWindowStartupReady = false
 let services = null
 let modelManager = null
 let updateService = null
@@ -341,6 +343,8 @@ function applyNativeTheme(mode) {
 }
 
 function createMainWindow() {
+  // 启动链、Dock 激活共用此入口，不能覆盖仍在使用的主窗引用（#455）。
+  if (mainWindow && !mainWindow.isDestroyed()) return mainWindow
   // 后端实际端口（打包态默认 5269，冲突自动降级，见 backend-service.js 端口链）。
   // 经 additionalArguments 同步注入 preload → window.checkbaDesktop.apiBaseUrl，
   // 渲染层 api.js 优先读它，取代原先写死的 9696。
@@ -460,8 +464,10 @@ function createMainWindow() {
     // ignore
   }
 
-  mainWindow.on('closed', () => {
-    mainWindow = null
+  const createdWindow = mainWindow
+  createdWindow.on('closed', () => {
+    // 旧窗迟到的 closed 不能断开新窗的剪贴板、菜单和原生弹窗。
+    if (mainWindow === createdWindow) mainWindow = null
   })
 
   mainWindow.on('resize', () => views.layoutAll())
@@ -1719,6 +1725,7 @@ app.whenReady().then(() => {
           }
         }
       } catch (e) { console.error('[overlay]', e) }
+      mainWindowStartupReady = true
       createMainWindow()
       retireFirstLaunchSplash()
       // 应用内更新检查（P1）：启动 2 分钟后静默首查，之后每 6 小时一次
@@ -1783,6 +1790,7 @@ app.whenReady().then(() => {
     .catch((err) => {
       // 端口分配/启动链失败也要建出主窗口并提示，避免 app 起来却无窗口无提示（静默失败）
       console.error('[startup] service init failed', err)
+      mainWindowStartupReady = true
       try { createMainWindow() } catch (e) { /* ignore */ }
       retireFirstLaunchSplash()
       try {
@@ -1796,7 +1804,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
+  if (mainWindowStartupReady && BrowserWindow.getAllWindows().length === 0) createMainWindow()
 })
 
 app.on('before-quit', async (e) => {

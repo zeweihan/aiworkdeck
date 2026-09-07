@@ -42,7 +42,7 @@ public class DocxStyleHelper {
     private static final Logger log = LoggerFactory.getLogger(DocxStyleHelper.class);
 
     /**
-     * Adds missing styles (BodyText, Quotations) to the WordprocessingMLPackage.
+     * Adds missing styles (BodyText, Quotations, TableHeading, TableContents) to the WordprocessingMLPackage.
      * This should be called after WordprocessingMLPackage.createPackage() and
      * before DocxRenderer.render().
      *
@@ -73,6 +73,10 @@ public class DocxStyleHelper {
                 styles.getStyle().add(createQuotationsStyle());
                 log.debug("Added Quotations style to document");
             }
+
+            // Flexmark 表格引用这两个段落样式；缺定义时 LOWA 会把单元格文字读到表外。
+            findOrCreateStyle(styles, "TableHeading");
+            findOrCreateStyle(styles, "TableContents");
 
             // Add ParagraphTextBody style if not present
             if (!hasStyle(styles, "ParagraphTextBody")) {
@@ -239,6 +243,7 @@ public class DocxStyleHelper {
 
     /** 对 flexmark 渲染完成的文档应用指定画像；缺省叶子不约束（调用方通常先 merge 到 houseDefault 上）。 */
     public static void applyProfile(WordprocessingMLPackage pkg, StyleProfile profile) {
+        setModernCompatibility(pkg);
         if (profile == null) profile = StyleProfiles.houseDefault();
         try {
             overrideStyles(pkg, profile);
@@ -269,6 +274,24 @@ public class DocxStyleHelper {
             applyToc(pkg, profile);
         } catch (Exception e) {
             log.warn("applyProfile: toc failed: {}", e.getMessage());
+        }
+    }
+
+    /** 只供新生成的文档调用，不改变用户上传文档的兼容设置或正文。 */
+    public static void setModernCompatibility(WordprocessingMLPackage pkg) {
+        try {
+            MainDocumentPart mdp = pkg.getMainDocumentPart();
+            DocumentSettingsPart dsp = mdp.getDocumentSettingsPart();
+            if (dsp == null) {
+                dsp = new DocumentSettingsPart();
+                mdp.addTargetPart(dsp);
+            }
+            CTSettings settings = dsp.getJaxbElement();
+            if (settings == null) { settings = F.createCTSettings(); dsp.setJaxbElement(settings); }
+            if (settings.getCompat() == null) settings.setCompat(new CTCompat());
+            settings.getCompat().setCompatSetting("compatibilityMode", "http://schemas.microsoft.com/office/word", "15");
+        } catch (Exception e) {
+            throw new IllegalStateException("设置新文档兼容级别失败", e);
         }
     }
 

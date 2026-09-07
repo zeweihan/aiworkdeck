@@ -340,7 +340,8 @@ export default {
       while (this._inflight) {
         try { await this._inflight } catch (e) { /* 失败已在 save 里记账 */ }
       }
-      if (this.dirty) await this.save()
+      if (this.dirty && (await this.save()) === false) return false
+      return !this.dirty && !this.saving
     },
 
     /**

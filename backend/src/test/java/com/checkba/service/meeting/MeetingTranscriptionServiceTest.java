@@ -288,6 +288,22 @@ class MeetingTranscriptionServiceTest {
     }
 
     @Test
+    @DisplayName("静音结果缺段落但包含完整音频信息 → EMPTY，不向用户回显 JSON")
+    void refreshSilenceWithAudioMetadataIsEmpty() throws Exception {
+        MeetingRecording m = meeting(MeetingRecording.STATUS_TRANSCRIBING);
+        m.setTingwuTaskId("silent-task");
+        when(tingwu.getTask(any(), eq("silent-task"))).thenReturn(new TingwuClient.TaskInfo(
+                "COMPLETED", null, "http://r/trans", null, null, null));
+        when(fetcher.fetch("http://r/trans")).thenReturn("""
+                {"TaskId":"silent-task","AudioInfo":{"Size":712629,"Duration":118728,"SampleRate":16000}}
+                """);
+        MeetingRecording out = service(true).refreshIfNeeded(m);
+        assertEquals(MeetingRecording.STATUS_EMPTY, out.getStatus());
+        assertEquals("[]", out.getTranscriptJson());
+        assertNull(out.getError());
+    }
+
+    @Test
     @DisplayName("COMPLETED 但结果 JSON 形状不对（异常信封，不是合法的 Transcription 结构）"
             + "→ 落 FAILED 带非空 error，不能和「没人说话」的合法空结果混成同一个终态")
     void refreshMalformedTranscriptResultIsFailureNotEmpty() throws Exception {
@@ -304,6 +320,7 @@ class MeetingTranscriptionServiceTest {
                 "结果 JSON 形状不对不是「这场会议没人说话」，不能落成合法空结果终态");
         assertEquals(MeetingRecording.STATUS_FAILED, out.getStatus());
         assertNotNull(out.getError(), "既然是出错了就该留一个非空 error，不能悄悄清空");
+        assertFalse(out.getError().contains("expired"), "不能回显原始结果正文");
     }
 
     @Test

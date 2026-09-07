@@ -1782,8 +1782,8 @@ function streamTableFlush() {
   const t = STREAM.table;
   STREAM.table = null;
   if (!t || !t.rows.length) return;
-  try { insertStyledTable(t.rows, t.sawSep ? 1 : 0); STREAM.afterTable = true; }
-  catch (e) { log('流式建表失败 / stream table: ' + errStr(e)); }
+  insertStyledTable(t.rows, t.sawSep ? 1 : 0);
+  STREAM.afterTable = true;
 }
 function streamParagraph(runs, kind, headingLevel) {
   const vc = ctrl.getViewCursor();
@@ -3210,7 +3210,8 @@ const EXEC = {
     const name = String(p && p.name || 'document.docx');
     const m = name.match(/\.([A-Za-z0-9]+)$/);
     const ext = (m ? m[1] : 'docx').toLowerCase();
-    const filter = IMPORT_FILTERS[ext];
+    // Word 2007 导出会将 compatibilityMode 15 降为 12；现代过滤器保留旧文档的较低模式。
+    const filter = ext === 'docx' ? 'Office Open XML Text' : IMPORT_FILTERS[ext];
 
     // Stream the store STRAIGHT INTO JS via a UNO XOutputStream implemented
     // here. Do NOT storeToURL a MEMFS file and read it back with Module.FS:
@@ -3382,11 +3383,11 @@ const EXEC = {
   set_paragraph_format(p) {
     const vc = ctrl.getViewCursor();
     const applied = {};
+    let alignment = null;
     if (p.alignment != null) {
       const m = { left: css.style.ParagraphAdjust.LEFT, right: css.style.ParagraphAdjust.RIGHT, center: css.style.ParagraphAdjust.CENTER, justify: css.style.ParagraphAdjust.BLOCK };
-      const v = m[String(p.alignment).toLowerCase()];
-      if (v == null) return { success: false, message: 'bad alignment: ' + p.alignment + ' (left/right/center/justify)' };
-      vc.setPropertyValue('ParaAdjust', v); applied.alignment = String(p.alignment);
+      alignment = m[String(p.alignment).toLowerCase()];
+      if (alignment == null) return { success: false, message: 'bad alignment: ' + p.alignment + ' (left/right/center/justify)' };
     }
     let styleName = p.styleName != null ? String(p.styleName) : null;
     if (p.headingLevel != null) {
@@ -3394,6 +3395,8 @@ const EXEC = {
       styleName = lvl >= 1 && lvl <= 9 ? 'Heading ' + lvl : 'Standard';
     }
     if (styleName != null) { vc.setPropertyValue('ParaStyleName', styleName); applied.styleName = styleName; }
+    // 切换段落样式会重置对齐；用户同次明确给出的格式必须在样式之后应用。
+    if (alignment != null) { vc.setPropertyValue('ParaAdjust', alignment); applied.alignment = String(p.alignment); }
     // 行距：single / 1.5 / double（固定倍数），proportional（百分比），
     // atLeast（最小值，磅），exactly（固定值，磅）
     if (p.lineSpacingMode != null) {
@@ -3432,7 +3435,13 @@ const EXEC = {
   // chinese（一、二、）/ multilevel（1. → 1.1 → 1.1.1）/ none（去掉编号）。
   set_numbering(p) {
     const preset = String(p.preset || 'decimal');
-    if (preset === 'none') { dispatchUno('.uno:RemoveBullets'); return Object.assign({ success: true, preset: 'none' }, verifySnapshot()); }
+    if (preset === 'none') {
+      dispatchUno('.uno:RemoveBullets');
+      // UNO 派发可能不抛错却没有生效；去列表必须用真实状态判定，不能只回显 preset。
+      const isNumbered = ctrl.getViewCursor().getPropertyValue('NumberingIsNumber');
+      if (isNumbered !== false) return tableFail('项目符号或编号尚未清除，请重新选中目标段落后重试，并用 doc_get_formatting 核验');
+      return Object.assign({ success: true, preset: 'none', isNumbered: false }, verifySnapshot());
+    }
     const lvl = Math.max(1, Math.min(Number(p.level) || 1, 9)) - 1;
     let rules = null;
     try { rules = makeNumberingRules(preset); } catch (e) {
@@ -3895,6 +3904,37 @@ const EXEC = {
   // 直接报错，让模型改走 slide_*/sheet_*，不悄悄把 markdown 正文糊进错误的文档模型。
   stream_insert(p) {
     if (!isWriterDoc()) return tableFail('doc_start_stream 仅支持 Word 文档：当前文档不是 Writer 文档。电子表格请用 sheet_* 原语，演示文稿请用 slide_* 原语逐处编辑。');
+    if (p.complete) {
+      // 回答「插入当前文档」在一次 worker 命令里完成，不能与 Agent 的半张表串流。
+      if (STREAM.active) return tableFail('文档正在流式写入，请等待写入完成后再插入回答');
+      if (!String(p.text || '').trim()) return { success: true, idle: true };
+      try {
+        // 完整回复是一个独立段落块。先隔开已有文字，不能把其所在段落一起套回复格式。
+        const vc = ctrl.getViewCursor();
+        vc.collapseToEnd();
+        const text = vc.getText();
+        const before = text.createTextCursorByRange(vc.getStart());
+        before.gotoStartOfParagraph(true);
+        const after = text.createTextCursorByRange(vc.getStart());
+        after.gotoEndOfParagraph(true);
+        const hasBefore = (before.getString() || '').length > 0;
+        const hasAfter = (after.getString() || '').length > 0;
+        if (hasBefore) {
+          text.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
+          vc.collapseToEnd();
+        }
+        if (hasAfter) {
+          text.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
+          vc.collapseToEnd();
+          const insertion = text.createTextCursorByRange(vc.getStart());
+          insertion.gotoPreviousParagraph(false);
+          insertion.gotoStartOfParagraph(false);
+          vc.gotoRange(insertion, false);
+        }
+        EXEC.stream_insert({ text: p.text });
+        return EXEC.stream_flush({});
+      } finally { streamReset(false); }
+    }
     streamEnsureActive();
     STREAM.buf += String(p.text || '');
     const nl = STREAM.buf.lastIndexOf('\n');
@@ -3908,12 +3948,13 @@ const EXEC = {
   stream_flush(p) {
     if (p && p.discard) { streamReset(true); return { success: true, discarded: true }; }
     if (!STREAM.active) return { success: true, idle: true };
-    const tail = STREAM.buf;
-    STREAM.buf = '';
-    if (tail.trim() || STREAM.table) streamWriteLine(tail);
-    if (STREAM.table) streamTableFlush();
-    streamReset(false);
-    return Object.assign({ success: true }, verifySnapshot());
+    try {
+      const tail = STREAM.buf;
+      STREAM.buf = '';
+      if (tail.trim() || STREAM.table) streamWriteLine(tail);
+      if (STREAM.table) streamTableFlush();
+      return Object.assign({ success: true }, verifySnapshot());
+    } finally { streamReset(false); }
   },
   // [插入] 在指定标题段落下方插入内容（后端 doc_insert_under_heading 一直派发此
   // action，此前 worker 未实现、白名单未收录，静默失败——本次补齐）。内容走

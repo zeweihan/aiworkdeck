@@ -172,6 +172,49 @@ class LitigationVisualServiceTest {
     // ==== 出图 ====
 
     @Test
+    @DisplayName("旧资源包缺少时间轴模块时提前指明升级，语义地图能力仍可用")
+    void oldPackDoesNotAdvertiseTimeline(@org.junit.jupiter.api.io.TempDir Path tempDir) throws Exception {
+        requireRuntime();
+        Files.writeString(tempDir.resolve("cli.py"), "import sys\nsys.exit(2)\n");
+        LitigationVisualService old = new LitigationVisualService();
+        ReflectionTestUtils.setField(old, "configuredDir", tempDir.toString());
+        ReflectionTestUtils.setField(old, "configuredPython", svc.runtime().python());
+
+        assertNull(old.unavailableReason(), "旧包的语义地图仍可用，不能整包禁用");
+        assertTrue(old.timelineUnavailableReason().contains("更新"));
+        var english = org.mockito.Mockito.mock(com.checkba.service.AppLanguageService.class);
+        org.mockito.Mockito.when(english.isEnglish()).thenReturn(true);
+        com.checkba.service.LangText.register(english);
+        try {
+            assertTrue(old.timelineUnavailableReason().contains("Update the resource pack"));
+        } finally {
+            com.checkba.service.LangText.reset();
+        }
+        LitigationVisualService.Result result = old.timeline(tempDir, "read", java.util.List.of("x.txt"), null);
+        assertFalse(result.ok());
+        assertTrue(result.error().contains("litigation_checkpoint"), result.error());
+        assertTrue(result.error().contains("litigation_render"), result.error());
+    }
+
+    @Test
+    @DisplayName("解释器只回 stderr 时保留退出码与诊断，但不回传无界日志")
+    void emptyStdoutIncludesBoundedStderr(@org.junit.jupiter.api.io.TempDir Path tempDir) throws Exception {
+        requireRuntime();
+        Files.writeString(tempDir.resolve("cli.py"), "import sys\n"
+                + "sys.stderr.write('x' * 4000 + '\\nlitviz: invalid choice: timeline\\n')\n"
+                + "sys.exit(2)\n");
+        LitigationVisualService broken = new LitigationVisualService();
+        ReflectionTestUtils.setField(broken, "configuredDir", tempDir.toString());
+        ReflectionTestUtils.setField(broken, "configuredPython", svc.runtime().python());
+
+        LitigationVisualService.Result result = broken.doctor();
+        assertFalse(result.ok());
+        assertTrue(result.error().contains("退出码 2"), result.error());
+        assertTrue(result.error().contains("invalid choice: timeline"), result.error());
+        assertTrue(result.error().length() < 1000, "对话中只透传诊断摘要");
+    }
+
+    @Test
     @DisplayName("时间轴：矢量与可编辑源文件必出，PNG 视机器有无光栅器而定")
     void rendersTimelineWithAllFormats() throws Exception {
         requireRuntime();

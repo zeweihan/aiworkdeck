@@ -438,3 +438,6 @@ stash 误 pop 之类）之后，5174 上的页面可能变成**整页无样式**
 
 - 改 workflow：推 PR 触发 windows 矩阵先验；mac 变更合并后用手动 workflow_dispatch 验证。
 - 改构建脚本：本地跑对应脚本 + desktop `npm test`（pysvc-runtime 有覆盖）。
+
+- 2026-09-07 桌面剪贴板回归：`test:desktop-e2e` 覆盖系统复制→IPC采集→卡片→确认删除→数据库消失，原剪贴板仅暂存内存并条件恢复。macOS CDP键盘模拟要在KeyA/KeyC附带`commands: [selectAll]/[copy]`，否则修饰键发送成功但原生编辑动作不执行（选区仍0），会伪报采集失败。
+- 全应用J2/J11按已恢复的团队案件库取回入口走真实鼠标；不再以旧SHOW_CLOUD_ACCEPT=false口径断言或强开组件状态。
