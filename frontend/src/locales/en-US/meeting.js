@@ -19,7 +19,7 @@ export default {
   tierDescByok: 'Transcribed with your own Alibaba Cloud Tingwu account; the audio passes through your own OSS bucket.',
   tierDescNoPlatform: 'This deployment uses your own key. Enter the Tingwu credentials under System settings - Platform Services.',
   tierDescNotConnected: 'Connect your AI WorkDeck account and transcription works right away, with no Tingwu account of your own.',
-  tierDescPlatform: 'AI WorkDeck transcribes for you and bills Credits from your account balance by duration. The audio passes through our object storage and is deleted as soon as transcription finishes, with a 24-hour sweep as a backstop.',
+  tierDescPlatform: 'AI WorkDeck transcribes for you and bills Credits from your account balance by duration; processing may still be charged when no speech is detected. The audio passes through our object storage and is deleted as soon as transcription finishes, with a 24-hour sweep as a backstop.',
   localSwitchLabel: 'Keep recordings on this device',
   localSwitchNoteOn: 'Audio is not uploaded and transcription runs on this device; slower than the cloud tier, with no speaker separation.',
   localSwitchNoteReady: 'Once on, audio is not uploaded and transcription runs on this device (slower than the cloud tier, with no speaker separation).',
@@ -94,7 +94,9 @@ export default {
   transcribingHint: 'Transcription and speaker separation are running. This usually takes a few minutes, and you can leave this page.',
   transcribeFailed: 'Transcription failed',
   submitTranscribeFailed: 'Could not submit for transcription: {message}',
-  emptyTranscriptHint: "This recording finished processing, but no speech was detected - it may be too short or largely silent. If you're sure it contains conversation, you can retry transcription.",
+  resultUnreadable: 'The transcript could not be read. Try again later; the original recording is still saved.',
+  emptyTranscriptBillingHint: 'Platform transcription may still charge Credits for processing time. Retrying submits a new task and may incur another charge.',
+  emptyTranscriptHint: "No speech was detected. Check the selected microphone, input volume and connection, then play the recording to check for sound. If it contains conversation, you can retry transcription.",
 
   // ---- Speakers ----
   speakersTitle: 'Speakers (tap to rename)',

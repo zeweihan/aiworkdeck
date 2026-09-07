@@ -798,7 +798,9 @@ public class MeetingTranscriptionService {
     private MeetingRecording failFromResults(MeetingRecording meeting, Exception e) {
         log.warn("转写结果落库失败: meetingId={}", meeting.getId(), e);
         meeting.setStatus(MeetingRecording.STATUS_FAILED);
-        meeting.setError("转写结果处理失败: " + brief(e));
+        meeting.setError(LangText.of(
+                "未能读取转写结果，请稍后重试。原始录音仍然保留。",
+                "The transcript could not be read. Try again later; the original recording is still saved."));
         return meetingRepository.save(meeting);
     }
 

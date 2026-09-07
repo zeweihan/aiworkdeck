@@ -24,6 +24,8 @@ function buildModuleUrl() {
     .replace(/from '@\/services\/api\.js'/, `from '${stubsUrl}'`)
     .replace(/from '@\/utils\/auth\.js'/, `from '${stubsUrl}'`)
     .replace(/from '@\/i18n'/, `from '${stubsUrl}'`)
+    .replace(/from '@\/utils\/meetingRecorderStatus\.js'/,
+      `from '${new URL('../../src/utils/meetingRecorderStatus.js', import.meta.url).href}'`)
   const out = join(tmpdir(), `meeting-recorder-under-test-${process.pid}.mjs`)
   writeFileSync(out, rewritten, 'utf8')
   return out

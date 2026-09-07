@@ -23,7 +23,7 @@ export default {
   tierDescByok: '用你自己的阿里云听悟账号转写，音频经你自己的 OSS 中转。',
   tierDescNoPlatform: '本机形态使用自备 Key，在「系统管理 - 平台服务」里填听悟凭证。',
   tierDescNotConnected: '连接官网账户后即可直接转写，不用自己开通听悟。',
-  tierDescPlatform: '由 AI WorkDeck 代为转写，按时长折算 Credits 从账户余额扣。音频经我们的对象存储中转，转写完成即删除，另有 24 小时兜底清理。',
+  tierDescPlatform: '由 AI WorkDeck 代为转写，按时长折算 Credits 从账户余额扣；未识别到人声也可能按处理时长计费。音频经我们的对象存储中转，转写完成即删除，另有 24 小时兜底清理。',
   localSwitchLabel: '录音不出本机',
   localSwitchNoteOn: '音频不上传，转写在本机完成；比云端慢，且没有说话人分离。',
   localSwitchNoteReady: '打开后音频不上传，转写在本机完成（比云端慢，且没有说话人分离）。',
@@ -98,7 +98,9 @@ export default {
   transcribingHint: '转写与说话人分离进行中，通常几分钟内完成，可离开此页',
   transcribeFailed: '转写失败',
   submitTranscribeFailed: '提交转写失败：{message}',
-  emptyTranscriptHint: '这段录音已转写完成，但没有识别到有效的人声内容，可能是录音过短或几乎无人说话。如果确认录音中有对话，可以重新转写。',
+  resultUnreadable: '未能读取转写结果，请稍后重试。原始录音仍然保留。',
+  emptyTranscriptBillingHint: '平台转写可能仍按处理时长扣除 Credits；重试会再次提交并可能再次计费。',
+  emptyTranscriptHint: '未检测到有效语音。请检查麦克风选择、输入音量与连接，播放录音确认是否有声音；若确有对话，可重新转写。',
 
   // ---- 说话人 ----
   speakersTitle: '说话人（点击改名）',

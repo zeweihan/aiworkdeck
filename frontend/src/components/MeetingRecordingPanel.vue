@@ -157,7 +157,7 @@
       <view class="mr-detail" v-if="expandedId === m.id">
         <!-- 标题改名 -->
         <view class="mr-title-edit" v-if="editingTitleId === m.id">
-          <input class="mr-input" v-model="editingTitle" :placeholder="$t('meeting.titlePlaceholder')" />
+          <input class="mr-input" v-model="editingTitle" @confirm="saveTitle(m)" :placeholder="$t('meeting.titlePlaceholder')" />
           <view class="mr-btn secondary small" @tap="editingTitleId = null">{{ $t('meeting.cancel') }}</view>
           <view class="mr-btn primary small" @tap="saveTitle(m)">{{ $t('meeting.save') }}</view>
         </view>
@@ -183,13 +183,14 @@
 
         <!-- 失败 -->
         <view v-if="m.status === 'FAILED'" class="mr-section">
-          <text class="mr-error">{{ m.error || $t('meeting.transcribeFailed') }}</text>
+          <text class="mr-error">{{ transcriptionError(m) }}</text>
           <view class="mr-btn secondary" @tap="onTranscribe(m)">{{ $t('meeting.retryTranscribe') }}</view>
         </view>
 
         <!-- 未识别到人声：不是失败，用中性提示而非报错样式 -->
         <view v-if="m.status === 'EMPTY'" class="mr-section">
           <text class="mr-hint">{{ $t('meeting.emptyTranscriptHint') }}</text>
+          <text v-if="m.gatewayTaskId" class="mr-hint">{{ $t('meeting.emptyTranscriptBillingHint') }}</text>
           <view class="mr-btn secondary" @tap="onTranscribe(m)">{{ $t('meeting.retryTranscribe') }}</view>
         </view>
 
@@ -209,7 +210,7 @@
               </view>
             </view>
             <view class="mr-title-edit" v-if="editingSpeakerId !== null">
-              <input class="mr-input" v-model="editingSpeakerName" :placeholder="$t('meeting.speakerNamePlaceholder', { n: editingSpeakerId })" />
+              <input class="mr-input" v-model="editingSpeakerName" @confirm="saveSpeakerName(m)" :placeholder="$t('meeting.speakerNamePlaceholder', { n: editingSpeakerId })" />
               <view class="mr-btn secondary small" @tap="editingSpeakerId = null">{{ $t('meeting.cancel') }}</view>
               <view class="mr-btn primary small" @tap="saveSpeakerName(m)">{{ $t('meeting.save') }}</view>
             </view>
@@ -297,9 +298,6 @@ import {
 import { host } from '@/services/host.js'
 import AwdSwitch from '@/components/AwdSwitch.vue'
 import AwdSelect from '@/components/AwdSelect.vue'
-
-// 选中的麦克风设备持久化到本机，跨会议记住上次的选择
-const MIC_DEVICE_STORAGE_KEY = 'awd_meeting_mic_device_id'
 
 const POLL_INTERVAL_MS = 8000
 
@@ -674,20 +672,20 @@ export default {
     // startRecording 成功后（此时必然已拿到授权）会再调一次本方法把真实 label 换上来。
     async loadAudioDevices() {
       const list = await listAudioInputDevices()
-      const savedId = uni.getStorageSync(MIC_DEVICE_STORAGE_KEY)
+      // 初开跟随系统默认设备；热插拔只保留本次仍在线的选择，不恢复历史 iPhone。
+      const selectedId = this.audioDevices[this.selectedDeviceIndex]?.deviceId
       this.audioDevices = list.map((d, i) => ({
         deviceId: d.deviceId,
         label: (d.label && d.label.trim())
           ? d.label
           : this.$t('meeting.micDeviceFallbackName', { n: i + 1 })
       }))
-      const idx = savedId ? this.audioDevices.findIndex(d => d.deviceId === savedId) : -1
-      this.selectedDeviceIndex = idx >= 0 ? idx : 0
+      const idx = selectedId ? this.audioDevices.findIndex(d => d.deviceId === selectedId) : -1
+      const defaultIdx = this.audioDevices.findIndex(d => d.deviceId === 'default')
+      this.selectedDeviceIndex = idx >= 0 ? idx : Math.max(defaultIdx, 0)
     },
     onDeviceChange(i) {
       this.selectedDeviceIndex = i
-      const d = this.audioDevices[i]
-      if (d) uni.setStorageSync(MIC_DEVICE_STORAGE_KEY, d.deviceId)
     },
 
     // ==================== 录音 ====================
@@ -822,6 +820,11 @@ export default {
       } catch (e) {
         uni.showToast({ title: this.$t('meeting.saveFailed', { message: (e && e.message) || e }), icon: 'none' })
       }
+    },
+    transcriptionError(m) {
+      // 旧版本已落库的失败信息可能附带整段上游 JSON，升级后也不能继续回显。
+      if ((m.error || '').startsWith('转写结果处理失败:')) return this.$t('meeting.resultUnreadable')
+      return m.error || this.$t('meeting.transcribeFailed')
     },
     segmentsOf(m) {
       if (!m.transcriptJson) return []

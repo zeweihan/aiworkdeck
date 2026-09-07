@@ -43,7 +43,7 @@ public final class MeetingTranscriptParser {
      *
      * <p>空/null 输入（上游压根没给结果地址）按"没有可解析的内容"处理，返回空列表——这与
      * "给了内容但形状不对"是两回事，前者继续算合法空结果。非空输入一旦不是合法 JSON、
-     * 或者没有 Transcription.Paragraphs 数组，说明结果形状本身就不对，抛
+     * 或者没有 Transcription.Paragraphs 数组且不符合静音结果的音频元数据形状，抛
      * {@link UnparseableTranscriptException}，不再悄悄吞成空列表。<b>段落内部的字段级缺失
      * 仍然宽松</b>（缺 SpeakerId 退化成"1"、空 Words 跳过该段落）——宽松的是听悟结果里
      * 随版本演进的次要字段，不是"这份结果到底是不是一次转写"这件事。
@@ -54,10 +54,8 @@ public final class MeetingTranscriptParser {
         JsonNode root = readTree(transcriptionJson);
         JsonNode paragraphs = root == null ? null : root.path("Transcription").path("Paragraphs");
         if (root == null || !paragraphs.isArray()) {
-            String preview = transcriptionJson.length() > 200
-                    ? transcriptionJson.substring(0, 200) : transcriptionJson;
-            throw new UnparseableTranscriptException(
-                    "转写结果 JSON 形状不对（缺 Transcription.Paragraphs 数组）: " + preview);
+            if (isSilentAudioResult(root)) return segments;
+            throw new UnparseableTranscriptException("未能读取转写结果，请稍后重试。原始录音仍然保留。");
         }
         for (JsonNode p : paragraphs) {
             String speaker = p.path("SpeakerId").asText("");
@@ -79,6 +77,19 @@ public final class MeetingTranscriptParser {
             segments.add(new Segment(speaker, start == Long.MAX_VALUE ? 0 : start, end, t));
         }
         return segments;
+    }
+
+    /** 听悟静音结果会只保留 TaskId/AudioInfo；不能把错误信封或损坏的段落字段吞成空稿。 */
+    private static boolean isSilentAudioResult(JsonNode root) {
+        if (root == null || !root.isObject() || !root.path("TaskId").isTextual()
+                || root.path("TaskId").asText("").isBlank()
+                || root.has("error") || root.has("Error") || root.has("ErrorCode") || root.has("Code")) return false;
+        JsonNode transcription = root.path("Transcription");
+        if (!transcription.isMissingNode() && !(transcription.isObject() && transcription.isEmpty())) return false;
+        JsonNode audio = root.path("AudioInfo");
+        return audio.isObject() && audio.path("Duration").isNumber() && audio.path("Duration").asLong() > 0
+                && audio.path("Size").isNumber() && audio.path("Size").asLong() > 0
+                && audio.path("SampleRate").isNumber() && audio.path("SampleRate").asLong() > 0;
     }
 
     /**
