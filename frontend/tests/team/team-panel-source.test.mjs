@@ -94,8 +94,105 @@ test('团队邀请码在成员区顶部，仅管理者可见，且有复制与�
   const members = teamPanel.slice(teamPanel.indexOf('team.membersTitle'), teamPanel.indexOf('team.projectsTitle'))
   assert.ok(members.includes('team.joinCodeTitle'), '邀请码不在成员区')
   assert.match(members, /v-if="canManage" class="code-row"/, '邀请码必须只对 OWNER\/ADMIN 显示')
-  assert.match(members, /onCopyCode\(team\.joinCode\)/)
+  assert.match(members, /onCopyCode\(joinCode\)/)
   assert.match(members, /onResetJoinCode/)
+})
+
+// ---- 走查 C 第 1 条：团队邀请码在响应顶层，不在 team 对象里 ----
+test('团队邀请码读 GET /api/account/team 的顶层 joinCode，不读 team.joinCode', () => {
+  // 官网契约：顶层 joinCode = 团队邀请码（仅本队 OWNER/ADMIN），firm.joinCode = 律所邀请码。
+  // team 对象里从来没有过这个字段，读它永远是 undefined，界面上就是一串「—」。
+  assert.ok(!/\bteam\.joinCode\b/.test(teamPanel),
+    '邀请码不在 team 对象里：官网把它放在 GET /api/account/team 的顶层')
+  assert.match(teamPanel, /this\.joinCode = typeof \(data && data\.joinCode\) === 'string' \? data\.joinCode : ''/,
+    '要从顶层 data.joinCode 读，并把缺字段/null 归成空串')
+  assert.match(teamPanel, /joinCode: '',/, 'data 里要有 joinCode 这个状态位')
+})
+
+test('两个邀请码的复制/重置都只在拿到非空字符串时渲染（契约用「缺字段」当信号）', () => {
+  // 契约明写：按角色缺字段而不是给 null，客户端据此判要不要渲染复制按钮。
+  // 只看 canManage 的话，MEMBER 之外的边角情形会渲染出一对点下去必然失败的按钮。
+  assert.match(teamPanel, /v-if="joinCode" class="code-actions"/, '团队邀请码的动作区要挂 joinCode')
+  assert.match(teamPanel, /v-if="firm\.joinCode" class="code-actions"/, '律所邀请码的动作区要挂 firm.joinCode')
+  assert.ok(!/\n\s*<view class="code-actions">/.test(teamPanel), '还有没挂条件的 code-actions')
+})
+
+// ---- 走查 C 第 2 条：输入框被竖向 flex 撑成一整块 ----
+test('.team-input 的 flex-basis 是 auto，且无团队态的输入框包在横向 .team-row 里', () => {
+  const input = teamPanel.slice(teamPanel.indexOf('.team-input {'), teamPanel.indexOf('.team-select {'))
+  assert.ok(input.length > 0, '找不到 .team-input 样式块')
+  assert.match(input, /flex: 1 1 auto/)
+  assert.ok(!/flex: 1 1 \d+(px|%)/.test(input),
+    'flex-basis 写成长度值时，在竖向 flex 的 .section-body 里会落到高度上，把输入框撑成一整块（实测 202px 高）')
+  assert.match(input, /height: 32px/)
+  const noTeam = teamPanel.slice(teamPanel.indexOf(`v-else-if="!team"`), teamPanel.indexOf('<!-- 态 3'))
+  const rows = noTeam.match(/<view class="team-row">/g) || []
+  assert.equal(rows.length, 2, '创建团队 / 邀请码加入两个输入框都要包进横向的 .team-row')
+})
+
+// ---- 走查 C 第 3、4 条：成员行的动作 ----
+test('OWNER 行与自己那行不渲染「改角色 / 移除」（契约里这两种都会被官网拒）', () => {
+  assert.match(teamPanel, /canActOn\(member\) \{/, '缺 canActOn')
+  assert.match(teamPanel, /if \(member\.role === 'OWNER'\) return false/, 'OWNER 不可改不可退')
+  assert.match(teamPanel, /member\.accountId === this\.myAccountId/, '自己退出走单独的「退出团队」')
+  assert.match(teamPanel, /<template v-if="canActOn\(m\)">/, '两个动作要一起挂在 canActOn 上')
+})
+
+test('「改角色」先弹确认，文案带上人名与前后角色', () => {
+  const fn = teamPanel.slice(teamPanel.indexOf('onChangeRole(member) {'), teamPanel.indexOf('onRemoveMember(member) {'))
+  assert.match(fn, /uni\.showModal/, '改角色是权限变更，不能点一下就生效')
+  assert.match(fn, /team\.confirmChangeRole/)
+  assert.match(fn, /from: this\.roleLabel\(member\.role\)/)
+  assert.match(fn, /to: this\.roleLabel\(next\)/)
+  assert.match(fn, /if \(!res\.confirm\) return/)
+})
+
+test('「撤销」邀请先弹确认（与「移除」同款：都是删了就回不来的动作）', () => {
+  const fn = teamPanel.slice(teamPanel.indexOf('onRevokeInvite(invite) {'), teamPanel.indexOf('onChangeRole(member) {'))
+  assert.match(fn, /uni\.showModal/)
+  assert.match(fn, /team\.confirmRevokeInvite/)
+  assert.match(fn, /if \(!res\.confirm\) return/)
+})
+
+// ---- 走查 C 第 6 条：全所视角的卡头 ----
+test('全所视角下看板大标题用律所名，副标题写「全所 · N 个团队」', () => {
+  assert.match(teamPanel, /<text class="section-title">\{\{ headerTitle \}\}<\/text>/)
+  const t = teamPanel.slice(teamPanel.indexOf('headerTitle() {'), teamPanel.indexOf('// 「6 / 9 人」'))
+  assert.match(t, /if \(this\.scope === 'firm' && this\.firm\) return this\.firm\.name/,
+    '全所视角挂本团队的名字会让人把全所数字当成本队的')
+  assert.match(t, /team\.firmScopeSubtitle/)
+  // 团队数取不到就只说「全所」，不编一个数字
+  assert.match(t, /n \? this\.\$t\('team\.firmScopeSubtitle', \{ n \}\) : this\.\$t\('team\.scopeFirm'\)/)
+})
+
+// ---- 走查 C 第 7 条：律所团队列表的人数列 ----
+test('律所团队列表：人数列固定宽右对齐，动作位恒占宽（总部那行没按钮，数字也不许跳）', () => {
+  const count = teamPanel.slice(teamPanel.indexOf('.team-list-count {'), teamPanel.indexOf('.team-row {'))
+  assert.match(count, /min-width: 48px/)
+  assert.match(count, /text-align: right/)
+  assert.match(count, /\.team-list-tail \{/)
+  assert.match(count, /min-width: 72px/)
+  assert.match(teamPanel, /<view class="team-list-tail">/, '动作要包在恒占宽的尾格里')
+})
+
+// ---- 走查 C 第 8 条：退出律所 ----
+test('「退出律所」与团队列表断开，并用次级危险样式（不许长得像列表第五行）', () => {
+  assert.match(teamPanel, /<view v-if="canLeaveFirm" class="firm-leave-row">/)
+  assert.match(teamPanel, /\.firm-leave-row \{[^}]*margin-top: 16px/)
+  assert.match(teamPanel, /\.firm-leave-row \{[^}]*border-top: 1px solid/)
+  assert.match(teamPanel, /class="team-btn small danger" @tap="onLeaveFirm"/)
+  assert.match(teamPanel, /\.team-btn\.danger \{[^}]*var\(--awd-danger-text\)/)
+})
+
+// ---- 走查 C 第 9 条：KPI caption 在 1280 宽下被裁 ----
+test('KPI 磁贴的 caption 在 1280 宽下放得下（11px 时「节约时间（估算）」溢出 1.6px）', () => {
+  const cap = teamPanel.slice(teamPanel.indexOf('.stat-caption {'), teamPanel.indexOf('.stat-sub {'))
+  // 1280 宽下这一列只有 86.4px；8 个全角字符 × 11px = 88px，最后那个「）」被切掉。
+  // 只放开 white-space 不够（实测这个宽度上 Chrome 仍不折行），字号必须是 10.5。
+  assert.ok(!/font-size: 11px/.test(cap), 'caption 11px 时最长那条会溢出 1.6px 被裁')
+  assert.match(cap, /font-size: 10\.5px/)
+  assert.match(cap, /white-space: normal/)
+  assert.ok(!/line-height: 16px/.test(cap), '换行后固定 16px 行高会把第二行挤出去')
 })
 
 test('有团队态的五个 KPI 磁贴都在，并复用 .stat-tile 形制', () => {
@@ -238,4 +335,12 @@ test('「账户与用量」在已连接账户时给出团队一行 +「前往团
   // 问不到时整行不渲染，不拿「未加入」冒充一个事实
   assert.match(adminPane, /v-if="teamLine\.loaded"/)
   assert.match(adminPane, /teamLine: \{ loaded: false, teamName: '', firmName: '' \}/)
+})
+
+// ---- 走查 C 第 10 条 ----
+test('「前往团队」看得出是可点的：带下划线，不是一段普通的强调色文字', () => {
+  const link = adminPane.slice(adminPane.indexOf('.account-team-link {'), adminPane.indexOf('.account-hint {'))
+  assert.ok(link.length > 0, '找不到 .account-team-link 样式块')
+  assert.match(link, /text-decoration: underline/)
+  assert.match(link, /text-underline-offset: 2px/)
 })

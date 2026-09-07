@@ -51,6 +51,7 @@ export default {
   rangeDays: '最近 {n} 天',
   scopeTeam: '本团队',
   scopeFirm: '全所',
+  firmScopeSubtitle: '全所 · {n} 个团队',
 
   // ---- 成员 ----
   joinCodeTitle: '团队邀请码',
@@ -75,6 +76,7 @@ export default {
   changeRole: '改角色',
   removeMember: '移除',
   leaveTeam: '退出团队',
+  confirmChangeRole: '把 {name} 从 {from} 改为 {to}？',
   confirmRemove: '确认把该成员移出团队？移出后他的历史统计仍保留。',
   confirmLeave: '确认退出团队？退出后你看不到团队统计。',
 
@@ -98,6 +100,7 @@ export default {
   pendingInvitesTitle: '待接受的邀请',
   pendingInvitesEmpty: '没有待接受的邀请',
   revokeInvite: '撤销',
+  confirmRevokeInvite: '确认撤销发给 {phone} 的邀请？撤销后这条邀请立刻失效。',
   settingsTitle: '团队设置',
   renameLabel: '团队名称',
   saveName: '保存',

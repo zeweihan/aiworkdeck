@@ -65,11 +65,16 @@
             <text class="section-subtitle">{{ $t('team.createDesc') }}</text>
           </view>
           <view class="section-body">
-            <input
-              v-model="newTeamName"
-              class="team-input"
-              :placeholder="$t('team.teamNamePlaceholder')"
-            />
+            <!-- 输入框必须包在横向的 .team-row 里：.section-body 是竖向 flex，
+                 .team-input 的 flex-basis 一旦是长度值就会落到高度上，把输入框
+                 撑成一整块（走查 C 第 2 条）。 -->
+            <view class="team-row">
+              <input
+                v-model="newTeamName"
+                class="team-input"
+                :placeholder="$t('team.teamNamePlaceholder')"
+              />
+            </view>
             <view class="team-btn primary" :class="{ 'is-busy': busy }" @tap="onCreateTeam">
               {{ $t('team.createButton') }}
             </view>
@@ -82,11 +87,13 @@
             <text class="section-subtitle">{{ $t('team.joinDesc') }}</text>
           </view>
           <view class="section-body">
-            <input
-              v-model="joinCodeInput"
-              class="team-input"
-              :placeholder="$t('team.joinCodePlaceholder')"
-            />
+            <view class="team-row">
+              <input
+                v-model="joinCodeInput"
+                class="team-input"
+                :placeholder="$t('team.joinCodePlaceholder')"
+              />
+            </view>
             <view class="team-btn primary" :class="{ 'is-busy': busy }" @tap="onJoinTeam">
               {{ $t('team.joinButton') }}
             </view>
@@ -146,7 +153,7 @@
 
       <view class="section-card">
         <view class="section-header">
-          <text class="section-title">{{ team.name || $t('team.kpiTitle') }}</text>
+          <text class="section-title">{{ headerTitle }}</text>
           <text class="section-subtitle">{{ headerSubtitle }}</text>
           <!-- 范围切换只在入所后出现：没有律所时「全所」不是一个真实存在的视角。
                能不能看全所由官网按角色判，这里只负责把用户选的视角带上去。 -->
@@ -285,7 +292,9 @@
                 <text class="code-value">{{ firm.joinCode || '—' }}</text>
                 <text class="code-desc">{{ $t('team.firmJoinCodeDesc') }}</text>
               </view>
-              <view class="code-actions">
+              <!-- 契约里两个 joinCode 都是「按角色缺字段」而不是给 null：没这个字段
+                   就别渲染一对点下去必然失败的按钮（走查 C 第 1 条） -->
+              <view v-if="firm.joinCode" class="code-actions">
                 <view class="team-btn small" @tap="onCopyCode(firm.joinCode)">{{ $t('team.copyCode') }}</view>
                 <view class="team-btn small" :class="{ 'is-busy': busy }" @tap="onResetFirmCode">
                   {{ $t('team.resetCode') }}
@@ -301,17 +310,22 @@
                 </text>
               </view>
               <text class="team-list-count">{{ t.memberCount || 0 }}</text>
-              <!-- 总部管理者可以移出别的团队；总部团队自己不可移出（官网也会拒） -->
-              <text
-                v-if="canManageFirm && !t.isHead"
-                class="link-action danger team-list-action"
-                @tap="onRemoveFirmTeam(t)"
-              >{{ $t('team.removeFirmTeam') }}</text>
+              <!-- 动作位恒占宽：总部那行没有「移出律所」，不占位的话它的人数会甩到
+                   行尾，整列数字对不齐（走查 C 第 7 条）。
+                   总部团队自己不可移出（官网也会拒）。 -->
+              <view class="team-list-tail">
+                <text
+                  v-if="canManageFirm && !t.isHead"
+                  class="link-action danger"
+                  @tap="onRemoveFirmTeam(t)"
+                >{{ $t('team.removeFirmTeam') }}</text>
+              </view>
             </view>
 
-            <!-- 子团队负责人的退出口 -->
-            <view v-if="canLeaveFirm" class="team-row">
-              <text class="link-action danger" @tap="onLeaveFirm">{{ $t('team.leaveFirm') }}</text>
+            <!-- 子团队负责人的退出口。必须与上面的团队列表断开：贴着列表尾巴时
+                 它读起来像「第五个团队」那一行（走查 C 第 8 条）。 -->
+            <view v-if="canLeaveFirm" class="firm-leave-row">
+              <view class="team-btn small danger" @tap="onLeaveFirm">{{ $t('team.leaveFirm') }}</view>
             </view>
           </template>
         </view>
@@ -328,11 +342,14 @@
           <view v-if="canManage" class="code-row">
             <view class="code-main">
               <text class="code-label">{{ $t('team.joinCodeTitle') }}</text>
-              <text class="code-value">{{ team.joinCode || '—' }}</text>
+              <text class="code-value">{{ joinCode || '—' }}</text>
               <text class="code-desc">{{ $t('team.joinCodeDesc') }}</text>
             </view>
-            <view class="code-actions">
-              <view class="team-btn small" @tap="onCopyCode(team.joinCode)">{{ $t('team.copyCode') }}</view>
+            <!-- 官网把团队邀请码放在 GET /api/account/team 的**顶层**，不在 team 对象里，
+                 且 MEMBER 时是「缺这个字段」而不是给 null。所以这里读 this.joinCode，
+                 并且只有拿到非空字符串才渲染复制/重置（走查 C 第 1 条）。 -->
+            <view v-if="joinCode" class="code-actions">
+              <view class="team-btn small" @tap="onCopyCode(joinCode)">{{ $t('team.copyCode') }}</view>
               <view class="team-btn small" :class="{ 'is-busy': busy }" @tap="onResetJoinCode">
                 {{ $t('team.resetCode') }}
               </view>
@@ -358,9 +375,13 @@
               <text class="col">{{ hoursLabel(m.activeMinutes) }}</text>
               <text class="col">{{ m.aiTurns || 0 }}</text>
               <text class="col">{{ m.lastActiveDate || '-' }}</text>
+              <!-- OWNER 改不了也踢不掉，自己退出走底部单独的「退出团队」。这两行不给动作：
+                   给了就是摆两个点下去必然被官网拒掉的按钮（走查 C 第 3 条）。 -->
               <view v-if="canManage" class="col col-actions">
-                <text class="link-action" @tap="onChangeRole(m)">{{ $t('team.changeRole') }}</text>
-                <text class="link-action danger" @tap="onRemoveMember(m)">{{ $t('team.removeMember') }}</text>
+                <template v-if="canActOn(m)">
+                  <text class="link-action" @tap="onChangeRole(m)">{{ $t('team.changeRole') }}</text>
+                  <text class="link-action danger" @tap="onRemoveMember(m)">{{ $t('team.removeMember') }}</text>
+                </template>
               </view>
             </view>
           </view>
@@ -497,6 +518,10 @@ export default {
       // 拿不到就不显示这个动作，**绝不自己编一个 'me' 之类的 id 去打 DELETE**：
       // 猜错的后果是把别人踢出团队。
       myAccountId: '',
+      // 团队邀请码。官网把它放在 GET /api/account/team 的顶层（不在 team 里），
+      // 且只发给本队 OWNER/ADMIN——MEMBER 那边是**缺字段**，不是 null。
+      // 空串 = 没拿到，界面据此不渲染复制/重置。
+      joinCode: '',
       members: [],
       pendingInvites: [],
       receivedInvites: [],
@@ -545,7 +570,18 @@ export default {
     firmTeamRows() {
       return (this.summary && Array.isArray(this.summary.teams) ? this.summary.teams : [])
     },
+    // 全所视角下这张卡统计的是整个律所，标题就该是律所名——挂着本团队的名字
+    // 会让人把全所的数字当成本队的（走查 C 第 6 条）
+    headerTitle() {
+      if (this.scope === 'firm' && this.firm) return this.firm.name || this.$t('team.firmTitle')
+      return (this.team && this.team.name) || this.$t('team.kpiTitle')
+    },
     headerSubtitle() {
+      if (this.scope === 'firm' && this.firm) {
+        // 团队数只取服务端给的名册长度；取不到就只说「全所」，不编一个数字
+        const n = this.firmTeams.length
+        return n ? this.$t('team.firmScopeSubtitle', { n }) : this.$t('team.scopeFirm')
+      }
       if (this.firm && this.firm.name) return `${this.$t('team.kpiTitle')} · ${this.firm.name}`
       return this.$t('team.kpiTitle')
     },
@@ -602,6 +638,13 @@ export default {
       const n = Number(minutes || 0)
       return this.$t('team.hours', { hours: (n / 60).toFixed(1) })
     },
+    // 能不能对这一行动手。OWNER 不可改不可踢（契约 403），自己退出走「退出团队」。
+    // 这只决定显不显示按钮，真正的闸门在官网。
+    canActOn(member) {
+      if (!this.canManage) return false
+      if (member.role === 'OWNER') return false
+      return !(this.myAccountId && member.accountId === this.myAccountId)
+    },
     roleLabel(role) {
       if (role === 'OWNER') return this.$t('team.roleOwner')
       if (role === 'ADMIN') return this.$t('team.roleAdmin')
@@ -631,6 +674,8 @@ export default {
         this.team = (data && data.team) || null
         this.myRole = (data && data.myRole) || ''
         this.myAccountId = (data && data.myAccountId) || ''
+        // 缺字段/null 一律归成空串，界面只认「非空字符串才渲染复制与重置」
+        this.joinCode = typeof (data && data.joinCode) === 'string' ? data.joinCode : ''
         this.members = (data && data.members) || []
         this.pendingInvites = (data && data.pendingInvites) || []
         this.receivedInvites = (data && data.invites) || []
@@ -847,17 +892,37 @@ export default {
         await this.reload()
       })
     },
+    // 撤销是删行、不可回退，与「移除成员」同款确认
     onRevokeInvite(invite) {
-      this.run(async () => {
-        await revokeTeamInvite(invite.id)
-        await this.reload()
+      uni.showModal({
+        title: this.$t('team.revokeInvite'),
+        content: this.$t('team.confirmRevokeInvite', { phone: invite.phone }),
+        success: (res) => {
+          if (!res.confirm) return
+          this.run(async () => {
+            await revokeTeamInvite(invite.id)
+            await this.reload()
+          })
+        },
       })
     },
+    // 改角色是权限变更，点一下就生效太轻了：先把「谁、从什么改成什么」摆出来确认
     onChangeRole(member) {
       const next = member.role === 'ADMIN' ? 'MEMBER' : 'ADMIN'
-      this.run(async () => {
-        await updateTeamMemberRole(member.accountId, next)
-        await this.reload()
+      uni.showModal({
+        title: this.$t('team.changeRole'),
+        content: this.$t('team.confirmChangeRole', {
+          name: member.displayName || member.accountId,
+          from: this.roleLabel(member.role),
+          to: this.roleLabel(next),
+        }),
+        success: (res) => {
+          if (!res.confirm) return
+          this.run(async () => {
+            await updateTeamMemberRole(member.accountId, next)
+            await this.reload()
+          })
+        },
       })
     },
     onRemoveMember(member) {
@@ -1041,20 +1106,28 @@ export default {
   line-height: 22px;
 }
 
+/* 1280 宽下这一列只有 86.4px 可用，而「节约时间（估算）」是 8 个全角字符：
+   11px 时正好 88px，溢出 1.6px，最后那个「）」被切掉（走查 C 第 9 条）。
+   只放开 white-space 不够——实测 Chrome 在这个宽度上仍不折行（唯一的断点在「估」
+   前面，「）」又不许起行），字号必须降到 10.5px（8 × 10.5 = 84px，留 2.4px 余量）。
+   量法：把这段样式搬进静态页，按 86.4px 的盒宽取 Range.getClientRects()。
+   .stat-sub 跟着一起降，否则副行比正行还大。 */
 .stat-caption {
   display: block;
   margin-top: 2px;
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--awd-text-2);
-  line-height: 16px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.3;
 }
 
 .stat-sub {
   display: block;
   margin-top: 1px;
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--awd-text-3);
-  line-height: 16px;
+  line-height: 1.3;
 }
 
 .team-footnote {
@@ -1186,8 +1259,20 @@ export default {
 }
 
 .team-list-count {
+  /* 固定宽 + 右对齐：一列人数要对得齐，不能跟着后面有没有按钮左右横跳 */
+  min-width: 48px;
+  text-align: right;
   font-size: 12px;
   color: var(--awd-text-2);
+}
+
+/* 动作位恒占宽，总部那行没有「移出律所」时也占着，前面的人数才不会甩到行尾 */
+.team-list-tail {
+  flex: 0 0 auto;
+  min-width: 72px;
+  margin-left: 16px;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .team-row {
@@ -1197,10 +1282,16 @@ export default {
   gap: 8px;
 }
 
+/* flex-basis 必须是 auto：写成长度值（改前是 200px）时，只要这个输入框落在
+   竖向 flex 的 .section-body 里，basis 就落到**高度**上，输入框会被撑成 202px
+   高的一大块（走查 C 第 2 条）。auto 让 basis 回到 height: 32px。
+   刻意不写 width: 100%：那会让 basis 变成整行宽，.team-row 又是 wrap 的，
+   「律所名称 + 保存」这类一行两件的行会被折成两行（静态页实测）。 */
 .team-input {
-  flex: 1 1 200px;
-  min-width: 160px;
+  flex: 1 1 auto;
+  min-width: 0;
   height: 32px;
+  box-sizing: border-box;
   padding: 0 10px;
   font-size: 13px;
   color: var(--awd-text);
@@ -1244,6 +1335,21 @@ export default {
 .team-btn.is-busy {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+/* 次级危险：描边而不是实心，和上面的团队列表拉开，也不抢主按钮的位置 */
+.team-btn.danger {
+  color: var(--awd-danger-text);
+  border-color: var(--awd-danger-text);
+  background: transparent;
+}
+
+/* 「退出律所」与团队列表之间必须断开，否则它读起来像列表的最后一行 */
+.firm-leave-row {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--awd-border-subtle);
+  display: flex;
 }
 
 /* 邀请码行：码本身要大到能一眼读出来、也能整串选中复制 */

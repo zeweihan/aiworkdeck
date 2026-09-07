@@ -45,6 +45,7 @@ export default {
   rangeDays: 'Last {n} days',
   scopeTeam: 'This team',
   scopeFirm: 'Whole firm',
+  firmScopeSubtitle: 'Whole firm · {n} teams',
 
   joinCodeTitle: 'Team invite code',
   joinCodeDesc: 'Give this code to a colleague; pasting it in their "Team" panel joins them.',
@@ -68,6 +69,7 @@ export default {
   changeRole: 'Change role',
   removeMember: 'Remove',
   leaveTeam: 'Leave team',
+  confirmChangeRole: 'Change {name} from {from} to {to}?',
   confirmRemove: 'Remove this member from the team? Their past stats are kept.',
   confirmLeave: 'Leave the team? You will no longer see team stats.',
 
@@ -89,6 +91,7 @@ export default {
   pendingInvitesTitle: 'Pending invitations',
   pendingInvitesEmpty: 'No pending invitations',
   revokeInvite: 'Revoke',
+  confirmRevokeInvite: 'Revoke the invitation sent to {phone}? It stops working immediately.',
   settingsTitle: 'Team settings',
   renameLabel: 'Team name',
   saveName: 'Save',

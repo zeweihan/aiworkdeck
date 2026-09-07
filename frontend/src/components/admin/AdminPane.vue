@@ -3291,9 +3291,13 @@ $brand-accent: $brand-mint;
   color: var(--awd-text-2);
 }
 
+/* 只靠强调色的一小段文字看不出能点（走查 C 第 10 条）：加下划线，
+   offset 2px 免得压住中文字的下缘。 */
 .account-team-link {
   font-size: 12px;
   color: var(--awd-accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
   cursor: pointer;
 }
 
