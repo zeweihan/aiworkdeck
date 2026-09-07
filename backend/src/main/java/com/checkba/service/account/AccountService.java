@@ -781,10 +781,65 @@ public class AccountService {
      * 状态码分类。5xx 归入 NETWORK（服务器故障不等于凭据失效，不能据此清除本地连接），
      * 401/403 才是明确的鉴权失败——与 PR-A LicenseService 的判定同源。
      */
+    /** 官网鉴权层的机器码：这些仍按凭据失效处理。 */
+    private static final java.util.Set<String> AUTH_ERROR_CODES = java.util.Set.of("unauthorized", "forbidden", "invalid_key", "key_revoked");
+
+    /** 从 4xx 响应体里取 {"error":"xxx"} 的机器码；不是这个形状就返回 null。 */
+    private static final ObjectMapper CODE_MAPPER = new ObjectMapper();
+
+    static String businessErrorCode(String body) {
+        if (body == null || body.isBlank()) return null;
+        try {
+            Map<String, Object> m = CODE_MAPPER.readValue(body, new TypeReference<Map<String, Object>>() {});
+            Object err = m.get("error");
+            if (err instanceof String str && !str.isBlank() && str.length() <= 64 && str.matches("[a-z0-9_]+")) {
+                return str;
+            }
+        } catch (Exception ignore) {
+            // 非 JSON 或形状不对：交回状态码分支
+        }
+        return null;
+    }
+
+    /**
+     * 业务机器码的人话（团队端点契约见官网 doc/desktop-contract.md「团队」节）。
+     * 文案红线同 {@link #unauthorizedMessage()}：不得含「登录」「未授权」「请先」。
+     */
+    static String rejectedMessage(String code) {
+        return switch (code) {
+            case "phone_required" -> LangText.of("需要在官网账户绑定手机号后，才能创建或加入团队", "Bind a phone number to your website account before creating or joining a team");
+            case "already_in_team" -> LangText.of("这个账户已经在一个团队里了", "This account already belongs to a team");
+            case "already_in_firm" -> LangText.of("这个团队已经在一家律所里了", "This team already belongs to a firm");
+            case "bad_code" -> LangText.of("邀请码不存在或已失效", "That invite code does not exist or has expired");
+            case "invite_accepted" -> LangText.of("这条邀请已经被接受过了", "That invite has already been accepted");
+            case "no_team" -> LangText.of("这个账户还没有团队", "This account has no team yet");
+            case "no_firm" -> LangText.of("这个团队还没有加入律所", "This team has not joined a firm");
+            case "owner_cannot_leave" -> LangText.of("团队负责人不能退出团队", "The team owner cannot leave the team");
+            case "head_cannot_leave" -> LangText.of("总部团队不能退出律所", "The head team cannot leave the firm");
+            case "bad_phone" -> LangText.of("手机号格式不对", "That phone number is not valid");
+            case "bad_role" -> LangText.of("角色不合法", "That role is not allowed");
+            case "bad_name" -> LangText.of("名称不能为空", "The name cannot be empty");
+            case "rate_limited" -> LangText.of("操作太频繁，稍后再试", "Too many requests, try again shortly");
+            case "payload_too_large" -> LangText.of("上报数据过大", "The upload is too large");
+            default -> LangText.of("官网拒绝了这次操作（", "The website rejected this request (") + code + LangText.of("）", ")");
+        };
+    }
+
     private Map<String, Object> handle(AccountTransport.Reply reply) {
         int status = reply.status();
-        if (status == 401 || status == 403) {
+        if (status == 401) {
             throw new AccountException(AccountException.Kind.UNAUTHORIZED, unauthorizedMessage());
+        }
+        if (status == 403 || status == 404 || status == 409 || status == 400 || status == 413 || status == 429) {
+            String code = businessErrorCode(reply.body());
+            if (code != null && !AUTH_ERROR_CODES.contains(code)) {
+                // 团队等业务端点：凭据没问题，是规则不许（dev-board#496 裁决 4 的 phone_required 等）。
+                // 折叠成「Key 无效」会让用户去官网重生成一把好 Key，还把真正的原因吞掉。
+                throw new AccountException(AccountException.Kind.REJECTED, rejectedMessage(code), code);
+            }
+            if (status == 403) {
+                throw new AccountException(AccountException.Kind.UNAUTHORIZED, unauthorizedMessage());
+            }
         }
         if (status >= 500) {
             throw new AccountException(AccountException.Kind.NETWORK,

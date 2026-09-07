@@ -797,6 +797,9 @@ public class AccountController {
         result.put("code", 1);
         result.put("kind", e.getKind().name());
         result.put("message", e.getMessage());
+        if (e.getReason() != null) {
+            result.put("reason", e.getReason());
+        }
         return ResponseEntity.ok(result);
     }
 }

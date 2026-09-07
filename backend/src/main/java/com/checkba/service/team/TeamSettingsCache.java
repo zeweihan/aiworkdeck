@@ -14,13 +14,14 @@ import java.util.Map;
  * 而且失败时没有安全的默认值可选——所以改成「每次拉团队信息时顺手记下」，
  * 聚合侧只读本机。
  *
- * <p><b>读不到一律按 false</b>：隐私上「不确定」只能解释为「不共享」。
- * 权威值始终在官网，本机这份只是给聚合用的快照。
+ * <p><b>读不到一律按 true</b>：维护者裁决（dev-board#496，2026-09-08）项目名默认随统计
+ * 上云，管理者可在团队设置里关闭。权威值始终在官网，本机这份只是给聚合用的快照；
+ * 一旦拉到权威值就会被 {@link #remember} 覆盖，这个默认值只在从没拉到过时生效。
  */
 @Service
 public class TeamSettingsCache {
 
-    /** 团队是否允许项目名随日聚合上云。默认 false。 */
+    /** 团队是否允许项目名随日聚合上云。默认 true（管理者可关）。 */
     public static final String KEY_SHARE_PROJECT_NAMES = "team.shareProjectNames";
 
     private final SystemSettingService settings;
@@ -30,17 +31,17 @@ public class TeamSettingsCache {
     }
 
     public boolean shareProjectNames() {
-        return Boolean.parseBoolean(settings.get(KEY_SHARE_PROJECT_NAMES, "false"));
+        return Boolean.parseBoolean(settings.get(KEY_SHARE_PROJECT_NAMES, "true"));
     }
 
-    /** 从官网返回的 team 对象里记下需要缓存的字段。字段缺失时按 false 落，不保留旧值。 */
+    /** 从官网返回的 team 对象里记下需要缓存的字段。字段缺失时按 true 落，不保留旧值。 */
     public void remember(Map<?, ?> team) {
-        boolean share = team != null && Boolean.TRUE.equals(team.get("shareProjectNames"));
+        boolean share = team == null || !Boolean.FALSE.equals(team.get("shareProjectNames"));
         settings.set(KEY_SHARE_PROJECT_NAMES, Boolean.toString(share));
     }
 
     /** 断开账户 / 退出团队后清回默认值。 */
     public void clear() {
-        settings.set(KEY_SHARE_PROJECT_NAMES, "false");
+        settings.set(KEY_SHARE_PROJECT_NAMES, "true");
     }
 }

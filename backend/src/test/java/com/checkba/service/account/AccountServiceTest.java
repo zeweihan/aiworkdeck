@@ -407,6 +407,31 @@ class AccountServiceTest {
     }
 
     @Test
+    @DisplayName("官网 4xx 带业务机器码时按 REJECTED 透传，不折叠成 Key 无效（dev-board#496 裁决 4）")
+    void businessRejectionIsNotFoldedIntoUnauthorized() {
+        AccountService service = connected();
+        transport.enqueue(403, "{\"error\":\"phone_required\"}");
+        AccountException e = assertThrows(AccountException.class, service::fetchTeam);
+        assertEquals(AccountException.Kind.REJECTED, e.getKind());
+        assertEquals("phone_required", e.getReason());
+        assertTrue(e.getMessage().contains("绑定手机号"), e.getMessage());
+        for (String banned : new String[] {"登录", "未授权", "请先"}) {
+            assertFalse(e.getMessage().contains(banned), "文案红线：" + banned);
+        }
+
+        // 403 但没有业务机器码：仍是凭据失效
+        transport.enqueue(403, "{\"error\":\"unauthorized\"}");
+        AccountException plain = assertThrows(AccountException.class, service::fetchTeam);
+        assertEquals(AccountException.Kind.UNAUTHORIZED, plain.getKind());
+
+        // 409 already_in_team 同样带码回来
+        transport.enqueue(409, "{\"error\":\"already_in_team\"}");
+        AccountException conflict = assertThrows(AccountException.class, service::fetchTeam);
+        assertEquals(AccountException.Kind.REJECTED, conflict.getKind());
+        assertEquals("already_in_team", conflict.getReason());
+    }
+
+    @Test
     @DisplayName("账户类信封不许带 4010，否则前端会误清会话/跳登录页")
     void accountMessagesDoNotLookLikeAuthErrors() {
         // PR4-0 起 frontend/src/services/api.js 只认 code === 4010 判定未登录（清 session，

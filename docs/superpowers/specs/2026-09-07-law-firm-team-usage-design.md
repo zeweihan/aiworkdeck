@@ -32,7 +32,7 @@ IDE 目前是单点工具。律所有知识沉淀、管理和团队调度的需�
 - 桌面端每日出一条**带鉴权**的个人使用日聚合，上报到团队通道；官网按团队加总。
 - IDE 设置页新增「团队」分区：无团队时可创建或接受邀请；有团队时看统计看板与成员表；
   管理者可邀请、改角色、移除。
-- 隐私：上云的只有计数、枚举、哈希；项目名默认不上云。
+- 隐私：上云的只有计数、枚举、哈希；项目名默认随统计上云，团队管理者可关闭（见第 9 节裁决）。
 
 非目标（本期不做）：
 - 席位计费、团队钱包、团队级权益。
@@ -42,7 +42,7 @@ IDE 目前是单点工具。律所有知识沉淀、管理和团队调度的需�
 ## 4. 概念模型
 
 ```
-team            id / name / ownerAccountId / shareProjectNames(bool, 默认 false) / createdAt
+team            id / name / ownerAccountId / shareProjectNames(bool, 默认 true，管理者可关) / createdAt
 team_member     teamId / accountId / role(OWNER|ADMIN|MEMBER) / joinedAt / invitedBy   唯一 (teamId, accountId)
 team_invite     id / teamId / phone / role / createdBy / createdAt / expiresAt / acceptedAt / acceptedAccountId
 team_usage_daily    teamId / accountId / date / payload(JSON) / receivedAt      主键 (accountId, date)
@@ -169,12 +169,22 @@ MEMBER 调用时 `members` 只含自己，`projects` 只含自己参与的。
 - 前端：`frontend/tests/team/*.test.mjs` 源码级断言（分区接链尾、三态分支、开关默认关、
   i18n 成对），接进 `ci.yml`。
 
-## 9. 待维护者拍板
+## 9. 已拍板（维护者裁决，2026-09-08）
 
-1. **项目名是否允许上云**。默认不上（只传哈希，管理者起别名），团队设置里可整体打开。
-   若你认为律所内部共享项目名是理所当然的，把默认值翻成 true 即可。
-2. **节约时间系数**：每次 AI 编辑 3 分钟、每轮对话 2 分钟，是拍脑袋的初值，UI 上明写公式。
-3. 首期「一人一团队」的约束是否可接受（律师同时挂两家所的情况极少）。
+原「待拍板」三项 + 补充一项，全部落定，后续改动以此为准：
+
+1. **项目名默认上云**。`shareProjectNames` 默认 **true**，团队管理者可在团队设置里关闭；
+   关闭后团队面板只显示匿名编号（管理者仍可给编号起别名）。
+2. **节约时间系数维持**：每次 AI 编辑 3 分钟、每轮 AI 对话 2 分钟，不改；UI 上继续明写公式，
+   不做成一个看起来精确的数字。
+3. **首期「一人一团队」维持**，约五年后视规模可能放开（律师同时挂两家所的情况现在还极少）。
+   **预留**：唯一约束点是唯一索引 `idx_team_member_account`（挂在 accountId 上，保证同一账号
+   同时只出现在一行 `team_member` 里）；将来放开时，删掉这条索引，并把 `getMembership`
+   从「返回单条」改成「返回多条」即可，不需要动其余表结构。
+4. **建团队 / 加入团队需先绑定手机号**：账号未绑定手机号时，官网对
+   `POST /api/account/team`（创建团队）、`POST /api/account/team/join`（邀请码加入）、
+   `POST /api/account/team/invites/{id}/accept`（接受邀请）一律回 403，
+   业务错误码 `phone_required`，IDE/官网据此提示先去账户页绑定手机号。
 
 ## 10. 层级、加入流程与入口地图（2026-09-07 晚，维护者补充要求）
 
@@ -207,6 +217,10 @@ MEMBER 调用时 `members` 只含自己，`projects` 只含自己参与的。
 | 团队并入律所 | 团队 OWNER | 输入律所邀请码 | 团队看板「律所」区 |
 | 邀请团队加入律所 | 总部团队 OWNER/ADMIN | 显示并复制律所邀请码 | 律所看板「团队」区 |
 | 团队退出律所 / 律所移除团队 | 该团队 OWNER / 总部 OWNER/ADMIN | 按钮 | 同上 |
+
+「创建团队」「加入团队（邀请码）」「加入团队（被邀请）」三条前提：账号需先在官网绑定手机号。
+未绑定时官网回 403、业务错误码 `phone_required`（见第 9 节裁决 4），IDE 提示「先在官网账户绑定
+手机号，才能创建或加入团队」。
 
 ### 10.3 API 增量（官网，Bearer awdk_）
 

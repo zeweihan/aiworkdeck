@@ -36,6 +36,7 @@ export default {
   inviteExpires: '有效期至 {date}',
   inviteExpiresUnknown: '有效期以官网为准',
   acceptInvite: '接受',
+  phoneRequired: '先在官网账户绑定手机号，才能创建或加入团队',
 
   // ---- KPI ----
   kpiTitle: '团队使用概览',
@@ -83,7 +84,7 @@ export default {
   // ---- 项目 ----
   projectsTitle: '项目',
   projectsEmpty: '暂无项目数据',
-  projectsNote: '项目默认以匿名编号出现。管理者可以给编号起一个团队内部叫法。',
+  projectsNote: '项目名随统计上传；管理者关闭共享后只显示匿名编号，可起别名。',
   colProject: '项目',
   colProjectMembers: '参与人数',
   setAlias: '起别名',

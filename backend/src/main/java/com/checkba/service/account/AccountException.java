@@ -21,18 +21,35 @@ public class AccountException extends RuntimeException {
         CONFLICT,
         /** 本地尚未连接账户，请求根本没发出去。 */
         NOT_CONNECTED,
+        /**
+         * 官网按业务规则拒绝（4xx + JSON 里带机器码 error，如团队端点的 phone_required /
+         * already_in_team / bad_code）。凭据本身有效，绝不能据此清除本地连接。
+         * 机器码放在 {@link #getReason()}，给前端做定向文案。
+         */
+        REJECTED,
         /** 官网返回了预期外的内容（字段缺失、非 JSON）。 */
         MALFORMED
     }
 
     private final Kind kind;
+    private final String reason;
 
     public AccountException(Kind kind, String message) {
+        this(kind, message, null);
+    }
+
+    public AccountException(Kind kind, String message, String reason) {
         super(message);
         this.kind = kind;
+        this.reason = reason;
     }
 
     public Kind getKind() {
         return kind;
+    }
+
+    /** 官网返回的业务机器码（仅 REJECTED 有值），其余为 null。 */
+    public String getReason() {
+        return reason;
     }
 }

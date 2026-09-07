@@ -127,7 +127,7 @@
 
 与匿名通道不同，这条记录带你的账户身份（用账户密钥鉴权），因为它的用途就是让团队管理者看到「谁用了多少」。
 
-**项目名默认不上传。** 团队面板上项目只显示匿名编号，管理者可以给编号起一个团队内部叫法（这个叫法存在服务器上，与你机器上的真实项目名无关）。只有团队管理者在「团队设置」里显式打开「共享项目名」后，成员的上报才会带上项目名——这是整个团队的设置，会影响全体成员。
+**项目名默认随团队统计上传。** 团队管理者可以在「团队设置」里关闭「共享项目名」；关闭后成员的上报只带匿名编号，团队面板只显示匿名编号（管理者仍可以给编号起一个团队内部叫法，这个叫法存在服务器上，与你机器上的真实项目名无关）——这是整个团队的设置，会影响全体成员。
 
 **仍然不会上传的**：文档内容、文件片段、AI 对话文本、文件名与路径、工作段标题、客户与当事人名称。第五节的清单在这条通道上同样成立。
 
@@ -186,7 +186,7 @@ When on, the app uploads **one record a day**, made entirely of counts, a date, 
 
 Unlike the anonymous channel, this record carries your account identity (authenticated with your account key) — showing a manager who used how much is precisely its purpose.
 
-**Project names are not uploaded by default.** The team panel shows anonymous codes, and a manager may attach an internal label to a code (that label lives on the server and is unrelated to the real project name on your machine). Only after a team manager explicitly turns on "Share project names" in team settings do members' uploads carry project names; that is a team-wide setting affecting everyone.
+**Project names are uploaded with the stats by default.** A team manager can turn off "Share project names" in team settings; once off, members' uploads carry only anonymous codes, and the team panel shows only anonymous codes (a manager can still attach an internal label to a code, which lives on the server and is unrelated to the real project name on your machine) — this is a team-wide setting affecting everyone.
 
 **Still never uploaded:** document content, text fragments, AI conversation text, file names and paths, work-session titles, client and counterparty names. The Part 2 exclusion list holds on this channel too.
 

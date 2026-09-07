@@ -731,7 +731,10 @@ export default {
       try {
         await fn()
       } catch (e) {
-        this.toast((e && e.message) || this.$t('team.loadFailed'))
+        const message = (e && e.message) || ''
+        // 官网的业务拒绝（如未绑手机号的 phone_required，dev-board#496 裁决 4）由本地后端
+        // AccountService.rejectedMessage 翻成人话再带回；这里只兜「message 为空」。
+        this.toast(message || this.$t('team.loadFailed'))
       } finally {
         this.busy = false
       }

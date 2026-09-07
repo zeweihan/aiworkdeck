@@ -31,6 +31,7 @@ export default {
   inviteExpires: 'Valid until {date}',
   inviteExpiresUnknown: 'Validity is decided on the website',
   acceptInvite: 'Accept',
+  phoneRequired: 'Bind a phone number on your website account before creating or joining a team',
 
   kpiTitle: 'Team usage overview',
   kpiActiveMembers: 'People active',
@@ -75,7 +76,7 @@ export default {
 
   projectsTitle: 'Projects',
   projectsEmpty: 'No project data yet',
-  projectsNote: 'Projects appear as anonymous codes by default. Managers can give a code an internal name.',
+  projectsNote: 'Project names are uploaded with the stats; once an admin turns sharing off, only anonymous codes show, and they can still be given a name.',
   colProject: 'Project',
   colProjectMembers: 'People',
   setAlias: 'Set name',
