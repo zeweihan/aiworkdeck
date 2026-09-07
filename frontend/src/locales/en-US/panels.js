@@ -24,7 +24,7 @@ export default {
   litRestyleLabel: 'Restyle',
   litUnavailableFallback: 'Diagram generation is unavailable',
   litStartFailedFallback: 'Failed to start',
-  litHandEditedConfirmTitle: 'This diagram was hand-edited',
+  litHandEditedConfirmTitle: 'Confirm replacing the current diagram',
   litHandEditedConfirmBody: 'Switching to {mode} will redraw the diagram from the semantic map, overwriting the changes you made in draw.io. Continue?',
   litContinueRedraw: 'Redraw Anyway',
   litCancel: 'Cancel',
@@ -46,6 +46,8 @@ export default {
   litPackFailedText: 'Resource pack download failed',
   litPackRetrying: 'Retrying…',
   litPackRetryFailedFallback: 'Retry failed',
+  litTimelineNeedsUpdate: 'The timeline engine needs a resource pack update. You can still ask AI to draw using the semantic-map workflow.',
+  litUpdatePack: 'Update resource pack',
 
   // ShareholderMeetingPanel.vue
   smListLabel: 'Verifications',

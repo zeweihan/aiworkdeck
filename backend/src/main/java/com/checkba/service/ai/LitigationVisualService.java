@@ -258,6 +258,21 @@ public class LitigationVisualService {
         return null;
     }
 
+    /** 旧资源包仍能画语义地图，但 1.0.1 不含时间轴大师；不能把目录存在当作能力齐全。 */
+    public String timelineUnavailableReason() {
+        String why = unavailableReason();
+        if (why != null) return why;
+        if (!Files.isRegularFile(runtime().litvizDir().resolve("skills/mqc-timeline-master/scripts/pipeline.py"))) {
+            return com.checkba.service.LangText.of(
+                    "事实时间轴引擎不可用：诉讼可视化资源包版本过旧或组件缺失，请更新资源包后重试。"
+                            + "也可以改用 litigation_checkpoint + litigation_render 语义地图路线出图。",
+                    "The timeline engine is unavailable: the litigation visual resource pack is outdated or incomplete. "
+                            + "Update the resource pack and retry, or use litigation_checkpoint + litigation_render "
+                            + "to draw from a semantic map.");
+        }
+        return null;
+    }
+
     // ==================== 调用 ====================
 
     public Result render(Path mapFile, Path outBase, String mode, String formats) {
@@ -292,6 +307,10 @@ public class LitigationVisualService {
      * @param emphasisSource 仅 mark 阶段有意义：user/model/none，如实记录深红是谁挑的
      */
     public Result timeline(Path workdir, String stage, List<String> stageArgs, String emphasisSource) {
+        String why = timelineUnavailableReason();
+        if (why != null) {
+            return new Result(false, JSONUtil.createObj().set("ok", false).set("error", why), "");
+        }
         List<String> args = new ArrayList<>(List.of(
                 "timeline", "--workdir", workdir.toString(), "--stage", stage));
         if (emphasisSource != null && !emphasisSource.isBlank()) {
@@ -357,7 +376,8 @@ public class LitigationVisualService {
                 // cli.py 的契约是「无论成败都打一行 JSON」。什么都没有，说明解释器
                 // 自己崩了（缺模块、权限、被杀），stderr 才是有用的那半边。
                 return new Result(false, JSONUtil.createObj().set("ok", false)
-                        .set("error", "引擎没有返回结果（退出码 " + proc.exitValue() + "）"), stderr);
+                        .set("error", "引擎没有返回结果（退出码 " + proc.exitValue() + "）"
+                                + diagnosticSummary(stderr)), stderr);
             }
             // 契约是恰好一行；真出现多行时取最后一行（JSON 一定是最后打的），
             // 不直接失败——宁可少一点洁癖，也别让用户为一行杂音丢掉整张图。
@@ -400,6 +420,14 @@ public class LitigationVisualService {
         synchronized (sink) {
             return sink.toString().trim();
         }
+    }
+
+    /** 对话只带有界诊断，去掉终端转义/控制字符；完整 stderr 留在 Result 供排障。 */
+    public static String diagnosticSummary(String stderr) {
+        if (stderr == null || stderr.isBlank()) return "";
+        String safe = stderr.replaceAll("\\u001B\\[[0-?]*[ -/]*[@-~]", "")
+                .replaceAll("[\\p{Cntrl}&&[^\\n\\t]]", "").trim();
+        return "\nstderr：" + safe.substring(Math.max(0, safe.length() - 800));
     }
 
     /** 读一份引擎自带的参考文档（渐进披露用）。越界返回 null。 */

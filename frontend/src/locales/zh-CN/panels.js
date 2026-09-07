@@ -24,7 +24,7 @@ export default {
   litRestyleLabel: '换风格',
   litUnavailableFallback: '出图环境不可用',
   litStartFailedFallback: '启动失败',
-  litHandEditedConfirmTitle: '这张图手工改过',
+  litHandEditedConfirmTitle: '确认覆盖当前图形',
   litHandEditedConfirmBody: '换成{mode}会用语义地图重新画一遍，你在 draw.io 里做的修改会被覆盖。继续吗？',
   litContinueRedraw: '继续重画',
   litCancel: '取消',
@@ -46,6 +46,8 @@ export default {
   litPackFailedText: '资源包下载失败',
   litPackRetrying: '重试中…',
   litPackRetryFailedFallback: '重试失败',
+  litTimelineNeedsUpdate: '事实时间轴引擎需要更新资源包。更新前仍可请 AI 使用语义地图方式出图。',
+  litUpdatePack: '更新资源包',
 
   // ShareholderMeetingPanel.vue
   smListLabel: '核查任务',

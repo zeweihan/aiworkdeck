@@ -38,6 +38,7 @@ import io
 import json
 import os
 import sys
+import tempfile
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ENGINE = os.path.join(_HERE, "skills", "mqc-litigation-visual-redraw")
@@ -161,6 +162,50 @@ def _has_cairosvg():
         return True
     except Exception:
         return False
+
+
+@contextlib.contextmanager
+def _canonical_relation_map(args):
+    """Accept known legacy relationship fields without changing the source map.
+
+    Older engines silently omitted these fields; newer schemas reject them.
+    Keep canonical values, including intentional blank labels and false emphasis.
+    """
+    source = getattr(args, "map", None)
+    if not source:
+        yield
+        return
+    with open(source, encoding="utf-8") as f:
+        semantic_map = json.load(f)
+    changed = False
+    if semantic_map.get("layout") == "graphviz_relation":
+        for node in semantic_map.get("nodes", []):
+            if isinstance(node, dict) and isinstance(node.get("subtitle"), str):
+                node.setdefault("note", node.pop("subtitle"))
+                changed = True
+        for edge in semantic_map.get("edges", []):
+            if isinstance(edge, dict) and isinstance(edge.get("title"), str):
+                edge.setdefault("label", edge["title"])
+                del edge["title"]
+                changed = True
+            if isinstance(edge, dict) and isinstance(edge.get("accent"), bool):
+                edge.setdefault("emphasis", edge.pop("accent"))
+                changed = True
+            # The renderer identifies edges by endpoints/order; legacy IDs are metadata.
+            if isinstance(edge, dict) and isinstance(edge.get("id"), str):
+                del edge["id"]
+                changed = True
+    if not changed:
+        yield
+        return
+    with tempfile.TemporaryDirectory(prefix="litviz-map-") as directory:
+        args.map = os.path.join(directory, "map.json")
+        try:
+            with open(args.map, "w", encoding="utf-8") as f:
+                json.dump(semantic_map, f, ensure_ascii=False)
+            yield
+        finally:
+            args.map = source
 
 
 def cmd_validate(args):
@@ -394,7 +439,9 @@ def main(argv=None):
 
     args = p.parse_args(argv)
     try:
-        _emit(args.fn(args))
+        with _canonical_relation_map(args):
+            result = args.fn(args)
+        _emit(result)
     except SystemExit:
         raise
     except FileNotFoundError as e:

@@ -88,6 +88,7 @@ export default {
       errorText: '',
       xml: '',
       dirty: false,
+      restylePending: false,
       savedTip: '',
       pendingExport: null,    // 保存链路里等 SVG 的那个 resolve
       // 桌面态资源包引导安装：packId 只在 getEditor() 明确回答"资源不在场"时才有值，
@@ -126,10 +127,14 @@ export default {
   },
   mounted() {
     window.addEventListener('message', this.onMessage)
+    uni.$on('awd:litviz-restyling', this.onRestyling)
+    uni.$on('awd:litviz-restyled', this.onRestyled)
     this.boot()
   },
   beforeUnmount() {
     window.removeEventListener('message', this.onMessage)
+    uni.$off('awd:litviz-restyling', this.onRestyling)
+    uni.$off('awd:litviz-restyled', this.onRestyled)
     this.stopPackPoll()
   },
   watch: {
@@ -140,6 +145,28 @@ export default {
     }
   },
   methods: {
+    matchesDiagram(event) {
+      return this.file && String(event.projectId) === String(this.projectId)
+        && String(event.folderId) === String(this.file.parentId)
+    },
+    onRestyling(event) {
+      if (!this.matchesDiagram(event)) return
+      this.restylePending = true
+      // Pause new saves; finish all accepted saves before the server replaces the files.
+      event.pendingSaves.push(this._persistQueue(() => {}))
+    },
+    async onRestyled(event) {
+      if (event.kind !== 'restyle' || !this.matchesDiagram(event)) return
+      try {
+        if (!event.failed) {
+          this.dirty = false
+          this.savedTip = ''
+          await this.boot()
+        }
+      } finally {
+        this.restylePending = false
+      }
+    },
     async boot() {
       this.phase = 'loading'
       this.errorText = ''
@@ -211,7 +238,7 @@ export default {
     async loadXml() {
       const id = this.fileRef()
       if (!id) throw new Error(this.$t('editor.drawio.fileMissing'))
-      const res = await fetch(getFileDownloadUrl(id), { headers: getAuthHeaders() || {} })
+      const res = await fetch(getFileDownloadUrl(id), { headers: getAuthHeaders() || {}, cache: 'no-store' })
       if (!res.ok) throw new Error(this.$t('editor.drawio.readFailed', { status: res.status }))
       const text = await res.text()
       if (!text || !text.trim()) throw new Error(this.$t('editor.drawio.fileEmpty'))
@@ -233,7 +260,7 @@ export default {
       if (!msg || !msg.event) return
 
       if (msg.event === 'init') {
-        this.post({ action: 'load', autosave: 0, xml: this.xml })
+        this.post({ action: 'load', autosave: 0, xml: this.xml, title: (this.file && this.file.name) || '' })
         return
       }
       if (msg.event === 'change') {
@@ -280,6 +307,7 @@ export default {
     // 不改保存提示）。用队列把 save 事件串行化，保证同一时刻只有一次 exportSvg
     // 在飞，单槽也就天然安全。
     persist(xml) {
+      if (this.restylePending) return Promise.resolve()
       return this._persistQueue(() => this.persistNow(xml))
     },
     async persistNow(xml) {
@@ -293,9 +321,11 @@ export default {
         this.dirty = false
         this.savedTip = this.$t('editor.drawio.saved')
         // 同一张图的 .svg / .png 被一起改了，已打开的标签要重拉。
-        // 复用换风格那条既有广播，订阅方不用改。
+        // 图廊刷新缩略图；当前画布已经是保存的内容，不重新加载。
         uni.$emit('awd:litviz-restyled', {
+          projectId: this.projectId,
           folderId: this.file.parentId,
+          kind: 'save',
           svgFileId: res && res.svgFileId
         })
         this.$emit('saved', res)
