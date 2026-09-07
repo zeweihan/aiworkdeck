@@ -137,3 +137,27 @@ for (const change of ['saved-again', 'previously-clean', 'registered-later']) {
     assert.equal(change === 'registered-later' ? refs.c.dirty : a.dirty, true, '不能清脏标记来假装已保存')
   })
 }
+
+for (const name of ['leaveWorkbench', 'handleLogout']) {
+  test(`${name} 等待文本保存时首次注册Office实例也必须阻止导航`, async () => {
+    const from = PAGE.indexOf(`    async ${name}(`)
+    const end = PAGE.indexOf(name === 'leaveWorkbench' ? '    goAllProjects()' : '    onFileTreeQuickAction(', from)
+    const calls = []
+    const methods = new Function('flushDirtyEditors', 'uni', 'clearSession',
+      'return {' + PAGE.slice(from, end) + '}')(
+      flushDirtyEditors,
+      { showToast: () => calls.push('toast'), reLaunch: () => calls.push('navigate') },
+      () => calls.push('clear'))
+    const text = libre({ dirty: true })
+    const vm = { $t: k => k, _plainTextRefs: { left: text } }
+    text.flushSave = async () => {
+      if (!vm._libreRefs) vm._libreRefs = {}
+      vm._libreRefs['right:2'] = libre({ dirty: true })
+      text.dirty = false
+      return true
+    }
+    await methods[name].call(vm, '/target')
+    assert.deepEqual(calls, ['toast'])
+    assert.equal(vm._libreRefs['right:2'].dirty, true)
+  })
+}

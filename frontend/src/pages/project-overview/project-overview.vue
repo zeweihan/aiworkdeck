@@ -3769,7 +3769,8 @@ export default {
     // 逐个保存；只要仍有未落盘的改动就留在工作台，让用户重试或先关闭该文档处理。
     async leaveWorkbench(url) {
       try {
-        const result = await flushDirtyEditors(this._libreRefs, this._plainTextRefs)
+        const result = await flushDirtyEditors(
+          this._libreRefs || (this._libreRefs = {}), this._plainTextRefs || (this._plainTextRefs = {}))
         if (result.failed > 0) {
           uni.showToast({ title: this.$t('editor.saveBeforeLeaving'), icon: 'none', duration: 4000 })
           return false
@@ -4301,7 +4302,8 @@ export default {
       // 落盘必须排在 clearSession 之前：会话一清，保存请求就是未授权，
       // 用户「退出登录」等于顺手丢掉最后几秒的修改。
       try {
-        const result = await flushDirtyEditors(this._libreRefs, this._plainTextRefs)
+        const result = await flushDirtyEditors(
+          this._libreRefs || (this._libreRefs = {}), this._plainTextRefs || (this._plainTextRefs = {}))
         if (result.failed > 0) {
           uni.showToast({ title: this.$t('editor.saveBeforeLeaving'), icon: 'none', duration: 4000 })
           return false
