@@ -3907,7 +3907,30 @@ const EXEC = {
     if (p.complete) {
       // 回答「插入当前文档」在一次 worker 命令里完成，不能与 Agent 的半张表串流。
       if (STREAM.active) return tableFail('文档正在流式写入，请等待写入完成后再插入回答');
+      if (!String(p.text || '').trim()) return { success: true, idle: true };
       try {
+        // 完整回复是一个独立段落块。先隔开已有文字，不能把其所在段落一起套回复格式。
+        const vc = ctrl.getViewCursor();
+        vc.collapseToEnd();
+        const text = vc.getText();
+        const before = text.createTextCursorByRange(vc.getStart());
+        before.gotoStartOfParagraph(true);
+        const after = text.createTextCursorByRange(vc.getStart());
+        after.gotoEndOfParagraph(true);
+        const hasBefore = (before.getString() || '').length > 0;
+        const hasAfter = (after.getString() || '').length > 0;
+        if (hasBefore) {
+          text.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
+          vc.collapseToEnd();
+        }
+        if (hasAfter) {
+          text.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
+          vc.collapseToEnd();
+          const insertion = text.createTextCursorByRange(vc.getStart());
+          insertion.gotoPreviousParagraph(false);
+          insertion.gotoStartOfParagraph(false);
+          vc.gotoRange(insertion, false);
+        }
         EXEC.stream_insert({ text: p.text });
         return EXEC.stream_flush({});
       } finally { streamReset(false); }

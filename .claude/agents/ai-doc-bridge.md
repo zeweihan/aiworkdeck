@@ -287,7 +287,7 @@ txt/md/markdown 自 dev-board#37 起不进 LOWA（前端走 PlainTextEditor.vue�
 
 ## 插入回答、列表清除与新文档兼容级别（2026-09-07 实测回归）
 
-- 回答的「插入当前文档」走 `stream_insert {text, complete:true}`，同一 worker 命令里解析 Markdown 并收尾，保留真实表格/标题/粗体。已有 Agent 流还在写时拒绝完整插入并保留其缓冲；完整插入和 `stream_flush` 都在 finally 复位，尾表失败不能吞掉。`stream_insert`/`stream_flush` 都可能一次建完整表，三处桥预算统一为 120 秒（同 insert_table），不对普通 chunk 提前截断。
+- 回答的「插入当前文档」走 `stream_insert {text, complete:true}`，同一 worker 命令里解析 Markdown 并收尾，保留真实表格/标题/粗体。仅此完整插入入口先在光标处隔出独立空段，保护原段前后文字的段落/字符格式；段首/段尾只插所需分隔，空白回复不改文档。普通 Agent chunk 不加分隔。`test:lowa-reply` 真引擎覆盖标题/居中段的中间与首尾插入、富文本/表格落盘，并以 `?uilang=en-US` 启动后核对 `get_ui_lang.ooLocale`。已有 Agent 流还在写时拒绝完整插入并保留其缓冲；完整插入和 `stream_flush` 都在 finally 复位，尾表失败不能吞掉。`stream_insert`/`stream_flush` 都可能一次建完整表，三处桥预算统一为 120 秒（同 insert_table），不对普通 chunk 提前截断。
 - `agentClientActions.handleDocStreamEnd` 必须同时检查 `stream_flush` 的失败返回与异常，并写入 `_docStreamFailReason`，交回对话展示。`stream_insert` 缓冲成功不等于尾表已经落字。
 - `doc_set_numbering(preset=none)` 同时清除自动编号和项目符号。字号/居中/headingLevel=0 不清列表；worker 派发后读 `NumberingIsNumber`，未明确变为 false 就不能声称成功。模型要选中图注→none→正文/居中→`doc_get_formatting` 核验。`set_paragraph_format` 同次给出样式/headingLevel与alignment时先切样式再应用对齐，否则 Standard 会把刚设置的居中重置为左对齐。
 - 新生成 docx 的 `DocxStyleHelper.applyProfile` 与空白 `doc_start_stream` 都调用 `setModernCompatibility`，只设置 compatibilityMode=15，不往空白文档添加正文，也不改用户上传文档。docx 导出单独使用 `Office Open XML Text`（Word 2010–365）；旧 `MS Word 2007 XML` 会把 15 降成 12，只改新建设置不能解决。现代过滤器保留用户原有较低兼容级别（实测 12→12、15→15），导入过滤器不变。见 LibreOffice 24.2 `sw/source/filter/ww8/docxexport.cxx` 的 `nTargetCompatibilityMode`/保留较低值逻辑。
