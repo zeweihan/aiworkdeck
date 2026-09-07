@@ -222,3 +222,4 @@ HOUSE 不再是常量：`buildHouse(profile)` 从画像 JSON 派生写端常量�
 - 全应用：`npm run test:app-e2e`。改编辑器三件套（原语/白名单/worker）必跑 lowa-e2e。
 
 - 离开工作台/退出登录前，`flushDirtyEditors` 逐个保存后必须同步重扫当前 Office/文本注册表；保存 B 期间重新编辑 A、原本干净实例变脏、或新注册实例变脏都应阻止导航（`flush-dirty-editors.test.mjs` 时序用例），不能只相信每个实例刚保存时的状态。
+- 文本标签关闭同样必须检查 `flushSave` 返回值及最终 dirty/saving；失败仅提示原有重试入口并保留标签。`PlainTextEditor.flushSave` 不得吞掉 `save()` 的 false，也不能在保存期间新增输入后报全已保存。

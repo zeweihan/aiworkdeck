@@ -316,7 +316,12 @@ export const fileOpenTabsMethods = {
       else if (file && this.isPlainTextFile(file)) {
         const inst = (this._plainTextRefs || {})[pane]
         if (inst && inst.file && inst.file.id === fileId && (inst.dirty || inst.saving)) {
-          try { await inst.flushSave() } catch (e) { console.warn('[ProjectOverview] close flush-save (text) failed:', e) }
+          let saved = false
+          try { saved = (await inst.flushSave()) !== false && !inst.dirty && !inst.saving } catch (e) { console.warn('[ProjectOverview] close flush-save (text) failed:', e) }
+          if (!saved) {
+            uni.showToast({ title: this.$t('editor.plainText.saveFailedRetry'), icon: 'none' })
+            return
+          }
         }
         idx = list.findIndex(f => f.id === fileId)
         if (idx === -1) return

@@ -107,9 +107,10 @@ function makeCloseVm(confirm) {
   const s = readFileSync(new URL('../../src/pages/project-overview/fileOpenTabs.js', import.meta.url), 'utf8')
     .replace(/^\s*import[\s\S]*?from\s*'[^']*'\s*$/gm, '')
     .replace('export const fileOpenTabsMethods = {', 'return {')
-  const modals = []
+  const modals = [], toasts = []
   const methods = new Function('uni', 'activityTracker', s)({
     showModal: opts => { modals.push(opts); opts.success({ confirm }) },
+    showToast: opts => toasts.push(opts),
   }, { stopActivity() {} })
   let flushed = 0, discarded = 0
   const inst = { ready: true, isError: true, dirty: true, file: { id: 7 },
@@ -121,7 +122,7 @@ function makeCloseVm(confirm) {
     isBrowserTab: () => false, $t: k => k, lastActiveIdsByMode: { left: {} },
     saveActiveIdsByMode() {},
   }
-  return { vm, close: methods.closeFile.bind(vm), modals,
+  return { vm, close: methods.closeFile.bind(vm), modals, toasts,
     counts: () => ({ flushed, discarded }) }
 }
 
@@ -157,3 +158,22 @@ test('关闭等待期间继续输入：保留标签后新改动必须重新进�
   assert.equal(uploads, 2)
   assert.equal(vm.dirty, false)
 })
+
+for (const outcome of ['false', 'dirty', 'saving', 'throws', 'saved']) {
+  test(`关闭文本标签 ${outcome}：未保存时保留正文并提示重试`, async () => {
+    const { vm, close, toasts } = makeCloseVm(false)
+    const inst = vm._libreRefs['left:7']
+    vm.useLibreEditor = () => false
+    vm.isPlainTextFile = () => true
+    vm._plainTextRefs = { left: inst }
+    inst.flushSave = async () => {
+      if (outcome === 'throws') throw new Error('offline')
+      if (outcome === 'saved' || outcome === 'saving') inst.dirty = false
+      if (outcome === 'saving') inst.saving = true
+      return outcome === 'false' ? false : undefined
+    }
+    await close(7, 'left')
+    assert.equal(vm.leftFiles.length, outcome === 'saved' ? 0 : 1)
+    assert.equal(toasts.length, outcome === 'saved' ? 0 : 1)
+  })
+}
