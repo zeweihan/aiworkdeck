@@ -906,6 +906,15 @@ export function packInstall(packId) {
   });
 }
 
+// 追新（仅管理员）：后端同步查一次 registry，有新版才开始异步下载
+// 返回 {upgrading: bool, latestVersion}；upgrading=true 时前端照安装那样轮询 packStatus
+export function packUpgrade(packId) {
+  return request({
+    url: `/api/packs/${encodeURIComponent(packId)}/upgrade`,
+    method: 'POST'
+  });
+}
+
 // 卸载（仅管理员）：删除本机已下载的资源包目录
 export function packUninstall(packId) {
   return request({

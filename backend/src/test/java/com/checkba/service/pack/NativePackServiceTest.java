@@ -1,5 +1,7 @@
 package com.checkba.service.pack;
 
+import com.checkba.service.ai.skill.SkillDefinition;
+import com.checkba.service.ai.skill.SkillRegistry;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
@@ -591,6 +593,212 @@ class NativePackServiceTest {
         assertTrue(primary.requests.isEmpty());
     }
 
+    // ==================== 版本追新（dev-board#499） ====================
+
+    @Test
+    @DisplayName("registry 有新版时换上新版，旧版本目录保留一份供回滚")
+    void upgradeInstallsNewerVersion() throws Exception {
+        byte[] v1 = tarGzWithContents(Map.of("cli.py", "old".getBytes(StandardCharsets.UTF_8)));
+        publishVersion(primary, "1.0.0", v1);
+        NativePackService svc = service(publicKeyPem, primary.baseUrl());
+        assertEquals("1.0.0", svc.install(PACK_ID));
+
+        byte[] v2 = tarGzWithContents(Map.of("cli.py", "new".getBytes(StandardCharsets.UTF_8)));
+        publishVersion(primary, "1.1.0", v2);
+
+        assertEquals(java.util.Optional.of("1.1.0"), svc.upgradeIfNewer(PACK_ID));
+        assertEquals("new", Files.readString(svc.componentDir(PACK_ID, "litviz").orElseThrow().resolve("cli.py")));
+        assertEquals("1.1.0", svc.status(PACK_ID).getInstalledVersion());
+        assertEquals(NativePackService.STATE_READY, svc.status(PACK_ID).getState());
+        // 上一版留着（回滚用）——自动追新不该让用户手上一点退路都没有
+        assertTrue(Files.isDirectory(packsRoot().resolve(PACK_ID).resolve("1.0.0")),
+                "上一版应保留一份供回滚");
+    }
+
+    @Test
+    @DisplayName("已是最新时一个字节都不下，指针不动")
+    void upgradeIsNoOpWhenAlreadyLatest() throws Exception {
+        byte[] v1 = tarGzWithContents(Map.of("cli.py", "old".getBytes(StandardCharsets.UTF_8)));
+        publishVersion(primary, "1.0.0", v1);
+        NativePackService svc = service(publicKeyPem, primary.baseUrl());
+        svc.install(PACK_ID);
+        long before = primary.requests.stream().filter(r -> r.path().endsWith(".tar.gz")).count();
+
+        assertTrue(svc.upgradeIfNewer(PACK_ID).isEmpty());
+
+        assertEquals(before, primary.requests.stream().filter(r -> r.path().endsWith(".tar.gz")).count());
+        assertEquals("1.0.0", svc.status(PACK_ID).getInstalledVersion());
+    }
+
+    @Test
+    @DisplayName("新版下载失败时保持旧版本可用，指针不切")
+    void upgradeKeepsOldVersionWhenDownloadFails() throws Exception {
+        byte[] v1 = tarGzWithContents(Map.of("cli.py", "old".getBytes(StandardCharsets.UTF_8)));
+        publishVersion(primary, "1.0.0", v1);
+        NativePackService svc = service(publicKeyPem, primary.baseUrl());
+        svc.install(PACK_ID);
+
+        // 新版 manifest 上架了，压缩包却拉不到（镜像只同步了一半 / 网络中断）
+        byte[] v2 = tarGzWithContents(Map.of("cli.py", "new".getBytes(StandardCharsets.UTF_8)));
+        publishVersion(primary, "1.1.0", v2);
+        primary.files.remove("/" + PACK_ID + "/1.1.0/litviz.tar.gz");
+
+        assertThrows(IllegalStateException.class, () -> svc.upgradeIfNewer(PACK_ID));
+
+        assertTrue(svc.isReady(PACK_ID), "升级失败不该把本机现有版本弄没");
+        assertEquals("old", Files.readString(svc.componentDir(PACK_ID, "litviz").orElseThrow().resolve("cli.py")));
+        assertEquals("1.0.0", readCurrentVersion());
+    }
+
+    @Test
+    @DisplayName("新版 manifest 签名不符时中止，指针仍指向旧版本")
+    void upgradeRefusesTamperedManifest() throws Exception {
+        byte[] v1 = tarGzWithContents(Map.of("cli.py", "old".getBytes(StandardCharsets.UTF_8)));
+        publishVersion(primary, "1.0.0", v1);
+        NativePackService svc = service(publicKeyPem, primary.baseUrl());
+        svc.install(PACK_ID);
+
+        byte[] v2 = tarGzWithContents(Map.of("cli.py", "evil".getBytes(StandardCharsets.UTF_8)));
+        List<Map<String, Object>> components = List.of(
+                component("litviz", List.of("*"), "litviz.tar.gz", v2, "litviz"));
+        publishManifest(primary, "1.1.0", components, false, "0.1.0", 1, 1); // 签名不匹配
+        primary.files.put("/" + PACK_ID + "/1.1.0/litviz.tar.gz", v2);
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> svc.upgradeIfNewer(PACK_ID));
+        assertTrue(e.getMessage().contains("签名") || e.getMessage().contains("signature"), e.getMessage());
+        assertEquals("1.0.0", readCurrentVersion());
+        assertEquals("old", Files.readString(svc.componentDir(PACK_ID, "litviz").orElseThrow().resolve("cli.py")));
+        // 一个字节都不该从这个版本目录下过
+        assertTrue(primary.requests.stream().noneMatch(r -> r.path().startsWith("/" + PACK_ID + "/1.1.0/")));
+    }
+
+    @Test
+    @DisplayName("连升两版后本地只留 current + 上一版")
+    void upgradeKeepsAtMostOnePreviousVersion() throws Exception {
+        NativePackService svc = service(publicKeyPem, primary.baseUrl());
+        publishVersion(primary, "1.0.0", tarGzWithContents(Map.of("cli.py", "v1".getBytes(StandardCharsets.UTF_8))));
+        svc.install(PACK_ID);
+        publishVersion(primary, "1.1.0", tarGzWithContents(Map.of("cli.py", "v2".getBytes(StandardCharsets.UTF_8))));
+        svc.upgradeIfNewer(PACK_ID);
+        publishVersion(primary, "1.2.0", tarGzWithContents(Map.of("cli.py", "v3".getBytes(StandardCharsets.UTF_8))));
+        svc.upgradeIfNewer(PACK_ID);
+
+        Path dir = packsRoot().resolve(PACK_ID);
+        assertTrue(Files.isDirectory(dir.resolve("1.2.0")));
+        assertTrue(Files.isDirectory(dir.resolve("1.1.0")), "上一版保留");
+        assertFalse(Files.exists(dir.resolve("1.0.0")), "更早的版本应被清掉，不能无限堆积");
+    }
+
+    @Test
+    @DisplayName("updateAvailable / knownLatestVersion 不发网络请求，只读最近一次拉到的快照")
+    void updateAvailableReadsCachedSnapshotOnly() throws Exception {
+        byte[] v1 = tarGzWithContents(Map.of("cli.py", "old".getBytes(StandardCharsets.UTF_8)));
+        publishVersion(primary, "1.0.0", v1);
+        NativePackService svc = service(publicKeyPem, primary.baseUrl());
+        svc.install(PACK_ID);
+        assertEquals("1.0.0", svc.knownLatestVersion(PACK_ID));
+        assertFalse(svc.updateAvailable(PACK_ID));
+
+        publishVersion(primary, "1.1.0", tarGzWithContents(Map.of("cli.py", "new".getBytes(StandardCharsets.UTF_8))));
+        int requestsBefore = primary.requests.size();
+        // 没人去拉过新 manifest：快照还停在 1.0.0，且这两个查询自己不许发请求
+        assertFalse(svc.updateAvailable(PACK_ID));
+        assertEquals(requestsBefore, primary.requests.size());
+
+        assertEquals(java.util.Optional.of("1.1.0"), svc.checkUpdate(PACK_ID));
+        assertTrue(svc.updateAvailable(PACK_ID));
+        svc.upgradeIfNewer(PACK_ID);
+        assertFalse(svc.updateAvailable(PACK_ID), "换上新版后不该继续提示有更新");
+    }
+
+    @Test
+    @DisplayName("没装过的 pack 不参与追新（checkUpdate 直接 empty，不打网络）")
+    void checkUpdateSkipsPacksThatAreNotInstalled() throws Exception {
+        publishVersion(primary, "1.0.0", tarGzWithContents(Map.of("cli.py", "x".getBytes(StandardCharsets.UTF_8))));
+        NativePackService svc = service(publicKeyPem, primary.baseUrl());
+        assertTrue(svc.checkUpdate(PACK_ID).isEmpty());
+        assertTrue(primary.requests.isEmpty());
+    }
+
+    // ---- PackUpdater（调度层） ----
+
+    @Test
+    @DisplayName("PackUpdater：已装且 skill 启用的 pack 会被追新")
+    void updaterUpgradesEnabledPack() throws Exception {
+        publishVersion(primary, "1.0.0", tarGzWithContents(Map.of("cli.py", "old".getBytes(StandardCharsets.UTF_8))));
+        PackProperties props = props(primary.baseUrl());
+        NativePackService svc = new TestPackService(props, publicKeyPem, "0.21.0");
+        svc.install(PACK_ID);
+        publishVersion(primary, "1.1.0", tarGzWithContents(Map.of("cli.py", "new".getBytes(StandardCharsets.UTF_8))));
+
+        PackUpdater updater = new PackUpdater(props, svc, skillRegistry(PACK_ID, true));
+        assertEquals(List.of(PACK_ID), updater.checkAndUpgrade());
+        assertEquals("new", Files.readString(svc.componentDir(PACK_ID, "litviz").orElseThrow().resolve("cli.py")));
+    }
+
+    @Test
+    @DisplayName("PackUpdater：ai.packs.auto-upgrade=false 时一次都不查")
+    void updaterDoesNothingWhenSwitchedOff() throws Exception {
+        publishVersion(primary, "1.0.0", tarGzWithContents(Map.of("cli.py", "old".getBytes(StandardCharsets.UTF_8))));
+        PackProperties props = props(primary.baseUrl());
+        NativePackService svc = new TestPackService(props, publicKeyPem, "0.21.0");
+        svc.install(PACK_ID);
+        publishVersion(primary, "1.1.0", tarGzWithContents(Map.of("cli.py", "new".getBytes(StandardCharsets.UTF_8))));
+
+        props.setAutoUpgrade(false);
+        int before = primary.requests.size();
+        PackUpdater updater = new PackUpdater(props, svc, skillRegistry(PACK_ID, true));
+        assertEquals(List.of(), updater.checkAndUpgrade());
+        assertEquals(before, primary.requests.size(), "关掉开关后不该有任何请求");
+        assertEquals("old", Files.readString(svc.componentDir(PACK_ID, "litviz").orElseThrow().resolve("cli.py")));
+    }
+
+    @Test
+    @DisplayName("PackUpdater：skill 被停用的 pack 不追新，不为关掉的功能耗流量")
+    void updaterSkipsDisabledSkillPack() throws Exception {
+        publishVersion(primary, "1.0.0", tarGzWithContents(Map.of("cli.py", "old".getBytes(StandardCharsets.UTF_8))));
+        PackProperties props = props(primary.baseUrl());
+        NativePackService svc = new TestPackService(props, publicKeyPem, "0.21.0");
+        svc.install(PACK_ID);
+        publishVersion(primary, "1.1.0", tarGzWithContents(Map.of("cli.py", "new".getBytes(StandardCharsets.UTF_8))));
+
+        PackUpdater updater = new PackUpdater(props, svc, skillRegistry(PACK_ID, false));
+        assertEquals(List.of(), updater.checkAndUpgrade());
+        assertEquals("old", Files.readString(svc.componentDir(PACK_ID, "litviz").orElseThrow().resolve("cli.py")));
+    }
+
+    @Test
+    @DisplayName("PackUpdater：追新失败只记 WARN，保持旧版本继续可用")
+    void updaterSurvivesFailure() throws Exception {
+        publishVersion(primary, "1.0.0", tarGzWithContents(Map.of("cli.py", "old".getBytes(StandardCharsets.UTF_8))));
+        PackProperties props = props(primary.baseUrl());
+        NativePackService svc = new TestPackService(props, publicKeyPem, "0.21.0");
+        svc.install(PACK_ID);
+        publishVersion(primary, "1.1.0", tarGzWithContents(Map.of("cli.py", "new".getBytes(StandardCharsets.UTF_8))));
+        primary.files.remove("/" + PACK_ID + "/1.1.0/litviz.tar.gz"); // 新版压缩包拉不到
+
+        PackUpdater updater = new PackUpdater(props, svc, skillRegistry(PACK_ID, true));
+        assertEquals(List.of(), updater.checkAndUpgrade()); // 不抛，只是没升上去
+        assertTrue(svc.isReady(PACK_ID));
+        assertEquals("1.0.0", readCurrentVersion());
+    }
+
+    /** 一个只回答「有没有声明 requires_pack、启没启用」的 SkillRegistry 替身 */
+    private SkillRegistry skillRegistry(String packId, boolean enabled) {
+        SkillDefinition def = new SkillDefinition();
+        def.setId("litigation-visual-redraw");
+        def.setRequiresPack(packId);
+        SkillRegistry registry = org.mockito.Mockito.mock(SkillRegistry.class);
+        org.mockito.Mockito.when(registry.getSkills()).thenReturn(List.of(def));
+        org.mockito.Mockito.when(registry.isEnabled(def.getId())).thenReturn(enabled);
+        return registry;
+    }
+
+    private String readCurrentVersion() throws IOException {
+        String json = Files.readString(packsRoot().resolve(PACK_ID).resolve("current.json"), StandardCharsets.UTF_8);
+        return cn.hutool.json.JSONUtil.parseObj(json).getStr("version");
+    }
+
     // ==================== 脚手架 ====================
 
     private static final String CONTENTS = "contents.sha256";
@@ -632,6 +840,17 @@ class NativePackServiceTest {
         mirror.files.put("/" + PACK_ID + "/" + VERSION + "/litviz.tar.gz", archive);
     }
 
+    /**
+     * 发布指定版本（manifest.json 指针指向它 + 该版本目录下的压缩包）。
+     * 追新用例靠它把镜像从 1.0.0 换成 1.1.0——旧版本的压缩包留在原位，与真实镜像一致。
+     */
+    private void publishVersion(StubMirror mirror, String version, byte[] archive) throws Exception {
+        List<Map<String, Object>> components = List.of(
+                component("litviz", List.of("*"), "litviz.tar.gz", archive, "litviz"));
+        publishManifest(mirror, version, components, true, "0.1.0", 1, 1);
+        mirror.files.put("/" + PACK_ID + "/" + version + "/litviz.tar.gz", archive);
+    }
+
     private Map<String, Object> component(String name, List<String> platforms, String archiveName,
                                           byte[] archive, String unpackDir) {
         return component(name, platforms, archiveName, archive, unpackDir, archive.length);
@@ -653,10 +872,16 @@ class NativePackServiceTest {
     private void publishManifest(StubMirror mirror, List<Map<String, Object>> components,
                                  boolean validSignature, String minAppVersion,
                                  int engineApi, int schema) throws Exception {
+        publishManifest(mirror, VERSION, components, validSignature, minAppVersion, engineApi, schema);
+    }
+
+    private void publishManifest(StubMirror mirror, String version, List<Map<String, Object>> components,
+                                 boolean validSignature, String minAppVersion,
+                                 int engineApi, int schema) throws Exception {
         StringBuilder sb = new StringBuilder();
         sb.append("{\"schema\":").append(schema)
                 .append(",\"id\":\"").append(PACK_ID).append('"')
-                .append(",\"version\":\"").append(VERSION).append('"')
+                .append(",\"version\":\"").append(version).append('"')
                 .append(",\"publishedAt\":\"2026-08-20T00:00:00Z\"")
                 .append(",\"minAppVersion\":\"").append(minAppVersion).append('"')
                 .append(",\"engineApi\":").append(engineApi)

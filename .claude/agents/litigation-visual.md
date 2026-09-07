@@ -84,9 +84,10 @@ JSON 对不对，不取决于模型对像素多聪明——这是上游的核心
 **打包与分发（2026-08 起转原生资源包，规范 docs/NATIVE_PACK_DISTRIBUTION.md）**
 - litviz / graphviz / drawio 三类重资源改走 native pack 运行时下载
   （`~/.aiworkdeck/packs/litigation-visual/`），skill.yml 声明
-  `requires_pack: litigation-visual`。资源解析优先级：显式 env/config →
-  随包内置（若在场）→ dev 目录爬升 → pack current 目录；老版本随包资源优先，
-  不强迫重下。extraResources 摘除在 pack 上架双镜像验证后单独出 PR（随 v0.21.0）。
+  `requires_pack: litigation-visual`。资源解析优先级（2026-09 起）：显式 config
+  `litviz.dir` → env `LITVIZ_DIR`（打包态的随包内置就走这一档）→ **pack current 目录**
+  → dev 目录爬升。老版本随包资源仍优先于 pack，不强迫重下。
+  extraResources 摘除在 pack 上架双镜像验证后单独出 PR（随 v0.21.0）。
 - `desktop/scripts/prepare-graphviz.js` — 烙最小 graphviz（约 4MB）；现服务于
   pack 构建（`desktop/scripts/build-pack.js`，workflow `pack-release.yml`）。
 - `desktop/package.json` extraResources — 摘除前仍含 `graphviz` / `skills` /
@@ -215,6 +216,13 @@ Python 下限 **3.11**（与打包运行时一致）。引擎原本要 3.12+，�
   兄弟目录硬引用，见上文「关键文件」），第三方替换引擎只换 `render.py` 是跑不起来的；
   槽的可用性判据只查 entry 目录下有没有 `cli.py`，查不出这一类缺失。
 
+- **解析顺序 2026-09 变过：pack 现在压过「dev 目录爬升」**（dev-board#499，
+  `LitigationVisualService.resolveLitvizDir`）。理由是 pack 有了自动追新，让爬升压过
+  一个签过名、有版本号、会自更新的资源包是错的（打包态 cwd 是用户数据目录，一个
+  `~/litviz` 就能无声盖掉刚追新好的包）。**代价直接落在开发机上**：本机装了 pack 之后，
+  仓库里的 `litviz/` 不再自动生效，改引擎源码调试必须显式设 `LITVIZ_DIR` 或
+  `litviz.dir`（这两档仍是最高优先级）。改回旧顺序会让
+  `LitigationVisualServiceTest#packDirWinsOverCwdAscent` 立刻转红。
 - **应用更新不等于 native pack 更新**（dev-board#477，v0.35.0 实测）：本机仍装着
   2026-08-20 的 1.0.1，只有旧 `engine/` 和四个 CLI 子命令，没有 `timeline`，所有材料
   都在 argparse 处 exit 2。发布新增引擎能力必须同步发 `pack-release.yml` 并签名上架。
@@ -222,6 +230,10 @@ Python 下限 **3.11**（与打包运行时一致）。引擎原本要 3.12+，�
   `available` / `timelineAvailable` / `timelineReason`；旧包不能禁掉仍可用的语义地图回退。
   面板可主动更新 ready 的旧包，安装完成后重查能力；引擎无 JSON 的错误必须带退出码与
   有界 stderr 摘要，工具层不能一见 error 字段非空就丢掉 stderr。
+  **2026-09（dev-board#499）起这条有了系统性兜底**：`service/pack/PackUpdater` 在启动后
+  45s + 每 24h 对已装且启用的 pack 自动追新（开关 `ai.packs.auto-upgrade`，默认开），
+  广场详情页另有「有新版本 x.y.z / 立即升级」。**但发布端的义务没变**：新增引擎能力
+  仍必须发 `pack-release.yml` 并签名上架双镜像，客户端追新只能追到镜像上真有的版本。
 
 - **GVBINDIR 必须运行时显式设**。graphviz 把插件目录**编译期焊死**在 libgvc 里，
   指向构建机的安装路径。构建机上那个路径真的存在，所以自检会假绿；用户机器上

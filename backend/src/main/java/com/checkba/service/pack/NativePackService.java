@@ -125,6 +125,17 @@ public class NativePackService {
     private final Map<String, CachedManifest> manifestCache = new ConcurrentHashMap<>();
 
     /**
+     * 最近一次成功拉到的 registry 版本号（packId -> version）。
+     *
+     * <p>存在的理由：{@code GET /api/packs/list} 要回答「有没有新版」，但那个端点不能发网络请求
+     * ——镜像不可达时 20s 超时 × 两个源会把整个广场列表拖死。所以列表只读这份内存快照，
+     * 由真正发过请求的路径（{@link #fetchAndVerifyManifest}：安装、{@code /info}、
+     * {@link PackUpdater} 每天那次检查）顺手写入；没人拉过就是 null = 「未知」，
+     * 前端据此不显示任何升级提示（不显示 ≠ 声称已是最新）。
+     */
+    private final Map<String, String> latestVersions = new ConcurrentHashMap<>();
+
+    /**
      * 按 packId 维度的互斥，取代此前 install()/uninstall() 共用的同一把 {@code synchronized(this)}
      * 服务级对象锁。旧写法下卸载一个已装好的 pack B 会被另一个正在下载的、完全无关的 pack A
      * 卡住——install() 一次下载最长可以跑到 3 次重试 × 10 分钟超时，uninstall() 的请求线程
@@ -331,6 +342,87 @@ public class NativePackService {
             total += c.size();
         }
         return new PackInfo(m.version(), total);
+    }
+
+    /**
+     * 最近一次成功拉到的 registry 版本号；从没拉过返回 null（= 未知，不是「已最新」）。
+     * <b>不发网络请求</b>，见 {@link #latestVersions}。
+     */
+    public String knownLatestVersion(String packId) {
+        return latestVersions.get(packId);
+    }
+
+    /**
+     * 本机装的这版是不是落后于最近一次拉到的 registry 版本。<b>不发网络请求</b>：
+     * 未装、被封禁、没拉到过 registry 版本，一律返回 false。
+     */
+    public boolean updateAvailable(String packId) {
+        if (!isReady(packId)) return false;
+        String latest = latestVersions.get(packId);
+        JSONObject current = readCurrent(packId);
+        String installed = current == null ? null : current.getStr("version");
+        if (latest == null || installed == null) return false;
+        return compareSemver(latest, installed) > 0;
+    }
+
+    /**
+     * 拉一次 registry 看有没有比本机更新的版本（发网络请求 + 验签）。
+     *
+     * <p>返回新版本号，或 empty（未安装 / 已是最新 / 本机版本更高）。
+     * 清单不可达、签名不符一律抛异常——「查不到」与「已最新」是两件事，
+     * 静默当成后者会让升级链路在镜像挂掉时无声退化成永不升级。
+     */
+    public Optional<String> checkUpdate(String packId) {
+        requireValidId(packId);
+        if (!isReady(packId)) return Optional.empty();
+        JSONObject current = readCurrent(packId);
+        String installed = current == null ? null : current.getStr("version");
+        Manifest m = fetchAndVerifyManifest(packId);
+        if (installed == null || compareSemver(m.version(), installed) > 0) {
+            return Optional.of(m.version());
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * 有新版就跑一遍完整安装事务把它换上（规范 §4.2 的下载 → sha256 → 验签 → 解包
+     * → 原子切指针，一步不少），否则什么都不做。
+     *
+     * <p>并发保护完全复用 {@link #install}：同一个 packId 上与用户手动安装、卸载、
+     * 封禁同步共用 {@link #packLock} 那把锁。失败时旧版本原封不动——指针要到新版本
+     * 全部落盘并复核通过之后才切，中途任何一步抛异常都不会碰 {@code current.json}。
+     *
+     * @return 升级到的新版本号；已是最新 / 未安装时 empty
+     */
+    public Optional<String> upgradeIfNewer(String packId) {
+        requireValidId(packId);
+        requireEnabled();
+        Optional<String> newer = checkUpdate(packId);
+        if (newer.isEmpty()) return Optional.empty();
+        String from = status(packId).getInstalledVersion();
+        String to = install(packId);
+        log.info("Native pack {} upgraded {} -> {}", packId, from, to);
+        return Optional.of(to);
+    }
+
+    /**
+     * 手动「立即升级」的入口：<b>同步</b>问一次 registry 有没有新版（一个几 KB 的
+     * manifest 请求），有就交给 {@link #installAsync} 异步下载，前端照常轮询 status。
+     *
+     * <p>为什么检查这一步是同步的：异步的话「已经是最新」与「清单拉不到」这两种情况
+     * 都表现为「状态一直不变」，前端只能靠猜和超时；同步返回则能当场给出确切答复，
+     * 失败（镜像不可达 / 签名不符）也直接以异常回到请求线程，由 controller 转成
+     * 一句人话——而不是把一个装得好好的包在界面上标成 failed。
+     *
+     * @return 开始下载的新版本号；已是最新 / 未安装时 empty
+     */
+    public Optional<String> startUpgrade(String packId) {
+        requireValidId(packId);
+        requireEnabled();
+        Optional<String> newer = checkUpdate(packId);
+        if (newer.isEmpty()) return Optional.empty();
+        installAsync(packId);
+        return newer;
     }
 
     // ==================== 安装 ====================
@@ -703,6 +795,7 @@ public class NativePackService {
                 throw new IllegalStateException(LangText.of(
                         "清单里的 id 与请求不符: ", "Manifest id does not match the request: ") + m.id());
             }
+            latestVersions.put(packId, m.version());
             return m;
         }
         throw new IllegalStateException(LangText.of("资源包清单不可达: ", "Pack manifest unreachable: ")
@@ -1036,15 +1129,32 @@ public class NativePackService {
         }
     }
 
-    /** 只保留 current 一版：draw.io 级别的体积不值得本地存两份（规范 §4.2-5） */
+    /**
+     * 保留 current 这版 + <b>最多一个</b>装完整的旧版本（规范 §4.2-5）。
+     *
+     * <p>原实现只留 current 一版。加了自动升级（{@link PackUpdater}）之后，用户不再是
+     * 「自己按的安装」，而是某天开机后包就换了——新版引擎出问题时手上得有东西可退，
+     * 所以留一份上一版（多占一份体积，是自动升级这件事该付的代价）。留的是「除 current
+     * 外版本号最高、且带 {@code .pack-complete} 的那个目录」：没有完成标记的是半成品，
+     * 留着也退不回去。
+     */
     private void pruneOtherVersions(String packId, String keep) {
         Path dir = packsRoot().resolve(packId);
         if (!Files.isDirectory(dir)) return;
         try (var stream = Files.list(dir)) {
-            stream.filter(Files::isDirectory)
+            List<Path> others = stream.filter(Files::isDirectory)
                     .filter(p -> !p.getFileName().toString().equals(keep))
-                    .sorted(Comparator.comparing(Path::toString))
-                    .forEach(p -> FileUtil.del(p.toFile()));
+                    .sorted(Comparator.comparing((Path p) -> p.getFileName().toString(),
+                            NativePackService::compareSemver).reversed())
+                    .toList();
+            boolean rollbackKept = false;
+            for (Path p : others) {
+                if (!rollbackKept && Files.isRegularFile(p.resolve(COMPLETE_MARKER))) {
+                    rollbackKept = true;
+                    continue;
+                }
+                FileUtil.del(p.toFile());
+            }
         } catch (IOException e) {
             log.warn("清理旧版本目录失败: {}", e.getMessage());
         }
