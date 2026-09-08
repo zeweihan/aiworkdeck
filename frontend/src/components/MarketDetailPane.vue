@@ -77,10 +77,20 @@
                 <view v-else-if="packId && !packReady" class="mdp-btn primary" :class="{ busy: packBusy }" @tap="doInstallPack">
                   <text>{{ packBusy ? $t('market.installingEllipsis') : packInstallLabel }}</text>
                 </view>
-                <view v-else class="mdp-switch-row">
-                  <text class="mdp-switch-label">{{ installedInfo.enabled ? $t('market.enabledTag') : $t('market.disabledTag') }}</text>
-                  <AwdSwitch :checked="!!installedInfo.enabled" @change="onPanelSkillToggle" />
-                </view>
+                <template v-else>
+                  <view class="mdp-switch-row">
+                    <text class="mdp-switch-label">{{ installedInfo.enabled ? $t('market.enabledTag') : $t('market.disabledTag') }}</text>
+                    <AwdSwitch :checked="!!installedInfo.enabled" @change="onPanelSkillToggle" />
+                  </view>
+                  <!-- 资源包追新（dev-board#499）：应用更新不等于资源包更新，
+                       后台每天自动追一次，这里给的是手动的那条路 -->
+                  <template v-if="packUpdateAvailable">
+                    <text class="mdp-pack-update">{{ $t('market.packUpdateAvailable', { version: packLatestVersion }) }}</text>
+                    <view class="mdp-btn primary" :class="{ busy: packBusy }" @tap="doUpgradePack">
+                      <text>{{ packBusy ? $t('market.packUpgradingEllipsis') : $t('market.packUpgradeBtn') }}</text>
+                    </view>
+                  </template>
+                </template>
               </template>
               <AwdSelect
                 v-else-if="installedInfo && !installedInfo.sourcePluginId"
@@ -249,7 +259,7 @@
 // 插件广场详情 tab（VS Code 扩展详情页形态）。spec = { kind: 'skill'|'plugin', id, name }
 // 由左栏 MarketSidebarPanel 点行打开。自行拉取市场与已安装两份数据合成视图，
 // 装/卸/启停后通过 uni.$emit('awd:market-changed') 通知左栏刷新。
-import { getPlugins, getSkills, getSkillMarket, getPluginMarket, installMarketSkill, uninstallMarketSkill, installMarketPlugin, uninstallMarketPlugin, setPluginEnabled, setSkillActivation, packStatus, packInfo, packInstall, packUninstall, getPluginSettings, savePluginSettings, getContributedStyleProfiles, selectContributedStyleProfile } from '@/services/api.js'
+import { getPlugins, getSkills, getSkillMarket, getPluginMarket, installMarketSkill, uninstallMarketSkill, installMarketPlugin, uninstallMarketPlugin, setPluginEnabled, setSkillActivation, packStatus, packInfo, packInstall, packUpgrade, packUninstall, getPluginSettings, savePluginSettings, getContributedStyleProfiles, selectContributedStyleProfile } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
 import { isPanelSkill, buildVoiceGroupSkill } from '@/config/leftSidebarPlugins.js'
 import { formatPrice, isPaid, paidState, priceCentsOf, priceLabel, purchaseUrl } from '@/utils/marketPricing.js'
@@ -284,6 +294,22 @@ const PERMISSION_LABELS = {
   file_write: t('market.permFileWrite'),
   network: t('market.permNetwork'),
   editor: t('market.permEditor'),
+}
+
+/**
+ * 三段版本号比较（与后端 NativePackService.compareSemver 同口径）：
+ * 只比 major.minor.patch，段里的非数字后缀截掉。用来判「资源包有没有新版」。
+ */
+function compareVersions(a, b) {
+  const parse = (v) => String(v || '0').split('.')
+  const pa = parse(a)
+  const pb = parse(b)
+  for (let i = 0; i < 3; i++) {
+    const na = parseInt(pa[i], 10) || 0
+    const nb = parseInt(pb[i], 10) || 0
+    if (na !== nb) return na > nb ? 1 : -1
+  }
+  return 0
 }
 
 const ACTIVATION_MODES = ['auto', 'manual', 'disabled']
@@ -446,6 +472,22 @@ export default {
     packRevokedState() {
       return !!this.packStatusInfo && this.packStatusInfo.state === 'revoked'
     },
+    /** registry 上的最新版本号：优先用懒加载的 packInfo（实时拉的），退回 status 里的内存快照 */
+    packLatestVersion() {
+      return (this.packMeta && this.packMeta.latestVersion)
+        || (this.packStatusInfo && this.packStatusInfo.latestVersion)
+        || ''
+    },
+    /**
+     * 本机装的这版落后于 registry。两个版本号都拿到才判——拿不到就什么都不显示
+     * （「不知道」不等于「已是最新」，更不等于「有更新」）。
+     */
+    packUpdateAvailable() {
+      if (!this.packId || !this.packReady || this.packDownloading || this.packRevokedState) return false
+      const installed = this.packStatusInfo && this.packStatusInfo.installedVersion
+      if (!installed || !this.packLatestVersion) return false
+      return compareVersions(this.packLatestVersion, installed) > 0
+    },
     /** 资源包体积（MB，一位小数），来自懒加载的 packInfo 或已有的 status 快照；两边都没有就留空 */
     packSizeMB() {
       const bytes = (this.packMeta && this.packMeta.totalSize) || (this.packStatusInfo && this.packStatusInfo.bytesTotal) || 0
@@ -546,7 +588,8 @@ export default {
         if (state === 'downloading' || state === 'verifying' || state === 'installing') {
           this.packBusy = true
           this.startPackPoll()
-        } else if (!this.packReady && state !== 'revoked' && !this.packMeta) {
+        } else if (state !== 'revoked' && !this.packMeta) {
+          // 已就绪的包也拉：latestVersion 是「有没有新版」的唯一判据（dev-board#499）
           this.loadPackMetaLazy()
         }
       } else {
@@ -674,6 +717,29 @@ export default {
         this.packBusy = false
         console.error('安装资源包失败:', e)
         uni.showToast({ title: e?.message || this.$t('market.installFailedNeedAdmin'), icon: 'none' })
+      }
+    },
+    /**
+     * 手动追新。后端同步查一次 registry：真有新版才开始下载并回 upgrading:true，
+     * 这时才摆忙态并轮询；已是最新就直接告诉用户，不留一个空转的按钮。
+     */
+    async doUpgradePack() {
+      if (this.packBusy || !this.packId) return
+      this.packBusy = true
+      try {
+        const res = await packUpgrade(this.packId)
+        if (res && res.upgrading) {
+          await this.refreshPackStatus()
+          this.startPackPoll()
+        } else {
+          this.packBusy = false
+          if (res && res.latestVersion) this.packMeta = { ...(this.packMeta || {}), latestVersion: res.latestVersion }
+          uni.showToast({ title: this.$t('market.packAlreadyLatest'), icon: 'none' })
+        }
+      } catch (e) {
+        this.packBusy = false
+        console.error('资源包追新失败:', e)
+        uni.showToast({ title: e?.message || this.$t('market.packUpgradeFailed'), icon: 'none' })
       }
     },
     async doUninstallPack() {
@@ -1119,6 +1185,11 @@ export default {
 .mdp-pack-error {
   font-size: 12px;
   color: var(--awd-danger-text);
+}
+
+.mdp-pack-update {
+  font-size: 12px;
+  color: var(--awd-text-2);
 }
 
 .mdp-divider {

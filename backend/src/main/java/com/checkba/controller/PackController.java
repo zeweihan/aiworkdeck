@@ -30,6 +30,7 @@ import java.util.regex.Pattern;
  * - GET  /{id}/status       单个 pack 的状态（登录）
  * - GET  /{id}/info         最新版本与本平台下载体积（登录，manifest 缓存 5 分钟）
  * - POST /{id}/install      异步安装，幂等（admin）
+ * - POST /{id}/upgrade      异步追新，有新版才换（admin）
  * - POST /{id}/uninstall    卸载（admin）
  *
  * 鉴权模式与 SkillController 一致：X-Session-Id → userId → AdminAccessService
@@ -111,6 +112,31 @@ public class PackController {
         }
     }
 
+    /**
+     * 手动追新（规范 §5.1）：拉一次 registry，有新版才走完整安装事务换上。
+     * 与自动追新（{@code PackUpdater}）、手动安装共用同一把锁与同一条安装线程。
+     */
+    @PostMapping("/{id}/upgrade")
+    public ResponseEntity<Map<String, Object>> upgrade(
+            @PathVariable("id") String packId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        if (!isAdmin(sessionId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(error(LangText.of("仅管理员可操作", "Administrator permission required")));
+        }
+        try {
+            // 检查同步、下载异步：前端要当场分清「已是最新」与「开始下载了」，
+            // 拉不到清单也要当场拿到错误文案，而不是盯着一个不动的状态猜
+            java.util.Optional<String> started = packService.startUpgrade(packId);
+            Map<String, Object> result = ok();
+            result.put("upgrading", started.isPresent());
+            result.put("latestVersion", started.orElse(packService.knownLatestVersion(packId)));
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            return ResponseEntity.ok(error(e.getMessage()));
+        }
+    }
+
     @PostMapping("/{id}/uninstall")
     public ResponseEntity<Map<String, Object>> uninstall(
             @PathVariable("id") String packId,
@@ -148,6 +174,10 @@ public class PackController {
         m.put("bytesDownloaded", st.getBytesDownloaded());
         m.put("bytesTotal", st.getBytesTotal());
         m.put("error", st.getError());
+        // 追新提示。latestVersion 是内存快照（最近一次真发过请求的路径写的），拿不到就是 null
+        // ——列表端点绝不为它发网络请求：镜像不可达时 20s 超时 × 两个源会把整个广场拖死。
+        m.put("latestVersion", packService.knownLatestVersion(packId));
+        m.put("updateAvailable", packService.updateAvailable(packId));
         return m;
     }
 

@@ -72,9 +72,17 @@ description: 插件市场领域。任务涉及插件广场页、在线 Skill 广
 
 **规范：`docs/NATIVE_PACK_DISTRIBUTION.md`（第四种分发形态的权威定义）。**
 
-- 后端 `service/pack/NativePackService` + `controller/PackController`（/api/packs：list、{id}/status、{id}/info、{id}/install、{id}/uninstall）。签名沿用插件 registry 密钥对（`ai.plugins.registry-public-key`，未配置即拒装），但盖在 manifest **原始字节**上（旁挂 .sig），不走 canonical JSON。
+- 后端 `service/pack/NativePackService` + `controller/PackController`（/api/packs：list、{id}/status、{id}/info、{id}/install、{id}/upgrade、{id}/uninstall）。签名沿用插件 registry 密钥对（`ai.plugins.registry-public-key`，未配置即拒装），但盖在 manifest **原始字节**上（旁挂 .sig），不走 canonical JSON。
 - 下载**不经官网应用层**：镜像静态直出 `https://{www.aiworkdeck.com|workdeck.ai}/plugin-packs/<id>/…`（`ai.packs.base-urls`），断点续传（.part + Range）+ 压缩包哈希 + 包内 `contents.sha256` 逐文件复核 + 原子指针切换。
 - 前端：MarketSidebarPanel / MarketDetailPane 对 `packId` 非空且 `packReady:false` 的面板 skill 显示「需下载资源包」与字节级进度；LitigationVisualPanel 顶部有下载状态条。
+  已就绪且 registry 版本更高时，MarketDetailPane 多一行「有新版本 x.y.z」+「立即升级」（`packUpgrade`）。
+- **版本追新**（dev-board#499，规范 §5.1）：`service/pack/PackUpdater` 启动后 45s + 每 24h
+  对「已装好且未被封禁、且不是所有引用它的 skill 都被停用」的 pack 比对 registry 版本，
+  有新版就走完整安装事务换上（失败静默 WARN 保持旧版），开关 `ai.packs.auto-upgrade`（默认 true）。
+  **两个地雷**：① `latestVersion` / `updateAvailable` 是内存快照，list/status 端点
+  绝不为它发网络请求（镜像挂了会把广场列表拖死 20s×2），没人拉过就是 null=未知，
+  前端此时不显示任何升级提示；② 升级后本地保留 current + 上一版（回滚用），
+  与规范早期「只留一版」的写法不同，改 `pruneOtherVersions` 前先看 §4.2-5。
 - 三方 pack 提交/审核/签名在官网仓（`lib/packs-store.ts`、admin PackReview、`GET /api/registry/packs/revoked`），发布件出到 outbox 后由服务器侧脚本上架静态目录，新加坡镜像 SG 侧拉取。
 - pack 发布链：`.github/workflows/pack-release.yml`（tag `pack-<id>-v<ver>`）出未签名产物，`deploy/publish-pack.sh` 负责服务器侧签名（私钥不离开官网机）、双机上架与指针切换。
 

@@ -424,6 +424,9 @@ ai:
       - https://workdeck.ai/plugin-packs
     # 总开关：false 时安装、自动补下载、封禁同步全部旁路（离线部署形态用）
     enabled: true
+    # 自动追新：启动后延迟一次 + 每 24h 比对 registry 版本，有新版就自动换上
+    # （应用更新不等于资源包更新，见 docs/NATIVE_PACK_DISTRIBUTION.md §5.1）
+    auto-upgrade: true
     # 平台封禁表（形制同插件封禁表）；端点不可达时静默跳过
     revoked-url: https://www.aiworkdeck.com/api/registry/packs/revoked
 

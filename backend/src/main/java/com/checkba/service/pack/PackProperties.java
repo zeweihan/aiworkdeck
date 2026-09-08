@@ -34,6 +34,16 @@ public class PackProperties {
     private boolean enabled = true;
 
     /**
+     * 自动追新：启动后延迟一次 + 每 24h，对已装且启用的 pack 比对 registry 版本，
+     * 有新版就走一遍完整安装事务换上（见 {@link PackUpdater}）。
+     *
+     * <p>置 false 只关自动升级，手动 {@code POST /api/packs/{id}/upgrade} 与安装不受影响。
+     * 关掉它的代价写在 docs/NATIVE_PACK_DISTRIBUTION.md §5.1：应用更新不等于 pack 更新，
+     * 新引擎能力会一直缺席。
+     */
+    private boolean autoUpgrade = true;
+
+    /**
      * 平台封禁表地址（形制同插件封禁表，见规范 §8.4）。
      * 端点 404 / 不可达时静默跳过——官网未部署时不该刷错误日志。
      */
@@ -45,6 +55,8 @@ public class PackProperties {
     public void setBaseUrls(List<String> baseUrls) { this.baseUrls = baseUrls; }
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
+    public boolean isAutoUpgrade() { return autoUpgrade; }
+    public void setAutoUpgrade(boolean autoUpgrade) { this.autoUpgrade = autoUpgrade; }
     public String getRevokedUrl() { return revokedUrl; }
     public void setRevokedUrl(String revokedUrl) { this.revokedUrl = revokedUrl; }
 }

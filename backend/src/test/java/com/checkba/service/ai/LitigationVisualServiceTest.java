@@ -213,6 +213,41 @@ class LitigationVisualServiceTest {
                 "槽未选中时应退回 litviz.dir 配置");
     }
 
+    /**
+     * dev-board#499：pack 有了自动追新之后，「cwd 目录爬升」这一档必须让位——否则本机
+     * 恰好存在一个 {@code <cwd>/litviz} 或 {@code <cwd>/../litviz}（dev 态一定有；打包态
+     * 用户家目录里也可能有）就会把刚追新好的、签过名的资源包整个盖掉，而且毫无提示。
+     *
+     * <p>这条同时钉住另一半：{@code includePack=false}（isEngineAvailableWithoutPack）
+     * 的语义不变——它问的始终是「把 pack 拿掉还剩什么」，不受顺序调整影响。
+     */
+    @Test
+    @DisplayName("pack 目录优先于 cwd 爬升找到的 litviz（显式 litviz.dir / LITVIZ_DIR 仍最高）")
+    void packDirWinsOverCwdAscent(@org.junit.jupiter.api.io.TempDir Path tempDir) throws Exception {
+        LitigationVisualService fresh = new LitigationVisualService();
+        ReflectionTestUtils.setField(fresh, "configuredDir", "");
+        ReflectionTestUtils.setField(fresh, "configuredPython", "");
+        ReflectionTestUtils.setField(fresh, "configuredGraphvizDir", "");
+        assumeTrue(System.getenv("LITVIZ_DIR") == null, "跳过：环境里显式指定了 LITVIZ_DIR，那一档优先级更高");
+        // 竞争者必须真实存在，否则这条用例在「顺序被改回去」时会假绿
+        assumeTrue(fresh.isEngineAvailableWithoutPack(), "跳过：本机 cwd 爬升找不到 litviz，构造不出竞争场景");
+        Path cwdCandidate = fresh.runtime().litvizDir();
+
+        Path packDir = tempDir.resolve("pack-litviz");
+        Files.createDirectories(packDir);
+        Files.writeString(packDir.resolve("cli.py"), "# pack cli\n", StandardCharsets.UTF_8);
+        NativePackService packService = mock(NativePackService.class);
+        org.mockito.Mockito.when(packService.componentDir(LitigationVisualService.PACK_ID, "litviz"))
+                .thenReturn(java.util.Optional.of(packDir));
+        ReflectionTestUtils.setField(fresh, "packService", packService);
+        fresh.invalidate();
+
+        assertEquals(packDir, fresh.runtime().litvizDir(),
+                "装了 pack 时应优先用 pack 里的引擎，而不是 cwd 爬升找到的 " + cwdCandidate);
+        assertTrue(fresh.isEngineAvailableWithoutPack(),
+                "includePack=false 的语义不变：不看 pack，仍能靠 cwd 爬升找到引擎");
+    }
+
     // ==== 出图 ====
 
     @Test

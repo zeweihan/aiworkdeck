@@ -132,8 +132,9 @@ public class LitigationVisualService {
     }
 
     /**
-     * 不借助资源包时引擎是否可用（显式配置 / 随包内置 / dev 目录爬升三步）。
+     * 不借助资源包时引擎是否可用（显式配置 / 随包内置注入的 LITVIZ_DIR / dev 目录爬升三步）。
      * 供 packReady 判定复用——随包内置优先于 pack，老用户不该被逼着重下一遍。
+     * <b>语义与解析顺序调整无关</b>：这里问的始终是「把 pack 拿掉还剩什么」。
      */
     public boolean isEngineAvailableWithoutPack() {
         return resolveLitvizDir(false) != null;
@@ -160,11 +161,21 @@ public class LitigationVisualService {
     }
 
     /**
-     * litviz 目录的定位顺序：显式配置 → 宿主注入的环境变量 → 相对后端工作目录往上找。
+     * litviz 目录的定位顺序：<b>显式配置 → 宿主注入的环境变量 → 原生资源包 → 相对后端
+     * 工作目录往上找</b>。
      *
-     * <p>最后一条覆盖两种真实布局：dev 态后端 cwd 是 {@code backend/}，litviz 在
-     * {@code ../litviz}；打包态 cwd 是用户数据目录，靠 Electron 注入 LITVIZ_DIR，
-     * 走不到这一条。**末位是原生资源包**（规范 §5 的优先级：随包内置优先于 pack）。
+     * <p>前两档是「开发者/宿主显式指定」：{@code litviz.dir} 配置、{@code LITVIZ_DIR}
+     * 环境变量。打包态的随包内置资源正是走 LITVIZ_DIR 那一档（{@code backend-service.js}
+     * 带 existsSync 守卫地注入），所以规范 §5 的「随包内置优先于 pack、老用户不强迫重下」
+     * 依然成立。
+     *
+     * <p><b>2026-09 起 pack 提到了「cwd 目录爬升」之前</b>（dev-board#499）：pack 有了自动
+     * 追新，而爬升这一档在打包态是纯运气——cwd 是用户数据目录 {@code ~/.aiworkdeck}，
+     * 恰好存在一个 {@code ~/litviz} 或 {@code ~/.aiworkdeck/litviz} 就会把刚追新好的 pack
+     * 整个盖掉，且没有任何提示。爬升本来只为 dev 态（cwd={@code backend/}，命中
+     * {@code ../litviz}）而存在，让它压过一个签过名、有版本号、会自动更新的资源包是错的。
+     * 反过来说：dev 态一旦本机装了 pack，仓库里的 {@code litviz/} 就不再自动生效——
+     * 要改引擎源码调试，显式设 {@code LITVIZ_DIR} 或 {@code litviz.dir}（它们仍是最高优先级）。
      *
      * @param includePack false = 跳过资源包这一步（isEngineAvailableWithoutPack 用）
      */
@@ -182,7 +193,7 @@ public class LitigationVisualService {
         return resolveBuiltinLitvizDir(includePack);
     }
 
-    /** 原有的四档链：显式配置 → 环境变量 → cwd 爬升 → 资源包。也是能力槽的 builtin 探针。 */
+    /** 原有的四档链：显式配置 → 环境变量 → 资源包 → cwd 爬升（dev-board#499 起 pack 压过爬升）。也是能力槽的 builtin 探针。 */
     private Path resolveBuiltinLitvizDir(boolean includePack) {
         for (String candidate : new String[]{configuredDir, System.getenv("LITVIZ_DIR")}) {
             if (candidate != null && !candidate.isBlank()) {
@@ -191,15 +202,15 @@ public class LitigationVisualService {
                 log.warn("litviz.dir 指向的位置没有 cli.py，忽略：{}", p);
             }
         }
+        if (includePack && packService != null) {
+            Path packDir = packService.componentDir(PACK_ID, "litviz").orElse(null);
+            if (packDir != null && Files.isRegularFile(packDir.resolve("cli.py"))) return packDir;
+        }
         Path cwd = Paths.get("").toAbsolutePath().normalize();
         for (Path base : new Path[]{cwd, cwd.getParent(), cwd.getParent() == null ? null : cwd.getParent().getParent()}) {
             if (base == null) continue;
             Path p = base.resolve("litviz");
             if (Files.isRegularFile(p.resolve("cli.py"))) return p.normalize();
-        }
-        if (includePack && packService != null) {
-            Path packDir = packService.componentDir(PACK_ID, "litviz").orElse(null);
-            if (packDir != null && Files.isRegularFile(packDir.resolve("cli.py"))) return packDir;
         }
         return null;
     }

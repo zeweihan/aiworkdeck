@@ -173,7 +173,8 @@ manifest `no-cache`、版本目录 `immutable`、`gzip off`（防对 tar.gz 二�
 `data/plugin-files/`，由发布脚本负责双机同步（§7.3）。
 
 配置：`ai.packs.base-urls`（列表，application.yml 给默认值），
-`ai.packs.dir`（默认相对 cwd 的 `packs`，同 `ai.plugins.dir` 惯例）。
+`ai.packs.dir`（默认相对 cwd 的 `packs`，同 `ai.plugins.dir` 惯例），
+`ai.packs.auto-upgrade`（默认 true，见 §5.1）。
 
 ## 4. 客户端安装（后端负责）
 
@@ -208,9 +209,11 @@ models/ 已验证过这一点），pack 同享此保障。
 4. 解压到 staging（zip-slip/软链/条目数/总体积防护，见 §2）；按包内
    `contents.sha256` 逐文件复核；恢复 exec bit。
 5. 全部组件就绪后：`rename(staging → <id>/<version>/)`（同文件系统，原子）→
-   写 `.pack-complete` → `current.json` 指针原子切换 → 删除旧版本目录（只保留
-   current 一版：draw.io 级别的体积不值得本地存两份，回退 = 按旧版本目录的
-   manifest 快照重装，镜像上旧版本常年在架）。
+   写 `.pack-complete` → `current.json` 指针原子切换 → 清理旧版本目录，**保留
+   current + 最近一个装完整的旧版本**（自 §5.1 的自动追新起：包不再只由用户手动换，
+   出问题时手上得有一份能退回去的；留的是带 `.pack-complete` 的那个，半成品留着也退不回去）。
+   更早的版本一律删——回退到更老的版本 = 按镜像上那一版的 manifest 快照重装，
+   旧版本常年在架。
 6. 失败处置：验签/哈希失败删除对应产物；**网络中断保留 `.part`**（下次续传）；
    staging 里的半成品不会被任何扫描路径看到（资源解析只认 `current.json` 指的、
    带 `.pack-complete` 的版本目录）。**HTTP 4xx（含 416 越界 Range）不算网络中断、
@@ -227,10 +230,16 @@ models/ 已验证过这一点），pack 同享此保障。
 
 | 方法 | 路径 | 权限 | 说明 |
 |---|---|---|---|
-| GET | `/api/packs/list` | 登录 | 各 pack 的 `{id, state, installedVersion, latestVersion, totalSize}` |
-| GET | `/api/packs/{id}/status` | 登录 | `{state: idle\|downloading\|verifying\|installing\|ready\|failed, bytesDownloaded, bytesTotal, error}` |
+| GET | `/api/packs/list` | 登录 | 各 pack 的 `{id, state, installedVersion, latestVersion, updateAvailable, bytesDownloaded, bytesTotal, error}` |
+| GET | `/api/packs/{id}/status` | 登录 | 同上单条（`state: not_installed\|downloading\|verifying\|installing\|ready\|failed\|revoked`） |
 | POST | `/api/packs/{id}/install` | admin | 异步启动安装（已在装则幂等返回当前进度） |
+| POST | `/api/packs/{id}/upgrade` | admin | 手动追新：**同步**查一次 registry，有新版才异步下载，回 `{upgrading, latestVersion}`（§5.1） |
 | POST | `/api/packs/{id}/uninstall` | admin | 见 §6 |
+
+`latestVersion` / `updateAvailable` 是**内存快照**，list/status 端点<b>绝不为它发网络
+请求</b>：镜像不可达时 20s 超时 × 两个源会把整个广场列表拖死。快照由真发过请求的路径
+（安装、`/info`、`PackUpdater` 每天那次）顺手写入；没人拉过就是 null = 「未知」，
+前端据此不显示任何升级提示（不显示 ≠ 声称已是最新）。
 
 下载在后端单线程执行器里跑（同一 pack 串行、去重），前端**轮询 status**
 展示字节级进度（先例：组件管理的模型下载）。鉴权与市场写操作一致
@@ -254,9 +263,17 @@ models/ 已验证过这一点），pack 同享此保障。
 1. **显式覆盖**（config `litviz.*` / env `LITVIZ_DIR` 等）——dev 与测试用；
 2. **随包内置**（extraResources；打包态由 backend-service.js 注入 env，摘除后
    注入逻辑改为 `fs.existsSync` 判定，目录不存在不注入）——**老版本已装用户
-   的随包资源仍在就优先用，不强迫重下**；
-3. dev 目录爬升（现状，仅 dev 态命中）;
-4. **pack current 目录**。
+   的随包资源仍在就优先用，不强迫重下**。注意它与第 1 档共用同一个 `LITVIZ_DIR`
+   入口，所以在代码里这两档是连着的两个候选；
+3. **pack current 目录**；
+4. dev 目录爬升（`<cwd>/litviz`、`<cwd>/../litviz`……，仅 dev 态命中）。
+
+**3 与 4 的顺序 2026-09（dev-board#499）对调过**：pack 有了自动追新之后，让「爬升」
+压过一个签过名、有版本号、会自动更新的资源包是错的——打包态 cwd 是用户数据目录，
+恰好存在一个 `~/litviz` 就会把刚追新好的 pack 整个盖掉，且没有任何提示。爬升本来
+只为 dev 态而存在。代价写在明处：**dev 机上一旦装了 pack，仓库里的 `litviz/` 就不
+再自动生效**，要调试引擎源码请显式设 `LITVIZ_DIR` 或 `litviz.dir`（它们仍是最高优先级）。
+`isEngineAvailableWithoutPack`（= 把 pack 拿掉还剩什么）的语义不受这次调整影响。
 
 **大版本升级的资源缺口**：老用户升级到摘除后的大版本，Resources 里的随包资源
 随 .app 替换消失，而本地还没有 pack——此时「skill 已启用」与「资源缺失」并存。
@@ -264,6 +281,33 @@ models/ 已验证过这一点），pack 同享此保障。
 「skill enabled && 资源全链缺失」→ **自动触发 pack 安装**（用户已用启用状态表达过
 要这个功能，升级不该让它变哑），左栏面板顶部显示下载进度条；
 `litigation_render` 等工具在资源就绪前如实返回「资源包下载中/未安装」的引导文本。
+
+## 5.1 版本追新（自动升级，dev-board#499）
+
+**装好之后不会自己更新**曾经是这套分发的一个真实缺口：pack 装上以后，此前没有任何
+代码路径会再看一眼 registry——`PackAutoInstaller` 只在「资源全链缺失」时补装，装上了
+就再也不管版本。dev-board#477 上实测到的后果是：桌面端一路升到 v0.35.0，本机 litviz
+还停在 2026-08-20 的 1.0.1，新增的 `timeline` 子命令在旧引擎里根本不存在，所有材料
+都在 argparse 处 exit 2。**应用更新不等于资源包更新。**
+
+处置（`service/pack/PackUpdater`）：
+
+- **节奏**：后端启动后延迟 45s（别和启动抢 CPU 与网络，比 `PackAutoInstaller` 的 10s
+  晚——补装缺失资源比追新急）+ 此后每 24h 一次。
+- **对象**：每个「已装好（`current.json` 指向的版本带 `.pack-complete`）且未被封禁」
+  的 pack。声明了 `requires_pack` 的 skill 全被停用时跳过——不为用户关掉的功能耗流量；
+  没有任何 skill 声明它的 pack（三方插件带的那类）按启用处理。
+- **动作**：拉 registry manifest 比对版本，更新则走**完整安装事务**（§4.2 一步不少：
+  下载 → sha256 → 验签 → 逐文件复核 → 原子切指针）。指针最后才切，中途失败本机仍是
+  升级前那一版。
+- **失败**：静默 WARN，保持旧版本，下一轮再说。用户没点任何按钮，一次镜像抖动不该
+  弹窗或让功能变哑。
+- **开关**：`ai.packs.auto-upgrade`（默认 true）。关掉只停自动追新，手动
+  `POST /api/packs/{id}/upgrade` 与安装不受影响。
+- **并发**：与用户手动安装/卸载/封禁同步共用同一把按 packId 分的锁（`packLock`），
+  手动 upgrade 端点还与 install 共用 `inFlight` 去重与那条安装线程。
+- **UI**：广场详情页（`MarketDetailPane`）在包已就绪且 registry 版本更高时多一行
+  「有新版本 x.y.z」+「立即升级」。判据是两个版本号都拿到——拿不到就什么都不显示。
 
 ## 6. 卸载语义
 
@@ -382,7 +426,11 @@ JAR 插件代码经 Spring 容器取 `NativePackService.currentDir(packId)` 拿�
   update-service.test.js 同款手法）、zip-slip/软链拒绝、哈希不符重试换源、
   幂等重装、指针原子性、卸载守卫（只删 packs 正下方目录，canonical 校验）。
 - 资源解析矩阵：env 覆盖 / 随包在场 / 仅 pack / 全缺四态 ×（litviz、graphviz、
-  drawio）——「随包优先于 pack」必须有断言钉住。
+  drawio）——「随包优先于 pack」与「pack 优先于 cwd 爬升」都必须有断言钉住
+  （`LitigationVisualServiceTest#packDirWinsOverCwdAscent`）。
+- 追新：有新版则升级、同版一个字节都不下、下载失败保持旧版、验签失败不切指针、
+  只保留 current + 上一版、开关关掉一次请求都不发（`NativePackServiceTest` 的
+  「版本追新」一节）。
 - e2e：app-e2e 加旅程「广场安装诉讼可视化 →（桩 pack 源）下载 → rail 出现 →
   出一张 numbered_point_timeline」；desktop `npm test` 盖 drawio-server 多根。
 - 发布链：`publish-pack.sh` 带 `check` 子命令本地验产物（不碰网络），
@@ -461,3 +509,6 @@ Web 插件包仍走官网 20 MB 受理线与 registry `file` 端点（体积小�
 2. **老用户升级后的资源缺口**：自动补下载 + 面板进度条（§5）。
 3. **Phase 顺序**：A、B 同轮实施。
 4. **三方 pack**：v1 即开放提交（§8），人工审核无自动通过。
+
+补记（2026-09-08，dev-board#499）：**已装 pack 的版本追新**按 §5.1 落地，
+默认开；同批把资源解析里 pack 与 dev 目录爬升的先后对调（§5）。
