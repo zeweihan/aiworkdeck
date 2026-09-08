@@ -192,9 +192,7 @@ class CloudSyncUpdateTest {
     // ---- helpers ------------------------------------------------------
 
     private String bareRemote(Path dir) throws Exception {
-        Git.init().setBare(true).setDirectory(dir.toFile())
-                .setInitialBranch("master").call().close();
-        return dir.toUri().toString();
+        return BareHub.init(dir);
     }
 
     /** 建一个 file:// 裸仓当云端 + CloudConnection/ProjectRemote 行，setRemoteOrigin 指过去。 */
@@ -534,7 +532,7 @@ class CloudSyncUpdateTest {
     private Path bareCloudRemote(long remoteProjectId, Path cloudRoot) throws Exception {
         Path bareRepoDir = cloudRoot.resolve("git").resolve(remoteProjectId + ".git");
         Files.createDirectories(bareRepoDir.getParent());
-        Git.init().setBare(true).setDirectory(bareRepoDir.toFile()).setInitialBranch("master").call().close();
+        BareHub.init(bareRepoDir);
         return bareRepoDir;
     }
 

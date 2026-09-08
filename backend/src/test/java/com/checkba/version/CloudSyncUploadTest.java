@@ -168,9 +168,7 @@ class CloudSyncUploadTest {
     // ---- helpers ------------------------------------------------------
 
     private String bareRemote(Path dir) throws Exception {
-        Git.init().setBare(true).setDirectory(dir.toFile())
-                .setInitialBranch("master").call().close();
-        return dir.toUri().toString();
+        return BareHub.init(dir);
     }
 
     /** 建一个 file:// 裸仓当云端 + CloudConnection/ProjectRemote 行，setRemoteOrigin 指过去。 */

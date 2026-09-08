@@ -1,7 +1,7 @@
 package com.checkba.version.memory;
 
 import com.checkba.model.entity.MemoryEntry;
-import org.eclipse.jgit.api.Git;
+import com.checkba.version.BareHub;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -28,8 +28,7 @@ class MemorySyncRoundTripTest {
     @BeforeEach
     void setUp() throws Exception {
         Path hub = tmp.resolve("hub.git");
-        Git.init().setBare(true).setDirectory(hub.toFile()).call().close();
-        hubUrl = hub.toUri().toString();
+        hubUrl = BareHub.init(hub);
         a = new MemorySyncTestMachine(tmp.resolve("machine-a"), hubUrl, MemoryRealm.project(1));
         b = new MemorySyncTestMachine(tmp.resolve("machine-b"), hubUrl, MemoryRealm.project(2));
     }
