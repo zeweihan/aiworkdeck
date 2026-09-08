@@ -173,3 +173,19 @@ LibreOffice，AI 修改全部以字符级修订留痕、由人接受或拒绝，
 | Show HN | 待维护者本人发 | 稿在上文；周二至周四北京 20:00-21:00 |
 
 fork 均在 zeweihan 名下，分支 add-ai-workdeck；被要求修改时直接在 fork 分支改后推送即可。
+
+## 执行记录
+
+### 2026-09-03（维护者批准全部外部提交）
+- 已提交：ruanyf/weekly#11482（周刊自荐）、HelloGitHub#3632、awesome-mcp-clients PR#301、
+  awesome-ai-agents PR#1497（CLA 已签、cla-signed SUCCESS）、awesome-legaltech PR#102（rebase 后 MERGEABLE）。
+- 推迟：awesome-electron（<100 星）；awesome-selfhosted（首 release v0.1.0=2026-05-17，09-17 后投）。
+- Show HN 事故：维护者 15:33 提前发出，item 49546991 dead。根因是账号 hanzewei_asa 早在 6 月两条评论
+  被 flag 后即被自动封禁（名下三条全 dead）。处置：不重发不新开号，邮件 hn@ycombinator.com 申诉（稿已给）。
+
+### 2026-09-08（101 星）
+- awesome-electron：条目已按规范加在 Apps → Open Source → Other 末尾，分支 zeweihan/awesome-electron:add-ai-workdeck
+  已推送；**PR 被仓库互动限制拦住**（"restricted to prior contributors only"，维护者临时开关）。
+  重试命令（限制解除后直接跑）：
+  `gh pr create --repo sindresorhus/awesome-electron --head zeweihan:add-ai-workdeck --title "Add AI WorkDeck" --body-file docs/marketing/community-launch/awesome-electron-pr-body.md`
+- 上周提交状态：三个 awesome PR 均 OPEN 未处理；周刊与 HelloGitHub 两条 issue 0 回复；HN 账号未恢复。
