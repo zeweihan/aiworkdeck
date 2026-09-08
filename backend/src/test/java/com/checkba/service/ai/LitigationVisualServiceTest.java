@@ -211,7 +211,9 @@ class LitigationVisualServiceTest {
         assertEquals(configured.toAbsolutePath().normalize(),
                 svcWithSlot.runtime().litvizDir().toAbsolutePath().normalize(),
                 "槽未选中时应退回 litviz.dir 配置");
+    }
 
+    /**
      * dev-board#499：pack 有了自动追新之后，「cwd 目录爬升」这一档必须让位——否则本机
      * 恰好存在一个 {@code <cwd>/litviz} 或 {@code <cwd>/../litviz}（dev 态一定有；打包态
      * 用户家目录里也可能有）就会把刚追新好的、签过名的资源包整个盖掉，而且毫无提示。
