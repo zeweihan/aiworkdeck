@@ -407,6 +407,31 @@ class AccountServiceTest {
     }
 
     @Test
+    @DisplayName("官网 4xx 带业务机器码时按 REJECTED 透传，不折叠成 Key 无效（dev-board#496 裁决 4）")
+    void businessRejectionIsNotFoldedIntoUnauthorized() {
+        AccountService service = connected();
+        transport.enqueue(403, "{\"error\":\"phone_required\"}");
+        AccountException e = assertThrows(AccountException.class, service::fetchTeam);
+        assertEquals(AccountException.Kind.REJECTED, e.getKind());
+        assertEquals("phone_required", e.getReason());
+        assertTrue(e.getMessage().contains("绑定手机号"), e.getMessage());
+        for (String banned : new String[] {"登录", "未授权", "请先"}) {
+            assertFalse(e.getMessage().contains(banned), "文案红线：" + banned);
+        }
+
+        // 403 但没有业务机器码：仍是凭据失效
+        transport.enqueue(403, "{\"error\":\"unauthorized\"}");
+        AccountException plain = assertThrows(AccountException.class, service::fetchTeam);
+        assertEquals(AccountException.Kind.UNAUTHORIZED, plain.getKind());
+
+        // 409 already_in_team 同样带码回来
+        transport.enqueue(409, "{\"error\":\"already_in_team\"}");
+        AccountException conflict = assertThrows(AccountException.class, service::fetchTeam);
+        assertEquals(AccountException.Kind.REJECTED, conflict.getKind());
+        assertEquals("already_in_team", conflict.getReason());
+    }
+
+    @Test
     @DisplayName("账户类信封不许带 4010，否则前端会误清会话/跳登录页")
     void accountMessagesDoNotLookLikeAuthErrors() {
         // PR4-0 起 frontend/src/services/api.js 只认 code === 4010 判定未登录（清 session，
@@ -419,7 +444,7 @@ class AccountServiceTest {
         transport.enqueue(409, "{\"error\":\"no_allocation\"}");
         AccountException noAllocationEx = assertThrows(AccountException.class, service::fetchAiKey);
 
-        var accountController = new com.checkba.controller.AccountController(null, null, null, null, null, null);
+        var accountController = new com.checkba.controller.AccountController(null, null, null, null, null, null, null, null, null);
         var keyController = new com.checkba.controller.PlatformAiKeyController(null, null);
         for (AccountException e : new AccountException[] {notConnectedEx, noAllocationEx}) {
             assertEquals(1, accountController.handleAccountException(e).getBody().get("code"),
@@ -749,6 +774,51 @@ class AccountServiceTest {
     void loopbackHttpAllowed() {
         assertDoesNotThrow(() -> new AccountService(com.checkba.service.site.SiteProfileService.pinnedTo("http://localhost:3000"), tempDir.toString(), new StubTransport(), null));
         assertDoesNotThrow(() -> new AccountService(com.checkba.service.site.SiteProfileService.pinnedTo("http://127.0.0.1:3000"), tempDir.toString(), new StubTransport(), null));
+    }
+
+    // ==================== 团队层级的出站形状（设计 §10.3） ====================
+
+    @Test
+    @DisplayName("层级动作的方法与路径逐条对齐官网契约；改律所名出站必须仍是 PATCH")
+    void teamHierarchyOutboundShape() {
+        AccountService service = connected();
+        for (int i = 0; i < 7; i++) transport.enqueue(200, "{\"ok\":true}");
+
+        service.joinTeam(" ABCD1234 ");
+        service.regenerateTeamJoinCode();
+        service.createFirm("某某律师事务所");
+        service.joinFirm("FIRMCODE");
+        service.updateFirm("改了名的所");
+        service.regenerateFirmJoinCode();
+        service.removeFirmTeam("t 7");
+
+        String base = "https://www.aiworkdeck.com/api/account/team";
+        assertEquals("POST " + base + "/join", transport.calls.get(1));
+        assertTrue(transport.bodies.get(1).contains("ABCD1234"), transport.bodies.get(1));
+        assertFalse(transport.bodies.get(1).contains(" ABCD1234"), "邀请码要去掉首尾空白，粘贴常带空格");
+        assertEquals("POST " + base + "/join-code/regenerate", transport.calls.get(2));
+        assertEquals("POST " + base + "/firm", transport.calls.get(3));
+        assertEquals("POST " + base + "/firm/join", transport.calls.get(4));
+        assertEquals("PATCH " + base + "/firm", transport.calls.get(5),
+                "本机那一跳是 PUT（uni.request 没有 PATCH），出站到官网必须仍是 PATCH");
+        assertEquals("POST " + base + "/firm/join-code/regenerate", transport.calls.get(6));
+        assertEquals("DELETE " + base + "/firm/teams/t+7", transport.calls.get(7),
+                "路径段必须编码：带 ../ 或 ? 的 teamId 会改写请求的目标端点");
+    }
+
+    @Test
+    @DisplayName("summary 带上 scope；老签名默认 team，不静默变成全所")
+    void teamSummaryCarriesScope() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"range\":7}").enqueue(200, "{\"range\":30}");
+
+        service.fetchTeamSummary(7);
+        service.fetchTeamSummary(30, "firm");
+
+        assertEquals("GET https://www.aiworkdeck.com/api/account/team/summary?range=7&scope=team",
+                transport.calls.get(1));
+        assertEquals("GET https://www.aiworkdeck.com/api/account/team/summary?range=30&scope=firm",
+                transport.calls.get(2));
     }
 
     @Test

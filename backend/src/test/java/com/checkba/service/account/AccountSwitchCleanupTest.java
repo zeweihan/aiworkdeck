@@ -22,6 +22,9 @@ class AccountSwitchCleanupTest {
     private AccountService accountService;
     private AccountSwitchCleanup cleanup;
 
+    com.checkba.service.team.TeamUsageSettings teamUsageSettings;
+    com.checkba.service.team.TeamSettingsCache teamSettingsCache;
+
     @BeforeEach
     void setUp() {
         accountService = mock(AccountService.class);
@@ -30,8 +33,11 @@ class AccountSwitchCleanupTest {
         PlatformCreditsGate platformCreditsGate = mock(PlatformCreditsGate.class);
         PlatformUsageAccountant platformUsageAccountant = mock(PlatformUsageAccountant.class);
         ChatModelFactory chatModelFactory = mock(ChatModelFactory.class);
+        teamUsageSettings = mock(com.checkba.service.team.TeamUsageSettings.class);
+        teamSettingsCache = mock(com.checkba.service.team.TeamSettingsCache.class);
         cleanup = new AccountSwitchCleanup(accountService, entitlementService, platformAiChannel,
-                platformCreditsGate, platformUsageAccountant, chatModelFactory);
+                platformCreditsGate, platformUsageAccountant, chatModelFactory,
+                teamUsageSettings, teamSettingsCache);
     }
 
     @Test
@@ -46,5 +52,17 @@ class AccountSwitchCleanupTest {
     void afterDisconnectClearsBalanceCache() {
         cleanup.afterDisconnect();
         verify(accountService).clearBalanceCache();
+    }
+
+    @Test
+    @DisplayName("换账户要一并作废团队上报台账与团队设置缓存（dev-board#496）")
+    void accountSwitchResetsTeamUsageLedger() {
+        cleanup.afterConnect();
+        verify(teamUsageSettings).resetLedger();
+        verify(teamSettingsCache).clear();
+
+        cleanup.afterDisconnect();
+        verify(teamUsageSettings, org.mockito.Mockito.times(2)).resetLedger();
+        verify(teamSettingsCache, org.mockito.Mockito.times(2)).clear();
     }
 }

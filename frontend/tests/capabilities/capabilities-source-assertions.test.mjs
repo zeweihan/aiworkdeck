@@ -25,7 +25,11 @@ const slotRegistry = readFileSync(
 test('分区接在 activeNav 长链的末尾，且链头没有被动过', () => {
   const branches = [...adminPane.matchAll(/activeNav === '([a-z_]+)'/g)].map((m) => m[1])
   assert.equal(branches[0], 'ai', '链头必须仍是 v-if="activeNav === \'ai\'"')
-  assert.equal(branches[branches.length - 1], 'capabilities', '新分区必须接在链尾')
+  // 链尾不止一个新分区（团队分区 dev-board#496 与本分区都接在原链尾 personal_settings 之后），
+  // 所以钉的是「在原链尾之后、且在链上」，不是「绝对最后一个」。
+  assert.ok(branches.includes('capabilities'), '能力升级分区必须在 activeNav 长链上')
+  assert.ok(branches.indexOf('capabilities') > branches.indexOf('personal_settings'), '新分区必须接在原链尾 personal_settings 之后')
+  assert.equal(branches[0], 'ai', '链头必须仍是 ai')
   assert.ok(
     adminPane.includes(`v-else-if="activeNav === 'capabilities'"`),
     '新分区必须是 v-else-if，不能自成一个新的 v-if 链',

@@ -965,6 +965,136 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     两者混成 0 的后果是：刚跑完一场两小时转写的用户看到「本月 0 Credits」，
     他的下一步是来问账是不是没记上。
 
+## 团队通道（2026-09-07，dev-board#496）
+
+律所管理者在 IDE 内看全所使用统计。设计 `docs/superpowers/specs/2026-09-07-law-firm-team-usage-design.md`
+（**与实现有出入以代码为准**；本节记的是桌面侧，官网侧的表与端点在官网仓）。
+
+**红线一条，先背下来：团队通道与匿名 telemetry 物理分离，永不合并。**
+`legal/PRIVACY.md`、README 两版、官网 `lib/db.ts` 的建表注释三处都公开承诺了
+「随机安装标识与设备、账户、个人身份无关」。团队统计恰恰相反——它带 `Bearer awdk_`、
+按 accountId 落库。两条通道的**端点、表、开关、上报体全部独立**：
+- 匿名：`telemetry.ingest-url` + `POST /rollup`，无鉴权，开关 `telemetry.rollup.enabled`（默认开）；
+- 团队：`POST {site}/api/account/team/usage`，Bearer，开关 `team.usage.enabled`（**默认关**）。
+给 `telemetry_event` 加 userId/projectId 来「省事」是这条红线最典型的破法——加了就毁掉匿名承诺，
+所以团队侧宁可重算一遍六个计数（见 `TeamUsageRollupService` 的类注释）。
+
+**文件**
+- `service/team/TeamUsageSettings.java` — 本机开关 + 上报台账（`team.usage.enabled` /
+  `.lastUploadAt` / `.uploadedDates`，都在 `system_setting`）。**刻意不复用 `TelemetrySettings`**。
+- `service/team/TeamUsageRollupService.java` — `rollupFor(date, userId)` 出日聚合 payload。
+  纯读、不写库、不发网络。数据源三处：`work_session`（投入时长，按 **startedAt 落日**，
+  排除 DRAFT 与 ACTIVE，总数与每个项目行都封顶 16 小时）、本机 `telemetry_event` 当日计数
+  （六个，派生口径与 `TelemetryRollupService` 逐条对齐，改那边要跟着改）、`token_usage`
+  （按 costSource 分 platform/estimate 两桶，**不得合并**）。
+- `service/team/TeamUsageUploadService.java` — 启动 + 24h，静默失败；`uploadNow()` 给设置页按钮用，
+  **如实回传跳过原因**（disabled / not_local_mode / not_connected / no_team）。
+- `service/team/TeamSettingsCache.java` — 本机只读缓存「共享项目名」，读不到一律 false。
+- `WorkSessionRepository.findByUserIdAndStartedAtBetween` — 新增 finder；状态与段类型的过滤
+  **刻意留在聚合层**，那是统计口径的一部分。
+- `InstallIdentityService.projectKey(projectId)` — `HMAC-SHA256(install-secret, "project:"+id)` 前 16 hex。
+- `AccountController` 的 `/team*` 一组透传（照 membership 模板）+ `AccountService` 的对应方法
+  （`sendJson` 是 POST/PUT/PATCH/DELETE 的统一出口，HTTP 缝仍是 `AccountTransport`）。
+- 前端 `components/admin/TeamPanel.vue`（设置页 personal 组的 `team` 分区，接在 `AdminPane`
+  `activeNav` 链尾）、`services/api.js` 的 13 个团队函数、`locales/{zh-CN,en-US}/team.js`。
+
+**上报四道闸，缺一不发**（`TeamUsageUploadService.run()`，顺序即判定顺序）：
+开关开 → **local-mode** → 账户已连接 → 确实在某个团队里。
+第二道最容易被当成多余：server 模式（团队案件库 / 插件云实例）下账户是**机器级**状态，
+而使用数据是**每个租户各自的**，照发等于把全服所有人的活动记在管理员账户名下。
+同理 `GET /api/account/team/usage-sharing` 回的 `available` 由后端下发，前端不许靠
+「有没有桌面壳」猜——猜错就是给用户一个永远不生效的开关。
+
+**换账户要清团队台账**（同地雷 22）：`AccountSwitchCleanup.invalidateAll()` 里加了
+`teamUsageSettings.resetLedger()` + `teamSettingsCache.clear()`。「哪些天传过了」记的是
+「传给**那个**账户」，换了人必须从头传；「共享项目名」是上一个团队的设置，留着会让
+下一个团队的日聚合按旧团队口径带上项目名。
+
+**动词的一处刻意偏差**：官网侧「改团队设置」「改成员角色」是 PATCH，本机透传层用 PUT。
+前端只有 `uni.request` 一个出口，它的 method 枚举里根本没有 PATCH。出站到官网那一跳仍是 PATCH。
+
+**已知口径缺口（写在代码注释里，不要当 bug 修掉）**：
+1. `telemetry_event` 没有 userId/projectId，所以六个计数是**整机口径**，一机多人时全记在当前本机用户名下；
+2. 项目行的 `editActions` 恒为 0（编辑动作只在匿名表里，那张表没有 projectId）；
+3. 项目行的 `aiTurns` 用当日该项目的 `token_usage` **行数**近似（一行 = 一次 LLM 调用），
+   带工具循环的一轮对话会产生多行，所以它偏大且各项目之和 ≠ 顶层 aiTurns。相对比较可信，绝对值不可信；
+4. 项目短码是 `HMAC(install-secret, localProjectId)`，**跨机器不可关联**——版本记录模块
+   今天没有远端仓标识（全仓 grep 零命中），所以同一个案件在两位律师机器上是两个短码。
+   将来有了远端标识改成 `HMAC(teamId, remoteId)` 即可聚成一行；
+5. 「节约时间」是带系数的估算，公式由**服务端下发**（`savedMinutesFormula`），
+   前端只负责把它印在脚注上。**绝不在前端写死系数**，也绝不把它做成一个看起来精确的数字。
+
+**待官网补的契约字段**：「退出团队」需要知道自己的 accountId，而设计 §6 的 `GET /api/account/team`
+只写了 `{team, myRole, members[], pendingInvites[]}`。前端读 `data.myAccountId`，
+**取不到就不显示这个动作**——绝不自己编一个 `me` 之类的 id 去打 DELETE，猜错会把别人踢出团队。
+
+### 三层结构与加入流程（设计 §10）
+
+```
+个人（官网注册） → 团队 team（一人一团队；OWNER/ADMIN/MEMBER） → 律所 firm（多团队并入，由总部团队管理）
+```
+
+律所**没有独立人员名单**：管理者就是总部团队的 OWNER/ADMIN，这样不破坏「一人一团队」。
+桌面侧新增的透传端点（`AccountController` + `AccountService`，一律只转发）：
+`POST /team/join`、`POST /team/join-code/regenerate`、`POST /team/firm`、`POST /team/firm/join`、
+`PUT /team/firm`（**出站 PATCH**，同上面那处动词偏差）、`POST /team/firm/join-code/regenerate`、
+`DELETE /team/firm/teams/{teamId}`；`GET /team/summary` 多收一个 `scope=team|firm`。
+
+**归一化不是鉴权。** `range`（7/30/90）与 `scope`（team/firm）在桌面端只做「值在枚举内」的
+归一，**能不能看全所由官网按角色判**。把角色判定抄一份到桌面端，等于给了「改本机一个布尔值
+就看全所」的机会，而真正的闸本来就在服务端——`TeamPanel` 的 `canManage` / `canManageFirm`
+同理，只决定按钮显不显示。「是不是总部团队」读服务端下发的 `firm.isHead`，
+不拿 `firm.headTeamId === team.id` 自己推（两个字段哪个缺了都会推错）。
+
+**「退出律所」与「移出团队」是同一个端点**（`DELETE /team/firm/teams/{teamId}`），
+本团队退出时拿的是自己的 `team.id`——**取不到就不发**，猜一个 id 出去会把别人的团队踢出律所
+（同上面 `myAccountId` 那条）。
+
+### 入口地图（验收清单，缺一项算没做完；设计 §10.4）
+
+尽调插件的教训：核心能力做好了、UI 上没入口，用户不知道怎么用，只能重新发版。六条都有源码级护栏
+（`frontend/tests/team/team-panel-source.test.mjs`）：
+
+1. 设置导航「团队」**常显**——`navItems` 里那一项不挂 `desktopOnly`、落 `personal` 组
+   （`system` 组对非管理员整组收起，落进去等于对普通成员隐身）。
+2. 设置页「账户与用量」的账户卡里一行「团队：未加入 / 团队名 · 律所名」+「前往团队」，
+   点了在 `AdminPane` 内部 `onNavTap({key:'team'})` 切分区。**问不到时整行不渲染**
+   （`teamLine.loaded`），不拿「未加入」去顶「没问出来」。
+3. 官网账户页「我的团队」页签——官网侧，不在本仓。
+4. 无团队态三条路**并排**（`.join-paths` 是 flex）：创建团队 / 输入 8 位邀请码 / 收到的邀请。
+   竖着叠三张卡等于把第三条藏在一屏之外。
+5. 团队看板「律所」区**常显**：未入所给「创建律所」「输入律所邀请码并入」（仅 OWNER 可操作，
+   其余人看到的是「只有负责人可以」的说明，而不是这一层整个消失），入所后给律所名、团队列表
+   （总部标记 + 人数）、总部管理者可见律所邀请码与「移出团队」、子团队 OWNER 可「退出律所」；
+   看板顶部「本团队 / 全所」切换**只在入所后出现**（没律所时「全所」不是真实存在的视角），
+   退出律所时 `scope` 要复位回 `team`，否则会一直打必然被拒的请求。
+6. 数据共享开关与「立即上报」在看板**顶部**，不在最底下——它决定「这个团队有没有数据可看」，
+   压在底下等于让用户滚过两张空表才发现自己一直没开。
+
+团队邀请码在**成员区顶部**（邀请人的第一动作就是把码发出去），仅 OWNER/ADMIN 可见——
+码等于一张入场券。
+
+### 界面口径（走查 2026-09-07 修的一批，改 TeamPanel 前对一遍）
+
+- **KPI 磁贴用 `grid-template-columns: repeat(5, minmax(0, 1fr))`**，两种更「聪明」的写法实测都不行：
+  `flex: 1 1 140px`（改前的写法）在 1440 窗口下裂成 4+1，`auto-fit + minmax(120px,1fr)` 只是把
+  这个断点挪到容器 600px 附近——对应 1280 宽的窗口，最常见的笔记本尺寸，照样 4+1。
+  固定五列实测容器 600px 以上五块同排且文字零裁切。`minmax` 的下界必须是 `0`（`auto` 下界
+  等于内容宽，长文案会把列撑开又变回换行）。这一页整个没有 `@media`，别为这一处开先例：
+  容器宽 ≈ 窗口宽 − 628px 是量出来的经验值，不是契约。
+- **KPI 第一块叫「使用人数」不叫「本周使用人数」**：档位可切 7/30/90，写死「本周」在另外两档上是错的；
+  「几人里有几人」走 caption（`kpiActiveMembersCaption`），**分母取不到时整行不显示**，
+  不拿活跃数顶成分母。
+- **`.team-btn` 必须 `inline-flex` + `align-self: flex-start` + `width: auto`**：`.section-body`
+  是竖向 flex，块级按钮会被拉满整张卡。
+- **开关行不许把上面那行标题原样念第二遍**（`sharingSwitchDesc` 是说明不是标题）：同一张卡上
+  出现两遍同一句话，用户会以为这是两个不同的开关。
+- **服务端没给的值不编**：邀请到期时间取不到就说「以官网为准」（绝不自己按「7 天」算一个日期），
+  律所各团队合计只在 `summary.teams` 存在时才渲染（`firm.teams` 只有名册没有统计数字）。
+- 项目**已有别名时**按钮说「改别名」；待接受邀请行里「撤销」与角色标签至少隔 16px。
+- `.team-pane` 留 `padding-bottom: 72px`：右下角反馈浮窗是全局元素、不改，但要给它让出高度，
+  保证面板最后一行仍可点。
+
 ## 跨设备传输的内部记账口（2026-08-28，dev-board#251）
 
 云后端对已桥接用户没有任何 awdk_（明文不落库），官网也否决过「凭 accountId 换 key」的
@@ -1011,11 +1141,23 @@ return 404 兜底，云后端从 127.0.0.1 直连 Next。云侧唯一出口
   （byok 档行为不变的基线）、`service/meeting/MeetingRecordingNoticeTest`（告知默认未确认 /
   版本作废 / 正文说全四件事 / 三个掉线子串与 emoji）、
   `controller/PlatformServiceControllerTest`（另含用量 null≠0、两个阈值的往返与拒非法、
-  告知端点缺字段不算确认）、`controller/ExternalControllerEnvelopeTest`
+  告知端点缺字段不算确认）；
+  团队通道：`service/team/TeamUsageRollupServiceTest`（DRAFT/ACTIVE 排除、16h 上限、
+  短码稳定且不泄露原 id、共享项目名默认关、六个计数的派生口径、token 分桶）、
+  `service/team/TeamUsageUploadServiceTest`（四道闸 + 补传窗口 + 今天永不传）、
+  `controller/AccountControllerTeamTest`（透传不裁字段、range/scope 归一、scope 归一不是鉴权、
+  层级七个动作原样转发、参数校验回业务信封、usage-sharing 不打官网）、
+  `service/account/AccountServiceTest`（层级动作的方法与路径逐条对齐官网契约、改律所名出站仍是
+  PATCH、路径段编码、summary 带 scope 且老签名默认 team）、
+  `service/account/AccountSwitchCleanupTest`（换账户清团队台账）；
+  `controller/ExternalControllerEnvelopeTest`
   （网关失败原样抛出、回落不吞掉网关原因、查无结果是 code=1 不是 4010）。
 - 官网侧（`aiworkdeckweb`）：`scripts/verify-gateway.mts` 45 项 + `contract-check.mts` 的网关段，
   **必须在空目录里跑、必须用 nvm v22 全路径**（`/usr/bin/node` v20 碰库会段错误）。
-- 前端：`cd frontend && npm run check:emits` + `npm run build:h5`。
+- 前端：`cd frontend && npm run check:emits` + `npm run build:h5`；
+  团队分区另跑 `npm run test:team`（已进 ci.yml frontend job）：文案红线（两语言键对拍、禁 emoji、
+  中文不含三个掉线子串、「估算」二字）+ 源码级契约（三态分支、入口地图六条、KPI 布局规则、
+  `.team-btn` 不撑满、邀请行显示角色与到期、scope 传参）。
 - 端到端（同样在 `frontend/` 下跑）：`cd frontend && npm run test:app-e2e`
   （**J1 就是首启解锁门旅程**，用试用码解锁；其余旅程 local-mode 免登直达）。
   `cd frontend && npm run test:desktop-e2e` 的 provision 会自动用试用码解锁并置向导。改解锁门/启动链必跑这两套。

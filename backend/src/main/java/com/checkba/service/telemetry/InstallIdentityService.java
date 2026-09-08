@@ -78,6 +78,30 @@ public class InstallIdentityService {
         }
     }
 
+    /**
+     * 团队统计的项目短码：HMAC-SHA256(install-secret, "project:" + projectId) 前 16 位十六进制。
+     *
+     * <p>与 {@link #convKey} 同源同盐，但**用途完全不同**，刻意不合并成一个方法：
+     * convKey 服务匿名 telemetry（与账户无关），本方法服务带鉴权的团队统计通道。
+     * 两条通道的端点、表、开关全部分离（见 licensing-billing 领域文档「团队通道」一节）。
+     *
+     * <p>短码不可反推项目 id，也不跨安装可关联（盐只在本机、永不上传）。代价是同一个案件
+     * 在两位律师的机器上会得到两个不同的短码——本机项目**没有任何跨机器稳定标识**
+     * （版本记录模块没有远端仓 id 的概念，全仓 grep 零命中），所以首期只能按本机 id 哈希。
+     * 将来若引入远端仓标识，改成 HMAC(teamId, remoteId) 即可让同一案件聚成一行。
+     */
+    public String projectKey(Long projectId) {
+        if (projectId == null) return null;
+        try {
+            javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+            mac.init(new javax.crypto.spec.SecretKeySpec(secret(), "HmacSHA256"));
+            byte[] digest = mac.doFinal(("project:" + projectId).getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest).substring(0, 16);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private synchronized byte[] secret() throws IOException {
         if (cachedSecret != null) return cachedSecret;
         Files.createDirectories(secretFile.getParent());

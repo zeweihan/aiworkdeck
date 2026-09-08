@@ -64,7 +64,8 @@
     "test:revision-view": "node --test tests/revision-view/*.test.mjs",
     "test:md-table": "node --test tests/markdown-table/*.test.mjs",
     "test:ocr-overlay": "node --test tests/ocr-overlay/*.test.mjs",
-    "test:capabilities": "node --test tests/capabilities/*.test.mjs"
+    "test:capabilities": "node --test tests/capabilities/*.test.mjs",
+    "test:team": "node --test tests/team/*.test.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",

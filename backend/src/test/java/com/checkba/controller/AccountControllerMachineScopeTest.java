@@ -80,7 +80,10 @@ class AccountControllerMachineScopeTest {
         PlatformAiChannel platformAiChannel = mock(PlatformAiChannel.class);
         accountController = new AccountController(accountService, platformAiChannel,
                 mock(AccountSwitchCleanup.class), mock(TokenUsageRepository.class), guard,
-                entitlementService);
+                entitlementService,
+                mock(com.checkba.service.team.TeamUsageSettings.class),
+                mock(com.checkba.service.team.TeamUsageUploadService.class),
+                mock(com.checkba.service.team.TeamSettingsCache.class));
         entitlementController = new EntitlementController(entitlementService, guard);
     }
 

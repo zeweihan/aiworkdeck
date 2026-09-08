@@ -2408,6 +2408,193 @@ export function saveAppLanguageRemote(language) {
   })
 }
 
+// ===================== 团队（dev-board#496） =====================
+//
+// 全部经本地后端 /api/account/team* 透传到官网（Bearer awdk_ 在后端加），
+// 前端从不直连官网。信封与全站一致：request() 解出 {code,data}，unwrapEnvelope 取 data。
+//
+// 动词说明：本机这一层用 GET/POST/PUT/DELETE，没有 PATCH——uni.request 的 method
+// 枚举里根本没有它。出站到官网那一跳仍是 PATCH（后端 AccountService 负责）。
+
+// 我的团队。无团队时回 { team: null, invites: [...] }（我手机号收到的邀请）。
+export function getTeam() {
+  return request({ url: '/api/account/team', method: 'GET' }).then(unwrapEnvelope);
+}
+
+export function createTeam(name) {
+  return request({
+    url: '/api/account/team',
+    method: 'POST',
+    data: { name },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 只传要改的字段：整表回传会把没碰过的开关一起改掉（后端也会拒空 patch）。
+export function updateTeam(patch) {
+  return request({
+    url: '/api/account/team',
+    method: 'PUT',
+    data: patch,
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+export function createTeamInvite(phone, role) {
+  return request({
+    url: '/api/account/team/invites',
+    method: 'POST',
+    data: { phone, role },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+export function revokeTeamInvite(inviteId) {
+  return request({
+    url: `/api/account/team/invites/${encodeURIComponent(inviteId)}`,
+    method: 'DELETE',
+  }).then(unwrapEnvelope);
+}
+
+export function acceptTeamInvite(inviteId) {
+  return request({
+    url: `/api/account/team/invites/${encodeURIComponent(inviteId)}/accept`,
+    method: 'POST',
+    data: {},
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+export function updateTeamMemberRole(accountId, role) {
+  return request({
+    url: `/api/account/team/members/${encodeURIComponent(accountId)}`,
+    method: 'PUT',
+    data: { role },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 移除成员，或本人退出团队（OWNER 不可退出，后端/官网会拒）。
+export function removeTeamMember(accountId) {
+  return request({
+    url: `/api/account/team/members/${encodeURIComponent(accountId)}`,
+    method: 'DELETE',
+  }).then(unwrapEnvelope);
+}
+
+// range 只有 7 / 30 / 90 三档，scope 只有 team / firm，其余值后端会归一。
+// scope=firm 能不能看由官网按角色判，前端只负责把用户选的视角带上去。
+export function getTeamSummary(range = 7, scope = 'team') {
+  return request({
+    url: `/api/account/team/summary?range=${range}&scope=${encodeURIComponent(scope)}`,
+    method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// ---- 层级与加入流程（设计 §10.3）----
+
+// 用 8 位团队邀请码加入。已有团队时官网回 409，走业务信封。
+export function joinTeam(code) {
+  return request({
+    url: '/api/account/team/join',
+    method: 'POST',
+    data: { code },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 重置团队邀请码：旧码立刻失效，已加入的成员不受影响。
+export function regenerateTeamJoinCode() {
+  return request({
+    url: '/api/account/team/join-code/regenerate',
+    method: 'POST',
+    data: {},
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 创建律所，本团队成为总部团队。
+export function createFirm(name) {
+  return request({
+    url: '/api/account/team/firm',
+    method: 'POST',
+    data: { name },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 本团队按律所邀请码并入律所。
+export function joinFirm(code) {
+  return request({
+    url: '/api/account/team/firm/join',
+    method: 'POST',
+    data: { code },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 改律所名。本机这一跳是 PUT，出站到官网仍是 PATCH（后端负责）。
+export function updateFirm(name) {
+  return request({
+    url: '/api/account/team/firm',
+    method: 'PUT',
+    data: { name },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+export function regenerateFirmJoinCode() {
+  return request({
+    url: '/api/account/team/firm/join-code/regenerate',
+    method: 'POST',
+    data: {},
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 把某个团队移出律所，或本团队自己退出律所（总部团队不可退出，官网会拒）。
+export function removeFirmTeam(teamId) {
+  return request({
+    url: `/api/account/team/firm/teams/${encodeURIComponent(teamId)}`,
+    method: 'DELETE',
+  }).then(unwrapEnvelope);
+}
+
+// 给项目短码起别名。空串表示清掉别名，退回显示短码。
+export function setTeamProjectAlias(projectKey, label) {
+  return request({
+    url: `/api/account/team/projects/${encodeURIComponent(projectKey)}/alias`,
+    method: 'PUT',
+    data: { label },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 本机的「向团队共享使用统计」开关（默认关）+ 上次上报时间。纯本机状态，不打官网。
+export function getTeamUsageSharing() {
+  return request({ url: '/api/account/team/usage-sharing', method: 'GET' }).then(unwrapEnvelope);
+}
+
+export function setTeamUsageSharing(enabled) {
+  return request({
+    url: '/api/account/team/usage-sharing',
+    method: 'PUT',
+    data: { enabled },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 立即上报。回 { uploaded, skipped, reason?, lastUploadAt }——skipped 时 reason 是
+// 机器可读的跳过原因（disabled / not_local_mode / not_connected / no_team）。
+export function uploadTeamUsageNow() {
+  return request({
+    url: '/api/account/team/usage-sharing/upload-now',
+    method: 'POST',
+    data: {},
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
 export function getTelemetrySettings() {
   return request({
     url: '/api/telemetry/settings',

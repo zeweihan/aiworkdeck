@@ -477,6 +477,170 @@ public class AccountService {
         membershipSummaryCache = null;
     }
 
+    // ==================== 团队（dev-board#496） ====================
+    //
+    // 全部走 Bearer awdk_，官网按 Key 解析 accountId。桌面前端从不直连官网，
+    // 这一层与 membership 一样是**原样转发**：字段以官网 doc/desktop-contract.md 为准，
+    // 不在这里裁剪，也不在这里编造默认值——官网加一个字段，桌面端立刻就能用。
+
+    /** GET /api/account/team —— 我的团队；无团队时官网回 {@code {team:null, invites:[...]}}。 */
+    public Map<String, Object> fetchTeam() {
+        return getJson("/api/account/team", requireKey());
+    }
+
+    /** POST /api/account/team —— 创建团队（已有团队时官网回 409）。 */
+    public Map<String, Object> createTeam(String name) {
+        return sendJson("POST", "/api/account/team", Map.of("name", name == null ? "" : name.trim()));
+    }
+
+    /** PATCH /api/account/team —— 改团队名 / 「共享项目名」开关。只传要改的字段。 */
+    public Map<String, Object> updateTeam(Map<String, Object> patch) {
+        return sendJson("PATCH", "/api/account/team", patch == null ? Map.of() : patch);
+    }
+
+    /** POST /api/account/team/invites —— 按手机号邀请（被邀请人可以还没注册）。 */
+    public Map<String, Object> createTeamInvite(String phone, String role) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("phone", phone == null ? "" : phone.trim());
+        body.put("role", role == null || role.isBlank() ? "MEMBER" : role.trim());
+        return sendJson("POST", "/api/account/team/invites", body);
+    }
+
+    /** DELETE /api/account/team/invites/{id} —— 撤销尚未接受的邀请。 */
+    public Map<String, Object> revokeTeamInvite(String inviteId) {
+        return sendJson("DELETE", "/api/account/team/invites/" + segment(inviteId), null);
+    }
+
+    /** POST /api/account/team/invites/{id}/accept —— 被邀请手机号本人接受邀请。 */
+    public Map<String, Object> acceptTeamInvite(String inviteId) {
+        return sendJson("POST", "/api/account/team/invites/" + segment(inviteId) + "/accept", Map.of());
+    }
+
+    /** PATCH /api/account/team/members/{accountId} —— 改成员角色。 */
+    public Map<String, Object> updateTeamMember(String accountId, String role) {
+        return sendJson("PATCH", "/api/account/team/members/" + segment(accountId),
+                Map.of("role", role == null ? "" : role.trim()));
+    }
+
+    /** DELETE /api/account/team/members/{accountId} —— 移除成员，或本人退出（OWNER 不可退出）。 */
+    public Map<String, Object> removeTeamMember(String accountId) {
+        return sendJson("DELETE", "/api/account/team/members/" + segment(accountId), null);
+    }
+
+    /** GET /api/account/team/summary?range=7|30|90 —— 团队看板取数（本团队视角）。 */
+    public Map<String, Object> fetchTeamSummary(int range) {
+        return fetchTeamSummary(range, "team");
+    }
+
+    /**
+     * GET /api/account/team/summary?range=&scope=team|firm —— 看板取数。
+     * scope=firm 只对已并入律所的团队有意义；**能不能看全所由官网按角色裁决**，
+     * 这一层不判——把角色判定抄到桌面端等于给了「改本机一个值就看全所」的机会。
+     */
+    public Map<String, Object> fetchTeamSummary(int range, String scope) {
+        String s = (scope == null || scope.isBlank()) ? "team" : scope.trim();
+        return getJson("/api/account/team/summary?range=" + range + "&scope=" + s, requireKey());
+    }
+
+    // ---- 层级与加入流程（设计 §10.3） ----
+
+    /** POST /api/account/team/join —— 用 8 位团队邀请码加入（已有团队时官网回 409）。 */
+    public Map<String, Object> joinTeam(String code) {
+        return sendJson("POST", "/api/account/team/join",
+                Map.of("code", code == null ? "" : code.trim()));
+    }
+
+    /** POST /api/account/team/join-code/regenerate —— 重置团队邀请码，旧码立刻失效。 */
+    public Map<String, Object> regenerateTeamJoinCode() {
+        return sendJson("POST", "/api/account/team/join-code/regenerate", Map.of());
+    }
+
+    /** POST /api/account/team/firm —— 创建律所，本团队成为总部团队。 */
+    public Map<String, Object> createFirm(String name) {
+        return sendJson("POST", "/api/account/team/firm",
+                Map.of("name", name == null ? "" : name.trim()));
+    }
+
+    /** POST /api/account/team/firm/join —— 本团队按律所邀请码并入律所。 */
+    public Map<String, Object> joinFirm(String code) {
+        return sendJson("POST", "/api/account/team/firm/join",
+                Map.of("code", code == null ? "" : code.trim()));
+    }
+
+    /** PATCH /api/account/team/firm —— 改律所名（总部 OWNER/ADMIN）。 */
+    public Map<String, Object> updateFirm(String name) {
+        return sendJson("PATCH", "/api/account/team/firm",
+                Map.of("name", name == null ? "" : name.trim()));
+    }
+
+    /** POST /api/account/team/firm/join-code/regenerate —— 重置律所邀请码。 */
+    public Map<String, Object> regenerateFirmJoinCode() {
+        return sendJson("POST", "/api/account/team/firm/join-code/regenerate", Map.of());
+    }
+
+    /** DELETE /api/account/team/firm/teams/{teamId} —— 移出团队，或该团队自己退出律所。 */
+    public Map<String, Object> removeFirmTeam(String teamId) {
+        return sendJson("DELETE", "/api/account/team/firm/teams/" + segment(teamId), null);
+    }
+
+    /** PUT /api/account/team/projects/{projectKey}/alias —— 管理者给项目短码起别名。 */
+    public Map<String, Object> setTeamProjectAlias(String projectKey, String label) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("label", label == null ? "" : label);
+        return sendJson("PUT", "/api/account/team/projects/" + segment(projectKey) + "/alias", body);
+    }
+
+    /**
+     * POST /api/account/team/usage —— 上报一天的使用日聚合。
+     *
+     * <p>入参是**已经序列化好的 JSON 串**，不是 Map：payload 由
+     * {@code TeamUsageRollupService} 组装，那里才是「什么字段可以出本机」的唯一裁决点。
+     * 让它把成品交过来，这一层就没有再往里塞字段的机会。
+     */
+    public Map<String, Object> uploadTeamUsage(String payloadJson) {
+        String key = requireKey();
+        AccountTransport.Reply reply = transport.send(
+                "POST", baseUrl() + "/api/account/team/usage", key, payloadJson);
+        if (reply.networkFailure()) {
+            throw networkError();
+        }
+        return handle(reply);
+    }
+
+    /**
+     * 带 Key 的 POST/PATCH/PUT/DELETE 统一出口（GET 走 {@link #getJson}）。
+     * body 为 null 表示无请求体——DELETE 带体在部分反代上会被丢掉，不值得冒这个险。
+     */
+    private Map<String, Object> sendJson(String method, String path, Map<String, Object> body) {
+        String key = requireKey();
+        String json = null;
+        if (body != null) {
+            try {
+                json = objectMapper.writeValueAsString(body);
+            } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                throw new IllegalStateException(e); // 入参都是 String/Boolean，序列化不会失败
+            }
+        }
+        AccountTransport.Reply reply = transport.send(method, baseUrl() + path, key, json);
+        if (reply.networkFailure()) {
+            throw networkError();
+        }
+        return handle(reply);
+    }
+
+    /**
+     * 路径段编码。accountId / inviteId / projectKey 都来自前端传参，直接拼进 URL
+     * 会让一个带 {@code ../} 或 {@code ?} 的值改写请求的目标端点。
+     */
+    private static String segment(String raw) {
+        String value = raw == null ? "" : raw.trim();
+        if (value.isEmpty()) {
+            throw new AccountException(AccountException.Kind.MALFORMED,
+                    LangText.of("缺少必要的标识参数", "A required identifier is missing"));
+        }
+        return java.net.URLEncoder.encode(value, StandardCharsets.UTF_8);
+    }
+
     // ==================== 内部 ====================
 
     /**
@@ -617,10 +781,65 @@ public class AccountService {
      * 状态码分类。5xx 归入 NETWORK（服务器故障不等于凭据失效，不能据此清除本地连接），
      * 401/403 才是明确的鉴权失败——与 PR-A LicenseService 的判定同源。
      */
+    /** 官网鉴权层的机器码：这些仍按凭据失效处理。 */
+    private static final java.util.Set<String> AUTH_ERROR_CODES = java.util.Set.of("unauthorized", "forbidden", "invalid_key", "key_revoked");
+
+    /** 从 4xx 响应体里取 {"error":"xxx"} 的机器码；不是这个形状就返回 null。 */
+    private static final ObjectMapper CODE_MAPPER = new ObjectMapper();
+
+    static String businessErrorCode(String body) {
+        if (body == null || body.isBlank()) return null;
+        try {
+            Map<String, Object> m = CODE_MAPPER.readValue(body, new TypeReference<Map<String, Object>>() {});
+            Object err = m.get("error");
+            if (err instanceof String str && !str.isBlank() && str.length() <= 64 && str.matches("[a-z0-9_]+")) {
+                return str;
+            }
+        } catch (Exception ignore) {
+            // 非 JSON 或形状不对：交回状态码分支
+        }
+        return null;
+    }
+
+    /**
+     * 业务机器码的人话（团队端点契约见官网 doc/desktop-contract.md「团队」节）。
+     * 文案红线同 {@link #unauthorizedMessage()}：不得含「登录」「未授权」「请先」。
+     */
+    static String rejectedMessage(String code) {
+        return switch (code) {
+            case "phone_required" -> LangText.of("需要在官网账户绑定手机号后，才能创建或加入团队", "Bind a phone number to your website account before creating or joining a team");
+            case "already_in_team" -> LangText.of("这个账户已经在一个团队里了", "This account already belongs to a team");
+            case "already_in_firm" -> LangText.of("这个团队已经在一家律所里了", "This team already belongs to a firm");
+            case "bad_code" -> LangText.of("邀请码不存在或已失效", "That invite code does not exist or has expired");
+            case "invite_accepted" -> LangText.of("这条邀请已经被接受过了", "That invite has already been accepted");
+            case "no_team" -> LangText.of("这个账户还没有团队", "This account has no team yet");
+            case "no_firm" -> LangText.of("这个团队还没有加入律所", "This team has not joined a firm");
+            case "owner_cannot_leave" -> LangText.of("团队负责人不能退出团队", "The team owner cannot leave the team");
+            case "head_cannot_leave" -> LangText.of("总部团队不能退出律所", "The head team cannot leave the firm");
+            case "bad_phone" -> LangText.of("手机号格式不对", "That phone number is not valid");
+            case "bad_role" -> LangText.of("角色不合法", "That role is not allowed");
+            case "bad_name" -> LangText.of("名称不能为空", "The name cannot be empty");
+            case "rate_limited" -> LangText.of("操作太频繁，稍后再试", "Too many requests, try again shortly");
+            case "payload_too_large" -> LangText.of("上报数据过大", "The upload is too large");
+            default -> LangText.of("官网拒绝了这次操作（", "The website rejected this request (") + code + LangText.of("）", ")");
+        };
+    }
+
     private Map<String, Object> handle(AccountTransport.Reply reply) {
         int status = reply.status();
-        if (status == 401 || status == 403) {
+        if (status == 401) {
             throw new AccountException(AccountException.Kind.UNAUTHORIZED, unauthorizedMessage());
+        }
+        if (status == 403 || status == 404 || status == 409 || status == 400 || status == 413 || status == 429) {
+            String code = businessErrorCode(reply.body());
+            if (code != null && !AUTH_ERROR_CODES.contains(code)) {
+                // 团队等业务端点：凭据没问题，是规则不许（dev-board#496 裁决 4 的 phone_required 等）。
+                // 折叠成「Key 无效」会让用户去官网重生成一把好 Key，还把真正的原因吞掉。
+                throw new AccountException(AccountException.Kind.REJECTED, rejectedMessage(code), code);
+            }
+            if (status == 403) {
+                throw new AccountException(AccountException.Kind.UNAUTHORIZED, unauthorizedMessage());
+            }
         }
         if (status >= 500) {
             throw new AccountException(AccountException.Kind.NETWORK,
