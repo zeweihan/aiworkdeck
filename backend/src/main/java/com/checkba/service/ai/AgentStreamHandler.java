@@ -25,6 +25,19 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
     // 调用方在本轮开始时记下的 SSE 连接代次，close() 收尾时原样带回
     // （见 SseEmitterService.close 的注释：防止误杀期间重连建立的新连接）
     private final long connectionEpoch;
+    /**
+     * 本轮是否仍是该会话的当前轮次（dev-board#533）。
+     *
+     * <p>一个 conversationId 只有一条 SseEmitter，而被新一轮取代的旧轮次<b>还在继续跑</b>
+     *（工具副作用已经发生，强杀不比跑完安全）。编排器那一侧的终态事件早已由
+     * {@code isCurrentRun} 把关，但流式增量是本类直发的：不加这道闸，旧轮次的
+     * text_delta / reasoning_delta / bubble_start 会一个字一个字地混进新一轮的气泡里。
+     *
+     * <p>闸只管<b>往 emitter 上发什么</b>：本轮的内容累积、看门狗、终态幂等、
+     * 回调（onToken / onEditorStream / onComplete / onError）一概不受影响——
+     * 旧轮次照常跑到自己的终态、落自己的库，只是对 SSE 完全静默。
+     */
+    private final java.util.function.BooleanSupplier currentRunGate;
 
     private final StringBuilder fullContentBuilder = new StringBuilder();
     private boolean isBubbleStarted = false;
@@ -103,7 +116,17 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
         if (f != null) f.cancel(false);
     }
 
+    /**
+     * 无轮次概念的调用方（单次响应、各单元测试）用这个：闸恒开，行为与加闸之前完全一致。
+     * 编排器<b>必须</b>走带闸的那个重载，否则旧轮次的增量会打到新一轮的气泡上。
+     */
     public AgentStreamHandler(SseEmitterService sseEmitterService, String conversationId, TokenUsageService tokenUsageService, String projectId, Long userId, String modelId, long connectionEpoch) {
+        this(sseEmitterService, conversationId, tokenUsageService, projectId, userId, modelId, connectionEpoch,
+                () -> true);
+    }
+
+    public AgentStreamHandler(SseEmitterService sseEmitterService, String conversationId, TokenUsageService tokenUsageService, String projectId, Long userId, String modelId, long connectionEpoch,
+                              java.util.function.BooleanSupplier currentRunGate) {
         this.sseEmitterService = sseEmitterService;
         this.conversationId = conversationId;
         this.tokenUsageService = tokenUsageService;
@@ -111,6 +134,13 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
         this.userId = userId;
         this.modelId = modelId;
         this.connectionEpoch = connectionEpoch;
+        this.currentRunGate = currentRunGate;
+    }
+
+    /** 本轮所有会话级 SSE 事件的唯一出口：不是当前轮次就静默丢弃。 */
+    private void sendSse(String eventName, Object payload) {
+        if (!currentRunGate.getAsBoolean()) return;
+        sseEmitterService.send(conversationId, eventName, payload);
     }
 
     // Callback for each token generated (for real-time tracking)
@@ -156,8 +186,7 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
         if (terminated.get() || reasoningDelta == null || reasoningDelta.isEmpty()) return;
         lastActivityNanos = System.nanoTime();
         streamedAnyReasoning = true;
-        sseEmitterService.send(conversationId, "reasoning_delta",
-                "{\"content\":\"" + escapeJson(reasoningDelta) + "\"}");
+        sendSse("reasoning_delta", "{\"content\":\"" + escapeJson(reasoningDelta) + "\"}");
     }
 
     /** 传输层保活注释：只刷新看门狗，不产生任何事件。 */
@@ -440,7 +469,7 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
                       "{\"operation\":\"create\", \"id\":\"%s\", \"type\":\"%s\", \"status\":\"draft\", \"data\":{\"content\":\"%s\"}}",
                       artifactId, type, jsonContent
                   );
-                  sseEmitterService.send(conversationId, "artifact", artifactEvent);
+                  sendSse("artifact", artifactEvent);
                   
                   // Flush text before artifact
                   if (start > 0) emitText(content.substring(0, start));
@@ -521,7 +550,7 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
 
     private void emitText(String text) {
         if (text == null || text.isEmpty()) return;
-        sseEmitterService.send(conversationId, "text_delta", "{\"content\":\"" + escapeJson(text) + "\"}");
+        sendSse("text_delta", "{\"content\":\"" + escapeJson(text) + "\"}");
     }
 
     @Override
@@ -554,7 +583,7 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
                 "{\"promptTokens\":%d,\"completionTokens\":%d,\"totalTokens\":%d}",
                 promptTokens, completionTokens, totalTokens
             );
-            sseEmitterService.send(conversationId, "token_usage", usageJson);
+            sendSse("token_usage", usageJson);
         }
         
         // Record Usage
@@ -572,7 +601,7 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
             onCompleteCallback.accept(response);
         } else {
             // 没有回调，说明是简单的单次响应，发送 bubble_end
-            sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"finished\"}");
+            sendSse("bubble_end", "{\"status\":\"finished\"}");
         }
     }
     
@@ -601,8 +630,10 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
         } else {
             // 无回调（单次响应）：保持旧行为——发 error 并关流，
             // 否则 SSE 连接会挂到 30 分钟超时、前端永久显示加载态。
-            sseEmitterService.send(conversationId, "error", "Stream Error: " + error.getMessage());
-            sseEmitterService.close(conversationId, connectionEpoch);
+            sendSse("error", "Stream Error: " + error.getMessage());
+            if (currentRunGate.getAsBoolean()) {
+                sseEmitterService.close(conversationId, connectionEpoch);
+            }
         }
     }
     
@@ -610,7 +641,7 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
         this.isBubbleStarted = true;
         this.currentBubbleId = UUID.randomUUID().toString();
         // Send bubble_start
-        sseEmitterService.send(conversationId, "bubble_start", "{\"bubbleId\":\"" + currentBubbleId + "\", \"type\":\"" + type + "\"}");
+        sendSse("bubble_start", "{\"bubbleId\":\"" + currentBubbleId + "\", \"type\":\"" + type + "\"}");
     }
     
     /**

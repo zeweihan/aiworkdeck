@@ -83,12 +83,15 @@ public class ContextAssemblerService {
      * 2. History Messages (Last 20)
      * 3. User Message (Current Prompt)
      * 
+     * @param runId 本轮的运行标识（编排器 RunGuard 生成）。skill 注入按<b>轮次</b>而不是会话取，
+     *              否则同一会话的并发轮次会读到对方的生效集合（dev-board#533）
      * @param agentMode Agent 运行模式 (ASK, PLAN, AGENT)
      * @param activeContext NEW: 当前激活标签页（自动上下文，可为null）
      * @param modelKey 当前使用的模型标识（用于按模型解析 token 预算，可为 null）
      */
     public java.util.List<dev.langchain4j.data.message.ChatMessage> assemble(
             String conversationId,
+            String runId,
             String userPrompt,
             java.util.List<com.checkba.controller.ai.AiAgentController.ContextItem> contextItems,
             com.checkba.controller.ai.AiAgentController.ContextItem activeContext,
@@ -218,7 +221,7 @@ public class ContextAssemblerService {
         // 一个都不生效时不注入（行为保持）。
         if (agentMode != AgentMode.ASK) {
             for (com.checkba.service.ai.skill.SkillRouter.ActiveSkill active
-                    : skillRouter.activeSkills(conversationId)) {
+                    : skillRouter.activeSkills(runId)) {
                 systemText.append(skillRouter.promptInjectionFor(active.definition()));
             }
         }
