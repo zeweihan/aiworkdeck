@@ -11,7 +11,7 @@
 // 非文件标签。它们的 fileType 要么缺席、要么与 tabType 同值（'version-compare'
 // / 'diff' / 'web'…），本来就落不进下面的映射表；这里显式挡一道，是为了让
 // 「非文件标签不着色」这条契约有个能被单测钉住的位置，而不是靠「扩展名恰好没撞上」。
-const NON_FILE_TAB_TYPES = ['web', 'browser', 'market-detail', 'admin-settings']
+const NON_FILE_TAB_TYPES = ['web', 'browser', 'market-detail', 'admin-settings', 'insight-entity']
 
 // 分组口径与 config/icons.js 的 fileGlyph 保持一致（csv 跟着 Excel 走）。
 const KIND_BY_EXT = {

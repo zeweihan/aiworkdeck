@@ -1,14 +1,14 @@
 ---
 name: doc-insight
-description: 文档「解析」与「依据」窗格领域。任务涉及实体抽取（企业/法规/案例）、外部库检索（企查查 REST+MCP、北大法宝 MCP、判决书通道）、文档内部一致性校验（数量前后矛盾、统一社会信用代码硬错）、doc_insight_* 三张表与 /api/projects/{pid}/insight 时，先读本文档再动代码。
+description: 文档「解析」与「依据」窗格领域。任务涉及实体抽取（企业/法规/案例/项目内文档）、外部库检索（企查查 REST+MCP、北大法宝 MCP、判决书通道）、文档内部一致性校验（数量前后矛盾、统一社会信用代码硬错）、doc_insight_* 三张表与 /api/projects/{pid}/insight 时，先读本文档再动代码。
 ---
 
 # 文档解析 / 依据窗格 领域地图
 
-职责边界：用户在编辑器点「解析」之后的<b>后端全链路</b>——通读文档 → 抽三类实体 → 逐个打外部库 → 同时做文档内部一致性校验 → 落库供前端「依据」窗格轮询。
+职责边界：用户在编辑器点「解析」之后的<b>后端全链路</b>——通读文档 → 抽四类实体 → 逐个打外部库（DOC 那类打的是本项目文件树）→ 同时做文档内部一致性校验 → 落库供前端「依据」窗格轮询。
 不含：编辑器侧的定位与一键替换（属 ai-doc-bridge），AI 对话里的 `qichacha_query` / `law_*` 工具（属 ai-chat，与本领域<b>共用下游、不共用代码</b>）。
 
-dev-board#181（后端部分）+ #182。
+dev-board#181（后端部分）+ #182 + #541（DOC 第四类实体）。
 
 ## 关键文件
 
@@ -52,7 +52,7 @@ dev-board#181（后端部分）+ #182。
 `doc_insight_run`：id / project_id / doc_file_id / status(RUNNING|DONE|FAILED) / phase（可读进度短语，前端直接显示）/ error / model / started_at / finished_at。
 索引 `(project_id, doc_file_id, started_at)`。
 
-`doc_insight_entity`：id / run_id / project_id / doc_file_id / kind(COMPANY|LAW|CASE) / name（展示名）/ norm_key（归一键，去重与缓存都按它）/ mentions_json / retrieval_status / retrieval_source / retrieval_json(TEXT) / retrieval_note / retrieval_hint / fetched_at。
+`doc_insight_entity`：id / run_id / project_id / doc_file_id / kind(COMPANY|LAW|CASE|DOC) / name（展示名）/ norm_key（归一键，去重与缓存都按它）/ mentions_json / retrieval_status / retrieval_source / retrieval_json(TEXT) / retrieval_note / retrieval_hint / fetched_at。
 索引 `(run_id)` 与 `(project_id, kind, norm_key, fetched_at)`（后者是 7 天缓存命中查询）。
 
 `doc_insight_finding`：id / run_id / project_id / doc_file_id / kind(COUNT_MISMATCH|USCC_INVALID|CITATION_NOT_FOUND|CITATION_MISMATCH) / severity(warn|error) / title / detail_json(TEXT) / created_at。
@@ -63,9 +63,9 @@ LAW 的 `authoritative`（权威条文原文）、CASE 的 `recognition`（案�
 **`retrieval_status` 五态的语义分工（最容易写错的一处）**
 | 值 | 含义 | 典型来源 |
 |---|---|---|
-| PENDING | 还没轮到它 | 实体刚落库 |
+| PENDING | 还没轮到它 | 实体刚落库（DOC 除外：它在落库时就判完了） |
 | OK | 拿到结果 | 上游 200 |
-| **NOT_FOUND** | **查完了，上游明确说没有**——一次成功的检索 | 企查查两条路都没查到、网关回「【有效请求】查询无结果」、法宝回空数组 |
+| **NOT_FOUND** | **查完了，上游明确说没有**——一次成功的检索 | 企查查两条路都没查到、网关回「【有效请求】查询无结果」、法宝回空数组、**DOC 在项目文件树里没有对应文件** |
 | **UNAVAILABLE** | **通道不可用**——不是「查无此项」 | 本机没凭证、法宝点数耗尽（401）、案例通道未配置、`GatewayException`（NOT_FOUND 那一类除外） |
 | ERROR | 打了但失败（异常、形状不认得） | 企查查全称重打时抛的非网关异常 |
 
@@ -100,11 +100,14 @@ NO_CREDENTIAL 不给按钮是刻意的：官方版没有法宝凭据输入框（
 startParse（同步）：写权限 → 文件校验 → 单飞闸 → 落 RUNNING 行 → 返回 runId
   ↓ executor（专用 2 线程池，整段包在 PlatformAiUserScope.run(userId, …) 里）
 ① 读取文档   DocumentTextService.extractText，超 insight.max-chars 截断并在 phase 里写明
-② 确定性预抽取  案号正则 + 书名号法规正则（正则那条腿保证下限，永不漏不编）
+② 确定性预抽取  案号正则 + 书名号法规正则 + 书名号文档正则（正则那条腿保证下限，永不漏不编）
 ③ 逐块 LLM 抽取  chunk-chars=10000 / overlap=500，每块一次 getAuxChatModel().generate
                 单块失败只跳过这一块；每块记一笔 token_usage
 ④ 合并去重   按 (kind, normKey)，出处累加（上限 max-mentions），展示名取最长的
-⑤ 逐个检索   命中 7 天缓存则复制；否则打上游。**每个实体检索完立刻 save**
+④' 文档匹配   resolveDocFiles：DOC 候选对项目文件树，命中的 normKey 改写成 `file:<id>` 后**再合并一次**
+              （多处提到同一份文件 = 一条实体）；OK/NOT_FOUND 在 persistEntities 里就写死
+⑤ 逐个检索   命中 7 天缓存则复制；否则打上游。**每个实体检索完立刻 save**。
+              **DOC 在 retrieveOne 开头整段跳过**（既不打上游也不读缓存）
 ⑥ 法条引用校验 insight.citation-server 配了才跑（法宝 adjust_provisions）：逐个 LAW 实体
               （有条号 + 条号能转成阿拉伯数字，上限 30 个）→ 回填 authoritative +
               产出 CITATION_NOT_FOUND / CITATION_MISMATCH。**单条失败只跳过这一条**
@@ -117,6 +120,10 @@ startParse（同步）：写权限 → 文件校验 → 单飞闸 → 落 RUNNIN
 - COMPANY：去括号内容 → `EvidenceChecks.compact`（NFKC + 去空白 + 大写）→ 剥组织形式后缀。
 - LAW：`compact(书名号内标题) + "#" + compact(条号)`。
 - CASE：案号（全角括号转半角 + 去空白）；没案号时用标题。
+- DOC：`DocInsightExtraction.normalizeDocTitle`——去书名号 → 去括号注记 → 去扩展名 →
+  去序号前缀（`^[\d一二三四五六七八九十]+[-.、）)]`）→ `compact`。**正文标题与文件名两边用同一个函数**。
+  命中项目文件后归一键**改写成 `file:<id>`**（这是与前端的契约：多处提到同一份文件只出一条实体）；
+  没命中的保留标题键。**不要复用企业的 `stripOrgSuffix`**：文件名里的「合同」「协议」正是主干。
 
 **检索路由**
 法宝那三行（LAW / CASE / 引用校验）**一律经 `PkulawChannel`**：平台档下 op = 法宝工具名、
@@ -128,6 +135,7 @@ service = `pkulaw`，端点写死在官网网关；自备 Key 档才落到 `McpC
 | COMPANY | `QichachaService.queryEciInfoJson` → 查不到再 `qichacha-company` MCP 的 `get_company_by_query` 模糊搜索拿全称 → 用全称重打 REST | REST 只认工商全称，非全称回 Status 201 无结果；MCP 那把是**另一套凭证** |
 | LAW | 有条号 → `pkulaw-semantic` / `get_article`；无条号 → `pkulaw-keyword` / `get_law_list` | |
 | CASE | **先导步**：`insight.case-number-server` / `-tool`（yml 默认 `pkulaw-case-number` / `anhao_recognition`，参数 `text`）把案号标准化并给出法院/判决书标题/法宝链接 → 用**标题**去打 `insight.case-server` / `-tool` / `-arg`（yml 默认 `pkulaw-case-semantic` / `search_case` / `text`） | 识别只做加法：未配置 / 报错 / 空数组一律**静默走原路**（拿案号原文检索）。识别命中而全文检索失败 → 仍记 **OK**，`retrievalJson` 只有 `recognition`、note 写「仅返回案号识别结果」。换别家案例 MCP 只改配置；代码内缺省全为空。法宝另有关键词档 `pkulaw-case-keyword`（`get_case_list`）备用 |
+| DOC | **不打任何外部库**：`ProjectFileRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc` 取存活文件（**排除文件夹**），文件名同口径归一后 相等优先、其次两向包含；多个命中取相等、再取 `filePath` 最短的 | 抽取只走确定性正则（`DocInsightExtraction.DOC_TITLE`），**LLM 提示词一个字没动**。同一个书名号只能落一类：法规体裁先被 `LAW_TITLE` 吃掉（按匹配起点排重），剩下的才是 DOC |
 | LAW 引用校验 | `insight.citation-server` / `-tool`（yml 默认 `pkulaw-citation-validator` / `adjust_provisions`） | 见「法条引用校验」一节。代码内缺省为空 = 整步跳过 |
 
 ## REST 契约（前端照这个接）
@@ -184,6 +192,14 @@ USCC_INVALID 的 detail 形状不同（没有 claims）：
                           "snippet":"…（截 200 字）","url":"https://www.pkulaw.com/…"}],
            "note":"候选可能来自旧版法规（存在条文重编号），请人工核对现行版本","fixable":false}}
 ```
+
+DOC 实体的 `detail`（命中项目文件时；`GET /entities/{id}` 才下发，列表里只有 `hasDetail:true`）：
+```json
+{"source":"project-file","fileId":21,"fileName":"房屋租赁合同.docx","filePath":"/p/1/房屋租赁合同.docx"}
+```
+前端据 `fileId` 直接打开那份文件。**没命中的落 NOT_FOUND**（note「项目中未找到该文件」、
+`retrievalHint` 为 null、`retrievalJson` 为 null → `hasDetail:false`），窗格**不给「重试」**：
+重试一百次还是同一句话，且这条本身就是尽调线索（文档提到但项目里缺这份），不是我们的故障。
 
 实体 `detail` 里的两个升级件字段（`GET /entities/{id}` 才下发）：
 ```json
@@ -295,7 +311,13 @@ USCC_INVALID 的 detail 形状不同（没有 claims）：
    不卡住就是间歇红——#394 的教训）。`DocInsightServiceTest.中间态与单飞` 是现成的写法。
 8. `Response.from(AiMessage.from(text))` **不带 tokenUsage**，记账断言会永远是空的。单测里用带 usage 的重载
    （`DocInsightServiceTest.modelReply`）。
-9. 本轮**不加 AI 工具**：UI 直连 REST，`AgentOrchestrator` / `ToolRegistry` / `RealToolBeans` 一行没动。
+9. **DOC 必须在 `retrieveOne` 开头整段返回**（dev-board#541）。它的「检索」是与项目文件树比对，
+   在 `persistEntities` 里就判完了。漏了这条守卫有两个后果：① switch 的 `default` 分支把已判好的
+   OK / NOT_FOUND 覆盖成 `UNAVAILABLE`「未知实体类型」——一句彻头彻尾的假故障；
+   ② `copyFromCache` 会拿 7 天前的 OK 盖掉「这份文件现在已经不在项目里了」。
+   `refreshEntity` 走的是同一个方法，所以「重新检索」对 DOC 天然是空操作。
+   `DocInsightServiceTest` 里删掉那一行会直接红三条（2026-09-09 对拍过）。
+10. 本轮**不加 AI 工具**：UI 直连 REST，`AgentOrchestrator` / `ToolRegistry` / `RealToolBeans` 一行没动。
    将来要给模型开一个 `doc_insight` 工具，记得同步 `RealToolBeans.instantiateAll()`（ai-chat 领域的既有地雷）。
 
 ## 前端（dev-board#182）
@@ -305,9 +327,12 @@ USCC_INVALID 的 detail 形状不同（没有 claims）：
 - `frontend/src/components/InsightPane.vue` + 同目录外置样式 `insight-pane.scss` —— 「依据」窗格本体，两个 tab（外部检索 / 一致性校验）。
 - `frontend/src/utils/insightMatch.js` —— 纯函数：`cursorWindow` / `matchEntityAt`（光标邻域命中实体）、`buildFixedQuote` / `fixSuggestions` / `fixBlockReason` / `findingLocateQuote`（一键修改的替换串）。**不许 import Vue/uni/i18n**（`node --test` 直接导入，且客体页 `editor-main.js` 也 import 它取 `CURSOR_RADIUS`）。
 - `frontend/src/utils/insightDetail.js` —— 纯函数：把 COMPANY/LAW/CASE 三种 `detail` 整形成可渲染的行，外加 `authoritative`（权威条文原文）/ `caseRecognition`（案号识别行）/ `citationDetail`（两类引用发现）。上游形状是别人家的，一律「认得的列出来、认不得的落原文兜底」。
+- `frontend/src/components/InsightHoverCard.vue` / `InsightEntityDetailPane.vue` / `InsightEntityBody.vue` —— 实体浮窗、实体详情标签页，以及**两者共用的一份正文渲染**（dev-board#541）。字段整形全部来自 `insightDetail.js`，不许再抄一份解析。
+- `frontend/src/utils/insightPopup.js` —— 纯函数：`guestPointToHost`（客体页 clientX/clientY + 画布 rect → 宿主页面坐标）、`hoverCardPosition`（贴点击点、靠边翻转、绝不出屏）。同 `insightMatch.js` 的口径：不许 import Vue/uni/i18n。
+- `frontend/src/pages/project-overview/insightEntityTab.js` —— 方法组：`insightEntityTabId` + `openInsightEntityTab` + `openInsightDocFile`（外置是为了能拿假 this 单测「强制开分屏」与「单例」两条）。
 - `frontend/src/config/panelRegistry.js` —— `insight` 一条（`defaultDock:'right'`、`allowedDocks:['left','right']`，**不给 bottom**：底栏放不下判决书全文）。
 - `frontend/src/services/api.js` —— `parseDocInsight` / `getDocInsight` / `getDocInsightEntity` / `refreshDocInsightEntity`。
-- 宿主接线在 `frontend/src/pages/project-overview/project-overview.vue`（右栏 `rightPaneKey==='insight'` / 左栏 `leftPaneKey==='insight'` 两条显式分支 + `isInsightDoc` / `getInsightExecutor` / `onOpenInsight` / `onInsightEntities` / `onEditorCursorContext`）。
+- 宿主接线在 `frontend/src/pages/project-overview/project-overview.vue`（右栏 `rightPaneKey==='insight'` / 左栏 `leftPaneKey==='insight'` 两条显式分支 + `isInsightDoc` / `getInsightExecutor` / `onOpenInsight` / `onInsightEntities` / `setInsightIndex` / `insightSubscribedFor` / `prefetchInsightIndex` / `onEditorCursorContext` / `openInsightHoverCard` / `closeInsightHoverCard`；浮窗在**根节点**渲染，实体详情标签在左右两条 `v-else-if` 链里各一份）。
 - 编辑器侧：`EditorToolbar.vue` 的「解析」按钮（`toggle-insight`）→ `LibreOfficeEditor.vue` `onToggleInsight` → `open-insight` → 宿主。
 
 ### 事件流
@@ -319,14 +344,54 @@ USCC_INVALID 的 detail 形状不同（没有 claims）：
 面板 → @entities{docFileId,entities[]} → 宿主 _insightIndex（非响应式，同 _libreRefs 口径）
 
 画布单击 / 光标移动 → 客体页 editor-main.js（**仅在订阅打开时**）get_cursor_context
-   → lo-relay {type:'cursor-context', payload:{before,after,paragraph,meta:{metaKey,ctrlKey}}}
-   → LibreOfficeEditor $emit('cursor-context') → 宿主 onEditorCursorContext（先用 _insightIndex 匹配一遍）
-   → :cursor-context prop → 面板 matchEntityAt → Cmd/Ctrl 点击=选中并展开详情；普通点击/光标移动=被动高亮
+   → lo-relay {type:'cursor-context', payload:{before,after,paragraph,
+                meta:{metaKey,ctrlKey,clientX,clientY}}}      ← 点击那一路才有坐标
+   → LibreOfficeEditor withHostPoint（画布 rect **每次现取**）→ meta 里补 {hostX,hostY}
+   → $emit('cursor-context') → 宿主 onEditorCursorContext（先用 _insightIndex 匹配一遍）
+   → 窗格开着且绑着这份文档：:cursor-context prop → 面板 matchEntityAt
+        · 普通点击/光标移动 = 被动高亮
+        · Cmd/Ctrl 点击     = @open-hover{entity,x,y} → 宿主 openInsightHoverCard
+   → 窗格没开：宿主只处理 Cmd/Ctrl 那一支，直接 openInsightHoverCard
+浮窗「在新标签页打开」 → openInsightEntityTab → 右侧分屏 tabType 'insight-entity'
 ```
 
 订阅开关是宿主 → 客体页的下行消息 `{__lo:'lo-relay', type:'insight-sub', enabled}`，
 由 `LibreOfficeEditor` 的 `insightSubscribed` prop 驱动（`ready` 时补发一次）。
-**不订阅时客体页一次 `get_cursor_context` 都不打**——没开窗格的用户零开销。
+判据在宿主的 `insightSubscribedFor(file)`：**窗格开着且绑在它上面，或这份文档已经解析出实体**
+（dev-board#541 把订阅与窗格显隐解耦——否则窗格一关，正文 Cmd 点击就没反应）。
+索引由 `prefetchInsightIndex`（文档标签激活时拉一次 `GET /insight`，一份文档只拉一次、
+失败不写缓存）与窗格的 `@entities` 共同填，唯一写入点是 `setInsightIndex`
+（写非响应式的 `_insightIndex` + 响应式计数镜像 `insightEntityCounts`，模板要用后者）。
+**没解析过的文档仍然一次 `get_cursor_context` 都不打**——「零开销」那条口径对它们没变。
+
+### 实体浮窗与实体标签页（dev-board#541）
+
+- 正文里 **Cmd（mac）/ Ctrl 点击**命中实体 → 贴着点击处弹 `InsightHoverCard`：类型徽标 + 名称 +
+  检索状态/来源/note + 核心字段摘要 + 底部「在新标签页打开」。遮罩点击或 **Esc** 关闭。
+- **浮窗挂在页面根节点**（不在面板里）：编辑器画布是独立合成层的 `<webview>`，
+  浮层只有在根级 + 高 z-index（同 `FileTree` 右键菜单的 9999/10000）才压得住。
+  桌面端还要进 `desktopOverlayActive`——另一侧开着浏览器标签时 BrowserView 是原生层，会盖住 DOM。
+- **拿不到坐标就不弹**：`guestPointToHost` 在 rect 缺失 / 客体页没带 clientX/clientY 时返回 null，
+  `openInsightHoverCard` 据此直接 return。弹到屏幕角落比不弹更糟——用户会以为自己点错了地方。
+- 「在新标签页打开」→ `openInsightEntityTab`：**未分屏先开分屏**、`focusedPane='right'`、
+  单例 id `insight-entity_<kind>_<id>`（跨两侧查重，已开的只激活不重建）。
+  落右侧是硬要求：开在左边会把用户正在读的那份文档顶掉。
+  `tabType 'insight-entity'` 必须在 `pages/project-overview/fileKind.js` 的 `NON_FILE_TAB_TYPES` 里。
+- 浮窗与标签页**共用 `InsightEntityBody`** 一份渲染（浮窗档 `compact`：截长正文、不列其余候选、不铺原始 JSON）。
+  同步给宿主的实体索引是**瘦身**的（名字 + 几个短标量），**出处 `mentions` 不进索引**——
+  标签页要出处时自己打一次 `GET /entities/{id}`（EntityView 里就有）。
+- **DOC 实体的展示与「打开文件」**（#541）：`KIND_ORDER` 第四位（漏了它 `entityGroups` 会把 DOC 兜底归进公司组），
+  分组标题/徽标 i18n 在 `insight.kind.DOC` / `insight.entityKind.DOC`。命中项目文件时列文件名 + 路径 +
+  「打开文件」，一路 `open-doc-file{fileId,fileName}` 上抛到宿主 `openInsightDocFile`：
+  **未分屏先开分屏、落右侧**再走既有 `openFile`（已在任一侧开着的只激活、不动分屏；
+  文件对象从 `$refs.fileTree.allFiles` 反查，查不到给一句 `insight.docMissing` 的 toast）。
+  浮窗对 DOC 的底部主按钮就是「打开文件」（**不给「在新标签页打开」**——实体详情标签对它没有意义，
+  打开文件本身就落在右侧分屏），没命中时底栏整条不出。字段整形走 `insightDetail.js` 的 `projectFile`。
+  **DOC 一律不给「重试」**（`showRetry` 对 `kind==='DOC'` 恒 false）：它的检索是与静态文件树比对，
+  后端 refresh 对 DOC 是空操作；未命中的说明沿用后端的 `retrievalNote`「项目中未找到该文件」。
+  宿主的三处 `@open-doc-file`（InsightPane 两处挂载点 / InsightHoverCard / InsightEntityDetailPane 左右两处）
+  漏一处 `check:emits` 直接红。
+- 面板里的 Cmd/Ctrl 点击**不再展开面板内详情**：用户的视线在正文上，把他引到侧栏去找刚点的那一条是多余的一步。
 
 ### 定位与一键修改的口径（硬约束）
 
@@ -345,7 +410,7 @@ USCC_INVALID 的 detail 形状不同（没有 claims）：
   带 `retrievalHint` 的**不给「重试」**，给引导按钮（`noteAction` → `open-settings {nav:'account'}`，NO_CREDENTIAL 只出一行 `.ip-note-h` 文案）；
   没有 hint 的才给「重试」（`showRetry` = `canParse && !retrievalHint`，`POST /entities/{id}/refresh`，要写权限）。
   面板自己不 `uni.navigateTo`：设置由宿主 `openSettingsTab` 就地开中栏标签（与 `@open-url` 同一条口径），
-  **两处挂载点（左栏 / 右 dock）都要绑 `@open-settings`**，漏一处 `check:emits` 直接红。
+  **两处挂载点（左栏 / 右 dock）都要绑 `@open-settings`**（`@open-hover` 同理），漏一处 `check:emits` 直接红。
   NOT_FOUND 用**中性灰**（`.ip-dot.st-NOT_FOUND` / `.ip-note.st-NOT_FOUND`），不用告警色：
   文档里写了一家不存在的公司，是文档的问题，不是我们的故障。
 - 两类引用发现（CITATION_*）在一致性 tab 里只列不改：`fixSuggestions` 看的是 `detail.claims`，引用 detail 没有这一段，天然落不到「修改建议」那一支；点条目仍按 `detail.quote` 定位。CITATION_MISMATCH 的「引用条文」是折叠段（`citedOpen`）。
@@ -356,7 +421,7 @@ USCC_INVALID 的 detail 形状不同（没有 claims）：
 ### 前端验证
 
 ```
-cd frontend && npm run test:insight        # 91 条（纯函数 58 + 组件级 33）
+cd frontend && npm run test:insight        # 115 条（纯函数 58 + 组件级 36 + 浮窗坐标 10 + 实体标签 11）
 cd frontend && npm run test:panel-dock     # 注册表自洽 + 停靠回落
 cd frontend && npm run check:emits && npm run check:nav && npm run check:locales
 cd frontend && npm run build:h5 && npm run build:zetaoffice   # 改 editor-main.js 后必须重建 glue
@@ -371,7 +436,7 @@ cd frontend && npm run build:h5 && npm run build:zetaoffice   # 改 editor-main.
 ## 验证
 
 ```
-cd backend && mvn test -Dtest='DocInsight*,LawArticle*'   # 65 条
+cd backend && mvn test -Dtest='DocInsight*,LawArticle*'   # 70 条
 cd backend && mvn test -Dtest='*Mcp*Test'                 # 含 StreamableHttpMcpProviderCredentialTest（空凭证不发请求）
 cd backend && mvn clean test                      # 全量（跨类常量内联，验证阶段一律 clean）
 ```
@@ -379,12 +444,15 @@ cd backend && mvn clean test                      # 全量（跨类常量内联�
   后缀剥离等价、USCC 校验位与去重、**fixable 三条降级分支**、空输入。
 - `LawArticleNumbersTest`（7）：十/百/千组合与「零」、`之N`、已是阿拉伯数字（含全角）、
   **转不动一律 null**、引文剥引用字样取内容线索。
-- `DocInsightServiceTest`（33）：RUNNING 中间态（CountDownLatch）、单飞、企查查降级链、网关失败落 UNAVAILABLE、
+- `DocInsightServiceTest`（38）：RUNNING 中间态（CountDownLatch）、单飞、企查查降级链、网关失败落 UNAVAILABLE、
   **平台档法宝四条通道全部走网关且一次法宝 MCP 都不打 / 网关失败仍 UNAVAILABLE / 本机没凭证说「未配置」不说「本次不可用」/
   上游明确回空 = NOT_FOUND 且按「跑完了」计进摘要**、
   法宝不可用不连坐、案例通道从「未配置」到「配上就接入」、**案号识别命中改用标题检索 / 识别失败静默走原路 /
   识别命中但全文失败仍 OK**、**引用校验三种判定 + 通道未配置整步跳过 + 通道报错不报发现 + 上限 30**、
   7 天缓存与 refresh 绕过、列表瘦身/发现不瘦身、**配置类失败带结构化 `retrievalHint`（未连接账户 / 余额不足 / 本机没凭据）
   且 note 不说「本次不可用」，瞬时失败不带原因码**、
-  读不出文字与辅助模型未配置 → FAILED、单块坏输出不炸整轮、鉴权与跨项目 IDOR。
+  读不出文字与辅助模型未配置 → FAILED、单块坏输出不炸整轮、鉴权与跨项目 IDOR、
+  **DOC（#541）：书名号分流（法规仍归 LAW）/ 相等·去序号前缀·去括号注记三种命中且 detail 带 fileId /
+  同名文件夹不算命中 → NOT_FOUND 且 note 不提重试 / 多处提到同一份文件合并成一条 /
+  重新检索是空操作、不把状态覆盖成 UNAVAILABLE**。
 - `DocInsightControllerTest`（6）：4010 信封、code=1、参数透传、响应形状、路由不互相吃。

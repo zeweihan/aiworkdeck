@@ -11,9 +11,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -200,15 +202,35 @@ final class DocInsightExtraction {
             "《([^《》]{2,60}?(?:法|条例|办法|规定|规则|细则|解释|准则|通知|意见|决定|批复|公告|标准|指引))》"
                     + "(?:\\s*第([一二三四五六七八九十百千零〇\\d]{1,10})条)?");
 
-    /** 正则能认的两类实体（案号、书名号法规）。企业名没有确定形状，只能靠模型。 */
+    /**
+     * 书名号里的其余标题（dev-board#541）：与 {@link #LAW_TITLE} <b>互补</b>——
+     * 同一个书名号只能落一类，法规体裁的先被 LAW_TITLE 吃掉，剩下的才当「文中提到的另一份文件」。
+     * 不限定尾字：文件名是用户起的，《房屋租赁合同》《尽调清单》《附件二》都可能真有对应文件。
+     */
+    static final Pattern DOC_TITLE = Pattern.compile("《([^《》]{2,60})》");
+
+    /**
+     * 正则能认的三类实体（案号、书名号法规、书名号文档）。企业名没有确定形状，只能靠模型。
+     *
+     * <p>DOC 这一类<b>只走正则、不进提示词</b>：书名号是确定形状，正则永远不漏也不编，
+     * 而让模型去猜「这是不是项目里的一份文件」既贵又不稳（判定要看项目文件树，模型看不到）。
+     */
     static List<RawEntity> scanDeterministic(String text) {
         List<RawEntity> out = new ArrayList<>();
         if (text == null || text.isEmpty()) return out;
 
+        // 法规先扫，记下这些书名号的起点：同一个书名号不许再被当成文档
+        Set<Integer> lawStarts = new HashSet<>();
         Matcher m = LAW_TITLE.matcher(text);
         while (m.find()) {
+            lawStarts.add(m.start());
             String article = m.group(2) == null ? null : "第" + m.group(2) + "条";
             out.add(law("《" + m.group(1) + "》", article, around(text, m.start(), m.end())));
+        }
+        m = DOC_TITLE.matcher(text);
+        while (m.find()) {
+            if (lawStarts.contains(m.start())) continue;
+            out.add(docRef(m.group(1), around(text, m.start(), m.end())));
         }
         m = CASE_NO.matcher(text);
         while (m.find()) {
@@ -245,6 +267,35 @@ final class DocInsightExtraction {
         String display = no.isEmpty() ? title.trim() : no;
         return new RawEntity(DocInsightEntity.KIND_CASE, display,
                 normalizeCaseNo(no.isEmpty() ? title : no), null, mentions(quote));
+    }
+
+    /** 文中提到的另一份文档。normKey 先按标题归一，命中项目文件后由服务层改写成 {@code file:<id>}。 */
+    static RawEntity docRef(String title, String quote) {
+        String t = stripBookMarks(title);
+        return new RawEntity(DocInsightEntity.KIND_DOC, t, normalizeDocTitle(t), null, mentions(quote));
+    }
+
+    /** 文件名里的扩展名（真实文件才有，正文里的书名号标题通常没有）。 */
+    private static final Pattern EXTENSION = Pattern.compile("\\.[A-Za-z0-9]{1,8}$");
+    /** 「04-」「三、」「1.」这类人肉序号前缀，文件树里满地都是，正文引用时一般不带。 */
+    private static final Pattern ORDER_PREFIX = Pattern.compile("^[\\d一二三四五六七八九十]+[-.、）)]\\s*");
+    /** 括号里多半是版本 / 日期 / 份数注记（「（2021）」「(终稿)」），两边都去掉才对得上。 */
+    private static final Pattern BRACKETED = Pattern.compile("[（(][^（()）]*[)）]");
+
+    /**
+     * 文档标题归一（dev-board#541）：去书名号 → 去括号注记 → 去扩展名 → 去序号前缀 →
+     * {@link EvidenceChecks#compact}（NFKC + 去空白 + 大写）。
+     *
+     * <p>正文写的《房屋租赁合同》与文件树里的「04-房屋租赁合同（2021）.docx」要归到同一把钥匙上，
+     * 所以两边用<b>同一个函数</b>。企业那套 {@code stripOrgSuffix} 不能复用：
+     * 文件名里的「协议」「合同」正是它的主干，剥掉就什么都不剩了。
+     */
+    static String normalizeDocTitle(String s) {
+        String t = stripBookMarks(s);
+        t = BRACKETED.matcher(t).replaceAll("");
+        t = EXTENSION.matcher(t.trim()).replaceAll("");
+        t = ORDER_PREFIX.matcher(t.trim()).replaceFirst("");
+        return EvidenceChecks.compact(t);
     }
 
     /**
