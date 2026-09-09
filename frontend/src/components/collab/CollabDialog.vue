@@ -207,6 +207,7 @@ import {
   getCloudMembers, addCloudMember, lookupCloudMember, getOfficialCloud,
 } from '@/services/api.js'
 import { roleLabel, ASSIGNABLE_ROLES } from '@/config/memberRoles.js'
+import { shareProjectToLibrary } from '@/utils/cloudShare.js'
 import { getInitial } from '@/utils/textInitial.js'
 
 export default {
@@ -327,19 +328,19 @@ export default {
     },
     async onShare() {
       if (this.busy) return
-      // 本机只认一个案件库：官方那个，或 cloud.collab.base-url 指过来的自建库。
-      // 恰好只有一条连接时指名用它（省掉一次重新桥接）；没有连接时不传 connectionId，
-      // 让后端连官方案件库再共享。多于一条（只可能是运维经 API 连出来的历史状态，
-      // 界面上已无从消歧义）时直接拒绝——绝不"拿列表第一条"也绝不静默改推官方：
-      // 前者会拿着失效令牌去推一个早已不在的服务器，后者会把案卷推去用户没选的地方。
-      if (this.connections.length > 1) {
-        uni.showToast({ title: this.$t('version.tooManyLibraries'), icon: 'none' })
-        return
-      }
-      const connectionId = this.connections.length === 1 ? this.connections[0].id : null
+      // 选哪条连接的规则搬到了 utils/cloudShare.js——InviteMemberDialog 的
+      // 「放进团队案件库」按钮用的是同一段判定，复制一份必然慢慢分叉。
       this.busy = true
       try {
-        await shareProjectToCloud(this.projectId, connectionId)
+        const res = await shareProjectToLibrary({
+          projectId: this.projectId,
+          connections: this.connections,
+          share: shareProjectToCloud,
+        })
+        if (!res.ok) {
+          uni.showToast({ title: this.$t('version.tooManyLibraries'), icon: 'none' })
+          return
+        }
         uni.showToast({ title: this.$t('version.sharedToLibrary'), icon: 'none' })
         this.$emit('changed')
       } catch (e) {

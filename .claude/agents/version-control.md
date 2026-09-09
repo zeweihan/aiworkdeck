@@ -73,6 +73,20 @@ description: 项目级版本记录领域。任务涉及版本记录/工作段（
   **`onShare` 的取库规则**：恰好一条连接时用那一条（自建部署经 API 连出来的那条，省一次重新桥接），
   0 条或多于 1 条都不传 `connectionId`、由后端连官方案件库——**绝不再拿 `list[0]`**（地雷 #31 的病根）。
   邀请话术只剩官方那一版（`inviteTextOfficial` / `...NoInviter`），带「填地址」的两个键已删。
+  **取库规则本体已抽到 `frontend/src/utils/cloudShare.js`**（`pickShareConnectionId` / `shareProjectToLibrary`，
+  share 函数由调用方注入以便 node --test），`CollabDialog.onShare` 与 `InviteMemberDialog` 的「放进团队案件库」
+  按钮共用，别再各写一份。
+- `InviteMemberDialog.vue`（`frontend/src/components/`，成员堆栈「+」与项目列表卡片「+」打开的「把人加进这份案卷」）
+  ——**dev-board#527（2026-09-09）起「所里同事」tab 按 `localMode x linked` 三轨**（判定在
+  `utils/memberLookup.js` 的 `resolveTrack`）：`localMode=false`（自建多用户服务器）走本机轨
+  `lookupProjectMember`/`addProjectMember`；桌面 local-mode 且案卷已入库走云端轨 `lookupCloudMember`/`addCloudMember`
+  （与协作抽屉同一张表，不再有「两边各加一次」）；桌面 local-mode 且未入库**不给输入框**，只给「放进团队案件库」
+  按钮——本机用户表里没有同事，在那里加谁都没有意义。local-mode 读 `GET /api/local-identity/status` 并模块级缓存，
+  `cloud` prop 缺省时自己调 `getCloudStatus`（项目列表页不传）。**边输入边查**：500ms debounce，`isWorthLooking`
+  只在像邮箱 / 归一后是 11 位手机号 / 其余长度 >= 2 时才发请求（敲到一半的手机号不查——查人限频按项目管理员计数，
+  与加人共用），递增序号丢弃过期回包。人卡 / 已在案卷 / 「没有这个用户」+「去邀请」（邀请链接
+  `${siteBaseUrl()}/{zh|en}/start`，云端轨再给整段加入说明）/ 红字错误行**一律就地显示，不走 toast**。
+  单测 `frontend/tests/member-invite/`（`npm run test:member-invite`，已进 CI）。
 - **admin 的「团队案件库」与「记忆同步」两个分区已撤（dev-board#440，2026-09-05）**，连同
   2026-08-18 那张 `.cloud-help-card` 空态说明卡（`admin.cloudNoServerTitle` 起五条文案）一起。
   那张卡当初是为了回答「这三个框到底填什么」而加的；现在的答案是**律师根本不该看见这三个框**——

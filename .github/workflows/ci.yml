@@ -105,6 +105,9 @@ jobs:
       - name: Team panel + locale contracts (dev-board#496)
         working-directory: frontend
         run: npm run test:team
+      - name: Member invite lookup + case-library share rules
+        working-directory: frontend
+        run: npm run test:member-invite
       - name: Desensitize pane custom-words entry (dev-board#531)
         working-directory: frontend
         run: npm run test:desensitize
