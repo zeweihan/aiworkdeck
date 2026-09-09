@@ -280,6 +280,44 @@ class MobileApiContractTest {
     }
 
     @Test
+    void wxPhoneLoginEnvelopesMatchSpec() throws Exception {
+        // 成功：与 sms-login/verify 逐字同形（sessionId + isNewUser + user），data 受 LoginData 约束。
+        // 号码用一个本测试专属的段，避免与别的用例抢同一行 users
+        when(billing.wxPhone("wx-code-ok")).thenReturn("13800000123");
+        mvc.perform(post("/api/auth/wx-phone-login").contentType(APPLICATION_JSON)
+                        .content("{\"code\":\"wx-code-ok\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0))
+                .andExpect(jsonPath("$.data.sessionId").isNotEmpty())
+                .andExpect(jsonPath("$.data.isNewUser").value(true))
+                .andExpect(openApi().isValid(validator));
+
+        // 未开通（本机 mobile.billing.* 没配 / 官网没配小程序 AppSecret）：code 1、无 kind，
+        // message 指路短信登录。客户端不按 kind 分支，所以这里也不许多出一个 kind 字段。
+        when(billing.wxPhone("wx-code-off")).thenThrow(new MobileBillingClient.MobileBillingException(
+                MobileBillingKind.DISABLED, "本服务器未开通微信一键登录，请用短信验证码登录"));
+        mvc.perform(post("/api/auth/wx-phone-login").contentType(APPLICATION_JSON)
+                        .content("{\"code\":\"wx-code-off\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(1))
+                .andExpect(jsonPath("$.kind").doesNotExist())
+                .andExpect(jsonPath("$.data").doesNotExist())
+                .andExpect(jsonPath("$.message").value("本服务器未开通微信一键登录，请用短信验证码登录"))
+                .andExpect(openApi().isValid(validator));
+
+        // 官网 401 invalid_wx_code：同一个 code 1 信封，只是换一句话
+        when(billing.wxPhone("wx-code-expired")).thenThrow(new MobileBillingClient.MobileBillingException(
+                MobileBillingKind.REJECTED, "微信授权已过期，请重试", "invalid_wx_code"));
+        mvc.perform(post("/api/auth/wx-phone-login").contentType(APPLICATION_JSON)
+                        .content("{\"code\":\"wx-code-expired\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(1))
+                .andExpect(jsonPath("$.kind").doesNotExist())
+                .andExpect(jsonPath("$.message").value("微信授权已过期，请重试"))
+                .andExpect(openApi().isValid(validator));
+    }
+
+    @Test
     void smsLoginEnvelopesMatchSpec() throws Exception {
         // 不真发短信：非法号码走 code 1 分支，信封形状仍受契约约束
         mvc.perform(post("/api/auth/sms-login/send-code").contentType(APPLICATION_JSON)

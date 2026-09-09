@@ -64,7 +64,7 @@ class AuthControllerHardeningTest {
         UserService userService = mock(UserService.class);
         AuthController controller = new AuthController(
                 userService, null, null, null, serverGuard("closed"), null, null, null, null, sessions(), false, null,
-                mock(com.checkba.service.account.AccountDeletionService.class));
+                mock(com.checkba.service.account.AccountDeletionService.class), null);
 
         Map<String, Object> result = controller.register(registerRequest(), http());
 
@@ -81,7 +81,7 @@ class AuthControllerHardeningTest {
                 .thenReturn(user(1L, "alice"));
         AuthController controller = new AuthController(
                 userService, null, null, null, serverGuard("open"), null, null, null, null, sessions(), false, null,
-                mock(com.checkba.service.account.AccountDeletionService.class));
+                mock(com.checkba.service.account.AccountDeletionService.class), null);
 
         Map<String, Object> result = controller.register(registerRequest(), http());
 
@@ -97,7 +97,7 @@ class AuthControllerHardeningTest {
         AuthAbuseGuard localGuard = new AuthAbuseGuard(true, "closed");
         AuthController controller = new AuthController(
                 userService, null, null, null, localGuard, null, null, null, null, sessions(), false, null,
-                mock(com.checkba.service.account.AccountDeletionService.class));
+                mock(com.checkba.service.account.AccountDeletionService.class), null);
 
         Map<String, Object> result = controller.register(registerRequest(), http());
 
@@ -112,7 +112,7 @@ class AuthControllerHardeningTest {
                 .thenThrow(new IllegalArgumentException("用户名或密码错误"));
         AuthController controller = new AuthController(
                 userService, null, null, null, serverGuard("open"), null, null, null, null, sessions(), false, null,
-                mock(com.checkba.service.account.AccountDeletionService.class));
+                mock(com.checkba.service.account.AccountDeletionService.class), null);
 
         AuthController.LoginRequest request = new AuthController.LoginRequest();
         request.setUsername("alice");
@@ -136,7 +136,7 @@ class AuthControllerHardeningTest {
                 .thenReturn(new AwdkLoginService.BridgeSession("awdt_x", 7L, "awd_hanzewei", "韩泽伟", 31L));
         AuthController controller = new AuthController(
                 null, null, null, null, serverGuard("open"), awdkLoginService, null, null, null, sessions(), false, null,
-                mock(com.checkba.service.account.AccountDeletionService.class));
+                mock(com.checkba.service.account.AccountDeletionService.class), null);
 
         Map<String, Object> result = controller.awdkLogin(Map.of("key", "awdk_abc"), http());
 
@@ -161,7 +161,7 @@ class AuthControllerHardeningTest {
                 .thenReturn(new AwdkLoginService.BridgeSession("awdt_x", 7L, "awd_hanzewei", null, null));
         AuthController controller = new AuthController(
                 null, null, null, null, serverGuard("open"), awdkLoginService, null, null, null, sessions(), false, null,
-                mock(com.checkba.service.account.AccountDeletionService.class));
+                mock(com.checkba.service.account.AccountDeletionService.class), null);
 
         Map<String, Object> result = controller.awdkLogin(Map.of("key", "awdk_abc"), http());
 
@@ -179,7 +179,7 @@ class AuthControllerHardeningTest {
                 .thenThrow(new IllegalArgumentException("本服务器未开启账户桥接功能"));
         AuthController controller = new AuthController(
                 null, null, null, null, serverGuard("open"), awdkLoginService, null, null, null, sessions(), false, null,
-                mock(com.checkba.service.account.AccountDeletionService.class));
+                mock(com.checkba.service.account.AccountDeletionService.class), null);
 
         Map<String, Object> result = controller.awdkLogin(Map.of("key", "awdk_abc"), http());
 
@@ -199,7 +199,7 @@ class AuthControllerHardeningTest {
                 AccountException.Kind.UNAUTHORIZED, "账户 Key 无效或已被撤销，请到官网账户页重新生成"));
         AuthController controller = new AuthController(
                 null, null, null, null, serverGuard("open"), awdkLoginService, null, null, null, sessions(), false, null,
-                mock(com.checkba.service.account.AccountDeletionService.class));
+                mock(com.checkba.service.account.AccountDeletionService.class), null);
 
         for (int i = 0; i < 5; i++) {
             assertEquals(1, controller.awdkLogin(Map.of("key", "awdk_bad"), http()).get("code"));
@@ -216,7 +216,7 @@ class AuthControllerHardeningTest {
     private static AuthController controller(AwdkLoginService awdkLoginService, AuthAbuseGuard guard) {
         return new AuthController(
                 null, null, null, null, guard, awdkLoginService, null, null, null, sessions(), false, null,
-                mock(com.checkba.service.account.AccountDeletionService.class));
+                mock(com.checkba.service.account.AccountDeletionService.class), null);
     }
 
     @Test
