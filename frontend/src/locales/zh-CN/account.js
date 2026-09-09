@@ -134,6 +134,12 @@ export default {
   logoutNothingTitle: '当前没有登录账户',
   logoutNothingContent: '本机是用试用码解锁的，还没有连接 AI WorkDeck 账户，没有可退出的登录。要回到未解锁状态，用下面「授权」里的「解除授权」。',
   logoutFailed: '退出登录失败，请重试',
+  // 文档 Generator 元数据开关（可溯源性设计规范附录 B4）
+  docGeneratorGroupTitle: '文档属性',
+  docGeneratorLabel: '在保存的文档里写入产品标识',
+  docGeneratorHint: '开启后，保存或导出的文档在「属性 - 应用程序」里显示 AI WorkDeck 与版本号。这是 Word 与 WPS 都会写的标准字段，不含任何个人信息（不写作者、单位、机器名）。如果交付前需要清除文档元数据，可以关掉。',
+  docGeneratorCurrent: '当前写入：{application}',
+  docGeneratorSaveFailed: '设置保存失败，请稍后重试',
   logoutGroupTitle: '登录',
   logoutGroupHint: '退出后回到登录页，可换一个账户登录。本机的项目与文件保留在原处。',
 

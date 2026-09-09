@@ -4,6 +4,7 @@
 package com.checkba.controller;
 
 import com.checkba.service.LangText;
+import com.checkba.util.ProductIdentity;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -126,7 +127,7 @@ public class BrowserProxyController {
                         .GET()
                         // 单跳超时取「剩余总预算」与 20 秒的较小值：跳数再多也不会累加成分钟级占用
                         .timeout(budget.compareTo(Duration.ofSeconds(20)) < 0 ? budget : Duration.ofSeconds(20))
-                        .header("User-Agent", "checkba-browser/1.0")
+                        .header("User-Agent", ProductIdentity.userAgent("browser-proxy"))
                         .build();
                 // 流式接收而不是 ofByteArray()：正文要不要收、收多少由下面的体积闸说了算
                 resp = CLIENT.send(req, HttpResponse.BodyHandlers.ofInputStream());

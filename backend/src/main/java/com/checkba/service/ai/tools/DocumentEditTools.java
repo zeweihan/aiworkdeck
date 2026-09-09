@@ -37,6 +37,11 @@ import java.util.stream.Collectors;
 @Slf4j
 public class DocumentEditTools implements AgentToolComponent {
 
+    // 文档 Generator 元数据（可溯源性设计规范附录 B4）：只写 docProps/app.xml 的
+    // Application，不含任何用户身份。required = false 是给手工 new 出来的单测留的口子。
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.document.DocumentGeneratorSettings documentGeneratorSettings;
+
     private final ProjectFileService projectFileService;
     private final ProjectFileRepository projectFileRepository;
     private final EditorBridgeService editorBridgeService;
@@ -2115,6 +2120,7 @@ public class DocumentEditTools implements AgentToolComponent {
                 try (org.apache.poi.xssf.usermodel.XSSFWorkbook wb = new org.apache.poi.xssf.usermodel.XSSFWorkbook();
                      java.io.OutputStream os = java.nio.file.Files.newOutputStream(target)) {
                     wb.createSheet("Sheet1");
+                    com.checkba.util.DocumentGeneratorStamp.apply(wb, documentGeneratorSettings);
                     wb.write(os);
                 }
             });

@@ -61,6 +61,11 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class LitigationTimelineTools implements AgentToolComponent {
 
+    // 文档 Generator 元数据（可溯源性设计规范附录 B4）：只写 docProps/app.xml 的
+    // Application，不含任何用户身份。required = false 是给手工 new 出来的单测留的口子。
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.document.DocumentGeneratorSettings documentGeneratorSettings;
+
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(LitigationTimelineTools.class);
 
     /** 模型可提交的文件名白名单——管线认识的那几份，别的名字一律拒收。 */
@@ -338,7 +343,8 @@ public class LitigationTimelineTools implements AgentToolComponent {
             // 溯源索引：管线里那条 node 路线在桌面端不可用（不随包分发 node/docx 包），
             // 由服务端按 trace.json 用 POI 出同一份 Word 三线表。已有 docx 时不重复出。
             if (traceJson != null && paths.stream().noneMatch(p -> p.getFileName().toString().endsWith(".docx"))) {
-                Path docx = buildTraceDocx(traceJson, safeName);
+                Path docx = buildTraceDocx(traceJson, safeName,
+                        com.checkba.util.DocumentGeneratorStamp.enabled(documentGeneratorSettings));
                 if (docx != null) paths.add(docx);
             }
 
@@ -478,6 +484,11 @@ public class LitigationTimelineTools implements AgentToolComponent {
      * 出不来只损失这一份附件，绝不拖垮整次交付。
      */
     static Path buildTraceDocx(Path traceJson, String figureName) {
+        return buildTraceDocx(traceJson, figureName, true);
+    }
+
+    /** {@code stampEnabled}：文档 Generator 元数据开关（B4）。静态方法拿不到注入字段，由调用方求值传入。 */
+    static Path buildTraceDocx(Path traceJson, String figureName, boolean stampEnabled) {
         try {
             JSONObject payload = JSONUtil.parseObj(Files.readString(traceJson, StandardCharsets.UTF_8));
             JSONArray rows = payload.getJSONArray("rows");
@@ -522,6 +533,7 @@ public class LitigationTimelineTools implements AgentToolComponent {
                 }
 
                 Path out = traceJson.getParent().resolve(figureName + "-溯源索引.docx");
+                com.checkba.util.DocumentGeneratorStamp.apply(doc, stampEnabled);
                 try (OutputStream os = Files.newOutputStream(out)) {
                     doc.write(os);
                 }

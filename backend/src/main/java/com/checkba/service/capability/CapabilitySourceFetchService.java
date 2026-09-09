@@ -4,6 +4,7 @@
 package com.checkba.service.capability;
 
 import com.checkba.service.LangText;
+import com.checkba.util.ProductIdentity;
 import com.checkba.util.SsrfGuard;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
@@ -235,7 +236,7 @@ public class CapabilitySourceFetchService {
             }
             HttpRequest req = HttpRequest.newBuilder(URI.create(current))
                     .timeout(Duration.ofSeconds(60))
-                    .header("User-Agent", "AI-WorkDeck-Capability-Installer")
+                    .header("User-Agent", ProductIdentity.userAgent("capability-installer"))
                     .GET().build();
             HttpResponse<InputStream> resp;
             try {

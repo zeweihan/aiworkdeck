@@ -34,6 +34,11 @@ import java.util.regex.Matcher;
 @Slf4j
 public class SensitiveService {
 
+    // 文档 Generator 元数据（可溯源性设计规范附录 B4）：只写 docProps/app.xml 的
+    // Application，不含任何用户身份。required = false 是给手工 new 出来的单测留的口子。
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.document.DocumentGeneratorSettings documentGeneratorSettings;
+
     public String processFile(String filePath, List<String> strategies) throws Exception {
         File file = new File(filePath);
         if (!file.exists()) {
@@ -120,6 +125,7 @@ public class SensitiveService {
             // 文本框内容，需要手写 w:txbxContent 的原始 XML 遍历才能做，本次不做，如果文本框里
             // 塞了敏感信息不会被脱敏，需要人工核查。
 
+            com.checkba.util.DocumentGeneratorStamp.apply(doc, documentGeneratorSettings);
             try (FileOutputStream out = new FileOutputStream(dest)) {
                 doc.write(out);
             }

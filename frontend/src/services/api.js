@@ -2613,6 +2613,24 @@ export function updateTelemetrySettings(payload) {
   })
 }
 
+// 文档 Generator 元数据开关（可溯源性设计规范附录 B4）。GET 同时下发 application——
+// 要写进 docProps/app.xml 的那个串由后端从 ProductIdentity 派生，前端不许自己拼版本号。
+export function getDocumentGeneratorSettings() {
+  return request({
+    url: '/api/document/generator/settings',
+    method: 'GET'
+  })
+}
+
+export function updateDocumentGeneratorSettings(payload) {
+  return request({
+    url: '/api/document/generator/settings',
+    method: 'PUT',
+    data: payload,
+    header: { 'Content-Type': 'application/json' }
+  })
+}
+
 export function getTelemetrySummary(days = 30) {
   return request({
     url: `/api/telemetry/summary?days=${days}`,

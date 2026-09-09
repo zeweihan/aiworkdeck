@@ -32,6 +32,10 @@ import { here, preflight, loadPuppeteer, startServer, launchBrowser, openEditor 
 // 证明「引擎给的串 → 面板显示的类型」「引擎给的坐标 → 批注挂到哪条修订」这两段
 // 映射在真数据上成立——单测里用的是手写夹具，只有这里能验夹具本身没编错。
 import { revisionTypeKey, linkCommentsToRevisions } from '../../src/utils/reviewGrouping.js'
+// B4：宿主保存路径给导出件打的产品标识（可溯源性设计规范附录 B4）。这里用真引擎的
+// 导出字节喂真函数，再让引擎把打完标的文件重新打开——纯函数的单测在
+// tests/lowa-unit/docxAppProps.test.mjs，这里补的是「真产物 + 真引擎回读」那一段。
+import { stampApplication } from '../../src/utils/docxAppProps.js'
 
 // ---------- preflight ----------
 preflight()
@@ -2329,6 +2333,40 @@ try {
     check('最终稿导出件的 settings.xml 里没有 w:revisionView',
       marksFinal.settings.indexOf('revisionView') < 0, marksFinal.settings.slice(0, 300))
     await exec('set_revision_view', { mode: 'all' })
+
+    // ---- 第 5 项：B4 产品标识（真引擎导出件 → 真 stampApplication → 引擎回读）----
+    // 覆盖边界：lowa-e2e 跑的是 dist/zetaoffice 的 editor-main.js（客体页），打标发生在
+    // Vue 宿主 LibreOfficeEditor.saveDocument 里，这条链路经不过来。所以这里断言的是
+    //「真引擎导出的字节喂给真函数之后，app.xml 对了、引擎还能原样打开」；
+    // 宿主的接线由 tests/project-home/libre-save-generator-stamp.test.mjs 守。
+    await exec('debug_fresh_document', { visible: true })
+    await exec('debug_set_record_changes', { on: false })
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: '产品标识回读用的正文。' })
+    const rawExport = await exportBytes()
+    const rawU8 = Uint8Array.from(rawExport.map((b) => b & 0xff))
+    const rawZip = await JSZip.loadAsync(Buffer.from(rawU8))
+    const rawApp = await rawZip.file('docProps/app.xml').async('string')
+    check('基线：引擎自己写的 Application 是 ZetaOffice/LibreOffice',
+      /<Application>[^<]*(ZetaOffice|LibreOffice)[^<]*<\/Application>/.test(rawApp), rawApp.slice(0, 300))
+
+    const APP_STR = 'AI WorkDeck 0.0.0-e2e'
+    const stampedU8 = await stampApplication(rawU8, APP_STR)
+    check('stampApplication 产出了新字节', stampedU8 !== rawU8 && stampedU8.length > 0)
+    const stampedZip = await JSZip.loadAsync(Buffer.from(stampedU8), { checkCRC32: true })
+    const stampedApp = await stampedZip.file('docProps/app.xml').async('string')
+    check('打标后 app.xml 的 Application 是 AI WorkDeck',
+      stampedApp.indexOf('<Application>' + APP_STR + '</Application>') >= 0, stampedApp.slice(0, 300))
+    check('打标只动 app.xml：word/document.xml 逐字节不变',
+      Buffer.compare(
+        await rawZip.file('word/document.xml').async('nodebuffer'),
+        await stampedZip.file('word/document.xml').async('nodebuffer')) === 0)
+
+    const reload = await exec('load_document',
+      { bytes: Array.from(stampedU8), name: 'stamped.docx', authorName: '测试用户' })
+    check('引擎能重新打开打过标的 docx', reload && reload.success === true, JSON.stringify(reload))
+    const stampedBody = (await exec('get_document_text')).paragraphs.map((x) => x.text).join('|')
+    check('打标后正文一字不差', stampedBody === '产品标识回读用的正文。', stampedBody)
   }
 
   // ---- 组 33：审阅窗格的作者/类型/理由三维度（dev-board#377）----------------

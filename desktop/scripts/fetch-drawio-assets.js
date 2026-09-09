@@ -39,6 +39,11 @@ const DRAWIO_VERSION = 'v31.1.8';
 const DEFAULT_WAR_URL =
   `https://github.com/jgraph/drawio/releases/download/${DRAWIO_VERSION}/draw.war`;
 
+// 出站 User-Agent。格式与后端 ProductIdentity.userAgent() 严格一致：
+// AIWorkDeck/<version> (<component>)。Node 脚本引不了 Java 常量，两边的一致性由
+// desktop/tests/product-identity-ua.test.js 守住。版本号单一来源是 desktop/package.json。
+const USER_AGENT = `AIWorkDeck/${require('../package.json').version} (build-script)`;
+
 const OUT_DIR = path.join(__dirname, '../../frontend/dist/drawio');
 const VERSION_FILE = path.join(OUT_DIR, '.drawio-version');
 
@@ -122,7 +127,7 @@ function download(url, redirects = 0) {
   return new Promise((resolve, reject) => {
     const mod = url.startsWith('http:') ? http : https;
     mod
-      .get(url, { headers: { 'User-Agent': 'aiworkdeck-build' } }, (res) => {
+      .get(url, { headers: { 'User-Agent': USER_AGENT } }, (res) => {
         const sc = res.statusCode || 0;
         if (sc >= 300 && sc < 400 && res.headers.location && redirects < 5) {
           res.resume();

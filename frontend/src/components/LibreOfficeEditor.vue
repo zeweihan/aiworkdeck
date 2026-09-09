@@ -151,6 +151,8 @@ import { createAnchorChecker, resolveKeepText } from '@/composables/useEvidenceA
 import { EVIDENCE_CHANGED_EVENT } from '@/utils/evidenceEvents.js'
 import { DOC_MUTATED_EVENT } from '@/utils/docEvents.js'
 import { getResolvedTheme, APP_THEME_EVENT } from '@/utils/appTheme.js'
+import { stampApplication } from '@/utils/docxAppProps.js'
+import { documentStampApplication } from '@/utils/documentGeneratorSetting.js'
 
 let seq = 0
 
@@ -1317,6 +1319,7 @@ export default {
           this.appendLog('save aborted: 正在重载后端最新内容，丢弃这一笔在途导出')
           return false
         }
+        u8 = await this.stampGeneratorMetadata(u8)
         this.appendLog('  ← exported ' + u8.length + ' bytes, uploading…')
         await this.uploadBytes(getFileUploadUrl(fileId), u8, name)
         this.appendLog('  ← saved to backend (fileId=' + fileId + ')')
@@ -1332,6 +1335,24 @@ export default {
         clearTimeout(this._slowSaveTimer)
         // 只收回自己挂上去的「保存中…」；失败态是 catch 里刚设的，必须留着
         if (this.statusKey === 'saving') this.statusKey = prevStatusKey
+      }
+    },
+    // 文档 Generator 元数据（可溯源性设计规范附录 B4）：把导出件 docProps/app.xml 的
+    // <Application> 换成「AI WorkDeck <版本>」。引擎 API 改不到这个字段（oox 导出器硬写
+    // GetGeneratorString()，真机探针实证），只能在拿到字节之后打补丁——细节见 docxAppProps.js。
+    //
+    // 这条链路上任何异常都不许影响保存：开关读不到、字节不是 zip、补丁自检不过，
+    // 一律拿回原样的字节继续上传。
+    async stampGeneratorMetadata(u8) {
+      try {
+        const application = await documentStampApplication()
+        if (!application) return u8
+        const stamped = await stampApplication(u8, application)
+        if (stamped !== u8) this.appendLog('  ← stamped Application=' + application)
+        return stamped && stamped.length ? stamped : u8
+      } catch (e) {
+        this.appendLog('stamp skipped: ' + (e && e.message ? e.message : e))
+        return u8
       }
     },
     // Authed multipart POST — the upload twin of fetchArrayBuffer (backend

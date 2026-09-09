@@ -70,6 +70,11 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class DdExportService {
 
+    // 文档 Generator 元数据（可溯源性设计规范附录 B4）：只写 docProps/app.xml 的
+    // Application，不含任何用户身份。required = false 是给手工 new 出来的单测留的口子。
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.document.DocumentGeneratorSettings documentGeneratorSettings;
+
     public static final String KIND_DOCKET = "docket";
     public static final String KIND_VERIFY_PLAN = "verify-plan";
     public static final String KIND_GAPS = "gaps";
@@ -418,6 +423,7 @@ public class DdExportService {
                 }
             }
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            com.checkba.util.DocumentGeneratorStamp.apply(wb, documentGeneratorSettings);
             wb.write(bos);
             return bos.toByteArray();
         }
