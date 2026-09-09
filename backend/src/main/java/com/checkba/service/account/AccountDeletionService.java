@@ -7,6 +7,7 @@ import com.checkba.model.entity.AccountBinding;
 import com.checkba.model.entity.MobileMediaInbox;
 import com.checkba.repository.AccountBindingRepository;
 import com.checkba.repository.DeviceTokenRepository;
+import com.checkba.repository.CompletionEntryRepository;
 import com.checkba.repository.MobileDeviceStateRepository;
 import com.checkba.repository.MobileMediaInboxRepository;
 import com.checkba.repository.MobileProjectDirRepository;
@@ -18,6 +19,8 @@ import com.checkba.service.mobile.MobileBillingClient;
 import com.checkba.service.mobile.MobileBillingFailureException;
 import com.checkba.service.mobile.MobileBillingKind;
 import com.checkba.service.mobile.MobileRelayBlobStore;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -79,6 +82,8 @@ public class AccountDeletionService {
     private final MobileTransferRequestRepository transferRepository;
     private final AccountBindingRepository bindingRepository;
     private final DeviceTokenRepository deviceTokenRepository;
+    private final CompletionEntryRepository completionEntryRepository;
+    private final EntityManager entityManager;
     private final MobileRelayBlobStore blobStore;
     /** 官网统一账户的内部记账口，注销传导用（dev-board#434）。 */
     private final MobileBillingClient billing;
@@ -91,6 +96,8 @@ public class AccountDeletionService {
                                   MobileTransferRequestRepository transferRepository,
                                   AccountBindingRepository bindingRepository,
                                   DeviceTokenRepository deviceTokenRepository,
+                                  CompletionEntryRepository completionEntryRepository,
+                                  EntityManager entityManager,
                                   MobileRelayBlobStore blobStore,
                                   MobileBillingClient billing) {
         this.userRepository = userRepository;
@@ -101,6 +108,8 @@ public class AccountDeletionService {
         this.transferRepository = transferRepository;
         this.bindingRepository = bindingRepository;
         this.deviceTokenRepository = deviceTokenRepository;
+        this.completionEntryRepository = completionEntryRepository;
+        this.entityManager = entityManager;
         this.blobStore = blobStore;
         this.billing = billing;
     }
@@ -117,6 +126,12 @@ public class AccountDeletionService {
         // 官网侧先删（dev-board#434）：失败即中止，本地一行都不动
         propagateToUnifiedAccount(userId);
 
+        // 与 CompletionService.learn 的 scope 父行锁一致：等在途学习完成，再清词库与账号；
+        // 此锁释放前新的学习也无法越过父行校验留下 u:<id> 孤儿。
+        if (entityManager.find(com.checkba.model.entity.User.class, userId, LockModeType.PESSIMISTIC_WRITE) == null) {
+            throw new IllegalArgumentException("账号不存在或已注销");
+        }
+
         List<MobileMediaInbox> items = inboxRepository.findByUserId(userId);
         for (MobileMediaInbox item : items) {
             if (item.getStoragePath() != null) {
@@ -130,6 +145,7 @@ public class AccountDeletionService {
         long sessions = sessionRepository.deleteByUserId(userId);
         bindingRepository.deleteByUserId(userId);
         deviceTokenRepository.deleteByUserId(userId);
+        completionEntryRepository.deleteByScopeKey("u:" + userId);
         userRepository.deleteById(userId);
 
         log.info("账号已注销 userId={}：影像 {}、项目目录 {}、设备 {}、传输请求 {}、会话 {}",

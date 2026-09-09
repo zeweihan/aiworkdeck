@@ -47,6 +47,7 @@ public class ProjectService {
     private final com.checkba.version.ProjectRepoService projectRepoService;
     private final com.checkba.version.memory.MemoryRepoService memoryRepoService;
     private final com.checkba.repository.MemoryRemoteRepository memoryRemoteRepository;
+    private final com.checkba.repository.CompletionEntryRepository completionEntryRepository;
     private final org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     @jakarta.persistence.PersistenceContext
@@ -276,7 +277,8 @@ public class ProjectService {
      */
     @Transactional
     public void deleteProject(Long id) {
-        if (!projectRepository.existsById(id)) {
+        Project project = entityManager.find(Project.class, id, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+        if (project == null) {
             throw new IllegalArgumentException(LangText.of("项目不存在: ", "Project not found: ") + id);
         }
 
@@ -303,6 +305,7 @@ public class ProjectService {
         // memory_remote 按 repoKey 建索引、没有 projectId 列，上面那套
         // 「delete from E where e.projectId = :pid」批量语句吃不到它。
         memoryRemoteRepository.findByRepoKey(memoryRepoKey).ifPresent(memoryRemoteRepository::delete);
+        completionEntryRepository.deleteByScopeKey("p:" + id);
         projectRepository.deleteById(id);
         storageResolver.invalidate(id);
 
