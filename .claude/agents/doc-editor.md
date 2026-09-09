@@ -43,7 +43,9 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - `zetaOfficeCompletion.js` 是客体 DOM 菜单，`writingAssistanceHost.js` 是项目/用户词库与 API 宿主；`editor-main.js` / IME overlay 只提供接线。Writer 就绪且可写时启用，换文档、重载、卸载销毁 session；中文组合输入优先，方向键/Tab 只在候选展开时接管，Enter 保留换段。
 - 本地候选覆盖机构、人名、法规、条款、案例/案号、常用词及表述。`completionLexicon.js` 负责确定性提取和前缀匹配；打开文档仅采集有界实体到项目词库，个人词库只从本人输入/采用学习，低频词与表述不立即出候选。用户级开关同步当前各文档，可删除/清空学习项。
 - 打字只读客体内存，不调用外部库或模型。选中正文右键明确查询才走 `/completion/lookup`；资料由 `completionDetails.js` 转成带来源的预览，点击插入才修改正文。
+- 选区查询只在真实 Writer 画布且选区有效时收起 Qt 原生菜单，并保留选区与插入令牌再展示预览；普通右键菜单不受影响（aiworkdeck#790）。
 - UNO 三动作 `get_completion_context` / `accept_completion` / `insert_completion_content` 以不透明 token 校验模型、光标/选区两端及上下文；补全只追加后缀，表格/纯文本原样插入，整组一次撤销。真实修改使 token 失效，只读导出期间保留 snapshot（含恢复 modified 标志），不能因自动保存误拒插入，也不能放宽位置校验。行内修订视图停用。
+- 首期能力止于确定性词库匹配、显式资料查询和原子插入；自动语义诊断、逻辑审校、段落推理与自动改写不在本期范围。
 - 回归：`npm run test:completion`、`test:lowa-completion`、`test:writing-ui`、`test:writing-desktop`；引擎测试包含移动/输入/重载拒旧 token、跨导出仍可插入、撤销/重做及资料表格。桌面用例从真实项目词库经中文输入/Tab 到自动保存后下载 DOCX 核对，夹具文件隔离在临时目录。
 
 ## 保存失败与关闭（实测清单 A6/C10）

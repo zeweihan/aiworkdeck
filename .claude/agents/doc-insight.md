@@ -16,6 +16,8 @@ dev-board#181（后端部分）+ #182 + #541（DOC 第四类实体）。
 
 `CompletionController` / `service/completion/CompletionService` 提供 `/api/projects/{pid}/completion`：GET 合并有界项目实体、项目/个人变量和学习记录；`/learn` 按 project/user 分域滚动收集，`/entries/{id}` 与 `/learned?scope=` 管理学习数据。`CompletionEntry` 的 scope_key + text 唯一，Project/User 行锁序列化计数与淘汰；全路径校验项目及个人归属。词库列表不加载历史检索大正文。
 
+词库生命周期同样按 scope_key 收口：`ProjectService.deleteProject` 在 Project 父行锁内只删 `p:<projectId>`；`AccountDeletionService.deleteAccount` 在官网账户传导成功后取得 User 父行锁，只删 `u:<userId>`。两把锁与学习相同，避免删除和异步学习交错留下孤儿；官网传导失败时不进入本地清理（aiworkdeck#791）。
+
 只有用户选区菜单点击后的 POST `/lookup` 才调用 `DocInsightService.lookupSelection`，复用既有检索与计费上下文，不启动全文解析或 LLM 抽取。成功资料缓存到当前项目学习项，失败不覆盖已有资料；GET `/entries/{id}` 只读缓存。外部资料先预览，点击插入才写文档。候选类别 COMPANY/PERSON/LAW/ARTICLE/CASE/WORD/PHRASE；外查只接 COMPANY/LAW/CASE。
 
 测试：`CompletionServiceTest`、`CompletionPersistenceTest`、`CompletionControllerTest` 与 `DocInsightServiceTest`（授权、并发、限额、失败缓存与显式检索边界）。
