@@ -310,6 +310,15 @@
           </view>
           <text class="context-menu-text">{{ $t('fileTree.sendFile') }}</text>
         </view>
+        <view v-if="contextMenu.targetItem" class="context-menu-item" @tap="handleCopy(contextMenu.targetItem); closeContextMenu()">
+          <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </view>
+          <text class="context-menu-text">{{ $t('fileTree.copy') }}</text>
+        </view>
         <view v-if="contextMenu.targetItem" class="context-menu-item context-menu-item-danger" @tap="handleDelete(contextMenu.targetItem); closeContextMenu()">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -324,7 +333,7 @@
 
     <view
       class="tree-content"
-      :class="{ 'external-drag-over': externalDragActive }"
+      :class="{ 'external-drag-over': externalDragActive, 'view-mode-recycle': viewMode === 'recycle' }"
       @mousedown="onMarqueeStart" @mousemove="onMarqueeMove" @mouseup="onMarqueeEnd" @tap="closeContextMenu"
       @dragenter="onTreeDragEnter" @dragover="onTreeDragOver" @dragleave="onTreeDragLeave" @drop="onTreeDrop"
     >
@@ -462,22 +471,7 @@
                  {{ $t('fileTree.referencedCount', { count: refCounts[item.id] }) }}
                </text>
             </text>
-            <view class="tree-item-actions" @tap.stop>
-              <template v-if="viewMode === 'files' && renamingId !== item.id">
-                <view class="action-btn icon-btn" :title="$t('fileTree.download')" @tap="handleDownload(item)">
-                   <image src="/static/download.png" class="action-icon" mode="aspectFit" />
-                </view>
-                <view class="action-btn icon-btn" :title="$t('fileTree.copy')" @tap="handleCopy(item)">
-                   <image src="/static/copy.png" class="action-icon" mode="aspectFit" />
-                </view>
-                <view class="action-btn icon-btn" :title="$t('fileTree.rename')" @tap="handleRename(item)">
-                   <image src="/static/rename.png" class="action-icon" mode="aspectFit" />
-                </view>
-                <view class="action-btn icon-btn" :title="$t('fileTree.delete')" @tap="handleDelete(item)">
-                   <image src="/static/delete.png" class="action-icon" mode="aspectFit" />
-                </view>
-              </template>
-              <template v-else-if="viewMode === 'recycle'">
+            <view v-if="viewMode === 'recycle'" class="tree-item-actions" @tap.stop>
                 <view
                   class="action-btn icon-btn"
                   :title="$t('fileTree.restore')"
@@ -504,7 +498,6 @@
                     mode="aspectFit"
                   />
                 </view>
-              </template>
 
             </view>
           </view>
@@ -599,23 +592,8 @@
                  {{ $t('fileTree.referencedCount', { count: refCounts[item.id] }) }}
                </text>
             </text>
-            <view class="tree-item-actions" @tap.stop>
-              <template v-if="viewMode === 'files' && renamingId !== item.id">
-                <view class="action-btn icon-btn" :title="$t('fileTree.download')" @tap="handleDownload(item)">
-                   <image src="/static/download.png" class="action-icon" mode="aspectFit" />
-                </view>
-                <view class="action-btn icon-btn" :title="$t('fileTree.copy')" @tap="handleCopy(item)">
-                   <image src="/static/copy.png" class="action-icon" mode="aspectFit" />
-                </view>
-                <view class="action-btn icon-btn" :title="$t('fileTree.rename')" @tap="handleRename(item)">
-                   <image src="/static/rename.png" class="action-icon" mode="aspectFit" />
-                </view>
-                <view class="action-btn icon-btn" :title="$t('fileTree.delete')" @tap="handleDelete(item)">
-                   <image src="/static/delete.png" class="action-icon" mode="aspectFit" />
-                </view>
-              </template>
-              <template v-else-if="viewMode === 'recycle'">
-                <view
+            <view v-if="viewMode === 'recycle'" class="tree-item-actions" @tap.stop>
+                              <view
                   class="action-btn icon-btn"
                   :title="$t('fileTree.restore')"
                   @tap="restoreFile(item)"
@@ -641,7 +619,6 @@
                     mode="aspectFit"
                   />
                 </view>
-              </template>
 
             </view>
           </view>
@@ -3538,6 +3515,8 @@ export default {
   .tree-item-content {
     height: 32px;
     gap: 6px;
+  }
+  .view-mode-recycle .tree-item-content {
     padding-right: 68px;
   }
 }
@@ -3777,7 +3756,10 @@ export default {
   align-items: center;
   gap: 10rpx;
   height: 52rpx; /* 紧凑行高，接近 Finder */
-  padding-right: 84rpx; /* 预留右侧操作按钮空间，避免把文件名挤没 */
+}
+
+.view-mode-recycle .tree-item-content {
+  padding-right: 84rpx; /* 预留右侧还原/彻底删除按钮空间，避免把文件名挤没 */
 }
 
 /* 树引导线 - 竖线 */
