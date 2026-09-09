@@ -298,9 +298,9 @@ cmd_verify() {
   local id="$1" version="$2"
   valid_id "$id"; valid_version "$version"
   local rc=0
-  step "验证北京（$BJ_BASE_URL）"
+  step "验证北京（${BJ_BASE_URL}）"
   verify_mirror "$BJ_BASE_URL" "$id" "$version" || rc=1
-  step "验证新加坡（$SG_BASE_URL）"
+  step "验证新加坡（${SG_BASE_URL}）"
   verify_mirror "$SG_BASE_URL" "$id" "$version" || rc=1
   echo
   if [ $rc -eq 0 ]; then
