@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * wpsWppHandlers 单测：node 自带 test runner，零依赖。
  * mock globalThis.wps 里的 WPP 对象模型（VBA 同构同步 API），

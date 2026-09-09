@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Calendar/task system (global calendar page, project calendar pane, file deadline dialog, TaskSchedule)
 // spec: docs/superpowers/specs/2026-08-20-calendar-view-design.md
 export default {

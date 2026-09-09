@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 「视图」菜单的**业务部分**：面板显隐与底部工具。
 //
 // 「打开视图」子菜单（资源管理器/搜索/版本记录/诉讼可视化…）是动态的——rail 上

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 工作台操作簇（project-overview 的 mixin 模块）：文件打开/标签页、AI 指令路由、
 // OCR 截图与识别、暂存区、剪贴板捕获的 toast/modal/错误文案。
 export default {

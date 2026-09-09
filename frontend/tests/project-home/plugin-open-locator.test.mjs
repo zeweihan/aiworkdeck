@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // P1 整体复核 F1（dev-board#100）：插件宿主 Docs.openFile(fileId, locator) 追发的
 // client_action `plugin_open_locator {fileId, locator}` 之前没有前端消费者——locator 被静默丢掉，
 // 底稿只会打开在文首。修法：agentClientActions.js 加分支，交给 evidenceLinkActions.js 的

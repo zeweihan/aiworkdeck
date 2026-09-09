@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 文档编辑器域：LibreOfficeEditor / ReviewPanel / DocDiffViewer /
 // CompareDocDialog / VariablePanel / DrawioEditor 的用户可见文案。
 export default {

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Office/Excel 面读取路径的过桥量（dev-board#288）：
  *   node --test office-addin/taskpane/lib/officeExcelRead.test.js

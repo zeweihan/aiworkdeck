@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 审计（dev-board#74）MEDIUM：openPendingLocalFile 找不到文件、或拉取文件列表出错
 // 时完全静默——只有 console.warn，用户在界面上看不到任何反应。
 //

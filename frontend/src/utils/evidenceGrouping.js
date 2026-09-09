@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // evidenceGrouping.js — 审阅面板「底稿」页的分组与过滤纯函数（spec §4.3；P2 补章节树/筛选/统计）。
 // 输入是后端 LinkView 数组（见 .claude/agents/ai-doc-bridge.md「EvidenceLink 契约」）。
 

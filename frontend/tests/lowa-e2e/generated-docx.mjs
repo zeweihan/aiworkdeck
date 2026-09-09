@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 实测清单 A7/B7/B13/C11：真引擎落字→导出 OOXML，不以 UNO setter 回声代替落盘结果。
 import assert from 'node:assert/strict'
 import JSZip from 'jszip'

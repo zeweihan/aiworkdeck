@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // meetingRecorder.js 的依赖替身（见 stop-upload-cap.test.mjs 的模块改写）。
 // 上传端点固定失败，用来模拟「鉴权过期 / 文件被后台删掉」这类永久性失败。
 

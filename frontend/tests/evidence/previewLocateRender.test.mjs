@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // P3「底稿定位增强」的真渲染走查：把 FilePreview.vue 的 <template> 用 vue 自带的
 // compiler-sfc 编译出来、真的渲染成 HTML，断言三种定位下该出现的东西确实出现了。
 //

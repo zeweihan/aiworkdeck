@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // reviewGrouping.js — 审阅面板（ReviewPanel）的纯函数层（dev-board#377）。
 //
 // 面板里三个新维度全部在这里判定，组件只负责渲染与发命令：

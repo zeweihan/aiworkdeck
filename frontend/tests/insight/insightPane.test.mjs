@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // InsightPane.vue 的组件级用例（dev-board#182）：把 <script> 抽出来跑 computed / methods
 // （同 tests/evidence/panelFilters.test.mjs 的路子：剥掉 import 行，依赖当形参喂进去）。
 //

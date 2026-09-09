@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /*
  * 把 bundled/<plat>/pysvc（上万个小文件）打成单个 pysvc.tar.gz + pysvc.meta.json，
  * electron-builder 只打包这两个文件（见 package.json extraResources），首次启动由

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 反馈浮窗的全局挂载点。
 //
 // uni-app 的页面组件挂不出「跨页面常驻」的东西：想在每个页面都有这个入口，

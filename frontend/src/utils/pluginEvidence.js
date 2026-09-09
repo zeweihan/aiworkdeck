@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Web 插件 SDK evidence.* 三方法的宿主端纯函数（PluginPane.vue 调用）。
 // 不碰 Vue / uni / 网络，只依赖传入的 executor，方便在 node --test 里直接跑。
 

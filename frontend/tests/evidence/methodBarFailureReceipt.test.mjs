@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 建链失败也要有可见回执（dev-board#139）：uni.showToast 在编辑器场景会被 webview
 // 遮挡（#133 定性），失败只弹 toast = 「文字变成了链接但库里没记录、用户毫无感知」。
 // 这里锚定：onEvidenceDrop 的失败分支（API 异常 / no_selection / 自链）一律走

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * office_command 执行器（Phase C 工具桥）：
  * 后端 OfficeBridgeService 经 SSE client_action 下发 {tool:'office_command',

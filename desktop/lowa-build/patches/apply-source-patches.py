@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Apply the two LO-core source patches for the zh-CN tooltip-CJK build (#66):
 #  1. gbuild: export FS/callMain/specialHTMLTargets unconditionally (QT5 build).
 #  2. vcl/qt5/QtInstance.cxx: register the runtime-injected CJK font with Qt so

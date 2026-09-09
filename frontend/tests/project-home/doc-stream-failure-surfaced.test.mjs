@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // dev-board#465：AI「新建文档并写入」失败，用户什么都看不到——文件建好了但正文为空，
 // 对话气泡永远停在「正在向文档流式写入内容…」，前后端谁都没报错。
 //

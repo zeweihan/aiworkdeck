@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 关闭标签时的落盘竞态（dev-board#74 审计）：flushSave 只等固定几秒就放行，
 // 在途的那一次自动保存还没回来时，saving 仍是 true，紧接着的 save() 原地 no-op
 // （只重挂一个防抖定时器），而组件随即卸载、定时器被 beforeUnmount 清掉——

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.plugin.api;
 
 /** 后台任务体内可用的上下文：汇报进度、响应取消、读取发起时的调用快照、写入结果。 */

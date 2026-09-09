@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <!-- 解锁门：桌面首启的唯一关卡。浅色双栏——左侧品牌视觉区（跟随鼠标的产品 mockup），
        右侧账户卡。窄窗口收成单栏、视觉区整块不渲染。 -->

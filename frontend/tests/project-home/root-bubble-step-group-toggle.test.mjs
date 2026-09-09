@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 审计（dev-board#74）MEDIUM：步骤分组的展开状态只按 stepIndex 记，导致两组联动。
 //
 // 病灶：processGroups 按 processes 数组里连续同 stepIndex 的项收成一组，key 形如

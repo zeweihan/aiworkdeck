@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Web 插件桥 doc.exec 放行的编辑器原语白名单（插件规范 v2.7 P1）。
 //
 // 这张表 = 宿主 SPI PluginHostImpl.DOC_ACTIONS 的同一份清单（JAR 与 Web 插件同一张能力面，

@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="favorites-panel">
     <scroll-view class="favorites-body" scroll-x :show-scrollbar="true" :scroll-into-view="scrollIntoView" scroll-with-animation>

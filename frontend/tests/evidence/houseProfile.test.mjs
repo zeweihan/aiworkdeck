@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // HOUSE 单源对拍（dev-board#111）：backend/src/main/resources/style-profiles/house-default.json
 // 是律所标准格式的唯一出处，worker（frontend/src/zetaoffice/public）与 Office 插件
 // （office-addin/taskpane/lib）各持一份字节副本，由 scripts/sync-house-profile.mjs 同步。

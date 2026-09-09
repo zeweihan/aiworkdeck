@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 统一的 API 封装层
 // 说明：
 // - 所有网络请求都应通过这里发起，组件内禁止直接写 URL。

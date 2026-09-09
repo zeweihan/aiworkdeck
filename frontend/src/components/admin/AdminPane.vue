@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!--
   系统设置的内容本体。
 
@@ -60,6 +62,25 @@
                   </view>
               </view>
             </view>
+        </view>
+
+        <!-- 关于（AGPL §0 Appropriate Legal Notices）。
+             常显、不可关闭、不随 activeNav 变化：许可与商标告示的要求是「用户看得到」，
+             不是「用户翻到某个页签才看得到」。刻意**不**挂在「软件更新」分区那行版本号下面
+             ——那个分区 desktopOnly + 仅管理员可见，普通用户和浏览器端根本进不去。
+             版本号在桌面端由 loadUpdateStatus() 填，浏览器端取不到就只显示产品名。 -->
+        <view class="legal-notice">
+          <text class="legal-line legal-strong">{{ legalProductLine }}</text>
+          <text class="legal-line">{{ $t('admin.legalLicense') }}</text>
+          <view class="legal-line legal-links">
+            <text>{{ $t('admin.legalSourceLabel') }}</text>
+            <text class="legal-link" @tap="openLegalLink(LEGAL_URLS.source)">{{ LEGAL_URLS.source }}</text>
+            <text> · {{ $t('admin.legalLicenseLabel') }}</text>
+            <text class="legal-link" @tap="openLegalLink(LEGAL_URLS.license)">LICENSE</text>
+            <text> · {{ $t('admin.legalTrademarkLabel') }}</text>
+            <text class="legal-link" @tap="openLegalLink(LEGAL_URLS.trademarks)">TRADEMARKS.md</text>
+          </view>
+          <text class="legal-line">{{ $t('admin.legalTrademark') }}</text>
         </view>
       </view>
 
@@ -1141,6 +1162,13 @@ export default {
   },
   data() {
     return {
+      // 「关于」区块的三条链接（AGPL §0 告示）。仓库根 LICENSE = AGPL-3.0，
+      // 商标说明 = legal/TRADEMARKS.md，都指 master 分支的常驻路径。
+      LEGAL_URLS: {
+        source: 'https://github.com/zeweihan/aiworkdeck',
+        license: 'https://github.com/zeweihan/aiworkdeck/blob/master/LICENSE',
+        trademarks: 'https://github.com/zeweihan/aiworkdeck/blob/master/legal/TRADEMARKS.md',
+      },
       // 侧栏用户卡（头像/昵称/@用户名）。loadUserInfo() 先读缓存再拉 /api/auth/me 合并。
       userInfo: {
         id: null,
@@ -1314,6 +1342,14 @@ export default {
     }
   },
   computed: {
+    /**
+     * 「关于」首行：产品名 + 版本 + 版权。品牌名与版本号不进 i18n（专名 + 数字）。
+     * 版本取自 loadUpdateStatus() 拉回的桌面端状态；浏览器端拿不到，就只显示产品名。
+     */
+    legalProductLine() {
+      const v = this.update.effectiveVersion || this.update.appVersion || ''
+      return (v ? 'AI WorkDeck ' + v : 'AI WorkDeck') + ' · ' + this.$t('admin.legalCopyright')
+    },
     isDesktop() {
       return !!(host.model)
     },
@@ -1578,6 +1614,10 @@ export default {
     }
   },
   methods: {
+    /** 「关于」区块的外链。与页内其他外链同一条出口：桌面端走系统浏览器。 */
+    openLegalLink(url) {
+      openExternalUrl(url)
+    },
     // ---------- 数据统计 ----------
     async loadTelemetry() {
       try {
@@ -2781,6 +2821,40 @@ $brand-accent: $brand-mint;
     font-size: 12px;
     color: var(--awd-accent-text);
     font-weight: 500;
+}
+
+/* 关于（AGPL §0 告示）。次级文字色 + 小字：不抢眼，但常在、不可关闭、可选中可点。
+   外壳保持浅色，颜色一律走既有令牌，不自带任何深色 chrome。 */
+.legal-notice {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--awd-border);
+  background: var(--awd-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.legal-line {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--awd-text-3);
+  word-break: break-all;
+}
+
+.legal-strong {
+  color: var(--awd-text-2);
+}
+
+.legal-links {
+  display: block;
+}
+
+.legal-link {
+  color: var(--awd-accent-text);
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .nav-card {

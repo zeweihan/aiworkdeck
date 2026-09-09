@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * wpsEtHandlers.js 的单元测试（node 自带 test runner，零依赖）：
  *   node --test office-addin/taskpane/lib/wpsEtHandlers.test.js

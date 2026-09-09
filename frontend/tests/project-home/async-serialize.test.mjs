@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 审计（dev-board#74）确认的缺陷：DrawioEditor.vue 快速两次保存，其中一次悄无声息
 // 地没做。
 //

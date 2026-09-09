@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 命令注册表汇总 + 「状态快照 → 菜单树」的纯函数。
 //
 // 本文件**不许 import Vue / uni / 任何浏览器 API**——它要能被 node --test 直接

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // abort() 的停止收尾（dev-board#211/#212）。
 //
 // 病灶：abort() 在掐断本地 SSE 之后，后端的 cancelled 事件永远到不了前端，

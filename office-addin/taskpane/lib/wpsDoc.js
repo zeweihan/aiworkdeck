@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * WPS 加载项 JSAPI 文档访问（与 wordDoc.js 同职责的 WPS 家族实现）：
  * 宿主检测 + 读取当前文档内容，作为 activeContext 内联正文随对话请求上送。

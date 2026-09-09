@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 拖到编辑器建链的纯函数（evidenceLinkCore.js，exec/api 全部注入）：mock exec 按 action 返回，断言各条路径。
 import test from 'node:test'
 import assert from 'node:assert/strict'

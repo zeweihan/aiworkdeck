@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // doc.exec 白名单对拍（插件规范 v2.7 P1）：前端 PLUGIN_DOC_ACTIONS 必须与
 // 后端宿主 SPI PluginHostImpl.DOC_ACTIONS 是同一份清单（JAR 与 Web 插件同一张能力面）。
 // 配方照 PluginHostImplTest 扫源码字面量：漏一个/多一个都红。

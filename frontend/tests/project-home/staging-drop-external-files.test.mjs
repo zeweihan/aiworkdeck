@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 审计（dev-board#74）两条，都在 FileStagingArea.vue 的 onDrop：
 //
 // HIGH：暂存区放置区静默丢弃真实的系统文件拖拽。面板对任意拖拽都亮起"松手暂存

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 应用菜单：主进程这一侧只做「把渲染层下发的 JSON 变成 NSMenu」，不决定菜单长什么样。
 //
 // 为什么数据源在渲染层：菜单的 enabled/checked 本来就必须由页面状态驱动（修订模式
@@ -14,7 +16,7 @@
 //
 // 设计见 docs/superpowers/specs/2026-08-16-desktop-chrome-and-command-menu.md。
 
-const { Menu, ipcMain } = require('electron')
+const { app, Menu, ipcMain } = require('electron')
 const { t, onAppLanguageChange } = require('./app-language')
 
 // 菜单里的应用名写死，**不要用 app.name**：desktop/package.json 没有顶层 productName，
@@ -166,8 +168,48 @@ function rebuild() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(buildTemplate()))
 }
 
+/**
+ * 原生「关于」面板的版权与许可行（AGPL §0 Appropriate Legal Notices）。
+ *
+ * macOS 的 { role: 'about' } 打开的是系统面板，内容取自 .app 的 Info.plist；
+ * setAboutPanelOptions 可以在运行期覆盖，且 Windows/Linux 上 Electron 会用同一份
+ * 数据自绘一个面板。credits 只在 macOS 生效，Windows/Linux 靠 applicationVersion
+ * 那行带出许可信息，两边都不落空。
+ *
+ * 版本号取 app.getVersion()（打包态 = desktop/package.json 的 version，单一来源）。
+ */
+function applyAboutPanel() {
+  const copyright = [
+    '版权所有 2026 北京京微资易科技有限公司及 AI WorkDeck 贡献者',
+    'Copyright 2026 Beijing Jingwei Ziyi Technology Co., Ltd. and AI WorkDeck contributors',
+    '',
+    '本软件依 GNU Affero General Public License v3.0 或更高版本发布，不提供任何担保。',
+    'Released under the GNU AGPL v3.0 or later, with ABSOLUTELY NO WARRANTY.',
+    '',
+    '源代码 / Source code: https://github.com/zeweihan/aiworkdeck',
+    '许可证全文 / Full license: https://github.com/zeweihan/aiworkdeck/blob/master/LICENSE',
+    '商标说明 / Trademark notice: https://github.com/zeweihan/aiworkdeck/blob/master/legal/TRADEMARKS.md',
+    '',
+    '「AI WorkDeck」为北京京微资易科技有限公司的商标，再分发修改版时不得使用该名称作为产品名。',
+  ].join('\n')
+  try {
+    app.setAboutPanelOptions({
+      applicationName: APP_DISPLAY_NAME,
+      applicationVersion: app.getVersion(),
+      version: app.getVersion(),
+      copyright,
+      credits: copyright,
+      website: 'https://github.com/zeweihan/aiworkdeck',
+    })
+  } catch (e) {
+    // 面板文案不是功能，拿不到就算了，绝不让它挡住菜单初始化
+    console.warn('[app-menu] setAboutPanelOptions 失败:', e && e.message)
+  }
+}
+
 function initAppMenu(mainWindowGetter) {
   getWindow = mainWindowGetter
+  applyAboutPanel()
   rebuild()
   // 语言切换只影响骨架文案；业务菜单的文案由渲染层重新下发（它自己也在换 i18n）。
   onAppLanguageChange(() => rebuild())
@@ -178,4 +220,4 @@ function initAppMenu(mainWindowGetter) {
   })
 }
 
-module.exports = { initAppMenu }
+module.exports = { initAppMenu, applyAboutPanel }

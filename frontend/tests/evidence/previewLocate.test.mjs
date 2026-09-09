@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // P3「底稿定位增强」的三种定位各一个可复现实例：把 FilePreview.vue 里的那几段源码
 // 抠出来真跑一遍（同 openEvidenceTarget.test.mjs 的做法，不依赖 Vue 运行时）。
 //

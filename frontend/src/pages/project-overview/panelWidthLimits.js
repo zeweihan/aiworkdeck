@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 左右两侧面板的拖拽上限（dev-board#459）。
 //
 // 病灶：applyResizeFrame 原来按 `window.innerWidth * 0.75` 限宽，可是面板并不住在整窗

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 尽调起草实测（dev-board#100）：worker 的失败分支大多只填 message（如 delete_match 的
 // 「match index out of range」），而回传只取 result.error —— 模型收到的是 {"error": "null"}，
 // 等于没告诉它哪里错了，只能瞎猜着重试（实测因此触发了一串无效的删改）。

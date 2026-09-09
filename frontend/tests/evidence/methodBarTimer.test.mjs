@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 回归：拖放建链成功后 method 小条的显示与收起时机。
 //
 // 两轮真机反馈叠在这一个文件里：

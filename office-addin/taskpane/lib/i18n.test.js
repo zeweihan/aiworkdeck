@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * i18n.js 回归用例（dev-board#150）：
  *   node --test office-addin/taskpane/lib/i18n.test.js

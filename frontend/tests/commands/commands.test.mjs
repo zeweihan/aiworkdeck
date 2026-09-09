@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 命令注册表守卫。把 spec §4 的快捷键口径从「文档里的约定」变成「CI 里的断言」——
 // 口径写在文档里会腐烂，写成测试才拦得住人。
 //

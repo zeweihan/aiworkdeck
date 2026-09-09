@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 审计（dev-board#74）：浏览器降级建空白项目时，busy 在请求返回后立刻放开，
 // 而真正的 reLaunch 还压在 500ms 的 setTimeout 里。这段窗口里按钮是活的，
 // blankName 也没清，再点一下就会用同一个名字再建一个空白项目。

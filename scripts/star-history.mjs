@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 生成自托管的 Star History 曲线图（.github/assets/star-history.svg）。
 //
 // 背景：GitHub 已将 stargazer 明细（含 starred_at 时间戳）限制为仓库管理员/

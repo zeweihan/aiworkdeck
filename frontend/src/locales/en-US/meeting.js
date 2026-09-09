@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // All meeting-recording copy: the panel (components/MeetingRecordingPanel.vue) and the
 // recording engine (utils/meetingRecorder.js), whose errors render inside that panel.
 //

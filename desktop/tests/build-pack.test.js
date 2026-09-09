@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // build-pack.js 的最小单测：打一个小的自造目录，断言 manifest 的 sha256/size
 // 与包内 contents.sha256 都算对了，且排除规则（__pycache__/*.pyc）真的生效、
 // 源目录打包后不留 contents.sha256 残留（它若是仓库里跟踪的源码目录，残留会

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 统一「设置」页（components/admin/AdminPane.vue）文案。语言分区（appLanguage）自带双语三元表达式，不在此列。
 export default {
   // 左侧导航
@@ -342,4 +344,11 @@ export default {
   capabilityAiPrompt: '帮我升级能力：{url}。{note}请先用 capability_install 拉取并校验，把安装计划念给我听，等我确认后再安装。',
   capabilityAiPromptNoteClause: '{note}。',
   capabilityAiPromptDefaultNote: '把这个仓库装成一项能力并接到对应的能力槽',
+  // 关于（AGPL §0 Appropriate Legal Notices）。品牌名与版本号在代码里拼，不进 i18n。
+  legalCopyright: '版权所有 2026 北京京微资易科技有限公司及 AI WorkDeck 贡献者',
+  legalLicense: '本软件依 GNU Affero General Public License v3.0 或更高版本发布，不提供任何担保。',
+  legalSourceLabel: '源代码：',
+  legalLicenseLabel: '许可证全文：',
+  legalTrademarkLabel: '商标说明：',
+  legalTrademark: '「AI WorkDeck」为北京京微资易科技有限公司的商标，再分发修改版时不得使用该名称作为产品名（详见商标说明）。',
 }

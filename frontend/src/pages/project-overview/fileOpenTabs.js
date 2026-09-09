@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // project-overview.vue 的文件打开与标签页生命周期：从文件树/搜索/AI 对话打开文件、
 // 标签激活与 FileTree 选中同步、关闭（Office 文档出池前先落盘）、可打开性判定与文档对比标签。
 // 经展开进组件 methods（纯搬移，Phase 2 外置），`this` 即 project-overview 页面实例。

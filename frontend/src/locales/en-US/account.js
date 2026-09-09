@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Account domain: Profile (userprofile.vue), login/register/client login (login.vue),
 // New/Open Project (newproject/index.vue). One shared namespace across the three pages;
 // text that is byte-identical across pages (e.g. "Standard User", "Back to Projects")

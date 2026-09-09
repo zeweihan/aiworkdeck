@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // project-overview.vue 的 AI 指令路由：SSE client_action 分发（含 doc_*/wps_* 双轨去重）、
 // doc 流式写入缓冲、编辑器打开/重载/命令执行与结果回传。
 // 经展开进组件 methods（纯搬移，Phase 1 外置），`this` 即 project-overview 页面实例。

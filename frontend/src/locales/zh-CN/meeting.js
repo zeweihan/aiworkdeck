@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 会议录音的全部界面文案：面板 components/MeetingRecordingPanel.vue 与
 // 录音引擎 utils/meetingRecorder.js（引擎的报错直接显示在面板里，同属一个语境）。
 //

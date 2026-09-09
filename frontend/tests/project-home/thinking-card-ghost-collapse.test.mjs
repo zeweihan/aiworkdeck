@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 审计（dev-board#74）MEDIUM：幽灵 ThinkingCard 永不自动折叠。
 //
 // 病灶：RootBubble.vue 把 ThinkingCard 的 card/ghost 两个变体渲染在结构不同的

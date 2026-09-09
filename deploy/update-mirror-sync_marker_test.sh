@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # update-mirror-sync.sh 的「发版推送让路」单元测试
 # ---------------------------------------------------------------------------

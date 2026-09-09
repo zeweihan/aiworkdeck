@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // agentStream：AI 对话 SSE 流（useAgentStream.js）的用户可见提示文案。
 // SSE 事件名/状态字面量（awaiting_input 等）与 AI_REGION_BLOCKED 判据是契约，不在此列。
 export default {

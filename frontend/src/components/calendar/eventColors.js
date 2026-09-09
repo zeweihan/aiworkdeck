@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 按 projectId 稳定配色（哈希取模，同一项目在会话内/刷新后颜色不变）。
 // 浅色专业风调色板：浅底 + 深色文字，避免大面积饱和色块（sidebar-shell 配色红线）。
 const PALETTE = [

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // dev-board#377：审阅面板补齐成 Word 式审阅窗格。本用例钉住纯函数层的三条判定：
 // 作者归类、RedlineType 归一、批注↔修订的位置关联；以及「理由不进合并判据、
 // 计数恒按全量算」这两条容易被后来的改动破坏的口径。
