@@ -177,6 +177,8 @@ jobs:
           set -euo pipefail
           SVC="${{ steps.svc.outputs.name }}"
           ROOT="$RUNNER_TEMP/packroot"
+          # RUNNER_TEMP 在 Windows 是 D:\...；GNU tar -C 要 Git Bash 的 POSIX 路径。
+          if [ "${{ matrix.plat }}" = "win-x64" ]; then ROOT="$(cygpath -u "$ROOT")"; fi
           rm -rf "$ROOT"; mkdir -p "$ROOT"
           # 按桌面端 resolveServiceRoot 的落盘布局解开：<root>/lib 与 <root>/app
           for f in pack-out/${{ matrix.plat }}/*-lib-*.tar.gz; do
@@ -199,6 +201,8 @@ jobs:
             PY="$PWD/desktop/bundled/win-x64/python/python.exe"
           fi
           export PYTHONPATH="$ROOT/lib"
+          # 环境变量直接交给原生 Python，不能沿用 /d/... 的 Bash 路径。
+          if [ "${{ matrix.plat }}" = "win-x64" ]; then export PYTHONPATH="$(cygpath -w "$PYTHONPATH")"; fi
           BODY_GREP=""
           EXTRA_URL=""
           EXTRA_GREP=""
