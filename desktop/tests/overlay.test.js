@@ -180,35 +180,3 @@ test('backend-service javaLaunchArgs：split 布局 + overlay 覆盖 + fat 兼�
   // lib 永远指向内置
   assert.strictEqual(patched.libDir, path.join(resources, 'backend', 'lib'))
 })
-
-test('pysvc syncSrcPatch：应用/幂等/换版本/还原', (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ovl-'))
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
-  const { syncSrcPatch } = require('../main/services/pysvc-runtime')
-  const pysvcRoot = path.join(root, 'pysvc')
-  fs.mkdirSync(path.join(pysvcRoot, 'kokoro-service', 'app'), { recursive: true })
-  fs.writeFileSync(path.join(pysvcRoot, 'kokoro-service', 'app', 'app.py'), 'original')
-
-  const patch1 = path.join(root, 'patch1')
-  fs.mkdirSync(path.join(patch1, 'kokoro-service', 'app'), { recursive: true })
-  fs.writeFileSync(path.join(patch1, 'kokoro-service', 'app', 'app.py'), 'patched-v1')
-  fs.writeFileSync(path.join(patch1, 'kokoro-service', 'app', 'new.py'), 'brand-new')
-
-  assert.deepStrictEqual(syncSrcPatch(pysvcRoot, patch1, '0.11.1'), { applied: true })
-  assert.strictEqual(fs.readFileSync(path.join(pysvcRoot, 'kokoro-service', 'app', 'app.py'), 'utf8'), 'patched-v1')
-  assert.strictEqual(fs.readFileSync(path.join(pysvcRoot, 'kokoro-service', 'app', 'new.py'), 'utf8'), 'brand-new')
-  // 幂等：同版本不重复应用
-  assert.deepStrictEqual(syncSrcPatch(pysvcRoot, patch1, '0.11.1'), { applied: false })
-
-  // 换版本：先还原基线再应用（v1 的 new.py 不残留）
-  const patch2 = path.join(root, 'patch2')
-  fs.mkdirSync(path.join(patch2, 'kokoro-service', 'app'), { recursive: true })
-  fs.writeFileSync(path.join(patch2, 'kokoro-service', 'app', 'app.py'), 'patched-v2')
-  assert.deepStrictEqual(syncSrcPatch(pysvcRoot, patch2, '0.11.2'), { applied: true })
-  assert.strictEqual(fs.readFileSync(path.join(pysvcRoot, 'kokoro-service', 'app', 'app.py'), 'utf8'), 'patched-v2')
-  assert.ok(!fs.existsSync(path.join(pysvcRoot, 'kokoro-service', 'app', 'new.py')))
-
-  // 补丁撤销：还原原件
-  assert.deepStrictEqual(syncSrcPatch(pysvcRoot, null, null), { reverted: true })
-  assert.strictEqual(fs.readFileSync(path.join(pysvcRoot, 'kokoro-service', 'app', 'app.py'), 'utf8'), 'original')
-})

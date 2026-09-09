@@ -185,3 +185,30 @@ test('prune() 对没有这些目录的精简树也能跑完（asr 那种小依�
     fs.rmSync(outDir, { recursive: true, force: true })
   }
 })
+
+// ---- 按服务的裁剪表（dev-board#529 Task 1b）----
+// mineru 的 requirements.in 是 mineru[core]，把整个 Gradio Web UI 拖进 lock；
+// 服务只跑 `-m mineru.cli.fast_api`，Web UI 从不启动（已在一份真实的 mineru lib 上
+// 实测 import mineru.cli.fast_api 之后 sys.modules 里没有任何 gradio* 模块）。
+// 这条只对 mineru 生效：别的服务里的 gradio 一律不碰。
+
+test('prune(libDir, "mineru-service") 删掉 gradio 三件套；其它服务不动 gradio', () => {
+  const root = mkTmpOut()
+  try {
+    for (const svc of ['mineru-service', 'pptx-service']) {
+      const lib = path.join(root, svc)
+      for (const d of ['gradio', 'gradio_client', 'gradio_pdf', 'mineru']) {
+        fs.mkdirSync(path.join(lib, d), { recursive: true })
+        fs.writeFileSync(path.join(lib, d, '__init__.py'), '')
+      }
+      prune(lib, svc)
+    }
+    for (const d of ['gradio', 'gradio_client', 'gradio_pdf']) {
+      assert.ok(!fs.existsSync(path.join(root, 'mineru-service', d)), `mineru 仍有 ${d}`)
+      assert.ok(fs.existsSync(path.join(root, 'pptx-service', d)), `pptx 的 ${d} 不该被动`)
+    }
+    assert.ok(fs.existsSync(path.join(root, 'mineru-service', 'mineru')))
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})

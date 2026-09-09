@@ -3,7 +3,7 @@
 const path = require('path')
 const fs = require('fs')
 const { findFreePort } = require('./service-manager')
-const { pysvcPath } = require('./pysvc-runtime')
+const { resolveServiceRoot, libDirFor, appDirFor } = require('./pysvc-runtime')
 
 function pyBin(ctx) {
   return process.platform === 'win32'
@@ -12,11 +12,11 @@ function pyBin(ctx) {
 }
 
 function libDir(ctx) {
-  return pysvcPath(ctx, 'asr-service', 'lib')
+  return libDirFor(ctx, 'asr-service')
 }
 
 function appDir(ctx) {
-  return pysvcPath(ctx, 'asr-service', 'app')
+  return appDirFor(ctx, 'asr-service')
 }
 
 function modelsDir(ctx) {
@@ -42,17 +42,20 @@ function spawnEnv(ctx) {
 /**
  * 本地 ASR（faster-whisper）。
  *
- * 与 kokoro 的关键差别：**模型没下载时照样启动**。
- * kokoro 用 `enabled` 门在模型上（没模型就不起进程），而这边的就绪探测必须能分清
- * 「服务没起」与「模型没下」——两者的下一步完全不同（重启应用 vs 下 1.5GB 模型）。
- * 不起进程的话探测只能回「服务没起」，用户按提示重启一万次也不会有模型。
- * 模型是懒加载的，空跑一个 FastAPI 进程的代价只有几十 MB 常驻内存。
+ * 两个门是分开的，别合并：
+ * - **运行时 pack 没装** → 不启动（进程根本没有 lib 可加载）。探测报 RUNTIME_MISSING，
+ *   下一步是「下载本机语音识别组件」。
+ * - **pack 装了、模型没下** → **照常启动**。就绪探测必须能分清「服务没起」与「模型没下」，
+ *   两者的下一步完全不同（重启应用 vs 下 1.5GB 模型）。不起进程的话探测只能回
+ *   「服务没起」，用户按提示重启一万次也不会有模型。模型是懒加载的，
+ *   空跑一个 FastAPI 进程的代价只有几十 MB 常驻内存。
  */
 function createAsrDescriptor() {
   return {
     name: 'asr-service',
     eager: true,
     logName: 'asr-service',
+    enabled: (ctx) => !ctx.packaged || !!resolveServiceRoot(ctx, 'asr-service'),
     port: async (ctx) => {
       if (process.env.CHECKBA_ASR_PORT) return Number(process.env.CHECKBA_ASR_PORT)
       // dev 态固定 8890（与 kokoro 的 8880 相邻，便于本机联调）；打包态动态挑空闲端口

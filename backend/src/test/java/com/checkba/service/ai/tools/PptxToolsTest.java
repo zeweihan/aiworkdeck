@@ -76,7 +76,8 @@ class PptxToolsTest {
 
         pptxTools = new PptxTools(pptxServiceClient, projectFileService, projectFileRepository,
                 editorBridgeService, storageServiceFactory, aiModelProperties, backgroundTaskService,
-                chatModelFactory, platformAiChannel, storageResolver);
+                chatModelFactory, platformAiChannel, storageResolver,
+                mock(com.checkba.service.pack.NativePackService.class));
     }
 
     @Test

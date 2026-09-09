@@ -36,7 +36,7 @@ function dirSize(root) {
   return total
 }
 
-const { pysvcPath } = require('./pysvc-runtime')
+const { libDirFor, PACK_ID_BY_SERVICE } = require('./pysvc-runtime')
 const { t } = require('../app-language')
 
 function pyBin(resourcesPath) {
@@ -57,6 +57,9 @@ function pyBin(resourcesPath) {
 const COMPONENTS = [
   {
     id: 'mineru-models',
+    // 下载器本身跑在该服务的 venv 里（modelscope / huggingface_hub 都在 lib/ 下），
+    // 所以下模型之前必须先装它的 runtime pack（download() 的守卫查这一项）
+    runtimeService: 'mineru-service',
     name: { zh: '文档解析模型（MinerU）', en: 'Document Parsing Model (MinerU)' },
     sizeHint: '3 GB',
     estBytes: 3.0 * 1024 * 1024 * 1024, // 整体进度分母（估计值，进度封顶 99% 直到进程成功退出）
@@ -73,7 +76,7 @@ const COMPONENTS = [
         ],
         env: {
           ...process.env,
-          PYTHONPATH: pysvcPath(ctx, 'mineru-service', 'lib'),
+          PYTHONPATH: libDirFor(ctx, 'mineru-service'),
           MINERU_MODEL_SOURCE: 'modelscope',
           MODELSCOPE_CACHE: dir,
           HF_HOME: path.join(dir, 'hf'),
@@ -85,6 +88,7 @@ const COMPONENTS = [
   },
   {
     id: 'kokoro-models',
+    runtimeService: 'kokoro-service',
     name: { zh: '语音合成模型（Kokoro）', en: 'Speech Synthesis Model (Kokoro)' },
     sizeHint: '300 MB',
     estBytes: 300 * 1024 * 1024,
@@ -100,7 +104,7 @@ const COMPONENTS = [
         ],
         env: {
           ...process.env,
-          PYTHONPATH: pysvcPath(ctx, 'kokoro-service', 'lib'),
+          PYTHONPATH: libDirFor(ctx, 'kokoro-service'),
           HF_HOME: dir,
           HF_ENDPOINT: process.env.CHECKBA_HF_ENDPOINT || 'https://hf-mirror.com',
           // 打包内带 hf_xet：Xet 路径绕过 HF_ENDPOINT 直连 HF 官方 CAS
@@ -114,6 +118,7 @@ const COMPONENTS = [
   },
   {
     id: 'asr-models',
+    runtimeService: 'asr-service',
     name: { zh: '本地转写模型（Whisper medium）', en: 'On-device Transcription Model (Whisper medium)' },
     sizeHint: '1.5 GB',
     estBytes: 1.5 * 1024 * 1024 * 1024,
@@ -130,7 +135,7 @@ const COMPONENTS = [
         ],
         env: {
           ...process.env,
-          PYTHONPATH: pysvcPath(ctx, 'asr-service', 'lib'),
+          PYTHONPATH: libDirFor(ctx, 'asr-service'),
           HF_HOME: dir,
           HF_ENDPOINT: process.env.CHECKBA_HF_ENDPOINT || 'https://hf-mirror.com',
           // 同 kokoro：Xet 路径绕过 HF_ENDPOINT 直连 HF 官方 CAS，镜像签发的凭证在那边必 401
@@ -147,7 +152,7 @@ class ModelManager {
     this.ctx = {
       dataDir: opts.dataDir,
       resourcesPath: opts.resourcesPath,
-      pysvcRoot: opts.pysvcRoot || null,
+      projectRoot: opts.projectRoot || null,
       packaged: !!opts.packaged
     }
     this.onProgress = opts.onProgress || (() => {})
@@ -191,6 +196,12 @@ class ModelManager {
 
   async download(id) {
     const c = this.component(id)
+    // 模型下载器本身就跑在这个服务的 venv 里（modelscope / huggingface_hub 都在 lib/ 下）：
+    // 运行时 pack 没装的话，spawn 出去只会 ModuleNotFoundError，用户看到的是一句看不懂的
+    // 报错而不是「先装组件」。这里当场说清楚（面板据此先装 pack 再下模型）。
+    if (this.ctx.packaged && c.runtimeService && !libDirFor(this.ctx, c.runtimeService)) {
+      throw new Error(`${PACK_ID_BY_SERVICE[c.runtimeService]} 未安装：模型下载要用该组件的 Python 运行时`)
+    }
     if (this.active.has(id)) throw new Error(`${id} already downloading`)
     if (this.isInstalled(id)) throw new Error(`${id} already installed`)
     this.errors.delete(id)

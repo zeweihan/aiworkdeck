@@ -106,3 +106,12 @@ test('本地路径：能正常读回上一版 manifest', async (t) => {
   const m = await loadPrevManifest(fp, FAST)
   assert.strictEqual(m.latestMajor, '0.22')
 })
+
+test('补丁组件收敛为三个，pysvc-src 已废除（服务源码修复走 pack 新版本 + 24h 自动追新）', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../scripts/build-patch-assets.js'), 'utf8')
+  assert.ok(!src.includes('pysvc-src'), 'build-patch-assets.js 仍在产 pysvc-src')
+  assert.ok(!src.includes('--pysvc'), '仍接受 --pysvc 参数')
+  const gate = fs.readFileSync(path.join(__dirname, '../scripts/patch-gate.sh'), 'utf8')
+  assert.ok(!gate.includes('pysvc-src'), 'patch-gate 文案仍提 pysvc-src')
+  assert.match(gate, /lock 改动走 pack 发版/, 'requirements.lock 那条的处置要改写成「走 pack 发版」')
+})

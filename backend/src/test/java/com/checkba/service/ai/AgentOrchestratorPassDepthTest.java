@@ -96,7 +96,7 @@ class AgentOrchestratorPassDepthTest {
         when(messageService.upsertAssistantMessage(any(), any(), any(), any(), any())).thenReturn(1L);
 
         ContextAssemblerService assembler = mock(ContextAssemblerService.class);
-        when(assembler.assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        when(assembler.assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenAnswer(inv -> new ArrayList<ChatMessage>(List.of(
                         SystemMessage.from("system"), UserMessage.from("请校对全文"))));
 

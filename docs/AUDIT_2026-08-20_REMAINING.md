@@ -3,6 +3,10 @@
 > **2026-08-21 收官：166 条里 156 条已修完并合并，6 条经复现被推翻，
 > 4 条留给维护者拍板（见下）。这份文件从「待处理清单」转为归档，
 > 原文全部保留不删（删了就没法回查当时的判断）。**
+>
+> **2026-09-09 更新：留给维护者拍板的 4 条已全部拍板并落地——第 1 条（中文姓名脱敏）见 dev-board#531，
+> 第 2、4 条（AgentOrchestrator 并发轮次竞态、SkillRouter 无轮次隔离）见 dev-board#533，第 3 条（会议转写卡死）见 dev-board#532。
+> 下面「还需要产品口径确认的两处」维护者同日确认维持现状。**
 
 ## 收官账目
 
@@ -33,7 +37,7 @@
 
 另有 1 条（EasyVoicePane 的 Blob URL 卸载不 revoke）在第二轮复核时发现已被 #510 顺手修掉，未重复改动。
 
-### 留给维护者拍板的 4 条（第 3 条已于 2026-09-09 拍板并修复，余 3 条待拍板）
+### 留给维护者拍板的 4 条（2026-09-09 全部拍板并落地：#531 / #533 / #532 / #533）
 
 前三条是 #498 交接时就点名「需要先拍板、别自作主张动」的，本轮遵照未动：
 
@@ -44,10 +48,15 @@
    落地：枚举值保留但 `autoDetect=false`（`/options` 不再列它，检测端一律跳过），
    脱敏面板首屏常驻「要涂黑的姓名/词语」输入区（`customWords`，逐字面量涂黑，docx/文本/PDF 三条路都覆盖）。
    详见 `.claude/agents/plugin-system.md` 的脱敏一节。
-2. **`AgentOrchestrator` 并发轮次竞态** —— 同一 conversationId 的两个并发轮次会互相覆盖
-   持久化的助手消息；「停止后立刻再发」还会擦掉上一轮尚未生效的取消标志。
-   正确修法是给每轮一个 runId、把流式内容与消息行 id 挂到 per-turn 的 RunGuard 上，
-   cancel/recovery 走 conversationId→runId 解析。这是架构改动。
+2. **`AgentOrchestrator` 并发轮次竞态** —— **已拍板并修复（2026-09-09），见 dev-board#533。**
+   原判断：同一 conversationId 的两个并发轮次会互相覆盖持久化的助手消息；
+   「停止后立刻再发」还会擦掉上一轮尚未生效的取消标志。
+   落地修法即当时写下的那条：每轮一个 runId，流式缓冲、消息行 id、取消标志、SSE 连接代次
+   全部挂到 per-turn 的 `RunGuard` 上；`activeRuns`（conversationId → 当前轮次）是
+   cancel 与断线重连恢复的唯一解析入口；被取代的旧轮次继续跑完但对会话级状态全程静默。
+   对外契约零变化（SSE 事件与两个端点的形态一字未动，前端与 Office/WPS 插件不用改）。
+   契约与残留局限写在 `.claude/agents/ai-chat.md` 的「轮次隔离：runId / RunGuard」一节，
+   回归用例 `AgentOrchestratorConcurrentTurnsTest`。
 3. ~~**会议永远停在「转写中」**~~ —— **已拍板并修复（2026-09-09），见 dev-board#532。**
    维护者定的阈值是 **`max(30 分钟, 音频时长 × 3)`**：新增 `transcribingStartedAt` 列作锚点，
    poll-on-read 时在按会议维度的锁内判定，超时置 `FAILED` 并写下可读原因，
@@ -55,10 +64,17 @@
    （阶段 / 已用时 / 按音频时长估算的预计时长，估算明确标注）。
    契约与理由见 `.claude/agents/utility-tools.md`「转写卡死判定与进度提示」。
    （相关的两条早前已修：转码无超时见 #516，转写结果解析失败被当成空会议见 #516。）
-4. **SkillRouter 的「无轮次隔离」** —— 根因就是第 2 条：SkillRouter 内部没有任何
-   「这是哪一轮」的标识可用，在它里面打补丁只会把竞态挪个位置。第 2 条拍板后一并处理。
+4. **SkillRouter 的「无轮次隔离」** —— **已拍板并修复（2026-09-09），见 dev-board#533。**
+   原判断成立：根因是第 2 条，SkillRouter 内部没有「这是哪一轮」的标识可用。
+   第 2 条给出 runId 之后一并处理：登记簿改按 runId 索引（`activeByRun`），
+   `activateForTurn` 同时收 conversationId（仅埋点归属）与 runId（登记键），
+   `activeSkills` / `activeSkill` / `visibleTools` 全部按 runId 取，新增 `clearRun(runId)`
+   由编排器在终态摘条目；`ContextAssemblerService.assemble` 相应多一个 runId 形参，
+   保住「prompt 注入与工具白名单同源」这条契约在并发下也成立。
 
 ### 还需要产品口径确认的两处（本轮按判断先做了，改回都很容易）
+
+> **2026-09-09 维护者确认：两处均维持现状**（pdf_redact 部分命中算成功并如实报缺失项；OCR 屏幕共享离开页面才释放）。
 
 1. **`pdf_redact` 部分命中现在算成功**并如实报告缺失项（原来是抛异常，但磁盘已经被改过了，
    调用方的 finishModification 被跳过，DB 与预览停在旧版本）。理由：redact 不可逆且以秒计生效，

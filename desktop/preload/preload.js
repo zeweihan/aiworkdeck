@@ -140,6 +140,11 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
   services: {
     ensure: (name) => ipcRenderer.invoke('checkba:service-ensure', { name })
   },
+  // 本机偏好（落 ~/.aiworkdeck/prefs.json）。只做 KV 转发，键名与语义在渲染层。
+  prefs: {
+    get: (key) => ipcRenderer.invoke('checkba:prefs-get', { key }),
+    set: (key, value) => ipcRenderer.invoke('checkba:prefs-set', { key, value })
+  },
   // 应用内增量更新（docs/INCREMENTAL_UPDATE_DESIGN.md）：小版本补丁自动下载、
   // 重启生效；大版本引导官网下载全量包。onEvent 返回退订函数——页面栈多实例
   // 场景务必用活跃实例指针消费（见剪贴板去重地雷，PR#151）。

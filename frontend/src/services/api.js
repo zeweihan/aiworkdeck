@@ -884,6 +884,16 @@ export function uninstallMarketSkill(skillId) {
 
 // 原生资源包（native pack）：重资源功能的运行时下载安装，规范见 docs/NATIVE_PACK_DISTRIBUTION.md §4.3
 
+// 四个可选组件的一次性快照（后端 PackController.optionalComponents）。
+// 这条端点**不发网络请求**（体积取内存/落盘快照，0 = 未知），首次登录面板可以放心在
+// 登录后立刻调它；要精确体积再按需打 packInfo。
+export function optionalComponents() {
+  return request({
+    url: '/api/packs/optional-components',
+    method: 'GET'
+  });
+}
+
 // 查询安装状态（登录即可）：{state, installedVersion, bytesDownloaded, bytesTotal, error}
 export function packStatus(packId) {
   return request({

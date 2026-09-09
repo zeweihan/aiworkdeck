@@ -77,6 +77,13 @@ const ACTION_BUDGET_MS = {
   replace_selection: 120000, modify_paragraph: 120000,
 }
 
+// 探活（dev-board#539）：备胎过继前先问一声「这个 guest 还活着吗」。用最便宜的
+// 只读命令（get_ui_state 实测 ~6ms），预算刻意短——探活的价值就在于**失败要早**，
+// 沿用 30s 默认预算等于把冷启动往后推半分钟。经 executeCommand 的
+// callOpts.timeoutMs 生效，不进 ACTION_BUDGET_MS（那张表只抬高下限、抬不低）。
+export const PROBE_ACTION = 'get_ui_state'
+export const PROBE_BUDGET_MS = 3000
+
 /**
  * HOST side: an executeCommand(action, params) that round-trips to the webview.
  * SAME contract as libreofficeExecutorClient.executeCommand, so useEditorBridge
@@ -140,14 +147,19 @@ export function createRelayExecutor({ send, subscribe, timeoutMs = 30000, onRead
     entry.resolve(msg.result)
   })
 
-  // callOpts（可选）：{onProgress(p), onIssued(reqId)}；reqId 也是 cancel 的把手。
+  // callOpts（可选）：{onProgress(p), onIssued(reqId), timeoutMs}；reqId 也是 cancel
+  // 的把手，timeoutMs 显式覆盖本次调用的等待预算（探活）。
   function executeCommand(action, params = {}, callOpts) {
     const reqId = 'rly_' + Date.now() + '_' + (++seq)
     // Whole-document transfers (load/export can be tens of MB and the worker
     // marshals every byte into UNO) and whole-document batch edits get a longer
     // deadline than interactive commands — a 18MB docx on a slow disk must not
     // surface as "加载失败" just because the default 30s ran out mid-import.
-    const budget = ACTION_BUDGET_MS[action] ? Math.max(timeoutMs, ACTION_BUDGET_MS[action]) : timeoutMs
+    // callOpts.timeoutMs 是**显式覆盖**（探活用），不受 ACTION_BUDGET_MS 的
+    // 「只抬高不降低」语义约束——调用方明说了要短就得真的短。
+    const budget = (callOpts && callOpts.timeoutMs)
+      ? callOpts.timeoutMs
+      : (ACTION_BUDGET_MS[action] ? Math.max(timeoutMs, ACTION_BUDGET_MS[action]) : timeoutMs)
     if (callOpts && callOpts.onIssued) { try { callOpts.onIssued(reqId) } catch (e) { /* ignore */ } }
     return new Promise((resolve) => {
       const timer = setTimeout(() => {

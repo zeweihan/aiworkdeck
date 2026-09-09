@@ -120,6 +120,9 @@ jobs:
       - name: Writing assistance contracts (dev-board#538)
         working-directory: frontend
         run: npm run test:completion
+      - name: Optional components prompts (dev-board#530)
+        working-directory: frontend
+        run: npm run test:optional-components
       - name: Build H5
         working-directory: frontend
         run: npm run build:h5

@@ -3,7 +3,7 @@
 const path = require('path')
 const fs = require('fs')
 const { findFreePort } = require('./service-manager')
-const { pysvcPath } = require('./pysvc-runtime')
+const { resolveServiceRoot, libDirFor, appDirFor } = require('./pysvc-runtime')
 
 function pyBin(ctx) {
   return process.platform === 'win32'
@@ -12,11 +12,11 @@ function pyBin(ctx) {
 }
 
 function libDir(ctx) {
-  return pysvcPath(ctx, 'kokoro-service', 'lib')
+  return libDirFor(ctx, 'kokoro-service')
 }
 
 function appDir(ctx) {
-  return pysvcPath(ctx, 'kokoro-service', 'app')
+  return appDirFor(ctx, 'kokoro-service')
 }
 
 function modelsDir(ctx) {
@@ -44,7 +44,9 @@ function createKokoroDescriptor(modelManager) {
     name: 'kokoro-service',
     eager: true,
     logName: 'kokoro-service',
-    enabled: (ctx) => !ctx.packaged || modelManager.isInstalled('kokoro-models'),
+    // 运行时 pack 与模型两个门都要过：模型在但 lib 不在，spawn 出去只会 ModuleNotFoundError
+    enabled: (ctx) => !ctx.packaged
+      || (!!resolveServiceRoot(ctx, 'kokoro-service') && modelManager.isInstalled('kokoro-models')),
     port: async (ctx) => {
       if (process.env.CHECKBA_KOKORO_PORT) return Number(process.env.CHECKBA_KOKORO_PORT)
       // dev 态固定 8880（Kokoro 生态惯例端口）；打包态动态挑空闲端口

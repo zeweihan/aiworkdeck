@@ -971,13 +971,19 @@
                        for Office docs when available (desktop). Web/h5 falls
                        through to FilePreview (docx 本地只读渲染).
                        Keep-alive pool: one instance per open Office doc (active +
-                       LRU 保活，见 leftLibreFiles) hidden via v-show — switching
-                       tabs must NOT re-boot the LOWA WASM engine. -->
+                       LRU 保活，见 leftLibreFiles) — switching tabs must NOT
+                       re-boot the LOWA WASM engine.
+                       未激活的实例用 .libre-standby（绝对定位 + visibility:hidden）
+                       隐藏，**不能用 v-show**（dev-board#539）：display:none 会让
+                       Chromium 把 guest 判成不可见，定时器降到 1/min、rAF 停摆，
+                       LOWA 的 Emscripten/Qt 事件循环跟着冻住——久置切回来装载就撞
+                       relay 的 180s 墙钟预算，落成空白页 +「文档加载失败」。
+                       与备胎的 .libre-spare-standby 是同一套隐藏写法。 -->
                   <view
                     v-for="file in leftLibreFiles"
                     :key="'libre-left-' + file.id"
-                    v-show="activeFileLeft && activeFileLeft.id === file.id"
                     class="pane-content"
+                    :class="{ 'libre-standby': !(activeFileLeft && activeFileLeft.id === file.id) }"
                   >
                     <LibreOfficeEditor
                       :ref="el => setLibreRef('left', file.id, el)"
@@ -1158,12 +1164,12 @@
                     @close="closeEvidenceMethodBar"
                   />
                   <!-- Epic #43 Track B / #79: embedded LibreOffice keep-alive pool
-                       (see left pane). -->
+                       （隐藏方式与左窗格同——见那边的 .libre-standby 注释）。 -->
                   <view
                     v-for="file in rightLibreFiles"
                     :key="'libre-right-' + file.id"
-                    v-show="activeFileRight && activeFileRight.id === file.id"
                     class="pane-content"
+                    :class="{ 'libre-standby': !(activeFileRight && activeFileRight.id === file.id) }"
                   >
                     <LibreOfficeEditor
                       :ref="el => setLibreRef('right', file.id, el)"

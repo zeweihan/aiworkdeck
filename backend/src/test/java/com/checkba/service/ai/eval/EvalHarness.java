@@ -161,7 +161,7 @@ public final class EvalHarness {
         TokenUsageService tokenUsage = mock(TokenUsageService.class);
 
         ContextAssemblerService assembler = mock(ContextAssemblerService.class);
-        when(assembler.assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        when(assembler.assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenAnswer(inv -> new ArrayList<>(List.of(
                         SystemMessage.from("[eval] system prompt placeholder"),
                         UserMessage.from(c.userInput))));

@@ -108,7 +108,7 @@ class AgentOrchestratorFailoverFlowTest {
         when(messageService.upsertAssistantMessage(any(), any(), any(), any(), any())).thenReturn(1L);
 
         ContextAssemblerService assembler = mock(ContextAssemblerService.class);
-        when(assembler.assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        when(assembler.assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenAnswer(inv -> new ArrayList<ChatMessage>(List.of(
                         SystemMessage.from("system"), UserMessage.from("整理一下这份合同"))));
 
@@ -255,7 +255,7 @@ class AgentOrchestratorFailoverFlowTest {
         when(messageService.listByConversationId(any()))
                 .thenReturn(List.of(mock(ProjectAiMessage.class), mock(ProjectAiMessage.class)));
         ContextAssemblerService assembler = mock(ContextAssemblerService.class);
-        when(assembler.assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        when(assembler.assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenAnswer(inv -> new ArrayList<ChatMessage>(List.of(UserMessage.from("整理一下这份合同"))));
         ToolRegistry toolRegistry = mock(ToolRegistry.class);
         when(toolRegistry.getAllSpecifications(any())).thenReturn(List.of());
