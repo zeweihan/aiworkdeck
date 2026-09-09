@@ -1016,6 +1016,40 @@ public class DocInsightService {
         return view(entities.save(row), true);
     }
 
+    /** 用户选中文字后明确点击在线查询；不创建解析任务、不落临时实体。 */
+    public EntityView lookupSelection(Long userId, Long projectId, String kind, String text) {
+        requireWrite(projectId, userId);
+        if (kind == null || !Set.of("COMPANY", "LAW", "CASE").contains(kind)) {
+            throw new IllegalArgumentException("在线查询仅支持机构、法规和案例");
+        }
+        String name = text == null ? "" : text.strip();
+        if (name.length() < 2 || name.length() > 160 || name.codePoints().anyMatch(Character::isISOControl)) {
+            throw new IllegalArgumentException("查询文本须为 2 至 160 字的单行文字");
+        }
+        DocInsightExtraction.RawEntity raw;
+        if ("COMPANY".equals(kind)) raw = DocInsightExtraction.company(name, name);
+        else if ("CASE".equals(kind)) raw = DocInsightExtraction.caseRef(name, "", name);
+        else {
+            String[] parts = splitLawName(name);
+            raw = DocInsightExtraction.law(parts[0], parts[1], name);
+        }
+        DocInsightEntity row = new DocInsightEntity();
+        row.setProjectId(projectId);
+        row.setKind(kind);
+        row.setName(raw.name());
+        row.setNormKey(raw.normKey());
+        PlatformAiUserScope.run(userId, () -> {
+            try {
+                retrieveOne(row, false);
+            } catch (Exception e) {
+                row.setRetrievalStatus(DocInsightEntity.RETRIEVAL_ERROR);
+                row.setRetrievalNote(readable(e));
+                row.setFetchedAt(LocalDateTime.now());
+            }
+        });
+        return view(row, true);
+    }
+
     // ---------------------------------------------------------------- 视图
 
     private RunView view(DocInsightRun r) {

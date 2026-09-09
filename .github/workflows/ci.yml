@@ -117,6 +117,9 @@ jobs:
       - name: LOWA worker pure-function + 命名前缀契约 (dev-board#506)
         working-directory: frontend
         run: npm run test:lowa-unit
+      - name: Writing assistance contracts (dev-board#538)
+        working-directory: frontend
+        run: npm run test:completion
       - name: Build H5
         working-directory: frontend
         run: npm run build:h5

@@ -1,0 +1,62 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+import assert from 'node:assert/strict'
+import { preflight, loadPuppeteer, startServer, launchBrowser, openEditor } from './_boot.mjs'
+preflight()
+const server = await startServer()
+const browser = await launchBrowser(await loadPuppeteer())
+try {
+  const page = await openEditor(browser)
+  page.on('pageerror', e => console.error('PAGE ERROR:', e.message))
+  const exec = (a, p = {}) => page.evaluate((a, p) => window.__loExecutor.executeCommand(a, p), a, p)
+  const text = async () => (await exec('get_document_text')).paragraphs.map(p => p.text).join('\n')
+  await exec('ui_command', { name: 'select_all' }); await exec('replace_selection', { text: '' })
+  await page.evaluate(() => {
+    window.__writingRequests = []
+    window.addEventListener('message', e => {
+      const m = e.data
+      if (m?.type !== 'writing-request') return
+      window.__writingRequests.push(m)
+      const result = m.action === 'lookup' ? { title: '北京当红晴天律师事务所', source: '测试资料 / Test fixture', date: '2026-09-09', variants: [{ rows: [['企业名称', '北京当红晴天律师事务所'], ['住所', '北京市（测试）']] }] } : {}
+      window.postMessage({ __lo: 'lo-relay', type: 'writing-response', id: m.id, session: m.session, result }, location.origin)
+    })
+    window.postMessage({ __lo: 'lo-relay', type: 'writing-config', config: { session: 'test-document', writable: true, enabled: true, learning: true, hints: true, items: [
+      { id: 'one', text: '北京当红晴天律师事务所', kind: 'COMPANY', scope: 'project', source: 'variable', uses: 3 },
+      { id: 'two', text: '北京当红齐天集团', kind: 'COMPANY', scope: 'project', source: 'variable', uses: 2 },
+      { text: '《中华人民共和国民法典》第一百条', kind: 'ARTICLE', scope: 'project', source: 'variable', uses: 3 },
+      { text: '张三丰', kind: 'PERSON', scope: 'user', source: 'variable', uses: 2 },
+    ] } }, location.origin)
+  })
+  const input = 'input[data-lo-ime]'
+  await page.focus(input)
+  const ime = async value => page.evaluate(value => {
+    const el = document.querySelector('input[data-lo-ime]')
+    el.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    el.dispatchEvent(new CompositionEvent('compositionend', { data: value, bubbles: true }))
+    el.dispatchEvent(new InputEvent('input', { data: value, inputType: 'insertCompositionText', bubbles: true }))
+  }, value)
+  await ime('北京当红')
+  await page.waitForSelector('[role=option]', { timeout: 10000 })
+  assert.equal(await page.$$eval('[role=option]', x => x.length), 2)
+  assert.equal(await text(), '北京当红', 'showing suggestions does not edit the document')
+  await page.keyboard.press('ArrowDown'); await page.keyboard.press('Tab')
+  await page.waitForFunction(() => !document.querySelector('[role=option]'))
+  assert.equal(await text(), '北京当红齐天集团')
+  await exec('undo'); assert.equal(await text(), '北京当红', 'one undo reverts the accepted suffix')
+  assert.equal(await page.evaluate(() => window.__writingRequests.filter(m => m.action === 'lookup').length), 0, 'typing and accepting do not query external sources')
+  await page.keyboard.press('Escape')
+  await exec('ui_command', { name: 'select_all' }); await exec('replace_selection', { text: '北京当红晴天律师事务所' })
+  await exec('ui_command', { name: 'select_all' })
+  await page.evaluate(() => document.querySelector('input[data-lo-ime]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 360, clientY: 260 })))
+  await page.waitForFunction(() => [...document.querySelectorAll('.awd-wa-panel button')].some(b => b.textContent === '查询机构工商信息'))
+  await page.evaluate(() => [...document.querySelectorAll('.awd-wa-panel button')].find(b => b.textContent === '查询机构工商信息').click())
+  await page.waitForSelector('.awd-wa-panel table')
+  assert.equal(await text(), '北京当红晴天律师事务所', 'querying and previewing do not insert content')
+  assert.equal(await page.evaluate(() => window.__writingRequests.filter(m => m.action === 'lookup').length), 1)
+  await page.screenshot({ path: '/tmp/awd-538-writing-preview.png' })
+  await page.evaluate(() => [...document.querySelectorAll('.awd-wa-panel button')].find(b => b.textContent === '插入以上内容').click())
+  await page.waitForFunction(() => document.querySelector('.awd-wa-panel')?.textContent.includes('已插入'))
+  const exported = await page.evaluate(async () => { const r = await window.__loExecutor.executeCommand('export_document', { name: 'writing-ui.docx' }); return { success: r.success, size: r.bytes?.byteLength || r.bytes?.length || 0 } }); assert.ok(exported.success && exported.size > 0)
+  await exec('undo'); assert.equal(await text(), '北京当红晴天律师事务所', 'table insertion preserves selected text and undoes in one step')
+  console.log('PASS: real IME → local menu → arrows/Tab → undo; explicit right-click lookup → preview → table → export → undo; no automatic external lookup')
+} finally { await browser.close(); await new Promise(r => server.close(r)) }

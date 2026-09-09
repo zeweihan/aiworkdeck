@@ -205,7 +205,15 @@ function paragraphTextOf(range) {
 // 重建；(3) 写原语末尾的 verifySnapshot 再补一刀。段落被删后旧对象会抛异常，
 // withParaIndex 捕到就重建一次再读，仍失败才冒泡。
 const paraIndex = { model: null, ranges: null, total: 0 };
-function invalidateParaIndex() { paraIndex.ranges = null; paraIndex.total = 0; paraIndex.model = null; }
+// 补全只保留一个内存快照；不把临时候选变成存进 docx 的书签。
+let completionSnapshot = null;
+let completionSeq = 0;
+function invalidateParaIndex() {
+  paraIndex.ranges = null; paraIndex.total = 0; paraIndex.model = null;
+  // 导出同步切换修订显示并恢复 modified 标志，会触发只读的缓存失效；
+  // 此窗口不可能插入人工编辑，补全令牌保留，接受时仍完整核对模型/位置/原文。
+  if (!exportInFlight) completionSnapshot = null;
+}
 function buildParaIndex() {
   const ranges = [];
   const en = xModel.getText().createEnumeration();
@@ -1131,7 +1139,7 @@ function styleTableStandard(table, opts) {
   }
 }
 // 在视图光标处插入一张按标准格式排好的表。rows: string[][]。返回表对象。
-function insertStyledTable(rows, headerRows) {
+function insertStyledTable(rows, headerRows, plainText) {
   const nRows = rows.length;
   let nCols = 1;
   for (let i = 0; i < nRows; i++) nCols = Math.max(nCols, rows[i].length);
@@ -1143,7 +1151,8 @@ function insertStyledTable(rows, headerRows) {
   for (let r = 0; r < nRows; r++) {
     for (let c = 0; c < nCols; c++) {
       const raw = rows[r][c] != null ? String(rows[r][c]) : '';
-      try { table.getCellByName(cellName(c, r)).setString(stripInlineMd(raw)); } catch (e) {}
+      if (plainText) table.getCellByName(cellName(c, r)).setString(raw);
+      else { try { table.getCellByName(cellName(c, r)).setString(stripInlineMd(raw)); } catch (e) {} }
     }
   }
   styleTableStandard(table, { headerRows: headerRows });
@@ -2344,7 +2353,121 @@ function applyProfileToStylesSafe(names) {
 }
 
 // ==========================================================================
+function completionUnavailable(reason) {
+  return { success: false, available: false, reason: reason, error: reason, message: reason };
+}
+function completionGuard() {
+  if (!isWriterDoc()) return 'not-writer';
+  if (revisionViewState().mode === 'all') return 'inline-revisions';
+  return null;
+}
+function captureCompletion(radius) {
+  completionSnapshot = null;
+  const reason = completionGuard();
+  if (reason) return completionUnavailable(reason);
+  try {
+    const vc = ctrl.getViewCursor();
+    const selectedText = String(vc.getString() || '');
+    const n = Math.max(1, Math.min(Number(radius) || 120, 200));
+    const ctx = contextAround(vc, n);
+    if (ctx.ctxErr) return completionUnavailable('unavailable-context');
+    const paragraph = paragraphTextOf(vc);
+    if (paragraph == null) return completionUnavailable('unavailable-context');
+    const result = { success: true, available: !selectedText, before: ctx.before, after: ctx.after,
+      paragraph: paragraph.slice(0, 300), selectedText: selectedText, hasSelection: !!selectedText, token: null };
+    if (selectedText) result.reason = 'selection';
+    const range = vc.getText().createTextCursorByRange(vc.getStart());
+    range.gotoRange(vc.getEnd(), true);
+    const token = 'completion_' + (++completionSeq);
+    completionSnapshot = { token: token, model: xModel, range: range, radius: n,
+      before: ctx.before, after: ctx.after, paragraph: paragraph, selectedText: selectedText };
+    result.token = token;
+    return result;
+  } catch (e) { return completionUnavailable('unavailable-context'); }
+}
+// 校验与落字必须在同一条同步 worker 命令内完成。活 range + 原文双校验防止
+// 同名前缀在别处出现、继续输入、换文档或迟到结果把内容落错位置。
+function checkCompletion(token) {
+  const reason = completionGuard();
+  if (reason) return completionUnavailable(reason);
+  const snap = completionSnapshot;
+  if (!snap || !token || token !== snap.token || snap.model !== xModel) return completionUnavailable('stale');
+  try {
+    const vc = ctrl.getViewCursor();
+    if (String(vc.getString() || '') !== snap.selectedText || !rangeStartsEqual(vc, snap.range)
+      || !rangeStartsEqual(vc.getEnd(), snap.range.getEnd())) return completionUnavailable('stale');
+    const ctx = contextAround(vc, snap.radius);
+    if (ctx.ctxErr || ctx.before !== snap.before || ctx.after !== snap.after || paragraphTextOf(vc) !== snap.paragraph) {
+      return completionUnavailable('stale');
+    }
+    return { success: true, cursor: vc, snapshot: snap };
+  } catch (e) { return completionUnavailable('stale'); }
+}
+// XUndoManager 把多段文本/表格的内部编辑收成一次人工操作；开组失败就不动文档。
+function completionEdit(title, edit) {
+  const um = xModel.getUndoManager();
+  const undoCount = um.getAllUndoActionTitles().length;
+  um.enterUndoContext(title);
+  completionSnapshot = null;
+  let failed = null, value;
+  lockModel();
+  try { value = edit(); } catch (e) { failed = e; }
+  finally { unlockModel(); um.leaveUndoContext(); }
+  if (failed) {
+    // 本组已有写入时撤回这一整组，避免表格写到半途残留。
+    try { if (um.getAllUndoActionTitles().length > undoCount && um.getCurrentUndoActionTitle() === title) um.undo(); } catch (e) {}
+    throw failed;
+  }
+  return Object.assign({}, captureCompletion(120), { success: true }, value || {});
+}
+
 const EXEC = {
+  get_completion_context(p) { return captureCompletion(p && p.radius); },
+  accept_completion(p) {
+    const checked = checkCompletion(p.token);
+    if (!checked.success) return checked;
+    if (checked.snapshot.selectedText) return completionUnavailable('selection');
+    const prefix = p.prefix, text = p.text;
+    if (typeof prefix !== 'string' || !prefix || typeof text !== 'string'
+      || text.length <= prefix.length || text.indexOf(prefix) !== 0 || /[\r\n]/.test(text)
+      || !checked.snapshot.before.endsWith(prefix)) return completionUnavailable('invalid-completion');
+    const suffix = text.slice(prefix.length);
+    return completionEdit('补全文字', function () {
+      const vc = checked.cursor;
+      vc.getText().insertString(vc, suffix, false);
+      vc.collapseToEnd();
+      return { inserted: suffix, text: text };
+    });
+  },
+  insert_completion_content(p) {
+    const checked = checkCompletion(p.token);
+    if (!checked.success) return checked;
+    const text = p.text == null ? '' : p.text;
+    const rows = p.rows;
+    if (typeof text !== 'string' || (!text && !rows)) return completionUnavailable('invalid-content');
+    if (rows != null && (!Array.isArray(rows) || !rows.length || rows.length > 200
+      || rows.some(function (r) { return !Array.isArray(r) || !r.length || r.length > 20
+        || r.some(function (c) { return typeof c !== 'string'; }); }))) return completionUnavailable('invalid-table');
+    // 表后摆位依赖正文枚举；不允许在表格/脚注/页眉中偷偷插入嵌套表。
+    if (rows) {
+      try { if (paraKeyOf(xModel.getText(), checked.cursor.getStart()) < 0) return completionUnavailable('table-requires-body'); }
+      catch (e) { return completionUnavailable('table-requires-body'); }
+    }
+    return completionEdit('插入补全资料', function () {
+      const vc = checked.cursor;
+      vc.collapseToEnd(); // 右键外查的选区保留原文，资料追加在其后。
+      const story = vc.getText();
+      const lines = text.replace(/\r\n?/g, '\n').split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        if (i) story.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
+        if (lines[i]) story.insertString(vc, lines[i], false);
+      }
+      vc.collapseToEnd();
+      let name = null;
+      if (rows) { const table = insertStyledTable(rows, 1, true); name = table.getName(); }
+      return { inserted: text, table: name };
+    });
+  },
   // [取消] 宿主对一条在飞的批量命令喊停（reqId 来自 progress 消息）。只置位，
   // 真正停下来要等那条命令跑到下一个批间检查点。
   cancel(p) {
@@ -3241,8 +3364,8 @@ const EXEC = {
     try {
       withInlineMarkupForExport(function () { xModel.storeToURL('private:stream', props); });
     } finally {
-      exportInFlight = false;
       try { if (!!xModel.isModified() !== wasModified) xModel.setModified(wasModified); } catch (e) { /* 只读文档等场景可能拒绝，忽略 */ }
+      exportInFlight = false;
     }
     saveSeq++;
     if (total === 0) return { success: false, message: 'export_document: store produced 0 bytes' };
