@@ -190,3 +190,44 @@ test('desktop-build.yml：Windows 腿必须在跑单元测试之前给 Temp 加 
   assert.equal(step['continue-on-error'], true,
     'Defender 排除项失败不许中断构建（continue-on-error 必须为 true）')
 })
+
+// 执行真实打包步骤的 shell，仅替换系统签名和打包命令，避免测试接触真实密钥。
+for (const [signed, unlockFails] of [[true, false], [false, false], [true, true]]) {
+  test(`macOS packaging keychain (credentials: ${signed}, unlock failure: ${unlockFails})`, () => {
+    const step = loadWorkflow('desktop-build.yml').jobs.build.steps.find((s) =>
+      s.name === 'Package installers (macOS, signed & notarized)')
+    const harness = `
+      sudo() { :; }
+      ulimit() { printf '1024\\n'; }
+      security() {
+        if [ "$UNLOCK_FAILS" = true ]; then return 75; fi
+        [ "$1" = unlock-keychain ] && [ "$2" = -p ] &&
+        [ "$3" = awd-tmp-keychain ] && [ "$4" = "$RUNNER_TEMP/awd-sign.keychain-db" ] || return 71
+        export UNLOCKED_KEYCHAIN="$4"
+      }
+      npx() {
+        [ "$1" = electron-builder ] || return 72
+        if [ "$EXPECT_SIGNED" = true ]; then
+          [ -z "\${CSC_LINK:-}" ] &&
+          [ "\${CSC_KEYCHAIN:-}" = "$RUNNER_TEMP/awd-sign.keychain-db" ] &&
+          [ "\${UNLOCKED_KEYCHAIN:-}" = "$CSC_KEYCHAIN" ] || return 73
+        else
+          [ -z "\${CSC_KEYCHAIN:-}" ] && [ -z "\${CSC_LINK:-}" ] || return 74
+        fi
+      }
+    `
+    const result = require('child_process').spawnSync('bash', ['-e', '-c', harness + step.run], {
+      encoding: 'utf8',
+      env: {
+        PATH: process.env.PATH,
+        RUNNER_TEMP: '/tmp/release keychain test',
+        CSC_LINK: signed ? 'fixture-p12-base64' : '',
+        CSC_KEY_PASSWORD: 'fixture-p12-password',
+        APPLE_API_KEY_B64: '',
+        EXPECT_SIGNED: String(signed),
+        UNLOCK_FAILS: String(unlockFails),
+      },
+    })
+    assert.equal(result.status, unlockFails ? 75 : 0, result.stderr || result.stdout)
+  })
+}

@@ -511,6 +511,13 @@ jobs:
           # electron-builder's default unsigned PR build.
           CSC_FOR_PULL_REQUEST: ${{ secrets.CSC_LINK != '' }}
         run: |
+          # 复用前一步正确导入的钥匙串：electron-builder 24.13.3 的导入链
+          # 错把 P12 口令传给 set-key-partition-list，导致 SecKeychainUnlock。
+          if [ -n "$CSC_LINK" ]; then
+            export CSC_KEYCHAIN="$RUNNER_TEMP/awd-sign.keychain-db"
+            security unlock-keychain -p "awd-tmp-keychain" "$CSC_KEYCHAIN"
+            unset CSC_LINK
+          fi
           # 公证凭据：三个环境变量要么全有要么全无——electron-builder 只要见到其中
           # 任意一个非空就要求三个都在，否则抛 InvalidConfigurationError；三个全空
           # 才会静默跳过公证（fork PR 走的就是这条路）。
