@@ -18,6 +18,13 @@
  *   drawio    <repo>/frontend/dist/drawio                平台无关，前置：fetch-drawio-assets.js
  *   graphviz  desktop/bundled/<os>-<arch>/graphviz        平台相关，前置：prepare-graphviz.js
  *
+ * 四个 Python 服务运行时 pack（pptx/mineru/kokoro/asr-runtime，dev-board#529）另有两个组件：
+ *   lib       desktop/bundled/<os>-<arch>/pysvc/<service>/lib   平台相关，前置：prepare-python-service.js
+ *   app       desktop/bundled/<os>-<arch>/pysvc/<service>/app   平台无关（mineru 没有这个组件）
+ *
+ *   node desktop/scripts/build-pack.js --id asr-runtime --version 1.0.0 \
+ *     --out pack-out/mac-arm64 --components lib,app
+ *
  * manifest 在这里**不签名**——签名私钥只在服务器侧（deploy/publish-pack.sh sign），
  * 不进 CI（NATIVE_PACK_DISTRIBUTION.md §1）。
  */
@@ -31,6 +38,30 @@ const DESKTOP_ROOT = path.join(__dirname, '..')
 
 const MIN_APP_VERSION = '0.21.0'
 const ENGINE_API = 1
+
+// 四个 Python 服务运行时 pack（设计 §3.1）。一服务一 pack：
+//   lib  = prepare-python-service.js 产出的 pysvc/<service>/lib（已 prune），平台相关（wheel 里有 .so/.pyd）
+//   app  = pysvc/<service>/app（服务源码），平台无关
+// mineru 是纯 pip 包服务（desktop-build.yml 调它时不带 --src），没有 app/。
+const RUNTIME_PACKS = {
+  'pptx-runtime': { service: 'pptx-service', hasApp: true },
+  'mineru-runtime': { service: 'mineru-service', hasApp: false },
+  'kokoro-runtime': { service: 'kokoro-service', hasApp: true },
+  'asr-runtime': { service: 'asr-service', hasApp: true },
+}
+
+// minAppVersion 按 pack 分：litigation-visual 是 v0.21.0 的老约定，四个 runtime pack
+// 依赖 0.38.0 才有的 resolveServiceRoot（更早的壳只会去 Resources/pysvc.tar.gz 找）。
+const MIN_APP_VERSION_BY_ID = {
+  'pptx-runtime': '0.38.0',
+  'mineru-runtime': '0.38.0',
+  'kokoro-runtime': '0.38.0',
+  'asr-runtime': '0.38.0',
+}
+
+function minAppVersionFor(id) {
+  return MIN_APP_VERSION_BY_ID[id] || MIN_APP_VERSION
+}
 
 function parseArgs() {
   const out = {}
@@ -131,11 +162,18 @@ function packComponent(ctx, { name, srcDir, exclude, archive, platforms, unpackD
   fs.rmSync(contentsPath, { force: true }) // 防止上一次构建的残留干扰本次遍历/哈希
 
   const files = listFiles(srcDir, exclude)
-  const lines = files.map((rel) => `${sha256File(path.join(srcDir, rel))}  ${rel}`)
+  let unpackedSize = 0
+  const lines = files.map((rel) => {
+    const abs = path.join(srcDir, rel)
+    unpackedSize += fs.statSync(abs).size
+    return `${sha256File(abs)}  ${rel}`
+  })
   fs.writeFileSync(contentsPath, lines.join('\n') + '\n')
   try {
     const archivePath = path.join(ctx.outDir, archive)
-    console.log(`打包 ${name} -> ${archivePath}（${files.length} 个文件）`)
+    console.log(
+      `打包 ${name} -> ${archivePath}（${files.length} 个文件，解压后 ${(unpackedSize / 1024 / 1024).toFixed(1)} MB）`
+    )
     tarPack(srcDir, [...files, contentsRel], archivePath)
     const st = fs.statSync(archivePath)
     return {
@@ -143,6 +181,9 @@ function packComponent(ctx, { name, srcDir, exclude, archive, platforms, unpackD
       platforms,
       archive,
       size: st.size,
+      // 解压后字节数：面板要同时告诉用户「下载多大」与「占盘多大」（设计 §4.3）。
+      // 老 manifest 没有这个字段，Java 侧按 0 = 未知处理。
+      unpackedSize,
       sha256: sha256File(archivePath),
       unpackDir: topName,
     }
@@ -204,7 +245,67 @@ function buildGraphviz(ctx) {
   })
 }
 
-const COMPONENT_BUILDERS = { litviz: buildLitviz, drawio: buildDrawio, graphviz: buildGraphviz }
+function runtimeSpec(ctx) {
+  const spec = RUNTIME_PACKS[ctx.id]
+  if (!spec) {
+    throw new Error(
+      `--components lib/app 只用于运行时 pack（${Object.keys(RUNTIME_PACKS).join(' / ')}），当前 --id=${ctx.id}`
+    )
+  }
+  return spec
+}
+
+function runtimeSrcDir(ctx, sub) {
+  const plat = platformTag()
+  const { service } = runtimeSpec(ctx)
+  const srcDir = path.join(DESKTOP_ROOT, 'bundled', plat, 'pysvc', service, sub)
+  if (!fs.existsSync(srcDir)) {
+    throw new Error(
+      `${service} 的 ${sub}/ 未就位（${srcDir}）。先跑：node desktop/scripts/prepare-python-service.js ` +
+        `--service ${service} --requirements ${service}/requirements.lock --out desktop/bundled/${plat}`
+    )
+  }
+  return srcDir
+}
+
+const PY_EXCLUDE = [
+  (relPath, name, st) => st.isDirectory() && name === '__pycache__',
+  (relPath, name, st) => st.isFile() && name.endsWith('.pyc'),
+]
+
+function buildRuntimeLib(ctx) {
+  const plat = platformTag()
+  return packComponent(ctx, {
+    name: 'lib',
+    srcDir: runtimeSrcDir(ctx, 'lib'),
+    exclude: PY_EXCLUDE,
+    archive: `${ctx.id}-lib-${ctx.version}-${plat}.tar.gz`,
+    platforms: [plat],
+    unpackDir: 'lib',
+  })
+}
+
+function buildRuntimeApp(ctx) {
+  if (!runtimeSpec(ctx).hasApp) {
+    throw new Error(`${ctx.id} 没有 app 组件（该服务是纯 pip 包，无源码目录），不要传 --components app`)
+  }
+  return packComponent(ctx, {
+    name: 'app',
+    srcDir: runtimeSrcDir(ctx, 'app'),
+    exclude: PY_EXCLUDE,
+    archive: `${ctx.id}-app-${ctx.version}.tar.gz`,
+    platforms: ['*'],
+    unpackDir: 'app',
+  })
+}
+
+const COMPONENT_BUILDERS = {
+  litviz: buildLitviz,
+  drawio: buildDrawio,
+  graphviz: buildGraphviz,
+  lib: buildRuntimeLib,
+  app: buildRuntimeApp,
+}
 
 // ---------------------------------------------------------------------------
 // manifest 合并（汇总 job：mac 产的 litviz/drawio/graphviz-mac 与 win 产的
@@ -266,7 +367,7 @@ function main() {
     id: ctx.id,
     version: ctx.version,
     publishedAt: new Date().toISOString(),
-    minAppVersion: MIN_APP_VERSION,
+    minAppVersion: minAppVersionFor(ctx.id),
     engineApi: ENGINE_API,
     components,
   }
@@ -303,4 +404,13 @@ if (require.main === module) {
   }
 }
 
-module.exports = { packComponent, sha256File, listFiles, mergeManifest, componentKey, platformTag }
+module.exports = {
+  packComponent,
+  sha256File,
+  listFiles,
+  mergeManifest,
+  componentKey,
+  platformTag,
+  RUNTIME_PACKS,
+  minAppVersionFor,
+}

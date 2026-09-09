@@ -217,3 +217,53 @@ for (const [signed, unlockFails] of [[true, false], [false, false], [true, true]
     assert.equal(result.status, unlockFails ? 75 : 0, result.stderr || result.stdout)
   })
 }
+
+// ---- pack-release.yml：四个 Python 运行时 pack 的双平台矩阵（dev-board#529）----
+// 这一组是纯静态检查：本机跑不了 GitHub Actions，只能把「一改就出事」的几条
+// 契约钉在文本与解析结果上。
+
+const PACK_RELEASE = fs.readFileSync(path.join(workflowsDir, 'pack-release.yml'), 'utf8')
+const PACK_RELEASE_DOC = yaml.load(PACK_RELEASE)
+
+test('pack-release.yml：pack_id 是显式枚举，四个 runtime pack 都在其中', () => {
+  const options = PACK_RELEASE_DOC.on.workflow_dispatch.inputs.pack_id.options
+  assert.deepStrictEqual(
+    [...options].sort(),
+    ['asr-runtime', 'kokoro-runtime', 'litigation-visual', 'mineru-runtime', 'pptx-runtime']
+  )
+})
+
+test('pack-release.yml：app 组件只在 mac 腿产一次（两台机各产一份同名 tar.gz 会让 sha256 对不上）', () => {
+  assert.match(PACK_RELEASE, /COMPONENTS=lib,app/)
+  const plats = PACK_RELEASE_DOC.jobs.runtime.strategy.matrix.include.map((e) => e.plat)
+  assert.deepStrictEqual([...plats].sort(), ['mac-arm64', 'win-x64'])
+})
+
+test('pack-release.yml：release 必须标 prerelease（否则顶掉仓库级 releases/latest，污染镜像同步）', () => {
+  const step = PACK_RELEASE_DOC.jobs.release.steps.find(
+    (s) => typeof s.uses === 'string' && s.uses.startsWith('softprops/action-gh-release')
+  )
+  assert.ok(step, 'release job 应当有 action-gh-release 步骤')
+  assert.strictEqual(step.with.prerelease, true)
+})
+
+test('pack-release.yml：runtime 腿必须真起一次服务打 /health，不能只打包不验', () => {
+  const names = PACK_RELEASE_DOC.jobs.runtime.steps.map((s) => s.name || '')
+  assert.ok(names.includes('Smoke test from pack layout'), '缺少从 pack 布局起服务的冒烟步骤')
+  assert.match(PACK_RELEASE, /\/health|\/docs/)
+})
+
+test('pack-release.yml：不缓存 pysvc（pack 产物必须每次从 requirements.lock 真装一遍）', () => {
+  assert.doesNotMatch(PACK_RELEASE, /actions\/cache@[^\n]*\n[\s\S]{0,400}?pysvc/)
+})
+
+test('pack-release.yml：两条老腿只在 litigation-visual 时跑，runtime 腿只在四个 runtime pack 时跑', () => {
+  for (const job of ['mac', 'win']) {
+    assert.strictEqual(PACK_RELEASE_DOC.jobs[job].if, "inputs.pack_id == 'litigation-visual'", job)
+  }
+  assert.strictEqual(PACK_RELEASE_DOC.jobs.runtime.if, "inputs.pack_id != 'litigation-visual'")
+  // 三条腿里必有两条被 if 跳过（skipped），release 的门控不能用「全成功」写法，
+  // 否则永远不跑；但也不能宽到 always()——那样任一腿失败照发半成品。
+  assert.match(String(PACK_RELEASE_DOC.jobs.release.if), /!cancelled\(\)/)
+  assert.match(String(PACK_RELEASE_DOC.jobs.release.if), /failure/)
+})
