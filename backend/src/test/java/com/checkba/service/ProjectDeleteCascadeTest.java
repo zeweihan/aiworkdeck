@@ -28,6 +28,8 @@ import com.checkba.repository.ProjectRepository;
 import com.checkba.repository.ProjectTaskRepository;
 import com.checkba.repository.ProjectVariableRepository;
 import com.checkba.model.entity.MemoryRemote;
+import com.checkba.model.entity.CompletionEntry;
+import com.checkba.repository.CompletionEntryRepository;
 import com.checkba.repository.MemoryRemoteRepository;
 import com.checkba.storage.ProjectStorageResolver;
 import com.checkba.version.ProjectRepoService;
@@ -82,6 +84,7 @@ class ProjectDeleteCascadeTest {
     @Autowired private WorkSessionRepository workSessionRepository;
     @Autowired private MemoryRemoteRepository memoryRemoteRepository;
     @Autowired private MemoryRepoService memoryRepoService;
+    @Autowired private CompletionEntryRepository completionEntryRepository;
 
     @Test
     void deleteProject_clearsEveryProjectScopedTableAndOnDiskDirectory() throws IOException {
@@ -182,6 +185,31 @@ class ProjectDeleteCascadeTest {
 
         assertFalse(projectRepository.existsById(projectId));
         assertTrue(Files.exists(userFolder.resolve("用户自己的文件.txt")), "用户自己的文件夹被误删");
+    }
+
+    @Test
+    void deleteProject_clearsOnlyItsCompletionScope() {
+        Long projectId = seedProject();
+        Long otherProjectId = seedProject();
+        saveCompletion("p:" + projectId, "待删除项目词条");
+        saveCompletion("p:" + otherProjectId, "其他项目词条");
+        saveCompletion("u:9000", "个人词条");
+
+        projectService.deleteProject(projectId);
+
+        assertTrue(completionEntryRepository.findByScopeKeyOrderByLastUsedAtDescIdDesc("p:" + projectId).isEmpty());
+        assertFalse(completionEntryRepository.findByScopeKeyOrderByLastUsedAtDescIdDesc("p:" + otherProjectId).isEmpty());
+        assertFalse(completionEntryRepository.findByScopeKeyOrderByLastUsedAtDescIdDesc("u:9000").isEmpty());
+    }
+
+    private void saveCompletion(String scopeKey, String text) {
+        CompletionEntry entry = new CompletionEntry();
+        entry.setScopeKey(scopeKey);
+        entry.setText(text);
+        entry.setKind("PHRASE");
+        entry.setUses(1L);
+        entry.setLastUsedAt(LocalDateTime.now());
+        completionEntryRepository.save(entry);
     }
 
     private Long seededDocFileId;

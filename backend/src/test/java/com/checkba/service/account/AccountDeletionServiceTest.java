@@ -11,6 +11,8 @@ import com.checkba.service.mobile.MobileBillingClient;
 import com.checkba.service.mobile.MobileBillingFailureException;
 import com.checkba.service.mobile.MobileBillingKind;
 import com.checkba.service.mobile.MobileRelayBlobStore;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
@@ -35,6 +37,8 @@ class AccountDeletionServiceTest {
                            MobileDeviceStateRepository devices,
                            MobileTransferRequestRepository transfers,
                            AccountBindingRepository bindings, DeviceTokenRepository tokens,
+                           CompletionEntryRepository completions,
+                           EntityManager entityManager,
                            MobileBillingClient billing) {}
 
     private Fixture fixture(List<MobileMediaInbox> items) {
@@ -54,6 +58,9 @@ class AccountDeletionServiceTest {
         MobileTransferRequestRepository transfers = mock(MobileTransferRequestRepository.class);
         AccountBindingRepository bindings = mock(AccountBindingRepository.class);
         DeviceTokenRepository tokens = mock(DeviceTokenRepository.class);
+        CompletionEntryRepository completions = mock(CompletionEntryRepository.class);
+        EntityManager entityManager = mock(EntityManager.class);
+        when(entityManager.find(User.class, 7L, LockModeType.PESSIMISTIC_WRITE)).thenReturn(new User());
         if (externalAccountId != null) {
             AccountBinding row = new AccountBinding();
             row.setUserId(7L);
@@ -64,8 +71,8 @@ class AccountDeletionServiceTest {
         }
         MobileBillingClient billing = mock(MobileBillingClient.class);
         return new Fixture(new AccountDeletionService(users, sessions, inbox, dirs, devices,
-                transfers, bindings, tokens, blobs, billing),
-                users, inbox, blobs, sessions, dirs, devices, transfers, bindings, tokens, billing);
+                transfers, bindings, tokens, completions, entityManager, blobs, billing),
+                users, inbox, blobs, sessions, dirs, devices, transfers, bindings, tokens, completions, entityManager, billing);
     }
 
     private static MobileMediaInbox item(String path) {
@@ -90,7 +97,13 @@ class AccountDeletionServiceTest {
         verify(f.sessions()).deleteByUserId(7L);
         verify(f.bindings()).deleteByUserId(7L);
         verify(f.tokens()).deleteByUserId(7L);
+        verify(f.completions()).deleteByScopeKey("u:7");
+        verify(f.completions(), never()).deleteByScopeKey("p:7");
         verify(f.users()).deleteById(7L);
+        InOrder cleanupOrder = inOrder(f.entityManager(), f.completions(), f.users());
+        cleanupOrder.verify(f.entityManager()).find(User.class, 7L, LockModeType.PESSIMISTIC_WRITE);
+        cleanupOrder.verify(f.completions()).deleteByScopeKey("u:7");
+        cleanupOrder.verify(f.users()).deleteById(7L);
     }
 
     @Test
@@ -156,6 +169,8 @@ class AccountDeletionServiceTest {
         verify(f.users(), never()).deleteById(any());
         verify(f.bindings(), never()).deleteByUserId(any());
         verify(f.blobs(), never()).deleteQuietly(any());
+        verifyNoInteractions(f.completions());
+        verifyNoInteractions(f.entityManager());
     }
 
     @Test
@@ -172,6 +187,8 @@ class AccountDeletionServiceTest {
         assertEquals(MobileBillingKind.UNAVAILABLE, e.getKind());
         verify(f.users(), never()).deleteById(any());
         verify(f.bindings(), never()).deleteByUserId(any());
+        verifyNoInteractions(f.completions());
+        verifyNoInteractions(f.entityManager());
     }
 
     @Test
