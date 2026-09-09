@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -82,6 +83,12 @@ class SensitiveServiceRedactionTest {
                     .map(XWPFParagraph::getText)
                     .collect(Collectors.joining());
             assertFalse(text.contains("13800001111"), "跨 run 的手机号必须被脱敏");
+            // B4 接线：脱敏输出是我们生成的新文件，docProps/app.xml 的 Application 必须是产品标识
+            // （手工 new 的 service 没注入开关，按缺省的「开」走）。源文件是 POI 空建的，POI 默认写的是
+            // 「Apache POI」，所以这条断言不会被输入文件「顺带」满足（还原病灶时读回的正是 Apache POI）。
+            assertEquals(com.checkba.util.ProductIdentity.applicationName(),
+                    out.getProperties().getExtendedProperties().getApplication(),
+                    "脱敏输出的 Application 元数据必须来自 ProductIdentity");
         }
     }
 

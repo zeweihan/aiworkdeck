@@ -92,6 +92,7 @@ function readCentral(b) {
   if (eocdAt >= 20 && u32(b, eocdAt - 20) === ZIP64_LOCATOR_SIG) return null
 
   const entries = []
+  const seen = new Set()
   let p = cdOffset
   const dec = new TextDecoder('utf-8')
   for (let i = 0; i < total; i++) {
@@ -107,8 +108,13 @@ function readCentral(b) {
     const localOffset = u32(b, p + 42)
     if (compSize === U32_MAX || uncompSize === U32_MAX || localOffset === U32_MAX) return null
     if (localOffset >= cdOffset) return null
+    const name = dec.decode(b.subarray(p + 46, p + 46 + nameLen))
+    // 重名条目：下面的偏移表按名字建键，重名会让两条中央目录指到同一个新偏移。
+    // OOXML 不允许重名，引擎也不会产出，遇到就整体放弃打标。
+    if (seen.has(name)) return null
+    seen.add(name)
     entries.push({
-      name: dec.decode(b.subarray(p + 46, p + 46 + nameLen)),
+      name,
       method: u16(b, p + 10),
       compSize,
       localOffset,
