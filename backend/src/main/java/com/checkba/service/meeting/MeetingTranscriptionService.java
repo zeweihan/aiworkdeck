@@ -3,6 +3,7 @@
 
 package com.checkba.service.meeting;
 
+import com.checkba.model.dto.MeetingTranscriptionProgress;
 import com.checkba.model.entity.MeetingRecording;
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.MeetingRecordingRepository;
@@ -97,6 +98,33 @@ public class MeetingTranscriptionService {
      * 包可见（不加 private）供测试用短超时构造服务，见 {@link #transcodeWithTimeout}。
      */
     static final Duration DEFAULT_TRANSCODE_TIMEOUT = Duration.ofMinutes(20);
+
+    /**
+     * 「转写中」卡死判定的阈值：{@code max(STUCK_FLOOR, 音频时长 × STUCK_FACTOR)}（dev-board#532）。
+     *
+     * <p>为什么需要它：会议进入 TRANSCRIBING 之后，只有上游给出终态才会离开这个状态
+     * （{@link #refreshViaTingwu} / {@link #refreshViaPlatform} 都刻意不把查询失败当成转写失败，
+     * 那是对的——网络抖动不该终结一个还在跑的任务）。但上游<b>永远</b>不给终态的情形是存在的：
+     * 听悟侧任务被清理、网关侧任务被回收、提交成功而任务实际没跑起来。此前这类会议
+     * 会永远停在「转写中」，而 {@link #startTranscription} 对该状态是幂等返回，
+     * 用户连「重试转写」都点不动，录音就此作废。
+     *
+     * <p>阈值取「音频时长 × 3、且不低于 30 分钟」（维护者 2026-09-09 拍板）：三倍相对
+     * 听悟/本机的实际耗时（都快于实时）留了数量级余量，30 分钟的下限则挡住「三分钟的
+     * 短录音九分钟就被判死」这种误杀。
+     */
+    static final Duration STUCK_FLOOR = Duration.ofMinutes(30);
+    static final int STUCK_FACTOR = 3;
+
+    /**
+     * 进度提示里「预计总时长」的取法：与录音本身差不多长，最少一分钟。
+     *
+     * <p><b>刻意高估</b>：听悟与本机 whisper 都快于实时（本机实测约 0.64 倍实时），
+     * 按 1 倍报出去，实际总是提前走完。反过来低估的话进度条会长时间钉在 99%，
+     * 那比没有进度更让人焦虑。这个值只用于界面提示，不参与任何判定。
+     */
+    private static final long PROGRESS_ESTIMATE_FACTOR = 1;
+    private static final long PROGRESS_ESTIMATE_FLOOR_SEC = 60;
 
     /** 结果文件下载的接缝（测试桩用） */
     public interface UrlFetcher {
@@ -390,6 +418,8 @@ public class MeetingTranscriptionService {
         meeting.setError(null);
         meeting.setTingwuTaskId(null);
         meeting.setGatewayTaskId(null);
+        // 卡死判定与界面「已用时」的锚点，必须与状态同一次写入（dev-board#532）
+        meeting.setTranscribingStartedAt(LocalDateTime.now());
         // 先登记再落库：中间那一瞬前端刚好来轮询的话，没有这一步会被判成「上次被打断」
         inFlight.add(meetingId);
         MeetingRecording saved = meetingRepository.save(meeting);
@@ -650,6 +680,18 @@ public class MeetingTranscriptionService {
             // 已经处理过"这件事；找不到（测试里没有为这个 id 打桩 findById）时退回传入值，
             // 行为与修复前一致。
             MeetingRecording fresh = meetingRepository.findById(meeting.getId()).orElse(meeting);
+
+            // 卡死判定与下面的节流是同一类 check-then-act，必须在锁内、对库里最新的那一份做。
+            // 放到锁外用传入的旧快照做过一版，被 concurrentRefreshIsSerializedPerMeeting 逮住：
+            // 它给存量行补盖时间戳时会 save 那份旧快照，把并发的另一个请求刚写进去的
+            // lastPolledAt 一起抹掉，节流窗口随即失效、两个请求各问一遍上游
+            // （platform 档下就是各触发一次结算）。
+            MeetingRecording checked = failIfStuck(fresh);
+            if (MeetingRecording.STATUS_FAILED.equals(checked.getStatus())) {
+                return checked;
+            }
+            fresh = checked;
+
             LocalDateTime last = fresh.getLastPolledAt();
             if (last != null && last.isAfter(LocalDateTime.now().minusSeconds(POLL_THROTTLE_SECONDS))) {
                 return fresh;
@@ -676,6 +718,134 @@ public class MeetingTranscriptionService {
                 "转写在上次运行中被中断，重新提交即可（录音本身完好）",
                 "Transcription was interrupted by a previous shutdown; submit it again (the recording itself is intact)"));
         return meetingRepository.save(meeting);
+    }
+
+    // ==================== 卡死判定（dev-board#532） ====================
+
+    /** 卡死阈值：{@code max(30 分钟, 音频时长 × 3)}。包可见供测试直接对拍。 */
+    static Duration stuckThreshold(long audioSeconds) {
+        Duration byAudio = Duration.ofSeconds(Math.max(0, audioSeconds) * STUCK_FACTOR);
+        return byAudio.compareTo(STUCK_FLOOR) > 0 ? byAudio : STUCK_FLOOR;
+    }
+
+    /**
+     * 「转写中」停太久就判为卡死：置 FAILED + 写下原因，界面既有的「重试转写」按钮
+     * 随 FAILED 出现，用户一键即可重来（{@link #startTranscription} 对 FAILED 是可提交态）。
+     *
+     * <p><b>本进程正在跑的（{@link #inFlight}）一律跳过。</b>那几步各自都已经有界的超时
+     * （转码 {@link #transcodeTimeout}、直传 30 分钟、本机转写 4 小时），不需要再判一次；
+     * 更要紧的是 platform 档在这个窗口里可能刚刚完成预扣，判死会让用户去点重试，
+     * 结果对同一次转写扣第二笔 Credits。
+     *
+     * <p>存量行（{@code transcribingStartedAt} 为 null，升级前就停在转写中的）
+     * <b>第一次被看到时补盖当前时间，不当场判死</b>。理由：
+     * {@code updatedAt} 被 poll-on-read 每 10 秒的 lastPolledAt 落库刷新，永远是「刚刚」，
+     * 拿它当锚点判定形同虚设；{@code createdAt} 又早于真正开始转写的时刻（中间隔着整场录音），
+     * 拿它算已用时会高估，可能把刚提交不久的健康任务判死。补盖的代价只是存量卡死行
+     * 最多再多等一个阈值，换来的是绝不误杀——而这些行本来已经卡了不知多久，多等一次无妨。
+     */
+    private MeetingRecording failIfStuck(MeetingRecording meeting) {
+        if (inFlight.contains(meeting.getId())) {
+            return meeting;
+        }
+        LocalDateTime startedAt = meeting.getTranscribingStartedAt();
+        if (startedAt == null) {
+            meeting.setTranscribingStartedAt(LocalDateTime.now());
+            return meetingRepository.save(meeting);
+        }
+        Duration threshold = stuckThreshold(audioSeconds(meeting));
+        if (Duration.between(startedAt, LocalDateTime.now()).compareTo(threshold) <= 0) {
+            return meeting;
+        }
+        long minutes = threshold.toMinutes();
+        log.warn("会议转写判定为卡死: meetingId={}, 已超过 {} 分钟", meeting.getId(), minutes);
+        meeting.setStatus(MeetingRecording.STATUS_FAILED);
+        meeting.setError(LangText.of(
+                "转写超时：已超过 " + minutes + " 分钟仍未返回结果，判定为卡死。原始录音完好，可重试转写。",
+                "Transcription timed out: no result after " + minutes + " minutes, so it is treated as stuck. "
+                        + "The original recording is intact - you can retry."));
+        return meetingRepository.save(meeting);
+    }
+
+    /**
+     * 音频时长（秒），卡死阈值与进度预计值共用。0 表示未知。
+     *
+     * <p>{@code durationMs} 是前端结束录音时回报的，右键转写注册进来的已有文件
+     * （dev-board#227）没有这个值。此时按音频文件的字节数除以转码码率反推——
+     * 与 {@link #estimateDurationSec} 同一套算法。<b>误差偏大的方向是安全的</b>：
+     * 原始录音的码率通常高于我们转码用的 {@link MeetingAudioTranscoder#BITRATE}，
+     * 反推出来的时长偏长，阈值跟着变长，只会更保守、不会误杀。
+     * 文件取不到（记录已删、路径失效、测试桩）时回 0，阈值退到 30 分钟下限。
+     */
+    private long audioSeconds(MeetingRecording meeting) {
+        Long ms = meeting.getDurationMs();
+        if (ms != null && ms > 0) {
+            return Math.max(1, ms / 1000);
+        }
+        try {
+            if (meeting.getAudioFileId() == null || storageResolver == null) return 0;
+            ProjectFile audio = projectFileRepository.findById(meeting.getAudioFileId()).orElse(null);
+            if (audio == null) return 0;
+            Path path = storageResolver.resolve(audio.getFilePath());
+            if (!Files.exists(path)) return 0;
+            return Math.max(0, Files.size(path) * 8 / MeetingAudioTranscoder.BITRATE);
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    // ==================== 进度提示（dev-board#532） ====================
+
+    /**
+     * 给「转写中」的会议挂上进度提示，出接口前调用（列表与详情两条路都调，
+     * 面板上的卡片就是列表里的行）。非 TRANSCRIBING 的一律不挂，响应形态不变。
+     *
+     * <p>档位只解析一次（{@link #tier()} 每次都要过一遍 resolver），列表里几十场会议
+     * 不必各问一遍。
+     */
+    public void attachProgress(List<MeetingRecording> meetings) {
+        if (meetings == null || meetings.isEmpty()) return;
+        boolean anyTranscribing = meetings.stream()
+                .anyMatch(m -> MeetingRecording.STATUS_TRANSCRIBING.equals(m.getStatus()));
+        if (!anyTranscribing) return;
+        ExternalServiceProvider tier = tier();
+        for (MeetingRecording m : meetings) {
+            m.setProgress(buildProgress(m, tier));
+        }
+    }
+
+    /** 单条（详情端点）。 */
+    public MeetingRecording attachProgress(MeetingRecording meeting) {
+        if (meeting != null) attachProgress(List.of(meeting));
+        return meeting;
+    }
+
+    /**
+     * 阶段由「有没有上游任务号」定，不由当前档位设置定——理由同 {@link #refreshIfNeeded}：
+     * 任务归属在提交那一刻就定死了，用户中途切档不该让界面改口。只有「还没有任务号」
+     * 这一种情形才需要看当前档位，用来把 local 档的<b>本机转写</b>与云端档的<b>转码上传</b>
+     * 分开——本机档一个字节都不出网，界面上绝不能出现「上传」。
+     */
+    private MeetingTranscriptionProgress buildProgress(MeetingRecording m, ExternalServiceProvider tier) {
+        if (!MeetingRecording.STATUS_TRANSCRIBING.equals(m.getStatus())) return null;
+        String stage;
+        if (m.getTingwuTaskId() != null || m.getGatewayTaskId() != null) {
+            stage = MeetingTranscriptionProgress.STAGE_UPSTREAM;
+        } else {
+            stage = tier == ExternalServiceProvider.LOCAL
+                    ? MeetingTranscriptionProgress.STAGE_LOCAL
+                    : MeetingTranscriptionProgress.STAGE_PREPARING;
+        }
+        LocalDateTime startedAt = m.getTranscribingStartedAt();
+        long elapsedSec = startedAt == null ? 0
+                : Math.max(0, Duration.between(startedAt, LocalDateTime.now()).toSeconds());
+        long audioSec = audioSeconds(m);
+        Long estimatedSec = audioSec <= 0 ? null
+                : Math.max(PROGRESS_ESTIMATE_FLOOR_SEC, audioSec * PROGRESS_ESTIMATE_FACTOR);
+        Integer percent = estimatedSec == null ? null
+                : (int) Math.min(99, elapsedSec * 100 / estimatedSec);
+        // estimated 恒 true：三条路的上游都给不出百分比，见 MeetingTranscriptionProgress 注释
+        return new MeetingTranscriptionProgress(stage, elapsedSec, estimatedSec, percent, true);
     }
 
     /**
