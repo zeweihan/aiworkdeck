@@ -44,12 +44,27 @@ public enum SensitiveType {
         "保留前6后4位"
     ),
     
+    /**
+     * 已下线自动检测（dev-board#531，维护者 2026-09-09 拍板），只保留枚举值本身。
+     *
+     * <p>这条模式是 [一-龥]{2,4}——中文文书里几乎每个词都是 2~4 个汉字，「甲方」「北京市」
+     * 「有限公司」「被告」统统命中，整篇被涂成 甲*／被*／有**司。中文姓名没有身份证的
+     * mod-11-2、银行卡的 Luhn 那样的客观校验位，纯正则分不出「张三」和「本条」，收紧不了。
+     *
+     * <p>产品口径：<b>法律文书里漏涂比误涂安全</b>。文书必须逐字可引，把正文改坏的代价比漏一个
+     * 名字更大，而漏涂还有人工复核兜底。姓名改由用户在脱敏面板的「要涂黑的姓名/词语」里手填
+     * （自定义词，逐字面量匹配）。
+     *
+     * <p>枚举值保留是为了兼容：存量记录里可能存着这个 code，老客户端也可能还会传它——
+     * 解析得出来，但 {@link #isAutoDetect()} 为 false，检测端一律跳过，不产生任何改动。
+     */
     CHINESE_NAME(
         "CHINESE_NAME",
         "中文姓名",
         "[\\u4e00-\\u9fa5]{2,4}",
         "张**",
-        "保留姓氏"
+        "保留姓氏",
+        false
     ),
     
     FIXED_PHONE(
@@ -105,13 +120,29 @@ public enum SensitiveType {
     private final Pattern pattern;
     private final String example;
     private final String description;
+    /**
+     * 是否参与自动检测。false 的类型不会出现在 /api/sensitive/options 的可勾选清单里，
+     * 即便调用方硬传它的 code，检测端也一律跳过（见 SensitiveService）。
+     */
+    private final boolean autoDetect;
 
     SensitiveType(String code, String label, String regex, String example, String description) {
+        this(code, label, regex, example, description, true);
+    }
+
+    SensitiveType(String code, String label, String regex, String example, String description,
+                  boolean autoDetect) {
         this.code = code;
         this.label = label;
         this.pattern = Pattern.compile(regex);
         this.example = example;
         this.description = description;
+        this.autoDetect = autoDetect;
+    }
+
+    /** 参与自动检测的类型（面板可勾选的那些）。 */
+    public static java.util.List<SensitiveType> autoDetectTypes() {
+        return java.util.Arrays.stream(values()).filter(SensitiveType::isAutoDetect).toList();
     }
 
     /**

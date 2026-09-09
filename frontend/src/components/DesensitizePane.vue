@@ -19,6 +19,20 @@
       </view>
     </view>
 
+    <!-- 「要涂黑的姓名/词语」：中文姓名不再自动识别（dev-board#531），姓名只能从这里进来。
+         所以它排在自动策略之前、常驻首屏，不折叠、不塞进高级设置——藏起来就等于把姓名脱敏
+         整个下线了。 -->
+    <view class="section">
+      <view class="section-title">{{ $t('panels.deCustomWordsTitle') }}</view>
+      <textarea
+        class="custom-words-input"
+        v-model="customWordsText"
+        :placeholder="$t('panels.deCustomWordsPlaceholder')"
+        maxlength="-1"
+      />
+      <view class="section-hint">{{ $t('panels.deCustomWordsHint') }}</view>
+    </view>
+
     <view class="section">
       <view class="section-title">{{ $t('panels.deStrategiesTitle') }}</view>
       <view class="strategies-list">
@@ -40,7 +54,7 @@
       <button
         class="workdeck-btn workdeck-btn-primary full-width"
         @tap="handleGenerate"
-        :disabled="processing || !filePath || selectedStrategies.length === 0"
+        :disabled="processing || !filePath || (selectedStrategies.length === 0 && customWords.length === 0)"
         :loading="processing"
       >
         {{ processing ? $t('panels.deProcessing') : $t('panels.deGenerate') }}
@@ -71,7 +85,20 @@ export default {
       fileId: null, // Add fileId
       availableStrategies: [], // Fetch from backend
       selectedStrategies: [],
+      customWordsText: '',
       processing: false
+    }
+  },
+  computed: {
+    // 用户手填的「要涂黑的姓名/词语」。换行/逗号/顿号/分号/空格都算分隔符——
+    // 用户从文书里复制一串名字过来，用哪种分隔符都不该让他重新排版。
+    customWords() {
+      return [...new Set(
+        (this.customWordsText || '')
+          .split(/[\n\r,，、;；\s]+/)
+          .map(w => w.trim())
+          .filter(Boolean)
+      )]
     }
   },
   mounted() {
@@ -143,7 +170,9 @@ export default {
         })
     },
     async handleGenerate() {
-        if (!this.fileId || this.selectedStrategies.length === 0) {
+        // 只填了「要涂黑的姓名/词语」、一个自动类型都没勾，也是合法的一次脱敏——
+        // 中文姓名不再自动识别，那条路本来就只能这么走。
+        if (!this.fileId || (this.selectedStrategies.length === 0 && this.customWords.length === 0)) {
              if (!this.fileId) uni.showToast({ title: this.$t('panels.deSelectValidFile'), icon: 'none' })
              return
         }
@@ -151,7 +180,8 @@ export default {
         try {
             const res = await desensitizeFile({
                 fileId: this.fileId, // Send fileId
-                strategies: this.selectedStrategies
+                strategies: this.selectedStrategies,
+                customWords: this.customWords
             })
 
             // Backend now returns the full ProjectFile object
@@ -242,6 +272,32 @@ export default {
 .mini-btn:hover {
     background: var(--awd-bg);
     border-color: var(--awd-border-strong);
+}
+
+.custom-words-input {
+    width: 100%;
+    height: 68px;
+    box-sizing: border-box;
+    padding: 6px 8px;
+    border: 1px solid var(--awd-panel-border);
+    border-radius: var(--awd-panel-radius);
+    background: var(--awd-surface);
+    font-size: var(--awd-panel-fs);
+    line-height: 1.6;
+    color: var(--awd-panel-text);
+    resize: none;
+    transition: border-color 0.2s;
+}
+.custom-words-input:focus {
+    border-color: var(--awd-panel-accent-2);
+    outline: none;
+}
+
+.section-hint {
+    margin-top: 4px;
+    font-size: var(--awd-panel-fs-meta);
+    line-height: 1.5;
+    color: var(--awd-text-2);
 }
 
 .strategies-list {
