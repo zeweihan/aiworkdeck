@@ -39,7 +39,16 @@ public class SensitiveService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.checkba.service.document.DocumentGeneratorSettings documentGeneratorSettings;
 
-    public String processFile(String filePath, List<String> strategies) throws Exception {
+    /**
+     * 自动检测策略 + 用户手填的自定义词，两条一起过。
+     *
+     * <p>自定义词是「要涂黑的姓名/词语」——逐字面量匹配，不做任何模糊化。
+     * <b>中文姓名不再自动识别</b>（dev-board#531）：[一-龥]{2,4} 会把「甲方」「北京市」这类
+     * 普通词一并涂黑，而中文姓名没有可用的客观校验位，纯正则分不出人名和普通词。
+     * 产品口径是<b>法律文书里漏涂比误涂安全</b>——文书必须逐字可引，把正文改坏的代价比漏一个
+     * 名字更大，而漏涂还有人工复核兜底。所以姓名交给用户在脱敏面板里逐个填。
+     */
+    public String processFile(String filePath, List<String> strategies, List<String> customWords) throws Exception {
         File file = new File(filePath);
         if (!file.exists()) {
             throw new IllegalArgumentException("File not found: " + filePath);
@@ -55,68 +64,88 @@ public class SensitiveService {
             counter++;
         }
 
-        log.info("Processing file: {} -> {}, Strategies: {}", file.getName(), newFile.getName(), strategies);
+        List<String> words = normalizeCustomWords(customWords);
+        // 自定义词是用户手填的姓名/词语，属于文档内容，日志里只记条数不记原文。
+        log.info("Processing file: {} -> {}, Strategies: {}, CustomWords: {}",
+                file.getName(), newFile.getName(), strategies, words.size());
 
         if ("docx".equals(ext)) {
-            processDocx(file, newFile, strategies);
+            processDocx(file, newFile, strategies, words);
         } else if ("pdf".equals(ext)) {
-            processPdf(file, newFile, strategies);
+            processPdf(file, newFile, strategies, words);
         } else {
             // Default to Text
-            processText(file, newFile, strategies);
+            processText(file, newFile, strategies, words);
         }
 
         return newFile.getAbsolutePath();
     }
 
-    private void processText(File src, File dest, List<String> strategies) {
+    /** 只勾策略、不填自定义词的老调用方（含既有测试）。 */
+    public String processFile(String filePath, List<String> strategies) throws Exception {
+        return processFile(filePath, strategies, List.of());
+    }
+
+    /** 去空白、去空串、去重；顺序保持用户填写的顺序。 */
+    private static List<String> normalizeCustomWords(List<String> customWords) {
+        if (customWords == null) return List.of();
+        return customWords.stream()
+                .filter(java.util.Objects::nonNull)
+                .map(String::trim)
+                .filter(w -> !w.isEmpty())
+                .distinct()
+                .toList();
+    }
+
+    private void processText(File src, File dest, List<String> strategies, List<String> customWords) {
         String content = FileUtil.readString(src, StandardCharsets.UTF_8); // Assumption: UTF-8. 
         // Better: Detect encoding, but hutool's readString usually good enough or defaults.
         
         for (String strategy : strategies) {
             content = replaceSensitiveData(content, strategy);
         }
-        
+        content = maskCustomWords(content, customWords);
+
         FileUtil.writeString(content, dest, StandardCharsets.UTF_8);
     }
 
-    private void processDocx(File src, File dest, List<String> strategies) throws IOException {
+    private void processDocx(File src, File dest, List<String> strategies, List<String> customWords) throws IOException {
         try (XWPFDocument doc = new XWPFDocument(Files.newInputStream(src.toPath()))) {
             // 1. Paragraphs
             for (XWPFParagraph p : doc.getParagraphs()) {
-                replaceInParagraph(p, strategies);
+                replaceInParagraph(p, strategies, customWords);
             }
 
             // 2. Tables
-            replaceInTables(doc.getTables(), strategies);
+            replaceInTables(doc.getTables(), strategies, customWords);
 
             // 3. 页眉 / 页脚：此前完全没扫描。律所文书的抬头、落款、联系方式恰恰常见于页眉页脚，
             //    是高频泄露点。页眉页脚自身也可能用表格排版（如三栏落款），一并覆盖。
             for (XWPFHeader header : doc.getHeaderList()) {
                 for (XWPFParagraph p : header.getParagraphs()) {
-                    replaceInParagraph(p, strategies);
+                    replaceInParagraph(p, strategies, customWords);
                 }
-                replaceInTables(header.getTables(), strategies);
+                replaceInTables(header.getTables(), strategies, customWords);
             }
             for (XWPFFooter footer : doc.getFooterList()) {
                 for (XWPFParagraph p : footer.getParagraphs()) {
-                    replaceInParagraph(p, strategies);
+                    replaceInParagraph(p, strategies, customWords);
                 }
-                replaceInTables(footer.getTables(), strategies);
+                replaceInTables(footer.getTables(), strategies, customWords);
             }
 
             // 4. 脚注 / 尾注：同样此前完全没扫描。
             for (XWPFFootnote footnote : doc.getFootnotes()) {
                 for (XWPFParagraph p : footnote.getParagraphs()) {
-                    replaceInParagraph(p, strategies);
+                    replaceInParagraph(p, strategies, customWords);
                 }
-                replaceInTables(footnote.getTables(), strategies);
+                replaceInTables(footnote.getTables(), strategies, customWords);
             }
             for (XWPFEndnote endnote : doc.getEndnotes()) {
                 for (XWPFParagraph p : endnote.getParagraphs()) {
-                    replaceInParagraph(p, strategies);
+                    replaceInParagraph(p, strategies, customWords);
                 }
-                replaceInTables(endnote.getTables(), strategies);
+                replaceInTables(endnote.getTables(), strategies, customWords);
             }
 
             // 已知局限（未覆盖，如实注明）：文本框（w:txbxContent）里的文字不脱敏。
@@ -132,19 +161,19 @@ public class SensitiveService {
         }
     }
 
-    private void replaceInTables(List<XWPFTable> tables, List<String> strategies) {
+    private void replaceInTables(List<XWPFTable> tables, List<String> strategies, List<String> customWords) {
         for (XWPFTable tbl : tables) {
             for (XWPFTableRow row : tbl.getRows()) {
                 for (XWPFTableCell cell : row.getTableCells()) {
                     for (XWPFParagraph p : cell.getParagraphs()) {
-                        replaceInParagraph(p, strategies);
+                        replaceInParagraph(p, strategies, customWords);
                     }
                 }
             }
         }
     }
 
-    private void replaceInParagraph(XWPFParagraph p, List<String> strategies) {
+    private void replaceInParagraph(XWPFParagraph p, List<String> strategies, List<String> customWords) {
         List<XWPFRun> runs = p.getRuns();
         if (runs == null || runs.isEmpty()) return;
 
@@ -162,6 +191,7 @@ public class SensitiveService {
         for (String strategy : strategies) {
             replaced = replaceSensitiveData(replaced, strategy);
         }
+        replaced = maskCustomWords(replaced, customWords);
 
         if (!replaced.equals(original)) {
             // 命中敏感串：整段文本写回首个 run、清空其余 run。
@@ -173,10 +203,10 @@ public class SensitiveService {
         }
     }
     
-    private void processPdf(File src, File dest, List<String> strategies) throws IOException {
+    private void processPdf(File src, File dest, List<String> strategies, List<String> customWords) throws IOException {
         try (PDDocument document = org.apache.pdfbox.Loader.loadPDF(src)) {
             // 1. Scan doc to find redaction areas (page by page, so coordinates map to the right page)
-            List<RedactionArea> areas = computeRedactionAreas(document, strategies);
+            List<RedactionArea> areas = computeRedactionAreas(document, strategies, customWords);
 
             // 2. Draw black rectangles
             for (RedactionArea area : areas) {
@@ -225,7 +255,12 @@ public class SensitiveService {
      * 无法再靠"提取输出文本"这种黑盒方式验证是否真的画上了黑框（详见 SensitiveTextStripper 内的取舍说明）。
      */
     List<RedactionArea> computeRedactionAreas(PDDocument document, List<String> strategies) throws IOException {
-        SensitiveTextStripper stripper = new SensitiveTextStripper(strategies);
+        return computeRedactionAreas(document, strategies, List.of());
+    }
+
+    List<RedactionArea> computeRedactionAreas(PDDocument document, List<String> strategies,
+                                              List<String> customWords) throws IOException {
+        SensitiveTextStripper stripper = new SensitiveTextStripper(strategies, normalizeCustomWords(customWords));
         stripper.setSortByPosition(true);
         int totalPages = document.getNumberOfPages();
         for (int i = 0; i < totalPages; i++) {
@@ -255,6 +290,8 @@ public class SensitiveService {
 
     private class SensitiveTextStripper extends PDFTextStripper {
         private final List<String> strategies;
+        /** 用户手填的「要涂黑的姓名/词语」，逐字面量匹配。 */
+        private final List<String> customWords;
         private final List<RedactionArea> redactionAreas = new ArrayList<>();
         public int currentPdfPageIndex = 0;
 
@@ -268,9 +305,10 @@ public class SensitiveService {
         private final StringBuilder pageText = new StringBuilder();
         private final List<TextPosition> pagePositions = new ArrayList<>();
 
-        public SensitiveTextStripper(List<String> strategies) throws IOException {
+        public SensitiveTextStripper(List<String> strategies, List<String> customWords) throws IOException {
             super();
             this.strategies = strategies;
+            this.customWords = customWords;
         }
 
         public List<RedactionArea> getRedactionAreas() {
@@ -307,22 +345,39 @@ public class SensitiveService {
             for (String strategyCode : strategies) {
                 SensitiveType type = SensitiveType.fromCode(strategyCode);
                 if (type == null) continue;
+                // 已下线自动检测的类型（CHINESE_NAME）即便被硬传进来也一律跳过，见枚举里的说明
+                if (!type.isAutoDetect()) {
+                    log.info("PDF脱敏：跳过已下线自动检测的类型 {}（姓名请用自定义词）", strategyCode);
+                    continue;
+                }
 
                 Matcher matcher = type.getPattern().matcher(text);
                 while (matcher.find()) {
                     // 校验位过不去的（18 位立案号之类）不是这类信息，涂黑它就是把正文改坏
                     if (!type.isPlausible(matcher.group())) continue;
-                    addRedactionArea(type, matcher.start(), matcher.end());
+                    addRedactionArea(type.getLabel(), matcher.start(), matcher.end());
                 }
             }
+
+            // 自定义词：用户逐个填进来的姓名/词语，按字面量在整页文本里找全部出现位置。
+            // 日志只说「自定义词」，不写词本身——那是文档内容。
+            for (String word : customWords) {
+                int from = 0;
+                int hit;
+                while ((hit = text.indexOf(word, from)) >= 0) {
+                    addRedactionArea("自定义词", hit, hit + word.length());
+                    from = hit + word.length();
+                }
+            }
+
             pageText.setLength(0);
             pagePositions.clear();
         }
 
-        private void addRedactionArea(SensitiveType type, int start, int end) {
+        private void addRedactionArea(String label, int start, int end) {
             if (start < 0 || end > pagePositions.size() || start >= end) {
                 log.warn("PDF脱敏：第{}页命中{}但匹配区间越界（start={}, end={}, size={}），跳过画框",
-                        currentPdfPageIndex + 1, type.getLabel(), start, end, pagePositions.size());
+                        currentPdfPageIndex + 1, label, start, end, pagePositions.size());
                 return;
             }
 
@@ -339,7 +394,7 @@ public class SensitiveService {
                     // 该字符缺少可靠坐标（字符数/位置数不一致的片段），不能猜一个位置去画框——
                     // 如实记为"这次命中没能画框"，避免出现"看起来已脱敏、实则未覆盖"的假阳性。
                     log.warn("PDF脱敏：第{}页命中{}但命中区间内存在无法映射坐标的字符，跳过画框（原文可能未被遮盖，请人工核查）",
-                            currentPdfPageIndex + 1, type.getLabel());
+                            currentPdfPageIndex + 1, label);
                     return;
                 }
                 float y = tp.getYDirAdj();
@@ -393,6 +448,12 @@ public class SensitiveService {
             log.warn("Unknown sensitive type: {}", strategyCode);
             return content;
         }
+        // 已下线自动检测的类型（CHINESE_NAME）：枚举值还在、老客户端还可能传，但一律不生效。
+        // 姓名走「要涂黑的姓名/词语」自定义词，理由见 SensitiveType.CHINESE_NAME 的说明。
+        if (!type.isAutoDetect()) {
+            log.info("跳过已下线自动检测的类型 {}（姓名请用自定义词）", strategyCode);
+            return content;
+        }
 
         Matcher matcher = type.getPattern().matcher(content);
         StringBuffer sb = new StringBuffer();
@@ -404,5 +465,21 @@ public class SensitiveService {
         }
         matcher.appendTail(sb);
         return sb.toString();
+    }
+
+    /**
+     * 把用户手填的「要涂黑的姓名/词语」逐字面量遮蔽（每个字符换成一个 *）。
+     *
+     * <p>不做任何模糊化或词形推断：用户填什么就涂什么。这是自动姓名检测下线后姓名的唯一入口，
+     * 可预期性比覆盖率重要——用户看得见自己填了哪些词，也就知道哪些没填。
+     */
+    String maskCustomWords(String content, List<String> customWords) {
+        if (StrUtil.isEmpty(content)) return content;
+
+        String result = content;
+        for (String word : normalizeCustomWords(customWords)) {
+            result = result.replace(word, "*".repeat(word.length()));
+        }
+        return result;
     }
 }

@@ -33,21 +33,28 @@
 
 另有 1 条（EasyVoicePane 的 Blob URL 卸载不 revoke）在第二轮复核时发现已被 #510 顺手修掉，未重复改动。
 
-### 留给维护者拍板的 4 条
+### 留给维护者拍板的 4 条（第 3 条已于 2026-09-09 拍板并修复，余 3 条待拍板）
 
 前三条是 #498 交接时就点名「需要先拍板、别自作主张动」的，本轮遵照未动：
 
-1. **`SensitiveType.CHINESE_NAME` 正则 `[一-龥]{2,4}`** —— 会匹配中文文书里几乎每个词。
-   收紧脱敏规则是产品/法务口径。**参考**：#521 已经用「客观校验位」的思路收紧了
-   ID_CARD / BANK_CARD（mod-11-2 与 Luhn），但中文姓名没有可用的校验位，
-   只能靠词典或上下文，那是另一类判断。
+1. ~~**`SensitiveType.CHINESE_NAME` 正则 `[一-龥]{2,4}`**~~ —— **已拍板并落地（2026-09-09，dev-board#531）：
+   下线自动姓名脱敏，姓名走自定义词。** 中文姓名没有可用的客观校验位（#521 那套 mod-11-2 / Luhn
+   在这里用不上），纯正则分不出「张三」和「本条」，收紧不了。口径是**法律文书里漏涂比误涂安全**——
+   文书必须逐字可引，把正文改坏的代价比漏一个名字更大，漏涂还有人工复核兜底。
+   落地：枚举值保留但 `autoDetect=false`（`/options` 不再列它，检测端一律跳过），
+   脱敏面板首屏常驻「要涂黑的姓名/词语」输入区（`customWords`，逐字面量涂黑，docx/文本/PDF 三条路都覆盖）。
+   详见 `.claude/agents/plugin-system.md` 的脱敏一节。
 2. **`AgentOrchestrator` 并发轮次竞态** —— 同一 conversationId 的两个并发轮次会互相覆盖
    持久化的助手消息；「停止后立刻再发」还会擦掉上一轮尚未生效的取消标志。
    正确修法是给每轮一个 runId、把流式内容与消息行 id 挂到 per-turn 的 RunGuard 上，
    cancel/recovery 走 conversationId→runId 解析。这是架构改动。
-3. **会议永远停在「转写中」** —— 干净修法要新增 `transcribingStartedAt` 列并定一个
-   「多久算卡死」的阈值，两件都是产品判断。
-   （相关的两条已经修掉：转码无超时见 #516，转写结果解析失败被当成空会议见 #516。）
+3. ~~**会议永远停在「转写中」**~~ —— **已拍板并修复（2026-09-09），见 dev-board#532。**
+   维护者定的阈值是 **`max(30 分钟, 音频时长 × 3)`**：新增 `transcribingStartedAt` 列作锚点，
+   poll-on-read 时在按会议维度的锁内判定，超时置 `FAILED` 并写下可读原因，
+   界面既有的「重试转写」按钮随 FAILED 出现。同批还给「转写中」加了进度提示
+   （阶段 / 已用时 / 按音频时长估算的预计时长，估算明确标注）。
+   契约与理由见 `.claude/agents/utility-tools.md`「转写卡死判定与进度提示」。
+   （相关的两条早前已修：转码无超时见 #516，转写结果解析失败被当成空会议见 #516。）
 4. **SkillRouter 的「无轮次隔离」** —— 根因就是第 2 条：SkillRouter 内部没有任何
    「这是哪一轮」的标识可用，在它里面打补丁只会把竞态挪个位置。第 2 条拍板后一并处理。
 
@@ -72,6 +79,10 @@
 ## 后端服务与控制器（54）
 
 ### [CRITICAL] CHINESE_NAME regex matches any 2-4 char Chinese substring, not just names — mass over-redaction corrupts the whole document
+
+> **已修（2026-09-09，dev-board#531）**：不是收紧正则，而是下线这个类型的自动检测——
+> 枚举值保留但 `autoDetect=false`，姓名改由用户在脱敏面板的「要涂黑的姓名/词语」里手填。
+> 见上面「留给维护者拍板」第 1 条。
 
 - 位置：`backend/src/main/java/com/checkba/model/SensitiveType.java:47`
 - 触发：POST /api/sensitive/desensitize with strategies=["CHINESE_NAME"] on any Chinese-language document (which is the overwhelming majority of this product's legal documents).

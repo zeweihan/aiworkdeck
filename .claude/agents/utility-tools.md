@@ -224,6 +224,36 @@ NORMAL `#3B82F6`，`tagTypes.js` 与 TagService 两处同值）。分组展示�
 档位推断那次任务是否收费。回归：`node --test frontend/tests/meeting-recorder/*.test.mjs`、
 `MeetingTranscriptParserTest` / `MeetingTranscriptionServiceTest`。
 
+**转写卡死判定与进度提示（dev-board#532，2026-09-09 维护者拍板）**：会议进入 `TRANSCRIBING`
+之后只有上游给终态才会离开，上游永不给终态（听悟任务被清理、网关任务被回收）就永远卡着，
+而 `startTranscription` 对 `TRANSCRIBING` 是幂等返回，用户连「重试转写」都点不动。
+现在有三条契约：
+1. **锚点**：`MeetingRecording.transcribingStartedAt`，与 `setStatus(TRANSCRIBING)` 同一次写入。
+   **不许改用 `updatedAt` 或 `createdAt` 顶**——前者被 poll-on-read 每 10 秒的 `lastPolledAt`
+   落库刷成「刚刚」，判定形同虚设；后者早于真正开始转写（中间隔着整场录音），会高估已用时。
+2. **阈值**：`max(30 分钟, 音频时长 × 3)`（`MeetingTranscriptionService.STUCK_FLOOR` /
+   `STUCK_FACTOR`）。超时置 `FAILED` + 可读 error（含分钟数、说明录音完好），
+   界面既有的「重试转写」按钮随 `FAILED` 自动出现，不需要新接口。
+   音频时长取 `durationMs`；右键转写注册的文件没有这个值，回退按文件字节数 ÷ 转码码率反推
+   （偏长的方向是安全的，只会更保守）；都取不到就退到 30 分钟下限。
+   **判定必须在 `refreshLock` 锁内、对库里最新那一份做**——放到锁外用旧快照做过一版，
+   补盖时间戳的 save 会抹掉并发请求刚写的 `lastPolledAt`，节流失效、上游被问两遍
+   （platform 档就是扣两次费），`MeetingTranscriptionServiceTest.concurrentRefreshIsSerializedPerMeeting`
+   守着这条。`inFlight` 里的一律跳过：那几步各自已有界超时，判死反而诱导用户重试、二次预扣。
+   存量行（`transcribingStartedAt` 为 null）**第一次看见补盖当前时间、不当场判死**，
+   代价是最多多等一个阈值，换绝不误杀。
+3. **进度字段**：`MeetingRecording.progress`（`@Transient`，`MeetingTranscriptionProgress` 记录，
+   由 `attachProgress` 在列表与详情两个端点出接口前挂上，**既有字段一个没动**，
+   非 `TRANSCRIBING` 时不出现）。`stage` 三个枚举 `PREPARING`（云端档转码上传）/
+   `LOCAL`（本机转写）/ `UPSTREAM`（已有任务号）——**后端只下发枚举不下发中文串**，
+   文案在 `MeetingRecordingPanel.progressText` 里按 `meeting.transcribingStage*` 取。
+   `estimatedSec` 按音频时长 1 倍估（刻意高估，宁可提前走完也不要钉在 99%），`percent` 封顶 99，
+   `estimated` **当前恒 true**：听悟只回 ONGOING/COMPLETED/FAILED、网关只回
+   processing/completed/failed、本机是一次性同步调用，**三条路都没有真百分比**，
+   界面必须标「(估算)」。`LOCAL` 阶段的文案里绝不能出现「上传」（那一档一个字节都不出网），
+   有 `panel-progress.test.mjs` 的断言守着。
+  回归：`MeetingTranscriptionTimeoutTest`、`node --test frontend/tests/meeting-recorder/*.test.mjs`。
+
 **本地 ASR（`asr-service/`，P3 起）**：faster-whisper 的 OpenAI 兼容薄包装，形态与 `kokoro-service/` 同构（`app.py` + `requirements.in/lock`，进 pysvc 单包，定位走 `pysvcPath()`）。端点 `GET /health`（带 `modelReady`，不加载模型）+ `POST /v1/audio/transcriptions`。桌面侧 `desktop/main/services/asr-service.js` 分配端口并把 `EXTERNAL_ASR_LOCAL_BASE_URL` 注入后端；模型 `Systran/faster-whisper-medium`（约 1.5GB）走组件管理 `asr-models` 下载，运行时 `HF_HUB_OFFLINE=1`。后端 `service/meeting/LocalAsrClient.java` 探测 + 转写，`controller/LocalAsrProbeController.java` 出 `GET /api/asr/local/probe`（匿名窗口口径与 Ollama 探测共用 `WizardStateService`）。
 **Whisper 说普通话时稳定输出繁体**（本机实测两分钟会见录音整篇繁体），社区常用的 `initial_prompt` 偏置一个字都没纠正过来——所以在 `app.py` 里用 OpenCC 做确定性的繁转简后处理（`ASR_OUTPUT_SCRIPT=original` 可关）。
 

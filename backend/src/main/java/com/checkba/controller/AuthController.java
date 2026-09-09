@@ -34,6 +34,12 @@ public class AuthController {
     private final com.checkba.service.mail.MailAuthService mailAuthService;
     private final com.checkba.service.auth.SecondFactorService secondFactorService;
     private final com.checkba.service.UserSessionService userSessionService;
+    /**
+     * 微信手机号一键登录（dev-board#534）用的内部记账口客户端。与统一账户余额/充值共用
+     * 同一套 {@code mobile.billing.base-url/secret}——官网那边也是同一条
+     * {@code /api/internal/account}，只是多了一个 {@code wx-phone} 动作。
+     */
+    private final com.checkba.service.mobile.MobileBillingClient mobileBillingClient;
     /** 单机免登模式。设备令牌的会话签发路径只在这一模式下存在（见 issueLocalDeviceToken）。 */
     private final boolean localMode;
     /** 存量账号补绑手机号的三态闸；未接线的调用方传 null 表示不设闸。 */
@@ -75,6 +81,14 @@ public class AuthController {
      */
     private static final String ACCOUNT_LOGIN_RATE_KEY = "::account-login";
 
+    /**
+     * 微信一键登录的限速维度（dev-board#534），同上带冒号避开真实用户名空间。
+     *
+     * <p>不按手机号分桶：手机号是这条路的<b>产出</b>而不是入参，请求进来时还不知道是谁。
+     * 按 IP 计的这一档护的是「拿一堆伪造 code 猛打官网换号口」。
+     */
+    private static final String WX_PHONE_LOGIN_RATE_KEY = "::wx-phone-login";
+
     private static UserService staticUserService;
     private static com.checkba.service.DeviceTokenService staticDeviceTokenService;
     private static com.checkba.service.LocalIdentityService staticLocalIdentityService;
@@ -107,7 +121,8 @@ public class AuthController {
                           @org.springframework.beans.factory.annotation.Value("${security.local-mode:false}")
                           boolean localMode,
                           PhoneLoginGuard phoneLoginGuard,
-                          com.checkba.service.account.AccountDeletionService accountDeletionService) {
+                          com.checkba.service.account.AccountDeletionService accountDeletionService,
+                          com.checkba.service.mobile.MobileBillingClient mobileBillingClient) {
         this.userService = userService;
         this.clientInvitationService = clientInvitationService;
         this.adminAccessService = adminAccessService;
@@ -121,6 +136,7 @@ public class AuthController {
         this.userSessionService = userSessionService;
         this.localMode = localMode;
         this.phoneLoginGuard = phoneLoginGuard;
+        this.mobileBillingClient = mobileBillingClient;
         staticUserService = userService;
     }
 
@@ -828,6 +844,68 @@ public class AuthController {
     }
 
     /**
+     * 微信手机号一键登录（dev-board#534，spec
+     * {@code aiworkdeck_mobile/docs/specs/2026-09-09-miniprogram-entry-and-wx-login.md} §2）。
+     *
+     * <p>小程序 {@code button open-type="getPhoneNumber"} 拿到的一次性 code 上来，经官网内部
+     * 记账口的 {@code wx-phone} 动作换成<b>已验证的</b>手机号，之后与 {@link #smsLoginVerify}
+     * 逐字同一条路：{@code findOrCreateByPhone} → {@code issue} → 同形的 LoginResult。
+     * 微信侧的号码验证与短信验证码是同一等级的控制权证明，所以这里同样注册登录合一。
+     *
+     * <p>云后端<b>不持有</b>小程序 AppSecret，也不碰 session_key：换号那一步全在官网，
+     * 本端只是管道（与虚拟支付 dev-board#427 同一立场）。
+     *
+     * <p>失败一律 code 1 + 可读 message（无 kind，与 sms-login 那条同形）：文案由
+     * {@code HttpMobileBillingClient.wxPhone} 按官网 error 串翻好，这里原样回显——
+     * 小程序据此 toast 并展开短信登录表单。
+     */
+    @PostMapping("/wx-phone-login")
+    public Map<String, Object> wxPhoneLogin(@RequestBody WxPhoneLoginRequest request,
+                                            jakarta.servlet.http.HttpServletRequest http) {
+        String ip = http.getRemoteAddr();
+        Map<String, Object> result = new HashMap<>();
+        try {
+            authAbuseGuard.checkLoginAttempt(ip, WX_PHONE_LOGIN_RATE_KEY);
+        } catch (IllegalArgumentException e) {
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+            return result;
+        }
+        String phone;
+        try {
+            phone = mobileBillingClient.wxPhone(request.getCode());
+        } catch (com.checkba.service.mobile.MobileBillingClient.MobileBillingException e) {
+            // 只有「官网拒了这张 code」才计失败：未开通/上游故障是服务器的事，
+            // 拿它把这台机器上的一键登录锁十分钟，等于故障期间再踹用户一脚。
+            if (e.getKind() == com.checkba.service.mobile.MobileBillingKind.REJECTED) {
+                authAbuseGuard.recordLoginFailure(ip, WX_PHONE_LOGIN_RATE_KEY);
+            }
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+            return result;
+        }
+        UserService.PhoneAccount account = userService.findOrCreateByPhone(phone);
+        User user = account.user();
+        authAbuseGuard.recordLoginSuccess(ip, WX_PHONE_LOGIN_RATE_KEY);
+        String newSessionId = userSessionService.issue(user.getId());
+        result.put("code", 0);
+        result.put("message", LangText.of("登录成功", "Signed in successfully"));
+        result.put("data", Map.of(
+                "sessionId", newSessionId,
+                "isNewUser", account.created(),
+                "user", Map.of(
+                        "id", user.getId(),
+                        "username", user.getUsername(),
+                        "displayName", user.getDisplayName(),
+                        "avatarUrl", user.getAvatarUrl() != null ? user.getAvatarUrl() : "",
+                        "role", user.getRole(),
+                        "subscriptionType", user.getSubscriptionType()
+                )
+        ));
+        return result;
+    }
+
+    /**
      * 客户登录（使用访问码）
      */
     @PostMapping("/client-login")
@@ -1178,6 +1256,14 @@ public class AuthController {
 
         public String getPhone() { return phone; }
         public void setPhone(String phone) { this.phone = phone; }
+        public String getCode() { return code; }
+        public void setCode(String code) { this.code = code; }
+    }
+
+    /** 微信手机号一键登录：只有 {@code getPhoneNumber} 回调里那张一次性 code。 */
+    static class WxPhoneLoginRequest {
+        private String code;
+
         public String getCode() { return code; }
         public void setCode(String code) { this.code = code; }
     }

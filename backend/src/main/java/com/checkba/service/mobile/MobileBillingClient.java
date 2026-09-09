@@ -76,6 +76,27 @@ public interface MobileBillingClient {
      */
     String resolveAccountId(String phone, String email, boolean create);
 
+    /**
+     * 微信手机号一键登录：拿小程序 {@code getPhoneNumber} 的一次性 code 换手机号
+     * （action=wx-phone，dev-board#534，spec
+     * {@code 2026-09-09-miniprogram-entry-and-wx-login.md} §2）。
+     *
+     * <p>与充值那几个动作共用同一条内部记账口与同一把 secret，但语义无关计费：官网只做
+     * 「code → 手机号」这一步，<b>不建官网账户、不发赠额</b>（那是官网公开路由
+     * {@code /api/auth/wx-phone} 的事）。云后端不持有小程序 AppSecret，也不碰 session_key。
+     *
+     * <p>code 是一次性的：网络失败<b>不重试</b>（重试同一 code 在官网侧必败），
+     * 由小程序重新拿一张 code 再来。
+     *
+     * @return 官网 {@code normalizePhone} 后的大陆手机号（{@code ^1\d{10}$}）
+     * @throws MobileBillingException DISABLED = 本机或官网未开通微信一键登录
+     *                                （本机 base-url/secret 未配 / 官网 503 {@code wx_not_configured}）；
+     *                                REJECTED = 官网 401 {@code invalid_wx_code} 或 400
+     *                                {@code unsupported_region}；UNAVAILABLE = 上游故障。
+     *                                message 已是可直接回显的用户可读文案。
+     */
+    String wxPhone(String code);
+
     /** 读余额（action=balance）。只读，网络失败不重试。 */
     BalanceResult balance(String accountId);
 
