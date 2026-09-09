@@ -348,6 +348,8 @@ AI WorkDeck 社区版基于 GNU Affero General Public License v3.0 发布。
 
 详见 [LICENSE](legal/LICENSE) 与 [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md)。商业许可请联系 [hi@aiworkdeck.com](mailto:hi@aiworkdeck.com)。
 
+随包分发的第三方组件（PPT 生成与文档解析 sidecar、LibreOffice WASM 编辑器、Graphviz 等）各自保留其原许可，商业许可不改变这些条款。清单见 [THIRD-PARTY-COMPONENTS.md](legal/THIRD-PARTY-COMPONENTS.md)。
+
 **AI WorkDeck 标识**（K 形图形）已在中国注册为商标（第 9、35、42 类，注册号 89857424、89857389、89857390）。「**AI WorkDeck**」作为商号与未注册文字商标使用（标 ™），与 aiworkdeck.com 域名一起受反不正当竞争法保护。欢迎在上述许可下基于内核构建产品，但将 **AI WorkDeck** 名称或标识用于商业产品的营销需要品牌或认证协议——见 [TRADEMARKS.md](legal/TRADEMARKS.md) 与 [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md) 中的**品牌与认证计划**。
 
 ## 背景
