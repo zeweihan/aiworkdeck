@@ -3,6 +3,7 @@
 
 package com.checkba.service.ai;
 
+import com.checkba.util.ProductIdentity;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -142,7 +143,7 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
                 .url(endpoint)
                 .header("Authorization", "Bearer " + (apiKey == null ? "" : apiKey))
                 .header("Accept", "text/event-stream")
-                .header("User-Agent", "AI-WorkDeck")
+                .header("User-Agent", ProductIdentity.userAgent("ai-gateway"))
                 .post(RequestBody.create(body, JSON))
                 .build();
 
