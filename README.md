@@ -280,7 +280,7 @@ chmod +x restart-all.sh
 | PPTX service | `http://localhost:5001` |
 | MinerU service | `http://localhost:8001` |
 
-Text-to-speech runs on-device (bundled Kokoro engine); `restart-all.sh` no longer starts the legacy EasyVoice Docker service, though its definition remains in `docker-compose.yml`.
+Text-to-speech runs on-device (bundled Kokoro engine); the legacy EasyVoice Docker service has been removed.
 
 Common optional providers: OpenRouter, Gemini, Qichacha, Tushare, PKULaw, Aliyun (OCR and Tingwu transcription), and object storage. Not every provider is required to inspect the code or run the basic workbench.
 
@@ -293,7 +293,6 @@ Common optional providers: OpenRouter, Gemini, Qichacha, Tushare, PKULaw, Aliyun
 | `desktop/` | Electron desktop shell |
 | `pptx-service/` | AI-native PPT generation service |
 | `mineru-service/` | MinerU-based document parsing service |
-| `easyvoice/` | Text-to-speech service |
 | `docs/` | Engineering notes, editor migration notes, storage and workflow docs |
 | `legal/` | AGPLv3 license, CLA, commercial license, trademark terms |
 

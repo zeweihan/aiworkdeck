@@ -23,10 +23,6 @@ export const EXCLUDED_DIR_PREFIXES = [
   // 见 pptx-service/LICENSE 与 pptx-service/UPGRADE_CHECKBA.md），checkba 侧定制
   // 靠 FORCE_INCLUDE_FILES 单独挑出。
   'pptx-service/',
-  // easyvoice 整目录疑似上游 cosin2077/easyVoice 的 vendored 拷贝（README 与上游
-  // 几乎逐字一致、无 LICENSE 文件、代码内找不到任何 checkba 定制标记，且该 Docker
-  // 段已在 eng-infra.md 里标注"已停用"）。许可不明确，拿不准，整目录跳过。
-  'easyvoice/',
 ];
 
 // 目录名黑名单：路径中任意一级目录名命中即排除（生成物/依赖，常见于任意深度）。
