@@ -209,6 +209,8 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 | `npm run test:feedback-e2e` | frontend/ | 反馈浮窗全链路（dev Electron + CDP：真走主进程框选截图、Chromium 假麦克风录音、提交后从 API 回读附件字节）。需 dev:h5 + local-mode 后端，同 desktop-e2e 的端口约定 |
 | `npm run test:desktop-e2e` | frontend/ | 桌面保存链路（弹 dev Electron 窗口，webview 真 LOWA 插文本→保存→API 下载验内容；PR-A 后免登直达，provision 会自动用试用码解锁+置向导）。`APP_E2E_BACKEND` 的端口会经 `CHECKBA_BACKEND_PORT` 传给 Electron 壳——渲染层的基址是壳注入的，只改 `VITE_API_BASE_URL` 对它无效 |
 
+**app-e2e 文件编号（dev-board#521）**：`createFile` 新建的测试文件允许 `wpsFileId=null`；J9/J10 的字节覆盖助手必须与 J4/真实编辑器一致，用 `wpsFileId || id` 调上传端点。强制要求 `wpsFileId` 会让合法落盘文件被判不存在，随后 MODIFY、分稿与协作步骤连锁失败。
+
 每日全量 QA：`scripts/qa-nightly.sh`（crontab，跑在 ~/aiworkdeck-qa/repo 专用克隆，报告 ~/aiworkdeck-qa/reports/，失败 gh 开 issue 标签 qa-nightly，引擎取自已安装 app）。
 
 ## 端口体系（2026-08 起）
