@@ -40,6 +40,7 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
    electron-updater），也不用钥匙串/safeStorage，签名主体变了不会让旧版失效或掉数据。
    **`office-addin/installer/build-installers.mjs` 不共用这套**：它在维护者 Mac 上取钥匙串里
    **第一条** `Developer ID Application` 身份，两个主体的证书都装着时选到哪张不确定（见「已知地雷」）。
+4.2. **最终 macOS 打包复用前置签名钥匙串（dev-board#523）**：`Sign bundled backend natives` 已导入证书到 `$RUNNER_TEMP/awd-sign.keychain-db`；最终打包显式解锁它，设置 `CSC_KEYCHAIN` 并 `unset CSC_LINK`。electron-builder 24.13.3 新建随机口令钥匙串后，`importCerts` 却把 P12 口令传给 `set-key-partition-list -k`，可报 `SecKeychainUnlock`；不要把这个错误误判成证书口令失效而轮换 secrets。`CSC_LINK` 未清会优先走旧导入链，`CSC_KEYCHAIN` 不生效。无凭据的 fork 路径不设置钥匙串；ASC 公证流程不变。失败诊断里的 notary history 可能是旧版记录，须核上传时间，不能当本轮已公证的证据。
 4.5. **Office 插件安装器是发版硬步骤（2026-08-19 维护者定，自 v0.21.0 之后的发版起强制）**：
    每次发版都要重建并上架插件的 dmg+exe——在维护者 Mac 上
    `cd office-addin/installer && npm run build:installers`（版本自动取
