@@ -451,7 +451,9 @@ stash 误 pop 之类）之后，5174 上的页面可能变成**整页无样式**
 ## 验证（改本领域自身时）
 
 - 写作辅助（dev-board#538）：CI 跑 `frontend npm run test:completion`（本地提取/排序、资料转换、宿主范围与客体交互）；`test:lowa-completion` 与 `test:writing-ui` 需真实 LOWA 载荷，覆盖位置令牌、中文输入、明确查询预览、资料插入与撤销。第三方响应使用测试资料，不在回归中自动消费查询额度。
+- 正式桌面首启验收须隔离 Electron profile、Electron 数据目录、JVM `user.home` 与后端端口，避免覆盖已安装应用或读写真实用户数据；确认无旧 pysvc 解压窗口、可选组件提示正常。写作辅助首启回归不安装可选组件或调用付费 AI；组件功能另有原生运行时冒烟检查。具体启动手段可随发布环境调整，验收结果须来自正式产物。
 
+- 服务生命周期测试必须注册失败路径的清理（`t.after` / `stopAll`）；就绪断言应在有界时间内验证真实响应，不能让一次 250ms 端口探测失败后遗留假服务拖满 CI 超时。v0.38.0 首轮 Mac 构建曾因此超时，回归与修复记录见 dev-board#546。
 - 改 workflow：推 PR 触发 windows 矩阵先验；mac 变更合并后用手动 workflow_dispatch 验证。
 - 改构建脚本：本地跑对应脚本 + desktop `npm test`（pysvc-runtime 有覆盖）。
 
