@@ -148,7 +148,8 @@ class MobileBillingServiceTest {
             assertTrue(assertThrows(IllegalArgumentException.class,
                     () -> service.balance(u.getId())).getMessage().contains("审核演示账号"));
             assertTrue(assertThrows(IllegalArgumentException.class,
-                    () -> service.createRecharge(u.getId(), 5000L, "idem-review-01")).getMessage()
+                    () -> service.createRecharge(u.getId(), 5000L, "idem-review-01", null, null, null))
+                    .getMessage()
                     .contains("审核演示账号"));
             assertTrue(accountBindingRepository.findByUserId(u.getId()).isEmpty());
         }
@@ -195,10 +196,10 @@ class MobileBillingServiceTest {
 
         for (String bad : new String[]{null, "", "   ", "short", "has space!!"}) {
             String msg = assertThrows(IllegalArgumentException.class,
-                    () -> service.createRecharge(u.getId(), 5000L, bad)).getMessage();
+                    () -> service.createRecharge(u.getId(), 5000L, bad, null, null, null)).getMessage();
             assertTrue(msg.contains("idempotencyKey"), msg);
         }
-        verify(billing, never()).createRecharge(any(), anyLong(), any());
+        verify(billing, never()).createRecharge(any(), anyLong(), any(), any(), any(), any());
     }
 
     @Test
@@ -209,9 +210,9 @@ class MobileBillingServiceTest {
 
         for (Long bad : new Long[]{null, 0L, -1L}) {
             assertThrows(IllegalArgumentException.class,
-                    () -> service.createRecharge(u.getId(), bad, "idem-amount-01"));
+                    () -> service.createRecharge(u.getId(), bad, "idem-amount-01", null, null, null));
         }
-        verify(billing, never()).createRecharge(any(), anyLong(), any());
+        verify(billing, never()).createRecharge(any(), anyLong(), any(), any(), any(), any());
     }
 
     @Test
@@ -220,15 +221,91 @@ class MobileBillingServiceTest {
         User u = phoneUser();
         String accountId = "acct-pay-" + u.getId();
         bind(u.getId(), accountId);
-        when(billing.createRecharge(accountId, 5000L, "idem-abc-0001"))
-                .thenReturn(new RechargeOrder("qrcode", "OT123", 5000L, "weixin://x", null, null));
+        when(billing.createRecharge(accountId, 5000L, "idem-abc-0001", null, null, null))
+                .thenReturn(new RechargeOrder("qrcode", "OT123", 5000L, "weixin://x", null, null,
+                        null, null, null));
 
-        RechargeOrder order = service.createRecharge(u.getId(), 5000L, "idem-abc-0001");
+        RechargeOrder order = service.createRecharge(u.getId(), 5000L, "idem-abc-0001",
+                null, null, null);
 
         assertEquals("qrcode", order.present());
         assertEquals("OT123", order.outTradeNo());
         assertEquals(5000L, order.amountCents());
-        verify(billing).createRecharge(accountId, 5000L, "idem-abc-0001");
+        verify(billing).createRecharge(accountId, 5000L, "idem-abc-0001", null, null, null);
+    }
+
+    // ==================== 小程序虚拟支付通道（dev-board#427） ====================
+
+    @Test
+    @DisplayName("channel=wxvp：productId / wxCode 原样上行，signData 三兄弟原样带回")
+    void wxvpChannelIsPassedThroughBothWays() {
+        User u = phoneUser();
+        String accountId = "acct-wxvp-" + u.getId();
+        bind(u.getId(), accountId);
+        when(billing.createRecharge(accountId, 1000L, "idem-wxvp-0001",
+                "wxvp", "credits_cny_10", "0a1b2c3d4e"))
+                .thenReturn(new RechargeOrder("virtual", "OT-wxvp", 1000L, null, null, null,
+                        "{\"offerId\":\"1450637533\"}", "paysig-hex", "sig-hex"));
+
+        RechargeOrder order = service.createRecharge(u.getId(), 1000L, "idem-wxvp-0001",
+                "wxvp", "credits_cny_10", "0a1b2c3d4e");
+
+        assertEquals("virtual", order.present());
+        assertEquals("paysig-hex", order.paySig());
+        assertEquals("sig-hex", order.signature());
+        assertNull(order.codeUrl());
+        verify(billing).createRecharge(accountId, 1000L, "idem-wxvp-0001",
+                "wxvp", "credits_cny_10", "0a1b2c3d4e");
+    }
+
+    @Test
+    @DisplayName("channel=wxvp 缺 productId / wxCode 或 productId 形态不对：拒绝，不发上游")
+    void wxvpRequiresProductIdAndWxCode() {
+        User u = phoneUser();
+        bind(u.getId(), "acct-wxvp-bad-" + u.getId());
+
+        // {productId, wxCode}
+        String[][] bad = {
+                {null, "0a1b2c3d4e"}, {"", "0a1b2c3d4e"}, {"Credits CNY 10", "0a1b2c3d4e"},
+                {"credits_cny_10", null}, {"credits_cny_10", "   "}};
+        for (String[] args : bad) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> service.createRecharge(u.getId(), 1000L, "idem-wxvp-bad1",
+                            "wxvp", args[0], args[1]));
+        }
+        verify(billing, never()).createRecharge(any(), anyLong(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("不认识的 channel：拒绝，绝不静默退回站点默认通道")
+    void unknownChannelIsRefusedNotSilentlyDowngraded() {
+        User u = phoneUser();
+        bind(u.getId(), "acct-wxvp-ch-" + u.getId());
+
+        for (String ch : new String[]{"alipay", "WXVP", "wxpay"}) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> service.createRecharge(u.getId(), 1000L, "idem-wxvp-ch01",
+                            ch, "credits_cny_10", "0a1b2c3d4e"));
+        }
+        verify(billing, never()).createRecharge(any(), anyLong(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("金额与档位是否相符不在这里判：官网的 product_mismatch 原样译成 REJECTED")
+    void productMismatchFromUpstreamStaysRejected() {
+        User u = phoneUser();
+        String accountId = "acct-wxvp-mm-" + u.getId();
+        bind(u.getId(), accountId);
+        doThrow(new MobileBillingException(MobileBillingKind.REJECTED,
+                "充值档位与金额不符，请更新小程序后重试", "product_mismatch"))
+                .when(billing).createRecharge(accountId, 9900L, "idem-wxvp-mm01",
+                        "wxvp", "credits_cny_10", "0a1b2c3d4e");
+
+        MobileBillingFailureException e = assertThrows(MobileBillingFailureException.class,
+                () -> service.createRecharge(u.getId(), 9900L, "idem-wxvp-mm01",
+                        "wxvp", "credits_cny_10", "0a1b2c3d4e"));
+        assertEquals(MobileBillingKind.REJECTED, e.getKind());
+        assertEquals("充值档位与金额不符，请更新小程序后重试", e.getMessage());
     }
 
     // ==================== 缓存与降级 ====================
@@ -353,11 +430,13 @@ class MobileBillingServiceTest {
         User u = phoneUser();
         String accountId = "acct-create-" + u.getId();
         when(billing.resolveAccountId(eq(u.getPhone()), isNull(), eq(true))).thenReturn(accountId);
-        when(billing.createRecharge(accountId, 5000L, "idem-create-01"))
-                .thenReturn(new RechargeOrder("qrcode", "OT-create", 5000L, "weixin://x", null, null));
+        when(billing.createRecharge(accountId, 5000L, "idem-create-01", null, null, null))
+                .thenReturn(new RechargeOrder("qrcode", "OT-create", 5000L, "weixin://x", null, null,
+                        null, null, null));
 
         assertEquals("OT-create",
-                service.createRecharge(u.getId(), 5000L, "idem-create-01").outTradeNo());
+                service.createRecharge(u.getId(), 5000L, "idem-create-01", null, null, null)
+                        .outTradeNo());
         verify(billing).resolveAccountId(u.getPhone(), null, true);
     }
 
@@ -439,10 +518,10 @@ class MobileBillingServiceTest {
         bind(u.getId(), accountId);
         doThrow(new MobileBillingException(MobileBillingKind.ALREADY_PAID,
                 "这笔充值已经支付成功，请查看订单状态", "order_already_paid", "RECHARGE20260904"))
-                .when(billing).createRecharge(accountId, 5000L, "idem-paid-0001");
+                .when(billing).createRecharge(accountId, 5000L, "idem-paid-0001", null, null, null);
 
         MobileBillingFailureException e = assertThrows(MobileBillingFailureException.class,
-                () -> service.createRecharge(u.getId(), 5000L, "idem-paid-0001"));
+                () -> service.createRecharge(u.getId(), 5000L, "idem-paid-0001", null, null, null));
         assertEquals(MobileBillingKind.ALREADY_PAID, e.getKind());
         assertEquals("RECHARGE20260904", e.getOutTradeNo());
     }

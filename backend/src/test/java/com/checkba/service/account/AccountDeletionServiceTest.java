@@ -3,12 +3,17 @@
 
 package com.checkba.service.account;
 
+import com.checkba.model.entity.AccountBinding;
 import com.checkba.model.entity.MobileMediaInbox;
 import com.checkba.model.entity.User;
 import com.checkba.repository.*;
+import com.checkba.service.mobile.MobileBillingClient;
+import com.checkba.service.mobile.MobileBillingFailureException;
+import com.checkba.service.mobile.MobileBillingKind;
 import com.checkba.service.mobile.MobileRelayBlobStore;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 
 import java.util.List;
 import java.util.Optional;
@@ -18,8 +23,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 /**
- * 注销是不可逆动作，所以两件事最值得测：该删的一样不落、blob 删不掉时不能把整个
- * 注销卡死（否则用户永远注销不掉，反而更糟）。
+ * 注销是不可逆动作，所以三件事最值得测：该删的一样不落、blob 删不掉时不能把整个
+ * 注销卡死（否则用户永远注销不掉，反而更糟）、以及官网侧的传导（dev-board#434）——
+ * 传导失败时<b>本地一行都不能删</b>，否则官网那行含明文手机号的账户就成了没人认领的孤儿。
  */
 class AccountDeletionServiceTest {
 
@@ -28,9 +34,15 @@ class AccountDeletionServiceTest {
                            UserSessionRepository sessions, MobileProjectDirRepository dirs,
                            MobileDeviceStateRepository devices,
                            MobileTransferRequestRepository transfers,
-                           AccountBindingRepository bindings, DeviceTokenRepository tokens) {}
+                           AccountBindingRepository bindings, DeviceTokenRepository tokens,
+                           MobileBillingClient billing) {}
 
     private Fixture fixture(List<MobileMediaInbox> items) {
+        return fixture(items, null);
+    }
+
+    /** @param externalAccountId 非 null 时给这个用户放一行 account_binding（= 官网侧有账户） */
+    private Fixture fixture(List<MobileMediaInbox> items, String externalAccountId) {
         UserRepository users = mock(UserRepository.class);
         when(users.findById(7L)).thenReturn(Optional.of(new User()));
         MobileMediaInboxRepository inbox = mock(MobileMediaInboxRepository.class);
@@ -42,9 +54,18 @@ class AccountDeletionServiceTest {
         MobileTransferRequestRepository transfers = mock(MobileTransferRequestRepository.class);
         AccountBindingRepository bindings = mock(AccountBindingRepository.class);
         DeviceTokenRepository tokens = mock(DeviceTokenRepository.class);
+        if (externalAccountId != null) {
+            AccountBinding row = new AccountBinding();
+            row.setUserId(7L);
+            row.setExternalAccountId(externalAccountId);
+            when(bindings.findByUserId(7L)).thenReturn(Optional.of(row));
+        } else {
+            when(bindings.findByUserId(7L)).thenReturn(Optional.empty());
+        }
+        MobileBillingClient billing = mock(MobileBillingClient.class);
         return new Fixture(new AccountDeletionService(users, sessions, inbox, dirs, devices,
-                transfers, bindings, tokens, blobs),
-                users, inbox, blobs, sessions, dirs, devices, transfers, bindings, tokens);
+                transfers, bindings, tokens, blobs, billing),
+                users, inbox, blobs, sessions, dirs, devices, transfers, bindings, tokens, billing);
     }
 
     private static MobileMediaInbox item(String path) {
@@ -101,5 +122,66 @@ class AccountDeletionServiceTest {
                 () -> f.svc().deleteAccount(7L));
         assertEquals("账号不存在或已注销", e.getMessage());
         verify(f.users(), never()).deleteById(any());
+    }
+
+    // ==================== 官网侧传导（dev-board#434） ====================
+
+    @Test
+    @DisplayName("有绑定：先把删除传导到官网，官网删成功才删本地")
+    void propagatesToUnifiedAccountBeforeDeletingLocally() {
+        Fixture f = fixture(List.of(), "acct-9");
+        when(f.billing().deleteAccount("acct-9"))
+                .thenReturn(new MobileBillingClient.DeleteAccountResult(true, null, null));
+
+        f.svc().deleteAccount(7L);
+
+        InOrder order = inOrder(f.billing(), f.users());
+        order.verify(f.billing()).deleteAccount("acct-9");
+        order.verify(f.users()).deleteById(7L);
+    }
+
+    @Test
+    @DisplayName("官网明确拒绝删除：本地一行都不删，且把官网给的原因原样告诉用户")
+    void blockedUpstreamDeletionAbortsLocalDeletion() {
+        Fixture f = fixture(List.of(item("relay/x.bin")), "acct-9");
+        when(f.billing().deleteAccount("acct-9")).thenReturn(
+                new MobileBillingClient.DeleteAccountResult(false, "refundable_balance",
+                        "账上还有可退余额，请先申请退款"));
+
+        MobileBillingFailureException e = assertThrows(MobileBillingFailureException.class,
+                () -> f.svc().deleteAccount(7L));
+
+        assertEquals(MobileBillingKind.REJECTED, e.getKind());
+        assertEquals("账上还有可退余额，请先申请退款", e.getMessage());
+        verify(f.users(), never()).deleteById(any());
+        verify(f.bindings(), never()).deleteByUserId(any());
+        verify(f.blobs(), never()).deleteQuietly(any());
+    }
+
+    @Test
+    @DisplayName("官网不可达：同样中止——宁可注销失败一次，也不留下官网侧的孤儿账户")
+    void unreachableUpstreamAbortsLocalDeletion() {
+        Fixture f = fixture(List.of(), "acct-9");
+        when(f.billing().deleteAccount("acct-9")).thenThrow(
+                new MobileBillingClient.MobileBillingException(
+                        MobileBillingKind.UNAVAILABLE, "账户服务暂不可用，请稍后再试"));
+
+        MobileBillingFailureException e = assertThrows(MobileBillingFailureException.class,
+                () -> f.svc().deleteAccount(7L));
+
+        assertEquals(MobileBillingKind.UNAVAILABLE, e.getKind());
+        verify(f.users(), never()).deleteById(any());
+        verify(f.bindings(), never()).deleteByUserId(any());
+    }
+
+    @Test
+    @DisplayName("没有绑定（含整台服务器没配统一账户）：一次上游请求都不发，照常删")
+    void unboundUserIsDeletedWithoutUpstreamCall() {
+        Fixture f = fixture(List.of());
+
+        f.svc().deleteAccount(7L);
+
+        verifyNoInteractions(f.billing());
+        verify(f.users()).deleteById(7L);
     }
 }

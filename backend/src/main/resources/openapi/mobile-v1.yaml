@@ -153,16 +153,23 @@ components:
     RechargeOrder:
       type: object
       description: |
-        充值单。present=qrcode 时 codeUrl/qrCode 有值，present=redirect 时 redirectUrl 有值；
-        不适用的字段不出现在响应里。
+        充值单。present=qrcode 时 codeUrl/qrCode 有值，present=redirect 时 redirectUrl 有值，
+        present=virtual 时 signData/paySig/signature 三者都有值；不适用的字段不出现在响应里。
+
+        present=virtual 是小程序虚拟支付（dev-board#427）：三个字段由官网算出后经云后端原样透传，
+        小程序拿它们调 wx.requestVirtualPayment({signData, paySig, signature, mode:'short_series_goods'})。
+        云后端不持有虚拟支付 AppKey、不碰 session_key，全程只当管道。
       required: [present, outTradeNo, amountCents]
       properties:
-        present: { type: string, enum: [qrcode, redirect] }
+        present: { type: string, enum: [qrcode, redirect, virtual] }
         outTradeNo: { type: string, description: 商户订单号，查状态用 }
         amountCents: { type: integer, format: int64, description: 下单金额，整数分 }
         codeUrl: { type: string, description: present=qrcode：支付链接原文 }
         qrCode: { type: string, description: present=qrcode：二维码图（data URI） }
         redirectUrl: { type: string, description: present=redirect：跳转地址 }
+        signData: { type: string, description: 'present=virtual 必有：待签名 JSON 串（offerId/buyQuantity/env/currencyType/productId/goodsPrice/outTradeNo/attach）' }
+        paySig: { type: string, description: 'present=virtual 必有：hex(hmac_sha256(appKey, "requestVirtualPayment&" + signData))' }
+        signature: { type: string, description: 'present=virtual 必有：hex(hmac_sha256(session_key, signData))' }
     RechargeStatus:
       type: object
       required: [status, paid, amountCents]
@@ -452,6 +459,25 @@ paths:
                   description: |
                     **客户端生成并落盘后传入**（扛 App 被杀）。服务端不代生成，缺失即 code 1。
                     官网 orders 表有 UNIQUE(userId, idempotencyKey) 兜底。
+                channel:
+                  type: string
+                  enum: [wxvp]
+                  description: |
+                    支付通道（dev-board#427）。**缺省 = 站点默认通道**（第一期行为，扫码/跳转）；
+                    wxvp = 微信小程序虚拟支付，**channel=wxvp 时 channel/productId/wxCode 三者必填**，
+                    响应为 present=virtual。别的取值一律 code 1（通用 handler，无 kind）。
+                productId:
+                  type: string
+                  pattern: '^[a-z0-9_]{1,64}$'
+                  description: |
+                    channel=wxvp 时必填：微信道具 id（credits_cny_10 / credits_cny_50 / credits_cny_100）。
+                    **价格权威在官网**，云后端只校形态；档位与金额不符时官网回 400 product_mismatch
+                    → 信封 kind=REJECTED + 「请更新小程序后重试」。
+                wxCode:
+                  type: string
+                  description: |
+                    channel=wxvp 时必填：wx.login() 拿到的一次性 code，官网用它换 openid + session_key
+                    算签名。**session_key 只在官网内存里用，不落库、不打日志**，云后端只透传 code。
       responses:
         "200":
           description: 裸对象；未登录 Envelope(4010)；业务错误 Envelope(code 1)

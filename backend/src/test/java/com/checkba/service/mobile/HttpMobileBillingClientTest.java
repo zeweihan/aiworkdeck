@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -41,12 +42,21 @@ class HttpMobileBillingClientTest {
     private final AtomicReference<String> stubBody = new AtomicReference<>("{}");
     /** 最后一次收到的请求体，用来断言 create 位真的上行了。 */
     private final AtomicReference<String> lastRequest = new AtomicReference<>();
+    /** 桩服务收到的请求次数，用来断言 wxvp 不重试。 */
+    private final AtomicInteger hits = new AtomicInteger();
+    /** 置 true 时桩服务读完请求体直接断开、不回任何响应，模拟「请求已到达但响应丢了」的网络失败。 */
+    private final AtomicBoolean stubDrop = new AtomicBoolean(false);
 
     @BeforeEach
     void startStub() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/api/internal/account", exchange -> {
             lastRequest.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            hits.incrementAndGet();
+            if (stubDrop.get()) {
+                exchange.close();
+                return;
+            }
             String body = stubBody.get();
             byte[] out = body == null ? new byte[0] : body.getBytes(StandardCharsets.UTF_8);
             if (out.length == 0) {
@@ -88,7 +98,8 @@ class HttpMobileBillingClientTest {
             assertEquals(MobileBillingKind.DISABLED,
                     assertThrows(MobileBillingException.class, () -> c.balance("acct-x")).getKind());
             assertEquals(MobileBillingKind.DISABLED,
-                    assertThrows(MobileBillingException.class, () -> c.createRecharge("acct-x", 5000, "idem-0001")).getKind());
+                    assertThrows(MobileBillingException.class,
+                            () -> c.createRecharge("acct-x", 5000, "idem-0001", null, null, null)).getKind());
             assertEquals(MobileBillingKind.DISABLED,
                     assertThrows(MobileBillingException.class, () -> c.queryRecharge("acct-x", "no-1")).getKind());
         }
@@ -101,7 +112,8 @@ class HttpMobileBillingClientTest {
         assertEquals(MobileBillingKind.UNAVAILABLE,
                 assertThrows(MobileBillingException.class, () -> c.balance("acct-x")).getKind());
         assertEquals(MobileBillingKind.UNAVAILABLE,
-                assertThrows(MobileBillingException.class, () -> c.createRecharge("acct-x", 5000, "idem-0001")).getKind());
+                assertThrows(MobileBillingException.class,
+                        () -> c.createRecharge("acct-x", 5000, "idem-0001", null, null, null)).getKind());
     }
 
     @Test
@@ -164,7 +176,7 @@ class HttpMobileBillingClientTest {
         HttpMobileBillingClient c = stubbed(409,
                 "{\"error\":\"order_already_paid\",\"outTradeNo\":\"RECHARGE202609040001\"}");
         MobileBillingException e = assertThrows(MobileBillingException.class,
-                () -> c.createRecharge("acct-x", 5000, "idem-0001"));
+                () -> c.createRecharge("acct-x", 5000, "idem-0001", null, null, null));
         assertEquals(MobileBillingKind.ALREADY_PAID, e.getKind());
         assertEquals("RECHARGE202609040001", e.getOutTradeNo());
     }
@@ -175,7 +187,7 @@ class HttpMobileBillingClientTest {
         HttpMobileBillingClient c = stubbed(409,
                 "{\"error\":\"idempotency_conflict\",\"outTradeNo\":\"RECHARGE202609040002\"}");
         MobileBillingException e = assertThrows(MobileBillingException.class,
-                () -> c.createRecharge("acct-x", 5000, "idem-0001"));
+                () -> c.createRecharge("acct-x", 5000, "idem-0001", null, null, null));
         assertEquals(MobileBillingKind.IDEMPOTENCY_CONFLICT, e.getKind());
         assertEquals("RECHARGE202609040002", e.getOutTradeNo());
     }
@@ -192,6 +204,125 @@ class HttpMobileBillingClientTest {
         HttpMobileBillingClient down = stubbed(500, "{\"error\":\"internal_error\"}");
         assertEquals(MobileBillingKind.UNAVAILABLE,
                 assertThrows(MobileBillingException.class, () -> down.balance("acct-x")).getKind());
+    }
+
+    // ==================== 小程序虚拟支付（dev-board#427） ====================
+
+    @Test
+    @DisplayName("channel=wxvp：三个字段上行，signData/paySig/signature 解回记录")
+    void wxvpFieldsGoUpAndSignaturesComeBack() {
+        HttpMobileBillingClient c = stubbed(200,
+                "{\"present\":\"virtual\",\"outTradeNo\":\"OT-vp-1\",\"amountCents\":1000,"
+                        + "\"signData\":\"{}\",\"paySig\":\"aa11\",\"signature\":\"bb22\"}");
+
+        MobileBillingClient.RechargeOrder order = c.createRecharge("acct-x", 1000, "idem-0001",
+                "wxvp", "credits_cny_10", "0a1b2c3d4e");
+
+        assertEquals("virtual", order.present());
+        assertEquals("aa11", order.paySig());
+        assertEquals("bb22", order.signature());
+        assertNull(order.codeUrl());
+        String sent = lastRequest.get();
+        assertTrue(sent.contains("\"channel\":\"wxvp\""), sent);
+        assertTrue(sent.contains("\"productId\":\"credits_cny_10\""), sent);
+        assertTrue(sent.contains("\"wxCode\":\"0a1b2c3d4e\""), sent);
+    }
+
+    @Test
+    @DisplayName("channel=wxvp 网络失败只发一次（wxCode 一次性，重试同一 body 必败）；默认通道仍重试一次")
+    void wxvpDoesNotRetryOnNetworkFailure() {
+        HttpMobileBillingClient c = stubbed(200, "{}");
+        stubDrop.set(true);
+
+        MobileBillingException e = assertThrows(MobileBillingException.class,
+                () -> c.createRecharge("acct-x", 1000, "idem-0001", "wxvp", "credits_cny_10", "0a1b2c3d4e"));
+        assertEquals(MobileBillingKind.UNAVAILABLE, e.getKind());
+        assertEquals(1, hits.get(), "wxvp 不许重试");
+
+        hits.set(0);
+        assertThrows(MobileBillingException.class,
+                () -> c.createRecharge("acct-x", 5000, "idem-0002", null, null, null));
+        assertEquals(2, hits.get(), "默认通道维持第一期的重试一次");
+    }
+
+    @Test
+    @DisplayName("不带 channel（第一期形态）：通道三兄弟一个都不上行")
+    void defaultChannelSendsNoChannelFields() {
+        HttpMobileBillingClient c = stubbed(200,
+                "{\"present\":\"qrcode\",\"outTradeNo\":\"OT-1\",\"amountCents\":5000,\"codeUrl\":\"weixin://x\"}");
+
+        assertEquals("weixin://x",
+                c.createRecharge("acct-x", 5000, "idem-0001", null, null, null).codeUrl());
+        String sent = lastRequest.get();
+        assertFalse(sent.contains("channel"), sent);
+        assertFalse(sent.contains("productId"), sent);
+        assertFalse(sent.contains("wxCode"), sent);
+    }
+
+    @Test
+    @DisplayName("400 product_mismatch：REJECTED，但给的是「请更新小程序」而不是「联系客服」")
+    void productMismatchHasItsOwnMessage() {
+        HttpMobileBillingClient c = stubbed(400, "{\"error\":\"product_mismatch\"}");
+
+        MobileBillingException e = assertThrows(MobileBillingException.class,
+                () -> c.createRecharge("acct-x", 9900, "idem-0001", "wxvp", "credits_cny_10", "0a1b"));
+
+        assertEquals(MobileBillingKind.REJECTED, e.getKind());
+        assertEquals("product_mismatch", e.getMachineError());
+        assertEquals("充值档位与金额不符，请更新小程序后重试", e.getMessage());
+    }
+
+    // ==================== 注销传导（dev-board#434） ====================
+
+    @Test
+    @DisplayName("delete-account 200 {deleted:true}：删成功，action 与 accountId 上行")
+    void deleteAccountSuccess() {
+        HttpMobileBillingClient c = stubbed(200, "{\"deleted\":true}");
+
+        MobileBillingClient.DeleteAccountResult r = c.deleteAccount("acct-x");
+
+        assertTrue(r.deleted());
+        assertNull(r.blocker());
+        assertTrue(lastRequest.get().contains("\"action\":\"delete-account\""), lastRequest.get());
+        assertTrue(lastRequest.get().contains("\"accountId\":\"acct-x\""), lastRequest.get());
+    }
+
+    @Test
+    @DisplayName("delete-account 200 {deleted:false}：带 blocker 与官网给的可读 message 回来")
+    void deleteAccountBlockedCarriesReason() {
+        HttpMobileBillingClient c = stubbed(200,
+                "{\"deleted\":false,\"blocker\":\"refundable_balance\",\"message\":\"账上还有可退余额\"}");
+
+        MobileBillingClient.DeleteAccountResult r = c.deleteAccount("acct-x");
+
+        assertFalse(r.deleted());
+        assertEquals("refundable_balance", r.blocker());
+        assertEquals("账上还有可退余额", r.message());
+    }
+
+    @Test
+    @DisplayName("delete-account 带 body 的 404：官网本来就没有这个账户 = 已删，不是失败")
+    void deleteAccountNotFoundCountsAsDeleted() {
+        HttpMobileBillingClient c = stubbed(404, "{\"error\":\"account_not_found\"}");
+        assertTrue(c.deleteAccount("acct-x").deleted());
+    }
+
+    @Test
+    @DisplayName("delete-account 空体 404 / 5xx / 连不上：一律抛 UNAVAILABLE，绝不当成「已经删了」")
+    void deleteAccountFailuresAreLoud() {
+        assertEquals(MobileBillingKind.UNAVAILABLE,
+                assertThrows(MobileBillingException.class,
+                        () -> stubbed(404, null).deleteAccount("acct-x")).getKind());
+        assertEquals(MobileBillingKind.UNAVAILABLE,
+                assertThrows(MobileBillingException.class,
+                        () -> stubbed(502, "{\"error\":\"key_disable_failed\"}").deleteAccount("acct-x")).getKind());
+        assertEquals(MobileBillingKind.UNAVAILABLE,
+                assertThrows(MobileBillingException.class,
+                        () -> new HttpMobileBillingClient(DEAD_BASE, "secret", om).deleteAccount("acct-x"))
+                        .getKind());
+        assertEquals(MobileBillingKind.DISABLED,
+                assertThrows(MobileBillingException.class,
+                        () -> new HttpMobileBillingClient("", "", om).deleteAccount("acct-x")).getKind());
     }
 
     @Test

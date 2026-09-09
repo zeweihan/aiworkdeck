@@ -26,7 +26,7 @@ import java.util.Map;
  * （dev-board#425，spec §3.2）。形状照抄 {@link HttpTransferBillingClient}。
  *
  * <p>base-url/secret 任一未配置（桌面/本地默认空）视为该服务器未开通统一账户充值，
- * 四个方法一律短路抛 DISABLED，<b>不发请求</b>——不静默放行、也不装作有余额。
+ * 每个方法都短路抛 DISABLED，<b>不发请求</b>——不静默放行、也不装作有余额。
  *
  * <p>网络失败（连不上/超时/中断，不含"连上了但业务报错"）只有 create-recharge 带同一
  * 幂等键重试一次；resolve/balance/query 是只读查询，失败直接报 UNAVAILABLE，不重试。
@@ -97,20 +97,35 @@ public class HttpMobileBillingClient implements MobileBillingClient {
     }
 
     @Override
-    public RechargeOrder createRecharge(String accountId, long amountCents, String idempotencyKey) {
+    public RechargeOrder createRecharge(String accountId, long amountCents, String idempotencyKey,
+                                        String channel, String productId, String wxCode) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("action", "create-recharge");
         body.put("accountId", accountId);
         body.put("amountCents", amountCents);
         body.put("idempotencyKey", idempotencyKey);
-        JsonNode json = callWithRetry(body);
+        // 通道三兄弟只在指定了 channel 时上行：不传 = 官网走站点默认通道（第一期行为），
+        // 传一串 null 上去只会让官网多几个要判空的字段
+        if (channel != null && !channel.isBlank()) {
+            body.put("channel", channel);
+            body.put("productId", productId);
+            body.put("wxCode", wxCode);
+        }
+        // wxvp 的 wxCode 是一次性的：第一发若已到达官网、只是响应丢了，带同一 body 重试会让官网
+        // 再换一次 code 而失败。所以 wxvp 只发一次，网络失败回 UNAVAILABLE，由小程序重新
+        // wx.login 拿新 code、带同一 idempotencyKey 再来（官网对命中幂等键的 pending 单用新 code 重签）。
+        boolean wxvp = "wxvp".equals(channel);
+        JsonNode json = wxvp ? call(body) : callWithRetry(body);
         return new RechargeOrder(
                 json.path("present").asText(null),
                 json.path("outTradeNo").asText(null),
                 json.path("amountCents").asLong(0),
                 textOrNull(json, "codeUrl"),
                 textOrNull(json, "qrCode"),
-                textOrNull(json, "redirectUrl"));
+                textOrNull(json, "redirectUrl"),
+                textOrNull(json, "signData"),
+                textOrNull(json, "paySig"),
+                textOrNull(json, "signature"));
     }
 
     @Override
@@ -124,6 +139,38 @@ public class HttpMobileBillingClient implements MobileBillingClient {
                 json.path("status").asText(null),
                 json.path("paid").asBoolean(false),
                 json.path("amountCents").asLong(0));
+    }
+
+    /**
+     * 删账号（action=delete-account，dev-board#434）。只读语义的反面：<b>失败必须响亮</b>，
+     * 所以走不重试的 {@link #call}——重试一次删除请求换不来什么，反而会把「官网到底删没删」
+     * 搅得更不清楚；调用方拿到异常就中止本地删除，用户稍后再试即可。
+     *
+     * <p>官网回带 body 的 404（{@code account_not_found}）不是失败：那边本来就没有这个账户，
+     * 与「刚刚删掉了」对本地是同一个结论，回 {@code deleted=true}。
+     * <b>空体 404 仍是配置/鉴权问题</b>（{@link #parse}），照样抛 UNAVAILABLE——
+     * 把它当成「已经删了」等于密钥配错时全量用户的官网账户被静默留下。
+     */
+    @Override
+    public DeleteAccountResult deleteAccount(String accountId) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("action", "delete-account");
+        body.put("accountId", accountId);
+        JsonNode json;
+        try {
+            json = call(body);
+        } catch (MobileBillingException e) {
+            if (e.getKind() == MobileBillingKind.NOT_FOUND) {
+                log.info("官网侧统一账户已不存在，注销传导视为完成: error={}", e.getMachineError());
+                return new DeleteAccountResult(true, null, null);
+            }
+            throw e;
+        }
+        boolean deleted = json.path("deleted").asBoolean(false);
+        if (!deleted) {
+            log.warn("官网拒绝删除统一账户: blocker={}", textOrNull(json, "blocker"));
+        }
+        return new DeleteAccountResult(deleted, textOrNull(json, "blocker"), textOrNull(json, "message"));
     }
 
     // ==================== 内部 ====================
@@ -210,6 +257,9 @@ public class HttpMobileBillingClient implements MobileBillingClient {
      *       ALREADY_PAID / IDEMPOTENCY_CONFLICT，且<b>把官网一并回的 {@code outTradeNo} 带走</b>
      *       （复审 C4）。这是「App 被杀后没存下单号」的恢复路径，丢了它用户既拿不到货
      *       也查不到单。</li>
+     *   <li><b>400</b> {@code product_mismatch}（dev-board#427）→ REJECTED，但给「请更新小程序」
+     *       那句专用文案：价格权威在官网，这条错只会在小程序拿着过期档位表下单时出现，
+     *       用户能自救，不该被引去联系客服。</li>
      *   <li>其余 4xx → REJECTED（error 串只进日志）；5xx 与解析失败 → UNAVAILABLE。</li>
      * </ul>
      */
@@ -256,6 +306,17 @@ public class HttpMobileBillingClient implements MobileBillingClient {
                     LangText.of("该充值请求与已有订单不一致，请重新发起",
                             "This top-up request conflicts with an existing order; please start a new one"),
                     machineError, outTradeNo);
+        }
+
+        // 档位与金额不符（dev-board#427）：价格权威在官网，云后端只做形态校验。走到这里
+        // 说明小程序拿的是过期的档位表，用户能自救的动作是更新小程序，所以单给一句文案，
+        // 而不是与「官网拒绝了这笔充值」共用那句「请联系客服」。
+        if (status == 400 && "product_mismatch".equals(machineError)) {
+            log.warn("充值档位与金额不符: status={}, error={}", status, machineError);
+            throw new MobileBillingException(MobileBillingKind.REJECTED,
+                    LangText.of("充值档位与金额不符，请更新小程序后重试",
+                            "Top-up tier and amount do not match; please update the mini program and try again"),
+                    machineError);
         }
 
         if (status >= 400 && status < 500) {

@@ -21,8 +21,9 @@ import java.util.Map;
  * 响应风格也随那一组：成功回<b>裸对象</b>（同 {@code /api/mobile/media/usage}），
  * 业务错误由全局处理器压成 200 + {@code {code:1,message}}。
  *
- * <p><b>本期只有服务端通路，没有任何客户端支付界面</b>：iOS 内购 / 小程序虚拟支付 /
- * 安卓微信支付是后面几期的事（dev-board#426/#427/#428）。
+ * <p>第一期（dev-board#425）只有服务端通路；小程序虚拟支付（dev-board#427）在
+ * {@link RechargeRequest} 上加了 channel/productId/wxCode 三个可选字段，
+ * 缺省即第一期行为。iOS 内购 / 安卓微信支付仍是后面几期的事（dev-board#426/#428）。
  */
 @RestController
 @RequestMapping("/api/mobile/billing")
@@ -54,9 +55,21 @@ public class MobileBillingController {
          * App 被杀/弱网重试会在官网留下一串悬挂 pending 单。缺失即 code:1 报错。
          */
         private String idempotencyKey;
+        /**
+         * 支付通道（dev-board#427）。缺省 = 站点默认通道（第一期行为）；
+         * {@code "wxvp"} = 小程序虚拟支付，此时 productId / wxCode 必填。
+         */
+        private String channel;
+        /** {@code channel=wxvp} 时必填：微信道具 id（价格权威在官网，这里只做形态校验）。 */
+        private String productId;
+        /** {@code channel=wxvp} 时必填：{@code wx.login()} 的一次性 code，官网拿它换 openid。 */
+        private String wxCode;
     }
 
-    /** POST /recharge → {present, outTradeNo, amountCents, codeUrl?, qrCode?, redirectUrl?}。 */
+    /**
+     * POST /recharge → {present, outTradeNo, amountCents, codeUrl?, qrCode?, redirectUrl?,
+     * signData?, paySig?, signature?}。
+     */
     @PostMapping("/recharge")
     public Map<String, Object> recharge(
             @RequestBody(required = false) RechargeRequest request,
@@ -64,15 +77,22 @@ public class MobileBillingController {
         Long userId = requireUser(sessionId);
         MobileBillingClient.RechargeOrder order = service.createRecharge(userId,
                 request == null ? null : request.getAmountCents(),
-                request == null ? null : request.getIdempotencyKey());
+                request == null ? null : request.getIdempotencyKey(),
+                request == null ? null : request.getChannel(),
+                request == null ? null : request.getProductId(),
+                request == null ? null : request.getWxCode());
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("present", order.present());
         out.put("outTradeNo", order.outTradeNo());
         out.put("amountCents", order.amountCents());
-        // 三个可选字段按 present 二选一有值，为 null 时不出现在响应里（契约里也是非必填）
+        // 六个可选字段按 present 分组有值，为 null 时不出现在响应里（契约里也是非必填）：
+        // qrcode → codeUrl/qrCode，redirect → redirectUrl，virtual → signData/paySig/signature
         putIfPresent(out, "codeUrl", order.codeUrl());
         putIfPresent(out, "qrCode", order.qrCode());
         putIfPresent(out, "redirectUrl", order.redirectUrl());
+        putIfPresent(out, "signData", order.signData());
+        putIfPresent(out, "paySig", order.paySig());
+        putIfPresent(out, "signature", order.signature());
         return out;
     }
 

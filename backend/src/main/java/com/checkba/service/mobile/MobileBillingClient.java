@@ -33,14 +33,29 @@ public interface MobileBillingClient {
     record BalanceResult(long balanceCents, String currency, String plan) {}
 
     /**
-     * 充值单。{@code present} = {@code "qrcode"}（codeUrl/qrCode 有值）或
-     * {@code "redirect"}（redirectUrl 有值）；不适用的字段为 null。
+     * 充值单。{@code present} = {@code "qrcode"}（codeUrl/qrCode 有值）、
+     * {@code "redirect"}（redirectUrl 有值）或 {@code "virtual"}
+     * （小程序虚拟支付，signData/paySig/signature 三者都有值）；不适用的字段为 null。
+     *
+     * <p>三个 virtual 字段是 {@code wx.requestVirtualPayment} 的入参，由官网算出来后原样透传：
+     * 云后端<b>不持有</b>虚拟支付 AppKey，也不碰小程序 session_key，全程只当管道
+     * （dev-board#427，spec {@code 2026-09-09-miniprogram-virtual-payment-plan.md} §1）。
      */
     record RechargeOrder(String present, String outTradeNo, long amountCents,
-                         String codeUrl, String qrCode, String redirectUrl) {}
+                         String codeUrl, String qrCode, String redirectUrl,
+                         String signData, String paySig, String signature) {}
 
     /** 充值单状态：status ∈ {pending, paid, closed, expired}。 */
     record RechargeStatus(String status, boolean paid, long amountCents) {}
+
+    /**
+     * 注销传导的结果（dev-board#434）。
+     *
+     * @param deleted 官网侧账户已删除（含「官网查无此账户」的 404：那边本来就没有，等价于已删）
+     * @param blocker 官网拒绝删除的机器可读原因（{@code deleted=false} 时有值），只进日志
+     * @param message 官网给的用户可读原因（{@code deleted=false} 时有值），原样回显给用户
+     */
+    record DeleteAccountResult(boolean deleted, String blocker, String message) {}
 
     /**
      * 按<b>已验证</b>的手机号或邮箱解析官网 accountId（action=resolve）。
@@ -70,11 +85,36 @@ public interface MobileBillingClient {
      * <p>{@code idempotencyKey} 由<b>客户端</b>生成并落盘后传入（官网 orders 表有
      * {@code UNIQUE(userId, idempotencyKey)} 兜底），服务端不代生成——代生成等于没有幂等键，
      * 弱网重试会在官网库里留下一串各自绑定独立二维码的悬挂 pending 单。
+     *
+     * @param channel   支付通道；{@code null} 走站点默认通道（第一期行为），
+     *                  {@code "wxvp"} 是小程序虚拟支付（dev-board#427）
+     * @param productId {@code channel="wxvp"} 时必填：微信道具 id。
+     *                  <b>价格权威在官网</b>，云后端只做形态校验不判价——档位与金额不符时
+     *                  官网回 400 {@code product_mismatch}，见 {@link HttpMobileBillingClient}
+     * @param wxCode    {@code channel="wxvp"} 时必填：{@code wx.login()} 的一次性 code，
+     *                  官网拿它换 openid + session_key 算签名。<b>不落库、不进日志</b>
      */
-    RechargeOrder createRecharge(String accountId, long amountCents, String idempotencyKey);
+    RechargeOrder createRecharge(String accountId, long amountCents, String idempotencyKey,
+                                 String channel, String productId, String wxCode);
 
     /** 查充值单（action=query）。 */
     RechargeStatus queryRecharge(String accountId, String outTradeNo);
+
+    /**
+     * 删除官网侧的统一账户（action=delete-account，dev-board#434）。
+     *
+     * <p><b>为什么必须有</b>：手机端一旦能在官网建号（充值前先要有 accountId），就落入
+     * App Store 5.1.1(v)「App 内能建的账号必须能在 App 内删」与个人信息保护法的删除权。
+     * 在这个方法出现之前，{@code AccountDeletionService} 只删 Java 侧本地表，官网那行
+     * 含明文手机号的账户<b>App 内无路可删</b>——这也正是
+     * {@code mobile.billing.recharge-enabled} 默认关、要等本方法落地才允许打开的原因。
+     *
+     * <p>失败语义对调用方很关键：官网不可达/5xx/未配置一律抛
+     * {@link MobileBillingException}（UNAVAILABLE / DISABLED），
+     * 调用方<b>必须据此中止本地删除</b>——宁可让用户稍后再试，也不能留下官网侧的孤儿账户。
+     * 「官网查无此账户」不是失败，回 {@code deleted=true}（那边本来就没有）。
+     */
+    DeleteAccountResult deleteAccount(String accountId);
 
     /**
      * 计费失败分类，翻成用户可读文案的活交给 {@link MobileBillingService}——本类只负责把

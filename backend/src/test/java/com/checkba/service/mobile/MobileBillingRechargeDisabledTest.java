@@ -89,12 +89,13 @@ class MobileBillingRechargeDisabledTest {
         User u = phoneUser();
 
         MobileBillingFailureException e = assertThrows(MobileBillingFailureException.class,
-                () -> service.createRecharge(u.getId(), 5000L, "idem-off-0001"));
+                () -> service.createRecharge(u.getId(), 5000L, "idem-off-0001", null, null, null));
 
         assertEquals(MobileBillingKind.DISABLED, e.getKind());
         // 一个上游请求都没发出去——建号那一位当然更没被置过 true
         verify(billing, never()).resolveAccountId(any(), any(), anyBoolean());
-        verify(billing, never()).createRecharge(anyString(), anyLong(), anyString());
+        verify(billing, never()).createRecharge(anyString(), anyLong(), anyString(),
+                any(), any(), any());
         verifyNoInteractions(billing);
         assertTrue(accountBindingRepository.findByUserId(u.getId()).isEmpty());
     }
@@ -120,7 +121,8 @@ class MobileBillingRechargeDisabledTest {
         for (Object[] bad : new Object[][]{{null, null}, {0L, "short"}, {-1L, "has space!!"}}) {
             assertEquals(MobileBillingKind.DISABLED,
                     assertThrows(MobileBillingFailureException.class,
-                            () -> service.createRecharge(u.getId(), (Long) bad[0], (String) bad[1])).getKind());
+                            () -> service.createRecharge(u.getId(), (Long) bad[0], (String) bad[1],
+                                    null, null, null)).getKind());
         }
         assertEquals(MobileBillingKind.DISABLED,
                 assertThrows(MobileBillingFailureException.class,
