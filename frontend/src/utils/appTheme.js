@@ -29,6 +29,7 @@ export const THEME_TOKEN_NAMES = [
   'danger', 'danger-text', 'danger-soft',
   'warning', 'warning-text', 'warning-soft',
   'info', 'info-text', 'info-soft',
+  'file-word', 'file-ppt', 'file-excel', 'file-pdf', 'file-md', 'file-image',
   'shadow-sm', 'shadow-md', 'shadow-lg', 'overlay',
   'halo-1', 'halo-2', 'halo-page', 'glass', 'glass-border', 'canvas'
 ]

@@ -5,6 +5,7 @@
 import { getProjectFiles } from '@/services/api.js'
 import { activityTracker } from '@/utils/activityTracker.js'
 import { ICONS as GLYPHS, fileGlyph } from '@/config/icons.js'
+import { fileKindClass } from './fileKind.js'
 
 // 轻量文本编辑器（PlainTextEditor.vue）承接的扩展名（dev-board#37）。
 // dev-board#61 插件开发形态起收纳代码文件（js/json/html/css 等），供律师直改插件源码。
@@ -368,6 +369,11 @@ export const fileOpenTabsMethods = {
       // 个人中心 2026-08-20 并进了「设置」标签，不再有 user-profile 标签
       if (tabType === 'admin-settings') return GLYPHS.settings
       return fileGlyph(type)
+    },
+
+    /** 标签页的文件类型色 class（dev-board#504）：映射表在 fileKind.js，样式在 .tab-item.kind-* */
+    tabKindClass(file) {
+      return file ? fileKindClass(file.fileType, file.tabType) : ''
     },
     isFileTypeSupported(file) {
       if (!file || file.isFolder) return true
