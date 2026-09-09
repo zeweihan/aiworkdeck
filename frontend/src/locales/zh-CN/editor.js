@@ -10,6 +10,7 @@ export default {
   unsavedCloseTitle: '文档尚未保存完成',
   unsavedCloseBody: '保存未能完成。你可以继续编辑并重试保存，或放弃尚未保存的更改并关闭。已保存到磁盘的内容会保留。',
   discardAndClose: '放弃并关闭',
+  moveTabSaveFailed: '保存尚未完成，标签暂不移动到另一侧',
   keepEditing: '继续编辑',
 
   status: {

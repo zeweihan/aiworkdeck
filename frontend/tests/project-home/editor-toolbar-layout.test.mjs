@@ -9,8 +9,14 @@
 // 布局高度的浮层之后，同样 10 次开关 0 帧）。所以这里守的是「查找栏不进文档流」。
 //
 // #502（滚动条过粗、与右侧控件不齐）：38px 的一行里，原生横向滚动条会把主命令区
-// 撑到 41px，align-items:center 于是把左半边顶得比右侧常驻区高半格。守「滚动条被
-// 藏掉」+「横滚仍然可用」。
+// 撑到 41px，align-items:center 于是把左半边顶得比右侧常驻区高半格。
+// #543 是它的续集：当时的修法是把滚动条整条藏掉（show-scrollbar=false + 一串
+// display:none），于是「这里还能往右滚」在界面上没有任何痕迹，而唯一的替代
+// ——滚轮横滚——写成了模板上的 @wheel，收到的是 uni 重建过的普通对象（currentTarget
+// 不是 DOM、连 delta 都没有），同样是死的（见 wheel-delta.test.mjs / horizontal-wheel
+// .test.mjs），主命令区右半截彻底够不着。现在守的是「4px 悬浮细滑轨
+// （.awd-hairline-scroll）」+「横滚原生挂在真实元素上」+「那一行还是 38px、两侧
+// 仍然对齐（含 .etb-field 的 border-box：不写它整行会变 28px，把按钮顶低 1px）」。
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -71,30 +77,61 @@ test('查找/替换的功能没被这次布局改动动过', () => {
 
 // ---------- dev-board#502：滚动条藏掉，横滚改走滚轮 ----------
 
-test('主命令区关掉原生滚动条', () => {
-  const tag = /<scroll-view[^>]*class="etb-scroll"[^>]*>/.exec(TEMPLATE)
+test('主命令区用 4px 悬浮细滑轨，不再整条藏掉滚动条', () => {
+  const tag = /<scroll-view[^>]*class="[^"]*etb-scroll[^"]*"[^>]*>/.exec(TEMPLATE)
   assert.ok(tag, '找不到 .etb-scroll 那个 scroll-view')
-  assert.match(tag[0], /:show-scrollbar="false"/,
-    'show-scrollbar=false 才会让 uni-h5 给真正 overflow 的内层元素挂上隐藏滚动条的类')
-  // scoped 属性只落在 <uni-scroll-view> 根元素上，内层那个 div 不带 scope id，
-  // 兜底规则必须走 :deep 才够得着。
-  assert.match(STYLE, /\.etb-scroll\s*:deep\(\*::-webkit-scrollbar\)\s*\{[^}]*display:\s*none/,
-    '缺少 :deep 兜底：只写 .etb-scroll::-webkit-scrollbar 打不到真正滚动的那个元素')
+  assert.match(tag[0], /class="[^"]*\bawd-hairline-scroll\b/,
+    '主命令区要挂 .awd-hairline-scroll（全局细滑轨，样式在 App.vue）')
+  assert.ok(!/:show-scrollbar="false"/.test(tag[0]),
+    'show-scrollbar=false 会让 uni-h5 给真正滚动的内层元素挂上隐藏类，把细滑轨也一起灭掉')
+  assert.ok(!/\.etb-scroll[^{]*::-webkit-scrollbar[^{]*\{[^}]*display:\s*none/.test(STYLE),
+    '组件里还留着把滚动条 display:none 的兜底规则，细滑轨看不见（dev-board#543）')
 })
 
-test('滚动条藏了之后横滚仍然能用（滚轮映射成横向）', () => {
-  const tag = /<scroll-view[^>]*class="etb-scroll"[^>]*>/.exec(TEMPLATE)
-  assert.match(tag[0], /@wheel\.prevent="onToolbarWheel"/,
-    '藏了滚动条又不接滚轮，窄窗口下右半截命令就够不着了')
-  assert.match(SRC, /onToolbarWheel\s*\(evt\)\s*\{/, '缺少 onToolbarWheel 实现')
-  assert.match(SRC, /scroller\.scrollLeft\s*\+=\s*delta/, 'onToolbarWheel 没有真的横向滚动')
+test('细滑轨占的 4px 不许把 38px 那一行的两侧顶歪', () => {
+  // 滑轨是从内容盒里扣的：不定高的话，有滑轨时主命令区长到 26+4=30px、
+  // 被 align-items:center 一居中就比右侧常驻区高 2px；命令放得下、没有滑轨时
+  // 又反向偏。边框盒 26+4=30（= calc(100% - 8px)）+ 负外边距 4，让外边距盒恒为
+  // 26px，两种情况都对齐。
+  assert.ok(declares('etb-scroll', 'height', 'calc\\(100% - 8px\\)'),
+    '.etb-scroll 要定高 calc(100% - 8px)（= 26 + 4px 滑轨），才能不管有没有滑轨都跟右侧常驻区对齐')
+  assert.ok(declares('etb-scroll', 'margin-bottom', '-4px'),
+    '.etb-scroll 少了 margin-bottom:-4px，滑轨那 4px 会把左半边按钮顶高（同 dev-board#502 的错位）')
+  assert.ok(!rulesFor('etb-scroll').some((b) => /z-index\s*:/.test(b)),
+    '.etb-scroll 不要设 z-index：会造出层叠上下文，框住工具栏下拉用的 fixed 弹层')
+})
+
+test('行里带边框的定高控件都要 border-box：否则整行变 28px，26px 的按钮跟着低 1px', () => {
+  // 走查实测：左侧命令按钮顶边比右侧常驻区低 1px（leftTop 93 / rightTop 92）。
+  // 根因是 .etb-field 与 .etb-stepper 都写了 height:26px + 1px 边框而没有
+  // border-box（本仓没有全局 * { box-sizing }），边框盒 28px 成了 .etb-row 里最高
+  // 的一件，26px 的按钮在里面一居中就整体下移 1px。往行里加带边框的定高控件
+  // 都要走这一条。
+  for (const cls of ['etb-field', 'etb-stepper']) {
+    assert.ok(declares(cls, 'box-sizing', 'border-box'),
+      '.' + cls + ' 少了 box-sizing:border-box（dev-board#543 的 1px 错位）')
+    assert.ok(declares(cls, 'height', '26px'), '.' + cls + ' 的定高不再是 26px，两侧对齐要重算')
+  }
+})
+
+test('横滚仍然能用（滚轮映射成横向），且是原生挂在真实元素上', () => {
+  const tag = /<scroll-view[^>]*class="[^"]*etb-scroll[^"]*"[^>]*>/.exec(TEMPLATE)
+  assert.ok(!/@wheel/.test(tag[0]),
+    '模板上的 @wheel 是死的：uni 把 currentTarget 换成了普通对象，第一道守卫就 return')
+  assert.match(SRC, /bindToolbarWheel\s*\(\)\s*\{/, '缺少 bindToolbarWheel 实现')
+  assert.match(SRC, /querySelector\('\.etb-scroll'\)/,
+    'bindToolbarWheel 要在本组件的 DOM 子树里找 .etb-scroll，不是 document 全局找')
+  assert.match(SRC, /bindHorizontalWheel\(el\)/, '没有真的挂上原生 wheel 监听')
+  assert.match(SRC, /mounted\(\)[\s\S]{0,400}?bindToolbarWheel\(\)/, 'mounted 里没有挂')
+  assert.match(SRC, /beforeUnmount\(\)[\s\S]{0,300}?_toolbarWheelOff\(\)/, 'beforeUnmount 里没有摘')
 })
 
 test('主命令区与右侧常驻区在同一行里居中对齐', () => {
   assert.ok(declares('etb', 'align-items', 'center'), '.etb 丢了 align-items:center')
   assert.ok(declares('etb', 'height', '38px'), '.etb 的行高被改了；两侧对齐是按这一行的高度算的')
-  // 不给 .etb-scroll 定高：内容多高它就多高，交给 align-items:center 居中。
-  // 一旦原生滚动条回来，这个高度会变成 26+15px，左半边就被顶高半格。
-  assert.ok(!rulesFor('etb-scroll').some((b) => /(^|;)\s*height\s*:/.test(b)),
-    '.etb-scroll 不要定高，让它跟着内容走')
+  // .etb-scroll 的定高只许跟着 .etb 那一行走——写死像素或写满 100%，
+  // 都会在有/没有滑轨的两种情况里各偏（见上面那条）。
+  const h = rulesFor('etb-scroll').map((b) => /(?:^|;)\s*height\s*:\s*([^;]+)/.exec(b)).find(Boolean)
+  assert.ok(h && /calc\(100% - 8px\)/.test(h[1]),
+    '.etb-scroll 的高度要跟着 .etb 那一行走（calc(100% - 8px)），实际 ' + (h && h[1]))
 })

@@ -25,6 +25,14 @@ function mouseButtonOf(e) {
   return native && typeof native.button === 'number' ? native.button : -1
 }
 
+// 标签在 DOM 里的 id：uni <scroll-view> 的 scroll-into-view 用它定位要滚到的元素，
+// 而它对 id 的形状有硬要求（/^[_a-zA-Z][-_a-zA-Z0-9:]*$/，不合就 console.error 后
+// 什么都不做）。标签 id 五花八门（数字主键、`vcmp-<sha>-<ts>`、`diff-a-b-ts`、
+// 浏览器/设置这类虚拟标签），非法字符统一换成下划线。
+function tabDomId(pane, fileId) {
+  return 'tab-' + pane + '-' + String(fileId == null ? '' : fileId).replace(/[^A-Za-z0-9_-]/g, '_')
+}
+
 export const fileOpenTabsMethods = {
     handleFileTreeSelect(file) {
       if (!file || file.isFolder) return
@@ -181,6 +189,45 @@ export const fileOpenTabsMethods = {
       this.$nextTick(() => this.triggerWorkbenchResize())
     },
 
+    /** 模板里给每个 .tab-item 打 id 用（scroll-into-view 的锚点） */
+    tabDomId(pane, fileId) {
+      return tabDomId(pane, fileId)
+    },
+
+    // 活动标签滚入视野（dev-board#543）。挂在 activeFileId* 的 watcher 上而不是
+    // activateTab 里：openFile 是自己直接写 activeFileId* 的（不走 activateTab），
+    // moveTabTo、closeFile 的相邻接管、按模式恢复也都是，watcher 才是唯一入口。
+    ensureActiveTabVisible(pane) {
+      const prop = pane === 'left' ? 'tabsScrollIntoViewLeft' : 'tabsScrollIntoViewRight'
+      const activeId = pane === 'left' ? this.activeFileIdLeft : this.activeFileIdRight
+      // 先清空：同一个 id 再次激活时属性值不变，uni 那个 watch 不会重新触发。
+      this[prop] = ''
+      if (!activeId) return
+      const domId = tabDomId(pane, activeId)
+      this.$nextTick(() => {
+        // 本来就整条看得见就不动。scroll-into-view 是把元素对齐到容器最左，
+        // 点一个眼前的标签也会把整条标签栏抽一下。
+        if (this.isTabFullyVisible(domId)) return
+        this[prop] = domId
+      })
+    },
+
+    isTabFullyVisible(domId) {
+      if (typeof document === 'undefined') return false
+      const el = document.getElementById(domId)
+      if (!el || typeof el.getBoundingClientRect !== 'function') return false
+      // 只在这条标签栏内部往上找，别一路找到页面级的横向滚动容器上去。
+      let scroller = el.parentElement
+      while (scroller && !(scroller.scrollWidth > scroller.clientWidth + 1)) {
+        if (scroller.tagName === 'UNI-SCROLL-VIEW') { scroller = null; break }
+        scroller = scroller.parentElement
+      }
+      if (!scroller) return true // 没有溢出，谈不上要滚
+      const box = scroller.getBoundingClientRect()
+      const rect = el.getBoundingClientRect()
+      return rect.left >= box.left - 1 && rect.right <= box.right + 1
+    },
+
     activateTab(file, pane) {
       // 点击 Tab 时，切换对应窗格的激活文件，并聚焦该窗格
       this.focusPane(pane)
@@ -331,7 +378,8 @@ export const fileOpenTabsMethods = {
       }
       // 浏览器标签：BrowserPane 卸载时只把 BrowserView 摘下（保活，为的是切标签
       // 不丢网页内容），真正销毁只发生在标签关闭——也就是这里，以及页面卸载。
-      // 跨窗格拖拽是「在另一侧也打开同一个标签」（同 id 双开，见 tabDragSplit），
+      // 按住 Alt/Option 跨窗格拖拽是「在另一侧也打开同一个标签」（同 id 双开，
+      // 见 tabDragSplit；普通拖拽是移动，不会造出第二份），
       // 所以另一侧还开着的时候不能销毁——那是把人家正看着的网页拔掉。
       if (this.isBrowserTab(file) && !this.isOpenInOtherPane(fileId, pane)) {
         this.destroyBrowserView(file.id)

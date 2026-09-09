@@ -10,6 +10,7 @@ export default {
   unsavedCloseTitle: 'Document has unsaved changes',
   unsavedCloseBody: 'Saving has not completed. Keep editing and retry saving, or discard unsaved changes and close. Content already saved to disk will be kept.',
   discardAndClose: 'Discard and Close',
+  moveTabSaveFailed: 'Saving has not completed - the tab was not moved to the other pane',
   keepEditing: 'Keep Editing',
 
   status: {

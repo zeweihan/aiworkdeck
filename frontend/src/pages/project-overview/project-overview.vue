@@ -852,7 +852,8 @@
             <view class="tabs-bar">
               <!-- 左侧窗格的 Tabs -->
               <view class="tabs-pane tabs-pane-left" :class="{ 'half-width': splitMode }">
-                <scroll-view class="tabs-scroll" scroll-x :show-scrollbar="false" @wheel.prevent="onTabsWheel">
+                <scroll-view class="tabs-scroll awd-hairline-scroll" scroll-x scroll-with-animation
+                  :scroll-into-view="tabsScrollIntoViewLeft">
                   <view
                     class="tabs-list"
                     @dragover.prevent="onTabDropZoneDragOver('left')"
@@ -862,6 +863,7 @@
                       v-for="file in leftFiles"
                       :key="file.id"
                       v-show="isTabVisible(file)"
+                      :id="tabDomId('left', file.id)"
                       class="tab-item"
                       :class="[tabKindClass(file), {
                         active: activeFileIdLeft === file.id,
@@ -892,7 +894,8 @@
 
               <!-- 右侧窗格的 Tabs (仅在分屏时显示) -->
               <view v-if="splitMode" class="tabs-pane tabs-pane-right">
-                <scroll-view class="tabs-scroll" scroll-x :show-scrollbar="false" @wheel.prevent="onTabsWheel">
+                <scroll-view class="tabs-scroll awd-hairline-scroll" scroll-x scroll-with-animation
+                  :scroll-into-view="tabsScrollIntoViewRight">
                   <view
                     class="tabs-list"
                     @dragover.prevent="onTabDropZoneDragOver('right')"
@@ -902,6 +905,7 @@
                       v-for="file in rightFiles"
                       :key="file.id"
                       v-show="isTabVisible(file)"
+                      :id="tabDomId('right', file.id)"
                       class="tab-item"
                       :class="[tabKindClass(file), {
                         active: activeFileIdRight === file.id,
@@ -2416,8 +2420,12 @@ export default {
       pageEnterTime: 0,
 
       // Tabs 拖拽状态
-      draggingTab: null, // { fileId, fromPane }
+      draggingTab: null, // { fileId, fromPane, copy }
       tabDragOver: null, // { fileId, pane }
+      // 活动标签滚入视野（dev-board#543）：uni <scroll-view> 的 scroll-into-view 认
+      // 元素 id，赋值即滚。两个窗格各一份，由 activeFileId* 的 watcher 统一驱动。
+      tabsScrollIntoViewLeft: '',
+      tabsScrollIntoViewRight: '',
 
       // Epic #43: embedded LibreOffice editor. When active, backend AI commands
       // route to it (handleEditorCommand).
@@ -2954,6 +2962,7 @@ export default {
   },
   beforeUnmount() {
     this.disposeThemeSwitch()
+    this.unbindTabsWheel()
     // 多实例守卫：只清掉指向自己的活跃指针；返回上一个本页实例时由其 onShow 重新接管
     if (typeof window !== 'undefined' && window.__checkbaActiveOverviewVm === this) {
       window.__checkbaActiveOverviewVm = null
@@ -3287,6 +3296,9 @@ export default {
     // mounted 绑定了全局（ipcRenderer/window 级）监听；全局事件只让最近展示的实例
     // 处理，否则一次事件触发 N 份副作用（与 PR#148 剪贴板重复入库同源）
     if (typeof window !== 'undefined') window.__checkbaActiveOverviewVm = this
+    // 标签栏的滚轮横滚：只能原生挂（模板 @wheel 收到的是 uni 重建过的普通对象，
+    // 见 utils/horizontalWheel.js），所以 DOM 就绪后挂一次，beforeUnmount 摘掉。
+    this.$nextTick(() => this.rebindTabsWheel())
     // 余额刷新事件（充值弹窗 / SKU 购买成功后 emit）。页面栈多实例地雷：mounted 挂、
     // beforeUnmount 必须按引用 $off，否则每回来一次多一份订阅。
     this._onWalletRefresh = () => this.loadWalletBalance()
@@ -3580,16 +3592,18 @@ export default {
   watch: {
     // IDE 化窗口标题：「文件名 — 项目名 — AI WorkDeck」（Electron 窗口标题跟随 document.title）
     'project.name'() { this.updateWindowTitle() },
-    activeFileIdLeft() { this.updateWindowTitle(); this.pushMenuState() },
+    activeFileIdLeft() { this.updateWindowTitle(); this.pushMenuState(); this.ensureActiveTabVisible('left') },
     // 菜单栏的勾选/置灰跟着这些走。编辑器与 AI 面板内部的状态走 @menu-state
     // 事件（见对应组件），这里只管工作台自己的。桥那边有浅比较+去抖，
     // 这些 watcher 只管「叫一声」，不必自己节流。
     'project.id'() { this.pushMenuState() },
-    activeFileIdRight() { this.pushMenuState() },
+    activeFileIdRight() { this.pushMenuState(); this.ensureActiveTabVisible('right') },
     sidebarCollapsed() { this.pushMenuState() },
     showToolsPanel() { this.pushMenuState() },
     showAiPanel() { this.pushMenuState() },
-    splitMode() { this.pushMenuState() },
+    // 分屏开关会把右侧那条标签栏整个建/拆，滚轮横滚是原生挂上去的，得跟着重挂
+    // （幂等，见 tabDragSplit.rebindTabsWheel）。
+    splitMode() { this.pushMenuState(); this.$nextTick(() => this.rebindTabsWheel()) },
     activeToolKey() { this.pushMenuState() },
     leftPaneKey() { this.pushMenuState() },
     isRecording() { this.pushMenuState() },
