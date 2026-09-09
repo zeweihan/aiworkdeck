@@ -14,6 +14,28 @@ import { getAppLanguage, APP_LANGUAGE_EVENT } from '@/utils/appLanguage.js'
 import { initAppTheme } from '@/utils/appTheme.js'
 import { saveAppLanguageRemote } from '@/services/api.js'
 
+// ==================== uni 弹层的层级修正（全应用一次） ====================
+// uni 的 showModal / showToast 生成的 <uni-modal> / <uni-toast> 由框架直接挂到
+// document.body，不在任何组件的渲染树里，SFC 的 scoped <style> 加不上 data-v 属性
+// 也够不到它们（试过，编译结果两个 <style> 块都被强行套了同一个 data-v 选择器，
+// 未 scoped 的那块形同虚设）。而框架给这两者写死的 z-index 都是 999
+// （node_modules/@dcloudio/uni-h5/style/api/modal.css、同目录 toast.css），本仓所有
+// 自绘弹窗的遮罩是 9999（.awd-mask / .workdeck-dialog-mask，且带 backdrop-filter）
+// ——于是弹窗开着时弹出的确认框与提示全部画在遮罩后面：
+//   · uni-modal：VersionNodeDetail 的「退回到这一版」二次确认按钮点不到，
+//     document.elementFromPoint 在按钮坐标上返回的是 .awd-footer（app-e2e J9 实测）；
+//   · uni-toast：InviteMemberDialog 的「没有这个用户」「已加进来」等提示一律看不见，
+//     表现成「输入账号没反应、点加进来也没反应」（dev-board 协作加人流程那次报障）。
+// 这段原先长在 VersionNodeDetail.vue 里（只覆盖 uni-modal，且只在加载了 version
+// 组件链的页面生效）。InviteMemberDialog 在项目列表页也会用到，那一页不加载 version
+// 组件链，所以必须搬到这个所有页面都早加载的公共入口。
+if (typeof document !== 'undefined' && !document.getElementById('awd-uni-modal-zfix')) {
+  const zfix = document.createElement('style')
+  zfix.id = 'awd-uni-modal-zfix'
+  zfix.textContent = 'uni-modal, uni-toast { z-index: 10000 !important; }'
+  document.head.appendChild(zfix)
+}
+
 export default {
   onLaunch: function () {
     console.log('App Launch')

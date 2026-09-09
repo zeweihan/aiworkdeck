@@ -3,6 +3,8 @@
 
 package com.checkba.model.entity;
 
+import com.checkba.model.dto.MeetingTranscriptionProgress;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import jakarta.persistence.*;
 import lombok.Data;
 import org.hibernate.annotations.CreationTimestamp;
@@ -80,6 +82,16 @@ public class MeetingRecording {
     private LocalDateTime lastPolledAt;
 
     /**
+     * 进入 TRANSCRIBING 的时刻（dev-board#532）。卡死判定与界面「已用时」的<b>唯一锚点</b>。
+     *
+     * <p>刻意不复用 {@code updatedAt}：poll-on-read 每 10 秒就把 lastPolledAt 落一次库，
+     * updatedAt 因此永远是「刚刚」，拿它算已用时会让超时判定形同虚设。
+     * 也不复用 {@code createdAt}：那是建档时刻，早于真正开始转写（中间还隔着整场录音），
+     * 拿它算会高估已用时，可能把刚提交不久的健康任务判死。
+     */
+    private LocalDateTime transcribingStartedAt;
+
+    /**
      * 转写结果（压缩后的段落 JSON 数组）：
      * [{"speaker":"1","start":毫秒,"end":毫秒,"text":"..."}]
      * speaker 是听悟的说话人编号字符串，展示名经 speakerNames 映射。
@@ -116,4 +128,14 @@ public class MeetingRecording {
 
     @UpdateTimestamp
     private LocalDateTime updatedAt;
+
+    /**
+     * 「转写中」的进度提示（dev-board#532），<b>不入库</b>：由
+     * {@code MeetingTranscriptionService.attachProgress} 在出接口前算好挂上，
+     * 随本实体一起序列化给前端。非 TRANSCRIBING 时为 null 且不出现在 JSON 里，
+     * 既有字段一个都没动。
+     */
+    @Transient
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private MeetingTranscriptionProgress progress;
 }

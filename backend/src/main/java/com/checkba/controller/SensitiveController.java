@@ -24,10 +24,16 @@ public class SensitiveController {
     private final com.checkba.service.ProjectFileService projectFileService;
     private final com.checkba.service.ProjectMemberService projectMemberService;
 
+    /**
+     * 面板上可勾选的自动检测类型。
+     *
+     * <p>只列 {@code autoDetect} 为真的类型——CHINESE_NAME 已下线自动检测（dev-board#531），
+     * 不再作为勾选项出现；姓名走面板上的「要涂黑的姓名/词语」自定义词。
+     */
     @GetMapping("/options")
     public ResponseEntity<List<Map<String, String>>> getSensitiveOptions() {
         java.util.List<Map<String, String>> options = new java.util.ArrayList<>();
-        for (com.checkba.model.SensitiveType type : com.checkba.model.SensitiveType.values()) {
+        for (com.checkba.model.SensitiveType type : com.checkba.model.SensitiveType.autoDetectTypes()) {
             options.add(Map.of(
                 "value", type.getCode(),
                 "label", type.getLabel() + " (" + type.getExample() + ")", // Combine for frontend display simplicity or keep separate
@@ -58,11 +64,21 @@ public class SensitiveController {
             
             @SuppressWarnings("unchecked")
             List<String> strategies = (List<String>) payload.get("strategies");
-            
-            log.info("Requesting desensitization for fileId: {}, strategies: {}", fileId, strategies);
+            // 「要涂黑的姓名/词语」：用户手填的自定义词。自动中文姓名检测已下线（dev-board#531），
+            // 姓名只能从这里进来，所以「只填了词、一个类型都没勾」是合法请求。
+            @SuppressWarnings("unchecked")
+            List<String> customWords = (List<String>) payload.get("customWords");
 
-            if (strategies == null || strategies.isEmpty()) {
-                return ResponseEntity.badRequest().body(Map.of("error", "strategies are required"));
+            // 自定义词是文档内容，只记条数不记原文
+            log.info("Requesting desensitization for fileId: {}, strategies: {}, customWords: {}",
+                    fileId, strategies, customWords == null ? 0 : customWords.size());
+
+            boolean noStrategies = strategies == null || strategies.isEmpty();
+            boolean noCustomWords = customWords == null || customWords.isEmpty();
+            if (noStrategies && noCustomWords) {
+                return ResponseEntity.badRequest().body(Map.of("error",
+                        LangText.of("请至少勾选一种信息类型，或填写要涂黑的姓名/词语",
+                                "Select at least one information type, or enter names/words to redact")));
             }
 
             // 1. Get Original File Info
@@ -80,7 +96,10 @@ public class SensitiveController {
 
             // 3. Process desensitization
             // The service generates a new file on disk.
-            String newAbsoluteFilePath = sensitiveService.processFile(absoluteSrcPath, strategies);
+            String newAbsoluteFilePath = sensitiveService.processFile(
+                    absoluteSrcPath,
+                    strategies == null ? List.of() : strategies,
+                    customWords == null ? List.of() : customWords);
             java.io.File newFile = new java.io.File(newAbsoluteFilePath);
             
             // 4. Determine logical info for new file

@@ -117,11 +117,12 @@ components:
       type: object
       required: [sessionId, isNewUser, user]
       description: |
-        sms-login/verify 成功时的 data。isNewUser 由服务端恒返回（account.created）。
+        sms-login/verify 与 wx-phone-login 成功时的 data（两条路逐字同形）。
+        isNewUser 由服务端恒返回（account.created）。
       properties:
         sessionId: { type: string }
         isNewUser: { type: boolean }
-        mustBindPhone: { type: boolean, description: 由 account-login / mail-login 等门控登录流设置；sms-login/verify 不返回 }
+        mustBindPhone: { type: boolean, description: 由 account-login / mail-login 等门控登录流设置；sms-login/verify 与 wx-phone-login 不返回 }
         user: { $ref: '#/components/schemas/AccountUser' }
     LoginEnvelope:
       type: object
@@ -231,6 +232,32 @@ paths:
       responses:
         "200":
           description: code 0 带 data；否则 code 非 0 且 data 缺失
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginEnvelope' }
+  /api/auth/wx-phone-login:
+    post:
+      summary: 微信手机号一键登录（匿名）
+      description: |
+        小程序 button open-type="getPhoneNumber" 回调里的一次性 code 换手机号并签发会话
+        （dev-board#534）。换号在官网侧完成（内部记账口 action=wx-phone），云后端不持有
+        小程序 AppSecret。成功响应与 sms-login/verify 逐字同形（LoginData，含 isNewUser）。
+
+        失败一律 200 + code 1 + message，**不带 kind**：客户端 toast 该 message 并展开
+        短信登录表单即可，不需要按机器可读位分支（与 /api/mobile/billing/* 不同）。
+        三种可预期的失败——本服务器/官网未开通微信登录、code 已过期、非中国大陆手机号。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string, description: getPhoneNumber 回调的 e.detail.code，一次性 }
+      responses:
+        "200":
+          description: code 0 带 data；否则 code 1 且 data 缺失
           content:
             application/json:
               schema: { $ref: '#/components/schemas/LoginEnvelope' }

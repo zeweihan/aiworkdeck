@@ -142,6 +142,64 @@ public class HttpMobileBillingClient implements MobileBillingClient {
     }
 
     /**
+     * 微信 code 换手机号（action=wx-phone，dev-board#534）。走不重试的 {@link #call}——
+     * code 一次性，带同一 body 重试只会让官网再换一次 code 而必败。
+     *
+     * <p>失败要翻成<b>登录场景</b>的话：这条路上用户看到的是登录页，共用计费那套
+     * 「充值请求被拒绝，请联系客服」只会让人不知所措。三类可预期的失败各给一句，
+     * 判据是官网回的 {@code error} 串（{@link #parse} 已把它带进异常）。
+     *
+     * <p>官网回的手机号形状不对（空、非大陆号）按上游故障处理：宁可让用户改用短信登录，
+     * 也不能拿一个来路不明的串去 {@code findOrCreateByPhone} 建号。
+     */
+    @Override
+    public String wxPhone(String code) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("action", "wx-phone");
+        body.put("code", code);
+        JsonNode json;
+        try {
+            json = call(body);
+        } catch (MobileBillingException e) {
+            throw remapWxPhoneFailure(e);
+        }
+        String phone = textOrNull(json, "phone");
+        if (phone == null || !phone.matches("^1\\d{10}$")) {
+            log.warn("微信一键登录：官网回的手机号形状不对，按上游故障处理");
+            throw unavailable();
+        }
+        return phone;
+    }
+
+    /** wx-phone 的失败翻译，见 {@link #wxPhone}。认不出的失败原样抛回。 */
+    private MobileBillingException remapWxPhoneFailure(MobileBillingException e) {
+        String err = e.getMachineError();
+        // 本机没配 base-url/secret（DISABLED），与官网没配小程序 AppSecret（503 wx_not_configured）
+        // 对用户是同一件事：这台服务器上没有这条登录路，去用短信。
+        if (e.getKind() == MobileBillingKind.DISABLED || "wx_not_configured".equals(err)) {
+            return new MobileBillingException(MobileBillingKind.DISABLED,
+                    LangText.of("本服务器未开通微信一键登录，请用短信验证码登录",
+                            "WeChat one-tap sign-in is not enabled on this server; please sign in with an SMS code"),
+                    err);
+        }
+        if (e.getKind() == MobileBillingKind.REJECTED) {
+            if ("unsupported_region".equals(err)) {
+                return new MobileBillingException(MobileBillingKind.REJECTED,
+                        LangText.of("目前仅支持中国大陆手机号",
+                                "Only Chinese mainland phone numbers are supported"),
+                        err);
+            }
+            // 401 invalid_wx_code，以及官网其余 4xx：对用户都是「这张 code 没换成」，
+            // 下一步都是重新授权或改用短信，不该分叉出第三种说法。
+            return new MobileBillingException(MobileBillingKind.REJECTED,
+                    LangText.of("微信授权已过期，请重试",
+                            "The WeChat authorization has expired, please try again"),
+                    err);
+        }
+        return e;
+    }
+
+    /**
      * 删账号（action=delete-account，dev-board#434）。只读语义的反面：<b>失败必须响亮</b>，
      * 所以走不重试的 {@link #call}——重试一次删除请求换不来什么，反而会把「官网到底删没删」
      * 搅得更不清楚；调用方拿到异常就中止本地删除，用户稍后再试即可。
@@ -327,7 +385,9 @@ public class HttpMobileBillingClient implements MobileBillingClient {
                     machineError);
         }
         log.warn("统一账户记账口调用失败: status={}, body={}", status, resp.body());
-        throw unavailable();
+        // machineError 带上：5xx 也可能是官网明确的业务状态（如 wx-phone 的 503
+        // wx_not_configured），调用方要据它翻文案；对其余 5xx 它本来就是 null。
+        throw unavailable(machineError);
     }
 
     /** 解析不出 JSON（空体、HTML 错误页）就回 null——判据本身要能区分"没有 body"与"body 里没有 error"。 */
@@ -344,9 +404,14 @@ public class HttpMobileBillingClient implements MobileBillingClient {
     }
 
     private MobileBillingException unavailable() {
+        return unavailable(null);
+    }
+
+    private MobileBillingException unavailable(String machineError) {
         return new MobileBillingException(MobileBillingKind.UNAVAILABLE,
                 LangText.of("账户服务暂不可用，请稍后再试",
-                        "Account service is temporarily unavailable, please try again later"));
+                        "Account service is temporarily unavailable, please try again later"),
+                machineError);
     }
 
     /** send() 内部标记网络层失败（连不上/超时/中断），与"连上了但业务报错"区分开，只有前者会重试。 */

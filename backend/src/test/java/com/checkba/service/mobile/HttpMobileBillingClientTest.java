@@ -325,6 +325,68 @@ class HttpMobileBillingClientTest {
                         () -> new HttpMobileBillingClient("", "", om).deleteAccount("acct-x")).getKind());
     }
 
+    // ==================== 微信手机号一键登录（dev-board#534） ====================
+
+    @Test
+    @DisplayName("wx-phone 成功：action/code 上行，回大陆手机号")
+    void wxPhoneSuccess() {
+        HttpMobileBillingClient c = stubbed(200, "{\"phone\":\"13800000001\"}");
+
+        assertEquals("13800000001", c.wxPhone("0a1b2c3d4e"));
+
+        String sent = lastRequest.get();
+        assertTrue(sent.contains("\"action\":\"wx-phone\""), sent);
+        assertTrue(sent.contains("\"code\":\"0a1b2c3d4e\""), sent);
+    }
+
+    @Test
+    @DisplayName("wx-phone 的三种失败各自翻成登录场景的话，绝不共用计费那句「联系客服」")
+    void wxPhoneFailuresSpeakLoginLanguage() {
+        // 本机没配 base-url/secret：短路，且这一条的文案是登录场景的，不是「未开通统一账户充值」
+        MobileBillingException localOff = assertThrows(MobileBillingException.class,
+                () -> new HttpMobileBillingClient("", "", om).wxPhone("0a1b"));
+        assertEquals(MobileBillingKind.DISABLED, localOff.getKind());
+        assertTrue(localOff.getMessage().contains("未开通微信一键登录"), localOff.getMessage());
+        assertEquals(0, hits.get(), "未配置不许发请求");
+
+        // 官网未配小程序 AppSecret：503 wx_not_configured 与本机没配是同一个结论
+        MobileBillingException notConfigured = assertThrows(MobileBillingException.class,
+                () -> stubbed(503, "{\"error\":\"wx_not_configured\"}").wxPhone("0a1b"));
+        assertEquals(MobileBillingKind.DISABLED, notConfigured.getKind());
+        assertTrue(notConfigured.getMessage().contains("未开通微信一键登录"), notConfigured.getMessage());
+
+        // code 无效 → 401
+        MobileBillingException expired = assertThrows(MobileBillingException.class,
+                () -> stubbed(401, "{\"error\":\"invalid_wx_code\"}").wxPhone("0a1b"));
+        assertEquals(MobileBillingKind.REJECTED, expired.getKind());
+        assertEquals("invalid_wx_code", expired.getMachineError());
+        assertTrue(expired.getMessage().contains("微信授权已过期"), expired.getMessage());
+
+        // 非大陆号 → 400
+        MobileBillingException region = assertThrows(MobileBillingException.class,
+                () -> stubbed(400, "{\"error\":\"unsupported_region\"}").wxPhone("0a1b"));
+        assertEquals(MobileBillingKind.REJECTED, region.getKind());
+        assertTrue(region.getMessage().contains("仅支持中国大陆手机号"), region.getMessage());
+    }
+
+    @Test
+    @DisplayName("wx-phone：code 一次性，网络失败只发一次；官网回的号形状不对按上游故障处理")
+    void wxPhoneNeverRetriesAndValidatesShape() {
+        HttpMobileBillingClient c = stubbed(200, "{}");
+        stubDrop.set(true);
+        assertEquals(MobileBillingKind.UNAVAILABLE,
+                assertThrows(MobileBillingException.class, () -> c.wxPhone("0a1b")).getKind());
+        assertEquals(1, hits.get(), "code 一次性，不许重试");
+
+        stubDrop.set(false);
+        for (String bad : new String[]{"{}", "{\"phone\":\"\"}", "{\"phone\":\"+8613800000001\"}"}) {
+            assertEquals(MobileBillingKind.UNAVAILABLE,
+                    assertThrows(MobileBillingException.class,
+                            () -> stubbed(200, bad).wxPhone("0a1b")).getKind(),
+                    bad);
+        }
+    }
+
     @Test
     @DisplayName("plan 是 paid/free 的计费档位，不是套餐名；上游不给才是 null")
     void planIsBillingTierNotPlanName() {

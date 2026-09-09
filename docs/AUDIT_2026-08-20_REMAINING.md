@@ -4,8 +4,9 @@
 > 4 条留给维护者拍板（见下）。这份文件从「待处理清单」转为归档，
 > 原文全部保留不删（删了就没法回查当时的判断）。**
 >
-> **2026-09-09 更新：留给维护者拍板的 4 条里，第 2、4 条（AgentOrchestrator 并发轮次竞态、
-> SkillRouter 无轮次隔离）已拍板并修复，见 dev-board#533；第 1、3 条仍待产品/法务口径。**
+> **2026-09-09 更新：留给维护者拍板的 4 条已全部拍板并落地——第 1 条（中文姓名脱敏）见 dev-board#531，
+> 第 2、4 条（AgentOrchestrator 并发轮次竞态、SkillRouter 无轮次隔离）见 dev-board#533，第 3 条（会议转写卡死）见 dev-board#532。
+> 下面「还需要产品口径确认的两处」维护者同日确认维持现状。**
 
 ## 收官账目
 
@@ -36,14 +37,17 @@
 
 另有 1 条（EasyVoicePane 的 Blob URL 卸载不 revoke）在第二轮复核时发现已被 #510 顺手修掉，未重复改动。
 
-### 留给维护者拍板的 4 条
+### 留给维护者拍板的 4 条（2026-09-09 全部拍板并落地：#531 / #533 / #532 / #533）
 
 前三条是 #498 交接时就点名「需要先拍板、别自作主张动」的，本轮遵照未动：
 
-1. **`SensitiveType.CHINESE_NAME` 正则 `[一-龥]{2,4}`** —— 会匹配中文文书里几乎每个词。
-   收紧脱敏规则是产品/法务口径。**参考**：#521 已经用「客观校验位」的思路收紧了
-   ID_CARD / BANK_CARD（mod-11-2 与 Luhn），但中文姓名没有可用的校验位，
-   只能靠词典或上下文，那是另一类判断。
+1. ~~**`SensitiveType.CHINESE_NAME` 正则 `[一-龥]{2,4}`**~~ —— **已拍板并落地（2026-09-09，dev-board#531）：
+   下线自动姓名脱敏，姓名走自定义词。** 中文姓名没有可用的客观校验位（#521 那套 mod-11-2 / Luhn
+   在这里用不上），纯正则分不出「张三」和「本条」，收紧不了。口径是**法律文书里漏涂比误涂安全**——
+   文书必须逐字可引，把正文改坏的代价比漏一个名字更大，漏涂还有人工复核兜底。
+   落地：枚举值保留但 `autoDetect=false`（`/options` 不再列它，检测端一律跳过），
+   脱敏面板首屏常驻「要涂黑的姓名/词语」输入区（`customWords`，逐字面量涂黑，docx/文本/PDF 三条路都覆盖）。
+   详见 `.claude/agents/plugin-system.md` 的脱敏一节。
 2. **`AgentOrchestrator` 并发轮次竞态** —— **已拍板并修复（2026-09-09），见 dev-board#533。**
    原判断：同一 conversationId 的两个并发轮次会互相覆盖持久化的助手消息；
    「停止后立刻再发」还会擦掉上一轮尚未生效的取消标志。
@@ -53,9 +57,13 @@
    对外契约零变化（SSE 事件与两个端点的形态一字未动，前端与 Office/WPS 插件不用改）。
    契约与残留局限写在 `.claude/agents/ai-chat.md` 的「轮次隔离：runId / RunGuard」一节，
    回归用例 `AgentOrchestratorConcurrentTurnsTest`。
-3. **会议永远停在「转写中」** —— 干净修法要新增 `transcribingStartedAt` 列并定一个
-   「多久算卡死」的阈值，两件都是产品判断。
-   （相关的两条已经修掉：转码无超时见 #516，转写结果解析失败被当成空会议见 #516。）
+3. ~~**会议永远停在「转写中」**~~ —— **已拍板并修复（2026-09-09），见 dev-board#532。**
+   维护者定的阈值是 **`max(30 分钟, 音频时长 × 3)`**：新增 `transcribingStartedAt` 列作锚点，
+   poll-on-read 时在按会议维度的锁内判定，超时置 `FAILED` 并写下可读原因，
+   界面既有的「重试转写」按钮随 FAILED 出现。同批还给「转写中」加了进度提示
+   （阶段 / 已用时 / 按音频时长估算的预计时长，估算明确标注）。
+   契约与理由见 `.claude/agents/utility-tools.md`「转写卡死判定与进度提示」。
+   （相关的两条早前已修：转码无超时见 #516，转写结果解析失败被当成空会议见 #516。）
 4. **SkillRouter 的「无轮次隔离」** —— **已拍板并修复（2026-09-09），见 dev-board#533。**
    原判断成立：根因是第 2 条，SkillRouter 内部没有「这是哪一轮」的标识可用。
    第 2 条给出 runId 之后一并处理：登记簿改按 runId 索引（`activeByRun`），
@@ -65,6 +73,8 @@
    保住「prompt 注入与工具白名单同源」这条契约在并发下也成立。
 
 ### 还需要产品口径确认的两处（本轮按判断先做了，改回都很容易）
+
+> **2026-09-09 维护者确认：两处均维持现状**（pdf_redact 部分命中算成功并如实报缺失项；OCR 屏幕共享离开页面才释放）。
 
 1. **`pdf_redact` 部分命中现在算成功**并如实报告缺失项（原来是抛异常，但磁盘已经被改过了，
    调用方的 finishModification 被跳过，DB 与预览停在旧版本）。理由：redact 不可逆且以秒计生效，
@@ -85,6 +95,10 @@
 ## 后端服务与控制器（54）
 
 ### [CRITICAL] CHINESE_NAME regex matches any 2-4 char Chinese substring, not just names — mass over-redaction corrupts the whole document
+
+> **已修（2026-09-09，dev-board#531）**：不是收紧正则，而是下线这个类型的自动检测——
+> 枚举值保留但 `autoDetect=false`，姓名改由用户在脱敏面板的「要涂黑的姓名/词语」里手填。
+> 见上面「留给维护者拍板」第 1 条。
 
 - 位置：`backend/src/main/java/com/checkba/model/SensitiveType.java:47`
 - 触发：POST /api/sensitive/desensitize with strategies=["CHINESE_NAME"] on any Chinese-language document (which is the overwhelming majority of this product's legal documents).
