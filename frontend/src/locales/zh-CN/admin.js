@@ -186,7 +186,7 @@ export default {
   switchFailed: '切换失败',
 
   // 组件管理
-  componentsSubtitle: '本地 AI 组件按需下载，数据不出本机；下载为一次性，之后离线可用',
+  componentsSubtitle: '本地 AI 组件按需下载：一次下好运行时与模型，之后离线可用，数据不出本机',
   loadingDots: '加载中...',
   compServiceRunning: '服务运行中',
   compReady: '已就绪',

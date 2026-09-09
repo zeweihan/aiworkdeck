@@ -1452,6 +1452,31 @@ ipcMain.handle('checkba:service-ensure', async (_evt, payload) => {
   }
 })
 
+// 本机偏好（~/.aiworkdeck/prefs.json）。目前只有「可选组件面板提示过没有」一个键，
+// 键名与取值由渲染层决定，主进程只负责落盘。
+let prefs = null
+function getPrefs() {
+  if (!prefs) {
+    prefs = require('./services/prefs').createPrefs({ dataDir: path.join(app.getPath('home'), '.aiworkdeck') })
+  }
+  return prefs
+}
+ipcMain.handle('checkba:prefs-get', async (_evt, payload) => {
+  try {
+    return { ok: true, value: getPrefs().get(payload && payload.key, null) }
+  } catch (e) {
+    return { ok: false, message: String(e && e.message ? e.message : e) }
+  }
+})
+ipcMain.handle('checkba:prefs-set', async (_evt, payload) => {
+  try {
+    getPrefs().set(payload && payload.key, payload && payload.value)
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, message: String(e && e.message ? e.message : e) }
+  }
+})
+
 // 应用内更新 IPC 面（增量更新 P1）：状态查询 / 手动检查 / 重启生效。
 // 版本口径：appVersion = 壳（安装包）版本，effectiveVersion = 补丁生效版本。
 // 帮助菜单「查看日志」：在访达/资源管理器里高亮日志目录。

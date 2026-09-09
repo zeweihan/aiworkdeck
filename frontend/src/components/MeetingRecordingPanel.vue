@@ -36,10 +36,13 @@
       <text class="mr-tier-desc">{{ localGate.nextStep }}</text>
       <view class="mr-tier-gate-actions">
         <template v-if="modelDownloading">
-          <text class="mr-tier-desc">{{ $t('meeting.modelDownloading', { percent: modelPercent }) }}</text>
+          <text class="mr-tier-desc">{{ $t('meeting.modelDownloading', { percent: installPercent }) }}</text>
           <view class="mr-btn secondary" @tap="onCancelAsrModel">{{ $t('meeting.cancelDownload') }}</view>
         </template>
         <template v-else>
+          <view class="mr-btn primary" v-if="canInstallRuntime" @tap="onInstallAsrRuntime">
+            {{ $t('meeting.downloadRuntime', { size: asrRuntimeSizeHint }) }}
+          </view>
           <view class="mr-btn primary" v-if="canDownloadModel" @tap="onDownloadAsrModel">
             {{ $t('meeting.downloadModel', { size: modelSizeHint }) }}
           </view>
@@ -305,6 +308,9 @@ import {
   localTierReady, localAsrProbeResult, refreshLocalAsrReadiness
 } from '@/config/platformServices.js'
 import { host } from '@/services/host.js'
+import { reactive } from 'vue'
+import { createOptionalComponentsController } from '@/composables/useOptionalComponents.js'
+import { optionalComponents, packInstall, packStatus, packInfo } from '@/services/api.js'
 import AwdSwitch from '@/components/AwdSwitch.vue'
 import AwdSelect from '@/components/AwdSelect.vue'
 
@@ -403,6 +409,20 @@ export default {
       // 用户点过「录音不出本机」但没成——下面那块引导只在这之后出现，
       // 平台档用户不该每次开面板都看见一块「模型没下载」
       localGateOpen: false,
+      // asr-runtime 这一条组件（运行时 + 1.5GB 模型），与首次登录面板同一份编排。
+      // state 在构造时就要是响应式的：控制器内部的写走闭包变量，事后包 reactive 无效。
+      asrItem: null,
+      installingRuntime: false,
+      controller: createOptionalComponentsController({
+        state: reactive({}),
+        optionalComponents,
+        packInstall,
+        packStatus,
+        packInfo,
+        modelDownload: (id) => host.model.download(id),
+        onModelProgress: (cb) => host.model.onProgress(cb),
+        ensureService: (name) => host.services.ensure(name),
+      }),
       _modelProgressUnsub: null,
       _player: null,
       _audioUrl: null,
@@ -455,12 +475,29 @@ export default {
       const r = localAsrProbeResult()
       return r && r.status !== 'READY' ? r : null
     },
+    /**
+     * 运行时组件没装：下一步是下组件（模型下载器本身跑在它的 venv 里，必须先装它）。
+     * 与 canDownloadModel 互斥——同时摆两个下载按钮，用户点哪个都可能是错的那个。
+     */
+    canInstallRuntime() {
+      return !!host.model && !!this.localGate && this.localGate.status === 'RUNTIME_MISSING'
+    },
     canDownloadModel() {
       // 服务没起时给下载按钮是错的指路：模型下完了照样没人来跑它
-      return !!host.model && this.localGate && this.localGate.status === 'MODEL_MISSING'
+      return !!host.model && !!this.localGate && this.localGate.status === 'MODEL_MISSING'
     },
     modelDownloading() {
-      return this.modelState === 'downloading'
+      return this.installingRuntime || this.modelState === 'downloading'
+    },
+    /** 运行时段的进度写在 item 上，模型段来自主进程事件流 */
+    installPercent() {
+      if (this.installingRuntime && this.asrItem) return this.asrItem.percent || 0
+      return this.modelPercent
+    },
+    asrRuntimeSizeHint() {
+      const mb = Math.round((((this.asrItem && this.asrItem.downloadBytes) || 0)
+        + ((this.asrItem && this.asrItem.modelBytes) || 0)) / (1024 * 1024))
+      return mb ? mb + ' MB' : this.modelSizeHint
     },
     tierText() {
       if (this.asrProvider === 'local') return this.$t('meeting.tierLocal')
@@ -504,6 +541,7 @@ export default {
     // 装载时就探一次：面板要在**按下录音键之前**说清这段录音会不会出本机（设计 §6.2.1）
     refreshLocalAsrReadiness()
     this.loadModelState()
+    this.loadAsrComponent()
     this._pollTimer = setInterval(() => this.pollTranscribing(), POLL_INTERVAL_MS)
     // 从顶部胶囊停止录音时刷新列表
     this._onStopped = () => this.loadMeetings()
@@ -631,6 +669,35 @@ export default {
         if (comp.sizeHint) this.modelSizeHint = comp.sizeHint
       } catch (e) {
         console.warn('读取本机转写模型状态失败', e)
+      }
+    },
+    /** 一次装完运行时 + 1.5GB 模型，然后拉起服务并重新探测——用户点一次就够 */
+    async onInstallAsrRuntime() {
+      if (this.installingRuntime) return
+      if (!this.asrItem) await this.loadAsrComponent()
+      if (!this.asrItem) return
+      this.installingRuntime = true
+      try {
+        const ok = await this.controller.installOne(this.asrItem)
+        if (!ok) {
+          uni.showToast({ title: this.$t('components.stateFailed', { msg: this.asrItem.error || '' }), icon: 'none' })
+        }
+      } finally {
+        this.installingRuntime = false
+        await refreshLocalAsrReadiness()
+        await this.loadModelState()
+      }
+    },
+    async loadAsrComponent() {
+      try {
+        await this.controller.load()
+        const item = this.controller.state.items.find(i => i.packId === 'asr-runtime')
+        if (item) {
+          await this.controller.fillSizes(item)
+          this.asrItem = item
+        }
+      } catch (e) {
+        console.warn('[MeetingRecordingPanel] 读取本机转写组件状态失败', e)
       }
     },
     async onDownloadAsrModel() {

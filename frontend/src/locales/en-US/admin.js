@@ -186,7 +186,7 @@ export default {
   switchFailed: 'Switch failed',
 
   // Components
-  componentsSubtitle: 'Local AI components are downloaded on demand and your data never leaves this machine; the download is one-time and works offline afterwards',
+  componentsSubtitle: 'On-demand local AI components: the runtime and model are downloaded together, then work offline — nothing leaves this computer',
   loadingDots: 'Loading...',
   compServiceRunning: 'Service running',
   compReady: 'Ready',

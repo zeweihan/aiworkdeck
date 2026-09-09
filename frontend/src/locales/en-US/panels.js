@@ -262,6 +262,8 @@ export default {
   evModelMissing: 'The on-device speech engine is not installed yet. Once installed, synthesis runs offline and audio never leaves this machine.',
   evEngineNotRunning: 'The speech component is installed, but the engine is not running. Hit Re-check; if it still fails, restart the app.',
   evNoVoicesNoticeWeb: 'The browser build has no on-device speech engine. Use the desktop app for text-to-speech.',
+  evRuntimeMissing: 'The speech engine runtime is not installed yet. Once the runtime and model are downloaded, synthesis runs offline and your voice never leaves this computer.',
+  evDownloadComponent: 'Download speech synthesis component (about {size})',
   evDownloadModel: 'Download speech component (~{size})',
   evModelDownloading: 'Downloading {percent}%',
   evCancelDownload: 'Cancel',

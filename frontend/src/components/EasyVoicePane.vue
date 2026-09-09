@@ -38,12 +38,12 @@
         <text class="ev-gate-msg">{{ gateMessage }}</text>
         <view class="ev-gate-actions">
           <template v-if="modelDownloading">
-            <text class="ev-gate-hint">{{ $t('panels.evModelDownloading', { percent: modelPercent }) }}</text>
+            <text class="ev-gate-hint">{{ $t('panels.evModelDownloading', { percent: installPercent }) }}</text>
             <view class="ev-gate-btn secondary" @tap="onCancelModel">{{ $t('panels.evCancelDownload') }}</view>
           </template>
           <template v-else>
             <view class="ev-gate-btn primary" v-if="canDownloadModel" @tap="onDownloadModel">
-              {{ $t('panels.evDownloadModel', { size: modelSizeHint }) }}
+              {{ downloadButtonText }}
             </view>
             <view class="ev-gate-btn secondary" :class="{ disabled: rechecking }" @tap="onRecheck">
               {{ rechecking ? $t('panels.evRechecking') : $t('panels.evRecheck') }}
@@ -158,10 +158,16 @@
 import { getTtsVoices, generateTtsAudio, promptFeatureNotConfigured } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
 import { host } from '@/services/host.js'
+import { reactive } from 'vue'
+import { createOptionalComponentsController } from '@/composables/useOptionalComponents.js'
+import { optionalComponents, packInstall, packStatus, packInfo } from '@/services/api.js'
 
-// 本机语音引擎的模型组件 id（desktop/main/services/model-manager.js）。
-// kokoro-service 的 descriptor 把 enabled 门在这个组件上——模型没下，服务根本不启动，
+// 本机语音引擎 = 运行时 pack + 模型两件事（设计 §3.1）。0.38.0 起运行时也是按需下载的，
+// 面板上仍然只是一个按钮，底层顺序执行两条通道（pack → 模型 → ensure，顺序不能换：
+// 模型下载器本身跑在 pack 的 venv 里）。
+// kokoro-service 的 descriptor 把 enabled 门在模型上——模型没下，服务根本不启动，
 // 于是 /api/tts/voices 恒返回空数组。
+const TTS_PACK_ID = 'kokoro-runtime'
 const TTS_MODEL_ID = 'kokoro-models'
 
 export default {
@@ -180,6 +186,21 @@ export default {
       modelPercent: 0,
       modelSizeHint: '300 MB',
       rechecking: false,
+      // 运行时 pack 的状态。初值 true：没问过之前不要先喊「组件没装」
+      runtimeInstalled: true,
+      componentItem: null,
+      installing: false,
+      controller: createOptionalComponentsController({
+        // state 在构造时就要是响应式的：控制器内部的写走闭包变量，事后包 reactive 无效
+        state: reactive({}),
+        optionalComponents,
+        packInstall,
+        packStatus,
+        packInfo,
+        modelDownload: (id) => host.model.download(id),
+        onModelProgress: (cb) => host.model.onProgress(cb),
+        ensureService: (name) => host.services.ensure(name),
+      }),
       // 语速以「百分之几倍」存（100 = 原速），下发时除以 100 变成 Kokoro 的 speed
       rate: 100,
       generating: false,
@@ -203,19 +224,37 @@ export default {
     },
     /** 浏览器态没有 host.model，下载入口整块不出现（那儿也没有本机引擎可言）。 */
     canDownloadModel() {
-      return !!host.model && this.modelState !== 'installed'
+      return !!host.model && !(this.runtimeInstalled && this.modelState === 'installed')
     },
     modelDownloading() {
-      return this.modelState === 'downloading'
+      return this.installing || this.modelState === 'downloading'
+    },
+    /** 运行时段的进度来自控制器写在 item 上的数字，模型段来自主进程事件流。 */
+    installPercent() {
+      if (this.installing && this.componentItem) return this.componentItem.percent || 0
+      return this.modelPercent
     },
     /**
-     * 「模型没下」与「模型下好了但服务没起」是两回事，下一步完全不同
-     *（前者下 300MB，后者点一下重新检测就够），不能合并成一句「不可用」让用户猜。
+     * 三件事三种下一步，不能合并：
+     * - 运行时没装：下运行时组件（模型下载器本身就跑在它的 venv 里，必须先装它）
+     * - 运行时装了、模型没下：下 300MB 模型
+     * - 都装了：点「重新检测」把服务拉起来
      */
     gateMessage() {
       if (!host.model) return this.$t('panels.evNoVoicesNoticeWeb')
+      if (!this.runtimeInstalled) return this.$t('panels.evRuntimeMissing')
       if (this.modelState === 'installed') return this.$t('panels.evEngineNotRunning')
       return this.$t('panels.evModelMissing')
+    },
+    downloadButtonText() {
+      return this.runtimeInstalled
+        ? this.$t('panels.evDownloadModel', { size: this.modelSizeHint })
+        : this.$t('panels.evDownloadComponent', { size: this.componentSizeHint })
+    },
+    componentSizeHint() {
+      const mb = Math.round((((this.componentItem && this.componentItem.downloadBytes) || 0)
+        + ((this.componentItem && this.componentItem.modelBytes) || 0)) / (1024 * 1024))
+      return mb ? mb + ' MB' : this.modelSizeHint
     },
     selectedVoiceLabel() {
         const v = this.voices.find(v => v.voiceId === this.selectedVoiceId)
@@ -428,21 +467,45 @@ export default {
       try {
         const res = await host.model.status()
         const comp = ((res && res.components) || []).find(c => c.id === TTS_MODEL_ID)
-        if (!comp) return
-        this.modelState = comp.state
-        if (comp.sizeHint) this.modelSizeHint = comp.sizeHint
+        if (comp) {
+          this.modelState = comp.state
+          if (comp.sizeHint) this.modelSizeHint = comp.sizeHint
+        }
+        await this.controller.load()
+        const item = this.controller.state.items.find(i => i.packId === TTS_PACK_ID)
+        if (item) {
+          await this.controller.fillSizes(item)
+          this.componentItem = item
+          this.runtimeInstalled = !!item.installed
+        }
       } catch (e) {
-        console.warn('[EasyVoicePane] 读取语音模型状态失败', e)
+        console.warn('[EasyVoicePane] 读取语音组件状态失败', e)
       }
     },
+    /**
+     * 一个按钮，两条通道：pack → 模型 → ensure（顺序不能换，模型下载器跑在 pack 的 venv 里）。
+     * 装完直接刷新音色列表，用户不用再点一次「重新检测」。
+     */
     async onDownloadModel() {
-      if (!host.model) return
-      try {
-        await host.model.download(TTS_MODEL_ID)
-        this.modelState = 'downloading'
-        this.modelPercent = 0
-      } catch (e) {
+      if (!host.model || this.installing) return
+      if (!this.componentItem) await this.loadModelState()
+      if (!this.componentItem) {
         uni.showToast({ title: this.$t('panels.evDownloadStartFailed'), icon: 'none' })
+        return
+      }
+      this.installing = true
+      try {
+        const ok = await this.controller.installOne(this.componentItem)
+        this.runtimeInstalled = !!this.componentItem.installed
+        if (!ok) {
+          uni.showToast({ title: this.$t('components.stateFailed', { msg: this.componentItem.error || '' }), icon: 'none' })
+          return
+        }
+        this.modelState = 'installed'
+        await this.fetchVoices()
+      } finally {
+        this.installing = false
+        await this.loadModelState()
       }
     },
     async onCancelModel() {

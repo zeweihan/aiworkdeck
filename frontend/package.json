@@ -67,6 +67,7 @@
     "test:capabilities": "node --test tests/capabilities/*.test.mjs",
     "test:team": "node --test tests/team/*.test.mjs",
     "test:member-invite": "node --test tests/member-invite/*.test.mjs",
+    "test:optional-components": "node --test tests/optional-components/*.test.mjs",
     "test:desensitize": "node --test tests/desensitize/*.test.mjs"
   },
   "dependencies": {

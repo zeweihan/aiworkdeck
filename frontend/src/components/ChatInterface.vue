@@ -661,6 +661,22 @@
       @dismiss="dismissBackgroundTask"
     />
 
+    <!-- 可选组件缺失（设计 §4.2）：确认前把体积、解锁什么、不装则什么不可用都说全，
+         确认后卡片就地跳进度，装完自动重发原消息。 -->
+    <view v-if="componentGateItem" class="chat-component-gate">
+      <view class="cg-panel">
+        <text class="cg-title">{{ $t('components.chatTitle') }}</text>
+        <OptionalComponentCard :item="componentGateItem" :selectable="false" :busy="true" />
+        <view v-if="componentGateResolved" class="cg-installing">
+          <text class="cg-installing-text">{{ $t('components.chatInstalling') }}</text>
+        </view>
+        <view v-else class="cg-actions">
+          <view class="cg-btn primary" @tap="resolveComponentGate(true)">{{ $t('components.chatConfirm') }}</view>
+          <view class="cg-btn" @tap="resolveComponentGate(false)">{{ $t('components.chatCancel') }}</view>
+        </view>
+      </view>
+    </view>
+
   </view>
 </template>
 
@@ -669,16 +685,21 @@ import RootBubble from './AgentMessage/RootBubble.vue'
 import BackgroundTaskIndicator from './BackgroundTaskIndicator.vue'
 import { useAgentStream } from '@/composables/useAgentStream.js'
 import { parseToolBlock } from '@/composables/agentTagProtocol.mjs'
-import { ref, watch, onMounted, nextTick, getCurrentInstance, computed } from 'vue'
+import { ref, reactive, watch, onMounted, nextTick, getCurrentInstance, computed } from 'vue'
 import { createFile, getProjectFiles, getApiBaseUrl, rollbackConversation, performPptGeneration, getSkills, fetchAiModels, getAiConfig, cancelBackgroundTask, listPluginJobs, cancelPluginJob } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
 import { getAppLanguage } from '@/utils/appLanguage.js'
 import { t } from '@/i18n'
 import { ICONS } from '@/config/icons.js'
+import OptionalComponentCard from '@/components/OptionalComponentCard.vue'
+import { host } from '@/services/host.js'
+import { optionalComponents, packInstall, packStatus, packInfo } from '@/services/api.js'
+import { createOptionalComponentsController } from '@/composables/useOptionalComponents.js'
+import { createComponentRequiredHandler } from '@/composables/useComponentRequired.js'
 
 export default {
   name: 'ChatInterface',
-  components: { RootBubble, BackgroundTaskIndicator },
+  components: { RootBubble, BackgroundTaskIndicator, OptionalComponentCard },
   props: {
     projectId: String,
     projectName: String,
@@ -735,6 +756,63 @@ export default {
       loadConversationMetadata
     } = useAgentStream()
 
+    // 可选组件缺失闸（设计 §4.2）。控制器与首次登录面板、组件管理页同一份编排：
+    // 顺序 pack → 模型 → ensure(service)，顺序不能换。
+    const optionalController = createOptionalComponentsController({
+      state: reactive({}),
+      optionalComponents,
+      packInstall,
+      packStatus,
+      packInfo,
+      modelDownload: (id) => host.model.download(id),
+      onModelProgress: (cb) => host.model.onProgress(cb),
+      ensureService: (name) => host.services.ensure(name),
+    })
+    const componentGateItem = ref(null)
+    const componentGateResolved = ref(false)
+    const componentGateResolve = ref(null)
+    const componentRequiredHandler = createComponentRequiredHandler({
+      installOne: (item) => optionalController.installOne(item),
+      fillSizes: (item) => optionalController.fillSizes(item),
+      // 弹窗确认：把 item 挂上去，等模板里的按钮 resolve
+      confirm: (item) => new Promise((resolve) => {
+        componentGateItem.value = item
+        componentGateResolved.value = false
+        componentGateResolve.value = resolve
+      }),
+      lastUserMessage: () => {
+        for (let i = bubbles.value.length - 1; i >= 0; i--) {
+          const b = bubbles.value[i]
+          if (b && String(b.role).toUpperCase() === 'USER') return b.content || ''
+        }
+        return ''
+      },
+      resend: async (text) => {
+        componentGateItem.value = null
+        uni.showToast({ title: t('components.chatResending'), icon: 'none' })
+        await sendMessage({
+          prompt: text,
+          projectId: props.projectId,
+          modelId: currentModelId.value,
+          mode: currentModeId.value,
+          skillIds: currentSkillIds()
+        })
+        scrollToBottom()
+      },
+      toast: (msg) => {
+        componentGateItem.value = null
+        uni.showToast({ title: t('components.stateFailed', { msg }), icon: 'none' })
+      },
+    })
+    /** 确认走下载（弹窗留着，卡片就地跳进度）；取消则直接收起 */
+    const resolveComponentGate = (ok) => {
+      const resolve = componentGateResolve.value
+      componentGateResolve.value = null
+      componentGateResolved.value = !!ok
+      if (!ok) componentGateItem.value = null
+      if (resolve) resolve(ok)
+    }
+
     // Bridge Stream Events to Component Events
     onClientAction((action) => {
         if (action.action === 'ppt_config_required') {
@@ -742,6 +820,12 @@ export default {
            pptConfigData.value = action
            pptExportEditable.value = false // Default to safe option
            showPptConfigDialog.value = true
+        } else if (action.action === 'component_required') {
+           // 可选组件缺失（设计 §4.2）：就地弹窗 → 装 → 自动重发原消息。
+           // 刻意不往下 emit：它不是编辑器命令，执行器只会回 Unknown action。
+           componentRequiredHandler.onAction(action).then((r) => {
+              if (!r.resent) componentGateItem.value = null
+           })
         } else {
            emit('client-action', action)
         }
@@ -2519,6 +2603,9 @@ export default {
     return {
        bubbles,
        isStreaming,
+       componentGateItem,
+       componentGateResolved,
+       resolveComponentGate,
        inputPrompt,
        richInput,
        tokenUsage,
@@ -4815,6 +4902,69 @@ export default {
 }
 .awd-btn-secondary:hover {
     background-color: var(--awd-surface-3);
+}
+
+/* 可选组件缺失弹窗（设计 §4.2） */
+.chat-component-gate {
+    position: absolute;
+    inset: 0;
+    background: var(--awd-overlay);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+}
+
+.cg-panel {
+    width: 420px;
+    max-width: 88%;
+    background: var(--awd-surface);
+    border: 1px solid var(--awd-border);
+    border-radius: 12px;
+    box-shadow: var(--awd-shadow-lg);
+    padding: 18px;
+}
+
+.cg-title {
+    display: block;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--awd-text);
+    margin-bottom: 10px;
+}
+
+.cg-installing-text {
+    font-size: 12px;
+    color: var(--awd-text-2);
+}
+
+.cg-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.cg-btn {
+    padding: 7px 14px;
+    border: 1px solid var(--awd-border-strong);
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--awd-text);
+    cursor: pointer;
+}
+
+.cg-btn:hover {
+    background: var(--awd-surface-2);
+}
+
+.cg-btn.primary {
+    background: var(--awd-accent);
+    color: var(--awd-text-on-accent);
+    border-color: var(--awd-accent);
+}
+
+.cg-btn.primary:hover {
+    background: var(--awd-accent-hover);
 }
 
 </style>

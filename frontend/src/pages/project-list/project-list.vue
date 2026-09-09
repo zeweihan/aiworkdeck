@@ -326,6 +326,12 @@
       v-model:visible="showCloudAccept"
       @accepted="onCloudAccepted"
     />
+
+    <OptionalComponentsDialog
+      v-if="showOptionalComponents"
+      :app-version="appVersion"
+      @close="showOptionalComponents = false"
+    />
   </view>
 </template>
 
@@ -352,6 +358,9 @@ import { openFolderFlow, createFolderFlow } from '@/utils/ideOpen.js'
 import { ICONS } from '@/config/icons.js'
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
 import CloudAcceptDialog from '@/components/CloudAcceptDialog.vue'
+import OptionalComponentsDialog from '@/components/OptionalComponentsDialog.vue'
+import { optionalComponents } from '@/services/api.js'
+import { shouldPromptOptionalComponents, PROMPTED_PREF_KEY } from '@/composables/useOptionalComponents.js'
 
 const VIEW_MODE_KEY = 'checkba_project_list_view'
 
@@ -364,6 +373,7 @@ export default {
   components: {
     InviteMemberDialog,
     CloudAcceptDialog,
+    OptionalComponentsDialog,
   },
   computed: {
     ICONS() {
@@ -419,12 +429,17 @@ export default {
       namingName: '',
 
       loadProjectsSeq: 0,
+
+      // 首次登录后的「可选组件」面板（设计 §4.1）
+      showOptionalComponents: false,
+      appVersion: '',
     }
   },
   onLoad() {
     if (!this.ensureLoggedIn()) return
     this.restoreViewMode()
     this.loadUserInfo()
+    this.maybePromptOptionalComponents()
   },
   onShow() {
     // 从概览页 navigateBack、从新建项目页回来都要看到最新结果（改名/删除都在这一页做）
@@ -438,6 +453,30 @@ export default {
       if (getSessionId() && getCurrentUser()) return true
       uni.reLaunch({ url: '/pages/login/login' })
       return false
+    },
+    /**
+     * 首次登录后的「可选组件」面板（设计 §4.1）。挂在 onLoad 而不是 onShow：
+     * 从项目页返回列表页会反复触发 onShow，那会变成每次返回都弹一次。
+     */
+    async maybePromptOptionalComponents() {
+      if (!isDesktopHost() || !host.prefs) return
+      try {
+        const [res, prompted, status] = await Promise.all([
+          optionalComponents(),
+          host.prefs.get(PROMPTED_PREF_KEY),
+          host.update ? host.update.status() : Promise.resolve(null),
+        ])
+        this.appVersion = (status && status.appVersion) || ''
+        this.showOptionalComponents = shouldPromptOptionalComponents({
+          items: (res && res.components) || [],
+          promptedVersion: prompted && prompted.value !== undefined ? prompted.value : prompted,
+          appVersion: this.appVersion,
+          isDesktop: true,
+        })
+      } catch (e) {
+        // 后端还没起来 / 离线部署关了 ai.packs：不打扰，用户仍可从设置进组件管理
+        console.warn('[project-list] 可选组件检查跳过', e)
+      }
     },
     async loadUserInfo() {
       const user = getCurrentUser()
