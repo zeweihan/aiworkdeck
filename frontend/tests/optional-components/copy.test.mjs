@@ -4,6 +4,7 @@
 // 下载什么、多大、解锁哪些功能、不下载则哪些功能不可用。
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import zh from '../../src/locales/zh-CN/components.js'
 import en from '../../src/locales/en-US/components.js'
 
@@ -63,4 +64,11 @@ test('两语言键集合完全一致（check:locales 的本地前哨）', () => 
   const flat = (o, p = '') => Object.entries(o).flatMap(([k, v]) =>
     typeof v === 'object' ? flat(v, `${p}${k}.`) : [`${p}${k}`])
   assert.deepEqual(flat(zh).sort(), flat(en).sort())
+})
+
+// CI 里跑前端单测的是 ci.yml 的 frontend job（desktop-build.yml 只负责打包与冒烟，
+// 一条前端单测步骤都没有）。这条断言钉的是「这套单测真的在 CI 上跑」。
+test('CI 真的跑这套单测（不跑等于没写）', () => {
+  const wf = readFileSync(new URL('../../../.github/workflows/ci.yml', import.meta.url), 'utf8')
+  assert.ok(wf.includes('test:optional-components'), 'ci.yml 没有调用 npm run test:optional-components')
 })

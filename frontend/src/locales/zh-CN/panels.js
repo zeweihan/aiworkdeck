@@ -262,6 +262,8 @@ export default {
   evModelMissing: '本机语音引擎还没装。装完即可离线合成，声音不出本机。',
   evEngineNotRunning: '语音组件已装好，但引擎这会儿没跑起来。点「重新检测」拉一次；仍不行就重启一次应用。',
   evNoVoicesNoticeWeb: '浏览器版没有本机语音引擎，语音合成请在桌面端使用。',
+  evRuntimeMissing: '本机语音引擎的运行时组件还没装。装好运行时与模型后即可离线合成，声音不出本机。',
+  evDownloadComponent: '下载语音合成组件（约 {size}）',
   evDownloadModel: '下载语音组件（约 {size}）',
   evModelDownloading: '正在下载 {percent}%',
   evCancelDownload: '取消下载',

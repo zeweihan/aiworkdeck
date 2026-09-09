@@ -28,14 +28,18 @@ const WEIGHT = { runtime: 40, model: 55, starting: 5 }
 const POLL_MS = 1000
 
 export function createOptionalComponentsController(deps) {
-  const state = {
+  // 状态容器可以由调用方注入（.vue 里传 `reactive({})`）。必须在这里就拿到那个代理：
+  // 控制器内部的写全部走闭包变量 state，事后再 `controller.state = reactive(state)`
+  // 只会得到一个「读得到、不触发重渲染」的壳——写落在原始对象上，代理的 setter
+  // 一次都不会被调用，进度条永远停在 0。
+  const state = Object.assign(deps.state || {}, {
     items: [],
     loading: false,
     running: false,
     doneCount: 0,
     totalCount: 0,
     error: '',
-  }
+  })
 
   const sleep = deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)))
 
@@ -199,4 +203,27 @@ export function createOptionalComponentsController(deps) {
   }
 
   return { state, load, fillSizes, installOne, installAll, overallPercent }
+}
+
+export const PROMPTED_PREF_KEY = 'optionalComponentsPromptedVersion'
+
+/** 大版本号（0.38.0 → 0.38）。小版本补丁不该让面板重新弹一次。 */
+function majorOf(v) {
+  const parts = String(v || '').split('.')
+  return parts.length >= 2 ? parts[0] + '.' + parts[1] : String(v || '')
+}
+
+/**
+ * 首次登录后要不要弹「可选组件」面板（设计 §4.1）。
+ * 判据四条全要满足：桌面端 / 接口真的回了组件 / 存在未装的（运行时或模型缺任一都算）/
+ * 本大版本没提示过。标记存 electron prefs，重装才重置——localStorage 被清一次
+ * 用户就会被重新打扰一遍。
+ */
+export function shouldPromptOptionalComponents({ items, promptedVersion, appVersion, isDesktop }) {
+  if (!isDesktop) return false
+  const list = items || []
+  if (!list.length) return false
+  const anyMissing = list.some((i) => !i.installed || (i.modelId && !i.modelInstalled))
+  if (!anyMissing) return false
+  return majorOf(promptedVersion) !== majorOf(appVersion)
 }

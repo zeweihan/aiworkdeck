@@ -33,6 +33,7 @@ export default {
   cancelDownload: 'Cancel Download',
   // The "~" belongs here, not in {size}: {size} is model-manager's sizeHint (like "1.5 GB",
   // language-neutral) and the same value also feeds the admin confirm copy.
+  downloadRuntime: 'Download on-device speech recognition (about {size})',
   downloadModel: 'Download Model (~{size})',
   recheck: 'Check Again',
   downloadStartFailed: 'Could not start the download. Try again later.',

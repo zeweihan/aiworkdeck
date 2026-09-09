@@ -37,6 +37,7 @@ export default {
   cancelDownload: '取消下载',
   // 「约」在这里、不在 {size} 里：{size} 是 model-manager 的 sizeHint（形如 '1.5 GB'，
   // 语言中立），同一个值还要喂给 admin 的确认文案，修饰词写进那边会漏到英文界面上
+  downloadRuntime: '下载本机语音识别组件（约 {size}）',
   downloadModel: '下载模型（约 {size}）',
   recheck: '重新检测',
   downloadStartFailed: '开始下载失败，稍后重试',

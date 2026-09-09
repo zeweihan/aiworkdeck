@@ -613,59 +613,22 @@
                 {{ $t('admin.componentsSubtitle') }}
               </text>
             </view>
+            <!-- 与首次登录面板共用同一张卡片：两处口径漂移的代价是用户在一处看到
+                 「已就绪」、另一处看到「未安装」，谁都不知道该信哪个。 -->
             <view class="section-body">
-              <view v-if="components.length === 0" class="empty">
+              <view v-if="optional.state.loading" class="empty">
                 <text class="empty-text">{{ $t('admin.loadingDots') }}</text>
               </view>
-              <view
-                v-for="comp in components"
-                :key="comp.id"
-                class="comp-row"
-              >
-                <view class="comp-main">
-                  <text class="comp-name">{{ comp.name }}</text>
-                  <text class="comp-sub">
-                    {{ comp.sizeHint }}
-                    <text v-if="comp.state === 'installed' && comp.serviceRunning"> · {{ $t('admin.compServiceRunning') }}</text>
-                    <text v-else-if="comp.state === 'installed'"> · {{ $t('admin.compReady') }}</text>
-                    <text v-else-if="comp.state === 'downloading'"> · {{ $t('admin.compDownloading') }} {{ comp.percent != null ? comp.percent + '%' : '' }}</text>
-                    <text v-else-if="comp.state === 'error'" class="comp-error"> · {{ $t('admin.compError', { msg: comp.message }) }}</text>
-                    <text v-else> · {{ $t('admin.compNotDownloaded') }}</text>
-                  </text>
-                  <view v-if="comp.state === 'downloading'" class="comp-progress">
-                    <view
-                      class="comp-progress-fill"
-                      :style="{ width: (comp.percent || 0) + '%' }"
-                    />
-                  </view>
-                </view>
-                <view class="comp-actions">
-                  <button
-                    v-if="comp.state === 'absent' || comp.state === 'error'"
-                    class="comp-btn primary"
-                    @tap="handleComponentDownload(comp)"
-                  >
-                    {{ $t('admin.downloadButton') }}
-                  </button>
-                  <button
-                    v-if="comp.state === 'downloading'"
-                    class="comp-btn"
-                    @tap="handleComponentCancel(comp)"
-                  >
-                    {{ $t('common.cancel') }}
-                  </button>
-                  <button
-                    v-if="comp.state === 'installed' && !comp.serviceRunning"
-                    class="comp-btn primary"
-                    @tap="handleComponentEnable(comp)"
-                  >
-                    {{ $t('admin.enableButton') }}
-                  </button>
-                  <button
-                    v-if="comp.state === 'installed'"
-                    class="comp-btn danger"
-                    @tap="handleComponentRemove(comp)"
-                  >
+              <view v-for="item in optional.state.items" :key="item.packId" class="comp-item">
+                <OptionalComponentCard
+                  :item="item"
+                  :selectable="false"
+                  :busy="optional.state.running"
+                  @install="onInstallComponent"
+                  @retry="onInstallComponent"
+                />
+                <view v-if="item.phase === 'ready'" class="comp-actions">
+                  <button class="comp-btn danger" @tap="handleComponentRemove(item)">
                     {{ $t('common.delete') }}
                   </button>
                 </view>
@@ -1095,6 +1058,7 @@
 </template>
 
 <script>
+import { reactive } from 'vue'
 import {
   getAdminConfig, saveAdminConfig,
   getAccountStatus, connectAccount, getAccountUsage,
@@ -1108,6 +1072,7 @@ import {
   getFeedbackList, getFeedbackDetail, getOptimizerStatus, runOptimizer, getApiBaseUrl,
   getSiteStatus, selectSite,
   getPlatformServices, getPlatformServiceRemote, savePlatformBudget,
+  optionalComponents, packInstall, packStatus, packInfo, packUninstall,
 } from '@/services/api.js'
 import { getCurrentUser, getSessionId, setSessionUser } from '@/utils/auth.js'
 import { getInitial } from '@/utils/textInitial.js'
@@ -1127,6 +1092,8 @@ import PersonalFavoritesPanel from '@/components/userprofile/PersonalFavoritesPa
 import PersonalTodosPanel from '@/components/userprofile/PersonalTodosPanel.vue'
 import PersonalSettingsPanel from '@/components/userprofile/PersonalSettingsPanel.vue'
 import TeamPanel from '@/components/admin/TeamPanel.vue'
+import OptionalComponentCard from '@/components/OptionalComponentCard.vue'
+import { createOptionalComponentsController } from '@/composables/useOptionalComponents.js'
 
 /**
  * 缓存里的登录用户是不是管理员。isAdmin 由 /api/auth/me 下发（桌面单机=全员管理员；
@@ -1145,7 +1112,7 @@ export default {
   components: {
     UnlockHint, RechargeDialog, AwdSelect, AwdSwitch,
     PersonalWorkLogPanel, PersonalFavoritesPanel, PersonalTodosPanel, PersonalSettingsPanel,
-    TeamPanel,
+    TeamPanel, OptionalComponentCard,
   },
   /**
    * ai-prompt：把一句话交给工作台的 AI 对话（「能力升级」的「让 AI 升级」按钮）。
@@ -1244,7 +1211,18 @@ export default {
         lastRunAt: '',
         lastReportText: '',
       },
-      components: [],
+      // 组件管理与首次登录面板共用同一份编排与同一张卡片。state 必须在构造时就是
+      // 响应式的：控制器内部的写走闭包变量，事后再包 reactive 拿到的是个不触发重渲染的壳。
+      optional: createOptionalComponentsController({
+        state: reactive({}),
+        optionalComponents,
+        packInstall,
+        packStatus,
+        packInfo,
+        modelDownload: (id) => host.model.download(id),
+        onModelProgress: (cb) => host.model.onProgress(cb),
+        ensureService: (name) => host.services.ensure(name),
+      }),
       // 软件更新状态（主进程 update-service 快照；事件推送增量刷新）
       update: {
         phase: 'idle',
@@ -1574,19 +1552,9 @@ export default {
       // AI 面板的「AI WorkDeck 云端」选项是否可选，取决于是否已连接账户。
       // status 是后端纯本地读盘，不打官网，可以随页面加载
       this.loadPlatformAiAvailability()
+      // 模型下载进度不在这里单独订阅：控制器的 installModel 自己挂同一条流，
+      // 并把百分比写进卡片的 item.percent（两处订阅只会互相覆盖同一个数字）。
       this.loadComponents()
-      // 订阅主进程模型下载进度；onUnload 退订
-      this._modelProgressUnsub = host.model.onProgress((evt) => {
-        const comp = this.components.find((c) => c.id === evt.id)
-        if (!comp) return
-        if (evt.phase === 'progress') {
-          comp.state = 'downloading'
-          if (typeof evt.percent === 'number') comp.percent = evt.percent
-        } else {
-          // done / error：以主进程状态为准，整体刷新
-          this.loadComponents()
-        }
-      })
       // 软件更新：拉初始状态 + 订阅主进程推送（快照全量携带，直接覆盖本地态）
       this.loadUpdateStatus()
       if (host.update) {
@@ -1603,10 +1571,6 @@ export default {
     if (this._onWalletRefresh) {
       uni.$off('awd:wallet-refresh', this._onWalletRefresh)
       this._onWalletRefresh = null
-    }
-    if (this._modelProgressUnsub) {
-      this._modelProgressUnsub()
-      this._modelProgressUnsub = null
     }
     if (this._updateEventUnsub) {
       this._updateEventUnsub()
@@ -1713,63 +1677,45 @@ export default {
     },
     async loadComponents() {
       if (!this.isDesktop) return
-      try {
-        const res = await host.model.status()
-        this.components = (res && res.components ? res.components : []).map((c) => ({ percent: null, ...c }))
-      } catch (e) {
-        console.error('loadComponents failed', e)
+      await this.optional.load()
+      for (const item of this.optional.state.items) {
+        await this.optional.fillSizes(item)
       }
     },
-    handleComponentDownload(comp) {
-      uni.showModal({
-        title: this.$t('admin.downloadComponentTitle'),
-        content: this.$t('admin.downloadComponentContent', { name: comp.name, size: comp.sizeHint }),
-        success: async (r) => {
-          if (!r.confirm) return
-          try {
-            await host.model.download(comp.id)
-            comp.state = 'downloading'
-            comp.percent = 0
-          } catch (e) {
-            uni.showToast({ title: this.$t('admin.startDownloadFailed'), icon: 'none' })
-          }
-        },
-      })
-    },
-    async handleComponentCancel(comp) {
+    /**
+     * 一张卡一个按钮，底层仍是顺序三段：pack → 模型 → ensure(service)。
+     * 旧的「下载 / 启用」两个按钮的语义都并进了这里——分开摆只会让用户在
+     * 「下完了为什么还不能用」上多绕一圈。
+     */
+    async onInstallComponent(packId) {
+      const item = this.optional.state.items.find((i) => i.packId === packId)
+      if (!item || this.optional.state.running) return
+      this.optional.state.running = true
       try {
-        await host.model.cancel(comp.id)
+        await this.optional.installOne(item)
       } finally {
-        this.loadComponents()
+        this.optional.state.running = false
       }
     },
-    handleComponentRemove(comp) {
+    /** 卸载 = 删模型 + 删 pack 目录（规范 §6：确认框注明可释放体积） */
+    handleComponentRemove(item) {
+      const mb = Math.round(((item.downloadBytes || 0) + (item.modelBytes || 0)) / (1024 * 1024))
       uni.showModal({
         title: this.$t('admin.removeComponentTitle'),
-        content: this.$t('admin.removeComponentContent', { name: comp.name, size: comp.sizeHint }),
+        content: this.$t('admin.removeComponentContent', {
+          name: this.$t('components.' + item.localeKey + '.name'),
+          size: mb ? mb + ' MB' : this.$t('components.sizeUnknown'),
+        }),
         success: async (r) => {
           if (!r.confirm) return
           try {
-            await host.model.remove(comp.id)
+            if (item.modelId) await host.model.remove(item.modelId)
+            await packUninstall(item.packId)
           } finally {
             this.loadComponents()
           }
         },
       })
-    },
-    async handleComponentEnable(comp) {
-      // serviceName 由主进程 model-status 按组件→服务映射带回
-      if (!comp.serviceName) return
-      uni.showLoading({ title: this.$t('admin.startingService') })
-      try {
-        const res = await host.services.ensure(comp.serviceName)
-        if (!res || !res.ok) {
-          uni.showToast({ title: this.$t('admin.serviceStartFailed', { msg: (res && res.message) || this.$t('admin.unknownError') }), icon: 'none' })
-        }
-      } finally {
-        uni.hideLoading()
-        this.loadComponents()
-      }
     },
     // Options API 模板拿不到裸导入函数，包一层 method 才能在模板里当 getInitial(...) 调用
     getInitial,
@@ -3163,7 +3109,17 @@ $brand-accent: $brand-mint;
   color: var(--awd-text-2);
 }
 
-/* 组件管理（桌面端） */
+/* 组件管理（桌面端）。卡片本身的样式在 OptionalComponentCard 里，这里只负责
+   把「卸载」按钮贴在卡片下沿——卸载是本页独有的动作，不进共用卡片。 */
+.comp-item {
+  margin-bottom: 6px;
+}
+
+.comp-item .comp-actions {
+  margin: 0 0 12px;
+  justify-content: flex-end;
+}
+
 .comp-row {
   display: flex;
   align-items: center;
