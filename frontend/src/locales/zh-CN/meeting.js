@@ -98,6 +98,13 @@ export default {
   transcribe: '开始转写',
   retryTranscribe: '重试转写',
   transcribingHint: '转写与说话人分离进行中，通常几分钟内完成，可离开此页',
+  // 进度提示（dev-board#532）：阶段来自后端 progress.stage 的三个枚举值
+  transcribingStagePreparing: '准备音频（转码与上传）',
+  transcribingStageLocal: '本机转写',
+  transcribingStageUpstream: '转写与说话人分离',
+  transcribingProgress: '{stage} · 已用 {elapsed} / 预计约 {estimated}{mark}',
+  transcribingProgressNoEstimate: '{stage} · 已用 {elapsed}',
+  transcribingEstimatedMark: '（估算）',
   transcribeFailed: '转写失败',
   submitTranscribeFailed: '提交转写失败：{message}',
   resultUnreadable: '未能读取转写结果，请稍后重试。原始录音仍然保留。',
