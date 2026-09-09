@@ -25,6 +25,14 @@ Please contact our licensing team to discuss your specific use case and pricing:
 - **Email:** hi@aiworkdeck.com
 - **Website:** [www.aiworkdeck.com](https://www.aiworkdeck.com)
 
+## Third-Party Components
+
+AI WorkDeck bundles and distributes several independently licensed third-party components, such as the PPT generation sidecar (`pptx-service`, upstream banana-slides, AGPL-3.0), the document parsing sidecar (`mineru-service`, upstream MinerU, Apache-2.0 with additional terms), the speech sidecars, the LibreOffice WASM editor, and Graphviz. They run as separate processes or separately loaded modules and communicate with AI WorkDeck over local HTTP or documented interfaces; they are aggregated with, not derived from, AI WorkDeck.
+
+**The Commercial License covers only the code owned by AI WorkDeck.** It does not modify, waive, or override the license of any third-party component. Copyleft components (AGPL-3.0, GPL, LGPL, MPL) remain under their own terms regardless of your commercial license: you must keep their license and copyright notices, make their source available as their license requires, and comply with their terms if you modify them. A Commercial License does not allow you to distribute a modified copyleft component under proprietary terms.
+
+The current list of bundled components, with licenses and upstream references, is maintained in [`THIRD-PARTY-COMPONENTS.md`](THIRD-PARTY-COMPONENTS.md). If your deployment cannot accept a specific component's license, contact us to discuss a build that excludes it.
+
 ## Brand & Certification Programs
 **AI WorkDeck™** is our unregistered word mark and trade name; the AI WorkDeck logo (the "K" mark) is a registered trademark in China in Classes 9, 35, and 42 (see [`TRADEMARKS.md`](TRADEMARKS.md) for the per-class detail). We license the brand to partners who meet our quality bar, so customers can trust that a deployment, plugin, or integration is genuinely compatible and supported.
 

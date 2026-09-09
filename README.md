@@ -350,6 +350,8 @@ Commercial licensing is available for:
 
 See [LICENSE](legal/LICENSE) and [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md). For commercial licensing, contact [hi@aiworkdeck.com](mailto:hi@aiworkdeck.com).
 
+Bundled third-party components (the PPT generation and document parsing sidecars, the LibreOffice WASM editor, Graphviz, and others) keep their own licenses, which a commercial license does not change. The list is in [THIRD-PARTY-COMPONENTS.md](legal/THIRD-PARTY-COMPONENTS.md).
+
 The **AI WorkDeck logo** (the "K" mark) is a registered trademark in China (Classes 9, 35, and 42; reg. nos. 89857424, 89857389, 89857390). "**AI WorkDeck**" is used as a trade name and unregistered word mark ("AI WorkDeck™"), protected together with the aiworkdeck.com domain under applicable unfair-competition law. Building on the kernel is welcome under the licenses above, but using the **AI WorkDeck** name or logo to market a commercial offering requires a brand or certification agreement — see [TRADEMARKS.md](legal/TRADEMARKS.md) and the **Brand & Certification Programs** in [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md).
 
 ## Background
