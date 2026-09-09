@@ -1,8 +1,11 @@
 <template>
   <view class="etb-wrap">
   <view class="etb" @tap="closeMenus">
-    <!-- 主命令区：窄了就横向滚动，不换行（换行会把画布挤下去） -->
-    <scroll-view class="etb-scroll" scroll-x>
+    <!-- 主命令区：窄了就横向滚动，不换行（换行会把画布挤下去）。
+         滚动条整条隐藏、横滚交给滚轮（与标签栏 .tabs-scroll 同一套做法，
+         dev-board#502）：原生横向滚动条有 15px 高，会把这一段撑到 41px、
+         在 38px 的行里被 align-items:center 顶得比右侧常驻区高半格。 -->
+    <scroll-view class="etb-scroll" scroll-x :show-scrollbar="false" @wheel.prevent="onToolbarWheel">
       <view class="etb-row">
         <!-- 撤销 / 重做 -->
         <view class="etb-btn" :class="{ off: undoDisabled }" :title="$t('editor.toolbar.undo')" @tap.stop="run('undo')">
@@ -246,8 +249,15 @@
   </view>
 
   <!-- 查找替换：自建面板，不走 LO 的 .uno:SearchDialog——真机审计实证那个对话框
-       弹得出来但**键盘关不掉**（画布聚焦时按 Esc 同样无效），挂上去就是个坑。 -->
-  <view v-if="findOpen" class="etb-find">
+       弹得出来但**键盘关不掉**（画布聚焦时按 Esc 同样无效），挂上去就是个坑。
+       **绝对定位浮在画布上，不占布局高度**（dev-board#503）：这一条留在文档流里
+       时，开关查找会让工具栏一高一矮，下面的 <webview> 跟着改尺寸，Electron 的
+       客体合成面在新尺寸那一帧到达前被整块画成黑色——用户看到的就是"点查找整个
+       编辑区黑一下"。给画布容器或 webview 元素铺底色都拦不住（客体面盖在上面，
+       真机探针实测过）；唯一有效的是根本不改 webview 尺寸。
+       钉法与 EvidenceStaleBar/状态胶囊同规矩（浮在画布上，不进流）。 -->
+  <view v-if="findOpen" class="etb-find-layer">
+  <view class="etb-find">
     <input class="etb-input fi" v-model="findText" :placeholder="$t('editor.toolbar.findPlaceholder')" @input="onFindInput" @confirm="findNext" />
     <text class="etb-find-n">{{ findStatus }}</text>
     <text class="etb-find-b" :title="$t('editor.toolbar.prevMatch')" @tap.stop="findPrev">{{ $t('editor.toolbar.prevMatch') }}</text>
@@ -258,7 +268,8 @@
     <text class="etb-find-b" :class="{ on: matchCase }" :title="$t('editor.toolbar.matchCase')" @tap.stop="toggleCase">Aa</text>
     <text class="etb-find-x" @tap.stop="toggleFind">{{ $t('editor.toolbar.close') }}</text>
   </view>
-  <text v-if="findOpen && findErr" class="etb-err bar">{{ findErr }}</text>
+  <text v-if="findErr" class="etb-err bar">{{ findErr }}</text>
+  </view>
   </view>
 </template>
 
@@ -499,6 +510,23 @@ export default {
       return { position: 'fixed', left: left + 'px', top: this.popPos.top + 'px', zIndex: 900 }
     },
     closeMenus() { this.menu = ''; this.insertMode = ''; this.insertErr = '' },
+    // 滚动条藏了，纵向滚轮就得映射成横向滚动，否则窄窗口下右半截命令够不着
+    // （dev-board#502，与标签栏 onTabsWheel 同一实现）。scroll-view 真正 overflow
+    // 的是 uni-h5 渲染出的内层元素，不是根元素本身，按 scrollWidth 找。
+    onToolbarWheel(evt) {
+      const root = evt && evt.currentTarget
+      if (!root || typeof root.querySelectorAll !== 'function') return
+      let scroller = null
+      if (root.scrollWidth > root.clientWidth) scroller = root
+      if (!scroller) {
+        for (const el of root.querySelectorAll('*')) {
+          if (el.scrollWidth > el.clientWidth + 1) { scroller = el; break }
+        }
+      }
+      if (!scroller) return
+      const delta = Math.abs(evt.deltaX) > Math.abs(evt.deltaY) ? evt.deltaX : evt.deltaY
+      scroller.scrollLeft += delta
+    },
 
     // ---- 插入菜单 ----
     openInsert() {
@@ -715,12 +743,20 @@ export default {
 </script>
 
 <style scoped>
-.etb-wrap { display: flex; flex-direction: column; flex-shrink: 0; }
+/* position:relative 只为给下面那条浮起来的查找栏当定位参照；不设 z-index，
+   免得凭空造出一个会把 popStyle 的 fixed 弹层框住的层叠上下文。 */
+.etb-wrap { position: relative; display: flex; flex-direction: column; flex-shrink: 0; }
 .etb { display: flex; align-items: center; gap: 6px; height: 38px; padding: 0 8px; flex-shrink: 0;
   background: var(--awd-bg); border-bottom: 1px solid var(--awd-border); }
-/* 查找替换条：工具栏下面单独一行，开着才占高度 */
+/* 查找替换条：浮在画布顶上，**不占布局高度**（dev-board#503）。占高度的话开关
+   查找就会改 webview 尺寸，客体合成面会整块黑一帧。z 40 压过画布上的既有浮层
+   （状态胶囊 20 / 证据投放层 25 / 改字提示条 30）。 */
+/* 宽度只包住内容、靠左：工具栏横跨画布与审阅面板，铺满整行会把面板顶部那排
+   修订/批注/底稿 tab 盖住；查找栏本身不到 600px，靠左浮着基本只压画布。 */
+.etb-find-layer { position: absolute; top: 100%; left: 0; width: max-content; max-width: 100%; z-index: 40; }
 .etb-find { display: flex; align-items: center; gap: 6px; height: 36px; padding: 0 8px; flex-shrink: 0;
-  background: var(--awd-surface); border-bottom: 1px solid var(--awd-border); }
+  background: var(--awd-surface); border: 1px solid var(--awd-border); border-top: none;
+  border-radius: 0 0 8px 0; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08); }
 .etb-input.fi { width: 148px; height: 26px; flex-shrink: 0; }
 .etb-find-n { min-width: 62px; font-size: 11px; color: var(--awd-text-2); }
 .etb-find-b { padding: 3px 9px; border: 1px solid var(--awd-border); border-radius: 5px; font-size: 12px;
@@ -729,7 +765,14 @@ export default {
 .etb-find-b.on { background: var(--awd-accent-soft); border-color: var(--awd-mint); color: var(--awd-accent-text); }
 .etb-find-x { margin-left: auto; padding: 3px 9px; font-size: 12px; color: var(--awd-text-2); flex-shrink: 0; }
 .etb-err.bar { margin: 0; border-radius: 0; padding: 4px 10px; }
-.etb-scroll { flex: 1; min-width: 0; white-space: nowrap; }
+/* 滚动条整条隐藏（dev-board#502）。show-scrollbar=false 会让 uni-h5 给真正 overflow
+   的内层元素挂上 .uni-scroll-view-scrollbar-hidden，那条规则在 h5 产物的 uni.css 里
+   是实打实存在的；下面这几行是同一目的的兜底——本组件的 scoped 属性只落在
+   <uni-scroll-view> 根元素上，内层那个 div 不带 scope id，得靠 :deep 才够得着。 */
+.etb-scroll { flex: 1; min-width: 0; white-space: nowrap; scrollbar-width: none; }
+.etb-scroll::-webkit-scrollbar { display: none; }
+.etb-scroll :deep(*) { scrollbar-width: none; }
+.etb-scroll :deep(*::-webkit-scrollbar) { display: none; }
 .etb-row { display: flex; align-items: center; gap: 2px; }
 .etb-right { display: flex; align-items: center; gap: 4px; flex-shrink: 0; padding-left: 6px;
   border-left: 1px solid var(--awd-border); }

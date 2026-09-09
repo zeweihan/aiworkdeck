@@ -226,6 +226,16 @@ html[data-theme='light'] {
     --awd-info: #3B82F6;
     --awd-info-text: #1D4ED8;
     --awd-info-soft: #EFF6FF;
+    /* 文件类型色（dev-board#504）：工作台标签页的图标与激活指示条按文件类型着色。
+       前四种沿用各自宿主软件的既有认知（Word 蓝 / PPT 橙 / Excel 绿 / PDF 红），
+       Markdown 用中性灰（它是纯文本，不属于任何一家），图片取紫——六个色相里
+       只有紫既离前五种最远、又不是任何办公套件的品牌色，一眼能认出「这不是文档」。 */
+    --awd-file-word: #185ABD;
+    --awd-file-ppt: #C43E1C;
+    --awd-file-excel: #1D6F42;
+    --awd-file-pdf: #D93025;
+    --awd-file-md: #6B7280;
+    --awd-file-image: #7C3AED;
     /* 阴影与遮罩 */
     --awd-shadow-sm: 0 1px 2px rgba(18, 52, 77, 0.06);
     --awd-shadow-md: 0 4px 16px rgba(18, 52, 77, 0.08);
@@ -279,6 +289,14 @@ html[data-theme='dark'] {
     --awd-info: #3B6FD4;
     --awd-info-text: #7FAEF9;
     --awd-info-soft: rgba(59, 130, 246, 0.15);
+    /* 文件类型色：浅色那六个是「铺在白底上」调的深色，直接搬到深底上一律读不出来，
+       统一提亮到对 --awd-surface(#1C2024) 至少 4.5:1。色相不动，认知不变。 */
+    --awd-file-word: #6FA8FF;
+    --awd-file-ppt: #FF9470;
+    --awd-file-excel: #4CC38A;
+    --awd-file-pdf: #FF8A80;
+    --awd-file-md: #A6ADB4;
+    --awd-file-image: #A78BFA;
     /* 深色下阴影靠纯黑加重，浅色那套带蓝的柔光在深底上等于没有 */
     --awd-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
     --awd-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);

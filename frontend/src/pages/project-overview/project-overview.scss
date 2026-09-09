@@ -1918,7 +1918,11 @@ $color-accent: #5BD197; // Mint Green
     width: 14px;
     height: 14px;
     flex-shrink: 0;
+    /* 非激活态就是「该类型色的降透明版」——上色与调淡是同一个 opacity 在管，
+       别给非激活态再单独配一个淡色令牌。缺省（非文件标签、未收录的扩展名）
+       回落到 inherit，等于这条声明不存在。 */
     opacity: 0.75;
+    color: var(--awd-tab-kind, inherit);
   }
 
   .tab-name {
@@ -1954,11 +1958,13 @@ $color-accent: #5BD197; // Mint Green
   &.active {
     background: var(--awd-surface);
 
-    .tab-icon { opacity: 1; color: var(--awd-accent-text); }
+    .tab-icon { opacity: 1; color: var(--awd-tab-kind, var(--awd-accent-text)); }
     .tab-name { color: var(--awd-text); font-weight: 500; }
     .tab-close { color: var(--awd-text-2); }
 
-    /* 顶部 mint 提示线：激活态的唯一强信号，不再叠描边+内阴影 */
+    /* 顶部提示线：激活态的唯一强信号，不再叠描边+内阴影。
+       文件类型色（dev-board#504）就落在这条线上——文件名保持墨色不染，
+       12px 的彩色小字在浅色外壳上读起来吃力，颜色交给图标与这条线足够。 */
     &::before {
       content: '';
       position: absolute;
@@ -1966,9 +1972,20 @@ $color-accent: #5BD197; // Mint Green
       left: 0;
       right: 0;
       height: 2px;
-      background: var(--awd-mint);
+      background: var(--awd-tab-kind, var(--awd-mint));
     }
   }
+
+  /* 文件类型色（dev-board#504）：每类只落一个局部变量，上面的图标与提示线
+     统一消费它；没有 kind-* 的标签（浏览器/设置/插件/版本对比…）变量缺席，
+     两处 var() 各自回落到原来的取值，形态一字不变。
+     class 由 fileOpenTabs.js 的 tabKindClass() 给出，映射表在 fileKind.js。 */
+  &.kind-word { --awd-tab-kind: var(--awd-file-word); }
+  &.kind-ppt { --awd-tab-kind: var(--awd-file-ppt); }
+  &.kind-excel { --awd-tab-kind: var(--awd-file-excel); }
+  &.kind-pdf { --awd-tab-kind: var(--awd-file-pdf); }
+  &.kind-md { --awd-tab-kind: var(--awd-file-md); }
+  &.kind-image { --awd-tab-kind: var(--awd-file-image); }
 }
 
 .tab-item.tab-drag-over {

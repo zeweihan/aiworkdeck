@@ -596,6 +596,20 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
   uni-h5 的 `<view>` 默认 inheritAttrs，原生 `auxclick` 直接落到 `<uni-view>` 上。
   标签没有「固定/不可关」概念，所以没有例外分支；要加固定标签时先在这里加判断。
   app-e2e J6.3 末尾用 `page.mouse.click(..., { button: 'middle' })` 关设置标签兼作覆盖。
+- **标签按文件类型着色（2026-09-09，dev-board#504）**：Word 蓝 / PPT 橙 / Excel 绿 /
+  PDF 红 / Markdown 灰 / 图片紫，六色令牌 `--awd-file-*` 在 App.vue 里浅深各一套
+  （也进了 `appTheme.js` 的 `THEME_TOKEN_NAMES`）。fileType → kind key 的**唯一出处**
+  是零依赖纯函数 `pages/project-overview/fileKind.js`（`fileKindKey` / `fileKindClass`），
+  经 `fileOpenTabs.js` 的 `tabKindClass(file)` 落成模板上的 `kind-*` class，
+  **左右两个窗格的 `:class` 都要带**（数组语法，`[tabKindClass(file), { active: … }]`）。
+  样式只在 `.tab-item` 那一份里：每个 `kind-*` 只设一个局部变量 `--awd-tab-kind`，
+  图标 `color` 与激活指示条 `&::before` 各消费一次，缺席时用 `var(…, 回落)` 落回
+  原来的 inherit / `--awd-accent-text` / `--awd-mint`——所以**非文件标签（浏览器、
+  设置、插件、版本对比…）与未收录的扩展名一个像素都不变**。着色只落在图标与那条
+  2px 顶线上，**文件名保持墨色不染**（12px 彩字在浅色外壳上读着吃力）。
+  加类型：`fileKind.js` 加映射 + App.vue 加两处令牌 + scss 加一行 `&.kind-x`，
+  单测 `frontend/tests/tab-visibility/file-kind.test.mjs` 里那条「三处一一对上」的
+  断言会拦下只改一头的改法（`npm run test:tab-visibility`）。
 
 ## 相关文件
 

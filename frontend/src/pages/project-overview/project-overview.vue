@@ -868,11 +868,11 @@
                       :key="file.id"
                       v-show="isTabVisible(file)"
                       class="tab-item"
-                      :class="{
+                      :class="[tabKindClass(file), {
                         active: activeFileIdLeft === file.id,
                         'tab-drag-over': tabDragOver && tabDragOver.pane === 'left' && tabDragOver.fileId === file.id,
                         'tab-dual-open': isOpenInOtherPane(file.id, 'left')
-                      }"
+                      }]"
                       :draggable="true"
                       @tap="activateTab(file, 'left')"
                       @mousedown="onTabMouseDown"
@@ -908,11 +908,11 @@
                       :key="file.id"
                       v-show="isTabVisible(file)"
                       class="tab-item"
-                      :class="{
+                      :class="[tabKindClass(file), {
                         active: activeFileIdRight === file.id,
                         'tab-drag-over': tabDragOver && tabDragOver.pane === 'right' && tabDragOver.fileId === file.id,
                         'tab-dual-open': isOpenInOtherPane(file.id, 'right')
-                      }"
+                      }]"
                       :draggable="true"
                       @tap="activateTab(file, 'right')"
                       @mousedown="onTabMouseDown"
