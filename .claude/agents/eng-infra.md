@@ -196,7 +196,7 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
    ① `prepare-backend.js` 拆包后调 `trim-driver-bundle.js` 把 Playwright `driver-bundle-*.jar` 重写成只含 `driver/<本平台>/`（mac-arm64 / win32_x64，字符串必须与 `DriverJar#platformDir` 逐字一致，161MB→31MB）；zip 条目级原样搬运不重压，找不到本平台目录直接抛错。
    ② `backend/pom.xml` 的 `javacv-platform` 已换成 `javacv` + `ffmpeg-platform`（全仓唯一调用方 `MeetingAudioTranscoder`）；**不要再引回聚合体**，opencv/leptonica/tesseract 没有任何调用方。
    ③ mac 语言包靠 `desktop/scripts/after-pack.js`（`build.afterPack`）在签名前删 Framework 里非 en/zh_CN 的 `*.lproj`（−36MB）；`electronLanguages` 在 mac 上只裁 `Contents/Resources` 的空壳。**升级 electron-builder 要回头核 `platformPackager.js` 里 afterPack 仍早于 doSignAfterPack**；`afterPack` 相对路径按 cwd 解析，必须在 `desktop/` 里跑。
-   ④ `installer.nsh` 顶部 `SetCompressor /SOLID lzma` 盖掉 electron-builder 用 `-X` 下发的 zlib（ARM64 壳的 `File /r` 走它）；`nsis.differentialPackage=false` 关掉为 electron-updater 差量准备的 dict 1MB/非固实 7z。`installer-ui-smoke.yml` 不覆盖 installer.nsh，只有 desktop-build.yml 的 Windows 腿能验；固实压缩会让 makensis 变慢。
+   ④ `installer.nsh` 顶部 `SetCompressor lzma` + `SetCompressorDictSize 32` 盖掉 electron-builder 用 `-X` 下发的 zlib（ARM64 壳的 `File /r` 走它）；**不能加 `/SOLID`**：整体压缩模式下模板里的 `SetCompress off` 触发 warning 8021，-WX 下 makensis 直接失败（#772 合并后 Windows 腿实锤，热修 PR 见 git log）；`nsis.differentialPackage=false` 关掉为 electron-updater 差量准备的 dict 1MB/非固实 7z。`installer-ui-smoke.yml` 不覆盖 installer.nsh，只有 desktop-build.yml 的 Windows 腿能验；固实压缩会让 makensis 变慢。
    ⑤ `prepare-python-service.js` 的 `prune()` 扩表（torch/include|test|share、bin/magika|ruff、pocketsphinx-data、一级包 tests/|test/、gradio *.js.map）；**`testing/` 不能删**（`torch/__init__` eager import 它），`dist-info/RECORD` 不能删。
 
 ## 测试命令总表
