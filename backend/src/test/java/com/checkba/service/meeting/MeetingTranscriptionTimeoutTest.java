@@ -19,6 +19,8 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -206,12 +208,30 @@ class MeetingTranscriptionTimeoutTest {
         m.setTitle("会议 09-09 10:00");
         m.setStatus(MeetingRecording.STATUS_RECORDED);
         m.setCreatedBy(10001L);
-        when(meetingRepository.findById(7L)).thenReturn(Optional.of(m));
+        // save 原样返回入参，startTranscription 的返回值与 m 是同一个可变实例。提交后
+        // executor 里的 submitToTingwu 第一步就是 findById，紧接着因为桩里没有音频文件
+        // 走 failMeeting 把这同一个实例写成 FAILED——它与下面的断言抢跑，本机机器快、
+        // 断言总是先做完所以从不复现，CI 上 2026-09-09 两次翻红（expected TRANSCRIBING
+        // but was FAILED）。把后台线程卡在 findById 上直到断言做完，这个与被测语义
+        // （进入转写中时写下锚点）无关的写入就进不来。生产上不存在这个竞态：JPA 给
+        // 后台线程的是另一份实例。
+        Thread caller = Thread.currentThread();
+        CountDownLatch releaseBackground = new CountDownLatch(1);
+        when(meetingRepository.findById(7L)).thenAnswer(inv -> {
+            if (Thread.currentThread() != caller) {
+                releaseBackground.await(5, TimeUnit.SECONDS);
+            }
+            return Optional.of(m);
+        });
 
-        MeetingRecording out = service().startTranscription(7L);
-        assertEquals(MeetingRecording.STATUS_TRANSCRIBING, out.getStatus());
-        assertNotNull(out.getTranscribingStartedAt(), "没有这个锚点，卡死判定就无从算起");
-        assertTrue(out.getTranscribingStartedAt().isAfter(LocalDateTime.now().minusMinutes(1)));
+        try {
+            MeetingRecording out = service().startTranscription(7L);
+            assertEquals(MeetingRecording.STATUS_TRANSCRIBING, out.getStatus());
+            assertNotNull(out.getTranscribingStartedAt(), "没有这个锚点，卡死判定就无从算起");
+            assertTrue(out.getTranscribingStartedAt().isAfter(LocalDateTime.now().minusMinutes(1)));
+        } finally {
+            releaseBackground.countDown();
+        }
     }
 
     // ==================== 进度提示 ====================
