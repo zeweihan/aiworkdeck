@@ -65,7 +65,7 @@ function makeVm() {
       executeCommand: async (action) => { vm.dispatched.push(action); return { success: true, kind: 'writer' } },
     },
   }
-  for (const name of ['finishDocLoad', 'loadDocument', 'retryLoad', 'bootMilestone']) vm[name] = METHODS[name].bind(vm)
+  for (const name of ['finishDocLoad', 'loadDocument', 'retryLoad', 'bootMilestone', 'initWritingAssistance']) vm[name] = METHODS[name].bind(vm)
   return vm
 }
 
