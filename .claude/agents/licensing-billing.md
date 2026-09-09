@@ -965,6 +965,17 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     两者混成 0 的后果是：刚跑完一场两小时转写的用户看到「本月 0 Credits」，
     他的下一步是来问账是不是没记上。
 
+43. **测 `startTranscription` 时，先把后台线程卡住再断言状态**。`save` 桩原样返回入参，
+    返回值与测试持有的实体是**同一个可变实例**；提交后 `executor` 里的 submit 第一步
+    `findById` 拿到同一实例，紧接着因桩里没有音频文件走 `failMeeting` 写成 FAILED，
+    与断言抢跑。本机断言总是先做完永远复现不出，CI 上已经三次翻红（08-30 / 09-03 /
+    09-09，三条不同用例，每次都是 expected TRANSCRIBING but was FAILED）。生产没有
+    这个竞态（JPA 给后台线程另一份实例），所以修在测试：在 `findById` 桩里按线程身份
+    把非调用线程 `await` 在一把 latch 上，断言做完 `finally` 放行——
+    `MeetingTranscriptionTimeoutTest.startTranscriptionStampsAnchor` 与
+    `MeetingTranscriptionServiceTest.concurrentStartTranscriptionOnlySubmitsOnce` 是现成写法。
+    要「还原病灶」就在断言前插 200ms 睡眠，必红。
+
 ## 团队通道（2026-09-07，dev-board#496）
 
 律所管理者在 IDE 内看全所使用统计。设计 `docs/superpowers/specs/2026-09-07-law-firm-team-usage-design.md`
