@@ -154,8 +154,9 @@ import { DOC_MUTATED_EVENT } from '@/utils/docEvents.js'
 import { getResolvedTheme, APP_THEME_EVENT } from '@/utils/appTheme.js'
 import { stampApplication } from '@/utils/docxAppProps.js'
 import { documentStampApplication } from '@/utils/documentGeneratorSetting.js'
+import { createInlineReviewHost } from '@/composables/inlineReviewHost.js'
 import { createWritingAssistanceHost } from '@/composables/writingAssistanceHost.js'
-import { listWritingCompletions, learnWritingCompletions, deleteWritingCompletion, clearWritingCompletions, lookupWritingSelection, getDocInsightEntity, getWritingCompletionDetail } from '@/services/api.js'
+import { reviewDocInsight, listWritingCompletions, learnWritingCompletions, deleteWritingCompletion, clearWritingCompletions, lookupWritingSelection, getDocInsightEntity, getWritingCompletionDetail } from '@/services/api.js'
 import { guestPointToHost } from '@/utils/insightPopup.js'
 
 let seq = 0
@@ -173,7 +174,7 @@ export default {
   components: { ReviewPanel, EditorToolbar, EvidenceStaleBar },
   // command-progress：批量命令（find_replace >50 命中 / apply_house_style）的
   // 「第 x/y 处」进度，{reqId, done, total}；reqId 可用 executeCommand('cancel', {reqId}) 喊停。
-  // open-insight：工具栏「解析」按钮 → 宿主打开「依据」窗格并（必要时）发起解析。
+  // open-insight：行内写作提示 → 宿主打开「依据」窗格；不自动调用 AI 或外部库。
   // cursor-context：画布点击/光标移动时客体页回传的光标邻域（仅在 insightSubscribed
   //   为真时才产生——不订阅时客体页一条都不发，常态零开销）。
   emits: ['close', 'ready', 'open-url', 'menu-state', 'evidence-drop', 'locator-consumed', 'open-evidence-target', 'command-progress', 'open-insight', 'cursor-context'],
@@ -359,6 +360,7 @@ export default {
   },
   beforeUnmount() {
     if (this._writingHost) { this._writingHost.destroy(); this._writingHost = null }
+    if (this._inlineReviewHost) { this._inlineReviewHost.destroy(); this._inlineReviewHost = null }
     uni.$off('file-drag-start', this._onEvidenceDragStart)
     uni.$off('file-drag-end', this._onEvidenceDragEnd)
     if (this._onThemeChanged) { uni.$off(APP_THEME_EVENT, this._onThemeChanged); this._onThemeChanged = null }
@@ -614,6 +616,7 @@ export default {
     // 建元素流程。文档字节的预取结果仍然有效（失败的是引擎不是下载），留着。
     async remountEditor() {
       if (this._writingHost) { this._writingHost.destroy(); this._writingHost = null }
+      if (this._inlineReviewHost) { this._inlineReviewHost.destroy(); this._inlineReviewHost = null }
       this.appendLog('用户点击重试（重启引擎）/ retry requested (engine remount)')
       try { if (this._eventUnsub) this._eventUnsub() } catch (e) { /* ignore */ }
       this._eventUnsub = null
@@ -752,7 +755,9 @@ export default {
     subscribeHostEvents(transport) {
       this._eventUnsub = transport.subscribe((msg) => {
         if (!msg || msg.__lo !== 'lo-relay') return
-        if (msg.type === 'writing-request') {
+        if (msg.type === 'inline-review-request') {
+          if (this._inlineReviewHost) this._inlineReviewHost.handle(msg)
+        } else if (msg.type === 'writing-request') {
           if (this._writingHost) this._writingHost.handle(msg)
         } else if (msg.type === 'open-url' && msg.url) {
           this.$emit('open-url', String(msg.url))
@@ -906,6 +911,7 @@ export default {
     // 备胎空白 boot 完成），以及 file watcher（备胎在引擎就绪后被过继）。
     async finishDocLoad() {
       if (this._writingHost) { this._writingHost.destroy(); this._writingHost = null }
+      if (this._inlineReviewHost) { this._inlineReviewHost.destroy(); this._inlineReviewHost = null }
       // 重入闸：卡住 30s 露出的「重试」按钮会在原来那次装载**仍在途**时（弱网/挂起
       // 代理下 XHR 的 60s 超时还没到）再起一条链路，两条各自 dispatch 一次
       // load_document，且后完成的那条按最后写者赢覆盖 ready/statusKey/docKind——
@@ -976,6 +982,7 @@ export default {
     },
     initWritingAssistance() {
       if (this._writingHost) { this._writingHost.destroy(); this._writingHost = null }
+      if (this._inlineReviewHost) { this._inlineReviewHost.destroy(); this._inlineReviewHost = null }
       if (!this.ready || this._reloading || this.docLoadFailed || this.docKind !== 'writer' || !this.file?.id || !this.projectId || !this._transportSend) return
       this._writingHost = createWritingAssistanceHost({
         projectId: Number(this.projectId), fileId: this.file.id, userId: (getCurrentUser() || {}).id || 'local',
@@ -986,6 +993,14 @@ export default {
           clear: clearWritingCompletions, lookup: lookupWritingSelection, detail: getDocInsightEntity, learnedDetail: getWritingCompletionDetail },
       })
       this._writingHost.start()
+      this._inlineReviewHost = createInlineReviewHost({
+        projectId: Number(this.projectId), fileId: this.file.id, userId: (getCurrentUser() || {}).id || 'local',
+        execute: (action, params) => this.executor.executeCommand(action, params), send: this._transportSend,
+        writable: this.canWrite, review: reviewDocInsight,
+        storage: { get: (key) => uni.getStorageSync(key), set: (key, value) => uni.setStorageSync(key, value) },
+        openInsight: () => this.onToggleInsight(),
+      })
+      this._inlineReviewHost.start()
     },
     // Kick off the (authed) document download without waiting for the engine.
     // loadDocument() awaits this promise; on failure it falls back to a fresh
@@ -1127,6 +1142,7 @@ export default {
       // （后端内容是权威），丢掉这一笔是语义本身，不是数据损失。
       this._reloading = true
       if (this._writingHost) { this._writingHost.destroy(); this._writingHost = null }
+      if (this._inlineReviewHost) { this._inlineReviewHost.destroy(); this._inlineReviewHost = null }
       const cancelAutoSave = () => {
         clearTimeout(this._saveTimer)
         this._saveTimer = null
@@ -1338,6 +1354,7 @@ export default {
       // 它描述的是即将被替换掉的旧文档，标脏只会让 autosave 把旧内容传回去。
       if (this._reloading || this._saveDiscarded) return
       this.dirty = true
+      this._inlineReviewHost?.modified()
       if (!this._dirtySince) this._dirtySince = Date.now()
       this.scheduleAutoSave()
       this.scheduleAnchorCheck()

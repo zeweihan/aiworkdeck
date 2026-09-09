@@ -351,3 +351,7 @@ txt/md/markdown 自 dev-board#37 起不进 LOWA（前端走 PlainTextEditor.vue�
 - **枚举列宽**：`evidence_link_target.method` 是 varchar(32) —— 枚举里最长的 `written_statement` 有 17 个字符，原来的 16 让「书面确认」型链接**永远存不进去**（真实起草跑分报 `Value too long for column method`）。改枚举时一并核对列宽，回归测试 `EvidenceLinkServiceTest.enumColumnsAreWideEnoughForEveryAllowedValue` 钉住。
 
 - **worker 失败原因不能丢**：`agentClientActions.handleEditorCommand` 回传失败时 `error` 缺省要退到 `message` —— worker 里大量失败分支只填 `message`（`delete_match` 的「match index out of range」之类），只取 `error` 的话模型收到 `{"error": "null"}`，只能瞎猜着重试。回归用例 `frontend/tests/project-home/editor-command-failure-reason.test.mjs`。
+
+## 即时审校的范围契约（dev-board#547）
+
+新增 editor action `get_review_context`、`goto_review_range`、`apply_review_edit` 服务用户审校卡片，不新增 AI 工具。范围由 `revision + paragraphIndex（0 基）+ start/end（UTF-16）+ expectedParagraph + quote` 联合校验，禁止从过期提示直接改正文；修订采用与单步撤销复用现有基础设施。`ContractStructureAudit.Report.findingsTruncated` 表示任一规则结果超限，不能把截断报告当完整报告；正文编号检查遇被跳过的段落索引要断开连续性推断。完整契约与测试见 doc-editor/doc-insight。

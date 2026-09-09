@@ -15,6 +15,8 @@
 // offset-shaped actions must map to anchors on the worker, never integer offsets.
 
 export const EDITOR_ACTIONS = [
+  // Ephemeral inline review: immutable paragraph validation, no saved bookmarks.
+  'get_review_context', 'goto_review_range', 'apply_review_edit',
   // [verified] proven against the Phase 0 spike UNO bridge
   'insert_at_cursor', 'replace_selection', 'find_replace', 'get_selection',
   // find_text_locations returns stable anchorIds (bookmarks), NOT integer offsets (§0.2)

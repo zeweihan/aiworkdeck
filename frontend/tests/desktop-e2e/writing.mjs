@@ -71,6 +71,7 @@ elec.stdout.pipe(log); elec.stderr.pipe(log)
 let browser
 let failed = null
 const requests = []
+const reviewRequests = []
 try {
   const ws = await waitForCdpWs(CDP_PORT, 60, elec)
   if (!ws) throw new Error(`CDP 未就绪；日志 ${logPath}`)
@@ -93,6 +94,9 @@ try {
   await hardenPageInput(page)
   page.on('request', (request) => {
     if (request.url().includes('/api/')) requests.push(`${request.method()} ${new URL(request.url()).pathname}`)
+    if (new URL(request.url()).pathname.endsWith('/insight/review')) {
+      try { reviewRequests.push(JSON.parse(request.postData() || '{}')) } catch {}
+    }
   })
   await page.evaluate(() => localStorage.setItem('awd_app_language', 'zh-CN'))
   const workbenchUrl = `${DEVURL}/#/pages/project-overview/project-overview?id=${project.id}`
@@ -204,6 +208,27 @@ try {
   await guest.keyboard.press('Tab')
   await guest.waitForFunction((name) => document.querySelector('.awd-wa-heading')?.textContent.includes(name), { timeout: 15000 }, selectedName)
 
+  // Continue normal writing: rules must inspect live text without an explicit parse.
+  await guest.keyboard.press('Escape')
+  await guest.keyboard.press('End')
+  await guest.keyboard.press('Enter')
+  const draft = '第一条 付款金额：【待填写】。'
+  await guest.evaluate(() => document.activeElement?.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' })))
+  await guest.keyboard.sendCharacter(draft)
+  await guest.evaluate((text) => document.activeElement?.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: text })), draft)
+  await guest.waitForFunction(() => /[1-9]\d* 条提示/.test(document.querySelector('.awd-ir-status')?.textContent || ''), { timeout: 30000 }).catch(async error => {
+    console.error('INLINE STATE', await guest.evaluate(() => ({ status: document.querySelector('.awd-ir-status')?.outerHTML, panel: document.querySelector('.awd-ir-panel')?.textContent })))
+    console.error('REVIEW REQUEST COUNT', reviewRequests.length, 'LAST', JSON.stringify(reviewRequests.at(-1)))
+    await guest.screenshot({ path: path.join(os.tmpdir(), 'awd-547-desktop-inline-failure.png') })
+    throw error
+  })
+  await guest.click('.awd-ir-status')
+  await guest.waitForFunction(() => document.querySelector('.awd-ir-panel')?.textContent.includes('存在待定内容'), { timeout: 10000 })
+  await guest.screenshot({ path: path.join(os.tmpdir(), 'awd-547-desktop-inline.png') })
+  if (!reviewRequests.some((body) => body.paragraphs?.some((p) => p.text.includes(draft)))) throw new Error('即时审校未读取刚输入的正文')
+  if (reviewRequests.some((body) => body.deep !== false)) throw new Error('普通编辑意外调用深入审校')
+  if (requests.some((item) => /\/insight\/(parse|entities\/[^/]+\/refresh)$/.test(item))) throw new Error('普通编辑意外触发全文在线核验或外部刷新')
+
   await page.waitForFunction(() => {
     let seed = [...document.querySelectorAll('*')].find((element) => element.__vueParentComponent)?.__vueParentComponent
     if (!seed) return false
@@ -235,6 +260,7 @@ try {
   const xml = execFileSync('unzip', ['-p', tempDoc, 'word/document.xml'], { encoding: 'utf8' })
   fs.rmSync(tempDoc, { force: true })
   if (!xml.includes(selectedName)) throw new Error('下载的 docx 未包含 Tab 接受后的机构全称')
+  if (!xml.includes('待填写')) throw new Error('即时审校不应自动删除待填写内容')
   if (!requests.includes(`GET /api/projects/${project.id}/completion`)) {
     throw new Error('请求监听未捕获词库加载，不能验证在线查询次数')
   }
@@ -242,7 +268,7 @@ try {
     throw new Error(`输入与补全期间意外触发在线 lookup: ${JSON.stringify(requests)}`)
   }
   console.log('阶段 4/4：自动保存和下载校验完成')
-  console.log(`通过：IME 输入 → 2 候选 → Tab 接受 → 自动保存 → docx 命中“${selectedName}”；在线 lookup=0。`)
+  console.log(`通过：IME 输入 → 2 候选 → Tab 接受 → 自动保存 → docx 命中“${selectedName}”；本地即时审校识别待填写内容，AI/在线 lookup=0。`)
 } catch (error) {
   failed = error
   console.error(`失败：${error.stack || error.message}`)

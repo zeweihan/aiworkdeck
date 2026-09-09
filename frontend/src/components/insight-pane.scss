@@ -8,7 +8,7 @@
 
 .ip { display: flex; flex-direction: column; flex: 1; min-height: 0; background: var(--awd-surface); }
 
-// ---- 头部：文档名 + 解析按钮 ----
+// ---- 头部：文档名 + 显式在线核验 ----
 .ip-head {
   display: flex; align-items: center; gap: 6px;
   height: var(--awd-panel-sec-h, 26px); min-height: var(--awd-panel-sec-h, 26px);
@@ -23,6 +23,9 @@
   flex: none; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;
   color: var(--awd-accent-text); background: var(--awd-accent-soft); border: 1px solid var(--awd-mint);
 }
+.ip-online { padding: 6px var(--awd-panel-pad-x, 10px); border-bottom: 1px solid var(--awd-panel-border, var(--awd-border)); }
+.ip-online .ip-parse { display: block; text-align: center; white-space: normal; }
+.ip-online-note { display: block; margin-top: 4px; font-size: 11px; line-height: 1.5; color: var(--awd-text-3); }
 .ip-parse.disabled { color: var(--awd-text-3); background: var(--awd-surface-2); border-color: var(--awd-border); }
 
 // ---- run 状态行 ----

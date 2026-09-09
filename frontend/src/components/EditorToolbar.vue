@@ -242,11 +242,6 @@
       <view class="etb-btn wide" :class="{ on: reviewOpen }" :title="$t('editor.toolbar.reviewPanel')" @tap.stop="$emit('toggle-review')">
         <text class="etb-tx sm">{{ $t('editor.toolbar.reviewShort') }}</text>
       </view>
-      <!-- 解析（dev-board#182）：AI 通读全文抽实体 + 打外部库 + 一致性校验，联动打开
-           「依据」窗格。这条工具栏只在 docKind==='writer' 时渲染，所以不用再判文档类型。 -->
-      <view class="etb-btn wide" :class="{ on: insightOpen }" :title="$t('editor.toolbar.insightPanel')" @tap.stop="$emit('toggle-insight')">
-        <text class="etb-tx sm">{{ $t('editor.toolbar.insightShort') }}</text>
-      </view>
       <view class="etb-stepper" :title="$t('editor.toolbar.zoom')">
         <text class="etb-step-b" @tap.stop="stepZoom(-10)">−</text>
         <text class="etb-step-v z" @tap.stop="resetZoom">{{ Math.round(state.view.zoom || 100) }}%</text>

@@ -19,6 +19,7 @@
 import { startEditorEndpoint } from '../composables/zetaOfficeEditorEndpoint.js'
 import { attachImeOverlay } from '../composables/zetaOfficeImeOverlay.js'
 import { attachWritingAssistance } from '../composables/zetaOfficeCompletion.js'
+import { attachInlineReview } from '../composables/zetaOfficeInlineReview.js'
 // 光标邻域半径的单一出处：宿主侧 matchEntityAt 用同一个默认值做窗口截取，
 // 两边不一致会让「实体名明明就在光标上却匹配不到」（纯数据模块，不带 Vue/uni）。
 import { CURSOR_RADIUS } from '../utils/insightMatch.js'
@@ -214,11 +215,13 @@ try {
 // (autosave) The worker posts one 'modified' per document change (typed / IME /
 // AI command — see installModifyListener in office_thread.js). The host only
 // needs an edge to debounce-save on, so throttle the relay to 1/500ms.
+let inlineReview = null
 let lastModifiedRelay = 0
 function relayModified(d) {
   if (!d || !d.cmd) return
   if (d.cmd === 'sel_changed') { relaySelection(); return }
   if (d.cmd !== 'modified') return
+  inlineReview?.documentChanged()
   const now = Date.now()
   if (now - lastModifiedRelay < 500) return
   lastModifiedRelay = now
@@ -406,8 +409,8 @@ startEditorEndpoint({
       onEnter: () => endpoint.executor.executeCommand('insert_paragraph', {}),
       sendCommand: (action, params) => endpoint.executor.executeCommand(action, params),
       // 覆盖层每做完一个移动光标的动作就报一声，宿主据此刷新工具栏激活态
-      onCursorMoved: relaySelection,
-      onCommitted: (text) => writingAssistance?.committed(text),
+      onCursorMoved: () => { relaySelection(); inlineReview?.cursorMoved() },
+      onCommitted: (text) => { writingAssistance?.committed(text); inlineReview?.committed(text) },
       onAssistanceKey: (event) => writingAssistance?.keydown(event) || false,
       onLog: (m) => { console.log('[zeta-editor]', m); if (VERIFY) vlog(m) },
     })
@@ -416,7 +419,9 @@ startEditorEndpoint({
       execute: (action, params) => endpoint.executor.executeCommand(action, params),
       transport: hostTransport, focus: overlay.focus, language: q.get('uilang') || 'zh-CN',
     })
-    window.addEventListener('pagehide', () => writingAssistance.destroy(), { once: true })
+    inlineReview = attachInlineReview({ canvas: document.getElementById('qtcanvas'), input: overlay.element,
+      execute: (action, params) => endpoint.executor.executeCommand(action, params), transport: hostTransport, language: q.get('uilang') || 'zh-CN' })
+    window.addEventListener('pagehide', () => { writingAssistance.destroy(); inlineReview.destroy() }, { once: true })
   } catch (e) { console.error('[zeta-editor] IME overlay failed:', e); if (VERIFY) vlog('IME overlay failed: ' + (e && e.message || e)) }
   // 触控板捏合缩放。Chromium 把捏合报成 ctrlKey + wheel；**不拦下来**浏览器就去
   // 缩放整个 webview 页面——LO 自己的工具栏跟着一起放大、画布重采样发糊，而且

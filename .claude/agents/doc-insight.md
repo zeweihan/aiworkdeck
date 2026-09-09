@@ -437,6 +437,22 @@ cd frontend && npm run build:h5 && npm run build:zetaoffice   # 改 editor-main.
 
 ## 验证
 
+## 即时审校（dev-board#547）
+
+`POST /api/projects/{projectId}/insight/review` 接收当前未保存的正文段落
+`{docFileId, paragraphs:[{index,text}], deep, truncated}`，返回
+`{findings, summary, truncated, scope:"body", deep}`。段落 index 为 0 基；finding 带当前段落全文
+`expectedParagraph` 和定位区间，宿主必须按同一编辑器 revision 接收结果，过期响应直接丢弃。
+
+- `deep:false` 只运行 `ContractStructureAudit` 的字形、编号、交叉引用、待定内容、同段算术规则，
+  以及 `DocInsightChecks.usccIssues`。不调模型、不查外部库、不写 insight run/entity/finding 表。
+- `deep:true` 只能由有写权限的用户点击“深入审校”触发：辅助模型在一次分块调用中抽取 claims
+  和有两条逐字引文支撑的主体/权利义务/条件/日期疑点、记 token 用量，再由
+  `DocInsightChecks.countMismatches` 做确定性数量矛盾判定。同一文档单飞，仍不做工商、法规、案例或引用外查；
+  坏 JSON 会令 `summary.deepComplete=false`，不得显示成“未发现问题”。
+- scope 仅为 Writer 正文；表格、页眉页脚等当前拿不到可靠段落的内容，继续由保存文件后的专门核验覆盖。
+- 即时 finding 只陈述机械事实；重复或已过期的模型 quote 不下发定位结果，也不得自动改文档。
+
 ```
 cd backend && mvn test -Dtest='DocInsight*,LawArticle*'   # 70 条
 cd backend && mvn test -Dtest='*Mcp*Test'                 # 含 StreamableHttpMcpProviderCredentialTest（空凭证不发请求）
