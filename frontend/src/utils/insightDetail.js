@@ -290,3 +290,10 @@ export function rawFallback(detail, limit = 4000) {
     return ''
   }
 }
+
+// 检索来源的展示键（dev-board#541）：后端 retrievalSource 是技术串（project-file / qichacha+mcp），
+// 浮窗与详情标签页要显示成人话。认不出来的来源返回 null，调用方原样显示。
+const SOURCE_I18N = { 'project-file': 'insight.source.projectFile', 'qichacha+mcp': 'insight.source.qichacha' }
+export function retrievalSourceKey(src) {
+  return (src && SOURCE_I18N[String(src)]) || null
+}

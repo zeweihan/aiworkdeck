@@ -40,7 +40,8 @@
       <template v-if="doc">
         <text class="ieb-title">{{ doc.fileName }}</text>
         <text v-if="doc.filePath" class="ieb-meta">{{ doc.filePath }}</text>
-        <text class="ieb-link" @tap.stop="openDoc">{{ $t('insight.openDocFile') }}</text>
+        <!-- 浮窗（compact）自己的底栏已有「打开文件」，这里不再重复一个入口 -->
+        <text v-if="!compact" class="ieb-link" @tap.stop="openDoc">{{ $t('insight.openDocFile') }}</text>
       </template>
     </template>
 
@@ -66,7 +67,8 @@
 
     <!-- 认得的字段一个都没渲染出来时才亮原文兜底（不是每次都把 JSON 铺一遍） -->
     <text v-if="showRaw" class="ieb-raw">{{ raw }}</text>
-    <text v-if="empty" class="ieb-hint">{{ kind === 'DOC' ? $t('insight.docNotFound') : $t('insight.noDetail') }}</text>
+    <!-- DOC 未命中在浮窗里由头部 retrievalNote 说明，compact 档不再重复一句 -->
+    <text v-if="empty && !(compact && kind === 'DOC')" class="ieb-hint">{{ kind === 'DOC' ? $t('insight.docNotFound') : $t('insight.noDetail') }}</text>
   </view>
 </template>
 

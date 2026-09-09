@@ -16,7 +16,7 @@
 
       <view class="ihc-status">
         <view class="ihc-dot" :class="'st-' + (entity.retrievalStatus || 'PENDING')"></view>
-        <text v-if="entity.retrievalSource" class="ihc-src">{{ entity.retrievalSource }}</text>
+        <text v-if="entity.retrievalSource" class="ihc-src">{{ sourceLabel }}</text>
       </view>
       <text v-if="entity.retrievalNote" class="ihc-note" :class="'st-' + (entity.retrievalStatus || 'PENDING')">{{ entity.retrievalNote }}</text>
 
@@ -55,7 +55,7 @@
 
 import InsightEntityBody from '@/components/InsightEntityBody.vue'
 import { getDocInsightEntity } from '@/services/api.js'
-import { projectFile } from '@/utils/insightDetail.js'
+import { projectFile, retrievalSourceKey } from '@/utils/insightDetail.js'
 import { hoverCardPosition } from '@/utils/insightPopup.js'
 
 const CARD_W = 320
@@ -92,6 +92,12 @@ export default {
     }
   },
   computed: {
+    sourceLabel() {
+      const s = this.entity && this.entity.retrievalSource
+      if (!s) return ''
+      const k = retrievalSourceKey(s)
+      return k ? this.$t(k) : String(s)
+    },
     kind() {
       const k = this.entity && this.entity.kind
       return k === 'LAW' || k === 'CASE' || k === 'DOC' ? k : 'COMPANY'

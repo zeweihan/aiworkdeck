@@ -49,6 +49,10 @@ export default {
   openDocFile: 'Open file',
   docNotFound: 'No such file in this project',
   docMissing: 'That file is no longer in this project',
+  source: {
+    projectFile: 'Project file',
+    qichacha: 'Qichacha',
+  },
 
   mentions: '{count} mention(s)',
   mentionsTitle: 'Mentions in this document',

@@ -54,6 +54,11 @@ export default {
   openDocFile: '打开文件',
   docNotFound: '项目中未找到该文件',
   docMissing: '文件已不在项目中',
+  // 检索来源的人话（浮窗 / 详情标签页的来源行）
+  source: {
+    projectFile: '项目文件',
+    qichacha: '企查查',
+  },
 
   mentions: '{count} 处',
   mentionsTitle: '文中出处',

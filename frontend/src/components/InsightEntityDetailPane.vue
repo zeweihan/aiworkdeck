@@ -9,7 +9,7 @@
       </view>
       <view class="iedp-status">
         <view class="iedp-dot" :class="'st-' + (entity.retrievalStatus || 'PENDING')"></view>
-        <text v-if="entity.retrievalSource" class="iedp-src">{{ entity.retrievalSource }}</text>
+        <text v-if="entity.retrievalSource" class="iedp-src">{{ sourceLabel }}</text>
       </view>
       <text v-if="entity.retrievalNote" class="iedp-note" :class="'st-' + (entity.retrievalStatus || 'PENDING')">{{ entity.retrievalNote }}</text>
 
@@ -42,6 +42,7 @@
 
 import InsightEntityBody from '@/components/InsightEntityBody.vue'
 import { getDocInsightEntity } from '@/services/api.js'
+import { retrievalSourceKey } from '@/utils/insightDetail.js'
 
 function unwrap(resp) {
   if (resp && typeof resp === 'object' && 'code' in resp && 'data' in resp) return resp.data
@@ -69,6 +70,12 @@ export default {
     }
   },
   computed: {
+    sourceLabel() {
+      const s = this.entity && this.entity.retrievalSource
+      if (!s) return ''
+      const k = retrievalSourceKey(s)
+      return k ? this.$t(k) : String(s)
+    },
     entity() { return Object.assign({}, (this.spec && this.spec.entity) || {}, this.view || {}) },
     kind() {
       const k = this.entity.kind
