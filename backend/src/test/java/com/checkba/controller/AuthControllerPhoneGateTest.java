@@ -82,7 +82,7 @@ class AuthControllerPhoneGateTest {
         return new AuthController(userService, null, null, deviceTokenService,
                 mock(AuthAbuseGuard.class), null, null, mailAuthService, null, sessions,
                 false, phoneLoginGuard,
-                mock(com.checkba.service.account.AccountDeletionService.class));
+                mock(com.checkba.service.account.AccountDeletionService.class), null);
     }
 
     private static UserSessionService sessions() {
