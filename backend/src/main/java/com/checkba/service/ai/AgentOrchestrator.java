@@ -13,7 +13,6 @@ import dev.langchain4j.model.chat.StreamingChatLanguageModel;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import java.util.List;
 import java.util.Map;
@@ -103,10 +102,70 @@ public class AgentOrchestrator {
             });
 
     /**
-     * 单次 Agent 运行的循环守卫状态（随递归传递）：
-     * 打转检测 + 连续失败计数 + 模型故障转移进度，防止模型原地打转耗尽步数预算。
+     * 单次 Agent 运行（= 一个轮次 = 一个 runId）的全部状态（随递归与两处回调传递）。
+     *
+     * <p><b>轮次隔离的落点就是这个对象（dev-board#533，审计「留给维护者拍板」第 2、4 条）</b>：
+     * 取消标志、流式缓冲、本轮 ASSISTANT 行 id、SSE 连接代次此前都是
+     * conversationId -&gt; 单槽 的 map，同一会话的两个并发轮次（双击发送 / 两个标签页 /
+     * 客户端重试 / 手机端镜像同一会话）会互相踩：
+     * <ul>
+     *   <li>后起一轮把行 id 槽清掉，先起那一轮收尾时拿到<b>别人的行 id</b> 去 update，
+     *       两轮回复合并成一行、其中一轮的正文永久消失；</li>
+     *   <li>后起一轮开头无条件 {@code cancelledConversations.remove(conversationId)}，
+     *       把上一轮尚未生效的取消标志擦掉——用户点了停止，旧轮次却一路跑到底。</li>
+     * </ul>
+     * 现在这些字段都挂在本对象上，每轮一个，谁也够不着谁。
+     *
+     * <p>会话级的副作用（run_state 状态点、bubble_end/cancelled/error、关流、过卷游标）
+     * 只有<b>当前轮次</b>才允许写，见 {@link AgentOrchestrator#isCurrentRun}——否则被取代的
+     * 旧轮次收尾时会把新轮次的 UI 状态一并终结掉。
      */
-    private static class RunGuard {
+    static final class RunGuard {
+        /** 归属会话。SSE / 状态点 / 落库都按它寻址。 */
+        final String conversationId;
+        /** 本轮标识。SkillRouter 的生效集合、日志与排障都按它索引；进程内唯一即可，不入库。 */
+        final String runId;
+        /**
+         * 本轮开始时记下的 SSE 连接代次：收尾时 close() 原样带回，
+         * 防止跑了半天的旧一轮把期间用户重连建立的新连接误杀（见 SseEmitterService.close）。
+         */
+        final long connectionEpoch;
+        /** 本轮已流出的正文（断线重连恢复快照 / 取消与出错时保存半截内容）。 */
+        private final StringBuilder streamContent = new StringBuilder();
+        /** 本轮 ASSISTANT 消息的行 ID：本轮内的增量/最终保存更新同一行，跨轮次互不覆盖。 */
+        private volatile Long assistantMessageId;
+        /** 本轮的取消标志。只有 {@link AgentOrchestrator#setCancelled} 解析到的那一轮会被置位。 */
+        private final java.util.concurrent.atomic.AtomicBoolean cancelled =
+                new java.util.concurrent.atomic.AtomicBoolean();
+
+        RunGuard(String conversationId, String runId, long connectionEpoch) {
+            this.conversationId = conversationId;
+            this.runId = runId;
+            this.connectionEpoch = connectionEpoch;
+        }
+
+        /** 流式 token 与恢复快照跨线程（HTTP 流线程写、SSE /connect 线程读），必须同步。 */
+        void appendStream(String token) {
+            if (token == null || token.isEmpty()) return;
+            synchronized (streamContent) {
+                streamContent.append(token);
+            }
+        }
+
+        String streamSnapshot() {
+            synchronized (streamContent) {
+                return streamContent.toString();
+            }
+        }
+
+        void cancel() {
+            cancelled.set(true);
+        }
+
+        boolean isCancelled() {
+            return cancelled.get();
+        }
+
         // 原地打转检测：滑动窗口，识别 A/A/A 与 A/B/A/B 两种重复模式，先干预后熔断
         final StuckDetector stuck = new StuckDetector();
         // 已经试过并失败的模型（含当前模型），故障转移时跳过
@@ -132,15 +191,15 @@ public class AgentOrchestrator {
     private static final com.fasterxml.jackson.databind.ObjectMapper SKILL_UPDATE_MAPPER =
             new com.fasterxml.jackson.databind.ObjectMapper();
 
-    // 取消状态管理：存储被取消的会话ID
-    private final Set<String> cancelledConversations = ConcurrentHashMap.newKeySet();
-    // 存储当前活跃会话的已生成内容（用于取消时保存部分内容）
-    private final Map<String, StringBuilder> activeStreamContent = new ConcurrentHashMap<>();
-    // 本轮 ASSISTANT 消息的行 ID：同一轮内的增量保存/最终保存更新同一行，跨轮次互不覆盖
-    private final Map<String, Long> activeAssistantMessageId = new ConcurrentHashMap<>();
-    // 本轮开始时记下的 SSE 连接代次：收尾调用 sseEmitterService.close() 时原样带回，
-    // 防止跑了半天的旧一轮在收尾时把期间用户重连建立的新连接误杀（见 SseEmitterService.close 注释）
-    private final Map<String, Long> turnConnectionEpoch = new ConcurrentHashMap<>();
+    /**
+     * 每会话「当前活跃轮次」：conversationId -&gt; RunGuard。
+     *
+     * <p>只登记最新的一轮。被取代的旧轮次<b>仍持有自己的 RunGuard 继续跑完</b>
+     *（工具副作用已经发生，强杀不比跑完安全），只是不再是本会话的当前轮次：
+     * 它的落库照旧走自己的行，会话级副作用一律不再执行（{@link #isCurrentRun}）。
+     * {@code cancel(conversationId)} 与断线重连的恢复快照都靠这张表解析 runId。
+     */
+    private final Map<String, RunGuard> activeRuns = new ConcurrentHashMap<>();
 
     private final ChatModelFactory chatModelFactory;
     private final ProjectAiMessageService messageService;
@@ -170,90 +229,144 @@ public class AgentOrchestrator {
     // ==================== 取消功能相关方法 ====================
 
     /**
-     * 标记会话为已取消
+     * 开一轮：生成 runId、记下 SSE 连接代次、登记为该会话的当前轮次。
+     *
+     * <p>登记是<b>覆盖式</b>的：上一轮若还在跑，从这一刻起它就不再是当前轮次
+     *（它自己的 RunGuard 仍然有效，落库照旧）。
+     */
+    private RunGuard beginRun(String conversationId) {
+        RunGuard guard = new RunGuard(conversationId, java.util.UUID.randomUUID().toString(),
+                sseEmitterService.currentEpoch(conversationId));
+        activeRuns.put(conversationId, guard);
+        return guard;
+    }
+
+    /**
+     * 本轮是否仍是该会话的当前轮次。
+     *
+     * <p>被新一轮取代之后一律返回 false，此后本轮不许再碰任何<b>会话级</b>状态
+     *（run_state 状态点、bubble_end/cancelled/error、关流、过卷游标）——旧轮次的终态
+     * 事件打到前端就是把新轮次的气泡当场结束掉，状态点更会把 RUNNING 覆盖成 FINISHED。
+     * 本轮自己的东西（消息行、执行日志、重试预算）不受影响，照常写完。
+     */
+    private boolean isCurrentRun(RunGuard guard) {
+        return guard != null && activeRuns.get(guard.conversationId) == guard;
+    }
+
+    /** 轮次收尾：把自己从当前轮次登记里摘掉（若已被取代则什么都不做），并释放 skill 的轮次记录。 */
+    private void endRun(RunGuard guard) {
+        if (guard == null) return;
+        activeRuns.remove(guard.conversationId, guard);
+        skillRouter.clearRun(guard.runId);
+    }
+
+    /**
+     * 标记会话「停止生成」：解析到该会话<b>当前活跃的那一轮</b>再置位。
+     *
+     * <p>刻意不是会话级的粘性标志（那正是本次要消灭的缺陷）：粘性标志一旦置上，
+     * 用户「停止后立刻再发」的新一轮会被上一轮的标志误杀，而新一轮开头的无条件清标志
+     * 又会把上一轮真正的取消擦掉——两头都错。没有活跃轮次时本方法是 no-op：
+     * 没有正在跑的东西可停，也绝不能给下一轮留下一个定时炸弹。
      */
     public void setCancelled(String conversationId) {
-        log.info("Cancelling conversation: {}", conversationId);
-        cancelledConversations.add(conversationId);
+        RunGuard guard = activeRuns.get(conversationId);
+        if (guard == null) {
+            log.info("Cancel requested for {} but no run is active, ignoring", conversationId);
+            return;
+        }
+        log.info("Cancelling conversation {} (run {})", conversationId, guard.runId);
+        guard.cancel();
     }
 
     /**
-     * 检查会话是否被取消
+     * 该会话当前活跃轮次是否已被取消。没有活跃轮次时为 false。
      */
     public boolean isCancelled(String conversationId) {
-        return cancelledConversations.contains(conversationId);
-    }
-
-    /**
-     * 清理取消状态
-     */
-    private void clearCancelledState(String conversationId) {
-        cancelledConversations.remove(conversationId);
-        activeStreamContent.remove(conversationId);
-        activeAssistantMessageId.remove(conversationId);
-        turnConnectionEpoch.remove(conversationId);
+        RunGuard guard = activeRuns.get(conversationId);
+        return guard != null && guard.isCancelled();
     }
 
     /**
      * 收尾关闭本轮 SSE 连接：带上本轮开始时记下的代次，交给 SseEmitterService 做匹配判断。
-     * 只处理这一处的误杀，不动取消/恢复相关逻辑。
+     * 已被新一轮取代时直接跳过——关掉的会是新轮次正在用的那条流。
      */
-    private void closeSse(String conversationId) {
-        sseEmitterService.close(conversationId, turnConnectionEpoch.getOrDefault(conversationId, 0L));
+    private void closeSse(RunGuard guard) {
+        if (!isCurrentRun(guard)) return;
+        sseEmitterService.close(guard.conversationId, guard.connectionEpoch);
     }
 
     /**
-     * 保存/更新本轮 ASSISTANT 消息：首次保存插入新行并记住行 ID，
-     * 本轮内后续（增量/最终）保存更新同一行，避免重复；新的一轮从新行开始，不会覆盖上一轮回复。
+     * 保存/更新本轮 ASSISTANT 消息：首次保存插入新行并记住行 ID（记在本轮的 RunGuard 上），
+     * 本轮内后续（增量/最终）保存更新同一行；别的轮次有别的 RunGuard，天然互不覆盖。
      */
-    private void saveAssistantMessage(String conversationId, String projectId, Long userId, String content) {
+    private void saveAssistantMessage(RunGuard guard, String projectId, Long userId, String content) {
         Long id = messageService.upsertAssistantMessage(
-                projectId, userId, conversationId, activeAssistantMessageId.get(conversationId), content);
+                projectId, userId, guard.conversationId, guard.assistantMessageId, content);
         if (id != null) {
-            activeAssistantMessageId.put(conversationId, id);
+            guard.assistantMessageId = id;
         }
     }
 
     /**
      * 终止路径专用的落库：落库失败只记日志，不能盖掉原始异常，也不能让后续收尾动作被跳过。
      */
-    private void saveAssistantMessageQuietly(String conversationId, String projectId, Long userId, String content) {
+    private void saveAssistantMessageQuietly(RunGuard guard, String projectId, Long userId, String content) {
         try {
-            saveAssistantMessage(conversationId, projectId, userId, content);
+            saveAssistantMessage(guard, projectId, userId, content);
         } catch (Exception persistError) {
-            log.warn("Failed to persist terminal assistant message for conversation {}", conversationId, persistError);
+            log.warn("Failed to persist terminal assistant message for run {} of conversation {}",
+                    guard.runId, guard.conversationId, persistError);
         }
+    }
+
+    /**
+     * 会话级 SSE 事件：只有当前轮次才发得出去（见 {@link #isCurrentRun}）。
+     * 工具副作用类的通知（refresh_files / file_change）不走这里——它们描述的是已经发生的
+     * 文件变化，与哪一轮在前台无关。
+     */
+    private void sendRunEvent(RunGuard guard, String eventName, Object payload) {
+        if (!isCurrentRun(guard)) return;
+        sseEmitterService.send(guard.conversationId, eventName, payload);
+    }
+
+    /** 会话运行状态点：同上，被取代的旧轮次不许再改（否则把新轮次的 RUNNING 盖成终态）。 */
+    private void markRunState(RunGuard guard, AgentRunStateService.RunStatus status) {
+        if (!isCurrentRun(guard)) return;
+        agentRunStateService.mark(guard.conversationId, status);
     }
 
     /**
      * 处理取消：保存已生成的部分内容
      */
-    private void handleCancellation(String conversationId, String projectId, Long userId) {
-        log.info("Handling cancellation for conversation: {}", conversationId);
-        
+    private void handleCancellation(RunGuard guard, String projectId, Long userId) {
+        String conversationId = guard.conversationId;
+        log.info("Handling cancellation for run {} of conversation {}", guard.runId, conversationId);
+
         // 获取已生成的部分内容
-        StringBuilder contentBuilder = activeStreamContent.get(conversationId);
-        String partialContent = contentBuilder != null ? contentBuilder.toString() : "";
-        
+        String partialContent = guard.streamSnapshot();
+
         // 如果有部分内容，保存并标记为已中断
         if (!partialContent.isEmpty()) {
             String contentToSave = partialContent + LangText.of("\n\n[已中断]", "\n\n[Interrupted]");
-            saveAssistantMessage(conversationId, projectId, userId, contentToSave);
+            saveAssistantMessage(guard, projectId, userId, contentToSave);
             log.info("Saved partial content ({} chars) for cancelled conversation: {}", partialContent.length(), conversationId);
         }
-        
-        agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.CANCELLED);
+
+        markRunState(guard, AgentRunStateService.RunStatus.CANCELLED);
         // 用户点了停止：进行中的过卷也就此作废（dev-board#422）。
-        // 刻意只挂在取消路径上，不放进 clearCancelledState——那个方法每轮正常收尾都会调，
+        // 刻意只挂在取消路径上，不放进 endRun——那个方法每轮正常收尾都会调，
         // 放进去会让「撞步数上限暂停、用户点继续」的续跑丢掉游标，从第 1 块重来。
-        officePassStateStore.clear(conversationId);
+        // 已被新一轮取代时也不清：过卷游标是会话级的，新一轮正拿着它。
+        if (isCurrentRun(guard)) {
+            officePassStateStore.clear(conversationId);
+        }
         // 发送取消事件
-        sseEmitterService.send(conversationId, "cancelled",
+        sendRunEvent(guard, "cancelled",
                 "{\"message\":\"" + LangText.of("用户已停止生成", "Generation stopped by the user") + "\"}");
-        closeSse(conversationId);
-        
+        closeSse(guard);
+
         // 清理状态
-        clearCancelledState(conversationId);
+        endRun(guard);
     }
     
     /**
@@ -261,11 +374,12 @@ public class AgentOrchestrator {
      * 返回目前正在生成的流式内容
      */
     public String getRecoverySnapshot(String conversationId) {
-        StringBuilder sb = activeStreamContent.get(conversationId);
-        if (sb != null && sb.length() > 0) {
-            return sb.toString();
+        RunGuard guard = activeRuns.get(conversationId);
+        if (guard == null) {
+            return null;
         }
-        return null;
+        String snapshot = guard.streamSnapshot();
+        return snapshot.isEmpty() ? null : snapshot;
     }
 
     // ==================== 工具分发（统一走 ToolRegistry，编排器不感知具体工具） ====================
@@ -428,7 +542,7 @@ public class AgentOrchestrator {
      *
      * <p>推送失败只 log：一个提示 chip 不该让对话中断（与 plan_update 同口径）。
      */
-    private void sendSkillUpdate(String conversationId,
+    private void sendSkillUpdate(RunGuard guard,
                                  List<com.checkba.service.ai.skill.SkillRouter.ActiveSkill> active) {
         try {
             List<java.util.Map<String, String>> skills = active.stream()
@@ -437,36 +551,77 @@ public class AgentOrchestrator {
                             "name", a.displayName(),
                             "source", a.source()))
                     .toList();
-            sseEmitterService.send(conversationId, "skill_update",
+            sendRunEvent(guard, "skill_update",
                     SKILL_UPDATE_MAPPER.writeValueAsString(java.util.Map.of("skills", skills)));
         } catch (Exception e) {
-            log.warn("Failed to push skill_update for {}", conversationId, e);
+            log.warn("Failed to push skill_update for {}", guard.conversationId, e);
         }
     }
 
     /**
-     * 处理用户消息 (入口)
+     * 编排循环的线程池（{@code taskExecutor}，核心 16 / 最大 32 / 有界队列 200）。
+     *
+     * <p>刻意不走构造器注入：本类的构造器由 {@code @RequiredArgsConstructor} 从 final 字段生成，
+     * 加一个字段就要同步改 EvalHarness 与九个编排器测试（领域文档里踩过三次的地雷），
+     * 为一个线程池付这个代价不值。
+     *
+     * <p>为空时 {@link #handleUserMessage} 就地同步执行——这正是各单元测试与回放评测里
+     * 直接 {@code new AgentOrchestrator(...)} 的既有行为（不经 Spring 代理，异步注解本来也不生效）。
      */
-    @Async("taskExecutor") // Run in separate thread
-    public void handleUserMessage(AiAgentController.AgentChatRequest request, Long userId) {
-        // 平台通道按用户计费（server 模式多租户）：整轮循环——含其中同步调用的上下文组装、
-        // 记忆检索、子 Agent、故障转移换模型——都在这个身份作用域内取 key。
-        // 本方法体里另有跨线程提交（标题生成），必须各自用 PlatformAiUserScope.wrap 重放。
-        PlatformAiUserScope.run(userId, () -> handleUserMessageInScope(request, userId));
+    private volatile java.util.concurrent.Executor turnExecutor;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setTurnExecutor(@org.springframework.beans.factory.annotation.Qualifier("taskExecutor")
+                         java.util.concurrent.Executor turnExecutor) {
+        this.turnExecutor = turnExecutor;
     }
 
-    private void handleUserMessageInScope(AiAgentController.AgentChatRequest request, Long userId) {
+    /**
+     * 处理用户消息 (入口)。
+     *
+     * <p><b>轮次登记同步发生在调用方（控制器）线程上</b>（dev-board#533）：本方法此前整体挂
+     * {@code @Async("taskExecutor")}，于是 {@code POST /chat} 返回 200 与池线程真正执行
+     * {@link #beginRun} 之间存在一个窗口——用户在这个窗口里点「停止」，{@link #setCancelled}
+     * 查 {@code activeRuns} 查不到任何活跃轮次，取消<b>整个落空</b>，随后起跑的那一轮一路跑到底：
+     * 用户点了停止却眼看着它继续写文档、继续烧 token，而且没有任何补救入口。
+     *
+     * <p>现在 {@code beginRun} 在返回给控制器之前就完成，异步的只是循环本体。对外契约一个字节不变：
+     * {@code POST /api/agent/chat} 仍然立刻返回 200，SSE 事件序列不变。
+     */
+    public void handleUserMessage(AiAgentController.AgentChatRequest request, Long userId) {
+        // 本轮的身份证：runId 在这里签发，随 RunGuard 一路传到每一层递归与两处流式回调。
+        // 登记发生在做任何事之前——POST /cancel 靠这张表解析「现在跑的是哪一轮」。
+        RunGuard guard = beginRun(request.getConversationId());
+        // 平台通道按用户计费（server 模式多租户）：整轮循环——含其中同步调用的上下文组装、
+        // 记忆检索、子 Agent、故障转移换模型——都在这个身份作用域内取 key。
+        // 身份作用域必须建在**执行线程**上：提交线程（控制器线程）设了也不跟着走。
+        // 本方法体里另有跨线程提交（标题生成），必须各自用 PlatformAiUserScope.wrap 重放。
+        Runnable turn = () -> PlatformAiUserScope.run(userId,
+                () -> handleUserMessageInScope(request, userId, guard));
+        java.util.concurrent.Executor executor = this.turnExecutor;
+        if (executor == null) {
+            turn.run();
+            return;
+        }
+        try {
+            executor.execute(turn);
+        } catch (RuntimeException e) {
+            // 提交失败（有界队列打满走 AbortPolicy）：把刚登记的轮次撤掉再把异常原样抛回控制器
+            //（与异步注解时期一致地 500）。不撤销的话会话会永久停在「有活跃轮次」上，
+            // 之后的 /cancel 会去掐一个根本不存在的东西。
+            endRun(guard);
+            throw e;
+        }
+    }
+
+    private void handleUserMessageInScope(AiAgentController.AgentChatRequest request, Long userId,
+                                          RunGuard guard) {
         String conversationId = request.getConversationId();
         String projectId = String.valueOf(request.getProjectId());
         AgentMode agentMode = request.getAgentMode(); // 获取 Agent 模式
         
-        // 初始化取消状态和内容收集器（新的一轮：清掉上一轮的 ASSISTANT 行 ID，本轮回复必须落新行）
-        cancelledConversations.remove(conversationId);
-        activeStreamContent.put(conversationId, new StringBuilder());
-        activeAssistantMessageId.remove(conversationId);
-        // 本轮开始时先取一次 SSE 连接代次存起来：本轮期间无论重试/递归多少层，
-        // 收尾时各处 close() 都带这同一个值，与用户中途重连产生的新代次区分开
-        turnConnectionEpoch.put(conversationId, sseEmitterService.currentEpoch(conversationId));
+        // 取消标志、流式缓冲、ASSISTANT 行 ID、SSE 连接代次全在本轮的 RunGuard 上（beginRun 已备好）：
+        // 新的一轮不需要——也不允许——去清上一轮的任何东西（那正是并发轮次互相踩的根因）。
         // 埋点轮次上下文先于 mark 建立：终态由 AgentRunStateService.mark 单点合成 ai.turn
         java.util.Map<String, Object> turnAttrs = new java.util.HashMap<>();
         turnAttrs.put("mode", agentMode == null ? null : agentMode.name());
@@ -524,18 +679,18 @@ public class AgentOrchestrator {
             // 因此手动选择在 ASK 下不参与——让"面板上亮着 skill、实际什么都没注入"这种
             // 显示与实际不一致的状态压根不出现。
             boolean skillsEffective = agentMode != AgentMode.ASK;
-            skillRouter.activateForTurn(conversationId, request.getMessage(), request.getPinnedSkillId(),
-                    skillsEffective ? request.getSkillIds() : null);
+            skillRouter.activateForTurn(conversationId, guard.runId, request.getMessage(),
+                    request.getPinnedSkillId(), skillsEffective ? request.getSkillIds() : null);
             // 把本轮真正生效的清单告诉前端（自动命中的那枚在面板里会闪一下）。
             // 空列表也发：前端靠它把上一轮的 chip 清掉。
-            sendSkillUpdate(conversationId,
-                    skillsEffective ? skillRouter.activeSkills(conversationId) : List.of());
+            sendSkillUpdate(guard,
+                    skillsEffective ? skillRouter.activeSkills(guard.runId) : List.of());
 
             // 1.3 事项类型 AI 兜底分类：仅会话首轮且未命中 skill（skill 命中由 SkillRouter 产出类别）；
             // 异步、开关关闭时 no-op，绝不阻塞对话主链路
             if (existingMsgs.size() <= 1) {
                 matterClassifierService.classifyAsync(conversationId, request.getMessage(),
-                        skillRouter.activeSkill(conversationId).isPresent());
+                        skillRouter.activeSkill(guard.runId).isPresent());
             }
 
             // 2. Build Context & History Message Stack (Spec v1.8)
@@ -545,7 +700,8 @@ public class AgentOrchestrator {
             String planId = null;
             
             java.util.List<dev.langchain4j.data.message.ChatMessage> messages = contextAssemblerService.assemble(
-                conversationId, 
+                conversationId,
+                guard.runId,
                 request.getMessage(), 
                 request.getContextItems() != null ? request.getContextItems() : 
                     convertFileIdsToContextItems(request.getFileIds()),
@@ -583,7 +739,6 @@ public class AgentOrchestrator {
             log.info("Starting runLoop for conversation: {}, mode: {}", conversationId, agentMode);
             // Track tool executions for history persistence
             StringBuilder executionLog = new StringBuilder();
-            RunGuard guard = new RunGuard();
             // 记录活跃文档 ID（修改前自动检查点的目标）；每轮一个独立检查点
             documentCheckpointService.clearForNewRun(conversationId);
             // 本轮的整段插入去重闸也一并重置（dev-board#464）——闸只在一轮内有效
@@ -601,20 +756,22 @@ public class AgentOrchestrator {
             // （如「请先在官网账户页分配 AI 额度」）。原样透出中文文案，不加英文前缀，
             // 也不打 ERROR 级日志——这条路径在未分配额度时每发一条消息都会走到
             log.info("平台通道不可用 [{}]，会话 {}: {}", e.getKind(), conversationId, e.getMessage());
-            agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
-            sseEmitterService.send(conversationId, "error", e.getMessage());
+            markRunState(guard, AgentRunStateService.RunStatus.ERROR);
+            sendRunEvent(guard, "error", e.getMessage());
             // 用户消息在本方法开头已落库：这里不补一条 ASSISTANT，刷新页面后这一轮就只剩用户
             // 自己的问题，看起来像 AI 完全没回应。落的正是推给用户的那句文案（不加前缀）。
-            saveAssistantMessageQuietly(conversationId, projectId, userId, e.getMessage());
-            closeSse(conversationId);
+            saveAssistantMessageQuietly(guard, projectId, userId, e.getMessage());
+            closeSse(guard);
+            endRun(guard);
         } catch (Exception e) {
             log.error("Agent Loop Error for conversation: " + conversationId, e);
             String errorText = "Internal Error: " + e.getMessage();
-            agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
-            sseEmitterService.send(conversationId, "error", errorText);
+            markRunState(guard, AgentRunStateService.RunStatus.ERROR);
+            sendRunEvent(guard, "error", errorText);
             // 同上：历史里必须留下这一轮出过错的痕迹，且与 SSE 推出去的是同一串文本
-            saveAssistantMessageQuietly(conversationId, projectId, userId, errorText);
-            closeSse(conversationId);
+            saveAssistantMessageQuietly(guard, projectId, userId, errorText);
+            closeSse(guard);
+            endRun(guard);
         }
     }
 
@@ -624,9 +781,9 @@ public class AgentOrchestrator {
                          StringBuilder executionLog, AgentMode agentMode, RunGuard guard) {
 
         // 检查是否被取消
-        if (isCancelled(conversationId)) {
+        if (guard.isCancelled()) {
             log.info("Conversation {} was cancelled, stopping loop at depth {}", conversationId, depth);
-            handleCancellation(conversationId, projectId, userId);
+            handleCancellation(guard, projectId, userId);
             return;
         }
 
@@ -636,24 +793,24 @@ public class AgentOrchestrator {
             // 步数预算耗尽：不是报错，而是"存档 + 请示"——保存进度、明确告知用户、干净收尾。
             log.warn("Agent loop reached max depth {} for conversation {}, stopping gracefully", loopBudget, conversationId);
             String notice = maxDepthNotice(loopBudget);
-            sendTextDelta(conversationId, notice);
+            sendTextDelta(guard, notice);
             String persisted = (executionLog.length() > 0 ? executionLog.toString() : "") + notice;
-            saveAssistantMessage(conversationId, projectId, userId, persisted);
-            agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.PAUSED);
+            saveAssistantMessage(guard, projectId, userId, persisted);
+            markRunState(guard, AgentRunStateService.RunStatus.PAUSED);
             // status=paused 让前端渲染一键「继续」按钮（区别于 finished 的正常收尾）
-            sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"paused\",\"reason\":\"max_depth\"}");
-            closeSse(conversationId);
-            clearCancelledState(conversationId);
+            sendRunEvent(guard, "bubble_end", "{\"status\":\"paused\",\"reason\":\"max_depth\"}");
+            closeSse(guard);
+            endRun(guard);
             return;
         }
         
         // Ask 模式限制递归深度为 1（不允许工具调用后的循环）
         if (agentMode == AgentMode.ASK && depth > 0) {
             log.info("Ask mode: stopping loop at depth {}", depth);
-            agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.FINISHED);
-            sseEmitterService.send(conversationId, "bubble_end", "{}");
-            closeSse(conversationId);
-            clearCancelledState(conversationId);
+            markRunState(guard, AgentRunStateService.RunStatus.FINISHED);
+            sendRunEvent(guard, "bubble_end", "{}");
+            closeSse(guard);
+            endRun(guard);
             return;
         }
         
@@ -667,21 +824,25 @@ public class AgentOrchestrator {
             projectId,
             userId,
             modelId,
-            turnConnectionEpoch.getOrDefault(conversationId, 0L)
+            guard.connectionEpoch,
+            // 流式增量的轮次闸（dev-board#533）：本轮被新一轮取代之后，
+            // text_delta / reasoning_delta / bubble_start 一律不再打到 emitter 上——
+            // 一个会话只有一条流，旧轮次的 token 发出去就是混进新一轮的气泡里。
+            // 旧轮次自己照常跑到终态、照常落自己的库，只是对 SSE 静默。
+            () -> isCurrentRun(guard)
         );
         
 
         // 实时更新当前生成的内容 (用于断线重连恢复)
-        handler.setOnToken(token -> {
-            StringBuilder sb = activeStreamContent.get(conversationId);
-            if (sb != null) {
-                sb.append(token);
-            }
-        });
+        handler.setOnToken(guard::appendStream);
 
         // 编辑器实时流式写入拦截（双轨迁移：新名 doc_stream_data 必须先于旧名 wps_stream_data 发出，
         // 前端以"先见新名"判定新后端并丢弃旧名去重；一个发布周期后摘旧名，见 docs/AI_ARCHITECTURE.md Phase 3）
         handler.setOnEditorStream(token -> {
+            // 同上：编辑器实时流也是会话级的一条通道（doc_stream_data / wps_stream_data
+            // 与 noteStreamContent 的「确实写过正文」标记都按 conversationId 寻址）。
+            // 被取代的旧轮次继续往里写，正文会插进新一轮正在写的那份文档。
+            if (!isCurrentRun(guard)) return;
             if (editorBridgeService.isStreamingMode(conversationId)) {
                 // 记一笔「确实送出过正文」（dev-board#465）：模型把正文包进 <artifact>/<process>
                 // 等标签时 AgentStreamHandler 会整段吞掉，这里只剩标签之间漏出的空白——
@@ -716,14 +877,14 @@ public class AgentOrchestrator {
                     log.warn("Streaming round for {} produced no document text (model likely wrapped the body "
                             + "in a hidden protocol tag or never emitted it)", conversationId);
                 }
-                sseEmitterService.send(conversationId, "doc_stream_end",
+                sendRunEvent(guard, "doc_stream_end",
                         java.util.Map.of("status", "finished", "wrote", streamWrote));
             }
 
             // 检查是否被取消
-            if (isCancelled(conversationId)) {
+            if (guard.isCancelled()) {
                 log.info("Conversation {} was cancelled during streaming", conversationId);
-                handleCancellation(conversationId, projectId, userId);
+                handleCancellation(guard, projectId, userId);
                 return;
             }
             
@@ -770,20 +931,20 @@ public class AgentOrchestrator {
                 String notice = LangText.of(
                         "\n\n> 模型输出连续多次达到长度上限、工具调用无法完整发出，先暂停。点击下方「继续」按钮可接着执行。",
                         "\n\n> The model's output kept hitting the length limit and the tool call could not be emitted in full; pausing here. Click the Continue button below to resume.");
-                sendTextDelta(conversationId, notice);
+                sendTextDelta(guard, notice);
                 String truncPersisted = (executionLog.length() > 0 ? executionLog.toString() : "")
                         + (aiMessage.text() != null ? aiMessage.text() : "") + notice;
-                saveAssistantMessage(conversationId, projectId, userId, truncPersisted);
-                agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.PAUSED);
-                sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"paused\",\"reason\":\"max_tokens\"}");
-                closeSse(conversationId);
-                clearCancelledState(conversationId);
+                saveAssistantMessage(guard, projectId, userId, truncPersisted);
+                markRunState(guard, AgentRunStateService.RunStatus.PAUSED);
+                sendRunEvent(guard, "bubble_end", "{\"status\":\"paused\",\"reason\":\"max_tokens\"}");
+                closeSse(guard);
+                endRun(guard);
                 return;
             }
 
             messages.add(aiMessage);
 
-            // 注意：本轮生成内容已由 onToken 回调逐 token 累加进 activeStreamContent，
+            // 注意：本轮生成内容已由 onToken 回调逐 token 累加进本轮 RunGuard 的流式缓冲，
             // 此处不可再 append aiMessage.text()，否则取消/断线恢复的快照内容会翻倍。
             String aiContent = aiMessage.text();
 
@@ -800,10 +961,10 @@ public class AgentOrchestrator {
                     // 于是「停止」按钮在 dispatch_subtask（可跑 630 秒）或 AI PPT（十几分钟）中间
                     // 完全不生效——用户看到的是按了没反应、还得继续等。一处检查覆盖所有慢工具：
                     // 一轮里剩下的工具全部不再执行。已经跑完的工具副作用无法回滚（这是取消的固有语义）。
-                    if (isCancelled(conversationId)) {
+                    if (guard.isCancelled()) {
                         log.info("Conversation {} cancelled before tool {}, skipping remaining tools",
                                 conversationId, req.name());
-                        handleCancellation(conversationId, projectId, userId);
+                        handleCancellation(guard, projectId, userId);
                         return;
                     }
                     // 面板可见性：原生工具调用复用 <process> XML 协议推送给前端，
@@ -811,7 +972,7 @@ public class AgentOrchestrator {
                     String displayName = toolRegistry.resolve(req.name())
                             .map(ToolRegistry.RegisteredTool::displayName)
                             .orElse(req.name());
-                    sendTextDelta(conversationId, String.format("<process name=\"%s\"><tool_code>%s(%s)</tool_code></process>",
+                    sendTextDelta(guard, String.format("<process name=\"%s\"><tool_code>%s(%s)</tool_code></process>",
                             displayName.replace("\"", "'"), req.name(),
                             AgentTagProtocol.escape(truncate(req.arguments(), 200))));
 
@@ -855,7 +1016,7 @@ public class AgentOrchestrator {
 
                     // 载荷先截断再中和：截断口径按原文字数（与前端「...(截断)」提示一致），
                     // 中和只保证载荷不会顶掉外层标签（AgentTagProtocol，两侧契约）
-                    sendTextDelta(conversationId, String.format("<tool_output status=\"%s\">%s</tool_output>",
+                    sendTextDelta(guard, String.format("<tool_output status=\"%s\">%s</tool_output>",
                             nativeToolStatus,
                             AgentTagProtocol.escape(truncate(result, toolOutputDisplayLimit(req.name())))));
 
@@ -881,14 +1042,14 @@ public class AgentOrchestrator {
 
                 // 增量保存：在工具执行后立即保存AI消息和工具输出，防止对话中断导致上下文丢失
                 String intermediateContent = (aiContent != null ? aiContent : "") + "\n" + executionLog.toString();
-                saveAssistantMessage(conversationId, projectId, userId, intermediateContent);
+                saveAssistantMessage(guard, projectId, userId, intermediateContent);
                 log.info("Intermediate save after native tool execution for conversation: {}", conversationId);
 
                 // 反问优先于递归：模型在同一轮里既调了工具又问了问题时，继续递归会把问题埋在
                 // 后续输出里、模型自己接着猜下去（正是 <question> 要阻止的事）。工具已经跑完、
                 // 结果已落库，此处停机等回答即可。
                 if (containsQuestion(aiContent)) {
-                    stopForUserQuestion(conversationId, projectId, userId, intermediateContent);
+                    stopForUserQuestion(guard, projectId, userId, intermediateContent);
                     return;
                 }
 
@@ -915,10 +1076,10 @@ public class AgentOrchestrator {
                 for (XmlToolCallParser.ParsedCall call : xmlToolCallParser.parse(content)) {
                     // 同原生分支：慢工具中间也要能取消。XML 兜底是弱模型的主路径，
                     // 只修原生分支等于「换个模型停止键就又不灵了」
-                    if (isCancelled(conversationId)) {
+                    if (guard.isCancelled()) {
                         log.info("Conversation {} cancelled before XML tool {}, skipping remaining tools",
                                 conversationId, call.toolName());
-                        handleCancellation(conversationId, projectId, userId);
+                        handleCancellation(guard, projectId, userId);
                         return;
                     }
                     String code = call.rawCode();
@@ -1002,7 +1163,7 @@ public class AgentOrchestrator {
                         statusPrefix, AgentTagProtocol.escape(result));
                     // 走 sendTextDelta 而不是自己拼 JSON：此处原来的手写转义漏了反斜杠，
                     // 输出里带 Windows 路径或 JSON 字符串时整条 text_delta 在前端 JSON.parse 失败
-                    sendTextDelta(conversationId, toolOutputXml);
+                    sendTextDelta(guard, toolOutputXml);
 
                     toolExecuted = true;
                 }
@@ -1014,12 +1175,12 @@ public class AgentOrchestrator {
                      }
                      // 增量保存：在XML工具执行后立即保存AI消息和工具输出，防止对话中断导致上下文丢失
                      String intermediateXmlContent = content + "\n" + executionLog.toString();
-                     saveAssistantMessage(conversationId, projectId, userId, intermediateXmlContent);
+                     saveAssistantMessage(guard, projectId, userId, intermediateXmlContent);
                      log.info("Intermediate save after XML tool execution for conversation: {}", conversationId);
 
                      // 反问优先于递归（同原生分支）
                      if (containsQuestion(content)) {
-                         stopForUserQuestion(conversationId, projectId, userId, intermediateXmlContent);
+                         stopForUserQuestion(guard, projectId, userId, intermediateXmlContent);
                          return;
                      }
 
@@ -1122,12 +1283,12 @@ public class AgentOrchestrator {
                     log.info("Detected Implementation Plan. STOPPING LOOP for user approval.");
                     // Save assistant message with execution log prepended
                     String fullContent = executionLog.length() > 0 ? executionLog.toString() + content : content;
-                    saveAssistantMessage(conversationId, projectId, userId, fullContent);
-                    agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.AWAITING_APPROVAL);
+                    saveAssistantMessage(guard, projectId, userId, fullContent);
+                    markRunState(guard, AgentRunStateService.RunStatus.AWAITING_APPROVAL);
                     // 发送 bubble_end 表示当前响应结束（等待用户审批）
-                    sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"awaiting_approval\"}");
-                    closeSse(conversationId);
-                    clearCancelledState(conversationId);
+                    sendRunEvent(guard, "bubble_end", "{\"status\":\"awaiting_approval\"}");
+                    closeSse(guard);
+                    endRun(guard);
                     return; // Stop and wait for user action
                 }
             }
@@ -1159,7 +1320,7 @@ public class AgentOrchestrator {
             // 那条路本来就要用户点头，问题正文照样已经流给用户看了。
             if (containsQuestion(content)) {
                 String fullContent = executionLog.length() > 0 ? executionLog.toString() + content : content;
-                stopForUserQuestion(conversationId, projectId, userId, fullContent);
+                stopForUserQuestion(guard, projectId, userId, fullContent);
                 return;
             }
 
@@ -1171,14 +1332,13 @@ public class AgentOrchestrator {
                 String notice = LangText.of(
                         "\n\n> 回答达到单次输出长度上限被截断，点击下方「继续」按钮可接着生成。",
                         "\n\n> The answer was cut off by the per-response output length limit. Click the Continue button below to keep generating.");
-                sendTextDelta(conversationId, notice);
+                sendTextDelta(guard, notice);
                 String truncContent = (executionLog.length() > 0 ? executionLog.toString() + content : content) + notice;
-                saveAssistantMessage(conversationId, projectId, userId, truncContent);
-                agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.PAUSED);
-                sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"paused\",\"reason\":\"max_tokens\"}");
-                closeSse(conversationId);
-                clearCancelledState(conversationId);
-                activeStreamContent.remove(conversationId);
+                saveAssistantMessage(guard, projectId, userId, truncContent);
+                markRunState(guard, AgentRunStateService.RunStatus.PAUSED);
+                sendRunEvent(guard, "bubble_end", "{\"status\":\"paused\",\"reason\":\"max_tokens\"}");
+                closeSse(guard);
+                endRun(guard);
                 return;
             }
 
@@ -1187,7 +1347,7 @@ public class AgentOrchestrator {
             if (!content.isEmpty()) {
                 // Prepend execution log for history persistence
                 String fullContent = executionLog.length() > 0 ? executionLog.toString() + content : content;
-                saveAssistantMessage(conversationId, projectId, userId, fullContent);
+                saveAssistantMessage(guard, projectId, userId, fullContent);
             }
             // 触发记忆写入管线（异步：对话摘要 / 项目记忆 / MemCell 原子记忆提取）
             try {
@@ -1202,13 +1362,12 @@ public class AgentOrchestrator {
             } catch (Exception vEx) {
                 log.warn("AI 轮次版本落档失败: project={}", projectId, vEx);
             }
-            agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.FINISHED);
+            markRunState(guard, AgentRunStateService.RunStatus.FINISHED);
             // 发送 bubble_end 表示整个循环真正结束
-            sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"finished\"}");
-            closeSse(conversationId);
-            // 清理取消状态
-            clearCancelledState(conversationId);
-            activeStreamContent.remove(conversationId); // CLEANUP
+            sendRunEvent(guard, "bubble_end", "{\"status\":\"finished\"}");
+            closeSse(guard);
+            // 清理本轮登记
+            endRun(guard);
           } catch (Exception e) {
             // 确保异常时也能正确结束 bubble，避免前端一直显示加载状态。
             //
@@ -1217,7 +1376,7 @@ public class AgentOrchestrator {
             // （「历史对话吃消息」）。对照 handleStreamErrorTerminal 与 handleCancellation：
             // 两者都存了部分内容。executionLog 一并带上，崩溃轮的过程卡才能回放。
             log.error("Error in onComplete callback for conversation: " + conversationId, e);
-            finishWithError(conversationId, projectId, userId,
+            finishWithError(guard, projectId, userId,
                     LlmErrorClassifier.INTERNAL_ERROR_MARKER + ": Callback Error: " + e.getMessage(),
                     executionLog);
           } finally {
@@ -1232,8 +1391,8 @@ public class AgentOrchestrator {
         // 3. 其余 → 终态清理（关 emitter + 复位状态，避免 SSE 挂到超时、前端永久加载）
         // 同 onComplete：错误回调也在 HTTP 线程上，换模型要取平台密钥，身份必须重建
         handler.setOnError(err -> PlatformAiUserScope.run(userId, () -> {
-            if (isCancelled(conversationId)) {
-                handleStreamErrorTerminal(conversationId, projectId, userId, err, null);
+            if (guard.isCancelled()) {
+                handleStreamErrorTerminal(guard, projectId, userId, err, null);
                 return;
             }
             LlmErrorClassifier.Kind kind = LlmErrorClassifier.classify(err);
@@ -1245,7 +1404,7 @@ public class AgentOrchestrator {
                 log.warn("LLM error [{}] for {} (attempt {}/{}), retrying in {}s: {}",
                         kind, conversationId, attempt, kind.maxRetries(), delaySec, String.valueOf(err));
                 // 限流与故障文案分开：用户看到「服务不可用」而实际是限流排队，会误判成产品坏了
-                sendTextDelta(conversationId, String.format(
+                sendTextDelta(guard, String.format(
                         kind == LlmErrorClassifier.Kind.RATE_LIMITED
                                 ? LangText.of("\n\n> 模型限流等待中，%d 秒后自动继续（第 %d/%d 次）…\n\n",
                                         "\n\n> The model is rate limited; continuing automatically in %d s (attempt %d/%d)…\n\n")
@@ -1260,7 +1419,7 @@ public class AgentOrchestrator {
                                 depth, executionLog, agentMode, guard);
                     } catch (Exception retryEx) {
                         log.error("Retry runLoop failed for {}", conversationId, retryEx);
-                        handleStreamErrorTerminal(conversationId, projectId, userId, retryEx, null);
+                        handleStreamErrorTerminal(guard, projectId, userId, retryEx, null);
                     }
                 }), delaySec, java.util.concurrent.TimeUnit.SECONDS);
                 return;
@@ -1276,7 +1435,7 @@ public class AgentOrchestrator {
                 if (forceCompactAfterOverflow(messages, conversationId, modelId)) {
                     log.warn("Context overflow for {} confirmed by provider, retrying after forced compaction",
                             conversationId);
-                    sendTextDelta(conversationId, LangText.of(
+                    sendTextDelta(guard, LangText.of(
                             "\n\n> 对话上下文超出模型窗口，已自动压缩较早的内容后重试…\n\n",
                             "\n\n> The conversation exceeded the model's context window; earlier content was compacted automatically, retrying…\n\n"));
                     try {
@@ -1284,7 +1443,7 @@ public class AgentOrchestrator {
                                 depth, executionLog, agentMode, guard);
                     } catch (Exception retryEx) {
                         log.error("Post-compaction retry failed for {}", conversationId, retryEx);
-                        handleStreamErrorTerminal(conversationId, projectId, userId, retryEx, null);
+                        handleStreamErrorTerminal(guard, projectId, userId, retryEx, null);
                     }
                     return;
                 }
@@ -1310,7 +1469,7 @@ public class AgentOrchestrator {
                     return;
                 }
             }
-            handleStreamErrorTerminal(conversationId, projectId, userId, err, kind);
+            handleStreamErrorTerminal(guard, projectId, userId, err, kind);
         }));
 
         // 无活动看门狗：timeout 调大后，"流悄悄停了但不回调"的场景由它兜底终止本轮
@@ -1329,7 +1488,7 @@ public class AgentOrchestrator {
             // Agent 和 Plan 模式：传递工具规格（内置 + 插件，统一来自注册表）
             // 会话客户端能力过滤（Phase C：office/lowa/none）在注册表内完成；
             // Skill 命中时由 SkillRouter 做可见性白名单裁剪（Phase 3B，未命中原样返回）
-            List<ToolSpecification> allTools = skillRouter.visibleTools(conversationId, toolRegistry.getAllSpecifications(conversationId));
+            List<ToolSpecification> allTools = skillRouter.visibleTools(guard.runId, toolRegistry.getAllSpecifications(conversationId));
             model.generate(messages, allTools, handler);
         }
     }
@@ -1354,10 +1513,10 @@ public class AgentOrchestrator {
             nextModel = chatModelFactory.getStreamingChatModel(nextModelId);
         } catch (com.checkba.service.account.AccountException ae) {
             log.info("故障转移中止，平台通道不可用 [{}]，会话 {}: {}", ae.getKind(), conversationId, ae.getMessage());
-            agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
-            sseEmitterService.send(conversationId, "error", ae.getMessage());
-            closeSse(conversationId);
-            clearCancelledState(conversationId);
+            markRunState(guard, AgentRunStateService.RunStatus.ERROR);
+            sendRunEvent(guard, "error", ae.getMessage());
+            closeSse(guard);
+            endRun(guard);
             return true;
         } catch (Exception e) {
             log.error("Failed to create failover model {} for {}", nextModelId, conversationId, e);
@@ -1370,7 +1529,7 @@ public class AgentOrchestrator {
 
         // 换模型等于换了一条通道，重试预算重新计
         guard.llmRetries = 0;
-        sendTextDelta(conversationId, String.format(
+        sendTextDelta(guard, String.format(
                 LangText.of("\n\n> 模型「%s」%s，已自动切换到备用模型「%s」继续本轮任务。\n\n",
                         "\n\n> Model \"%s\" %s; automatically switched to fallback model \"%s\" to continue this round.\n\n"),
                 failedModelId, kind.userFacingReason(), nextModelId));
@@ -1379,7 +1538,7 @@ public class AgentOrchestrator {
                     depth, executionLog, agentMode, guard);
         } catch (Exception e) {
             log.error("Failover runLoop failed for {}", conversationId, e);
-            handleStreamErrorTerminal(conversationId, projectId, userId, e, null);
+            handleStreamErrorTerminal(guard, projectId, userId, e, null);
         }
         return true;
     }
@@ -1393,12 +1552,12 @@ public class AgentOrchestrator {
      *             地域拒绝会带上 AI_REGION_BLOCKED，前端据此把上游英文原文换成中文引导
      *             （见 useAgentStream.js 的 includes 检测）。不带标记的话前端只能显示英文原文。
      */
-    private void handleStreamErrorTerminal(String conversationId, String projectId, Long userId,
+    private void handleStreamErrorTerminal(RunGuard guard, String projectId, Long userId,
                                            Throwable err, LlmErrorClassifier.Kind kind) {
         String message = kind == null
                 ? err.getMessage()
                 : LlmErrorClassifier.taggedErrorMessage(kind, err.getMessage());
-        finishWithError(conversationId, projectId, userId, "Stream Error: " + message, null);
+        finishWithError(guard, projectId, userId, "Stream Error: " + message, null);
     }
 
     /**
@@ -1413,29 +1572,29 @@ public class AgentOrchestrator {
      * @param executionLog 本轮已产生的工具过程日志，可为 null；非空时一并落库，
      *                     崩溃轮的过程卡才能在历史里回放
      */
-    private void finishWithError(String conversationId, String projectId, Long userId,
+    private void finishWithError(RunGuard guard, String projectId, Long userId,
                                  String ssePayload, StringBuilder executionLog) {
-        sseEmitterService.send(conversationId, "error", ssePayload);
-        agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
+        String conversationId = guard.conversationId;
+        sendRunEvent(guard, "error", ssePayload);
+        markRunState(guard, AgentRunStateService.RunStatus.ERROR);
         boolean wasStreamingOnError = editorBridgeService.isStreamingMode(conversationId);
         boolean streamWroteOnError = editorBridgeService.hasStreamedContent(conversationId);
         editorBridgeService.setStreamingMode(conversationId, false);
         // 出错也要让 worker 收尾（否则 markdown 状态机残留半行/半张表），须在 close 之前发
         if (wasStreamingOnError) {
-            sseEmitterService.send(conversationId, "doc_stream_end",
+            sendRunEvent(guard, "doc_stream_end",
                     java.util.Map.of("status", "error", "wrote", streamWroteOnError));
         }
         // 保存已生成的部分内容，避免"当时看到了回复、历史里却没有"
-        StringBuilder sb = activeStreamContent.get(conversationId);
-        String partialContent = sb != null ? sb.toString() : "";
+        String partialContent = guard.streamSnapshot();
         String logText = executionLog != null ? executionLog.toString() : "";
         if (!partialContent.isEmpty() || !logText.isEmpty()) {
-            saveAssistantMessage(conversationId, projectId, userId,
+            saveAssistantMessage(guard, projectId, userId,
                     logText + partialContent
                             + LangText.of("\n\n[生成出错，已中断]", "\n\n[Generation error, interrupted]"));
         }
-        closeSse(conversationId);
-        clearCancelledState(conversationId);
+        closeSse(guard);
+        endRun(guard);
         editorBridgeService.clearCurrentConversationId();
     }
 
@@ -1492,13 +1651,14 @@ public class AgentOrchestrator {
                                      java.util.List<dev.langchain4j.data.message.ChatMessage> messages,
                                      String conversationId, String projectId, Long userId, String modelId,
                                      int depth, StringBuilder executionLog, AgentMode agentMode, RunGuard guard) {
+        // conversationId 与 guard.conversationId 恒等，保留形参只为不动调用方的实参顺序
         LlmErrorClassifier.Kind kind = LlmErrorClassifier.Kind.TRANSIENT;
         if (guard.llmRetries < kind.maxRetries()) {
             int attempt = ++guard.llmRetries;
             long delaySec = kind.retryDelaySeconds(attempt);
             log.warn("Empty LLM response for {} (attempt {}/{}), retrying in {}s",
                     conversationId, attempt, kind.maxRetries(), delaySec);
-            sendTextDelta(conversationId, String.format(
+            sendTextDelta(guard, String.format(
                     LangText.of("\n\n> 模型返回了空响应，%d 秒后自动重试（第 %d/%d 次）…\n\n",
                             "\n\n> The model returned an empty response; retrying in %d s (attempt %d/%d)…\n\n"),
                     delaySec, attempt, kind.maxRetries()));
@@ -1509,13 +1669,13 @@ public class AgentOrchestrator {
                             depth, executionLog, agentMode, guard);
                 } catch (Exception retryEx) {
                     log.error("Empty-response retry failed for {}", conversationId, retryEx);
-                    handleStreamErrorTerminal(conversationId, projectId, userId, retryEx, null);
+                    handleStreamErrorTerminal(guard, projectId, userId, retryEx, null);
                 }
             }), delaySec, java.util.concurrent.TimeUnit.SECONDS);
             return;
         }
         log.error("Empty LLM response persisted after retries for {}", conversationId);
-        handleStreamErrorTerminal(conversationId, projectId, userId,
+        handleStreamErrorTerminal(guard, projectId, userId,
                 new IllegalStateException(LangText.of("模型连续返回空响应，请稍后重发这条消息",
                         "The model kept returning empty responses; please resend this message later")), kind);
     }
@@ -1561,8 +1721,8 @@ public class AgentOrchestrator {
      * 客户端 `JSON.parse` 抛错后按原文渲染，用户看到的是 `{"content":"…` 这一串信封本身。
      * Jackson 的 writeValueAsString 会把 U+0000-U+001F 全部转义，这类问题一次性绝迹。
      */
-    private void sendTextDelta(String conversationId, String content) {
-        sseEmitterService.send(conversationId, "text_delta", jsonContentEnvelope(content));
+    private void sendTextDelta(RunGuard guard, String content) {
+        sendRunEvent(guard, "text_delta", jsonContentEnvelope(content));
     }
 
     /** {"content": "..."} 信封，转义交给 Jackson。序列化失败时退回不带正文的空信封而不是发出非法 JSON。 */
@@ -1682,14 +1842,14 @@ public class AgentOrchestrator {
      * 是两个独立的 run；StuckDetector 也只记录工具调用签名，反问本身根本不进窗口。
      * 若哪天把 RunGuard 改成跨轮复用，必须让反问轮不计入打转窗口与步数预算。
      */
-    private void stopForUserQuestion(String conversationId, String projectId, Long userId, String persistedContent) {
-        log.info("Detected <question> for {}, stopping loop and waiting for user answer", conversationId);
-        saveAssistantMessage(conversationId, projectId, userId, persistedContent);
-        agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.AWAITING_INPUT);
+    private void stopForUserQuestion(RunGuard guard, String projectId, Long userId, String persistedContent) {
+        log.info("Detected <question> for {}, stopping loop and waiting for user answer", guard.conversationId);
+        saveAssistantMessage(guard, projectId, userId, persistedContent);
+        markRunState(guard, AgentRunStateService.RunStatus.AWAITING_INPUT);
         // status=awaiting_input：会话列表显示「待回答」（区别于待审批），前端解锁输入区
-        sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"awaiting_input\"}");
-        closeSse(conversationId);
-        clearCancelledState(conversationId);
+        sendRunEvent(guard, "bubble_end", "{\"status\":\"awaiting_input\"}");
+        closeSse(guard);
+        endRun(guard);
     }
 
     /**

@@ -28,7 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 本轮生效集合 = 用户手动选择（{@code POST /api/agent/chat} 的 skillIds，含旧字段 pinnedSkillId）
  * ∪ 触发词自动命中（至多一个）。自动匹配仍是"多命中取最长关键词"的单选；能同时生效多个
  * 只是因为手动选择可以有多枚。prompt 注入与工具白名单都按整个集合做并集，
- * 见 {@link #activateForTurn(String, String, String, java.util.Collection)}。
+ * 见 {@link #activateForTurn(String, String, String, String, java.util.Collection)}。
  *
  * 注意：裁剪只影响"可见性"（LLM 看不到即不会调用），不拦截分发——与插件启停的
  * 可见性语义保持一致，也保证老对话历史里的工具调用仍可回放。
@@ -84,23 +84,29 @@ public class SkillRouter {
     }
 
     /**
-     * 本轮生效的 skill：conversationId -> [(skillId, source)]，手动选择在前、自动命中在后。
-     * 每次用户消息（handleUserMessage）刷新一次；一个都不生效即移除。
+     * 本轮生效的 skill：<b>runId</b> -> [(skillId, source)]，手动选择在前、自动命中在后。
+     * 每次用户消息（handleUserMessage）开一个新 runId 写一条；一个都不生效即不写。
+     *
+     * <p><b>键是 runId 不是 conversationId（dev-board#533）</b>：同一会话的两个并发轮次
+     * （双击发送 / 两个标签页 / 客户端重试 / 手机端镜像）此前会互相覆盖这张表——
+     * 后起一轮的 skill 会把先起那一轮<b>正在跑的循环</b>的工具白名单换掉，
+     * 于是第一轮注入的是 A 技能的 prompt、第二轮起可见工具却成了 B 技能的
+     * （审计「留给维护者拍板」第 4 条）。轮次标识由编排器的 RunGuard 生成并一路传进来，
+     * 本类不再持有任何 conversationId 级的可变状态。conversationId 只用于埋点归属。
      *
      * <p><b>顺序是契约</b>：{@link #activeSkill} 取第一个，于是"用户明确选的"永远压过
      * "关键词猜的"——这条语义从单选时代（pinnedSkillId 优先于触发词匹配）延续下来。
      *
      * <p>只存 id 不存定义：registry 可能在两轮之间 rescan，存定义会拿到已经不存在的旧对象。
      *
-     * <p><b>无界增长</b>：只有"这一轮没有任何 skill 生效"才会 {@code remove}——一个会话只要
-     * 最后一轮命中过 skill，条目就永久留着，进程不重启就一直涨（审计条目：activeByConversation
-     * never evicts...）。value 额外带上激活时刻，配 {@link #purgeStaleActivations()} 做惰性过期；
-     * 24 小时对齐本仓库同类"内存登记簿"的既有先例（{@code ConversationIssuanceService} 24h 过期）——
-     * 会话超过这么久没有新一轮 activateForTurn，下次用户回来发消息时会重新触发一次，不丢功能。
+     * <p><b>无界增长</b>：正常路径由编排器在轮次终态调 {@link #clearRun} 摘除；
+     * 进程被杀等异常路径摘不掉，value 额外带上激活时刻，配 {@link #purgeStaleActivations()}
+     * 做惰性过期；24 小时对齐本仓库同类"内存登记簿"的既有先例
+     *（{@code ConversationIssuanceService} 24h 过期）。
      */
-    private final Map<String, ActivationRecord> activeByConversation = new ConcurrentHashMap<>();
+    private final Map<String, ActivationRecord> activeByRun = new ConcurrentHashMap<>();
 
-    /** 过期窗口：见 {@link #activeByConversation} 字段注释。 */
+    /** 过期窗口：见 {@link #activeByRun} 字段注释。 */
     private static final long STALE_ACTIVATION_MILLIS = 24L * 60 * 60 * 1000;
 
     /** 时间源，测试可注入固定值以避免真实等待 24 小时。 */
@@ -111,14 +117,14 @@ public class SkillRouter {
     }
 
     /** 供测试断言登记簿大小（不下沉成生产代码路径）。 */
-    int activeByConversationSize() {
-        return activeByConversation.size();
+    int activeRunCount() {
+        return activeByRun.size();
     }
 
     private record ActiveEntry(String skillId, String source) {
     }
 
-    /** {@link #activeByConversation} 的 value：本轮生效集合 + 激活时刻，供惰性过期判断。 */
+    /** {@link #activeByRun} 的 value：本轮生效集合 + 激活时刻，供惰性过期判断。 */
     private record ActivationRecord(List<ActiveEntry> entries, long activatedAtMillis) {
     }
 
@@ -155,19 +161,19 @@ public class SkillRouter {
 
     /**
      * 为本轮对话做一次触发匹配并记录结果（编排器在每条用户消息入口调用一次）。
-     * 未命中时清除该会话的旧记录，保证行为回到"与现状完全一致"。
+     * 未命中时不留记录，保证行为回到"与现状完全一致"。
      */
-    public void activateForTurn(String conversationId, String userInput) {
-        activateForTurn(conversationId, userInput, null);
+    public void activateForTurn(String conversationId, String runId, String userInput) {
+        activateForTurn(conversationId, runId, userInput, null);
     }
 
     /**
      * 同上，但用户可钉选一个 skill 强制本轮生效（旧的单选字段 pinnedSkillId）。
      * 语义等价于把它当作只有一项的手动选择列表，见
-     * {@link #activateForTurn(String, String, String, java.util.Collection)}。
+     * {@link #activateForTurn(String, String, String, String, java.util.Collection)}。
      */
-    public void activateForTurn(String conversationId, String userInput, String pinnedSkillId) {
-        activateForTurn(conversationId, userInput, pinnedSkillId, null);
+    public void activateForTurn(String conversationId, String runId, String userInput, String pinnedSkillId) {
+        activateForTurn(conversationId, runId, userInput, pinnedSkillId, null);
     }
 
     /**
@@ -186,7 +192,7 @@ public class SkillRouter {
      * 前端状态过期不该让整轮报错，只是那个 skill 这轮不生效——而 SSE {@code skill_update}
      * 下发的是真正生效的清单，用户看得见它没被点亮。
      */
-    public void activateForTurn(String conversationId, String userInput, String pinnedSkillId,
+    public void activateForTurn(String conversationId, String runId, String userInput, String pinnedSkillId,
                                 java.util.Collection<String> manualSkillIds) {
         java.util.LinkedHashMap<String, String> active = new java.util.LinkedHashMap<>();
 
@@ -214,20 +220,30 @@ public class SkillRouter {
         match(userInput).ifPresent(matched -> active.putIfAbsent(matched.getId(), SOURCE_AUTO));
 
         if (active.isEmpty()) {
-            activeByConversation.remove(conversationId);
+            activeByRun.remove(runId);
             return;
         }
         List<ActiveEntry> entries = active.entrySet().stream()
                 .map(e -> new ActiveEntry(e.getKey(), e.getValue()))
                 .toList();
-        activeByConversation.put(conversationId, new ActivationRecord(entries, clockMillis.getAsLong()));
-        log.info("Skills activated for conversation {}: {}", conversationId, active);
-        recordActivation(conversationId, activeSkills(conversationId));
+        activeByRun.put(runId, new ActivationRecord(entries, clockMillis.getAsLong()));
+        log.info("Skills activated for conversation {} (run {}): {}", conversationId, runId, active);
+        recordActivation(conversationId, activeSkills(runId));
     }
 
     /**
-     * 清理超过 {@link #STALE_ACTIVATION_MILLIS} 未再激活的会话条目——见
-     * {@link #activeByConversation} 字段注释的无界增长问题。与 {@code TodoListService.purgeStaleLists}
+     * 轮次结束时摘掉它的生效记录（编排器在每条终态路径上调一次）。
+     * 摘不掉的异常路径（进程被杀）由 {@link #purgeStaleActivations()} 兜底。
+     */
+    public void clearRun(String runId) {
+        if (runId != null) {
+            activeByRun.remove(runId);
+        }
+    }
+
+    /**
+     * 清理超过 {@link #STALE_ACTIVATION_MILLIS} 未再激活的轮次条目——见
+     * {@link #activeByRun} 字段注释的无界增长问题。与 {@code TodoListService.purgeStaleLists}
      * 同款节奏（每日一次 + 15 分钟初始延迟错峰）。
      */
     @org.springframework.scheduling.annotation.Scheduled(fixedDelay = 24L * 60 * 60 * 1000,
@@ -235,9 +251,9 @@ public class SkillRouter {
     public void purgeStaleActivations() {
         try {
             long cutoff = clockMillis.getAsLong() - STALE_ACTIVATION_MILLIS;
-            int before = activeByConversation.size();
-            activeByConversation.entrySet().removeIf(e -> e.getValue().activatedAtMillis() < cutoff);
-            int removed = before - activeByConversation.size();
+            int before = activeByRun.size();
+            activeByRun.entrySet().removeIf(e -> e.getValue().activatedAtMillis() < cutoff);
+            int removed = before - activeByRun.size();
             if (removed > 0) {
                 log.info("清理冷 skill 激活记录 {} 条", removed);
             }
@@ -272,8 +288,8 @@ public class SkillRouter {
      * 本轮生效的全部 skill（手动在前、自动在后；一个都没有时返回空列表）。
      * 注入前复查可用性——两轮之间可能被管理员停用。
      */
-    public List<ActiveSkill> activeSkills(String conversationId) {
-        ActivationRecord record = activeByConversation.get(conversationId);
+    public List<ActiveSkill> activeSkills(String runId) {
+        ActivationRecord record = activeByRun.get(runId);
         List<ActiveEntry> entries = record == null ? null : record.entries();
         if (entries == null || entries.isEmpty()) {
             return List.of();
@@ -288,8 +304,8 @@ public class SkillRouter {
     }
 
     /** 本轮生效的首个 skill（手动优先；一个都没有返回 empty）。单值出口，供只关心"有没有"的旧调用方。 */
-    public Optional<SkillDefinition> activeSkill(String conversationId) {
-        return activeSkills(conversationId).stream().findFirst().map(ActiveSkill::definition);
+    public Optional<SkillDefinition> activeSkill(String runId) {
+        return activeSkills(runId).stream().findFirst().map(ActiveSkill::definition);
     }
 
     /** 按当前应用语言解析展示名：en-US 优先 name_en，缺省回退 name，再缺回退 id。 */
@@ -308,8 +324,8 @@ public class SkillRouter {
      * 白名单过滤结果为空（allowed_tools 全部拼错等误配置）时回退为不裁剪并告警，
      * 避免把 Agent 裁成"无工具可用"。
      */
-    public List<ToolSpecification> visibleTools(String conversationId, List<ToolSpecification> all) {
-        List<ActiveSkill> active = activeSkills(conversationId);
+    public List<ToolSpecification> visibleTools(String runId, List<ToolSpecification> all) {
+        List<ActiveSkill> active = activeSkills(runId);
         if (active.isEmpty()) {
             return all;
         }

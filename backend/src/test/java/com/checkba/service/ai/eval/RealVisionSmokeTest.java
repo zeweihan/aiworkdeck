@@ -157,7 +157,7 @@ class RealVisionSmokeTest {
         item.setFileType("image");
 
         List<dev.langchain4j.data.message.ChatMessage> messages = assembler.assemble(
-                "conv-vision-smoke", "图片里印着一个词和两个数字，原样回答它，不要有任何别的文字。",
+                "conv-vision-smoke", "run-vision-smoke", "图片里印着一个词和两个数字，原样回答它，不要有任何别的文字。",
                 List.of(item), null, null, null, "88",
                 com.checkba.model.ai.AgentMode.ASK, 1L, modelId);
 
