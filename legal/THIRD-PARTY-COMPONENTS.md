@@ -2,7 +2,7 @@
 
 Last reviewed: 2026-09-09
 
-AI WorkDeck's desktop installers bundle several independently developed components. Each runs as a separate process or a separately loaded module and talks to AI WorkDeck over local HTTP or a documented interface. They are aggregated with AI WorkDeck, not derived from it, and each stays under its own license. AI WorkDeck's own license (AGPL-3.0, see [`LICENSE`](LICENSE)) and its Commercial License (see [`COMMERCIAL-LICENSE.md`](COMMERCIAL-LICENSE.md)) do not change the terms below.
+AI WorkDeck's desktop app ships several independently developed components, either inside the installer or as packs downloaded on first use. Each runs as a separate process or a separately loaded module and talks to AI WorkDeck over local HTTP or a documented interface. They are aggregated with AI WorkDeck, not derived from it, and each stays under its own license. AI WorkDeck's own license (AGPL-3.0, see [`LICENSE`](LICENSE)) and its Commercial License (see [`COMMERCIAL-LICENSE.md`](COMMERCIAL-LICENSE.md)) do not change the terms below.
 
 This file is the human-readable inventory. Machine-readable per-file annotations live in the repository root `REUSE.toml`.
 
@@ -61,7 +61,7 @@ Packaging: `desktop/scripts/prepare-python-service.js` installs each service's `
 | Source availability | The corresponding source is the upstream branch above plus the patches in `desktop/lowa-build/`. Together they reproduce the shipped artifacts. |
 | Related | zeta.js marshalling layer by [allotropia](https://github.com/allotropia/zetajs), MIT, vendored under `frontend/src/zetaoffice/public/` (see `UPSTREAM.md` there). CJK fonts under the SIL Open Font License 1.1, downloaded at build time. |
 
-## Diagram layout
+## Diagram layout (native pack, downloaded on first use)
 
 ### Graphviz
 
@@ -69,7 +69,7 @@ Packaging: `desktop/scripts/prepare-python-service.js` installs each service's `
 |---|---|
 | Upstream | [Graphviz](https://graphviz.org/) by AT&T Research and contributors |
 | License | EPL-2.0 |
-| Where | Only the `dot` binary and the `core`, `dot_layout`, and `neato_layout` plugins are bundled, taken from upstream release builds (`desktop/scripts/prepare-graphviz.js`). No rendering backends are included. |
+| Where | Only the `dot` binary and the `core`, `dot_layout`, and `neato_layout` plugins are shipped, taken from upstream release builds (`desktop/scripts/prepare-graphviz.js`). No rendering backends are included. It is not inside the installer: it ships in the litigation visualization native pack, which the app downloads on first use (`.github/workflows/pack-release.yml`). |
 | Source availability | https://gitlab.com/graphviz/graphviz |
 
 ## Components no longer bundled
