@@ -62,8 +62,11 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 文档「解析」管线（dev-board#181 后端 / #182）：通读一份文档 →
- * 抽实体（企业 / 法规 / 案例）→ 逐个打外部库 → 同时做文档内部一致性校验。
+ * 文档「解析」管线（dev-board#181 后端 / #182 / #541）：通读一份文档 →
+ * 抽实体（企业 / 法规 / 案例 / 本项目内的另一份文档）→ 逐个打外部库 → 同时做文档内部一致性校验。
+ *
+ * <p>DOC 这一类不打外部库：它的「检索」是把正文里书名号提到的标题<b>对到项目文件树上</b>
+ * （{@link #resolveDocFiles}），命中就把 fileId 交给窗格去开那份文件。
  * 结果供前端「依据」窗格轮询展示。
  *
  * <h3>三条硬口径</h3>
@@ -119,6 +122,11 @@ public class DocInsightService {
     /** 内容定位候选的摘要上限与条数上限。 */
     private static final int CANDIDATE_SNIPPET_LIMIT = 200;
     private static final int MAX_CANDIDATES = 3;
+
+    /** DOC 实体命中项目文件后的归一键前缀（多处提到同一份文件合并成一条）。 */
+    private static final String FILE_KEY_PREFIX = "file:";
+    /** DOC 的检索来源：项目文件树，不是任何外部库。 */
+    private static final String DOC_SOURCE = "project-file";
 
     /** 「《公司法》第二十条」→ title=公司法, article=第二十条。 */
     private static final Pattern LAW_NAME = Pattern.compile("^《([^《》]+)》\\s*(.*)$");
@@ -230,7 +238,9 @@ public class DocInsightService {
             extract(runId, text, raw, claims, projectId, userId);
 
             List<RawEntity> merged = DocInsightExtraction.merge(raw, props.getMaxMentions(), props.getMaxEntities());
-            List<DocInsightEntity> rows = persistEntities(runId, projectId, file.getId(), merged);
+            DocResolved resolved = resolveDocFiles(projectId, merged);
+            List<DocInsightEntity> rows = persistEntities(runId, projectId, file.getId(),
+                    resolved.entities(), resolved.hits());
 
             Retrieved retrieved = retrieveAll(runId, rows);
             List<DocInsightChecks.Finding> citations = validateCitations(runId, rows);
@@ -287,8 +297,12 @@ public class DocInsightService {
         }
     }
 
+    /**
+     * @param docHits DOC 实体的归一键 → 命中的项目文件（{@link #resolveDocFiles}）。
+     *                DOC 的「检索」在这里就判完了：命中写 OK + fileId，没命中写 NOT_FOUND。
+     */
     private List<DocInsightEntity> persistEntities(Long runId, Long projectId, Long docFileId,
-                                                   List<RawEntity> merged) {
+                                                   List<RawEntity> merged, Map<String, ProjectFile> docHits) {
         List<DocInsightEntity> out = new ArrayList<>(merged.size());
         for (RawEntity e : merged) {
             DocInsightEntity row = new DocInsightEntity();
@@ -300,9 +314,91 @@ public class DocInsightService {
             row.setNormKey(e.normKey());
             row.setMentionsJson(mentionsJson(e.mentions()));
             row.setRetrievalStatus(DocInsightEntity.RETRIEVAL_PENDING);
+            if (DocInsightEntity.KIND_DOC.equals(e.kind())) settleDoc(row, docHits.get(e.normKey()));
             out.add(entities.save(row));
         }
         return out;
+    }
+
+    /** 一轮 DOC 归并的结果：改写过归一键的实体表 + 归一键 → 命中文件。 */
+    private record DocResolved(List<RawEntity> entities, Map<String, ProjectFile> hits) {}
+
+    /**
+     * 把书名号候选对到项目文件树上（dev-board#541）。
+     *
+     * <p>命中的实体归一键改写成 {@code file:<id>} 后<b>再合并一次</b>——正文里
+     * 《房屋租赁合同》与《房屋租赁合同（2021）》指的是同一份文件，窗格里该只出现一条。
+     * 没命中的保留原键，落 NOT_FOUND：「文档提到但项目里缺这份」对尽调本身就是一条线索。
+     */
+    private DocResolved resolveDocFiles(Long projectId, List<RawEntity> merged) {
+        boolean any = merged.stream().anyMatch(e -> DocInsightEntity.KIND_DOC.equals(e.kind()));
+        if (!any) return new DocResolved(merged, Map.of());
+
+        List<ProjectFile> candidates = files.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId)
+                .stream().filter(f -> !Boolean.TRUE.equals(f.getIsFolder())).toList();
+        Map<String, ProjectFile> hits = new LinkedHashMap<>();
+        List<RawEntity> rewritten = new ArrayList<>(merged.size());
+        for (RawEntity e : merged) {
+            if (!DocInsightEntity.KIND_DOC.equals(e.kind())) {
+                rewritten.add(e);
+                continue;
+            }
+            ProjectFile hit = matchFile(e.normKey(), candidates);
+            if (hit == null) {
+                rewritten.add(e);
+                continue;
+            }
+            String key = FILE_KEY_PREFIX + hit.getId();
+            hits.put(key, hit);
+            rewritten.add(new RawEntity(e.kind(), e.name(), key, e.article(), e.mentions()));
+        }
+        return new DocResolved(
+                DocInsightExtraction.merge(rewritten, props.getMaxMentions(), props.getMaxEntities()), hits);
+    }
+
+    /**
+     * 归一后<b>相等优先、其次互相包含</b>；同档里取路径最短的那个（越靠近根目录越可能是正本）。
+     * 包含匹配两个方向都收：正文可能写得比文件名长（《北京房屋租赁合同》），也可能更短。
+     */
+    private static ProjectFile matchFile(String key, List<ProjectFile> candidates) {
+        if (!StringUtils.hasText(key) || key.length() < 2) return null;
+        ProjectFile exact = null;
+        ProjectFile loose = null;
+        for (ProjectFile f : candidates) {
+            String fk = DocInsightExtraction.normalizeDocTitle(f.getName());
+            if (fk.length() < 2) continue;
+            if (fk.equals(key)) exact = shorterPath(exact, f);
+            else if (fk.contains(key) || key.contains(fk)) loose = shorterPath(loose, f);
+        }
+        return exact != null ? exact : loose;
+    }
+
+    private static ProjectFile shorterPath(ProjectFile a, ProjectFile b) {
+        if (a == null) return b;
+        if (b == null) return a;
+        int la = a.getFilePath() == null ? Integer.MAX_VALUE : a.getFilePath().length();
+        int lb = b.getFilePath() == null ? Integer.MAX_VALUE : b.getFilePath().length();
+        if (la != lb) return la < lb ? a : b;
+        return b.getId() != null && a.getId() != null && b.getId() < a.getId() ? b : a;
+    }
+
+    /** DOC 的终态：命中 = OK + fileId（窗格据它直接打开那份文件），没命中 = NOT_FOUND。 */
+    private void settleDoc(DocInsightEntity row, ProjectFile hit) {
+        row.setFetchedAt(LocalDateTime.now());
+        if (hit == null) {
+            notFound(row, DOC_SOURCE, LangText.of("项目中未找到该文件", "No such file in this project"));
+            return;
+        }
+        ObjectNode out = om.createObjectNode();
+        out.put("source", DOC_SOURCE);
+        out.put("fileId", hit.getId());
+        out.put("fileName", hit.getName());
+        out.put("filePath", hit.getFilePath());
+        row.setRetrievalStatus(DocInsightEntity.RETRIEVAL_OK);
+        row.setRetrievalSource(DOC_SOURCE);
+        row.setRetrievalJson(writeJson(out));
+        row.setRetrievalNote(null);
+        row.setRetrievalHint(null);
     }
 
     /** 一轮检索的完成情况。NOT_FOUND 也算<b>跑完了</b>——上游明确回「没有这一项」，不是故障。 */
@@ -353,6 +449,11 @@ public class DocInsightService {
 
     /** @param force true = 绕过 7 天缓存（单实体「重新检索」用） */
     private void retrieveOne(DocInsightEntity row, boolean force) {
+        // DOC 的「检索」= 与项目文件树比对，在 persistEntities 里就判完了，这里整段跳过：
+        // ① 落到 default 会把已判好的 OK / NOT_FOUND 覆盖成 UNAVAILABLE；
+        // ② 走 7 天缓存会拿上一轮的结论盖掉「这份文件现在不在项目里了」。
+        // 「重新检索」对 DOC 同样是空操作（窗格也不给这个按钮：重试一百次还是同一句话）。
+        if (DocInsightEntity.KIND_DOC.equals(row.getKind())) return;
         row.setRetrievalHint(null);   // 上一轮的原因码不许挂到这一轮（重新检索 / 缓存复用都走这里）
         if (!force && copyFromCache(row)) return;
         row.setFetchedAt(LocalDateTime.now());

@@ -791,8 +791,10 @@
             :parse-request="insightParseRequest"
             :cursor-context="insightCursorContext"
             @entities="onInsightEntities"
+            @open-hover="openInsightHoverCard($event)"
             @open-url="openBrowserTab($event)"
             @open-settings="openSettingsTab($event || {})"
+            @open-doc-file="openInsightDocFile($event)"
           />
           <!-- 有真前端入口（Web 插件）走 iframe 沙箱；纯工具/skill 插件走宿主渲染的
                启动面板（介绍 + 怎么用 + 一键动作发进 AI 对话），不再是「未配置入口地址」。 -->
@@ -999,7 +1001,7 @@
                       @evidence-drop="onEvidenceDrop($event, 'left')"
                       @locator-consumed="onLocatorConsumed"
                       :insight-open="insightPaneOpen && insightDocFileId === file.id"
-                      :insight-subscribed="insightPaneOpen && insightDocFileId === file.id"
+                      :insight-subscribed="insightSubscribedFor(file)"
                       @open-insight="onOpenInsight($event, 'left')"
                       @cursor-context="onEditorCursorContext"
                     />
@@ -1028,7 +1030,7 @@
                       @evidence-drop="onEvidenceDrop($event, 'left')"
                       @locator-consumed="onLocatorConsumed"
                       :insight-open="!!(sp.file && insightPaneOpen && insightDocFileId === sp.file.id)"
-                      :insight-subscribed="!!(sp.file && insightPaneOpen && insightDocFileId === sp.file.id)"
+                      :insight-subscribed="insightSubscribedFor(sp.file)"
                       @open-insight="onOpenInsight($event, 'left')"
                       @cursor-context="onEditorCursorContext"
                     />
@@ -1100,6 +1102,16 @@
                       :key="activeFileLeft.id"
                       :spec="activeFileLeft.marketSpec"
                       @open-url="openBrowserTab($event)"
+                    />
+                    <!-- 实体详情标签（dev-board#541）：浮窗上「在新标签页打开」的落点。
+                         照 market-detail 那套 tab 形制（单例 id、直接 push 进列表）。 -->
+                    <InsightEntityDetailPane
+                      v-else-if="activeFileLeft.tabType === 'insight-entity'"
+                      :key="activeFileLeft.id"
+                      :spec="activeFileLeft.entitySpec"
+                      :project-id="projectId"
+                      @open-url="openBrowserTab($event)"
+                      @open-doc-file="openInsightDocFile($event)"
                     />
                     <!-- 「设置」标签：与 pages/admin 薄壳页共用同一个 AdminPane
                          （照插件广场 market-detail 那套 tab 形制）。个人中心 2026-08-20
@@ -1185,7 +1197,7 @@
                       @evidence-drop="onEvidenceDrop($event, 'right')"
                       @locator-consumed="onLocatorConsumed"
                       :insight-open="insightPaneOpen && insightDocFileId === file.id"
-                      :insight-subscribed="insightPaneOpen && insightDocFileId === file.id"
+                      :insight-subscribed="insightSubscribedFor(file)"
                       @open-insight="onOpenInsight($event, 'right')"
                       @cursor-context="onEditorCursorContext"
                     />
@@ -1250,6 +1262,16 @@
                       :key="activeFileRight.id"
                       :spec="activeFileRight.marketSpec"
                       @open-url="openBrowserTab($event)"
+                    />
+                    <!-- 实体详情标签（dev-board#541）：浮窗上「在新标签页打开」的落点。
+                         照 market-detail 那套 tab 形制（单例 id、直接 push 进列表）。 -->
+                    <InsightEntityDetailPane
+                      v-else-if="activeFileRight.tabType === 'insight-entity'"
+                      :key="activeFileRight.id"
+                      :spec="activeFileRight.entitySpec"
+                      :project-id="projectId"
+                      @open-url="openBrowserTab($event)"
+                      @open-doc-file="openInsightDocFile($event)"
                     />
                     <!-- 「设置」标签：见左窗格同名注释 -->
                     <AdminPane
@@ -1535,8 +1557,10 @@
                 :parse-request="insightParseRequest"
                 :cursor-context="insightCursorContext"
                 @entities="onInsightEntities"
+                @open-hover="openInsightHoverCard($event)"
                 @open-url="openBrowserTab($event)"
                 @open-settings="openSettingsTab($event || {})"
+                @open-doc-file="openInsightDocFile($event)"
               />
             </view>
 
@@ -1905,6 +1929,23 @@
       </view>
     </view>
 
+    <!-- 「依据」实体浮窗（dev-board#541）：正文里 Cmd/Ctrl 点中实体后贴着点击处弹出。
+         挂在页面根节点（不在面板里）——编辑器画布是独立合成层的 <webview>，
+         浮层只有在根级 + 高 z-index 才压得住，同 FileTree 的右键菜单。 -->
+    <InsightHoverCard
+      v-if="insightHover"
+      :key="insightHover.key"
+      :entity="insightHover.entity"
+      :x="insightHover.x"
+      :y="insightHover.y"
+      :project-id="projectId"
+      :initial-detail="insightHover.detail || null"
+      @close="closeInsightHoverCard"
+      @open-tab="openInsightEntityTab($event)"
+      @open-url="openBrowserTab($event)"
+      @open-doc-file="openInsightDocFile($event)"
+    />
+
     <!-- 底部状态条（IDE 化：常驻工具入口 + 真实状态信号，等宽字体） -->
     <view class="status-bar" v-if="!isClientView">
       <view
@@ -1975,6 +2016,10 @@ import EasyVoicePane from '@/components/EasyVoicePane.vue'
 import DesensitizePane from '@/components/DesensitizePane.vue'
 import ClipboardPanel from '@/components/ClipboardPanel.vue'
 import InsightPane from '@/components/InsightPane.vue'
+// 正文 Cmd/Ctrl 点中实体后的浮窗 + 它的「在新标签页打开」落点（dev-board#541）。
+// 浮窗必须挂在页面根节点才叠得上编辑器 <webview>，所以宿主持有它而不是面板。
+import InsightHoverCard from '@/components/InsightHoverCard.vue'
+import InsightEntityDetailPane from '@/components/InsightEntityDetailPane.vue'
 import SearchPanel from '@/components/SearchPanel.vue'
 import VersionPanel from '@/components/version/VersionPanel.vue'
 // 异步组件：ProjectCalendarPane 静态 import 会把 FullCalendar 整包拖进工作台主
@@ -2026,7 +2071,8 @@ import {
   checkCloud, // 协作 chip 的联网刷新（cloudStatus 是不联网的本地快照）
   getCloudMembers, // 成员堆栈：案卷放进案件库后，同事在库那边的名单本机 /members 里没有
   getCurrentUser as getCurrentUserApi, // 顶栏头像：补一次真实接口，本地缓存只是首屏兜底
-  registerMeetingFromFile // 右键转写：音频文件注册进会议录音面板（dev-board#227）
+  registerMeetingFromFile, // 右键转写：音频文件注册进会议录音面板（dev-board#227）
+  getDocInsight // 「依据」实体索引预取：窗格关着也要能 Cmd 点正文（dev-board#541）
 } from '@/services/api.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { signOut } from '@/utils/signOut.js'
@@ -2083,6 +2129,7 @@ import { fileOpenTabsMethods } from './fileOpenTabs.js'
 import { clipboardBridgeMethods } from './clipboardBridge.js'
 import { ocrActionMethods } from './ocrActions.js'
 import { ocrCaptureMethods } from './ocrCapture.js'
+import { insightEntityTabMethods } from './insightEntityTab.js'
 
 // 网页标签保活上限（只在 Web/H5 生效，桌面端保活是 BrowserView 的活，见 leftWebTabs）。
 // 为什么要有上限、而桌面端可以不要：从窗口摘下的 BrowserView 会被 Chromium 冻住渲染进程，
@@ -2106,6 +2153,8 @@ export default {
     FileStagingArea,
     ClipboardPanel,
     InsightPane,
+    InsightHoverCard,
+    InsightEntityDetailPane,
     DdFilesPanel,
     ShareholderMeetingPanel,
     MeetingRecordingPanel,
@@ -2350,6 +2399,11 @@ export default {
       // 实体索引在 _insightIndex（非响应式，同 _libreRefs 口径）——它只在事件处理里被读。
       insightParseRequest: null,
       insightCursorContext: null,
+      // 正文 Cmd/Ctrl 点中实体后的浮窗（dev-board#541）：{entity, x, y, detail}，null = 不显示。
+      insightHover: null,
+      // 每份文档抽出了几个实体。_insightIndex 是非响应式的，模板要用（决定要不要
+      // 给客体页开光标订阅）就得有个响应式镜像。
+      insightEntityCounts: {},
 
       // 文件状态 - 分两组管理
       leftFiles: [], // 左侧文件列表
@@ -2545,6 +2599,9 @@ export default {
         this.showFilePicker ||
         this.showInviteModal ||
         !!this.imagePreviewUrl ||
+        // 「依据」实体浮窗（dev-board#541）：另一侧开着浏览器标签时，BrowserView 是
+        // 原生层，会把浮窗盖住——同图片预览那条，弹出期间先把 BrowserView 藏掉
+        !!this.insightHover ||
         (this.fileLinkPicker && this.fileLinkPicker.visible)
       )
     },
@@ -3555,8 +3612,8 @@ export default {
     // 内嵌 LibreOffice 多实例保活：激活的 Office 标签记入 LRU（超上限触发
     // 淘汰），并把 AI 指令路由指针同步到当前活动实例（活跃实例指针，同
     // PR#151 WPS 编辑器模式）。
-    activeFileLeft(f) { this.onActiveOfficeFileChanged('left', f); this.touchWebKeepAlive('left', f) },
-    activeFileRight(f) { this.onActiveOfficeFileChanged('right', f); this.touchWebKeepAlive('right', f) },
+    activeFileLeft(f) { this.onActiveOfficeFileChanged('left', f); this.touchWebKeepAlive('left', f); this.prefetchInsightIndex(f) },
+    activeFileRight(f) { this.onActiveOfficeFileChanged('right', f); this.touchWebKeepAlive('right', f); this.prefetchInsightIndex(f) },
     focusedPane() { this.syncLibreExecutor() },
     // 关闭 tab 后清掉文件已不在左列表的过继备胎条目（closeFile 已 flush）
     'leftFiles.length'() { this.pruneClosedLibreSpares() },
@@ -3669,6 +3726,8 @@ export default {
     ...ocrActionMethods,
     // Phase 3c 外置的方法组
     ...ocrCaptureMethods,
+    // 「依据」实体详情标签（dev-board#541）
+    ...insightEntityTabMethods,
     // 右键「这份文件的历史」：切到版本面板并只显示这份文件的版本
     onFileHistory(file) {
       this.versionFileFilter = { fileId: file.id, name: file.name }
@@ -5530,25 +5589,93 @@ export default {
     },
     /** 窗格把实体清单同步上来（宿主据此在正文点击时做匹配）。 */
     onInsightEntities(payload) {
-      const idx = this._insightIndex || (this._insightIndex = {})
       const id = payload && payload.docFileId
       if (!id) return
-      idx[id] = Array.isArray(payload.entities) ? payload.entities : []
+      this.setInsightIndex(id, Array.isArray(payload.entities) ? payload.entities : [])
+    },
+    /** 索引 + 它的响应式计数镜像的唯一写入点。 */
+    setInsightIndex(docFileId, list) {
+      const idx = this._insightIndex || (this._insightIndex = {})
+      idx[docFileId] = list
+      this.insightEntityCounts = { ...this.insightEntityCounts, [docFileId]: list.length }
     },
     /**
-     * 客体页回传的光标邻域（只有窗格订阅着才会有）。宿主先自己匹配一遍：
-     * 命中才把上下文推给窗格（窗格再匹配一次决定展开还是被动高亮）——
-     * 没命中的光标移动不推，免得窗格每次移动都白跑一遍。
+     * 这份文档要不要给客体页开光标订阅（dev-board#541）。
+     * 原判据只有「窗格开着且绑在它上面」，于是窗格一关，正文里 Cmd 点击就没反应了。
+     * 现在多一条：**已经解析出实体**的文档也订阅——没解析过的文档仍然一次
+     * get_cursor_context 都不打，「没开窗格的用户零开销」那条口径对它们没变。
+     */
+    insightSubscribedFor(file) {
+      if (!file || !file.id) return false
+      if (this.insightPaneOpen && Number(this.insightDocFileId) === Number(file.id)) return true
+      return !!this.insightEntityCounts[file.id]
+    },
+    /**
+     * 文档标签激活时预取一次实体清单（dev-board#541）。窗格是 v-if 挂载的，
+     * 关着时没人拉过 GET /insight，_insightIndex 就是空的——Cmd 点击匹配不到任何东西。
+     * 一份文档只拉一次；失败不写缓存，下次激活会重试。非 writer 文档一次也不拉。
+     */
+    prefetchInsightIndex(file) {
+      if (!file || !this.projectId || !this.isInsightDoc(file)) return
+      const id = Number(file.id)
+      if (!id) return
+      if ((this._insightIndex || {})[id] !== undefined) return
+      const inflight = this._insightPrefetch || (this._insightPrefetch = {})
+      if (inflight[id]) return
+      inflight[id] = true
+      const done = () => { delete inflight[id] }
+      getDocInsight(this.projectId, id)
+        .then((resp) => {
+          const v = (resp && typeof resp === 'object' && 'data' in resp ? resp.data : resp) || {}
+          // 与窗格 emit 的索引同形：匹配用的名字 + 浮窗抬头的短标量，出处不进索引
+          const list = (Array.isArray(v.entities) ? v.entities : []).map((e) => ({
+            id: e.id, kind: e.kind, name: e.name, normKey: e.normKey,
+            retrievalStatus: e.retrievalStatus, retrievalSource: e.retrievalSource,
+            retrievalNote: e.retrievalNote, hasDetail: e.hasDetail,
+          }))
+          this.setInsightIndex(id, list)
+        })
+        .catch(() => { /* 还没解析过 / 拉不到：不写缓存，下次激活再试 */ })
+        .then(done, done)
+    },
+    /**
+     * 客体页回传的光标邻域。宿主先自己匹配一遍（索引在宿主手里，窗格可能根本没挂）：
+     *   窗格开着且绑着这份文档 → 原样推给窗格（它决定被动高亮，还是上抛 open-hover）；
+     *   窗格没开             → 只处理 Cmd/Ctrl 那一支，直接弹浮窗。
+     * 没命中的光标移动一律不推，免得窗格每次移动都白跑一遍。
      */
     onEditorCursorContext(ctx) {
-      if (!ctx || !this.insightPaneOpen) return
-      const fileId = ctx.fileId
-      if (fileId && Number(fileId) !== Number(this.insightDocFileId)) return
-      const list = (this._insightIndex || {})[this.insightDocFileId] || []
+      if (!ctx) return
+      const fileId = Number(ctx.fileId) || null
+      if (!fileId) return
+      const list = (this._insightIndex || {})[fileId] || []
       if (!list.length) return
-      if (!matchEntityAt(ctx, list)) return
-      this.insightCursorContext = ctx
+      const hit = matchEntityAt(ctx, list)
+      if (!hit) return
+      if (this.insightPaneOpen && Number(this.insightDocFileId) === fileId) {
+        this.insightCursorContext = ctx
+        return
+      }
+      const meta = ctx.meta || {}
+      if (meta.metaKey || meta.ctrlKey) {
+        this.openInsightHoverCard({ entity: hit, x: meta.hostX, y: meta.hostY })
+      }
     },
+    /**
+     * 弹实体浮窗（dev-board#541）。坐标是 LibreOfficeEditor 换算好的页面坐标；
+     * 换算不出来（拿不到画布 rect、或客体页没带坐标）就**不弹**——
+     * 弹到屏幕角落比不弹更糟，用户会以为自己点错了地方。
+     */
+    openInsightHoverCard(payload) {
+      const entity = payload && payload.entity
+      const x = Number(payload && payload.x)
+      const y = Number(payload && payload.y)
+      if (!entity || !entity.id) return
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return
+      // key 带时间戳：连点两个不同实体时强制重建（详情/定位都要重来一遍）
+      this.insightHover = { entity, x, y, detail: (payload && payload.detail) || null, key: entity.id + '@' + Date.now() }
+    },
+    closeInsightHoverCard() { this.insightHover = null },
 
     // #104: getEditor() adapter for VariablePanel — the five document-field
     // methods it expects, implemented over the LibreOffice executor's var_*

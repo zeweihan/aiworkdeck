@@ -595,6 +595,23 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
   单测 `frontend/tests/tab-visibility/file-kind.test.mjs` 里那条「三处一一对上」的
   断言会拦下只改一头的改法（`npm run test:tab-visibility`）。
 
+## 非文件标签 `insight-entity`（dev-board#541）
+
+「依据」实体浮窗上的「在新标签页打开」会在中栏开一个实体详情标签：
+`tabType:'insight-entity'`、id `insight-entity_<kind>_<id>`、单例（跨两侧查重）、
+直接 push 进 `rightFiles` 绕过 `isFileTypeSupported`——与 `market-detail` / 浏览器 tab 同法，
+渲染分流在左右两条 `v-else-if` 链里各一份 `<InsightEntityDetailPane>`。
+
+两条与外壳有关的口径：
+- **未分屏时强制开分屏并落右侧**（`splitMode=true` + `focusedPane='right'`）。
+  这个动作的意义就是「正文与详情并排看」，开在左边会把用户正在读的那份文档顶掉。
+- `'insight-entity'` 必须进 `pages/project-overview/fileKind.js` 的 `NON_FILE_TAB_TYPES`，
+  否则标签会被按扩展名上色。
+
+开法本身外置在 `pages/project-overview/insightEntityTab.js`（方法组，同 tabDragSplit.js 的先例），
+单测 `frontend/tests/insight/insightEntityTab.test.mjs`（`npm run test:insight`）。
+浮窗本身**不是标签**：它挂在页面根节点、position:fixed 贴点击点，详见 doc-insight.md。
+
 ## 相关文件
 
 - `frontend/src/services/host.js` — **访问桌面壳能力的唯一出口**（浏览器面板/截图/剪贴板/组件下载/自动更新/本地文件对话框/应用菜单等）。业务代码一律 `import { host } from '@/services/host.js'`，**不要再写 `window.checkbaDesktop`**；「是不是桌面壳」用 `isDesktopHost()`。桌面态逐字段透传、Web 态缺席，所以既有的 `if (host.browser && ...)` 子对象守卫必须保留（守卫就是能力探测）。详见 doc-editor.md 的「宿主能力层与编辑器容器」。

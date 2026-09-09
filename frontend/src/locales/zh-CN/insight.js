@@ -37,6 +37,27 @@ export default {
     COMPANY: '公司',
     LAW: '法规',
     CASE: '案例',
+    // 第四类实体：正文里提到的、项目文件树里的那份文件（dev-board#541）
+    DOC: '文档',
+  },
+  // 单个实体的类型徽标（浮窗 / 实体详情标签页）。与上面 kind 的分组标题分开：
+  // 分组标题在英文版是复数（Companies），当徽标读起来不对。
+  entityKind: {
+    COMPANY: '公司',
+    LAW: '法规',
+    CASE: '案例',
+    DOC: '文档',
+  },
+  // 正文 Cmd/Ctrl 点中实体后的浮窗（dev-board#541）
+  openInNewTab: '在新标签页打开',
+  // DOC 实体：命中项目文件时直接打开那份文件（落右侧分屏），没命中只说明情况
+  openDocFile: '打开文件',
+  docNotFound: '项目中未找到该文件',
+  docMissing: '文件已不在项目中',
+  // 检索来源的人话（浮窗 / 详情标签页的来源行）
+  source: {
+    projectFile: '项目文件',
+    qichacha: '企查查',
   },
 
   mentions: '{count} 处',
