@@ -277,6 +277,15 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
     e.preventDefault(); invalidate(); const gen = generation, point = { x: e.clientX, y: e.clientY }
     const ctx = await execute('get_completion_context', { radius: 160 }).catch(() => null)
     if (disposed || gen !== generation || !ctx?.success || !ctx.selectedText || !ctx.token || ctx.selectedText.length > 160) return
+    // A real canvas right-click has already opened Qt's native popup. Route
+    // Escape through Qt's keyboard handler: it dismisses that popup while
+    // preserving the selection/token. .uno:Escape would cancel the selection.
+    // Synthetic/input context menus have no Qt popup and must not receive it.
+    if (e.isTrusted && e.target === canvas) {
+      for (const type of ['keydown', 'keyup']) canvas.dispatchEvent(new view.KeyboardEvent(type, {
+        key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true,
+      }))
+    }
     show('context', ctx.selectedText, point)
     const known = items.find((x) => x.text === ctx.selectedText)
     if (known?.entityId || known?.hasDetail) button(t.detail, () => detailRequest('detail', { entityId: known.entityId, id: known.id }, ctx.token))
