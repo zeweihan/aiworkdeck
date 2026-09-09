@@ -95,34 +95,20 @@ test('desktop-build.yml：镜像同步必须排在 release 之后（它是从 Gi
     'sync-mirror 必须 needs: release，否则会和发布并行、拉不到 Release 资产')
 })
 
-// dev-board#74 稳定性审计：pysvc 缓存的 key 只由 requirements.lock 与打包脚本
-// 组成，唯独漏了各服务自己的源码（prepare-python-service.js 的 --src 会把它
-// cpSync 进被缓存的 pysvc/ 目录）。只改 pptx-service/backend、kokoro-service、
-// asr-service 的源码而不动 lock 时 key 不变，缓存命中就把「Bundle X-service」
-// 整步跳过，装机包里带的还是上一次构建的旧源码——构建全绿、冒烟也过（跑的是
-// 旧代码），tag 构建会把缺了刚合并那笔改动的安装包发出去且毫无告警。
-test('desktop-build.yml：pysvc 缓存 key 必须覆盖各服务源码，否则改源码会命中旧缓存发出旧代码', () => {
-  const doc = loadWorkflow('desktop-build.yml')
-  const steps = doc.jobs.build.steps
-  const cacheSteps = steps.filter((s) =>
-    typeof s.uses === 'string' && s.uses.startsWith('actions/cache@') &&
-    String((s.with && s.with.path) || '').includes('/pysvc'))
-  assert.ok(cacheSteps.length > 0, '应该存在缓存 pysvc 目录的步骤（本用例的前提）')
-
-  for (const cache of cacheSteps) {
-    const key = String(cache.with.key)
-    // 被这条缓存的 cache-hit 门控、且带 --src（有自有源码）的打包步骤
-    const gated = steps.filter((s) =>
-      String(s.if || '').includes(`steps.${cache.id}.outputs.cache-hit`) &&
-      /--src\s/.test(String(s.run || '')))
-    assert.ok(gated.length > 0, `${cache.id} 应该门控着若干带 --src 的打包步骤（本用例的前提）`)
-    for (const s of gated) {
-      const src = String(s.run).match(/--src\s+(\S+)/)[1]
-      assert.ok(key.includes(`'${src}/**'`),
-        `缓存 ${cache.id} 的 key 没覆盖 ${src}：只改这个服务的源码 key 不变，` +
-        `缓存命中会把打包步骤整步跳过，装机包里还是旧源码。key=${key}`)
-    }
+// 0.38.0 起四个 Python 服务改走 native pack（设计 §3）：安装包链路里不再装 pip
+// 依赖、不再打 pysvc.tar.gz。dev-board#74 那条「缓存 key 必须覆盖各服务源码」的
+// 门禁随之作废——被它守着的步骤已经整体不在这条 workflow 里了。
+test('desktop-build.yml：安装包链路里不再有任何 pysvc 痕迹（四个服务改走 native pack）', () => {
+  const yml = fs.readFileSync(path.join(workflowsDir, 'desktop-build.yml'), 'utf8')
+  for (const sym of ['pysvc', 'pack-pysvc.js']) {
+    assert.ok(!yml.includes(sym), `desktop-build.yml 仍引用 ${sym}`)
   }
+})
+
+test('desktop-build.yml：python 运行时仍随包（litviz 与 pack 里的服务共用它）', () => {
+  const yml = fs.readFileSync(path.join(workflowsDir, 'desktop-build.yml'), 'utf8')
+  assert.match(yml, /bundled\/mac-arm64\/python/)
+  assert.match(yml, /--runtime-only/, '运行时仍要由 prepare-python-service.js 烙进去')
 })
 
 // v0.23.0 发版实测：sync-mirror job 转红、官网下载页停在 0.22.0 直到人工介入。
@@ -231,3 +217,53 @@ for (const [signed, unlockFails] of [[true, false], [false, false], [true, true]
     assert.equal(result.status, unlockFails ? 75 : 0, result.stderr || result.stdout)
   })
 }
+
+// ---- pack-release.yml：四个 Python 运行时 pack 的双平台矩阵（dev-board#529）----
+// 这一组是纯静态检查：本机跑不了 GitHub Actions，只能把「一改就出事」的几条
+// 契约钉在文本与解析结果上。
+
+const PACK_RELEASE = fs.readFileSync(path.join(workflowsDir, 'pack-release.yml'), 'utf8')
+const PACK_RELEASE_DOC = yaml.load(PACK_RELEASE)
+
+test('pack-release.yml：pack_id 是显式枚举，四个 runtime pack 都在其中', () => {
+  const options = PACK_RELEASE_DOC.on.workflow_dispatch.inputs.pack_id.options
+  assert.deepStrictEqual(
+    [...options].sort(),
+    ['asr-runtime', 'kokoro-runtime', 'litigation-visual', 'mineru-runtime', 'pptx-runtime']
+  )
+})
+
+test('pack-release.yml：app 组件只在 mac 腿产一次（两台机各产一份同名 tar.gz 会让 sha256 对不上）', () => {
+  assert.match(PACK_RELEASE, /COMPONENTS=lib,app/)
+  const plats = PACK_RELEASE_DOC.jobs.runtime.strategy.matrix.include.map((e) => e.plat)
+  assert.deepStrictEqual([...plats].sort(), ['mac-arm64', 'win-x64'])
+})
+
+test('pack-release.yml：release 必须标 prerelease（否则顶掉仓库级 releases/latest，污染镜像同步）', () => {
+  const step = PACK_RELEASE_DOC.jobs.release.steps.find(
+    (s) => typeof s.uses === 'string' && s.uses.startsWith('softprops/action-gh-release')
+  )
+  assert.ok(step, 'release job 应当有 action-gh-release 步骤')
+  assert.strictEqual(step.with.prerelease, true)
+})
+
+test('pack-release.yml：runtime 腿必须真起一次服务打 /health，不能只打包不验', () => {
+  const names = PACK_RELEASE_DOC.jobs.runtime.steps.map((s) => s.name || '')
+  assert.ok(names.includes('Smoke test from pack layout'), '缺少从 pack 布局起服务的冒烟步骤')
+  assert.match(PACK_RELEASE, /\/health|\/docs/)
+})
+
+test('pack-release.yml：不缓存 pysvc（pack 产物必须每次从 requirements.lock 真装一遍）', () => {
+  assert.doesNotMatch(PACK_RELEASE, /actions\/cache@[^\n]*\n[\s\S]{0,400}?pysvc/)
+})
+
+test('pack-release.yml：两条老腿只在 litigation-visual 时跑，runtime 腿只在四个 runtime pack 时跑', () => {
+  for (const job of ['mac', 'win']) {
+    assert.strictEqual(PACK_RELEASE_DOC.jobs[job].if, "inputs.pack_id == 'litigation-visual'", job)
+  }
+  assert.strictEqual(PACK_RELEASE_DOC.jobs.runtime.if, "inputs.pack_id != 'litigation-visual'")
+  // 三条腿里必有两条被 if 跳过（skipped），release 的门控不能用「全成功」写法，
+  // 否则永远不跑；但也不能宽到 always()——那样任一腿失败照发半成品。
+  assert.match(String(PACK_RELEASE_DOC.jobs.release.if), /!cancelled\(\)/)
+  assert.match(String(PACK_RELEASE_DOC.jobs.release.if), /failure/)
+})

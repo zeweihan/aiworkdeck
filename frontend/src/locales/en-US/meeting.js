@@ -95,6 +95,13 @@ export default {
   transcribe: 'Start Transcription',
   retryTranscribe: 'Retry Transcription',
   transcribingHint: 'Transcription and speaker separation are running. This usually takes a few minutes, and you can leave this page.',
+  // Progress hint (dev-board#532): stage comes from the backend progress.stage enum
+  transcribingStagePreparing: 'Preparing audio (transcoding and upload)',
+  transcribingStageLocal: 'Transcribing on this machine',
+  transcribingStageUpstream: 'Transcription and speaker separation',
+  transcribingProgress: '{stage} - {elapsed} elapsed / about {estimated} expected{mark}',
+  transcribingProgressNoEstimate: '{stage} - {elapsed} elapsed',
+  transcribingEstimatedMark: ' (estimated)',
   transcribeFailed: 'Transcription failed',
   submitTranscribeFailed: 'Could not submit for transcription: {message}',
   resultUnreadable: 'The transcript could not be read. Try again later; the original recording is still saved.',

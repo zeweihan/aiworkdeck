@@ -87,6 +87,8 @@ public class MeetingRecordingController {
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         requireMemberByProject(sessionId, projectId);
         List<MeetingRecording> meetings = meetingService.list(projectId);
+        // 「转写中」的行带上进度提示（阶段/已用时/预计时长），面板卡片就渲染这份列表
+        transcriptionService.attachProgress(meetings);
         Map<String, Object> result = new HashMap<>();
         result.put("meetings", meetings);
         result.put("configured", transcriptionService.isConfigured());
@@ -99,7 +101,8 @@ public class MeetingRecordingController {
             @PathVariable Long meetingId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         requireMemberByMeeting(sessionId, meetingId);
-        return transcriptionService.refreshIfNeeded(meetingService.get(meetingId));
+        return transcriptionService.attachProgress(
+                transcriptionService.refreshIfNeeded(meetingService.get(meetingId)));
     }
 
     /** 结束录音。durationMs 可空（崩溃恢复补刀）。凭证已配则自动提交转写。 */

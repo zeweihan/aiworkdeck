@@ -184,6 +184,13 @@
             <view class="mr-spinner"></view>
             <text class="mr-hint">{{ $t('meeting.transcribingHint') }}</text>
           </view>
+          <!-- 进度提示（dev-board#532）：阶段 + 已用时 / 预计时长，预计值明确标注为估算 -->
+          <template v-if="m.progress">
+            <text class="mr-hint">{{ progressText(m) }}</text>
+            <view class="mr-progress-bar" v-if="m.progress.percent !== null && m.progress.percent !== undefined">
+              <view class="mr-progress-fill" :style="{ width: m.progress.percent + '%' }"></view>
+            </view>
+          </template>
         </view>
 
         <!-- 失败 -->
@@ -728,10 +735,15 @@ export default {
       for (const m of inflight) {
         try {
           const fresh = await getMeetingRecording(m.id)
-          if (fresh && fresh.status !== m.status) {
+          if (!fresh) continue
+          if (fresh.status !== m.status) {
             await this.loadMeetings()
             return
           }
+          // 状态没变也要把这一份换上：进度提示（已用时/预计时长/百分比）就在里面，
+          // 只在状态跳变时刷新的话，「转写中」那块数字会一直停在打开面板的那一刻。
+          const idx = this.meetings.findIndex(x => x.id === m.id)
+          if (idx >= 0) this.meetings.splice(idx, 1, fresh)
         } catch (e) { /* 下轮再试 */ }
       }
     },
@@ -829,6 +841,29 @@ export default {
     },
     formatMs(ms) {
       return formatSeconds(Math.floor((ms || 0) / 1000))
+    },
+    // 转写中的进度一行（dev-board#532）。阶段枚举来自后端，文案在这边取——
+    // 后端不下发中文串（英文版下会原样漏出去）。预计时长与百分比都是按音频时长
+    // 估算的：三条上游（听悟 / 平台网关 / 本机 asr-service）都给不出真实百分比，
+    // 所以 progress.estimated 为真时必须把「估算」两个字标出来，不能装成真值。
+    progressText(m) {
+      const p = m.progress
+      if (!p) return ''
+      const stage = {
+        PREPARING: this.$t('meeting.transcribingStagePreparing'),
+        LOCAL: this.$t('meeting.transcribingStageLocal'),
+        UPSTREAM: this.$t('meeting.transcribingStageUpstream')
+      }[p.stage] || p.stage
+      const elapsed = formatSeconds(p.elapsedSec || 0)
+      if (!p.estimatedSec) {
+        return this.$t('meeting.transcribingProgressNoEstimate', { stage, elapsed })
+      }
+      return this.$t('meeting.transcribingProgress', {
+        stage,
+        elapsed,
+        estimated: formatSeconds(p.estimatedSec),
+        mark: p.estimated ? this.$t('meeting.transcribingEstimatedMark') : ''
+      })
     },
 
     // ==================== 转写与纪要 ====================
@@ -1556,6 +1591,19 @@ export default {
 
 @keyframes mr-spin {
   to { transform: rotate(360deg); }
+}
+
+.mr-progress-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--awd-border);
+  overflow: hidden;
+}
+
+.mr-progress-fill {
+  height: 100%;
+  background: var(--awd-accent);
+  transition: width 0.4s ease;
 }
 
 .mr-actions {
