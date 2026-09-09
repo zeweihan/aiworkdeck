@@ -18,14 +18,21 @@
 ; 没有用 /FINAL，NSIS 允许在任何 Section/Function/PageEx 之前重设。
 ; 本机实测（electron-builder 自带的 mac makensis 3.0.4.1，-WX -INPUTCHARSET UTF8
 ; "-XSetCompressor zlib" 加一份带本行的 stdin 脚本）：输出为
-; "Using lzma (compress whole) compression."，且不产生任何警告（-WX 下不会误伤）；
+; "Using lzma compression."，且不产生任何警告（-WX 下不会误伤）；
 ; 去掉本行的对照组输出 "Using zlib compression."。
 ; 收益落在 customInstall 里那份用 NSIS 原生 File /r 塞进来的 ARM64 Electron 壳
-;（约 260MB 未压缩，zlib 约 41.7%、固实 LZMA 约 27.3%，本机实测系数）。
+;（约 260MB 未压缩，zlib 约 41.7%、LZMA 约 27-30%，本机实测系数）。
 ; 主载荷 app-64.7z 早已是 7z/LZMA，再压一遍不会变小也不会变大多少，代价是编译更慢。
 ; 位置必须留在本文件最顶部：SetCompressor 只能出现在任何 Section/Function/PageEx 之前，
 ; 而下面 !include 的 awd-oneclick-ui.nsh 会定义 Function。
-SetCompressor /SOLID lzma
+; **不能用 /SOLID**（PR#772 合并后 Windows 腿实锤，run 34323250825）：整体压缩模式下
+; electron-builder 模板 extractEmbeddedAppPackage 里的 `SetCompress off`（主载荷 app-64.7z
+; 本就是 7z，不该再压）会触发 NSIS warning 8021「Effectively ignored」，-WX 把它当错误，
+; makensis 直接退出。非固实 lzma 下 SetCompress off 正常生效：7z 主载荷原样存、ARM64 壳
+; 逐文件 LZMA（Electron 壳的体积集中在几个大文件上，逐文件与固实差距很小）。
+; 字典 32MB：默认 8MB 对 100MB 级二进制偏小；安装端解压内存也只多几十 MB。
+SetCompressor lzma
+SetCompressorDictSize 32
 
 !define AWD_UI_ART "${BUILD_RESOURCES_DIR}/win/generated"
 !define AWD_UI_DIR_CHOICE
