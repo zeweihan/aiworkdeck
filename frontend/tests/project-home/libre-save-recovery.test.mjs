@@ -9,7 +9,12 @@ const source = readFileSync(new URL('../../src/components/LibreOfficeEditor.vue'
 const body = source.match(/<script>([\s\S]*?)<\/script>/)[1]
   .replace(/^import .*$/gm, '').replace(/export default \{/, 'return {')
 function makeVm(extra = {}) {
-  const options = new Function('ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar', 'getFileUploadUrl', body)(null, null, null, id => '/upload/' + id)
+  // stampApplication / documentStampApplication 是 B4 的打标链路，这里喂成「开关关着」，
+  // 保存行为与打标前完全一致；打标本身另有 libre-save-generator-stamp.test.mjs。
+  const options = new Function('ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar', 'getFileUploadUrl',
+    'stampApplication', 'documentStampApplication', body)(
+    null, null, null, id => '/upload/' + id,
+    async (bytes) => bytes, async () => null)
   const vm = {
     ready: true, file: { id: 7, name: '证据清单.docx' }, statusKey: 'ready',
     dirty: true, saving: false, _dirtySince: Date.now(),

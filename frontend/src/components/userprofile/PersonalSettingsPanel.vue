@@ -155,6 +155,26 @@
         <text v-if="!deviceTokens.length" class="bind-tip">{{ $t('account.noTokensYet') }}</text>
       </view>
 
+      <!-- 文档属性里的产品标识（可溯源性设计规范附录 B4）。默认开：Word / WPS /
+           LibreOffice 保存文档时都会写这个标准字段，我们此前是唯一不写的那个。
+           只写产品名与版本，不写作者/单位/机器名——所以它不是隐私项，是「交付前
+           要不要清元数据」的开关。 -->
+      <view class="form-group">
+        <text class="group-title">{{ $t('account.docGeneratorGroupTitle') }}</text>
+        <view class="form-row doc-generator-row">
+          <text class="form-label doc-generator-label">{{ $t('account.docGeneratorLabel') }}</text>
+          <AwdSwitch
+            :checked="docGeneratorEnabled"
+            :disabled="docGeneratorBusy"
+            @change="onToggleDocGenerator"
+          />
+        </view>
+        <text class="bind-tip">{{ $t('account.docGeneratorHint') }}</text>
+        <text v-if="docGeneratorEnabled && docGeneratorApplication" class="bind-tip">
+          {{ $t('account.docGeneratorCurrent', { application: docGeneratorApplication }) }}
+        </text>
+      </view>
+
       <!-- 界面语言。2026-08-18 从设置页「系统配置」搬来：语言是每个人自己的
            偏好（storage 权威源、人人可改、不要 admin 权限）。
            独立保存链（setAppLanguage 直写），与本栏其它字段无关。 -->
@@ -198,6 +218,9 @@ import {
   totpSetup, totpActivate, totpDisable,
   issueLocalDeviceToken, listDeviceTokens, revokeDeviceToken,
 } from '@/services/api.js'
+import { getDocumentGeneratorSettings, updateDocumentGeneratorSettings } from '@/services/api.js'
+import { resetDocumentStampCache } from '@/utils/documentGeneratorSetting.js'
+import AwdSwitch from '@/components/AwdSwitch.vue'
 import { isDesktopHost } from '@/services/host.js'
 import { getCurrentUser, setSessionUser } from '@/utils/auth.js'
 import { signOut } from '@/utils/signOut.js'
@@ -207,6 +230,7 @@ import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
 
 export default {
   name: 'PersonalSettingsPanel',
+  components: { AwdSwitch },
   computed: {
     isDesktop() {
       return isDesktopHost()
@@ -236,6 +260,12 @@ export default {
         { value: 'zh-CN', label: '简体中文' },
         { value: 'en-US', label: 'English' },
       ],
+
+      // 文档属性里的产品标识（B4）：默认按「开」渲染，拉到后端值再纠正——
+      // 缺省就是开，先画成关会在加载瞬间闪一下。
+      docGeneratorEnabled: true,
+      docGeneratorApplication: '',
+      docGeneratorBusy: false,
 
       // 认证器（TOTP）绑定
       showTotpPanel: false,
@@ -268,6 +298,7 @@ export default {
   },
   mounted() {
     this.loadUserInfo()
+    this.loadDocGeneratorSetting()
     if (this.isDesktop) {
       this.loadLicenseInfo()
       this.loadDeviceTokens()
@@ -288,6 +319,36 @@ export default {
   methods: {
     // Options API 模板拿不到裸导入函数，包一层 method 才能在模板里当 getInitial(...) 调用
     getInitial,
+    async loadDocGeneratorSetting() {
+      try {
+        const res = await getDocumentGeneratorSettings()
+        if (res && res.code === 0) {
+          this.docGeneratorEnabled = res.enabled !== false
+          this.docGeneratorApplication = res.application || ''
+        }
+      } catch (e) {
+        // 读不到就保持默认显示，不打扰用户：这个开关不影响任何正在进行的工作
+      }
+    },
+    async onToggleDocGenerator(next) {
+      if (this.docGeneratorBusy) return
+      const prev = this.docGeneratorEnabled
+      this.docGeneratorBusy = true
+      this.docGeneratorEnabled = next
+      try {
+        const res = await updateDocumentGeneratorSettings({ enabled: next })
+        if (!res || res.code !== 0) throw new Error('save failed')
+        this.docGeneratorEnabled = res.enabled !== false
+        this.docGeneratorApplication = res.application || this.docGeneratorApplication
+        // 编辑器的保存路径按会话缓存这个开关，改完必须让它重取，否则要等下次启动才生效
+        resetDocumentStampCache()
+      } catch (e) {
+        this.docGeneratorEnabled = prev
+        uni.showToast({ title: this.$t('account.docGeneratorSaveFailed'), icon: 'none' })
+      } finally {
+        this.docGeneratorBusy = false
+      }
+    },
     async loadUserInfo() {
       const user = getCurrentUser()
       if (user) {
@@ -796,6 +857,14 @@ $text-secondary: #6C757D;
     color: var(--awd-text-on-accent);
     font-size: 13px;
     cursor: pointer;
+}
+.doc-generator-row {
+    justify-content: space-between;
+}
+.doc-generator-label {
+    width: auto;
+    flex: 1;
+    color: var(--awd-text);
 }
 .bind-tip {
     display: block;

@@ -215,9 +215,19 @@ HOUSE 不再是常量：`buildHouse(profile)` 从画像 JSON 派生写端常量�
 - `adopt_legacy_links` 不能把 TextPortion 直接喂 `insertTextContent`（抛 IllegalArgumentException），要 `createTextCursorByRange(start)` + `gotoRange(end, true)` 在正文上造区间游标；且先收集目标再插书签，枚举中改段落会让 portion 枚举失效。
 - `headingChainOf` 用 `XTextRangeCompare` 定位段落，表格单元格内的书签跨 story 比较会抛 → `sectionPath` 空、`paragraphIndex -1`（P0 接受）。
 
+## 文档 Generator 元数据（可溯源性设计规范附录 B4）
+
+保存出去的 docx/xlsx/pptx 在 `docProps/app.xml` 的 `<Application>` 里写 `AI WorkDeck <version>`（Word / WPS / LibreOffice 都写这个标准字段，我们此前是唯一不写的）。**只写产品名与版本，不写作者/单位/机器名**；开关 `document.generator.enabled` 缺省开，设置页「文档属性」一栏可关（交付前要 scrub 元数据的律所用）。
+
+- **引擎 API 改不到这个字段**（2026-09-09 真机探针，24.2.8-zhcn-r4，三种试法全否）：`getDocumentProperties()` 上**没有** `setGenerator/getGenerator` 方法（zetajs 把 `Generator` 暴露成属性）；属性写法 `dp.Generator = '...'` **写得进也读得回**，但导出件的 `<Application>` 纹丝不动，仍是 `ZetaOffice/24.2.8.0.beta1$Emscripten_x86 LibreOffice_project/<buildid>`；`UserDefinedProperties.addProperty('Application', …)` 只多出一个 `docProps/custom.xml`，标准字段照旧。结论：oox 导出器硬写 `utl::DocInfoHelper::GetGeneratorString()`。**别再试 API 路线**，引擎哪天改了 lowa-e2e 组 32 第 5 项的「基线」那条会红。
+- 实现在**宿主侧**：`frontend/src/utils/docxAppProps.js` 的 `stampApplication(bytes, application)`（async——引擎导出的条目全是 DEFLATE、带 data descriptor，读 app.xml 要 `DecompressionStream('deflate-raw')`），只换 `docProps/app.xml` 这一个条目（新条目 STORED、自算 CRC32），其余条目的本地头与数据**逐字节原样拷贝**、只重写中央目录偏移；ZIP64 / 非 zip / 没有 EOCD / app.xml 里没有 `<Application>` 元素（**只替换不插入**）/ 自检不过——**一律原样返回入参**。不引 jszip：那会把整包重压一遍，大文档在保存路径上不可接受。
+- 接线：`LibreOfficeEditor.saveDocument` 在 `uploadBytes` 之前调 `stampGeneratorMetadata(u8)`，开关与串从 `GET /api/document/generator/settings` 取一次、`utils/documentGeneratorSetting.js` 按会话缓存（**读失败不入缓存**，后端刚起来那几秒读不到是常态）。打标链路任何异常都退回导出原字节，绝不影响保存。
+- 覆盖边界：lowa-e2e 跑的是 dist 的 editor-main.js，**打标那一步经不过来**——纯函数由 `tests/lowa-unit/docxAppProps.test.mjs` 守，宿主接线由 `tests/project-home/libre-save-generator-stamp.test.mjs` 守（删掉 saveDocument 里那一行即转红），真产物+真引擎回读由 lowa-e2e 组 32 第 5 项守。
+- 后端 POI 落盘路径同口径：`DocumentGeneratorStamp.apply(doc, documentGeneratorSettings)` 一行，已接 SensitiveService / MeetingRecordingService / LitigationTimelineTools / DdExportService(xlsx) / DocumentEditTools(xlsx)。**docx4j 的两条路径（`doc_start_stream` 建空白 docx、DdExportService 的 markdown→docx）没接**——docx4j 不走 POI 的属性 API，且前者随即由编辑器接管保存、自然会被宿主打上。
+
 ## 验证
 
-- 核心回归：`cd frontend && npm run test:lowa-e2e`（真引擎 puppeteer-core 无头，33 组人机模拟，2026-09-02 基线 541 步；前置 `npm run build:zetaoffice` + `node ../desktop/scripts/fetch-lowa-assets.js` 或设 LOWA_ENGINE_DIR）。
+- 核心回归：`cd frontend && npm run test:lowa-e2e`（真引擎 puppeteer-core 无头，33 组人机模拟，2026-09-09 基线 547 步；前置 `npm run build:zetaoffice` + `node ../desktop/scripts/fetch-lowa-assets.js` 或设 LOWA_ENGINE_DIR）。
 - 修订视图三态的接线契约（白名单 / 三态命令序列 / 换文档复位）：`npm run test:revision-view`（node --test，不需要引擎）。
 - 大文档性能：`npm run test:lowa-big`（同一套启动件 `tests/lowa-e2e/_boot.mjs`；端口被别的 worktree 占着时设 `LOWA_E2E_PORT`）。
 - 涉桌面壳/webview：`npm run test:desktop-e2e`（弹 dev Electron 窗口，验证保存落盘链路）。

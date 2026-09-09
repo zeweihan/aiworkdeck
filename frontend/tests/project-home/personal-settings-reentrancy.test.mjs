@@ -16,6 +16,9 @@ const SRC = readFileSync(
 function makeVm(deps, uniStub) {
   const script = SRC.match(/<script>([\s\S]*?)<\/script>/)[1]
   const importRe = /import\s*\{([\s\S]*?)\}\s*from\s*'[^']+'\s*;?/g
+  // 默认导入（组件之类：import AwdSwitch from '@/components/AwdSwitch.vue'）也要剥掉，
+  // 否则 new Function 里留一行 import 就是「Cannot use import statement outside a module」。
+  const defaultImportRe = /import\s+([A-Za-z_$][\w$]*)\s+from\s*'[^']+'\s*;?/g
   const locals = []
   let m
   while ((m = importRe.exec(script)) !== null) {
@@ -25,10 +28,11 @@ function makeVm(deps, uniStub) {
       locals.push(/\sas\s/.test(t) ? t.split(/\s+as\s+/)[1].trim() : t)
     }
   }
+  while ((m = defaultImportRe.exec(script)) !== null) locals.push(m[1])
   const preamble = locals
     .map((n) => `const ${n} = deps[${JSON.stringify(n)}] || (() => { throw new Error('未打桩: ${n}') });`)
     .join('\n')
-  const body = script.replace(importRe, '').replace('export default', 'return')
+  const body = script.replace(importRe, '').replace(defaultImportRe, '').replace('export default', 'return')
   // eslint-disable-next-line no-new-func
   const component = new Function('deps', 'uni', preamble + '\n' + body)(deps, uniStub)
   const base = { $t: (k) => k }

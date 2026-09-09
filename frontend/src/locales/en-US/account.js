@@ -133,6 +133,12 @@ export default {
   logoutNothingTitle: 'Not signed in',
   logoutNothingContent: 'This machine is unlocked by a trial code and is not connected to an AI WorkDeck account, so there is no sign-in to leave. To return to the locked state, use "Deactivate License" under License below.',
   logoutFailed: 'Log out failed, please try again',
+  // 文档 Generator 元数据开关（可溯源性设计规范附录 B4）
+  docGeneratorGroupTitle: 'Document properties',
+  docGeneratorLabel: 'Write the product name into saved documents',
+  docGeneratorHint: 'When on, documents you save or export show AI WorkDeck and its version under Properties - Application. This is the standard field Word and WPS also write; it carries no personal information (no author, organisation or machine name). Turn it off if you need to strip document metadata before delivery.',
+  docGeneratorCurrent: 'Currently written: {application}',
+  docGeneratorSaveFailed: 'Could not save the setting, please try again',
   logoutGroupTitle: 'Sign-in',
   logoutGroupHint: 'Returns to the sign-in screen so you can use a different account. Your local projects and files stay where they are.',
 
