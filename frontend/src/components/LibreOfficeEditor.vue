@@ -599,6 +599,7 @@ export default {
     // 引擎重启：拆掉 boot 失败的那个 webview/iframe，重新走一遍 mounted 里的
     // 建元素流程。文档字节的预取结果仍然有效（失败的是引擎不是下载），留着。
     async remountEditor() {
+      if (this._writingHost) { this._writingHost.destroy(); this._writingHost = null }
       this.appendLog('用户点击重试（重启引擎）/ retry requested (engine remount)')
       try { if (this._eventUnsub) this._eventUnsub() } catch (e) { /* ignore */ }
       this._eventUnsub = null

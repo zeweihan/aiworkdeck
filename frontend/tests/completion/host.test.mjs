@@ -84,6 +84,19 @@ const editorScript = readFileSync(new URL('../../src/components/LibreOfficeEdito
   .match(/<script>([\s\S]*?)<\/script>/)[1].replace(/^import .*$/gm, '').replace(/export default \{/, 'return {')
 const editorMethods = new Function('ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar', editorScript)(null, null, null).methods
 
+test('engine remount disposes vocabulary before detaching its old transport', async () => {
+  const events = []
+  const vm = {
+    _writingHost: { destroy: () => events.push('vocabulary') },
+    _eventUnsub: () => { assert.equal(vm._writingHost, null); events.push('transport') },
+    executor: { dispose: () => events.push('executor') },
+    appendLog() {}, startBootTrickle() {},
+  }
+  await editorMethods.remountEditor.call(vm)
+  assert.deepEqual(events, ['vocabulary', 'transport', 'executor'])
+  assert.equal(vm.ready, false)
+})
+
 test('in-place Writer reload destroys the old vocabulary before loading and rebuilds after success', async () => {
   const events = []
   const vm = { file: { id: 22 }, executor: {}, ready: true, saving: false, statusKey: 'ready', docLoadFailed: false,
