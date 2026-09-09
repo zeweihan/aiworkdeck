@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors */
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
 /*
  * AI WorkDeck Office 插件——浅色、克制、专业。
  * 配色对齐品牌令牌（frontend/src/uni.scss 的 $awd-* 与官网 DESIGN.md）：
@@ -58,7 +60,25 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
-#app { height: 100%; }
+/* body 改成纵向 flex：#app 占满剩余高度，AGPL 告示页脚固定在窗格底部。
+   #app 保留 height:100%（作为 flex-basis），由 flex-shrink 让出页脚那点高度，
+   .app-shell 的 height:100% 因此仍能解析出确定高度。 */
+body { display: flex; flex-direction: column; }
+#app { height: 100%; flex: 1 1 auto; min-height: 0; }
+
+/* AGPL §0 Appropriate Legal Notices：常显、不可关闭的许可与商标告示。
+   次级文字色 + 小字，不抢眼；外壳保持浅色，不引入任何深色 chrome。 */
+.legal-notice {
+  flex: none;
+  padding: 6px 10px 8px;
+  border-top: 1px solid var(--awd-border);
+  font-size: 9px;
+  line-height: 1.45;
+  color: var(--awd-text-secondary);
+  word-break: break-word;
+}
+.legal-notice div + div { margin-top: 1px; }
+.legal-notice a { color: inherit; text-decoration: underline; }
 
 button {
   font-family: inherit;

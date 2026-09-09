@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 审计（dev-board#74）：左栏日历面板的快速新建没有防重复提交。
 // 输入框按回车触发一次 submitQuickCreate，网络往返还没回来时再点「保存」，
 // 两次调用各自发起一次 createTask，服务端就多出一条标题与日期完全相同的任务。

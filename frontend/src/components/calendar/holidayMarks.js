@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 节假日/调休标记（chinese-days，MIT，支持 2004-2026 年，超出范围优雅降级为普通工作日）。
 //
 // getDayDetail(date) 返回 { work, name }：

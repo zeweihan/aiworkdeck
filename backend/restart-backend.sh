@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 set -e
 
 # 确保脚本在 backend 目录下执行，解决从根目录即使 invoked 找不到 pom.xml 的问题

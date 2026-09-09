@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 审计（dev-board#74）：ConversationList 的「加载更多」直接 @tap="$emit('load-more')"，
 // 没有重入闸。父组件的翻页游标（nextBefore/nextBeforeId）要等响应回来才更新，
 // 所以在第一次请求落地前连点两下，第二次带的是同一份游标，取回同一页拼进列表——

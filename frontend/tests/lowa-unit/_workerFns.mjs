@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 从 office_thread.js（worker 脚本，非模块）里按名字抠出顶层纯函数，在 node 里直接跑。
 // 只适用于不碰 UNO 对象的纯函数（minimalEdits 一族）；有 UNO 依赖的原语走 lowa-e2e。
 import fs from 'node:fs'

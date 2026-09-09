@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 审计（dev-board#74）确认的缺陷：TOTP 绑定慢响应覆盖新密钥。
 //
 // 病灶：PersonalSettingsPanel.vue 的 toggleTotpPanel 无 in-flight 闸、无请求代次，

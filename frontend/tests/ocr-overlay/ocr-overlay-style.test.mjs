@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 截图框选浮层的样式契约（dev-board#474）。
 // 浮层的底图是一张冻结帧截图，框选矩形与提示条都叠在它上面：
 //  (a) 选区背景必须半透明——PR#657 令牌化时换成 var(--awd-info-soft)，浅色主题下

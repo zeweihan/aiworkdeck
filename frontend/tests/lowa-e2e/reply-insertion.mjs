@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // B7：完整回复插入现有段落中间，原文字的段落/字符格式不能被 Markdown 排版覆盖。
 import assert from 'node:assert/strict'
 import JSZip from 'jszip'

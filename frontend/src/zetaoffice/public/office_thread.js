@@ -1,18 +1,16 @@
-/* SPDX-License-Identifier: MIT
+/* SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 (Beijing Jingwei Ziyi Technology Co., Ltd.) and AI WorkDeck contributors
+ * SPDX-FileCopyrightText: allotropia software GmbH (portions derived from zetajs examples, MIT)
+ * SPDX-License-Identifier: AGPL-3.0-or-later AND MIT
  *
- * ZetaOffice spike — OFFICE WORKER thread (#39 Phase 0).
+ * 本文件主体是 AI WorkDeck 自研的 office 线程 UNO 原语实现，以 AGPL-3.0-or-later 发布。
+ * 早期骨架（worker 装载、消息分发、少量示例式片段）源自 allotropia/zetajs 的 MIT 示例
+ * （simple-examples + web-office），该部分继续以 MIT 提供。仓库根 LICENSE 是 AGPL-3.0，
+ * 见同目录 UPSTREAM.md 对上游 zeta.js 的溯源说明。
  *
+ * 技术说明（原头注释保留部分）：
  * This file is loaded INTO the LibreOffice WASM em-pthread worker via
  * Module.uno_scripts. Here `Module.zetajs` resolves to the zetajs UNO bridge
- * (on the MAIN thread it resolves to the thread *port* instead — see index.html).
- *
- * Patterns below are taken verbatim from allotropia/zetajs examples
- * (simple-examples + web-office). The four #39 acceptance probes are wired as
- * message handlers driven by buttons on the main thread.
- *
- * The deliverable of this spike is the VERDICT on the four probes, run on a real
- * device — not a green checkmark here. Lines marked VERIFY need a real run to
- * confirm against the current zetajs beta API.
+ * (on the MAIN thread it resolves to the thread *port* instead, see index.html).
  */
 'use strict';
 

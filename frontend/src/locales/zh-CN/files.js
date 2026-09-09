@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 文件预览/选择/暂存/下载/搜索/标签组件文案
 export default {
   // FileTree.vue：根级 _模板 文件夹（dev-board#112）

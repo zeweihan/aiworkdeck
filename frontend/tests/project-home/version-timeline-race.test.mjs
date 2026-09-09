@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 审计（dev-board#74）：VersionTimeline.load() 没有请求乱序保护。
 // 这里不做源码文本断言，而是把 .vue 的 <script> 块抽出来真跑一遍 load()——
 // 组件带 @/ 别名 import 不进来，改成把两个 api 函数当参数注入。

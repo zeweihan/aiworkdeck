@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // LOWA 大文档基线组 / big-document baseline (dev-board#108)。
 //
 // 在真引擎上加载 150 页 / 30 表 / 20 图（约 6.7MB）的夹具，对几条「尽调报告工况」

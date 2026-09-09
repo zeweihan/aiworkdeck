@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // markdownPlain.js — AI 回复（Markdown）落入文档前的纯文本化。
 //
 // 「插入当前文档 / 替换选区」走 LOWA 的纯文本原语（insert_at_cursor /

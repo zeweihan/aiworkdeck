@@ -71,3 +71,8 @@ desktop/bundled/
 desktop/build/win/generated/
 desktop/build/win/arm64-shell/
 office-addin/installer/win/generated/
+
+# 符号链接形态的 node_modules 不被 **/node_modules/ 匹配（尾斜杠对软链无效）
+desktop/node_modules
+frontend/node_modules
+office-addin/node_modules

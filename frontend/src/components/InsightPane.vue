@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="ip">
     <!-- 头部：当前文档 + 解析按钮 + run 状态。面板**不自画标题**（左栏由外壳的

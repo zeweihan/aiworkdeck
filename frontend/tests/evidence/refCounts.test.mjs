@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // FileTree.vue 引用角标拉取调度（#550 复核 M2）：
 //   cd frontend && npm run test:evidence
 import test from 'node:test'

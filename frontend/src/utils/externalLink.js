@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { host } from '@/services/host.js'
 
 // 打开外部链接（官网、GitHub 等站外页面）的统一出口。

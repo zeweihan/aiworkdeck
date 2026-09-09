@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 审计（dev-board#74）：标签管理的「添加」没有在途闸。newTagName 要等 await 返回才清，
 // 按钮的 :disabled 又只看 newTagName，所以在请求返回前双击（或回车后紧接着点一下）
 // 会用同一个名字发两次 createTag：第一次建成，第二次被后端的同项目重名校验驳回，

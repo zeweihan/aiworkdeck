@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Office.js 文档访问：宿主检测 + 读取当前文档内容，作为 activeContext 内联正文
  * 随对话请求上送。后端上限 200k 字符，客户端先行截断少传流量。

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * 渲染 Windows 安装器美术资产：build/win/*.html → PNG（headless Chrome）→ 24 位 BMP3（ImageMagick）。
  * NSIS/MUI2 只认无 alpha 的经典 BMP，sips 只能输出 32 位，所以走 magick。

@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="libre-editor-wrapper" :class="{ 'evidence-drop-armed': evidenceDropArmed }">
     <!-- NO full-width bar — it read as alien chrome on top of the document

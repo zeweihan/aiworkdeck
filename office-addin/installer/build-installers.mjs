@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Office 插件独立安装器构建（仅用 node 内置模块 + 系统工具）：
  *   macOS: swiftc 编译用户态安装器 .app（通用二进制），装进 DMG 分发。

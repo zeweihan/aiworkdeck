@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // dev-board#74 稳定性审计：loadPrevManifest 原先把"拉不到上一版 manifest"一律
 // 吞成 null 并打印一条"首个补丁版本属正常"的告警。CI 每次 tag 构建都用
 // --prev https://www.aiworkdeck.com/update/desktop/manifest.json，只要遇上一次网络

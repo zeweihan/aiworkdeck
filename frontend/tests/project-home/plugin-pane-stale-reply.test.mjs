@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 审计（dev-board#74）：PluginPane 在三处调用点都没带 :key，同一个面板槽位换插件时
 // 组件被复用、iframe 只是换了 src。插件 A 发起的桥调用（files.list / files.read 都是
 // 真网络往返）若在换成插件 B 之后才 resolve，reply() 只检查 contentWindow 存在，

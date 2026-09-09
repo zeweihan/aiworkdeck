@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 任务/日程的共享判定与展示逻辑（唯一出处）。
 // 消费方：pages/calendar/calendar.vue、TaskDialog、UpcomingList、
 // project-home/TaskSchedule、project-calendar/ProjectCalendarPane。

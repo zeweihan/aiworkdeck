@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // B6（dev-board#481）定向复测：真实解析器与 Vue 响应式，问题正文必须在本轮结束时可见，
 // 不依赖用户再发一条消息触发刷新。没有复现「折叠点不开」，此文件只钉住数据到卡片的契约。
 import test from 'node:test'

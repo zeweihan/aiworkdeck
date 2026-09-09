@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * 渲染一键安装器（awd-oneclick-ui.nsh）的位图资产：
  *   desktop/build/win/oneclick-*.html → <out>/oneclick-*-{zh|en}-{100|125|150|200}.bmp

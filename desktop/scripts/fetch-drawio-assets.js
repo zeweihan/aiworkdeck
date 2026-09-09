@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // fetch-drawio-assets.js — 把 draw.io 编辑器烙进前端产物，供「诉讼可视化」出的
 // .drawio 文件在应用内直接编辑（离线，不出网）。
 //

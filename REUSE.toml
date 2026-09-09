@@ -1,0 +1,50 @@
+version = 1
+SPDX-PackageName = "AI WorkDeck"
+SPDX-PackageSupplier = "北京京微资易科技有限公司"
+
+# 本文件登记仓库里"不是我们自己写的"或"许可不明确"的目录/文件，配合
+# scripts/spdx-scope.mjs 的排除范围一起看。可被机械加头的一方源码不在这里，
+# 它们的 SPDX 标记直接写在文件顶部。
+
+# litviz 的两个 vendor 模块：上游原样拷贝，MIT。见 litviz/UPSTREAM.md。
+[[annotations]]
+path = "litviz/skills/mqc-litigation-visual-redraw/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "缪奇川 (Miao Qichuan)"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = "litviz/skills/mqc-timeline-master/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "缪奇川 (Miao Qichuan)"
+SPDX-License-Identifier = "MIT"
+
+# zetajs vendor 文件（LibreOffice WASM 编组胶水层），MIT，来自
+# https://github.com/allotropia/zetajs。
+[[annotations]]
+path = "frontend/src/zetaoffice/public/zeta.js"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "allotropia software GmbH and zetajs contributors"
+SPDX-License-Identifier = "MIT"
+
+
+# pptx-service 整目录是上游 banana-slides 的 vendored 源码（CC BY-NC-SA 4.0，
+# 见 pptx-service/LICENSE）。checkba 侧全新文件（backend/utils/text_sanitizer.py 等，
+# 见 pptx-service/UPGRADE_CHECKBA.md 定制清单）已各自带 AGPL-3.0-or-later 文件头，
+# 优先于这条目录级标注。
+[[annotations]]
+path = "pptx-service/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Anionex (banana-slides upstream) and AI WorkDeck contributors"
+SPDX-License-Identifier = "CC-BY-NC-SA-4.0"
+
+# easyvoice：疑似上游 cosin2077/easyVoice 的 vendored 拷贝——README 与上游几乎逐字
+# 一致、目录内无 LICENSE 文件、找不到任何 checkba 定制标记，且该服务已在
+# .claude/agents/eng-infra.md 标注"已停用"（语音合成改走桌面捆绑的 Kokoro）。
+# 上游许可待人工核实，先占位为 LicenseRef-Vendored。
+[[annotations]]
+path = "easyvoice/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "cosin2077 and easyVoice contributors (upstream license unverified)"
+SPDX-License-Identifier = "LicenseRef-Vendored"
+

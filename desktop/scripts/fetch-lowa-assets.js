@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Fetch the LOWA (LibreOffice WASM) runtime + an OFL CJK font into the editor
 // bundle, so the packaged desktop app renders Chinese documents OFFLINE without
 // reaching cdn.zetaoffice.net at runtime (Epic #43, Track A).

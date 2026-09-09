@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // ReviewPanel.vue 的组件级测试底座：把 <script> 剥出来当普通对象跑（export default
 // 换成 return，用假 this 调 methods / computed）。带 @/ 别名的 import 进不来，剥掉
 // import 行后用形参把真实依赖喂回去——纯函数层（utils/reviewGrouping.js）喂的是

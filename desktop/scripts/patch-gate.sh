@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # patch-gate.sh — 小版本发布纪律的机器强制（增量更新设计 §2.3）。
 #
 # tag v0.X.Y（Y>0）时校验：与同大版本上一个 tag 相比，

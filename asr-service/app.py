@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """
 本地 ASR 服务：OpenAI 兼容的极薄包装层（会议录音转写，音频不出本机）。
 

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 审计（dev-board#74）：SearchPanel.performSearch() 的 catch 分支没跟着 seq 走。
 // 快速连点两个标签时（toggleTag 不去抖，每次都直接发请求），先发的那次若在
 // 后发的那次成功落地之后才失败，仍会弹一次「搜索失败」——屏幕上明明是新结果。

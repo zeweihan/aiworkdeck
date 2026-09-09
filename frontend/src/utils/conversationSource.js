@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * 会话来源角标（dev-board#298）：sourceChannel（插件镜像会话的来源通道）→ 展示文案。
  * null/空 = 本地会话，不出角标；未知非空值兜底成「插件」。

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * zetaOfficeRelay.js 的迟到结果（late result）机制。零依赖，用 Node 自带的
  * node:test 跑：

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // MarkdownPreview.vue 的表格渲染用例（dev-board#467）：AI 助手面板里 6 列表格被面板的
 // overflow:hidden 裁掉、且没有横向滚动条。锁的是两条真行为——
 //   ① markdown-it 渲染出的每张 <table> 都被一层 <div class="md-table-scroll"> 直接包裹

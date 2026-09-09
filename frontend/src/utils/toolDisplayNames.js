@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // toolDisplayNames.js — 工具代号 → 人性化名称（按软件语言环境取 zh/en）。
 //
 // 卡片里的「search_web」「doc_open_file」对律师用户是噪音；这里维护一份与后端

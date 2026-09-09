@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // useAgentStream 的卸载收尾（审计 dev-board#74）。
 //
 // 病灶：composable 里的 SSE reader 循环、心跳 interval、待触发的重连定时器全都活在闭包里，

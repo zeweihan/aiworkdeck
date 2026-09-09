@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!--
   「我的收藏」栏目。2026-08-20 从 components/userprofile/UserProfilePane.vue 整块搬出来
   （个人中心并进统一「设置」页的「个人」组）。内容一行没改，加载时机从

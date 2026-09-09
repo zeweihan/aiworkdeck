@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // FileTree.vue「被引用 N 次」角标的拉取调度（dev-board#107，#550 复核 M2）。
 // 纯逻辑抽出来为了能在 node:test 里直接单测；组件只负责把 fetch/apply 注进来。
 //

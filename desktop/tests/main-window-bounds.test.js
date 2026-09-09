@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 主窗口出生尺寸必须夹在显示器工作区内（dev-board#459）。
 //
 // 病灶：createMainWindow 写死 width:1400 / height:900，既没有 x/y 也没有按

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * HOUSE 单源对拍（dev-board#111）：taskpane/lib/house-default.json 是后端
  * backend/src/main/resources/style-profiles/house-default.json 的字节副本，officeExecutor.js

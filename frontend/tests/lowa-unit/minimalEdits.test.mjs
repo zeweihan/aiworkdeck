@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 修订颗粒度（dev-board#365）：worker 的字符级最小 diff 必须是「删 X 插 Y」的散点片段，
 // 不许把整句/整段吞成一块删除重写。用例直接抠 office_thread.js 的纯函数在 node 里跑，
 // 真引擎上的修订形态由 lowa-e2e 组 11 兜底。

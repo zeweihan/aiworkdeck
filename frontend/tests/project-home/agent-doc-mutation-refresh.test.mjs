@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // dev-board#460：Agent 在文档里写完内容后，编辑器工具条上的「修订 / 批注 / 底稿」
 // 计数不立即刷新，切一次标签页才更新。
 //

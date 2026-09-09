@@ -1,4 +1,6 @@
 <!DOCTYPE html>
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8"/>
@@ -30,6 +32,25 @@
 </head>
 <body>
   <div id="app"></div>
+  <!-- AGPL §0 Appropriate Legal Notices：许可与商标告示。
+       刻意放在 #app 之外的静态 HTML 里，而不是 Vue 树内：Office/WPS 宿主里 JS 挂载失败
+       （office.js CDN 挂了、宿主注入延迟）时告示仍在。此处早于 i18n 模块，
+       中文为主、英文括注；文案与工作台设置页的「关于」区块同源。 -->
+  <footer class="legal-notice">
+    <div>AI WorkDeck · 版权所有 2026 北京京微资易科技有限公司及 AI WorkDeck 贡献者
+      (Copyright 2026 Beijing Jingwei Ziyi Technology Co., Ltd. and AI WorkDeck contributors)</div>
+    <div>本软件依 GNU Affero General Public License v3.0 或更高版本发布，不提供任何担保。
+      (Released under the GNU AGPL v3.0 or later, with ABSOLUTELY NO WARRANTY.)</div>
+    <div>源代码 / Source code:
+      <a href="https://github.com/zeweihan/aiworkdeck" target="_blank" rel="noopener noreferrer">https://github.com/zeweihan/aiworkdeck</a>
+      · 许可证全文 / Full license:
+      <a href="https://github.com/zeweihan/aiworkdeck/blob/master/LICENSE" target="_blank" rel="noopener noreferrer">LICENSE</a>
+      · 商标说明 / Trademark notice:
+      <a href="https://github.com/zeweihan/aiworkdeck/blob/master/legal/TRADEMARKS.md" target="_blank" rel="noopener noreferrer">TRADEMARKS.md</a>
+    </div>
+    <div>「AI WorkDeck」为北京京微资易科技有限公司的商标，再分发修改版时不得使用该名称作为产品名（详见商标说明）。
+      ("AI WorkDeck" is a trademark of Beijing Jingwei Ziyi Technology Co., Ltd.; do not use it as the product name of a redistributed modified version.)</div>
+  </footer>
   <script type="module" src="/taskpane/main.js"></script>
 </body>
 </html>

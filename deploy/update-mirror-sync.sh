@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # update-mirror-sync.sh — 把最新 GitHub Release 的产物同步到官网镜像
 # （增量更新设计 §5.2）。在官网 ECS（8.152.169.44）上运行：发版后手动执行，
 # 或挂 cron 每小时一次（幂等，asset 未变时只做 HEAD 级比对开销）。

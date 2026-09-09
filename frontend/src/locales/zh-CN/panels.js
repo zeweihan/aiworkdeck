@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 长尾面板/页面命名空间（PR3 分片）：诉讼可视化、股东大会核查、脱敏、尽调、
 // 浏览器面板、项目收藏夹、插件容器、语音合成、剪贴板、变量库。
 export default {

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 面板拖拽上限必须按面板所在的容器算，不能按整窗宽算（dev-board#459）。
 //
 // 病灶：applyResizeFrame 用 `Math.floor(window.innerWidth * 0.75)` 当左右两侧面板的

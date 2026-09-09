@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // dev-board#363：把 Finder / 微信里的文件直接拖进左栏「资源管理器」的目录节点。
 //   cd frontend && npm run test:project-home
 //

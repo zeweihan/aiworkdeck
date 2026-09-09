@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 检索详情整形（dev-band 无关，dev-board#182）：上游形状不受我们控制，
 // 这组用例锁的是「认得的字段列出来、认不得的落原文兜底、少一个键不吞整块」。
 import test from 'node:test'

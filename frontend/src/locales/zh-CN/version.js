@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 版本记录 / 协作（version/*.vue、collab/CollabDialog.vue、InviteMemberDialog.vue、
 // CloudAcceptDialog.vue）：工作段、稿、时间线、三语境采纳冲突弹窗、团队案件库协作。
 export default {

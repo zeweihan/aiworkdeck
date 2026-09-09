@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // project-overview.vue 的标签页拖拽与分栏布局：tab 跨窗格拖拽（跨窗格是"双开"不是"移动"）、
 // 三向面板拖拽改尺寸（rAF 节流 + 直接改 DOM，停手时才同步回 Vue 状态）、分屏开关与窗格聚焦。
 // 经展开进组件 methods（纯搬移，Phase 2 外置），`this` 即 project-overview 页面实例。

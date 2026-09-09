@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 工作台面板停靠（dev-board#180）：把「录音窗格拖到右侧就在右侧开」「变量库拖到左侧就在左侧开」
 // 这件事做成状态而不是三份重复的面板实现。
 //

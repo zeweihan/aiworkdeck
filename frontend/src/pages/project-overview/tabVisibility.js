@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 中间列标签页的可见性契约（dev-board#394）。
 //
 // 标签页是常驻的：它与左栏当前停在哪个面板（资源管理器 / 项目概览 / 插件中心 /

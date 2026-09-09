@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // globalBack.js — 全局返回键。
 //
 // 为什么要有这个东西：设置页（admin）历史上根本没有返回入口，唯一的出口

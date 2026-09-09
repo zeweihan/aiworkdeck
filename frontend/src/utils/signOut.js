@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // signOut.js — 「退出登录」的唯一实现。
 //
 // 桌面端此前根本没有登出入口：个人中心那个按钮写着 `v-if="!isDesktop"`，

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 后端复用版本闸（dev-board#139 根因之一）：更新后的应用把 8-21 残留的陈旧后端
 // 当自家后端直接复用，新前端打旧后端 404 且毫无提示。闸的裁决必须满足：
 //   陌生进程 skip / 同指纹自家后端 reuse / 打包态指纹不一致 replace / dev 态不看指纹。

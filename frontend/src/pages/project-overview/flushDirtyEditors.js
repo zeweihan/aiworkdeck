@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 离开工作台前把还没落盘的编辑器内容存下来。
 //
 // 病灶：自动保存是防抖的，用户敲完最后一个字到真正落盘之间有一段窗口。

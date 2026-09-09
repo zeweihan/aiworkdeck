@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 审阅面板「底稿」页（P2，dev-board#120）：章节树两级分组、三重筛选、顶部统计的纯函数，
 // 外加把 EvidencePanel.vue 的 <script> 抽出来跑一遍 computed 链（同
 // tests/project-home/review-panel-double-tap.test.mjs 的路子：剥掉 import 行，

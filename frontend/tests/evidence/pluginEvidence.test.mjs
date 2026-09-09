@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Web 插件 evidence.* 宿主端纯函数（frontend/src/utils/pluginEvidence.js）
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

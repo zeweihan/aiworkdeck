@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * emit/绑定契约静态检查（PR#147 剪贴板/收藏夹闪电 bug 后加装的护栏）。
  *

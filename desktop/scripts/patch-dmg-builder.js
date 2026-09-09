@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // macOS 26.2 起 Finder 拒读 dmgbuild 写进 .DS_Store 的 pBBk 背景书签，DMG 背景整个
 // 不显示（同版 Obsidian/Podman Desktop 全中招；electron-builder#9072 / dmgbuild#273）。
 // 上游修复没有随 electron-builder 24.x 发布，这里在 npm postinstall 时对 vendored

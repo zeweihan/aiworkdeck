@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * 连接配置持久化（localStorage）。
  * 常规形态：用户只填官网账户 Key（awdk_），换回的 awdt_ 设备令牌存本机；

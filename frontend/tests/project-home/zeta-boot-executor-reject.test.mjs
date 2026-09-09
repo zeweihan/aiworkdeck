@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 审计（dev-board#74）HIGH：bootZetaOffice() 的 async Promise-executor 吞掉首个
 // await 之后抛出的异常，boot 的 promise（连同编辑器加载遮罩）永远悬空。
 //

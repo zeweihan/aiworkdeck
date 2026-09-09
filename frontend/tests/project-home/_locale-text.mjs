@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 禁字断言专用：解析出「这个组件实际会显示的中文」。
 //
 // i18n 迁移后组件源码里只剩 $t('ns.key')，于是 !CODE.includes('读取失败') 这类

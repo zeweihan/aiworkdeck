@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 工具输出的可读化（dev-board#178）。
 //
 // 执行过程卡的折叠区此前直接展示工具返回的原始 JSON——对律师是一段「代码」，

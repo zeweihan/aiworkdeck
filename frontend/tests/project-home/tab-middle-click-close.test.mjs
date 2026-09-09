@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // dev-board#97 的「中键单击标签关闭」在 H5/桌面端从来没生效过：
 // uni-app H5 把 <view> 上的原生事件重新包装成普通对象（uni-h5 createNativeEvent），
 // 只给 click / mouse 系 / touch / keyboard 几类补字段，补的还只是坐标——`button`

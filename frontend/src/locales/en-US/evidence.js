@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // evidence.* — EvidenceLink (report text to source file links): review panel Sources tab and stale bar
 export default {
   view: {

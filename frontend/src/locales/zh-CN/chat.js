@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // AI 对话面板（ChatInterface + AgentMessage 卡片族 + ArtifactCard + BackgroundTaskIndicator）
 export default {
   // ---- 上传文件对话框 ----

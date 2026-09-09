@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 审计（dev-board#74）：LibreOfficeEditor 的「重试」没有重入闸。
 //
 // 病灶：下载挂起（弱网 / 代理收了头就不给正文，XHR 的 60s 超时还没到）时，

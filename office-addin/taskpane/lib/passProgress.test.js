@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * 整篇分段过卷的进度展示（dev-board#422）。
  *   node --test office-addin/taskpane/lib/passProgress.test.js

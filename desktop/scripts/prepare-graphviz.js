@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /*
  * 烙制一份最小可用的 graphviz 进 desktop/bundled/<target>/graphviz/，
  * 供 electron-builder 打包（对标 prepare-python-service.js）。

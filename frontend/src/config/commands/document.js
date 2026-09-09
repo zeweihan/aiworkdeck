@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 「文档」菜单：这一条是本次菜单改造的正面回答。
 //
 // 律师每天的动词是修订、批注、定稿、回退——在此之前这些一个都不在菜单栏里，

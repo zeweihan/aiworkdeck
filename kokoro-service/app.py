@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """
 Kokoro 本地 TTS 服务：OpenAI 兼容的极薄包装层（桌面版语音合成，数据不出本机）。
 

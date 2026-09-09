@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 顶栏外观切换（dev-board#223）：浅色 / 深色 / 跟随系统三选一。
 // 位置就是原「已连接账户」chip 那一格（该 chip 已于 dev-board#221 下线）。
 //

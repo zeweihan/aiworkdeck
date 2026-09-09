@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 锁 zh-CN / en-US 两侧命名空间与键集合完全一致（漏译=构建期红，不是运行期回退）。
 // 用法：node scripts/check-locale-parity.mjs（npm run check:locales）
 import { readdirSync } from 'node:fs'

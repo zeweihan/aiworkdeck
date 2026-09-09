@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // agentStream: user-visible strings of the AI chat SSE stream (useAgentStream.js).
 // SSE event names / status literals (awaiting_input etc.) and the AI_REGION_BLOCKED
 // marker are contracts and are intentionally not here.

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 项目类型与公司信息展示配置
 // 说明：
 // - 这里只做前端显示与表单配置，真正的字段含义和映射由后端接口负责。

@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!--
   日历日程创建/编辑弹窗。task 为 null（或无 id）时是创建态，否则是编辑态。
   创建态可选项目；编辑态项目已归属，不做迁移，只显示 + 「进入项目」跳转。

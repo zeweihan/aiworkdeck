@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // ClipboardPanel.vue 的删除链路（dev-board#455 复现 1「确认后卡片仍在」）。
 //
 // 把 <script> 剥出来当普通对象跑（同 tests/insight/insightPane.test.mjs 的路子），

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // windowChrome.js — 无边框窗口的渲染层一侧。
 //
 // 桌面壳把系统标题栏去掉了（desktop/main/main.js 的 titleBarStyle: 'hidden'），

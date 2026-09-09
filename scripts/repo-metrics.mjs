@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 仓库流量快照：GitHub traffic API 只保留 14 天，本脚本把 views/clones/referrers/paths
 // 与 star/fork 数拼成一行 JSON 追加到 metrics/traffic.jsonl（由 repo-metrics 工作流每周
 // 跑一次并推到 repo-metrics 分支）。traffic 端点要求 push 权限：Actions 的 GITHUB_TOKEN

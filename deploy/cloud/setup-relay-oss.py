@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """建手机影像云中转的 OSS 桶 + RAM 子用户（大陆站）。
 
 - 桶 awd-mobile-relay（cn-beijing / Standard / private），生命周期 35 天兜底 + 7 天清失败分片。

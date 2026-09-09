@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // FileTree.vue 树构建的分组/递归纯函数（dev-board#107 单元 F3）：
 //   cd frontend && npm run test:evidence
 //

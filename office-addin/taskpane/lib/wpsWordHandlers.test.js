@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * wpsWordHandlers 单测：mock globalThis.wps 的 VBA 风对象模型（同步桥），
  * 覆盖偏移直切定位、最小修订与回退、withTracking 保存/恢复、编号降级、

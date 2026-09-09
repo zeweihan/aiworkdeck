@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 「团队」分区的源码级契约（dev-board#496）。
 //
 // 这些点没法用纯函数覆盖（都是「某个写法必须接在某处」），所以按 tests/project-home 下
