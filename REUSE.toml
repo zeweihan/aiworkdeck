@@ -38,13 +38,3 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "Anionex (banana-slides upstream) and AI WorkDeck contributors"
 SPDX-License-Identifier = "CC-BY-NC-SA-4.0"
 
-# easyvoice：疑似上游 cosin2077/easyVoice 的 vendored 拷贝——README 与上游几乎逐字
-# 一致、目录内无 LICENSE 文件、找不到任何 checkba 定制标记，且该服务已在
-# .claude/agents/eng-infra.md 标注"已停用"（语音合成改走桌面捆绑的 Kokoro）。
-# 上游许可待人工核实，先占位为 LicenseRef-Vendored。
-[[annotations]]
-path = "easyvoice/**"
-precedence = "aggregate"
-SPDX-FileCopyrightText = "cosin2077 and easyVoice contributors (upstream license unverified)"
-SPDX-License-Identifier = "LicenseRef-Vendored"
-

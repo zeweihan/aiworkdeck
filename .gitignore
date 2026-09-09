@@ -18,7 +18,6 @@ Thumbs.db
 # Project-specific data
 data/
 database/
-easyvoice/temp/
 pptx-service/uploads/
 mineru-service/temp/
 

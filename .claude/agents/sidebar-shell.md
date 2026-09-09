@@ -129,8 +129,8 @@ rail 底部（spacer 之后由模板单独渲染）现在是**暂存区 → 版�
   key 上，左栏是「加载中…」占位符、rail 上一个高亮按钮都没有，看上去就是坏了。
   **CLIENT 不过这张表**（dd-files→files 对客户是错的，他看不到资源管理器）。
 - easyvoice 的展示名沿革：路由键曾是 `easyvoice`（`EasyVoice` 是早已停用的 Docker
-  服务代号，不当产品名用），#389 改展示名为「语音合成」，2026-08-19 它成了
-  voice 面板里的一个 tab，rail 上的名字是「语音」。
+  服务代号，不当产品名用；该目录已于 2026-09-09 删除），#389 改展示名为「语音合成」，
+  2026-08-19 它成了 voice 面板里的一个 tab，rail 上的名字是「语音」。
 
 版本记录 version→VersionPanel 见 `.claude/agents/version-control.md`。
 **shareholder-meeting(股东大会核查) 已于 2026-08-17 下线**：入口从本数组移除即等于功能隐藏，`ShareholderMeetingPanel.vue` / `api.js` 的 `/api/shareholder-meeting/*` / 后端 controller 与实体全部保留（存量案卷数据还在库里），skill 改成 `enabled_by_default: false`。注意 `SkillRegistry` 的种子化只在「第一次见到这个 id」时生效，**存量安装里它仍是启用状态**，要在插件广场手动停用。`EvalHarness` 里显式 `setEnabled(..., true)` 把它开回去——那条回放用例守的是编排契约，与业务在不在产品里无关。requiresSkill 门控入口：litigation-visual(诉讼可视化)；meeting-recorder(会议录音→MeetingRecordingPanel，**2026-08-19 起不占 rail 位，是「语音」面板里的一个 tab**，skill 启用才出现；录音本体是页面树外的模块级单例 `utils/meetingRecorder.js` + body 级浮动指示器 `utils/recordingIndicator.js`，见 plugin-system.md)。辅助函数 getLeftSidebarPlugin(key)（数组里找不到再找 OFF_RAIL_PLUGINS，都没有才回退第一项）、getPluginsForUser(role)（CLIENT 只见尽调文件，返回 DD_FILES_PLUGIN）。动态插件后端拉取后追加 rail 并用 PluginPane 渲染。**设置入口不在 rail 上了**，见顶栏头像下拉那一节；admin 页/接口后端仍 requireAdmin（用户名 admin）。

@@ -69,26 +69,6 @@ services:
     networks:
       - checkba-network
 
-  # EasyVoice TTS Service
-  easyvoice:
-    build:
-      context: ./easyvoice
-      dockerfile: Dockerfile
-    container_name: checkba-easyvoice
-    # 同上：不做鉴权的服务只发布到宿主回环
-    ports:
-      - "127.0.0.1:9549:3000"
-    environment:
-      # DEBUG 会把内部错误细节回给调用方，生产不开
-      - DEBUG=false
-      # Add OPENAI_BASE_URL if you want to support LLM based TTS, otherwise optional
-      # - OPENAI_BASE_URL=https://openrouter.ai/api/v1/
-    volumes:
-      - ./easyvoice/audio:/app/audio
-    restart: unless-stopped
-    networks:
-      - checkba-network
-
 networks:
   checkba-network:
     driver: bridge

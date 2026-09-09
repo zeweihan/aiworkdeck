@@ -278,7 +278,7 @@ chmod +x restart-all.sh
 | PPTX 服务 | `http://localhost:5001` |
 | MinerU 服务 | `http://localhost:8001` |
 
-语音合成在本机运行（随包 Kokoro 引擎）；`restart-all.sh` 已不再启动旧的 EasyVoice Docker 服务（定义仍保留在 `docker-compose.yml` 中）。
+语音合成在本机运行（随包 Kokoro 引擎）；旧的 EasyVoice Docker 服务已删除。
 
 常见可选提供方：OpenRouter、Gemini、企查查、Tushare、北大法宝、阿里云（OCR 与听悟转写）与对象存储。审查代码或运行基础工作台并不要求配齐所有提供方。
 
@@ -291,7 +291,6 @@ chmod +x restart-all.sh
 | `desktop/` | Electron 桌面壳 |
 | `pptx-service/` | AI 原生 PPT 生成服务 |
 | `mineru-service/` | 基于 MinerU 的文档解析服务 |
-| `easyvoice/` | 语音合成服务 |
 | `docs/` | 工程笔记、编辑器迁移笔记、存储与工作流文档 |
 | `legal/` | AGPLv3 许可、CLA、商业许可、商标条款 |
 
