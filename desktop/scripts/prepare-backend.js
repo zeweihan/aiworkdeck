@@ -16,6 +16,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { driverPlatformDir, findDriverBundleJar, trimDriverBundleJar } = require('./trim-driver-bundle');
 
 // Module set = `jdeps --print-module-deps` over the backend fat jar, widened
 // to java.se (aggregator), plus modules jdeps cannot see (reflection/JPMS
@@ -105,6 +106,20 @@ fs.rmSync(work, { recursive: true, force: true });
 const libCount = fs.readdirSync(path.join(backendDir, 'lib')).length;
 console.log(`Backend split: app.jar ${(fs.statSync(appJar).size / 1048576).toFixed(1)}MB + lib/ ${libCount} jars`);
 
+// 1b) Playwright driver-bundle 只留本平台驱动（安装包瘦身 dev-board#528）：
+// 上游 jar 里并排放着五套平台驱动，运行时只读 driver/<platformDir>/ 那一套
+// （见 trim-driver-bundle.js 顶部注释）。跨平台构建这里按目标平台名裁剪。
+const driverJar = findDriverBundleJar(path.join(backendDir, 'lib'));
+if (driverJar) {
+    const keep = driverPlatformDir(process.platform, process.arch);
+    const r = trimDriverBundleJar(driverJar, keep);
+    console.log(`Playwright driver-bundle trimmed to driver/${keep}: `
+        + `${(r.beforeBytes / 1048576).toFixed(1)}MB -> ${(r.afterBytes / 1048576).toFixed(1)}MB `
+        + `(dropped ${r.removedEntries} entries)`);
+} else {
+    console.log('Playwright driver-bundle jar not found in lib/ — skipping driver trim');
+}
+
 // 2) Trimmed runtime
 const jlink = path.join(javaHome, 'bin', process.platform === 'win32' ? 'jlink.exe' : 'jlink');
 const jreDir = path.join(outDir, 'jre');
@@ -115,7 +130,7 @@ execFileSync(jlink, [
     '--strip-debug',
     '--no-man-pages',
     '--no-header-files',
-    '--compress', 'zip-6',
+    '--compress', 'zip-9',
     '--output', jreDir
 ], { stdio: 'inherit' });
 
