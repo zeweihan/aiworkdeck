@@ -3,7 +3,7 @@
 //
 // 从桌面首启解锁门（launch → unlock）开始，以真实鼠标点击
 // 走完核心用户旅程：项目列表页、统一设置页的「个人」组、两级导航（列表→工作台，
-// 含概览页档案手填落库）、上传文件（含 >5MB 分片路径回归）、
+// 含概览页档案手填落库）、文件落进项目（含 >5MB 大文件回归）、
 // 打开文件、左栏功能区、独立页面——全程收集控制台错误 / 失败 API / 可疑文案，
 // 任何断言失败退出码非 0。
 //
@@ -715,38 +715,61 @@ try {
     // 等 rail 上的按钮（title 属性，与 leftPaneKey 无关）才是「工作台起来了」的判据。
     await page.waitForSelector('[title="资源管理器"]', { timeout: 30000 })
     // 概览是左栏的一个面板，点它会把 leftPaneKey 持久化成 'home'——再进工作台
-    // 就可能落在概览面板上，而 J4 要点的「上传文件」只长在资源管理器的面板头上。
-    // 显式确保停在文件树上，别让后面整段挂在一个看不见的按钮上。
+    // 就可能落在概览面板上，而后面整段都要资源管理器面板在场（uploadOne 靠收起/展开
+    // 它来刷新文件树）。显式确保停在文件树上。判据用「新建文件夹」这个面板头按钮：
+    // 它与「上传文件」同一排，而后者随 dev-board#513 一起撤了。
     //
     // **不能无脑点一下 rail**：toggleLeftPane 对**同一个 key** 是「收起/展开侧栏」，
-    // 已经在资源管理器上时点它等于把整条左栏收掉，「上传文件」跟着消失。
+    // 已经在资源管理器上时点它等于把整条左栏收掉，面板头按钮跟着消失。
     // 所以先探测，需要才点；点完仍没有就再点一次（上一次是收起，这一次是展开）。
     for (let i = 0; i < 2; i++) {
-      if (await page.$('[title="上传文件"]')) break
+      if (await page.$('[title="新建文件夹"]')) break
       await mouseClickSel('[title="资源管理器"]')
     }
-    await page.waitForSelector('[title="上传文件"]', { timeout: 15000 })
+    await page.waitForSelector('[title="新建文件夹"]', { timeout: 15000 })
   })
   await shot('j3-project')
 
-  // ============ J4 上传（小 + 大分片） ============
-  console.log('== J4 文件上传 ==')
+  // ============ J4 文件落进项目（小 + 大） ============
+  // dev-board#513 起资源管理器没有「上传文件」这条 UI 通道了（对话框、分片上传队列、
+  // 底栏进度全撤），剩下的入口是「从 Finder 拖进来 → import-local」——headless
+  // 浏览器驱动不了真实 OS 拖拽。所以这里改走裸 REST：createFile 建行 + POST
+  // /api/files/{id}/upload 写字节，与 J9 既有的 restOverwrite 同一条后端路径
+  // （同一段 signalChange），旅程语义（文件真落盘、版本记录看得见）不变。
+  // 文件树只在挂载时拉一次清单，所以写完靠「收起再展开左栏」强制重新挂载来刷新
+  // （与版本面板那几步同样的手法）。
+  console.log('== J4 文件落进项目 ==')
   const uploadOne = async (file, name) => {
-    await mouseClickSel('[title="上传文件"]')
-    await waitText('选择文件（支持多选）', 8000)
-    const [chooser] = await Promise.all([
-      page.waitForFileChooser({ timeout: 8000 }),
-      mouseClickText('选择文件（支持多选）', { contains: true }),
-    ])
-    await chooser.accept([file])
-    await sleep(500)
-    await mouseClickText('确定上传')
+    const fileName = path.basename(file)
+    const bytes = fs.readFileSync(file)
+    const created = await api('/api/projects/' + QA.projectId + '/files/file', {
+      method: 'POST',
+      body: {
+        parentId: null,
+        name: fileName,
+        fileType: (fileName.split('.').pop() || 'txt').toLowerCase(),
+        fileSize: bytes.length,
+      },
+    })
+    if (!created || !created.id) throw new Error('createFile 失败: ' + JSON.stringify(created).slice(0, 200))
+    const form = new FormData()
+    form.append('file', new Blob([bytes], { type: 'text/plain' }), fileName)
+    const r = await fetch(BACKEND + '/api/files/' + (created.wpsFileId || created.id) + '/upload', {
+      method: 'POST',
+      headers: QA.sid ? { 'X-Session-Id': QA.sid } : {},
+      body: form,
+    })
+    const j = await r.json()
+    if (!j || j.code !== 0) throw new Error('写字节失败: ' + JSON.stringify(j).slice(0, 200))
+    // 收起再展开 = FileTree 重新挂载 = 重新拉清单
+    await mouseClickSel('[title="资源管理器"]')
+    await mouseClickSel('[title="资源管理器"]')
   }
-  await step('上传小文件', async () => {
+  await step('落一个小文件', async () => {
     await uploadOne(smallFile, 'qa-small.txt')
     await waitText('qa-small', 20000)
   })
-  await step('上传 >5MB 大文件（分片回归 #156）', async () => {
+  await step('落一个 >5MB 大文件（#156 回归：大文件照样完整落盘）', async () => {
     await uploadOne(bigFile, 'qa-big.txt')
     await waitText('qa-big', 60000)
   })
@@ -1166,11 +1189,11 @@ try {
 
   // ============ J9 版本记录 ============
   // 注：本 harness 跑浏览器目标，不驱动 LOWA 引擎，工作段不能靠"改文档"触发，
-  // 改用真实 UI 上传文件（走既有 uploadOne，与 J4 同一条链路，真正落盘到项目
-  // 工作区目录，git diff 才看得见）。上传前后要切回/切出资源管理器面板，
+  // 改用既有 uploadOne 往项目里真落一个文件（与 J4 同一条链路，真正落盘到项目
+  // 工作区目录，git diff 才看得见）。前后要切回/切出资源管理器面板，
   // 因为版本面板与文件树共用同一个侧栏挂载点（project-overview.vue 的
-  // sidebar-content 按 leftPaneKey 互斥渲染），版本面板打开时文件树（含
-  // "上传文件"按钮）不在 DOM 里。
+  // sidebar-content 按 leftPaneKey 互斥渲染），版本面板打开时文件树不在 DOM 里，
+  // uploadOne 结尾那两下「收起/展开」也就刷不到树。
   //
   // 旅程结构（task-15 报告定案后的修正版，需要两段工作）：
   // brief 原设计的"退回"点的是刚结束的那个工作段自己——单工作段场景下，退回
@@ -1306,7 +1329,7 @@ try {
     await waitText('当前没有进行中的工作')
   }
 
-  await step('第一段工作：上传文件并命名结束', () =>
+  await step('第一段工作：落一个文件并命名结束', () =>
     runWorkSession(versionFileA, 'qa-版本测试A', '端到端测试稿一'))
 
   await step('时间线出现第一个工作段的命名节点', async () => {

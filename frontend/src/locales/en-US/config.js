@@ -29,7 +29,6 @@ export default {
     cancel: 'Cancel',
     newFile: 'New File',
     newFolder: 'New Folder',
-    uploadFile: 'Upload File',
     sort: 'Sort',
   },
   ocr: {

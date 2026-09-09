@@ -185,64 +185,48 @@ dev-board#97 的「中键关闭标签」就这么静默失效了一整轮：auxc
 「第 3 分支读 `e.dataTransfer.files`」在真机上也是死的。统一修法在
 `utils/fileTreeExternalDrop.js`：`nativeDataTransfer(e)`（回调自带优先，否则 `window.event`）
 + `isExternalFileDrag(dt)`（dragover 阶段 `files` 恒空，只能看 `types` 含 `'Files'`）+
-`collectDroppedFiles(dt)`（`webkitGetAsEntry` 递归展开目录、给 `relativePath`；快照必须在
-drop 的同步阶段取）+ `claimExternalDrop(native)`（同一原生事件在节点与容器各到一次，只认领一次）。
+`claimExternalDrop(native)`（同一原生事件在节点与容器各到一次，只认领一次）。
 **Finder / 微信文件拖进资源管理器**就靠它：`FileTree.handleDrop` / `onRootDrop` 各加了 Case 0、
 `.tree-content` 上新加容器级 `onTree*` 四个处理器（空白区落项目根、`externalDragActive`
-点亮根投放区与容器描边），落点定了统一走 `uploadExternalDrop` → **复用 `confirmUpload`**
-（读 `selectedFiles` / `selectedUploadParent`，与上传对话框、暂存区 `onStagingDropFiles`
-同一条通道，不另起一套）。App.vue 那条「拖单个文件夹到窗口 = 打开为项目」的 capture 段
-drop 现在**对落点在 `.file-tree` 里的事件让路**——拖文件夹进目录节点是上传进去。
-单测 `tests/project-home/file-tree-external-drop.test.mjs`（`npm run test:project-home`）。
+点亮根投放区与容器描边），落点定了统一走 `importExternalDrop`。App.vue 那条「拖单个文件夹到
+窗口 = 打开为项目」的 capture 段 drop 现在**对落点在 `.file-tree` 里的事件让路**——拖文件夹
+进目录节点是导入进去。单测 `tests/project-home/file-tree-external-drop.test.mjs`
+（`npm run test:project-home`）。
 
-**落点定了之后分两条路（dev-board#409，2026-09-03）**：桌面端凡是能解析出本机绝对路径的
-单个文件（`host.fs.getPathForFile`，Electron 的 webUtils），走
+**落点定了之后只有一条路：import-local（dev-board#409 立，#513 收敛为唯一通道）**。
+`importExternalDrop(dt, targetParentId)` 取 `dataTransfer.files` 里的**顶层条目**
+（每条可能是文件，也可能是目录），逐个用 `resolveDroppedFilePath`（`host.fs.getPathForFile`，
+Electron 的 webUtils）解析出本机绝对路径，交给
 **`POST /api/projects/{id}/files/import-local`**（`{sourcePath, parentId}`，
 `ProjectFileController.importLocal` → `ProjectFileService.importLocalFile`），
-让后端把那个文件**复制**进项目目录；其余（浏览器 H5、解析不出路径、**整个文件夹拖进来**
-——`relativePath` 带目录前缀的一律留给 confirmUpload，import-local 一次只收一个文件、
-不建目录，走它会把目录结构拍平）仍走 `confirmUpload`。
-理由是老路那两颗雷：① 微信/Finder 拖过来的 File 指向那一次拖拽的临时目录，等
-`createFile` 那一趟往返回来 blob 常常已经失效（Chromium `ERR_UPLOAD_FILE_CHANGED`，
+让后端把它**复制**进项目目录；**目录由后端递归建行、递归复制**，前端不再用
+`webkitGetAsEntry` 展开目录。解析不出路径（不在桌面壳里跑）= 一条都导不了，
+只弹一句 `fileTree.importDesktopOnly`（「拖入导入仅桌面端支持」）——工作台的 H5 部署
+已于 2026-08-19 下线，资源管理器是桌面端专属。逐条循环 + 一次 `loadFiles()` 收尾的
+`importDroppedLocalFiles(fileList, parentId)` 是**公开方法**，暂存区
+（`stagingArea.js#onStagingDropFiles`）直接调它，不另起一套。
+理由是老的 HTTP 上传路那两颗雷：① 微信/Finder 拖过来的 File 指向那一次拖拽的临时目录，
+等 `createFile` 那一趟往返回来 blob 常常已经失效（Chromium `ERR_UPLOAD_FILE_CHANGED`，
 xhr 只给一句 `Network Error`，后端看到 `ClientAbortException`），三次重试全挂；
 ② `createFile` 早就按模板物化出一份空白 docx 躺在用户目录里，那行还点得开，
 编辑器把空白模板当正文加载、自动保存再写回磁盘——同名时是**静默的内容丢失**。
 桌面端项目本来就是本机的一个文件夹，同机 copy 既没有这个窗口，也不必让 5GB 证据包
 绕一圈 HTTP。import-local **只在 `security.local-mode=true` 开放**（它让调用方指名
 服务器磁盘上的绝对路径，只有「服务器就是用户这台电脑」时才成立；同 open-local 那道闸的
-理由），拒符号链接/目录/不存在的路径，同名仍是**报错**（与普通上传逐字一致，不改名不覆盖），
-行由 `createFile` 建、后置钩子（RAG 增量索引 + 自动打标签）与上传完成时同源。
+理由），拒符号链接、同名仍是**报错**（不改名不覆盖），行由 `createFile` 建、
+后置钩子（RAG 增量索引 + 自动打标签）与上传完成时同源。
 **这条路径不插乐观行**——没有传输阶段，返回时字节已经在目录里，`loadFiles()` 一刷即最终形态。
-
-**分片上传通道（H5/远端仍在用）同轮加固两处**：重试用尽后 `discardFailedUpload` 会把
-`createFile` 建出的**空白占位行删掉**（此前刻意保留以便重试，代价是用户目录里长期躺着
-5KB 假文件）；`handleItemClick` 顶部新增闸——`uploadStatusMap[id].progress < 100` 的行
-**不发 `file-select`**（模板里那条 `text-muted` 只是视觉提示，闸必须在唯一出口上）。
-另外裸 body 分片请求不再把 `getAuthHeaders()` 的 `application/json` 一起抄进去
-（XHR 的 `setRequestHeader` 对同名头是追加不是覆盖，此前实际发出的是
-`application/json, application/octet-stream`）。
 后端测试 `ProjectFileServiceImportLocalTest` / `ProjectFileControllerImportLocalTest`。
 
-**上传底栏不许把死任务算成「正在上传」（dev-board#462，2026-09-05）**：左下角那条
-`.upload-status-footer-fixed` 是 FileTree 自己的上传队列，**与手机端中转无关**
-（`frontend/src` 里没有一行 mobile-relay 代码，手机落盘全在后端 `MobileRelayClientService`）。
-此前 `uploadedCount` / `totalUploadCount` 直接数整张 `uploadStatusMap`，队列里只剩
-已中断/出错的任务时就得到「正在上传... (0/1)」，而 `globalUploadProgress` 明明过滤掉了
-死任务返回 `null`，模板那句 `Math.floor(globalUploadProgress || 0)` 又把它画成 0%。
-现在三个计数统一走新的 `activeUploads`（`!error && status !== 'interrupted'`，与
-`globalUploadProgress` 同一个口径），只剩死任务时（`showInterruptedOnly`）底栏不画进度环、
-改说「N 个上传已中断」——**条目本身留着**，悬浮列表里的 ↻ 重试与 × 删除、常驻的
-「取消全部」一个都没动。批量上传途中队列瞬时清空（条目延迟 1s 删）仍走进度环，
-所以判据是 `totalUploadCount === 0 && interruptedUploadCount > 0` 而不是单看前者。
-`restoreUploadState` 同时补两条：`progress >= 100` 的恢复条目**直接丢弃并落盘**
-（`completeUpload` 那 1s 延迟删除没赶上而已，留着会让底栏永远说「正在上传 (1/1)」，
-且 `saveUploadState` 不落 error 标志，下次挂载又原样复活）；未完成的条目（含
-`status:'pending'` 的排队项）一律标 interrupted。**刻意不做**启动时自动
-`deleteFilePerm` 删占位文件——那会毁掉跨重启续传（`resumeUpload` 策略 2 的重选文件
-+ `processChunkedUpload` 开头的服务端 offset 探测是设计好的能力），而且
-`projectId` watcher（`immediate: true`）与 `FilePickerDialog` 里的第二个 FileTree 实例
-共用同一个 `upload_state_v2_project_<id>` 键，删除动作会在项目来回切时误伤在传的文件。
-单测 `frontend/tests/project-home/file-tree-upload-zombie.test.mjs`（`npm run test:project-home`）。
+**资源管理器的「上传」概念整体撤除（dev-board#513，2026-09-09）**：上传对话框（含文件夹
+上传）、`btn-upload` 底栏按钮与面板头快捷键、分片/断点续传队列（`confirmUpload` /
+`uploadSingleFile` / `processChunkedUpload` / `resumeUpload` / `saveUploadState` 一整套）、
+行内进度条、左下角 `.upload-status-footer-fixed` 底栏（dev-board#462 那轮
+`activeUploads` / `showInterruptedOnly` 计数加固随之一起删）、`upload_state_v2_project_<id>`
+的落盘恢复、`upload-status` 轮询、以及 `fileTree.upload*` 那批文案全部删除；
+`file-tree-upload-zombie.test.mjs` 一并删。文件树的文件夹选择器只剩批量移动/复制/剪切
+一种用途（`folderSelectorMode` 随之消失）。**`/api/files/{id}/upload` 本身没动**——
+它仍是编辑器保存正文的通道（LibreOfficeEditor 的 `uploadBytes`）。
 
 ## 顶栏头像与统一「设置」标签（2026-08-19 立，2026-08-20 并，2026-08-21 撤下拉）
 

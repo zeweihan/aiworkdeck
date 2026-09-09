@@ -65,27 +65,6 @@ test('bubbles 上不应该再挂一个空回调体的 deep watcher（唯一保�
 })
 
 // ======================================================================
-// 3. FileTree.vue：并发批量上传生成重复临时 id
-// ======================================================================
-
-test('uploadSingleFile 的 tempId 生成必须叠加一个自增序号，不能是裸 Date.now()', () => {
-  const src = stripComments(read('components/FileTree.vue'))
-  const body = extractBlock(src, 'async uploadSingleFile(projectId, file, parentId, pendingTempId = null)')
-  assert.doesNotMatch(body, /const tempId = Date\.now\(\)\n/,
-    '裸 Date.now() 在并发批量上传（CONCURRENCY=3 背靠背同步调用）里可能在同一毫秒内撞出重复 id')
-  assert.match(body, /const tempId = Date\.now\(\) \* 1000 \+ \(this\._uploadTempIdSeq/,
-    '必须叠加一个组件级自增序号，保证同一毫秒内也互不相同')
-})
-
-test('接线核实：processNext 确实是同步背靠背调用（本条缺陷的触发前提仍然成立）', () => {
-  const src = stripComments(read('components/FileTree.vue'))
-  const body = extractBlock(src, 'for (let i = 0; i < Math.min(CONCURRENCY, uploadQueue.length); i++)', 0)
-  assert.match(body, /processNext\(\)/)
-  assert.doesNotMatch(body, /await processNext\(\)/,
-    '如果这里改成了 await，触发条件就不成立了——本用例的前提失效，需要重新评估这条修复是否还有必要')
-})
-
-// ======================================================================
 // 4. FileTree.vue：按下标解析拖拽目标会与后台重载竞态导致移进错的文件夹
 // ======================================================================
 

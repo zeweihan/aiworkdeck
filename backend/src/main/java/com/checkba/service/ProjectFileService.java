@@ -341,32 +341,9 @@ public class ProjectFileService {
      */
     @Transactional
     public ProjectFile importLocalFile(Long projectId, Long parentId, String sourcePath, Long userId) {
-        if (projectId == null) {
-            throw new IllegalArgumentException(LangText.of("项目 ID 不能为空", "Project ID must not be empty"));
-        }
-        if (userId == null) {
-            throw new IllegalArgumentException(LangText.of("用户 ID 不能为空", "User ID must not be empty"));
-        }
-        if (!StringUtils.hasText(sourcePath)) {
-            throw new IllegalArgumentException(LangText.of("源文件路径不能为空", "Source path must not be empty"));
-        }
-        java.nio.file.Path source;
-        try {
-            source = java.nio.file.Paths.get(sourcePath).normalize();
-        } catch (Exception e) {
-            throw new IllegalArgumentException(LangText.of("源文件路径非法: ", "Invalid source path: ") + sourcePath);
-        }
-        if (!source.isAbsolute()) {
-            throw new IllegalArgumentException(LangText.of("源文件路径必须是绝对路径: ", "Source path must be absolute: ") + sourcePath);
-        }
-        // 符号链接不跟随：跟随了就等于允许调用方拿一个链接把项目目录外的任意文件复制进来。
-        // 只看末段——祖先目录是链接是常态（macOS 的 /var -> /private/var 就是），拿
-        // toRealPath 去比会把正常的临时目录路径一并误伤。
-        if (java.nio.file.Files.isSymbolicLink(source)) {
-            throw new IllegalArgumentException(LangText.of("不支持导入符号链接: ", "Symbolic links are not supported: ") + sourcePath);
-        }
+        java.nio.file.Path source = resolveImportSource(projectId, userId, sourcePath);
         if (!java.nio.file.Files.isRegularFile(source, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
-            // 目录与不存在的路径都落在这里：这条通道一次只收一个普通文件
+            // 目录与不存在的路径都落在这里：这个入口一次只收一个普通文件（目录走 importLocalPath）
             throw new IllegalArgumentException(LangText.of("源文件不存在或不是普通文件: ", "Source file does not exist or is not a regular file: ") + sourcePath);
         }
         long size;
@@ -405,6 +382,184 @@ public class ProjectFileService {
         created.setFileSize(size);
         created.setUpdatedAt(LocalDateTime.now());
         return projectFileRepository.save(created);
+    }
+
+    /**
+     * import-local 两条路（单个文件 / 整个目录）共用的入口校验：项目与用户非空、路径可解析、
+     * 必须是绝对路径、末段不是符号链接。「是不是普通文件」留给各自的调用点判断。
+     */
+    private java.nio.file.Path resolveImportSource(Long projectId, Long userId, String sourcePath) {
+        if (projectId == null) {
+            throw new IllegalArgumentException(LangText.of("项目 ID 不能为空", "Project ID must not be empty"));
+        }
+        if (userId == null) {
+            throw new IllegalArgumentException(LangText.of("用户 ID 不能为空", "User ID must not be empty"));
+        }
+        if (!StringUtils.hasText(sourcePath)) {
+            throw new IllegalArgumentException(LangText.of("源文件路径不能为空", "Source path must not be empty"));
+        }
+        java.nio.file.Path source;
+        try {
+            source = java.nio.file.Paths.get(sourcePath).normalize();
+        } catch (Exception e) {
+            throw new IllegalArgumentException(LangText.of("源文件路径非法: ", "Invalid source path: ") + sourcePath);
+        }
+        if (!source.isAbsolute()) {
+            throw new IllegalArgumentException(LangText.of("源文件路径必须是绝对路径: ", "Source path must be absolute: ") + sourcePath);
+        }
+        // 符号链接不跟随：跟随了就等于允许调用方拿一个链接把项目目录外的任意文件复制进来。
+        // 只看末段——祖先目录是链接是常态（macOS 的 /var -> /private/var 就是），拿
+        // toRealPath 去比会把正常的临时目录路径一并误伤。
+        if (java.nio.file.Files.isSymbolicLink(source)) {
+            throw new IllegalArgumentException(LangText.of("不支持导入符号链接: ", "Symbolic links are not supported: ") + sourcePath);
+        }
+        return source;
+    }
+
+    /** 一次 import-local 的产物：顶层行（文件或文件夹）、真正落盘的文件行、被跳过的条目数。 */
+    public static class ImportLocalResult {
+        private final ProjectFile root;
+        private final List<ProjectFile> importedFiles;
+        private final int skippedCount;
+
+        public ImportLocalResult(ProjectFile root, List<ProjectFile> importedFiles, int skippedCount) {
+            this.root = root;
+            this.importedFiles = importedFiles;
+            this.skippedCount = skippedCount;
+        }
+
+        /** 顶层创建出来的行：导入单个文件时是文件行，导入目录时是那个文件夹行。 */
+        public ProjectFile getRoot() {
+            return root;
+        }
+
+        /** 本次真正复制进来的文件行（不含文件夹），后置钩子按它逐个跑。 */
+        public List<ProjectFile> getImportedFiles() {
+            return importedFiles;
+        }
+
+        /** 树里被跳过的条目数：符号链接、设备/管道等特殊文件、读不到的条目。 */
+        public int getSkippedCount() {
+            return skippedCount;
+        }
+    }
+
+    /**
+     * 从本机绝对路径导入：普通文件复制一份进来（{@link #importLocalFile}），
+     * 目录则把整棵树复制进来——资源管理器现在也收整个文件夹的拖入。
+     *
+     * <p>入口校验（绝对路径、不跟随符号链接、单机模式与归属由控制器把）一律不变，
+     * 只把原来那条「必须是普通文件」的拒绝换成分流：普通文件走老路，目录走
+     * {@link #importLocalDirectory}，其余形态（不存在、设备/管道等）照旧拒绝。
+     */
+    @Transactional
+    public ImportLocalResult importLocalPath(Long projectId, Long parentId, String sourcePath, Long userId) {
+        java.nio.file.Path source = resolveImportSource(projectId, userId, sourcePath);
+        if (java.nio.file.Files.isRegularFile(source, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            ProjectFile created = importLocalFile(projectId, parentId, sourcePath, userId);
+            return new ImportLocalResult(created, List.of(created), 0);
+        }
+        if (java.nio.file.Files.isDirectory(source, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            return importLocalDirectory(projectId, parentId, source, userId);
+        }
+        throw new IllegalArgumentException(LangText.of("源文件不存在或不是普通文件: ", "Source file does not exist or is not a regular file: ") + sourcePath);
+    }
+
+    /**
+     * 把整个目录复制进项目：顶层建一个同名文件夹行，子目录建文件夹行，普通文件逐个走
+     * {@link #importLocalFile}（复制逻辑只有那一份）。
+     *
+     * <p>三条与单文件路径对齐的规矩：
+     * <ul>
+     * <li><b>顶层同名报错</b>——用的就是 {@link #createFolder} 那道同名查重，不改名不覆盖；</li>
+     * <li><b>额度先算后拷</b>——先摊平整棵树、把普通文件的字节加总，与
+     *     {@code sumSizeByProjectId} 一起过 20GB 那道闸，拦住时一行不建、一个字节不落盘；</li>
+     * <li><b>跳过而不是报错</b>——树里的符号链接（跟随了等于把项目目录外的文件复制进来）、
+     *     设备/管道等特殊文件、读不到的条目只计数；点开头的目录与 {@code ~$} 锁文件
+     *     按磁盘扫描同一条规则（{@link LocalProjectService#isIgnoredEntryName}）静默略过，
+     *     {@code .awd}/{@code .git} 这些项目自己的元数据目录都在里面。</li>
+     * </ul>
+     *
+     * <p>版本变更信号不额外发：createFolder/createFile 各自已经 signalChange，与逐个文件
+     * 拖进来时的行为一致。
+     */
+    private ImportLocalResult importLocalDirectory(Long projectId, Long parentId,
+                                                   java.nio.file.Path source, Long userId) {
+        java.nio.file.Path topName = source.getFileName();
+        if (topName == null) {
+            throw new IllegalArgumentException(LangText.of("源文件路径非法: ", "Invalid source path: ") + source);
+        }
+
+        // 先摊平成一张有序计划（父目录一定排在孩子前面），再动手：额度必须在复制之前判定
+        java.util.LinkedHashMap<java.nio.file.Path, Boolean> plan = new java.util.LinkedHashMap<>();
+        final long[] totalBytes = {0L};
+        final int[] skipped = {0};
+        try {
+            java.nio.file.Files.walkFileTree(source, java.util.Collections.emptySet(), Integer.MAX_VALUE,
+                    new java.nio.file.SimpleFileVisitor<java.nio.file.Path>() {
+                @Override
+                public java.nio.file.FileVisitResult preVisitDirectory(
+                        java.nio.file.Path dir, java.nio.file.attribute.BasicFileAttributes attrs) {
+                    if (dir.equals(source)) {
+                        return java.nio.file.FileVisitResult.CONTINUE;
+                    }
+                    if (dir.getFileName().toString().startsWith(".")) {
+                        return java.nio.file.FileVisitResult.SKIP_SUBTREE;
+                    }
+                    plan.put(dir, Boolean.TRUE);
+                    return java.nio.file.FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public java.nio.file.FileVisitResult visitFile(
+                        java.nio.file.Path file, java.nio.file.attribute.BasicFileAttributes attrs) {
+                    if (LocalProjectService.isIgnoredEntryName(file.getFileName().toString())) {
+                        return java.nio.file.FileVisitResult.CONTINUE;
+                    }
+                    if (attrs.isSymbolicLink() || !attrs.isRegularFile()) {
+                        skipped[0]++;
+                        return java.nio.file.FileVisitResult.CONTINUE;
+                    }
+                    plan.put(file, Boolean.FALSE);
+                    totalBytes[0] += attrs.size();
+                    return java.nio.file.FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public java.nio.file.FileVisitResult visitFileFailed(
+                        java.nio.file.Path file, java.io.IOException exc) {
+                    log.warn("导入目录时无法访问，跳过: {} ({})", file, exc.getMessage());
+                    skipped[0]++;
+                    return java.nio.file.FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (java.io.IOException e) {
+            throw new IllegalArgumentException(LangText.of("无法读取源目录: ", "Cannot read source directory: ") + source);
+        }
+
+        Long total = projectFileRepository.sumSizeByProjectId(projectId);
+        if (total != null && total + totalBytes[0] > PROJECT_TOTAL_SIZE_LIMIT) {
+            throw new IllegalArgumentException(LangText.of("项目文件总大小超过20GB限制", "Project file storage exceeds the 20GB limit"));
+        }
+
+        ProjectFile rootFolder = createFolder(projectId, parentId, topName.toString(), userId);
+        java.util.Map<java.nio.file.Path, Long> dirIds = new java.util.HashMap<>();
+        dirIds.put(source, rootFolder.getId());
+        List<ProjectFile> imported = new ArrayList<>();
+        for (java.util.Map.Entry<java.nio.file.Path, Boolean> entry : plan.entrySet()) {
+            java.nio.file.Path path = entry.getKey();
+            Long dirId = dirIds.get(path.getParent());
+            if (dirId == null) {
+                continue; // 父目录被跳过，整条分支一起放弃
+            }
+            if (Boolean.TRUE.equals(entry.getValue())) {
+                ProjectFile folder = createFolder(projectId, dirId, path.getFileName().toString(), userId);
+                dirIds.put(path, folder.getId());
+            } else {
+                imported.add(importLocalFile(projectId, dirId, path.toString(), userId));
+            }
+        }
+        return new ImportLocalResult(rootFolder, imported, skipped[0]);
     }
 
     /**

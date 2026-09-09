@@ -1,4 +1,4 @@
-// File tree (FileTree.vue): context menu, batch actions, confirm dialogs, drag hints, upload progress
+// File tree (FileTree.vue): context menu, batch actions, confirm dialogs, drag hints, local import
 export default {
   // Delete confirmation dialog
   hardDeleteTitle: 'Delete Permanently',
@@ -17,16 +17,7 @@ export default {
   // New folder
   newFolder: 'New Folder',
   folderNamePlaceholder: 'Enter a folder name',
-  // Upload dialog
-  uploadFile: 'Upload Files',
-  uploadDialogSubtitle: 'Choose a destination and select documents to upload',
-  uploadLocation: 'Destination',
   rootDirectory: 'Root Directory',
-  uploadFolder: 'Upload Folder',
-  selectedFilesCount: '{count} files selected',
-  clickToSelectFolder: 'Click to select a folder...',
-  selectFilesPlaceholder: 'Select files (multiple allowed)',
-  confirmUploadBtn: 'Upload',
   // Tag management
   manageTags: 'Manage Tags',
   currentTags: 'Current Tags',
@@ -67,21 +58,10 @@ export default {
   loading: 'Loading...',
   noFiles: 'No files yet',
   dropToRoot: 'Drop here to move to the root directory',
-  dropFilesToRoot: 'Release to upload to the project root',
+  dropFilesToRoot: 'Release to import into the project root',
   // Windowed rendering + reference count badge (dev-board#107 unit F3)
   loadMoreItems: 'Show more ({count} more items)',
   referencedCount: 'Referenced {count}',
-  // Upload status area
-  uploadListCount: 'Upload List ({count})',
-  cancelAll: 'Cancel All',
-  interrupted: 'Interrupted',
-  resumeUploadTitle: 'Resume Upload',
-  cancelUploadTitle: 'Cancel Upload',
-  uploadingProgress: 'Uploading... ({done}/{total})',
-  uploadsInterrupted: '{count} upload(s) interrupted',
-  uploadsInterruptedHint: 'Open the list to retry or remove',
-  etaAbout: 'about {time}',
-  etaDone: 'done',
   // Document compare
   twoDocsSelected: '2 documents selected',
   compareDocsBtn: 'Compare Documents',
@@ -128,23 +108,10 @@ export default {
   copySuccess: 'Copied',
   batchOpFailed: 'Batch operation failed',
   moveToRootSuccess: 'Moved to the root directory',
-  chooseFileFailed: 'Failed to select files',
-  selectFilesFirst: 'Please select files to upload',
-  uploadSuccessCount: '{count} files uploaded',
-  uploadFailCount: '{count} files failed to upload',
-  uploadPartialResult: '{success} succeeded, {fail} failed',
-  uploadFileFailedRetry: 'Failed to upload the file, please try again',
-  uploadFailed: 'Upload failed',
-  uploadingCannotOpen: 'This file is still uploading; it can be opened once the upload finishes',
-  chunkUnsupportedNonH5: 'Chunked resumable upload is not supported on this platform',
-  uploadInterruptedRetry: 'Upload interrupted, please try again',
-  uploadCanceled: 'Upload canceled',
-  allUploadsCanceled: 'All uploads canceled',
-  reselectAfterRefresh: 'The page was refreshed, please reselect the original file',
-  resumeUnsupportedApp: 'Reselecting to resume is not supported in the app',
-  selectNamedFile: 'Please select the file: {name}',
-  fileSizeMismatch: 'File size does not match',
-  resumingUpload: 'Resuming upload...',
-  refreshInterrupted: 'Interrupted by page refresh',
+  importSuccessCount: 'Imported {count} item(s)',
+  importPartialResult: '{success} succeeded, {fail} failed',
+  importFileFailedRetry: 'Failed to import the file, please try again',
+  importFailed: 'Import failed',
+  importDesktopOnly: 'Drag-in import is desktop only',
   unknownFolder: 'Unknown folder',
 }

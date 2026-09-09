@@ -75,7 +75,6 @@ export default {
   newDoc: 'New Document',
   newFolder: 'New Folder',
   batchSelect: 'Batch Select',
-  uploadFile: 'Upload File',
   batchDownload: 'Batch Download',
   sort: 'Sort',
   batchCopy: 'Batch Copy',

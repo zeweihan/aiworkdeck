@@ -1,4 +1,4 @@
-// 文件树（FileTree.vue）：右键菜单/批量操作/确认弹窗/拖拽提示/上传进度
+// 文件树（FileTree.vue）：右键菜单/批量操作/确认弹窗/拖拽提示/本机文件导入
 export default {
   // 删除确认弹窗
   hardDeleteTitle: '彻底删除',
@@ -17,16 +17,7 @@ export default {
   // 新建文件夹
   newFolder: '新建文件夹',
   folderNamePlaceholder: '请输入文件夹名称',
-  // 上传弹窗
-  uploadFile: '上传文件',
-  uploadDialogSubtitle: '选择目标位置并选择要上传的文档',
-  uploadLocation: '上传位置',
   rootDirectory: '根目录',
-  uploadFolder: '上传文件夹',
-  selectedFilesCount: '已选择 {count} 个文件',
-  clickToSelectFolder: '点击选择文件夹...',
-  selectFilesPlaceholder: '选择文件（支持多选）',
-  confirmUploadBtn: '确定上传',
   // 标签管理
   manageTags: '管理标签',
   currentTags: '当前标签',
@@ -67,21 +58,10 @@ export default {
   loading: '加载中...',
   noFiles: '暂无文件',
   dropToRoot: '拖拽到此处移至根目录',
-  dropFilesToRoot: '松开即上传到项目根目录',
+  dropFilesToRoot: '松开即导入到项目根目录',
   // 窗口化渲染 + 引用角标（dev-board#107 单元 F3）
   loadMoreItems: '展开更多（还有 {count} 项）',
   referencedCount: '引用 {count}',
-  // 上传状态区
-  uploadListCount: '上传列表 ({count})',
-  cancelAll: '取消全部',
-  interrupted: '已中断',
-  resumeUploadTitle: '继续上传',
-  cancelUploadTitle: '取消上传',
-  uploadingProgress: '正在上传... ({done}/{total})',
-  uploadsInterrupted: '{count} 个上传已中断',
-  uploadsInterruptedHint: '点开列表可重试或删除',
-  etaAbout: '约 {time}',
-  etaDone: '完成',
   // 文档对比
   twoDocsSelected: '已选择 2 个文档',
   compareDocsBtn: '对比文档',
@@ -128,23 +108,10 @@ export default {
   copySuccess: '复制成功',
   batchOpFailed: '批量操作失败',
   moveToRootSuccess: '移动到根目录成功',
-  chooseFileFailed: '选择文件失败',
-  selectFilesFirst: '请选择要上传的文件',
-  uploadSuccessCount: '成功上传 {count} 个文件',
-  uploadFailCount: '上传失败 {count} 个文件',
-  uploadPartialResult: '成功 {success} 个，失败 {fail} 个',
-  uploadFileFailedRetry: '文件上传失败，请重试',
-  uploadFailed: '上传失败',
-  uploadingCannotOpen: '文件还在上传中，传完才能打开',
-  chunkUnsupportedNonH5: '非H5端暂不支持分片断点续传',
-  uploadInterruptedRetry: '上传中断，请重试',
-  uploadCanceled: '已取消上传',
-  allUploadsCanceled: '已取消全部上传',
-  reselectAfterRefresh: '页面已刷新，请重新选择原文件',
-  resumeUnsupportedApp: 'App端暂不支持重新选择续传',
-  selectNamedFile: '请选择文件: {name}',
-  fileSizeMismatch: '文件大小不一致',
-  resumingUpload: '正在恢复上传...',
-  refreshInterrupted: '页面刷新导致中断',
+  importSuccessCount: '成功导入 {count} 个文件',
+  importPartialResult: '成功 {success} 个，失败 {fail} 个',
+  importFileFailedRetry: '文件导入失败，请重试',
+  importFailed: '导入失败',
+  importDesktopOnly: '拖入导入仅桌面端支持',
   unknownFolder: '未知文件夹',
 }

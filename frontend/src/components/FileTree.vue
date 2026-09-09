@@ -52,69 +52,6 @@
       </view>
     </view>
 
-    <!-- 3. Upload File Modal -->
-    <view v-if="showUploadDialog" class="awd-dialog-mask" @tap="showUploadDialog = false">
-      <view class="awd-dialog awd-dialog-large" @tap.stop>
-        <view class="awd-dialog-header">
-          <view class="header-row">
-            <text class="awd-dialog-title">{{ $t('fileTree.uploadFile') }}</text>
-            <text class="awd-dialog-subtitle">{{ $t('fileTree.uploadDialogSubtitle') }}</text>
-          </view>
-        </view>
-        <view class="awd-dialog-body">
-          <view class="form-group">
-            <text class="form-label">{{ $t('fileTree.uploadLocation') }}</text>
-            <view class="awd-field clickable" @tap="showFolderSelector = true">
-              <image src="/static/folder-closed.png" class="field-icon-img" mode="aspectFit" />
-              <text class="field-value">
-                {{ selectedUploadParent ? getFolderPath(selectedUploadParent) : $t('fileTree.rootDirectory') }}
-              </text>
-            </view>
-          </view>
-
-          <!-- H5 Folder Upload -->
-          <!-- #ifdef H5 -->
-          <view class="form-group">
-            <text class="form-label">{{ $t('fileTree.uploadFolder') }}</text>
-            <view class="awd-field clickable" @tap="triggerFolderUpload">
-               <view v-if="isFolderUpload && selectedFiles.length > 0" class="field-content-row">
-                  <text class="field-value">{{ $t('fileTree.selectedFilesCount', { count: selectedFiles.length }) }}</text>
-                  <text class="field-desc">({{ selectedFiles[0].relativePath ? selectedFiles[0].relativePath.split('/')[0] : $t('fileTree.folder') }})</text>
-               </view>
-               <view v-else>
-                  <text class="field-placeholder">{{ $t('fileTree.clickToSelectFolder') }}</text>
-               </view>
-            </view>
-          </view>
-          <!-- #endif -->
-
-          <view class="form-group">
-            <text class="form-label">{{ $t('fileTree.uploadFile') }}</text>
-            <view class="awd-field clickable" @tap="selectFiles">
-              <view v-if="selectedFiles.length === 0 || isFolderUpload">
-                <text class="field-placeholder">{{ $t('fileTree.selectFilesPlaceholder') }}</text>
-              </view>
-              <view v-else class="selected-files-list">
-                <text v-for="(file, index) in selectedFiles" :key="index" class="selected-file-tag">
-                  {{ file.name }}
-                </text>
-              </view>
-            </view>
-          </view>
-        </view>
-        <view class="awd-dialog-footer">
-          <view class="awd-btn awd-btn-secondary" @tap="cancelUpload">{{ $t('fileTree.cancel') }}</view>
-          <view
-            class="awd-btn awd-btn-primary"
-            :class="{ disabled: !selectedFiles.length }"
-            @tap="selectedFiles.length ? confirmUpload() : null"
-          >
-            {{ $t('fileTree.confirmUploadBtn') }}
-          </view>
-        </view>
-      </view>
-    </view>
-
     <!-- 4. Manage Tags Modal -->
     <view v-if="showTagEditDialog" class="awd-dialog-mask" @tap="showTagEditDialog = false">
       <view class="awd-dialog" @tap.stop>
@@ -212,7 +149,7 @@
           <view
             class="folder-tree-item root"
             :class="{ active: tempSelectedParent === null }"
-            @tap="selectUploadParent(null)"
+            @tap="selectTempParent(null)"
           >
             <view class="tree-expand-icon-wrapper" @tap.stop="toggleFolderSelectorExpand('root')">
               <image
@@ -236,7 +173,7 @@
             :key="folder.id"
             class="folder-tree-item"
             :class="{ active: tempSelectedParent === folder.id }"
-            @tap="selectUploadParent(folder.id)"
+            @tap="selectTempParent(folder.id)"
           >
             <view class="indent" :style="{ width: (folder.level * 20) + 'px' }"></view>
             <view class="tree-expand-icon-wrapper" @tap.stop="toggleFolderSelectorExpand(folder.id)">
@@ -468,13 +405,6 @@
             :style="getTagStripStyle(item.tags)"
           ></view>
           <view class="tree-item-content" :style="{ paddingLeft: getItemPadding(item) }">
-            <!-- Progress Background Bar -->
-            <view
-              v-if="uploadStatusMap[item.id]"
-              class="item-upload-progress-bg"
-              :style="{ width: (uploadStatusMap[item.id].progress || 0) + '%' }"
-            ></view>
-
             <view v-if="selectionMode" class="tree-checkbox" @tap.stop="toggleChecked(item)">
               <view
                 class="checkbox-box"
@@ -524,11 +454,8 @@
                 @keydown.stop="handleRenameKeydown"
               />
             </view>
-            <text v-else class="tree-item-name" :class="{ 'text-muted': uploadStatusMap[item.id] && uploadStatusMap[item.id].progress < 100 }">
+            <text v-else class="tree-item-name">
                {{ item.name }}
-               <text v-if="uploadStatusMap[item.id] && uploadStatusMap[item.id].progress < 100" style="font-size: 10px; color: #999; margin-left: 6px;">
-                 {{ Math.floor(uploadStatusMap[item.id].progress) }}%
-               </text>
                <text v-if="!item.isFolder && refCounts[item.id] > 0" class="tree-item-ref-count">
                  {{ $t('fileTree.referencedCount', { count: refCounts[item.id] }) }}
                </text>
@@ -579,18 +506,6 @@
 
             </view>
           </view>
-          <!-- 行内上传进度条 (Removed old one to avoid duplicate) -->
-          <view v-if="uploadStatusMap[item.id]" class="upload-progress-inline">
-            <view
-              class="upload-progress-inline-bar"
-              :style="{ width: (uploadStatusMap[item.id].progress || 0) + '%' }"
-            ></view>
-          </view>
-          <view v-if="uploadStatusMap[item.id]" class="upload-progress-inline-text">
-            {{ (uploadStatusMap[item.id].progress || 0) }}%
-            <text v-if="uploadStatusMap[item.id].speed"> · {{ formatSpeed(uploadStatusMap[item.id].speed) }}</text>
-            <text v-if="uploadStatusMap[item.id].eta !== null"> · {{ $t('fileTree.etaAbout', { time: formatEta(uploadStatusMap[item.id].eta) }) }}</text>
-          </view>
         </view>
         <!-- 窗口化「展开更多」占位行（dev-board#107 单元 F3）：文件夹子项超过 100 时，
              其余项先不挂进 DOM，点这一行一次性多渲染 200 项。 -->
@@ -627,13 +542,6 @@
             :style="getTagStripStyle(item.tags)"
           ></view>
           <view class="tree-item-content" :style="{ paddingLeft: getItemPadding(item) }">
-            <!-- Progress Background Bar -->
-            <view
-              v-if="uploadStatusMap[item.id]"
-              class="item-upload-progress-bg"
-              :style="{ width: (uploadStatusMap[item.id].progress || 0) + '%' }"
-            ></view>
-
             <view v-if="selectionMode" class="tree-checkbox" @tap.stop="toggleChecked(item)">
               <view
                 class="checkbox-box"
@@ -683,11 +591,8 @@
                 @keydown.stop="handleRenameKeydown"
               />
             </view>
-            <text v-else class="tree-item-name" :class="{ 'text-muted': uploadStatusMap[item.id] && uploadStatusMap[item.id].progress < 100 }">
+            <text v-else class="tree-item-name">
                {{ item.name }}
-               <text v-if="uploadStatusMap[item.id] && uploadStatusMap[item.id].progress < 100" style="font-size: 10px; color: #999; margin-left: 6px;">
-                 {{ Math.floor(uploadStatusMap[item.id].progress) }}%
-               </text>
                <text v-if="!item.isFolder && refCounts[item.id] > 0" class="tree-item-ref-count">
                  {{ $t('fileTree.referencedCount', { count: refCounts[item.id] }) }}
                </text>
@@ -766,103 +671,6 @@
 
     </view> <!-- Close tree-content -->
 
-    <!-- 独立于 Footer 的上传进度显示 -->
-    <view
-        v-if="isBatchUploading || Object.keys(uploadStatusMap).length > 0"
-        class="upload-status-footer-fixed"
-        style="padding: 10px; border-top: 1px solid var(--awd-border); background: var(--awd-surface); position: relative; flex-shrink: 0;"
-        @mouseenter="showUploadDetails = true"
-        @mouseleave="showUploadDetails = false"
-    >
-        <!-- 悬浮详情列表 -->
-        <view v-if="showUploadDetails" class="upload-details-popover" style="position: absolute; bottom: 100%; left: 0; right: 0; background: var(--awd-surface); border: 1px solid var(--awd-border); border-radius: 4px; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); max-height: 200px; overflow-y: auto; z-index: 100;">
-            <view class="popover-header" style="padding: 8px 12px; border-bottom: 1px solid #f0f0f0; display: flex; justify-content: space-between; align-items: center; background: #f9fafb;">
-                <text style="font-size: 12px; font-weight: bold; color: #333;">{{ $t('fileTree.uploadListCount', { count: Object.keys(uploadStatusMap).length }) }}</text>
-                <view style="display: flex; align-items: center; gap: 12px;">
-                    <text
-                        style="font-size: 11px; color: #ef4444; cursor: pointer; padding: 2px 8px; border: 1px solid #fecaca; border-radius: 4px; background: #fef2f2;"
-                        @tap.stop="cancelAllUploads"
-                    >{{ $t('fileTree.cancelAll') }}</text>
-                    <text style="font-size: 12px; color: #666; cursor: pointer;" @tap.stop="showUploadDetails = false">▼</text>
-                </view>
-            </view>
-            <view class="popover-list">
-                <view v-for="status in uploadStatusMap" :key="status.fileId" class="popover-item" style="padding: 8px 12px; border-bottom: 1px solid #f5f5f5; display: flex; align-items: center; justify-content: space-between;">
-                    <view style="display: flex; flex-direction: column; width: 85%;">
-                        <text style="font-size: 12px; color: #333; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;">{{ status.name }}</text>
-                        <!-- Error/Interrupted State -->
-                        <view v-if="status.error || status.status === 'interrupted'" style="display: flex; align-items: center; margin-top: 4px;">
-                             <text style="font-size: 10px; color: #ef4444;">{{ status.errorMessage || $t('fileTree.interrupted') }}</text>
-                        </view>
-                        <!-- Normal Progress -->
-                        <view v-else style="display: flex; align-items: center; margin-top: 4px;">
-                             <view style="width: 100%; height: 2px; background: #eee; border-radius: 2px; overflow: hidden;">
-                                 <view :style="{ width: status.progress + '%', background: '#2563eb', height: '100%' }"></view>
-                             </view>
-                             <text style="font-size: 10px; color: #999; margin-left: 6px;">{{ Math.floor(status.progress) }}%</text>
-                        </view>
-                    </view>
-                    <view style="display: flex; align-items: center;">
-                        <!-- Resume Button for Interrupted items -->
-                        <text
-                            v-if="status.error || status.status === 'interrupted'"
-                            class="btn-retry"
-                            @tap.stop="resumeUpload(status.fileId)"
-                            style="font-size: 14px; color: #2563eb; cursor: pointer; padding: 0 4px; margin-right: 4px;"
-                            :title="$t('fileTree.resumeUploadTitle')"
-                        >↻</text>
-                        <text class="btn-cancel" @tap.stop="cancelSingleUpload(status.fileId)" style="font-size: 16px; color: #999; cursor: pointer; padding: 0 4px;" :title="$t('fileTree.cancelUploadTitle')">×</text>
-                    </view>
-                </view>
-            </view>
-        </view>
-
-        <!-- Hidden input removed (using uni.chooseFile) -->
-
-        <view class="upload-status-content" style="display: flex; align-items: center; gap: 12px;">
-          <!-- 线性进度条 -->
-          <!-- <view style="flex: 1; max-width: 200px;">
-            <view style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-              <text style="font-size: 13px; font-weight: 600; color: #1e40af;">正在上传文件...</text>
-              <text style="font-size: 13px; font-weight: 600; color: #2563eb;">{{ Math.floor(globalUploadProgress || 0) }}%</text>
-            </view>
-            <view style="width: 100%; height: 8px; background: #e5e7eb; border-radius: 4px; overflow: hidden; position: relative;">
-              <view
-                :style="{ width: (globalUploadProgress || 0) + '%', background: 'linear-gradient(90deg, #3b82f6, #2563eb)', height: '100%', transition: 'width 0.3s ease' }"
-              ></view>
-            </view>
-            <view style="display: flex; justify-content: space-between; margin-top: 4px;">
-              <text style="font-size: 11px; color: #6b7280;">{{ uploadedCount }} / {{ totalUploadCount }} 文件</text>
-              <text v-if="uploadSpeed" style="font-size: 11px; color: #6b7280;">{{ formatSpeed(uploadSpeed) }}</text>
-            </view>
-          </view> -->
-          <!-- 圆形进度条 -->
-          <!-- dev-board#462：队列里只剩已中断的任务时不画进度环、也不说「正在上传」 -->
-          <template v-if="!showInterruptedOnly">
-            <CircularProgress
-              :percentage="globalUploadProgress || 0"
-              :size="48"
-              :strokeWidth="4"
-              color="#2563eb"
-            >
-              <text style="font-size: 12px; font-weight: bold;">{{ Math.floor(globalUploadProgress || 0) }}%</text>
-            </CircularProgress>
-            <view class="upload-status-text" style="display: flex; flex-direction: column; flex: 1;">
-               <text class="status-title" style="font-size: 12px; color: #333;">{{ $t('fileTree.uploadingProgress', { done: uploadedCount, total: totalUploadCount }) }}</text>
-               <text class="status-detail" v-if="globalUploadProgress !== null" style="font-size: 10px; color: #666;">{{ Math.floor(globalUploadProgress) }}%</text>
-            </view>
-          </template>
-          <view v-else class="upload-status-text" style="display: flex; flex-direction: column; flex: 1;">
-             <text class="status-title" style="font-size: 12px; color: #ef4444;">{{ $t('fileTree.uploadsInterrupted', { count: interruptedUploadCount }) }}</text>
-             <text class="status-detail" style="font-size: 10px; color: #666;">{{ $t('fileTree.uploadsInterruptedHint') }}</text>
-          </view>
-          <text
-            style="font-size: 11px; color: #ef4444; cursor: pointer; padding: 4px 10px; border: 1px solid #fecaca; border-radius: 4px; background: #fef2f2; flex-shrink: 0;"
-            @tap.stop="cancelAllUploads"
-          >{{ $t('fileTree.cancelAll') }}</text>
-        </view>
-    </view>
-
     <!-- 文档对比按钮（选中 2 个文档时显示） -->
     <view v-if="canCompareDocuments()" class="compare-bar">
       <view class="compare-bar-content">
@@ -878,20 +686,12 @@
 
     <!-- 底部工具栏 -->
     <view v-if="showFooterActions" class="tree-footer">
-       <!-- Upload status moved outside -->
-       <!-- 第一行：新建文件夹和新建Word -->
        <view class="footer-row">
         <button class="btn-new-folder" @tap="showCreateFolderDialog">
           {{ $t('fileTree.newFolder') }}
         </button>
         <button class="btn-new-word" @tap="handleCreateWord">
           {{ $t('fileTree.newWord') }}
-        </button>
-      </view>
-      <!-- 第二行：上传文件 -->
-      <view class="footer-row">
-        <button class="btn-upload" @tap="handleUploadFile">
-          {{ $t('fileTree.uploadFile') }}
         </button>
       </view>
     </view>
@@ -942,15 +742,14 @@
 
 <script>
 import { getProjectFiles, createFolder, createFile, renameFile, deleteFile, deleteFilePerm, restoreFile as restoreFileApi, getRecycleBinFiles, moveFile, batchDeleteFiles, batchMoveFiles, batchCopyFiles, getApiBaseUrl, getContributedTemplates, createFileFromContributedTemplate, importLocalFile } from '@/services/api.js'
-import { getAuthHeaders, getSessionId } from '@/utils/auth.js'
+import { getSessionId } from '@/utils/auth.js'
 import { host } from '@/services/host.js'
 import { findTopmostDeletedAncestor, summarizeDeleteResults } from '@/utils/fileTreeRecycle.js'
 import { groupByParent, buildTreeFromGroups } from '@/utils/fileTreeBuild.js'
 import { evidenceRefCounts } from '@/services/api.js'
 import { createRefCountsFetcher } from '@/utils/fileTreeRefCounts.js'
-import CircularProgress from '@/components/CircularProgress.vue'
 import { warmDragImage, applyDragImage } from '@/utils/dragImage.js'
-import { nativeDataTransfer, isExternalFileDrag, collectDroppedFiles, claimExternalDrop } from '@/utils/fileTreeExternalDrop.js'
+import { nativeDataTransfer, isExternalFileDrag, claimExternalDrop } from '@/utils/fileTreeExternalDrop.js'
 import FileTypeIcon from '@/components/FileTypeIcon.vue'
 import TagChip from '@/components/TagChip.vue'
 import TagSelector from '@/components/TagSelector.vue'
@@ -977,7 +776,6 @@ function parentIdsEqual(a, b) {
 export default {
   name: 'FileTree',
   components: {
-    CircularProgress,
     FileTypeIcon,
     TagChip,
     TagSelector,
@@ -998,7 +796,7 @@ export default {
       type: Boolean,
       default: false
     },
-    // 是否展示底部“新建/上传”操作区（默认展示；在 IDE 风格页面由父组件放到头部工具栏）
+    // 是否展示底部“新建”操作区（默认展示；在 IDE 风格页面由父组件放到头部工具栏）
     showFooterActions: {
       type: Boolean,
       default: true
@@ -1050,7 +848,6 @@ export default {
       checkedMap: {}, // { [id]: true }
       pendingBatchAction: null, // 'move'|'cut'|'copy'
       batchTargetParentId: null,
-      folderSelectorMode: 'upload', // 'upload' | 'batch'
       // 框选状态（H5）
       marquee: {
         active: false,
@@ -1061,15 +858,8 @@ export default {
         w: 0,
         h: 0
       },
-      // 上传文件相关
-      showUploadDialog: false,
-      isFolderUpload: false, // 是否是文件夹上传模式
       showFolderSelector: false,
-      selectedUploadParent: null,
-      selectedFiles: [], // 选中的文件列表
       tempSelectedParent: null, // 临时选中的父文件夹（用于文件夹选择器）
-      // 上传状态：fileId -> { name, size, uploaded, progress, speed, eta, startTime }
-      uploadStatusMap: {},
       // 文件夹选择器展开状态（id -> bool），默认 true
       folderSelectorExpanded: {},
 
@@ -1091,12 +881,6 @@ export default {
       sortOrder: 'asc', // 'asc' | 'desc'
       showSortMenu: false,
 
-      // Batch Upload Global Progress
-      batchUploadTotalSize: 0,
-      batchUploadFinishedSize: 0,
-      isBatchUploading: false,
-      showUploadDetails: false,
-      resumingFileId: null,
 
       // Delete Confirmation
       showDeleteDialog: false,
@@ -1215,26 +999,6 @@ export default {
     checkedCount() {
       return this.checkedIds.length
     },
-    // dev-board#462：已中断/出错的任务不算「正在上传」。此前计数直接数整张 uploadStatusMap，
-    // 队列里只剩死任务时底栏就永远停在「正在上传... (0/1)」+ 那个假的 0%。
-    // globalUploadProgress 早就是这么过滤的，计数与它同一个口径。
-    activeUploads() {
-        return Object.values(this.uploadStatusMap).filter(s => !s.error && s.status !== 'interrupted')
-    },
-    uploadedCount() {
-        return this.activeUploads.filter(s => s.progress === 100).length
-    },
-    totalUploadCount() {
-        return this.activeUploads.length
-    },
-    // 底栏在没有活跃任务时改说「N 个上传已中断」，条目本身留着（↻ 重试 / × 删除仍要够得着）
-    interruptedUploadCount() {
-        return Object.keys(this.uploadStatusMap).length - this.activeUploads.length
-    },
-    // 队列里只剩死任务时才换文案；批量上传途中队列瞬时清空（条目延迟 1s 删）仍走进度环
-    showInterruptedOnly() {
-        return this.totalUploadCount === 0 && this.interruptedUploadCount > 0
-    },
     marqueeStyle() {
       const m = this.marquee
       return {
@@ -1247,7 +1011,7 @@ export default {
     folders() {
       return this.allFiles.filter(f => f.isFolder)
     },
-    // 用于“选择上传位置”弹窗的文件夹树（扁平化列表）
+    // 用于“选择目标文件夹”弹窗的文件夹树（扁平化列表）
     // 始终返回数组，避免 undefined.length 报错
     folderTree() {
       if (!Array.isArray(this.allFiles) || this.allFiles.length === 0) {
@@ -1305,57 +1069,15 @@ export default {
          traverse(roots, 1)
        }
       return result
-    },
-    // 全局上传进度（0-100），如果没有上传任务则返回 null
-    globalUploadProgress() {
-      // 批量上传模式：使用总进度
-      if (this.isBatchUploading && this.batchUploadTotalSize > 0) {
-        let currentUploaded = 0
-        // 加上正在上传的文件的已上传量 (exclude interrupted)
-        Object.values(this.uploadStatusMap).forEach(info => {
-            if (info.status !== 'interrupted' && !info.error) {
-                currentUploaded += (info.uploaded || 0)
-            }
-        })
-        return Math.min(100, (this.batchUploadFinishedSize + currentUploaded) * 100 / this.batchUploadTotalSize)
-      }
-
-      // 已中断/出错的任务不参与进度计算（与 uploadedCount / totalUploadCount 同一个口径）
-      const active = this.activeUploads
-      if (active.length === 0) return null
-
-      let total = 0
-      let uploaded = 0
-      active.forEach(info => {
-        total += info.size
-        uploaded += info.uploaded
-      })
-      return total > 0 ? (uploaded / total) * 100 : 0
-    },
-    // 全局上传速度（所有正在上传文件的速度总和）
-    uploadSpeed() {
-      let totalSpeed = 0
-      Object.values(this.uploadStatusMap).forEach(info => {
-        if (!info.error && info.status !== 'interrupted' && info.speed) {
-          totalSpeed += info.speed
-        }
-      })
-      return totalSpeed
     }
   },
   watch: {
     projectId: {
       immediate: true,
       handler() {
-        // 切换项目时，清空当前上传状态，并恢复新项目的状态
-        this.uploadStatusMap = {}
-        this.isBatchUploading = false
-        this.batchUploadTotalSize = 0
-        this.batchUploadFinishedSize = 0
         // 「展开更多」的渲染上限与引用角标都是按项目的，换项目必须归零
         this.revealCounts = {}
         this.refCounts = {}
-        this.restoreUploadState()
         this.loadFiles()
       }
     },
@@ -1375,7 +1097,7 @@ export default {
       if (val) {
         // 重置为默认状态：根目录展开(undefined !== false)，其他收起(undefined !== true)
         this.folderSelectorExpanded = {}
-        this.tempSelectedParent = this.folderSelectorMode === 'batch' ? this.batchTargetParentId : this.selectedUploadParent
+        this.tempSelectedParent = this.batchTargetParentId
       }
     }
   },
@@ -1386,7 +1108,6 @@ export default {
     if (!this.selectionMode) {
       this.clearChecked()
     }
-    this.restoreUploadState()
     this.refreshProjectTags() // Tag Management
 
     // Listen for global drag events to show/hide root drop zone
@@ -2199,15 +1920,6 @@ export default {
     handleItemClick(item, event) {
       if (!item) return
 
-      // 上传中的占位行不许打开（dev-board#409）：字节还没到，磁盘上躺着的是 createFile
-      // 物化出来的空白模板，编辑器会把它当正文加载、自动保存再把空白写回去。模板里那条
-      // text-muted 只是视觉提示，真正的闸必须在这里——它才是 file-select 的唯一出口。
-      const uploading = this.uploadStatusMap[item.id]
-      if (uploading && uploading.progress < 100) {
-        uni.showToast({ title: this.$t('fileTree.uploadingCannotOpen'), icon: 'none' })
-        return
-      }
-
       const now = Date.now()
       // Double Click Detection: Toggle Folder
       if (this.lastClickItemId === item.id && (now - this.lastClickTime < 350)) {
@@ -2294,7 +2006,6 @@ export default {
       this.checkedMap = {}
       this.pendingBatchAction = null
       this.batchTargetParentId = null
-      this.folderSelectorMode = 'upload'
       this.$emit('checked-change', [])
     },
     openBatchAction(action) {
@@ -2315,7 +2026,6 @@ export default {
       }
 
       this.pendingBatchAction = action
-      this.folderSelectorMode = 'batch'
       this.batchTargetParentId = null
       this.showFolderSelector = true
     },
@@ -2658,26 +2368,6 @@ export default {
       if (t === 'pdf') return 'PDF'
       return 'F'
     },
-    // 进度条显示速度（格式化为 KB/s 或 MB/s）
-    formatSpeed(speedBytesPerSec) {
-      if (!speedBytesPerSec || speedBytesPerSec <= 0) return ''
-      const kb = speedBytesPerSec / 1024
-      if (kb < 1024) {
-        return kb.toFixed(1) + ' KB/s'
-      }
-      const mb = kb / 1024
-      return mb.toFixed(1) + ' MB/s'
-    },
-    // 格式化剩余时间（秒 => Xm Ys）
-    formatEta(etaSeconds) {
-      if (etaSeconds == null || etaSeconds <= 0) return this.$t('fileTree.etaDone')
-      const s = Math.round(etaSeconds)
-      const m = Math.floor(s / 60)
-      const rest = s % 60
-      if (m === 0) return `${rest}s`
-      if (rest === 0) return `${m}min`
-      return `${m}min ${rest}s`
-    },
     // #ifdef H5
     handleDragStart(e, item, index) {
       console.log('拖拽开始:', index)
@@ -2778,11 +2468,11 @@ export default {
       }
 
       // Case 0: 外部（Finder/资源管理器/微信）文件（dev-board#363）——磁盘上有、项目里没有，
-      // 走上传通道而不是移动。dataTransfer 要从原生事件上取（uni 重建的 <view> 事件没有它）。
+      // 走导入通道而不是移动。dataTransfer 要从原生事件上取（uni 重建的 <view> 事件没有它）。
       const externalDt = nativeDataTransfer(e)
       if (isExternalFileDrag(externalDt)) {
           if (e.stopPropagation) e.stopPropagation()
-          await this.uploadExternalDrop(externalDt, targetParentId)
+          await this.importExternalDrop(externalDt, targetParentId)
           return
       }
 
@@ -2908,11 +2598,11 @@ export default {
       const targetParentId = null // Move to root
       const newSortOrder = 0
 
-      // Case 0: 外部文件落到根投放区 → 上传到项目根（同 handleDrop 的 Case 0）
+      // Case 0: 外部文件落到根投放区 → 导入到项目根（同 handleDrop 的 Case 0）
       const externalDt = nativeDataTransfer(e)
       if (isExternalFileDrag(externalDt)) {
           if (e.stopPropagation) e.stopPropagation()
-          await this.uploadExternalDrop(externalDt, targetParentId)
+          await this.importExternalDrop(externalDt, targetParentId)
           return
       }
 
@@ -3015,54 +2705,34 @@ export default {
       }
       if (e.preventDefault) e.preventDefault()
       // 树空白区 = 项目根（与 onRootDrop 同口径）
-      await this.uploadExternalDrop(dt, null)
+      await this.importExternalDrop(dt, null)
     },
     resetExternalDrag() {
       this.externalDragActive = false
       this.rootDropActive = false
       this.dragOverIndex = -1
     },
-    // 落点确定之后统一走这里。分两条路：
-    // ① 桌面端（拿得到本机绝对路径）→ import-local，后端把那个文件复制进项目目录。
-    //    桌面端的项目就是本机的一个文件夹，「拖入 = 复制进来」本来就是用户的心理模型；
-    //    而走 HTTP 上传会先建一份空白模板行、再把已经失效的临时 blob 传上去——微信/
-    //    Finder 的拖拽临时文件在 createFile 那一趟往返之后常常就没了，Chromium 报
-    //    ERR_UPLOAD_FILE_CHANGED、xhr 只给一句 Network Error，三次重试全挂，用户目录里
-    //    留下一份 5KB 空白 docx（dev-board#409）。
-    // ② 其余（浏览器 H5、拿不到路径、整个文件夹拖进来）→ 仍走 confirmUpload（读
-    //    selectedFiles / selectedUploadParent，与上传对话框、暂存区 onStagingDropFiles
-    //    同一条路），分片续传/并发/建目录/完成后 loadFiles 全在那条通道里。
-    async uploadExternalDrop(dt, targetParentId) {
+    // 落点确定之后统一走这里（dev-board#513）。资源管理器只剩「导入本机路径」一条通道：
+    // 取 dataTransfer.files 里的**顶层条目**（每条可能是文件，也可能是目录），逐个解析出
+    // 本机绝对路径交给 import-local，让后端把它复制进项目目录，目录由后端递归建行。
+    // 不再用 webkitGetAsEntry 在前端展开目录——那是给 HTTP 分片上传通道准备的，
+    // 那条通道连同上传对话框、上传队列一起撤了（工作台是桌面端专属，H5 部署已于
+    // 2026-08-19 下线）。桌面端的项目本来就是本机的一个文件夹，「拖入 = 复制进来」
+    // 正是用户的心理模型；而老的上传路会先建一份空白模板行、再把已经失效的临时 blob
+    // 传上去（Chromium ERR_UPLOAD_FILE_CHANGED，用户目录里留下 5KB 空白 docx，
+    // dev-board#409）。
+    async importExternalDrop(dt, targetParentId) {
       const native = typeof window !== 'undefined' ? window.event : null
       if (!claimExternalDrop(native)) return
       this.resetExternalDrag()
-      // webkitGetAsEntry / files 必须在 drop 的同步阶段取，collectDroppedFiles 内部先快照再递归
-      const items = await collectDroppedFiles(dt)
-      if (!items.length) return
+      // files 必须在 drop 的同步阶段取——处理器一返回，dataTransfer 就作废了
+      const fileList = dt && dt.files ? Array.from(dt.files) : []
+      if (!fileList.length) return
       if (targetParentId != null && this.showTree) this.expandedFolders.add(targetParentId)
-
-      const localEntries = []
-      const rest = []
-      for (const item of items) {
-        // 整个文件夹拖进来的（relativePath 带目录前缀）一律留给 confirmUpload：
-        // import-local 一次只收一个文件、不建目录，让它们走这条路会把目录结构拍平。
-        const nested = !!(item.relativePath && item.relativePath.indexOf('/') !== -1)
-        const path = nested ? '' : this.resolveDroppedFilePath(item.fileObject)
-        if (path) localEntries.push({ item, path })
-        else rest.push(item)
-      }
-
-      if (localEntries.length) {
-        await this.importDroppedLocalFiles(localEntries, targetParentId)
-      }
-      if (!rest.length) return
-      this.selectedFiles = rest
-      this.selectedUploadParent = targetParentId
-      this.isFolderUpload = rest.some(f => f.relativePath && f.relativePath.indexOf('/') !== -1)
-      await this.confirmUpload()
+      await this.importDroppedLocalFiles(fileList, targetParentId)
     },
     // File → 本机绝对路径。只有桌面壳给得出（Electron 32 起 File.path 没了，走 webUtils），
-    // 浏览器端 host.fs 整个缺席，恒返回空串 = 退回上传通道。
+    // 浏览器端 host.fs 整个缺席，恒返回空串 = 这次拖入没有可导入的东西。
     resolveDroppedFilePath(fileObject) {
       try {
         if (!fileObject || !host.fs || typeof host.fs.getPathForFile !== 'function') return ''
@@ -3071,10 +2741,26 @@ export default {
         return ''
       }
     },
-    // 逐个调 import-local。不做乐观插行：这条路径没有「传输中」这个阶段，
-    // 后端返回时字节已经在项目目录里，loadFiles 一刷就是最终形态。
-    async importDroppedLocalFiles(entries, targetParentId) {
+    // 顶层条目逐个调 import-local。暂存区（stagingArea.js#onStagingDropFiles）也直接调它。
+    // 不做乐观插行：这条路径没有「传输中」这个阶段，后端返回时字节已经在项目目录里，
+    // loadFiles 一刷就是最终形态。
+    async importDroppedLocalFiles(fileList, targetParentId) {
+      const items = Array.from(fileList || [])
+      if (!items.length) return
       const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
+      const entries = []
+      let unresolved = 0
+      for (const fileObject of items) {
+        const path = this.resolveDroppedFilePath(fileObject)
+        if (path) entries.push({ name: (fileObject && fileObject.name) || '', path })
+        else unresolved++
+      }
+      // 解析不出本机路径 = 不在桌面壳里跑（工作台只有桌面端），这条路走不通，一次 drop 只说一遍
+      if (unresolved > 0) {
+        uni.showToast({ title: this.$t('fileTree.importDesktopOnly'), icon: 'none' })
+      }
+      if (!entries.length) return
+
       let successCount = 0
       let failCount = 0
       let lastError = ''
@@ -3085,16 +2771,16 @@ export default {
         } catch (e) {
           failCount++
           lastError = (e && e.message) || ''
-          console.error('导入本机文件失败:', entry.item.name, e)
+          console.error('导入本机文件失败:', entry.name, e)
         }
       }
       await this.loadFiles()
       if (failCount === 0) {
-        uni.showToast({ title: this.$t('fileTree.uploadSuccessCount', { count: successCount }), icon: 'success', duration: 2000 })
+        uni.showToast({ title: this.$t('fileTree.importSuccessCount', { count: successCount }), icon: 'success', duration: 2000 })
       } else if (successCount === 0) {
-        this.showErrorModal(lastError || this.$t('fileTree.uploadFileFailedRetry'), this.$t('fileTree.uploadFailed'))
+        this.showErrorModal(lastError || this.$t('fileTree.importFileFailedRetry'), this.$t('fileTree.importFailed'))
       } else {
-        uni.showToast({ title: this.$t('fileTree.uploadPartialResult', { success: successCount, fail: failCount }), icon: 'none', duration: 2500 })
+        uni.showToast({ title: this.$t('fileTree.importPartialResult', { success: successCount, fail: failCount }), icon: 'none', duration: 2500 })
       }
     },
     // 非H5端触摸拖拽方法
@@ -3166,78 +2852,13 @@ export default {
       this.draggingIndex = -1
       this.isDragging = false
     },
-    // 上传文件相关方法
-    handleUploadFile() {
-      this.selectedUploadParent = this.parentId
-      this.selectedFiles = []
-      this.isFolderUpload = false
-      this.showUploadDialog = true
-    },
-    // #ifdef H5
-    triggerFolderUpload() {
-      // 动态创建 input 元素
-      const input = document.createElement('input')
-      input.type = 'file'
-      input.webkitdirectory = true
-      input.directory = true // 非标准，兼容性
-      input.multiple = true
-
-      input.onchange = (e) => {
-        const files = Array.from(e.target.files || [])
-        if (files.length === 0) return
-
-        this.isFolderUpload = true
-        this.selectedFiles = files.map(f => ({
-          name: f.name,
-          size: f.size,
-          path: URL.createObjectURL(f), // 生成临时预览地址
-          fileObject: f, // 保留原始 File 对象用于上传
-          relativePath: f.webkitRelativePath || f.name // 保留相对路径结构
-        }))
-      }
-
-      input.click()
-    },
-    // #endif
-    selectFiles() {
-      // uni-app 文件选择
-      uni.chooseFile({
-        count: 9, // 最多选择9个文件
-        count: 9, // 最多选择9个文件
-        success: (res) => {
-          this.isFolderUpload = false
-          this.selectedFiles = res.tempFiles.map(file => ({
-            name: file.name,
-            path: file.path,
-            size: file.size,
-            relativePath: file.name, // 普通文件上传只有文件名
-            fileObject: file
-          }))
-        },
-        fail: (err) => {
-          console.error('选择文件失败:', err)
-          uni.showToast({
-            title: this.$t('fileTree.chooseFileFailed'),
-            icon: 'none'
-          })
-        }
-      })
-    },
-    removeFile(index) {
-      this.selectedFiles.splice(index, 1)
-    },
-    selectUploadParent(parentId) {
+    selectTempParent(parentId) {
       this.tempSelectedParent = parentId
     },
     confirmFolderSelection() {
-      if (this.folderSelectorMode === 'batch') {
-        this.batchTargetParentId = this.tempSelectedParent
-        this.showFolderSelector = false
-        this.executeBatchAction()
-        return
-      }
-      this.selectedUploadParent = this.tempSelectedParent
+      this.batchTargetParentId = this.tempSelectedParent
       this.showFolderSelector = false
+      this.executeBatchAction()
     },
 
     // 设置截止日（project_task）
@@ -3443,784 +3064,6 @@ export default {
       }
       return path.join(' / ')
     },
-    cancelUpload() {
-      this.showUploadDialog = false
-      this.selectedFiles = []
-      this.selectedUploadParent = null
-    },
-    async confirmUpload() {
-      if (this.selectedFiles.length === 0) {
-        uni.showToast({
-          title: this.$t('fileTree.selectFilesFirst'),
-          icon: 'none'
-        })
-        return
-      }
-
-      if (!this.projectId) {
-        uni.showToast({
-          title: this.$t('fileTree.projectIdMissing'),
-          icon: 'none'
-        })
-        return
-      }
-
-      try {
-        const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
-        if (isNaN(projectId)) {
-          throw new Error(this.$t('fileTree.projectIdInvalid'))
-        }
-        const files = [...this.selectedFiles]
-        const rootParentId = this.selectedUploadParent
-
-        // 关闭弹窗，清空选择
-        this.showUploadDialog = false
-        this.selectedFiles = []
-        this.selectedUploadParent = null
-        this.isFolderUpload = false // 重置模式
-
-        // 文件夹路径缓存 (path -> folderId)
-        // key: relative path (e.g., "A", "A/B"), value: folderId
-        const dirCache = { "": rootParentId }
-
-        // Helper to get directory path
-        const getDirName = (path) => {
-           if (!path) return ''
-           // Windows path separator handling? Usually webkitRelativePath uses '/'
-           const parts = path.split('/')
-           if (parts.length <= 1) return ''
-           parts.pop() // remove filename
-           return parts.join('/')
-        }
-
-        // 1. 收集所有需要创建的目录
-        const dirsToCreate = new Set()
-        // Calculate total size for batch progress
-        let totalSize = 0
-        files.forEach(f => {
-           totalSize += (f.size || 0)
-           if (f.relativePath) {
-              const dir = getDirName(f.relativePath)
-              if (dir) {
-                 // 添加所有父级目录
-                 const parts = dir.split('/')
-                 let current = ''
-                 parts.forEach(p => {
-                    current = current ? `${current}/${p}` : p
-                    dirsToCreate.add(current)
-                 })
-              }
-           }
-        })
-
-        // Initialize or update batch progress
-        this.isBatchUploading = true
-        if (!this.batchUploadTotalSize) this.batchUploadTotalSize = 0
-        this.batchUploadTotalSize += totalSize
-        // this.batchUploadFinishedSize already exists, don't reset it
-        if (!this.batchUploadFinishedSize) this.batchUploadFinishedSize = 0
-
-        // 统计成功和失败的数量
-        let successCount = 0
-        let failCount = 0
-
-        // 2. 排序：短路径在前（确保先创建父目录）
-        const sortedDirs = Array.from(dirsToCreate).sort((a, b) => a.split('/').length - b.split('/').length)
-
-        // 3. 逐个创建目录
-        for (const dirPath of sortedDirs) {
-           if (dirCache[dirPath] !== undefined) continue // 已存在
-
-           const parts = dirPath.split('/')
-           const folderName = parts.pop()
-           const parentPath = parts.join('/')
-           const parentId = dirCache[parentPath]
-
-           try {
-              const newFolder = await createFolder(projectId, parentId, folderName)
-              if (newFolder && newFolder.id) {
-                dirCache[dirPath] = newFolder.id
-
-                // 乐观更新：如果新建的文件夹在当前视图下，立即加入显示列表
-                // 注意：parentId可能是null或数字，this.parentId可能是null或数字
-                const isCurrentDir = (parentId === this.parentId) ||
-                                     (parentId == null && this.parentId == null) ||
-                                     (String(parentId) === String(this.parentId))
-                if (isCurrentDir) {
-                    this.files.unshift(newFolder)
-                    // 同时加入 activeFolderId 对应的缓存（如果需要）但 loadFiles 稍后会刷新
-                }
-                this.allFiles.unshift(newFolder)
-              } else {
-                throw new Error('创建文件夹未返回ID')
-              }
-           } catch (e) {
-              console.warn(`尝试创建文件夹 ${folderName} 失败，尝试查找已存在的...`, e)
-              try {
-                  // 如果创建失败（可能是同名），尝试查找已存在的文件夹
-                  const siblings = await getProjectFiles(projectId, parentId)
-                  const existing = siblings.find(f => f.isFolder && f.name === folderName)
-                  if (existing) {
-                      dirCache[dirPath] = existing.id
-                  } else {
-                      // 确实无法创建也找不到，回退到父目录
-                      console.error(`无法创建也无法找到文件夹 ${folderName}`)
-                      dirCache[dirPath] = parentId
-                  }
-              } catch (innerE) {
-                  console.error('查找已存在文件夹失败', innerE)
-                  dirCache[dirPath] = parentId // Fallback
-              }
-           }
-        }
-
-      // 4. 准备文件队列并展示“等待中”状态
-        const uploadQueue = []
-        // Ensure file objects cache is initialized
-        if (!this.uploadFileObjects) {
-             this.uploadFileObjects = {}
-        }
-
-        files.forEach((file, index) => {
-            const tempId = `pending_${Date.now()}_${index}`
-            this.uploadStatusMap[tempId] = {
-                fileId: tempId,
-                name: file.name,
-                size: file.size || 0,
-                uploaded: 0,
-                progress: 0,
-                status: 'pending', // Special status
-                xhr: null
-            }
-            // CACHE THE FILE OBJECT for resume support without re-selection
-            this.uploadFileObjects[tempId] = file
-            uploadQueue.push({ file, tempId })
-        })
-        this.saveUploadState()
-
-        // 5. 并发上传控制
-        const CONCURRENCY = 3
-        let activeCount = 0
-        let currentIndex = 0
-
-        const processNext = async () => {
-             // Check if we are done with the queue
-             if (currentIndex >= uploadQueue.length) {
-                 if (activeCount === 0) {
-                     // All done
-                     this.isBatchUploading = false
-                     this.batchUploadFinishedSize = 0 // Reset only when all done
-                     this.uploadFileObjects = {} // Clean up cache when batch done (or keep? better keep for failed items)
-                     // Actually, we should only clean up successful ones.
-                     // But for now, let's just trigger loadFiles
-                     this.loadFiles()
-
-                     // 显示批量上传完成提示，包含成功和失败的统计
-                     const totalCount = uploadQueue.length
-                     if (failCount === 0) {
-                       // 全部成功
-                       uni.showToast({
-                         title: this.$t('fileTree.uploadSuccessCount', { count: successCount }),
-                         icon: 'success',
-                         duration: 2000
-                       })
-                     } else if (successCount === 0) {
-                       // 全部失败
-                       uni.showToast({
-                         title: this.$t('fileTree.uploadFailCount', { count: failCount }),
-                         icon: 'error',
-                         duration: 2000
-                       })
-                     } else {
-                       // 部分成功
-                       uni.showToast({
-                         title: this.$t('fileTree.uploadPartialResult', { success: successCount, fail: failCount }),
-                         icon: successCount > failCount ? 'success' : 'none',
-                         duration: 2500
-                       })
-                     }
-                 }
-                 return
-             }
-
-             activeCount++
-             const { file, tempId } = uploadQueue[currentIndex++]
-
-             const dirPath = getDirName(file.relativePath || '')
-             // Resolve Parent ID: if we created a folder, use it; otherwise use root
-             const targetParentId = dirCache[dirPath] !== undefined ? dirCache[dirPath] : rootParentId
-
-             try {
-                 // Update cache with real ID later?
-                 // uploadSingleFile returns the new fileId, but we might need to map tempId -> realId in cache?
-                 // Actually uploadSingleFile handles the transition.
-                 await this.uploadSingleFile(projectId, file, targetParentId, tempId)
-                 successCount++ // 成功计数
-             } catch (error) {
-                 console.error('上传文件失败:', error)
-                 failCount++ // 失败计数
-                 // 显示错误提示（使用模态对话框）
-                 this.showErrorModal(error.message || this.$t('fileTree.uploadFileFailedRetry'), this.$t('fileTree.uploadFailed'))
-                 // Keep the error in status map so user can see it
-                 if (this.uploadStatusMap[tempId]) {
-                      this.uploadStatusMap[tempId].status = 'interrupted'
-                      this.uploadStatusMap[tempId].error = true
-                      this.uploadStatusMap[tempId].errorMessage = error.message || this.$t('fileTree.uploadFailed')
-                      this.saveUploadState()
-                 }
-                 // Do not delete from map, allow retry
-             } finally {
-                 activeCount--
-                 processNext()
-             }
-        }
-
-        // Start initial batch
-        for (let i = 0; i < Math.min(CONCURRENCY, uploadQueue.length); i++) {
-             processNext()
-        }
-
-      } catch (error) {
-        console.error('上传文件失败:', error)
-        this.showErrorModal(error.message || this.$t('fileTree.uploadFileFailedRetry'), this.$t('fileTree.uploadFailed'))
-        this.isBatchUploading = false
-      }
-    },
-    // 支持分片断点续传的上传逻辑
-    async uploadSingleFile(projectId, file, parentId, pendingTempId = null) {
-      // 0. 检查是否存在同名且处于失败状态的文件记录，如果存在则先删除
-      try {
-        const failedFile = this.allFiles.find(f =>
-          f.name === file.name &&
-          f.parentId === parentId &&
-          f._isUploading === true &&
-          this.uploadStatusMap[f.id] &&
-          (this.uploadStatusMap[f.id].error || this.uploadStatusMap[f.id].status === 'interrupted')
-        )
-        if (failedFile) {
-          console.log('发现同名失败文件记录，先删除:', failedFile.name)
-          await deleteFile(projectId, failedFile.id)
-          // 从前端列表和状态中移除
-          this.files = this.files.filter(f => f.id !== failedFile.id)
-          this.allFiles = this.allFiles.filter(f => f.id !== failedFile.id)
-          delete this.uploadStatusMap[failedFile.id]
-          this.saveUploadState()
-        }
-      } catch (e) {
-        console.warn('检查失败文件记录时出错，继续上传:', e)
-      }
-
-      // 1. 创建文件记录
-      const fileType = this.getFileTypeFromName(file.name)
-      const wpsFileId = `project_${projectId}_doc_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`
-
-      // 乐观更新：仅当文件属于当前视图（parentId匹配）时，才添加到前端列表
-      const isCurrentDir = (parentId === this.parentId) ||
-                           (parentId == null && this.parentId == null) ||
-                           (String(parentId) === String(this.parentId))
-
-      // 并发批量上传（CONCURRENCY=3）时，processNext() 在同一 tick 里背靠背调用
-      // 本方法：每次调用在真正 await createFile(...) 之前都是纯同步代码，三次
-      // Date.now() 落在同一毫秒里完全可能拿到一模一样的值。撞车的两行会共享同一
-      // 个 id——Vue :key 靠它做身份识别，进度/文件名会在两行之间串掉，且
-      // findIndex(f => f.id === tempId) 只命中第一条，另一条永远等不到真实记录
-      // 替换，卡死在"正在上传"。叠加一个自增序号，保证同一毫秒内也互不相同。
-      const tempId = Date.now() * 1000 + (this._uploadTempIdSeq = ((this._uploadTempIdSeq || 0) + 1) % 1000)
-      // Transfer file object from pending cache to new ID cache
-      if (pendingTempId && this.uploadFileObjects[pendingTempId]) {
-           this.uploadFileObjects[tempId] = this.uploadFileObjects[pendingTempId]
-           delete this.uploadFileObjects[pendingTempId]
-      } else {
-           // Direct upload case
-           if (!this.uploadFileObjects) this.uploadFileObjects = {}
-           this.uploadFileObjects[tempId] = file
-      }
-
-      const tempFileObj = {
-          id: tempId,
-          projectId,
-          parentId,
-          name: file.name,
-          isFolder: false, // Uploaded items via this method are files. Folders are created separately.
-          fileType: fileType,
-          size: file.size,
-          createTime: new Date().toISOString(),
-          updateTime: new Date().toISOString(),
-          sortOrder: 0, // 暂时置顶
-          wpsFileId: wpsFileId,
-          _isUploading: true // 标记为正在上传
-      }
-
-      // 添加到本地列表，实现“立即刷新”效果
-      if (isCurrentDir) {
-           this.files.unshift(tempFileObj)
-      }
-      // allFiles 始终添加（如果维护完整树）
-      this.allFiles.unshift(tempFileObj)
-
-      // 真实创建请求
-      let createdFile
-      try {
-          createdFile = await createFile(
-            projectId,
-            parentId,
-            file.name,
-            fileType,
-            file.size,
-            null,
-            wpsFileId
-          )
-          // 替换临时生成的 ID
-          if (isCurrentDir) {
-              const idx = this.files.findIndex(f => f.id === tempId)
-              if (idx !== -1) {
-                  const updated = { ...createdFile, _isUploading: true }
-                  this.files[idx] = updated
-              }
-          }
-          const allIdx = this.allFiles.findIndex(f => f.id === tempId)
-          if (allIdx !== -1) {
-              const updated = { ...createdFile, _isUploading: true }
-              this.allFiles[allIdx] = updated
-          }
-      } catch (e) {
-          // 创建失败，移除临时文件
-          if (isCurrentDir) {
-              this.files = this.files.filter(f => f.id !== tempId)
-          }
-          this.allFiles = this.allFiles.filter(f => f.id !== tempId)
-          throw e
-      }
-
-      // 如果有挂起的临时任务状态，先移除，再添加真实的
-      if (pendingTempId && this.uploadStatusMap[pendingTempId]) {
-          delete this.uploadStatusMap[pendingTempId]
-      }
-
-      // 初始化进度状态
-      this.uploadStatusMap[createdFile.id] = {
-        fileId: createdFile.id,
-        wpsFileId: wpsFileId,
-        name: createdFile.name,
-        size: file.size || 0,
-        uploaded: 0,
-        progress: 0,
-        speed: 0,
-        eta: null,
-        startTime: Date.now(),
-        // 保存原始 File 对象用于续传 (H5 only since we can hold ref)
-        // 注意：页面刷新后 File 对象会丢失，需要用户重新选择，或暂时只支持单次会话续传
-        // 如需跨刷新续传，H5 无法直接获取 File，但 requestFileSystem API 支持有限。
-        // 这里主要支持“网络中断/暂停”后的续传，以及页面不刷新情况下的重试。
-        fileObject: file.fileObject || file // Prefer raw File object
-      }
-
-      // 保存到 localStorage 以便刷新后知道有哪些断点任务（虽然没 File 对象传不了，但可以提示）
-      this.saveUploadState()
-
-      return this.processChunkedUpload(createdFile.id, file.fileObject || file, createdFile)
-    },
-
-    async processChunkedUpload(fileId, fileObject, fileRecord) {
-       const status = this.uploadStatusMap[fileId]
-       if (!status) return
-
-       const CHUNK_SIZE = 5 * 1024 * 1024 // 5MB chunks
-       const TIMEOUT = 60000 // 60s timeout
-       const MAX_RETRIES = 3 // Retry 3 times
-
-       try {
-           // 1. 获取服务器已上传大小 (Check server status)
-           let offset = 0
-           try {
-               const res = await uni.request({
-                   url: `${this.getApiBaseUrl()}/api/files/${status.wpsFileId}/upload-status`,
-                   header: this.getAuthHeaders(),
-                   method: 'GET'
-               })
-               if (res.data && res.data.code === 0 && res.data.data) {
-                   offset = res.data.data.uploadedSize || 0
-               }
-           } catch (e) {
-               console.warn('获取断点状态失败，将从头上传', e)
-           }
-
-           if (offset >= status.size) {
-               this.completeUpload(fileId)
-               return
-           }
-
-           status.uploaded = offset
-           this.updateProgress(fileId, offset, status.size)
-
-           // 2. 开始分片上传
-           while (offset < status.size) {
-               const end = Math.min(offset + CHUNK_SIZE, status.size)
-               const chunk = fileObject.slice(offset, end)
-
-               // Retry loop
-               let retryCount = 0
-               let success = false
-
-               while (!success && retryCount < MAX_RETRIES) {
-                   try {
-                       await new Promise((resolve, reject) => {
-                   let isTimeout = false
-                   const timer = setTimeout(() => {
-                       isTimeout = true
-                       reject(new Error('Upload timeout'))
-                   }, TIMEOUT)
-
-                   // 使用 uni.request 发送 ArrayBuffer (H5)
-                   // 注意：uni.uploadFile 也可以，但 headers控制较弱，且通常用于 multipart
-                   // 这里改用 request 发送二进制流
-
-                   // #ifdef H5
-                   const xhr = new XMLHttpRequest()
-                   // 保存 XHR 以便取消
-                   if (this.uploadStatusMap[fileId]) {
-                      this.uploadStatusMap[fileId].xhr = xhr
-                   }
-
-                   xhr.open('POST', `${this.getApiBaseUrl()}/api/files/${status.wpsFileId}/upload`)
-
-                   // getAuthHeaders() 里带着 application/json（它是给 uni.request 的
-                   // JSON 接口用的）。XHR 的 setRequestHeader 对同名头是「追加」不是
-                   // 「覆盖」，照抄一遍再设 octet-stream 会发出
-                   // "application/json, application/octet-stream" 这种自相矛盾的头。
-                   // 与 api.js 里其余裸 body 请求同口径：只带 X-Session-Id。
-                   const headers = this.getAuthHeaders()
-                   for (const key in headers) {
-                       if (key.toLowerCase() === 'content-type') continue
-                       xhr.setRequestHeader(key, headers[key])
-                   }
-                   xhr.setRequestHeader('Content-Type', 'application/octet-stream')
-                   xhr.setRequestHeader('X-File-Offset', offset.toString())
-                   xhr.setRequestHeader('X-File-Total-Size', status.size.toString()) // Notify backend of total size for RAG trigger
-
-                   xhr.upload.onprogress = (e) => {
-                       if (e.lengthComputable) {
-                           // 块内进度
-                           const chunkProgress = e.loaded
-                           this.updateProgress(fileId, offset + chunkProgress, status.size)
-                       }
-                   }
-
-                   xhr.onload = () => {
-                       clearTimeout(timer)
-                       if (xhr.status >= 200 && xhr.status < 300) {
-                           resolve()
-                       } else {
-                           reject(new Error(`HTTP ${xhr.status}`))
-                       }
-                   }
-
-                   xhr.onabort = () => {
-                       clearTimeout(timer)
-                       reject(new Error('Aborted'))
-                   }
-
-                   xhr.onerror = () => {
-                       clearTimeout(timer)
-                       reject(new Error('Network Error'))
-                   }
-
-                   xhr.send(chunk)
-                   // #endif
-
-                   // #ifndef H5
-                   // 非H5端暂不支持流式分片，回退到普通上传或使用 uni.uploadFile 模拟
-                   // 由于非H5端 FileSlice 支持有限，这里简单处理：
-                   // 如果是大文件，建议使用特定平台的原生上传插件
-                   // 这里暂且回退到整文件上传或报错
-                   reject(new Error(this.$t('fileTree.chunkUnsupportedNonH5')))
-                   // #endif
-               })
-
-               success = true // Mark as success if promise resolves
-
-               } catch (e) {
-                   console.warn(`Chunk upload failed, attempt ${retryCount + 1}/${MAX_RETRIES}`, e)
-                   retryCount++
-                   if (retryCount >= MAX_RETRIES) {
-                       throw e // Rethrow if max retries reached
-                   }
-                   // Optional: add delay before retry
-                   await new Promise(r => setTimeout(r, 1000 * retryCount))
-               }
-           } // End retry loop
-
-           offset = end
-           this.saveUploadState()
-       }
-       this.completeUpload(fileId)
-
-       } catch (error) {
-           console.error('分片上传失败:', error)
-           // 显示具体的错误信息（使用模态对话框）
-           const errorMessage = error.message || this.$t('fileTree.uploadInterruptedRetry')
-           this.showErrorModal(errorMessage, this.$t('fileTree.uploadFailed'))
-           status.error = true
-           status.errorMessage = errorMessage
-           this.saveUploadState()
-           // 重试用尽了才走到这里：createFile 已经按模板物化出一份空白 docx，留着它
-           // 就是在用户的项目目录里放一个 5KB 的假文件（点开还能被编辑器当正文加载、
-           // 自动保存再写回磁盘）。行删掉，重传由上传对话框重新走一遍 createFile。
-           // dev-board#409。
-           await this.discardFailedUpload(fileId)
-       }
-    },
-
-    // 上传彻底失败后的清理：删占位行 + 清进度状态 + 从两个列表里摘掉。
-    async discardFailedUpload(fileId) {
-        try {
-            const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
-            // 占位行从来没有过正文，直接永久删，别让一份空白 docx 再躺进回收站
-            if (projectId && fileId) await deleteFilePerm(projectId, fileId)
-        } catch (e) {
-            console.warn('清理上传失败的占位文件时出错:', e)
-        }
-        delete this.uploadStatusMap[fileId]
-        this.files = this.files.filter(f => f.id !== fileId)
-        this.allFiles = this.allFiles.filter(f => f.id !== fileId)
-        this.saveUploadState()
-    },
-
-    updateProgress(fileId, uploaded, total) {
-        const status = this.uploadStatusMap[fileId]
-        if (!status) return
-
-        status.uploaded = uploaded
-        status.progress = (uploaded / total) * 100
-
-        // Calculate speed
-        const now = Date.now()
-        const diffTime = (now - status.startTime) / 1000
-        if (diffTime > 0) {
-            status.speed = uploaded / diffTime
-        }
-
-        this.$forceUpdate()
-    },
-
-    completeUpload(fileId) {
-        const status = this.uploadStatusMap[fileId]
-        if (status) {
-            status.progress = 100
-            status.uploaded = status.size
-            this.batchUploadFinishedSize += status.size
-            // 不再显示单个文件的成功提示，等待批量完成后统一提示
-        }
-
-        // Remove from map after delay
-        setTimeout(() => {
-            if (this.uploadStatusMap[fileId]) {
-                delete this.uploadStatusMap[fileId]
-                this.saveUploadState()
-
-                // 去掉 _isUploading 标记
-                const idx = this.files.findIndex(f => f.id === fileId)
-                if (idx !== -1) {
-                    this.files[idx]._isUploading = undefined
-                }
-            }
-        }, 1000)
-    },
-
-    cancelSingleUpload(fileId) {
-        const status = this.uploadStatusMap[fileId]
-        if (status) {
-            // Abort XHR
-            if (status.xhr) {
-                status.xhr.abort()
-            }
-
-            // Remove from map
-            delete this.uploadStatusMap[fileId]
-            this.saveUploadState()
-
-            // Optimistic UI cleanup
-            // Remove from this.files if present
-            const idx = this.files.findIndex(f => f.id === fileId)
-            if (idx !== -1) {
-                this.files.splice(idx, 1) // Remove it completely like a delete
-            }
-            // Remove from allFiles
-            const allIdx = this.allFiles.findIndex(f => f.id === fileId)
-            if (allIdx !== -1) {
-                this.allFiles.splice(allIdx, 1)
-            }
-
-            uni.showToast({
-                title: this.$t('fileTree.uploadCanceled'),
-                icon: 'none'
-            })
-        }
-    },
-
-    cancelAllUploads() {
-        const fileIds = Object.keys(this.uploadStatusMap)
-        if (fileIds.length === 0) return
-
-        fileIds.forEach(fileId => {
-            const status = this.uploadStatusMap[fileId]
-            if (status) {
-                // Abort XHR if still running
-                if (status.xhr) {
-                    status.xhr.abort()
-                }
-                // Remove from files list
-                const idx = this.files.findIndex(f => f.id === fileId)
-                if (idx !== -1) {
-                    this.files.splice(idx, 1)
-                }
-                const allIdx = this.allFiles.findIndex(f => f.id === fileId)
-                if (allIdx !== -1) {
-                    this.allFiles.splice(allIdx, 1)
-                }
-            }
-        })
-
-        // Clear all upload status
-        this.uploadStatusMap = {}
-        this.isBatchUploading = false
-        this.batchUploadTotalSize = 0
-        this.batchUploadFinishedSize = 0
-        this.saveUploadState()
-
-        uni.showToast({
-            title: this.$t('fileTree.allUploadsCanceled'),
-            icon: 'none'
-        })
-    },
-
-    resumeUpload(fileId) {
-        this.resumingFileId = fileId
-
-        // Strategy 1: Check In-Memory Cache (No user interaction needed)
-        if (this.uploadFileObjects && this.uploadFileObjects[fileId]) {
-            console.log('Resuming from cache flow', fileId)
-            const cachedFile = this.uploadFileObjects[fileId]
-            this.handleResumeFile(cachedFile)
-            return
-        }
-
-        // Strategy 2: Fallback to File Selection (If refreshed)
-        // #ifdef H5
-        uni.showToast({ title: this.$t('fileTree.reselectAfterRefresh'), icon: 'none' })
-        uni.chooseFile({
-            count: 1,
-            success: (res) => {
-                const files = res.tempFiles
-                if (files && files.length > 0) {
-                     this.handleResumeFile(files[0])
-                }
-            },
-            fail: (err) => {
-                console.warn('Choose file failed', err)
-            }
-        })
-        // #endif
-
-        // #ifndef H5
-        uni.showToast({ title: this.$t('fileTree.resumeUnsupportedApp'), icon: 'none' })
-        // #endif
-    },
-
-    handleResumeFile(file) {
-        if (!file || !this.resumingFileId) return
-
-        const status = this.uploadStatusMap[this.resumingFileId]
-        if (!status) return
-
-        // Validation: Verify if same file
-        if (file.name !== status.name || Math.abs(file.size - status.size) > 1024) {
-             if (file.name !== status.name) {
-                 uni.showToast({ title: this.$t('fileTree.selectNamedFile', { name: status.name }), icon: 'none' })
-                 return
-             }
-             if (file.size !== status.size) {
-                 uni.showToast({ title: this.$t('fileTree.fileSizeMismatch'), icon: 'none' })
-                 return
-             }
-        }
-
-        // Reset status
-        this.$set(this.uploadStatusMap, this.resumingFileId, {
-            ...status,
-            error: false,
-            status: 'pending',
-            errorMessage: null,
-            xhr: null
-        })
-
-        // Restart upload
-        uni.showToast({ title: this.$t('fileTree.resumingUpload'), icon: 'none' })
-        this.processChunkedUpload(this.resumingFileId, file)
-
-        this.resumingFileId = null
-    },
-
-    saveUploadState() {
-        try {
-            // 只保存 metadata，File对象无法保存
-            const state = {}
-            for (const key in this.uploadStatusMap) {
-                const item = this.uploadStatusMap[key]
-                state[key] = {
-                    fileId: item.fileId,
-                    wpsFileId: item.wpsFileId,
-                    name: item.name,
-                    size: item.size,
-                    uploaded: item.uploaded || 0,
-                    progress: item.progress || 0,
-                    startTime: item.startTime
-                }
-            }
-            const storageKey = `upload_state_v2_project_${this.projectId}`
-            uni.setStorageSync(storageKey, JSON.stringify(state))
-        } catch (e) { console.error('Save state failed', e) }
-    },
-
-    restoreUploadState() {
-        try {
-            const storageKey = `upload_state_v2_project_${this.projectId}`
-            const data = uni.getStorageSync(storageKey)
-            if (!data) {
-                this.uploadStatusMap = {}
-                return
-            }
-            const state = JSON.parse(data)
-            // 恢复时，检查是否有正在进行的任务。由于刷新导致 File 对象丢失，无法自动继续。
-            // 必须将这些任务标记为中断/失败，避免 UI 假死。
-            let dropped = 0
-            for (const fileId in state) {
-                const item = state[fileId]
-                // dev-board#462：progress 已经 100 的条目没有「可恢复」的东西
-                //（completeUpload 那 1s 延迟删除没赶上而已），留着只会让底栏永远说「正在上传」。
-                if (item.progress >= 100) {
-                    delete state[fileId]
-                    dropped += 1
-                    continue
-                }
-                // 未完成的任务（含 status:'pending' 的排队项）：内存里的 File 对象随页面一起没了，
-                // 一律标成中断，等用户点 ↻ 重选文件续传。
-                item.error = true
-                item.status = 'interrupted' // Add explicitly status
-                item.errorMessage = this.$t('fileTree.refreshInterrupted')
-                // 确保 xhr 是空的
-                item.xhr = null
-            }
-            this.uploadStatusMap = state
-            // 丢掉的条目要同步落盘，否则下次挂载又被原样复活（「常驻不消失」的另一半）
-            if (dropped > 0) this.saveUploadState()
-        } catch (e) {}
-    },
-
-    // Placeholder for old method if called elsewhere
-    async uploadSingleFileLegacy(projectId, file, parentId) {
-       // ... kept for fallback if needed, or removed
-    },
     // 统一的错误提示函数
     showErrorModal(message, title = this.$t('fileTree.opFailed')) {
       // 使用 Toast 替代 Modal，无需手动确认
@@ -4242,12 +3085,6 @@ export default {
         'pptx': 'pptx'
       }
       return typeMap[ext] || ext || 'file'
-    },
-    getApiBaseUrl() {
-      return getApiBaseUrl()
-    },
-    getAuthHeaders() {
-      return getAuthHeaders()
     }
   }
 }
@@ -4295,7 +3132,6 @@ export default {
 /* uni-app button 默认会带 ::after 边框，这里统一去掉，避免窄屏/不同端显示“发虚/变丑” */
 .btn-new-folder::after,
 .btn-new-word::after,
-.btn-upload::after,
 .batch-btn::after,
 .dialog-btn::after {
   border: none;
@@ -4645,53 +3481,11 @@ export default {
   gap: 8rpx;
 }
 
-.upload-status-footer {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 4px;
-  margin-bottom: 4px;
-}
-
-.upload-status-text {
-  display: flex;
-  flex-direction: column;
-}
-
-.status-title {
-  font-size: 10px;
-  color: var(--awd-text-2);
-}
-
-.status-detail {
-  font-size: 12px;
-  font-weight: bold;
-  color: var(--awd-text);
-}
-
 .footer-row {
   display: flex;
   gap: 8rpx;
   justify-content: center;
   flex-wrap: wrap;
-}
-
-.btn-upload {
-  flex: 1;
-  min-width: 0;
-  height: 56rpx;
-  font-size: 24rpx;
-  padding: 0;
-  line-height: 56rpx;
-  border-radius: 10rpx;
-  border: 1px solid transparent;
-  transition: all 0.2s;
-  background-color: var(--awd-accent);
-  color: var(--awd-text-on-accent);
-}
-
-.btn-upload:active {
-  background-color: var(--awd-accent-hover);
 }
 
 .btn-recycle-bin {
@@ -4722,8 +3516,7 @@ export default {
 /* 桌面端窄屏：避免 rpx 随视口缩放导致按钮“忽大忽小/比例失衡” */
 @media (max-width: 900px) {
   .btn-new-folder,
-  .btn-new-word,
-  .btn-upload {
+  .btn-new-word {
     height: 28px;
     line-height: 28px;
     font-size: 12px;
@@ -4752,20 +3545,6 @@ export default {
   .tree-item-content {
     padding-left: 10px !important;
   }
-}
-
-.upload-dialog {
-  width: 600px; /* 桌面端固定宽度 */
-  max-width: 90vw; /* 移动端响应式 */
-  height: 70vh;
-  max-height: 800px;
-  background-color: var(--awd-surface);
-  border-radius: 12px;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-  /* 确保不被压缩 */
-  flex-shrink: 0;
 }
 
 .folder-list {
@@ -4980,7 +3759,7 @@ export default {
   background-color: var(--awd-info-soft);
 }
 
-/* 外部文件正拖在树上：整个容器描一圈，提示「松手即上传」（dev-board#363） */
+/* 外部文件正拖在树上：整个容器描一圈，提示「松手即导入」（dev-board#363） */
 .tree-content.external-drag-over {
   box-shadow: inset 0 0 0 2px var(--awd-info);
 }
@@ -5008,33 +3787,6 @@ export default {
   background-color: transparent;
   border-left: 1px dashed var(--awd-border);
   pointer-events: none;
-}
-
-/* 上传进度条样式 */
-.upload-progress-bar {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  background-color: var(--awd-info-soft);
-  transition: width 0.3s ease;
-  z-index: 0;
-}
-
-/* Upload Progress Styles */
-.item-upload-progress-bg {
-  position: absolute;
-  left: 0;
-  bottom: 0;
-  height: 2px;
-  background-color: var(--awd-info);
-  opacity: 0.8;
-  z-index: 1;
-  transition: width 0.3s ease;
-}
-.text-muted {
-  color: var(--awd-text-3) !important;
-  opacity: 0.8;
 }
 
 .tree-expand-icon-wrapper {
@@ -5079,23 +3831,6 @@ export default {
   height: 100%;
   display: block;
 }
-
-.upload-status-footer-fixed{
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  z-index: 10;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 12px 16px;
-  border-top: 2px solid var(--awd-info);
-  background: linear-gradient(to bottom, var(--awd-info-soft), var(--awd-surface));
-  box-shadow: 0 -2px 8px rgba(37, 99, 235, 0.1);
-  background-color: var(--awd-surface);
-}
-
-
-
 
 .tree-item-name {
   flex: 1;
@@ -5220,50 +3955,7 @@ export default {
   display: block;
 }
 
-/* 行内上传进度条 */
-.upload-progress-inline {
-  display: none;
-}
-
-.upload-progress-inline-bar {
-  display: none;
-}
-
-.upload-progress-inline-text {
-  display: none;
-}
-
-/* 全局上传进度条 */
-.global-upload {
-  padding: 8rpx 16rpx;
-  border-top: 1rpx solid var(--awd-border);
-  background-color: var(--awd-bg);
-}
-
-.global-upload-bar-wrapper {
-  position: relative;
-  height: 8rpx;
-  border-radius: 999px;
-  background-color: var(--awd-surface-3);
-  overflow: hidden;
-}
-
-.global-upload-bar {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  background: linear-gradient(90deg, var(--awd-info), var(--awd-info));
-  transition: width 0.2s ease-out;
-}
-
-.global-upload-text {
-  margin-top: 4rpx;
-  font-size: 20rpx;
-  color: var(--awd-text-2);
-}
-
-/* 上传对话框重构样式 */
+/* 回收站对话框样式 */
 .upload-mask {
   position: fixed;
   top: 0;
@@ -5319,91 +4011,6 @@ export default {
   display: flex;
   flex-direction: column;
   gap: 24rpx;
-}
-
-.upload-row {
-  display: flex;
-  flex-direction: column;
-  gap: 8rpx;
-}
-
-.upload-label {
-  font-size: 26rpx;
-  color: var(--awd-text);
-}
-
-.upload-field {
-  background-color: var(--awd-bg);
-  border-radius: 12rpx;
-  border: 1rpx solid var(--awd-border);
-  padding: 20rpx 24rpx;
-  display: flex;
-  align-items: center;
-}
-
-.upload-field-clickable:hover {
-  background-color: var(--awd-surface-2);
-  border-color: var(--awd-warning);
-}
-
-.upload-folder-icon {
-  margin-right: 12rpx;
-  font-size: 28rpx;
-}
-
-.upload-field-text {
-  font-size: 26rpx;
-  color: var(--awd-text);
-}
-
-.upload-placeholder {
-  color: var(--awd-text-3);
-}
-
-.upload-selected-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6rpx;
-  max-height: 300rpx;
-  overflow-y: auto;
-}
-
-.upload-selected-item {
-  font-size: 24rpx;
-  color: var(--awd-text);
-}
-
-.upload-footer {
-  padding: 16rpx 40rpx 24rpx;
-  border-top: 1rpx solid var(--awd-border);
-  background-color: var(--awd-bg);
-  display: flex;
-  justify-content: flex-end;
-  gap: 16rpx;
-}
-
-.upload-btn {
-  min-width: 160rpx;
-  padding: 16rpx 32rpx;
-  text-align: center;
-  border-radius: 999rpx;
-  font-size: 26rpx;
-}
-
-.upload-btn-secondary {
-  background-color: var(--awd-surface);
-  color: var(--awd-text);
-  border: 1rpx solid var(--awd-info);
-}
-
-.upload-btn-primary {
-  background-color: var(--awd-info);
-  color: var(--awd-text-on-accent);
-}
-
-.upload-btn-primary.upload-btn-disabled {
-  background-color: var(--awd-info);
-  color: var(--awd-text-on-accent);
 }
 
 .dialog-overlay {
@@ -5578,10 +4185,6 @@ export default {
   box-sizing: border-box;
 }
 
-.awd-dialog-large {
-  width: 750px; /* Wider for Upload */
-}
-
 @keyframes awd-dialog-in {
   from {
     opacity: 0;
@@ -5731,64 +4334,6 @@ export default {
   font-weight: 500;
   color: var(--awd-text);
   margin-bottom: 8px;
-}
-
-.awd-field {
-  background-color: var(--awd-bg);
-  border: 1px solid var(--awd-border);
-  border-radius: 8px;
-  padding: 12px 16px;
-  display: flex;
-  align-items: center;
-  min-height: 48px;
-}
-.awd-field.clickable {
-  cursor: pointer;
-}
-.awd-field.clickable:hover {
-  background-color: var(--awd-accent-soft); /* Mint tint */
-  border-color: var(--awd-mint);
-}
-
-.field-icon {
-  margin-right: 12px;
-  font-size: 18px;
-}
-.field-icon-img {
-  width: 20px;
-  height: 20px;
-  margin-right: 12px;
-}
-.field-value {
-  font-size: 14px;
-  color: var(--awd-text);
-}
-.field-placeholder {
-  font-size: 14px;
-  color: var(--awd-text-3);
-}
-.field-content-row {
-  display: flex;
-  flex-direction: column;
-}
-.field-desc {
-  font-size: 12px;
-  color: var(--awd-text-2);
-  margin-top: 2px;
-}
-
-.selected-files-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.selected-file-tag {
-  font-size: 12px;
-  background: var(--awd-surface);
-  padding: 4px 8px;
-  border-radius: 4px;
-  border: 1px solid var(--awd-border);
-  color: var(--awd-text);
 }
 
 /* Folder Tree in Dialog */
