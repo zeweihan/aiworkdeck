@@ -4,7 +4,7 @@
 // （同 tests/evidence/panelFilters.test.mjs 的路子：剥掉 import 行，依赖当形参喂进去）。
 //
 // 锁的是三条真会花钱/改文档的不变式：
-//   ① 工具栏「解析」对已经解析过的文档**不重跑**（一次解析 = 一次 LLM + 一串外部库调用）；
+//   ① 打开窗格只读；只有显式在线核验、保存成功后才能调用 LLM 与外部库；
 //   ② 一键修改**只在恰好唯一命中时**才动文档，非唯一一律不改并给可读提示；
 //   ③ 轮询定时器在卸载时清掉（面板是 v-if 挂载的）。
 import test from 'node:test'
@@ -18,7 +18,7 @@ import {
 } from '../../src/utils/insightDetail.js'
 
 function makeVm(overrides = {}) {
-  const calls = { parse: [], latest: [], entity: [], refresh: [], exec: [] }
+  const calls = { parse: [], latest: [], entity: [], refresh: [], exec: [], prepare: [] }
   const deps = {
     parseDocInsight: async (pid, did) => { calls.parse.push([pid, did]); return { code: 0, data: { runId: 1, status: 'RUNNING' } } },
     getDocInsight: async (pid, did) => { calls.latest.push([pid, did]); return { code: 0, data: overrides.latest || { run: null, entities: [], findings: [] } } },
@@ -45,6 +45,7 @@ function makeVm(overrides = {}) {
     canWrite: true,
     parseRequest: overrides.parseRequest || null,
     cursorContext: null,
+    prepareDocument: overrides.prepareDocument || (async (did) => { calls.prepare.push(did); return true }),
     getExecutor: overrides.getExecutor || (() => (action, params) => {
       calls.exec.push([action, params])
       return Promise.resolve(overrides.execResult ? overrides.execResult(action, params) : { success: true })
@@ -57,59 +58,155 @@ function makeVm(overrides = {}) {
   return { vm, component, calls, emitted }
 }
 
-// ————————————————— ① 解析请求的闸 —————————————————
+// ————————————————— ① 只有显式在线核验才能发起付费管线 —————————————————
 
-test('工具栏解析：没解析过 → 真发 POST /parse', async () => {
-  const { vm, calls } = makeVm({ latest: { run: null, entities: [], findings: [] } })
-  vm.parseRequest = { fileId: 9, token: 1 }
-  await vm.load()
-  await vm.consumeParseRequest()
-  await new Promise((r) => setTimeout(r, 0))
-  assert.equal(calls.parse.length, 1)
-  assert.deepEqual(calls.parse[0], [7, 9])
+for (const status of [null, 'DONE', 'FAILED']) {
+  test(`打开窗格只加载既有结果，不发起在线核验（${status || '未核验'}）`, async () => {
+    const latest = { run: status ? { id: 3, status } : null, entities: [], findings: [] }
+    const { vm, component, calls } = makeVm({ latest, parseRequest: { fileId: 9, token: 1 } })
+    component.mounted.call(vm)
+    await vm._loading
+    await new Promise((r) => setTimeout(r, 0))
+    assert.deepEqual(calls.latest, [[7, 9]])
+    assert.equal(calls.parse.length, 0, '旧入口令牌也不能在挂载时触发付费请求')
+  })
+}
+
+test('写作辅助打开依据只切焦点与停靠窗格，不创建解析请求', () => {
+  const src = readFileSync(new URL('../../src/pages/project-overview/project-overview.vue', import.meta.url), 'utf8')
+  const body = src.match(/onOpenInsight\(payload, pane\) \{([\s\S]*?)\n    \},/)[1]
+  const opened = []
+  const vm = { focusedPane: 'left', insightDocFileId: 9, insightParseRequest: null, openPanelInItsDock: (key) => opened.push(key) }
+  new Function('payload', 'pane', body).call(vm, { fileId: 9 }, 'right')
+  assert.equal(vm.focusedPane, 'right')
+  assert.deepEqual(opened, ['insight'])
+  assert.equal(vm.insightParseRequest, null)
 })
 
-test('工具栏解析：已经解析过 → 只开面板，不再花一次额度', async () => {
-  const { vm, calls } = makeVm({ latest: { run: { id: 3, status: 'DONE', phase: '完成' }, entities: [], findings: [] } })
-  vm.parseRequest = { fileId: 9, token: 1 }
+test('工具栏不再显示旧解析按钮；在线按钮明确标注费用', () => {
+  const toolbar = readFileSync(new URL('../../src/components/EditorToolbar.vue', import.meta.url), 'utf8').split('<script>')[0]
+  assert.ok(!toolbar.includes("$emit('toggle-insight')"))
+  for (const locale of ['zh-CN', 'en-US']) {
+    const src = readFileSync(new URL(`../../src/locales/${locale}/insight.js`, import.meta.url), 'utf8')
+    assert.match(src, locale === 'zh-CN' ? /全文在线核验（可能产生费用）/ : /Full-document online verification \(charges may apply\)/)
+  }
+})
+
+test('显式点击全文在线核验：已有结论也重跑', async () => {
+  const { vm, calls } = makeVm({ latest: { run: { id: 3, status: 'DONE' }, entities: [], findings: [] } })
   await vm.load()
-  await vm.consumeParseRequest()
+  await vm.onParseTap()
   await new Promise((r) => setTimeout(r, 0))
+  assert.deepEqual(calls.parse, [[7, 9]])
+})
+
+test('等待首拉时切文档，不把在线核验请求转移给另一份文档', async () => {
+  const { vm, calls } = makeVm()
+  let release
+  vm._loading = new Promise((resolve) => { release = resolve })
+  const pending = vm.requestParse()
+  vm.docFileId = 10
+  release()
+  await pending
   assert.equal(calls.parse.length, 0)
 })
 
-test('工具栏解析：上一次是 FAILED → 重跑（失败的那次不算结论）', async () => {
-  const { vm, calls } = makeVm({ latest: { run: { id: 3, status: 'FAILED', error: '读不出文字' }, entities: [], findings: [] } })
-  vm.parseRequest = { fileId: 9, token: 1 }
-  await vm.load()
-  await vm.consumeParseRequest()
-  await new Promise((r) => setTimeout(r, 0))
-  assert.equal(calls.parse.length, 1)
-})
-
-test('工具栏解析：请求打给别的文档 → 本面板一动不动', async () => {
-  const { vm, calls } = makeVm({ latest: { run: null, entities: [], findings: [] } })
-  vm.parseRequest = { fileId: 12345, token: 1 }
-  await vm.load()
-  await vm.consumeParseRequest()
-  await new Promise((r) => setTimeout(r, 0))
-  assert.equal(calls.parse.length, 0, '「在 A 文档点过解析、切到 B 开面板」不许把 B 也解析掉')
-})
-
-test('面板里的「重新解析」是用户明示的 → 已有结论也重跑', async () => {
-  const { vm, calls } = makeVm({ latest: { run: { id: 3, status: 'DONE' }, entities: [], findings: [] } })
-  await vm.load()
-  await vm.requestParse(true)
-  assert.equal(calls.parse.length, 1)
+test('等待首拉期间连续点击在线核验只发一次请求', async () => {
+  const { vm, calls } = makeVm()
+  let release
+  vm._loading = new Promise((resolve) => { release = resolve })
+  const first = vm.requestParse(), second = vm.requestParse()
+  release()
+  await Promise.all([first, second])
+  assert.deepEqual(calls.parse, [[7, 9]])
 })
 
 test('只读成员没有写权限 → 按钮置灰且不发请求', async () => {
-  const { vm, calls } = makeVm({ latest: { run: null, entities: [], findings: [] } })
+  const { vm, calls } = makeVm()
   vm.canWrite = false
   await vm.load()
   assert.equal(vm.canParse, false)
-  vm.onParseTap()
-  await vm.requestParse(true)
+  await vm.onParseTap()
+  await vm.requestParse()
+  assert.equal(calls.parse.length, 0)
+})
+
+test('在线核验先保存当前文档，保存失败不发付费请求', async () => {
+  const { vm, calls } = makeVm({ prepareDocument: async () => false })
+  await vm.onParseTap()
+  assert.equal(calls.parse.length, 0)
+  assert.equal(vm.error, 'insight.saveRequired')
+})
+
+test('保存等待期间切换文档，取消原在线核验请求', async () => {
+  const { vm, calls } = makeVm()
+  vm.prepareDocument = async () => { vm.docFileId = 10; return true }
+  await vm.onParseTap()
+  assert.equal(calls.parse.length, 0)
+})
+
+test('显式核验成功时，先准备同一文档再发请求', async () => {
+  const { vm, calls } = makeVm()
+  vm.prepareDocument = async (did) => {
+    assert.equal(did, 9)
+    assert.equal(calls.parse.length, 0)
+    calls.prepare.push(did)
+    return true
+  }
+  await vm.onParseTap()
+  assert.deepEqual(calls.prepare, [9])
+  assert.deepEqual(calls.parse, [[7, 9]])
+})
+
+function prepareHostVm() {
+  const src = readFileSync(new URL('../../src/pages/project-overview/project-overview.vue', import.meta.url), 'utf8')
+  const methods = ['getInsightEditorKey', 'prepareInsightDocument'].map((name) => {
+    const found = src.match(new RegExp('(?:async )?' + name + '\\([^)]*\\) \\{[\\s\\S]*?\\n    \\},'))
+    assert.ok(found, name + ' method must exist')
+    return found[0]
+  })
+  return { projectId: 7, focusedPane: 'right', insightDocFileId: 9, activeFileLeft: { id: 9 }, activeFileRight: { id: 9 }, _libreRefs: {}, ...new Function('return ({' + methods.join('\n') + '})')() }
+}
+
+test('保存精确选择依据文档的当前侧实例，并核对保存后的脏状态', async () => {
+  const vm = prepareHostVm(), calls = []
+  const inst = { ready: true, file: { id: 9 }, dirty: true, saving: false, docLoadFailed: false, async flushSave(options) { calls.push(options); this.dirty = false; return true } }
+  vm._libreRefs = { 'right:9': inst, 'left:9': { ...inst, flushSave() { throw new Error('wrong side') } } }
+  assert.equal(await vm.prepareInsightDocument(9), true)
+  assert.deepEqual(calls, [{ timeoutMs: 10000 }])
+  inst.flushSave = async () => { inst.dirty = true; return true }
+  assert.equal(await vm.prepareInsightDocument(9), false)
+})
+
+test('加载失败、实例替换或切文档时不许可在线核验', async () => {
+  const vm = prepareHostVm()
+  let saves = 0
+  const inst = { ready: true, file: { id: 9 }, docLoadFailed: true, async flushSave() { saves++; return true } }
+  vm._libreRefs = { 'right:9': inst }
+  assert.equal(await vm.prepareInsightDocument(9), false)
+  assert.equal(saves, 0)
+  inst.docLoadFailed = false
+  inst.flushSave = async () => { vm._libreRefs['right:9'] = { ...inst }; return true }
+  assert.equal(await vm.prepareInsightDocument(9), false)
+  vm._libreRefs['right:9'] = inst
+  inst.flushSave = async () => { vm.insightDocFileId = 10; return true }
+  assert.equal(await vm.prepareInsightDocument(9), false)
+})
+
+test('卸载时首拉尚未完成，也不能重新开启轮询', async () => {
+  const { vm, component } = makeVm({ latest: { run: { status: 'RUNNING' }, entities: [], findings: [] } })
+  const pending = vm.load()
+  component.beforeUnmount.call(vm)
+  try {
+    await pending
+    assert.ok(!vm._poll)
+  } finally { vm.clearPoll() }
+})
+
+test('等待保存时关闭窗格，不在卸载后发起在线核验', async () => {
+  const { vm, component, calls } = makeVm()
+  vm.prepareDocument = async () => { component.beforeUnmount.call(vm); return true }
+  await vm.onParseTap()
   assert.equal(calls.parse.length, 0)
 })
 

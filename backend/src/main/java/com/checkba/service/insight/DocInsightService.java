@@ -19,6 +19,11 @@ import com.checkba.service.ai.AuxModelResolver;
 import com.checkba.service.ai.ChatModelFactory;
 import com.checkba.service.ai.PlatformAiUserScope;
 import com.checkba.service.ai.TokenUsageService;
+import com.checkba.service.ai.review.ContractStructureAudit;
+import com.checkba.service.insight.InlineReviewViews.Fact;
+import com.checkba.service.insight.InlineReviewViews.ParagraphInput;
+import com.checkba.service.insight.InlineReviewViews.Related;
+import com.checkba.service.insight.InlineReviewViews.ReviewResult;
 import com.checkba.service.ai.mcp.McpClientService;
 import com.checkba.service.ai.mcp.McpProvider;
 import com.checkba.service.insight.DocInsightChecks.Claim;
@@ -50,11 +55,13 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -148,6 +155,178 @@ public class DocInsightService {
 
     /** 同一份文档同时只跑一个解析。DB 里的 RUNNING 行是跨重启的兜底，这个集合是同进程的原子闸。 */
     private final Set<String> inFlight = ConcurrentHashMap.newKeySet();
+    private final Set<String> deepReviews = ConcurrentHashMap.newKeySet();
+
+    /**
+     * Reviews the live Writer body without persisting a run. {@code deep=false} is entirely local;
+     * deep review is an explicit, single-flight auxiliary-model request and never retrieves sources.
+     */
+    public ReviewResult review(Long userId, Long projectId, Long docFileId,
+                               List<ParagraphInput> inputs, boolean deep, boolean truncated) {
+        if (deep) requireWrite(projectId, userId); else requireRead(projectId, userId);
+        requireDoc(projectId, docFileId);
+        List<ParagraphInput> safe = inputs == null ? List.of() : inputs.stream()
+                .filter(java.util.Objects::nonNull)
+                .map(p -> new ParagraphInput(p.index(), p.text() == null ? "" : p.text()))
+                .toList();
+        if (safe.size() > 10_000) throw new IllegalArgumentException("too many paragraphs");
+        Set<Integer> indexes = new HashSet<>();
+        for (ParagraphInput p : safe) {
+            if (p.index() < 0 || !indexes.add(p.index())) {
+                throw new IllegalArgumentException("paragraph index must be unique and non-negative");
+            }
+            if (p.text().length() > 20_000) throw new IllegalArgumentException("paragraph is too long");
+        }
+        String text = safe.stream().map(ParagraphInput::text).collect(java.util.stream.Collectors.joining("\n"));
+        if (text.length() > props.getMaxChars()) throw new IllegalArgumentException("review text is too long");
+
+        List<Fact> out = new ArrayList<>();
+        ContractStructureAudit.Report report = ContractStructureAudit.run(
+                safe.stream().map(p -> new ContractStructureAudit.Paragraph(p.index(), p.text())).toList(),
+                List.of(), null);
+        addAudit(out, "SCRIPT_OUTLIER", "warn", LangText.of("字形不一致", "Inconsistent script"), report.scriptOutliers, safe);
+        addAudit(out, "NUMBERING", "warn", LangText.of("编号异常", "Numbering issue"), report.numbering, safe);
+        if (!truncated) addAudit(out, "DANGLING_REFERENCE", "warn", LangText.of("正文未找到所引用内容", "Reference not found in body"),
+                report.danglingReferences, safe);
+        addAudit(out, "PLACEHOLDER", "warn", LangText.of("存在待定内容", "Unresolved placeholder"), report.blanks, safe);
+        addAudit(out, "ARITHMETIC", "error", LangText.of("金额或数量算式不一致", "Amount or quantity mismatch"), report.arithmetic, safe);
+        addChecks(out, DocInsightChecks.usccIssues(text), safe);
+        addMissingDocuments(out, projectId, text, safe);
+
+        boolean deepComplete = false;
+        if (deep) {
+            String key = projectId + ":" + docFileId;
+            if (!deepReviews.add(key)) throw new IllegalStateException("这份文档正在深入审校中");
+            try {
+                List<InlineDeepReview.Issue> issues = new ArrayList<>();
+                boolean[] complete = {true};
+                List<Claim> claims = PlatformAiUserScope.call(userId,
+                        () -> extractDeep(text, projectId, userId, issues, complete));
+                addChecks(out, DocInsightChecks.countMismatches(claims, text), safe);
+                addLogicIssues(out, issues, safe);
+                deepComplete = complete[0];
+            } finally {
+                deepReviews.remove(key);
+            }
+        }
+        boolean outputTruncated = report.findingsTruncated || out.size() > 200;
+        if (out.size() > 200) out = new ArrayList<>(out.subList(0, 200));
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("findingCount", out.size());
+        summary.put("paragraphCount", safe.size());
+        summary.put("dominantScript", report.dominantScript);
+        summary.put("currencies", report.currencies);
+        summary.put("deepComplete", deepComplete);
+        return new ReviewResult(List.copyOf(out), summary, truncated || outputTruncated, "body", deep);
+    }
+
+    private List<Claim> extractDeep(String text, Long projectId, Long userId,
+                                    List<InlineDeepReview.Issue> issues, boolean[] complete) {
+        ChatLanguageModel model = chatModelFactory.getAuxChatModel();
+        String modelId = auxModelResolver.auxModelId();
+        List<Claim> claims = new ArrayList<>();
+        for (String chunk : DocInsightExtraction.chunks(text, props.getChunkChars(), props.getChunkOverlap())) {
+            Response<AiMessage> response = model.generate(List.of(UserMessage.from(
+                    InlineDeepReview.prompt(chunk, LangText.isEnglish()))));
+            recordUsage(response, modelId, projectId, userId);
+            InlineDeepReview.Result parsed = InlineDeepReview.parse(
+                    response.content() == null ? null : response.content().text(), chunk, om);
+            if (!parsed.valid()) complete[0] = false;
+            claims.addAll(parsed.claims());
+            issues.addAll(parsed.issues());
+        }
+        return claims;
+    }
+
+    private static void addLogicIssues(List<Fact> out, List<InlineDeepReview.Issue> issues,
+                                       List<ParagraphInput> paragraphs) {
+        for (InlineDeepReview.Issue issue : issues) {
+            ParagraphInput first = paragraphContaining(paragraphs, issue.quote1());
+            ParagraphInput second = paragraphContaining(paragraphs, issue.quote2());
+            if (first == null || second == null) continue;
+            String title = issue.title().isBlank() ? LangText.of("逻辑疑点", "Logic issue") : issue.title();
+            String message = (issue.message().isBlank()
+                    ? LangText.of("两处表述可能不一致", "The two passages may be inconsistent") : issue.message())
+                    + LangText.of("；待人工确认", "; manual confirmation required");
+            out.add(fact("LOGIC_REVIEW", "warn", title, message, first, issue.quote1(),
+                    List.of(new Related(second.index(), issue.quote2()))));
+        }
+    }
+
+    private void addMissingDocuments(List<Fact> out, Long projectId, String text,
+                                     List<ParagraphInput> paragraphs) {
+        List<RawEntity> scanned = DocInsightExtraction.merge(DocInsightExtraction.scanDeterministic(text),
+                props.getMaxMentions(), props.getMaxEntities());
+        DocResolved resolved = resolveDocFiles(projectId, scanned);
+        for (RawEntity entity : resolved.entities()) {
+            if (!DocInsightEntity.KIND_DOC.equals(entity.kind()) || entity.normKey().startsWith(FILE_KEY_PREFIX)
+                    || entity.mentions().isEmpty()) continue;
+            String quote = entity.mentions().get(0).quote();
+            ParagraphInput p = paragraphContaining(paragraphs, quote);
+            if (p != null) out.add(fact("DOCUMENT_NOT_FOUND", "warn",
+                    LangText.of("项目资料未找到", "Project document not found"),
+                    LangText.of("正文提到的《" + entity.name() + "》未在项目文件中找到",
+                            "The document mentioned in the body was not found in this project: " + entity.name()),
+                    p, quote, List.of()));
+        }
+    }
+
+    private static void addAudit(List<Fact> out, String kind, String severity, String title,
+                                 List<ContractStructureAudit.Finding> rows, List<ParagraphInput> paragraphs) {
+        for (ContractStructureAudit.Finding row : rows) {
+            ParagraphInput p = paragraph(paragraphs, row.paragraph());
+            if (p == null) continue;
+            String quote = p.text();
+            String message = LangText.isEnglish() ? switch (kind) {
+                case "SCRIPT_OUTLIER" -> "This paragraph uses a different Chinese script from the document body.";
+                case "NUMBERING" -> "The clause numbering sequence needs review.";
+                case "DANGLING_REFERENCE" -> "The referenced clause or appendix was not found in the supplied body.";
+                case "PLACEHOLDER" -> "This paragraph contains unresolved placeholder text.";
+                case "ARITHMETIC" -> "The quantities in this paragraph do not produce the stated total.";
+                default -> row.message();
+            } : row.message();
+            out.add(fact(kind, severity, title, message, p, quote, List.of()));
+        }
+    }
+
+    private static void addChecks(List<Fact> out, List<DocInsightChecks.Finding> checks,
+                                  List<ParagraphInput> paragraphs) {
+        for (DocInsightChecks.Finding check : checks) {
+            Object rawClaims = check.detail().get("claims");
+            List<String> quotes = new ArrayList<>();
+            if (rawClaims instanceof List<?> list) for (Object item : list) {
+                if (item instanceof Map<?, ?> map && map.get("quote") instanceof String q) quotes.add(q);
+            }
+            if (DocInsightChecks.KIND_USCC_INVALID.equals(check.kind())
+                    && check.detail().get("code") instanceof String q) quotes.add(q);
+            if (quotes.isEmpty() && check.detail().get("quote") instanceof String q) quotes.add(q);
+            ParagraphInput primary = paragraphContaining(paragraphs, quotes.isEmpty() ? "" : quotes.get(0));
+            if (primary == null) continue;
+            List<Related> related = quotes.stream().skip(1).map(q -> {
+                ParagraphInput p = paragraphContaining(paragraphs, q);
+                return p == null ? null : new Related(p.index(), q);
+            }).filter(java.util.Objects::nonNull).toList();
+            out.add(fact(check.kind(), check.severity(), check.title(), check.title(), primary,
+                    quotes.get(0), related));
+        }
+    }
+
+    private static Fact fact(String kind, String severity, String title, String message,
+                             ParagraphInput p, String quote, List<Related> related) {
+        int start = p.text().indexOf(quote);
+        if (start < 0) { quote = p.text(); start = 0; }
+        String id = kind + ":" + p.index() + ":" + Integer.toUnsignedString((message + quote).hashCode(), 36);
+        return new Fact(id, kind, severity, title, message, p.index(), start, start + quote.length(),
+                quote, p.text(), related, null);
+    }
+
+    private static ParagraphInput paragraph(List<ParagraphInput> rows, int index) {
+        return rows.stream().filter(p -> p.index() == index).findFirst().orElse(null);
+    }
+
+    private static ParagraphInput paragraphContaining(List<ParagraphInput> rows, String quote) {
+        return rows.stream().filter(p -> !quote.isBlank() && p.text().contains(quote)).findFirst().orElse(null);
+    }
 
     private final ExecutorService pool = Executors.newFixedThreadPool(2, r -> {
         Thread t = new Thread(r, "doc-insight");

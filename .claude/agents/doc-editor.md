@@ -253,3 +253,15 @@ HOUSE 不再是常量：`buildHouse(profile)` 从画像 JSON 派生写端常量�
 
 - 离开工作台/退出登录前，`flushDirtyEditors` 逐个保存后必须同步重扫当前 Office/文本注册表；保存 B 期间重新编辑 A、原本干净实例变脏、或新注册实例变脏都应阻止导航（`flush-dirty-editors.test.mjs` 时序用例），不能只相信每个实例刚保存时的状态。
 - 文本标签关闭同样必须检查 `flushSave` 返回值及最终 dirty/saving；失败仅提示原有重试入口并保留标签。`PlainTextEditor.flushSave` 不得吞掉 `save()` 的 false，也不能在保存期间新增输入后报全已保存。
+
+## 即时审校（dev-board#547）
+
+`inlineReviewHost.js` 读当前 Writer 正文快照，修改后 1.2 秒防抖调 `/insight/review`（`deep:false`），只有点击「深入审校」才传 `deep:true`。会话与 worker revision 双围栏拦住迟到结果；修改、换文档、销毁立即失效。同用户开关同步，独立于写作补全开关。默认计时器用箭头包装调用，不能以 `{set:setTimeout}.set()` 调浏览器原生函数（Illegal invocation，Node 单测捕获不了）；真实浏览器测试覆盖启动与销毁。
+
+`zetaOfficeInlineReview.js` 是不落盘的 guest DOM：当前段落光标旁提示、全量问题清单、原文定位、明确点击采用。不给文档塞书签或批注。IME/编辑/滚动立即隐藏旧定位；**LOWA boot 每秒发同尺寸 synthetic resize，不能因此清掉提示；只有视口或 canvas 几何变化才失效**。不抢 Tab；候选菜单打开时让位。
+
+worker `get_document_text` 与 `get_review_context` 回 revision；`goto_review_range` / `apply_review_edit` 校验 revision、0 基段落、UTF-16 起止、完整段落和引文后操作临时 range。采用建议保留细粒度修订、一次撤销，旧结果拒绝。导出不增 revision，重载即使同文也增。`get_cursor_rect.viewData` 只返回可序列化原始值。
+
+检查范围为正文段落（不含表格、页眉页脚），单段 >15,000 字跳过并披露截断，总计 200,000 字/10,000 段/60 页。行内修订模式需切页边或最终视图。完整在线核验保留在依据窗格，打开窗格不自动调用模型或外库，点击后先保存对应文档。
+
+验证：`npm run test:inline-review`、`test:lowa-inline-review`，真实桌面 `tests/desktop-e2e/writing.mjs` 同时检查中文补全与刚输入正文的规则提示、无自动深入审校/外查。

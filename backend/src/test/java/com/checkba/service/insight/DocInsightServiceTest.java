@@ -16,11 +16,14 @@ import com.checkba.service.ProjectMemberService;
 import com.checkba.service.QichachaService;
 import com.checkba.service.ai.AuxModelResolver;
 import com.checkba.service.ai.ChatModelFactory;
+import com.checkba.service.ai.PlatformAiUserScope;
 import com.checkba.service.ai.TokenUsageService;
 import com.checkba.service.ai.mcp.McpClientService;
 import com.checkba.service.insight.DocInsightViews.EntityView;
 import com.checkba.service.insight.DocInsightViews.InsightView;
 import com.checkba.service.insight.DocInsightViews.StartResult;
+import com.checkba.service.insight.InlineReviewViews.ParagraphInput;
+import com.checkba.service.insight.InlineReviewViews.ReviewResult;
 import com.checkba.service.legal.PkulawChannel;
 import com.checkba.service.platform.ExternalProviderResolver;
 import com.checkba.service.platform.ExternalServiceProvider;
@@ -1016,6 +1019,107 @@ class DocInsightServiceTest {
                 "落到 default 分支会说成「未知实体类型 / 本次不可用」——那是给用户的假故障");
         assertTrue(miss.retrievalNote().contains("项目中未找到该文件"), miss.retrievalNote());
         verify(qichacha, never()).queryEciInfoJson(startsWith("海外"));
+    }
+
+    @Test
+    @DisplayName("即时本地审校读取未保存段落且零模型零外部调用零持久化")
+    void localReviewIsPureAndNonPersistent() {
+        ReviewResult result = svc.review(UID, PID, DOC, List.of(
+                new ParagraphInput(7, "第一条 定义"),
+                new ParagraphInput(8, "第三条 价款为____元")), false, true);
+
+        assertEquals("body", result.scope());
+        assertTrue(result.truncated());
+        assertTrue(result.findings().stream().anyMatch(f -> "NUMBERING".equals(f.kind())));
+        assertTrue(result.findings().stream().anyMatch(f -> "PLACEHOLDER".equals(f.kind())
+                && f.paragraphIndex() == 8 && f.expectedParagraph().contains("____")));
+        verify(chatModelFactory, never()).getAuxChatModel();
+        verify(qichacha, never()).queryEciInfoJson(anyString());
+        verify(mcp, never()).callTool(anyString(), anyString(), anyMap());
+        verify(runs, never()).save(any());
+        verify(findingRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("深入审校仅显式调用辅助模型并返回可定位的数量矛盾")
+    void deepReviewExtractsClaimsWithoutRetrieval() {
+        when(model.generate(anyList())).thenAnswer(inv -> {
+            assertEquals(UID, PlatformAiUserScope.current(), "平台计费身份必须包住模型调用");
+            return modelReply(MODEL_JSON.substring(0, MODEL_JSON.lastIndexOf('}')) + ",\"issues\":[]}");
+        });
+        ReviewResult result = svc.review(UID, PID, DOC, List.of(
+                new ParagraphInput(0, "标的公司名下房产共 58 项。"),
+                new ParagraphInput(1, "附表二：房产明细共 39 项。")), true, false);
+
+        assertTrue(result.deep());
+        assertTrue(result.findings().stream().anyMatch(f -> "COUNT_MISMATCH".equals(f.kind())
+                && f.paragraphIndex() == 0 && f.related().size() == 1));
+        verify(chatModelFactory).getAuxChatModel();
+        verify(tokenUsageService).recordUsage(eq(PID), eq(UID), anyString(), any(), eq(null));
+        verify(qichacha, never()).queryEciInfoJson(anyString());
+        verify(mcp, never()).callTool(anyString(), anyString(), anyMap());
+        verify(runs, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("即时审校仍校验项目权限与文档归属")
+    void reviewChecksAuthorizationAndDocumentOwnership() {
+        when(members.hasReadPermission(PID, UID)).thenReturn(false);
+        assertThrows(IllegalArgumentException.class,
+                () -> svc.review(UID, PID, DOC, List.of(), false, false));
+        verify(files, never()).findById(anyLong());
+    }
+
+    @Test
+    @DisplayName("深入审校要求写权限，段落索引必须非负且唯一")
+    void deepReviewRequiresWriteAndValidIndexes() {
+        when(members.hasWritePermission(PID, UID)).thenReturn(false);
+        assertThrows(IllegalArgumentException.class,
+                () -> svc.review(UID, PID, DOC, List.of(), true, false));
+        when(members.hasWritePermission(PID, UID)).thenReturn(true);
+        assertThrows(IllegalArgumentException.class, () -> svc.review(UID, PID, DOC,
+                List.of(new ParagraphInput(0, "甲"), new ParagraphInput(0, "乙")), false, false));
+        assertThrows(IllegalArgumentException.class, () -> svc.review(UID, PID, DOC,
+                List.of(new ParagraphInput(-1, "甲")), false, false));
+    }
+
+    @Test
+    @DisplayName("正文已截断时不把后半部缺失误报成交叉引用错误")
+    void truncatedReviewSuppressesDanglingReferences() {
+        ReviewResult result = svc.review(UID, PID, DOC,
+                List.of(new ParagraphInput(0, "依照本协议第九十九条办理。")), false, true);
+        assertFalse(result.findings().stream().anyMatch(f -> "DANGLING_REFERENCE".equals(f.kind())));
+    }
+
+    @Test
+    @DisplayName("即时审校只用项目文件树提示正文提到但缺失的资料")
+    void localReviewReportsMissingProjectDocument() {
+        when(files.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(PID)).thenReturn(List.of(doc()));
+        ReviewResult result = svc.review(UID, PID, DOC,
+                List.of(new ParagraphInput(3, "交易安排详见《房屋租赁合同》。")), false, false);
+        assertTrue(result.findings().stream().anyMatch(f -> "DOCUMENT_NOT_FOUND".equals(f.kind())
+                && f.paragraphIndex() == 3 && f.message().contains("房屋租赁合同")));
+        verify(qichacha, never()).queryEciInfoJson(anyString());
+        verify(mcp, never()).callTool(anyString(), anyString(), anyMap());
+    }
+
+    @Test
+    void ruleLimitIsDisclosedAndDoesNotMarkExactLimitAsTruncated() {
+        List<ParagraphInput> paragraphs = java.util.stream.IntStream.range(0, 41)
+                .mapToObj(i -> new ParagraphInput(i, "价款为____元")).toList();
+        ReviewResult result = svc.review(UID, PID, DOC, paragraphs, false, false);
+        assertEquals(40, result.findings().size());
+        assertTrue(result.truncated());
+        assertFalse(svc.review(UID, PID, DOC, paragraphs.subList(0, 40), false, false).truncated());
+    }
+
+    @Test
+    void missingParagraphDoesNotProduceAFalseNumberingGap() {
+        ReviewResult result = svc.review(UID, PID, DOC, List.of(
+                new ParagraphInput(0, "第一条 定义"),
+                new ParagraphInput(2, "第三条 价款")), false, true);
+        assertTrue(result.truncated());
+        assertFalse(result.findings().stream().anyMatch(f -> "NUMBERING".equals(f.kind())));
     }
 
     /** 法规实体的 REST 视图（原因码是给前端的契约，只断言实体字段不够）。 */

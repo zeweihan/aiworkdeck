@@ -208,11 +208,17 @@ const paraIndex = { model: null, ranges: null, total: 0 };
 // 补全只保留一个内存快照；不把临时候选变成存进 docx 的书签。
 let completionSnapshot = null;
 let completionSeq = 0;
+// Session-local, monotonic content generation; read-only exports do not advance it.
+let reviewRevision = 0, reviewModel = null;
+function currentReviewRevision() {
+  if (reviewModel !== xModel) { reviewModel = xModel; reviewRevision++; }
+  return reviewRevision;
+}
 function invalidateParaIndex() {
   paraIndex.ranges = null; paraIndex.total = 0; paraIndex.model = null;
   // 导出同步切换修订显示并恢复 modified 标志，会触发只读的缓存失效；
   // 此窗口不可能插入人工编辑，补全令牌保留，接受时仍完整核对模型/位置/原文。
-  if (!exportInFlight) completionSnapshot = null;
+  if (!exportInFlight) { completionSnapshot = null; reviewRevision++; }
 }
 function buildParaIndex() {
   const ranges = [];
@@ -2403,6 +2409,28 @@ function checkCompletion(token) {
     return { success: true, cursor: vc, snapshot: snap };
   } catch (e) { return completionUnavailable('stale'); }
 }
+// Review findings carry coordinates only within a verified immutable paragraph.
+// These temporary ranges are never bookmarks and never enter the saved document.
+function checkReviewRange(p) {
+  const reason = completionGuard();
+  if (reason) return completionUnavailable(reason);
+  if (!p || p.revision !== currentReviewRevision()) return completionUnavailable('stale');
+  const index = p.paragraphIndex, start = p.start, end = p.end;
+  if (!Number.isInteger(index) || index < 0 || !Number.isInteger(start) || !Number.isInteger(end)
+    || start < 0 || end <= start || typeof p.expectedParagraph !== 'string' || p.expectedParagraph.length > 15000
+    || typeof p.quote !== 'string' || !p.quote || end > p.expectedParagraph.length
+    || p.expectedParagraph.slice(start, end) !== p.quote) return completionUnavailable('invalid-range');
+  // UNO cursor movement counts Unicode characters, JS offsets count UTF-16 units.
+  if (/[\uD800-\uDFFF]/.test(p.expectedParagraph.slice(0, end))) return completionUnavailable('unsupported-unicode-range');
+  try {
+    const paragraph = paraAt(index);
+    if (!paragraph || p.revision !== currentReviewRevision() || paragraph.getString() !== p.expectedParagraph) return completionUnavailable('stale');
+    const range = paragraph.getText().createTextCursorByRange(paragraph.getStart());
+    if (start && !range.goRight(start, false)) return completionUnavailable('invalid-range');
+    if (!range.goRight(end - start, true) || range.getString() !== p.quote) return completionUnavailable('stale');
+    return { success: true, range: range, paragraph: paragraph };
+  } catch (e) { return completionUnavailable('stale'); }
+}
 // XUndoManager 把多段文本/表格的内部编辑收成一次人工操作；开组失败就不动文档。
 function completionEdit(title, edit) {
   const um = xModel.getUndoManager();
@@ -2422,6 +2450,50 @@ function completionEdit(title, edit) {
 }
 
 const EXEC = {
+  get_review_context() {
+    const reason = completionGuard();
+    if (reason) return Object.assign(completionUnavailable(reason), { revision: currentReviewRevision() });
+    try {
+      const vc = ctrl.getViewCursor();
+      const locator = rangeLocator(vc.getStart(), vc.getEnd());
+      if (!locator) return Object.assign(completionUnavailable('body-only'), { revision: currentReviewRevision() });
+      const text = paragraphTextOf(vc);
+      if (text == null) return Object.assign(completionUnavailable('unavailable-context'), { revision: currentReviewRevision() });
+      return { success: true, available: text.length <= 15000, revision: currentReviewRevision(),
+        paragraphIndex: locator.paraKey, text: text.slice(0, 15000), truncated: text.length > 15000,
+        offset: locator.start, selectedText: String(vc.getString() || '').slice(0, 15000), hasSelection: !vc.isCollapsed(),
+        cursorRectRaw: EXEC.get_cursor_rect(), scope: 'body-paragraphs' };
+    } catch (e) { return Object.assign(completionUnavailable('unavailable-context'), { revision: currentReviewRevision() }); }
+  },
+  goto_review_range(p) {
+    const checked = checkReviewRange(p);
+    if (!checked.success) return checked;
+    return selectVisibly(checked.range) ? { success: true, revision: currentReviewRevision() } : completionUnavailable('unavailable-context');
+  },
+  apply_review_edit(p) {
+    const checked = checkReviewRange(p);
+    if (!checked.success) return checked;
+    if (typeof p.replacement !== 'string' || p.replacement.length > 15000 || /[\r\n]/.test(p.replacement)) return completionUnavailable('invalid-replacement');
+    const expected = p.expectedParagraph.slice(0, p.start) + p.replacement + p.expectedParagraph.slice(p.end);
+    const um = xModel.getUndoManager();
+    const before = um.getAllUndoActionTitles().length;
+    const title = '采用审校建议';
+    um.enterUndoContext(title);
+    let error = null;
+    lockModel();
+    try {
+      xModel.setPropertyValue('RecordChanges', true);
+      if (!applyMinimalRedline(checked.range, p.replacement)) checked.range.setString(p.replacement);
+      if (checked.paragraph.getString() !== expected) throw new Error('review edit verification failed');
+    } catch (e) { error = e; }
+    finally { unlockModel(); um.leaveUndoContext(); }
+    if (error) {
+      try { if (um.getAllUndoActionTitles().length > before && um.getCurrentUndoActionTitle() === title) um.undo(); } catch (e) {}
+      return completionUnavailable('edit-failed');
+    }
+    invalidateParaIndex();
+    return { success: true, revision: currentReviewRevision() };
+  },
   get_completion_context(p) { return captureCompletion(p && p.radius); },
   accept_completion(p) {
     const checked = checkCompletion(p.token);
@@ -3166,7 +3238,7 @@ const EXEC = {
     // page top), so after the view scrolls the click-derived offset goes stale.
     // The view data carries the scrolled origin — VisibleLeft/Top (or ViewLeft/Top)
     // — so the overlay can subtract it and follow the cursor WITHOUT re-clicking.
-    // We return the whole bag verbatim: which field tracks scroll AND its unit
+    // Return serializable primitive fields only: which field tracks scroll AND its unit
     // (1/100 mm vs twips) is the open question to confirm on a real device, then
     // bake CURSOR_MAP.viewDataToMm accordingly.
     try {
@@ -3176,7 +3248,10 @@ const EXEC = {
         const view = {};
         if (seq && seq.length) for (let i = 0; i < seq.length; i++) {
           const pv = seq[i];
-          if (pv && pv.Name != null) view[pv.Name] = pv.Value;
+          if (pv && pv.Name != null) {
+            const value = typeof pv.Value === 'bigint' ? Number(pv.Value) : pv.Value;
+            if (['number', 'string', 'boolean'].indexOf(typeof value) >= 0) view[pv.Name] = value;
+          }
         }
         out.viewData = view;
       }
@@ -3429,7 +3504,7 @@ const EXEC = {
         chars += item.text.length;
         paragraphs.push(item);
       }
-      const r = { success: true, totalParagraphs: total, startParagraph: start, returned: paragraphs.length, paragraphs: paragraphs };
+      const r = { success: true, revision: currentReviewRevision(), scope: 'body-paragraphs', totalParagraphs: total, startParagraph: start, returned: paragraphs.length, paragraphs: paragraphs };
       if (start + paragraphs.length < total) { r.truncated = true; r.nextStartParagraph = start + paragraphs.length; }
       return r;
     });

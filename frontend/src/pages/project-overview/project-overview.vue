@@ -788,7 +788,7 @@
             :doc-name="insightDocName"
             :get-executor="getInsightExecutor"
             :can-write="canWriteProject"
-            :parse-request="insightParseRequest"
+            :prepare-document="prepareInsightDocument"
             :cursor-context="insightCursorContext"
             @entities="onInsightEntities"
             @open-hover="openInsightHoverCard($event)"
@@ -1558,7 +1558,7 @@
                 :doc-name="insightDocName"
                 :get-executor="getInsightExecutor"
                 :can-write="canWriteProject"
-                :parse-request="insightParseRequest"
+                :prepare-document="prepareInsightDocument"
                 :cursor-context="insightCursorContext"
                 @entities="onInsightEntities"
                 @open-hover="openInsightHoverCard($event)"
@@ -2398,10 +2398,8 @@ export default {
       focusedPane: 'left', // 'left' | 'right'
 
       // 「依据」窗格（dev-board#182）。窗格是工作台级的（停右栏或左栏），绑「当前活跃的
-      // writer 文档」；这里只存宿主要用的三件：发起解析的令牌、推给窗格的光标邻域、
-      // 以及最近一次点「解析」是哪一侧发起的（用于挑 executor）。
+      // writer 文档」；光标邻域与实体索引只读同步，打开窗格不发起在线核验。
       // 实体索引在 _insightIndex（非响应式，同 _libreRefs 口径）——它只在事件处理里被读。
-      insightParseRequest: null,
       insightCursorContext: null,
       // 正文 Cmd/Ctrl 点中实体后的浮窗（dev-board#541）：{entity, x, y, detail}，null = 不显示。
       insightHover: null,
@@ -5577,29 +5575,45 @@ export default {
      * libreOfficeExecutor 那个"活跃指针"——指针同步与标签切换之间有窗口，
      * 落错文档的代价是把查找替换打在别人身上。
      */
-    getInsightExecutor() {
-      const id = this.insightDocFileId
+    getInsightEditorKey() {
+      const id = Number(this.insightDocFileId)
       if (!id) return null
-      const map = this.getLibreExecutorMap()
-      const ex = map['left:' + id] || map['right:' + id]
+      const sides = this.focusedPane === 'right' ? ['right', 'left'] : ['left', 'right']
+      for (const side of sides) {
+        const file = side === 'right' ? this.activeFileRight : this.activeFileLeft
+        if (file && Number(file.id) === id) return side + ':' + id
+      }
+      return null
+    },
+    getInsightExecutor() {
+      const key = this.getInsightEditorKey()
+      const ex = key && this.getLibreExecutorMap()[key]
       if (!ex) return null
       return (action, params) => ex.executeCommand(action, params || {})
     },
-    /**
-     * 编辑器工具栏「解析」按钮：打开「依据」窗格（走停靠系统的语义——被用户拖去
-     * 左栏就开左栏），并让窗格发起一次解析。
-     */
+    /** 在线核验只读落盘文件，因此仅在该按钮点击后保存当前绑定的编辑器。 */
+    async prepareInsightDocument(docFileId) {
+      const forDoc = Number(docFileId), forProject = String(this.projectId)
+      const key = this.getInsightEditorKey()
+      const inst = key && (this._libreRefs || {})[key]
+      const usable = () => inst && inst.ready && !inst.docLoadFailed && !inst._reloading && inst.canWrite !== false && Number(inst.file && inst.file.id) === forDoc
+      if (!forDoc || forDoc !== Number(this.insightDocFileId) || !usable() || typeof inst.flushSave !== 'function') return false
+      try {
+        const saved = await inst.flushSave({ timeoutMs: 10000 })
+        return saved !== false && String(this.projectId) === forProject && Number(this.insightDocFileId) === forDoc
+          && this.getInsightEditorKey() === key && (this._libreRefs || {})[key] === inst
+          && usable() && !inst.dirty && !inst.saving
+      } catch (e) {
+        return false
+      }
+    },
+    /** 写作辅助打开既有资料；全文在线核验由面板中的显式按钮单独触发。 */
     onOpenInsight(payload, pane) {
       const fileId = payload && payload.fileId
-      // 点的是哪一侧的工具栏，就把焦点挪到哪一侧——insightDocFile 跟着 focusedPane 走，
-      // 不挪的话在分屏下点右侧的「解析」会去解析左侧那份。
       if (pane && this.focusedPane !== pane) this.focusedPane = pane
-      this.openPanelInItsDock('insight')
       const target = this.insightDocFileId
-      if (!target) return
-      if (fileId && Number(fileId) !== Number(target)) return
-      // 请求带上 fileId：面板是 v-if 挂载的，这一步之后才挂出来，挂载时它自己认一次
-      this.insightParseRequest = { fileId: target, token: Date.now() }
+      if (!target || (fileId && Number(fileId) !== Number(target))) return
+      this.openPanelInItsDock('insight')
     },
     /** 窗格把实体清单同步上来（宿主据此在正文点击时做匹配）。 */
     onInsightEntities(payload) {

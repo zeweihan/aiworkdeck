@@ -68,6 +68,7 @@ public final class ContractStructureAudit {
         public final Map<String, Integer> revisionsByType = new LinkedHashMap<>();
         public final List<String> largeDeletions = new ArrayList<>();
         public final List<String> revisionSample = new ArrayList<>();
+        public boolean findingsTruncated;
         public int totalParagraphs;
         public int totalRevisions;
         public String revisionNote;
@@ -158,6 +159,11 @@ public final class ContractStructureAudit {
         }
     }
 
+    private static void addLimited(Report report, List<Finding> target, int limit, Finding finding) {
+        if (target.size() < limit) target.add(finding);
+        else report.findingsTruncated = true;
+    }
+
     // ------------------------------------------------------------------ 入口
 
     public static Report run(List<Paragraph> paragraphs, List<Revision> revisions, String revisionNote) {
@@ -223,12 +229,12 @@ public final class ContractStructureAudit {
         if ("mixed".equals(r.dominantScript)) return;
 
         boolean trad = "traditional".equals(r.dominantScript);
-        for (int i = 0; i < paras.size() && r.scriptOutliers.size() < 30; i++) {
+        for (int i = 0; i < paras.size(); i++) {
             int mine = trad ? per[i][0] : per[i][1];
             int other = trad ? per[i][1] : per[i][0];
             // 判据：异体字至少 2 个，且多于本体字——一两个错别字不报，整句混入才报
             if (other >= 2 && other > mine) {
-                r.scriptOutliers.add(new Finding(paras.get(i).index(),
+                addLimited(r, r.scriptOutliers, 30, new Finding(paras.get(i).index(),
                         (trad ? "简体字混入繁體正文" : "繁體字混入简体正文") + "（异体字 " + other
                                 + " 个）：" + snippet(paras.get(i).text(), 60)));
             }
@@ -266,7 +272,14 @@ public final class ContractStructureAudit {
         int lastTiaoParagraph = -1;
         boolean hasTiao = paras.stream().anyMatch(p -> P_TIAO.matcher(p.text()).find());
         Set<Integer> seenTiao = new LinkedHashSet<>();
+        int previousParagraph = -1;
         for (Paragraph p : paras) {
+            if (previousParagraph >= 0 && p.index() != previousParagraph + 1) {
+                // An omitted paragraph may contain a heading or restart a numbered list.
+                runs.clear(); seenTiao.clear(); lastTiao = 0; lastTiaoParagraph = -1;
+                scope0++; scope1++;
+            }
+            previousParagraph = p.index();
             String t = p.text();
             Matcher m;
             if ((m = P_TIAO.matcher(t)).find()) {
@@ -329,6 +342,7 @@ public final class ContractStructureAudit {
             }
         }
         if (r.numbering.size() > 40) {
+            r.findingsTruncated = true;
             List<Finding> cut = new ArrayList<>(r.numbering.subList(0, 40));
             r.numbering.clear();
             r.numbering.addAll(cut);
@@ -387,29 +401,29 @@ public final class ContractStructureAudit {
             Matcher h = P_TIAO.matcher(t);
             if (h.find()) headerEnd = h.end();
             Matcher m = P_REF_TIAO.matcher(t);
-            while (m.find() && r.danglingReferences.size() < 40) {
+            while (m.find()) {
                 if (m.start() < headerEnd) continue;
                 int n = ChineseNumerals.parse(m.group(1));
                 if (n <= 0 || tiao.isEmpty()) continue;
                 String ref = m.group().replaceAll("\\s+", "");
                 if (!tiao.contains(n)) {
                     if (reported.add("t" + n)) {
-                        r.danglingReferences.add(new Finding(p.index(), "引用了「" + ref + "」，但全文没有第" + n + "条"));
+                        addLimited(r, r.danglingReferences, 40, new Finding(p.index(), "引用了「" + ref + "」，但全文没有第" + n + "条"));
                     }
                 } else if (m.group(2) != null && !dotted.isEmpty() && !dotted.contains(n + "." + m.group(2))) {
                     String key = n + "." + m.group(2);
                     if (reported.add("d" + key)) {
-                        r.danglingReferences.add(new Finding(p.index(), "引用了「" + ref + "」，但全文没有编号 " + key + " 的款"));
+                        addLimited(r, r.danglingReferences, 40, new Finding(p.index(), "引用了「" + ref + "」，但全文没有编号 " + key + " 的款"));
                     }
                 }
             }
             if (annexes.isEmpty()) continue;
             Matcher a = P_REF_ANNEX.matcher(t);
-            while (a.find() && r.danglingReferences.size() < 40) {
+            while (a.find()) {
                 if (a.start() == 0 || P_DEF_ANNEX.matcher(t).find()) continue;
                 String key = a.group(1).charAt(0) + normalizeAnnex(a.group(2));
                 if (!annexes.contains(key) && reported.add("a" + key)) {
-                    r.danglingReferences.add(new Finding(p.index(), "引用了「" + a.group().trim() + "」，但全文没有以它开头的附表/附件标题"));
+                    addLimited(r, r.danglingReferences, 40, new Finding(p.index(), "引用了「" + a.group().trim() + "」，但全文没有以它开头的附表/附件标题"));
                 }
             }
         }
@@ -429,8 +443,8 @@ public final class ContractStructureAudit {
     private static void auditBlanks(List<Paragraph> paras, Report r) {
         for (Paragraph p : paras) {
             Matcher m = P_BLANK.matcher(p.text());
-            while (m.find() && r.blanks.size() < 40) {
-                r.blanks.add(new Finding(p.index(), "「" + m.group() + "」：" + around(p.text(), m.start(), m.end(), 30)));
+            while (m.find()) {
+                addLimited(r, r.blanks, 40, new Finding(p.index(), "「" + m.group() + "」：" + around(p.text(), m.start(), m.end(), 30)));
             }
         }
     }

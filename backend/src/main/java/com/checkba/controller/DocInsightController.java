@@ -7,6 +7,8 @@ import com.checkba.service.insight.DocInsightService;
 import com.checkba.service.insight.DocInsightViews.EntityView;
 import com.checkba.service.insight.DocInsightViews.InsightView;
 import com.checkba.service.insight.DocInsightViews.StartResult;
+import com.checkba.service.insight.InlineReviewViews.ParagraphInput;
+import com.checkba.service.insight.InlineReviewViews.ReviewResult;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -71,8 +73,26 @@ public class DocInsightController {
         return svc.refreshEntity(uid(sessionId), projectId, entityId);
     }
 
+    /** Review the current unsaved Writer body. Local mode never calls a model or an external source. */
+    @PostMapping("/review")
+    public ReviewResult review(@PathVariable Long projectId,
+                               @RequestBody ReviewReq req,
+                               @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        if (req == null) throw new IllegalArgumentException("review body required");
+        return svc.review(uid(sessionId), projectId, req.getDocFileId(), req.getParagraphs(),
+                req.isDeep(), req.isTruncated());
+    }
+
     @Data
     public static class ParseReq {
         private Long docFileId;
+    }
+
+    @Data
+    public static class ReviewReq {
+        private Long docFileId;
+        private java.util.List<ParagraphInput> paragraphs;
+        private boolean deep;
+        private boolean truncated;
     }
 }

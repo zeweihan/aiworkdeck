@@ -2,15 +2,18 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="ip">
-    <!-- 头部：当前文档 + 解析按钮 + run 状态。面板**不自画标题**（左栏由外壳的
+    <!-- 头部：当前文档 + 显式在线核验 + run 状态。面板**不自画标题**（左栏由外壳的
          .sidebar-header 出，右栏由 dock tab 出）——这里只画「对哪份文档、跑到哪一步」。 -->
     <view class="ip-head">
       <text class="ip-doc" :title="docName || ''">{{ docName || $t('insight.noDoc') }}</text>
+    </view>
+    <view class="ip-online">
       <text
         class="ip-parse"
         :class="{ disabled: !canParse }"
         @tap="onParseTap"
       >{{ run ? $t('insight.reparse') : $t('insight.parse') }}</text>
+      <text class="ip-online-note">{{ $t('insight.onlineHint') }}</text>
     </view>
 
     <view v-if="runLine" class="ip-run" :class="runClass">
@@ -294,11 +297,8 @@ export default {
     getExecutor: { type: Function, default: null },
     // 只读成员/客户没有写权限：解析与重新检索都花外部库额度，按钮置灰。
     canWrite: { type: Boolean, default: true },
-    // 宿主「解析」按钮的请求：{fileId, token}，每点一次换一个新对象。
-    // **必须带 fileId**：面板是 v-if 挂载的，点完解析才把面板开出来——挂载时
-    // 请求已经在 props 里了（watch 看不到变化），所以 mounted 也要认一次。
-    // 不带 fileId 的话，「在 A 文档点过解析、随后切到 B 文档开面板」会把 B 也解析掉。
-    parseRequest: { type: Object, default: null },
+    // 仅显式在线核验调用：宿主保存同一文档，失败时禁止付费请求。
+    prepareDocument: { type: Function, default: null },
     // 正文点击/光标移动时宿主推下来的光标邻域：{before, after, paragraph, meta:{metaKey,ctrlKey}, token}
     cursorContext: { type: Object, default: null },
   },
@@ -341,16 +341,16 @@ export default {
   },
   watch: {
     docFileId() { this.resetAndLoad() },
-    parseRequest() { this.consumeParseRequest() },
     cursorContext(v) { this.onCursorContext(v) },
   },
   mounted() {
+    this._disposed = false
     this.resetAndLoad()
-    this.consumeParseRequest()
   },
   beforeUnmount() {
     // 轮询定时器必须在这里清掉：面板是 v-if 挂载的，切走 tab / 收起 dock 就销毁，
     // 留着的 setTimeout 会对着一个已销毁的实例继续 setData（设置面板倒计时同款地雷）。
+    this._disposed = true
     this.clearPoll()
   },
   methods: {
@@ -373,13 +373,11 @@ export default {
       this.fixBusy = null
       this.citedOpen = {}
       this._loading = null
-      this._seenParse = null
       this.$emit('entities', { docFileId: this.did, entities: [] })
       if (this.did) this.load()
     },
     load() {
-      // _loading 是给 requestParse 等的：面板刚开出来时首拉还在飞，此刻 run 恒为 null，
-      // 不等就会把「已经解析过」的文档再解析一遍（白花一次 LLM + 外部库额度）。
+      // 显式在线核验等待首拉完成，避免把正在运行的任务重复提交。
       this._loading = this.doLoad()
       return this._loading
     },
@@ -389,7 +387,7 @@ export default {
       this.loading = true
       try {
         const v = unwrap(await getDocInsight(this.pid, this.did)) || {}
-        if (forDoc !== this.did) return // 加载途中换了文档，这份结果作废
+        if (forDoc !== this.did || this._disposed) return // 换文档或卸载后，这份结果作废
         this.run = v.run || null
         this.entities = Array.isArray(v.entities) ? v.entities : []
         this.findings = Array.isArray(v.findings) ? v.findings : []
@@ -406,7 +404,7 @@ export default {
         })
         if (this.isRunning) this.schedulePoll()
       } catch (e) {
-        if (forDoc !== this.did) return
+        if (forDoc !== this.did || this._disposed) return
         this.error = (e && e.message) || this.$t('insight.loadFailed')
       } finally {
         if (forDoc === this.did) this.loading = false
@@ -421,37 +419,26 @@ export default {
     },
     onParseTap() {
       if (!this.canParse) return
-      // 面板里这个按钮是用户明示的，force：已有结论也重跑一遍
-      this.requestParse(true)
+      return this.requestParse()
     },
-    /** 宿主的「解析」请求：只认打给本文档的那一条（见 parseRequest 的注释）。 */
-    consumeParseRequest() {
-      const req = this.parseRequest
-      if (!req || !this.did) return
-      if (Number(req.fileId) !== this.did) return
-      if (this._seenParse === req) return
-      this._seenParse = req
-      this.requestParse(false)
-    },
-    /**
-     * 发起解析。force=false（工具栏按钮）时：已经有结论的文档只是把面板开出来，
-     * 不再白花一次 LLM + 外部库额度；失败的那次不算结论，照样重跑。
-     */
-    async requestParse(force) {
-      if (!this.pid || !this.did || !this.canWrite) return
-      if (this.parsing) return
-      if (this._loading) { try { await this._loading } catch (e) { /* 首拉失败也照常往下走 */ } }
-      if (!this.did) return                       // 等首拉的过程中换了文档
-      if (this.isRunning) return                  // 已经在跑了
-      if (!force && this.run && this.run.status !== 'FAILED') return
+    /** 只有面板明确标注费用的按钮才能调用全文在线核验。 */
+    async requestParse() {
+      if (!this.canParse || this._disposed) return
+      const forProject = this.pid, forDoc = this.did
+      const stillCurrent = () => !this._disposed && this.pid === forProject && this.did === forDoc
       this.parsing = true
       this.error = ''
       try {
-        await parseDocInsight(this.pid, this.did)
-        // 立刻拉一次：后端返回时 run 已落库为 RUNNING，画面马上有进度而不是空等 2 秒
-        await this.load()
+        if (this._loading) { try { await this._loading } catch (e) { /* 可在读取旧结果失败后重新核验 */ } }
+        if (!stillCurrent() || !this.canWrite || this.isRunning) return
+        const saved = this.prepareDocument && await this.prepareDocument(forDoc)
+        if (!stillCurrent()) return
+        if (!saved) { this.error = this.$t('insight.saveRequired'); return }
+        if (!this.canWrite) return
+        await parseDocInsight(forProject, forDoc)
+        if (stillCurrent()) await this.load()
       } catch (e) {
-        this.error = (e && e.message) || this.$t('insight.parseFailed')
+        if (stillCurrent()) this.error = (e && e.message) || this.$t('insight.parseFailed')
       } finally {
         this.parsing = false
       }

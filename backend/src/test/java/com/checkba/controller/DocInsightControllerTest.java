@@ -11,6 +11,7 @@ import com.checkba.service.insight.DocInsightViews.InsightView;
 import com.checkba.service.insight.DocInsightViews.MentionView;
 import com.checkba.service.insight.DocInsightViews.RunView;
 import com.checkba.service.insight.DocInsightViews.StartResult;
+import com.checkba.service.insight.InlineReviewViews.ReviewResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -27,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
@@ -115,6 +117,24 @@ class DocInsightControllerTest {
                     .andExpect(jsonPath("$.runId").value(7))
                     .andExpect(jsonPath("$.status").value("RUNNING"));
             verify(svc).startParse(9L, 1L, 10L);
+        }
+    }
+
+    @Test
+    void POST即时审校透传未保存段落与deep标志() throws Exception {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(9L);
+            when(svc.review(eq(9L), eq(1L), eq(10L), any(), eq(true), eq(false)))
+                    .thenReturn(new ReviewResult(List.of(), Map.of("deepComplete", true), false, "body", true));
+            mvc().perform(post("/api/projects/1/insight/review").header("X-Session-Id", "sess")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"docFileId\":10,\"deep\":true,\"truncated\":false,"
+                                    + "\"paragraphs\":[{\"index\":0,\"text\":\"即时正文\"}]}"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.scope").value("body"))
+                    .andExpect(jsonPath("$.deep").value(true))
+                    .andExpect(jsonPath("$.summary.deepComplete").value(true));
+            verify(svc).review(eq(9L), eq(1L), eq(10L), any(), eq(true), eq(false));
         }
     }
 

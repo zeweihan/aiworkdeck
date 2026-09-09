@@ -184,7 +184,7 @@ function request(options) {
     url: url,
     baseUrl: baseUrl,
     originalUrl: options.url,
-    data: options.data
+    data: options.logBody === false ? '[document content omitted]' : options.data
   })
 
   // 获取认证头
@@ -221,7 +221,7 @@ function request(options) {
           console.error('HTTP 状态码错误:', {
             statusCode: status,
             message: message,
-            data: res.data,
+            data: options.logBody === false ? '[document content omitted]' : res.data,
             header: res.header
           })
           reject(new Error(message));
@@ -280,8 +280,8 @@ function request(options) {
             console.error('业务错误:', {
               code: res.data.code,
               message: errorMessage,
-              data: res.data.data,
-              fullResponse: res.data
+              data: options.logBody === false ? undefined : res.data.data,
+              fullResponse: options.logBody === false ? undefined : res.data
             })
 
             // 特殊处理：未登录错误（PR4-0：后端统一回 code=4010，只认 code 不再做
@@ -2074,6 +2074,9 @@ export function evidenceRefCounts(projectId, fileIds) {
 // 四个端点全在 /api/projects/{pid}/insight 之下；未登录一律 200 + {code:4010}，
 // 由 request() 的统一信封处理（这里不另做分支）。
 /** 发起解析（异步）。返回时 run 已落库为 RUNNING，调用方立刻可以轮询 getInsight。 */
+export function reviewDocInsight(projectId, data) {
+  return request({ url: `/api/projects/${projectId}/insight/review`, method: 'POST', data, logBody: false, timeout: data.deep ? 120000 : 30000 })
+}
 export function parseDocInsight(projectId, docFileId) {
   return request({ url: `/api/projects/${projectId}/insight/parse`, method: 'POST', data: { docFileId } })
 }
