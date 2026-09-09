@@ -14,7 +14,7 @@ import { readFileSync } from 'node:fs'
 import { matchEntityAt, fixSuggestions, fixBlockReason, findingLocateQuote } from '../../src/utils/insightMatch.js'
 import {
   companyRows, companyShareholders, lawArticle, caseRecord, rawFallback,
-  authoritative, caseRecognition, citationDetail,
+  authoritative, caseRecognition, citationDetail, projectFile,
 } from '../../src/utils/insightDetail.js'
 
 function makeVm(overrides = {}) {
@@ -26,7 +26,7 @@ function makeVm(overrides = {}) {
     refreshDocInsightEntity: async (pid, id) => { calls.refresh.push([pid, id]); return { code: 0, data: { retrievalStatus: 'OK', hasDetail: true, detail: { basic: {} } } } },
     matchEntityAt, fixSuggestions, fixBlockReason, findingLocateQuote,
     companyRows, companyShareholders, lawArticle, caseRecord, rawFallback,
-    authoritative, caseRecognition, citationDetail,
+    authoritative, caseRecognition, citationDetail, projectFile,
   }
   const src = readFileSync(new URL('../../src/components/InsightPane.vue', import.meta.url), 'utf8')
   const script = src.match(/<script>([\s\S]*?)<\/script>/)[1].replace(/^import [\s\S]*?from .*$/gm, '')
@@ -275,6 +275,50 @@ test('实体按 公司 → 法规 → 案例 分组（顺序固定，不跟后�
   const { vm } = makeVm({ latest: { run: { status: 'DONE' }, entities: ENTS, findings: [] } })
   await vm.load()
   assert.deepEqual(vm.entityGroups.map((g) => g.kind), ['COMPANY', 'LAW', 'CASE'])
+})
+
+// ————————————————— 第四类实体 DOC（dev-board#541） —————————————————
+
+const DOC_HIT = {
+  id: 4, kind: 'DOC', name: '房屋租赁合同.docx', normKey: 'file:21',
+  retrievalStatus: 'OK', retrievalSource: 'project-file', hasDetail: true, mentions: [{ quote: '见《房屋租赁合同》' }],
+}
+const DOC_MISS = {
+  id: 5, kind: 'DOC', name: '补充协议', normKey: '补充协议',
+  retrievalStatus: 'NOT_FOUND', retrievalNote: '项目中未找到该文件', retrievalHint: null,
+  hasDetail: false, mentions: [],
+}
+
+test('DOC 自成一组，且排在案例之后（KIND_ORDER 漏了它就会被兜底归进公司组）', async () => {
+  const { vm } = makeVm({ latest: { run: { status: 'DONE' }, entities: [...ENTS, DOC_HIT], findings: [] } })
+  await vm.load()
+  assert.deepEqual(vm.entityGroups.map((g) => g.kind), ['COMPANY', 'LAW', 'CASE', 'DOC'])
+  const doc = vm.entityGroups.find((g) => g.kind === 'DOC')
+  assert.deepEqual(doc.items.map((e) => e.id), [4])
+})
+
+test('DOC 不给「重试」：它的检索是与项目文件树比对，重试一百次也不会多出一份文件', async () => {
+  const { vm } = makeVm({ latest: { run: { status: 'DONE' }, entities: [DOC_HIT, DOC_MISS], findings: [] } })
+  await vm.load()
+  assert.equal(vm.canParse, true, '前提：写权限在、没在跑——其余实体这时是给「重试」的')
+  assert.equal(vm.showRetry(vm.entities[0]), false)
+  assert.equal(vm.showRetry(vm.entities[1]), false, '未命中同样不给——那是文档的线索，不是我们的故障')
+  assert.equal(vm.noteAction(DOC_MISS), null, '未命中没有 hint，也不该指向设置页')
+})
+
+test('DOC 命中：「打开文件」上抛 open-doc-file{fileId,fileName}；未命中不给按钮', async () => {
+  const { vm, emitted, component } = makeVm({ latest: { run: { status: 'DONE' }, entities: [DOC_HIT, DOC_MISS], findings: [] } })
+  await vm.load()
+  assert.ok(component.emits.includes('open-doc-file'), '没声明的话宿主的 @open-doc-file 收不到')
+
+  vm.details = { 4: { source: 'project-file', fileId: 21, fileName: '房屋租赁合同.docx', filePath: '/p/1/房屋租赁合同.docx' }, 5: null }
+  assert.deepEqual(vm.docOf(DOC_HIT), { fileId: 21, fileName: '房屋租赁合同.docx', filePath: '/p/1/房屋租赁合同.docx' })
+  vm.openDocFile(DOC_HIT)
+  assert.deepEqual(emitted.filter((e) => e[0] === 'open-doc-file'), [['open-doc-file', { fileId: 21, fileName: '房屋租赁合同.docx' }]])
+
+  assert.equal(vm.docOf(DOC_MISS), null)
+  vm.openDocFile(DOC_MISS)
+  assert.equal(emitted.filter((e) => e[0] === 'open-doc-file').length, 1, '没命中的一条一个事件都不许发')
 })
 
 test('实体清单同步给宿主（宿主据此做正文点击匹配）', async () => {

@@ -794,6 +794,7 @@
             @open-hover="openInsightHoverCard($event)"
             @open-url="openBrowserTab($event)"
             @open-settings="openSettingsTab($event || {})"
+            @open-doc-file="openInsightDocFile($event)"
           />
           <!-- 有真前端入口（Web 插件）走 iframe 沙箱；纯工具/skill 插件走宿主渲染的
                启动面板（介绍 + 怎么用 + 一键动作发进 AI 对话），不再是「未配置入口地址」。 -->
@@ -1104,6 +1105,7 @@
                       :spec="activeFileLeft.entitySpec"
                       :project-id="projectId"
                       @open-url="openBrowserTab($event)"
+                      @open-doc-file="openInsightDocFile($event)"
                     />
                     <!-- 「设置」标签：与 pages/admin 薄壳页共用同一个 AdminPane
                          （照插件广场 market-detail 那套 tab 形制）。个人中心 2026-08-20
@@ -1263,6 +1265,7 @@
                       :spec="activeFileRight.entitySpec"
                       :project-id="projectId"
                       @open-url="openBrowserTab($event)"
+                      @open-doc-file="openInsightDocFile($event)"
                     />
                     <!-- 「设置」标签：见左窗格同名注释 -->
                     <AdminPane
@@ -1551,6 +1554,7 @@
                 @open-hover="openInsightHoverCard($event)"
                 @open-url="openBrowserTab($event)"
                 @open-settings="openSettingsTab($event || {})"
+                @open-doc-file="openInsightDocFile($event)"
               />
             </view>
 
@@ -1933,6 +1937,7 @@
       @close="closeInsightHoverCard"
       @open-tab="openInsightEntityTab($event)"
       @open-url="openBrowserTab($event)"
+      @open-doc-file="openInsightDocFile($event)"
     />
 
     <!-- 底部状态条（IDE 化：常驻工具入口 + 真实状态信号，等宽字体） -->

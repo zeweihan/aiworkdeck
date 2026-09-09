@@ -35,6 +35,15 @@
       </template>
     </template>
 
+    <!-- 文档：项目文件树里命中的那份文件（dev-board#541） -->
+    <template v-else-if="kind === 'DOC'">
+      <template v-if="doc">
+        <text class="ieb-title">{{ doc.fileName }}</text>
+        <text v-if="doc.filePath" class="ieb-meta">{{ doc.filePath }}</text>
+        <text class="ieb-link" @tap.stop="openDoc">{{ $t('insight.openDocFile') }}</text>
+      </template>
+    </template>
+
     <!-- 案例：案号识别（先导步）+ 判决书 -->
     <template v-else>
       <template v-if="rec">
@@ -57,7 +66,7 @@
 
     <!-- 认得的字段一个都没渲染出来时才亮原文兜底（不是每次都把 JSON 铺一遍） -->
     <text v-if="showRaw" class="ieb-raw">{{ raw }}</text>
-    <text v-if="empty" class="ieb-hint">{{ $t('insight.noDetail') }}</text>
+    <text v-if="empty" class="ieb-hint">{{ kind === 'DOC' ? $t('insight.docNotFound') : $t('insight.noDetail') }}</text>
   </view>
 </template>
 
@@ -73,7 +82,7 @@
 
 import {
   companyRows, companyShareholders, lawArticle, caseRecord, rawFallback,
-  authoritative, caseRecognition,
+  authoritative, caseRecognition, projectFile,
 } from '@/utils/insightDetail.js'
 
 // 浮窗里一段正文的字数上限：再长就该去新标签页看了。
@@ -84,7 +93,8 @@ const COMPACT_SHAREHOLDERS = 3
 
 export default {
   name: 'InsightEntityBody',
-  emits: ['open-url'],
+  // open-doc-file：DOC 实体命中的项目文件，一路上抛到宿主在右侧分屏打开。
+  emits: ['open-url', 'open-doc-file'],
   props: {
     entity: { type: Object, default: null },
     detail: { type: Object, default: null },
@@ -93,7 +103,7 @@ export default {
   computed: {
     kind() {
       const k = this.entity && this.entity.kind
-      return k === 'LAW' || k === 'CASE' ? k : 'COMPANY'
+      return k === 'LAW' || k === 'CASE' || k === 'DOC' ? k : 'COMPANY'
     },
     rows() {
       const all = companyRows(this.detail)
@@ -104,6 +114,7 @@ export default {
       return this.compact ? all.slice(0, COMPACT_SHAREHOLDERS) : all
     },
     law() { return lawArticle(this.detail) },
+    doc() { return projectFile(this.detail) },
     auth() { return authoritative(this.detail) },
     caseRec() { return caseRecord(this.detail) },
     rec() { return caseRecognition(this.detail) },
@@ -124,6 +135,7 @@ export default {
       if (this.compact) return false      // 浮窗不铺原始 JSON，看不懂也占满整张卡
       if (this.kind === 'COMPANY') return !companyRows(this.detail).length
       if (this.kind === 'LAW') return !this.law.title && !this.law.content && !this.auth
+      if (this.kind === 'DOC') return !this.doc
       return !this.caseRec.title && !this.caseRec.sections.length && !this.rec
     },
     raw() { return rawFallback(this.detail) },
@@ -141,6 +153,10 @@ export default {
     openUrl(url) {
       const u = url == null ? '' : String(url)
       if (u) this.$emit('open-url', u)
+    },
+    openDoc() {
+      const d = this.doc
+      if (d) this.$emit('open-doc-file', { fileId: d.fileId, fileName: d.fileName })
     },
   },
 }

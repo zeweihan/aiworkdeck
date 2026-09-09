@@ -10,6 +10,10 @@ import assert from 'node:assert/strict'
 
 import { insightEntityTabId, insightEntityTabMethods, INSIGHT_ENTITY_TAB_TYPE } from '../../src/pages/project-overview/insightEntityTab.js'
 
+// openInsightDocFile 走 uni.showToast（宿主方法组里的既有口径）
+const toasts = []
+globalThis.uni = { showToast: (o) => toasts.push(o) }
+
 function makeHost(over = {}) {
   const host = {
     leftFiles: over.leftFiles || [],
@@ -20,6 +24,10 @@ function makeHost(over = {}) {
     focusedPane: over.focusedPane || 'left',
     hoverClosed: 0,
     resized: 0,
+    opened: [],
+    $t: (k) => k,
+    $refs: { fileTree: { allFiles: over.allFiles || [] } },
+    openFile(file) { this.opened.push(file) },
     closeInsightHoverCard() { this.hoverClosed++ },
     triggerWorkbenchResize() { this.resized++ },
     $nextTick(fn) { if (fn) fn(); return Promise.resolve() },
@@ -98,4 +106,54 @@ test('不同 kind 同 id 是两个标签（后端三类实体各自编号）', (
   h.openInsightEntityTab({ entity: { id: 31, kind: 'COMPANY', name: 'A' } })
   h.openInsightEntityTab({ entity: { id: 31, kind: 'LAW', name: 'B' } })
   assert.equal(h.rightFiles.length, 2)
+})
+
+// ————————————————— DOC 实体的「打开文件」（dev-board#541） —————————————————
+
+const DOC_FILE = { id: 21, name: '房屋租赁合同.docx', fileType: 'docx' }
+
+test('DOC：未分屏时开分屏、落右侧，交给 openFile 按 focusedPane 放', () => {
+  const h = makeHost({ leftFiles: [{ id: 10, name: 'a.docx' }], activeFileIdLeft: 10, allFiles: [DOC_FILE] })
+  toasts.length = 0
+  h.openInsightDocFile({ fileId: 21, fileName: '房屋租赁合同.docx' })
+
+  assert.equal(h.splitMode, true, '默认在右侧分屏打开——开在左边会把正在读的那份顶掉')
+  assert.equal(h.focusedPane, 'right')
+  assert.deepEqual(h.opened, [DOC_FILE])
+  assert.equal(h.activeFileIdLeft, 10, '左侧那份文档不许被顶掉')
+  assert.equal(h.hoverClosed, 1, '打开文件的同时收掉浮窗')
+  assert.equal(toasts.length, 0)
+})
+
+test('DOC：已经开着的只激活，不重开也不动分屏', () => {
+  const h = makeHost({
+    splitMode: true, focusedPane: 'right',
+    leftFiles: [{ id: 21, name: '房屋租赁合同.docx' }],
+    allFiles: [DOC_FILE],
+  })
+  h.openInsightDocFile({ fileId: 21 })
+  assert.deepEqual(h.opened, [], '已经开着就不该再 openFile 一次')
+  assert.equal(h.activeFileIdLeft, 21)
+  assert.equal(h.focusedPane, 'left')
+  assert.equal(h.splitMode, true)
+})
+
+test('DOC：文件已不在项目里 → 一句可读提示，不开标签也不开分屏', () => {
+  const h = makeHost({ allFiles: [{ id: 99, name: '别的.docx' }] })
+  toasts.length = 0
+  h.openInsightDocFile({ fileId: 21, fileName: '房屋租赁合同.docx' })
+  assert.deepEqual(h.opened, [])
+  assert.equal(h.splitMode, false)
+  assert.equal(toasts.length, 1, '静默什么都不做 = 用户以为点坏了')
+  assert.equal(toasts[0].title, 'insight.docMissing')
+})
+
+test('DOC：payload 没有 fileId → 一动不动（连浮窗都不收）', () => {
+  const h = makeHost({ allFiles: [DOC_FILE] })
+  toasts.length = 0
+  h.openInsightDocFile(null)
+  h.openInsightDocFile({ fileName: '没有 id' })
+  assert.deepEqual(h.opened, [])
+  assert.equal(h.hoverClosed, 0)
+  assert.equal(toasts.length, 0)
 })

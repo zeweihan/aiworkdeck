@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// insightEntityTab.js — 「依据」实体详情标签页的开法（dev-board#541）。
+// insightEntityTab.js — 「依据」实体详情标签页 / DOC 实体文件的开法（dev-board#541）。
 //
 // 外置成方法组（this 即 project-overview 页面实例，同 tabDragSplit.js 等 Phase 1-3
 // 的先例）是为了能被 node --test 拿一个假 this 跑：这段里有两条真会打扰用户的判断
@@ -51,5 +51,41 @@ export const insightEntityTabMethods = {
     })
     this.activeFileIdRight = tabId
     this.$nextTick(() => this.triggerWorkbenchResize())
+  },
+
+  /**
+   * DOC 实体的「打开文件」（dev-board#541）：把正文里提到、项目里确实有的那份文件
+   * 打开来对着看。**默认落右侧分屏**，理由与上面同一条——开在左边会把用户正在读的
+   * 那份文档顶掉。已经在任一侧开着的只激活，不重开也不动分屏。
+   *
+   * 文件对象从左栏文件树的平铺清单里反查（解析时命中的是同一棵树）；
+   * 查不到就是解析之后被删/被移走了，给一句可读提示，不静默什么都不做。
+   */
+  openInsightDocFile(payload) {
+    const fileId = Number(payload && payload.fileId) || null
+    if (!fileId) return
+    this.closeInsightHoverCard()
+    for (const pane of ['left', 'right']) {
+      if (pane === 'right' && !this.splitMode) continue
+      const list = (pane === 'left' ? this.leftFiles : this.rightFiles) || []
+      const existing = list.find((f) => Number(f.id) === fileId)
+      if (existing) {
+        this[pane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'] = existing.id
+        this.focusedPane = pane
+        this.$nextTick(() => this.triggerWorkbenchResize())
+        return
+      }
+    }
+    const tree = this.$refs && this.$refs.fileTree
+    const all = tree && Array.isArray(tree.allFiles) ? tree.allFiles : []
+    const file = all.find((f) => f && Number(f.id) === fileId)
+    if (!file) {
+      uni.showToast({ title: this.$t('insight.docMissing'), icon: 'none' })
+      return
+    }
+    if (!this.splitMode) this.splitMode = true
+    this.focusedPane = 'right'
+    // openFile 按 focusedPane 落位，并自己处理「另一侧已经开着这份文档」的情形
+    this.openFile(file)
   },
 }

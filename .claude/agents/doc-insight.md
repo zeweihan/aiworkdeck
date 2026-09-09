@@ -321,7 +321,7 @@ DOC 实体的 `detail`（命中项目文件时；`GET /entities/{id}` 才下发�
 - `frontend/src/utils/insightDetail.js` —— 纯函数：把 COMPANY/LAW/CASE 三种 `detail` 整形成可渲染的行，外加 `authoritative`（权威条文原文）/ `caseRecognition`（案号识别行）/ `citationDetail`（两类引用发现）。上游形状是别人家的，一律「认得的列出来、认不得的落原文兜底」。
 - `frontend/src/components/InsightHoverCard.vue` / `InsightEntityDetailPane.vue` / `InsightEntityBody.vue` —— 实体浮窗、实体详情标签页，以及**两者共用的一份正文渲染**（dev-board#541）。字段整形全部来自 `insightDetail.js`，不许再抄一份解析。
 - `frontend/src/utils/insightPopup.js` —— 纯函数：`guestPointToHost`（客体页 clientX/clientY + 画布 rect → 宿主页面坐标）、`hoverCardPosition`（贴点击点、靠边翻转、绝不出屏）。同 `insightMatch.js` 的口径：不许 import Vue/uni/i18n。
-- `frontend/src/pages/project-overview/insightEntityTab.js` —— 方法组：`insightEntityTabId` + `openInsightEntityTab`（外置是为了能拿假 this 单测「强制开分屏」与「单例」两条）。
+- `frontend/src/pages/project-overview/insightEntityTab.js` —— 方法组：`insightEntityTabId` + `openInsightEntityTab` + `openInsightDocFile`（外置是为了能拿假 this 单测「强制开分屏」与「单例」两条）。
 - `frontend/src/config/panelRegistry.js` —— `insight` 一条（`defaultDock:'right'`、`allowedDocks:['left','right']`，**不给 bottom**：底栏放不下判决书全文）。
 - `frontend/src/services/api.js` —— `parseDocInsight` / `getDocInsight` / `getDocInsightEntity` / `refreshDocInsightEntity`。
 - 宿主接线在 `frontend/src/pages/project-overview/project-overview.vue`（右栏 `rightPaneKey==='insight'` / 左栏 `leftPaneKey==='insight'` 两条显式分支 + `isInsightDoc` / `getInsightExecutor` / `onOpenInsight` / `onInsightEntities` / `setInsightIndex` / `insightSubscribedFor` / `prefetchInsightIndex` / `onEditorCursorContext` / `openInsightHoverCard` / `closeInsightHoverCard`；浮窗在**根节点**渲染，实体详情标签在左右两条 `v-else-if` 链里各一份）。
@@ -372,6 +372,17 @@ DOC 实体的 `detail`（命中项目文件时；`GET /entities/{id}` 才下发�
 - 浮窗与标签页**共用 `InsightEntityBody`** 一份渲染（浮窗档 `compact`：截长正文、不列其余候选、不铺原始 JSON）。
   同步给宿主的实体索引是**瘦身**的（名字 + 几个短标量），**出处 `mentions` 不进索引**——
   标签页要出处时自己打一次 `GET /entities/{id}`（EntityView 里就有）。
+- **DOC 实体的展示与「打开文件」**（#541）：`KIND_ORDER` 第四位（漏了它 `entityGroups` 会把 DOC 兜底归进公司组），
+  分组标题/徽标 i18n 在 `insight.kind.DOC` / `insight.entityKind.DOC`。命中项目文件时列文件名 + 路径 +
+  「打开文件」，一路 `open-doc-file{fileId,fileName}` 上抛到宿主 `openInsightDocFile`：
+  **未分屏先开分屏、落右侧**再走既有 `openFile`（已在任一侧开着的只激活、不动分屏；
+  文件对象从 `$refs.fileTree.allFiles` 反查，查不到给一句 `insight.docMissing` 的 toast）。
+  浮窗对 DOC 的底部主按钮就是「打开文件」（**不给「在新标签页打开」**——实体详情标签对它没有意义，
+  打开文件本身就落在右侧分屏），没命中时底栏整条不出。字段整形走 `insightDetail.js` 的 `projectFile`。
+  **DOC 一律不给「重试」**（`showRetry` 对 `kind==='DOC'` 恒 false）：它的检索是与静态文件树比对，
+  后端 refresh 对 DOC 是空操作；未命中的说明沿用后端的 `retrievalNote`「项目中未找到该文件」。
+  宿主的三处 `@open-doc-file`（InsightPane 两处挂载点 / InsightHoverCard / InsightEntityDetailPane 左右两处）
+  漏一处 `check:emits` 直接红。
 - 面板里的 Cmd/Ctrl 点击**不再展开面板内详情**：用户的视线在正文上，把他引到侧栏去找刚点的那一条是多余的一步。
 
 ### 定位与一键修改的口径（硬约束）
@@ -402,7 +413,7 @@ DOC 实体的 `detail`（命中项目文件时；`GET /entities/{id}` 才下发�
 ### 前端验证
 
 ```
-cd frontend && npm run test:insight        # 108 条（纯函数 58 + 组件级 33 + 浮窗坐标 10 + 实体标签 7）
+cd frontend && npm run test:insight        # 115 条（纯函数 58 + 组件级 36 + 浮窗坐标 10 + 实体标签 11）
 cd frontend && npm run test:panel-dock     # 注册表自洽 + 停靠回落
 cd frontend && npm run check:emits && npm run check:nav && npm run check:locales
 cd frontend && npm run build:h5 && npm run build:zetaoffice   # 改 editor-main.js 后必须重建 glue

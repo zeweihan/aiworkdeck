@@ -109,6 +109,16 @@
                   <text v-if="authOf(e).url" class="ip-link" @tap.stop="openUrl(authOf(e).url)">{{ $t('insight.openInPkulaw') }}</text>
                 </template>
               </template>
+              <!-- 文档：项目文件树里命中的那份文件（dev-board#541） -->
+              <template v-else-if="e.kind === 'DOC'">
+                <template v-if="docOf(e)">
+                  <text class="ip-title">{{ docOf(e).fileName }}</text>
+                  <text v-if="docOf(e).filePath" class="ip-meta">{{ docOf(e).filePath }}</text>
+                  <text class="ip-link" @tap.stop="openDocFile(e)">{{ $t('insight.openDocFile') }}</text>
+                </template>
+                <!-- 没命中：只说明情况，不给按钮（这条本身就是尽调线索，不是我们的故障） -->
+                <text v-else class="ip-detail-hint">{{ $t('insight.docNotFound') }}</text>
+              </template>
               <!-- 案例：判决书 -->
               <template v-else>
                 <!-- 案号识别（先导步）：标准化案号 / 法院 / 判决书标题 / 法宝链接 -->
@@ -249,11 +259,12 @@ import {
 import { matchEntityAt, fixSuggestions, fixBlockReason, findingLocateQuote } from '@/utils/insightMatch.js'
 import {
   companyRows, companyShareholders, lawArticle, caseRecord, rawFallback,
-  authoritative, caseRecognition, citationDetail,
+  authoritative, caseRecognition, citationDetail, projectFile,
 } from '@/utils/insightDetail.js'
 
 const POLL_MS = 2000
-const KIND_ORDER = ['COMPANY', 'LAW', 'CASE']
+// 分组顺序。**新 kind 必须进这张表**：entityGroups 对认不得的 kind 兜底归进 COMPANY 组。
+const KIND_ORDER = ['COMPANY', 'LAW', 'CASE', 'DOC']
 
 // request() 已把 {code:0,data} 整体 resolve 出来，这里统一剥一层（同 evidenceLinkActions）。
 function unwrap(resp) {
@@ -271,7 +282,8 @@ export default {
   // 面板自己不碰 uni.navigateTo，交给宿主 openSettingsTab —— 与 open-url 同一条口径。
   // open-hover：正文里 Cmd/Ctrl 点中一个实体（dev-board#541）。浮窗要压在编辑器
   // <webview> 之上，只能挂在宿主根节点，所以面板只上抛「点中了谁、在屏幕哪一点」。
-  emits: ['entities', 'open-url', 'open-settings', 'open-hover'],
+  // open-doc-file：DOC 实体命中的那份项目文件，交给宿主在右侧分屏打开（dev-board#541）。
+  emits: ['entities', 'open-url', 'open-settings', 'open-hover', 'open-doc-file'],
   props: {
     projectId: { type: [Number, String], default: null },
     // 当前活跃的 writer 文档；换文档时面板整体重载（跟随，不留旧结论）
@@ -491,8 +503,13 @@ export default {
     noteHint(e) {
       return e && e.retrievalHint === 'NO_CREDENTIAL' ? 'insight.hint.NO_CREDENTIAL' : ''
     },
-    /** 配置类失败重试不了：那四种是恒定状态，再打一次上游只是白花一次额度。 */
+    /**
+     * 配置类失败重试不了：那四种是恒定状态，再打一次上游只是白花一次额度。
+     * DOC 同理：它的「检索」是与项目文件树比对（后端 refresh 对 DOC 是空操作），
+     * 静态文件树不会因为重试就多出一份文件来。
+     */
     showRetry(e) {
+      if (e && e.kind === 'DOC') return false
       return this.canParse && !(e && e.retrievalHint)
     },
     runNoteAction(e) {
@@ -530,12 +547,20 @@ export default {
       const r = this.recOf(e)
       return r ? [r.caseNumber, r.court].filter(Boolean).join(' · ') : ''
     },
+    // DOC：命中的项目文件（没命中时 detail 压根没有，返回 null）
+    docOf(e) { return projectFile(this.details[e.id]) },
+    /** 打开命中的那份项目文件——宿主落到右侧分屏（面板自己不碰标签系统）。 */
+    openDocFile(e) {
+      const d = this.docOf(e)
+      if (d) this.$emit('open-doc-file', { fileId: d.fileId, fileName: d.fileName })
+    },
     // 认得的字段一个都没渲染出来时才亮原文兜底（不是每次都把 JSON 铺一遍）
     showRaw(e) {
       const d = this.details[e.id]
       if (!d) return false
       if (e.kind === 'COMPANY') return !companyRows(d).length
       if (e.kind === 'LAW') { const a = lawArticle(d); return !a.title && !a.content && !authoritative(d) }
+      if (e.kind === 'DOC') return !projectFile(d)
       const c = caseRecord(d)
       return !c.title && !c.sections.length && !caseRecognition(d)
     },

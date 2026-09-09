@@ -35,14 +35,20 @@ export default {
     COMPANY: 'Companies',
     LAW: 'Statutes',
     CASE: 'Cases',
+    // Fourth entity kind: a file of this project referenced in the text (dev-board#541)
+    DOC: 'Documents',
   },
   // Badge for a single entity (hover card / entity tab) — the group headings above are plural.
   entityKind: {
     COMPANY: 'Company',
     LAW: 'Statute',
     CASE: 'Case',
+    DOC: 'Document',
   },
   openInNewTab: 'Open in a new tab',
+  openDocFile: 'Open file',
+  docNotFound: 'No such file in this project',
+  docMissing: 'That file is no longer in this project',
 
   mentions: '{count} mention(s)',
   mentionsTitle: 'Mentions in this document',

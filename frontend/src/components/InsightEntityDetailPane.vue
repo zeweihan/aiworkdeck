@@ -20,6 +20,7 @@
         :entity="entity"
         :detail="detail"
         @open-url="$emit('open-url', $event)"
+        @open-doc-file="$emit('open-doc-file', $event)"
       />
 
       <template v-if="mentions.length">
@@ -50,7 +51,7 @@ function unwrap(resp) {
 export default {
   name: 'InsightEntityDetailPane',
   components: { InsightEntityBody },
-  emits: ['open-url'],
+  emits: ['open-url', 'open-doc-file'],
   props: {
     // { entity, detail } —— 标签页建出来时宿主塞进去的那份（detail 可能已经拉好了）
     spec: { type: Object, default: null },
@@ -71,7 +72,7 @@ export default {
     entity() { return Object.assign({}, (this.spec && this.spec.entity) || {}, this.view || {}) },
     kind() {
       const k = this.entity.kind
-      return k === 'LAW' || k === 'CASE' ? k : 'COMPANY'
+      return k === 'LAW' || k === 'CASE' || k === 'DOC' ? k : 'COMPANY'
     },
     mentions() {
       const m = this.entity.mentions

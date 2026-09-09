@@ -5,6 +5,7 @@
 // 三种 detail 的形状（后端 DocInsightService 落库时定的，见 .claude/agents/doc-insight.md）：
 //   COMPANY  {source, basic:{企业名称:…, 统一社会信用代码:…, …}, shareholders:[{股东,持股比例,认缴出资}], raw?}
 //   LAW/CASE {source, tool, query, result:<上游 JSON 或原文字符串>}
+//   DOC      {source:'project-file', fileId, fileName, filePath}（没命中项目文件时压根没有 detail）
 //
 // **上游形状是别人家的**（法宝/企查查随时可能改字段名、外面还可能裹一层 MCP content 信封），
 // 所以这里一律「有什么渲染什么」：认得的字段按顺序列出来，认不得的整体落到原文兜底，
@@ -221,6 +222,23 @@ export function caseRecognition(detail) {
     url: pick(r, REC_URL),
   }
   return out.caseNumber || out.court || out.title || out.url ? out : null
+}
+
+/**
+ * DOC：解析在项目文件树里命中的那份文件（dev-board#541）。
+ * 后端命中时 detail = {source:'project-file', fileId, fileName, filePath}；
+ * 没命中的实体是 NOT_FOUND、压根没有 detail，这里返回 null（窗格照 retrievalNote 说话）。
+ */
+export function projectFile(detail) {
+  const d = detail && typeof detail === 'object' ? detail : null
+  if (!d) return null
+  const id = Number(d.fileId)
+  if (!id) return null
+  return {
+    fileId: id,
+    fileName: pick(d, ['fileName', 'file_name', '文件名']),
+    filePath: pick(d, ['filePath', 'file_path', '路径']),
+  }
 }
 
 /**

@@ -29,11 +29,15 @@
           :detail="detail"
           compact
           @open-url="$emit('open-url', $event)"
+          @open-doc-file="openDoc"
         />
       </scroll-view>
 
-      <view class="ihc-foot">
-        <text class="ihc-open" @tap.stop="openTab">{{ $t('insight.openInNewTab') }}</text>
+      <!-- DOC 的主动作是「打开文件」（详情标签对它没有意义，打开文件本身就落在右侧分屏）；
+           项目里没有这份文件时一个按钮都不给。 -->
+      <view v-if="showFoot" class="ihc-foot">
+        <text v-if="kind === 'DOC'" class="ihc-open" @tap.stop="openDoc">{{ $t('insight.openDocFile') }}</text>
+        <text v-else class="ihc-open" @tap.stop="openTab">{{ $t('insight.openInNewTab') }}</text>
       </view>
     </view>
   </view>
@@ -51,6 +55,7 @@
 
 import InsightEntityBody from '@/components/InsightEntityBody.vue'
 import { getDocInsightEntity } from '@/services/api.js'
+import { projectFile } from '@/utils/insightDetail.js'
 import { hoverCardPosition } from '@/utils/insightPopup.js'
 
 const CARD_W = 320
@@ -67,7 +72,8 @@ export default {
   // open-tab：底部「在新标签页打开」，宿主据此在右侧分屏开一个 insight-entity 标签。
   //           带上已经拉到的 detail，新标签页就不必再打一次接口。
   // open-url：法宝外链交给宿主的浏览器面板（面板自己不 window.open）。
-  emits: ['close', 'open-tab', 'open-url'],
+  // open-doc-file：DOC 实体命中的项目文件（宿主在右侧分屏打开那份文件本身）。
+  emits: ['close', 'open-tab', 'open-url', 'open-doc-file'],
   props: {
     entity: { type: Object, required: true },
     // 宿主换算好的页面坐标（客体页 clientX/clientY + webview rect）
@@ -88,8 +94,11 @@ export default {
   computed: {
     kind() {
       const k = this.entity && this.entity.kind
-      return k === 'LAW' || k === 'CASE' ? k : 'COMPANY'
+      return k === 'LAW' || k === 'CASE' || k === 'DOC' ? k : 'COMPANY'
     },
+    doc() { return projectFile(this.detail) },
+    /** DOC 没命中项目文件时底栏整条不出：没有一个走得通的动作可给。 */
+    showFoot() { return this.kind !== 'DOC' || !!this.doc },
     pos() {
       return hoverCardPosition({
         x: this.x,
@@ -113,6 +122,10 @@ export default {
   methods: {
     close() { this.$emit('close') },
     openTab() { this.$emit('open-tab', { entity: this.entity, detail: this.detail }) },
+    openDoc() {
+      const d = this.doc
+      if (d) this.$emit('open-doc-file', { fileId: d.fileId, fileName: d.fileName })
+    },
     /** 真实高度量出来再定位一次：翻转判据要用真高度，不然靠近底边时会露出屏幕外。 */
     measure() {
       this.$nextTick(() => {
