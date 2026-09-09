@@ -38,6 +38,15 @@ export default {
     LAW: '法规',
     CASE: '案例',
   },
+  // 单个实体的类型徽标（浮窗 / 实体详情标签页）。与上面 kind 的分组标题分开：
+  // 分组标题在英文版是复数（Companies），当徽标读起来不对。
+  entityKind: {
+    COMPANY: '公司',
+    LAW: '法规',
+    CASE: '案例',
+  },
+  // 正文 Cmd/Ctrl 点中实体后的浮窗（dev-board#541）
+  openInNewTab: '在新标签页打开',
 
   mentions: '{count} 处',
   mentionsTitle: '文中出处',

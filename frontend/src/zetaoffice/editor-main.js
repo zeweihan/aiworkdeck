@@ -287,7 +287,7 @@ function relayCursorContext(meta) {
         payload: {
           before: r.before || '', after: r.after || '', paragraph: r.paragraph || '',
           selectedText: r.selectedText || '', hasSelection: !!r.hasSelection,
-          meta: meta || { metaKey: false, ctrlKey: false },
+          meta: meta || { metaKey: false, ctrlKey: false, clientX: null, clientY: null },
           at: Date.now(),
         },
       })
@@ -365,7 +365,11 @@ startEditorEndpoint({
       setTimeout(async () => {
         // (dev-board#182) 依据窗格的正文联动：单击落定后问一次光标邻域。
         // 与超链接那条并行、互不阻塞（两者都是只读原语，谁先回来都不影响对方）。
-        relayCursorContext({ metaKey: d.metaKey, ctrlKey: d.ctrlKey })
+        // clientX/clientY 是**客体页视口**里的坐标（mousedown 记下的那一对，
+        // 不用 mouseup 的：拖动被上面 5px 判据挡掉了，两者本来就该一致）。
+        // 宿主 LibreOfficeEditor 收到后按 webview/iframe 的 rect 换算成页面坐标，
+        // 「依据」浮窗据此贴着点击处弹出（dev-board#541）。
+        relayCursorContext({ metaKey: d.metaKey, ctrlKey: d.ctrlKey, clientX: d.x, clientY: d.y })
         try {
           const r = await endpoint.executor.executeCommand('get_hyperlink_at_cursor', {})
           if (r && r.success && r.url) {

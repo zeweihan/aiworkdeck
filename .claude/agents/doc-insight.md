@@ -297,9 +297,12 @@ USCC_INVALID 的 detail 形状不同（没有 claims）：
 - `frontend/src/components/InsightPane.vue` + 同目录外置样式 `insight-pane.scss` —— 「依据」窗格本体，两个 tab（外部检索 / 一致性校验）。
 - `frontend/src/utils/insightMatch.js` —— 纯函数：`cursorWindow` / `matchEntityAt`（光标邻域命中实体）、`buildFixedQuote` / `fixSuggestions` / `fixBlockReason` / `findingLocateQuote`（一键修改的替换串）。**不许 import Vue/uni/i18n**（`node --test` 直接导入，且客体页 `editor-main.js` 也 import 它取 `CURSOR_RADIUS`）。
 - `frontend/src/utils/insightDetail.js` —— 纯函数：把 COMPANY/LAW/CASE 三种 `detail` 整形成可渲染的行，外加 `authoritative`（权威条文原文）/ `caseRecognition`（案号识别行）/ `citationDetail`（两类引用发现）。上游形状是别人家的，一律「认得的列出来、认不得的落原文兜底」。
+- `frontend/src/components/InsightHoverCard.vue` / `InsightEntityDetailPane.vue` / `InsightEntityBody.vue` —— 实体浮窗、实体详情标签页，以及**两者共用的一份正文渲染**（dev-board#541）。字段整形全部来自 `insightDetail.js`，不许再抄一份解析。
+- `frontend/src/utils/insightPopup.js` —— 纯函数：`guestPointToHost`（客体页 clientX/clientY + 画布 rect → 宿主页面坐标）、`hoverCardPosition`（贴点击点、靠边翻转、绝不出屏）。同 `insightMatch.js` 的口径：不许 import Vue/uni/i18n。
+- `frontend/src/pages/project-overview/insightEntityTab.js` —— 方法组：`insightEntityTabId` + `openInsightEntityTab`（外置是为了能拿假 this 单测「强制开分屏」与「单例」两条）。
 - `frontend/src/config/panelRegistry.js` —— `insight` 一条（`defaultDock:'right'`、`allowedDocks:['left','right']`，**不给 bottom**：底栏放不下判决书全文）。
 - `frontend/src/services/api.js` —— `parseDocInsight` / `getDocInsight` / `getDocInsightEntity` / `refreshDocInsightEntity`。
-- 宿主接线在 `frontend/src/pages/project-overview/project-overview.vue`（右栏 `rightPaneKey==='insight'` / 左栏 `leftPaneKey==='insight'` 两条显式分支 + `isInsightDoc` / `getInsightExecutor` / `onOpenInsight` / `onInsightEntities` / `onEditorCursorContext`）。
+- 宿主接线在 `frontend/src/pages/project-overview/project-overview.vue`（右栏 `rightPaneKey==='insight'` / 左栏 `leftPaneKey==='insight'` 两条显式分支 + `isInsightDoc` / `getInsightExecutor` / `onOpenInsight` / `onInsightEntities` / `setInsightIndex` / `insightSubscribedFor` / `prefetchInsightIndex` / `onEditorCursorContext` / `openInsightHoverCard` / `closeInsightHoverCard`；浮窗在**根节点**渲染，实体详情标签在左右两条 `v-else-if` 链里各一份）。
 - 编辑器侧：`EditorToolbar.vue` 的「解析」按钮（`toggle-insight`）→ `LibreOfficeEditor.vue` `onToggleInsight` → `open-insight` → 宿主。
 
 ### 事件流
@@ -311,14 +314,43 @@ USCC_INVALID 的 detail 形状不同（没有 claims）：
 面板 → @entities{docFileId,entities[]} → 宿主 _insightIndex（非响应式，同 _libreRefs 口径）
 
 画布单击 / 光标移动 → 客体页 editor-main.js（**仅在订阅打开时**）get_cursor_context
-   → lo-relay {type:'cursor-context', payload:{before,after,paragraph,meta:{metaKey,ctrlKey}}}
-   → LibreOfficeEditor $emit('cursor-context') → 宿主 onEditorCursorContext（先用 _insightIndex 匹配一遍）
-   → :cursor-context prop → 面板 matchEntityAt → Cmd/Ctrl 点击=选中并展开详情；普通点击/光标移动=被动高亮
+   → lo-relay {type:'cursor-context', payload:{before,after,paragraph,
+                meta:{metaKey,ctrlKey,clientX,clientY}}}      ← 点击那一路才有坐标
+   → LibreOfficeEditor withHostPoint（画布 rect **每次现取**）→ meta 里补 {hostX,hostY}
+   → $emit('cursor-context') → 宿主 onEditorCursorContext（先用 _insightIndex 匹配一遍）
+   → 窗格开着且绑着这份文档：:cursor-context prop → 面板 matchEntityAt
+        · 普通点击/光标移动 = 被动高亮
+        · Cmd/Ctrl 点击     = @open-hover{entity,x,y} → 宿主 openInsightHoverCard
+   → 窗格没开：宿主只处理 Cmd/Ctrl 那一支，直接 openInsightHoverCard
+浮窗「在新标签页打开」 → openInsightEntityTab → 右侧分屏 tabType 'insight-entity'
 ```
 
 订阅开关是宿主 → 客体页的下行消息 `{__lo:'lo-relay', type:'insight-sub', enabled}`，
 由 `LibreOfficeEditor` 的 `insightSubscribed` prop 驱动（`ready` 时补发一次）。
-**不订阅时客体页一次 `get_cursor_context` 都不打**——没开窗格的用户零开销。
+判据在宿主的 `insightSubscribedFor(file)`：**窗格开着且绑在它上面，或这份文档已经解析出实体**
+（dev-board#541 把订阅与窗格显隐解耦——否则窗格一关，正文 Cmd 点击就没反应）。
+索引由 `prefetchInsightIndex`（文档标签激活时拉一次 `GET /insight`，一份文档只拉一次、
+失败不写缓存）与窗格的 `@entities` 共同填，唯一写入点是 `setInsightIndex`
+（写非响应式的 `_insightIndex` + 响应式计数镜像 `insightEntityCounts`，模板要用后者）。
+**没解析过的文档仍然一次 `get_cursor_context` 都不打**——「零开销」那条口径对它们没变。
+
+### 实体浮窗与实体标签页（dev-board#541）
+
+- 正文里 **Cmd（mac）/ Ctrl 点击**命中实体 → 贴着点击处弹 `InsightHoverCard`：类型徽标 + 名称 +
+  检索状态/来源/note + 核心字段摘要 + 底部「在新标签页打开」。遮罩点击或 **Esc** 关闭。
+- **浮窗挂在页面根节点**（不在面板里）：编辑器画布是独立合成层的 `<webview>`，
+  浮层只有在根级 + 高 z-index（同 `FileTree` 右键菜单的 9999/10000）才压得住。
+  桌面端还要进 `desktopOverlayActive`——另一侧开着浏览器标签时 BrowserView 是原生层，会盖住 DOM。
+- **拿不到坐标就不弹**：`guestPointToHost` 在 rect 缺失 / 客体页没带 clientX/clientY 时返回 null，
+  `openInsightHoverCard` 据此直接 return。弹到屏幕角落比不弹更糟——用户会以为自己点错了地方。
+- 「在新标签页打开」→ `openInsightEntityTab`：**未分屏先开分屏**、`focusedPane='right'`、
+  单例 id `insight-entity_<kind>_<id>`（跨两侧查重，已开的只激活不重建）。
+  落右侧是硬要求：开在左边会把用户正在读的那份文档顶掉。
+  `tabType 'insight-entity'` 必须在 `pages/project-overview/fileKind.js` 的 `NON_FILE_TAB_TYPES` 里。
+- 浮窗与标签页**共用 `InsightEntityBody`** 一份渲染（浮窗档 `compact`：截长正文、不列其余候选、不铺原始 JSON）。
+  同步给宿主的实体索引是**瘦身**的（名字 + 几个短标量），**出处 `mentions` 不进索引**——
+  标签页要出处时自己打一次 `GET /entities/{id}`（EntityView 里就有）。
+- 面板里的 Cmd/Ctrl 点击**不再展开面板内详情**：用户的视线在正文上，把他引到侧栏去找刚点的那一条是多余的一步。
 
 ### 定位与一键修改的口径（硬约束）
 
@@ -337,7 +369,7 @@ USCC_INVALID 的 detail 形状不同（没有 claims）：
   带 `retrievalHint` 的**不给「重试」**，给引导按钮（`noteAction` → `open-settings {nav:'account'}`，NO_CREDENTIAL 只出一行 `.ip-note-h` 文案）；
   没有 hint 的才给「重试」（`showRetry` = `canParse && !retrievalHint`，`POST /entities/{id}/refresh`，要写权限）。
   面板自己不 `uni.navigateTo`：设置由宿主 `openSettingsTab` 就地开中栏标签（与 `@open-url` 同一条口径），
-  **两处挂载点（左栏 / 右 dock）都要绑 `@open-settings`**，漏一处 `check:emits` 直接红。
+  **两处挂载点（左栏 / 右 dock）都要绑 `@open-settings`**（`@open-hover` 同理），漏一处 `check:emits` 直接红。
   NOT_FOUND 用**中性灰**（`.ip-dot.st-NOT_FOUND` / `.ip-note.st-NOT_FOUND`），不用告警色：
   文档里写了一家不存在的公司，是文档的问题，不是我们的故障。
 - 两类引用发现（CITATION_*）在一致性 tab 里只列不改：`fixSuggestions` 看的是 `detail.claims`，引用 detail 没有这一段，天然落不到「修改建议」那一支；点条目仍按 `detail.quote` 定位。CITATION_MISMATCH 的「引用条文」是折叠段（`citedOpen`）。
@@ -348,7 +380,7 @@ USCC_INVALID 的 detail 形状不同（没有 claims）：
 ### 前端验证
 
 ```
-cd frontend && npm run test:insight        # 91 条（纯函数 58 + 组件级 33）
+cd frontend && npm run test:insight        # 108 条（纯函数 58 + 组件级 33 + 浮窗坐标 10 + 实体标签 7）
 cd frontend && npm run test:panel-dock     # 注册表自洽 + 停靠回落
 cd frontend && npm run check:emits && npm run check:nav && npm run check:locales
 cd frontend && npm run build:h5 && npm run build:zetaoffice   # 改 editor-main.js 后必须重建 glue

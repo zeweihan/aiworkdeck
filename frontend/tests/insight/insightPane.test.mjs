@@ -314,8 +314,8 @@ test('详情懒加载：展开才拉，且同一条只拉一次；hasDetail=fals
   assert.equal(calls.entity.length, 1)
 })
 
-test('光标联动：Cmd/Ctrl 点击 → 选中并展开；普通点击 → 只高亮', async () => {
-  const { vm, calls } = makeVm({ latest: { run: { status: 'DONE' }, entities: ENTS, findings: [] } })
+test('光标联动：Cmd/Ctrl 点击 → 上抛 open-hover；普通点击 → 只高亮（dev-board#541）', async () => {
+  const { vm, calls, emitted } = makeVm({ latest: { run: { status: 'DONE' }, entities: ENTS, findings: [] } })
   await vm.load()
   vm.tab = 'checks'
 
@@ -323,12 +323,16 @@ test('光标联动：Cmd/Ctrl 点击 → 选中并展开；普通点击 → 只�
   assert.equal(vm.highlightId, 2)
   assert.equal(vm.expandedId, null, '普通点击不该抢展开')
   assert.equal(vm.tab, 'checks', '普通点击不该抢 tab')
+  assert.equal(emitted.filter((e) => e[0] === 'open-hover').length, 0)
 
-  vm.onCursorContext({ before: '由京微资易', after: '科技有限公司持有', meta: { metaKey: true } })
-  assert.equal(vm.expandedId, 2)
-  assert.equal(vm.tab, 'retrieval')
+  vm.onCursorContext({ before: '由京微资易', after: '科技有限公司持有', meta: { metaKey: true, hostX: 420, hostY: 310 } })
+  const hover = emitted.filter((e) => e[0] === 'open-hover').pop()
+  assert.equal(hover[1].entity.id, 2)
+  assert.deepEqual([hover[1].x, hover[1].y], [420, 310], '坐标要原样带上去，浮窗才贴得住点击处')
   await new Promise((r) => setTimeout(r, 0))
-  assert.equal(calls.entity.length, 1)
+  assert.equal(vm.expandedId, null, '详情改由浮窗就地给，面板不再抢展开')
+  assert.equal(vm.tab, 'checks', '也不再抢 tab')
+  assert.equal(calls.entity.length, 0, '面板不该再为这一次点击去打一遍详情接口')
 })
 
 test('光标联动：没命中就什么都不动（不清高亮，免得面板一直闪）', async () => {
@@ -337,7 +341,6 @@ test('光标联动：没命中就什么都不动（不清高亮，免得面板�
   vm.highlightId = 2
   vm.onCursorContext({ before: '本次交易的对价为', after: '人民币一亿元', meta: { metaKey: true } })
   assert.equal(vm.highlightId, 2)
-  assert.equal(vm.expandedId, null)
   vm.onCursorContext(null)
   assert.equal(vm.highlightId, 2)
 })

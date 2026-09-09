@@ -52,7 +52,6 @@
           :key="e.id"
           class="ip-row"
           :class="{ on: expandedId === e.id, hl: highlightId === e.id }"
-          :id="'ip-ent-' + e.id"
         >
           <view class="ip-row-top" @tap="toggleEntity(e)">
             <view class="ip-dot" :class="'st-' + (e.retrievalStatus || 'PENDING')"></view>
@@ -270,7 +269,9 @@ export default {
   // 与 MarketDetailPane / ProjectFavoritesPanel 同一条既有事件。
   // open-settings：配置类检索失败（未连接账户 / 余额不足 / Key 失效）的「下一步」。
   // 面板自己不碰 uni.navigateTo，交给宿主 openSettingsTab —— 与 open-url 同一条口径。
-  emits: ['entities', 'open-url', 'open-settings'],
+  // open-hover：正文里 Cmd/Ctrl 点中一个实体（dev-board#541）。浮窗要压在编辑器
+  // <webview> 之上，只能挂在宿主根节点，所以面板只上抛「点中了谁、在屏幕哪一点」。
+  emits: ['entities', 'open-url', 'open-settings', 'open-hover'],
   props: {
     projectId: { type: [Number, String], default: null },
     // 当前活跃的 writer 文档；换文档时面板整体重载（跟随，不留旧结论）
@@ -383,7 +384,13 @@ export default {
         this.error = ''
         this.$emit('entities', {
           docFileId: forDoc,
-          entities: this.entities.map((e) => ({ id: e.id, kind: e.kind, name: e.name, normKey: e.normKey })),
+          // 瘦身索引：匹配用的两个名字 + 浮窗抬头要显示的几个短标量。
+          // **出处（mentions）不搬**——那是整段原文，索引只是给点击匹配用的。
+          entities: this.entities.map((e) => ({
+            id: e.id, kind: e.kind, name: e.name, normKey: e.normKey,
+            retrievalStatus: e.retrievalStatus, retrievalSource: e.retrievalSource,
+            retrievalNote: e.retrievalNote, hasDetail: e.hasDetail,
+          })),
         })
         if (this.isRunning) this.schedulePoll()
       } catch (e) {
@@ -618,9 +625,14 @@ export default {
     // ————————————————— 光标联动 —————————————————
     /**
      * 宿主推下来的光标邻域。命中实体时：
-     *   带 Cmd/Ctrl（meta.metaKey || meta.ctrlKey）→ 选中并展开详情（切到检索 tab）；
-     *   普通点击 / 光标移动         → 只被动高亮，不展开也不抢滚动。
+     *   带 Cmd/Ctrl（meta.metaKey || meta.ctrlKey）→ 上抛 open-hover，宿主在点击处弹浮窗；
+     *   普通点击 / 光标移动         → 只被动高亮，不抢 tab 也不抢滚动。
      * 未命中不清高亮——光标走出实体名就把高亮抹掉会让面板一直在闪。
+     *
+     * Cmd/Ctrl 那一支**不再在面板里展开详情**（dev-board#541）：用户的视线在正文上，
+     * 把它引到侧栏去找刚点的那一条是多余的一步；详情改由浮窗就地给。
+     * 坐标是宿主换算好的页面坐标（客体页 clientX/clientY + 画布 rect），
+     * 拿不到时宿主自己会退回「不弹」，这里原样传上去。
      */
     onCursorContext(ctx) {
       if (!ctx) return
@@ -629,19 +641,8 @@ export default {
       const meta = ctx.meta || {}
       this.highlightId = hit.id
       if (meta.metaKey || meta.ctrlKey) {
-        this.tab = 'retrieval'
-        this.expandedId = hit.id
-        this.loadDetail(hit)
-        this.scrollToEntity(hit.id)
+        this.$emit('open-hover', { entity: hit, x: meta.hostX, y: meta.hostY })
       }
-    },
-    scrollToEntity(id) {
-      this.$nextTick(() => {
-        try {
-          const el = typeof document !== 'undefined' ? document.getElementById('ip-ent-' + id) : null
-          if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' })
-        } catch (e) { /* 非 h5 端没有 document：滚不过去也不影响展开 */ }
-      })
     },
   },
 }

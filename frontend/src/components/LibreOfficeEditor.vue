@@ -153,6 +153,7 @@ import { DOC_MUTATED_EVENT } from '@/utils/docEvents.js'
 import { getResolvedTheme, APP_THEME_EVENT } from '@/utils/appTheme.js'
 import { stampApplication } from '@/utils/docxAppProps.js'
 import { documentStampApplication } from '@/utils/documentGeneratorSetting.js'
+import { guestPointToHost } from '@/utils/insightPopup.js'
 
 let seq = 0
 
@@ -487,6 +488,19 @@ export default {
      * 也就一次 get_cursor_context 都不打——没开窗格的用户完全不受影响。
      * ready 时补发一次：webview 重建/换文档后客体页的状态是全新的。
      */
+    /**
+     * 客体页的点击坐标（客体视口）换算成宿主页面坐标，供「依据」浮窗贴着点击点弹出
+     * （dev-board#541）。rect **每次现取**：分屏拖动/左栏收放/底栏开合都会挪动画布，
+     * 缓存下来的 rect 会让浮窗弹到上一次的位置。拿不到坐标时不写 hostX/hostY，
+     * 宿主据此退回「不弹浮窗」而不是弹到屏幕角落。
+     */
+    withHostPoint(meta) {
+      const m = meta && typeof meta === 'object' ? meta : {}
+      let rect = null
+      try { rect = this.webviewEl ? this.webviewEl.getBoundingClientRect() : null } catch (e) { rect = null }
+      const pt = guestPointToHost(rect, m.clientX, m.clientY)
+      return pt ? Object.assign({}, m, { hostX: pt.x, hostY: pt.y }) : m
+    },
     pushInsightSub() {
       if (!this._transportSend) return
       try {
@@ -728,7 +742,9 @@ export default {
         } else if (msg.type === 'cursor-context') {
           // 「依据」窗格的正文联动（dev-board#182）：客体页只在被订阅时才发这条。
           // 纯只读（get_cursor_context），不标脏、不刷工具栏。
-          this.$emit('cursor-context', Object.assign({ fileId: this.file && this.file.id }, msg.payload || {}))
+          const ctx = Object.assign({ fileId: this.file && this.file.id }, msg.payload || {})
+          ctx.meta = this.withHostPoint(ctx.meta)
+          this.$emit('cursor-context', ctx)
         } else if (msg.type === 'boot-log') {
           this.onBootLog(String(msg.msg || ''))
         } else if (msg.type === 'boot-failed') {

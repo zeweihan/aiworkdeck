@@ -36,6 +36,13 @@ export default {
     LAW: 'Statutes',
     CASE: 'Cases',
   },
+  // Badge for a single entity (hover card / entity tab) — the group headings above are plural.
+  entityKind: {
+    COMPANY: 'Company',
+    LAW: 'Statute',
+    CASE: 'Case',
+  },
+  openInNewTab: 'Open in a new tab',
 
   mentions: '{count} mention(s)',
   mentionsTitle: 'Mentions in this document',
