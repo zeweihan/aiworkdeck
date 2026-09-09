@@ -125,7 +125,7 @@ git merge-base --is-ancestor a9a5c36 v0.4.0   ->  否（v0.4.0 早于改证）
 
 | 方案 | 许可结果 | 工程量 | 说明 |
 |---|---|---|---|
-| **A0 re-vendor 到改证提交 a9a5c36** | AGPL-3.0 | 约 1 人周 | v0.4.0 到 a9a5c36 只有 32 个提交；后端总漂移 +1855 / -334；我们打补丁的 12 个文件里 9 个有变动（+952 / -34，几乎纯新增），**export_controller、ai_service_manager、pptx_builder 三个最重的补丁文件上游没动**。核心依赖清单不变（lazyllm 只是可选 extra 组）。有 compat_smoke_test.sh 与四个单元测试兜底 |
+| **A0 re-vendor 到改证提交 a9a5c36** | AGPL-3.0 | 约 1 人周 | v0.4.0 到 a9a5c36 只有 32 个提交；后端总漂移 +1855 / -334；我们打补丁的 12 个文件里 9 个有变动（+952 / -34，几乎纯新增），**export_controller、ai_service_manager、pptx_builder 三个最重的补丁文件上游没动**。a9a5c36 把 lazyllm、volcengine-python-sdk、fastapi 放进了核心依赖（执行时实测 lock 从 105 到 123 个 pin，无 torch / opencv 之类重包）。有 compat_smoke_test.sh 与四个单元测试兜底 |
 | A1 升级到 v0.9.0-rc.x | AGPL-3.0 | 2 到 4 人周 | 729 个提交；后端 +17759 / -1997；我们的 12 个文件漂移 +5735 / -1268。我们用的 7 个端点全部还在。但依赖大增（onnxruntime、opencv、PyMuPDF、多家模型 SDK），桌面包体积明显上涨，需裁剪 |
 | B 向 Anionex 买商业授权 | 合同定 | 接近 0，加谈判 | 邮箱 davidyang042@gmail.com；无公开报价，issues 里无先例。只有想在商业闭源版里保留对 pptx-service 的私有修改、或想给客户提供高于 AGPL 的保证时才需要。合同须写清再分发、OEM、转授权范围与对已重写贡献者代码的权利保证 |
 | C1 换 Presenton | Apache-2.0 | 6 到 10 人周 | 10126 star，FastAPI + Next.js。产品形态不同：出原生可编辑 pptx，不是整页 AI 生图。契约全量重写，双栈打包，CJK 渲染未核实，按请求下发 model_config 要重做 |
