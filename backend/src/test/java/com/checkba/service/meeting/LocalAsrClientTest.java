@@ -4,6 +4,7 @@
 package com.checkba.service.meeting;
 
 import com.checkba.service.SystemSettingService;
+import com.checkba.service.pack.NativePackService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -16,7 +17,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * 本机转写探测的三态与文案。
+ * 本机转写探测的四态与文案。
  *
  * <p>用覆写 {@code getHealth} 的子类打桩：真发请求会让测试结果取决于本机装没装 asr-service，
  * 那样测试就不可信了（口径抄 {@code OllamaProbeServiceTest}）。
@@ -27,9 +28,15 @@ class LocalAsrClientTest {
     private static final List<String> LOGOUT_MARKERS = List.of("登录", "未授权", "请先");
 
     private static LocalAsrClient client(String healthBody) {
+        return client(healthBody, true);
+    }
+
+    private static LocalAsrClient client(String healthBody, boolean packReady) {
         SystemSettingService settings = mock(SystemSettingService.class);
         when(settings.get(eq(LocalAsrClient.SETTING_BASE_URL), anyString())).thenReturn("http://127.0.0.1:8890");
-        return new LocalAsrClient(settings, "http://127.0.0.1:8890") {
+        NativePackService packs = mock(NativePackService.class);
+        when(packs.isReady("asr-runtime")).thenReturn(packReady);
+        return new LocalAsrClient(settings, packs, "http://127.0.0.1:8890") {
             @Override
             String getHealth(String base) {
                 return healthBody;
@@ -71,9 +78,30 @@ class LocalAsrClientTest {
     }
 
     @Test
-    @DisplayName("连不上 → SERVICE_DOWN；下一步指向重启/组件管理，不是「下载模型」")
+    @DisplayName("连不上且 asr-runtime 没装 → RUNTIME_MISSING，下一步是下载组件而不是重启应用")
+    void runtimeMissing() {
+        LocalAsrClient.ProbeResult r = client(null, false).probe();
+
+        assertEquals(LocalAsrClient.Status.RUNTIME_MISSING, r.status());
+        assertFalse(r.ready());
+        assertTrue(r.nextStep().contains("下载"), "下一步要指向下载运行时组件：" + r.nextStep());
+        assertFalse(r.nextStep().contains("重启"), "组件没装时让用户重启应用是错的指路：" + r.nextStep());
+        assertNotMistakenForLogout(r);
+    }
+
+    @Test
+    @DisplayName("服务能应答就不是 RUNTIME_MISSING（dev 态从仓库跑，本机没有 pack 也算就绪）")
+    void respondingServiceIsNeverRuntimeMissing() {
+        LocalAsrClient.ProbeResult r = client(
+                "{\"status\":\"ok\",\"model\":\"m\",\"modelReady\":true}", false).probe();
+
+        assertEquals(LocalAsrClient.Status.READY, r.status());
+    }
+
+    @Test
+    @DisplayName("组件装了但连不上 → SERVICE_DOWN；下一步指向重启/组件管理，不是「下载模型」")
     void serviceDown() {
-        LocalAsrClient.ProbeResult r = client(null).probe();
+        LocalAsrClient.ProbeResult r = client(null, true).probe();
 
         assertEquals(LocalAsrClient.Status.SERVICE_DOWN, r.status());
         assertTrue(r.message().contains("没有运行"), r.message());
@@ -96,8 +124,9 @@ class LocalAsrClientTest {
         SystemSettingService settings = mock(SystemSettingService.class);
         when(settings.get(anyString(), anyString())).thenAnswer(inv -> inv.getArgument(1));
 
-        assertEquals("http://127.0.0.1:8890", new LocalAsrClient(settings, "").baseUrl());
-        assertEquals("http://127.0.0.1:9001", new LocalAsrClient(settings, "http://127.0.0.1:9001/").baseUrl(),
+        NativePackService packs = mock(NativePackService.class);
+        assertEquals("http://127.0.0.1:8890", new LocalAsrClient(settings, packs, "").baseUrl());
+        assertEquals("http://127.0.0.1:9001", new LocalAsrClient(settings, packs, "http://127.0.0.1:9001/").baseUrl(),
                 "尾斜杠要去掉，否则拼出 //health");
     }
 }

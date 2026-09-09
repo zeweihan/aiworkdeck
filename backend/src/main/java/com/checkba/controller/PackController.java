@@ -8,7 +8,9 @@ import com.checkba.service.AdminAccessService;
 import com.checkba.service.LangText;
 import com.checkba.service.ai.skill.SkillDefinition;
 import com.checkba.service.ai.skill.SkillRegistry;
+import com.checkba.service.pack.ModelPresence;
 import com.checkba.service.pack.NativePackService;
+import com.checkba.service.pack.OptionalComponents;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -32,6 +34,7 @@ import java.util.regex.Pattern;
  * - GET  /list              已知 pack 的状态（登录）
  * - GET  /{id}/status       单个 pack 的状态（登录）
  * - GET  /{id}/info         最新版本与本平台下载体积（登录，manifest 缓存 5 分钟）
+ * - GET  /optional-components 四个可选运行时组件的快照（登录，不发网络请求）
  * - POST /{id}/install      异步安装，幂等（admin）
  * - POST /{id}/upgrade      异步追新，有新版才换（admin）
  * - POST /{id}/uninstall    卸载（admin）
@@ -50,6 +53,7 @@ public class PackController {
     private final SkillRegistry skillRegistry;
     private final UserRepository userRepository;
     private final AdminAccessService adminAccessService;
+    private final ModelPresence modelPresence;
 
     @GetMapping("/list")
     public ResponseEntity<Map<String, Object>> list(
@@ -93,10 +97,50 @@ public class PackController {
             Map<String, Object> result = ok();
             result.put("latestVersion", info.latestVersion());
             result.put("totalSize", info.totalSize());
+            result.put("unpackedSize", info.unpackedSize());
             return ResponseEntity.ok(result);
         } catch (Exception e) {
             return ResponseEntity.ok(error(e.getMessage()));
         }
+    }
+
+    /**
+     * 四个可选组件的一次性快照（设计 §3.2 / §4.1）。首次登录面板与「设置 - 组件管理」共用它。
+     * <b>绝不发网络请求</b>：体积取内存/落盘快照，0 = 未知，前端要精确值再去打 /info。
+     */
+    @GetMapping("/optional-components")
+    public ResponseEntity<Map<String, Object>> optionalComponents(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        if (!isLoggedIn(sessionId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("未登录", "Not signed in")));
+        }
+        Map<String, Object> result = ok();
+        result.put("components", optionalComponentViews(packService, modelPresence));
+        return ResponseEntity.ok(result);
+    }
+
+    /** 包级可见（无修饰符）纯为单测：不起 Spring 上下文就能核对这份快照的形状。 */
+    static List<Map<String, Object>> optionalComponentViews(NativePackService packs, ModelPresence models) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (OptionalComponents.Entry e : OptionalComponents.ALL) {
+            NativePackService.PackStatus st = packs.status(e.packId());
+            NativePackService.Sizes sizes = packs.knownSizes(e.packId());
+            Map<String, Object> m = new HashMap<>();
+            m.put("packId", e.packId());
+            m.put("service", e.service());
+            m.put("state", st.getState());
+            m.put("installed", NativePackService.STATE_READY.equals(st.getState()));
+            m.put("installedVersion", st.getInstalledVersion());
+            m.put("latestVersion", packs.knownLatestVersion(e.packId()));
+            m.put("downloadBytes", sizes.downloadBytes());
+            m.put("unpackedBytes", sizes.unpackedBytes());
+            m.put("modelId", e.modelId());
+            m.put("modelInstalled", models.installed(e.modelId()));
+            m.put("modelBytes", e.modelBytes());
+            m.put("featureKeys", e.featureKeys());
+            out.add(m);
+        }
+        return out;
     }
 
     @PostMapping("/{id}/install")

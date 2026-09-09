@@ -252,14 +252,56 @@ class NativePackServiceTest {
     }
 
     @Test
-    @DisplayName("解压拒绝条目数超限的压缩包")
+    @DisplayName("默认上限是 150000 条目 / 2.5GB —— 一个 torch venv 就超旧上限（5000/500MB）")
+    void defaultLimitsFitAPythonVenv() {
+        PackProperties defaults = new PackProperties();
+        assertEquals(150_000, defaults.getMaxArchiveEntries());
+        assertEquals(2_684_354_560L, defaults.getMaxUnpackedBytes());
+    }
+
+    @Test
+    @DisplayName("解压仍然拒绝超过配置条目数的压缩包（用小上限跑，不造 15 万个条目）")
     void rejectsTooManyEntries() throws Exception {
         byte[] bad = tarGz(tar -> {
-            for (int i = 0; i <= 5001; i++) {
+            for (int i = 0; i <= 11; i++) {
                 tar.file("f" + i, new byte[]{1});
             }
         });
-        assertExtractRejected(bad, "条目数");
+        PackProperties p = props("https://example.invalid/plugin-packs");
+        p.setMaxArchiveEntries(10);
+        NativePackService svc = new TestPackService(p, publicKeyPem, "0.21.0");
+        Path file = tempDir.resolve("too-many.tar.gz");
+        Files.write(file, bad);
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> svc.extract(file, tempDir.resolve("out-entries")));
+        assertTrue(e.getMessage().contains("条目数"), e.getMessage());
+    }
+
+    @Test
+    @DisplayName("解压仍然拒绝超过配置总体积的压缩包，且错误里报的是配置值不是写死的 500 MB")
+    void rejectsTooLargeUnpacked() throws Exception {
+        byte[] bad = tarGz(tar -> tar.file("big.bin", new byte[4096]));
+        PackProperties p = props("https://example.invalid/plugin-packs");
+        p.setMaxUnpackedBytes(1024);
+        NativePackService svc = new TestPackService(p, publicKeyPem, "0.21.0");
+        Path file = tempDir.resolve("too-big.tar.gz");
+        Files.write(file, bad);
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> svc.extract(file, tempDir.resolve("out-bytes")));
+        assertTrue(e.getMessage().contains("1024"), "错误文案要报真实上限：" + e.getMessage());
+    }
+
+    @Test
+    @DisplayName("manifest 的 unpackedSize 被解析出来（老 manifest 没有这个字段则为 0）")
+    void parsesUnpackedSize() {
+        byte[] raw = ("{\"schema\":1,\"id\":\"p\",\"version\":\"1.0.0\",\"minAppVersion\":\"0.1.0\",\"engineApi\":1,"
+                + "\"components\":[{\"name\":\"lib\",\"platforms\":[\"*\"],\"archive\":\"a.tar.gz\",\"size\":10,"
+                + "\"sha256\":\"x\",\"unpackDir\":\"lib\",\"unpackedSize\":4096},"
+                + "{\"name\":\"app\",\"platforms\":[\"*\"],\"archive\":\"b.tar.gz\",\"size\":5,"
+                + "\"sha256\":\"y\",\"unpackDir\":\"app\"}]}").getBytes(StandardCharsets.UTF_8);
+        NativePackService.Manifest m = NativePackService.parseManifest(raw);
+        assertEquals(4096L, m.components().get(0).unpackedSize());
+        assertEquals(0L, m.components().get(1).unpackedSize(), "老 manifest 无此字段 = 未知，按 0");
     }
 
     // ==================== contents.sha256 复核 ====================
