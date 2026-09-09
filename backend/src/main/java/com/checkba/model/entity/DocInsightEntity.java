@@ -16,7 +16,7 @@ import lombok.Setter;
 import java.time.LocalDateTime;
 
 /**
- * 文档里抽出来的一个实体（企业 / 法规 / 案例）及其外部库检索结果（dev-board#182）。
+ * 文档里抽出来的一个实体（企业 / 法规 / 案例 / 本项目内的另一份文档）及其检索结果（dev-board#182、#541）。
  *
  * <p><b>检索状态五态</b>：PENDING（还没打上游）、OK（拿到结果）、NOT_FOUND（<b>查完了，上游明确说没有</b>——
  * 这是一次成功的检索，不是故障）、UNAVAILABLE（通道不可用——未配置、点数耗尽、网关未开放；
@@ -42,6 +42,12 @@ public class DocInsightEntity {
     public static final String KIND_COMPANY = "COMPANY";
     public static final String KIND_LAW = "LAW";
     public static final String KIND_CASE = "CASE";
+    /**
+     * 正文里用书名号提到的<b>本项目里的另一份文件</b>（dev-board#541）。
+     * 「检索」是与项目文件树比对，不打任何外部库：命中写 {@code retrievalJson.fileId} 供窗格直接打开，
+     * 没命中落 NOT_FOUND（「文档提到但项目里缺这份」——尽调里这本身就是一条线索，不是故障）。
+     */
+    public static final String KIND_DOC = "DOC";
 
     public static final String RETRIEVAL_PENDING = "PENDING";
     public static final String RETRIEVAL_OK = "OK";

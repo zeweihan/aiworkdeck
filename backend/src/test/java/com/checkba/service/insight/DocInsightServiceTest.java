@@ -851,6 +851,137 @@ class DocInsightServiceTest {
         assertTrue(law.getRetrievalNote().contains("稍后重试"), law.getRetrievalNote());
     }
 
+    // ---------------------------------------------------------------- 文档实体（DOC，dev-board#541）
+
+    /** 五处书名号：四份指向项目文件（含一份只在文件夹上同名），一处是法规。 */
+    static final String DOC_TEXT = """
+            本次交易的租赁安排见《房屋租赁合同》，另见《北京房屋租赁合同》补充说明，
+            表决程序见《股东会决议》，核查范围见《尽职调查清单》。
+            法律依据为《中华人民共和国公司法》，另有《海外架构备忘录》一份。
+            """;
+
+    /**
+     * 项目文件树：三份能对上的文件（相等 / 带序号前缀 / 带括号注记），外加一个<b>同名文件夹</b>
+     * ——文件夹不算数，《海外架构备忘录》照样得落「项目里缺这份」。
+     */
+    private void stubDocProject() throws Exception {
+        when(docText.extractText(any())).thenReturn(DOC_TEXT);
+        when(model.generate(anyList())).thenReturn(modelReply("{}"));
+        when(files.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(PID)).thenReturn(List.of(
+                projectFile(21L, "房屋租赁合同.docx", "/p/1/房屋租赁合同.docx", false),
+                projectFile(22L, "04-股东会决议.docx", "/p/1/04-股东会决议.docx", false),
+                projectFile(23L, "尽职调查清单（2021）.xlsx", "/p/1/尽职调查清单（2021）.xlsx", false),
+                projectFile(24L, "海外架构备忘录", null, true)));
+        stubPkulawUnavailable();
+    }
+
+    private static ProjectFile projectFile(Long id, String name, String path, boolean folder) {
+        ProjectFile f = new ProjectFile();
+        f.setId(id);
+        f.setProjectId(PID);
+        f.setName(name);
+        f.setFilePath(path);
+        f.setIsFolder(folder);
+        f.setIsDeleted(false);
+        return f;
+    }
+
+    private List<DocInsightEntity> docEntities() {
+        return entityStore.values().stream()
+                .filter(e -> DocInsightEntity.KIND_DOC.equals(e.getKind()))
+                .sorted(Comparator.comparing(DocInsightEntity::getId)).toList();
+    }
+
+    private DocInsightEntity docEntity(String normKey) {
+        return docEntities().stream().filter(e -> normKey.equals(e.getNormKey())).findFirst()
+                .orElseThrow(() -> new AssertionError("没有 normKey=" + normKey + " 的 DOC 实体，实到 "
+                        + docEntities().stream().map(DocInsightEntity::getNormKey).toList()));
+    }
+
+    @Test
+    @DisplayName("书名号分流：法规体裁仍归 LAW，其余书名号才当 DOC 候选")
+    void 书名号分流() throws Exception {
+        stubDocProject();
+        awaitStatus(svc.startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+
+        assertEquals("《中华人民共和国公司法》", entityOf(DocInsightEntity.KIND_LAW).getName());
+        assertTrue(docEntities().stream().noneMatch(e -> e.getName().contains("公司法")),
+                "同一个书名号只能落一类，《公司法》不许再被当成项目文件");
+        assertTrue(docEntities().stream().anyMatch(e -> e.getName().contains("房屋租赁合同")),
+                "《房屋租赁合同》要抽成 DOC 候选");
+        assertEquals("海外架构备忘录", docEntity("海外架构备忘录").getName(),
+                "展示名是文中的写法，不带书名号");
+    }
+
+    @Test
+    @DisplayName("候选对上项目文件：相等 / 去序号前缀 / 去括号注记三种都命中，detail 带 fileId")
+    void 文档命中项目文件() throws Exception {
+        stubDocProject();
+        awaitStatus(svc.startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+
+        for (long fileId : new long[]{21L, 22L, 23L}) {
+            DocInsightEntity row = docEntity("file:" + fileId);
+            assertEquals(DocInsightEntity.RETRIEVAL_OK, row.getRetrievalStatus(), "file:" + fileId);
+            assertEquals("project-file", row.getRetrievalSource());
+            assertNull(row.getRetrievalHint());
+            assertTrue(row.getRetrievalJson().contains("\"fileId\":" + fileId), row.getRetrievalJson());
+        }
+        assertTrue(docEntity("file:22").getRetrievalJson().contains("04-股东会决议.docx"),
+                "detail 要带真实文件名，窗格照它显示");
+
+        EntityView view = svc.latest(UID, PID, DOC).entities().stream()
+                .filter(e -> "file:21".equals(e.normKey())).findFirst().orElseThrow();
+        assertTrue(view.hasDetail(), "命中的 DOC 行必须 hasDetail=true，前端才会去拿 fileId");
+        assertNull(view.detail(), "列表照旧瘦身");
+        assertNotNull(svc.entityDetail(UID, PID, view.id()).detail().get("fileId"));
+    }
+
+    @Test
+    @DisplayName("项目里没有对应文件（同名文件夹不算）：落 NOT_FOUND，不带原因码也不提重试")
+    void 文档未命中() throws Exception {
+        stubDocProject();
+        awaitStatus(svc.startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+
+        DocInsightEntity miss = docEntity("海外架构备忘录");
+        assertEquals(DocInsightEntity.RETRIEVAL_NOT_FOUND, miss.getRetrievalStatus(),
+                "文档提到但项目里缺这份，是文档的线索不是通道故障");
+        assertTrue(miss.getRetrievalNote().contains("项目中未找到该文件"), miss.getRetrievalNote());
+        assertNull(miss.getRetrievalHint());
+        assertFalse(miss.getRetrievalNote().contains("重试"), miss.getRetrievalNote());
+        assertNull(miss.getRetrievalJson());
+    }
+
+    @Test
+    @DisplayName("多处提到同一份文件合并成一个实体，出处累加")
+    void 同一文件多处提及合并() throws Exception {
+        stubDocProject();
+        awaitStatus(svc.startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+
+        assertEquals(4, docEntities().size(),
+                "《房屋租赁合同》与《北京房屋租赁合同》指的是同一份文件，窗格里只该有一条：实到 "
+                        + docEntities().stream().map(DocInsightEntity::getNormKey).toList());
+        DocInsightEntity row = docEntity("file:21");
+        assertTrue(row.getMentionsJson().contains("北京房屋租赁合同"), row.getMentionsJson());
+        assertTrue(row.getMentionsJson().contains("本次交易的租赁安排见"), row.getMentionsJson());
+    }
+
+    @Test
+    @DisplayName("重新检索对 DOC 是空操作：不打外部库，也不把已判好的状态覆盖成 UNAVAILABLE")
+    void 重新检索不覆盖文档状态() throws Exception {
+        stubDocProject();
+        awaitStatus(svc.startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+
+        EntityView hit = svc.refreshEntity(UID, PID, docEntity("file:21").getId());
+        assertEquals(DocInsightEntity.RETRIEVAL_OK, hit.retrievalStatus());
+        assertEquals(21, hit.detail().get("fileId").asLong());
+
+        EntityView miss = svc.refreshEntity(UID, PID, docEntity("海外架构备忘录").getId());
+        assertEquals(DocInsightEntity.RETRIEVAL_NOT_FOUND, miss.retrievalStatus(),
+                "落到 default 分支会说成「未知实体类型 / 本次不可用」——那是给用户的假故障");
+        assertTrue(miss.retrievalNote().contains("项目中未找到该文件"), miss.retrievalNote());
+        verify(qichacha, never()).queryEciInfoJson(startsWith("海外"));
+    }
+
     /** 法规实体的 REST 视图（原因码是给前端的契约，只断言实体字段不够）。 */
     private EntityView lawView() {
         return svc.latest(UID, PID, DOC).entities().stream()
