@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.plugin.api;
 
 /** 插件级键值设置（键自动加前缀 plugin.&lt;id&gt;.）与项目样式画像。 */

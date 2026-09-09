@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 离开工作台前必须落盘：否则自动保存防抖窗口内的改动静默丢失。
 //
 // 病灶：closeFile / evictLibreInstance 都会先 await flushSave 再拆实例，但**离开整个

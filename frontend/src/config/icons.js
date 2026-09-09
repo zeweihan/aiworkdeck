@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 全站线性图标 path 集合。
 //
 // 产品红线：界面里不使用 emoji。图标一律 stroke 线性 SVG，24x24 viewBox，

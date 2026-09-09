@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!--
   左栏「日历」面板：project_task 的第三个挂载点（另两个是文件右键设截止日、
   概览页 TaskSchedule）。窄栏（260px 起）装不下月历网格，用 FullCalendar 的

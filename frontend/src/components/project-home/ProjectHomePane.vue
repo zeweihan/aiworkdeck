@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!--
   项目概览的内容本体（一页纸卷轴：档案头 / 统计条 / 动态 / 日程 / 对话）。
 

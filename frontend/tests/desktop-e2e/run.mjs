@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 桌面宿主链路 e2e / desktop host-chain e2e (Electron + CDP).
 //
 // 覆盖浏览器目标够不到的三处：

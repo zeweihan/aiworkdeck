@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # 优化者常驻进程：一个只干这件事的后端实例。
 #
 # 它跟桌面 app 那个后端刻意隔离：独立端口、独立 user.home（自己的空 H2）、

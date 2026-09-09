@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * office_command 的 WPS 家族执行器（与 officeExecutor.js 同契约）：
  * 后端 OfficeBridgeService 经 SSE client_action 下发 {tool:'office_command',

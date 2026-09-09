@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // project-overview.vue 的证据链接（EvidenceLink）动作组：拖文件到编辑器即建链、
 // method 浮动小条、点击 filelink 链接解包定位。与 stagingArea.js 同款导出 `{ data(), methods }`，
 // 经展开进组件，`this` 即 project-overview 页面实例。

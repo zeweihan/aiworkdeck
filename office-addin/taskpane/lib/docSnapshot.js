@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * 文档镜像采集（dev-board#299）：拿当前文档的**原始文件字节**（.docx/.xlsx/.pptx）。
  *

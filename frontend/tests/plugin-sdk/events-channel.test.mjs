@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 事件通道（插件规范 v2.7）SDK 行为测试：订阅/推送/退订/老宿主降级。
 // 与 theme-channel.test.mjs 同一配方：把 SDK 源码注入假 DOM 环境直接执行。
 import { test } from 'node:test'

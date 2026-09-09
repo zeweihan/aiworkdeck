@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!--
   「近期截止」侧栏：未完成任务按 dueDate 升序展示，剩余天数徽标（≤7 天红色系 /
   逾期深红 / 其余灰）。点击一条 → 父级 gotoDate 跳到该日期（不在这里跳，

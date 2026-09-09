@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // insightMatch.js — 「依据」窗格的两组纯函数（dev-board#182）：
 //   ① 光标邻域 → 命中哪个实体（正文点击/光标移动联动）；
 //   ② 一致性发现 → 「统一为 X」的机械替换串（一键修改）。

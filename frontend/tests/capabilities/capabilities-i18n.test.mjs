@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * 「能力升级」分区的 i18n 对拍：模板里用到的每个 admin.capability* / navCapabilities
  * 键，两个语言文件里都得有。check:locales 只保证两侧键集合一致，

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 原生外观必须与应用主题一致（dev-board#218 → #223）。
 //
 // 病灶（#218）：外壳当时是浅色单主题，原生层却跟随系统。系统开深色时主窗口

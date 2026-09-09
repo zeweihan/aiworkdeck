@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <!-- :key=langKey：语言切换时整树重挂载，让模板里的 t() 全部重新求值（会话态在模块级 store，不丢） -->
   <div class="app-shell" :key="langKey">

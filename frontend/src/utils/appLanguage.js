@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 应用语言（zh-CN / en-US）。权威源是这里的 uni storage 值；后端 system_setting
 // 与桌面主进程（菜单/原生对话框）只是镜像，由 App.vue 监听 EVENT 统一写透。
 //

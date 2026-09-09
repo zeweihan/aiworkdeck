@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!--
   「我的代办」栏目（UI 占位，后端尚无待办实体）。2026-08-20 从
   components/userprofile/UserProfilePane.vue 原样搬出，内容一行没改。

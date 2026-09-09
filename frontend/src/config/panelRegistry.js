@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 可停靠面板注册表（dev-board#180）：哪些面板能换停靠位、默认停在哪、允许停在哪。
 //
 // **本文件不许 import Vue / uni / @/i18n**——它要能被 node --test 直接导入

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // project-overview.vue 的菜单栏接线：状态上报 + wb:* 命令执行。
 // 经展开进组件 methods（与同目录其它模块同法），`this` 即工作台页面实例。
 //

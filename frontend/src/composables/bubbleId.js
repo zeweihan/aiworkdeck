@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 聊天气泡的唯一 ID。
 //
 // 病灶：原来两处都是 `msg-${Date.now()}`，而用户气泡与助手气泡是在**同一个同步块**里

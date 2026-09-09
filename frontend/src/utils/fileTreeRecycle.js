@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // FileTree.vue 回收站相关的纯判定逻辑，抽出来是为了能在 node:test 里直接单测
 // （FileTree.vue 体量太大又是组件，测不动整个文件）。
 

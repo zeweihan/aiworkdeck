@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 const { contextBridge, ipcRenderer } = require('electron')
 
 // 主进程经 additionalArguments 注入的后端地址（端口是启动时实际分配的，

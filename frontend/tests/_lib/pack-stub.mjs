@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 原生资源包（native pack）测试桩：现生成一对 Ed25519 密钥、现造一个极小的 pack
 // 产物（manifest.json + .sig + 一个 tar.gz 组件 + 包内 contents.sha256），起一个
 // 本地 HTTP 静态源把它们 serve 出来。供 app-e2e J13「广场安装带资源包的插件」用。

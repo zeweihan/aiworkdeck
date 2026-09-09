@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // project-overview.vue 的内嵌 LibreOffice 保活池/活跃实例指针/LRU 淘汰与编辑器宿主事件。
 // 模式说明见 .claude/agents/sidebar-shell.md 与 PR#151/#159。
 // 经展开进组件 methods（纯搬移，Phase 1 外置），`this` 即 project-overview 页面实例。

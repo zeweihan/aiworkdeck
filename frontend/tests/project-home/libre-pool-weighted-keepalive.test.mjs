@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 尽调模块 P3 稳定性余项 #2（dev-board#100）：LOWA 编辑器保活池固定 LRU=3，与文档体积
 // 无关。三个 150 页/6.6MB 大文档同时驻留会把页面内存吃到约 2.4GB（实测基线，见
 // docs/superpowers/specs/2026-08-21-due-diligence-module-proposal.md §3）。

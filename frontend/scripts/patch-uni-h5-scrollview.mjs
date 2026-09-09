@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // uni-h5 的 scroll-view 在挂载后用 nextTick 补写一次 scrollTop/scrollLeft，但那个回调
 // 对元素 ref 没有任何空判：组件在同一批 flush 里被卸载（v-if 分支翻转、路由离开）时，
 // main.value 已经是 null，于是产线控制台常驻两条——

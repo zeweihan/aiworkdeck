@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 会议录音端到端走查（Electron + CDP + Chromium 假麦克风），配方沿用 feedback-e2e。
 //
 // 覆盖链：广场启用 skill → 左栏出现「会议录音」→ 一键开录（真 getUserMedia）→

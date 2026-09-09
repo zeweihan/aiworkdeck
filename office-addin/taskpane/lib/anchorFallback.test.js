@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * 锚点跨段降级选段（dev-board#149）：Office.js 的 body.search 不跨段落，模型摘的
  * anchorText/searchText 若含 \n/\r 会首次必然「未找到」。pickAnchorFallback 把

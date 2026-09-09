@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 通用词汇：跨页面复用的动词/状态。页面专有文案放各自命名空间，不要都堆到这里。
 export default {
   confirm: '确定',

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // evidenceStaleQueue.js — 改字 stale 提示条的合并规则（spec §4.4，纯函数、可测）。
 //
 // - 同一 linkKey 在 windowMs（默认 3s）内只弹一次；

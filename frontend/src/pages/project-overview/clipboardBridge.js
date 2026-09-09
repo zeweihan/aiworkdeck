@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // project-overview.vue 的剪贴板捕获桥：桌面端走 Electron 主进程推送，H5 走
 // copy/paste/keydown 三路兜底监听；TEXT/IMAGE/FILE 三类载荷统一经 recordClipboardOnce 入库。
 // 去重状态挂 window 而非组件实例——本页经 navigateTo 反复进入时页面栈里存在多个实例，

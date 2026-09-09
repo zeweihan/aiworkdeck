@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 剪贴板采集桥的登录态闸门（dev-board#455）。
 //
 // 病灶：bindClipboardListener() 第一件事是 `const user = getCurrentUser(); if (!user) return`，

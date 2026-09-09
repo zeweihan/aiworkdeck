@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // useEvidenceAnchors.js — EvidenceLink 锚点核对状态机（spec §4.4，dev-board#105）。
 // LibreOfficeEditor 只做接线：把 executor / API / 缓存读写喂进来，这里负责
 // 判定（classifyAnchorResults）、回写本地状态（applyReport）与调度（createAnchorChecker）。

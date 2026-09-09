@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // A6/C10：运行真实组件保存方法，控制导出/上传的在途顺序。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

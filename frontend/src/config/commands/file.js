@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 「文件」菜单：案卷与文件的进出口。字段含义见同目录 README.md。
 
 export const FILE_COMMANDS = [

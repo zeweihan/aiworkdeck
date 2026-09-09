@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 审计（dev-board#74）MEDIUM：loadArchiveEntries 没有陈旧守卫，快速切换 zip/rar/7z
 // 文件会显示错的条目列表。
 //

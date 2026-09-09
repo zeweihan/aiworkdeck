@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // P3「底稿定位增强」：locator → 可渲染形状的纯函数（utils/evidenceLocator.js 后半段）。
 // 三条不变式：
 //   1. 缺字段（OCR 常态）一律退化成 null——调用方据此「只打开文件、什么都不画」，

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 拖拽建链的 guest 代收转发（dev-board#171）。
 //
 // 病灶：Electron 原生 DnD 的命中测试把拖拽路由进 <webview> 客体，宿主 DOM 的

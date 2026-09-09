@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 反馈浮窗端到端 / feedback widget e2e (Electron + CDP)。
 //
 // 覆盖浏览器目标够不到的整条链：右下角浮窗 → 打字 → **真的走一次主进程框选截图**

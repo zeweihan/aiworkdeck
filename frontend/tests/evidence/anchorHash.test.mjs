@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 锚点归一化与 sha256 必须与后端 AnchorHash.java 双端对拍：向量文件 anchor-hash-vectors.json
 // 由单元 A 从 Java 算出写死（in/norm/hash 三字段），这里逐条断言。
 import test from 'node:test'

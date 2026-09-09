@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // dev-board#367：AI 流式落字（doc_start_stream → doc_stream_data → stream_insert）
 // 这一路曾经不带 __agent 标记，worker 据此把修订署成当前用户名——用户在 Word 里
 // 看到 AI 写的内容记在自己名下，分不清哪些是 AI 改的。handleEditorCommand 一直带

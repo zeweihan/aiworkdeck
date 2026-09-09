@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 审计（dev-board#74）MEDIUM：AwdSelect 自己的下拉滚动会立刻把菜单关掉。
 //
 // 病灶：attachDismiss 在 window 上挂了捕获段（第三参 true）的 scroll 监听器，用来

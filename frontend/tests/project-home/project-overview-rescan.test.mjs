@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 稳定性审计复扫（dev-board#74）里落在工作台 project-overview.vue 上的三条结论。
 // 组件带 @/ 别名、import 不进来，所以走本仓既有的两种写法：
 // 能抠出来单跑的函数就真跑一遍（重命名竞态），模板接线只能做源码文本断言。

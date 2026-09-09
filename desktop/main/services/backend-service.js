@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 const path = require('path')
 const fs = require('fs')
 const net = require('net')
@@ -353,4 +355,6 @@ module.exports = {
   createBackendDescriptor, backendLayout, javaLaunchArgs,
   // 复用版本闸的可测面（backend-reuse-gate.test.js）
   decideReuse, probeBackend, backendBuildId,
+  // 端口链契约的可测面（port-chain-contract.test.js）
+  DESKTOP_PORT_CHAIN,
 }

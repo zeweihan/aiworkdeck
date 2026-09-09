@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 全应用"真人模拟"e2e / whole-app human-simulation e2e (browser target).
 //
 // 从桌面首启解锁门（launch → unlock）开始，以真实鼠标点击

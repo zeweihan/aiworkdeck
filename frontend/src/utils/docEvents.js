@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // docEvents.js — 「文档被写过一笔」的全局通知（uni.$emit/$on），载荷 { fileId }。
 //
 // 为什么需要它（dev-board#460）：审阅面板的「修订 / 批注」计数只有一条刷新来路，

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * 渲染 Office 插件安装器美术资产（维护者改美术时手动跑，产物入库；构建/CI 不需要本脚本）：
  *   art/installer-sidebar.html → win/installerSidebar.bmp   （164x314，24 位 BMP3）

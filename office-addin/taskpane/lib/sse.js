@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * SSE 消费：与主前端 useAgentStream 同一方式——fetch + ReadableStream 手工解析
  * `event:`/`data:` 行（不用 EventSource，因为要携带 X-Session-Id 请求头）。

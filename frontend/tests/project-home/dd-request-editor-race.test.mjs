@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 审计（dev-board#74）：DdRequestEditor 在 project-overview 里没有 :key，
 // 切换不同尽调清单标签时是同一个实例被复用，requestId watcher 只是再调一次
 // fetchData()，先发的那次若后返回就会把后发那次的数据整个盖掉——头部标题、

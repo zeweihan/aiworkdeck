@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // useEditorBridge.js — editor-agnostic dispatch seam for the AI agent command pipeline.
 //
 // Epic #43 (LibreOffice migration), WPS removal #79. The agent command pipeline is:

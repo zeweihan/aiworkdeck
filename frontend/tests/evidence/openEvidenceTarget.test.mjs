@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 复核 F1：Web 插件 evidence.locate 经 uni 事件 awd:open-evidence-target 到工作台，
 // 监听器必须把整个 payload（{fileId, locator, linkKey}）交给 openFileLinkTarget(target, side)。
 // 此前传的是裸 fileId，openFileLinkTarget 读 target.fileId 得 NaN 静默返回，SDK 却回 ok:true。

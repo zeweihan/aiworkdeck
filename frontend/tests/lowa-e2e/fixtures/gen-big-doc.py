@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """大文档基线组的夹具生成器（dev-board#108，配方见
 docs/superpowers/specs/2026-08-21-dd-scale-stability-inventory.md 附录 A）。
 

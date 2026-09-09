@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // drawio-server.js — 内嵌 draw.io 编辑器的本地静态服务。
 //
 // 「诉讼可视化」出的 .drawio 是唯一的可继续编辑版；这个 server 让它在应用内直接

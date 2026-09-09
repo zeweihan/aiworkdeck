@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 外观主题（浅色 / 深色 / 跟随系统）。权威源是这里的 uni storage 值；
 // documentElement 上的 data-theme 与桌面主进程的 nativeTheme 都是镜像。
 //

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * 生产部署产物生成器（仅用 node 内置模块，无新依赖）：
  * 1. 把 manifest.xml 里的开发态 URL（https://localhost:3000）整体替换为部署地址；

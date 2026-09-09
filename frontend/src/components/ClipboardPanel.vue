@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="clip-panel">
     <!-- 免费额度提示：只在确实有记录被挡住时出现。没超额时一个字都不显示，不打扰。 -->

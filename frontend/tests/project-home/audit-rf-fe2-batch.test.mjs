@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 审计（dev-board#74，dev-board#498 待处理清单）第 rF 批：面板/表单/列表侧的
 // 请求定序 / 在途守卫缺陷。docs/AUDIT_2026-08-20_REMAINING.md 里给的原始行号
 // （780/815/899/906/913/920/927/934/941/948/955/962/969/990）在合入 #506/#517

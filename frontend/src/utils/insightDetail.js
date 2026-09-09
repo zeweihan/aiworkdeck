@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // insightDetail.js — 把「依据」窗格拿到的检索详情整形成可渲染的行（dev-board#182）。
 //
 // 三种 detail 的形状（后端 DocInsightService 落库时定的，见 .claude/agents/doc-insight.md）：

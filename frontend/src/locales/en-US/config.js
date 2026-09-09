@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // config/ directory strings (sidebar plugins / tools / file actions / OCR actions / project types / member roles / clipboard / variable library)
 export default {
   sidebar: {

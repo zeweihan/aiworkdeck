@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 功能权益（entitlement）前端出口。
 //
 // 单一数据源是后端 GET /api/entitlements（本地票据 ∪ 账户同步结果，合并逻辑在后端

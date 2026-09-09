@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * 平台服务在界面上的展示元数据（首启向导步骤 2 与系统管理「平台服务」分区共用）。
  *

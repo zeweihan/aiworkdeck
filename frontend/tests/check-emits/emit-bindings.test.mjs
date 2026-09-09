@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 静态护栏自身的回归测试：属性里出现裸 '>' 时，护栏不许把后面的 @event 漏掉。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

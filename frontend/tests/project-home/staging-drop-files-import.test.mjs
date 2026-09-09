@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 审计（dev-board#74）HIGH 的落地一半：FileStagingArea 发出 drop-files 之后，
 // project-overview 的消费端 stagingArea.js#onStagingDropFiles 是否真的把文件
 // 接进了导入通道，而不是也一样悄悄什么都不做。

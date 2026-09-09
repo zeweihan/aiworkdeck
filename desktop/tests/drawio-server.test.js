@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 内嵌 draw.io 静态服务的回归测试。
 //
 // 守几件真出过事故 / 明确设计契约的东西：

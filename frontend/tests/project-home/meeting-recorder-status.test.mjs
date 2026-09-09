@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 审计（dev-board#74）确认的缺陷：录音设备中途死掉，界面照常计时报「录音中」。
 //
 // 病灶：ondataavailable 只入队、onstop 只置 recordingDone，两者都不动

@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <!-- 纯工具 / skill 型插件（manifest 无 frontendEntry）的宿主渲染启动面板。
        它就是这类插件的「独立页面」：介绍能做什么、怎么用、一键把任务发进 AI 对话。

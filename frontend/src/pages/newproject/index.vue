@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!--
   新建/打开项目页。2026-08 起**不再是主入口**——「打开文件夹 / 新建项目文件夹」
   两个动作已经内嵌在项目列表页下方（先看见有哪些案卷，再谈新建）。本页保留两个用途：

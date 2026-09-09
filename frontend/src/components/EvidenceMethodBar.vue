@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view v-if="visible" class="evidence-bar" :class="{ 'is-error': isError }" @mousedown.stop @tap.stop>
     <svg class="evidence-bar-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">

@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!--
   全局日历页（跨项目日程/截止日）。dev-board #50，spec:
   docs/superpowers/specs/2026-08-20-calendar-view-design.md

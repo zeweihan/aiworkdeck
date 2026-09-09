@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * 宿主桥：同一套任务窗格 Vue 层跑在两个宿主家族里——Microsoft Office（Office.js）
  * 与 WPS（WPS 加载项 JSAPI）。Vue 层（chatSession/ChatView）只 import 本模块，
