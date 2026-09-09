@@ -15,7 +15,7 @@
 // Usage:
 //   node scripts/build-patch-assets.js --version 0.11.2 \
 //     --backend <app.jar> --h5 <h5 dist dir> --zeta <zetaoffice dist dir> \
-//     --out <out dir> [--pysvc <bundled pysvc dir>] \
+//     --out <out dir> \
 //     [--prev <上一版 manifest 的 URL 或本地路径>]
 //
 // 签名私钥经 env UPDATE_SIGNING_KEY（PEM 文本，CI secret）传入；
@@ -37,10 +37,6 @@ const DOWNLOAD_PAGE = 'https://www.aiworkdeck.com'
 // 字体必须按前缀排，不能只列 cjk.ttc——cjk-kai.ttf(23.6MB)/cjk-serif.otf(11.1MB)/
 // cjk-fangsong.ttf(8.4MB) 曾漏网，让 v0.11.0 的壳层补丁涨到 26.9MB（业务代码仅 0.3MB）。
 const zetaExcluded = (name) => name === 'lowa' || /^cjk[.-]/.test(name)
-
-// pysvc-src 排除项：字节码缓存（客户端 Python 会自行重建）与随服务烙入的字体
-// 资产（app/fonts/NotoSansSC-Regular.ttf 15.7MB）——同理只随大版本走。
-const PYSVC_SRC_EXCLUDE_DIRS = new Set(['__pycache__', 'fonts'])
 
 function parseArgs(argv) {
   const args = {}
@@ -195,22 +191,6 @@ async function main() {
     fs.cpSync(path.join(args.zeta, en.name), path.join(stage['zetaoffice-wrapper'], en.name), { recursive: true })
   }
 
-  // pysvc-src（P3）：Python 服务源码层（各服务 app/ 目录，不含 pip 依赖 lib/）。
-  // 客户端由 pysvc-runtime.syncSrcPatch 覆盖进解压树（带备份可回滚）。
-  if (args.pysvc && fs.existsSync(args.pysvc)) {
-    stage['pysvc-src'] = path.join(work, 'pysvc-src')
-    fs.mkdirSync(stage['pysvc-src'], { recursive: true })
-    for (const en of fs.readdirSync(args.pysvc, { withFileTypes: true })) {
-      const appDir = path.join(args.pysvc, en.name, 'app')
-      if (en.isDirectory() && fs.existsSync(appDir)) {
-        fs.cpSync(appDir, path.join(stage['pysvc-src'], en.name, 'app'), {
-          recursive: true,
-          filter: (src) => !PYSVC_SRC_EXCLUDE_DIRS.has(path.basename(src))
-        })
-      }
-    }
-  }
-
   // --- 与上一版 manifest 做内容级去重 ---------------------------------------
   const prev = await loadPrevManifest(args.prev)
   const prevComponents = new Map()
@@ -246,8 +226,8 @@ async function main() {
   }
 
   // --- 体积自检 --------------------------------------------------------------
-  // 补丁的全部意义就是小。任何一次"大文件漏进排除规则"（v0.11.0 的 CJK 字体与
-  // pysvc 字体）都会静默把补丁涨成几十 MB，用户侧只会表现为"更新有点慢"而不会
+  // 补丁的全部意义就是小。任何一次"大文件漏进排除规则"（v0.11.0 的 LOWA 引擎与
+  // CJK 字体）都会静默把补丁涨成几十 MB，用户侧只会表现为"更新有点慢"而不会
   // 报错——所以在产出时就炸，别等用户发现。
   const MAX_COMPONENT_MB = 8
   const oversized = components.filter((c) => c.size > MAX_COMPONENT_MB * 1048576)

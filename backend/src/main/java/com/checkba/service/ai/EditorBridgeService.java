@@ -450,6 +450,42 @@ public class EditorBridgeService {
         }
     }
 
+    /**
+     * 可选组件缺失（设计 §3.2 / §4.2）：前端收到后弹「要不要下载」，用户确认则
+     * POST /api/packs/{packId}/install → （有 modelId 就接着下模型）→
+     * host.services.ensure(service) → 自动把原消息重发一次。
+     *
+     * <p>它不是编辑器命令，不进 libreofficeExecutorClient 的 EDITOR_ACTIONS 白名单——
+     * 前端在 ChatInterface 的 onClientAction 接缝里就地拦下（同 ppt_config_required），
+     * 不会往下透到执行器（透下去只会得到一句 "Unknown action"）。
+     *
+     * @param sizeMb 运行时压缩包体积（MB，整数；0 = 未知，前端会去打 /api/packs/{id}/info 补）
+     * @param features 解锁功能的文案键（frontend/src/locales/*&#47;components.js 的 features.*）
+     * @param trigger 触发它的工具名，只进日志与埋点
+     */
+    public void sendComponentRequiredAction(String packId, String service, String modelId,
+                                            long sizeMb, java.util.List<String> features, String trigger) {
+        String conversationId = currentConversationId.get();
+        if (conversationId == null) {
+            log.warn("No conversation ID set, cannot send component_required for {}", packId);
+            return;
+        }
+        try {
+            java.util.Map<String, Object> payloadMap = new java.util.HashMap<>();
+            payloadMap.put("action", "component_required");
+            payloadMap.put("packId", packId);
+            payloadMap.put("service", service);
+            payloadMap.put("modelId", modelId);
+            payloadMap.put("sizeMb", sizeMb);
+            payloadMap.put("features", features == null ? java.util.List.of() : features);
+            payloadMap.put("trigger", trigger);
+            sseEmitterService.send(conversationId, "client_action", objectMapper.writeValueAsString(payloadMap));
+            log.info("Sent component_required for pack {} (trigger={})", packId, trigger);
+        } catch (Exception e) {
+            log.error("Failed to send component_required for pack " + packId, e);
+        }
+    }
+
     /** 埋点：服务端往返（action 是原语枚举名，params 内容不采集） */
     private void recordBridge(String action, String outcome, String conversationId, long startMs) {
         telemetryService.recordConv("editor.bridge", conversationId, Map.of(

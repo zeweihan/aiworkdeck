@@ -9,6 +9,8 @@ import com.checkba.service.ProjectFileService;
 import com.checkba.service.ai.AiDocxExportService;
 import com.checkba.service.ai.EditorBridgeService;
 import com.checkba.service.ai.PdfEditService;
+import com.checkba.service.pack.NativePackService;
+import com.checkba.service.pack.OptionalComponents;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
@@ -46,6 +48,8 @@ public class PdfTools implements AgentToolComponent {
     private final AiDocxExportService aiDocxExportService;
     private final com.checkba.service.ai.PptxServiceClient pptxServiceClient;
     private final com.checkba.storage.ProjectStorageResolver storageResolver;
+    // mineru-service / pptx-service 从 0.38.0 起是按需下载的可选组件（设计 §3.2）
+    private final NativePackService packService;
 
     private static final Long AGENT_USER_ID = 10001L;
     private static final int INSPECT_MAX_CHARS_PER_PAGE = 3000;
@@ -252,6 +256,16 @@ public class PdfTools implements AgentToolComponent {
                         // 变成一句「请去装 MinerU」——判据偏向 OCR 的前提就是有这条兜底。
                         log.warn("OCR 不可用，回退到已提取的稀薄文本层: {}", file.getName());
                     } else {
+                        OptionalComponents.Entry me = OptionalComponents.byService("mineru-service");
+                        if (!packService.isReady(me.packId())) {
+                            long sizeMb = packService.knownSizes(me.packId()).downloadBytes() / (1024 * 1024);
+                            editorBridgeService.sendComponentRequiredAction(
+                                    me.packId(), me.service(), me.modelId(), sizeMb, me.featureKeys(), "pdf_to_word");
+                            // 同 PptxTools：文案里不出现「稍后重试」，模型会原样转述
+                            return "该 PDF 是扫描件（无文本层），本机的「文档解析引擎」组件还没安装，"
+                                    + "已请用户确认下载（界面上已经弹出提示，含 3GB 模型）。"
+                                    + "用户确认后会自动装好并重新执行这一步，不要让用户等一会儿再试一次。";
+                        }
                         return "Error: 该 PDF 是扫描件（无文本层），已尝试本地 MinerU OCR 但失败：" + e.getMessage() +
                                 "\n请确认桌面端 MinerU 组件已下载并启动（设置-组件管理），或稍后重试。";
                     }
@@ -301,6 +315,9 @@ public class PdfTools implements AgentToolComponent {
                 }
             } catch (Exception e) {
                 log.warn("Layout-level pdf2docx conversion failed, falling back to structural extraction", e);
+                // 组件没装才提示下载；提示只是提示——下面的结构级降级照常做完，
+                // 不能因为发提示把一份本来能转出来的 docx 弄丢（设计 §4.2）。
+                promptPptxComponentIfMissing("pdf_to_word");
             }
 
             ProjectFile docx = aiDocxExportService.exportMarkdownToDocx(
@@ -317,6 +334,23 @@ public class PdfTools implements AgentToolComponent {
     }
 
     // ==================== 辅助 ====================
+
+    /**
+     * 版式级转换（pdf2docx，跑在 pptx-service 里）打不通且 pptx-runtime 没装时，
+     * 发一次 component_required 引导下载。只发提示、不改变返回值：
+     * 结构级降级转换仍然照常完成。
+     */
+    private void promptPptxComponentIfMissing(String trigger) {
+        try {
+            OptionalComponents.Entry pe = OptionalComponents.byService("pptx-service");
+            if (packService.isReady(pe.packId())) return;
+            long sizeMb = packService.knownSizes(pe.packId()).downloadBytes() / (1024 * 1024);
+            editorBridgeService.sendComponentRequiredAction(
+                    pe.packId(), pe.service(), pe.modelId(), sizeMb, pe.featureKeys(), trigger);
+        } catch (Exception ignored) {
+            // 提示失败不该影响降级转换
+        }
+    }
 
     private ProjectFile getPdfFile(Long fileId) {
         ProjectFile file = projectFileService.getFile(fileId);

@@ -174,77 +174,36 @@ jobs:
             --jar backend/target/backend-0.0.1-SNAPSHOT.jar \
             --out desktop/bundled/mac-arm64
       # ──────────────────────────────────────────────────────────────
-      # Python 运行时 / 各 pysvc / graphviz 的缓存。
+      # Python 运行时 / graphviz 的缓存。
       #
-      # 这几样只由 requirements.lock、各服务源码与打包脚本决定，
-      # 但过去每个 PR 都从零重装一遍（实测 Windows 上 mineru 111s + kokoro 98s +
-      # pptx 60s + asr 22s + graphviz 43s ≈ 5.6 分钟纯浪费）。
+      # 0.38.0 起四个 Python 服务的 lib/app 不再进安装包（设计 §3）：它们由
+      # pack-release.yml 各自打成 native pack，这里只烙一份 CPython 解释器——
+      # litviz 与四个 runtime pack 共用它。缓存内容随之只剩 python/ 与 graphviz/。
       #
       # **必须放在「Bundle backend」之后**：prepare-backend.js 会
       # `rmSync(outDir, {recursive:true})` 清空整个 bundled/<plat>，
       # 放在它之前恢复的缓存会被当场抹掉。
       #
       # key 里带打包脚本自身的哈希：脚本改了（比如换 Python 版本）就该重装。
-      # **也必须带各服务的源码哈希**（dev-board#74）：prepare-python-service.js 的
-      # --src 会把源码 cpSync 进这里被缓存的 pysvc/。少了它，只改
-      # pptx-service/backend、kokoro-service、asr-service 而不动 lock 时 key 不变，
-      # 缓存命中就把下面的打包步骤整步跳过，装机包里带的还是旧源码——构建全绿、
-      # 冒烟也过（跑的是旧代码），tag 构建会把缺了这笔改动的安装包直接发出去。
+      # 各服务源码与 requirements.lock 不再进 key——它们已经不影响这里的产物了
+      #（dev-board#74 那条门禁随被守护的步骤一起作废，见 workflow-release-gating 用例）。
       # 开头的 v1 是人工盐——graphviz 来自 choco/brew，上游版本不体现在任何文件哈希里，
       # 想强制取新版就把它 +1。
       # ──────────────────────────────────────────────────────────────
-      - name: Cache python runtime / pysvc / graphviz (mac-arm64)
+      - name: Cache python runtime / graphviz (mac-arm64)
         id: cache-pybundle-mac
         if: runner.os == 'macOS'
         uses: actions/cache@v4
         with:
           path: |
             desktop/bundled/mac-arm64/python
-            desktop/bundled/mac-arm64/pysvc
             desktop/bundled/mac-arm64/graphviz
-          key: v1-mac-arm64-pybundle-${{ hashFiles('*/requirements.lock', 'desktop/scripts/prepare-python-service.js', 'desktop/scripts/prepare-graphviz.js', 'pptx-service/backend/**', 'kokoro-service/**', 'asr-service/**') }}
+          key: v1-mac-arm64-pybundle-${{ hashFiles('desktop/scripts/prepare-python-service.js', 'desktop/scripts/prepare-graphviz.js') }}
 
-      - name: Bundle pptx-service (macOS arm64)
-        # 缓存命中就整步跳过——产物只由 requirements.lock / 服务源码 / 打包脚本决定，见上面那条 cache
+      - name: Bundle CPython runtime (macOS arm64)
+        # 运行时随包（litviz 与四个 runtime pack 共用它，设计 §3.1）；服务的 lib/app 不再进包。
         if: runner.os == 'macOS' && steps.cache-pybundle-mac.outputs.cache-hit != 'true'
-        run: |
-          node desktop/scripts/prepare-python-service.js \
-            --service pptx-service \
-            --src pptx-service/backend \
-            --requirements pptx-service/requirements.lock \
-            --out desktop/bundled/mac-arm64
-      - name: Bundle mineru-service (macOS arm64)
-        # 缓存命中就整步跳过——产物只由 requirements.lock / 服务源码 / 打包脚本决定，见上面那条 cache
-        if: runner.os == 'macOS' && steps.cache-pybundle-mac.outputs.cache-hit != 'true'
-        run: |
-          # 纯 pip 包服务（无 --src）；模型不进包，首启在「组件管理」下载
-          node desktop/scripts/prepare-python-service.js \
-            --service mineru-service \
-            --requirements mineru-service/requirements.lock \
-            --out desktop/bundled/mac-arm64
-          du -sh desktop/bundled/mac-arm64/pysvc/mineru-service/lib
-      - name: Bundle kokoro-service (macOS arm64)
-        # 缓存命中就整步跳过——产物只由 requirements.lock / 服务源码 / 打包脚本决定，见上面那条 cache
-        if: runner.os == 'macOS' && steps.cache-pybundle-mac.outputs.cache-hit != 'true'
-        run: |
-          # 本地 TTS 包装层（Phase 3）：模型不进包，首启在「组件管理」下载
-          node desktop/scripts/prepare-python-service.js \
-            --service kokoro-service \
-            --src kokoro-service \
-            --requirements kokoro-service/requirements.lock \
-            --out desktop/bundled/mac-arm64
-          du -sh desktop/bundled/mac-arm64/pysvc/kokoro-service/lib
-      - name: Bundle asr-service (macOS arm64)
-        # 缓存命中就整步跳过——产物只由 requirements.lock / 服务源码 / 打包脚本决定，见上面那条 cache
-        if: runner.os == 'macOS' && steps.cache-pybundle-mac.outputs.cache-hit != 'true'
-        run: |
-          # 本地 ASR 包装层（P3）：模型不进包（1.5GB），首启在「组件管理」下载
-          node desktop/scripts/prepare-python-service.js \
-            --service asr-service \
-            --src asr-service \
-            --requirements asr-service/requirements.lock \
-            --out desktop/bundled/mac-arm64
-          du -sh desktop/bundled/mac-arm64/pysvc/asr-service/lib
+        run: node desktop/scripts/prepare-python-service.js --runtime-only 1 --out desktop/bundled/mac-arm64
       - name: Bundle backend (Windows x64)
         if: runner.os == 'Windows'
         shell: bash
@@ -257,78 +216,37 @@ jobs:
             --jar backend/target/backend-0.0.1-SNAPSHOT.jar \
             --out desktop/bundled/win-x64
       # ──────────────────────────────────────────────────────────────
-      # Python 运行时 / 各 pysvc / graphviz 的缓存。
+      # Python 运行时 / graphviz 的缓存。
       #
-      # 这几样只由 requirements.lock、各服务源码与打包脚本决定，
-      # 但过去每个 PR 都从零重装一遍（实测 Windows 上 mineru 111s + kokoro 98s +
-      # pptx 60s + asr 22s + graphviz 43s ≈ 5.6 分钟纯浪费）。
+      # 0.38.0 起四个 Python 服务的 lib/app 不再进安装包（设计 §3）：它们由
+      # pack-release.yml 各自打成 native pack，这里只烙一份 CPython 解释器——
+      # litviz 与四个 runtime pack 共用它。缓存内容随之只剩 python/ 与 graphviz/。
       #
       # **必须放在「Bundle backend」之后**：prepare-backend.js 会
       # `rmSync(outDir, {recursive:true})` 清空整个 bundled/<plat>，
       # 放在它之前恢复的缓存会被当场抹掉。
       #
       # key 里带打包脚本自身的哈希：脚本改了（比如换 Python 版本）就该重装。
-      # **也必须带各服务的源码哈希**（dev-board#74）：prepare-python-service.js 的
-      # --src 会把源码 cpSync 进这里被缓存的 pysvc/。少了它，只改
-      # pptx-service/backend、kokoro-service、asr-service 而不动 lock 时 key 不变，
-      # 缓存命中就把下面的打包步骤整步跳过，装机包里带的还是旧源码——构建全绿、
-      # 冒烟也过（跑的是旧代码），tag 构建会把缺了这笔改动的安装包直接发出去。
+      # 各服务源码与 requirements.lock 不再进 key——它们已经不影响这里的产物了
+      #（dev-board#74 那条门禁随被守护的步骤一起作废，见 workflow-release-gating 用例）。
       # 开头的 v1 是人工盐——graphviz 来自 choco/brew，上游版本不体现在任何文件哈希里，
       # 想强制取新版就把它 +1。
       # ──────────────────────────────────────────────────────────────
-      - name: Cache python runtime / pysvc / graphviz (win-x64)
+      - name: Cache python runtime / graphviz (win-x64)
         id: cache-pybundle-win
         if: runner.os == 'Windows'
         uses: actions/cache@v4
         with:
           path: |
             desktop/bundled/win-x64/python
-            desktop/bundled/win-x64/pysvc
             desktop/bundled/win-x64/graphviz
-          key: v1-win-x64-pybundle-${{ hashFiles('*/requirements.lock', 'desktop/scripts/prepare-python-service.js', 'desktop/scripts/prepare-graphviz.js', 'pptx-service/backend/**', 'kokoro-service/**', 'asr-service/**') }}
+          key: v1-win-x64-pybundle-${{ hashFiles('desktop/scripts/prepare-python-service.js', 'desktop/scripts/prepare-graphviz.js') }}
 
-      - name: Bundle pptx-service (Windows x64)
-        # 缓存命中就整步跳过——产物只由 requirements.lock / 服务源码 / 打包脚本决定，见上面那条 cache
+      - name: Bundle CPython runtime (Windows x64)
+        # 运行时随包（litviz 与四个 runtime pack 共用它，设计 §3.1）；服务的 lib/app 不再进包。
         if: runner.os == 'Windows' && steps.cache-pybundle-win.outputs.cache-hit != 'true'
         shell: bash
-        run: |
-          node desktop/scripts/prepare-python-service.js \
-            --service pptx-service \
-            --src pptx-service/backend \
-            --requirements pptx-service/requirements.lock \
-            --out desktop/bundled/win-x64
-      - name: Bundle mineru-service (Windows x64)
-        # 缓存命中就整步跳过——产物只由 requirements.lock / 服务源码 / 打包脚本决定，见上面那条 cache
-        if: runner.os == 'Windows' && steps.cache-pybundle-win.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          node desktop/scripts/prepare-python-service.js \
-            --service mineru-service \
-            --requirements mineru-service/requirements.lock \
-            --out desktop/bundled/win-x64
-          du -sh desktop/bundled/win-x64/pysvc/mineru-service/lib
-      - name: Bundle kokoro-service (Windows x64)
-        # 缓存命中就整步跳过——产物只由 requirements.lock / 服务源码 / 打包脚本决定，见上面那条 cache
-        if: runner.os == 'Windows' && steps.cache-pybundle-win.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          node desktop/scripts/prepare-python-service.js \
-            --service kokoro-service \
-            --src kokoro-service \
-            --requirements kokoro-service/requirements.lock \
-            --out desktop/bundled/win-x64
-          du -sh desktop/bundled/win-x64/pysvc/kokoro-service/lib
-      - name: Bundle asr-service (Windows x64)
-        # 缓存命中就整步跳过——产物只由 requirements.lock / 服务源码 / 打包脚本决定，见上面那条 cache
-        if: runner.os == 'Windows' && steps.cache-pybundle-win.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          node desktop/scripts/prepare-python-service.js \
-            --service asr-service \
-            --src asr-service \
-            --requirements asr-service/requirements.lock \
-            --out desktop/bundled/win-x64
-          du -sh desktop/bundled/win-x64/pysvc/asr-service/lib
+        run: node desktop/scripts/prepare-python-service.js --runtime-only 1 --out desktop/bundled/win-x64
       - name: Sign bundled backend natives (macOS)
         if: runner.os == 'macOS'
         env:
@@ -391,106 +309,6 @@ jobs:
           tail -80 "$RUNNER_TEMP/backend-smoke.log"
           kill $BACK_PID 2>/dev/null || true
           exit 1
-      - name: Smoke test bundled pptx-service (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          # 用烙好的运行时按打包态同款方式拉起：先 alembic 迁移，后起服务，验 /health
-          export PPTX_DATA_DIR="$RUNNER_TEMP/pptx-data"
-          mkdir -p "$PPTX_DATA_DIR"
-          APP="$PWD/desktop/bundled/mac-arm64/pysvc/pptx-service/app"
-          PY="$PWD/desktop/bundled/mac-arm64/python/bin/python3.11"
-          export PYTHONPATH="$PWD/desktop/bundled/mac-arm64/pysvc/pptx-service/lib"
-          (cd "$APP" && "$PY" -m alembic -c alembic.ini upgrade head)
-          PORT=5099 BACKEND_PORT=5099 FLASK_ENV=production "$PY" "$APP/app.py" > "$RUNNER_TEMP/pptx-smoke.log" 2>&1 &
-          PPTX_PID=$!
-          for i in $(seq 1 30); do
-            sleep 2
-            if curl -sf http://127.0.0.1:5099/health; then
-              echo; echo "pptx-service up after ~$((i*2))s"
-              kill $PPTX_PID
-              exit 0
-            fi
-          done
-          echo "pptx-service failed to start within 60s"
-          tail -80 "$RUNNER_TEMP/pptx-smoke.log"
-          kill $PPTX_PID 2>/dev/null || true
-          exit 1
-      - name: Smoke test bundled mineru-service (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          # 无模型拉起（模型解析时懒加载，/docs 不依赖模型——本地实测约 4s 就绪）
-          export MDIR="$RUNNER_TEMP/mineru-data"
-          mkdir -p "$MDIR"
-          PY="$PWD/desktop/bundled/mac-arm64/python/bin/python3.11"
-          export PYTHONPATH="$PWD/desktop/bundled/mac-arm64/pysvc/mineru-service/lib"
-          MINERU_DEVICE_MODE=cpu MINERU_MODEL_SOURCE=modelscope \
-            MODELSCOPE_CACHE="$MDIR" HF_HOME="$MDIR/hf" MINERU_TOOLS_CONFIG_JSON="$MDIR/mineru.json" \
-            "$PY" -m mineru.cli.fast_api --host 127.0.0.1 --port 8098 > "$RUNNER_TEMP/mineru-smoke.log" 2>&1 &
-          MINERU_PID=$!
-          for i in $(seq 1 30); do
-            sleep 2
-            if curl -sf -o /dev/null http://127.0.0.1:8098/docs; then
-              echo "mineru-service up after ~$((i*2))s"
-              kill $MINERU_PID
-              exit 0
-            fi
-          done
-          echo "mineru-service failed to start within 60s"
-          tail -80 "$RUNNER_TEMP/mineru-smoke.log"
-          kill $MINERU_PID 2>/dev/null || true
-          exit 1
-      - name: Smoke test bundled kokoro-service (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          # 无模型拉起（模型懒加载，/health 与 voices 不依赖模型）
-          PY="$PWD/desktop/bundled/mac-arm64/python/bin/python3.11"
-          APP="$PWD/desktop/bundled/mac-arm64/pysvc/kokoro-service/app"
-          export PYTHONPATH="$PWD/desktop/bundled/mac-arm64/pysvc/kokoro-service/lib"
-          PORT=8881 "$PY" "$APP/app.py" > "$RUNNER_TEMP/kokoro-smoke.log" 2>&1 &
-          KOKORO_PID=$!
-          for i in $(seq 1 20); do
-            sleep 2
-            if curl -sf http://127.0.0.1:8881/health && curl -sf http://127.0.0.1:8881/v1/audio/voices | grep -q zf_001; then
-              echo; echo "kokoro-service up after ~$((i*2))s"
-              kill $KOKORO_PID
-              exit 0
-            fi
-          done
-          echo "kokoro-service failed to start within 40s"
-          tail -60 "$RUNNER_TEMP/kokoro-smoke.log"
-          kill $KOKORO_PID 2>/dev/null || true
-          exit 1
-      - name: Smoke test bundled asr-service (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          # 无模型拉起。/health 断言 modelReady=false 是这条冒烟的重点：
-          # 「服务起着但模型没下」必须是一个能被观测到的状态，界面的下载引导全靠它
-          PY="$PWD/desktop/bundled/mac-arm64/python/bin/python3.11"
-          APP="$PWD/desktop/bundled/mac-arm64/pysvc/asr-service/app"
-          export PYTHONPATH="$PWD/desktop/bundled/mac-arm64/pysvc/asr-service/lib"
-          export HF_HOME="$RUNNER_TEMP/asr-empty-home"
-          PORT=8891 "$PY" "$APP/app.py" > "$RUNNER_TEMP/asr-smoke.log" 2>&1 &
-          ASR_PID=$!
-          for i in $(seq 1 20); do
-            sleep 2
-            if curl -sf http://127.0.0.1:8891/health | grep -q '"modelReady":false'; then
-              echo; echo "asr-service up after ~$((i*2))s"
-              kill $ASR_PID
-              exit 0
-            fi
-          done
-          echo "asr-service failed to start within 40s"
-          tail -60 "$RUNNER_TEMP/asr-smoke.log"
-          kill $ASR_PID 2>/dev/null || true
-          exit 1
-      - name: Pack pysvc archive (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          # 上万个 Python 小文件不再直接进 .app：签名（sign-mac-natives.sh 已给
-          # 每个 Mach-O 打 Developer ID + 时间戳——公证会扫嵌套压缩包，未签名照拒）
-          # 与冒烟测试之后整体打成单个 pysvc.tar.gz，electron-builder 的签名/公证
-          # 阶段从上万文件降到一个文件，消除时间戳服务抖动。首启由主进程解压。
-          node desktop/scripts/pack-pysvc.js --bundle desktop/bundled/mac-arm64
       - name: Package installers (macOS, signed & notarized)
         if: runner.os == 'macOS'
         working-directory: desktop
@@ -602,103 +420,6 @@ jobs:
           tail -80 "$RUNNER_TEMP/backend-smoke.log"
           kill $BACK_PID 2>/dev/null || true
           exit 1
-      - name: Smoke test bundled pptx-service (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          export PPTX_DATA_DIR="$RUNNER_TEMP/pptx-data"
-          mkdir -p "$PPTX_DATA_DIR"
-          APP="$PWD/desktop/bundled/win-x64/pysvc/pptx-service/app"
-          PY="$PWD/desktop/bundled/win-x64/python/python.exe"
-          export PYTHONPATH="$PWD/desktop/bundled/win-x64/pysvc/pptx-service/lib"
-          (cd "$APP" && "$PY" -m alembic -c alembic.ini upgrade head)
-          PORT=5099 BACKEND_PORT=5099 FLASK_ENV=production "$PY" "$APP/app.py" > "$RUNNER_TEMP/pptx-smoke.log" 2>&1 &
-          PPTX_PID=$!
-          for i in $(seq 1 30); do
-            sleep 2
-            if curl -sf http://127.0.0.1:5099/health; then
-              echo; echo "pptx-service up after ~$((i*2))s"
-              kill $PPTX_PID
-              exit 0
-            fi
-          done
-          echo "pptx-service failed to start within 60s"
-          tail -80 "$RUNNER_TEMP/pptx-smoke.log"
-          kill $PPTX_PID 2>/dev/null || true
-          exit 1
-      - name: Smoke test bundled mineru-service (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          export MDIR="$RUNNER_TEMP/mineru-data"
-          mkdir -p "$MDIR"
-          PY="$PWD/desktop/bundled/win-x64/python/python.exe"
-          export PYTHONPATH="$PWD/desktop/bundled/win-x64/pysvc/mineru-service/lib"
-          MINERU_DEVICE_MODE=cpu MINERU_MODEL_SOURCE=modelscope \
-            MODELSCOPE_CACHE="$MDIR" HF_HOME="$MDIR/hf" MINERU_TOOLS_CONFIG_JSON="$MDIR/mineru.json" \
-            "$PY" -m mineru.cli.fast_api --host 127.0.0.1 --port 8098 > "$RUNNER_TEMP/mineru-smoke.log" 2>&1 &
-          MINERU_PID=$!
-          for i in $(seq 1 30); do
-            sleep 2
-            if curl -sf -o /dev/null http://127.0.0.1:8098/docs; then
-              echo "mineru-service up after ~$((i*2))s"
-              kill $MINERU_PID
-              exit 0
-            fi
-          done
-          echo "mineru-service failed to start within 60s"
-          tail -80 "$RUNNER_TEMP/mineru-smoke.log"
-          kill $MINERU_PID 2>/dev/null || true
-          exit 1
-      - name: Smoke test bundled kokoro-service (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          PY="$PWD/desktop/bundled/win-x64/python/python.exe"
-          APP="$PWD/desktop/bundled/win-x64/pysvc/kokoro-service/app"
-          export PYTHONPATH="$PWD/desktop/bundled/win-x64/pysvc/kokoro-service/lib"
-          PORT=8881 "$PY" "$APP/app.py" > "$RUNNER_TEMP/kokoro-smoke.log" 2>&1 &
-          KOKORO_PID=$!
-          for i in $(seq 1 20); do
-            sleep 2
-            if curl -sf http://127.0.0.1:8881/health && curl -sf http://127.0.0.1:8881/v1/audio/voices | grep -q zf_001; then
-              echo; echo "kokoro-service up after ~$((i*2))s"
-              kill $KOKORO_PID
-              exit 0
-            fi
-          done
-          echo "kokoro-service failed to start within 40s"
-          tail -60 "$RUNNER_TEMP/kokoro-smoke.log"
-          kill $KOKORO_PID 2>/dev/null || true
-          exit 1
-      - name: Smoke test bundled asr-service (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          PY="$PWD/desktop/bundled/win-x64/python/python.exe"
-          APP="$PWD/desktop/bundled/win-x64/pysvc/asr-service/app"
-          export PYTHONPATH="$PWD/desktop/bundled/win-x64/pysvc/asr-service/lib"
-          export HF_HOME="$RUNNER_TEMP/asr-empty-home"
-          PORT=8891 "$PY" "$APP/app.py" > "$RUNNER_TEMP/asr-smoke.log" 2>&1 &
-          ASR_PID=$!
-          for i in $(seq 1 20); do
-            sleep 2
-            if curl -sf http://127.0.0.1:8891/health | grep -q '"modelReady":false'; then
-              echo; echo "asr-service up after ~$((i*2))s"
-              kill $ASR_PID
-              exit 0
-            fi
-          done
-          echo "asr-service failed to start within 40s"
-          tail -60 "$RUNNER_TEMP/asr-smoke.log"
-          kill $ASR_PID 2>/dev/null || true
-          exit 1
-      - name: Pack pysvc archive (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          # 与 macOS 同构：安装包只带一个 pysvc.tar.gz（文件数大降、安装更快），首启解压
-          node desktop/scripts/pack-pysvc.js --bundle desktop/bundled/win-x64
       - name: Build arm64 Electron shell overlay (Windows)
         # Windows 单包双架构（dev-board#341）：产出纯 arm64 壳目录供 NSIS
         # customInstall 覆盖用。app.asar 无原生依赖双架构通用，剪掉 resources/
@@ -745,7 +466,6 @@ jobs:
             --backend desktop/bundled/win-x64/backend/app.jar \
             --h5 frontend/dist/build/h5 \
             --zeta frontend/dist/zetaoffice \
-            --pysvc desktop/bundled/win-x64/pysvc \
             --prev https://www.aiworkdeck.com/update/desktop/manifest.json \
             --out desktop/release/patch
           ls -la desktop/release/patch

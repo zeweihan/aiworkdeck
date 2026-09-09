@@ -5,6 +5,7 @@ package com.checkba.service.meeting;
 
 import com.checkba.service.LangText;
 import com.checkba.service.SystemSettingService;
+import com.checkba.service.pack.NativePackService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -32,8 +33,8 @@ import java.util.List;
  * 代价是没有说话人分离（faster-whisper 不提供；引 pyannote 要 HF token + 许可协议
  * + 额外几百 MB 模型，与「零配置」冲突），这一点必须在界面上写明。
  *
- * <p><b>探测的三态照 {@code OllamaProbeService} 的范式</b>，理由相同：本地档没有密钥可校验，
- * 只能靠探测判断能不能用；而「服务没起」与「模型没下」的下一步完全不同，
+ * <p><b>探测的多态照 {@code OllamaProbeService} 的范式</b>，理由相同：本地档没有密钥可校验，
+ * 只能靠探测判断能不能用；而「组件没装」「服务没起」「模型没下」的下一步完全不同，
  * 合并成一个「不可用」等于让用户猜。
  */
 @Slf4j
@@ -56,15 +57,20 @@ public class LocalAsrClient {
      */
     static final Duration TRANSCRIBE_TIMEOUT = Duration.ofHours(4);
 
-    /** 探测结论三态，前端据此渲染「下一步该做什么」。 */
+    /** 探测结论四态，前端据此渲染「下一步该做什么」。 */
     public enum Status {
         /** 服务在跑且模型已下载 */
         READY,
         /** 服务在跑，但模型还没下载 */
         MODEL_MISSING,
-        /** 连不上 / 响应异常（一律归到这一档） */
+        /** 连不上，且本机根本没装 asr-runtime 这个可选组件（0.38.0 起是常态） */
+        RUNTIME_MISSING,
+        /** 组件装了但连不上 / 响应异常（一律归到这一档） */
         SERVICE_DOWN
     }
+
+    /** 本机语音识别运行时组件的 pack id（设计 §3.1）。 */
+    public static final String RUNTIME_PACK_ID = "asr-runtime";
 
     /**
      * @param diarization 说话人分离能力。本地档恒 false，读接口而不是在前端写死，
@@ -84,6 +90,7 @@ public class LocalAsrClient {
     }
 
     private final SystemSettingService systemSettingService;
+    private final NativePackService packService;
     private final String defaultBaseUrl;
     private final ObjectMapper mapper = new ObjectMapper();
 
@@ -99,8 +106,10 @@ public class LocalAsrClient {
             .build();
 
     public LocalAsrClient(SystemSettingService systemSettingService,
+                          NativePackService packService,
                           @Value("${external.asr.local-base-url:}") String defaultBaseUrl) {
         this.systemSettingService = systemSettingService;
+        this.packService = packService;
         this.defaultBaseUrl = defaultBaseUrl == null ? "" : defaultBaseUrl.trim();
     }
 
@@ -120,6 +129,16 @@ public class LocalAsrClient {
         String base = baseUrl();
         String body = getHealth(base);
         if (body == null) {
+            // 判定顺序刻意是「先问服务、再问 pack」：dev 态从仓库直接跑 asr-service 时
+            // 本机没有 pack，但服务确实活着——先问 pack 会把它误报成「组件没装」。
+            if (!packService.isReady(RUNTIME_PACK_ID)) {
+                return new ProbeResult(Status.RUNTIME_MISSING, base, "", false,
+                        LangText.of("本机语音识别组件还没安装。",
+                                "The on-device speech recognition component is not installed."),
+                        LangText.of("下载「本机语音识别」组件（运行时约 40MB，模型 1.5GB）后，录音可以完全不出本机。",
+                                "Download the on-device speech recognition component (about 40 MB runtime plus a 1.5 GB model) "
+                                        + "to keep recordings entirely on this computer."));
+            }
             return new ProbeResult(Status.SERVICE_DOWN, base, "", false,
                     LangText.of("本机转写服务没有运行。", "The on-device transcription service is not running."),
                     LangText.of("重启 AI WorkDeck 让它自动拉起；仍不行时到「系统管理 - 组件管理」查看本机转写组件。",

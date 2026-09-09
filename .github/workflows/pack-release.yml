@@ -1,16 +1,31 @@
 name: Pack Release
 
-# 构建「诉讼可视化」native pack（docs/NATIVE_PACK_DISTRIBUTION.md）并发布到
-# GitHub Release，供 deploy/publish-pack.sh 拉取、签名、推两台镜像。
+# 构建 native pack（docs/NATIVE_PACK_DISTRIBUTION.md）并发布到 GitHub Release，
+# 供 deploy/publish-pack.sh 拉取、签名、推两台镜像。
 #
-# 与 desktop-build.yml 的 tag v* 触发**互不相干**（tag 前缀不同：pack-litigation-visual-v*
+# 两条互斥的构建路径，由 pack_id 选择：
+#   litigation-visual                      → mac / win 两个 job（litviz + drawio + graphviz）
+#   {pptx,mineru,kokoro,asr}-runtime       → runtime 矩阵 job（Python 服务运行时，dev-board#529）
+#
+# 与 desktop-build.yml 的 tag v* 触发**互不相干**（tag 前缀不同：pack-<id>-v*
 # vs v*），不会互相触发对方的 workflow。
 #
-# 只手动触发（workflow_dispatch）：native pack 不随每次代码改动重发，只在
-# litviz/drawio/graphviz 三者之一真的需要出新版本时才手动跑一次。
+# 只手动触发（workflow_dispatch）：native pack 不随每次代码改动重发，只在某个
+# pack 的内容真的需要出新版本时才手动跑一次。
 on:
   workflow_dispatch:
     inputs:
+      pack_id:
+        description: '要构建的 pack'
+        required: true
+        type: choice
+        default: litigation-visual
+        options:
+          - litigation-visual
+          - pptx-runtime
+          - mineru-runtime
+          - kokoro-runtime
+          - asr-runtime
       version:
         description: 'pack 版本号（语义化版本，如 1.0.0；与应用版本号 desktop/package.json 无关）'
         required: true
@@ -19,14 +34,12 @@ on:
 permissions:
   contents: write
 
-env:
-  PACK_ID: litigation-visual
-
 jobs:
   # mac：litviz / drawio 是平台无关组件，随便挑一台机器产就行，图省事和
   # desktop-build.yml 一样放在 macOS runner；graphviz(mac) 也在这台机产。
   mac:
     name: Build pack components (macOS)
+    if: inputs.pack_id == 'litigation-visual'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,7 +61,7 @@ jobs:
       - name: Build pack (litviz + drawio + graphviz-mac)
         run: |
           node desktop/scripts/build-pack.js \
-            --id "$PACK_ID" \
+            --id "${{ inputs.pack_id }}" \
             --version "${{ inputs.version }}" \
             --out pack-out/mac \
             --components litviz,drawio,graphviz
@@ -63,6 +76,7 @@ jobs:
   # 见 .claude/agents/litigation-visual.md「已知地雷」。这台机只产这一个组件。
   win:
     name: Build pack components (Windows)
+    if: inputs.pack_id == 'litigation-visual'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -87,7 +101,7 @@ jobs:
         shell: bash
         run: |
           node desktop/scripts/build-pack.js \
-            --id "$PACK_ID" \
+            --id "${{ inputs.pack_id }}" \
             --version "${{ inputs.version }}" \
             --out pack-out/win \
             --components graphviz
@@ -98,13 +112,153 @@ jobs:
           path: pack-out/win/*
           if-no-files-found: error
 
-  # 汇总：合并 mac 与 win 两份半成品 manifest 成一份全量 manifest，连同全部产物
-  # 一起挂上 GitHub Release。manifest 在这里**不签名**——私钥只存在于官网服务器，
-  # 从不进 CI；签名在发布脚本 deploy/publish-pack.sh 的 sign 子命令里，在服务器
-  # 侧用 AWD_PLUGIN_SIGNING_KEY 完成。
+  # 四个 Python 服务运行时 pack（设计 §3.3）。两条腿各自跑一遍
+  # prepare-python-service（真装 pip 依赖）→ build-pack → 从 pack 布局起一次服务。
+  # 刻意不加 actions/cache：pack 是要发给用户的字节，宁可多花几分钟也不冒
+  # 「缓存命中发出旧依赖」的险（desktop-build.yml 上曾出过 dev-board#74）。
+  runtime:
+    name: Build runtime pack (${{ matrix.plat }})
+    if: inputs.pack_id != 'litigation-visual'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            plat: mac-arm64
+          - os: windows-latest
+            plat: win-x64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Resolve service name
+        id: svc
+        shell: bash
+        run: echo "name=${{ inputs.pack_id }}" | sed 's/-runtime$/-service/' >> "$GITHUB_OUTPUT"
+      - name: Bundle python service
+        shell: bash
+        run: |
+          set -euo pipefail
+          SVC="${{ steps.svc.outputs.name }}"
+          # mineru 是纯 pip 包服务，没有 --src（与 desktop-build.yml 现有四步逐字同源）
+          SRC_ARG=""
+          case "$SVC" in
+            pptx-service)   SRC_ARG="--src pptx-service/backend" ;;
+            kokoro-service) SRC_ARG="--src kokoro-service" ;;
+            asr-service)    SRC_ARG="--src asr-service" ;;
+            mineru-service) SRC_ARG="" ;;
+          esac
+          node desktop/scripts/prepare-python-service.js \
+            --service "$SVC" $SRC_ARG \
+            --requirements "$SVC/requirements.lock" \
+            --out "desktop/bundled/${{ matrix.plat }}"
+          du -sh "desktop/bundled/${{ matrix.plat }}/pysvc/$SVC/lib"
+      - name: Build pack components
+        shell: bash
+        run: |
+          set -euo pipefail
+          COMPONENTS=lib
+          # app 组件平台无关，只在 mac 腿产一次：两台机各产一份同名 tar.gz，
+          # 汇总 job 的 cp 会用后到的覆盖先到的，而 manifest 里记的是先到那份的 sha256。
+          if [ "${{ matrix.plat }}" = "mac-arm64" ] && [ "${{ inputs.pack_id }}" != "mineru-runtime" ]; then
+            COMPONENTS=lib,app
+          fi
+          node desktop/scripts/build-pack.js \
+            --id "${{ inputs.pack_id }}" \
+            --version "${{ inputs.version }}" \
+            --out "pack-out/${{ matrix.plat }}" \
+            --components "$COMPONENTS"
+          ls -la "pack-out/${{ matrix.plat }}"
+      - name: Smoke test from pack layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          SVC="${{ steps.svc.outputs.name }}"
+          ROOT="$RUNNER_TEMP/packroot"
+          rm -rf "$ROOT"; mkdir -p "$ROOT"
+          # 按桌面端 resolveServiceRoot 的落盘布局解开：<root>/lib 与 <root>/app
+          for f in pack-out/${{ matrix.plat }}/*-lib-*.tar.gz; do
+            [ -e "$f" ] || continue
+            mkdir -p "$ROOT/lib"; tar -xzf "$f" -C "$ROOT/lib"
+          done
+          for f in pack-out/${{ matrix.plat }}/*-app-*.tar.gz; do
+            [ -e "$f" ] || continue
+            mkdir -p "$ROOT/app"; tar -xzf "$f" -C "$ROOT/app"
+          done
+          # win 腿不产 app 组件（平台无关，只在 mac 腿产一次），但冒烟仍要真起服务：
+          # 用 prepare-python-service 刚烙好的同一份源码补上——这一腿要验的是本平台的
+          # lib（wheel 里的 .so/.pyd），app 只是同一份纯 Python 源码。
+          if [ ! -d "$ROOT/app" ] && [ -d "desktop/bundled/${{ matrix.plat }}/pysvc/$SVC/app" ]; then
+            cp -R "desktop/bundled/${{ matrix.plat }}/pysvc/$SVC/app" "$ROOT/app"
+          fi
+          if [ "${{ matrix.plat }}" = "mac-arm64" ]; then
+            PY="$PWD/desktop/bundled/mac-arm64/python/bin/python3.11"
+          else
+            PY="$PWD/desktop/bundled/win-x64/python/python.exe"
+          fi
+          export PYTHONPATH="$ROOT/lib"
+          BODY_GREP=""
+          EXTRA_URL=""
+          EXTRA_GREP=""
+          case "${{ inputs.pack_id }}" in
+            pptx-runtime)
+              export PPTX_DATA_DIR="$RUNNER_TEMP/pptx-data"; mkdir -p "$PPTX_DATA_DIR"
+              (cd "$ROOT/app" && "$PY" -m alembic -c alembic.ini upgrade head)
+              PORT=5099 BACKEND_PORT=5099 FLASK_ENV=production "$PY" "$ROOT/app/app.py" > "$RUNNER_TEMP/smoke.log" 2>&1 &
+              URL=http://127.0.0.1:5099/health ;;
+            mineru-runtime)
+              # 无模型拉起（模型解析时懒加载，/docs 不依赖模型）
+              MD="$RUNNER_TEMP/mineru-data"; mkdir -p "$MD"
+              MINERU_DEVICE_MODE=cpu MINERU_MODEL_SOURCE=modelscope MODELSCOPE_CACHE="$MD" \
+                HF_HOME="$MD/hf" MINERU_TOOLS_CONFIG_JSON="$MD/mineru.json" \
+                "$PY" -m mineru.cli.fast_api --host 127.0.0.1 --port 8098 > "$RUNNER_TEMP/smoke.log" 2>&1 &
+              URL=http://127.0.0.1:8098/docs ;;
+            kokoro-runtime)
+              PORT=8881 "$PY" "$ROOT/app/app.py" > "$RUNNER_TEMP/smoke.log" 2>&1 &
+              URL=http://127.0.0.1:8881/health
+              # 与 desktop-build.yml 同款：光起得来不够，音色表里必须有 zf_001
+              EXTRA_URL=http://127.0.0.1:8881/v1/audio/voices
+              EXTRA_GREP=zf_001 ;;
+            asr-runtime)
+              export HF_HOME="$RUNNER_TEMP/asr-empty-home"
+              PORT=8891 "$PY" "$ROOT/app/app.py" > "$RUNNER_TEMP/smoke.log" 2>&1 &
+              URL=http://127.0.0.1:8891/health
+              # 「服务起着但模型没下」必须是能被观测到的状态，界面的下载引导全靠它
+              BODY_GREP='"modelReady":false' ;;
+          esac
+          PID=$!
+          for i in $(seq 1 45); do
+            sleep 2
+            curl -sf -o "$RUNNER_TEMP/probe.txt" "$URL" || continue
+            if [ -n "$BODY_GREP" ] && ! grep -q "$BODY_GREP" "$RUNNER_TEMP/probe.txt"; then continue; fi
+            if [ -n "$EXTRA_URL" ] && ! curl -sf "$EXTRA_URL" | grep -q "$EXTRA_GREP"; then continue; fi
+            echo "$SVC up after ~$((i*2))s"
+            kill $PID
+            exit 0
+          done
+          echo "service failed to start within 90s"
+          tail -80 "$RUNNER_TEMP/smoke.log"
+          kill $PID 2>/dev/null || true
+          exit 1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pack-runtime-${{ matrix.plat }}
+          path: pack-out/${{ matrix.plat }}/*
+          if-no-files-found: error
+
+  # 汇总：合并各腿的半成品 manifest 成一份全量 manifest，连同全部产物一起挂上
+  # GitHub Release。manifest 在这里**不签名**——私钥只存在于官网服务器，从不进 CI；
+  # 签名在发布脚本 deploy/publish-pack.sh 的 sign 子命令里，在服务器侧用
+  # AWD_PLUGIN_SIGNING_KEY 完成。
+  #
+  # if 门控：三条构建腿里总有两条被 pack_id 跳过（skipped），所以不能用默认的
+  # 「needs 全部成功」；但也不能宽到 always()——那样任一腿真失败照样发半成品。
   release:
     name: Merge manifest and publish GitHub Release
-    needs: [mac, win]
+    needs: [mac, win, runtime]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -113,24 +267,23 @@ jobs:
           node-version: '20'
       - uses: actions/download-artifact@v4
         with:
-          name: pack-mac
-          path: pack-in/mac
-      - uses: actions/download-artifact@v4
-        with:
-          name: pack-win
-          path: pack-in/win
+          pattern: pack-*
+          path: pack-in
       - name: Merge manifest + collect archives
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p pack-out/final
+          MERGE=$(ls -d pack-in/*/manifest.json | paste -sd, -)
+          [ -n "$MERGE" ] || { echo "没有任何 manifest 可合并"; exit 1; }
           node desktop/scripts/build-pack.js \
-            --id "$PACK_ID" \
+            --id "${{ inputs.pack_id }}" \
             --version "${{ inputs.version }}" \
             --out pack-out/final \
-            --merge pack-in/mac/manifest.json,pack-in/win/manifest.json
-          # 合并只产出 manifest.json；实际压缩包分散在 mac/win 两份产物里，
-          # 一并收进最终发布目录（manifest.json.sig 有意不在这里生成，见上方注释）。
-          cp pack-in/mac/*.tar.gz pack-out/final/
-          cp pack-in/win/*.tar.gz pack-out/final/
+            --merge "$MERGE"
+          # 合并只产出 manifest.json；实际压缩包分散在各腿的产物里，一并收进最终
+          # 发布目录（manifest.json.sig 有意不在这里生成，见上方注释）。
+          cp pack-in/*/*.tar.gz pack-out/final/
           echo "=== 最终产物 ==="
           ls -la pack-out/final
           echo "=== manifest.json ==="
@@ -138,8 +291,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: pack-${{ env.PACK_ID }}-v${{ inputs.version }}
-          name: 'native pack: ${{ env.PACK_ID }} v${{ inputs.version }}'
+          tag_name: pack-${{ inputs.pack_id }}-v${{ inputs.version }}
+          name: 'native pack: ${{ inputs.pack_id }} v${{ inputs.version }}'
           # 与应用的 v* tag 井水不犯河水（前缀不同），不会触发 desktop-build.yml。
           # 必须标 prerelease：GitHub 的 releases/latest 是仓库级的，正式 release
           # 一律算数。2026-08-19 实测 pack 上架后 releases/latest 返回本 release
@@ -148,13 +301,14 @@ jobs:
           # 按 tag 直链兜底）完全不受影响。
           prerelease: true
           body: |
-            native pack `${{ env.PACK_ID }}` v${{ inputs.version }}（未签名产物）。
+            native pack `${{ inputs.pack_id }}` v${{ inputs.version }}（未签名产物）。
 
             发布到镜像前必须先跑：
             ```
             bash deploy/publish-pack.sh check   <本地下载目录>
             bash deploy/publish-pack.sh sign    <本地下载目录>
-            bash deploy/publish-pack.sh publish <本地下载目录> ${{ env.PACK_ID }} ${{ inputs.version }}
+            bash deploy/publish-pack.sh publish <本地下载目录> ${{ inputs.pack_id }} ${{ inputs.version }}
+            bash deploy/publish-pack.sh verify  ${{ inputs.pack_id }} ${{ inputs.version }}
             ```
           files: |
             pack-out/final/*.tar.gz

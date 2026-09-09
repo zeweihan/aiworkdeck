@@ -12,6 +12,9 @@
  *     --requirements ../pptx-service/requirements.lock \
  *     --out bundled/mac-arm64
  *
+ * 只要解释器（安装包链路，0.38.0 起四个服务的 lib/app 走 native pack）：
+ *   node scripts/prepare-python-service.js --runtime-only 1 --out bundled/mac-arm64
+ *
  * 平台按构建宿主原生解析（mac 仅支持 Apple Silicon——2026-07-03 决策放弃 Intel Mac，
  * 因 onnxruntime/pikepdf 等依赖已停发 x86_64 wheel，交叉烙制不可持续）。
  * 共享运行时：同一 out 目录下多次调用只下载/解压一次 python/。
@@ -42,8 +45,10 @@ function parseArgs() {
       }
     }
   }
+  // --runtime-only：只烙 CPython 解释器，不装任何服务依赖，故不需要 service/requirements
+  const required = out['runtime-only'] ? ['out'] : ['service', 'requirements', 'out']
   // --src 可选：mineru 这类纯 pip 包服务没有自有源码，只烙依赖
-  for (const k of ['service', 'requirements', 'out']) {
+  for (const k of required) {
     if (!out[k]) {
       console.error(`missing --${k}`)
       process.exit(1)
@@ -146,11 +151,22 @@ const PRUNE_BIN_EXECUTABLES = ['magika', 'ruff']
  */
 const PRUNE_PKG_TEST_DIRS = ['tests', 'test']
 
+/**
+ * 按服务的裁剪表（dev-board#529）。mineru 的 requirements.in 是 `mineru[core]`，
+ * 把整个 Gradio Web UI 拖进 lock（P1 删完 *.js.map 之后仍约 80MB 未压缩）；
+ * 服务只跑 `-m mineru.cli.fast_api`，Web UI 从不启动——已在真实的 mineru lib 上
+ * 实测 `import mineru.cli.fast_api` 之后 sys.modules 里没有任何 gradio* 模块。
+ * 只对表里点名的服务生效，别的服务的同名包一律不碰。
+ */
+const PRUNE_BY_SERVICE = {
+  'mineru-service': ['gradio', 'gradio_client', 'gradio_pdf']
+}
+
 function rmIfExists(p) {
   if (fs.existsSync(p)) fs.rmSync(p, { recursive: true, force: true })
 }
 
-function prune(libDir) {
+function prune(libDir, service) {
   // 体积裁剪：字节码缓存（保守起见不动 dist-info——pip/importlib.metadata 需要，
   // 尤其是 RECORD：删了它 importlib.metadata 的 files() 与后续 pip 操作都会瞎）
   const stack = [libDir]
@@ -199,18 +215,27 @@ function prune(libDir) {
       }
     }
   }
+  // 按服务的整包裁剪放在最后：上面的通用规则先跑完，这里只做点名删除。
+  // service 为空（老调用方/单测）时不走这张表，行为与 P1 完全一致。
+  for (const rel of PRUNE_BY_SERVICE[service] || []) rmIfExists(path.join(libDir, rel))
 }
 
 function main() {
   const args = parseArgs()
   const outDir = path.resolve(args.out)
+  // 只烙 CPython 运行时、不装任何服务依赖：安装包只需要解释器（litviz 与四个
+  // runtime pack 共用它），四个服务的 lib/app 由 pack-release.yml 打进各自的 native pack。
+  if (args['runtime-only']) {
+    console.log(`runtime: ${ensurePython(outDir)}`)
+    return
+  }
   const pyRoot = ensurePython(outDir)
   const svcDir = path.join(outDir, 'pysvc', args.service)
   const libDir = path.join(svcDir, 'lib')
   const appDir = path.join(svcDir, 'app')
   installDeps(pyRoot, path.resolve(args.requirements), libDir)
   if (args.src) copyAppSource(path.resolve(args.src), appDir)
-  prune(libDir)
+  prune(libDir, args.service)
   console.log(`bundled ${args.service}:`)
   console.log(`  runtime: ${pyRoot}`)
   console.log(`  lib:     ${libDir}`)

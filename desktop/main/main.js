@@ -58,9 +58,9 @@ let mainWindowStartupReady = false
 let services = null
 let modelManager = null
 let updateService = null
-// 首启 pysvc 解压完成后仍需保留的进度窗（见 ensurePysvcReady）：解压只是启动链的一段，
-// 后面 createServices→startEager 还要拉起 Java 后端等本机服务，期间没有它就是纯黑屏，
-// 系统会判定"无响应"。真正销毁挪到 createMainWindow 之后（ready-to-show 时机，见下）。
+// 首启进度窗的引用。0.38.0 起首启不再解压 pysvc（四个 Python 服务改走 native pack），
+// 这里只剩「等本机服务起来」这一段的兜底；当前没有创建它的路径，保留是为了
+// retireFirstLaunchSplash 的调用点不必跟着分支。
 let firstLaunchSplash = null
 
 // 增量更新（docs/INCREMENTAL_UPDATE_DESIGN.md）：overlay 上下文——三个 seam
@@ -1356,118 +1356,7 @@ const COMPONENT_SERVICE = {
   'asr-models': 'asr-service'
 }
 
-// 打包态 pysvc 不再随 .app 携带目录，而是 Resources/pysvc.tar.gz 首启解压到
-// 用户数据目录（见 services/pysvc-runtime.js 顶部说明）。返回解压产物里的
-// pysvc 根目录；dev 态或旧布局（无 tar 包，pysvc 目录直接在 Resources）返回 null，
-// 服务代码经 pysvcPath() 回退到 resourcesPath/pysvc。
-function resolvePysvcRoot() {
-  if (!app.isPackaged) return null
-  const fs = require('fs')
-  if (!fs.existsSync(path.join(process.resourcesPath, 'pysvc.tar.gz'))) return null
-  return path.join(app.getPath('userData'), 'pysvc-' + app.getVersion(), 'pysvc')
-}
-
-// 首启/升级后的 pysvc 解压（幂等）。带一个极简进度窗——mineru lib 解压要数十秒，
-// 无提示会被当成"点了没反应"。失败不阻塞主流程：弹框告知后照常开窗，
-// 相关 Python 服务会各自启动失败并落日志。
-//
-// 解压完成不等于启动完成：后面还要 createServices→allocatePorts→startEager 拉起
-// Java 后端等本机服务，这段同样耗时且此前完全没有 UI（系统据此判定"无响应"，Dock
-// 弹强制退出）。所以这里解压完不销毁窗口，只把文案切到不确定态；真正销毁交给调用方
-// 在 createMainWindow 之后做（见 firstLaunchSplash）。
-async function ensurePysvcReady() {
-  const root = resolvePysvcRoot()
-  if (!root) return
-  const { ensurePysvcExtracted, MARKER } = require('./services/pysvc-runtime')
-  const fs = require('fs')
-  const versionDir = path.dirname(root)
-  if (fs.existsSync(path.join(versionDir, MARKER))) return // 常规启动零开销快路径
-
-  let splash = null
-  const setProgress = (percent) => {
-    if (!splash || splash.isDestroyed()) return
-    const p = typeof percent === 'number' ? percent : -1
-    splash.webContents.executeJavaScript(`window.__setP && window.__setP(${p})`).catch(() => {})
-  }
-  try {
-    splash = new BrowserWindow({
-      width: 420,
-      height: 160,
-      frame: false,
-      resizable: false,
-      show: false,
-      webPreferences: { nodeIntegration: false, contextIsolation: true }
-    })
-    const html = `<!doctype html><meta charset="utf-8">
-      <body style="margin:0;font:14px -apple-system,'Segoe UI',sans-serif;background:#1e1f24;color:#e8e8ea;display:flex;align-items:center;justify-content:center;height:100vh;user-select:none">
-        <div style="width:320px;text-align:center">
-          <div id="title" style="margin-bottom:6px">正在准备本地组件…</div>
-          <div id="subtitle" style="font-size:12px;color:#9a9aa2;margin-bottom:14px">首次启动或版本更新后需解压，约一分钟</div>
-          <div style="background:#33343c;border-radius:4px;height:8px;overflow:hidden">
-            <div id="bar" style="background:#4f8cff;height:100%;width:0%;transition:width .4s"></div>
-          </div>
-          <div id="pct" style="font-size:12px;color:#9a9aa2;margin-top:8px">&nbsp;</div>
-        </div>
-        <style>
-          @keyframes indet { 0% { margin-left:-40% } 100% { margin-left:100% } }
-          #bar.indet { width:40% !important; animation: indet 1.1s ease-in-out infinite; transition: none }
-        </style>
-        <script>
-          window.__setP=function(p){if(p>=0){document.getElementById('bar').style.width=p+'%';document.getElementById('pct').textContent=p+'%'}}
-          // 解压完成后进入"启动本地服务"阶段：耗时未知，切不确定态进度条
-          window.__setPhase=function(title, subtitle){
-            document.getElementById('title').textContent = title
-            document.getElementById('subtitle').textContent = subtitle
-            document.getElementById('pct').textContent = '\\u00a0'
-            var bar = document.getElementById('bar')
-            bar.classList.add('indet')
-          }
-        </script>
-      </body>`
-    splash.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
-    splash.once('ready-to-show', () => { try { splash.show() } catch (e) { /* ignore */ } })
-  } catch (e) {
-    splash = null // 无窗口也照样解压
-  }
-
-  const result = await ensurePysvcExtracted({
-    archive: path.join(process.resourcesPath, 'pysvc.tar.gz'),
-    metaFile: path.join(process.resourcesPath, 'pysvc.meta.json'),
-    versionDir,
-    onProgress: ({ percent }) => setProgress(percent)
-  })
-  if (!result.ok) {
-    try { if (splash && !splash.isDestroyed()) splash.destroy() } catch (e) { /* ignore */ }
-    console.error('[pysvc] extract failed:', result.message)
-    try {
-      const { dialog } = require('electron')
-      dialog.showErrorBox(
-        require('./app-language').t({ zh: '本地组件解压失败', en: 'Local Component Extraction Failed' }),
-        require('./app-language').t({
-          zh: `部分本地功能（文档解析/PPT/语音）将不可用：\n${result.message || ''}`,
-          en: `Some local features (document parsing/slides/voice) will be unavailable:\n${result.message || ''}`,
-        })
-      )
-    } catch (e) { /* ignore */ }
-    return
-  }
-  // 成功：不销毁，切文案继续等后端等服务起来；调用方在 createMainWindow 后收尾
-  try {
-    if (splash && !splash.isDestroyed()) {
-      // ARM 版 Windows（Mac 虚拟机）转译运行时首启以分钟计，明说，免得像卡死（dev-board#340）
-      const emulated = require('./services/win-arch').isWinArmEmulated()
-      const subtitle = emulated
-        ? '检测到 ARM 版 Windows（转译运行），首次启动可能需要几分钟'
-        : '首次启动准备就绪，即将打开窗口'
-      splash.webContents.executeJavaScript(
-        `window.__setPhase && window.__setPhase(${JSON.stringify('正在启动本地服务…')}, ${JSON.stringify(subtitle)})`
-      ).catch(() => {})
-    }
-  } catch (e) { /* ignore */ }
-  firstLaunchSplash = splash
-}
-
-// firstLaunchSplash 收尾：绑到主窗口 ready-to-show，避免解压进度窗与主窗口两个
+// firstLaunchSplash 收尾：绑到主窗口 ready-to-show，避免进度窗与主窗口两个
 // 窗口叠加闪烁；兜个超时兜底，防止极端情况下 ready-to-show 迟迟不来把它卡住。
 function retireFirstLaunchSplash() {
   const splash = firstLaunchSplash
@@ -1484,14 +1373,14 @@ function retireFirstLaunchSplash() {
 
 function createServices() {
   // 打包模式下 jar/JRE/python 从 resourcesPath 解析（Epic #18 T2），数据落 ~/.aiworkdeck；
-  // pysvc 落用户数据目录（首启解压，见 ensurePysvcReady）
+  // 四个 Python 服务的 lib/app 落 ~/.aiworkdeck/packs/<service>-runtime/<version>/（设计 §3.2）
   const dataDir = path.join(app.getPath('home'), '.aiworkdeck')
-  const pysvcRoot = resolvePysvcRoot()
+  const projectRoot = path.join(__dirname, '..', '..')
   if (!modelManager) {
     modelManager = createModelManager({
       dataDir,
       resourcesPath: process.resourcesPath,
-      pysvcRoot,
+      projectRoot,
       packaged: app.isPackaged,
       onProgress: (evt) => {
         try {
@@ -1506,10 +1395,9 @@ function createServices() {
     })
   }
   const mgr = createServiceManager({
-    projectRoot: path.join(__dirname, '..', '..'),
+    projectRoot,
     packaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
-    pysvcRoot,
     dataDir,
     // ARM 版 Windows（Mac 虚拟机）上 x64 转译运行，服务启动看门狗要放宽（dev-board#340）
     winEmulated: require('./services/win-arch').isWinArmEmulated()
@@ -1688,23 +1576,11 @@ app.whenReady().then(() => {
   } catch (e) { /* ignore */ }
   // 增量更新：清理非本大版本的 overlay 残留（全量升级后安装器不会替我们清）
   try { require('./services/overlay').cleanupStaleMajors(overlayCtx()) } catch (e) { console.error('[overlay]', e) }
-  // 桌面端启动时自动拉起本机服务（Java 后端 9696 + 打包态的 pptx-service）；
-  // 打包态先确保 pysvc 已解压（首启/升级后带进度窗，常规启动是零开销快路径）
-  ensurePysvcReady()
-    .catch((e) => console.error('[pysvc]', e))
+  // 桌面端启动时自动拉起本机服务（Java 后端 9696 + 已装 runtime pack 的 Python 服务）。
+  // 0.38.0 起没有 pysvc 解压这一步：四个 Python 服务的 descriptor 各自判 pack 在不在场，
+  // 不在场就不启动（用户在「可选组件」面板下载后 host.services.ensure 拉起）。
+  Promise.resolve()
     .then(() => {
-      // P3：pysvc 源码层补丁与 overlay 对齐（无补丁时自动还原备份）
-      try {
-        const root = resolvePysvcRoot()
-        if (root) {
-          const overlay = require('./services/overlay')
-          const ctx = overlayCtx()
-          const dir = overlay.componentDir(ctx, 'pysvc-src')
-          const cur = overlay.readCurrent(ctx)
-          const ver = dir && cur && cur.components['pysvc-src'] ? cur.components['pysvc-src'].version : null
-          require('./services/pysvc-runtime').syncSrcPatch(root, dir, ver)
-        }
-      } catch (e) { console.error('[pysvc-src-patch]', e) }
       services = createServices()
       return services.allocatePorts()
     })

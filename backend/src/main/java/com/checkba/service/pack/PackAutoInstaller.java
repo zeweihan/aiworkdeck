@@ -64,6 +64,11 @@ public class PackAutoInstaller {
             String packId = skill.getRequiresPack();
             if (packId == null || packId.isBlank()) continue;
             if (!skillRegistry.isEnabled(skill.getId())) continue;
+            // 四个 Python 服务运行时是**可选组件**，走的是「先问用户再下」那条路（设计 §3.2 / §4）：
+            // 一个 2GB 级的下载不能因为某个 skill 默认启用（text-to-speech 就是
+            // enabled_by_default: true）就在后端启动 10 秒后无声开跑。
+            // 它们的入口是首次登录的「可选组件」面板与各功能触发点的提示。
+            if (OptionalComponents.isOptionalRuntime(packId)) continue;
             if (packService.resourceReady(packId)) continue;
             try {
                 packService.installAsync(packId);

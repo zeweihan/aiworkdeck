@@ -5,38 +5,71 @@ const fs = require('fs')
 const { spawn } = require('child_process')
 
 /**
- * pysvc 运行时定位与首启解压。
+ * 四个 Python 服务的运行时定位。
  *
- * 打包产物不再直接携带 pysvc/ 目录（上万个小文件让 macOS 逐文件 codesign 的
- * Apple 时间戳请求抖动、EMFILE 频发），改为 Resources/pysvc.tar.gz 单文件；
- * 首次启动（或 app 版本变更）解压到用户数据目录 <userData>/pysvc-<version>/。
- * 绝不能解压回 .app 内部——会破坏 bundle 签名密封（Gatekeeper 直接拒启）。
+ * 0.38.0 起这四个服务不再随安装包分发（设计 §3）：每个服务一个 native pack
+ * （<service 前缀>-runtime），装到 ~/.aiworkdeck/packs/<id>/<version>/{lib,app}。
+ * 首启解压 pysvc.tar.gz 那一整套（含 splash 与 pysvc-src 补丁）已随本次改动删除——
+ * 安装包里不再有 pysvc.tar.gz，没有什么可解压的。
+ *
+ * 解析优先级与 LitigationVisualService.resolveRuntime / 规范 §5 同构：
+ *   1. 显式 env 覆盖 AIWORKDECK_PYSVC_<SVC>_DIR（dev 与排障；最高优先级）
+ *   2. pack current 目录（current.json 指向、带 .pack-complete、未被封禁）
+ *   3. dev 态随仓库的 desktop/bundled/<os>-<arch>/pysvc/<service>
+ * 一档都不命中就返回 null：调用方据此把服务判为「组件未安装」，不 spawn、不报错。
  */
 
-const MARKER = '.aiworkdeck-extracted'
-
-// 服务代码统一经此定位 pysvc 内文件：
-// - 打包态（ctx.pysvcRoot 已设置）→ 用户数据目录里的解压产物
-// - dev 态 / 旧布局（未设置）→ 沿用 resourcesPath/pysvc
-function pysvcPath(ctx, ...segments) {
-  const root = ctx.pysvcRoot || path.join(ctx.resourcesPath || '', 'pysvc')
-  return path.join(root, ...segments)
+const PACK_ID_BY_SERVICE = {
+  'pptx-service': 'pptx-runtime',
+  'mineru-service': 'mineru-runtime',
+  'kokoro-service': 'kokoro-runtime',
+  'asr-service': 'asr-runtime',
 }
 
-function dirSize(root) {
-  let total = 0
-  const stack = [root]
-  while (stack.length) {
-    const cur = stack.pop()
-    let entries
-    try { entries = fs.readdirSync(cur, { withFileTypes: true }) } catch (e) { continue }
-    for (const en of entries) {
-      const fp = path.join(cur, en.name)
-      if (en.isDirectory()) stack.push(fp)
-      else if (en.isFile()) { try { total += fs.statSync(fp).size } catch (e) { /* 解压中文件可能在改名 */ } }
-    }
+const COMPLETE_MARKER = '.pack-complete'
+
+function envOverride(service) {
+  const key = 'AIWORKDECK_PYSVC_' + service.replace(/-service$/, '').toUpperCase() + '_DIR'
+  const v = process.env[key]
+  return v && fs.existsSync(v) ? v : null
+}
+
+function packRoot(ctx, service) {
+  const id = PACK_ID_BY_SERVICE[service]
+  if (!id || !ctx || !ctx.dataDir) return null
+  const base = path.join(ctx.dataDir, 'packs', id)
+  let cur
+  try {
+    cur = JSON.parse(fs.readFileSync(path.join(base, 'current.json'), 'utf8'))
+  } catch (e) {
+    return null // 从没装过
   }
-  return total
+  if (!cur || !cur.version || cur.revoked) return null // 封禁的包资源解析要视而不见
+  const dir = path.join(base, String(cur.version))
+  return fs.existsSync(path.join(dir, COMPLETE_MARKER)) ? dir : null // 半成品不算数
+}
+
+function bundledRoot(ctx, service) {
+  if (!ctx || !ctx.projectRoot) return null
+  const plat = process.platform === 'win32' ? 'win-x64' : 'mac-arm64'
+  const dir = path.join(ctx.projectRoot, 'desktop', 'bundled', plat, 'pysvc', service)
+  return fs.existsSync(dir) ? dir : null
+}
+
+/** 服务根目录（其下是 lib/ 与 app/）；未安装返回 null。 */
+function resolveServiceRoot(ctx, service) {
+  if (!PACK_ID_BY_SERVICE[service]) return null
+  return envOverride(service) || packRoot(ctx, service) || bundledRoot(ctx, service) || null
+}
+
+function libDirFor(ctx, service) {
+  const root = resolveServiceRoot(ctx, service)
+  return root ? path.join(root, 'lib') : null
+}
+
+function appDirFor(ctx, service) {
+  const root = resolveServiceRoot(ctx, service)
+  return root ? path.join(root, 'app') : null
 }
 
 // Windows 优先 System32 的 bsdtar（处理盘符冒号无坑）；PATH 里的 GNU tar 会把
@@ -62,6 +95,7 @@ function extractTarOnce(cmd, archive, destDir) {
   })
 }
 
+/** 增量更新（update-service.js）解补丁包用；pack 的解压在 Java 侧，不走这里。 */
 async function extractTar(archive, destDir) {
   let lastErr = null
   for (const cmd of tarCandidates()) {
@@ -76,132 +110,4 @@ async function extractTar(archive, destDir) {
   throw lastErr || new Error('no tar available')
 }
 
-// 成功解压后清理同级旧版本目录（pysvc-<oldVersion>），升级不留双份体积
-function cleanupOldVersions(versionDir) {
-  const parent = path.dirname(versionDir)
-  const current = path.basename(versionDir)
-  let entries
-  try { entries = fs.readdirSync(parent, { withFileTypes: true }) } catch (e) { return }
-  for (const en of entries) {
-    if (!en.isDirectory() || !en.name.startsWith('pysvc-') || en.name === current) continue
-    try { fs.rmSync(path.join(parent, en.name), { recursive: true, force: true }) } catch (e) { /* 尽力而为 */ }
-  }
-}
-
-/**
- * 确保 pysvc 已解压到 versionDir（幂等：marker 命中直接复用）。
- * opts = { archive, metaFile, versionDir, onProgress?({percent}) }
- * 返回 { ok, reused?, message? }，不抛异常。
- */
-async function ensurePysvcExtracted(opts) {
-  const { archive, metaFile, versionDir, onProgress } = opts
-  const marker = path.join(versionDir, MARKER)
-  if (fs.existsSync(marker)) return { ok: true, reused: true }
-
-  let poller = null
-  try {
-    // 无 marker 的残留（上次解压被打断）整体重来，保证目录内容完整
-    fs.rmSync(versionDir, { recursive: true, force: true })
-    fs.mkdirSync(versionDir, { recursive: true })
-
-    let totalBytes = 0
-    try { totalBytes = JSON.parse(fs.readFileSync(metaFile, 'utf8')).totalBytes || 0 } catch (e) { /* 无元数据则不报百分比 */ }
-    if (onProgress) {
-      poller = setInterval(() => {
-        const percent = totalBytes > 0
-          ? Math.min(99, Math.round(dirSize(versionDir) / totalBytes * 100)) // 封顶 99，tar 成功退出才算完成
-          : undefined
-        try { onProgress({ percent }) } catch (e) { /* ignore */ }
-      }, 500)
-    }
-
-    await extractTar(archive, versionDir)
-    fs.writeFileSync(marker, new Date().toISOString())
-    cleanupOldVersions(versionDir)
-    return { ok: true, reused: false }
-  } catch (e) {
-    return { ok: false, message: String(e && e.message ? e.message : e) }
-  } finally {
-    if (poller) clearInterval(poller)
-  }
-}
-
-// ---------------------------------------------------------------------------
-// P3：pysvc 源码层补丁（设计文档 §11 Phase 3）。
-// 解压产物在用户数据目录（可写、不在签名密封内），补丁 = 把 overlay 组件
-// pysvc-src 里的文件（相对 pysvc 根的同构路径）覆盖进解压树。覆盖前逐文件
-// 备份原件到 .patch-backup/，回滚即还原备份——不必重解 728MB 的 tar。
-// 全量升级换 pysvc-<version> 目录后补丁自然重放（marker 不匹配触发重应用）。
-
-const APPLIED_FILE = '.patch-applied.json'
-const BACKUP_DIR = '.patch-backup'
-
-function walkFiles(root, dir = root, out = []) {
-  let entries
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch (e) { return out }
-  for (const en of entries) {
-    const fp = path.join(dir, en.name)
-    if (en.isDirectory()) walkFiles(root, fp, out)
-    else if (en.isFile()) out.push(path.relative(root, fp))
-  }
-  return out
-}
-
-function restoreSrcPatch(pysvcRoot) {
-  const appliedFp = path.join(pysvcRoot, APPLIED_FILE)
-  let applied
-  try { applied = JSON.parse(fs.readFileSync(appliedFp, 'utf8')) } catch (e) { return false }
-  const backupRoot = path.join(pysvcRoot, BACKUP_DIR)
-  for (const rel of applied.files || []) {
-    const target = path.join(pysvcRoot, rel)
-    const backup = path.join(backupRoot, rel)
-    try {
-      if (fs.existsSync(backup)) {
-        fs.mkdirSync(path.dirname(target), { recursive: true })
-        fs.copyFileSync(backup, target)
-      } else {
-        fs.rmSync(target, { force: true }) // 补丁新增的文件：还原 = 删除
-      }
-    } catch (e) { /* 尽力而为，单文件失败不阻断其余还原 */ }
-  }
-  try { fs.rmSync(backupRoot, { recursive: true, force: true }) } catch (e) { /* ignore */ }
-  try { fs.rmSync(appliedFp, { force: true }) } catch (e) { /* ignore */ }
-  return true
-}
-
-/**
- * 让解压树与 overlay 的 pysvc-src 组件对齐（幂等）。
- * @param {string} pysvcRoot 解压产物根（<userData>/pysvc-<version>/pysvc）
- * @param {string|null} patchDir overlay 组件目录；null = 无补丁（触发还原）
- * @param {string|null} patchVersion 组件版本（marker 判等用）
- * @returns {{applied?: boolean, reverted?: boolean}}
- */
-function syncSrcPatch(pysvcRoot, patchDir, patchVersion) {
-  const appliedFp = path.join(pysvcRoot, APPLIED_FILE)
-  if (!patchDir) {
-    return { reverted: restoreSrcPatch(pysvcRoot) }
-  }
-  try {
-    const applied = JSON.parse(fs.readFileSync(appliedFp, 'utf8'))
-    if (applied.version === patchVersion) return { applied: false } // 已是该版本
-  } catch (e) { /* 未应用过 */ }
-
-  restoreSrcPatch(pysvcRoot) // 先回到干净基线，防旧补丁文件残留
-  const files = walkFiles(patchDir)
-  const backupRoot = path.join(pysvcRoot, BACKUP_DIR)
-  for (const rel of files) {
-    const target = path.join(pysvcRoot, rel)
-    if (fs.existsSync(target)) {
-      const backup = path.join(backupRoot, rel)
-      fs.mkdirSync(path.dirname(backup), { recursive: true })
-      fs.copyFileSync(target, backup)
-    }
-    fs.mkdirSync(path.dirname(target), { recursive: true })
-    fs.copyFileSync(path.join(patchDir, rel), target)
-  }
-  // marker 最后写（写入即视为应用完成；中途失败下次启动整套重放）
-  fs.writeFileSync(appliedFp, JSON.stringify({ version: patchVersion, files }, null, 2))
-  return { applied: true }
-}
-
-module.exports = { pysvcPath, ensurePysvcExtracted, MARKER, extractTar, syncSrcPatch }
+module.exports = { PACK_ID_BY_SERVICE, resolveServiceRoot, libDirFor, appDirFor, extractTar }
