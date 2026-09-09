@@ -85,11 +85,16 @@ try {
   }
   if (!page) throw new Error('找不到 Electron 主渲染页')
   await hardenPageInput(page)
+  console.log('阶段 1/4：进入工作台并打开文件面板')
+  // Electron 主进程的首次 loadURL 可能晚于 CDP 连接完成；等它落定后重新取当前页，
+  // 避免导航途中旧 execution context 被回收成 Promise was collected。
+  await sleep(5000)
+  page = (await browser.pages()).find((candidate) => candidate.url().startsWith(DEVURL) && !candidate.isClosed()) || page
+  await hardenPageInput(page)
   page.on('request', (request) => {
     if (request.url().includes('/api/')) requests.push(`${request.method()} ${new URL(request.url()).pathname}`)
   })
   await page.evaluate(() => localStorage.setItem('awd_app_language', 'zh-CN'))
-  console.log('阶段 1/4：进入工作台并打开文件面板')
   const workbenchUrl = `${DEVURL}/#/pages/project-overview/project-overview?id=${project.id}`
   let workbenchReady = false
   let workbenchSnapshot = null
@@ -97,25 +102,23 @@ try {
     if (!page.url().includes('project-overview/project-overview')) {
       await page.goto(workbenchUrl, { waitUntil: 'domcontentloaded' })
     }
-    workbenchSnapshot = await page.evaluate(async (expectedId) => {
+    workbenchSnapshot = await page.evaluate((expectedId) => {
       const root = document.querySelector('.page-project-overview')
       if (!root) return {
         ready: false,
         route: location.hash,
         optionalDialog: !!document.querySelector('.optional-components-dialog'),
       }
-      let seed = [...document.querySelectorAll('*')].find((element) => element.__vueParentComponent)?.__vueParentComponent
+      let seed = root.__vueParentComponent
+        || [...root.querySelectorAll('*')].find((element) => element.__vueParentComponent)?.__vueParentComponent
       if (!seed) return { ready: false, route: location.hash, root: true }
-      while (seed.parent) seed = seed.parent
-      const queue = [seed]
-      while (queue.length) {
-        const component = queue.shift()
-        const proxy = component.proxy
+      // 生产构建会裁掉部分静态 vnode children，不能只从应用根向下 BFS；
+      // 真实工作台根 DOM 上的 owner 链稳定保留，先沿它向上找页面实例。
+      for (let owner = seed; owner; owner = owner.parent) {
+        const proxy = owner.proxy
         if (proxy && typeof proxy.openFile === 'function' && String(proxy.projectId) === String(expectedId)) {
           proxy.leftPaneKey = 'files'
           proxy.sidebarCollapsed = false
-          await proxy.$nextTick()
-          await new Promise((resolve) => setTimeout(resolve, 50))
           const tree = proxy.$refs?.fileTree
           return {
             ready: !!tree && !!document.querySelector('.file-tree'),
@@ -129,13 +132,6 @@ try {
             expectedId,
           }
         }
-        const stack = [component.subTree]
-        while (stack.length) {
-          const vnode = stack.pop()
-          if (!vnode) continue
-          if (vnode.component) queue.push(vnode.component)
-          else if (Array.isArray(vnode.children)) stack.push(...vnode.children)
-        }
       }
       return { ready: false, route: location.hash, root: true, owner: false }
     }, project.id).catch(() => null)
@@ -147,16 +143,16 @@ try {
   }
   if (!workbenchReady) throw new Error(`工作台/文件面板未就绪: ${JSON.stringify(workbenchSnapshot)}`)
 
-  const created = await page.evaluate(async () => {
-    let seed = [...document.querySelectorAll('*')].find((element) => element.__vueParentComponent)?.__vueParentComponent
+  const created = await page.evaluate(async (expectedId) => {
+    const root = document.querySelector('.page-project-overview')
+    let seed = root?.__vueParentComponent
+      || [...(root?.querySelectorAll('*') || [])].find((element) => element.__vueParentComponent)?.__vueParentComponent
     if (!seed) return { error: 'Vue root missing' }
-    while (seed.parent) seed = seed.parent
-    const queue = [seed]
-    while (queue.length) {
-      const component = queue.shift()
-      const proxy = component.proxy
+    for (let owner = seed; owner; owner = owner.parent) {
+      const proxy = owner.proxy
       const tree = proxy?.$refs?.fileTree
-      if (tree && typeof tree.createBlankWord === 'function' && typeof proxy.openFile === 'function') {
+      if (tree && typeof tree.createBlankWord === 'function' && typeof proxy.openFile === 'function'
+          && String(proxy.projectId) === String(expectedId)) {
         await tree.createBlankWord()
         await tree.loadFiles()
         const file = tree.displayFiles.find((item) => item.fileType === 'docx' || item.name?.endsWith('.docx'))
@@ -164,16 +160,9 @@ try {
         proxy.openFile(file)
         return { id: file.id, name: file.name }
       }
-      const stack = [component.subTree]
-      while (stack.length) {
-        const vnode = stack.pop()
-        if (!vnode) continue
-        if (vnode.component) queue.push(vnode.component)
-        else if (Array.isArray(vnode.children)) stack.push(...vnode.children)
-      }
     }
     return { error: 'FileTree owner missing' }
-  })
+  }, project.id)
   if (created.error) throw new Error(created.error)
   console.log(`阶段 2/4：已创建并打开 ${created.name}`)
   await page.waitForSelector('webview', { timeout: 30000 })
@@ -246,6 +235,9 @@ try {
   const xml = execFileSync('unzip', ['-p', tempDoc, 'word/document.xml'], { encoding: 'utf8' })
   fs.rmSync(tempDoc, { force: true })
   if (!xml.includes(selectedName)) throw new Error('下载的 docx 未包含 Tab 接受后的机构全称')
+  if (!requests.includes(`GET /api/projects/${project.id}/completion`)) {
+    throw new Error('请求监听未捕获词库加载，不能验证在线查询次数')
+  }
   if (requests.some((item) => item.endsWith(`/projects/${project.id}/completion/lookup`))) {
     throw new Error(`输入与补全期间意外触发在线 lookup: ${JSON.stringify(requests)}`)
   }
