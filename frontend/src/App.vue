@@ -409,13 +409,16 @@ html {
    那个 div.uni-scroll-view（组件的 scope id 只落在 <uni-scroll-view> 根元素上），
    scoped 样式够不着它，非要写就得逐处 :deep 复制一份。
 
-   Chromium 一旦看到 scrollbar-width，就整个忽略 ::-webkit-scrollbar 那套，6px 的
-   确定高度会退化成 thin（约 8px），把按上面 6px 算好的居中偏移带歪。所以标准属性
+   4px：两处宿主各自按这个数补偿高度（.etb-scroll 的 calc(100% - 8px)/-4px、
+   .tabs-scroll 的 calc(100% + 4px)），改这里要连带改那两处。
+
+   Chromium 一旦看到 scrollbar-width，就整个忽略 ::-webkit-scrollbar 那套，4px 的
+   确定高度会退化成 thin（约 8px），把按上面 4px 算好的居中偏移带歪。所以标准属性
    只留给没有 webkit 伪元素的浏览器。 */
 .awd-hairline-scroll::-webkit-scrollbar,
 .awd-hairline-scroll ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 4px;
+    height: 4px;
 }
 .awd-hairline-scroll::-webkit-scrollbar-track,
 .awd-hairline-scroll ::-webkit-scrollbar-track {

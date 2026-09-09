@@ -1844,24 +1844,25 @@ $color-accent: #5BD197; // Mint Green
 .tabs-scroll {
   width: 100%;
 
-  /* VS Code 式标签栏：6px 悬浮细滑轨（.awd-hairline-scroll，样式本体在 App.vue
-     全局），横滚同时接滚轮（onTabsWheel）。滑轨整条藏掉的话，标签一多就再没有
-     任何「右边还有」的提示（dev-board#543）。
+  /* VS Code 式标签栏：4px 悬浮细滑轨（.awd-hairline-scroll，样式本体在 App.vue
+     全局），横滚同时接滚轮（原生挂上去的，见 tabDragSplit.rebindTabsWheel）。
+     滑轨整条藏掉的话，标签一多就再没有任何「右边还有」的提示（dev-board#543）。
 
-     高度写 calc(100% + 6px) 而不是 100%：滑轨占的 6px 是从内容盒里扣的，
-     100% 会让内容盒只剩 30px，而 .tab-item 是写死的 36px，底下 6px 会被 uni 给
+     高度写 calc(100% + 4px) 而不是 100%：滑轨占的 4px 是从内容盒里扣的，
+     100% 会让内容盒只剩 32px，而 .tab-item 是写死的 36px，底下 4px 会被 uni 给
      内层元素挂的 overflow-y:hidden 裁掉（激活标签那块白底会在贴着编辑器的一侧
-     断开 6px，正好毁掉「标签与正文连成一体」这个形制）。多给 6px，标签仍是完整
-     36px，滑轨落在标签栏下沿那 6px 里。
+     断开，正好毁掉「标签与正文连成一体」这个形制）。多给 4px，标签仍是完整
+     36px，滑轨落在标签栏下沿之外那 4px 里。
 
-     那 6px 溢出到 .tabs-bar 之外，落在 .editors-container 头上——后者是
-     position:relative 且有背景色，按绘制顺序排在普通流内容之后，会把滑轨整条盖掉。
-     所以这里自己也定位起来并抬一层。z-index 只给 .tabs-scroll 不给 .tabs-bar：
-     层叠上下文越小越好，这一层里只有标签本身，没有任何要往外飞的弹层。
+     那 4px 溢出到 .tabs-bar 之外，落在编辑区头上——`.editors-container` 与
+     `.editor-pane` 都是 position:relative 且有背景色，排在普通流里更靠后，
+     z-index 只到 1 时会把滑轨整条盖掉（#543 走查实测：注入 height:100% 立刻
+     就能看见 thumb）。所以这里自己定位起来并抬到 2。z-index 只给 .tabs-scroll
+     不给 .tabs-bar：层叠上下文越小越好，这一层里只有标签本身，没有要往外飞的弹层。
      被盖住的是编辑器工具栏那 38px 行的上边距（按钮在 y6..32），点不着按钮的风险没有。 */
-  height: calc(100% + 6px);
+  height: calc(100% + 4px);
   position: relative;
-  z-index: 1;
+  z-index: 2;
 }
 
 .tabs-list {
@@ -1914,6 +1915,8 @@ $color-accent: #5BD197; // Mint Green
   /* 标签多了要溢出成横滚，不是被整批压扁（dev-board#543）：没有 flex-shrink:0
      时 .tabs-list 这一行会把每个标签越挤越窄，滚动条永远不出现。 */
   flex-shrink: 0;
+  /* content-box：这 160px 不含左右 20px 内边距与 1px 右边框，实测渲染宽 181px。
+     想按「标签实际多宽」调，改这里要连带算上那 21px。 */
   max-width: 160px;
   user-select: none;
   transition: background-color 0.15s ease;

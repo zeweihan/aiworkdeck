@@ -6,10 +6,13 @@
     <!-- 主命令区：窄了就横向滚动，不换行（换行会把画布挤下去）。
          原生横向滚动条有 15px 高，会把这一段撑到 41px、在 38px 的行里被
          align-items:center 顶得比右侧常驻区高半格（dev-board#502），但整条藏掉
-         又等于把「这里还能往右滚」从界面上抹掉（dev-board#543）——所以改成 6px
-         悬浮细滑轨（.awd-hairline-scroll，定义在 App.vue 全局样式里），横滚同时
-         接滚轮（与标签栏 .tabs-scroll 同一套做法）。 -->
-    <scroll-view class="etb-scroll awd-hairline-scroll" scroll-x @wheel.prevent="onToolbarWheel">
+         又等于把「这里还能往右滚」从界面上抹掉（dev-board#543）——所以改成 4px
+         悬浮细滑轨（.awd-hairline-scroll，定义在 App.vue 全局样式里）。
+         滚轮转横滚**不能写成这里的 @wheel**：uni 会把事件重建成普通对象，
+         currentTarget 不是 DOM、连 delta 都没有，整条是死的（dev-board#543 复发的
+         正是这一步）——改在 mounted 里用原生 addEventListener 挂，见
+         utils/horizontalWheel.js 与本组件的 bindToolbarWheel。 -->
+    <scroll-view class="etb-scroll awd-hairline-scroll" scroll-x>
       <view class="etb-row">
         <!-- 撤销 / 重做 -->
         <view class="etb-btn" :class="{ off: undoDisabled }" :title="$t('editor.toolbar.undo')" @tap.stop="run('undo')">
@@ -299,7 +302,7 @@
 //   3) 本组件自己发完命令之后
 // 没有轮询：以上三路已经覆盖了用户能让光标动起来的所有途径。
 
-import { wheelDeltaOf } from '@/utils/wheelDelta.js'
+import { bindHorizontalWheel } from '@/utils/horizontalWheel.js'
 
 const ICONS = {
   undo: ['M9 14 4 9l5-5', 'M4 9h10a6 6 0 0 1 0 12h-3'],
@@ -461,6 +464,16 @@ export default {
     executor: { handler() { this.bootstrap() }, immediate: true },
     refreshKey() { this.refresh() },
   },
+  mounted() {
+    // 滚轮横滚只能在真实 DOM 上挂（见 methods.bindToolbarWheel）。工具栏自己不会
+    // 重建 .etb-scroll，挂一次即可；组件被父级 v-if 掉时走 beforeUnmount 摘掉。
+    this.$nextTick(() => this.bindToolbarWheel())
+  },
+
+  beforeUnmount() {
+    if (this._toolbarWheelOff) { this._toolbarWheelOff(); this._toolbarWheelOff = null }
+  },
+
   methods: {
     async call(action, params) {
       if (!this.executor) return null
@@ -516,25 +529,14 @@ export default {
       return { position: 'fixed', left: left + 'px', top: this.popPos.top + 'px', zIndex: 900 }
     },
     closeMenus() { this.menu = ''; this.insertMode = ''; this.insertErr = '' },
-    // 纵向滚轮映射成横向滚动，否则窄窗口下右半截命令只能靠拖那条 6px 细滑轨
-    // （dev-board#502，与标签栏 onTabsWheel 同一实现）。scroll-view 真正 overflow
-    // 的是 uni-h5 渲染出的内层元素，不是根元素本身，按 scrollWidth 找。
-    // 位移一律经 wheelDeltaOf 取：uni 重建过的事件对象上没有 deltaX/deltaY，
-    // 直接读会得到 NaN，横滚静默失效（dev-board#543）。
-    onToolbarWheel(evt) {
-      const root = evt && evt.currentTarget
-      if (!root || typeof root.querySelectorAll !== 'function') return
-      const delta = wheelDeltaOf(evt)
-      if (!delta) return
-      let scroller = null
-      if (root.scrollWidth > root.clientWidth) scroller = root
-      if (!scroller) {
-        for (const el of root.querySelectorAll('*')) {
-          if (el.scrollWidth > el.clientWidth + 1) { scroller = el; break }
-        }
-      }
-      if (!scroller) return
-      scroller.scrollLeft += delta
+    // 纵向滚轮映射成横向滚动，否则窄窗口下右半截命令只能靠拖那条 4px 细滑轨
+    // （dev-board#502 / #543，与标签栏 rebindTabsWheel 同一实现）。必须用原生
+    // addEventListener 挂在 uni 渲染出的真实元素上——模板上的 @wheel 收到的是
+    // uni 重建过的普通对象，第一道守卫就 return（理由写在 horizontalWheel.js）。
+    bindToolbarWheel() {
+      const root = this.$el
+      const el = root && typeof root.querySelector === 'function' ? root.querySelector('.etb-scroll') : null
+      if (el) this._toolbarWheelOff = bindHorizontalWheel(el)
     },
 
     // ---- 插入菜单 ----
@@ -774,18 +776,22 @@ export default {
 .etb-find-b.on { background: var(--awd-accent-soft); border-color: var(--awd-mint); color: var(--awd-accent-text); }
 .etb-find-x { margin-left: auto; padding: 3px 9px; font-size: 12px; color: var(--awd-text-2); flex-shrink: 0; }
 .etb-err.bar { margin: 0; border-radius: 0; padding: 4px 10px; }
-/* 6px 悬浮细滑轨：样式本体在 .awd-hairline-scroll（App.vue 全局），这里只处理
-   它占的那 6px 高度。滑轨是从内容盒里扣掉的，主命令区因此会长到 26+6=32px，被
-   .etb 的 align-items:center 一居中，左半边按钮就比右侧常驻区高 3px——正是
+/* 4px 悬浮细滑轨：样式本体在 .awd-hairline-scroll（App.vue 全局），这里只处理
+   它占的那 4px 高度。滑轨是从内容盒里扣掉的，不补偿的话主命令区会长到 26+4=30px，
+   被 .etb 的 align-items:center 一居中，左半边按钮就比右侧常驻区高 2px——正是
    dev-board#502 修的那种错位。
 
-   定高 calc(100% - 6px)（= 32px）+ margin-bottom:-6px：外边距盒回到 26px，被居中后
-   边框盒从 y6 起，内容盒恰好 y6..32，与右侧常驻区严丝合缝——**溢出与否都一样**。
-   不定高的话（内容多高就多高）只在有滑轨时对得上，命令放得下时又会反向偏 3px。
-   行内最高的是 26px 的 .etb-btn/.etb-field，有滑轨时内容盒正好 26px，不会裁到。
+   两个数按「行高 38、行内内容 26、滑轨 4」算，改任何一个都要重算：
+   边框盒 = 26 + 4 = 30px（写成 calc(100% - 8px)，跟着 .etb 那 38px 走），
+   margin-bottom:-4px 让外边距盒回到 26px，align-items:center 之后边框盒从 y6 起，
+   内容盒恰好 y6..32，与右侧常驻区严丝合缝——**溢出与否都一样**。不定高的话
+   （内容多高就多高）只在有滑轨时对得上，命令放得下时又会反向偏。
+   行内最高的是 26px 的 .etb-btn/.etb-field/.etb-stepper（后两者靠 box-sizing:
+   border-box 把 1px 边框收进 26 里，否则它们 28px 会把整行连同按钮顶低 1px，
+   dev-board#543 走查实测）。
    这里刻意不设 z-index：会造出层叠上下文，把工具栏下拉那些 fixed 弹层框住（同
    .etb-wrap 那条）。 */
-.etb-scroll { flex: 1; min-width: 0; white-space: nowrap; height: calc(100% - 6px); margin-bottom: -6px; }
+.etb-scroll { flex: 1; min-width: 0; white-space: nowrap; height: calc(100% - 8px); margin-bottom: -4px; }
 .etb-row { display: flex; align-items: center; gap: 2px; }
 .etb-right { display: flex; align-items: center; gap: 4px; flex-shrink: 0; padding-left: 6px;
   border-left: 1px solid var(--awd-border); }
@@ -808,7 +814,10 @@ export default {
 .etb-swatch { position: absolute; left: 4px; right: 4px; bottom: 3px; height: 3px; border-radius: 2px;
   border: 1px solid rgba(0, 0, 0, 0.08); }
 
+/* box-sizing:border-box：没有它，1px 边框会让边框盒变成 28px，.etb-row 跟着变 28，
+   26px 的按钮在里面一居中就比右侧常驻区低 1px（dev-board#543 走查实测）。 */
 .etb-field { display: flex; align-items: center; justify-content: space-between; gap: 4px; height: 26px;
+  box-sizing: border-box;
   padding: 0 6px; border: 1px solid var(--awd-border); border-radius: 5px; background: var(--awd-surface); }
 .etb-field:hover { border-color: var(--awd-border-strong); }
 .etb-field-t { font-size: 12px; color: var(--awd-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -856,7 +865,10 @@ export default {
 .etb-chip.none::after { content: ''; position: absolute; left: 1px; right: 1px; top: 8px; height: 1px;
   background: var(--awd-danger); transform: rotate(-45deg); }
 
-.etb-stepper { display: flex; align-items: center; height: 26px; border: 1px solid var(--awd-border); border-radius: 5px;
+/* box-sizing 同 .etb-field：26px + 1px 边框 = 28px 的边框盒会成为 .etb-row 里最高的
+   一件，把整行连同 26px 的按钮顶低 1px（dev-board#543 走查实测的那 1px）。 */
+.etb-stepper { display: flex; align-items: center; height: 26px; box-sizing: border-box;
+  border: 1px solid var(--awd-border); border-radius: 5px;
   background: var(--awd-surface); flex-shrink: 0; }
 .etb-step-b { width: 20px; text-align: center; font-size: 14px; color: var(--awd-text-2); line-height: 24px; }
 .etb-step-b:hover { color: var(--awd-accent-text); background: var(--awd-surface-2); }

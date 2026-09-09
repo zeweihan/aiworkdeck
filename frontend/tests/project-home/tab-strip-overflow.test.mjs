@@ -15,6 +15,8 @@ const SCSS = readFileSync(
   new URL('../../src/pages/project-overview/project-overview.scss', import.meta.url), 'utf8')
 const TABS = readFileSync(
   new URL('../../src/pages/project-overview/fileOpenTabs.js', import.meta.url), 'utf8')
+const DRAG = readFileSync(
+  new URL('../../src/pages/project-overview/tabDragSplit.js', import.meta.url), 'utf8')
 const APP = readFileSync(new URL('../../src/App.vue', import.meta.url), 'utf8')
 
 /** 取某个 class 选择器名下的规则体（scss 嵌套：只取到第一层闭合前的声明） */
@@ -33,34 +35,52 @@ test('.tab-item 不许被压扁：标签多了要溢出成横滚', () => {
   assert.match(body, /text-overflow:\s*ellipsis/, '.tab-name 仍要省略号收尾')
 })
 
-test('两个窗格的标签栏都换成 6px 悬浮细滑轨，不再整条藏掉', () => {
+test('两个窗格的标签栏都换成 4px 悬浮细滑轨，不再整条藏掉', () => {
   const tags = [...VUE.matchAll(/<scroll-view[^>]*class="[^"]*tabs-scroll[^"]*"[\s\S]{0,200}?>/g)].map(m => m[0])
   assert.equal(tags.length, 2, '左右窗格各一条标签栏，实际找到 ' + tags.length)
   for (const t of tags) {
     assert.match(t, /class="[^"]*\bawd-hairline-scroll\b/, '标签栏要挂 .awd-hairline-scroll')
     assert.ok(!/:show-scrollbar="false"/.test(t),
       'show-scrollbar=false 会让 uni-h5 给真正滚动的内层元素挂上隐藏类，细滑轨一起没了')
-    assert.match(t, /@wheel\.prevent="onTabsWheel"/, '标签栏要接滚轮横滚')
+    assert.ok(!/@wheel/.test(t),
+      '模板上的 @wheel 是死的（uni 把 currentTarget 换成了普通对象），横滚要原生挂')
   }
   assert.ok(!/display:\s*none/.test(bodyOf(SCSS, 'tabs-scroll')),
     '.tabs-scroll 里还留着藏滚动条的 display:none')
-  // 滑轨占的 6px 是从内容盒里扣的，height:100% 会让 36px 的 .tab-item 被
-  // uni 给内层元素挂的 overflow-y:hidden 裁掉底下 6px。
+  // 滑轨占的 4px 是从内容盒里扣的，height:100% 会让 36px 的 .tab-item 被
+  // uni 给内层元素挂的 overflow-y:hidden 裁掉底下 4px。
   const scroll = bodyOf(SCSS, 'tabs-scroll')
-  assert.match(scroll, /height:\s*calc\(100% \+ 6px\)/,
-    '.tabs-scroll 要多留 6px 给滑轨，否则标签底部会被裁掉')
-  // 那 6px 溢出到 .editors-container 头上，而它是 position:relative + 有背景，
-  // 按绘制顺序会把滑轨整条盖掉。
+  assert.match(scroll, /height:\s*calc\(100% \+ 4px\)/,
+    '.tabs-scroll 要多留 4px 给滑轨，否则标签底部会被裁掉')
+  // 那 4px 溢出到编辑区头上，而 .editors-container / .editor-pane 都是
+  // position:relative + 有背景、排在更后面，z-index 只到 1 时会把滑轨整条盖掉
+  // （#543 走查实测：注入 height:100% 立刻就能看见 thumb）。
   assert.match(scroll, /position:\s*relative/)
-  assert.match(scroll, /z-index:\s*1/,
-    '.tabs-scroll 不抬一层的话，溢出的 6px 滑轨会被 .editors-container 的背景盖掉')
+  const z = /z-index:\s*(\d+)/.exec(scroll)
+  assert.ok(z && Number(z[1]) >= 2,
+    '.tabs-scroll 的 z-index 要 >= 2，否则溢出的 4px 滑轨会被编辑区背景盖掉，实际 ' + (z && z[1]))
+})
+
+test('滚轮横滚改成原生 addEventListener 挂在真实元素上，且会摘干净', () => {
+  assert.match(DRAG, /rebindTabsWheel\s*\(\)\s*\{/, 'tabDragSplit.js 缺少 rebindTabsWheel')
+  assert.match(DRAG, /bindHorizontalWheelAll\(this\.\$el, '\.tabs-scroll'/,
+    'rebindTabsWheel 要按 .tabs-scroll 在本实例的 DOM 子树里找元素')
+  assert.match(DRAG, /unbindTabsWheel\s*\(\)\s*\{/, 'tabDragSplit.js 缺少 unbindTabsWheel')
+  assert.ok(!/onTabsWheel/.test(DRAG + VUE), '模板事件版的 onTabsWheel 还没删干净')
+  assert.match(VUE, /mounted\(\)[\s\S]{0,1200}?rebindTabsWheel\(\)/, 'mounted 里没有挂')
+  assert.match(VUE, /beforeUnmount\(\)[\s\S]{0,400}?unbindTabsWheel\(\)/, 'beforeUnmount 里没有摘')
+  // 分屏开关会把右侧那条标签栏整个建/拆，回来要重挂（bind 是幂等的）
+  assert.match(VUE, /splitMode\(\)[^\n]*rebindTabsWheel\(\)/,
+    'splitMode 变化后没有重挂：右侧标签栏是新建出来的元素，老监听在旧元素上')
 })
 
 test('.awd-hairline-scroll 定义在全局样式里，静止透明、悬停才显形', () => {
-  assert.match(APP, /\.awd-hairline-scroll[^{]*::-webkit-scrollbar[^{]*\{[^}]*height:\s*6px/,
-    'App.vue 里没有 .awd-hairline-scroll 的 6px 滑轨定义')
+  assert.match(APP, /\.awd-hairline-scroll[^{]*::-webkit-scrollbar[^{]*\{[^}]*height:\s*4px/,
+    'App.vue 里没有 .awd-hairline-scroll 的 4px 滑轨定义')
   assert.match(APP, /\.awd-hairline-scroll[^{]*::-webkit-scrollbar-thumb[^{]*\{[^}]*background:\s*transparent/,
     '静止时 thumb 要是透明的')
+  assert.match(APP, /\.awd-hairline-scroll[^{]*::-webkit-scrollbar-thumb[^{]*\{[^}]*border-radius:\s*999px/,
+    'thumb 要圆角（4px 的方块线条在浅色外壳上很硌眼）')
   assert.match(APP, /\.awd-hairline-scroll:hover[^{]*::-webkit-scrollbar-thumb[^{]*\{[^}]*var\(--awd-border-strong\)/,
     '悬停时 thumb 要用 --awd-border-strong 显形（跟随主题，不写死颜色）')
 })

@@ -7,7 +7,7 @@
 
 import { activityTracker } from '@/utils/activityTracker.js'
 import { rightPanelMaxWidth, leftPanelMaxWidth } from './panelWidthLimits.js'
-import { wheelDeltaOf } from '@/utils/wheelDelta.js'
+import { bindHorizontalWheelAll } from '@/utils/horizontalWheel.js'
 
 // 取拖拽起手时有没有按住 Alt/Option。同 fileOpenTabs.js 的 mouseButtonOf：uni-h5 把
 // <view> 上的原生事件重建成普通对象，只给 click / mouse 系 / touch / 键盘四类补字段，
@@ -106,24 +106,20 @@ export const tabDragSplitMethods = {
       return true
     },
 
-    onTabsWheel(evt) {
-      // VS Code 式标签栏：纵向滚轮映射为横向滚动（滑轨只有 6px，不该逼着人去拖它）。
-      // scroll-view 真正 overflow 的是 uni-h5 渲染出的内层元素，不是根元素本身，按 scrollWidth 找。
-      // 位移一律经 wheelDeltaOf 取：uni 重建过的事件对象上没有 deltaX/deltaY，
-      // 直接读会得到 NaN，横滚静默失效（dev-board#543）。
-      const root = evt?.currentTarget
-      if (!root || typeof root.querySelectorAll !== 'function') return
-      const delta = wheelDeltaOf(evt)
-      if (!delta) return
-      let scroller = null
-      if (root.scrollWidth > root.clientWidth) scroller = root
-      if (!scroller) {
-        for (const el of root.querySelectorAll('*')) {
-          if (el.scrollWidth > el.clientWidth + 1) { scroller = el; break }
-        }
-      }
-      if (!scroller) return
-      scroller.scrollLeft += delta
+    // VS Code 式标签栏：纵向滚轮映射为横向滚动（滑轨只有 4px，不该逼着人去拖它）。
+    // 必须用原生 addEventListener 挂在 uni 渲染出的真实元素上——模板上的 @wheel
+    // 收到的是 uni 重建过的普通对象，currentTarget 不是 DOM、连 delta 都没有，
+    // 整条横滚是死的（dev-board#543，理由与对照实验写在 utils/horizontalWheel.js）。
+    // 幂等：分屏开关会把右侧那条标签栏整个建/拆，回来后重跑一遍即可。
+    rebindTabsWheel() {
+      if (!this._tabsWheelOffs) this._tabsWheelOffs = new Set()
+      bindHorizontalWheelAll(this.$el, '.tabs-scroll', this._tabsWheelOffs)
+    },
+
+    unbindTabsWheel() {
+      if (!this._tabsWheelOffs) return
+      for (const off of this._tabsWheelOffs) off()
+      this._tabsWheelOffs.clear()
     },
 
     getTabDragPayload(evt) {

@@ -49,18 +49,29 @@ test('NaN / 非数字的 delta 不会被原样加到 scrollLeft 上', () => {
   assert.equal(wheelDeltaOf({ deltaY: 60, deltaX: undefined }), 60)
 })
 
-// ---------- 两个调用方确实换成了它 ----------
+// ---------- 唯一的调用方是 horizontalWheel.js，两个宿主都改走原生挂载 ----------
 
 import { readFileSync } from 'node:fs'
 
+const HWHEEL = readFileSync(new URL('../../src/utils/horizontalWheel.js', import.meta.url), 'utf8')
 const TOOLBAR = readFileSync(new URL('../../src/components/EditorToolbar.vue', import.meta.url), 'utf8')
 const TABS = readFileSync(new URL('../../src/pages/project-overview/tabDragSplit.js', import.meta.url), 'utf8')
+const PAGE = readFileSync(
+  new URL('../../src/pages/project-overview/project-overview.vue', import.meta.url), 'utf8')
 
-test('onToolbarWheel / onTabsWheel 都走 wheelDeltaOf，不再直接读 evt.delta*', () => {
+test('位移只在 horizontalWheel.js 里取，宿主不再自己读 evt.delta*', () => {
+  assert.match(HWHEEL, /wheelDeltaOf\(evt\)/, 'horizontalWheel.js 没有调用 wheelDeltaOf')
+  assert.match(HWHEEL, /from '\.\/wheelDelta\.js'/, 'horizontalWheel.js 没有 import wheelDeltaOf')
   for (const [name, src] of [['EditorToolbar.vue', TOOLBAR], ['tabDragSplit.js', TABS]]) {
-    assert.match(src, /wheelDeltaOf\(evt\)/, name + ' 没有调用 wheelDeltaOf')
-    assert.match(src, /from '@\/utils\/wheelDelta\.js'/, name + ' 没有 import wheelDeltaOf')
     assert.ok(!/Math\.abs\(evt\.deltaX\)/.test(src),
       name + ' 还在直接读 evt.deltaX：uni 重建过的事件上没有这个字段，恒 NaN')
+    assert.match(src, /horizontalWheel\.js'/, name + ' 没有改走 horizontalWheel.js')
+  }
+})
+
+test('模板里不许再挂 @wheel：uni 重建过的对象上 currentTarget 不是 DOM，第一道守卫就 return', () => {
+  for (const [name, src] of [['EditorToolbar.vue', TOOLBAR], ['project-overview.vue', PAGE]]) {
+    assert.ok(!/@wheel[.\w]*="/.test(src.slice(0, src.lastIndexOf('</template>'))),
+      name + ' 的模板里还留着 @wheel（dev-board#543 走查实测：scrollLeft 0 → 0）')
   }
 })

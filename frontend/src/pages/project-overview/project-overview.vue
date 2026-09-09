@@ -853,7 +853,7 @@
               <!-- 左侧窗格的 Tabs -->
               <view class="tabs-pane tabs-pane-left" :class="{ 'half-width': splitMode }">
                 <scroll-view class="tabs-scroll awd-hairline-scroll" scroll-x scroll-with-animation
-                  :scroll-into-view="tabsScrollIntoViewLeft" @wheel.prevent="onTabsWheel">
+                  :scroll-into-view="tabsScrollIntoViewLeft">
                   <view
                     class="tabs-list"
                     @dragover.prevent="onTabDropZoneDragOver('left')"
@@ -895,7 +895,7 @@
               <!-- 右侧窗格的 Tabs (仅在分屏时显示) -->
               <view v-if="splitMode" class="tabs-pane tabs-pane-right">
                 <scroll-view class="tabs-scroll awd-hairline-scroll" scroll-x scroll-with-animation
-                  :scroll-into-view="tabsScrollIntoViewRight" @wheel.prevent="onTabsWheel">
+                  :scroll-into-view="tabsScrollIntoViewRight">
                   <view
                     class="tabs-list"
                     @dragover.prevent="onTabDropZoneDragOver('right')"
@@ -2962,6 +2962,7 @@ export default {
   },
   beforeUnmount() {
     this.disposeThemeSwitch()
+    this.unbindTabsWheel()
     // 多实例守卫：只清掉指向自己的活跃指针；返回上一个本页实例时由其 onShow 重新接管
     if (typeof window !== 'undefined' && window.__checkbaActiveOverviewVm === this) {
       window.__checkbaActiveOverviewVm = null
@@ -3295,6 +3296,9 @@ export default {
     // mounted 绑定了全局（ipcRenderer/window 级）监听；全局事件只让最近展示的实例
     // 处理，否则一次事件触发 N 份副作用（与 PR#148 剪贴板重复入库同源）
     if (typeof window !== 'undefined') window.__checkbaActiveOverviewVm = this
+    // 标签栏的滚轮横滚：只能原生挂（模板 @wheel 收到的是 uni 重建过的普通对象，
+    // 见 utils/horizontalWheel.js），所以 DOM 就绪后挂一次，beforeUnmount 摘掉。
+    this.$nextTick(() => this.rebindTabsWheel())
     // 余额刷新事件（充值弹窗 / SKU 购买成功后 emit）。页面栈多实例地雷：mounted 挂、
     // beforeUnmount 必须按引用 $off，否则每回来一次多一份订阅。
     this._onWalletRefresh = () => this.loadWalletBalance()
@@ -3597,7 +3601,9 @@ export default {
     sidebarCollapsed() { this.pushMenuState() },
     showToolsPanel() { this.pushMenuState() },
     showAiPanel() { this.pushMenuState() },
-    splitMode() { this.pushMenuState() },
+    // 分屏开关会把右侧那条标签栏整个建/拆，滚轮横滚是原生挂上去的，得跟着重挂
+    // （幂等，见 tabDragSplit.rebindTabsWheel）。
+    splitMode() { this.pushMenuState(); this.$nextTick(() => this.rebindTabsWheel()) },
     activeToolKey() { this.pushMenuState() },
     leftPaneKey() { this.pushMenuState() },
     isRecording() { this.pushMenuState() },
