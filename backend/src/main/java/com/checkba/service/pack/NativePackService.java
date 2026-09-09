@@ -89,16 +89,13 @@ public class NativePackService {
     /** 单个组件的下载重试次数，每次换下一个源 */
     private static final int MAX_ATTEMPTS = 3;
 
-    /** 解压防护：单个压缩包的条目数与解压后总体积上限 */
-    private static final int MAX_ENTRIES = 5000;
-    private static final long MAX_UNPACKED_BYTES = 500L * 1024 * 1024;
-
     /** manifest 查询缓存时长（/api/packs/{id}/info） */
     private static final long MANIFEST_TTL_MS = 5 * 60 * 1000L;
 
     private static final long DAY_MS = 24 * 60 * 60 * 1000L;
 
     private static final String COMPLETE_MARKER = ".pack-complete";
+    private static final String SIZES_JSON = "sizes.json";
     private static final String CURRENT_JSON = "current.json";
     private static final String CONTENTS_LIST = "contents.sha256";
 
@@ -211,7 +208,8 @@ public class NativePackService {
 
     /** manifest 里的一个组件 */
     public record Component(String name, List<String> platforms, String archive,
-                            long size, String sha256, String unpackDir, List<String> urls) {}
+                            long size, String sha256, String unpackDir, List<String> urls,
+                            long unpackedSize) {}
 
     /** pack manifest（托管静态文件，签名盖在原始字节上） */
     public record Manifest(int schema, String id, String version, String publishedAt,
@@ -221,7 +219,7 @@ public class NativePackService {
     public record RevokedPack(String id, String version, String reason, String revokedAt) {}
 
     /** {@code /api/packs/{id}/info} 的返回体 */
-    public record PackInfo(String latestVersion, long totalSize) {}
+    public record PackInfo(String latestVersion, long totalSize, long unpackedSize) {}
 
     /**
      * 安装进度（内存态；重启后按磁盘重建 ready / not_installed）。
@@ -340,11 +338,35 @@ public class NativePackService {
     public PackInfo info(String packId) {
         requireValidId(packId);
         Manifest m = cachedManifest(packId);
-        long total = 0;
-        for (Component c : componentsForPlatform(m)) {
-            total += c.size();
+        List<Component> cs = componentsForPlatform(m);
+        return new PackInfo(m.version(), totalSize(cs), totalUnpacked(cs));
+    }
+
+    /** 一个 pack 在本平台的下载体积与解压体积（字节）；0 = 未知。 */
+    public record Sizes(long downloadBytes, long unpackedBytes) {}
+
+    /**
+     * 体积快照。<b>不发网络请求</b>：只读 manifest 内存缓存（安装 / {@code /info} /
+     * {@link PackUpdater} 写入）与已装版本目录里的 {@code sizes.json}。
+     * 两处都没有就是「未知」（两个 0），前端再决定要不要去打会发请求的 {@code /info}。
+     */
+    public Sizes knownSizes(String packId) {
+        CachedManifest cached = manifestCache.get(packId);
+        if (cached != null) {
+            // 刻意不走 cachedManifest()：这里宁可用过期几分钟的数字，也不能为它发一次请求
+            List<Component> cs = componentsForPlatform(cached.manifest());
+            return new Sizes(totalSize(cs), totalUnpacked(cs));
         }
-        return new PackInfo(m.version(), total);
+        Optional<Path> dir = currentVersionDir(packId);
+        if (dir.isPresent()) {
+            try {
+                JSONObject j = JSONUtil.parseObj(Files.readString(dir.get().resolve(SIZES_JSON), StandardCharsets.UTF_8));
+                return new Sizes(j.getLong("downloadBytes", 0L), j.getLong("unpackedBytes", 0L));
+            } catch (Exception e) {
+                // 0.38.0 之前装的版本目录没有这个文件：按未知处理
+            }
+        }
+        return new Sizes(0L, 0L);
     }
 
     /**
@@ -558,6 +580,12 @@ public class NativePackService {
                 FileUtil.copyContent(unpack.toFile(), versionDir.toFile(), true);
                 FileUtil.del(unpack.toFile());
             }
+            // 版本目录留一份体积快照：可选组件面板要在不发网络请求的前提下报出
+            // 「下载多大 / 占盘多大」，而重启后 manifest 内存缓存是空的。
+            JSONObject sizes = new JSONObject();
+            sizes.set("downloadBytes", totalSize(components));
+            sizes.set("unpackedBytes", totalUnpacked(components));
+            Files.writeString(versionDir.resolve(SIZES_JSON), sizes.toString(), StandardCharsets.UTF_8);
             Files.writeString(versionDir.resolve(COMPLETE_MARKER), m.version(), StandardCharsets.UTF_8);
         } catch (IOException e) {
             FileUtil.del(versionDir.toFile());
@@ -837,7 +865,8 @@ public class NativePackService {
                         c.getLong("size", 0L),
                         c.getStr("sha256"),
                         c.getStr("unpackDir"),
-                        strList(c.getJSONArray("urls"))));
+                        strList(c.getJSONArray("urls")),
+                        c.getLong("unpackedSize", 0L)));
             }
         }
         Manifest m = new Manifest(
@@ -903,10 +932,10 @@ public class NativePackService {
                     new GzipCompressorInputStream(Files.newInputStream(archive)))) {
                 TarArchiveEntry e;
                 while ((e = tin.getNextEntry()) != null) {
-                    if (++entries > MAX_ENTRIES) {
+                    if (++entries > props.getMaxArchiveEntries()) {
                         throw new IllegalStateException(LangText.of(
-                                "压缩包条目数超过上限（" + MAX_ENTRIES + "）",
-                                "Archive exceeds the entry limit (" + MAX_ENTRIES + ")"));
+                                "压缩包条目数超过上限（" + props.getMaxArchiveEntries() + "）",
+                                "Archive exceeds the entry limit (" + props.getMaxArchiveEntries() + ")"));
                     }
                     if (e.isSymbolicLink() || e.isLink()) {
                         throw new IllegalStateException(LangText.of(
@@ -931,9 +960,10 @@ public class NativePackService {
                         continue;
                     }
                     unpacked += Math.max(e.getSize(), 0);
-                    if (unpacked > MAX_UNPACKED_BYTES) {
+                    if (unpacked > props.getMaxUnpackedBytes()) {
                         throw new IllegalStateException(LangText.of(
-                                "解压后体积超过上限（500 MB）", "Unpacked size exceeds the 500 MB limit"));
+                                "解压后体积超过上限（" + props.getMaxUnpackedBytes() + " 字节）",
+                                "Unpacked size exceeds the limit (" + props.getMaxUnpackedBytes() + " bytes)"));
                     }
                     Files.createDirectories(dest.getParent());
                     try (OutputStream out = Files.newOutputStream(dest)) {
@@ -1199,6 +1229,13 @@ public class NativePackService {
     private static long totalSize(List<Component> components) {
         long total = 0;
         for (Component c : components) total += Math.max(c.size(), 0);
+        return total;
+    }
+
+    /** 解压后总体积；老 manifest 没有 unpackedSize 字段时按 0（未知）累加。 */
+    private static long totalUnpacked(List<Component> components) {
+        long total = 0;
+        for (Component c : components) total += Math.max(c.unpackedSize(), 0);
         return total;
     }
 

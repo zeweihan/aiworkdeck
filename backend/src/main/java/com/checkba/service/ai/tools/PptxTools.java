@@ -14,6 +14,8 @@ import com.checkba.service.ai.ChatModelFactory;
 import com.checkba.service.ai.PlatformAiChannel;
 import com.checkba.service.ai.PptxServiceClient;
 import com.checkba.service.ai.EditorBridgeService;
+import com.checkba.service.pack.NativePackService;
+import com.checkba.service.pack.OptionalComponents;
 import com.checkba.storage.StorageServiceFactory;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
@@ -63,6 +65,9 @@ public class PptxTools implements AgentToolComponent {
     private final PlatformAiChannel platformAiChannel;
 
     private final com.checkba.storage.ProjectStorageResolver storageResolver;
+    // pptx-service 从 0.38.0 起不随安装包分发，改由 pptx-runtime 这个可选组件按需下载
+    private final NativePackService packService;
+
     private static final Long AGENT_USER_ID = 10001L;
 
     // ==================== 文件管理工具 ====================
@@ -218,17 +223,38 @@ public class PptxTools implements AgentToolComponent {
 
     // ==================== 服务检查工具 ====================
 
+    /**
+     * 服务打不通时分两种情况处置：
+     * - runtime pack 没装（0.38.0 起新装机器的常态）→ 发 component_required 引导下载，
+     *   返回给模型的文本明说「已请用户确认下载」，模型不该再喊「稍后重试」；
+     * - pack 装了只是进程没起 → 维持原状（重试是有意义的）。
+     *
+     * @return 已发提示则返回给模型的说明文本；不该发提示时返回 null
+     */
+    private String promptComponentIfMissing(String trigger) {
+        OptionalComponents.Entry e = OptionalComponents.byService("pptx-service");
+        if (packService.isReady(e.packId())) return null;
+        long sizeMb = packService.knownSizes(e.packId()).downloadBytes() / (1024 * 1024);
+        editorBridgeService.sendComponentRequiredAction(
+                e.packId(), e.service(), e.modelId(), sizeMb, e.featureKeys(), trigger);
+        // 文案里刻意不出现「稍后重试」四个字（含在「不要说稍后重试」这类否定句里也不行）：
+        // 模型抄工具返回文本是常态，出现即会被原样转述给用户，而组件没装时等下去毫无意义。
+        return "本机的「PPT 与 PDF 组件」还没安装，已请用户确认下载（界面上已经弹出提示）。"
+                + "用户确认后组件会自动装好并重新执行这一步，你现在不需要重复调用本工具，"
+                + "也不要让用户等一会儿再试一次。这只影响 PPT 生成与 PDF 版式级转换，不影响读文件。";
+    }
+
     @ToolMeta(displayName = "检查PPT服务", category = "pptx")
     @Tool("检查 PPTX 生成服务是否可用。在生成 PPT 之前应先调用此工具确认服务状态。")
     public String pptx_check_service() {
         log.info("Tool: pptx_check_service called");
         try {
-            boolean healthy = pptxServiceClient.isHealthy();
-            if (healthy) {
+            if (pptxServiceClient.isHealthy()) {
                 return "PPTX 生成服务运行正常，可以开始生成 PPT。";
-            } else {
-                return "PPTX 生成服务当前不可用（本机的 PPT 服务组件没有就绪）。请稍后重试；这只影响 PPT 生成，不影响读文件与 OCR。";
             }
+            String prompt = promptComponentIfMissing("pptx_check_service");
+            if (prompt != null) return prompt;
+            return "PPTX 生成服务当前不可用（本机的 PPT 服务组件没有就绪）。请稍后重试；这只影响 PPT 生成，不影响读文件与 OCR。";
         } catch (Exception e) {
             log.error("Failed to check PPTX service", e);
             return "检查服务状态失败: " + e.getMessage() + "。这只影响 PPT 生成，不影响读文件与 OCR。";
@@ -257,7 +283,11 @@ public class PptxTools implements AgentToolComponent {
                                 String fileName, String style, String language, String modelId) {
         
         log.info("Tool: pptx_generate called (UI Interceptor), topic={}", topic);
-        
+
+        // 组件没装就不要先弹生成配置弹窗：用户填完一堆选项才发现没引擎是最糟的顺序
+        String prompt = promptComponentIfMissing("pptx_generate");
+        if (prompt != null) return prompt;
+
         // 构造参数 Map
         java.util.Map<String, Object> params = new java.util.HashMap<>();
         params.put("topic", topic);

@@ -52,6 +52,16 @@ public class PackProperties {
      */
     private String revokedUrl = "https://www.aiworkdeck.com/api/registry/packs/revoked";
 
+    /**
+     * 单个压缩包的条目数上限。5000 是 litviz/drawio 时代的值——一个带 torch 的 Python venv
+     * 轻松上万文件，四个运行时 pack 会当场被拦下。抬到 150000 的安全前提是 manifest 有
+     * Ed25519 签名：能走到解压这一步的字节只可能来自我们自己的构建（规范 §2/§10）。
+     */
+    private int maxArchiveEntries = 150_000;
+
+    /** 单个压缩包解压后的总体积上限（字节）。默认 2.5 GB：mineru 的 lib 解压后 1.2 GB 量级。 */
+    private long maxUnpackedBytes = 2_684_354_560L;
+
     public String getDir() { return dir; }
     public void setDir(String dir) { this.dir = dir; }
     public List<String> getBaseUrls() { return baseUrls; }
@@ -62,4 +72,8 @@ public class PackProperties {
     public void setAutoUpgrade(boolean autoUpgrade) { this.autoUpgrade = autoUpgrade; }
     public String getRevokedUrl() { return revokedUrl; }
     public void setRevokedUrl(String revokedUrl) { this.revokedUrl = revokedUrl; }
+    public int getMaxArchiveEntries() { return maxArchiveEntries; }
+    public void setMaxArchiveEntries(int maxArchiveEntries) { this.maxArchiveEntries = maxArchiveEntries; }
+    public long getMaxUnpackedBytes() { return maxUnpackedBytes; }
+    public void setMaxUnpackedBytes(long maxUnpackedBytes) { this.maxUnpackedBytes = maxUnpackedBytes; }
 }
