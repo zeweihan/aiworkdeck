@@ -2318,6 +2318,17 @@ export function getProjectMembers(projectId) {
   })
 }
 
+// 本机轨的「先查人」。与云端轨的 lookupCloudMember 同一张卡片契约：
+// {found, displayName, avatarUrl, maskedContact, alreadyMember, currentRole, message}，
+// found=false 也是 code=0 的正常回包（message 是「让对方先登录一次再加」那句话），
+// 界面就地显示即可，不要弹成故障提示。
+export function lookupProjectMember(projectId, identifier) {
+  return request({
+    url: `/api/projects/${projectId}/members/lookup?identifier=${encodeURIComponent(identifier || '')}`,
+    method: 'GET'
+  })
+}
+
 export function addProjectMember(projectId, username, role) {
   return request({
     url: `/api/projects/${projectId}/members`,
@@ -2999,6 +3010,7 @@ export default {
   saveUserVariable,
   deleteUserVariable,
   getProjectMembers,
+  lookupProjectMember,
   addProjectMember,
   removeProjectMember,
   getFileVariables,
