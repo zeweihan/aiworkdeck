@@ -30,9 +30,11 @@ import java.util.Map;
 
 import static com.atlassian.oai.validator.mockmvc.OpenApiValidationMatchers.openApi;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.when;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
@@ -165,9 +167,17 @@ class MobileApiContractTest {
 
         when(billing.balance(anyString()))
                 .thenReturn(new MobileBillingClient.BalanceResult(12345L, "CNY", "paid"));
-        when(billing.createRecharge(anyString(), anyLong(), anyString()))
+        when(billing.createRecharge(anyString(), anyLong(), anyString(), isNull(), isNull(), isNull()))
                 .thenReturn(new MobileBillingClient.RechargeOrder(
-                        "qrcode", "OT-contract-1", 5000L, "weixin://wxpay/bizpayurl?pr=x", null, null));
+                        "qrcode", "OT-contract-1", 5000L, "weixin://wxpay/bizpayurl?pr=x", null, null,
+                        null, null, null));
+        // 小程序虚拟支付（dev-board#427）：present=virtual 时多出 signData/paySig/signature 三个键，
+        // 它们必须先写进 YAML——校验器默认 additionalProperties:false，漏一个这里就红
+        when(billing.createRecharge(anyString(), anyLong(), anyString(),
+                eq("wxvp"), anyString(), anyString()))
+                .thenReturn(new MobileBillingClient.RechargeOrder(
+                        "virtual", "OT-contract-vp", 1000L, null, null, null,
+                        "{\"offerId\":\"1450637533\",\"buyQuantity\":1}", "a1b2c3", "d4e5f6"));
         when(billing.queryRecharge(anyString(), anyString()))
                 .thenReturn(new MobileBillingClient.RechargeStatus("pending", false, 5000L));
 
@@ -190,6 +200,45 @@ class MobileApiContractTest {
                 .andExpect(jsonPath("$.status").value("pending"))
                 .andExpect(openApi().isValid(validator));
 
+        // present=virtual 的成功形状（dev-board#427）：三个签名串出现在响应里，
+        // 扫码那三兄弟一个都不出现（不适用的字段不进响应，与 present=qrcode 时正好相反）
+        mvc.perform(post("/api/mobile/billing/recharge").header("X-Session-Id", sid)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"amountCents":1000,"idempotencyKey":"idem-contract-vp01",\
+                                "channel":"wxvp","productId":"credits_cny_10","wxCode":"0a1b2c3d4e"}"""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.present").value("virtual"))
+                .andExpect(jsonPath("$.outTradeNo").value("OT-contract-vp"))
+                .andExpect(jsonPath("$.signData").exists())
+                .andExpect(jsonPath("$.paySig").value("a1b2c3"))
+                .andExpect(jsonPath("$.signature").value("d4e5f6"))
+                .andExpect(jsonPath("$.codeUrl").doesNotExist())
+                .andExpect(openApi().isValid(validator));
+
+        // 新请求字段的校验也走通用信封：不认识的通道 → code 1（无 kind，通用 handler）
+        mvc.perform(post("/api/mobile/billing/recharge").header("X-Session-Id", sid)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"amountCents":1000,"idempotencyKey":"idem-contract-vp02",\
+                                "channel":"alipay","productId":"credits_cny_10","wxCode":"0a1b2c3d4e"}"""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(1))
+                .andExpect(jsonPath("$.kind").doesNotExist())
+                .andExpect(openApi().isValid(validator));
+
+        // channel=wxvp 但缺 productId / wxCode → 同样 code 1，绝不当成默认通道悄悄下单
+        for (String bad : new String[]{
+                "{\"amountCents\":1000,\"idempotencyKey\":\"idem-contract-vp03\",\"channel\":\"wxvp\"}",
+                "{\"amountCents\":1000,\"idempotencyKey\":\"idem-contract-vp04\",\"channel\":\"wxvp\","
+                        + "\"productId\":\"credits_cny_10\"}"}) {
+            mvc.perform(post("/api/mobile/billing/recharge").header("X-Session-Id", sid)
+                            .contentType(APPLICATION_JSON).content(bad))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.code").value(1))
+                    .andExpect(openApi().isValid(validator));
+        }
+
         // 业务错误也在契约里：缺 idempotencyKey → 200 + Envelope(code 1)
         mvc.perform(post("/api/mobile/billing/recharge").header("X-Session-Id", sid)
                         .contentType(APPLICATION_JSON)
@@ -202,7 +251,8 @@ class MobileApiContractTest {
         // 机器可读判别位（dev-board#425 复审 C2）：四端按 kind 分支，不许猜 message 措辞
         doThrow(new MobileBillingClient.MobileBillingException(
                 MobileBillingKind.UNAVAILABLE, "账户服务暂不可用，请稍后再试"))
-                .when(billing).createRecharge(anyString(), anyLong(), eq("idem-contract-down1"));
+                .when(billing).createRecharge(anyString(), anyLong(), eq("idem-contract-down1"),
+                        any(), any(), any());
         mvc.perform(post("/api/mobile/billing/recharge").header("X-Session-Id", sid)
                         .contentType(APPLICATION_JSON)
                         .content("""
@@ -216,7 +266,8 @@ class MobileApiContractTest {
         doThrow(new MobileBillingClient.MobileBillingException(
                 MobileBillingKind.ALREADY_PAID, "这笔充值已经支付成功，请查看订单状态",
                 "order_already_paid", "RECHARGE20260904X"))
-                .when(billing).createRecharge(anyString(), anyLong(), eq("idem-contract-paid1"));
+                .when(billing).createRecharge(anyString(), anyLong(), eq("idem-contract-paid1"),
+                        any(), any(), any());
         mvc.perform(post("/api/mobile/billing/recharge").header("X-Session-Id", sid)
                         .contentType(APPLICATION_JSON)
                         .content("""

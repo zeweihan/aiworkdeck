@@ -221,9 +221,10 @@ find-or-create，影子项目从 `/api/projects/my` 滤掉）。绑定后两条�
 云后端一个字都不存。
 
 - `service/mobile/MobileBillingClient` + `HttpMobileBillingClient` — POST 官网
-  `/api/internal/account`，头 `X-Internal-Secret`，四个 action：`resolve`（按已验证
+  `/api/internal/account`，头 `X-Internal-Secret`，五个 action：`resolve`（按已验证
   手机号或邮箱换 accountId，二选一恰好一个，**带 `create` 位**）/ `balance` /
-  `create-recharge` / `query`。
+  `create-recharge`（可带 `channel="wxvp"` + `productId` + `wxCode`，dev-board#427）/
+  `query` / `delete-account`（注销传导，dev-board#434）。
   形状照抄 `HttpTransferBillingClient`：配置 `mobile.billing.base-url/secret`
   （env `MOBILE_BILLING_BASE_URL`/`MOBILE_BILLING_SECRET`，**与 TRANSFER_BILLING_SECRET
   是两把不同的密钥**），任一未配 → DISABLED 短路，不发请求。
@@ -231,7 +232,8 @@ find-or-create，影子项目从 `/api/projects/my` 滤掉）。绑定后两条�
   默认 false，落在 `MobileBillingService`**（复审 N1）。关时 `createRecharge` / `queryRecharge`
   在做任何别的事情之前抛 `DISABLED`——不校参数、不解析身份、**不会走到 `create=true`**、
   不发上游请求。`GET /balance` 是只读的（`create=false`，永不建号），**不受这个开关影响**。
-  **这个开关要等 dev-board#434（官网账户注销传导）落地后才允许打开**，理由见红线 8。
+  Java 侧的注销传导已随 dev-board#434 落地，**打开这个开关前还要确认官网那侧的
+  `delete-account` action 已上线**，理由见红线 8。
 - `service/mobile/MobileBillingKind` — **失败判别位的唯一来源**，八个值同时是
   `openapi/mobile-v1.yaml` 里 `Envelope.kind` 的取值集合，四端按它分支。
   `service/mobile/MobileBillingFailureException` 带 kind + outTradeNo，
@@ -286,11 +288,16 @@ find-or-create，影子项目从 `/api/projects/my` 滤掉）。绑定后两条�
    `createRecharge`（用户显式发起充值）为 true，`balance`/`queryRecharge` 一律 false。
    第一版是无条件建号的，而 iOS 设置页的 `.task` 无条件读一次余额——「新用户打开设置页」
    这个纯读动作就会在官网建出一行含明文手机号的真账户，用户全程无感知、未同意；
-   而 App 的注销流程（`AccountDeletionService`）只删 Java 侧的 `app_users` 与
+   而当时 App 的注销流程（`AccountDeletionService`）只删 Java 侧的 `app_users` 与
    `account_binding`，**从不通知官网**，内部口也没有 delete action，于是 App 自己建的账号
    App 内没有任何路径能删掉——直接撞 App Store 5.1.1(v) 与个人信息保护法的删除权。
-   第二期做充值界面时，`create=true` 的那条路要同时补上「注销时通知官网」或
-   「建号前明确告知并取得同意」，否则这条红线只是被推迟了。
+   **dev-board#434 已把传导补上**：`AccountDeletionService` 在删本地表**之前**，
+   有 `account_binding` 就先调 `MobileBillingClient.deleteAccount(accountId)`——
+   官网 `deleted:true` 或带 body 的 404（那边本来就没有）才继续删本地；
+   `deleted:false` 用官网给的 message 报 REJECTED，官网不可达/5xx/本机未配 `mobile.billing.*`
+   报 UNAVAILABLE，**两种都不删本地**（宁可注销失败一次让用户重试，也不能留下官网侧的孤儿账户
+   ——本地那行绑定是「哪个 accountId 属于这个人」的唯一记录）。没有绑定的用户一次上游请求都不发。
+   护栏 `AccountDeletionServiceTest`。
 
    **二轮复审 N1 补的护栏**：上面这句「本期没有充值界面所以一次号都不会建」**不是护栏**——
    `POST /api/mobile/billing/recharge` 是随本期一起上线的活端点，也是全站唯一的 `create=true`
@@ -298,8 +305,9 @@ find-or-create，影子项目从 `/api/projects/my` 滤掉）。绑定后两条�
    触发点只是从「打开设置页」搬到了「直接打这个端点」。所以加了服务端开关
    `mobile.billing.recharge-enabled`（默认 **false**）：关时下单与查单在到达 `create=true`
    之前短路成 `DISABLED`，不发任何上游请求。
-   **打开的前提是 dev-board#434（官网账户注销传导）已落地**：注销能传导到官网、官网内部口有
-   delete action 之后，才把它置 true。在那之前打开 = 把 App Store 5.1.1(v) 重新放出来。
+   **打开的前提是注销传导整条链路通**：Java 侧已就位（上面那段），剩下的是官网内部口的
+   `delete-account` action 真的上线、本机 `mobile.billing.base-url/secret` 配好，都齐了才置 true。
+   在那之前打开 = 把 App Store 5.1.1(v) 重新放出来。
    护栏：`MobileBillingRechargeDisabledTest`（不配这个键，走 application.yml 的生产默认值）
    与 `MobileBillingServiceTest`（显式 `=true`，测开关开着时行为不变）。
 9. **失败一律带机器可读的 `kind`，客户端禁止匹配 message 措辞**。message 经 `LangText`

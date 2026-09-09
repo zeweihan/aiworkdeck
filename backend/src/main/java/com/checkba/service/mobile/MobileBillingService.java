@@ -50,17 +50,20 @@ import java.util.regex.Pattern;
  * {@link #createRecharge}（用户显式发起充值）这一条路上为 true，{@link #balance} 与
  * {@link #queryRecharge} 一律 false。第一版是无条件建号的，而 iOS 设置页的 {@code .task}
  * 无条件读一次余额——「新用户打开设置页」这个纯读动作就会在官网建出一行含明文手机号的真账户，
- * 用户全程无感知、未同意；更糟的是 App 的注销流程只删 Java 侧的 app_users 与 account_binding，
+ * 用户全程无感知、未同意；更糟的是当时 App 的注销流程只删 Java 侧的 app_users 与 account_binding，
  * 从不通知官网，内部口也没有 delete action，于是<b>App 自己建的账号，App 内没有任何路径能删掉</b>，
- * 直接撞 App Store 5.1.1(v) 与个人信息保护法的删除权。本期没有充值界面，所以实际上一次号都不会建。
+ * 直接撞 App Store 5.1.1(v) 与个人信息保护法的删除权。这条注销传导已由 dev-board#434 补上
+ * （{@code AccountDeletionService} 先调 {@link MobileBillingClient#deleteAccount} 再删本地），
+ * 但「读余额永不建号」这条不因此放宽：纯读动作不该替用户建号。
  *
  * <p><b>充值总开关</b>（复审 N1）：{@code mobile.billing.recharge-enabled} 默认 false，
  * 关时 {@link #createRecharge} 与 {@link #queryRecharge} 在做<b>任何</b>别的事情之前短路成
  * {@link MobileBillingKind#DISABLED}，不解析身份、不发上游请求。上一条说的「本期没有充值界面
  * 所以一次号都不会建」<b>不是护栏</b>——{@code POST /api/mobile/billing/recharge} 是活的端点，
  * 任何持有有效 {@code X-Session-Id} 的人直接打它就会走到 {@code create=true}。
- * <b>这个开关要等 dev-board#434（官网账户注销传导）落地后才允许打开</b>，
- * 在那之前打开就等于把 App Store 5.1.1(v) 那条重新放出来。
+ * <b>这个开关的前置条件是 dev-board#434（官网账户注销传导）</b>：Java 侧的传导已经就位，
+ * 但它要官网内部口真的有 {@code delete-account} action 才有效，所以开关仍默认关，
+ * 等官网那侧上线、{@code mobile.billing.base-url/secret} 配好之后再打开。
  *
  * <p>失败一律带 {@link MobileBillingKind} 判别位（复审 C2），信封里是 {@code kind} 字段，
  * 四端按它分支——第一版只送 message，三端于是各自去猜（安卓硬编码中文串、小程序判
@@ -87,6 +90,16 @@ public class MobileBillingService {
 
     /** 商户订单号围栏：官网侧生成的形态，只做长度与字符集把关。 */
     private static final Pattern OUT_TRADE_NO = Pattern.compile("^[A-Za-z0-9_-]{1,64}$");
+
+    /**
+     * 微信虚拟支付通道（dev-board#427）。{@code channel} 为空 = 站点默认通道（第一期行为）；
+     * 只认这一个显式取值，别的串一律拒——静默当成默认通道等于用户以为在走虚拟支付，
+     * 实际拿回一张扫码单。
+     */
+    private static final String CHANNEL_WXVP = "wxvp";
+
+    /** 微信道具 id 围栏。只做形态把关，<b>价格权威在官网</b>（不符时官网回 product_mismatch）。 */
+    private static final Pattern PRODUCT_ID = Pattern.compile("^[a-z0-9_]{1,64}$");
 
     private final MobileBillingClient billing;
     private final AccountBindingRepository accountBindingRepository;
@@ -148,8 +161,16 @@ public class MobileBillingService {
      * <p><b>总开关先行</b>（复审 N1）：{@code mobile.billing.recharge-enabled} 关时（默认）
      * 第一行就抛 DISABLED，参数校验、身份解析、上游请求一律不发生。「本期四端还没有充值界面」
      * 只是没人调，不是护栏——这个端点是活的。
+     *
+     * <p><b>通道</b>（dev-board#427，spec {@code 2026-09-09-miniprogram-virtual-payment-plan.md} §4）：
+     * {@code channel} 为空即第一期行为（站点默认通道）；{@code "wxvp"} 是小程序虚拟支付，
+     * 此时 {@code productId} / {@code wxCode} 必填。<b>金额与档位是否匹配不在这里判</b>——
+     * 价格权威在官网，两处各写一份价格表迟早会对不上；不符时官网回 400 {@code product_mismatch}，
+     * 由 {@link HttpMobileBillingClient} 译成 REJECTED + 「请更新小程序」。
      */
-    public MobileBillingClient.RechargeOrder createRecharge(Long userId, Long amountCents, String idempotencyKey) {
+    public MobileBillingClient.RechargeOrder createRecharge(Long userId, Long amountCents,
+                                                            String idempotencyKey, String channel,
+                                                            String productId, String wxCode) {
         requireRechargeEnabled();
         if (amountCents == null || amountCents <= 0) {
             throw new IllegalArgumentException(LangText.of(
@@ -161,8 +182,35 @@ public class MobileBillingService {
                     "缺少或非法的 idempotencyKey，请升级客户端后重试",
                     "Missing or invalid idempotencyKey; please update the app and try again"));
         }
+
+        String ch = trimToNull(channel);
+        String product = null;
+        String code = null;
+        if (ch != null) {
+            if (!CHANNEL_WXVP.equals(ch)) {
+                throw new IllegalArgumentException(LangText.of(
+                        "不支持的支付通道，请升级客户端后重试",
+                        "Unsupported payment channel; please update the app and try again"));
+            }
+            product = trimToNull(productId);
+            code = trimToNull(wxCode);
+            if (product == null || !PRODUCT_ID.matcher(product).matches()) {
+                throw new IllegalArgumentException(LangText.of(
+                        "缺少或非法的充值档位，请更新小程序后重试",
+                        "Missing or invalid top-up product; please update the mini program and try again"));
+            }
+            if (code == null) {
+                // wx.login() 的 code 是一次性的，缺了它官网换不到 openid，签不出 paySig
+                throw new IllegalArgumentException(LangText.of(
+                        "缺少微信登录凭证，请重新进入充值页",
+                        "Missing WeChat login code; please reopen the top-up page"));
+            }
+        }
+
+        final String finalProduct = product;
+        final String finalCode = code;
         return callWithAccount(userId, true, true,
-                accountId -> billing.createRecharge(accountId, amountCents, key));
+                accountId -> billing.createRecharge(accountId, amountCents, key, ch, finalProduct, finalCode));
     }
 
     /**
@@ -278,15 +326,15 @@ public class MobileBillingService {
      * <p>为什么需要它：{@code POST /api/mobile/billing/recharge} 是全站唯一走
      * {@code create=true} 的调用方，随本期一起上线且是活的——任何持有有效
      * {@code X-Session-Id} 的人直接打它，就会在官网建出一行含明文手机号的真账户并发注册赠额。
-     * 而 {@code AccountDeletionService} 依旧只删 Java 侧本地表、不通知官网，官网内部口也还
-     * 没有 delete action，于是 App 自己建的账号 App 内没有任何路径能删掉——就是复审 C1 要堵的
-     * App Store 5.1.1(v) 场景，只是触发点从「打开设置页」搬到了「直接打这个端点」。
-     * 本期四端都没有充值界面，「没人调」是社会性约束而不是服务端护栏，所以要有这一行。
+     * 第一版写这一行时 {@code AccountDeletionService} 还只删 Java 侧本地表、不通知官网，
+     * 官网内部口也没有 delete action，于是 App 自己建的账号 App 内没有任何路径能删掉——就是
+     * 复审 C1 要堵的 App Store 5.1.1(v) 场景，只是触发点从「打开设置页」搬到了「直接打这个端点」。
+     * 四端有没有充值界面是社会性约束而不是服务端护栏，所以这一行留着。
      *
-     * <p><b>什么时候才允许打开</b>：等 dev-board#434（官网账户注销传导）落地——注销时能把删除
-     * 传导到官网、官网内部口有 delete action 之后，把
-     * {@code mobile.billing.recharge-enabled}（env {@code MOBILE_BILLING_RECHARGE_ENABLED}）
-     * 置 true。在那之前打开等于把 5.1.1(v) 重新放出来。
+     * <p><b>什么时候才允许打开</b>：dev-board#434 已经把注销传导补上（注销先调官网
+     * {@code delete-account} 再删本地，官网不可达就不删），剩下的前置条件是官网那侧的
+     * action 真的上线、本机 {@code mobile.billing.base-url/secret} 配好；都齐了再把
+     * {@code mobile.billing.recharge-enabled}（env {@code MOBILE_BILLING_RECHARGE_ENABLED}）置 true。
      */
     private void requireRechargeEnabled() {
         if (!rechargeEnabled) {
