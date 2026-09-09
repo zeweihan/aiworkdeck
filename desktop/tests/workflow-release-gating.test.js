@@ -253,6 +253,36 @@ test('pack-release.yml：runtime 腿必须真起一次服务打 /health，不能
   assert.match(PACK_RELEASE, /\/health|\/docs/)
 })
 
+// 执行实际冒烟准备代码：GNU tar 要 POSIX 路径，原生 Python 的环境变量要 Windows 路径。
+// 本机没有 cygpath，仅替换这个平台边界与文件系统写操作；服务启动仍由真实双平台 CI 验证。
+for (const plat of ['win-x64', 'mac-arm64']) {
+  test(`pack smoke paths reach tar and native Python in their platform format (${plat})`, () => {
+    const step = PACK_RELEASE_DOC.jobs.runtime.steps.find((s) => s.name === 'Smoke test from pack layout')
+    const setup = step.run.slice(0, step.run.indexOf('BODY_GREP='))
+      .replace(/\$\{\{ matrix.plat \}\}/g, plat)
+      .replace(/\$\{\{ steps.svc.outputs.name \}\}/g, 'asr-service')
+    const result = require('child_process').spawnSync('bash', ['-e', '-c', `
+      rm() { :; }; mkdir() { :; }; cp() { :; }
+      cygpath() {
+        case "$1:$2" in
+          '-u:D:\\a\\runner temp/packroot') printf '%s' '/d/a/runner temp/packroot' ;;
+          '-w:/d/a/runner temp/packroot/lib') printf '%s' 'D:\\a\\runner temp\\packroot\\lib' ;;
+          *) return 71 ;;
+        esac
+      }
+      ${setup}
+      printf '%s\\n' "$ROOT" "$PYTHONPATH"
+    `], {
+      cwd: require('os').tmpdir(), encoding: 'utf8',
+      env: { PATH: process.env.PATH, RUNNER_TEMP: plat === 'win-x64' ? 'D:\\a\\runner temp' : '/tmp/runner temp' },
+    })
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepStrictEqual(result.stdout.trim().split('\n'), plat === 'win-x64'
+      ? ['/d/a/runner temp/packroot', 'D:\\a\\runner temp\\packroot\\lib']
+      : ['/tmp/runner temp/packroot', '/tmp/runner temp/packroot/lib'])
+  })
+}
+
 test('pack-release.yml：不缓存 pysvc（pack 产物必须每次从 requirements.lock 真装一遍）', () => {
   assert.doesNotMatch(PACK_RELEASE, /actions\/cache@[^\n]*\n[\s\S]{0,400}?pysvc/)
 })
