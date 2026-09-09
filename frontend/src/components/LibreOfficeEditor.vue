@@ -138,7 +138,8 @@
 // （原 ⌘⇧O 实验覆盖层与探针工具栏已移除）.
 
 import { webviewTransport, iframeTransport } from '@/composables/useZetaOfficeWebview.js'
-import { createRelayExecutor } from '@/composables/zetaOfficeRelay.js'
+import { createRelayExecutor, PROBE_ACTION, PROBE_BUDGET_MS } from '@/composables/zetaOfficeRelay.js'
+import { classifyLoadFailure, shouldSelfHealLoadFailure } from '@/utils/editorLoadFailure.js'
 import ReviewPanel from '@/components/ReviewPanel.vue'
 import EditorToolbar from '@/components/EditorToolbar.vue'
 import EvidenceStaleBar from '@/components/EvidenceStaleBar.vue'
@@ -292,6 +293,7 @@ export default {
     // onEndpointReady 会照常装载。file→file 换文档不支持（池按实例=文档）。
     file(newFile, oldFile) {
       if (!newFile || oldFile) return
+      this._adoptedSpare = true
       this.prefetchBytes()
       if (!this._endpointUp) return
       this.ready = false
@@ -303,7 +305,7 @@ export default {
       this._stageChangedAt = Date.now()
       this.stuck = false
       this.startBootTrickle()
-      this.finishDocLoad()
+      this.adoptAndLoad()
     },
     // 菜单栏读勾选/置灰的三个信号。合并在这个 watch 里而不是另起一块——
     // 选项对象里两个同名 key，后写的会把先写的整个覆盖掉。
@@ -602,6 +604,11 @@ export default {
       try { if (this.webviewEl && this.webviewEl.remove) this.webviewEl.remove() } catch (e) { /* ignore */ }
       this.webviewEl = null
       this.bootFailReason = ''
+      // 承载引擎的元素刚被拆掉：endpoint 与 ready 都不再成立。旧的唯一调用方
+      // （boot 失败后的重试）本来这两位就是 false，写在这里对它是恒等操作；
+      // 崩溃自愈与 relay 超时自愈则必须靠它把加载面板重新亮出来。
+      this._endpointUp = false
+      this.ready = false
       this.statusKey = 'booting'
       this.bootPct = 3
       this.bootCap = 12
@@ -674,7 +681,12 @@ export default {
       wv.setAttribute('partition', info.partition)
       if (info.preload) wv.setAttribute('preload', info.preload)
       // contextIsolation ON (the preload uses contextBridge), nodeIntegration OFF.
-      wv.setAttribute('webpreferences', 'contextIsolation=yes,nodeIntegration=no')
+      // backgroundThrottling=no（dev-board#539）：guest 一旦被 Chromium 判为
+      // 不可见/失焦，定时器降到 1/min、rAF 停摆，LOWA 的 Emscripten/Qt 事件
+      // 循环跟着冻住——久置回来打开文档就撞 relay 的 180s 墙钟预算，画布上留
+      // 一个 boot 出来的空白原型 + 红胶囊「文档加载失败」。这里的引擎是**计算
+      // 进程**不是页面，节流对它只有害处。
+      wv.setAttribute('webpreferences', 'contextIsolation=yes,nodeIntegration=no,backgroundThrottling=no')
       const transport = webviewTransport(wv)
       // 事件订阅必须在建元素时就挂上，绝不能推迟到 dom-ready：boot-log 里程碑
       // 从引擎启动第一刻就在发，modified 是自动保存的唯一触发信号——晚挂一步
@@ -686,6 +698,16 @@ export default {
         this.wireExecutor(transport, 'webview dom-ready')
       })
       wv.addEventListener('did-fail-load', (e) => this.appendLog('did-fail-load: ' + (e.errorDescription || e.errorCode)))
+      // 渲染进程没了（久置被系统回收 / OOM / 崩溃）：此前全仓没有任何处理，
+      // 表现就是「界面还在，命令全部石沉大海」——下一次装载撞 180s 超时，
+      // 用户看到空白页。这里立刻重启引擎并重装当前文档。
+      wv.addEventListener('render-process-gone', (e) => {
+        const d = (e && e.details) || {}
+        this.onGuestProcessGone(String(d.reason || (e && e.reason) || 'unknown'))
+      })
+      // 卡住但没死：只记日志——引擎在跑大文档排版时本来就会长时间不响应，
+      // 一律重启会把正常的重活当成故障杀掉。
+      wv.addEventListener('unresponsive', () => this.appendLog('webview unresponsive（引擎线程忙或卡住，未做处置）'))
       wv.addEventListener('console-message', (e) => { if (e.level >= 2) this.appendLog('[webview] ' + e.message) })
       wv.setAttribute('src', info.url)
       return wv
@@ -795,6 +817,67 @@ export default {
         this.appendLog('迟到的 load_document 结果实际成功，撤回失败态 / late load_document result arrived successful, reverting loadFailed')
       }
     },
+    // 预热备胎过继（dev-board#539）：备胎可能已经在后台空转好几个小时，其间
+    // guest 被系统回收 / 渲染进程崩掉 / 被冻死都不会有任何信号——_endpointUp
+    // 只是一个「历史上握过手」的布尔，不代表现在还活着。拿它直接 finishDocLoad
+    // 就是撞 180s 超时的那条路。先花几毫秒探一声活，死了就丢掉备胎走冷启动。
+    async adoptAndLoad() {
+      if (await this.probeGuestAlive()) { this.finishDocLoad(); return }
+      this.appendLog('备胎探活失败 → 丢弃并冷启动 / spare probe failed, cold boot instead')
+      await this.remountEditor() // onEndpointReady 会接着装载当前文档
+    },
+    // 最便宜的只读探活：命中就是 6ms 级；guest 死了/冻住就在 3s 预算上失败，
+    // 不拖着用户等 relay 的默认预算。
+    async probeGuestAlive() {
+      if (!this.executor) return false
+      try {
+        const r = await this.executor.executeCommand(PROBE_ACTION, {}, { timeoutMs: PROBE_BUDGET_MS })
+        return !!(r && r.success)
+      } catch (e) {
+        return false
+      }
+    },
+    // webview 的渲染进程没了（被系统回收 / OOM / 崩溃）。引擎连同文档一起消失，
+    // 界面上却什么都看不出来——不重启的话下一条命令要等到 relay 超时才报错。
+    // 重启引擎并重装当前文件（未保存的编辑随进程一起没了，重装拿到的是后端
+    // 最后一次落盘的内容，这已是能做到的最好结果）。
+    async onGuestProcessGone(reason) {
+      // 崩溃风暴防抖：起不来的引擎会连着 gone 好几次，别陷进重启循环。
+      if (this._guestGoneAt && Date.now() - this._guestGoneAt < 10000) {
+        this.appendLog('render-process-gone 再次发生（10s 内），不再重启：' + reason)
+        return
+      }
+      this._guestGoneAt = Date.now()
+      this.appendLog('render-process-gone（' + reason + '）→ 重启引擎并重装当前文档')
+      // 进程里的文档已经没了：脏标记与预取字节都作废，保存闸等重装结果说话。
+      this.dirty = false
+      this.docLoadFailed = false
+      this._bytesPromise = null
+      this.dlLoaded = 0
+      this.dlTotal = 0
+      this._loadSelfHealed = false
+      await this.remountEditor()
+    },
+    // 诊断落盘（dev-board#539 要求 7）：桌面壳目前**没有**渲染层→主进程的日志
+    // 通道（~/.aiworkdeck/logs 只有主进程自己在写，checkba:reveal-logs 只负责
+    // 揭示目录），所以这里只往 devtools 打一行结构化记录，不新增任何出站请求。
+    // 有了日志 IPC 之后把这一行改成经它落盘即可，字段已经齐了。
+    logLoadFailure(msg, seq) {
+      const f = this.file || {}
+      try {
+        console.log('[libre-editor] doc-load-failed', JSON.stringify({
+          fileId: f.id != null ? f.id : null,
+          fileType: f.fileType || null,
+          fileSize: f.fileSize != null ? f.fileSize : null,
+          reason: classifyLoadFailure(msg),
+          message: String(msg).slice(0, 300),
+          elapsedMs: this._loadStartedAt ? Date.now() - this._loadStartedAt : null,
+          retried: !!this._loadSelfHealed,
+          adopted: !!this._adoptedSpare,
+          attempt: seq,
+        }))
+      } catch (e) { /* 诊断不许拖垮装载路径 */ }
+    },
     // 装载 + 发布就绪。两个入口：onEndpointReady（常规：mount 时就有 file，或
     // 备胎空白 boot 完成），以及 file watcher（备胎在引擎就绪后被过继）。
     async finishDocLoad() {
@@ -805,23 +888,49 @@ export default {
       // 重试装好的文档连同其间的编辑整个换掉。世代号让被取代的那条在每个 await
       // 之后自行退场：只有最新一次尝试有权推命令、改状态、发 ready。
       const seq = this._docLoadSeq = (this._docLoadSeq || 0) + 1
+      this._loadStartedAt = Date.now()
       if (this.file) {
         try {
           await this.loadDocument()
           if (seq !== this._docLoadSeq) return
+          // 装载成功 = 画布上是后端真文档：撤回上一次失败留下的保存闸，
+          // 否则重试/自愈装好了，autosave 却永久拒绝（用户的编辑不落盘）。
+          this.docLoadFailed = false
+          this._loadSelfHealed = false
         } catch (e) {
           if (seq !== this._docLoadSeq) return
+          const msg = (e && e.message) ? e.message : String(e)
+          this.logLoadFailure(msg, seq)
+          // relay 超时自愈（dev-board#539）：worker 侧事件循环冻住/失联时
+          // load_document 撞 180s 墙钟预算，画布上留的是 boot 出来的空白原型
+          // ——正是用户看到的空白页。重启引擎重装一次，只自愈一次。
+          // 与 onLateLoadResult 不冲突：这条路径不置 docLoadFailed（那个回调
+          // 第一件事就是判它），且 remountEditor 会 dispose 掉旧 executor、
+          // 连同 relay 的订阅一起断开，旧的迟到结果根本不会再回调进来。
+          if (shouldSelfHealLoadFailure(msg, this._loadSelfHealed)) {
+            this._loadSelfHealed = true
+            this.appendLog('relay 超时 → 重启引擎重装一次 / relay timeout, remounting engine once')
+            this.dirty = false
+            this._bytesPromise = null
+            this.dlLoaded = 0
+            this.dlTotal = 0
+            await this.remountEditor()
+            return // onEndpointReady 会接着重走 finishDocLoad；此处不落失败态也不发 ready
+          }
           // Load failed → the seeded prototype is still showing. Surface it; the
           // editor stays usable (AI/IME act on whatever is shown) but the content
           // is wrong, so this is loud, not silent. docLoadFailed 关保存闸——
           // 空白画布上的任何编辑都不得回传覆盖后端真文件。
           this.docLoadFailed = true
-          this.statusKey = 'loadFailed'
+          // 失败原因分流（dev-board#539）：404 = 文件已不在磁盘上（重试无意义）、
+          // 下载超时/网络错 = 请检查网络、其余（含引擎装载失败与 relay 超时）
+          // 沿用 loadFailed。三个 key 都以 'Failed' 结尾，既有判据不必改。
+          this.statusKey = classifyLoadFailure(msg)
           // 记下这次失败时的世代号——迟到的 load_document 结果（见
           // onLateLoadResult）只在世代仍相符（没有更晚的装载尝试发生过）时
           // 才允许撤回这个失败态，防止串到后来的重试/换文档头上。
           this._loadGenAtFailure = this._loadGen
-          this.appendLog('load_document failed: ' + (e && e.message ? e.message : e))
+          this.appendLog('load_document failed: ' + msg)
         }
       }
       this.bootPct = 100

@@ -2111,9 +2111,14 @@ $color-accent: #5BD197; // Mint Green
   box-shadow: none;
 }
 
-/* 预热备胎实例（librePool.js）：未激活时脱离布局流隐形占位。不能用
-   display:none——引擎要在有尺寸的画布里 boot；visibility 保留布局尺寸。 */
-.pane-content.libre-spare-standby {
+/* LOWA 实例的「后台驻留」隐藏：未激活时脱离布局流隐形占位。不能用
+   display:none / v-show——引擎要在有尺寸的画布里 boot，而且 display:none 会让
+   Chromium 把 guest 判成不可见，定时器降到 1/min、rAF 停摆，Emscripten/Qt 事件
+   循环跟着冻住（dev-board#539）；visibility 保留布局尺寸也保住可见性。
+   .libre-spare-standby = 预热备胎（librePool.js），.libre-standby = 保活池里
+   非激活的那些文档实例。 */
+.pane-content.libre-spare-standby,
+.pane-content.libre-standby {
   position: absolute;
   inset: 0;
   visibility: hidden;
