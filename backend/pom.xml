@@ -227,11 +227,21 @@
         </dependency>
 
 
-        <!-- JavaCV (FFmpeg wrapper) for Video Processing -->
+        <!-- JavaCV (FFmpeg wrapper)：全仓唯一用途是 MeetingAudioTranscoder 把
+             会议录音 webm/opus 转 16kHz 单声道 mp3。原先引的聚合体 javacv-platform
+             会把 opencv/openblas/leptonica/tesseract/librealsense2 与一堆摄像头驱动
+             一并拖进 backend/lib（mac 51MB、win 101MB），而这些库一个调用方都没有。
+             改成 javacv 本体 + ffmpeg-platform：-Djavacpp.platform=<平台> 照旧把
+             ffmpeg 的原生 jar 收敛到单平台（安装包瘦身 dev-board#528）。 -->
         <dependency>
             <groupId>org.bytedeco</groupId>
-            <artifactId>javacv-platform</artifactId>
+            <artifactId>javacv</artifactId>
             <version>1.5.10</version>
+        </dependency>
+        <dependency>
+            <groupId>org.bytedeco</groupId>
+            <artifactId>ffmpeg-platform</artifactId>
+            <version>6.1.1-1.5.10</version>
         </dependency>
 
         <!-- Apache POI for DOCX Processing -->

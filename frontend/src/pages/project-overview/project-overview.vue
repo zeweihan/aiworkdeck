@@ -456,7 +456,10 @@
       <InviteMemberDialog
         v-model:visible="showInviteModal"
         :project-id="projectId"
-        @success="loadProjectMembers"
+        :cloud="collabCloud"
+        :project-name="project.name || ''"
+        :inviter-name="userDisplayName || (currentUser && currentUser.displayName) || ''"
+        @success="onInviteMemberSuccess"
       />
 
       <!-- 协作抽屉：顶栏 chip 与版本面板状态行共用的唯一动作入口 -->
@@ -2015,6 +2018,7 @@ import {
   getAccountBalance, // Credits 余额 chip（dev-board#187，后端带 TTL 缓存的轻端点）
   getCloudStatus, // 协作 chip：这份案卷有没有放进团队案件库、状态如何
   checkCloud, // 协作 chip 的联网刷新（cloudStatus 是不联网的本地快照）
+  getCloudMembers, // 成员堆栈：案卷放进案件库后，同事在库那边的名单本机 /members 里没有
   getCurrentUser as getCurrentUserApi, // 顶栏头像：补一次真实接口，本地缓存只是首屏兜底
   registerMeetingFromFile // 右键转写：音频文件注册进会议录音面板（dev-board#227）
 } from '@/services/api.js'
@@ -4897,14 +4901,52 @@ export default {
         console.error('加载项目详情失败', e)
       }
     },
+    /**
+     * 成员堆栈的名单。
+     *
+     * 本机 /members 与团队案件库那边的成员是**两张表**：案卷放进案件库之后，加同事走的
+     * 是云端那张（CollabDialog 的「案件参与人」、加人弹窗的云端轨），本机表一个字不变。
+     * 只读本机表的话，律师刚在库里加完人、回头看堆栈毫无变化，会第二次以为「没生效」。
+     *
+     * 合并纪律：
+     * · 按 username 去重，本机条目优先（本机那条带得动本机 userId 与权限语义）；
+     * · 云端条目的 id 加前缀，避免与本机 id 撞 :key；
+     * · **云端条目的 userId 一律抹成 null**——它来自案件库服务器的用户表，和本机
+     *   user.id 是两个 id 空间，撞上同一个数字会让 canWriteProject / canRemoveMember
+     *   把别人的角色当成「我的角色」，把有写权限的人判成只读；
+     * · 云端读取失败静默回落到本机名单，不让工作台因此报错。
+     */
     async loadProjectMembers() {
         if (!this.projectId) return
+        let local = []
         try {
             const res = await getProjectMembers(this.projectId)
-            this.projectMembers = res.data || []
+            local = res.data || []
         } catch (e) {
             console.error('Failed to load project members', e)
+            return
         }
+        // 本机名单先落地再去问案件库：getCloudMembers 是**走网络**的代理调用，
+        // 库连不上时它会一直等到超时，等在这里的话堆栈整段时间都是空的。
+        this.projectMembers = local
+        if (!(this.collabCloud && this.collabCloud.linked)) return
+        try {
+            const res = await getCloudMembers(this.projectId)
+            const cloudMembers = (res && res.data && res.data.members) || []
+            const seen = new Set(local.map(m => m.username).filter(Boolean))
+            const extra = cloudMembers
+              .filter(m => m.username && !seen.has(m.username))
+              .map(m => ({ ...m, id: `cloud-${m.id != null ? m.id : m.username}`, userId: null, fromCloud: true }))
+            if (extra.length) this.projectMembers = local.concat(extra)
+        } catch (e) {
+            console.warn('[Collab] 读取案件库参与人失败，只显示本机名单', e)
+        }
+    },
+    // 加人弹窗可能刚把案卷放进了案件库、也可能在库那边加了人：两边状态都要重取，
+    // 只重取成员名单的话协作状态还停在「没放进去」，云端名单也就并不进来。
+    async onInviteMemberSuccess() {
+        await this.fetchCollabState()
+        this.loadProjectMembers()
     },
     goBack() {
       uni.navigateBack()

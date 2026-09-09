@@ -118,8 +118,41 @@ function copyAppSource(srcDir, appDir) {
   })
 }
 
+// 包内固定路径的非运行时目录（安装包瘦身 dev-board#528）。
+// torch/include 是 C++ 扩展的头文件（61MB×两个服务），只有 torch.utils.cpp_extension
+// 现场编译扩展才要；torch/test 是 C++ 单测；torch/share 是 cmake 配置。
+// **torch/lib 不在表内**——那是 libtorch 本体，删了 import torch 直接完蛋。
+// speech_recognition/pocketsphinx-data 是离线英文声学模型（37MB），本仓走的是
+// 听悟/faster-whisper 两条转写通道，pocketsphinx 一行代码都没调。
+const PRUNE_PATHS = [
+  'torch/include',
+  'torch/test',
+  'torch/share',
+  'speech_recognition/pocketsphinx-data'
+]
+
+// bin/（pip --target 的 console_scripts 落点）里两个独立可执行文件：
+// magika 27MB 是 Rust CLI（markitdown 走的是 `import magika` 的 Python API，
+// 不 fork 这个二进制）、ruff 24MB 是 lint 工具，运行期都不会被调用。
+// 其余 bin/ 条目是几百字节的 Python 入口脚本，留着不占地方也免得误伤。
+const PRUNE_BIN_EXECUTABLES = ['magika', 'ruff']
+
+/**
+ * 逐个一级包目录下的测试套件。**只删 tests/ 与 test/，不删 testing/**：
+ * torch/__init__.py 里有一行 `testing as testing`（torch 2.12 的 :2317），
+ * 删掉 torch/testing 会让 `import torch` 当场炸掉，kokoro 与 mineru 一起死；
+ * numpy.testing / sqlalchemy.testing / sympy.testing 同样是对外 API。
+ * 这一类加起来只有约 12MB，不值得为它冒整条服务起不来的险。
+ */
+const PRUNE_PKG_TEST_DIRS = ['tests', 'test']
+
+function rmIfExists(p) {
+  if (fs.existsSync(p)) fs.rmSync(p, { recursive: true, force: true })
+}
+
 function prune(libDir) {
-  // 体积裁剪：字节码缓存（保守起见不动 dist-info——pip/importlib.metadata 需要）
+  // 体积裁剪：字节码缓存（保守起见不动 dist-info——pip/importlib.metadata 需要，
+  // 尤其是 RECORD：删了它 importlib.metadata 的 files() 与后续 pip 操作都会瞎）
   const stack = [libDir]
   while (stack.length) {
     const dir = stack.pop()
@@ -137,6 +170,33 @@ function prune(libDir) {
   if (fs.existsSync(srDir)) {
     for (const entry of fs.readdirSync(srDir)) {
       if (entry.startsWith('flac-')) fs.rmSync(path.join(srDir, entry), { recursive: true, force: true })
+    }
+  }
+  for (const rel of PRUNE_PATHS) rmIfExists(path.join(libDir, ...rel.split('/')))
+  // pip --target 在 POSIX 上把入口脚本放 bin/，Windows 上放 Scripts/
+  for (const binDir of ['bin', 'Scripts']) {
+    for (const name of PRUNE_BIN_EXECUTABLES) {
+      rmIfExists(path.join(libDir, binDir, name))
+      rmIfExists(path.join(libDir, binDir, `${name}.exe`))
+    }
+  }
+  for (const entry of fs.readdirSync(libDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name.endsWith('.dist-info')) continue
+    for (const name of PRUNE_PKG_TEST_DIRS) rmIfExists(path.join(libDir, entry.name, name))
+  }
+  // gradio 的前端产物带着 1000 多个 sourcemap（mineru 实测 118MB）。mineru 走的是
+  // `-m mineru.cli.fast_api`，gradio 的 Web UI 根本不启动，何况 sourcemap 只服务浏览器
+  // devtools，删掉对任何运行路径都没有影响。
+  const gradioDir = path.join(libDir, 'gradio')
+  if (fs.existsSync(gradioDir)) {
+    const gstack = [gradioDir]
+    while (gstack.length) {
+      const dir = gstack.pop()
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, entry.name)
+        if (entry.isDirectory()) gstack.push(p)
+        else if (entry.name.endsWith('.js.map')) fs.rmSync(p, { force: true })
+      }
     }
   }
 }
@@ -164,4 +224,4 @@ if (require.main === module) {
   main()
 }
 
-module.exports = { isPythonRuntimeComplete, pythonBin, pythonMarker }
+module.exports = { isPythonRuntimeComplete, pythonBin, pythonMarker, prune }
