@@ -7,6 +7,8 @@ import com.checkba.model.entity.ProjectFile;
 import com.checkba.service.FileTagService;
 import com.checkba.service.ProjectFileService;
 import com.checkba.service.ProjectMemberService;
+
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -63,7 +65,7 @@ class ProjectFileControllerImportLocalTest {
 
             assertThrows(IllegalArgumentException.class,
                     () -> controller.importLocal(1L, req("/Users/me/证据.pdf", null), "sess"));
-            verify(projectFileService, never()).importLocalFile(anyLong(), any(), anyString(), anyLong());
+            verify(projectFileService, never()).importLocalPath(anyLong(), any(), anyString(), anyLong());
         }
     }
 
@@ -81,7 +83,7 @@ class ProjectFileControllerImportLocalTest {
 
             assertThrows(IllegalArgumentException.class,
                     () -> controller.importLocal(1L, req("/Users/me/证据.pdf", 777L), "sess"));
-            verify(projectFileService, never()).importLocalFile(anyLong(), any(), anyString(), anyLong());
+            verify(projectFileService, never()).importLocalPath(anyLong(), any(), anyString(), anyLong());
         }
     }
 
@@ -96,8 +98,17 @@ class ProjectFileControllerImportLocalTest {
 
             assertThrows(IllegalArgumentException.class,
                     () -> controller.importLocal(1L, req("/Users/me/证据.pdf", null), "sess"));
-            verify(projectFileService, never()).importLocalFile(anyLong(), any(), anyString(), anyLong());
+            verify(projectFileService, never()).importLocalPath(anyLong(), any(), anyString(), anyLong());
         }
+    }
+
+    private ProjectFile file(long id, String name) {
+        ProjectFile f = new ProjectFile();
+        f.setId(id);
+        f.setProjectId(1L);
+        f.setName(name);
+        f.setFilePath("projects/1/" + name);
+        return f;
     }
 
     @Test
@@ -106,17 +117,48 @@ class ProjectFileControllerImportLocalTest {
         try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(1L);
             allowMember();
-            ProjectFile created = new ProjectFile();
-            created.setId(42L);
-            created.setProjectId(1L);
-            created.setName("证据.pdf");
-            created.setFilePath("projects/1/证据.pdf");
-            when(projectFileService.importLocalFile(1L, null, "/Users/me/证据.pdf", 1L)).thenReturn(created);
+            ProjectFile created = file(42L, "证据.pdf");
+            when(projectFileService.importLocalPath(1L, null, "/Users/me/证据.pdf", 1L))
+                    .thenReturn(new ProjectFileService.ImportLocalResult(created, java.util.List.of(created), 0));
 
-            ProjectFile out = controller.importLocal(1L, req("/Users/me/证据.pdf", null), "sess");
+            Map<String, Object> out = controller.importLocal(1L, req("/Users/me/证据.pdf", null), "sess");
 
-            assertEquals(42L, out.getId());
-            verify(projectFileService).importLocalFile(1L, null, "/Users/me/证据.pdf", 1L);
+            assertEquals(42L, ((ProjectFile) out.get("data")).getId());
+            assertEquals(1, out.get("importedFileCount"));
+            assertEquals(0, out.get("skippedCount"));
+            verify(projectFileService).importLocalPath(1L, null, "/Users/me/证据.pdf", 1L);
+        }
+    }
+
+    /** 目录导入：返回顶层文件夹行 + 计数，后置钩子对每个文件各跑一次。 */
+    @Test
+    void folderImportReturnsCountsAndRunsHooksPerFile() {
+        ReflectionTestUtils.setField(controller, "localMode", true);
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(1L);
+            allowMember();
+            ProjectFile folder = new ProjectFile();
+            folder.setId(9L);
+            folder.setProjectId(1L);
+            folder.setName("卷宗");
+            folder.setIsFolder(true);
+            ProjectFile a = file(11L, "卷宗/a.docx");
+            ProjectFile b = file(12L, "卷宗/b.pdf");
+            when(projectFileService.importLocalPath(1L, null, "/Users/me/卷宗", 1L))
+                    .thenReturn(new ProjectFileService.ImportLocalResult(folder, java.util.List.of(a, b), 3));
+
+            Map<String, Object> out = controller.importLocal(1L, req("/Users/me/卷宗", null), "sess");
+
+            assertEquals(9L, ((ProjectFile) out.get("data")).getId());
+            assertEquals(2, out.get("importedFileCount"));
+            assertEquals(3, out.get("skippedCount"));
+
+            verify(projectRagService, timeout(5000)).refreshProjectKnowledgeIncremental("1", a.getFilePath());
+            verify(projectRagService, timeout(5000)).refreshProjectKnowledgeIncremental("1", b.getFilePath());
+            verify(autoTaggingService, timeout(5000)).autoTagFile(1L, 11L, a.getFilePath(), 1L);
+            verify(autoTaggingService, timeout(5000)).autoTagFile(1L, 12L, b.getFilePath(), 1L);
+            verify(projectRagService, timeout(5000).times(2))
+                    .refreshProjectKnowledgeIncremental(anyString(), anyString());
         }
     }
 }

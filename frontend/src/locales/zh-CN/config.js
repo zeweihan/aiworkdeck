@@ -31,7 +31,6 @@ export default {
     cancel: '取消',
     newFile: '新建文件',
     newFolder: '新建文件夹',
-    uploadFile: '上传文件',
     sort: '排序',
   },
   ocr: {

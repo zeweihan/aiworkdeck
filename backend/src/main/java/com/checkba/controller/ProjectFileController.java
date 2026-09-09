@@ -254,7 +254,7 @@ public class ProjectFileController {
     }
 
     /**
-     * 从本机绝对路径复制一个文件进项目（桌面端「拖入资源管理器 = 复制进项目目录」，dev-board#409）。
+     * 从本机绝对路径导入进项目（桌面端「拖入资源管理器 = 复制进项目目录」，dev-board#409）。
      * POST /api/projects/{projectId}/files/import-local  body: { sourcePath, parentId }
      *
      * <p>只在单机模式（{@code security.local-mode=true}）开放。这条接口让调用方指名一个
@@ -263,11 +263,23 @@ public class ProjectFileController {
      * 校验来源，请求只可能来自本机。团队服务器上开着它，等于让任意成员把服务器磁盘上的
      * 任意文件复制进自己的项目（同 open-local 那道闸的理由）。
      *
-     * <p>返回创建出来的文件行；后置钩子（RAG 增量索引 + 自动打标签）与
+     * <p>{@code sourcePath} 可以是一个普通文件，也可以是一个目录（资源管理器收整个文件夹
+     * 的拖入）：目录会连同子目录整棵复制进来，树里的符号链接与特殊文件跳过并计数。
+     *
+     * <p>返回体：
+     * <pre>
+     * {
+     *   "data": &lt;ProjectFile&gt;,    // 顶层创建出来的行：导入文件时是文件行，导入目录时是那个文件夹行
+     *   "importedFileCount": int,  // 本次真正复制进来的文件数（不含文件夹）
+     *   "skippedCount": int        // 树里被跳过的条目数（符号链接、特殊文件、读不到的条目）
+     * }
+     * </pre>
+     *
+     * <p>后置钩子（RAG 增量索引 + 自动打标签）对<b>每一个</b>导入的文件各跑一次，与
      * {@code FileController.uploadFile} 上传完成时完全一致。
      */
     @PostMapping("/import-local")
-    public ProjectFile importLocal(
+    public Map<String, Object> importLocal(
             @PathVariable Long projectId,
             @RequestBody ImportLocalRequest request,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
@@ -282,25 +294,33 @@ public class ProjectFileController {
         checkFileWriteAccess(projectId, userId);
         checkParentFolder(request.getParentId(), projectId);
 
-        ProjectFile created = projectFileService.importLocalFile(
+        ProjectFileService.ImportLocalResult result = projectFileService.importLocalPath(
                 projectId, request.getParentId(), request.getSourcePath(), userId);
 
-        // 与上传完成后同一套异步钩子（同步跑会把大文档的索引耗时挂在这次请求上）
-        final String storagePath = created.getFilePath();
-        final Long fileId = created.getId();
+        // 与上传完成后同一套异步钩子（同步跑会把大文档的索引耗时挂在这次请求上）。
+        // 导入目录时一次可能进来几百个文件，用一条异步任务顺序跑完，不按文件数铺线程。
+        final List<ProjectFile> importedFiles = List.copyOf(result.getImportedFiles());
         java.util.concurrent.CompletableFuture.runAsync(() -> {
-            try {
-                projectRagService.refreshProjectKnowledgeIncremental(String.valueOf(projectId), storagePath);
-            } catch (Exception e) {
-                log.error("导入本机文件后 RAG 索引失败: {}", storagePath, e);
-            }
-            try {
-                autoTaggingService.autoTagFile(projectId, fileId, storagePath, userId);
-            } catch (Exception e) {
-                log.error("导入本机文件后自动打标签失败: {}", storagePath, e);
+            for (ProjectFile imported : importedFiles) {
+                String storagePath = imported.getFilePath();
+                try {
+                    projectRagService.refreshProjectKnowledgeIncremental(String.valueOf(projectId), storagePath);
+                } catch (Exception e) {
+                    log.error("导入本机文件后 RAG 索引失败: {}", storagePath, e);
+                }
+                try {
+                    autoTaggingService.autoTagFile(projectId, imported.getId(), storagePath, userId);
+                } catch (Exception e) {
+                    log.error("导入本机文件后自动打标签失败: {}", storagePath, e);
+                }
             }
         });
-        return created;
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("data", result.getRoot());
+        response.put("importedFileCount", importedFiles.size());
+        response.put("skippedCount", result.getSkippedCount());
+        return response;
     }
 
     /**

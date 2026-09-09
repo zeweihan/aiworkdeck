@@ -547,18 +547,6 @@
                 </svg>
               </view>
 
-              <!-- 4. 上传 (普通模式) -->
-              <view
-                v-if="!fileBatchMode"
-                class="icon-btn mini"
-                @tap="onFileTreeQuickAction('upload')"
-                :title="$t('workbench.uploadFile')"
-              >
-                <svg class="mini-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path v-for="(d, gi) in GLYPHS.upload" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
-              </view>
-
               <!-- 5. 下载 (批量模式) -->
               <view
                 v-if="fileBatchMode"
@@ -4331,10 +4319,6 @@ export default {
       }
       if (actionKey === 'newFile' && typeof tree.handleCreateWord === 'function') {
         tree.handleCreateWord()
-        return
-      }
-      if (actionKey === 'upload' && typeof tree.handleUploadFile === 'function') {
-        tree.handleUploadFile()
         return
       }
       if (actionKey === 'recycleBin') {

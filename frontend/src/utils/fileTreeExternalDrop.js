@@ -3,6 +3,10 @@
 // 外部（Finder / 资源管理器 / 微信）文件拖进文件树的纯函数（dev-board#363）。
 // 零依赖，便于 node --test 直接导入；单测见 tests/project-home/file-tree-external-drop.test.mjs。
 //
+// 只剩「识别这是不是一次外部文件拖拽」与「同一个原生事件只认领一次」两件事：
+// 落点定了之后走的是 import-local（顶层条目的本机绝对路径直接交给后端，目录由后端
+// 递归展开），前端不再用 webkitGetAsEntry 展开目录、也不再整理上传队列（dev-board#513）。
+//
 // 地雷：uni-h5 把 <view> 上的事件重建成普通对象（$nne → createNativeEvent），只补
 // click / mouse / touch 三类字段，drag 系事件的 dataTransfer / relatedTarget 全丢。
 // 要读它们必须回到正在派发的原生事件 window.event 上（同 fileOpenTabs.js 的 mouseButtonOf）。
@@ -36,59 +40,4 @@ export function claimExternalDrop(native) {
   if (native.__awdExternalDropClaimed) return false
   try { native.__awdExternalDropClaimed = true } catch (e) { /* ignore */ }
   return true
-}
-
-function toUploadItem(file, relativePath) {
-  return {
-    name: file.name,
-    size: file.size || 0,
-    fileObject: file,
-    relativePath: relativePath || file.name,
-  }
-}
-
-function walkEntry(entry, prefix, out) {
-  return new Promise((resolve) => {
-    if (!entry) return resolve()
-    if (entry.isFile) {
-      entry.file((f) => { out.push(toUploadItem(f, prefix + entry.name)); resolve() }, () => resolve())
-      return
-    }
-    if (entry.isDirectory && typeof entry.createReader === 'function') {
-      const reader = entry.createReader()
-      const dirPrefix = prefix + entry.name + '/'
-      // readEntries 每次最多回 100 条，读到空数组才算读完
-      const readBatch = () => {
-        reader.readEntries(async (batch) => {
-          if (!batch || batch.length === 0) return resolve()
-          for (const child of batch) await walkEntry(child, dirPrefix, out)
-          readBatch()
-        }, () => resolve())
-      }
-      readBatch()
-      return
-    }
-    resolve()
-  })
-}
-
-// 把 dataTransfer 整理成 confirmUpload 吃的形状 [{ name, size, fileObject, relativePath }]。
-// 目录经 webkitGetAsEntry 递归展开，relativePath 带目录前缀（confirmUpload 据此建目录）。
-// webkitGetAsEntry 与 files 必须在 drop 事件同步阶段取——事件处理器一返回 items 就作废，
-// 所以两份快照都在第一个 await 之前拿好。
-export function collectDroppedFiles(dt) {
-  if (!dt) return Promise.resolve([])
-  const plainFiles = Array.from(dt.files || [])
-  const items = dt.items ? Array.from(dt.items) : []
-  const entries = items.map((it) => (
-    it && it.kind === 'file' && typeof it.webkitGetAsEntry === 'function' ? it.webkitGetAsEntry() : null
-  ))
-  if (entries.some(Boolean)) {
-    const out = []
-    return (async () => {
-      for (const entry of entries) await walkEntry(entry, '', out)
-      return out
-    })()
-  }
-  return Promise.resolve(plainFiles.map((f) => toUploadItem(f, f.name)))
 }

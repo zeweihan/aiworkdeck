@@ -104,8 +104,9 @@ class ProjectFileServiceImportLocalTest {
         assertArrayEquals(bytes, Files.readAllBytes(copied));
     }
 
+    /** 单文件入口仍然只收普通文件——目录走 {@link ProjectFileService#importLocalPath}。 */
     @Test
-    void rejectsDirectory(@TempDir Path srcDir) throws Exception {
+    void singleFileEntryPointStillRejectsDirectory(@TempDir Path srcDir) throws Exception {
         Path dir = srcDir.resolve("一整个文件夹");
         Files.createDirectories(dir);
         assertThrows(IllegalArgumentException.class,
@@ -140,5 +141,130 @@ class ProjectFileServiceImportLocalTest {
         assertThrows(IllegalArgumentException.class,
                 () -> svc.importLocalFile(projectId, null, source.toAbsolutePath().toString(), 1L));
         assertEquals("v1", Files.readString(projectRoot.resolve("合同.docx")), "原件不许被盖掉");
+    }
+
+    // ---- 目录导入（拖整个文件夹进资源管理器） ----
+
+    @Test
+    void importsNestedDirectoryTree(@TempDir Path srcDir) throws Exception {
+        Path root = srcDir.resolve("卷宗");
+        Path sub = root.resolve("证据");
+        Files.createDirectories(sub);
+        byte[] topBytes = "TOP".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] subBytes = "SUB-证据".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        Files.write(root.resolve("起诉状.docx"), topBytes);
+        Files.write(sub.resolve("合同.pdf"), subBytes);
+
+        ProjectFileService.ImportLocalResult result =
+                svc.importLocalPath(projectId, null, root.toAbsolutePath().toString(), 1L);
+
+        assertTrue(Boolean.TRUE.equals(result.getRoot().getIsFolder()), "顶层返回的是文件夹行");
+        assertEquals("卷宗", result.getRoot().getName());
+        assertEquals(2, result.getImportedFiles().size());
+        assertEquals(0, result.getSkippedCount());
+
+        ProjectFile subFolder = projectFileRepository.findByProjectId(projectId).stream()
+                .filter(f -> Boolean.TRUE.equals(f.getIsFolder()) && "证据".equals(f.getName()))
+                .findFirst().orElseThrow();
+        assertEquals(result.getRoot().getId(), subFolder.getParentId());
+
+        assertArrayEquals(topBytes, Files.readAllBytes(projectRoot.resolve("卷宗/起诉状.docx")));
+        assertArrayEquals(subBytes, Files.readAllBytes(projectRoot.resolve("卷宗/证据/合同.pdf")));
+        assertEquals("projects/" + projectId + "/卷宗/证据/合同.pdf",
+                result.getImportedFiles().stream()
+                        .filter(f -> "合同.pdf".equals(f.getName())).findFirst().orElseThrow().getFilePath());
+    }
+
+    @Test
+    void emptyDirectoryImportsAsEmptyFolder(@TempDir Path srcDir) throws Exception {
+        Path root = srcDir.resolve("空文件夹");
+        Files.createDirectories(root);
+
+        ProjectFileService.ImportLocalResult result =
+                svc.importLocalPath(projectId, null, root.toAbsolutePath().toString(), 1L);
+
+        assertTrue(Boolean.TRUE.equals(result.getRoot().getIsFolder()));
+        assertEquals(0, result.getImportedFiles().size());
+        assertEquals(0, result.getSkippedCount());
+        assertEquals(1, projectFileRepository.findByProjectId(projectId).size());
+    }
+
+    /** 顶层同名与单文件同名一条规则：报错，不改名不覆盖，一个字节都不复制。 */
+    @Test
+    void duplicateTopLevelFolderNameFailsAndCopiesNothing(@TempDir Path srcDir) throws Exception {
+        svc.createFolder(projectId, null, "卷宗", 1L);
+        Path root = srcDir.resolve("卷宗");
+        Files.createDirectories(root);
+        Files.writeString(root.resolve("起诉状.docx"), "v1");
+
+        assertThrows(IllegalArgumentException.class,
+                () -> svc.importLocalPath(projectId, null, root.toAbsolutePath().toString(), 1L));
+
+        assertEquals(1, projectFileRepository.findByProjectId(projectId).size(), "只剩那个先建的文件夹行");
+        assertFalse(Files.exists(projectRoot.resolve("卷宗/起诉状.docx")), "不许复制任何字节");
+    }
+
+    @Test
+    void skipsSymlinkInsideTree(@TempDir Path srcDir) throws Exception {
+        Path root = srcDir.resolve("卷宗");
+        Files.createDirectories(root);
+        Path real = srcDir.resolve("外部机密.txt");
+        Files.writeString(real, "SECRET");
+        Files.writeString(root.resolve("正常.txt"), "OK");
+        Files.createSymbolicLink(root.resolve("链接.txt"), real);
+
+        ProjectFileService.ImportLocalResult result =
+                svc.importLocalPath(projectId, null, root.toAbsolutePath().toString(), 1L);
+
+        assertEquals(1, result.getImportedFiles().size());
+        assertEquals(1, result.getSkippedCount());
+        assertFalse(Files.exists(projectRoot.resolve("卷宗/链接.txt")), "符号链接不许被跟随复制进来");
+        assertTrue(Files.exists(projectRoot.resolve("卷宗/正常.txt")));
+    }
+
+    /** .awd/.git 是项目自己的元数据目录，与磁盘扫描（LocalProjectService）同一条跳过规则。 */
+    @Test
+    void skipsMetadataDirectories(@TempDir Path srcDir) throws Exception {
+        Path root = srcDir.resolve("卷宗");
+        Files.createDirectories(root.resolve(".git"));
+        Files.createDirectories(root.resolve(".awd"));
+        Files.writeString(root.resolve(".git/HEAD"), "ref: x");
+        Files.writeString(root.resolve(".awd/tree.json"), "{}");
+        Files.writeString(root.resolve("正常.txt"), "OK");
+
+        ProjectFileService.ImportLocalResult result =
+                svc.importLocalPath(projectId, null, root.toAbsolutePath().toString(), 1L);
+
+        assertEquals(1, result.getImportedFiles().size());
+        assertFalse(Files.exists(projectRoot.resolve("卷宗/.git")));
+        assertFalse(Files.exists(projectRoot.resolve("卷宗/.awd")));
+    }
+
+    /** 额度按整棵树的总字节先算再拦：拦住时一个文件都不许落盘。 */
+    @Test
+    void quotaExceededRejectsBeforeCopying(@TempDir Path srcDir) throws Exception {
+        ProjectFile huge = new ProjectFile();
+        huge.setProjectId(projectId);
+        huge.setParentId(null);
+        huge.setIsFolder(false);
+        huge.setName("既有大文件.bin");
+        huge.setFileSize(20L * 1024 * 1024 * 1024 - 1);
+        huge.setIsDeleted(false);
+        huge.setSortOrder(0);
+        huge.setUserId(1L);
+        huge.setCreatedAt(java.time.LocalDateTime.now());
+        huge.setUpdatedAt(java.time.LocalDateTime.now());
+        projectFileRepository.save(huge);
+
+        Path root = srcDir.resolve("卷宗");
+        Files.createDirectories(root);
+        Files.writeString(root.resolve("a.txt"), "AAAA");
+        Files.writeString(root.resolve("b.txt"), "BBBB");
+
+        assertThrows(IllegalArgumentException.class,
+                () -> svc.importLocalPath(projectId, null, root.toAbsolutePath().toString(), 1L));
+
+        assertEquals(1, projectFileRepository.findByProjectId(projectId).size(), "连顶层文件夹行都不该建");
+        assertFalse(Files.exists(projectRoot.resolve("卷宗")), "一个字节都不许落盘");
     }
 }

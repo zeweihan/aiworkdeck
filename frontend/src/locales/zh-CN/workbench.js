@@ -77,7 +77,6 @@ export default {
   newDoc: '新建文档',
   newFolder: '新建文件夹',
   batchSelect: '批量选择',
-  uploadFile: '上传文件',
   batchDownload: '批量下载',
   sort: '排序',
   batchCopy: '批量复制',

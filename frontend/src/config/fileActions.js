@@ -18,7 +18,6 @@ export const FILE_BATCH_CANCEL_LABEL = t('config.fileActions.cancel')
 export const FILE_TREE_QUICK_ACTIONS = [
   { key: 'newFile', label: t('config.fileActions.newFile'), title: t('config.fileActions.newFile'), iconPath: '/static/new-document_unselected.png', activeIconPath: '/static/new-document.png' },
   { key: 'newFolder', label: t('config.fileActions.newFolder'), title: t('config.fileActions.newFolder'), iconPath: '/static/icon_new_folder_unselected.png', activeIconPath: '/static/icon_new_folder.png' },
-  { key: 'upload', label: t('config.fileActions.uploadFile'), title: t('config.fileActions.uploadFile'), iconPath: '/static/upload_unselected.png', activeIconPath: '/static/upload.png' },
   { key: 'sort', label: t('config.fileActions.sort'), title: t('config.fileActions.sort'), iconPath: '/static/sort_unselected.png', activeIconPath: '/static/sort.png' },
 ]
 
