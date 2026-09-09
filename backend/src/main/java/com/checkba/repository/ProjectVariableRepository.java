@@ -12,6 +12,8 @@ import java.util.Optional;
 
 @Repository
 public interface ProjectVariableRepository extends JpaRepository<ProjectVariable, Long> {
+    List<ProjectVariable> findTop500ByProjectIdOrderByUpdatedAtDescIdDesc(Long projectId);
+
     List<ProjectVariable> findByProjectId(Long projectId);
     Optional<ProjectVariable> findByProjectIdAndName(Long projectId, String name);
 }

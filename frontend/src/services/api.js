@@ -2090,6 +2090,26 @@ export function refreshDocInsightEntity(projectId, entityId) {
   return request({ url: `/api/projects/${projectId}/insight/entities/${entityId}/refresh`, method: 'POST' })
 }
 
+// Local writing vocabulary. Only lookupWritingSelection performs external retrieval.
+export function listWritingCompletions(projectId) {
+  return request({ url: `/api/projects/${projectId}/completion`, method: 'GET' })
+}
+export function getWritingCompletionDetail(projectId, id) {
+  return request({ url: `/api/projects/${projectId}/completion/entries/${encodeURIComponent(id)}`, method: 'GET' })
+}
+export function learnWritingCompletions(projectId, data) {
+  return request({ url: `/api/projects/${projectId}/completion/learn`, method: 'POST', data })
+}
+export function deleteWritingCompletion(projectId, id) {
+  return request({ url: `/api/projects/${projectId}/completion/entries/${encodeURIComponent(id)}`, method: 'DELETE' })
+}
+export function clearWritingCompletions(projectId, scope) {
+  return request({ url: `/api/projects/${projectId}/completion/learned?scope=${encodeURIComponent(scope)}`, method: 'DELETE' })
+}
+export function lookupWritingSelection(projectId, data) {
+  return request({ url: `/api/projects/${projectId}/completion/lookup`, method: 'POST', data, timeout: 90000 })
+}
+
 export function deleteFavorite(favoriteId) {
   return request({
     url: `/api/favorites/${favoriteId}`,

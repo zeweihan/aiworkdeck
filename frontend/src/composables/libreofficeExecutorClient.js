@@ -28,6 +28,8 @@ export const EDITOR_ACTIONS = [
   // (select_paragraph/collapse_selection), edit (delete_selection), format
   // (format_selection/set_paragraph_format), recover (undo/redo).
   'get_document_text', 'get_cursor_context', 'get_clauses', 'select_paragraph', 'collapse_selection',
+  // 人工补全：内存快照校验后同步接受，不使用 AI 编辑通道。
+  'get_completion_context', 'accept_completion', 'insert_completion_content',
   'delete_selection', 'format_selection', 'set_paragraph_format', 'undo', 'redo',
   // [spike/IME] implemented by the worker since Phase B but never whitelisted
   // (found by the primitive self-test: "Unknown action: move_cursor").

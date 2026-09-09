@@ -450,6 +450,8 @@ stash 误 pop 之类）之后，5174 上的页面可能变成**整页无样式**
 
 ## 验证（改本领域自身时）
 
+- 写作辅助（dev-board#538）：CI 跑 `frontend npm run test:completion`（本地提取/排序、资料转换、宿主范围与客体交互）；`test:lowa-completion` 与 `test:writing-ui` 需真实 LOWA 载荷，覆盖位置令牌、中文输入、明确查询预览、资料插入与撤销。第三方响应使用测试资料，不在回归中自动消费查询额度。
+
 - 改 workflow：推 PR 触发 windows 矩阵先验；mac 变更合并后用手动 workflow_dispatch 验证。
 - 改构建脚本：本地跑对应脚本 + desktop `npm test`（pysvc-runtime 有覆盖）。
 

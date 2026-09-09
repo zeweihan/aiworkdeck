@@ -367,7 +367,7 @@ const META = 4, SHIFT = 8, ALT = 1
 const browser = await launchBrowser(puppeteer)
 try {
   const page = await openEditor(browser)
-  await page.evaluate(() => { window.__overlayInput = document.querySelector('input[aria-hidden]') })
+  await page.evaluate(() => { window.__overlayInput = document.querySelector('input[data-lo-ime]') })
 
   const cdp = await page.createCDPSession()
   const key = async (k, code, vk, modifiers = 0) => {

@@ -38,6 +38,14 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - `frontend/src/components/LibreOfficeEditor.vue` — 单文档编辑器组件：webview 创建、prefetch、load/export、autoSave、flushSave、reloadFromBackend。支持**备胎过继**（watch file 仅 null→文档；引擎已就绪走 finishDocLoad，未就绪由 onEndpointReady 接手）与**只读预览接力**（字节预取完成即 docx-preview 本地渲染，previewReady 后 overlay 变成可滚动阅读 + 顶部细进度条，ready 后整体消失）。
 - `frontend/src/pages/project-overview/librePool.js` — 保活池方法组（Phase 1 外置）：libreLruKeys/touchLibreLru/evictLibreInstance、syncLibreExecutor 活跃指针、`_libreRefs`/`_libreExecMap` 非响应式注册表、reloadActiveLibreInstances（版本退回/检查点恢复后就地重载）。**按文档体积计权**（尽调模块 P3 稳定性余项 #2，dev-board#100，取代旧的固定 `LIBRE_KEEPALIVE_MAX = 3`）：`LIBRE_SIZE_UNIT_BYTES`=2MB 是 1 个权重单位，`LIBRE_WEIGHT_BUDGET`=6 是总权重上限，`libreInstanceWeight(fileSize)` = `max(1, ceil(fileSize / 2MB))`（体积未知按最小权重 1，退化成旧的按数量语义）。`touchLibreLru(pane, fileId, fileSize)` 新增第三参——刚激活那份的体积由调用方 `onActiveOfficeFileChanged` 直接传入，池里其它 key 的体积经 `libreWeightOf(key)` 从 `_libreRefs` 已挂载实例的 `file.fileSize` 反查（未挂载按权重 1）；从最近使用往回累计权重，一旦超预算，该 key 起（含自身）全部是淘汰候选，交给 `evictLibreInstance` 逐个判活动文件保护再淘汰。150 页/6.6MB 级文档权重=4，两份即超预算，避免旧版"三个大文档同时驻留吃到约 2.4GB"（实测基线）；普通几百 KB 文档权重恒为 1，同时保活数量不降反升（旧固定 3 → 最多可到 6）。活动文件保护不变：`evictLibreInstance` 对 `left:activeFileIdLeft`/`right:activeFileIdRight` 一律跳过，与体积无关。**预热备胎**（PR#220）：libreSpares（{key, file}，file=null 是后台预 boot 的空白隐藏实例），onActiveOfficeFileChanged 里 maybeAdoptLibreSpare（须在 touchLibreLru 之前，靠"不在 lru 记账"识别无实例）过继给池外首开文档，过继后按 'left:fileId' 常规记账；补胎在过继 ready 后（scheduleLibreSpare，4s 延迟）。仅左窗格设备胎（webview 不能跨容器移动）；h5 无 checkbaDesktop 不建胎；常驻多一个空白实例内存（数百 MB）。
 
+## 本地写作辅助（dev-board#538）
+
+- `zetaOfficeCompletion.js` 是客体 DOM 菜单，`writingAssistanceHost.js` 是项目/用户词库与 API 宿主；`editor-main.js` / IME overlay 只提供接线。Writer 就绪且可写时启用，换文档、重载、卸载销毁 session；中文组合输入优先，方向键/Tab 只在候选展开时接管，Enter 保留换段。
+- 本地候选覆盖机构、人名、法规、条款、案例/案号、常用词及表述。`completionLexicon.js` 负责确定性提取和前缀匹配；打开文档仅采集有界实体到项目词库，个人词库只从本人输入/采用学习，低频词与表述不立即出候选。用户级开关同步当前各文档，可删除/清空学习项。
+- 打字只读客体内存，不调用外部库或模型。选中正文右键明确查询才走 `/completion/lookup`；资料由 `completionDetails.js` 转成带来源的预览，点击插入才修改正文。
+- UNO 三动作 `get_completion_context` / `accept_completion` / `insert_completion_content` 以不透明 token 校验模型、光标/选区两端及上下文；补全只追加后缀，表格/纯文本原样插入，整组一次撤销。真实修改使 token 失效，只读导出期间保留 snapshot（含恢复 modified 标志），不能因自动保存误拒插入，也不能放宽位置校验。行内修订视图停用。
+- 回归：`npm run test:completion`、`test:lowa-completion`、`test:writing-ui`、`test:writing-desktop`；引擎测试包含移动/输入/重载拒旧 token、跨导出仍可插入、撤销/重做及资料表格。桌面用例从真实项目词库经中文输入/Tab 到自动保存后下载 DOCX 核对，夹具文件隔离在临时目录。
+
 ## 保存失败与关闭（实测清单 A6/C10）
 
 - `LibreOfficeEditor.uploadBytes` 的 XHR 必须有 60s 超时与中止终态；导出沿用三层 180s 预算。

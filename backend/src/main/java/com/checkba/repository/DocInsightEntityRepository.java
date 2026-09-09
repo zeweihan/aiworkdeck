@@ -10,6 +10,8 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 public interface DocInsightEntityRepository extends JpaRepository<DocInsightEntity, Long> {
+    List<DocInsightEntity> findTop200ByProjectIdOrderByIdDesc(Long projectId);
+
 
     List<DocInsightEntity> findByRunIdOrderByIdAsc(Long runId);
 

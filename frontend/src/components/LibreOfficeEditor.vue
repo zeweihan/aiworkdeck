@@ -154,6 +154,8 @@ import { DOC_MUTATED_EVENT } from '@/utils/docEvents.js'
 import { getResolvedTheme, APP_THEME_EVENT } from '@/utils/appTheme.js'
 import { stampApplication } from '@/utils/docxAppProps.js'
 import { documentStampApplication } from '@/utils/documentGeneratorSetting.js'
+import { createWritingAssistanceHost } from '@/composables/writingAssistanceHost.js'
+import { listWritingCompletions, learnWritingCompletions, deleteWritingCompletion, clearWritingCompletions, lookupWritingSelection, getDocInsightEntity, getWritingCompletionDetail } from '@/services/api.js'
 import { guestPointToHost } from '@/utils/insightPopup.js'
 
 let seq = 0
@@ -314,7 +316,8 @@ export default {
     ready(v) { this.$emit('menu-state'); if (v) { this.consumeLocator(); this.pushInsightSub(); this.pushTheme() } },
     // 「依据」窗格开合 → 客体页的光标上报订阅（dev-board#182）
     insightSubscribed() { this.pushInsightSub() },
-    docKind() { this.$emit('menu-state') },
+    docKind() { this.$emit('menu-state'); this.initWritingAssistance() },
+    canWrite() { this.initWritingAssistance() },
     // 宿主 openFile(file, {locator}) 把定位符挂在 tab 对象上；已打开的标签再次被
     // 链接点中时是原地换对象，靠这个路径 watch 触发。
     'file.pendingLocator'(loc) { if (loc) this.consumeLocator() },
@@ -355,6 +358,7 @@ export default {
     }
   },
   beforeUnmount() {
+    if (this._writingHost) { this._writingHost.destroy(); this._writingHost = null }
     uni.$off('file-drag-start', this._onEvidenceDragStart)
     uni.$off('file-drag-end', this._onEvidenceDragEnd)
     if (this._onThemeChanged) { uni.$off(APP_THEME_EVENT, this._onThemeChanged); this._onThemeChanged = null }
@@ -609,6 +613,7 @@ export default {
     // 引擎重启：拆掉 boot 失败的那个 webview/iframe，重新走一遍 mounted 里的
     // 建元素流程。文档字节的预取结果仍然有效（失败的是引擎不是下载），留着。
     async remountEditor() {
+      if (this._writingHost) { this._writingHost.destroy(); this._writingHost = null }
       this.appendLog('用户点击重试（重启引擎）/ retry requested (engine remount)')
       try { if (this._eventUnsub) this._eventUnsub() } catch (e) { /* ignore */ }
       this._eventUnsub = null
@@ -747,7 +752,9 @@ export default {
     subscribeHostEvents(transport) {
       this._eventUnsub = transport.subscribe((msg) => {
         if (!msg || msg.__lo !== 'lo-relay') return
-        if (msg.type === 'open-url' && msg.url) {
+        if (msg.type === 'writing-request') {
+          if (this._writingHost) this._writingHost.handle(msg)
+        } else if (msg.type === 'open-url' && msg.url) {
           this.$emit('open-url', String(msg.url))
         } else if (msg.type === 'modified') {
           this.onDocModified()
@@ -830,6 +837,7 @@ export default {
       if (result && result.success) {
         this.docLoadFailed = false
         this.statusKey = 'ready'
+        this.initWritingAssistance()
         this.appendLog('迟到的 load_document 结果实际成功，撤回失败态 / late load_document result arrived successful, reverting loadFailed')
       }
     },
@@ -897,6 +905,7 @@ export default {
     // 装载 + 发布就绪。两个入口：onEndpointReady（常规：mount 时就有 file，或
     // 备胎空白 boot 完成），以及 file watcher（备胎在引擎就绪后被过继）。
     async finishDocLoad() {
+      if (this._writingHost) { this._writingHost.destroy(); this._writingHost = null }
       // 重入闸：卡住 30s 露出的「重试」按钮会在原来那次装载**仍在途**时（弱网/挂起
       // 代理下 XHR 的 60s 超时还没到）再起一条链路，两条各自 dispatch 一次
       // load_document，且后完成的那条按最后写者赢覆盖 ready/statusKey/docKind——
@@ -957,12 +966,26 @@ export default {
       // EvidenceLink 首轮：拉缓存 → 旧式链接收编书签（仅 writer）→ 核对锚点。
       // 不 await：核对是后台事，不能拖住 ready 之后的任何链路。
       this.initEvidence()
+      this.initWritingAssistance()
       // 装载期间后端把这份文件改掉了（版本退回 / 检查点恢复），刚装进来的是
       // 预取到的旧字节——不 await，让宿主先拿到 ready 再补一次真重载。
       if (this._reloadPending) {
         this._reloadPending = false
         this.reloadFromBackend()
       }
+    },
+    initWritingAssistance() {
+      if (this._writingHost) { this._writingHost.destroy(); this._writingHost = null }
+      if (!this.ready || this._reloading || this.docLoadFailed || this.docKind !== 'writer' || !this.file?.id || !this.projectId || !this._transportSend) return
+      this._writingHost = createWritingAssistanceHost({
+        projectId: Number(this.projectId), fileId: this.file.id, userId: (getCurrentUser() || {}).id || 'local',
+        execute: (action, params) => this.executor.executeCommand(action, params), send: this._transportSend,
+        writable: this.canWrite,
+        storage: { get: (key) => uni.getStorageSync(key), set: (key, value) => uni.setStorageSync(key, value) },
+        api: { list: listWritingCompletions, learn: learnWritingCompletions, remove: deleteWritingCompletion,
+          clear: clearWritingCompletions, lookup: lookupWritingSelection, detail: getDocInsightEntity, learnedDetail: getWritingCompletionDetail },
+      })
+      this._writingHost.start()
     },
     // Kick off the (authed) document download without waiting for the engine.
     // loadDocument() awaits this promise; on failure it falls back to a fresh
@@ -1103,6 +1126,7 @@ export default {
       // saveDocument 在 upload 前直接放弃。重载语义本来就是丢弃编辑器里的本地改动
       // （后端内容是权威），丢掉这一笔是语义本身，不是数据损失。
       this._reloading = true
+      if (this._writingHost) { this._writingHost.destroy(); this._writingHost = null }
       const cancelAutoSave = () => {
         clearTimeout(this._saveTimer)
         this._saveTimer = null
@@ -1140,6 +1164,7 @@ export default {
         return false
       } finally {
         this._reloading = false
+        this.initWritingAssistance()
         // 换进来的是另一个版本的文档，锚点要重新结账
         this.scheduleAnchorCheck()
       }
@@ -1299,10 +1324,12 @@ export default {
     // 保活池里同时挂着好几个编辑器实例，别的实例跟着重读纯属浪费 office 线程。
     // 面板是 v-if，没开就没有要刷的东西。
     onDocMutatedEvent(payload) {
-      if (!this.reviewOpen || !this.file) return
+      if (!this.file) return
       const fid = payload && payload.fileId
       if (fid != null && String(fid) !== String(this.file.id)) return
-      this.reviewRefreshKey++
+      // 这里只接 AI 写入完成通知，不接人工补全的 modified，避免关闭它自己的资料提示。
+      if (this._transportSend) this._transportSend({ __lo: 'lo-relay', type: 'writing-invalidate' })
+      if (this.reviewOpen) this.reviewRefreshKey++
     },
     onDocModified() {
       // docLoadFailed：画布上是空白 boot 文档，标脏会引发空文档覆盖真文件

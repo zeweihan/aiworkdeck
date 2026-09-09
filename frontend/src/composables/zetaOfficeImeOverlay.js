@@ -128,7 +128,7 @@ export function cursorRectToPixels(raw, offset) {
  * @param {(msg:string)=>void} [options.onLog] optional progress/diagnostic log.
  * @returns {{element, focus, reposition, computeRect, destroy}}
  */
-export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCommand, onCursorMoved, onLog } = {}) {
+export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCommand, onCursorMoved, onCommitted, onAssistanceKey, onLog } = {}) {
   if (!canvas) throw new Error('attachImeOverlay: canvas is required')
   if (typeof commit !== 'function') throw new Error('attachImeOverlay: commit(text) is required')
   const log = (m) => { if (onLog) onLog(m) }
@@ -141,6 +141,7 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
 
   const input = document.createElement('input')
   input.setAttribute('autocomplete', 'off')
+  input.setAttribute('data-lo-ime', '')
   input.setAttribute('aria-hidden', 'true')
   Object.assign(input.style, {
     position: 'absolute', top: '0', left: '0',
@@ -285,7 +286,7 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     input.value = ''
     if (!t) return
     log('IME 覆盖层 → 上屏「' + t + '」')
-    try { Promise.resolve(commit(t)).catch((e) => log('overlay commit error: ' + (e && e.message || e))) }
+    try { Promise.resolve(commit(t)).then((result) => { if (result?.success !== false && typeof onCommitted === 'function') onCommitted(t) }).catch((e) => log('overlay commit error: ' + (e && e.message || e))) }
     catch (e) { log('overlay commit error: ' + (e && e.message || e)) }
   }
   input.addEventListener('compositionstart', () => { composing = true })
@@ -348,7 +349,8 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
   // onEnter; Backspace/arrows route through sendCommand (skipped if not supplied,
   // letting them fall through to the harmless empty input).
   input.addEventListener('keydown', (e) => {
-    if (composing || e.isComposing) return
+    if (composing || e.isComposing || e.keyCode === 229) return
+    if (typeof onAssistanceKey === 'function' && onAssistanceKey(e)) return
     if (e.key === 'Enter') {
       e.preventDefault()
       // Shift+Enter = soft line break (same paragraph), like the desktop app.

@@ -18,6 +18,7 @@
 
 import { startEditorEndpoint } from '../composables/zetaOfficeEditorEndpoint.js'
 import { attachImeOverlay } from '../composables/zetaOfficeImeOverlay.js'
+import { attachWritingAssistance } from '../composables/zetaOfficeCompletion.js'
 // 光标邻域半径的单一出处：宿主侧 matchEntityAt 用同一个默认值做窗口截取，
 // 两边不一致会让「实体名明明就在光标上却匹配不到」（纯数据模块，不带 Vue/uni）。
 import { CURSOR_RADIUS } from '../utils/insightMatch.js'
@@ -392,6 +393,7 @@ startEditorEndpoint({
   // via the same verified path as agent commands. Attached in BOTH webview and
   // verify modes — local typing is a real-user need, not just a verification one.
   let overlay = null
+  let writingAssistance = null
   try {
     overlay = attachImeOverlay({
       canvas: document.getElementById('qtcanvas'),
@@ -405,8 +407,16 @@ startEditorEndpoint({
       sendCommand: (action, params) => endpoint.executor.executeCommand(action, params),
       // 覆盖层每做完一个移动光标的动作就报一声，宿主据此刷新工具栏激活态
       onCursorMoved: relaySelection,
+      onCommitted: (text) => writingAssistance?.committed(text),
+      onAssistanceKey: (event) => writingAssistance?.keydown(event) || false,
       onLog: (m) => { console.log('[zeta-editor]', m); if (VERIFY) vlog(m) },
     })
+    writingAssistance = attachWritingAssistance({
+      canvas: document.getElementById('qtcanvas'), input: overlay.element,
+      execute: (action, params) => endpoint.executor.executeCommand(action, params),
+      transport: hostTransport, focus: overlay.focus, language: q.get('uilang') || 'zh-CN',
+    })
+    window.addEventListener('pagehide', () => writingAssistance.destroy(), { once: true })
   } catch (e) { console.error('[zeta-editor] IME overlay failed:', e); if (VERIFY) vlog('IME overlay failed: ' + (e && e.message || e)) }
   // 触控板捏合缩放。Chromium 把捏合报成 ctrlKey + wheel；**不拦下来**浏览器就去
   // 缩放整个 webview 页面——LO 自己的工具栏跟着一起放大、画布重采样发糊，而且

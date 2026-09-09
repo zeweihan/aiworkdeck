@@ -191,6 +191,42 @@ class DocInsightServiceTest {
         svc = newService();
     }
 
+    @Test
+    void selectedTextLookupRequiresWriteBeforeAnyUpstreamCall() {
+        when(members.hasWritePermission(PID, UID)).thenReturn(false);
+        assertThrows(IllegalArgumentException.class, () -> svc.lookupSelection(UID, PID, "COMPANY", "示例有限公司"));
+        verify(qichacha, never()).queryEciInfoJson(anyString());
+        verify(mcp, never()).callTool(anyString(), anyString(), anyMap());
+        verify(entityRepo, never()).save(any());
+    }
+
+    @Test
+    void selectedTextLookupDoesNotLearnOrCreateParseRunAndCarriesPlatformUser() throws Exception {
+        when(qichacha.queryEciInfoJson("示例有限公司")).thenAnswer(inv -> {
+            assertEquals(UID, com.checkba.service.ai.PlatformAiUserScope.current());
+            return QCC_FULL;
+        });
+        EntityView result = svc.lookupSelection(UID, PID, "COMPANY", "示例有限公司");
+        assertNull(result.id());
+        assertEquals("OK", result.retrievalStatus());
+        assertNotNull(result.detail());
+        verify(runs, never()).save(any());
+        verify(entityRepo, never()).save(any());
+        verify(model, never()).generate(anyList());
+    }
+
+    @Test
+    void selectedTextLookupRejectsUnsupportedKindsAndInvalidText() {
+        for (String kind : List.of("PERSON", "ARTICLE", "WORD", "PHRASE", "UNKNOWN")) {
+            assertThrows(IllegalArgumentException.class, () -> svc.lookupSelection(UID, PID, kind, "测试文字"));
+        }
+        for (String text : List.of("字", "字".repeat(161), "第一行\n第二行")) {
+            assertThrows(IllegalArgumentException.class, () -> svc.lookupSelection(UID, PID, "COMPANY", text));
+        }
+        verify(qichacha, never()).queryEciInfoJson(anyString());
+        verify(mcp, never()).callTool(anyString(), anyString(), anyMap());
+    }
+
     /** 带 tokenUsage 的回包——不带的话记账那条断言永远是空的（真实通道一定会回 usage）。 */
     private static Response<AiMessage> modelReply(String text) {
         return Response.from(AiMessage.from(text), new dev.langchain4j.model.output.TokenUsage(120, 80));
