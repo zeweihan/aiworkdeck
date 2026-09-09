@@ -95,34 +95,20 @@ test('desktop-build.yml：镜像同步必须排在 release 之后（它是从 Gi
     'sync-mirror 必须 needs: release，否则会和发布并行、拉不到 Release 资产')
 })
 
-// dev-board#74 稳定性审计：pysvc 缓存的 key 只由 requirements.lock 与打包脚本
-// 组成，唯独漏了各服务自己的源码（prepare-python-service.js 的 --src 会把它
-// cpSync 进被缓存的 pysvc/ 目录）。只改 pptx-service/backend、kokoro-service、
-// asr-service 的源码而不动 lock 时 key 不变，缓存命中就把「Bundle X-service」
-// 整步跳过，装机包里带的还是上一次构建的旧源码——构建全绿、冒烟也过（跑的是
-// 旧代码），tag 构建会把缺了刚合并那笔改动的安装包发出去且毫无告警。
-test('desktop-build.yml：pysvc 缓存 key 必须覆盖各服务源码，否则改源码会命中旧缓存发出旧代码', () => {
-  const doc = loadWorkflow('desktop-build.yml')
-  const steps = doc.jobs.build.steps
-  const cacheSteps = steps.filter((s) =>
-    typeof s.uses === 'string' && s.uses.startsWith('actions/cache@') &&
-    String((s.with && s.with.path) || '').includes('/pysvc'))
-  assert.ok(cacheSteps.length > 0, '应该存在缓存 pysvc 目录的步骤（本用例的前提）')
-
-  for (const cache of cacheSteps) {
-    const key = String(cache.with.key)
-    // 被这条缓存的 cache-hit 门控、且带 --src（有自有源码）的打包步骤
-    const gated = steps.filter((s) =>
-      String(s.if || '').includes(`steps.${cache.id}.outputs.cache-hit`) &&
-      /--src\s/.test(String(s.run || '')))
-    assert.ok(gated.length > 0, `${cache.id} 应该门控着若干带 --src 的打包步骤（本用例的前提）`)
-    for (const s of gated) {
-      const src = String(s.run).match(/--src\s+(\S+)/)[1]
-      assert.ok(key.includes(`'${src}/**'`),
-        `缓存 ${cache.id} 的 key 没覆盖 ${src}：只改这个服务的源码 key 不变，` +
-        `缓存命中会把打包步骤整步跳过，装机包里还是旧源码。key=${key}`)
-    }
+// 0.38.0 起四个 Python 服务改走 native pack（设计 §3）：安装包链路里不再装 pip
+// 依赖、不再打 pysvc.tar.gz。dev-board#74 那条「缓存 key 必须覆盖各服务源码」的
+// 门禁随之作废——被它守着的步骤已经整体不在这条 workflow 里了。
+test('desktop-build.yml：安装包链路里不再有任何 pysvc 痕迹（四个服务改走 native pack）', () => {
+  const yml = fs.readFileSync(path.join(workflowsDir, 'desktop-build.yml'), 'utf8')
+  for (const sym of ['pysvc', 'pack-pysvc.js']) {
+    assert.ok(!yml.includes(sym), `desktop-build.yml 仍引用 ${sym}`)
   }
+})
+
+test('desktop-build.yml：python 运行时仍随包（litviz 与 pack 里的服务共用它）', () => {
+  const yml = fs.readFileSync(path.join(workflowsDir, 'desktop-build.yml'), 'utf8')
+  assert.match(yml, /bundled\/mac-arm64\/python/)
+  assert.match(yml, /--runtime-only/, '运行时仍要由 prepare-python-service.js 烙进去')
 })
 
 // v0.23.0 发版实测：sync-mirror job 转红、官网下载页停在 0.22.0 直到人工介入。

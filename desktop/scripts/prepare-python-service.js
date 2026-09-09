@@ -12,6 +12,9 @@
  *     --requirements ../pptx-service/requirements.lock \
  *     --out bundled/mac-arm64
  *
+ * 只要解释器（安装包链路，0.38.0 起四个服务的 lib/app 走 native pack）：
+ *   node scripts/prepare-python-service.js --runtime-only 1 --out bundled/mac-arm64
+ *
  * 平台按构建宿主原生解析（mac 仅支持 Apple Silicon——2026-07-03 决策放弃 Intel Mac，
  * 因 onnxruntime/pikepdf 等依赖已停发 x86_64 wheel，交叉烙制不可持续）。
  * 共享运行时：同一 out 目录下多次调用只下载/解压一次 python/。
@@ -42,8 +45,10 @@ function parseArgs() {
       }
     }
   }
+  // --runtime-only：只烙 CPython 解释器，不装任何服务依赖，故不需要 service/requirements
+  const required = out['runtime-only'] ? ['out'] : ['service', 'requirements', 'out']
   // --src 可选：mineru 这类纯 pip 包服务没有自有源码，只烙依赖
-  for (const k of ['service', 'requirements', 'out']) {
+  for (const k of required) {
     if (!out[k]) {
       console.error(`missing --${k}`)
       process.exit(1)
@@ -204,6 +209,12 @@ function prune(libDir) {
 function main() {
   const args = parseArgs()
   const outDir = path.resolve(args.out)
+  // 只烙 CPython 运行时、不装任何服务依赖：安装包只需要解释器（litviz 与四个
+  // runtime pack 共用它），四个服务的 lib/app 由 pack-release.yml 打进各自的 native pack。
+  if (args['runtime-only']) {
+    console.log(`runtime: ${ensurePython(outDir)}`)
+    return
+  }
   const pyRoot = ensurePython(outDir)
   const svcDir = path.join(outDir, 'pysvc', args.service)
   const libDir = path.join(svcDir, 'lib')

@@ -4,7 +4,7 @@ const path = require('path')
 const fs = require('fs')
 const { spawn } = require('child_process')
 const { findFreePort } = require('./service-manager')
-const { pysvcPath } = require('./pysvc-runtime')
+const { resolveServiceRoot, libDirFor, appDirFor } = require('./pysvc-runtime')
 
 function pyBin(ctx) {
   return process.platform === 'win32'
@@ -13,11 +13,11 @@ function pyBin(ctx) {
 }
 
 function appDir(ctx) {
-  return pysvcPath(ctx, 'pptx-service', 'app')
+  return appDirFor(ctx, 'pptx-service')
 }
 
 function libDir(ctx) {
-  return pysvcPath(ctx, 'pptx-service', 'lib')
+  return libDirFor(ctx, 'pptx-service')
 }
 
 function dataDir(ctx) {
@@ -74,6 +74,9 @@ function createPptxDescriptor() {
     // Phase 1 有意 eager（轻量 Flask；lazy 机制随 Phase 2 mineru 落地，见设计文档 §2.1）
     eager: true,
     logName: 'pptx-service',
+    // 0.38.0 起 pptx 也是可选组件（设计 §3）：runtime pack 没装就不启动，
+    // AI 侧的 pptx_* 工具会发 component_required 引导下载，而不是报「稍后重试」。
+    enabled: (ctx) => !ctx.packaged || !!resolveServiceRoot(ctx, 'pptx-service'),
     // dev 态不 spawn（commands 返回空）：沿用现状——docker compose 起在 5001，复用检测直接 reuse
     port: async (ctx) => {
       if (process.env.CHECKBA_PPTX_PORT) return Number(process.env.CHECKBA_PPTX_PORT)

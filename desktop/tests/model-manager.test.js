@@ -120,3 +120,16 @@ test('remove clears installed state', async () => {
   assert.strictEqual(mm.isInstalled('mineru-models'), false)
   assert.strictEqual(mm.status().find((c) => c.id === 'mineru-models').state, 'absent')
 })
+
+test('runtime pack 未装时，模型下载当场失败并说清要先装哪个组件', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mm-nopack-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const mgr = createModelManager({
+    dataDir: path.join(root, '.aiworkdeck'),
+    resourcesPath: path.join(root, 'res'),
+    projectRoot: path.join(root, 'repo'),
+    packaged: true,
+    onProgress: () => {}
+  })
+  await assert.rejects(() => mgr.download('kokoro-models'), /kokoro-runtime/)
+})
