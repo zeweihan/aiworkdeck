@@ -65,7 +65,8 @@
     "test:md-table": "node --test tests/markdown-table/*.test.mjs",
     "test:ocr-overlay": "node --test tests/ocr-overlay/*.test.mjs",
     "test:capabilities": "node --test tests/capabilities/*.test.mjs",
-    "test:team": "node --test tests/team/*.test.mjs"
+    "test:team": "node --test tests/team/*.test.mjs",
+    "test:desensitize": "node --test tests/desensitize/*.test.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",
