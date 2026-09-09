@@ -19,6 +19,8 @@ export default {
     initFailed: 'Initialization failed',
     bootFailed: 'The document engine failed to start',
     loadFailed: 'Failed to load the document',
+    fileMissingFailed: 'The file is no longer on disk',
+    downloadFailed: 'Download failed — check your network',
     ready: 'Ready',
     reloading: 'Reloading…',
     reloadFailed: 'Reload failed; the content is out of date',

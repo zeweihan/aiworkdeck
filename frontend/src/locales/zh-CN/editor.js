@@ -19,6 +19,10 @@ export default {
     initFailed: '初始化失败',
     bootFailed: '文档引擎启动失败',
     loadFailed: '文档加载失败',
+    // 装载失败三分（dev-board#539）：404 = 文件已不在磁盘上（重试没有意义），
+    // 下载超时/网络错 = 检查网络后重试有意义，其余沿用 loadFailed。
+    fileMissingFailed: '文件已不在磁盘上',
+    downloadFailed: '下载失败，请检查网络',
     ready: '就绪',
     reloading: '重新加载中…',
     reloadFailed: '重新加载失败，内容已过期',
