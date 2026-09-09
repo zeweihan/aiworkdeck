@@ -1,18 +1,20 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Sparkles, FileText, FileEdit, ImagePlus, Paperclip, Palette, Lightbulb, Search, Settings, FolderOpen, HelpCircle, Sun, Moon, Globe, Monitor, ChevronDown } from 'lucide-react';
+import { Sparkles, FileText, FileEdit, ImagePlus, Paperclip, Palette, Lightbulb, Search, Settings, FolderOpen, HelpCircle, Sun, Moon, Globe, Monitor, ChevronDown, Upload, RefreshCw } from 'lucide-react';
 import { Button, Textarea, Card, useToast, MaterialGeneratorModal, MaterialCenterModal, ReferenceFileList, ReferenceFileSelector, FilePreviewModal, HelpModal, Footer, GithubRepoCard } from '@/components/shared';
 import { MarkdownTextarea, type MarkdownTextareaRef } from '@/components/shared/MarkdownTextarea';
 import { TemplateSelector, getTemplateFile } from '@/components/shared/TemplateSelector';
-import { listUserTemplates, type UserTemplate, uploadReferenceFile, type ReferenceFile, associateFileToProject, triggerFileParse, associateMaterialsToProject, listProjects } from '@/api/endpoints';
+import { listUserTemplates, type UserTemplate, uploadReferenceFile, type ReferenceFile, associateFileToProject, triggerFileParse, associateMaterialsToProject, createPptRenovationProject, extractStyleFromImage } from '@/api/endpoints';
 import { useProjectStore } from '@/store/useProjectStore';
 import { useTheme } from '@/hooks/useTheme';
 import { useImagePaste } from '@/hooks/useImagePaste';
 import { useT } from '@/hooks/useT';
 import { PRESET_STYLES } from '@/config/presetStyles';
+import { presetStylesI18n } from '@/config/presetStylesI18n';
+import { ASPECT_RATIO_OPTIONS } from '@/config/aspectRatio';
 
-type CreationType = 'idea' | 'outline' | 'description';
+type CreationType = 'idea' | 'outline' | 'description' | 'ppt_renovation';
 
 // 页面特有翻译 - AI 可以直接看到所有文案，保留原始 key 结构
 const homeI18n = {
@@ -25,40 +27,7 @@ const homeI18n = {
       language: { label: '界面语言' },
       theme: { label: '主题模式', light: '浅色', dark: '深色', system: '跟随系统' }
     },
-    presetStyles: {
-      businessSimple: {
-        name: '简约商务',
-        description: '视觉描述：全局视觉语言应体现国际顶级咨询公司（如麦肯锡或波士顿咨询）的专业与稳重。整体风格追求极致的扁平化与秩序感，拒绝多余的装饰，强调信息的清晰传达。光照环境应为均匀的演播室漫射光，无明显的戏剧性阴影，确保画面干净透亮。\n\n配色与材质：背景色必须锁定为深沉、权威的"海军蓝"（Navy Blue, #0B1F3B），前景元素则使用纯白（#FFFFFF）和微量的天蓝色（Sky Blue, #38BDF8）作为点缀；材质上避免复杂的纹理，采用哑光纸张质感或平滑的矢量色块。\n\n内容与排版：排版逻辑遵循严格的模块化网格系统。请生成清晰的几何分区，使用细线条或微弱的浅灰色色块（Light Gray, #E5E7EB）来划分内容区域。字体方面，应用粗壮有力的无衬线字体（如Helvetica或Roboto）作为标题，正文保持纤细清晰。图表元素应为扁平化的2D矢量图形，如简洁的柱状图或饼图，配色单一且克制。\n\n渲染要求：矢量插画风格，极高清晰度，无论是文字还是图形边缘都要锐利无锯齿，展现出严谨的商务美学，适合世界500强企业汇报场景。',
-      },
-      techModern: {
-        name: '现代科技',
-        description: '视觉描述：全局视觉语言要融合赛博朋克与现代SaaS产品的未来感。整体氛围神秘、深邃且富有动感，仿佛置身于高科技的数据中心或虚拟空间。光照采用暗调环境下的自发光效果，模拟霓虹灯管和激光的辉光。\n\n配色与材质：背景色采用深邃的"午夜黑"（Midnight Black, #0B0F19），以衬托前景的亮度。主色调使用高饱和度的"电光蓝"（Electric Blue, #00A3FF）与"赛博紫"（Cyber Purple, #7C3AED）进行线性渐变，营造出流动的能量感。材质上大量运用半透明的玻璃、发光的网格线以及带有金属光泽的几何体。\n\n内容与排版：画面中应包含悬浮的3D几何元素（如立方体、四面体或芯片结构），这些元素应带有线框渲染（Wireframe）效果。排版布局倾向于不对称的动态平衡，使用具有科技感的等宽字体或现代无衬线体。背景中可以隐约添加电路板纹理、二进制代码流或点阵地图作为装饰，增加细节密度。\n\n渲染要求：Octane Render渲染风格，强调光线追踪、辉光（Bloom）效果和景深控制，呈现出精细的粒子特效和充满科技张力的视觉冲击力。',
-      },
-      academicFormal: {
-        name: '严谨学术',
-        description: '视觉描述：全局视觉语言应模仿高质量印刷出版物或经典论文的排版风格，传达理性、客观和知识的厚重感。整体氛围安静、克制，没有任何干扰视线的炫光或过度设计。画面必须铺满全屏，严禁出现书本装订线、纸张边缘、卷角、阴影或任何形式的边框。背景不应该呈现三维立体，而应该以二维平面方式呈现。\n\n配色与材质：背景色严格限制为"米白色"（Off-white, #F8F7F2），模拟高级道林纸的质感。前景色仅使用纯黑（#000000）、深炭灰（Charcoal, #1F2937）和作为强调色的深红（Deep Red, #7F1D1D）或深蓝（Deep Blue, #1E3A8A）（这种强调色占比不超过5%）。材质完全呈现为高质量的纸质印刷效果，具有细腻的纸张纹理。\n\n内容与排版：排版必须遵循经典的版式设计原则，拥有宽阔的页边距。请使用带有衬线的字体（类似Times New Roman或Garamond）来体现传统与正式。视觉元素主要由精细的黑色线条框（Black, #000000）、标准的学术表格样式和黑白线稿插图（Black, #000000 / White, #FFFFFF）组成。布局上采用左右分栏或上下结构的严谨对齐方式。\n\n渲染要求：超高分辨率扫描件风格，强调字体的灰度抗锯齿效果和线条的锐度，画面如同精装学术期刊的内页，展现出绝对的专业性与权威性。不应该存在任何形式的页面边框，比如黑色边框或者阴影边线。',
-      },
-      creativeFun: {
-        name: '活泼创意',
-        description: '视觉描述：全局视觉语言要像一个充满活力的初创公司Pitch Deck或儿童教育应用界面。整体氛围轻松、愉悦、充满想象力，打破常规的束缚。光照明亮且充满阳光感，色彩之间没有阴影，呈现彻底的扁平化。\n\n配色与材质：背景色使用高明度的"暖黄色"（Warm Yellow, #FFD54A）。配色方案极其大胆，混合使用鲜艳的"活力橙"（Vibrant Orange, #FF6A00）、"草绿"（Grass Green, #22C55E）和"天蓝"（Sky Blue, #38BDF8），形成孟菲斯（Memphis）风格的撞色效果。材质上模拟手绘涂鸦、剪纸或粗糙边缘的矢量插画。\n\n内容与排版：画面内容应包含手绘风格的插图元素，如涂鸦箭头、星星、波浪线和不规则的有机形状色块。排版上允许文字倾斜、重叠或跳跃，打破僵硬的网格。字体选用圆润可爱的圆体或手写体。请在角落放置一些拟人化的可爱物体或夸张的对话气泡。\n\n渲染要求：Dribbble热门插画风格，色彩鲜艳平涂，线条流畅且富有弹性，视觉上给人一种快乐、友好且极具亲和力的感觉。',
-      },
-      minimalistClean: {
-        name: '极简清爽',
-        description: '视觉描述：全局视觉语言借鉴北欧设计（Scandinavian Design）和Kinfolk杂志的审美。整体氛围空灵、静谧，强调"少即是多"的哲学。光照采用极柔和的漫反射天光，阴影非常淡且边缘模糊，营造出空气感。\n\n配色与材质：背景色为极浅的"雾霾灰"（Haze Gray, #F5F5F7）。前景色仅使用中灰色（Mid Gray, #6B7280）和低饱和度的莫兰迪色系（如灰蓝（Morandi Gray Blue, #7A8FA6））作为微小的点缀。材质上体现细腻的哑光质感，偶尔出现一点点石膏（Plaster）的微纹理。\n\n内容与排版：构图的核心是"留白"（Negative Space），留白面积应占据画面的70%以上。排版极为克制，文字字号较小，行间距宽大，使用纤细优雅的非衬线字体。视觉锚点是简单的几何线条构成的图标，布局上追求绝对的平衡。\n\n渲染要求：极简主义摄影风格，高动态范围（HDR），画面极其干净，没有任何噪点，展现出一种画廊般的艺术陈列感。',
-      },
-      luxuryPremium: {
-        name: '高端奢华',
-        description: '视觉描述：全局视觉语言要融合高端腕表广告或五星级酒店的品牌形象。整体氛围神秘、高贵、独一无二。光照采用戏剧性的伦勃朗光或聚光灯效果，重点照亮关键元素，其余部分隐没在黑暗中。\n\n配色与材质：背景色严格锁定为深沉的"曜石黑"（Obsidian Black, #0B0B0F）。前景色主要由"香槟金"（Champagne Gold, #F7E7CE）构成。材质上必须体现昂贵的触感，核心组合为：背景呈现哑光黑天鹅绒质感，前景装饰呈现拉丝金属质感。\n\n内容与排版：排版采用经典的居中对齐或对称布局，强调仪式感。字体必须使用高雅的衬线体（Serif），字间距适当加宽以体现尊贵。画面中可以加入细致的金色边框线条、Art Deco风格的装饰纹样。如果有3D物体，应呈现出珠宝般的抛光质感。\n\n渲染要求：电影级写实渲染，强调材质的物理属性（PBR），特别是金属的高光反射和丝绒的漫反射细节，画面呈现出奢侈品广告大片的高级质感。',
-      },
-      natureFresh: {
-        name: '自然清新',
-        description: '视觉描述：全局视觉语言旨在唤起人们对大自然、环保和健康生活的向往，类似全食超市（Whole Foods）或Aesop的品牌视觉。整体氛围治愈、透气、有机。光照模拟清晨穿过树叶的斑驳阳光（丁达尔效应），温暖而柔和。\n\n配色与材质：背景色采用柔和的"米色"（Beige, #EAD9C6）。配色方案取自自然界，重点使用森林绿（Forest Green, #14532D）和大地棕（Earth Brown, #7A4E2D）。材质上强调天然纹理，如再生纸的颗粒感和植物叶片的脉络。\n\n内容与排版：画面中应融合真实的自然元素，主要是伸展的绿植叶片，这些元素可以作为背景装饰或前景框架。排版使用圆润亲和的字体。布局上可以稍微松散，模仿自然生长的形态。阴影处理要柔和自然，避免生硬的黑色投影。\n\n渲染要求：微距摄影风格结合3D渲染，强调植物表面的透光感（Subsurface Scattering）和自然材质的细腻纹理，画面清新淡雅，令人心旷神怡。',
-      },
-      gradientVibrant: {
-        name: '渐变活力',
-        description: '视觉描述：全局视觉语言对标现代科技独角兽公司（如Stripe或Linear）的官网视觉，呈现一种极光般的流动美感。整体氛围梦幻、通透且富有呼吸感，避免刺眼的撞色，强调色彩之间的优雅融合。\n\n配色与材质：背景即前景，使用全屏的弥散渐变色。配色方案采用高雅且和谐的"全息色系"，以深邃的"宝石蓝"（Royal Blue, #2563EB）为基底，平滑过渡到"紫罗兰"（Violet, #7C3AED）和明亮的"洋红色"（Magenta, #DB2777）。颜色之间如水彩般晕染，没有生硬的边界。材质上锁定为"磨砂玻璃（Frosted Glass）"质感，让色彩看起来像是透过一层雾面屏透出来的，增加朦胧的高级感。插画使用有质感的半立体彩色设计。\n\n内容与排版：画面核心是缓慢流动的有机波浪形状，形态柔和自然。排版上使用醒目的粗体无衬线字（Bold Sans-serif），文字颜色为纯白（#FFFFFF），以确保在多彩背景上的绝对清晰度。界面元素采用"玻璃拟态"（Glassmorphism），即高透明度的白色圆角卡片，带有细腻的白色描边和背景模糊效果。\n\n渲染要求：C4D流体模拟渲染，强调"丝绸"般的顺滑光泽，配合轻微的噪点（Grain）增加质感，色彩饱满但不刺眼，展现出流光溢彩的现代数字美学。',
-      },
-    },
+    presetStyles: presetStylesI18n.zh,
     home: {
       title: '蕉幻',
       subtitle: 'Vibe your PPT like vibing code',
@@ -73,11 +42,13 @@ const homeI18n = {
         idea: '一句话生成',
         outline: '从大纲生成',
         description: '从描述生成',
+        ppt_renovation: 'PPT 翻新',
       },
       tabDescriptions: {
         idea: '输入你的想法，AI 将为你生成完整的 PPT',
         outline: '已有大纲？直接粘贴，AI 将自动切分为结构化大纲',
         description: '已有完整描述？AI 将自动解析并直接生成图片，跳过大纲步骤',
+        ppt_renovation: '上传已有的 PDF/PPTX 文件，AI 将解析内容并重新生成翻新后的PPT',
       },
       placeholders: {
         idea: '例如：生成一份关于 AI 发展史的演讲 PPT',
@@ -100,6 +71,19 @@ const homeI18n = {
         parsing: '解析中...',
         createProject: '创建新项目',
       },
+      renovation: {
+        uploadHint: '点击或拖拽上传 PDF / PPTX 文件',
+        formatHint: '支持 .pdf, .pptx, .ppt 格式',
+        keepLayout: '保留原始排版布局',
+        onlyPdfPptx: '仅支持 PDF 和 PPTX 文件',
+        uploadFile: '请先上传 PDF 或 PPTX 文件',
+      },
+      style: {
+        extractFromImage: '从图片提取风格',
+        extracting: '提取中...',
+        extractSuccess: '风格提取成功',
+        extractFailed: '风格提取失败',
+      },
       messages: {
         enterContent: '请输入内容',
         filesParsing: '还有 {{count}} 个参考文件正在解析中，请等待解析完成',
@@ -115,6 +99,8 @@ const homeI18n = {
         filesAdded: '已添加 {{count}} 个参考文件',
         imageRemoved: '已移除图片',
         serviceTestTip: '建议先到设置页底部进行服务测试，避免后续功能异常',
+        verifying: '正在验证 API 配置...',
+        verifyFailed: '请在设置页配置正确的 API Key，并在页面底部点击「服务测试」验证',
       },
     },
   },
@@ -127,40 +113,7 @@ const homeI18n = {
       language: { label: 'Interface Language' },
       theme: { label: 'Theme', light: 'Light', dark: 'Dark', system: 'System' }
     },
-    presetStyles: {
-      businessSimple: {
-        name: 'Business Simple',
-        description: 'Visual Description: The global visual language should embody the professionalism and gravitas of top-tier international consulting firms (such as McKinsey or BCG). The overall style pursues ultimate flat design and orderliness, rejecting superfluous decoration and emphasizing clear information delivery. Lighting should be even studio diffused light with no dramatic shadows, ensuring a clean and bright image.\n\nColor & Material: The background color must be a deep, authoritative Navy Blue (#0B1F3B), with foreground elements using pure white (#FFFFFF) and subtle Sky Blue (#38BDF8) accents. Avoid complex textures; use matte paper textures or smooth vector color blocks.\n\nContent & Typography: Typography follows a strict modular grid system. Generate clear geometric divisions using thin lines or faint Light Gray (#E5E7EB) blocks to separate content areas. Use bold sans-serif fonts (such as Helvetica or Roboto) for headings, keeping body text thin and clear. Chart elements should be flat 2D vector graphics, such as clean bar charts or pie charts, with restrained single-tone coloring.\n\nRendering: Vector illustration style, ultra-high clarity, with sharp anti-aliased edges on both text and graphics, showcasing rigorous business aesthetics suitable for Fortune 500 corporate presentations.',
-      },
-      techModern: {
-        name: 'Tech Modern',
-        description: 'Visual Description: The global visual language should blend cyberpunk with modern SaaS product futurism. The overall atmosphere is mysterious, deep, and dynamic, as if set inside a high-tech data center or virtual space. Lighting uses self-luminous effects in a dark environment, simulating neon tubes and laser glow.\n\nColor & Material: The background is a deep Midnight Black (#0B0F19) to contrast with foreground brightness. The primary palette uses high-saturation Electric Blue (#00A3FF) and Cyber Purple (#7C3AED) in linear gradients, creating a flowing energy feel. Materials heavily feature translucent glass, glowing grid lines, and metallic-sheen geometric shapes.\n\nContent & Typography: The scene should contain floating 3D geometric elements (cubes, tetrahedrons, or chip structures) with wireframe rendering effects. Layout favors asymmetric dynamic balance, using tech-feel monospace or modern sans-serif fonts. The background may subtly include circuit board textures, binary code streams, or dot-matrix maps as decorative detail.\n\nRendering: Octane Render style, emphasizing ray tracing, bloom effects, and depth of field control, presenting refined particle effects and tech-driven visual impact.',
-      },
-      academicFormal: {
-        name: 'Academic Formal',
-        description: 'Visual Description: The global visual language should emulate high-quality print publications or classic academic paper typesetting, conveying rationality, objectivity, and intellectual gravitas. The overall atmosphere is quiet and restrained, with no distracting glare or over-design. The image must fill the entire screen — no book bindings, paper edges, curled corners, shadows, or borders of any kind. The background should be presented in 2D flat style, not 3D.\n\nColor & Material: The background color is strictly Off-white (#F8F7F2), simulating premium book paper texture. Foreground colors use only pure black (#000000), Charcoal (#1F2937), and sparingly used Deep Red (#7F1D1D) or Deep Blue (#1E3A8A) as accent colors (no more than 5%). The material fully presents as high-quality printed paper with fine paper grain texture.\n\nContent & Typography: Typography must follow classic typographic design principles with generous margins. Use serif fonts (similar to Times New Roman or Garamond) to convey tradition and formality. Visual elements consist mainly of fine black line frames (#000000), standard academic table styles, and black-and-white line illustrations (#000000 / #FFFFFF). Layout uses left-right columns or top-bottom structured strict alignment.\n\nRendering: Ultra-high resolution scan style, emphasizing font grayscale anti-aliasing and line sharpness, appearing like the inner pages of a hardcover academic journal, showcasing absolute professionalism and authority. No page borders, black frames, or shadow lines should exist.',
-      },
-      creativeFun: {
-        name: 'Creative Fun',
-        description: 'Visual Description: The global visual language should resemble an energetic startup pitch deck or children\'s educational app interface. The overall atmosphere is relaxed, joyful, and imaginative, breaking conventional constraints. Lighting is bright and sunny, with no shadows between colors — completely flat design.\n\nColor & Material: The background uses a high-brightness Warm Yellow (#FFD54A). The color scheme is extremely bold, mixing vivid Vibrant Orange (#FF6A00), Grass Green (#22C55E), and Sky Blue (#38BDF8) to create Memphis-style color clashing effects. Materials simulate hand-drawn doodles, paper cutouts, or rough-edged vector illustrations.\n\nContent & Typography: The scene should contain hand-drawn illustration elements such as doodle arrows, stars, wavy lines, and irregular organic-shaped color blocks. Typography allows tilted, overlapping, or bouncing text, breaking rigid grids. Fonts should be rounded, cute bubble fonts or handwritten styles. Place some anthropomorphic cute objects or exaggerated speech bubbles in corners.\n\nRendering: Dribbble trending illustration style, with vivid flat colors, smooth elastic lines, visually conveying a happy, friendly, and approachable feeling.',
-      },
-      minimalistClean: {
-        name: 'Minimalist Clean',
-        description: 'Visual Description: The global visual language draws from Scandinavian Design and Kinfolk magazine aesthetics. The overall atmosphere is ethereal and tranquil, emphasizing the "less is more" philosophy. Lighting uses extremely soft diffused ambient light, with very faint and blurred shadows, creating an airy feel.\n\nColor & Material: The background is an ultra-light Haze Gray (#F5F5F7). Foreground colors use only Mid Gray (#6B7280) and low-saturation Morandi tones (such as Morandi Gray Blue #7A8FA6) as subtle accents. Materials feature fine matte finishes, with occasional slight plaster micro-texture.\n\nContent & Typography: The core of composition is negative space, which should occupy over 70% of the frame. Typography is extremely restrained — small font sizes, generous line spacing, using thin elegant sans-serif fonts. Visual anchors are simple geometric line icons, with layout pursuing absolute balance.\n\nRendering: Minimalist photography style, high dynamic range (HDR), extremely clean images with no noise, presenting a gallery-like art display aesthetic.',
-      },
-      luxuryPremium: {
-        name: 'Luxury Premium',
-        description: 'Visual Description: The global visual language should blend luxury watch advertising with five-star hotel brand imagery. The overall atmosphere is mysterious, noble, and unique. Lighting uses dramatic Rembrandt lighting or spotlight effects, illuminating key elements while the rest fades into darkness.\n\nColor & Material: The background is strictly locked to deep Obsidian Black (#0B0B0F). Foreground colors primarily consist of Champagne Gold (#F7E7CE). Materials must convey an expensive tactile quality — the core combination is: matte black velvet texture for backgrounds, brushed metal texture for foreground decorations.\n\nContent & Typography: Layout uses classic centered or symmetrical alignment, emphasizing ceremonial feel. Fonts must be elegant serif typefaces with slightly widened letter spacing to convey prestige. The scene may include delicate gold border lines and Art Deco decorative patterns. Any 3D objects should have a jewel-like polished quality.\n\nRendering: Cinematic photorealistic rendering, emphasizing physical material properties (PBR), particularly metallic specular reflections and velvet diffuse reflection details, presenting luxury advertising campaign-level premium quality.',
-      },
-      natureFresh: {
-        name: 'Nature Fresh',
-        description: 'Visual Description: The global visual language aims to evoke longing for nature, environmental awareness, and healthy living, similar to Whole Foods or Aesop brand visuals. The overall atmosphere is healing, breathable, and organic. Lighting simulates morning sunlight filtering through leaves (Tyndall effect), warm and soft.\n\nColor & Material: The background uses a soft Beige (#EAD9C6). The color palette draws from nature, primarily using Forest Green (#14532D) and Earth Brown (#7A4E2D). Materials emphasize natural textures such as recycled paper grain and plant leaf veins.\n\nContent & Typography: The scene should integrate real natural elements, primarily extending green plant leaves, as background decoration or foreground framing. Typography uses rounded, approachable fonts. Layout can be slightly loose, mimicking natural growth patterns. Shadow treatment should be soft and natural, avoiding harsh black drop shadows.\n\nRendering: Macro photography style combined with 3D rendering, emphasizing subsurface scattering on plant surfaces and fine natural material textures, creating a fresh and elegant image that feels refreshing and uplifting.',
-      },
-      gradientVibrant: {
-        name: 'Gradient Vibrant',
-        description: 'Visual Description: The global visual language benchmarks modern tech unicorn companies (such as Stripe or Linear) website visuals, presenting an aurora-like flowing beauty. The overall atmosphere is dreamy, translucent, and breathable, avoiding harsh color clashes and emphasizing elegant color fusion.\n\nColor & Material: The background IS the foreground, using full-screen diffused gradients. The palette uses elegant and harmonious "holographic colors," with a deep Royal Blue (#2563EB) base smoothly transitioning to Violet (#7C3AED) and bright Magenta (#DB2777). Colors blend like watercolors without hard boundaries. The material is locked to "frosted glass" texture, making colors appear as if glowing through a matte screen, adding an elegant haziness. Illustrations use textured semi-dimensional colorful designs.\n\nContent & Typography: The visual core consists of slowly flowing organic wave shapes with soft, natural forms. Typography uses bold sans-serif fonts, with text color in pure white (#FFFFFF) to ensure absolute clarity on the multicolored background. Interface elements use glassmorphism — highly transparent white rounded cards with subtle white borders and background blur effects.\n\nRendering: C4D fluid simulation rendering, emphasizing "silk-like" smooth sheen, with subtle grain for texture. Colors are saturated but not glaring, showcasing an iridescent modern digital aesthetic.',
-      },
-    },
+    presetStyles: presetStylesI18n.en,
     home: {
       title: 'Banana Slides',
       subtitle: 'Vibe your PPT like vibing code',
@@ -175,11 +128,13 @@ const homeI18n = {
         idea: 'From Idea',
         outline: 'From Outline',
         description: 'From Description',
+        ppt_renovation: 'PPT Renovation',
       },
       tabDescriptions: {
         idea: 'Enter your idea, AI will generate a complete PPT for you',
         outline: 'Have an outline? Paste it directly, AI will split it into a structured outline',
         description: 'Have detailed descriptions? AI will parse and generate images directly, skipping the outline step',
+        ppt_renovation: 'Upload an existing PDF/PPTX file, AI will parse its content and regenerate the renovated PPT',
       },
       placeholders: {
         idea: 'e.g., Generate a presentation about the history of AI',
@@ -202,6 +157,19 @@ const homeI18n = {
         parsing: 'Parsing...',
         createProject: 'Create New Project',
       },
+      renovation: {
+        uploadHint: 'Click or drag to upload PDF / PPTX file',
+        formatHint: 'Supports .pdf, .pptx, .ppt formats',
+        keepLayout: 'Keep original layout',
+        onlyPdfPptx: 'Only PDF and PPTX files are supported',
+        uploadFile: 'Please upload a PDF or PPTX file first',
+      },
+      style: {
+        extractFromImage: 'Extract from image',
+        extracting: 'Extracting...',
+        extractSuccess: 'Style extracted successfully',
+        extractFailed: 'Style extraction failed',
+      },
       messages: {
         enterContent: 'Please enter content',
         filesParsing: '{{count}} reference file(s) are still parsing, please wait',
@@ -217,6 +185,8 @@ const homeI18n = {
         filesAdded: 'Added {{count}} reference file(s)',
         imageRemoved: 'Image removed',
         serviceTestTip: 'Test services in Settings first to avoid issues',
+        verifying: 'Verifying API configuration...',
+        verifyFailed: 'Please configure a valid API Key in Settings and click "Service Test" at the bottom to verify',
       },
     },
   },
@@ -245,11 +215,31 @@ export const Home: React.FC = () => {
   const [isUploadingFile, setIsUploadingFile] = useState(false);
   const [isFileSelectorOpen, setIsFileSelectorOpen] = useState(false);
   const [previewFileId, setPreviewFileId] = useState<string | null>(null);
+
   const [useTemplateStyle, setUseTemplateStyle] = useState(false);
   const [templateStyle, setTemplateStyle] = useState('');
   const [hoveredPresetId, setHoveredPresetId] = useState<string | null>(null);
+  const [aspectRatio, setAspectRatio] = useState('16:9');
+  const [isAspectRatioOpen, setIsAspectRatioOpen] = useState(false);
+  const [renovationFile, setRenovationFile] = useState<File | null>(null);
+  const [keepLayout, setKeepLayout] = useState(false);
+  const [isExtractingStyle, setIsExtractingStyle] = useState(false);
+  const renovationFileInputRef = useRef<HTMLInputElement>(null);
+  const styleImageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const themeMenuRef = useRef<HTMLDivElement>(null);
+
+  // 持久化草稿到 sessionStorage，确保跳转设置页后返回时内容不丢失
+  useEffect(() => {
+    if (content) {
+      sessionStorage.setItem('home-draft-content', content);
+    }
+  }, [content]);
+
+  useEffect(() => {
+    sessionStorage.setItem('home-draft-tab', activeTab);
+  }, [activeTab]);
+
 
   // 检查是否有当前项目 & 加载用户模板
   useEffect(() => {
@@ -499,6 +489,13 @@ export const Home: React.FC = () => {
       description: t('home.tabDescriptions.description'),
       example: t('home.examples.description'),
     },
+    ppt_renovation: {
+      icon: <RefreshCw size={20} />,
+      label: t('home.tabs.ppt_renovation'),
+      placeholder: '',
+      description: t('home.tabDescriptions.ppt_renovation'),
+      example: null as string | null,
+    },
   };
 
   const handleTemplateSelect = async (templateFile: File | null, templateId?: string) => {
@@ -529,8 +526,16 @@ export const Home: React.FC = () => {
     }
   };
 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   const handleSubmit = async () => {
-    if (!content.trim()) {
+    // For ppt_renovation, validate file instead of content
+    if (activeTab === 'ppt_renovation') {
+      if (!renovationFile) {
+        show({ message: t('home.renovation.uploadFile'), type: 'error' });
+        return;
+      }
+    } else if (!content.trim()) {
       show({ message: t('home.messages.enterContent'), type: 'error' });
       return;
     }
@@ -547,7 +552,38 @@ export const Home: React.FC = () => {
       return;
     }
 
+    setIsSubmitting(true);
     try {
+      // PPT 翻新模式：走独立的上传+异步解析流程
+      if (activeTab === 'ppt_renovation' && renovationFile) {
+        const styleDesc = templateStyle.trim() ? templateStyle.trim() : undefined;
+        const result = await createPptRenovationProject(renovationFile, {
+          keepLayout,
+          templateStyle: styleDesc,
+        });
+
+        const projectId = result.data?.project_id;
+        const taskId = result.data?.task_id;
+        if (!projectId) {
+          show({ message: t('home.messages.projectCreateFailed'), type: 'error' });
+          return;
+        }
+
+        // Save project ID and task ID for DetailEditor to poll
+        localStorage.setItem('currentProjectId', projectId);
+        if (taskId) {
+          localStorage.setItem('renovationTaskId', taskId);
+        }
+
+        // Clear draft
+        sessionStorage.removeItem('home-draft-content');
+        sessionStorage.removeItem('home-draft-tab');
+
+        // Navigate to detail editor (will poll for task completion with skeleton UI)
+        navigate(`/project/${projectId}/detail`);
+        return;
+      }
+
       // 如果有模板ID但没有File，按需加载
       let templateFile = selectedTemplate;
       if (!templateFile && (selectedTemplateId || selectedPresetTemplateId)) {
@@ -565,7 +601,7 @@ export const Home: React.FC = () => {
         .filter(f => f.parse_status === 'completed')
         .map(f => f.id);
 
-      await initializeProject(activeTab, content, templateFile || undefined, styleDesc, refFileIds.length > 0 ? refFileIds : undefined);
+      await initializeProject(activeTab as 'idea' | 'outline' | 'description', content, templateFile || undefined, styleDesc, refFileIds.length > 0 ? refFileIds : undefined, aspectRatio);
       
       // 根据类型跳转到不同页面
       const projectId = localStorage.getItem('currentProjectId');
@@ -621,7 +657,10 @@ export const Home: React.FC = () => {
       }
     } catch (error: any) {
       console.error('创建项目失败:', error);
-      // 错误已经在 store 中处理并显示
+      const msg = error?.response?.data?.error?.message || error?.message || t('home.messages.projectCreateFailed');
+      show({ message: msg, type: 'error' });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -872,6 +911,97 @@ export const Home: React.FC = () => {
 
           {/* 输入区 - 带工具栏 */}
           <div className="mb-2">
+            {activeTab === 'ppt_renovation' ? (
+              /* PPT 翻新：文件上传区 */
+              <div className="space-y-4">
+                <div
+                  className="border-2 border-dashed border-gray-300 dark:border-border-primary rounded-xl p-8 text-center cursor-pointer hover:border-banana-400 dark:hover:border-banana transition-colors duration-200"
+                  onClick={() => renovationFileInputRef.current?.click()}
+                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const file = e.dataTransfer.files[0];
+                    if (file && (file.name.toLowerCase().endsWith('.pdf') || file.name.toLowerCase().endsWith('.pptx') || file.name.toLowerCase().endsWith('.ppt'))) {
+                      setRenovationFile(file);
+                      const ext = file.name.split('.').pop()?.toLowerCase();
+                      if (ext === 'ppt' || ext === 'pptx') {
+                        show({ message: `💡 ${t('home.messages.pptTip')}`, type: 'info' });
+                      }
+                    } else {
+                      show({ message: t('home.renovation.onlyPdfPptx'), type: 'error' });
+                    }
+                  }}
+                >
+                  {renovationFile ? (
+                    <div className="flex items-center justify-center gap-3">
+                      <FileText size={24} className="text-banana-600 dark:text-banana" />
+                      <div className="text-left">
+                        <p className="text-sm font-medium text-gray-900 dark:text-white">{renovationFile.name}</p>
+                        <p className="text-xs text-gray-500 dark:text-foreground-tertiary">{(renovationFile.size / 1024 / 1024).toFixed(1)} MB</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setRenovationFile(null); }}
+                        className="ml-2 text-gray-400 hover:text-red-500 transition-colors"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <Upload size={32} className="mx-auto text-gray-400 dark:text-foreground-tertiary" />
+                      <p className="text-sm text-gray-600 dark:text-foreground-secondary">{t('home.renovation.uploadHint')}</p>
+                      <p className="text-xs text-gray-400 dark:text-foreground-tertiary">{t('home.renovation.formatHint')}</p>
+                    </div>
+                  )}
+                </div>
+                <input
+                  ref={renovationFileInputRef}
+                  type="file"
+                  accept=".pdf,.pptx,.ppt"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      setRenovationFile(file);
+                      const ext = file.name.split('.').pop()?.toLowerCase();
+                      if (ext === 'ppt' || ext === 'pptx') {
+                        show({ message: `💡 ${t('home.messages.pptTip')}`, type: 'info' });
+                      }
+                    }
+                    e.target.value = '';
+                  }}
+                  className="hidden"
+                />
+
+                {/* 保留布局 toggle */}
+                <div className="flex items-center justify-between">
+                  <label className="flex items-center gap-2 cursor-pointer group">
+                    <span className="text-sm text-gray-600 dark:text-foreground-tertiary group-hover:text-gray-900 dark:group-hover:text-white transition-colors">
+                      {t('home.renovation.keepLayout')}
+                    </span>
+                    <div className="relative">
+                      <input
+                        type="checkbox"
+                        checked={keepLayout}
+                        onChange={(e) => setKeepLayout(e.target.checked)}
+                        className="sr-only peer"
+                      />
+                      <div className="w-11 h-6 bg-gray-200 dark:bg-background-hover peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-banana-300 dark:peer-focus:ring-banana/30 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white dark:after:bg-foreground-secondary after:border-gray-300 dark:after:border-border-hover after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-banana"></div>
+                    </div>
+                  </label>
+                  <Button
+                    size="sm"
+                    onClick={handleSubmit}
+                    loading={isSubmitting || isGlobalLoading}
+                    disabled={!renovationFile}
+                    className="shadow-sm dark:shadow-background-primary/30 text-xs md:text-sm px-3 md:px-4"
+                  >
+                    {t('common.next')}
+                  </Button>
+                </div>
+              </div>
+            ) : (
             <MarkdownTextarea
               ref={textareaRef}
               placeholder={tabConfig[activeTab].placeholder}
@@ -882,20 +1012,50 @@ export const Home: React.FC = () => {
               rows={activeTab === 'idea' ? 4 : 8}
               className="text-sm md:text-base border-2 border-gray-200 dark:border-border-primary dark:bg-background-tertiary dark:text-white focus-within:border-banana-400 dark:focus-within:border-banana transition-colors duration-200"
               toolbarLeft={
-                <button
-                  type="button"
-                  onClick={handlePaperclipClick}
-                  className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:text-foreground-tertiary dark:hover:text-foreground-secondary dark:hover:bg-background-hover rounded transition-colors active:scale-95 touch-manipulation"
-                  title={t('home.actions.selectFile')}
-                >
-                  <Paperclip size={18} />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={handlePaperclipClick}
+                    className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:text-foreground-tertiary dark:hover:text-foreground-secondary dark:hover:bg-background-hover rounded transition-colors active:scale-95 touch-manipulation"
+                    title={t('home.actions.selectFile')}
+                  >
+                    <Paperclip size={18} />
+                  </button>
+                  {/* 画面比例选择 */}
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setIsAspectRatioOpen(!isAspectRatioOpen)}
+                      className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:text-foreground-tertiary dark:hover:text-foreground-secondary dark:hover:bg-background-hover rounded transition-colors"
+                      title={i18n.language?.startsWith('zh') ? '画面比例' : 'Aspect Ratio'}
+                    >
+                      <span>{aspectRatio}</span>
+                      <ChevronDown size={12} className={`transition-transform ${isAspectRatioOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {isAspectRatioOpen && (
+                      <>
+                        <div className="fixed inset-0 z-40" onClick={() => setIsAspectRatioOpen(false)} />
+                        <div className="absolute left-0 bottom-full mb-1 z-50 bg-white dark:bg-background-elevated border border-gray-200 dark:border-border-primary rounded-lg shadow-lg dark:shadow-none py-1 min-w-[80px]">
+                          {ASPECT_RATIO_OPTIONS.map((opt) => (
+                            <button
+                              key={opt.value}
+                              onClick={() => { setAspectRatio(opt.value); setIsAspectRatioOpen(false); }}
+                              className={`w-full text-left px-3 py-1.5 text-xs hover:bg-gray-100 dark:hover:bg-background-hover transition-colors ${aspectRatio === opt.value ? 'text-banana font-semibold' : 'text-gray-700 dark:text-foreground-secondary'}`}
+                            >
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
               }
               toolbarRight={
                 <Button
                   size="sm"
                   onClick={handleSubmit}
-                  loading={isGlobalLoading}
+                  loading={isSubmitting || isGlobalLoading}
                   disabled={
                     !content.trim() ||
                     isUploadingImage ||
@@ -909,6 +1069,7 @@ export const Home: React.FC = () => {
                 </Button>
               }
             />
+            )}
           </div>
 
           {/* 隐藏的文件输入 */}
@@ -989,11 +1150,15 @@ export const Home: React.FC = () => {
                           onClick={() => setTemplateStyle(t(preset.descriptionKey))}
                           onMouseEnter={() => setHoveredPresetId(preset.id)}
                           onMouseLeave={() => setHoveredPresetId(null)}
-                          className="px-3 py-1.5 text-xs font-medium rounded-full border-2 border-gray-200 dark:border-border-primary dark:text-foreground-secondary hover:border-banana-400 dark:hover:border-banana hover:bg-banana-50 dark:hover:bg-background-hover transition-all duration-200 hover:shadow-sm dark:hover:shadow-none"
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full border-2 border-gray-200 dark:border-border-primary dark:text-foreground-secondary hover:border-banana-400 dark:hover:border-banana hover:bg-banana-50 dark:hover:bg-background-hover transition-all duration-200 hover:shadow-sm dark:hover:shadow-none"
                         >
+                          <span
+                            className="w-2.5 h-2.5 rounded-full flex-shrink-0 ring-1 ring-black/10"
+                            style={{ backgroundColor: preset.color }}
+                          />
                           {t(preset.nameKey)}
                         </button>
-                        
+
                         {/* 悬停时显示预览图片 */}
                         {hoveredPresetId === preset.id && preset.previewImage && (
                           <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
@@ -1019,6 +1184,49 @@ export const Home: React.FC = () => {
                         )}
                       </div>
                     ))}
+
+                    {/* 从图片提取风格按钮 */}
+                    <button
+                      type="button"
+                      onClick={() => styleImageInputRef.current?.click()}
+                      disabled={isExtractingStyle}
+                      className="px-3 py-1.5 text-xs font-medium rounded-full border-2 border-dashed border-gray-300 dark:border-border-primary dark:text-foreground-secondary hover:border-banana-400 dark:hover:border-banana hover:bg-banana-50 dark:hover:bg-background-hover transition-all duration-200 hover:shadow-sm dark:hover:shadow-none flex items-center gap-1"
+                    >
+                      {isExtractingStyle ? (
+                        <>
+                          <span className="animate-spin">⏳</span>
+                          {t('home.style.extracting')}
+                        </>
+                      ) : (
+                        <>
+                          <ImagePlus size={12} />
+                          {t('home.style.extractFromImage')}
+                        </>
+                      )}
+                    </button>
+                    <input
+                      ref={styleImageInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        e.target.value = '';
+                        setIsExtractingStyle(true);
+                        try {
+                          const result = await extractStyleFromImage(file);
+                          if (result.data?.style_description) {
+                            setTemplateStyle(result.data.style_description);
+                            show({ message: t('home.style.extractSuccess'), type: 'success' });
+                          }
+                        } catch (error: any) {
+                          show({ message: `${t('home.style.extractFailed')}: ${error?.message || ''}`, type: 'error' });
+                        } finally {
+                          setIsExtractingStyle(false);
+                        }
+                      }}
+                      className="hidden"
+                    />
                   </div>
                 </div>
                 

@@ -24,7 +24,7 @@ from config import Config
 from controllers.material_controller import material_bp, material_global_bp
 from controllers.reference_file_controller import reference_file_bp
 from controllers.settings_controller import settings_bp
-from controllers import project_bp, page_bp, template_bp, user_template_bp, export_bp, file_bp
+from controllers import project_bp, page_bp, template_bp, user_template_bp, export_bp, file_bp, style_bp
 # [checkba] 存量 pptx 格式识别与操作端点
 from controllers import pptx_edit_bp
 from controllers import pdf_convert_bp  # [checkba]
@@ -114,6 +114,7 @@ def create_app():
     app.register_blueprint(material_global_bp)
     app.register_blueprint(reference_file_bp, url_prefix='/api/reference-files')
     app.register_blueprint(settings_bp)
+    app.register_blueprint(style_bp)
     # [checkba] 存量 pptx 格式识别与操作
     app.register_blueprint(pptx_edit_bp)
     app.register_blueprint(pdf_convert_bp)  # [checkba]
@@ -245,6 +246,33 @@ def _load_settings_to_config(app):
             app.config['BAIDU_OCR_API_KEY'] = settings.baidu_ocr_api_key
             logging.info("Loaded BAIDU_OCR_API_KEY from settings")
 
+        # Load LazyLLM source settings
+        if settings.text_model_source:
+            app.config['TEXT_MODEL_SOURCE'] = settings.text_model_source
+            logging.info(f"Loaded TEXT_MODEL_SOURCE from settings: {settings.text_model_source}")
+        if settings.image_model_source:
+            app.config['IMAGE_MODEL_SOURCE'] = settings.image_model_source
+            logging.info(f"Loaded IMAGE_MODEL_SOURCE from settings: {settings.image_model_source}")
+        if settings.image_caption_model_source:
+            app.config['IMAGE_CAPTION_MODEL_SOURCE'] = settings.image_caption_model_source
+            logging.info(f"Loaded IMAGE_CAPTION_MODEL_SOURCE from settings: {settings.image_caption_model_source}")
+
+        # Sync LazyLLM vendor API keys to environment variables
+        # Only allow known vendor names to prevent environment variable injection
+        from services.ai_providers.lazyllm_env import ALLOWED_LAZYLLM_VENDORS
+        if settings.lazyllm_api_keys:
+            import json
+            try:
+                keys = json.loads(settings.lazyllm_api_keys)
+                for vendor, key in keys.items():
+                    if key and vendor.lower() in ALLOWED_LAZYLLM_VENDORS:
+                        os.environ[f"{vendor.upper()}_API_KEY"] = key
+                    elif key:
+                        logging.warning(f"Ignoring unknown lazyllm vendor: {vendor}")
+                logging.info(f"Loaded LazyLLM API keys for vendors: {[v for v, k in keys.items() if k and v.lower() in ALLOWED_LAZYLLM_VENDORS]}")
+            except (json.JSONDecodeError, TypeError):
+                logging.warning("Failed to parse lazyllm_api_keys from settings")
+
     except Exception as e:
         logging.warning(f"Could not load settings from database: {e}")
 
@@ -253,13 +281,27 @@ def _load_settings_to_config(app):
 app = create_app()
 
 
+def _compute_worktree_port(base_port: int) -> int:
+    """Compute a deterministic port from the worktree directory name.
+
+    Uses MD5 of the project root basename so each worktree gets a unique,
+    stable port pair (backend 5xxx, frontend 3xxx) without manual config.
+    """
+    import hashlib
+    basename = _project_root.name
+    offset = int(hashlib.md5(basename.encode()).hexdigest()[:8], 16) % 500
+    return base_port + offset
+
+
 if __name__ == '__main__':
     # Run development server
     if os.getenv("IN_DOCKER", "0") == "1":
         port = 5000  # Docker 容器内部固定使用 5000 端口
+    elif os.getenv('BACKEND_PORT'):
+        port = int(os.getenv('BACKEND_PORT'))
     else:
-        port = int(os.getenv('BACKEND_PORT', 5000))
-    # debug 必须是显式开启项：默认值给 'development' 等于漏配 FLASK_ENV 就开着
+        port = _compute_worktree_port(5000)
+    # [checkba] debug 必须是显式开启项：默认值给 'development' 等于漏配 FLASK_ENV 就开着
     # Werkzeug 调试器，未捕获异常处会暴露交互式控制台与源码
     debug = os.getenv('FLASK_ENV') == 'development'
     
@@ -282,5 +324,8 @@ if __name__ == '__main__':
     # 绑 0.0.0.0 等于把「按路径读写文件」的能力开放给同一局域网。
     # 容器内需要 0.0.0.0 才能被端口映射到宿主，由 compose 显式设 PPTX_BIND_HOST=0.0.0.0，
     # 同时把发布地址限制成 127.0.0.1，不对外网暴露。
+    # [checkba] use_reloader 保持 False（上游 a9a5c36 改成了 use_reloader=debug）：
+    # 重载器会再 fork 一条进程，而 TaskManager.reconcile_orphaned_tasks() 的
+    # 「启动这一刻正在跑的任务必然为零」建立在单进程之上。
     bind_host = os.getenv('PPTX_BIND_HOST', '127.0.0.1')
     app.run(host=bind_host, port=port, debug=debug, use_reloader=False)

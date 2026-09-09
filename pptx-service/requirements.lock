@@ -4,6 +4,8 @@ alembic==1.17.2
     # via
     #   banana-slides
     #   flask-migrate
+annotated-doc==0.0.4
+    # via fastapi
 annotated-types==0.7.0
     # via pydantic
 anyio==4.12.0
@@ -11,6 +13,8 @@ anyio==4.12.0
     #   google-genai
     #   httpx
     #   openai
+    #   starlette
+    #   volcengine-python-sdk
 audioop-lts==0.2.2 ; python_full_version >= '3.13'
     # via
     #   speechrecognition
@@ -36,6 +40,7 @@ certifi==2025.11.12
     #   httpcore
     #   httpx
     #   requests
+    #   volcengine-python-sdk
 cffi==2.0.0 ; platform_python_implementation != 'PyPy'
     # via cryptography
 charset-normalizer==3.4.4
@@ -48,11 +53,15 @@ click==8.3.1
     # via
     #   flask
     #   magika
+    #   uvicorn
+cloudpickle==3.1.2
+    # via lazyllm
 cobble==0.1.4
     # via mammoth
 colorama==0.4.6 ; sys_platform == 'win32'
     # via
     #   click
+    #   loguru
     #   tqdm
 coloredlogs==15.0.1
     # via onnxruntime
@@ -62,6 +71,9 @@ cryptography==46.0.3
     #   msal
     #   pdfminer-six
     #   pyjwt
+    #   volcengine-python-sdk
+deepdiff==8.6.1
+    # via lazyllm
 defusedxml==0.7.1
     # via
     #   markitdown
@@ -70,10 +82,16 @@ deprecated==1.3.1
     # via pikepdf
 distro==1.9.0
     # via openai
+docstring-parser==0.16
+    # via lazyllm
 et-xmlfile==2.0.0
     # via openpyxl
 exceptiongroup==1.3.1 ; python_full_version < '3.11'
     # via anyio
+fastapi==0.129.0
+    # via lazyllm
+filelock==3.21.2
+    # via lazyllm
 fire==0.7.1
     # via pdf2docx
 flask==3.1.2
@@ -92,7 +110,7 @@ flask-sqlalchemy==3.1.1
     #   flask-migrate
 flatbuffers==25.9.23
     # via onnxruntime
-fonttools==4.63.0
+fonttools==4.64.0
     # via pdf2docx
 google-auth==2.43.0
     # via google-genai
@@ -101,13 +119,16 @@ google-genai==1.52.0
 greenlet==3.2.4 ; platform_machine == 'AMD64' or platform_machine == 'WIN32' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'ppc64le' or platform_machine == 'win32' or platform_machine == 'x86_64'
     # via sqlalchemy
 h11==0.16.0
-    # via httpcore
+    # via
+    #   httpcore
+    #   uvicorn
 httpcore==1.0.9
     # via httpx
 httpx==0.28.1
     # via
     #   google-genai
     #   openai
+    #   volcengine-python-sdk
 humanfriendly==10.0
     # via coloredlogs
 idna==3.11
@@ -125,6 +146,12 @@ jinja2==3.1.6
     # via flask
 jiter==0.12.0
     # via openai
+json5==0.9.28
+    # via lazyllm
+lazyllm==0.7.5
+    # via banana-slides
+loguru==0.7.3
+    # via lazyllm
 lxml==6.0.2
     # via
     #   markitdown
@@ -181,8 +208,11 @@ opencv-python-headless==5.0.0.93
     # via pdf2docx
 openpyxl==3.1.5
     # via markitdown
+orderly-set==5.5.0
+    # via deepdiff
 packaging==25.0
     # via
+    #   lazyllm
     #   onnxruntime
     #   pikepdf
 pandas==2.3.3
@@ -202,6 +232,8 @@ pillow==12.0.0
     #   reportlab
 protobuf==6.33.2
     # via onnxruntime
+psutil==6.1.1
+    # via lazyllm
 pyasn1==0.6.1
     # via
     #   pyasn1-modules
@@ -213,20 +245,31 @@ pycparser==2.23 ; implementation_name != 'PyPy' and platform_python_implementati
 pydantic==2.12.5
     # via
     #   banana-slides
+    #   fastapi
     #   google-genai
+    #   lazyllm
     #   openai
+    #   volcengine-python-sdk
 pydantic-core==2.41.5
     # via pydantic
 pydub==0.25.1
     # via markitdown
-pyjwt==2.10.1
-    # via msal
-pymupdf==1.28.0
-    # via pdf2docx
+pyjwt==2.8.0
+    # via
+    #   lazyllm
+    #   msal
+pymupdf==1.27.1
+    # via
+    #   banana-slides
+    #   pdf2docx
+pypdf2==3.0.1
+    # via banana-slides
 pyreadline3==3.5.4 ; sys_platform == 'win32'
     # via humanfriendly
 python-dateutil==2.9.0.post0
-    # via pandas
+    # via
+    #   pandas
+    #   volcengine-python-sdk
 python-docx==1.2.0
     # via pdf2docx
 python-dotenv==1.2.1
@@ -239,12 +282,15 @@ python-pptx==1.0.2
     #   markitdown
 pytz==2025.2
     # via pandas
+pyyaml==6.0.3
+    # via lazyllm
 reportlab==4.4.5
     # via banana-slides
 requests==2.32.5
     # via
     #   azure-core
     #   google-genai
+    #   lazyllm
     #   markitdown
     #   msal
     #   youtube-transcript-api
@@ -254,6 +300,7 @@ six==1.17.0
     # via
     #   markdownify
     #   python-dateutil
+    #   volcengine-python-sdk
 sniffio==1.3.1
     # via openai
 soupsieve==2.8
@@ -268,6 +315,8 @@ standard-aifc==3.13.0 ; python_full_version >= '3.13'
     # via speechrecognition
 standard-chunk==3.13.0 ; python_full_version >= '3.13'
     # via standard-aifc
+starlette==0.52.1
+    # via fastapi
 sympy==1.14.0
     # via onnxruntime
 tenacity==9.1.2
@@ -276,10 +325,14 @@ tenacity==9.1.2
     #   google-genai
 termcolor==3.3.0
     # via fire
+toml==0.10.2
+    # via lazyllm
 tomli==2.3.0 ; python_full_version < '3.11'
     # via alembic
 tqdm==4.67.1
-    # via openai
+    # via
+    #   lazyllm
+    #   openai
 typing-extensions==4.15.0
     # via
     #   alembic
@@ -290,6 +343,7 @@ typing-extensions==4.15.0
     #   beautifulsoup4
     #   cryptography
     #   exceptiongroup
+    #   fastapi
     #   google-genai
     #   openai
     #   pydantic
@@ -298,13 +352,23 @@ typing-extensions==4.15.0
     #   python-pptx
     #   speechrecognition
     #   sqlalchemy
+    #   starlette
     #   typing-inspection
+    #   uvicorn
 typing-inspection==0.4.2
-    # via pydantic
+    # via
+    #   fastapi
+    #   pydantic
 tzdata==2025.2
     # via pandas
 urllib3==2.5.0
-    # via requests
+    # via
+    #   requests
+    #   volcengine-python-sdk
+uvicorn==0.40.0
+    # via lazyllm
+volcengine-python-sdk==5.0.9
+    # via banana-slides
 websockets==15.0.1
     # via google-genai
 werkzeug==3.1.4
@@ -312,6 +376,8 @@ werkzeug==3.1.4
     #   banana-slides
     #   flask
     #   flask-cors
+win32-setctime==1.2.0 ; sys_platform == 'win32'
+    # via loguru
 wrapt==2.0.1
     # via deprecated
 xlrd==2.0.2
