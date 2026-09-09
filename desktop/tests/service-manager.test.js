@@ -28,13 +28,16 @@ function fakeDescriptor(overrides) {
   }, overrides)
 }
 
-function makeManager() {
-  return createServiceManager({
+function makeManager(t) {
+  const mgr = createServiceManager({
     packaged: false,
     resourcesPath: null,
     dataDir: require('os').tmpdir(),
     projectRoot: path.join(__dirname, '..')
   })
+  // 断言失败时也要关闭子服务，否则测试报告失败后仍会挂到 CI 超时。
+  t.after(() => mgr.stopAll())
+  return mgr
 }
 
 test('findFreePort returns a usable port', async () => {
@@ -43,25 +46,29 @@ test('findFreePort returns a usable port', async () => {
   assert.strictEqual(await isPortOpen(port), false)
 })
 
-test('start/stop lifecycle: spawns, waits for port, stops', async () => {
-  const mgr = makeManager()
+test('start/stop lifecycle: spawns, waits for port, stops', async (t) => {
+  const mgr = makeManager(t)
   mgr.register(fakeDescriptor())
   await mgr.allocatePorts()
   const res = await mgr.start('fake')
   assert.strictEqual(res.ok, true)
   assert.strictEqual(res.reused, false)
-  assert.strictEqual(await isPortOpen(mgr.ports.fake), true)
+  const response = await fetch(`http://127.0.0.1:${mgr.ports.fake}`, {
+    signal: AbortSignal.timeout(3000)
+  })
+  assert.strictEqual(response.status, 200)
+  assert.strictEqual(await response.text(), 'ok')
   await mgr.stop('fake')
   assert.strictEqual(await isPortOpen(mgr.ports.fake), false)
 })
 
-test('reuses already-open port without spawning', async () => {
+test('reuses already-open port without spawning', async (t) => {
   const http = require('http')
   const server = http.createServer((req, res) => res.end('ok'))
   const port = await findFreePort()
   await new Promise((r) => server.listen(port, '127.0.0.1', r))
   try {
-    const mgr = makeManager()
+    const mgr = makeManager(t)
     mgr.register(fakeDescriptor({ port: async () => port }))
     await mgr.allocatePorts()
     const res = await mgr.start('fake')
@@ -71,14 +78,14 @@ test('reuses already-open port without spawning', async () => {
   }
 })
 
-test('verifyReuse=false triggers reallocatePort instead of reusing foreign process', async () => {
+test('verifyReuse=false triggers reallocatePort instead of reusing foreign process', async (t) => {
   const http = require('http')
   // 陌生进程占着首选端口
   const foreign = http.createServer((req, res) => res.end('not ours'))
   const occupied = await findFreePort()
   await new Promise((r) => foreign.listen(occupied, '127.0.0.1', r))
   try {
-    const mgr = makeManager()
+    const mgr = makeManager(t)
     mgr.register(fakeDescriptor({
       port: async () => occupied,
       verifyReuse: async () => false,
@@ -95,13 +102,13 @@ test('verifyReuse=false triggers reallocatePort instead of reusing foreign proce
   }
 })
 
-test('verifyReuse=true keeps old reuse semantics', async () => {
+test('verifyReuse=true keeps old reuse semantics', async (t) => {
   const http = require('http')
   const server = http.createServer((req, res) => res.end('ok'))
   const port = await findFreePort()
   await new Promise((r) => server.listen(port, '127.0.0.1', r))
   try {
-    const mgr = makeManager()
+    const mgr = makeManager(t)
     mgr.register(fakeDescriptor({ port: async () => port, verifyReuse: async () => true }))
     await mgr.allocatePorts()
     const res = await mgr.start('fake')
@@ -175,8 +182,8 @@ test('spawned backend env.SERVER_PORT always follows ctx.ports.backend, not an i
   }
 })
 
-test('falls through failed candidate to next command', async () => {
-  const mgr = makeManager()
+test('falls through failed candidate to next command', async (t) => {
+  const mgr = makeManager(t)
   mgr.register(fakeDescriptor({
     commands: (ctx) => [
       // 第一个候选立刻退出（崩溃路径）
