@@ -10,7 +10,7 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 ## CI（.github/workflows/）
 
 - **ci.yml**（push master + 所有 PR）：三并行 job——backend（temurin **21**，`mvn -B test`）、frontend（node 20，`check:emits` + `check:locales` + `check:nav:full` + `test:project-home` + `test:commands` + `build:h5`）、desktop（仅 `npm ci`）。不打安装包。
-- **desktop-build.yml**（发版主 workflow）：触发 = workflow_dispatch / tag `v*` / PR 改动 desktop|backend|frontend|pptx-service 路径（pptx-service 于 2026-09-09 补入，PR#766：它的源码与 requirements.lock 原样进包，re-vendor 类 PR 必须跑打包冒烟）。矩阵：tag 或手动 = mac+win；**普通 PR 只跑 windows**（mac runner 1h+）。每平台步骤顺序（**不可乱**，PR#176）：build:h5 → build:zetaoffice → fetch-lowa-assets（LOWA_BASE_URL=自建 zh-CN 引擎 24.2.8-zhcn-r2）→ desktop npm test → mvn package(-Djavacpp.platform) + prepare-backend(jar+jlink JRE) → 四个 Python 服务 prepare-python-service（pptx/mineru/kokoro/asr） → **(mac)sign-mac-natives.sh → 冒烟（backend /api/admin/wizard 120s、pptx alembic+/health、mineru /docs、kokoro /health+voices 验 zf_001、asr /health 验 modelReady:false）→ pack-pysvc** → electron-builder（mac 签名+公证，先抬 maxfiles/ulimit 524288 防 EMFILE；win 未签名 issue #12）→ 失败时 notarytool history/log 打印 Apple 拒因 → upload-artifact（dmg/exe + windows 腿单独产的 patch/*）。**发布收口在独立的 `release` job**（`needs: [build]`，不加 `if: always()`，故 build 任一矩阵腿失败则整个 release 不跑，避免 mac/win 各自往同一 tag 独立发布出半成品 Release，dev-board#74）：下载两平台 artifact 合并后统一跑 softprops/action-gh-release 附 dmg/exe/patch + 双语 body。
+- **desktop-build.yml**（发版主 workflow）：触发 = workflow_dispatch / tag `v*` / PR 改动 desktop|backend|frontend|pptx-service 路径（pptx-service 于 2026-09-09 补入，PR#766：它的源码与 requirements.lock 原样进包，re-vendor 类 PR 必须跑打包冒烟）。矩阵：tag 或手动 = mac+win；**普通 PR 只跑 windows**（mac runner 1h+）。每平台步骤顺序（**不可乱**，PR#176）：build:h5 → build:zetaoffice → fetch-lowa-assets（LOWA_BASE_URL=自建 zh-CN 引擎 24.2.8-zhcn-r2）→ desktop npm test → mvn package(-Djavacpp.platform) + prepare-backend(jar+jlink JRE) → CPython 运行时 `prepare-python-service.js --runtime-only 1`（**0.38.0 起四个 Python 服务不再随包**，见下「Python 运行时 pack」） → **(mac)sign-mac-natives.sh → 冒烟（backend /api/admin/wizard 120s；四个 Python 服务的冒烟移到 pack-release.yml 的 runtime 腿）** → electron-builder（mac 签名+公证，先抬 maxfiles/ulimit 524288 防 EMFILE；win 未签名 issue #12）→ 失败时 notarytool history/log 打印 Apple 拒因 → upload-artifact（dmg/exe + windows 腿单独产的 patch/*）。**发布收口在独立的 `release` job**（`needs: [build]`，不加 `if: always()`，故 build 任一矩阵腿失败则整个 release 不跑，避免 mac/win 各自往同一 tag 独立发布出半成品 Release，dev-board#74）：下载两平台 artifact 合并后统一跑 softprops/action-gh-release 附 dmg/exe/patch + 双语 body。
 - **star-history.yml**（周一 cron）：重画 star SVG 强推 star-history 分支。
 
 ## 发版链路
@@ -198,6 +198,11 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
    ③ mac 语言包靠 `desktop/scripts/after-pack.js`（`build.afterPack`）在签名前删 Framework 里非 en/zh_CN 的 `*.lproj`（−36MB）；`electronLanguages` 在 mac 上只裁 `Contents/Resources` 的空壳。**升级 electron-builder 要回头核 `platformPackager.js` 里 afterPack 仍早于 doSignAfterPack**；`afterPack` 相对路径按 cwd 解析，必须在 `desktop/` 里跑。
    ④ `installer.nsh` 顶部 `SetCompressor /SOLID lzma` 盖掉 electron-builder 用 `-X` 下发的 zlib（ARM64 壳的 `File /r` 走它）；`nsis.differentialPackage=false` 关掉为 electron-updater 差量准备的 dict 1MB/非固实 7z。`installer-ui-smoke.yml` 不覆盖 installer.nsh，只有 desktop-build.yml 的 Windows 腿能验；固实压缩会让 makensis 变慢。
    ⑤ `prepare-python-service.js` 的 `prune()` 扩表（torch/include|test|share、bin/magika|ruff、pocketsphinx-data、一级包 tests/|test/、gradio *.js.map）；**`testing/` 不能删**（`torch/__init__` eager import 它），`dist-info/RECORD` 不能删。
+6.8. **Python 运行时 pack（dev-board#529，规格 `docs/superpowers/specs/2026-09-09-installer-slimming-design.md` §3，规范 `docs/NATIVE_PACK_DISTRIBUTION.md` §7.5）**：
+   ① 安装包不再含 `pysvc.tar.gz`；四个服务的根目录由 `desktop/main/services/pysvc-runtime.js` 的 `resolveServiceRoot(ctx, service)` 解析：env `AIWORKDECK_PYSVC_<SVC>_DIR` → `~/.aiworkdeck/packs/<id>/<version>/`（`current.json` 指向 + `.pack-complete` + 未 revoked）→ dev 态 `desktop/bundled/<plat>/pysvc/<service>`。首启解压与 splash「约一分钟」文案已删。
+   ② 启动门：pptx/asr = pack 在场即起（asr **刻意不等模型**，探测要分清 RUNTIME_MISSING / SERVICE_DOWN / MODEL_MISSING）；mineru/kokoro = pack 在场且模型已装。`model-manager.js` 的模型下载器跑在服务 venv 里，**先 pack 后模型**是硬顺序，runtime 缺失时 `download()` 当场抛。
+   ③ 后端：`ai.packs.max-archive-entries`（150000）/ `ai.packs.max-unpacked-bytes`（2.5GB）可配置；`PackAutoInstaller` 对四个 runtime pack **不自动补下**（用户要求先提示）；`GET /api/packs/optional-components` 零网络请求；`PptxTools`/`PdfTools` 在服务不可达且 pack 未装时发 SSE `client_action` `component_required`（六字段 packId/service/modelId/sizeMb/features/trigger，前端 ChatInterface 就地拦截，**不进 EDITOR_ACTIONS**）。
+   ④ 发版硬顺序：四个 pack 先经 `pack-release.yml`（runtime 矩阵腿，`app` 只在 mac 腿产一次）+ `deploy/publish-pack.sh` 上两站镜像 verify 通过，再打 `v0.38.0`（runbook：`docs/superpowers/plans/2026-09-09-pack-release-runbook.md`）。补丁组件收敛为 backend-app / frontend-h5 / zetaoffice-wrapper，`pysvc-src` 废除；requirements.lock 改动走 pack 发版。
 
 ## 测试命令总表
 
@@ -237,9 +242,9 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 ## 关键构建脚本（desktop/scripts/）
 
 - `prepare-backend.js` — fat jar→backend.jar + jlink 裁剪 JRE 到 bundled/<plat>/。
-- `prepare-python-service.js` — python-build-standalone 3.11.12 + pip site-packages + 服务源码；mineru 纯 pip 无源码。
+- `prepare-python-service.js` — python-build-standalone 3.11.12 + pip site-packages + 服务源码；mineru 纯 pip 无源码。`--runtime-only 1` 只烙 CPython（安装包用）；`prune(libDir, service)` 通用表 + 按服务表（mineru 去 gradio 三件套，前提已证明 `mineru.cli.fast_api` 不 import gradio）。
 - `prepare-graphviz.js` — 烙最小 graphviz（仅布局引擎，不带任何渲染后端；闭包约 4MB）到 bundled/<plat>/graphviz/。**只有诉讼可视化的流程图布局要它**，而诉讼可视化自 v0.21.0 起改走 native pack 分发（[[native-pack-distribution]]），所以**这个脚本只在 `pack-release.yml` 里跑，不在 desktop-build.yml 的安装包构建链里**——它在 desktop-build.yml 里只作为缓存键的哈希输入出现（2026-08-29 核对）。按「安装包里为什么没有 graphviz」排查的人别再往构建链上找。mac 需 install_name_tool 重定位 + ad-hoc 重签（改过的 Mach-O 不重签会被内核 SIGKILL）；脚本自带正反两条自检（详见 `.claude/agents/litigation-visual.md`）。
-- `pack-pysvc.js` — 上万小文件→单 pysvc.tar.gz + meta（首启解压进度条；解压逻辑在 desktop/main/services/pysvc-runtime.js）。**必须在签名与冒烟之后跑**。
+- `build-pack.js` — native pack 出包：litigation-visual 三组件 + **四个 Python 运行时 pack（`pptx/mineru/kokoro/asr-runtime`，组件 `lib` 平台相关 + `app` 平台无关，mineru 无 app；`minAppVersion` 0.38.0）**。`pack-pysvc.js` 已删（dev-board#529）。
 - `fetch-lowa-assets.js` — LOWA 运行时+CJK 字体进 frontend/dist/zetaoffice/，保留 brotli + .encodings.json 侧车。
 - `sign-mac-natives.sh` — 签 electron-builder 够不到的 Mach-O（JRE + jar 内嵌 dylib），时间戳退避重试，nested jar 用 zip -0 回写。
 - `desktop/lowa-build/mega-build.sh` — 从源码重建 zh-CN LOWA（Ubuntu 22.04，无人值守）。
