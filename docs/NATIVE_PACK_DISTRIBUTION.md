@@ -128,7 +128,9 @@ manifest 原始字节上（旁挂 `.sig`，与增量更新的 `manifest.json.sig
   并显式 `gzip off`，杜绝「客户端把压缩字节再解一层」这类编码事故。
 - **符号链接**：构建期打 tar 时 `--dereference` 物化所有软链；安装端解压器
   **拒绝** symlink / hardlink / 绝对路径 / `..` 条目（zip-slip 同款防护），
-  并限制条目数（≤ 5000）与解压后总体积（≤ 500 MB）。
+  并限制条目数与解压后总体积（可配置，默认 150000 条目 / 2.5 GB；
+  litviz/drawio 时代是写死的 5000 / 500 MB，四个 Python 运行时 pack 把它抬起来的，
+  见 §7.5）。
 - **可执行位**：tar 保留 POSIX 权限；Java 解压端恢复 exec bit（graphviz 的
   `dot` 等）。mac 二进制在构建期已由 `prepare-graphviz.js` 做过
   install_name_tool 重定位 + ad-hoc 重签，pack 原样收录（签名在文件字节里，
@@ -375,6 +377,27 @@ pack 不进 registry API、不进 `data/plugin-files/`（那条路是为 ≤20 M
 - `doc/nginx-workdeck-ai.conf` 加 `^~ /plugin-packs/` location（北京侧宝塔同步改）；
 - `/zh/plugins` 页与桌面广场对面板型 skill 的展示口径不变（它们本来就不在
   官网 registry 里）。
+
+### 7.5 四个 Python 运行时 pack（v0.38.0）
+
+`pptx-runtime` / `mineru-runtime` / `kokoro-runtime` / `asr-runtime`，一服务一 pack，
+组件 `lib`（平台相关，`unpackDir: lib`）+ `app`（平台无关，`unpackDir: app`；mineru 没有）。
+`minAppVersion: 0.38.0`。落盘 `~/.aiworkdeck/packs/<id>/<version>/{lib,app}`，
+桌面壳经 `desktop/main/services/pysvc-runtime.js` 的 `resolveServiceRoot()` 解析
+（env 覆盖 → pack current → dev bundled）。模型仍走 `model-manager.js`，不并入 pack。
+
+- 单包解压上限因此抬到 150000 条目 / 2.5 GB（`ai.packs.max-archive-entries` /
+  `ai.packs.max-unpacked-bytes`），安全前提是 manifest 有 Ed25519 签名。
+- 这四个 pack **不进** `PackAutoInstaller` 的自动补下（用户要求先提示后下），
+  但照常受 `PackUpdater` 的 24h 追新——服务源码的修复由 pack 新版本承载，
+  小版本补丁的 `pysvc-src` 组件同批废除。
+- 构建走 `pack-release.yml` 的 `runtime` 矩阵腿（mac-arm64 / win-x64 各跑一遍
+  `prepare-python-service.js` → `build-pack.js` → 从 pack 布局真起一次服务打
+  `/health`）。**`app` 组件只在 mac 腿产一次**：它平台无关，两台机各产一份同名
+  `tar.gz` 会让汇总时 `cp` 覆盖的那份与 manifest 里记的 sha256 对不上。
+- 发布顺序是硬约束：四个 pack 必须**先于** 0.38.0 安装包上两站镜像并 `verify`
+  通过，否则新装用户点「下载组件」只会拿到 404。照抄
+  `docs/superpowers/plans/2026-09-09-pack-release-runbook.md`。
 
 ## 8. 三方 pack 提交与审核（v1 即开放，已拍板）
 

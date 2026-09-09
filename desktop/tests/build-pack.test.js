@@ -16,7 +16,7 @@ const path = require('path')
 const crypto = require('crypto')
 const { execFileSync } = require('child_process')
 
-const { packComponent } = require('../scripts/build-pack')
+const { packComponent, RUNTIME_PACKS, minAppVersionFor } = require('../scripts/build-pack')
 
 function sha256Of(filePath) {
   return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
@@ -96,4 +96,40 @@ test('打包一个自造小目录：manifest 的 size/sha256 与 contents.sha256
     const got = sha256Of(path.join(extractDir, rel))
     assert.strictEqual(got, want, `contents.sha256 里 ${rel} 的哈希对不上解出来的文件`)
   }
+})
+
+// ---- 四个 Python 服务运行时 pack（dev-board#529 / 设计 §3.1）----
+
+test('四个 runtime pack 的注册表与 minAppVersion 钉死（mineru 无 app 组件）', () => {
+  assert.deepStrictEqual(Object.keys(RUNTIME_PACKS).sort(), [
+    'asr-runtime', 'kokoro-runtime', 'mineru-runtime', 'pptx-runtime'
+  ])
+  assert.strictEqual(RUNTIME_PACKS['pptx-runtime'].service, 'pptx-service')
+  assert.strictEqual(RUNTIME_PACKS['mineru-runtime'].hasApp, false,
+    'mineru 是纯 pip 包服务（prepare-python-service.js 不带 --src），没有 app/')
+  assert.strictEqual(RUNTIME_PACKS['kokoro-runtime'].hasApp, true)
+  for (const id of Object.keys(RUNTIME_PACKS)) {
+    assert.strictEqual(minAppVersionFor(id), '0.38.0', id + ' 只对 0.38.0 及以上的宿主开放')
+  }
+  assert.strictEqual(minAppVersionFor('litigation-visual'), '0.21.0', '老 pack 的下限不许被改动波及')
+})
+
+test('packComponent 报出解压后体积（optional-components 面板要显示「解压多大」）', (t) => {
+  const workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'build-pack-size-'))
+  t.after(() => fs.rmSync(workRoot, { recursive: true, force: true }))
+  const srcDir = path.join(workRoot, 'lib')
+  fs.mkdirSync(srcDir, { recursive: true })
+  fs.writeFileSync(path.join(srcDir, 'a.bin'), Buffer.alloc(4096, 1))
+  fs.writeFileSync(path.join(srcDir, 'b.bin'), Buffer.alloc(2048, 2))
+  const outDir = path.join(workRoot, 'out')
+  fs.mkdirSync(outDir, { recursive: true })
+
+  const comp = packComponent(
+    { id: 'asr-runtime', version: '1.0.0', outDir },
+    { name: 'lib', srcDir, exclude: [], archive: 'lib.tar.gz', platforms: ['mac-arm64'], unpackDir: 'lib' }
+  )
+
+  assert.strictEqual(comp.unpackDir, 'lib')
+  assert.strictEqual(comp.unpackedSize, 4096 + 2048)
+  assert.ok(comp.size > 0 && comp.size < comp.unpackedSize, '压缩包应当比解压后小')
 })
