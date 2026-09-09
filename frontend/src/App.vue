@@ -398,6 +398,49 @@ html {
     --awd-panel-accent-2: var(--awd-mint);
     --awd-panel-accent-wash: var(--awd-accent-wash);
 }
+
+/* ---- 悬浮细滑轨（.awd-hairline-scroll，dev-board#543） ----
+   VS Code 式：静止时只有轨道没有滑块（thumb 透明），鼠标进到容器里才显形。
+   给横向可滚的窄条（编辑器工具栏主命令区 .etb-scroll、编辑器标签栏 .tabs-scroll）
+   用——原生 15px 滚动条会把 38px 的一行撑成 41px（dev-board#502），而整条藏掉
+   又等于把「这里还能往右滚」这件事从界面上抹掉（#543 复发的正是这一步）。
+
+   写成全局类而不是各自 scoped：uni-h5 的 <scroll-view> 真正 overflow 的是内层
+   那个 div.uni-scroll-view（组件的 scope id 只落在 <uni-scroll-view> 根元素上），
+   scoped 样式够不着它，非要写就得逐处 :deep 复制一份。
+
+   Chromium 一旦看到 scrollbar-width，就整个忽略 ::-webkit-scrollbar 那套，6px 的
+   确定高度会退化成 thin（约 8px），把按上面 6px 算好的居中偏移带歪。所以标准属性
+   只留给没有 webkit 伪元素的浏览器。 */
+.awd-hairline-scroll::-webkit-scrollbar,
+.awd-hairline-scroll ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+.awd-hairline-scroll::-webkit-scrollbar-track,
+.awd-hairline-scroll ::-webkit-scrollbar-track {
+    background: transparent;
+}
+.awd-hairline-scroll::-webkit-scrollbar-thumb,
+.awd-hairline-scroll ::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 999px;
+}
+.awd-hairline-scroll:hover::-webkit-scrollbar-thumb,
+.awd-hairline-scroll:hover ::-webkit-scrollbar-thumb {
+    background: var(--awd-border-strong);
+}
+@supports not selector(::-webkit-scrollbar) {
+    .awd-hairline-scroll,
+    .awd-hairline-scroll .uni-scroll-view {
+        scrollbar-width: thin;
+        scrollbar-color: transparent transparent;
+    }
+    .awd-hairline-scroll:hover,
+    .awd-hairline-scroll:hover .uni-scroll-view {
+        scrollbar-color: var(--awd-border-strong) transparent;
+    }
+}
 /* mac：三颗交通灯占住左上角（右缘约 70px，留 18px 呼吸） */
 html.is-mac {
     --awd-titlebar-safe-inline-start: 88px;

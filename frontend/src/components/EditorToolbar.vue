@@ -4,10 +4,12 @@
   <view class="etb-wrap">
   <view class="etb" @tap="closeMenus">
     <!-- 主命令区：窄了就横向滚动，不换行（换行会把画布挤下去）。
-         滚动条整条隐藏、横滚交给滚轮（与标签栏 .tabs-scroll 同一套做法，
-         dev-board#502）：原生横向滚动条有 15px 高，会把这一段撑到 41px、
-         在 38px 的行里被 align-items:center 顶得比右侧常驻区高半格。 -->
-    <scroll-view class="etb-scroll" scroll-x :show-scrollbar="false" @wheel.prevent="onToolbarWheel">
+         原生横向滚动条有 15px 高，会把这一段撑到 41px、在 38px 的行里被
+         align-items:center 顶得比右侧常驻区高半格（dev-board#502），但整条藏掉
+         又等于把「这里还能往右滚」从界面上抹掉（dev-board#543）——所以改成 6px
+         悬浮细滑轨（.awd-hairline-scroll，定义在 App.vue 全局样式里），横滚同时
+         接滚轮（与标签栏 .tabs-scroll 同一套做法）。 -->
+    <scroll-view class="etb-scroll awd-hairline-scroll" scroll-x @wheel.prevent="onToolbarWheel">
       <view class="etb-row">
         <!-- 撤销 / 重做 -->
         <view class="etb-btn" :class="{ off: undoDisabled }" :title="$t('editor.toolbar.undo')" @tap.stop="run('undo')">
@@ -297,6 +299,8 @@
 //   3) 本组件自己发完命令之后
 // 没有轮询：以上三路已经覆盖了用户能让光标动起来的所有途径。
 
+import { wheelDeltaOf } from '@/utils/wheelDelta.js'
+
 const ICONS = {
   undo: ['M9 14 4 9l5-5', 'M4 9h10a6 6 0 0 1 0 12h-3'],
   redo: ['M15 14l5-5-5-5', 'M20 9H10a6 6 0 0 0 0 12h3'],
@@ -512,12 +516,16 @@ export default {
       return { position: 'fixed', left: left + 'px', top: this.popPos.top + 'px', zIndex: 900 }
     },
     closeMenus() { this.menu = ''; this.insertMode = ''; this.insertErr = '' },
-    // 滚动条藏了，纵向滚轮就得映射成横向滚动，否则窄窗口下右半截命令够不着
+    // 纵向滚轮映射成横向滚动，否则窄窗口下右半截命令只能靠拖那条 6px 细滑轨
     // （dev-board#502，与标签栏 onTabsWheel 同一实现）。scroll-view 真正 overflow
     // 的是 uni-h5 渲染出的内层元素，不是根元素本身，按 scrollWidth 找。
+    // 位移一律经 wheelDeltaOf 取：uni 重建过的事件对象上没有 deltaX/deltaY，
+    // 直接读会得到 NaN，横滚静默失效（dev-board#543）。
     onToolbarWheel(evt) {
       const root = evt && evt.currentTarget
       if (!root || typeof root.querySelectorAll !== 'function') return
+      const delta = wheelDeltaOf(evt)
+      if (!delta) return
       let scroller = null
       if (root.scrollWidth > root.clientWidth) scroller = root
       if (!scroller) {
@@ -526,7 +534,6 @@ export default {
         }
       }
       if (!scroller) return
-      const delta = Math.abs(evt.deltaX) > Math.abs(evt.deltaY) ? evt.deltaX : evt.deltaY
       scroller.scrollLeft += delta
     },
 
@@ -767,14 +774,18 @@ export default {
 .etb-find-b.on { background: var(--awd-accent-soft); border-color: var(--awd-mint); color: var(--awd-accent-text); }
 .etb-find-x { margin-left: auto; padding: 3px 9px; font-size: 12px; color: var(--awd-text-2); flex-shrink: 0; }
 .etb-err.bar { margin: 0; border-radius: 0; padding: 4px 10px; }
-/* 滚动条整条隐藏（dev-board#502）。show-scrollbar=false 会让 uni-h5 给真正 overflow
-   的内层元素挂上 .uni-scroll-view-scrollbar-hidden，那条规则在 h5 产物的 uni.css 里
-   是实打实存在的；下面这几行是同一目的的兜底——本组件的 scoped 属性只落在
-   <uni-scroll-view> 根元素上，内层那个 div 不带 scope id，得靠 :deep 才够得着。 */
-.etb-scroll { flex: 1; min-width: 0; white-space: nowrap; scrollbar-width: none; }
-.etb-scroll::-webkit-scrollbar { display: none; }
-.etb-scroll :deep(*) { scrollbar-width: none; }
-.etb-scroll :deep(*::-webkit-scrollbar) { display: none; }
+/* 6px 悬浮细滑轨：样式本体在 .awd-hairline-scroll（App.vue 全局），这里只处理
+   它占的那 6px 高度。滑轨是从内容盒里扣掉的，主命令区因此会长到 26+6=32px，被
+   .etb 的 align-items:center 一居中，左半边按钮就比右侧常驻区高 3px——正是
+   dev-board#502 修的那种错位。
+
+   定高 calc(100% - 6px)（= 32px）+ margin-bottom:-6px：外边距盒回到 26px，被居中后
+   边框盒从 y6 起，内容盒恰好 y6..32，与右侧常驻区严丝合缝——**溢出与否都一样**。
+   不定高的话（内容多高就多高）只在有滑轨时对得上，命令放得下时又会反向偏 3px。
+   行内最高的是 26px 的 .etb-btn/.etb-field，有滑轨时内容盒正好 26px，不会裁到。
+   这里刻意不设 z-index：会造出层叠上下文，把工具栏下拉那些 fixed 弹层框住（同
+   .etb-wrap 那条）。 */
+.etb-scroll { flex: 1; min-width: 0; white-space: nowrap; height: calc(100% - 6px); margin-bottom: -6px; }
 .etb-row { display: flex; align-items: center; gap: 2px; }
 .etb-right { display: flex; align-items: center; gap: 4px; flex-shrink: 0; padding-left: 6px;
   border-left: 1px solid var(--awd-border); }

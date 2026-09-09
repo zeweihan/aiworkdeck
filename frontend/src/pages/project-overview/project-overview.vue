@@ -852,7 +852,8 @@
             <view class="tabs-bar">
               <!-- 左侧窗格的 Tabs -->
               <view class="tabs-pane tabs-pane-left" :class="{ 'half-width': splitMode }">
-                <scroll-view class="tabs-scroll" scroll-x :show-scrollbar="false" @wheel.prevent="onTabsWheel">
+                <scroll-view class="tabs-scroll awd-hairline-scroll" scroll-x scroll-with-animation
+                  :scroll-into-view="tabsScrollIntoViewLeft" @wheel.prevent="onTabsWheel">
                   <view
                     class="tabs-list"
                     @dragover.prevent="onTabDropZoneDragOver('left')"
@@ -862,6 +863,7 @@
                       v-for="file in leftFiles"
                       :key="file.id"
                       v-show="isTabVisible(file)"
+                      :id="tabDomId('left', file.id)"
                       class="tab-item"
                       :class="[tabKindClass(file), {
                         active: activeFileIdLeft === file.id,
@@ -892,7 +894,8 @@
 
               <!-- 右侧窗格的 Tabs (仅在分屏时显示) -->
               <view v-if="splitMode" class="tabs-pane tabs-pane-right">
-                <scroll-view class="tabs-scroll" scroll-x :show-scrollbar="false" @wheel.prevent="onTabsWheel">
+                <scroll-view class="tabs-scroll awd-hairline-scroll" scroll-x scroll-with-animation
+                  :scroll-into-view="tabsScrollIntoViewRight" @wheel.prevent="onTabsWheel">
                   <view
                     class="tabs-list"
                     @dragover.prevent="onTabDropZoneDragOver('right')"
@@ -902,6 +905,7 @@
                       v-for="file in rightFiles"
                       :key="file.id"
                       v-show="isTabVisible(file)"
+                      :id="tabDomId('right', file.id)"
                       class="tab-item"
                       :class="[tabKindClass(file), {
                         active: activeFileIdRight === file.id,
@@ -2416,8 +2420,12 @@ export default {
       pageEnterTime: 0,
 
       // Tabs 拖拽状态
-      draggingTab: null, // { fileId, fromPane }
+      draggingTab: null, // { fileId, fromPane, copy }
       tabDragOver: null, // { fileId, pane }
+      // 活动标签滚入视野（dev-board#543）：uni <scroll-view> 的 scroll-into-view 认
+      // 元素 id，赋值即滚。两个窗格各一份，由 activeFileId* 的 watcher 统一驱动。
+      tabsScrollIntoViewLeft: '',
+      tabsScrollIntoViewRight: '',
 
       // Epic #43: embedded LibreOffice editor. When active, backend AI commands
       // route to it (handleEditorCommand).
@@ -3580,12 +3588,12 @@ export default {
   watch: {
     // IDE 化窗口标题：「文件名 — 项目名 — AI WorkDeck」（Electron 窗口标题跟随 document.title）
     'project.name'() { this.updateWindowTitle() },
-    activeFileIdLeft() { this.updateWindowTitle(); this.pushMenuState() },
+    activeFileIdLeft() { this.updateWindowTitle(); this.pushMenuState(); this.ensureActiveTabVisible('left') },
     // 菜单栏的勾选/置灰跟着这些走。编辑器与 AI 面板内部的状态走 @menu-state
     // 事件（见对应组件），这里只管工作台自己的。桥那边有浅比较+去抖，
     // 这些 watcher 只管「叫一声」，不必自己节流。
     'project.id'() { this.pushMenuState() },
-    activeFileIdRight() { this.pushMenuState() },
+    activeFileIdRight() { this.pushMenuState(); this.ensureActiveTabVisible('right') },
     sidebarCollapsed() { this.pushMenuState() },
     showToolsPanel() { this.pushMenuState() },
     showAiPanel() { this.pushMenuState() },

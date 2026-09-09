@@ -179,6 +179,17 @@ dev-board#97 的「中键关闭标签」就这么静默失效了一整轮：auxc
 先确认这一类在不在上面那四个补字段分支里；`tabDragSplit.js` 的 `onTabDragStart`
 就是靠 `if (evt && evt.dataTransfer)` 兜住的（拖拽状态记在组件上，不依赖 dataTransfer）。
 
+**wheel 也一样丢字段（dev-board#543，2026-09-09）**：`wheel` 不在那四个补字段分支里，
+回调拿到的事件**没有 `deltaX/deltaY`**，`scroller.scrollLeft += evt.deltaY` 得到 NaN，
+横滚静默失效——编辑器工具栏（`EditorToolbar.onToolbarWheel`）与编辑器标签栏
+（`tabDragSplit.onTabsWheel`）当时又同时把滚动条整条藏掉，于是「窄窗口下右半截命令
+够不着」「标签开多了看不出还有更多」两件事一起发生（回归自 PR#759 / dev-board#502）。
+位移的唯一出处是 **`frontend/src/utils/wheelDelta.js` 的 `wheelDeltaOf(evt)`**
+（回调自带 delta 优先，否则回退 `window.event`；`|deltaX| > |deltaY|` 取 deltaX；
+都没有返回 0，调用方据此不动）。`altKey` 同理——标签拖拽的修饰键判定在
+`tabDragSplit.js` 的 `altKeyOf`，且**只能在 dragstart 那一下取**（dragover/drop
+阶段连原生事件都没有），起手记进 `draggingTab.copy`，drop 时读那一份。
+
 **drag 系事件是重灾区（dev-board#363，2026-09-02）**：`dragover/drop/dragleave` 的
 `dataTransfer` / `relatedTarget` 在 `<view>` 上一律拿不到——文件树内部拖拽一直是靠
 `document.__checkbaDraggedFile` 那个全局兜底在跑，`FileStagingArea.onDrop` 为 #74 加的
@@ -580,6 +591,51 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
   uni-h5 的 `<view>` 默认 inheritAttrs，原生 `auxclick` 直接落到 `<uni-view>` 上。
   标签没有「固定/不可关」概念，所以没有例外分支；要加固定标签时先在这里加判断。
   app-e2e J6.3 末尾用 `page.mouse.click(..., { button: 'middle' })` 关设置标签兼作覆盖。
+- **标签栏与工具栏的悬浮细滑轨 `.awd-hairline-scroll`（2026-09-09，dev-board#543）**：
+  定义在 **`App.vue` 的全局 `<style>`**（不是 scoped——uni `<scroll-view>` 真正
+  overflow 的是内层 `div.uni-scroll-view`，组件的 scope id 只落在 `<uni-scroll-view>`
+  根元素上），6px 轨、thumb 静止透明、容器 `:hover` 才用 `--awd-border-strong` 显形。
+  用在 `.etb-scroll`（EditorToolbar）与左右两条 `.tabs-scroll`；`:show-scrollbar="false"`
+  与那几条 `display:none` 兜底一起删掉了（它们会让 uni 给内层元素挂
+  `.uni-scroll-view-scrollbar-hidden`，把细滑轨也灭掉）。
+  **标准属性 `scrollbar-width` 被关在 `@supports not selector(::-webkit-scrollbar)` 里**：
+  Chromium 一看到它就整个忽略 `::-webkit-scrollbar` 那套，6px 会退化成 thin（约 8px），
+  把按 6px 算好的两处偏移带歪。
+  滑轨占的 6px 是从内容盒里扣的，两处各自的补偿不一样，**改高度前先看这两条**：
+  `.etb-scroll` 是 `height: calc(100% - 6px)` + `margin-bottom: -6px`（外边距盒恒为
+  26px，`align-items:center` 之后内容盒恰好 y6..32，与 `.etb-right` 对齐，且**有没有
+  滑轨都一样**——不定高的话两种情况会各偏 3px，正是 #502 那种错位）；`.tabs-scroll`
+  是 `height: calc(100% + 6px)` + `position: relative; z-index: 1`（`.tab-item` 是写死的
+  36px，内容盒少 6px 会被 uni 挂的 `overflow-y:hidden` 裁掉激活标签那块白底；多出的
+  6px 溢出到 `.editors-container` 头上，而它 `position:relative` 且有背景色，不抬一层
+  就把滑轨整条盖掉）。z-index 只给 `.tabs-scroll`，**不要给 `.etb-scroll` 或 `.etb-wrap`**
+  ——工具栏下拉是 `position:fixed` 弹层，多一个层叠上下文就把它们框住了。
+- **`.tab-item` 必须有 `flex-shrink: 0`（dev-board#543）**：没有它，标签一多是整行被
+  压扁而不是溢出，滚动条永远不出现。`max-width` 同轮从 200px 收到 160px。
+- **活动标签滚入视野（dev-board#543）**：两条 `.tabs-scroll` 各有一个
+  `:scroll-into-view="tabsScrollIntoView{Left,Right}"` + `scroll-with-animation`，
+  锚点是每个 `.tab-item` 上的 `:id="tabDomId(pane, file.id)"`（`fileOpenTabs.js`
+  的模块级纯函数，非法字符换下划线——uni 对这个 id 的形状有硬要求
+  `/^[_a-zA-Z][-_a-zA-Z0-9:]*$/`，不合只 `console.error` 然后什么都不做）。
+  驱动挂在 **`activeFileIdLeft/Right` 的 watcher** 上，不是 `activateTab` 里：
+  `openFile`、`moveTabTo`、`closeFile` 的相邻接管、按模式恢复都是直接写
+  `activeFileId*` 的，watcher 才是唯一入口。`ensureActiveTabVisible` 先把值清空再在
+  `$nextTick` 里赋（同一个 id 再次激活时属性值不变，uni 那个 watch 不会重新触发），
+  并且**本来就整条可见就不滚**（scroll-into-view 是对齐到容器最左，点一个眼前的标签
+  也会把整条抽一下）。
+  **`tabDomId` 刻意不 export**：`tab-middle-click-close` 一类测试用
+  `new Function` 把整个 mixin 源码包起来跑，模块级 `export` 会让那个工厂语法出错。
+- **标签跨窗格拖拽 = 移动，按住 Alt/Option 才是复制（2026-09-09，dev-board#542）**：
+  `moveTabTo(fileId, fromPane, toPane, beforeFileId, opts = { copy: false })`。
+  默认从源列表 splice 掉再插进目标（源侧若移走的是活动标签，按 `closeFile` 同一条
+  `min(idx, len-1)` 规则让相邻的顶上，空了置 null）；`copy:true` 才 `{ ...source }`
+  留下双开那一份（`.tab-dual-open` 样式与 `isOpenInOtherPane` 保持不变，`closeFile`
+  里那条「另一侧还开着就不销毁 BrowserView」的判断照旧成立）。
+  修饰键在 dragstart 记进 `draggingTab.copy` 并写进 dataTransfer payload。
+  **跨窗格移动前必须先落盘**（`flushTabBeforePaneMove`，两个 drop 落点共用的
+  `commitTabDrop` 调它）：移动会把源侧的编辑器实例卸掉，而
+  `LibreOfficeEditor.beforeUnmount` 自己写着「export 需要活的 webview，从这里保存
+  已经太晚」——落不下来就不搬，toast `editor.moveTabSaveFailed`。
 - **标签按文件类型着色（2026-09-09，dev-board#504）**：Word 蓝 / PPT 橙 / Excel 绿 /
   PDF 红 / Markdown 灰 / 图片紫，六色令牌 `--awd-file-*` 在 App.vue 里浅深各一套
   （也进了 `appTheme.js` 的 `THEME_TOKEN_NAMES`）。fileType → kind key 的**唯一出处**
@@ -783,6 +839,9 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 ## 验证
 
 - `cd frontend && npm run check:emits`（死绑定护栏）+ `npm run test:app-e2e`（登录→项目→上传→打开文件→独立页面全旅程）。
+- 改标签栏/工具栏滚动、标签拖拽语义加跑 `npm run test:project-home`（相关三个文件：
+  `wheel-delta.test.mjs` / `tab-strip-overflow.test.mjs` / `tab-drag-move.test.mjs`，
+  外加 `editor-toolbar-layout.test.mjs` 的 #502/#543 那半边）。
 - 改面板停靠/注册表加跑 `npm run test:panel-dock`（`resolveDocks` 回落规则与注册表自洽）。
 - 改导航/入口/设置页结构加跑 `npm run check:nav` 与 `npm run check:nav:full`（导航契约静态护栏，
   含「头像下拉只剩一项」「个人组四栏各自有人加载数据」「薄壳页挂的是统一设置面板」等断言）；

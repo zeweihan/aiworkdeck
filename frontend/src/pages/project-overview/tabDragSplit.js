@@ -1,20 +1,34 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// project-overview.vue 的标签页拖拽与分栏布局：tab 跨窗格拖拽（跨窗格是"双开"不是"移动"）、
+// project-overview.vue 的标签页拖拽与分栏布局：tab 跨窗格拖拽（普通拖拽是"移动"，
+// 按住 Alt/Option 才是"在另一侧再开一份"，dev-board#542）、
 // 三向面板拖拽改尺寸（rAF 节流 + 直接改 DOM，停手时才同步回 Vue 状态）、分屏开关与窗格聚焦。
 // 经展开进组件 methods（纯搬移，Phase 2 外置），`this` 即 project-overview 页面实例。
 
 import { activityTracker } from '@/utils/activityTracker.js'
 import { rightPanelMaxWidth, leftPanelMaxWidth } from './panelWidthLimits.js'
+import { wheelDeltaOf } from '@/utils/wheelDelta.js'
+
+// 取拖拽起手时有没有按住 Alt/Option。同 fileOpenTabs.js 的 mouseButtonOf：uni-h5 把
+// <view> 上的原生事件重建成普通对象，只给 click / mouse 系 / touch / 键盘四类补字段，
+// 补的也只是坐标，altKey 一类一概没有——所以要回退到当前正在派发的原生事件。
+function altKeyOf(e) {
+  if (e && typeof e.altKey === 'boolean') return e.altKey
+  const native = typeof window !== 'undefined' ? window.event : null
+  return !!(native && native.altKey)
+}
 
 export const tabDragSplitMethods = {
     onTabDragStart(evt, file, fromPane) {
-      this.draggingTab = { fileId: file.id, fromPane }
+      // 修饰键只在 dragstart 这一下有原生事件可读（dragover/drop 阶段 uni 重建的
+      // 对象上更没有），所以起手就记下来，drop 时读这份。
+      const copy = altKeyOf(evt)
+      this.draggingTab = { fileId: file.id, fromPane, copy }
       this.tabDragOver = null
       try {
         if (evt && evt.dataTransfer) {
-          evt.dataTransfer.effectAllowed = 'move'
-          evt.dataTransfer.setData('application/json', JSON.stringify({ fileId: file.id, fromPane }))
+          evt.dataTransfer.effectAllowed = copy ? 'copyMove' : 'move'
+          evt.dataTransfer.setData('application/json', JSON.stringify({ fileId: file.id, fromPane, copy }))
         }
       } catch (e) {
         // ignore
@@ -35,27 +49,72 @@ export const tabDragSplitMethods = {
       }
     },
 
-    onTabDropOnZone(evt, targetPane) {
+    async onTabDropOnZone(evt, targetPane) {
       const payload = this.getTabDragPayload(evt) || this.draggingTab
       if (!payload || !payload.fileId) return
       // drop 到空白区域：插入到末尾
-      this.moveTabTo(payload.fileId, payload.fromPane, targetPane, null)
-      this.onTabDragEnd()
+      await this.commitTabDrop(payload, targetPane, null)
     },
 
-    onTabDropOnItem(evt, targetFile, targetPane) {
+    async onTabDropOnItem(evt, targetFile, targetPane) {
       const payload = this.getTabDragPayload(evt) || this.draggingTab
       if (!payload || !payload.fileId) return
 
-      this.moveTabTo(payload.fileId, payload.fromPane, targetPane, targetFile.id)
+      await this.commitTabDrop(payload, targetPane, targetFile.id)
+    },
+
+    // 两个 drop 落点共用的收尾：先按需落盘，再改列表。
+    async commitTabDrop(payload, targetPane, beforeFileId) {
+      const copy = !!payload.copy
+      if (!copy && payload.fromPane !== targetPane) {
+        const ok = await this.flushTabBeforePaneMove(payload.fileId, payload.fromPane)
+        if (!ok) {
+          uni.showToast({ title: this.$t('editor.moveTabSaveFailed'), icon: 'none' })
+          this.onTabDragEnd()
+          return
+        }
+      }
+      this.moveTabTo(payload.fileId, payload.fromPane, targetPane, beforeFileId, { copy })
       this.onTabDragEnd()
     },
 
+    // 跨窗格「移动」会把源侧那个编辑器实例卸掉，而 LibreOfficeEditor.beforeUnmount
+    // 自己写着「export 需要活的 webview，从这里保存已经太晚」——所以搬走之前必须
+    // 先落盘，同 closeFile 的那道闸。落不下来就不搬，把话说清楚（静默丢几秒改动
+    // 是这个仓里反复踩过的坑）。
+    async flushTabBeforePaneMove(fileId, fromPane) {
+      const list = fromPane === 'left' ? this.leftFiles : this.rightFiles
+      const file = (list || []).find(f => f.id === fileId)
+      if (!file) return true
+      if (this.useLibreEditor(file)) {
+        const inst = (this._libreRefs || {})[fromPane + ':' + fileId]
+        if (inst && inst.ready && !inst.docLoadFailed && inst.file && (inst.dirty || inst.saving)) {
+          try { return (await inst.flushSave({ timeoutMs: 10000 })) !== false } catch (e) {
+            console.warn('[ProjectOverview] move flush-save failed:', e)
+            return false
+          }
+        }
+      } else if (this.isPlainTextFile(file)) {
+        const inst = (this._plainTextRefs || {})[fromPane]
+        if (inst && inst.file && inst.file.id === fileId && (inst.dirty || inst.saving)) {
+          try { return (await inst.flushSave()) !== false && !inst.dirty && !inst.saving } catch (e) {
+            console.warn('[ProjectOverview] move flush-save (text) failed:', e)
+            return false
+          }
+        }
+      }
+      return true
+    },
+
     onTabsWheel(evt) {
-      // VS Code 式标签栏：滚动条整条隐藏，纵向滚轮映射为横向滚动。
+      // VS Code 式标签栏：纵向滚轮映射为横向滚动（滑轨只有 6px，不该逼着人去拖它）。
       // scroll-view 真正 overflow 的是 uni-h5 渲染出的内层元素，不是根元素本身，按 scrollWidth 找。
+      // 位移一律经 wheelDeltaOf 取：uni 重建过的事件对象上没有 deltaX/deltaY，
+      // 直接读会得到 NaN，横滚静默失效（dev-board#543）。
       const root = evt?.currentTarget
       if (!root || typeof root.querySelectorAll !== 'function') return
+      const delta = wheelDeltaOf(evt)
+      if (!delta) return
       let scroller = null
       if (root.scrollWidth > root.clientWidth) scroller = root
       if (!scroller) {
@@ -64,7 +123,6 @@ export const tabDragSplitMethods = {
         }
       }
       if (!scroller) return
-      const delta = Math.abs(evt.deltaX) > Math.abs(evt.deltaY) ? evt.deltaX : evt.deltaY
       scroller.scrollLeft += delta
     },
 
@@ -78,7 +136,10 @@ export const tabDragSplitMethods = {
       }
     },
 
-    moveTabTo(fileId, fromPane, toPane, beforeFileId) {
+    // opts.copy=true：跨窗格时「在另一侧再开一份」（左右双开，.tab-dual-open 那套），
+    // 由拖拽时按住 Alt/Option 触发。默认（普通拖拽）是**移动**：从源列表摘掉再插进
+    // 目标列表（dev-board#542）。同窗格换序永远是移动，与 opts 无关。
+    moveTabTo(fileId, fromPane, toPane, beforeFileId, opts = {}) {
       if (!fileId || !fromPane || !toPane) return
       if (!this.splitMode && toPane === 'right') return
 
@@ -89,9 +150,9 @@ export const tabDragSplitMethods = {
       if (fromIdx < 0) return
 
       const source = fromList[fromIdx]
-      // 关键修复：跨窗格拖拽不“移动”，而是“在另一侧打开同一文件”（允许左右双开）
       const isCrossPane = fromPane !== toPane
-      const moved = isCrossPane ? { ...source } : fromList.splice(fromIdx, 1)[0]
+      const copy = isCrossPane && !!opts.copy
+      const moved = copy ? { ...source } : fromList.splice(fromIdx, 1)[0]
 
       // 目标索引：插入到 beforeFileId 前面（如果没有则追加末尾）
       let toIdx = -1
@@ -111,6 +172,19 @@ export const tabDragSplitMethods = {
           toList.push(moved)
         } else {
           toList.splice(toIdx, 0, moved)
+        }
+      }
+
+      // 源侧的激活态：搬走的正好是那一侧的活动标签时，按关闭标签的同一条规则
+      // 让相邻的顶上（都搬空了就置 null，窗格回到既有的空状态）。
+      if (!copy && isCrossPane) {
+        const fromIdProp = fromPane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'
+        if (this[fromIdProp] === fileId) {
+          const next = fromList.length > 0 ? fromList[Math.min(fromIdx, fromList.length - 1)].id : null
+          this[fromIdProp] = next
+          const mode = this.leftPaneKey || 'files'
+          this.lastActiveIdsByMode[fromPane][mode] = next
+          this.saveActiveIdsByMode()
         }
       }
 
