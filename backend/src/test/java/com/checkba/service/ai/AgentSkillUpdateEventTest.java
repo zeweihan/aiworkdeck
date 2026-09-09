@@ -106,7 +106,7 @@ class AgentSkillUpdateEventTest {
         when(messageService.upsertAssistantMessage(any(), any(), any(), any(), any())).thenReturn(1L);
 
         ContextAssemblerService assembler = mock(ContextAssemblerService.class);
-        when(assembler.assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        when(assembler.assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenAnswer(inv -> new ArrayList<ChatMessage>(List.of(
                         SystemMessage.from("system"), UserMessage.from("帮我出一张诉讼时间轴"))));
 
@@ -159,7 +159,8 @@ class AgentSkillUpdateEventTest {
     @Test
     @DisplayName("生效的 skill 随 skill_update 下发：id / name / source 三个字段是跨端契约")
     void emitsActiveSkillsWithSource() {
-        when(skillRouter.activeSkills("conv-skill")).thenReturn(List.of(
+        // runId 由编排器现签（UUID），桩不能再按 conversationId 匹配
+        when(skillRouter.activeSkills(anyString())).thenReturn(List.of(
                 new SkillRouter.ActiveSkill(skill("litigation-visual", "诉讼可视化"),
                         "诉讼可视化", SkillRouter.SOURCE_MANUAL),
                 new SkillRouter.ActiveSkill(skill("listing-pathway", "上市路径选择"),
@@ -180,7 +181,8 @@ class AgentSkillUpdateEventTest {
     void forwardsSkillIdsToRouter() {
         run("conv-fwd", AgentMode.AGENT, List.of("a", "b"));
 
-        verify(skillRouter).activateForTurn(eq("conv-fwd"), eq("帮我出一张诉讼时间轴"),
+        // 第二个实参是本轮的 runId（编排器现签的 UUID），只断言它非空
+        verify(skillRouter).activateForTurn(eq("conv-fwd"), anyString(), eq("帮我出一张诉讼时间轴"),
                 isNull(), eq(List.of("a", "b")));
     }
 
@@ -195,13 +197,14 @@ class AgentSkillUpdateEventTest {
     @Test
     @DisplayName("ASK 模式：手动选择不参与，skill_update 下发空列表")
     void askModeDropsManualSelection() {
-        when(skillRouter.activeSkills("conv-ask")).thenReturn(List.of(
+        when(skillRouter.activeSkills(anyString())).thenReturn(List.of(
                 new SkillRouter.ActiveSkill(skill("litigation-visual", "诉讼可视化"),
                         "诉讼可视化", SkillRouter.SOURCE_MANUAL)));
 
         run("conv-ask", AgentMode.ASK, List.of("litigation-visual"));
 
-        verify(skillRouter).activateForTurn(eq("conv-ask"), eq("帮我出一张诉讼时间轴"), isNull(), isNull());
+        verify(skillRouter).activateForTurn(eq("conv-ask"), anyString(),
+                eq("帮我出一张诉讼时间轴"), isNull(), isNull());
         assertEquals("{\"skills\":[]}", skillUpdateData(),
                 "ASK 下 skill 本来就不生效，面板不该亮着 chip");
     }

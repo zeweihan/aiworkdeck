@@ -171,6 +171,15 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 - 线程池：`config/AsyncExecutorConfig.java` 显式 taskExecutor(16/32/队列200) + memoryExecutor(2/4)——MemoryPipelineService 的同步 LLM 调用已隔离，别再挂回 taskExecutor。
 - 进程重启续跑（二期）：run 状态持久化 + 启动回收，见上文 AgentRunStateService / AgentRunRecoveryService。只有 RUNNING 跨重启复活（回收成 INTERRUPTED），FINISHED/ERROR/CANCELLED 仍是进程内状态，避免僵尸状态。
 
+**轮次隔离：runId / RunGuard（2026-09-09，dev-board#533；审计「留给维护者拍板」第 2、4 条的落地）**
+- **一次 `POST /api/agent/chat` = 一个轮次 = 一个 runId**（`AgentOrchestrator.beginRun` 现签 UUID，进程内唯一、不入库、不上 SSE）。`AgentOrchestrator.RunGuard` 现在持有本轮的**全部**状态：conversationId、runId、SSE 连接代次、取消标志（AtomicBoolean）、流式缓冲（同步的 StringBuilder）、本轮 ASSISTANT 行 id，外加原有的 StuckDetector / triedModels / llmRetries / malformedToolRounds / overflowCompactions / activeFileId。**改造前这四样都是 `conversationId -> 单槽` 的 map**，同一会话两个并发轮次（双击发送 / 两个标签页 / 客户端重试 / 手机端镜像同一会话）必然互相踩：后起一轮把行 id 槽清掉，先起那一轮收尾时拿到**别人的行 id** 去 update（两轮合并成一行、一轮的正文永久消失）；后起一轮开头无条件 `cancelledConversations.remove(cid)`，把上一轮尚未生效的取消标志擦掉（用户点了停止，旧轮次一路跑到底继续烧 token、继续改文档）。
+- **`activeRuns`（conversationId → 当前轮次的 RunGuard）是唯一的解析入口**：`POST /cancel/{cid}` → `setCancelled` 解析出当前活跃 runId 再置位；`/connect/{cid}` 的断线恢复快照 `getRecoverySnapshot` 同样按它解析。**没有活跃轮次时 cancel 是 no-op**——这是刻意的语义改变：会话级的粘性取消标志正是要消灭的缺陷（它会误杀「停止后立刻再发」的新一轮）。前端 `useAgentStream.abort()` 先 `await` 掉 POST /cancel 再拆本地 SSE，用户随后手动发的新消息必然排在后面，顺序天然正确。**轮次登记同步发生在控制器线程上**（2026-09-09 补齐）：`handleUserMessage` 不再整体挂 `@Async`——`beginRun` 在返回给控制器之前完成，之后才把循环本体提交给 `taskExecutor`（线程池经 `setTurnExecutor` 方法注入，**刻意不进构造器**：本类构造器由 `@RequiredArgsConstructor` 生成，加字段就要同步改 EvalHarness 与九个编排器测试；字段为空时就地同步执行，正是各单测与回放评测里 `new AgentOrchestrator(...)` 的既有行为）。此前「chat 已返回 200、池线程还没执行 beginRun」那个空窗里发来的 cancel 会**整个落空**（云端 taskExecutor 打满时窗口会放大到秒级），用户点了停止却眼看着它继续写文档、继续烧 token；现在窗口不存在——起跑后第一件事就是 `runLoop` 顶部的取消检查，模型一次都不会被调用。提交被有界队列的 AbortPolicy 拒绝时先 `endRun` 撤销登记再把异常原样抛回控制器，不留「有活跃轮次但什么都没跑」的幽灵。
+- **被取代的旧轮次继续跑完，但对会话级状态全程静默**（`isCurrentRun` 判据 = `activeRuns.get(cid) == guard`）：run_state 状态点（`markRunState`）、`bubble_end` / `cancelled` / `error` / `doc_stream_end` / `text_delta` / `skill_update`（`sendRunEvent`）、`closeSse`、`officePassStateStore.clear` 一律跳过。不这样的话旧轮次的一个 `bubble_end` 就能把新轮次的气泡当场结束掉，一次 `mark(FINISHED)` 就能把新轮次的 RUNNING 盖成终态。**它自己的东西照写**：消息行、执行日志、重试预算——所以两轮的回复在历史里各自完整，这正是回归用例断言的东西。刻意不强杀旧轮次：工具副作用（已写进文档、已发出的请求）回滚不了，跑完不比半路掐更危险。
+- **`SkillRouter` 的登记簿改按 runId 索引**（`activeByRun`，原 `activeByConversation`）：`activateForTurn(conversationId, runId, …)`（conversationId 只用于埋点归属）、`activeSkills(runId)` / `activeSkill(runId)` / `visibleTools(runId, …)`、新增 `clearRun(runId)` 由编排器在每条终态路径上调。本类不再持有任何 conversationId 级的可变状态。`ContextAssemblerService.assemble` 因此多了一个 **`runId` 形参（第 2 位）**——prompt 注入与工具白名单必须读同一轮的生效集合，这条「同源」契约在并发下只有按 runId 才成立。
+- **流式增量也过轮次闸**（2026-09-09 补齐）：`AgentStreamHandler` 构造器多了第 8 个参数 `BooleanSupplier currentRunGate`，编排器传 `() -> isCurrentRun(guard)`。本类所有会话级 SSE 出口收进私有的 `sendSse`（`text_delta` / `reasoning_delta` / `bubble_start` / `artifact` / `token_usage`，以及无编排器回调时的 `bubble_end` 与 `error`+close），闸关就静默丢弃；`runLoop` 里 `setOnEditorStream` 的回调体整体加了 `isCurrentRun(guard)` 前置判断（`doc_stream_data` / `wps_stream_data` 与 `noteStreamContent` 都按 conversationId 寻址，是会话级的）。**闸只管往 emitter 上发什么**：本轮的内容累积、看门狗、终态幂等、`onToken` / `onEditorStream` / `onComplete` / `onError` 回调一概不受影响——被取代的旧轮次照常跑到自己的终态、落自己的库，只是对 SSE 完全静默。七参构造器保留（恒开闸），给无轮次概念的调用方与三个既有 handler 单测用；**编排器必须走带闸的重载**。
+- **对外契约零变化**：SSE 事件名与载荷、`/api/agent/chat` 与 `/api/agent/connect/{id}` 的请求响应形态一字未动，runId 不出现在任何载荷里；前端与 Office/WPS 插件不需要改。
+- **仍然存在的已知局限（刻意没做）**：① 埋点 `TelemetryTurnTracker` 仍按 conversationId 记，被取代那一轮的 `ai.turn` 不会闭合；② 跨进程重启的 `AgentRunRecoveryService` 仍按 conversationId 回收（重启后进程内一个 RunGuard 都不剩，`agent_run_record` 每会话一行仍然正确，加 runId 列没有消费者）；③ 旧轮次收尾时仍会执行 `editorBridgeService.setStreamingMode(cid, false)`，把新轮次正在进行的编辑器流式写入模式一起关掉。**这里刻意没加闸**：流式模式是工具打开、收尾关闭的会话级开关，给旧轮次加闸只会换成「旧轮次开的流式模式永远不关」这种更难查的泄漏；正确修法是把流式模式本身做成轮次级状态，属 ai-doc-bridge 领域。
+
 **前端消费**
 - `frontend/src/composables/useAgentStream.js`（1233 行）— SSE 核心：connectSSE（fetch+ReadableStream，非 EventSource）、sendMessage、abort、handleEvent（~:352 分派）、handleTag/processTextDelta（XML 标签驱动气泡组装）、handleStateRecovery。
 - `frontend/src/components/ChatInterface.vue`（3620 行）+ `AgentMessage/`（RootBubble/ProcessCard/ThinkingCard/TodoProgressCard/WalkthroughCard/TitleCard/**QuestionCard**/**SubtaskResultCard**）。
@@ -221,6 +230,15 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
 
 - **改 AgentOrchestrator 构造器必须同步 EvalHarness**（已踩三次；现构造器末三参是
   TelemetryService/TelemetryTurnTracker/MatterClassifierService）。
+- **编排器里凡是「会话级」的写操作，一律走 `markRunState` / `sendRunEvent` / `closeSse(guard)`，不要直接调
+  `agentRunStateService.mark` 或 `sseEmitterService.send(conversationId, …)`**（dev-board#533）。直接调等于
+  绕过 `isCurrentRun` 判据，被新一轮取代的旧轮次会把新轮次的气泡与状态点一起终结掉——而这类 bug 只在
+  并发轮次下才现形，单轮跑一百遍都是绿的。工具副作用类通知（`client_action` refresh_files / `file_change`）
+  是例外：它们描述的是已经发生的文件变化，与哪一轮在前台无关。
+- **新增终态分支必须调 `endRun(guard)`**：漏了会在 `activeRuns` 里留一条僵尸轮次，此后这个会话的
+  「停止」会打到一个已经死掉的 run 上（用户看到点了没反应），断线重连还会拿到过期快照。
+- **`SkillRouter` / `ContextAssemblerService` 拿的是 runId，不是 conversationId**：两处签名里它们都是
+  `String`，传错了编译照过、单轮也照跑，只有并发轮次才会露出「A 轮的 prompt 配 B 轮的工具」。
 - **工具返回空白会掀翻整轮**：`ToolExecutionResultMessage.from(req, text)` 的
   `ensureNotBlank(text, "text")` 对空串直接抛异常，用户看到的是
   「Callback Error: text cannot be null or blank」——一个返回空串的工具就能打掉整轮对话。
@@ -400,10 +418,11 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
 - `cd backend && mvn test`（JDK 21！默认 25 SIGBUS）——含回放评测 OrchestratorReplayEvalTest（用例 `backend/src/test/resources/ai-eval/cases/cases-*.json`，**13 组**）+ DesktopContextSmokeTest。新增 cases-file-tree（整理文件夹/重命名的 create_folder→move_project_file→rename_project_file 链）、cases-harness-recovery（截断 tool_code 纠正回路 F-10、编辑器桥 `{"error"}` 判 FAILURE F-09）与 **cases-question**（反问停机：awaiting_input / 执行日志随停机落库 / 同轮工具+反问不递归 / 计划审批优先于反问）。`expect.promptContains` 断言编排器回喂的系统提醒确实进了下一轮上下文。
   - **地雷：`eval/RealToolBeans.instantiateAll()` 的清单必须与生产 `AgentToolComponent` 集合同步。** TodoTools 曾长期漏列，于是 `todo_write` 在整个回放评测里根本没注册——`offeredToolsInclude` 永远失败、`offeredToolsExclude` 永远通过，相关可见性断言全是空的（已补 TodoTools）。**目前仍缺 CheckpointTools 与 SlideEditTools**，补时要同时复核各用例的 offeredToolsExclude。
   - **跨类 `public static final` 常量在编译期内联**：只跑 `mvn test` 的增量编译会留下「源码一致、字节码不一致」的假失败，验证阶段一律 `mvn clean test`。
-  - **`mvn clean test` 里有 3 条 skip 是常态**（env 门控：AllowedModelsLiveContractTest 要 `RUN_LIVE_MODEL_CHECK=1`、RealLlmSmokeTest 要 `OPENROUTER_API_KEY`、CrossLanguageSignatureTest 要 python），不是回归。
+  - **`mvn clean test` 里有 14 条 skip 是常态**（2026-09-09 实测：Tests run 3410 / Skipped 14），不是回归。逐条门控：ProjectProfileFieldMysqlSchemaTest **3** 条与 ProjectAiMessageIndexMysqlTest **1** 条要 `AWD_MYSQL_SCHEMA_CHECK=1`（真 MySQL）；LitigationPngServiceTest **4** 条要本机有随包字体与已生成的示例 SVG（`node desktop/scripts/fetch-lowa-assets.js`）；RealVisionSmokeTest **3** 条与 RealLlmSmokeTest **1** 条要 `OPENROUTER_API_KEY`；AllowedModelsLiveContractTest **1** 条要 `RUN_LIVE_MODEL_CHECK=1`；CrossLanguageSignatureTest **1** 条要 python。数字对不上再查，别默认「skip 反正是常态」。
   - **Mockito 陷阱（踩过）**：`String.valueOf(inv.getArgument(n))` 会被 Java 重载决议挑成 `String.valueOf(char[])`（泛型 `<T> T` 推成 `char[]`），运行时抛 ClassCastException；若该 mock 的调用方把异常吞掉只 log（如 `SubAgentService.sendProgress`），表现就是「队列永远空、断言说没收到事件」，看着像生产代码不发事件。写 `inv.getArgument(n, String.class)`。
 - 只跑回放：`mvn test -Dtest=OrchestratorReplayEvalTest`；真实 LLM 冒烟：`OPENROUTER_API_KEY=… mvn test -Dtest=RealLlmSmokeTest`（默认模型已换成 deepseek/deepseek-v4-flash，境内可跑）。
 - 身份作用域与模型解析：`mvn test -Dtest=PlatformScopeCloudMultiTenantTest,AuxModelResolverTest,SubAgentServiceTest,AgentOrchestratorFailoverTest,AgentOrchestratorFailoverFlowTest`。
+- 并发轮次隔离：`mvn test -Dtest=AgentOrchestratorConcurrentTurnsTest`（五条：两轮并发各占一行消息、「停止后立刻再发」只停旧轮、两轮各自命中各自的 skill、旧轮次被取代后 `text_delta` / `reasoning_delta` / `doc_stream_data` 全部静默而新轮次照常、chat 返回后循环起跑前发来的 cancel 不落空；交错点全用 CountDownLatch 钉死，不靠 sleep 赌时序——最后一条用一个只在放行后才跑任务的假 executor 卡住「已提交未起跑」这个窗口）。
 - 状态持久化/启动回收：`mvn test -Dtest=AgentRunRecoveryServiceTest`（mark 写透、RUNNING→INTERRUPTED+补标记、幂等、续跑翻回 RUNNING）。
 - 工具空输出与崩溃轮落库：`mvn test -Dtest=AgentOrchestratorBlankToolOutputTest,ReadDocumentOfficeFormatTest`
   （空串工具不掀翻整轮 + 按 FAILURE 回喂；onComplete 异常路径把执行日志与错误摘要落库、error 载荷带

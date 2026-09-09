@@ -81,7 +81,7 @@ class ContextAssemblerServiceTest {
 
     private List<ChatMessage> assembleMessages(AiAgentController.ContextItem activeContext) {
         return assembler.assemble(
-                "conv-1", "帮我修订一下", null, activeContext,
+                "conv-1", "run-1", "帮我修订一下", null, activeContext,
                 null, null, "88", AgentMode.AGENT, 1L, null);
     }
 
@@ -263,7 +263,7 @@ class ContextAssemblerServiceTest {
 
         String huge = "甲".repeat(200_001);
         List<ChatMessage> messages = bigLimitAssembler.assemble(
-                "conv-1", "帮我修订一下", null, officeDoc(huge),
+                "conv-1", "run-1", "帮我修订一下", null, officeDoc(huge),
                 null, null, "88", AgentMode.AGENT, 1L, null);
         String systemText = ((SystemMessage) messages.get(0)).text();
 
@@ -327,9 +327,9 @@ class ContextAssemblerServiceTest {
         SkillRouter realRouter = (SkillRouter) parts[1];
 
         // 用户这句话不含 manual-skill 的任何触发词，纯靠手动勾选
-        realRouter.activateForTurn("conv-skill", "帮我看看这个", null, List.of("manual-skill"));
+        realRouter.activateForTurn("conv-skill", "run-skill", "帮我看看这个", null, List.of("manual-skill"));
         String systemText = ((SystemMessage) realAssembler.assemble(
-                "conv-skill", "帮我看看这个", null, null, null, null, "88",
+                "conv-skill", "run-skill", "帮我看看这个", null, null, null, null, "88",
                 AgentMode.AGENT, 1L, null).get(0)).text();
 
         assertTrue(systemText.contains("手动技能模板正文MANUAL"),
@@ -345,9 +345,9 @@ class ContextAssemblerServiceTest {
         SkillRouter realRouter = (SkillRouter) parts[1];
 
         // "帮我修订一下" 命中 auto-skill 的触发词「修订」，同时手动勾了 manual-skill
-        realRouter.activateForTurn("conv-both", "帮我修订一下", null, List.of("manual-skill"));
+        realRouter.activateForTurn("conv-both", "run-both", "帮我修订一下", null, List.of("manual-skill"));
         String systemText = ((SystemMessage) realAssembler.assemble(
-                "conv-both", "帮我修订一下", null, null, null, null, "88",
+                "conv-both", "run-both", "帮我修订一下", null, null, null, null, "88",
                 AgentMode.AGENT, 1L, null).get(0)).text();
 
         assertTrue(systemText.contains("手动技能模板正文MANUAL"), "手动选择的 skill 应注入");
@@ -362,9 +362,9 @@ class ContextAssemblerServiceTest {
         ContextAssemblerService realAssembler = (ContextAssemblerService) parts[0];
         SkillRouter realRouter = (SkillRouter) parts[1];
 
-        realRouter.activateForTurn("conv-ask", "帮我修订一下", null, List.of("manual-skill"));
+        realRouter.activateForTurn("conv-ask", "run-ask", "帮我修订一下", null, List.of("manual-skill"));
         String systemText = ((SystemMessage) realAssembler.assemble(
-                "conv-ask", "帮我修订一下", null, null, null, null, "88",
+                "conv-ask", "run-ask", "帮我修订一下", null, null, null, null, "88",
                 AgentMode.ASK, 1L, null).get(0)).text();
 
         assertFalse(systemText.contains("手动技能模板正文MANUAL"));
@@ -687,7 +687,7 @@ class ContextAssemblerServiceTest {
                 mockedChatModelFactory(), mock(com.checkba.service.ProjectFileService.class));
 
         List<ChatMessage> messages = assertDoesNotThrow(() -> withBlankHistory.assemble(
-                "conv-1", "帮我修订一下", null, null, null, null, "88", AgentMode.AGENT, 1L, null),
+                "conv-1", "run-1", "帮我修订一下", null, null, null, null, "88", AgentMode.AGENT, 1L, null),
                 "空白历史消息不应掀翻整轮上下文组装");
 
         boolean hasValidHistoryText = messages.stream()
@@ -760,7 +760,7 @@ class ContextAssemblerServiceTest {
         attachment.setName("补充协议.docx");
         attachment.setFileType("docx");
 
-        assembler.assemble("conv-1", "看看这份补充协议", List.of(attachment), null,
+        assembler.assemble("conv-1", "run-1", "看看这份补充协议", List.of(attachment), null,
                 null, null, "88", AgentMode.AGENT, 1L, null);
 
         assertEquals("88", seen.get(),
@@ -801,7 +801,7 @@ class ContextAssemblerServiceTest {
     void visionCapableModelGetsImageContentInsteadOfOcr() throws Exception {
         ContextAssemblerService a = visionAssembler(new byte[]{1, 2, 3, 4});
 
-        List<ChatMessage> messages = a.assemble("conv-1", "这张照片里写了什么",
+        List<ChatMessage> messages = a.assemble("conv-1", "run-1", "这张照片里写了什么",
                 List.of(imageItem("555", "现场照片.png")), null,
                 null, null, "88", AgentMode.AGENT, 1L, "moonshotai/kimi-k3");
 
@@ -845,7 +845,7 @@ class ContextAssemblerServiceTest {
                 new InlineContentCache(), mockedMemoryManager(), mockedCompressor(),
                 en, mockedChatModelFactory(), mock(com.checkba.service.ProjectFileService.class));
 
-        String systemText = ((SystemMessage) english.assemble("conv-1", "read it",
+        String systemText = ((SystemMessage) english.assemble("conv-1", "run-1", "read it",
                 List.of(imageItem("555", "photo.png")), null,
                 null, null, "88", AgentMode.AGENT, 1L, "deepseek/deepseek-v4-flash").get(0)).text();
 
@@ -874,7 +874,7 @@ class ContextAssemblerServiceTest {
                 new InlineContentCache(), mockedMemoryManager(), mockedCompressor(),
                 mock(com.checkba.service.AppLanguageService.class), factory, fileService);
 
-        List<ChatMessage> messages = a.assemble("conv-1", "看图",
+        List<ChatMessage> messages = a.assemble("conv-1", "run-1", "看图",
                 List.of(imageItem("555", "现场照片.png")), null,
                 null, null, "88", AgentMode.AGENT, 1L, "moonshotai/kimi-k3");
 
@@ -895,7 +895,7 @@ class ContextAssemblerServiceTest {
         pdf.setName("判决书.pdf");
         pdf.setFileType("pdf");
 
-        List<ChatMessage> messages = a.assemble("conv-1", "看这份判决", List.of(pdf), null,
+        List<ChatMessage> messages = a.assemble("conv-1", "run-1", "看这份判决", List.of(pdf), null,
                 null, null, "88", AgentMode.AGENT, 1L, "moonshotai/kimi-k3");
 
         assertEquals(0, com.checkba.service.ai.context.ChatMessageText.imageCountOf(
@@ -907,7 +907,7 @@ class ContextAssemblerServiceTest {
     @Test
     @DisplayName("没有图片时用户消息保持纯文本构造，不退化成单元素内容块列表")
     void noImagesKeepsPlainTextUserMessage() {
-        List<ChatMessage> messages = assembler.assemble("conv-1", "帮我修订一下", null, null,
+        List<ChatMessage> messages = assembler.assemble("conv-1", "run-1", "帮我修订一下", null, null,
                 null, null, "88", AgentMode.AGENT, 1L, null);
         dev.langchain4j.data.message.UserMessage last =
                 (dev.langchain4j.data.message.UserMessage) messages.get(messages.size() - 1);
@@ -916,7 +916,7 @@ class ContextAssemblerServiceTest {
     }
 
     private String assembleSystemTextWith(List<AiAgentController.ContextItem> items) {
-        List<ChatMessage> messages = assembler.assemble("conv-1", "看图", items, null,
+        List<ChatMessage> messages = assembler.assemble("conv-1", "run-1", "看图", items, null,
                 null, null, "88", AgentMode.AGENT, 1L, "deepseek/deepseek-v4-flash");
         return ((SystemMessage) messages.get(0)).text();
     }

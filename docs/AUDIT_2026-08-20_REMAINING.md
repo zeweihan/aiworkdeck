@@ -3,6 +3,9 @@
 > **2026-08-21 收官：166 条里 156 条已修完并合并，6 条经复现被推翻，
 > 4 条留给维护者拍板（见下）。这份文件从「待处理清单」转为归档，
 > 原文全部保留不删（删了就没法回查当时的判断）。**
+>
+> **2026-09-09 更新：留给维护者拍板的 4 条里，第 2、4 条（AgentOrchestrator 并发轮次竞态、
+> SkillRouter 无轮次隔离）已拍板并修复，见 dev-board#533；第 1、3 条仍待产品/法务口径。**
 
 ## 收官账目
 
@@ -41,15 +44,25 @@
    收紧脱敏规则是产品/法务口径。**参考**：#521 已经用「客观校验位」的思路收紧了
    ID_CARD / BANK_CARD（mod-11-2 与 Luhn），但中文姓名没有可用的校验位，
    只能靠词典或上下文，那是另一类判断。
-2. **`AgentOrchestrator` 并发轮次竞态** —— 同一 conversationId 的两个并发轮次会互相覆盖
-   持久化的助手消息；「停止后立刻再发」还会擦掉上一轮尚未生效的取消标志。
-   正确修法是给每轮一个 runId、把流式内容与消息行 id 挂到 per-turn 的 RunGuard 上，
-   cancel/recovery 走 conversationId→runId 解析。这是架构改动。
+2. **`AgentOrchestrator` 并发轮次竞态** —— **已拍板并修复（2026-09-09），见 dev-board#533。**
+   原判断：同一 conversationId 的两个并发轮次会互相覆盖持久化的助手消息；
+   「停止后立刻再发」还会擦掉上一轮尚未生效的取消标志。
+   落地修法即当时写下的那条：每轮一个 runId，流式缓冲、消息行 id、取消标志、SSE 连接代次
+   全部挂到 per-turn 的 `RunGuard` 上；`activeRuns`（conversationId → 当前轮次）是
+   cancel 与断线重连恢复的唯一解析入口；被取代的旧轮次继续跑完但对会话级状态全程静默。
+   对外契约零变化（SSE 事件与两个端点的形态一字未动，前端与 Office/WPS 插件不用改）。
+   契约与残留局限写在 `.claude/agents/ai-chat.md` 的「轮次隔离：runId / RunGuard」一节，
+   回归用例 `AgentOrchestratorConcurrentTurnsTest`。
 3. **会议永远停在「转写中」** —— 干净修法要新增 `transcribingStartedAt` 列并定一个
    「多久算卡死」的阈值，两件都是产品判断。
    （相关的两条已经修掉：转码无超时见 #516，转写结果解析失败被当成空会议见 #516。）
-4. **SkillRouter 的「无轮次隔离」** —— 根因就是第 2 条：SkillRouter 内部没有任何
-   「这是哪一轮」的标识可用，在它里面打补丁只会把竞态挪个位置。第 2 条拍板后一并处理。
+4. **SkillRouter 的「无轮次隔离」** —— **已拍板并修复（2026-09-09），见 dev-board#533。**
+   原判断成立：根因是第 2 条，SkillRouter 内部没有「这是哪一轮」的标识可用。
+   第 2 条给出 runId 之后一并处理：登记簿改按 runId 索引（`activeByRun`），
+   `activateForTurn` 同时收 conversationId（仅埋点归属）与 runId（登记键），
+   `activeSkills` / `activeSkill` / `visibleTools` 全部按 runId 取，新增 `clearRun(runId)`
+   由编排器在终态摘条目；`ContextAssemblerService.assemble` 相应多一个 runId 形参，
+   保住「prompt 注入与工具白名单同源」这条契约在并发下也成立。
 
 ### 还需要产品口径确认的两处（本轮按判断先做了，改回都很容易）
 
