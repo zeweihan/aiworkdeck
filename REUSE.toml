@@ -28,13 +28,14 @@ SPDX-FileCopyrightText = "allotropia software GmbH and zetajs contributors"
 SPDX-License-Identifier = "MIT"
 
 
-# pptx-service 整目录是上游 banana-slides 的 vendored 源码（CC BY-NC-SA 4.0，
-# 见 pptx-service/LICENSE）。checkba 侧全新文件（backend/utils/text_sanitizer.py 等，
-# 见 pptx-service/UPGRADE_CHECKBA.md 定制清单）已各自带 AGPL-3.0-or-later 文件头，
-# 优先于这条目录级标注。
+# pptx-service 整目录是上游 banana-slides 的 vendored 源码。上游于 2026-02-17 提交
+# a9a5c36 把许可从 CC BY-NC-SA 4.0 改为 AGPL-3.0，本目录 vendor 自该提交（见
+# pptx-service/LICENSE 与 pptx-service/UPGRADE_CHECKBA.md；re-vendor 一律按提交号，
+# v0.4.0 tag 在改证之前）。checkba 侧全新文件（backend/utils/text_sanitizer.py 等，
+# 见定制清单）已各自带 AGPL-3.0-or-later 文件头，优先于这条目录级标注。
 [[annotations]]
 path = "pptx-service/**"
 precedence = "aggregate"
 SPDX-FileCopyrightText = "Anionex (banana-slides upstream) and AI WorkDeck contributors"
-SPDX-License-Identifier = "CC-BY-NC-SA-4.0"
+SPDX-License-Identifier = "AGPL-3.0-only"
 

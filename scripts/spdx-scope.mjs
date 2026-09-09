@@ -19,9 +19,9 @@ export const EXCLUDED_DIR_PREFIXES = [
   'litviz/skills/mqc-timeline-master/', // 上游 vendor（时间轴大师，MIT，见 litviz/UPSTREAM.md）
   'frontend/src/static/',
   'office-addin/assets/',
-  // pptx-service 整目录是上游 banana-slides 的 vendored 源码（CC BY-NC-SA 4.0，
-  // 见 pptx-service/LICENSE 与 pptx-service/UPGRADE_CHECKBA.md），checkba 侧定制
-  // 靠 FORCE_INCLUDE_FILES 单独挑出。
+  // pptx-service 整目录是上游 banana-slides 的 vendored 源码（AGPL-3.0，vendor 自
+  // 上游改证提交 a9a5c36，见 pptx-service/LICENSE 与 UPGRADE_CHECKBA.md），checkba
+  // 侧定制靠 FORCE_INCLUDE_FILES 单独挑出。
   'pptx-service/',
 ];
 

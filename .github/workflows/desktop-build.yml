@@ -17,6 +17,10 @@ on:
       # Without this, the first-run wizard (PR #25, frontend-only) shipped to
       # v0.2.0 having never been validated inside an installer. See issue #27.
       - 'frontend/**'
+      # pptx-service 的源码由 prepare-python-service.js 原样打进安装包，
+      # requirements.lock 决定它的依赖闭包——改这里不跑桌面打包冒烟，
+      # re-vendor 之类的整包替换就没有任何 CI 覆盖。
+      - 'pptx-service/**'
 
 # The "Attach to GitHub Release" step (softprops/action-gh-release) creates the
 # release for a v* tag, which needs write access to repository contents. The

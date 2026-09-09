@@ -111,22 +111,39 @@ fi
 #     0.1.0 → 0.4.0 整包替换时这层定制被丢掉，AI PPT 断了一个月才被发现。
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# custom_grep <名称> <模式> <相对文件> [最少出现次数]
+# custom_grep <名称> <模式> <相对文件> [最少出现次数] [丢失时的提示]
 custom_grep() {
   local name="$1" pattern="$2" file="$3" want="${4:-1}"
+  local hint="${5:-详见 UPGRADE_CHECKBA.md 的定制清单}"
   local n; n="$(grep -c -- "$pattern" "$HERE/$file" 2>/dev/null || true)"
   n="${n:-0}"
   if [ "$n" -ge "$want" ] 2>/dev/null; then
     ok "定制在：$name"
   else
-    bad "定制丢失：$name（$file 里 '$pattern' 出现 $n 次，应 >= $want）——re-vendor 漏移植，AI PPT 会在大纲阶段抛 GOOGLE_API_KEY is required，详见 UPGRADE_CHECKBA.md"
+    bad "定制丢失：$name（$file 里 '$pattern' 出现 $n 次，应 >= $want）——$hint"
   fi
 }
 
-custom_grep "model_config → AIService 工厂"       "def create_ai_service_with_config" backend/services/ai_service_manager.py
-custom_grep "进程级模型配置兜底"                   "def set_active_model_config"       backend/services/ai_service_manager.py
-custom_grep "大纲/描述/图片三端点消费 model_config" "set_active_model_config"           backend/controllers/project_controller.py 3
-custom_grep "可编辑导出消费 model_config"          "set_active_model_config"           backend/controllers/export_controller.py
+MC_HINT="re-vendor 漏移植，AI PPT 会在大纲阶段抛 GOOGLE_API_KEY is required，详见 UPGRADE_CHECKBA.md"
+custom_grep "model_config → AIService 工厂"       "def create_ai_service_with_config" backend/services/ai_service_manager.py 1 "$MC_HINT"
+custom_grep "进程级模型配置兜底"                   "def set_active_model_config"       backend/services/ai_service_manager.py 1 "$MC_HINT"
+custom_grep "大纲/描述/图片三端点消费 model_config" "set_active_model_config"           backend/controllers/project_controller.py 3 "$MC_HINT"
+custom_grep "可编辑导出消费 model_config"          "set_active_model_config"           backend/controllers/export_controller.py 1 "$MC_HINT"
+
+# 以下四项在 2026-09-09 之前不在定制清单里，也没有任何源码级防线（dev-board 上游许可备忘
+# 第 1.3 节点名）。补进来，避免下一次 re-vendor 再静默丢掉。
+custom_grep "数据目录外置 PPTX_DATA_DIR"           "PPTX_DATA_DIR"                     backend/app.py 1 \
+  "桌面打包态 resources 只读，丢了这项首启就写不进数据库"
+custom_grep "自有蓝图注册（pptx/pdf）"             "register_blueprint(pptx_edit_bp)"  backend/app.py 1 \
+  "/api/pptx/* 与 /api/pdf/* 会整体 404"
+custom_grep "设置写入面口令闸"                     "_reject_without_settings_token"    backend/controllers/settings_controller.py 4 \
+  "PPTX_SETTINGS_TOKEN 未配置时写设置会重新变成默认放开（PR#241）"
+custom_grep "任务启动对账"                         "def reconcile_orphaned_tasks"      backend/services/task_manager.py 1 \
+  "进程重启后残留任务会让前端永远轮询转圈（PR#526）"
+custom_grep "大纲 prompt 禁 markdown"              "Do NOT use markdown formatting"    backend/services/prompts.py 1 \
+  "大纲会带 ** / # 之类的标记落进 PPT 正文"
+custom_grep "pdf2docx 依赖"                        "pdf2docx"                          pyproject.toml 1 \
+  "/api/pdf/to-docx 起不来；改完记得重跑 uv lock 与 uv export"
 
 echo
 if [ "$FAIL" = "0" ]; then
