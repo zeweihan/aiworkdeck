@@ -19,6 +19,7 @@ const BACKEND = process.env.APP_E2E_BACKEND || 'http://127.0.0.1:9848'
 const BACKEND_PORT = new URL(BACKEND).port
 const CDP_PORT = pickCdpPort('WRITING_E2E_CDP_PORT', 9460)
 const projectName = `写作辅助E2E_${Date.now()}`
+const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'awd-writing-e2e-project-'))
 const selectedName = '北京当红晴天律师事务所'
 const otherName = '北京当红科技有限公司'
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -46,7 +47,9 @@ await ensureUnlocked(api)
 const wizard = await api('/api/admin/wizard')
 if (wizard?.initialized === false) await api('/api/admin/wizard', { method: 'POST', body: { ai: { activeProvider: 'OPENROUTER' } } })
 
-const project = await api('/api/projects', { method: 'POST', body: { name: projectName, projectType: 'BLANK' } })
+const opened = await api('/api/projects/open-local', { method: 'POST', body: { localRoot: projectRoot, createFolder: false, name: projectName } })
+const project = { id: opened?.data?.projectId }
+if (!project.id) throw new Error(`创建临时本地项目失败: ${JSON.stringify(opened)}`)
 await api(`/api/projects/${project.id}/completion/learn`, {
   method: 'POST',
   body: { scope: 'project', entries: [
@@ -86,9 +89,63 @@ try {
     if (request.url().includes('/api/')) requests.push(`${request.method()} ${new URL(request.url()).pathname}`)
   })
   await page.evaluate(() => localStorage.setItem('awd_app_language', 'zh-CN'))
-  await page.goto(`${DEVURL}/#/pages/project-overview/project-overview?id=${project.id}`, { waitUntil: 'networkidle2' })
-  await page.reload({ waitUntil: 'networkidle2' })
-  await page.waitForFunction(() => document.body.innerText.includes('资源管理器'), { timeout: 60000 })
+  console.log('阶段 1/4：进入工作台并打开文件面板')
+  const workbenchUrl = `${DEVURL}/#/pages/project-overview/project-overview?id=${project.id}`
+  let workbenchReady = false
+  let workbenchSnapshot = null
+  for (let attempt = 0; attempt < 20 && !workbenchReady; attempt++) {
+    if (!page.url().includes('project-overview/project-overview')) {
+      await page.goto(workbenchUrl, { waitUntil: 'domcontentloaded' })
+    }
+    workbenchSnapshot = await page.evaluate(async (expectedId) => {
+      const root = document.querySelector('.page-project-overview')
+      if (!root) return {
+        ready: false,
+        route: location.hash,
+        optionalDialog: !!document.querySelector('.optional-components-dialog'),
+      }
+      let seed = [...document.querySelectorAll('*')].find((element) => element.__vueParentComponent)?.__vueParentComponent
+      if (!seed) return { ready: false, route: location.hash, root: true }
+      while (seed.parent) seed = seed.parent
+      const queue = [seed]
+      while (queue.length) {
+        const component = queue.shift()
+        const proxy = component.proxy
+        if (proxy && typeof proxy.openFile === 'function' && String(proxy.projectId) === String(expectedId)) {
+          proxy.leftPaneKey = 'files'
+          proxy.sidebarCollapsed = false
+          await proxy.$nextTick()
+          await new Promise((resolve) => setTimeout(resolve, 50))
+          const tree = proxy.$refs?.fileTree
+          return {
+            ready: !!tree && !!document.querySelector('.file-tree'),
+            route: location.hash,
+            root: true,
+            projectId: proxy.projectId,
+            leftPaneKey: proxy.leftPaneKey,
+            sidebarCollapsed: proxy.sidebarCollapsed,
+            hasTree: !!tree,
+            fileTreeDom: !!document.querySelector('.file-tree'),
+            expectedId,
+          }
+        }
+        const stack = [component.subTree]
+        while (stack.length) {
+          const vnode = stack.pop()
+          if (!vnode) continue
+          if (vnode.component) queue.push(vnode.component)
+          else if (Array.isArray(vnode.children)) stack.push(...vnode.children)
+        }
+      }
+      return { ready: false, route: location.hash, root: true, owner: false }
+    }, project.id).catch(() => null)
+    workbenchReady = !!workbenchSnapshot?.ready
+    if (!workbenchReady) {
+      await sleep(1500)
+      if (attempt === 5 || attempt === 12) await page.goto(workbenchUrl, { waitUntil: 'domcontentloaded' })
+    }
+  }
+  if (!workbenchReady) throw new Error(`工作台/文件面板未就绪: ${JSON.stringify(workbenchSnapshot)}`)
 
   const created = await page.evaluate(async () => {
     let seed = [...document.querySelectorAll('*')].find((element) => element.__vueParentComponent)?.__vueParentComponent
@@ -118,26 +175,8 @@ try {
     return { error: 'FileTree owner missing' }
   })
   if (created.error) throw new Error(created.error)
+  console.log(`阶段 2/4：已创建并打开 ${created.name}`)
   await page.waitForSelector('webview', { timeout: 30000 })
-  await page.waitForFunction(() => {
-    let seed = [...document.querySelectorAll('*')].find((element) => element.__vueParentComponent)?.__vueParentComponent
-    if (!seed) return false
-    while (seed.parent) seed = seed.parent
-    const queue = [seed]
-    while (queue.length) {
-      const component = queue.shift()
-      const editor = component.proxy
-      if (editor?.file && editor.executor && (editor.ready === true || /就绪|Ready/i.test(editor.statusText || ''))) return true
-      const stack = [component.subTree]
-      while (stack.length) {
-        const vnode = stack.pop()
-        if (!vnode) continue
-        if (vnode.component) queue.push(vnode.component)
-        else if (Array.isArray(vnode.children)) stack.push(...vnode.children)
-      }
-    }
-    return false
-  }, { timeout: 180000 })
 
   let guest
   for (let i = 0; i < 180 && !guest; i++) {
@@ -152,7 +191,11 @@ try {
     }
     if (!guest) await sleep(1000)
   }
-  if (!guest) throw new Error('LOWA guest 未就绪')
+  if (!guest) {
+    const targets = browser.targets().filter((target) => target.type() === 'webview').map((target) => target.url())
+    throw new Error(`LOWA guest 未就绪；webview targets=${JSON.stringify(targets)}`)
+  }
+  console.log('阶段 3/4：LOWA guest 已就绪，执行 IME 与 Tab 补全')
   await hardenPageInput(guest)
   await sleep(3000)
 
@@ -206,6 +249,7 @@ try {
   if (requests.some((item) => item.endsWith(`/projects/${project.id}/completion/lookup`))) {
     throw new Error(`输入与补全期间意外触发在线 lookup: ${JSON.stringify(requests)}`)
   }
+  console.log('阶段 4/4：自动保存和下载校验完成')
   console.log(`通过：IME 输入 → 2 候选 → Tab 接受 → 自动保存 → docx 命中“${selectedName}”；在线 lookup=0。`)
 } catch (error) {
   failed = error
@@ -215,6 +259,7 @@ try {
   killTree()
   try { await api(`/api/projects/${project.id}`, { method: 'DELETE' }) }
   catch (error) { console.error(`清理项目失败：${error.message}`) }
+  try { fs.rmSync(projectRoot, { recursive: true, force: true }) } catch {}
 }
 
 if (failed) process.exit(1)

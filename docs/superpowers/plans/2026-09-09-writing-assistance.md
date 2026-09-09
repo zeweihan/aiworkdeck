@@ -51,6 +51,15 @@ Files: new completion controller, host adapter, API functions; narrow seams in I
 ## Task 5: Review, regression, release
 
 - [x] Inspect actual diffs and perform adversarial review of cursor and permissions.
-- [ ] Run relevant unit suites, real LOWA chain, H5/editor builds, required application and desktop verification.
-- [ ] Update domain maps and development card with exact validation evidence.
+- [x] Run relevant unit suites, real LOWA chain, H5/editor builds, required application and desktop verification.
+- [x] Update domain maps and development card with exact validation evidence.
 - [ ] Open/merge validated PR and release according to project handbook, verifying artifacts and distribution before claiming online.
+
+### Verification record
+
+- Local backend suite: 3460 tests, 0 failures/errors, 10 configured skips. Merged branch backend/frontend CI passed.
+- Frontend completion: 47 passed; project-home: 416 passed; Office add-in: 307 passed.
+- Real LOWA completion/undo/stale-token/export cases and real mouse context menu + explicit preview/table insertion passed. English UNO locale and writing preferences verified.
+- Real Electron project vocabulary → IME → two candidates → Tab → autosave → downloaded DOCX passed; zero external lookup requests. Isolated temporary project folder, cleanup verified.
+- Full app: 133 passed (explicitly skipped live AI and unconfigured local-browser allowlist). Pre-feature LOWA status-bar assertion and existing desktop clipboard empty-format assertion remain documented baseline/environment failures.
+- Release preparation includes the main branch’s four required native runtime packs before v0.38.0 distribution; tracked separately in dev-board#544.

@@ -44,6 +44,7 @@
     "test:tag-protocol": "node --test tests/tag-protocol/protocol.test.mjs",
     "test:completion": "node --test tests/completion/*.test.mjs",
     "test:writing-ui": "node tests/lowa-e2e/writing-ui.mjs",
+    "test:writing-desktop": "node tests/desktop-e2e/writing.mjs",
     "test:lowa-completion": "node tests/lowa-e2e/completion.mjs",
     "test:lowa-unit": "node --test tests/lowa-unit/*.test.mjs",
     "test:lowa-e2e": "node tests/lowa-e2e/run.mjs",

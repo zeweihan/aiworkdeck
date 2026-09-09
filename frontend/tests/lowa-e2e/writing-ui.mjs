@@ -47,7 +47,8 @@ try {
   await page.keyboard.press('Escape')
   await exec('ui_command', { name: 'select_all' }); await exec('replace_selection', { text: '北京当红晴天律师事务所' })
   await exec('ui_command', { name: 'select_all' })
-  await page.evaluate(() => document.querySelector('input[data-lo-ime]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 360, clientY: 260 })))
+  // 真鼠标右键落在已选中的第一行，验证引擎输入转发不会吞掉选区菜单。
+  await page.mouse.click(160, 232, { button: 'right' })
   await page.waitForFunction(() => [...document.querySelectorAll('.awd-wa-panel button')].some(b => b.textContent === '查询机构工商信息'))
   await page.evaluate(() => [...document.querySelectorAll('.awd-wa-panel button')].find(b => b.textContent === '查询机构工商信息').click())
   await page.waitForSelector('.awd-wa-panel table')
