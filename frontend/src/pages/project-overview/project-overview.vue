@@ -5071,7 +5071,14 @@ export default {
         const list = pane === 'left' ? this.leftFiles : this.rightFiles
         const existing = list.find(f => f.id === tabId)
         if (existing) {
-          if (nav) existing.adminNav = nav
+          if (nav && existing.adminNav === nav) {
+            // 同值写回不触发 AdminPane 的 initialNav watcher：用户手动切到别的分区后再点
+            // 「去团队设置」会停在原地（dev-board#582 走查实锤）。先清空、下一拍再写回。
+            existing.adminNav = ''
+            this.$nextTick(() => { existing.adminNav = nav })
+          } else if (nav) {
+            existing.adminNav = nav
+          }
           if (service) existing.adminService = service
           this[pane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'] = existing.id
           this.focusedPane = pane
