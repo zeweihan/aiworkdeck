@@ -628,7 +628,7 @@
                 <OptionalComponentCard
                   :item="item"
                   :selectable="false"
-                  :busy="optional.state.running"
+                  :busy="optional.state.activeCount > 0"
                   @install="onInstallComponent"
                   @retry="onInstallComponent"
                 />
@@ -1075,7 +1075,6 @@
 </template>
 
 <script>
-import { reactive } from 'vue'
 import {
   getAdminConfig, saveAdminConfig,
   getAccountStatus, connectAccount, getAccountUsage,
@@ -1090,7 +1089,7 @@ import {
   getFeedbackList, getFeedbackDetail, getOptimizerStatus, runOptimizer, getApiBaseUrl,
   getSiteStatus, selectSite,
   getPlatformServices, getPlatformServiceRemote, savePlatformBudget,
-  optionalComponents, packInstall, packStatus, packInfo, packUninstall,
+  packUninstall,
 } from '@/services/api.js'
 import { getCurrentUser, getSessionId, setSessionUser } from '@/utils/auth.js'
 import { getInitial } from '@/utils/textInitial.js'
@@ -1114,7 +1113,7 @@ import PersonalSettingsPanel from '@/components/userprofile/PersonalSettingsPane
 import TeamPanel from '@/components/admin/TeamPanel.vue'
 import OptionalComponentCard from '@/components/OptionalComponentCard.vue'
 import MemoryBrowser from '@/components/MemoryBrowser.vue'
-import { createOptionalComponentsController } from '@/composables/useOptionalComponents.js'
+import { componentDownloads } from '@/services/componentDownloads.js'
 
 /**
  * 缓存里的登录用户是不是管理员。isAdmin 由 /api/auth/me 下发（桌面单机=全员管理员；
@@ -1235,18 +1234,9 @@ export default {
         lastRunAt: '',
         lastReportText: '',
       },
-      // 组件管理与首次登录面板共用同一份编排与同一张卡片。state 必须在构造时就是
-      // 响应式的：控制器内部的写走闭包变量，事后再包 reactive 拿到的是个不触发重渲染的壳。
-      optional: createOptionalComponentsController({
-        state: reactive({}),
-        optionalComponents,
-        packInstall,
-        packStatus,
-        packInfo,
-        modelDownload: (id) => host.model.download(id),
-        onModelProgress: (cb) => host.model.onProgress(cb),
-        ensureService: (name) => host.services.ensure(name),
-      }),
+      // 组件管理与首次登录面板共用同一张卡片，下载走应用级单例（dev-board#581）：
+      // 别的入口转入后台的下载，进这一页就能看到同一份实时进度。
+      optional: componentDownloads,
       // 软件更新状态（主进程 update-service 快照；事件推送增量刷新）
       update: {
         phase: 'idle',
@@ -1729,13 +1719,9 @@ export default {
      */
     async onInstallComponent(packId) {
       const item = this.optional.state.items.find((i) => i.packId === packId)
-      if (!item || this.optional.state.running) return
-      this.optional.state.running = true
-      try {
-        await this.optional.installOne(item)
-      } finally {
-        this.optional.state.running = false
-      }
+      // 在途数由应用级下载管理记（首次登录面板、AI 对话发起的也算）：一次只装一个
+      if (!item || this.optional.state.activeCount > 0) return
+      await this.optional.installOne(item)
     },
     /** 卸载 = 删模型 + 删 pack 目录（规范 §6：确认框注明可释放体积） */
     handleComponentRemove(item) {

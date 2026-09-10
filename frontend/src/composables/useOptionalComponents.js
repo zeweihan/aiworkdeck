@@ -190,19 +190,24 @@ export function createOptionalComponentsController(deps) {
   function overallPercent() {
     const list = state.items.filter((i) => i.selected || i.phase !== 'idle')
     const scope = list.length ? list : state.items
-    if (!scope.length) return 0
-    let sum = 0
-    for (const i of scope) {
-      if (i.phase === 'ready') { sum += 100; continue }
-      if (i.phase === 'failed') { sum += 100; continue } // 失败也不再前进，按处理完计
-      if (i.phase === 'runtime') sum += WEIGHT.runtime * (i.percent / 100)
-      else if (i.phase === 'model') sum += WEIGHT.runtime + WEIGHT.model * (i.percent / 100)
-      else if (i.phase === 'starting') sum += WEIGHT.runtime + WEIGHT.model
-    }
-    return Math.round(sum / scope.length)
+    return overallPercentOf(scope)
   }
 
   return { state, load, fillSizes, installOne, installAll, overallPercent }
+}
+
+/** 一组组件的总进度（应用级下载管理按「本批」复用这一份算法）。 */
+export function overallPercentOf(scope) {
+  if (!scope.length) return 0
+  let sum = 0
+  for (const i of scope) {
+    if (i.phase === 'ready') { sum += 100; continue }
+    if (i.phase === 'failed') { sum += 100; continue } // 失败也不再前进，按处理完计
+    if (i.phase === 'runtime') sum += WEIGHT.runtime * (i.percent / 100)
+    else if (i.phase === 'model') sum += WEIGHT.runtime + WEIGHT.model * (i.percent / 100)
+    else if (i.phase === 'starting') sum += WEIGHT.runtime + WEIGHT.model
+  }
+  return Math.round(sum / scope.length)
 }
 
 export const PROMPTED_PREF_KEY = 'optionalComponentsPromptedVersion'

@@ -14,16 +14,14 @@ const script = source.match(/<script>([\s\S]*?)<\/script>/)[1]
   .replace(/^import\s[\s\S]*?from\s+'[^']+'\s*;?\s*$/gm, '')
 
 // 顶层 import 被剥掉之后，脚本里引用到的名字要靠形参补回来（与 recorder-gate 同型）。
-const HARNESS_ARGS = ['host', 'ICONS', 'reactive', 'createOptionalComponentsController',
-  'optionalComponents', 'packInstall', 'packStatus', 'packInfo']
+const HARNESS_ARGS = ['host', 'ICONS', 'componentDownloads']
 
 function pane(over) {
   const factory = new Function(...HARNESS_ARGS, script.replace('export default', 'return'))
   const component = factory(
     { model: {}, services: {} }, {},
-    (o) => o,
-    () => ({ state: { items: [] }, load: async () => {}, fillSizes: async () => {}, installOne: async () => true }),
-    async () => ({ components: [] }), async () => ({}), async () => ({}), async () => ({}),
+    { state: { items: [] }, load: async () => {}, fillSizes: async () => {}, installOne: async () => true,
+      isInstalling: () => false, claim: () => () => {} },
   )
   const vm = Object.assign(component.data(), component.methods, { $t: (k) => k }, over)
   for (const [key, fn] of Object.entries(component.computed)) {

@@ -31,6 +31,13 @@ export default {
   chatCancel: '暂不下载',
   chatInstalling: '正在准备组件…',
   chatResending: '组件已就绪，正在继续刚才的请求…',
+  chatReadyRetry: '组件已就绪，可以重新发送刚才的请求。',
+
+  // 后台下载（dev-board#581）：关掉面板/收起卡片后下载继续，完成或失败时全局提示
+  backgroundDownload: '后台下载',
+  backgroundStarted: '已转入后台下载，可在「设置 → 组件管理」查看进度。',
+  backgroundDone: '{name}已下载完成，可以使用了。',
+  backgroundFailed: '{name}下载失败：{msg}',
 
   asrRuntimeMissingAction: '下载本机语音识别组件',
 

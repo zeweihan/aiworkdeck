@@ -158,9 +158,7 @@
 import { getTtsVoices, generateTtsAudio, promptFeatureNotConfigured } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
 import { host } from '@/services/host.js'
-import { reactive } from 'vue'
-import { createOptionalComponentsController } from '@/composables/useOptionalComponents.js'
-import { optionalComponents, packInstall, packStatus, packInfo } from '@/services/api.js'
+import { componentDownloads } from '@/services/componentDownloads.js'
 
 // 本机语音引擎 = 运行时 pack + 模型两件事（设计 §3.1）。0.38.0 起运行时也是按需下载的，
 // 面板上仍然只是一个按钮，底层顺序执行两条通道（pack → 模型 → ensure，顺序不能换：
@@ -190,17 +188,8 @@ export default {
       runtimeInstalled: true,
       componentItem: null,
       installing: false,
-      controller: createOptionalComponentsController({
-        // state 在构造时就要是响应式的：控制器内部的写走闭包变量，事后包 reactive 无效
-        state: reactive({}),
-        optionalComponents,
-        packInstall,
-        packStatus,
-        packInfo,
-        modelDownload: (id) => host.model.download(id),
-        onModelProgress: (cb) => host.model.onProgress(cb),
-        ensureService: (name) => host.services.ensure(name),
-      }),
+      // 应用级下载单例（dev-board#581）：别的入口正在下的，这里接上同一份进度
+      controller: componentDownloads,
       // 语速以「百分之几倍」存（100 = 原速），下发时除以 100 变成 Kokoro 的 speed
       rate: 100,
       generating: false,
@@ -291,6 +280,8 @@ export default {
   },
   beforeUnmount() {
     this._unmounted = true
+    // 在途的组件下载不停，只是不再由本面板交代结果
+    if (this._releaseClaim) { this._releaseClaim(); this._releaseClaim = null }
     this.stopAudio()
     // 卸载时手上可能还攥着一个已经生成好、但还没播的 blob URL，必须一并释放，
     // 否则每次"生成完切走面板"都会泄漏一个 blob。
@@ -477,6 +468,8 @@ export default {
           await this.controller.fillSizes(item)
           this.componentItem = item
           this.runtimeInstalled = !!item.installed
+          // 别的入口（首次登录面板、组件管理）正在装这个组件：接上同一个任务
+          if (this.controller.isInstalling(TTS_PACK_ID) && !this.installing) this.followInstall()
         }
       } catch (e) {
         console.warn('[EasyVoicePane] 读取语音组件状态失败', e)
@@ -493,9 +486,16 @@ export default {
         uni.showToast({ title: this.$t('panels.evDownloadStartFailed'), icon: 'none' })
         return
       }
+      await this.followInstall()
+    },
+    /** 发起或接上应用级下载管理里的同一个任务（在途时 installOne 返回同一个 Promise）。 */
+    async followInstall() {
       this.installing = true
+      // 面板开着就由它交代结果；切走面板时释放（beforeUnmount），结果交给全局提示
+      this._releaseClaim = this.controller.claim(TTS_PACK_ID)
       try {
         const ok = await this.controller.installOne(this.componentItem)
+        if (this._unmounted) return
         this.runtimeInstalled = !!this.componentItem.installed
         if (!ok) {
           uni.showToast({ title: this.$t('components.stateFailed', { msg: this.componentItem.error || '' }), icon: 'none' })
@@ -504,8 +504,9 @@ export default {
         this.modelState = 'installed'
         await this.fetchVoices()
       } finally {
+        if (this._releaseClaim) { this._releaseClaim(); this._releaseClaim = null }
         this.installing = false
-        await this.loadModelState()
+        if (!this._unmounted) await this.loadModelState()
       }
     },
     async onCancelModel() {
