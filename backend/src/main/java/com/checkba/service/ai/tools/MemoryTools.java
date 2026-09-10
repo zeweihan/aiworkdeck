@@ -189,7 +189,7 @@ public class MemoryTools implements AgentToolComponent {
         try {
             String memoryType = "all".equalsIgnoreCase(type) || type == null ? null : type.toLowerCase();
             List<MemoryEntry> memories = memoryManager.retrieveMemories(projectId, query, memoryType, 10);
-            memories = withScopedMemories(memories, scope, sourceFileId);
+            memories = withScopedMemories(memories, projectId, scope, sourceFileId);
 
             if (memories.isEmpty()) {
                 return "未找到相关记忆。可以使用 save_memory 工具保存重要信息。";
@@ -216,16 +216,17 @@ public class MemoryTools implements AgentToolComponent {
      * 额外做一次按 scope 的确定性查找并合并进来——保证"明确要哪个作用域"时百分之百找得到，
      * 检索算法继续负责"泛泛地找相关内容"这一半职责。
      */
-    private List<MemoryEntry> withScopedMemories(List<MemoryEntry> algorithmic, String scope, Long sourceFileId) {
+    private List<MemoryEntry> withScopedMemories(List<MemoryEntry> algorithmic, Long projectId,
+                                                 String scope, Long sourceFileId) {
         if (scope == null || scope.isBlank()) {
             return algorithmic;
         }
         List<MemoryEntry> scoped;
         String normalized = scope.trim().toLowerCase();
         if (MemoryEntry.MemoryScope.FILE.equals(normalized)) {
-            scoped = memoryManager.retrieveFileMemories(sourceFileId);
+            scoped = memoryManager.retrieveFileMemories(projectId, sourceFileId);
         } else if (MemoryEntry.MemoryScope.CONVERSATION.equals(normalized)) {
-            scoped = memoryManager.retrieveConversationMemories(ProjectContextHolder.getConversationId());
+            scoped = memoryManager.retrieveConversationMemories(projectId, ProjectContextHolder.getConversationId());
         } else {
             // project/user/global：现有算法已经是按 projectId 全量检索，不额外加一条确定性通路
             return algorithmic;
@@ -334,7 +335,7 @@ public class MemoryTools implements AgentToolComponent {
         try {
             // 使用 RRF 混合检索替代单纯的语义检索
             List<MemoryEntry> results = memoryManager.hybridSearch(projectId, query, limit);
-            results = withScopedMemories(results, scope, sourceFileId);
+            results = withScopedMemories(results, projectId, scope, sourceFileId);
 
             if (results.isEmpty()) {
                 return "未在知识库中找到相关信息。";
@@ -391,7 +392,7 @@ public class MemoryTools implements AgentToolComponent {
         try {
             // 使用 Agentic 多轮召回检索
             List<MemoryEntry> results = agenticRetriever.agenticRetrieve(projectId, query, limit);
-            results = withScopedMemories(results, scope, sourceFileId);
+            results = withScopedMemories(results, projectId, scope, sourceFileId);
 
             if (results.isEmpty()) {
                 return "深度搜索未找到相关信息。建议尝试不同的查询词或使用 save_memory 保存新信息。";

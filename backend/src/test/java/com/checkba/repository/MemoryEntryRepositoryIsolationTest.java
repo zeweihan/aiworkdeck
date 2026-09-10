@@ -45,16 +45,26 @@ class MemoryEntryRepositoryIsolationTest {
         MemoryEntry conversation = save("conversation", "对话记忆");
         conversation.setConversationId("conv-1");
         repository.save(conversation);
+        MemoryEntry otherProjectFile = save(10L, "file", "其他项目文件记忆");
+        otherProjectFile.setSourceFileId(42L);
+        repository.save(otherProjectFile);
+        MemoryEntry otherProjectConversation = save(10L, "conversation", "其他项目对话记忆");
+        otherProjectConversation.setConversationId("conv-1");
+        repository.save(otherProjectConversation);
 
-        assertEquals(List.of(file.getId()), repository.findBySourceFileIdOrderByImportanceScoreDesc(42L)
+        assertEquals(List.of(file.getId()), repository.findByProjectIdAndSourceFileIdOrderByImportanceScoreDesc(9L, 42L)
                 .stream().map(MemoryEntry::getId).toList());
-        assertEquals(List.of(conversation.getId()), repository.findByConversationIdOrderByCreatedAtDesc("conv-1")
+        assertEquals(List.of(conversation.getId()), repository.findByProjectIdAndConversationIdOrderByCreatedAtDesc(9L, "conv-1")
                 .stream().map(MemoryEntry::getId).toList());
     }
 
     private MemoryEntry save(String scope, String value) {
+        return save(9L, scope, value);
+    }
+
+    private MemoryEntry save(Long projectId, String scope, String value) {
         return repository.saveAndFlush(MemoryEntry.builder()
-                .projectId(9L).userId(5L).scope(scope).memoryType("fact")
+                .projectId(projectId).userId(5L).scope(scope).memoryType("fact")
                 .memoryKey(value).memoryValue(value).importanceScore(0.7).isProtected(false).build());
     }
 }

@@ -115,6 +115,11 @@ class MemorySyncTestMachine {
         sync = new MemorySyncService(repo, entries, remotes, manager, files, users,
                 mock(TaskScheduler.class));
         documents = mock(MemoryDocumentService.class);
+        doAnswer(invocation -> {
+            MemoryEntry entry = byUid(invocation.getArgument(0));
+            if (entry != null) entries.delete(entry);
+            return null;
+        }).when(documents).tombstoneSourceAndDeleteLegacy(any());
         sync.setMemoryDocumentServiceForTest(documents);
 
         if (remoteUrl != null) {

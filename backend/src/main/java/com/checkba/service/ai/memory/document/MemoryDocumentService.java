@@ -12,12 +12,17 @@ import com.checkba.repository.MemoryDocumentSpaceRepository;
 import com.checkba.repository.MemoryEntryRepository;
 import com.checkba.repository.ProjectRepository;
 import com.checkba.service.ProjectMemberService;
+import jakarta.annotation.PreDestroy;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -28,6 +33,7 @@ public class MemoryDocumentService {
     private static final String LINKS_START = "<!-- memory-topics:start -->";
     private static final String LINKS_END = "<!-- memory-topics:end -->";
     private static final Pattern HEADING = Pattern.compile("(?m)^#\\s+(.+?)\\s*$");
+    private static final Pattern MARKDOWN_LINK = Pattern.compile("\\[[^\\]]*]\\(([^)]+)\\)");
 
     private final MemoryDocumentRepository documents;
     private final MemoryDocumentSpaceRepository spaces;
@@ -35,24 +41,42 @@ public class MemoryDocumentService {
     private final ProjectRepository projects;
     private final ProjectMemberService projectMembers;
     private final MemoryOrganizationGateway organizations;
+    private final TransactionTemplate transactions;
+    private final long organizationTimeoutMillis;
+    private final ExecutorService organizationExecutor = Executors.newFixedThreadPool(2, task -> {
+        Thread thread = new Thread(task, "memory-organization-context");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     public MemoryDocumentService(MemoryDocumentRepository documents,
                                  MemoryDocumentSpaceRepository spaces,
                                  MemoryEntryRepository legacyEntries,
                                  ProjectRepository projects,
                                  ProjectMemberService projectMembers,
-                                 MemoryOrganizationGateway organizations) {
+                                 MemoryOrganizationGateway organizations,
+                                 PlatformTransactionManager transactionManager,
+                                 @Value("${memory.context.organization-timeout-ms:2000}") long organizationTimeoutMillis) {
         this.documents = documents;
         this.spaces = spaces;
         this.legacyEntries = legacyEntries;
         this.projects = projects;
         this.projectMembers = projectMembers;
         this.organizations = organizations;
+        this.transactions = new TransactionTemplate(transactionManager);
+        this.organizationTimeoutMillis = Math.max(50, organizationTimeoutMillis);
     }
 
-    @Transactional
     public List<MemorySpaceView> listSpaces(Long userId, Long projectId) {
         requireUser(userId);
+        List<MemorySpaceView> result = required(transactions.execute(status -> listLocalSpaces(userId, projectId)));
+        List<MemorySpaceView> org = organizations.listSpaces(userId);
+        result.add(findOrg(org, "team", "团队记忆", "团队记忆暂不可用"));
+        result.add(findOrg(org, "firm", "律所记忆", "律所记忆暂不可用"));
+        return result;
+    }
+
+    private List<MemorySpaceView> listLocalSpaces(Long userId, Long projectId) {
         List<MemorySpaceView> result = new ArrayList<>(4);
         MemoryDocumentSpace user = ensureSpace("user", String.valueOf(userId), "个人记忆");
         result.add(view(user, true, true, true, null));
@@ -71,33 +95,31 @@ public class MemoryDocumentService {
                     projectMembers.hasWritePermission(projectId, userId), true, null));
         }
 
-        List<MemorySpaceView> org = organizations.listSpaces(userId);
-        result.add(findOrg(org, "team", "团队记忆", "团队记忆暂不可用"));
-        result.add(findOrg(org, "firm", "律所记忆", "律所记忆暂不可用"));
         return result;
     }
 
-    @Transactional
     public List<MemoryFileView> listFiles(Long userId, String spaceId) {
         if (organizations.handles(spaceId)) return organizations.listFiles(requireUser(userId), spaceId);
-        LocalAccess access = requireLocalAccess(userId, spaceId, false);
-        ensureIndex(access.space());
-        return documents.findBySpaceIdAndDeletedFalseOrderByPathAsc(spaceId).stream()
-                .map(d -> toView(d, access.writable(), false)).toList();
+        return required(transactions.execute(status -> {
+            LocalAccess access = requireLocalAccess(userId, spaceId, false);
+            ensureIndex(access.space());
+            return documents.findBySpaceIdAndDeletedFalseOrderByPathAsc(spaceId).stream()
+                    .map(d -> toView(d, access.writable(), false)).toList();
+        }));
     }
 
-    @Transactional
     public MemoryFileView read(Long userId, String spaceId, String path) {
         validatePath(path);
         if (organizations.handles(spaceId)) return organizations.read(requireUser(userId), spaceId, path);
-        LocalAccess access = requireLocalAccess(userId, spaceId, false);
-        if (INDEX_PATH.equals(path)) ensureIndex(access.space());
-        MemoryDocument document = documents.findBySpaceIdAndPath(spaceId, path)
-                .filter(d -> !d.isDeleted()).orElseThrow(() -> bad("记忆文件不存在"));
-        return toView(document, access.writable(), true);
+        return required(transactions.execute(status -> {
+            LocalAccess access = requireLocalAccess(userId, spaceId, false);
+            if (INDEX_PATH.equals(path)) ensureIndex(access.space());
+            MemoryDocument document = documents.findBySpaceIdAndPath(spaceId, path)
+                    .filter(d -> !d.isDeleted()).orElseThrow(() -> bad("记忆文件不存在"));
+            return toView(document, access.writable(), true);
+        }));
     }
 
-    @Transactional
     public MemoryFileView write(Long userId, String spaceId, String path,
                                 String content, long expectedRevision) {
         validatePath(path);
@@ -105,11 +127,12 @@ public class MemoryDocumentService {
         if (organizations.handles(spaceId)) {
             return organizations.write(requireUser(userId), spaceId, path, content, expectedRevision);
         }
-        LocalAccess access = requireLocalAccess(userId, spaceId, true);
-        return writeLocal(access.space(), userId, path, content, expectedRevision, null);
+        return required(transactions.execute(status -> {
+            LocalAccess access = requireLocalAccess(userId, spaceId, true);
+            return writeLocal(access.space(), userId, path, content, expectedRevision, null);
+        }));
     }
 
-    @Transactional
     public void delete(Long userId, String spaceId, String path, long expectedRevision) {
         validatePath(path);
         if (INDEX_PATH.equals(path)) throw bad("remember.md 是空间索引，不能删除；可以编辑或清空正文");
@@ -117,41 +140,43 @@ public class MemoryDocumentService {
             organizations.delete(requireUser(userId), spaceId, path, expectedRevision);
             return;
         }
-        LocalAccess access = requireLocalAccess(userId, spaceId, true);
-        MemoryDocument document = documents.findLockedBySpaceIdAndPath(spaceId, path)
-                .filter(d -> !d.isDeleted()).orElseThrow(() -> bad("记忆文件不存在"));
-        checkRevision(document, expectedRevision);
-        document.setDeleted(true);
-        document.setRevision(document.getRevision() + 1);
-        document.setModifiedBy(userId);
-        document.setUpdatedAt(LocalDateTime.now());
-        documents.save(document);
-        if (document.getSourceMemoryUid() != null) {
-            legacyEntries.findFirstByUid(document.getSourceMemoryUid()).ifPresent(legacyEntries::delete);
-        }
-        refreshIndex(access.space(), userId);
+        transactions.executeWithoutResult(status -> {
+            LocalAccess access = requireLocalAccess(userId, spaceId, true);
+            MemoryDocument document = documents.findLockedBySpaceIdAndPath(spaceId, path)
+                    .filter(d -> !d.isDeleted()).orElseThrow(() -> bad("记忆文件不存在"));
+            checkRevision(document, expectedRevision);
+            document.setDeleted(true);
+            document.setRevision(document.getRevision() + 1);
+            document.setModifiedBy(userId);
+            document.setUpdatedAt(LocalDateTime.now());
+            documents.save(document);
+            if (document.getSourceMemoryUid() != null) {
+                legacyEntries.findFirstByUid(document.getSourceMemoryUid()).ifPresent(legacyEntries::delete);
+            }
+            refreshIndex(access.space(), userId);
+        });
     }
 
-    @Transactional
     public String download(Long userId, String spaceId, String path) {
         if (organizations.handles(spaceId)) return organizations.download(requireUser(userId), spaceId, path);
         return read(userId, spaceId, path).content();
     }
 
-    @Transactional
     public List<MemoryFileView> search(Long userId, String spaceId, String query, int limit) {
         if (query == null || query.isBlank()) throw bad("搜索词不能为空");
         int capped = Math.max(1, Math.min(limit, 20));
         if (organizations.handles(spaceId)) {
             return organizations.search(requireUser(userId), spaceId, query, capped);
         }
-        LocalAccess access = requireLocalAccess(userId, spaceId, false);
-        String needle = query.toLowerCase(Locale.ROOT);
-        return documents.findBySpaceIdAndDeletedFalseOrderByPathAsc(spaceId).stream()
-                .filter(d -> d.getPath().toLowerCase(Locale.ROOT).contains(needle)
-                        || d.getTitle().toLowerCase(Locale.ROOT).contains(needle)
-                        || d.getContent().toLowerCase(Locale.ROOT).contains(needle))
-                .limit(capped).map(d -> toView(d, access.writable(), true)).toList();
+        return required(transactions.execute(status -> {
+            LocalAccess access = requireLocalAccess(userId, spaceId, false);
+            String needle = query.toLowerCase(Locale.ROOT);
+            return documents.findBySpaceIdAndDeletedFalseOrderByPathAsc(spaceId).stream()
+                    .filter(d -> d.getPath().toLowerCase(Locale.ROOT).contains(needle)
+                            || d.getTitle().toLowerCase(Locale.ROOT).contains(needle)
+                            || d.getContent().toLowerCase(Locale.ROOT).contains(needle))
+                    .limit(capped).map(d -> toView(d, access.writable(), true)).toList();
+        }));
     }
 
     @Transactional
@@ -194,9 +219,9 @@ public class MemoryDocumentService {
         return writeLocal(space, entry.getUserId(), path, content, 0, entry.getUid());
     }
 
-    /** Git 墓碑回灌的文档侧落点：保留递增 revision，避免后续旧行再次迁移把内容复活。 */
+    /** Git 墓碑回灌的统一落点：旧行、文档墓碑和索引更新在同一事务中完成。 */
     @Transactional
-    public void tombstoneSource(String sourceMemoryUid) {
+    public void tombstoneSourceAndDeleteLegacy(String sourceMemoryUid) {
         if (sourceMemoryUid == null) return;
         documents.findBySourceMemoryUid(sourceMemoryUid).filter(d -> !d.isDeleted()).ifPresent(d -> {
             d.setDeleted(true);
@@ -205,15 +230,17 @@ public class MemoryDocumentService {
             documents.save(d);
             spaces.findById(d.getSpaceId()).ifPresent(s -> refreshIndex(s, null));
         });
+        legacyEntries.findFirstByUid(sourceMemoryUid).ifPresent(legacyEntries::delete);
     }
 
     /** 每轮注入的索引快照；组织列表只请求一次，详细主题文件仍由工具按需读取。 */
-    @Transactional
     public String contextIndexes(Long userId, Long projectId, int maxChars) {
         int budget = Math.max(0, maxChars);
         if (userId == null || budget == 0) return "";
         StringBuilder out = new StringBuilder();
-        for (MemorySpaceView space : listSpaces(userId, projectId)) {
+        List<MemorySpaceView> localSpaces = required(
+                transactions.execute(status -> listLocalSpaces(userId, projectId)));
+        for (MemorySpaceView space : localSpaces) {
             if (!space.available() || !space.readable() || space.id() == null) continue;
             try {
                 MemoryFileView index = read(userId, space.id(), INDEX_PATH);
@@ -224,13 +251,19 @@ public class MemoryDocumentService {
             }
             if (out.length() >= budget) break;
         }
+        if (out.length() < budget) {
+            for (OrganizationIndex index : organizationIndexes(userId)) {
+                appendBounded(out, "\n## " + index.space().label() + " [" + index.space().scope() + "]\n"
+                        + index.file().content() + "\n", budget);
+                if (out.length() >= budget) break;
+            }
+        }
         return out.toString();
     }
 
     private MemoryFileView writeLocal(MemoryDocumentSpace space, Long userId, String path,
                                       String content, long expectedRevision, String sourceMemoryUid) {
         MemoryDocument document = documents.findLockedBySpaceIdAndPath(space.getId(), path).orElse(null);
-        boolean newTopic = document == null || document.isDeleted();
         if (document == null) {
             if (expectedRevision != 0) throw conflict("记忆文件已发生变化，请刷新后重试");
             document = new MemoryDocument();
@@ -244,9 +277,10 @@ public class MemoryDocumentService {
             checkRevision(document, expectedRevision);
             document.setRevision(document.getRevision() + 1);
         }
+        String storedContent = INDEX_PATH.equals(path) ? canonicalIndexContent(space, content) : content;
         document.setDeleted(false);
-        document.setTitle(title(path, content));
-        document.setContent(content);
+        document.setTitle(title(path, storedContent));
+        document.setContent(storedContent);
         document.setModifiedBy(userId);
         document.setUpdatedAt(LocalDateTime.now());
         if (sourceMemoryUid != null) document.setSourceMemoryUid(sourceMemoryUid);
@@ -258,7 +292,7 @@ public class MemoryDocumentService {
         if (document.getSourceMemoryUid() == null) document.setSourceMemoryUid(UUID.randomUUID().toString());
         documents.saveAndFlush(document);
         syncLegacyIndex(document, space);
-        if (!INDEX_PATH.equals(path) && newTopic) refreshIndex(space, userId);
+        if (!INDEX_PATH.equals(path)) refreshIndex(space, userId);
         return toView(document, true, true);
     }
 
@@ -309,13 +343,7 @@ public class MemoryDocumentService {
         MemoryDocument index = ensureIndex(space);
         List<MemoryDocument> topics = documents.findBySpaceIdAndDeletedFalseOrderByPathAsc(space.getId()).stream()
                 .filter(d -> !INDEX_PATH.equals(d.getPath())).toList();
-        StringBuilder links = new StringBuilder(LINKS_START).append('\n');
-        for (MemoryDocument topic : topics) {
-            links.append("- [").append(linkLabel(topic.getTitle())).append("](")
-                    .append(topic.getPath()).append(")\n");
-        }
-        links.append(LINKS_END);
-        String content = replaceManagedLinks(index.getContent(), links.toString());
+        String content = replaceManagedLinks(index.getContent(), managedLinks(topics));
         if (!content.equals(index.getContent())) {
             index.setContent(content);
             index.setRevision(index.getRevision() + 1);
@@ -398,6 +426,84 @@ public class MemoryDocumentService {
         return safe + "\n" + block + "\n";
     }
 
+    private String canonicalIndexContent(MemoryDocumentSpace space, String content) {
+        validateIndexLinks(space, content);
+        List<MemoryDocument> topics = documents.findBySpaceIdAndDeletedFalseOrderByPathAsc(space.getId()).stream()
+                .filter(d -> !INDEX_PATH.equals(d.getPath())).toList();
+        return replaceManagedLinks(content, managedLinks(topics));
+    }
+
+    private void validateIndexLinks(MemoryDocumentSpace space, String content) {
+        Matcher matcher = MARKDOWN_LINK.matcher(content == null ? "" : content);
+        while (matcher.find()) {
+            String target = matcher.group(1).trim();
+            int anchor = target.indexOf('#');
+            if (anchor >= 0) target = target.substring(0, anchor);
+            if (target.isBlank() || target.contains(":") || target.startsWith("/")) continue;
+            if (!target.toLowerCase(Locale.ROOT).endsWith(".md")) continue;
+            validatePath(target);
+            if (documents.findBySpaceIdAndPath(space.getId(), target).filter(d -> !d.isDeleted()).isEmpty()) {
+                throw bad("记忆索引链接的文件不存在: " + target);
+            }
+        }
+    }
+
+    private static String managedLinks(List<MemoryDocument> topics) {
+        StringBuilder links = new StringBuilder(LINKS_START).append('\n');
+        for (MemoryDocument topic : topics) {
+            links.append("- [").append(linkLabel(topic.getTitle())).append("](")
+                    .append(topic.getPath()).append(")\n");
+        }
+        return links.append(LINKS_END).toString();
+    }
+
+    private List<OrganizationIndex> organizationIndexes(Long userId) {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(organizationTimeoutMillis);
+        Future<List<MemorySpaceView>> spacesFuture = organizationExecutor.submit(() -> organizations.listSpaces(userId));
+        List<Future<OrganizationIndex>> reads = new ArrayList<>();
+        List<OrganizationIndex> result = new ArrayList<>();
+        try {
+            List<MemorySpaceView> orgSpaces = spacesFuture.get(remaining(deadline), TimeUnit.NANOSECONDS);
+            CompletionService<OrganizationIndex> completion = new ExecutorCompletionService<>(organizationExecutor);
+            for (MemorySpaceView space : orgSpaces) {
+                if (space.available() && space.readable() && space.id() != null) {
+                    reads.add(completion.submit(() ->
+                            new OrganizationIndex(space, organizations.read(userId, space.id(), INDEX_PATH))));
+                }
+            }
+            for (int completed = 0; completed < reads.size(); completed++) {
+                Future<OrganizationIndex> next = completion.poll(remaining(deadline), TimeUnit.NANOSECONDS);
+                if (next == null) break;
+                try {
+                    result.add(next.get());
+                } catch (ExecutionException ignored) {
+                    // 一个共享空间暂时不可达时，仍保留其他索引。
+                }
+            }
+            result.sort(Comparator.comparingInt(index -> "team".equals(index.space().scope()) ? 0 : 1));
+            return result;
+        } catch (TimeoutException | ExecutionException ignored) {
+            return result;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return List.of();
+        } finally {
+            spacesFuture.cancel(true);
+            reads.forEach(read -> read.cancel(true));
+        }
+    }
+
+    private static long remaining(long deadline) throws TimeoutException {
+        long left = deadline - System.nanoTime();
+        if (left <= 0) throw new TimeoutException();
+        return left;
+    }
+
+    @PreDestroy
+    void closeOrganizationExecutor() {
+        organizationExecutor.shutdownNow();
+    }
+
     private static String linkLabel(String title) {
         return title == null ? "记忆" : title.replace("[", "（").replace("]", "）");
     }
@@ -462,8 +568,10 @@ public class MemoryDocumentService {
     }
 
     private static String nullToEmpty(String value) { return value == null ? "" : value; }
+    private static <T> T required(T value) { return Objects.requireNonNull(value); }
     private static MemoryDocumentException bad(String message) { return new MemoryDocumentException(400, message); }
     private static MemoryDocumentException denied(String message) { return new MemoryDocumentException(403, message); }
     private static MemoryDocumentException conflict(String message) { return new MemoryDocumentException(409, message); }
     private record LocalAccess(MemoryDocumentSpace space, boolean writable) {}
+    private record OrganizationIndex(MemorySpaceView space, MemoryFileView file) {}
 }

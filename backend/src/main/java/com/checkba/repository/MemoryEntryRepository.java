@@ -44,9 +44,10 @@ public interface MemoryEntryRepository extends JpaRepository<MemoryEntry, Long> 
     /**
      * 根据对话ID查找记忆
      */
-    @Query("SELECT m FROM MemoryEntry m WHERE m.conversationId = :conversationId " +
+    @Query("SELECT m FROM MemoryEntry m WHERE m.projectId = :projectId AND m.conversationId = :conversationId " +
            "AND m.scope = 'conversation' ORDER BY m.createdAt DESC")
-    List<MemoryEntry> findByConversationIdOrderByCreatedAtDesc(@Param("conversationId") String conversationId);
+    List<MemoryEntry> findByProjectIdAndConversationIdOrderByCreatedAtDesc(
+            @Param("projectId") Long projectId, @Param("conversationId") String conversationId);
 
     /**
      * 根据关键词模糊搜索记忆
@@ -130,9 +131,11 @@ public interface MemoryEntryRepository extends JpaRepository<MemoryEntry, Long> 
     /**
      * 按来源文件查找文件级记忆
      */
-    @Query("SELECT m FROM MemoryEntry m WHERE m.sourceFileId = :sourceFileId AND m.scope = 'file' " +
+    @Query("SELECT m FROM MemoryEntry m WHERE m.projectId = :projectId " +
+           "AND m.sourceFileId = :sourceFileId AND m.scope = 'file' " +
            "ORDER BY m.importanceScore DESC")
-    List<MemoryEntry> findBySourceFileIdOrderByImportanceScoreDesc(@Param("sourceFileId") Long sourceFileId);
+    List<MemoryEntry> findByProjectIdAndSourceFileIdOrderByImportanceScoreDesc(
+            @Param("projectId") Long projectId, @Param("sourceFileId") Long sourceFileId);
 
     /**
      * 按项目与一组 memoryKey 查找记忆（证据账本的"已被更新"信号检测用）

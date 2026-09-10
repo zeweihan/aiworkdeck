@@ -13,7 +13,7 @@ import java.nio.file.Path;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.*;
 
 /**
  * 导出/回灌 round-trip（spec Phase A 验证标准第 1 条）：A 写记忆 → push →
@@ -121,10 +121,31 @@ class MemorySyncRoundTripTest {
 
         assertNull(a.byUid(uid));
         assertNull(b.byUid(uid));
-        verify(a.documents).tombstoneSource(uid);
+        verify(a.documents).tombstoneSourceAndDeleteLegacy(uid);
         a.syncNow();
         b.syncNow();
         assertNull(a.byUid(uid));
         assertNull(b.byUid(uid));
+    }
+
+    @Test
+    void failedImportedTombstoneIsRetriedFromCanonicalGitTombstone() {
+        MemoryEntry original = a.addEntry("project", "删除重试", "这条应被删除");
+        a.syncNow();
+        b.syncNow();
+        String uid = original.getUid();
+        b.entries.delete(b.byUid(uid));
+        b.syncNow();
+        doThrow(new IllegalStateException("transient database failure"))
+                .doAnswer(invocation -> {
+                    a.entries.delete(a.byUid(uid));
+                    return null;
+                })
+                .when(a.documents).tombstoneSourceAndDeleteLegacy(uid);
+
+        a.syncNow();
+
+        assertNull(a.byUid(uid));
+        verify(a.documents, times(2)).tombstoneSourceAndDeleteLegacy(uid);
     }
 }

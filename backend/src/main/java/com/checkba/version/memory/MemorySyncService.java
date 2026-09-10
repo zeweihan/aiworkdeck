@@ -408,11 +408,12 @@ public class MemorySyncService {
                                      Map<String, MemoryEntry> byUid, ImportContext ctx) {
         MemoryEntry row = byUid.get(data.uid());
         if (data.tombstone()) {
-            if (row != null) {
+            if (memoryDocumentService != null) {
+                memoryDocumentService.tombstoneSourceAndDeleteLegacy(data.uid());
+            } else if (row != null) {
                 entryRepository.delete(row);
-                byUid.remove(data.uid());
             }
-            if (memoryDocumentService != null) memoryDocumentService.tombstoneSource(data.uid());
+            byUid.remove(data.uid());
             return;
         }
         if (row != null) {
@@ -496,7 +497,11 @@ public class MemorySyncService {
                     MemoryFileData existing = MemoryFileCodec.decode(row.getUid(), Files.readAllBytes(target));
                     if (existing != null && existing.tombstone()) {
                         // 墓碑胜：文件已墓碑而 DB 仍有行（陈旧行）→ 删行、文件不动
-                        entryRepository.delete(row);
+                        if (memoryDocumentService != null) {
+                            memoryDocumentService.tombstoneSourceAndDeleteLegacy(row.getUid());
+                        } else {
+                            entryRepository.delete(row);
+                        }
                         byUid.remove(row.getUid());
                         continue;
                     }

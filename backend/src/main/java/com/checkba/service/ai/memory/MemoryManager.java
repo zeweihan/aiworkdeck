@@ -361,11 +361,11 @@ public class MemoryManager {
     /**
      * 获取绑定到某个文件的记忆（如"该合同的审查结论"）
      */
-    public List<MemoryEntry> retrieveFileMemories(Long sourceFileId) {
-        if (sourceFileId == null) {
+    public List<MemoryEntry> retrieveFileMemories(Long projectId, Long sourceFileId) {
+        if (projectId == null || sourceFileId == null) {
             return Collections.emptyList();
         }
-        return memoryEntryRepository.findBySourceFileIdOrderByImportanceScoreDesc(sourceFileId);
+        return memoryEntryRepository.findByProjectIdAndSourceFileIdOrderByImportanceScoreDesc(projectId, sourceFileId);
     }
 
     /**
@@ -375,11 +375,11 @@ public class MemoryManager {
      * 此前完全不认 scope，file/conversation 作用域保存的记忆只能靠关键词/语义检索"运气好"才捞得到——
      * 这里提供一条确定性的按 scope 取值通路，供工具层在调用方明确指定 scope 时兜底合并进结果。
      */
-    public List<MemoryEntry> retrieveConversationMemories(String conversationId) {
-        if (conversationId == null || conversationId.isBlank()) {
+    public List<MemoryEntry> retrieveConversationMemories(Long projectId, String conversationId) {
+        if (projectId == null || conversationId == null || conversationId.isBlank()) {
             return Collections.emptyList();
         }
-        return memoryEntryRepository.findByConversationIdOrderByCreatedAtDesc(conversationId);
+        return memoryEntryRepository.findByProjectIdAndConversationIdOrderByCreatedAtDesc(projectId, conversationId);
     }
 
     // ==================== RRF 混合检索 ====================

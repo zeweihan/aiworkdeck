@@ -15,15 +15,21 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.when;
 
-@DataJpaTest(properties = "spring.jpa.database-platform=org.hibernate.dialect.H2Dialect")
+@DataJpaTest(properties = {
+        "spring.jpa.database-platform=org.hibernate.dialect.H2Dialect",
+        "memory.context.organization-timeout-ms=100"
+})
 @Import(MemoryDocumentService.class)
 class MemoryDocumentServiceTest {
 
@@ -84,6 +90,35 @@ class MemoryDocumentServiceTest {
     }
 
     @Test
+    void indexEditPreservesManagedTopicLinksAndRejectsDanglingMarkdownLinks() {
+        String userSpace = space(service.listSpaces(7L, null), "user").id();
+        service.write(7L, userSpace, "facts.md", "# 事实\n\n有效内容", 0);
+        MemoryFileView index = service.read(7L, userSpace, "remember.md");
+
+        MemoryFileView edited = service.write(7L, userSpace, "remember.md",
+                "# 我的记忆\n\n模型撰写的正文。\n", index.revision());
+        assertTrue(edited.content().contains("模型撰写的正文。"));
+        assertTrue(edited.content().contains("[事实](facts.md)"));
+
+        MemoryDocumentException dangling = assertThrows(MemoryDocumentException.class,
+                () -> service.write(7L, userSpace, "remember.md",
+                        "# 我的记忆\n\n[不存在](missing.md)\n", edited.revision()));
+        assertEquals(400, dangling.status());
+    }
+
+    @Test
+    void editingTopicHeadingRefreshesManagedIndexLabel() {
+        String userSpace = space(service.listSpaces(8L, null), "user").id();
+        MemoryFileView topic = service.write(8L, userSpace, "deal.md", "# 收购\n\n旧标题", 0);
+
+        service.write(8L, userSpace, "deal.md", "# 出售\n\n新标题", topic.revision());
+
+        String index = service.read(8L, userSpace, "remember.md").content();
+        assertTrue(index.contains("[出售](deal.md)"));
+        assertFalse(index.contains("[收购](deal.md)"));
+    }
+
+    @Test
     void traversalAndNonMarkdownPathsAreRejected() {
         String userSpace = space(service.listSpaces(9L, null), "user").id();
         for (String path : List.of("../secret.md", "/tmp/secret.md", "a\\..\\secret.md", "notes.txt")) {
@@ -128,6 +163,77 @@ class MemoryDocumentServiceTest {
                 migrated.path(), migrated.revision());
         assertNull(service.migrateLegacyEntry(legacy));
         assertTrue(documents.findBySourceMemoryUid(legacy.getUid()).orElseThrow().isDeleted());
+    }
+
+    @Test
+    void sourceTombstoneDeletesLegacyRowAndDocumentTogether() {
+        MemoryEntry legacy = MemoryEntry.builder()
+                .userId(6L).scope(MemoryEntry.MemoryScope.USER)
+                .memoryType(MemoryEntry.MemoryType.PREFERENCE)
+                .memoryKey("称谓").memoryValue("使用韩律师").build();
+        legacy.setUid(UUID.randomUUID().toString());
+        legacy = legacyEntries.saveAndFlush(legacy);
+        MemoryFileView migrated = service.migrateLegacyEntry(legacy);
+
+        service.tombstoneSourceAndDeleteLegacy(legacy.getUid());
+
+        assertTrue(legacyEntries.findFirstByUid(legacy.getUid()).isEmpty());
+        assertTrue(documents.findBySourceMemoryUid(legacy.getUid()).orElseThrow().isDeleted());
+        String index = service.read(6L, space(service.listSpaces(6L, null), "user").id(), "remember.md").content();
+        assertFalse(index.contains("(" + migrated.path() + ")"));
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void organizationCallsRunOutsideDatabaseTransactions() {
+        when(organizations.listSpaces(3L)).thenAnswer(invocation -> {
+            assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+            return List.of(MemorySpaceView.unavailable("team", "团队记忆", "暂不可用"),
+                    MemorySpaceView.unavailable("firm", "律所记忆", "暂不可用"));
+        });
+
+        service.listSpaces(3L, null);
+        service.contextIndexes(3L, null, 16_000);
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void contextOrganizationReadsHaveOneStrictTotalDeadline() {
+        when(organizations.listSpaces(4L)).thenReturn(List.of(
+                new MemorySpaceView("team:t-1", "team", "团队记忆", true, false, true, null),
+                new MemorySpaceView("firm:f-1", "firm", "律所记忆", true, false, true, null)));
+        when(organizations.handles(anyString())).thenAnswer(invocation ->
+                ((String) invocation.getArgument(0)).contains(":"));
+        when(organizations.read(eq(4L), anyString(), eq("remember.md"))).thenAnswer(invocation -> {
+            Thread.sleep(2_000);
+            return new MemoryFileView("remember.md", "共享", "# 共享", 1, null, false);
+        });
+
+        long started = System.nanoTime();
+        String indexes = service.contextIndexes(4L, null, 16_000);
+        long elapsedMillis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+
+        assertTrue(indexes.contains("个人记忆"));
+        assertTrue(elapsedMillis < 1_000, "organization timeout must be total, elapsed=" + elapsedMillis);
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void contextTimeoutKeepsOrganizationIndexThatAlreadyCompleted() {
+        when(organizations.listSpaces(5L)).thenReturn(List.of(
+                new MemorySpaceView("team:t-1", "team", "团队记忆", true, false, true, null),
+                new MemorySpaceView("firm:f-1", "firm", "律所记忆", true, false, true, null)));
+        when(organizations.read(eq(5L), eq("team:t-1"), eq("remember.md")))
+                .thenReturn(new MemoryFileView("remember.md", "团队", "# fast-team", 1, null, false));
+        when(organizations.read(eq(5L), eq("firm:f-1"), eq("remember.md"))).thenAnswer(invocation -> {
+            Thread.sleep(2_000);
+            return new MemoryFileView("remember.md", "律所", "# slow-firm", 1, null, false);
+        });
+
+        String indexes = service.contextIndexes(5L, null, 16_000);
+
+        assertTrue(indexes.contains("fast-team"));
+        assertFalse(indexes.contains("slow-firm"));
     }
 
     @Test

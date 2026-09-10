@@ -8,6 +8,8 @@ The backend now stores user and project memory as revisioned Markdown documents 
 model-authored prose. Writes use `expectedRevision` and return HTTP 409 before a stale writer can
 overwrite newer content. Paths must be relative `.md` paths without traversal, backslashes, absolute
 segments, URI schemes, or empty segments. Content is limited to 128 KiB of UTF-8 data.
+Editing `remember.md` validates local Markdown links and then rebuilds the managed topic block from
+live documents in the same transaction. Renaming an existing topic refreshes its managed link label.
 
 Space identity comes from the authenticated user and the current project. Local user spaces are
 private. Project reads and writes use `ProjectMemberService` checks. Team and firm spaces are
@@ -20,9 +22,12 @@ null `id`.
 Legacy `MemoryEntry` saves migrate idempotently to stable Markdown paths while retaining their UID,
 scope, type, source metadata, and evidence retrieval. New local Markdown documents maintain one
 derived legacy row for existing Git memory sync rather than a second writable store. Sync tombstones
-also tombstone the document row, and a repeated migration or sync cannot revive deleted content.
+delete the legacy row, tombstone the document, and refresh the index in one transaction. A failed
+import remains represented by the canonical Git tombstone and is retried during export, so a repeated
+migration or sync cannot revive deleted content.
 Project retrieval queries and vector results exclude user/global rows even when malformed historical
-rows carry a project ID.
+rows carry a project ID. Deterministic legacy file and conversation lookups also require the current
+authorized project ID; a caller-provided file ID cannot cross a project boundary.
 
 The model tools are `memory_list`, `memory_read`, `memory_search`, `memory_write`, `memory_edit`, and
 `memory_delete`. Tools accept only `user`, `project`, `team`, or `firm`; they resolve the opaque space
@@ -31,9 +36,11 @@ revision. ASK mode exposes only list/read/search through the paired orchestrator
 system prompt explicitly prohibits writes. Skill selection cannot remove those three ASK reads.
 Context assembly injects only authorized `remember.md` indexes, bounded by
 `ai.context.memory-reserve * chars-per-token` and capped at 16,000 characters; topic bodies remain
-on-demand. The automatic conversation pipeline retains long-conversation summarization and Git
-sync, while the duplicate per-turn regex and LLM memory writers are removed in favor of immediate,
-explicit model tool writes.
+on-demand. Local index reads use short database transactions; team and firm HTTP reads run outside
+them, concurrently, with one two-second total deadline per turn. A completed organization index is
+retained if the other shared space reaches that deadline. The automatic conversation pipeline retains
+long-conversation summarization and Git sync, while the duplicate per-turn regex and LLM memory
+writers are removed in favor of immediate, explicit model tool writes.
 
 ## Desktop API
 
@@ -79,10 +86,11 @@ Java 21 command:
 JAVA_HOME=$(/usr/libexec/java_home -v 21) mvn -q -Dtest='MemoryDocumentServiceTest,RemoteMemoryOrganizationGatewayTest,MemoryDocumentControllerTest,MemoryDocumentToolsTest,ContextAssemblerServiceTest,MemoryEntryRepositoryIsolationTest,MemoryPipelineServiceTest,MemorySyncRoundTripTest,MemoryScopeTest,MemoryToolsScopeTest' test
 ```
 
-Result: **83 tests, 0 failures, 0 errors, 0 skipped**. Coverage includes cross-project denial,
+Result after review fixes: **90 tests, 0 failures, 0 errors, 0 skipped**. Coverage includes cross-project denial,
 central wrong-organization denial propagation, no-team unavailable rows, index link integrity,
 path traversal, stale revisions, legacy migration, scope bypass, ASK read-only prompts, bounded
-context injection, and cross-machine deletion tombstones.
+context injection, organization transaction/deadline boundaries, and retryable cross-machine deletion
+tombstones.
 
 The paired website was also exercised over real local HTTP by its implementer: desktop Bearer write
 to canonical team storage followed by a server internal read as another authorized member passed.
