@@ -3614,6 +3614,7 @@ export default {
   flex-shrink: 0;
 }
 .composer-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; margin-left: auto; max-width: 100%; }
+.centered-style .composer-actions { margin-right: 56px; }
 .follow-mode,.alternate-send { padding: 4px 6px; border-radius: 5px; color: var(--awd-text-2); font-size: 10px; cursor: pointer; }
 .follow-mode { background: var(--awd-accent-soft); color: var(--awd-accent-text); }
 .alternate-send:hover { background: var(--awd-surface-2); }
