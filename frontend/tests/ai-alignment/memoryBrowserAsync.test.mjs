@@ -34,6 +34,7 @@ function makeVm(api, uni = { showToast() {}, showModal() {} }) {
   for (const [name, computed] of Object.entries(options.computed)) {
     Object.defineProperty(vm, name, { get: computed.bind(vm) })
   }
+  vm.watchers = options.watch
   return vm
 }
 
@@ -102,4 +103,61 @@ test('delete confirmation keeps the file identity shown in the modal', async () 
   await modal.success({ confirm: true })
 
   assert.deepEqual(deletes, [['personal', 'a.md', 3]])
+})
+
+test('selecting a visible space supersedes a pending space refresh without leaving loading stuck', async () => {
+  const oldSpaces = deferred()
+  const vm = makeVm({
+    getMemorySpaces: () => oldSpaces.promise,
+    getMemoryFiles: async () => [],
+  })
+  vm.spaces = [space('team:1')]
+
+  const pendingRefresh = vm.loadSpaces()
+  assert.equal(vm.loading, true)
+  await vm.selectSpace(vm.spaces[0])
+  assert.equal(vm.loading, false)
+
+  oldSpaces.resolve([space('personal')])
+  await pendingRefresh
+  assert.equal(vm.loading, false)
+  assert.equal(vm.activeSpace.id, 'team:1')
+})
+
+test('changing project while open reloads its project-scoped spaces', async () => {
+  const projects = []
+  const vm = makeVm({
+    getMemorySpaces: async (projectId) => { projects.push(projectId); return [] },
+  })
+  vm.projectId = 8
+
+  await vm.watchers.projectId.call(vm)
+
+  assert.deepEqual(projects, [8])
+})
+
+test('a delete refresh superseded by navigation does not issue another read in the new space', async () => {
+  const oldRefresh = deferred()
+  const reads = []
+  const vm = makeVm({
+    deleteMemoryFile: async () => {},
+    getMemoryFiles: (spaceId) => spaceId === 'personal'
+      ? oldRefresh.promise
+      : Promise.resolve([{ path: 'team.md' }]),
+    getMemoryFile: async (spaceId, path) => {
+      reads.push([spaceId, path])
+      return { path, content: 'team', revision: 1, writable: true }
+    },
+  })
+  vm.activeSpace = space('personal')
+  vm.current = { path: 'old.md', revision: 1, writable: true }
+  vm.currentSpaceId = 'personal'
+
+  const pendingDelete = vm.deleteCurrent()
+  await Promise.resolve()
+  await vm.selectSpace(space('team:1'))
+  oldRefresh.resolve([{ path: 'personal-next.md' }])
+  await pendingDelete
+
+  assert.deepEqual(reads, [['team:1', 'team.md']])
 })

@@ -127,6 +127,9 @@ export default {
       if (value) this.loadSpaces()
       else this.viewGeneration += 1
     },
+    projectId() {
+      if (this.open) this.loadSpaces()
+    },
   },
   mounted() {
     if (this.open) this.loadSpaces()
@@ -178,6 +181,8 @@ export default {
     async selectSpace(space, inheritedGeneration = null) {
       const generation = inheritedGeneration == null ? ++this.viewGeneration : inheritedGeneration
       if (generation !== this.viewGeneration) return
+      this.loading = true
+      this.loadError = ''
       this.activeSpace = space
       this.files = []
       this.current = null
@@ -194,6 +199,8 @@ export default {
         if (this.isActiveRequest(space.id, generation)) {
           this.loadError = e.message || this.$t('chat.memoryLoadFailed')
         }
+      } finally {
+        if (this.viewGeneration === generation) this.loading = false
       }
     },
     async openFile(path, inheritedGeneration = null) {
@@ -306,6 +313,7 @@ export default {
         this.currentSpaceId = null
         this.draft = ''
         await this.refreshFiles(target.spaceId, generation)
+        if (!this.isActiveRequest(target.spaceId, generation)) return
         const next = this.files.find((file) => file.path === 'remember.md') || this.files[0]
         if (next) await this.openFile(next.path, generation)
       } catch (e) {
