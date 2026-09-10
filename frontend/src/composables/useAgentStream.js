@@ -6,7 +6,7 @@ import { getSessionId } from '@/utils/auth.js'
 import { createProtocolTagRegex, decodeProtocolTags } from '@/composables/agentTagProtocol.mjs'
 import { t } from '@/i18n'
 import { nextBubbleId } from './bubbleId.js'
-import { applyInboxReceipt, applyInboxSnapshot, applyInputApplied, createInboxState, removeInboxItem, replaceInboxItem } from './agentInboxState.mjs'
+import { applyInboxReceipt, applyInboxSnapshot, applyInputApplied, createInboxState, markInboxEvent, removeInboxItem, replaceInboxItem } from './agentInboxState.mjs'
 
 // 网络恢复/页面回前台时触发重连的激活实例指针（模块级单例）。
 // 页面栈会多次实例化本 composable（PR#148 重复订阅地雷），window 监听只挂一次，
@@ -39,6 +39,7 @@ export function useAgentStream() {
     const error = ref(null)
     const currentConversationId = ref(null)
     const inboxState = reactive(createInboxState())
+    let inboxConversationGeneration = 0
     const appliedAssistantSegments = new Set()
     // STATE: Token Usage Tracking (Session Cumulative)
     // STATE: Token Usage Tracking (Session Cumulative)
@@ -190,9 +191,11 @@ export function useAgentStream() {
     })
 
     const resetInboxState = () => {
+        inboxConversationGeneration += 1
         inboxState.items.splice(0, inboxState.items.length)
         inboxState.runId = null
         inboxState.status = null
+        inboxState.eventEpoch = 0
         inboxState.lastSequences = {}
         inboxState.appliedMessageIds = {}
         appliedAssistantSegments.clear()
@@ -324,11 +327,22 @@ export function useAgentStream() {
         }
     }
 
+    const captureInboxRequest = (conversationId) => ({
+        conversationId,
+        generation: inboxConversationGeneration,
+        eventEpoch: inboxState.eventEpoch,
+    })
+    const isCurrentInboxRequest = (request) => currentConversationId.value === request.conversationId
+        && inboxConversationGeneration === request.generation
+    const canApplyInboxResponse = (request) => isCurrentInboxRequest(request)
+        && inboxState.eventEpoch === request.eventEpoch
+
     const restoreInbox = async (conversationId) => {
         if (!conversationId || currentConversationId.value !== conversationId) return
+        const request = captureInboxRequest(conversationId)
         try {
             const snapshot = await getAgentInbox(conversationId)
-            if (currentConversationId.value === conversationId) applyInboxSnapshot(inboxState, snapshot || {})
+            if (canApplyInboxResponse(request)) applyInboxSnapshot(inboxState, snapshot || {})
         } catch (e) {
             console.warn('[AgentStream] Failed to restore inbox:', e)
         }
@@ -827,6 +841,7 @@ export function useAgentStream() {
         if (evt === 'inbox_updated') {
             try {
                 const snapshot = JSON.parse(dataStr)
+                markInboxEvent(inboxState)
                 applyInboxSnapshot(inboxState, snapshot || {})
             } catch (e) {
                 console.error('Failed to parse inbox_updated', e)
@@ -836,7 +851,9 @@ export function useAgentStream() {
 
         if (evt === 'input_applied') {
             try {
-                acceptAppliedInput(JSON.parse(dataStr))
+                const applied = JSON.parse(dataStr)
+                markInboxEvent(inboxState)
+                acceptAppliedInput(applied)
             } catch (e) {
                 console.error('Failed to parse input_applied', e)
             }
@@ -1890,11 +1907,13 @@ export function useAgentStream() {
     const updateInbox = async (messageId, patch) => {
         const conversationId = currentConversationId.value
         if (!conversationId || !messageId) return null
+        const request = captureInboxRequest(conversationId)
         try {
             const updated = await updateAgentInboxItem(conversationId, messageId, patch)
+            if (!canApplyInboxResponse(request)) return null
             return replaceInboxItem(inboxState, updated)
         } catch (e) {
-            if (e && e.status === 409) await restoreInbox(conversationId)
+            if (e && e.status === 409 && isCurrentInboxRequest(request)) await restoreInbox(conversationId)
             throw e
         }
     }
@@ -1902,12 +1921,14 @@ export function useAgentStream() {
     const deleteInbox = async (messageId, expectedRevision) => {
         const conversationId = currentConversationId.value
         if (!conversationId || !messageId) return
+        const request = captureInboxRequest(conversationId)
         try {
             const snapshot = await deleteAgentInboxItem(conversationId, messageId, expectedRevision)
+            if (!canApplyInboxResponse(request)) return
             if (snapshot && Array.isArray(snapshot.items)) applyInboxSnapshot(inboxState, snapshot)
             else removeInboxItem(inboxState, messageId)
         } catch (e) {
-            if (e && e.status === 409) await restoreInbox(conversationId)
+            if (e && e.status === 409 && isCurrentInboxRequest(request)) await restoreInbox(conversationId)
             throw e
         }
     }

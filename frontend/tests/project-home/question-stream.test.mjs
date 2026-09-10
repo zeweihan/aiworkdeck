@@ -12,6 +12,7 @@ import {
   applyInboxSnapshot,
   applyInputApplied,
   createInboxState,
+  markInboxEvent,
   removeInboxItem,
   replaceInboxItem,
 } from '../../src/composables/agentInboxState.mjs'
@@ -19,25 +20,35 @@ import { nextBubbleId } from '../../src/composables/bubbleId.js'
 
 const source = readFileSync(new URL('../../src/composables/useAgentStream.js', import.meta.url), 'utf8')
 
-function stream() {
+function stream(overrides = {}) {
   const body = source.replace(/^import .*$/gm, '')
     .replace('export function useAgentStream()', 'function useAgentStream()')
     .replace('        bubbles,\n', '        bubbles, handleEvent, currentAssistantBubble, createAssistantBubble, createUserBubble,\n')
   const factory = new Function('ref', 'reactive', 'nextTick', 'onUnmounted', 'getCurrentInstance',
     'createProtocolTagRegex', 'decodeProtocolTags', 't', 'nextBubbleId',
-    'createInboxState', 'applyInboxReceipt', 'applyInboxSnapshot', 'applyInputApplied', 'removeInboxItem', 'replaceInboxItem',
+    'createInboxState', 'applyInboxReceipt', 'applyInboxSnapshot', 'applyInputApplied', 'markInboxEvent', 'removeInboxItem', 'replaceInboxItem',
     'getApiBaseUrl', 'getSessionId', 'getAgentInbox', 'updateAgentInboxItem', 'deleteAgentInboxItem', 'getConversationMetadata',
     body + '\nreturn useAgentStream()')
   const value = factory(ref, reactive, nextTick, () => {}, () => null,
     createProtocolTagRegex, decodeProtocolTags, key => key, nextBubbleId,
-    createInboxState, applyInboxReceipt, applyInboxSnapshot, applyInputApplied, removeInboxItem, replaceInboxItem,
-    () => 'http://test.local', () => 'test-session', async () => ({ items: [], runId: null, status: null }),
-    async () => null, async () => ({ items: [] }), async () => null)
+    createInboxState, applyInboxReceipt, applyInboxSnapshot, applyInputApplied, markInboxEvent, removeInboxItem, replaceInboxItem,
+    () => 'http://test.local', () => 'test-session',
+    overrides.getAgentInbox || (async () => ({ items: [], runId: null, status: null })),
+    overrides.updateAgentInboxItem || (async () => null),
+    overrides.deleteAgentInboxItem || (async () => ({ items: [] })),
+    async () => null)
   const bubble = value.createAssistantBubble()
   bubble.isStreaming = true
   value.bubbles.value.push(bubble)
   value.currentAssistantBubble.value = bubble
   return value
+}
+
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej })
+  return { promise, resolve, reject }
 }
 
 const QUESTION = '时间跨度请选择：'
@@ -113,6 +124,67 @@ test('inbox snapshot and applied event render steering once and keep one empty a
   assert.deepEqual(s.bubbles.value.map((bubble) => bubble.role), ['USER', 'USER', 'USER', 'ASSISTANT'])
   assert.deepEqual(s.bubbles.value.filter((bubble) => bubble.role === 'USER').map((bubble) => bubble.content),
     ['initial request', 'canonical first steer', 'second steer'])
+})
+
+test('a restore snapshot that resolves after input_applied cannot restore a phantom pending item', async () => {
+  const request = deferred()
+  const s = stream({ getAgentInbox: async () => request.promise })
+  s.setConversationId('conversation-1')
+
+  const restoring = s.restoreInbox()
+  s.handleEvent('inbox_updated', JSON.stringify({
+    runId: 'run-1', status: 'RUNNING',
+    items: [{ id: 'message-1', message: 'steer', state: 'pending', runId: 'run-1', sequence: 1 }],
+  }))
+  s.handleEvent('input_applied', JSON.stringify({
+    messageId: 'message-1', runId: 'run-1', sequence: 1, message: 'steer', submissionMode: 'steer',
+  }))
+  request.resolve({
+    runId: 'run-1', status: 'RUNNING',
+    items: [{ id: 'message-1', message: 'steer', state: 'pending', runId: 'run-1', sequence: 1 }],
+  })
+  await restoring
+
+  assert.equal(s.inboxState.items.length, 1)
+  assert.equal(s.inboxState.items[0].state, 'applied')
+})
+
+test('an edit response that resolves after switching conversations cannot overwrite the new inbox', async () => {
+  const request = deferred()
+  const s = stream({ updateAgentInboxItem: async () => request.promise })
+  s.setConversationId('conversation-1')
+  s.handleEvent('inbox_updated', JSON.stringify({
+    runId: 'run-1', status: 'RUNNING', items: [{ id: 'old', message: 'old', state: 'pending' }],
+  }))
+
+  const editing = s.updateInbox('old', { message: 'edited', expectedRevision: 1 })
+  s.setConversationId('conversation-2')
+  s.handleEvent('inbox_updated', JSON.stringify({
+    runId: 'run-2', status: 'RUNNING', items: [{ id: 'new', message: 'new', state: 'pending' }],
+  }))
+  request.resolve({ id: 'old', message: 'edited', state: 'pending', revision: 2 })
+  await editing
+
+  assert.deepEqual(s.inboxState.items.map(item => item.id), ['new'])
+})
+
+test('a delete response that resolves after switching conversations cannot overwrite the new inbox', async () => {
+  const request = deferred()
+  const s = stream({ deleteAgentInboxItem: async () => request.promise })
+  s.setConversationId('conversation-1')
+  s.handleEvent('inbox_updated', JSON.stringify({
+    runId: 'run-1', status: 'RUNNING', items: [{ id: 'old', message: 'old', state: 'pending' }],
+  }))
+
+  const deleting = s.deleteInbox('old', 1)
+  s.setConversationId('conversation-2')
+  s.handleEvent('inbox_updated', JSON.stringify({
+    runId: 'run-2', status: 'RUNNING', items: [{ id: 'new', message: 'new', state: 'pending' }],
+  }))
+  request.resolve({ runId: 'run-1', status: 'RUNNING', items: [] })
+  await deleting
+
+  assert.deepEqual(s.inboxState.items.map(item => item.id), ['new'])
 })
 
 test('a late HTTP receipt after New Chat cannot repopulate the new conversation', async () => {

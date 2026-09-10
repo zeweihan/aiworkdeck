@@ -5,9 +5,15 @@ export const createInboxState = () => ({
   items: [],
   runId: null,
   status: null,
+  eventEpoch: 0,
   lastSequences: {},
   appliedMessageIds: {},
 })
+
+export function markInboxEvent(state) {
+  state.eventEpoch += 1
+  return state.eventEpoch
+}
 
 const finiteNumber = (value, fallback) => Number.isFinite(Number(value)) ? Number(value) : fallback
 
