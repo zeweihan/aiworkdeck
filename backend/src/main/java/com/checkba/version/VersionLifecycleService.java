@@ -7,6 +7,7 @@ import com.checkba.model.entity.Project;
 import com.checkba.repository.ProjectRemoteRepository;
 import com.checkba.repository.ProjectRepository;
 import com.checkba.repository.UserRepository;
+import com.checkba.service.UserService;
 import com.checkba.service.LangText;
 import com.checkba.service.ProjectService;
 import org.slf4j.Logger;
@@ -237,8 +238,7 @@ public class VersionLifecycleService {
         Long id = userId != null ? userId : project.getUserId();
         if (id == null) return LangText.of("用户", "User");
         return userRepository.findById(id)
-                .map(u -> u.getUsername())
-                .filter(n -> n != null && !n.isBlank())
+                .map(UserService::signatureName)
                 .orElse(LangText.of("用户", "User"));
     }
 

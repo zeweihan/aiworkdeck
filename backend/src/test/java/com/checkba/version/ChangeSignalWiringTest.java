@@ -66,6 +66,25 @@ class ChangeSignalWiringTest {
         projectFileService.permDelete(folder.getId(), 1L);
     }
 
+    /**
+     * 自动存档的署名与结束工作同一口径：展示名优先（spec 2026-09-10 §4）。
+     * 用户名是内部标识（桥接账号是 awd_xxx，单机是 admin），时间线上不能再出现它。
+     */
+    @Test
+    void changeSignalCarriesDisplayNameRatherThanUsername() {
+        User user = new User();
+        user.setId(1L);
+        user.setUsername("admin");
+        user.setDisplayName("韩律师");
+        when(userService.getUserById(1L)).thenReturn(user);
+
+        ProjectFile folder = projectFileService.createFolder(7L, null, "新建文件夹四", 1L);
+
+        verify(workSessionService, atLeastOnce())
+                .onChangeSignal(eq(7L), eq(1L), eq("韩律师"));
+        projectFileService.permDelete(folder.getId(), 1L);
+    }
+
     /** 查不到用户（或查询异常）时必须退回兜底名「用户」，不能抛异常阻断文件操作。 */
     @Test
     void changeSignalFallsBackToGenericNameWhenUserLookupFails() {

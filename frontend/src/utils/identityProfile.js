@@ -57,6 +57,17 @@ export function withNudgeDismissed(dismissedIds, accountId) {
   return list.concat(id).slice(-50)
 }
 
+/**
+ * 输入框 confirm/blur 那一刻用户真正提交的文字。
+ *
+ * uni-h5 的 v-model 有 100ms 节流：打完最后一个字立刻回车，绑定的 data 还是上一拍的值，
+ * 只有事件自己带的 detail.value 是最新的。事件不带字符串值时回落绑定值。
+ */
+export function submittedInputValue(event, fallback) {
+  const value = event && event.detail ? event.detail.value : undefined
+  return typeof value === 'string' ? value : fallback
+}
+
 /** storage 里读回来的东西可能是任何形状（老版本写过别的、被人手改过）：一律归一成字符串数组。 */
 function toIdList(value) {
   if (!Array.isArray(value)) return []

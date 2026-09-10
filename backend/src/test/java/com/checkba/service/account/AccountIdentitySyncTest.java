@@ -38,6 +38,7 @@ class AccountIdentitySyncTest {
     private LocalIdentityService localIdentityService;
     private UserService userService;
     private AccountIdentitySync sync;
+    private org.springframework.context.ApplicationEventPublisher events;
     private User localUser;
 
     @BeforeEach
@@ -45,7 +46,8 @@ class AccountIdentitySyncTest {
         accountService = mock(AccountService.class);
         localIdentityService = mock(LocalIdentityService.class);
         userService = mock(UserService.class);
-        sync = new AccountIdentitySync(accountService, localIdentityService, userService);
+        events = mock(org.springframework.context.ApplicationEventPublisher.class);
+        sync = new AccountIdentitySync(accountService, localIdentityService, userService, events);
 
         localUser = new User();
         localUser.setId(LOCAL_USER);
@@ -145,6 +147,23 @@ class AccountIdentitySyncTest {
 
         verify(userService).refreshDisplayNameFromWebsite(localUser, "韩律师");
         verify(userService, never()).updateAvatar(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("同步到了展示名：发事件，让案件库连接跟着刷新（v0.38.2 走查）")
+    void syncedDisplayNameIsPublishedForTheCaseLibrary() {
+        when(accountService.profileIdentity()).thenReturn(view("韩律师", null));
+
+        sync.refresh();
+
+        verify(events).publishEvent(new AccountIdentitySync.DisplayNameSynced(LOCAL_USER, "韩律师"));
+    }
+
+    @Test
+    @DisplayName("只动头像：不发展示名事件")
+    void avatarOnlyWriteDoesNotPublish() {
+        sync.applyAvatarUrl(null);
+        verify(events, never()).publishEvent(any(Object.class));
     }
 
     @Test

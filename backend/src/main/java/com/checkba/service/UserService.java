@@ -295,6 +295,21 @@ public class UserService {
     }
 
     /**
+     * 版本署名用的名字（spec 2026-09-10 §4）：展示名优先，空才回落用户名，两样都没有回 null，
+     * 兜底写「用户」还是「AI WorkDeck」由调用方决定。
+     *
+     * <p>写进 Git 提交对象的作者名全部走这里——手动开启、自动开启、自动存档、AI 改文本、
+     * 云端整合，以前五处各写一份、只改了一处，时间线上就一半是「韩律师」一半是 {@code admin}。
+     */
+    public static String signatureName(User user) {
+        if (user == null) return null;
+        String display = user.getDisplayName();
+        if (display != null && !display.isBlank()) return display.trim();
+        String username = user.getUsername();
+        return username == null || username.isBlank() ? null : username;
+    }
+
+    /**
      * 展示名随官网刷新（spec 2026-09-10 §4/§5：官网的展示名是唯一权威源）。
      *
      * <p>只在官网给了非空值、且与本地这行不同时才写；<b>username 一个字都不动</b>——
