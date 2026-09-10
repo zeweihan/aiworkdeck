@@ -3,6 +3,8 @@
 
 package com.checkba.service.ai;
 
+import com.checkba.service.AppLanguageService;
+import com.checkba.service.LangText;
 import com.checkba.service.SystemSettingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -155,6 +157,32 @@ class NetworkRegionServiceTest {
             assertTrue(basis.contains("CN"), "判定依据应含国家/地区，实际: " + basis);
             assertTrue(basis.contains("Asia/Shanghai"), "判定依据应含时区，实际: " + basis);
         });
+    }
+
+    @Test
+    @DisplayName("detectionBasis 中文界面给中文说法")
+    void detectionBasisChinese() {
+        withLanguage(false, () -> withEnv(Locale.CHINA, "Asia/Singapore", () ->
+                assertEquals("系统国家/地区=CN，时区=Asia/Singapore", service.detectionBasis())));
+    }
+
+    @Test
+    @DisplayName("detectionBasis 英文界面不许夹中文（dev-board#575）")
+    void detectionBasisEnglish() {
+        withLanguage(true, () -> withEnv(Locale.CHINA, "Asia/Singapore", () ->
+                assertEquals("system country/region=CN, time zone=Asia/Singapore", service.detectionBasis())));
+    }
+
+    /** LangText 是静态桥：登记一个指定语言的实例跑完断言后必须 reset，不然会串到别的测试类。 */
+    private void withLanguage(boolean english, Runnable body) {
+        AppLanguageService lang = mock(AppLanguageService.class);
+        when(lang.isEnglish()).thenReturn(english);
+        LangText.register(lang);
+        try {
+            body.run();
+        } finally {
+            LangText.reset();
+        }
     }
 
     /**
