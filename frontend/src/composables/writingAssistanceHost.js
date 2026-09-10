@@ -9,7 +9,8 @@ const preferenceListeners = new Map()
 export function createWritingAssistanceHost({ projectId, fileId, userId, execute, send, api, storage, writable, language }) {
   const session = `${projectId}:${fileId}:${Date.now()}:${Math.random().toString(36).slice(2)}`
   const key = `awd_writing_preferences_${userId}`
-  let disposed = false, items = [], documentItems = [], loadSequence = 0
+  let disposed = false, items = [], documentItems = [], loadSequence = 0, seedSequence = 0
+  const seededTexts = new Set()
   let preferences = { enabled: true, learning: true, hints: true }
   try { const stored = storage.get(key); for (const name of Object.keys(preferences)) if (typeof stored?.[name] === 'boolean') preferences[name] = stored[name] } catch { /* defaults */ }
   const receivePreferences = (next) => {
@@ -46,23 +47,48 @@ export function createWritingAssistanceHost({ projectId, fileId, userId, execute
     publish()
   }
   async function seedDocument() {
-    if (disposed || !writable) return
+    const seq = ++seedSequence
+    const current = () => !disposed && seq === seedSequence
+    if (!current() || !writable) return
     const view = await execute('set_revision_view', {}).catch(() => null)
-    if (disposed || view?.mode === 'all') return
-    // One bounded read at load, never on each keystroke; no AI or external retrieval.
-    const result = await execute('get_document_text', { maxParagraphs: 200 }).catch(() => null)
-    if (disposed || !result?.success) return
-    const entries = extractCompletionEntries((result.paragraphs || []).map((p) => p.text || '').join('\n'))
+    if (!current() || !view || view.mode === 'all') return
+    // Load/manual refresh only: page the live body within one worker revision.
+    // The API's 50-entry learn batch is independent of the document vocabulary.
+    const paragraphs = []
+    let revision, start = 0, chars = 0, stop = false
+    for (let page = 0; page < 1000 && !stop; page++) {
+      const result = await execute('get_document_text', { startParagraph: start, maxParagraphs: 200 }).catch(() => null)
+      if (!current() || !result?.success || result.revision == null || !Array.isArray(result.paragraphs)) return
+      if (revision == null) revision = result.revision
+      if (result.revision !== revision) return
+      for (const p of result.paragraphs) {
+        if (typeof p.text !== 'string') return
+        const size = p.text.length + (paragraphs.length ? 1 : 0)
+        if (paragraphs.length >= 1000 || chars + size > 200000) { stop = true; break }
+        paragraphs.push(p.text); chars += size
+      }
+      if (stop || paragraphs.length >= 1000 || !result.truncated) break
+      if (!Number.isInteger(result.nextStartParagraph) || result.nextStartParagraph <= start) return
+      start = result.nextStartParagraph
+    }
+    const context = await execute('get_review_context', {}).catch(() => null)
+    if (!current() || context?.revision !== revision || context.reason === 'inline-revisions') return
+    const entries = extractCompletionEntries(paragraphs.join('\n'), { limit: 500 })
     documentItems = entries.map((x) => ({ ...x, source: 'document', scope: 'project', uses: 1 }))
     publish()
-    if (preferences.learning) {
-      const entities = entries.filter((x) => !['WORD', 'PHRASE'].includes(x.kind))
-      if (entities.length) await api.learn(projectId, { scope: 'project', entries: entities })
+    const entities = entries.filter((x) => !['WORD', 'PHRASE'].includes(x.kind) && !seededTexts.has(x.text))
+      .slice(0, Math.max(0, 200 - seededTexts.size))
+    for (let offset = 0; offset < entities.length; offset += 50) {
+      if (!current() || !preferences.learning) return
+      const batch = entities.slice(offset, offset + 50)
+      await api.learn(projectId, { scope: 'project', entries: batch })
+      batch.forEach((entry) => seededTexts.add(entry.text))
     }
   }
   async function perform(action, data) {
     switch (action) {
       case 'refresh': await refresh(); return {}
+      case 'refreshDocument': await Promise.all([refresh(), seedDocument()]); return {}
       case 'learn':
         if (!writable || !preferences.learning) return { learned: 0 }
         if (!['project', 'user'].includes(data.scope)) throw new Error('Invalid learning scope')
@@ -106,7 +132,7 @@ export function createWritingAssistanceHost({ projectId, fileId, userId, execute
     },
     destroy() {
       if (disposed) return
-      disposed = true; loadSequence++
+      disposed = true; loadSequence++; seedSequence++
       const listeners = preferenceListeners.get(key)
       listeners?.delete(receivePreferences)
       if (!listeners?.size) preferenceListeners.delete(key)

@@ -2359,6 +2359,47 @@ function applyProfileToStylesSafe(names) {
 }
 
 // ==========================================================================
+// Writer's live controller view data contains the caret and visible area in
+// twips. Model.getViewData() is a saved snapshot and may lag typing/scrolling.
+// Locate the native editing child by its visible-area size, excluding rulers,
+// scrollbars and the sidebar; retain the short window path between reads.
+let caretWindowCache = null;
+function readNativeCaretRect(frame, live, charHeightPt) {
+  const values = typeof live === 'string' ? live.split(';').map(Number) : [];
+  if (values.length < 9 || values.slice(0, 7).some(function (v) { return !isFinite(v); }) || values[2] <= 0) return null;
+  const component = frame.getComponentWindow();
+  // VCL window rectangles are physical pixels on Retina. Query one inch in
+  // the same native window units instead of assuming a 96-dpi surface.
+  const inch = component.convertPointToPixel({ X: 2540, Y: 2540 }, css.util.MeasureUnit.MM_100TH);
+  if (!inch || !isFinite(inch.X) || inch.X <= 0) return null;
+  const dpi = inch.X, scale = dpi / 1440 * values[2] / 100;
+  const width = (values[5] - values[3]) * scale, height = (values[6] - values[4]) * scale;
+  if (width <= 0 || height <= 0) return null;
+  const matches = function (r) { return Math.abs(r.Width - width) <= 2 && Math.abs(r.Height - height) <= 2; };
+  let path = caretWindowCache && caretWindowCache.model === xModel ? caretWindowCache.path : null;
+  try { if (path && !matches(path[path.length - 1].getPosSize())) path = null; } catch (e) { path = null; }
+  if (!path) {
+    const queue = [{ window: component, path: [component] }];
+    for (let count = 0; queue.length && count < 64; count++) {
+      const node = queue.shift(), rect = node.window.getPosSize();
+      if (matches(rect)) { path = node.path; break; }
+      if (node.path.length >= 5) continue;
+      try { const children = node.window.getWindows();
+        for (let i = 0; i < children.length && queue.length < 64; i++) queue.push({ window: children[i], path: node.path.concat([children[i]]) });
+      } catch (e) { /* Leaf windows have no children. */ }
+    }
+    if (!path) return null;
+    caretWindowCache = { model: xModel, path: path };
+  }
+  let x = 0, y = 0;
+  for (let i = 0; i < path.length; i++) { const r = path[i].getPosSize(); x += r.X; y += r.Y; }
+  const container = frame.getContainerWindow().getPosSize();
+  return { x: x + (values[0] - values[3]) * scale, y: y + (values[1] - values[4]) * scale,
+    height: (Number(charHeightPt) || 12) * dpi / 72 * values[2] / 100,
+    frameWidth: container.Width, frameHeight: container.Height,
+    viewport: { x: x, y: y, width: width, height: height } };
+}
+
 function completionUnavailable(reason) {
   return { success: false, available: false, reason: reason, error: reason, message: reason };
 }
@@ -3234,13 +3275,8 @@ const EXEC = {
       const r = ctrl.getFrame().getComponentWindow().getPosSize();
       out.winPx = { X: r.X, Y: r.Y, W: r.Width, H: r.Height };
     } catch (e) { out.winErr = errStr(e); }
-    // SCROLL-AWARE origin (Phase B): getPosition() is in document coords (from the
-    // page top), so after the view scrolls the click-derived offset goes stale.
-    // The view data carries the scrolled origin — VisibleLeft/Top (or ViewLeft/Top)
-    // — so the overlay can subtract it and follow the cursor WITHOUT re-clicking.
-    // Return serializable primitive fields only: which field tracks scroll AND its unit
-    // (1/100 mm vs twips) is the open question to confirm on a real device, then
-    // bake CURSOR_MAP.viewDataToMm accordingly.
+    // Saved model view data remains for older consumers. It is not a live
+    // scroll/caret source; nativeCaret below reads the current controller.
     try {
       const vd = xModel.getViewData && xModel.getViewData();
       if (vd && typeof vd.getByIndex === 'function' && vd.getCount() > 0) {
@@ -3256,6 +3292,8 @@ const EXEC = {
         out.viewData = view;
       }
     } catch (e) { out.viewDataErr = errStr(e); }
+    try { out.nativeCaret = readNativeCaretRect(ctrl.getFrame(), ctrl.getViewData(), out.charHeightPt); }
+    catch (e) { /* Older engines retain the click-calibrated fallback. */ }
     return out;
   },
   // [spike] probe 4b: LOAD performance of a 50-page docx (#56 余项). The existing
@@ -4473,32 +4511,70 @@ const EXEC = {
     if (!selectVisibly(range)) return bmFail('could not select bookmark: ' + name);
     return { success: true, name: name };
   },
-  // read the hyperlink URL at the (collapsed) view cursor — the click-to-open
-  // seam: LO WASM does NOT surface hyperlink activation (no window.open, real-
-  // machine verified on v0.7.1), so the editor page listens for canvas clicks
-  // and asks the worker what link the cursor landed in. Non-collapsed cursor
-  // (drag-selection / double-click) returns '' on purpose — only a plain
-  // positioning click opens a link.
+  // Read-only activation lookup: never select the target or add bookmarks.
   get_hyperlink_at_cursor() {
+    if (!isWriterDoc()) return { success: true, url: '' };
     const vc = ctrl.getViewCursor();
-    try { if ((vc.getString() || '').length > 0) return { success: true, url: '' }; } catch (e) {}
-    let url = '';
-    try {
-      const v = vc.getPropertyValue('HyperLinkURL');
-      if (typeof v === 'string') url = v;
-    } catch (e) {}
-    if (!url) {
-      // cursor may sit at the run boundary: peek one char to the right
+    const hasSelection = !!(vc.getString() || '').length;
+    let url = '', field = null;
+    function readAt(range) {
+      try { const v = range.getPropertyValue('HyperLinkURL'); if (typeof v === 'string' && v) url = v; } catch (e) {}
+      try { field = range.getPropertyValue('TextField') || field; } catch (e) {}
+    }
+    readAt(vc);
+    if (!url && !field) {
       try {
-        const xText = vc.getText();
-        const cur = xText.createTextCursorByRange(vc.getStart());
-        if (cur.goRight(1, true)) {
-          const v2 = cur.getPropertyValue('HyperLinkURL');
-          if (typeof v2 === 'string') url = v2;
+        const cur = vc.getText().createTextCursorByRange(vc.getStart());
+        if (cur.goRight(1, true)) readAt(cur);
+      } catch (e) {}
+    }
+    // Writer selects a whole REF field on a positioning click. Permit exactly
+    // that field anchor, while rejecting ordinary/multi-run selected text.
+    if (hasSelection) {
+      try {
+        if (!field) return { success: true, url: '' };
+        const anchor = field.getAnchor(), text = vc.getText();
+        if (text.compareRegionStarts(vc, anchor) !== 0 || text.compareRegionEnds(vc, anchor) !== 0)
+          return { success: true, url: '' };
+      } catch (e) { return { success: true, url: '' }; }
+    }
+    let name = '', source = 2;
+    if (url.charAt(0) === '#') {
+      try { name = decodeURIComponent(url.slice(1)); } catch (e) { name = url.slice(1); }
+    } else if (!url && field) {
+      try {
+        if (field.supportsService('com.sun.star.text.textfield.GetReference')) {
+          name = String(field.getPropertyValue('SourceName') || '');
+          source = Number(field.getPropertyValue('ReferenceFieldSource'));
+          if (name) url = '#' + encodeURIComponent(name);
         }
       } catch (e) {}
     }
-    return { success: true, url: url };
+    let target = null;
+    if (name) {
+      let range = null;
+      try {
+        if (source === 2) range = anchorRange(name);
+        else if (source === 0) {
+          const refs = xModel.getReferenceMarks();
+          if (refs.hasByName(name)) range = refs.getByName(name).getAnchor();
+        }
+      } catch (e) {}
+      let text = '';
+      if (range) {
+        try {
+          text = range.getString() || '';
+          // Point bookmarks (headings are common) have no selected text.
+          if (!text) {
+            const cur = range.getText().createTextCursorByRange(range.getStart());
+            cur.gotoStartOfParagraph(false); cur.gotoEndOfParagraph(true);
+            text = cur.getString() || '';
+          }
+        } catch (e) {}
+      }
+      target = { name: name, exists: !!range, text: text.slice(0, 3000), truncated: text.length > 3000 };
+    }
+    return { success: true, url: url, target: target };
   },
   // insert an image (data URL / raw base64) at the view cursor — the WPS-era
   // insertImage. Bytes go JS→UNO through SequenceInputStream (same signed-Array

@@ -58,5 +58,5 @@ test('接线核实：分支存在且交给 openFileLinkTarget（evidenceLinkActi
   assert.match(SRC, /action\.action === 'plugin_open_locator'/)
   assert.match(SRC, /this\.openFileLinkTarget\(\{ fileId: action\.fileId, locator: action\.locator \|\| null \}/)
   const ela = readFileSync(new URL('../../src/pages/project-overview/evidenceLinkActions.js', import.meta.url), 'utf8')
-  assert.match(ela, /async openFileLinkTarget\(target, sideOverride = null\)/)
+  assert.match(ela, /async openFileLinkTarget\(target, sideOverride = null(?:,|\))/)
 })

@@ -452,6 +452,7 @@ cd frontend && npm run build:h5 && npm run build:zetaoffice   # 改 editor-main.
   坏 JSON 会令 `summary.deepComplete=false`，不得显示成“未发现问题”。
 - scope 仅为 Writer 正文；表格、页眉页脚等当前拿不到可靠段落的内容，继续由保存文件后的专门核验覆盖。
 - 即时 finding 只陈述机械事实；重复或已过期的模型 quote 不下发定位结果，也不得自动改文档。
+- guest 以可拖动、可收起悬浮窗承载结果；收起态与展开态共用位置，分类 tab 固定在滚动列表上方。正文变化后旧结果只显示“等待重新检查”，不得继续定位或采用；补全候选出现只隐藏行旁提示，不改变用户选择的面板展开态。
 
 ```
 cd backend && mvn test -Dtest='DocInsight*,LawArticle*'   # 70 条

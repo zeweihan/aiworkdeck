@@ -120,6 +120,10 @@ jobs:
       - name: Writing assistance contracts (dev-board#538)
         working-directory: frontend
         run: npm run test:completion
+
+      - name: Document insight and link preview tests
+        working-directory: frontend
+        run: npm run test:insight
       - name: Inline review contracts (dev-board#547)
         working-directory: frontend
         run: npm run test:inline-review

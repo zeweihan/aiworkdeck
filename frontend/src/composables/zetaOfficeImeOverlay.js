@@ -25,26 +25,11 @@
 // 输入框本身必须全透明（它压在画布上，显字会与正文叠印），而预览条不依赖光标
 // 映射，Phase A 下照样可见。
 //
-//   MAPPING — doc 1/100 mm -> canvas CSS px is affine: px = origin + scale*(doc - scroll).
-//   * scale is STABLE: 96/2540 CSS px per 1/100 mm at 100% zoom (CSS defines
-//     96 px/in; 2540 (1/100 mm)/in), times ZoomValue%. Verified exact against a
-//     real LibreOffice (click-correspondence calibration).
-//   * scroll is the SCROLLED view origin (VisibleTop/Left from get_cursor_rect's
-//     viewData). getPosition() is in document coords (from the page top), so once
-//     the view scrolls the cursor's doc Y jumps while its pixel stays in view.
-//     Subtracting `scroll` makes the mapping track the cursor through scroll
-//     WITHOUT re-clicking — the fix for the "anchor goes stale after auto-scroll"
-//     limitation. Absent viewData (older LOWA) -> scroll=0 -> identical to the
-//     pre-scroll-aware behavior. Unit (1/100 mm vs twips) is baked once on a real
-//     device via CURSOR_MAP.viewDataToMm.
-//   * origin is the canvas pixel of the visible-area top-left — VIEW-STATE-
-//     DEPENDENT (window size, LO chrome) but STABLE under scroll. We derive it
-//     LIVE from each canvas click: the click gives both the click pixel AND
-//     (after Qt positions the cursor) the cursor's doc coords + scroll, so
-//     origin = clickPx - scale*(docPos - scroll). The normal flow is "click to
-//     place the cursor, then type", so the anchor is always fresh. Before the
-//     first click we have no anchor, so the overlay stays full-cover (Phase A)
-//     and the candidate box sits top-left until the first click.
+// Native mapping uses the live Writer controller caret/visible-area twips and
+// the native editing window origin. It follows scrolling, zoom, keyboard moves
+// and Qt snapping a margin click to text without calibrating against that click.
+// Older guests without native geometry retain the click-derived fallback below;
+// model viewData is only a saved snapshot and cannot track live scrolling.
 //
 // Control keys (Phase B, when sendCommand is supplied): Enter inserts a paragraph
 // break via onEnter; Backspace/Delete delete around the cursor; arrow keys move
@@ -102,6 +87,19 @@ export function cursorRectToPixels(raw, offset) {
   }
 }
 
+/** Native window geometry stays correct when a margin click snaps to text,
+ * and when scrolling/zooming changes the document's visible origin. */
+export function nativeCursorRectToPixels(raw, surface) {
+  const caret = raw?.nativeCaret
+  if (!caret || !surface || ![caret.x, caret.y, caret.height, caret.frameWidth, caret.frameHeight, surface.width, surface.height].every(Number.isFinite)
+    || caret.frameWidth <= 0 || caret.frameHeight <= 0 || surface.width <= 0) return null
+  const scale = surface.width / caret.frameWidth
+  // Qt's frame client excludes its menu bar; the canvas includes it.
+  const menuHeight = Math.max(0, surface.height - caret.frameHeight * scale)
+  return { left: (surface.left || 0) + caret.x * scale,
+    top: (surface.top || 0) + menuHeight + caret.y * scale, height: caret.height * scale }
+}
+
 /**
  * Attach a transparent IME overlay to a LibreOffice WASM canvas.
  *
@@ -134,6 +132,7 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
   const log = (m) => { if (onLog) onLog(m) }
 
   const phaseB = typeof getCursorRaw === 'function'
+  let positionSequence = 0, disposed = false
   let mapOk = phaseB     // flips false (-> Phase A) if a raw read ever throws
   let anchor = null      // {x,y} live origin offset in host px, set on canvas click
   let lastClick = null   // 最近一次画布点击（host 相对 px）——没有光标映射时的摆位依据
@@ -241,13 +240,15 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     }
   }
 
-  // Compute the current cursor rect in host px (null until anchored). Exported via
+  // Compute the current cursor rect in host px (native geometry needs no click). Exported via
   // the return for the spike's debug box.
   async function computeRect() {
-    if (!phaseB || !mapOk || !anchor) return null
+    if (!phaseB || !mapOk) return null
     try {
       const raw = await getCursorRaw()
-      return cursorRectToPixels(raw, anchor)
+      const surface = canvas.getBoundingClientRect(), parent = host.getBoundingClientRect()
+      return nativeCursorRectToPixels(raw, { left: surface.left - parent.left, top: surface.top - parent.top, width: surface.width, height: surface.height })
+        || cursorRectToPixels(raw, anchor)
     } catch (e) { mapOk = false; return null }
   }
 
@@ -255,7 +256,10 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
   // 失败）退回**最后一次点击处**而不是全覆盖：系统候选窗跟着输入框走，落在用户
   // 刚点的地方总比钉在画布左上角强。一次都没点过才全覆盖。
   async function reposition() {
+    if (disposed) return
+    const sequence = ++positionSequence
     const rect = await computeRect()
+    if (disposed || sequence !== positionSequence) return
     if (rect) applyCursorBox(rect)
     else if (lastClick) applyCursorBox({ left: lastClick.x, top: Math.max(0, lastClick.y - 9), height: 18 })
     else applyCover()
@@ -286,7 +290,12 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     input.value = ''
     if (!t) return
     log('IME 覆盖层 → 上屏「' + t + '」')
-    try { Promise.resolve(commit(t)).then((result) => { if (result?.success !== false && typeof onCommitted === 'function') onCommitted(t) }).catch((e) => log('overlay commit error: ' + (e && e.message || e))) }
+    try { Promise.resolve(commit(t)).then(async (result) => {
+      // Read the caret after insertion has completed, so suggestions follow the
+      // new glyph/line instead of the position before the committed phrase.
+      await reposition()
+      if (result?.success !== false && typeof onCommitted === 'function') onCommitted(t)
+    }).catch((e) => log('overlay commit error: ' + (e && e.message || e))) }
     catch (e) { log('overlay commit error: ' + (e && e.message || e)) }
   }
   input.addEventListener('compositionstart', () => { composing = true })
@@ -295,7 +304,6 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     composing = false; armSkip()
     hidePreview()
     doCommit(e.data)
-    reposition() // cursor advanced past the committed text
   })
   input.addEventListener('input', (e) => {
     if (composing) { showPreview(input.value); return }    // mid-composition: wait for end
@@ -305,7 +313,6 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
       if (!e.inputType || isCompositionInput(e)) return
     }
     doCommit(e.data != null ? e.data : input.value)
-    reposition()
   })
 
   // Forward a worker UI command, then move the box to the (now-moved) cursor.
@@ -454,6 +461,7 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
   const onMouseUp = (e) => {
     const cx = e.clientX, cy = e.clientY
     setTimeout(() => {
+      if (disposed) return
       try { input.focus() } catch (err) {}
       // 光标映射不可用时就靠它摆输入框/预览条——所以每次点击都记，不看 phaseB。
       const r = host.getBoundingClientRect()
@@ -476,6 +484,7 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     reposition,
     computeRect,
     destroy() {
+      disposed = true; positionSequence++
       canvas.removeEventListener('mouseup', onMouseUp)
       input.remove()
       preview.remove()

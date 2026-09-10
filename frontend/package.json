@@ -46,6 +46,8 @@
     "test:lowa-inline-review": "node tests/lowa-e2e/inline-review.mjs",
     "test:completion": "node --test tests/completion/*.test.mjs",
     "test:writing-ui": "node tests/lowa-e2e/writing-ui.mjs",
+    "test:writing-caret": "node tests/lowa-e2e/writing-caret.mjs",
+    "test:lowa-link-preview": "node tests/lowa-e2e/link-preview.mjs",
     "test:writing-desktop": "node tests/desktop-e2e/writing.mjs",
     "test:lowa-completion": "node tests/lowa-e2e/completion.mjs",
     "test:lowa-unit": "node --test tests/lowa-unit/*.test.mjs",

@@ -283,3 +283,33 @@ test('真实编辑器 AI 通知只让对应 guest 失效，未开审阅面板也
   h.respond('detail', { title: '旧结果', variants: [{ text: '过期资料' }] }); await tick()
   assert.equal(h.panel().hidden, true, 'AI 修改前发出的详情晚回也不复活')
 })
+
+test('光标移到已有前缀后重新给本地候选，不要求再敲一个字符', async t => {
+  const h = harness(t)
+  h.setContext({ before: '北京当红', token: 'new-position' })
+  h.api.cursorMoved()
+  await debounce()
+  assert.equal(h.input.getAttribute('aria-expanded'), 'true')
+  h.key('Tab'); await tick()
+  assert.equal(h.calls.find(c => c.action === 'accept_completion').params.token, 'new-position')
+  assert.equal(h.messages.some(m => m.action === 'lookup'), false)
+})
+
+test('显示法规完整来源名称，接受使用实际输入形式，保留光标前缀', async t => {
+  const h = harness(t)
+  h.config({ items: [{ text: '《民法典》', kind: 'LAW', scope: 'project' }] })
+  h.setContext({ before: '民法', token: 'law-position' })
+  h.api.cursorMoved(); await debounce()
+  assert.ok(h.doc.querySelector('[role=option]').textContent.includes('《民法典》'))
+  h.key('Tab'); await tick()
+  assert.deepEqual(h.calls.find(c => c.action === 'accept_completion').params, { token: 'law-position', prefix: '民法', text: '民法典' })
+})
+
+test('视口底部的补全菜单翻到光标上方，不遮住正在输入的行', async t => {
+  const h = harness(t)
+  h.input.getBoundingClientRect = () => ({ left: 200, top: 720, bottom: 744, width: 208, height: 24 })
+  Object.defineProperty(h.panel(), 'offsetHeight', { value: 180 })
+  Object.defineProperty(h.panel(), 'offsetWidth', { value: 366 })
+  await suggestions(h)
+  assert.ok(Number.parseFloat(h.panel().style.top) + 180 <= 716)
+})

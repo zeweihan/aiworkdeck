@@ -171,3 +171,12 @@ test('malformed deep output is explicitly incomplete even when rule results are 
   assert.equal(f.messages.at(-1).deepStatus, 'error')
   assert.equal(f.messages.at(-1).message, 'REVIEW_DEEP_INCOMPLETE')
 })
+
+test('layout key is stable per user across documents and differs between users', (t) => {
+  const a = fixture(t, { userId: 'user-a', fileId: 8 }); a.host.start()
+  const b = fixture(t, { userId: 'user-a', fileId: 9 }); b.host.start()
+  const c = fixture(t, { userId: 'user-b', fileId: 8 }); c.host.start()
+  assert.equal(a.messages.at(-1).layoutKey, b.messages.at(-1).layoutKey)
+  assert.notEqual(a.messages.at(-1).layoutKey, c.messages.at(-1).layoutKey)
+  assert.equal(a.messages.at(-1).layoutKey.includes('user-a'), false)
+})
