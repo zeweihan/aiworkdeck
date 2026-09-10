@@ -303,8 +303,12 @@ public class ProjectMemberService {
      * 头像地址：本机上传过就用本机那份（自建服务器的人工账号），否则按官网账户绑定
      * 拼出官网的公开头像地址。没有绑定就给 null——硬拼一个必然 404 的地址只会让
      * 界面白等一次网络请求，前端本来就有首字母降级。
+     *
+     * <p>public：查人卡片与参与人列表（{@code ProjectMemberController.getMembers}，含 owner 那行）
+     * 共用这一处口径（spec 2026-09-10 §4）。桥接进来的同事本机表里根本没有头像，
+     * 直接回 {@code user.avatarUrl} 的那一版在参与人列表里就是一片空白首字母。
      */
-    private String avatarUrlFor(User user) {
+    public String avatarUrlFor(User user) {
         if (user.getAvatarUrl() != null && !user.getAvatarUrl().isBlank()) {
             return user.getAvatarUrl();
         }

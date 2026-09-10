@@ -50,7 +50,8 @@ class AccountControllerPurchaseSkuTest {
                 entitlementService,
                 mock(com.checkba.service.team.TeamUsageSettings.class),
                 mock(com.checkba.service.team.TeamUsageUploadService.class),
-                mock(com.checkba.service.team.TeamSettingsCache.class));
+                mock(com.checkba.service.team.TeamSettingsCache.class),
+                mock(com.checkba.service.account.AccountIdentitySync.class));
     }
 
     // ==================== 白名单 ====================

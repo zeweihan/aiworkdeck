@@ -95,6 +95,8 @@ export default {
   draftsInProgress: '进行中的稿',
   newDraft: '另起一稿',
   unnamedDraft: '未命名稿',
+  // 参与人行的兜底名：展示名为空时也不许退回用户名（那是 uid，不是名字）
+  unnamedColleague: '同事',
   switchToDraft: '切到这一稿',
   switchDraftFailed: '切换失败，请稍后重试',
 

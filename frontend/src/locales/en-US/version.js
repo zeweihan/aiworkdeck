@@ -96,6 +96,8 @@ export default {
   draftsInProgress: 'Drafts in Progress',
   newDraft: 'New Draft',
   unnamedDraft: 'Untitled Draft',
+  // Fallback name in the members list: never fall back to the username (it is a uid, not a name)
+  unnamedColleague: 'Colleague',
   switchToDraft: 'Switch to This Draft',
   switchDraftFailed: 'Failed to switch. Please try again later.',
 

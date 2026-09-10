@@ -47,6 +47,10 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - `backend/src/main/java/com/checkba/config/LocalModeAccessFilter.java` — 免登模式的每请求准入闸（回环校验 + 反代痕迹拒绝 + 跨站 Origin 硬拦截）。
 - `backend/src/main/java/com/checkba/config/LocalModeLoopbackGuard.java` — 启动强不变式：local-mode 必须绑回环地址，否则拒绝启动。
 - `AuthController.getUserIdFromSession()` 在 local-mode 下把任何请求解析为本机用户（90 余处调用方一行未改）。
+- **`LocalIdentityService` 从不给真实账号改名，但展示名会随官网刷新**（spec 2026-09-10 §5）：
+  `commit()` 那处改名只收窄到 `username=admin`（系统默认账号，「管理员」不是用户自己起的名字）；
+  真实账号的 `displayName` 由 `AccountIdentitySync` 按**官网这个唯一权威源**刷新，
+  不是「一个字都不动」而是「不被本机改名，只随权威源刷新」。两者不冲突：一个是本机替用户做主，一个是随权威源同步。
 - **「本机用户」是库里恒存的中文哨兵，界面语言只在读出来时替换**（`LocalIdentityService.displayNameOf`，
   v0.30.0 + dev-board#351）。库里存的值一个字都不动——改写入侧会让同一个人在中英文界面下留下两种身份。
   出口全集（新增读出口要跟着补，别再漏）：`/api/auth/me`、`/api/local-identity/{status,candidates}`、
@@ -58,11 +62,16 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 
 **账户连接（PR-B）**
 - `backend/src/main/java/com/checkba/service/account/AccountService.java` — 与官网账户的唯一连接方式是 `awdk_` Key。
-  `~/.aiworkdeck/account.json`（0600）；`connect/disconnect/status/fetchProfile/fetchEntitlements/fetchLedger/fetchAiUsage/fetchAiKey/currentKeyOrNull`。
+  `~/.aiworkdeck/account.json`（0600，字段 `key/username/accountId/displayName/connectedAt/lastSyncAt`）；
+  `connect/disconnect/status/fetchProfile/fetchEntitlements/fetchLedger/fetchAiUsage/fetchAiKey/currentKeyOrNull`，
+  以及个人档案那一组 `profileIdentity/updateDisplayName/uploadAvatar/deleteAvatar`（见下方「身份展示」一节）。
 - `service/account/AccountTransport.java` + `HttpAccountTransport.java` — 出站 HTTP 缝（单测打桩不依赖网络）；固定 HTTP/1.1。
+  `sendMultipart(method,url,bearer,Multipart)` 是头像上传那条路，**默认实现直接抛**——
+  给个默认返回值会让「桩根本没接这条路」在测试里表现成一次成功的上传。
 - `service/account/AccountEndpoint.java` — 授权服务器地址的协议校验（https，回环 http 例外），`LicenseService` 与 `AccountService` 共用。
 - `service/account/AccountException.java` — `Kind`：NETWORK / UNAUTHORIZED / CONFLICT / NOT_CONNECTED / MALFORMED。
-- `backend/src/main/java/com/checkba/controller/AccountController.java` — `/api/account/{status,connect,disconnect,usage}`。
+- `backend/src/main/java/com/checkba/controller/AccountController.java` — `/api/account/{status,connect,disconnect,usage}`
+  以及个人档案 `/api/account/profile`（GET/PUT）与 `/api/account/avatar`（POST multipart/DELETE）。
 - `service/account/AccountSwitchCleanup.java` — **换账户后作废动作的唯一出口**（`afterConnect` / `afterDisconnect`）：
   权益缓存 + 平台 AI 密钥缓存 + 余额判定 + 用量基线四样一起清，disconnect 还要 `demotePlatformProvider()`。
   连接账户有**两个**入口（设置页 `AccountController.connect`、解锁页 `LicenseController.activate` 粘 `awdk_`），
@@ -447,7 +456,11 @@ security.license.trial-code.legacy-grace-until: "2026-09-30"
 | 端点 | 鉴权 | 桌面调用点 |
 |---|---|---|
 | `POST /api/license/verify-key` → `{valid, plan}` | 匿名 | `LicenseService.callVerifyKey` |
-| `GET /api/account/me` → `{username, displayName, balanceCents, plan, createdAt}` | Bearer | `connect()` 校验 Key、`fetchProfile()` 取余额 |
+| `GET /api/account/me` → `{accountId, username, displayName, balanceCents, plan, createdAt, avatarUpdatedAt, displayNameIsDefault}` | Bearer | `connect()` 校验 Key、`fetchProfile()` 取余额、`profileIdentity()` 取身份视图 |
+| `PATCH /api/account/profile` `{displayName?, bio?}` → `{displayName, bio}` | Cookie 或 Bearer | `updateDisplayName()`；400 `invalid_display_name` |
+| `POST /api/account/avatar` multipart `file` → `{avatarUpdatedAt}` | Cookie 或 Bearer | `uploadAvatar()`；4xx `too_large`/`invalid_image`/`unsupported_format` |
+| `DELETE /api/account/avatar` → `{avatarUpdatedAt:null}` | Cookie 或 Bearer | `deleteAvatar()` |
+| `GET /api/avatar/{accountId}?v=` | 匿名 | 头像地址由桌面端按 `accountId` + `avatarUpdatedAt` 拼好下发 |
 | `GET /api/account/entitlements` → `{entitlements:[{feature, purchasedAt, orderId}]}` | Bearer | `fetchEntitlements()` |
 | `GET /api/account/ledger?limit=50` → `{entries:[...]}` | Bearer | `fetchLedger()`，桌面只挑 `kind=ai_alloc` 显示 |
 | `GET /api/account/ai-usage`(*) → `{configured, hasKey, limitUsd, usageUsd, remainingUsd, keyMasked}` | Bearer | `fetchAiUsage()` |
@@ -524,7 +537,9 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
    选择结果存 `SystemSetting` 而不是 `~/.aiworkdeck/identity.json`：存的是指向同一个库里 user 表的外键，
    放进被指向的库才能与数据同生共死（还原旧库时指针跟着回退）；license/account 描述的是机器授权，独立于库是刻意的。
    测试账号前缀白名单（`qa_bot_` / `claude-e2e` / `e2e_keepalive`）**保守到只排除脚手架自造账号**，
-   真实账号一个都不许被误排。`displayName` 改名收窄到 `username=admin`——改真实账号的名字会让用户在选择页里认不出自己。
+   真实账号一个都不许被误排。`displayName` 改名收窄到 `username=admin`——本机替用户改名会让他在选择页里认不出自己。
+   注意口径（2026-09-10 改写）：真实账号的展示名**不被 `LocalIdentityService` 改名，但会随官网刷新**
+   （`AccountIdentitySync`，官网是唯一权威源）。这条不是「一个字都不动」。
 5. **免费额度只隐藏、不删数据**。这是本领域最硬的一条红线：剪贴板是**查询侧过滤**（超出的行留在库里，
    解锁后原样可见），缓存区是**移入时拒绝**（区内已有文件一个都不动，移出方向永不拦截）。
    全 diff 里没有任何 delete/purge 路径被额度逻辑触发，任何「顺手清理超额记录」的改动都是回归。
@@ -1118,6 +1133,44 @@ return 404 兜底，云后端从 127.0.0.1 直连 Next。云侧唯一出口
 失败绝不免费放行）。**没有新增 ledger kind**（service_spend + meta.service=transfer）。
 细节见 mobile-sync.md「跨设备文件传输」节与官网仓 DEPLOY.md §7.4。
 
+## 身份展示：展示名与头像以官网为唯一权威源（2026-09-10，dev-board#564-#567）
+
+设计 `docs/superpowers/specs/2026-09-10-identity-display-source-design.md`。治的是这个病：
+手机号注册的官网账户自动生成用户名 `u`+随机串、展示名打码手机号，而桌面端 `account.json` 与案件库
+`awd_` 用户在连接/桥接那一刻抄一份展示名之后**永不刷新**，头像各存各的。
+
+**唯一权威源是官网**，本机与案件库都只读、随官网刷新；用户名退成内部标识（**不改名**、任何界面不当名字显示）。
+
+桌面侧（local-mode）四个端点，一律转发官网 + 把结果同步回本机 `User` 行：
+
+| 方法 | 本机路径 | 出站 | 回什么 |
+|---|---|---|---|
+| GET | `/api/account/profile` | `GET /api/account/me` | `{accountId, displayName, avatarUrl, displayNameIsDefault}`，**不回 username** |
+| PUT | `/api/account/profile` | `PATCH /api/account/profile` | 官网回包 `{displayName, bio}` 原样透传 |
+| POST | `/api/account/avatar` | `POST /api/account/avatar`（multipart `file`） | `{avatarUpdatedAt, avatarUrl}` |
+| DELETE | `/api/account/avatar` | `DELETE /api/account/avatar` | `{avatarUpdatedAt:null, avatarUrl:null}` |
+
+要点：
+
+- **本机 PUT / 出站 PATCH** 是刻意偏差，与团队那组同源（uni.request 的 method 枚举里没有 PATCH）。
+- `avatarUrl` 由桌面端按 `accountId` + `avatarUpdatedAt` 拼成 `{base}/api/avatar/{accountId}?v=...`，
+  **没传过头像（`avatarUpdatedAt` 为 null）就回 null**——硬拼一个必然 404 的地址只会让界面白等一次网络请求。
+  `accountId` 连接时落进 `account.json`，老盘没有这一项时补拉一次 `/me` 回填。
+- **同步唯一出口是 `service/account/AccountIdentitySync`**（`refresh` / `refreshQuietly` /
+  `applyDisplayName` / `applyAvatarUrl`），落点四处：连接账户时、每次 `GET /api/account/status`
+  （应用启动会拉）、`GET /api/account/profile`、三个写动作之后。
+  两条红线：**未连接 / 官网不可达时不动本机行也不报错**；**非 local-mode 整条短路**
+  （团队案件库与插件云上账户是机器级状态，按它改某一个租户的 `User` 行是张冠李戴，同 `TeamUsageUploadService` 第二道闸）。
+- `LocalIdentityService` 那条「真实账号 displayName 不动」的纪律**改写为**：不被本机改名，
+  但随官网这个权威源刷新（见「关键文件地图」与地雷 4）。
+- 既有 `POST /api/users/avatar`（本机上传落本机表）**保留给自建服务器**，local-mode 下前端不再调它。
+- `GET /api/account/status` 的回包多一个 `accountId`（就是公开头像地址里的那个 id，不是凭据）。
+- 案件库侧（server，profile `case`）四处一并改：`AwdkLoginService.resolveUser` 每次桥接刷新展示名、
+  `CollaboratorAdmission` 名录回查时刷新、`ProjectMemberController.getMembers` 的头像改走
+  `ProjectMemberService.avatarUrlFor`、`VersionController.userName` 改用展示名（见 version-control.md）。
+  `UserService.refreshDisplayNameFromWebsite` 是这三处共用的唯一写入点：**非空且不同才写，username 一个字不动**。
+- 官网侧的 `displayNameIsDefault` 只用于引导「填写你的姓名」，桌面端不据它做任何拦截。
+
 ## 窄权限内部口第三条：同事名录（2026-09-10，dev-board#550 #551）
 
 官网内部口现在有**三条**，形状完全一致（同机 127.0.0.1 直连 Next、头 `X-Internal-Secret`、
@@ -1141,6 +1194,7 @@ return 404 兜底，云后端从 127.0.0.1 直连 Next。云侧唯一出口
   `service/LicenseServiceTest`、`service/TrialCodeVerifierTest`、`service/LocalIdentityServiceTest`、
   `service/LocalIdentityRealShapeIntegrationTest`（真机形态种子库跑选择链路）、
   `service/account/AccountServiceTest`、`service/account/AccountEndpointTest`、
+  `service/account/AccountIdentitySyncTest`、`controller/AccountControllerProfileTest`（身份展示那一组），
   `service/entitlement/EntitlementServiceTest`、`service/entitlement/FeatureCatalogTest`、
   `service/quota/StageQuotaServiceTest`、`service/storage/StorageLocationServiceTest`、
   `service/ClipboardQuotaTest`、`service/ai/PlatformUsageAccountantTest`、`service/ai/ChatModelFactoryTest`、

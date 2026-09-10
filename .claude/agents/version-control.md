@@ -202,6 +202,27 @@ description: 项目级版本记录领域。任务涉及版本记录/工作段（
 护栏测试：`ProjectRepoHistoryTest.localUserAuthorIsLocalizedOnReadWithoutRewritingHistory`
 （同一个仓库中/英/中读三遍，值必须来回切得回去，证明提交对象没被改写）。
 
+**新写入的署名是展示名，不是用户名**（spec 2026-09-10 §4，dev-board#564-#567）：
+`VersionController.userName(userId)` 由「`username`，取不到才回『用户』」改成
+「`displayName` → 空则 `username` → 都空才回『用户』」。以前手机号注册的同事在时间线与文档修订里
+就是一串 `awd_upoxwcdtg`——用户名现在是内部标识，任何界面都不再当名字显示。
+**已写入的历史 `authorName` 不回填**（Git 提交对象不重写，同上一条纪律）。
+护栏测试 `version/VersionAuthorNameTest`（两条：展示名优先、空展示名回落用户名）。
+
+**参与人列表的头像与展示名也随官网刷新**（同一份 spec §4）：
+`ProjectMemberController.getMembers`（成员行与 owner 行）的 `avatarUrl` 改走
+**public** 的 `ProjectMemberService.avatarUrlFor(user)`——本机上传过就用本机那份（自建服务器的人工账号），
+否则按 `account_binding` 拼 `{ai.account.base-url}/api/avatar/{accountId}`，两样都没有才是 null，
+与「加同事」确认卡同一个口径。桥接进来的同事本机表里根本没有头像，旧的 `user.getAvatarUrl()`
+在参与人列表里就是一片空白首字母。`username` 字段**保留一版**给老客户端，前端不再读它。
+展示名的刷新点有两处：`AwdkLoginService.resolveUser`（每次桥接）与 `CollaboratorAdmission`
+（每次名录回查，用 `DirectoryReply.account().displayName`），共用唯一写入点
+`UserService.refreshDisplayNameFromWebsite`（**非空且不同才写，username 一个字不动**）。
+`CloudSyncService.proxyMembers` 透传不改。
+护栏测试：`service/ProjectMemberAvatarSourceTest`（真 service + 真 controller 跑 getMembers 四条）、
+`service/account/AwdkLoginServiceTest` 的展示名三条、`service/collab/CollaboratorAdmissionTest` 的刷新两条。
+桌面侧的编辑入口与同步落点见 licensing-billing.md「身份展示」一节。
+
 ## 已知地雷
 
 1. **历史永不重写**——硬不变量，理由与 Git 自己一致，为将来推云端仓库（v2）打基础。唯一例外是删除工作段/稿的分支引用（`deleteBranch(force=true)`）——**删的是引用不是历史**：从未合并的那种（`discardSession`/`abandonDraft`）连内容一起丢是本来的语义，已经合并进主线的那种（`endSession` 两条路径、`adoptDraft`）每一笔提交都还从 master 可达，删掉只是不再留一条对律师本就不可见的分支名。护栏测试：`RepoMaintenanceTest.gcPreservesEveryReachableVersion`，GC 前后逐条比对每个 `VersionEntry.sha()`。

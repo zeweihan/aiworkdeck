@@ -74,6 +74,8 @@ public class AccountService {
     static class State {
         public String key;
         public String username;
+        /** 官网的稳定账户 id。头像地址 {@code /api/avatar/{accountId}} 要用，省得每次再拉一趟 /me。 */
+        public String accountId;
         public String displayName;
         public String connectedAt;
         public String lastSyncAt;
@@ -102,6 +104,7 @@ public class AccountService {
         State state = new State();
         state.key = key;
         state.username = str(me.get("username"));
+        state.accountId = str(me.get("accountId"));
         state.displayName = str(me.get("displayName"));
         state.connectedAt = Instant.now().toString();
         state.lastSyncAt = state.connectedAt;
@@ -137,6 +140,7 @@ public class AccountService {
         result.put("connected", connected);
         if (connected) {
             result.put("username", state.username);
+            result.put("accountId", state.accountId);
             result.put("displayName", state.displayName);
             result.put("connectedAt", state.connectedAt);
             result.put("lastSyncAt", state.lastSyncAt);
@@ -291,6 +295,132 @@ public class AccountService {
                     LangText.of("官网返回的 AI 通道密钥为空，请稍后重试", "The website returned an empty AI channel key, please retry shortly"));
         }
         return body;
+    }
+
+    // ==================== 个人档案与头像（spec 2026-09-10 §5） ====================
+    //
+    // 官网的展示名与头像是**唯一权威源**，桌面端只是它的一个编辑入口：本机不存第二份真相，
+    // 每一次写都直接打官网，写完把结果同步回本机 User 行（那一步在 AccountIdentitySync）。
+    // 本机 `POST /api/users/avatar` 留给自建服务器，local-mode 下前端不再调它。
+
+    /**
+     * GET /api/account/me 的**身份视图**：{@code {accountId, displayName, avatarUrl, displayNameIsDefault}}。
+     *
+     * <p><b>不含 username</b>：用户名退成内部标识，任何界面都不再当名字显示（spec §2 裁决 5）。
+     * 走 60 秒 profile 缓存（与顶栏余额端点同一份）——应用启动的 status 与个人设置页
+     * 打开的一瞬间会连着问好几次，没必要每次都出网。
+     */
+    public synchronized Map<String, Object> profileIdentity() {
+        String owner = accountFingerprintOrNull();
+        if (owner == null) {
+            // 未连接时 requireKey() 抛 NOT_CONNECTED；连着而指纹算不出来（SHA-256 不可用）时兜个哨兵
+            requireKey();
+            owner = "unknown";
+        }
+        Map<String, Object> me = cachedProfile(owner);
+        rememberIdentity(str(me.get("accountId")), str(me.get("displayName")));
+        return identityView(str(me.get("accountId")), str(me.get("displayName")),
+                str(me.get("avatarUpdatedAt")), Boolean.TRUE.equals(me.get("displayNameIsDefault")));
+    }
+
+    /**
+     * PATCH /api/account/profile —— 改昵称。
+     *
+     * <p>本机那一跳是 PUT（uni.request 的 method 枚举里没有 PATCH），出站到官网仍是 PATCH，
+     * 与团队那组同一处刻意偏差（护栏 {@code AccountServiceTest.teamHierarchyOutboundShape}）。
+     * 长度/字符的判据在官网（400 {@code invalid_display_name}），这里不抄一份。
+     */
+    public Map<String, Object> updateDisplayName(String displayName) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("displayName", displayName == null ? "" : displayName.trim());
+        Map<String, Object> res = sendJson("PATCH", "/api/account/profile", body);
+        String next = str(res.get("displayName"));
+        rememberIdentity(null, next);
+        // 缓存里那份 displayName 已经旧了；下一次 profileIdentity() 必须看到新名字
+        clearBalanceCache();
+        return res;
+    }
+
+    /**
+     * POST /api/account/avatar —— multipart 转发头像。
+     * 回 {@code {avatarUpdatedAt, avatarUrl}}：官网只回版本号，地址在这里按 accountId 拼好，
+     * 省得前端为了一个地址再拉一趟 /me。2MB 上限与格式判据都在官网（{@code too_large} 等）。
+     */
+    public Map<String, Object> uploadAvatar(byte[] content, String filename, String contentType) {
+        String key = requireKey();
+        AccountTransport.Reply reply = transport.sendMultipart(
+                "POST", baseUrl() + "/api/account/avatar", key,
+                new AccountTransport.Multipart("file", filename, contentType, content));
+        if (reply.networkFailure()) {
+            throw networkError();
+        }
+        Map<String, Object> body = handle(reply);
+        String updatedAt = str(body.get("avatarUpdatedAt"));
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("avatarUpdatedAt", updatedAt);
+        result.put("avatarUrl", avatarUrl(accountIdOrFetch(), updatedAt));
+        return result;
+    }
+
+    /** DELETE /api/account/avatar —— 删头像，回 {@code {avatarUpdatedAt:null, avatarUrl:null}}。 */
+    public Map<String, Object> deleteAvatar() {
+        sendJson("DELETE", "/api/account/avatar", null);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("avatarUpdatedAt", null);
+        result.put("avatarUrl", null);
+        return result;
+    }
+
+    /** 身份视图的唯一拼法，profileIdentity 与写入回包共用。 */
+    private Map<String, Object> identityView(String accountId, String displayName,
+                                             String avatarUpdatedAt, boolean displayNameIsDefault) {
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("accountId", accountId);
+        view.put("displayName", displayName);
+        view.put("avatarUrl", avatarUrl(accountId, avatarUpdatedAt));
+        view.put("displayNameIsDefault", displayNameIsDefault);
+        return view;
+    }
+
+    /**
+     * 官网公开头像地址。{@code avatarUpdatedAt} 为空表示这个账户根本没传过头像——
+     * 回 null 而不是一个必然 404 的地址（前端本来就有首字母降级）。
+     * {@code ?v=} 是缓存版本号，改了头像地址就变，浏览器不会拿旧的那张。
+     */
+    private String avatarUrl(String accountId, String avatarUpdatedAt) {
+        if (accountId == null || accountId.isBlank()) return null;
+        if (avatarUpdatedAt == null || avatarUpdatedAt.isBlank() || "null".equals(avatarUpdatedAt)) return null;
+        return baseUrl() + "/api/avatar/" + java.net.URLEncoder.encode(accountId, StandardCharsets.UTF_8)
+                + "?v=" + java.net.URLEncoder.encode(avatarUpdatedAt, StandardCharsets.UTF_8);
+    }
+
+    /** account.json 里的 accountId；老版本落的盘没有这一项时补拉一次 /me。 */
+    private String accountIdOrFetch() {
+        State state = loadState();
+        if (state.accountId != null && !state.accountId.isBlank()) return state.accountId;
+        Map<String, Object> me = fetchProfile();
+        String accountId = str(me.get("accountId"));
+        rememberIdentity(accountId, str(me.get("displayName")));
+        return accountId;
+    }
+
+    /**
+     * 把官网那份身份落回 account.json。null 表示这一项不动
+     * （改昵称只知道新名字，不该顺手把 accountId 清掉）。
+     */
+    private synchronized void rememberIdentity(String accountId, String displayName) {
+        State state = loadState();
+        if (state.key == null || state.key.isBlank()) return;
+        boolean changed = false;
+        if (accountId != null && !accountId.isBlank() && !accountId.equals(state.accountId)) {
+            state.accountId = accountId;
+            changed = true;
+        }
+        if (displayName != null && !displayName.isBlank() && !displayName.equals(state.displayName)) {
+            state.displayName = displayName;
+            changed = true;
+        }
+        if (changed) saveState(state);
     }
 
     // ==================== 会员与充值（dev-board#183/#184） ====================
@@ -808,7 +938,7 @@ public class AccountService {
      * 业务机器码的人话（团队端点契约见官网 doc/desktop-contract.md「团队」节）。
      * 文案红线同 {@link #unauthorizedMessage()}：不得含「登录」「未授权」「请先」。
      */
-    static String rejectedMessage(String code) {
+    public static String rejectedMessage(String code) {
         return switch (code) {
             case "phone_required" -> LangText.of("需要在官网账户绑定手机号后，才能创建或加入团队", "Bind a phone number to your website account before creating or joining a team");
             case "already_in_team" -> LangText.of("这个账户已经在一个团队里了", "This account already belongs to a team");
@@ -823,6 +953,11 @@ public class AccountService {
             case "bad_role" -> LangText.of("角色不合法", "That role is not allowed");
             case "bad_name" -> LangText.of("名称不能为空", "The name cannot be empty");
             case "rate_limited" -> LangText.of("操作太频繁，稍后再试", "Too many requests, try again shortly");
+            // 个人档案与头像（spec 2026-09-10 §5，官网 /api/account/profile 与 /api/account/avatar）
+            case "invalid_display_name" -> LangText.of("昵称不合规，换一个（1-24 个字）", "That display name is not allowed; try another one (1-24 characters)");
+            case "too_large" -> LangText.of("图片太大，换一张 2MB 以内的", "That image is too large; pick one under 2MB");
+            case "invalid_image" -> LangText.of("这不是一张能识别的图片", "That file is not a readable image");
+            case "unsupported_format" -> LangText.of("图片格式不支持，用 JPG / PNG / WebP", "That image format is not supported; use JPG, PNG or WebP");
             case "payload_too_large" -> LangText.of("上报数据过大", "The upload is too large");
             default -> LangText.of("官网拒绝了这次操作（", "The website rejected this request (") + code + LangText.of("）", ")");
         };

@@ -1,0 +1,27 @@
+[
+  {
+    "file": "src/components/admin/AdminPane.vue",
+    "pattern": "item.displayName || item.username",
+    "reason": "本机工作区身份列表与「切换身份」确认弹窗。同一台机器上的多个本地账号展示名可能重名甚至为空，用户名是这里唯一能把它们区分开的东西；这是用户在选自己的哪个本机账号，不是同事看到的名字。"
+  },
+  {
+    "file": "src/components/admin/AdminPane.vue",
+    "pattern": "username: item.username",
+    "reason": "同上那份本机身份列表的元信息行（admin.identityMeta：用户名 · N 个项目 · N 个文件），项目数与文件数正是靠它来认哪个账号是自己在用的那个。"
+  },
+  {
+    "file": "src/components/admin/AdminPane.vue",
+    "pattern": "fb.username",
+    "reason": "后台「用户反馈」看板的提交人列。管理员要按登录名把反馈定位到具体账号，不是协作界面，看的人只有管理员自己。"
+  },
+  {
+    "file": "src/pages/identity/identity.vue",
+    "pattern": "item.username",
+    "reason": "本机工作区选择页（local-mode 首启分流）。这一页存在的意义就是让用户在同机的几个本地账号里挑一个，展示名区分不开时只剩用户名可认。"
+  },
+  {
+    "file": "src/pages/login/login.vue",
+    "pattern": "this.registerForm.displayName || this.registerForm.username",
+    "reason": "自建服务器的注册表单：显示名是选填项，留空时拿用户名当初始展示名写进新账号。这是一次性的建号取值，不是把用户名当名字显示——之后用户改了展示名，这里再也不参与。"
+  }
+]

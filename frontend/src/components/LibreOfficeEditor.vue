@@ -161,12 +161,14 @@ import { guestPointToHost } from '@/utils/insightPopup.js'
 
 let seq = 0
 
-// 当前登录用户名。两个地方要用同一个串：随 load_document 传给引擎（用户本人的
+// 当前用户的展示名。两个地方要用同一个串：随 load_document 传给引擎（用户本人的
 // 修订以此署名）与审阅面板的「我」这一桶（dev-board#377）。抽成一处，免得哪天
 // 一边加了兜底另一边没加，用户自己的修订被归成「其他人」。
+// **不许回落 username**（Spec §6）：手机号注册的用户名是 `u`+随机串，落进批注与修订
+// 就是永久的——历史条目不回填。取不到名字宁可给空串，让引擎用它自己的默认作者。
 function currentAuthorName() {
   const u = getCurrentUser() || {}
-  return String(u.name || u.nickname || u.username || '')
+  return String(u.displayName || u.nickname || u.name || '')
 }
 
 export default {

@@ -214,7 +214,8 @@ class ProjectMemberLookupTest {
             }
         };
         service.setCollaboratorAdmissionForTest(new CollaboratorAdmission(
-                directory, new SameFirmOrTeamPolicy(), bindingRepository, awdkLoginService));
+                directory, new SameFirmOrTeamPolicy(), bindingRepository, awdkLoginService,
+                mock(UserService.class)));
     }
 
     @Test

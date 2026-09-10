@@ -42,7 +42,8 @@ class AccountControllerUsageMalformedLedgerTest {
                 mock(com.checkba.service.entitlement.EntitlementService.class),
                 mock(com.checkba.service.team.TeamUsageSettings.class),
                 mock(com.checkba.service.team.TeamUsageUploadService.class),
-                mock(com.checkba.service.team.TeamSettingsCache.class));
+                mock(com.checkba.service.team.TeamSettingsCache.class),
+                mock(com.checkba.service.account.AccountIdentitySync.class));
     }
 
     @SuppressWarnings("unchecked")
