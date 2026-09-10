@@ -21,7 +21,8 @@
       <view class="admin-sidebar">
         <!-- 用户信息卡取代了原来的纯 logo 头部（2026-08-20 个人中心并进本页）：
              这一页现在同时是「我的」和「系统的」，顶上摆的应该是「我是谁」。
-             头像可点，走的还是原个人中心那条 uni.chooseImage + uploadAvatar。 -->
+             头像可点：local-mode 且已连接账户时写官网（展示名与头像的唯一权威源），
+             自建服务器仍走原来那条 uni.chooseImage + uploadAvatar。 -->
         <view class="sidebar-user">
           <view class="user-avatar-wrapper" @tap="triggerAvatarUpload">
             <image
@@ -35,7 +36,6 @@
             </view>
           </view>
           <text class="user-name">{{ userInfo.displayName || $t('account.defaultUserName') }}</text>
-          <text class="user-handle">@{{ userInfo.username || userInfo.id || 'unknown' }}</text>
           <view class="user-role-tag">
             <text class="role-text">{{ $t('account.standardUserRole') }}</text>
           </view>
@@ -391,17 +391,22 @@
                 <text class="section-subtitle">{{ $t('admin.accountConnectedSubtitle') }}</text>
               </view>
               <view class="section-body">
-                <!-- 账户卡（dev-board#200/#205）：一行排布——左边身份（头像/显示名/用户名），
+                <!-- 账户卡（dev-board#200/#205）：一行排布——左边身份（头像/展示名），
                      右边两个动作按齐。「断开连接」已统一成「退出登录」（utils/signOut.js
-                     唯一编排：摘账户连接，账户模式顺带清授权票据，回启动页重跑分流）。 -->
+                     唯一编排：摘账户连接，账户模式顺带清授权票据，回启动页重跑分流）。
+                     用户名一行已按 Spec §6 去掉：它是 uid，不是名字，用户分不清两者。 -->
                 <view class="provider-card account-card">
+                  <!-- 姓名引导：手机号注册的默认展示名是打码手机号，同事在案卷里看到的就是它 -->
+                  <view v-if="accountProfile.displayNameIsDefault" class="account-name-nudge" @tap="goFillName">
+                    <text class="account-name-nudge-text">{{ $t('account.nameNudgeText') }}</text>
+                  </view>
                   <view class="account-row">
                     <view class="account-avatar">
-                      <text class="account-avatar-text">{{ getInitial(account.displayName || account.username) || 'U' }}</text>
+                      <text class="account-avatar-text">{{ getInitial(account.displayName) || 'U' }}</text>
                     </view>
                     <view class="account-identity">
-                      <text class="provider-name">{{ account.displayName || account.username || $t('admin.accountTitle') }}</text>
-                      <text class="account-sub">{{ account.username }}<text v-if="accountPlanLabel"> · {{ accountPlanLabel }}</text></text>
+                      <text class="provider-name">{{ account.displayName || $t('admin.accountTitle') }}</text>
+                      <text v-if="accountPlanLabel" class="account-sub">{{ accountPlanLabel }}</text>
                     </view>
                     <view class="account-actions">
                       <button class="comp-btn" :disabled="entitlementBusy" @tap="onRefreshEntitlements">
@@ -1078,6 +1083,7 @@ import {
   getStorageLocation, moveStorageLocation, resetStorageLocation,
   getLocalIdentityCandidates, selectLocalIdentity,
   getCurrentUser as fetchCurrentUser, uploadAvatar,
+  uploadAccountAvatar,
   getTelemetrySettings, updateTelemetrySettings, getTelemetrySummary,
   getCapabilities, selectCapability, rollbackCapability, setCapabilityDevMode,
   fetchAiModels,
@@ -1094,6 +1100,8 @@ import { host } from '@/services/host.js'
 import { signOut } from '@/utils/signOut.js'
 import { setGlobalOverlay } from '@/utils/overlayState.js'
 import { refreshEntitlements, isEnabled, FEATURES } from '@/composables/useEntitlement.js'
+import { loadIdentityProfile, readNudgeDismissed, markNudgeDismissed, PROFILE_SOURCE } from '@/services/accountProfile.js'
+import { shouldPromptNameNudge } from '@/utils/identityProfile.js'
 import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
 import UnlockHint from '@/components/UnlockHint.vue'
 import RechargeDialog from '@/components/RechargeDialog.vue'
@@ -1304,7 +1312,10 @@ export default {
       siteBusy: false,
       // 账户与用量（商业化 PR-B）
       // status 是纯本地读盘（不含余额），余额与额度都在 usage 的 platform 段
-      account: { connected: false, username: '', displayName: '', keyMasked: '' },
+      account: { connected: false, displayName: '', keyMasked: '' },
+      // 官网那份资料（Spec §5 的 GET /api/account/profile）。source 决定头像点下去写哪儿：
+      // ACCOUNT=写官网（唯一权威源），LOCAL=自建服务器，仍写本机 /api/users/avatar。
+      accountProfile: { source: PROFILE_SOURCE.LOCAL, accountId: '', displayNameIsDefault: false },
       accountUsage: null, // { local: {...}, platform: {...} }，形状见 api.js getAccountUsage
       // 会员钱包卡（dev-board#183）。walletData 来自轻端点 getAccountBalance（余额），
       // membershipData 来自 getAccountMembership（等级/成长值/七档表），分开取分开失败
@@ -1565,10 +1576,18 @@ export default {
       }
     }
     uni.$on('awd:wallet-refresh', this._onWalletRefresh)
+    // 个人设置那边改了昵称/头像：侧栏用户卡与账户卡都要跟着变（同一份权威源）
+    this._onIdentityUpdated = () => {
+      this.loadUserInfo()
+      this.loadAccountProfile()
+    }
+    uni.$on('awd:identity-updated', this._onIdentityUpdated)
     if (this.isDesktop) {
       // AI 面板的「AI WorkDeck 云端」选项是否可选，取决于是否已连接账户。
       // status 是后端纯本地读盘，不打官网，可以随页面加载
       this.loadPlatformAiAvailability()
+      // 名字与头像归谁管 + 默认名时引导一次（每个 accountId 只弹一次）
+      this.loadAccountProfile().then(() => this.maybePromptNameNudge())
       // 模型下载进度不在这里单独订阅：控制器的 installModel 自己挂同一条流，
       // 并把百分比写进卡片的 item.percent（两处订阅只会互相覆盖同一个数字）。
       this.loadComponents()
@@ -1588,6 +1607,10 @@ export default {
     if (this._onWalletRefresh) {
       uni.$off('awd:wallet-refresh', this._onWalletRefresh)
       this._onWalletRefresh = null
+    }
+    if (this._onIdentityUpdated) {
+      uni.$off('awd:identity-updated', this._onIdentityUpdated)
+      this._onIdentityUpdated = null
     }
     if (this._updateEventUnsub) {
       this._updateEventUnsub()
@@ -1769,6 +1792,11 @@ export default {
       this.loadModelCatalog()
       this.loadTelemetry()
     },
+    /**
+     * 侧栏用户卡的头像。路由规则与个人设置那处必须一致（Spec §6）：
+     * local-mode 且已连接账户 → 写官网（唯一权威源），本机 User 行由后端随写入刷新，
+     * 所以这里重新拉一次 /api/auth/me 就能让侧栏跟上；否则（自建服务器）走本机上传。
+     */
     triggerAvatarUpload() {
       uni.chooseImage({
         count: 1,
@@ -1778,13 +1806,19 @@ export default {
           const tempFilePath = res.tempFilePaths[0]
           try {
             uni.showLoading({ title: this.$t('account.uploadingTitle') })
-            const result = await uploadAvatar(tempFilePath)
-            if (result.data && result.data.avatarUrl) {
-              this.userInfo = { ...this.userInfo, avatarUrl: result.data.avatarUrl }
-              // Update local storage/session
-              setSessionUser(this.userInfo)
-              uni.showToast({ title: this.$t('account.avatarUpdateSuccess'), icon: 'success' })
+            if (this.accountProfile.source === PROFILE_SOURCE.ACCOUNT) {
+              await uploadAccountAvatar(tempFilePath)
+              await this.loadUserInfo()
+              await this.loadAccountProfile()
+            } else {
+              const result = await uploadAvatar(tempFilePath)
+              if (result.data && result.data.avatarUrl) {
+                this.userInfo = { ...this.userInfo, avatarUrl: result.data.avatarUrl }
+                // Update local storage/session
+                setSessionUser(this.userInfo)
+              }
             }
+            uni.showToast({ title: this.$t('account.avatarUpdateSuccess'), icon: 'success' })
           } catch (e) {
             console.error('Avatar upload failed', e)
             uni.showToast({ title: this.$t('account.avatarUploadFailed', { message: e.message }), icon: 'none' })
@@ -1793,6 +1827,47 @@ export default {
           }
         },
       })
+    },
+    /**
+     * 「名字与头像归谁管」。头像点击与账户卡那条姓名引导都读它，
+     * 拉不到一律降级成 LOCAL（老后端还没上这四个端点时就是这条路）。
+     */
+    async loadAccountProfile() {
+      const { source, profile } = await loadIdentityProfile()
+      this.accountProfile = {
+        source,
+        accountId: (profile && profile.accountId) || '',
+        displayNameIsDefault: !!(profile && profile.displayNameIsDefault),
+      }
+      return this.accountProfile
+    },
+    /**
+     * 「填写你的姓名」弹窗：每个 accountId 只弹一次（已读落 storage）。
+     * 弹出来就记已读——两个按钮都算打发过，不然点「稍后」的人下次进来还要再看一遍。
+     */
+    maybePromptNameNudge() {
+      const p = this.accountProfile
+      if (!shouldPromptNameNudge({
+        displayNameIsDefault: p.displayNameIsDefault,
+        accountId: p.accountId,
+        dismissedIds: readNudgeDismissed(),
+      })) return
+      markNudgeDismissed(p.accountId)
+      uni.showModal({
+        title: this.$t('account.nameNudgeTitle'),
+        content: this.$t('account.nameNudgeText'),
+        confirmText: this.$t('account.nameNudgeConfirm'),
+        cancelText: this.$t('common.later'),
+        success: (r) => { if (r.confirm) this.goFillName() },
+      })
+    },
+    /**
+     * 去个人设置填名字。个人设置面板是 v-else-if 挂上来的，切栏这一帧它还不存在，
+     * 所以聚焦事件要等它挂完再发（nextTick 之后 PersonalSettingsPanel 的 mounted 已订阅）。
+     */
+    goFillName() {
+      this.onNavTap({ key: 'personal_settings' })
+      this.$nextTick(() => uni.$emit('awd:focus-display-name'))
     },
     onNavTap(nav) {
       this.activeNav = nav.key
@@ -2283,18 +2358,18 @@ export default {
         this.platformAiAvailable = !!(s && s.platformAiAvailable)
         this.account = {
           connected: !!(s && s.connected),
-          username: (s && s.username) || '',
           displayName: (s && s.displayName) || '',
           keyMasked: (s && s.keyMasked) || '',
         }
       } catch (e) {
         // 旧后端没有该端点 / 请求失败：按未连接展示引导，不弹错打断
-        this.account = { connected: false, username: '', displayName: '', keyMasked: '' }
+        this.account = { connected: false, displayName: '', keyMasked: '' }
         this.platformAiAvailable = false
       }
       if (this.account.connected) {
         await this.loadAccountUsage()
         this.loadTeamLine()
+        this.loadAccountProfile()
       } else {
         this.accountUsage = null
         this.teamLine = { loaded: false, teamName: '', firmName: '' }
@@ -2488,6 +2563,9 @@ export default {
         await connectAccount(key)
         this.accountKeyInput = ''
         await this.loadAccount()
+        // 首次连接成功后引导一次「填写你的姓名」（手机号注册的默认展示名是打码手机号）
+        await this.loadAccountProfile()
+        this.maybePromptNameNudge()
         // 已购功能解锁随账户走，连接后必须让权益缓存失效重取
         await refreshEntitlements(true)
         this.notifyMarketAccountChanged()
@@ -2764,12 +2842,7 @@ $brand-accent: $brand-mint;
     font-size: 18px;
     font-weight: 600;
     color: var(--awd-text);
-    margin-bottom: 4px;
-}
-
-.user-handle {
-    font-size: 13px;
-    color: var(--awd-text-2);
+    /* 10px 原本由 @username 那一行的下边距提供，那行随「用户名不当名字显示」去掉了 */
     margin-bottom: 10px;
 }
 
@@ -3323,6 +3396,22 @@ $brand-accent: $brand-mint;
 .account-sub {
   font-size: 12px;
   color: var(--awd-text-2);
+}
+
+/* 姓名引导条：与「不可达提示」同一档的弱强调，不抢账户卡主体 */
+.account-name-nudge {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--awd-accent-soft);
+  border-radius: 6px;
+  background: var(--awd-accent-wash);
+  cursor: pointer;
+}
+
+.account-name-nudge-text {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--awd-text);
 }
 
 .account-team-row {

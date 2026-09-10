@@ -53,6 +53,17 @@ export default {
   uploadingTitle: 'Uploading…',
   avatarUpdateSuccess: 'Avatar updated',
   avatarUploadFailed: 'Upload failed: {message}',
+  avatarRemoveAction: 'Remove Avatar',
+  avatarRemoveSuccess: 'Avatar removed',
+  avatarRemoveFailed: 'Remove failed: {message}',
+  nicknamePlaceholder: 'Enter your name',
+  nicknameSaving: 'Saving…',
+  nicknameSaveFailed: 'Save failed: {message}',
+  nicknameTooLong: 'A name can be at most 24 characters',
+  // Name nudge (Spec §6): phone sign-ups default to a masked phone number as the display name
+  nameNudgeText: 'Add your name — it is what colleagues see on a case file',
+  nameNudgeTitle: 'Add Your Name',
+  nameNudgeConfirm: 'Add It Now',
 
   // ---- userprofile.vue: settings - account security (authenticator/phone/email) ----
   accountSecurityGroupTitle: 'Account Security',

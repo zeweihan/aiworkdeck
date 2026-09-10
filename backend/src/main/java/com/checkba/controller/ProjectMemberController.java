@@ -53,10 +53,13 @@ public class ProjectMemberController {
             map.put("role", member.getRole());
             map.put("joinedAt", member.getJoinedAt());
             if (user != null) {
+                // username 保留一版给老客户端，前端不再读它（spec 2026-09-10 §4/§5：
+                // 用户名退成内部标识，任何界面都不再当名字显示）
                 map.put("username", user.getUsername());
                 // local-mode 下项目 owner/成员可能是库里存了中文哨兵值的本机用户，按界面语言本地化
                 map.put("displayName", LocalIdentityService.displayNameOf(user.getDisplayName()));
-                map.put("avatarUrl", user.getAvatarUrl());
+                // 本机有就本机，否则官网 /api/avatar/{accountId}——与「加同事」确认卡同一个口径
+                map.put("avatarUrl", projectMemberService.avatarUrlFor(user));
             }
             return map;
         }).collect(Collectors.toList());
@@ -72,7 +75,7 @@ public class ProjectMemberController {
                 ownerMap.put("joinedAt", null);
                 ownerMap.put("username", owner.getUsername());
                 ownerMap.put("displayName", LocalIdentityService.displayNameOf(owner.getDisplayName()));
-                ownerMap.put("avatarUrl", owner.getAvatarUrl());
+                ownerMap.put("avatarUrl", projectMemberService.avatarUrlFor(owner));
                 resultList.add(0, ownerMap); // Add to top
             }
         }

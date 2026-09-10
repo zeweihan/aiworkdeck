@@ -52,6 +52,17 @@ export default {
   uploadingTitle: '上传中...',
   avatarUpdateSuccess: '头像更新成功',
   avatarUploadFailed: '上传失败: {message}',
+  avatarRemoveAction: '删除头像',
+  avatarRemoveSuccess: '头像已删除',
+  avatarRemoveFailed: '删除失败: {message}',
+  nicknamePlaceholder: '填写你的姓名',
+  nicknameSaving: '保存中...',
+  nicknameSaveFailed: '保存失败: {message}',
+  nicknameTooLong: '姓名最多 24 个字',
+  // 姓名引导（Spec §6）：手机号注册的默认展示名是打码手机号，同事在案卷里看到的就是它
+  nameNudgeText: '填写你的姓名，同事在案卷里看到的就是它',
+  nameNudgeTitle: '填写你的姓名',
+  nameNudgeConfirm: '去填写',
 
   // ---- userprofile.vue：设置 - 账号安全（认证器/手机/邮箱） ----
   accountSecurityGroupTitle: '账号安全',

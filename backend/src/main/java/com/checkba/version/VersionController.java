@@ -644,12 +644,23 @@ public class VersionController {
         return userId;
     }
 
+    /**
+     * 版本记录里的署名（spec 2026-09-10 §4）：**展示名优先，空了才回落用户名**。
+     *
+     * <p>以前直接写 username，手机号注册的同事在时间线与文档修订里就是一串
+     * {@code awd_upoxwcdtg}——用户名现在是内部标识，任何界面都不再当名字显示。
+     * 已经写进 Git 提交对象的历史 authorName 不回填。
+     */
     private String userName(Long userId) {
         try {
             var u = userService.getUserById(userId);
-            if (u != null && u.getUsername() != null) return u.getUsername();
+            if (u != null) {
+                String display = u.getDisplayName();
+                if (display != null && !display.isBlank()) return display.trim();
+                if (u.getUsername() != null) return u.getUsername();
+            }
         } catch (Exception e) {
-            log.warn("取用户名失败: userId={}", userId, e);
+            log.warn("取署名失败: userId={}", userId, e);
         }
         return LangText.of("用户", "User");
     }

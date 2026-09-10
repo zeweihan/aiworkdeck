@@ -52,7 +52,8 @@ class AccountControllerRechargeTest {
                 mock(com.checkba.service.entitlement.EntitlementService.class),
                 mock(com.checkba.service.team.TeamUsageSettings.class),
                 mock(com.checkba.service.team.TeamUsageUploadService.class),
-                mock(com.checkba.service.team.TeamSettingsCache.class));
+                mock(com.checkba.service.team.TeamSettingsCache.class),
+                mock(com.checkba.service.account.AccountIdentitySync.class));
     }
 
     // ==================== recharge 参数校验：拒绝但绝不 4xx/4010 ====================

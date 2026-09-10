@@ -295,6 +295,26 @@ public class UserService {
     }
 
     /**
+     * 展示名随官网刷新（spec 2026-09-10 §4/§5：官网的展示名是唯一权威源）。
+     *
+     * <p>只在官网给了非空值、且与本地这行不同时才写；<b>username 一个字都不动</b>——
+     * 它是内部标识，改名会断掉 {@code /u/用户名} 与 Skill 归属链接。
+     * 官网给空（老账户还没填名字）时保留本地已有的那份，不清成空白。
+     *
+     * <p>这条与 {@code LocalIdentityService.commit} 的「真实账号的 displayName 不动」不冲突：
+     * 那条禁的是本机按 admin 心智替用户改名，这里是随权威源刷新。
+     */
+    public User refreshDisplayNameFromWebsite(User user, String websiteDisplayName) {
+        if (user == null) return null;
+        String next = websiteDisplayName == null ? "" : websiteDisplayName.trim();
+        if (next.isEmpty() || next.equals(user.getDisplayName())) return user;
+        if (next.length() > 128) next = next.substring(0, 128);  // 列宽 128
+        user.setDisplayName(next);
+        user.setUpdatedAt(LocalDateTime.now());
+        return userRepository.save(user);
+    }
+
+    /**
      * 更新用户头像
      */
     public User updateAvatar(Long userId, String avatarUrl) {

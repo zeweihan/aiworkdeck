@@ -3165,7 +3165,7 @@ export default {
 
     const user = getCurrentUser()
     if (user) {
-      this.userDisplayName = user.displayName || user.username
+      this.userDisplayName = user.displayName || this.userDisplayName
       this.currentUser = user
     }
     // 本地缓存只是首屏兜底：local-mode 免登下 checkba_user 永远为空，头像会
@@ -3660,7 +3660,7 @@ export default {
         const res = await getCurrentUserApi()
         if (res && res.code === 0 && res.data) {
           this.currentUser = { ...this.currentUser, ...res.data }
-          this.userDisplayName = this.currentUser.displayName || this.currentUser.username || this.userDisplayName
+          this.userDisplayName = this.currentUser.displayName || this.userDisplayName
         }
       } catch (e) {
         // 拿不到就用本地缓存那份，不拦路

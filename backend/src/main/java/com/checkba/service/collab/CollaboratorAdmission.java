@@ -6,6 +6,7 @@ package com.checkba.service.collab;
 import com.checkba.model.entity.AccountBinding;
 import com.checkba.model.entity.User;
 import com.checkba.repository.AccountBindingRepository;
+import com.checkba.service.UserService;
 import com.checkba.service.account.AwdkLoginService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -35,15 +36,18 @@ public class CollaboratorAdmission {
     private final CollaborationPolicy policy;
     private final AccountBindingRepository bindingRepository;
     private final AwdkLoginService awdkLoginService;
+    private final UserService userService;
 
     public CollaboratorAdmission(AccountDirectoryClient directory,
                                  CollaborationPolicy policy,
                                  AccountBindingRepository bindingRepository,
-                                 AwdkLoginService awdkLoginService) {
+                                 AwdkLoginService awdkLoginService,
+                                 UserService userService) {
         this.directory = directory;
         this.policy = policy;
         this.bindingRepository = bindingRepository;
         this.awdkLoginService = awdkLoginService;
+        this.userService = userService;
     }
 
     /** 准入结果：要么给出可以加进案卷的人，要么给出一个说得清下一步的拒绝理由。 */
@@ -81,8 +85,12 @@ public class CollaboratorAdmission {
             }
             DirectoryReply reply = directory.lookupByAccountId(requesterAccountId, candidateAccountId);
             Verdict verdict = policy.check(reply.requester(), reply.candidate());
-            return verdict.allowed() ? new Admission(local.get(), null)
-                    : new Admission(null, verdict.denial());
+            if (!verdict.allowed()) {
+                return new Admission(null, verdict.denial());
+            }
+            // 每次名录回查顺手刷新展示名（spec 2026-09-10 §4）：官网是唯一权威源，
+            // 而桥接那一刻抄下来的那份可能已经是几个月前的打码手机号了。
+            return new Admission(refreshDisplayName(local.get(), reply), null);
         }
 
         DirectoryReply reply = directory.lookupByIdentifier(requesterAccountId, identifier);
@@ -98,6 +106,19 @@ public class CollaboratorAdmission {
                 account.accountId(), account.username(), account.displayName(), account.phone());
         log.info("按官网名录预建协作用户: accountId={} -> userId={}", account.accountId(), bridged.getId());
         return new Admission(bridged, null);
+    }
+
+    /**
+     * 用名录回包里的展示名刷新本机这行。名录 {@code found:true} 时总带 {@code account}，
+     * 但缺了也不该炸——身份行本身是好的，只是名字没能刷新。
+     */
+    private User refreshDisplayName(User user, DirectoryReply reply) {
+        DirectoryAccount account = reply.account();
+        if (account == null) {
+            return user;
+        }
+        User refreshed = userService.refreshDisplayNameFromWebsite(user, account.displayName());
+        return refreshed != null ? refreshed : user;
     }
 
     private String externalAccountId(Long userId) {

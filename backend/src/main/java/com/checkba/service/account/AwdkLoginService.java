@@ -285,6 +285,10 @@ public class AwdkLoginService {
             AccountBinding binding = existing.get();
             try {
                 User user = userService.getUserById(binding.getUserId());
+                // 展示名以官网为唯一权威源（spec 2026-09-10 §4）：桥接那一刻抄一份、
+                // 之后永不刷新，会让手机号注册的同事在参与人列表与时间线里一直挂着
+                // 官网早就改掉的打码手机号。username 不动——它是内部标识。
+                user = userService.refreshDisplayNameFromWebsite(user, displayName);
                 binding.setLastLoginAt(LocalDateTime.now());
                 bindingRepository.save(binding);
                 return user;

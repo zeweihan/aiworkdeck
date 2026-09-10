@@ -160,7 +160,7 @@ class ProjectMemberAddByContactTest {
         when(bindings.findByUserId(any())).thenReturn(Optional.empty());
         AwdkLoginService awdk = mock(AwdkLoginService.class);
         service.setCollaboratorAdmissionForTest(new CollaboratorAdmission(
-                directory, new SameFirmOrTeamPolicy(), bindings, awdk));
+                directory, new SameFirmOrTeamPolicy(), bindings, awdk, mock(UserService.class)));
         return awdk;
     }
 

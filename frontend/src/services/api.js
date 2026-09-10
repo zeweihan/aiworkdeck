@@ -1296,6 +1296,81 @@ export function disconnectAccount() {
   }).then(unwrapEnvelope);
 }
 
+// ---------- 账户资料：展示名与头像（Spec §5，dev-board#564–#567） ----------
+//
+// 官网是展示名与头像的**唯一权威源**。本机后端把官网那三个写端点收敛成下面四个
+// 本机端点（Key 与 Bearer 都留在后端），前端一律只跟本机后端说话。
+// 只在 local-mode 且已连接账户时可用——两条判定见 utils/identityProfile.js
+// 的 resolveProfileSource；自建服务器仍走 uploadAvatar() 那条本机上传。
+
+// { accountId, displayName, avatarUrl|null, displayNameIsDefault }
+// 刻意**不回 username**：用户名按 uid 处理，任何界面不再当名字显示。
+// 未连接账户时后端回 code:1（request 层转 reject），调用方按「不可编辑」降级即可。
+export function getAccountProfile() {
+  return request({
+    url: '/api/account/profile',
+    method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// 改展示名 → 官网 PATCH /api/account/profile。
+// 本机这一层用 PUT 而不是 PATCH：uni.request 没有 PATCH（团队接口先例）。
+export function updateAccountProfile(displayName) {
+  return request({
+    url: '/api/account/profile',
+    method: 'PUT',
+    data: { displayName },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  }).then(unwrapEnvelope);
+}
+
+// 传头像 → 官网 POST /api/account/avatar。multipart 字段名 file，与 uploadAvatar() 同形。
+export function uploadAccountAvatar(filePath) {
+  const baseUrl = getApiBaseUrl()
+  const url = `${baseUrl}/api/account/avatar`
+  const sessionId = getSessionId()
+
+  return new Promise((resolve, reject) => {
+    uni.uploadFile({
+      url: url,
+      filePath: filePath,
+      name: 'file',
+      header: {
+        'X-Session-Id': sessionId
+      },
+      success: (uploadFileRes) => {
+        if (uploadFileRes.statusCode === 200) {
+          try {
+            const data = JSON.parse(uploadFileRes.data)
+            if (data.code === 0) {
+              resolve(unwrapEnvelope(data))
+            } else {
+              reject(new Error(data.message || t('common.uploadFailed')))
+            }
+          } catch (e) {
+            reject(new Error(t('common.parseResponseFailed')))
+          }
+        } else {
+          reject(new Error('HTTP Error ' + uploadFileRes.statusCode))
+        }
+      },
+      fail: (err) => {
+        reject(err)
+      }
+    })
+  })
+}
+
+// 删头像 → 官网 DELETE /api/account/avatar
+export function deleteAccountAvatar() {
+  return request({
+    url: '/api/account/avatar',
+    method: 'DELETE',
+  }).then(unwrapEnvelope);
+}
+
 // 用量：两套口径分开返回（Spec §3），前端不做合并。
 // {
 //   local:    { records, promptTokens, completionTokens, totalTokens,
