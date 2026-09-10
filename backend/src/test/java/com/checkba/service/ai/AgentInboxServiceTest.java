@@ -30,6 +30,8 @@ class AgentInboxServiceTest {
         when(repository.saveAndFlush(any())).thenAnswer(inv -> save(inv.getArgument(0)));
         when(repository.save(any())).thenAnswer(inv -> save(inv.getArgument(0)));
         when(repository.findById(anyString())).thenAnswer(inv -> Optional.ofNullable(table.get(inv.getArgument(0))));
+        when(repository.findConversationIdById(anyString())).thenAnswer(inv ->
+                Optional.ofNullable(table.get(inv.getArgument(0))).map(AgentInboxItem::getConversationId));
         when(repository.findByConversationIdOrderByPositionAscCreatedAtAsc(anyString()))
                 .thenAnswer(inv -> rows(inv.getArgument(0), null));
         when(repository.findByConversationIdAndStateOrderByPositionAscCreatedAtAsc(anyString(), anyString()))

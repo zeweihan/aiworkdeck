@@ -338,6 +338,8 @@ class AgentOrchestratorInboxTest {
         when(repo.saveAndFlush(any())).thenAnswer(inv -> save(inv.getArgument(0)));
         when(repo.save(any())).thenAnswer(inv -> save(inv.getArgument(0)));
         when(repo.findById(anyString())).thenAnswer(inv -> Optional.ofNullable(rows.get(inv.getArgument(0))));
+        when(repo.findConversationIdById(anyString())).thenAnswer(inv ->
+                Optional.ofNullable(rows.get(inv.getArgument(0))).map(AgentInboxItem::getConversationId));
         when(repo.findByConversationIdOrderByPositionAscCreatedAtAsc(anyString()))
                 .thenAnswer(inv -> list(inv.getArgument(0), null));
         when(repo.findByConversationIdAndStateOrderByPositionAscCreatedAtAsc(anyString(), anyString()))

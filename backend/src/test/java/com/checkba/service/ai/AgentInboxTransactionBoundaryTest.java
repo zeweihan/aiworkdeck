@@ -6,16 +6,20 @@ package com.checkba.service.ai;
 import com.checkba.controller.ai.AiAgentController;
 import com.checkba.model.entity.AgentInboxItem;
 import com.checkba.repository.AgentInboxItemRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.EntityManagerFactory;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.orm.jpa.EntityManagerHolder;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -37,6 +41,8 @@ import static org.mockito.Mockito.*;
 class AgentInboxTransactionBoundaryTest {
     @Autowired AgentInboxItemRepository repository;
     @Autowired PlatformTransactionManager transactionManager;
+    @Autowired EntityManager entityManager;
+    @Autowired EntityManagerFactory entityManagerFactory;
 
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
@@ -45,9 +51,34 @@ class AgentInboxTransactionBoundaryTest {
         AgentInboxService service = new AgentInboxService(repository, sse, mock(AgentRunStateService.class));
         BlockingCommitTransactionManager blocking = new BlockingCommitTransactionManager(transactionManager);
         service.setTransactionManager(blocking);
+        service.setEntityManager(entityManager);
 
         AgentInboxItem row = service.submit(request(), 7L);
         clearInvocations(sse);
+        CountDownLatch staleEntityCached = new CountDownLatch(1);
+        CountDownLatch invokeClaim = new CountDownLatch(1);
+        AtomicReference<AgentInboxItem> claimed = new AtomicReference<>();
+        AtomicReference<Throwable> claimFailure = new AtomicReference<>();
+        Thread claiming = new Thread(() -> {
+            EntityManager requestEntityManager = entityManagerFactory.createEntityManager();
+            TransactionSynchronizationManager.bindResource(
+                    entityManagerFactory, new EntityManagerHolder(requestEntityManager));
+            try {
+                assertEquals(AgentInboxService.PENDING,
+                        repository.findById(row.getId()).orElseThrow().getState());
+                staleEntityCached.countDown();
+                assertTrue(invokeClaim.await(5, TimeUnit.SECONDS));
+                claimed.set(service.claim(row.getId(), "late-run"));
+            } catch (Throwable failure) {
+                claimFailure.set(failure);
+            } finally {
+                TransactionSynchronizationManager.unbindResource(entityManagerFactory);
+                requestEntityManager.close();
+            }
+        });
+        claiming.start();
+        assertTrue(staleEntityCached.await(5, TimeUnit.SECONDS), "claim request did not cache the pending row");
+
         AtomicReference<Throwable> deleteFailure = new AtomicReference<>();
         Thread deleting = new Thread(() -> {
             try { service.delete("conv-tx", row.getId(), row.getRevision()); }
@@ -57,9 +88,7 @@ class AgentInboxTransactionBoundaryTest {
         assertTrue(blocking.commitEntered.await(5, TimeUnit.SECONDS), "delete did not reach commit");
         verifyNoInteractions(sse);
 
-        AtomicReference<AgentInboxItem> claimed = new AtomicReference<>();
-        Thread claiming = new Thread(() -> claimed.set(service.claim(row.getId(), "late-run")));
-        claiming.start();
+        invokeClaim.countDown();
         Thread.sleep(100);
         assertTrue(claiming.isAlive(), "claim crossed the conversation gate before delete committed");
 
@@ -67,6 +96,7 @@ class AgentInboxTransactionBoundaryTest {
         deleting.join(5_000);
         claiming.join(5_000);
         assertNull(deleteFailure.get());
+        assertNull(claimFailure.get());
         assertNotNull(claimed.get());
         assertEquals(AgentInboxService.DELETED, claimed.get().getState());
         assertEquals(AgentInboxService.DELETED, repository.findById(row.getId()).orElseThrow().getState());

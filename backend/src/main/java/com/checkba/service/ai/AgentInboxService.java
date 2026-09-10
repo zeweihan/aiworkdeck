@@ -9,6 +9,8 @@ import com.checkba.repository.AgentInboxItemRepository;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -52,6 +54,7 @@ public class AgentInboxService {
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
     private final Map<String, Object> locks = new ConcurrentHashMap<>();
     private volatile TransactionTemplate transactions;
+    private volatile EntityManager entityManager;
 
     public AgentInboxService(AgentInboxItemRepository repository,
                              SseEmitterService sseEmitterService,
@@ -66,6 +69,11 @@ public class AgentInboxService {
         TransactionTemplate template = new TransactionTemplate(transactionManager);
         template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.transactions = template;
+    }
+
+    @PersistenceContext
+    void setEntityManager(EntityManager entityManager) {
+        this.entityManager = entityManager;
     }
 
     public Object conversationLock(String conversationId) {
@@ -137,22 +145,38 @@ public class AgentInboxService {
     }
 
     public AgentInboxItem claim(String id, String runId, boolean emitApplied) {
-        AgentInboxItem row = require(id);
-        synchronized (conversationLock(row.getConversationId())) {
-            row = require(id);
-            if (!PENDING.equals(row.getState())) return row;
-            row.setState(APPLIED);
-            row.setRunId(runId);
-            row.setAppliedSequence(nextSequence(row.getConversationId(), runId));
-            row.setRevision(row.getRevision() + 1);
-            row.setUpdatedAt(LocalDateTime.now());
-            row = repository.saveAndFlush(row);
-            compactPendingPositions(row.getConversationId());
+        String conversationId = conversationId(id);
+        synchronized (conversationLock(conversationId)) {
+            boolean[] claimedNow = {false};
+            AgentInboxItem row = inTransaction(() -> {
+                AgentInboxItem current = require(id);
+                if (!PENDING.equals(current.getState())) return current;
+                claimedNow[0] = true;
+                current.setState(APPLIED);
+                current.setRunId(runId);
+                current.setAppliedSequence(nextSequence(conversationId, runId));
+                current.setRevision(current.getRevision() + 1);
+                current.setUpdatedAt(LocalDateTime.now());
+                AgentInboxItem saved = repository.saveAndFlush(current);
+                compactPendingPositions(conversationId);
+                return saved;
+            });
+            if (!claimedNow[0]) return row;
             // The snapshot establishes the new run id before input_applied is interpreted.
-            emitSnapshot(row.getConversationId());
+            emitSnapshot(conversationId);
             if (emitApplied) emitInputApplied(row);
             return row;
         }
+    }
+
+    public String conversationId(String id) {
+        return repository.findConversationIdById(id)
+                .orElseThrow(() -> new NoSuchElementException("Inbox message not found"));
+    }
+
+    /** Re-read after clearing an OSIV persistence context; caller holds the conversation monitor. */
+    AgentInboxItem fresh(String id) {
+        return inTransaction(() -> require(id));
     }
 
     public boolean hasPendingSteering(String conversationId) {
@@ -349,7 +373,12 @@ public class AgentInboxService {
     /** The transaction must commit before the caller releases the per-conversation monitor. */
     private <T> T inTransaction(Supplier<T> work) {
         TransactionTemplate template = transactions;
-        return template == null ? work.get() : template.execute(status -> work.get());
+        if (template == null) return work.get();
+        return template.execute(status -> {
+            EntityManager em = entityManager;
+            if (em != null) em.clear();
+            return work.get();
+        });
     }
 
     private String writeRequest(AiAgentController.AgentChatRequest request) {

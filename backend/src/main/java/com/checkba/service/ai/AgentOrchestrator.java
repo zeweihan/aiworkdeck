@@ -733,12 +733,12 @@ public class AgentOrchestrator {
     public String acceptInboxSubmission(String itemId, boolean emitApplied) {
         AgentInboxService inbox = this.inboxService;
         if (inbox == null) throw new IllegalStateException("Agent inbox is unavailable");
-        com.checkba.model.entity.AgentInboxItem item = inbox.require(itemId);
+        String conversationId = inbox.conversationId(itemId);
         RunGuard guard;
         com.checkba.model.entity.AgentInboxItem claimed;
         AiAgentController.AgentChatRequest request;
-        synchronized (inbox.conversationLock(item.getConversationId())) {
-            item = inbox.require(itemId);
+        synchronized (inbox.conversationLock(conversationId)) {
+            com.checkba.model.entity.AgentInboxItem item = inbox.fresh(itemId);
             if (!AgentInboxService.PENDING.equals(item.getState())) {
                 return item.getRunId() != null ? item.getRunId() : activeRunId(item.getConversationId());
             }
