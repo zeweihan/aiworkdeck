@@ -89,6 +89,7 @@ EOF
 chmod 600 "$AWD_E2E_ROOT/home/.aiworkdeck/license.json"
 (
   cd "$AWD_E2E_ROOT/backend"
+  SECURITY_BROWSER_PROXY_E2E_ALLOWED_HOSTS=127.0.0.1 \
   AI_SKILLS_BUILTIN_DIR="$AWD_E2E_ROOT/skills" "$JAVA_HOME/bin/java" \
     -Duser.home="$AWD_E2E_ROOT/home" -jar "$AWD_JAR" \
     --server.port=9797 --spring.profiles.active=desktop \
