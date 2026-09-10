@@ -81,6 +81,9 @@ jobs:
       - name: Check navigation contracts
         working-directory: frontend
         run: npm run check:nav:full
+      - name: Test AI inbox, submission and memory state
+        working-directory: frontend
+        run: node --test tests/ai-alignment/*.test.mjs
       - name: Test project-home page
         working-directory: frontend
         run: npm run test:project-home

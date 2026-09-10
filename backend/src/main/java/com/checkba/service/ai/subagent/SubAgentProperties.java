@@ -18,9 +18,6 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "ai.subagent")
 public class SubAgentProperties {
 
-    /** 单个子任务的 Thought→Action→Observation 轮数上限 */
-    private int maxRounds = 6;
-
     /** 子任务专用线程池大小 = 同时运行的子任务数上限 */
     private int maxParallel = 3;
 
@@ -62,8 +59,6 @@ public class SubAgentProperties {
      */
     private String model = "";
 
-    public int getMaxRounds() { return maxRounds; }
-    public void setMaxRounds(int maxRounds) { this.maxRounds = maxRounds; }
     public int getMaxParallel() { return maxParallel; }
     public void setMaxParallel(int maxParallel) { this.maxParallel = maxParallel; }
     public int getTimeoutSeconds() { return timeoutSeconds; }

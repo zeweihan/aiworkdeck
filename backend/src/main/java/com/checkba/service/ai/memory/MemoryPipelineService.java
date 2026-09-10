@@ -19,8 +19,7 @@ import java.util.List;
  *
  * 在每轮 Agent 循环结束后由编排器异步触发，负责：
  * 1. 对话摘要 / Episode 生成（消息数 >= EPISODE_THRESHOLD 时）
- * 2. 项目级记忆提取（正则提取法律引用、金额、日期、当事人——低成本，每轮执行）
- * 3. MemCell 原子记忆提取（LLM 提取——有成本，消息数 >= MEMCELL_THRESHOLD 时执行）
+ * 2. 触发 Markdown 记忆的 Git 同步
  *
  * 历史背景：此逻辑原以 ContextAssemblerService.postConversationUpdate 存在但从未被调用，
  * 现拆分为独立服务并接入编排循环，使记忆的"读侧"（ContextAssembler）与"写侧"解耦。
@@ -32,13 +31,8 @@ public class MemoryPipelineService {
 
     /** 触发 Episode 摘要生成的最小消息数 */
     private static final int EPISODE_THRESHOLD = 15;
-    /** 触发 LLM MemCell 提取的最小消息数（控制每轮对话的 LLM 成本） */
-    private static final int MEMCELL_THRESHOLD = 4;
-
     private final MemoryManager memoryManager;
     private final ConversationSummarizer conversationSummarizer;
-    private final ProjectMemoryExtractor projectMemoryExtractor;
-    private final MemCellExtractor memCellExtractor;
     private final ContextCompressor contextCompressor;
     private final com.checkba.version.memory.MemorySyncService memorySyncService;
 
@@ -101,35 +95,8 @@ public class MemoryPipelineService {
             }
         }
 
-        // 2. 提取并更新项目记忆
-        if (projectIdLong != null) {
-            // 2.1 项目级记忆（正则提取，低成本）——单独一个 try/catch：这一步出错（比如并发写
-            // ProjectMemory 撞了唯一约束）不该连带跳过下面更贵、也更值钱的 LLM MemCell 抽取；
-            // 此前两步共用一个 try 块，2.1 一抛异常，2.2 整轮都不会执行，且日志上看不出区别。
-            try {
-                projectMemoryExtractor.extractAndUpdateProjectMemory(projectIdLong, messages);
-            } catch (Exception e) {
-                log.error("Failed to extract project memory (regex step): {}", e.getMessage(), e);
-            }
-
-            // 2.2 MemCell 原子记忆（LLM 提取，控制触发频率）——即便 2.1 刚刚失败也要照常跑
-            if (messages.size() >= MEMCELL_THRESHOLD) {
-                try {
-                    int memCellCount = memCellExtractor.extractAndSave(projectIdLong, conversationId, messages);
-                    if (memCellCount > 0) {
-                        log.info("MemCell extraction completed: saved {} atomic memory units", memCellCount);
-                    } else if (memCellCount < 0) {
-                        // -1 是 MemCellExtractor 特意区分出来的"本轮 LLM 响应解析失败"信号，
-                        // 不能当成 0（=正常跑完、确实没有可提取的内容）一样悄悄不吭声。
-                        log.warn("MemCell extraction failed to parse this turn's LLM response "
-                                + "(conversationId={}); treated as a failure, not as \"nothing worth remembering\"",
-                                conversationId);
-                    }
-                } catch (Exception e) {
-                    log.error("Failed to extract MemCell memory: {}", e.getMessage(), e);
-                }
-            }
-        }
+        // 2. 模型在对话内通过 memory_write/memory_edit 立即持久化确定信息。后台不再并行运行
+        //    正则与 LLM 抽取写者，避免同一事实生成重复记录；长对话摘要仍由上面的压缩路径维护。
 
         // 3. 记忆 Git 同步（防抖导出 + push，spec Phase A）。方法自身吞掉一切异常且只对
         //    已配置同步的领域生效，这里再包一层保险——同步永远不能反噬记忆管线。

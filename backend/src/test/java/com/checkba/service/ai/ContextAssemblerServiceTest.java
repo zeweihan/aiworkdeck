@@ -10,6 +10,7 @@ import com.checkba.service.ProjectAiMessageService;
 import com.checkba.service.ai.context.ContextCompressor;
 import com.checkba.service.ai.context.FileContextLoader;
 import com.checkba.service.ai.memory.MemoryManager;
+import com.checkba.service.ai.memory.document.MemoryDocumentService;
 import com.checkba.service.ai.skill.SkillRouter;
 import com.checkba.service.ai.tools.LegalTools;
 import dev.langchain4j.data.message.ChatMessage;
@@ -48,6 +49,7 @@ class ContextAssemblerServiceTest {
     private com.checkba.service.AppLanguageService appLanguageService;
     private ChatModelFactory chatModelFactory;
     private com.checkba.service.ProjectFileService projectFileService;
+    private MemoryDocumentService memoryDocumentService;
 
     @BeforeEach
     void setUp() {
@@ -77,6 +79,8 @@ class ContextAssemblerServiceTest {
                 new AiContextProperties(), skillRouter, capabilityService, inlineContentCache,
                 memoryManager, contextCompressor, appLanguageService,
                 chatModelFactory, projectFileService);
+        memoryDocumentService = mock(MemoryDocumentService.class);
+        assembler.setMemoryDocumentServiceForTest(memoryDocumentService);
     }
 
     private List<ChatMessage> assembleMessages(AiAgentController.ContextItem activeContext) {
@@ -87,6 +91,33 @@ class ContextAssemblerServiceTest {
 
     private String assembleSystemText(AiAgentController.ContextItem activeContext) {
         return ((SystemMessage) assembleMessages(activeContext).get(0)).text();
+    }
+
+    @Test
+    void markdownMemoryIndexesAreInjectedWithConfiguredTokenBudget() {
+        when(memoryDocumentService.contextIndexes(1L, 88L, 10_000))
+                .thenReturn("## 个人记忆 [user]\n- [行文](topics/style.md)");
+
+        String systemText = assembleSystemText(null);
+
+        assertTrue(systemText.contains("# Markdown 记忆索引"));
+        assertTrue(systemText.contains("topics/style.md"));
+    }
+
+    @Test
+    void askModeAllowsOnlyReadOnlyMarkdownMemoryToolsInBothLanguages() {
+        for (boolean english : new boolean[] {false, true}) {
+            when(appLanguageService.isEnglish()).thenReturn(english);
+            List<ChatMessage> messages = assembler.assemble(
+                    "conv-1", "run-1", "此前偏好是什么", null, null,
+                    null, null, "88", AgentMode.ASK, 1L, null);
+            String systemText = ((SystemMessage) messages.get(0)).text();
+            assertTrue(systemText.contains("memory_list"));
+            assertTrue(systemText.contains("memory_read"));
+            assertTrue(systemText.contains("memory_search"));
+            assertTrue(systemText.contains("memory_write"));
+            assertTrue(systemText.contains(english ? "prohibited" : "禁止"));
+        }
     }
 
     /** 末位消息（用户消息）的文本——注意力最高的位置。 */

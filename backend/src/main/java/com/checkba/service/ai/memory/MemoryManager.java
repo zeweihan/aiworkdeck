@@ -71,6 +71,10 @@ public class MemoryManager {
     
     @Qualifier("memoryEmbeddingStore")
     private final EmbeddingStore<TextSegment> memoryEmbeddingStore;
+
+    /** 手工 new 的既有单测不接文档层；生产由 Spring 接入统一 Markdown 真源。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.ai.memory.document.MemoryDocumentService memoryDocumentService;
     
     private final EmbeddingModel embeddingModel;
 
@@ -104,6 +108,10 @@ public class MemoryManager {
         } catch (Exception e) {
             log.warn("Failed to create embedding for memory id={}: {}", saved.getId(), e.getMessage());
         }
+
+        if (memoryDocumentService != null) {
+            memoryDocumentService.migrateLegacyEntry(saved);
+        }
         
         return saved;
     }
@@ -133,7 +141,9 @@ public class MemoryManager {
 
             for (EmbeddingMatch<TextSegment> match : matches) {
                 String pid = match.embedded().metadata().getString("projectId");
-                if (pid == null || !pid.equals(String.valueOf(entry.getProjectId()))) {
+                String indexedScope = match.embedded().metadata().getString("scope");
+                if (pid == null || !pid.equals(String.valueOf(entry.getProjectId()))
+                        || !Objects.equals(normalizeScope(indexedScope), normalizeScope(entry.getScope()))) {
                     continue;
                 }
                 String memoryIdStr = match.embedded().metadata().getString("memoryId");
@@ -287,7 +297,8 @@ public class MemoryManager {
             List<Long> memoryIds = matches.stream()
                     .filter(match -> {
                         String pid = match.embedded().metadata().getString("projectId");
-                        return pid != null && pid.equals(String.valueOf(projectId));
+                        String scope = match.embedded().metadata().getString("scope");
+                        return pid != null && pid.equals(String.valueOf(projectId)) && isProjectScope(scope);
                     })
                     .map(match -> Long.parseLong(match.embedded().metadata().getString("memoryId")))
                     .limit(limit)
@@ -297,12 +308,23 @@ public class MemoryManager {
                 return Collections.emptyList();
             }
             
-            return memoryEntryRepository.findAllById(memoryIds);
+            return memoryEntryRepository.findAllById(memoryIds).stream()
+                    .filter(entry -> isProjectScope(entry.getScope())).toList();
         } catch (Exception e) {
             log.error("Semantic search failed: {}", e.getMessage(), e);
             // 降级到关键词搜索
             return fetchKeywordCandidates(projectId, query, null, limit);
         }
+    }
+
+    private static boolean isProjectScope(String scope) {
+        return scope == null || MemoryEntry.MemoryScope.PROJECT.equals(scope)
+                || MemoryEntry.MemoryScope.FILE.equals(scope)
+                || MemoryEntry.MemoryScope.CONVERSATION.equals(scope);
+    }
+
+    private static String normalizeScope(String scope) {
+        return scope == null ? MemoryEntry.MemoryScope.PROJECT : scope;
     }
 
     /**
@@ -339,11 +361,11 @@ public class MemoryManager {
     /**
      * 获取绑定到某个文件的记忆（如"该合同的审查结论"）
      */
-    public List<MemoryEntry> retrieveFileMemories(Long sourceFileId) {
-        if (sourceFileId == null) {
+    public List<MemoryEntry> retrieveFileMemories(Long projectId, Long sourceFileId) {
+        if (projectId == null || sourceFileId == null) {
             return Collections.emptyList();
         }
-        return memoryEntryRepository.findBySourceFileIdOrderByImportanceScoreDesc(sourceFileId);
+        return memoryEntryRepository.findByProjectIdAndSourceFileIdOrderByImportanceScoreDesc(projectId, sourceFileId);
     }
 
     /**
@@ -353,11 +375,11 @@ public class MemoryManager {
      * 此前完全不认 scope，file/conversation 作用域保存的记忆只能靠关键词/语义检索"运气好"才捞得到——
      * 这里提供一条确定性的按 scope 取值通路，供工具层在调用方明确指定 scope 时兜底合并进结果。
      */
-    public List<MemoryEntry> retrieveConversationMemories(String conversationId) {
-        if (conversationId == null || conversationId.isBlank()) {
+    public List<MemoryEntry> retrieveConversationMemories(Long projectId, String conversationId) {
+        if (projectId == null || conversationId == null || conversationId.isBlank()) {
             return Collections.emptyList();
         }
-        return memoryEntryRepository.findByConversationIdOrderByCreatedAtDesc(conversationId);
+        return memoryEntryRepository.findByProjectIdAndConversationIdOrderByCreatedAtDesc(projectId, conversationId);
     }
 
     // ==================== RRF 混合检索 ====================
@@ -761,4 +783,3 @@ public class MemoryManager {
         return stats;
     }
 }
-

@@ -36,41 +36,6 @@ public class AgentOrchestrator {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AgentOrchestrator.class);
 
-    // 循环步数预算：达到上限时优雅收尾（保存进度 + 告知用户可继续），而不是静默中断
-    private static final int MAX_LOOP_DEPTH = 30;
-
-    /**
-     * 整篇分段过卷进行中的步数预算硬上限（dev-board#422）。
-     *
-     * <p>30 步是给「常规多步任务」定的。分段过卷是<b>刻意的</b>多步推进——一块一步，
-     * 块数由文档长度决定（切块器上限 60 块）。恒 30 会让一份长文档的过卷跑到一半被迫暂停，
-     * 正是 #419 要根治的那种「一路正在操作文档到撞上限」换个位置复发。
-     * 所以过卷进行中把预算抬到 {@code min(30 + 块数, 120)}——抬得动，但仍有硬上限：
-     * 模型在过卷里打转时不能变成无限跑。达到上限仍走既有 paused/max_depth 语义，
-     * 过卷状态保留，用户点「继续」可接着跑。
-     */
-    private static final int PASS_MAX_LOOP_DEPTH = 120;
-
-    /** 本轮允许的步数预算：没有进行中的过卷时恒为 30。 */
-    static int maxLoopDepthFor(OfficePassStateStore passStateStore, String conversationId) {
-        int total = passStateStore == null ? 0 : passStateStore.totalChunks(conversationId);
-        if (total <= 0) {
-            return MAX_LOOP_DEPTH;
-        }
-        return Math.min(MAX_LOOP_DEPTH + total, PASS_MAX_LOOP_DEPTH);
-    }
-
-    /** 步数预算耗尽的用户提示（抽成方法便于按应用语言断言，见 AgentTextLanguageTest）。 */
-    static String maxDepthNotice() {
-        return maxDepthNotice(MAX_LOOP_DEPTH);
-    }
-
-    /** 同上，但按本轮实际生效的预算报数——过卷把预算抬高后，提示里的数字也要说实话。 */
-    static String maxDepthNotice(int budget) {
-        return LangText.of(
-                "\n\n> 本轮已达最大执行步数（" + budget + " 步），先暂停。已完成的修改均已生效，点击下方「继续」按钮可接着执行剩余任务。",
-                "\n\n> This run reached the maximum step budget (" + budget + " steps) and is paused. All completed changes have taken effect; click the Continue button below to carry on with the remaining work.");
-    }
     // 工具连续失败达到该次数后，向模型注入强提示要求收敛
     private static final int CONSECUTIVE_FAILURE_NUDGE = 3;
 
@@ -84,6 +49,20 @@ public class AgentOrchestrator {
     public static final String BLANK_TOOL_OUTPUT =
             "Error: the tool returned no output. Treat this as a failure: do not assume the operation "
                     + "succeeded — verify with a read-only tool, or tell the user what is missing.";
+
+    /** ASK remains read-only but can inspect the user's durable memory. */
+    static final Set<String> ASK_MEMORY_TOOLS = Set.of("memory_list", "memory_read", "memory_search");
+    /** Ordinary Agent/Plan turns retain the complete memory capability despite skill narrowing. */
+    static final Set<String> MEMORY_TOOLS = Set.of(
+            "memory_list", "memory_read", "memory_search", "memory_write", "memory_edit", "memory_delete");
+    static final int STREAM_RECOVERY_LIMIT = 256 * 1024;
+    static final int EXECUTION_LOG_LIMIT = 512 * 1024;
+    static final String STREAM_TRUNCATED_MARKER =
+            "[早期流式输出因长度限制已省略 / Earlier streamed output omitted due to length limit]\n";
+    static final String EXECUTION_LOG_TRUNCATED_MARKER =
+            "<process name=\"历史日志\"><tool_output status=\"TRUNCATED\">"
+                    + "早期工具日志因长度限制已省略；模型上下文中的工具结果不受影响。"
+                    + "</tool_output></process>\n";
 
     // LLM 失败自动重试：退避档位与次数上限按错误类型区分（见 LlmErrorClassifier.Kind），
     // 且仅在本轮尚未流出任何 token 时重放（对话状态未被污染，重放安全且用户无感知重复内容）；
@@ -148,7 +127,8 @@ public class AgentOrchestrator {
         void appendStream(String token) {
             if (token == null || token.isEmpty()) return;
             synchronized (streamContent) {
-                streamContent.append(token);
+                appendBoundedTail(streamContent, token, STREAM_RECOVERY_LIMIT,
+                        STREAM_TRUNCATED_MARKER, false);
             }
         }
 
@@ -156,6 +136,18 @@ public class AgentOrchestrator {
             synchronized (streamContent) {
                 return streamContent.toString();
             }
+        }
+
+        String takeStreamSnapshot() {
+            synchronized (streamContent) {
+                String snapshot = streamContent.toString();
+                streamContent.setLength(0);
+                return snapshot;
+            }
+        }
+
+        void startAssistantSegment() {
+            assistantMessageId = null;
         }
 
         void cancel() {
@@ -225,6 +217,12 @@ public class AgentOrchestrator {
     private final com.checkba.service.telemetry.MatterClassifierService matterClassifierService;
     // 整篇分段过卷的游标状态（dev-board#422）：编排器只读它算本轮步数预算，取消时顺手清掉
     private final OfficePassStateStore officePassStateStore;
+    private volatile AgentInboxService inboxService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setInboxService(AgentInboxService inboxService) {
+        this.inboxService = inboxService;
+    }
 
     // ==================== 取消功能相关方法 ====================
 
@@ -239,6 +237,12 @@ public class AgentOrchestrator {
                 sseEmitterService.currentEpoch(conversationId));
         activeRuns.put(conversationId, guard);
         return guard;
+    }
+
+    /** Current durable-run identity exposed to the receipt/controller layer. */
+    public String activeRunId(String conversationId) {
+        RunGuard guard = activeRuns.get(conversationId);
+        return guard == null ? null : guard.runId;
     }
 
     /**
@@ -258,6 +262,24 @@ public class AgentOrchestrator {
         if (guard == null) return;
         activeRuns.remove(guard.conversationId, guard);
         skillRouter.clearRun(guard.runId);
+    }
+
+    /**
+     * Successful completion is the only automatic queue drain point. The same monitor is used by
+     * HTTP submission, finish and drain so a finish/POST race can neither lose nor double-start input.
+     */
+    private void endRunAndDrain(RunGuard guard) {
+        AgentInboxService inbox = this.inboxService;
+        if (inbox == null) {
+            endRun(guard);
+            return;
+        }
+        synchronized (inbox.conversationLock(guard.conversationId)) {
+            activeRuns.remove(guard.conversationId, guard);
+            skillRouter.clearRun(guard.runId);
+            inbox.nextPending(guard.conversationId)
+                    .ifPresent(next -> acceptInboxSubmission(next.getId()));
+        }
     }
 
     /**
@@ -366,6 +388,113 @@ public class AgentOrchestrator {
         closeSse(guard);
 
         // 清理状态
+        endRun(guard);
+    }
+
+    private static final String STEERING_CANCELLED_TOOL =
+            "Cancelled before execution because newer user input superseded this pending tool request.";
+
+    /**
+     * Apply every durable steering item at a safe boundary. The current assistant segment is saved
+     * before USER rows, then a fresh assistant row is used for later output, preserving chronology.
+     */
+    private boolean applyPendingSteering(RunGuard guard,
+                                         java.util.List<dev.langchain4j.data.message.ChatMessage> messages,
+                                         String projectId, Long userId, String modelId, AgentMode agentMode,
+                                         StringBuilder executionLog) {
+        AgentInboxService inbox = this.inboxService;
+        if (inbox == null || !inbox.hasPendingSteering(guard.conversationId)) return false;
+        java.util.List<com.checkba.model.entity.AgentInboxItem> inputs =
+                inbox.claimPendingSteering(guard.conversationId, guard.runId);
+        if (inputs.isEmpty()) return false;
+
+        String streamed = guard.takeStreamSnapshot();
+        String segment = executionLog.toString() + streamed;
+        if (!segment.isBlank()) saveAssistantMessage(guard, projectId, userId, segment);
+        guard.startAssistantSegment();
+        executionLog.setLength(0);
+
+        for (com.checkba.model.entity.AgentInboxItem input : inputs) {
+            AiAgentController.AgentChatRequest request = inbox.requestOf(input);
+            messageService.saveMessage(projectId, userId, guard.conversationId, "USER",
+                    input.getMessage(), input.getDisplayText());
+            dev.langchain4j.data.message.ChatMessage augmented = null;
+            try {
+                java.util.List<dev.langchain4j.data.message.ChatMessage> assembled = contextAssemblerService.assemble(
+                        guard.conversationId, guard.runId, input.getMessage(),
+                        request.getContextItems() != null ? request.getContextItems()
+                                : convertFileIdsToContextItems(request.getFileIds()),
+                        request.getActiveContext(), null, null, projectId,
+                        agentMode, userId, modelId);
+                for (int i = assembled.size() - 1; i >= 0; i--) {
+                    if (assembled.get(i) instanceof dev.langchain4j.data.message.UserMessage) {
+                        augmented = assembled.get(i);
+                        break;
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("Failed to augment steering input {}, using its durable text", input.getId(), e);
+            }
+            messages.add(augmented != null ? augmented
+                    : dev.langchain4j.data.message.UserMessage.from(input.getMessage()));
+            if (request.getActiveContext() != null && request.getActiveContext().getId() != null) {
+                try {
+                    guard.activeFileId = Long.parseLong(request.getActiveContext().getId().trim());
+                    guard.activeFileName = request.getActiveContext().getName();
+                } catch (NumberFormatException ignore) { }
+            }
+        }
+        return true;
+    }
+
+    /** Pair every skipped native request so OpenAI-compatible providers never see orphan tool_calls. */
+    private void cancelPendingNativeTools(
+            java.util.List<dev.langchain4j.agent.tool.ToolExecutionRequest> requests, int from,
+            java.util.List<dev.langchain4j.data.message.ChatMessage> messages,
+            StringBuilder executionLog, RunGuard guard) {
+        for (int i = from; i < requests.size(); i++) {
+            dev.langchain4j.agent.tool.ToolExecutionRequest req = requests.get(i);
+            messages.add(dev.langchain4j.data.message.ToolExecutionResultMessage.from(req, STEERING_CANCELLED_TOOL));
+            String displayName = toolRegistry.resolve(req.name())
+                    .map(ToolRegistry.RegisteredTool::displayName).orElse(req.name());
+            appendBoundedExecutionLog(executionLog, String.format(
+                    "<process name=\"%s\"><tool_code>%s(%s)</tool_code><tool_output status=\"CANCELLED\">%s</tool_output></process>\n",
+                    displayName.replace("\"", "'"), req.name(),
+                    AgentTagProtocol.escape(truncate(req.arguments(), toolOutputDisplayLimit(req.name()))),
+                    AgentTagProtocol.escape(STEERING_CANCELLED_TOOL)));
+            sendTextDelta(guard, "<tool_output status=\"CANCELLED\">"
+                    + AgentTagProtocol.escape(STEERING_CANCELLED_TOOL) + "</tool_output>");
+        }
+    }
+
+    private void cancelPendingXmlTools(java.util.List<XmlToolCallParser.ParsedCall> calls, int from,
+                                       java.util.List<dev.langchain4j.data.message.ChatMessage> messages,
+                                       StringBuilder executionLog, RunGuard guard) {
+        for (int i = from; i < calls.size(); i++) {
+            XmlToolCallParser.ParsedCall call = calls.get(i);
+            messages.add(dev.langchain4j.data.message.UserMessage.from(
+                    "[Tool Execution Result]\nTool: " + call.rawCode() + "\nStatus: CANCELLED\nOutput: "
+                            + STEERING_CANCELLED_TOOL));
+            appendBoundedExecutionLog(executionLog, String.format(
+                    "<process name=\"%s\"><tool_code>%s</tool_code><tool_output status=\"CANCELLED\">%s</tool_output></process>\n",
+                    LangText.of("工具执行", "Tool execution"),
+                    AgentTagProtocol.escape(truncate(call.rawCode(), toolOutputDisplayLimit(call.toolName()))),
+                    AgentTagProtocol.escape(STEERING_CANCELLED_TOOL)));
+            sendTextDelta(guard, "<tool_output status=\"CANCELLED\">"
+                    + AgentTagProtocol.escape(STEERING_CANCELLED_TOOL) + "</tool_output>");
+        }
+    }
+
+    private void pauseForNoProgress(RunGuard guard, String projectId, Long userId,
+                                    StringBuilder executionLog) {
+        String notice = LangText.of(
+                "\n\n> 多次工具调用得到相同结果，任务没有继续推进，已暂停。请补充信息或点击「继续」后换一种做法。",
+                "\n\n> Repeated tool calls produced the same result without progress, so the run is paused. Add guidance or continue with a different approach.");
+        sendTextDelta(guard, notice);
+        saveAssistantMessage(guard, projectId, userId, executionLog + guard.streamSnapshot() + notice);
+        markRunState(guard, AgentRunStateService.RunStatus.PAUSED);
+        sendRunEvent(guard, "bubble_end", "{\"status\":\"paused\",\"reason\":\"no_progress\"}");
+        closeSse(guard);
         endRun(guard);
     }
     
@@ -592,6 +721,52 @@ public class AgentOrchestrator {
         // 本轮的身份证：runId 在这里签发，随 RunGuard 一路传到每一层递归与两处流式回调。
         // 登记发生在做任何事之前——POST /cancel 靠这张表解析「现在跑的是哪一轮」。
         RunGuard guard = beginRun(request.getConversationId());
+        launchTurn(request, userId, guard);
+    }
+
+    /** Persisted production entrypoint. Returns the active run id for the HTTP receipt. */
+    public String acceptInboxSubmission(String itemId) {
+        return acceptInboxSubmission(itemId, true);
+    }
+
+    /** emitApplied=false is used by the originating POST; its receipt already represents the bubble. */
+    public String acceptInboxSubmission(String itemId, boolean emitApplied) {
+        AgentInboxService inbox = this.inboxService;
+        if (inbox == null) throw new IllegalStateException("Agent inbox is unavailable");
+        String conversationId = inbox.conversationId(itemId);
+        RunGuard guard;
+        com.checkba.model.entity.AgentInboxItem claimed;
+        AiAgentController.AgentChatRequest request;
+        synchronized (inbox.conversationLock(conversationId)) {
+            com.checkba.model.entity.AgentInboxItem item = inbox.fresh(itemId);
+            if (!AgentInboxService.PENDING.equals(item.getState())) {
+                return item.getRunId() != null ? item.getRunId() : activeRunId(item.getConversationId());
+            }
+            RunGuard current = activeRuns.get(item.getConversationId());
+            if (current != null) return current.runId;
+
+            guard = beginRun(item.getConversationId());
+            claimed = inbox.claim(itemId, guard.runId, emitApplied);
+            if (!AgentInboxService.APPLIED.equals(claimed.getState())
+                    || !guard.runId.equals(claimed.getRunId())) {
+                endRun(guard);
+                return claimed.getRunId();
+            }
+            request = inbox.requestOf(claimed);
+        }
+        // Do not hold the inbox monitor while the turn runs. The guard is already visible, so new
+        // submissions queue safely, while completion can reacquire the same monitor to drain once.
+        try {
+            launchTurn(request, claimed.getUserId(), guard);
+        } catch (RuntimeException e) {
+            inbox.interruptRun(guard.runId);
+            endRun(guard);
+            throw e;
+        }
+        return guard.runId;
+    }
+
+    private void launchTurn(AiAgentController.AgentChatRequest request, Long userId, RunGuard guard) {
         // 平台通道按用户计费（server 模式多租户）：整轮循环——含其中同步调用的上下文组装、
         // 记忆检索、子 Agent、故障转移换模型——都在这个身份作用域内取 key。
         // 身份作用域必须建在**执行线程**上：提交线程（控制器线程）设了也不跟着走。
@@ -787,32 +962,11 @@ public class AgentOrchestrator {
             return;
         }
 
-        // 步数预算：常规 30 步；整篇分段过卷进行中抬到 min(30+块数,120)（dev-board#422）
-        int loopBudget = maxLoopDepthFor(officePassStateStore, conversationId);
-        if (depth > loopBudget) {
-            // 步数预算耗尽：不是报错，而是"存档 + 请示"——保存进度、明确告知用户、干净收尾。
-            log.warn("Agent loop reached max depth {} for conversation {}, stopping gracefully", loopBudget, conversationId);
-            String notice = maxDepthNotice(loopBudget);
-            sendTextDelta(guard, notice);
-            String persisted = (executionLog.length() > 0 ? executionLog.toString() : "") + notice;
-            saveAssistantMessage(guard, projectId, userId, persisted);
-            markRunState(guard, AgentRunStateService.RunStatus.PAUSED);
-            // status=paused 让前端渲染一键「继续」按钮（区别于 finished 的正常收尾）
-            sendRunEvent(guard, "bubble_end", "{\"status\":\"paused\",\"reason\":\"max_depth\"}");
-            closeSse(guard);
-            endRun(guard);
-            return;
-        }
-        
-        // Ask 模式限制递归深度为 1（不允许工具调用后的循环）
-        if (agentMode == AgentMode.ASK && depth > 0) {
-            log.info("Ask mode: stopping loop at depth {}", depth);
-            markRunState(guard, AgentRunStateService.RunStatus.FINISHED);
-            sendRunEvent(guard, "bubble_end", "{}");
-            closeSse(guard);
-            endRun(guard);
-            return;
-        }
+        // Productive work has no fixed turn count. Cancellation, bounded request retries, context
+        // compaction and the observation-aware no-progress detector remain the terminating guards.
+
+        // A steer received after the preceding boundary is inserted before this model call.
+        applyPendingSteering(guard, messages, projectId, userId, modelId, agentMode, executionLog);
         
         // 设置当前会话 ID 到 EditorBridgeService，以便文档编辑工具可以发送 SSE 事件
         editorBridgeService.setCurrentConversationId(conversationId);
@@ -922,7 +1076,7 @@ public class AgentOrchestrator {
                     messages.add(dev.langchain4j.data.message.UserMessage.from(
                             "[系统提醒] 你上一条输出因达到单次输出长度上限被截断，其中的工具调用参数不完整、"
                             + "没有被执行。请把动作拆小，重新、完整地输出这次工具调用；一次只做一步也可以。"));
-                    runLoop(model, messages, conversationId, projectId, userId, modelId,
+                    continueRunLoop(model, messages, conversationId, projectId, userId, modelId,
                             depth + 1, executionLog, agentMode, guard);
                     return;
                 }
@@ -955,8 +1109,20 @@ public class AgentOrchestrator {
                 // 打转首次干预的提示语（本轮末位追加一条），null 表示未检出
                 String stuckNudge = null;
 
+                java.util.List<dev.langchain4j.agent.tool.ToolExecutionRequest> nativeRequests =
+                        aiMessage.toolExecutionRequests();
                 // Execute Native Tools (统一分发，无需感知具体工具)
-                for (dev.langchain4j.agent.tool.ToolExecutionRequest req : aiMessage.toolExecutionRequests()) {
+                for (int nativeIndex = 0; nativeIndex < nativeRequests.size(); nativeIndex++) {
+                    dev.langchain4j.agent.tool.ToolExecutionRequest req = nativeRequests.get(nativeIndex);
+                    // Native tool_calls must be paired before the steering USER message is inserted.
+                    AgentInboxService inbox = this.inboxService;
+                    if (inbox != null && inbox.hasPendingSteering(conversationId)) {
+                        cancelPendingNativeTools(nativeRequests, nativeIndex, messages, executionLog, guard);
+                        applyPendingSteering(guard, messages, projectId, userId, modelId, agentMode, executionLog);
+                        continueRunLoop(model, messages, conversationId, projectId, userId, modelId,
+                                depth + 1, executionLog, agentMode, guard);
+                        return;
+                    }
                     // 慢工具执行期的取消响应点。此前 isCancelled 只在 runLoop 入口与本回调开头各查一次，
                     // 于是「停止」按钮在 dispatch_subtask（可跑 630 秒）或 AI PPT（十几分钟）中间
                     // 完全不生效——用户看到的是按了没反应、还得继续等。一处检查覆盖所有慢工具：
@@ -978,17 +1144,10 @@ public class AgentOrchestrator {
 
                     String result;
                     boolean success;
-                    StuckDetector.Verdict verdict = guard.stuck.record(req.name(), req.arguments());
-                    if (verdict == StuckDetector.Verdict.CIRCUIT_BREAK) {
-                        // 二次检出熔断：不执行，直接把守卫反馈作为工具结果回给模型
-                        log.warn("Stuck detector circuit break for {}: {}", conversationId, guard.stuck.lastPattern());
-                        result = stuckCircuitBreakFeedback(guard.stuck.lastPattern());
+                    if (agentMode == AgentMode.ASK && !ASK_MEMORY_TOOLS.contains(req.name())) {
+                        result = "Error: ASK mode permits only memory_list, memory_read, and memory_search.";
                         success = false;
                     } else {
-                        if (verdict == StuckDetector.Verdict.INTERVENE) {
-                            log.warn("Stuck detector intervention for {}: {}", conversationId, guard.stuck.lastPattern());
-                            stuckNudge = guard.stuck.lastPattern();
-                        }
                         ToolRegistry.ToolResult toolResult = dispatchTool(req.name(), req.arguments(),
                                 Long.parseLong(projectId), conversationId, userId, modelId, guard);
                         result = toolResult.output();
@@ -1002,6 +1161,13 @@ public class AgentOrchestrator {
                         result = BLANK_TOOL_OUTPUT;
                         success = false;
                     }
+                    StuckDetector.Verdict verdict = guard.stuck.record(
+                            req.name(), req.arguments(), result, success);
+                    boolean pauseForNoProgress = verdict == StuckDetector.Verdict.CIRCUIT_BREAK;
+                    if (verdict == StuckDetector.Verdict.INTERVENE) {
+                        log.warn("Stuck detector intervention for {}: {}", conversationId, guard.stuck.lastPattern());
+                        stuckNudge = guard.stuck.lastPattern();
+                    }
                     result = appendFailureNudge(guard, result, success);
 
                     // Determine status for history and display
@@ -1010,9 +1176,12 @@ public class AgentOrchestrator {
                     // Log for history persistence (include status attribute)
                     // 先落执行日志再入栈：入栈那步一旦抛异常（历史上就是上面的 ensureNotBlank），
                     // 排在它后面的 append 不会执行，崩溃轮的过程卡整段丢失、历史里无从回放
-                    executionLog.append(String.format("<process name=\"%s\"><tool_code>%s(%s)</tool_code><tool_output status=\"%s\">%s</tool_output></process>\n",
-                        displayName.replace("\"", "'"), req.name(), AgentTagProtocol.escape(req.arguments()),
-                        nativeToolStatus, AgentTagProtocol.escape(result)));
+                    int persistedToolLimit = toolOutputDisplayLimit(req.name());
+                    appendBoundedExecutionLog(executionLog, String.format(
+                        "<process name=\"%s\"><tool_code>%s(%s)</tool_code><tool_output status=\"%s\">%s</tool_output></process>\n",
+                        displayName.replace("\"", "'"), req.name(),
+                        AgentTagProtocol.escape(truncate(req.arguments(), persistedToolLimit)), nativeToolStatus,
+                        AgentTagProtocol.escape(truncate(result, persistedToolLimit))));
 
                     // 载荷先截断再中和：截断口径按原文字数（与前端「...(截断)」提示一致），
                     // 中和只保证载荷不会顶掉外层标签（AgentTagProtocol，两侧契约）
@@ -1021,6 +1190,11 @@ public class AgentOrchestrator {
                             AgentTagProtocol.escape(truncate(result, toolOutputDisplayLimit(req.name())))));
 
                     messages.add(dev.langchain4j.data.message.ToolExecutionResultMessage.from(req, result));
+                    if (pauseForNoProgress) {
+                        cancelPendingNativeTools(nativeRequests, nativeIndex + 1, messages, executionLog, guard);
+                        pauseForNoProgress(guard, projectId, userId, executionLog);
+                        return;
+                    }
                 }
 
                 // 防走神注入（Claude Code system-reminder 模式）：每次工具执行后带上任务清单状态，
@@ -1045,6 +1219,13 @@ public class AgentOrchestrator {
                 saveAssistantMessage(guard, projectId, userId, intermediateContent);
                 log.info("Intermediate save after native tool execution for conversation: {}", conversationId);
 
+                // A steer that arrived during the last tool wins over the model's pre-steer question/final.
+                if (applyPendingSteering(guard, messages, projectId, userId, modelId, agentMode, executionLog)) {
+                    continueRunLoop(model, messages, conversationId, projectId, userId, modelId,
+                            depth + 1, executionLog, agentMode, guard);
+                    return;
+                }
+
                 // 反问优先于递归：模型在同一轮里既调了工具又问了问题时，继续递归会把问题埋在
                 // 后续输出里、模型自己接着猜下去（正是 <question> 要阻止的事）。工具已经跑完、
                 // 结果已落库，此处停机等回答即可。
@@ -1053,7 +1234,7 @@ public class AgentOrchestrator {
                     return;
                 }
 
-                runLoop(model, messages, conversationId, projectId, userId, modelId, depth + 1, executionLog, agentMode, guard);
+                continueRunLoop(model, messages, conversationId, projectId, userId, modelId, depth + 1, executionLog, agentMode, guard);
                 return;
             }
             
@@ -1063,7 +1244,7 @@ public class AgentOrchestrator {
             // 2. Check for XML Tool Requests (Fallback for Root Bubble Protocol)
             // Pattern: <tool_code>legal_tools.method(args)</tool_code> OR <code>...</code>
             // We need to parse this manually because we forced XML output in System Prompt.
-            if (agentMode != AgentMode.ASK && xmlToolCallParser.containsToolCall(content)) {
+            if (xmlToolCallParser.containsToolCall(content)) {
                 log.info("Detected XML Tool Code in content. Parsing...");
 
                 // 提取LLM选择的process name，用于历史记录保存时保持一致性
@@ -1073,7 +1254,17 @@ public class AgentOrchestrator {
                 // 打转首次干预的提示语（本轮末位追加一条），null 表示未检出
                 String stuckNudge = null;
 
-                for (XmlToolCallParser.ParsedCall call : xmlToolCallParser.parse(content)) {
+                java.util.List<XmlToolCallParser.ParsedCall> xmlCalls = xmlToolCallParser.parse(content);
+                for (int xmlIndex = 0; xmlIndex < xmlCalls.size(); xmlIndex++) {
+                    XmlToolCallParser.ParsedCall call = xmlCalls.get(xmlIndex);
+                    AgentInboxService inbox = this.inboxService;
+                    if (inbox != null && inbox.hasPendingSteering(conversationId)) {
+                        cancelPendingXmlTools(xmlCalls, xmlIndex, messages, executionLog, guard);
+                        applyPendingSteering(guard, messages, projectId, userId, modelId, agentMode, executionLog);
+                        continueRunLoop(model, messages, conversationId, projectId, userId, modelId,
+                                depth + 1, executionLog, agentMode, guard);
+                        return;
+                    }
                     // 同原生分支：慢工具中间也要能取消。XML 兜底是弱模型的主路径，
                     // 只修原生分支等于「换个模型停止键就又不灵了」
                     if (guard.isCancelled()) {
@@ -1088,17 +1279,10 @@ public class AgentOrchestrator {
                     String result;
                     boolean xmlToolSuccess;
                     ToolRegistry.ToolResult toolResult = null;
-                    StuckDetector.Verdict verdict = guard.stuck.record(call.toolName(), call.argsJson());
-                    if (verdict == StuckDetector.Verdict.CIRCUIT_BREAK) {
-                        // 二次检出熔断：不执行，直接把守卫反馈作为工具结果回给模型
-                        log.warn("Stuck detector circuit break for {}: {}", conversationId, guard.stuck.lastPattern());
-                        result = stuckCircuitBreakFeedback(guard.stuck.lastPattern());
+                    if (agentMode == AgentMode.ASK && !ASK_MEMORY_TOOLS.contains(call.toolName())) {
+                        result = "Error: ASK mode permits only memory_list, memory_read, and memory_search.";
                         xmlToolSuccess = false;
                     } else {
-                        if (verdict == StuckDetector.Verdict.INTERVENE) {
-                            log.warn("Stuck detector intervention for {}: {}", conversationId, guard.stuck.lastPattern());
-                            stuckNudge = guard.stuck.lastPattern();
-                        }
                         toolResult = dispatchTool(call.toolName(), call.argsJson(),
                                 Long.parseLong(projectId), conversationId, userId, modelId, guard);
                         result = toolResult.found()
@@ -1112,6 +1296,13 @@ public class AgentOrchestrator {
                     if (!org.springframework.util.StringUtils.hasText(result)) {
                         result = BLANK_TOOL_OUTPUT;
                         xmlToolSuccess = false;
+                    }
+                    StuckDetector.Verdict verdict = guard.stuck.record(
+                            call.toolName(), call.argsJson(), result, xmlToolSuccess);
+                    boolean pauseForNoProgress = verdict == StuckDetector.Verdict.CIRCUIT_BREAK;
+                    if (verdict == StuckDetector.Verdict.INTERVENE) {
+                        log.warn("Stuck detector intervention for {}: {}", conversationId, guard.stuck.lastPattern());
+                        stuckNudge = guard.stuck.lastPattern();
                     }
                     result = appendFailureNudge(guard, result, xmlToolSuccess);
 
@@ -1152,9 +1343,11 @@ public class AgentOrchestrator {
                         ? llmProcessName
                         : (toolResult != null && toolResult.tool() != null ? toolResult.tool().displayName()
                                 : LangText.of("工具执行", "Tool execution"));
-                    executionLog.append(String.format("<process name=\"%s\"><tool_code>%s</tool_code><tool_output status=\"%s\">%s</tool_output></process>\n",
-                        processNameForLog, AgentTagProtocol.escape(code), statusPrefix,
-                        AgentTagProtocol.escape(result)));
+                    int persistedToolLimit = toolOutputDisplayLimit(call.toolName());
+                    appendBoundedExecutionLog(executionLog, String.format(
+                        "<process name=\"%s\"><tool_code>%s</tool_code><tool_output status=\"%s\">%s</tool_output></process>\n",
+                        processNameForLog, AgentTagProtocol.escape(truncate(code, persistedToolLimit)), statusPrefix,
+                        AgentTagProtocol.escape(truncate(result, persistedToolLimit))));
 
                     // Emit explicit tool_output for frontend parser with status attribute
                     // NOTE: Do NOT wrap in <process> - the tool_output belongs to the existing process
@@ -1166,6 +1359,11 @@ public class AgentOrchestrator {
                     sendTextDelta(guard, toolOutputXml);
 
                     toolExecuted = true;
+                    if (pauseForNoProgress) {
+                        cancelPendingXmlTools(xmlCalls, xmlIndex + 1, messages, executionLog, guard);
+                        pauseForNoProgress(guard, projectId, userId, executionLog);
+                        return;
+                    }
                 }
 
                 if (toolExecuted) {
@@ -1178,6 +1376,12 @@ public class AgentOrchestrator {
                      saveAssistantMessage(guard, projectId, userId, intermediateXmlContent);
                      log.info("Intermediate save after XML tool execution for conversation: {}", conversationId);
 
+                     if (applyPendingSteering(guard, messages, projectId, userId, modelId, agentMode, executionLog)) {
+                         continueRunLoop(model, messages, conversationId, projectId, userId, modelId,
+                                 depth + 1, executionLog, agentMode, guard);
+                         return;
+                     }
+
                      // 反问优先于递归（同原生分支）
                      if (containsQuestion(content)) {
                          stopForUserQuestion(guard, projectId, userId, intermediateXmlContent);
@@ -1185,7 +1389,7 @@ public class AgentOrchestrator {
                      }
 
                      // Recurse with executionLog
-                     runLoop(model, messages, conversationId, projectId, userId, modelId, depth + 1, executionLog, agentMode, guard);
+                     continueRunLoop(model, messages, conversationId, projectId, userId, modelId, depth + 1, executionLog, agentMode, guard);
                      return;
                 }
             }
@@ -1204,7 +1408,7 @@ public class AgentOrchestrator {
                             "[系统提醒] 你上一条输出中的标签未闭合（<tool_code> / <todo_write> / <final> 之一，内容被截断），"
                             + "这次输出没有生效。请重新、完整地输出这一步；参数很长时先拆小，"
                             + "或改用能直接把内容写进文档的工具。若任务其实已完成，请直接输出最终总结。"));
-                    runLoop(model, messages, conversationId, projectId, userId, modelId,
+                    continueRunLoop(model, messages, conversationId, projectId, userId, modelId,
                             depth + 1, executionLog, agentMode, guard);
                     return;
                 }
@@ -1221,6 +1425,14 @@ public class AgentOrchestrator {
             // - Task List: Do NOT stop loop anymore (User Requirement). Backend maintains it or just logs it.
             // - Implementation Plan: STOP LOOP for approval.
             
+            // Steering received during a final/no-tool generation is applied before interpreting
+            // that pre-steer response as approval, a question or successful completion.
+            if (applyPendingSteering(guard, messages, projectId, userId, modelId, agentMode, executionLog)) {
+                continueRunLoop(model, messages, conversationId, projectId, userId, modelId,
+                        depth + 1, executionLog, agentMode, guard);
+                return;
+            }
+
             // FIRST: Strip any markdown code block wrappers that LLM may have added
             String cleanedContent = content;
             cleanedContent = cleanedContent.replaceAll("^```(?:xml|html|markdown)?\\s*\\n?", "");
@@ -1367,7 +1579,7 @@ public class AgentOrchestrator {
             sendRunEvent(guard, "bubble_end", "{\"status\":\"finished\"}");
             closeSse(guard);
             // 清理本轮登记
-            endRun(guard);
+            endRunAndDrain(guard);
           } catch (Exception e) {
             // 确保异常时也能正确结束 bubble，避免前端一直显示加载状态。
             //
@@ -1479,17 +1691,61 @@ public class AgentOrchestrator {
         // 原地替换（而不是换个列表实例）——递归各层与两处回调共享同一个 messages 引用
         compactIfNeeded(messages, conversationId, modelId);
 
-        // Execute Generation with Tools
-        // Ask 模式：不传递工具，禁止工具调用
+        // Execute Generation with Tools. ASK receives only the three read-only memory tools.
         if (agentMode == AgentMode.ASK) {
-            log.info("Ask mode: generating without tools");
-            model.generate(messages, handler);
+            List<ToolSpecification> readOnlyMemory = toolRegistry.getAllSpecifications(conversationId).stream()
+                    .filter(s -> ASK_MEMORY_TOOLS.contains(s.name())).toList();
+            log.info("Ask mode: generating with {} read-only memory tools", readOnlyMemory.size());
+            model.generate(messages, readOnlyMemory, handler);
         } else {
             // Agent 和 Plan 模式：传递工具规格（内置 + 插件，统一来自注册表）
             // 会话客户端能力过滤（Phase C：office/lowa/none）在注册表内完成；
             // Skill 命中时由 SkillRouter 做可见性白名单裁剪（Phase 3B，未命中原样返回）
-            List<ToolSpecification> allTools = skillRouter.visibleTools(guard.runId, toolRegistry.getAllSpecifications(conversationId));
-            model.generate(messages, allTools, handler);
+            List<ToolSpecification> registered = toolRegistry.getAllSpecifications(conversationId);
+            List<ToolSpecification> visible = new java.util.ArrayList<>(skillRouter.visibleTools(guard.runId, registered));
+            // Memory is an invariant capability: skill action whitelists must not prevent an
+            // ordinary Agent/Plan request from recalling or persisting the user's context.
+            for (ToolSpecification spec : registered) {
+                if (MEMORY_TOOLS.contains(spec.name())
+                        && visible.stream().noneMatch(v -> v.name().equals(spec.name()))) {
+                    visible.add(spec);
+                }
+            }
+            model.generate(messages, visible, handler);
+        }
+    }
+
+    /**
+     * Synchronous scripted models call the next completion callback on the same Java stack. Break
+     * that stack every 64 productive rounds; real asynchronous providers also use this harmless
+     * boundary, so fixed turn caps are not replaced by StackOverflowError.
+     */
+    private void continueRunLoop(StreamingChatLanguageModel model,
+                                 java.util.List<dev.langchain4j.data.message.ChatMessage> messages,
+                                 String conversationId, String projectId, Long userId, String modelId,
+                                 int depth, StringBuilder executionLog, AgentMode agentMode, RunGuard guard) {
+        if (depth % 64 != 0) {
+            runLoop(model, messages, conversationId, projectId, userId, modelId,
+                    depth, executionLog, agentMode, guard);
+            return;
+        }
+        java.util.concurrent.Executor executor = turnExecutor != null
+                ? turnExecutor : java.util.concurrent.ForkJoinPool.commonPool();
+        try {
+            executor.execute(PlatformAiUserScope.wrap(() -> {
+                try {
+                    runLoop(model, messages, conversationId, projectId, userId, modelId,
+                            depth, executionLog, agentMode, guard);
+                } catch (Exception e) {
+                    finishWithError(guard, projectId, userId,
+                            LlmErrorClassifier.INTERNAL_ERROR_MARKER + ": Continuation Error: " + e.getMessage(),
+                            executionLog);
+                }
+            }));
+        } catch (RuntimeException e) {
+            finishWithError(guard, projectId, userId,
+                    LlmErrorClassifier.INTERNAL_ERROR_MARKER + ": Continuation rejected: " + e.getMessage(),
+                    executionLog);
         }
     }
 
@@ -1740,6 +1996,27 @@ public class AgentOrchestrator {
                 : s.substring(0, tagSafeCut(s, max)) + LangText.of("...(截断)", "...(truncated)");
     }
 
+    static void appendBoundedExecutionLog(StringBuilder executionLog, String entry) {
+        appendBoundedTail(executionLog, entry, EXECUTION_LOG_LIMIT,
+                EXECUTION_LOG_TRUNCATED_MARKER, true);
+    }
+
+    private static void appendBoundedTail(StringBuilder buffer, String text, int limit,
+                                          String marker, boolean alignProcess) {
+        buffer.append(text);
+        if (buffer.length() <= limit) return;
+        int tailBudget = Math.max(0, limit - marker.length());
+        int keepFrom = Math.max(0, buffer.length() - tailBudget);
+        if (alignProcess) {
+            int boundary = buffer.indexOf("<process", keepFrom);
+            if (boundary >= 0) keepFrom = boundary;
+        }
+        String tail = buffer.substring(keepFrom);
+        if (tail.length() > tailBudget) tail = tail.substring(tail.length() - tailBudget);
+        buffer.setLength(0);
+        buffer.append(marker).append(tail);
+    }
+
     /**
      * 截断点回退：不许把切口留在一个还没闭合的协议标签形状中间。
      *
@@ -1769,7 +2046,7 @@ public class AgentOrchestrator {
         return max;
     }
 
-    /** 工具输出在面板上的默认展示上限（历史落库存的是全文，这里只是 SSE 载荷） */
+    /** 工具输出在面板和可追溯历史里的默认展示上限；模型上下文仍保留完整结果。 */
     private static final int TOOL_OUTPUT_DISPLAY_LIMIT = 4000;
     /** 结果型工具的展示上限：它们的输出本身就是要给用户核验的成果 */
     private static final int RESULT_TOOL_OUTPUT_DISPLAY_LIMIT = 16000;

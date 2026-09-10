@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { ref, reactive, nextTick, onUnmounted, getCurrentInstance } from 'vue'
-import { getApiBaseUrl, getConversationMetadata } from '@/services/api.js'
+import { deleteAgentInboxItem, getAgentInbox, getApiBaseUrl, getConversationMetadata, updateAgentInboxItem } from '@/services/api.js'
 import { getSessionId } from '@/utils/auth.js'
 import { createProtocolTagRegex, decodeProtocolTags } from '@/composables/agentTagProtocol.mjs'
 import { t } from '@/i18n'
 import { nextBubbleId } from './bubbleId.js'
+import { applyInboxReceipt, applyInboxSnapshot, applyInputApplied, createInboxState, markInboxEvent, removeInboxItem, replaceInboxItem } from './agentInboxState.mjs'
 
 // 网络恢复/页面回前台时触发重连的激活实例指针（模块级单例）。
 // 页面栈会多次实例化本 composable（PR#148 重复订阅地雷），window 监听只挂一次，
@@ -37,6 +38,9 @@ export function useAgentStream() {
     const linkStatus = ref({ state: 'live', attempt: 0 })
     const error = ref(null)
     const currentConversationId = ref(null)
+    const inboxState = reactive(createInboxState())
+    let inboxConversationGeneration = 0
+    const appliedAssistantSegments = new Set()
     // STATE: Token Usage Tracking (Session Cumulative)
     // STATE: Token Usage Tracking (Session Cumulative)
     const tokenUsage = ref({ promptTokens: 0, completionTokens: 0, totalTokens: 0 })
@@ -186,6 +190,17 @@ export function useAgentStream() {
         contextFiles: contextFiles
     })
 
+    const resetInboxState = () => {
+        inboxConversationGeneration += 1
+        inboxState.items.splice(0, inboxState.items.length)
+        inboxState.runId = null
+        inboxState.status = null
+        inboxState.eventEpoch = 0
+        inboxState.lastSequences = {}
+        inboxState.appliedMessageIds = {}
+        appliedAssistantSegments.clear()
+    }
+
     // --- RESET PARSER STATE ---
     const resetParser = () => {
         parserBuffer = ''
@@ -198,6 +213,8 @@ export function useAgentStream() {
     // Call this when switching conversations to ensure clean state
     const resetSSE = () => {
         console.log('[AgentStream] Resetting SSE state')
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+        stopHeartbeatMonitor()
         // Abort any existing connections
         if (sseAbortController) {
             try { sseAbortController.abort() } catch (e) { }
@@ -239,6 +256,7 @@ export function useAgentStream() {
         currentAssistantBubble.value = null
         // 切会话即丢弃断线截断指针：旧连接的终态 run_state 迟到时不许写到新会话的气泡上
         disconnectedBubble = null
+        resetInboxState()
     }
 
     // --- CLEAR BUBBLES ---
@@ -306,6 +324,27 @@ export function useAgentStream() {
             if (tasks.length > 0) console.log('[AgentStream] Restored active background tasks:', tasks.length)
         } catch (e) {
             console.warn('[AgentStream] Failed to restore active background tasks:', e)
+        }
+    }
+
+    const captureInboxRequest = (conversationId) => ({
+        conversationId,
+        generation: inboxConversationGeneration,
+        eventEpoch: inboxState.eventEpoch,
+    })
+    const isCurrentInboxRequest = (request) => currentConversationId.value === request.conversationId
+        && inboxConversationGeneration === request.generation
+    const canApplyInboxResponse = (request) => isCurrentInboxRequest(request)
+        && inboxState.eventEpoch === request.eventEpoch
+
+    const restoreInbox = async (conversationId) => {
+        if (!conversationId || currentConversationId.value !== conversationId) return
+        const request = captureInboxRequest(conversationId)
+        try {
+            const snapshot = await getAgentInbox(conversationId)
+            if (canApplyInboxResponse(request)) applyInboxSnapshot(inboxState, snapshot || {})
+        } catch (e) {
+            console.warn('[AgentStream] Failed to restore inbox:', e)
         }
     }
 
@@ -383,6 +422,7 @@ export function useAgentStream() {
                 // 断线重连或切回会话的用户此前完全看不到「PPT 还在生成」，进度条要等下一个
                 // task_progress 才可能出现（而 task_progress 只更新已存在的条目，永远等不到）。
                 restoreActiveTasks(conversationId)
+                restoreInbox(conversationId)
 
                 const reader = response.body.getReader()
                 const decoder = new TextDecoder('utf-8')
@@ -455,47 +495,121 @@ export function useAgentStream() {
     // 缺省 null 时行为与此前完全一致。
     // skillIds（可选）：用户在面板里主动选择的 Skill，本轮强制生效（与触发词自动命中取并集）。
     // 无状态——每次请求都要带，后端不持久化。
-    const sendMessage = async ({ prompt, displayText = '', contentHtml = '', fileList = [], projectId, modelId = 'default', mode = 'AGENT', activeContext = null, skillIds = [], _userImages = [], _userContextFiles = [] }) => {
-        // 防重入：流式进行中再触发发送（回车/连点）会产生重复气泡和并发请求。
-        // 必须给用户可见反馈——静默吞掉就是"点了发送什么都没发生"（F-07）
-        if (isStreaming.value) {
-            console.warn('[AgentStream] sendMessage ignored: already streaming')
-            try {
-                if (typeof uni !== 'undefined' && uni.showToast) {
-                    uni.showToast({ title: t('agentStream.alreadyStreamingToast'), icon: 'none' })
-                }
-            } catch (e) { /* ignore */ }
-            return
+    const createClientRequestId = () => {
+        try {
+            if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
+        } catch (e) { /* fallback below */ }
+        return `chat-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    }
+
+    const ensureInboxUserBubble = (entry, draft = {}) => {
+        let bubble = bubbles.value.find((candidate) =>
+            candidate.inboxMessageId === entry.id
+            || (entry.clientRequestId && candidate.clientRequestId === entry.clientRequestId))
+        if (!bubble) {
+            bubble = createUserBubble(
+                entry.message,
+                draft.images || [],
+                draft.contextFiles || [],
+                draft.contentHtml || '',
+                entry.displayText)
+            bubbles.value.push(bubble)
         }
-        // Clear file changes for new turn
-        fileChanges.value = []
-        // 新一轮开始即清除暂停态（无论是点「继续」还是发新消息）
-        agentPaused.value = null
-        agentRunStatus.value = 'RUNNING'
-        agentAwaitingInput.value = false
-        // 上一轮的断线截断指针到此作废：新一轮的终态不该往旧气泡上补提示
-        disconnectedBubble = null
-        // 这一轮就是上一问的答案（点选项或自己打字都算）：封掉历史上所有未作答的问题卡，
-        // 只有最新一条助手消息上的反问可操作——与审批卡「仅最新一条可操作」同口径。
-        bubbles.value.forEach(b => {
-            if (b.role === 'ASSISTANT' && b.question && !b.question.answered) b.question.answered = true
-        })
+        bubble.inboxMessageId = entry.id
+        bubble.clientRequestId = entry.clientRequestId || bubble.clientRequestId || null
+        bubble.receiptState = entry.state
+        bubble.submissionMode = entry.submissionMode
+        bubble.content = entry.message
+        bubble.displayContent = entry.displayText || ''
+        return bubble
+    }
 
-        // 1. Add User Message with images and context files for display
-        bubbles.value.push(createUserBubble(prompt, _userImages, _userContextFiles, contentHtml, displayText))
+    const assistantHasOutput = (bubble) => Boolean(
+        bubble && (
+            bubble.content
+            || bubble.walkthrough
+            || bubble.title
+            || bubble.rawLog
+            || bubble.stopNotice
+            || bubble.question
+            || (bubble.thinking && bubble.thinking.content)
+            || (Array.isArray(bubble.processes) && bubble.processes.length)
+            || (Array.isArray(bubble.artifacts) && bubble.artifacts.length)
+            || (Array.isArray(bubble.planTodos) && bubble.planTodos.length)
+        )
+    )
 
-        // 2. Prepare Assistant Bubble
-        const newBubble = createAssistantBubble()
-        newBubble.isStreaming = true
-        // 思考计时从「发送」那一刻起算（用户感知的等待包含网络/排队），而不是
-        // 等 <thinking> 标签到达才起算——否则经常显示 0 秒且卡顿期间不读秒。
-        newBubble.thinking.status = 'thinking'
-        newBubble.thinking.startTime = Date.now()
-        bubbles.value.push(newBubble)
-        currentAssistantBubble.value = newBubble
-
-        isStreaming.value = true
+    const beginAssistantSegmentAfterAppliedInput = (entry) => {
+        if (!entry || !entry.id || appliedAssistantSegments.has(entry.id)) return
+        appliedAssistantSegments.add(entry.id)
+        const previous = currentAssistantBubble.value
+        if (previous) {
+            if (!assistantHasOutput(previous)) {
+                const previousIndex = bubbles.value.indexOf(previous)
+                if (previousIndex >= 0) bubbles.value.splice(previousIndex, 1)
+            } else {
+                previous.isStreaming = false
+                if (previous.thinking && previous.thinking.status === 'thinking') {
+                    previous.thinking.status = 'done'
+                    previous.thinking.duration = previous.thinking.duration
+                        || (Date.now() - previous.thinking.startTime) / 1000
+                }
+                finalizeProcesses('success', previous)
+            }
+        }
         resetParser()
+        const next = createAssistantBubble()
+        next.isStreaming = true
+        next.thinking.status = 'thinking'
+        next.thinking.startTime = Date.now()
+        bubbles.value.push(next)
+        currentAssistantBubble.value = next
+        isStreaming.value = true
+    }
+
+    const acceptAppliedInput = (event, draft = {}) => {
+        const result = applyInputApplied(inboxState, event)
+        if (!result.accepted) return false
+        ensureInboxUserBubble(result.item, draft)
+        beginAssistantSegmentAfterAppliedInput(result.item)
+        return true
+    }
+
+    const sendMessage = async ({
+        prompt, displayText = '', contentHtml = '', fileList = [], projectId,
+        modelId = 'default', mode = 'AGENT', activeContext = null, skillIds = [],
+        submissionMode = 'steer', clientRequestId = '',
+        _userImages = [], _userContextFiles = []
+    }) => {
+        const continuingRun = isStreaming.value || agentRunStatus.value === 'RUNNING'
+        const requestId = clientRequestId || createClientRequestId()
+
+        if (!continuingRun) {
+            fileChanges.value = []
+            agentPaused.value = null
+            agentRunStatus.value = 'RUNNING'
+            agentAwaitingInput.value = false
+            disconnectedBubble = null
+            bubbles.value.forEach(b => {
+                if (b.role === 'ASSISTANT' && b.question && !b.question.answered) b.question.answered = true
+            })
+
+            let userBubble = bubbles.value.find((candidate) => candidate.clientRequestId === requestId)
+            if (!userBubble) {
+                userBubble = createUserBubble(prompt, _userImages, _userContextFiles, contentHtml, displayText)
+                userBubble.clientRequestId = requestId
+                bubbles.value.push(userBubble)
+            }
+
+            const newBubble = createAssistantBubble()
+            newBubble.isStreaming = true
+            newBubble.thinking.status = 'thinking'
+            newBubble.thinking.startTime = Date.now()
+            bubbles.value.push(newBubble)
+            currentAssistantBubble.value = newBubble
+            isStreaming.value = true
+            resetParser()
+        }
 
         // 3. Ensure Conversation
         if (!currentConversationId.value) {
@@ -516,6 +630,8 @@ export function useAgentStream() {
                 displayText: displayText || null,
                 model: modelId,
                 mode: mode, // Agent 模式: ASK, PLAN, AGENT
+                submissionMode: continuingRun && submissionMode === 'queue' ? 'queue' : 'steer',
+                clientRequestId: requestId,
                 // Send full context metadata for folder support
                 contextItems: fileList.map(f => ({
                     id: String(f.id),
@@ -545,16 +661,61 @@ export function useAgentStream() {
             if (!chatResp.ok) {
                 throw new Error(t('agentStream.chatRequestFailed', { status: chatResp.status }))
             }
+            const responseBody = await chatResp.json()
+            const receipt = responseBody && responseBody.data ? responseBody.data : responseBody
+            if (!receipt || receipt.status !== 'accepted' || !receipt.messageId) {
+                throw new Error(t('agentStream.chatRequestFailed', { status: chatResp.status }))
+            }
+
+            // The request still belongs to the captured conversation even if the user opened
+            // another chat while HTTP was in flight. Return its receipt to the sender, but do
+            // not let that late completion repopulate the newly selected conversation.
+            if (currentConversationId.value !== conversationId) return receipt
+
+            const entry = applyInboxReceipt(inboxState, receipt, {
+                message: prompt,
+                displayText,
+                clientRequestId: requestId,
+            })
+            if (continuingRun) {
+                if (entry && entry.submissionMode === 'steer') {
+                    ensureInboxUserBubble(entry, {
+                        images: _userImages,
+                        contextFiles: _userContextFiles,
+                        contentHtml,
+                    })
+                }
+                if (entry && entry.state === 'applied') {
+                    acceptAppliedInput({
+                        messageId: entry.id,
+                        runId: entry.runId,
+                        sequence: entry.sequence,
+                        message: entry.message,
+                        displayText: entry.displayText,
+                    }, { images: _userImages, contextFiles: _userContextFiles, contentHtml })
+                }
+            } else {
+                const optimistic = bubbles.value.find((candidate) => candidate.clientRequestId === requestId)
+                if (optimistic) {
+                    optimistic.inboxMessageId = receipt.messageId
+                    optimistic.receiptState = receipt.state
+                    optimistic.submissionMode = receipt.submissionMode
+                }
+            }
+            return receipt
 
         } catch (err) {
             if (err.name !== 'AbortError') {
-                error.value = err.message
-                if (currentAssistantBubble.value) {
+                const stillCurrent = currentConversationId.value === conversationId
+                if (stillCurrent) error.value = err.message
+                if (stillCurrent && !continuingRun && currentAssistantBubble.value) {
                     currentAssistantBubble.value.content += '\n' + t('agentStream.errorWithMessage', { message: err.message })
                     currentAssistantBubble.value.isStreaming = false
+                    isStreaming.value = false
+                    agentRunStatus.value = 'ERROR'
                 }
-                isStreaming.value = false
             }
+            return null
         }
     }
 
@@ -673,6 +834,28 @@ export function useAgentStream() {
                 }
             } catch (e) {
                 console.error('Failed to parse skill_update', e)
+            }
+            return
+        }
+
+        if (evt === 'inbox_updated') {
+            try {
+                const snapshot = JSON.parse(dataStr)
+                markInboxEvent(inboxState)
+                applyInboxSnapshot(inboxState, snapshot || {})
+            } catch (e) {
+                console.error('Failed to parse inbox_updated', e)
+            }
+            return
+        }
+
+        if (evt === 'input_applied') {
+            try {
+                const applied = JSON.parse(dataStr)
+                markInboxEvent(inboxState)
+                acceptAppliedInput(applied)
+            } catch (e) {
+                console.error('Failed to parse input_applied', e)
             }
             return
         }
@@ -1721,6 +1904,35 @@ export function useAgentStream() {
         })
     }
 
+    const updateInbox = async (messageId, patch) => {
+        const conversationId = currentConversationId.value
+        if (!conversationId || !messageId) return null
+        const request = captureInboxRequest(conversationId)
+        try {
+            const updated = await updateAgentInboxItem(conversationId, messageId, patch)
+            if (!canApplyInboxResponse(request)) return null
+            return replaceInboxItem(inboxState, updated)
+        } catch (e) {
+            if (e && e.status === 409 && isCurrentInboxRequest(request)) await restoreInbox(conversationId)
+            throw e
+        }
+    }
+
+    const deleteInbox = async (messageId, expectedRevision) => {
+        const conversationId = currentConversationId.value
+        if (!conversationId || !messageId) return
+        const request = captureInboxRequest(conversationId)
+        try {
+            const snapshot = await deleteAgentInboxItem(conversationId, messageId, expectedRevision)
+            if (!canApplyInboxResponse(request)) return
+            if (snapshot && Array.isArray(snapshot.items)) applyInboxSnapshot(inboxState, snapshot)
+            else removeInboxItem(inboxState, messageId)
+        } catch (e) {
+            if (e && e.status === 409 && isCurrentInboxRequest(request)) await restoreInbox(conversationId)
+            throw e
+        }
+    }
+
     return {
         bubbles,
         isStreaming,
@@ -1730,6 +1942,10 @@ export function useAgentStream() {
         resetSSE,
         clearBubbles,
         currentConversationId,
+        inboxState,
+        updateInbox,
+        deleteInbox,
+        restoreInbox: () => restoreInbox(currentConversationId.value),
         // Rollback support
         rollbackToMessage,
         // Background task tracking

@@ -1124,6 +1124,7 @@
                       v-else-if="activeFileLeft.tabType === 'admin-settings'"
                       :key="activeFileLeft.id"
                       embedded
+                      :project-id="projectId"
                       :initial-nav="activeFileLeft.adminNav || ''"
                       :initial-service="activeFileLeft.adminService || ''"
                       @ai-prompt="onPluginQuickAction"
@@ -1282,6 +1283,7 @@
                       v-else-if="activeFileRight.tabType === 'admin-settings'"
                       :key="activeFileRight.id"
                       embedded
+                      :project-id="projectId"
                       :initial-nav="activeFileRight.adminNav || ''"
                       :initial-service="activeFileRight.adminService || ''"
                       @ai-prompt="onPluginQuickAction"

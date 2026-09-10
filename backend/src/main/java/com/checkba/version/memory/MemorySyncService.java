@@ -81,6 +81,9 @@ public class MemorySyncService {
     private final UserRepository userRepository;
     private final TaskScheduler taskScheduler;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.ai.memory.document.MemoryDocumentService memoryDocumentService;
+
     /** 防抖静默期（写侧：记忆管线一轮可能落多条，攒一波再导出）。测试里调短取得确定性。 */
     private long debounceMillis = 30_000L;
 
@@ -105,6 +108,11 @@ public class MemorySyncService {
 
     void setDebounceMillis(long millis) {
         this.debounceMillis = millis;
+    }
+
+    void setMemoryDocumentServiceForTest(
+            com.checkba.service.ai.memory.document.MemoryDocumentService service) {
+        this.memoryDocumentService = service;
     }
 
     ReentrantLock repoLock(String repoKey) {
@@ -400,10 +408,12 @@ public class MemorySyncService {
                                      Map<String, MemoryEntry> byUid, ImportContext ctx) {
         MemoryEntry row = byUid.get(data.uid());
         if (data.tombstone()) {
-            if (row != null) {
+            if (memoryDocumentService != null) {
+                memoryDocumentService.tombstoneSourceAndDeleteLegacy(data.uid());
+            } else if (row != null) {
                 entryRepository.delete(row);
-                byUid.remove(data.uid());
             }
+            byUid.remove(data.uid());
             return;
         }
         if (row != null) {
@@ -487,7 +497,11 @@ public class MemorySyncService {
                     MemoryFileData existing = MemoryFileCodec.decode(row.getUid(), Files.readAllBytes(target));
                     if (existing != null && existing.tombstone()) {
                         // 墓碑胜：文件已墓碑而 DB 仍有行（陈旧行）→ 删行、文件不动
-                        entryRepository.delete(row);
+                        if (memoryDocumentService != null) {
+                            memoryDocumentService.tombstoneSourceAndDeleteLegacy(row.getUid());
+                        } else {
+                            entryRepository.delete(row);
+                        }
                         byUid.remove(row.getUid());
                         continue;
                     }

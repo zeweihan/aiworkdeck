@@ -53,6 +53,13 @@ if (!(await fetch(DEVURL).then(() => true).catch(() => false))) {
 // ---- 起隔离后端（配方源自 app-e2e spawnBackend：隔离 user.home 与 H2） ----
 const home = path.join(os.tmpdir(), 'meeting-e2e-' + ts)
 fs.mkdirSync(path.join(home, 'cwd'), { recursive: true })
+// This suite creates its own backend, so seed the documented legacy trial fixture before
+// startup. Keep the production trial-code switch disabled, as in app/desktop E2E.
+fs.mkdirSync(path.join(home, '.aiworkdeck'), { recursive: true })
+fs.writeFileSync(path.join(home, '.aiworkdeck', 'license.json'), JSON.stringify({
+  mode: 'trial', code: 'AWD-T-SEEDED-FOR-E2E',
+  activatedAt: new Date().toISOString(), lastVerifiedAt: new Date().toISOString(),
+}), { mode: 0o600 })
 console.log('启动隔离后端 :' + BACKEND_PORT + '（日志 ' + home + '/stdout.log）...')
 const backendChild = spawn(process.env.JAVA_HOME + '/bin/java',
   ['-Duser.home=' + home, '-jar', jar], {
@@ -187,7 +194,7 @@ try {
   page.on('pageerror', (e) => console.log('    [pageerror] ' + String(e).slice(0, 200)))
   page.on('console', (m) => { if (m.type() === 'error') console.log('    [console.error] ' + m.text().slice(0, 200)) })
 
-  await step('进入工作台，左栏 rail 出现「会议录音」（skill 启用 → requiresSkill 放行）', async () => {
+  await step('进入工作台，左栏出现「语音」入口', async () => {
     // 2026-08 起**启动一律落项目列表页**：launch.vue 不再读 checkba_last_project_id
     // 直达上次项目，所以老的"写最近项目 → reload 直达工作台"配方已经失效（本套件
     // 因此在 master 上整轮红，10 步全挂，第一条就是这里）。改成 desktop-e2e 同款：
@@ -231,13 +238,13 @@ try {
     // 等不到就把左栏 rail 现在到底有哪些入口、以及后端认不认这个 skill 一并报出来，
     // 别只丢一句选择器超时（这一步就是靠 requiresSkill 放行的，缺什么要一眼看见）。
     try {
-      await page.waitForSelector('.rail-btn[title="会议录音"]', { timeout: 30000 })
+      await page.waitForSelector('.rail-btn[title="语音"]', { timeout: 30000 })
     } catch (e) {
       const rail = await page.evaluate(() => [...document.querySelectorAll('.rail-btn')]
         .map((b) => b.getAttribute('title') || b.innerText.trim().slice(0, 8))).catch(() => null)
       const skills = await api('/api/skills/list').catch(() => null)
       const mine = Array.isArray(skills) ? skills.filter((k) => /meeting/i.test(JSON.stringify(k))) : skills
-      throw new Error('左栏没出现「会议录音」入口。当前 rail=' + JSON.stringify(rail)
+      throw new Error('左栏没出现「语音」入口。当前 rail=' + JSON.stringify(rail)
         + ' 后端 skill=' + JSON.stringify(mine).slice(0, 300))
     }
   })
@@ -246,7 +253,17 @@ try {
     // rail 按钮是**开关**，而左栏面板是记住上次的：上一轮跑完把「会议录音」留在打开
     // 状态，这一轮再点一下正好把它关上，于是 .mr-record-zone 永远等不到（本套件因此
     // 一轮好一轮坏地交替）。改成"确保打开"而不是"点一下"。
-    if (!(await page.$('.mr-record-zone'))) await clickSel('.rail-btn[title="会议录音"]')
+    if (!(await page.$('.voice-pane'))) await clickSel('.rail-btn[title="语音"]')
+    await page.waitForFunction(() => [...document.querySelectorAll('.voice-tab')]
+      .some(tab => tab.textContent.includes('会议录音')), POLL(15000))
+    if (!(await page.$('.mr-record-zone'))) {
+      const box = await page.evaluate(() => {
+        const tab = [...document.querySelectorAll('.voice-tab')].find(el => el.textContent.includes('会议录音'))
+        const r = tab.getBoundingClientRect()
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+      })
+      await page.mouse.click(box.x, box.y)
+    }
     await page.waitForSelector('.mr-record-zone', { timeout: 15000 })
     await page.waitForSelector('.mr-config-hint', { timeout: 10000 })
   })
@@ -256,6 +273,16 @@ try {
   // 「放弃这份录音」或「照传不误」两条路，后者正好绕过了告知存在的理由。
   // 自备 Key / 本地档没有这块（音频不经我们的手），所以这一步是条件式的。
   await step('平台档：告知摆在录音之前，且绝不预勾选', async () => {
+    // Tier/notice load independently of the recording list. Wait for the expected
+    // notice before treating its initially absent DOM as a non-platform account.
+    const tierResponse = await api('/api/platform-services')
+    const tier = tierResponse.data || tierResponse
+    const noticeResponse = await api('/api/platform-services/asr-notice')
+    const notice = noticeResponse.data || noticeResponse
+    if (tier.services?.some(service => service.service === 'asr' && service.provider === 'platform')
+      && !notice.acknowledged) {
+      await page.waitForSelector('.mr-notice', { timeout: 15000 })
+    }
     const present = await page.$('.mr-notice')
     if (!present) {
       console.log('    （当前不是平台档，无需告知）')
@@ -270,7 +297,19 @@ try {
 
   await step('一键开录：假麦克风出真音轨，面板进入录音态', async () => {
     await clickSel('.mr-record-btn')
-    await page.waitForSelector('.mr-recording-live', { timeout: 20000 })
+    // The connecting placeholder also uses mr-recording-live. Wait for actual recording,
+    // after getUserMedia and createMeetingRecording have both completed.
+    try {
+      await page.waitForSelector('.mr-recording-live .mr-live-time', { timeout: 30000 })
+    } catch (error) {
+      const state = await page.evaluate(() => ({
+        panel: document.querySelector('.meeting-recording-panel')?.innerText
+          || document.querySelector('.voice-pane')?.innerText,
+        devices: document.querySelector('.mr-device-select')?.innerText,
+        toast: document.querySelector('uni-toast')?.innerText,
+      }))
+      throw new Error(`${error.message}; recording state=${JSON.stringify(state)}`)
+    }
   })
 
   await step('顶部浮动「录音中」指示器在场（body 级挂载）', async () => {

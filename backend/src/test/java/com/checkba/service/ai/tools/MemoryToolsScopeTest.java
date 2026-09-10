@@ -22,6 +22,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -73,13 +74,14 @@ class MemoryToolsScopeTest {
     @DisplayName("修复：query_memory 传 scope=file 时，即便关键词检索为空也要能找到绑定该文件的记忆")
     void queryMemoryFindsFileScopedEntryEvenWhenKeywordSearchIsEmpty() {
         when(memoryManager.retrieveMemories(eq(1L), any(), any(), anyInt())).thenReturn(List.of());
-        when(memoryManager.retrieveFileMemories(42L)).thenReturn(List.of(fileScopedEntry()));
+        when(memoryManager.retrieveFileMemories(1L, 42L)).thenReturn(List.of(fileScopedEntry()));
         when(memoryManager.formatAsEvidenceLedger(any())).thenReturn("[EVIDENCE:99]");
 
         String result = tools.query_memory("随便什么不相关的词", null, "file", 42L);
 
         assertFalse(result.contains("未找到相关记忆"), "明确按文件 scope 查找时不该说没找到: " + result);
         assertTrue(result.contains("[EVIDENCE:99]"));
+        verify(memoryManager).retrieveFileMemories(1L, 42L);
     }
 
     @Test
@@ -100,18 +102,19 @@ class MemoryToolsScopeTest {
                 .memoryValue("本次对话讨论的要点").scope(MemoryEntry.MemoryScope.CONVERSATION)
                 .conversationId("conv-1").importanceScore(0.7).build();
         when(memoryManager.hybridSearch(eq(1L), any(), anyInt())).thenReturn(List.of());
-        when(memoryManager.retrieveConversationMemories("conv-1")).thenReturn(List.of(convEntry));
+        when(memoryManager.retrieveConversationMemories(1L, "conv-1")).thenReturn(List.of(convEntry));
 
         String result = tools.search_knowledge_base("不相关的词", 5, "conversation", null);
 
         assertFalse(result.contains("未在知识库中找到相关信息"), "明确按对话 scope 查找时不该说没找到: " + result);
         assertTrue(result.contains("本次对话讨论的要点"));
+        verify(memoryManager).retrieveConversationMemories(1L, "conv-1");
     }
 
     @Test
     @DisplayName("修复：deep_search 传 scope=file 时要能找到绑定该文件的记忆")
     void deepSearchFindsFileScopedEntry() {
-        when(memoryManager.retrieveFileMemories(42L)).thenReturn(List.of(fileScopedEntry()));
+        when(memoryManager.retrieveFileMemories(1L, 42L)).thenReturn(List.of(fileScopedEntry()));
 
         String result = tools.deep_search("不相关的词", 10, "file", 42L);
 

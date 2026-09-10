@@ -1050,6 +1050,17 @@
 
         <!-- 团队（dev-board#496）。接在链尾：这条 v-if/v-else-if 长链的链头是
              activeNav === 'ai'，动链头会拿到「v-else 没有相邻 v-if」的编译错。 -->
+        <scroll-view v-else-if="activeNav === 'memory'" scroll-y class="config-scroll">
+          <view class="section-card">
+            <view class="section-header">
+              <text class="section-title">{{ $t('chat.memoryTitle') }}</text>
+              <text class="section-subtitle">{{ $t('chat.memorySubtitle') }}</text>
+            </view>
+            <view class="section-body">
+              <button class="comp-btn primary" @tap="showMemoryBrowser = true">{{ $t('chat.memoryButton') }}</button>
+            </view>
+          </view>
+        </scroll-view>
         <scroll-view v-else-if="activeNav === 'team'" scroll-y class="config-scroll">
           <TeamPanel @go-account="onNavTap({ key: 'account' })" />
         </scroll-view>
@@ -1058,6 +1069,7 @@
 
     <!-- 充值弹窗（dev-board#184）：会员钱包卡的「充值」按钮打开 -->
     <RechargeDialog v-model:visible="showRecharge" />
+    <MemoryBrowser :open="showMemoryBrowser" :project-id="projectId" @close="showMemoryBrowser = false" />
 
   </view>
 </template>
@@ -1101,6 +1113,7 @@ import PersonalTodosPanel from '@/components/userprofile/PersonalTodosPanel.vue'
 import PersonalSettingsPanel from '@/components/userprofile/PersonalSettingsPanel.vue'
 import TeamPanel from '@/components/admin/TeamPanel.vue'
 import OptionalComponentCard from '@/components/OptionalComponentCard.vue'
+import MemoryBrowser from '@/components/MemoryBrowser.vue'
 import { createOptionalComponentsController } from '@/composables/useOptionalComponents.js'
 
 /**
@@ -1120,7 +1133,7 @@ export default {
   components: {
     UnlockHint, RechargeDialog, AwdSelect, AwdSwitch,
     PersonalWorkLogPanel, PersonalFavoritesPanel, PersonalTodosPanel, PersonalSettingsPanel,
-    TeamPanel, OptionalComponentCard,
+    TeamPanel, OptionalComponentCard, MemoryBrowser,
   },
   /**
    * ai-prompt：把一句话交给工作台的 AI 对话（「能力升级」的「让 AI 升级」按钮）。
@@ -1134,6 +1147,8 @@ export default {
     initialNav: { type: String, default: '' },
     /** ?nav=platform&service=ocr。宿主仍会传它；BYOK 折叠区撤掉后深链只落到面板本身 */
     initialService: { type: String, default: '' },
+    /** 工作台内打开时带当前项目，以显示项目记忆；独立设置页省略即可。 */
+    projectId: { type: [String, Number], default: null },
   },
   data() {
     return {
@@ -1169,6 +1184,7 @@ export default {
         // 团队（dev-board#496）：挂「个人」组而不是「系统」组——团队是每个人自己的归属，
         // 普通成员也要看得到自己的统计与那个数据共享开关，而「系统」组对非管理员整组收起
         { key: 'team', label: this.$t('team.navTeam'), group: 'personal' },
+        { key: 'memory', label: this.$t('chat.memoryButton'), group: 'personal' },
         // 「系统」组：'config'（系统配置）已撤，内容分别并入 'ai' 与「账户与安全」；
         // 'platform'（平台服务）2026-08-27 已撤——官方版外部服务统一平台代采，档位
         // 下拉全是单选项，分区已无实际作用（花费闸门/预扣提醒搬进了 'account' 末尾）。
@@ -1310,6 +1326,7 @@ export default {
       // 而不是显示「未加入」（那是在拿「不知道」冒充一个事实）
       teamLine: { loaded: false, teamName: '', firmName: '' },
       showRecharge: false,
+      showMemoryBrowser: false,
       tierRulesOpen: false,
       accountKeyInput: '',
       accountBusy: false,

@@ -10,10 +10,14 @@ import com.checkba.service.ai.context.ProjectContextHolder;
 import com.checkba.service.ai.memory.AgenticRetriever;
 import com.checkba.service.ai.memory.MemoryManager;
 import com.checkba.service.ai.memory.ProjectMemoryExtractor;
+import com.checkba.service.ai.memory.document.MemoryDocumentService;
+import com.checkba.service.ai.memory.document.MemoryFileView;
+import com.checkba.service.ai.memory.document.MemorySpaceView;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -41,6 +45,9 @@ public class MemoryTools implements AgentToolComponent {
     private final MemoryManager memoryManager;
     private final ProjectMemoryExtractor projectMemoryExtractor;
     private final AgenticRetriever agenticRetriever;
+
+    @Autowired(required = false)
+    private MemoryDocumentService memoryDocumentService;
 
     /**
      * 保存结构化记忆
@@ -182,7 +189,7 @@ public class MemoryTools implements AgentToolComponent {
         try {
             String memoryType = "all".equalsIgnoreCase(type) || type == null ? null : type.toLowerCase();
             List<MemoryEntry> memories = memoryManager.retrieveMemories(projectId, query, memoryType, 10);
-            memories = withScopedMemories(memories, scope, sourceFileId);
+            memories = withScopedMemories(memories, projectId, scope, sourceFileId);
 
             if (memories.isEmpty()) {
                 return "未找到相关记忆。可以使用 save_memory 工具保存重要信息。";
@@ -209,16 +216,17 @@ public class MemoryTools implements AgentToolComponent {
      * 额外做一次按 scope 的确定性查找并合并进来——保证"明确要哪个作用域"时百分之百找得到，
      * 检索算法继续负责"泛泛地找相关内容"这一半职责。
      */
-    private List<MemoryEntry> withScopedMemories(List<MemoryEntry> algorithmic, String scope, Long sourceFileId) {
+    private List<MemoryEntry> withScopedMemories(List<MemoryEntry> algorithmic, Long projectId,
+                                                 String scope, Long sourceFileId) {
         if (scope == null || scope.isBlank()) {
             return algorithmic;
         }
         List<MemoryEntry> scoped;
         String normalized = scope.trim().toLowerCase();
         if (MemoryEntry.MemoryScope.FILE.equals(normalized)) {
-            scoped = memoryManager.retrieveFileMemories(sourceFileId);
+            scoped = memoryManager.retrieveFileMemories(projectId, sourceFileId);
         } else if (MemoryEntry.MemoryScope.CONVERSATION.equals(normalized)) {
-            scoped = memoryManager.retrieveConversationMemories(ProjectContextHolder.getConversationId());
+            scoped = memoryManager.retrieveConversationMemories(projectId, ProjectContextHolder.getConversationId());
         } else {
             // project/user/global：现有算法已经是按 projectId 全量检索，不额外加一条确定性通路
             return algorithmic;
@@ -327,7 +335,7 @@ public class MemoryTools implements AgentToolComponent {
         try {
             // 使用 RRF 混合检索替代单纯的语义检索
             List<MemoryEntry> results = memoryManager.hybridSearch(projectId, query, limit);
-            results = withScopedMemories(results, scope, sourceFileId);
+            results = withScopedMemories(results, projectId, scope, sourceFileId);
 
             if (results.isEmpty()) {
                 return "未在知识库中找到相关信息。";
@@ -384,7 +392,7 @@ public class MemoryTools implements AgentToolComponent {
         try {
             // 使用 Agentic 多轮召回检索
             List<MemoryEntry> results = agenticRetriever.agenticRetrieve(projectId, query, limit);
-            results = withScopedMemories(results, scope, sourceFileId);
+            results = withScopedMemories(results, projectId, scope, sourceFileId);
 
             if (results.isEmpty()) {
                 return "深度搜索未找到相关信息。建议尝试不同的查询词或使用 save_memory 保存新信息。";
@@ -467,6 +475,150 @@ public class MemoryTools implements AgentToolComponent {
             log.error("Failed to get conversation summary: {}", e.getMessage(), e);
             return "获取对话摘要时出错: " + e.getMessage();
         }
+    }
+
+    @Tool("列出 Markdown 长期记忆空间中的文件。scope 只能是 user、project、team 或 firm；空间身份由当前登录用户和项目自动确定。")
+    @ToolMeta(displayName = "列出记忆文件", category = "memory")
+    public String memory_list(@P("记忆范围: user/project/team/firm") String scope) {
+        try {
+            MemorySpaceView space = resolveDocumentSpace(scope);
+            List<MemoryFileView> files = memoryDocumentService.listFiles(currentUser(), space.id());
+            if (files.isEmpty()) return "该记忆空间暂无文件。";
+            StringBuilder result = new StringBuilder("# ").append(space.label()).append("\n");
+            for (MemoryFileView file : files) {
+                result.append("- ").append(file.path()).append(" | ")
+                        .append(file.title()).append(" | revision=").append(file.revision()).append("\n");
+            }
+            return result.toString();
+        } catch (Exception e) {
+            return documentError("列出记忆文件", e);
+        }
+    }
+
+    @Tool("读取一个 Markdown 长期记忆文件。scope 只能是 user、project、team 或 firm；先用 memory_list 获取路径。")
+    @ToolMeta(displayName = "读取记忆文件", category = "memory")
+    public String memory_read(@P("记忆范围: user/project/team/firm") String scope,
+                              @P("相对 Markdown 路径，例如 remember.md 或 topics/style.md") String path) {
+        try {
+            MemorySpaceView space = resolveDocumentSpace(scope);
+            MemoryFileView file = memoryDocumentService.read(currentUser(), space.id(), path);
+            return "path=" + file.path() + " revision=" + file.revision() + "\n\n" + file.content();
+        } catch (Exception e) {
+            return documentError("读取记忆文件", e);
+        }
+    }
+
+    @Tool("在一个 Markdown 长期记忆空间内搜索标题、路径和正文。scope 只能是 user、project、team 或 firm。")
+    @ToolMeta(displayName = "搜索记忆", category = "memory")
+    public String memory_search(@P("记忆范围: user/project/team/firm") String scope,
+                                @P("搜索词") String query) {
+        try {
+            MemorySpaceView space = resolveDocumentSpace(scope);
+            List<MemoryFileView> files = memoryDocumentService.search(currentUser(), space.id(), query, 10);
+            if (files.isEmpty()) return "未找到相关 Markdown 记忆。";
+            StringBuilder result = new StringBuilder();
+            for (MemoryFileView file : files) {
+                result.append("- ").append(file.path()).append(" | ")
+                        .append(file.title()).append(" | revision=").append(file.revision()).append("\n");
+            }
+            return result.toString();
+        } catch (Exception e) {
+            return documentError("搜索记忆", e);
+        }
+    }
+
+    @Tool("创建或整篇更新 Markdown 长期记忆。更新前必须 memory_read 并传回读取到的 revision；新文件 expectedRevision 传 0。")
+    @ToolMeta(displayName = "写入记忆文件", category = "memory")
+    public String memory_write(@P("记忆范围: user/project/team/firm") String scope,
+                               @P("相对 Markdown 路径") String path,
+                               @P("完整 Markdown 正文") String content,
+                               @P("乐观锁版本；新文件为 0，更新为 memory_read 返回的 revision") long expectedRevision) {
+        try {
+            MemorySpaceView space = resolveDocumentSpace(scope);
+            requireWritable(space);
+            MemoryFileView file = memoryDocumentService.write(currentUser(), space.id(), path, content, expectedRevision);
+            return "✓ 记忆已保存: " + file.path() + " revision=" + file.revision();
+        } catch (Exception e) {
+            return documentError("写入记忆文件", e);
+        }
+    }
+
+    @Tool("对 Markdown 长期记忆做一次精确文本替换。oldText 必须在当前正文中恰好出现一次，并需传入当前 revision。")
+    @ToolMeta(displayName = "编辑记忆文件", category = "memory")
+    public String memory_edit(@P("记忆范围: user/project/team/firm") String scope,
+                              @P("相对 Markdown 路径") String path,
+                              @P("正文中恰好出现一次的原文本") String oldText,
+                              @P("替换后的新文本") String newText,
+                              @P("memory_read 返回的当前 revision") long expectedRevision) {
+        try {
+            if (oldText == null || oldText.isEmpty()) return "编辑记忆文件失败：oldText 不能为空。";
+            MemorySpaceView space = resolveDocumentSpace(scope);
+            requireWritable(space);
+            MemoryFileView current = memoryDocumentService.read(currentUser(), space.id(), path);
+            if (current.revision() != expectedRevision) {
+                return "编辑记忆文件失败：revision 已变化，请重新读取后重试。";
+            }
+            int first = current.content().indexOf(oldText);
+            int second = first < 0 ? -1 : current.content().indexOf(oldText, first + oldText.length());
+            if (first < 0 || second >= 0) return "编辑记忆文件失败：oldText 必须在当前正文中恰好出现一次。";
+            String replacement = newText == null ? "" : newText;
+            String content = current.content().substring(0, first) + replacement
+                    + current.content().substring(first + oldText.length());
+            MemoryFileView updated = memoryDocumentService.write(
+                    currentUser(), space.id(), path, content, expectedRevision);
+            return "✓ 记忆已编辑: " + updated.path() + " revision=" + updated.revision();
+        } catch (Exception e) {
+            return documentError("编辑记忆文件", e);
+        }
+    }
+
+    @Tool("删除一个 Markdown 长期记忆主题文件。remember.md 不能删除；必须传入当前 revision。")
+    @ToolMeta(displayName = "删除记忆文件", category = "memory")
+    public String memory_delete(@P("记忆范围: user/project/team/firm") String scope,
+                                @P("相对 Markdown 路径") String path,
+                                @P("memory_read 返回的当前 revision") long expectedRevision) {
+        try {
+            MemorySpaceView space = resolveDocumentSpace(scope);
+            requireWritable(space);
+            memoryDocumentService.delete(currentUser(), space.id(), path, expectedRevision);
+            return "✓ 记忆已删除: " + path;
+        } catch (Exception e) {
+            return documentError("删除记忆文件", e);
+        }
+    }
+
+    private MemorySpaceView resolveDocumentSpace(String scope) {
+        if (memoryDocumentService == null) throw new IllegalStateException("Markdown 记忆服务未启用");
+        String normalized = scope == null ? "" : scope.trim().toLowerCase();
+        if (!List.of("user", "project", "team", "firm").contains(normalized)) {
+            throw new IllegalArgumentException("scope 必须是 user、project、team 或 firm");
+        }
+        return memoryDocumentService.listSpaces(currentUser(), ProjectContextHolder.getProjectIdAsLong()).stream()
+                .filter(space -> normalized.equals(space.scope())).findFirst()
+                .map(space -> {
+                    if (!space.available() || !space.readable() || space.id() == null) {
+                        throw new IllegalStateException(space.reason() == null ? "该记忆空间暂不可用" : space.reason());
+                    }
+                    return space;
+                }).orElseThrow(() -> new IllegalStateException("该记忆空间暂不可用"));
+    }
+
+    private static void requireWritable(MemorySpaceView space) {
+        if (!space.writable()) throw new IllegalStateException("当前账号对该记忆空间只有读取权限");
+    }
+
+    private static Long currentUser() {
+        Long userId = ProjectContextHolder.getUserId();
+        if (userId == null) throw new IllegalStateException("无法获取当前用户ID");
+        return userId;
+    }
+
+    private static String documentError(String action, Exception e) {
+        return action + "失败：" + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+    }
+
+    void setMemoryDocumentServiceForTest(MemoryDocumentService service) {
+        this.memoryDocumentService = service;
     }
 
     /**

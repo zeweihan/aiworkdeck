@@ -35,15 +35,13 @@ function extractBlock(src, marker, braceOpenOffset) {
 // 1. ChatInterface.vue：流式中途「新建对话」不发取消请求
 // ======================================================================
 
-test('startNewChat 在 isStreaming 时必须调用 abort()（内部会 POST /api/agent/cancel），且排在清空会话状态之前', () => {
+test('startNewChat 只断开当前面板，不得取消仍在后台运行的对话', () => {
   const src = stripComments(read('components/ChatInterface.vue'))
   const body = extractBlock(src, 'const startNewChat = () =>')
-  assert.match(body, /if \(isStreaming\.value\) abort\(\)/,
-    '必须在 isStreaming 时调用 abort()——这是唯一真正向后端发取消请求的路径（handleAbort 用的就是它）')
-  const abortIdx = body.indexOf('abort()')
-  const setConvIdx = body.indexOf('setConversationId(null)')
-  assert.ok(abortIdx > 0 && setConvIdx > abortIdx,
-    'abort() 必须排在 setConversationId(null) 之前——发完取消请求再清前端状态，不能反过来')
+  assert.doesNotMatch(body, /\babort\(\)/,
+    '新建对话只应 detach；取消后台任务必须由独立的停止按钮触发')
+  assert.match(body, /setConversationId\(null\)/)
+  assert.match(body, /clearBubbles\(\)/)
 })
 
 test('handleAbort 确实调用同一个 abort()（核实两处复用的是同一份取消逻辑，不是各写一份）', () => {

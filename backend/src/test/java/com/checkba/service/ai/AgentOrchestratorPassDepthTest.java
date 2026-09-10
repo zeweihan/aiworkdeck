@@ -18,6 +18,7 @@ import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.StreamingResponseHandler;
 import dev.langchain4j.model.chat.StreamingChatLanguageModel;
@@ -36,39 +37,44 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 整篇过卷的步数预算（dev-board#422）。
- *
- * <p>MAX_LOOP_DEPTH=30 是给「常规多步任务」定的。分段过卷是刻意的多步推进：
- * 一块一步，块数由文档长度决定。恒 30 会让一份长文档的过卷跑到一半被迫暂停——
- * 这正是 #419 要根治的那种「一路正在操作文档到撞上限」的形态换了个位置复发。
- * 所以过卷进行中把预算抬到 {@code min(30 + total, 120)}，没有过卷时一切照旧。
- *
- * <p>本用例走真实 runLoop（不是只测那个算式）：把深度规则改回恒 30 就会转红。
+ * Productive Agent work has no arbitrary 30/120-turn stop.
+ * This runs the real loop through more than 100 changing tool rounds before a final answer.
  */
 class AgentOrchestratorPassDepthTest {
 
     private static final String MODEL = "qwen/qwen3.7-flash";
 
     private ChatModelFactory chatModelFactory;
+    private ProjectAiMessageService messageService;
+    private ToolRegistry toolRegistry;
     private OfficePassStateStore passStateStore;
     private List<String> sseEvents;
     private List<String> sseData;
     private AgentOrchestrator orchestrator;
 
-    /** 永远回一个工具调用的模型：让循环一路跑到步数预算耗尽。参数每轮不同，避开打转干预。 */
+    /** 121 productive tool rounds, then a final answer. */
     private static final class LoopingModel implements StreamingChatLanguageModel {
         final AtomicInteger calls = new AtomicInteger();
+        final java.util.concurrent.CountDownLatch finished = new java.util.concurrent.CountDownLatch(1);
 
         @Override
         public void generate(List<ChatMessage> messages, StreamingResponseHandler<AiMessage> handler) {
             int n = calls.incrementAndGet();
-            handler.onComplete(Response.from(AiMessage.from(List.of(ToolExecutionRequest.builder()
-                    .id("t" + n).name("office_pass_step")
-                    .arguments("{\"editsJson\":\"[]\",\"round\":" + n + "}").build()))));
+            if (n <= 1001) {
+                handler.onComplete(Response.from(AiMessage.from(List.of(ToolExecutionRequest.builder()
+                        .id("t" + n).name("office_pass_step")
+                        .arguments("{\"editsJson\":\"[]\",\"round\":" + n + "}").build()))));
+            } else {
+                handler.onNext("完成");
+                handler.onComplete(Response.from(AiMessage.from("完成")));
+                finished.countDown();
+            }
         }
 
         @Override
@@ -90,7 +96,7 @@ class AgentOrchestratorPassDepthTest {
             return null;
         }).when(sse).send(any(), any(), any());
 
-        ProjectAiMessageService messageService = mock(ProjectAiMessageService.class);
+        messageService = mock(ProjectAiMessageService.class);
         when(messageService.listByConversationId(any()))
                 .thenReturn(List.of(mock(ProjectAiMessage.class), mock(ProjectAiMessage.class)));
         when(messageService.upsertAssistantMessage(any(), any(), any(), any(), any())).thenReturn(1L);
@@ -100,7 +106,7 @@ class AgentOrchestratorPassDepthTest {
                 .thenAnswer(inv -> new ArrayList<ChatMessage>(List.of(
                         SystemMessage.from("system"), UserMessage.from("请校对全文"))));
 
-        ToolRegistry toolRegistry = mock(ToolRegistry.class);
+        toolRegistry = mock(ToolRegistry.class);
         when(toolRegistry.getAllSpecifications(any())).thenReturn(List.of());
         when(toolRegistry.resolve(anyString())).thenReturn(java.util.Optional.empty());
         when(toolRegistry.execute(any(), any(), any()))
@@ -151,47 +157,73 @@ class AgentOrchestratorPassDepthTest {
     }
 
     @Test
-    @DisplayName("没有过卷：步数预算仍是 30（depth 0..30 各调一次模型，第 31 步暂停）")
-    void withoutPassBudgetStaysAtThirty() {
+    @DisplayName("普通任务可连续完成 1001 个有进展的工具轮次且不耗尽 Java 栈")
+    void productiveRunExceedsOneThousandRounds() throws Exception {
         LoopingModel model = run("conv-nopass");
 
-        assertEquals(31, model.calls.get(), "无过卷时预算恒为 30 步");
-        assertTrue(String.valueOf(bubbleEndData()).contains("max_depth"), "撞预算应按 paused 收尾");
+        assertTrue(model.finished.await(20, java.util.concurrent.TimeUnit.SECONDS));
+        assertEquals(1002, model.calls.get());
+        assertTrue(String.valueOf(bubbleEndData()).contains("finished"));
     }
 
     @Test
-    @DisplayName("过卷进行中：预算抬到 min(30 + 块数, 120)")
-    void passInProgressRaisesBudgetByChunkCount() {
-        passStateStore.start("conv-pass", List.of(
-                new OfficePassChunker.Chunk(1, 10),
-                new OfficePassChunker.Chunk(11, 20),
-                new OfficePassChunker.Chunk(21, 30),
-                new OfficePassChunker.Chunk(31, 40),
-                new OfficePassChunker.Chunk(41, 50)), "hash-a");
+    void recoveryAndDurableToolBuffersAreBoundedAndMarkTheDroppedPrefix() {
+        AgentOrchestrator.RunGuard guard = new AgentOrchestrator.RunGuard("conv-buffer", "run-buffer", 1L);
+        guard.appendStream("old".repeat(AgentOrchestrator.STREAM_RECOVERY_LIMIT));
+        guard.appendStream("LATEST_STREAM");
+        assertTrue(guard.streamSnapshot().contains(AgentOrchestrator.STREAM_TRUNCATED_MARKER));
+        assertTrue(guard.streamSnapshot().endsWith("LATEST_STREAM"));
+        assertTrue(guard.streamSnapshot().length() <= AgentOrchestrator.STREAM_RECOVERY_LIMIT);
 
-        LoopingModel model = run("conv-pass");
-
-        assertEquals(36, model.calls.get(), "5 块过卷 → 预算 35 步");
-        assertTrue(String.valueOf(bubbleEndData()).contains("max_depth"));
+        StringBuilder executionLog = new StringBuilder();
+        for (int i = 0; i < 200; i++) {
+            AgentOrchestrator.appendBoundedExecutionLog(executionLog,
+                    "<process name=\"test\"><tool_output>" + i + ":" + "x".repeat(4000)
+                            + "</tool_output></process>\n");
+        }
+        assertTrue(executionLog.toString().contains(AgentOrchestrator.EXECUTION_LOG_TRUNCATED_MARKER));
+        assertTrue(executionLog.toString().contains("199:"));
+        assertTrue(executionLog.length() <= AgentOrchestrator.EXECUTION_LOG_LIMIT);
     }
 
     @Test
-    @DisplayName("步数预算的算式：无过卷 30；有过卷 min(30+total,120)")
-    void budgetFormula() {
-        assertEquals(30, AgentOrchestrator.maxLoopDepthFor(passStateStore, "conv-none"));
+    void persistenceTruncationDoesNotTruncateTheToolResultGivenBackToTheModel() {
+        String full = "x".repeat(20_000) + "FULL_TAIL";
+        when(toolRegistry.execute(any(), any(), any()))
+                .thenReturn(new ToolRegistry.ToolResult(full, null, true));
+        java.util.concurrent.atomic.AtomicBoolean modelSawTail = new java.util.concurrent.atomic.AtomicBoolean();
+        AtomicInteger calls = new AtomicInteger();
+        StreamingChatLanguageModel model = new StreamingChatLanguageModel() {
+            @Override public void generate(List<ChatMessage> messages, StreamingResponseHandler<AiMessage> handler) {
+                if (calls.incrementAndGet() == 1) {
+                    handler.onComplete(Response.from(AiMessage.from(List.of(ToolExecutionRequest.builder()
+                            .id("large").name("read").arguments("{}").build()))));
+                    return;
+                }
+                modelSawTail.set(messages.stream().filter(ToolExecutionResultMessage.class::isInstance)
+                        .map(ToolExecutionResultMessage.class::cast).anyMatch(m -> m.text().endsWith("FULL_TAIL")));
+                handler.onNext("done");
+                handler.onComplete(Response.from(AiMessage.from("done")));
+            }
 
-        passStateStore.start("conv-a", List.of(new OfficePassChunker.Chunk(1, 10)), "h");
-        assertEquals(31, AgentOrchestrator.maxLoopDepthFor(passStateStore, "conv-a"));
+            @Override public void generate(List<ChatMessage> messages, List<ToolSpecification> tools,
+                                           StreamingResponseHandler<AiMessage> handler) {
+                generate(messages, handler);
+            }
+        };
+        when(chatModelFactory.getStreamingChatModel(MODEL)).thenReturn(model);
 
-        List<OfficePassChunker.Chunk> sixty = new ArrayList<>();
-        for (int i = 0; i < 60; i++) sixty.add(new OfficePassChunker.Chunk(i * 10 + 1, i * 10 + 10));
-        passStateStore.start("conv-b", sixty, "h");
-        assertEquals(90, AgentOrchestrator.maxLoopDepthFor(passStateStore, "conv-b"));
+        AiAgentController.AgentChatRequest request = new AiAgentController.AgentChatRequest();
+        request.setProjectId(1L);
+        request.setConversationId("conv-full-tool-result");
+        request.setMessage("read");
+        request.setModel(MODEL);
+        orchestrator.handleUserMessage(request, 7L);
 
-        // 60 块是切块器的上限，但算式本身也要在更大的输入上收敛到 120
-        List<OfficePassChunker.Chunk> huge = new ArrayList<>();
-        for (int i = 0; i < 200; i++) huge.add(new OfficePassChunker.Chunk(i * 10 + 1, i * 10 + 10));
-        passStateStore.start("conv-c", huge, "h");
-        assertEquals(120, AgentOrchestrator.maxLoopDepthFor(passStateStore, "conv-c"));
+        assertTrue(modelSawTail.get(), "the model must receive the complete tool observation");
+        org.mockito.ArgumentCaptor<String> saved = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(messageService, atLeastOnce()).upsertAssistantMessage(any(), any(), any(), any(), saved.capture());
+        assertTrue(saved.getAllValues().stream().anyMatch(v -> v.contains("...(truncated)") || v.contains("...(截断)")));
+        assertTrue(saved.getAllValues().stream().noneMatch(v -> v.contains("FULL_TAIL")));
     }
 }
