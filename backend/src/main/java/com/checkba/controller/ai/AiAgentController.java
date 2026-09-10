@@ -37,6 +37,7 @@ public class AiAgentController {
     private final com.checkba.service.ProjectMemberService projectMemberService;
     private final com.checkba.service.ai.ClientCapabilityService clientCapabilityService;
     private final com.checkba.service.ai.subagent.SubAgentService subAgentService;
+    private final com.checkba.service.ai.AgentInboxService agentInboxService;
 
     @org.springframework.beans.factory.annotation.Autowired
     public AiAgentController(SseEmitterService sseEmitterService,
@@ -48,7 +49,8 @@ public class AiAgentController {
                             com.checkba.service.ai.AgentRunStateService agentRunStateService,
                             com.checkba.service.ProjectMemberService projectMemberService,
                             com.checkba.service.ai.ClientCapabilityService clientCapabilityService,
-                            com.checkba.service.ai.subagent.SubAgentService subAgentService) {
+                            com.checkba.service.ai.subagent.SubAgentService subAgentService,
+                            com.checkba.service.ai.AgentInboxService agentInboxService) {
         this.sseEmitterService = sseEmitterService;
         this.agentOrchestrator = agentOrchestrator;
         this.messageService = messageService;
@@ -59,6 +61,7 @@ public class AiAgentController {
         this.projectMemberService = projectMemberService;
         this.clientCapabilityService = clientCapabilityService;
         this.subAgentService = subAgentService;
+        this.agentInboxService = agentInboxService;
     }
 
     /**
@@ -134,6 +137,7 @@ public class AiAgentController {
         String runStatus = agentRunStateService.statusName(conversationId);
         sseEmitterService.send(conversationId, "run_state",
                 "{\"status\":" + (runStatus == null ? "null" : "\"" + runStatus + "\"") + "}");
+        agentInboxService.emitSnapshot(conversationId);
 
         return ResponseEntity.ok(emitter);
     }
@@ -150,30 +154,26 @@ public class AiAgentController {
         // ToolRegistry 把 projectId 强制注入工具参数只挡得住 LLM，挡不住 HTTP 调用方，
         // 于是「按项目隔离」的工具反而成了跨租户读写别家文档的入口
         if (userId == null) {
-            return ResponseEntity.status(401).body("{\"status\":\"error\", \"message\":\"请先登录\"}");
+            return chatError(401, "请先登录");
         }
         if (request.getProjectId() == null || !projectMemberService.hasReadPermission(request.getProjectId(), userId)) {
-            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"" +
-                    LangText.of("无权访问该项目", "You do not have access to this project") + "\"}");
+            return chatError(403, LangText.of("无权访问该项目", "You do not have access to this project"));
         }
         if (!canUseConversation(request.getConversationId(), userId)) {
-            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"" +
-                    LangText.of("无权操作该会话", "You do not have permission for this conversation") + "\"}");
+            return chatError(403, LangText.of("无权操作该会话", "You do not have permission for this conversation"));
         }
         // 插件镜像会话只读（dev-board#298）：镜像那头（插件端）还在续写同一条时间线，
         // 桌面端直接续写会双头交错。前端已把输入区换成「另起分支继续」，这里是防旁路的
         // 服务端护栏——续聊必须走 fork（POST /api/ai/conversation/{id}/fork）。
         if (messageService.isMirroredConversation(request.getConversationId())) {
-            return ResponseEntity.status(409).body("{\"status\":\"error\", \"message\":\"" +
-                    LangText.of("插件同步的会话为只读，请「另起分支」后继续",
-                            "Plugin-synced conversations are read-only; fork it to continue") + "\"}");
+            return chatError(409, LangText.of("插件同步的会话为只读，请「另起分支」后继续",
+                    "Plugin-synced conversations are read-only; fork it to continue"));
         }
         // message 为空/纯空白必须在入口拒绝：一旦落库，ContextAssemblerService 回放历史时
         // langchain4j 的 UserMessage.from(text) 会对空白文本抛异常——存量脏数据已经在
         // ContextAssemblerService 里加了容错，但新请求应该在这里就被挡下，不该先污染会话。
         if (request.getMessage() == null || request.getMessage().isBlank()) {
-            return ResponseEntity.status(400).body("{\"status\":\"error\", \"message\":\"" +
-                    LangText.of("消息内容不能为空", "Message cannot be empty") + "\"}");
+            return chatError(400, LangText.of("消息内容不能为空", "Message cannot be empty"));
         }
 
         log.info("Received Agent Chat Request: project={}, conversation={}, mode={}, msg={}",
@@ -184,9 +184,19 @@ public class AiAgentController {
         clientCapabilityService.record(request.getConversationId(), request.getClientCapability(),
                 request.getOfficeHost(), request.getOfficeFamily());
 
-        agentOrchestrator.handleUserMessage(request, userId);
-        
-        return ResponseEntity.ok().build();
+        try {
+            com.checkba.model.entity.AgentInboxItem item = agentInboxService.submit(request, userId);
+            // The originating POST renders from this receipt. Suppress input_applied for this one
+            // item to avoid a duplicate user bubble; later steering/auto-drain claims do emit it.
+            String activeRunId = agentOrchestrator.acceptInboxSubmission(item.getId(), false);
+            return ResponseEntity.ok(agentInboxService.receipt(item, activeRunId));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(java.util.Map.of("status", "error", "message", e.getMessage()));
+        }
+    }
+
+    private static ResponseEntity<?> chatError(int status, String message) {
+        return ResponseEntity.status(status).body(java.util.Map.of("status", "error", "message", message));
     }
 
     /**
@@ -496,6 +506,10 @@ public class AiAgentController {
          * 缺省按 word 处理，兼容不发送该字段的存量 Word 插件。
          */
         private String officeHost;
+        /** Running conversations default to steering; queue defers until a successful run finish. */
+        private String submissionMode;
+        /** Optional idempotency key scoped to conversation + authenticated user. */
+        private String clientRequestId;
 
         public Long getProjectId() { return projectId; }
         public void setProjectId(Long projectId) { this.projectId = projectId; }
@@ -532,6 +546,10 @@ public class AiAgentController {
         public void setOfficeHost(String officeHost) { this.officeHost = officeHost; }
         public String getOfficeFamily() { return officeFamily; }
         public void setOfficeFamily(String officeFamily) { this.officeFamily = officeFamily; }
+        public String getSubmissionMode() { return submissionMode; }
+        public void setSubmissionMode(String submissionMode) { this.submissionMode = submissionMode; }
+        public String getClientRequestId() { return clientRequestId; }
+        public void setClientRequestId(String clientRequestId) { this.clientRequestId = clientRequestId; }
     }
     
     /**

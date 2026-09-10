@@ -40,14 +40,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * 整篇过卷的步数预算（dev-board#422）。
- *
- * <p>MAX_LOOP_DEPTH=30 是给「常规多步任务」定的。分段过卷是刻意的多步推进：
- * 一块一步，块数由文档长度决定。恒 30 会让一份长文档的过卷跑到一半被迫暂停——
- * 这正是 #419 要根治的那种「一路正在操作文档到撞上限」的形态换了个位置复发。
- * 所以过卷进行中把预算抬到 {@code min(30 + total, 120)}，没有过卷时一切照旧。
- *
- * <p>本用例走真实 runLoop（不是只测那个算式）：把深度规则改回恒 30 就会转红。
+ * Productive Agent work has no arbitrary 30/120-turn stop.
+ * This runs the real loop through more than 100 changing tool rounds before a final answer.
  */
 class AgentOrchestratorPassDepthTest {
 
@@ -59,16 +53,23 @@ class AgentOrchestratorPassDepthTest {
     private List<String> sseData;
     private AgentOrchestrator orchestrator;
 
-    /** 永远回一个工具调用的模型：让循环一路跑到步数预算耗尽。参数每轮不同，避开打转干预。 */
+    /** 121 productive tool rounds, then a final answer. */
     private static final class LoopingModel implements StreamingChatLanguageModel {
         final AtomicInteger calls = new AtomicInteger();
+        final java.util.concurrent.CountDownLatch finished = new java.util.concurrent.CountDownLatch(1);
 
         @Override
         public void generate(List<ChatMessage> messages, StreamingResponseHandler<AiMessage> handler) {
             int n = calls.incrementAndGet();
-            handler.onComplete(Response.from(AiMessage.from(List.of(ToolExecutionRequest.builder()
-                    .id("t" + n).name("office_pass_step")
-                    .arguments("{\"editsJson\":\"[]\",\"round\":" + n + "}").build()))));
+            if (n <= 1001) {
+                handler.onComplete(Response.from(AiMessage.from(List.of(ToolExecutionRequest.builder()
+                        .id("t" + n).name("office_pass_step")
+                        .arguments("{\"editsJson\":\"[]\",\"round\":" + n + "}").build()))));
+            } else {
+                handler.onNext("完成");
+                handler.onComplete(Response.from(AiMessage.from("完成")));
+                finished.countDown();
+            }
         }
 
         @Override
@@ -151,47 +152,12 @@ class AgentOrchestratorPassDepthTest {
     }
 
     @Test
-    @DisplayName("没有过卷：步数预算仍是 30（depth 0..30 各调一次模型，第 31 步暂停）")
-    void withoutPassBudgetStaysAtThirty() {
+    @DisplayName("普通任务可连续完成 1001 个有进展的工具轮次且不耗尽 Java 栈")
+    void productiveRunExceedsOneThousandRounds() throws Exception {
         LoopingModel model = run("conv-nopass");
 
-        assertEquals(31, model.calls.get(), "无过卷时预算恒为 30 步");
-        assertTrue(String.valueOf(bubbleEndData()).contains("max_depth"), "撞预算应按 paused 收尾");
-    }
-
-    @Test
-    @DisplayName("过卷进行中：预算抬到 min(30 + 块数, 120)")
-    void passInProgressRaisesBudgetByChunkCount() {
-        passStateStore.start("conv-pass", List.of(
-                new OfficePassChunker.Chunk(1, 10),
-                new OfficePassChunker.Chunk(11, 20),
-                new OfficePassChunker.Chunk(21, 30),
-                new OfficePassChunker.Chunk(31, 40),
-                new OfficePassChunker.Chunk(41, 50)), "hash-a");
-
-        LoopingModel model = run("conv-pass");
-
-        assertEquals(36, model.calls.get(), "5 块过卷 → 预算 35 步");
-        assertTrue(String.valueOf(bubbleEndData()).contains("max_depth"));
-    }
-
-    @Test
-    @DisplayName("步数预算的算式：无过卷 30；有过卷 min(30+total,120)")
-    void budgetFormula() {
-        assertEquals(30, AgentOrchestrator.maxLoopDepthFor(passStateStore, "conv-none"));
-
-        passStateStore.start("conv-a", List.of(new OfficePassChunker.Chunk(1, 10)), "h");
-        assertEquals(31, AgentOrchestrator.maxLoopDepthFor(passStateStore, "conv-a"));
-
-        List<OfficePassChunker.Chunk> sixty = new ArrayList<>();
-        for (int i = 0; i < 60; i++) sixty.add(new OfficePassChunker.Chunk(i * 10 + 1, i * 10 + 10));
-        passStateStore.start("conv-b", sixty, "h");
-        assertEquals(90, AgentOrchestrator.maxLoopDepthFor(passStateStore, "conv-b"));
-
-        // 60 块是切块器的上限，但算式本身也要在更大的输入上收敛到 120
-        List<OfficePassChunker.Chunk> huge = new ArrayList<>();
-        for (int i = 0; i < 200; i++) huge.add(new OfficePassChunker.Chunk(i * 10 + 1, i * 10 + 10));
-        passStateStore.start("conv-c", huge, "h");
-        assertEquals(120, AgentOrchestrator.maxLoopDepthFor(passStateStore, "conv-c"));
+        assertTrue(model.finished.await(20, java.util.concurrent.TimeUnit.SECONDS));
+        assertEquals(1002, model.calls.get());
+        assertTrue(String.valueOf(bubbleEndData()).contains("finished"));
     }
 }

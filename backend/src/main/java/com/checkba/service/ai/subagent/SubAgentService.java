@@ -331,7 +331,9 @@ public class SubAgentService {
         List<String> toolsUsed = progress.toolsUsedList();
         long charBudget = (long) (props.getTokenBudget() * props.getCharsPerToken());
 
-        for (int round = 1; round <= props.getMaxRounds(); round++) {
+        int round = 0;
+        while (true) {
+            round++;
             // 记「已完整跑完 round-1 轮」：本轮才刚开始，还不算数——与下面各分支自己返回的
             // round - 1 保持同一个口径。
             progress.roundStarted(round);
@@ -384,10 +386,6 @@ public class SubAgentService {
             // 无工具调用 = 最终答案
             return SubAgentResult.success(subtaskId, text.trim(), toolsUsed, round);
         }
-
-        return SubAgentResult.failure(subtaskId,
-                "sub-agent reached max rounds (" + props.getMaxRounds() + ") without a final answer",
-                toolsUsed, props.getMaxRounds());
     }
 
     /**

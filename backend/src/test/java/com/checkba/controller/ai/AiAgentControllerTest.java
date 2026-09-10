@@ -50,6 +50,7 @@ class AiAgentControllerTest {
     private PptxTools pptxTools;
     private ProjectMemberService projectMemberService;
     private AgentOrchestrator agentOrchestrator;
+    private com.checkba.service.ai.AgentInboxService inboxService;
     private AiAgentController controller;
 
     @BeforeEach
@@ -60,6 +61,7 @@ class AiAgentControllerTest {
         pptxTools = mock(PptxTools.class);
         projectMemberService = mock(ProjectMemberService.class);
         agentOrchestrator = mock(AgentOrchestrator.class);
+        inboxService = mock(com.checkba.service.ai.AgentInboxService.class);
         controller = new AiAgentController(
                 mock(SseEmitterService.class),
                 agentOrchestrator,
@@ -70,7 +72,8 @@ class AiAgentControllerTest {
                 mock(AgentRunStateService.class),
                 projectMemberService,
                 mock(ClientCapabilityService.class),
-                subAgentService);
+                subAgentService,
+                inboxService);
     }
 
     private AiAgentController.SubtaskCancelRequest subtaskReq(String conv, String subtaskId) {
@@ -233,6 +236,41 @@ class AiAgentControllerTest {
 
             assertEquals(400, resp.getStatusCode().value());
             verify(agentOrchestrator, never()).handleUserMessage(any(), any());
+        }
+    }
+
+    @Test
+    @DisplayName("/chat 先持久化 inbox，再返回可区分 pending/applied 的 receipt")
+    void chatReturnsDurableReceipt() {
+        AiAgentController.AgentChatRequest req = new AiAgentController.AgentChatRequest();
+        req.setProjectId(42L);
+        req.setConversationId("conv-1");
+        req.setMessage("继续核对");
+        req.setClientRequestId("client-1");
+        com.checkba.model.entity.AgentInboxItem item = new com.checkba.model.entity.AgentInboxItem();
+        item.setId("message-1");
+        item.setState("pending");
+        item.setSubmissionMode("queue");
+        when(inboxService.submit(req, 7L)).thenReturn(item);
+        when(agentOrchestrator.acceptInboxSubmission("message-1", false)).thenReturn("run-1");
+        when(inboxService.receipt(item, "run-1")).thenReturn(
+                new com.checkba.service.ai.AgentInboxService.Receipt(
+                        "accepted", "message-1", "run-1", "queue", "pending"));
+
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("s")).thenReturn(7L);
+            when(projectMemberService.hasReadPermission(42L, 7L)).thenReturn(true);
+            when(messageService.canUseConversation("conv-1", 7L)).thenReturn(true);
+
+            ResponseEntity<?> response = controller.startSession(req, "s");
+
+            assertEquals(200, response.getStatusCode().value());
+            com.checkba.service.ai.AgentInboxService.Receipt receipt =
+                    (com.checkba.service.ai.AgentInboxService.Receipt) response.getBody();
+            assertEquals("accepted", receipt.status());
+            assertEquals("pending", receipt.state());
+            verify(inboxService).submit(req, 7L);
+            verify(agentOrchestrator).acceptInboxSubmission("message-1", false);
         }
     }
 }

@@ -96,4 +96,24 @@ class StuckDetectorTest {
         d.record("scan_files", "");
         assertEquals(INTERVENE, d.record("scan_files", null));
     }
+
+    @Test
+    @DisplayName("轮询参数相同但结果持续变化属于进展，不触发暂停")
+    void changingPollingObservationIsProgress() {
+        StuckDetector d = new StuckDetector();
+        for (int percent : new int[]{10, 20, 30, 40, 50, 60, 70}) {
+            assertEquals(OK, d.record("poll_job", "{\"id\":1}",
+                    "{\"percent\":" + percent + "}", true));
+        }
+    }
+
+    @Test
+    @DisplayName("调用与结果都不变时先干预、再次重复后要求真正暂停")
+    void unchangedObservationEventuallyPauses() {
+        StuckDetector d = new StuckDetector();
+        assertEquals(OK, d.record("poll_job", "{}", "still pending", true));
+        assertEquals(OK, d.record("poll_job", "{}", "still pending", true));
+        assertEquals(INTERVENE, d.record("poll_job", "{}", "still pending", true));
+        assertEquals(CIRCUIT_BREAK, d.record("poll_job", "{}", "still pending", true));
+    }
 }

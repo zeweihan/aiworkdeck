@@ -16,6 +16,7 @@ import com.checkba.service.ai.memory.MemoryPipelineService;
 import com.checkba.service.ai.skill.SkillDefinition;
 import com.checkba.service.ai.skill.SkillRouter;
 import dev.langchain4j.agent.tool.ToolSpecification;
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
@@ -32,6 +33,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -40,6 +42,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -62,6 +65,7 @@ class AgentSkillUpdateEventTest {
     private List<String> sseEvents;
     private List<String> sseData;
     private AgentOrchestrator orchestrator;
+    private ToolRegistry toolRegistry;
 
     /** 一轮就收尾的假模型 */
     private static final class OneShotModel implements StreamingChatLanguageModel {
@@ -110,7 +114,7 @@ class AgentSkillUpdateEventTest {
                 .thenAnswer(inv -> new ArrayList<ChatMessage>(List.of(
                         SystemMessage.from("system"), UserMessage.from("帮我出一张诉讼时间轴"))));
 
-        ToolRegistry toolRegistry = mock(ToolRegistry.class);
+        toolRegistry = mock(ToolRegistry.class);
         when(toolRegistry.getAllSpecifications(any())).thenReturn(List.of());
         when(toolRegistry.resolve(anyString())).thenReturn(java.util.Optional.empty());
 
@@ -207,5 +211,100 @@ class AgentSkillUpdateEventTest {
                 eq("帮我出一张诉讼时间轴"), isNull(), isNull());
         assertEquals("{\"skills\":[]}", skillUpdateData(),
                 "ASK 下 skill 本来就不生效，面板不该亮着 chip");
+    }
+
+    @Test
+    @DisplayName("ASK 只暴露并执行 memory_list/read/search，读完后可继续生成答案")
+    void askModeKeepsOnlyReadOnlyMemoryTools() {
+        when(toolRegistry.getAllSpecifications(any())).thenReturn(List.of(
+                spec("memory_list"), spec("memory_read"), spec("memory_search"), spec("memory_write")));
+        when(toolRegistry.execute(eq("memory_read"), any(), any()))
+                .thenReturn(new ToolRegistry.ToolResult("remembered preference", null, true));
+        List<List<String>> offered = new CopyOnWriteArrayList<>();
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        StreamingChatLanguageModel model = new StreamingChatLanguageModel() {
+            @Override public void generate(List<ChatMessage> messages, StreamingResponseHandler<AiMessage> handler) {
+                generate(messages, List.of(), handler);
+            }
+            @Override public void generate(List<ChatMessage> messages, List<ToolSpecification> tools,
+                                           StreamingResponseHandler<AiMessage> handler) {
+                offered.add(tools.stream().map(ToolSpecification::name).toList());
+                AiMessage reply = calls.getAndIncrement() == 0
+                        ? AiMessage.from(ToolExecutionRequest.builder().id("r1").name("memory_read")
+                                .arguments("{\"path\":\"remember.md\"}").build())
+                        : AiMessage.from("answer from memory");
+                if (reply.text() != null) handler.onNext(reply.text());
+                handler.onComplete(Response.from(reply));
+            }
+        };
+        when(chatModelFactory.getStreamingChatModel(MODEL)).thenReturn(model);
+
+        run("conv-ask-memory", AgentMode.ASK, null);
+
+        assertEquals(2, offered.size(), "ASK must continue after its read tool to answer");
+        assertEquals(List.of("memory_list", "memory_read", "memory_search"), offered.get(0));
+        verify(toolRegistry).execute(eq("memory_read"), any(), any());
+        verify(toolRegistry, never()).execute(eq("memory_write"), any(), any());
+    }
+
+    @Test
+    @DisplayName("ASK 对模型伪造的 memory_write 做分发层拒绝")
+    void askModeRejectsUnadvertisedWriteCall() {
+        when(toolRegistry.getAllSpecifications(any())).thenReturn(List.of(spec("memory_read"), spec("memory_write")));
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        StreamingChatLanguageModel model = new StreamingChatLanguageModel() {
+            @Override public void generate(List<ChatMessage> messages, StreamingResponseHandler<AiMessage> handler) {
+                generate(messages, List.of(), handler);
+            }
+            @Override public void generate(List<ChatMessage> messages, List<ToolSpecification> tools,
+                                           StreamingResponseHandler<AiMessage> handler) {
+                AiMessage reply = calls.getAndIncrement() == 0
+                        ? AiMessage.from(ToolExecutionRequest.builder().id("w1").name("memory_write")
+                                .arguments("{}").build())
+                        : AiMessage.from("write refused");
+                if (reply.text() != null) handler.onNext(reply.text());
+                handler.onComplete(Response.from(reply));
+            }
+        };
+        when(chatModelFactory.getStreamingChatModel(MODEL)).thenReturn(model);
+
+        run("conv-ask-deny", AgentMode.ASK, null);
+
+        verify(toolRegistry, never()).execute(eq("memory_write"), any(), any());
+        assertEquals(2, calls.get());
+    }
+
+    @Test
+    @DisplayName("技能裁剪不能隐藏只读 memory 工具，也不能顺带放开写工具")
+    void skillNarrowingRetainsInvariantMemoryReads() {
+        ToolSpecification action = spec("skill_action");
+        ToolSpecification read = spec("memory_read");
+        ToolSpecification write = spec("memory_write");
+        when(toolRegistry.getAllSpecifications(any())).thenReturn(List.of(action, read, write));
+        when(skillRouter.visibleTools(any(), any())).thenReturn(List.of(action));
+        List<String> offered = new CopyOnWriteArrayList<>();
+        StreamingChatLanguageModel model = new StreamingChatLanguageModel() {
+            @Override public void generate(List<ChatMessage> messages, StreamingResponseHandler<AiMessage> handler) {
+                generate(messages, List.of(), handler);
+            }
+            @Override public void generate(List<ChatMessage> messages, List<ToolSpecification> tools,
+                                           StreamingResponseHandler<AiMessage> handler) {
+                offered.addAll(tools.stream().map(ToolSpecification::name).toList());
+                AiMessage reply = AiMessage.from("done");
+                handler.onNext("done");
+                handler.onComplete(Response.from(reply));
+            }
+        };
+        when(chatModelFactory.getStreamingChatModel(MODEL)).thenReturn(model);
+
+        run("conv-skill-memory", AgentMode.AGENT, null);
+
+        assertTrue(offered.contains("skill_action"));
+        assertTrue(offered.contains("memory_read"));
+        assertFalse(offered.contains("memory_write"));
+    }
+
+    private static ToolSpecification spec(String name) {
+        return ToolSpecification.builder().name(name).description(name).build();
     }
 }
