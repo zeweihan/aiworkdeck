@@ -3,7 +3,9 @@
 
 # AI interaction alignment validation
 
-Status: implementation and integration in progress. No release, merge, or deployment.
+Status: implementation, independent review repairs, final feature acceptance and
+application regression complete. No release, merge, or deployment. Known baseline
+failures remain explicitly recorded; this is not a claim that every suite is green.
 
 ## Clean-base results
 
@@ -40,22 +42,23 @@ The baseline app run first failed navigating `/pages/userprofile` because Chrome
 `DOM.resolveNode: Node with given id does not belong to the document`; three subsequent
 personal-section tab assertions failed after that. The loopback browser fixture was skipped
 because the initial test backend lacked `SECURITY_BROWSER_PROXY_E2E_ALLOWED_HOSTS=127.0.0.1`;
-the test recipe now includes it for the integrated run. The baseline deliberately used
-`AI_E2E=0`; real-model interaction validation is still outstanding.
+the test recipe includes it for integrated runs. The baseline deliberately used
+`AI_E2E=0`; the final real-model interaction evidence is recorded below.
 
 Local raw logs use `/tmp/ai-alignment-baseline-*.log`. Additional LOWA suite results are
-collected in `/tmp/ai-alignment-lowa-results.json`; final integrated results will be added
-below. A clean baseline passing does not substitute for testing the integrated feature.
+collected in `/tmp/ai-alignment-lowa-results.json`; integrated results are recorded below. A clean baseline passing does not substitute for testing the integrated feature.
 
 ## Paired website implementation
 
-Website base `bf7284c`, shared-memory commit `8fc6200`. Shared storage/route acceptance,
+Website base originally `bf7284c`, synced through `21bfa8a` at delivery; branch head
+`3b69cc9`. Shared storage/route acceptance,
 78 existing team cases, 27 existing collaboration-directory cases, TypeScript check,
 focused lint and production build pass. The complete cn/intl contract matrix (17 scripts
 per site, 34 runs) passes. Tests use generated local accounts and an isolated SQLite
 database. A live local production Next server also passes desktop Bearer write → internal
 member read across the same canonical document. See website `doc/shared-memory-contract.md`
-for transport and configuration. Website draft PR: https://github.com/zeweihan/aiworkdeck_website/pull/172.
+for transport and configuration. The final cn/intl CI matrix and production build pass.
+Website PR: https://github.com/zeweihan/aiworkdeck_website/pull/172.
 
 ## Baseline real provider checks
 
@@ -66,23 +69,29 @@ DeepSeek Flash/Pro and GLM 5.2 price drift, and Qwen 3.8 Max absent from the ups
 catalog. These are recorded separately from the new feature acceptance cases.
 Log: `/tmp/ai-alignment-live-smoke.log`.
 
-## Integrated verification (ongoing)
+## Integrated verification
 
 - Integrated backend full run: 3,533 tests, 2 failures, 0 errors, 14 skips. Both
   integration omissions were repaired: ASK replay now asserts the three read-only
   memory tools and excludes writes; six memory tools have zh/en display names.
   Their 47-test rerun and package build pass. The first PR CI backend full run also
-  passes. Review fixes added later still require a final full run.
+  passes. After all backend review repairs and syncing master `d596ea2c`, the final
+  full run passes: **3,621 tests, 0 failures/errors, 14 skips**; package build passes.
+  Log: `/tmp/ai-alignment-final-backend.log`.
 - Frontend full run: 1,153 tests, 1,147 pass, 6 fail. The added navigation regression
   was fixed by preserving TeamPanel as the last settings branch; its 44-test rerun
   passes. The other five failures reproduce the unchanged revision-view loader issue.
-- Final frontend unit rerun: 1,153 tests, 1,148 pass and only the five unchanged
+- Final frontend unit run after the UI race repairs, including latest master:
+  **1,172 tests, 1,167 pass and only the five unchanged**
   revision-view loader failures. Final desktop unit run: 155 tests, 154 pass,
-  1 skip, 0 failures. Logs: `/tmp/ai-alignment-final-{frontend,desktop}-unit.log`.
-- Integrated emit/locale/full-navigation/state checks and H5 build pass.
-- Integrated application E2E: 141 steps pass, 0 failures, including actual model
+  1 skip, 0 failures. Logs: `/tmp/ai-alignment-delivery-frontend-unit.log` and
+  `/tmp/ai-alignment-final-desktop-unit.log`.
+- Final emit/locale/full-navigation checks and H5 build pass. SPDX checks all 37 new
+  source files successfully. No thresholds or failing assertions were relaxed.
+- Final application E2E: **141 steps pass, 0 failures**, repeated on the delivery code
+  after all repairs and the master sync, including actual model
   reply/history, loopback browser, collaborative version/conflict flows and plugins.
-  Log: `/tmp/ai-alignment-integrated-app.log`.
+  Log: `/tmp/ai-alignment-delivery-app.log` (the earlier integrated run also passed).
 - First PR CI Windows installer build passes; release and mirror jobs are skipped.
 - Integrated LOWA: 547/547 pass; inline-review, writing-caret, link-preview,
   completion and reply insertion pass. Writing UI still fails in its Qt popup flow
@@ -92,15 +101,30 @@ Log: `/tmp/ai-alignment-live-smoke.log`.
 - Actual OpenRouter/DeepSeek Flash examples pass: model writes/reads personal Markdown;
   a new ASK conversation reads it; steering is applied once despite duplicate POST,
   edited/reordered queue drains correctly, deleted input stays absent; Stop retains the
-  pending queue and Send now resumes it. Evidence: `/tmp/ai-alignment-live-result.json`.
+  pending queue and Send now resumes it. All four examples pass again on the final
+  Java package; log `/tmp/ai-alignment-final-live-features.log`. Evidence: `/tmp/ai-alignment-live-result.json`.
 - Live Java desktop adapter → local production Next service passes head/member/outsider
   team roles and head/branch firm roles, with exact content readback and expected 403
   writes/reads. Only generated local accounts were used. Evidence:
-  `/tmp/ai-alignment-shared-gateway-result.json`.
+  `/tmp/ai-alignment-shared-gateway-result.json`. The final Java package and merged
+  production Next build pass the role scenarios again in
+  `/tmp/ai-alignment-shared-gateway-final-result.json`.
 - Native Mac CUA walk-through opened the real isolated Electron project, AI panel,
   all four available memory scopes and the exact model-written Markdown file.
   Native coordinate save was unavailable in CUA; it is not counted as a completed
-  save test. The dedicated real-Electron journey covers write/save/readback separately.
+  save test. The dedicated real-Electron journey independently passes
+  write/save/exact API readback, with disposable home/profile and real preload.
+  Final Chromium and real Electron runs both pass after all UI repairs, including
+  New Chat while running and reattaching the same run, steering/queue/edit/reorder,
+  Stop/Send now and exact Markdown save/readback. These two UI journeys use an
+  explicitly held deterministic provider; they are separate from the real-model tests.
+  Screenshots: `/tmp/ai-alignment-delivery-browser/` and
+  `/tmp/ai-alignment-delivery-electron/`. Logs use the same names with `.log`.
+- Independent review repairs cover database commit/OSIV cancellation races, bounded
+  run logs, project-scoped legacy retrieval, canonical index links, atomic tombstone
+  convergence, remote context deadline outside DB transactions, late HTTP/SSE responses,
+  and memory read/save/delete responses after scope or project switching.
+  The final narrow-pane test also proves long titles cannot hide header actions.
 
-Draft implementation PR: https://github.com/zeweihan/aiworkdeck/pull/798.
+Implementation PR: https://github.com/zeweihan/aiworkdeck/pull/798.
 No merge, deployment, tag, or release has been performed.

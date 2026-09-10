@@ -93,7 +93,7 @@ chmod 600 "$AWD_E2E_ROOT/home/.aiworkdeck/license.json"
   SECURITY_BROWSER_PROXY_E2E_ALLOWED_HOSTS=127.0.0.1 \
   AI_SKILLS_BUILTIN_DIR="$AWD_E2E_ROOT/skills" "$JAVA_HOME/bin/java" \
     -Duser.home="$AWD_E2E_ROOT/home" -jar "$AWD_E2E_ROOT/backend.jar" \
-    --server.port=9797 --spring.profiles.active=desktop \
+    --server.port=9797 --spring.profiles.active=desktop --mobile.relay.enabled=false \
     '--spring.datasource.url=jdbc:h2:file:'"$AWD_E2E_ROOT"'/db;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;NON_KEYWORDS=VALUE'
 ) > "$AWD_E2E_ROOT/backend.log" 2>&1 &
 export AWD_E2E_BACKEND_PID=$!
@@ -170,7 +170,7 @@ cp "$AWD_E2E_ROOT/home/.aiworkdeck/license.json" "$WRITING_E2E_ROOT/home/.aiwork
   cd "$WRITING_E2E_ROOT/backend"
   AI_SKILLS_BUILTIN_DIR="$WRITING_E2E_ROOT/skills" "$JAVA_HOME/bin/java" \
     -Duser.home="$WRITING_E2E_ROOT/home" -jar "$WRITING_E2E_ROOT/backend.jar" \
-    --server.port=9848 --spring.profiles.active=desktop \
+    --server.port=9848 --spring.profiles.active=desktop --mobile.relay.enabled=false \
     '--spring.datasource.url=jdbc:h2:file:'"$WRITING_E2E_ROOT"'/db;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;NON_KEYWORDS=VALUE'
 ) > "$WRITING_E2E_ROOT/backend.log" 2>&1 &
 export WRITING_E2E_BACKEND_PID=$!

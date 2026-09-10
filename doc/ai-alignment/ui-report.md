@@ -49,11 +49,11 @@ The journey configures that isolated backend to use its in-process deterministic
 - `/tmp/ai-alignment-e2e/memory-index.png`
 - `/tmp/ai-alignment-e2e/memory-editor.png`
 
-Set `AI_ALIGNMENT_E2E_OUT` to keep evidence for a specific run. The last green Chromium evidence before the detach/reattach extension is in:
+Set `AI_ALIGNMENT_E2E_OUT` to keep evidence for a specific run. Final Chromium acceptance, including the detach/reattach extension and all review repairs, passes. Evidence:
 
-- `/tmp/ai-alignment-browser-green/queue-running-360px.png`
-- `/tmp/ai-alignment-browser-green/memory-index.png`
-- `/tmp/ai-alignment-browser-green/memory-editor.png`
+- `/tmp/ai-alignment-delivery-browser/queue-running-360px.png`
+- `/tmp/ai-alignment-delivery-browser/memory-index.png`
+- `/tmp/ai-alignment-delivery-browser/memory-editor.png`
 
 The same journey can run through the real Electron desktop host. It requires the disposable backend root used to start the isolated backend:
 
@@ -65,14 +65,16 @@ AI_ALIGNMENT_E2E_ROOT=/tmp/aiworkdeck-ai-alignment-hrvxyeo3 \
 AI_ALIGNMENT_E2E_EDITOR_DIST=/tmp/aiworkdeck-ai-alignment-hrvxyeo3/frontend/dist/zetaoffice \
 AI_ALIGNMENT_E2E_BASE=http://127.0.0.1:5174 \
 AI_ALIGNMENT_E2E_BACKEND=http://127.0.0.1:9797 \
-AI_ALIGNMENT_E2E_OUT=/tmp/ai-alignment-electron-green \
+AI_ALIGNMENT_E2E_OUT=/tmp/ai-alignment-delivery-electron \
 npm run test:ai-alignment-e2e
 ```
 
-The last green Electron evidence before the detach/reattach extension is in:
+Final real Mac Electron acceptance, including detach/reattach and all review repairs, passes. Evidence:
 
-- `/tmp/ai-alignment-electron-green/queue-running-360px.png`
-- `/tmp/ai-alignment-electron-green/memory-index.png`
-- `/tmp/ai-alignment-electron-green/memory-editor.png`
+- `/tmp/ai-alignment-delivery-electron/queue-running-360px.png`
+- `/tmp/ai-alignment-delivery-electron/memory-index.png`
+- `/tmp/ai-alignment-delivery-electron/memory-editor.png`
 
 The runner fails closed unless `AI_ALIGNMENT_E2E_ISOLATED=1` is explicit because it temporarily changes AI provider settings. Desktop mode also validates the backend port injected by the actual preload and uses `prepareWritingIsolation` to prove the backend and Electron home/profile are disposable.
+
+Final review repairs bind memory actions to their captured space/document and discard stale view responses; inbox HTTP replies are guarded against newer SSE events and conversation changes. Long project titles truncate so memory/history/new-chat/close controls remain reachable. Full final frontend results are in `validation-report.md`.
