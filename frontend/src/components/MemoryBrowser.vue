@@ -108,11 +108,13 @@ export default {
       spaces: [], activeSpace: null, files: [], current: null, draft: '', serverDraft: '',
       loading: false, saving: false, loadError: '', conflict: false,
       showCreate: false, newTopic: '',
+      viewGeneration: 0, currentSpaceId: null,
     }
   },
   computed: {
     canWrite() {
-      return !!(this.activeSpace && this.activeSpace.writable && this.current && this.current.writable !== false)
+      return !!(this.activeSpace && this.activeSpace.writable && this.current
+        && this.currentSpaceId === this.activeSpace.id && this.current.writable !== false)
     },
     relativeLinks() {
       return this.current
@@ -123,6 +125,7 @@ export default {
   watch: {
     open(value) {
       if (value) this.loadSpaces()
+      else this.viewGeneration += 1
     },
   },
   mounted() {
@@ -137,44 +140,78 @@ export default {
       try { return new Date(value).toLocaleString() } catch (e) { return String(value) }
     },
     async loadSpaces() {
+      const generation = ++this.viewGeneration
       this.loading = true
       this.loadError = ''
       try {
         const data = await getMemorySpaces(this.projectId || undefined)
+        if (!this.isActiveRequest(null, generation)) return
         this.spaces = Array.isArray(data) ? data : []
         const preferred = this.spaces.find((space) => space.available && space.id === this.activeSpace?.id)
           || this.spaces.find((space) => space.available)
-        if (preferred) await this.selectSpace(preferred)
+        if (preferred) await this.selectSpace(preferred, generation)
       } catch (e) {
-        this.loadError = e.message || this.$t('chat.memoryLoadFailed')
+        if (this.isActiveRequest(null, generation)) {
+          this.loadError = e.message || this.$t('chat.memoryLoadFailed')
+        }
       } finally {
-        this.loading = false
+        if (this.viewGeneration === generation) this.loading = false
       }
     },
-    async selectSpace(space) {
+    isActiveRequest(spaceId, generation) {
+      return this.open && this.viewGeneration === generation
+        && (spaceId == null || this.activeSpace?.id === spaceId)
+    },
+    isCurrentFile(spaceId, path, generation) {
+      return this.isActiveRequest(spaceId, generation)
+        && this.currentSpaceId === spaceId && this.current?.path === path
+    },
+    currentTarget() {
+      if (!this.activeSpace || !this.current || this.currentSpaceId !== this.activeSpace.id) return null
+      return {
+        spaceId: this.activeSpace.id,
+        path: this.current.path,
+        revision: this.current.revision,
+        generation: this.viewGeneration,
+      }
+    },
+    async selectSpace(space, inheritedGeneration = null) {
+      const generation = inheritedGeneration == null ? ++this.viewGeneration : inheritedGeneration
+      if (generation !== this.viewGeneration) return
       this.activeSpace = space
+      this.files = []
       this.current = null
+      this.currentSpaceId = null
       this.draft = ''
       this.conflict = false
       try {
         const data = await getMemoryFiles(space.id)
+        if (!this.isActiveRequest(space.id, generation)) return
         this.files = Array.isArray(data) ? data : []
         const first = this.files.find((file) => file.path === 'remember.md') || this.files[0]
-        if (first) await this.openFile(first.path)
+        if (first) await this.openFile(first.path, generation)
       } catch (e) {
-        this.loadError = e.message || this.$t('chat.memoryLoadFailed')
+        if (this.isActiveRequest(space.id, generation)) {
+          this.loadError = e.message || this.$t('chat.memoryLoadFailed')
+        }
       }
     },
-    async openFile(path) {
+    async openFile(path, inheritedGeneration = null) {
       if (!this.activeSpace || !path) return
+      const spaceId = this.activeSpace.id
+      const generation = inheritedGeneration == null ? ++this.viewGeneration : inheritedGeneration
       try {
-        const file = await getMemoryFile(this.activeSpace.id, path)
+        const file = await getMemoryFile(spaceId, path)
+        if (!this.isActiveRequest(spaceId, generation)) return
         this.current = file
+        this.currentSpaceId = spaceId
         this.draft = file.content || ''
         this.serverDraft = this.draft
         this.conflict = false
       } catch (e) {
-        uni.showToast({ title: e.message || this.$t('chat.memoryLoadFailed'), icon: 'none' })
+        if (this.isActiveRequest(spaceId, generation)) {
+          uni.showToast({ title: e.message || this.$t('chat.memoryLoadFailed'), icon: 'none' })
+        }
       }
     },
     async createTopic() {
@@ -186,45 +223,60 @@ export default {
         uni.showToast({ title: this.$t('chat.memoryInvalidPath'), icon: 'none' })
         return
       }
+      const spaceId = this.activeSpace.id
+      const generation = this.viewGeneration
       try {
-        const file = await saveMemoryFile({ spaceId: this.activeSpace.id, path, content: `# ${path.replace(/\.md$/i, '')}\n`, expectedRevision: 0 })
+        const file = await saveMemoryFile({ spaceId, path, content: `# ${path.replace(/\.md$/i, '')}\n`, expectedRevision: 0 })
+        if (!this.isActiveRequest(spaceId, generation)) return
         this.showCreate = false
         this.newTopic = ''
-        await this.refreshFiles()
-        await this.openFile(file.path)
+        await this.refreshFiles(spaceId, generation)
+        if (this.isActiveRequest(spaceId, generation)) await this.openFile(file.path, generation)
       } catch (e) {
-        uni.showToast({ title: e.message || this.$t('chat.memorySaveFailed'), icon: 'none' })
+        if (this.isActiveRequest(spaceId, generation)) {
+          uni.showToast({ title: e.message || this.$t('chat.memorySaveFailed'), icon: 'none' })
+        }
       }
     },
-    async refreshFiles() {
-      const data = await getMemoryFiles(this.activeSpace.id)
+    async refreshFiles(spaceId = this.activeSpace?.id, generation = this.viewGeneration) {
+      if (!spaceId) return
+      const data = await getMemoryFiles(spaceId)
+      if (!this.isActiveRequest(spaceId, generation)) return
       this.files = Array.isArray(data) ? data : []
     },
     async saveCurrent() {
       if (!this.canWrite || this.saving) return
+      const target = this.currentTarget()
+      if (!target) return
+      const content = this.draft
       this.saving = true
       try {
         const file = await saveMemoryFile({
-          spaceId: this.activeSpace.id,
-          path: this.current.path,
-          content: this.draft,
-          expectedRevision: this.current.revision,
+          spaceId: target.spaceId,
+          path: target.path,
+          content,
+          expectedRevision: target.revision,
         })
+        if (!this.isCurrentFile(target.spaceId, target.path, target.generation)) return
+        const hasNewerDraft = this.draft !== content
         this.current = file
-        this.draft = file.content || ''
-        this.serverDraft = this.draft
+        this.currentSpaceId = target.spaceId
+        this.serverDraft = file.content || ''
+        if (!hasNewerDraft) this.draft = this.serverDraft
         this.conflict = false
-        await this.refreshFiles()
+        await this.refreshFiles(target.spaceId, target.generation)
         uni.showToast({ title: this.$t('chat.memorySaved'), icon: 'success' })
       } catch (e) {
-        if (e && e.status === 409) {
+        if (e && e.status === 409 && this.isCurrentFile(target.spaceId, target.path, target.generation)) {
+          const latest = await getMemoryFile(target.spaceId, target.path)
+          if (!this.isCurrentFile(target.spaceId, target.path, target.generation)) return
           const mine = this.draft
-          const latest = await getMemoryFile(this.activeSpace.id, this.current.path)
           this.current = latest
+          this.currentSpaceId = target.spaceId
           this.serverDraft = latest.content || ''
           this.draft = mine
           this.conflict = true
-        } else {
+        } else if (this.isCurrentFile(target.spaceId, target.path, target.generation)) {
           uni.showToast({ title: e.message || this.$t('chat.memorySaveFailed'), icon: 'none' })
         }
       } finally {
@@ -236,32 +288,42 @@ export default {
       this.conflict = false
     },
     confirmDelete() {
+      const target = this.currentTarget()
+      if (!target) return
       uni.showModal({
         title: this.$t('chat.memoryDeleteTitle'),
-        content: this.$t('chat.memoryDeleteConfirm', { path: this.current.path }),
-        success: async (result) => { if (result.confirm) await this.deleteCurrent() },
+        content: this.$t('chat.memoryDeleteConfirm', { path: target.path }),
+        success: async (result) => { if (result.confirm) await this.deleteCurrent(target) },
       })
     },
-    async deleteCurrent() {
+    async deleteCurrent(target = this.currentTarget()) {
+      if (!target) return
       try {
-        await deleteMemoryFile(this.activeSpace.id, this.current.path, this.current.revision)
-        await this.refreshFiles()
-        const next = this.files.find((file) => file.path === 'remember.md') || this.files[0]
+        await deleteMemoryFile(target.spaceId, target.path, target.revision)
+        if (!this.isCurrentFile(target.spaceId, target.path, target.generation)) return
+        const generation = ++this.viewGeneration
         this.current = null
-        if (next) await this.openFile(next.path)
+        this.currentSpaceId = null
+        this.draft = ''
+        await this.refreshFiles(target.spaceId, generation)
+        const next = this.files.find((file) => file.path === 'remember.md') || this.files[0]
+        if (next) await this.openFile(next.path, generation)
       } catch (e) {
-        if (e && e.status === 409) await this.openFile(this.current.path)
+        if (!this.isCurrentFile(target.spaceId, target.path, target.generation)) return
+        if (e && e.status === 409) await this.openFile(target.path)
         uni.showToast({ title: e.message || this.$t('chat.memoryDeleteFailed'), icon: 'none' })
       }
     },
     async downloadCurrent() {
+      const target = this.currentTarget()
+      if (!target) return
       try {
-        const bytes = await downloadMemoryFile(this.activeSpace.id, this.current.path)
+        const bytes = await downloadMemoryFile(target.spaceId, target.path)
         const blob = new Blob([bytes], { type: 'text/markdown;charset=utf-8' })
         const url = URL.createObjectURL(blob)
         const anchor = document.createElement('a')
         anchor.href = url
-        anchor.download = this.current.path.split('/').pop()
+        anchor.download = target.path.split('/').pop()
         anchor.click()
         setTimeout(() => URL.revokeObjectURL(url), 0)
       } catch (e) {
