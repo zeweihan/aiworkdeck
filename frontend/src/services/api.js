@@ -2002,6 +2002,14 @@ export function desensitizeFile(payload) {
   });
 }
 
+export function previewSensitiveFile(payload) {
+  return request({ url: '/api/sensitive/preview', method: 'POST', data: payload, timeout: 300000 });
+}
+
+export function restoreSensitiveFile(payload) {
+  return request({ url: '/api/sensitive/restore', method: 'POST', data: payload, timeout: 300000 });
+}
+
 // 获取文件详情
 export function getFileDetail(projectId, fileId) {
   return request({

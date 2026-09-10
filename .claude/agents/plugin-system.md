@@ -271,3 +271,5 @@ JAR 插件拿宿主能力的唯一契约：`com.checkba:plugin-api:1.1.0`（1.0.
 - 前端面板：`cd frontend && npm run test:app-e2e` 覆盖主要旅程。
 
 - **`Evidence.linkAtQuote(projectId, docFileId, anchorQuote, targets)`（SPI 1.1.0 新增）**：插件按引文建链的唯一正路。宿主内部走 `EvidenceAnchorService`（查引文必须恰好命中一次 → set_selection → bookmark_selection（书签名 = linkKey）→ 内部超链接 → get_bookmark_context → 落库），与 AI 工具 `doc_link_evidence` **同一份实现**。插件**不要**自己用 `Docs.exec` 拼这套原语——书签名规则、超链接 scheme、章节路径口径都是契约，两份实现必然漂移。
+
+**脱敏/复敏更新（2026-09-10，dev-board#552/#553/#554）**：`SensitiveType` + `service/sensitive/SensitiveTextEngine` 使用本地字段/后缀/号码规则与用户词表；`SensitiveDocx` 以 XML 段落遍历 Word 全部文字节点并保留未命中 run 的格式；PDF 继续不可逆黑框。`SensitiveController` 新增 `POST /preview`、`POST /restore`，`/desensitize` 带 mode 时回 `{file,recoveryKit,counts,warnings}`，未带 mode 的旧调用保留返回 ProjectFile。TOKEN 模式推荐，MASK 为旧星号模式。`SensitiveRecoveryKit` 仅在请求内存中生成/解密映射，密码派生 AES-GCM；加密 `.awd-recovery` 由面板另行下载，不注册进项目。三条端点都鉴权，写操作还需写权限。所有操作不调用 AI/OCR/embedding，skill prompt 明确禁止先把原文读给模型。限制与回归见 `docs/DESENSITIZATION_REVIEW_2026-09-10.md`；`mvn test -Dtest=Sensitive*Test` + `node --test frontend/tests/desensitize/pane.test.mjs`。原介绍中“Word 走 XWPF 段落遮蔽 + OcrService 辅助”已由上述离线 XML 路径替代。
