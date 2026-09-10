@@ -61,6 +61,12 @@ const dataOf = (body) => body && Object.prototype.hasOwnProperty.call(body, 'dat
 function startModelFixture() {
   let mainRequests = 0
   let streamingMainRequests = 0
+  let heldMainResponse = null
+  const completeStream = (response, content) => {
+    response.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', choices: [{ index: 0, delta: { role: 'assistant', content }, finish_reason: null }] })}\n\n`)
+    response.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`)
+    response.end('data: [DONE]\n\n')
+  }
   const server = http.createServer(async (request, response) => {
     if (request.method !== 'POST' || !request.url.endsWith('/chat/completions')) {
       response.writeHead(404).end()
@@ -74,15 +80,19 @@ function startModelFixture() {
     if (isMain) mainRequests += 1
     if (isMain && payload.stream) streamingMainRequests += 1
     const content = isMain ? `<final>Fixture completed ${mainRequests}</final>` : 'Fixture helper response'
-    const delay = isMain && payload.stream && streamingMainRequests === 1 ? 12000 : 25
 
     if (payload.stream) {
       response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' })
-      setTimeout(() => {
-        response.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', choices: [{ index: 0, delta: { role: 'assistant', content }, finish_reason: null }] })}\n\n`)
-        response.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`)
-        response.end('data: [DONE]\n\n')
-      }, delay)
+      response.flushHeaders()
+      if (isMain && streamingMainRequests === 1) {
+        heldMainResponse = () => {
+          if (!heldMainResponse) return
+          heldMainResponse = null
+          completeStream(response, content)
+        }
+      } else {
+        setTimeout(() => completeStream(response, content), 25)
+      }
       return
     }
 
@@ -93,11 +103,13 @@ function startModelFixture() {
         choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }],
         usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
       }))
-    }, delay)
+    }, 25)
   })
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({
     server,
     baseUrl: `http://127.0.0.1:${server.address().port}/v1`,
+    hasHeldResponse: () => heldMainResponse !== null,
+    releaseHeldResponse: () => heldMainResponse?.(),
   })))
 }
 
@@ -218,6 +230,17 @@ try {
     if (!point) throw new Error(`missing action ${actionText} for ${contains}`)
     await page.mouse.click(point.x, point.y)
   }
+  const clickHistoryEntry = async () => {
+    const point = await page.evaluate((marker) => {
+      const rows = [...document.querySelectorAll('.ai-dropdown-panel .menu-item:not(.header)')]
+      const row = rows.find((node) => node.innerText.includes(marker)) || (rows.length === 1 ? rows[0] : null)
+      if (!row) return null
+      const box = row.getBoundingClientRect()
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
+    }, MARKER)
+    if (!point) throw new Error('running conversation is missing from history')
+    await page.mouse.click(point.x, point.y)
+  }
 
   await click('[title="AI 助手"], [title="AI Assistant"]')
   await page.waitForSelector('.side-panel-ai .chat-input-rich', { visible: true, timeout: 30000 })
@@ -235,7 +258,29 @@ try {
       || conversation.lastMessage?.includes(MARKER)) || conversations[0]
     return active?.conversationId || false
   }, 20000)
-  await until(async () => (await api(`/api/agent/inbox/${conversationId}`)).status === 'RUNNING', 10000)
+  const originalRun = await until(async () => {
+    const snapshot = await api(`/api/agent/inbox/${conversationId}`)
+    return snapshot.status === 'RUNNING' && snapshot.runId ? snapshot : false
+  }, 10000)
+  await until(() => fixture.hasHeldResponse(), 10000)
+
+  await click('[title="New Chat"]')
+  await page.waitForSelector('.chat-interface.is-empty', { visible: true, timeout: 10000 })
+  const detachedRun = await api(`/api/agent/inbox/${conversationId}`)
+  if (detachedRun.status !== 'RUNNING' || detachedRun.runId !== originalRun.runId) {
+    throw new Error(`New Chat changed the server run: ${JSON.stringify({ before: originalRun, after: detachedRun })}`)
+  }
+  await click('[title="History"]')
+  await page.waitForSelector('.ai-dropdown-panel', { visible: true, timeout: 10000 })
+  await clickHistoryEntry()
+  await page.waitForFunction((marker) => [...document.querySelectorAll('.user-bubble')]
+    .some((node) => node.innerText.includes(marker)), { timeout: 10000 }, MARKER)
+  await page.waitForSelector('.stop-btn', { visible: true, timeout: 10000 })
+  const reattachedRun = await api(`/api/agent/inbox/${conversationId}`)
+  if (reattachedRun.status !== 'RUNNING' || reattachedRun.runId !== originalRun.runId) {
+    throw new Error(`history reattach changed the server run: ${JSON.stringify({ before: originalRun, after: reattachedRun })}`)
+  }
+  await page.screenshot({ path: path.join(OUT, 'reattached-running-360px.png') })
 
   await setComposer('steer while the fixture model is running')
   await click('.send-btn')
@@ -260,6 +305,7 @@ try {
   await clickRowAction('queued follow up edited', '↑')
   await click('.stop-btn')
   await page.waitForFunction(() => !document.querySelector('.stop-btn'), { timeout: 10000 })
+  fixture.releaseHeldResponse()
   await until(async () => {
     const status = (await api(`/api/agent/inbox/${conversationId}`)).status
     return status === 'CANCELLED' || status === 'ERROR' || status === 'FINISHED'
@@ -330,6 +376,7 @@ try {
     else await browser.close().catch(() => {})
   }
   if (killElectron) killElectron()
+  fixture.releaseHeldResponse()
   fixture.server.closeAllConnections?.()
   await new Promise((resolve) => fixture.server.close(resolve))
 }
