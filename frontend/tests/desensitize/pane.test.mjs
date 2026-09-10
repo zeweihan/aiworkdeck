@@ -9,7 +9,7 @@ const script = sfc.match(/<script>([\s\S]*?)<\/script>/)[1]
 function pane(api = {}) {
   const events = []
   const component = vm.runInNewContext(script, { ...api, URL, Blob, setTimeout })
-  const state = { ...component.data(), projectId: 1, $t: x => x, $emit: (...args) => events.push(args) }
+  const state = { ...component.data(), projectId: 1, prepareFile: async () => false, $t: x => x, $emit: (...args) => events.push(args) }
   for (const [key, fn] of Object.entries(component.methods)) state[key] = fn.bind(state)
   for (const [key, fn] of Object.entries(component.computed)) Object.defineProperty(state, key, { get: fn.bind(state) })
   return { state, component, events }
@@ -62,8 +62,60 @@ test('PDF selection uses irreversible mode; project change clears sensitive stat
   assert.equal(state.effectiveMode, 'MASK')
   state.password = 'secret-password'; state.recoveryKit = 'map'; state.exportedKit = 'export'
   state.customTerms = 'private'; state.excludedTerms = 'also private'
+  state.lastRedaction = { kit: 'encrypted', file: { id: 9 } }
   component.watch.projectId.call(state)
   assert.equal(state.fileId, null); assert.equal(state.password, '')
   assert.equal(state.recoveryKit, ''); assert.equal(state.exportedKit, '')
   assert.equal(state.customTerms, ''); assert.equal(state.excludedTerms, '')
+  assert.equal(state.lastRedaction, null)
+})
+
+
+test('generating waits for editor save, and a save failure never calls the redaction API', async () => {
+  let calls = 0
+  const { state } = pane({ desensitizeFile: async () => { calls++; return {} } })
+  state.fileId = 1; state.preview = {}; state.password = 'long-password'
+  state.prepareFile = async () => { throw new Error('save failed') }
+  await state.handleGenerate()
+  assert.equal(calls, 0); assert.equal(state.error, 'save failed'); assert.equal(state.processing, false)
+})
+
+test('switching to restore selects the latest generated file and reuses its encrypted kit', async () => {
+  const { state } = pane({ desensitizeFile: async () => ({ file: { id: 4, name: 'redacted.docx', filePath: 'redacted.docx' }, recoveryKit: 'AWD-RECOVERY-1:encrypted', counts: {} }) })
+  state.fileId = 1; state.fileName = 'original.docx'; state.preview = {}; state.downloadKit = () => {}
+  await state.handleGenerate()
+  state.chooseOperation('restore')
+  assert.equal(state.operation, 'restore'); assert.equal(state.fileId, 4)
+  assert.equal(state.recoveryKit, 'AWD-RECOVERY-1:encrypted')
+  assert.equal(state.password, '')
+})
+
+test('preview and restore also wait for the target file to be saved', async () => {
+  const order = []
+  const { state } = pane({
+    previewSensitiveFile: async () => { order.push('preview'); return {} },
+    restoreSensitiveFile: async () => { order.push('restore'); return { file: { id: 9 } } },
+  })
+  state.fileId = 1; state.recoveryKit = 'encrypted'
+  state.prepareFile = async id => { assert.equal(id, 1); order.push('save') }
+  await state.handlePreview(); await state.handleRestore()
+  assert.deepEqual(order, ['save', 'preview', 'save', 'restore'])
+})
+
+test('changes saved after preview require a fresh preview before generation', async () => {
+  let calls = 0
+  const { state } = pane({ desensitizeFile: async () => { calls++; return {} } })
+  state.fileId = 1; state.preview = {}; state.prepareFile = async () => true
+  await state.handleGenerate()
+  assert.equal(calls, 0); assert.equal(state.preview, null)
+})
+
+test('download failure keeps the encrypted kit available and still opens the generated document', async () => {
+  const { state, events } = pane({ desensitizeFile: async () => ({ file: { id: 4 }, recoveryKit: 'encrypted' }) })
+  state.fileId = 1; state.preview = {}; state.password = 'secret-password'
+  state.downloadKit = () => { throw new Error('download failed') }
+  await state.handleGenerate()
+  assert.equal(state.exportedKit, 'encrypted'); assert.equal(state.password, '')
+  assert.equal(state.error, 'panels.deDownloadRetry')
+  assert.equal(events[0][0], 'open-file'); assert.equal(events[0][1].id, 4)
 })

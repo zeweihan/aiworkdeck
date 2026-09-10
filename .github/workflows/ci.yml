@@ -138,7 +138,7 @@ jobs:
         run: npm run test:optional-components
       - name: Test local redaction panel
         working-directory: frontend
-        run: node --test tests/desensitize/pane.test.mjs
+        run: node --test tests/desensitize/*.test.mjs
       - name: Build H5
         working-directory: frontend
         run: npm run build:h5

@@ -109,6 +109,15 @@ export default {
   smFileNamed: '文件 #{id}',
 
   // DesensitizePane.vue
+  deWorkflow: '选择原文件 → 预览并生成副本 → 编辑副本 → 本地复敏。切换文档标签不会更换左侧功能区。',
+  deResultEditing: '已在编辑区打开脱敏副本，可直接修改。左侧所选文件不会随文档标签自动切换。',
+  dePdfResult: '已打开脱敏 PDF 供核查；该结果是栅格化副本，不支持直接编辑或复敏。',
+  deRestoreResult: '复敏这份结果',
+  deCurrentKit: '已使用本次生成的加密映射',
+  dePreviewChanged: '文档修改刚刚保存，请重新预览后再生成',
+  deDownloadRetry: '结果已生成，复敏文件下载未完成，请点击下方重新下载',
+  deAiWorkflowNotice: 'AI 功能在右侧助手中使用，本面板不会自动发送文件。普通对话可能带入历史和项目上下文，不是隔离会话；请核查材料范围，勿加入原件、映射或复敏后的文件。',
+
   deRedactTab: '脱敏',
   deRestoreTab: '复敏',
   deLocalNotice: '使用本地规则处理，不调用大模型。请仅将核查后的脱敏文件提供给 AI。',

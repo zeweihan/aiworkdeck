@@ -695,6 +695,7 @@
           <DesensitizePane
              v-else-if="leftPaneKey === 'desensitize'"
              :project-id="projectId"
+             :prepare-file="prepareSensitiveFile"
              @request-file-select="handleDesensitizeSelectFile"
              @request-active-file="handleDesensitizeActiveFile"
              @open-file="handleDesensitizeSuccess"
@@ -1998,6 +1999,7 @@
 import { defineAsyncComponent } from 'vue'
 import { flushDirtyEditors } from './flushDirtyEditors.js'
 import { isTabVisibleInPane } from './tabVisibility.js'
+import { saveSensitiveInput } from './sensitiveWorkflow.js'
 import LibreOfficeEditor from '@/components/LibreOfficeEditor.vue'
 import { host, isDesktopHost } from '@/services/host.js'
 import BrowserPane from '@/components/BrowserPane.vue'
@@ -4036,6 +4038,9 @@ export default {
     },
 
     // ==================== Desensitize Handlers ====================
+    prepareSensitiveFile(fileId) {
+        return saveSensitiveInput(fileId, this._libreRefs, this._plainTextRefs)
+    },
     handleDesensitizeSelectFile(callback) {
         this.desensitizeFileSelectCallback = callback
         this.filePickerAllowFolder = false

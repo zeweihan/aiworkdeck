@@ -109,6 +109,15 @@ export default {
   smFileNamed: 'File #{id}',
 
   // DesensitizePane.vue
+  deWorkflow: 'Select original → Preview and create copy → Edit copy → Restore locally. Document tabs do not switch the sidebar.',
+  deResultEditing: 'The redacted copy is open for editing. The selected input here does not follow document tab changes automatically.',
+  dePdfResult: 'The redacted PDF is open for review. This rasterized copy cannot be directly edited or restored.',
+  deRestoreResult: 'Restore this result',
+  deCurrentKit: 'Using the encrypted mapping from this run',
+  dePreviewChanged: 'Document changes were just saved. Preview again before generating.',
+  deDownloadRetry: 'The result was created, but recovery download failed. Use the download button below.',
+  deAiWorkflowNotice: 'AI tools are in the right-hand assistant. This panel never sends files automatically. Normal chats may include history and project context; they are not isolated. Check the context and exclude originals, recovery mappings and restored files.',
+
   deRedactTab: 'Redact',
   deRestoreTab: 'Restore',
   deLocalNotice: 'Processed by local rules without an LLM. Send only reviewed, redacted files to AI.',

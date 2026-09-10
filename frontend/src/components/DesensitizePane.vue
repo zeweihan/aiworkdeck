@@ -5,10 +5,11 @@
   <scroll-view scroll-y class="desensitize-pane">
     <view class="section">
       <view class="actions-row">
-        <button class="mini-btn" :class="{ active: operation === 'redact' }" :disabled="processing" @tap="operation = 'redact'">{{ $t('panels.deRedactTab') }}</button>
-        <button class="mini-btn" :class="{ active: operation === 'restore' }" :disabled="processing" @tap="operation = 'restore'">{{ $t('panels.deRestoreTab') }}</button>
+        <button class="mini-btn" :class="{ active: operation === 'redact' }" :disabled="processing" @tap="chooseOperation('redact')">{{ $t('panels.deRedactTab') }}</button>
+        <button class="mini-btn" :class="{ active: operation === 'restore' }" :disabled="processing" @tap="chooseOperation('restore')">{{ $t('panels.deRestoreTab') }}</button>
       </view>
       <text class="help-text">{{ $t('panels.deLocalNotice') }}</text>
+      <text class="help-text">{{ $t('panels.deWorkflow') }}</text>
       <view class="section-title">{{ $t('panels.deSectionFileSelect') }}</view>
       <view class="path-display" :class="{ empty: !filePath }" @tap="triggerFileSelect">{{ fileName || $t('panels.deFilePlaceholder') }}</view>
       <view class="actions-row">
@@ -63,6 +64,11 @@
       <text class="help-text">{{ $t('panels.deMatchCount', { count: totalMatches }) }}</text>
       <text v-for="(warning, i) in (result?.warnings || preview?.warnings || [])" :key="i" class="help-text">{{ warning }}</text>
     </view>
+    <view v-if="result?.file && operation === 'redact'" class="section">
+      <text class="help-text">{{ $t(isPdf ? 'panels.dePdfResult' : 'panels.deResultEditing') }}</text>
+      <button v-if="exportedKit" class="workdeck-btn full-width" :disabled="processing" @tap="chooseOperation('restore')">{{ $t('panels.deRestoreResult') }}</button>
+      <text class="help-text">{{ $t('panels.deAiWorkflowNotice') }}</text>
+    </view>
     <view v-if="exportedKit" class="section">
       <button class="workdeck-btn full-width" @tap="downloadKit">{{ $t('panels.deDownloadKit') }}</button>
       <text class="help-text">{{ $t('panels.deSaveKitNotice') }}</text>
@@ -77,13 +83,16 @@ import { desensitizeFile, getSensitiveOptions, previewSensitiveFile, restoreSens
 export default {
   name: 'DesensitizePane',
   emits: ['request-file-select', 'request-active-file', 'open-file'],
-  props: { projectId: { type: [String, Number], required: true } },
+  props: {
+    projectId: { type: [String, Number], required: true },
+    prepareFile: { type: Function, required: true },
+  },
   data() {
     return {
       operation: 'redact', mode: 'TOKEN', filePath: '', fileName: '', fileId: null,
       availableStrategies: [], selectedStrategies: [], customTerms: '', excludedTerms: '',
       password: '', recoveryKit: '', kitName: '', exportedKit: '', processing: false,
-      preview: null, result: null, error: '',
+      preview: null, result: null, error: '', lastRedaction: null,
     }
   },
   computed: {
@@ -100,7 +109,7 @@ export default {
     projectId() {
       this.fileId = null; this.filePath = ''; this.fileName = ''; this.password = ''
       this.recoveryKit = ''; this.exportedKit = ''; this.kitName = ''; this.preview = null; this.result = null
-      this.customTerms = ''; this.excludedTerms = ''
+      this.customTerms = ''; this.excludedTerms = ''; this.lastRedaction = null
     },
   },
   mounted() { this.fetchOptions() },
@@ -111,6 +120,18 @@ export default {
         this.availableStrategies = Array.isArray(res) ? res : res?.data || []
         this.selectedStrategies = this.availableStrategies.filter(s => ['COMPANY', 'CHINESE_NAME', 'PHONE', 'ID_CARD', 'EMAIL', 'BANK_CARD'].includes(s.value)).map(s => s.value)
       } catch (e) { this.error = this.$t('panels.deFetchStrategiesFailed') }
+    },
+    chooseOperation(operation) {
+      if (this.processing || this.operation === operation) return
+      this.operation = operation
+      this.preview = null; this.result = null; this.error = ''; this.password = ''
+      if (operation === 'restore' && this.lastRedaction?.kit) {
+        this.selectFile(this.lastRedaction.file)
+        this.recoveryKit = this.lastRedaction.kit
+        this.kitName = this.$t('panels.deCurrentKit')
+      } else if (operation === 'redact' && this.lastRedaction?.source) {
+        this.selectFile(this.lastRedaction.source)
+      }
     },
     toggleStrategy(value) {
       if (this.processing) return
@@ -139,7 +160,10 @@ export default {
     async handlePreview() {
       if (this.processing || !this.fileId) return
       this.processing = true; this.error = ''; this.result = null
-      try { this.preview = await previewSensitiveFile(this.payload()) }
+      try {
+        await this.prepareFile(this.fileId)
+        this.preview = await previewSensitiveFile(this.payload())
+      }
       catch (e) { this.error = e.message; this.preview = null }
       finally { this.processing = false }
     },
@@ -147,10 +171,20 @@ export default {
       if (this.processing || !this.preview || !this.fileId) return
       this.processing = true; this.error = ''
       try {
+        const changed = await this.prepareFile(this.fileId)
+        if (changed) {
+          this.preview = null
+          throw new Error(this.$t('panels.dePreviewChanged'))
+        }
+        const source = { id: this.fileId, name: this.fileName, filePath: this.filePath }
         const res = await desensitizeFile({ ...this.payload(), password: this.password })
         this.result = res
         this.exportedKit = res.recoveryKit || ''; this.preview = null
-        if (this.exportedKit) this.downloadKit()
+        this.lastRedaction = res.recoveryKit ? { source, file: res.file, kit: res.recoveryKit } : null
+        if (this.exportedKit) {
+          try { this.downloadKit() }
+          catch (e) { this.error = this.$t('panels.deDownloadRetry') }
+        }
         this.password = ''
         if (res.file?.id) this.$emit('open-file', res.file)
       } catch (e) { this.error = e.message }
@@ -184,6 +218,7 @@ export default {
       if (this.processing || !this.fileId || !this.recoveryKit) return
       this.processing = true; this.error = ''; this.result = null
       try {
+        await this.prepareFile(this.fileId)
         const res = await restoreSensitiveFile({ fileId: this.fileId, recoveryKit: this.recoveryKit, password: this.password })
         this.result = res; this.password = ''
         if (res.file?.id) this.$emit('open-file', res.file)
