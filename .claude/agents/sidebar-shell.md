@@ -26,6 +26,14 @@ beforeUnmount 兜底，Office 没有）。
 （goAllProjects 允许直接 reLaunch 或走 leaveWorkbench，走出口时会连带校验出口里有
 flushDirtyEditors），单测见 `frontend/tests/project-home/flush-dirty-editors.test.mjs`。
 
+**工作台里渲染的组件要跳出工作台，也走这个出口**（v0.38.2 走查：协作抽屉「去团队设置」直接
+`uni.reLaunch`，防抖期内没落盘的文档改动随组件树一起没了）。组件拿不到页面实例，所以
+`project-overview.vue` 用 `provide()` 把 `leaveWorkbench` 注入下去，组件 `inject: { leaveWorkbench: { default: null } }`，
+有就走它、没有（宿主不是工作台，比如项目列表页里的加人弹窗）才直调。`check:nav` 扫 project-overview
+直接 import 的全部组件：出现 `uni.reLaunch/navigateTo/redirectTo` 的方法要么同方法里走了
+`this.leaveWorkbench(`，要么进脚本里的 `WORKBENCH_NAV_ALLOWLIST` 并写理由。名单里现有四处早于这条护栏
+（插件详情/侧栏跳账户页、技能下拉跳插件广场、切换本机身份），各有产品含义，待单独评估。
+
 ## project-overview.vue 内部地图（4939 行，主战场）
 
 > **下面这份 :xxx 行号地图早于「project-overview 分阶段拆分」，多数已漂（实测：

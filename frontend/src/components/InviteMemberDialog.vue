@@ -276,6 +276,8 @@ export default {
     }
   },
   emits: ['update:visible', 'close', 'success'],
+  // 工作台 provide 的离开出口（先落盘再 reLaunch）；挂在项目列表页时为 null
+  inject: { leaveWorkbench: { default: null } },
   data() {
     return {
       activeTab: 'MEMBER', // 'MEMBER' | 'CLIENT'
@@ -522,13 +524,15 @@ export default {
      * AdminPane 里「账户与用量」那条「前往团队」（onNavTap({ key: 'team' })）同一个，
      * 深链形制同仓里既有的 `/pages/admin/admin?nav=account`（MarketPane 那几处）。
      *
-     * 这个弹窗**只挂在项目列表页**（工作台里的加人走 CollabDialog），不是工作台参与的
-     * 跳转，所以照项目列表页「个人中心」按钮的既有形制用 navigateTo：设置页看完能退回
-     * 列表，弹窗那一步的上下文还在。
+     * 这个弹窗挂在两处：项目列表页（工作台之外，照「个人中心」按钮的既有形制用
+     * navigateTo，设置页看完能退回列表），以及工作台成员堆栈的「+」——那里要走工作台
+     * provide 的 leaveWorkbench（先落盘再 reLaunch），navigateTo 会把工作台留在栈里。
      */
     goTeamSettings() {
       this.close()
-      uni.navigateTo({ url: '/pages/admin/admin?nav=team' })
+      const url = '/pages/admin/admin?nav=team'
+      if (this.leaveWorkbench) this.leaveWorkbench(url)
+      else uni.navigateTo({ url })
     },
     copyInviteLink() {
       uni.setClipboardData({

@@ -387,8 +387,8 @@ public class CloudController {
 
     private String userName(Long userId) {
         try {
-            var u = userService.getUserById(userId);
-            if (u != null && u.getUsername() != null) return u.getUsername();
+            String name = UserService.signatureName(userService.getUserById(userId));
+            if (name != null) return name;
         } catch (Exception e) {
             log.warn("取用户名失败: userId={}", userId, e);
         }

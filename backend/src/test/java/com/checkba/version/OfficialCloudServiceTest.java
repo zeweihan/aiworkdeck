@@ -264,4 +264,89 @@ class OfficialCloudServiceTest {
         assertEquals(Boolean.FALSE, s.get("connected"));
         assertNull(s.get("username"));
     }
+
+    // ---- 展示名跟随官网（v0.38.2 走查：改了昵称，案件库参与人列表仍是打码手机号）----
+    // 案件库只在桥接（awdk-login → resolveUser）时刷新展示名，而指纹不变时连接一直复用、
+    // 从不重桥；本机的合并署名 conn.displayName 也停在旧值。
+
+    private void renamedOnCase(String displayName) {
+        canned = "{\"code\":0,\"data\":{\"token\":\"awdt_second\",\"userId\":9,"
+                + "\"username\":\"awd_hanzewei\",\"displayName\":\"" + displayName + "\",\"tokenId\":32}}";
+    }
+
+    @Test
+    void aRenamedAccountRebridgesInPlaceAndRevokesTheOldToken() {
+        connectedAccount("awdk_abc", "fp-1");
+        OfficialCloudService svc = mainland();
+        CloudConnection conn = svc.connectOfficial(ME);
+        renamedOnCase("韩律师");
+
+        svc.refreshDisplayName(ME, "韩律师");
+
+        assertEquals(2, httpCalls, "展示名变了要重桥一次，案件库那边才会刷新");
+        assertEquals(1, rows.size(), "就地重桥，不留第二条连接");
+        assertEquals("韩律师", conn.getDisplayName());
+        assertEquals("awdt_second", conn.getDeviceToken());
+        verify(cloudSyncService).revokeRemoteToken(OFFICIAL, 31L, "awdt_second");
+    }
+
+    @Test
+    void anUnchangedNameDoesNotRebridge() {
+        connectedAccount("awdk_abc", "fp-1");
+        OfficialCloudService svc = mainland();
+        svc.connectOfficial(ME);
+
+        svc.refreshDisplayName(ME, "韩泽伟");
+
+        assertEquals(1, httpCalls);
+        verify(cloudSyncService, never()).revokeRemoteToken(any(), any(), any());
+    }
+
+    /** 旧案件库的桥接不刷新展示名：只许重桥一次，不能每次 status 都换一枚令牌。 */
+    @Test
+    void anOldCaseLibraryKeepingTheStaleNameDoesNotCauseARebridgeLoop() {
+        connectedAccount("awdk_abc", "fp-1");
+        OfficialCloudService svc = mainland();
+        CloudConnection conn = svc.connectOfficial(ME);
+        renamedOnCase("韩泽伟");
+
+        svc.refreshDisplayName(ME, "韩律师");
+        svc.refreshDisplayName(ME, "韩律师");
+
+        assertEquals(2, httpCalls);
+        assertEquals("韩律师", conn.getDisplayName(), "本机合并署名以官网为准");
+    }
+
+    @Test
+    void withoutAnOfficialConnectionThereIsNothingToRefresh() {
+        connectedAccount("awdk_abc", "fp-1");
+        mainland().refreshDisplayName(ME, "韩律师");
+        assertEquals(0, httpCalls);
+    }
+
+    @Test
+    void aFailedRefreshIsSwallowedAndLeavesTheConnectionUntouched() {
+        connectedAccount("awdk_abc", "fp-1");
+        OfficialCloudService svc = mainland();
+        CloudConnection conn = svc.connectOfficial(ME);
+        canned = "{\"code\":1,\"message\":\"限速\"}";
+
+        assertDoesNotThrow(() -> svc.refreshDisplayName(ME, "韩律师"));
+        assertEquals("awdt_first", conn.getDeviceToken());
+        assertEquals("韩泽伟", conn.getDisplayName());
+        verify(cloudSyncService, never()).revokeRemoteToken(any(), any(), any());
+    }
+
+    @Test
+    void theIdentitySyncEventDrivesTheRefresh() {
+        connectedAccount("awdk_abc", "fp-1");
+        OfficialCloudService svc = mainland();
+        svc.connectOfficial(ME);
+        renamedOnCase("韩律师");
+
+        svc.onDisplayNameSynced(
+                new com.checkba.service.account.AccountIdentitySync.DisplayNameSynced(ME, "韩律师"));
+
+        assertEquals(2, httpCalls);
+    }
 }

@@ -653,12 +653,8 @@ public class VersionController {
      */
     private String userName(Long userId) {
         try {
-            var u = userService.getUserById(userId);
-            if (u != null) {
-                String display = u.getDisplayName();
-                if (display != null && !display.isBlank()) return display.trim();
-                if (u.getUsername() != null) return u.getUsername();
-            }
+            String name = UserService.signatureName(userService.getUserById(userId));
+            if (name != null) return name;
         } catch (Exception e) {
             log.warn("取署名失败: userId={}", userId, e);
         }

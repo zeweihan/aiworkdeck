@@ -245,6 +245,7 @@ import {
   uploadAvatar, updateAccountProfile, uploadAccountAvatar, deleteAccountAvatar,
 } from '@/services/api.js'
 import { loadIdentityProfile, PROFILE_SOURCE } from '@/services/accountProfile.js'
+import { submittedInputValue } from '@/utils/identityProfile.js'
 import { getDocumentGeneratorSettings, updateDocumentGeneratorSettings } from '@/services/api.js'
 import { resetDocumentStampCache } from '@/utils/documentGeneratorSetting.js'
 import AwdSwitch from '@/components/AwdSwitch.vue'
@@ -426,10 +427,21 @@ export default {
         accountId: (profile && profile.accountId) || '',
         displayNameIsDefault: !!(profile && profile.displayNameIsDefault),
       }
+      // 「去填写」赶在资料回来之前发的聚焦请求，在这里兑现
+      if (this._pendingNameFocus) {
+        this._pendingNameFocus = false
+        if (this.canEditProfile) this.focusDisplayName()
+      }
     },
     /** 姓名引导点下去：把光标送进昵称输入框（uni 的 focus 是 prop，要先落回 false 才能再次触发） */
     focusDisplayName() {
-      if (!this.canEditProfile) return
+      if (!this.canEditProfile) {
+        // 设置页别处点「去填写」时本组件刚挂上，资料还在路上（canEditProfile 暂时为 false）：
+        // 直接 return 会把请求丢掉，所以先记下，loadAccountProfile 回来后兑现
+        this._pendingNameFocus = true
+        return
+      }
+      this._pendingNameFocus = false
       this.displayNameFocus = false
       this.$nextTick(() => { this.displayNameFocus = true })
     },
@@ -437,10 +449,11 @@ export default {
      * 存昵称。@blur 与 @confirm 都会调到这里（回车之后紧接着失焦），
      * 所以「没变就什么都不做」这条不是优化，是防止一次编辑发两次写请求。
      */
-    async saveDisplayName() {
+    async saveDisplayName(e) {
       if (!this.canEditProfile || this.displayNameSaving) return
       const current = String(this.userInfo.displayName || '')
-      const next = String(this.displayNameInput || '').trim()
+      // 用事件带的值：v-model 有 100ms 节流，打完字立刻回车时 displayNameInput 还是上一拍
+      const next = String(submittedInputValue(e, this.displayNameInput) || '').trim()
       if (!next || next === current) {
         // 清空不算「改成空名」：空展示名同事那边照样看不出是谁，回落到原值
         this.displayNameInput = current

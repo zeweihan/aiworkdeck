@@ -1604,8 +1604,8 @@ public class ProjectFileService {
     private String resolveUserName(Long userId) {
         if (userId == null) return LangText.of("用户", "User");
         try {
-            var u = userService.getUserById(userId);
-            if (u != null && u.getUsername() != null) return u.getUsername();
+            String name = UserService.signatureName(userService.getUserById(userId));
+            if (name != null) return name;
         } catch (Exception e) {
             log.warn("解析用户名失败: userId={}", userId, e);
         }

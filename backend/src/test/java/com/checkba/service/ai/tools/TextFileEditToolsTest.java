@@ -83,6 +83,28 @@ class TextFileEditToolsTest {
     }
 
     @Test
+    @DisplayName("版本信号的署名用展示名，不用用户名（spec 2026-09-10 §4）")
+    void changeSignalIsSignedWithTheDisplayName() throws Exception {
+        com.checkba.service.UserService users = Mockito.mock(com.checkba.service.UserService.class);
+        com.checkba.model.entity.User u = new com.checkba.model.entity.User();
+        u.setId(3L);
+        u.setUsername("admin");
+        u.setDisplayName("韩律师");
+        when(users.getUserById(3L)).thenReturn(u);
+        StorageServiceFactory factory = Mockito.mock(StorageServiceFactory.class);
+        when(factory.getStorageService()).thenReturn(storage);
+        TextFileEditTools signed = new TextFileEditTools(repo, factory, workSessions, bridge, users);
+        ProjectContextHolder.setUserId(3L);
+        ProjectFile pf = textFile(12L, "备忘二.txt", "txt");
+        when(repo.findById(12L)).thenReturn(Optional.of(pf));
+        stubContent(pf, "甲方");
+
+        signed.text_find_replace(12L, "甲方", "乙方", true);
+
+        verify(workSessions).onChangeSignal(7L, 3L, "韩律师");
+    }
+
+    @Test
     @DisplayName("find_replace 命中：替换全部并落盘，触发版本信号与前端刷新")
     void findReplaceHitWritesBackAndSignals() throws Exception {
         ProjectFile pf = textFile(11L, "备忘.txt", "txt");
