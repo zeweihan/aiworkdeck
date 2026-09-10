@@ -188,6 +188,7 @@ import { getLastProjectId } from '@/utils/recentProjects.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { t as t$ } from '@/i18n'
 import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
+import { KEEP_CLEAR_ATTR, resolveLauncherTop } from '@/utils/keepClear.js'
 
 const MAX_IMAGES = 10
 const MAX_RECORD_SECONDS = 120
@@ -252,6 +253,9 @@ export default {
       dragging: false,
       // 入口按钮的位置。null = 没挪过，走 CSS 里的右下角默认值
       launcherPos: null,
+      // 让路后的 top（null = 没压住任何 data-awd-keep-clear 区域，按原位显示）。
+      // 只是显示层的偏移，不写回 launcherPos、不持久化：主操作区挪走后按钮就回原位
+      keepClearTop: null,
       moving: false,
       showContext: false,
       status: '',
@@ -290,11 +294,15 @@ export default {
       return this.$t('feedback.headDefaultTitle')
     },
     launcherStyle() {
-      if (!this.launcherPos) return {}
+      const top = this.keepClearTop
+      if (!this.launcherPos) {
+        // 默认位（CSS 的 right/bottom）只在让路时改竖直坐标，水平仍贴右缘
+        return top == null ? {} : { top: top + 'px', bottom: 'auto' }
+      }
       // 挪过之后改成左上角定位，得把 CSS 里的 right/bottom 显式解掉
       return {
         left: this.launcherPos.left + 'px',
-        top: this.launcherPos.top + 'px',
+        top: (top == null ? this.launcherPos.top : top) + 'px',
         right: 'auto',
         bottom: 'auto',
       }
@@ -322,12 +330,21 @@ export default {
     try { uni.$on('awd:open-feedback', this._openFromMenu) } catch (e) { /* ignore */ }
     this.restoreLauncherPos()
     // 窗口缩小后旧坐标可能整个落到视口外，缩一次窗就再也点不到那个按钮了
-    this._onWinResize = () => { if (this.launcherPos) this.launcherPos = this.clampPos(this.launcherPos) }
+    this._onWinResize = () => {
+      if (this.launcherPos) this.launcherPos = this.clampPos(this.launcherPos)
+      this.updateKeepClear()
+    }
     try { window.addEventListener('resize', this._onWinResize) } catch (e) { /* ignore */ }
+    // 主操作区的位置随页面状态变（空会话输入卡垂直居中 → 有消息后沉底、切面板、
+    // 文案折行），没有能统一订阅的事件，所以低频轮询：每次只是一个 querySelectorAll
+    // 加几次 getBoundingClientRect，代价可以忽略。
+    this.$nextTick(() => this.updateKeepClear())
+    this._keepClearTimer = setInterval(() => this.updateKeepClear(), 800)
   },
   beforeUnmount() {
     try { uni.$off('awd:open-feedback', this._openFromMenu) } catch (e) { /* ignore */ }
     try { window.removeEventListener('resize', this._onWinResize) } catch (e) { /* ignore */ }
+    clearInterval(this._keepClearTimer)
     this.detachLauncherDrag()
     this.stopRecording(true)
     this.stopPlay()
@@ -350,6 +367,22 @@ export default {
         left: Math.min(Math.max(pos.left, M), Math.max(M, vw - w - M)),
         top: Math.min(Math.max(pos.top, M), Math.max(M, vh - h - M)),
       }
+    },
+    // 浮钮不许压住主操作区（dev-board#574）：任何固定坐标都会在某种布局下压住别人的
+    // 发送键，所以由主操作区自己打 data-awd-keep-clear 声明，这里每次落位前避开。
+    // 只算竖直方向——水平挪动会让贴边的按钮跑进内容区中间。
+    updateKeepClear() {
+      if (this.open || this.moving || typeof document === 'undefined') return
+      const vw = window.innerWidth || 1280
+      const vh = window.innerHeight || 800
+      const { w, h } = this.launcherSize()
+      // 没挪过时的原位由 CSS 决定（right:16px; bottom:40vh），这里按同一公式换算
+      const base = this.launcherPos || { left: vw - 16 - w, top: vh - vh * 0.4 - h }
+      const obstacles = [...document.querySelectorAll('[' + KEEP_CLEAR_ATTR + ']')]
+        .map((el) => el.getBoundingClientRect())
+      const top = resolveLauncherTop({ left: base.left, top: base.top, width: w, height: h }, obstacles, vh)
+      const next = top === base.top ? null : top
+      if (next !== this.keepClearTop) this.keepClearTop = next
     },
     restoreLauncherPos() {
       try {
@@ -388,6 +421,8 @@ export default {
         && Math.abs(e.clientY - this._drag.y0) < 4) return
       this._drag.moved = true
       this.moving = true
+      // 拖动中按钮必须跟手，让路偏移先撤掉；松手后再重新判一次
+      this.keepClearTop = null
       this.launcherPos = this.clampPos({
         left: e.clientX - this._drag.dx,
         top: e.clientY - this._drag.dy,
@@ -402,6 +437,7 @@ export default {
         return
       }
       try { uni.setStorageSync(LAUNCHER_POS_KEY, this.launcherPos) } catch (e) { /* ignore */ }
+      this.updateKeepClear()
     },
     detachLauncherDrag() {
       if (this._onLauncherMove) window.removeEventListener('pointermove', this._onLauncherMove)

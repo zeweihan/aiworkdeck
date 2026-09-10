@@ -3,6 +3,7 @@
 
 package com.checkba.service.ai;
 
+import com.checkba.service.LangText;
 import com.checkba.service.SystemSettingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -109,10 +110,16 @@ public class NetworkRegionService {
         return mainland ? AllowedModels.Region.GLOBAL : AllowedModels.Region.INTERNATIONAL;
     }
 
-    /** 供设置页展示判定依据，让用户能看懂为什么国际模型不见了。 */
+    /**
+     * 供设置页展示判定依据，让用户能看懂为什么国际模型不见了。
+     * 这串直接拼进前端文案（admin.regionSummary / chat.networkBasis），得跟着界面语言走（dev-board#575）。
+     */
     public String detectionBasis() {
-        return "系统国家/地区=" + orDash(Locale.getDefault().getCountry())
-                + "，时区=" + orDash(TimeZone.getDefault().getID());
+        String country = orDash(Locale.getDefault().getCountry());
+        String zone = orDash(TimeZone.getDefault().getID());
+        return LangText.of(
+                "系统国家/地区=" + country + "，时区=" + zone,
+                "system country/region=" + country + ", time zone=" + zone);
     }
 
     private static String orDash(String s) {
