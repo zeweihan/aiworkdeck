@@ -39,7 +39,7 @@
       @changed="$emit('changed')"
     />
 
-    <scroll-view v-show="tab !== 'evd'" class="rp-list" scroll-y>
+    <scroll-view v-show="tab !== 'evd'" class="rp-list" scroll-y :scroll-into-view="activeCardId" scroll-with-animation>
       <!-- 修订 -->
       <template v-if="tab === 'rev'">
         <view v-if="!revisions.length" class="rp-empty">
@@ -50,12 +50,12 @@
           <text class="rp-empty-t">{{ $t('editor.review.emptyFilteredTitle') }}</text>
           <text class="rp-empty-s">{{ $t('editor.review.emptyFilteredSub') }}</text>
         </view>
-        <view v-for="g in revisionGroups" :key="g.key" class="rp-card" :class="'k-' + g.authorKind" @tap="goto(g)">
+        <view v-for="g in revisionGroups" :key="g.key" :id="'rp-' + g.key" class="rp-card" :class="['k-' + g.authorKind, { active: activeCardId === 'rp-' + g.key }]" @tap="goto(g)">
           <view class="rp-card-top">
             <text class="rp-who" :class="g.authorKind">{{ authorLabel(g) }}</text>
             <text class="rp-tag" :class="typeClass(g)">{{ typeLabel(g) }}</text>
             <text v-if="g.inTable" class="rp-tag tbl">{{ $t('editor.review.table') }}</text>
-            <text v-if="g.items.length > 1" class="rp-tag cnt">{{ $t('editor.review.contiguousCount', { count: g.items.length }) }}</text>
+            <text v-if="g.items.length > 1 && !g.operationId" class="rp-tag cnt">{{ $t('editor.review.contiguousCount', { count: g.items.length }) }}</text>
             <text class="rp-date">{{ g.date || '' }}</text>
           </view>
           <text class="rp-text" :class="{ del: g.typeKey === 'delete' }">{{ g.text || $t('editor.review.emptyText') }}</text>
@@ -81,7 +81,7 @@
           <text class="rp-empty-t">{{ $t('editor.review.emptyCmtTitle') }}</text>
           <text class="rp-empty-s">{{ $t('editor.review.emptyCmtSub') }}</text>
         </view>
-        <view v-for="c in commentRows" :key="'c' + c.index" class="rp-card" :class="{ done: c.resolved }" @tap="gotoComment(c)">
+        <view v-for="c in commentRows" :key="'c' + c.index" :id="'rp-c' + c.index" class="rp-card" :class="{ done: c.resolved, active: activeCardId === 'rp-c' + c.index }" @tap="gotoComment(c)">
           <view class="rp-card-top">
             <text class="rp-who" :class="c.authorKind">{{ c.author || $t('editor.review.unknownAuthor') }}</text>
             <text v-if="c.linkedCount" class="rp-tag link">{{ $t('editor.review.linkedToRev', { count: c.linkedCount }) }}</text>
@@ -90,9 +90,7 @@
           </view>
           <text class="rp-text">{{ c.content }}</text>
           <text v-if="c.anchorText" class="rp-ctx">{{ $t('editor.review.anchor', { text: c.anchorText }) }}</text>
-          <!-- 没有「删除」按钮：引擎的 .uno:DeleteComment 按活动批注窗口找 Id，
-               在宿主加载出来的文档上下文里够不着（真机四轮验证），做不到就不放
-               按钮——删除批注请用编辑器自身批注栏的右键菜单。 -->
+          <!-- 编辑和删除在随正文滚动的批注卡片中操作；此处保留汇总处置。 -->
           <view class="rp-acts">
             <text class="rp-act" @tap.stop="toggleResolved(c)">{{ c.resolved ? $t('editor.review.reopen') : $t('editor.review.resolve') }}</text>
           </view>
@@ -138,6 +136,7 @@ export default {
   components: { EvidencePanel },
   emits: ['close', 'changed', 'locate'],
   props: {
+    documentLocation: { type: Object, default: () => ({}) },
     // LibreOffice executor（executeCommand(action, params)）。null 时面板静默。
     executor: { type: Object, default: null },
     // 宿主用它在文档改动后要求刷新（自增数字即可）。
@@ -157,6 +156,13 @@ export default {
     }
   },
   computed: {
+    activeCardId() {
+      const loc = this.documentLocation || {}
+      if (this.tab === 'cmt') return loc.commentIndex == null ? '' : 'rp-c' + loc.commentIndex
+      if (this.tab !== 'rev') return ''
+      const group = this.revisionGroups.find(g => g.items.some(r => r.index === loc.revisionIndex))
+      return group ? 'rp-' + group.key : ''
+    },
     // 批注 ↔ 修订的双向关联（同段落 + 区间相交/相接）。坐标由 worker 回传，
     // 表格单元格等跨 story 的区间定位不到（paraKey -1）时一律不关联。
     links() { return linkCommentsToRevisions(this.revisions, this.comments) },
@@ -319,6 +325,7 @@ export default {
 .rp-card.k-ai { border-left: 3px solid var(--awd-accent); }
 .rp-card.k-me { border-left: 3px solid var(--awd-info); }
 .rp-card.k-other { border-left: 3px solid var(--awd-border-strong); }
+.rp-card.active { border-color: var(--awd-accent-text); }
 .rp-card.done { opacity: 0.6; }
 .rp-card-top { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; flex-wrap: wrap; }
 .rp-who { padding: 1px 6px; border-radius: 4px; font-size: 11px; background: var(--awd-surface-2); color: var(--awd-text-2); }

@@ -210,6 +210,7 @@ let completionSnapshot = null;
 let completionSeq = 0;
 // Session-local, monotonic content generation; read-only exports do not advance it.
 let reviewRevision = 0, reviewModel = null;
+let viewChangeInFlight = 0;
 function currentReviewRevision() {
   if (reviewModel !== xModel) { reviewModel = xModel; reviewRevision++; }
   return reviewRevision;
@@ -218,7 +219,7 @@ function invalidateParaIndex() {
   paraIndex.ranges = null; paraIndex.total = 0; paraIndex.model = null;
   // 导出同步切换修订显示并恢复 modified 标志，会触发只读的缓存失效；
   // 此窗口不可能插入人工编辑，补全令牌保留，接受时仍完整核对模型/位置/原文。
-  if (!exportInFlight) { completionSnapshot = null; reviewRevision++; }
+  if (!exportInFlight && !viewChangeInFlight) { completionSnapshot = null; reviewRevision++; }
 }
 function buildParaIndex() {
   const ranges = [];
@@ -367,7 +368,7 @@ function countComments() {
 // （批注的 Name 属性——AI 工具面用它替代 index，因为 index 在任何一条批注被
 // 处置/删除后就会整体前移，同一会话里两次调用之间不可靠）。
 function commentAt(ref) {
-  if (typeof ref === 'string' && ref !== '' && !/^\d+$/.test(ref)) {
+  if (typeof ref === 'string' && ref !== '') {
     try {
       const en = xModel.getTextFields().createEnumeration();
       while (en.hasMoreElements()) {
@@ -1883,14 +1884,9 @@ function streamWriteLine(line) {
 // 页边文字画在锚点 frame 左侧，表格里 frame = 单元格，删除文字会叠到左邻格正文
 // 上；r3 焙入了 frmpaint.cxx 补丁（锚整表左缘，desktop/lowa-build/patches）。
 const REVISION_VIEWS = ['all', 'margin', 'final'];
-// 产品默认 = 页边显示。**这不是观感偏好，是 AI 文本读取契约的地基**：页边模式下
-// 删除的文字被移出正文流，所以 get_document_text / get_paragraph 读到的正文就是
-// 「改后的样子」，find_text_locations / replace_nth_match 的 matchIndex 只数**可见**
-// 匹配（dev-board#369 的用例明写了这一条靠页边成立）。换成内联，AI 多轮编辑时读到的
-// 正文会混进被删的旧字、按可见匹配计数也会错位——那是 AI 编辑契约的回归。
-// 用户可以在工具栏把显示切成内联或最终稿（dev-board#368），AI 命令另有守卫兜住，
-// 见 runAgentCommandInMarginView。改这个常量 = 改上述契约，别顺手动。
-const DEFAULT_REVISION_VIEW = 'margin';
+// 默认完整标记：删除在正文内以删除线展示。AI 和写作助手的正文读取/定位
+// 仍走 runAgentCommandInMarginView 的最终文本语义，与用户看到的显示方式分离。
+const DEFAULT_REVISION_VIEW = 'all';
 
 function readShowChanges() {
   try { return !!xModel.getPropertyValue('ShowChanges'); } catch (e) { return null; }
@@ -1942,17 +1938,34 @@ function applyShowChangesInMargin(on) {
   return readShowChangesInMargin() === !!on ? null : 'ShowChangesInMargin 未生效';
 }
 // 返回的是**读回来的真实状态**（另带 requested/warnings），不是把入参原样抄回去。
+// Pure display changes must not expire completion/review tokens or trigger autosave.
+function withViewOnlyChange(fn) {
+  const enabled = xModel.isSetModifiedEnabled();
+  if (enabled) xModel.disableSetModified();
+  viewChangeInFlight++;
+  try { return fn(); }
+  finally {
+    if (enabled) xModel.enableSetModified();
+    viewChangeInFlight--;
+  }
+}
+
 function applyRevisionView(mode) {
-  const want = REVISION_VIEWS.indexOf(mode) >= 0 ? mode : DEFAULT_REVISION_VIEW;
-  const warnings = [];
-  const e1 = applyShowChangesInMargin(want === 'margin');
-  if (e1) warnings.push('ShowChangesInMargin: ' + e1);
-  const e2 = applyShowChanges(want !== 'final');
-  if (e2) warnings.push('ShowChanges: ' + e2);
-  const st = revisionViewState();
-  st.requested = want;
-  if (warnings.length) st.warnings = warnings;
-  return st;
+  return withViewOnlyChange(function () {
+    const want = REVISION_VIEWS.indexOf(mode) >= 0 ? mode : DEFAULT_REVISION_VIEW;
+    const warnings = [];
+    const e1 = applyShowChangesInMargin(want === 'margin');
+    if (e1) warnings.push('ShowChangesInMargin: ' + e1);
+    const e2 = applyShowChanges(want !== 'final');
+    if (e2) warnings.push('ShowChanges: ' + e2);
+    // Hiding a whole deleted paragraph changes paragraph membership. View-only
+    // changes suppress modified events, so cached ranges must be dropped here.
+    invalidateParaIndex();
+    const st = revisionViewState();
+    st.requested = want;
+    if (warnings.length) st.warnings = warnings;
+    return st;
+  });
 }
 // 启动 / 换文档时复位。不只是把页边开关重新打开（视图设置跟着控制器走），更是
 // 把上一份文档可能留下的「最终稿」隐藏态显式打回来——保活池里同一个 worker 会
@@ -2057,7 +2070,7 @@ function installModifyListener(model) {
     // 不挡掉的话每次自动保存都会引出一次 modified，宿主据此再排一次保存——
     // 实测形成每 3 秒一轮的「保存→modified→保存」死循环，整份 docx 反复上传，
     // 且 export 是全文档同步序列化，会周期性冻住 Qt 事件循环。
-    modified() { invalidateParaIndex(); try { if (exportInFlight) return; if (model.isModified()) post('modified'); } catch (e) { /* ignore */ } },
+    modified() { invalidateParaIndex(); try { if (exportInFlight || viewChangeInFlight) return; if (model.isModified()) post('modified'); } catch (e) { /* ignore */ } },
     disposing() {},
   });
   model.addModifyListener(listener);
@@ -2490,7 +2503,104 @@ function completionEdit(title, edit) {
   return Object.assign({}, captureCompletion(120), { success: true }, value || {});
 }
 
+// Reverse hit-testing obtains document coordinates without touching the view cursor.
+// Moving that cursor to measure anchors loses selection and scroll (restoreViewData
+// ignores the visible area of documents authored by another user).
+let reviewLayoutCache = null;
+let comparisonModel = null;
+function isReviewWritable() { return comparisonModel !== xModel && !xModel.isReadonly(); }
+function locateReviewAnchor(range, view, viewport, height, width) {
+  const scale = viewport.width / (view[5] - view[3]);
+  const text = xModel.getText();
+  const compare = (x, y) => {
+    const hit = ctrl.createTextRangeByPixelPosition(new css.awt.Point({
+      X: Math.round((x - view[3]) * scale), Y: Math.round((y - view[4]) * scale),
+    }));
+    return hit ? text.compareRegionStarts(hit, range) : 1;
+  };
+  // Separate columns need separate vertical searches. Only use a location when
+  // the reverse hit-test actually resolves to this anchor; never guess a line.
+  for (const fraction of [0.5, 0.25, 0.75, 0.125, 0.375, 0.625, 0.875]) {
+    let low = 0, high = height;
+    for (let i = 0; i < 5 && compare(width * fraction, high) > 0; i++) high *= 2;
+    while (high - low > 1 / scale) {
+      const mid = (low + high) / 2;
+      if (compare(width * fraction, mid) > 0) low = mid; else high = mid;
+    }
+    const y = high + 4 / scale;
+    low = 0; high = width;
+    while (high - low > 1 / scale) {
+      const mid = (low + high) / 2;
+      if (compare(mid, y) > 0) low = mid; else high = mid;
+    }
+    if (compare(high, y) !== 0) continue;
+    const start = high;
+    low = start; high = width;
+    while (high - low > 1 / scale) {
+      const mid = (low + high) / 2;
+      if (compare(mid, y) >= 0) low = mid; else high = mid;
+    }
+    // The line-start hit area includes the left margin. Use its text-side edge.
+    return { x: high - Math.min(high - start, 8 / scale) / 2, y: y };
+  }
+  return null;
+}
+function reviewLayout() {
+  if (!isWriterDoc()) { reviewLayoutCache = null; return { success: true, items: [], available: false }; }
+  const live = ctrl.getViewData(), v = String(live).split(';').map(Number);
+  const rect = readNativeCaretRect(ctrl.getFrame(), live, 12);
+  if (!rect) return { success: false, message: 'Document viewport unavailable' };
+  const signature = [docSeq, currentReviewRevision(), revisionViewState().mode, v[2], v[5] - v[3], v[6] - v[4]].join(':');
+  if (!reviewLayoutCache || reviewLayoutCache.signature !== signature) {
+    const revisions = EXEC.list_revisions({ limit: 500 });
+    const comments = EXEC.list_comments({ limit: 500 });
+    if (!revisions.success || !comments.success) return tableFail('Review list unavailable');
+    const targets = [], ren = xModel.getRedlines().createEnumeration();
+    revisions.revisions.forEach(function (r) {
+      const native = ren.nextElement();
+      try { targets.push({ key: 'r' + r.index, kind: 'revision', data: r, range: native.getPropertyValue('RedlineStart') }); } catch (e) {}
+    });
+    const cen = xModel.getTextFields().createEnumeration(); let ci = 0;
+    while (cen.hasMoreElements() && ci < comments.comments.length) {
+      const field = cen.nextElement();
+      if (!(field.supportsService && field.supportsService('com.sun.star.text.textfield.Annotation'))) continue;
+      const c = comments.comments[ci++];
+      try { targets.push({ key: 'c' + c.id, kind: 'comment', data: c, range: field.getAnchor().getStart() }); } catch (e) {}
+    }
+    // getByName lazily creates unused built-in page styles and marks the document
+    // modified. Read only the style already applied to the active page.
+    const pageStyleName = ctrl.getViewCursor().getPropertyValue('PageStyleName');
+    const pageStyle = xModel.getStyleFamilies().getByName('PageStyles').getByName(pageStyleName);
+    const pageHeight = pageStyle.getPropertyValue('Height') * 1440 / 2540;
+    const pageWidth = pageStyle.getPropertyValue('Width') * 1440 / 2540;
+    const height = Math.max(v[6], Number(ctrl.getPropertyValue('PageCount')) * (pageHeight + 568));
+    const width = Math.max(v[5], pageWidth + 568), items = [], operations = new Map();
+    for (const target of targets) {
+      try {
+        const op = target.data.operationId;
+        const pos = (op && operations.get(op)) || locateReviewAnchor(target.range, v, rect.viewport, height, width);
+        if (!pos) continue;
+        if (op) operations.set(op, pos);
+        items.push({ key: target.key, kind: target.kind, data: target.data, ...pos });
+      } catch (e) { /* Unavailable anchors remain accessible in the review list. */ }
+    }
+    reviewLayoutCache = { signature: signature, items: items,
+      truncated: revisions.count >= 500 || comments.count >= 500 || items.length < targets.length };
+  }
+  return { success: true, available: true, items: reviewLayoutCache.items, truncated: reviewLayoutCache.truncated,
+    notesVisible: !!ctrl.getViewSettings().getPropertyValue('ShowAnnotations'),
+    revision: currentReviewRevision(), writable: isReviewWritable(), view: { left: v[3], top: v[4], right: v[5], bottom: v[6],
+      caretX: v[0], caretY: v[1], ...rect }, mode: revisionViewState().mode };
+}
+
 const EXEC = {
+  get_review_layout() { return reviewLayout(); },
+  set_review_balloons(p) {
+    if (!isWriterDoc()) return { success: true };
+    withViewOnlyChange(function () { ctrl.getViewSettings().setPropertyValue('ShowAnnotations', !p.enabled); });
+    reviewLayoutCache = null;
+    return { success: ctrl.getViewSettings().getPropertyValue('ShowAnnotations') === !p.enabled };
+  },
   get_review_context() {
     const reason = completionGuard();
     if (reason) return Object.assign(completionUnavailable(reason), { revision: currentReviewRevision() });
@@ -3262,6 +3372,8 @@ const EXEC = {
   //   - winPx: the Qt component window rect (px) — the canvas surface bounds.
   // Each field is independently try/caught so a missing API degrades, not throws.
   get_cursor_rect() {
+    // The IME/caret timer can outlive a Writer document during a tab switch.
+    if (!isWriterDoc()) return completionUnavailable('not-writer');
     const out = { success: true };
     let vc = null;
     try { vc = ctrl.getViewCursor(); } catch (e) { out.vcErr = errStr(e); }
@@ -4889,7 +5001,7 @@ const EXEC = {
   // 点击定位、逐条接受/拒绝——修订的权威视图从页边挪进面板。
   list_revisions(p) {
     const limit = Math.max(1, Math.min(500, Number(p && p.limit) || 200));
-    const out = [];
+    const out = [], tableCells = Object.create(null);
     let prevEnd = null;   // 上一条的 RedlineEnd，用来判「首尾相接」（见 contiguous）
     try {
       const en = xModel.getRedlines().createEnumeration();
@@ -4906,7 +5018,7 @@ const EXEC = {
         try { it.description = String(r.getPropertyValue('RedlineDescription') || ''); } catch (e) {}
         try {
           const d = r.getPropertyValue('RedlineDateTime');
-          if (d) it.date = d.Year + '-' + pad2(d.Month) + '-' + pad2(d.Day) + ' ' + pad2(d.Hours) + ':' + pad2(d.Minutes);
+          if (d) { it.date = d.Year + '-' + pad2(d.Month) + '-' + pad2(d.Day) + ' ' + pad2(d.Hours) + ':' + pad2(d.Minutes); it.timestamp = it.date + ':' + pad2(d.Seconds) + '.' + (d.NanoSeconds || 0); }
         } catch (e) {}
         // 删除型在页边模式下文本收进 redline 对象（getString 可取）；插入型的
         // 文本只在正文流里，要靠 RedlineStart/End 区间取。两路都试。
@@ -4929,18 +5041,42 @@ const EXEC = {
             const pc = rs.getText().createTextCursorByRange(rs);
             try { pc.gotoStartOfParagraph(false); pc.gotoEndOfParagraph(true); it.paragraph = String(pc.getString() || '').slice(0, 120); } catch (e) {}
             // 表格内的修订：面板要标出来（页边互叠的正是这一类）
-            try { it.inTable = !!rs.getPropertyValue('Cell'); } catch (e) { it.inTable = false; }
+            try {
+              const cell = rs.getPropertyValue('Cell'), table = rs.getPropertyValue('TextTable');
+              it.inTable = !!cell;
+              if (cell && table) {
+                it.tableName = table.getName(); it.cellName = String(cell.getPropertyValue('CellName') || '');
+                it.wholeCell = !!it.text && it.text === String(cell.getString() || '');
+                it.tableCells = tableCells[it.tableName] || (tableCells[it.tableName] = table.getCellNames().filter(function (name) { return !!table.getCellByName(name).getString(); }));
+              }
+            } catch (e) { it.inTable = false; }
             applyLocator(it, rs, re);   // 批注关联用的可比坐标
           }
         } catch (e) {}
         prevEnd = curEnd;
-        it.text = String(it.text || '').slice(0, 120);
+        it.text = String(it.text || '');
         out.push(it);
       }
     } catch (e) { return tableFail(errStr(e)); }
+    // Only infer an imported table operation when every nonempty cell is covered in
+    // full, with exactly the same author/type/engine timestamp. Partial cell edits
+    // and unrelated same-minute changes stay separate.
+    const candidates = {};
+    out.forEach(function (r) {
+      if (!r.wholeCell || !r.timestamp || !r.tableName || r.type !== 'Insert') return;
+      const key = JSON.stringify([r.tableName, r.type, r.author, r.timestamp]);
+      (candidates[key] || (candidates[key] = [])).push(r);
+    });
+    Object.keys(candidates).forEach(function (key) {
+      const rows = candidates[key], cells = rows[0].tableCells || [];
+      if (out.some(function (r) { return r.tableName === rows[0].tableName && r.type === 'Delete'; }) || rows.length < 2 || rows.length !== cells.length || !cells.every(function (name) { return rows.some(function (r) { return r.cellName === name; }); })) return;
+      rows.forEach(function (r) { r.operationId = key; r.operationKind = 'table-insert'; });
+    });
+    out.forEach(function (r) { delete r.tableCells; });
     return { success: true, count: out.length, revisions: out };
   },
   goto_revision(p) {
+    if (p && p.revision != null && p.revision !== currentReviewRevision()) return tableFail('文档已变化，请刷新修订后重试');
     const r = redlineAt(p && p.index);
     if (!r) return { success: false, message: 'no revision at index ' + (p && p.index) };
     return selectRedlineRange(r)
@@ -4979,6 +5115,7 @@ const EXEC = {
   // 会因异常/取不到区间而返回 false，这时退回 redlineAt 按位重新枚举一次，只让
   // 那一条退化成旧路径的开销，不拖累整批、也不会把错误的修订当成功处置掉。
   resolve_revisions(p) {
+    if (p && p.revision != null && p.revision !== currentReviewRevision()) return tableFail('文档已变化，请刷新修订后重试');
     const action = String((p && p.action) || 'accept').toLowerCase();
     if (action !== 'accept' && action !== 'reject') return tableFail("action must be accept|reject");
     const indices = Array.isArray(p && p.indices) ? p.indices : [];
@@ -5029,10 +5166,10 @@ const EXEC = {
         const it = { index: out.length };
         try { it.id = commentIdOf(f); } catch (e) {}
         try { it.author = f.getPropertyValue('Author'); } catch (e) {}
-        try { it.content = String(f.getPropertyValue('Content') || '').slice(0, 500); } catch (e) {}
+        try { it.content = String(f.getPropertyValue('Content') || ''); } catch (e) {}
         try {
           const d = f.getPropertyValue('DateTimeValue');
-          if (d) it.date = d.Year + '-' + pad2(d.Month) + '-' + pad2(d.Day) + ' ' + pad2(d.Hours) + ':' + pad2(d.Minutes);
+          if (d) { it.date = d.Year + '-' + pad2(d.Month) + '-' + pad2(d.Day) + ' ' + pad2(d.Hours) + ':' + pad2(d.Minutes); it.timestamp = it.date + ':' + pad2(d.Seconds) + '.' + (d.NanoSeconds || 0); }
         } catch (e) {}
         try { it.resolved = !!f.getPropertyValue('Resolved'); } catch (e) { it.resolved = false; }
         try {
@@ -5047,14 +5184,26 @@ const EXEC = {
     return { success: true, count: out.length, comments: out };
   },
   goto_comment(p) {
-    const f = commentAt(p && p.index);
+    if (p && p.revision != null && p.revision !== currentReviewRevision()) return tableFail('批注已变化，请刷新后重试');
+    const f = commentAt(p && (p.id || p.index));
     if (!f) return { success: false, message: 'no comment at index ' + (p && p.index) };
     try { return selectVisibly(f.getAnchor()) ? { success: true, index: Number(p.index) } : { success: false, message: 'could not select anchor' }; }
     catch (e) { return { success: false, message: errStr(e) }; }
   },
+  update_comment(p) {
+    if (p && p.revision != null && p.revision !== currentReviewRevision()) return tableFail('批注已变化，请刷新后重试');
+    if (!isReviewWritable()) return tableFail('文档为只读状态');
+    const f = commentAt(p && (p.id || p.index));
+    if (!f || typeof p.content !== 'string' || !p.content.trim()) return tableFail('批注内容不能为空');
+    if (p.expectedContent != null && f.getPropertyValue('Content') !== p.expectedContent) return tableFail('批注已变化，请刷新后重试');
+    f.setPropertyValue('Content', p.content);
+    return { success: f.getPropertyValue('Content') === p.content, id: commentIdOf(f) };
+  },
   // AI 工具面（doc_resolve_comment）与 ReviewPanel（{index}）共用本原语：ref 优先
   // 取 id（commentAt 按 Name 定位，跨调用稳定），没有 id 才退回 index。
   set_comment_resolved(p) {
+    if (p && p.revision != null && p.revision !== currentReviewRevision()) return tableFail('批注已变化，请刷新后重试');
+    if (!isReviewWritable()) return tableFail('文档为只读状态');
     const ref = p && (p.id != null && p.id !== '' ? p.id : p.index);
     const f = commentAt(ref);
     if (!f) return tableFail('no comment at ' + ref);
@@ -5063,35 +5212,21 @@ const EXEC = {
       return { success: true, id: commentIdOf(f), resolved: !!f.getPropertyValue('Resolved') };
     } catch (e) { return tableFail(errStr(e)); }
   },
-  // 删除批注：removeTextContent 是正路。**dispose() 不能信**——它在本引擎上
-  // 既不抛异常也不真的移除批注字段（真机实证），照着它的返回值报成功就是骗
-  // 用户。两条路都跑完还要用条数复核。
+  // Annotation removal must not itself become a tracked deletion: otherwise the
+  // field remains in the document and the comment count never decreases.
   delete_comment(p) {
+    if (p && p.revision != null && p.revision !== currentReviewRevision()) return tableFail('批注已变化，请刷新后重试');
+    if (!isReviewWritable()) return tableFail('文档为只读状态');
     const ref = p && (p.id != null && p.id !== '' ? p.id : p.index);
     const f = commentAt(ref);
     if (!f) return tableFail('no comment at ' + ref);
     const before = countComments();
-    const errs = [];
-    // 主路：定位到批注锚点后派发 .uno:DeleteComment，**Id 参数（批注的 Name）
-    // 必传**——真机实证不带 Id 会静默打空（引擎按 Id 找批注，不认光标位置）。
-    // 与 add_comment 走 .uno:InsertAnnotation 同一先例。
-    // 前提：文档必须是可见的（.uno:DeleteComment 找的是引擎里的活动批注窗口，
-    // Hidden 打开的文档没有这些窗口，删除会静默失败——e2e 因此专门用可见文档）。
-    // 已解决的批注同理不再是活动窗口，先取消解决态再删。
-    try { if (f.getPropertyValue('Resolved')) f.setPropertyValue('Resolved', false); } catch (e) {}
-    try { selectVisibly(f.getAnchor()); } catch (e) { errs.push(errStr(e)); }
     try {
-      const name = commentIdOf(f);
-      css.frame.DispatchHelper.create(context).executeDispatch(
-        ctrl.getFrame(), '.uno:DeleteComment', '', 0, [mkProp('Id', name)]);
-    } catch (e) { errs.push(errStr(e)); }
-    if (countComments() === before) {
-      try { f.getAnchor().getText().removeTextContent(f); } catch (e) { errs.push(errStr(e)); }
-    }
+      withRecordChangesOff(function () { f.getAnchor().getText().removeTextContent(f); });
+    } catch (e) { return tableFail(errStr(e)); }
     const after = countComments();
-    return after < before
-      ? { success: true, remaining: after }
-      : Object.assign(tableFail('批注未被删除' + (errs.length ? '：' + errs.join(' | ') : '')), { remaining: after });
+    return after < before ? { success: true, remaining: after }
+      : Object.assign(tableFail('批注未被删除'), { remaining: after });
   },
   // [批注回复] 是否有真正的原生线程回复（LO 的 ParentId/ParentName 一类属性）
   // 在这个引擎版本上待查证——vendored zeta.js 未见相关 typedef，无法在不接
@@ -5208,6 +5343,7 @@ const EXEC = {
       css.frame.DispatchHelper.create(context).executeDispatch(
         ctrl.getFrame(), '.uno:EditDoc', '', 0, []);
     } catch (e) {}
+    comparisonModel = xModel; // The comparison tab is a read-only review surface.
     return { success: true, redlineCount: count };
   },
   // ==================== Calc 电子表格原语（sheet_*） ====================
@@ -7028,16 +7164,15 @@ const EXEC = {
 // 原语可能是 async（分批的 find_replace / apply_house_style），恢复必须等它 settle；
 // 分批命令在批间会让出事件循环，那期间插进来的别的命令会看到页边语义——与「批间允许
 // 别的命令插进来」这条既有约定同源，不额外收窄。
+const FINAL_TEXT_ACTIONS = new Set(['get_completion_context', 'accept_completion', 'insert_completion_content', 'get_review_context', 'goto_review_range', 'apply_review_edit']);
 const AGENT_VIEW_EXEMPT = { set_revision_view: 1, export_document: 1, load_document: 1 };
 function runAgentCommandInMarginView(action, fn) {
   if (AGENT_VIEW_EXEMPT[action] || !isWriterDoc()) return fn();
   const before = revisionViewState().mode;
   if (before !== 'all') return fn();
-  applyRevisionView('margin');
-  try { xModel.refresh(); } catch (e) {}
+  withViewOnlyChange(function () { applyRevisionView('margin'); try { xModel.refresh(); } catch (e) {} });
   const restore = function () {
-    applyRevisionView(before);
-    try { xModel.refresh(); } catch (e) {}
+    withViewOnlyChange(function () { applyRevisionView(before); try { xModel.refresh(); } catch (e) {} });
   };
   let out;
   try { out = fn(); }
@@ -7055,6 +7190,7 @@ function execCommand(reqId, action, params) {
   const finish = function (result) {
     delete CANCELLED[reqId];
     delete INFLIGHT[reqId];
+    if (action === 'get_review_context' && result && result.success) result.cursorRectRaw = EXEC.get_cursor_rect();
     post('result', { reqId: reqId, result: result });
   };
   INFLIGHT[reqId] = true;
@@ -7068,7 +7204,7 @@ function execCommand(reqId, action, params) {
     catch (e) { log('修订作者设置失败 / redline author failed: ' + errStr(e)); }
     const fn = EXEC[action];
     result = fn
-      ? (p.__agent ? runAgentCommandInMarginView(action, function () { return fn(p); }) : fn(p))
+      ? ((p.__agent || FINAL_TEXT_ACTIONS.has(action)) ? runAgentCommandInMarginView(action, function () { return fn(p); }) : fn(p))
       : { success: false, message: 'not implemented in LibreOffice worker yet: ' + action };
   } catch (e) {
     result = { success: false, message: errStr(e) };

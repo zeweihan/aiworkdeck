@@ -16,6 +16,9 @@
 // iframe it falls back to window.parent.postMessage, so the Phase 0 spike (and a
 // browser) can drive it the same way the host will.
 
+import { attachReviewBalloons } from '../composables/zetaOfficeReviewBalloons.js'
+let reviewBalloons = null
+
 import { startEditorEndpoint } from '../composables/zetaOfficeEditorEndpoint.js'
 import { attachDocumentLinkClicks } from '../composables/zetaOfficeLinkClick.js'
 import { attachImeOverlay } from '../composables/zetaOfficeImeOverlay.js'
@@ -222,6 +225,7 @@ function relayModified(d) {
   if (!d || !d.cmd) return
   if (d.cmd === 'sel_changed') { relaySelection(); return }
   if (d.cmd !== 'modified') return
+  reviewBalloons?.documentChanged()
   inlineReview?.documentChanged()
   const now = Date.now()
   if (now - lastModifiedRelay < 500) return
@@ -236,6 +240,7 @@ function relayModified(d) {
 let lastSelectionRelay = 0
 let selectionTimer = 0
 function relaySelection() {
+  reviewBalloons?.cursorMoved()
   const now = Date.now()
   const since = now - lastSelectionRelay
   if (since < 150) {
@@ -337,6 +342,17 @@ startEditorEndpoint({
     try { hostTransport.send({ __lo: 'lo-relay', type: 'boot-log', msg: String(m) }) } catch (e) { /* ignore */ }
   },
 }).then((endpoint) => {
+  reviewBalloons = attachReviewBalloons({ canvas: document.getElementById('qtcanvas'), execute: (a,p) => endpoint.executor.executeCommand(a,p), transport: hostTransport, locale: q.get('uilang') || 'zh' })
+  // A layout result can arrive while the host has already started another UNO
+  // command. Never resize the Qt canvas during import/export or an edit.
+  const executeWithReview = endpoint.executor.executeCommand.bind(endpoint.executor)
+  endpoint.executor.executeCommand = async (action, params, callOpts) => {
+    if (/^(get_|list_)/.test(action) || action === 'set_review_balloons' || (action === 'set_revision_view' && !params?.mode)) return executeWithReview(action, params, callOpts)
+    reviewBalloons.suspend(action)
+    try { return await executeWithReview(action, params, callOpts) }
+    finally { reviewBalloons.resume() }
+  }
+
   console.log('[zeta-editor] endpoint ready — serving host over transport')
   insightExecutor = endpoint.executor
   themeExecutor = endpoint.executor
@@ -383,7 +399,7 @@ startEditorEndpoint({
     })
     inlineReview = attachInlineReview({ canvas: document.getElementById('qtcanvas'), input: overlay.element,
       execute: (action, params) => endpoint.executor.executeCommand(action, params), transport: hostTransport, language: q.get('uilang') || 'zh-CN' })
-    window.addEventListener('pagehide', () => { writingAssistance.destroy(); inlineReview.destroy() }, { once: true })
+    window.addEventListener('pagehide', () => { writingAssistance.destroy(); inlineReview.destroy(); reviewBalloons?.destroy() }, { once: true })
   } catch (e) { console.error('[zeta-editor] IME overlay failed:', e); if (VERIFY) vlog('IME overlay failed: ' + (e && e.message || e)) }
   // 触控板捏合缩放。Chromium 把捏合报成 ctrlKey + wheel；**不拦下来**浏览器就去
   // 缩放整个 webview 页面——LO 自己的工具栏跟着一起放大、画布重采样发糊，而且

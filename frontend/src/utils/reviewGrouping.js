@@ -98,20 +98,22 @@ export function groupRevisions(revisions, opts) {
   const o = opts || {}
   const reasons = o.reasons || new Map()
   const selfAuthor = o.selfAuthor
-  const textLimit = o.textLimit == null ? 120 : o.textLimit
+  const textLimit = o.textLimit == null ? 0 : o.textLimit
   const groups = []
   for (const r of (Array.isArray(revisions) ? revisions : [])) {
     const last = groups[groups.length - 1]
-    const joins = last && r.contiguous
+    const sameOperation = last && r.operationId && r.operationId === last.operationId
+      && r.tableName === last.tableName
+    const joins = last && (sameOperation || (r.contiguous && !r.operationId && !last.operationId
+      && (last.date || '') === (r.date || '')))
       && last.type === r.type
       && (last.author || '') === (r.author || '')
-      && (last.date || '') === (r.date || '')
     if (joins) {
       last.items.push(r)
-      last.text += (r.text || '')
+      last.text += (sameOperation ? '\n' : '') + (r.text || '')
     } else {
       groups.push({
-        key: 'g' + r.index,
+        key: 'g' + r.index, operationId: r.operationId, operationKind: r.operationKind, tableName: r.tableName,
         type: r.type,
         typeKey: revisionTypeKey(r.type),
         description: r.description || '',
