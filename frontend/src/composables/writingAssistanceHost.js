@@ -6,11 +6,13 @@ import { completionDetails } from '../utils/completionDetails.js'
 const preferenceListeners = new Map()
 
 /** Host-scoped vocabulary and explicit lookup. Dependencies stay injectable for isolation tests. */
-export function createWritingAssistanceHost({ projectId, fileId, userId, execute, send, api, storage, writable, language }) {
+export function createWritingAssistanceHost({ projectId, fileId, userId, execute, send, api, storage, writable, language,
+  timers = { set: (fn, ms) => setTimeout(fn, ms), clear: id => clearTimeout(id) } }) {
   const session = `${projectId}:${fileId}:${Date.now()}:${Math.random().toString(36).slice(2)}`
   const key = `awd_writing_preferences_${userId}`
   let disposed = false, items = [], documentItems = [], loadSequence = 0, seedSequence = 0
   const seededTexts = new Set()
+  let seedComplete = false, seedTimer = null
   let preferences = { enabled: true, learning: true, hints: true }
   try { const stored = storage.get(key); for (const name of Object.keys(preferences)) if (typeof stored?.[name] === 'boolean') preferences[name] = stored[name] } catch { /* defaults */ }
   const receivePreferences = (next) => {
@@ -52,7 +54,7 @@ export function createWritingAssistanceHost({ projectId, fileId, userId, execute
     if (!current() || !writable) return
     const view = await execute('set_revision_view', {}).catch(() => null)
     if (!current() || !view || view.mode === 'all') return
-    // Load/manual refresh only: page the live body within one worker revision.
+    // Initial load/manual refresh: page the live body within one worker revision.
     // The API's 50-entry learn batch is independent of the document vocabulary.
     const paragraphs = []
     let revision, start = 0, chars = 0, stop = false
@@ -75,6 +77,8 @@ export function createWritingAssistanceHost({ projectId, fileId, userId, execute
     if (!current() || context?.revision !== revision || context.reason === 'inline-revisions') return
     const entries = extractCompletionEntries(paragraphs.join('\n'), { limit: 500 })
     documentItems = entries.map((x) => ({ ...x, source: 'document', scope: 'project', uses: 1 }))
+    seedComplete = true
+    if (seedTimer != null) { timers.clear(seedTimer); seedTimer = null }
     publish()
     const entities = entries.filter((x) => !['WORD', 'PHRASE'].includes(x.kind) && !seededTexts.has(x.text))
       .slice(0, Math.max(0, 200 - seededTexts.size))
@@ -120,6 +124,17 @@ export function createWritingAssistanceHost({ projectId, fileId, userId, execute
       publish()
       await Promise.allSettled([refresh(), seedDocument()])
     },
+    modified() {
+      if (disposed || seedComplete || !writable) return
+      // A first scan interrupted by typing must recover when the user pauses.
+      // Once seeded, ongoing input learning handles edits without rescanning.
+      seedSequence++
+      if (seedTimer != null) timers.clear(seedTimer)
+      seedTimer = timers.set(async () => {
+        seedTimer = null
+        try { await seedDocument() } catch { /* Local candidates remain optional. */ }
+      }, 1200)
+    },
     async handle(msg) {
       if (disposed || msg?.type !== 'writing-request' || msg.session !== session) return false
       try {
@@ -133,6 +148,7 @@ export function createWritingAssistanceHost({ projectId, fileId, userId, execute
     destroy() {
       if (disposed) return
       disposed = true; loadSequence++; seedSequence++
+      if (seedTimer != null) timers.clear(seedTimer)
       const listeners = preferenceListeners.get(key)
       listeners?.delete(receivePreferences)
       if (!listeners?.size) preferenceListeners.delete(key)

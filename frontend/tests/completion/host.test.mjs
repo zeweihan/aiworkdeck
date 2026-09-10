@@ -252,3 +252,34 @@ test('manual rescans do not count the same imported entities as repeated persona
   assert.equal(f.learned.length, 1)
   assert.deepEqual(f.learned[0], { scope: 'project', entries: [{ text: '青岛致衡贸易有限公司', kind: 'COMPANY' }] })
 })
+
+test('typing during first document scan retries once idle; successful seeds do not scan on every edit', async t => {
+  const pendingTimers = new Map(), messages = []; let timerId = 0, reads = 0, revision = 1, release
+  const host = createWritingAssistanceHost({ projectId: 1, fileId: 2, userId: 'seed-race', writable: true,
+    send: m => messages.push(m), storage: { get: () => ({ learning: false }) }, api: { list: async () => ({ items: [] }) },
+    timers: { set(fn) { pendingTimers.set(++timerId, fn); return timerId }, clear(id) { pendingTimers.delete(id) } },
+    execute: async action => {
+      if (action === 'set_revision_view') return { mode: 'margin' }
+      if (action === 'get_document_text') {
+        reads++
+        const capturedRevision = revision
+        if (reads === 1) await new Promise(resolve => { release = resolve })
+        return { success: true, revision: capturedRevision, paragraphs: [{ text: '股东名册中青岛致衡贸易有限公司持股40%。' }] }
+      }
+      return { success: true, revision }
+    },
+  })
+  t.after(() => host.destroy())
+  const start = host.start()
+  await new Promise(r => setTimeout(r, 0))
+  revision++
+  host.modified?.(); host.modified?.()
+  release(); await start
+  assert.equal(pendingTimers.size, 1, 'interrupted initial scan retries after the last edit, not each keystroke')
+  const run = [...pendingTimers.values()][0]; pendingTimers.clear(); await run()
+  assert.ok(messages.at(-1).config.items.some(i => i.text === '青岛致衡贸易有限公司'))
+  const completedReads = reads
+  host.modified?.()
+  assert.equal(pendingTimers.size, 0)
+  assert.equal(reads, completedReads)
+})

@@ -1355,6 +1355,7 @@ export default {
       // 它描述的是即将被替换掉的旧文档，标脏只会让 autosave 把旧内容传回去。
       if (this._reloading || this._saveDiscarded) return
       this.dirty = true
+      this._writingHost?.modified()
       this._inlineReviewHost?.modified()
       if (!this._dirtySince) this._dirtySince = Date.now()
       this.scheduleAutoSave()
