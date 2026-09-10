@@ -200,7 +200,7 @@ try {
       return {
         x,
         y,
-        blocker: hit && !element.contains(hit)
+        blocker: !hit ? 'outside the viewport' : !element.contains(hit)
           ? `${hit.tagName.toLowerCase()}.${[...hit.classList].join('.')}`
           : null,
       }

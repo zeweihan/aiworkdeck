@@ -2897,18 +2897,30 @@ export default {
   flex-shrink: 0;
 }
 
+.header-left {
+  flex: 1;
+  min-width: 0;
+  margin-right: 8px;
+}
+
 .header-left .project-name-display {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
   color: var(--awd-text);
 }
 
 .header-actions {
   display: flex;
+  flex-shrink: 0;
   gap: 12px;
   position: relative;
 }
 .memory-header-btn {
   align-self: center;
+  white-space: nowrap;
   padding: 4px 7px;
   border-radius: 5px;
   color: var(--awd-text-2);
