@@ -153,36 +153,31 @@ export const fileOpenTabsMethods = {
       // Start session tracking for this file
       activityTracker.trackActivePage('OPEN_FILE', file.id, file.name, this.project && this.project.id, meta)
 
-      // 1. 如果已经在某个 pane 打开，则聚焦该 pane
-      // - 如果当前聚焦窗格未打开该文件，则在当前窗格打开
-      // - 若当前窗格已打开，则仅激活
-      let targetPane = this.splitMode ? this.focusedPane : 'left'
-      // 分屏时同一份文档绝不能在两个窗格各开一份：两个 LibreOfficeEditor 实例
-      // 各自维护 dirty/autoSave（纯实例内状态，互不知晓），谁后保存谁就整体
-      // 覆盖后端文件，先编辑那一侧的修改被静默丢弃。另一侧已经开着就聚焦过去。
-      if (this.splitMode) {
-        const otherPane = targetPane === 'left' ? 'right' : 'left'
-        const otherList = otherPane === 'left' ? this.leftFiles : this.rightFiles
-        if (otherList.some(f => f.id === file.id)) targetPane = otherPane
-      }
+      // 普通打开先找两侧已有标签；显式拖拽分屏仍由 tabDragSplit 管理。
+      // 保留已有 id 的类型，避免数字/字符串来源差异重建编辑器实例。
+      const sameFile = tab => tab.id != null && file.id != null
+        && String(tab.id) === String(file.id) && (tab.tabType || '') === (file.tabType || '')
+      const preferredPane = this.splitMode ? this.focusedPane : 'left'
+      const otherPane = preferredPane === 'left' ? 'right' : 'left'
+      const preferredList = preferredPane === 'left' ? this.leftFiles : this.rightFiles
+      const otherList = otherPane === 'left' ? this.leftFiles : this.rightFiles
+      const existing = preferredList.find(sameFile) || otherList.find(sameFile)
+      const targetPane = existing && otherList.includes(existing) ? otherPane : preferredPane
       const targetList = targetPane === 'left' ? this.leftFiles : this.rightFiles
       const targetIdProp = targetPane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'
-
-      const existing = targetList.find(f => f.id === file.id)
-      const locator = (opts && opts.locator) || null
+      const tabId = existing ? existing.id : file.id
+      if (targetPane === 'right' && !this.splitMode) this.splitMode = true
+      this.focusedPane = targetPane
       if (existing) {
-        Object.assign(existing, file)
-        existing.pendingLocator = locator
-        this[targetIdProp] = file.id
-        this.focusedPane = targetPane
+        Object.assign(existing, file, { id: tabId })
+        if (opts.locator) existing.pendingLocator = opts.locator
       } else {
-        targetList.push({ ...file, pendingLocator: locator })
-        this[targetIdProp] = file.id
+        targetList.push({ ...file, pendingLocator: opts.locator || null })
       }
+      this[targetIdProp] = tabId
 
-      // Persist active ID for current mode
       const mode = this.leftPaneKey || 'files'
-      this.lastActiveIdsByMode[targetPane][mode] = file.id
+      this.lastActiveIdsByMode[targetPane][mode] = tabId
       this.saveActiveIdsByMode()
 
       // 打开/激活后，给 WPS 一个机会刷新（避免容器尺寸/激活状态不对）
@@ -245,15 +240,7 @@ export const fileOpenTabsMethods = {
       // 同步更新 FileTree 的选中状态
       // 如果是文件类型（非浏览器标签、非特殊标签类型），需要更新资源管理器的选中状态
       if (!this.isBrowserTab(file) && file.id && !file.tabType) {
-        // 展开侧边栏并切换到文件模式
-        if (this.sidebarCollapsed) {
-          this.sidebarCollapsed = false
-        }
-        if (this.leftPaneKey !== 'files') {
-          this.leftPaneKey = 'files'
-        }
-
-        // 确保在下一个 tick 中执行，此时 FileTree 组件已经更新
+        // 只同步当前已挂载的文件树；文档标签不改变左侧功能区或折叠状态。
         this.$nextTick(() => {
           if (this.$refs.fileTree) {
             // 使用 revealFile 方法来定位并选中文件（会展开父目录并滚动到文件）

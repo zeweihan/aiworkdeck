@@ -31,7 +31,7 @@ public enum SensitiveType {
     EMAIL(
         "EMAIL",
         "邮箱",
-        "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,6}",
+        "(?<![A-Za-z0-9._%+-])[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,63}(?![A-Za-z0-9.-])",
         "a***@example.com",
         "保留首字母和域名"
     ),
@@ -44,6 +44,12 @@ public enum SensitiveType {
         "保留前6后4位"
     ),
     
+    COMPANY(
+        "COMPANY", "公司名称",
+        "[\\p{IsHan}A-Za-z0-9（）()·&]{2,70}?(?:股份有限公司|有限责任公司|有限責任公司|有限公司|有限合伙企业|有限合夥企業|合伙企业|分公司|律师事务所|律師事務所|会计师事务所|會計師事務所)",
+        "[公司]", "公司全称后缀识别；简称可手工补充"
+    ),
+
     /**
      * 已下线自动检测（dev-board#531，维护者 2026-09-09 拍板），只保留枚举值本身。
      *
@@ -61,7 +67,7 @@ public enum SensitiveType {
     CHINESE_NAME(
         "CHINESE_NAME",
         "中文姓名",
-        "[\\u4e00-\\u9fa5]{2,4}",
+        "(?:(?:姓名|联系人|法定代表人|负责人|经办人|委托代理人|代理人)[：:\\h]*|(?:原告|被告|甲方|乙方)[：:]\\h*)(?<value>[\\p{IsHan}]{2,4})(?=$|[^\\p{IsHan}]|先生|女士)",
         "张**",
         "保留姓氏",
         false
@@ -78,15 +84,15 @@ public enum SensitiveType {
     ADDRESS(
         "ADDRESS",
         "地址",
-        "[\\u4e00-\\u9fa5]{2,4}省[\\u4e00-\\u9fa5]{2,6}市[\\u4e00-\\u9fa5]{2,10}(区|县)[\\u4e00-\\u9fa5\\d]{4,}",
-        "浙江省杭州市**区****",
-        "保留省市"
+        "(?:地址|住所地|住所|住址|注册地址|联系地址)[：:\\h]+(?<value>[^\\r\\n，。；;]{6,80})",
+        "[地址]",
+        "完整遮蔽地址字段"
     ),
     
     PASSWORD(
         "PASSWORD",
         "密码",
-        "(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)[a-zA-Z\\d@$!%*?&]{8,}",
+        "(?i)(?:密码|口令|password|passwd|pwd)[：:\\h]+(?<value>[^\\s，。；;]{1,128})",
         "******",
         "完全遮蔽"
     ),
@@ -162,9 +168,17 @@ public enum SensitiveType {
         if (candidate == null || candidate.isEmpty()) return false;
         return switch (this) {
             case ID_CARD -> isPlausibleIdCard(candidate);
-            case BANK_CARD -> luhnValid(candidate);
+            case BANK_CARD -> candidate.matches("[1-9][0-9]{15,18}") && luhnValid(candidate);
+            case CHINESE_NAME -> isPlausibleName(candidate);
+            case ADDRESS -> candidate.matches(".*[省市区县路街道村镇号室].*");
             default -> true;
         };
+    }
+
+    private static boolean isPlausibleName(String value) {
+        if (java.util.Set.of("公司", "双方", "当事人", "法定代表", "负责人", "联系人", "有限公司", "合同", "申请人").contains(value)) return false;
+        String surnames = "赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜戚谢邹喻柏水窦章云苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳鲍史唐费廉岑薛雷贺倪汤滕殷罗毕郝邬安常乐于时傅皮卞齐康伍余元卜顾孟平黄穆萧尹姚邵汪毛禹狄米贝明臧计伏成戴谈宋茅庞熊纪舒屈项祝董梁杜阮蓝闵席季麻强贾路娄危江童颜郭梅盛林刁钟徐邱骆高夏蔡田樊胡凌霍万支柯管卢莫房解应宗丁宣邓郁单杭洪包诸左石崔吉龚程邢裴陆荣翁荀羊甄封储靳汲邴糜松井段富巫乌焦巴弓牧隗山谷车侯宓蓬全班仰秋仲伊宫宁仇栾甘厉戎祖武符刘景詹束龙叶幸司黎印宿白怀蒲邰从鄂索咸赖卓蔺屠蒙池乔阴胥能苍双闻莘党翟谭贡劳逄姬申扶堵冉宰郦雍桑桂濮牛寿通边扈燕冀浦尚农温庄晏柴瞿阎连茹习艾鱼容向古易慎戈廖庾终暨居衡步都耿满弘匡国文寇广禄阙东欧殳沃利蔚越夔隆师巩厍聂晁勾敖融冷訾辛阚那简饶空曾毋沙乜养鞠须丰巢关蒯相查后荆红游竺权逯盖益桓公";
+        return surnames.indexOf(value.charAt(0)) >= 0;
     }
 
     /** 18 位查 mod-11-2 校验位与出生日期；15 位没有校验位，只查出生日期。 */
@@ -222,6 +236,8 @@ public enum SensitiveType {
         int len = original.length();
         
         switch (this) {
+            case COMPANY:
+                return "[公司]";
             case PHONE:
                 if (len == 11) return original.substring(0, 3) + "****" + original.substring(7);
                 break;
@@ -232,7 +248,7 @@ public enum SensitiveType {
                 
             case EMAIL:
                 int atIndex = original.indexOf("@");
-                if (atIndex > 1) return original.substring(0, 1) + "***" + original.substring(atIndex);
+                if (atIndex >= 1) return original.substring(0, 1) + "***" + original.substring(atIndex);
                 break;
                 
             case BANK_CARD:
@@ -241,7 +257,7 @@ public enum SensitiveType {
                 
             case CHINESE_NAME:
                 if (len == 2) return original.substring(0, 1) + "*";
-                if (len > 2) return original.substring(0, 1) + "**" + original.substring(len - 1);
+                if (len > 2) return original.substring(0, 1) + "*".repeat(len - 1);
                 break;
                 
             case FIXED_PHONE:
@@ -255,9 +271,7 @@ public enum SensitiveType {
                 break;
                 
             case ADDRESS:
-                // Keep province and city, mask rest
-                if (len > 10) return original.substring(0, Math.min(10, len)) + "****";
-                break;
+                return "[地址]";
                 
             case PASSWORD:
                 return "******";

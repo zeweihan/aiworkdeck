@@ -41,6 +41,21 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class SensitiveServiceRedactionTest {
 
     @Test
+    void rotatedPdfMustNotClaimThatUnreliableCoordinatesWereRedacted() throws Exception {
+        File source = File.createTempFile("rotated-redaction-", ".pdf");
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(); page.setRotation(90); doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.beginText(); cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                cs.newLineAtOffset(100, 700); cs.showText("13800001111"); cs.endText();
+            }
+            doc.save(source);
+        }
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> new SensitiveService().processFile(source.toString(), List.of("PHONE")));
+    }
+
+    @Test
     void pdfRedactionRemovesExtractableText() throws Exception {
         File src = File.createTempFile("redact-src-", ".pdf");
         try (PDDocument doc = new PDDocument()) {

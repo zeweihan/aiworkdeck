@@ -222,6 +222,12 @@ public class SkillController {
         view.setAuthor(skill.getAuthor());
         view.setAuthorUrl(skill.getAuthorUrl());
         view.setVersion(skill.getVersion());
+        // The panel engine ships in the app patch; an old Resources/skills file (or
+        // a reinstalled text-only skill) must not misreport the executable version.
+        if ("desensitize".equals(skill.getId()) && skill.getSourcePluginId() == null) {
+            view.setVersion(com.checkba.service.SensitiveService.VERSION);
+            view.setDescription(com.checkba.service.SensitiveService.DESCRIPTION);
+        }
         view.setLicense(skill.getLicense());
         view.setCredits(skill.getCredits());
         view.setAvailable(skillRegistry.isAvailable(skill));

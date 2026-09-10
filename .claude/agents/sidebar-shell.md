@@ -39,6 +39,13 @@ flushDirtyEditors），单测见 `frontend/tests/project-home/flush-dirty-editor
 `inject: { openSettingsTab: { default: null } }`，有就 `this.openSettingsTab({ nav })` 开设置标签，
 没有（项目列表页等工作台之外的宿主）才跳 `/pages/admin/admin?nav=xxx`。现有四处：加人弹窗与
 协作抽屉的 `goTeamSettings`、插件侧栏与插件详情的 `goToAccountSettings`，`check:nav` 逐个钉住。
+## 文档标签与左栏独立（2026-09-10，dev-board#555/#556）
+
+`fileOpenTabs.activateTab` 不得修改 `leftPaneKey` 或 `sidebarCollapsed`；文件树已挂载时仍可同步选中项。
+`isTabVisible` 对普通文档返回 true，左栏停在脱敏等功能区时仍能编辑；尽调/动态插件等特殊标签保留各自规则。
+`openFile` 按文件 id（统一字符串比较）和 tabType，在两侧窗格查找已有标签并聚焦，保留已有 id 类型和编辑器实例。
+当前窗格优先；另一侧有该文件时转到另一侧。用户明确拖拽分屏仍由 `tabDragSplit` 管理，不与普通重复打开混淆。
+回归：`frontend/tests/project-home/file-tab-focus.test.mjs`。
 
 ## project-overview.vue 内部地图（4939 行，主战场）
 
@@ -511,7 +518,7 @@ dragover 实时改 `railOrderDraft` 草稿、dragend 提交并持久化。
   **顺序**从 2026-08-27 起由 `applyRailOrder` 按 `awd_rail_order` 重排，见上）。
   CLIENT 视图整个不参与。工具面板在左栏的宿主是 `.dock-tool-pane`（一条紧凑搜索行 +
   面板体）——这三个面板的搜索早就外置给宿主了，不给就等于没有搜索。
-  **`isTabVisible` 必须放行这些左栏模式**（`|| this.isMovablePanel(this.leftPaneKey)`）：
+  **`isTabVisible` 对普通文档始终放行**（2026-09-10 起不再逐个枚举左栏模式）：
   它们的动作全是「往当前文档里插入 / 从当前文档取值」，把编辑器标签藏死等于功能没了
   （同「语音合成要在编辑器里取正文」那条）。
 - **右栏**：`rightDockPanels` 非空才渲染 `.right-dock-tabs`（平时右侧只有 AI 对话，
@@ -849,7 +856,7 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 - **rail 上加/改 key 之后自查 `panelSwitching.js`**：`toggleLeftPane` 与
   `lastActiveIdsByMode` 全按 key 工作（`data()` 里那两个字面量种子只写了
   `files` / `dd-files`，其余 key 是运行时补的，不用逐个登记）。改 key 集合时
-  同时看 `isTabVisible`（哪些左栏模式下普通文件标签可见）与
+  同时看 `isTabVisible`（特殊标签的可见性；普通文档始终可见）与
   `migrateLeftPaneKey`（存量 storage 值）。
 - **组件里两个同名 `watch:` / `methods:` 键，后写的会把先写的整个覆盖掉**（本次在
   LibreOfficeEditor 上真踩到，加的 watch 静默失效）。往大组件里加块之前先 grep 一遍。

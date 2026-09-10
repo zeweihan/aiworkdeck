@@ -27,6 +27,9 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
 - 姓名改走**自定义词**：`POST /desensitize` 的 `customWords`（字符串数组，与 `strategies` 平级；**两者只要有一个非空就是合法请求**——只填词不勾类型是姓名的正常走法）。逐字面量匹配、每个字符换一个 `*`，docx/纯文本走 `SensitiveService.maskCustomWords`，PDF 走 stripper 整页文本 `indexOf` 后画框，三条路都覆盖。日志只记条数不记原文（自定义词是文档内容）。
 - 面板上「要涂黑的姓名/词语」是**首屏常驻的主区域**，排在自动识别类型之前，带说明文案（`panels.deCustomWordsTitle/Placeholder/Hint`，双语）——不许折叠、不许塞进高级设置：姓名的唯一入口藏起来就等于把姓名脱敏整个下线了。契约测试 `frontend/tests/desensitize/desensitize-pane.test.mjs`（真渲染 + 解析规则 + 接线，CI 里是 `npm run test:desensitize`）与后端 `SensitiveChineseNameOfflineTest` / `SensitiveCustomWordsTest` 守着。
 
+**脱敏编辑流程（2026-09-10，dev-board#557/#558）**：生成后 `open-file` 打开副本，左栏保留面板；结果区「复敏这份结果」选择本次副本并复用内存中的加密映射，密码须重新输入，跨次使用可导入 `.awd-recovery`。切文档标签不自动改变面板处理目标，需「导入当前」明确选择。`prepareFile` 由工作台注入 `sensitiveWorkflow.saveSensitiveInput`，预览/生成/复敏前等待目标编辑器保存，错误或未就绪阻止处理；生成前刚保存了修改则要求重新预览。普通 AI 对话可能附带历史/项目上下文，面板提示其不是隔离会话，不自动触发 AI，也不把恢复密码/映射交给 AI。前端测试用 `node --test frontend/tests/desensitize/*.test.mjs`。
+
+
 **股东大会核查（已下线，2026-08-17）**：维护者决定不做了。`leftSidebarPlugins.js` 里的 rail 入口已移除、skill 改成 `enabled_by_default: false`，**其余三层代码一律保留**（面板组件、controller、service、实体、api.js 端点），想恢复只需把 rail 条目加回去。存量安装里 skill 仍是启用状态（`SkillRegistry` 的种子化只在首次见到该 id 时生效），要在插件广场手动停用。下面这段是它下线前的实现地图，恢复或翻旧账时照读。
 
 面板 + AI 编排混合型（三层齐备）。**注**：下段那条「pinnedSkillId 只裁剪工具不注入 prompt」的地雷已在 2026-08 修掉（判据同源收敛到 `SkillRouter.activateForTurn`，见上文 skill 注入链路一节）；触发词必须在 prompt 文本里这条仍然成立——面板 kick-off 走的是自动匹配，不带 skillIds。前端 `frontend/src/components/ShareholderMeetingPanel.vue`（会话列表/五组材料槽位/巨潮拉取/开始核查，选文件用 FilePickerDialog 的 accept 过滤）；后端 `controller/ShareholderMeetingController.java`（/api/shareholder-meeting）+ `service/ShareholderMeetingService.java`（底稿夹 `股东大会核查/<公司>_<届次>/01..05` 五子目录、材料复制幂等、kick-off prompt 组装）+ `service/CninfoAnnouncementService.java`（巨潮拉取，挑选启发式移植自内核 skill 且有单测锁定）；skill `backend/skills/shareholder-meeting-verification/`。执行链路：面板 start 接口返回 prompt（以触发词「股东大会核查」开头）→ project-overview 经 `ChatInterface.sendExternalPrompt`（expose）以 AGENT 模式发送 → skill 注入 → AI 用 extract_file_text/run_python/write_docx（带 parentFolderId）产出核查底稿表与法律意见书到 04/05 子目录。**地雷**：pinnedSkillId 只裁剪工具不注入 prompt，触发词必须在 prompt 文本里；ASK 模式跳过注入。
@@ -271,3 +274,8 @@ JAR 插件拿宿主能力的唯一契约：`com.checkba:plugin-api:1.1.0`（1.0.
 - 前端面板：`cd frontend && npm run test:app-e2e` 覆盖主要旅程。
 
 - **`Evidence.linkAtQuote(projectId, docFileId, anchorQuote, targets)`（SPI 1.1.0 新增）**：插件按引文建链的唯一正路。宿主内部走 `EvidenceAnchorService`（查引文必须恰好命中一次 → set_selection → bookmark_selection（书签名 = linkKey）→ 内部超链接 → get_bookmark_context → 落库），与 AI 工具 `doc_link_evidence` **同一份实现**。插件**不要**自己用 `Docs.exec` 拼这套原语——书签名规则、超链接 scheme、章节路径口径都是契约，两份实现必然漂移。
+
+**脱敏/复敏更新（2026-09-10，dev-board#552/#553/#554）**：`SensitiveType` + `service/sensitive/SensitiveTextEngine` 使用本地字段/后缀/号码规则与用户词表；`SensitiveDocx` 以 XML 段落遍历 Word 全部文字节点并保留未命中 run 的格式；PDF 继续不可逆黑框。`SensitiveController` 新增 `POST /preview`、`POST /restore`，`/desensitize` 带 mode 时回 `{file,recoveryKit,counts,warnings}`，未带 mode 的旧调用保留返回 ProjectFile。TOKEN 模式推荐，MASK 为旧星号模式。`SensitiveRecoveryKit` 仅在请求内存中生成/解密映射，密码派生 AES-GCM；加密 `.awd-recovery` 由面板另行下载，不注册进项目。三条端点都鉴权，写操作还需写权限。所有操作不调用 AI/OCR/embedding，skill prompt 明确禁止先把原文读给模型。限制与回归见 `docs/DESENSITIZATION_REVIEW_2026-09-10.md`；`mvn test -Dtest=Sensitive*Test` + `node --test frontend/tests/desensitize/pane.test.mjs`。原介绍中“Word 走 XWPF 段落遮蔽 + OcrService 辅助”已由上述离线 XML 路径替代。
+
+
+**发布整合（2026-09-10，dev-board#585）**：脱敏引擎 2.0.0 随桌面端 0.38.4 补丁更新。保持 #531 的中文姓名不自动识别，首屏手填整词（每行一个，支持英文公司名里的空格/逗号），旧 customWords JSON 字段由 JsonAlias 兼容。SkillController 对内置 desensitize 返回实际 SensitiveService.VERSION/DESCRIPTION，防止只读 Resources/skills/1.0.0 将补丁引擎误报为旧版；用户自装插件不覆盖。详情页检查更新走工作台 updates 设置标签，不能用重装 skill 文本冒充引擎升级。
