@@ -22,27 +22,37 @@ public interface MemoryEntryRepository extends JpaRepository<MemoryEntry, Long> 
     /**
      * 根据项目ID查找记忆
      */
-    List<MemoryEntry> findByProjectIdOrderByCreatedAtDesc(Long projectId);
+    @Query("SELECT m FROM MemoryEntry m WHERE m.projectId = :projectId " +
+           "AND (m.scope IS NULL OR m.scope IN ('project', 'file', 'conversation')) ORDER BY m.createdAt DESC")
+    List<MemoryEntry> findByProjectIdOrderByCreatedAtDesc(@Param("projectId") Long projectId);
 
     /**
      * 根据项目ID和类型查找记忆
      */
-    List<MemoryEntry> findByProjectIdAndMemoryTypeOrderByImportanceScoreDesc(Long projectId, String memoryType);
+    @Query("SELECT m FROM MemoryEntry m WHERE m.projectId = :projectId AND m.memoryType = :memoryType " +
+           "AND (m.scope IS NULL OR m.scope IN ('project', 'file', 'conversation')) ORDER BY m.importanceScore DESC")
+    List<MemoryEntry> findByProjectIdAndMemoryTypeOrderByImportanceScoreDesc(
+            @Param("projectId") Long projectId, @Param("memoryType") String memoryType);
 
     /**
      * 根据项目ID查找受保护的记忆
      */
-    List<MemoryEntry> findByProjectIdAndIsProtectedTrue(Long projectId);
+    @Query("SELECT m FROM MemoryEntry m WHERE m.projectId = :projectId AND m.isProtected = true " +
+           "AND (m.scope IS NULL OR m.scope IN ('project', 'file', 'conversation'))")
+    List<MemoryEntry> findByProjectIdAndIsProtectedTrue(@Param("projectId") Long projectId);
 
     /**
      * 根据对话ID查找记忆
      */
-    List<MemoryEntry> findByConversationIdOrderByCreatedAtDesc(String conversationId);
+    @Query("SELECT m FROM MemoryEntry m WHERE m.conversationId = :conversationId " +
+           "AND m.scope = 'conversation' ORDER BY m.createdAt DESC")
+    List<MemoryEntry> findByConversationIdOrderByCreatedAtDesc(@Param("conversationId") String conversationId);
 
     /**
      * 根据关键词模糊搜索记忆
      */
     @Query("SELECT m FROM MemoryEntry m WHERE m.projectId = :projectId " +
+           "AND (m.scope IS NULL OR m.scope IN ('project', 'file', 'conversation')) " +
            "AND (LOWER(m.memoryKey) LIKE LOWER(CONCAT('%', :keyword, '%')) " +
            "OR LOWER(m.memoryValue) LIKE LOWER(CONCAT('%', :keyword, '%'))) " +
            "ORDER BY m.importanceScore DESC")
@@ -54,6 +64,7 @@ public interface MemoryEntryRepository extends JpaRepository<MemoryEntry, Long> 
      * 根据项目ID和类型搜索记忆
      */
     @Query("SELECT m FROM MemoryEntry m WHERE m.projectId = :projectId " +
+           "AND (m.scope IS NULL OR m.scope IN ('project', 'file', 'conversation')) " +
            "AND (:memoryType IS NULL OR m.memoryType = :memoryType) " +
            "AND (LOWER(m.memoryKey) LIKE LOWER(CONCAT('%', :keyword, '%')) " +
            "OR LOWER(m.memoryValue) LIKE LOWER(CONCAT('%', :keyword, '%'))) " +
@@ -67,6 +78,7 @@ public interface MemoryEntryRepository extends JpaRepository<MemoryEntry, Long> 
      * 获取项目最重要的记忆
      */
     @Query("SELECT m FROM MemoryEntry m WHERE m.projectId = :projectId " +
+           "AND (m.scope IS NULL OR m.scope IN ('project', 'file', 'conversation')) " +
            "ORDER BY m.importanceScore DESC, m.createdAt DESC")
     List<MemoryEntry> findTopImportantMemories(@Param("projectId") Long projectId, Pageable pageable);
 
@@ -90,7 +102,10 @@ public interface MemoryEntryRepository extends JpaRepository<MemoryEntry, Long> 
     /**
      * 根据项目ID和用户ID查找记忆
      */
-    List<MemoryEntry> findByProjectIdAndUserIdOrderByCreatedAtDesc(Long projectId, Long userId);
+    @Query("SELECT m FROM MemoryEntry m WHERE m.projectId = :projectId AND m.userId = :userId " +
+           "AND (m.scope IS NULL OR m.scope IN ('project', 'file', 'conversation')) ORDER BY m.createdAt DESC")
+    List<MemoryEntry> findByProjectIdAndUserIdOrderByCreatedAtDesc(
+            @Param("projectId") Long projectId, @Param("userId") Long userId);
 
     /**
      * 按作用域查找用户级记忆（跨项目，如用户偏好）
@@ -115,12 +130,20 @@ public interface MemoryEntryRepository extends JpaRepository<MemoryEntry, Long> 
     /**
      * 按来源文件查找文件级记忆
      */
-    List<MemoryEntry> findBySourceFileIdOrderByImportanceScoreDesc(Long sourceFileId);
+    @Query("SELECT m FROM MemoryEntry m WHERE m.sourceFileId = :sourceFileId AND m.scope = 'file' " +
+           "ORDER BY m.importanceScore DESC")
+    List<MemoryEntry> findBySourceFileIdOrderByImportanceScoreDesc(@Param("sourceFileId") Long sourceFileId);
 
     /**
      * 按项目与一组 memoryKey 查找记忆（证据账本的"已被更新"信号检测用）
      */
-    List<MemoryEntry> findByProjectIdAndMemoryKeyIn(Long projectId, java.util.Collection<String> memoryKeys);
+    @Query("SELECT m FROM MemoryEntry m WHERE m.projectId = :projectId AND m.memoryKey IN :memoryKeys " +
+           "AND (m.scope IS NULL OR m.scope IN ('project', 'file', 'conversation'))")
+    List<MemoryEntry> findByProjectIdAndMemoryKeyIn(@Param("projectId") Long projectId,
+                                                     @Param("memoryKeys") java.util.Collection<String> memoryKeys);
+
+    /** Markdown 文档派生索引与 Git 同步按跨机器稳定 uid 对接。 */
+    java.util.Optional<MemoryEntry> findFirstByUid(String uid);
 
     /**
      * Git 记忆同步：项目领域的全部行（project/file/conversation 作用域）
@@ -135,12 +158,14 @@ public interface MemoryEntryRepository extends JpaRepository<MemoryEntry, Long> 
     /**
      * 统计项目的记忆数量
      */
-    long countByProjectId(Long projectId);
+    @Query("SELECT COUNT(m) FROM MemoryEntry m WHERE m.projectId = :projectId " +
+           "AND (m.scope IS NULL OR m.scope IN ('project', 'file', 'conversation'))")
+    long countByProjectId(@Param("projectId") Long projectId);
 
     /**
      * 统计项目各类型记忆数量
      */
-    @Query("SELECT m.memoryType, COUNT(m) FROM MemoryEntry m WHERE m.projectId = :projectId GROUP BY m.memoryType")
+    @Query("SELECT m.memoryType, COUNT(m) FROM MemoryEntry m WHERE m.projectId = :projectId " +
+           "AND (m.scope IS NULL OR m.scope IN ('project', 'file', 'conversation')) GROUP BY m.memoryType")
     List<Object[]> countByProjectIdGroupByType(@Param("projectId") Long projectId);
 }
-

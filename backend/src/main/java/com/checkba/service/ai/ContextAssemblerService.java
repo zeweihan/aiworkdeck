@@ -12,10 +12,12 @@ import com.checkba.service.ai.context.ContextCompressor;
 import com.checkba.service.ai.context.FileContextLoader;
 import com.checkba.service.ai.context.ProjectContextHolder;
 import com.checkba.service.ai.memory.MemoryManager;
+import com.checkba.service.ai.memory.document.MemoryDocumentService;
 import com.checkba.service.ai.tools.LegalTools;
 import com.checkba.service.ProjectAiMessageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -67,6 +69,9 @@ public class ContextAssemblerService {
     // 记忆系统组件（读侧：写侧见 MemoryPipelineService）
     private final MemoryManager memoryManager;
     private final ContextCompressor contextCompressor;
+
+    @Autowired(required = false)
+    private MemoryDocumentService memoryDocumentService;
 
     // 应用语言（EN 版 PR5）：en-US 时选英文 system prompt 与各硬编码段的英文文本；
     // zh-CN 路径的代码与文本一字不动（中文版行为保持逐字节一致是硬约束）。
@@ -217,7 +222,7 @@ public class ContextAssemblerService {
         // 这正是旧 pinnedSkillId 的那个静默 bug（工具可见性与 prompt 注入走了两条不同的判据）。
         // 生效集合的口径唯一收敛在 SkillRouter.activateForTurn。
         //
-        // ASK 模式跳过（skill 指引以工具流程为主，与 ASK 禁用工具的约束冲突）；
+        // ASK 模式跳过（skill 指引以执行流程为主；ASK 的三个只读 Markdown 记忆工具独立放行）；
         // 一个都不生效时不注入（行为保持）。
         if (agentMode != AgentMode.ASK) {
             for (com.checkba.service.ai.skill.SkillRouter.ActiveSkill active
@@ -564,7 +569,7 @@ public class ContextAssemblerService {
             }
         }
 
-        // 2. 注入项目记忆（如果存在）
+        // 2. 注入 Markdown 记忆索引与既有结构化记忆。
         //
         // **记忆三段也全部写 volatileText**：retrieveMemories 是按 userPrompt 现查的
         // （每轮问题不同结果就不同），且排序带随机项，所以同一个问题两次的结果都可能不一样。
@@ -575,6 +580,19 @@ public class ContextAssemblerService {
             projectIdLong = projectId != null ? Long.parseLong(projectId) : null;
         } catch (NumberFormatException e) {
             // ignore
+        }
+
+        if (memoryDocumentService != null && userId != null) {
+            int memoryIndexChars = (int) Math.min(16_000,
+                    Math.max(0, contextProperties.getMemoryReserve() * contextProperties.getCharsPerToken()));
+            String indexes = memoryDocumentService.contextIndexes(userId, projectIdLong, memoryIndexChars);
+            if (indexes != null && !indexes.isBlank()) {
+                volatileText.append(english ? "\n\n# Markdown Memory Indexes\n" : "\n\n# Markdown 记忆索引\n");
+                volatileText.append(english
+                        ? "Use memory_read to load a linked topic only when it is relevant.\n"
+                        : "仅在主题相关时使用 memory_read 按需读取链接文件。\n");
+                volatileText.append(indexes);
+            }
         }
         
         if (projectIdLong != null) {
@@ -1143,7 +1161,7 @@ public class ContextAssemblerService {
     /**
      * 根据 Agent 模式生成对应的提示词约束。
      * 
-     * - ASK: 纯对话模式，禁止工具调用
+     * - ASK: 对话模式，仅允许只读 Markdown 记忆工具
      * - PLAN: 规划模式，必须先生成计划并等待确认
      * - AGENT: 自动执行模式（默认行为）
      */
@@ -1153,19 +1171,20 @@ public class ContextAssemblerService {
         return switch (mode) {
             case ASK -> """
 
-# MODE OVERRIDE: ASK MODE (纯对话模式)
+# MODE OVERRIDE: ASK MODE (对话模式)
 
 **CRITICAL CONSTRAINTS - YOU MUST FOLLOW THESE RULES:**
 
 1. **FORBIDDEN ACTIONS** - 以下操作在 Ask 模式下完全禁止：
-   - DO NOT output `<tool_code>` tags - 不允许调用任何工具
    - DO NOT output `<artifact>` tags - 不生成任何计划或任务清单
    - DO NOT output `<process>` tags - 不执行任何操作流程
-   - DO NOT use any tools (search_web, read_document, write_docx, etc.)
+   - 除 memory_list、memory_read、memory_search 外，不允许调用任何工具
+   - memory_write、memory_edit、memory_delete、save_memory 等写操作严格禁止
 
 2. **ALLOWED ACTIONS** - 在 Ask 模式下你只能：
    - 直接回答用户问题（使用 `<thinking>` + 纯文本或 `<final>` 标签）
    - 基于已有上下文（文件内容、历史记录）进行分析和解答
+   - 可用 memory_list、memory_read、memory_search 只读查询当前用户有权访问的长期记忆
    - 提供建议和意见，但不执行任何操作
    - 如果用户请求需要工具才能完成，请告知用户切换到 Agent 模式
 
@@ -1176,7 +1195,8 @@ public class ContextAssemblerService {
    直接回答用户问题的内容...
    </final>
 
-4. **IMPORTANT**: 如果用户询问需要查询法规、搜索网络、读取文档或创建文件的问题，
+4. **IMPORTANT**: 只读 Markdown 记忆是上述限制的唯一工具例外，且不受 skill 是否启用影响。
+   如果用户询问需要查询法规、搜索网络、读取普通文档或创建文件的问题，
    你应该基于你的知识库回答，或者建议用户切换到 Agent 模式以获取实时信息。
 """;
             case PLAN -> """
@@ -1306,19 +1326,20 @@ public class ContextAssemblerService {
         return switch (mode) {
             case ASK -> """
 
-# MODE OVERRIDE: ASK MODE (conversation-only)
+# MODE OVERRIDE: ASK MODE (conversation with read-only memory)
 
 **CRITICAL CONSTRAINTS - YOU MUST FOLLOW THESE RULES:**
 
 1. **FORBIDDEN ACTIONS** - the following are completely prohibited in Ask mode:
-   - DO NOT output `<tool_code>` tags - no tool calls of any kind
    - DO NOT output `<artifact>` tags - no plans or task lists
    - DO NOT output `<process>` tags - no operation flows
-   - DO NOT use any tools (search_web, read_document, write_docx, etc.)
+   - Do not call any tool except memory_list, memory_read, and memory_search
+   - memory_write, memory_edit, memory_delete, save_memory, and all other writes are prohibited
 
 2. **ALLOWED ACTIONS** - in Ask mode you may ONLY:
    - Answer the user's question directly (using `<thinking>` + plain text or the `<final>` tag)
    - Analyze and explain based on context you already have (file contents, conversation history)
+   - Use memory_list, memory_read, and memory_search to read long-term memory the current user may access
    - Offer advice and opinions, without performing any operation
    - If the user's request requires tools to complete, tell the user to switch to Agent mode
 
@@ -1329,7 +1350,8 @@ public class ContextAssemblerService {
    The direct answer to the user's question...
    </final>
 
-4. **IMPORTANT**: If the user asks something that would require statutory research, web
+4. **IMPORTANT**: Read-only Markdown memory is the sole tool exception above and is independent
+   of whether a skill is active. If the user asks something that would require statutory research, web
    search, reading a document, or creating a file, answer from your own knowledge, or
    suggest that the user switch to Agent mode to get real-time information.
 """;
@@ -1640,5 +1662,8 @@ All doc_* editing and reading tools act directly on this document. You need NOT 
                         + "material or evidence is an input, not a write target.";
             };
         };
+    }
+    void setMemoryDocumentServiceForTest(MemoryDocumentService service) {
+        this.memoryDocumentService = service;
     }
 }

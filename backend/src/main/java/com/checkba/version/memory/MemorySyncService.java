@@ -81,6 +81,9 @@ public class MemorySyncService {
     private final UserRepository userRepository;
     private final TaskScheduler taskScheduler;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.ai.memory.document.MemoryDocumentService memoryDocumentService;
+
     /** 防抖静默期（写侧：记忆管线一轮可能落多条，攒一波再导出）。测试里调短取得确定性。 */
     private long debounceMillis = 30_000L;
 
@@ -105,6 +108,11 @@ public class MemorySyncService {
 
     void setDebounceMillis(long millis) {
         this.debounceMillis = millis;
+    }
+
+    void setMemoryDocumentServiceForTest(
+            com.checkba.service.ai.memory.document.MemoryDocumentService service) {
+        this.memoryDocumentService = service;
     }
 
     ReentrantLock repoLock(String repoKey) {
@@ -404,6 +412,7 @@ public class MemorySyncService {
                 entryRepository.delete(row);
                 byUid.remove(data.uid());
             }
+            if (memoryDocumentService != null) memoryDocumentService.tombstoneSource(data.uid());
             return;
         }
         if (row != null) {
