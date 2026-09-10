@@ -58,3 +58,9 @@ security:
   # 共享部署里同一个接口等于让任意租户挂载任意绝对路径当项目根，故云端 profile 不设此项（默认 false）。
   local-folder-projects:
     enabled: true
+
+# 导入、编辑器自动保存和脱敏前保存仅落盘，不默认把原文发送给 AI 打标签。
+# 手动标签及用户主动发起的 AI 功能不受影响；云端默认行为保持原样。
+ai:
+  auto-tagging:
+    enabled: false
