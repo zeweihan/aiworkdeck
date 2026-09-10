@@ -231,6 +231,12 @@ try {
     await page.mouse.click(point.x, point.y)
   }
   const clickHistoryEntry = async () => {
+    // 下拉每次打开都重拉历史，拉取期间只有一行「加载中...」；先等真实条目出来，
+    // 否则下面「只剩一行就点它」的兜底会点在加载占位上，点击无效、下一步超时
+    await page.waitForFunction(() => {
+      const rows = [...document.querySelectorAll('.ai-dropdown-panel .menu-item:not(.header)')]
+      return rows.length > 0 && !rows.some((node) => /加载中|Loading/i.test(node.innerText))
+    }, { timeout: 10000 })
     const point = await page.evaluate((marker) => {
       const rows = [...document.querySelectorAll('.ai-dropdown-panel .menu-item:not(.header)')]
       const row = rows.find((node) => node.innerText.includes(marker)) || (rows.length === 1 ? rows[0] : null)
@@ -318,6 +324,11 @@ try {
 
   await click('.memory-header-btn')
   await page.waitForSelector('.memory-dialog', { timeout: 10000 })
+  // 记忆空间列表是弹窗打开后异步拉的，直接找会赶在列表出来之前
+  if (memorySpace.scope === 'project') {
+    await page.waitForFunction((projectName) => [...document.querySelectorAll('.memory-space')]
+      .some((node) => node.innerText.includes(projectName)), { timeout: 10000 }, project.name)
+  }
   const projectScopePoint = await page.evaluate((projectName) => {
     const item = [...document.querySelectorAll('.memory-space')]
       .find((node) => node.innerText.includes(projectName))
