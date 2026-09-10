@@ -1118,6 +1118,23 @@ return 404 兜底，云后端从 127.0.0.1 直连 Next。云侧唯一出口
 失败绝不免费放行）。**没有新增 ledger kind**（service_spend + meta.service=transfer）。
 细节见 mobile-sync.md「跨设备文件传输」节与官网仓 DEPLOY.md §7.4。
 
+## 窄权限内部口第三条：同事名录（2026-09-10，dev-board#550 #551）
+
+官网内部口现在有**三条**，形状完全一致（同机 127.0.0.1 直连 Next、头 `X-Internal-Secret`、
+各自一把专用密钥、未配置或不匹配一律裸 404、公网 nginx `location ^~ /api/internal/ { return 404; }` 兜底），
+**三把密钥互不复用**：
+
+| 口 | 官网 env | 本仓出口 | 本仓属性 | 回什么 |
+|---|---|---|---|---|
+| `POST /api/internal/transfer` | `AWD_TRANSFER_BILLING_SECRET` | `service/mobile/TransferBillingClient` | `mobile.transfer.billing.*` | 跨设备传输的报价/扣费/退费 |
+| `POST /api/internal/account` | `AWD_MOBILE_BILLING_SECRET` | `service/mobile/MobileBillingClient` | `mobile.billing.*` | 手机端账户解析/余额/充值/注销 |
+| `POST /api/internal/collab-directory` | `AWD_COLLAB_DIRECTORY_SECRET` | `service/collab/AccountDirectoryClient` | `collab.directory.*` | 加同事时的账户是否存在 + 展示名/手机号 + 双方团队律所归属 |
+
+第三条**同样不违反**「per-user 平台 AI key」那条裁决（doc/desktop-contract.md）：它回的是名录事实，
+**不发任何凭据**——拿到它的答复也换不出任何用户的 key、令牌或会话，泄露的上界是「某个手机号在官网注册过、
+展示名是什么、和谁同团队」，而这几样正是发起查询的律师本来就要看到的东西。用途单一、密钥单一，
+撤销就是把官网那一个 env 拿掉。案件库侧的消费者是 `CollaboratorAdmission`（见 version-control.md「加同事」）。
+
 ## 验证
 
 - 后端：`cd backend && mvn test`（**JDK 21，系统默认 25 会 SIGBUS**）。本领域相关用例：

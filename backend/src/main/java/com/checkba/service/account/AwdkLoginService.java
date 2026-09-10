@@ -135,6 +135,32 @@ public class AwdkLoginService {
                 user.getDisplayName(), issued.id());
     }
 
+    /**
+     * 按官网名录查到的账户预建（或复用）桥接用户——「加同事」用（spec 2026-09-10 §5）。
+     *
+     * <p>与 {@link #login} 走的是同一条建号/映射链路，落到**同一行** {@code account_binding}：
+     * 对方日后自己桥接时命中的就是这行，不会凭空多出第二个 server 用户。
+     *
+     * <p>刻意<b>不</b>签发令牌、<b>不</b>取平台 AI key：这里手上没有对方的 awdk_（也不该有），
+     * 只是替他把身份行准备好，好让他被加进案卷。
+     *
+     * @throws IllegalArgumentException 桥接开关关闭
+     * @throws AccountException MALFORMED（accountId 为空）
+     */
+    public synchronized User ensureBridgedUser(String accountId, String username,
+                                               String displayName, String phone) {
+        requireEnabled();
+        if (accountId == null || accountId.isBlank()) {
+            throw new AccountException(AccountException.Kind.MALFORMED,
+                    LangText.of("账户信息缺少 accountId 字段，无法在本服务器建立协作身份",
+                            "The account information is missing the accountId field; this server cannot create a collaboration identity"));
+        }
+        User user = resolveUser(accountId, username, displayName);
+        // 与桥接登录同款：官网账户带手机号时认领到这行名下，此后对方自己登录解析到同一账号。
+        userService.claimPhoneFromWebsite(user, phone);
+        return user;
+    }
+
     // ==================== 账户登录（手机号/邮箱直登，用户不必人肉搬运 Key） ====================
 
     /**

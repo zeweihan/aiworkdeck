@@ -596,6 +596,26 @@ mobile:
     # 不发任何上游请求；GET /balance 是只读的（create=false，永不建号），不受本开关影响。
     recharge-enabled: ${MOBILE_BILLING_RECHARGE_ENABLED:false}
 
+# 协作加人的同事名录（dev-board#550 #551）：案件库本地查不到人时回官网按手机号/邮箱找账户，
+# 找到即按 accountId 预建桥接用户并允许加入。官网 POST {base-url}/api/internal/collab-directory，
+# 头 X-Internal-Secret（同机 127.0.0.1 直连 Next，公网 nginx `^~ /api/internal/` 恒 404 兜底）。
+# **只回名录事实（账户是否存在、展示名、手机号、团队/律所归属），不发任何凭据**——
+# 与官网早已否决的「凭 accountId 换任意用户 key」那类宽权限 S2S 主凭据不是一回事。
+# secret 与 TRANSFER_BILLING_SECRET / MOBILE_BILLING_SECRET 是三把不同的密钥，不要复用
+# （官网侧 AWD_COLLAB_DIRECTORY_SECRET，只在服务器 env 里配，别入库）。
+# 两个键任一为空 = 本服务器没开通名录，查人/加人一律只查本库、一次请求都不发（默认态）。
+collab:
+  directory:
+    base-url: ${COLLAB_DIRECTORY_BASE_URL:}
+    secret: ${COLLAB_DIRECTORY_SECRET:}
+  eligibility:
+    # 资格门，可整体替换的一层：firm-or-team（至少同一律所；没有律所的，同一团队）
+    # 或 open（只要官网名录里有这个人就允许）。默认 open——桌面单机与自建服务器上
+    # 根本没有律所/团队结构，按律所限制等于把加人这条路直接堵死。
+    # 官方案件库在 application-case.yml 里显式设成 firm-or-team。
+    # 写错值启动即失败（CollaborationPolicyConfig），不静默落回 open。
+    policy: ${COLLAB_ELIGIBILITY_POLICY:open}
+
 # 文件存储配置
 storage:
   # 存储类型：local（本地文件系统）或 oss（对象存储）

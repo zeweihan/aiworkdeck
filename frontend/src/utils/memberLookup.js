@@ -103,3 +103,22 @@ export function inviteLinkFor(baseUrl, locale) {
   const base = String(baseUrl == null ? '' : baseUrl).trim().replace(/\/+$/, '')
   return `${base}/${siteLangSegment(locale)}/start`
 }
+
+/**
+ * 查不到人时那一块该长成什么样。后端 lookup 回包的 `data.reason` 分三种拒绝理由
+ * （NOT_REGISTERED / NOT_IN_ORG / REQUESTER_NO_TEAM，见 backend 的 Denial），
+ * 正文一律用服务端那句话，这里只决定标题与那条动作链接。
+ *
+ * **未知值与缺失一律按 NOT_REGISTERED 处理**：老服务端根本不回这个字段，
+ * 那时的呈现就是今天的「还没有这个账户 + 去邀请」；将来后端多出一种理由而桌面端
+ * 还没跟上时，落到「去邀请」也比落到一个没有动作的死块强。
+ */
+export function notFoundPresentation(reason) {
+  if (reason === 'NOT_IN_ORG') {
+    return { titleKey: 'version.notInYourOrg', action: 'TEAM_SETTINGS' }
+  }
+  if (reason === 'REQUESTER_NO_TEAM') {
+    return { titleKey: 'version.youHaveNoTeam', action: 'TEAM_SETTINGS' }
+  }
+  return { titleKey: 'version.noSuchAccount', action: 'INVITE_LINK' }
+}

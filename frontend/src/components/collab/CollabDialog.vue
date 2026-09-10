@@ -120,10 +120,45 @@
                   @tap="onLookup"
                 >{{ lookupBusy ? $t('version.lookingUp') : $t('version.lookupAction') }}</view>
               </view>
-              <text v-if="lookupMessage" class="collab-note">{{ lookupMessage }}</text>
+              <!-- 查不到人分三态（后端 data.reason，见 utils/memberLookup.js 的
+                   notFoundPresentation）：还没注册就给邀请链接，不在同一律所/团队、
+                   或自己还没加入团队，给的是「去团队设置」——那两种情况把邀请链接
+                   发过去也没用，对方早就注册过了。老服务端不回 reason，落回
+                   「还没有这个账户 + 去邀请」，与今天的呈现一字不差。 -->
+              <view v-if="notFoundMessage" class="collab-notfound">
+                <text class="collab-notfound-title">{{ $t(notFound.titleKey) }}</text>
+                <text class="collab-note">{{ notFoundMessage }}</text>
+
+                <text
+                  v-if="notFound.action === 'TEAM_SETTINGS'"
+                  class="collab-copy-link"
+                  @tap="goTeamSettings"
+                >{{ $t('version.goTeamSettings') }}</text>
+
+                <text
+                  v-else-if="!inviteOpen"
+                  class="collab-copy-link"
+                  @tap="inviteOpen = true"
+                >{{ $t('version.goInvite') }}</text>
+
+                <view v-else class="collab-invite-block">
+                  <text class="collab-label">{{ $t('version.inviteLinkLabel') }}</text>
+                  <view class="collab-invite-link-row">
+                    <text class="collab-invite-link-text" selectable>{{ inviteLink }}</text>
+                    <text class="collab-copy-link" @tap="copyInviteLink">{{ $t('version.copyLink') }}</text>
+                  </view>
+                  <text v-if="linkCopied" class="collab-note">{{ $t('version.copiedInline') }}</text>
+                  <text class="collab-note">{{ $t('version.inviteLinkNote') }}</text>
+                </view>
+              </view>
+
+              <!-- 请求本身失败（网络/限频）是另一回事，仍旧只出那一行原因 -->
+              <text v-else-if="lookupMessage" class="collab-note">{{ lookupMessage }}</text>
               <text v-else-if="!candidate" class="collab-note">{{ $t('version.addColleagueByContactNote') }}</text>
 
-              <view v-if="candidate" class="member-candidate">
+              <!-- 被拒绝时绝不能同时挂着上一次查到的人：那张卡片带确认加入按钮，
+                   看着就像「查到了但拒绝了」，点下去加的却是上一个人。 -->
+              <view v-if="candidate && !notFoundMessage" class="member-candidate">
                 <view class="member-candidate-head">
                   <image
                     v-if="candidate.avatarUrl && !avatarBroken"
@@ -209,6 +244,9 @@ import {
 import { roleLabel, ASSIGNABLE_ROLES } from '@/config/memberRoles.js'
 import { shareProjectToLibrary } from '@/utils/cloudShare.js'
 import { getInitial } from '@/utils/textInitial.js'
+import { getAppLanguage } from '@/utils/appLanguage.js'
+import { siteBaseUrl } from '@/utils/siteLinks.js'
+import { inviteLinkFor, notFoundPresentation } from '@/utils/memberLookup.js'
 
 export default {
   name: 'CollabDialog',
@@ -242,6 +280,14 @@ export default {
       // 查人结果：null=还没查/已清空；对象=查到的那个人（只带展示名、头像、打码联系方式）
       candidate: null,
       lookupMessage: '',
+      // 查不到人（后端 code=0、found=false）与「请求失败」分开存：前者要出三态那一块，
+      // 后者只是一行原因，混在一个字段里就会给网络故障配上一条「去邀请」。
+      notFoundMessage: '',
+      // 后端给的拒绝理由（NOT_REGISTERED / NOT_IN_ORG / REQUESTER_NO_TEAM）。
+      // 老服务端不回这个字段，空串落回今天的「还没有这个账户 + 去邀请」。
+      notFoundReason: '',
+      inviteOpen: false,
+      linkCopied: false,
       lookupBusy: false,
       // 官网头像 404（对方没传过头像）时降级成首字母方块，不留一个碎图标
       avatarBroken: false,
@@ -260,6 +306,13 @@ export default {
     },
     linked() {
       return !!(this.cloud && this.cloud.linked)
+    },
+    notFound() {
+      return notFoundPresentation(this.notFoundReason)
+    },
+    // 官网的「开始使用」落地页，与 InviteMemberDialog 同一条链接（同一个 inviteLinkFor）
+    inviteLink() {
+      return inviteLinkFor(siteBaseUrl(), getAppLanguage())
     },
     // 优先级与页面上的状态 chip 同源同序（口径见 project-overview.collabStateText）：
     // 待选择 > 连不上 > 同事交了新稿 > 有改动还没交稿 > 一致。
@@ -426,6 +479,10 @@ export default {
     clearCandidate() {
       this.candidate = null
       this.lookupMessage = ''
+      this.notFoundMessage = ''
+      this.notFoundReason = ''
+      this.inviteOpen = false
+      this.linkCopied = false
       this.avatarBroken = false
     },
     async onLookup() {
@@ -439,7 +496,9 @@ export default {
           this.candidate = person
         } else {
           // 「这个号还没人用过」是正常结果，就地显示那句话，不弹成像故障的提示
-          this.lookupMessage = person.message || this.$t('version.colleagueNotFound')
+          this.candidate = null
+          this.notFoundMessage = person.message || this.$t('version.colleagueNotFound')
+          this.notFoundReason = person.reason || ''
         }
       } catch (e) {
         this.lookupMessage = (e && e.message) || this.$t('version.lookupFailed')
@@ -462,6 +521,24 @@ export default {
       } finally {
         this.memberBusy = false
       }
+    },
+    /**
+     * 「去团队设置」：设置页的「团队」分区，深链 `?nav=team`——nav key 与 AdminPane 里
+     * 「账户与用量」那条「前往团队」同一个，深链形制同仓里既有的 `?nav=account`。
+     *
+     * 这个弹窗挂在工作台（pages/project-overview）里，按导航总规则「凡是工作台参与的
+     * 跳转一律 reLaunch」（sidebar-shell.md）：navigateTo 会把工作台连同它的全局订阅
+     * 一起留在页面栈里，回头再进工作台就是第二个实例。
+     */
+    goTeamSettings() {
+      this.close()
+      uni.reLaunch({ url: '/pages/admin/admin?nav=team' })
+    },
+    copyInviteLink() {
+      uni.setClipboardData({
+        data: this.inviteLink,
+        success: () => { this.linkCopied = true },
+      })
     },
     copyInvite() {
       uni.setClipboardData({
@@ -558,6 +635,27 @@ export default {
 }
 .collab-member-name { font-size: 14px; color: var(--awd-text); }
 .collab-member-role { font-size: 12.5px; color: var(--awd-text-2); }
+
+/* 查不到人的那一块：与候选人卡片同一个盒子形制——两者在同一个位置轮流出现，
+   换一种边框会看着像界面跳了一下 */
+.collab-notfound {
+  margin-top: 12px; padding: 14px; border: 1px solid var(--awd-border); border-radius: 8px;
+  display: flex; flex-direction: column; gap: 6px; background: var(--awd-bg);
+}
+.collab-notfound-title { font-size: 14px; font-weight: 600; color: var(--awd-text); }
+.collab-invite-block {
+  display: flex; flex-direction: column; gap: 6px;
+  margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--awd-border);
+}
+.collab-invite-link-row { display: flex; align-items: center; gap: 12px; }
+.collab-invite-link-text {
+  flex: 1; font-size: 13px; color: var(--awd-text); word-break: break-all;
+  background: var(--awd-surface-2); padding: 4px 12px; border-radius: 6px;
+}
+.collab-copy-link {
+  color: var(--awd-accent-text); font-size: 13.5px; cursor: pointer;
+  text-decoration: underline; align-self: flex-start;
+}
 
 .collab-invite-box {
   background: var(--awd-bg); border: 1px solid var(--awd-border); border-radius: 8px; padding: 12px;

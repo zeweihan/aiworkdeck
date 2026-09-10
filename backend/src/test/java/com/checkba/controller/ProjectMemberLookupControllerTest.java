@@ -43,7 +43,7 @@ class ProjectMemberLookupControllerTest {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(USER_ID);
             when(projectMemberService.lookupMember(PROJECT_ID, "13800138000", USER_ID))
                     .thenReturn(new ProjectMemberService.MemberLookup(
-                            true, "李思", null, "138****8000", false, null, null));
+                            true, "李思", null, "138****8000", false, null, null, null));
 
             Map<String, Object> res = controller.lookupMember(PROJECT_ID, "13800138000", "sess");
 
@@ -53,6 +53,10 @@ class ProjectMemberLookupControllerTest {
             assertEquals(Boolean.TRUE, data.get("found"));
             assertEquals("李思", data.get("displayName"));
             assertEquals("138****8000", data.get("maskedContact"));
+            // 前端按 reason 分三态（还没注册 / 不在律所团队 / 你还没加入团队），
+            // 键必须恒在——缺键与 null 在 JSON 里是两回事，缺了就退化成老服务端的单一形态
+            assertTrue(data.containsKey("reason"));
+            assertNull(data.get("reason"));
             verify(authAbuseGuard).checkMemberLookupRate(USER_ID);
             verify(authAbuseGuard).recordMemberLookup(USER_ID);
         }
@@ -91,6 +95,27 @@ class ProjectMemberLookupControllerTest {
 
             verify(authAbuseGuard).checkMemberLookupRate(USER_ID);
             verify(authAbuseGuard).recordMemberLookup(USER_ID);
+        }
+    }
+
+    /** 被拒的那一半：reason 原样上桌，身份字段一个都不许出现在回包里。 */
+    @Test
+    void aDeniedLookupCarriesItsReasonAndNoIdentity() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(USER_ID);
+            when(projectMemberService.lookupMember(PROJECT_ID, "13800138000", USER_ID))
+                    .thenReturn(new ProjectMemberService.MemberLookup(
+                            false, null, null, null, false, null, "不在你的律所或团队里", "NOT_IN_ORG"));
+
+            Map<String, Object> res = controller.lookupMember(PROJECT_ID, "13800138000", "sess");
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) res.get("data");
+            assertEquals(Boolean.FALSE, data.get("found"));
+            assertEquals("NOT_IN_ORG", data.get("reason"));
+            assertNull(data.get("displayName"));
+            assertNull(data.get("maskedContact"));
+            assertNull(data.get("avatarUrl"));
         }
     }
 }

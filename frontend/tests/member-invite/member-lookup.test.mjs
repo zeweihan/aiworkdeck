@@ -8,10 +8,11 @@
 // 邀请链接拼错语言段就是把同事送去一个 404。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
   TRACK, resolveTrack,
   normalizePhone, isPhoneLike, isEmailLike, isWorthLooking, lookupIdentifier,
-  siteLangSegment, inviteLinkFor,
+  siteLangSegment, inviteLinkFor, notFoundPresentation,
 } from '../../src/utils/memberLookup.js'
 
 // ==================== 值得查的判定 ====================
@@ -106,4 +107,84 @@ test('邀请链接指向官网的 start 落地页，基址末尾的斜杠不许�
   assert.equal(inviteLinkFor('https://www.aiworkdeck.com', 'en-US'), 'https://www.aiworkdeck.com/en/start')
   assert.equal(inviteLinkFor('https://workdeck.ai/', 'en-US'), 'https://workdeck.ai/en/start')
   assert.equal(inviteLinkFor('https://workdeck.ai///', 'ja-JP'), 'https://workdeck.ai/zh/start')
+})
+
+// ==================== 查不到人的三态 ====================
+
+test('还没注册：给邀请链接（这是唯一一种「发链接过去有用」的情况）', () => {
+  assert.deepEqual(notFoundPresentation('NOT_REGISTERED'), {
+    titleKey: 'version.noSuchAccount', action: 'INVITE_LINK',
+  })
+})
+
+test('不在同一律所/团队：给「去团队设置」——对方早就注册过了，再发一次下载链接是白费', () => {
+  assert.deepEqual(notFoundPresentation('NOT_IN_ORG'), {
+    titleKey: 'version.notInYourOrg', action: 'TEAM_SETTINGS',
+  })
+})
+
+test('自己还没加入团队：也落到团队设置，先把团队建起来', () => {
+  assert.deepEqual(notFoundPresentation('REQUESTER_NO_TEAM'), {
+    titleKey: 'version.youHaveNoTeam', action: 'TEAM_SETTINGS',
+  })
+})
+
+test('reason 缺失（老服务端根本不回这个字段）保持今天的呈现', () => {
+  const today = { titleKey: 'version.noSuchAccount', action: 'INVITE_LINK' }
+  assert.deepEqual(notFoundPresentation(undefined), today)
+  assert.deepEqual(notFoundPresentation(null), today)
+  assert.deepEqual(notFoundPresentation(''), today)
+})
+
+test('认不出的 reason 也落到「去邀请」——给个能点的动作，好过一块死掉的提示', () => {
+  assert.deepEqual(notFoundPresentation('SOMETHING_NEW'), {
+    titleKey: 'version.noSuchAccount', action: 'INVITE_LINK',
+  })
+})
+
+// ==================== 弹窗接线（源码级护栏） ====================
+// 纯逻辑再对，弹窗不调它也是白搭：这一条守的就是那根线。
+
+const dialogSrc = readFileSync(
+  new URL('../../src/components/InviteMemberDialog.vue', import.meta.url), 'utf8')
+
+test('弹窗按 notFoundPresentation 决定标题与动作，而不是又写死一个 noSuchUser', () => {
+  assert.match(dialogSrc, /notFoundPresentation/)
+  assert.match(dialogSrc, /notFoundReason/)
+  assert.match(dialogSrc, /\$t\(notFound\.titleKey\)/)
+})
+
+test('「去团队设置」这条动作真的接上了跳转', () => {
+  assert.match(dialogSrc, /goTeamSettings/)
+  assert.match(dialogSrc, /version\.goTeamSettings/)
+  // 设置页「团队」分区的既有落点：薄壳页深链，nav key 与 AdminPane 侧栏同源
+  assert.match(dialogSrc, /\/pages\/admin\/admin\?nav=team/)
+})
+
+// 工作台里那个「把人加进这份案卷」弹窗（CollabDialog）是律师真正撞上的那一个，
+// 它与上面那个弹窗查的是同一个后端接口，三态必须一模一样地铺开。
+const collabSrc = readFileSync(
+  new URL('../../src/components/collab/CollabDialog.vue', import.meta.url), 'utf8')
+
+test('工作台弹窗也按 notFoundPresentation 决定标题与动作', () => {
+  assert.match(collabSrc, /notFoundPresentation/)
+  assert.match(collabSrc, /notFoundReason/)
+  assert.match(collabSrc, /\$t\(notFound\.titleKey\)/)
+})
+
+test('工作台弹窗的「去团队设置」接上了跳转', () => {
+  assert.match(collabSrc, /goTeamSettings/)
+  assert.match(collabSrc, /version\.goTeamSettings/)
+  assert.match(collabSrc, /\/pages\/admin\/admin\?nav=team/)
+})
+
+test('工作台里的跳转必须 reLaunch——navigateTo 会把工作台连同它的全局订阅留在页面栈里', () => {
+  const jump = /goTeamSettings\s*\(\)\s*\{[\s\S]*?\n    \}/.exec(collabSrc)
+  assert.ok(jump, '找不到 goTeamSettings 的方法体')
+  assert.match(jump[0], /uni\.reLaunch\(\{\s*url:\s*'\/pages\/admin\/admin\?nav=team'/)
+  assert.doesNotMatch(jump[0], /navigateTo|redirectTo|navigateBack/)
+})
+
+test('被拒绝时不许再挂着上一次查到的人——那张卡片带的是确认加入按钮', () => {
+  assert.match(collabSrc, /v-if="candidate && !notFoundMessage"/)
 })

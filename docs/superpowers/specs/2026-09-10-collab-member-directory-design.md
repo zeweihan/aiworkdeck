@@ -44,8 +44,9 @@
 `identifier` 与 `candidateAccountId` 恰好给一个，否则 `400 {error:"bad_request"}`。
 
 解析：
-- `identifier` 含 `@` → `normalizeEmail`（无效 → `found:false`），按 `email` 精确匹配未注销用户
-  （新增只读 `findUserByEmail`，不用会建号的 `findOrCreateByEmail`）；
+- `identifier` 含 `@` → `normalizeEmail`（无效 → `found:false`），按 `email` 精确匹配未注销、**且已验证**
+  （`emailVerifiedAt` 有值）的用户——密码注册时填的邮箱谁都能填别人的（新增只读 `findUserByEmail`，
+  不用会建号的 `findOrCreateByEmail`；与桌面仓 `findByVerifiedEmail` 同口径）；
 - 否则 `normalizePhone`（无效 → `found:false`），`findUserByPhone`；
 - `candidateAccountId` → `findUserById`（注销视为不存在）。
 - `requesterAccountId` 为空或查无 → `requester` 归属回 `{teamId:null, firmId:null}`（**不** 404：
@@ -73,7 +74,7 @@
 注销用户 `found:false`、requester 无团队、同团队、同律所不同团队、`candidateAccountId` 路径。
 加 `package.json` 脚本 `test:collab-directory` 并进 `.github/workflows/ci.yml` contracts 循环。
 
-文档：`DEPLOY.md` 新增 §7.6，格式照 §7.4/§7.5；env 名 `AWD_COLLAB_DIRECTORY_SECRET`（仅国内站需要，
+文档：`DEPLOY.md` 新增 §7.7，格式照 §7.4/§7.5；env 名 `AWD_COLLAB_DIRECTORY_SECRET`（仅国内站需要，
 国际站未配置即 404）。**不进** `doc/desktop-contract.md`（内部口不是桌面契约，同 transfer 的处理）。
 
 ## 5. 案件库 server 侧（本仓 backend）
@@ -123,7 +124,8 @@ admit(Optional<User> local, String identifier, Long requesterId) -> Admission { 
   if admission 为 null 或 !directory.configured(): 维持今天的本地行为（local 有则用，无则 NOT_REGISTERED 语义）
   requesterAccountId = accountBinding(requesterId) 或 null
   local 有且有绑定  -> directory.lookupByAccountId(requesterAccountId, 该绑定 accountId)
-  local 有但无绑定  -> 不出网；candidate 归属按 NONE 交给 policy（case 库里这种只有 admin）
+  local 有但无绑定  -> 不出网；双方归属按 NONE 交给 policy，拒绝时统一报 NOT_IN_ORG（没有官网身份的人
+                      不可能在任何团队里，理由落在对方身上；case 库里这种只有 admin）
   local 无          -> directory.lookupByIdentifier(requesterAccountId, identifier)
   reply.found 为假且 local 无 -> Denial.NOT_REGISTERED
   verdict = policy.check(reply.requester, reply.candidate)；不通过 -> 该 Denial
@@ -149,7 +151,8 @@ admit(Optional<User> local, String identifier, Long requesterId) -> Admission { 
 
 ## 6. 桌面端（本仓 frontend）
 
-`InviteMemberDialog.vue` 的未找到块按 `reason` 分三态；`reason` 缺失（老服务端）保持今天的呈现：
+两个加人弹窗——项目列表页的 `InviteMemberDialog.vue` 与工作台的 `components/collab/CollabDialog.vue`
+（用户截图的那个）——未找到块都按 `reason` 分三态；`reason` 缺失（老服务端）落回 NOT_REGISTERED 的呈现：
 
 | reason | 标题 | 正文 | 动作 |
 |---|---|---|---|
