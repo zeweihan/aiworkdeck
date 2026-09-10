@@ -34,6 +34,8 @@ Item states are lowercase `pending`, `applied`, or `interrupted`. A deletion cre
 
 `PATCH /api/agent/inbox/{conversationId}/{messageId}` accepts `message?`, `submissionMode?`, `position?`, and required `expectedRevision`. `position` is the desired zero-based index among pending items; peers are shifted and reindexed in one transaction. Editing canonical text clears the old `displayText`, which makes clients fall back to the edited text, and updates the stored request used by the model. Stale or non-pending changes return 409.
 
+An explicit `queue` to `steer` PATCH is the Send now operation. It starts a consumer when the conversation is idle (including after cancellation/error), or remains durable for the active run's next safe boundary. Other edits and reorders do not start a paused queue.
+
 `DELETE /api/agent/inbox/{conversationId}/{messageId}?expectedRevision=R` tombstones a pending item and returns the new snapshot. All inbox routes use existing authenticated conversation access checks.
 
 `inbox_updated` carries exactly the GET snapshot. `input_applied` carries:
@@ -58,7 +60,7 @@ Restart recovery leaves pending rows untouched, marks inputs assigned to uncerta
 
 The ordinary 30-step, pass 120-step, and subagent 6-round caps were removed. Productive main-loop continuations break the synchronous Java call stack every 64 rounds, while cancellation, request retry budgets, timeouts, compaction, token budget, and subagent concurrency remain. The no-progress detector includes the tool observation in its bounded signature: repeated polling with changing output continues, while the same call and same observation first receives a corrective nudge and then moves the run to `PAUSED` with reason `no_progress`.
 
-ASK mode advertises and executes only `memory_list`, `memory_read`, and `memory_search`, through both native and XML paths. Memory write/edit/delete remain hidden and are rejected defensively. Those three read tools are restored after an active skill narrows the general tool list, and successful ASK reads may continue to a model answer.
+ASK mode advertises and executes only `memory_list`, `memory_read`, and `memory_search`, through both native and XML paths. Memory write/edit/delete remain hidden and are rejected defensively. In ordinary Agent/Plan mode all six memory tools, including write/edit/delete, are restored after an active skill narrows the general tool list, so a task can still recall or persist context. Successful ASK reads may continue to a model answer.
 
 ## Verification
 

@@ -21,13 +21,15 @@ import static org.mockito.Mockito.*;
 class AgentInboxControllerTest {
     private AgentInboxService inbox;
     private ProjectAiMessageService messages;
+    private com.checkba.service.ai.AgentOrchestrator orchestrator;
     private AgentInboxController controller;
 
     @BeforeEach
     void setUp() {
         inbox = mock(AgentInboxService.class);
         messages = mock(ProjectAiMessageService.class);
-        controller = new AgentInboxController(inbox, messages);
+        orchestrator = mock(com.checkba.service.ai.AgentOrchestrator.class);
+        controller = new AgentInboxController(inbox, messages, orchestrator);
     }
 
     @Test
@@ -71,6 +73,26 @@ class AgentInboxControllerTest {
             when(inbox.delete("conv-1", "m-1", 1L))
                     .thenThrow(new AgentInboxService.RevisionConflict("Inbox revision is stale"));
             assertEquals(409, controller.delete("conv-1", "m-1", 1L, "mine").getStatusCode().value());
+        }
+    }
+
+    @Test
+    void explicitQueueToSteerTransitionStartsAnIdleConsumer() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("mine")).thenReturn(7L);
+            when(messages.canUseConversation("conv-1", 7L)).thenReturn(true);
+            when(inbox.submissionMode("conv-1", "m-1")).thenReturn(AgentInboxService.QUEUE);
+            AgentInboxService.ItemView pending = new AgentInboxService.ItemView(
+                    "m-1", "later", null, "steer", "pending", 0, 2,
+                    "key", null, null, null, null);
+            when(inbox.edit("conv-1", "m-1", null, "steer", null, 1L)).thenReturn(pending);
+            when(inbox.view("m-1")).thenReturn(pending);
+            AgentInboxController.EditRequest sendNow = new AgentInboxController.EditRequest();
+            sendNow.submissionMode = "steer";
+            sendNow.expectedRevision = 1L;
+
+            assertEquals(200, controller.edit("conv-1", "m-1", sendNow, "mine").getStatusCode().value());
+            verify(orchestrator).acceptInboxSubmission("m-1");
         }
     }
 }

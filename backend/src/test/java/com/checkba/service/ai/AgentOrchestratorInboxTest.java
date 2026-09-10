@@ -304,6 +304,14 @@ class AgentOrchestratorInboxTest {
         assertEquals(1, calls.get());
         assertEquals(AgentInboxService.PENDING, rows.get(queued.getId()).getState());
         assertNull(orchestrator.activeRunId(CONV));
+
+        String cancelledRunId = rows.get(first.getId()).getRunId();
+        inbox.edit(CONV, queued.getId(), null, AgentInboxService.STEER, null, queued.getRevision());
+        orchestrator.acceptInboxSubmission(queued.getId());
+        assertEquals(2, calls.get());
+        assertEquals(AgentInboxService.APPLIED, rows.get(queued.getId()).getState());
+        assertNotEquals(cancelledRunId, rows.get(queued.getId()).getRunId());
+        assertNull(orchestrator.activeRunId(CONV));
     }
 
     private StreamingChatLanguageModel scripted(AiMessage... script) {

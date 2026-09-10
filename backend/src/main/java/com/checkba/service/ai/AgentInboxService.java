@@ -103,6 +103,14 @@ public class AgentInboxService {
                 .orElseThrow(() -> new NoSuchElementException("Inbox message not found"));
     }
 
+    public ItemView view(String id) {
+        return view(require(id));
+    }
+
+    public String submissionMode(String conversationId, String id) {
+        return requireOwned(conversationId, id).getSubmissionMode();
+    }
+
     public AiAgentController.AgentChatRequest requestOf(AgentInboxItem row) {
         try {
             return mapper.readValue(row.getRequestJson(), AiAgentController.AgentChatRequest.class);

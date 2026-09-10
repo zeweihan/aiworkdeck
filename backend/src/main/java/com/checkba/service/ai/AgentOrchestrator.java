@@ -52,6 +52,9 @@ public class AgentOrchestrator {
 
     /** ASK remains read-only but can inspect the user's durable memory. */
     static final Set<String> ASK_MEMORY_TOOLS = Set.of("memory_list", "memory_read", "memory_search");
+    /** Ordinary Agent/Plan turns retain the complete memory capability despite skill narrowing. */
+    static final Set<String> MEMORY_TOOLS = Set.of(
+            "memory_list", "memory_read", "memory_search", "memory_write", "memory_edit", "memory_delete");
 
     // LLM 失败自动重试：退避档位与次数上限按错误类型区分（见 LlmErrorClassifier.Kind），
     // 且仅在本轮尚未流出任何 token 时重放（对话状态未被污染，重放安全且用户无感知重复内容）；
@@ -1684,10 +1687,10 @@ public class AgentOrchestrator {
             // Skill 命中时由 SkillRouter 做可见性白名单裁剪（Phase 3B，未命中原样返回）
             List<ToolSpecification> registered = toolRegistry.getAllSpecifications(conversationId);
             List<ToolSpecification> visible = new java.util.ArrayList<>(skillRouter.visibleTools(guard.runId, registered));
-            // Memory reads are invariant capabilities: an active skill may narrow action tools but
-            // must not hide the user's own durable context.
+            // Memory is an invariant capability: skill action whitelists must not prevent an
+            // ordinary Agent/Plan request from recalling or persisting the user's context.
             for (ToolSpecification spec : registered) {
-                if (ASK_MEMORY_TOOLS.contains(spec.name())
+                if (MEMORY_TOOLS.contains(spec.name())
                         && visible.stream().noneMatch(v -> v.name().equals(spec.name()))) {
                     visible.add(spec);
                 }

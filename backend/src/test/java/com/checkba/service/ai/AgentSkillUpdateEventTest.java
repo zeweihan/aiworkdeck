@@ -275,12 +275,15 @@ class AgentSkillUpdateEventTest {
     }
 
     @Test
-    @DisplayName("技能裁剪不能隐藏只读 memory 工具，也不能顺带放开写工具")
-    void skillNarrowingRetainsInvariantMemoryReads() {
+    @DisplayName("技能裁剪不能隐藏 Agent/Plan 的六个 memory 工具")
+    void skillNarrowingRetainsAllOrdinaryMemoryTools() {
         ToolSpecification action = spec("skill_action");
-        ToolSpecification read = spec("memory_read");
-        ToolSpecification write = spec("memory_write");
-        when(toolRegistry.getAllSpecifications(any())).thenReturn(List.of(action, read, write));
+        List<ToolSpecification> memory = List.of("memory_list", "memory_read", "memory_search",
+                "memory_write", "memory_edit", "memory_delete").stream().map(AgentSkillUpdateEventTest::spec).toList();
+        List<ToolSpecification> registered = new ArrayList<>();
+        registered.add(action);
+        registered.addAll(memory);
+        when(toolRegistry.getAllSpecifications(any())).thenReturn(registered);
         when(skillRouter.visibleTools(any(), any())).thenReturn(List.of(action));
         List<String> offered = new CopyOnWriteArrayList<>();
         StreamingChatLanguageModel model = new StreamingChatLanguageModel() {
@@ -300,8 +303,7 @@ class AgentSkillUpdateEventTest {
         run("conv-skill-memory", AgentMode.AGENT, null);
 
         assertTrue(offered.contains("skill_action"));
-        assertTrue(offered.contains("memory_read"));
-        assertFalse(offered.contains("memory_write"));
+        assertTrue(offered.containsAll(memory.stream().map(ToolSpecification::name).toList()));
     }
 
     private static ToolSpecification spec(String name) {

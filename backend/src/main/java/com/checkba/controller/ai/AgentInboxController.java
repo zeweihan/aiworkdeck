@@ -6,6 +6,7 @@ package com.checkba.controller.ai;
 import com.checkba.controller.AuthController;
 import com.checkba.service.ProjectAiMessageService;
 import com.checkba.service.ai.AgentInboxService;
+import com.checkba.service.ai.AgentOrchestrator;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -18,10 +19,13 @@ import java.util.NoSuchElementException;
 public class AgentInboxController {
     private final AgentInboxService inbox;
     private final ProjectAiMessageService messageService;
+    private final AgentOrchestrator orchestrator;
 
-    public AgentInboxController(AgentInboxService inbox, ProjectAiMessageService messageService) {
+    public AgentInboxController(AgentInboxService inbox, ProjectAiMessageService messageService,
+                                AgentOrchestrator orchestrator) {
         this.inbox = inbox;
         this.messageService = messageService;
+        this.orchestrator = orchestrator;
     }
 
     @GetMapping("/{conversationId}")
@@ -39,8 +43,18 @@ public class AgentInboxController {
         if (denied != null) return denied;
         if (request.expectedRevision == null) return error(400, "expectedRevision is required");
         try {
-            return ResponseEntity.ok(inbox.edit(conversationId, messageId, request.message,
-                    request.submissionMode, request.position, request.expectedRevision));
+            String previousMode = inbox.submissionMode(conversationId, messageId);
+            AgentInboxService.ItemView edited = inbox.edit(conversationId, messageId, request.message,
+                    request.submissionMode, request.position, request.expectedRevision);
+            // "Send now" is an explicit queue -> steer transition. When no run is active this must
+            // create one; with an active run the durable steer is picked up at its next boundary.
+            if (AgentInboxService.QUEUE.equals(previousMode)
+                    && request.submissionMode != null
+                    && AgentInboxService.STEER.equals(AgentInboxService.normalizeMode(request.submissionMode))) {
+                orchestrator.acceptInboxSubmission(messageId);
+                edited = inbox.view(messageId);
+            }
+            return ResponseEntity.ok(edited);
         } catch (AgentInboxService.RevisionConflict e) {
             return error(409, e.getMessage());
         } catch (NoSuchElementException e) {
