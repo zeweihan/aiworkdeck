@@ -2151,8 +2151,12 @@ const WEB_KEEPALIVE_MAX = 5
 export default {
   // 工作台里渲染的组件（协作抽屉、加人弹窗……）要跳出工作台时，也得走同一个出口：
   // 先落盘再 reLaunch。组件拿不到页面实例，只能靠注入（check:nav 钉着）。
+  // 要去的是设置页时不用离开：工作台里设置是一个标签（dev-board#582），组件走 openSettingsTab。
   provide() {
-    return { leaveWorkbench: (url) => this.leaveWorkbench(url) }
+    return {
+      leaveWorkbench: (url) => this.leaveWorkbench(url),
+      openSettingsTab: (opts) => this.openSettingsTab(opts || {}),
+    }
   },
   components: {
     LibreOfficeEditor,
@@ -5067,7 +5071,14 @@ export default {
         const list = pane === 'left' ? this.leftFiles : this.rightFiles
         const existing = list.find(f => f.id === tabId)
         if (existing) {
-          if (nav) existing.adminNav = nav
+          if (nav && existing.adminNav === nav) {
+            // 同值写回不触发 AdminPane 的 initialNav watcher：用户手动切到别的分区后再点
+            // 「去团队设置」会停在原地（dev-board#582 走查实锤）。先清空、下一拍再写回。
+            existing.adminNav = ''
+            this.$nextTick(() => { existing.adminNav = nav })
+          } else if (nav) {
+            existing.adminNav = nav
+          }
           if (service) existing.adminService = service
           this[pane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'] = existing.id
           this.focusedPane = pane

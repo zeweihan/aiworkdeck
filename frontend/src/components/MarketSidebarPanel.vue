@@ -219,6 +219,8 @@ function fmtDownloads(n) {
 export default {
   name: 'MarketSidebarPanel',
   emits: ['open-detail'],
+  // 工作台 provide 的设置标签入口；宿主不是工作台时为 null
+  inject: { openSettingsTab: { default: null } },
   data() {
     return {
       searchText: '',
@@ -421,6 +423,8 @@ export default {
       uni.showToast({ title: this.$t('market.openedPurchasePage'), icon: 'none' })
     },
     goToAccountSettings() {
+      // 工作台里设置是标签，不跳页（dev-board#582）
+      if (this.openSettingsTab) return this.openSettingsTab({ nav: 'account' })
       uni.navigateTo({ url: '/pages/admin/admin?nav=account' })
     },
     async reloadAll() {

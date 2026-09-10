@@ -267,8 +267,8 @@ export default {
   // changed：云端状态可能变了，页面重新拉一次。reload-files：磁盘被改写，重载打开中的编辑器。
   // conflict：撞上了要逐份选择的情况，页面把人送到裁决现场。
   emits: ['update:visible', 'changed', 'reload-files', 'conflict'],
-  // 工作台 provide 的离开出口（先落盘再 reLaunch）；宿主不是工作台时为 null
-  inject: { leaveWorkbench: { default: null } },
+  // 工作台 provide 的离开出口（先落盘再 reLaunch）与设置标签入口；宿主不是工作台时为 null
+  inject: { leaveWorkbench: { default: null }, openSettingsTab: { default: null } },
   data() {
     return {
       activeTab: 'casefile',
@@ -528,12 +528,14 @@ export default {
      * 「去团队设置」：设置页的「团队」分区，深链 `?nav=team`——nav key 与 AdminPane 里
      * 「账户与用量」那条「前往团队」同一个，深链形制同仓里既有的 `?nav=account`。
      *
-     * 这个弹窗挂在工作台（pages/project-overview）里，按导航总规则「凡是工作台参与的
-     * 跳转一律 reLaunch」（sidebar-shell.md）：navigateTo 会把工作台连同它的全局订阅
-     * 一起留在页面栈里，回头再进工作台就是第二个实例。
+     * 这个弹窗挂在工作台（pages/project-overview）里，工作台里设置是一个标签：
+     * 直接开「设置」标签定位到团队分区，不离开工作台（dev-board#582）。
+     * 下面的跳页只是拿不到注入时的兜底，按导航总规则「凡是工作台参与的跳转一律
+     * reLaunch」（sidebar-shell.md）：navigateTo 会把工作台留在页面栈里。
      */
     goTeamSettings() {
       this.close()
+      if (this.openSettingsTab) return this.openSettingsTab({ nav: 'team' })
       const url = '/pages/admin/admin?nav=team'
       // 直接 reLaunch 会连同防抖期内还没落盘的文档改动一起销毁（sidebar-shell.md
       // 「离开工作台前必须落盘」），所以走工作台的统一出口

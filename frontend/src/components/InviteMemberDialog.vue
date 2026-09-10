@@ -276,8 +276,8 @@ export default {
     }
   },
   emits: ['update:visible', 'close', 'success'],
-  // 工作台 provide 的离开出口（先落盘再 reLaunch）；挂在项目列表页时为 null
-  inject: { leaveWorkbench: { default: null } },
+  // 工作台 provide 的离开出口（先落盘再 reLaunch）与设置标签入口；挂在项目列表页时为 null
+  inject: { leaveWorkbench: { default: null }, openSettingsTab: { default: null } },
   data() {
     return {
       activeTab: 'MEMBER', // 'MEMBER' | 'CLIENT'
@@ -525,11 +525,12 @@ export default {
      * 深链形制同仓里既有的 `/pages/admin/admin?nav=account`（MarketPane 那几处）。
      *
      * 这个弹窗挂在两处：项目列表页（工作台之外，照「个人中心」按钮的既有形制用
-     * navigateTo，设置页看完能退回列表），以及工作台成员堆栈的「+」——那里要走工作台
-     * provide 的 leaveWorkbench（先落盘再 reLaunch），navigateTo 会把工作台留在栈里。
+     * navigateTo，设置页看完能退回列表），以及工作台成员堆栈的「+」——工作台里设置是
+     * 一个标签，直接开标签、不离开工作台（dev-board#582）；leaveWorkbench 只剩兜底。
      */
     goTeamSettings() {
       this.close()
+      if (this.openSettingsTab) return this.openSettingsTab({ nav: 'team' })
       const url = '/pages/admin/admin?nav=team'
       if (this.leaveWorkbench) this.leaveWorkbench(url)
       else uni.navigateTo({ url })
