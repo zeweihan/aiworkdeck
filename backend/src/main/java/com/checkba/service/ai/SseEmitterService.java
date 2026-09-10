@@ -250,6 +250,12 @@ public class SseEmitterService {
             // 两种情况该 emitter 都已失效，一并丢弃，避免异常逃逸打断推事件的调用线程。
             log.warn("Failed to send SSE event to {} ({}), removing emitter.", connectionId, e.getClass().getSimpleName());
             emitters.remove(connectionId, emitter);
+            // 摘出映射之后再没有人会收尾这个 emitter（close() 按映射查找），不 complete 的话
+            // 它的异步请求要挂到 30 分钟超时。只 complete 失败的这一个实例，与重连后映射里的
+            // 新 emitter 无关，不存在代次竞态。注意：I/O 失败（含 AsyncRequestNotUsableException）
+            // 之后 Spring 6.1 的 complete() 是空操作，那条路由容器的 onError 分派收尾；
+            // 这里兜的是非 I/O 失败（IllegalStateException 等）。
+            try { emitter.complete(); } catch (Exception ignored) { /* 已失效 */ }
         }
     }
 

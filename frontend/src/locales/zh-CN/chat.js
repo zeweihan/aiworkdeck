@@ -137,6 +137,8 @@ export default {
   memoryLoadFailed: '记忆加载失败',
   memorySaveFailed: '记忆保存失败',
   memorySaved: '记忆已保存',
+  memoryUnsaved: '未保存',
+  memoryTooLarge: '内容超过 128 KiB 上限，无法保存，请删减后再试',
   memoryInvalidPath: '文件名必须是安全的相对 Markdown 路径',
   memoryDeleteTitle: '删除记忆主题',
   memoryDeleteConfirm: '确定删除 {path}？',

@@ -161,3 +161,85 @@ test('a delete refresh superseded by navigation does not issue another read in t
 
   assert.deepEqual(reads, [['team:1', 'team.md']])
 })
+
+// v0.38.3 走查 D5：uni 的 v-model 有 100ms 节流，打完字立刻点保存/创建，
+// data 里还是旧值，末尾几个字就丢了。保存与创建必须读控件当下的值。
+const liveRef = (value) => ({ $el: { querySelector: () => ({ value }) } })
+
+test('D5: save right after typing sends what the editor shows, not the throttled v-model value', async () => {
+  const saves = []
+  const vm = makeVm({
+    saveMemoryFile: async (payload) => { saves.push(payload); return { ...payload, revision: 2, writable: true } },
+    getMemoryFiles: async () => [{ path: 'remember.md' }],
+  })
+  vm.activeSpace = space('personal')
+  vm.current = file('personal', 1)
+  vm.currentSpaceId = 'personal'
+  vm.draft = 'personal content'
+  vm.$refs = { editor: liveRef('personal content plus the last words') }
+
+  await vm.saveCurrent()
+
+  assert.equal(saves.length, 1)
+  assert.equal(saves[0].content, 'personal content plus the last words')
+  assert.equal(vm.draft, 'personal content plus the last words')
+})
+
+test('D5: creating a topic right after typing uses the input value shown on screen', async () => {
+  const saves = []
+  const vm = makeVm({
+    saveMemoryFile: async (payload) => { saves.push(payload); return { path: payload.path, revision: 1, content: payload.content } },
+    getMemoryFiles: async () => [],
+    getMemoryFile: async (spaceId, path) => ({ path, revision: 1, content: '', writable: true }),
+  })
+  vm.activeSpace = space('personal')
+  vm.newTopic = 'client-pre'
+  vm.$refs = { topicInput: liveRef('client-preferences') }
+
+  await vm.createTopic({ detail: { x: 1, y: 2 } })
+
+  assert.equal(saves[0]?.path, 'client-preferences.md')
+})
+
+test('D5: the confirm event value wins over a stale v-model value', async () => {
+  const saves = []
+  const vm = makeVm({
+    saveMemoryFile: async (payload) => { saves.push(payload); return { path: payload.path, revision: 1, content: payload.content } },
+    getMemoryFiles: async () => [],
+    getMemoryFile: async (spaceId, path) => ({ path, revision: 1, content: '', writable: true }),
+  })
+  vm.activeSpace = space('personal')
+  vm.newTopic = 'deadl'
+
+  await vm.createTopic({ detail: { value: 'deadlines' } })
+
+  assert.equal(saves[0]?.path, 'deadlines.md')
+})
+
+test('D2: content over the 128 KiB contract is refused locally with a message instead of a failed request', async () => {
+  const saves = []
+  const toasts = []
+  const vm = makeVm({ saveMemoryFile: async (payload) => { saves.push(payload); return payload } },
+    { showToast(options) { toasts.push(options.title) }, showModal() {} })
+  vm.activeSpace = space('personal')
+  vm.current = file('personal', 1)
+  vm.currentSpaceId = 'personal'
+  vm.draft = '中'.repeat(50000) // 150000 UTF-8 bytes
+  vm.$refs = {}
+
+  assert.equal(vm.draftTooLarge, true)
+  await vm.saveCurrent()
+
+  assert.equal(saves.length, 0)
+  assert.deepEqual(toasts, ['chat.memoryTooLarge'])
+})
+
+test('unsaved edits are flagged until the save lands', async () => {
+  const vm = makeVm({})
+  vm.current = file('personal', 1)
+  vm.draft = 'personal content'
+  vm.serverDraft = 'personal content'
+  assert.equal(vm.hasUnsavedChanges, false)
+  vm.draft = 'personal content edited'
+  assert.equal(vm.hasUnsavedChanges, true)
+})

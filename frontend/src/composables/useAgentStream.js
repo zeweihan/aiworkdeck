@@ -1303,9 +1303,10 @@ export function useAgentStream() {
 
                 // 3. Process the full snapshot
                 // Treat it like a huge chunk of text
+                // 与 text_delta 走同一个解析入口（此前调的 parseTags 从未定义，
+                // 切回运行中的会话就抛 ReferenceError，快照整段丢失）
                 if (d.content) {
-                    parserBuffer += d.content
-                    parseTags()
+                    processTextStream(d.content)
                 }
 
             } catch (e) {
@@ -1908,6 +1909,13 @@ export function useAgentStream() {
         const conversationId = currentConversationId.value
         if (!conversationId || !messageId) return null
         const request = captureInboxRequest(conversationId)
+        // 「立即发送」（submissionMode=steer）会让停住的队列恢复执行。停止时本地 SSE 已经断开，
+        // 不重连的话后端跑完一整轮，前端既没有停止键也没有新气泡，已执行的条目还挂在待处理里。
+        // 必须先连上再发 PATCH：恢复那一轮的 input_applied 可能在 PATCH 返回前就发出，
+        // 前端不带 Last-Event-ID，连晚了就补不回来。
+        if (patch && patch.submissionMode === 'steer' && !isConnected.value) {
+            try { await connectSSE(conversationId) } catch (e) { console.warn('[AgentStream] reconnect before send-now failed', e) }
+        }
         try {
             const updated = await updateAgentInboxItem(conversationId, messageId, patch)
             if (!canApplyInboxResponse(request)) return null

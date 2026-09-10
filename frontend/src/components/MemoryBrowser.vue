@@ -36,7 +36,7 @@
             <text v-if="activeSpace && activeSpace.writable" class="memory-link" @tap="showCreate = true">{{ $t('chat.memoryNewTopic') }}</text>
           </view>
           <view v-if="showCreate" class="memory-create">
-            <input v-model="newTopic" class="memory-create-input" :placeholder="$t('chat.memoryTopicPlaceholder')" @confirm="createTopic" />
+            <input ref="topicInput" v-model="newTopic" class="memory-create-input" :maxlength="-1" :placeholder="$t('chat.memoryTopicPlaceholder')" @confirm="createTopic" />
             <text class="memory-link" @tap="createTopic">{{ $t('chat.memoryCreate') }}</text>
           </view>
           <view
@@ -55,8 +55,11 @@
           <template v-if="current">
             <view class="memory-meta">
               <text>{{ activeSpace.label || scopeLabel(activeSpace.scope) }} / {{ current.path }}</text>
-              <text>{{ $t('chat.memoryRevision', { revision: current.revision }) }} · {{ formatUpdated(current.updatedAt) }}</text>
+              <text>
+                <text v-if="hasUnsavedChanges" class="memory-unsaved">{{ $t('chat.memoryUnsaved') }} · </text>{{ $t('chat.memoryRevision', { revision: current.revision }) }} · {{ formatUpdated(current.updatedAt) }}
+              </text>
             </view>
+            <view v-if="draftTooLarge" class="memory-conflict">{{ $t('chat.memoryTooLarge') }}</view>
             <view v-if="!canWrite" class="memory-readonly">
               {{ activeSpace.reason || $t('chat.memoryReadOnly') }}
             </view>
@@ -67,7 +70,8 @@
                 <text class="memory-link" @tap="saveCurrent">{{ $t('chat.memorySaveMine') }}</text>
               </view>
             </view>
-            <textarea v-model="draft" class="memory-textarea" :disabled="!canWrite"></textarea>
+            <!-- maxlength=-1：uni-h5 的 textarea 缺省只许 140 字；上限按契约 128 KiB 在保存时校验 -->
+            <textarea ref="editor" v-model="draft" class="memory-textarea" :maxlength="-1" :disabled="!canWrite"></textarea>
             <view v-if="relativeLinks.length" class="memory-related">
               <text class="memory-related-label">{{ $t('chat.memoryLinkedFiles') }}</text>
               <text v-for="link in relativeLinks" :key="link.path" class="memory-link" @tap="openFile(link.path)">{{ link.label }}</text>
@@ -96,6 +100,8 @@ import {
 } from '@/services/api.js'
 import { markdownFileLinks } from '@/composables/memoryBrowserState.mjs'
 
+const MAX_MEMORY_BYTES = 128 * 1024
+
 export default {
   name: 'MemoryBrowser',
   emits: ['close'],
@@ -115,6 +121,13 @@ export default {
     canWrite() {
       return !!(this.activeSpace && this.activeSpace.writable && this.current
         && this.currentSpaceId === this.activeSpace.id && this.current.writable !== false)
+    },
+    hasUnsavedChanges() {
+      return !!this.current && this.draft !== this.serverDraft
+    },
+    // 与后端 MemoryDocumentService 同一口径：UTF-8 字节数不超过 128 KiB
+    draftTooLarge() {
+      return new TextEncoder().encode(this.draft || '').length > MAX_MEMORY_BYTES
     },
     relativeLinks() {
       return this.current
@@ -221,8 +234,22 @@ export default {
         }
       }
     },
-    async createTopic() {
+    // uni 的 v-model 有 100ms 节流：打完字立刻点保存/创建时 data 里还是旧值，末尾几个字会丢。
+    // 取值优先级：confirm 事件自带的值（同 utils/identityProfile.js 的 submittedInputValue）
+    // → 控件当下的 DOM 值 → v-model 的值。
+    liveFieldValue(refName, fallback, event) {
+      const submitted = event && event.detail ? event.detail.value : undefined
+      if (typeof submitted === 'string') return submitted
+      const ref = this.$refs && this.$refs[refName]
+      const root = ref && (ref.$el || ref)
+      const field = !root ? null
+        : typeof root.matches === 'function' && root.matches('textarea, input') ? root
+          : typeof root.querySelector === 'function' ? root.querySelector('textarea, input') : null
+      return field && typeof field.value === 'string' ? field.value : fallback
+    },
+    async createTopic(event) {
       if (!this.activeSpace || !this.activeSpace.writable) return
+      this.newTopic = this.liveFieldValue('topicInput', this.newTopic, event)
       let path = this.newTopic.trim().replace(/\\/g, '/')
       if (!path) return
       if (!path.toLowerCase().endsWith('.md')) path += '.md'
@@ -255,6 +282,11 @@ export default {
       if (!this.canWrite || this.saving) return
       const target = this.currentTarget()
       if (!target) return
+      this.draft = this.liveFieldValue('editor', this.draft)
+      if (this.draftTooLarge) {
+        uni.showToast({ title: this.$t('chat.memoryTooLarge'), icon: 'none' })
+        return
+      }
       const content = this.draft
       this.saving = true
       try {
@@ -368,6 +400,7 @@ export default {
 .memory-create-input { min-width: 0; flex: 1; height: 26px; padding: 0 6px; border: 1px solid var(--awd-border); border-radius: 5px; background: var(--awd-surface); font-size: 11px; }
 .memory-editor { min-width: 0; flex: 1; display: flex; flex-direction: column; padding: 14px; }
 .memory-meta { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 8px; color: var(--awd-text-3); font-size: 11px; }
+.memory-unsaved { color: var(--awd-accent-text); }
 .memory-readonly,.memory-conflict { margin-bottom: 8px; padding: 7px 9px; border-radius: 6px; background: var(--awd-warning-soft, #fff6df); color: var(--awd-text-2); font-size: 11px; }
 .memory-conflict { display: flex; justify-content: space-between; gap: 10px; }
 .memory-conflict-actions { display: flex; gap: 10px; }
