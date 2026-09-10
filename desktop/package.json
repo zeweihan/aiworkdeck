@@ -90,10 +90,6 @@
     "dmg": {
       "title": "AI WorkDeck ${version}",
       "background": "build/background.png",
-      "window": {
-        "width": 660,
-        "height": 420
-      },
       "iconSize": 128,
       "iconTextSize": 13,
       "contents": [

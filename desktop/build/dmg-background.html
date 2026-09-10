@@ -4,19 +4,16 @@
   macOS DMG 安装窗口的背景图源文件。改完这里，在本目录下重新生成两张 PNG：
 
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-gpu \
-    --hide-scrollbars --force-device-scale-factor=1 --window-size=3840,2160 \
+    --hide-scrollbars --force-device-scale-factor=1 --window-size=660,420 \
     --screenshot="$PWD/background.png" "file://$PWD/dmg-background.html"
 
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-gpu \
-    --hide-scrollbars --force-device-scale-factor=2 --window-size=3840,2160 \
+    --hide-scrollbars --force-device-scale-factor=2 --window-size=660,420 \
     --screenshot="$PWD/background@2x.png" "file://$PWD/dmg-background.html"
 
   electron-builder 会自动把 background.png 与 background@2x.png 合成 hidpi TIFF（tiffutil）。
-  背景图比窗口大（dev-board#580）：Finder 把背景按原尺寸贴在窗口左上角、不拉伸，用户把窗口
-  拉大时图外露白。所以画布远大于窗口，设计主体只占左上 660x420，其余是延展区；默认窗口
-  尺寸靠 package.json 的 build.dmg.window 显式钉在 660x420（不写的话 electron-builder
-  会拿背景图尺寸当窗口尺寸）。图标落位见 build.dmg.contents，与本图光晕/箭头一起改：
-  图标中心为 (170, 238) 与 (490, 238)，iconSize 128。
+  DMG 窗口尺寸取自 1x 图的像素尺寸（660x420）；图标落位见 package.json 的 build.dmg.contents，
+  两者必须一起改：图标中心为 (170, 238) 与 (490, 238)，iconSize 128。
 -->
 <!doctype html>
 <html lang="zh-CN">
@@ -24,53 +21,47 @@
 <meta charset="utf-8">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  /* 画布 = 截图视口（渲染命令的 --window-size），设计主体固定在左上 660x420。
-     下面的渐变位置与色标都写成 px（由原先相对 660x420 的百分比换算），主体区在任何
-     画布尺寸下保持原样，超出部分就是同一组渐变的自然延续——Finder 窗口被拉大时不露白。 */
-  html, body { width: 100%; height: 100%; overflow: hidden; }
+  html, body { width: 660px; height: 420px; overflow: hidden; }
 
   body {
     position: relative;
     background:
-      radial-gradient(600px 360px at 66px 504px, rgba(91, 209, 151, 0.26) 0%, rgba(91, 209, 151, 0) 64%),
-      radial-gradient(640px 400px at 673.2px 243.6px, rgba(26, 83, 54, 0.14) 0%, rgba(26, 83, 54, 0) 62%),
-      linear-gradient(180deg, #FAFCFB 0px, #F0F6F2 243.6px, #E6F0EA 420px);
+      radial-gradient(600px 360px at 10% 120%, rgba(91, 209, 151, 0.26) 0%, rgba(91, 209, 151, 0) 64%),
+      radial-gradient(640px 400px at 102% 58%, rgba(26, 83, 54, 0.14) 0%, rgba(26, 83, 54, 0) 62%),
+      linear-gradient(180deg, #FAFCFB 0%, #F0F6F2 58%, #E6F0EA 100%);
     font-family: -apple-system, "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
     -webkit-font-smoothing: antialiased;
   }
 
-  /* 顶部品牌带，横贯整个画布。112deg 渐变线起点由左上角决定、与盒宽无关，
-     px 色标（原 54%/100% × 660x104 盒的渐变线长 650.9px）在更宽的盒里不变，过终点钳在 #1D6440 */
+  /* 顶部品牌带 */
   .band {
     position: absolute; top: 0; left: 0;
-    width: 100%; height: 104px;
+    width: 660px; height: 104px;
     overflow: hidden;
     background:
-      radial-gradient(420px 220px at 580.8px -24.96px, rgba(91, 209, 151, 0.36) 0%, rgba(91, 209, 151, 0) 68%),
-      linear-gradient(112deg, #0E3320 0px, #174C31 351.5px, #1D6440 650.9px);
+      radial-gradient(420px 220px at 88% -24%, rgba(91, 209, 151, 0.36) 0%, rgba(91, 209, 151, 0) 68%),
+      linear-gradient(112deg, #0E3320 0%, #174C31 54%, #1D6440 100%);
   }
-  /* 分隔线只在主体宽度内，两端本就淡出，延展区里不需要它 */
   .band-rule {
     position: absolute; top: 102px; left: 0;
     width: 660px; height: 2px;
     background: linear-gradient(90deg,
       rgba(91,209,151,0) 0%, #5BD197 24%, #A6EFCA 50%, #5BD197 76%, rgba(91,209,151,0) 100%);
   }
-  /* 电路走线，呼应 logo 底座；中间留白避开文字。右侧三条从画布右缘进来（原先从 660 处进来），
-     遮罩色标按原 660 宽换算成 px，主体区里的明暗分布不变 */
+  /* 电路走线，呼应 logo 底座；中间留白避开文字 */
   .band-traces {
     position: absolute; left: 0; top: 4px;
-    -webkit-mask-image: linear-gradient(90deg, #000 0px, #000 92.4px, transparent 211.2px, transparent 448.8px, #000 567.6px, #000 100%);
+    -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 14%, transparent 32%, transparent 68%, #000 86%, #000 100%);
   }
 
   .wordmark {
-    position: absolute; top: 30px; left: 0; width: 660px;
+    position: absolute; top: 30px; left: 0; width: 100%;
     text-align: center;
     font-size: 25px; font-weight: 600; letter-spacing: 0.005em;
     color: #FFFFFF;
   }
   .tagline {
-    position: absolute; top: 68px; left: 0; width: 660px;
+    position: absolute; top: 68px; left: 0; width: 100%;
     text-align: center;
     font-size: 11.5px; font-weight: 400; letter-spacing: 0.16em;
     color: rgba(220, 248, 234, 0.78);
@@ -91,7 +82,7 @@
 
   /* 底部留出 Finder 状态栏（新系统即使 bwsp 关掉也可能画一条），文字别贴底 */
   .caption {
-    position: absolute; top: 336px; left: 0; width: 660px;
+    position: absolute; top: 336px; left: 0; width: 100%;
     text-align: center;
     font-size: 12.5px; letter-spacing: 0.04em;
     color: rgba(15, 46, 30, 0.5);
@@ -100,14 +91,14 @@
 </head>
 <body>
   <div class="band">
-    <svg class="band-traces" width="100%" height="96" fill="none"
+    <svg class="band-traces" width="660" height="96" viewBox="0 0 660 96" fill="none"
          stroke="rgba(255,255,255,0.15)" stroke-width="1" stroke-linecap="round">
       <path d="M-10 22 H70 L84 36 H176"/>
       <path d="M-10 58 H36 L50 44 H144"/>
       <path d="M-10 86 H108 L122 72 H186"/>
-      <path d="M9999 28 H592 L578 42 H486"/>
-      <path d="M9999 64 H626 L612 50 H516"/>
-      <path d="M9999 88 H556 L542 74 H474"/>
+      <path d="M670 28 H592 L578 42 H486"/>
+      <path d="M670 64 H626 L612 50 H516"/>
+      <path d="M670 88 H556 L542 74 H474"/>
       <g fill="rgba(166,239,202,0.42)" stroke="none">
         <circle cx="176" cy="36" r="2"/>
         <circle cx="144" cy="44" r="2"/>
