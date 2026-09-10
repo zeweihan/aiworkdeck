@@ -27,7 +27,7 @@ public class SensitiveController {
     private final ProjectFileService projectFileService;
     private final ProjectMemberService projectMemberService;
 
-    public record Request(Long fileId, List<String> strategies, String mode, List<String> customTerms,
+    public record Request(Long fileId, List<String> strategies, String mode, @com.fasterxml.jackson.annotation.JsonAlias("customWords") List<String> customTerms,
                           List<String> excludedTerms, String password, String recoveryKit) {
         SensitiveService.Options options() {
             return new SensitiveService.Options(strategies, mode, customTerms, excludedTerms, password);
@@ -37,7 +37,7 @@ public class SensitiveController {
     @GetMapping("/options")
     public ResponseEntity<List<Map<String, String>>> getSensitiveOptions() {
         List<Map<String, String>> options = new ArrayList<>();
-        for (SensitiveType type : SensitiveType.values()) {
+        for (SensitiveType type : SensitiveType.autoDetectTypes()) {
             options.add(Map.of("value", type.getCode(), "label", type.getLabel(),
                     "example", type.getExample(), "description", type.getDescription()));
         }

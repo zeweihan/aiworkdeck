@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.sensitive;
 
 import com.checkba.model.SensitiveType;
@@ -40,7 +43,7 @@ public final class SensitiveTextEngine {
     private List<Hit> detect(String text) {
         List<Hit> hits = new ArrayList<>();
         for (SensitiveType type : SensitiveType.values()) {
-            if (!strategies.contains(type.getCode())) continue;
+            if (!type.isAutoDetect() || !strategies.contains(type.getCode())) continue;
             Matcher matcher = type.getPattern().matcher(text);
             while (matcher.find()) {
                 int start = matcher.start(), end = matcher.end();
@@ -107,7 +110,7 @@ public final class SensitiveTextEngine {
                     return key;
                 });
             } else {
-                replacement = type == null ? "[敏感信息]" : type.mask(hit.value);
+                replacement = type == null ? "*".repeat(hit.value.length()) : type.mask(hit.value);
             }
             edits.add(new Edit(hit.start, hit.end, replacement));
             counts.merge(hit.code, 1, Integer::sum);

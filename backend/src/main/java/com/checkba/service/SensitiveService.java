@@ -6,6 +6,7 @@ package com.checkba.service;
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
 import com.checkba.model.SensitiveType;
+import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
@@ -31,6 +32,11 @@ import java.nio.file.Path;
 @Service
 @Slf4j
 public class SensitiveService {
+    public static final String VERSION = "2.0.0";
+    public static final String DESCRIPTION = "本地规则脱敏：公司识别、手填姓名/词语、预览与编号替换；编辑副本后凭加密映射和密码复敏。引擎随桌面端更新，不调用大模型。";
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.document.DocumentGeneratorSettings documentGeneratorSettings;
+
 
     public record Options(List<String> strategies, String mode, List<String> customTerms,
                           List<String> excludedTerms, String password) {
@@ -56,6 +62,24 @@ public class SensitiveService {
 
     public String processFile(String filePath, List<String> strategies) throws Exception {
         return processFile(filePath, new Options(strategies, "MASK", List.of(), List.of(), null)).path();
+    }
+
+    /** Compatibility for clients that send the original customWords field. */
+    public String processFile(String filePath, List<String> strategies, List<String> customWords) throws Exception {
+        return processFile(filePath, new Options(strategies, "MASK", customWords, List.of(), null)).path();
+    }
+
+    String maskCustomWords(String text, List<String> words) {
+        List<String> clean = words == null ? List.of() : words.stream().filter(Objects::nonNull).toList();
+        return new SensitiveTextEngine(List.of(), false, clean, List.of()).apply(text);
+    }
+
+    private void writeDocx(SensitiveDocx doc, Path destination) throws Exception {
+        doc.write(destination);
+        try (XWPFDocument output = new XWPFDocument(Files.newInputStream(destination))) {
+            com.checkba.util.DocumentGeneratorStamp.apply(output, documentGeneratorSettings);
+            try (var stream = Files.newOutputStream(destination)) { output.write(stream); }
+        }
     }
 
     private String validateSource(Path source, boolean reversible) throws IOException {
@@ -108,7 +132,7 @@ public class SensitiveService {
         SensitiveTextEngine engine = engine(options, text);
         Path dest = outputPath(source, ext, "已脱敏");
         try {
-            if (doc != null) { doc.transform(engine::edits); doc.write(dest); }
+            if (doc != null) { doc.transform(engine::edits); writeDocx(doc, dest); }
             else if (ext.equals("pdf")) processPdf(source.toFile(), dest.toFile(), engine);
             else Files.writeString(dest, engine.apply(text), StandardCharsets.UTF_8);
             String kit = reversible && !engine.recovery().isEmpty() ? SensitiveRecoveryKit.encrypt(engine.recovery(), options.password()) : "";
@@ -138,7 +162,7 @@ public class SensitiveService {
         if (restored[0] == 0) throw new IllegalArgumentException("没有找到与该复敏文件匹配的编号；请核对文件，星号、黑框及被改写的编号无法还原");
         Path dest = outputPath(source, ext, "已复敏");
         try {
-            if (doc != null) doc.write(dest); else Files.writeString(dest, result, StandardCharsets.UTF_8);
+            if (doc != null) writeDocx(doc, dest); else Files.writeString(dest, result, StandardCharsets.UTF_8);
             var messages = new ArrayList<String>();
             messages.add("仅恢复原样保留的编号；已删除或被改写的编号无法还原。复敏后的文件含原始敏感信息。");
             if (unknown[0] > 0) messages.add("另有" + unknown[0] + "个编号不属于此复敏文件，已保留原样。");
@@ -227,6 +251,10 @@ public class SensitiveService {
      */
     List<RedactionArea> computeRedactionAreas(PDDocument document, List<String> strategies) throws IOException {
         return computeRedactionAreas(document, new SensitiveTextEngine(strategies, false, List.of(), List.of()));
+    }
+
+    List<RedactionArea> computeRedactionAreas(PDDocument document, List<String> strategies, List<String> words) throws IOException {
+        return computeRedactionAreas(document, new SensitiveTextEngine(strategies, false, words, List.of()));
     }
 
     private List<RedactionArea> computeRedactionAreas(PDDocument document, SensitiveTextEngine engine) throws IOException {

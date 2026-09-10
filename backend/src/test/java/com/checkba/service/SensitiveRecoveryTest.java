@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service;
 
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
@@ -16,8 +19,8 @@ class SensitiveRecoveryTest {
     private final String password = "test-passphrase-2026";
 
     private SensitiveService.Options options() {
-        return new SensitiveService.Options(List.of("COMPANY", "CHINESE_NAME", "PHONE", "EMAIL"),
-                "TOKEN", List.of("星河"), List.of(), password);
+        return new SensitiveService.Options(List.of("COMPANY", "PHONE", "EMAIL"),
+                "TOKEN", List.of("星河", "张三"), List.of(), password);
     }
 
     @Test

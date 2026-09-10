@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service;
 
 import com.checkba.model.SensitiveType;
@@ -37,8 +40,8 @@ class SensitiveRecognitionTest {
     }
 
     @Test
-    void namesNeedContextAndSurname() {
-        String result = service.replaceSensitiveData("联系人：张三。法定代表人：欧阳明。双方应当履行合同。", "CHINESE_NAME");
+    void namesAreRedactedOnlyWhenExplicitlyProvided() {
+        String result = service.maskCustomWords("联系人：张三。法定代表人：欧阳明。双方应当履行合同。", List.of("张三", "欧阳明"));
         assertFalse(result.contains("张三"));
         assertFalse(result.contains("欧阳明"));
         assertTrue(result.contains("双方应当履行合同。"));

@@ -1,7 +1,6 @@
 <!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
-<template>
   <scroll-view scroll-y class="desensitize-pane">
     <view class="section">
       <view class="actions-row">
@@ -21,6 +20,11 @@
 
     <template v-if="operation === 'redact'">
       <view class="section">
+        <view class="section-title">{{ $t('panels.deCustomWordsTitle') }}</view>
+        <textarea v-model="customTerms" :disabled="processing" class="text-input custom-words-input" :maxlength="100000" :placeholder="$t('panels.deCustomPlaceholder')" />
+        <text class="help-text">{{ $t('panels.deCustomWordsHint') }}</text>
+      </view>
+      <view class="section">
         <view class="section-title">{{ $t('panels.deModeTitle') }}</view>
         <view v-if="!isPdf" class="actions-row">
           <button class="mini-btn" :class="{ active: mode === 'TOKEN' }" :disabled="processing" @tap="mode = 'TOKEN'">{{ $t('panels.deTokenMode') }}</button>
@@ -36,8 +40,6 @@
             <text class="strategy-label">{{ s.label }}</text>
           </label>
         </view>
-        <view class="section-title">{{ $t('panels.deCustomTerms') }}</view>
-        <textarea v-model="customTerms" :disabled="processing" class="text-input" :maxlength="100000" :placeholder="$t('panels.deCustomPlaceholder')" />
         <view class="section-title">{{ $t('panels.deExcludedTerms') }}</view>
         <textarea v-model="excludedTerms" :disabled="processing" class="text-input" :maxlength="100000" :placeholder="$t('panels.deExcludedPlaceholder')" />
       </view>
@@ -118,7 +120,7 @@ export default {
       try {
         const res = await getSensitiveOptions()
         this.availableStrategies = Array.isArray(res) ? res : res?.data || []
-        this.selectedStrategies = this.availableStrategies.filter(s => ['COMPANY', 'CHINESE_NAME', 'PHONE', 'ID_CARD', 'EMAIL', 'BANK_CARD'].includes(s.value)).map(s => s.value)
+        this.selectedStrategies = this.availableStrategies.filter(s => ['COMPANY', 'PHONE', 'ID_CARD', 'EMAIL', 'BANK_CARD'].includes(s.value)).map(s => s.value)
       } catch (e) { this.error = this.$t('panels.deFetchStrategiesFailed') }
     },
     chooseOperation(operation) {

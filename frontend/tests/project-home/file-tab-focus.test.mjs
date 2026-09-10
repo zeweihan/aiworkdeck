@@ -1,4 +1,8 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import test from 'node:test'
+import { isTabVisibleInPane } from '../../src/pages/project-overview/tabVisibility.js'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
@@ -73,7 +77,7 @@ test('different files with identical names remain separate; repeated opens are s
 
 const page = readFileSync(new URL('../../src/pages/project-overview/project-overview.vue', import.meta.url), 'utf8')
 const visible = page.slice(page.indexOf('    isTabVisible(file) {'), page.indexOf('    startRenameProject()'))
-const isTabVisible = new Function('return ({' + visible + '}).isTabVisible')()
+const isTabVisible = new Function('isTabVisibleInPane', 'return ({' + visible + '}).isTabVisible')(isTabVisibleInPane)
 test('ordinary documents stay visible throughout sidebar workflows', () => {
   for (const leftPaneKey of ['desensitize', 'market', 'home', 'version', 'files']) {
     assert.equal(isTabVisible.call({ leftPaneKey, isMovablePanel: () => false }, { id: 1, fileType: 'docx' }), true)

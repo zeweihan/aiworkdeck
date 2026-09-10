@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.controller;
 
 import com.checkba.model.entity.ProjectFile;
@@ -30,6 +33,12 @@ class SensitiveControllerTest {
         when(files.getFile(1L)).thenReturn(source);
         when(storage.getStorageService()).thenReturn(local);
         when(local.load(source.getFilePath())).thenReturn(new FileSystemResource(path));
+    }
+
+    @Test void previousCustomWordsPayloadRemainsSupported() throws Exception {
+        var request = json.readValue("{\"fileId\":1,\"customWords\":[\"张三\"]}", SensitiveController.Request.class);
+        assertEquals(List.of("张三"), request.options().customTerms());
+        assertEquals("MASK", request.options().mode());
     }
 
     @Test void allOperationsRequireAuthenticationBeforeStorageAccess() throws Exception {
