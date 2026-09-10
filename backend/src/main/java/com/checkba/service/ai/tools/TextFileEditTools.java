@@ -221,8 +221,8 @@ public class TextFileEditTools implements AgentToolComponent {
     private String resolveUserName(Long userId) {
         if (userId != null) {
             try {
-                var u = userService.getUserById(userId);
-                if (u != null && u.getUsername() != null) return u.getUsername();
+                String name = com.checkba.service.UserService.signatureName(userService.getUserById(userId));
+                if (name != null) return name;
             } catch (Exception e) {
                 log.warn("解析用户名失败: userId={}", userId, e);
             }

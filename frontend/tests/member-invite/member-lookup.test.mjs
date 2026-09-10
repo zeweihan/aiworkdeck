@@ -178,10 +178,14 @@ test('工作台弹窗的「去团队设置」接上了跳转', () => {
   assert.match(collabSrc, /\/pages\/admin\/admin\?nav=team/)
 })
 
-test('工作台里的跳转必须 reLaunch——navigateTo 会把工作台连同它的全局订阅留在页面栈里', () => {
+test('工作台里的跳转走 leaveWorkbench（先落盘再 reLaunch）——navigateTo 会把工作台留在页面栈里', () => {
   const jump = /goTeamSettings\s*\(\)\s*\{[\s\S]*?\n    \}/.exec(collabSrc)
   assert.ok(jump, '找不到 goTeamSettings 的方法体')
-  assert.match(jump[0], /uni\.reLaunch\(\{\s*url:\s*'\/pages\/admin\/admin\?nav=team'/)
+  // 优先走工作台 provide 的出口：直接 reLaunch 会丢掉防抖期内没落盘的文档改动（v0.38.2 走查）
+  assert.match(jump[0], /this\.leaveWorkbench\(url\)/)
+  assert.match(jump[0], /'\/pages\/admin\/admin\?nav=team'/)
+  // 回落（宿主不是工作台）也只许 reLaunch
+  assert.match(jump[0], /uni\.reLaunch\(\{\s*url\s*\}\)/)
   assert.doesNotMatch(jump[0], /navigateTo|redirectTo|navigateBack/)
 })
 

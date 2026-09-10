@@ -7,6 +7,7 @@ import com.checkba.model.entity.User;
 import com.checkba.service.LocalIdentityService;
 import com.checkba.service.UserService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
@@ -37,13 +38,23 @@ public class AccountIdentitySync {
     private final AccountService accountService;
     private final LocalIdentityService localIdentityService;
     private final UserService userService;
+    private final ApplicationEventPublisher events;
+
+    /**
+     * 本机行刚按官网展示名同步过。官方团队案件库那边的展示名只在桥接时刷新，
+     * 由 {@code OfficialCloudService} 听这个事件决定要不要重桥（v0.38.2 发版走查：
+     * 改完昵称，案件库参与人列表里自己仍是打码手机号）。
+     */
+    public record DisplayNameSynced(Long userId, String displayName) {}
 
     public AccountIdentitySync(AccountService accountService,
                                LocalIdentityService localIdentityService,
-                               UserService userService) {
+                               UserService userService,
+                               ApplicationEventPublisher events) {
         this.accountService = accountService;
         this.localIdentityService = localIdentityService;
         this.userService = userService;
+        this.events = events;
     }
 
     /**
@@ -103,6 +114,9 @@ public class AccountIdentitySync {
             if (user == null) return;
             if (displayName != null && !displayName.isBlank()) {
                 userService.refreshDisplayNameFromWebsite(user, displayName);
+                // 每次都发（不只「本机行变了」时）：升级上来的机器本机行早就是新名字，
+                // 案件库连接却还停在旧值，只有这样下次启动才会收敛。听的一方自己比对、没变不动。
+                events.publishEvent(new DisplayNameSynced(userId, displayName.trim()));
             }
             if (touchAvatar && !Objects.equals(user.getAvatarUrl(), avatarUrl)) {
                 userService.updateAvatar(userId, avatarUrl);

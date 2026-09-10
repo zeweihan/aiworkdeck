@@ -267,6 +267,8 @@ export default {
   // changed：云端状态可能变了，页面重新拉一次。reload-files：磁盘被改写，重载打开中的编辑器。
   // conflict：撞上了要逐份选择的情况，页面把人送到裁决现场。
   emits: ['update:visible', 'changed', 'reload-files', 'conflict'],
+  // 工作台 provide 的离开出口（先落盘再 reLaunch）；宿主不是工作台时为 null
+  inject: { leaveWorkbench: { default: null } },
   data() {
     return {
       activeTab: 'casefile',
@@ -532,7 +534,11 @@ export default {
      */
     goTeamSettings() {
       this.close()
-      uni.reLaunch({ url: '/pages/admin/admin?nav=team' })
+      const url = '/pages/admin/admin?nav=team'
+      // 直接 reLaunch 会连同防抖期内还没落盘的文档改动一起销毁（sidebar-shell.md
+      // 「离开工作台前必须落盘」），所以走工作台的统一出口
+      if (this.leaveWorkbench) this.leaveWorkbench(url)
+      else uni.reLaunch({ url })
     },
     copyInviteLink() {
       uni.setClipboardData({

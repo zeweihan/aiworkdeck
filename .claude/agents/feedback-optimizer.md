@@ -108,6 +108,14 @@ optimizer.*」——普通用户永远 enabled=false，只看得到下面的「�
   而框选覆盖窗一定会抢焦点 → 条件等待集体假超时（现象是「截图没出来」，实际早就出来了）。
 - 多构造器的 Spring bean（`VoiceTranscriptionService`/`FeedbackTriageService`）
   必须给公开构造器打 `@Autowired`，否则整个上下文起不来。
+- **浮钮的「让路」契约 `data-awd-keep-clear`（dev-board#574）**：入口浮钮是 fixed 常驻层，
+  任何固定坐标都会在某种布局下压住别人的主操作（#213 压过沉底发送键，挪到右缘 60% 后又压住
+  英文空会话折行后的居中输入卡）。现在由主操作区容器自己打 `data-awd-keep-clear`，
+  `FeedbackWidget.updateKeepClear()` 每 800ms / resize / 拖动松手后只沿竖直方向避开
+  （几何在 `utils/keepClear.js`，`tests/feedback-widget/keep-clear.test.mjs` 覆盖）。
+  让路只是显示偏移，不写回 `launcherPos`、不持久化。**新面板的主操作按钮若贴右缘，
+  要自己加这个属性**，浮钮不会自动识别可点元素。app-e2e J12 在点发送前断言
+  `elementFromPoint` 命中按钮自身，被盖住直接判红（原来记 skip，门禁形同虚设）。
 
 ## 验证
 

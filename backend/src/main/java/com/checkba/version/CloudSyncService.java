@@ -132,22 +132,28 @@ public class CloudSyncService {
     /** 断开一个云端连接：尽力撤远端令牌 + 删本地连接与所有关联的项目绑定。 */
     public void disconnect(long connectionId, Long userId) {
         connectionRepository.findById(connectionId).filter(c -> ownedBy(c, userId)).ifPresent(conn -> {
-            if (conn.getTokenId() != null) {
-                try {
-                    JSONObject resp = JSONUtil.parseObj(httpPost(
-                            conn.getServerUrl() + "/api/auth/device-token/" + conn.getTokenId() + "/revoke",
-                            "{}", conn.getDeviceToken()));
-                    if (resp.getInt("code", 1) != 0) {
-                        log.warn("远端撤销设备令牌未成功: connection={}, message={}",
-                                connectionId, resp.getStr("message"));
-                    }
-                } catch (Exception e) {
-                    log.warn("远端撤销设备令牌失败，仅做本地断开: connection={}", connectionId, e);
-                }
-            }
+            revokeRemoteToken(conn.getServerUrl(), conn.getTokenId(), conn.getDeviceToken());
             remoteRepository.findByConnectionId(connectionId).forEach(remoteRepository::delete);
             connectionRepository.delete(conn);
         });
+    }
+
+    /**
+     * 尽力撤掉远端一枚长期设备令牌：断开连接、官方连接重桥换令牌之后共用。失败只记日志——
+     * 撤不掉最多是远端多一枚不再有人用的令牌，不值得为它让断开或改名失败。
+     */
+    void revokeRemoteToken(String serverUrl, Long tokenId, String sessionToken) {
+        if (tokenId == null) return;
+        try {
+            JSONObject resp = JSONUtil.parseObj(httpPost(
+                    serverUrl + "/api/auth/device-token/" + tokenId + "/revoke", "{}", sessionToken));
+            if (resp.getInt("code", 1) != 0) {
+                log.warn("远端撤销设备令牌未成功: server={}, tokenId={}, message={}",
+                        serverUrl, tokenId, resp.getStr("message"));
+            }
+        } catch (Exception e) {
+            log.warn("远端撤销设备令牌失败: server={}, tokenId={}", serverUrl, tokenId, e);
+        }
     }
 
     public java.util.List<CloudConnection> listConnections(Long userId) {

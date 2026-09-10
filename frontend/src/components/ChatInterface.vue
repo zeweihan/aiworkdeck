@@ -314,7 +314,8 @@
 
        <!-- Center: Input -->
        <view class="empty-middle-section">
-          <view class="input-card centered-style">
+          <!-- data-awd-keep-clear：右下角反馈浮钮会主动避开这块（utils/keepClear.js，dev-board#574） -->
+          <view class="input-card centered-style" data-awd-keep-clear>
               <view v-if="isDragging" class="drop-overlay">
                  <text>Drop files here</text>
               </view>
@@ -543,7 +544,7 @@
          @move="handleInboxMove"
          @send-now="handleInboxSendNow"
        />
-       <view class="input-card">
+       <view class="input-card" data-awd-keep-clear>
           <view v-if="isDragging" class="drop-overlay">
              <text>Drop files here</text>
           </view>

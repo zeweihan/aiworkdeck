@@ -2149,6 +2149,11 @@ import DocumentLinkPreview from '@/components/DocumentLinkPreview.vue'
 const WEB_KEEPALIVE_MAX = 5
 
 export default {
+  // 工作台里渲染的组件（协作抽屉、加人弹窗……）要跳出工作台时，也得走同一个出口：
+  // 先落盘再 reLaunch。组件拿不到页面实例，只能靠注入（check:nav 钉着）。
+  provide() {
+    return { leaveWorkbench: (url) => this.leaveWorkbench(url) }
+  },
   components: {
     LibreOfficeEditor,
     BrowserPane,

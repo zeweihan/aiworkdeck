@@ -10,10 +10,13 @@ import cn.hutool.json.JSONUtil;
 import com.checkba.model.entity.CloudConnection;
 import com.checkba.repository.CloudConnectionRepository;
 import com.checkba.service.LangText;
+import com.checkba.service.account.AccountIdentitySync;
 import com.checkba.service.account.AccountService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -117,6 +120,54 @@ public class OfficialCloudService {
     public Map<String, Object> shareProject(long projectId, Long userId, Long connectionId) {
         long target = connectionId != null ? connectionId : connectOfficial(userId).getId();
         return cloudSyncService.shareToCloud(projectId, target, userId);
+    }
+
+    /**
+     * 本机展示名随官网刷新之后（{@link AccountIdentitySync} 的事件：连接账户、每次
+     * {@code GET /api/account/status}、改昵称之后），把官方案件库那边的也跟上。
+     */
+    @EventListener
+    @Async("taskExecutor")
+    public void onDisplayNameSynced(AccountIdentitySync.DisplayNameSynced event) {
+        refreshDisplayName(event.userId(), event.displayName());
+    }
+
+    /**
+     * 官方连接上的展示名与官网不一致时就地重桥（v0.38.2 发版走查）。
+     *
+     * <p>案件库侧没有单独的「刷新我的展示名」端点，现成的入口就是桥接本身——
+     * {@code awdk-login} 每次都按官网 /me 刷新服务端用户的展示名（PR#797）。
+     * 而 {@link #connectOfficial} 在指纹不变时一直复用旧连接、从不重桥，于是改完昵称
+     * 案件库参与人列表里自己还是旧名字，本机合并署名 {@code conn.displayName} 也是旧值。
+     *
+     * <p>重桥会换一枚新令牌，旧的那枚随即撤掉（不然每改一次名远端就多一枚长期凭据）。
+     * 桥接回来的名字若仍是旧的（旧版案件库不刷新展示名），本机连接照样记官网那份：
+     * 合并署名以官网为准，也不会因为两边一直对不上而每次 status 都重桥一次。
+     *
+     * <p>尽力而为：没有官方连接、没有账户 Key、官网或案件库不可达，一律安静跳过。
+     * {@code synchronized}：连发的两次事件并发重桥会多换出一枚没人撤的令牌。
+     */
+    synchronized void refreshDisplayName(Long userId, String displayName) {
+        if (displayName == null || displayName.isBlank()) return;
+        String name = displayName.trim();
+        CloudConnection existing = existingOfficial(userId);
+        if (existing == null || name.equals(existing.getDisplayName())) return;
+        String key = accountService.currentKeyOrNull();
+        if (key == null) return;
+        Long oldTokenId = existing.getTokenId();
+        try {
+            CloudConnection conn = bridge(officialBaseUrl, userId, key,
+                    accountService.accountFingerprintOrNull(), existing);
+            if (!name.equals(conn.getDisplayName())) {
+                conn.setDisplayName(name);
+                conn = connectionRepository.save(conn);
+            }
+            if (oldTokenId != null && !oldTokenId.equals(conn.getTokenId())) {
+                cloudSyncService.revokeRemoteToken(officialBaseUrl, oldTokenId, conn.getDeviceToken());
+            }
+        } catch (RuntimeException e) {
+            log.warn("官方案件库展示名刷新跳过（下次同步再试）: user={} {}", userId, e.getMessage());
+        }
     }
 
     // ==================== 内部 ====================

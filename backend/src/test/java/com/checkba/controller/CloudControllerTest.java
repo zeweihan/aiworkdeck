@@ -272,6 +272,28 @@ class CloudControllerTest {
         }
     }
 
+    /** 整合落下的合并提交署名：展示名优先（spec 2026-09-10 §4），与 VersionController 同一口径。 */
+    @Test
+    void updateSignsWithTheDisplayNameRatherThanTheUsername() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(USER_ID);
+            when(projectMemberService.hasReadPermission(PROJECT_ID, USER_ID)).thenReturn(true);
+            when(projectMemberService.isClient(PROJECT_ID, USER_ID)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(PROJECT_ID, USER_ID)).thenReturn(true);
+            var user = new com.checkba.model.entity.User();
+            user.setUsername("awd_upoxwcdtg");
+            user.setDisplayName("韩律师");
+            when(userService.getUserById(USER_ID)).thenReturn(user);
+            when(cloudSyncService.updateFromCloud(anyLong(), any(), any()))
+                    .thenReturn(new CloudSyncService.UpdateResult(
+                            CloudSyncService.UpdateStatus.UPDATED, List.of(), null));
+
+            controller.update(PROJECT_ID, "sess");
+
+            verify(cloudSyncService).updateFromCloud(PROJECT_ID, USER_ID, "韩律师");
+        }
+    }
+
     @Test
     void resolveParsesValidResolutionsAndForwards() {
         try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {

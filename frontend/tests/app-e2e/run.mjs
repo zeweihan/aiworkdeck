@@ -2311,10 +2311,39 @@ try {
       await shot('j12-en-ai-panel')
     })
 
-    await step('J12 英文指令过程卡工具名不含中文', async () => {
+    // 「点不中发送键」与「模型没选工具」必须分开判（dev-board#574）：以前发送键被右下角
+    // 反馈浮钮盖住时，这里的点击落在浮钮上（点开的是反馈面板），消息根本没发出去，
+    // 下一步照样等满 120s 记成「模型未产出工具调用」的 skip——发版门形同虚设。
+    // 现在：按钮中心被别的元素盖住 / 点了没发出去 → 判红；发出去了但模型这一轮
+    // 没调工具 → 照旧 skip。
+    const J12_PROMPT = 'List the files in this project, then reply with just: E2E OK'
+    const j12Sent = await step('J12 发送按钮未被遮挡且点击确实发出消息', async () => {
       await mouseClickSel('.chat-input-rich')
-      await page.keyboard.type('List the files in this project, then reply with just: E2E OK', { delay: 10 })
-      await mouseClickSel('.send-btn')
+      await page.keyboard.type(J12_PROMPT, { delay: 10 })
+      const hit = await page.evaluate(() => {
+        const btn = [...document.querySelectorAll('.send-btn')].find((b) => b.getBoundingClientRect().width > 0)
+        if (!btn) return { ok: false, top: '（没有可见的 .send-btn）' }
+        const r = btn.getBoundingClientRect()
+        const x = r.x + r.width / 2
+        const y = r.y + r.height / 2
+        const top = document.elementFromPoint(x, y)
+        const desc = top
+          ? top.tagName + '.' + String(top.className || '').trim().replace(/\s+/g, '.') + ' "' + (top.innerText || '').trim().slice(0, 30) + '"'
+          : 'null'
+        return { ok: !!top && (top === btn || btn.contains(top)), x, y, top: desc }
+      })
+      if (!hit.ok) throw new Error('发送按钮中心被遮挡，elementFromPoint 命中 ' + hit.top)
+      await page.mouse.click(hit.x, hit.y)
+      // 发出去的判据：进入流式（发送键变停止键），或输入框已清空且提问落进了消息区
+      await page.waitForFunction((p) => {
+        if (document.querySelector('.send-btn.stopping')) return true
+        const input = document.querySelector('.chat-input-rich')
+        const inputEmpty = !input || !(input.innerText || '').trim()
+        return inputEmpty && (document.body.innerText || '').includes(p)
+      }, { timeout: 20000, polling: 250 }, J12_PROMPT)
+    })
+
+    if (j12Sent) await step('J12 英文指令过程卡工具名不含中文', async () => {
       // 工具名是否出现取决于模型这一轮选不选工具——这是 LLM 不确定性，不该让发版门
       // 因此变红。所以这一步是「出现了就必须英文」：等到有工具名就断言无 CJK；
       // 一直没有则记 skip 信号（人工按信号复看），不判失败。
