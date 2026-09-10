@@ -98,7 +98,7 @@
             <view v-else-if="!members.length" class="collab-note">{{ $t('version.onlyYouInCaseFile') }}</view>
             <view v-else class="collab-member-list">
               <view v-for="m in members" :key="m.username || m.id" class="collab-member-row">
-                <text class="collab-member-name">{{ m.displayName || m.username }}</text>
+                <text class="collab-member-name">{{ m.displayName || $t('version.unnamedColleague') }}</text>
                 <text class="collab-member-role">{{ roleLabel(m.role) }}</text>
               </view>
             </view>

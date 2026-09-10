@@ -6,6 +6,7 @@ package com.checkba.service.collab;
 import com.checkba.model.entity.AccountBinding;
 import com.checkba.model.entity.User;
 import com.checkba.repository.AccountBindingRepository;
+import com.checkba.service.UserService;
 import com.checkba.service.account.AwdkLoginService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -64,6 +65,7 @@ class CollaboratorAdmissionTest {
     private StubDirectory directory;
     private AccountBindingRepository bindingRepository;
     private AwdkLoginService awdkLoginService;
+    private UserService userService;
     private CollaboratorAdmission admission;
 
     @BeforeEach
@@ -72,8 +74,9 @@ class CollaboratorAdmissionTest {
         bindingRepository = mock(AccountBindingRepository.class);
         when(bindingRepository.findByUserId(anyLong())).thenReturn(Optional.empty());
         awdkLoginService = mock(AwdkLoginService.class);
+        userService = mock(UserService.class);
         admission = new CollaboratorAdmission(directory, new SameFirmOrTeamPolicy(),
-                bindingRepository, awdkLoginService);
+                bindingRepository, awdkLoginService, userService);
     }
 
     private static User user(long id, String name) {
@@ -151,6 +154,38 @@ class CollaboratorAdmissionTest {
                 "没有官网身份的人不可能在任何团队里，理由要落在对方身上，不能让律师去查自己的团队");
     }
 
+    @Test
+    @DisplayName("名录回查命中本地已有用户：顺手把官网的展示名刷到本机行（spec 2026-09-10 §4）")
+    void localUserDisplayNameIsRefreshedFromTheDirectoryReply() {
+        bind(REQUESTER, "acc-me");
+        bind(CANDIDATE, "acc-9f");
+        directory.reply = found("team-a", "firm-1", "team-b", "firm-1");
+        User local = user(CANDIDATE, "awd_lisi");
+        local.setDisplayName("138****8000");   // 手机号注册时官网自动生成的打码名
+        when(userService.refreshDisplayNameFromWebsite(local, "李思")).thenAnswer(inv -> {
+            local.setDisplayName("李思");
+            return local;
+        });
+
+        CollaboratorAdmission.Admission a =
+                admission.admit(Optional.of(local), "13800138000", REQUESTER);
+
+        assertSame(local, a.user());
+        assertEquals("李思", a.user().getDisplayName());
+        verify(userService).refreshDisplayNameFromWebsite(local, "李思");
+    }
+
+    @Test
+    @DisplayName("没有官网绑定那一支：不出网，也就没有可刷新的展示名")
+    void localUserWithoutBindingIsNeverRefreshed() {
+        bind(REQUESTER, "acc-me");
+        User local = user(CANDIDATE, "admin");
+
+        admission.admit(Optional.of(local), "admin", REQUESTER);
+
+        verifyNoInteractions(userService);
+    }
+
     // ==================== 本地没有账号 ====================
 
     @Test
@@ -226,7 +261,7 @@ class CollaboratorAdmissionTest {
             }
         };
         CollaboratorAdmission a = new CollaboratorAdmission(broken, new SameFirmOrTeamPolicy(),
-                bindingRepository, awdkLoginService);
+                bindingRepository, awdkLoginService, userService);
 
         assertThrows(DirectoryUnavailableException.class,
                 () -> a.admit(Optional.empty(), "13800138000", REQUESTER));
@@ -237,7 +272,7 @@ class CollaboratorAdmissionTest {
     @DisplayName("open 策略：官网找到就允许，照样预建桥接用户")
     void openPolicyAdmitsAnyoneTheDirectoryKnows() {
         CollaboratorAdmission open = new CollaboratorAdmission(directory, new OpenPolicy(),
-                bindingRepository, awdkLoginService);
+                bindingRepository, awdkLoginService, userService);
         directory.reply = found(null, null, null, null);
         User bridged = user(77L, "awd_lisi");
         when(awdkLoginService.ensureBridgedUser(anyString(), any(), any(), any())).thenReturn(bridged);

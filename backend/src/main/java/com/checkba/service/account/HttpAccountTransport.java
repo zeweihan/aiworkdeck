@@ -60,4 +60,58 @@ public class HttpAccountTransport implements AccountTransport {
             return new Reply(Reply.NETWORK_FAILURE, null);
         }
     }
+
+    /**
+     * multipart/form-data 出站（头像上传，spec 2026-09-10 §5）。
+     *
+     * <p>JDK HttpClient 没有 multipart 编码器，这里手工拼一份**单部件**报文。
+     * 分隔符用随机串：内容是用户挑的图片二进制，固定分隔符万一在图片里出现，
+     * 服务端会在半截处截断，表现成一张莫名其妙损坏的头像。
+     */
+    @Override
+    public Reply sendMultipart(String method, String url, String bearerKey, Multipart part) {
+        try {
+            String boundary = "----awdk" + java.util.UUID.randomUUID().toString().replace("-", "");
+            String filename = part.filename() == null || part.filename().isBlank() ? "avatar" : part.filename();
+            // 文件名里的引号/换行会破坏头部结构；只留一个安全的形态
+            filename = filename.replaceAll("[\r\n\"\\\\]", "_");
+            String contentType = part.contentType() == null || part.contentType().isBlank()
+                    ? "application/octet-stream" : part.contentType();
+            String head = "--" + boundary + "\r\n"
+                    + "Content-Disposition: form-data; name=\"" + part.fieldName() + "\"; filename=\"" + filename + "\"\r\n"
+                    + "Content-Type: " + contentType + "\r\n\r\n";
+            String tail = "\r\n--" + boundary + "--\r\n";
+            byte[] body = concat(head.getBytes(StandardCharsets.UTF_8),
+                    part.content() == null ? new byte[0] : part.content(),
+                    tail.getBytes(StandardCharsets.UTF_8));
+            HttpRequest.Builder builder = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(TIMEOUT)
+                    .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                    .method(method, HttpRequest.BodyPublishers.ofByteArray(body));
+            if (bearerKey != null) {
+                builder.header("Authorization", "Bearer " + bearerKey);
+            }
+            HttpResponse<String> response = client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+            return new Reply(response.statusCode(), response.body());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return new Reply(Reply.NETWORK_FAILURE, null);
+        } catch (Exception e) {
+            log.debug("账户 multipart 请求失败 {} {}: {}", method, url, e.toString());
+            return new Reply(Reply.NETWORK_FAILURE, null);
+        }
+    }
+
+    private static byte[] concat(byte[]... parts) {
+        int total = 0;
+        for (byte[] p : parts) total += p.length;
+        byte[] out = new byte[total];
+        int at = 0;
+        for (byte[] p : parts) {
+            System.arraycopy(p, 0, out, at, p.length);
+            at += p.length;
+        }
+        return out;
+    }
 }

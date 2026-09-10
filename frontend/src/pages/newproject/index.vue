@@ -33,7 +33,6 @@
               </view>
             </view>
             <text class="user-name">{{ userDisplayName }}</text>
-            <text class="user-handle">@{{ username || 'user' }}</text>
             <view class="user-role-tag">
               <text class="role-text">{{ $t('account.standardUserRole') }}</text>
             </view>
@@ -142,7 +141,6 @@ export default {
   data() {
     return {
       userDisplayName: this.$t('account.defaultUserName'),
-      username: '',
       userAvatarUrl: '',
       busy: false,
       busyText: this.$t('account.busyOpeningProject'),
@@ -155,8 +153,7 @@ export default {
   onLoad(query) {
     const user = getCurrentUser()
     if (user) {
-      this.userDisplayName = user.displayName || user.username || this.$t('account.defaultUserName')
-      this.username = user.username
+      this.userDisplayName = user.displayName || this.$t('account.defaultUserName')
       this.userAvatarUrl = user.avatarUrl
     }
     // 应用菜单「新建项目文件夹…」跳入时自动拉起流程
@@ -343,12 +340,7 @@ $brand-dark: #212629;    /* Dark BG */
   font-size: 20px;
   font-weight: 600;
   color: var(--awd-text);
-  margin-bottom: 4px;
-}
-
-.user-handle {
-  font-size: 14px;
-  color: var(--awd-text-2);
+  /* 12px 原本由 @username 那一行的下边距提供，那行随「用户名不当名字显示」去掉了 */
   margin-bottom: 12px;
 }
 

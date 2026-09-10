@@ -14,16 +14,41 @@
     <view class="settings-form">
       <view class="form-group">
         <text class="group-title">{{ $t('account.basicInfoGroupTitle') }}</text>
+        <!-- 姓名引导（Spec §6）：手机号注册的默认展示名是打码手机号，
+             而同事在案卷参与人列表、时间线、批注作者里看到的就是这个字段 -->
+        <view v-if="accountProfile.displayNameIsDefault" class="name-nudge" @tap="focusDisplayName">
+          <text class="name-nudge-text">{{ $t('account.nameNudgeText') }}</text>
+        </view>
         <view class="form-row">
           <text class="form-label">{{ $t('account.avatarLabel') }}</text>
-          <view class="avatar-preview">
-            <text class="avatar-char">{{ getInitial(userInfo.displayName) || 'U' }}</text>
+          <view class="avatar-preview tappable" @tap="onAvatarTap">
+            <image v-if="userInfo.avatarUrl" class="avatar-image" :src="userInfo.avatarUrl" mode="aspectFill" />
+            <text v-else class="avatar-char">{{ getInitial(userInfo.displayName) || 'U' }}</text>
           </view>
+          <!-- 删除只有官网那条路有对应端点（DELETE /api/account/avatar）；
+               自建服务器只有上传，没有删除，就不画这个入口 -->
+          <text v-if="canEditProfile && userInfo.avatarUrl" class="bind-link" @tap="onRemoveAvatar">
+            {{ $t('account.avatarRemoveAction') }}
+          </text>
         </view>
         <view class="form-row">
           <text class="form-label">{{ $t('account.nicknameLabel') }}</text>
-          <text class="form-value">{{ userInfo.displayName }}</text>
+          <!-- 自建服务器（非 local-mode / 未连接账户）服务端没有改名接口，保持只读 -->
+          <input
+            v-if="canEditProfile"
+            class="bind-input"
+            v-model="displayNameInput"
+            maxlength="24"
+            :focus="displayNameFocus"
+            :disabled="displayNameSaving"
+            :placeholder="$t('account.nicknamePlaceholder')"
+            @blur="saveDisplayName"
+            @confirm="saveDisplayName"
+          />
+          <text v-else class="form-value">{{ userInfo.displayName }}</text>
+          <text v-if="displayNameSaving" class="bind-link">{{ $t('account.nicknameSaving') }}</text>
         </view>
+        <text v-if="displayNameError" class="form-error">{{ displayNameError }}</text>
       </view>
 
       <!-- 账号安全（server 模式；认证器恒可用，短信取决于通道配置） -->
@@ -217,7 +242,9 @@ import {
   sendSmsCode, bindPhone, sendMailCode, bindEmail,
   totpSetup, totpActivate, totpDisable,
   issueLocalDeviceToken, listDeviceTokens, revokeDeviceToken,
+  uploadAvatar, updateAccountProfile, uploadAccountAvatar, deleteAccountAvatar,
 } from '@/services/api.js'
+import { loadIdentityProfile, PROFILE_SOURCE } from '@/services/accountProfile.js'
 import { getDocumentGeneratorSettings, updateDocumentGeneratorSettings } from '@/services/api.js'
 import { resetDocumentStampCache } from '@/utils/documentGeneratorSetting.js'
 import AwdSwitch from '@/components/AwdSwitch.vue'
@@ -235,6 +262,13 @@ export default {
     isDesktop() {
       return isDesktopHost()
     },
+    /**
+     * 昵称能不能改、头像能不能删（Spec §6）：只有「local-mode 且已连接账户」这条路
+     * 有官网那三个写端点。自建服务器本期不做改名，头像仍可传（走本机 /api/users/avatar）。
+     */
+    canEditProfile() {
+      return this.accountProfile.source === PROFILE_SOURCE.ACCOUNT
+    },
   },
   data() {
     return {
@@ -244,6 +278,15 @@ export default {
         displayName: this.$t('account.defaultUserName'),
         avatarUrl: null,
       },
+
+      // 名字与头像归谁管（services/accountProfile.js）。拉不到一律按 LOCAL 画，
+      // 也就是今天这套只读形态——绝不先画出一个必然失败的输入框。
+      accountProfile: { source: PROFILE_SOURCE.LOCAL, accountId: '', displayNameIsDefault: false },
+      displayNameInput: '',
+      displayNameSaving: false,
+      displayNameError: '',
+      displayNameFocus: false,
+      avatarBusy: false,
 
       // 授权状态（桌面端）：{ unlocked, mode, plan, activatedAt?, accountConnected, edition }
       licenseInfo: {},
@@ -298,7 +341,12 @@ export default {
   },
   mounted() {
     this.loadUserInfo()
+    this.loadAccountProfile()
     this.loadDocGeneratorSetting()
+    // 设置页别处（账户分区的姓名引导、连接成功后的弹窗）点「去填写」时把光标送到这里。
+    // 那两处切栏之后本组件才挂上来，所以只能靠事件，不能靠 prop。
+    this._onFocusDisplayName = () => this.focusDisplayName()
+    uni.$on('awd:focus-display-name', this._onFocusDisplayName)
     if (this.isDesktop) {
       this.loadLicenseInfo()
       this.loadDeviceTokens()
@@ -314,6 +362,10 @@ export default {
     if (this.bindEmailCountdownTimer) {
       clearInterval(this.bindEmailCountdownTimer)
       this.bindEmailCountdownTimer = null
+    }
+    if (this._onFocusDisplayName) {
+      uni.$off('awd:focus-display-name', this._onFocusDisplayName)
+      this._onFocusDisplayName = null
     }
   },
   methods: {
@@ -363,6 +415,109 @@ export default {
         }
       } catch (error) {
         console.error('获取用户信息失败:', error)
+      }
+      // 输入框只在这里跟随权威源；用户正在编辑时本方法不会被调用（只在挂载与写入成功后跑）
+      this.displayNameInput = this.userInfo.displayName || ''
+    },
+    async loadAccountProfile() {
+      const { source, profile } = await loadIdentityProfile()
+      this.accountProfile = {
+        source,
+        accountId: (profile && profile.accountId) || '',
+        displayNameIsDefault: !!(profile && profile.displayNameIsDefault),
+      }
+    },
+    /** 姓名引导点下去：把光标送进昵称输入框（uni 的 focus 是 prop，要先落回 false 才能再次触发） */
+    focusDisplayName() {
+      if (!this.canEditProfile) return
+      this.displayNameFocus = false
+      this.$nextTick(() => { this.displayNameFocus = true })
+    },
+    /**
+     * 存昵称。@blur 与 @confirm 都会调到这里（回车之后紧接着失焦），
+     * 所以「没变就什么都不做」这条不是优化，是防止一次编辑发两次写请求。
+     */
+    async saveDisplayName() {
+      if (!this.canEditProfile || this.displayNameSaving) return
+      const current = String(this.userInfo.displayName || '')
+      const next = String(this.displayNameInput || '').trim()
+      if (!next || next === current) {
+        // 清空不算「改成空名」：空展示名同事那边照样看不出是谁，回落到原值
+        this.displayNameInput = current
+        this.displayNameError = ''
+        return
+      }
+      if (next.length > 24) {
+        this.displayNameError = this.$t('account.nicknameTooLong')
+        return
+      }
+      this.displayNameSaving = true
+      this.displayNameError = ''
+      try {
+        const data = await updateAccountProfile(next)
+        const saved = (data && data.displayName) || next
+        this.userInfo = { ...this.userInfo, displayName: saved }
+        this.displayNameInput = saved
+        setSessionUser(this.userInfo)
+        // displayNameIsDefault 跟着变（引导条随之消失），所以要重拉而不是本地推断
+        await this.loadAccountProfile()
+        uni.$emit('awd:identity-updated')
+      } catch (e) {
+        this.displayNameError = this.$t('account.nicknameSaveFailed', { message: (e && e.message) || '' })
+        this.displayNameInput = current
+      } finally {
+        this.displayNameSaving = false
+      }
+    },
+    /**
+     * 头像：路由规则与 AdminPane 侧栏那处同源（services/accountProfile.js）。
+     * 写官网之后本机 User 行由后端刷新，所以重拉一次 /api/auth/me 就能拿到新头像。
+     */
+    onAvatarTap() {
+      if (this.avatarBusy) return
+      uni.chooseImage({
+        count: 1,
+        sizeType: ['compressed'],
+        sourceType: ['album', 'camera'],
+        success: async (res) => {
+          const filePath = res.tempFilePaths[0]
+          this.avatarBusy = true
+          try {
+            uni.showLoading({ title: this.$t('account.uploadingTitle') })
+            if (this.canEditProfile) {
+              await uploadAccountAvatar(filePath)
+              await this.loadUserInfo()
+            } else {
+              const result = await uploadAvatar(filePath)
+              const url = result && result.data && result.data.avatarUrl
+              if (url) {
+                this.userInfo = { ...this.userInfo, avatarUrl: url }
+                setSessionUser(this.userInfo)
+              }
+            }
+            uni.$emit('awd:identity-updated')
+            uni.showToast({ title: this.$t('account.avatarUpdateSuccess'), icon: 'success' })
+          } catch (e) {
+            uni.showToast({ title: this.$t('account.avatarUploadFailed', { message: (e && e.message) || '' }), icon: 'none' })
+          } finally {
+            uni.hideLoading()
+            this.avatarBusy = false
+          }
+        },
+      })
+    },
+    async onRemoveAvatar() {
+      if (this.avatarBusy || !this.canEditProfile) return
+      this.avatarBusy = true
+      try {
+        await deleteAccountAvatar()
+        await this.loadUserInfo()
+        uni.$emit('awd:identity-updated')
+        uni.showToast({ title: this.$t('account.avatarRemoveSuccess'), icon: 'none' })
+      } catch (e) {
+        uni.showToast({ title: this.$t('account.avatarRemoveFailed', { message: (e && e.message) || '' }), icon: 'none' })
+      } finally {
+        this.avatarBusy = false
       }
     },
     async loadLicenseInfo() {
@@ -734,6 +889,39 @@ $text-secondary: #6C757D;
   justify-content: center;
   color: white;
   font-size: 20px;
+  overflow: hidden;
+  flex-shrink: 0;
+
+  &.tappable { cursor: pointer; }
+}
+
+.avatar-image {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+}
+
+.form-error {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--awd-danger-text);
+}
+
+/* 姓名引导条：弱强调，不抢「基本信息」本身 */
+.name-nudge {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--awd-accent-soft);
+  border-radius: 6px;
+  background: var(--awd-accent-wash);
+  cursor: pointer;
+}
+
+.name-nudge-text {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--awd-text);
 }
 
 /* 界面语言（从设置页「系统配置」搬来）。单选样式独立写一份：admin 那套

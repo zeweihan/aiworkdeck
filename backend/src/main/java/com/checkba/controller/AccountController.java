@@ -6,6 +6,7 @@ package com.checkba.controller;
 import com.checkba.model.entity.TokenUsage;
 import com.checkba.repository.TokenUsageRepository;
 import com.checkba.service.account.AccountException;
+import com.checkba.service.account.AccountIdentitySync;
 import com.checkba.service.account.AccountService;
 import com.checkba.service.account.AccountSwitchCleanup;
 import com.checkba.service.account.MachineAccountGuard;
@@ -26,6 +27,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.math.BigDecimal;
 import java.util.Comparator;
@@ -43,6 +45,8 @@ import java.util.UUID;
  *   <li>POST /api/account/connect    {"key":"awdk_..."} 校验并落盘</li>
  *   <li>POST /api/account/disconnect 断开并清空权益缓存、平台 AI 密钥缓存</li>
  *   <li>GET  /api/account/usage      平台结算（官网）+ 本地统计（TokenUsage）两套口径</li>
+ *   <li>GET/PUT /api/account/profile 个人档案（展示名/头像地址），PUT 出站到官网是 PATCH</li>
+ *   <li>POST/DELETE /api/account/avatar 头像上传与删除（multipart 转发官网）</li>
  *   <li>GET  /api/account/balance    轻端点，供顶栏高频轮询（内部带 TTL 缓存）</li>
  *   <li>GET  /api/account/membership 会员等级/积分全量转发</li>
  *   <li>POST /api/account/recharge   {"amountCents":N} 发起充值，转发官网 payment/create</li>
@@ -76,6 +80,7 @@ public class AccountController {
     private final com.checkba.service.team.TeamUsageSettings teamUsageSettings;
     private final com.checkba.service.team.TeamUsageUploadService teamUsageUploadService;
     private final com.checkba.service.team.TeamSettingsCache teamSettingsCache;
+    private final AccountIdentitySync identitySync;
 
     public AccountController(AccountService accountService,
                              PlatformAiChannel platformAiChannel,
@@ -85,7 +90,8 @@ public class AccountController {
                              EntitlementService entitlementService,
                              com.checkba.service.team.TeamUsageSettings teamUsageSettings,
                              com.checkba.service.team.TeamUsageUploadService teamUsageUploadService,
-                             com.checkba.service.team.TeamSettingsCache teamSettingsCache) {
+                             com.checkba.service.team.TeamSettingsCache teamSettingsCache,
+                             AccountIdentitySync identitySync) {
         this.accountService = accountService;
         this.platformAiChannel = platformAiChannel;
         this.accountSwitchCleanup = accountSwitchCleanup;
@@ -95,6 +101,7 @@ public class AccountController {
         this.teamUsageSettings = teamUsageSettings;
         this.teamUsageUploadService = teamUsageUploadService;
         this.teamSettingsCache = teamSettingsCache;
+        this.identitySync = identitySync;
     }
 
     /**
@@ -110,6 +117,9 @@ public class AccountController {
     public Map<String, Object> status(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         requireUser(sessionId);
+        // 应用启动会拉这条：顺手把官网的展示名/头像刷到本机 User 行与 account.json
+        // （spec 2026-09-10 §5）。未连接账户或官网不可达时静默跳过，绝不因此让状态查询失败。
+        identitySync.refreshQuietly();
         Map<String, Object> data = new LinkedHashMap<>(accountService.status());
         // 平台 AI 通道是否可选（未连接账户时前端不展示该供应商）
         data.put("platformAiAvailable", platformAiChannel.isAvailable());
@@ -126,6 +136,9 @@ public class AccountController {
         // 换账户后旧账户的权益、平台密钥、余额判定与用量基线必须立刻作废，不能等下一次刷新。
         // 解锁页那条连接路径共用这一处（AccountSwitchCleanup），别在这里再抄一遍动作
         accountSwitchCleanup.afterConnect();
+        // 新账户的展示名/头像立刻落到本机行：不然刚连上账户的那一刻，参与人列表里
+        // 还是「本机用户」，得等下一次启动才对（spec 2026-09-10 §5）
+        identitySync.refreshQuietly();
         return ok(status);
     }
 
@@ -319,6 +332,88 @@ public class AccountController {
         data.put("feature", purchased.get("feature"));
         data.put("balanceCents", purchased.get("balanceCents"));
         return ok(data);
+    }
+
+    // ==================== 个人档案与头像（spec 2026-09-10 §5） ====================
+    //
+    // 官网的展示名与头像是唯一权威源，这四个端点只是它的一个编辑入口：一律转发官网，
+    // 写成功之后把结果同步回本机 User 行（{@link AccountIdentitySync}）。
+    // 既有的 POST /api/users/avatar（本机上传）保留给自建服务器，local-mode 下前端不再调它。
+
+    /** 头像大小上限，与官网 2MB 同——本机先拦一道，省得把一个大文件白传一趟。 */
+    private static final long MAX_AVATAR_BYTES = 2L * 1024 * 1024;
+
+    /**
+     * 身份视图 {@code {accountId, displayName, avatarUrl, displayNameIsDefault}}。
+     * <b>不回 username</b>：用户名退成内部标识，任何界面都不再当名字显示。
+     * 顺手把这份身份同步到本机 User 行。
+     */
+    @GetMapping("/profile")
+    public Map<String, Object> profile(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
+        return ok(identitySync.refresh());
+    }
+
+    /**
+     * 改昵称：body {@code {displayName}}。本机是 PUT，出站到官网是 PATCH——
+     * 前端只有 uni.request 一个出口，它的 method 枚举里没有 PATCH（同团队那组的刻意偏差）。
+     * 长度与字符的判据在官网，这里只拦「空」。
+     */
+    @PutMapping("/profile")
+    public Map<String, Object> updateProfile(
+            @RequestBody(required = false) Map<String, String> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
+        String displayName = body == null ? null : body.get("displayName");
+        if (displayName == null || displayName.isBlank()) {
+            // 文案不含「登录/未授权/请先」，不会被 api.js 误判成掉线
+            throw new IllegalArgumentException(LangText.of("昵称不能为空", "The display name cannot be empty"));
+        }
+        Map<String, Object> updated = accountService.updateDisplayName(displayName);
+        Object next = updated.get("displayName");
+        identitySync.applyDisplayName(next == null ? displayName.trim() : String.valueOf(next));
+        return ok(updated);
+    }
+
+    /** 传头像：multipart 字段 {@code file}，原样转发官网；回 {@code {avatarUpdatedAt, avatarUrl}}。 */
+    @PostMapping("/avatar")
+    public Map<String, Object> uploadAvatar(
+            @RequestParam("file") MultipartFile file,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException(LangText.of("请选择一张图片", "Pick an image first"));
+        }
+        if (file.getSize() > MAX_AVATAR_BYTES) {
+            // 复用官网那张错误码表，两边说同一句话
+            throw new AccountException(AccountException.Kind.REJECTED,
+                    AccountService.rejectedMessage("too_large"), "too_large");
+        }
+        byte[] content;
+        try {
+            content = file.getBytes();
+        } catch (java.io.IOException e) {
+            throw new IllegalArgumentException(LangText.of("读取图片失败，换一张再试", "Could not read that image, try another one"));
+        }
+        Map<String, Object> uploaded = accountService.uploadAvatar(
+                content, file.getOriginalFilename(), file.getContentType());
+        identitySync.applyAvatarUrl(str(uploaded.get("avatarUrl")));
+        return ok(uploaded);
+    }
+
+    /** 删头像：转发官网；回 {@code {avatarUpdatedAt:null, avatarUrl:null}}，本机行的头像一并清空。 */
+    @DeleteMapping("/avatar")
+    public Map<String, Object> deleteAvatar(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
+        Map<String, Object> deleted = accountService.deleteAvatar();
+        identitySync.applyAvatarUrl(str(deleted.get("avatarUrl")));
+        return ok(deleted);
+    }
+
+    private static String str(Object value) {
+        return value == null ? null : String.valueOf(value);
     }
 
     // ==================== 团队（dev-board#496） ====================

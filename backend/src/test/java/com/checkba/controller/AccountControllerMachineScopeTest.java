@@ -86,7 +86,8 @@ class AccountControllerMachineScopeTest {
                 entitlementService,
                 mock(com.checkba.service.team.TeamUsageSettings.class),
                 mock(com.checkba.service.team.TeamUsageUploadService.class),
-                mock(com.checkba.service.team.TeamSettingsCache.class));
+                mock(com.checkba.service.team.TeamSettingsCache.class),
+                mock(com.checkba.service.account.AccountIdentitySync.class));
         entitlementController = new EntitlementController(entitlementService, guard);
     }
 

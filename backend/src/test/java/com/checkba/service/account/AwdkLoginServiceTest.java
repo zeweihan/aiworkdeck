@@ -286,6 +286,54 @@ class AwdkLoginServiceTest {
         assertEquals(second.userId(), bindingsByAccountId.get("acc_9f3a").getUserId());
     }
 
+    // ==================== 展示名随官网刷新（spec 2026-09-10 §4） ====================
+
+    @Test
+    @DisplayName("再次桥接：官网改过的展示名刷到本机行，username 不动")
+    void repeatLoginRefreshesDisplayNameFromWebsite() {
+        transport.enqueue(200, ME_OK)
+                .enqueue(200, "{\"accountId\":\"acc_9f3a\",\"username\":\"hanzewei\",\"displayName\":\"韩律师\"}");
+        AwdkLoginService svc = service(true);
+
+        AwdkLoginService.BridgeSession first = svc.login(KEY);
+        assertEquals("韩泽伟", usersById.get(first.userId()).getDisplayName());
+
+        AwdkLoginService.BridgeSession second = svc.login(KEY);
+
+        assertEquals(first.userId(), second.userId(), "还是同一行，不许因为改名另建一个人");
+        assertEquals("韩律师", usersById.get(second.userId()).getDisplayName());
+        assertEquals("韩律师", second.displayName(), "回包里也得是新名字");
+        assertEquals("awd_hanzewei", usersById.get(second.userId()).getUsername(),
+                "username 是内部标识，改名会断 /u/用户名 与 Skill 归属链接");
+    }
+
+    @Test
+    @DisplayName("官网展示名为空：保留本机已有的那份，不清成空白")
+    void blankWebsiteDisplayNameNeverClobbersLocal() {
+        transport.enqueue(200, ME_OK)
+                .enqueue(200, "{\"accountId\":\"acc_9f3a\",\"username\":\"hanzewei\",\"displayName\":\"  \"}");
+        AwdkLoginService svc = service(true);
+
+        AwdkLoginService.BridgeSession first = svc.login(KEY);
+        AwdkLoginService.BridgeSession second = svc.login(KEY);
+
+        assertEquals(first.userId(), second.userId());
+        assertEquals("韩泽伟", usersById.get(second.userId()).getDisplayName());
+    }
+
+    @Test
+    @DisplayName("ensureBridgedUser 同享这条刷新：名录回来的展示名也要落到已有的那行")
+    void ensureBridgedUserRefreshesDisplayName() {
+        transport.enqueue(200, ME_OK);
+        AwdkLoginService svc = service(true);
+        AwdkLoginService.BridgeSession first = svc.login(KEY);
+
+        User again = svc.ensureBridgedUser("acc_9f3a", "hanzewei", "韩律师", null);
+
+        assertEquals(first.userId(), again.getId());
+        assertEquals("韩律师", usersById.get(first.userId()).getDisplayName());
+    }
+
     // ==================== per-user 平台 AI key（2026-08-07） ====================
 
     @Test

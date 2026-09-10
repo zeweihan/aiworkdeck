@@ -57,7 +57,8 @@ class AccountControllerTeamTest {
         controller = new AccountController(accountService, mock(PlatformAiChannel.class),
                 mock(AccountSwitchCleanup.class), mock(TokenUsageRepository.class),
                 mock(MachineAccountGuard.class), mock(EntitlementService.class),
-                teamUsageSettings, teamUsageUploadService, teamSettingsCache);
+                teamUsageSettings, teamUsageUploadService, teamSettingsCache,
+                mock(com.checkba.service.account.AccountIdentitySync.class));
     }
 
     // ==================== 透传 ====================

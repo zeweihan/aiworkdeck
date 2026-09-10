@@ -655,7 +655,7 @@ export default {
       const filled = this.profileValue(project, 'client')
       if (filled) return filled
       const names = this.getClientMembers(project)
-        .map((m) => m.displayName || m.username)
+        .map((m) => m.displayName)
         .filter(Boolean)
       if (names.length) return names.join('、')
       const listed = project.listedCompanyName
