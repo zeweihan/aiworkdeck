@@ -271,14 +271,20 @@ public class AgentOrchestrator {
     private void endRunAndDrain(RunGuard guard) {
         AgentInboxService inbox = this.inboxService;
         if (inbox == null) {
+            closeSse(guard);
             endRun(guard);
             return;
         }
         synchronized (inbox.conversationLock(guard.conversationId)) {
+            java.util.Optional<com.checkba.model.entity.AgentInboxItem> next = inbox.nextPending(guard.conversationId);
+            // 还有下一条要自动接续时不许关流（v0.38.3 走查 D3）：接续那一轮沿用同一条连接
+            // （beginRun 记下的是当前代次），它的 inbox_updated / input_applied / 正文都要发到这条流上。
+            // 先关再接续的话，前端收不到接续那一轮的任何事件，已执行的条目一直挂在「待处理」里。
+            // 必须在摘掉本轮登记之前判断：closeSse 只对当前轮次生效。
+            if (next.isEmpty()) closeSse(guard);
             activeRuns.remove(guard.conversationId, guard);
             skillRouter.clearRun(guard.runId);
-            inbox.nextPending(guard.conversationId)
-                    .ifPresent(next -> acceptInboxSubmission(next.getId()));
+            next.ifPresent(item -> acceptInboxSubmission(item.getId()));
         }
     }
 
@@ -1577,8 +1583,7 @@ public class AgentOrchestrator {
             markRunState(guard, AgentRunStateService.RunStatus.FINISHED);
             // 发送 bubble_end 表示整个循环真正结束
             sendRunEvent(guard, "bubble_end", "{\"status\":\"finished\"}");
-            closeSse(guard);
-            // 清理本轮登记
+            // 清理本轮登记；队列跑空才关流（见 endRunAndDrain）
             endRunAndDrain(guard);
           } catch (Exception e) {
             // 确保异常时也能正确结束 bubble，避免前端一直显示加载状态。

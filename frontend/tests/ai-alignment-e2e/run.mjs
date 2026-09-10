@@ -144,7 +144,8 @@ try {
   if (!memorySpace) throw new Error('no writable memory space')
   await api('/api/ai/memory/file', {
     method: 'PUT',
-    body: { spaceId: memorySpace.id, path: 'preferences.md', content: '# Preferences\n\nInitial fixture value.\n', expectedRevision: 0 },
+    // 刻意超过 140 字：uni-h5 的 textarea 缺省 maxlength=140，短夹具测不出「超过 140 字就打不进去」
+    body: { spaceId: memorySpace.id, path: 'preferences.md', content: `# Preferences\n\nInitial fixture value.\n${'Long preference line kept past the 140 character default. '.repeat(4)}\n`, expectedRevision: 0 },
   })
 
   let page
@@ -299,12 +300,10 @@ try {
   await page.screenshot({ path: path.join(OUT, 'queue-running-360px.png') })
 
   await clickRowAction('queued follow up', 'Edit').catch(() => clickRowAction('queued follow up', '编辑'))
-  await page.$eval('.agent-inbox-edit', (editor, value) => {
-    const input = editor.matches('input') ? editor : editor.querySelector('input')
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
-    setter.call(input, value)
-    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }))
-  }, 'queued follow up edited')
+  // 真按键输入：原生 setter 绕过了 uni 输入控件的 maxlength 与 100ms 节流，测不出这两类缺陷
+  await click('.agent-inbox-edit')
+  await page.keyboard.press('End')
+  await page.keyboard.type(' edited', { delay: 2 })
   await clickRowAction('queued follow up edited', 'Save').catch(() => clickRowAction('queued follow up edited', '保存'))
   await page.waitForFunction(() => [...document.querySelectorAll('.agent-inbox-message')]
     .some((node) => node.innerText.includes('queued follow up edited')), { timeout: 10000 })
@@ -321,6 +320,11 @@ try {
     const snapshot = await api(`/api/agent/inbox/${conversationId}`)
     return snapshot.status === 'FINISHED' && !snapshot.items.some((item) => item.state === 'pending')
   }, 30000)
+  // 停止后本地 SSE 已断开：「立即发送」恢复执行的这一轮，界面也必须跟上——
+  // 待处理面板清空、恢复执行的那条出现在对话里（只看后端会漏掉前端完全不更新的缺陷）
+  await page.waitForFunction(() => document.querySelectorAll('.agent-inbox-row').length === 0, { timeout: 15000 })
+  await page.waitForFunction(() => [...document.querySelectorAll('.user-bubble')]
+    .some((node) => node.innerText.includes('queued follow up edited')), { timeout: 15000 })
 
   await click('.memory-header-btn')
   await page.waitForSelector('.memory-dialog', { timeout: 10000 })
@@ -355,14 +359,22 @@ try {
     const editor = document.querySelector('.memory-textarea')
     return (editor?.value || editor?.querySelector('textarea')?.value || '').includes('Initial fixture value')
   }, { timeout: 10000 })
-  const beforeSave = await page.$eval('.memory-textarea', (editor, marker) => {
+  // 真按键输入到超过 140 字的文件末尾，打完立刻点保存（落在 uni v-model 的 100ms 节流窗口里）
+  const editorValue = () => page.$eval('.memory-textarea', (editor) =>
+    (editor.matches('textarea') ? editor : editor.querySelector('textarea')).value)
+  const initialValue = await editorValue()
+  await click('.memory-textarea')
+  await page.$eval('.memory-textarea', (editor) => {
     const textarea = editor.matches('textarea') ? editor : editor.querySelector('textarea')
-    const next = `${textarea.value}\nRetained exactly: ${marker}`
-    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set
-    setter.call(textarea, next)
-    textarea.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: next }))
-    return next
-  }, MARKER)
+    textarea.focus()
+    textarea.selectionStart = textarea.selectionEnd = textarea.value.length
+  })
+  const appended = `\nRetained exactly: ${MARKER}`
+  await page.keyboard.type(appended, { delay: 2 })
+  const beforeSave = await editorValue()
+  if (beforeSave !== initialValue + appended) {
+    throw new Error(`typing into the memory editor was blocked: ${initialValue.length} -> ${beforeSave.length} chars`)
+  }
   await click('.memory-button.primary')
   await page.waitForFunction((expected) => {
     const editor = document.querySelector('.memory-textarea')

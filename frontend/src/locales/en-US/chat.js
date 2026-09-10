@@ -137,6 +137,8 @@ export default {
   memoryLoadFailed: 'Could not load memory',
   memorySaveFailed: 'Could not save memory',
   memorySaved: 'Memory saved',
+  memoryUnsaved: 'Unsaved',
+  memoryTooLarge: 'This file is over the 128 KiB limit and cannot be saved. Shorten it and try again.',
   memoryInvalidPath: 'Use a safe relative Markdown path',
   memoryDeleteTitle: 'Delete memory topic',
   memoryDeleteConfirm: 'Delete {path}?',

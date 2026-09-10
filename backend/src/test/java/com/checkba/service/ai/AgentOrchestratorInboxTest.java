@@ -59,6 +59,11 @@ class AgentOrchestratorInboxTest {
             return null;
         })
                 .when(sse).send(any(), any(), any());
+        // 关流也记进同一条时间线：自动接续的那一轮必须在一条还开着的流上发事件
+        doAnswer(inv -> {
+            sseEvents.add("close:" + inv.getArgument(0, String.class));
+            return null;
+        }).when(sse).close(any(), anyLong());
         AgentRunStateService runState = mock(AgentRunStateService.class);
         inbox = new AgentInboxService(repo, sse, runState);
 
@@ -264,6 +269,57 @@ class AgentOrchestratorInboxTest {
         int appliedIndex = indexOfEvent("input_applied", queued.getId());
         assertTrue(snapshotIndex >= 0 && appliedIndex > snapshotIndex,
                 "new-run snapshot must precede applied event: " + sseEvents);
+    }
+
+    /**
+     * v0.38.3 走查 D3：一轮正常结束、队列里还有待处理条目时，收尾曾经先关流再接续下一条——
+     * 接续那一轮的 inbox_updated / input_applied / 正文全部发进一个已经没有 emitter 的会话，
+     * 前端既没有新气泡也没有停止键，已执行的条目一直挂在「待处理」里。
+     * 还有下一条要跑时不许关流；关流只发生在队列真正跑空之后。
+     */
+    @Test
+    void finishingWithQueuedFollowUpKeepsTheStreamOpenForTheContinuedRun() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+        CountDownLatch firstReady = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        StreamingChatLanguageModel model = new StreamingChatLanguageModel() {
+            @Override public void generate(List<ChatMessage> messages, StreamingResponseHandler<AiMessage> handler) {
+                complete(handler);
+            }
+            @Override public void generate(List<ChatMessage> messages, List<ToolSpecification> specifications,
+                                           StreamingResponseHandler<AiMessage> handler) {
+                complete(handler);
+            }
+            private void complete(StreamingResponseHandler<AiMessage> handler) {
+                if (calls.incrementAndGet() == 1) {
+                    firstReady.countDown();
+                    await(releaseFirst);
+                }
+                handler.onNext("done " + calls.get());
+                handler.onComplete(Response.from(AiMessage.from("done " + calls.get())));
+            }
+        };
+        when(modelFactory.getStreamingChatModel(MODEL)).thenReturn(model);
+
+        AgentInboxItem first = inbox.submit(request("first", "keep-open-first", "steer"), 7L);
+        Thread run = new Thread(() -> orchestrator.acceptInboxSubmission(first.getId(), false));
+        run.start();
+        assertTrue(firstReady.await(5, TimeUnit.SECONDS));
+        AgentInboxItem queued = inbox.submit(request("follow-up", "keep-open-queued", "queue"), 7L);
+        releaseFirst.countDown();
+        run.join(5000);
+
+        assertEquals(2, calls.get());
+        int appliedIndex = indexOfEvent("input_applied", queued.getId());
+        int firstClose = -1;
+        for (int i = 0; i < sseEvents.size(); i++) {
+            if (sseEvents.get(i).startsWith("close:")) { firstClose = i; break; }
+        }
+        assertTrue(appliedIndex >= 0, "queued run must emit input_applied: " + sseEvents);
+        assertTrue(firstClose > appliedIndex,
+                "stream was closed before the continued run started emitting: " + sseEvents);
+        assertEquals(1, sseEvents.stream().filter(e -> e.startsWith("close:")).count(),
+                "the stream closes once, after the queue drains: " + sseEvents);
     }
 
     @Test

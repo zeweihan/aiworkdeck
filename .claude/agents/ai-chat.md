@@ -238,6 +238,24 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
 
 ## 已知地雷
 
+- **SSE 长连接端点不许持有 JPA EntityManager（v0.38.3 走查 D1）**：`spring.jpa.open-in-view` 从未配置、走默认 true，
+  OSIV 会把 connect 里归属校验拿到的 JDBC 连接一直占到流结束（Spring 下 Hibernate 是 DELAYED_ACQUISITION_AND_HOLD），
+  客户端断开走 onError 时 OSIV 甚至不关 EntityManager，连接永久泄漏；池子 10 条，切几次会话后端整体卡死。
+  现由 `config/OpenEntityManagerInViewConfig` 替换 Boot 自动配置的拦截器并排除 `/api/agent/connect/**`（其余路径 OSIV 不变，
+  **不要全局关 OSIV**）。新增任何 SseEmitter / 长轮询端点必须加进 `LONG_LIVED_STREAM_PATHS`。护栏 `SseConnectPoolReleaseTest`
+  （真 Tomcat + Hikari 活跃数）。另：Spring 6.1 的 `ResponseBodyEmitter.complete()` 在 I/O 发送失败后是空操作，
+  断线收尾靠容器 onError 分派，`SseEmitterService.emitTo` 里的 complete() 只兜非 I/O 失败。
+- **uni-h5 的 `<textarea>`/`<input>` 缺省 maxlength=140，且 v-model 有 100ms 节流**：新增输入控件必须显式 `:maxlength`
+  （记忆编辑器 -1 + 保存时按 128 KiB UTF-8 校验）；「打完字立刻点按钮」的提交路径要读 confirm 事件值或控件 DOM 值
+  （`MemoryBrowser.liveFieldValue`，同 `utils/identityProfile.js` 的 submittedInputValue）。e2e 必须真按键输入，
+  原生 value setter 会绕过这两类缺陷。
+- **「立即发送」会恢复停住的队列**：停止时本地 SSE 已断开，`useAgentStream.updateInbox` 对 `submissionMode=steer`
+  的补丁先 `connectSSE` 再发 PATCH（前端不带 Last-Event-ID，连晚了会丢 input_applied）。
+- **队列自动接续不许先关流**：正常收尾由 `AgentOrchestrator.endRunAndDrain` 在 inbox 锁内判断——还有下一条待处理就
+  **不关流**，接续那一轮沿用同一条连接（`beginRun` 记的是当前代次，它自己收尾时再关）；队列跑空才 `closeSse`。
+  曾经是「bubble_end → closeSse → drain」，接续那一轮的事件全部发进没有 emitter 的会话，前端看不到、条目一直挂在待处理。
+  护栏 `AgentOrchestratorInboxTest.finishingWithQueuedFollowUpKeepsTheStreamOpenForTheContinuedRun`。
+
 - **改 AgentOrchestrator 构造器必须同步 EvalHarness**（已踩三次；现构造器末三参是
   TelemetryService/TelemetryTurnTracker/MatterClassifierService）。
 - **编排器里凡是「会话级」的写操作，一律走 `markRunState` / `sendRunEvent` / `closeSse(guard)`，不要直接调

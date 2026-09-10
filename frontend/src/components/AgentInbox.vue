@@ -1,7 +1,8 @@
 <!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
-  <view v-if="items.length" class="agent-inbox">
+  <!-- data-awd-keep-clear：队列在输入卡外面，右下角反馈浮钮要一并避开（utils/keepClear.js） -->
+  <view v-if="items.length" class="agent-inbox" data-awd-keep-clear>
     <view class="agent-inbox-head">
       <text class="agent-inbox-title">{{ $t('chat.inboxTitle') }}</text>
       <text class="agent-inbox-count">{{ items.length }}</text>
@@ -13,8 +14,9 @@
           v-model="editText"
           class="agent-inbox-edit"
           type="text"
+          :maxlength="-1"
           :focus="true"
-          @confirm="saveEdit(item)"
+          @confirm="saveEdit(item, $event)"
         />
         <text v-else class="agent-inbox-message">{{ item.displayText || item.message }}</text>
         <text class="agent-inbox-mode">{{ item.submissionMode === 'steer' ? $t('chat.inboxSteer') : $t('chat.inboxQueued') }}</text>
@@ -46,8 +48,15 @@ export default {
       this.editingId = item.id
       this.editText = item.message || ''
     },
-    saveEdit(item) {
-      const message = this.editText.trim()
+    // uni 的 v-model 有 100ms 节流：打完字立刻点保存时 editText 还是旧值，改动会整个丢掉。
+    // 取值优先级：confirm 事件自带的值 → 输入框当下的 DOM 值 → v-model 的值。
+    saveEdit(item, event) {
+      const submitted = event && event.detail ? event.detail.value : undefined
+      const field = this.$el && typeof this.$el.querySelector === 'function'
+        ? this.$el.querySelector('.agent-inbox-edit input, input.agent-inbox-edit') : null
+      const live = typeof submitted === 'string' ? submitted
+        : field && typeof field.value === 'string' ? field.value : this.editText
+      const message = live.trim()
       if (!message) return
       this.$emit('edit', { item, message })
       this.editingId = null
