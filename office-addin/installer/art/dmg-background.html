@@ -1,10 +1,13 @@
 <!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!--
-  Office 插件 DMG 安装窗口背景（660x420，1x/2x PNG 入库，构建时 tiffutil 合成 hidpi TIFF）。
+  Office 插件 DMG 安装窗口背景（1x/2x PNG 入库，构建时 tiffutil 合成 hidpi TIFF）。
   与桌面端 desktop/build/dmg-background.html 同一套视觉语言。改完跑 `node installer/render-art.mjs`。
   图标落位见 build-installers.mjs 的 Finder 排版脚本：安装器 app 居中 (330, 200)，
   manifest.xml 兜底文件收在右侧 (572, 316)。两者必须与本图的光晕/文案一起改。
+  背景图比窗口大（dev-board#580）：Finder 把背景按原尺寸贴在窗口左上角、不拉伸，用户把
+  窗口拉大时图外露白。所以画布（render-art.mjs 的 DMG_CANVAS）远大于窗口，设计主体只占
+  左上 660x420，其余是同一组渐变的延展区；默认窗口尺寸由排版脚本的 bounds 决定，与图无关。
 -->
 <!doctype html>
 <html lang="zh-CN">
@@ -12,25 +15,29 @@
 <meta charset="utf-8">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: 660px; height: 420px; overflow: hidden; }
+  /* 画布 = 截图视口，设计主体固定在左上 660x420。渐变位置与色标写成 px（由原先相对
+     660x420 的百分比换算），主体区在任何画布尺寸下保持原样，超出部分是自然延续 */
+  html, body { width: 100%; height: 100%; overflow: hidden; }
 
   body {
     position: relative;
     background:
-      radial-gradient(600px 360px at 10% 120%, rgba(91, 209, 151, 0.26) 0%, rgba(91, 209, 151, 0) 64%),
-      radial-gradient(640px 400px at 102% 58%, rgba(26, 83, 54, 0.14) 0%, rgba(26, 83, 54, 0) 62%),
-      linear-gradient(180deg, #FAFCFB 0%, #F0F6F2 58%, #E6F0EA 100%);
+      radial-gradient(600px 360px at 66px 504px, rgba(91, 209, 151, 0.26) 0%, rgba(91, 209, 151, 0) 64%),
+      radial-gradient(640px 400px at 673.2px 243.6px, rgba(26, 83, 54, 0.14) 0%, rgba(26, 83, 54, 0) 62%),
+      linear-gradient(180deg, #FAFCFB 0px, #F0F6F2 243.6px, #E6F0EA 420px);
     font-family: -apple-system, "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
     -webkit-font-smoothing: antialiased;
   }
 
+  /* 品牌带横贯整个画布。112deg 渐变线起点由左上角决定、与盒宽无关，
+     px 色标（原 54%/100% × 660x104 盒的渐变线长 650.9px）在更宽的盒里不变，过终点钳在 #1D6440 */
   .band {
     position: absolute; top: 0; left: 0;
-    width: 660px; height: 104px;
+    width: 100%; height: 104px;
     overflow: hidden;
     background:
-      radial-gradient(420px 220px at 88% -24%, rgba(91, 209, 151, 0.36) 0%, rgba(91, 209, 151, 0) 68%),
-      linear-gradient(112deg, #0E3320 0%, #174C31 54%, #1D6440 100%);
+      radial-gradient(420px 220px at 580.8px -24.96px, rgba(91, 209, 151, 0.36) 0%, rgba(91, 209, 151, 0) 68%),
+      linear-gradient(112deg, #0E3320 0px, #174C31 351.5px, #1D6440 650.9px);
   }
   .band-rule {
     position: absolute; top: 102px; left: 0;
@@ -38,19 +45,20 @@
     background: linear-gradient(90deg,
       rgba(91,209,151,0) 0%, #5BD197 24%, #A6EFCA 50%, #5BD197 76%, rgba(91,209,151,0) 100%);
   }
+  /* 右侧三条走线从画布右缘进来；遮罩色标按原 660 宽换算成 px */
   .band-traces {
     position: absolute; left: 0; top: 4px;
-    -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 14%, transparent 32%, transparent 68%, #000 86%, #000 100%);
+    -webkit-mask-image: linear-gradient(90deg, #000 0px, #000 92.4px, transparent 211.2px, transparent 448.8px, #000 567.6px, #000 100%);
   }
 
   .wordmark {
-    position: absolute; top: 30px; left: 0; width: 100%;
+    position: absolute; top: 30px; left: 0; width: 660px;
     text-align: center;
     font-size: 25px; font-weight: 600; letter-spacing: 0.005em;
     color: #FFFFFF;
   }
   .tagline {
-    position: absolute; top: 68px; left: 0; width: 100%;
+    position: absolute; top: 68px; left: 0; width: 660px;
     text-align: center;
     font-size: 11.5px; font-weight: 400; letter-spacing: 0.16em;
     color: rgba(220, 248, 234, 0.78);
@@ -65,13 +73,13 @@
   }
 
   .caption {
-    position: absolute; top: 296px; left: 0; width: 100%;
+    position: absolute; top: 296px; left: 0; width: 660px;
     text-align: center;
     font-size: 14px; font-weight: 500; letter-spacing: 0.04em;
     color: #1A5336;
   }
   .caption-sub {
-    position: absolute; top: 320px; left: 0; width: 100%;
+    position: absolute; top: 320px; left: 0; width: 660px;
     text-align: center;
     font-size: 11.5px; letter-spacing: 0.03em;
     color: rgba(15, 46, 30, 0.5);
@@ -80,7 +88,7 @@
   /* manifest.xml 兜底文件的注脚：放在图标正上方（图标中心 572, 316，上缘约 260），
      与居中的 caption/caption-sub 两行错开，也避开 Finder 底部状态栏 */
   .fallback-note {
-    position: absolute; top: 226px; right: 24px;
+    position: absolute; top: 226px; left: 506px;
     width: 130px; text-align: center;
     font-size: 10px; line-height: 1.5; letter-spacing: 0.02em;
     color: rgba(15, 46, 30, 0.38);
@@ -89,14 +97,14 @@
 </head>
 <body>
   <div class="band">
-    <svg class="band-traces" width="660" height="96" viewBox="0 0 660 96" fill="none"
+    <svg class="band-traces" width="100%" height="96" fill="none"
          stroke="rgba(255,255,255,0.15)" stroke-width="1" stroke-linecap="round">
       <path d="M-10 22 H70 L84 36 H176"/>
       <path d="M-10 58 H36 L50 44 H144"/>
       <path d="M-10 86 H108 L122 72 H186"/>
-      <path d="M670 28 H592 L578 42 H486"/>
-      <path d="M670 64 H626 L612 50 H516"/>
-      <path d="M670 88 H556 L542 74 H474"/>
+      <path d="M9999 28 H592 L578 42 H486"/>
+      <path d="M9999 64 H626 L612 50 H516"/>
+      <path d="M9999 88 H556 L542 74 H474"/>
       <g fill="rgba(166,239,202,0.42)" stroke="none">
         <circle cx="176" cy="36" r="2"/>
         <circle cx="144" cy="44" r="2"/>
