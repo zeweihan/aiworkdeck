@@ -22,10 +22,16 @@ test('late geometry responses cannot move the input back or refresh stale sugges
   const { JSDOM } = await import('jsdom')
   const { attachImeOverlay } = await import('../../src/composables/zetaOfficeImeOverlay.js')
   const dom = new JSDOM('<div><canvas></canvas></div>', { pretendToBeVisual: true })
+  const navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.window.navigator })
   const saved = { document: globalThis.document, getComputedStyle: globalThis.getComputedStyle }
   globalThis.document = dom.window.document; globalThis.getComputedStyle = dom.window.getComputedStyle
   let overlay
-  t.after(() => { overlay?.destroy(); dom.window.close(); Object.assign(globalThis, saved) })
+  t.after(() => {
+    overlay?.destroy(); dom.window.close(); Object.assign(globalThis, saved)
+    if (navigatorDescriptor) Object.defineProperty(globalThis, 'navigator', navigatorDescriptor)
+    else delete globalThis.navigator
+  })
   const canvas = document.querySelector('canvas'), reads = []; let moves = 0
   canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1280, height: 900 })
   overlay = attachImeOverlay({ canvas, commit() {}, getCursorRaw: () => new Promise(resolve => reads.push(resolve)), onCursorMoved: () => moves++ })
