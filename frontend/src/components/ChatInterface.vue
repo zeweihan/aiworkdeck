@@ -3,6 +3,8 @@
 <template>
   <view class="chat-interface" :class="{ 'is-empty': bubbles.length === 0 && !isStreaming }">
 
+    <MemoryBrowser :open="showMemoryBrowser" :project-id="projectId" @close="showMemoryBrowser = false" />
+
     <!-- Upload File Modal (reused from FileTree pattern) -->
     <view v-if="showUploadDialog" class="awd-dialog-mask" @tap="cancelUpload">
       <view class="awd-dialog awd-dialog-large" @tap.stop>
@@ -225,6 +227,7 @@
           <text class="project-name-display">{{ projectName }}</text>
        </view>
        <view class="header-actions">
+          <view class="memory-header-btn" @tap="showMemoryBrowser = true">{{ $t('chat.memoryButton') }}</view>
           <view class="icon-btn" @tap="$emit('toggle-history')" title="History">
              <image class="btn-icon default" src="/static/history.png" />
              <image class="btn-icon hover" src="/static/history_hover.png" />
@@ -424,12 +427,17 @@
                        </view>
                     </view>
                  </view>
-                 <view
-                    class="send-btn"
-                    :class="{ disabled: !inputPrompt.trim() && !isStreaming, stopping: isStreaming }"
-                    @tap="isStreaming ? handleAbort() : handleSubmit()"
-                 >
-                    <text class="send-icon">{{ isStreaming ? '■' : '↑' }}</text>
+                 <view class="composer-actions">
+                    <view v-if="isStreaming" class="follow-mode" @tap="toggleFollowUpMode">
+                       {{ followUpMode === 'steer' ? $t('chat.followUpSteer') : $t('chat.followUpQueue') }}
+                    </view>
+                    <view v-if="isStreaming" class="alternate-send" @tap="handleSubmit(followUpMode === 'steer' ? 'queue' : 'steer')">
+                       {{ followUpMode === 'steer' ? $t('chat.queueInstead') : $t('chat.steerInstead') }}
+                    </view>
+                    <view v-if="isStreaming" class="stop-btn" @tap="handleAbort"><text>■</text></view>
+                    <view class="send-btn" :class="{ disabled: !inputPrompt.trim() || isUploadingPasted }" @tap="handleSubmit(followUpMode)">
+                       <text class="send-icon">↑</text>
+                    </view>
                  </view>
               </view>
           </view>
@@ -528,6 +536,13 @@
                <text class="token-detail">({{ tokenUsage.promptTokens.toLocaleString() }} / {{ tokenUsage.completionTokens.toLocaleString() }})</text>
            </view> -->
        </view>
+       <AgentInbox
+         :items="pendingInbox"
+         @edit="handleInboxEdit"
+         @delete="handleInboxDelete"
+         @move="handleInboxMove"
+         @send-now="handleInboxSendNow"
+       />
        <view class="input-card">
           <view v-if="isDragging" class="drop-overlay">
              <text>Drop files here</text>
@@ -641,12 +656,17 @@
                    </view>
                 </view>
              </view>
-             <view
-                class="send-btn"
-                :class="{ disabled: !inputPrompt.trim() && !isStreaming, stopping: isStreaming }"
-                @tap="isStreaming ? handleAbort() : handleSubmit()"
-             >
-                <text class="send-icon">{{ isStreaming ? '■' : '↑' }}</text>
+             <view class="composer-actions">
+                <view v-if="isStreaming" class="follow-mode" @tap="toggleFollowUpMode">
+                   {{ followUpMode === 'steer' ? $t('chat.followUpSteer') : $t('chat.followUpQueue') }}
+                </view>
+                <view v-if="isStreaming" class="alternate-send" @tap="handleSubmit(followUpMode === 'steer' ? 'queue' : 'steer')">
+                   {{ followUpMode === 'steer' ? $t('chat.queueInstead') : $t('chat.steerInstead') }}
+                </view>
+                <view v-if="isStreaming" class="stop-btn" @tap="handleAbort"><text>■</text></view>
+                <view class="send-btn" :class="{ disabled: !inputPrompt.trim() || isUploadingPasted }" @tap="handleSubmit(followUpMode)">
+                   <text class="send-icon">↑</text>
+                </view>
              </view>
           </view>
           <view v-if="showModelDropdown || showModeDropdown || showSkillDropdown" class="dropdown-mask" @tap="showModelDropdown = false; showModeDropdown = false; showSkillDropdown = false"></view>
@@ -683,6 +703,8 @@
 <script>
 import RootBubble from './AgentMessage/RootBubble.vue'
 import BackgroundTaskIndicator from './BackgroundTaskIndicator.vue'
+import AgentInbox from './AgentInbox.vue'
+import MemoryBrowser from './MemoryBrowser.vue'
 import { useAgentStream } from '@/composables/useAgentStream.js'
 import { parseToolBlock } from '@/composables/agentTagProtocol.mjs'
 import { ref, reactive, watch, onMounted, nextTick, getCurrentInstance, computed } from 'vue'
@@ -696,10 +718,18 @@ import { host } from '@/services/host.js'
 import { optionalComponents, packInstall, packStatus, packInfo } from '@/services/api.js'
 import { createOptionalComponentsController } from '@/composables/useOptionalComponents.js'
 import { createComponentRequiredHandler } from '@/composables/useComponentRequired.js'
+import { pendingInboxItems } from '@/composables/agentInboxState.mjs'
+import {
+  beginChatSubmission,
+  failChatSubmission,
+  receiptChatSubmission,
+  shouldClearChatDraft,
+  submitChatAttempt,
+} from '@/composables/chatSubmissionState.mjs'
 
 export default {
   name: 'ChatInterface',
-  components: { RootBubble, BackgroundTaskIndicator, OptionalComponentCard },
+  components: { RootBubble, BackgroundTaskIndicator, AgentInbox, MemoryBrowser, OptionalComponentCard },
   props: {
     projectId: String,
     projectName: String,
@@ -753,7 +783,10 @@ export default {
       reattachSSE,
       rollbackToMessage,
       currentConversationId,
-      loadConversationMetadata
+      loadConversationMetadata,
+      inboxState,
+      updateInbox,
+      deleteInbox,
     } = useAgentStream()
 
     // 可选组件缺失闸（设计 §4.2）。控制器与首次登录面板、组件管理页同一份编排：
@@ -838,6 +871,13 @@ export default {
     })
     const inputPrompt = ref('')
     const richInput = ref(null)
+    const showMemoryBrowser = ref(false)
+    const submissionTracker = { failed: null, inflight: {} }
+    const followUpMode = ref('steer')
+    try {
+      followUpMode.value = uni.getStorageSync('awd_agent_follow_up_mode') === 'queue' ? 'queue' : 'steer'
+    } catch (e) { /* storage unavailable */ }
+    const pendingInbox = computed(() => pendingInboxItems(inboxState))
     const scrollTop = ref(0)
     const isDragging = ref(false)
 
@@ -1435,26 +1475,19 @@ export default {
     }
 
     const startNewChat = () => {
-      // 流式进行中点"新建对话"：以前只清前端状态（setConversationId(null) 触发的
-      // resetSSE 只是断本地连接），从不通知后端——编排器在服务端继续跑这一轮
-      // （模型调用、可能有副作用的工具调用），用户却完全看不到任何迹象，白烧
-      // 资源/额度。复用 handleAbort 同一条 abort()（内部先 POST /api/agent/cancel
-      // 再断连接）；不 await 它——新建对话本身不该被这次网络请求拖住，abort()
-      // 对已经清空的气泡/会话状态做的收尾判断都是空值安全的。
-      if (isStreaming.value) abort()
+      // New conversation detaches this panel from the old SSE. The server run keeps working
+      // and remains visible from history; Stop is the explicit cancellation action.
       setConversationId(null)  // This now triggers resetSSE internally
       clearBubbles()           // Use composable method
       selectedSkillIds.value = [] // 手动选的技能属于这一段对话，新会话从干净状态开始
       emit('new-chat')
     }
 
-    const handleSubmit = async () => {
+    const handleSubmit = async (requestedMode = 'steer') => {
       // 插件镜像会话只读（dev-board#298）：输入区已换成说明条，这里再拦一道
       // 兜住空态输入框等旁路（后端对镜像会话追加也会拒，这是省一次报错）
       if (props.externalReadOnly) return
-      // 流式进行中禁止再发送（回车路径不走发送按钮的 abort 分支）：
-      // 必须在清空输入框之前拦截，否则用户输入会被静默丢弃
-      if (isStreaming.value || isUploadingPasted.value) return
+      if (isUploadingPasted.value) return
       // Create a clone to safely manipulate and extract text without tags
       let text = ''
       let contentHtml = ''
@@ -1524,12 +1557,40 @@ export default {
       }
 
       const prompt = text
+      const submissionMode = isStreaming.value && requestedMode === 'queue' ? 'queue' : 'steer'
+      const editorHtml = richInput.value ? richInput.value.innerHTML : ''
+      const selectedSkillSnapshot = currentSkillIds()
+      const conversationId = currentConversationId.value || `conv-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      if (!currentConversationId.value) setConversationId(conversationId)
 
       // 先定住本次要带走的那几张，再去上传：上传要走网络，其间用户还可能继续粘贴，
       // 拿 pastedImages 的实时值会一边漏掉新贴的、一边把它顺手清掉。
       const pastedBatch = pastedImages.value.slice()
-      let pastedFileList = []
-      if (pastedBatch.length) {
+      const activeContext = (!hasFiles && !hasImages && props.activeTab) ? {
+        id: String(props.activeTab.id || props.activeTab.wpsFileId),
+        name: props.activeTab.name,
+        fileType: props.activeTab.fileType,
+        wpsFileId: props.activeTab.wpsFileId,
+        pane: props.activeTabPane
+      } : null
+      const attempt = beginChatSubmission(submissionTracker, {
+        prompt,
+        contentHtml,
+        editorHtml,
+        fileIds: contextFiles.value.map((file) => file.id),
+        imageKeys: pastedBatch.map((image, index) => image.path || `image-${index}`),
+        submissionMode,
+        conversationId,
+        projectId: props.projectId,
+        modelId: currentModelId.value,
+        mode: currentModeId.value,
+        skillIds: selectedSkillSnapshot,
+        activeContext,
+      }, () => {
+        try { return crypto.randomUUID() } catch (e) { return `chat-${Date.now()}-${Math.random().toString(36).slice(2)}` }
+      })
+      let pastedFileList = Array.isArray(attempt.pastedFileList) ? attempt.pastedFileList : []
+      if (pastedBatch.length && !attempt.pastedPrepared) {
         // 上传这段时间里 isStreaming 还是 false、输入框也还没清空，再按一次回车
         // 会把同一批图重复上传、同一条消息发两遍——自己上一道闩。
         // 上传结束到 sendMessage 之间只有同步代码，而 sendMessage 是同步置起
@@ -1549,10 +1610,9 @@ export default {
         } finally {
           isUploadingPasted.value = false
         }
+        attempt.pastedFileList = pastedFileList
+        attempt.pastedPrepared = true
       }
-
-      if (richInput.value) richInput.value.innerHTML = ''
-      inputPrompt.value = ''
 
       // Use context files as fileList；粘贴的图片走同一条 contextItems 通道
       const fileListToSend = contextFiles.value.map(f => ({
@@ -1577,39 +1637,55 @@ export default {
         isDir: f.isDir
       }))
 
-      // Clear context files and images after sending
-      contextFiles.value = []
-      // 只清掉本次带走的那几张，上传期间新粘的留给下一条消息
-      pastedImages.value = pastedImages.value.filter(img => !pastedBatch.includes(img))
-
-      // Build activeContext from props.activeTab (only if no manual context provided)
-      // Priority: manual contextFiles > activeContext
-      const activeContext = (fileListToSend.length === 0 && props.activeTab) ? {
-        id: String(props.activeTab.id || props.activeTab.wpsFileId),
-        name: props.activeTab.name,
-        fileType: props.activeTab.fileType,
-        wpsFileId: props.activeTab.wpsFileId,
-        pane: props.activeTabPane
-      } : null
-
       if (activeContext) {
         console.log('[ChatInterface] Auto-attaching active context:', activeContext.name)
       }
 
-      await sendMessage({
+      const receipt = await submitChatAttempt(attempt, () => sendMessage({
         prompt,
         contentHtml, // Pass HTML with inline tags for bubble display
         fileList: fileListToSend,
         projectId: props.projectId,
-        modelId: currentModelId.value,
-        mode: currentModeId.value, // Agent 模式: ASK, PLAN, AGENT
-        activeContext, // NEW: Auto-detected active tab context
+        modelId: attempt.modelId,
+        mode: attempt.mode, // Agent 模式: ASK, PLAN, AGENT
+        activeContext: attempt.activeContext, // NEW: Auto-detected active tab context
         // ASK 模式下 skill 不生效，一律不带——省得后端与面板的状态各说各话
-        skillIds: currentSkillIds(),
+        skillIds: attempt.skillIds,
+        submissionMode,
+        clientRequestId: attempt.clientRequestId,
         // Pass for user bubble display
         _userImages: imagesToShow,
         _userContextFiles: contextFilesToShow
-      })
+      }))
+
+      if (!receiptChatSubmission(submissionTracker, attempt, receipt)) {
+        failChatSubmission(submissionTracker, attempt)
+        uni.showToast({ title: t('chat.sendFailedDraftKept'), icon: 'none' })
+        return
+      }
+
+      // Receipt is the durability boundary. Only clear the exact draft and attachments that
+      // produced it; text/images added while the request was in flight stay for the next send.
+      const currentDraft = {
+        prompt,
+        contentHtml,
+        editorHtml: richInput.value ? richInput.value.innerHTML : '',
+        fileIds: contextFiles.value.map((file) => file.id),
+        imageKeys: pastedImages.value.map((image, index) => image.path || `image-${index}`),
+        submissionMode: attempt.submissionMode,
+        conversationId: currentConversationId.value,
+        projectId: props.projectId,
+        modelId: currentModelId.value,
+        mode: currentModeId.value,
+        skillIds: currentSkillIds(),
+        activeContext: attempt.activeContext,
+      }
+      if (shouldClearChatDraft(attempt, currentDraft)) {
+        if (richInput.value) richInput.value.innerHTML = ''
+        inputPrompt.value = ''
+        contextFiles.value = contextFiles.value.filter((file) => !contextFilesToShow.some((sent) => sent.id === file.id))
+        pastedImages.value = pastedImages.value.filter((image) => !pastedBatch.includes(image))
+      }
 
       scrollToBottom()
     }
@@ -1627,6 +1703,26 @@ export default {
       uni.showToast({ title: t('chat.abortToast'), icon: 'none' })
       abort()
     }
+
+    const toggleFollowUpMode = () => {
+      followUpMode.value = followUpMode.value === 'steer' ? 'queue' : 'steer'
+      try { uni.setStorageSync('awd_agent_follow_up_mode', followUpMode.value) } catch (e) { /* ignore */ }
+    }
+
+    const inboxAction = async (action) => {
+      try {
+        await action()
+      } catch (e) {
+        uni.showToast({ title: e.message || t('chat.inboxUpdateFailed'), icon: 'none' })
+      }
+    }
+    const handleInboxEdit = ({ item, message }) => inboxAction(() =>
+      updateInbox(item.id, { message, expectedRevision: item.revision }))
+    const handleInboxDelete = (item) => inboxAction(() => deleteInbox(item.id, item.revision))
+    const handleInboxMove = ({ item, position }) => inboxAction(() =>
+      updateInbox(item.id, { position, expectedRevision: item.revision }))
+    const handleInboxSendNow = (item) => inboxAction(() =>
+      updateInbox(item.id, { submissionMode: 'steer', expectedRevision: item.revision }))
 
     // 只列还在跑的：已完成/失败的条目留在浮窗里供用户核对结果，控制条不该再给停止按钮
     const runningTasks = computed(() =>
@@ -2069,7 +2165,7 @@ export default {
       if (!e.shiftKey) {
         // Plain Enter -> Send
         e.preventDefault()
-        handleSubmit()
+        handleSubmit(followUpMode.value)
       } else {
         // Shift+Enter -> New line (default behavior, do not prevent)
       }
@@ -2608,11 +2704,20 @@ export default {
        resolveComponentGate,
        inputPrompt,
        richInput,
+       showMemoryBrowser,
+       followUpMode,
+       toggleFollowUpMode,
+       pendingInbox,
+       handleInboxEdit,
+       handleInboxDelete,
+       handleInboxMove,
+       handleInboxSendNow,
        tokenUsage,
        scrollTop,
        isDragging,
        contextFiles,
        pastedImages,
+       isUploadingPasted,
        handleSubmit,
        handleAbort,
        handleRichInput,
@@ -2802,6 +2907,15 @@ export default {
   gap: 12px;
   position: relative;
 }
+.memory-header-btn {
+  align-self: center;
+  padding: 4px 7px;
+  border-radius: 5px;
+  color: var(--awd-text-2);
+  font-size: 11px;
+  cursor: pointer;
+}
+.memory-header-btn:hover { background: var(--awd-surface); color: var(--awd-accent-text); }
 
 /* Wrapper for icon buttons that have dropdowns - prevents layout shift */
 .icon-btn-wrapper {
@@ -3141,6 +3255,9 @@ export default {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  column-gap: 8px;
+  row-gap: 6px;
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px solid var(--awd-border-subtle);
@@ -3148,8 +3265,9 @@ export default {
 
 .action-bar-left {
   display: flex;
-  gap: 12px;
+  gap: 8px;
   align-items: center;
+  flex: 1 1 140px;
   /* 允许整条工具栏收缩，避免钉选长名 Skill 时把发送按钮挤出面板 */
   min-width: 0;
 }
@@ -3495,6 +3613,11 @@ export default {
   transition: background 0.15s ease;
   flex-shrink: 0;
 }
+.composer-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; margin-left: auto; max-width: 100%; }
+.follow-mode,.alternate-send { padding: 4px 6px; border-radius: 5px; color: var(--awd-text-2); font-size: 10px; cursor: pointer; }
+.follow-mode { background: var(--awd-accent-soft); color: var(--awd-accent-text); }
+.alternate-send:hover { background: var(--awd-surface-2); }
+.stop-btn { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--awd-danger); color: white; font-size: 11px; cursor: pointer; }
 .send-btn:hover {
   background: var(--awd-accent-hover);
 }

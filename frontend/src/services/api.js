@@ -224,7 +224,10 @@ function request(options) {
             data: options.logBody === false ? '[document content omitted]' : res.data,
             header: res.header
           })
-          reject(new Error(message));
+          const httpError = new Error(message);
+          httpError.status = status;
+          httpError.data = res.data;
+          reject(httpError);
           return;
         }
 
@@ -244,8 +247,8 @@ function request(options) {
 
         // 统一处理后端返回的 { code: 0, data: ... } 或 { code: 1, message: ... } 格式
         if (res.data && typeof res.data.code !== 'undefined') {
-          if (res.data.code === 0) {
-            // 成功：code=0
+          if (res.data.code === 0 || res.data.code === 200) {
+            // 成功：既有接口用 code=0，AI Markdown memory 契约用 code=200
             resolve(res.data);
           } else if (res.data.code === 4005) {
             // 密码已对但还差短信验证码（登录二次验证）：reject 时带 smsRequired 标记，
@@ -3537,6 +3540,84 @@ export function removeMemorySyncRemote(repoKey) {
 
 export function syncMemoryNow(repoKey) {
   return request({ url: `/api/memory-sync/${repoKey}/sync`, method: 'POST' })
+}
+
+// ==================== Agent inbox / mid-run steering ====================
+
+export function getAgentInbox(conversationId) {
+  return request({
+    url: `/api/agent/inbox/${encodeURIComponent(conversationId)}`,
+    method: 'GET',
+  }).then(unwrapEnvelope)
+}
+
+export function updateAgentInboxItem(conversationId, messageId, patch) {
+  return request({
+    url: `/api/agent/inbox/${encodeURIComponent(conversationId)}/${encodeURIComponent(messageId)}`,
+    method: 'PATCH',
+    data: patch,
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope)
+}
+
+export function deleteAgentInboxItem(conversationId, messageId, expectedRevision) {
+  return request({
+    url: `/api/agent/inbox/${encodeURIComponent(conversationId)}/${encodeURIComponent(messageId)}?expectedRevision=${encodeURIComponent(expectedRevision)}`,
+    method: 'DELETE',
+  }).then(unwrapEnvelope)
+}
+
+// ==================== Canonical Markdown memory ====================
+
+export function getMemorySpaces(projectId) {
+  return request({
+    url: '/api/ai/memory/spaces',
+    method: 'GET',
+    params: projectId ? { projectId } : {},
+  }).then(unwrapEnvelope)
+}
+
+export function getMemoryFiles(spaceId) {
+  return request({
+    url: '/api/ai/memory/files',
+    method: 'GET',
+    params: { spaceId },
+  }).then(unwrapEnvelope)
+}
+
+export function getMemoryFile(spaceId, path) {
+  return request({
+    url: '/api/ai/memory/file',
+    method: 'GET',
+    params: { spaceId, path },
+  }).then(unwrapEnvelope)
+}
+
+export function saveMemoryFile({ spaceId, path, content, expectedRevision }) {
+  return request({
+    url: '/api/ai/memory/file',
+    method: 'PUT',
+    data: { spaceId, path, content, expectedRevision },
+    logBody: false,
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope)
+}
+
+export function deleteMemoryFile(spaceId, path, expectedRevision) {
+  return request({
+    url: `/api/ai/memory/file?spaceId=${encodeURIComponent(spaceId)}&path=${encodeURIComponent(path)}&expectedRevision=${encodeURIComponent(expectedRevision)}`,
+    method: 'DELETE',
+  }).then(unwrapEnvelope)
+}
+
+export function downloadMemoryFile(spaceId, path) {
+  return request({
+    url: '/api/ai/memory/download',
+    method: 'GET',
+    params: { spaceId, path },
+    responseType: 'arraybuffer',
+    logBody: false,
+  })
 }
 
 
