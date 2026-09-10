@@ -65,3 +65,42 @@ get_project_context. The live model catalog contract reports 4 existing discrepa
 DeepSeek Flash/Pro and GLM 5.2 price drift, and Qwen 3.8 Max absent from the upstream
 catalog. These are recorded separately from the new feature acceptance cases.
 Log: `/tmp/ai-alignment-live-smoke.log`.
+
+## Integrated verification (ongoing)
+
+- Integrated backend full run: 3,533 tests, 2 failures, 0 errors, 14 skips. Both
+  integration omissions were repaired: ASK replay now asserts the three read-only
+  memory tools and excludes writes; six memory tools have zh/en display names.
+  Their 47-test rerun and package build pass. The first PR CI backend full run also
+  passes. Review fixes added later still require a final full run.
+- Frontend full run: 1,153 tests, 1,147 pass, 6 fail. The added navigation regression
+  was fixed by preserving TeamPanel as the last settings branch; its 44-test rerun
+  passes. The other five failures reproduce the unchanged revision-view loader issue.
+- Final frontend unit rerun: 1,153 tests, 1,148 pass and only the five unchanged
+  revision-view loader failures. Final desktop unit run: 155 tests, 154 pass,
+  1 skip, 0 failures. Logs: `/tmp/ai-alignment-final-{frontend,desktop}-unit.log`.
+- Integrated emit/locale/full-navigation/state checks and H5 build pass.
+- Integrated application E2E: 141 steps pass, 0 failures, including actual model
+  reply/history, loopback browser, collaborative version/conflict flows and plugins.
+  Log: `/tmp/ai-alignment-integrated-app.log`.
+- First PR CI Windows installer build passes; release and mirror jobs are skipped.
+- Integrated LOWA: 547/547 pass; inline-review, writing-caret, link-preview,
+  completion and reply insertion pass. Writing UI still fails in its Qt popup flow
+  (this run line 69); generated DOCX reproduces the line 125 baseline failure.
+- Integrated 150-page performance: six criteria pass; export median 13.10 seconds
+  remains above 10 seconds (three samples: 13.10, 12.81, 15.50). No threshold was relaxed.
+- Actual OpenRouter/DeepSeek Flash examples pass: model writes/reads personal Markdown;
+  a new ASK conversation reads it; steering is applied once despite duplicate POST,
+  edited/reordered queue drains correctly, deleted input stays absent; Stop retains the
+  pending queue and Send now resumes it. Evidence: `/tmp/ai-alignment-live-result.json`.
+- Live Java desktop adapter → local production Next service passes head/member/outsider
+  team roles and head/branch firm roles, with exact content readback and expected 403
+  writes/reads. Only generated local accounts were used. Evidence:
+  `/tmp/ai-alignment-shared-gateway-result.json`.
+- Native Mac CUA walk-through opened the real isolated Electron project, AI panel,
+  all four available memory scopes and the exact model-written Markdown file.
+  Native coordinate save was unavailable in CUA; it is not counted as a completed
+  save test. The dedicated real-Electron journey covers write/save/readback separately.
+
+Draft implementation PR: https://github.com/zeweihan/aiworkdeck/pull/798.
+No merge, deployment, tag, or release has been performed.

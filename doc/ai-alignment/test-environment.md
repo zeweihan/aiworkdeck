@@ -160,8 +160,8 @@ and the names the guard expects:
 
 ```bash
 export WRITING_E2E_ROOT="$(mktemp -d /tmp/aiworkdeck-writing-e2e.XXXXXX)"
-mkdir -p "$WRITING_E2E_ROOT/home/.aiworkdeck" "$WRITING_E2E_ROOT/backend"
-cp "$AWD_JAR" "$AWD_E2E_ROOT/backend.jar"
+mkdir -p "$WRITING_E2E_ROOT/home/.aiworkdeck" "$WRITING_E2E_ROOT/backend" "$WRITING_E2E_ROOT/frontend/dist"
+cp "$AWD_JAR" "$WRITING_E2E_ROOT/backend.jar"
 cp -R "$AWD_REPO/backend/skills" "$WRITING_E2E_ROOT/skills"
 cp -R "$AWD_REPO/backend/plugins" "$WRITING_E2E_ROOT/backend/plugins"
 cp -R "$AWD_REPO/frontend/dist/zetaoffice" "$WRITING_E2E_ROOT/frontend/dist/zetaoffice"
@@ -169,7 +169,7 @@ cp "$AWD_E2E_ROOT/home/.aiworkdeck/license.json" "$WRITING_E2E_ROOT/home/.aiwork
 (
   cd "$WRITING_E2E_ROOT/backend"
   AI_SKILLS_BUILTIN_DIR="$WRITING_E2E_ROOT/skills" "$JAVA_HOME/bin/java" \
-    -Duser.home="$WRITING_E2E_ROOT/home" -jar "$AWD_JAR" \
+    -Duser.home="$WRITING_E2E_ROOT/home" -jar "$WRITING_E2E_ROOT/backend.jar" \
     --server.port=9848 --spring.profiles.active=desktop \
     '--spring.datasource.url=jdbc:h2:file:'"$WRITING_E2E_ROOT"'/db;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;NON_KEYWORDS=VALUE'
 ) > "$WRITING_E2E_ROOT/backend.log" 2>&1 &
