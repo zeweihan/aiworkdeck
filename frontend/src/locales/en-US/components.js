@@ -28,6 +28,12 @@ export default {
   chatCancel: 'Not now',
   chatInstalling: 'Preparing the component…',
   chatResending: 'The component is ready. Continuing your request…',
+  chatReadyRetry: 'The component is ready. You can resend your request.',
+
+  backgroundDownload: 'Download in background',
+  backgroundStarted: 'Downloading in the background. Track progress in Settings → Components.',
+  backgroundDone: '{name} is ready to use.',
+  backgroundFailed: '{name} failed to download: {msg}',
 
   asrRuntimeMissingAction: 'Download on-device speech recognition',
 

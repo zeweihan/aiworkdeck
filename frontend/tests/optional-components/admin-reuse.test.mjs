@@ -13,8 +13,8 @@ test('组件管理复用 OptionalComponentCard，而不是自己再写一套 com
   assert.match(src, /<OptionalComponentCard/)
 })
 
-test('组件管理走 useOptionalComponents 的编排（顺序 pack → 模型 → ensure）', () => {
-  assert.match(src, /createOptionalComponentsController/)
+test('组件管理走应用级下载单例（内部仍是 useOptionalComponents 的顺序 pack → 模型 → ensure）', () => {
+  assert.match(src, /componentDownloads/)
   assert.match(src, /installOne/)
 })
 

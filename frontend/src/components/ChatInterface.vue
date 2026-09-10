@@ -683,13 +683,17 @@
     />
 
     <!-- 可选组件缺失（设计 §4.2）：确认前把体积、解锁什么、不装则什么不可用都说全，
-         确认后卡片就地跳进度，装完自动重发原消息。 -->
+         确认后卡片就地跳进度，装完自动重发原消息。下载中可「后台下载」收起卡片继续用对话
+         （dev-board#581），装完是否重发见 useComponentRequired.shouldAutoResend。 -->
     <view v-if="componentGateItem" class="chat-component-gate">
       <view class="cg-panel">
         <text class="cg-title">{{ $t('components.chatTitle') }}</text>
         <OptionalComponentCard :item="componentGateItem" :selectable="false" :busy="true" />
         <view v-if="componentGateResolved" class="cg-installing">
           <text class="cg-installing-text">{{ $t('components.chatInstalling') }}</text>
+          <view class="cg-actions">
+            <view class="cg-btn cg-background" @tap="backgroundComponentGate">{{ $t('components.backgroundDownload') }}</view>
+          </view>
         </view>
         <view v-else class="cg-actions">
           <view class="cg-btn primary" @tap="resolveComponentGate(true)">{{ $t('components.chatConfirm') }}</view>
@@ -708,17 +712,15 @@ import AgentInbox from './AgentInbox.vue'
 import MemoryBrowser from './MemoryBrowser.vue'
 import { useAgentStream } from '@/composables/useAgentStream.js'
 import { parseToolBlock } from '@/composables/agentTagProtocol.mjs'
-import { ref, reactive, watch, onMounted, nextTick, getCurrentInstance, computed } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount, nextTick, getCurrentInstance, computed } from 'vue'
 import { createFile, getProjectFiles, getApiBaseUrl, rollbackConversation, performPptGeneration, getSkills, fetchAiModels, getAiConfig, cancelBackgroundTask, listPluginJobs, cancelPluginJob } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
 import { getAppLanguage } from '@/utils/appLanguage.js'
 import { t } from '@/i18n'
 import { ICONS } from '@/config/icons.js'
 import OptionalComponentCard from '@/components/OptionalComponentCard.vue'
-import { host } from '@/services/host.js'
-import { optionalComponents, packInstall, packStatus, packInfo } from '@/services/api.js'
-import { createOptionalComponentsController } from '@/composables/useOptionalComponents.js'
-import { createComponentRequiredHandler } from '@/composables/useComponentRequired.js'
+import { componentDownloads } from '@/services/componentDownloads.js'
+import { createComponentRequiredHandler, shouldAutoResend } from '@/composables/useComponentRequired.js'
 import { pendingInboxItems } from '@/composables/agentInboxState.mjs'
 import {
   beginChatSubmission,
@@ -790,24 +792,52 @@ export default {
       deleteInbox,
     } = useAgentStream()
 
-    // 可选组件缺失闸（设计 §4.2）。控制器与首次登录面板、组件管理页同一份编排：
-    // 顺序 pack → 模型 → ensure(service)，顺序不能换。
-    const optionalController = createOptionalComponentsController({
-      state: reactive({}),
-      optionalComponents,
-      packInstall,
-      packStatus,
-      packInfo,
-      modelDownload: (id) => host.model.download(id),
-      onModelProgress: (cb) => host.model.onProgress(cb),
-      ensureService: (name) => host.services.ensure(name),
-    })
+    // 可选组件缺失闸（设计 §4.2）。下载走应用级单例（dev-board#581）：与首次登录面板、
+    // 组件管理页同一份编排、同一份进度，顺序 pack → 模型 → ensure(service) 不能换。
     const componentGateItem = ref(null)
     const componentGateResolved = ref(false)
     const componentGateResolve = ref(null)
+    // 前台认领：对话组件活着就由它交代结果（重发或提示可重试）；卸载时释放，交给全局提示
+    const componentClaims = new Map()
+    const backgroundedPacks = new Set()
+    let chatAlive = true
+    const userMessageCount = () =>
+      bubbles.value.filter((b) => b && String(b.role).toUpperCase() === 'USER').length
+    const releaseComponentClaim = (packId) => {
+      const release = componentClaims.get(packId)
+      if (release) release()
+      componentClaims.delete(packId)
+      backgroundedPacks.delete(packId)
+    }
+    /** 只收起属于这个 packId 的卡片：后台装完时卡片上可能已经换成了另一个组件 */
+    const closeComponentGate = (packId) => {
+      if (componentGateItem.value && componentGateItem.value.packId === packId) componentGateItem.value = null
+    }
     const componentRequiredHandler = createComponentRequiredHandler({
-      installOne: (item) => optionalController.installOne(item),
-      fillSizes: (item) => optionalController.fillSizes(item),
+      adopt: (item) => componentDownloads.adopt(item),
+      isInstalling: (packId) => componentDownloads.isInstalling(packId),
+      // 别的入口已经在下这个组件：卡片直接进「下载中」，不再问一遍
+      attach: (item) => {
+        componentGateItem.value = item
+        componentGateResolved.value = true
+      },
+      installOne: (item) => {
+        if (!componentClaims.has(item.packId)) componentClaims.set(item.packId, componentDownloads.claim(item.packId))
+        return componentDownloads.installOne(item)
+      },
+      fillSizes: (item) => componentDownloads.fillSizes(item),
+      mark: () => userMessageCount(),
+      shouldResend: (mark, item) => shouldAutoResend({
+        alive: chatAlive,
+        backgrounded: backgroundedPacks.has(item.packId),
+        streaming: isStreaming.value,
+        userCountAtGate: mark,
+        userCountNow: userMessageCount(),
+      }),
+      readyNotice: (item) => {
+        closeComponentGate(item.packId)
+        if (chatAlive) uni.showToast({ title: t('components.chatReadyRetry'), icon: 'none', duration: 3500 })
+      },
       // 弹窗确认：把 item 挂上去，等模板里的按钮 resolve
       confirm: (item) => new Promise((resolve) => {
         componentGateItem.value = item
@@ -821,8 +851,8 @@ export default {
         }
         return ''
       },
-      resend: async (text) => {
-        componentGateItem.value = null
+      resend: async (text, item) => {
+        closeComponentGate(item.packId)
         uni.showToast({ title: t('components.chatResending'), icon: 'none' })
         await sendMessage({
           prompt: text,
@@ -833,10 +863,23 @@ export default {
         })
         scrollToBottom()
       },
-      toast: (msg) => {
-        componentGateItem.value = null
-        uni.showToast({ title: t('components.stateFailed', { msg }), icon: 'none' })
+      toast: (msg, item) => {
+        closeComponentGate(item.packId)
+        // 已卸载时认领早已释放，失败由全局提示交代
+        if (chatAlive) uni.showToast({ title: t('components.stateFailed', { msg }), icon: 'none' })
       },
+    })
+    /** 「后台下载」：收起卡片继续用对话；装完时按 shouldAutoResend 决定重发还是只提示 */
+    const backgroundComponentGate = () => {
+      const item = componentGateItem.value
+      if (!item) return
+      backgroundedPacks.add(item.packId)
+      componentGateItem.value = null
+      uni.showToast({ title: t('components.backgroundStarted'), icon: 'none', duration: 3000 })
+    }
+    onBeforeUnmount(() => {
+      chatAlive = false
+      for (const packId of [...componentClaims.keys()]) releaseComponentClaim(packId)
     })
     /** 确认走下载（弹窗留着，卡片就地跳进度）；取消则直接收起 */
     const resolveComponentGate = (ok) => {
@@ -858,7 +901,9 @@ export default {
            // 可选组件缺失（设计 §4.2）：就地弹窗 → 装 → 自动重发原消息。
            // 刻意不往下 emit：它不是编辑器命令，执行器只会回 Unknown action。
            componentRequiredHandler.onAction(action).then((r) => {
-              if (!r.resent) componentGateItem.value = null
+              if (r.duplicate) return
+              closeComponentGate(action.packId)
+              releaseComponentClaim(action.packId)
            })
         } else {
            emit('client-action', action)
@@ -2703,6 +2748,7 @@ export default {
        componentGateItem,
        componentGateResolved,
        resolveComponentGate,
+       backgroundComponentGate,
        inputPrompt,
        richInput,
        showMemoryBrowser,

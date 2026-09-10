@@ -9,6 +9,10 @@
 
   「提示过」的标记落 electron prefs（~/.aiworkdeck/prefs.json），不是 localStorage：
   那个随浏览器数据一起被清，也不区分重装。
+
+  下载走应用级单例（services/componentDownloads.js，dev-board#581）：下载中可「后台下载」
+  关面板，「稍后再说」/点遮罩在下载中也只是转后台、不中断；进度在 设置 → 组件管理 接着看，
+  完成或失败时全局提示。
 -->
 <template>
   <view class="ocd-mask" @tap.self="onLater">
@@ -39,7 +43,10 @@
       </view>
 
       <view class="ocd-actions">
-        <view class="ocd-btn primary" :class="{ disabled: !anySelected || controller.state.running }" @tap="onInstall">
+        <view v-if="controller.state.running" class="ocd-btn primary ocd-background" @tap="onBackground">
+          {{ $t('components.backgroundDownload') }}
+        </view>
+        <view v-else class="ocd-btn primary" :class="{ disabled: !anySelected }" @tap="onInstall">
           {{ $t('components.installSelected') }}
         </view>
         <view class="ocd-btn" @tap="onLater">{{ $t('components.later') }}</view>
@@ -50,11 +57,10 @@
 </template>
 
 <script>
-import { reactive } from 'vue'
 import OptionalComponentCard from '@/components/OptionalComponentCard.vue'
 import { host } from '@/services/host.js'
-import { optionalComponents, packInstall, packStatus, packInfo } from '@/services/api.js'
-import { createOptionalComponentsController, PROMPTED_PREF_KEY } from '@/composables/useOptionalComponents.js'
+import { componentDownloads } from '@/services/componentDownloads.js'
+import { PROMPTED_PREF_KEY } from '@/composables/useOptionalComponents.js'
 
 export default {
   name: 'OptionalComponentsDialog',
@@ -65,17 +71,8 @@ export default {
   emits: ['close'],
   data() {
     return {
-      controller: createOptionalComponentsController({
-        // 状态容器在这里就要是响应式的：控制器内部的写走闭包，事后包 reactive 无效
-        state: reactive({}),
-        optionalComponents,
-        packInstall,
-        packStatus,
-        packInfo,
-        modelDownload: (id) => host.model.download(id),
-        onModelProgress: (cb) => host.model.onProgress(cb),
-        ensureService: (name) => host.services.ensure(name),
-      }),
+      // 应用级单例：状态不跟这个面板走，面板关了下载照样继续
+      controller: componentDownloads,
     }
   },
   computed: {
@@ -99,6 +96,10 @@ export default {
       if (item.phase !== 'ready' && item.modelId && item.modelInstalled) item.selected = true
     }
   },
+  beforeUnmount() {
+    // 被 reLaunch 带走或关掉：结果改由全局提示交代
+    this.releaseClaims()
+  },
   methods: {
     onToggle(packId, checked) {
       const it = this.controller.state.items.find((i) => i.packId === packId)
@@ -106,14 +107,33 @@ export default {
     },
     async onInstall() {
       if (!this.anySelected || this.controller.state.running) return
-      await this.controller.installAll(this.controller.state.items.filter((i) => i.selected))
+      // 面板在前台看着：装完由面板自己交代（全成功关面板、有失败留着原地重试）
+      this._claims = this.controller.state.items.filter((i) => i.selected)
+        .map((i) => this.controller.claim(i.packId))
+      // 用户已经作答，先落标记：转后台之后面板就卸载了，等装完再写就写不上
       await this.markPrompted()
+      await this.controller.installAll(this.controller.state.items.filter((i) => i.selected))
+      if (this._backgrounded) return
+      this.releaseClaims()
       // 有失败的就把面板留着，用户能在卡片上原地重试；全成功才关
       if (this.controller.state.items.every((i) => i.phase !== 'failed')) this.$emit('close')
     },
+    /** 下载继续、面板关闭；进度在「设置 → 组件管理」，完成或失败时全局提示 */
+    onBackground() {
+      this._backgrounded = true
+      this.releaseClaims()
+      uni.showToast({ title: this.$t('components.backgroundStarted'), icon: 'none', duration: 3000 })
+      this.$emit('close')
+    },
     async onLater() {
+      // 下载中「稍后再说」/点遮罩不许中断下载：等同于转后台
+      if (this.controller.state.running) return this.onBackground()
       await this.markPrompted()
       this.$emit('close')
+    },
+    releaseClaims() {
+      for (const release of this._claims || []) release()
+      this._claims = []
     },
     /** 标记落 electron prefs：重装才重置，下个大版本会再问一次 */
     async markPrompted() {

@@ -308,9 +308,7 @@ import {
   localTierReady, localAsrProbeResult, refreshLocalAsrReadiness
 } from '@/config/platformServices.js'
 import { host } from '@/services/host.js'
-import { reactive } from 'vue'
-import { createOptionalComponentsController } from '@/composables/useOptionalComponents.js'
-import { optionalComponents, packInstall, packStatus, packInfo } from '@/services/api.js'
+import { componentDownloads } from '@/services/componentDownloads.js'
 import AwdSwitch from '@/components/AwdSwitch.vue'
 import AwdSelect from '@/components/AwdSelect.vue'
 
@@ -410,19 +408,10 @@ export default {
       // 平台档用户不该每次开面板都看见一块「模型没下载」
       localGateOpen: false,
       // asr-runtime 这一条组件（运行时 + 1.5GB 模型），与首次登录面板同一份编排。
-      // state 在构造时就要是响应式的：控制器内部的写走闭包变量，事后包 reactive 无效。
       asrItem: null,
       installingRuntime: false,
-      controller: createOptionalComponentsController({
-        state: reactive({}),
-        optionalComponents,
-        packInstall,
-        packStatus,
-        packInfo,
-        modelDownload: (id) => host.model.download(id),
-        onModelProgress: (cb) => host.model.onProgress(cb),
-        ensureService: (name) => host.services.ensure(name),
-      }),
+      // 应用级下载单例（dev-board#581）：别的入口正在下的，这里接上同一份进度
+      controller: componentDownloads,
       _modelProgressUnsub: null,
       _player: null,
       _audioUrl: null,
@@ -563,6 +552,9 @@ export default {
     }
   },
   beforeUnmount() {
+    this._unmounted = true
+    // 在途的组件下载不停，只是不再由本面板交代结果
+    if (this._releaseClaim) { this._releaseClaim(); this._releaseClaim = null }
     if (this._pollTimer) clearInterval(this._pollTimer)
     try { if (this._onStopped) uni.$off('awd:meeting-recording-stopped', this._onStopped) } catch (e) { /* ignore */ }
     if (this._onDeviceChange && navigator.mediaDevices && navigator.mediaDevices.removeEventListener) {
@@ -676,13 +668,20 @@ export default {
       if (this.installingRuntime) return
       if (!this.asrItem) await this.loadAsrComponent()
       if (!this.asrItem) return
+      await this.followAsrInstall()
+    },
+    /** 发起或接上应用级下载管理里的同一个任务（在途时 installOne 返回同一个 Promise）。 */
+    async followAsrInstall() {
       this.installingRuntime = true
+      // 面板开着就由它交代结果；切走面板时释放（beforeUnmount），结果交给全局提示
+      this._releaseClaim = this.controller.claim('asr-runtime')
       try {
         const ok = await this.controller.installOne(this.asrItem)
-        if (!ok) {
+        if (!ok && !this._unmounted) {
           uni.showToast({ title: this.$t('components.stateFailed', { msg: this.asrItem.error || '' }), icon: 'none' })
         }
       } finally {
+        if (this._releaseClaim) { this._releaseClaim(); this._releaseClaim = null }
         this.installingRuntime = false
         await refreshLocalAsrReadiness()
         await this.loadModelState()
@@ -695,6 +694,8 @@ export default {
         if (item) {
           await this.controller.fillSizes(item)
           this.asrItem = item
+          // 别的入口（首次登录面板、组件管理）正在装这个组件：接上同一个任务
+          if (this.controller.isInstalling('asr-runtime') && !this.installingRuntime) this.followAsrInstall()
         }
       } catch (e) {
         console.warn('[MeetingRecordingPanel] 读取本机转写组件状态失败', e)
