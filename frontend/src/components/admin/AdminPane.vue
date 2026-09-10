@@ -1045,9 +1045,6 @@
 
         <!-- 团队（dev-board#496）。接在链尾：这条 v-if/v-else-if 长链的链头是
              activeNav === 'ai'，动链头会拿到「v-else 没有相邻 v-if」的编译错。 -->
-        <scroll-view v-else-if="activeNav === 'team'" scroll-y class="config-scroll">
-          <TeamPanel @go-account="onNavTap({ key: 'account' })" />
-        </scroll-view>
         <scroll-view v-else-if="activeNav === 'memory'" scroll-y class="config-scroll">
           <view class="section-card">
             <view class="section-header">
@@ -1058,6 +1055,9 @@
               <button class="comp-btn primary" @tap="showMemoryBrowser = true">{{ $t('chat.memoryButton') }}</button>
             </view>
           </view>
+        </scroll-view>
+        <scroll-view v-else-if="activeNav === 'team'" scroll-y class="config-scroll">
+          <TeamPanel @go-account="onNavTap({ key: 'account' })" />
         </scroll-view>
       </view>
     </view>
