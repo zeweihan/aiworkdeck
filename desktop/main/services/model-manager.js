@@ -45,6 +45,76 @@ function pyBin(resourcesPath) {
     : path.join(resourcesPath || '', 'python', 'bin', 'python3.11')
 }
 
+// ModelScope 下载脚本随 main/** 打进 app.asar（package.json build.files），Python 读不了 asar；
+// Electron 的 fs 能读，所以每次下载前把它拷到数据目录再交给打包 Python。
+const FETCH_SCRIPT = path.join(__dirname, 'model-fetch.py')
+
+function stagedFetchScript(ctx) {
+  const dst = path.join(ctx.dataDir, 'models', '.model-fetch.py')
+  const src = fs.readFileSync(FETCH_SCRIPT, 'utf8')
+  let cur = null
+  try { cur = fs.readFileSync(dst, 'utf8') } catch (e) { /* 首次 */ }
+  if (cur !== src) {
+    fs.mkdirSync(path.dirname(dst), { recursive: true })
+    fs.writeFileSync(dst, src)
+  }
+  return dst
+}
+
+// kokoro / asr 的模型下载源（dev-board#583），按顺序尝试：
+//   modelscope —— model-fetch.py 从 ModelScope 同名仓直下，落成标准 HF 缓存布局；
+//   hf         —— huggingface_hub.snapshot_download 走 hf-mirror.com。
+// 为什么 ModelScope 在前：hf-mirror 只代理元数据，大文件 302 到 HF 官方 CDN
+// （cas-bridge.xethub.hf.co），国内无代理网络连不上，报 LocalEntryNotFoundError。
+// hf 留作回落给海外用户（ModelScope 在海外可能慢或不通）。
+// CHECKBA_MODEL_SOURCE=modelscope|hf 强制单一来源（测试/排障用）。
+const HF_SOURCES = ['modelscope', 'hf']
+const SOURCE_LABELS = {
+  modelscope: { zh: 'ModelScope', en: 'ModelScope' },
+  hf: { zh: 'HuggingFace 镜像', en: 'HuggingFace mirror' }
+}
+
+function hfRepoSpec(ctx, service, repo, source) {
+  const dir = path.join(ctx.dataDir, 'models', service.replace(/-service$/, ''))
+  const base = { ...process.env, PYTHONPATH: libDirFor(ctx, service), HF_HOME: dir }
+  if (source === 'modelscope') {
+    return {
+      cmd: pyBin(ctx.resourcesPath),
+      args: [stagedFetchScript(ctx), '--repo', repo, '--hf-home', dir],
+      env: base,
+      cwd: dir
+    }
+  }
+  return {
+    cmd: pyBin(ctx.resourcesPath),
+    args: ['-c', `from huggingface_hub import snapshot_download; snapshot_download('${repo}')`],
+    env: {
+      ...base,
+      HF_ENDPOINT: process.env.CHECKBA_HF_ENDPOINT || 'https://hf-mirror.com',
+      // 打包内带 hf_xet：Xet 路径绕过 HF_ENDPOINT 直连 HF 官方 CAS
+      // (cas-server.xethub.hf.co)，镜像签发的凭证在那边必 401——大陆用户
+      // 无梯子即挂。禁用 xet 走镜像的普通 HTTP 下载（真机 401 实证）。
+      HF_HUB_DISABLE_XET: '1'
+    },
+    cwd: dir
+  }
+}
+
+// 所有源都失败后给用户看的话：先说原因和该怎么办，再附各源的原始异常便于排障。
+// 前端会再套一层「下载失败：{msg}」（components.stateFailed），所以这里不重复「下载失败」。
+function humanDownloadError(attempts) {
+  const disk = attempts.some((a) => /error\[disk\]|No space left|Errno 28|ENOSPC/i.test(a.detail))
+  const labels = attempts.map((a) => t(SOURCE_LABELS[a.source])).join(' / ')
+  const head = disk
+    ? t({ zh: '磁盘空间不足，请清理出空间后重试。', en: 'Not enough disk space. Free up some space and try again.' })
+    : t({
+      zh: `无法连接模型下载源（${labels}），请检查网络后重试。`,
+      en: `Could not reach the model download sources (${labels}). Check your network and try again.`
+    })
+  const details = attempts.map((a) => `${a.source}: ${a.detail.slice(0, 220)}`).join('; ')
+  return `${head}${t({ zh: '原始错误：', en: ' Details: ' })}${details}`
+}
+
 // 组件注册表：MinerU pipeline 模型 + Kokoro 语音模型 + 本地转写模型
 //
 // name 写成 { zh, en } 对，由 status() 用 app-language 的 t() 取值——**必须在 status() 里取，
@@ -90,31 +160,13 @@ const COMPONENTS = [
     id: 'kokoro-models',
     runtimeService: 'kokoro-service',
     name: { zh: '语音合成模型（Kokoro）', en: 'Speech Synthesis Model (Kokoro)' },
-    sizeHint: '300 MB',
-    estBytes: 300 * 1024 * 1024,
+    // 全仓实测约 376MB（含 100 个音色文件与 samples）；写小了进度会在 80% 处提前封顶 99%
+    sizeHint: '380 MB',
+    estBytes: 380 * 1024 * 1024,
     dir: (ctx) => path.join(ctx.dataDir, 'models', 'kokoro'),
-    // huggingface_hub snapshot（走国内镜像，env 可覆盖）；运行侧 HF_HOME 与此一致
-    spawnSpec: (ctx) => {
-      const dir = path.join(ctx.dataDir, 'models', 'kokoro')
-      return {
-        cmd: pyBin(ctx.resourcesPath),
-        args: [
-          '-c',
-          "from huggingface_hub import snapshot_download; snapshot_download('hexgrad/Kokoro-82M-v1.1-zh')"
-        ],
-        env: {
-          ...process.env,
-          PYTHONPATH: libDirFor(ctx, 'kokoro-service'),
-          HF_HOME: dir,
-          HF_ENDPOINT: process.env.CHECKBA_HF_ENDPOINT || 'https://hf-mirror.com',
-          // 打包内带 hf_xet：Xet 路径绕过 HF_ENDPOINT 直连 HF 官方 CAS
-          // (cas-server.xethub.hf.co)，镜像签发的凭证在那边必 401——大陆用户
-          // 无梯子即挂。禁用 xet 走镜像的普通 HTTP 下载（真机 401 实证）。
-          HF_HUB_DISABLE_XET: '1'
-        },
-        cwd: dir
-      }
-    }
+    // 先 ModelScope 再 hf-mirror（见 HF_SOURCES）；两条路都落标准 HF 缓存，运行侧 HF_HOME 与此一致
+    sources: HF_SOURCES,
+    spawnSpec: (ctx, source) => hfRepoSpec(ctx, 'kokoro-service', 'hexgrad/Kokoro-82M-v1.1-zh', source)
   },
   {
     id: 'asr-models',
@@ -123,29 +175,19 @@ const COMPONENTS = [
     sizeHint: '1.5 GB',
     estBytes: 1.5 * 1024 * 1024 * 1024,
     dir: (ctx) => path.join(ctx.dataDir, 'models', 'asr'),
-    // 与 kokoro 同一条 huggingface_hub snapshot 路径；运行侧 HF_HOME 与此一致。
+    // 与 kokoro 同样先 ModelScope 再 hf-mirror；运行侧 HF_HOME 与此一致。
     // 模型不进安装包：1.5GB 会让安装包体积翻几倍，而只有开了「录音不出本机」的用户才需要它。
-    spawnSpec: (ctx) => {
-      const dir = path.join(ctx.dataDir, 'models', 'asr')
-      return {
-        cmd: pyBin(ctx.resourcesPath),
-        args: [
-          '-c',
-          "from huggingface_hub import snapshot_download; snapshot_download('Systran/faster-whisper-medium')"
-        ],
-        env: {
-          ...process.env,
-          PYTHONPATH: libDirFor(ctx, 'asr-service'),
-          HF_HOME: dir,
-          HF_ENDPOINT: process.env.CHECKBA_HF_ENDPOINT || 'https://hf-mirror.com',
-          // 同 kokoro：Xet 路径绕过 HF_ENDPOINT 直连 HF 官方 CAS，镜像签发的凭证在那边必 401
-          HF_HUB_DISABLE_XET: '1'
-        },
-        cwd: dir
-      }
-    }
+    sources: HF_SOURCES,
+    spawnSpec: (ctx, source) => hfRepoSpec(ctx, 'asr-service', 'Systran/faster-whisper-medium', source)
   }
 ]
+
+// 本次下载要依次尝试的来源；没有 sources 的组件（mineru）只有一次、source 为 null
+function sourcesFor(c) {
+  if (!c.sources) return [null]
+  const forced = process.env.CHECKBA_MODEL_SOURCE
+  return forced && c.sources.includes(forced) ? [forced] : c.sources
+}
 
 class ModelManager {
   constructor(opts) {
@@ -208,15 +250,13 @@ class ModelManager {
 
     const dir = this.dirOf(id)
     fs.mkdirSync(dir, { recursive: true })
-    const spec = this.spawnSpecOverride ? this.spawnSpecOverride(c, this.ctx) : c.spawnSpec(this.ctx)
-    const child = spawn(spec.cmd, spec.args, { cwd: spec.cwd, env: spec.env, stdio: ['ignore', 'pipe', 'pipe'] })
-    this.active.set(id, child)
+    const sources = sourcesFor(c)
+    const attempts = [] // 失败过的来源：{ source, detail, raw }
 
     // stdout/stderr 只取"最近一行"当状态文案；百分比不再取自下载器输出——
     // 那是单个文件的 tqdm，十几个模型文件会反复 0→100%（真机反馈"下载完又
     // 从 0 开始"）。整体进度 = 已落盘字节 / estBytes，按固定间隔轮询目录。
     let lastLine = ''
-    const onLine = (line) => { lastLine = line }
     const estBytes = c.estBytes || 0
     const poller = setInterval(() => {
       const percent = estBytes > 0
@@ -224,44 +264,88 @@ class ModelManager {
         : undefined
       this.onProgress({ id, phase: 'progress', percent, message: lastLine.slice(0, 200) })
     }, this.progressPollMs)
-    const hook = (stream) => {
-      let buf = ''
-      stream.on('data', (d) => {
-        buf += d.toString()
-        // tqdm 用 \r 刷新进度，按 \r 和 \n 一起切行
-        const parts = buf.split(/[\r\n]+/)
-        buf = parts.pop()
-        for (const p of parts) if (p.trim()) onLine(p.trim())
-      })
-    }
-    hook(child.stdout)
-    hook(child.stderr)
 
-    child.on('exit', (code, signal) => {
-      clearInterval(poller)
-      const wasCancelled = child._awdCancelled
-      this.active.delete(id)
-      if (wasCancelled) {
-        this.onProgress({ id, phase: 'progress', percent: 0, message: 'cancelled' })
-        return
-      }
-      if (code === 0) {
-        fs.writeFileSync(path.join(dir, MARKER), new Date().toISOString())
-        this.onProgress({ id, phase: 'done' })
-      } else {
-        const msg = `download exited ${code ?? signal}: ${lastLine}`.slice(0, 500)
-        this.errors.set(id, msg)
-        this.onProgress({ id, phase: 'error', message: msg })
-      }
-    })
-    child.on('error', (e) => {
+    const finishError = (msg) => {
       clearInterval(poller)
       this.active.delete(id)
-      const msg = String(e && e.message ? e.message : e)
       this.errors.set(id, msg)
       this.onProgress({ id, phase: 'error', message: msg })
-    })
+    }
 
+    const runAttempt = (idx) => {
+      const source = sources[idx]
+      let spec
+      try {
+        spec = this.spawnSpecOverride ? this.spawnSpecOverride(c, this.ctx, source) : c.spawnSpec(this.ctx, source)
+      } catch (e) {
+        return settleFailure(idx, String(e && e.message ? e.message : e))
+      }
+      lastLine = ''
+      // Python 异常的说明可能跨多行，最后一行未必带异常类名与根因（hf 的
+      // LocalEntryNotFoundError 就是这样）；另记最后一条「异常头」行，报错时优先用它
+      let errLine = ''
+      const child = spawn(spec.cmd, spec.args, { cwd: spec.cwd, env: spec.env, stdio: ['ignore', 'pipe', 'pipe'] })
+      this.active.set(id, child)
+      const hook = (stream) => {
+        let buf = ''
+        stream.on('data', (d) => {
+          buf += d.toString()
+          // tqdm 用 \r 刷新进度，按 \r 和 \n 一起切行
+          const parts = buf.split(/[\r\n]+/)
+          buf = parts.pop()
+          // 回落之后上一个来源的残余输出不能盖掉当前来源的状态行
+          for (const p of parts) {
+            const line = p.trim()
+            if (!line || this.active.get(id) !== child) continue
+            lastLine = line
+            if (/^(error\[\w+\]:|[\w.]+(Error|Exception)\b)/.test(line)) errLine = line
+          }
+        })
+      }
+      hook(child.stdout)
+      hook(child.stderr)
+
+      let settled = false
+      const settle = (ok, raw) => {
+        if (settled) return
+        settled = true
+        if (child._awdCancelled) {
+          // 取消 = 用户的决定，不再回落到下一个来源
+          clearInterval(poller)
+          if (this.active.get(id) === child) this.active.delete(id)
+          this.onProgress({ id, phase: 'progress', percent: 0, message: 'cancelled' })
+          return
+        }
+        if (ok) {
+          clearInterval(poller)
+          this.active.delete(id)
+          fs.writeFileSync(path.join(dir, MARKER), new Date().toISOString())
+          this.onProgress({ id, phase: 'done' })
+          return
+        }
+        settleFailure(idx, raw, errLine || lastLine)
+      }
+      // 用 close 不用 exit：close 在 stdio 读完之后才发，最后一行（错误原因）不会丢
+      child.on('close', (code, signal) => settle(code === 0, `download exited ${code ?? signal}: ${lastLine}`))
+      child.on('error', (e) => settle(false, String(e && e.message ? e.message : e)))
+    }
+
+    const settleFailure = (idx, raw, line) => {
+      const source = sources[idx]
+      attempts.push({ source, raw, detail: line || raw })
+      if (idx + 1 < sources.length) {
+        const next = sources[idx + 1]
+        lastLine = t({
+          zh: `${t(SOURCE_LABELS[source])} 下载失败，改用 ${t(SOURCE_LABELS[next])}…`,
+          en: `${t(SOURCE_LABELS[source])} failed, trying ${t(SOURCE_LABELS[next])}...`
+        })
+        return runAttempt(idx + 1)
+      }
+      // mineru 没有多来源：保持原来的报错口径
+      finishError(source === null ? raw.slice(0, 500) : humanDownloadError(attempts))
+    }
+
+    runAttempt(0)
     return { ok: true }
   }
 
