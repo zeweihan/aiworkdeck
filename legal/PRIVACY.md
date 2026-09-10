@@ -1,6 +1,6 @@
 # AI WorkDeck 隐私说明
 
-更新日期：2026-08-17
+更新日期：2026-09-10
 
 本说明描述 AI WorkDeck 桌面应用的两件事：
 
@@ -43,6 +43,8 @@
 **这六家供应商全部在境内**，平台代采不涉及向境外提供个人信息。
 
 **语音合成不在这张表里**：它只有本机一档，随包内置的引擎在你的机器上合成，不出本机，也没有云端通路。
+
+**可选组件的模型文件从公开模型站下载，同样不经过我们的服务器。** 文档解析、语音合成、本机转写这几个可选组件的模型不随安装包分发，只在你主动点「下载」时，由你的机器直接从 ModelScope（modelscope.cn）下载；连不上时改从 HuggingFace 镜像（hf-mirror.com）下载，其中较大的文件可能由 HuggingFace 官方 CDN 提供。下载请求只包含要取的模型名与文件名，不上传任何文档、对话或其他用户数据。
 
 ## 三、会留下的记录：账务流水
 
@@ -141,7 +143,7 @@
 
 # AI WorkDeck Privacy Note
 
-Last updated: 2026-08-17
+Last updated: 2026-09-10
 
 ## Part 1 — Platform services
 
@@ -159,6 +161,8 @@ Last updated: 2026-08-17
 | Statute and case law search | The query | PKULaw | No | Nothing kept past the call |
 
 **Meeting audio is the only item written to disk on our side.** The desktop app uploads it directly to our object storage (bypassing the application server); the object is deleted by code once transcription finishes or the task fails, and a 24-hour lifecycle rule on the bucket clears anything the code misses. The transcript is not retained after it is returned to the desktop app. Every other service passes content through only at call time: request content is not logged, not stored, and not used to train any model. All six vendors are inside mainland China, so the platform-sourced tier involves no transfer of personal information abroad. Speech synthesis is absent from the table: it has an on-device tier only, synthesizing in the bundled engine with no cloud path at all.
+
+**Optional-component models come from public model hubs, not from our servers.** The models for the optional components (document parsing, speech synthesis, on-device transcription) are not shipped in the installer. Only when you choose to download one does your machine fetch it directly from ModelScope (modelscope.cn); if that cannot be reached it falls back to a HuggingFace mirror (hf-mirror.com), where larger files may be served by HuggingFace's own CDN. The requests carry only the model and file names being fetched; no documents, conversations, or other user data are uploaded.
 
 **What is kept: billing entries.** Each platform-sourced call leaves one ledger entry under your account recording the service name, operation, quantity (minutes / pages / calls / thousand characters), amount charged, timestamp, and idempotency key. It contains no request content, no result content, and no file names. These are financial records, kept for the life of the account, and visible to you under Settings → Account and Usage.
 

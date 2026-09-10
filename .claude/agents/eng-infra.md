@@ -282,6 +282,7 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
   下游 fetch-lowa-assets.js 对 data 只查「长度 ≥1024」，兜不住双重压缩）。
   落盘先落 web root 之外的暂存区、校验通过再 rename 换入，旧版本自动备份到 `/root/lowa-engine-backup/`。
 - 官网部署在独立仓库（website/，gitignore 掉），服务器 ssh -i ~/.ssh/aiworkdeck_ops root@47.92.111.102；ECS 8.137.95.63(~/.ssh/checkba_ecs)。
+- **kokoro/asr 模型下载源顺序（dev-board#583）**：先 ModelScope，失败再回落 hf-mirror 的 `snapshot_download`（`CHECKBA_MODEL_SOURCE=modelscope|hf` 强制单源）。原因：hf-mirror 只代理元数据，大文件 302 到 HF 官方 CDN（cas-bridge.xethub.hf.co），国内无代理必挂 `LocalEntryNotFoundError`。ModelScope 路径是 `desktop/main/services/model-fetch.py`（纯标准库，按 HF 缓存布局落 `HF_HOME/hub/models--*/{blobs/<sha256>, snapshots/<ModelScope commit>, refs/main}`，续传临时文件 `blobs/<sha256>.incomplete`，refs/main 最后写——所以旧的半截缓存里 refs/main 指向不存在的 snapshot 也能直接续下），运行侧 pack 的 app.py 不用改。**地雷**：脚本随 `main/**` 进 app.asar，Python 读不了，model-manager 每次下载前把它拷到 `~/.aiworkdeck/models/.model-fetch.py` 再跑。mineru 仍走 MinerU 官方 CLI（`-s modelscope`），不动。
 - 模型不进包：mineru/kokoro/asr 模型首启在"组件管理"下载（下载进度按字节级整体，PR#142）。asr 的 faster-whisper medium 约 1.5GB，依赖闭包 182MB（压缩后约 57MB 进安装包，大头是 onnxruntime 70MB + PyAV 44MB，两者都是 faster-whisper 的硬依赖）。
 
 ## 已知地雷
