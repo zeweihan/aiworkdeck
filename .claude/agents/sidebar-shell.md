@@ -31,8 +31,14 @@ flushDirtyEditors），单测见 `frontend/tests/project-home/flush-dirty-editor
 `project-overview.vue` 用 `provide()` 把 `leaveWorkbench` 注入下去，组件 `inject: { leaveWorkbench: { default: null } }`，
 有就走它、没有（宿主不是工作台，比如项目列表页里的加人弹窗）才直调。`check:nav` 扫 project-overview
 直接 import 的全部组件：出现 `uni.reLaunch/navigateTo/redirectTo` 的方法要么同方法里走了
-`this.leaveWorkbench(`，要么进脚本里的 `WORKBENCH_NAV_ALLOWLIST` 并写理由。名单里现有四处早于这条护栏
-（插件详情/侧栏跳账户页、技能下拉跳插件广场、切换本机身份），各有产品含义，待单独评估。
+`this.leaveWorkbench(`，要么进脚本里的 `WORKBENCH_NAV_ALLOWLIST` 并写理由。名单里现有两处早于这条护栏
+（技能下拉跳插件广场、切换本机身份），各有产品含义，待单独评估。
+
+**目的地是设置页的根本不该离开工作台**（dev-board#582：加人弹窗「去团队设置」跳出独立设置页，
+用户点名「设置应以标签页存在」）。`provide()` 同时注入 `openSettingsTab`，组件
+`inject: { openSettingsTab: { default: null } }`，有就 `this.openSettingsTab({ nav })` 开设置标签，
+没有（项目列表页等工作台之外的宿主）才跳 `/pages/admin/admin?nav=xxx`。现有四处：加人弹窗与
+协作抽屉的 `goTeamSettings`、插件侧栏与插件详情的 `goToAccountSettings`，`check:nav` 逐个钉住。
 
 ## project-overview.vue 内部地图（4939 行，主战场）
 

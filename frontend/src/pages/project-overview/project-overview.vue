@@ -2151,8 +2151,12 @@ const WEB_KEEPALIVE_MAX = 5
 export default {
   // 工作台里渲染的组件（协作抽屉、加人弹窗……）要跳出工作台时，也得走同一个出口：
   // 先落盘再 reLaunch。组件拿不到页面实例，只能靠注入（check:nav 钉着）。
+  // 要去的是设置页时不用离开：工作台里设置是一个标签（dev-board#582），组件走 openSettingsTab。
   provide() {
-    return { leaveWorkbench: (url) => this.leaveWorkbench(url) }
+    return {
+      leaveWorkbench: (url) => this.leaveWorkbench(url),
+      openSettingsTab: (opts) => this.openSettingsTab(opts || {}),
+    }
   },
   components: {
     LibreOfficeEditor,

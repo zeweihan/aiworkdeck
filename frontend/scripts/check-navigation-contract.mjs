@@ -797,11 +797,11 @@ checkFull('app-e2e 走三级跳而不是把个人中心当必经之路', () => {
 // 规则：project-overview 把 leaveWorkbench provide 出去；它直接 import 的组件里，
 // 凡是出现 uni.reLaunch / navigateTo / redirectTo 的方法，要么同一个方法里优先走注入的
 // this.leaveWorkbench(...)（直调只作为「宿主不是工作台」时的回落），要么进下面的名单并写明理由。
+// 目的地是设置页的，同一个方法里优先走注入的 this.openSettingsTab(...)（工作台里设置是标签，
+// 根本不该离开，dev-board#582）也算合规。
 const WORKBENCH_NAV_ALLOWLIST = {
-  // 以下四处早于本条护栏，行为（navigateTo 保留工作台在栈里 / 切身份整站重走启动链）
+  // 以下两处早于本条护栏，行为（navigateTo 保留工作台在栈里 / 切身份整站重走启动链）
   // 各有产品含义，改动要单独评估，先记名在此不许再新增。
-  'components/MarketSidebarPanel.vue#goToAccountSettings': '预存在：插件详情跳账户页，待单独评估',
-  'components/MarketDetailPane.vue#goToAccountSettings': '预存在：插件详情跳账户页，待单独评估',
   'components/ChatInterface.vue#goToSkillManagement': '预存在：技能下拉跳插件广场，待单独评估',
   'components/admin/AdminPane.vue#onSwitchIdentity': '预存在：切换本机身份后整站回启动链重建',
 }
@@ -811,7 +811,26 @@ check('工作台 provide 出 leaveWorkbench，给里面的组件用', () => {
   const provide = extractMethodBody(src, 'provide()')
   if (!provide) return 'project-overview 没有 provide()'
   if (!provide.includes('leaveWorkbench')) return 'provide() 里没有 leaveWorkbench'
+  if (!provide.includes('openSettingsTab')) return 'provide() 里没有 openSettingsTab'
   return null
+})
+
+check('工作台里「去团队设置 / 去账户」开设置标签，不跳出独立设置页（dev-board#582）', () => {
+  const sites = [
+    ['src/components/InviteMemberDialog.vue', 'goTeamSettings()'],
+    ['src/components/collab/CollabDialog.vue', 'goTeamSettings()'],
+    ['src/components/MarketSidebarPanel.vue', 'goToAccountSettings()'],
+    ['src/components/MarketDetailPane.vue', 'goToAccountSettings()'],
+  ]
+  const bad = []
+  for (const [rel, marker] of sites) {
+    const src = readVue(rel)
+    const body = extractMethodBody(src, marker)
+    if (!body || !body.includes('this.openSettingsTab(') || !/openSettingsTab:\s*\{\s*default:\s*null/.test(src)) {
+      bad.push(rel + '#' + marker)
+    }
+  }
+  return bad.length ? '没走注入的 openSettingsTab: ' + bad.join(', ') : null
 })
 
 check('工作台里渲染的组件跳出工作台必须走 leaveWorkbench（先落盘）', () => {
@@ -836,7 +855,7 @@ check('工作台里渲染的组件跳出工作台必须走 leaveWorkbench（先�
       const key = rel + '#' + name
       if (WORKBENCH_NAV_ALLOWLIST[key]) continue
       const body = name ? extractMethodBody(src, name + '(') : null
-      if (body && body.includes('this.leaveWorkbench(')) continue
+      if (body && (body.includes('this.leaveWorkbench(') || body.includes('this.openSettingsTab('))) continue
       bad.push(key)
     }
   }
