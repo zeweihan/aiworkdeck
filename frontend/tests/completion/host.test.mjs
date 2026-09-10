@@ -12,7 +12,7 @@ function fixture(preferences = {}) {
   const host = createWritingAssistanceHost({ projectId: 11, fileId: 22, userId: 33, writable: true,
     send: (m) => messages.push(m), api,
     storage: { get: () => preferences, set: (...args) => calls.push({ name: 'store', args }) },
-    execute: async (action) => action === 'set_revision_view' ? { mode: 'margin' } : { success: true, paragraphs: [{ text: '姓名：张三。北京当红晴天律师事务所。' }] },
+    execute: async (action) => action === 'set_revision_view' ? { mode: 'margin' } : { success: true, revision: 1, paragraphs: [{ index: 0, text: '姓名：张三。北京当红晴天律师事务所。' }] },
   })
   const request = (action, data = {}, session = host.session) => host.handle({ type: 'writing-request', session, id: 1, action, data })
   return { host, api, calls, messages, request }
@@ -158,4 +158,128 @@ test('user preference changes reach all open documents without replacing their c
   const destroyedCount = b.messages.length
   await a.request('preferences', { learning: true })
   assert.equal(b.messages.length, destroyedCount, 'destroyed hosts unsubscribe from user preference updates')
+})
+
+function pagedFixture(t, read) {
+  const messages = [], calls = [], learned = []
+  const host = createWritingAssistanceHost({ projectId: 11, fileId: 22, userId: Math.random(), writable: true,
+    send: m => messages.push(m), storage: { get() {}, set() {} },
+    execute: async (action, params) => {
+      calls.push({ action, params })
+      if (action === 'set_revision_view') return { mode: 'margin' }
+      if (action === 'get_review_context') return { success: true, revision: 1 }
+      return read(params)
+    },
+    api: { list: async () => ({ items: [] }), learn: async (_pid, body) => { learned.push(body); return {} } },
+  })
+  t.after(() => host.destroy())
+  const request = action => host.handle({ type: 'writing-request', session: host.session, id: 1, action })
+  return { host, messages, calls, learned, request, items: () => messages.at(-1).config?.items || [] }
+}
+
+test('document seeding follows pagination and learns later entities without any paid call', async t => {
+  const f = pagedFixture(t, p => p.startParagraph
+    ? { success: true, revision: 1, paragraphs: [{ index: 200, text: '股东名册中青岛致衡贸易有限公司持股40%。' }] }
+    : { success: true, revision: 1, paragraphs: [{ index: 0, text: '项目概况。' }], truncated: true, nextStartParagraph: 200 })
+  await f.host.start()
+  assert.equal(matchCompletionItems('青岛致', f.items())[0]?.text, '青岛致衡贸易有限公司')
+  assert.ok(f.learned.some(x => x.entries.some(e => e.text === '青岛致衡贸易有限公司')))
+  assert.ok(f.learned.every(x => x.scope === 'project'))
+})
+
+test('mixed-revision document pages are never published or learned', async t => {
+  const f = pagedFixture(t, p => p.startParagraph
+    ? { success: true, revision: 2, paragraphs: [{ index: 1, text: '青岛新正文有限公司。' }] }
+    : { success: true, revision: 1, paragraphs: [{ index: 0, text: '青岛旧正文有限公司。' }], truncated: true, nextStartParagraph: 1 })
+  await f.host.start()
+  assert.deepEqual(f.items(), [])
+  assert.deepEqual(f.learned, [])
+})
+
+test('manual document refresh retries a failed seed; focus refresh does not scan the document', async t => {
+  let available = false
+  const f = pagedFixture(t, () => available
+    ? { success: true, revision: 1, paragraphs: [{ index: 0, text: '青岛致衡贸易有限公司。' }] }
+    : { success: false })
+  await f.host.start(); available = true
+  await f.request('refresh')
+  assert.equal(f.calls.filter(x => x.action === 'get_document_text').length, 1)
+  await f.request('refreshDocument')
+  const config = f.messages.filter(m => m.type === 'writing-config').at(-1).config
+  assert.equal(matchCompletionItems('青岛致', config.items)[0]?.text, '青岛致衡贸易有限公司')
+})
+
+test('document candidates exceed a learn batch but project learning stays capped and batched', async t => {
+  const f = pagedFixture(t, () => ({ success: true, revision: 1, paragraphs: Array.from({ length: 250 }, (_, i) => ({ index: i, text: `北京示例${i}有限公司。` })) }))
+  await f.host.start()
+  assert.ok(f.items().filter(x => x.kind === 'COMPANY').length >= 250)
+  assert.equal(f.learned.reduce((sum, x) => sum + x.entries.length, 0), 200)
+  assert.ok(f.learned.every(x => x.entries.length <= 50))
+})
+
+test('document collection stops at paragraph and text budgets', async t => {
+  const f = pagedFixture(t, p => ({ success: true, revision: 1,
+    paragraphs: Array.from({ length: 200 }, (_, i) => ({ index: (p.startParagraph || 0) + i, text: `北京主体${(p.startParagraph || 0) + i}有限公司。` })),
+    truncated: true, nextStartParagraph: (p.startParagraph || 0) + 200 }))
+  await f.host.start()
+  assert.equal(f.calls.filter(x => x.action === 'get_document_text').length, 5)
+  const g = pagedFixture(t, p => ({ success: true, revision: 1,
+    paragraphs: [{ index: p.startParagraph || 0, text: '甲'.repeat(14999) + '。' }], truncated: true, nextStartParagraph: (p.startParagraph || 0) + 1 }))
+  await g.host.start()
+  assert.ok(g.calls.filter(x => x.action === 'get_document_text').length <= 14)
+})
+
+test('a document edit before publication or destruction while reading cannot seed stale text', async t => {
+  let release
+  const f = pagedFixture(t, () => new Promise(resolve => { release = resolve }))
+  const pending = f.host.start()
+  await new Promise(setImmediate)
+  f.host.destroy()
+  release({ success: true, revision: 1, paragraphs: [{ index: 0, text: '青岛旧正文有限公司。' }] })
+  await pending
+  assert.deepEqual(f.learned, [])
+  assert.deepEqual(f.items(), [])
+  const g = pagedFixture(t, () => ({ success: true, revision: 2, paragraphs: [{ index: 0, text: '青岛已变化有限公司。' }] }))
+  await g.host.start()
+  assert.deepEqual(g.learned, [])
+  assert.deepEqual(g.items(), [])
+})
+
+test('manual rescans do not count the same imported entities as repeated personal use', async t => {
+  const f = pagedFixture(t, () => ({ success: true, revision: 1, paragraphs: [{ index: 0, text: '青岛致衡贸易有限公司。' }] }))
+  await f.host.start()
+  await f.request('refreshDocument')
+  assert.equal(f.learned.length, 1)
+  assert.deepEqual(f.learned[0], { scope: 'project', entries: [{ text: '青岛致衡贸易有限公司', kind: 'COMPANY' }] })
+})
+
+test('typing during first document scan retries once idle; successful seeds do not scan on every edit', async t => {
+  const pendingTimers = new Map(), messages = []; let timerId = 0, reads = 0, revision = 1, release
+  const host = createWritingAssistanceHost({ projectId: 1, fileId: 2, userId: 'seed-race', writable: true,
+    send: m => messages.push(m), storage: { get: () => ({ learning: false }) }, api: { list: async () => ({ items: [] }) },
+    timers: { set(fn) { pendingTimers.set(++timerId, fn); return timerId }, clear(id) { pendingTimers.delete(id) } },
+    execute: async action => {
+      if (action === 'set_revision_view') return { mode: 'margin' }
+      if (action === 'get_document_text') {
+        reads++
+        const capturedRevision = revision
+        if (reads === 1) await new Promise(resolve => { release = resolve })
+        return { success: true, revision: capturedRevision, paragraphs: [{ text: '股东名册中青岛致衡贸易有限公司持股40%。' }] }
+      }
+      return { success: true, revision }
+    },
+  })
+  t.after(() => host.destroy())
+  const start = host.start()
+  await new Promise(r => setTimeout(r, 0))
+  revision++
+  host.modified?.(); host.modified?.()
+  release(); await start
+  assert.equal(pendingTimers.size, 1, 'interrupted initial scan retries after the last edit, not each keystroke')
+  const run = [...pendingTimers.values()][0]; pendingTimers.clear(); await run()
+  assert.ok(messages.at(-1).config.items.some(i => i.text === '青岛致衡贸易有限公司'))
+  const completedReads = reads
+  host.modified?.()
+  assert.equal(pendingTimers.size, 0)
+  assert.equal(reads, completedReads)
 })

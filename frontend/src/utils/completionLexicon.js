@@ -8,6 +8,8 @@ const ORGANIZATION_RE = new RegExp(`[\\p{Script=Han}A-Za-z0-9（）()·]{2,60}?$
 const ORGANIZATION_END_RE = new RegExp(`${ORGANIZATION_SUFFIX}$`, 'u')
 const LAW_ARTICLE_RE = /《[^》\r\n]{2,80}》(?:第[零〇一二三四五六七八九十百千万亿两\d]+条(?:之[零〇一二三四五六七八九十百千万亿两\d]+)?)?/gu
 const CASE_NUMBER_RE = /[（(]\d{4}[）)][\p{Script=Han}A-Za-z0-9]{2,30}号/gu
+const NARRATIVE_PERSON_RE = /(?:记载|载明|股东|出资人)\s*(?:为|是)?\s*[：:]?\s*([\p{Script=Han}]{2,4}?)(?=(?:实际|已经|已)?(?:持股|出资|认缴|实缴))/gu
+const NON_PERSON = /(?:公司|集团|企业|银行|法院|政府|中心|机构|股东)$|^(?:出资人|自然人|法人|均已|均|已经|应当|依法|尚未|全部|分别|实际)$/u
 const PERSON_RE = /(?:法定代表人|原告|被告|姓名|联系人)\s*(?:为|是)?\s*[：:]?\s*([\p{Script=Han}·]{2,8}?)(?=\s|[，,。；;、]|与|和|及|$)/gu
 
 function isSafeEntry(text) {
@@ -15,7 +17,7 @@ function isSafeEntry(text) {
 }
 
 function cleanOrganization(candidate, leadingText) {
-  let value = candidate.replace(/^(?:本协议由|甲方为|乙方为|甲方是|乙方是|原告为|被告为|申请人为|被申请人为)/u, '')
+  let value = candidate.replace(/^(?:(?:根据|依据)?(?:股东名册|公司章程|工商登记资料)(?:中|记载|载明)|本协议由|甲方为|乙方为|甲方是|乙方是|原告为|被告为|申请人为|被申请人为|出资人为|股东为|记载|载明)/u, '')
   if (value.startsWith('与') && ORGANIZATION_END_RE.test(leadingText)) value = value.slice(1)
   if (/(?:原告|被告)[：:]\s*$/u.test(leadingText)) {
     value = value.replace(/^[\p{Script=Han}·]{2,8}与(?=[\p{Script=Han}A-Za-z0-9（）()·]+$)/u, '')
@@ -30,7 +32,7 @@ function resolveSegmenter(segmenter) {
   return new Intl.Segmenter('zh-CN', { granularity: 'word' })
 }
 
-export function extractCompletionEntries(text, { segmenter } = {}) {
+export function extractCompletionEntries(text, { segmenter, limit = MAX_ENTRIES } = {}) {
   if (typeof text !== 'string' || !text) return []
 
   const entries = []
@@ -53,6 +55,9 @@ export function extractCompletionEntries(text, { segmenter } = {}) {
   }
   for (const match of text.matchAll(CASE_NUMBER_RE)) add(match[0], 'CASE')
   for (const match of text.matchAll(PERSON_RE)) add(match[1], 'PERSON')
+  for (const match of text.matchAll(NARRATIVE_PERSON_RE)) {
+    if (!NON_PERSON.test(match[1])) add(match[1], 'PERSON')
+  }
 
   const wordSegmenter = resolveSegmenter(segmenter)
   if (wordSegmenter) {
@@ -65,7 +70,23 @@ export function extractCompletionEntries(text, { segmenter } = {}) {
     if (normalized.length >= 4 && normalized.length <= 80) add(normalized, 'PHRASE')
   }
 
-  return entries.slice(0, MAX_ENTRIES)
+  const budget = Math.max(0, Math.min(500, Math.floor(limit) || 0))
+  if (entries.length <= budget) return entries
+  // A long list of companies or segmented words must not crowd out every law,
+  // person and phrase. Round-robin only when the requested budget is exceeded.
+  const groups = new Map()
+  for (const entry of entries) {
+    if (!groups.has(entry.kind)) groups.set(entry.kind, [])
+    groups.get(entry.kind).push(entry)
+  }
+  const selected = []
+  for (let row = 0; selected.length < budget; row++) {
+    for (const group of groups.values()) {
+      if (group[row]) selected.push(group[row])
+      if (selected.length === budget) break
+    }
+  }
+  return selected
 }
 
 function isUsablePrefix(prefix) {
@@ -97,16 +118,29 @@ export function matchCompletionItems(before, items, { limit = 8 } = {}) {
   const matches = []
   for (const item of items) {
     if (!item || typeof item.text !== 'string' || item.text.length < 2) continue
-    const prefix = longestTailPrefix(before, item.text)
-    if (prefix) matches.push({ ...item, prefix })
+    const forms = [item.text]
+    if (['LAW', 'ARTICLE'].includes(item.kind)) {
+      const citation = item.text.match(/^《([^》]+)》(.*)$/u)
+      if (citation) {
+        forms.push(citation[1] + citation[2])
+        if (item.kind === 'ARTICLE' && /^第.+条/u.test(citation[2])) forms.push(citation[2])
+      }
+    }
+    let best
+    for (const text of forms) {
+      const prefix = longestTailPrefix(before, text)
+      if (prefix && (!best || prefix.length > best.prefix.length)) best = { ...item, text, displayText: item.displayText || item.text, prefix }
+    }
+    if (best) matches.push(best)
   }
   matches.sort(itemRank)
 
   const unique = []
   const seen = new Set()
   for (const item of matches) {
-    if (seen.has(item.text)) continue
-    seen.add(item.text)
+    const key = item.displayText || item.text
+    if (seen.has(key)) continue
+    seen.add(key)
     unique.push(item)
     if (unique.length >= limit) break
   }

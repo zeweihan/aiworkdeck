@@ -3,20 +3,26 @@
 
 const preferenceListeners = new Map()
 const unwrap = (value) => value && typeof value === 'object' && 'code' in value && 'data' in value ? value.data : value
+const hashKey = value => {
+  let hash = 2166136261
+  for (const ch of String(value ?? '')) { hash ^= ch.codePointAt(0); hash = Math.imul(hash, 16777619) }
+  return (hash >>> 0).toString(36)
+}
 
 /** Review the live Writer snapshot. Typing may invoke rules, never a model or external lookup. */
 export function createInlineReviewHost({ projectId, fileId, userId, execute, send, review, storage, openInsight,
   writable = true, delay = 1200, timers = { set: (fn, ms) => setTimeout(fn, ms), clear: id => clearTimeout(id) } }) {
   const session = `review:${projectId}:${fileId}:${Date.now()}:${Math.random().toString(36).slice(2)}`
   const key = `awd_inline_review_${userId}`
+  const layoutKey = `awd_inline_review_layout_${hashKey(userId)}`
   let enabled = true
   try { if (storage?.get(key)?.enabled === false) enabled = false } catch { /* default */ }
   let disposed = false, generation = 0, timer = null, localBusy = false, deepBusy = false, dirty = true
-  let state = { session, revision: null, enabled, writable, status: 'stale', deepStatus: 'idle', findings: [], truncated: false }
+  let state = { session, layoutKey, revision: null, enabled, writable, status: 'stale', deepStatus: 'idle', findings: [], truncated: false }
   let deepRevision = null
   const publish = (next = {}) => {
     if (disposed) return
-    state = { ...state, ...next, session, enabled, writable }
+    state = { ...state, ...next, session, layoutKey, enabled, writable }
     send({ __lo: 'lo-relay', type: 'inline-review-state', ...state })
   }
   function schedule() {

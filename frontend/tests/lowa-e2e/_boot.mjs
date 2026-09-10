@@ -92,11 +92,12 @@ export async function launchBrowser(puppeteer) {
 }
 
 /** 打开 editor.html?verify=1 并等引擎就绪（window.__loExecutor）。 */
-export async function openEditor(browser, { clipboard = true } = {}) {
+export async function openEditor(browser, { clipboard = true, viewport } = {}) {
   if (clipboard) {
     await browser.defaultBrowserContext().overridePermissions(ORIGIN, ['clipboard-read', 'clipboard-write', 'clipboard-sanitized-write'])
   }
   const page = await browser.newPage()
+  if (viewport) await page.setViewport(viewport)
   await page.goto(ORIGIN + '/editor.html?verify=1&lowa=/lowa/', { waitUntil: 'domcontentloaded' })
   console.log('booting engine (~90s)...')
   await page.waitForFunction('!!window.__loExecutor', { timeout: 240000 })

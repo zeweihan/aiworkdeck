@@ -1936,6 +1936,8 @@
     <!-- 「依据」实体浮窗（dev-board#541）：正文里 Cmd/Ctrl 点中实体后贴着点击处弹出。
          挂在页面根节点（不在面板里）——编辑器画布是独立合成层的 <webview>，
          浮层只有在根级 + 高 z-index 才压得住，同 FileTree 的右键菜单。 -->
+    <DocumentLinkPreview v-if="documentLinkPreview" :preview="documentLinkPreview"
+      @close="closeDocumentLinkPreview" @open="openDocumentLinkAside" />
     <InsightHoverCard
       v-if="insightHover"
       :key="insightHover.key"
@@ -2134,6 +2136,8 @@ import { clipboardBridgeMethods } from './clipboardBridge.js'
 import { ocrActionMethods } from './ocrActions.js'
 import { ocrCaptureMethods } from './ocrCapture.js'
 import { insightEntityTabMethods } from './insightEntityTab.js'
+import { documentLinkPreviewMethods } from './documentLinkPreview.js'
+import DocumentLinkPreview from '@/components/DocumentLinkPreview.vue'
 
 // 网页标签保活上限（只在 Web/H5 生效，桌面端保活是 BrowserView 的活，见 leftWebTabs）。
 // 为什么要有上限、而桌面端可以不要：从窗口摘下的 BrowserView 会被 Chromium 冻住渲染进程，
@@ -2158,6 +2162,7 @@ export default {
     ClipboardPanel,
     InsightPane,
     InsightHoverCard,
+    DocumentLinkPreview,
     InsightEntityDetailPane,
     DdFilesPanel,
     ShareholderMeetingPanel,
@@ -2403,6 +2408,7 @@ export default {
       insightCursorContext: null,
       // 正文 Cmd/Ctrl 点中实体后的浮窗（dev-board#541）：{entity, x, y, detail}，null = 不显示。
       insightHover: null,
+      documentLinkPreview: null,
       // 每份文档抽出了几个实体。_insightIndex 是非响应式的，模板要用（决定要不要
       // 给客体页开光标订阅）就得有个响应式镜像。
       insightEntityCounts: {},
@@ -2607,7 +2613,7 @@ export default {
         !!this.imagePreviewUrl ||
         // 「依据」实体浮窗（dev-board#541）：另一侧开着浏览器标签时，BrowserView 是
         // 原生层，会把浮窗盖住——同图片预览那条，弹出期间先把 BrowserView 藏掉
-        !!this.insightHover ||
+        !!this.insightHover || !!this.documentLinkPreview ||
         (this.fileLinkPicker && this.fileLinkPicker.visible)
       )
     },
@@ -2959,6 +2965,7 @@ export default {
     }
   },
   beforeUnmount() {
+    this.closeDocumentLinkPreview()
     this.disposeThemeSwitch()
     this.unbindTabsWheel()
     // 多实例守卫：只清掉指向自己的活跃指针；返回上一个本页实例时由其 onShow 重新接管
@@ -3277,6 +3284,7 @@ export default {
     }
   },
   onUnload() {
+    this.closeDocumentLinkPreview()
     // Replace simple page view log with ActivityTracker stop
     this.stopActivityTracking()
 
@@ -3740,6 +3748,7 @@ export default {
     ...ocrCaptureMethods,
     // 「依据」实体详情标签（dev-board#541）
     ...insightEntityTabMethods,
+    ...documentLinkPreviewMethods,
     // 右键「这份文件的历史」：切到版本面板并只显示这份文件的版本
     onFileHistory(file) {
       this.versionFileFilter = { fileId: file.id, name: file.name }
@@ -5701,6 +5710,7 @@ export default {
       if (!entity || !entity.id) return
       if (!Number.isFinite(x) || !Number.isFinite(y)) return
       // key 带时间戳：连点两个不同实体时强制重建（详情/定位都要重来一遍）
+      this.closeDocumentLinkPreview()
       this.insightHover = { entity, x, y, detail: (payload && payload.detail) || null, key: entity.id + '@' + Date.now() }
     },
     closeInsightHoverCard() { this.insightHover = null },

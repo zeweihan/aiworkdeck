@@ -461,3 +461,5 @@ stash 误 pop 之类）之后，5174 上的页面可能变成**整页无样式**
 - 全应用J2/J11按已恢复的团队案件库取回入口走真实鼠标；不再以旧SHOW_CLOUD_ACCEPT=false口径断言或强开组件状态。
 
 - 即时审校（dev-board#547）：CI `test:inline-review` 覆盖宿主版本围栏、手动 AI 与 guest 中英文交互；`test:lowa-inline-review` 使用原生浏览器计时器并验证真实定位/修订/撤销，桌面 `tests/desktop-e2e/writing.mjs` 验证中文输入后本地规则自动启动。
+
+- 写作交互复测（dev-board#538/#541/#547/#549）：CI 增加 `test:insight` 覆盖链接预览、来源失效、目标已在后台时的分屏路由。`test:writing-caret` 可配 `LOWA_E2E_DPR=2` 在引擎启动前模拟 Retina，验证正文提取→光标菜单→Tab→撤销；`test:lowa-link-preview` 使用真实 Ctrl/Cmd 鼠标点击覆盖外链、书签和 REF。完整桌面用例要求 `WRITING_E2E_ROOT` 指向独立后端 cwd/user.home，复制壳并在 main 前隔离 Electron home/profile，避免接触用户资料。

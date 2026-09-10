@@ -49,7 +49,10 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
   function position(point) {
     const r = input.getBoundingClientRect()
     const x = point ? point.x : r.width < view.innerWidth * 0.8 ? r.left : view.innerWidth - 380
-    const y = point ? point.y : r.height < 100 ? r.bottom + 4 : view.innerHeight - 300
+    let y = point ? point.y : r.height < 100 ? r.bottom + 4 : view.innerHeight - 300
+    if (!point && r.height < 100 && y + panel.offsetHeight > view.innerHeight - 12) {
+      y = r.top - panel.offsetHeight - 4
+    }
     panel.style.left = Math.max(8, Math.min(x, view.innerWidth - panel.offsetWidth - 12)) + 'px'
     panel.style.top = Math.max(8, Math.min(y, view.innerHeight - panel.offsetHeight - 12)) + 'px'
   }
@@ -127,7 +130,7 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
     const saved = choices; show('suggest'); choices = saved
     const list = doc.createElement('div'); list.id = listId; list.setAttribute('role', 'listbox'); panel.appendChild(list)
     choices.forEach((item, index) => {
-      const b = button(item.text, () => accept(index), list); b.className = 'awd-wa-option'; b.id = listId + '-' + index
+      const b = button(item.displayText || item.text, () => accept(index), list); b.className = 'awd-wa-option'; b.id = listId + '-' + index
       b.setAttribute('role', 'option'); b.setAttribute('aria-selected', String(index === active))
       const sub = doc.createElement('small'); sub.textContent = `${t[item.kind] || item.kind} · ${item.source === 'document' ? t.current : t[item.scope] || item.scope}`; b.appendChild(sub)
     })
@@ -243,7 +246,7 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
       }
       label.appendChild(check); label.appendChild(doc.createTextNode(' ' + t[name])); panel.appendChild(label)
     }
-    button(t.manage, manage); button(t.refresh, async () => { const gen = generation; await rpc('refresh'); if (!disposed && gen === generation) settings() }); position()
+    button(t.manage, manage); button(t.refresh, async () => { const gen = generation; await rpc('refreshDocument'); if (!disposed && gen === generation) settings() }); position()
   }
   async function manage() {
     invalidate(); const gen = generation
@@ -296,6 +299,10 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
   const startComposition = () => { composing = true; invalidate({ flush: false }) }
   const endComposition = () => { composing = false }
   const moved = () => invalidate()
+  const cursorMoved = () => {
+    invalidate({ flush: false })
+    if (!disposed && !composing && config.enabled && config.writable && doc.activeElement === input) timer = setTimeout(suggest, 160)
+  }
   const blur = (e) => { if (!root.contains(e.relatedTarget || doc.activeElement)) invalidate() }
   const refreshOnFocus = () => {
     if (disposed || !config.writable || !config.session || Date.now() - lastRefreshAt < 30000) return
@@ -314,7 +321,7 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
   input.addEventListener('contextmenu', contextMenu)
   doc.addEventListener('mousedown', pointer, true)
   root.addEventListener('keydown', panelKeydown)
-  return { committed, keydown, invalidate,
+  return { committed, keydown, invalidate, cursorMoved,
     destroy() {
       if (disposed) return
       flushLearning(); disposed = true; clearTimeout(timer); clearTimeout(learningTimer); unsub()

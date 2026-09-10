@@ -228,22 +228,9 @@ export const librePoolMethods = {
         return allOk
     },
 
-    // (#79) 文档内超链接点击：编辑器把 LO 的 window.open 经 lo-relay 转发上来。
-    // 内部链接（包装 https 或裸 checkba:）走 __checkbaHandleInternalLink（关联
-    // 文件/网核定位，含解包），普通网页开工作区浏览器 tab。
-    onLibreOpenUrl(url) {
-      const u = String(url || '')
-      if (!u) return
-      const isWrapped = this.WPS_INTERNAL_HTTP_LINK_BASE && u.startsWith(this.WPS_INTERNAL_HTTP_LINK_BASE)
-      if (isWrapped || u.startsWith('checkba:')) {
-        try {
-          if (typeof window !== 'undefined' && window.__checkbaHandleInternalLink) window.__checkbaHandleInternalLink(u)
-        } catch (e) {
-          console.error('内部链接处理失败:', e)
-        }
-        return
-      }
-      if (/^https?:\/\//i.test(u)) this.openBrowserTab(u)
+    // 正文 Cmd/Ctrl 点击统一预览；由用户在浮窗中明确选择分屏查看。
+    onLibreOpenUrl(payload) {
+      this.openDocumentLinkPreview(payload)
     },
     onLibreClose(executor) {
         // An inline pool editor unmount (tab close / LRU evict) emits its

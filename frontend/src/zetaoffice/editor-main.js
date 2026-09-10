@@ -17,6 +17,7 @@
 // browser) can drive it the same way the host will.
 
 import { startEditorEndpoint } from '../composables/zetaOfficeEditorEndpoint.js'
+import { attachDocumentLinkClicks } from '../composables/zetaOfficeLinkClick.js'
 import { attachImeOverlay } from '../composables/zetaOfficeImeOverlay.js'
 import { attachWritingAssistance } from '../composables/zetaOfficeCompletion.js'
 import { attachInlineReview } from '../composables/zetaOfficeInlineReview.js'
@@ -337,55 +338,15 @@ startEditorEndpoint({
   },
 }).then((endpoint) => {
   console.log('[zeta-editor] endpoint ready — serving host over transport')
-  // (#79 click-to-open) LO WASM never calls window.open on hyperlink clicks
-  // (real-machine verified on v0.7.1) — the hook above only covers hypothetical
-  // engine-initiated opens. The working seam: a plain positioning click moves
-  // the LO cursor; ask the worker what link the cursor landed in and forward it.
-  // Guards: primary button only, no drag-selection (>5px move), 800ms cooldown,
-  // and the worker returns '' for non-collapsed cursors (double-click selection).
-  // 光标邻域上报要用同一个 executor（订阅打开后才会真的调用它）
   insightExecutor = endpoint.executor
-  // 引擎起来后把 AppBackground 调成当前主题的工作区色（浅色也要调：LO 默认灰
-  // 与宿主 --awd-canvas 不同色，会在画布边缘露出异色缝）
   themeExecutor = endpoint.executor
   applyTheme(currentTheme)
-  try {
-    const canvas = document.getElementById('qtcanvas')
-    let downAt = null
-    let lastOpen = 0
-    canvas.addEventListener('mousedown', (ev) => {
-      // 修饰键只能从**原生** mousedown 上取（本页是真 DOM，不经 uni 的事件重建），
-      // mouseup 上的修饰键在部分输入法/触控板组合下已经被放开了。
-      downAt = ev.button === 0
-        ? { x: ev.clientX, y: ev.clientY, metaKey: !!ev.metaKey, ctrlKey: !!ev.ctrlKey }
-        : null
-    }, true)
-    canvas.addEventListener('mouseup', (ev) => {
-      const d = downAt
-      downAt = null
-      if (!d || ev.button !== 0 || ev.shiftKey) return
-      if (Math.abs(ev.clientX - d.x) > 5 || Math.abs(ev.clientY - d.y) > 5) return // drag-selection
-      // let Qt process the click and move the LO cursor first
-      setTimeout(async () => {
-        // (dev-board#182) 依据窗格的正文联动：单击落定后问一次光标邻域。
-        // 与超链接那条并行、互不阻塞（两者都是只读原语，谁先回来都不影响对方）。
-        // clientX/clientY 是**客体页视口**里的坐标（mousedown 记下的那一对，
-        // 不用 mouseup 的：拖动被上面 5px 判据挡掉了，两者本来就该一致）。
-        // 宿主 LibreOfficeEditor 收到后按 webview/iframe 的 rect 换算成页面坐标，
-        // 「依据」浮窗据此贴着点击处弹出（dev-board#541）。
-        relayCursorContext({ metaKey: d.metaKey, ctrlKey: d.ctrlKey, clientX: d.x, clientY: d.y })
-        try {
-          const r = await endpoint.executor.executeCommand('get_hyperlink_at_cursor', {})
-          if (r && r.success && r.url) {
-            const now = Date.now()
-            if (now - lastOpen < 800) return
-            lastOpen = now
-            hostTransport.send({ __lo: 'lo-relay', type: 'open-url', url: String(r.url) })
-          }
-        } catch (e) { /* ignore */ }
-      }, 150)
-    }, true)
-  } catch (e) { console.error('[zeta-editor] link-click seam failed:', e) }
+  attachDocumentLinkClicks({
+    canvas: document.getElementById('qtcanvas'),
+    execute: (action, params) => endpoint.executor.executeCommand(action, params),
+    send: message => hostTransport.send(message),
+    cursorContext: meta => relayCursorContext(meta),
+  })
   // Tell the host the office endpoint is booted and serving (serveExecutor is now
   // subscribed). The host (createRelayExecutor onReady) waits for this before
   // pushing load_document — sending it earlier would drop it (no subscriber yet,
@@ -401,6 +362,7 @@ startEditorEndpoint({
     overlay = attachImeOverlay({
       canvas: document.getElementById('qtcanvas'),
       commit: (text) => endpoint.executor.executeCommand('insert_at_cursor', { text }),
+      getCursorRaw: () => endpoint.executor.executeCommand('get_cursor_rect', {}),
       // Control keys: the overlay swallows keystrokes (it IS the focused input),
       // so Enter/Backspace/arrows must be forwarded to the worker explicitly.
       // The worker actions (insert_paragraph/delete_backward/move_cursor) have
@@ -409,7 +371,7 @@ startEditorEndpoint({
       onEnter: () => endpoint.executor.executeCommand('insert_paragraph', {}),
       sendCommand: (action, params) => endpoint.executor.executeCommand(action, params),
       // 覆盖层每做完一个移动光标的动作就报一声，宿主据此刷新工具栏激活态
-      onCursorMoved: () => { relaySelection(); inlineReview?.cursorMoved() },
+      onCursorMoved: () => { relaySelection(); writingAssistance?.cursorMoved(); inlineReview?.cursorMoved() },
       onCommitted: (text) => { writingAssistance?.committed(text); inlineReview?.committed(text) },
       onAssistanceKey: (event) => writingAssistance?.keydown(event) || false,
       onLog: (m) => { console.log('[zeta-editor]', m); if (VERIFY) vlog(m) },

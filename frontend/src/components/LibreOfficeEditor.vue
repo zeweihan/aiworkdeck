@@ -760,7 +760,8 @@ export default {
         } else if (msg.type === 'writing-request') {
           if (this._writingHost) this._writingHost.handle(msg)
         } else if (msg.type === 'open-url' && msg.url) {
-          this.$emit('open-url', String(msg.url))
+          this.$emit('open-url', { url: String(msg.url), target: msg.target || null,
+            fileId: this.file && this.file.id, meta: this.withHostPoint(msg.meta) })
         } else if (msg.type === 'modified') {
           this.onDocModified()
         } else if (msg.type === 'selection') {
@@ -1354,6 +1355,7 @@ export default {
       // 它描述的是即将被替换掉的旧文档，标脏只会让 autosave 把旧内容传回去。
       if (this._reloading || this._saveDiscarded) return
       this.dirty = true
+      this._writingHost?.modified()
       this._inlineReviewHost?.modified()
       if (!this._dirtySince) this._dirtySince = Date.now()
       this.scheduleAutoSave()

@@ -291,13 +291,13 @@ try {
   // 桌面（免登）语境。evaluateOnNewDocument 注册的最小桩对之后每个新文档生效，
   // 全程保持——这正是新基线（桌面=免登）的浏览器映射。
   console.log('== J1 首启解锁门 ==')
-  await page.evaluateOnNewDocument(() => {
-    window.checkbaDesktop = { shell: { openExternal: () => Promise.resolve() } }
+  await page.evaluateOnNewDocument((apiBase) => {
+    window.checkbaDesktop = { apiBaseUrl: apiBase, shell: { openExternal: () => Promise.resolve() } }
     // 中文基线钉死：utils/appLanguage.js 首启会按 navigator.language 猜语言，
     // 全新 profile 在英文 locale 机器/CI 上会整套翻成英文导致中文断言全线假红。
     // 显式写语言键（uni h5 的 getStorageSync 兼容裸字符串）。
     try { localStorage.setItem('awd_app_language', 'zh-CN') } catch (e) { /* ignore */ }
-  })
+  }, BACKEND)
 
   // 后端的解锁门形态。trialCodeEnabled=false 是发版默认值（官方版必须账户登录）；
   // 缺字段 = 旧后端，按 true 处理，与改动前行为一致。

@@ -125,28 +125,29 @@ export const evidenceLinkMethods = {
   },
 
   // 文档里点击 filelink 链接（两条入口 onLibreOpenUrl / __checkbaHandleInternalLink 都汇到这里）
-  handleFileLinkClick(rawUrl) {
+  handleFileLinkClick(rawUrl, preview = null) {
     const parsed = parseFileLinkUrl(rawUrl)
     if (!parsed || !this.projectId) return false
+    if (!preview) {
+      this.openDocumentLinkPreview(rawUrl)
+      return true
+    }
     const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
-    const side = this.focusedPane === 'right' && this.splitMode ? 'right' : 'left'
+    preview.loading = true
     getEvidenceLink(pid, parsed.linkKey)
       .then((resp) => {
+        if (!this.isDocumentLinkPreviewCurrent(preview)) return
         const view = unwrap(resp)
-        const targets = (view && Array.isArray(view.targets)) ? view.targets : []
-        if (targets.length === 0) {
-          uni.showToast({ title: this.$t('workbench.linkedFileMissing'), icon: 'none' })
-          return
-        }
+        const targets = view && Array.isArray(view.targets) ? view.targets : []
         const hit = pickEvidenceTarget(view, parsed.targetId)
-        if (hit) {
-          this.openFileLinkTarget(hit, side)
-          return
-        }
-        this.fileLinkPicker = { visible: true, side, targets, linkKey: parsed.linkKey }
+        preview.loading = false
+        preview.targets = hit ? [hit] : targets
+        if (!preview.targets.length) preview.error = this.$t('workbench.linkedFileMissing')
       })
       .catch((e) => {
-        uni.showToast({ title: (e && e.message) ? e.message : this.$t('workbench.openFailed'), icon: 'none' })
+        if (!this.isDocumentLinkPreviewCurrent(preview)) return
+        preview.loading = false
+        preview.error = e?.message || this.$t('workbench.openFailed')
       })
     return true
   },
@@ -162,21 +163,41 @@ export const evidenceLinkMethods = {
     return method ? this.$t('workbench.evidence.method.' + method) : ''
   },
   // target = TargetView {id, fileId, file, locator, ...}
-  async openFileLinkTarget(target, sideOverride = null) {
+  async openFileLinkTarget(target, sideOverride = null, { preview = null } = {}) {
     const fid = Number(target && target.fileId)
     if (!fid || !this.projectId) return
     const side = sideOverride || this.fileLinkPicker.side || 'left'
+    if (preview && !this.isDocumentLinkPreviewCurrent(preview)) return
     this.closeFileLinkPicker()
     try {
       if (target.file && target.file.isDeleted) throw new Error(this.$t('workbench.fileMissing'))
       const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
       const file = await getFileDetail(pid, fid)
+      if (preview && !this.isDocumentLinkPreviewCurrent(preview)) return
       if (!file) throw new Error(this.$t('workbench.fileMissing'))
+      if (preview) {
+        // openFile deduplicates toward the pane already holding B. Move that
+        // background tab first so it cannot reactivate B over source A.
+        const sourceList = preview.sourceSide === 'left' ? this.leftFiles : this.rightFiles
+        const existing = sourceList.find(f => Number(f.id) === fid)
+        if (existing) {
+          const saved = await this.flushTabBeforePaneMove(existing.id, preview.sourceSide)
+          if (!this.isDocumentLinkPreviewCurrent(preview)) return
+          if (!saved) throw new Error(this.$t('editor.moveTabSaveFailed'))
+        }
+        this.closeDocumentLinkPreview()
+        this.splitMode = true
+        if (existing && sourceList.includes(existing)) this.moveTabTo(existing.id, preview.sourceSide, side, null)
+      }
       const old = this.focusedPane
       this.focusedPane = side === 'right' && this.splitMode ? 'right' : 'left'
       this.openFile(file, { locator: target.locator || null })
       this.focusedPane = old
     } catch (e) {
+      if (preview) {
+        if (this.isDocumentLinkPreviewCurrent(preview)) preview.error = e.message || this.$t('workbench.openFailed')
+        return
+      }
       uni.showToast({ title: e.message || this.$t('workbench.openFailed'), icon: 'none' })
     }
   },

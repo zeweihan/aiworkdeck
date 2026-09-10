@@ -136,3 +136,59 @@ test('拉丁匹配不区分大小写，但当前协议只返回可由原文 star
   const [match] = matchCompletionItems('Con', [{ text: 'Contract', kind: 'WORD' }])
   assert.equal(match.prefix, 'Con')
 })
+
+test('法律叙述中的公司名称不包含名册、记载或出资角色前缀', () => {
+  const text = '股东名册中青岛致衡贸易有限公司持股40%。股东名册记载青岛华为贸易有限公司。出资人为青岛向阳贸易有限公司。'
+  const entries = extractCompletionEntries(text, { segmenter: null })
+  assert.deepEqual(byKind(entries, 'COMPANY'), ['青岛致衡贸易有限公司', '青岛华为贸易有限公司', '青岛向阳贸易有限公司'])
+  assert.equal(matchCompletionItems('青岛致', entries)[0]?.text, '青岛致衡贸易有限公司')
+})
+
+test('持股出资叙述收录原文人名，普通主语和机构不能猜成人名', () => {
+  const text = '《公司章程》记载韩明远持股60%。股东张三实际出资600万元。出资人欧阳明认缴100万元。章程记载公司持股60%。股东均已出资。股东依法出资。记载企业出资。青岛致衡贸易有限公司持股40%。'
+  const entries = extractCompletionEntries(text, { segmenter: null })
+  assert.deepEqual(byKind(entries, 'PERSON'), ['韩明远', '张三', '欧阳明'])
+  assert.equal(matchCompletionItems('韩明', entries)[0]?.text, '韩明远')
+  assert.ok(entries.filter(x => x.kind === 'PERSON').every(x => text.includes(x.text)))
+})
+
+test('较大文档预算保留多类别候选，而非前50个公司占满全部位置', () => {
+  const text = Array.from({ length: 510 }, (_, i) => `北京示例${i}有限公司。`).join('') + '《民法典》第五百零九条。姓名：韩明远。'
+  const entries = extractCompletionEntries(text, { segmenter: null, limit: 500 })
+  assert.equal(entries.length, 500)
+  assert.ok(byKind(entries, 'LAW').includes('《民法典》'))
+  assert.ok(byKind(entries, 'PERSON').includes('韩明远'))
+  assert.ok(byKind(entries, 'ARTICLE').includes('《民法典》第五百零九条'))
+})
+
+test('裸法规名补全使用配对去括号的插入文本并保留原文与资料元数据', () => {
+  const item = { text: '《民法典》', kind: 'LAW', entityId: 17, hasDetail: true, id: 'insight:17' }
+  const bare = matchCompletionItems('依据民法', [item])[0]
+  assert.equal(bare?.text, '民法典')
+  assert.equal(bare.prefix, '民法')
+  assert.equal(bare.displayText, '《民法典》')
+  assert.equal(bare.entityId, 17)
+  assert.equal(bare.hasDetail, true)
+  assert.equal(bare.id, 'insight:17')
+  const bracketed = matchCompletionItems('依据《民法', [item])[0]
+  assert.equal(bracketed.text, '《民法典》')
+  assert.equal(bracketed.prefix, '《民法')
+  assert.deepEqual(matchCompletionItems('依据民法典', [item]), [])
+})
+
+test('条款前缀可独立补全，显示完整法源且保留同条号的不同法规', () => {
+  const items = [
+    { text: '《公司法》第二十条', kind: 'ARTICLE', entityId: 1 },
+    { text: '《民法典》第二十条', kind: 'ARTICLE', entityId: 2 },
+  ]
+  const matches = matchCompletionItems('依据第二十', items)
+  assert.deepEqual(matches.map(x => x.text), ['第二十条', '第二十条'])
+  assert.deepEqual(matches.map(x => x.displayText), ['《公司法》第二十条', '《民法典》第二十条'])
+  assert.deepEqual(matches.map(x => x.entityId), [1, 2])
+  assert.equal(matchCompletionItems('依据公司法第二十', items)[0]?.text, '公司法第二十条')
+})
+
+test('出资叙述中的短机构名和普通主语不成为人名', () => {
+  const text = '股东甲公司持股60%。股东北京银行出资600万元。记载全体股东出资。股东韩明远出资600万元。'
+  assert.deepEqual(byKind(extractCompletionEntries(text, { segmenter: null }), 'PERSON'), ['韩明远'])
+})
