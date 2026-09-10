@@ -89,11 +89,11 @@ class OrchestratorReplayEvalTest {
         assertTrue(lastEnd.contains(c.expect.bubbleEndStatus),
                 "bubble_end status 应为 [" + c.expect.bubbleEndStatus + "]，实际: " + lastEnd);
 
-        // 5. 是否向 LLM 提供工具规格（ASK 模式应为 false）
+        // 5. 是否向 LLM 提供工具规格（ASK 模式只提供只读记忆工具）
         if (c.expect.toolsOffered != null) {
             for (int i = 0; i < r.toolsOfferedPerLlmCall().size(); i++) {
                 assertEquals(c.expect.toolsOffered, r.toolsOfferedPerLlmCall().get(i),
-                        "第 " + (i + 1) + " 次 LLM 调用的 toolsOffered 不符（ASK 模式不应携带工具）");
+                        "第 " + (i + 1) + " 次 LLM 调用的 toolsOffered 不符");
             }
         }
 
@@ -102,7 +102,7 @@ class OrchestratorReplayEvalTest {
             for (int i = 0; i < r.toolNamesOfferedPerLlmCall().size(); i++) {
                 List<String> offered = r.toolNamesOfferedPerLlmCall().get(i);
                 if (offered.isEmpty()) {
-                    continue; // 未携带工具的调用（如 ASK 模式）不参与该断言
+                    continue; // 未携带工具的调用不参与该断言
                 }
                 for (String name : c.expect.offeredToolsInclude) {
                     assertTrue(offered.contains(name),

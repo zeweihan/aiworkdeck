@@ -81,6 +81,7 @@ not enable the retired trial-code switch.
 ```bash
 export AWD_E2E_ROOT="$(mktemp -d /tmp/aiworkdeck-e2e.XXXXXX)"
 mkdir -p "$AWD_E2E_ROOT/home/.aiworkdeck" "$AWD_E2E_ROOT/backend"
+cp "$AWD_JAR" "$AWD_E2E_ROOT/backend.jar"
 cp -R "$AWD_REPO/backend/skills" "$AWD_E2E_ROOT/skills"
 cp -R "$AWD_REPO/backend/plugins" "$AWD_E2E_ROOT/backend/plugins"
 cat > "$AWD_E2E_ROOT/home/.aiworkdeck/license.json" <<'EOF'
@@ -91,7 +92,7 @@ chmod 600 "$AWD_E2E_ROOT/home/.aiworkdeck/license.json"
   cd "$AWD_E2E_ROOT/backend"
   SECURITY_BROWSER_PROXY_E2E_ALLOWED_HOSTS=127.0.0.1 \
   AI_SKILLS_BUILTIN_DIR="$AWD_E2E_ROOT/skills" "$JAVA_HOME/bin/java" \
-    -Duser.home="$AWD_E2E_ROOT/home" -jar "$AWD_JAR" \
+    -Duser.home="$AWD_E2E_ROOT/home" -jar "$AWD_E2E_ROOT/backend.jar" \
     --server.port=9797 --spring.profiles.active=desktop \
     '--spring.datasource.url=jdbc:h2:file:'"$AWD_E2E_ROOT"'/db;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;NON_KEYWORDS=VALUE'
 ) > "$AWD_E2E_ROOT/backend.log" 2>&1 &
@@ -160,6 +161,7 @@ and the names the guard expects:
 ```bash
 export WRITING_E2E_ROOT="$(mktemp -d /tmp/aiworkdeck-writing-e2e.XXXXXX)"
 mkdir -p "$WRITING_E2E_ROOT/home/.aiworkdeck" "$WRITING_E2E_ROOT/backend"
+cp "$AWD_JAR" "$AWD_E2E_ROOT/backend.jar"
 cp -R "$AWD_REPO/backend/skills" "$WRITING_E2E_ROOT/skills"
 cp -R "$AWD_REPO/backend/plugins" "$WRITING_E2E_ROOT/backend/plugins"
 cp -R "$AWD_REPO/frontend/dist/zetaoffice" "$WRITING_E2E_ROOT/frontend/dist/zetaoffice"

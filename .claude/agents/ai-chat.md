@@ -28,7 +28,7 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
   - **点开一条历史 → 进工作台并打开它**：概览页 `reLaunch` 到工作台时带 `conversationId` query，工作台 `onLoad` 读到后调既有 `loadHistoryChat({ conversationId })`（`pages/project-overview/project-overview.vue:4729`）。那个方法内部要 `$refs.chatInterface.loadMessages(...)`，**必须在 mounted 且 AI 面板已渲染之后调**；它同时会清掉该会话的未读蓝点、并带竞态防护（快速切换时丢弃已不是当前会话的旧响应）。概览页本身**绝不内嵌 ChatInterface**——`loadHistoryChat` 是完整切换会话，会在用户还没进工作台时就抢占当前会话。
 - **「智慧助手」（AiAssistantConfig / AiAssistantService / `GET /assistants`）已于 2026-08-19 整体移除**：生产库 `ai.assistants` 只有四条从未被真配置过的远古脚手架默认值，功能从未生效——`assistantId` 在前端 `useAgentStream.sendMessage` 组装 payload 时就被丢弃，后端从不消费。裁决为不做数据迁移的干净删除；system_setting 里遗留的 `ai.assistants` 行不清理（不读不写即废弃）。
 - **conversationId 服务端签发**（安全审计遗留 + Office 插件 Phase D）：`controller/ai/ConversationIssuanceController.java` `POST /api/agent/conversations` body `{projectId}` → `{"conversationId":"conv-<毫秒>-<16位随机base64url>"}`（鉴权 + hasReadPermission）。登记簿 `service/ai/ConversationIssuanceService.java`（内存 Map，惰性 24h 过期）；`ProjectAiMessageService.canUseConversation` 开头先查登记——签发给谁就归谁，关掉「空会话首条消息落库前任何登录用户可抢占」的窗口。开关 `security.conversation-issuance-required`（默认 false）：true（官方云配）时**尚无消息**的未登记会话一律拒绝（已有消息仍按 DB 归属，进程重启丢登记不影响历史）；local-mode 恒不强制，桌面自造 conv-毫秒 ID 流程不变。
-- `service/ai/AgentOrchestrator.java`（1381 行）— **编排器**：handleUserMessage（@Async("taskExecutor")）+ runLoop（递归）。RunGuard：打转检测（StuckDetector 滑动窗口，先干预后熔断）、连续失败提示=3、步数预算 `maxLoopDepthFor()`（常规 MAX_LOOP_DEPTH=30；**整篇分段过卷进行中抬到 `min(30+块数,120)`**，只读 `OfficePassStateStore.totalChunks`，dev-board#422）、故障转移已试模型集。工具分发 dispatchTool、artifact/<title> 处理、检查点触发、反问停机（见下文「一条消息的完整链路」）。
+- `service/ai/AgentOrchestrator.java` — 编排器：持久化 inbox 受理、每会话串行消费、工具边界插入新指令。普通 30 轮/过卷 120 轮/subagent 6 轮固定上限已移除；每 64 轮切出同步调用栈，保留取消、超时、资源并发、压缩及真实无进展暂停。`StuckDetector` 同时比较工具调用与结果，变化中的轮询不按重复失败处理。详见下方 2026-09-10 契约。
 - `service/ai/AgentStreamHandler.java`（493 行）— StreamingResponseHandler：token 流→SSE；<bubble_type>/<artifact> 边界解析缓冲、编辑器流过滤、token 用量上报。每次 runLoop 新建实例。
 - `service/ai/AgentRunStateService.java` — 每会话运行状态登记簿：RUNNING/PAUSED/AWAITING_APPROVAL/**AWAITING_INPUT**/FINISHED/ERROR/CANCELLED/**INTERRUPTED**。内存 map 是快路径，同时写透 `agent_run_record` 表（entity `model/entity/AgentRunRecord`，ddl-auto 自动建表；DB 写失败只 log 不阻断）。**新增终止分支必打状态点**（PR#173 状态机契约）。
   - **AWAITING_INPUT = 模型反问（`<question>` 标签）等用户回答**，SSE `bubble_end` 的 status 字面量是 `awaiting_input`。刻意不复用 AWAITING_APPROVAL：会话列表要把「待回答」与「待审批」显示成两种文案。停机语义与审批完全一致——答案是**下一轮普通用户消息**，不做阻塞式挂起（工具分发在流式回调线程上，撞 600s callTimeout 与 180s 看门狗；用户关掉 app 明天再来那一轮必死）。
@@ -191,6 +191,16 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 - **后台任务可见性**：三个后台任务事件（background_task_start / task_progress / background_task_complete）已提到气泡守卫**之前**并各自 return——挂在守卫后面时，切回会话/重连后 `currentAssistantBubble` 为 null，表现是「重连后进度条再也不动」。完成态**不再 5 秒自动销毁**（改为打 `completedAt`），生命周期由 `resetSSE`（切会话清已结束的）与导出的 `dismissBackgroundTask(taskId)` 管；`BackgroundTaskIndicator` 因此必须给已结束的卡一个关闭入口（`@dismiss` → dismissBackgroundTask），否则那张卡关不掉。建连后 fire-and-forget 补拉 `GET /api/agent/tasks/active` 重建进度条。
 - `step_update` 前端分派与 `handleStepUpdate` **已删**（后端零生产者）。`subtask_progress` 改推 `proc.items` 而不是 `proc.steps`——ProcessCard 里 items 与 steps 是 v-if/v-else-if 关系，解析器建的过程卡都有 items，往 steps 推永远不显示（此前子任务状态行就是这么半死的）。
 - **计划审批卡（2026-08）**：ArtifactCard 对 task_list/plan/implementation_plan 三类 draft 计划内联渲染正文并给「按此推进 / 修订」按钮（仅最新一条助手消息可操作，RootBubble 的 isLatest→actionable 链）；修订态就地编辑，提交时行级 LCS 统计改动处数，handleArtifactApprove 把「已修订 N 处 + 修订版全文」回喂模型。工具过程卡一律收进可折叠组（无步骤归属的归「执行过程」组），流式中展开最新组、结束后全收起。
+
+## 2026-09-10 记忆与运行中输入（dev-board #559–563）
+
+- `AgentInboxService` / `AgentInboxController` / `AgentInboxItem` 以 DB 保存输入、完整附件上下文、幂等键及 revision。`POST /api/agent/chat` 返回 receipt，正在运行时默认 steer，可选 queue；编辑/排序/删除只针对 pending。删除保留幂等 tombstone。每会话锁覆盖 claim/register/finalize，模型执行在锁外；目前单后端消费，不能将进程锁当成多实例租约。
+- `inbox_updated` 是权威快照；`input_applied` 携带 messageId/runId/sequence。最初 POST 靠 receipt 显示，不重复发 applied；自动接续先发新 run 快照再发 applied。原生/XML 工具批次在安全边界应用新指令，未开始的旧工具回填取消结果；已经执行的副作用保留。取消/错误/待审批/待回答/无进展均暂停队列；只有明确“立即发送”才主动启动暂停队列中的该项。
+- 前端 `AgentInbox.vue`、`agentInboxState.mjs` 与 `chatSubmissionState.mjs` 管理队列、事件去重和提交事务。发送与停止分开，执行中可输入；新会话只断开本地视图，旧会话继续。迟到 receipt 不得清空新会话草稿；附件草稿按原始 HTML 快照比较。
+- `service/ai/memory/document/*`、`MemoryDocumentController`、`MemoryDocument`/`MemoryDocumentSpace` 是 Markdown 记忆真源。`/api/ai/memory/{spaces,files,file,download}`；个人/项目使用权限校验后的 opaque spaceId，团队/律所由官网共享服务校验成员/管理员。每空间 remember.md 自动维护 topic 链接；UTF-8 128 KiB、路径校验、expectedRevision 冲突及删除墓碑由后端负责。legacy 读写/同步向同一文档服务收敛，不保留可独立写入的副本。
+- `MemoryTools` 暴露 memory_list/read/search/write/edit/delete；Agent/Plan 的 skill 白名单不能隐藏这些基础工具，ASK 只允许前三个。ContextAssembler 每轮注入有权限的限量索引，正文按需由模型读取。`MemoryBrowser.vue` 从对话与设置进入，支持索引跳转、编辑、下载及冲突提示。
+- 桌面共享记忆使用已连接账户 Bearer；服务器使用专用 `memory.shared.base-url`/`memory.shared.secret` 与绑定账户 ID，不能复用只读协作目录密钥。官网配套契约与 PR 见 `doc/ai-alignment/memory-report.md`；无账户/服务未配置的共享空间显示不可用，不能伪装成本地共享。
+- 测试与实际结果：`doc/ai-alignment/validation-report.md`；隔离运行配方：`doc/ai-alignment/test-environment.md`。不可将模拟 provider E2E 称为真实模型测试。
 
 ## 一条消息的完整链路
 

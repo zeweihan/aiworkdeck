@@ -70,6 +70,12 @@ const NAMES = {
   tag_file: { zh: '给文件打标签', en: 'Tag file' },
   tag_remove_from_file: { zh: '移除文件标签', en: 'Untag file' },
   // 记忆
+  memory_list: { zh: '查看记忆目录', en: 'List memories' },
+  memory_read: { zh: '读取记忆', en: 'Read memory' },
+  memory_search: { zh: '搜索记忆', en: 'Search memory' },
+  memory_write: { zh: '写入记忆', en: 'Write memory' },
+  memory_edit: { zh: '修改记忆', en: 'Edit memory' },
+  memory_delete: { zh: '删除记忆', en: 'Delete memory' },
   save_memory: { zh: '保存记忆', en: 'Save memory' },
   query_memory: { zh: '检索记忆', en: 'Query memory' },
   retrieve_evidence: { zh: '检索证据', en: 'Retrieve evidence' },
