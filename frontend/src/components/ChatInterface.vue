@@ -244,21 +244,37 @@
        </view>
     </view>
 
-    <!-- 2. Message List (Single Source of Truth: bubbles) -->
-    <scroll-view
+    <TurnActivityPanel
+      v-if="chatTurns.length"
+      :key="currentConversationId || 'new-chat'"
+      ref="activityPanel"
+      :turns="chatTurns"
+      :is-streaming="isStreaming"
+      @navigate="navigateToMessage"
+    />
+
+    <!-- Replies stay in the transcript; task/thinking/tool details share one fixed panel. -->
+    <div
       v-if="bubbles.length > 0 || isStreaming"
       class="message-list"
-      scroll-y
-      :scroll-top="scrollTop"
-      :scroll-with-animation="true"
+      ref="messageList"
+      @scroll="handleMessageScroll"
     >
-      <view class="message-list-content">
+      <view ref="messageContent" class="message-list-content">
+        <view v-for="turn in chatTurns" :key="turn.key" class="conversation-turn">
         <view
-          v-for="(msg, index) in bubbles"
+          v-for="{ bubble: msg, index } in (turn.user ? [turn.user, ...turn.assistants] : turn.assistants)"
           :key="msg.id || index"
+          :data-message-index="index"
+          v-show="msg.role === 'USER' || index === turn.assistants[0]?.index || msg.content || msg.artifacts?.length || msg.question || msg.stopNotice"
           class="message-row"
           :class="msg.role.toLowerCase()"
         >
+        <button v-if="index === turn.assistants[0]?.index" class="turn-activity-link" @click="openTurnActivity(turn.key)">
+          {{ $t('chat.activityOpenDetails') }}
+          <span v-if="turn.processes.length"> · {{ turn.processes.length }}</span>
+          <span aria-hidden="true"> ↗</span>
+        </button>
           <!-- User Message -->
           <div v-if="msg.role === 'USER'" class="user-bubble">
             <!-- Image Thumbnails (above message) -->
@@ -292,6 +308,8 @@
           <div v-else-if="msg.role === 'ASSISTANT'" class="assistant-root-wrapper">
              <RootBubble
                :bubble="msg"
+               :hide-activity="true"
+               :reply-label="index === turn.answerIndex ? $t('chat.activityReply') : $t('chat.activityUpdate')"
                :is-latest="index === bubbles.length - 1"
                @open-artifact-tab="handleArtifactOpenTab"
                @approve="handleArtifactApprove"
@@ -302,7 +320,11 @@
           </div>
         </view>
       </view>
-    </scroll-view>
+      </view>
+    </div>
+    <view v-if="bubbles.length && !followLatest" class="return-to-latest">
+      <button @click="scrollToBottom">{{ $t('chat.activityBackToLatest') }} ↓</button>
+    </view>
 
     <!-- 3. Integrated Empty & Input Layout -->
     <view v-if="bubbles.length === 0 && !isStreaming" class="empty-flow-container">
@@ -707,6 +729,9 @@
 
 <script>
 import RootBubble from './AgentMessage/RootBubble.vue'
+import TurnActivityPanel from './AgentMessage/TurnActivityPanel.vue'
+import { buildChatTurns, recoverPlanTodos } from './AgentMessage/chatTurns.mjs'
+import { useChatReadingPosition } from '@/composables/useChatReadingPosition.js'
 import BackgroundTaskIndicator from './BackgroundTaskIndicator.vue'
 import AgentInbox from './AgentInbox.vue'
 import MemoryBrowser from './MemoryBrowser.vue'
@@ -732,7 +757,7 @@ import {
 
 export default {
   name: 'ChatInterface',
-  components: { RootBubble, BackgroundTaskIndicator, AgentInbox, MemoryBrowser, OptionalComponentCard },
+  components: { RootBubble, BackgroundTaskIndicator, AgentInbox, MemoryBrowser, OptionalComponentCard, TurnActivityPanel },
   props: {
     projectId: String,
     projectName: String,
@@ -924,7 +949,16 @@ export default {
       followUpMode.value = uni.getStorageSync('awd_agent_follow_up_mode') === 'queue' ? 'queue' : 'steer'
     } catch (e) { /* storage unavailable */ }
     const pendingInbox = computed(() => pendingInboxItems(inboxState))
-    const scrollTop = ref(0)
+    const messageList = ref(null)
+    const messageContent = ref(null)
+    const activityPanel = ref(null)
+    const chatTurns = computed(() => buildChatTurns(bubbles.value, {
+      isStreaming: isStreaming.value, runStatus: agentRunStatus.value
+    }))
+    const { followLatest, handleMessageScroll, scrollToBottom, navigateToMessage } = useChatReadingPosition(messageList, messageContent)
+    const openTurnActivity = (key) => activityPanel.value?.openTurn(key)
+    watch(currentConversationId, () => { followLatest.value = true })
+
     const isDragging = ref(false)
 
     // Context Files (for drag-drop file context)
@@ -1374,25 +1408,10 @@ export default {
       }
     }
 
-    // Scroll to bottom when bubbles change
+    // Follow new messages only while the reader is already at the bottom.
     watch(() => bubbles.value.length, () => {
-       scrollToBottom()
+      if (followLatest.value) scrollToBottom()
     })
-    // 曾经有一个 `watch(bubbles, () => {}, { deep: true })`：回调体是空的（注释也
-    // 写着"for now simple trigger"），从来没做任何事。deep watch 每次触发都要把
-    // bubbles 整棵响应式对象图（含全部消息/工具输出/artifact）重新遍历一遍来
-    // 重建依赖追踪，而流式回答的每一个 token 都会命中它（currentAssistantBubble
-    // 的 content 在 SSE 每个 chunk 都会变）——对话越长这个空转的代价越大，长
-    // 工具调用/长回答期间会明显卡顿。上面那条浅层 watch（只看 length）已经覆盖
-    // "新气泡出现要滚到底"，这条 deep watch 删掉不改变任何行为，纯粹省掉这份
-    // 空转开销。
-
-    const scrollToBottom = () => {
-       nextTick(() => {
-         scrollTop.value += 10000
-       })
-    }
-
 
     // --- PPT Config Logic ---
     const showPptConfigDialog = ref(false)
@@ -1901,25 +1920,11 @@ export default {
                  remaining = remaining.replace(match[0], '')
               }
 
-              // Extract thinking
-              const thinkingMatch = remaining.match(/<thinking>([\s\S]*?)<\/thinking>/)
-              if (thinkingMatch) {
-                  bubble.thinking.content = thinkingMatch[1]
-                  remaining = remaining.replace(thinkingMatch[0], '')
-              }
-
               // Extract title
               const titleMatch = remaining.match(/<title>([\s\S]*?)<\/title>/)
               if (titleMatch) {
                   bubble.title = titleMatch[1]
                   remaining = remaining.replace(titleMatch[0], '')
-              }
-
-              // Extract <final> tag content -> bubble.content
-              const finalMatch = remaining.match(/<final>([\s\S]*?)<\/final>/)
-              if (finalMatch) {
-                  bubble.content = finalMatch[1].trim()
-                  remaining = remaining.replace(finalMatch[0], '')
               }
 
               // Extract <walkthrough> tag content
@@ -1954,6 +1959,10 @@ export default {
                           status: 'done',
                           text: stepMatch[1].trim()
                       })
+                  }
+
+                  for (const segment of processContent.matchAll(/<thinking>([\s\S]*?)<\/thinking>/g)) {
+                      proc.items.push({ type: 'thinking', status: 'done', content: segment[1], duration: 0 })
                   }
 
                   // Extract <tool_code> and <tool_output> - create tool items
@@ -1994,8 +2003,18 @@ export default {
                   bubble.processes.push(proc)
               }
 
+              const recoveredTodos = recoverPlanTodos(bubble.processes)
+              if (recoveredTodos !== null) bubble.planTodos = recoveredTodos
+
               // Clean up process tags from remaining
               remaining = remaining.replace(/<process[^>]*>[\s\S]*?<\/process>/g, '')
+
+              const rootThoughts = [...remaining.matchAll(/<thinking>([\s\S]*?)<\/thinking>/g)]
+              bubble.thinking.content = rootThoughts.map(m => m[1].trim()).filter(Boolean).join('\n\n')
+              remaining = remaining.replace(/<thinking>[\s\S]*?<\/thinking>/g, '')
+              const replies = [...remaining.matchAll(/<final>([\s\S]*?)<\/final>/g)]
+              bubble.content = replies.map(m => m[1].trim()).filter(Boolean).join('\n\n')
+              remaining = remaining.replace(/<final>[\s\S]*?<\/final>/g, '')
 
               // 反问（<question>）回灌。此前全仓不解析这个标签：落库正文里带着原样标签，
               // 重开会话时整段 <question>…</question> 作为「未标记文本」掉进 bubble.content
@@ -2744,6 +2763,7 @@ export default {
 
     return {
        bubbles,
+       currentConversationId,
        isStreaming,
        componentGateItem,
        componentGateResolved,
@@ -2760,7 +2780,8 @@ export default {
        handleInboxMove,
        handleInboxSendNow,
        tokenUsage,
-       scrollTop,
+       messageList, messageContent, activityPanel, chatTurns,
+       followLatest, handleMessageScroll, navigateToMessage, openTurnActivity, scrollToBottom,
        isDragging,
        contextFiles,
        pastedImages,
@@ -3057,6 +3078,8 @@ export default {
 
 .message-list {
   flex: 1;
+  min-height: 0;
+  overflow-anchor: none;
   overflow-y: auto;
   overflow-x: hidden; /* Prevent horizontal overflow */
   padding: 12px;
@@ -3074,6 +3097,39 @@ export default {
   overflow: hidden; /* Prevent children from overflowing */
 }
 
+.conversation-turn { margin-bottom: 18px; }
+.turn-activity-link {
+  display: block;
+  margin: 0 0 8px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--awd-text-2);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+  text-align: left;
+}
+.turn-activity-link:hover { color: var(--awd-accent-text); }
+.turn-activity-link::after, .return-to-latest button::after { border: 0; }
+.return-to-latest { position: relative; flex-shrink: 0; height: 0; z-index: 5; }
+.return-to-latest button {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 1px solid var(--awd-border);
+  border-radius: 20px;
+  padding: 5px 14px;
+  color: var(--awd-accent-text);
+  background: var(--awd-surface);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .08);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: nowrap;
+  cursor: pointer;
+}
 .message-row {
   margin-bottom: 14px;
   display: flex;

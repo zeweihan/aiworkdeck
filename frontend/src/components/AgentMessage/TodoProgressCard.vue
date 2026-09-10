@@ -1,14 +1,14 @@
 <!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
-  <div class="todo-progress-card" v-if="todos && todos.length > 0">
+  <div class="todo-progress-card" :class="{ 'is-snapshot': !live }" v-if="todos && todos.length > 0">
     <div class="todo-header" @click="isCollapsed = !isCollapsed">
       <div class="todo-header-left">
         <span class="todo-title">{{ $t('chat.taskProgress') }}</span>
         <span class="todo-counter">{{ completedCount }}/{{ todos.length }}</span>
       </div>
       <div class="todo-header-right">
-        <span v-if="currentTodo" class="todo-current-hint">{{ currentTodo.activeForm || currentTodo.content }}</span>
+        <span v-if="currentTodo && live" class="todo-current-hint">{{ currentTodo.activeForm || currentTodo.content }}</span>
         <div class="chevron" :class="{ collapsed: isCollapsed }">
           <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="6 9 12 15 18 9"></polyline>
@@ -24,7 +24,7 @@
           <svg v-else-if="todo.status === 'failed'" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
           <span v-else class="marker-dot"></span>
         </span>
-        <span class="todo-text">{{ todo.status === 'in_progress' ? (todo.activeForm || todo.content) : todo.content }}</span>
+        <span class="todo-text">{{ todo.status === 'in_progress' && live ? (todo.activeForm || todo.content) : todo.content }}</span>
       </div>
     </div>
   </div>
@@ -34,7 +34,8 @@
 import { computed, ref } from 'vue'
 
 const props = defineProps({
-  todos: { type: Array, default: () => [] }
+  todos: { type: Array, default: () => [] },
+  live: { type: Boolean, default: true }
 })
 
 const isCollapsed = ref(false)
@@ -44,6 +45,7 @@ const currentTodo = computed(() => props.todos.find(t => t.status === 'in_progre
 </script>
 
 <style scoped>
+.is-snapshot .marker-spinner { animation: none; }
 .todo-progress-card {
   background: var(--awd-surface);
   border: 1px solid var(--awd-border);

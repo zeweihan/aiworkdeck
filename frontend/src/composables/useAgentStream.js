@@ -158,9 +158,9 @@ export function useAgentStream() {
         thinking: { status: 'idle', content: '', duration: 0, startTime: 0, endTime: 0 },
         title: '',
         processes: [],
-        // 本轮的任务清单快照（plan_update 时写入）：计划卡随消息流内联展示，
-        // 历史消息也能保留自己那轮的计划（planTodos 全局值只代表最新一轮）。
-        planTodos: [],
+        // 延续当前任务清单，后续 plan_update 覆写；固定进度面板按轮保留快照。
+        // TodoListService 约定跨轮保留直到下一次 todo_write，不能在“继续”时清空。
+        planTodos: [...planTodos.value],
         artifacts: [],
         walkthrough: '',
         content: '', // Main Answer (from <final> tag)
@@ -535,13 +535,15 @@ export function useAgentStream() {
             || (bubble.thinking && bubble.thinking.content)
             || (Array.isArray(bubble.processes) && bubble.processes.length)
             || (Array.isArray(bubble.artifacts) && bubble.artifacts.length)
-            || (Array.isArray(bubble.planTodos) && bubble.planTodos.length)
         )
     )
 
     const beginAssistantSegmentAfterAppliedInput = (entry) => {
         if (!entry || !entry.id || appliedAssistantSegments.has(entry.id)) return
         appliedAssistantSegments.add(entry.id)
+        // An applied interjection can arrive before bubble_end: preserve pending text
+        // in its original segment before clearing the parser for the next one.
+        flushRemainingBuffer()
         const previous = currentAssistantBubble.value
         if (previous) {
             if (!assistantHasOutput(previous)) {
