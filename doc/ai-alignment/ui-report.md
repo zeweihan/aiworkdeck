@@ -25,6 +25,8 @@
 - `npm run check:nav`: passed.
 - `npm run build:h5`: completed successfully. Existing Sass deprecation and Vite dynamic/static import warnings remain unchanged.
 - `node --check tests/ai-alignment-e2e/run.mjs`: passed.
+- Integrated Chromium journey against the deterministic model fixture and real Task 1/2 backend: exit 0. It exercised narrow-pane submit, steer/queue, edit/reorder, stop, Send now, memory navigation, save, and exact API readback.
+- Integrated real Electron journey against the same fixture/backend: exit 0. It verified the desktop preload-injected backend before exercising the same behavior through a native macOS Electron window.
 
 ## Integrated browser journey
 
@@ -44,4 +46,30 @@ The journey configures that isolated backend to use its in-process deterministic
 - `/tmp/ai-alignment-e2e/memory-index.png`
 - `/tmp/ai-alignment-e2e/memory-editor.png`
 
-The integrated journey was not run in this worktree before handoff because the isolated backend did not yet include the concurrent Task 1/2 routes. The runner fails closed unless `AI_ALIGNMENT_E2E_ISOLATED=1` is explicit because it temporarily changes AI provider settings.
+Set `AI_ALIGNMENT_E2E_OUT` to keep evidence for a specific run. The final Chromium evidence is in:
+
+- `/tmp/ai-alignment-browser-green/queue-running-360px.png`
+- `/tmp/ai-alignment-browser-green/memory-index.png`
+- `/tmp/ai-alignment-browser-green/memory-editor.png`
+
+The same journey can run through the real Electron desktop host. It requires the disposable backend root used to start the isolated backend:
+
+```sh
+cd frontend
+AI_ALIGNMENT_E2E_ISOLATED=1 \
+AI_ALIGNMENT_E2E_DESKTOP=1 \
+AI_ALIGNMENT_E2E_ROOT=/tmp/aiworkdeck-ai-alignment-hrvxyeo3 \
+AI_ALIGNMENT_E2E_EDITOR_DIST=/tmp/aiworkdeck-ai-alignment-hrvxyeo3/frontend/dist/zetaoffice \
+AI_ALIGNMENT_E2E_BASE=http://127.0.0.1:5174 \
+AI_ALIGNMENT_E2E_BACKEND=http://127.0.0.1:9797 \
+AI_ALIGNMENT_E2E_OUT=/tmp/ai-alignment-electron-green \
+npm run test:ai-alignment-e2e
+```
+
+The final Electron evidence is in:
+
+- `/tmp/ai-alignment-electron-green/queue-running-360px.png`
+- `/tmp/ai-alignment-electron-green/memory-index.png`
+- `/tmp/ai-alignment-electron-green/memory-editor.png`
+
+The runner fails closed unless `AI_ALIGNMENT_E2E_ISOLATED=1` is explicit because it temporarily changes AI provider settings. Desktop mode also validates the backend port injected by the actual preload and uses `prepareWritingIsolation` to prove the backend and Electron home/profile are disposable.

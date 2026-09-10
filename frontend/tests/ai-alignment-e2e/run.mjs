@@ -9,11 +9,19 @@ import fs from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { cdpOwnershipError, hardenPageInput, pickCdpPort, spawnElectron, waitForCdpWs } from '../_lib/electron-cdp.mjs'
+import { prepareWritingIsolation } from '../_lib/writing-isolation.mjs'
+
+const here = path.dirname(fileURLToPath(import.meta.url))
+const frontendDir = path.resolve(here, '../..')
+const sourceDesktopDir = process.env.AI_ALIGNMENT_E2E_DESKTOP_SOURCE || path.resolve(frontendDir, '../desktop')
 
 const BASE = process.env.AI_ALIGNMENT_E2E_BASE || 'http://127.0.0.1:5174'
 const BACKEND = process.env.AI_ALIGNMENT_E2E_BACKEND || 'http://127.0.0.1:9797'
 const CHROME = process.env.PUPPETEER_EXECUTABLE_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 const OUT = process.env.AI_ALIGNMENT_E2E_OUT || path.join(os.tmpdir(), 'ai-alignment-e2e')
+const DESKTOP = process.env.AI_ALIGNMENT_E2E_DESKTOP === '1'
 const MARKER = `AI_ALIGNMENT_${Date.now()}`
 fs.mkdirSync(OUT, { recursive: true })
 
@@ -27,6 +35,15 @@ try { puppeteer = (await import('puppeteer-core')).default }
 catch { console.error('Missing puppeteer-core; run npm ci in frontend'); process.exit(2) }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+async function until(check, timeout = 30000) {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    const value = await check()
+    if (value) return value
+    await sleep(200)
+  }
+  throw new Error('timed out waiting for backend state')
+}
 async function api(endpoint, options = {}) {
   const response = await fetch(BACKEND + endpoint, {
     method: options.method || 'GET',
@@ -43,6 +60,7 @@ const dataOf = (body) => body && Object.prototype.hasOwnProperty.call(body, 'dat
 
 function startModelFixture() {
   let mainRequests = 0
+  let streamingMainRequests = 0
   const server = http.createServer(async (request, response) => {
     if (request.method !== 'POST' || !request.url.endsWith('/chat/completions')) {
       response.writeHead(404).end()
@@ -54,8 +72,9 @@ function startModelFixture() {
     const prompt = JSON.stringify(payload.messages || [])
     const isMain = prompt.includes(MARKER)
     if (isMain) mainRequests += 1
+    if (isMain && payload.stream) streamingMainRequests += 1
     const content = isMain ? `<final>Fixture completed ${mainRequests}</final>` : 'Fixture helper response'
-    const delay = isMain && mainRequests === 1 ? 12000 : 25
+    const delay = isMain && payload.stream && streamingMainRequests === 1 ? 12000 : 25
 
     if (payload.stream) {
       response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' })
@@ -91,6 +110,8 @@ for (const [name, url] of [['frontend', BASE], ['backend', `${BACKEND}/api/auth/
 
 const fixture = await startModelFixture()
 let browser
+let electron = null
+let killElectron = null
 let failed = false
 try {
   const config = await api('/api/admin/config')
@@ -114,30 +135,81 @@ try {
     body: { spaceId: memorySpace.id, path: 'preferences.md', content: '# Preferences\n\nInitial fixture value.\n', expectedRevision: 0 },
   })
 
-  browser = await puppeteer.launch({ executablePath: CHROME, headless: process.env.AI_ALIGNMENT_E2E_HEADFUL !== '1', args: ['--no-first-run'] })
-  const page = await browser.newPage()
-  await page.setViewport({ width: 1280, height: 820 })
-  await page.evaluateOnNewDocument((backend) => {
-    window.checkbaDesktop = { apiBaseUrl: backend, shell: { openExternal: async () => true } }
-  }, BACKEND)
+  let page
+  if (DESKTOP) {
+    const backendPort = new URL(BACKEND).port
+    const isolation = prepareWritingIsolation({
+      root: process.env.AI_ALIGNMENT_E2E_ROOT,
+      desktopDir: sourceDesktopDir,
+      editorDist: process.env.AI_ALIGNMENT_E2E_EDITOR_DIST || path.join(frontendDir, 'dist/zetaoffice'),
+      backendPort,
+    })
+    const cdpPort = pickCdpPort('AI_ALIGNMENT_E2E_CDP_PORT', 9470)
+    const launched = spawnElectron({
+      desktopDir: isolation.desktopDir,
+      cdpPort,
+      env: { AIWORKDECK_DESKTOP_DEV: '1', CHECKBA_DEV_SERVER_URL: BASE, CHECKBA_BACKEND_PORT: backendPort },
+    })
+    electron = launched.elec
+    killElectron = launched.killTree
+    const electronLog = fs.createWriteStream(path.join(OUT, 'electron.log'))
+    electron.stdout.pipe(electronLog)
+    electron.stderr.pipe(electronLog)
+    const ws = await waitForCdpWs(cdpPort, 60, electron)
+    if (!ws) throw new Error(`Electron CDP did not start; see ${path.join(OUT, 'electron.log')}`)
+    const ownership = cdpOwnershipError(cdpPort, electron)
+    if (ownership) throw new Error(ownership)
+    browser = await puppeteer.connect({ browserWSEndpoint: ws, defaultViewport: null })
+    page = await until(async () => (await browser.pages()).find((candidate) => candidate.url().startsWith(BASE)) || false, 30000)
+    const injected = await page.evaluate(() => window.checkbaDesktop?.apiBaseUrl || null)
+    if (!injected || new URL(injected).port !== backendPort) {
+      throw new Error(`Electron injected backend ${injected}; expected ${BACKEND}`)
+    }
+  } else {
+    browser = await puppeteer.launch({ executablePath: CHROME, headless: process.env.AI_ALIGNMENT_E2E_HEADFUL !== '1', args: ['--no-first-run'] })
+    page = await browser.newPage()
+    await page.setViewport({ width: 1280, height: 820 })
+    await page.evaluateOnNewDocument((backend) => {
+      window.checkbaDesktop = { apiBaseUrl: backend, shell: { openExternal: async () => true } }
+    }, BACKEND)
+  }
+  await hardenPageInput(page)
   await page.goto(`${BASE}/#/pages/project-overview/project-overview?id=${project.id}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+  await hardenPageInput(page)
   await page.waitForSelector('[title="AI 助手"], [title="AI Assistant"]', { timeout: 120000 })
 
   const click = async (selector) => {
     await page.waitForSelector(selector, { visible: true, timeout: 30000 })
     const point = await page.$eval(selector, (element) => {
       const box = element.getBoundingClientRect()
-      return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
+      const x = box.left + box.width / 2
+      const y = box.top + box.height / 2
+      const hit = document.elementFromPoint(x, y)
+      return {
+        x,
+        y,
+        blocker: hit && !element.contains(hit)
+          ? `${hit.tagName.toLowerCase()}.${[...hit.classList].join('.')}`
+          : null,
+      }
     })
+    if (point.blocker) throw new Error(`${selector} is covered by ${point.blocker}`)
     await page.mouse.click(point.x, point.y)
   }
   const setComposer = async (text) => {
-    await click('.chat-input-rich')
+    await click('.side-panel-ai .chat-input-rich')
     await page.keyboard.type(text, { delay: 2 })
+    await page.waitForFunction((expected) => document.querySelector('.side-panel-ai .chat-input-rich')?.innerText.includes(expected),
+      { timeout: 5000 }, text)
+    await sleep(150)
   }
   const clickRowAction = async (contains, actionText) => {
     const point = await page.evaluate(({ contains, actionText }) => {
-      const row = [...document.querySelectorAll('.agent-inbox-row')].find((node) => node.innerText.includes(contains))
+      const row = [...document.querySelectorAll('.agent-inbox-row')].find((node) => {
+        const editor = node.querySelector('.agent-inbox-edit')
+        const editValue = editor?.value || editor?.querySelector('input')?.value || ''
+        return node.innerText.includes(contains) || editValue.includes(contains)
+      })
       const action = row && [...row.querySelectorAll('.inbox-action')].find((node) => node.innerText.trim() === actionText)
       if (!action) return null
       const box = action.getBoundingClientRect()
@@ -148,32 +220,71 @@ try {
   }
 
   await click('[title="AI 助手"], [title="AI Assistant"]')
-  await page.waitForSelector('.chat-input-rich', { timeout: 30000 })
+  await page.waitForSelector('.side-panel-ai .chat-input-rich', { visible: true, timeout: 30000 })
+  const paneWidth = await page.$eval('.side-panel-ai', (element) => Math.round(element.getBoundingClientRect().width))
+  if (paneWidth < 300 || paneWidth > 360) throw new Error(`AI pane is not narrow: ${paneWidth}px`)
   await setComposer(`${MARKER} start a deliberately slow task`)
+  const composerState = await page.$eval('.chat-input-rich', (element) => ({ text: element.innerText, html: element.innerHTML }))
+  if (!composerState.text.includes(MARKER)) throw new Error(`composer did not retain typed marker: ${JSON.stringify(composerState)}`)
   await click('.send-btn')
   await page.waitForSelector('.stop-btn', { timeout: 10000 })
+  const conversationId = await until(async () => {
+    const payload = dataOf(await api(`/api/ai/conversations?projectId=${project.id}`))
+    const conversations = Array.isArray(payload) ? payload : (payload?.items || payload?.conversations || [])
+    const active = conversations.find((conversation) => conversation.title?.includes(MARKER)
+      || conversation.lastMessage?.includes(MARKER)) || conversations[0]
+    return active?.conversationId || false
+  }, 20000)
+  await until(async () => (await api(`/api/agent/inbox/${conversationId}`)).status === 'RUNNING', 10000)
 
   await setComposer('steer while the fixture model is running')
   await click('.send-btn')
-  await page.waitForFunction(() => document.querySelectorAll('.agent-inbox-row').length >= 1, { timeout: 10000 })
+  await page.waitForFunction(() => [...document.querySelectorAll('.user-bubble')]
+    .some((node) => node.innerText.includes('steer while the fixture model is running')), { timeout: 10000 })
   await setComposer('queued follow up')
   await click('.alternate-send')
-  await page.waitForFunction(() => document.querySelectorAll('.agent-inbox-row').length >= 2, { timeout: 10000 })
+  await page.waitForFunction(() => [...document.querySelectorAll('.agent-inbox-row')]
+    .some((node) => node.innerText.includes('queued follow up')), { timeout: 10000 })
   await page.screenshot({ path: path.join(OUT, 'queue-running-360px.png') })
 
   await clickRowAction('queued follow up', 'Edit').catch(() => clickRowAction('queued follow up', '编辑'))
-  const edit = await page.$('.agent-inbox-edit')
-  await edit.click({ clickCount: 3 })
-  await page.keyboard.type('queued follow up edited')
+  await page.$eval('.agent-inbox-edit', (editor, value) => {
+    const input = editor.matches('input') ? editor : editor.querySelector('input')
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+    setter.call(input, value)
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }))
+  }, 'queued follow up edited')
   await clickRowAction('queued follow up edited', 'Save').catch(() => clickRowAction('queued follow up edited', '保存'))
+  await page.waitForFunction(() => [...document.querySelectorAll('.agent-inbox-message')]
+    .some((node) => node.innerText.includes('queued follow up edited')), { timeout: 10000 })
   await clickRowAction('queued follow up edited', '↑')
   await click('.stop-btn')
   await page.waitForFunction(() => !document.querySelector('.stop-btn'), { timeout: 10000 })
+  await until(async () => {
+    const status = (await api(`/api/agent/inbox/${conversationId}`)).status
+    return status === 'CANCELLED' || status === 'ERROR' || status === 'FINISHED'
+  }, 20000)
   await clickRowAction('queued follow up edited', 'Send now').catch(() => clickRowAction('queued follow up edited', '立即发送'))
-  await page.waitForSelector('.stop-btn', { timeout: 10000 })
+  await until(async () => {
+    const snapshot = await api(`/api/agent/inbox/${conversationId}`)
+    return snapshot.status === 'FINISHED' && !snapshot.items.some((item) => item.state === 'pending')
+  }, 30000)
 
   await click('.memory-header-btn')
   await page.waitForSelector('.memory-dialog', { timeout: 10000 })
+  const projectScopePoint = await page.evaluate((projectName) => {
+    const item = [...document.querySelectorAll('.memory-space')]
+      .find((node) => node.innerText.includes(projectName))
+    if (!item) return null
+    const box = item.getBoundingClientRect()
+    return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
+  }, project.name)
+  if (memorySpace.scope === 'project') {
+    if (!projectScopePoint) throw new Error('project memory scope is missing')
+    await page.mouse.click(projectScopePoint.x, projectScopePoint.y)
+    await page.waitForFunction(() => [...document.querySelectorAll('.memory-file')]
+      .some((node) => node.innerText.includes('preferences.md')), { timeout: 10000 })
+  }
   await page.screenshot({ path: path.join(OUT, 'memory-index.png') })
   const preferencePoint = await page.evaluate(() => {
     const item = [...document.querySelectorAll('.memory-file')].find((node) => node.innerText.includes('preferences.md'))
@@ -183,23 +294,42 @@ try {
   })
   if (!preferencePoint) throw new Error('preferences.md missing from memory browser')
   await page.mouse.click(preferencePoint.x, preferencePoint.y)
-  await page.waitForFunction(() => document.querySelector('.memory-textarea')?.value.includes('Initial fixture value'), { timeout: 10000 })
-  const textarea = await page.$('.memory-textarea')
-  await textarea.click()
-  await page.keyboard.type(`\nRetained exactly: ${MARKER}`)
-  const beforeSave = await page.$eval('.memory-textarea', (element) => element.value)
+  await page.waitForFunction(() => {
+    const editor = document.querySelector('.memory-textarea')
+    return (editor?.value || editor?.querySelector('textarea')?.value || '').includes('Initial fixture value')
+  }, { timeout: 10000 })
+  const beforeSave = await page.$eval('.memory-textarea', (editor, marker) => {
+    const textarea = editor.matches('textarea') ? editor : editor.querySelector('textarea')
+    const next = `${textarea.value}\nRetained exactly: ${marker}`
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set
+    setter.call(textarea, next)
+    textarea.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: next }))
+    return next
+  }, MARKER)
   await click('.memory-button.primary')
-  await page.waitForFunction((expected) => document.querySelector('.memory-textarea')?.value === expected, { timeout: 10000 }, beforeSave)
+  await page.waitForFunction((expected) => {
+    const editor = document.querySelector('.memory-textarea')
+    return (editor?.value || editor?.querySelector('textarea')?.value || '') === expected
+  }, { timeout: 10000 }, beforeSave)
   await page.screenshot({ path: path.join(OUT, 'memory-editor.png') })
 
   const savedFile = dataOf(await api(`/api/ai/memory/file?spaceId=${encodeURIComponent(memorySpace.id)}&path=preferences.md`))
   if (savedFile.content !== beforeSave) throw new Error('memory Markdown did not round-trip exactly')
-  console.log(`AI alignment E2E passed. Screenshots: ${OUT}`)
+  console.log(`AI alignment ${DESKTOP ? 'Electron ' : ''}E2E passed. Screenshots: ${OUT}`)
 } catch (error) {
   failed = true
+  if (browser) {
+    const pages = await browser.pages().catch(() => [])
+    const page = pages[pages.length - 1]
+    if (page) await page.screenshot({ path: path.join(OUT, 'failure.png'), fullPage: true }).catch(() => {})
+  }
   console.error(error.stack || error)
 } finally {
-  if (browser) await browser.close().catch(() => {})
+  if (browser) {
+    if (DESKTOP) await browser.disconnect().catch(() => {})
+    else await browser.close().catch(() => {})
+  }
+  if (killElectron) killElectron()
   fixture.server.closeAllConnections?.()
   await new Promise((resolve) => fixture.server.close(resolve))
 }
