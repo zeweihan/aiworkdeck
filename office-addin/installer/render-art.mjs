@@ -45,9 +45,12 @@ for (const job of [
   console.log(`[render-art] ${job.out} ok`)
 }
 
-// 2) DMG 背景 1x/2x
-shoot('dmg-background.html', 660, 420, 1, path.join(installerDir, 'mac', 'dmg-background.png'))
-shoot('dmg-background.html', 660, 420, 2, path.join(installerDir, 'mac', 'dmg-background@2x.png'))
+// 2) DMG 背景 1x/2x。画布远大于 660x420 的窗口（dev-board#580）：Finder 不拉伸背景，
+//    窗口拉大后图外露白，所以向右下画足延展区，覆盖 4K「更多空间」3840x2160 这一级屏幕。
+//    延展区是平滑渐变，LZW TIFF 与 UDZO 压得动，DMG 实测只多约 1.5MB
+const DMG_CANVAS = [3840, 2160]
+shoot('dmg-background.html', ...DMG_CANVAS, 1, path.join(installerDir, 'mac', 'dmg-background.png'))
+shoot('dmg-background.html', ...DMG_CANVAS, 2, path.join(installerDir, 'mac', 'dmg-background@2x.png'))
 console.log('[render-art] dmg-background{,@2x}.png ok')
 
 // 3) Windows 安装器 .ico（PNG 条目，Win Vista+ 均支持；NSIS 3 可直接嵌入）

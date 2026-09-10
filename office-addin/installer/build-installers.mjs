@@ -177,7 +177,8 @@ if (!args.skipMac) {
   try { execFileSync('hdiutil', ['detach', `/Volumes/${volName}`, '-force'], { stdio: 'ignore' }) } catch { /* 没挂载 */ }
   execFileSync('hdiutil', ['attach', rwDmg, '-readwrite', '-noverify', '-noautoopen'], { stdio: 'inherit' })
   try {
-    // 窗口 660x442（内容区 660x420 = 背景图逻辑尺寸 + 22 标题栏）；图标中心与
+    // 窗口 660x442（内容区 660x420 = 背景图设计主体尺寸 + 22 标题栏；背景图本身更大，
+    // 是给用户拉大窗口时用的延展区，dev-board#580）；图标中心与
     // art/dmg-background.html 的光晕/文案联动：安装器 app (330, 200)，manifest 兜底 (566, 350)
     execFileSync('osascript', ['-e', `
       tell application "Finder"
