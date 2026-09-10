@@ -222,7 +222,12 @@ export default {
   colleagueIdentifierPlaceholder: 'Colleague’s phone number, email, or account',
   // Live lookup result area (always shown in place, never through a toast)
   noSuchUser: 'No such user',
+  // The three not-found reasons (server data.reason; missing = older server, shown as "no account yet")
+  noSuchAccount: 'No account with that contact yet',
+  notInYourOrg: 'Not in your law firm or team',
+  youHaveNoTeam: 'You have not joined a team yet',
   goInvite: 'Invite Them',
+  goTeamSettings: 'Open team settings',
   inviteLinkLabel: 'Invite Link',
   copyLink: 'Copy Link',
   copiedInline: 'Copied',

@@ -11,7 +11,11 @@ import com.checkba.repository.ProjectInvitationRepository;
 import com.checkba.repository.ProjectMemberRepository;
 import com.checkba.repository.ProjectRepository;
 import com.checkba.repository.UserRepository;
+import com.checkba.service.collab.CollaboratorAdmission;
+import com.checkba.service.collab.Denial;
+import com.checkba.service.collab.DirectoryUnavailableException;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -25,6 +29,7 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class ProjectMemberService {
 
@@ -48,10 +53,20 @@ public class ProjectMemberService {
     @Value("${ai.account.base-url:https://www.aiworkdeck.com}")
     private String accountBaseUrl;
 
+    // 本地查不到时回官网名录找账户 + 资格门（spec 2026-09-10）。同样**字段注入**，理由同上。
+    // required=false：自建服务器与桌面单机上这条根本不接线，接了也因为名录未配置而短路。
+    @Autowired(required = false)
+    private CollaboratorAdmission collaboratorAdmission;
+
     /** 单测用：这两样走字段注入，手工 new 出来的实例得有地方补上。 */
     void setAccountLookupForTest(AccountBindingRepository repo, String accountBaseUrl) {
         this.accountBindingRepository = repo;
         this.accountBaseUrl = accountBaseUrl;
+    }
+
+    /** 单测用：同上。 */
+    void setCollaboratorAdmissionForTest(CollaboratorAdmission admission) {
+        this.collaboratorAdmission = admission;
     }
 
     public List<ProjectMember> getProjectMembers(Long projectId) {
@@ -92,7 +107,7 @@ public class ProjectMemberService {
     public void addMember(Long projectId, String identifier, String role, Long requesterId) {
         checkAdminPermission(projectId, requesterId);
 
-        User user = resolveMemberUser(identifier);
+        User user = resolveMemberUser(identifier, requesterId);
 
         if (projectMemberRepository.findByProjectIdAndUserId(projectId, user.getId()).isPresent()) {
             throw new IllegalArgumentException("用户已在项目中");
@@ -127,9 +142,40 @@ public class ProjectMemberService {
      * 而律师从通讯录粘出来的号常带 {@code +86} 和空格。邮箱查的是
      * {@code verifiedEmail}（验证过因而可当身份），不是自由填写的资料邮箱。
      */
-    private User resolveMemberUser(String identifier) {
-        return findMemberUser(identifier)
-                .orElseThrow(() -> new IllegalArgumentException(notFoundMessage(identifier)));
+    private User resolveMemberUser(String identifier, Long requesterId) {
+        Resolution resolved = resolve(identifier, requesterId);
+        if (resolved.user() == null) {
+            throw new IllegalArgumentException(notFoundMessage(identifier, resolved.denial()));
+        }
+        return resolved.user();
+    }
+
+    /** 解析结果：人，或者一个说得清下一步的拒绝理由（{@code denial} 为 null = 就是没查到）。 */
+    private record Resolution(User user, Denial denial) {}
+
+    /**
+     * 本库查一遍，再按需过一道准入（回官网名录找账户 + 资格门，spec 2026-09-10）。
+     *
+     * <p>准入没接线或名录未配置时**逐字维持今天的行为**：只查本库、拒绝理由为 null、
+     * 文案还是今天那三句。自建服务器与桌面单机走的就是这条。
+     */
+    private Resolution resolve(String identifier, Long requesterId) {
+        Optional<User> local = findMemberUser(identifier);
+        boolean blank = identifier == null || identifier.trim().isEmpty();
+        if (blank || collaboratorAdmission == null || !collaboratorAdmission.directoryConfigured()) {
+            return new Resolution(local.orElse(null), null);
+        }
+        try {
+            CollaboratorAdmission.Admission admission =
+                    collaboratorAdmission.admit(local, identifier.trim(), requesterId);
+            return new Resolution(admission.user(), admission.denial());
+        } catch (DirectoryUnavailableException e) {
+            // 名录故障不是"没找到"：抛成业务异常让界面红字显示，绝不说"还没有人用这个号注册"
+            log.warn("同事名录不可用，本次查人未完成: {}", e.toString());
+            throw new IllegalArgumentException(LangText.of(
+                    "暂时没能核对同事身份，请稍后再试",
+                    "Could not verify that colleague right now, please try again later"));
+        }
     }
 
     /** 解析本体。查不到不抛异常——查人卡片要把「查不到」当成一个正常结果回显。 */
@@ -151,11 +197,40 @@ public class ProjectMemberService {
         return userRepository.findByUsername(raw);
     }
 
-    /** 查不到时说下一步该做什么（「用户不存在」对律师没有任何指导意义）。 */
-    private static String notFoundMessage(String identifier) {
+    /**
+     * 查不到 / 加不进来时说下一步该做什么（「用户不存在」对律师没有任何指导意义）。
+     *
+     * <p>三种 {@link Denial} 的落点各不相同——让对方去注册、去团队设置里邀请对方、
+     * 自己先创建或加入团队——所以文案必须分开；桌面端也按 {@code reason} 分三态。
+     * {@code denial} 为 null 是「名录没接线」那条老路，文案逐字保持今天的样子。
+     */
+    private static String notFoundMessage(String identifier, Denial denial) {
         String raw = identifier == null ? "" : identifier.trim();
         if (raw.isEmpty()) {
             return LangText.of("请填写同事的手机号或邮箱", "Enter your colleague's phone number or email");
+        }
+        if (denial == Denial.NOT_IN_ORG) {
+            return LangText.of(
+                    "对方已有 AI WorkDeck 账户，但不在你的律所或团队里。先在设置「团队」里把对方邀请进团队，再把人加进案卷",
+                    "This person has an AI WorkDeck account but is not in your law firm or team. Invite them to your team under Settings > Team first, then add them to the case");
+        }
+        if (denial == Denial.REQUESTER_NO_TEAM) {
+            return LangText.of(
+                    "你还没有加入团队。协作对象要和你在同一律所或同一团队，先在设置「团队」里创建或加入团队",
+                    "You have not joined a team yet. Collaborators must share your law firm or team. Create or join a team under Settings > Team first");
+        }
+        if (denial == Denial.NOT_REGISTERED) {
+            if (raw.contains("@")) {
+                return LangText.of(
+                        "还没有人用这个邮箱注册 AI WorkDeck 账户，请让对方先注册并登录一次桌面端",
+                        "Nobody has registered an AI WorkDeck account with that email yet. Ask them to register and sign in to the desktop app once");
+            }
+            if (phoneForLookup(raw) != null) {
+                return LangText.of(
+                        "还没有人用这个手机号注册 AI WorkDeck 账户，请让对方先注册并登录一次桌面端",
+                        "Nobody has registered an AI WorkDeck account with that phone number yet. Ask them to register and sign in to the desktop app once");
+            }
+            return "用户不存在: " + raw;
         }
         if (raw.contains("@")) {
             return LangText.of(
@@ -179,7 +254,7 @@ public class ProjectMemberService {
      */
     public record MemberLookup(boolean found, String displayName, String avatarUrl,
                                String maskedContact, boolean alreadyMember, String currentRole,
-                               String message) {}
+                               String message, String reason) {}
 
     /**
      * 按手机号/邮箱找人并回一张确认卡，**不**做任何改动。
@@ -193,12 +268,14 @@ public class ProjectMemberService {
     public MemberLookup lookupMember(Long projectId, String identifier, Long requesterId) {
         checkAdminPermission(projectId, requesterId);
 
-        Optional<User> found = findMemberUser(identifier);
-        if (found.isEmpty()) {
+        Resolution resolved = resolve(identifier, requesterId);
+        if (resolved.user() == null) {
+            // 被资格门拒绝时**一个身份字段都不回**：存在与否可以说，是谁不能说
             return new MemberLookup(false, null, null, null, false, null,
-                    notFoundMessage(identifier));
+                    notFoundMessage(identifier, resolved.denial()),
+                    resolved.denial() == null ? null : resolved.denial().name());
         }
-        User user = found.get();
+        User user = resolved.user();
         String currentRole = currentRoleOrNull(projectId, user.getId());
         return new MemberLookup(
                 true,
@@ -207,6 +284,7 @@ public class ProjectMemberService {
                 maskedContactFor(user, identifier),
                 currentRole != null,
                 currentRole,
+                null,
                 null);
     }
 

@@ -10,6 +10,34 @@
 
 ## 已落地条目（留档，便于回溯当初的判断）
 
+### `POST /api/internal/collab-directory` 同事名录（2026-09-10 实施，dev-board#550 #551）
+
+官方案件库按手机号加同事时，本库 `app_users` 只有**在桌面端桥接过案件库的人**——在官网注册过、
+也登录过桌面端的同事查不到，界面还引他「去邀请」，照做完回来仍然查不到（线上核实：表里仅 3 个用户，
+被查号码匹配 0）。治本的做法是本地查不到时回官网按手机号/邮箱找账户，找到即按 `accountId`
+预建桥接用户，与对方日后自己桥接落到同一行。
+
+**为什么这不违反本文件「per-user 平台 AI key」那条否决**（当时否决的是「server 注册为受信客户端、
+凭 accountId 换任意用户 key」的宽权限服务端-服务端主凭据）：
+
+- **只回名录事实，不发任何凭据**：账户是否存在、`accountId`、`username`、`displayName`、`phone`、
+  双方的 `teamId`/`firmId`。拿到这份答复换不出任何用户的 key、令牌或会话，
+  也换不出邮箱、头像、角色、团队名与律所名（官网侧刻意不回）。
+- **泄露上界就是发起方本来该看到的东西**：某个手机号在官网注册过、展示名是什么、和自己同不同团队——
+  这正是律师在「加同事」确认卡上要核对的信息，而这条路本来就有按项目管理员的限频
+  （`AuthAbuseGuard.checkMemberLookupRate`，查人与加人共用一个计数）。
+- **单一用途、单一密钥、可单独撤销**：`AWD_COLLAB_DIRECTORY_SECRET` 只开这一个口，
+  与 `AWD_TRANSFER_BILLING_SECRET`（dev-board#251）、`AWD_MOBILE_BILLING_SECRET`（#425）
+  是三把互不复用的密钥；撤销 = 把官网那一个 env 拿掉，案件库侧立刻退回「只查本库」。
+  被否决的那条是**一把长期主凭据换全站任意用户的 key**，泄露即全站沦陷，且收窄半径还要另建授权表。
+- **形状与前两条内部口逐条相同**：同机 `127.0.0.1` 直连 Next、头 `X-Internal-Secret`、
+  未配置或密钥不匹配一律裸 404、公网 nginx `location ^~ /api/internal/ { return 404; }` 兜底。
+
+因此本条**不进官网仓的权威桌面契约**（内部口不是桌面契约，同 transfer 的处理），
+官网侧文档在 `DEPLOY.md §7.7`；本仓侧实现在 `com.checkba.service.collab`
+（属性 `collab.directory.base-url` / `collab.directory.secret`，未配置即整条准入短路成今天的本地行为）。
+设计文档：`docs/superpowers/specs/2026-09-10-collab-member-directory-design.md`。
+
 ### `GET /api/avatar/{accountId}` 公开头像（2026-09-05 核对，dev-board#444）
 
 「按手机号邀请同事」的确认卡片要显示对方的头像，好让律师在加人之前看清自己加的是谁

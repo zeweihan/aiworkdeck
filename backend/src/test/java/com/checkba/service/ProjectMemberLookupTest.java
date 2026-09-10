@@ -12,6 +12,15 @@ import com.checkba.repository.ProjectInvitationRepository;
 import com.checkba.repository.ProjectMemberRepository;
 import com.checkba.repository.ProjectRepository;
 import com.checkba.repository.UserRepository;
+import com.checkba.service.account.AwdkLoginService;
+import com.checkba.service.collab.AccountDirectoryClient;
+import com.checkba.service.collab.CollaboratorAdmission;
+import com.checkba.service.collab.Denial;
+import com.checkba.service.collab.DirectoryAccount;
+import com.checkba.service.collab.DirectoryReply;
+import com.checkba.service.collab.DirectoryUnavailableException;
+import com.checkba.service.collab.OrgMembership;
+import com.checkba.service.collab.SameFirmOrTeamPolicy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -42,6 +51,7 @@ class ProjectMemberLookupTest {
     private UserRepository userRepository;
     private ProjectRepository projectRepository;
     private AccountBindingRepository bindingRepository;
+    private AwdkLoginService awdkLoginService;
     private ProjectMemberService service;
 
     @BeforeEach
@@ -50,6 +60,7 @@ class ProjectMemberLookupTest {
         userRepository = mock(UserRepository.class);
         projectRepository = mock(ProjectRepository.class);
         bindingRepository = mock(AccountBindingRepository.class);
+        awdkLoginService = mock(AwdkLoginService.class);
         service = new ProjectMemberService(memberRepository, userRepository, projectRepository,
                 mock(ProjectInvitationRepository.class));
         service.setAccountLookupForTest(bindingRepository, ACCOUNT_BASE);
@@ -121,6 +132,7 @@ class ProjectMemberLookupTest {
         assertFalse(r.message().startsWith("用户不存在"), r.message());
         assertNull(r.displayName());
         assertNull(r.maskedContact());
+        assertNull(r.reason(), "没接名录时不给 reason，老服务端与今天的呈现逐字一致");
     }
 
     @Test
@@ -186,5 +198,117 @@ class ProjectMemberLookupTest {
         assertThrows(IllegalArgumentException.class,
                 () -> service.lookupMember(PROJECT, "13800138000", 99L));
         verify(userRepository, never()).findByPhone(any());
+    }
+
+    // ==================== 回官网找账户 + 资格门（spec 2026-09-10） ====================
+
+    /** 名录桩：configured() 恒 true，回预先编排的一份答复（或抛不可用）。 */
+    private void injectAdmission(DirectoryReply reply, RuntimeException failure) {
+        AccountDirectoryClient directory = new AccountDirectoryClient() {
+            @Override public boolean configured() { return true; }
+            @Override public DirectoryReply lookupByIdentifier(String r, String i) { return answer(); }
+            @Override public DirectoryReply lookupByAccountId(String r, String c) { return answer(); }
+            private DirectoryReply answer() {
+                if (failure != null) throw failure;
+                return reply;
+            }
+        };
+        service.setCollaboratorAdmissionForTest(new CollaboratorAdmission(
+                directory, new SameFirmOrTeamPolicy(), bindingRepository, awdkLoginService));
+    }
+
+    @Test
+    @DisplayName("对方有账户但不在你的律所/团队：found=false + reason，且**一个身份字段都不回**")
+    void deniedLookupSaysNothingAboutWhoTheyAre() {
+        injectAdmission(new DirectoryReply(true,
+                new DirectoryAccount("acc-9f", "lisi", "李思", "13800138000"),
+                new OrgMembership("team-a", "firm-1"),
+                new OrgMembership("team-b", "firm-2")), null);
+
+        ProjectMemberService.MemberLookup r = service.lookupMember(PROJECT, "13800138000", OWNER);
+
+        assertFalse(r.found());
+        assertEquals(Denial.NOT_IN_ORG.name(), r.reason());
+        assertNull(r.displayName(), "被拒时不得回展示名——存在与否可以说，是谁不能说");
+        assertNull(r.avatarUrl());
+        assertNull(r.maskedContact());
+        assertTrue(r.message().contains("团队"), r.message());
+        verify(awdkLoginService, never()).ensureBridgedUser(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("自己还没加入团队：reason=REQUESTER_NO_TEAM，文案落到「你还没有加入团队」")
+    void requesterWithoutATeamGetsTheirOwnReason() {
+        injectAdmission(new DirectoryReply(true,
+                new DirectoryAccount("acc-9f", "lisi", "李思", "13800138000"),
+                OrgMembership.NONE,
+                new OrgMembership("team-b", "firm-1")), null);
+
+        ProjectMemberService.MemberLookup r = service.lookupMember(PROJECT, "13800138000", OWNER);
+
+        assertFalse(r.found());
+        assertEquals(Denial.REQUESTER_NO_TEAM.name(), r.reason());
+        assertTrue(r.message().contains("团队"), r.message());
+    }
+
+    @Test
+    @DisplayName("官网也没有这个号：reason=NOT_REGISTERED，文案说的是「注册」不是「登录过」")
+    void unknownUpstreamAccountIsNotRegistered() {
+        injectAdmission(new DirectoryReply(false, null,
+                new OrgMembership("team-a", "firm-1"), OrgMembership.NONE), null);
+
+        ProjectMemberService.MemberLookup r = service.lookupMember(PROJECT, "13800138000", OWNER);
+
+        assertFalse(r.found());
+        assertEquals(Denial.NOT_REGISTERED.name(), r.reason());
+        assertTrue(r.message().contains("手机号"), r.message());
+        assertTrue(r.message().contains("注册"), r.message());
+    }
+
+    @Test
+    @DisplayName("官网有、资格门通过：预建桥接用户后照常回人卡")
+    void allowedNewcomerIsBridgedAndShownAsACard() {
+        User bridged = colleague();
+        when(awdkLoginService.ensureBridgedUser("acc-9f", "lisi", "李思", "13800138000"))
+                .thenReturn(bridged);
+        injectAdmission(new DirectoryReply(true,
+                new DirectoryAccount("acc-9f", "lisi", "李思", "13800138000"),
+                new OrgMembership("team-a", "firm-1"),
+                new OrgMembership("team-b", "firm-1")), null);
+
+        ProjectMemberService.MemberLookup r = service.lookupMember(PROJECT, "13800138000", OWNER);
+
+        assertTrue(r.found());
+        assertNull(r.reason());
+        assertEquals("李思", r.displayName());
+        assertEquals("138****8000", r.maskedContact());
+    }
+
+    /** 名录连不上是故障，不是"没找到"：必须走异常，让界面显示红字而不是「还没有人注册」。 */
+    @Test
+    @DisplayName("名录不可用：抛业务异常（前端红字），绝不退化成 found=false")
+    void directoryOutageIsAnErrorNotAMiss() {
+        injectAdmission(null, new DirectoryUnavailableException("上游炸了"));
+
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> service.lookupMember(PROJECT, "13800138000", OWNER));
+
+        assertTrue(e.getMessage().contains("稍后再试"), e.getMessage());
+        assertFalse(e.getMessage().contains("注册"), e.getMessage());
+    }
+
+    @Test
+    @DisplayName("识别串为空：维持今天的提示，不出网、不给 reason")
+    void blankIdentifierKeepsTodaysPrompt() {
+        injectAdmission(new DirectoryReply(true,
+                new DirectoryAccount("acc-9f", "lisi", "李思", "13800138000"),
+                new OrgMembership("team-a", "firm-1"),
+                new OrgMembership("team-b", "firm-1")), null);
+
+        ProjectMemberService.MemberLookup r = service.lookupMember(PROJECT, "  ", OWNER);
+
+        assertFalse(r.found());
+        assertNull(r.reason());
+        assertTrue(r.message().contains("请填写"), r.message());
     }
 }

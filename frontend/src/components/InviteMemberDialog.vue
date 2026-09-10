@@ -92,10 +92,21 @@
                   </text>
                 </view>
 
+                <!-- 查不到人分三态（后端 data.reason，见 utils/memberLookup.js 的
+                     notFoundPresentation）：还没注册就给邀请链接，不在同一律所/团队、
+                     或自己还没加入团队，给的是「去团队设置」——那两种情况把邀请链接
+                     发过去也没用，对方早就注册过了。 -->
                 <view v-else-if="notFoundMessage" class="lookup-notfound">
-                  <text class="lookup-notfound-title">{{ $t('version.noSuchUser') }}</text>
+                  <text class="lookup-notfound-title">{{ $t(notFound.titleKey) }}</text>
                   <text class="lookup-hint">{{ notFoundMessage }}</text>
-                  <text v-if="!inviteOpen" class="copy-link" @tap="inviteOpen = true">{{ $t('version.goInvite') }}</text>
+
+                  <text
+                    v-if="notFound.action === 'TEAM_SETTINGS'"
+                    class="copy-link"
+                    @tap="goTeamSettings"
+                  >{{ $t('version.goTeamSettings') }}</text>
+
+                  <text v-else-if="!inviteOpen" class="copy-link" @tap="inviteOpen = true">{{ $t('version.goInvite') }}</text>
 
                   <view v-else class="invite-block">
                     <text class="form-label">{{ $t('version.inviteLinkLabel') }}</text>
@@ -215,7 +226,7 @@ import { getInitial } from '@/utils/textInitial.js'
 import { getAppLanguage } from '@/utils/appLanguage.js'
 import { siteBaseUrl } from '@/utils/siteLinks.js'
 import { shareProjectToLibrary } from '@/utils/cloudShare.js'
-import { TRACK, resolveTrack, isWorthLooking, lookupIdentifier, inviteLinkFor } from '@/utils/memberLookup.js'
+import { TRACK, resolveTrack, isWorthLooking, lookupIdentifier, inviteLinkFor, notFoundPresentation } from '@/utils/memberLookup.js'
 
 // local-mode 是一台机器的装机形态，一次进程内不会变。弹窗每次打开都问一遍后端
 // 纯属浪费——而这个请求恰好挡在「输入框出不出得来」前面，慢一次就是一次白屏。
@@ -287,6 +298,9 @@ export default {
       candidate: null,
       avatarBroken: false,
       notFoundMessage: '',
+      // 后端给的拒绝理由（NOT_REGISTERED / NOT_IN_ORG / REQUESTER_NO_TEAM）。
+      // 老服务端不回这个字段，空串就落回今天的「还没有这个账户 + 去邀请」。
+      notFoundReason: '',
       // ---- 就地反馈 ----
       errorMessage: '',
       addedName: '',
@@ -309,6 +323,9 @@ export default {
     },
     canSubmit() {
       return !!(this.candidate && !this.candidate.alreadyMember)
+    },
+    notFound() {
+      return notFoundPresentation(this.notFoundReason)
     },
     showDualTrackHint() {
       return this.track === TRACK.LOCAL && this.linked
@@ -381,6 +398,7 @@ export default {
       this.candidate = null
       this.avatarBroken = false
       this.notFoundMessage = ''
+      this.notFoundReason = ''
       this.errorMessage = ''
       this.addedName = ''
       this.inviteOpen = false
@@ -468,6 +486,7 @@ export default {
         } else {
           // 「这个号还没人用过」是正常结果（后端 code=0），就地显示那句话
           this.notFoundMessage = person.message || this.$t('version.colleagueNotFound')
+          this.notFoundReason = person.reason || ''
         }
       } catch (e) {
         if (seq !== this.lookupSeq) return
@@ -497,6 +516,19 @@ export default {
          this.errorMessage = (e && e.message) || this.$t('version.addMemberFailed')
          this.loading = false
        }
+    },
+    /**
+     * 「去团队设置」：设置页的「团队」分区，深链 `?nav=team`——nav key 与
+     * AdminPane 里「账户与用量」那条「前往团队」（onNavTap({ key: 'team' })）同一个，
+     * 深链形制同仓里既有的 `/pages/admin/admin?nav=account`（MarketPane 那几处）。
+     *
+     * 这个弹窗**只挂在项目列表页**（工作台里的加人走 CollabDialog），不是工作台参与的
+     * 跳转，所以照项目列表页「个人中心」按钮的既有形制用 navigateTo：设置页看完能退回
+     * 列表，弹窗那一步的上下文还在。
+     */
+    goTeamSettings() {
+      this.close()
+      uni.navigateTo({ url: '/pages/admin/admin?nav=team' })
     },
     copyInviteLink() {
       uni.setClipboardData({

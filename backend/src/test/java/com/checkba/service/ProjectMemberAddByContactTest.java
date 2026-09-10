@@ -6,10 +6,18 @@ package com.checkba.service;
 import com.checkba.model.entity.Project;
 import com.checkba.model.entity.ProjectMember;
 import com.checkba.model.entity.User;
+import com.checkba.repository.AccountBindingRepository;
 import com.checkba.repository.ProjectInvitationRepository;
 import com.checkba.repository.ProjectMemberRepository;
 import com.checkba.repository.ProjectRepository;
 import com.checkba.repository.UserRepository;
+import com.checkba.service.account.AwdkLoginService;
+import com.checkba.service.collab.AccountDirectoryClient;
+import com.checkba.service.collab.CollaboratorAdmission;
+import com.checkba.service.collab.DirectoryAccount;
+import com.checkba.service.collab.DirectoryReply;
+import com.checkba.service.collab.OrgMembership;
+import com.checkba.service.collab.SameFirmOrTeamPolicy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -138,5 +146,53 @@ class ProjectMemberAddByContactTest {
         service.addMember(PROJECT, "13800138000", "PARTICIPANT", OWNER);
 
         assertEquals(13L, saved.get(0).getUserId());
+    }
+
+    // ==================== 回官网找账户 + 资格门（spec 2026-09-10） ====================
+
+    private AwdkLoginService injectAdmission(DirectoryReply reply) {
+        AccountDirectoryClient directory = new AccountDirectoryClient() {
+            @Override public boolean configured() { return true; }
+            @Override public DirectoryReply lookupByIdentifier(String r, String i) { return reply; }
+            @Override public DirectoryReply lookupByAccountId(String r, String c) { return reply; }
+        };
+        AccountBindingRepository bindings = mock(AccountBindingRepository.class);
+        when(bindings.findByUserId(any())).thenReturn(Optional.empty());
+        AwdkLoginService awdk = mock(AwdkLoginService.class);
+        service.setCollaboratorAdmissionForTest(new CollaboratorAdmission(
+                directory, new SameFirmOrTeamPolicy(), bindings, awdk));
+        return awdk;
+    }
+
+    /** 加人与查人同一道门：查人那边拒了，这边照样得拒，而且是同一句话。 */
+    @Test
+    void addingSomeoneOutsideYourFirmOrTeamIsRejectedWithTheSameMessage() {
+        AwdkLoginService awdk = injectAdmission(new DirectoryReply(true,
+                new DirectoryAccount("acc-9f", "lisi", "李思", "13800138000"),
+                new OrgMembership("team-a", "firm-1"),
+                new OrgMembership("team-b", "firm-2")));
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> service.addMember(PROJECT, "13800138000", "PARTICIPANT", OWNER));
+
+        assertTrue(ex.getMessage().contains("团队"), ex.getMessage());
+        assertTrue(saved.isEmpty(), "被拒的人绝不能落成员行");
+        verify(awdk, never()).ensureBridgedUser(any(), any(), any(), any());
+    }
+
+    /** 治本的那一半：官网注册过、案件库里还没有这行的同事，现在加得进来了。 */
+    @Test
+    void aColleagueKnownOnlyToTheWebsiteIsBridgedAndAdded() {
+        AwdkLoginService awdk = injectAdmission(new DirectoryReply(true,
+                new DirectoryAccount("acc-9f", "lisi", "李思", "13800138000"),
+                new OrgMembership("team-a", "firm-1"),
+                new OrgMembership("team-b", "firm-1")));
+        when(awdk.ensureBridgedUser("acc-9f", "lisi", "李思", "13800138000"))
+                .thenReturn(user(99L, "awd_lisi"));
+
+        service.addMember(PROJECT, "13800138000", "PARTICIPANT", OWNER);
+
+        assertEquals(1, saved.size());
+        assertEquals(99L, saved.get(0).getUserId());
     }
 }

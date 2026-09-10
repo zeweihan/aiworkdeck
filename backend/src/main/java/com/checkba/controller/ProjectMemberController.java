@@ -117,6 +117,9 @@ public class ProjectMemberController {
             data.put("alreadyMember", lookup.alreadyMember());
             data.put("currentRole", lookup.currentRole());
             data.put("message", lookup.message());
+            // 拒绝理由（Denial 名或 null）：桌面端据此把「未找到」块分三态，各给对的动作按钮。
+            // 老客户端没有这个键也照常显示 message，所以服务端可以先上线。
+            data.put("reason", lookup.reason());
             result.put("code", 0);
             result.put("data", data);
         } catch (IllegalArgumentException e) {

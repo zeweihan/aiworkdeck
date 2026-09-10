@@ -221,7 +221,12 @@ export default {
   colleagueIdentifierPlaceholder: '同事的手机号、邮箱或账号',
   // 边输入边查的结果区（一律就地显示，不走 toast）
   noSuchUser: '没有这个用户',
+  // 查不到人的三种理由（后端 data.reason，缺失=老服务端，按「还没这个账户」呈现）
+  noSuchAccount: '还没有这个账户',
+  notInYourOrg: '对方不在你的律所或团队',
+  youHaveNoTeam: '你还没有加入团队',
   goInvite: '去邀请',
+  goTeamSettings: '去团队设置',
   inviteLinkLabel: '邀请链接',
   copyLink: '复制链接',
   copiedInline: '已复制',
