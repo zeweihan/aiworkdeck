@@ -10,12 +10,17 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 /** Persistent, revisioned inbox for Agent input. */
 @Service
@@ -46,6 +51,7 @@ public class AgentInboxService {
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
     private final Map<String, Object> locks = new ConcurrentHashMap<>();
+    private volatile TransactionTemplate transactions;
 
     public AgentInboxService(AgentInboxItemRepository repository,
                              SseEmitterService sseEmitterService,
@@ -53,6 +59,13 @@ public class AgentInboxService {
         this.repository = repository;
         this.sseEmitterService = sseEmitterService;
         this.runStateService = runStateService;
+    }
+
+    @Autowired
+    void setTransactionManager(PlatformTransactionManager transactionManager) {
+        TransactionTemplate template = new TransactionTemplate(transactionManager);
+        template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.transactions = template;
     }
 
     public Object conversationLock(String conversationId) {
@@ -147,23 +160,24 @@ public class AgentInboxService {
                 .stream().anyMatch(i -> STEER.equals(i.getSubmissionMode()));
     }
 
-    @Transactional
     public List<AgentInboxItem> claimPendingSteering(String conversationId, String runId) {
         synchronized (conversationLock(conversationId)) {
-            List<AgentInboxItem> claimed = new ArrayList<>();
-            for (AgentInboxItem row : repository
-                    .findByConversationIdAndStateOrderByPositionAscCreatedAtAsc(conversationId, PENDING)) {
-                if (!STEER.equals(row.getSubmissionMode())) continue;
-                row.setState(APPLIED);
-                row.setRunId(runId);
-                row.setAppliedSequence(nextSequence(conversationId, runId));
-                row.setRevision(row.getRevision() + 1);
-                row.setUpdatedAt(LocalDateTime.now());
-                AgentInboxItem saved = repository.saveAndFlush(row);
-                claimed.add(saved);
-            }
+            List<AgentInboxItem> claimed = inTransaction(() -> {
+                List<AgentInboxItem> result = new ArrayList<>();
+                for (AgentInboxItem row : repository
+                        .findByConversationIdAndStateOrderByPositionAscCreatedAtAsc(conversationId, PENDING)) {
+                    if (!STEER.equals(row.getSubmissionMode())) continue;
+                    row.setState(APPLIED);
+                    row.setRunId(runId);
+                    row.setAppliedSequence(nextSequence(conversationId, runId));
+                    row.setRevision(row.getRevision() + 1);
+                    row.setUpdatedAt(LocalDateTime.now());
+                    result.add(repository.saveAndFlush(row));
+                }
+                if (!result.isEmpty()) compactPendingPositions(conversationId);
+                return result;
+            });
             if (!claimed.isEmpty()) {
-                compactPendingPositions(conversationId);
                 emitSnapshot(conversationId);
                 claimed.forEach(this::emitInputApplied);
             }
@@ -182,49 +196,51 @@ public class AgentInboxService {
                 .stream().findFirst();
     }
 
-    @Transactional
     public ItemView edit(String conversationId, String id, String message, String submissionMode,
                          Long position, long expectedRevision) {
         synchronized (conversationLock(conversationId)) {
-            AgentInboxItem row = requireOwned(conversationId, id);
-            assertMutable(row, expectedRevision);
-            AiAgentController.AgentChatRequest storedRequest = null;
-            if (message != null) {
-                if (message.isBlank()) throw new IllegalArgumentException("Message cannot be empty");
-                row.setMessage(message);
-                storedRequest = requestOf(row);
-                storedRequest.setMessage(message);
-                // displayText described the old canonical message. PATCH has no separate displayText
-                // field, so clearing it makes every renderer fall back to the edited canonical text.
-                storedRequest.setDisplayText(null);
-                row.setDisplayText(null);
-            }
-            if (submissionMode != null) {
-                row.setSubmissionMode(normalizeMode(submissionMode));
-                if (storedRequest == null) storedRequest = requestOf(row);
-                storedRequest.setSubmissionMode(row.getSubmissionMode());
-            }
-            if (storedRequest != null) row.setRequestJson(writeRequest(storedRequest));
-            if (position != null) reorderPending(conversationId, row, position);
-            row.setRevision(row.getRevision() + 1);
-            row.setUpdatedAt(LocalDateTime.now());
-            row = repository.saveAndFlush(row);
+            ItemView result = inTransaction(() -> {
+                AgentInboxItem row = requireOwned(conversationId, id);
+                assertMutable(row, expectedRevision);
+                AiAgentController.AgentChatRequest storedRequest = null;
+                if (message != null) {
+                    if (message.isBlank()) throw new IllegalArgumentException("Message cannot be empty");
+                    row.setMessage(message);
+                    storedRequest = requestOf(row);
+                    storedRequest.setMessage(message);
+                    // displayText described the old canonical message. PATCH has no separate displayText
+                    // field, so clearing it makes every renderer fall back to the edited canonical text.
+                    storedRequest.setDisplayText(null);
+                    row.setDisplayText(null);
+                }
+                if (submissionMode != null) {
+                    row.setSubmissionMode(normalizeMode(submissionMode));
+                    if (storedRequest == null) storedRequest = requestOf(row);
+                    storedRequest.setSubmissionMode(row.getSubmissionMode());
+                }
+                if (storedRequest != null) row.setRequestJson(writeRequest(storedRequest));
+                if (position != null) reorderPending(conversationId, row, position);
+                row.setRevision(row.getRevision() + 1);
+                row.setUpdatedAt(LocalDateTime.now());
+                return view(repository.saveAndFlush(row));
+            });
             emitSnapshot(conversationId);
-            return view(row);
+            return result;
         }
     }
 
-    @Transactional
     public Snapshot delete(String conversationId, String id, long expectedRevision) {
         synchronized (conversationLock(conversationId)) {
-            AgentInboxItem row = requireOwned(conversationId, id);
-            assertMutable(row, expectedRevision);
-            row.setState(DELETED);
-            row.setRevision(row.getRevision() + 1);
-            row.setUpdatedAt(LocalDateTime.now());
-            repository.saveAndFlush(row);
-            compactPendingPositions(conversationId);
-            Snapshot snapshot = snapshot(conversationId);
+            Snapshot snapshot = inTransaction(() -> {
+                AgentInboxItem row = requireOwned(conversationId, id);
+                assertMutable(row, expectedRevision);
+                row.setState(DELETED);
+                row.setRevision(row.getRevision() + 1);
+                row.setUpdatedAt(LocalDateTime.now());
+                repository.saveAndFlush(row);
+                compactPendingPositions(conversationId);
+                return snapshot(conversationId);
+            });
             emitSnapshot(snapshot, conversationId);
             return snapshot;
         }
@@ -241,17 +257,19 @@ public class AgentInboxService {
         }
     }
 
-    @Transactional
     public void interruptConversationRuns(String conversationId) {
         synchronized (conversationLock(conversationId)) {
-            for (AgentInboxItem row : repository
-                    .findByConversationIdOrderByPositionAscCreatedAtAsc(conversationId)) {
-                if (!APPLIED.equals(row.getState())) continue;
-                row.setState(INTERRUPTED);
-                row.setRevision(row.getRevision() + 1);
-                row.setUpdatedAt(LocalDateTime.now());
-                repository.save(row);
-            }
+            inTransaction(() -> {
+                for (AgentInboxItem row : repository
+                        .findByConversationIdOrderByPositionAscCreatedAtAsc(conversationId)) {
+                    if (!APPLIED.equals(row.getState())) continue;
+                    row.setState(INTERRUPTED);
+                    row.setRevision(row.getRevision() + 1);
+                    row.setUpdatedAt(LocalDateTime.now());
+                    repository.save(row);
+                }
+                return null;
+            });
             emitSnapshot(conversationId);
         }
     }
@@ -326,6 +344,12 @@ public class AgentInboxService {
                 .filter(i -> Objects.equals(runId, i.getRunId()))
                 .map(AgentInboxItem::getAppliedSequence).filter(Objects::nonNull)
                 .max(Long::compareTo).orElse(0L) + 1L;
+    }
+
+    /** The transaction must commit before the caller releases the per-conversation monitor. */
+    private <T> T inTransaction(Supplier<T> work) {
+        TransactionTemplate template = transactions;
+        return template == null ? work.get() : template.execute(status -> work.get());
     }
 
     private String writeRequest(AiAgentController.AgentChatRequest request) {

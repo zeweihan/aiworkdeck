@@ -55,6 +55,14 @@ public class AgentOrchestrator {
     /** Ordinary Agent/Plan turns retain the complete memory capability despite skill narrowing. */
     static final Set<String> MEMORY_TOOLS = Set.of(
             "memory_list", "memory_read", "memory_search", "memory_write", "memory_edit", "memory_delete");
+    static final int STREAM_RECOVERY_LIMIT = 256 * 1024;
+    static final int EXECUTION_LOG_LIMIT = 512 * 1024;
+    static final String STREAM_TRUNCATED_MARKER =
+            "[早期流式输出因长度限制已省略 / Earlier streamed output omitted due to length limit]\n";
+    static final String EXECUTION_LOG_TRUNCATED_MARKER =
+            "<process name=\"历史日志\"><tool_output status=\"TRUNCATED\">"
+                    + "早期工具日志因长度限制已省略；模型上下文中的工具结果不受影响。"
+                    + "</tool_output></process>\n";
 
     // LLM 失败自动重试：退避档位与次数上限按错误类型区分（见 LlmErrorClassifier.Kind），
     // 且仅在本轮尚未流出任何 token 时重放（对话状态未被污染，重放安全且用户无感知重复内容）；
@@ -119,7 +127,8 @@ public class AgentOrchestrator {
         void appendStream(String token) {
             if (token == null || token.isEmpty()) return;
             synchronized (streamContent) {
-                streamContent.append(token);
+                appendBoundedTail(streamContent, token, STREAM_RECOVERY_LIMIT,
+                        STREAM_TRUNCATED_MARKER, false);
             }
         }
 
@@ -448,9 +457,10 @@ public class AgentOrchestrator {
             messages.add(dev.langchain4j.data.message.ToolExecutionResultMessage.from(req, STEERING_CANCELLED_TOOL));
             String displayName = toolRegistry.resolve(req.name())
                     .map(ToolRegistry.RegisteredTool::displayName).orElse(req.name());
-            executionLog.append(String.format(
+            appendBoundedExecutionLog(executionLog, String.format(
                     "<process name=\"%s\"><tool_code>%s(%s)</tool_code><tool_output status=\"CANCELLED\">%s</tool_output></process>\n",
-                    displayName.replace("\"", "'"), req.name(), AgentTagProtocol.escape(req.arguments()),
+                    displayName.replace("\"", "'"), req.name(),
+                    AgentTagProtocol.escape(truncate(req.arguments(), toolOutputDisplayLimit(req.name()))),
                     AgentTagProtocol.escape(STEERING_CANCELLED_TOOL)));
             sendTextDelta(guard, "<tool_output status=\"CANCELLED\">"
                     + AgentTagProtocol.escape(STEERING_CANCELLED_TOOL) + "</tool_output>");
@@ -465,9 +475,10 @@ public class AgentOrchestrator {
             messages.add(dev.langchain4j.data.message.UserMessage.from(
                     "[Tool Execution Result]\nTool: " + call.rawCode() + "\nStatus: CANCELLED\nOutput: "
                             + STEERING_CANCELLED_TOOL));
-            executionLog.append(String.format(
+            appendBoundedExecutionLog(executionLog, String.format(
                     "<process name=\"%s\"><tool_code>%s</tool_code><tool_output status=\"CANCELLED\">%s</tool_output></process>\n",
-                    LangText.of("工具执行", "Tool execution"), AgentTagProtocol.escape(call.rawCode()),
+                    LangText.of("工具执行", "Tool execution"),
+                    AgentTagProtocol.escape(truncate(call.rawCode(), toolOutputDisplayLimit(call.toolName()))),
                     AgentTagProtocol.escape(STEERING_CANCELLED_TOOL)));
             sendTextDelta(guard, "<tool_output status=\"CANCELLED\">"
                     + AgentTagProtocol.escape(STEERING_CANCELLED_TOOL) + "</tool_output>");
@@ -1165,9 +1176,12 @@ public class AgentOrchestrator {
                     // Log for history persistence (include status attribute)
                     // 先落执行日志再入栈：入栈那步一旦抛异常（历史上就是上面的 ensureNotBlank），
                     // 排在它后面的 append 不会执行，崩溃轮的过程卡整段丢失、历史里无从回放
-                    executionLog.append(String.format("<process name=\"%s\"><tool_code>%s(%s)</tool_code><tool_output status=\"%s\">%s</tool_output></process>\n",
-                        displayName.replace("\"", "'"), req.name(), AgentTagProtocol.escape(req.arguments()),
-                        nativeToolStatus, AgentTagProtocol.escape(result)));
+                    int persistedToolLimit = toolOutputDisplayLimit(req.name());
+                    appendBoundedExecutionLog(executionLog, String.format(
+                        "<process name=\"%s\"><tool_code>%s(%s)</tool_code><tool_output status=\"%s\">%s</tool_output></process>\n",
+                        displayName.replace("\"", "'"), req.name(),
+                        AgentTagProtocol.escape(truncate(req.arguments(), persistedToolLimit)), nativeToolStatus,
+                        AgentTagProtocol.escape(truncate(result, persistedToolLimit))));
 
                     // 载荷先截断再中和：截断口径按原文字数（与前端「...(截断)」提示一致），
                     // 中和只保证载荷不会顶掉外层标签（AgentTagProtocol，两侧契约）
@@ -1329,9 +1343,11 @@ public class AgentOrchestrator {
                         ? llmProcessName
                         : (toolResult != null && toolResult.tool() != null ? toolResult.tool().displayName()
                                 : LangText.of("工具执行", "Tool execution"));
-                    executionLog.append(String.format("<process name=\"%s\"><tool_code>%s</tool_code><tool_output status=\"%s\">%s</tool_output></process>\n",
-                        processNameForLog, AgentTagProtocol.escape(code), statusPrefix,
-                        AgentTagProtocol.escape(result)));
+                    int persistedToolLimit = toolOutputDisplayLimit(call.toolName());
+                    appendBoundedExecutionLog(executionLog, String.format(
+                        "<process name=\"%s\"><tool_code>%s</tool_code><tool_output status=\"%s\">%s</tool_output></process>\n",
+                        processNameForLog, AgentTagProtocol.escape(truncate(code, persistedToolLimit)), statusPrefix,
+                        AgentTagProtocol.escape(truncate(result, persistedToolLimit))));
 
                     // Emit explicit tool_output for frontend parser with status attribute
                     // NOTE: Do NOT wrap in <process> - the tool_output belongs to the existing process
@@ -1980,6 +1996,27 @@ public class AgentOrchestrator {
                 : s.substring(0, tagSafeCut(s, max)) + LangText.of("...(截断)", "...(truncated)");
     }
 
+    static void appendBoundedExecutionLog(StringBuilder executionLog, String entry) {
+        appendBoundedTail(executionLog, entry, EXECUTION_LOG_LIMIT,
+                EXECUTION_LOG_TRUNCATED_MARKER, true);
+    }
+
+    private static void appendBoundedTail(StringBuilder buffer, String text, int limit,
+                                          String marker, boolean alignProcess) {
+        buffer.append(text);
+        if (buffer.length() <= limit) return;
+        int tailBudget = Math.max(0, limit - marker.length());
+        int keepFrom = Math.max(0, buffer.length() - tailBudget);
+        if (alignProcess) {
+            int boundary = buffer.indexOf("<process", keepFrom);
+            if (boundary >= 0) keepFrom = boundary;
+        }
+        String tail = buffer.substring(keepFrom);
+        if (tail.length() > tailBudget) tail = tail.substring(tail.length() - tailBudget);
+        buffer.setLength(0);
+        buffer.append(marker).append(tail);
+    }
+
     /**
      * 截断点回退：不许把切口留在一个还没闭合的协议标签形状中间。
      *
@@ -2009,7 +2046,7 @@ public class AgentOrchestrator {
         return max;
     }
 
-    /** 工具输出在面板上的默认展示上限（历史落库存的是全文，这里只是 SSE 载荷） */
+    /** 工具输出在面板和可追溯历史里的默认展示上限；模型上下文仍保留完整结果。 */
     private static final int TOOL_OUTPUT_DISPLAY_LIMIT = 4000;
     /** 结果型工具的展示上限：它们的输出本身就是要给用户核验的成果 */
     private static final int RESULT_TOOL_OUTPUT_DISPLAY_LIMIT = 16000;

@@ -18,6 +18,7 @@ import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.StreamingResponseHandler;
 import dev.langchain4j.model.chat.StreamingChatLanguageModel;
@@ -36,7 +37,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -48,6 +51,8 @@ class AgentOrchestratorPassDepthTest {
     private static final String MODEL = "qwen/qwen3.7-flash";
 
     private ChatModelFactory chatModelFactory;
+    private ProjectAiMessageService messageService;
+    private ToolRegistry toolRegistry;
     private OfficePassStateStore passStateStore;
     private List<String> sseEvents;
     private List<String> sseData;
@@ -91,7 +96,7 @@ class AgentOrchestratorPassDepthTest {
             return null;
         }).when(sse).send(any(), any(), any());
 
-        ProjectAiMessageService messageService = mock(ProjectAiMessageService.class);
+        messageService = mock(ProjectAiMessageService.class);
         when(messageService.listByConversationId(any()))
                 .thenReturn(List.of(mock(ProjectAiMessage.class), mock(ProjectAiMessage.class)));
         when(messageService.upsertAssistantMessage(any(), any(), any(), any(), any())).thenReturn(1L);
@@ -101,7 +106,7 @@ class AgentOrchestratorPassDepthTest {
                 .thenAnswer(inv -> new ArrayList<ChatMessage>(List.of(
                         SystemMessage.from("system"), UserMessage.from("请校对全文"))));
 
-        ToolRegistry toolRegistry = mock(ToolRegistry.class);
+        toolRegistry = mock(ToolRegistry.class);
         when(toolRegistry.getAllSpecifications(any())).thenReturn(List.of());
         when(toolRegistry.resolve(anyString())).thenReturn(java.util.Optional.empty());
         when(toolRegistry.execute(any(), any(), any()))
@@ -159,5 +164,66 @@ class AgentOrchestratorPassDepthTest {
         assertTrue(model.finished.await(20, java.util.concurrent.TimeUnit.SECONDS));
         assertEquals(1002, model.calls.get());
         assertTrue(String.valueOf(bubbleEndData()).contains("finished"));
+    }
+
+    @Test
+    void recoveryAndDurableToolBuffersAreBoundedAndMarkTheDroppedPrefix() {
+        AgentOrchestrator.RunGuard guard = new AgentOrchestrator.RunGuard("conv-buffer", "run-buffer", 1L);
+        guard.appendStream("old".repeat(AgentOrchestrator.STREAM_RECOVERY_LIMIT));
+        guard.appendStream("LATEST_STREAM");
+        assertTrue(guard.streamSnapshot().contains(AgentOrchestrator.STREAM_TRUNCATED_MARKER));
+        assertTrue(guard.streamSnapshot().endsWith("LATEST_STREAM"));
+        assertTrue(guard.streamSnapshot().length() <= AgentOrchestrator.STREAM_RECOVERY_LIMIT);
+
+        StringBuilder executionLog = new StringBuilder();
+        for (int i = 0; i < 200; i++) {
+            AgentOrchestrator.appendBoundedExecutionLog(executionLog,
+                    "<process name=\"test\"><tool_output>" + i + ":" + "x".repeat(4000)
+                            + "</tool_output></process>\n");
+        }
+        assertTrue(executionLog.toString().contains(AgentOrchestrator.EXECUTION_LOG_TRUNCATED_MARKER));
+        assertTrue(executionLog.toString().contains("199:"));
+        assertTrue(executionLog.length() <= AgentOrchestrator.EXECUTION_LOG_LIMIT);
+    }
+
+    @Test
+    void persistenceTruncationDoesNotTruncateTheToolResultGivenBackToTheModel() {
+        String full = "x".repeat(20_000) + "FULL_TAIL";
+        when(toolRegistry.execute(any(), any(), any()))
+                .thenReturn(new ToolRegistry.ToolResult(full, null, true));
+        java.util.concurrent.atomic.AtomicBoolean modelSawTail = new java.util.concurrent.atomic.AtomicBoolean();
+        AtomicInteger calls = new AtomicInteger();
+        StreamingChatLanguageModel model = new StreamingChatLanguageModel() {
+            @Override public void generate(List<ChatMessage> messages, StreamingResponseHandler<AiMessage> handler) {
+                if (calls.incrementAndGet() == 1) {
+                    handler.onComplete(Response.from(AiMessage.from(List.of(ToolExecutionRequest.builder()
+                            .id("large").name("read").arguments("{}").build()))));
+                    return;
+                }
+                modelSawTail.set(messages.stream().filter(ToolExecutionResultMessage.class::isInstance)
+                        .map(ToolExecutionResultMessage.class::cast).anyMatch(m -> m.text().endsWith("FULL_TAIL")));
+                handler.onNext("done");
+                handler.onComplete(Response.from(AiMessage.from("done")));
+            }
+
+            @Override public void generate(List<ChatMessage> messages, List<ToolSpecification> tools,
+                                           StreamingResponseHandler<AiMessage> handler) {
+                generate(messages, handler);
+            }
+        };
+        when(chatModelFactory.getStreamingChatModel(MODEL)).thenReturn(model);
+
+        AiAgentController.AgentChatRequest request = new AiAgentController.AgentChatRequest();
+        request.setProjectId(1L);
+        request.setConversationId("conv-full-tool-result");
+        request.setMessage("read");
+        request.setModel(MODEL);
+        orchestrator.handleUserMessage(request, 7L);
+
+        assertTrue(modelSawTail.get(), "the model must receive the complete tool observation");
+        org.mockito.ArgumentCaptor<String> saved = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(messageService, atLeastOnce()).upsertAssistantMessage(any(), any(), any(), any(), saved.capture());
+        assertTrue(saved.getAllValues().stream().anyMatch(v -> v.contains("...(truncated)") || v.contains("...(截断)")));
+        assertTrue(saved.getAllValues().stream().noneMatch(v -> v.contains("FULL_TAIL")));
     }
 }
