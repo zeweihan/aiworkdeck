@@ -261,17 +261,20 @@ try {
   await ok('set_revision_view',{mode:'all'});await ok('goto_comment',{index:0})
   const denseLayout=await readyLayout()
   await assertPageCards(denseLayout,'ten-comment overflow')
-  const denseComments=denseLayout.items.filter(i=>i.kind==='comment').sort((a,b)=>a.data.index-b.data.index)
+  // Field order is not document order: tell the ten dense notes and the later one apart by content.
+  const denseComments=denseLayout.items.filter(i=>i.kind==='comment')
   assert.equal(denseComments.length,11)
-  const densePage=denseComments[0].page
-  assert.ok(denseComments.slice(0,10).every(i=>i.page===densePage),'ten imported comment anchors really share one native page')
-  assert.notEqual(denseComments[10].page,densePage,'the next comment belongs to another native page')
+  const tenDense=denseComments.filter(i=>i.data.content.startsWith('密集批注')), laterNote=denseComments.find(i=>i.data.content==='后页独立批注')
+  assert.equal(tenDense.length,10)
+  const densePage=tenDense[0].page
+  assert.ok(tenDense.every(i=>i.page===densePage),'ten imported comment anchors really share one native page')
+  assert.notEqual(laterNote.page,densePage,'the next comment belongs to another native page')
   const pageSelector='.awd-rb-page[data-page="'+densePage+'"]'
   await page.waitForSelector(pageSelector+' .awd-rb-overflow:not([hidden])')
   assert.equal(await page.$eval(pageSelector,n=>getComputedStyle(n).overflow),'hidden','overflow never paints across the page boundary')
-  for (const target of denseComments.slice(0,10)) {
+  for (const target of tenDense) {
     const key=target.key
-    await ok('goto_comment',{id:denseComments[0].data.id,index:0});await readyLayout()
+    await ok('goto_comment',{id:tenDense[0].data.id,index:tenDense[0].data.index});await readyLayout()
     await page.evaluate((key,pageSelector)=>{
       const root=document.querySelector('.awd-review-balloons'), gutter=document.querySelector(pageSelector)
       const card=[...gutter.querySelectorAll('.awd-rb-card')].find(n=>n.dataset.key===key)
@@ -280,9 +283,10 @@ try {
       slider.value=Math.max(0,Math.min(Number(slider.max),Number(slider.value)+(card.getBoundingClientRect().top-root.getBoundingClientRect().top-80)/scale))
       slider.dispatchEvent(new Event('input',{bubbles:true}))
     },key,pageSelector)
+    // One wheel step scrolls Writer only ~75px: a 380px card can need several.
     const selector='[data-key="'+key+'"]'
     let card=await rect(selector), viewport=await rect('.awd-review-balloons')
-    for (let attempt=0;attempt<4 && (card.bottom>viewport.bottom-2 || card.top<viewport.top-2);attempt++) {
+    for (let attempt=0;attempt<10 && (card.bottom>viewport.bottom-2 || card.top<viewport.top-2);attempt++) {
       const delta=Math.max(-180,Math.min(180,card.bottom>viewport.bottom-2 ? card.bottom-viewport.bottom+20 : card.top-viewport.top-20))
       const canvas=await rect('#qtcanvas'), beforeTop=(await ok('get_review_layout')).view.top
       await page.mouse.move(canvas.left+canvas.width/3,viewport.top+viewport.height/2)
@@ -294,9 +298,9 @@ try {
     assert.ok(card.top>=Math.max(gutter.top,viewport.top)-2 && card.bottom<=Math.min(gutter.bottom,viewport.bottom)+2,'dense comment '+target.data.index+' is fully reachable')
     assert.equal(await page.$eval(selector+' .awd-rb-content',n=>n.textContent),target.data.content,'dense comment retains full text')
   }
-  const nextPageBefore=await page.$eval('[data-key="'+denseComments[10].key+'"]',n=>n.style.top)
+  const nextPageBefore=await page.$eval('[data-key="'+laterNote.key+'"]',n=>n.style.top)
   await page.$eval(pageSelector+' .awd-rb-overflow',n=>{n.value=n.min;n.dispatchEvent(new Event('input',{bubbles:true}))})
-  assert.equal(await page.$eval('[data-key="'+denseComments[10].key+'"]',n=>n.style.top),nextPageBefore,'one page overflow never displaces the following page cards')
+  assert.equal(await page.$eval('[data-key="'+laterNote.key+'"]',n=>n.style.top),nextPageBefore,'one page overflow never displaces the following page cards')
   await page.screenshot({path:'/tmp/word-review-overflow-587-dpr'+dpr+'.png'})
   console.log('PASS native page geometry, complete ten-comment overflow and DPR '+dpr+' alignment')
 
