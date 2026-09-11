@@ -66,13 +66,16 @@
       @changed="onDocModified"
       @ui-state="$emit('menu-state')"
     />
-    <view class="libre-body">
+    <!-- review-overview-open：审阅概览现在浮在画布右侧（不挤宽画布），画布上的
+         宿主浮层据此让出面板宽度，见样式 .libre-review-overview 之后那一段。 -->
+    <view class="libre-body" :class="{ 'review-overview-open': reviewOverviewShown }">
       <!-- 浮层必须钉在**画布**上而不是整个编辑器上：审阅面板是并排挤宽的，钉在
            外层右上角会正好压住面板的「修订/批注」标题行（真机截图实证）。 -->
       <view class="libre-canvas-wrap">
         <view :id="hostId" class="libre-host"></view>
         <!-- 改字 stale 提示条：绝对定位叠在画布顶部，非阻塞；不依赖审阅面板开着 -->
         <EvidenceStaleBar
+          class="libre-stale-bar"
           :items="staleItems"
           @keep="onStaleKeep"
           @locate="onEvidenceLocate"
@@ -110,7 +113,8 @@
         </view>
       </view>
       <ReviewPanel
-        v-if="reviewOpen && ready && showsReview"
+        class="libre-review-overview"
+        v-if="reviewOverviewShown"
         ref="review"
         :executor="executor"
         :refresh-key="reviewRefreshKey"
@@ -271,6 +275,11 @@ export default {
     showsReview() {
       return this.docKind !== 'calc' && this.docKind !== 'impress'
     },
+    // 审阅概览此刻是否渲染。v-if 与 .libre-body 的让位 class 共用这一个判据，
+    // 两处不许各写一份——面板不在时浮层白白让出 288px，面板在时又压住浮层。
+    reviewOverviewShown() {
+      return this.reviewOpen && this.ready && this.showsReview
+    },
     // Stays quiet once ready — no permanent "就绪" badge.
     displayStatus() {
       return this.statusKey === 'ready' ? '' : this.$t('editor.status.' + this.statusKey)
@@ -374,6 +383,7 @@ export default {
     // export needs the live webview, so saving from here is already too late.
     clearTimeout(this._saveTimer)
     clearTimeout(this._slowSaveTimer)
+    clearTimeout(this._reviewRefreshTimer)
     clearInterval(this._bootTimer)
     try { if (this._anchorChecker) this._anchorChecker.dispose() } catch (e) { /* ignore */ }
     this._anchorChecker = null
@@ -543,9 +553,40 @@ export default {
       const tb = this.$refs.toolbar
       if (!tb) return { ok: false, reason: 'not-ready' }
       if (tb.noSelection) return { ok: false, reason: 'no-selection' }
+      tb.capturePopPos('insert')
       tb.menu = 'insert'
-      tb.startComment()
+      if (tb.insertMode !== 'comment') tb.startComment()
+      this.$nextTick(() => {
+        if (this.$refs.toolbar !== tb || tb.menu !== 'insert' || tb.insertMode !== 'comment') return
+        const input = tb.$el && tb.$el.querySelector('.etb-form textarea')
+        if (input) input.focus()
+      })
       return { ok: true }
+    },
+    async onCommentRequest(msg = {}) {
+      const tb = this.$refs.toolbar, executor = this.executor
+      if (!this.ready || !tb || !executor || this._commentRequestPending) return
+      const fileId = this.file && this.file.id, loadGen = this._loadGen
+      const request = {}
+      this._commentRequestPending = request
+      const isCurrent = () => this.ready && this.executor === executor && this.$refs.toolbar === tb
+        && (this.file && this.file.id) === fileId && this._loadGen === loadGen
+      try {
+        // Selection notifications are throttled; the shortcut needs the live state.
+        const state = await executor.executeCommand('get_ui_state', {})
+        if (!isCurrent()) return
+        if (!state || state.success !== true) throw new Error('comment selection unavailable')
+        if (msg.documentSeq != null && state.documentSeq !== msg.documentSeq) return
+        tb.state = state
+        const result = this.menuInsertComment()
+        if (result.reason === 'no-selection') {
+          uni.showToast({ title: this.$t('workbench.menuSelectTextFirst'), icon: 'none' })
+        }
+      } catch (e) {
+        if (isCurrent()) uni.showToast({ title: this.$t('editor.toolbar.opFailed'), icon: 'none' })
+      } finally {
+        if (this._commentRequestPending === request) this._commentRequestPending = null
+      }
     },
     menuClearFormatting() {
       const tb = this.$refs.toolbar
@@ -768,6 +809,8 @@ export default {
             fileId: this.file && this.file.id, meta: this.withHostPoint(msg.meta) })
         } else if (msg.type === 'modified') {
           this.onDocModified()
+        } else if (msg.type === 'comment-request') {
+          this.onCommentRequest(msg)
         } else if (msg.type === 'review-overview') {
           this.reviewOpen = true
         } else if (msg.type === 'review-focus') {
@@ -1368,8 +1411,13 @@ export default {
       if (!this._dirtySince) this._dirtySince = Date.now()
       this.scheduleAutoSave()
       this.scheduleAnchorCheck()
-      // 文档变了（打字 / AI 改动）——面板开着就刷新，别让它显示过期清单
-      if (this.reviewOpen) this.reviewRefreshKey++
+      // 文档变了（打字 / AI 改动）——面板开着就刷新，别让它显示过期清单。
+      // 停笔后再刷：整份修订/批注清单要在 office 线程上逐条读，每敲一下就读会让
+      // 下一个字（含中文确认）排在它后面才上屏。AI 写入另走 onDocMutatedEvent。
+      if (this.reviewOpen) {
+        clearTimeout(this._reviewRefreshTimer)
+        this._reviewRefreshTimer = setTimeout(() => { if (this.reviewOpen) this.reviewRefreshKey++ }, 1000)
+      }
       // 工具栏激活态也可能变了（AI 改了格式、用户敲了字）
       this.uiRefreshKey++
     },
@@ -1571,9 +1619,17 @@ export default {
 .libre-spin { width: 10px; height: 10px; border: 2px solid rgba(229, 231, 235, 0.35); border-top-color: var(--awd-border);
   border-radius: 50%; animation: libre-rot 0.8s linear infinite; }
 @keyframes libre-rot { to { transform: rotate(360deg); } }
-.libre-body { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: row; }
+.libre-body { position: relative; flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: row; }
 .libre-canvas-wrap { position: relative; flex: 1; min-width: 0; min-height: 0; height: 100%; }
 .libre-host { width: 100%; height: 100%; }
+/* Explicit review overview overlays the native gutter without shrinking the canvas. */
+.libre-review-overview { position: absolute; top: 0; right: 0; bottom: 0; z-index: 30; max-width: 100%; box-shadow: -8px 0 24px #00000018; }
+/* 概览打开时，画布上的宿主浮层让出面板那 288px（= ReviewPanel .rp 的宽度），画布本身
+   不挤宽。不让的话：保存失败的「重试」、改字 stale 条右侧的 保留/打开/忽略、拖拽关联
+   投放框的右半边与居中提示都被压在面板底下，看不见也点不到。 */
+.libre-body.review-overview-open .libre-float { right: calc(288px + 16px); }
+.libre-body.review-overview-open .libre-stale-bar,
+.libre-body.review-overview-open .libre-evidence-drop { right: 288px; }
 /* EvidenceLink 拖放：整个编辑器描一圈边，画布上铺透明接收层；悬停时加深 */
 .libre-editor-wrapper.evidence-drop-armed { box-shadow: inset 0 0 0 2px #1A5336; }
 .libre-evidence-drop { position: absolute; inset: 0; z-index: 25; display: flex; align-items: flex-end; justify-content: center;

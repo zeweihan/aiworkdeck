@@ -29,7 +29,7 @@ function harness(t, overrides = {}) {
   const execute = async (action, params) => {
     calls.push({ action, params })
     if (overrides[action]) return overrides[action](params)
-    if (action === 'get_completion_context') return { ...context }
+    if (action === 'get_completion_context' || action === 'get_context_menu_context') return { ...context }
     return { success: true, token: 'cursor-2' }
   }
   input.focus()
@@ -44,7 +44,8 @@ function harness(t, overrides = {}) {
     deliver({ type: 'writing-response', id: msg.id, session: msg.session, result, error })
   }
   t.after(() => { api.destroy(); dom.window.close() })
-  return { dom, doc, canvas, input, api, calls, messages, config, key, button, respond, deliver, setContext: value => { context = { ...context, ...value } }, panel: () => doc.querySelector('.awd-wa-panel') }
+  const queries = () => calls.filter(c => c.action !== 'set_host_context_menu')
+  return { dom, doc, canvas, input, api, calls, queries, messages, config, key, button, respond, deliver, setContext: value => { context = { ...context, ...value } }, panel: () => doc.querySelector('.awd-wa-panel') }
 }
 async function suggestions(h) { h.api.committed('北京当红'); await debounce(); assert.equal(h.input.getAttribute('aria-expanded'), 'true') }
 async function openManagement(h) {
@@ -91,7 +92,7 @@ test('IME 组合不接受候选，旧上下文响应及禁用后的响应不能�
   h.input.dispatchEvent(new h.dom.window.CompositionEvent('compositionend'))
   h.config({ enabled: false })
   h.api.committed('晴'); await debounce()
-  assert.equal(h.calls.length, 1, '关闭自动补全后打字不查询上下文')
+  assert.equal(h.queries().length, 1, '关闭自动补全后打字不查询上下文')
 })
 
 test('禁用、关闭面板和销毁均使在飞建议失效', async t => {
@@ -105,7 +106,7 @@ test('禁用、关闭面板和销毁均使在飞建议失效', async t => {
   assert.equal(h.input.getAttribute('aria-hidden'), 'true')
   assert.equal(h.input.hasAttribute('role'), false)
   h.api.committed('北京当红'); await debounce()
-  assert.equal(h.calls.length, 1)
+  assert.equal(h.queries().length, 1)
 })
 
 test('迟到的接受结果不能显示旧资料、向新项目学习或抢焦点', async t => {
@@ -139,10 +140,35 @@ test('接受后相关资料保留；详情选择框可聚焦；纯文本和表�
   assert.ok(h.panel().textContent.includes('已插入'))
 })
 
+test('右键菜单只向引擎申请被原生菜单让位的选区，且不再向画布合成 Escape（#601）', async t => {
+  const h = harness(t)
+  assert.deepEqual(h.calls.filter(c => c.action === 'set_host_context_menu').map(c => c.params), [{ enabled: true, maxLength: 160 }])
+  h.config({ items: entries })
+  assert.equal(h.calls.filter(c => c.action === 'set_host_context_menu').length, 1, 'unchanged writability is not resent')
+  const keys = []
+  h.canvas.addEventListener('keydown', e => keys.push(e.key))
+  h.setContext({ available: false, hasSelection: true, selectedText: '示例企业', token: 'selection-1' })
+  h.canvas.dispatchEvent(new h.dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 20, clientY: 30 })); await tick()
+  assert.equal(h.panel().hidden, false)
+  assert.deepEqual(h.queries().map(c => c.action), ['get_context_menu_context'])
+  assert.deepEqual(keys, [], 'no synthetic Escape reaches the engine canvas')
+  h.config({ writable: false })
+  assert.deepEqual(h.calls.filter(c => c.action === 'set_host_context_menu').map(c => c.params.enabled), [true, false])
+})
+
+test('原生菜单保留时（引擎未让位）不弹 HTML 菜单', async t => {
+  const h = harness(t, { get_context_menu_context: () => ({ success: false, available: false, reason: 'native-menu' }) })
+  h.setContext({ available: false, hasSelection: true, selectedText: '示例企业', token: 'selection-1' })
+  h.canvas.dispatchEvent(new h.dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 20, clientY: 30 })); await tick()
+  assert.equal(h.panel().hidden, true)
+})
+
 test('只有选中后右键产生外查菜单，显式点击才查询；晚回结果不能复活关闭的菜单', async t => {
   const h = harness(t)
   h.setContext({ available: false, hasSelection: true, selectedText: '示例企业', token: 'selection-1' })
+  h.canvas.tabIndex = 0; h.canvas.focus()
   h.canvas.dispatchEvent(new h.dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 20, clientY: 30 })); await tick()
+  assert.equal(h.doc.activeElement, h.input, 'HTML context menu explicitly retains its Escape-key route')
   assert.equal(h.messages.some(m => m.action === 'lookup'), false)
   h.button('查询机构工商信息').click()
   const request = h.messages.find(m => m.action === 'lookup')
@@ -160,7 +186,7 @@ test('学习仅来自自己提交的文字并分别按个人/项目范围发送�
   const learned = h.messages.filter(m => m.action === 'learn')
   assert.deepEqual(learned.map(m => m.data.scope).sort(), ['project', 'user'])
   assert.ok(learned.every(m => m.data.entries.some(e => e.text === '张三' && e.kind === 'PERSON')))
-  assert.equal(h.calls.length, 0)
+  assert.equal(h.queries().length, 0)
   h.api.committed('联系人：李四')
   h.config({ enabled: false, learning: false })
   h.api.invalidate()

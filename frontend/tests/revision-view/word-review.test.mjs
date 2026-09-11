@@ -31,3 +31,15 @@ test('nearby comments avoid collisions and retain document positions while scrol
   const screenAfter = result.map(r => r.top - 250)
   assert.deepEqual(screenAfter, screenBefore.map(y=>y-200))
 })
+
+
+test('collision layout is independent for each native page', () => {
+  const result = positionReviewCards([
+    { key:'a', page:1, x:0, y:100, height:300 },
+    { key:'b', page:1, x:0, y:110, height:200 },
+    { key:'c', page:2, x:600, y:100, height:80 },
+    { key:'d', page:2, x:600, y:110, height:80 },
+  ])
+  const tops = Object.fromEntries(result.map(r => [r.key, r.top]))
+  assert.deepEqual(tops, { a:100, b:412, c:100, d:192 })
+})

@@ -27,6 +27,7 @@
     </scroll-view>
 
     <view v-if="error && tab !== 'evd'" class="rp-error">{{ error }}</view>
+    <view v-if="listLimitReached" class="rp-limit">{{ $t('editor.review.limitReached', { count: 500 }) }}</view>
 
     <!-- 底稿页：独立组件、v-show 常驻（tab 上要显示计数，且切页不丢筛选/折叠态） -->
     <EvidencePanel
@@ -131,6 +132,20 @@ const TYPE_I18N = {
 }
 const TYPE_CLASS = { insert: 'ins', delete: 'del', format: 'fmt', paraFormat: 'pfmt', other: 'oth' }
 
+// 围栏快照：只带 worker 围栏（office_thread.js 的 matchRevisionSnapshot /
+// matchCommentSnapshot）实际比对的字段，逐个取值拼成普通对象。
+// WHY：g.items 取自响应式的 this.revisions，每一项都是 Vue Proxy，而命令要过
+// 结构化克隆（Electron webview.send 的 IPC / iframe postMessage）——Proxy 过不去
+// （DataCloneError）。webview 下 send() 返回的 Promise 被拒、无人接，relay 干等满
+// resolve_revisions 的 120s 预算，其间 resolving 把面板按钮全部锁死。
+const REVISION_FENCE_FIELDS = ['index', 'identifier', 'type', 'text', 'author', 'timestamp']
+const COMMENT_FENCE_FIELDS = ['id', 'author', 'content', 'timestamp', 'anchorText', 'resolved']
+function fenceSnapshot(src, fields) {
+  const out = {}
+  for (const k of fields) out[k] = src[k]
+  return out
+}
+
 export default {
   name: 'ReviewPanel',
   components: { EvidencePanel },
@@ -152,10 +167,14 @@ export default {
   data() {
     return {
       tab: 'rev', revisions: [], comments: [], error: '', resolving: false, evidenceCount: 0,
+      reviewRevision: null, reviewDocumentSeq: null,
       authorFilter: 'all',
     }
   },
   computed: {
+    listLimitReached() {
+      return this.tab === 'rev' ? this.revisions.length >= 500 : this.tab === 'cmt' && this.comments.length >= 500
+    },
     activeCardId() {
       const loc = this.documentLocation || {}
       if (this.tab === 'cmt') return loc.commentIndex == null ? '' : 'rp-c' + loc.commentIndex
@@ -169,6 +188,7 @@ export default {
     // 未筛选的全量分组——筛选与计数都基于它，tab 上的数字也用它。
     allGroups() {
       return groupRevisions(this.revisions, { reasons: this.links.reasons, selfAuthor: this.selfAuthor })
+        .map(g => ({ ...g, revision: this.reviewRevision, documentSeq: this.reviewDocumentSeq }))
     },
     authorCounts() { return countByAuthorKind(this.allGroups) },
     authorFilters() {
@@ -232,17 +252,28 @@ export default {
       try {
         do {
           this._again = false
-          const [rv, cm] = await Promise.all([this.run('list_revisions', {}), this.run('list_comments', {})])
-          if (rv) this.revisions = rv.revisions || []
-          if (cm) this.comments = cm.comments || []
+          const [rv, cm] = await Promise.all([this.run('list_revisions', { limit: 500 }), this.run('list_comments', { limit: 500 })])
+          if (rv) {
+            this.revisions = rv.revisions || []
+            this.reviewRevision = rv.revision ?? null
+            this.reviewDocumentSeq = rv.documentSeq ?? null
+          }
+          if (cm) this.comments = (cm.comments || []).map(c => ({ ...c, revision: cm.revision, documentSeq: cm.documentSeq }))
         } while (this._again)
       } finally {
         this._loading = false
         this._again = false
       }
     },
-    goto(g) { this.run('goto_revision', { index: g.items[0].index }) },
-    gotoComment(c) { this.run('goto_comment', { index: c.index }) },
+    goto(g) {
+      const target = g.items[0]
+      this.run('goto_revision', { index: target.index, ...(g.documentSeq == null ? {} : {
+        identifier: target.identifier, documentSeq: g.documentSeq, revision: g.revision,
+      }) })
+    },
+    gotoComment(c) {
+      this.run('goto_comment', { id: c.id, index: c.index, documentSeq: c.documentSeq, revision: c.revision })
+    },
     // 整组处置（尽调模块 P3 稳定性余项 #1，dev-board#100）：一次性把组内全部 index
     // 打包发给 resolve_revisions 批量原语，worker 侧一次建索引再批处理，不再对每个
     // 条目单独调 resolve_revision——旧实现里 worker 的 redlineAt(index) 每次都从头
@@ -259,7 +290,11 @@ export default {
       this.resolving = true
       try {
         const indices = g.items.map((r) => r.index).sort((a, b) => b - a)
-        const res = await this.run('resolve_revisions', { indices, action })
+        const snapshot = g.documentSeq == null ? {} : {
+          revision: g.revision, documentSeq: g.documentSeq,
+          expectedRevisions: g.items.map((r) => fenceSnapshot(r, REVISION_FENCE_FIELDS)),
+        }
+        const res = await this.run('resolve_revisions', { indices, action, ...snapshot })
         const results = (res && res.results) || []
         const done = results.filter((r) => r && r.success).length
         if (done) {
@@ -281,7 +316,7 @@ export default {
     async resolveReasons(reasons) {
       for (const c of (reasons || [])) {
         if (c.resolved) continue
-        await this.run('set_comment_resolved', { id: c.id, index: c.index, resolved: true })
+        await this.run('set_comment_resolved', { id: c.id, index: c.index, resolved: true, ...(c.documentSeq == null ? {} : { documentSeq: c.documentSeq }) })
       }
     },
     async resolveAll(action) {
@@ -290,7 +325,10 @@ export default {
       await this.reload()
     },
     async toggleResolved(c) {
-      const res = await this.run('set_comment_resolved', { id: c.id, index: c.index, resolved: !c.resolved })
+      const snapshot = c.documentSeq == null ? {} : {
+        documentSeq: c.documentSeq, revision: c.revision, expectedComment: fenceSnapshot(c, COMMENT_FENCE_FIELDS),
+      }
+      const res = await this.run('set_comment_resolved', { id: c.id, index: c.index, resolved: !c.resolved, ...snapshot })
       if (res) this.$emit('changed')
       await this.reload()
     },
@@ -316,6 +354,7 @@ export default {
   font-size: 11px; color: var(--awd-text-2); background: var(--awd-surface); }
 .rp-chip.on { background: var(--awd-accent-soft); border-color: var(--awd-accent); color: var(--awd-accent-text); font-weight: 600; }
 .rp-error { margin: 8px 10px 0; padding: 6px 8px; border-radius: 6px; background: var(--awd-danger-soft); color: var(--awd-danger-text); font-size: 12px; }
+.rp-limit { margin: 8px 10px 0; font-size: 12px; color: var(--awd-text-2); }
 .rp-list { flex: 1; min-height: 0; padding: 8px 10px; }
 .rp-empty { padding: 28px 6px; display: flex; flex-direction: column; gap: 6px; }
 .rp-empty-t { font-size: 13px; color: var(--awd-text-2); }

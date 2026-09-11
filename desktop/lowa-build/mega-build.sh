@@ -100,6 +100,7 @@ cat > autogen.input <<AUTOGEN
 --with-distro=LibreOfficeWASM32
 --with-package-format=emscripten
 --with-lang=en-US zh-CN
+--with-wasm-module=calc writer impress
 QT5DIR=$QT5DIR
 --enable-ccache
 --with-build-platform-configure-options=--enable-ccache

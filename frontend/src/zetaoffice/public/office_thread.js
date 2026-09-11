@@ -339,7 +339,7 @@ function applyLocator(it, start, end) {
 //     和插入型一样必须跨选——内联态下沿用塌陷会「引擎未命中该条」（真机实证：
 //     resolve_revision 返回失败、redline 条数不减）。
 // 摆错不会报错——dispatch 静默不生效，甚至凭空多出一条空插入修订，所以调用
-// 方（resolve_revision / resolve_revisions）一律用条数变化复核。
+// 方（resolve_revision / resolve_revisions）用条数与原生修订层变化复核。
 function selectRedlineRange(r, forDispatch) {
   try {
     const rs = r.getPropertyValue('RedlineStart'), re = r.getPropertyValue('RedlineEnd');
@@ -353,6 +353,145 @@ function selectRedlineRange(r, forDispatch) {
     return true;
   } catch (e) { return false; }
 }
+// A redline can contain several authors' revision layers. Rejecting a deletion
+// over an earlier insertion restores the text and exposes that insertion, but
+// keeps both the redline's identity and the total count. Compare native layer
+// metadata as well as the count; never dispatch twice to make the count fall.
+function redlineLayerState(r) {
+  try {
+    return JSON.stringify(['RedlineType', 'RedlineAuthor', 'RedlineDateTime', 'RedlineComment', 'RedlineSuccessorData']
+      .map(function (name) { return r.getPropertyValue(name); }));
+  } catch (e) { return null; }
+}
+function redlineWasResolved(r, beforeCount, afterCount, beforeLayer) {
+  if (afterCount < beforeCount) return true;
+  const afterLayer = redlineLayerState(r);
+  return beforeLayer !== null && afterLayer !== null && beforeLayer !== afterLayer;
+}
+// ---- Resolution by native redline id (engines with AwdReviewGeometry) -----
+// In the review gutter deletions leave the body flow: two touching deletions
+// Writer does not group (other author or minute) collapse to one body position,
+// and the cursor path above can resolve the neighbour. .uno:AcceptTrackedChange
+// and .uno:RejectTrackedChange take an SfxUInt32Item named like the command,
+// matched against SwRangeRedline::GetId() (sw/source/uibase/uiview/view2.cxx).
+// Only AwdReviewGeometry exposes that id (revisions[].index -> id);
+// RedlineIdentifier is a pointer-derived string, not the id.
+// The cursor is still placed on the target: outside LibreOfficeKit the slot is
+// disabled unless the cursor is on a redline (uiview/viewstat.cxx) and a
+// disabled slot is dropped silently. The id then picks the redline. An unknown
+// id falls back to the cursor, so only ids read in this command are sent.
+function redlineTop(type, author, date, comment) {
+  const time = date ? Date.UTC(date.Year, date.Month - 1, date.Day, date.Hours, date.Minutes, date.Seconds)
+    + (Number(date.NanoSeconds) || 0) / 1e6 : NaN;
+  return { type: String(type), author: String(author), time: time, comment: String(comment || '') };
+}
+// All redlines in enumeration order. `layer` is exactly redlineLayerState();
+// top/below are the grouping fields of the first two native layers.
+function redlineSnapshot() {
+  const list = [], byId = new Map();
+  const en = xModel.getRedlines().createEnumeration();
+  while (en.hasMoreElements()) {
+    const r = en.nextElement();
+    const v = ['RedlineType', 'RedlineAuthor', 'RedlineDateTime', 'RedlineComment', 'RedlineSuccessorData']
+      .map(function (name) { return r.getPropertyValue(name); });
+    const next = {};
+    (Array.isArray(v[4]) ? v[4] : []).forEach(function (pv) { if (pv && pv.Name) next[pv.Name] = zetajs.fromAny(pv.Value); });
+    const s = { redline: r, identifier: String(r.getPropertyValue('RedlineIdentifier')), layer: JSON.stringify(v),
+      successor: JSON.stringify(v[4]), top: redlineTop(v[0], v[1], v[2], v[3]),
+      below: next.RedlineType == null ? null : redlineTop(next.RedlineType, next.RedlineAuthor, next.RedlineDateTime, next.RedlineComment) };
+    list.push(s);
+    byId.set(s.identifier, byId.has(s.identifier) ? null : s);
+  }
+  return { list: list, byId: byId };
+}
+// SwRedlineData::CanCombineForAcceptReject: same author, type and comment, at
+// most one minute apart (sw/source/core/doc/docredln.cxx).
+function sameRedlineFamily(a, b) {
+  return !!a && !!b && a.type === b.type && a.author === b.author && a.comment === b.comment
+    && Math.abs(a.time - b.time) <= 60000;
+}
+// Besides the target, Writer itself resolves the connected area of touching
+// redlines that combine with it, also one layer down (getConnectedArea), and
+// CompressRedlines() then merges a now-adjacent identical redline into its
+// predecessor (DocumentRedlineManager.cxx). Any other change to a redline that
+// existed before the dispatch means a wrong resolution: returns its identifier.
+function unexplainedRedlineChange(before, after, k, exempt) {
+  const changed = function (s) { const a = after.byId.get(s.identifier); return !a || a.layer !== s.layer; };
+  const target = before.list[k];
+  for (let i = 0; i < before.list.length; i++) {
+    const s = before.list[i];
+    if (i === k || exempt.has(s.identifier) || !changed(s)) continue;
+    let run = true;
+    for (let j = Math.min(i, k) + 1; j < Math.max(i, k); j++) if (!changed(before.list[j])) { run = false; break; }
+    if (run && (sameRedlineFamily(s.top, target.top) || sameRedlineFamily(s.below, target.top))) continue;
+    if (!after.byId.get(s.identifier)) {
+      let j = i - 1;
+      while (j >= 0 && !after.byId.get(before.list[j].identifier)) j--;
+      const into = j >= 0 ? after.byId.get(before.list[j].identifier) : null;
+      if (into && sameRedlineFamily(into.top, s.top) && into.successor === s.successor) continue;
+    }
+    return s.identifier;
+  }
+  return null;
+}
+// Native ids of the target enumeration indices, read in the same synchronous
+// command as `snapshot` (after matchRevisionSnapshot remapped the indices).
+// Each target must still carry an expected RedlineIdentifier; null otherwise.
+function nativeRedlineTargets(snapshot, indices, expected) {
+  const geometry = JSON.parse(ctrl.getPropertyValue('AwdReviewGeometry'));
+  if (!geometry || geometry.version !== 1 || !Array.isArray(geometry.revisions)) return null;
+  const ids = new Map(geometry.revisions.map(function (r) { return [r.index, r.id]; }));
+  const targets = [];
+  for (const raw of indices) {
+    const index = Number(raw), s = snapshot.list[index], id = ids.get(index);
+    if (!s || snapshot.byId.get(s.identifier) !== s || (expected && !expected.has(s.identifier))
+      || !Number.isInteger(id) || id < 0 || id > 0xFFFFFFFF) return null;
+    targets.push({ index: index, identifier: s.identifier, layer: s.layer, id: id });
+  }
+  return new Set(targets.map(function (t) { return t.identifier; })).size === targets.length ? targets : null;
+}
+function expectedRedlineIdentifiers(p) {
+  return p && Array.isArray(p.expectedRevisions) ? new Set(p.expectedRevisions.map(function (r) { return r && r.identifier; })) : null;
+}
+// Dispatch each target once by its native id and judge that target itself:
+// its identifier is gone or its layer changed (one reject of a deletion over an
+// older insertion only pops the top layer). Stops at the first failure and
+// never retries. Returns null on engines without the geometry contract, whose
+// callers keep the cursor path unchanged.
+function resolveRedlinesByNativeId(indices, expected, action) {
+  if (!isWriterDoc() || !supportsReviewGeometry()) return null;
+  let current, targets;
+  try { current = redlineSnapshot(); targets = nativeRedlineTargets(current, indices, expected); }
+  catch (e) { return { error: errStr(e) }; }
+  const missing = indices.findIndex(function (i) { return !current.list[Number(i)]; });
+  if (missing >= 0) return { error: 'no revision at index ' + indices[missing] };
+  if (!targets) return { error: '修订已变化，请刷新后重试' };
+  const command = action === 'accept' ? 'AcceptTrackedChange' : 'RejectTrackedChange';
+  const dispatcher = css.frame.DispatchHelper.create(context);
+  const results = [];
+  let stopped = false;
+  targets.sort(function (a, b) { return b.index - a.index; });
+  for (const t of targets) {
+    if (stopped) { results.push({ index: t.index, success: false }); continue; }
+    const k = current.list.findIndex(function (s) { return s.identifier === t.identifier; });
+    // Resolved together with an earlier target of this command.
+    if (k < 0 || current.list[k].layer !== t.layer) { results.push({ index: t.index, success: true }); continue; }
+    let ok = false;
+    try {
+      if (selectRedlineRange(current.list[k].redline, true)) {
+        dispatcher.executeDispatch(ctrl.getFrame(), '.uno:' + command, '', 0, [mkProp(command, uint32Any(t.id))]);
+        const after = redlineSnapshot(), mine = after.byId.get(t.identifier);
+        const others = new Set(targets.map(function (x) { return x.identifier; }));
+        others.delete(t.identifier);
+        ok = (!mine || mine.layer !== t.layer) && !unexplainedRedlineChange(current, after, k, others);
+        current = after;
+      }
+    } catch (e) { ok = false; }
+    results.push({ index: t.index, success: ok });
+    if (!ok) stopped = true;
+  }
+  return { results: results, remaining: current.list.length };
+}
 function countComments() {
   let n = 0;
   try {
@@ -365,17 +504,22 @@ function countComments() {
   return n;
 }
 // ref 接受两种形状：数字 index（枚举顺序，ReviewPanel 既有用法）或字符串 id
-// （批注的 Name 属性——AI 工具面用它替代 index，因为 index 在任何一条批注被
+// （批注的 Name，或尚无 Name 时的原生 ParaId——index 在任何一条批注被
 // 处置/删除后就会整体前移，同一会话里两次调用之间不可靠）。
 function commentAt(ref) {
   if (typeof ref === 'string' && ref !== '') {
     try {
       const en = xModel.getTextFields().createEnumeration();
+      let match = null;
       while (en.hasMoreElements()) {
         const f = en.nextElement();
         if (!(f.supportsService && f.supportsService('com.sun.star.text.textfield.Annotation'))) continue;
-        try { if (String(f.getPropertyValue('Name')) === ref) return f; } catch (e) {}
+        if (commentIdOf(f) === ref) {
+          if (match) return null; // Ambiguous IDs must never target the wrong comment.
+          match = f;
+        }
       }
+      return match;
     } catch (e) {}
     return null;
   }
@@ -393,7 +537,14 @@ function commentAt(ref) {
   return null;
 }
 function commentIdOf(f) {
-  try { return String(f.getPropertyValue('Name') || ''); } catch (e) { return ''; }
+  try { const name = String(f.getPropertyValue('Name') || ''); if (name) return name; } catch (e) {}
+  // Writer ParaId is the native PostItId in hex, including freshly inserted
+  // point comments whose Name is still empty. Reading it does not edit the field.
+  try {
+    const id = String(f.getPropertyValue('ParaId') || '');
+    if (/^[0-9a-f]+$/i.test(id)) return 'postit:' + parseInt(id, 16);
+  } catch (e) {}
+  return '';
 }
 // Insert text at the view cursor, honoring '\n' as a PARAGRAPH BREAK.
 // XText.insertString does NOT split paragraphs on '\n' (verified against the
@@ -677,6 +828,8 @@ function enumEq(a, b) { return unoEnumVal(a) === unoEnumVal(b); }
 // short 型属性（VertOrient/OutlineLevel 等）必须传带类型的 Any：裸 JS number 会被
 // 编组成 long，严格的 UNO setter（>>= sal_Int16）直接拒绝且被 try 吞掉。
 function shortAny(n) { return new zetajs.Any(zetajs.type.short, Number(n)); }
+// SfxUInt32Item dispatch arguments (the native redline id) likewise get an explicit type.
+function uint32Any(n) { return new zetajs.Any(zetajs.type.unsigned_long, Number(n)); }
 // ---- 样式画像（styleProfile v1，dev-board#111）----------------------------
 // HOUSE 的唯一出处是 backend/src/main/resources/style-profiles/house-default.json：
 // scripts/sync-house-profile.mjs 把它包装成 house-default.js（self.HOUSE_DEFAULT_JSON），
@@ -1871,7 +2024,7 @@ function streamWriteLine(line) {
 
 // ---- 修订显示三态（Word 式，dev-board#368）---------------------------------
 // all    全部修订：正文内联删除线/下划线   ShowChanges=true  ShowChangesInMargin=false
-// balloons 纸外批注框：最终正文布局，修订内容由右侧 HTML 气泡展示
+// balloons 原生页外审阅区：正文保留插入标记，删除/格式修订与批注在页边展示
 // margin 旧页边方式：仅保留内部最终正文操作和兼容调用，不再出现在工具栏
 // final  最终稿：修订痕迹全隐             ShowChanges=false
 //
@@ -1885,7 +2038,7 @@ function streamWriteLine(line) {
 // 页边文字画在锚点 frame 左侧，表格里 frame = 单元格，删除文字会叠到左邻格正文
 // 上；r3 焙入了 frmpaint.cxx 补丁（锚整表左缘，desktop/lowa-build/patches）。
 const REVISION_VIEWS = ['all', 'balloons', 'margin', 'final'];
-let balloonModel = null; // External balloons share native final-text layout, not native margins.
+let balloonModel = null; // Native margin layout; its legacy deletion paint is replaced by page-gutter cards.
 // 默认完整标记：删除在正文内以删除线展示。AI 和写作助手的正文读取/定位
 // 仍走 runAgentCommandInMarginView 的最终文本语义，与用户看到的显示方式分离。
 const DEFAULT_REVISION_VIEW = 'all';
@@ -1906,7 +2059,7 @@ function revisionViewState() {
   const showChanges = readShowChanges();
   const inMargin = readShowChangesInMargin();
   return {
-    mode: showChanges === false && balloonModel === xModel ? 'balloons' : revisionModeOf(showChanges, inMargin),
+    mode: balloonModel === xModel && inMargin === true ? 'balloons' : revisionModeOf(showChanges, inMargin),
     showChanges: showChanges,
     showChangesInMargin: inMargin,
     // 属性在本构建上根本不存在时读会抛（→ null），宿主据此把中间项去掉退成两态。
@@ -1955,13 +2108,54 @@ function withViewOnlyChange(fn) {
   }
 }
 
-function applyRevisionView(mode) {
+// ShowChangesInMargin (margin and balloons views) makes Writer's undo fragile:
+// undoing a rejected long deletion in that view hangs the engine for good, and
+// undoing an edit in a different view than it was recorded in hangs too
+// (both reproduced on r4 and r5, dev-board#587). Revision resolutions from the
+// margin views therefore run in the inline view (runRevisionResolution) and
+// their undo entries are remembered; undo/redo take the same inline detour
+// only while such an entry is on top. Every other entry undoes where it is.
+const inlineUndoEntries = { undo: null, redo: null };
+function topUndoEntry(um, kind) {
+  const titles = kind === 'undo' ? um.getAllUndoActionTitles() : um.getAllRedoActionTitles();
+  return { model: xModel, depth: titles.length, title: titles.length ? String(titles[0]) : '' };
+}
+function sameUndoEntry(a, b) { return !!a && !!b && a.model === b.model && a.depth === b.depth && a.title === b.title; }
+function rememberInlineUndo() {
+  try { inlineUndoEntries.undo = topUndoEntry(xModel.getUndoManager(), 'undo'); inlineUndoEntries.redo = null; } catch (e) {}
+}
+// One undo or redo step through `run` (the UndoManager, or Writer's own command).
+function undoStep(um, kind, run) {
+  const other = kind === 'undo' ? 'redo' : 'undo';
+  const detour = isWriterDoc() && readShowChangesInMargin() === true
+    && sameUndoEntry(inlineUndoEntries[kind], topUndoEntry(um, kind));
+  if (!detour) { run(); return; }
+  const before = revisionViewState().mode;
+  withViewOnlyChange(function () { applyRevisionView('all'); try { xModel.refresh(); } catch (e) {} });
+  try { run(); }
+  finally { withViewOnlyChange(function () { applyRevisionView(before); try { xModel.refresh(); } catch (e) {} }); }
+  inlineUndoEntries[other] = topUndoEntry(um, other);
+  inlineUndoEntries[kind] = null;
+}
+
+// reserveGutter: only a user switch into balloons from another mode. Internal
+// switch-and-restore paths (export, revision resolution) leave the width alone:
+// no revision view writes it, so the restore keeps exactly the gutter the host
+// chose, including a released one (0), without a relayout and page jump.
+function applyRevisionView(mode, reserveGutter) {
   return withViewOnlyChange(function () {
     const want = REVISION_VIEWS.indexOf(mode) >= 0 ? mode : DEFAULT_REVISION_VIEW;
+    if (want === 'balloons' && !installReviewCommentInterceptor(ctrl)) {
+      return Object.assign(revisionViewState(), { requested: want, warnings: ['批注输入通道不可用，请重新打开文档后重试。'] });
+    }
     const warnings = [];
-    const e1 = applyShowChangesInMargin(want === 'margin');
+    // Reserve the native gutter before hiding deletions, so no frame paints the
+    // legacy left-margin text while the overlay is catching up.
+    if (want === 'balloons' && reserveGutter && supportsReviewGeometry()
+      && Number(ctrl.getPropertyValue('AwdReviewSidebarWidth')) !== 280) ctrl.setPropertyValue('AwdReviewSidebarWidth', 280);
+    const e1 = applyShowChangesInMargin(want === 'margin' || want === 'balloons');
     if (e1) warnings.push('ShowChangesInMargin: ' + e1);
-    const e2 = applyShowChanges(want !== 'final' && want !== 'balloons');
+    const e2 = applyShowChanges(want !== 'final');
     balloonModel = want === 'balloons' && !e1 && !e2 ? xModel : null;
     if (e2) warnings.push('ShowChanges: ' + e2);
     // Hiding a whole deleted paragraph changes paragraph membership. View-only
@@ -2018,6 +2212,124 @@ function withRecordChangesOff(fn) {
   finally { if (was) { try { xModel.setPropertyValue('RecordChanges', true); } catch (e) {} } }
 }
 
+// ---- Native comment requests ---------------------------------------------
+// Native InsertAnnotation without Text focuses its own editor. The external
+// gutter hides that editor, so open the existing host form BEFORE insertion.
+let reviewCommentInterceptor = null;
+function installReviewCommentInterceptor(controller) {
+  const previous = reviewCommentInterceptor;
+  if (previous && previous.controller === controller) return previous.ready;
+  if (previous) {
+    previous.ready = false;
+    try { previous.frame.releaseDispatchProviderInterceptor(previous.interceptor); } catch (e) {}
+  }
+  const state = { controller: controller, frame: null, interceptor: null, ready: false, slave: null, master: null };
+  reviewCommentInterceptor = state;
+  try {
+    state.frame = controller.getFrame();
+    const query = function (url, target, flags) {
+      const native = state.slave ? state.slave.queryDispatch(url, target, flags) : null;
+      // Writer's own Ctrl+Z (canvas focused) follows the worker's undo/redo rule
+      // (see undoStep): the inline detour only for a remembered resolution.
+      if (native && (url.Complete === '.uno:Undo' || url.Complete === '.uno:Redo')) {
+        return zetajs.unoObject([css.frame.XDispatch], {
+          dispatch(command, args) {
+            undoStep(xModel.getUndoManager(), url.Complete === '.uno:Undo' ? 'undo' : 'redo', function () { native.dispatch(command, args); });
+          },
+          addStatusListener(listener, command) { native.addStatusListener(listener, command); },
+          removeStatusListener(listener, command) { native.removeStatusListener(listener, command); },
+        });
+      }
+      if (!native || url.Complete !== '.uno:InsertAnnotation') return native;
+      return zetajs.unoObject([css.frame.XDispatch], {
+        dispatch(command, args) {
+          if (!state.ready || controller !== ctrl) return;
+          const hasText = Array.from(args || []).some(function (p) {
+            const value = zetajs.fromAny(p.Value);
+            return p.Name === 'Text' && value != null && String(value).length > 0;
+          });
+          // The host form exists whenever this Writer view has the external review
+          // surface, in every view mode and with the gutter released (width 0).
+          // Without readable support the previous width test still applies.
+          let external = false;
+          try { external = isWriterDoc() && supportsReviewGeometry(); } catch (e) {}
+          if (!external) { try { external = Number(controller.getPropertyValue('AwdReviewSidebarWidth')) > 0; } catch (e) {} }
+          if (external && !hasText) post('comment-request', { documentSeq: docSeq });
+          else native.dispatch(command, args);
+        },
+        addStatusListener(listener, command) { native.addStatusListener(listener, command); },
+        removeStatusListener(listener, command) { native.removeStatusListener(listener, command); },
+      });
+    };
+    state.interceptor = zetajs.unoObject([css.frame.XDispatchProviderInterceptor, css.frame.XInterceptorInfo], {
+      // Avoid a JS callback for every menu/toolbar command queried by Writer.
+      getInterceptedURLs() { return ['.uno:InsertAnnotation', '.uno:Undo', '.uno:Redo']; },
+      queryDispatch: query,
+      queryDispatches(requests) {
+        return requests.map(function (r) { return query(r.FeatureURL, r.FrameName, r.SearchFlags); });
+      },
+      getSlaveDispatchProvider() { return state.slave; },
+      setSlaveDispatchProvider(provider) { state.slave = provider; },
+      getMasterDispatchProvider() { return state.master; },
+      setMasterDispatchProvider(provider) { state.master = provider; },
+    });
+    state.frame.registerDispatchProviderInterceptor(state.interceptor);
+    state.ready = true;
+    return true;
+  } catch (e) {
+    try { if (state.frame && state.interceptor) state.frame.releaseDispatchProviderInterceptor(state.interceptor); } catch (ignored) {}
+    log('批注输入通道安装失败 / comment dispatch interception failed: ' + errStr(e));
+    return false;
+  }
+}
+
+// #601: a right-click on a short selection opens the host's HTML menu instead of
+// Writer's popup. Suppress that popup up front. Opening it and closing it with a
+// synthetic Escape left Qt's popup state behind: the next right press moved the
+// caret and dropped the selection. The host shows its menu only when this same
+// predicate held, so exactly one of the two menus opens.
+let hostContextMenu = { enabled: false, maxLength: 0 };
+let contextMenuInterceptor = null;
+function selectionTouchesDeletion(vc) {
+  const text = vc.getText(), start = vc.getStart(), end = vc.getEnd();
+  const e = xModel.getRedlines().createEnumeration();
+  while (e.hasMoreElements()) {
+    const r = e.nextElement();
+    try {
+      if (String(r.getPropertyValue('RedlineType')) !== 'Delete') continue;
+      // compareRegion*(a, b) > 0 means a is before b; ranges in other texts throw.
+      if (text.compareRegionStarts(r.getPropertyValue('RedlineStart'), end) > 0
+        && text.compareRegionStarts(start, r.getPropertyValue('RedlineEnd')) > 0) return true;
+    } catch (ignored) {}
+  }
+  return false;
+}
+function hostHandlesContextMenu() {
+  if (!hostContextMenu.enabled || !contextMenuInterceptor || contextMenuInterceptor.controller !== ctrl || !isWriterDoc()) return false;
+  try {
+    const vc = ctrl.getViewCursor();
+    const length = String(vc.getString() || '').length;
+    if (!length || length > hostContextMenu.maxLength) return false;
+    // Inline markup keeps deleted text in the selection while the host reads the
+    // final text; such a selection keeps Writer's accept/reject menu.
+    return revisionViewState().mode !== 'all' || !selectionTouchesDeletion(vc);
+  } catch (e) { return false; }
+}
+function installContextMenuInterceptor(controller) {
+  const previous = contextMenuInterceptor;
+  if (previous && previous.controller === controller) return;
+  contextMenuInterceptor = null;
+  if (previous) { try { previous.controller.releaseContextMenuInterceptor(previous.interceptor); } catch (e) {} }
+  try {
+    const action = css.ui.ContextMenuInterceptorAction;
+    const interceptor = zetajs.unoObject([css.ui.XContextMenuInterceptor], {
+      notifyContextMenuExecute() { return hostHandlesContextMenu() ? action.CANCELLED : action.IGNORED; },
+    });
+    controller.registerContextMenuInterceptor(interceptor);
+    contextMenuInterceptor = { controller: controller, interceptor: interceptor };
+  } catch (e) { log('右键菜单拦截安装失败 / context menu interception failed: ' + errStr(e)); }
+}
+
 // ---- boot: open a fresh BLANK Writer doc ----------------------------------
 // Production: a brand-new / empty document must show a clean blank page (the
 // host loads real bytes via load_document when the file has content). We do NOT
@@ -2029,6 +2341,8 @@ function bootDoc() {
   desktop = css.frame.Desktop.create(context);
   xModel = desktop.loadComponentFromURL('private:factory/swriter', '_default', 0, []);
   ctrl = xModel.getCurrentController();
+  installReviewCommentInterceptor(ctrl);
+  installContextMenuInterceptor(ctrl);
   try { ctrl.getFrame().getContainerWindow().FullScreen = true; } catch {}
   // RFC v2: revisions default ON — every edit (AI or typed) lands as a tracked
   // change the lawyer can accept/reject. Set once here (and on retarget) instead
@@ -2509,104 +2823,101 @@ function completionEdit(title, edit) {
   return Object.assign({}, captureCompletion(120), { success: true }, value || {});
 }
 
-// Reverse hit-testing obtains document coordinates without touching the view cursor.
-// Moving that cursor to measure anchors loses selection and scroll (restoreViewData
-// ignores the visible area of documents authored by another user).
+// Geometry comes from Writer's existing layout. Never reverse-hit-test the
+// document or move its live cursor to position review cards.
 let reviewLayoutCache = null;
+let reviewGeometryController = null, reviewGeometrySupported = false;
 let comparisonModel = null;
 function isReviewWritable() { return comparisonModel !== xModel && !xModel.isReadonly(); }
-function locateReviewAnchor(range, view, viewport, height, width) {
-  const scale = viewport.width / (view[5] - view[3]);
-  const text = xModel.getText();
-  const compare = (x, y) => {
-    const hit = ctrl.createTextRangeByPixelPosition(new css.awt.Point({
-      X: Math.round((x - view[3]) * scale), Y: Math.round((y - view[4]) * scale),
-    }));
-    return hit ? text.compareRegionStarts(hit, range) : 1;
-  };
-  // Separate columns need separate vertical searches. Only use a location when
-  // the reverse hit-test actually resolves to this anchor; never guess a line.
-  for (const fraction of [0.5, 0.25, 0.75, 0.125, 0.375, 0.625, 0.875]) {
-    let low = 0, high = height;
-    for (let i = 0; i < 5 && compare(width * fraction, high) > 0; i++) high *= 2;
-    while (high - low > 1 / scale) {
-      const mid = (low + high) / 2;
-      if (compare(width * fraction, mid) > 0) low = mid; else high = mid;
-    }
-    const y = high + 4 / scale;
-    low = 0; high = width;
-    while (high - low > 1 / scale) {
-      const mid = (low + high) / 2;
-      if (compare(mid, y) > 0) low = mid; else high = mid;
-    }
-    if (compare(high, y) !== 0) continue;
-    const start = high;
-    low = start; high = width;
-    while (high - low > 1 / scale) {
-      const mid = (low + high) / 2;
-      if (compare(mid, y) >= 0) low = mid; else high = mid;
-    }
-    // The line-start hit area includes the left margin. Use its text-side edge.
-    return { x: high - Math.min(high - start, 8 / scale) / 2, y: y };
+function supportsReviewGeometry() {
+  if (reviewGeometryController !== ctrl) {
+    reviewGeometryController = ctrl;
+    try {
+      const info = ctrl.getPropertySetInfo();
+      reviewGeometrySupported = info.hasPropertyByName('AwdReviewGeometry')
+        && info.hasPropertyByName('AwdReviewSidebarWidth');
+    } catch (e) { reviewGeometrySupported = false; }
   }
-  return null;
+  return reviewGeometrySupported;
 }
-function reviewLayout() {
-  if (!isWriterDoc()) { reviewLayoutCache = null; return { success: true, items: [], available: false }; }
+// Metadata costs several UNO round trips per item; typing must never wait for
+// it. Callers pass fresh:false for position-only refreshes: geometry is always
+// live, and metadata is reused by native identity (redline GetId, comment id)
+// until a fresh read. pending = known cards on pages not laid out yet (they keep
+// the gutter); unread = native items the cache has not read (refresh when idle).
+function reviewLayout(p) {
+  if (!isWriterDoc() || !supportsReviewGeometry()) {
+    reviewLayoutCache = null;
+    return { success: true, available: false, items: [], pages: [] };
+  }
+  const mode = revisionViewState().mode;
+  // Only balloons/margin render revision cards; other views need positions only.
+  const revisionCards = mode === 'balloons' || mode === 'margin';
+  const geometry = JSON.parse(ctrl.getPropertyValue('AwdReviewGeometry'));
+  if (geometry.version !== 1 || geometry.unit !== 'twip') return tableFail('Unsupported review geometry');
+  let cache = reviewLayoutCache;
+  const fresh = p && p.fresh;   // true: re-read; false: reuse even after edits; unset: re-read after edits
+  if (!cache || cache.docSeq !== docSeq || cache.mode !== mode || fresh === true
+    || (fresh !== false && cache.revisionAtRead !== currentReviewRevision())) {
+    const revisionAtRead = currentReviewRevision();
+    const comments = EXEC.list_comments({ limit: 500, locate: false });
+    const revisions = revisionCards ? EXEC.list_revisions({ limit: 500, locate: false }) : { success: true, count: 0, revisions: [] };
+    if (!revisions.success || !comments.success) return tableFail('Review list unavailable');
+    // Both enumerations walk the same redline table in the same synchronous call.
+    const nativeIds = new Map(geometry.revisions.map(r => [r.index, r.id]));
+    cache = reviewLayoutCache = { docSeq: docSeq, mode: mode, revisionAtRead: revisionAtRead,
+      revisions: new Map(), comments: new Map(), truncated: revisions.count >= 500 || comments.count >= 500 };
+    revisions.revisions.forEach(r => { if (nativeIds.has(r.index)) cache.revisions.set(nativeIds.get(r.index), r); });
+    comments.comments.forEach(c => cache.comments.set(String(c.id), c));
+  }
   const live = ctrl.getViewData(), v = String(live).split(';').map(Number);
   const rect = readNativeCaretRect(ctrl.getFrame(), live, 12);
   if (!rect) return { success: false, message: 'Document viewport unavailable' };
-  const signature = [docSeq, currentReviewRevision(), revisionViewState().mode, v[2], v[5] - v[3], v[6] - v[4]].join(':');
-  if (!reviewLayoutCache || reviewLayoutCache.signature !== signature) {
-    const revisions = EXEC.list_revisions({ limit: 500 });
-    const comments = EXEC.list_comments({ limit: 500 });
-    if (!revisions.success || !comments.success) return tableFail('Review list unavailable');
-    const targets = [], ren = xModel.getRedlines().createEnumeration();
-    revisions.revisions.forEach(function (r) {
-      const native = ren.nextElement();
-      try { targets.push({ key: 'r' + r.index, kind: 'revision', data: r, range: native.getPropertyValue('RedlineStart') }); } catch (e) {}
-    });
-    const cen = xModel.getTextFields().createEnumeration(); let ci = 0;
-    while (cen.hasMoreElements() && ci < comments.comments.length) {
-      const field = cen.nextElement();
-      if (!(field.supportsService && field.supportsService('com.sun.star.text.textfield.Annotation'))) continue;
-      const c = comments.comments[ci++];
-      try { targets.push({ key: 'c' + c.id, kind: 'comment', data: c, range: field.getAnchor().getStart() }); } catch (e) {}
+  const nativeComments = new Map();
+  geometry.comments.forEach(c => {
+    const id = String(c.name || ('postit:' + c.id));
+    nativeComments.set(id, nativeComments.has(id) ? null : c);
+  });
+  const items = [];
+  let missing = false, pending = 0, unread = 0;
+  function add(kind, data, native, key) {
+    if (!native?.anchor || native.available === false || native.page == null) {
+      // Laid-out-later pages still hold cards: the host keeps their gutter.
+      missing = true;
+      if (kind === 'comment' || (data && data.type !== 'Insert')) pending++;
+      return;
     }
-    // getByName lazily creates unused built-in page styles and marks the document
-    // modified. Read only the style already applied to the active page.
-    const pageStyleName = ctrl.getViewCursor().getPropertyValue('PageStyleName');
-    const pageStyle = xModel.getStyleFamilies().getByName('PageStyles').getByName(pageStyleName);
-    const pageHeight = pageStyle.getPropertyValue('Height') * 1440 / 2540;
-    const pageWidth = pageStyle.getPropertyValue('Width') * 1440 / 2540;
-    const height = Math.max(v[6], Number(ctrl.getPropertyValue('PageCount')) * (pageHeight + 568));
-    const width = Math.max(v[5], pageWidth + 568), items = [], operations = new Map();
-    for (const target of targets) {
-      try {
-        const op = target.data.operationId;
-        const pos = (op && operations.get(op)) || locateReviewAnchor(target.range, v, rect.viewport, height, width);
-        if (!pos) continue;
-        if (op) operations.set(op, pos);
-        items.push({ key: target.key, kind: target.kind, data: target.data, ...pos });
-      } catch (e) { /* Unavailable anchors remain accessible in the review list. */ }
-    }
-    reviewLayoutCache = { signature: signature, items: items,
-      truncated: revisions.count >= 500 || comments.count >= 500 || items.length < targets.length };
+    items.push({ key: key, kind: kind, data: data, x: native.anchor.x, y: native.anchor.y,
+      page: native.page, rects: native.rects || [] });
   }
-  return { success: true, available: true, items: reviewLayoutCache.items, truncated: reviewLayoutCache.truncated,
-    notesVisible: !!ctrl.getViewSettings().getPropertyValue('ShowAnnotations'),
-    revision: currentReviewRevision(), writable: isReviewWritable(), view: { left: v[3], top: v[4], right: v[5], bottom: v[6],
-      caretX: v[0], caretY: v[1], ...rect }, mode: revisionViewState().mode };
+  geometry.revisions.forEach(g => {
+    if (!revisionCards) { add('revision', { index: g.index }, g, 'r' + g.index); return; }
+    const meta = cache.revisions.get(g.id);
+    if (!meta) { missing = true; unread++; return; }
+    add('revision', Object.assign({}, meta, { index: g.index }), g, 'r' + g.index);
+  });
+  cache.comments.forEach(c => add('comment', c, nativeComments.get(String(c.id)), 'c' + c.id));
+  nativeComments.forEach((c, id) => { if (c && !cache.comments.has(id)) { missing = true; unread++; } });
+  return { success: true, available: true, items: items, pages: geometry.pages,
+    truncated: cache.truncated || missing, pending: pending, unread: unread,
+    stale: cache.revisionAtRead !== currentReviewRevision(),
+    sidebarWidth: Number(ctrl.getPropertyValue('AwdReviewSidebarWidth')),
+    revision: currentReviewRevision(), documentSeq: docSeq, writable: isReviewWritable(), view: { left: v[3], top: v[4], right: v[5], bottom: v[6],
+      caretX: v[0], caretY: v[1], ...rect }, mode: mode };
 }
 
 const EXEC = {
-  get_review_layout() { return reviewLayout(); },
+  get_review_layout(p) { return reviewLayout(p); },
   set_review_balloons(p) {
-    if (!isWriterDoc()) return { success: true };
-    withViewOnlyChange(function () { ctrl.getViewSettings().setPropertyValue('ShowAnnotations', !p.enabled); });
-    reviewLayoutCache = null;
-    return { success: ctrl.getViewSettings().getPropertyValue('ShowAnnotations') === !p.enabled };
+    if (!isWriterDoc() || !supportsReviewGeometry()) return { success: true, available: false };
+    if (p.enabled && !installReviewCommentInterceptor(ctrl)) return tableFail('批注输入通道不可用，请重新打开文档后重试。');
+    const width = p.enabled ? Math.max(180, Math.min(360, Math.round(Number(p.width) || 280))) : 0;
+    if (Number(ctrl.getPropertyValue('AwdReviewSidebarWidth')) !== width) {
+      withViewOnlyChange(function () { ctrl.setPropertyValue('AwdReviewSidebarWidth', width); });
+    }
+    return { success: Number(ctrl.getPropertyValue('AwdReviewSidebarWidth')) === width, available: true };
   },
+
   get_review_context() {
     const reason = completionGuard();
     if (reason) return Object.assign(completionUnavailable(reason), { revision: currentReviewRevision() });
@@ -2652,6 +2963,16 @@ const EXEC = {
     return { success: true, revision: currentReviewRevision() };
   },
   get_completion_context(p) { return captureCompletion(p && p.radius); },
+  set_host_context_menu(p) {
+    hostContextMenu = { enabled: !!(p && p.enabled), maxLength: Math.max(0, Number(p && p.maxLength) || 0) };
+    return { success: true };
+  },
+  // Same decision the context menu interceptor made for this right-click, then
+  // the final text through the FINAL_TEXT_ACTIONS view (see runAgentCommandInMarginView).
+  get_context_menu_context(p) {
+    if (!hostHandlesContextMenu()) return completionUnavailable('native-menu');
+    return runAgentCommandInMarginView('get_completion_context', function () { return captureCompletion(p && p.radius); });
+  },
   accept_completion(p) {
     const checked = checkCompletion(p.token);
     if (!checked.success) return checked;
@@ -3157,7 +3478,7 @@ const EXEC = {
   // 高频调用（选区事件 + 400ms 聚焦轮询），实测整套读一遍约 6ms——每个字段各自
   // try/catch，缺一个不影响其余，绝不因为某个属性在当前上下文不存在就整体失败。
   get_ui_state() {
-    const out = { success: true };
+    const out = { success: true, documentSeq: docSeq };
     let vc = null;
     try { vc = ctrl.getViewCursor(); } catch (e) { return { success: false, message: errStr(e) }; }
     const ch = {};
@@ -3213,7 +3534,7 @@ const EXEC = {
         view.showChanges = rv.showChanges;
         view.showChangesInMargin = rv.showChangesInMargin;
         view.revisionMarginSupported = rv.marginSupported;
-        view.revisionBalloonsSupported = rv.hideSupported;
+        view.revisionBalloonsSupported = rv.hideSupported && supportsReviewGeometry() && installReviewCommentInterceptor(ctrl);
       } catch (e) {}
     }
     out.view = view;
@@ -3360,7 +3681,9 @@ const EXEC = {
       if (REVISION_VIEWS.indexOf(mode) < 0) {
         return tableFail('未知的修订显示方式: ' + mode + '（可选 ' + REVISION_VIEWS.join(' / ') + '）');
       }
-      const applied = applyRevisionView(mode);
+      if (mode === 'balloons' && !supportsReviewGeometry()) return tableFail('当前编辑器引擎不支持批注框修订，请更新编辑器后使用。');
+      if (mode === 'balloons' && !installReviewCommentInterceptor(ctrl)) return tableFail('批注输入通道不可用，请重新打开文档后重试。');
+      const applied = applyRevisionView(mode, mode === 'balloons' && revisionViewState().mode !== 'balloons');
       applied.success = true;
       return applied;
     }
@@ -3452,6 +3775,8 @@ const EXEC = {
       // so subsequent commands act on what's actually displayed.
       xModel = loaded;
       ctrl = loaded.getCurrentController();
+      installReviewCommentInterceptor(ctrl);
+      installContextMenuInterceptor(ctrl);
       try { const vc = ctrl.getViewCursor(); vc.gotoEnd(false); r.pageCount = vc.getPage(); }
       catch (e) { r.pageErr = errStr(e); }
     } catch (e) { r.success = false; r.message = errStr(e); }
@@ -3494,6 +3819,8 @@ const EXEC = {
     const retarget = (loaded) => {
       xModel = loaded;
       ctrl = loaded.getCurrentController();
+      installReviewCommentInterceptor(ctrl);
+      installContextMenuInterceptor(ctrl);
       try { ctrl.getFrame().getContainerWindow().FullScreen = true; } catch (e) {}
       try { installKeyHandler(); } catch (e) {}
       // The listener is per-model — the freshly-loaded component needs its own.
@@ -4340,7 +4667,7 @@ const EXEC = {
     const want = Math.max(1, Math.min(Number(p && p.steps) || 1, 20));
     let done = 0;
     for (; done < want; done++) {
-      try { um.undo(); } catch (e) { break; } // empty stack ends the loop
+      try { undoStep(um, 'undo', function () { um.undo(); }); } catch (e) { break; } // empty stack ends the loop
     }
     invalidateParaIndex();
     return Object.assign({ success: done > 0, undone: done }, done > 0 ? verifySnapshot() : { message: 'nothing to undo' });
@@ -4350,7 +4677,7 @@ const EXEC = {
     const want = Math.max(1, Math.min(Number(p && p.steps) || 1, 20));
     let done = 0;
     for (; done < want; done++) {
-      try { um.redo(); } catch (e) { break; }
+      try { undoStep(um, 'redo', function () { um.redo(); }); } catch (e) { break; }
     }
     invalidateParaIndex();
     return Object.assign({ success: done > 0, redone: done }, done > 0 ? verifySnapshot() : { message: 'nothing to redo' });
@@ -5008,6 +5335,9 @@ const EXEC = {
   // 点击定位、逐条接受/拒绝——修订的权威视图从页边挪进面板。
   list_revisions(p) {
     const limit = Math.max(1, Math.min(500, Number(p && p.limit) || 200));
+    // locate:false skips the paragraph text and locator: they rebuild the whole
+    // paragraph index after every edit, and review balloons render neither.
+    const locate = !(p && p.locate === false);
     const out = [], tableCells = Object.create(null);
     let prevEnd = null;   // 上一条的 RedlineEnd，用来判「首尾相接」（见 contiguous）
     try {
@@ -5015,6 +5345,7 @@ const EXEC = {
       while (en.hasMoreElements() && out.length < limit) {
         const r = en.nextElement();
         const it = { index: out.length };
+        try { it.identifier = String(r.getPropertyValue('RedlineIdentifier')); } catch (e) {}
         // RedlineType 如实回传引擎原串（Insert / Delete / Format / ParagraphFormat /
         // TextTable …）。改造前面板只分「Delete 与其余」，格式类修订被当成插入显示
         // （dev-board#377）；面板的类型映射认不出的一律原样展示，不再硬塞进「插入」。
@@ -5047,8 +5378,10 @@ const EXEC = {
               rc.gotoRange(re, true);
               it.text = String(rc.getString() || '');
             }
-            const pc = rs.getText().createTextCursorByRange(rs);
-            try { pc.gotoStartOfParagraph(false); pc.gotoEndOfParagraph(true); it.paragraph = String(pc.getString() || '').slice(0, 120); } catch (e) {}
+            if (locate) {
+              const pc = rs.getText().createTextCursorByRange(rs);
+              try { pc.gotoStartOfParagraph(false); pc.gotoEndOfParagraph(true); it.paragraph = String(pc.getString() || '').slice(0, 120); } catch (e) {}
+            }
             // 表格内的修订：面板要标出来（页边互叠的正是这一类）
             try {
               const cell = rs.getPropertyValue('Cell'), table = rs.getPropertyValue('TextTable');
@@ -5059,7 +5392,7 @@ const EXEC = {
                 it.tableCells = tableCells[it.tableName] || (tableCells[it.tableName] = table.getCellNames().filter(function (name) { return !!table.getCellByName(name).getString(); }));
               }
             } catch (e) { it.inTable = false; }
-            applyLocator(it, rs, re);   // 批注关联用的可比坐标
+            if (locate) applyLocator(it, rs, re);   // 批注关联用的可比坐标
           }
         } catch (e) {}
         prevEnd = curEnd;
@@ -5082,10 +5415,20 @@ const EXEC = {
       rows.forEach(function (r) { r.operationId = key; r.operationKind = 'table-insert'; });
     });
     out.forEach(function (r) { delete r.tableCells; });
-    return { success: true, count: out.length, revisions: out };
+    return { success: true, count: out.length, revisions: out, revision: currentReviewRevision(), documentSeq: docSeq };
   },
   goto_revision(p) {
-    if (p && p.revision != null && p.revision !== currentReviewRevision()) return tableFail('文档已变化，请刷新修订后重试');
+    if (p && p.documentSeq != null && p.documentSeq !== docSeq) return tableFail('修订已变化，请刷新后重试');
+    if (p && p.identifier != null) {
+      if (p.documentSeq !== docSeq || !p.identifier) return tableFail('修订已变化，请刷新后重试');
+      const matches = [], en = xModel.getRedlines().createEnumeration();
+      for (let index = 0; index < 500 && en.hasMoreElements(); index++) {
+        const r = en.nextElement();
+        if (String(r.getPropertyValue('RedlineIdentifier')) === p.identifier) matches.push(index);
+      }
+      if (matches.length !== 1) return tableFail('修订已变化，请刷新后重试');
+      p.index = matches[0];
+    } else if (p && p.revision != null && p.revision !== currentReviewRevision()) return tableFail('文档已变化，请刷新修订后重试');
     const r = redlineAt(p && p.index);
     if (!r) return { success: false, message: 'no revision at index ' + (p && p.index) };
     return selectRedlineRange(r)
@@ -5097,18 +5440,27 @@ const EXEC = {
   // 正文流里是零宽，退化成定位到起点；内联模式下删除文字就在流里，同样要跨选），
   // 见 selectRedlineRange。摆错位置（collapse 到起点再右移、或用 selectVisibly
   // 传区间游标）会让 dispatch 打空，甚至凭空多出一条空插入修订。
+  // 带 AwdReviewGeometry 的引擎先走 resolveRedlinesByNativeId（按原生 id 派发）；
+  // 下面的光标路径只服务没有该契约的旧引擎（r4），原样保留。
   resolve_revision(p) {
     const action = String((p && p.action) || 'accept').toLowerCase();
     if (action !== 'accept' && action !== 'reject') return tableFail("action must be accept|reject");
+    const byId = resolveRedlinesByNativeId([p && p.index], expectedRedlineIdentifiers(p), action);
+    if (byId && byId.error) return tableFail(byId.error);
+    if (byId) {
+      return byId.results[0].success
+        ? { success: true, index: Number(p.index), action: action, remaining: byId.remaining, via: 'native-id' }
+        : Object.assign(tableFail('修订未被处置（引擎未命中该条）'), { remaining: byId.remaining, via: 'native-id' });
+    }
     const r = redlineAt(p && p.index);
     if (!r) return tableFail('no revision at index ' + (p && p.index));
     if (!selectRedlineRange(r, true)) return tableFail('could not select revision range');
-    const before = countRedlines();
+    const before = countRedlines(), beforeLayer = redlineLayerState(r);
     css.frame.DispatchHelper.create(context).executeDispatch(
       ctrl.getFrame(), action === 'accept' ? '.uno:AcceptTrackedChange' : '.uno:RejectTrackedChange', '', 0, []);
     const after = countRedlines();
-    // dispatch 不报错也可能没命中——用条数变化确认，别对用户谎报成功
-    return after < before
+    // Stacked revisions may change their top layer without changing the count.
+    return redlineWasResolved(r, before, after, beforeLayer)
       ? { success: true, index: Number(p.index), action: action, remaining: after }
       : Object.assign(tableFail('修订未被处置（引擎未命中该条）'), { remaining: after });
   },
@@ -5129,6 +5481,12 @@ const EXEC = {
     if (action !== 'accept' && action !== 'reject') return tableFail("action must be accept|reject");
     const indices = Array.isArray(p && p.indices) ? p.indices : [];
     if (!indices.length) return tableFail('resolve_revisions requires a non-empty indices array');
+    const byId = resolveRedlinesByNativeId(indices, expectedRedlineIdentifiers(p), action);
+    if (byId && byId.error) return tableFail(byId.error);
+    if (byId) {
+      return { success: true, action: action, resolved: byId.results.filter(function (x) { return x.success; }).length,
+        remaining: byId.remaining, results: byId.results, via: 'native-id' };
+    }
     const all = [];
     try {
       const en = xModel.getRedlines().createEnumeration();
@@ -5143,11 +5501,11 @@ const EXEC = {
       let ok = !!r && selectRedlineRange(r, true);
       if (!ok) { r = redlineAt(index); ok = !!r && selectRedlineRange(r, true); } // 退回单条重扫兜底
       if (!ok) { results.push({ index: index, success: false }); continue; }
-      const before = countRedlines();
+      const before = countRedlines(), beforeLayer = redlineLayerState(r);
       dispatcher.executeDispatch(ctrl.getFrame(),
         action === 'accept' ? '.uno:AcceptTrackedChange' : '.uno:RejectTrackedChange', '', 0, []);
       const after = countRedlines();
-      results.push({ index: index, success: after < before });
+      results.push({ index: index, success: redlineWasResolved(r, before, after, beforeLayer) });
     }
     const resolved = results.filter(function (x) { return x.success; }).length;
     return { success: true, action: action, resolved: resolved, remaining: countRedlines(), results: results };
@@ -5166,6 +5524,7 @@ const EXEC = {
   },
   list_comments(p) {
     const limit = Math.max(1, Math.min(500, Number(p && p.limit) || 200));
+    const locate = !(p && p.locate === false);   // see list_revisions
     const out = [];
     try {
       const en = xModel.getTextFields().createEnumeration();
@@ -5183,25 +5542,39 @@ const EXEC = {
         try { it.resolved = !!f.getPropertyValue('Resolved'); } catch (e) { it.resolved = false; }
         try {
           const a = f.getAnchor();
-          it.anchorText = String(a.getString() || '').slice(0, 80);
-          it.paragraph = (paragraphTextOf(a) || '').slice(0, 120);
-          applyLocator(it, a.getStart(), a.getEnd());   // 与 list_revisions 同一坐标系
+          it.anchorText = String(a.getString() || '');
+          if (locate) {
+            it.paragraph = (paragraphTextOf(a) || '').slice(0, 120);
+            applyLocator(it, a.getStart(), a.getEnd());   // 与 list_revisions 同一坐标系
+          }
         } catch (e) {}
         out.push(it);
       }
     } catch (e) { return tableFail(errStr(e)); }
-    return { success: true, count: out.length, comments: out };
+    return { success: true, count: out.length, comments: out, revision: currentReviewRevision(), documentSeq: docSeq };
   },
   goto_comment(p) {
-    if (p && p.revision != null && p.revision !== currentReviewRevision()) return tableFail('批注已变化，请刷新后重试');
-    const f = commentAt(p && (p.id || p.index));
+    let f, index = Number(p && p.index);
+    if (p && p.documentSeq != null) {
+      if (p.documentSeq !== docSeq || typeof p.id !== 'string' || !p.id) return tableFail('批注已变化，请刷新后重试');
+      const matches = [], en = xModel.getTextFields().createEnumeration();
+      for (let n = 0; n < 500 && en.hasMoreElements();) {
+        const field = en.nextElement();
+        if (!(field.supportsService && field.supportsService('com.sun.star.text.textfield.Annotation'))) continue;
+        if (commentIdOf(field) === p.id) matches.push({ field: field, index: n });
+        n++;
+      }
+      if (matches.length !== 1) return tableFail('批注已变化，请刷新后重试');
+      f = matches[0].field; index = matches[0].index;
+    } else if (p && p.revision != null && p.revision !== currentReviewRevision()) return tableFail('批注已变化，请刷新后重试');
+    else f = commentAt(p && (p.id || p.index));
     if (!f) return { success: false, message: 'no comment at index ' + (p && p.index) };
-    try { return selectVisibly(f.getAnchor()) ? { success: true, index: Number(p.index) } : { success: false, message: 'could not select anchor' }; }
+    try { return selectVisibly(f.getAnchor()) ? { success: true, index: index, id: commentIdOf(f) } : { success: false, message: 'could not select anchor' }; }
     catch (e) { return { success: false, message: errStr(e) }; }
   },
   update_comment(p) {
-    if (p && p.revision != null && p.revision !== currentReviewRevision()) return tableFail('批注已变化，请刷新后重试');
     if (!isReviewWritable()) return tableFail('文档为只读状态');
+    if (!matchCommentSnapshot(p)) return tableFail('批注已变化，请刷新后重试');
     const f = commentAt(p && (p.id || p.index));
     if (!f || typeof p.content !== 'string' || !p.content.trim()) return tableFail('批注内容不能为空');
     if (p.expectedContent != null && f.getPropertyValue('Content') !== p.expectedContent) return tableFail('批注已变化，请刷新后重试');
@@ -5211,8 +5584,8 @@ const EXEC = {
   // AI 工具面（doc_resolve_comment）与 ReviewPanel（{index}）共用本原语：ref 优先
   // 取 id（commentAt 按 Name 定位，跨调用稳定），没有 id 才退回 index。
   set_comment_resolved(p) {
-    if (p && p.revision != null && p.revision !== currentReviewRevision()) return tableFail('批注已变化，请刷新后重试');
     if (!isReviewWritable()) return tableFail('文档为只读状态');
+    if (!matchCommentSnapshot(p)) return tableFail('批注已变化，请刷新后重试');
     const ref = p && (p.id != null && p.id !== '' ? p.id : p.index);
     const f = commentAt(ref);
     if (!f) return tableFail('no comment at ' + ref);
@@ -5224,8 +5597,8 @@ const EXEC = {
   // Annotation removal must not itself become a tracked deletion: otherwise the
   // field remains in the document and the comment count never decreases.
   delete_comment(p) {
-    if (p && p.revision != null && p.revision !== currentReviewRevision()) return tableFail('批注已变化，请刷新后重试');
     if (!isReviewWritable()) return tableFail('文档为只读状态');
+    if (!matchCommentSnapshot(p)) return tableFail('批注已变化，请刷新后重试');
     const ref = p && (p.id != null && p.id !== '' ? p.id : p.index);
     const f = commentAt(ref);
     if (!f) return tableFail('no comment at ' + ref);
@@ -5282,7 +5655,7 @@ const EXEC = {
     } catch (e) {}
     if (!newField) return tableFail('回复未生效（引擎未产生新批注）');
     try { newField.setPropertyValue('ParentId', parentId); } catch (e) {}
-    try { newField.setPropertyValue('ParentName', parentId); } catch (e) {}
+    try { const name = parent.getPropertyValue('Name'); if (name) newField.setPropertyValue('ParentName', name); } catch (e) {}
     return { success: true, id: newName, parentId: parentId, author: AI_AUTHOR, text: text };
   },
   // [diagnostic] 修订记录清单（类型/作者/文本片段）。后端 doc_debug_revisions
@@ -7193,15 +7566,60 @@ function runAgentCommandInMarginView(action, fn) {
 }
 
 const RESOLVE_REVISION_ACTIONS = new Set(['resolve_revision', 'resolve_revisions', 'resolve_all_revisions']);
-function runRevisionResolution(fn, p) {
+// Keep an open comment draft usable across unrelated edits and delayed view
+// notifications. Its native identity, full state and document must still match.
+function matchCommentSnapshot(p) {
+  if (p && p.documentSeq != null && p.documentSeq !== docSeq) return false;
+  if (!p || p.expectedComment == null) return !p || p.revision == null || p.revision === currentReviewRevision();
+  const expected = p.expectedComment;
+  if (p.documentSeq !== docSeq || typeof expected.id !== 'string' || !expected.id || p.id !== expected.id) return false;
+  const listed = EXEC.list_comments({ limit: 500 });
+  const matches = listed.success ? listed.comments.filter(c => c.id === expected.id) : [];
+  const fields = ['id', 'author', 'content', 'timestamp', 'anchorText'];
+  if (matches.length !== 1 || !fields.every(key => typeof expected[key] === 'string' && matches[0][key] === expected[key])
+      || typeof expected.resolved !== 'boolean' || matches[0].resolved !== expected.resolved) return false;
+  p.index = matches[0].index;
+  p.revision = currentReviewRevision();
+  return true;
+}
+// A view-only native notification can arrive after its command has returned and
+// advance the global revision. Snapshot-backed cards remain usable if the same
+// native revision still has exactly the content the user reviewed. Remap by ID,
+// never by an expired index, and reject changed targets or replacement documents.
+function matchRevisionSnapshot(p, action) {
+  if (p.documentSeq !== docSeq || !Array.isArray(p.expectedRevisions) || !p.expectedRevisions.length) return false;
+  const requested = action === 'resolve_revision' ? [p.index] : action === 'resolve_revisions' ? p.indices : null;
+  if (!Array.isArray(requested) || requested.length !== p.expectedRevisions.length || new Set(requested).size !== requested.length) return false;
+  const expected = p.expectedRevisions;
+  if (new Set(expected.map(r => r.identifier)).size !== expected.length || !expected.every(r => requested.includes(r.index) && typeof r.identifier === 'string' && r.identifier)) return false;
+  const listed = EXEC.list_revisions({ limit: 500 });
+  if (!listed.success) return false;
+  const current = new Map();
+  listed.revisions.forEach(r => current.set(r.identifier, current.has(r.identifier) ? null : r));
+  const fields = ['identifier', 'type', 'text', 'author', 'timestamp'];
+  const matched = expected.map(r => current.get(r.identifier));
+  if (!matched.every((r, i) => r && fields.every(key => typeof expected[i][key] === 'string' && r[key] === expected[i][key]))) return false;
+  if (action === 'resolve_revision') p.index = matched[0].index;
+  else p.indices = matched.map(r => r.index);
+  p.revision = currentReviewRevision();
+  return true;
+}
+function runRevisionResolution(fn, p, action) {
   if (!isWriterDoc()) return fn();
-  if (p && p.revision != null && p.revision !== currentReviewRevision()) return tableFail('文档已变化，请刷新修订后重试');
   if (!isReviewWritable()) return tableFail('文档为只读状态');
-  if (readShowChanges() !== false) return fn();
+  if (p && p.expectedRevisions != null) {
+    if (!matchRevisionSnapshot(p, action)) return tableFail('修订已变化，请刷新后重试');
+  } else if (p && p.revision != null && p.revision !== currentReviewRevision()) return tableFail('文档已变化，请刷新修订后重试');
+  // Hidden markup cannot be resolved, margin markup cannot be undone safely:
+  // both resolve in the inline view (see undoStep for the margin case).
+  const inMargin = readShowChangesInMargin() === true;
+  if (readShowChanges() !== false && !inMargin) return fn();
   const before = revisionViewState().mode;
   try {
     withViewOnlyChange(function () { applyRevisionView('all'); xModel.refresh(); });
-    return fn();
+    const result = fn();
+    if (inMargin) rememberInlineUndo();
+    return result;
   } finally {
     withViewOnlyChange(function () { applyRevisionView(before); try { xModel.refresh(); } catch (e) {} });
   }
@@ -7227,7 +7645,7 @@ function execCommand(reqId, action, params) {
     catch (e) { log('修订作者设置失败 / redline author failed: ' + errStr(e)); }
     const fn = EXEC[action];
     result = fn
-      ? (RESOLVE_REVISION_ACTIONS.has(action) ? runRevisionResolution(function () { return fn(p); }, p) : (p.__agent || FINAL_TEXT_ACTIONS.has(action)) ? runAgentCommandInMarginView(action, function () { return fn(p); }) : fn(p))
+      ? (RESOLVE_REVISION_ACTIONS.has(action) ? runRevisionResolution(function () { return fn(p); }, p, action) : (p.__agent || FINAL_TEXT_ACTIONS.has(action)) ? runAgentCommandInMarginView(action, function () { return fn(p); }) : fn(p))
       : { success: false, message: 'not implemented in LibreOffice worker yet: ' + action };
   } catch (e) {
     result = { success: false, message: errStr(e) };

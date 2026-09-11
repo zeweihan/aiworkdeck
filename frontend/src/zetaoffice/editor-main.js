@@ -221,8 +221,15 @@ try {
 // needs an edge to debounce-save on, so throttle the relay to 1/500ms.
 let inlineReview = null
 let lastModifiedRelay = 0
+function relayCommentRequest(documentSeq) {
+  try {
+    hostTransport.send({ __lo: 'lo-relay', type: 'comment-request',
+      ...(documentSeq != null ? { documentSeq } : {}) })
+  } catch (e) { /* ignore */ }
+}
 function relayModified(d) {
   if (!d || !d.cmd) return
+  if (d.cmd === 'comment-request') { relayCommentRequest(d.documentSeq); return }
   if (d.cmd === 'sel_changed') { relaySelection(); return }
   if (d.cmd !== 'modified') return
   reviewBalloons?.documentChanged()
@@ -390,6 +397,7 @@ startEditorEndpoint({
       onCursorMoved: () => { relaySelection(); writingAssistance?.cursorMoved(); inlineReview?.cursorMoved() },
       onCommitted: (text) => { writingAssistance?.committed(text); inlineReview?.committed(text) },
       onAssistanceKey: (event) => writingAssistance?.keydown(event) || false,
+      onCommentRequested: () => relayCommentRequest(),
       onLog: (m) => { console.log('[zeta-editor]', m); if (VERIFY) vlog(m) },
     })
     writingAssistance = attachWritingAssistance({

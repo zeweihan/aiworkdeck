@@ -171,7 +171,21 @@ export function createRelayExecutor({ send, subscribe, timeoutMs = 30000, onRead
         }
       }, budget)
       pending.set(reqId, { resolve, timer, onProgress: callOpts && callOpts.onProgress })
-      send({ __lo: TAG, type: 'exec', reqId, action, params })
+      // 传输层拒收（典型是参数里混进了 Vue 响应式 Proxy，结构化克隆报 DataCloneError）：
+      // iframe postMessage 同步抛，Electron webview.send 返回被拒的 Promise。这条命令
+      // 根本没发出去、对端永远不会回——当场以失败收场，不干等满预算，也不立墓碑。
+      const sendFailed = (e) => {
+        if (!pending.has(reqId)) return
+        clearTimeout(timer)
+        pending.delete(reqId)
+        resolve({ success: false, message: 'LibreOffice relay send failed: ' + action + ': ' + (e && e.message ? e.message : String(e)) })
+      }
+      try {
+        const sent = send({ __lo: TAG, type: 'exec', reqId, action, params })
+        if (sent && typeof sent.then === 'function') sent.then(null, sendFailed)
+      } catch (e) {
+        sendFailed(e)
+      }
     })
   }
 
