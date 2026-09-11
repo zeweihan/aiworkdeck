@@ -42,22 +42,17 @@ function buildSsrRender() {
 
 const ssrRender = buildSsrRender()
 
-// 把组件里真正的 customWords 计算属性抠出来直接跑：断言的是产品代码的解析规则，
-// 不是测试里另写一份。抠不出来就直接失败，不会静悄悄变成空断言。
-function extractCustomWordsComputed() {
-  const m = SRC.match(/customWords\s*\(\)\s*\{\n([\s\S]*?)\n {4}\}/)
-  assert.ok(m, 'DesensitizePane.vue 里找不到 customWords 计算属性（缩进或名字变了？）')
-  // eslint-disable-next-line no-new-func
-  return new Function(m[1])
-}
-
-const customWordsOf = (text) => extractCustomWordsComputed().call({ customWordsText: text })
+const componentScript = SRC.match(/<script>([\s\S]*?)<\/script>/)[1]
+  .replace(/^import .*$/m, '').replace('export default', 'return')
+const component = new Function(componentScript)()
+const termsOf = text => component.methods.payload.call({ customTerms: text, excludedTerms: '' }).customTerms
 
 // $t 直接回键名：断言键名即断言「模板引用的 i18n 键」，打错字就对不上。
 async function render(state = {}) {
   const app = VueRuntime.createSSRApp({
     ssrRender,
     data: () => ({
+      ...component.data(),
       filePath: '',
       fileName: '',
       fileId: null,
@@ -70,9 +65,7 @@ async function render(state = {}) {
       customWordsText: '',
       ...state,
     }),
-    computed: {
-      customWords: extractCustomWordsComputed(),
-    },
+    computed: component.computed,
     methods: {
       $t: (k, p) => (p ? k + JSON.stringify(p) : k),
     },
@@ -101,8 +94,8 @@ const stripComments = (html) => html.replace(/<!--[\s\S]*?-->/g, '')
 test('自定义词输入区在首屏 DOM 里：一个文件都没选、什么都没点，它就在', async () => {
   const html = stripComments(await render())
   assert.match(html, /panels\.deCustomWordsTitle/, '首屏没有「要涂黑的姓名/词语」标题')
-  assert.match(html, /class="custom-words-input"/, '首屏没有自定义词输入框')
-  assert.match(html, /panels\.deCustomWordsPlaceholder/, '输入框没有占位提示')
+  assert.match(html, /class="[^"]*custom-words-input[^"]*"/, '首屏没有自定义词输入框')
+  assert.match(html, /panels\.deCustomPlaceholder/, '输入框没有占位提示')
 })
 
 test('说明文案跟着输入区一起在首屏：不解释「姓名不会自动识别」，用户根本不知道要填', async () => {
@@ -124,35 +117,24 @@ test('不许再有「中文姓名」勾选项——清单由后端 /options 给�
 
 // ==================== 解析规则 ====================
 
-test('换行 / 逗号 / 顿号 / 分号 / 空格都能分词，空白与重复被丢掉', () => {
-  assert.deepEqual(customWordsOf('张三\n李四，王五、赵六;钱七 孙八'),
-    ['张三', '李四', '王五', '赵六', '钱七', '孙八'])
-  assert.deepEqual(customWordsOf('  张三 \n\n 张三 '), ['张三'])
-  assert.deepEqual(customWordsOf(''), [])
-  assert.deepEqual(customWordsOf('   '), [])
+test('逐行词语保留英文公司名中的空格，不拆分合法短语', () => {
+  assert.deepEqual(termsOf('张三\n Acme Technology Co., Ltd. \n'), ['张三', 'Acme Technology Co., Ltd.'])
+  assert.deepEqual(termsOf('   '), [])
 })
 
-// ==================== 接线 ====================
-
-test('生成时把 customWords 一起发给后端', () => {
-  assert.match(SRC, /customWords: this\.customWords/,
-    'handleGenerate 的 payload 里没有 customWords，填了也白填')
+test('自定义词通过预览和生成共用的 payload 传给后端', () => {
+  assert.deepEqual(termsOf('张三\n李四'), ['张三', '李四'])
+  assert.match(SRC, /previewSensitiveFile\(this\.payload\(\)\)/)
+  assert.match(SRC, /desensitizeFile\(\{ \.\.\.this\.payload\(\)/)
 })
 
-test('只填了词、一个类型都没勾，生成按钮也要可用（姓名的唯一入口）', () => {
-  const m = SRC.match(/:disabled="([^"]+)"/)
-  assert.ok(m, '找不到生成按钮的 disabled 表达式')
-  const expr = m[1]
-  assert.ok(/customWords\.length/.test(expr),
-    'disabled 表达式没把 customWords 算进去：' + expr)
-  // eslint-disable-next-line no-new-func
-  const disabled = new Function('s', `with (s) { return (${expr}) }`)
-  assert.equal(disabled({ processing: false, filePath: 'a.docx', selectedStrategies: [], customWords: ['张三'] }),
-    false, '只填自定义词时按钮被禁用了')
-  assert.equal(disabled({ processing: false, filePath: 'a.docx', selectedStrategies: [], customWords: [] }),
-    true, '既没勾类型也没填词时不该能点')
-  assert.equal(disabled({ processing: false, filePath: '', selectedStrategies: ['PHONE'], customWords: ['张三'] }),
-    true, '没选文件时不该能点')
+test('仅填词语时可以先预览；没有输入或未选文件时不能预览', () => {
+  const m = SRC.match(/<button[^>]*:disabled="([^"]+)"[^>]*@tap="handlePreview"/)
+  assert.ok(m)
+  const disabled = new Function('s', `with (s) { return (${m[1]}) }`)
+  assert.equal(disabled({ processing: false, fileId: 1, selectedStrategies: [], customTerms: '张三' }), false)
+  assert.equal(disabled({ processing: false, fileId: 1, selectedStrategies: [], customTerms: '' }), true)
+  assert.equal(disabled({ processing: false, fileId: null, selectedStrategies: [], customTerms: '张三' }), true)
 })
 
 // ==================== 文案 ====================

@@ -189,3 +189,51 @@ fork 均在 zeweihan 名下，分支 add-ai-workdeck；被要求修改时直接�
   重试命令（限制解除后直接跑）：
   `gh pr create --repo sindresorhus/awesome-electron --head zeweihan:add-ai-workdeck --title "Add AI WorkDeck" --body-file docs/marketing/community-launch/awesome-electron-pr-body.md`
 - 上周提交状态：三个 awesome PR 均 OPEN 未处理；周刊与 HelloGitHub 两条 issue 0 回复；HN 账号未恢复。
+
+## 2026-09-11 进展复查
+
+| 指标 | 09-03 | 09-07 | 09-11 |
+|---|---|---|---|
+| 星 | 79 | 94 | 127 |
+| 14 天独立访客 | 104 | 119 | 129 |
+
+新增 48 星，只多了约 25 个独立访客。星的增长和流量对不上。
+
+### 刷星信号（证据）
+
+- 09-04 以后的 49 个新 stargazer：34 个零粉丝，25 个 2026 年才注册，17 个仓库数不超过 2。
+- 基线是 6 月那次 40 星爆发：7 个零粉丝，1 个 2026 年注册，7 个仓库数不超过 2。
+- 抽查 6 个可疑账号：5 个在 08-27 到 08-31 之间各 star 了 40 到 50 个仓库，互相重叠
+  （fuxicodex/Fuxi 出现在 5 个账号里，ArkEval、echo-agent、Data-Analysis-Agent 反复出现）。
+  这是刷星农场的指纹。农场有时也会随手 star 无关仓库做掩护，所以不能据此断定是谁买的。
+- 粗估：新增 48 星里约 30 到 35 颗可疑，自然星约 15 颗，自然总数约 94。
+
+**处置**：GitHub 服务条款禁止虚假星，平台会周期性清理，榜单维护者也会看 stargazer。
+我方不买、不换，也不拿这批星当门槛凭据。需要维护者确认 hermes 或其他人有没有做过换星或买星，
+有的话立即停止。
+
+### 两项纠错
+
+1. **awesome-legaltech#102 是重复提交，已关闭并致歉。** 榜单第 125 行早有「AI Workdeck」条目，
+   是 6 月那一轮加的。当时查重断言写的是区分大小写的 `'AI WorkDeck' not in t`，没有命中。
+   以后查重一律不区分大小写，并同时匹配仓库 URL `zeweihan/aiworkdeck`。
+2. **awesome-electron 暂停提交。** 它的门槛是 100 星，扣掉可疑星后自然星约 94，
+   不应拿刷出来的数过门槛。等自然星数过百再投（fork 分支 add-ai-workdeck 保留），
+   另外该仓的互动限制仍未解除。hermes 每日重试任务同步取消。
+
+### 已被收录（外部自发或 6 月那轮）
+
+- alvinreal/awesome-opensource-ai（4.7k 星）
+- alexanderop/awesome-local-first（06-16 合并）
+- lilialla/awesome-legal-ai-zh（06-22）
+- Vaquill-AI/awesome-legaltech（早于 09-03）
+- Arnon-hs/open-source（MCP 目录）
+
+6 月那次 40 星爆发和榜单收录时间吻合，印证「榜单与一次性爆点才出星」的判断。
+
+### 仍在等待
+
+- awesome-mcp-clients#301、awesome-ai-agents#1497：OPEN，0 审阅。
+- 阮一峰周刊 #11482、HelloGitHub #3632：0 回复。
+- HN：账号 karma 1，帖子仍 dead，还没收到版主申诉结果。
+- awesome-selfhosted：09-17 以后投。

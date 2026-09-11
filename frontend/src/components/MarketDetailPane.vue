@@ -42,6 +42,12 @@
               </view>
             </template>
 
+            <template v-if="isBuiltinRedaction">
+              <text class="mdp-action-hint">{{ $t('market.redactionEngineUpdateNotice') }}</text>
+              <view class="mdp-btn primary" @tap="goToBuiltinUpdates">
+                <text>{{ $t('market.redactionEngineUpdateButton') }}</text>
+              </view>
+            </template>
             <!-- Skill：安装 / 更新 / 卸载 + 生效方式三档 -->
             <template v-if="spec.kind === 'skill'">
               <view
@@ -53,7 +59,7 @@
                 <text>{{ busy ? $t('market.installingEllipsis') : $t('market.install') }}</text>
               </view>
               <view
-                v-else-if="marketInfo && installedInfo"
+                v-else-if="marketInfo && installedInfo && !isBuiltinRedaction"
                 class="mdp-btn"
                 :class="{ busy }"
                 @tap="doInstallSkill"
@@ -389,6 +395,10 @@ export default {
       const cat = (this.marketInfo?.category || this.installedInfo?.category) || 'other'
       return CATEGORY_GLYPHS[cat] || CATEGORY_GLYPHS.other
     },
+    isBuiltinRedaction() {
+      return this.spec.kind === 'skill' && this.spec.id === 'desensitize'
+        && !!this.installedInfo && !this.installedInfo.sourcePluginId
+    },
     display() {
       const m = this.marketInfo || {}
       const i = this.installedInfo || {}
@@ -396,9 +406,9 @@ export default {
       const cat = m.category || i.category
       return {
         name: m.name || i.name || this.spec.name || this.spec.id,
-        description: m.description || i.description || '',
+        description: (this.isBuiltinRedaction ? i.description : m.description) || i.description || '',
         author: m.authorDisplayName || m.author || i.author || '',
-        version: m.version || i.version || '',
+        version: (this.isBuiltinRedaction ? i.version : m.version) || i.version || '',
         license: m.license || i.license || '',
         // credits（第三方引擎署名）目前只有本机 skill 会带；官网 registry 契约暂未收录该字段
         credits: i.credits || m.credits || [],
@@ -780,6 +790,11 @@ export default {
     // 购买走系统浏览器：支付要用用户已登录的浏览器会话，内嵌 tab 里付不了
     openPurchase() {
       openExternalUrl(purchaseUrl(this.spec.kind, this.spec.id))
+    },
+    goToBuiltinUpdates() {
+      if (this.openSettingsTab) return this.openSettingsTab({ nav: 'updates' })
+      if (this.leaveWorkbench) return this.leaveWorkbench('/pages/admin/admin?nav=updates')
+      uni.navigateTo({ url: '/pages/admin/admin?nav=updates' })
     },
     goToAccountSettings() {
       // 工作台里设置是标签，不跳页（dev-board#582）

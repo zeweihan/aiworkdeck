@@ -11,11 +11,11 @@
 # 姓名走面板上的「要涂黑的姓名/词语」由用户手填。
 id: desensitize
 name: 脱敏
-description: 文档脱敏：定位并涂黑身份证号、手机号、银行卡号等有客观特征的敏感信息，姓名等词语由用户手填后逐字涂黑；支持 PDF 与 Word（.docx）文档，一键生成脱敏后的新文件。
+description: 本地规则脱敏：公司识别、手填姓名/词语、预览与编号替换；编辑副本后凭加密映射和密码复敏。引擎随桌面端更新，不调用大模型。
 
 author: AI Workdeck
 author_url: https://www.aiworkdeck.com
-version: 1.0.0
+version: 2.0.0
 license: MIT
 
 # 默认不安装：随包分发但默认关闭，用户在插件广场手动启用（= 安装）后才在左栏出现，

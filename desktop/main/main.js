@@ -1397,6 +1397,7 @@ function createServices() {
   const mgr = createServiceManager({
     projectRoot,
     packaged: app.isPackaged,
+    appVersion: app.getVersion(),
     resourcesPath: process.resourcesPath,
     dataDir,
     // ARM 版 Windows（Mac 虚拟机）上 x64 转译运行，服务启动看门狗要放宽（dev-board#340）

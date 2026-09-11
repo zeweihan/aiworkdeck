@@ -108,11 +108,13 @@ test('disabled preference cancels pending checks and resumes only after explicit
   assert.equal(f.calls.length, 1)
 })
 
-test('all-revisions view is explicitly unavailable and does not feed deleted text into checks', async (t) => {
-  const f = fixture(t); f.dependencies.execute = async () => ({ mode: 'all' })
+test('inline revision display reads the guarded final text snapshot', async (t) => {
+  const f = fixture(t), calls = [], original = f.dependencies.execute
+  f.dependencies.execute = async (action, params) => { calls.push({action, params}); return original(action, params) }
   f.host.start(); await f.tick()
-  assert.equal(f.calls.length, 0)
-  assert.equal(f.messages.at(-1).message, 'REVIEW_INLINE_REVISIONS')
+  assert.equal(f.calls.length, 1)
+  assert.equal(calls.find(c => c.action === 'get_document_text').params.__agent, true)
+  assert.equal(f.messages.at(-1).status, 'ready')
 })
 
 test('destroy prevents late responses, timers and all future actions', async (t) => {

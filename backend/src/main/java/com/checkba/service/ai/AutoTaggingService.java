@@ -10,6 +10,7 @@ import com.checkba.service.TagService;
 import dev.langchain4j.model.chat.ChatLanguageModel;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -33,6 +34,9 @@ public class AutoTaggingService {
     private final AuxModelResolver auxModelResolver;
     private final TokenUsageService tokenUsageService;
 
+    @Value("${ai.auto-tagging.enabled:true}")
+    private boolean autoTaggingEnabled = true;
+
     /**
      * 按 fileId 序列化整个自动打标签流程（check-then-act 竞态修复，dev-board#74）。
      *
@@ -54,6 +58,8 @@ public class AutoTaggingService {
      * Automatically generate and attach tags to a file based on its content.
      */
     public void autoTagFile(Long projectId, Long fileId, String storagePath, Long userId) {
+        // 桌面端导入/保存不应在用户主动调用 AI 前读取并发送未脱敏正文。
+        if (!autoTaggingEnabled) return;
         // 平台通道按用户计费：这次 LLM 调用要落在上传者本人的额度上
         PlatformAiUserScope.run(userId, () -> autoTagFileInScope(projectId, fileId, storagePath, userId));
     }

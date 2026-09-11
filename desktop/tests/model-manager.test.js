@@ -121,6 +121,132 @@ test('remove clears installed state', async () => {
   assert.strictEqual(mm.status().find((c) => c.id === 'mineru-models').state, 'absent')
 })
 
+// ── 下载源顺序（dev-board#583）：kokoro/asr 先 ModelScope，失败再回落 hf-mirror ──
+// 假下载器按 source 决定成败，并把每次被调起的 source 记进 calls.log
+const MS_FAIL_LINE = 'error[network]: URLError: <urlopen error boom-ms>'
+const HF_FAIL_LINE = 'huggingface_hub.errors.LocalEntryNotFoundError: boom-hf'
+
+function makeSourcedManager(dataDir, behavior, events) {
+  const logFile = path.join(dataDir, 'calls.log')
+  const mm = createModelManager({
+    dataDir,
+    resourcesPath: null,
+    packaged: false,
+    onProgress: (e) => events.push(e),
+    progressPollMs: 50,
+    spawnSpecOverride: (component, ctx, source) => {
+      const mode = behavior[source] || 'fail'
+      const failLine = mode === 'disk'
+        ? 'error[disk]: OSError: [Errno 28] No space left on device'
+        : (source === 'hf' ? HF_FAIL_LINE : MS_FAIL_LINE)
+      const body = mode === 'ok'
+        ? `console.log('done'); process.exit(0)`
+        : mode === 'hang'
+          ? `console.log('starting'); setInterval(() => {}, 1000)`
+          : `console.log(${JSON.stringify(failLine)}); process.exit(1)`
+      return {
+        cmd: process.execPath,
+        args: ['-e', `require('fs').appendFileSync(${JSON.stringify(logFile)}, ${JSON.stringify(String(source))} + '\\n'); ${body}`],
+        env: process.env,
+        cwd: dataDir
+      }
+    }
+  })
+  const calls = () => {
+    try { return fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean) } catch (e) { return [] }
+  }
+  return { mm, calls }
+}
+
+test('kokoro/asr: ModelScope 成功就不走 hf 回落', async () => {
+  const dataDir = tmpDataDir()
+  const events = []
+  const { mm, calls } = makeSourcedManager(dataDir, { modelscope: 'ok', hf: 'ok' }, events)
+  await mm.download('asr-models')
+  await waitFor(() => mm.isInstalled('asr-models'))
+  assert.deepStrictEqual(calls(), ['modelscope'])
+})
+
+test('kokoro/asr: ModelScope 失败回落 hf-mirror，回落成功即装好', async () => {
+  const dataDir = tmpDataDir()
+  const events = []
+  const { mm, calls } = makeSourcedManager(dataDir, { modelscope: 'fail', hf: 'ok' }, events)
+  await mm.download('kokoro-models')
+  await waitFor(() => mm.isInstalled('kokoro-models'))
+  assert.deepStrictEqual(calls(), ['modelscope', 'hf'])
+  assert.ok(!events.some((e) => e.phase === 'error'), '回落成功时不该发 error')
+})
+
+test('kokoro/asr: 两个源都失败时 message 是人话且附原始异常', async () => {
+  const dataDir = tmpDataDir()
+  const events = []
+  const { mm, calls } = makeSourcedManager(dataDir, { modelscope: 'fail', hf: 'fail' }, events)
+  await mm.download('asr-models')
+  await waitFor(() => events.some((e) => e.phase === 'error'))
+  assert.deepStrictEqual(calls(), ['modelscope', 'hf'])
+  const st = mm.status().find((c) => c.id === 'asr-models')
+  assert.strictEqual(st.state, 'error')
+  assert.match(st.message, /无法连接模型下载源|Could not reach the model download sources/)
+  assert.match(st.message, /ModelScope/)
+  assert.doesNotMatch(st.message, /^download exited/)
+  assert.ok(st.message.includes('boom-ms'), 'ModelScope 的原始异常要附上')
+  assert.ok(st.message.includes('LocalEntryNotFoundError: boom-hf'), 'hf 的原始异常要附上')
+  const err = events.find((e) => e.phase === 'error')
+  assert.strictEqual(err.message, st.message)
+})
+
+test('磁盘满时提示空间不足而不是网络', async () => {
+  const dataDir = tmpDataDir()
+  const events = []
+  const { mm } = makeSourcedManager(dataDir, { modelscope: 'disk', hf: 'fail' }, events)
+  await mm.download('asr-models')
+  await waitFor(() => events.some((e) => e.phase === 'error'))
+  assert.match(mm.status().find((c) => c.id === 'asr-models').message, /磁盘空间不足|Not enough disk space/)
+})
+
+test('CHECKBA_MODEL_SOURCE=hf 强制只走 hf', async (t) => {
+  const prev = process.env.CHECKBA_MODEL_SOURCE
+  process.env.CHECKBA_MODEL_SOURCE = 'hf'
+  t.after(() => { if (prev === undefined) delete process.env.CHECKBA_MODEL_SOURCE; else process.env.CHECKBA_MODEL_SOURCE = prev })
+  const dataDir = tmpDataDir()
+  const { mm, calls } = makeSourcedManager(dataDir, { modelscope: 'ok', hf: 'ok' }, [])
+  await mm.download('kokoro-models')
+  await waitFor(() => mm.isInstalled('kokoro-models'))
+  assert.deepStrictEqual(calls(), ['hf'])
+})
+
+test('CHECKBA_MODEL_SOURCE=modelscope 失败时不回落', async (t) => {
+  const prev = process.env.CHECKBA_MODEL_SOURCE
+  process.env.CHECKBA_MODEL_SOURCE = 'modelscope'
+  t.after(() => { if (prev === undefined) delete process.env.CHECKBA_MODEL_SOURCE; else process.env.CHECKBA_MODEL_SOURCE = prev })
+  const dataDir = tmpDataDir()
+  const events = []
+  const { mm, calls } = makeSourcedManager(dataDir, { modelscope: 'fail', hf: 'ok' }, events)
+  await mm.download('kokoro-models')
+  await waitFor(() => events.some((e) => e.phase === 'error'))
+  assert.deepStrictEqual(calls(), ['modelscope'])
+})
+
+test('ModelScope 下载中取消：不回落 hf、状态回 absent', async () => {
+  const dataDir = tmpDataDir()
+  const events = []
+  const { mm, calls } = makeSourcedManager(dataDir, { modelscope: 'hang', hf: 'ok' }, events)
+  await mm.download('asr-models')
+  await waitFor(() => calls().length === 1)
+  await mm.cancel('asr-models')
+  await new Promise((r) => setTimeout(r, 400))
+  assert.deepStrictEqual(calls(), ['modelscope'])
+  assert.strictEqual(mm.status().find((c) => c.id === 'asr-models').state, 'absent')
+})
+
+test('mineru 仍是单一来源，一次调起', async () => {
+  const dataDir = tmpDataDir()
+  const { mm, calls } = makeSourcedManager(dataDir, { null: 'ok', undefined: 'ok' }, [])
+  await mm.download('mineru-models')
+  await waitFor(() => mm.isInstalled('mineru-models'))
+  assert.strictEqual(calls().length, 1)
+})
+
 test('runtime pack 未装时，模型下载当场失败并说清要先装哪个组件', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mm-nopack-'))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))

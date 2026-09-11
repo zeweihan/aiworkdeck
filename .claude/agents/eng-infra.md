@@ -16,6 +16,8 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 ## 发版链路
 
 0. **版本规则 0.X.Y**（docs/INCREMENTAL_UPDATE_DESIGN.md）：X=大版本全量安装包；Y=小版本应用内补丁（overlay 机制，组件=backend-app/frontend-h5/zetaoffice-wrapper/pysvc-src）。小版本 tag 触发 CI `patch-gate` job（desktop/scripts/patch-gate.sh）：改壳（desktop/）、pom、LOWA 引擎、requirements.lock 都会被拒——这些只能随大版本走。补丁产物+签名 manifest 由 build-patch-assets.js 在 windows job 生成（私钥=secret UPDATE_SIGNING_KEY，备份 ~/.ssh/aiworkdeck_update_signing.pem；公钥内置 update-service.js，换钥须发大版本）；镜像同步 deploy/update-mirror-sync.sh 在官网 ECS 跑。
+0.1. **服务上下文必须传 `appVersion: app.getVersion()`（dev-board#589）**：backendLayout 与 UI 的 overlay 使用不同调用链。漏传时 UI 显示补丁已更新，但后端因无法解析大版本目录而静默回落内置 app.jar。回归必须运行 main.js 的实际 createServices，再验证 backendLayout 读取激活补丁及回滚；只单测 overlay 不足以覆盖接线。旧 0.38 壳存在此缺陷，脱敏 2.0 必须先装完整 0.38.4；修复随 0.39.0 全量版本交付，不能用旧壳自身的补丁修复。
+0.2. **桌面端默认关闭自动 AI 标签（dev-board#590，0.39.0）**：上传、本地导入及编辑器保存共用 AutoTaggingService；脱敏前 flushSave 也会经过此链路。`application-desktop.yml` 设置 `ai.auto-tagging.enabled: false`，在读取正文和调用模型之前返回，避免原文先被自动发送。云端默认行为及手动标签不变。DesktopAutoTaggingPrivacyTest 加载真实 desktop 配置，验证入口不读正文、不调用模型。0.38.4 仅供合成样例测试，真实敏感材料需完整 0.39.0；普通 AI 会话仍须由用户核查项目和历史上下文。
 1. 版本号**单一来源 `desktop/package.json` version**（backend 拆为 backend/app.jar + backend/lib/，启动 `java -cp "app.jar:lib/*" com.checkba.CheckbaApplication`，见 backend-service.js javaLaunchArgs；frontend version 不参与）。
 2. `git tag v<ver> && git push origin v<ver>` → 触发 desktop-build 双平台。auto 模式下 tag 推送不被分支保护拦；可用 Monitor 等 PR 合并后自动打 tag（v0.8.0 配方）。
 3. 产物：mac 仅 dmg（**arm64 only**，已放弃 Intel）；win 仅 nsis exe——**单包双架构**（dev-board#341）：主体 x64 全量 + 纯 arm64 Electron 壳（desktop-build.yml 在打包前 `electron-builder --dir --arm64` 产出、剪掉 resources/ 后由 installer.nsh 的 customInstall 在 ARM64 机器上覆盖进安装目录；壳约 260MB 未压缩、装器 +约 106MB）。ARM64 上渲染与 LOWA WASM 原生、JVM/Python 走转译层（javacv/torch 无 windows-arm64 natives，这是为什么不出纯 arm64 包）；x64 机器行为不变；本地构建无壳目录自动降级纯 x64。electron-builder 配置在 desktop/package.json "build" 字段（appId com.aiworkdeck.desktop、extraResources 打入 frontend/dist、backend.jar、jre、python、pysvc.tar.gz+meta、**graphviz、skills（随包内置 skill，v0.11.1 以前漏打）、litviz（诉讼可视化引擎）**；`notarize: true`（**不能写 teamId**：公证走 ASC API Key，@electron/notarize 把 teamId 归为密码凭据、与 API Key 并存即报 "Cannot use password credentials, API key credentials ... at once"，v0.34.0 首次 tag 构建踩过；团队由 issuer 决定=境内主体 8WKHZVR2W8，2026-09-05 起，此前香港主体 X9B97KVA84，dev-board#447）；entitlements desktop/build/entitlements.mac.plist）。**win 侧 `nsis` 字段（2026-08-31 起搜狗式一键 UI，dev-board#339）**：`oneClick:false` 但页面全部换装 `build/win/awd-oneclick-ui.nsh` 引擎——无边框大卡片（立即安装大按钮/协议链接/「自定义安装」展开路径行），点击后主窗收起为桌面右上角小进度卡，完成卡「立即体验」；`allowToChangeInstallationDirectory:false`（目录选择收进卡片，engine 强制追加 `AI WorkDeck` 子目录）；`include: build/installer.nsh` 只做桌面端接线（customWelcomePage/customInstallMode/customFinishPage 三钩子）。引擎设 `ManifestDPIAware`（根治高分屏点阵字）+ `CRCCheck off`（去掉大包启动前 verifying 长进度）；**卸载器仍走 MUI 经典页**，`installerSidebar`/`installerHeader` BMP 只为它保留；**静默安装（/S，自动更新路径）不进 GUI 代码**。改卡片布局必须同步改引擎 AWDUI_* 常量与 `build/win/oneclick-*.html` 的绝对定位（两边同一 96dpi 基准）。
@@ -71,6 +73,21 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
    `systemctl restart aiworkdeck-cloud` → 冒烟：journal 无 ERROR、新端点返回体
    不再与「不存在的端点」相同（后者恒为 `{"code":1,"message":"服务器内部错误"}` + 200，
    这也是判「接口没上」最快的探法）。表结构靠 `ddl-auto: update` 自动建，无手动迁移。
+4.7. **独立发布件逐项查、有更新随发版一起发（2026-09-11 维护者定，dev-board#592）**：
+   五个 native pack（`pptx/mineru/kokoro/asr-runtime` + `litigation-visual`）、广场官方插件
+   （`due-diligence` 在私有仓 `zeweihan/aiworkdeck-dd-plugin`、`hr-template-pack`）、LOWA 引擎
+   **都不随 `v*` tag 自动发**，`<svc>-service/` 与 `litviz/` 的改动合进 master 后用户手里不会变。
+   pack 判据：`git log $(git tag -l 'pack-<id>-v*' --sort=-v:refname | head -1)..origin/master --
+   <源目录> desktop/scripts/build-pack.js`（runtime 再加 `prepare-python-service.js`；litviz 再加
+   `prepare-graphviz.js`、`fetch-drawio-assets.js`）只作初筛，**以内容为准复核**：`git archive origin/master
+   <源目录>` 与已发布版（本机 `~/.aiworkdeck/packs/<id>/<current>/` 或 Release 组件）`diff -r`，
+   只差 SPDX 头/tests 算无更新——pack-release 从 master 当时 HEAD 出包，tag 可能落后于实际出包提交
+   （litigation-visual 1.1.1 实测）。确有差异 → `pack-release.yml`
+   出新版本 + `deploy/publish-pack.sh`，**先于打 tag** verify 通过；已装用户靠 `PackUpdater` 24h 内自动追新。
+   官方插件判据：源 `manifest.json` 版本高于 `/api/registry/plugins` → 北京 `publish-plugin.mjs` 上架 +
+   国际站同步；声明了更高 `minHostVersion` 的要等桌面正式版发出后再上。LOWA：`desktop-build.yml`
+   的 `LOWA_BASE_URL` 变了 → `publish-lowa-engine.sh publish/verify` 先于打 tag。
+   内置 skill（`backend/skills/*`，脱敏等）随安装包/补丁走，不在此列。
 5. **EN 走查（打 tag 前必过）**：① 以英文语言设置跑 app-e2e 全量（含 J12 英文旅程：切 en-US 断言工作台四列英文锚点 + AI 过程卡工具名无中文，语言键 `awd_app_language`，切语言必须整页 reload）；② 编辑器 boot 用 `?uilang=en-US` 并以 office_thread.js 的 ooLocale 诊断确认 en-US 生效（issue #66 的诊断口径）；③ 人工过一遍英文主界面截图（工作台/设置/AI 面板）。
 6. DMG 安装窗口视觉（PR#204）：`build.dmg` 里的 `contents` 坐标是**图标中心、原点在窗口内容区左上角（不含标题栏）**；默认窗口尺寸由 `build.dmg.window` 显式钉在 660x420（**外框**，含约 32pt 标题栏，dmgbuild 写进 `.DS_Store` 的 `bwsp.WindowBounds`；不写就拿背景图 1x 尺寸当窗口）。**背景图刻意比窗口大（dev-board#580）**：Finder 按原尺寸把背景贴在左上角、不拉伸，图外是白底，用户拉大窗口就露白；所以画布 3840x2160（2x 7680x4320），设计主体只占左上 660x420，其余是同一组渐变的 px 锚定延续（DMG 只多约 1.5MB，代价是打开时 Finder 多吃约 140MB 解码内存）。Office 插件 DMG（`office-addin/installer/art/dmg-background.html`，`render-art.mjs` 的 `DMG_CANVAS`）同一做法。背景图 `desktop/build/background.png` + `background@2x.png` 由 electron-builder 自动合成 hidpi TIFF，源文件是 `desktop/build/dmg-background.html`（顶部注释有 headless Chrome 重新生成命令）。改图标落位必须同步改 HTML 里的光晕/箭头位置，否则错位；改 HTML 的渐变别写回百分比（会随画布尺寸漂移，主体区跟着变）。
 6.5. **win 安装器美术管线**（`desktop/scripts/render-win-installer-art.mjs`，安装器 UI 重设计新增）：`build/win/*.html`（美术源文件）→ headless Chrome 截图 → ImageMagick 转 24 位 BMP3 入库为 `installerSidebar.bmp`/`installerHeader.bmp`。**sips 只能出 32 位 BMP，NSIS/MUI2 只认无 alpha 的经典 BMP，必须用 `magick`**——这是个地雷，脚本会校验 BM 头与色深不合格宁可失败也不入库。只有维护者改美术时手动跑一次，产物入库后 CI 与用户构建都不需要 Chrome/ImageMagick。
@@ -282,6 +299,7 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
   下游 fetch-lowa-assets.js 对 data 只查「长度 ≥1024」，兜不住双重压缩）。
   落盘先落 web root 之外的暂存区、校验通过再 rename 换入，旧版本自动备份到 `/root/lowa-engine-backup/`。
 - 官网部署在独立仓库（website/，gitignore 掉），服务器 ssh -i ~/.ssh/aiworkdeck_ops root@47.92.111.102；ECS 8.137.95.63(~/.ssh/checkba_ecs)。
+- **kokoro/asr 模型下载源顺序（dev-board#583）**：先 ModelScope，失败再回落 hf-mirror 的 `snapshot_download`（`CHECKBA_MODEL_SOURCE=modelscope|hf` 强制单源）。原因：hf-mirror 只代理元数据，大文件 302 到 HF 官方 CDN（cas-bridge.xethub.hf.co），国内无代理必挂 `LocalEntryNotFoundError`。ModelScope 路径是 `desktop/main/services/model-fetch.py`（纯标准库，按 HF 缓存布局落 `HF_HOME/hub/models--*/{blobs/<sha256>, snapshots/<ModelScope commit>, refs/main}`，续传临时文件 `blobs/<sha256>.incomplete`，refs/main 最后写——所以旧的半截缓存里 refs/main 指向不存在的 snapshot 也能直接续下），运行侧 pack 的 app.py 不用改。**地雷**：脚本随 `main/**` 进 app.asar，Python 读不了，model-manager 每次下载前把它拷到 `~/.aiworkdeck/models/.model-fetch.py` 再跑。mineru 仍走 MinerU 官方 CLI（`-s modelscope`），不动。
 - 模型不进包：mineru/kokoro/asr 模型首启在"组件管理"下载（下载进度按字节级整体，PR#142）。asr 的 faster-whisper medium 约 1.5GB，依赖闭包 182MB（压缩后约 57MB 进安装包，大头是 onnxruntime 70MB + PyAV 44MB，两者都是 faster-whisper 的硬依赖）。
 
 ## 已知地雷

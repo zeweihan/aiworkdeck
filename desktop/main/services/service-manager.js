@@ -55,7 +55,7 @@ function findFreePort() {
  *   commands: (ctx) => [{cmd, args, env, cwd}]           // 候选命令，按序轮试
  *   moreCommandsAfterFailure?: (ctx) => [{...}]          // 首个候选失败后追加（系统 JDK 回退）
  * }
- * ctx = { packaged, resourcesPath, dataDir, projectRoot, ports }
+ * ctx = { packaged, appVersion, resourcesPath, dataDir, projectRoot, ports }
  */
 class ServiceManager {
   constructor(ctx) {
