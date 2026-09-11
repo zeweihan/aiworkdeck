@@ -368,6 +368,130 @@ function redlineWasResolved(r, beforeCount, afterCount, beforeLayer) {
   const afterLayer = redlineLayerState(r);
   return beforeLayer !== null && afterLayer !== null && beforeLayer !== afterLayer;
 }
+// ---- Resolution by native redline id (engines with AwdReviewGeometry) -----
+// In the review gutter deletions leave the body flow: two touching deletions
+// Writer does not group (other author or minute) collapse to one body position,
+// and the cursor path above can resolve the neighbour. .uno:AcceptTrackedChange
+// and .uno:RejectTrackedChange take an SfxUInt32Item named like the command,
+// matched against SwRangeRedline::GetId() (sw/source/uibase/uiview/view2.cxx).
+// Only AwdReviewGeometry exposes that id (revisions[].index -> id);
+// RedlineIdentifier is a pointer-derived string, not the id.
+// The cursor is still placed on the target: outside LibreOfficeKit the slot is
+// disabled unless the cursor is on a redline (uiview/viewstat.cxx) and a
+// disabled slot is dropped silently. The id then picks the redline. An unknown
+// id falls back to the cursor, so only ids read in this command are sent.
+function redlineTop(type, author, date, comment) {
+  const time = date ? Date.UTC(date.Year, date.Month - 1, date.Day, date.Hours, date.Minutes, date.Seconds)
+    + (Number(date.NanoSeconds) || 0) / 1e6 : NaN;
+  return { type: String(type), author: String(author), time: time, comment: String(comment || '') };
+}
+// All redlines in enumeration order. `layer` is exactly redlineLayerState();
+// top/below are the grouping fields of the first two native layers.
+function redlineSnapshot() {
+  const list = [], byId = new Map();
+  const en = xModel.getRedlines().createEnumeration();
+  while (en.hasMoreElements()) {
+    const r = en.nextElement();
+    const v = ['RedlineType', 'RedlineAuthor', 'RedlineDateTime', 'RedlineComment', 'RedlineSuccessorData']
+      .map(function (name) { return r.getPropertyValue(name); });
+    const next = {};
+    (Array.isArray(v[4]) ? v[4] : []).forEach(function (pv) { if (pv && pv.Name) next[pv.Name] = zetajs.fromAny(pv.Value); });
+    const s = { redline: r, identifier: String(r.getPropertyValue('RedlineIdentifier')), layer: JSON.stringify(v),
+      successor: JSON.stringify(v[4]), top: redlineTop(v[0], v[1], v[2], v[3]),
+      below: next.RedlineType == null ? null : redlineTop(next.RedlineType, next.RedlineAuthor, next.RedlineDateTime, next.RedlineComment) };
+    list.push(s);
+    byId.set(s.identifier, byId.has(s.identifier) ? null : s);
+  }
+  return { list: list, byId: byId };
+}
+// SwRedlineData::CanCombineForAcceptReject: same author, type and comment, at
+// most one minute apart (sw/source/core/doc/docredln.cxx).
+function sameRedlineFamily(a, b) {
+  return !!a && !!b && a.type === b.type && a.author === b.author && a.comment === b.comment
+    && Math.abs(a.time - b.time) <= 60000;
+}
+// Besides the target, Writer itself resolves the connected area of touching
+// redlines that combine with it, also one layer down (getConnectedArea), and
+// CompressRedlines() then merges a now-adjacent identical redline into its
+// predecessor (DocumentRedlineManager.cxx). Any other change to a redline that
+// existed before the dispatch means a wrong resolution: returns its identifier.
+function unexplainedRedlineChange(before, after, k, exempt) {
+  const changed = function (s) { const a = after.byId.get(s.identifier); return !a || a.layer !== s.layer; };
+  const target = before.list[k];
+  for (let i = 0; i < before.list.length; i++) {
+    const s = before.list[i];
+    if (i === k || exempt.has(s.identifier) || !changed(s)) continue;
+    let run = true;
+    for (let j = Math.min(i, k) + 1; j < Math.max(i, k); j++) if (!changed(before.list[j])) { run = false; break; }
+    if (run && (sameRedlineFamily(s.top, target.top) || sameRedlineFamily(s.below, target.top))) continue;
+    if (!after.byId.get(s.identifier)) {
+      let j = i - 1;
+      while (j >= 0 && !after.byId.get(before.list[j].identifier)) j--;
+      const into = j >= 0 ? after.byId.get(before.list[j].identifier) : null;
+      if (into && sameRedlineFamily(into.top, s.top) && into.successor === s.successor) continue;
+    }
+    return s.identifier;
+  }
+  return null;
+}
+// Native ids of the target enumeration indices, read in the same synchronous
+// command as `snapshot` (after matchRevisionSnapshot remapped the indices).
+// Each target must still carry an expected RedlineIdentifier; null otherwise.
+function nativeRedlineTargets(snapshot, indices, expected) {
+  const geometry = JSON.parse(ctrl.getPropertyValue('AwdReviewGeometry'));
+  if (!geometry || geometry.version !== 1 || !Array.isArray(geometry.revisions)) return null;
+  const ids = new Map(geometry.revisions.map(function (r) { return [r.index, r.id]; }));
+  const targets = [];
+  for (const raw of indices) {
+    const index = Number(raw), s = snapshot.list[index], id = ids.get(index);
+    if (!s || snapshot.byId.get(s.identifier) !== s || (expected && !expected.has(s.identifier))
+      || !Number.isInteger(id) || id < 0 || id > 0xFFFFFFFF) return null;
+    targets.push({ index: index, identifier: s.identifier, layer: s.layer, id: id });
+  }
+  return new Set(targets.map(function (t) { return t.identifier; })).size === targets.length ? targets : null;
+}
+function expectedRedlineIdentifiers(p) {
+  return p && Array.isArray(p.expectedRevisions) ? new Set(p.expectedRevisions.map(function (r) { return r && r.identifier; })) : null;
+}
+// Dispatch each target once by its native id and judge that target itself:
+// its identifier is gone or its layer changed (one reject of a deletion over an
+// older insertion only pops the top layer). Stops at the first failure and
+// never retries. Returns null on engines without the geometry contract, whose
+// callers keep the cursor path unchanged.
+function resolveRedlinesByNativeId(indices, expected, action) {
+  if (!isWriterDoc() || !supportsReviewGeometry()) return null;
+  let current, targets;
+  try { current = redlineSnapshot(); targets = nativeRedlineTargets(current, indices, expected); }
+  catch (e) { return { error: errStr(e) }; }
+  const missing = indices.findIndex(function (i) { return !current.list[Number(i)]; });
+  if (missing >= 0) return { error: 'no revision at index ' + indices[missing] };
+  if (!targets) return { error: '修订已变化，请刷新后重试' };
+  const command = action === 'accept' ? 'AcceptTrackedChange' : 'RejectTrackedChange';
+  const dispatcher = css.frame.DispatchHelper.create(context);
+  const results = [];
+  let stopped = false;
+  targets.sort(function (a, b) { return b.index - a.index; });
+  for (const t of targets) {
+    if (stopped) { results.push({ index: t.index, success: false }); continue; }
+    const k = current.list.findIndex(function (s) { return s.identifier === t.identifier; });
+    // Resolved together with an earlier target of this command.
+    if (k < 0 || current.list[k].layer !== t.layer) { results.push({ index: t.index, success: true }); continue; }
+    let ok = false;
+    try {
+      if (selectRedlineRange(current.list[k].redline, true)) {
+        dispatcher.executeDispatch(ctrl.getFrame(), '.uno:' + command, '', 0, [mkProp(command, uint32Any(t.id))]);
+        const after = redlineSnapshot(), mine = after.byId.get(t.identifier);
+        const others = new Set(targets.map(function (x) { return x.identifier; }));
+        others.delete(t.identifier);
+        ok = (!mine || mine.layer !== t.layer) && !unexplainedRedlineChange(current, after, k, others);
+        current = after;
+      }
+    } catch (e) { ok = false; }
+    results.push({ index: t.index, success: ok });
+    if (!ok) stopped = true;
+  }
+  return { results: results, remaining: current.list.length };
+}
 function countComments() {
   let n = 0;
   try {
@@ -704,6 +828,8 @@ function enumEq(a, b) { return unoEnumVal(a) === unoEnumVal(b); }
 // short 型属性（VertOrient/OutlineLevel 等）必须传带类型的 Any：裸 JS number 会被
 // 编组成 long，严格的 UNO setter（>>= sal_Int16）直接拒绝且被 try 吞掉。
 function shortAny(n) { return new zetajs.Any(zetajs.type.short, Number(n)); }
+// SfxUInt32Item dispatch arguments (the native redline id) likewise get an explicit type.
+function uint32Any(n) { return new zetajs.Any(zetajs.type.unsigned_long, Number(n)); }
 // ---- 样式画像（styleProfile v1，dev-board#111）----------------------------
 // HOUSE 的唯一出处是 backend/src/main/resources/style-profiles/house-default.json：
 // scripts/sync-house-profile.mjs 把它包装成 house-default.js（self.HOUSE_DEFAULT_JSON），
@@ -5264,9 +5390,18 @@ const EXEC = {
   // 正文流里是零宽，退化成定位到起点；内联模式下删除文字就在流里，同样要跨选），
   // 见 selectRedlineRange。摆错位置（collapse 到起点再右移、或用 selectVisibly
   // 传区间游标）会让 dispatch 打空，甚至凭空多出一条空插入修订。
+  // 带 AwdReviewGeometry 的引擎先走 resolveRedlinesByNativeId（按原生 id 派发）；
+  // 下面的光标路径只服务没有该契约的旧引擎（r4），原样保留。
   resolve_revision(p) {
     const action = String((p && p.action) || 'accept').toLowerCase();
     if (action !== 'accept' && action !== 'reject') return tableFail("action must be accept|reject");
+    const byId = resolveRedlinesByNativeId([p && p.index], expectedRedlineIdentifiers(p), action);
+    if (byId && byId.error) return tableFail(byId.error);
+    if (byId) {
+      return byId.results[0].success
+        ? { success: true, index: Number(p.index), action: action, remaining: byId.remaining, via: 'native-id' }
+        : Object.assign(tableFail('修订未被处置（引擎未命中该条）'), { remaining: byId.remaining, via: 'native-id' });
+    }
     const r = redlineAt(p && p.index);
     if (!r) return tableFail('no revision at index ' + (p && p.index));
     if (!selectRedlineRange(r, true)) return tableFail('could not select revision range');
@@ -5296,6 +5431,12 @@ const EXEC = {
     if (action !== 'accept' && action !== 'reject') return tableFail("action must be accept|reject");
     const indices = Array.isArray(p && p.indices) ? p.indices : [];
     if (!indices.length) return tableFail('resolve_revisions requires a non-empty indices array');
+    const byId = resolveRedlinesByNativeId(indices, expectedRedlineIdentifiers(p), action);
+    if (byId && byId.error) return tableFail(byId.error);
+    if (byId) {
+      return { success: true, action: action, resolved: byId.results.filter(function (x) { return x.success; }).length,
+        remaining: byId.remaining, results: byId.results, via: 'native-id' };
+    }
     const all = [];
     try {
       const en = xModel.getRedlines().createEnumeration();

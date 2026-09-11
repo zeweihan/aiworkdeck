@@ -4,7 +4,7 @@
 // restores its text while exposing the older insertion, without reducing the
 // redline count. One real button click must succeed and preserve that insertion.
 import assert from 'node:assert/strict'
-import { fixture, deleted } from './_revision-fixture.mjs'
+import { fixture, deleted, adjacentDeletions, adjacent } from './_revision-fixture.mjs'
 import { startServer, launchBrowser, loadPuppeteer, preflight, ORIGIN } from './_boot.mjs'
 
 
@@ -81,6 +81,58 @@ try {
     assert.deepEqual(identity(await revisions()), identity(before))
     console.log('PASS one-click rejection, unrelated revisions and undo: ' + (layered ? 'deletion over insertion' : 'ordinary deletion'))
   }
+
+  // Balloons mode on an engine with AwdReviewGeometry: two touching deletions by
+  // different authors are hidden at one body position. The card's revision is
+  // resolved by its native id, never the neighbour found at the cursor.
+  await ok('load_document', { name: 'adjacent-deletions.docx', bytes: await adjacentDeletions() })
+  await ok('set_chrome', { all: false })
+  await ok('set_revision_view', { mode: 'balloons' })   // fails on engines without the native review contract
+  const pair = (await ok('list_revisions')).revisions
+  assert.deepEqual(identity(pair), [{ type: 'Delete', author: '甲审阅人', text: adjacent[0] }, { type: 'Delete', author: '乙审阅人', text: adjacent[1] }])
+  assert.ok(typeof pair[0].start === 'number' && pair[0].start === pair[1].start && pair[0].paraKey === pair[1].paraKey,
+    'precondition: both hidden deletions sit at one body position: ' + JSON.stringify(pair))
+  assert.equal(await body(), '前后')
+  await page.waitForFunction(text => [...document.querySelectorAll('.awd-rb-content')].some(n => n.textContent === text), { timeout: 30000 }, adjacent[1])
+  await page.evaluate(() => {
+    window.rejectCalls = []
+    const executor = window.__loExecutor
+    window.originalReviewExecute = executor.executeCommand.bind(executor)
+    executor.executeCommand = async (action, params) => {
+      const result = await window.originalReviewExecute(action, params)
+      if (action === 'resolve_revisions') window.rejectCalls.push({ params, result })
+      return result
+    }
+  })
+  let secondReject
+  for (const card of await page.$$('.awd-rb-card')) {
+    if (!(await card.$eval('.awd-rb-content', (n, text) => n.textContent === text, adjacent[1]))) continue
+    for (const candidate of await card.$$('button')) if (await candidate.evaluate(n => n.textContent === '拒绝')) secondReject = candidate
+  }
+  assert.ok(secondReject, 'the second deletion has its own card with a reject control')
+  await secondReject.click()
+  await page.waitForFunction(() => window.rejectCalls.length > 0, { timeout: 30000 })
+  const pairCalls = await page.evaluate(() => window.rejectCalls)
+  await page.evaluate(() => { window.__loExecutor.executeCommand = window.originalReviewExecute })
+  assert.equal(pairCalls.length, 1)
+  assert.deepEqual(pairCalls[0].params.expectedRevisions.map(r => r.identifier), [pair[1].identifier])
+  assert.equal(pairCalls[0].result.via, 'native-id', JSON.stringify(pairCalls[0].result))
+  assert.deepEqual(pairCalls[0].result.results.map(r => r.success), [true])
+  assert.equal(await body(), '前' + adjacent[1] + '后', 'exactly the second text is restored')
+  assert.deepEqual(identity(await revisions()), [{ type: 'Delete', author: '甲审阅人', text: adjacent[0] }], 'the first deletion is intact')
+  await ok('undo')
+  assert.deepEqual(identity(await revisions()), identity(pair))
+
+  // Accept is the destructive direction: it must drop only the second text.
+  const snap = await ok('list_revisions')
+  const accepted = await ok('resolve_revision', { index: 1, action: 'accept', revision: snap.revision, documentSeq: snap.documentSeq, expectedRevisions: [snap.revisions[1]] })
+  assert.equal(accepted.via, 'native-id')
+  assert.equal(await body(), '前后')
+  const left = await revisions()
+  assert.deepEqual(identity(left), [{ type: 'Delete', author: '甲审阅人', text: adjacent[0] }], 'accepting the second card keeps the first deletion pending')
+  await ok('resolve_revision', { index: left[0].index, action: 'reject' })
+  assert.equal(await body(), '前' + adjacent[0] + '后', 'the first deleted text was never removed')
+  console.log('PASS balloons: adjacent ungrouped hidden deletions resolve by native id (reject and accept)')
 } finally {
   await browser.close()
   await new Promise(resolve => server.close(resolve))
