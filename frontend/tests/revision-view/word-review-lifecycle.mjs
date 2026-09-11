@@ -47,7 +47,7 @@ async function mount(t, options = {}) {
         if (action !== 'get_review_layout') return { success: true }
         const m = window.model
         return {
-          success: true, revision: m.revision, mode: 'all', writable: m.writable, notesVisible: m.notes,
+          success: true, revision: m.revision, mode: window.mode || 'balloons', writable: m.writable, notesVisible: m.notes,
           items: [
             { key: 'c0', kind: 'comment', data: { id: '0', index: 0, content: 'Same original comment', author: m.name }, x: 200, y: 100 },
             { key: 'r0', kind: 'revision', data: { index: 0, type: 'Delete', text: 'Deleted text', author: m.name }, x: 200, y: 300 },
@@ -132,4 +132,16 @@ test('changing only writability removes previously available mutation controls',
   await page.evaluate(() => { window.model.writable = false; window.balloons.cursorMoved() })
   await page.waitForFunction(() => document.querySelectorAll('.awd-rb-card').length === 2
     && document.querySelectorAll('.awd-rb-actions button').length === 0)
+})
+
+
+test('inline mode shows only comments; balloon mode displays the complete deleted revision', async t => {
+  const page = await mount(t)
+  await page.waitForSelector('.awd-rb-card.deletion')
+  assert.equal(await page.$eval('.awd-rb-card.deletion .awd-rb-content',n=>n.textContent),'Deleted text')
+  await page.evaluate(()=>{window.mode='all';window.balloons.documentChanged()})
+  await page.waitForFunction(()=>!document.querySelector('.awd-rb-card.deletion'))
+  assert.ok(await page.$('[data-key="c0"]'))
+  await page.evaluate(()=>{window.mode='balloons';window.balloons.documentChanged()})
+  await page.waitForSelector('.awd-rb-card.deletion')
 })

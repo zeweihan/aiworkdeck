@@ -350,12 +350,10 @@ const TEXT_FORMS = {
   header: { title: 'headerTitle', ph: 'headerPlaceholder', action: 'edit_header_footer', arg: 'text', extra: { target: 'header' } },
   footer: { title: 'footerTitle', ph: 'footerPlaceholder', action: 'edit_header_footer', arg: 'text', extra: { target: 'footer' } },
 }
-// 修订显示三态（dev-board#368）。k 与 worker 的 REVISION_VIEWS 一字不差：
-// all=正文内联标记 / margin=删除文字挪页边 / final=痕迹全隐只看结果。
-// 引擎读不到 ShowChangesInMargin（旧构建）时 margin 那项自动去掉，退成两态。
+// 用户选择正文内修订、纸外批注框或最终稿；旧 native margin 仅供内部兼容。
 const REVISION_VIEWS = [
   { k: 'all', t: 'revisionViewAll' },
-  { k: 'margin', t: 'revisionViewMargin' },
+  { k: 'balloons', t: 'revisionViewMargin' },
   { k: 'final', t: 'revisionViewFinal' },
 ]
 const SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72]
@@ -400,8 +398,8 @@ export default {
     // 页边显示要引擎支持（LO 7.1+ 且我们的 r3 表格补丁）。worker 读不到那个视图
     // 设置时回 revisionMarginSupported:false，这里把中间项摘掉——不放做不到的选项。
     revisionViewOptions() {
-      const marginOk = this.state.view.revisionMarginSupported !== false
-      return REVISION_VIEWS.filter((o) => o.k !== 'margin' || marginOk)
+      const balloonsOk = this.state.view.revisionBalloonsSupported !== false
+      return REVISION_VIEWS.filter((o) => o.k !== 'balloons' || balloonsOk)
     },
     revisionViewLabel() {
       const cur = this.state.view.revisionView

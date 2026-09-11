@@ -22,7 +22,7 @@ async function fixture() {
 }
 preflight()
 const server = await startServer({ patchServed(url,b) {
-  if(url==='/office_thread.js')return Buffer.from(b.toString().replace('const EXEC = {',`const EXEC = { debug_deleted_paragraph() { xModel.setPropertyValue('RecordChanges', false); const text=xModel.getText(); text.setString(''); const c=text.createTextCursor(); insertTextAtCursor(c, '一段\\n删除段\\n末段'); xModel.setPropertyValue('RecordChanges', true); c.gotoStart(false); c.goRight(3,false); c.goRight(4,true); c.setString(''); invalidateParaIndex(); return {success:true}; }, debug_review_state() { return {success:true, live:ctrl.getViewData(), selection:ctrl.getViewCursor().getString(), revision:currentReviewRevision(), notes:ctrl.getViewSettings().getPropertyValue('ShowAnnotations'), signature:reviewLayoutCache?.signature}; },`))
+  if(url==='/office_thread.js')return Buffer.from(b.toString().replace('const EXEC = {',`const EXEC = { debug_deleted_paragraph() { xModel.setPropertyValue('RecordChanges', false); const text=xModel.getText(); text.setString(''); const c=text.createTextCursor(); insertTextAtCursor(c, '一段\\n删除段\\n末段'); xModel.setPropertyValue('RecordChanges', true); c.gotoStart(false); c.goRight(3,false); c.goRight(4,true); c.setString(''); invalidateParaIndex(); return {success:true}; }, debug_review_state() { return {success:true, live:ctrl.getViewData(), selection:ctrl.getViewCursor().getString(), revision:currentReviewRevision(), showChanges:readShowChanges(), inMargin:readShowChangesInMargin(), notes:ctrl.getViewSettings().getPropertyValue('ShowAnnotations'), signature:reviewLayoutCache?.signature}; },`))
   if(/^\/assets\/editor-.*\.js$/.test(url))return Buffer.from(b.toString().replace(/(['"])get_hyperlink_at_cursor\1/,m=>m+',"debug_review_state","debug_deleted_paragraph"'))
   return b
 }, extraFiles: Object.fromEntries(['cjk.ttc','cjk-serif.otf','cjk-kai.ttf','cjk-fangsong.ttf'].map(f=>['/'+f,'/Applications/AI WorkDeck.app/Contents/Resources/frontend/dist/zetaoffice/'+f])) })
@@ -30,7 +30,7 @@ const browser=await launchBrowser(await loadPuppeteer())
 try {
   const page=await browser.newPage();await page.setViewport({width:1360,height:900});await page.goto(ORIGIN+'/editor.html?verify=1&lowa=/lowa/',{waitUntil:'domcontentloaded'});await page.waitForFunction('!!window.__loExecutor',{timeout:240000});console.log('ENGINE READY')
   await page.addStyleTag({content:'#verify,#vlog{display:none!important}'})
-  const exec=(a,p={})=>page.evaluate((a,p)=>window.__loExecutor.executeCommand(a,p),a,p)
+  const exec=(a,p={})=>page.evaluate(async(a,p)=>{ const r=await window.__loExecutor.executeCommand(a,p); if(r.bytes && ArrayBuffer.isView(r.bytes))r.bytes=Array.from(r.bytes); return r },a,p)
   const ok=async(a,p)=>{const r=await exec(a,p);assert.equal(r.success,true,a+': '+JSON.stringify(r));return r}
   await ok('load_document',{name:'word-review.docx',bytes:await fixture()})
   await ok('set_chrome',{all:false})
@@ -85,15 +85,41 @@ try {
   await page.evaluate(()=>[...document.querySelectorAll('.awd-rb-card button')].find(b=>b.textContent==='保存').click())
   await page.waitForFunction(async()=> (await window.__loExecutor.executeCommand('list_comments',{})).comments[0].content.endsWith('界面编辑已保存。'))
   console.log('PASS edit/save through the visible balloon controls')
+  await ok('set_revision_view',{mode:'balloons'})
+  assert.equal((await ok('set_revision_view')).mode,'balloons')
+  const balloonBody=(await ok('get_document_text')).paragraphs.map(p=>p.text).join('|')
+  assert.equal(balloonBody.includes(deleted),false,'balloon mode removes deletion from the body')
+  const balloonState=await ok('debug_review_state')
+  assert.equal(balloonState.showChanges,false,'native inline markup is hidden')
+  assert.equal(balloonState.inMargin,false,'native left-margin deletion painting is off')
+  const balloonLayout=await ok('get_review_layout')
+  assert.equal(balloonLayout.items.find(i=>i.data.type==='Delete').data.text,deleted)
+  await page.waitForFunction(text=>[...document.querySelectorAll('.awd-rb-content')].some(n=>n.textContent===text),{timeout:10000},deleted)
+  await page.screenshot({path:'/tmp/word-review-balloons.png'})
+  const balloonDeletion=(await ok('list_revisions')).revisions.find(r=>r.type==='Delete')
+  await ok('goto_revision',{index:balloonDeletion.index})
+  await ok('resolve_revision',{index:balloonDeletion.index,action:'reject'})
+  assert.equal((await ok('set_revision_view')).mode,'balloons','resolving preserves chosen balloon mode')
+  assert.equal((await ok('list_revisions')).revisions.some(r=>r.type==='Delete'),false)
+  await ok('undo')
+  assert.equal((await ok('list_revisions')).revisions.find(r=>r.type==='Delete').text,deleted)
+  console.log('PASS balloon mode removes native deletion markup, preserves full card content and resolves/undoes revisions')
+
   // Save/import preserves the full review data and imported table grouping.
   const exported=await ok('export_document');const bytes=exported.bytes||exported.data
   assert.ok(bytes,'export returns bytes')
-  await ok('load_document',{name:'word-review-roundtrip.docx',bytes})
+  assert.ok(bytes.length>100,'transported export bytes are a nonempty sequence')
+  const reloaded=await ok('load_document',{name:'word-review-roundtrip.docx',bytes})
+  assert.equal(reloaded.empty,undefined,'roundtrip really loads the exported file')
+  assert.equal((await ok('set_revision_view')).mode,'all')
   rows=(await ok('list_revisions')).revisions;groups=groupRevisions(rows)
   assert.equal(rows.find(r=>r.type==='Delete').text,deleted)
   assert.equal(groups.filter(g=>g.operationId).length,2)
   const chosen=groups.find(g=>g.operationId), originalCount=rows.length
   const version=(await ok('get_review_layout')).revision
+  for (const action of ['resolve_revision','resolve_all_revisions']) {
+    assert.equal((await exec(action,{index:chosen.items[0].index,action:'accept',revision:version-1})).success,false,'stale '+action+' rejected')
+  }
   const stale=await exec('resolve_revisions',{indices:chosen.items.map(r=>r.index),action:'accept',revision:version-1})
   assert.equal(stale.success,false)
   assert.equal((await ok('list_revisions')).count,originalCount)
@@ -126,6 +152,13 @@ try {
   }
   await ok('compare_document',{baseBytes:await fixture()})
   assert.equal((await ok('get_review_layout')).writable,false)
+  const readonlyMode=(await ok('set_revision_view')).mode
+  for (const action of ['resolve_revision','resolve_revisions','resolve_all_revisions']) {
+    const denied=await exec(action,{index:0,indices:[0],action:'accept'})
+    assert.equal(denied.success,false,'readonly '+action+' rejected')
+    assert.match(denied.message,/只读/)
+    assert.equal((await ok('set_revision_view')).mode,readonlyMode,'denied commands preserve view')
+  }
   for (const action of ['update_comment','delete_comment','set_comment_resolved']) {
     assert.equal((await exec(action,{id:replacedComment.id,content:'只读中不能写入'})).success,false,'readonly '+action+' rejected')
   }

@@ -124,7 +124,7 @@ export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh'
   function rebuild(data) {
     const revisionItems = data.items.filter(x => x.kind === 'revision')
     const byIndex = new Map(revisionItems.map(x => [x.data.index, x]))
-    const groups = data.mode === 'final' ? [] : groupRevisions(revisionItems.map(x => x.data))
+    const groups = ['balloons', 'margin'].includes(data.mode) ? groupRevisions(revisionItems.map(x => x.data)) : []
     const items = groups.map(g => ({ ...byIndex.get(g.items[0].index), key: g.key, data: g }))
       .concat(data.items.filter(x => x.kind === 'comment'))
     list.replaceChildren(); cards = items.map(item => makeCard({ ...item, revision: data.revision, writable: data.writable })); manualScroll = 0
@@ -181,7 +181,7 @@ export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh'
       if (disposed || suspended || capturedGeneration !== generation) return
       if (!data?.success) { showNotice(labels.failed); return }
       snapshot = data
-      const hasItems = data.items.some(x => x.kind === 'comment' || data.mode !== 'final')
+      const hasItems = data.items.some(x => x.kind === 'comment' || ['balloons', 'margin'].includes(data.mode))
       if (hasItems !== enabled || (hasItems && data.notesVisible)) {
         // Hide the native narrow note windows only after the replacement exists.
         const changed = await execute('set_review_balloons', { enabled: hasItems })

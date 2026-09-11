@@ -346,7 +346,7 @@ function selectRedlineRange(r, forDispatch) {
     if (!rs || !re) return false;
     let isDelete = false;
     try { isDelete = String(r.getPropertyValue('RedlineType')) === 'Delete'; } catch (e) {}
-    const collapse = forDispatch && isDelete && readShowChangesInMargin() === true;
+    const collapse = isDelete && (readShowChanges() === false || (forDispatch && readShowChangesInMargin() === true));
     const vc = ctrl.getViewCursor();
     vc.gotoRange(rs, false);
     if (!collapse) vc.gotoRange(re, true);
@@ -1871,7 +1871,8 @@ function streamWriteLine(line) {
 
 // ---- 修订显示三态（Word 式，dev-board#368）---------------------------------
 // all    全部修订：正文内联删除线/下划线   ShowChanges=true  ShowChangesInMargin=false
-// margin 简洁标记：删除文字挪到页边       ShowChanges=true  ShowChangesInMargin=true
+// balloons 纸外批注框：最终正文布局，修订内容由右侧 HTML 气泡展示
+// margin 旧页边方式：仅保留内部最终正文操作和兼容调用，不再出现在工具栏
 // final  最终稿：修订痕迹全隐             ShowChanges=false
 //
 // 三态**只改显示**：RecordChanges（还记不记修订）与 redline 数据本身一律不动，
@@ -1883,7 +1884,8 @@ function streamWriteLine(line) {
 // 页边显示 (LO 7.1+, tdf#34355) REQUIRES engine >= 24.2.8-zhcn-r3：原生 LO 把
 // 页边文字画在锚点 frame 左侧，表格里 frame = 单元格，删除文字会叠到左邻格正文
 // 上；r3 焙入了 frmpaint.cxx 补丁（锚整表左缘，desktop/lowa-build/patches）。
-const REVISION_VIEWS = ['all', 'margin', 'final'];
+const REVISION_VIEWS = ['all', 'balloons', 'margin', 'final'];
+let balloonModel = null; // External balloons share native final-text layout, not native margins.
 // 默认完整标记：删除在正文内以删除线展示。AI 和写作助手的正文读取/定位
 // 仍走 runAgentCommandInMarginView 的最终文本语义，与用户看到的显示方式分离。
 const DEFAULT_REVISION_VIEW = 'all';
@@ -1904,7 +1906,7 @@ function revisionViewState() {
   const showChanges = readShowChanges();
   const inMargin = readShowChangesInMargin();
   return {
-    mode: revisionModeOf(showChanges, inMargin),
+    mode: showChanges === false && balloonModel === xModel ? 'balloons' : revisionModeOf(showChanges, inMargin),
     showChanges: showChanges,
     showChangesInMargin: inMargin,
     // 属性在本构建上根本不存在时读会抛（→ null），宿主据此把中间项去掉退成两态。
@@ -1933,6 +1935,9 @@ function applyShowChanges(on) {
   return readShowChanges() === !!on ? null : (err || 'ShowChanges 未生效');
 }
 function applyShowChangesInMargin(on) {
+  const current = readShowChangesInMargin();
+  if (current === !!on || (current === null && !on)) return null;
+  if (current === null) return 'ShowChangesInMargin 不受支持';
   try { ctrl.getViewSettings().setPropertyValue('ShowChangesInMargin', !!on); }
   catch (e) { return errStr(e); }
   return readShowChangesInMargin() === !!on ? null : 'ShowChangesInMargin 未生效';
@@ -1956,7 +1961,8 @@ function applyRevisionView(mode) {
     const warnings = [];
     const e1 = applyShowChangesInMargin(want === 'margin');
     if (e1) warnings.push('ShowChangesInMargin: ' + e1);
-    const e2 = applyShowChanges(want !== 'final');
+    const e2 = applyShowChanges(want !== 'final' && want !== 'balloons');
+    balloonModel = want === 'balloons' && !e1 && !e2 ? xModel : null;
     if (e2) warnings.push('ShowChanges: ' + e2);
     // Hiding a whole deleted paragraph changes paragraph membership. View-only
     // changes suppress modified events, so cached ranges must be dropped here.
@@ -3207,6 +3213,7 @@ const EXEC = {
         view.showChanges = rv.showChanges;
         view.showChangesInMargin = rv.showChangesInMargin;
         view.revisionMarginSupported = rv.marginSupported;
+        view.revisionBalloonsSupported = rv.hideSupported;
       } catch (e) {}
     }
     out.view = view;
@@ -5020,9 +5027,11 @@ const EXEC = {
           const d = r.getPropertyValue('RedlineDateTime');
           if (d) { it.date = d.Year + '-' + pad2(d.Month) + '-' + pad2(d.Day) + ' ' + pad2(d.Hours) + ':' + pad2(d.Minutes); it.timestamp = it.date + ':' + pad2(d.Seconds) + '.' + (d.NanoSeconds || 0); }
         } catch (e) {}
-        // 删除型在页边模式下文本收进 redline 对象（getString 可取）；插入型的
-        // 文本只在正文流里，要靠 RedlineStart/End 区间取。两路都试。
-        try { if (typeof r.getString === 'function') it.text = String(r.getString() || ''); } catch (e) {}
+        // SwXRedline.getString() creates a cursor in its hidden content section.
+        // Inline redlines have no such section: probing it throws inside native
+        // code and repeated probes destabilize this engine. RedlineText safely
+        // returns null when the text must be read from RedlineStart/End instead.
+        try { const hiddenText = r.getPropertyValue('RedlineText'); if (hiddenText) it.text = String(hiddenText.getString() || ''); } catch (e) {}
         let curEnd = null;
         try {
           const rs = r.getPropertyValue('RedlineStart'), re = r.getPropertyValue('RedlineEnd');
@@ -5289,10 +5298,9 @@ const EXEC = {
         try { item.type = r.getPropertyValue('RedlineType'); } catch (e) {}
         try { item.author = r.getPropertyValue('RedlineAuthor'); } catch (e) {}
         try { item.comment = r.getPropertyValue('RedlineComment'); } catch (e) {}
-        try { if (typeof r.getString === 'function') item.text = String(r.getString() || '').slice(0, 80); } catch (e) {}
-        // 行内显示（ShowChangesInMargin=false）下删除文本留在正文流里，redline
-        // 自身 getString() 抛 RuntimeException（页边模式才把文本收进 redline）——
-        // 回退用 RedlineStart/End 区间从正文取；Insert 型两种模式都走这条。
+        try { const hiddenText = r.getPropertyValue('RedlineText'); if (hiddenText) item.text = String(hiddenText.getString() || '').slice(0, 80); } catch (e) {}
+        // Inline content has no hidden section; read its document range directly,
+        // just as list_revisions does, without an invalid native getString probe.
         if (item.text == null) {
           try {
             const rs = r.getPropertyValue('RedlineStart'), re = r.getPropertyValue('RedlineEnd');
@@ -7184,6 +7192,21 @@ function runAgentCommandInMarginView(action, fn) {
   return out;
 }
 
+const RESOLVE_REVISION_ACTIONS = new Set(['resolve_revision', 'resolve_revisions', 'resolve_all_revisions']);
+function runRevisionResolution(fn, p) {
+  if (!isWriterDoc()) return fn();
+  if (p && p.revision != null && p.revision !== currentReviewRevision()) return tableFail('文档已变化，请刷新修订后重试');
+  if (!isReviewWritable()) return tableFail('文档为只读状态');
+  if (readShowChanges() !== false) return fn();
+  const before = revisionViewState().mode;
+  try {
+    withViewOnlyChange(function () { applyRevisionView('all'); xModel.refresh(); });
+    return fn();
+  } finally {
+    withViewOnlyChange(function () { applyRevisionView(before); try { xModel.refresh(); } catch (e) {} });
+  }
+}
+
 function execCommand(reqId, action, params) {
   // 原语可以是 async（分批的 find_replace / apply_house_style）：返回 Promise 就等它，
   // 期间 worker 事件循环继续处理别的命令；同步原语路径与从前完全一样。
@@ -7204,7 +7227,7 @@ function execCommand(reqId, action, params) {
     catch (e) { log('修订作者设置失败 / redline author failed: ' + errStr(e)); }
     const fn = EXEC[action];
     result = fn
-      ? ((p.__agent || FINAL_TEXT_ACTIONS.has(action)) ? runAgentCommandInMarginView(action, function () { return fn(p); }) : fn(p))
+      ? (RESOLVE_REVISION_ACTIONS.has(action) ? runRevisionResolution(function () { return fn(p); }, p) : (p.__agent || FINAL_TEXT_ACTIONS.has(action)) ? runAgentCommandInMarginView(action, function () { return fn(p); }) : fn(p))
       : { success: false, message: 'not implemented in LibreOffice worker yet: ' + action };
   } catch (e) {
     result = { success: false, message: errStr(e) };
