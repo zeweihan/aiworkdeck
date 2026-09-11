@@ -11,11 +11,16 @@ preflight()
 const server = await startServer({ patchServed(url, bytes) {
   if (url === '/office_thread.js') {
     let source = bytes.toString()
-    source = source.replace('let reviewLayoutCache = null;', 'let reviewLayoutCache = null; const reviewPerf = { layouts: 0, metadata: 0, hits: 0, durations: [] };')
-    source = source.replace('const revisions = EXEC.list_revisions({ limit: 500 });', 'reviewPerf.metadata++; const revisions = EXEC.list_revisions({ limit: 500 });')
+    // Each probe must land exactly once, or the measurements below read nothing.
+    const patch = (from, to) => {
+      if (source.split(from).length !== 2) throw new Error('review-performance probe anchor not unique: ' + from)
+      source = source.replace(from, to)
+    }
+    patch('let reviewLayoutCache = null;', 'let reviewLayoutCache = null; const reviewPerf = { layouts: 0, metadata: 0, hits: 0, durations: [] };')
+    patch('const comments = EXEC.list_comments({ limit: 500, locate: false });', 'reviewPerf.metadata++; const comments = EXEC.list_comments({ limit: 500, locate: false });')
     source = source.replaceAll('ctrl.createTextRangeByPixelPosition(', '((...args) => { reviewPerf.hits++; return ctrl.createTextRangeByPixelPosition(...args); })(')
-    source = source.replace('get_review_layout() { return reviewLayout(); },', 'get_review_layout() { const t = performance.now(); try { return reviewLayout(); } finally { reviewPerf.layouts++; reviewPerf.durations.push(performance.now() - t); } },')
-    source = source.replace('const EXEC = {', 'const EXEC = { debug_review_perf() { return { success: true, perf: reviewPerf, selection: ctrl.getViewCursor().getString(), revision: currentReviewRevision() }; },')
+    patch('get_review_layout(p) { return reviewLayout(p); },', 'get_review_layout(p) { const t = performance.now(); try { return reviewLayout(p); } finally { reviewPerf.layouts++; reviewPerf.durations.push(performance.now() - t); } },')
+    patch('const EXEC = {', 'const EXEC = { debug_review_perf() { return { success: true, perf: reviewPerf, selection: ctrl.getViewCursor().getString(), revision: currentReviewRevision() }; },')
     return Buffer.from(source)
   }
   if (/^\/assets\/editor-.*\.js$/.test(url)) return Buffer.from(bytes.toString().replace(/(['"])get_hyperlink_at_cursor\1/, match => match + ',"debug_review_perf"'))

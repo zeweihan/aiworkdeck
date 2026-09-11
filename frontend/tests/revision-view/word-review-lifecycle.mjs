@@ -122,7 +122,7 @@ test('read-only comments and revisions remain locatable without exposing mutatio
   assert.equal(await page.$$eval('.awd-rb-actions button', nodes => nodes.length), 0)
   await page.evaluate(() => {
     document.querySelector('[data-key="c0"]').click()
-    document.querySelector('[data-key="g0"]').click()
+    document.querySelector('[data-key="g:revision-A"]').click()
   })
   assert.deepEqual(await page.evaluate(() => window.commands.filter(c => !['get_review_layout', 'set_review_balloons'].includes(c.action))
     .map(c => ({ action: c.action, revision: c.params.revision }))), [
@@ -257,7 +257,7 @@ test('a steady native gutter does not poll or repeat its visibility command', as
 
 test('balloons omit inserted text while keeping deletion and formatting cards', async t => {
   const page = await mount(t)
-  await page.waitForSelector('[data-key="g0"]')
+  await page.waitForSelector('[data-key="g:revision-A"]')
   await page.evaluate(() => {
     const revision = (index, type) => ({ key: 'r' + index, kind: 'revision', data: { index, identifier: String(index), type, text: type }, x: 3000, y: 1500 + index * 1500, page: 1 })
     window.reviewItems = [revision(0, 'Delete'), revision(1, 'Insert'), revision(2, 'Format')]
@@ -269,12 +269,12 @@ test('balloons omit inserted text while keeping deletion and formatting cards', 
 
 test('revision actions include the document and exact native target snapshot', async t => {
   const page = await mount(t)
-  await page.waitForSelector('[data-key="g0"] .awd-rb-actions button')
-  await page.$eval('[data-key="g0"]',n=>n.click())
+  await page.waitForSelector('[data-key="g:revision-A"] .awd-rb-actions button')
+  await page.$eval('[data-key="g:revision-A"]',n=>n.click())
   const navigation=await page.evaluate(()=>window.commands.find(c=>c.action==='goto_revision').params)
   assert.equal(navigation.identifier,'revision-A')
   assert.equal(navigation.documentSeq,1)
-  await page.click('[data-key="g0"] .awd-rb-actions button')
+  await page.click('[data-key="g:revision-A"] .awd-rb-actions button')
   const params = await page.evaluate(() => window.commands.find(c => c.action === 'resolve_revisions').params)
   assert.equal(params.documentSeq, 1)
   assert.deepEqual(params.expectedRevisions.map(r => ({ identifier: r.identifier, type: r.type, text: r.text })), [{ identifier: 'revision-A', type: 'Delete', text: 'Deleted text' }])
@@ -323,7 +323,7 @@ test('ten long comments remain reachable inside their page without covering the 
 
 test('an omitted insertion still separates unrelated deletion groups across pages', async t => {
   const page = await mount(t)
-  await page.waitForSelector('[data-key="g0"]')
+  await page.waitForSelector('[data-key="g:revision-A"]')
   await page.evaluate(() => {
     const item = (index, type, page, y, contiguous) => ({ key:'r'+index, kind:'revision', page, x:3000, y,
       data:{index,identifier:String(index),type,author:type==='Insert'?'B':'A',date:'2026-09-11 10:00',text:'Change '+index,contiguous} })
@@ -334,11 +334,11 @@ test('an omitted insertion still separates unrelated deletion groups across page
     ]
     window.balloons.documentChanged()
   })
-  await page.waitForFunction(() => document.querySelector('[data-key="g0"] .awd-rb-content')?.textContent.startsWith('Change'))
+  await page.waitForFunction(() => document.querySelector('[data-key="g:0"] .awd-rb-content')?.textContent.startsWith('Change'))
   assert.deepEqual(await page.$$eval('.awd-rb-card', nodes=>nodes.map(n=>({key:n.dataset.key,page:n.parentElement.dataset.page,text:n.querySelector('.awd-rb-content').textContent}))), [
-    {key:'g0',page:'1',text:'Change 0'},{key:'g2',page:'2',text:'Change 2'},
+    {key:'g:0',page:'1',text:'Change 0'},{key:'g:2',page:'2',text:'Change 2'},
   ])
-  await page.click('[data-key="g0"] .awd-rb-actions button')
+  await page.click('[data-key="g:0"] .awd-rb-actions button')
   assert.deepEqual(await page.evaluate(()=>window.commands.find(c=>c.action==='resolve_revisions').params.indices),[0])
 })
 

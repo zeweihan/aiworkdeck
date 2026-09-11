@@ -349,7 +349,8 @@ export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh'
     resume() {
       suspended = Math.max(0, suspended - 1)
       if (suspended) return
-      if (lastAction === 'load_document') refreshNow(); else edited()
+      // Content edits also arrive as documentChanged; a command alone only moves things.
+      if (lastAction === 'load_document') refreshNow(); else schedule(EDIT_DELAY)
     },
     documentChanged: edited,
     cursorMoved() { if (enabled) schedule(200) },

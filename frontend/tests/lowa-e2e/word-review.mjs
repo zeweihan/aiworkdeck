@@ -43,7 +43,8 @@ try {
   const readyLayout = async () => {
     await page.waitForFunction(async () => {
       const data = await window.__loExecutor.executeCommand('get_review_layout', {})
-      return data.success && data.available && data.sidebarWidth === 280
+      // Every card anchored: pages beyond the view are laid out in Writer's idle time.
+      return data.success && data.available && data.sidebarWidth === 280 && !data.pending && !data.unread
         && document.querySelector('.awd-review-balloons')?.dataset.viewport === [data.view.left,data.view.top,data.view.right,data.view.bottom].join(':')
     }, { timeout:15000 })
     return ok('get_review_layout')
