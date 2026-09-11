@@ -2108,7 +2108,11 @@ function withViewOnlyChange(fn) {
   }
 }
 
-function applyRevisionView(mode) {
+// reserveGutter: only a user switch into balloons from another mode. Internal
+// switch-and-restore paths (export, revision resolution) leave the width alone:
+// no revision view writes it, so the restore keeps exactly the gutter the host
+// chose, including a released one (0), without a relayout and page jump.
+function applyRevisionView(mode, reserveGutter) {
   return withViewOnlyChange(function () {
     const want = REVISION_VIEWS.indexOf(mode) >= 0 ? mode : DEFAULT_REVISION_VIEW;
     if (want === 'balloons' && !installReviewCommentInterceptor(ctrl)) {
@@ -2117,7 +2121,8 @@ function applyRevisionView(mode) {
     const warnings = [];
     // Reserve the native gutter before hiding deletions, so no frame paints the
     // legacy left-margin text while the overlay is catching up.
-    if (want === 'balloons' && supportsReviewGeometry()) ctrl.setPropertyValue('AwdReviewSidebarWidth', 280);
+    if (want === 'balloons' && reserveGutter && supportsReviewGeometry()
+      && Number(ctrl.getPropertyValue('AwdReviewSidebarWidth')) !== 280) ctrl.setPropertyValue('AwdReviewSidebarWidth', 280);
     const e1 = applyShowChangesInMargin(want === 'margin' || want === 'balloons');
     if (e1) warnings.push('ShowChangesInMargin: ' + e1);
     const e2 = applyShowChanges(want !== 'final');
@@ -3637,7 +3642,7 @@ const EXEC = {
       }
       if (mode === 'balloons' && !supportsReviewGeometry()) return tableFail('当前编辑器引擎不支持批注框修订，请更新编辑器后使用。');
       if (mode === 'balloons' && !installReviewCommentInterceptor(ctrl)) return tableFail('批注输入通道不可用，请重新打开文档后重试。');
-      const applied = applyRevisionView(mode);
+      const applied = applyRevisionView(mode, mode === 'balloons' && revisionViewState().mode !== 'balloons');
       applied.success = true;
       return applied;
     }
