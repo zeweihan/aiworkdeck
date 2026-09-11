@@ -110,6 +110,8 @@ try {
   assert.equal(layout.sidebarWidth,280,'single native gutter is reserved')
   await page.waitForFunction(()=>document.querySelector('.awd-rb-lines path'))
   await assertPageCards(layout, '100% zoom')
+  // A card whose page Writer lays out in idle time appears with the next position poll.
+  await page.waitForFunction(()=>document.querySelectorAll('.awd-rb-card').length>=3,{timeout:10000}).catch(()=>{})
   assert.equal(await page.$$eval('.awd-rb-card', nodes=>nodes.length), 3, 'inline mode has only native-anchored comments')
   assert.ok(await page.$$eval('.awd-rb-content', (nodes,text)=>nodes.some(n=>n.textContent===text), comment), 'long comment remains complete')
   const beforeScroll=await ok('get_review_layout')
@@ -122,10 +124,13 @@ try {
   const secondTop=await page.$eval('.awd-rb-card',n=>n.getBoundingClientRect().top)
   assert.ok(secondTop<firstTop,'balloons scroll with the document')
   console.log('PASS outside-page column, dashed connectors, selection preservation and scroll synchronization')
-  await ok('goto_comment',{index:2})
+  // Writer enumerates comments in field order, not document order: find them by content.
+  const listed=(await ok('list_comments')).comments
+  const longComment=listed.find(c=>c.content===comment), laterComment=listed.find(c=>c.content==='后页条款批注')
+  await ok('goto_comment',{index:laterComment.index})
   const laterPage=await readyLayout()
-  assert.ok(laterPage.items.find(i=>i.kind==='comment' && i.data.index===2).page > laterPage.items.find(i=>i.kind==='comment' && i.data.index===0).page, 'later comment belongs to a later native page')
-  await ok('goto_comment',{index:0})
+  assert.ok(laterPage.items.find(i=>i.kind==='comment' && i.data.id===laterComment.id).page > laterPage.items.find(i=>i.kind==='comment' && i.data.id===longComment.id).page, 'later comment belongs to a later native page')
+  await ok('goto_comment',{index:longComment.index})
   const beforeZoom=await readyLayout(), width100=(await rect('.awd-rb-card')).width
   await ok('set_zoom',{value:80})
   const zoomAfter=await readyLayout()

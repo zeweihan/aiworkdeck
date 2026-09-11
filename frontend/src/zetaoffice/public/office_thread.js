@@ -2108,6 +2108,18 @@ function withViewOnlyChange(fn) {
   }
 }
 
+// Writer hangs for good undoing a rejected long deletion while deleted text is
+// drawn in the margin (ShowChangesInMargin, the margin and balloons views;
+// reproduced on the r4 and r5 engines, dev-board#587). The same undo works in
+// the inline view, so undo/redo run there and the chosen view is restored.
+function withInlineUndo(fn) {
+  if (!isWriterDoc() || readShowChangesInMargin() !== true) return fn();
+  const before = revisionViewState().mode;
+  withViewOnlyChange(function () { applyRevisionView('all'); try { xModel.refresh(); } catch (e) {} });
+  try { return fn(); }
+  finally { withViewOnlyChange(function () { applyRevisionView(before); try { xModel.refresh(); } catch (e) {} }); }
+}
+
 // reserveGutter: only a user switch into balloons from another mode. Internal
 // switch-and-restore paths (export, revision resolution) leave the width alone:
 // no revision view writes it, so the restore keeps exactly the gutter the host
@@ -2199,6 +2211,15 @@ function installReviewCommentInterceptor(controller) {
     state.frame = controller.getFrame();
     const query = function (url, target, flags) {
       const native = state.slave ? state.slave.queryDispatch(url, target, flags) : null;
+      // Writer's own Ctrl+Z (canvas focused) must take the same inline detour as
+      // the worker's undo/redo actions (see withInlineUndo).
+      if (native && (url.Complete === '.uno:Undo' || url.Complete === '.uno:Redo')) {
+        return zetajs.unoObject([css.frame.XDispatch], {
+          dispatch(command, args) { withInlineUndo(function () { native.dispatch(command, args); }); },
+          addStatusListener(listener, command) { native.addStatusListener(listener, command); },
+          removeStatusListener(listener, command) { native.removeStatusListener(listener, command); },
+        });
+      }
       if (!native || url.Complete !== '.uno:InsertAnnotation') return native;
       return zetajs.unoObject([css.frame.XDispatch], {
         dispatch(command, args) {
@@ -2222,7 +2243,7 @@ function installReviewCommentInterceptor(controller) {
     };
     state.interceptor = zetajs.unoObject([css.frame.XDispatchProviderInterceptor, css.frame.XInterceptorInfo], {
       // Avoid a JS callback for every menu/toolbar command queried by Writer.
-      getInterceptedURLs() { return ['.uno:InsertAnnotation']; },
+      getInterceptedURLs() { return ['.uno:InsertAnnotation', '.uno:Undo', '.uno:Redo']; },
       queryDispatch: query,
       queryDispatches(requests) {
         return requests.map(function (r) { return query(r.FeatureURL, r.FrameName, r.SearchFlags); });
@@ -4625,9 +4646,11 @@ const EXEC = {
     const um = xModel.getUndoManager();
     const want = Math.max(1, Math.min(Number(p && p.steps) || 1, 20));
     let done = 0;
-    for (; done < want; done++) {
-      try { um.undo(); } catch (e) { break; } // empty stack ends the loop
-    }
+    withInlineUndo(function () {
+      for (; done < want; done++) {
+        try { um.undo(); } catch (e) { break; } // empty stack ends the loop
+      }
+    });
     invalidateParaIndex();
     return Object.assign({ success: done > 0, undone: done }, done > 0 ? verifySnapshot() : { message: 'nothing to undo' });
   },
@@ -4635,9 +4658,11 @@ const EXEC = {
     const um = xModel.getUndoManager();
     const want = Math.max(1, Math.min(Number(p && p.steps) || 1, 20));
     let done = 0;
-    for (; done < want; done++) {
-      try { um.redo(); } catch (e) { break; }
-    }
+    withInlineUndo(function () {
+      for (; done < want; done++) {
+        try { um.redo(); } catch (e) { break; }
+      }
+    });
     invalidateParaIndex();
     return Object.assign({ success: done > 0, redone: done }, done > 0 ? verifySnapshot() : { message: 'nothing to redo' });
   },

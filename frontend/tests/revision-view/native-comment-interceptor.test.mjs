@@ -11,9 +11,9 @@ const end = source.indexOf('// ---- boot:', begin)
 class UnoAny { constructor(val) { this.val = val } }
 
 function environment({ width = 280, fails = false } = {}) {
-  const calls = [], events = [], status = [], registrations = [], releases = []
+  const calls = [], events = [], status = [], registrations = [], releases = [], inline = []
   const delegate = {
-    dispatch(url, args) { calls.push({ command: url.Complete, args }) },
+    dispatch(url, args) { calls.push({ command: url.Complete, args }); inline.push('dispatch ' + url.Complete) },
     addStatusListener(listener, url) { status.push(['add', listener, url]) },
     removeStatusListener(listener, url) { status.push(['remove', listener, url]) },
   }
@@ -31,11 +31,12 @@ function environment({ width = 280, fails = false } = {}) {
     zetajs: { unoObject: (_interfaces, implementation) => implementation, fromAny: value => value instanceof UnoAny ? value.val : value },
     css: { frame: { XDispatch: 'dispatch', XDispatchProviderInterceptor: 'interceptor', XInterceptorInfo: 'info' } },
     post: (cmd, payload) => events.push({ cmd, ...payload }), log() {}, errStr: e => e.message,
+    withInlineUndo: fn => { inline.push('inline'); try { return fn() } finally { inline.push('restore') } },
   })
   assert.ok(begin >= 0 && end > begin, 'worker contains the native comment interception seam')
   vm.runInContext(source.slice(begin, end), realm)
   const install = () => vm.runInContext('installReviewCommentInterceptor(ctrl)', realm)
-  return { calls, events, status, registrations, releases, controller, frame, slave, realm, install,
+  return { calls, events, status, registrations, releases, inline, controller, frame, slave, realm, install,
     width(value) { width = value },
     query(command = '.uno:InsertAnnotation') {
       return registrations.at(-1).queryDispatch({ Complete: command }, '', 0)
@@ -63,7 +64,14 @@ test('comments with supplied text and unrelated commands retain native dispatch 
   assert.deepEqual(e.calls, [{ command: '.uno:InsertAnnotation', args }, { command: '.uno:Bold', args: [] }])
   assert.deepEqual(e.status, [['add', listener, url], ['remove', listener, url]])
   assert.equal(e.events.length, 0)
-  assert.deepEqual(Array.from(e.registrations[0].getInterceptedURLs()), ['.uno:InsertAnnotation'])
+  assert.deepEqual(Array.from(e.registrations[0].getInterceptedURLs()), ['.uno:InsertAnnotation', '.uno:Undo', '.uno:Redo'])
+})
+
+test("Writer's own undo/redo run inside the inline-view detour; other commands do not", () => {
+  const e = environment(); e.install()
+  for (const command of ['.uno:Undo', '.uno:Redo']) e.query(command).dispatch({ Complete: command }, [])
+  e.query('.uno:Bold').dispatch({ Complete: '.uno:Bold' }, [])
+  assert.deepEqual(e.inline, ['inline', 'dispatch .uno:Undo', 'restore', 'inline', 'dispatch .uno:Redo', 'restore', 'dispatch .uno:Bold'])
 })
 
 test('without readable review support a cached dispatch checks the current gutter, not the state when the menu was built', () => {

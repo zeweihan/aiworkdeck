@@ -56,7 +56,7 @@ export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh'
   // item on the office thread). Edits refresh positions from cached metadata;
   // metadata is re-read once the document has been quiet for FRESH_DELAY.
   const EDIT_DELAY = 250, FRESH_DELAY = 900
-  let wantFresh = true, freshTimer = null, lastAction = ''
+  let wantFresh = true, freshTimer = null, lastAction = '', pendingPolls = 0
   let enabled = false, cards = [], focusKey = '', busy = false, editingKey = '', pointerDown = false
   const pageLayers = new Map()
   function showNotice(text) { notice.textContent = text; notice.hidden = !text }
@@ -288,6 +288,10 @@ export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh'
         return
       }
       if (data.stale || data.unread) armFresh()
+      // Writer lays out far pages in idle time and sends no event when done: poll
+      // the cheap position read a few times so their cards appear unprompted.
+      if (!data.pending) pendingPolls = 0
+      else if (pendingPolls < 6) { pendingPolls++; schedule(700) }
       // Cards on pages Writer has not laid out yet, or not read yet, keep the
       // gutter: releasing it for one read would shift the page back and forth.
       const items = reviewItems(data), hasItems = items.length > 0 || data.pending > 0 || (enabled && data.unread > 0)
