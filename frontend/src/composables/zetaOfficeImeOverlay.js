@@ -307,13 +307,19 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
   })
   input.addEventListener('input', (e) => {
     const text = e.data != null ? e.data : input.value
+    // Deletions and history edits only reshape the transparent box; committing
+    // its leftover value would type raw preedit into the document.
+    const inserts = !e.inputType || /^insert/.test(e.inputType)
     if (composing) {
-      if (e.isComposing !== false && e.inputType !== 'insertFromComposition') {
+      // Only a nonempty final insert confirms early. Cleanup deletes or an empty
+      // input must leave the composition open for its real compositionend text.
+      if (!inserts || !text || (e.isComposing !== false && e.inputType !== 'insertFromComposition')) {
         showPreview(input.value); return
       }
       composing = false; compositionCommitted = true
       hidePreview()
     }
+    if (!inserts) { input.value = ''; return }
     if (trailingCommit !== null) {
       const duplicate = text === trailingCommit
       armTrailingCommit(null)

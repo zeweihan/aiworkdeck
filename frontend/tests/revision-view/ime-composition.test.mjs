@@ -147,3 +147,12 @@ test('an empty final input does not count as a committed phrase before a nonempt
   f.composition('compositionend', '中文')
   assert.deepEqual(f.commits, ['中文'])
 })
+
+test('a deletion outside composition never types the leftover box value into the document', t => {
+  const f = fixture(t); f.start()
+  f.composition('compositionend', '中文')
+  f.change(null, 'deleteContentBackward', false, 'stale')
+  f.change(null, 'historyUndo', false, 'zhongwen')
+  assert.deepEqual(f.commits, ['中文'])
+  assert.equal(f.input.value, '')
+})
