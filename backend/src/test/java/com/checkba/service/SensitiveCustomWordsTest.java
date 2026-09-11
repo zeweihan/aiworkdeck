@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 「要涂黑的姓名/词语」（自定义词）：自动中文姓名检测下线后，姓名的唯一入口（dev-board#531）。
+ * 补充敏感词保持逐字匹配，与自动中文姓名识别并存（dev-board#599）。
  *
  * <p>逐字面量匹配、逐字符遮蔽，不做任何模糊化——用户填什么就涂什么，可预期性比覆盖率重要。
  * docx / 纯文本 / PDF 三条路都要覆盖：PDF 走的是另一套（整页文本匹配 + 坐标画框 + 栅格化），
@@ -36,12 +36,10 @@ class SensitiveCustomWordsTest {
     private final SensitiveService service = new SensitiveService();
 
     @Test
-    @DisplayName("CHINESE_NAME 不再是可勾选的自动检测类型，但枚举值还在")
-    void chineseNameIsNoLongerAnAutoDetectType() {
-        assertFalse(SensitiveType.CHINESE_NAME.isAutoDetect(),
-                "自动中文姓名检测已下线，见 SensitiveType.CHINESE_NAME 的说明");
-        assertFalse(SensitiveType.autoDetectTypes().contains(SensitiveType.CHINESE_NAME),
-                "面板可勾选清单（/api/sensitive/options）里不许再出现中文姓名");
+    @DisplayName("CHINESE_NAME 恢复为可勾选的自动检测类型")
+    void chineseNameIsAnAutoDetectType() {
+        assertTrue(SensitiveType.CHINESE_NAME.isAutoDetect());
+        assertTrue(SensitiveType.autoDetectTypes().contains(SensitiveType.CHINESE_NAME));
         // 护栏：有客观特征的类型一个都不许被顺手带走
         for (SensitiveType kept : List.of(SensitiveType.PHONE, SensitiveType.ID_CARD,
                 SensitiveType.BANK_CARD, SensitiveType.EMAIL)) {

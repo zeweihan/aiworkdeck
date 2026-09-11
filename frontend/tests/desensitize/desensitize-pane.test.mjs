@@ -1,11 +1,6 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// 脱敏面板的「要涂黑的姓名/词语」入口（dev-board#531）。
-//
-// 背景：自动中文姓名脱敏已下线——[一-龥]{2,4} 会把「甲方」「北京市」这类普通词一并涂黑，
-// 而中文姓名没有可用的客观校验位，收紧不了。产品口径是「法律文书里漏涂比误涂安全」，
-// 姓名改由用户手填。既然姓名的唯一入口就是这个输入区，它必须在首屏、必须自带说明，
-// 不能藏在折叠区或高级设置里——藏起来就等于把姓名脱敏整个下线了。
+// 脱敏面板保留可选补充词；中文姓名默认自动识别（dev-board#599）。
 //
 // 渲染这一层照 tests/evidence/previewLocateRender.test.mjs 的做法：用 vue 自带的
 // compiler-sfc 真编译 <template>、真渲染成 HTML。只读源码的断言发现不了「键打错了」
@@ -98,7 +93,7 @@ test('自定义词输入区在首屏 DOM 里：一个文件都没选、什么都
   assert.match(html, /panels\.deCustomPlaceholder/, '输入框没有占位提示')
 })
 
-test('说明文案跟着输入区一起在首屏：不解释「姓名不会自动识别」，用户根本不知道要填', async () => {
+test('可选补充词说明在首屏可见', async () => {
   const html = stripComments(await render())
   assert.match(html, /panels\.deCustomWordsHint/, '首屏没有说明文案')
 })
@@ -109,10 +104,6 @@ test('自定义词区在「脱敏策略」勾选区之前——姓名是主路�
   const strategies = html.indexOf('panels.deStrategiesTitle')
   assert.ok(words > -1 && strategies > -1, '两个分区都得在')
   assert.ok(words < strategies, `自定义词区排在策略区后面了（${words} > ${strategies}）`)
-})
-
-test('不许再有「中文姓名」勾选项——清单由后端 /options 给，前端不许自己补回来', () => {
-  assert.ok(!SRC.includes('CHINESE_NAME'), 'DesensitizePane.vue 里不该出现 CHINESE_NAME')
 })
 
 // ==================== 解析规则 ====================
@@ -150,14 +141,13 @@ test('新增文案键在 zh-CN / en-US 两侧都有', async () => {
   }
 })
 
-test('说明文案把「中文姓名不会自动识别」说清楚，两语言都说', async () => {
+test('说明姓名默认本地识别，补充词是可选入口', async () => {
   const zh = await loadPanels('zh-CN')
   const en = await loadPanels('en-US')
-  assert.ok(zh.deCustomWordsHint.includes('姓名'), zh.deCustomWordsHint)
-  assert.ok(zh.deCustomWordsHint.includes('不会自动识别'),
-    '中文说明必须直说「不会自动识别」：' + zh.deCustomWordsHint)
-  assert.ok(/not.*automatic/i.test(en.deCustomWordsHint),
-    '英文说明必须直说不自动识别：' + en.deCustomWordsHint)
+  assert.match(zh.deCustomWordsHint, /默认开启中文姓名识别/)
+  assert.match(zh.deCustomWordsTitle, /可选/)
+  assert.match(en.deCustomWordsHint, /detected locally by default/)
+  assert.match(en.deCustomWordsTitle, /Optional/)
 })
 
 test('新增文案不含 emoji（全站红线）', async () => {
@@ -169,4 +159,13 @@ test('新增文案不含 emoji（全站红线）', async () => {
       assert.ok(!emoji.test(String(panels[key])), `${lang} panels.${key} 含 emoji`)
     }
   }
+})
+
+test('获取策略后默认勾选中文姓名，用户不填补充词也能使用', async () => {
+  const fetchScript = componentScript.replace('await getSensitiveOptions()', "[{value:'CHINESE_NAME'}, {value:'PHONE'}]")
+  const subject = new Function(fetchScript)()
+  const state = { ...subject.data(), $t: key => key }
+  await subject.methods.fetchOptions.call(state)
+  assert.ok(state.selectedStrategies.includes('CHINESE_NAME'))
+  assert.equal(state.customTerms, '')
 })
