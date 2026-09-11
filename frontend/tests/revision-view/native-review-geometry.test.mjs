@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs'
 const source = readFileSync(new URL('../../src/zetaoffice/public/office_thread.js', import.meta.url), 'utf8')
 const implementation = source.slice(source.indexOf('// Geometry comes from Writer'), source.indexOf('\nconst EXEC = {'))
 function editor(supported = true) {
-  let revision = 7, listReads = 0, geometryReads = 0
+  let revision = 7, listReads = 0, geometryReads = 0, mode = 'balloons'
   const originalSelection = 'selected original text'
   const native = {version:1,unit:'twip',pages:[{number:1,x:280,y:280,width:12000,height:16800,sidebar:'right',gutterWidth:4200}],
     revisions:[{index:0,id:91,anchor:{x:800,y:1200,width:8,height:200},page:1}],
@@ -26,9 +26,9 @@ function editor(supported = true) {
   }
   const read = new Function('ctrl','xModel','isWriterDoc','docSeq','currentReviewRevision','revisionViewState','readNativeCaretRect','EXEC','tableFail',
     implementation + ';return reviewLayout')(
-    ctrl,{isReadonly:()=>false},()=>true,12,()=>revision,()=>({mode:'balloons'}),
+    ctrl,{isReadonly:()=>false},()=>true,12,()=>revision,()=>({mode}),
     ()=>({frameWidth:1000,frameHeight:700,viewport:{x:0,y:30,width:1000,height:650}}),EXEC,message=>({success:false,message}))
-  return {read,native,commentMetadata,originalSelection,change:()=>revision++,counts:()=>({listReads,geometryReads})}
+  return {read,native,commentMetadata,originalSelection,change:()=>revision++,setMode:m=>{mode=m},counts:()=>({listReads,geometryReads})}
 }
 test('reads native anchors by identity and preserves full content without hit testing or selection changes', () => {
   const e=editor(), layout=e.read()
@@ -46,6 +46,24 @@ test('scroll/layout reads refresh native positions and reuse metadata until docu
   assert.deepEqual(e.counts(),{listReads:2,geometryReads:2})
   e.change(); assert.equal(e.read().revision,8)
   assert.deepEqual(e.counts(),{listReads:4,geometryReads:3})
+})
+test('edits refresh positions from cached metadata keyed by native identity; fresh reads re-list', () => {
+  const e=editor(); e.read({fresh:true})
+  e.change()
+  // A new revision is inserted before the old one: indices shift, native ids do not.
+  e.native.revisions=[{index:0,id:92,anchor:{x:700,y:1000,width:8,height:200},page:1},{...e.native.revisions[0],index:1}]
+  const cached=e.read({fresh:false})
+  assert.deepEqual(e.counts().listReads,2,'position-only refresh never re-lists metadata')
+  assert.equal(cached.stale,true); assert.equal(cached.unread,1)
+  const old=cached.items.find(i=>i.kind==='revision')
+  assert.deepEqual([old.data.index,old.data.type,old.y],[1,'Delete',1200])
+  e.read({fresh:true}); assert.equal(e.counts().listReads,4)
+})
+test('views without revision cards read comment metadata only', () => {
+  const e=editor(); e.setMode('all')
+  const layout=e.read({fresh:true})
+  assert.deepEqual(e.counts().listReads,1)
+  assert.deepEqual(layout.items.find(i=>i.kind==='revision').data,{index:0})
 })
 test('an older engine keeps native comments and performs no background review scans', () => {
   const e=editor(false)

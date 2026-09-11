@@ -25,7 +25,10 @@ async function documentBytes() {
 
 preflight()
 const server = await startServer({ extraFiles: Object.fromEntries(['cjk.ttc','cjk-serif.otf','cjk-kai.ttf','cjk-fangsong.ttf'].map(f=>['/'+f,'/Applications/AI WorkDeck.app/Contents/Resources/frontend/dist/zetaoffice/'+f])) })
-const browser = await launchBrowser(await loadPuppeteer())
+// Headed on purpose: headless Chrome does not present the engine canvas until a
+// capture resizes the view, and that resize repaints Writer by itself. Only a
+// real display tells "painted on its own" from "painted because we poked it".
+const browser = await launchBrowser(await loadPuppeteer(), { headed: true })
 try {
   const page = await browser.newPage()
   await page.setViewport({width:1280,height:900,deviceScaleFactor:Number(process.env.LOWA_E2E_DPR || 1)})

@@ -52,6 +52,11 @@ export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh'
   let suspended = 0, generation = 0
   let disposed = false, timer = null, inFlight = false, again = false, snapshot = null
   let viewportTimer = null
+  // Typing must never wait for review metadata (several UNO round trips per
+  // item on the office thread). Edits refresh positions from cached metadata;
+  // metadata is re-read once the document has been quiet for FRESH_DELAY.
+  const EDIT_DELAY = 250, FRESH_DELAY = 900
+  let wantFresh = true, freshTimer = null, lastAction = ''
   let enabled = false, cards = [], focusKey = '', busy = false, editingKey = '', pointerDown = false
   const pageLayers = new Map()
   function showNotice(text) { notice.textContent = text; notice.hidden = !text }
@@ -68,7 +73,9 @@ export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh'
     const content = doc.createElement('div'); content.className = 'awd-rb-content'; content.textContent = r.content || r.text || r.description || ''
     node.append(meta, content)
     if (r.anchorText) { const quote = doc.createElement('div'); quote.className = 'awd-rb-quote'; quote.textContent = r.anchorText; node.append(quote) }
+    // Cards survive index shifts (see reconcile): handlers read the current data.
     const locate = async () => {
+      const r = item.data
       if (busy) return
       try { const result = await execute(item.kind === 'comment' ? 'goto_comment' : 'goto_revision', { id: r.id, index: r.index ?? r.items[0].index, revision: item.revision, documentSeq: item.documentSeq, ...(item.kind === 'revision' ? { identifier: r.items[0].identifier } : {}) }); if (!result?.success) throw new Error(); schedule(0) }
       catch { showNotice(labels.failed) }
@@ -79,6 +86,7 @@ export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh'
     for (const action of !item.writable ? [] : item.kind === 'comment' ? ['edit', 'remove', r.resolved ? 'reopen' : 'resolve'] : ['accept', 'reject']) {
       const b = doc.createElement('button'); b.textContent = labels[action]
       b.onclick = async e => {
+        const r = item.data
         e.stopPropagation(); if (busy) return
         if (action === 'edit') {
           if (node.querySelector('textarea')) return
@@ -99,7 +107,7 @@ export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh'
             } catch { showNotice(labels.failed) }
             finally {
               if (saved || !input.isConnected) { busy = false; editingKey = '' }
-              save.disabled = false; cancel.disabled = false; schedule(0)
+              save.disabled = false; cancel.disabled = false; refreshNow()
             }
           }
           editActions.append(save, cancel); content.hidden = true; actions.hidden = true; node.append(input, editActions); busy = true; editingKey = item.key
@@ -113,7 +121,7 @@ export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh'
           if (!result?.success || result.results?.some(x => !x.success)) throw new Error()
           transport.send({ __lo: 'lo-relay', type: 'modified' })
         } catch { showNotice(labels.failed) }
-        finally { busy = false; root.querySelectorAll('.awd-rb-actions button').forEach(b => { b.disabled = false }); schedule(0) }
+        finally { busy = false; root.querySelectorAll('.awd-rb-actions button').forEach(b => { b.disabled = false }); refreshNow() }
       }
       actions.append(b)
     }
@@ -124,15 +132,21 @@ export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh'
     const revisions = data.items.filter(x => x.kind === 'revision')
     const byIndex = new Map(revisions.map(x => [x.data.index, x]))
     const groups = ['balloons', 'margin'].includes(data.mode) ? groupRevisions(revisions.map(x => x.data)).filter(group => group.type !== 'Insert') : []
-    return groups.map(g => ({ ...byIndex.get(g.items[0].index), key: g.key, data: g }))
+    // A group keeps its card while edits elsewhere shift enumeration indices.
+    return groups.map(g => ({ ...byIndex.get(g.items[0].index), key: g.items[0].identifier ? 'g:' + g.items[0].identifier : g.key, data: g }))
       .concat(data.items.filter(x => x.kind === 'comment'))
   }
+  // Only what a card renders or sends as its fence; positions update in place.
+  const cardSignature = (item, writable) => JSON.stringify(item.kind === 'comment'
+    ? [item.kind, writable, ...['id', 'author', 'date', 'timestamp', 'content', 'anchorText', 'resolved'].map(k => item.data[k])]
+    : [item.kind, writable, item.data.type, item.data.inTable, item.data.author, item.data.date, item.data.text, item.data.description,
+      item.data.items.map(r => [r.identifier, r.type, r.text, r.author, r.timestamp])])
   function reconcile(data, items) {
     if (!data.writable && editingKey) { editingKey = ''; busy = false }
     const previous = new Map(cards.map(c => [c.key, c]))
     cards = items.map(item => {
       const next = { ...item, revision: data.revision, documentSeq: data.documentSeq, writable: data.writable }
-      const signature = JSON.stringify([item.kind, item.data, data.writable])
+      const signature = cardSignature(item, data.writable)
       let card = previous.get(item.key)
       previous.delete(item.key)
       if (card && (card.signature === signature || card.key === editingKey)) {
@@ -259,9 +273,10 @@ export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh'
     if (disposed) return
     if (inFlight || suspended || pointerDown || (busy && !editingKey)) { again = true; return }
     inFlight = true
-    const capturedGeneration = generation
+    const capturedGeneration = generation, fresh = wantFresh
+    wantFresh = false
     try {
-      const data = await execute('get_review_layout', {})
+      const data = await execute('get_review_layout', { fresh })
       if (disposed || suspended || capturedGeneration !== generation) return
       if (pointerDown) { again = true; return }
       if (!data?.success) { showNotice(labels.failed); return }
@@ -272,7 +287,10 @@ export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh'
         if (enabled) { enabled = false; await execute('set_review_balloons', { enabled: false, width: 280 }) }
         return
       }
-      const items = reviewItems(data), hasItems = items.length > 0
+      if (data.stale || data.unread) armFresh()
+      // Cards on pages Writer has not laid out yet, or not read yet, keep the
+      // gutter: releasing it for one read would shift the page back and forth.
+      const items = reviewItems(data), hasItems = items.length > 0 || data.pending > 0 || (enabled && data.unread > 0)
       snapshot = data
       const desiredWidth = hasItems ? 280 : 0
       if (hasItems !== enabled || (data.sidebarWidth != null && Number(data.sidebarWidth) !== desiredWidth)) {
@@ -291,8 +309,17 @@ export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh'
     finally { inFlight = false; if (again && !suspended && !pointerDown && (!busy || editingKey)) { again = false; schedule(0) } }
   }
   function schedule(delay = 80) { if (disposed) return; clearTimeout(timer); timer = setTimeout(refresh, delay) }
+  function armFresh() {
+    if (disposed) return
+    clearTimeout(freshTimer)
+    freshTimer = setTimeout(() => { freshTimer = null; wantFresh = true; schedule(0) }, FRESH_DELAY)
+  }
+  // After a card action the content itself changed: read it back at once.
+  function refreshNow() { wantFresh = true; schedule(0) }
+  const edited = () => { schedule(EDIT_DELAY); armFresh() }
   const scheduleViewport = () => {
-    if (disposed || viewportTimer) return
+    // Nothing is shown: a scroll or resize has nothing to move.
+    if (disposed || viewportTimer || !enabled) return
     viewportTimer = setTimeout(() => { viewportTimer = null; clearTimeout(timer); refresh() }, 40)
   }
   const onWheel = () => scheduleViewport(), onPointer = () => scheduleViewport()
@@ -313,16 +340,21 @@ export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh'
   schedule(0)
   return {
     suspend(action) {
-      suspended++; generation++; clearTimeout(timer)
+      suspended++; generation++; clearTimeout(timer); lastAction = action
       if (action === 'load_document') {
         busy = false; editingKey = ''; pointerDown = false; snapshot = null; cards = []; focusKey = ''; enabled = false
         list.replaceChildren(); pageLayers.clear(); svg.replaceChildren(); root.hidden = true
       }
     },
-    resume() { suspended = Math.max(0, suspended - 1); if (!suspended) schedule(0) },
-    documentChanged() { schedule(80) }, cursorMoved() { scheduleViewport() },
+    resume() {
+      suspended = Math.max(0, suspended - 1)
+      if (suspended) return
+      if (lastAction === 'load_document') refreshNow(); else edited()
+    },
+    documentChanged: edited,
+    cursorMoved() { if (enabled) schedule(200) },
     destroy() {
-      disposed = true; clearTimeout(timer); clearTimeout(viewportTimer); root.remove(); style.remove()
+      disposed = true; clearTimeout(timer); clearTimeout(viewportTimer); clearTimeout(freshTimer); root.remove(); style.remove()
       canvas.removeEventListener('wheel', onWheel); canvas.removeEventListener('pointerup', onPointer); canvas.removeEventListener('pointermove', onDrag)
       win.removeEventListener('resize', onResize); win.removeEventListener('pointerup', releasePointer); win.removeEventListener('pointercancel', releasePointer); win.removeEventListener('blur', releasePointer)
     },

@@ -375,6 +375,7 @@ export default {
     // export needs the live webview, so saving from here is already too late.
     clearTimeout(this._saveTimer)
     clearTimeout(this._slowSaveTimer)
+    clearTimeout(this._reviewRefreshTimer)
     clearInterval(this._bootTimer)
     try { if (this._anchorChecker) this._anchorChecker.dispose() } catch (e) { /* ignore */ }
     this._anchorChecker = null
@@ -1402,8 +1403,13 @@ export default {
       if (!this._dirtySince) this._dirtySince = Date.now()
       this.scheduleAutoSave()
       this.scheduleAnchorCheck()
-      // 文档变了（打字 / AI 改动）——面板开着就刷新，别让它显示过期清单
-      if (this.reviewOpen) this.reviewRefreshKey++
+      // 文档变了（打字 / AI 改动）——面板开着就刷新，别让它显示过期清单。
+      // 停笔后再刷：整份修订/批注清单要在 office 线程上逐条读，每敲一下就读会让
+      // 下一个字（含中文确认）排在它后面才上屏。AI 写入另走 onDocMutatedEvent。
+      if (this.reviewOpen) {
+        clearTimeout(this._reviewRefreshTimer)
+        this._reviewRefreshTimer = setTimeout(() => { if (this.reviewOpen) this.reviewRefreshKey++ }, 1000)
+      }
       // 工具栏激活态也可能变了（AI 改了格式、用户敲了字）
       this.uiRefreshKey++
     },

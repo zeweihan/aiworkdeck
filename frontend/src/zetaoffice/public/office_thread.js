@@ -2664,49 +2664,74 @@ function supportsReviewGeometry() {
   }
   return reviewGeometrySupported;
 }
-function reviewLayout() {
+// Metadata costs several UNO round trips per item; typing must never wait for
+// it. Callers pass fresh:false for position-only refreshes: geometry is always
+// live, and metadata is reused by native identity (redline GetId, comment id)
+// until a fresh read. pending = known cards on pages not laid out yet (they keep
+// the gutter); unread = native items the cache has not read (refresh when idle).
+function reviewLayout(p) {
   if (!isWriterDoc() || !supportsReviewGeometry()) {
     reviewLayoutCache = null;
     return { success: true, available: false, items: [], pages: [] };
   }
   const mode = revisionViewState().mode;
-  const signature = [docSeq, currentReviewRevision(), mode].join(':');
-  if (!reviewLayoutCache || reviewLayoutCache.signature !== signature) {
-    const revisions = EXEC.list_revisions({ limit: 500 });
-    const comments = EXEC.list_comments({ limit: 500 });
-    if (!revisions.success || !comments.success) return tableFail('Review list unavailable');
-    reviewLayoutCache = { signature: signature, revisions: revisions.revisions, comments: comments.comments,
-      truncated: revisions.count >= 500 || comments.count >= 500 };
-  }
+  // Only balloons/margin render revision cards; other views need positions only.
+  const revisionCards = mode === 'balloons' || mode === 'margin';
   const geometry = JSON.parse(ctrl.getPropertyValue('AwdReviewGeometry'));
   if (geometry.version !== 1 || geometry.unit !== 'twip') return tableFail('Unsupported review geometry');
+  let cache = reviewLayoutCache;
+  const fresh = p && p.fresh;   // true: re-read; false: reuse even after edits; unset: re-read after edits
+  if (!cache || cache.docSeq !== docSeq || cache.mode !== mode || fresh === true
+    || (fresh !== false && cache.revisionAtRead !== currentReviewRevision())) {
+    const revisionAtRead = currentReviewRevision();
+    const comments = EXEC.list_comments({ limit: 500, locate: false });
+    const revisions = revisionCards ? EXEC.list_revisions({ limit: 500, locate: false }) : { success: true, count: 0, revisions: [] };
+    if (!revisions.success || !comments.success) return tableFail('Review list unavailable');
+    // Both enumerations walk the same redline table in the same synchronous call.
+    const nativeIds = new Map(geometry.revisions.map(r => [r.index, r.id]));
+    cache = reviewLayoutCache = { docSeq: docSeq, mode: mode, revisionAtRead: revisionAtRead,
+      revisions: new Map(), comments: new Map(), truncated: revisions.count >= 500 || comments.count >= 500 };
+    revisions.revisions.forEach(r => { if (nativeIds.has(r.index)) cache.revisions.set(nativeIds.get(r.index), r); });
+    comments.comments.forEach(c => cache.comments.set(String(c.id), c));
+  }
   const live = ctrl.getViewData(), v = String(live).split(';').map(Number);
   const rect = readNativeCaretRect(ctrl.getFrame(), live, 12);
   if (!rect) return { success: false, message: 'Document viewport unavailable' };
-  const revisions = new Map(geometry.revisions.map(r => [r.index, r]));
-  const comments = new Map();
+  const nativeComments = new Map();
   geometry.comments.forEach(c => {
     const id = String(c.name || ('postit:' + c.id));
-    comments.set(id, comments.has(id) ? null : c);
+    nativeComments.set(id, nativeComments.has(id) ? null : c);
   });
   const items = [];
-  let missing = false;
+  let missing = false, pending = 0, unread = 0;
   function add(kind, data, native, key) {
-    if (!native?.anchor || native.available === false || native.page == null) { missing = true; return; }
+    if (!native?.anchor || native.available === false || native.page == null) {
+      // Laid-out-later pages still hold cards: the host keeps their gutter.
+      missing = true;
+      if (kind === 'comment' || (data && data.type !== 'Insert')) pending++;
+      return;
+    }
     items.push({ key: key, kind: kind, data: data, x: native.anchor.x, y: native.anchor.y,
       page: native.page, rects: native.rects || [] });
   }
-  reviewLayoutCache.revisions.forEach(r => add('revision', r, revisions.get(r.index), 'r' + r.index));
-  reviewLayoutCache.comments.forEach(c => add('comment', c, comments.get(String(c.id)), 'c' + c.id));
+  geometry.revisions.forEach(g => {
+    if (!revisionCards) { add('revision', { index: g.index }, g, 'r' + g.index); return; }
+    const meta = cache.revisions.get(g.id);
+    if (!meta) { missing = true; unread++; return; }
+    add('revision', Object.assign({}, meta, { index: g.index }), g, 'r' + g.index);
+  });
+  cache.comments.forEach(c => add('comment', c, nativeComments.get(String(c.id)), 'c' + c.id));
+  nativeComments.forEach((c, id) => { if (c && !cache.comments.has(id)) { missing = true; unread++; } });
   return { success: true, available: true, items: items, pages: geometry.pages,
-    truncated: reviewLayoutCache.truncated || missing,
+    truncated: cache.truncated || missing, pending: pending, unread: unread,
+    stale: cache.revisionAtRead !== currentReviewRevision(),
     sidebarWidth: Number(ctrl.getPropertyValue('AwdReviewSidebarWidth')),
     revision: currentReviewRevision(), documentSeq: docSeq, writable: isReviewWritable(), view: { left: v[3], top: v[4], right: v[5], bottom: v[6],
       caretX: v[0], caretY: v[1], ...rect }, mode: mode };
 }
 
 const EXEC = {
-  get_review_layout() { return reviewLayout(); },
+  get_review_layout(p) { return reviewLayout(p); },
   set_review_balloons(p) {
     if (!isWriterDoc() || !supportsReviewGeometry()) return { success: true, available: false };
     if (p.enabled && !installReviewCommentInterceptor(ctrl)) return tableFail('批注输入通道不可用，请重新打开文档后重试。');
@@ -5134,6 +5159,9 @@ const EXEC = {
   // 点击定位、逐条接受/拒绝——修订的权威视图从页边挪进面板。
   list_revisions(p) {
     const limit = Math.max(1, Math.min(500, Number(p && p.limit) || 200));
+    // locate:false skips the paragraph text and locator: they rebuild the whole
+    // paragraph index after every edit, and review balloons render neither.
+    const locate = !(p && p.locate === false);
     const out = [], tableCells = Object.create(null);
     let prevEnd = null;   // 上一条的 RedlineEnd，用来判「首尾相接」（见 contiguous）
     try {
@@ -5174,8 +5202,10 @@ const EXEC = {
               rc.gotoRange(re, true);
               it.text = String(rc.getString() || '');
             }
-            const pc = rs.getText().createTextCursorByRange(rs);
-            try { pc.gotoStartOfParagraph(false); pc.gotoEndOfParagraph(true); it.paragraph = String(pc.getString() || '').slice(0, 120); } catch (e) {}
+            if (locate) {
+              const pc = rs.getText().createTextCursorByRange(rs);
+              try { pc.gotoStartOfParagraph(false); pc.gotoEndOfParagraph(true); it.paragraph = String(pc.getString() || '').slice(0, 120); } catch (e) {}
+            }
             // 表格内的修订：面板要标出来（页边互叠的正是这一类）
             try {
               const cell = rs.getPropertyValue('Cell'), table = rs.getPropertyValue('TextTable');
@@ -5186,7 +5216,7 @@ const EXEC = {
                 it.tableCells = tableCells[it.tableName] || (tableCells[it.tableName] = table.getCellNames().filter(function (name) { return !!table.getCellByName(name).getString(); }));
               }
             } catch (e) { it.inTable = false; }
-            applyLocator(it, rs, re);   // 批注关联用的可比坐标
+            if (locate) applyLocator(it, rs, re);   // 批注关联用的可比坐标
           }
         } catch (e) {}
         prevEnd = curEnd;
@@ -5303,6 +5333,7 @@ const EXEC = {
   },
   list_comments(p) {
     const limit = Math.max(1, Math.min(500, Number(p && p.limit) || 200));
+    const locate = !(p && p.locate === false);   // see list_revisions
     const out = [];
     try {
       const en = xModel.getTextFields().createEnumeration();
@@ -5321,8 +5352,10 @@ const EXEC = {
         try {
           const a = f.getAnchor();
           it.anchorText = String(a.getString() || '');
-          it.paragraph = (paragraphTextOf(a) || '').slice(0, 120);
-          applyLocator(it, a.getStart(), a.getEnd());   // 与 list_revisions 同一坐标系
+          if (locate) {
+            it.paragraph = (paragraphTextOf(a) || '').slice(0, 120);
+            applyLocator(it, a.getStart(), a.getEnd());   // 与 list_revisions 同一坐标系
+          }
         } catch (e) {}
         out.push(it);
       }
