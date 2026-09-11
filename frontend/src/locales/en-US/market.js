@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Plugin Marketplace (MarketPane / MarketDetailPane / MarketSidebarPanel / plugin-market page / marketPricing util)
 export default {
-  redactionEngineUpdateNotice: 'Redaction 2.0 adds company detection, preview, tokens and local restoration. The engine is updated through desktop patches; reinstalling skill instructions does not update it.',
+  redactionEngineUpdateNotice: 'Local rules automatically detect companies and Chinese names, with previews, tokens and restoration. The engine is updated through desktop patches; reinstalling skill instructions does not update it.',
   redactionEngineUpdateButton: 'Check redaction engine updates',
   // ---- Hero ----
   heroWatermark: 'E',

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // 插件广场（MarketPane / MarketDetailPane / MarketSidebarPanel / plugin-market 页 / marketPricing 工具）
 export default {
-  redactionEngineUpdateNotice: '脱敏 2.0：公司识别、预览、编号替换与本地复敏。实际功能随桌面端补丁升级，重新安装说明文件不会更新引擎。',
+  redactionEngineUpdateNotice: '本地规则自动识别公司与中文姓名，支持预览、编号替换和复敏。实际功能随桌面端补丁升级，重新安装说明文件不会更新引擎。',
   redactionEngineUpdateButton: '检查脱敏引擎更新',
   // ---- Hero ----
   heroWatermark: '技',
