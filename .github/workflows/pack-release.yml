@@ -220,6 +220,11 @@ jobs:
                 "$PY" -m mineru.cli.fast_api --host 127.0.0.1 --port 8098 > "$RUNNER_TEMP/smoke.log" 2>&1 &
               URL=http://127.0.0.1:8098/docs ;;
             kokoro-runtime)
+              # 英文 G2P 必须离线可初始化：lib 缺 en_core_web_sm 时 misaki 会现场
+              # spacy.cli.download 出网（dev-board#591）。代理指向死端口，任何出网都会失败
+              HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 NO_PROXY= \
+                "$PY" -c "from misaki import en; en.G2P(trf=False, british=False, fallback=None, unk='')" \
+                || { echo "misaki en.G2P failed offline: en_core_web_sm missing from kokoro lib"; exit 1; }
               PORT=8881 "$PY" "$ROOT/app/app.py" > "$RUNNER_TEMP/smoke.log" 2>&1 &
               URL=http://127.0.0.1:8881/health
               # 与 desktop-build.yml 同款：光起得来不够，音色表里必须有 zf_001
