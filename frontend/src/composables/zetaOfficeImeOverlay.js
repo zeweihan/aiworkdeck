@@ -370,6 +370,8 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
   // letting them fall through to the harmless empty input).
   input.addEventListener('keydown', (e) => {
     if (composing || e.isComposing || e.keyCode === 229) return
+    // A real keystroke starts its own input; only an IME echo may repeat the commit.
+    armTrailingCommit(null)
     // Option can change e.key to a printable symbol on macOS; code retains C.
     if ((e.metaKey || e.ctrlKey) && e.altKey && !e.shiftKey
       && (e.code === 'KeyC' || String(e.key).toLowerCase() === 'c')

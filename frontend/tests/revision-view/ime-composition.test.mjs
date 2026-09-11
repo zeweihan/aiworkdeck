@@ -156,3 +156,11 @@ test('a deletion outside composition never types the leftover box value into the
   assert.deepEqual(f.commits, ['中文'])
   assert.equal(f.input.value, '')
 })
+
+test('a genuine keystroke right after a one-letter commit is typed, not taken for the IME echo', t => {
+  const f = fixture(t); f.start()
+  f.composition('compositionend', 'a')
+  f.key({ key: 'a', code: 'KeyA', keyCode: 65 })
+  f.change('a', 'insertText', false)
+  assert.deepEqual(f.commits, ['a', 'a'])
+})
