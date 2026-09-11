@@ -4,7 +4,7 @@
   <div class="root-bubble-wrapper">
 
     <!-- GHOST STATE: Only Show Thinking if not ready -->
-    <div v-if="!isReady && bubble.thinking.status === 'thinking'" class="ghost-thinking">
+    <div v-if="!hideActivity && !isReady && bubble.thinking.status === 'thinking'" class="ghost-thinking">
         <ThinkingCard
            :status="bubble.thinking.status"
            :duration="bubble.thinking.duration"
@@ -17,7 +17,7 @@
     <!-- ACTIVE STATE: Full Card -->
     <div v-else class="active-bubble-wrapper">
         <!-- 1. Thinking Card (Moved Out as Ghost) -->
-        <div class="ghost-thinking-wrapper">
+        <div v-if="!hideActivity" class="ghost-thinking-wrapper">
              <ThinkingCard
                :status="bubble.thinking.status"
                :duration="bubble.thinking.duration"
@@ -34,14 +34,14 @@
             <!-- 2b. 计划卡（线性时序结构）：思考结束、制定计划后先展示计划框，
                  下方才是各步骤的执行进展；每步内部再嵌工具调用记录。
                  快照挂在气泡上（plan_update 时写入），历史消息各自保留当轮计划。 -->
-            <div v-if="bubble.planTodos && bubble.planTodos.length" class="inline-plan">
+            <div v-if="!hideActivity && bubble.planTodos && bubble.planTodos.length" class="inline-plan">
                <TodoProgressCard :todos="bubble.planTodos" />
             </div>
 
             <!-- 3. Process Stream（工具执行一律收进可折叠组：有 plan 步骤的按步骤分组，
                  无归属的收进「执行过程」组；流式进行中展开最新组，结束后全部收起——
                  后台操作细节默认不刷屏，点开才看） -->
-            <div class="process-stream">
+            <div v-if="!hideActivity" class="process-stream">
                <template v-for="(group, gi) in processGroups" :key="group.key + '-' + gi">
                   <div class="step-group">
                      <div class="step-group-header" @click="toggleGroup(group.key, gi)">
@@ -76,6 +76,7 @@
                  v-for="art in bubble.artifacts"
                  :key="art.id"
                  class="artifact-wrapper"
+                 :data-chat-attention="isApprovalPending(art) ? '' : null"
                  :class="{ 'artifact-wrapper--approval': isApprovalPending(art) }"
                >
                   <div v-if="isApprovalPending(art)" class="approval-flag">
@@ -97,7 +98,8 @@
             </div>
 
             <!-- 5. Main Content (The Answer) -->
-            <div v-if="bubble.content" class="main-content">
+            <div v-if="bubble.content" class="main-content" data-chat-answer>
+               <div v-if="replyLabel" class="reply-label">{{ replyLabel }}</div>
                <MarkdownPreview :content="bubble.content" />
             </div>
 
@@ -125,6 +127,7 @@
                  选项也要出现在那段话下面，读起来才是「先问、再给选项」。
                  可操作性与计划卡同一条链（仅最新一条助手消息、且流已结束）。 -->
             <QuestionCard
+              data-chat-attention
               v-if="bubble.question"
               :text="bubble.question.text || ''"
               :options="bubble.question.options || []"
@@ -166,7 +169,9 @@ import { t } from '@/i18n'
 const props = defineProps({
   bubble: { type: Object, required: true },
   /** 是否为最新一条助手消息（决定计划卡是否可操作） */
-  isLatest: { type: Boolean, default: false }
+  isLatest: { type: Boolean, default: false },
+  hideActivity: { type: Boolean, default: false },
+  replyLabel: { type: String, default: '' }
 })
 
 const emit = defineEmits(['open-artifact-tab', 'approve', 'message-action', 'answer-question'])
@@ -243,6 +248,7 @@ const isReady = computed(() => {
 })
 
 const hasContent = computed(() => {
+    if (props.hideActivity) return !!(props.bubble.content || props.bubble.artifacts.length || hasQuestion.value)
     // Check if the bubble has any content to display
     return !!(
         props.bubble.title ||
@@ -353,6 +359,12 @@ const hasContent = computed(() => {
   margin-bottom: 14px;
 }
 
+.reply-label {
+  color: var(--awd-accent-text);
+  font-size: 11px;
+  font-weight: 600;
+  margin: 4px 0 10px;
+}
 .main-content {
   padding: 6px 12px;
   font-size: 13px;

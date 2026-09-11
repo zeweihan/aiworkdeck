@@ -88,6 +88,7 @@ test('模型漏闭合 question 时，bubble_end 冲出缓冲，开放式问题�
 
 test('inbox snapshot and applied event render steering once and keep one empty assistant segment', () => {
   const s = stream()
+  s.handleEvent('plan_update', JSON.stringify({ todos: [{ content: 'Inherited task', status: 'in_progress' }] }))
   s.bubbles.value.unshift(s.createUserBubble('initial request'))
 
   s.handleEvent('inbox_updated', JSON.stringify({
@@ -124,6 +125,7 @@ test('inbox snapshot and applied event render steering once and keep one empty a
   assert.deepEqual(s.bubbles.value.map((bubble) => bubble.role), ['USER', 'USER', 'USER', 'ASSISTANT'])
   assert.deepEqual(s.bubbles.value.filter((bubble) => bubble.role === 'USER').map((bubble) => bubble.content),
     ['initial request', 'canonical first steer', 'second steer'])
+  assert.equal(s.bubbles.value.at(-1).planTodos[0].content, 'Inherited task')
 })
 
 test('a restore snapshot that resolves after input_applied cannot restore a phantom pending item', async () => {
@@ -243,4 +245,18 @@ test('a late HTTP receipt after New Chat cannot repopulate the new conversation'
   } finally {
     globalThis.fetch = originalFetch
   }
+})
+
+test('applying an interjection preserves buffered text in its original assistant segment', () => {
+  const s = stream()
+  s.bubbles.value.unshift(s.createUserBubble('initial request'))
+  s.handleEvent('text_delta', JSON.stringify({ content: 'Visible untagged reply before steer' }))
+  s.handleEvent('input_applied', JSON.stringify({ messageId: 'steer-buffer', message: 'Focus on payment', runId: 'run-buffer', sequence: 1 }))
+  const prior = s.bubbles.value.filter(b => b.role === 'ASSISTANT')[0]
+  assert.equal(prior.content, 'Visible untagged reply before steer')
+  assert.equal(prior.isStreaming, false)
+  s.handleEvent('text_delta', JSON.stringify({ content: '<final>New reply after steer</final>' }))
+  s.handleEvent('bubble_end', JSON.stringify({ status: 'finished' }))
+  assert.equal(s.bubbles.value.at(-1).content, 'New reply after steer')
+  assert.equal(prior.content, 'Visible untagged reply before steer')
 })

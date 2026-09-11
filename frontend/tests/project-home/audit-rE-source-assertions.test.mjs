@@ -54,14 +54,14 @@ test('handleAbort 确实调用同一个 abort()（核实两处复用的是同一
 // 2. ChatInterface.vue：bubbles 全树空 deep watcher 每个 token 全量重遍历
 // ======================================================================
 
-test('bubbles 上不应该再挂一个空回调体的 deep watcher（唯一保留的 watch 只看 length）', () => {
+test('bubbles 上不应该再挂一个空回调体的 deep watcher（增长观察不遍历历史消息）', () => {
   const src = stripComments(read('components/ChatInterface.vue'))
   assert.doesNotMatch(src, /watch\(bubbles,/,
     '不能再对 bubbles 整棵对象图做 deep watch——原来的回调体是空的，纯粹白白遍历一遍')
   assert.doesNotMatch(src, /\{\s*deep:\s*true\s*\}/,
     '本组件不该再有任何 { deep: true } 的 watch（唯一一处曾经存在的就是本条要删的这个）')
-  assert.match(src, /watch\(\(\) => bubbles\.value\.length, \(\) => \{\s*scrollToBottom\(\)/,
-    '新气泡出现时滚到底部的浅层 watch 必须保留——这是唯一还需要的行为')
+  assert.match(src, /watch\(\(\) => bubbles\.value\.length, \(\) => \{\s*if \(followLatest.value\) scrollToBottom\(\)/,
+    '仅当用户跟随最新消息时，新增气泡才滚到底部')
 })
 
 // ======================================================================

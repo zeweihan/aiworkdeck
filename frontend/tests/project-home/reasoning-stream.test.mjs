@@ -85,9 +85,9 @@ test('ThinkingCard 模板在 thinking 态渲染 chat.thinkingLive，两套 local
   }
 })
 
-test('RootBubble 在还没有任何产出时渲染 ghost 态的 ThinkingCard（计时器有落点）', () => {
+test('RootBubble 内联模式保留 ghost ThinkingCard，固定面板模式不重复渲染', () => {
   const root = read('../../src/components/AgentMessage/RootBubble.vue')
-  assert.match(root, /v-if="!isReady && bubble\.thinking\.status === 'thinking'"/)
+  assert.match(root, /v-if="!hideActivity && !isReady && bubble\.thinking\.status === 'thinking'"/)
 })
 
 // ---------- 2. reasoning_delta 实时进思考卡 ----------
