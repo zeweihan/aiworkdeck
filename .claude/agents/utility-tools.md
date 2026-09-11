@@ -364,6 +364,7 @@ FilePickerDialog :298 / EasyVoicePane :537 / DesensitizePane :543 / SearchPanel 
   详见上面剪贴板段的「采集链路的登录态红线」。
 - `checkba:fs-read-file` 有敏感路径拦截，别为新功能开任意路径读写。
 - Kokoro 大陆网络 401 = hf_xet 绕镜像问题，禁 xet 修（PR#142）。asr-models 的下载走同一条路，同样禁 xet。
+- **Kokoro 英文音色的运行时出网（dev-board#591）**：misaki 的 `en.G2P` 缺 `en_core_web_sm` 时会 `spacy.cli.download`（先 GET raw.githubusercontent.com 的 compatibility.json，再 `pip install` 进 `sys.executable` 的 site-packages，也就是 App 包内），`HF_HUB_OFFLINE=1` 管不到。kokoro-runtime 1.0.0 的 lib 就缺它（实测离线时 af_/bf_ 合成 500，中文不受影响）。现在三道闸：lock 钉死模型 wheel、`app.py` 的 `_require_en_spacy_model()` 缺模型直接拒绝、pack-release 冒烟在死端口代理下真跑 `en.G2P()`（契约测试 `desktop/tests/kokoro-offline-english.test.js`）。**lock 改动要走 pack 发版才到用户手里**。中文 pipeline 的 `ZHG2P` 没传 `en_callable`，不碰 spaCy。
 - **asr-service 不像 kokoro 那样把服务门在模型上**：kokoro 的 descriptor 有 `enabled`（没模型不起进程），asr-service **没有**。就绪探测必须能分开「服务没起」（重启应用）与「模型没下」（下 1.5GB），不起进程就只剩前一种结论，用户照提示重启一万次也不会有模型。
 - **`POST /api/files/{id}/upload` 同时是编辑器自动保存的落点**（`LibreOfficeEditor.uploadBytes`
   不带 `X-File-Total-Size` 头，命中 `FileController` 的 legacy 分支）。挂在那条分支上的

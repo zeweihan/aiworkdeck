@@ -42,10 +42,25 @@ app = FastAPI(title="Kokoro Local TTS", version="1.0.0")
 
 _pipelines = {}
 
+# misaki 英文 G2P 依赖的 spaCy 模型，随 pack 的 requirements.lock 装进 lib
+EN_SPACY_MODEL = "en_core_web_sm"
+
+
+def _require_en_spacy_model():
+    """misaki 的 en.G2P 发现缺模型会 spacy.cli.download 现场出网（HF_HUB_OFFLINE 管不到，
+    联网时还会 pip install 进 App 包）。运行时零出网是红线：缺了就明确报错，不让它下（dev-board#591）"""
+    import spacy.util
+    if not spacy.util.is_package(EN_SPACY_MODEL):
+        raise RuntimeError(
+            f"{EN_SPACY_MODEL} is missing from the kokoro runtime pack; "
+            "English voices are unavailable (runtime download refused)")
+
 
 def _pipeline(lang_code: str):
     """按语言缓存 KPipeline（模型懒加载，进程内单例）"""
     if lang_code not in _pipelines:
+        if lang_code in ("a", "b"):
+            _require_en_spacy_model()
         from kokoro import KPipeline  # 延迟 import：/health 不碰 torch
         logger.info("Initializing KPipeline lang=%s repo=%s", lang_code, REPO_ID)
         _pipelines[lang_code] = KPipeline(lang_code=lang_code, repo_id=REPO_ID)

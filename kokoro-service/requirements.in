@@ -4,3 +4,6 @@ fastapi>=0.110
 uvicorn>=0.29
 soundfile>=0.12
 espeakng-loader>=0.2
+# misaki 英文 G2P 要这个 spaCy 模型；缺了它会在首次英文合成时 spacy.cli.download 现场出网
+# （HF_HUB_OFFLINE 管不到），违反运行时零出网。必须随 pack 装进 lib（dev-board#591）
+en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
