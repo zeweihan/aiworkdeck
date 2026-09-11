@@ -2108,16 +2108,34 @@ function withViewOnlyChange(fn) {
   }
 }
 
-// Writer hangs for good undoing a rejected long deletion while deleted text is
-// drawn in the margin (ShowChangesInMargin, the margin and balloons views;
-// reproduced on the r4 and r5 engines, dev-board#587). The same undo works in
-// the inline view, so undo/redo run there and the chosen view is restored.
-function withInlineUndo(fn) {
-  if (!isWriterDoc() || readShowChangesInMargin() !== true) return fn();
+// ShowChangesInMargin (margin and balloons views) makes Writer's undo fragile:
+// undoing a rejected long deletion in that view hangs the engine for good, and
+// undoing an edit in a different view than it was recorded in hangs too
+// (both reproduced on r4 and r5, dev-board#587). Revision resolutions from the
+// margin views therefore run in the inline view (runRevisionResolution) and
+// their undo entries are remembered; undo/redo take the same inline detour
+// only while such an entry is on top. Every other entry undoes where it is.
+const inlineUndoEntries = { undo: null, redo: null };
+function topUndoEntry(um, kind) {
+  const titles = kind === 'undo' ? um.getAllUndoActionTitles() : um.getAllRedoActionTitles();
+  return { model: xModel, depth: titles.length, title: titles.length ? String(titles[0]) : '' };
+}
+function sameUndoEntry(a, b) { return !!a && !!b && a.model === b.model && a.depth === b.depth && a.title === b.title; }
+function rememberInlineUndo() {
+  try { inlineUndoEntries.undo = topUndoEntry(xModel.getUndoManager(), 'undo'); inlineUndoEntries.redo = null; } catch (e) {}
+}
+// One undo or redo step through `run` (the UndoManager, or Writer's own command).
+function undoStep(um, kind, run) {
+  const other = kind === 'undo' ? 'redo' : 'undo';
+  const detour = isWriterDoc() && readShowChangesInMargin() === true
+    && sameUndoEntry(inlineUndoEntries[kind], topUndoEntry(um, kind));
+  if (!detour) { run(); return; }
   const before = revisionViewState().mode;
   withViewOnlyChange(function () { applyRevisionView('all'); try { xModel.refresh(); } catch (e) {} });
-  try { return fn(); }
+  try { run(); }
   finally { withViewOnlyChange(function () { applyRevisionView(before); try { xModel.refresh(); } catch (e) {} }); }
+  inlineUndoEntries[other] = topUndoEntry(um, other);
+  inlineUndoEntries[kind] = null;
 }
 
 // reserveGutter: only a user switch into balloons from another mode. Internal
@@ -2211,11 +2229,13 @@ function installReviewCommentInterceptor(controller) {
     state.frame = controller.getFrame();
     const query = function (url, target, flags) {
       const native = state.slave ? state.slave.queryDispatch(url, target, flags) : null;
-      // Writer's own Ctrl+Z (canvas focused) must take the same inline detour as
-      // the worker's undo/redo actions (see withInlineUndo).
+      // Writer's own Ctrl+Z (canvas focused) follows the worker's undo/redo rule
+      // (see undoStep): the inline detour only for a remembered resolution.
       if (native && (url.Complete === '.uno:Undo' || url.Complete === '.uno:Redo')) {
         return zetajs.unoObject([css.frame.XDispatch], {
-          dispatch(command, args) { withInlineUndo(function () { native.dispatch(command, args); }); },
+          dispatch(command, args) {
+            undoStep(xModel.getUndoManager(), url.Complete === '.uno:Undo' ? 'undo' : 'redo', function () { native.dispatch(command, args); });
+          },
           addStatusListener(listener, command) { native.addStatusListener(listener, command); },
           removeStatusListener(listener, command) { native.removeStatusListener(listener, command); },
         });
@@ -4646,11 +4666,9 @@ const EXEC = {
     const um = xModel.getUndoManager();
     const want = Math.max(1, Math.min(Number(p && p.steps) || 1, 20));
     let done = 0;
-    withInlineUndo(function () {
-      for (; done < want; done++) {
-        try { um.undo(); } catch (e) { break; } // empty stack ends the loop
-      }
-    });
+    for (; done < want; done++) {
+      try { undoStep(um, 'undo', function () { um.undo(); }); } catch (e) { break; } // empty stack ends the loop
+    }
     invalidateParaIndex();
     return Object.assign({ success: done > 0, undone: done }, done > 0 ? verifySnapshot() : { message: 'nothing to undo' });
   },
@@ -4658,11 +4676,9 @@ const EXEC = {
     const um = xModel.getUndoManager();
     const want = Math.max(1, Math.min(Number(p && p.steps) || 1, 20));
     let done = 0;
-    withInlineUndo(function () {
-      for (; done < want; done++) {
-        try { um.redo(); } catch (e) { break; }
-      }
-    });
+    for (; done < want; done++) {
+      try { undoStep(um, 'redo', function () { um.redo(); }); } catch (e) { break; }
+    }
     invalidateParaIndex();
     return Object.assign({ success: done > 0, redone: done }, done > 0 ? verifySnapshot() : { message: 'nothing to redo' });
   },
@@ -7594,11 +7610,16 @@ function runRevisionResolution(fn, p, action) {
   if (p && p.expectedRevisions != null) {
     if (!matchRevisionSnapshot(p, action)) return tableFail('修订已变化，请刷新后重试');
   } else if (p && p.revision != null && p.revision !== currentReviewRevision()) return tableFail('文档已变化，请刷新修订后重试');
-  if (readShowChanges() !== false) return fn();
+  // Hidden markup cannot be resolved, margin markup cannot be undone safely:
+  // both resolve in the inline view (see undoStep for the margin case).
+  const inMargin = readShowChangesInMargin() === true;
+  if (readShowChanges() !== false && !inMargin) return fn();
   const before = revisionViewState().mode;
   try {
     withViewOnlyChange(function () { applyRevisionView('all'); xModel.refresh(); });
-    return fn();
+    const result = fn();
+    if (inMargin) rememberInlineUndo();
+    return result;
   } finally {
     withViewOnlyChange(function () { applyRevisionView(before); try { xModel.refresh(); } catch (e) {} });
   }
