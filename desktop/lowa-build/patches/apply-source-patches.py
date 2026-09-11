@@ -7,6 +7,7 @@
 #     native QToolTip / quick-help renders Chinese instead of tofu.
 #  3. Anchor table deletions at the table edge.
 #  4-6. Expose review geometry and reserve one native page gutter (#587).
+#  7. Keep native sidebar hit-testing and page indexing out of that gutter.
 import os
 import sys
 CORE = os.environ.get('LOWA_CORE', '/root/lowa-build/core')
@@ -373,10 +374,18 @@ patch(
     'tools::ULong SwPostItMgr::GetSidebarWidth(bool bPx) const\n',
     ('''void SwPostItMgr::SetExternalReviewWidth(sal_Int32 nWidth)
 {
+    // Upper bound: GetSidebarWidth() multiplies by 15 in tools::Long, which is
+    // 32 bits on wasm32; an unbounded UNO value would overflow it.
     if (nWidth > 0)
-        nWidth = std::max<sal_Int32>(180, nWidth);
+        nWidth = std::clamp<sal_Int32>(nWidth, 180, 10000);
     if (mnExternalReviewWidth == nWidth)
         return;
+    // A gutter width change must never move the document. PrepareView() ends in
+    // SwEditShell::EndAllAction(), whose UpdateCursor(CHKRANGE|SCROLLWIN) scrolls
+    // a focused view to the caret. SwViewShell::MakeVisible() is a no-op while
+    // the visible area is locked (as SwView::ExecViewOptions does for notes).
+    const bool bViewLocked = mpWrtShell->IsViewLocked();
+    mpWrtShell->LockView(true);
     if (mpActivePostIt)
     {
         mpActivePostIt->UpdateData();
@@ -387,6 +396,7 @@ patch(
     PrepareView(true);
     CalcRects();
     LayoutPostIts();
+    mpWrtShell->LockView(bViewLocked);
     mpEditWin->Invalidate();
 }
 
@@ -463,5 +473,102 @@ patch(
      '        return;\n'
      '    }\n'),
     'Writer external review suppress legacy deletion text only',
+)
+# ---- Patch 7: no native sidebar hit-testing in the external gutter ----------
+# With the external gutter on, HasNotes() is true even without comments, so
+# SwEditWin::MouseButtonDown / Command(ContextMenu) reach IsHit() on every
+# click. mPages is only resized by CalcRects()/PreparePageContainer(), which
+# DocChanged and SwEventLayoutFinished skip when there are no comments, so a
+# page created by typing (without scrolling) has no entry: mPages[nPageNum-1]
+# would read past the end. The external gutter has no native cards, arrows or
+# scrollbars, so every native hit-test/scroll entry point returns early, and
+# every function that indexes mPages by page number checks the bounds.
+patch(
+    f'{CORE}/sw/source/uibase/docvw/PostItMgr.cxx',
+    'bool SwPostItMgr::BorderOverPageBorder(tools::ULong aPage) const\n{\n',
+    ('bool SwPostItMgr::BorderOverPageBorder(tools::ULong aPage) const\n{\n'
+     '    if (aPage == 0 || aPage > mPages.size())\n'
+     '        return false;\n'),
+    'Writer review page bounds in BorderOverPageBorder',
+)
+patch(
+    f'{CORE}/sw/source/uibase/docvw/PostItMgr.cxx',
+    'void SwPostItMgr::Scroll(const tools::Long lScroll,const tools::ULong aPage)\n{\n',
+    ('void SwPostItMgr::Scroll(const tools::Long lScroll,const tools::ULong aPage)\n{\n'
+     '    if (mnExternalReviewWidth > 0 || aPage == 0 || aPage > mPages.size())\n'
+     '        return;\n'),
+    'Writer review page bounds in Scroll',
+)
+patch(
+    f'{CORE}/sw/source/uibase/docvw/PostItMgr.cxx',
+    'void SwPostItMgr::AutoScroll(const SwAnnotationWin* pPostIt,const tools::ULong aPage )\n{\n',
+    ('void SwPostItMgr::AutoScroll(const SwAnnotationWin* pPostIt,const tools::ULong aPage )\n{\n'
+     '    if (mnExternalReviewWidth > 0 || aPage == 0 || aPage > mPages.size())\n'
+     '        return;\n'),
+    'Writer review page bounds in AutoScroll',
+)
+patch(
+    f'{CORE}/sw/source/uibase/docvw/PostItMgr.cxx',
+    'bool SwPostItMgr::ArrowEnabled(sal_uInt16 aDirection,tools::ULong aPage) const\n{\n',
+    ('bool SwPostItMgr::ArrowEnabled(sal_uInt16 aDirection,tools::ULong aPage) const\n{\n'
+     '    if (mnExternalReviewWidth > 0 || aPage == 0 || aPage > mPages.size())\n'
+     '        return false;\n'),
+    'Writer review page bounds in ArrowEnabled',
+)
+patch(
+    f'{CORE}/sw/source/uibase/docvw/PostItMgr.cxx',
+    'bool SwPostItMgr::ShowScrollbar(const tools::ULong aPage) const\n{\n',
+    ('bool SwPostItMgr::ShowScrollbar(const tools::ULong aPage) const\n{\n'
+     '    if (mnExternalReviewWidth > 0 || aPage == 0)\n'
+     '        return false;\n'),
+    'Writer external review no native scrollbar',
+)
+patch(
+    f'{CORE}/sw/source/uibase/docvw/PostItMgr.cxx',
+    'bool SwPostItMgr::IsHit(const Point &aPointPixel)\n{\n',
+    ('bool SwPostItMgr::IsHit(const Point &aPointPixel)\n{\n'
+     '    if (mnExternalReviewWidth > 0)\n'
+     '        return false;\n'),
+    'Writer external review no native sidebar hit-test',
+)
+patch(
+    f'{CORE}/sw/source/uibase/docvw/PostItMgr.cxx',
+    '            OSL_ENSURE(mPages.size()>nPageNum-1,"SwPostitMgr:: page container size wrong");\n',
+    ('            OSL_ENSURE(mPages.size()>nPageNum-1,"SwPostitMgr:: page container size wrong");\n'
+     '            if (nPageNum > mPages.size())\n'
+     '                return false;\n'),
+    'Writer review page bounds in IsHit',
+)
+patch(
+    f'{CORE}/sw/source/uibase/docvw/PostItMgr.cxx',
+    'vcl::Window* SwPostItMgr::IsHitSidebarWindow(const Point& rPointLogic)\n{\n',
+    ('vcl::Window* SwPostItMgr::IsHitSidebarWindow(const Point& rPointLogic)\n{\n'
+     '    if (mnExternalReviewWidth > 0)\n'
+     '        return nullptr;\n'),
+    'Writer external review no native sidebar window hit-test',
+)
+patch(
+    f'{CORE}/sw/source/uibase/docvw/PostItMgr.cxx',
+    'tools::Rectangle SwPostItMgr::GetBottomScrollRect(const tools::ULong aPage) const\n{\n',
+    ('tools::Rectangle SwPostItMgr::GetBottomScrollRect(const tools::ULong aPage) const\n{\n'
+     '    if (aPage == 0 || aPage > mPages.size())\n'
+     '        return tools::Rectangle();\n'),
+    'Writer review page bounds in GetBottomScrollRect',
+)
+patch(
+    f'{CORE}/sw/source/uibase/docvw/PostItMgr.cxx',
+    'tools::Rectangle SwPostItMgr::GetTopScrollRect(const tools::ULong aPage) const\n{\n',
+    ('tools::Rectangle SwPostItMgr::GetTopScrollRect(const tools::ULong aPage) const\n{\n'
+     '    if (aPage == 0 || aPage > mPages.size())\n'
+     '        return tools::Rectangle();\n'),
+    'Writer review page bounds in GetTopScrollRect',
+)
+patch(
+    f'{CORE}/sw/source/uibase/docvw/PostItMgr.cxx',
+    'bool SwPostItMgr::ScrollbarHit(const tools::ULong aPage,const Point &aPoint)\n{\n',
+    ('bool SwPostItMgr::ScrollbarHit(const tools::ULong aPage,const Point &aPoint)\n{\n'
+     '    if (mnExternalReviewWidth > 0 || aPage == 0 || aPage > mPages.size())\n'
+     '        return false;\n'),
+    'Writer review page bounds in ScrollbarHit',
 )
 print('ALL_PATCHES_OK')

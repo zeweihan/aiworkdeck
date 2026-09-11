@@ -66,7 +66,7 @@ page gutter and scroll coordinates; they do not reverse-hit-test text positions.
 | 属性 / Property | 契约 / Contract |
 |---|---|
 | `AwdReviewGeometry` | 只读 JSON，`version: 1`、`unit: "twip"`；物理页码、纸张边界、侧边审阅区宽度及修订/批注锚点。最多各 500 条，不计算未使用的整段选区矩形。不可定位的条目明确返回 `available: false`。 |
-| `AwdReviewSidebarWidth` | 当前视图的审阅区宽度，单位为 100% 缩放下的 96-DPI 像素。正值由 Writer 预留页面侧边区域并隐藏原生批注窗口；0 恢复原生批注。不是文档内容或持久配置。 |
+| `AwdReviewSidebarWidth` | 当前视图的审阅区宽度，单位为 100% 缩放下的 96-DPI 像素。正值（钳位到 180–10000）由 Writer 预留页面侧边区域并隐藏原生批注窗口；0 恢复原生批注。改宽度会重排但锁定可视区，不滚动文档。不是文档内容或持久配置。 |
 
 批注以 `Name` 匹配；新建批注名称为空时使用 UNO `ParaId`（原生 PostIt ID 的十六进制值）
 与几何数据中的数字 `id` 匹配，不以枚举次序猜测。插入修订继续在正文中标记，删除与格式
@@ -74,6 +74,14 @@ page gutter and scroll coordinates; they do not reverse-hit-test text positions.
 
 Comments match by name, or by the native PostIt ID exposed as `ParaId` when an
 unsaved comment has no name. Older engines retain their native review display.
+
+外部审阅区开启时，即使文档没有批注 `HasNotes()` 也为真，但原生侧栏的点击命中、
+滚动箭头与滚动条（`IsHit`、`ScrollbarHit`、`ShowScrollbar` 等）一律直接返回，
+按页号访问 `mPages` 的函数都先查边界：无批注文档里 `mPages` 不随新增页面同步，
+否则回车新建一页后点击该页会越界读取。
+
+With the external gutter on, native sidebar hit-testing and scrolling return
+early, and every page-indexed `mPages` access is bounds-checked.
 
 变更后需同时运行 `frontend/tests/lowa-e2e/word-review.mjs`（DPR 1 和 2）、
 `reject-once.mjs`、`revision-snapshot.mjs`、`comment-snapshot.mjs` 和
