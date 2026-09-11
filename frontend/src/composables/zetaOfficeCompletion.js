@@ -230,7 +230,7 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
       if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); accept(active); return true }
       if (!e.shiftKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); active = (active + (e.key === 'ArrowDown' ? 1 : -1) + choices.length) % choices.length; renderChoices(); return true }
     }
-    if (e.key === 'Escape' && mode) { e.preventDefault(); invalidate(); return true }
+    if (e.key === 'Escape' && mode) { e.preventDefault(); e.stopPropagation(); invalidate(); return true }
     if (e.key.length > 1 || e.metaKey || e.ctrlKey || e.altKey) invalidate()
     else { generation++; accepting = false; hide() }
     return false
@@ -289,6 +289,9 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
         key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true,
       }))
     }
+    // This HTML menu now owns keyboard dismissal; returning focus alone keeps
+    // Escape usable without reporting a document-caret movement on mouseup.
+    focus()
     show('context', ctx.selectedText, point)
     const known = items.find((x) => x.text === ctx.selectedText)
     if (known?.entityId || known?.hasDetail) button(t.detail, () => detailRequest('detail', { entityId: known.entityId, id: known.id }, ctx.token))
@@ -310,7 +313,7 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
     rpc('refresh').catch(() => {})
   }
   const pointer = (e) => { if (!root.contains(e.target)) invalidate() }
-  const panelKeydown = (e) => { if (e.key === 'Escape') { e.preventDefault(); invalidate(); focus() } }
+  const panelKeydown = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); invalidate(); focus() } }
   input.addEventListener('compositionstart', startComposition)
   input.addEventListener('compositionend', endComposition)
   input.addEventListener('blur', blur)

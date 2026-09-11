@@ -1,0 +1,87 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// A deletion may cover another author's insertion. Rejecting the deletion
+// restores its text while exposing the older insertion, without reducing the
+// redline count. One real button click must succeed and preserve that insertion.
+import assert from 'node:assert/strict'
+import { fixture, deleted } from './_revision-fixture.mjs'
+import { startServer, launchBrowser, loadPuppeteer, preflight, ORIGIN } from './_boot.mjs'
+
+
+preflight()
+const server = await startServer({ extraFiles: Object.fromEntries(['cjk.ttc', 'cjk-serif.otf', 'cjk-kai.ttf', 'cjk-fangsong.ttf'].map(f => ['/' + f, '/Applications/AI WorkDeck.app/Contents/Resources/frontend/dist/zetaoffice/' + f])) })
+const browser = await launchBrowser(await loadPuppeteer())
+try {
+  const page = await browser.newPage()
+  await page.setViewport({ width: 1360, height: 900 })
+  await page.goto(ORIGIN + '/editor.html?verify=1&lowa=/lowa/', { waitUntil: 'domcontentloaded' })
+  await page.waitForFunction('!!window.__loExecutor', { timeout: 240000 })
+  await page.addStyleTag({ content: '#verify,#vlog{display:none!important}' })
+  const exec = (action, params = {}) => page.evaluate((a, p) => window.__loExecutor.executeCommand(a, p), action, params)
+  const ok = async (action, params) => {
+    const result = await exec(action, params)
+    assert.equal(result.success, true, action + ': ' + JSON.stringify(result))
+    return result
+  }
+  const revisions = async () => (await ok('list_revisions')).revisions
+  const body = async () => (await ok('get_document_text', { __agent: true })).paragraphs.map(p => p.text).join('\n')
+  const identity = rows => rows.map(({ type, author, text }) => ({ type, author, text }))
+
+  for (const layered of [false, true]) {
+    await ok('load_document', { name: 'reject-once.docx', bytes: await fixture(layered) })
+    await ok('set_chrome', { all: false })
+    await ok('set_revision_view', { mode: 'balloons' })
+    const snapshot = await ok('list_revisions')
+    const before = snapshot.revisions
+    const unrelated = identity(before.filter(r => r.text !== deleted))
+    assert.equal(await body(), '前文后文\n独立插入\n尾文')
+    await page.waitForFunction(text => [...document.querySelectorAll('.awd-rb-content')].some(n => n.textContent === text), { timeout: 30000 }, deleted)
+    await page.evaluate(() => {
+      window.rejectCalls = []
+      const executor = window.__loExecutor
+      window.originalReviewExecute = executor.executeCommand.bind(executor)
+      executor.executeCommand = async (action, params) => {
+        const result = await window.originalReviewExecute(action, params)
+        if (action === 'resolve_revisions') window.rejectCalls.push({ params, result })
+        return result
+      }
+    })
+    // Use an actual pointer click on the production control, without first
+    // locating/selecting the revision or making a second resolution call.
+    let button
+    for (const candidate of await page.$$('.awd-rb-card')) {
+      if (!(await candidate.$eval('.awd-rb-content', (n, text) => n.textContent === text, deleted))) continue
+      for (const candidateButton of await candidate.$$('button')) {
+        if (await candidateButton.evaluate(n => n.textContent === '拒绝')) button = candidateButton
+      }
+    }
+    assert.ok(button, 'the target deletion has a visible reject control')
+    await button.click()
+    await page.waitForFunction(() => window.rejectCalls.length > 0, { timeout: 30000 })
+    const calls = await page.evaluate(() => window.rejectCalls)
+    assert.equal(calls.length, 1, 'one pointer click sends one resolution command')
+    assert.equal(calls[0].params.documentSeq, snapshot.documentSeq, 'the button retains its document snapshot')
+    assert.deepEqual(calls[0].params.expectedRevisions.map(r => r.identifier), [before.find(r => r.text === deleted).identifier], 'the button identifies the actual reviewed revision')
+    assert.equal(calls[0].result.resolved, 1, 'rejecting the top revision succeeds even if an older revision remains: ' + JSON.stringify(calls))
+    assert.equal(calls[0].result.results[0].success, true)
+    assert.equal(await body(), '前文' + deleted + '后文\n独立插入\n尾文', 'the first click fully restores the deleted content')
+    const after = await revisions()
+    assert.deepEqual(identity(after.filter(r => r.text !== deleted)), unrelated, 'unrelated revisions remain unchanged')
+    assert.deepEqual(identity(after.filter(r => r.text === deleted)), layered ? [{ type: 'Insert', author: '原插入者', text: deleted }] : [], 'the earlier insertion remains pending')
+    assert.equal((await ok('set_revision_view')).mode, 'balloons')
+    await ok('undo')
+    assert.deepEqual(identity(await revisions()), identity(before), 'one undo restores the original revision layers')
+    assert.equal(await body(), '前文后文\n独立插入\n尾文')
+    await page.evaluate(() => { window.__loExecutor.executeCommand = window.originalReviewExecute })
+
+    const target = (await revisions()).find(r => r.text === deleted)
+    await ok('resolve_revision', { index: target.index, action: 'reject' })
+    assert.equal(await body(), '前文' + deleted + '后文\n独立插入\n尾文', 'single-revision API shares the one-layer success semantics')
+    await ok('undo')
+    assert.deepEqual(identity(await revisions()), identity(before))
+    console.log('PASS one-click rejection, unrelated revisions and undo: ' + (layered ? 'deletion over insertion' : 'ordinary deletion'))
+  }
+} finally {
+  await browser.close()
+  await new Promise(resolve => server.close(resolve))
+}

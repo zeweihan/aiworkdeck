@@ -5,10 +5,10 @@ import { groupRevisions } from '../utils/reviewGrouping.js'
 // Keep collision layout in document space. Re-running it in viewport space
 // would pin cards to the top when the document scrolls underneath them.
 export function positionReviewCards(items, gap = 12) {
-  let bottom = -Infinity
+  const bottoms = new Map()
   return [...items].sort((a, b) => a.y - b.y || a.x - b.x).map(item => {
-    const top = Math.max(item.y, bottom + gap)
-    bottom = top + item.height
+    const top = Math.max(item.y, (bottoms.get(item.page) ?? -Infinity) + gap)
+    bottoms.set(item.page, top + item.height)
     return { ...item, top }
   })
 }
@@ -16,49 +16,44 @@ export function positionReviewCards(items, gap = 12) {
 export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh' }) {
   const doc = canvas.ownerDocument, win = doc.defaultView, en = locale.startsWith('en')
   const labels = en
-    ? { title: 'Comments & changes', overview: 'Review list', insert: 'Inserted', delete: 'Deleted', table: 'Table', comment: 'Comment', accept: 'Accept', reject: 'Reject', resolve: 'Resolve', reopen: 'Reopen', edit: 'Edit', remove: 'Delete', save: 'Save', cancel: 'Cancel', more: 'More items are available in the review list.', failed: 'Could not update review. Try again.', empty: 'No comments or changes', other: 'Change', format: 'Formatting', paraFormat: 'Paragraph formatting', unknown: 'Unknown author' }
-    : { title: '批注与修订', overview: '审阅列表', insert: '插入', delete: '删除', table: '表格', comment: '批注', accept: '接受', reject: '拒绝', resolve: '解决', reopen: '重新打开', edit: '编辑', remove: '删除', save: '保存', cancel: '取消', more: '其余条目请在审阅列表中查看。', failed: '审阅更新失败，请重试。', empty: '暂无批注或修订', other: '更改', format: '格式', paraFormat: '段落格式', unknown: '未知作者' }
+    ? { title: 'Comments & changes', overview: 'Review list', insert: 'Inserted', delete: 'Deleted', table: 'Table', comment: 'Comment', accept: 'Accept', reject: 'Reject', resolve: 'Resolve', reopen: 'Reopen', edit: 'Edit', remove: 'Delete', save: 'Save', cancel: 'Cancel', more: 'Some review items are not displayed.', failed: 'Could not update review. Try again.', empty: 'No comments or changes', other: 'Change', format: 'Formatting', paraFormat: 'Paragraph formatting', unknown: 'Unknown author' }
+    : { title: '批注与修订', overview: '审阅列表', insert: '插入', delete: '删除', table: '表格', comment: '批注', accept: '接受', reject: '拒绝', resolve: '解决', reopen: '重新打开', edit: '编辑', remove: '删除', save: '保存', cancel: '取消', more: '部分审阅条目暂未显示。', failed: '审阅更新失败，请重试。', empty: '暂无批注或修订', other: '更改', format: '格式', paraFormat: '段落格式', unknown: '未知作者' }
   const root = doc.createElement('div'); root.className = 'awd-review-balloons'; root.hidden = true
   const style = doc.createElement('style'); style.textContent = `
-    html.awd-review-margin #qtcanvas { width: calc(100% - 316px); }
-    .awd-review-balloons { position:fixed;inset:0;pointer-events:none;z-index:5;color:#26352f;font:12px/1.5 system-ui,sans-serif; }
+    .awd-review-balloons { position:fixed;overflow:hidden;pointer-events:none;z-index:5;color:#26352f;font:12px/1.5 system-ui,sans-serif; }
     .awd-review-balloons[hidden] { display:none; }
-    .awd-rb-rail { position:absolute;right:0;width:296px;bottom:28px;overflow:hidden;pointer-events:auto;background:#f1f3f5;border-left:1px solid #d8dfdc; }
-    .awd-rb-head { position:absolute;top:0;left:0;right:0;display:flex;justify-content:space-between;gap:8px;padding:10px 12px;background:#f1f3f5;z-index:2;border-bottom:1px solid #d8dfdc; }
-    .awd-rb-head button,.awd-rb-actions button { cursor:pointer;font:inherit;color:inherit;background:transparent;border:1px solid #ced8d2;border-radius:5px;padding:2px 7px; }
-    .awd-rb-list { position:absolute;inset:42px 0 0;overflow:hidden; }
-    .awd-rb-card { position:absolute;left:10px;right:10px;padding:10px;box-sizing:border-box;background:#fff;border:1px solid #d8dfdc;border-radius:8px;box-shadow:0 2px 5px #16302608;pointer-events:auto;cursor:pointer; }
+    .awd-rb-actions button { cursor:pointer;font:inherit;color:inherit;background:transparent;border:1px solid #ced8d2;border-radius:5px;padding:2px 7px; }
+    .awd-rb-list { position:absolute;inset:0;pointer-events:none; }
+    .awd-rb-page { position:absolute;overflow:hidden;pointer-events:none; }
+    .awd-rb-page.overflowing { pointer-events:auto; }
+    .awd-rb-overflow { position:absolute;right:0;top:0;width:8px;height:100%;margin:0;writing-mode:vertical-lr;direction:ltr;accent-color:#6d9b85;pointer-events:auto;z-index:2; }
+    .awd-rb-card { position:absolute;transform-origin:top left;padding:10px;box-sizing:border-box;background:#fff;border:1px solid #d8dfdc;border-radius:8px;box-shadow:0 2px 5px #16302608;pointer-events:auto;cursor:pointer; }
     .awd-rb-card:hover,.awd-rb-card.active { border-color:#437762;box-shadow:0 0 0 1px #43776233; }
     .awd-rb-card.resolved { opacity:.65; }
     .awd-rb-meta { display:flex;gap:6px;flex-wrap:wrap;align-items:center;color:#67756e;font-size:11px; }
     .awd-rb-meta strong { color:#315847;font-weight:600; }
-    .awd-rb-content { white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;margin:7px 0;font-size:13px;line-height:1.6;cursor:text; }
+    .awd-rb-content { white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto;margin:7px 0;font-size:13px;line-height:1.6;cursor:text; }
     .awd-rb-card.deletion .awd-rb-content { color:#a34640;text-decoration:line-through; }
     .awd-rb-quote { border-left:2px solid #d8dfdc;padding-left:7px;margin:6px 0;color:#67756e;white-space:pre-wrap;overflow-wrap:anywhere;max-height:48px;overflow:auto; }
-    .awd-rb-editor { width:100%;min-height:140px;box-sizing:border-box;font:inherit;resize:vertical; }
+    .awd-rb-editor { width:100%;height:140px;box-sizing:border-box;font:inherit;resize:none; }
     .awd-rb-actions { display:flex;gap:6px;flex-wrap:wrap; }.awd-rb-actions button:disabled { opacity:.45;cursor:wait; }
     .awd-rb-lines { position:absolute;inset:0;width:100%;height:100%;overflow:hidden;pointer-events:none; }
     .awd-rb-lines path { fill:none;stroke:#6d9b85;stroke-width:1;stroke-dasharray:4 4;opacity:.65; }
-    .awd-rb-notice { position:absolute;bottom:0;left:0;right:0;padding:5px 10px;background:#f1f3f5;color:#7d5346;z-index:3; }
-    .theme-dark .awd-rb-rail,.theme-dark .awd-rb-head,.theme-dark .awd-rb-notice { background:#101214;color:#c5d0ca;border-color:#343e38; }
+    .awd-rb-notice { position:absolute;bottom:8px;right:8px;max-width:260px;padding:5px 10px;background:#f1f3f5;color:#7d5346;z-index:3; }
+    .theme-dark .awd-rb-notice { background:#101214;color:#c5d0ca;border-color:#343e38; }
     .theme-dark .awd-rb-card { background:#1b211e;color:#dae3dc;border-color:#3a4840; }
     .theme-dark .awd-rb-meta strong { color:#92bea5; }
     .theme-dark .awd-rb-card.deletion .awd-rb-content { color:#e69590; }
   `
   const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.classList.add('awd-rb-lines')
-  const rail = doc.createElement('aside'); rail.className = 'awd-rb-rail'; rail.setAttribute('aria-label', labels.title)
-  const head = doc.createElement('div'); head.className = 'awd-rb-head'
-  const title = doc.createElement('strong'); title.textContent = labels.title
-  const overview = doc.createElement('button'); overview.textContent = labels.overview
-  overview.onclick = () => transport.send({ __lo: 'lo-relay', type: 'review-overview' })
-  head.append(title, overview)
-  const list = doc.createElement('div'); list.className = 'awd-rb-list'
+  const list = doc.createElement('aside'); list.className = 'awd-rb-list'; list.setAttribute('aria-label', labels.title)
   const notice = doc.createElement('div'); notice.className = 'awd-rb-notice'; notice.hidden = true
-  rail.append(head, list, notice); root.append(svg, rail); doc.head.append(style); doc.body.append(root)
+  root.append(svg, list, notice); doc.head.append(style); doc.body.append(root)
   let suspended = 0, generation = 0
-  let disposed = false, timer = null, inFlight = false, again = false, dirty = true, snapshot = null
+  let disposed = false, timer = null, inFlight = false, again = false, snapshot = null
   let viewportTimer = null
-  let enabled = false, cards = [], renderKey = '', manualScroll = 0, previousView = '', focusKey = '', busy = false
+  let enabled = false, cards = [], focusKey = '', busy = false, editingKey = '', pointerDown = false
+  const pageLayers = new Map()
   function showNotice(text) { notice.textContent = text; notice.hidden = !text }
   function makeCard(item) {
     const node = doc.createElement('article'); node.className = 'awd-rb-card'
@@ -75,7 +70,7 @@ export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh'
     if (r.anchorText) { const quote = doc.createElement('div'); quote.className = 'awd-rb-quote'; quote.textContent = r.anchorText; node.append(quote) }
     const locate = async () => {
       if (busy) return
-      try { const result = await execute(item.kind === 'comment' ? 'goto_comment' : 'goto_revision', { id: r.id, index: r.index ?? r.items[0].index, revision: item.revision }); if (!result?.success) throw new Error(); manualScroll = 0; schedule(0) }
+      try { const result = await execute(item.kind === 'comment' ? 'goto_comment' : 'goto_revision', { id: r.id, index: r.index ?? r.items[0].index, revision: item.revision, documentSeq: item.documentSeq, ...(item.kind === 'revision' ? { identifier: r.items[0].identifier } : {}) }); if (!result?.success) throw new Error(); schedule(0) }
       catch { showNotice(labels.failed) }
     }
     node.onclick = e => { if (!e.target.closest('button,textarea') && !win.getSelection()?.toString()) locate() }
@@ -92,128 +87,227 @@ export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh'
           const save = doc.createElement('button'); save.textContent = labels.save
           const cancel = doc.createElement('button'); cancel.textContent = labels.cancel
           const close = () => { input.remove(); editActions.remove(); content.hidden = false; actions.hidden = false; if (snapshot) place(snapshot) }
-          cancel.onclick = e => { e.stopPropagation(); busy = false; close() }
+          cancel.onclick = e => { e.stopPropagation(); busy = false; editingKey = ''; close(); schedule(0) }
           save.onclick = async e => {
             e.stopPropagation(); if (!input.value.trim()) { input.focus(); return }
             save.disabled = true; cancel.disabled = true
+            let saved = false
             try {
-              const result = await execute('update_comment', { id: r.id, index: r.index, content: input.value, expectedContent: r.content, revision: item.revision })
+              const result = await execute('update_comment', { id: r.id, index: r.index, content: input.value, expectedContent: r.content, revision: item.revision, documentSeq: item.documentSeq, expectedComment: r })
               if (!result?.success) throw new Error()
-              dirty = true; transport.send({ __lo: 'lo-relay', type: 'modified' }); close()
+              saved = true; transport.send({ __lo: 'lo-relay', type: 'modified' }); close()
             } catch { showNotice(labels.failed) }
-            finally { busy = false; save.disabled = false; cancel.disabled = false; schedule(0) }
+            finally {
+              if (saved || !input.isConnected) { busy = false; editingKey = '' }
+              save.disabled = false; cancel.disabled = false; schedule(0)
+            }
           }
-          editActions.append(save, cancel); content.hidden = true; actions.hidden = true; node.append(input, editActions); busy = true
+          editActions.append(save, cancel); content.hidden = true; actions.hidden = true; node.append(input, editActions); busy = true; editingKey = item.key
           if (snapshot) place(snapshot); input.focus(); return
         }
         busy = true; root.querySelectorAll('.awd-rb-actions button').forEach(b => { b.disabled = true })
         try {
           const result = await execute(item.kind === 'comment' ? (action === 'remove' ? 'delete_comment' : 'set_comment_resolved') : 'resolve_revisions', item.kind === 'comment'
-            ? { id: r.id, index: r.index, resolved: action === 'resolve', revision: item.revision }
-            : { indices: r.items.map(x => x.index).sort((a, b) => b - a), action, revision: item.revision })
+            ? { id: r.id, index: r.index, resolved: action === 'resolve', revision: item.revision, documentSeq: item.documentSeq, expectedComment: r }
+            : { indices: r.items.map(x => x.index).sort((a, b) => b - a), action, revision: item.revision, documentSeq: item.documentSeq, expectedRevisions: r.items })
           if (!result?.success || result.results?.some(x => !x.success)) throw new Error()
           transport.send({ __lo: 'lo-relay', type: 'modified' })
         } catch { showNotice(labels.failed) }
-        finally { busy = false; dirty = true; root.querySelectorAll('.awd-rb-actions button').forEach(b => { b.disabled = false }); schedule(0) }
+        finally { busy = false; root.querySelectorAll('.awd-rb-actions button').forEach(b => { b.disabled = false }); schedule(0) }
       }
       actions.append(b)
     }
     node.append(actions); list.append(node)
-    return { ...item, node }
+    return Object.assign(item, { node })
   }
-  function rebuild(data) {
-    const revisionItems = data.items.filter(x => x.kind === 'revision')
-    const byIndex = new Map(revisionItems.map(x => [x.data.index, x]))
-    const groups = ['balloons', 'margin'].includes(data.mode) ? groupRevisions(revisionItems.map(x => x.data)) : []
-    const items = groups.map(g => ({ ...byIndex.get(g.items[0].index), key: g.key, data: g }))
+  function reviewItems(data) {
+    const revisions = data.items.filter(x => x.kind === 'revision')
+    const byIndex = new Map(revisions.map(x => [x.data.index, x]))
+    const groups = ['balloons', 'margin'].includes(data.mode) ? groupRevisions(revisions.map(x => x.data)).filter(group => group.type !== 'Insert') : []
+    return groups.map(g => ({ ...byIndex.get(g.items[0].index), key: g.key, data: g }))
       .concat(data.items.filter(x => x.kind === 'comment'))
-    list.replaceChildren(); cards = items.map(item => makeCard({ ...item, revision: data.revision, writable: data.writable })); manualScroll = 0
+  }
+  function reconcile(data, items) {
+    if (!data.writable && editingKey) { editingKey = ''; busy = false }
+    const previous = new Map(cards.map(c => [c.key, c]))
+    cards = items.map(item => {
+      const next = { ...item, revision: data.revision, documentSeq: data.documentSeq, writable: data.writable }
+      const signature = JSON.stringify([item.kind, item.data, data.writable])
+      let card = previous.get(item.key)
+      previous.delete(item.key)
+      if (card && (card.signature === signature || card.key === editingKey)) {
+        // Keep the click target and any draft. Only identical content may inherit
+        // a fresh mutation token; a real edit still fails the worker's stale guard.
+        if (card.key === editingKey) Object.assign(card, { x: item.x, y: item.y, page: item.page })
+        else Object.assign(card, next)
+      } else {
+        card?.node.remove()
+        card = makeCard(next)
+        card.signature = signature
+      }
+      return card
+    })
+    previous.forEach(card => {
+      if (card.key === editingKey) { editingKey = ''; busy = false }
+      card.node.remove()
+    })
     showNotice(data.truncated ? labels.more : '')
+  }
+  function pageLayer(page) {
+    let layer = pageLayers.get(page.number)
+    if (layer) return layer
+    const node = doc.createElement('div'); node.className = 'awd-rb-page'; node.dataset.page = page.number
+    const slider = doc.createElement('input'); slider.type = 'range'; slider.className = 'awd-rb-overflow'
+    slider.min = '0'; slider.step = 'any'; slider.hidden = true
+    slider.setAttribute('aria-label', labels.title + ' · ' + page.number)
+    layer = { node, slider, offset: 0, overflow: 0, scale: 1 }
+    slider.oninput = () => { layer.offset = Number(slider.value); if (snapshot) place(snapshot) }
+    node.addEventListener('wheel', e => {
+      const body = e.target.closest('.awd-rb-content,.awd-rb-quote,textarea')
+      const vertical = !e.ctrlKey && Math.abs(e.deltaY) >= Math.abs(e.deltaX)
+      if (vertical && body && (e.deltaY < 0 ? body.scrollTop > 0 : body.scrollTop + body.clientHeight < body.scrollHeight - 1)) return
+      const pixels = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? node.clientHeight : 1)
+      const offset = Math.max(0, Math.min(layer.overflow, layer.offset + pixels / layer.scale))
+      if (vertical && offset !== layer.offset) {
+        e.preventDefault(); layer.offset = offset; if (snapshot) place(snapshot)
+        return
+      }
+      // The overlay is a sibling of canvas, so bubbling cannot reach Qt's wheel
+      // listener. At page-scroll limits (or without overflow) hand it to Qt.
+      canvas.dispatchEvent(new win.WheelEvent('wheel', {
+        bubbles: true, cancelable: true, deltaX: e.deltaX, deltaY: e.deltaY, deltaZ: e.deltaZ, deltaMode: e.deltaMode,
+        clientX: e.clientX, clientY: e.clientY, screenX: e.screenX, screenY: e.screenY,
+        ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, altKey: e.altKey, metaKey: e.metaKey,
+      }))
+      e.preventDefault()
+    }, { passive: false })
+    node.append(slider); list.append(node); pageLayers.set(page.number, layer)
+    return layer
   }
   function place(data) {
     const surface = canvas.getBoundingClientRect(), v = data.view
-    if (!v || !v.frameWidth || !v.viewport) return
-    const s = surface.width / v.frameWidth, menu = Math.max(0, surface.height - v.frameHeight * s)
-    const viewportTop = surface.top + menu + v.viewport.y * s
-    const scale = v.viewport.width * s / (v.right - v.left)
-    if (!(scale > 0)) return
-    rail.style.top = viewportTop + 'px'
-    const listTop = list.getBoundingClientRect().top, listHeight = list.clientHeight
-    const positioned = positionReviewCards(cards.map(c => ({ ...c, height: c.node.offsetHeight / scale })), 12 / scale)
-    const viewKey = [v.left, v.top, v.right, v.bottom].join(':')
-    root.dataset.viewport = viewKey
-    if (viewKey !== previousView) { manualScroll = 0; previousView = viewKey }
-    const last = positioned.at(-1)
-    const overflow = last ? Math.max(0, viewportTop + (last.top + last.height - v.top) * scale - listTop - listHeight + 12) : 0
-    manualScroll = Math.max(0, Math.min(manualScroll, overflow))
+    if (!v?.frameWidth || !v.viewport || !data.pages?.length) { root.hidden = true; return }
+    const nativeScale = surface.width / v.frameWidth
+    const menu = Math.max(0, surface.height - v.frameHeight * nativeScale)
+    const viewport = v.viewport
+    const scale = viewport.width * nativeScale / (v.right - v.left)
+    if (!(scale > 0)) { root.hidden = true; return }
+    const zoom = scale * 15 // One native pixel at 100% is fifteen document twips.
+    root.style.left = surface.left + viewport.x * nativeScale + 'px'
+    root.style.top = surface.top + menu + viewport.y * nativeScale + 'px'
+    root.style.width = viewport.width * nativeScale + 'px'
+    root.style.height = viewport.height * nativeScale + 'px'
+    root.dataset.viewport = [v.left, v.top, v.right, v.bottom].join(':')
+    const pages = new Map(data.pages.map(page => [page.number, page]))
+    const measured = [], usedPages = new Set()
+    for (const card of cards) {
+      const page = pages.get(card.page)
+      if (!page || page.sidebar === 'none' || !(page.gutterWidth > 0)) { card.node.hidden = true; continue }
+      const layer = pageLayer(page); usedPages.add(page.number)
+      if (card.node.parentNode !== layer.node) layer.node.append(card.node)
+      card.node.hidden = false
+      card.node.style.width = Math.max(1, page.gutterWidth / 15 - 16) + 'px'
+      card.node.style.transform = `scale(${zoom})`
+      measured.push({ ...card, height: card.node.offsetHeight * 15 })
+    }
+    pageLayers.forEach((layer, number) => {
+      if (!usedPages.has(number)) { layer.node.remove(); pageLayers.delete(number) }
+    })
+    const positioned = positionReviewCards(measured, 12 * 15)
+    for (const number of usedPages) {
+      const page = pages.get(number), layer = pageLayers.get(number), right = page.sidebar === 'right'
+      const gutterX = right ? page.x + page.width : page.x - page.gutterWidth
+      layer.node.style.left = (gutterX - v.left) * scale + 'px'
+      layer.node.style.top = (page.y - v.top) * scale + 'px'
+      layer.node.style.width = page.gutterWidth * scale + 'px'
+      layer.node.style.height = page.height * scale + 'px'
+      layer.scale = scale
+      layer.overflow = Math.max(0, ...positioned.filter(item => item.page === number).map(item => item.top + item.height - page.y - page.height))
+      layer.offset = Math.max(0, Math.min(layer.offset, layer.overflow))
+      layer.node.classList.toggle('overflowing', layer.overflow > 0)
+      layer.slider.hidden = !(layer.overflow > 0)
+      layer.slider.max = String(layer.overflow); layer.slider.value = String(layer.offset)
+    }
     svg.replaceChildren()
-    const visible = []
     for (const item of positioned) {
-      const x = surface.left + (v.viewport.x + (item.x - v.left) * v.viewport.width / (v.right - v.left)) * s
-      const anchorY = viewportTop + (item.y - v.top) * scale
-      const cardY = viewportTop + (item.top - v.top) * scale - manualScroll
-      item.node.style.top = (cardY - listTop) + 'px'
-      const inView = cardY + item.node.offsetHeight > listTop && cardY < listTop + listHeight
+      const page = pages.get(item.page), layer = pageLayers.get(item.page), right = page.sidebar === 'right'
+      const pageEdge = right ? page.x + page.width : page.x
+      const cardX = right ? pageEdge + 8 * 15 : pageEdge - page.gutterWidth + 8 * 15
+      const cardTop = item.top - layer.offset, left = (cardX - v.left) * scale, top = (cardTop - v.top) * scale
+      item.node.style.left = 8 * zoom + 'px'; item.node.style.top = (cardTop - page.y) * scale + 'px'
+      const inView = top + item.height * scale > 0 && top < viewport.height * nativeScale
+        && left + item.node.offsetWidth * zoom > 0 && left < viewport.width * nativeScale
+        && cardTop + item.height > page.y && cardTop < page.y + page.height
       item.node.style.visibility = inView ? 'visible' : 'hidden'
-      const active = Math.abs(item.y - v.caretY) < 240
-      item.node.classList.toggle('active', active)
-      if (inView) visible.push(item)
-      if (!inView || anchorY < viewportTop || anchorY > listTop + listHeight || x < surface.left || x > surface.right) continue
-      const edge = rail.getBoundingClientRect().left, y = Math.max(listTop, cardY + 24)
+      item.node.classList.toggle('active', Math.abs(item.y - v.caretY) < 240)
+      if (!inView) continue
+      const anchorX = (item.x - v.left) * scale, anchorY = (item.y - v.top) * scale
+      const edgeX = (pageEdge - v.left) * scale
+      const joinX = right ? left : left + item.node.offsetWidth * zoom
+      const joinY = Math.max((page.y - v.top) * scale, Math.min((page.y + page.height - v.top) * scale, top + 24 * zoom))
       const path = doc.createElementNS(svg.namespaceURI, 'path')
-      path.setAttribute('d', `M ${x} ${anchorY + 7} L ${surface.right + 5} ${anchorY + 7} L ${edge + 10} ${y}`)
+      path.setAttribute('d', `M ${anchorX} ${anchorY} L ${edgeX} ${anchorY} L ${joinX} ${joinY}`)
       svg.append(path)
     }
-    const target = viewportTop + 80
-    const nearest = kind => data.items.filter(i => i.kind === kind && viewportTop + (i.y - v.top) * scale >= viewportTop)
-      .sort((a,b) => Math.abs(viewportTop+(a.y-v.top)*scale-target)-Math.abs(viewportTop+(b.y-v.top)*scale-target))[0]
+    const nearest = kind => data.items.filter(i => i.kind === kind && i.y >= v.top)
+      .sort((a,b) => Math.abs(a.y - v.top - 80 / scale) - Math.abs(b.y - v.top - 80 / scale))[0]
     const focus = { revisionIndex: nearest('revision')?.data.index, commentIndex: nearest('comment')?.data.index }
     const nextFocus = JSON.stringify(focus)
     if (nextFocus !== focusKey) { focusKey = nextFocus; transport.send({ __lo: 'lo-relay', type: 'review-focus', payload: focus }) }
   }
   async function refresh() {
     if (disposed) return
-    if (inFlight || busy || suspended) { again = true; return }
+    if (inFlight || suspended || pointerDown || (busy && !editingKey)) { again = true; return }
     inFlight = true
     const capturedGeneration = generation
     try {
       const data = await execute('get_review_layout', {})
       if (disposed || suspended || capturedGeneration !== generation) return
+      if (pointerDown) { again = true; return }
       if (!data?.success) { showNotice(labels.failed); return }
-      snapshot = data
-      const hasItems = data.items.some(x => x.kind === 'comment' || ['balloons', 'margin'].includes(data.mode))
-      if (hasItems !== enabled || (hasItems && data.notesVisible)) {
-        // Hide the native narrow note windows only after the replacement exists.
-        const changed = await execute('set_review_balloons', { enabled: hasItems })
-        if (disposed || suspended || capturedGeneration !== generation) return
-        if (!changed?.success) { showNotice(labels.failed); return }
-        const resized = enabled !== hasItems
-        enabled = hasItems; root.hidden = !enabled
-        doc.documentElement.classList.toggle('awd-review-margin', enabled)
-        dirty = true; if (resized) win.dispatchEvent(new win.Event('resize')); again = true
+      if (data.available === false) {
+        root.hidden = true; snapshot = null
+        // An unsupported engine retains its own notes. Do not keep probing or
+        // reserve an empty gutter when the geometry contract is unavailable.
+        if (enabled) { enabled = false; await execute('set_review_balloons', { enabled: false, width: 280 }) }
         return
       }
-      const key = [data.revision, data.mode, data.writable, enabled].join(':')
-      if (dirty || key !== renderKey) { rebuild(data); dirty = false; renderKey = key }
+      const items = reviewItems(data), hasItems = items.length > 0
+      snapshot = data
+      const desiredWidth = hasItems ? 280 : 0
+      if (hasItems !== enabled || (data.sidebarWidth != null && Number(data.sidebarWidth) !== desiredWidth)) {
+        const changed = await execute('set_review_balloons', { enabled: hasItems, width: 280 })
+        if (disposed || suspended || capturedGeneration !== generation) return
+        if (!changed?.success || changed.available === false) { root.hidden = true; return }
+        enabled = hasItems
+        // One fresh read after a native gutter transition; no periodic polling.
+        again = true
+      }
+      if (pointerDown) { again = true; return }
+      reconcile(data, items)
       root.hidden = !enabled
       if (enabled) place(data)
     } catch { if (!disposed) showNotice(labels.failed) }
-    finally { inFlight = false; if (again && !suspended) { again = false; schedule(80) } }
+    finally { inFlight = false; if (again && !suspended && !pointerDown && (!busy || editingKey)) { again = false; schedule(0) } }
   }
-  function schedule(delay = 120) { if (disposed) return; clearTimeout(timer); timer = setTimeout(refresh, delay) }
-  const wheel = e => {
-    if (e.target.closest('.awd-rb-content,.awd-rb-quote')) return
-    e.preventDefault(); manualScroll += e.deltaY; if (snapshot) place(snapshot)
-  }
-  rail.addEventListener('wheel', wheel, { passive: false })
+  function schedule(delay = 80) { if (disposed) return; clearTimeout(timer); timer = setTimeout(refresh, delay) }
   const scheduleViewport = () => {
     if (disposed || viewportTimer) return
-    viewportTimer = setTimeout(() => { viewportTimer = null; clearTimeout(timer); refresh() }, 60)
+    viewportTimer = setTimeout(() => { viewportTimer = null; clearTimeout(timer); refresh() }, 40)
   }
-  const onWheel = e => { if (e.ctrlKey) dirty = true; scheduleViewport() }, onPointer = () => scheduleViewport()
+  const onWheel = () => scheduleViewport(), onPointer = () => scheduleViewport()
   const onDrag = e => { if (e.buttons === 1) scheduleViewport() }
-  let size = ''
-  const onResize = () => { const r = canvas.getBoundingClientRect(), next = [r.width,r.height].join(':'); if (next !== size) { size = next; dirty = true; schedule(100) } }
+  const onResize = () => scheduleViewport()
+  const onCardPointerDown = e => {
+    if (!e.target.closest('.awd-rb-card')) return
+    pointerDown = true
+    // Preserve the native selection until the action dispatches. Textareas and
+    // card text retain their normal focus/selection behavior.
+    if (e.target.closest('button')) e.preventDefault()
+  }
+  const releasePointer = () => { if (pointerDown) { pointerDown = false; schedule(0) } }
+  root.addEventListener('pointerdown', onCardPointerDown)
+  win.addEventListener('pointerup', releasePointer); win.addEventListener('pointercancel', releasePointer); win.addEventListener('blur', releasePointer)
   canvas.addEventListener('wheel', onWheel, { passive: true }); canvas.addEventListener('pointerup', onPointer); canvas.addEventListener('pointermove', onDrag)
   win.addEventListener('resize', onResize)
   schedule(0)
@@ -221,14 +315,16 @@ export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh'
     suspend(action) {
       suspended++; generation++; clearTimeout(timer)
       if (action === 'load_document') {
-        // Imported documents can reuse comment IDs. Never carry a draft or its
-        // handlers across a model replacement, even when the content matches.
-        busy = false; dirty = true; snapshot = null; cards = []; renderKey = ''; focusKey = ''
-        list.replaceChildren(); svg.replaceChildren(); root.hidden = true
+        busy = false; editingKey = ''; pointerDown = false; snapshot = null; cards = []; focusKey = ''; enabled = false
+        list.replaceChildren(); pageLayers.clear(); svg.replaceChildren(); root.hidden = true
       }
     },
-    resume() { suspended = Math.max(0, suspended - 1); if (!suspended) schedule(180) },
-    documentChanged() { dirty = true; schedule(450) }, cursorMoved() { scheduleViewport() },
-    destroy() { disposed = true; clearTimeout(timer); clearTimeout(viewportTimer); root.remove(); style.remove(); doc.documentElement.classList.remove('awd-review-margin'); canvas.removeEventListener('wheel', onWheel); canvas.removeEventListener('pointerup', onPointer); canvas.removeEventListener('pointermove', onDrag); win.removeEventListener('resize', onResize) },
+    resume() { suspended = Math.max(0, suspended - 1); if (!suspended) schedule(0) },
+    documentChanged() { schedule(80) }, cursorMoved() { scheduleViewport() },
+    destroy() {
+      disposed = true; clearTimeout(timer); clearTimeout(viewportTimer); root.remove(); style.remove()
+      canvas.removeEventListener('wheel', onWheel); canvas.removeEventListener('pointerup', onPointer); canvas.removeEventListener('pointermove', onDrag)
+      win.removeEventListener('resize', onResize); win.removeEventListener('pointerup', releasePointer); win.removeEventListener('pointercancel', releasePointer); win.removeEventListener('blur', releasePointer)
+    },
   }
 }

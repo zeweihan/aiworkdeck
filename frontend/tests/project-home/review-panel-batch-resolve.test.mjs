@@ -125,3 +125,73 @@ test('组内部分条目处置失败：error 提示与既有口径一致（total
   assert.equal(vm.error, 'editor.review.groupPartialFail{"total":2,"failed":1}')
   assert.equal(changed, 1, '组里只要有条目成功就该触发一次 changed')
 })
+
+test('卡片处置携带当时的原生修订快照与文档代号，后续刷新不替换旧卡片的来源', async () => {
+  const engine = makeEngine(['A', 'B', 'C'], ['C'])
+  const execute = engine.executeCommand.bind(engine)
+  engine.executeCommand = async (action, params) => {
+    const result = await execute(action, params)
+    if (action === 'list_revisions') {
+      result.revision = 42
+      result.documentSeq = 7
+      result.revisions.forEach(r => { r.identifier = 'native-' + r.id; r.timestamp = '2026-09-10 08:00:00.0' })
+    }
+    return result
+  }
+  const vm = makeVm(engine)
+  await vm.reload()
+  const group = vm.revisionGroups.find(g => g.items.length === 2)
+  vm.reviewRevision = 100
+  vm.reviewDocumentSeq = 8
+  await vm.resolveGroup(group, 'reject')
+  const { params } = engine.calls.find(c => c.action === 'resolve_revisions')
+  assert.equal(params.revision, 42)
+  assert.equal(params.documentSeq, 7, '旧卡片不能借用新文档的代号绕过替换文档保护')
+  assert.deepEqual(params.expectedRevisions.map(r => r.identifier), ['native-B', 'native-C'])
+})
+
+test('批注卡片保留原文档快照，定位和已解决操作均携带稳定编号', async () => {
+  const calls = []
+  const comment = { id: 'native-comment', index: 3, author: '审阅人', content: '待核对', timestamp: '2026-09-10 08:00:00.0', resolved: false, anchorText: '对应条款' }
+  const vm = makeVm({ async executeCommand(action, params) {
+    calls.push({ action, params })
+    if (action === 'list_revisions') return { success: true, revisions: [], revision: 42, documentSeq: 7 }
+    if (action === 'list_comments') return { success: true, comments: [comment], revision: 42, documentSeq: 7 }
+    return { success: true }
+  } })
+  await vm.reload()
+  const card = vm.commentRows[0]
+  vm.comments = []
+  vm.reviewRevision = 100
+  vm.reviewDocumentSeq = 8
+  vm.gotoComment(card)
+  await vm.toggleResolved(card)
+  const locate = calls.find(c => c.action === 'goto_comment').params
+  assert.equal(locate.id, comment.id)
+  assert.equal(locate.documentSeq, 7)
+  const resolve = calls.find(c => c.action === 'set_comment_resolved').params
+  assert.equal(resolve.documentSeq, 7)
+  assert.equal(resolve.revision, 42)
+  assert.equal(resolve.expectedComment.content, comment.content)
+  assert.equal(resolve.expectedComment.id, comment.id)
+  assert.equal(resolve.resolved, true)
+})
+
+test('概览与页边清单同为500条上限，达到上限后明确提示未加载更多内容', async () => {
+  const calls = []
+  const vm = makeVm({ async executeCommand(action, params) {
+    calls.push({ action, params })
+    return action === 'list_revisions'
+      ? { success: true, revisions: Array.from({ length: 500 }, (_, index) => ({ index })) }
+      : { success: true, comments: [{ index: 0 }] }
+  } })
+  await vm.reload()
+  assert.deepEqual(calls.map(c => c.params.limit), [500, 500])
+  assert.equal(vm.listLimitReached, true)
+  vm.tab = 'cmt'
+  assert.equal(vm.listLimitReached, false)
+  vm.comments = Array.from({ length: 500 }, (_, index) => ({ index }))
+  assert.equal(vm.listLimitReached, true)
+  vm.tab = 'evd'
+  assert.equal(vm.listLimitReached, false)
+})

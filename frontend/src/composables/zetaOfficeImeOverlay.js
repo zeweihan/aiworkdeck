@@ -123,10 +123,12 @@ export function nativeCursorRectToPixels(raw, surface) {
  * @param {()=>void} [options.onCursorMoved] OPTIONAL. Fired after every action
  *        that moves the LO cursor (commit / control key / arrow / canvas click).
  *        宿主用它刷新工具栏激活态——引擎的选区监听盖不住纯光标移动。
+ * @param {()=>void} [options.onCommentRequested] Opens the host's comment form
+ *        for Ctrl/Cmd+Alt+C without creating an empty native annotation.
  * @param {(msg:string)=>void} [options.onLog] optional progress/diagnostic log.
  * @returns {{element, focus, reposition, computeRect, destroy}}
  */
-export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCommand, onCursorMoved, onCommitted, onAssistanceKey, onLog } = {}) {
+export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCommand, onCursorMoved, onCommitted, onAssistanceKey, onCommentRequested, onLog } = {}) {
   if (!canvas) throw new Error('attachImeOverlay: canvas is required')
   if (typeof commit !== 'function') throw new Error('attachImeOverlay: commit(text) is required')
   const log = (m) => { if (onLog) onLog(m) }
@@ -269,23 +271,17 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     if (typeof onCursorMoved === 'function') { try { onCursorMoved() } catch (e) { /* ignore */ } }
   }
 
-  // Commit logic: identical to the verified toolbar bridge. dedup the input event
-  // that trails compositionend so a committed phrase isn't inserted twice.
-  //
-  // 这个闩曾经是「中文标点要按两次」的根因：compositionend 后无条件置位，指望
-  // 紧跟着一定有一个 input 事件来把它消费掉。可**不是每次都有**——中文态下标点
-  // 直接上屏、组合被取消等情形都不补发，闩就一直挂着，把用户随后敲的第一个字符
-  // 吃掉，于是"按两次才过去"。两道保险：
-  //   1) 有 inputType 时只吞组合产物（insertCompositionText/insertFromComposition），
-  //      普通字符（直接上屏的标点走 insertText）一律照常上屏；
-  //   2) 无论如何都在下一个宏任务里自动解闩——尾随 input 与 compositionend 由浏览器
-  //      在同一个任务里连发，解闩排在它之后，闩绝不跨事件循环存活。
-  let composing = false, skipNextInput = false
-  const armSkip = () => {
-    skipNextInput = true
-    setTimeout(() => { skipNextInput = false }, 0)
+  // The browser may report a final input before compositionend. Use that
+  // explicit confirmation immediately; never infer it from Space/digit keys.
+  // A later end/input pair may repeat the same text, so deduplicate only that
+  // committed phrase, without swallowing cancellation or following punctuation.
+  let composing = false, compositionCommitted = false, trailingCommit = null
+  let trailingTimer = null
+  const armTrailingCommit = (text) => {
+    clearTimeout(trailingTimer)
+    trailingCommit = text || null
+    trailingTimer = trailingCommit ? setTimeout(() => { trailingCommit = null }, 0) : null
   }
-  const isCompositionInput = (e) => e.inputType === 'insertCompositionText' || e.inputType === 'insertFromComposition'
   const doCommit = (t) => {
     input.value = ''
     if (!t) return
@@ -298,21 +294,32 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     }).catch((e) => log('overlay commit error: ' + (e && e.message || e))) }
     catch (e) { log('overlay commit error: ' + (e && e.message || e)) }
   }
-  input.addEventListener('compositionstart', () => { composing = true })
+  input.addEventListener('compositionstart', () => {
+    composing = true; compositionCommitted = false; armTrailingCommit(null)
+  })
   input.addEventListener('compositionupdate', (e) => showPreview(e.data || ''))
   input.addEventListener('compositionend', (e) => {
-    composing = false; armSkip()
+    composing = false
     hidePreview()
-    doCommit(e.data)
+    if (!compositionCommitted) doCommit(e.data)
+    compositionCommitted = false
+    armTrailingCommit(e.data)
   })
   input.addEventListener('input', (e) => {
-    if (composing) { showPreview(input.value); return }    // mid-composition: wait for end
-    if (skipNextInput) {
-      skipNextInput = false
-      // 只吞组合产物；直接上屏的标点带 insertText，必须放行（见 armSkip 注释）
-      if (!e.inputType || isCompositionInput(e)) return
+    const text = e.data != null ? e.data : input.value
+    if (composing) {
+      if (e.isComposing !== false && e.inputType !== 'insertFromComposition') {
+        showPreview(input.value); return
+      }
+      composing = false; compositionCommitted = true
+      hidePreview()
     }
-    doCommit(e.data != null ? e.data : input.value)
+    if (trailingCommit !== null) {
+      const duplicate = text === trailingCommit
+      armTrailingCommit(null)
+      if (duplicate) { input.value = ''; return }
+    }
+    doCommit(text)
   })
 
   // Forward a worker UI command, then move the box to the (now-moved) cursor.
@@ -357,6 +364,15 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
   // letting them fall through to the harmless empty input).
   input.addEventListener('keydown', (e) => {
     if (composing || e.isComposing || e.keyCode === 229) return
+    // Option can change e.key to a printable symbol on macOS; code retains C.
+    if ((e.metaKey || e.ctrlKey) && e.altKey && !e.shiftKey
+      && (e.code === 'KeyC' || String(e.key).toLowerCase() === 'c')
+      && typeof onCommentRequested === 'function') {
+      e.preventDefault()
+      e.stopPropagation()
+      if (!e.repeat) onCommentRequested()
+      return
+    }
     if (typeof onAssistanceKey === 'function' && onAssistanceKey(e)) return
     if (e.key === 'Enter') {
       e.preventDefault()
@@ -459,6 +475,9 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
   // (mouseup), and at the same time re-anchor the live offset + move the box to
   // the freshly-set cursor so the candidate window shows up there.
   const onMouseUp = (e) => {
+    // A secondary click opens a menu without moving the document caret. Taking
+    // focus or reporting a cursor move here closes that menu on button release.
+    if (e.button !== 0 || (isMac && e.ctrlKey)) return
     const cx = e.clientX, cy = e.clientY
     setTimeout(() => {
       if (disposed) return
@@ -484,7 +503,7 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     reposition,
     computeRect,
     destroy() {
-      disposed = true; positionSequence++
+      disposed = true; positionSequence++; clearTimeout(trailingTimer)
       canvas.removeEventListener('mouseup', onMouseUp)
       input.remove()
       preview.remove()

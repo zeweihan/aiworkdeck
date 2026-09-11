@@ -29,8 +29,8 @@ for (const method of ['list_revisions', 'debug_revisions']) {
       } }) }
       const start = source.indexOf(`  ${method}(`)
       const end = source.indexOf('\n  },', start) + 5
-      const read = new Function('xModel', 'rangeStartsEqual', 'applyLocator', 'tableFail', 'errStr',
-        `return ({${source.slice(start, end)}}).${method}`)(model, () => false, () => {}, String, String)
+      const read = new Function('xModel', 'rangeStartsEqual', 'applyLocator', 'tableFail', 'errStr', 'currentReviewRevision', 'docSeq',
+        `return ({${source.slice(start, end)}}).${method}`)(model, () => false, () => {}, String, String, () => 'doc-1:review-1', 1)
       const result = read({})
       assert.equal(result.success, true)
       assert.equal((result.revisions || result.redlines)[0].text, method === 'list_revisions' ? text : text.slice(0, 80))

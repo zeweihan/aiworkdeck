@@ -72,6 +72,7 @@ export default {
     accept: '接受',
     reject: '拒绝',
     opFailed: '操作未成功',
+    limitReached: '此列表最多显示 {count} 条，超出部分暂未加载。',
     groupPartialFail: '本组 {total} 处中有 {failed} 处未被引擎处置',
     typeFormat: '格式',
     typeParaFormat: '段落格式',

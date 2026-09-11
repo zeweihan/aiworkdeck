@@ -142,7 +142,9 @@ test('接受后相关资料保留；详情选择框可聚焦；纯文本和表�
 test('只有选中后右键产生外查菜单，显式点击才查询；晚回结果不能复活关闭的菜单', async t => {
   const h = harness(t)
   h.setContext({ available: false, hasSelection: true, selectedText: '示例企业', token: 'selection-1' })
+  h.canvas.tabIndex = 0; h.canvas.focus()
   h.canvas.dispatchEvent(new h.dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 20, clientY: 30 })); await tick()
+  assert.equal(h.doc.activeElement, h.input, 'HTML context menu explicitly retains its Escape-key route')
   assert.equal(h.messages.some(m => m.action === 'lookup'), false)
   h.button('查询机构工商信息').click()
   const request = h.messages.find(m => m.action === 'lookup')

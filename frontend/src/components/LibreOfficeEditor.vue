@@ -110,6 +110,7 @@
         </view>
       </view>
       <ReviewPanel
+        class="libre-review-overview"
         v-if="reviewOpen && ready && showsReview"
         ref="review"
         :executor="executor"
@@ -543,9 +544,40 @@ export default {
       const tb = this.$refs.toolbar
       if (!tb) return { ok: false, reason: 'not-ready' }
       if (tb.noSelection) return { ok: false, reason: 'no-selection' }
+      tb.capturePopPos('insert')
       tb.menu = 'insert'
-      tb.startComment()
+      if (tb.insertMode !== 'comment') tb.startComment()
+      this.$nextTick(() => {
+        if (this.$refs.toolbar !== tb || tb.menu !== 'insert' || tb.insertMode !== 'comment') return
+        const input = tb.$el && tb.$el.querySelector('.etb-form textarea')
+        if (input) input.focus()
+      })
       return { ok: true }
+    },
+    async onCommentRequest(msg = {}) {
+      const tb = this.$refs.toolbar, executor = this.executor
+      if (!this.ready || !tb || !executor || this._commentRequestPending) return
+      const fileId = this.file && this.file.id, loadGen = this._loadGen
+      const request = {}
+      this._commentRequestPending = request
+      const isCurrent = () => this.ready && this.executor === executor && this.$refs.toolbar === tb
+        && (this.file && this.file.id) === fileId && this._loadGen === loadGen
+      try {
+        // Selection notifications are throttled; the shortcut needs the live state.
+        const state = await executor.executeCommand('get_ui_state', {})
+        if (!isCurrent()) return
+        if (!state || state.success !== true) throw new Error('comment selection unavailable')
+        if (msg.documentSeq != null && state.documentSeq !== msg.documentSeq) return
+        tb.state = state
+        const result = this.menuInsertComment()
+        if (result.reason === 'no-selection') {
+          uni.showToast({ title: this.$t('workbench.menuSelectTextFirst'), icon: 'none' })
+        }
+      } catch (e) {
+        if (isCurrent()) uni.showToast({ title: this.$t('editor.toolbar.opFailed'), icon: 'none' })
+      } finally {
+        if (this._commentRequestPending === request) this._commentRequestPending = null
+      }
     },
     menuClearFormatting() {
       const tb = this.$refs.toolbar
@@ -768,6 +800,8 @@ export default {
             fileId: this.file && this.file.id, meta: this.withHostPoint(msg.meta) })
         } else if (msg.type === 'modified') {
           this.onDocModified()
+        } else if (msg.type === 'comment-request') {
+          this.onCommentRequest(msg)
         } else if (msg.type === 'review-overview') {
           this.reviewOpen = true
         } else if (msg.type === 'review-focus') {
@@ -1571,9 +1605,11 @@ export default {
 .libre-spin { width: 10px; height: 10px; border: 2px solid rgba(229, 231, 235, 0.35); border-top-color: var(--awd-border);
   border-radius: 50%; animation: libre-rot 0.8s linear infinite; }
 @keyframes libre-rot { to { transform: rotate(360deg); } }
-.libre-body { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: row; }
+.libre-body { position: relative; flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: row; }
 .libre-canvas-wrap { position: relative; flex: 1; min-width: 0; min-height: 0; height: 100%; }
 .libre-host { width: 100%; height: 100%; }
+/* Explicit review overview overlays the native gutter without shrinking the canvas. */
+.libre-review-overview { position: absolute; top: 0; right: 0; bottom: 0; z-index: 30; max-width: 100%; box-shadow: -8px 0 24px #00000018; }
 /* EvidenceLink 拖放：整个编辑器描一圈边，画布上铺透明接收层；悬停时加深 */
 .libre-editor-wrapper.evidence-drop-armed { box-shadow: inset 0 0 0 2px #1A5336; }
 .libre-evidence-drop { position: absolute; inset: 0; z-index: 25; display: flex; align-items: flex-end; justify-content: center;

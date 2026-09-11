@@ -70,6 +70,7 @@ export default {
     accept: 'Accept',
     reject: 'Reject',
     opFailed: 'Operation failed',
+    limitReached: 'This list shows up to {count} entries. Any additional entries are not loaded.',
     groupPartialFail: 'The engine did not process {failed} of {total} changes in this group',
     typeFormat: 'Formatting',
     typeParaFormat: 'Paragraph formatting',
