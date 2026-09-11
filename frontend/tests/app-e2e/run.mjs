@@ -2351,20 +2351,65 @@ try {
       // 下带工具定义的流式请求会零字节停滞 180s 直到 watchdog 兜底（后端日志伴随
       // OkHttp "Cannot invoke Response.code() because response is null" 的 NPE）。
       // 中文模式发同样需要调工具的指令一样会停滞——语言不是变量。
-      let names = []
-      try {
-        await page.waitForFunction(() => {
-          const n = [...document.querySelectorAll('.process-card .tool-name')]
-            .map((e) => (e.innerText || '').trim()).filter(Boolean)
-          return n.length >= 1
-        }, { timeout: 120000 })
-        names = await page.evaluate(() =>
-          [...document.querySelectorAll('.process-card .tool-name')]
-            .map((e) => (e.innerText || '').trim()).filter(Boolean))
-      } catch (e) {
-        note('skip', 'J12 本轮模型未产出工具调用（' + (e && e.message ? e.message.split('\n')[0] : e) + '），过程卡工具名断言未执行')
+      //
+      // PR#809 之后过程卡不再渲染在消息流里，只在 TurnActivityPanel 的 processes 页里出现，
+      // 且面板默认收起——以前「等 .process-card 出现、等不到就 skip」在新 UI 下恒走 skip，
+      // 发版门静默失效。现在：等这一轮跑完 → 点 J12 这一轮自己的 .turn-activity-link
+      // （openTurn(turn.key)，直接落在 processes 页）→ 核对面板停在 J12 这一轮。
+      // skip 只认面板自己报的「这一轮 0 条动作」；面板打不开、不在 J12 这一轮、
+      // 有动作却找不到工具名，一律判红，UI 再改也只会响亮地红，不会悄悄 skip。
+      // 「跑完」以面板状态条为准（刚发出的这一轮就是最新一轮，状态条默认显示它）；
+      // 240s 覆盖上面那个 180s watchdog。还在跑时面板里 0 条动作不代表模型没调工具。
+      const ended = await page.waitForFunction(() => {
+        const s = document.querySelector('.turn-activity .turn-status')
+        return !!s && !/status-(running|queued)\b/.test(String(s.className))
+      }, { timeout: 240000, polling: 500 }).catch(() => null)
+      if (!ended) throw new Error('J12 这一轮 240s 后仍未结束（.turn-activity .turn-status 仍是 running/queued 或不存在）')
+      const linkSel = await page.waitForFunction((p) => {
+        const turns = [...document.querySelectorAll('.conversation-turn')].filter((t) => {
+          const u = t.querySelector('.user-bubble-content')
+          return u && (u.innerText || '').includes(p)
+        })
+        const a = turns.length && turns[turns.length - 1].querySelector('.turn-activity-link')
+        if (!a) return false
+        a.scrollIntoView({ block: 'center' })
+        return true
+      }, { timeout: 30000, polling: 500 }, J12_PROMPT).catch(() => null)
+      if (!linkSel) throw new Error('找不到 J12 这一轮的 .turn-activity-link（这一轮没有助手回复，或活动面板入口已改）')
+      await sleep(500)
+      const link = await page.evaluate((p) => {
+        const turns = [...document.querySelectorAll('.conversation-turn')].filter((t) => {
+          const u = t.querySelector('.user-bubble-content')
+          return u && (u.innerText || '').includes(p)
+        })
+        const a = turns[turns.length - 1].querySelector('.turn-activity-link')
+        const r = a.getBoundingClientRect()
+        const x = r.x + r.width / 2
+        const y = r.y + r.height / 2
+        const top = document.elementFromPoint(x, y)
+        return { ok: !!top && (top === a || a.contains(top)), x, y, top: top ? top.tagName + '.' + String(top.className || '') : 'null' }
+      }, J12_PROMPT)
+      if (!link.ok) throw new Error('J12 这一轮的 .turn-activity-link 中心被遮挡，elementFromPoint 命中 ' + link.top)
+      await page.mouse.click(link.x, link.y)
+      const state = await page.waitForFunction(() => {
+        const panel = document.querySelector('.turn-activity .activity-panel')
+        const tab = panel && panel.querySelector('[data-activity-tab="processes"]')
+        if (!tab || tab.getAttribute('aria-selected') !== 'true') return null
+        return {
+          title: (panel.querySelector('.panel-title')?.innerText || '').trim(),
+          status: String(document.querySelector('.turn-activity .turn-status')?.className || ''),
+          entries: panel.querySelectorAll('.process-entry').length,
+          names: [...panel.querySelectorAll('.process-card .tool-name')].map((e) => (e.innerText || '').trim()).filter(Boolean),
+        }
+      }, { timeout: 10000 }).then((h) => h.jsonValue()).catch(() => null)
+      if (!state) throw new Error('点了 J12 这一轮的 .turn-activity-link，活动面板没有停在 processes 页（[data-activity-tab="processes"][aria-selected="true"] 不出现）')
+      if (!state.title.includes(J12_PROMPT)) throw new Error('活动面板显示的不是 J12 这一轮: ' + JSON.stringify(state.title.slice(0, 80)))
+      if (state.entries === 0) {
+        note('skip', 'J12 本轮模型未产出工具调用（活动面板报这一轮 0 条动作，' + state.status + '），过程卡工具名断言未执行')
         return
       }
+      if (!state.names.length) throw new Error('活动面板报 ' + state.entries + ' 条动作，却找不到 .process-card .tool-name')
+      const names = state.names
       const bad = names.filter((t) => /[一-鿿]/.test(t))
       if (bad.length) throw new Error('en-US 下过程卡工具名仍含中文: ' + JSON.stringify(bad))
       await shot('j12-en-process-card')
