@@ -44,7 +44,7 @@ try {
   const page = await openEditor(browser)
   const exec = (a, p = {}) => page.evaluate((a, p) => window.__loExecutor.executeCommand(a, p), a, p)
   const ok = async (a, p) => { const r = await exec(a, p); assert.equal(r.success, true, a + ': ' + JSON.stringify(r)); return r }
-  const doc = async () => (await ok('get_document_text')).paragraphs.map(p => p.text).join('\n')
+  const doc = async () => (await ok('get_document_text', { __agent: true })).paragraphs.map(p => p.text).join('\n')
   const prefix = '北京当红', text = '北京当红晴天律师事务所'
   const blank = await blankDocx()
   const reset = async (body = prefix) => {
@@ -110,8 +110,9 @@ try {
   ctx = await ok('get_completion_context')
   assert.equal((await exec('accept_completion', { token: ctx.token, prefix, text: '别的机构' })).reason, 'invalid-completion')
   await ok('set_revision_view', { mode: 'all' })
-  assert.equal((await exec('get_completion_context')).reason, 'inline-revisions')
-  assert.equal((await accept(ctx.token)).reason, 'inline-revisions')
+  ctx = await ok('get_completion_context')
+  assert.equal((await accept(ctx.token)).success, true)
+  assert.equal((await exec('set_revision_view')).mode, 'all')
   await ok('set_revision_view', { mode: 'margin' })
   console.log('PASS moved cursor, continued input, reload, invalid prefix, inline revision guard')
 

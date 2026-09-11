@@ -38,7 +38,7 @@ try {
   const blank = Array.from(await zip.generateAsync({ type: 'uint8array' }))
   const body = '甲方应在30日内付款。'
   const reset = async () => { await ok('load_document', { name: 'inline-review.docx', bytes: blank }); await ok('insert_at_cursor', { text: body }) }
-  const snapshot = () => ok('get_document_text')
+  const snapshot = () => ok('get_document_text', { __agent: true })
   const waitChip = async () => { try { await page.waitForSelector('.awd-ir-chip:not([hidden])', { timeout: 4000 }) } catch (e) { console.log('CHIP WAIT', await exec('get_review_context'), await page.evaluate(() => ({ state: window.__lastReviewState, input: document.activeElement?.outerHTML.slice(0,100), chip: document.querySelector('.awd-ir-chip')?.outerHTML, clicks: window.__reviewClicks }))); throw e } }
   const text = async () => (await snapshot()).paragraphs.map(p => p.text).join('\n')
   const params = async (paragraphIndex = 0) => { const s = await snapshot(); const p = s.paragraphs[paragraphIndex]; const start = p.text.indexOf('30'); return { revision: s.revision, paragraphIndex, start, end: start + 2, expectedParagraph: p.text, quote: '30', replacement: '15' } }
@@ -62,13 +62,13 @@ try {
   p = await params(1); await ok('apply_review_edit', p)
   assert.deepEqual((await snapshot()).paragraphs.map(p => p.text), [body, body.replace('30', '15')], 'duplicate quotes are confined to the verified paragraph')
   await ok('undo'); assert.deepEqual((await snapshot()).paragraphs.map(p => p.text), [body, body])
-  await ok('set_revision_view', { mode: 'all' }); assert.equal((await exec('get_review_context')).reason, 'inline-revisions'); await ok('set_revision_view', { mode: 'margin' })
+  await ok('set_revision_view', { mode: 'all' }); assert.equal((await exec('get_review_context')).success, true); await ok('set_revision_view', { mode: 'margin' })
   console.log('PASS atomic revision/range checks, export stability, duplicate paragraphs, tracked one-step undo/redo')
 
   await reset(); p = await params()
   await page.evaluate(() => { window.__reviewRequests = []; window.__reviewClicks=[]; document.getElementById('qtcanvas').addEventListener('mouseup',e=>window.__reviewClicks.push([e.clientX,e.clientY]),true); window.addEventListener('message', e => { if (e.data?.type === 'inline-review-request') window.__reviewRequests.push(e.data); if(e.data?.type === 'inline-review-state') window.__lastReviewState=e.data }) })
   // The real host checks after its 1.2s debounce, after the guest's 500ms modified relay.
-  const state = async (patch = {}) => { await new Promise(resolve => setTimeout(resolve, 600)); return page.evaluate(async (p, patch) => { window.postMessage({ __lo: 'lo-relay', type: 'inline-review-state', session: 'review-test', enabled: true, writable: true, revision: p.revision, status: 'ready', deepStatus: 'idle', findings: [{ id: 'term', kind: 'TEST_FIXTURE', title: '付款期限待核对', message: '测试提示：请核对两处约定。', severity: 'warning', ...p }], ...patch }, location.origin); await new Promise(resolve => setTimeout(resolve, 0)) }, p, patch) }
+  const state = async (patch = {}) => { await new Promise(resolve => setTimeout(resolve, 600)); p = { ...p, revision: (await snapshot()).revision }; return page.evaluate(async (p, patch) => { window.postMessage({ __lo: 'lo-relay', type: 'inline-review-state', session: 'review-test', enabled: true, writable: true, revision: p.revision, status: 'ready', deepStatus: 'idle', findings: [{ id: 'term', kind: 'TEST_FIXTURE', title: '付款期限待核对', message: '测试提示：请核对两处约定。', severity: 'warning', ...p }], ...patch }, location.origin); await new Promise(resolve => setTimeout(resolve, 0)) }, p, patch) }
   await state()
   await clickCaret()
   try { await page.waitForSelector('.awd-ir-chip:not([hidden])', { timeout: 5000 }) } catch (e) { console.log('INITIAL CHIP', p, await exec('get_review_context'), await page.$eval('.awd-ir-status', e => e.textContent)); await page.screenshot({ path: '/tmp/awd-547-inline-failure.png' }); throw e }

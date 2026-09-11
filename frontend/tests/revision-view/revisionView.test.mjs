@@ -51,7 +51,7 @@ test('executor 放行 set_revision_view 并原样把 mode 发给 worker', async 
 function loadToolbar() {
   const src = readFileSync(new URL('../../src/components/EditorToolbar.vue', import.meta.url), 'utf8')
   const script = src.match(/<script>([\s\S]*?)<\/script>/)[1]
-  return new Function(script.replace('export default', 'return'))()
+  return new Function(script.replace(/^import .*$/gm, '').replace('export default', 'return'))()
 }
 
 // engineView: worker 侧 get_ui_state 回的 view 段（= 引擎的真实读回）
@@ -83,13 +83,13 @@ function makeVm(engineView) {
 }
 
 test('三态各自派发 set_revision_view，且一律不标脏（纯显示切换）', async () => {
-  let mode = 'margin'
-  const vm = makeVm(() => ({ revisionView: mode, revisionMarginSupported: true }))
+  let mode = 'balloons'
+  const vm = makeVm(() => ({ revisionView: mode, revisionBalloonsSupported: true }))
   await vm.refresh()
   vm.calls.length = 0
   vm.emitted.length = 0
 
-  for (const want of ['all', 'final', 'margin']) {
+  for (const want of ['all', 'final', 'balloons']) {
     mode = want
     await vm.pickRevisionView(want)
   }
@@ -97,7 +97,7 @@ test('三态各自派发 set_revision_view，且一律不标脏（纯显示切�
     vm.calls.map((c) => c.action + (c.params.mode ? ':' + c.params.mode : '')),
     ['set_revision_view:all', 'get_ui_state',
       'set_revision_view:final', 'get_ui_state',
-      'set_revision_view:margin', 'get_ui_state'],
+      'set_revision_view:balloons', 'get_ui_state'],
     '每次切换 = 一条 set_revision_view + 一次真实状态回读'
   )
   assert.equal(vm.emitted.filter((e) => e[0] === 'changed').length, 0, '显示切换不许标脏触发自动保存')
@@ -105,14 +105,14 @@ test('三态各自派发 set_revision_view，且一律不标脏（纯显示切�
 
 test('当前态跟引擎读回走，不是本地置位（引擎拒绝时高亮不许说谎）', async () => {
   // 引擎恒回 margin：模拟「请求 final 但引擎没生效」
-  const vm = makeVm(() => ({ revisionView: 'margin', revisionMarginSupported: true }))
+  const vm = makeVm(() => ({ revisionView: 'balloons', revisionBalloonsSupported: true }))
   await vm.pickRevisionView('final')
-  assert.equal(vm.state.view.revisionView, 'margin')
+  assert.equal(vm.state.view.revisionView, 'balloons')
   assert.equal(vm.revisionViewLabel, 'editor.toolbar.revisionViewMargin')
 })
 
-test('引擎不支持页边显示时退成两态（全部修订 / 最终稿）', async () => {
-  const vm = makeVm(() => ({ revisionView: 'all', revisionMarginSupported: false }))
+test('引擎不支持隐藏正文标记时退成两态（全部修订 / 最终稿）', async () => {
+  const vm = makeVm(() => ({ revisionView: 'all', revisionBalloonsSupported: false }))
   await vm.refresh()
   assert.deepEqual(vm.revisionViewOptions.map((o) => o.k), ['all', 'final'])
 })
@@ -125,7 +125,7 @@ test('文档类型不对（非 Writer，view 里没有该字段）时整个控�
 })
 
 test('工具栏重挂（bootstrap）先清空状态，不端着上一份文档的读数', async () => {
-  const vm = makeVm(() => ({ revisionView: 'final', revisionMarginSupported: true }))
+  const vm = makeVm(() => ({ revisionView: 'final', revisionBalloonsSupported: true }))
   await vm.refresh()
   assert.equal(vm.state.view.revisionView, 'final')
   const seen = []
@@ -150,18 +150,18 @@ test('worker 的 boot 与 load_document retarget 都复位显示态', () => {
   const calls = (WORKER_SRC.match(/^\s*resetRevisionView\(\);$/gm) || []).length
   assert.equal(calls, 2, 'bootDoc 一处 + retarget 一处；少一处就会「上一份设了最终稿、下一份打开痕迹默默不见」')
   assert.match(WORKER_SRC, /function resetRevisionView\(\) \{ return applyRevisionView\(DEFAULT_REVISION_VIEW\); \}/)
-  assert.match(WORKER_SRC, /const DEFAULT_REVISION_VIEW = 'margin';/,
-    '默认 = 页边：AI 读到的正文要是「改后的样子」，匹配计数只数可见匹配（dev-board#369）')
+  assert.match(WORKER_SRC, /const DEFAULT_REVISION_VIEW = 'all';/,
+    '默认正文删除线，AI 读取语义由命令守卫负责')
   // retarget 里的那处必须在 isWriterDoc() 分支内（Calc/Impress 没有修订机制）
   const retarget = WORKER_SRC.match(/const retarget = \(loaded\) => \{[\s\S]*?\n    \};/)[0]
   assert.match(retarget, /if \(isWriterDoc\(\)\) \{[\s\S]*resetRevisionView\(\);/)
 })
 
-test('worker 的 EXEC 里有 set_revision_view，且三个态名与工具栏一字不差', () => {
+test('worker 的 EXEC 里有 set_revision_view，且工具栏显示三个用户模式，旧 margin 仅供内部兼容', () => {
   assert.match(WORKER_SRC, /\n {2}set_revision_view\(p\) \{/)
-  assert.match(WORKER_SRC, /const REVISION_VIEWS = \['all', 'margin', 'final'\];/)
+  assert.match(WORKER_SRC, /const REVISION_VIEWS = \['all', 'balloons', 'margin', 'final'\];/)
   const toolbar = readFileSync(new URL('../../src/components/EditorToolbar.vue', import.meta.url), 'utf8')
-  for (const k of ['all', 'margin', 'final']) assert.match(toolbar, new RegExp("k: '" + k + "'"))
+  for (const k of ['all', 'balloons', 'final']) assert.match(toolbar, new RegExp("k: '" + k + "'"))
 })
 
 test('export_document 走 withInlineMarkupForExport：导出期间强制内联，导完还原原态', () => {
@@ -170,7 +170,7 @@ test('export_document 走 withInlineMarkupForExport：导出期间强制内联�
   assert.match(WORKER_SRC, /withInlineMarkupForExport\(function \(\) \{ xModel\.storeToURL\('private:stream', props\); \}\);/)
   const fn = WORKER_SRC.match(/function withInlineMarkupForExport\(fn\) \{[\s\S]*?\n\}/)[0]
   assert.match(fn, /const before = revisionViewState\(\)\.mode/, '先记下用户所选的态')
-  assert.match(fn, /if \(before === 'all'\) return fn\(\)/, '本来就是内联就零开销直通')
+  assert.match(fn, /if \(before === 'all'\) return fn\(\)/, '已经内联时直接导出')
   assert.match(fn, /applyRevisionView\('all'\)/)
   assert.match(fn, /xModel\.refresh\(\)/, '只关页边不重排仍会错位（#367 探针 R2）')
   assert.match(fn, /finally \{\s*applyRevisionView\(before\)/, '导完必须还原用户所选的态')
@@ -179,7 +179,7 @@ test('export_document 走 withInlineMarkupForExport：导出期间强制内联�
 test('__agent 命令按页边语义执行：内联态下临时切页边，跑完还原', () => {
   // AI 多轮改稿依赖「正文 = 改后的样子」与「只数可见匹配」。用户把视图切成内联后
   // 正文里混着被删的旧字——不兜住的话 AI 读到的就是错的（dev-board#369 的契约）。
-  assert.match(WORKER_SRC, /p\.__agent \? runAgentCommandInMarginView\(action, function \(\) \{ return fn\(p\); \}\) : fn\(p\)/,
+  assert.match(WORKER_SRC, /\(p\.__agent \|\| FINAL_TEXT_ACTIONS\.has\(action\)\) \? runAgentCommandInMarginView\(action, function \(\) \{ return fn\(p\); \}\) : fn\(p\)/,
     'execCommand 必须把带 __agent 的命令套进守卫')
   const fn = WORKER_SRC.match(/function runAgentCommandInMarginView\(action, fn\) \{[\s\S]*?\n\}/)[0]
   assert.match(fn, /if \(AGENT_VIEW_EXEMPT\[action\] \|\| !isWriterDoc\(\)\) return fn\(\)/,

@@ -160,9 +160,9 @@ const DEBUG_ACTIONS = `
       // 别拖累用例本身。
       try { if (prev && prev !== loaded) { try { prev.setModified(false); } catch (e) {} prev.close(true); } } catch (e) {}
       try { xModel.setPropertyValue('RecordChanges', false); } catch (e) {}
-      // 生产的 retarget（load_document）会把修订显示方式复位到默认——探针换文档
-      // 也要跟着做，否则后续断言跑在与真实产品不同的显示语义下。
-      resetRevisionView();
+      // These legacy fixtures exercise final-text edits in margin mode. The
+      // production load_document default is covered by word-review.mjs.
+      applyRevisionView('margin');
       return { success: true };
     } catch (e) { return { success: false, message: errStr(e) }; }
   },
@@ -376,7 +376,7 @@ try {
     await new Promise((r) => setTimeout(r, 350))
   }
   const exec = (a, p) => page.evaluate((a2, p2) => window.__loExecutor.executeCommand(a2, p2 || {}), a, p)
-  const doc = async () => (await exec('get_document_text')).paragraphs.map((x) => x.text).join('|')
+  const doc = async () => (await exec('get_document_text', { __agent: true })).paragraphs.map((x) => x.text).join('|')
   const cursor = async () => { const r = await exec('get_cursor_context'); return { b: r.before || '', a: r.after || '' } }
   const focus = () => page.evaluate(() => window.__overlayInput.focus())
   // hard reset: revisions off so leftovers (incl. redline remnants) truly vanish
@@ -394,6 +394,8 @@ try {
   // the true page margin (stock LO painted them over the neighboring cell).
   // Deletions leave the inline text, so the cursor context no longer contains
   // the struck-through originals.
+  check('新文档默认正文删除线', (await exec('set_revision_view', {})).mode === 'all')
+  await exec('set_revision_view', { mode: 'margin' }) // retained legacy margin-mode keyboard coverage
   console.log('== 1) Backspace over pre-existing text (revision-mode jam regression #164) ==')
   await reset('合同条款abc') // inserted with rc OFF -> "original" text; rc back ON
   for (let i = 0; i < 3; i++) await key('Backspace', 'Backspace', 8)
@@ -1100,7 +1102,8 @@ try {
     const rlTexts = (rlAfter.redlines || []).map((x) => x.text || '').join('/')
     check('修订只覆盖差异字符（不含整格旧值 12000）', !/12000/.test(rlTexts), rlTexts)
     rd = await exec('table_read', { tableIndex: 0 })
-    check('正文读回新值 13000', rd.cells[1][1] === '13000', JSON.stringify(rd.cells))
+    const finalCells = await exec('table_read', { tableIndex: 0, __agent: true })
+    check('正文读回新值 13000', finalCells.cells[1][1] === '13000', JSON.stringify(finalCells.cells))
 
     // 修订模式下删行：真删或落成删除修订都算生效，返回值要说清是哪种
     const drRc = await exec('table_delete_row', { tableIndex: 0, position: 3 })

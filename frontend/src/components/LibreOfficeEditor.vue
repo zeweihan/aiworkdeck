@@ -114,6 +114,7 @@
         ref="review"
         :executor="executor"
         :refresh-key="reviewRefreshKey"
+        :document-location="reviewLocation"
         :project-id="projectId"
         :doc-file-id="file && file.id"
         :self-author="selfAuthor"
@@ -211,6 +212,7 @@ export default {
       docKind: 'writer',
       // 审阅面板（修订/批注）开关与刷新信号
       reviewOpen: false,
+      reviewLocation: {},
       reviewRefreshKey: 0,
       // 当前登录用户名。审阅面板的「我」这一桶按它归类作者（dev-board#377），
       // 与下面 load_document 传给引擎的 authorName 同源（currentAuthorName），
@@ -766,6 +768,10 @@ export default {
             fileId: this.file && this.file.id, meta: this.withHostPoint(msg.meta) })
         } else if (msg.type === 'modified') {
           this.onDocModified()
+        } else if (msg.type === 'review-overview') {
+          this.reviewOpen = true
+        } else if (msg.type === 'review-focus') {
+          this.reviewLocation = msg.payload || {}
         } else if (msg.type === 'selection') {
           // 光标/选区动了：工具栏重读激活态。不标脏——移动光标不是修改文档。
           if (this.ready) {

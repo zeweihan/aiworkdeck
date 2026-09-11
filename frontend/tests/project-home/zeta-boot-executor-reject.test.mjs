@@ -14,7 +14,7 @@
 // 用最小的 document/self 桩，制造"首个 await 之后同步抛异常"与"s.onload 内部同步
 // 抛异常"两种触发场景，断言 boot() 返回的 promise 必须在有限时间内 reject，
 // 而不是永远不 settle。
-import { test } from 'node:test'
+import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { bootZetaOffice } from '../../src/composables/zetaOfficeBoot.js'
 
@@ -22,16 +22,19 @@ import { bootZetaOffice } from '../../src/composables/zetaOfficeBoot.js'
 // 时间看 promise 有没有 settle"计时，不受被测代码内部计时器影响。
 const realSetTimeout = globalThis.setTimeout
 
-// bootZetaOffice 内部起了一个 1s 一跳的 setInterval（保持 Qt 窗口跟画布同尺寸），
-// 只有调用方拿到 resolve 出的 dispose() 才会清掉；本测试文件不少路径走的是
-// reject（早退），根本拿不到 dispose。不 unref 的话这个定时器会让 node --test
-// 进程永远退不出去（不是本条要修的缺陷——这里只是让测试进程能正常收尾）。
-const realSetInterval = globalThis.setInterval
-globalThis.setInterval = (fn, ms, ...args) => {
-  const t = realSetInterval(fn, ms, ...args)
-  if (t && typeof t.unref === 'function') t.unref()
-  return t
+// Node has no browser ResizeObserver; supply the platform API while exercising
+// the actual boot rejection paths and checking their resource cleanup.
+const resizeDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'ResizeObserver')
+const observers = []
+globalThis.ResizeObserver = class {
+  constructor() { this.disconnected = false; observers.push(this) }
+  observe() {}
+  disconnect() { this.disconnected = true }
 }
+after(() => {
+  if (resizeDescriptor) Object.defineProperty(globalThis, 'ResizeObserver', resizeDescriptor)
+  else delete globalThis.ResizeObserver
+})
 
 const delay = (ms, val) => new Promise((r) => realSetTimeout(() => r(val), ms))
 
@@ -62,6 +65,7 @@ test('首个 await 之后（fontFetches 完成之后的同步代码）抛出的�
     assert.notEqual(result, undefined)
     assert.equal(result.ok, false, 'boot() 的 promise 必须在合理时间内 reject——不能永远挂起（这正是本条缺陷的表现）')
     assert.match(String(result.error && result.error.message), /boom-create-element/)
+    assert.equal(observers.at(-1).disconnected, true, 'failed startup releases the observer')
   } finally {
     delete globalThis.document
   }
@@ -83,6 +87,7 @@ test('s.onload 内部同步抛出的异常（如 Module.uno_main 不存在）必
     assert.equal(result.ok, false, 's.onload 内部的同步抛出也必须 reject，不能被吞掉')
     assert.match(String(result.error && result.error.message),
       /uno_main|Cannot read propert/i)
+    assert.equal(observers.at(-1).disconnected, true)
   } finally {
     delete globalThis.document
     delete globalThis.Module
@@ -106,6 +111,8 @@ test('正常路径不受影响：onload 里 uno_main 正常 resolve 时 boot() �
     const result = await raceSettle(bootZetaOffice({ canvas: {}, sofficeBaseUrl: '' }))
     assert.equal(result.ok, true, '正常路径必须照常 resolve，本条修复不能引入新的失败')
     assert.ok(result.value && result.value.port, 'resolve 值必须带上 port')
+    result.value.dispose()
+    assert.equal(observers.at(-1).disconnected, true)
   } finally {
     delete globalThis.document
     delete globalThis.Module

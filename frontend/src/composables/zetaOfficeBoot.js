@@ -100,7 +100,8 @@ export function bootZetaOffice(options = {}) {
   // every exception — from any point in the async body, or from the onload callback —
   // into `reject`.
   return new Promise((resolve, reject) => {
-    const rejectWithError = (e) => reject(e instanceof Error ? e : new Error(String(e)))
+    let dispose = () => {}
+    const rejectWithError = (e) => { dispose(); reject(e instanceof Error ? e : new Error(String(e))) }
     ;(async () => {
     // Files to write into the LOWA MEMFS before main() (CJK font). Each
     // { path:'/instdir/...', bytes:Uint8Array }. Fetched here (async) because
@@ -268,6 +269,18 @@ export function bootZetaOffice(options = {}) {
     }
     globalThis.Module = Module
 
+    let ready = false, disposed = false, lastWidth = 0, lastHeight = 0
+    function resizeCanvas(force = false) {
+      if (disposed || !ready) return
+      const width = canvas.clientWidth, height = canvas.clientHeight
+      const changed = width !== lastWidth || height !== lastHeight
+      lastWidth = width
+      lastHeight = height
+      if (width > 0 && height > 0 && (force || changed)) {
+        try { globalThis.dispatchEvent(new Event('resize')) } catch (e) { /* ignore */ }
+      }
+    }
+
     function onMessage(e) {
       const d = (e && e.data) || {}
       if (d.cmd === 'log') log(d.msg)
@@ -276,19 +289,21 @@ export function bootZetaOffice(options = {}) {
         // blank/garbage surface) and kick one repaint. The spike's page did this
         // in its own ui_ready handler; the boot-module extraction (#46) must own
         // it so every consumer gets a visible, painted canvas.
-        try { canvas.style.visibility = 'visible'; globalThis.dispatchEvent(new Event('resize')) } catch (err) { /* ignore */ }
+        canvas.style.visibility = 'visible'
+        ready = true
+        resizeCanvas(true)
         log('UI ready')
         if (onReady) onReady()
       }
       if (onWorkerMessage) onWorkerMessage(d)
     }
 
-    // Keep the embedded Qt window sized to the canvas.
-    const resizeTimer = setInterval(function () {
-      try { globalThis.dispatchEvent(new Event('resize')) } catch (e) { /* ignore */ }
-    }, 1000)
+    // Qt needs a resize when the pane changes, not a periodic callback into
+    // native windows that may be closing during document replacement.
+    const resizeObserver = new ResizeObserver(() => resizeCanvas())
+    resizeObserver.observe(canvas)
 
-    const dispose = () => { clearInterval(resizeTimer) }
+    dispose = () => { if (disposed) return; disposed = true; resizeObserver.disconnect() }
 
     const s = document.createElement('script')
     s.src = sofficeBaseUrl + 'soffice.js'
