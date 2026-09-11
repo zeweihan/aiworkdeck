@@ -7,6 +7,8 @@ const LABELS = {
   en: { title: 'Writing assistance', close: 'Close', local: 'Local suggestions · Tab accept · Esc dismiss', empty: 'No local suggestions yet. Vocabulary grows as you write.', enabled: 'Automatic suggestions', learning: 'Learn from my typing', hints: 'Related information', manage: 'Learned vocabulary', project: 'This project', user: 'My vocabulary', remove: 'Delete', clear: 'Clear learned entries in this scope', confirm: 'Click again to confirm', loading: 'Loading…', stale: 'The cursor or document changed. Select the text again.', detail: 'View saved information', insert: 'Insert the content above', lookup: 'Online lookup (charges may apply)', company: 'Look up company information', law: 'Look up a law or article', case: 'Look up a case', noDetail: 'No insertable information. Select text and right-click to look it up.', source: 'Source', date: 'Retrieved', error: 'The operation failed. Please try again.', saved: 'Inserted. Use Undo to revert.', current: 'Current document', refresh: 'Refresh local vocabulary', COMPANY: 'Company', PERSON: 'Person', LAW: 'Law', ARTICLE: 'Article', CASE: 'Case', WORD: 'Word', PHRASE: 'Phrase' },
 }
 let instanceSeq = 0
+// Longest selection the right-click lookup menu accepts.
+const CONTEXT_MENU_MAX = 160
 
 /** Guest-side UI. No network access: all requests travel through the document host. */
 export function attachWritingAssistance({ canvas, input, execute, transport, focus, language = 'zh-CN' }) {
@@ -18,7 +20,7 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
   let ownText = '', mode = '', disposed = false, composing = false, accepting = false, scope = 'project', clearArmed = false
   const pending = new Map()
   const learningWrites = new Set()
-  let requestSeq = 0, lastRefreshAt = Date.now()
+  let requestSeq = 0, lastRefreshAt = Date.now(), contextMenuWritable = false
   const root = doc.createElement('div')
   root.className = 'awd-writing-assistance'
   const style = doc.createElement('style')
@@ -98,6 +100,10 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
       toggle.hidden = !config.writable
       if (!config.learning || !config.writable) { ownText = ''; clearTimeout(learningTimer); learningTimer = 0 }
       if (disabled || !config.writable) invalidate({ flush: false })
+      if (contextMenuWritable !== !!config.writable) {
+        contextMenuWritable = !!config.writable
+        execute('set_host_context_menu', { enabled: contextMenuWritable, maxLength: CONTEXT_MENU_MAX }).catch(() => {})
+      }
       return
     }
     if (msg.type !== 'writing-response') return
@@ -230,7 +236,7 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
       if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); accept(active); return true }
       if (!e.shiftKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); active = (active + (e.key === 'ArrowDown' ? 1 : -1) + choices.length) % choices.length; renderChoices(); return true }
     }
-    if (e.key === 'Escape' && mode) { e.preventDefault(); e.stopPropagation(); invalidate(); return true }
+    if (e.key === 'Escape' && mode) { e.preventDefault(); invalidate(); return true }
     if (e.key.length > 1 || e.metaKey || e.ctrlKey || e.altKey) invalidate()
     else { generation++; accepting = false; hide() }
     return false
@@ -278,17 +284,10 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
   const contextMenu = async (e) => {
     if (disposed || !config.writable || composing) return
     e.preventDefault(); invalidate(); const gen = generation, point = { x: e.clientX, y: e.clientY }
-    const ctx = await execute('get_completion_context', { radius: 160 }).catch(() => null)
-    if (disposed || gen !== generation || !ctx?.success || !ctx.selectedText || !ctx.token || ctx.selectedText.length > 160) return
-    // A real canvas right-click has already opened Qt's native popup. Route
-    // Escape through Qt's keyboard handler: it dismisses that popup while
-    // preserving the selection/token. .uno:Escape would cancel the selection.
-    // Synthetic/input context menus have no Qt popup and must not receive it.
-    if (e.isTrusted && e.target === canvas) {
-      for (const type of ['keydown', 'keyup']) canvas.dispatchEvent(new view.KeyboardEvent(type, {
-        key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true,
-      }))
-    }
+    // The worker suppressed Writer's own popup for exactly the selections it
+    // reports here (#601), so this menu never has to close a native one.
+    const ctx = await execute('get_context_menu_context', { radius: 160 }).catch(() => null)
+    if (disposed || gen !== generation || !ctx?.success || !ctx.selectedText || !ctx.token) return
     // This HTML menu now owns keyboard dismissal; returning focus alone keeps
     // Escape usable without reporting a document-caret movement on mouseup.
     focus()
@@ -313,7 +312,7 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
     rpc('refresh').catch(() => {})
   }
   const pointer = (e) => { if (!root.contains(e.target)) invalidate() }
-  const panelKeydown = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); invalidate(); focus() } }
+  const panelKeydown = (e) => { if (e.key === 'Escape') { e.preventDefault(); invalidate(); focus() } }
   input.addEventListener('compositionstart', startComposition)
   input.addEventListener('compositionend', endComposition)
   input.addEventListener('blur', blur)

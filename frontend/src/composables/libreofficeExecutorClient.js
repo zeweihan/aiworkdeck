@@ -32,6 +32,8 @@ export const EDITOR_ACTIONS = [
   'get_document_text', 'get_cursor_context', 'get_clauses', 'select_paragraph', 'collapse_selection',
   // 人工补全：内存快照校验后同步接受，不使用 AI 编辑通道。
   'get_completion_context', 'accept_completion', 'insert_completion_content',
+  // 右键：选区外查菜单与引擎原生菜单二选一（#601）。
+  'set_host_context_menu', 'get_context_menu_context',
   'delete_selection', 'format_selection', 'set_paragraph_format', 'undo', 'redo',
   // [spike/IME] implemented by the worker since Phase B but never whitelisted
   // (found by the primitive self-test: "Unknown action: move_cursor").

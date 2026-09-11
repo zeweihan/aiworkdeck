@@ -2107,6 +2107,53 @@ function installReviewCommentInterceptor(controller) {
   }
 }
 
+// #601: a right-click on a short selection opens the host's HTML menu instead of
+// Writer's popup. Suppress that popup up front. Opening it and closing it with a
+// synthetic Escape left Qt's popup state behind: the next right press moved the
+// caret and dropped the selection. The host shows its menu only when this same
+// predicate held, so exactly one of the two menus opens.
+let hostContextMenu = { enabled: false, maxLength: 0 };
+let contextMenuInterceptor = null;
+function selectionTouchesDeletion(vc) {
+  const text = vc.getText(), start = vc.getStart(), end = vc.getEnd();
+  const e = xModel.getRedlines().createEnumeration();
+  while (e.hasMoreElements()) {
+    const r = e.nextElement();
+    try {
+      if (String(r.getPropertyValue('RedlineType')) !== 'Delete') continue;
+      // compareRegion*(a, b) > 0 means a is before b; ranges in other texts throw.
+      if (text.compareRegionStarts(r.getPropertyValue('RedlineStart'), end) > 0
+        && text.compareRegionStarts(start, r.getPropertyValue('RedlineEnd')) > 0) return true;
+    } catch (ignored) {}
+  }
+  return false;
+}
+function hostHandlesContextMenu() {
+  if (!hostContextMenu.enabled || !contextMenuInterceptor || contextMenuInterceptor.controller !== ctrl || !isWriterDoc()) return false;
+  try {
+    const vc = ctrl.getViewCursor();
+    const length = String(vc.getString() || '').length;
+    if (!length || length > hostContextMenu.maxLength) return false;
+    // Inline markup keeps deleted text in the selection while the host reads the
+    // final text; such a selection keeps Writer's accept/reject menu.
+    return revisionViewState().mode !== 'all' || !selectionTouchesDeletion(vc);
+  } catch (e) { return false; }
+}
+function installContextMenuInterceptor(controller) {
+  const previous = contextMenuInterceptor;
+  if (previous && previous.controller === controller) return;
+  contextMenuInterceptor = null;
+  if (previous) { try { previous.controller.releaseContextMenuInterceptor(previous.interceptor); } catch (e) {} }
+  try {
+    const action = css.ui.ContextMenuInterceptorAction;
+    const interceptor = zetajs.unoObject([css.ui.XContextMenuInterceptor], {
+      notifyContextMenuExecute() { return hostHandlesContextMenu() ? action.CANCELLED : action.IGNORED; },
+    });
+    controller.registerContextMenuInterceptor(interceptor);
+    contextMenuInterceptor = { controller: controller, interceptor: interceptor };
+  } catch (e) { log('右键菜单拦截安装失败 / context menu interception failed: ' + errStr(e)); }
+}
+
 // ---- boot: open a fresh BLANK Writer doc ----------------------------------
 // Production: a brand-new / empty document must show a clean blank page (the
 // host loads real bytes via load_document when the file has content). We do NOT
@@ -2119,6 +2166,7 @@ function bootDoc() {
   xModel = desktop.loadComponentFromURL('private:factory/swriter', '_default', 0, []);
   ctrl = xModel.getCurrentController();
   installReviewCommentInterceptor(ctrl);
+  installContextMenuInterceptor(ctrl);
   try { ctrl.getFrame().getContainerWindow().FullScreen = true; } catch {}
   // RFC v2: revisions default ON — every edit (AI or typed) lands as a tracked
   // change the lawyer can accept/reject. Set once here (and on retarget) instead
@@ -2714,6 +2762,16 @@ const EXEC = {
     return { success: true, revision: currentReviewRevision() };
   },
   get_completion_context(p) { return captureCompletion(p && p.radius); },
+  set_host_context_menu(p) {
+    hostContextMenu = { enabled: !!(p && p.enabled), maxLength: Math.max(0, Number(p && p.maxLength) || 0) };
+    return { success: true };
+  },
+  // Same decision the context menu interceptor made for this right-click, then
+  // the final text through the FINAL_TEXT_ACTIONS view (see runAgentCommandInMarginView).
+  get_context_menu_context(p) {
+    if (!hostHandlesContextMenu()) return completionUnavailable('native-menu');
+    return runAgentCommandInMarginView('get_completion_context', function () { return captureCompletion(p && p.radius); });
+  },
   accept_completion(p) {
     const checked = checkCompletion(p.token);
     if (!checked.success) return checked;
@@ -3517,6 +3575,7 @@ const EXEC = {
       xModel = loaded;
       ctrl = loaded.getCurrentController();
       installReviewCommentInterceptor(ctrl);
+      installContextMenuInterceptor(ctrl);
       try { const vc = ctrl.getViewCursor(); vc.gotoEnd(false); r.pageCount = vc.getPage(); }
       catch (e) { r.pageErr = errStr(e); }
     } catch (e) { r.success = false; r.message = errStr(e); }
@@ -3560,6 +3619,7 @@ const EXEC = {
       xModel = loaded;
       ctrl = loaded.getCurrentController();
       installReviewCommentInterceptor(ctrl);
+      installContextMenuInterceptor(ctrl);
       try { ctrl.getFrame().getContainerWindow().FullScreen = true; } catch (e) {}
       try { installKeyHandler(); } catch (e) {}
       // The listener is per-model — the freshly-loaded component needs its own.

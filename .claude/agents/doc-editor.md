@@ -44,7 +44,7 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - 本地候选覆盖机构、人名、法规、条款、案例/案号、常用词及表述。`completionLexicon.js` 负责确定性提取和前缀匹配；打开文档仅采集有界实体到项目词库，个人词库只从本人输入/采用学习，低频词与表述不立即出候选。用户级开关同步当前各文档，可删除/清空学习项。
 - 文档候选按同一 revision 分页读取（最多 1,000 段/200,000 字/500 候选），首次读取与显式刷新才扫描；首次读取被编辑打断时，等待 1.2 秒停笔后重试，成功后不随每次按键重扫；机构、人名、法规、表述按类别保留名额。完整法规名称用于展示，裸法规/条款前缀使用匹配的补入形式；不得补出半个书名号。持股叙述的人名、机构前的“股东名册中”等已覆盖回归。
 - 打字只读客体内存，不调用外部库或模型。选中正文右键明确查询才走 `/completion/lookup`；资料由 `completionDetails.js` 转成带来源的预览，点击插入才修改正文。
-- 选区查询只在真实 Writer 画布且选区有效时收起 Qt 原生菜单，并保留选区与插入令牌再展示预览；普通右键菜单不受影响（aiworkdeck#790）。
+- 右键「二选一」由 worker 裁决（dev-board#601）：`installContextMenuInterceptor` 在每次换 controller 时注册 `XContextMenuInterceptor`，`hostHandlesContextMenu()` 为真（宿主可写、Writer、选区 1–160 字、行内「全部修订」视图下选区不碰删除修订）时返回 CANCELLED，原生菜单根本不弹；宿主右键走 `get_context_menu_context`（同一谓词，再经 FINAL_TEXT 视图取终稿文字），只在谓词成立时出 HTML 菜单。开关由 `set_host_context_menu` 随 writable 变化下发。**地雷：别再用合成 Escape 去关已弹出的 Qt 菜单**——关掉后 Qt 残留弹窗状态，下一次右键按下会移动光标、丢选区（真机复现：第二次打开即丢）；不带 Escape 时下一次按下又会点中残留菜单的「插入批注」。回归 `tests/lowa-e2e/context-menu.mjs`（真实按住/松开，像素判定两种菜单只出其一）。
 - UNO 三动作 `get_completion_context` / `accept_completion` / `insert_completion_content` 以不透明 token 校验模型、光标/选区两端及上下文；补全只追加后缀，表格/纯文本原样插入，整组一次撤销。真实修改使 token 失效，只读导出期间保留 snapshot（含恢复 modified 标志），不能因自动保存误拒插入，也不能放宽位置校验。行内修订视图停用。
 - 首期能力止于确定性词库匹配、显式资料查询和原子插入；自动语义诊断、逻辑审校、段落推理与自动改写不在本期范围。
 - 回归：`npm run test:completion`、`test:lowa-completion`、`test:writing-ui`、`test:writing-caret`、`test:lowa-link-preview`、`test:writing-desktop`；引擎测试包含移动/输入/重载拒旧 token、跨导出仍可插入、撤销/重做及资料表格。桌面用例从真实项目词库经中文输入/Tab 到自动保存后下载 DOCX 核对，夹具文件隔离在临时目录。
