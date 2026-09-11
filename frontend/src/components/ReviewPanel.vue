@@ -132,6 +132,20 @@ const TYPE_I18N = {
 }
 const TYPE_CLASS = { insert: 'ins', delete: 'del', format: 'fmt', paraFormat: 'pfmt', other: 'oth' }
 
+// 围栏快照：只带 worker 围栏（office_thread.js 的 matchRevisionSnapshot /
+// matchCommentSnapshot）实际比对的字段，逐个取值拼成普通对象。
+// WHY：g.items 取自响应式的 this.revisions，每一项都是 Vue Proxy，而命令要过
+// 结构化克隆（Electron webview.send 的 IPC / iframe postMessage）——Proxy 过不去
+// （DataCloneError）。webview 下 send() 返回的 Promise 被拒、无人接，relay 干等满
+// resolve_revisions 的 120s 预算，其间 resolving 把面板按钮全部锁死。
+const REVISION_FENCE_FIELDS = ['index', 'identifier', 'type', 'text', 'author', 'timestamp']
+const COMMENT_FENCE_FIELDS = ['id', 'author', 'content', 'timestamp', 'anchorText', 'resolved']
+function fenceSnapshot(src, fields) {
+  const out = {}
+  for (const k of fields) out[k] = src[k]
+  return out
+}
+
 export default {
   name: 'ReviewPanel',
   components: { EvidencePanel },
@@ -277,7 +291,8 @@ export default {
       try {
         const indices = g.items.map((r) => r.index).sort((a, b) => b - a)
         const snapshot = g.documentSeq == null ? {} : {
-          revision: g.revision, documentSeq: g.documentSeq, expectedRevisions: g.items,
+          revision: g.revision, documentSeq: g.documentSeq,
+          expectedRevisions: g.items.map((r) => fenceSnapshot(r, REVISION_FENCE_FIELDS)),
         }
         const res = await this.run('resolve_revisions', { indices, action, ...snapshot })
         const results = (res && res.results) || []
@@ -310,7 +325,9 @@ export default {
       await this.reload()
     },
     async toggleResolved(c) {
-      const snapshot = c.documentSeq == null ? {} : { documentSeq: c.documentSeq, revision: c.revision, expectedComment: c }
+      const snapshot = c.documentSeq == null ? {} : {
+        documentSeq: c.documentSeq, revision: c.revision, expectedComment: fenceSnapshot(c, COMMENT_FENCE_FIELDS),
+      }
       const res = await this.run('set_comment_resolved', { id: c.id, index: c.index, resolved: !c.resolved, ...snapshot })
       if (res) this.$emit('changed')
       await this.reload()
