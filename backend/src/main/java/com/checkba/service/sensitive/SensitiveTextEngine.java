@@ -42,8 +42,15 @@ public final class SensitiveTextEngine {
 
     private List<Hit> detect(String text) {
         List<Hit> hits = new ArrayList<>();
+        if (strategies.contains("CHINESE_NAME")) {
+            for (var span : ChineseNameRecognizer.find(text, ChineseNameRecognizer.protectedRanges(text))) {
+                String value = text.substring(span.start(), span.end());
+                if (!excluded.contains(value)) hits.add(new Hit(span.start(), span.end(), "CHINESE_NAME", value));
+            }
+        }
         for (SensitiveType type : SensitiveType.values()) {
             if (!type.isAutoDetect() || !strategies.contains(type.getCode())) continue;
+            if (type == SensitiveType.CHINESE_NAME) continue; // Context rules return just the name span.
             Matcher matcher = type.getPattern().matcher(text);
             while (matcher.find()) {
                 int start = matcher.start(), end = matcher.end();
@@ -52,6 +59,7 @@ public final class SensitiveTextEngine {
                 }
                 if (type == SensitiveType.COMPANY) {
                     // Strip syntactic introductions, not arbitrary surname-like Chinese fragments.
+                    start += ChineseNameRecognizer.organizationStart(text.substring(start, end));
                     String candidate = text.substring(start, end);
                     Matcher prefix = Pattern.compile("^(?:(?:本合同|本协议|该合同)?由|(?:原告|被告|甲方|乙方|丙方|公司名称|企业名称)|与|及|向|委托|系)").matcher(candidate);
                     while (prefix.find()) {
@@ -76,10 +84,14 @@ public final class SensitiveTextEngine {
 
     public List<Edit> edits(String text) {
         List<Hit> hits = detect(text);
+        BitSet protectedNames = strategies.contains("CHINESE_NAME") ? ChineseNameRecognizer.protectedRanges(text) : new BitSet();
         known.forEach((value, code) -> {
             int from = 0, at;
             while ((at = text.indexOf(value, from)) >= 0) {
-                if (!excluded.contains(value)) hits.add(new Hit(at, at + value.length(), code, value));
+                if (!excluded.contains(value) && (!code.equals("CHINESE_NAME")
+                        || ChineseNameRecognizer.allowsOccurrence(text, at, at + value.length(), protectedNames))) {
+                    hits.add(new Hit(at, at + value.length(), code, value));
+                }
                 from = at + value.length();
             }
         });
