@@ -2202,8 +2202,12 @@ function installReviewCommentInterceptor(controller) {
             const value = zetajs.fromAny(p.Value);
             return p.Name === 'Text' && value != null && String(value).length > 0;
           });
+          // The host form exists whenever this Writer view has the external review
+          // surface, in every view mode and with the gutter released (width 0).
+          // Without readable support the previous width test still applies.
           let external = false;
-          try { external = Number(controller.getPropertyValue('AwdReviewSidebarWidth')) > 0; } catch (e) {}
+          try { external = isWriterDoc() && supportsReviewGeometry(); } catch (e) {}
+          if (!external) { try { external = Number(controller.getPropertyValue('AwdReviewSidebarWidth')) > 0; } catch (e) {} }
           if (external && !hasText) post('comment-request', { documentSeq: docSeq });
           else native.dispatch(command, args);
         },

@@ -32,6 +32,7 @@ const server=await startServer({extraFiles,patchServed(url,buf){
     s=s.replace("external = Number(controller.getPropertyValue('AwdReviewSidebarWidth')) > 0;", 'external = testExternal;')
     s=s.replace("if (external && !hasText) post('comment-request', { documentSeq: docSeq });", "if (external && !hasText) { ++testRequests; post('comment-request', { documentSeq: docSeq }); }")
     s=s.replace('const EXEC = {', 'const EXEC = {'+action)
+    for(const probe of ['external = testExternal;','++testRequests;','native_comment_probe(p)'])assert.ok(s.includes(probe),'served worker patch landed: '+probe)
     return Buffer.from(s)
   }
   if(url.startsWith('/assets/')) {s=s.replace('["update_comment",', '["native_comment_probe","update_comment",');return Buffer.from(s)}

@@ -66,12 +66,34 @@ test('comments with supplied text and unrelated commands retain native dispatch 
   assert.deepEqual(Array.from(e.registrations[0].getInterceptedURLs()), ['.uno:InsertAnnotation'])
 })
 
-test('a cached dispatch checks current native gutter state rather than the state when the menu was built', () => {
+test('without readable review support a cached dispatch checks the current gutter, not the state when the menu was built', () => {
   const e = environment({ width: 0 }); e.install(); const dispatch = e.query(), url = { Complete: '.uno:InsertAnnotation' }
   dispatch.dispatch(url, [])
   e.width(280); dispatch.dispatch(url, [])
   e.width(0); dispatch.dispatch(url, [])
   assert.equal(e.calls.length, 2); assert.equal(e.events.length, 1)
+})
+
+test('with the external review surface an empty request reaches the host form even while no gutter is reserved', () => {
+  const e = environment({ width: 0 })
+  Object.assign(e.realm, { isWriterDoc: () => true, supportsReviewGeometry: () => true })
+  e.install()
+  const url = { Complete: '.uno:InsertAnnotation' }, text = [{ Name: 'Text', Value: new UnoAny('Typed in the host form') }]
+  e.query().dispatch(url, [])                                  // Qt context menu / Ctrl+Alt+C with the canvas focused
+  e.query().dispatch(url, [{ Name: 'Text', Value: '' }])
+  assert.deepEqual(e.events, [{ cmd: 'comment-request', documentSeq: 4 }, { cmd: 'comment-request', documentSeq: 4 }])
+  assert.equal(e.calls.length, 0, 'no empty native point comment')
+  e.query().dispatch(url, text)
+  assert.deepEqual(e.calls, [{ command: '.uno:InsertAnnotation', args: text }])
+})
+
+test('without the review surface an empty request stays native unless a gutter is reserved', () => {
+  for (const [writer, geometry] of [[true, false], [false, true]]) {
+    const e = environment({ width: 0 })
+    Object.assign(e.realm, { isWriterDoc: () => writer, supportsReviewGeometry: () => geometry })
+    e.install(); e.query().dispatch({ Complete: '.uno:InsertAnnotation' }, [])
+    assert.equal(e.calls.length, 1); assert.equal(e.events.length, 0)
+  }
 })
 
 test('retargeting releases the old frame interceptor and cached old menu actions cannot target the new document', () => {
