@@ -133,17 +133,20 @@ try {
   await ok('set_selection', {anchor:found.matches[0].anchorId})
   // Toolbar reads the real native selection before opening its existing dialog.
   await until('Toolbar selection', () => host.evaluate(() => {
-    const el=document.querySelector('.etb');const vm=el?.__vueParentComponent?.proxy
-    return vm?.noSelection === false
+    // .etb belongs to uni's built-in View; the toolbar component sits further up.
+    const el=document.querySelector('.etb');let o=el?.__vueParentComponent
+    while (o && !(o.proxy && 'noSelection' in o.proxy)) o=o.parent
+    return o?.proxy?.noSelection === false
   }), Boolean)
   await click('.etb-field[title="插入"]')
   await click('.etb-item', '批注…')
-  await host.waitForSelector('textarea[placeholder="批注内容"]', {visible:true})
+  // uni-h5 draws the placeholder in its own element, not as a textarea attribute.
+  await host.waitForSelector('.etb-form textarea', {visible:true})
   assert.ok((await host.$eval('.etb-form-t', n=>n.textContent)).includes(anchor.slice(0,8)), 'Dialog retains native selected anchor')
   await click('.etb-form-b.ok')
   await host.waitForFunction(() => document.querySelector('.etb-err')?.textContent.includes('请填写批注内容'))
   assert.equal((await ok('list_comments')).comments.length, 1, 'Empty dialog does not create comment')
-  await click('textarea[placeholder="批注内容"]')
+  await click('.etb-form textarea')
   await host.keyboard.type(newComment)
   await host.screenshot({path:path.join(artifacts,'new-comment-dialog.png')})
   await click('.etb-form-b.ok')
