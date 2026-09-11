@@ -66,13 +66,16 @@
       @changed="onDocModified"
       @ui-state="$emit('menu-state')"
     />
-    <view class="libre-body">
+    <!-- review-overview-open：审阅概览现在浮在画布右侧（不挤宽画布），画布上的
+         宿主浮层据此让出面板宽度，见样式 .libre-review-overview 之后那一段。 -->
+    <view class="libre-body" :class="{ 'review-overview-open': reviewOverviewShown }">
       <!-- 浮层必须钉在**画布**上而不是整个编辑器上：审阅面板是并排挤宽的，钉在
            外层右上角会正好压住面板的「修订/批注」标题行（真机截图实证）。 -->
       <view class="libre-canvas-wrap">
         <view :id="hostId" class="libre-host"></view>
         <!-- 改字 stale 提示条：绝对定位叠在画布顶部，非阻塞；不依赖审阅面板开着 -->
         <EvidenceStaleBar
+          class="libre-stale-bar"
           :items="staleItems"
           @keep="onStaleKeep"
           @locate="onEvidenceLocate"
@@ -111,7 +114,7 @@
       </view>
       <ReviewPanel
         class="libre-review-overview"
-        v-if="reviewOpen && ready && showsReview"
+        v-if="reviewOverviewShown"
         ref="review"
         :executor="executor"
         :refresh-key="reviewRefreshKey"
@@ -271,6 +274,11 @@ export default {
     // Calc/Impress 都没有修订（redline）机制——审阅面板对它们没有数据可展示。
     showsReview() {
       return this.docKind !== 'calc' && this.docKind !== 'impress'
+    },
+    // 审阅概览此刻是否渲染。v-if 与 .libre-body 的让位 class 共用这一个判据，
+    // 两处不许各写一份——面板不在时浮层白白让出 288px，面板在时又压住浮层。
+    reviewOverviewShown() {
+      return this.reviewOpen && this.ready && this.showsReview
     },
     // Stays quiet once ready — no permanent "就绪" badge.
     displayStatus() {
@@ -1616,6 +1624,12 @@ export default {
 .libre-host { width: 100%; height: 100%; }
 /* Explicit review overview overlays the native gutter without shrinking the canvas. */
 .libre-review-overview { position: absolute; top: 0; right: 0; bottom: 0; z-index: 30; max-width: 100%; box-shadow: -8px 0 24px #00000018; }
+/* 概览打开时，画布上的宿主浮层让出面板那 288px（= ReviewPanel .rp 的宽度），画布本身
+   不挤宽。不让的话：保存失败的「重试」、改字 stale 条右侧的 保留/打开/忽略、拖拽关联
+   投放框的右半边与居中提示都被压在面板底下，看不见也点不到。 */
+.libre-body.review-overview-open .libre-float { right: calc(288px + 16px); }
+.libre-body.review-overview-open .libre-stale-bar,
+.libre-body.review-overview-open .libre-evidence-drop { right: 288px; }
 /* EvidenceLink 拖放：整个编辑器描一圈边，画布上铺透明接收层；悬停时加深 */
 .libre-editor-wrapper.evidence-drop-armed { box-shadow: inset 0 0 0 2px #1A5336; }
 .libre-evidence-drop { position: absolute; inset: 0; z-index: 25; display: flex; align-items: flex-end; justify-content: center;
