@@ -100,7 +100,8 @@ export function bootZetaOffice(options = {}) {
   // every exception — from any point in the async body, or from the onload callback —
   // into `reject`.
   return new Promise((resolve, reject) => {
-    const rejectWithError = (e) => reject(e instanceof Error ? e : new Error(String(e)))
+    let dispose = () => {}
+    const rejectWithError = (e) => { dispose(); reject(e instanceof Error ? e : new Error(String(e))) }
     ;(async () => {
     // Files to write into the LOWA MEMFS before main() (CJK font). Each
     // { path:'/instdir/...', bytes:Uint8Array }. Fetched here (async) because
@@ -302,7 +303,7 @@ export function bootZetaOffice(options = {}) {
     const resizeObserver = new ResizeObserver(() => resizeCanvas())
     resizeObserver.observe(canvas)
 
-    const dispose = () => { disposed = true; resizeObserver.disconnect() }
+    dispose = () => { if (disposed) return; disposed = true; resizeObserver.disconnect() }
 
     const s = document.createElement('script')
     s.src = sofficeBaseUrl + 'soffice.js'
