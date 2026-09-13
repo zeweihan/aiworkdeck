@@ -130,7 +130,7 @@ const COMPONENTS = [
     // 下载器本身跑在该服务的 venv 里（modelscope / huggingface_hub 都在 lib/ 下），
     // 所以下模型之前必须先装它的 runtime pack（download() 的守卫查这一项）
     runtimeService: 'mineru-service',
-    name: { zh: '文档解析模型（MinerU）', en: 'Document Parsing Model (MinerU)' },
+    name: { zh: '扫描件 OCR 模型（MinerU）', en: 'Scanned-document OCR Model (MinerU)' },
     sizeHint: '3 GB',
     estBytes: 3.0 * 1024 * 1024 * 1024, // 整体进度分母（估计值，进度封顶 99% 直到进程成功退出）
     // 模型根目录（相对 dataDir）

@@ -38,7 +38,7 @@ export default {
   inviteExpires: '有效期至 {date}',
   inviteExpiresUnknown: '有效期以官网为准',
   acceptInvite: '接受',
-  phoneRequired: '先在官网账户绑定手机号，才能创建或加入团队',
+  phoneRequired: '当前连接的账户没有绑定手机号，不能创建或加入团队，需到官网账户页绑定，或断开后改用手机号验证码重新连接',
 
   // ---- KPI ----
   kpiTitle: '团队使用概览',

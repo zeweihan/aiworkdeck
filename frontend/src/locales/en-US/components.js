@@ -38,14 +38,14 @@ export default {
   asrRuntimeMissingAction: 'Download on-device speech recognition',
 
   pptxRuntime: {
-    name: 'Slides and PDF component',
-    unlocks: 'AI slide generation, PPTX formatting, layout-preserving PDF to Word, scanned-document OCR entry',
-    impact: 'those features are unavailable; PDFs can still be previewed and converted structurally',
+    name: 'Slides and PDF-to-Word',
+    unlocks: 'AI slide generation, PPTX reading and formatting, layout-preserving Word conversion for text-based PDFs; scanned PDFs also need the OCR engine below',
+    impact: 'those features are unavailable; PDF preview and structural conversion still work',
   },
   mineruRuntime: {
-    name: 'Document parsing engine',
-    unlocks: 'scanned PDF to Word and OCR layout parsing',
-    impact: 'scanned-document conversion falls back to cloud MinerU or is unavailable',
+    name: 'Scanned-document OCR engine (MinerU)',
+    unlocks: 'Word conversion and layout recognition for scanned PDFs with no text layer; only needed for scans, and requires "Slides and PDF-to-Word"',
+    impact: 'scanned PDFs cannot be converted to Word; text-based PDFs are unaffected',
   },
   kokoroRuntime: {
     name: 'Speech synthesis',
@@ -62,7 +62,7 @@ export default {
     pptxGenerate: 'AI slide generation',
     pptxFormat: 'PPTX read/edit formatting',
     pdfToWordLayout: 'PDF to Word (layout-preserving)',
-    scannedOcrEntry: 'scanned-document OCR entry',
+    scannedOcrEntry: 'scanned-document OCR entry (also needs the OCR engine)',
     scannedPdfToWord: 'scanned PDF to Word',
     ocrParse: 'OCR layout parsing',
     ttsPanel: 'speech synthesis panel',

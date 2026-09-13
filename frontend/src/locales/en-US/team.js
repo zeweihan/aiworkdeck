@@ -33,7 +33,7 @@ export default {
   inviteExpires: 'Valid until {date}',
   inviteExpiresUnknown: 'Validity is decided on the website',
   acceptInvite: 'Accept',
-  phoneRequired: 'Bind a phone number on your website account before creating or joining a team',
+  phoneRequired: 'The connected account has no phone number bound, so it cannot create or join a team; bind one on the website account page, or disconnect and reconnect with a phone verification code instead',
 
   kpiTitle: 'Team usage overview',
   kpiActiveMembers: 'People active',
