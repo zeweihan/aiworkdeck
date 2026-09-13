@@ -3003,6 +3003,10 @@ export default {
       uni.$off('awd:wallet-refresh', this._onWalletRefresh)
       this._onWalletRefresh = null
     }
+    if (this._onIdentityUpdated) {
+      uni.$off('awd:identity-updated', this._onIdentityUpdated)
+      this._onIdentityUpdated = null
+    }
     if (this._onOpenSettings) {
       uni.$off('awd:open-settings', this._onOpenSettings)
       this._onOpenSettings = null
@@ -3329,6 +3333,16 @@ export default {
       if (this.stagingFolderId) this.loadStagingUsage()
     }
     uni.$on('awd:entitlements-changed', this._onEntitlementsChanged)
+    // 设置页/侧栏用户卡改了头像或昵称（dev-board#603）：顶栏那颗头像与参与人堆叠
+    // 都是本页在画，本页不订阅就只能等下次重开工作台才跟上——用户看到的是
+    // 「提示上传成功，但桌面端不显示」。刻意不加 isActiveOverviewInstance 守卫：
+    // 这里只是各实例把自己那份 currentUser 拉新（幂等本地 GET，无跨实例副作用），
+    // 加了守卫反而让页面栈里的旧实例一直挂着旧头像。
+    this._onIdentityUpdated = () => {
+      this.loadRealUserInfo()
+      if (this.projectId) this.loadProjectMembers()
+    }
+    uni.$on('awd:identity-updated', this._onIdentityUpdated)
     // UnlockHint 应用内化（dev-board#187）：解锁引导不再外跳官网，改为打开设置
     // 「账户与用量」标签。只让活跃实例响应——openSettingsTab 会动本实例的标签列表。
     this._onOpenSettings = (opts) => {

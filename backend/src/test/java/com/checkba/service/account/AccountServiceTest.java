@@ -933,6 +933,52 @@ class AccountServiceTest {
     }
 
     @Test
+    @DisplayName("传头像之后：60 秒 profile 缓存里的 avatarUpdatedAt 要跟着新值走，否则下一次身份同步把刚写好的头像回滚")
+    void uploadAvatarKeepsProfileCacheFresh() {
+        AccountService service = connected();
+        // ① 上传前打开一次设置页：把「这个账户还没传过头像」那一份烤进 60 秒缓存
+        transport.enqueue(200, "{\"accountId\":\"acc_9f3a\",\"displayName\":\"韩泽伟\",\"avatarUpdatedAt\":null}");
+        assertNull(service.profileIdentity().get("avatarUrl"));
+
+        // ② 传头像成功，官网回了新的版本号
+        transport.enqueue(200, "{\"avatarUpdatedAt\":\"2026-09-13T12:25:08.001Z\"}");
+        Map<String, Object> uploaded = service.uploadAvatar(new byte[]{1}, "me.png", "image/png");
+
+        // ③ 紧接着的一次身份视图（GET /api/account/status 与 /api/account/profile 都走这里）
+        //    必须已经是新头像：AccountIdentitySync.refresh() 拿这份去回写本机 User 行，
+        //    它要是还捧着上传前那个 null，刚写好的头像当场被清空。
+        assertEquals(uploaded.get("avatarUrl"), service.profileIdentity().get("avatarUrl"),
+                "缓存里那份 avatarUpdatedAt 还停在上传前，身份同步会把本机头像回滚成空");
+    }
+
+    @Test
+    @DisplayName("删头像之后：缓存里那份 avatarUpdatedAt 也要跟着清，否则删掉的头像过一会儿自己回来")
+    void deleteAvatarKeepsProfileCacheFresh() {
+        AccountService service = connected();
+        transport.enqueue(200, PROFILE_ME);
+        assertNotNull(service.profileIdentity().get("avatarUrl"));
+
+        transport.enqueue(200, "{\"avatarUpdatedAt\":null}");
+        service.deleteAvatar();
+
+        assertNull(service.profileIdentity().get("avatarUrl"),
+                "缓存里还留着删之前的版本号，身份同步会把本机头像又写回去");
+    }
+
+    @Test
+    @DisplayName("官网回包缺 avatarUpdatedAt：算失败，不能回一个「成功但没有头像」让本机行被清空")
+    void uploadAvatarWithoutVersionIsNotASuccess() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"ok\":true}");
+
+        AccountException e = assertThrows(AccountException.class,
+                () -> service.uploadAvatar(new byte[]{1}, "me.png", "image/png"));
+
+        assertEquals(AccountException.Kind.MALFORMED, e.getKind());
+        assertNotMistakenForLogout(e.getMessage());
+    }
+
+    @Test
     @DisplayName("老 account.json 里没有 accountId：补拉一次 /me，不把头像地址拼成半截")
     void uploadAvatarBackfillsAccountIdForLegacyState() {
         // 本次改造之前落的盘只有 key/username/displayName
