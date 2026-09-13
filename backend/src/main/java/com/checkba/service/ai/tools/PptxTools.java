@@ -239,7 +239,7 @@ public class PptxTools implements AgentToolComponent {
                 e.packId(), e.service(), e.modelId(), sizeMb, e.featureKeys(), trigger);
         // 文案里刻意不出现「稍后重试」四个字（含在「不要说稍后重试」这类否定句里也不行）：
         // 模型抄工具返回文本是常态，出现即会被原样转述给用户，而组件没装时等下去毫无意义。
-        return "本机的「PPT 与 PDF 组件」还没安装，已请用户确认下载（界面上已经弹出提示）。"
+        return "本机的「PPT 生成与 PDF 转 Word」还没安装，已请用户确认下载（界面上已经弹出提示）。"
                 + "用户确认后组件会自动装好并重新执行这一步，你现在不需要重复调用本工具，"
                 + "也不要让用户等一会儿再试一次。这只影响 PPT 生成与 PDF 版式级转换，不影响读文件。";
     }

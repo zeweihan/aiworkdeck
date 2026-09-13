@@ -979,7 +979,7 @@ public class AccountService {
      */
     public static String rejectedMessage(String code) {
         return switch (code) {
-            case "phone_required" -> LangText.of("需要在官网账户绑定手机号后，才能创建或加入团队", "Bind a phone number to your website account before creating or joining a team");
+            case "phone_required" -> LangText.of("当前连接的账户没有绑定手机号，不能创建或加入团队。到官网账户页绑定即可；如果这个手机号已经注册过另一个账户，请断开当前账户，改用手机号验证码重新连接", "The connected account has no phone number bound, so it cannot create or join a team. Bind one on the website account page; if that phone number already belongs to another account, disconnect and reconnect with a phone verification code instead");
             case "already_in_team" -> LangText.of("这个账户已经在一个团队里了", "This account already belongs to a team");
             case "already_in_firm" -> LangText.of("这个团队已经在一家律所里了", "This team already belongs to a firm");
             case "bad_code" -> LangText.of("邀请码不存在或已失效", "That invite code does not exist or has expired");

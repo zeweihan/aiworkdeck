@@ -262,7 +262,7 @@ public class PdfTools implements AgentToolComponent {
                             editorBridgeService.sendComponentRequiredAction(
                                     me.packId(), me.service(), me.modelId(), sizeMb, me.featureKeys(), "pdf_to_word");
                             // 同 PptxTools：文案里不出现「稍后重试」，模型会原样转述
-                            return "该 PDF 是扫描件（无文本层），本机的「文档解析引擎」组件还没安装，"
+                            return "该 PDF 是扫描件（无文本层），本机的「扫描件 OCR 引擎」组件还没安装，"
                                     + "已请用户确认下载（界面上已经弹出提示，含 3GB 模型）。"
                                     + "用户确认后会自动装好并重新执行这一步，不要让用户等一会儿再试一次。";
                         }

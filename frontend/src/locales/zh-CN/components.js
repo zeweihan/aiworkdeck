@@ -42,14 +42,14 @@ export default {
   asrRuntimeMissingAction: '下载本机语音识别组件',
 
   pptxRuntime: {
-    name: 'PPT 与 PDF 组件',
-    unlocks: 'AI 生成 PPT、PPTX 读/改格式、PDF 转 Word（版式级）、扫描件 OCR 入口',
-    impact: '上述功能不可用；PDF 仍可预览与结构级转换',
+    name: 'PPT 生成与 PDF 转 Word',
+    unlocks: 'AI 生成 PPT、PPTX 读取与改格式、带文字层的 PDF 转 Word（保留版式）；扫描件还需要下面的 OCR 引擎',
+    impact: '这些功能不可用；PDF 预览与结构级转换不受影响',
   },
   mineruRuntime: {
-    name: '文档解析引擎',
-    unlocks: '扫描件 PDF 转 Word、OCR 版面解析',
-    impact: '扫描件转换退回云端 MinerU 或不可用',
+    name: '扫描件 OCR 引擎（MinerU）',
+    unlocks: '没有文字层的扫描件 PDF 转 Word、版面识别；只有处理扫描件时才需要，并且要先装「PPT 生成与 PDF 转 Word」',
+    impact: '扫描件 PDF 无法转 Word；带文字层的 PDF 不受影响',
   },
   kokoroRuntime: {
     name: '语音合成',
@@ -66,7 +66,7 @@ export default {
     pptxGenerate: 'AI 生成 PPT',
     pptxFormat: 'PPTX 读/改格式',
     pdfToWordLayout: 'PDF 转 Word（版式级）',
-    scannedOcrEntry: '扫描件 OCR 入口',
+    scannedOcrEntry: '扫描件 OCR 入口（还需 OCR 引擎）',
     scannedPdfToWord: '扫描件 PDF 转 Word',
     ocrParse: 'OCR 版面解析',
     ttsPanel: '语音合成面板',
