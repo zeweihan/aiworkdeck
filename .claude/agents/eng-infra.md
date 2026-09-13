@@ -305,6 +305,16 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 
 ## 已知地雷
 
+**真机走查/门禁的三条环境地雷（2026-09-13，0.42.0 发版前实测）**：
+① Electron 的 `app.getPath('home')` 在 macOS 上走 passwd 条目、**不认 `HOME` 环境变量**——隔离 HOME 起 dev 壳时，
+`~/.aiworkdeck/logs/desktop.log` 这类按 home 派生的路径仍落在维护者真实目录；隔离只对后端（`-Duser.home`）有效。
+② 模拟断网别只给 JVM `-Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=1`：`SystemProxyRefresher` 每 60 秒把代理属性改回
+机器真实系统代理（日志「检测到系统代理已变更 … 已就地更新」），之后请求真的出网、拿回 401 被分类成非网络错误，
+看起来像「断网提示没生效」。要加 `--network.proxy.auto-refresh=false`。
+③ 主检出 `frontend/node_modules` 若是 `npm ci --ignore-scripts`/手工装的，uni-h5 的 scroll-view 空判补丁（6.5.3）没打上，
+`dev:h5` 控制台常驻 `setting 'scrollTop'` + 未处理 rejection，app-e2e 末尾护栏判死；判据 `grep -c` 三个锚点是否已 guarded，
+处置直接跑 `node frontend/scripts/patch-uni-h5-scrollview.mjs`。
+
 **装好的应用开着，三套 Electron e2e 全起不来（2026-08-23 修）**：`main.js` 的
 `requestSingleInstanceLock` 按 userData 目录判重，dev 实例与 `/Applications/AI WorkDeck.app`
 默认同一个目录，第二个进程被 `app.quit()` 当场顶掉。现象极不好认——Electron 起来、
