@@ -120,7 +120,8 @@ test('子进程正常退出后，SIGKILL 兜底定时器被清掉（不留悬挂
     await mgr.stop('polite')
     const elapsed = Date.now() - t0
     // 防空断言：必须走的是「SIGTERM 后进程自己退了」这条快路径，否则测的是强杀路径
-    assert.ok(elapsed < 2000, `polite 服务应该响应 SIGTERM 立即退出，实测 ${elapsed}ms`)
+    // 阈值取 2900：只要没撞到 3000ms 的 SIGKILL 兜底就是快路径；全套并行跑时子进程退出会被负载拖慢（本机实测过一次 >2s 的假红）
+    assert.ok(elapsed < 2900, `polite 服务应该响应 SIGTERM 自行退出（<2900ms，否则就是 3s 强杀路径），实测 ${elapsed}ms`)
     assert.strictEqual(created.length, 1, 'stop() 应当建了且只建了一个 3000ms 强杀兜底定时器')
     assert.ok(cleared.has(created[0]),
       '进程已经退出，那个 3000ms SIGKILL 定时器必须 clearTimeout，否则 fd/句柄悬挂到超时')
