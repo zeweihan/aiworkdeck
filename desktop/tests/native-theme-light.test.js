@@ -22,7 +22,10 @@ const fs = require('node:fs')
 const path = require('node:path')
 
 const SRC = fs.readFileSync(path.join(__dirname, '../main/main.js'), 'utf8')
-const CODE = SRC.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+// 块注释只认「行首或空白之后」的 /*：main.js 里 Chromium 的 URL 匹配模式
+// '*://*/api/avatar/*'（attachAvatarCorpRelaxation）字面上也含 /* 与 */，
+// 不加锚点会把从那里到下一个 */ 之间的 applyNativeTheme 整段当注释吞掉。
+const CODE = SRC.replace(/(^|\s)\/\*[\s\S]*?\*\//g, '$1').replace(/^\s*\/\/.*$/gm, '')
 const PRELOAD = fs.readFileSync(path.join(__dirname, '../preload/preload.js'), 'utf8')
 
 test('从 electron 引入 nativeTheme', () => {
