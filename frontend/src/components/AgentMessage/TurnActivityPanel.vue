@@ -791,6 +791,7 @@ button:disabled {
     display: block;
   }
 
+  .turn-summary,
   .activity-hint {
     display: block;
   }
