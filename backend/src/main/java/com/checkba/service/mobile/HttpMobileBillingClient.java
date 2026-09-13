@@ -104,16 +104,20 @@ public class HttpMobileBillingClient implements MobileBillingClient {
         body.put("accountId", accountId);
         body.put("amountCents", amountCents);
         body.put("idempotencyKey", idempotencyKey);
-        // 通道三兄弟只在指定了 channel 时上行：不传 = 官网走站点默认通道（第一期行为），
-        // 传一串 null 上去只会让官网多几个要判空的字段
+        // 通道字段只在指定了 channel 时上行：不传 = 官网走站点默认通道（第一期行为），
+        // 传一串 null 上去只会让官网多几个要判空的字段。wxCode 是 wxvp 专有的，
+        // channel=appstore 时它本来就是 null，别硬塞一个 null 键上去。
         if (channel != null && !channel.isBlank()) {
             body.put("channel", channel);
             body.put("productId", productId);
-            body.put("wxCode", wxCode);
+            if (wxCode != null && !wxCode.isBlank()) {
+                body.put("wxCode", wxCode);
+            }
         }
         // wxvp 的 wxCode 是一次性的：第一发若已到达官网、只是响应丢了，带同一 body 重试会让官网
         // 再换一次 code 而失败。所以 wxvp 只发一次，网络失败回 UNAVAILABLE，由小程序重新
         // wx.login 拿新 code、带同一 idempotencyKey 再来（官网对命中幂等键的 pending 单用新 code 重签）。
+        // appstore 没有一次性凭证，且建单只是「拿一个 appAccountToken」，与默认通道一样可以重试。
         boolean wxvp = "wxvp".equals(channel);
         JsonNode json = wxvp ? call(body) : callWithRetry(body);
         return new RechargeOrder(
@@ -125,7 +129,8 @@ public class HttpMobileBillingClient implements MobileBillingClient {
                 textOrNull(json, "redirectUrl"),
                 textOrNull(json, "signData"),
                 textOrNull(json, "paySig"),
-                textOrNull(json, "signature"));
+                textOrNull(json, "signature"),
+                textOrNull(json, "appAccountToken"));
     }
 
     @Override
@@ -139,6 +144,67 @@ public class HttpMobileBillingClient implements MobileBillingClient {
                 json.path("status").asText(null),
                 json.path("paid").asBoolean(false),
                 json.path("amountCents").asLong(0));
+    }
+
+    /**
+     * 确认 App Store 内购交易（action=confirm-appstore，dev-board#426）。走不重试的
+     * {@link #call}：确认是写动作，重发一次换不来「到底入没入账」的确定性，交易重放由 iOS 的
+     * {@code Transaction.unfinished} 负责（收到 paid 之前不 finish）。
+     *
+     * <p>{@code outTradeNo} 可缺省：App 被杀后本地没存下单号时只带 JWS 来，官网用交易里的
+     * appAccountToken 反查 providerRef。缺省时<b>不上行这个键</b>，别送一个 null 让官网判空。
+     *
+     * <p>失败要翻成<b>内购场景</b>的话：这条路上用户刚刚在 App Store 付过钱，共用那句
+     * 「充值请求被拒绝，请联系客服」既吓人也没有下一步。判据是官网回的 {@code error} 串。
+     */
+    @Override
+    public RechargeStatus confirmAppstore(String accountId, String outTradeNo, String signedTransaction) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("action", "confirm-appstore");
+        body.put("accountId", accountId);
+        if (outTradeNo != null && !outTradeNo.isBlank()) {
+            body.put("outTradeNo", outTradeNo);
+        }
+        body.put("signedTransaction", signedTransaction);
+        JsonNode json;
+        try {
+            json = call(body);
+        } catch (MobileBillingException e) {
+            throw remapConfirmFailure(e);
+        }
+        return new RechargeStatus(
+                json.path("status").asText(null),
+                json.path("paid").asBoolean(false),
+                json.path("amountCents").asLong(0));
+    }
+
+    /**
+     * confirm-appstore 的失败翻译，见 {@link #confirmAppstore}。认不出的失败原样抛回
+     * （404 由 {@link #parse} 给的 NOT_FOUND 就是「查无此单」，不需要改判别位）。
+     */
+    private MobileBillingException remapConfirmFailure(MobileBillingException e) {
+        if (e.getKind() != MobileBillingKind.REJECTED) {
+            // 只换 4xx 的措辞。5xx 也可能带这两个 error 串，但那是上游故障，
+            // 不能被这里降格成「官网明确拒绝了你这笔交易」。
+            return e;
+        }
+        String err = e.getMachineError();
+        if ("transaction_invalid".equals(err)) {
+            // 官网 400：验签没过 / appAccountToken 或 productId 与单子不符。对用户只能是
+            // 「这笔没认出来，稍后再试」——交易还在设备上没 finish，重试是真的有用。
+            return new MobileBillingException(MobileBillingKind.REJECTED,
+                    LangText.of("交易验证失败，请稍后重试",
+                            "Could not verify the transaction. Please try again later."),
+                    err);
+        }
+        if ("transaction_reused".equals(err)) {
+            // 官网 409：这个 transactionId 已经入过账。不是错误结局，但也不能再入一次账，
+            // 客户端据此 finish 掉这笔交易并去查单。
+            return new MobileBillingException(MobileBillingKind.REJECTED,
+                    LangText.of("该交易已使用", "This transaction has already been used"),
+                    err);
+        }
+        return e;
     }
 
     /**

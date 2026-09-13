@@ -223,7 +223,7 @@ class MobileBillingServiceTest {
         bind(u.getId(), accountId);
         when(billing.createRecharge(accountId, 5000L, "idem-abc-0001", null, null, null))
                 .thenReturn(new RechargeOrder("qrcode", "OT123", 5000L, "weixin://x", null, null,
-                        null, null, null));
+                        null, null, null, null));
 
         RechargeOrder order = service.createRecharge(u.getId(), 5000L, "idem-abc-0001",
                 null, null, null);
@@ -245,7 +245,7 @@ class MobileBillingServiceTest {
         when(billing.createRecharge(accountId, 1000L, "idem-wxvp-0001",
                 "wxvp", "credits_cny_10", "0a1b2c3d4e"))
                 .thenReturn(new RechargeOrder("virtual", "OT-wxvp", 1000L, null, null, null,
-                        "{\"offerId\":\"1450637533\"}", "paysig-hex", "sig-hex"));
+                        "{\"offerId\":\"1450637533\"}", "paysig-hex", "sig-hex", null));
 
         RechargeOrder order = service.createRecharge(u.getId(), 1000L, "idem-wxvp-0001",
                 "wxvp", "credits_cny_10", "0a1b2c3d4e");
@@ -306,6 +306,152 @@ class MobileBillingServiceTest {
                         "wxvp", "credits_cny_10", "0a1b2c3d4e"));
         assertEquals(MobileBillingKind.REJECTED, e.getKind());
         assertEquals("充值档位与金额不符，请更新小程序后重试", e.getMessage());
+    }
+
+    // ==================== iOS 内购通道（dev-board#426） ====================
+
+    @Test
+    @DisplayName("channel=appstore：带点号的 productId 放行、wxCode 不上行，appAccountToken 原样带回")
+    void appstoreChannelPassesProductIdAndReturnsToken() {
+        User u = phoneUser();
+        String accountId = "acct-ios-" + u.getId();
+        bind(u.getId(), accountId);
+        when(billing.createRecharge(accountId, 5000L, "idem-ios-0001",
+                "appstore", "credits.cny.50", null))
+                .thenReturn(new RechargeOrder("native", "OT-ios", 5000L, null, null, null,
+                        null, null, null, "3f2504e0-4f89-11d3-9a0c-0305e82c3301"));
+
+        RechargeOrder order = service.createRecharge(u.getId(), 5000L, "idem-ios-0001",
+                "appstore", "credits.cny.50", null);
+
+        assertEquals("native", order.present());
+        assertEquals("3f2504e0-4f89-11d3-9a0c-0305e82c3301", order.appAccountToken());
+        assertNull(order.codeUrl());
+        assertNull(order.signData());
+        verify(billing).createRecharge(accountId, 5000L, "idem-ios-0001",
+                "appstore", "credits.cny.50", null);
+    }
+
+    @Test
+    @DisplayName("channel=appstore 带了 wxCode：那是微信那条路的凭证，不上行也不报错")
+    void appstoreIgnoresWxCode() {
+        User u = phoneUser();
+        String accountId = "acct-ios-nowx-" + u.getId();
+        bind(u.getId(), accountId);
+        when(billing.createRecharge(accountId, 5000L, "idem-ios-0002",
+                "appstore", "credits.cny.50", null))
+                .thenReturn(new RechargeOrder("native", "OT-ios-2", 5000L, null, null, null,
+                        null, null, null, "token-2"));
+
+        assertEquals("OT-ios-2", service.createRecharge(u.getId(), 5000L, "idem-ios-0002",
+                "appstore", "credits.cny.50", "0a1b2c3d4e").outTradeNo());
+
+        verify(billing).createRecharge(accountId, 5000L, "idem-ios-0002",
+                "appstore", "credits.cny.50", null);
+    }
+
+    @Test
+    @DisplayName("channel=appstore 缺 productId 或形态不对：拒绝，不发上游（wxvp 那条仍不吃点号）")
+    void appstoreRequiresWellFormedProductId() {
+        User u = phoneUser();
+        bind(u.getId(), "acct-ios-bad-" + u.getId());
+
+        for (String bad : new String[]{null, "", "   ", "Credits.CNY.50", "credits cny 50", "credits/cny/50"}) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> service.createRecharge(u.getId(), 5000L, "idem-ios-bad1",
+                            "appstore", bad, null));
+        }
+        // 点号是 appstore 专有的放宽，别顺手漏进微信道具那条
+        assertThrows(IllegalArgumentException.class,
+                () -> service.createRecharge(u.getId(), 1000L, "idem-ios-bad2",
+                        "wxvp", "credits.cny.10", "0a1b2c3d4e"));
+        verify(billing, never()).createRecharge(any(), anyLong(), any(), any(), any(), any());
+    }
+
+    // ==================== 内购交易确认（dev-board#426） ====================
+
+    @Test
+    @DisplayName("confirm：outTradeNo 与 JWS 原样上行；到账即作废该用户的余额缓存")
+    void confirmAppstorePassesThroughAndInvalidatesBalance() {
+        User u = phoneUser();
+        String accountId = "acct-ios-cf-" + u.getId();
+        bind(u.getId(), accountId);
+        when(billing.balance(accountId)).thenReturn(new BalanceResult(100L, "CNY", "free"));
+        when(billing.confirmAppstore(accountId, "OT-ios-1", "jws.a.b"))
+                .thenReturn(new RechargeStatus("paid", true, 5000L));
+
+        service.balance(u.getId());
+        RechargeStatus s = service.confirmAppstore(u.getId(), "OT-ios-1", "jws.a.b");
+
+        assertEquals("paid", s.status());
+        assertTrue(s.paid());
+        assertEquals(5000L, s.amountCents());
+        verify(billing).confirmAppstore(accountId, "OT-ios-1", "jws.a.b");
+        // 缓存被作废：下一次读余额要打真源
+        service.balance(u.getId());
+        verify(billing, times(2)).balance(accountId);
+    }
+
+    @Test
+    @DisplayName("confirm：outTradeNo 可缺省（App 被杀后的重放），空串一律归一成 null")
+    void confirmAppstoreAcceptsMissingOutTradeNo() {
+        User u = phoneUser();
+        String accountId = "acct-ios-cf2-" + u.getId();
+        bind(u.getId(), accountId);
+        when(billing.confirmAppstore(accountId, null, "jws.a.b"))
+                .thenReturn(new RechargeStatus("paid", true, 5000L));
+
+        assertTrue(service.confirmAppstore(u.getId(), null, "jws.a.b").paid());
+        assertTrue(service.confirmAppstore(u.getId(), "  ", "jws.a.b").paid());
+        verify(billing, times(2)).confirmAppstore(accountId, null, "jws.a.b");
+    }
+
+    @Test
+    @DisplayName("confirm：JWS 必填且有长度上限，outTradeNo 给了就要合形态——都不发上游")
+    void confirmAppstoreValidatesArguments() {
+        User u = phoneUser();
+        bind(u.getId(), "acct-ios-cf3-" + u.getId());
+
+        for (String bad : new String[]{null, "", "   ", "x".repeat(16 * 1024 + 1)}) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> service.confirmAppstore(u.getId(), "OT-ios-1", bad));
+        }
+        assertThrows(IllegalArgumentException.class,
+                () -> service.confirmAppstore(u.getId(), "非法单号!!", "jws.a.b"));
+        verify(billing, never()).confirmAppstore(any(), any(), any());
+
+        // 正好卡在上限上要过：上限是防灌大 body，不是拒绝真实交易
+        String accountId = accountBindingRepository.findByUserId(u.getId()).orElseThrow()
+                .getExternalAccountId();
+        String maxJws = "x".repeat(16 * 1024);
+        when(billing.confirmAppstore(accountId, null, maxJws))
+                .thenReturn(new RechargeStatus("paid", true, 5000L));
+        assertTrue(service.confirmAppstore(u.getId(), null, maxJws).paid());
+    }
+
+    @Test
+    @DisplayName("confirm：官网的 REJECTED / NOT_FOUND 原样带判别位与文案落到信封")
+    void confirmAppstoreFailuresKeepTheirKind() {
+        User u = phoneUser();
+        String accountId = "acct-ios-cf4-" + u.getId();
+        bind(u.getId(), accountId);
+
+        doThrow(new MobileBillingException(MobileBillingKind.REJECTED,
+                "该交易已使用", "transaction_reused"))
+                .when(billing).confirmAppstore(accountId, "OT-ios-used", "jws.a.b");
+        MobileBillingFailureException reused = assertThrows(MobileBillingFailureException.class,
+                () -> service.confirmAppstore(u.getId(), "OT-ios-used", "jws.a.b"));
+        assertEquals(MobileBillingKind.REJECTED, reused.getKind());
+        assertEquals("该交易已使用", reused.getMessage());
+
+        doThrow(new MobileBillingException(MobileBillingKind.NOT_FOUND,
+                "未找到对应的统一账户", "order_not_found"))
+                .when(billing).confirmAppstore(accountId, "OT-ios-gone", "jws.a.b");
+        MobileBillingFailureException missing = assertThrows(MobileBillingFailureException.class,
+                () -> service.confirmAppstore(u.getId(), "OT-ios-gone", "jws.a.b"));
+        assertEquals(MobileBillingKind.NOT_FOUND, missing.getKind());
+        // 查单/确认的 404 分不出「账户没了」与「单号不是你的」，一律不动绑定行
+        assertTrue(accountBindingRepository.findByUserId(u.getId()).isPresent());
     }
 
     // ==================== 缓存与降级 ====================
@@ -432,7 +578,7 @@ class MobileBillingServiceTest {
         when(billing.resolveAccountId(eq(u.getPhone()), isNull(), eq(true))).thenReturn(accountId);
         when(billing.createRecharge(accountId, 5000L, "idem-create-01", null, null, null))
                 .thenReturn(new RechargeOrder("qrcode", "OT-create", 5000L, "weixin://x", null, null,
-                        null, null, null));
+                        null, null, null, null));
 
         assertEquals("OT-create",
                 service.createRecharge(u.getId(), 5000L, "idem-create-01", null, null, null)

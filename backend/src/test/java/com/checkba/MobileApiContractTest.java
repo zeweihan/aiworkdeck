@@ -81,6 +81,11 @@ class MobileApiContractTest {
         validator = OpenApiInteractionValidator.createForInlineApiSpecification(spec)
                 .withLevelResolver(LevelResolver.create()
                         .withLevel("validation.request", ValidationReport.Level.IGNORE)
+                        // 唯一不放过的请求级判定：**YAML 里根本没有这条路径**。
+                        // 它被一起 IGNORE 掉时，校验器找不到 operation 就连响应也不校了——
+                        // 于是「给新端点加了契约用例」会绿得毫无意义（实测：把
+                        // /recharge/confirm 从 YAML 里改个名，本类照样全绿）。
+                        .withLevel("validation.request.path.missing", ValidationReport.Level.ERROR)
                         .build())
                 .build();
     }
@@ -170,16 +175,24 @@ class MobileApiContractTest {
         when(billing.createRecharge(anyString(), anyLong(), anyString(), isNull(), isNull(), isNull()))
                 .thenReturn(new MobileBillingClient.RechargeOrder(
                         "qrcode", "OT-contract-1", 5000L, "weixin://wxpay/bizpayurl?pr=x", null, null,
-                        null, null, null));
+                        null, null, null, null));
         // 小程序虚拟支付（dev-board#427）：present=virtual 时多出 signData/paySig/signature 三个键，
         // 它们必须先写进 YAML——校验器默认 additionalProperties:false，漏一个这里就红
         when(billing.createRecharge(anyString(), anyLong(), anyString(),
                 eq("wxvp"), anyString(), anyString()))
                 .thenReturn(new MobileBillingClient.RechargeOrder(
                         "virtual", "OT-contract-vp", 1000L, null, null, null,
-                        "{\"offerId\":\"1450637533\",\"buyQuantity\":1}", "a1b2c3", "d4e5f6"));
+                        "{\"offerId\":\"1450637533\",\"buyQuantity\":1}", "a1b2c3", "d4e5f6", null));
+        // iOS 内购（dev-board#426）：present=native 多出 appAccountToken 一个键，同样必须先进 YAML
+        when(billing.createRecharge(anyString(), anyLong(), anyString(),
+                eq("appstore"), anyString(), isNull()))
+                .thenReturn(new MobileBillingClient.RechargeOrder(
+                        "native", "OT-contract-ios", 5000L, null, null, null,
+                        null, null, null, "3f2504e0-4f89-11d3-9a0c-0305e82c3301"));
         when(billing.queryRecharge(anyString(), anyString()))
                 .thenReturn(new MobileBillingClient.RechargeStatus("pending", false, 5000L));
+        when(billing.confirmAppstore(anyString(), any(), eq("jws.contract.ok")))
+                .thenReturn(new MobileBillingClient.RechargeStatus("paid", true, 5000L));
 
         mvc.perform(get("/api/mobile/billing/balance").header("X-Session-Id", sid))
                 .andExpect(status().isOk())
@@ -214,6 +227,84 @@ class MobileApiContractTest {
                 .andExpect(jsonPath("$.paySig").value("a1b2c3"))
                 .andExpect(jsonPath("$.signature").value("d4e5f6"))
                 .andExpect(jsonPath("$.codeUrl").doesNotExist())
+                .andExpect(openApi().isValid(validator));
+
+        // present=native 的成功形状（dev-board#426）：只多出 appAccountToken，
+        // 扫码/虚拟支付那几个字段一个都不出现
+        mvc.perform(post("/api/mobile/billing/recharge").header("X-Session-Id", sid)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"amountCents":5000,"idempotencyKey":"idem-contract-ios01",\
+                                "channel":"appstore","productId":"credits.cny.50"}"""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.present").value("native"))
+                .andExpect(jsonPath("$.outTradeNo").value("OT-contract-ios"))
+                .andExpect(jsonPath("$.appAccountToken").value("3f2504e0-4f89-11d3-9a0c-0305e82c3301"))
+                .andExpect(jsonPath("$.codeUrl").doesNotExist())
+                .andExpect(jsonPath("$.signData").doesNotExist())
+                .andExpect(openApi().isValid(validator));
+
+        // 内购确认端点：成功回 RechargeStatus 形状（与 /recharge/status 逐字段同形）
+        mvc.perform(post("/api/mobile/billing/recharge/confirm").header("X-Session-Id", sid)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"outTradeNo":"OT-contract-ios","signedTransaction":"jws.contract.ok"}"""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("paid"))
+                .andExpect(jsonPath("$.paid").value(true))
+                .andExpect(jsonPath("$.amountCents").value(5000))
+                .andExpect(openApi().isValid(validator));
+
+        // outTradeNo 可缺省（App 被杀后重放未完成交易）：同一个成功形状
+        mvc.perform(post("/api/mobile/billing/recharge/confirm").header("X-Session-Id", sid)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"signedTransaction":"jws.contract.ok"}"""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.paid").value(true))
+                .andExpect(openApi().isValid(validator));
+
+        // 确认失败的两个判别位：验签失败/交易已用过 → REJECTED，查无此单 → NOT_FOUND
+        doThrow(new MobileBillingClient.MobileBillingException(
+                MobileBillingKind.REJECTED, "该交易已使用", "transaction_reused"))
+                .when(billing).confirmAppstore(anyString(), any(), eq("jws.contract.reused"));
+        mvc.perform(post("/api/mobile/billing/recharge/confirm").header("X-Session-Id", sid)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"outTradeNo":"OT-contract-ios","signedTransaction":"jws.contract.reused"}"""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(1))
+                .andExpect(jsonPath("$.kind").value("REJECTED"))
+                .andExpect(jsonPath("$.message").value("该交易已使用"))
+                .andExpect(openApi().isValid(validator));
+
+        doThrow(new MobileBillingClient.MobileBillingException(
+                MobileBillingKind.NOT_FOUND, "未找到对应的统一账户", "order_not_found"))
+                .when(billing).confirmAppstore(anyString(), any(), eq("jws.contract.missing"));
+        mvc.perform(post("/api/mobile/billing/recharge/confirm").header("X-Session-Id", sid)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"outTradeNo":"OT-contract-gone","signedTransaction":"jws.contract.missing"}"""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(1))
+                .andExpect(jsonPath("$.kind").value("NOT_FOUND"))
+                .andExpect(openApi().isValid(validator));
+
+        // 缺 signedTransaction → 通用 code 1 信封（无 kind）
+        mvc.perform(post("/api/mobile/billing/recharge/confirm").header("X-Session-Id", sid)
+                        .contentType(APPLICATION_JSON).content("{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(1))
+                .andExpect(jsonPath("$.kind").doesNotExist())
+                .andExpect(openApi().isValid(validator));
+
+        // 未登录也走 4010 信封
+        mvc.perform(post("/api/mobile/billing/recharge/confirm")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"signedTransaction":"jws.contract.ok"}"""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(4010))
                 .andExpect(openApi().isValid(validator));
 
         // 新请求字段的校验也走通用信封：不认识的通道 → code 1（无 kind，通用 handler）

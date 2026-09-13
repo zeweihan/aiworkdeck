@@ -272,6 +272,112 @@ class HttpMobileBillingClientTest {
         assertEquals("充值档位与金额不符，请更新小程序后重试", e.getMessage());
     }
 
+    // ==================== iOS 内购（dev-board#426） ====================
+
+    @Test
+    @DisplayName("channel=appstore：channel/productId 上行且不带 wxCode，appAccountToken 解回记录")
+    void appstoreFieldsGoUpAndTokenComesBack() {
+        HttpMobileBillingClient c = stubbed(200,
+                "{\"present\":\"native\",\"outTradeNo\":\"OT-ios-1\",\"amountCents\":5000,"
+                        + "\"appAccountToken\":\"3f2504e0-4f89-11d3-9a0c-0305e82c3301\"}");
+
+        MobileBillingClient.RechargeOrder order = c.createRecharge("acct-x", 5000, "idem-ios-0001",
+                "appstore", "credits.cny.50", null);
+
+        assertEquals("native", order.present());
+        assertEquals("3f2504e0-4f89-11d3-9a0c-0305e82c3301", order.appAccountToken());
+        assertNull(order.codeUrl());
+        assertNull(order.signData());
+        String sent = lastRequest.get();
+        assertTrue(sent.contains("\"channel\":\"appstore\""), sent);
+        assertTrue(sent.contains("\"productId\":\"credits.cny.50\""), sent);
+        assertFalse(sent.contains("wxCode"), "appstore 不该往上送 wxCode 键：" + sent);
+    }
+
+    @Test
+    @DisplayName("channel=appstore 网络失败仍重试一次：没有一次性凭证，建单是幂等的")
+    void appstoreRetriesLikeDefaultChannel() {
+        HttpMobileBillingClient c = stubbed(200, "{}");
+        stubDrop.set(true);
+
+        assertEquals(MobileBillingKind.UNAVAILABLE,
+                assertThrows(MobileBillingException.class,
+                        () -> c.createRecharge("acct-x", 5000, "idem-ios-0002",
+                                "appstore", "credits.cny.50", null)).getKind());
+        assertEquals(2, hits.get(), "appstore 与默认通道一样重试一次");
+    }
+
+    @Test
+    @DisplayName("confirm-appstore 成功：action/accountId/outTradeNo/signedTransaction 上行，回状态")
+    void confirmAppstoreSuccess() {
+        HttpMobileBillingClient c = stubbed(200,
+                "{\"status\":\"paid\",\"paid\":true,\"amountCents\":5000}");
+
+        MobileBillingClient.RechargeStatus s = c.confirmAppstore("acct-x", "OT-ios-1", "jws.a.b");
+
+        assertEquals("paid", s.status());
+        assertTrue(s.paid());
+        assertEquals(5000L, s.amountCents());
+        String sent = lastRequest.get();
+        assertTrue(sent.contains("\"action\":\"confirm-appstore\""), sent);
+        assertTrue(sent.contains("\"accountId\":\"acct-x\""), sent);
+        assertTrue(sent.contains("\"outTradeNo\":\"OT-ios-1\""), sent);
+        assertTrue(sent.contains("\"signedTransaction\":\"jws.a.b\""), sent);
+    }
+
+    @Test
+    @DisplayName("confirm-appstore 缺 outTradeNo：这个键干脆不上行，官网用 appAccountToken 反查")
+    void confirmAppstoreOmitsBlankOutTradeNo() {
+        HttpMobileBillingClient c = stubbed(200,
+                "{\"status\":\"paid\",\"paid\":true,\"amountCents\":5000}");
+
+        assertTrue(c.confirmAppstore("acct-x", null, "jws.a.b").paid());
+        assertFalse(lastRequest.get().contains("outTradeNo"), lastRequest.get());
+    }
+
+    @Test
+    @DisplayName("confirm-appstore 的四种失败：400/409 各有自己的话，404 是 NOT_FOUND，网络是 UNAVAILABLE 且不重试")
+    void confirmAppstoreFailuresSpeakPurchaseLanguage() {
+        // 400 transaction_invalid：验签没过 / 订单不符。交易还没 finish，重试是真的有用
+        MobileBillingException invalid = assertThrows(MobileBillingException.class,
+                () -> stubbed(400, "{\"error\":\"transaction_invalid\"}")
+                        .confirmAppstore("acct-x", "OT-ios-1", "jws"));
+        assertEquals(MobileBillingKind.REJECTED, invalid.getKind());
+        assertEquals("transaction_invalid", invalid.getMachineError());
+        assertEquals("交易验证失败，请稍后重试", invalid.getMessage());
+
+        // 409 transaction_reused：这个 transactionId 已经入过账
+        MobileBillingException reused = assertThrows(MobileBillingException.class,
+                () -> stubbed(409, "{\"error\":\"transaction_reused\"}")
+                        .confirmAppstore("acct-x", "OT-ios-1", "jws"));
+        assertEquals(MobileBillingKind.REJECTED, reused.getKind());
+        assertEquals("transaction_reused", reused.getMachineError());
+        assertEquals("该交易已使用", reused.getMessage());
+
+        // 404 带 body：查无此单
+        MobileBillingException missing = assertThrows(MobileBillingException.class,
+                () -> stubbed(404, "{\"error\":\"order_not_found\"}")
+                        .confirmAppstore("acct-x", "OT-ios-1", "jws"));
+        assertEquals(MobileBillingKind.NOT_FOUND, missing.getKind());
+        assertEquals("order_not_found", missing.getMachineError());
+
+        // 网络失败：只发一次。确认是写动作，重发换不来「到底入没入账」的确定性
+        HttpMobileBillingClient dropping = stubbed(200, "{}");
+        stubDrop.set(true);
+        hits.set(0);
+        assertEquals(MobileBillingKind.UNAVAILABLE,
+                assertThrows(MobileBillingException.class,
+                        () -> dropping.confirmAppstore("acct-x", "OT-ios-1", "jws")).getKind());
+        assertEquals(1, hits.get(), "confirm 不许重试");
+        stubDrop.set(false);
+
+        // 未配置：一律短路
+        assertEquals(MobileBillingKind.DISABLED,
+                assertThrows(MobileBillingException.class,
+                        () -> new HttpMobileBillingClient("", "", om)
+                                .confirmAppstore("acct-x", "OT-ios-1", "jws")).getKind());
+    }
+
     // ==================== 注销传导（dev-board#434） ====================
 
     @Test

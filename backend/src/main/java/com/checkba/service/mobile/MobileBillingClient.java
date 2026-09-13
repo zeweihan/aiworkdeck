@@ -34,16 +34,23 @@ public interface MobileBillingClient {
 
     /**
      * 充值单。{@code present} = {@code "qrcode"}（codeUrl/qrCode 有值）、
-     * {@code "redirect"}（redirectUrl 有值）或 {@code "virtual"}
-     * （小程序虚拟支付，signData/paySig/signature 三者都有值）；不适用的字段为 null。
+     * {@code "redirect"}（redirectUrl 有值）、{@code "virtual"}
+     * （小程序虚拟支付，signData/paySig/signature 三者都有值）或 {@code "native"}
+     * （iOS 内购，appAccountToken 有值）；不适用的字段为 null。
      *
      * <p>三个 virtual 字段是 {@code wx.requestVirtualPayment} 的入参，由官网算出来后原样透传：
      * 云后端<b>不持有</b>虚拟支付 AppKey，也不碰小程序 session_key，全程只当管道
      * （dev-board#427，spec {@code 2026-09-09-miniprogram-virtual-payment-plan.md} §1）。
+     *
+     * <p>{@code appAccountToken} 是 present=native 时官网给的 UUID（订单的 providerRef）：
+     * iOS 把它塞进 {@code product.purchase(options:[.appAccountToken(...)])}，苹果在
+     * signedTransaction 里原样带回，官网据此把交易认回这张单
+     * （dev-board#426，spec {@code 2026-09-13-ios-iap-and-four-end-alignment-plan.md} §1）。
      */
     record RechargeOrder(String present, String outTradeNo, long amountCents,
                          String codeUrl, String qrCode, String redirectUrl,
-                         String signData, String paySig, String signature) {}
+                         String signData, String paySig, String signature,
+                         String appAccountToken) {}
 
     /** 充值单状态：status ∈ {pending, paid, closed, expired}。 */
     record RechargeStatus(String status, boolean paid, long amountCents) {}
@@ -108,18 +115,42 @@ public interface MobileBillingClient {
      * 弱网重试会在官网库里留下一串各自绑定独立二维码的悬挂 pending 单。
      *
      * @param channel   支付通道；{@code null} 走站点默认通道（第一期行为），
-     *                  {@code "wxvp"} 是小程序虚拟支付（dev-board#427）
-     * @param productId {@code channel="wxvp"} 时必填：微信道具 id。
+     *                  {@code "wxvp"} 是小程序虚拟支付（dev-board#427），
+     *                  {@code "appstore"} 是 iOS 内购（dev-board#426）
+     * @param productId {@code channel="wxvp"} / {@code "appstore"} 时必填：微信道具 id
+     *                  或 App Store 商品 id（后者带点号，如 {@code credits.cny.50}）。
      *                  <b>价格权威在官网</b>，云后端只做形态校验不判价——档位与金额不符时
      *                  官网回 400 {@code product_mismatch}，见 {@link HttpMobileBillingClient}
      * @param wxCode    {@code channel="wxvp"} 时必填：{@code wx.login()} 的一次性 code，
-     *                  官网拿它换 openid + session_key 算签名。<b>不落库、不进日志</b>
+     *                  官网拿它换 openid + session_key 算签名。<b>不落库、不进日志</b>。
+     *                  {@code channel="appstore"} 不用它，传 null
      */
     RechargeOrder createRecharge(String accountId, long amountCents, String idempotencyKey,
                                  String channel, String productId, String wxCode);
 
     /** 查充值单（action=query）。 */
     RechargeStatus queryRecharge(String accountId, String outTradeNo);
+
+    /**
+     * 确认一笔 App Store 内购交易（action=confirm-appstore，dev-board#426，spec
+     * {@code 2026-09-13-ios-iap-and-four-end-alignment-plan.md} §1/§3）。
+     *
+     * <p>云后端<b>不验签</b>：苹果根证书、bundleId、appAppleId 与 SignedDataVerifier 全在官网侧
+     * （理由同虚拟支付——签名材料留在钱袋所在的那一侧，这里只当管道）。本方法把 iOS 交上来的
+     * {@code signedTransaction}（JWS 原文）原样送到官网，官网验签 + 校 appAccountToken/productId +
+     * 判 transactionId 未用过，然后入账，回与 {@link #queryRecharge} 同形的状态。
+     *
+     * <p><b>不重试</b>：确认是写动作，网络失败重发一次并不能让「到底入没入账」更清楚；
+     * 客户端本来就要在收到 paid 之前不 finish 交易，重放由 iOS 的
+     * {@code Transaction.unfinished} 负责，比服务端盲目重发可靠。
+     *
+     * @param outTradeNo 可缺省（null）：App 被杀后本地没存下单号时只带 JWS 来，
+     *                   官网用交易里的 appAccountToken 反查 providerRef
+     * @throws MobileBillingException REJECTED = 官网 400 {@code transaction_invalid}（验签失败/
+     *                                订单不符）或 409 {@code transaction_reused}（该交易已用过）；
+     *                                NOT_FOUND = 官网 404 查无此单；其余同其它动作
+     */
+    RechargeStatus confirmAppstore(String accountId, String outTradeNo, String signedTransaction);
 
     /**
      * 删除官网侧的统一账户（action=delete-account，dev-board#434）。

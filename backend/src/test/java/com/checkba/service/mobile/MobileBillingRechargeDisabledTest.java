@@ -131,6 +131,22 @@ class MobileBillingRechargeDisabledTest {
     }
 
     @Test
+    @DisplayName("默认关：内购交易确认同样 DISABLED，不打上游（dev-board#426）")
+    void confirmAppstoreIsDisabled() {
+        User u = phoneUser();
+        bind(u.getId(), "acct-off-confirm-" + u.getId());
+
+        assertEquals(MobileBillingKind.DISABLED,
+                assertThrows(MobileBillingFailureException.class,
+                        () -> service.confirmAppstore(u.getId(), "OT-off-1", "jws.a.b")).getKind());
+        // 开关先于参数校验：JWS 怎么填都是 DISABLED
+        assertEquals(MobileBillingKind.DISABLED,
+                assertThrows(MobileBillingFailureException.class,
+                        () -> service.confirmAppstore(u.getId(), null, null)).getKind());
+        verifyNoInteractions(billing);
+    }
+
+    @Test
     @DisplayName("余额不受这个开关影响：只读、create=false、本期就是要它能用")
     void balanceStillWorksWhileRechargeIsOff() {
         User u = phoneUser();

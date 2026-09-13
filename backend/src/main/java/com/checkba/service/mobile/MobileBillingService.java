@@ -98,8 +98,25 @@ public class MobileBillingService {
      */
     private static final String CHANNEL_WXVP = "wxvp";
 
+    /** iOS App Store 内购通道（dev-board#426）。 */
+    private static final String CHANNEL_APPSTORE = "appstore";
+
     /** 微信道具 id 围栏。只做形态把关，<b>价格权威在官网</b>（不符时官网回 product_mismatch）。 */
     private static final Pattern PRODUCT_ID = Pattern.compile("^[a-z0-9_]{1,64}$");
+
+    /**
+     * App Store 商品 id 围栏。与微信道具 id 只差一个点号（ASC 里的 id 是
+     * {@code credits.cny.50} 这种反域名写法），但<b>刻意分成两条</b>：把点号加进 wxvp 那条
+     * 等于顺手放宽了一个已经上线的通道的校验，而两个通道的 id 来自两个不同的商品库。
+     */
+    private static final Pattern APPSTORE_PRODUCT_ID = Pattern.compile("^[a-z0-9_.]{1,64}$");
+
+    /**
+     * signedTransaction（苹果 JWS）长度上限。真实交易 JWS 在 2-4KB 量级，16KB 已经很宽；
+     * 设上限是因为这串会原样进官网请求体，没有上限等于把一个「往上游灌任意大 body」的口子
+     * 挂在一个只要有 session 就能打的端点上。
+     */
+    private static final int MAX_SIGNED_TRANSACTION_LENGTH = 16 * 1024;
 
     private final MobileBillingClient billing;
     private final AccountBindingRepository accountBindingRepository;
@@ -162,11 +179,14 @@ public class MobileBillingService {
      * 第一行就抛 DISABLED，参数校验、身份解析、上游请求一律不发生。「本期四端还没有充值界面」
      * 只是没人调，不是护栏——这个端点是活的。
      *
-     * <p><b>通道</b>（dev-board#427，spec {@code 2026-09-09-miniprogram-virtual-payment-plan.md} §4）：
+     * <p><b>通道</b>（dev-board#427，spec {@code 2026-09-09-miniprogram-virtual-payment-plan.md} §4；
+     * dev-board#426，spec {@code 2026-09-13-ios-iap-and-four-end-alignment-plan.md} §1）：
      * {@code channel} 为空即第一期行为（站点默认通道）；{@code "wxvp"} 是小程序虚拟支付，
-     * 此时 {@code productId} / {@code wxCode} 必填。<b>金额与档位是否匹配不在这里判</b>——
-     * 价格权威在官网，两处各写一份价格表迟早会对不上；不符时官网回 400 {@code product_mismatch}，
-     * 由 {@link HttpMobileBillingClient} 译成 REJECTED + 「请更新小程序」。
+     * 此时 {@code productId} / {@code wxCode} 必填；{@code "appstore"} 是 iOS 内购，
+     * 此时只要 {@code productId}（商品 id 带点号，如 {@code credits.cny.50}），
+     * {@code wxCode} 不属于这条路、传了也不上行，响应是 {@code present=native} + appAccountToken。
+     * <b>金额与档位是否匹配不在这里判</b>——价格权威在官网，两处各写一份价格表迟早会对不上；
+     * 不符时官网回 400 {@code product_mismatch}，由 {@link HttpMobileBillingClient} 译成 REJECTED。
      */
     public MobileBillingClient.RechargeOrder createRecharge(Long userId, Long amountCents,
                                                             String idempotencyKey, String channel,
@@ -186,12 +206,7 @@ public class MobileBillingService {
         String ch = trimToNull(channel);
         String product = null;
         String code = null;
-        if (ch != null) {
-            if (!CHANNEL_WXVP.equals(ch)) {
-                throw new IllegalArgumentException(LangText.of(
-                        "不支持的支付通道，请升级客户端后重试",
-                        "Unsupported payment channel; please update the app and try again"));
-            }
+        if (CHANNEL_WXVP.equals(ch)) {
             product = trimToNull(productId);
             code = trimToNull(wxCode);
             if (product == null || !PRODUCT_ID.matcher(product).matches()) {
@@ -205,6 +220,18 @@ public class MobileBillingService {
                         "缺少微信登录凭证，请重新进入充值页",
                         "Missing WeChat login code; please reopen the top-up page"));
             }
+        } else if (CHANNEL_APPSTORE.equals(ch)) {
+            // iOS 内购只要档位：wxCode 是微信那条路的一次性凭证，这里即便客户端传了也不上行
+            product = trimToNull(productId);
+            if (product == null || !APPSTORE_PRODUCT_ID.matcher(product).matches()) {
+                throw new IllegalArgumentException(LangText.of(
+                        "缺少或非法的充值档位，请更新 App 后重试",
+                        "Missing or invalid top-up product; please update the app and try again"));
+            }
+        } else if (ch != null) {
+            throw new IllegalArgumentException(LangText.of(
+                    "不支持的支付通道，请升级客户端后重试",
+                    "Unsupported payment channel; please update the app and try again"));
         }
 
         final String finalProduct = product;
@@ -232,6 +259,44 @@ public class MobileBillingService {
         }
         MobileBillingClient.RechargeStatus status = callWithAccount(userId, false, false,
                 accountId -> billing.queryRecharge(accountId, no));
+        if (status.paid()) {
+            balanceCache.remove(userId);
+        }
+        return status;
+    }
+
+    /**
+     * 确认一笔 App Store 内购交易（dev-board#426，spec
+     * {@code 2026-09-13-ios-iap-and-four-end-alignment-plan.md} §1/§4）。
+     *
+     * <p>iOS 在 {@code product.purchase} 拿到 {@code .success(.verified(tx))} 之后调这里，
+     * <b>拿到 paid 之前绝不 {@code tx.finish()}</b>——finish 掉的交易苹果不再重放，那笔钱就成了
+     * 「用户付了、账上没到」的死账。所以本方法与下单共用同一把总开关，但语义是写动作：
+     * 云后端不验签（根证书与 bundleId/appAppleId 全在官网），只把 JWS 原样转过去。
+     *
+     * <p>{@code outTradeNo} <b>可缺省</b>：App 被杀后重放 {@code Transaction.unfinished} 时本地
+     * 可能没存下单号，官网用交易里的 appAccountToken 反查 providerRef。给了就做形态校验，
+     * 免得把任意串送上去。
+     *
+     * <p>{@code create=false}（确认一笔已存在的单不是建号的理由），且<b>不做绑定自愈</b>：
+     * 理由同 {@link #queryRecharge}——这条路的 404 既可能是「账户没了」也可能是「这笔单不属于你」，
+     * 分不出来就不要动绑定行。
+     */
+    public MobileBillingClient.RechargeStatus confirmAppstore(Long userId, String outTradeNo,
+                                                              String signedTransaction) {
+        requireRechargeEnabled();
+        String jws = signedTransaction == null ? "" : signedTransaction.trim();
+        if (jws.isEmpty() || jws.length() > MAX_SIGNED_TRANSACTION_LENGTH) {
+            throw new IllegalArgumentException(LangText.of(
+                    "缺少或非法的交易凭证", "Missing or invalid transaction receipt"));
+        }
+        String no = trimToNull(outTradeNo);
+        if (no != null && !OUT_TRADE_NO.matcher(no).matches()) {
+            throw new IllegalArgumentException(LangText.of(
+                    "非法的 outTradeNo", "Invalid outTradeNo"));
+        }
+        MobileBillingClient.RechargeStatus status = callWithAccount(userId, false, false,
+                accountId -> billing.confirmAppstore(accountId, no, jws));
         if (status.paid()) {
             balanceCache.remove(userId);
         }
