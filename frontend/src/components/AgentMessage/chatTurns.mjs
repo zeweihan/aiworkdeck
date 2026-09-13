@@ -31,7 +31,7 @@ export function buildChatTurns(bubbles, { isStreaming = false, runStatus = null 
     }
     if (bubble.role === 'USER') {
       turn.user = { bubble, index }
-      turn.label = (bubble.displayContent || bubble.content || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim()
+      turn.label = (bubble.displayContent || bubble.content || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 120)
       return
     }
     if (bubble.role !== 'ASSISTANT') return

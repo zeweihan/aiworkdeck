@@ -5,6 +5,10 @@ import assert from 'node:assert/strict'
 import { buildChatTurns, recoverPlanTodos } from '../../src/components/AgentMessage/chatTurns.mjs'
 const user = (id, content) => ({ id, role: 'USER', content })
 const assistant = (id, extra = {}) => ({ id, role: 'ASSISTANT', content: '', processes: [], artifacts: [], ...extra })
+test('turn label is capped defensively regardless of message length', () => {
+  const turns = buildChatTurns([user('u', 'x'.repeat(500))])
+  assert.equal(turns[0].label.length, 120)
+})
 test('one user turn owns multiple assistant messages, preserving global navigation indices', () => {
   const list = [user('u', 'Review'), assistant('a', { processes: [{ id: 'p' }] }), assistant('b', { content: 'Answer', question: { text: 'Confirm?' } }), user('u2', 'Next')]
   const turns = buildChatTurns(list, { isStreaming: true, runStatus: 'RUNNING' })

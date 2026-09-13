@@ -27,6 +27,21 @@ try {
   assert.equal(await page.$$eval('.message-list .process-card', els => els.length), 0, 'tool log does not flood transcript')
   assert.equal(await page.$$eval('.turn-activity-link', els => els.length), 2, 'one detail entry per turn')
   assert.ok(await page.$eval('.message-list', el => el.textContent.includes('第一部分') && el.textContent.includes('第二部分')), 'multiple finals survive history recovery')
+  // The header row (turn-summary + activity-hint) must never overflow past the panel edge, collapsed or narrow.
+  for (const width of [320, 350, 360, 420, 640]) {
+    await page.setViewport({ width, height: 860 })
+    await page.evaluate(() => new Promise(requestAnimationFrame))
+    const metrics = await page.evaluate(() => {
+      const panel = document.querySelector('.turn-activity')
+      const bar = document.querySelector('.activity-bar')
+      const panelRight = panel.getBoundingClientRect().right
+      const maxRight = Math.max(...[...panel.querySelectorAll('*')].map(el => el.getBoundingClientRect().right))
+      return { maxRight, panelRight, barScrollWidth: bar.scrollWidth, barClientWidth: bar.clientWidth }
+    })
+    assert.ok(metrics.maxRight <= metrics.panelRight + 1, `turn-activity descendant overflows panel edge at ${width}px: ${JSON.stringify(metrics)}`)
+    assert.ok(metrics.barScrollWidth - metrics.barClientWidth <= 1, `activity-bar has horizontal overflow at ${width}px: ${JSON.stringify(metrics)}`)
+  }
+  await page.setViewport({ width: 420, height: 860 })
   await page.click('.activity-trigger')
   await wait(() => document.querySelector('.activity-panel'))
   assert.ok(await page.$eval('.panel-body', el => el.textContent.includes('阅读合同及附件')), 'historical JSON tasks recovered')
