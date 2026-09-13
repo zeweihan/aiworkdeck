@@ -1804,6 +1804,10 @@ export default {
                 setSessionUser(this.userInfo)
               }
             }
+            // 与个人设置那处对齐（dev-board#603）：从侧栏用户卡传的头像同样要广播，
+            // 否则顶栏与个人设置面板要等下次重开才跟上。本组件自己的
+            // _onIdentityUpdated 会被同一次广播打中，重复拉一次本地 GET，无副作用。
+            uni.$emit('awd:identity-updated')
             uni.showToast({ title: this.$t('account.avatarUpdateSuccess'), icon: 'success' })
           } catch (e) {
             console.error('Avatar upload failed', e)

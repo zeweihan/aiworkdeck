@@ -356,19 +356,58 @@ public class AccountService {
         }
         Map<String, Object> body = handle(reply);
         String updatedAt = str(body.get("avatarUpdatedAt"));
+        String url = avatarUrl(accountIdOrFetch(), updatedAt);
+        if (url == null) {
+            // 地址拼不出来（官网回包缺 avatarUpdatedAt，或这台机器连 accountId 都解析不出来）。
+            // 「成功但 avatarUrl 为 null」是一条会咬人的路：AccountController 拿它去
+            // applyAvatarUrl(null) 把本机行清空，前端只看 code 照弹「上传成功」——
+            // 用户看到的就是「提示成功但头像没了」。宁可报错让人重试，也不要一次静默的清空。
+            throw new AccountException(AccountException.Kind.MALFORMED,
+                    LangText.of("官网没有返回头像版本号，头像可能没保存成功，请稍后重试",
+                            "The website returned no avatar version, the avatar may not have been saved; please retry shortly"));
+        }
+        seedAvatarVersion(updatedAt);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("avatarUpdatedAt", updatedAt);
-        result.put("avatarUrl", avatarUrl(accountIdOrFetch(), updatedAt));
+        result.put("avatarUrl", url);
         return result;
     }
 
     /** DELETE /api/account/avatar —— 删头像，回 {@code {avatarUpdatedAt:null, avatarUrl:null}}。 */
     public Map<String, Object> deleteAvatar() {
         sendJson("DELETE", "/api/account/avatar", null);
+        seedAvatarVersion(null);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("avatarUpdatedAt", null);
         result.put("avatarUrl", null);
         return result;
+    }
+
+    /**
+     * 头像刚写完官网：把新的版本号就地塞进那份 60 秒 profile 缓存（删除时塞 null）。
+     *
+     * <p>不这么做的后果是确定的：{@link #profileIdentity()} 的 {@code avatarUpdatedAt} 来自这份缓存，
+     * 而 {@code GET /api/account/status} / {@code /api/account/profile} 都会走
+     * {@code AccountIdentitySync.refresh()} 拿它回写本机 {@code User} 行——缓存里还是上传前那份，
+     * 刚写好的头像当场被回滚（首次上传就是回滚成 null）。
+     *
+     * <p>为什么是 seed 而不是 {@link #clearBalanceCache()}（{@code updateDisplayName} 走的那条）：
+     * 作废之后下一次 {@code profileIdentity()} 要重新问官网 {@code /api/account/me}，
+     * 而刚 POST 完那一瞬间官网的读侧未必已经跟上，拿回来的还可能是旧版本号，照样回滚；
+     * 新版本号这一刻就在手里，直接写进去不依赖官网的读后写一致性，也不白白作废余额那半。
+     * 缓存不存在或归属账户对不上时退回作废——那时本来就没有陈旧值可用。
+     */
+    private synchronized void seedAvatarVersion(String avatarUpdatedAt) {
+        Cached<Map<String, Object>> cache = profileCache;
+        String owner = accountFingerprintOrNull();
+        if (cache == null || owner == null || !owner.equals(cache.owner())) {
+            clearBalanceCache();
+            return;
+        }
+        Map<String, Object> next = new LinkedHashMap<>(cache.value());
+        next.put("avatarUpdatedAt", avatarUpdatedAt);
+        // fetchedAt 保持原值：这次只让头像那一项跟上，余额该什么时候过期还什么时候过期
+        profileCache = new Cached<>(next, cache.fetchedAt(), owner);
     }
 
     /** 身份视图的唯一拼法，profileIdentity 与写入回包共用。 */

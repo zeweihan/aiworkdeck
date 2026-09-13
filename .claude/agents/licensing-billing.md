@@ -1156,6 +1156,29 @@ return 404 兜底，云后端从 127.0.0.1 直连 Next。云侧唯一出口
 - `avatarUrl` 由桌面端按 `accountId` + `avatarUpdatedAt` 拼成 `{base}/api/avatar/{accountId}?v=...`，
   **没传过头像（`avatarUpdatedAt` 为 null）就回 null**——硬拼一个必然 404 的地址只会让界面白等一次网络请求。
   `accountId` 连接时落进 `account.json`，老盘没有这一项时补拉一次 `/me` 回填。
+- **地雷（dev-board#603）：官网 `GET /api/avatar/{accountId}` 的响应带
+  `Cross-Origin-Resource-Policy: same-site`，而桌面主窗口是 `loadFile` 出来的 `file://` 页面，
+  与 `www.aiworkdeck.com` 永远不可能同站** —— Chromium 在网络层就把图拦掉
+  （`net::ERR_BLOCKED_BY_RESPONSE.NotSameSite`），渲染层是一次静默失败：`<image>` 什么都不画，
+  首字母分支又因为 `avatarUrl` 是真值而不渲染，屏幕上只剩一颗 `--awd-accent` 纯色圆。
+  `webPreferences.webSecurity:false` **关不掉这一条**（实测 Chrome 带 `--disable-web-security` 照样拦）。
+  桌面侧的解法在 `desktop/main/main.js` 的 `attachAvatarCorpRelaxation()`：按路径
+  `*://*/api/avatar/*` 挂 `onHeadersReceived`，只把 CORP 改写成 `cross-origin`，
+  且必须赶在第一次 `load` 之前挂。**正解在官网侧**（这个端点本来就是匿名公开的，应当发
+  `cross-origin`）；官网改好之后桌面这段可以撤。护栏 `frontend/tests/identity/avatar-refresh.test.mjs`。
+- **写完头像要 seed 那份 60 秒 `profileCache`，不是作废**（`AccountService.seedAvatarVersion`，dev-board#603）：
+  `profileIdentity()` 的 `avatarUpdatedAt` 来自这份缓存，而 `AccountIdentitySync.refresh()`
+  恒以 `touchAvatar=true` 回写本机 `User` 行——缓存里还是上传前那份的话，接下来任何一次
+  `/api/account/status|profile` 都会把刚写好的头像回滚（首传即回滚成 null）。
+  只作废不够：下一次要重新问官网 `/me`，刚 POST 完那一瞬间读侧未必跟上，拿回旧版本号照样回滚；
+  新版本号这一刻就在手里，直接写进缓存。**不要给 `AccountIdentitySync.refresh()` 加时间戳比较**——
+  那是引入第二份真相。
+- **上传拼不出 `avatarUrl` 一律按失败抛 MALFORMED**：回一个「成功但 `avatarUrl` 为 null」会让
+  `AccountController` 反手 `applyAvatarUrl(null)` 清空本机行，而 `api.js` 只看 `code` 照弹「上传成功」。
+- 界面跟上靠 `uni.$emit('awd:identity-updated')`：发的一端是 `PersonalSettingsPanel`
+  （改名/传/删三处）与 `AdminPane.triggerAvatarUpload`，收的一端是 `AdminPane` 与
+  `project-overview`（顶栏头像 + 参与人堆叠）。`project-overview` 是 `navigateTo` 反复进入的多实例页，
+  `uni.$on` 必须在 `beforeUnmount` 里按引用 `uni.$off`。
 - **同步唯一出口是 `service/account/AccountIdentitySync`**（`refresh` / `refreshQuietly` /
   `applyDisplayName` / `applyAvatarUrl`），落点四处：连接账户时、每次 `GET /api/account/status`
   （应用启动会拉）、`GET /api/account/profile`、三个写动作之后。

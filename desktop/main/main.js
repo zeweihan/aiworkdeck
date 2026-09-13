@@ -313,6 +313,30 @@ function attachCopyListener(webContents, sourceLabel) {
   })
 }
 
+// 官网头像（GET {官网}/api/avatar/{accountId}?v=...）的响应带
+// `Cross-Origin-Resource-Policy: same-site`。主窗口是 loadFile 出来的 file:// 页面，
+// 与 www.aiworkdeck.com 永远不可能同站，于是 Chromium 在网络层就把这张图拦掉
+// （net::ERR_BLOCKED_BY_RESPONSE.NotSameSite），渲染层拿到的是一次**静默失败**：
+// <image> 什么都不画，顶栏那颗头像只剩 --awd-accent 的纯色圆——连首字母都没有，
+// 因为 avatarUrl 是真值，v-else 的首字母分支根本不渲染（dev-board#603 的症状原样）。
+// webPreferences.webSecurity:false 关不掉这一条（已实测：Chrome 带 --disable-web-security
+// 同样拦），所以只能在响应头这一层解，与 zetaoffice-session 给 webview 分区装 COOP/COEP
+// 是同一个手法。作用面收到「路径是 /api/avatar/ 的响应」这一条，且只动 CORP 这一个头。
+// 正解在官网侧——那个端点本来就是匿名公开的，应当发 cross-origin；官网改好后这段可撤。
+function attachAvatarCorpRelaxation(ses) {
+  if (!ses || ses.__checkbaAvatarCorpBound) return
+  ses.__checkbaAvatarCorpBound = true
+  ses.webRequest.onHeadersReceived({ urls: ['*://*/api/avatar/*'] }, (details, callback) => {
+    const headers = Object.assign({}, details.responseHeaders)
+    // 大小写不定（nginx 回的是全小写），先把已有的那一份摘掉再写规范名，避免两条并存
+    for (const name of Object.keys(headers)) {
+      if (name.toLowerCase() === 'cross-origin-resource-policy') delete headers[name]
+    }
+    headers['Cross-Origin-Resource-Policy'] = ['cross-origin']
+    callback({ responseHeaders: headers })
+  })
+}
+
 // 下载弹「另存为」对话框的监听器：挂在 session 上，跟 attachCopyListener 一样用
 // 一个标记位去重。macOS 下关主窗口不退出应用（见下方 window-all-closed），用户可以
 // 反复点 Dock 图标触发 createMainWindow() 重开窗口——mainWindow.webContents.session
@@ -387,6 +411,10 @@ function createMainWindow() {
       webviewTag: true
     }
   })
+
+  // 官网头像的 CORP 放行（dev-board#603）。必须赶在第一次 load 之前挂上，
+  // 否则首屏那次头像请求会漏在拦截器外面。只挂一次（函数内自带去重标记）。
+  attachAvatarCorpRelaxation(mainWindow.webContents.session)
 
   // UI：直接复用现有 frontend（开发态用 dev server）
   if (IS_DEV) {
