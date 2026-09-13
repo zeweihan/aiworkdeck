@@ -290,7 +290,11 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
   `/www/wwwroot/plugin-packs/` 暂存校验后换入、双机验证后才切 manifest 指针 /
   verify 两站对账。产物来自 workflow `pack-release.yml`（workflow_dispatch，
   tag `pack-<id>-v<ver>`，win 侧 graphviz 只能在 win runner 出）。规范
-  `docs/NATIVE_PACK_DISTRIBUTION.md`。
+  `docs/NATIVE_PACK_DISTRIBUTION.md`。**终验别在本机等（2026-09-14 pptx-runtime 1.0.1 实测）**：
+  `publish` 的两站公网终验在本机 curl，本机拉 workdeck.ai 只有约 16KB/s（拉北京 13MB/s），183MB 的 lib
+  要三小时、看着像卡死；版本目录在两台机就位而指针未切时，杀掉本地 publish，把脚本 scp 到新加坡机跑
+  `verify <id> <ver>`（自身 30MB/s、拉北京 26MB/s，26 秒），通过后按 `switch_pointer` 的原子 cp+mv 在两台机各切
+  一次，再 curl 两站 `<id>/manifest.json` 核版本。
 - **`deploy/publish-lowa-engine.sh` — 换 LOWA 引擎必须走它，别手工传**（issue #310）。
   `check-build <目录>` 只在本地验产物；`publish <目录> <版本号>` 发到两台机；`verify <版本号>` 切指针前必跑。
   它把三件必须同时做对的事绑在一起：按形态判定该压不该压、**两台机都同步**（新加坡是本地镜像直出、
