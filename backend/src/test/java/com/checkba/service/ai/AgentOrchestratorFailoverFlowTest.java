@@ -214,6 +214,34 @@ class AgentOrchestratorFailoverFlowTest {
     }
 
     @Test
+    @DisplayName("断网（UnknownHost）：只重试 1 次、不换模型，终态载荷带 AI_NETWORK_UNREACHABLE（dev-board#602）")
+    void networkUnreachableRetriesOnceThenTerminatesWithMarker() {
+        when(chatModelFactory.getStreamingChatModel(PRIMARY))
+                .thenReturn(new FailingModel(new RuntimeException("Error while streaming response",
+                        new java.net.UnknownHostException("openrouter.ai"))));
+        when(chatModelFactory.getStreamingChatModel(BACKUP))
+                .thenReturn(new HealthyModel("不应该被用到"));
+
+        run("conv-offline");
+
+        // 重试是排在 LLM_RETRY_SCHEDULER 上的（2s），等它跑完这一轮
+        long deadline = System.currentTimeMillis() + 15000;
+        while (!sseEvents.contains("error") && System.currentTimeMillis() < deadline) {
+            try { Thread.sleep(50); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+        }
+
+        assertTrue(sseEvents.contains("error"), "断网必须在一次重试后就给出终态，不能挂着：" + allText());
+        assertTrue(allText().contains(LlmErrorClassifier.NETWORK_UNREACHABLE_MARKER),
+                "终态载荷要带标记，前端才能说「网络连接异常」而不是甩一个主机名：" + allText());
+        verify(chatModelFactory, never()).getStreamingChatModel(eq(BACKUP));
+        assertTrue(allText().contains("第 1/1 次"),
+                "退避提示要如实说只重试一次：" + allText());
+        assertTrue(allText().contains("连不上"),
+                "退避提示要说是连不上，而不是「模型服务暂时不可用」：" + allText());
+        assertEquals(AgentRunStateService.RunStatus.ERROR, runState.get("conv-offline").status());
+    }
+
+    @Test
     @DisplayName("鉴权类 FATAL 错误不换模型：重放也不会好，白换一次还多花一次调用")
     void doesNotFailoverOnFatalError() {
         when(chatModelFactory.getStreamingChatModel(PRIMARY))

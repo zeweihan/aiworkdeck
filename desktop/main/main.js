@@ -42,6 +42,39 @@ app.on('second-instance', () => {
 const DEV_SERVER_URL = process.env.CHECKBA_DEV_SERVER_URL || 'http://localhost:5173'
 const IS_DEV = process.env.AIWORKDECK_DESKTOP_DEV === '1'
 
+// 主进程自己的事件日志：~/.aiworkdeck/logs/desktop.log，JSONL 一行一条
+// （格式与路径都与 update-service 的 update.log 同源，不另起一套日志体系）。
+// 存在的理由是 dev-board#602：应用整体消失时，主进程这一侧一个字都没留下，
+// 事后只能去翻 macOS 统一日志反推。
+function logDesktopEvent(type, data) {
+  const evt = { ts: new Date().toISOString(), type, ...data }
+  try {
+    const dir = path.join(app.getPath('home'), '.aiworkdeck', 'logs')
+    require('fs').mkdirSync(dir, { recursive: true })
+    require('fs').appendFileSync(path.join(dir, 'desktop.log'), JSON.stringify(evt) + '\n')
+  } catch (e) { /* 日志失败不阻断任何流程 */ }
+}
+
+// 主进程的全局兜底（dev-board#602）。此前 desktop/main 与 desktop/preload 全树没有任何
+// uncaughtException/unhandledRejection 处理器——drawio-server.js 的注释早就自证过这条路径
+// 会让整个应用无提示消失，断网时更是凭空多出大量异步错误源（更新检查、账户同步等）。
+// 纪律：只记账 + console.error，**明确不退出、不弹 dialog**——断网时这类错误成片出现，
+// 弹框会连环弹，退出则正是本卡要消灭的那个症状。
+process.on('uncaughtException', (err) => {
+  console.error('[main] uncaughtException', err)
+  logDesktopEvent('uncaught-exception', {
+    message: String((err && err.message) || err),
+    stack: String((err && err.stack) || '')
+  })
+})
+process.on('unhandledRejection', (reason) => {
+  console.error('[main] unhandledRejection', reason)
+  logDesktopEvent('unhandled-rejection', {
+    message: String((reason && reason.message) || reason),
+    stack: String((reason && reason.stack) || '')
+  })
+})
+
 function escapeHtml(s) {
   return String(s || '')
     .replace(/&/g, '&amp;')
@@ -1711,19 +1744,47 @@ app.on('activate', () => {
   if (mainWindowStartupReady && BrowserWindow.getAllWindows().length === 0) createMainWindow()
 })
 
+// 退出时等服务停干净的总墙钟上限。stopAll 里每个服务各有 3s 的 SIGTERM→SIGKILL 兜底，
+// 并行之后正常就是一次 3s 上下；这里给一个略宽的硬上限，任何一个服务卡在 kill 之外的
+// 地方都不至于让应用「既没有窗口也不退出」（dev-board#602）。
+const QUIT_STOP_TIMEOUT_MS = 4000
+
+function hideAllWindowsForQuit() {
+  try {
+    for (const w of BrowserWindow.getAllWindows()) {
+      try { if (!w.isDestroyed()) w.hide() } catch (e) { /* ignore */ }
+    }
+  } catch (e) { /* ignore */ }
+}
+
 app.on('before-quit', async (e) => {
   // 尽量在退出时停止我们启动的本地服务进程
   if (services) {
+    const quitStartedAt = Date.now()
     try {
       e.preventDefault()
+      // ① 先记账：下次再出现「应用自己消失了」，能直接从 desktop.log 读出退出起点与耗时，
+      //    不用再去反推 macOS 统一日志（dev-board#602 那次就是这么查的）。
+      logDesktopEvent('quit-begin', { pid: process.pid })
+      // ② 立刻把窗口藏掉。preventDefault 之后停服务要好几秒，原来这段时间里窗口
+      //    完全可用、还能建 SSE 发新请求，然后整个应用在同一瞬间消失——用户看到的
+      //    就是「闪退」。先 hide 才是 Mac 应用按 ⌘Q 的正常观感：窗口立刻消失，
+      //    收尾在后台进行。
+      hideAllWindowsForQuit()
       // 先终止进行中的模型下载子进程，否则退出时它们会变孤儿继续占用资源
       if (modelManager) modelManager.killAllActive()
-      await services.stopAll()
+      // ③ 停服务带总墙钟上限：到点就走，不再无限等
+      await Promise.race([
+        services.stopAll(),
+        new Promise((r) => setTimeout(r, QUIT_STOP_TIMEOUT_MS))
+      ])
     } catch (err) {
       // ignore
     }
+    logDesktopEvent('quit-stopped', { elapsedMs: Date.now() - quitStartedAt })
     services = null
     stopClipboardWatcher()
+    logDesktopEvent('quit-end', { elapsedMs: Date.now() - quitStartedAt })
     app.exit(0)
   }
 })

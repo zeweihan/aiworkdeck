@@ -1229,6 +1229,12 @@ export function useAgentStream() {
                     // 走到这里说明后端强制压缩后仍装不下（或压不动）
                     currentAssistantBubble.value.content +=
                         '\n\n' + t('agentStream.contextOverflowNotice') + '\n'
+                } else if (errMsg.includes('AI_NETWORK_UNREACHABLE')) {
+                    // 本机连不上模型网关（后端 LlmErrorClassifier.NETWORK_UNREACHABLE_MARKER）：
+                    // 断网/DNS 解析不了/TLS 握手被掐断。上游原文这时往往只有一个主机名
+                    // （UnknownHostException 的 getMessage()），甩给用户等于没有信息（dev-board#602）。
+                    currentAssistantBubble.value.content +=
+                        '\n\n' + t('agentStream.networkUnreachableNotice') + '\n'
                 } else if (errMsg.includes('AI_INTERNAL_ERROR')) {
                     // 编排器内部一致性错误（后端 LlmErrorClassifier.INTERNAL_ERROR_MARKER）：
                     // 载荷后面拼着裸 Java 异常文本（如 "text cannot be null or blank"），

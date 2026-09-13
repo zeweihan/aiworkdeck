@@ -218,26 +218,32 @@ class ServiceManager {
     this.procs.delete(name)
     return new Promise((resolve) => {
       let finished = false
+      let killTimer = null
       const done = () => {
         if (finished) return
         finished = true
+        // 进程已经退了就把强杀定时器撤掉：原来这个 setTimeout 从不取消，每停一次服务
+        // 就留一个 3 秒的悬挂句柄（退出路径上还会把事件循环多吊住 3 秒）
+        if (killTimer) { clearTimeout(killTimer); killTimer = null }
         resolve({ ok: true })
       }
       p.once('exit', () => done())
       try { p.kill('SIGTERM') } catch (e) { done(); return }
-      // 兜底：3s 后强杀
-      setTimeout(() => {
+      // 兜底：3s 后强杀。这个窗口刻意不缩小——后端的 H2 库就落在 ~/.aiworkdeck/local.mv.db，
+      // 缩窗只会提高硬杀概率，而后端关闭的真实阻塞点至今没定位（dev-board#602）。
+      killTimer = setTimeout(() => {
         try { p.kill('SIGKILL') } catch (e) { /* ignore */ }
         done()
       }, 3000)
     })
   }
 
+  // 并行停所有服务。各服务之间没有停止顺序依赖（端口、数据目录都各管各的），
+  // 逐个 await 只是把每个服务最坏 3 秒的强杀兜底线性叠加起来：退出时后端一个人
+  // 装死就够让「⌘Q 到应用消失」拖成 6 秒，用户看着一个还能点的窗口，最后整个应用
+  // 在同一瞬间消失——观感与闪退不可区分（dev-board#602）。
   async stopAll() {
-    for (const name of [...this.procs.keys()]) {
-      // eslint-disable-next-line no-await-in-loop
-      await this.stop(name)
-    }
+    await Promise.all([...this.procs.keys()].map((name) => this.stop(name)))
     // 退出/全停时关闭所有日志流，释放 fd
     for (const [, s] of this.logStreams) { try { s.end() } catch (e) { /* ignore */ } }
     this.logStreams.clear()
