@@ -539,7 +539,7 @@ class ServiceConfig:
             ServiceConfig实例
         
         Raises:
-            ValueError: 如果 mineru_token 未配置
+            ValueError: 既没有本机 MinerU 引擎、也没有配置云端 token
         """
         # 处理新参数：extractor_method 优先于 use_hybrid_extractor
         if extractor_method is not None:
@@ -562,10 +562,6 @@ class ServiceConfig:
             if upload_folder is None:
                 upload_folder = './uploads'
         
-        # 验证必需配置
-        if not mineru_token:
-            raise ValueError("MinerU token is required. Please configure MINERU_TOKEN.")
-        
         from services.file_parser_service import FileParserService
         
         # 解析upload_folder路径
@@ -580,9 +576,20 @@ class ServiceConfig:
         
         # 创建MinerU解析服务
         parser_service = FileParserService(
-            mineru_token=mineru_token,
+            mineru_token=mineru_token or '',
             mineru_api_base=mineru_api_base
         )
+
+        # [checkba] 版面分析的门是「有引擎可用」，不是「有云端 token」。
+        # 桌面发行版从不注入 MINERU_TOKEN（设置页写配置的接口还被 PPTX_SETTINGS_TOKEN 恒 403），
+        # 以前这里无 token 必抛，可编辑导出在发行版里从未成功过。本机引擎在跑就放行，
+        # 两头都没有才报错——错误信息直接指向本机引擎，别把用户引去申请云端 token。
+        if not mineru_token and not parser_service.local_service_available():
+            raise ValueError(
+                "本机 MinerU 引擎未运行（local MinerU service unavailable），"
+                "且未配置云端 MINERU_TOKEN：无法做版面分析。"
+                "请先在「设置 → 组件管理」下载并启动「扫描件 OCR 引擎（MinerU）」组件。"
+            )
         
         # 创建提取器注册表
         extractor_registry = ExtractorRegistry()

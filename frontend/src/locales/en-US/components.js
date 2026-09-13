@@ -44,7 +44,7 @@ export default {
   },
   mineruRuntime: {
     name: 'Scanned-document OCR engine (MinerU)',
-    unlocks: 'Word conversion and layout recognition for scanned PDFs with no text layer; only needed for scans, and requires "Slides and PDF-to-Word"',
+    unlocks: 'Word conversion and layout recognition for scanned PDFs with no text layer, editable PPT export; only needed for scans, and requires "Slides and PDF-to-Word"',
     impact: 'scanned PDFs cannot be converted to Word; text-based PDFs are unaffected',
   },
   kokoroRuntime: {
@@ -65,6 +65,7 @@ export default {
     scannedOcrEntry: 'scanned-document OCR entry (also needs the OCR engine)',
     scannedPdfToWord: 'scanned PDF to Word',
     ocrParse: 'OCR layout parsing',
+    pptxEditableExport: 'editable PPT export',
     ttsPanel: 'speech synthesis panel',
     localTranscription: 'on-device transcription',
   },
