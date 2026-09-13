@@ -127,6 +127,54 @@ class ComponentRequiredTest {
     }
 
     @Test
+    @DisplayName("pptx_export_editable：mineru-runtime 未装时发 component_required，不碰 pptx-service")
+    void editableExportPromptsForMineruComponent() {
+        PptxServiceClient client = mock(PptxServiceClient.class);
+        NativePackService packs = mock(NativePackService.class);
+        when(packs.isReady("pptx-runtime")).thenReturn(true);
+        when(packs.isReady("mineru-runtime")).thenReturn(false);
+        when(packs.knownSizes("mineru-runtime")).thenReturn(new NativePackService.Sizes(1_048_576_000L, 0L));
+        EditorBridgeService bridge = mock(EditorBridgeService.class);
+
+        String out = pptxTools(client, bridge, packs).pptx_export_editable("proj-1", "报告", null);
+
+        verify(bridge).sendComponentRequiredAction(eq("mineru-runtime"), eq("mineru-service"),
+                eq("mineru-models"), eq(1000L),
+                eq(OptionalComponents.byPackId("mineru-runtime").featureKeys()), eq("pptx_export_editable"));
+        assertTrue(out.contains("已请用户确认下载"), out);
+        assertFalse(out.contains("稍后重试"), "组件没装时让用户「稍后重试」是死路：" + out);
+        // 组件缺失时不能先去调服务：那条路就是历史上「静默降级纯图片」的来源
+        verify(client, never()).startExportEditable(anyString(), any(), any());
+    }
+
+    @Test
+    @DisplayName("pptx_export_editable：pptx-runtime 未装时先提示它（导出的宿主服务），trigger 仍是本工具名")
+    void editableExportPromptsForPptxComponentFirst() {
+        PptxServiceClient client = mock(PptxServiceClient.class);
+        NativePackService packs = mock(NativePackService.class);
+        when(packs.isReady("pptx-runtime")).thenReturn(false);
+        when(packs.knownSizes("pptx-runtime")).thenReturn(new NativePackService.Sizes(173_015_040L, 0L));
+        EditorBridgeService bridge = mock(EditorBridgeService.class);
+
+        String out = pptxTools(client, bridge, packs).pptx_export_editable("proj-1", "报告", null);
+
+        verify(bridge).sendComponentRequiredAction(eq("pptx-runtime"), eq("pptx-service"), isNull(),
+                eq(165L), eq(OptionalComponents.byPackId("pptx-runtime").featureKeys()),
+                eq("pptx_export_editable"));
+        verify(bridge, never()).sendComponentRequiredAction(eq("mineru-runtime"), anyString(), any(),
+                anyLong(), anyList(), anyString());
+        assertFalse(out.contains("稍后重试"), out);
+        verify(client, never()).startExportEditable(anyString(), any(), any());
+    }
+
+    @Test
+    @DisplayName("mineru-runtime 的 featureKeys 含 pptxEditableExport（前端 features 文案的对面）")
+    void mineruUnlocksEditableExport() {
+        assertTrue(OptionalComponents.byPackId("mineru-runtime").featureKeys().contains("pptxEditableExport"),
+                "可编辑导出靠 mineru 做版面分析，组件卡上必须列出这条解锁项");
+    }
+
+    @Test
     @DisplayName("扫描件 OCR 失败且 mineru-runtime 未装：发 component_required，不说「稍后重试」")
     void scannedPdfPromptsForMineruComponent(@TempDir Path tmp) throws Exception {
         Path onDisk = Files.writeString(tmp.resolve("scan.pdf"), "%PDF-1.7");

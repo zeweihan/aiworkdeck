@@ -54,6 +54,8 @@ export const FORCE_INCLUDE_FILES = new Set([
   'pptx-service/backend/tests/unit/test_text_sanitizer.py',
   'pptx-service/backend/tests/unit/test_pptx_formatting.py',
   'pptx-service/backend/tests/unit/test_pdf_convert.py',
+  'pptx-service/backend/tests/unit/test_image_editability_factory_gate.py',
+  'pptx-service/backend/tests/integration/test_editable_export_local_mineru.py',
   'pptx-service/compat_smoke_test.sh',
 ]);
 

@@ -26,7 +26,7 @@ public final class OptionalComponents {
             new Entry("pptx-runtime", "pptx-service", null, 0L,
                     List.of("pptxGenerate", "pptxFormat", "pdfToWordLayout", "scannedOcrEntry")),
             new Entry("mineru-runtime", "mineru-service", "mineru-models", 3L * 1024 * 1024 * 1024,
-                    List.of("scannedPdfToWord", "ocrParse")),
+                    List.of("scannedPdfToWord", "ocrParse", "pptxEditableExport")),
             new Entry("kokoro-runtime", "kokoro-service", "kokoro-models", 300L * 1024 * 1024,
                     List.of("ttsPanel")),
             new Entry("asr-runtime", "asr-service", "asr-models", 1536L * 1024 * 1024,

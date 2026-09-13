@@ -45,9 +45,9 @@ test('动作与状态键清单齐备（两个下载入口的文案是分开的�
   }
 })
 
-test('八个功能键齐备（后端 featureKeys 的对面）', () => {
+test('九个功能键齐备（后端 featureKeys 的对面）', () => {
   const keys = ['pptxGenerate', 'pptxFormat', 'pdfToWordLayout', 'scannedOcrEntry',
-    'scannedPdfToWord', 'ocrParse', 'ttsPanel', 'localTranscription']
+    'scannedPdfToWord', 'ocrParse', 'pptxEditableExport', 'ttsPanel', 'localTranscription']
   for (const k of keys) {
     assert.ok(zh.features[k], `zh-CN 缺 components.features.${k}`)
     assert.ok(en.features[k], `en-US 缺 components.features.${k}`)

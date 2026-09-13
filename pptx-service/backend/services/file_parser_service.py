@@ -60,6 +60,45 @@ def _get_local_mineru_url() -> str:
     return os.getenv("MINERU_LOCAL_URL", "")
 
 
+def _mineru_storage_root():
+    """
+    [checkba] MinerU 解析产物（layout.json / *_content_list.json）的落盘根目录。
+
+    必须与读取侧同源：可编辑导出的提取器用的是 Flask config 的 UPLOAD_FOLDER
+    （见 image_editability/factories.py 的 ServiceConfig.from_defaults），而桌面打包态
+    注入 PPTX_DATA_DIR 后 UPLOAD_FOLDER 是 ~/.aiworkdeck/pptx/uploads，并不等于仓库里的
+    project_root/uploads——写在 project_root 下等于写进读不到的地方。
+    无 Flask 上下文时（脚本/单测）回退老路径。
+    """
+    from pathlib import Path
+    try:
+        from flask import current_app
+        if current_app and hasattr(current_app, "config"):
+            upload_folder = current_app.config.get("UPLOAD_FOLDER")
+            if upload_folder:
+                return Path(upload_folder) / "mineru_files"
+    except RuntimeError:
+        pass
+    project_root = Path(__file__).resolve().parent.parent.parent
+    return project_root / "uploads" / "mineru_files"
+
+
+def _coerce_json_payload(raw):
+    """[checkba] 本地 MinerU 把 middle_json / content_list 以 JSON 字符串下发，统一解析成对象。"""
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, (dict, list)):
+        return raw
+    if isinstance(raw, str):
+        import json as json_module
+        try:
+            return json_module.loads(raw)
+        except json_module.JSONDecodeError as e:
+            logger.warning(f"Failed to parse MinerU JSON payload: {e}")
+            return None
+    return None
+
+
 def _get_ai_provider_format(provider_format: str = None) -> str:
     """Get the configured AI provider format
     
@@ -219,6 +258,17 @@ class FileParserService:
         self._use_local_service = False
         return False
 
+    def local_service_available(self) -> bool:
+        """
+        [checkba] 本机 MinerU 引擎是否可用（探测带缓存，与 parse_file 同一判据）。
+
+        强制云端开关打开时一律返回 False——那种配置下解析根本不会走本地服务。
+        供工厂层判断「无 token 能不能构造」，避免外部去摸私有方法。
+        """
+        if _should_force_cloud():
+            return False
+        return self._check_local_service()
+
     def _parse_with_local_service(self, file_path: str, filename: str) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str], int]:
         """
         [checkba] Parse file using local MinerU service (official mineru-api)
@@ -241,6 +291,11 @@ class FileParserService:
                     'lang_list': 'ch',  # Chinese + English
                     'return_md': 'true',  # Return markdown in response
                     'return_content_list': 'true',  # Return content list for PPTX generation
+                    # [checkba] middle_json 就是云端 zip 里那份 layout.json：pdf_info[0] 的
+                    # para_blocks / discarded_blocks 带 bbox 与 page_size，是可编辑导出
+                    # （MinerUElementExtractor）唯一的元素来源。不要这份，本地路径解析得
+                    # 再好，导出也只拿到空元素表、静默退回纯图片版。
+                    'return_middle_json': 'true',
                 }
 
                 # Official mineru-api is synchronous and may take a long time
@@ -269,6 +324,7 @@ class FileParserService:
             # Official MinerU API format: {"backend": "...", "version": "...", "results": {filename: {...}}}
             markdown_content = None
             content_list = []
+            middle_json = None
 
             if 'results' in result and isinstance(result['results'], dict):
                 # New format: {"results": {filename: {"md_content": "...", "content_list": "..."}}}
@@ -277,27 +333,16 @@ class FileParserService:
                     # Get the first file's result
                     first_file = list(results.values())[0]
                     markdown_content = first_file.get('md_content', '')
-                    content_list_raw = first_file.get('content_list')
-
-                    # content_list may be a JSON string, need to parse
-                    if isinstance(content_list_raw, str):
-                        import json as json_module
-                        try:
-                            content_list = json_module.loads(content_list_raw)
-                        except json_module.JSONDecodeError as e:
-                            logger.warning(f"Failed to parse content_list JSON: {e}")
-                            content_list = []
-                    elif isinstance(content_list_raw, list):
-                        content_list = content_list_raw
-                    else:
-                        content_list = []
+                    content_list = _coerce_json_payload(first_file.get('content_list')) or []
+                    middle_json = _coerce_json_payload(first_file.get('middle_json'))
 
                     logger.info(f"Parsed MinerU response: backend={result.get('backend')}, version={result.get('version')}")
             elif isinstance(result, list) and len(result) > 0:
                 # Legacy format fallback: [{"md_content": "...", "content_list": [...]}]
                 first_result = result[0]
                 markdown_content = first_result.get('md_content', '')
-                content_list = first_result.get('content_list', [])
+                content_list = _coerce_json_payload(first_result.get('content_list')) or []
+                middle_json = _coerce_json_payload(first_result.get('middle_json'))
 
             if not markdown_content:
                 error_msg = "No markdown content in local MinerU response"
@@ -308,11 +353,13 @@ class FileParserService:
             import uuid
             extract_id = str(uuid.uuid4())[:8]
 
-            # Save content_list to local storage for PPTX generation
-            if content_list:
-                self._save_local_mineru_result(extract_id, content_list)
+            # Save content_list + layout.json to local storage（PPTX 生成 / 可编辑导出都读它）
+            self._save_local_mineru_result(extract_id, content_list, middle_json)
 
-            logger.info(f"Local MinerU parsing completed, markdown length: {len(markdown_content)}, content_list items: {len(content_list)}")
+            logger.info(
+                f"Local MinerU parsing completed, markdown length: {len(markdown_content)}, "
+                f"content_list items: {len(content_list)}, layout.json: {'yes' if middle_json else 'no'}"
+            )
 
             # Enhance markdown with image captions
             if markdown_content and self._can_generate_captions():
@@ -331,29 +378,38 @@ class FileParserService:
             logger.error(error_msg, exc_info=True)
             return None, None, None, error_msg, 0
 
-    def _save_local_mineru_result(self, extract_id: str, content_list: list):
-        """[checkba] Save content_list to local storage for PPTX generation"""
+    def _save_local_mineru_result(self, extract_id: str, content_list: list, middle_json=None):
+        """
+        [checkba] Save content_list (+ layout.json) to local storage.
+
+        两个文件都是可编辑导出的硬依赖：`MinerUElementExtractor._extract_from_result`
+        要求同一目录里 layout.json 与 *_content_list.json 都在，缺任一就返回空元素表。
+        layout.json 的内容来自本地服务的 middle_json（与云端 zip 里的 layout.json 同构）。
+        """
         import json
-        from pathlib import Path
 
         try:
-            # Navigate to project root
-            current_file = Path(__file__).resolve()
-            backend_dir = current_file.parent.parent
-            project_root = backend_dir.parent
-
-            # Create directory for mineru results
-            mineru_storage = project_root / 'uploads' / 'mineru_files' / extract_id
+            mineru_storage = _mineru_storage_root() / extract_id
             mineru_storage.mkdir(parents=True, exist_ok=True)
 
-            # Save content_list as JSON
+            # content_list 即使为空也落盘：提取器按文件存在性把关
             content_list_file = mineru_storage / f'{extract_id}_content_list.json'
             with open(content_list_file, 'w', encoding='utf-8') as f:
-                json.dump(content_list, f, ensure_ascii=False, indent=2)
-
+                json.dump(content_list or [], f, ensure_ascii=False, indent=2)
             logger.info(f"Saved MinerU content_list to: {content_list_file}")
+
+            if middle_json:
+                layout_file = mineru_storage / 'layout.json'
+                with open(layout_file, 'w', encoding='utf-8') as f:
+                    json.dump(middle_json, f, ensure_ascii=False, indent=2)
+                logger.info(f"Saved MinerU layout.json to: {layout_file}")
+            else:
+                logger.warning(
+                    "本地 MinerU 未返回 middle_json，layout.json 缺失："
+                    "可编辑导出将拿不到版面元素（检查 return_middle_json 是否被服务端忽略）"
+                )
         except Exception as e:
-            logger.warning(f"Failed to save MinerU content_list: {e}")
+            logger.warning(f"Failed to save MinerU result files: {e}")
 
     def parse_file(self, file_path: str, filename: str) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str], int]:
         """
@@ -656,18 +712,10 @@ class FileParserService:
             import uuid
             extract_id = str(uuid.uuid4())[:8]
             
-            # Get upload folder from Flask config (we'll need to pass this)
-            # For now, use a hardcoded path relative to project root
-            import os
-            from pathlib import Path
-            
-            # Navigate to project root (assuming this file is in backend/services/)
-            current_file = Path(__file__).resolve()
-            backend_dir = current_file.parent.parent
-            project_root = backend_dir.parent
-            
             # Create directory for mineru extracts
-            mineru_storage = project_root / 'uploads' / 'mineru_files' / extract_id
+            # [checkba] 与本地通路、页眉页脚读取共用 _mineru_storage_root()：三处必须同源，
+            # 否则打包态（PPTX_DATA_DIR 改写 UPLOAD_FOLDER）会写进读不到的地方
+            mineru_storage = _mineru_storage_root() / extract_id
             mineru_storage.mkdir(parents=True, exist_ok=True)
             
             logger.info(f"Extracting ZIP to: {mineru_storage}")
@@ -729,11 +777,9 @@ class FileParserService:
             提取到的页眉页脚文本，如无则返回空字符串
         """
         import json
-        from pathlib import Path
 
-        current_file = Path(__file__).resolve()
-        project_root = current_file.parent.parent.parent
-        mineru_dir = project_root / 'uploads' / 'mineru_files' / extract_id
+        # 与写入侧（_save_local_mineru_result / 云端 zip 解包）同一个根目录
+        mineru_dir = _mineru_storage_root() / extract_id
         layout_file = mineru_dir / 'layout.json'
 
         if not layout_file.exists():

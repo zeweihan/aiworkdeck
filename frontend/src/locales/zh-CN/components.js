@@ -48,7 +48,7 @@ export default {
   },
   mineruRuntime: {
     name: '扫描件 OCR 引擎（MinerU）',
-    unlocks: '没有文字层的扫描件 PDF 转 Word、版面识别；只有处理扫描件时才需要，并且要先装「PPT 生成与 PDF 转 Word」',
+    unlocks: '没有文字层的扫描件 PDF 转 Word、版面识别、PPT 可编辑导出；只有处理扫描件时才需要，并且要先装「PPT 生成与 PDF 转 Word」',
     impact: '扫描件 PDF 无法转 Word；带文字层的 PDF 不受影响',
   },
   kokoroRuntime: {
@@ -69,6 +69,7 @@ export default {
     scannedOcrEntry: '扫描件 OCR 入口（还需 OCR 引擎）',
     scannedPdfToWord: '扫描件 PDF 转 Word',
     ocrParse: 'OCR 版面解析',
+    pptxEditableExport: 'PPT 可编辑导出',
     ttsPanel: '语音合成面板',
     localTranscription: '录音不出本机的转写',
   },
