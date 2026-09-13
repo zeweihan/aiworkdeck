@@ -24,19 +24,6 @@ const vm = require('node:vm')
 const { EventEmitter } = require('node:events')
 const { createServiceManager, findFreePort } = require('../main/services/service-manager')
 
-// 「装死」的假服务：监听端口让 start() 能就绪，但**明确忽略 SIGTERM**——这正是断网那次
-// 后端的等价形态（SIGTERM 后一行关闭日志都没有，最后被 SIGKILL 掐掉）。
-const DEAF_SERVICE = `
-  process.on('SIGTERM', () => {});
-  const http = require('http');
-  http.createServer((req, res) => res.end('ok')).listen(Number(process.env.PORT), '127.0.0.1');
-`
-// 对照用：老老实实响应 SIGTERM 的服务（默认行为即退出）
-const POLITE_SERVICE = `
-  const http = require('http');
-  http.createServer((req, res) => res.end('ok')).listen(Number(process.env.PORT), '127.0.0.1');
-`
-
 function descriptor(name, script) {
   return {
     name,
@@ -67,33 +54,45 @@ function makeManager(t) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 test('stopAll 并行停服务：两个装死的服务一次 3s 兜底，不是 2×3s 串行叠加', async (t) => {
+  // 「装死」用假的子进程对象而不是真 spawn：Windows 上 process.kill('SIGTERM') 是
+  // TerminateProcess，子进程根本没有机会忽略它（v0.42.0 首次 tag 构建的 Windows 腿就
+  // 是这样红的），而这条用例要证的是 service-manager 自己的并行与 3s 兜底，与真进程无关。
+  const { EventEmitter } = require('events')
+  const deafProc = (log) => {
+    const p = new EventEmitter()
+    p.exitCode = null
+    p.signalCode = null
+    p.kill = (sig) => {
+      log.push(sig)
+      if (sig === 'SIGKILL') setImmediate(() => { p.exitCode = null; p.signalCode = 'SIGKILL'; p.emit('exit', null, 'SIGKILL') })
+      return true
+    }
+    return p
+  }
   const mgr = makeManager(t)
-  mgr.register(descriptor('deaf1', DEAF_SERVICE))
-  mgr.register(descriptor('deaf2', DEAF_SERVICE))
-  await mgr.allocatePorts()
-  await mgr.start('deaf1')
-  await mgr.start('deaf2')
+  const log1 = [], log2 = []
+  const p1 = deafProc(log1), p2 = deafProc(log2)
+  mgr.procs.set('deaf1', p1)
+  mgr.procs.set('deaf2', p2)
 
-  // 防空断言：先证明「病灶确实落地」——这两个子进程真的对 SIGTERM 无动于衷。
-  // 少了这一步，后面的时限断言可能因为子进程本来就秒退而恒绿。
-  const p1 = mgr.procs.get('deaf1')
-  const p2 = mgr.procs.get('deaf2')
-  assert.ok(p1 && p2, '两个假服务都应该已经 spawn')
+  // 防空断言：先证明「病灶确实落地」——这两个假进程对 SIGTERM 无动于衷。
+  // 少了这一步，后面的时限断言可能因为进程本来就秒退而恒绿。
   p1.kill('SIGTERM')
   p2.kill('SIGTERM')
-  await sleep(500)
-  assert.strictEqual(p1.exitCode, null, 'deaf1 必须仍然存活（SIGTERM 被忽略），否则本用例什么都没测')
-  assert.strictEqual(p1.signalCode, null, 'deaf1 不该已被信号杀死')
-  assert.strictEqual(p2.exitCode, null, 'deaf2 必须仍然存活（SIGTERM 被忽略）')
+  await sleep(200)
+  assert.strictEqual(p1.signalCode, null, 'deaf1 必须仍然存活（SIGTERM 被忽略），否则本用例什么都没测')
+  assert.strictEqual(p2.signalCode, null, 'deaf2 必须仍然存活（SIGTERM 被忽略）')
 
   const t0 = Date.now()
   await mgr.stopAll()
   const elapsed = Date.now() - t0
 
+  assert.deepStrictEqual(log1.slice(1), ['SIGTERM', 'SIGKILL'], 'deaf1 应经历 SIGTERM → 3s 兜底 SIGKILL')
+  assert.deepStrictEqual(log2.slice(1), ['SIGTERM', 'SIGKILL'], 'deaf2 应经历 SIGTERM → 3s 兜底 SIGKILL')
   // 串行版本是 2×3000ms ≈ 6s；并行后两个 3s 兜底同时跑，总耗时一次 3s 上下。
   assert.ok(elapsed < 4000,
     `stopAll 必须并行：两个装死服务应在一次 3s 兜底内停完，实测 ${elapsed}ms（串行会 >6000ms）`)
-  // 反向护栏：低于 2s 说明子进程其实是自己退的，上面的「装死」前提已经不成立
+  // 反向护栏：低于 2s 说明进程其实是自己退的，上面的「装死」前提已经不成立
   assert.ok(elapsed > 2000,
     `耗时 ${elapsed}ms 过短，说明装死的前提没成立，本用例不再证明并行`)
 })
