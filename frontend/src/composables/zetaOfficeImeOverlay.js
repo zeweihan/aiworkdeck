@@ -275,7 +275,13 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
   // explicit confirmation immediately; never infer it from Space/digit keys.
   // A later end/input pair may repeat the same text, so deduplicate only that
   // committed phrase, without swallowing cancellation or following punctuation.
-  let composing = false, compositionCommitted = false, trailingCommit = null
+  //
+  // `composing` means ONE thing: the browser composition is open (start..end).
+  // An early confirmation must NOT clear it — the system IME (macOS marked text)
+  // keeps its session alive past that confirmation, and a flag that disagrees
+  // lets the rest of the composition fall through as plain typing: raw pinyin in
+  // the document, control keys stolen from the candidate window (dev-board#606).
+  let composing = false, compositionCommitted = false, committedText = '', trailingCommit = null
   let trailingTimer = null
   const armTrailingCommit = (text) => {
     clearTimeout(trailingTimer)
@@ -283,7 +289,11 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     trailingTimer = trailingCommit ? setTimeout(() => { trailingCommit = null }, 0) : null
   }
   const doCommit = (t) => {
-    input.value = ''
+    // Emptying the box while the browser composition is open tears the DOM
+    // buffer away from the IME's marked-text session (the preedit stops being
+    // painted and the candidate window stays at the old anchor). compositionend
+    // clears it instead.
+    if (!composing) input.value = ''
     if (!t) return
     log('IME 覆盖层 → 上屏「' + t + '」')
     try { Promise.resolve(commit(t)).then(async (result) => {
@@ -295,15 +305,22 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     catch (e) { log('overlay commit error: ' + (e && e.message || e)) }
   }
   input.addEventListener('compositionstart', () => {
-    composing = true; compositionCommitted = false; armTrailingCommit(null)
+    composing = true; compositionCommitted = false; committedText = ''; armTrailingCommit(null)
   })
   input.addEventListener('compositionupdate', (e) => showPreview(e.data || ''))
   input.addEventListener('compositionend', (e) => {
     composing = false
     hidePreview()
-    if (!compositionCommitted) doCommit(e.data)
-    compositionCommitted = false
-    armTrailingCommit(e.data)
+    // An early confirmation already typed its phrase. The end event repeats that
+    // phrase on the IMEs that confirm first (#600), so type only what the IME
+    // added after it — never the confirmed prefix twice, never nothing when the
+    // composition went on to produce more text.
+    const data = e.data || ''
+    const pending = compositionCommitted && data.startsWith(committedText) ? data.slice(committedText.length) : data
+    if (!compositionCommitted || pending) doCommit(pending)
+    compositionCommitted = false; committedText = ''
+    input.value = ''
+    armTrailingCommit(data)
   })
   input.addEventListener('input', (e) => {
     const text = e.data != null ? e.data : input.value
@@ -311,13 +328,21 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     // its leftover value would type raw preedit into the document.
     const inserts = !e.inputType || /^insert/.test(e.inputType)
     if (composing) {
-      // Only a nonempty final insert confirms early. Cleanup deletes or an empty
-      // input must leave the composition open for its real compositionend text.
-      if (!inserts || !text || (e.isComposing !== false && e.inputType !== 'insertFromComposition')) {
-        showPreview(input.value); return
+      // Only a nonempty final insert confirms early, and only the first one.
+      // Cleanup deletes, an empty input, and everything after that confirmation
+      // must stay with the composition until its real compositionend.
+      if (compositionCommitted || !inserts || !text
+        || (e.isComposing !== false && e.inputType !== 'insertFromComposition')) {
+        if (compositionCommitted) hidePreview()
+        else showPreview(input.value)
+        return
       }
-      composing = false; compositionCommitted = true
+      // Type the confirmed phrase now (#600), but leave the composition state as
+      // the browser reports it — compositionend owns `composing` and the box.
+      compositionCommitted = true; committedText = text
       hidePreview()
+      doCommit(text)
+      return
     }
     if (!inserts) { input.value = ''; return }
     if (trailingCommit !== null) {

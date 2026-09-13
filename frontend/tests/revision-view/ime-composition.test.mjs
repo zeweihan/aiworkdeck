@@ -164,3 +164,66 @@ test('a genuine keystroke right after a one-letter commit is typed, not taken fo
   f.change('a', 'insertText', false)
   assert.deepEqual(f.commits, ['a', 'a'])
 })
+
+// dev-board#606. An early confirm (#600) inserts the phrase, but the BROWSER
+// composition may still be open: macOS keeps its marked-text session alive, so
+// the overlay must keep treating the rest of that composition as IME traffic.
+// Pretending it ended typed raw pinyin into the document and forwarded control
+// keys that belonged to the candidate window.
+test('an early confirm leaves the still-open composition to the IME, not to the document', t => {
+  const f = fixture(t); f.start()
+  f.change('文件', 'insertText', false)
+  assert.deepEqual(f.commits, ['文件'])
+  f.composition('compositionupdate', 'ziliao')
+  f.change('文件ziliao', 'insertCompositionText', true)
+  f.change('ziliao', 'insertText', false)
+  assert.deepEqual(f.commits, ['文件'],
+    'the rest of the composition must not be typed into the document as raw letters')
+})
+
+test('an early confirm does not clear the box while the browser composition is open', t => {
+  const f = fixture(t); f.start()
+  f.change('文件', 'insertText', false)
+  assert.equal(f.input.value, '文件',
+    'clearing the box tears the DOM buffer away from the open marked-text session')
+})
+
+test('control keys during a still-open composition after an early confirm stay with the IME', t => {
+  const f = fixture(t); f.start()
+  f.change('文件', 'insertText', false)
+  assert.equal(f.key({ key: 'Backspace', code: 'Backspace', keyCode: 8 }).defaultPrevented, false)
+  assert.equal(f.key({ key: 'Enter', code: 'Enter', keyCode: 13 }).defaultPrevented, false)
+  assert.equal(f.key({ key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 }).defaultPrevented, false)
+  assert.deepEqual(f.commands, [], 'these keys drive the candidate window, not the document')
+})
+
+test('compositionend repeating an early-confirmed phrase neither repeats nor drops it', t => {
+  const f = fixture(t); f.start()
+  f.change('文件', 'insertText', false)
+  f.composition('compositionend', '文件')
+  assert.deepEqual(f.commits, ['文件'])
+  assert.equal(f.input.value, '', 'the end of the composition is where the box is cleared')
+})
+
+test('compositionend that extends an early-confirmed phrase types only the added text', t => {
+  const f = fixture(t); f.start()
+  f.change('文件', 'insertText', false)
+  f.composition('compositionend', '文件资料')
+  assert.deepEqual(f.commits, ['文件', '资料'])
+})
+
+test('compositionend unrelated to the early-confirmed phrase is typed in full', t => {
+  const f = fixture(t); f.start()
+  f.change('文件', 'insertText', false)
+  f.composition('compositionend', '你好')
+  assert.deepEqual(f.commits, ['文件', '你好'])
+})
+
+test('a new composition after an early confirm commits its own phrase once', t => {
+  const f = fixture(t); f.start()
+  f.change('文件', 'insertText', false)
+  f.composition('compositionend', '文件')
+  f.start()
+  f.composition('compositionend', '资料')
+  assert.deepEqual(f.commits, ['文件', '资料'])
+})
