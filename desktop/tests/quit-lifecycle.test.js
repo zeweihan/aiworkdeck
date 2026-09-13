@@ -24,6 +24,12 @@ const vm = require('node:vm')
 const { EventEmitter } = require('node:events')
 const { createServiceManager, findFreePort } = require('../main/services/service-manager')
 
+// 对照用：老老实实响应 SIGTERM 的服务（默认行为即退出）
+const POLITE_SERVICE = `
+  const http = require('http');
+  http.createServer((req, res) => res.end('ok')).listen(Number(process.env.PORT), '127.0.0.1');
+`
+
 function descriptor(name, script) {
   return {
     name,
@@ -57,7 +63,6 @@ test('stopAll 并行停服务：两个装死的服务一次 3s 兜底，不是 2
   // 「装死」用假的子进程对象而不是真 spawn：Windows 上 process.kill('SIGTERM') 是
   // TerminateProcess，子进程根本没有机会忽略它（v0.42.0 首次 tag 构建的 Windows 腿就
   // 是这样红的），而这条用例要证的是 service-manager 自己的并行与 3s 兜底，与真进程无关。
-  const { EventEmitter } = require('events')
   const deafProc = (log) => {
     const p = new EventEmitter()
     p.exitCode = null
