@@ -155,14 +155,20 @@ components:
       type: object
       description: |
         充值单。present=qrcode 时 codeUrl/qrCode 有值，present=redirect 时 redirectUrl 有值，
-        present=virtual 时 signData/paySig/signature 三者都有值；不适用的字段不出现在响应里。
+        present=virtual 时 signData/paySig/signature 三者都有值，present=native 时 appAccountToken 有值；
+        不适用的字段不出现在响应里。
 
         present=virtual 是小程序虚拟支付（dev-board#427）：三个字段由官网算出后经云后端原样透传，
         小程序拿它们调 wx.requestVirtualPayment({signData, paySig, signature, mode:'short_series_goods'})。
         云后端不持有虚拟支付 AppKey、不碰 session_key，全程只当管道。
+
+        present=native 是 iOS App Store 内购（dev-board#426）：客户端拿 appAccountToken 调
+        product.purchase(options:[.appAccountToken(UUID)])，成功后把 Transaction.jwsRepresentation
+        交给 POST /api/mobile/billing/recharge/confirm；**收到 paid 之前绝不 tx.finish()**。
+        验签在官网（苹果根证书 / bundleId / appAppleId 都在那边），云后端同样只当管道。
       required: [present, outTradeNo, amountCents]
       properties:
-        present: { type: string, enum: [qrcode, redirect, virtual] }
+        present: { type: string, enum: [qrcode, redirect, virtual, native] }
         outTradeNo: { type: string, description: 商户订单号，查状态用 }
         amountCents: { type: integer, format: int64, description: 下单金额，整数分 }
         codeUrl: { type: string, description: present=qrcode：支付链接原文 }
@@ -171,6 +177,12 @@ components:
         signData: { type: string, description: 'present=virtual 必有：待签名 JSON 串（offerId/buyQuantity/env/currencyType/productId/goodsPrice/outTradeNo/attach）' }
         paySig: { type: string, description: 'present=virtual 必有：hex(hmac_sha256(appKey, "requestVirtualPayment&" + signData))' }
         signature: { type: string, description: 'present=virtual 必有：hex(hmac_sha256(session_key, signData))' }
+        appAccountToken:
+          type: string
+          description: |
+            present=native 必有：官网为这张单生成的 UUID（订单的 providerRef）。iOS 把它塞进
+            purchase 的 appAccountToken 选项，苹果在 signedTransaction 里原样带回，
+            官网据此把交易认回这张单（App 被杀、本地没存下单号时的唯一线索）。
     RechargeStatus:
       type: object
       required: [status, paid, amountCents]
@@ -488,18 +500,23 @@ paths:
                     官网 orders 表有 UNIQUE(userId, idempotencyKey) 兜底。
                 channel:
                   type: string
-                  enum: [wxvp]
+                  enum: [wxvp, appstore]
                   description: |
-                    支付通道（dev-board#427）。**缺省 = 站点默认通道**（第一期行为，扫码/跳转）；
+                    支付通道（dev-board#427/#426）。**缺省 = 站点默认通道**（第一期行为，扫码/跳转）；
                     wxvp = 微信小程序虚拟支付，**channel=wxvp 时 channel/productId/wxCode 三者必填**，
-                    响应为 present=virtual。别的取值一律 code 1（通用 handler，无 kind）。
+                    响应为 present=virtual；appstore = iOS 内购，**productId 必填、wxCode 不传**，
+                    响应为 present=native。别的取值一律 code 1（通用 handler，无 kind）。
                 productId:
                   type: string
-                  pattern: '^[a-z0-9_]{1,64}$'
+                  pattern: '^[a-z0-9_.]{1,64}$'
                   description: |
-                    channel=wxvp 时必填：微信道具 id（credits_cny_10 / credits_cny_50 / credits_cny_100）。
+                    channel=wxvp 时必填：微信道具 id（credits_cny_10 / credits_cny_50 / credits_cny_100）；
+                    channel=appstore 时必填：App Store 商品 id，**带点号**
+                    （credits.cny.50 / credits.cny.100 / credits.cny.300）。
+                    服务端按通道分别校形态：wxvp 是 `^[a-z0-9_]{1,64}$`，appstore 是 `^[a-z0-9_.]{1,64}$`。
                     **价格权威在官网**，云后端只校形态；档位与金额不符时官网回 400 product_mismatch
-                    → 信封 kind=REJECTED + 「请更新小程序后重试」。
+                    → 信封 kind=REJECTED。message 目前逐字是「充值档位与金额不符，请更新小程序后重试」
+                    （两个通道共用这一句，iOS 上措辞不贴切）——**客户端一律按 kind 分支，别读 message**。
                 wxCode:
                   type: string
                   description: |
@@ -513,6 +530,49 @@ paths:
               schema:
                 oneOf:
                   - $ref: '#/components/schemas/RechargeOrder'
+                  - $ref: '#/components/schemas/Envelope'
+  /api/mobile/billing/recharge/confirm:
+    post:
+      summary: 手机端：确认 App Store 内购交易（裸对象）
+      description: |
+        iOS 内购（dev-board#426）：product.purchase 拿到 .success(.verified(tx)) 之后调这里，
+        云后端透传官网 confirm-appstore，官网验签（bundleId / appAppleId / 苹果根证书）+ 校
+        appAccountToken 与 productId + 判 transactionId 未用过，然后入账。
+        **客户端收到 paid 之前绝不 tx.finish()**——finish 掉的交易苹果不再重放。
+
+        受 mobile.billing.recharge-enabled 总开关约束（关时 Envelope kind=DISABLED）。
+        失败判别位：验签失败 / 订单不符（官网 400 transaction_invalid）与「该交易已使用」
+        （官网 409 transaction_reused）都是 kind=REJECTED，只有 message 不同；
+        查无此单（官网 404）是 kind=NOT_FOUND；上游故障是 kind=UNAVAILABLE。
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [signedTransaction]
+              properties:
+                outTradeNo:
+                  type: string
+                  pattern: '^[A-Za-z0-9_-]{1,64}$'
+                  description: |
+                    **可缺省**：App 被杀后重放 Transaction.unfinished 时本地可能没存下单号，
+                    这时只带 signedTransaction 来，官网用交易里的 appAccountToken 反查 providerRef。
+                signedTransaction:
+                  type: string
+                  maxLength: 16384
+                  description: |
+                    StoreKit 2 的 Transaction.jwsRepresentation 原文。云后端**不验签**、不解析，
+                    原样转给官网；超过 16KB 即 code 1。
+      responses:
+        "200":
+          description: 裸对象（形状同 /recharge/status）；未登录 Envelope(4010)；业务错误 Envelope(code 1)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/RechargeStatus'
                   - $ref: '#/components/schemas/Envelope'
   /api/mobile/billing/recharge/status:
     get:

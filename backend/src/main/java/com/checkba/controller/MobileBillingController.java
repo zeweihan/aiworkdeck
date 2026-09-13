@@ -56,11 +56,15 @@ public class MobileBillingController {
          */
         private String idempotencyKey;
         /**
-         * 支付通道（dev-board#427）。缺省 = 站点默认通道（第一期行为）；
-         * {@code "wxvp"} = 小程序虚拟支付，此时 productId / wxCode 必填。
+         * 支付通道（dev-board#427/#426）。缺省 = 站点默认通道（第一期行为）；
+         * {@code "wxvp"} = 小程序虚拟支付，此时 productId / wxCode 必填；
+         * {@code "appstore"} = iOS 内购，此时只要 productId。
          */
         private String channel;
-        /** {@code channel=wxvp} 时必填：微信道具 id（价格权威在官网，这里只做形态校验）。 */
+        /**
+         * {@code channel=wxvp} / {@code appstore} 时必填：微信道具 id 或 App Store 商品 id
+         * （后者带点号，如 credits.cny.50）。价格权威在官网，这里只做形态校验。
+         */
         private String productId;
         /** {@code channel=wxvp} 时必填：{@code wx.login()} 的一次性 code，官网拿它换 openid。 */
         private String wxCode;
@@ -85,14 +89,47 @@ public class MobileBillingController {
         out.put("present", order.present());
         out.put("outTradeNo", order.outTradeNo());
         out.put("amountCents", order.amountCents());
-        // 六个可选字段按 present 分组有值，为 null 时不出现在响应里（契约里也是非必填）：
-        // qrcode → codeUrl/qrCode，redirect → redirectUrl，virtual → signData/paySig/signature
+        // 七个可选字段按 present 分组有值，为 null 时不出现在响应里（契约里也是非必填）：
+        // qrcode → codeUrl/qrCode，redirect → redirectUrl，virtual → signData/paySig/signature，
+        // native → appAccountToken
         putIfPresent(out, "codeUrl", order.codeUrl());
         putIfPresent(out, "qrCode", order.qrCode());
         putIfPresent(out, "redirectUrl", order.redirectUrl());
         putIfPresent(out, "signData", order.signData());
         putIfPresent(out, "paySig", order.paySig());
         putIfPresent(out, "signature", order.signature());
+        putIfPresent(out, "appAccountToken", order.appAccountToken());
+        return out;
+    }
+
+    @Data
+    public static class RechargeConfirmRequest {
+        /**
+         * 可缺省：App 被杀后重放未完成交易时本地可能没存下单号，官网用交易里的
+         * appAccountToken 反查 providerRef。
+         */
+        private String outTradeNo;
+        /** 必填：StoreKit 2 的 {@code Transaction.jwsRepresentation} 原文。 */
+        private String signedTransaction;
+    }
+
+    /**
+     * POST /recharge/confirm → {status, paid, amountCents}（形状同 /recharge/status）。
+     *
+     * <p>iOS 内购（dev-board#426）：拿到 {@code .verified(tx)} 后调这里，服务端透传官网验签入账；
+     * <b>客户端收到 paid 之前不许 {@code tx.finish()}</b>。
+     */
+    @PostMapping("/recharge/confirm")
+    public Map<String, Object> rechargeConfirm(
+            @RequestBody(required = false) RechargeConfirmRequest request,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        MobileBillingClient.RechargeStatus s = service.confirmAppstore(requireUser(sessionId),
+                request == null ? null : request.getOutTradeNo(),
+                request == null ? null : request.getSignedTransaction());
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("status", s.status());
+        out.put("paid", s.paid());
+        out.put("amountCents", s.amountCents());
         return out;
     }
 
