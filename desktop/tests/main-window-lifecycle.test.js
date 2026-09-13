@@ -47,7 +47,7 @@ function harness() {
     require: name => { assert.equal(name, './services/win-arch'); return { isWinArmEmulated: () => false } },
     setInterval: fn => { intervals.push(fn); return intervals.length }, clearInterval: () => {},
     views: { layoutAll() {} }, restoreViewsVisibility() {}, syncOcrSelectWinBounds() {},
-    attachCopyListener() {}, attachDownloadListener() {},
+    attachCopyListener() {}, attachDownloadListener() {}, attachAvatarCorpRelaxation() {},
   })
   vm.runInContext(`let mainWindow = null; let mainWindowStartupReady = false;
     let services = { ports: { backend: 9799 } }; const IS_DEV = false;
