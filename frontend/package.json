@@ -44,6 +44,7 @@
     "test:tag-protocol": "node --test tests/tag-protocol/protocol.test.mjs",
     "test:inline-review": "node --test tests/completion/inline-review-host.test.mjs tests/inline-review/*.test.mjs",
     "test:lowa-inline-review": "node tests/lowa-e2e/inline-review.mjs",
+    "test:lowa-scroll": "node tests/lowa-e2e/scroll-stability.mjs",
     "test:completion": "node --test tests/completion/*.test.mjs",
     "test:writing-ui": "node tests/lowa-e2e/writing-ui.mjs",
     "test:writing-caret": "node tests/lowa-e2e/writing-caret.mjs",

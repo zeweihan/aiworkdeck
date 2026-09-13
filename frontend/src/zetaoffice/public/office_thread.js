@@ -7534,11 +7534,12 @@ const EXEC = {
   },
 };
 
-// AI 工具面（宿主打 __agent 标记的命令）一律按**页边语义**执行。
+// AI 工具面（宿主打 __agent 标记的命令）与即时审校 / 写作补全的只读取文命令
+// （FINAL_TEXT_ACTIONS）一律按**最终文本语义**执行。
 // WHY：AI 多轮改稿依赖「正文 = 改后的样子」——get_document_text / get_paragraph 读到的
 // 不能混进被删的旧字，find_text_locations / replace_nth_match 的计数只能数可见匹配
-// （dev-board#369）。默认显示态本来就是页边，这条守卫只在**用户自己把视图切成内联
-// 「全部修订」**时才起作用：执行前临时切页边 + refresh，执行完切回去 + refresh。
+// （dev-board#369）。内联「全部修订」是默认显示态，所以这条守卫是常态路径：执行前
+// 临时切到一种不含删除文字的态 + refresh，执行完切回去 + refresh。
 // 最终稿态与页边态的正文本来就不含删除文字，直接放行，零开销。
 // 非 Writer 文档一个属性都不碰（Impress 上问 Writer 专属属性会把引擎搞坏，
 // 见 withInlineMarkupForExport 头上的注释）。
@@ -7551,7 +7552,19 @@ function runAgentCommandInMarginView(action, fn) {
   if (AGENT_VIEW_EXEMPT[action] || !isWriterDoc()) return fn();
   const before = revisionViewState().mode;
   if (before !== 'all') return fn();
-  withViewOnlyChange(function () { applyRevisionView('margin'); try { xModel.refresh(); } catch (e) {} });
+  // 通向「正文 = 改后的样子」有两条路，读回的正文 / 段号 / 偏移完全一致：
+  //   隐藏修订  RedlineDisplayType   → **模型**属性
+  //   页边      ShowChangesInMargin  → **控制器的视图设置**
+  // 本引擎每写一次那个视图设置就把视图滚回光标。默认视图变成内联之后这条守卫成了
+  // 常态路径，于是用户往下滚动、180ms 后即时审校读一次上下文，视口就被拽回光标所在
+  // 的文首——dev-board#604 报的「自动跳回开头」。真机实测（24.2.8-zhcn-r5）：切页边
+  // top 44880 → 0，隐藏修订 top 21840 → 21840 一动不动，正文与偏移两者一字不差。
+  // 所以先隐藏；引擎隐不掉（hideSupported=false，读回仍是 all）时才退回页边。
+  // 回归：tests/lowa-e2e/scroll-stability.mjs。
+  withViewOnlyChange(function () {
+    if (applyRevisionView('final').mode === 'all') applyRevisionView('margin');
+    try { xModel.refresh(); } catch (e) {}
+  });
   const restore = function () {
     withViewOnlyChange(function () { applyRevisionView(before); try { xModel.refresh(); } catch (e) {} });
   };

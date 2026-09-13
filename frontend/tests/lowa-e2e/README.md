@@ -34,6 +34,17 @@ server / puppeteer 启动件在 `_boot.mjs`（preflight、COOP/COEP 静态服务
 打开 `editor.html?verify=1`），run.mjs 与下面的大文档基线组共用。端口被别的
 worktree 占着时（`EADDRINUSE`）设 `LOWA_E2E_PORT`。
 
+## 滚动稳定性组（dev-board#604）
+
+```bash
+npm run test:lowa-scroll     # tests/lowa-e2e/scroll-stability.mjs
+```
+
+默认「全部修订」内联视图下真滚轮滚到第三页以后，逐条打只读命令
+（`get_review_context` / `get_completion_context` / `__agent` 读取 / 客体页自发的
+180ms 刷新），断言 `get_review_layout().view.top`（`ctrl.getViewData()` 的 VisibleTop，
+单位 twip）一动不动。每步前先断言视口确实已离开文首——否则「没跳」是假绿。
+
 ## 大文档基线组（dev-board#108）
 
 ```bash

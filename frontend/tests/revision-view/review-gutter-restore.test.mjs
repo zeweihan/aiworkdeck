@@ -84,8 +84,21 @@ test('AI final-text reads in all-markup view never touch the gutter', () => {
   const v = view(); v.state.width = 0
   let seen
   v.run('runAgentCommandInMarginView')('get_document_text', () => { seen = v.mode(); return { success: true } })
-  assert.equal(seen, 'margin'); assert.equal(v.mode(), 'all')
+  // Hiding the revisions gives the reader the same final text as the margin view
+  // without writing ShowChangesInMargin — that write is a controller view setting
+  // and scrolls the view back to the caret on every read (dev-board#604).
+  assert.equal(seen, 'final'); assert.equal(v.mode(), 'all')
   assert.deepEqual(v.state.writes, [])
+  assert.equal(v.state.inMargin, false, 'a final-text read never writes the controller view setting')
+})
+
+test('an engine that cannot hide revisions still reads final text, through the margin view', () => {
+  const v = view(); v.state.width = 0
+  v.run('xModel.setPropertyValue = function () {}')   // RedlineDisplayType writes do nothing
+  let seen
+  v.run('runAgentCommandInMarginView')('get_document_text', () => { seen = v.mode(); return { success: true } })
+  assert.equal(seen, 'margin', 'the margin fallback keeps the final-text contract on such engines')
+  assert.equal(v.mode(), 'all'); assert.deepEqual(v.state.writes, [])
 })
 
 test('choosing balloons again while already in balloons keeps the host gutter', () => {
