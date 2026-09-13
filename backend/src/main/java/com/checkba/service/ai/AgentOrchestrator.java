@@ -1620,14 +1620,20 @@ public class AgentOrchestrator {
                 long delaySec = kind.retryDelaySeconds(attempt);
                 log.warn("LLM error [{}] for {} (attempt {}/{}), retrying in {}s: {}",
                         kind, conversationId, attempt, kind.maxRetries(), delaySec, String.valueOf(err));
-                // 限流与故障文案分开：用户看到「服务不可用」而实际是限流排队，会误判成产品坏了
-                sendTextDelta(guard, String.format(
-                        kind == LlmErrorClassifier.Kind.RATE_LIMITED
-                                ? LangText.of("\n\n> 模型限流等待中，%d 秒后自动继续（第 %d/%d 次）…\n\n",
-                                        "\n\n> The model is rate limited; continuing automatically in %d s (attempt %d/%d)…\n\n")
-                                : LangText.of("\n\n> 模型服务暂时不可用，%d 秒后自动重试（第 %d/%d 次）…\n\n",
-                                        "\n\n> The model service is temporarily unavailable; retrying in %d s (attempt %d/%d)…\n\n"),
-                        delaySec, attempt, kind.maxRetries()));
+                // 限流/断网/故障三类文案分开：用户看到「服务不可用」而实际是限流排队，会误判成
+                // 产品坏了；断网时说「模型服务暂时不可用」更是把人往错的方向带（dev-board#602）。
+                sendTextDelta(guard, String.format(switch (kind) {
+                    case RATE_LIMITED -> LangText.of(
+                            "\n\n> 模型限流等待中，%d 秒后自动继续（第 %d/%d 次）…\n\n",
+                            "\n\n> The model is rate limited; continuing automatically in %d s (attempt %d/%d)…\n\n");
+                    case NETWORK_UNREACHABLE -> LangText.of(
+                            "\n\n> 本机连不上 AI 服务，请检查网络；%d 秒后自动重试（第 %d/%d 次）…\n\n",
+                            "\n\n> This machine cannot reach the AI service; check your network. "
+                                    + "Retrying in %d s (attempt %d/%d)…\n\n");
+                    default -> LangText.of(
+                            "\n\n> 模型服务暂时不可用，%d 秒后自动重试（第 %d/%d 次）…\n\n",
+                            "\n\n> The model service is temporarily unavailable; retrying in %d s (attempt %d/%d)…\n\n");
+                }, delaySec, attempt, kind.maxRetries()));
                 // 定时器是自己的单线程池：身份同样要显式重放，否则重放的这一轮取不到平台密钥
                 LLM_RETRY_SCHEDULER.schedule(PlatformAiUserScope.wrap(() -> {
                     try {
@@ -1809,15 +1815,16 @@ public class AgentOrchestrator {
      * 发 error 事件、保存部分内容、关流、复位状态。原 setOnError 内联逻辑提取而来。
      *
      * @param kind 错误分类，可为 null（取消分支/重放失败等拿不到分类的路径）。
-     *             非 null 时经 {@link LlmErrorClassifier#taggedErrorMessage} 给 SSE 载荷加机器可读标记：
-     *             地域拒绝会带上 AI_REGION_BLOCKED，前端据此把上游英文原文换成中文引导
-     *             （见 useAgentStream.js 的 includes 检测）。不带标记的话前端只能显示英文原文。
+     *             载荷一律经 {@link LlmErrorClassifier#taggedErrorMessage(LlmErrorClassifier.Kind, Throwable)}
+     *             加机器可读标记：地域拒绝会带上 AI_REGION_BLOCKED，本机连不上模型网关（断网）
+     *             会带上 AI_NETWORK_UNREACHABLE，前端据此把上游英文原文换成中文引导
+     *             （见 useAgentStream.js 的 includes 检测）。不带标记的话前端只能显示英文原文——
+     *             断网时那句原文常常只有一个主机名（dev-board#602）。kind 为 null 的路径同样要过
+     *             这一遍：重放失败/取消收尾也可能是断网导致的。
      */
     private void handleStreamErrorTerminal(RunGuard guard, String projectId, Long userId,
                                            Throwable err, LlmErrorClassifier.Kind kind) {
-        String message = kind == null
-                ? err.getMessage()
-                : LlmErrorClassifier.taggedErrorMessage(kind, err.getMessage());
+        String message = LlmErrorClassifier.taggedErrorMessage(kind, err);
         finishWithError(guard, projectId, userId, "Stream Error: " + message, null);
     }
 
