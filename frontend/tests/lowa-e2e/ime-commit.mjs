@@ -55,26 +55,54 @@ try {
   const cdp = await page.createCDPSession()
   for (const mode of layout.available ? ['all','balloons'] : ['all']) {
     await ok('set_revision_view',{mode})
-    for (const order of ['normal','delayed-end']) {
+    for (const order of ['normal','delayed-end','confirm-then-continue']) {
+      const stale=(await ok('get_cursor_rect')).nativeCaret
       await ok('goto',{type:'end'});await ok('insert_paragraph')
       await page.$eval('[data-lo-ime]',e=>e.focus())
       await new Promise(r=>setTimeout(r,300))
-      const caret=(await ok('get_cursor_rect')).nativeCaret
+      // The native caret geometry lags the model: for a while after
+      // insert_paragraph it still reports the end of the PREVIOUS line, and the
+      // ink clip derived from it then covers text that is already on the page —
+      // a correct commit reads as 0 new pixels. Wait for it to reach the new
+      // line instead of trusting a fixed delay.
+      let caret=null
+      for(let i=0;i<40;i++){
+        caret=(await ok('get_cursor_rect')).nativeCaret
+        if(caret&&(!stale||caret.x!==stale.x||caret.y!==stale.y))break
+        await new Promise(r=>setTimeout(r,100))
+      }
       assert.ok(caret,'native caret geometry is required to check the writing line')
+      assert.ok(!stale||caret.x!==stale.x||caret.y!==stale.y,'caret geometry must reach the new paragraph before the ink clip is computed')
       const surface=await page.$eval('#qtcanvas',e=>{const r=e.getBoundingClientRect();return {left:r.left,top:r.top,width:r.width,height:r.height}})
       const scale=surface.width/caret.frameWidth, menu=Math.max(0,surface.height-caret.frameHeight*scale)
       const x=Math.max(0,Math.floor(surface.left+caret.x*scale+4)), y=Math.max(0,Math.floor(surface.top+menu+caret.y*scale-2))
       const clip={x,y,width:Math.min(360,1280-x),height:Math.min(Math.ceil(caret.height*scale+8),900-y)}
       const before=PNG.sync.read(await page.screenshot({clip}))
       const count=await page.evaluate(()=>window.imeCommitCalls.length)
-      const text=order==='normal'?'文件资料确认':'候选已经确认'
+      const text=order==='normal'?'文件资料确认':order==='delayed-end'?'候选已经确认':'确认之后继续'
       if(order==='normal'){
         await cdp.send('Input.imeSetComposition',{text:'wenjian',selectionStart:7,selectionEnd:7})
         await cdp.send('Input.insertText',{text})
-      }else await page.$eval('[data-lo-ime]',(e,text)=>{
+      }else if(order==='delayed-end')await page.$eval('[data-lo-ime]',(e,text)=>{
         e.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}))
         e.value=text
         e.dispatchEvent(new InputEvent('input',{data:text,inputType:'insertText',isComposing:false,bubbles:true}))
+      },text)
+      // dev-board#606: the confirmation arrives first AND the system keeps its
+      // marked-text session open. Everything after it still belongs to the IME —
+      // treating it as plain typing put raw pinyin on the page and let Backspace
+      // eat the confirmed phrase.
+      else await page.$eval('[data-lo-ime]',(e,text)=>{
+        const input=(data,inputType,isComposing)=>e.dispatchEvent(new InputEvent('input',{data,inputType,isComposing,bubbles:true}))
+        e.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}))
+        e.value=text
+        input(text,'insertText',false)
+        e.dispatchEvent(new CompositionEvent('compositionupdate',{data:'ziliao',bubbles:true}))
+        e.value=text+'ziliao'
+        input('ziliao','insertCompositionText',true)
+        e.dispatchEvent(new KeyboardEvent('keydown',{key:'Backspace',code:'Backspace',keyCode:8,bubbles:true,cancelable:true}))
+        input('ziliao','insertText',false)
+        e.dispatchEvent(new CompositionEvent('compositionend',{data:text,bubbles:true}))
       },text)
       await new Promise(r=>setTimeout(r,300))
       const after=PNG.sync.read(await page.screenshot({clip}))
@@ -85,7 +113,9 @@ try {
       let addedInk=0
       for(let i=0;i<after.data.length;i+=4)if(Math.min(...after.data.subarray(i,i+3))<180&&Math.min(...before.data.subarray(i,i+3))>230)addedInk++
       assert.ok(addedInk>60,'new glyphs must paint before any click, not just move the caret')
-      assert.ok((await ok('get_cursor_context')).before.endsWith(text),'the model contains the confirmed phrase')
+      // Exact, not endsWith: raw preedit letters and a stolen Backspace both show
+      // up only as a paragraph that is not exactly the confirmed phrase.
+      assert.equal((await ok('get_cursor_context')).paragraph,text,'the paragraph holds the confirmed phrase and nothing else')
       if(order==='delayed-end'){
         await page.$eval('[data-lo-ime]',(e,text)=>e.dispatchEvent(new CompositionEvent('compositionend',{data:text,bubbles:true})),text)
         await new Promise(r=>setTimeout(r,80))
