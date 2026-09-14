@@ -575,11 +575,14 @@ export const fileOpenTabsMethods = {
       const projectId = spec.projectId || this.projectId
       const tabId = `commit-history_${projectId}`
       const focus = spec.focus || ''
+      // 溯源光标条点进来时带的那一版 sha（dev-board#632）
+      const focusSha = spec.focusSha || ''
       for (const pane of ['left', 'right']) {
         const list = pane === 'left' ? this.leftFiles : this.rightFiles
         const existing = list.find((f) => f.id === tabId)
         if (existing) {
           existing.historyFocus = focus
+          existing.historyFocusSha = focusSha
           // focusToken 让已经挂载的标签页知道「又被点了一次」：focus 值没变时
           // props 不变，组件不会重新定位，用户会以为按钮坏了。
           existing.historyFocusToken = (existing.historyFocusToken || 0) + 1
@@ -597,6 +600,7 @@ export const fileOpenTabsMethods = {
         tabType: 'commit-history',
         name: this.$t('version.historyTabName'),
         historyFocus: focus,
+        historyFocusSha: focusSha,
         historyFocusToken: 1,
       })
       this[idProp] = tabId

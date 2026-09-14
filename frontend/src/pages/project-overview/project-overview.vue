@@ -1014,6 +1014,7 @@
                       :insight-subscribed="insightSubscribedFor(file)"
                       @open-insight="onOpenInsight($event, 'left')"
                       @cursor-context="onEditorCursorContext"
+                      @open-history="openCommitHistoryTab({ focusSha: $event && $event.sha })"
                     />
                   </view>
                   <!-- 预热备胎实例（librePool.js）：file=null 时是后台预 boot 的
@@ -1043,6 +1044,7 @@
                       :insight-subscribed="insightSubscribedFor(sp.file)"
                       @open-insight="onOpenInsight($event, 'left')"
                       @cursor-context="onEditorCursorContext"
+                      @open-history="openCommitHistoryTab({ focusSha: $event && $event.sha })"
                     />
                   </view>
                   <!-- 网页标签保活池（Web/H5）：与上面的编辑器保活池同形制——按标签建实例、
@@ -1130,6 +1132,7 @@
                       :key="activeFileLeft.id"
                       :project-id="projectId"
                       :focus="activeFileLeft.historyFocus || ''"
+                      :focus-sha="activeFileLeft.historyFocusSha || ''"
                       :focus-token="activeFileLeft.historyFocusToken || 0"
                       :cloud-linked="collabLinked"
                       :refresh-token="collabRefreshToken"
@@ -1226,6 +1229,7 @@
                       :insight-subscribed="insightSubscribedFor(file)"
                       @open-insight="onOpenInsight($event, 'right')"
                       @cursor-context="onEditorCursorContext"
+                      @open-history="openCommitHistoryTab({ focusSha: $event && $event.sha })"
                     />
                   </view>
                   <!-- 网页标签保活池（见左窗格同名注释）。跨窗格拖拽是"在另一侧也打开同一
@@ -1305,6 +1309,7 @@
                       :key="activeFileRight.id"
                       :project-id="projectId"
                       :focus="activeFileRight.historyFocus || ''"
+                      :focus-sha="activeFileRight.historyFocusSha || ''"
                       :focus-token="activeFileRight.historyFocusToken || 0"
                       :cloud-linked="collabLinked"
                       :refresh-token="collabRefreshToken"
