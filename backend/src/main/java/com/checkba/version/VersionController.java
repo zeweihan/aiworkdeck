@@ -455,6 +455,11 @@ public class VersionController {
                 }).toList());
         m.put("milestone", e.milestone());
         m.put("resolutions", e.resolutions() == null ? List.of() : e.resolutions());
+        // 三方合并（spec 2026-09-14 §4.6/§5.6）：mergeContext 是把 resolutions/merges 里裸的
+        // MAIN/DRAFT、M/T 翻成「你 / 律师乙」的唯一依据（三语境里指向的物理侧不同）；
+        // merges 逐文件给出这一次是自动合并的还是逐处裁决的。老提交分别是 null 与空表。
+        m.put("mergeContext", e.mergeContext());
+        m.put("merges", e.merges() == null ? List.of() : e.merges());
         m.put("remote", row.remote());
         m.put("autoCount", row.autoCount());
         ProjectRepoService.ChangeCounts c = row.changes();
