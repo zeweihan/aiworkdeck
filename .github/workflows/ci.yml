@@ -114,6 +114,9 @@ jobs:
       - name: Display-name-only identity contract (dev-board#564–#567)
         working-directory: frontend
         run: npm run test:identity
+      - name: Commit history tab, lane graph, member dedupe, collab wording (dev-board#623–#625)
+        working-directory: frontend
+        run: npm run test:version-history
       - name: Desensitize pane custom-words entry (dev-board#531)
         working-directory: frontend
         run: npm run test:desensitize
