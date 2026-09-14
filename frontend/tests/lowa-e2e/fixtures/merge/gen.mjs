@@ -228,7 +228,7 @@ function unitIndexOfCell(ti, ri, ci) {
     : TABLE1_AFTER_PARA + TABLE0.length * TABLE0[0].length + 1 + within
 }
 
-function buildBody(side, conflict) {
+function buildBody(side, conflict, formatOnly) {
   const parts = []
   const paraTexts = []
   for (let i = 0; i < PARA_COUNT; i++) {
@@ -245,7 +245,7 @@ function buildBody(side, conflict) {
       const e = OTHER_EDITS.find((x) => x.para === i)
       if (e) text = applyEdit(text, e)
       if (conflict && i === CONFLICT_PARA) text = applyEdit(text, OTHER_CONFLICT)
-      if (i === OTHER_FORMAT_ONLY_PARA) bold = true
+      if (formatOnly && i === OTHER_FORMAT_ONLY_PARA) bold = true
     }
     const ci = COMMENT_PARAS.indexOf(i)
     parts.push(para(text, { bold, commentId: ci >= 0 ? ci : null }))
@@ -268,10 +268,13 @@ function otherTable(ti) {
 // 「只改不同段」的夹具（后端 ThreeWayAnalyzer 该判 AUTO）；默认 true 是原来那套
 // 「另有一段两边都改了」（该判 MANUAL）。lowa-e2e 组 34 用的是默认那套，
 // 不传参时产出的三份字节与加这个开关之前逐字节相同。
-export function generateMergeFixtures({ conflict = true } = {}) {
-  const base = buildBody('base', conflict)
-  const main = buildBody('main', conflict)
-  const other = buildBody('other', conflict)
+// formatOnly=false 时另一侧连那一段加粗都不做，产出一套**真正能全自动合完**的夹具：
+// 只改格式的段落文字重放带不过来，useDocumentMerge 见到 formatOnly 非空就按规格降成
+// MANUAL（spec §5.2），所以只关 conflict 是合不完的——真机走查场景①要的是这一套。
+export function generateMergeFixtures({ conflict = true, formatOnly = true } = {}) {
+  const base = buildBody('base', conflict, formatOnly)
+  const main = buildBody('main', conflict, formatOnly)
+  const other = buildBody('other', conflict, formatOnly)
 
   // baseUnits：正文段落 + 表格单元，表格单元跟在它所在表的 body 位置之后。
   const baseUnits = []
@@ -361,7 +364,7 @@ export function generateMergeFixtures({ conflict = true } = {}) {
       takeOtherParagraphs: expectedParagraphs.map((t) =>
         conflict && t === applyEdit(baseParaText(CONFLICT_PARA), MAIN_CONFLICT)
           ? applyEdit(baseParaText(CONFLICT_PARA), OTHER_CONFLICT) : t),
-      formatOnlyParaKey: OTHER_FORMAT_ONLY_PARA,
+      formatOnlyParaKey: formatOnly ? OTHER_FORMAT_ONLY_PARA : null,
       formatOnlyText: baseParaText(OTHER_FORMAT_ONLY_PARA),
       insertedText: OTHER_INSERT_TEXT,
       deletedText: baseParaText(OTHER_DELETE_PARA),

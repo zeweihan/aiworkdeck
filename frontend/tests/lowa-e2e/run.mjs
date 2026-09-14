@@ -625,9 +625,14 @@ try {
 
     // 当前文档载入"新版本"，再与"旧版本"比较
     await exec('load_document', { bytes: newBytes, name: 'v2.docx', authorName: '测试用户' })
+    // 版本对比标签页同样不是 LibreOfficeEditor，没人替它调 set_chrome（dev-board#631）。
+    // 先把 chrome 全开，断言才不是沿用上一组的状态。
+    await exec('set_chrome', { all: true, menubar: true, statusbar: true, toolbars: true, rulers: true })
     const cmp = await exec('compare_document', { baseBytes: oldBytes })
     check('compare_document 成功且产出修订', cmp && cmp.success === true && cmp.redlineCount > 0,
       JSON.stringify(cmp))
+    check('compare_document 之后 LO 原生 chrome 已藏起（否则原生「管理修订」对话框压在对比稿上）',
+      (await exec('set_chrome', {})).visible.all === false, JSON.stringify((await exec('set_chrome', {})).visible))
 
     const rev = await exec('debug_revisions')
     const cmpRedlines = (rev.redlines || []).filter((r) => r.author === '版本对比')
@@ -2491,10 +2496,29 @@ try {
     const indexOfToken = (paras, token) => paras.findIndex((t) => t.indexOf(token) >= 0)
 
     check('起点：换一份干净的 Writer 文档', (await exec('debug_fresh_document')).success === true)
+    // chrome 先全开，才能证明「是 build_merge_draft 自己把它藏掉的」，而不是沿用
+    // 上一组留下的状态（dev-board#631：合并比对稿标签页不是 LibreOfficeEditor，
+    // 没有 EditorToolbar 去调 set_chrome，原生菜单栏/工具栏/「管理修订」对话框
+    // 全露着，压住正文还吃掉点击）。
+    await exec('set_chrome', { all: true, menubar: true, statusbar: true, toolbars: true, rulers: true })
+    check('前置：LO 原生 chrome 是开着的', (await exec('set_chrome', {})).visible.all === true)
 
     const built = await exec('build_merge_draft', mergeArgs())
     check('build_merge_draft 成功', built && built.success === true, JSON.stringify({ success: built && built.success, stage: built && built.stage, message: built && built.message }))
     console.log('  elapsedMs: ' + JSON.stringify(built && built.elapsedMs))
+    // dev-board#631：合并比对稿上不许露出 LO 自己的外壳。内部三次 load_document 会
+    // 把 chrome 一次次拉回来，所以藏的时机钉在「派发 .uno:CompareDocuments 之前」
+    // （compareWithBytes → hideNativeChrome），那也正是原生「管理修订」对话框的出生地。
+    // 摘掉 hideNativeChrome() 这一条就转红。
+    {
+      const vis = (await exec('set_chrome', {})).visible
+      check('build_merge_draft 之后 LO 原生 chrome 已藏起（顺带压掉「管理修订」对话框）',
+        vis.all === false, JSON.stringify(vis))
+      // 标尺不归 LayoutManager 管，setVisible(false) 藏不掉它——真机上会在合并比对稿
+      // 顶上剩一条孤零零的标尺，所以 hideNativeChrome 另外写了 ViewSettings。
+      check('标尺也一起藏了（ViewSettings，不归 LayoutManager 管）',
+        vis.rulers && vis.rulers.ShowHoriRuler === false && vis.rulers.ShowVertRuler === false, JSON.stringify(vis.rulers))
+    }
 
     // (1) 两位作者的修订：主线侧来自原生比较，另一侧来自逐段重放，两边都必须署对人。
     const byAuthor = {}

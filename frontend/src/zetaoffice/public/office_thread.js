@@ -2941,6 +2941,33 @@ function toUnoByteSeq(raw) {
   if (!u8 || !u8.length) return null;
   return Array.from(new Int8Array(u8.buffer, u8.byteOffset, u8.byteLength));
 }
+// LO 自己那套 chrome（菜单栏 / 两排工具栏 / 状态栏 / 标尺 / 右侧栏）一刀切藏掉。
+// 常规编辑器由 EditorToolbar.bootstrap() 调 set_chrome 藏；版本对比与合并比对稿
+// 两个标签页不是 LibreOfficeEditor、没有工具栏组件，谁都不会去藏（dev-board#631
+// 真机走查：合并比对稿上整套原生外壳都露着）。
+// **而且必须由引擎侧自己在派发 .uno:CompareDocuments 之前藏**，宿主事后补一刀
+// 不够：
+//   ① LayoutManager 可见时这条派发会弹 LO 原生的「管理修订」对话框（真机实证，
+//      2026-09-14：同一份夹具，派发前 set_chrome{all:false} 的那轮画布上干干净净，
+//      不藏的那轮对话框压在正文上）。`NoAcceptDialog` 属性本引擎不认——带上它
+//      对话框照弹，所以别再往那条路上走。
+//   ② load_document 会把藏好的 chrome 重新拉出来（真机实证：set_chrome{all:false}
+//      之后 load_document，isVisible 读回 true），而 build_merge_draft 内部连做三次
+//      load_document，宿主在命令之前藏是白藏。比较是这条链里最后一个会重建
+//      chrome 的动作，藏在它前面才立得住。
+function hideNativeChrome() {
+  try {
+    const lm = ctrl.getFrame().getPropertyValue('LayoutManager');
+    if (lm) lm.setVisible(false);
+  } catch (e) { /* 没有 LayoutManager 就没有 chrome 可藏 */ }
+  // 标尺不归 LayoutManager 管（是控制器的 ViewSettings），setVisible(false) 藏不掉它
+  // ——真机实测合并比对稿顶上会剩一条孤零零的标尺。与 set_chrome{rulers:false} 同口径。
+  try {
+    const vs = ctrl.getViewSettings();
+    vs.setPropertyValue('ShowHoriRuler', false);
+    vs.setPropertyValue('ShowVertRuler', false);
+  } catch (e) { /* 非 Writer 或没有这两个属性 */ }
+}
 // 把 bytes 写进 MEMFS 再派发 .uno:CompareDocuments。compare_document（版本对比
 // 标签页）与 build_merge_draft（合并比对稿）共用这一段；**修订署名必须由调用方
 // 在同一条 worker 命令里先设好**——execCommand 每条命令开头都会重置署名
@@ -2955,6 +2982,8 @@ function compareWithBytes(raw, url) {
     sfa.writeFile(url, stream);
     try { stream.closeInput(); } catch (e) {}
   } catch (e) { return { success: false, stage: 'memfs', message: errStr(e) }; }
+  // 顺序是硬的：先藏 chrome 再派发，否则弹原生「管理修订」对话框（见 hideNativeChrome）。
+  hideNativeChrome();
   try {
     css.frame.DispatchHelper.create(context).executeDispatch(
       ctrl.getFrame(), '.uno:CompareDocuments', '', 0, [mkProp('URL', url)]);
