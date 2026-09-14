@@ -90,6 +90,12 @@
 | 本机 | This Computer | 提交历史里的标签；与「案件库 Case Library」对举 |
 | 裁决（冲突三选一的结果） | Resolution | 「留了你这边 / 留了同事那边 / 两边都留」→ kept your side / kept your colleague's side / kept both sides |
 | 参与人（筛选项） | Person | 提交历史工具栏的筛选下拉；名单语境仍是 Case Members |
+| 合并比对稿 | Merge review | 同一份稿里同时看到两位律师相对「共同的上一版」的修订（dev-board#630）；标签名 Merge review: {name} |
+| 自动合并 | Combined automatically | 两边改动段落不重叠时静默合并（dev-board#631）；「自动合并了同事的改动」→ your colleague's changes were combined automatically |
+| 共同的上一版 | Common earlier version | 两位律师分头修改前的那一版；对外不出现 merge-base |
+| 同一段两边都改了 | Changed on both sides | 只有这种情况才打扰律师逐处裁决 |
+| 逐处裁决（接受 / 拒绝 / 用你的 / 用同事的 / 自己改） | Resolve each change (Accept / Reject / Keep yours / Take theirs / Edit myself) | 合并比对稿右栏 |
+| 溯源 | Origin | 每段最后改动它的版本 / 作者 / 时间（dev-board#632）；侧栏标签 Origin，光标条「{谁} · {日期} · {版本标题}」 |
 | 脱敏 | Redaction | 动词 redact |
 | 套红/公文格式 | House Style Formatting | |
 | 书签 | Bookmark | |
