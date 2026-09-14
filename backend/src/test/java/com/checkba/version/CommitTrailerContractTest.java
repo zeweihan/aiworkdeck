@@ -12,7 +12,10 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -36,6 +39,7 @@ class CommitTrailerContractTest {
     private static final String KIND_TRAILER = "X-AWD-Kind: ";
     private static final String NOTE_TRAILER = "X-AWD-Note: ";
     private static final String SKIPPED_TRAILER = "X-AWD-Skipped-Large-Files: ";
+    private static final String RESOLUTIONS_TRAILER = "X-AWD-Resolutions: ";
 
     private ProjectRepoService svc(Path root) {
         StorageProperties props = new StorageProperties();
@@ -81,5 +85,85 @@ class CommitTrailerContractTest {
                 "缺 \"" + NOTE_TRAILER + "\"，实际：\n" + msg);
         assertTrue(msg.contains(SKIPPED_TRAILER),
                 "缺 \"" + SKIPPED_TRAILER + "\"，实际：\n" + msg);
+    }
+
+    /**
+     * 第四条尾注：冲突裁决结果（spec 2026-09-14 §2.2）。走一次**真实的裁决合并**——
+     * 造一条分叉、撞出冲突、裁决后 commitMergeResolution——而不是只测字符串编解码：
+     * 尾注的价值在于「律师事后还能看到那一次到底留了谁的」，只有真的写进提交对象、
+     * 再从 log() 读回来才算兑现。
+     *
+     * <p>冲突文件的名字**故意带 {@code ;} 与 {@code =}**：它们正是尾注的两个分隔符，
+     * 不编码就会把一行截成两条假记录。中文文件名原样保留（尾注也是给人读的）。
+     */
+    @Test
+    void mergeResolutionCarriesResolutionsTrailerAndReadsBack(@TempDir Path root) throws Exception {
+        Path work = root.resolve("projects/11");
+        Files.createDirectories(work);
+        String tricky = "合同;甲=乙.txt";
+        Files.writeString(work.resolve(tricky), "初稿");
+        Files.writeString(work.resolve("附件.txt"), "初稿");
+        ProjectRepoService s = svc(root);
+        s.init(11L, "韩泽伟", "hzw@example.com");
+
+        // 一条分叉：work/1 与 master 改同两份文件 → 两份都冲突
+        s.createBranch(11L, "work/1", "master");
+        s.checkoutBranch(11L, "work/1");
+        Files.writeString(work.resolve(tricky), "我这边");
+        Files.writeString(work.resolve("附件.txt"), "我这边");
+        s.commitAll(11L, "我这边的工作", "auto", null, "韩泽伟", "hzw@example.com");
+        s.checkoutBranch(11L, "master");
+        Files.writeString(work.resolve(tricky), "同事那边");
+        Files.writeString(work.resolve("附件.txt"), "同事那边");
+        s.commitAll(11L, "同事的工作", "auto", null, "同事", "peer@example.com");
+
+        MergeOutcome outcome = s.mergeNoCommit(11L, "work/1", "撞车的工作",
+                "韩泽伟", "hzw@example.com");
+        assertTrue(!outcome.success(), "这一步必须真的撞出冲突，否则后面测的不是裁决提交");
+        assertTrue(s.repositoryMerging(11L));
+
+        // 律师逐份选完（内容由上层 applyResolution 落盘，这里只关心尾注）
+        Files.writeString(work.resolve(tricky), "同事那边");
+        Files.writeString(work.resolve("附件.txt"), "我这边");
+        String sha = s.commitMergeResolution(11L, "撞车的工作",
+                Map.of(tricky, "MAIN", "附件.txt", "DRAFT"), "韩泽伟", "hzw@example.com");
+
+        String msg = headMessage(s, 11L);
+        assertTrue(msg.contains(RESOLUTIONS_TRAILER),
+                "缺 \"" + RESOLUTIONS_TRAILER + "\"，实际：\n" + msg);
+        assertTrue(msg.contains("合同%3B甲%3D乙.txt=MAIN"),
+                "路径里的 ; 与 = 必须编码，否则这一行会被解析成几条假记录，实际：\n" + msg);
+
+        VersionEntry entry = s.log(11L, sha, 1).get(0);
+        List<VersionEntry.Resolution> back = entry.resolutions();
+        assertEquals(2, back.size(), "读回来的裁决清单：" + back);
+        assertEquals("MAIN", back.stream().filter(r -> r.path().equals(tricky))
+                .findFirst().orElseThrow().kept());
+        assertEquals("DRAFT", back.stream().filter(r -> r.path().equals("附件.txt"))
+                .findFirst().orElseThrow().kept());
+    }
+
+    /** 干净合并不带这条尾注：时间线上「这一版做过裁决」不能凭空多出来。 */
+    @Test
+    void cleanMergeCarriesNoResolutionsTrailer(@TempDir Path root) throws Exception {
+        Path work = root.resolve("projects/12");
+        Files.createDirectories(work);
+        Files.writeString(work.resolve("合同.txt"), "初稿");
+        ProjectRepoService s = svc(root);
+        s.init(12L, "韩泽伟", "hzw@example.com");
+        s.createBranch(12L, "work/1", "master");
+        s.checkoutBranch(12L, "work/1");
+        Files.writeString(work.resolve("我的.txt"), "我这边");
+        s.commitAll(12L, "我这边的工作", "auto", null, "韩泽伟", "hzw@example.com");
+        s.checkoutBranch(12L, "master");
+        Files.writeString(work.resolve("同事的.txt"), "同事那边");
+        s.commitAll(12L, "同事的工作", "auto", null, "同事", "peer@example.com");
+
+        s.mergeNoCommit(12L, "work/1", "两不相干", "韩泽伟", "hzw@example.com");
+        String sha = s.commitMergeResolution(12L, "两不相干", Map.of(),
+                "韩泽伟", "hzw@example.com");
+
+        assertTrue(!headMessage(s, 12L).contains(RESOLUTIONS_TRAILER));
+        assertTrue(s.log(12L, sha, 1).get(0).resolutions().isEmpty());
     }
 }

@@ -36,6 +36,13 @@ public class VersionController {
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
     private final VersionLifecycleService lifecycleService;
 
+    /**
+     * 提交署名解析（spec 2026-09-14 §2.1）。字段注入：本类的构造器被
+     * GlobalExceptionHandlerAuthCodeTest / VersionFileAccessTest 手工 new，加参数是纯 churn。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private VersionAuthorResolver authorResolver;
+
     /** 埋点：版本记录关键动作计数（op 是端点枚举名，不带任何项目/版本信息） */
     private void trackOp(String op) {
         telemetryService.record("version.op", Map.of("op", op, "ok", true));
@@ -213,7 +220,7 @@ public class VersionController {
         // 律师自己按下去就是他自己的决定。同时清掉 opt-out，否则下次自动触发点
         // 还会被旧标记拦住。
         lifecycleService.clearOptOut(projectId);
-        sessionService.enableVersionRecording(projectId, userName(userId), email(userId));
+        sessionService.enableVersionRecording(projectId, userName(userId), email(projectId, userId));
         trackOp("enable");
         return ok(Map.of("enabled", true));
     }
@@ -661,8 +668,12 @@ public class VersionController {
         return LangText.of("用户", "User");
     }
 
-    private String email(Long userId) {
-        return "user-" + userId + "@aiworkdeck.local";
+    /** 作者邮箱的唯一取法，规则集中在 {@link VersionAuthorResolver}（spec 2026-09-14 §2.1）。 */
+    private String email(Long projectId, Long userId) {
+        String name = userName(userId);
+        return authorResolver != null
+                ? authorResolver.email(projectId, userId, name)
+                : VersionAuthorResolver.localEmail(name);
     }
 
     private ResponseEntity<Map<String, Object>> ok(Map<String, Object> data) {

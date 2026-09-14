@@ -63,12 +63,15 @@
             <!-- 协作状态 chip：只在这份案卷真的放进过团队案件库时才渲染。
                  没连案件库的律师（绝大多数）在界面上看不到任何协作元素——
                  「以自己工作为主」的产品定位要求协作 UI 零打扰。 -->
+            <!-- 点它开的是中栏「提交历史」标签（dev-board#624）：这句话说的是
+                 「案件库那边发生了什么」，律师的下一步是去看发生了什么，不是去按交稿键。
+                 交稿/取回/加人仍在协作抽屉里（底部状态条的同一句话还开那个）。 -->
             <view
               v-if="collabLinked"
               class="collab-chip"
               :class="'collab-chip-' + collabTone"
-              @tap.stop="openCollab('casefile')"
-              :title="$t('workbench.collab')"
+              @tap.stop="openCommitHistoryTab({ focus: collabCloud && collabCloud.remoteAhead ? 'remote' : '' })"
+              :title="$t('version.historyTabName')"
             >
               <view class="collab-chip-dot"></view>
               <text class="collab-chip-text">{{ collabStateText }}</text>
@@ -475,6 +478,7 @@
         @changed="onCollabChanged"
         @reload-files="onVersionReloadFiles"
         @conflict="onCollabConflict"
+        @open-history="onOpenHistoryFromCollab"
       />
 
       <!-- 文档比较选择对话框 -->
@@ -716,6 +720,7 @@
             @adopt-conflict="adoptConflictPending = $event"
             @status-changed="checkAdoptConflict"
             @open-collab="openCollab"
+            @open-history="openCommitHistoryTab({})"
           />
           <MarketSidebarPanel
             v-else-if="leftPaneKey === 'market'"
@@ -1118,6 +1123,21 @@
                       @open-url="openBrowserTab($event)"
                       @open-doc-file="openInsightDocFile($event)"
                     />
+                    <!-- 「提交历史」标签（dev-board#624）：主线 + 各稿 + 案件库最新稿的统一历史。
+                         三个入口（顶栏协作 chip / 协作抽屉 / 版本面板「完整历史」）共用同一个单例标签。 -->
+                    <CommitHistoryTab
+                      v-else-if="activeFileLeft.tabType === 'commit-history'"
+                      :key="activeFileLeft.id"
+                      :project-id="projectId"
+                      :focus="activeFileLeft.historyFocus || ''"
+                      :focus-token="activeFileLeft.historyFocusToken || 0"
+                      :cloud-linked="collabLinked"
+                      :refresh-token="collabRefreshToken"
+                      @compare-file="onVersionCompareFile"
+                      @reload-files="onVersionReloadFiles"
+                      @changed="onCollabChanged"
+                      @conflict="onCollabConflict"
+                    />
                     <!-- 「设置」标签：与 pages/admin 薄壳页共用同一个 AdminPane
                          （照插件广场 market-detail 那套 tab 形制）。个人中心 2026-08-20
                          并进了它的「个人」组，工作台里不再有第二个设置类标签。 -->
@@ -1278,6 +1298,20 @@
                       :project-id="projectId"
                       @open-url="openBrowserTab($event)"
                       @open-doc-file="openInsightDocFile($event)"
+                    />
+                    <!-- 「提交历史」标签：见左窗格同名注释 -->
+                    <CommitHistoryTab
+                      v-else-if="activeFileRight.tabType === 'commit-history'"
+                      :key="activeFileRight.id"
+                      :project-id="projectId"
+                      :focus="activeFileRight.historyFocus || ''"
+                      :focus-token="activeFileRight.historyFocusToken || 0"
+                      :cloud-linked="collabLinked"
+                      :refresh-token="collabRefreshToken"
+                      @compare-file="onVersionCompareFile"
+                      @reload-files="onVersionReloadFiles"
+                      @changed="onCollabChanged"
+                      @conflict="onCollabConflict"
                     />
                     <!-- 「设置」标签：见左窗格同名注释 -->
                     <AdminPane
@@ -2032,6 +2066,7 @@ import InsightHoverCard from '@/components/InsightHoverCard.vue'
 import InsightEntityDetailPane from '@/components/InsightEntityDetailPane.vue'
 import SearchPanel from '@/components/SearchPanel.vue'
 import VersionPanel from '@/components/version/VersionPanel.vue'
+import CommitHistoryTab from '@/components/version/CommitHistoryTab.vue'
 // 异步组件：ProjectCalendarPane 静态 import 会把 FullCalendar 整包拖进工作台主
 // chunk（工作台是全应用最热路由），懒加载让只有真点开「日历」面板的会话付这个成本。
 const ProjectCalendarPane = defineAsyncComponent(() => import('@/components/project-calendar/ProjectCalendarPane.vue'))
@@ -2088,6 +2123,8 @@ import { openExternalUrl } from '@/utils/externalLink.js'
 import { signOut } from '@/utils/signOut.js'
 import { loadSiteLinks, siteBaseUrl, siteLinks } from '@/utils/siteLinks.js'
 import { getCurrentUser } from '@/utils/auth.js'
+import { mergeMembers } from '@/utils/mergeMembers.js'
+import { remoteAheadText } from '@/utils/collabWording.js'
 import { getInitial } from '@/utils/textInitial.js'
 import { recordProjectVisit, getRecentProjectIds, syncRecentToMenuFetching } from '@/utils/recentProjects.js'
 import { markdownToPlainText } from '@/utils/markdownPlain.js'
@@ -2203,6 +2240,7 @@ export default {
     FilePickerDialog,
     SearchPanel,
     VersionPanel,
+    CommitHistoryTab,
     ProjectCalendarPane
   },
   data() {
@@ -2717,7 +2755,11 @@ export default {
       if (this.adoptConflictPending) return this.$t('workbench.adoptPendingText')
       const c = this.collabCloud || {}
       if (c.offline) return this.$t('workbench.collabOffline')
-      if (c.remoteAhead) return this.$t('workbench.collabRemoteAhead')
+      // 「同事交了新稿」四处同源（utils/collabWording.js）：后端给得出作者时说清楚是
+      // 本人的另一台电脑还是哪位同事、几版；给不出（老服务端）才落回这句老文案。
+      if (c.remoteAhead) {
+        return remoteAheadText((k, params) => this.$t(k, params), c, { fallbackKey: 'workbench.collabRemoteAhead' })
+      }
       if (c.pendingUpload || this.versionWorkStatus.working) return this.$t('workbench.collabPendingUpload')
       return this.$t('workbench.collabInSync')
     },
@@ -4021,6 +4063,11 @@ export default {
       this.collabInitialTab = typeof tab === 'string' ? tab : 'casefile'
       this.collabDialogVisible = true
     },
+    // 协作抽屉里的「查看提交历史」：抽屉是模态的，开完标签还挂在上面就把它挡住了。
+    onOpenHistoryFromCollab() {
+      this.collabDialogVisible = false
+      this.openCommitHistoryTab({})
+    },
     // 抽屉里做完动作：页面自己的状态、版本面板那份状态、以及「有没有等着做选择的
     // 文件」三处都要跟着走一遍。
     //
@@ -5024,9 +5071,12 @@ export default {
      * 是云端那张（CollabDialog 的「案件参与人」、加人弹窗的云端轨），本机表一个字不变。
      * 只读本机表的话，律师刚在库里加完人、回头看堆栈毫无变化，会第二次以为「没生效」。
      *
-     * 合并纪律：
-     * · 按 username 去重，本机条目优先（本机那条带得动本机 userId 与权限语义）；
-     * · 云端条目的 id 加前缀，避免与本机 id 撞 :key；
+     * 合并纪律（实现与单测在 utils/mergeMembers.js，dev-board#625）：
+     * · 去重键按可靠度试三把：accountId → username → 云端 `awd_` + 本机 username。
+     *   只比 username 的老写法会让同一个官网账户（本机 hanzewei / 案件库 awd_hanzewei）
+     *   显示成两个人；
+     * · 合并后保留本机条目（它带得动本机 userId 与权限语义），role/joinedAt 以案件库为准；
+     * · 云端独有条目的 id 加前缀，避免与本机 id 撞 :key；
      * · **云端条目的 userId 一律抹成 null**——它来自案件库服务器的用户表，和本机
      *   user.id 是两个 id 空间，撞上同一个数字会让 canWriteProject / canRemoveMember
      *   把别人的角色当成「我的角色」，把有写权限的人判成只读；
@@ -5049,11 +5099,10 @@ export default {
         try {
             const res = await getCloudMembers(this.projectId)
             const cloudMembers = (res && res.data && res.data.members) || []
-            const seen = new Set(local.map(m => m.username).filter(Boolean))
-            const extra = cloudMembers
-              .filter(m => m.username && !seen.has(m.username))
-              .map(m => ({ ...m, id: `cloud-${m.id != null ? m.id : m.username}`, userId: null, fromCloud: true }))
-            if (extra.length) this.projectMembers = local.concat(extra)
+            // 去重键（accountId → username → 云端 awd_ 前缀）与合并规则在
+            // utils/mergeMembers.js，配单测；同一个官网账户在两张表里叫两个名字
+            // （本机 hanzewei / 案件库 awd_hanzewei）曾让一个人显示成两个人（#625）。
+            this.projectMembers = mergeMembers(local, cloudMembers)
         } catch (e) {
             console.warn('[Collab] 读取案件库参与人失败，只显示本机名单', e)
         }

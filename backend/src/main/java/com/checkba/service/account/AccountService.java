@@ -170,6 +170,20 @@ public class AccountService {
     }
 
     /**
+     * 已连接账户在官网侧的稳定账户 id（{@code account.json} 里的那一项）；未连接、
+     * 或者是老版本落的盘还没有这一项时返回 null。
+     *
+     * <p><b>纯本地读，绝不出网</b>——调用方是参与人列表这类每次打开界面都要走的路
+     * （spec 2026-09-14 §2.6 的去重键）。需要「没有就补拉一次 /me」的场景走
+     * {@link #profileIdentity()}。
+     */
+    public synchronized String currentAccountIdOrNull() {
+        State state = loadState();
+        if (state.key == null || state.key.isBlank()) return null;
+        return state.accountId == null || state.accountId.isBlank() ? null : state.accountId;
+    }
+
+    /**
      * 当前连接账户的指纹（Key 的 SHA-256 前 12 位十六进制）；未连接返回 null。
      *
      * <p>给需要回答「现在连的还是不是刚才那个账户」的地方用——机器级的缓存（平台 AI 密钥、

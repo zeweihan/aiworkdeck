@@ -58,10 +58,23 @@ public class ProjectMemberService {
     @Autowired(required = false)
     private CollaboratorAdmission collaboratorAdmission;
 
+    /**
+     * 本机连着的官网账户（spec 2026-09-14 §2.6：参与人列表里「我自己」那一行的
+     * accountId）。同样**字段注入**，理由同上；required=false，案件库/自建服务器上
+     * 这条根本不接线也照常跑。
+     */
+    @Autowired(required = false)
+    private com.checkba.service.account.AccountService accountService;
+
     /** 单测用：这两样走字段注入，手工 new 出来的实例得有地方补上。 */
     void setAccountLookupForTest(AccountBindingRepository repo, String accountBaseUrl) {
         this.accountBindingRepository = repo;
         this.accountBaseUrl = accountBaseUrl;
+    }
+
+    /** 单测用：同上。 */
+    void setAccountServiceForTest(com.checkba.service.account.AccountService service) {
+        this.accountService = service;
     }
 
     /** 单测用：同上。 */
@@ -318,6 +331,36 @@ public class ProjectMemberService {
         return accountBindingRepository.findByUserId(user.getId())
                 .map(b -> trimTrailingSlash(accountBaseUrl) + "/api/avatar/" + b.getExternalAccountId())
                 .orElse(null);
+    }
+
+    /**
+     * 这个人的官网账户 id（spec 2026-09-14 §2.6）；不知道就回 null。
+     *
+     * <p>参与人「2 人」的病根：本机成员表里的 {@code hanzewei} 与案件库成员表里的
+     * {@code awd_hanzewei} 是同一个官网账户，前端按用户名字符串去重所以显示两次。
+     * 账户 id 是两边唯一对得上的键，两侧的 members 都带上它，去重才有依据。
+     *
+     * <p>取法两级：{@code account_binding}（案件库侧每个人都桥接过，本机侧的同事也是
+     * 「加同事」预建出来的）→ 查不到时，如果问的就是**调用者自己**，用本机连着的那个
+     * 官网账户（桌面 local-mode 下本机用户从来不桥接，库里没有他的绑定行）。
+     * {@code callerId} 传 null 就只走第一级。
+     */
+    public String accountIdFor(User user, Long callerId) {
+        if (user == null || user.getId() == null) return null;
+        if (accountBindingRepository != null) {
+            String bound = accountBindingRepository.findByUserId(user.getId())
+                    .map(com.checkba.model.entity.AccountBinding::getExternalAccountId)
+                    .orElse(null);
+            if (bound != null && !bound.isBlank()) return bound;
+        }
+        if (accountService != null && user.getId().equals(callerId)) {
+            try {
+                return accountService.currentAccountIdOrNull();
+            } catch (Exception e) {
+                log.warn("读取本机账户 id 失败（参与人去重退化）: userId={}", user.getId(), e);
+            }
+        }
+        return null;
     }
 
     private static String trimTrailingSlash(String url) {

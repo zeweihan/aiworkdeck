@@ -18,6 +18,12 @@
     </view>
 
     <template v-else>
+      <!-- 「完整历史」：侧栏这条时间线只看得到主线最近 50 条，中栏那个标签页才是
+           `git log --graph --all` 的等价物（各稿 + 案件库最新稿 + 事件 + 筛选 + 任选两版对比）。
+           没连案件库的案卷同样有用（本机历史本来就在），所以不收进协作状态行。 -->
+      <view class="version-history-row">
+        <text class="version-history-link" @tap="$emit('open-history')">{{ $t('version.openFullHistory') }}</text>
+      </view>
       <WorkSessionBar
         :working="working"
         :changed-count="changedCount"
@@ -130,7 +136,7 @@ export default {
   // status-changed：面板内的结束工作/丢弃/回主线/采纳/放弃等操作都只更新面板自己的
   // 状态，不会通知页面级的顶栏/底部工作状态 chip（它们各自轮询/事件驱动，互不相通）。
   // refresh()/onReload() 每次拉完 /status 都发一次，页面据此重新拉一次自己的状态点。
-  emits: ['compare-file', 'clear-file-filter', 'reload-files', 'adopt-conflict', 'open-collab', 'status-changed'],
+  emits: ['compare-file', 'clear-file-filter', 'reload-files', 'adopt-conflict', 'open-collab', 'open-history', 'status-changed'],
   provide() {
     return { projectId: this.projectId }
   },
@@ -320,6 +326,11 @@ export default {
   font-size: 24rpx; color: var(--awd-text-2);
 }
 .version-file-filter-clear { color: var(--awd-text); text-decoration: underline; }
+.version-history-row {
+  display: flex; justify-content: flex-end;
+  padding: 8rpx 24rpx; border-bottom: 1px solid var(--awd-border);
+}
+.version-history-link { font-size: 23rpx; color: var(--awd-text); text-decoration: underline; }
 .version-footer {
   display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8rpx;
   padding: 12rpx 24rpx; border-top: 1px solid var(--awd-border);

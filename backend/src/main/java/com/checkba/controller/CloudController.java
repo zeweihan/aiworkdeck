@@ -162,16 +162,17 @@ public class CloudController {
     public ResponseEntity<Map<String, Object>> status(
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireMemberNonClient(projectId, sessionId);
-        return ok(cloudSyncService.cloudStatus(projectId));
+        Long userId = requireMemberNonClient(projectId, sessionId);
+        // userId 用于「这几版新稿是不是我在另一台电脑上交的」（spec 2026-09-14 §2.5）
+        return ok(cloudSyncService.cloudStatus(projectId, userId));
     }
 
     @PostMapping("/projects/{projectId}/check")
     public ResponseEntity<Map<String, Object>> check(
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireMemberNonClient(projectId, sessionId);
-        return ok(cloudSyncService.checkCloud(projectId));
+        Long userId = requireMemberNonClient(projectId, sessionId);
+        return ok(cloudSyncService.checkCloud(projectId, userId));
     }
 
     @PostMapping("/projects/{projectId}/upload")

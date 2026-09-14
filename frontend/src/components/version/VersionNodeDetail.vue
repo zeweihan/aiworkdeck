@@ -68,7 +68,8 @@
 </template>
 
 <script>
-import { getVersionChanges, revertToVersion, markVersionMilestone, createDraft } from '@/services/api.js'
+import { getVersionChanges } from '@/services/api.js'
+import { createVersionActions } from '@/composables/useVersionActions.js'
 
 // uni.showModal / showToast 的层级修正（<uni-modal>/<uni-toast> 恒为 z-index 999，
 // 会被本仓 9999 的弹窗遮罩挡住）已搬到 App.vue 的 <script> 模块级——
@@ -100,6 +101,17 @@ export default {
       })
     },
   },
+  created() {
+    // 四件事的实现搬到了 composables/useVersionActions.js（与中栏「提交历史」标签页共用）。
+    // 这里只留一份宿主绑定：busy 重入守卫仍是本组件自己的状态。
+    this._actions = createVersionActions({
+      projectId: () => this.projectId,
+      t: (k, p) => this.$t(k, p),
+      isBusy: () => this.busy,
+      setBusy: (v) => { this.busy = v },
+      emit: (name, payload) => this.$emit(name, payload),
+    })
+  },
   mounted() {
     this.load()
   },
@@ -126,78 +138,29 @@ export default {
     // 对比结果开在编辑区的标签页里，弹窗留着只会挡住它（也让「弹窗上的按钮文字」
     // 被误当成对比结果渲染出来了）——上抛之后立刻关掉自己。
     compareFile(path) {
-      this.$emit('compare-file', { path, sha: this.version.sha })
+      this._actions.compareWithPrevious(this.version.sha, path)
       this.$emit('close')
     },
     confirmRevert() {
-      // 本文件其它两个写操作（submitMilestone/submitDraftCreate）都靠 busy 挡重入，
-      // 这里漏了：确认框关掉之后按钮和弹窗都还能再点一次，在第一个 revertToVersion
-      // 请求飞着时能弹出并确认第二个 uni.showModal，打出两个并发的退回请求。
-      if (this.busy) return
-      uni.showModal({
-        title: this.$t('version.revertToVersion'),
-        content: this.$t('version.revertConfirmContent'),
-        success: async (r) => {
-          if (!r.confirm) return
-          this.busy = true
-          try {
-            const res = await revertToVersion(this.projectId, this.version.sha)
-            const affectedFileIds = (res && res.data && res.data.affectedFileIds) || []
-            this.$emit('reload-files', affectedFileIds)
-          } catch (e) {
-            uni.showToast({ title: (e && e.message) || this.$t('version.revertFailed'), icon: 'none' })
-          } finally {
-            this.busy = false
-          }
-        },
-      })
+      // busy 重入守卫在 useVersionActions 里（本文件另两个写操作也靠它）：确认框关掉之后
+      // 按钮和弹窗都还能再点一次，在第一个 revertToVersion 请求飞着时能打出第二个。
+      this._actions.confirmRevert(this.version.sha)
     },
     openMilestoneNaming() {
       this.milestoneName = this.version.milestone || ''
       this.milestoneNaming = true
     },
     async submitMilestone() {
-      if (this.busy) return
-      const name = (this.milestoneName || '').trim()
-      if (!name) {
-        uni.showToast({ title: this.$t('version.milestoneNameRequired'), icon: 'none' })
-        return
-      }
-      this.busy = true
-      try {
-        await markVersionMilestone(this.projectId, this.version.sha, name)
-        this.milestoneNaming = false
-        uni.showToast({ title: this.$t('version.markedMilestone'), icon: 'none' })
-        this.$emit('milestoned')
-      } catch (e) {
-        uni.showToast({ title: (e && e.message) || this.$t('version.markMilestoneFailed'), icon: 'none' })
-      } finally {
-        this.busy = false
-      }
+      const ok = await this._actions.markMilestone(this.version.sha, this.milestoneName)
+      if (ok) this.milestoneNaming = false
     },
     openDraftNaming() {
       this.draftName = ''
       this.draftNaming = true
     },
     async submitDraftCreate() {
-      if (this.busy) return
-      const name = (this.draftName || '').trim()
-      if (!name) {
-        uni.showToast({ title: this.$t('version.draftNameRequired'), icon: 'none' })
-        return
-      }
-      this.busy = true
-      try {
-        const res = await createDraft(this.projectId, this.version.sha, name)
-        const affectedFileIds = (res && res.data && res.data.affectedFileIds) || []
-        this.draftNaming = false
-        uni.showToast({ title: this.$t('version.draftCreatedSwitching', { name }), icon: 'none' })
-        this.$emit('draft-created', affectedFileIds)
-      } catch (e) {
-        uni.showToast({ title: (e && e.message) || this.$t('version.createDraftFailed'), icon: 'none' })
-      } finally {
-        this.busy = false
-      }
+      const ok = await this._actions.createDraftFrom(this.version.sha, this.draftName)
+      if (ok) this.draftNaming = false
     },
   },
 }

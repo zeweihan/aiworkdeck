@@ -263,6 +263,13 @@ public class ProjectRepoService {
     private static final String NOTE_TRAILER = "X-AWD-Note: ";
     /** 体积过滤跳过的文件清单（尽调 P3#3）：commitAll 里超限文件不入库，指纹落这一行。 */
     private static final String SKIPPED_TRAILER = "X-AWD-Skipped-Large-Files: ";
+    /**
+     * 冲突裁决结果（spec 2026-09-14 §2.2）：{@code <path>=<MAIN|DRAFT|BOTH>; ...}。
+     * 三个裁决合并调用点（结束工作裁决 / 采纳裁决 / 取回最新稿裁决）共用这一行；
+     * 干净合并不带这条尾注。path 里的 {@code % ; =} 与换行走 URL 编码，见
+     * {@link #encodeResolutionPath}。
+     */
+    private static final String RESOLUTIONS_TRAILER = "X-AWD-Resolutions: ";
 
     /**
      * {@code .git/index.lock} 陈旧锁的判定阈值。commitAll/commitNow 等一切改仓库状态的
@@ -424,6 +431,32 @@ public class ProjectRepoService {
     }
 
     /**
+     * {@code fromRef..toRef} 之间的提交（可达 to、不可达 from），最多 {@code cap} 条，
+     * 新的在前。任一 ref 解析不出就回空列表——「算不出来」不是错误（口径同
+     * {@link #resolveRef}/{@link #mergeBase}），调用方自己决定怎么退化。
+     *
+     * <p>当前唯一用途：云端状态里的「同事交了新稿 · N 版」要数一数
+     * {@code master..origin/master} 有几版、都是谁提交的（spec 2026-09-14 §2.5）。
+     */
+    public List<VersionEntry> commitsBetween(long projectId, String fromRef, String toRef, int cap) {
+        List<VersionEntry> out = new ArrayList<>();
+        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            ObjectId from = repo.resolve(fromRef);
+            ObjectId to = repo.resolve(toRef);
+            if (to == null) return out;
+            Map<String, String> milestones = milestonesIn(repo);
+            var cmd = git.log().add(to).setMaxCount(cap);
+            if (from != null) cmd = cmd.not(from);
+            for (RevCommit c : cmd.call()) {
+                out.add(toEntry(c, milestones));
+            }
+            return out;
+        } catch (Exception e) {
+            throw new VersionException("读取区间历史失败: project=" + projectId, e);
+        }
+    }
+
+    /**
      * 与 {@link #log} 相同，但只保留改动过 relPath 的提交（单文件历史）。
      *
      * <p>刻意不用 JGit 的 {@code addPath}（也就是 git 的默认历史简化）：那条路径会把
@@ -475,11 +508,15 @@ public class ProjectRepoService {
                 // （dev-board#351）；这里按当前界面语言替换后再交给 UI，真实用户名（含云端
                 // 协作方的署名）一个字都不动，Git 对象一字节都没碰。
                 LocalIdentityService.displayNameOf(c.getAuthorIdent().getName()),
+                // 邮箱是账户级身份的唯一可靠线索（见 VersionAuthorResolver），原值直出：
+                // 它不是给人看的字符串，不做本地化、不做任何改写。
+                c.getAuthorIdent().getEmailAddress(),
                 Instant.ofEpochSecond(c.getCommitTime()),
                 kind == null ? "auto" : kind,
                 note,
                 parents,
-                milestones.get(c.getName()));
+                milestones.get(c.getName()),
+                parseResolutions(extractTrailer(full, RESOLUTIONS_TRAILER)));
     }
 
     private String extractTrailer(String fullMessage, String prefix) {
@@ -488,6 +525,72 @@ public class ProjectRepoService {
             if (t.startsWith(prefix)) return t.substring(prefix.length()).trim();
         }
         return null;
+    }
+
+    // ==================== 裁决尾注（spec 2026-09-14 §2.2） ====================
+
+    /**
+     * {@code <path>=<KEPT>; ...} 尾注文本。空/全 null 的裁决表回 null（干净合并不带这条）。
+     * 顺序按路径排序：同一次裁决在任何机器上生成同一行文本，diff 与人眼比对都稳定。
+     */
+    static String resolutionsTrailerValue(Map<String, String> resolutions) {
+        if (resolutions == null || resolutions.isEmpty()) return null;
+        StringBuilder sb = new StringBuilder();
+        for (String path : new java.util.TreeSet<>(resolutions.keySet())) {
+            String kept = resolutions.get(path);
+            if (path == null || kept == null || kept.isBlank()) continue;
+            if (sb.length() > 0) sb.append("; ");
+            sb.append(encodeResolutionPath(path)).append('=').append(kept);
+        }
+        return sb.length() == 0 ? null : sb.toString();
+    }
+
+    /**
+     * 只编码会破坏这一行格式的五个字符（{@code %} 必须第一个换，否则会二次编码）：
+     * 分隔符 {@code ;} {@code =}、转义符本身 {@code %}，以及会把尾注截成两行的换行。
+     * 中文文件名原样留着——尾注是人也要读的（律师把仓库 clone 出去用 git log 看）。
+     */
+    static String encodeResolutionPath(String path) {
+        return path.replace("%", "%25")
+                .replace(";", "%3B")
+                .replace("=", "%3D")
+                .replace("\r", "%0D")
+                .replace("\n", "%0A");
+    }
+
+    /** {@link #encodeResolutionPath} 的逆运算，接受任意 %XX。 */
+    static String decodeResolutionPath(String encoded) {
+        StringBuilder sb = new StringBuilder(encoded.length());
+        for (int i = 0; i < encoded.length(); i++) {
+            char c = encoded.charAt(i);
+            if (c == '%' && i + 2 < encoded.length()) {
+                try {
+                    sb.append((char) Integer.parseInt(encoded.substring(i + 1, i + 3), 16));
+                    i += 2;
+                    continue;
+                } catch (NumberFormatException ignored) {
+                    // 不是合法的 %XX：原样留着那个 %，别把用户的文件名吃掉
+                }
+            }
+            sb.append(c);
+        }
+        return sb.toString();
+    }
+
+    /** 尾注文本 → 裁决清单；没有这条尾注（干净合并/普通存档）回空列表。 */
+    static List<VersionEntry.Resolution> parseResolutions(String trailerValue) {
+        if (trailerValue == null || trailerValue.isBlank()) return List.of();
+        List<VersionEntry.Resolution> out = new ArrayList<>();
+        for (String part : trailerValue.split(";")) {
+            String item = part.trim();
+            if (item.isEmpty()) continue;
+            int at = item.lastIndexOf('=');
+            if (at <= 0 || at == item.length() - 1) continue;
+            out.add(new VersionEntry.Resolution(
+                    decodeResolutionPath(item.substring(0, at)),
+                    item.substring(at + 1).trim()));
+        }
+        return out;
     }
 
     /**
@@ -884,6 +987,18 @@ public class ProjectRepoService {
      */
     public String commitMergeResolution(long projectId, String message,
                                         String authorName, String authorEmail) {
+        return commitMergeResolution(projectId, message, null, authorName, authorEmail);
+    }
+
+    /**
+     * 带裁决清单的版本（spec 2026-09-14 §2.2）：{@code resolutions} 是
+     * {@code path → MAIN|DRAFT|BOTH}，非空时追加 {@link #RESOLUTIONS_TRAILER} 尾注。
+     * 值用字符串而不是 {@code WorkSessionService.Resolution}：本类只认识 Git 概念，
+     * 反向依赖业务层会把两个类缠成一个环。
+     */
+    public String commitMergeResolution(long projectId, String message,
+                                        Map<String, String> resolutions,
+                                        String authorName, String authorEmail) {
         try (Repository repo = open(projectId); Git git = new Git(repo)) {
             RepositoryState st = repo.getRepositoryState();
             if (st != RepositoryState.MERGING && st != RepositoryState.MERGING_RESOLVED) {
@@ -893,6 +1008,10 @@ public class ProjectRepoService {
             git.add().addFilepattern(".").setUpdate(true).call();
 
             String fullMessage = message + "\n\n" + KIND_TRAILER + "session";
+            String resolutionLine = resolutionsTrailerValue(resolutions);
+            if (resolutionLine != null) {
+                fullMessage = fullMessage + "\n" + RESOLUTIONS_TRAILER + resolutionLine;
+            }
             RevCommit c = git.commit()
                     .setMessage(fullMessage)
                     .setAuthor(authorName, authorEmail)

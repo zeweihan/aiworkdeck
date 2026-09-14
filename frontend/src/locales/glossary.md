@@ -82,6 +82,14 @@
 | 采纳（稿） | Adopt | 采纳-放弃-冲突三选一：Adopt / Discard / Resolve Conflict |
 | 交稿 | Submit Draft | 协作 |
 | 取回最新稿 | Pull Latest | 协作 |
+| 提交历史 | History | 中栏标签页（dev-board#624）；标签名短，「完整历史」入口 → Full History |
+| 完整历史 | Full History | 版本面板顶部与协作抽屉里通往提交历史标签页的入口 |
+| 泳道图 | Lane graph | 提交历史左侧那张图；对外不出现「分支图 / branch graph」 |
+| 版（量词） | version | 「领先 2 版」→ ahead by 2；不写 commit |
+| 签出（一份案卷） | Check out | 事件行「{谁} 签出了一份」→ {who} checked out a copy |
+| 本机 | This Computer | 提交历史里的标签；与「案件库 Case Library」对举 |
+| 裁决（冲突三选一的结果） | Resolution | 「留了你这边 / 留了同事那边 / 两边都留」→ kept your side / kept your colleague's side / kept both sides |
+| 参与人（筛选项） | Person | 提交历史工具栏的筛选下拉；名单语境仍是 Case Members |
 | 脱敏 | Redaction | 动词 redact |
 | 套红/公文格式 | House Style Formatting | |
 | 书签 | Bookmark | |

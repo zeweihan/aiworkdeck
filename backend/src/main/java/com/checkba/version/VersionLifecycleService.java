@@ -81,6 +81,18 @@ public class VersionLifecycleService {
     /** 正在开启中的项目：一次文件夹对账会连发几千个变更信号，去重掉后面全部。 */
     private final Set<Long> inFlight = ConcurrentHashMap.newKeySet();
 
+    /**
+     * 提交署名解析（spec 2026-09-14 §2.1）。字段注入：本类的构造器被
+     * VersionDisableTest / PrepareRemoteRaceTest / VersionAutoEnableAuthorTest 手工 new。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private VersionAuthorResolver authorResolver;
+
+    /** 单测用：走字段注入，手工 new 出来的实例得有地方补上。 */
+    void setAuthorResolverForTest(VersionAuthorResolver resolver) {
+        this.authorResolver = resolver;
+    }
+
     public VersionLifecycleService(WorkSessionService sessionService,
                                    ProjectRepoService repoService,
                                    ProjectRepository projectRepository,
@@ -161,8 +173,9 @@ public class VersionLifecycleService {
                 if (project == null) return;      // 事务还没提交/项目已删：下一个信号再说
                 if (Boolean.TRUE.equals(project.getVersionOptOut())) return;
                 if (!withinGuardrail(projectId)) return;
+                String author = authorName(userId, userName, project);
                 sessionService.enableVersionRecording(projectId,
-                        authorName(userId, userName, project), authorEmail(userId));
+                        author, authorEmail(projectId, userId, author));
                 log.info("已自动开启版本记录: project={}", projectId);
             });
         } catch (Exception e) {
@@ -242,9 +255,11 @@ public class VersionLifecycleService {
                 .orElse(LangText.of("用户", "User"));
     }
 
-    /** 口径与 VersionController.email 一致。 */
-    private String authorEmail(Long userId) {
-        return "user-" + (userId == null ? "auto" : userId) + "@aiworkdeck.local";
+    /** 口径与 VersionController.email 一致——同一个出口 {@link VersionAuthorResolver}。 */
+    private String authorEmail(long projectId, Long userId, String authorName) {
+        return authorResolver != null
+                ? authorResolver.email(projectId, userId, authorName)
+                : VersionAuthorResolver.localEmail(authorName);
     }
 
     // ==================== 关闭与 opt-out ====================

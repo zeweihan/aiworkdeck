@@ -405,6 +405,7 @@ export const fileOpenTabsMethods = {
       // 项目概览 2026-08-19 起在左栏展示，不再有 project-home 标签
       // 个人中心 2026-08-20 并进了「设置」标签，不再有 user-profile 标签
       if (tabType === 'admin-settings') return GLYPHS.settings
+      if (tabType === 'commit-history') return GLYPHS.history
       return fileGlyph(type)
     },
 
@@ -558,6 +559,49 @@ export const fileOpenTabsMethods = {
 
     isVersionCompareTab(file) {
       return file && file.tabType === 'version-compare'
+    },
+
+    /**
+     * 「提交历史」标签（dev-board#624）：主线 + 各进行中稿 + 案件库最新稿的统一历史。
+     *
+     * 单例（一个项目一个标签，两个窗格一起查）：重开一次等于把筛选、滚动位置、
+     * 选中的那一版全抹掉，而三个入口（顶栏协作 chip / 协作抽屉 / 版本面板）
+     * 常常被同一个人在几秒内连点。已经开着时只激活并更新 focus——
+     * 从顶栏「同事交了新稿」进来的那次要定位到第一条还没取回的版本。
+     *
+     * 标签直接 push 进列表（绕过 isFileTypeSupported），同 openMarketDetail 的形制。
+     */
+    openCommitHistoryTab(spec = {}) {
+      const projectId = spec.projectId || this.projectId
+      const tabId = `commit-history_${projectId}`
+      const focus = spec.focus || ''
+      for (const pane of ['left', 'right']) {
+        const list = pane === 'left' ? this.leftFiles : this.rightFiles
+        const existing = list.find((f) => f.id === tabId)
+        if (existing) {
+          existing.historyFocus = focus
+          // focusToken 让已经挂载的标签页知道「又被点了一次」：focus 值没变时
+          // props 不变，组件不会重新定位，用户会以为按钮坏了。
+          existing.historyFocusToken = (existing.historyFocusToken || 0) + 1
+          this[pane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'] = existing.id
+          this.focusedPane = pane
+          this.$nextTick(() => this.triggerWorkbenchResize())
+          return
+        }
+      }
+      const targetPane = this.splitMode ? this.focusedPane : 'left'
+      const list = targetPane === 'left' ? this.leftFiles : this.rightFiles
+      const idProp = targetPane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'
+      list.push({
+        id: tabId,
+        tabType: 'commit-history',
+        name: this.$t('version.historyTabName'),
+        historyFocus: focus,
+        historyFocusToken: 1,
+      })
+      this[idProp] = tabId
+      this.focusedPane = targetPane
+      this.$nextTick(() => this.triggerWorkbenchResize())
     },
 
     // 版本对比标签：{projectId, path, name, newRef, oldRef}
