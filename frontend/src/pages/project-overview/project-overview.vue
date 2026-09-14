@@ -3469,6 +3469,10 @@ export default {
         // refresh()（见 VersionPanel.vue :192），这一条也是三语境通用的。
         // app-e2e J14 实测：不重叠的 xlsx+pptx 已经静默合好并落成一版，弹窗却还在。
         this.collabRefreshToken += 1
+        // 顶栏协作 chip 读的是本页的 collabCloud 快照，不随 VersionPanel 的 refresh 变；
+        // 不补这一趟，自动合并收尾后 chip 会继续说「同事交了新稿 · N 版」直到 120 秒轮询
+        // （真机走查截图：toast 已出、面板已「和大家的稿一致」、chip 仍是旧话）。
+        this.fetchCollabState({ online: false }).catch(() => {})
       },
       openOverview: () => this.goHandleAdoptConflict(),
     })
