@@ -359,7 +359,7 @@ Analysis {
   `build_merge_draft` 后两位作者各自的修订数、`conflicts` 恰为那一段、同段冲突不被重放（该段文字 = 主线侧）、
   `merge_take_other` 后该段文字 = 另一侧、`resolve_all_revisions(accept)` 后 `get_document_text` 等于预期合并文本、
   另一侧只改格式的夹具落进 `formatOnly`、同实例第二次 `build_merge_draft` 仍成功、对齐核对失败返回 `stage:'align'`、耗时打印。
-- `app-e2e` 新增 J12（复用 J11 的 A/S/B 拓扑与 `restOverwriteAt`，上传真实 docx 字节）：
+- `app-e2e` 新增一段旅程（实施时编号落在 J14，J12/J13 已被既有旅程占用；复用 J11 的 A/S/B 拓扑与 `restOverwriteAt`，上传真实 docx 字节）：
   ① A、B 从同一版各改不同段落 → A 取回 → 不弹窗、历史多一行带「自动合并了律师乙对 …docx 的改动」、正文含两边改动、退回到合并前那一版可用；
   ② A、B 改同一段 → 总览出现「同一段两边都改了 · 1 处」→ 打开合并比对稿 → 面板里拒绝律师乙那一处、接受其余 → 完成裁决 → 确认 →
   历史行副标题含「第 N 段拒绝了律师乙的」，`X-AWD-Merges` 尾注经 `/history` 出参断言；
