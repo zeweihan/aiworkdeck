@@ -2924,6 +2924,114 @@ function reviewLayout(p) {
       caretX: v[0], caretY: v[1], ...rect }, mode: mode };
 }
 
+// ---- 三方合并：比较内核与单元归一（spec 2026-09-14-docx-three-way-merge-design §5.1）----
+// 归一与后端 DocxUnitReader.normalize 同口径：trim + 连续空白折一个 + NFC。两边
+// 必须一字不差，否则 build_merge_draft 的对齐核对会把正常文档判成 stage:'align'。
+function mergeNormalize(s) {
+  const t = String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+  return t.normalize ? t.normalize('NFC') : t;
+}
+// 宿主送来的文档字节可能是 Uint8Array / ArrayBuffer / 普通数组（结构化克隆跨
+// relay 与 worker 两跳后形态不定）；统一成 zeta.js 能喂给 UNO 的 signed 数组。
+function toUnoByteSeq(raw) {
+  let u8 = null;
+  if (raw instanceof ArrayBuffer) u8 = new Uint8Array(raw);
+  else if (raw && raw.buffer instanceof ArrayBuffer) u8 = new Uint8Array(raw.buffer, raw.byteOffset || 0, raw.byteLength != null ? raw.byteLength : raw.length);
+  else if (Array.isArray(raw)) u8 = new Uint8Array(raw);
+  if (!u8 || !u8.length) return null;
+  return Array.from(new Int8Array(u8.buffer, u8.byteOffset, u8.byteLength));
+}
+// 把 bytes 写进 MEMFS 再派发 .uno:CompareDocuments。compare_document（版本对比
+// 标签页）与 build_merge_draft（合并比对稿）共用这一段；**修订署名必须由调用方
+// 在同一条 worker 命令里先设好**——execCommand 每条命令开头都会重置署名
+// （见 setRedlineAuthor 的说明），跨命令设作者必然失效。
+function compareWithBytes(raw, url) {
+  const bytes = toUnoByteSeq(raw);
+  if (!bytes) return { success: false, stage: 'input', message: 'compare bytes empty' };
+  try {
+    const sfa = css.ucb.SimpleFileAccess.create(context);
+    try { if (sfa.exists(url)) sfa.kill(url); } catch (e) {}
+    const stream = css.io.SequenceInputStream.createStreamFromSequence(context, bytes);
+    sfa.writeFile(url, stream);
+    try { stream.closeInput(); } catch (e) {}
+  } catch (e) { return { success: false, stage: 'memfs', message: errStr(e) }; }
+  try {
+    css.frame.DispatchHelper.create(context).executeDispatch(
+      ctrl.getFrame(), '.uno:CompareDocuments', '', 0, [mkProp('URL', url)]);
+  } catch (e) { return { success: false, stage: 'dispatch', message: errStr(e) }; }
+  invalidateParaIndex();
+  return { success: true, redlineCount: countRedlines() };
+}
+// 正文顶层段落的当前文字（下标 = get_paragraph / select_paragraph 的下标）。
+function bodyParagraphStrings() {
+  const out = [];
+  eachParagraph(function (el) { out.push(String(el.getString() || '')); });
+  return out;
+}
+// 正文顶层段落的「归一文字 + 格式指纹」快照。三方合并靠它找出另一侧「只改了
+// 格式没改文字」的段——**不能靠 .uno:CompareDocuments**：真机实测（24.2.8-zhcn-r5）
+// 该命令只产出 Insert/Delete 两类修订，整段加粗这种纯格式改动一条都不报。
+// 字符属性必须**从跨整段的文字游标**上读：段落对象自己的 CharWeight 给的是段落
+// 默认值，整段加粗时读回来仍是 100（真机实测），只有游标读得到 150。
+const PARA_FORMAT_PROPS = ['ParaStyleName', 'ParaAdjust', 'ParaFirstLineIndent', 'ParaLeftMargin'];
+const RUN_FORMAT_PROPS = ['CharWeight', 'CharPosture', 'CharUnderline', 'CharHeight', 'CharColor',
+  'CharFontName', 'CharFontNameAsian'];
+function formatToken(v) {
+  const u = unoEnumVal(v);
+  if (u == null) return '';
+  if (typeof u === 'object') { try { return JSON.stringify(u); } catch (e) { return 'obj'; } }
+  return String(u);
+}
+function paragraphScan() {
+  const out = [];
+  eachParagraph(function (el) {
+    const parts = [];
+    for (let i = 0; i < PARA_FORMAT_PROPS.length; i++) {
+      let v;
+      try { v = el.getPropertyValue(PARA_FORMAT_PROPS[i]); } catch (e) { v = '?'; }
+      parts.push(formatToken(v));
+    }
+    let cur = null;
+    try { cur = el.getText().createTextCursorByRange(el); } catch (e) { cur = null; }
+    for (let i = 0; i < RUN_FORMAT_PROPS.length; i++) {
+      let v = '?';
+      if (cur) { try { v = cur.getPropertyValue(RUN_FORMAT_PROPS[i]); } catch (e) { v = '?'; } }
+      parts.push(formatToken(v));
+    }
+    let text = '';
+    try { text = String(el.getString() || ''); } catch (e) {}
+    out.push({ norm: mergeNormalize(text), fmt: parts.join('|') });
+  });
+  return out;
+}
+// 单元键 → 表格坐标。't1.2.3' = 第 1 张表（0 起）第 2 行第 3 列（都 0 起）。
+function parseCellUnitKey(key) {
+  const m = /^t(\d+)\.(\d+)\.(\d+)$/.exec(String(key || ''));
+  if (!m) return null;
+  return { table: Number(m[1]), row: Number(m[2]), col: Number(m[3]), name: colLetterOf(Number(m[3])) + (Number(m[2]) + 1) };
+}
+// 取表格单元的 XTextRange（整格），拿不到回 null。
+function tableCellRange(ref) {
+  try {
+    const tables = xModel.getTextTables();
+    if (!(ref.table >= 0) || ref.table >= tables.getCount()) return null;
+    const cell = tables.getByIndex(ref.table).getCellByName(ref.name);
+    if (!cell) return null;
+    const cur = cell.createTextCursor();
+    cur.gotoStart(false); cur.gotoEnd(true);
+    return cur;
+  } catch (e) { return null; }
+}
+// 把 newText 作为修订写进 range（字符级最小颗粒度，退化时整段替换）。
+function writeTrackedText(range, newText) {
+  const txt = String(newText == null ? '' : newText);
+  try {
+    if (applyMinimalRedline(range, txt)) return true;
+    range.setString(txt);
+    return true;
+  } catch (e) { return false; }
+}
+
 const EXEC = {
   get_review_layout(p) { return reviewLayout(p); },
   set_review_balloons(p) {
@@ -5732,37 +5840,361 @@ const EXEC = {
   // 比较完成后把文档切只读（.uno:EditDoc 关编辑模式）——这是展示用文档，
   // 宿主（VersionCompareTab）没有任何保存路径，只读是第二道保险。
   compare_document(p) {
-    const raw = p && p.baseBytes;
-    let u8 = null;
-    if (raw instanceof ArrayBuffer) u8 = new Uint8Array(raw);
-    else if (raw && raw.buffer instanceof ArrayBuffer) u8 = new Uint8Array(raw.buffer, raw.byteOffset || 0, raw.byteLength);
-    else if (Array.isArray(raw)) u8 = new Uint8Array(raw);
-    if (!u8 || u8.length === 0) return { success: false, stage: 'input', message: 'baseBytes empty' };
-    const bytes = Array.from(new Int8Array(u8.buffer, u8.byteOffset, u8.byteLength));
-    const url = 'file:///tmp/awd_base_cmp.docx';
-    try {
-      const sfa = css.ucb.SimpleFileAccess.create(context);
-      try { if (sfa.exists(url)) sfa.kill(url); } catch (e) {}
-      const stream = css.io.SequenceInputStream.createStreamFromSequence(context, bytes);
-      sfa.writeFile(url, stream);
-      try { stream.closeInput(); } catch (e) {}
-    } catch (e) { return { success: false, stage: 'memfs', message: errStr(e) }; }
+    if (!toUnoByteSeq(p && p.baseBytes)) return { success: false, stage: 'input', message: 'baseBytes empty' };
     try { setRedlineAuthor('版本对比'); } catch (e) {}
-    try {
-      css.frame.DispatchHelper.create(context).executeDispatch(
-        ctrl.getFrame(), '.uno:CompareDocuments', '', 0, [mkProp('URL', url)]);
-    } catch (e) { return { success: false, stage: 'dispatch', message: errStr(e) }; }
-    let count = 0;
-    try {
-      const en = xModel.getRedlines().createEnumeration();
-      while (en.hasMoreElements() && count < 10000) { en.nextElement(); count++; }
-    } catch (e) {}
+    const r = compareWithBytes(p && p.baseBytes, 'file:///tmp/awd_base_cmp.docx');
+    if (!r.success) return r;
     try {
       css.frame.DispatchHelper.create(context).executeDispatch(
         ctrl.getFrame(), '.uno:EditDoc', '', 0, []);
     } catch (e) {}
     comparisonModel = xModel; // The comparison tab is a read-only review surface.
-    return { success: true, redlineCount: count };
+    return { success: true, redlineCount: r.redlineCount };
+  },
+  // ==================== 三方合并（合并比对稿）====================
+  // spec docs/superpowers/specs/2026-09-14-docx-three-way-merge-design.md §5.1。
+  // 「整条链必须在一条 worker 命令里跑完」是硬约束：execCommand 每条命令开头都会
+  // 把修订署名重置回 humanAuthor / AI WorkDeck（见 setRedlineAuthor 的说明），
+  // 跨命令切作者必然失效——spike 第一轮两侧修订全签成「本地用户」就是这么来的。
+  //
+  // 链路：① 载入另一侧 → 以对方署名与共同的上一版比较 → 只为收集「只改了格式」
+  // 的段；② 载入主线侧 → 以主线署名与共同的上一版比较（主线侧的改动成为带作者的
+  // 字符级修订，含表格/批注/格式）；③ 用后端给的 mainChunks 建「基线段序 → 当前
+  // 段序」映射并逐段核对归一文字，对不上就整份退回（stage:'align'）；④ 以对方
+  // 署名按 otherChunks 里 conflict=false 的块**从后往前**重放；⑤ 恢复 humanAuthor。
+  // 同一段两边都改了的块不重放——正文里只留主线侧那一版，另一侧的文字交给面板
+  // 的三选一（merge_take_other）。
+  // 结果留在实例里可编辑：**不派发 .uno:EditDoc**（真机实测该命令在 r5 上根本
+  // 不生效，版本对比标签页的只读靠的是「没有保存路径」）。
+  build_merge_draft(p) {
+    const t0 = Date.now();
+    const elapsedMs = {};
+    const restoreAuthor = function () { try { setRedlineAuthor(humanAuthor); } catch (e) {} };
+    const fail = function (stage, message) {
+      restoreAuthor();
+      elapsedMs.total = Date.now() - t0;
+      return { success: false, stage: stage, message: String(message || ''), elapsedMs: elapsedMs };
+    };
+    const plan = (p && p.plan) || {};
+    const mainChunks = Array.isArray(plan.mainChunks) ? plan.mainChunks : [];
+    const otherChunks = Array.isArray(plan.otherChunks) ? plan.otherChunks : [];
+    const baseUnits = Array.isArray(p && p.baseUnits) ? p.baseUnits : [];
+    const mainAuthor = String((p && p.mainAuthor) || '');
+    const otherAuthor = String((p && p.otherAuthor) || '');
+    const name = String((p && p.name) || 'merge.docx');
+    if (!baseUnits.length) return fail('align', 'baseUnits 为空，无法核对对齐');
+
+    // 基线单元序列的两张索引：单元下标 ↔ 正文段落序（表格单元不占段落序）。
+    const paraOrdOfUnit = [];
+    const unitOfParaOrd = [];
+    const baseParaNorm = [];
+    for (let i = 0; i < baseUnits.length; i++) {
+      const key = String((baseUnits[i] && baseUnits[i].key) || '');
+      if (key.charAt(0) === 'p') {
+        const ord = unitOfParaOrd.length;
+        paraOrdOfUnit[i] = ord;
+        unitOfParaOrd.push(i);
+        baseParaNorm.push(String((baseUnits[i] && baseUnits[i].norm) || ''));
+      } else paraOrdOfUnit[i] = -1;
+    }
+    const unitsIn = function (c) {
+      const out = [];
+      for (let i = Number(c.baseStart); i < Number(c.baseEnd) && i < baseUnits.length; i++) {
+        out.push({ index: i, key: String((baseUnits[i] && baseUnits[i].key) || ''), paraOrd: paraOrdOfUnit[i] });
+      }
+      return out;
+    };
+    const paraOrdsIn = function (c) {
+      return unitsIn(c).filter(function (u) { return u.paraOrd >= 0; }).map(function (u) { return u.paraOrd; });
+    };
+
+    // ① 另一侧「只改了格式、没改文字」的段：文字重放带不过来，只能列出来让律师
+    // 手动套（面板第 3 块）。spec §5.1 原设想用 .uno:CompareDocuments 的格式类修订
+    // 来收集，真机实测那条路走不通（见 paragraphScan 的说明），改成载入另一侧与
+    // 共同的上一版各扫一遍段落格式指纹，按 otherChunks 对齐段序后逐段比。
+    let t = Date.now();
+    let ld = EXEC.load_document({ bytes: p && p.otherBytes, name: name });
+    if (!ld || ld.success !== true || ld.empty) return fail('load-other', (ld && ld.message) || '另一侧的稿是空的');
+    const otherScan = paragraphScan();
+    elapsedMs.loadOther = Date.now() - t;
+    t = Date.now();
+    ld = EXEC.load_document({ bytes: p && p.baseBytes, name: name });
+    if (!ld || ld.success !== true || ld.empty) return fail('load-base', (ld && ld.message) || '共同的上一版是空的');
+    const baseScan = paragraphScan();
+    elapsedMs.loadBase = Date.now() - t;
+    t = Date.now();
+    // 基线段序 → 另一侧段序（另一侧删掉的段在它那边不存在，插入的段让后面的段往后挪）。
+    const otherTouched = Object.create(null);
+    const otherShifts = [];
+    otherChunks.slice().sort(function (a, b) { return Number(a.baseStart) - Number(b.baseStart); })
+      .forEach(function (c) {
+        const ords = paraOrdsIn(c);
+        ords.forEach(function (o) { otherTouched[o] = true; });
+        const type = String(c.type || 'MODIFY');
+        const texts = Array.isArray(c.texts) ? c.texts : [];
+        if (type === 'INSERT') {
+          let anchor = unitOfParaOrd.length;
+          for (let i2 = Number(c.baseStart); i2 < baseUnits.length; i2++) {
+            if (paraOrdOfUnit[i2] >= 0) { anchor = paraOrdOfUnit[i2]; break; }
+          }
+          if (texts.length) otherShifts.push({ from: anchor, delta: texts.length });
+        } else if (type === 'DELETE') {
+          if (ords.length) otherShifts.push({ from: ords[ords.length - 1] + 1, delta: -ords.length });
+        } else if (ords.length && texts.length !== ords.length) {
+          otherShifts.push({ from: ords[ords.length - 1] + 1, delta: texts.length - ords.length });
+        }
+      });
+    const otherParaIndexOf = function (ord) {
+      let d = 0;
+      for (let i2 = 0; i2 < otherShifts.length; i2++) { if (ord >= otherShifts[i2].from) d += otherShifts[i2].delta; }
+      return ord + d;
+    };
+    const formatOnlyOrds = [];
+    for (let ord = 0; ord < baseScan.length; ord++) {
+      if (otherTouched[ord]) continue;                       // 文字已重放，格式不必再单列
+      const oi = otherParaIndexOf(ord);
+      const o = otherScan[oi];
+      if (!o || o.norm !== baseScan[ord].norm) continue;     // 对不上就不猜
+      if (o.fmt !== baseScan[ord].fmt) formatOnlyOrds.push(ord);
+    }
+    elapsedMs.compareOther = Date.now() - t;
+
+    // ② 主线侧 vs 共同的上一版：主线的改动成为带作者的字符级修订。
+    t = Date.now();
+    ld = EXEC.load_document({ bytes: p && p.mainBytes, name: name });
+    if (!ld || ld.success !== true || ld.empty) return fail('load-main', (ld && ld.message) || '主线那一版是空的');
+    elapsedMs.loadMain = Date.now() - t;
+    t = Date.now();
+    try { setRedlineAuthor(mainAuthor); } catch (e) {}
+    const cmp = compareWithBytes(p && p.baseBytes, 'file:///tmp/awd_merge_main.docx');
+    if (!cmp.success) return fail('compare-main', cmp.message);
+    elapsedMs.compareMain = Date.now() - t;
+
+    // ③ 基线段序 → 当前段序：主线侧删掉的段仍留在流里（删除修订），只有新增的
+    // 段会让后面的段序往后挪。未被主线改过的段逐一核对归一文字，对不上即退回。
+    const mainTouched = Object.create(null);
+    const shifts = [];
+    mainChunks.forEach(function (c) {
+      const ords = paraOrdsIn(c);
+      ords.forEach(function (o) { mainTouched[o] = true; });
+      const type = String(c.type || 'MODIFY');
+      const texts = Array.isArray(c.texts) ? c.texts : [];
+      if (type === 'INSERT') {
+        let anchor = unitOfParaOrd.length;
+        for (let i = Number(c.baseStart); i < baseUnits.length; i++) {
+          if (paraOrdOfUnit[i] >= 0) { anchor = paraOrdOfUnit[i]; break; }
+        }
+        if (texts.length) shifts.push({ from: anchor, delta: texts.length });
+      } else if (type !== 'DELETE') {
+        const extra = texts.length - ords.length;
+        if (extra > 0 && ords.length) shifts.push({ from: ords[ords.length - 1] + 1, delta: extra });
+      }
+    });
+    const curParaIndexOf = function (ord) {
+      let d = 0;
+      for (let i = 0; i < shifts.length; i++) { if (ord >= shifts[i].from) d += shifts[i].delta; }
+      return ord + d;
+    };
+    let expectedTotal = unitOfParaOrd.length;
+    shifts.forEach(function (s) { expectedTotal += s.delta; });
+    const curParas = bodyParagraphStrings();
+    if (curParas.length !== expectedTotal) {
+      return fail('align', '段数与共同的上一版对不上（当前 ' + curParas.length + '，按计划应为 ' + expectedTotal + '）');
+    }
+    for (let ord = 0; ord < baseParaNorm.length; ord++) {
+      if (mainTouched[ord]) continue;
+      if (mergeNormalize(curParas[curParaIndexOf(ord)]) !== baseParaNorm[ord]) {
+        return fail('align', '第 ' + (ord + 1) + ' 段与共同的上一版对不上');
+      }
+    }
+
+    // ④ 以对方署名重放另一侧的改动（从后往前，前面的段序才不会漂）。
+    t = Date.now();
+    try { setRedlineAuthor(otherAuthor); } catch (e) {}
+    try { xModel.setPropertyValue('RecordChanges', true); } catch (e) {}
+    let replayed = 0;
+    let replayErr = null;
+    const rangeOfUnit = function (u) {
+      if (u.paraOrd >= 0) return paraAt(curParaIndexOf(u.paraOrd));
+      const ref = parseCellUnitKey(u.key);
+      return ref ? tableCellRange(ref) : null;
+    };
+    const deleteUnit = function (u) {
+      if (u.paraOrd >= 0) {
+        const para = paraAt(curParaIndexOf(u.paraOrd));
+        if (!para) return false;
+        const body = para.getText();
+        const cur = body.createTextCursorByRange(para.getStart());
+        cur.gotoEndOfParagraph(true);
+        try { cur.goRight(1, true); } catch (e) {}   // 连段末的换行一起选中 = 整段消失
+        cur.setString('');
+        return true;
+      }
+      const range = rangeOfUnit(u);
+      return range ? writeTrackedText(range, '') : false;
+    };
+    const insertParasAfter = function (prevOrd, texts) {
+      const body = xModel.getText();
+      let cur;
+      if (prevOrd < 0) cur = body.createTextCursorByRange(body.getStart());
+      else {
+        const anchor = paraAt(curParaIndexOf(prevOrd));
+        if (!anchor) return false;
+        cur = body.createTextCursorByRange(anchor.getEnd());
+      }
+      for (let i = 0; i < texts.length; i++) {
+        body.insertControlCharacter(cur, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
+        body.insertString(cur, String(texts[i] == null ? '' : texts[i]), false);
+      }
+      return true;
+    };
+    const replayable = otherChunks.filter(function (c) { return !c.conflict; })
+      .slice().sort(function (a, b) { return Number(b.baseStart) - Number(a.baseStart); });
+    for (let k = 0; k < replayable.length && !replayErr; k++) {
+      const c = replayable[k];
+      const type = String(c.type || 'MODIFY');
+      const texts = Array.isArray(c.texts) ? c.texts : [];
+      const units = unitsIn(c);
+      try {
+        if (type === 'INSERT') {
+          let prevOrd = -1;
+          for (let i = Number(c.baseStart) - 1; i >= 0; i--) {
+            if (paraOrdOfUnit[i] >= 0) { prevOrd = paraOrdOfUnit[i]; break; }
+          }
+          if (!insertParasAfter(prevOrd, texts)) { replayErr = '插入新段失败（锚点段 ' + prevOrd + '）'; break; }
+          replayed += texts.length;
+        } else if (type === 'DELETE') {
+          for (let i = units.length - 1; i >= 0; i--) {
+            if (!deleteUnit(units[i])) { replayErr = '删除单元失败: ' + units[i].key; break; }
+            replayed++;
+          }
+        } else {
+          // 多出来的基线单元先清掉，多出来的新文本追加成新段，其余一一对应改写。
+          for (let i = units.length - 1; i >= texts.length; i--) {
+            if (!deleteUnit(units[i])) { replayErr = '删除单元失败: ' + units[i].key; break; }
+            replayed++;
+          }
+          if (!replayErr && texts.length > units.length && units.length) {
+            const last = units[units.length - 1];
+            if (last.paraOrd >= 0 && !insertParasAfter(last.paraOrd, texts.slice(units.length))) {
+              replayErr = '追加新段失败: ' + last.key;
+            } else replayed += texts.length - units.length;
+          }
+          const pairs = Math.min(units.length, texts.length);
+          for (let i = pairs - 1; i >= 0 && !replayErr; i--) {
+            const range = rangeOfUnit(units[i]);
+            if (!range) { replayErr = '找不到要改写的单元: ' + units[i].key; break; }
+            if (!writeTrackedText(range, texts[i])) { replayErr = '改写单元失败: ' + units[i].key; break; }
+            replayed++;
+          }
+        }
+      } catch (e) { replayErr = errStr(e); }
+    }
+    if (replayErr) return fail('replay', replayErr);
+    elapsedMs.replay = Date.now() - t;
+
+    // ⑤ 恢复用户本人的署名，回报结果。
+    restoreAuthor();
+    invalidateParaIndex();
+    const listed = EXEC.list_revisions({ limit: 500 });
+    const revisions = (listed && listed.revisions) || [];
+    let mainCount = 0, otherCount = 0;
+    revisions.forEach(function (r) {
+      const a = String(r.author || '');
+      if (a === mainAuthor) mainCount++;
+      else if (a === otherAuthor) otherCount++;
+    });
+    const formatOnly = formatOnlyOrds.map(function (ord) {
+      return { paraKey: curParaIndexOf(ord), preview: String(baseScan[ord].norm).slice(0, 40) };
+    });
+    const conflicts = [];
+    otherChunks.forEach(function (c) {
+      if (!c.conflict) return;
+      unitsIn(c).forEach(function (u) { if (u.key) conflicts.push(u.key); });
+    });
+    elapsedMs.total = Date.now() - t0;
+    return {
+      success: true, name: name, revisions: revisions, count: revisions.length,
+      mainCount: mainCount, otherCount: otherCount, replayed: replayed,
+      conflicts: conflicts, formatOnly: formatOnly, elapsedMs: elapsedMs,
+    };
+  },
+  // 同一段两边都改了时的「用律师乙的」：拒掉该段现有的（主线侧）修订让文字回到
+  // 共同的上一版，切成对方的署名把对方那一版文字写进去，再把刚产生的修订接受掉。
+  // 同样必须在一条命令里做完（署名）。「用你的」不需要新原语——直接接受该段修订。
+  merge_take_other(p) {
+    if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
+    const paraKey = Number(p && p.paraKey);
+    if (!(paraKey >= 0)) return tableFail('段落序非法: ' + (p && p.paraKey));
+    const text = String((p && p.text) == null ? '' : p.text);
+    const author = String((p && p.author) || '');
+    const revsIn = function () {
+      const listed = EXEC.list_revisions({ limit: 500 });
+      return ((listed && listed.revisions) || []).filter(function (r) { return Number(r.paraKey) === paraKey; });
+    };
+    const resolve = function (revs, action) {
+      if (!revs.length) return { success: true, resolved: 0 };
+      const args = { indices: revs.map(function (r) { return r.index; }), action: action };
+      return runRevisionResolution(function () { return EXEC.resolve_revisions(args); }, args, 'resolve_revisions');
+    };
+    const rej = resolve(revsIn(), 'reject');
+    if (!rej || rej.success !== true) return tableFail('拒绝该段原有修订失败：' + ((rej && rej.message) || ''));
+    invalidateParaIndex();
+    try { setRedlineAuthor(author); } catch (e) {}
+    let wrote = false;
+    try {
+      try { xModel.setPropertyValue('RecordChanges', true); } catch (e) {}
+      const para = paraAt(paraKey);
+      if (para) wrote = writeTrackedText(para, text);
+    } catch (e) { wrote = false; }
+    if (!wrote) { try { setRedlineAuthor(humanAuthor); } catch (e) {} return tableFail('写入另一侧的文字失败（第 ' + (paraKey + 1) + ' 段）'); }
+    invalidateParaIndex();
+    const acc = resolve(revsIn(), 'accept');
+    try { setRedlineAuthor(humanAuthor); } catch (e) {}
+    invalidateParaIndex();
+    const left = revsIn();
+    const para2 = paraAt(paraKey);
+    return {
+      success: left.length === 0, paraKey: paraKey,
+      revisionCount: (acc && acc.resolved) || 0, remainingInParagraph: left.length,
+      text: para2 ? String(para2.getString() || '') : '',
+    };
+  },
+  // [溯源光标条] 表格里的「当前这一格」。段落级溯源用 get_review_context 的
+  // paragraphIndex，xlsx 这一条与 pptx 的 slide_get_current 是它的对应物。
+  sheet_get_active_cell() {
+    if (!isCalcDoc()) return { success: false, error: NOT_SPREADSHEET_MSG, message: NOT_SPREADSHEET_MSG };
+    let sheet = '';
+    try { sheet = String(ctrl.getActiveSheet().getName() || ''); } catch (e) {}
+    let col = null, row = null;
+    try {
+      const sel = ctrl.getSelection();
+      if (sel && typeof sel.getCellAddress === 'function') {
+        const a = sel.getCellAddress(); col = a.Column; row = a.Row;
+      } else if (sel && typeof sel.getRangeAddress === 'function') {
+        const a = sel.getRangeAddress(); col = a.StartColumn; row = a.StartRow;
+      } else if (sel && typeof sel.getByIndex === 'function' && sel.getCount && sel.getCount() > 0) {
+        const a = sel.getByIndex(0).getRangeAddress(); col = a.StartColumn; row = a.StartRow;
+      }
+    } catch (e) { return { success: false, error: errStr(e), message: errStr(e) }; }
+    if (!(col >= 0) || !(row >= 0)) return { success: false, error: '取不到当前单元格', message: '取不到当前单元格' };
+    return { success: true, sheet: sheet, address: colLetterOf(col) + (row + 1) };
+  },
+  // [溯源光标条] 演示文稿里的「当前这一页」（1 基，与 slide_goto 同口径）。
+  slide_get_current() {
+    if (!isImpressDoc()) return slideFail(NOT_PRESENTATION_MSG);
+    try {
+      const page = ctrl.getCurrentPage ? ctrl.getCurrentPage() : null;
+      if (!page) return slideFail('取不到当前页');
+      let n = NaN;
+      try { n = Number(page.getPropertyValue('Number')); } catch (e) {}
+      if (!(n >= 1)) {
+        const i = locatePageIndex(page, {});
+        if (i >= 0) n = i + 1;
+      }
+      if (!(n >= 1)) return slideFail('取不到当前页');
+      return { success: true, slideNumber: n };
+    } catch (e) { return slideFail(errStr(e)); }
   },
   // ==================== Calc 电子表格原语（sheet_*） ====================
   // 与 doc_* 平行的 xlsx 操作面。Calc 没有 Writer 的修订（redline）机制，写入

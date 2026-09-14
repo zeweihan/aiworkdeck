@@ -96,6 +96,11 @@ export const EDITOR_ACTIONS = [
   'add_comment',
   // [第 2 期 版本对比] host-initiated：当前文档与旧版字节比较产出修订，随后切只读。
   'compare_document',
+  // [三方合并 dev-board#630/#631/#632] host-initiated：合并比对稿。
+  // build_merge_draft 把「主线侧原生比较 + 另一侧逐段重放」整条链做在**一条命令里**
+  //（修订署名必须同命令内切换，见 office_thread.js 的说明）；merge_take_other 是同段
+  // 冲突「用律师乙的」。sheet_get_active_cell / slide_get_current 供溯源光标条取数。
+  'build_merge_draft', 'merge_take_other', 'sheet_get_active_cell', 'slide_get_current',
   // [格式增强] 富格式原语：编号/表格/格式读取/全文标准格式化；insert_under_heading
   // 是后端一直在派发但从未接通的原语（本次补齐 worker 实现）。
   'set_numbering', 'format_table', 'insert_table', 'get_formatting', 'apply_house_style',
@@ -180,6 +185,9 @@ export const ACTION_BUDGET_MS = {
   // 后端把「不再等」报成失败，模型重发一次 —— 同一份报告插了两遍。
   insert_at_cursor: 120000, insert_under_heading: 120000,
   replace_selection: 120000, modify_paragraph: 120000,
+  // 三方合并：三次 load（另一侧/上一版/主线）+ 两遍格式扫描 + 一次原生比较 + 逐段重放
+  // 全在一条命令里；420 段 32 页的夹具实测约 22 秒，按 load_document 同量级给预算。
+  build_merge_draft: 180000,
 }
 
 /**

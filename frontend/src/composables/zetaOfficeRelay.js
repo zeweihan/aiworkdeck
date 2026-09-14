@@ -75,6 +75,8 @@ const ACTION_BUDGET_MS = {
   // 后端把「不再等」报成失败，模型重发一次 —— 同一份报告插了两遍。
   insert_at_cursor: 120000, insert_under_heading: 120000,
   replace_selection: 120000, modify_paragraph: 120000,
+  // 三方合并（合并比对稿）：与 libreofficeExecutorClient 同表。
+  build_merge_draft: 180000,
 }
 
 // 探活（dev-board#539）：备胎过继前先问一声「这个 guest 还活着吗」。用最便宜的

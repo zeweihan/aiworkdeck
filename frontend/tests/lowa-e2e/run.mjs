@@ -36,6 +36,9 @@ import { revisionTypeKey, linkCommentsToRevisions } from '../../src/utils/review
 // 导出字节喂真函数，再让引擎把打完标的文件重新打开——纯函数的单测在
 // tests/lowa-unit/docxAppProps.test.mjs，这里补的是「真产物 + 真引擎回读」那一段。
 import { stampApplication } from '../../src/utils/docxAppProps.js'
+// 组 34：三方合并夹具（base/main/other 三份同源 docx + 后端本该算出的 plan/baseUnits）。
+// 产物不入库——这里在内存里现造，见 fixtures/merge/gen.mjs 顶部说明。
+import { generateMergeFixtures } from './fixtures/merge/gen.mjs'
 
 // ---------- preflight ----------
 preflight()
@@ -2455,6 +2458,135 @@ try {
       setR.resolved === true && lc2.count === lc.count &&
       (lc2.comments.find((c) => c.id === cmt.id) || {}).resolved === true,
       JSON.stringify({ setR, count: lc2.count }))
+  }
+
+  console.log('\n== 组 34：三方合并（build_merge_draft / merge_take_other / 活动单元格与当前页）==')
+  {
+    // 律师版三方合并的引擎半边（spec 2026-09-14-docx-three-way-merge-design §5.1）。
+    // 夹具三份同源 docx 由 fixtures/merge/gen.mjs 现造（420 段 + 2 表 + 3 批注），
+    // plan/baseUnits 就是后端 ThreeWayAnalyzer 本该算出来的那一份——生成脚本知道
+    // 自己造了哪些编辑，所以坐标与新文本是已知量，不必在测试里再算一遍。
+    const fx = generateMergeFixtures()
+    const MAIN_AUTHOR = '韩律师'
+    const OTHER_AUTHOR = '律师乙'
+    const bytesOf = (buf) => Array.from(buf)
+    const mergeArgs = (over = {}) => Object.assign({
+      baseBytes: bytesOf(fx.base), mainBytes: bytesOf(fx.main), otherBytes: bytesOf(fx.other),
+      mainAuthor: MAIN_AUTHOR, otherAuthor: OTHER_AUTHOR,
+      plan: fx.plan, baseUnits: fx.baseUnits, name: '合同.docx',
+    }, over)
+    // 420 段超过 get_document_text 的单次字符预算，必须翻页取全。
+    const allParas = async () => {
+      const out = []
+      let start = 0
+      for (;;) {
+        const r = await exec('get_document_text', { startParagraph: start, maxParagraphs: 500 })
+        if (!r || !r.success || !r.paragraphs.length) break
+        r.paragraphs.forEach((x) => out.push(x.text))
+        if (!r.truncated) break
+        start = r.nextStartParagraph
+      }
+      return out
+    }
+    const indexOfToken = (paras, token) => paras.findIndex((t) => t.indexOf(token) >= 0)
+
+    check('起点：换一份干净的 Writer 文档', (await exec('debug_fresh_document')).success === true)
+
+    const built = await exec('build_merge_draft', mergeArgs())
+    check('build_merge_draft 成功', built && built.success === true, JSON.stringify({ success: built && built.success, stage: built && built.stage, message: built && built.message }))
+    console.log('  elapsedMs: ' + JSON.stringify(built && built.elapsedMs))
+
+    // (1) 两位作者的修订：主线侧来自原生比较，另一侧来自逐段重放，两边都必须署对人。
+    const byAuthor = {}
+    ;((built && built.revisions) || []).forEach((r) => { byAuthor[r.author] = (byAuthor[r.author] || 0) + 1 })
+    check('修订只署这两位律师（没有「版本对比」「本地用户」之类的漏网）',
+      Object.keys(byAuthor).sort().join(',') === [MAIN_AUTHOR, OTHER_AUTHOR].sort().join(','), JSON.stringify(byAuthor))
+    check('主线侧修订数 ≥ 夹具的 6 处改动（5 段 + 同段冲突那段）',
+      (byAuthor[MAIN_AUTHOR] || 0) >= fx.expected.mainEditCount, JSON.stringify(byAuthor))
+    check('另一侧重放出的修订数 ≥ 夹具的 7 处改动（4 段 + 表格单元 + 插入 + 删除）',
+      (byAuthor[OTHER_AUTHOR] || 0) >= fx.expected.otherReplayCount, JSON.stringify(byAuthor))
+    check('mainCount / otherCount 与按作者分组一致',
+      built.mainCount === (byAuthor[MAIN_AUTHOR] || 0) && built.otherCount === (byAuthor[OTHER_AUTHOR] || 0),
+      JSON.stringify({ mainCount: built.mainCount, otherCount: built.otherCount, byAuthor }))
+
+    // (2)(3) 同一段两边都改了：只报冲突，不重放——正文里必须只有主线侧那版文字。
+    check('conflicts 恰为同段冲突的那一个键', JSON.stringify(built.conflicts) === JSON.stringify(fx.conflicts),
+      JSON.stringify(built.conflicts))
+    let paras = await allParas()
+    const conflictIdx = indexOfToken(paras, '【P' + fx.expected.conflictParaKey + '】')
+    check('冲突段能定位到', conflictIdx >= 0, String(conflictIdx))
+    // 「全部修订」视图下这一段同时显示主线侧插入的「十五」与基线被删的「三十」；
+    // 判据取另一侧独有的「四十五」：它出现就说明冲突段被错误重放了。
+    check('冲突段没有被重放（正文里有主线侧的「十五」、没有另一侧的「四十五」）',
+      conflictIdx >= 0 && paras[conflictIdx].indexOf('十五') >= 0 && paras[conflictIdx].indexOf('四十五') < 0,
+      paras[conflictIdx])
+
+    // (6) 另一侧只改了格式（加粗）的段：文字重放带不过来，必须列进 formatOnly 交给律师。
+    const fmtHit = (built.formatOnly || []).filter((x) => String(x.preview || '').indexOf('【P' + fx.expected.formatOnlyParaKey + '】') >= 0)
+    check('另一侧只改格式的那一段落进 formatOnly',
+      fmtHit.length === 1 && Number.isFinite(fmtHit[0].paraKey), JSON.stringify(built.formatOnly))
+    check('formatOnly 不含另一侧已重放文字的段',
+      !(built.formatOnly || []).some((x) => /【P(20|60|130|260)】/.test(String(x.preview || ''))), JSON.stringify(built.formatOnly))
+
+    // (5) 全部接受之后，正文逐段等于预期合并文本（表格单元另测）。
+    const accepted = await exec('resolve_all_revisions', { action: 'accept' })
+    check('resolve_all_revisions(accept) 成功', accepted.success === true && accepted.remaining === 0, JSON.stringify({ resolved: accepted.resolved, remaining: accepted.remaining }))
+    paras = await allParas()
+    check('合并后段数 = 预期（原 420 段 − 另一侧删 1 段 + 另一侧新增 1 段）',
+      paras.length === fx.expected.paragraphCount, paras.length + ' vs ' + fx.expected.paragraphCount)
+    const firstDiff = paras.findIndex((t, i) => t !== fx.expected.paragraphs[i])
+    check('合并后正文逐段等于预期合并文本', firstDiff < 0,
+      firstDiff < 0 ? '' : ('第 ' + firstDiff + ' 段: 实际「' + paras[firstDiff] + '」 期望「' + fx.expected.paragraphs[firstDiff] + '」'))
+
+    // (7) 表格单元的改动也要被重放（docx 的单元序列里表格格子与段落混在一起）。
+    const tr = await exec('table_read', { tableIndex: fx.expected.tableCell.table })
+    const cellText = tr.success && tr.cells ? String((tr.cells[fx.expected.tableCell.row] || [])[fx.expected.tableCell.col] || '') : ''
+    check('另一侧改的表格单元被重放', cellText === fx.expected.tableCell.text, JSON.stringify({ cellText, want: fx.expected.tableCell.text, ok: tr.success }))
+
+    // (8) 同一个实例里第二次合并：备胎实例是复用的，退化就等于每份文件要一个新实例。
+    const built2 = await exec('build_merge_draft', mergeArgs())
+    check('同实例第二次 build_merge_draft 仍成功', built2 && built2.success === true,
+      JSON.stringify({ success: built2 && built2.success, stage: built2 && built2.stage, message: built2 && built2.message }))
+    console.log('  第二次 elapsedMs: ' + JSON.stringify(built2 && built2.elapsedMs))
+
+    // (4) 同段冲突「用律师乙的」：拒掉主线侧那处、以对方作者写入对方文字并接受。
+    paras = await allParas()
+    const conflictIdx2 = indexOfToken(paras, '【P' + fx.expected.conflictParaKey + '】')
+    const took = await exec('merge_take_other', {
+      paraKey: conflictIdx2, text: fx.expected.conflictOtherText, author: OTHER_AUTHOR,
+    })
+    check('merge_take_other 成功', took && took.success === true, JSON.stringify(took))
+    const paraAfter = await exec('select_paragraph', { index: conflictIdx2 })
+    check('「用律师乙的」之后该段文字 = 另一侧那版',
+      paraAfter.success === true && paraAfter.text === fx.expected.conflictOtherText,
+      JSON.stringify({ got: paraAfter.text, want: fx.expected.conflictOtherText }))
+    const lrAfter = await exec('list_revisions', { limit: 500 })
+    check('「用律师乙的」之后该段没有留下未处理的修订',
+      took && took.success === true && lrAfter.success === true && !(lrAfter.revisions || []).some((r) => r.paraKey === conflictIdx2),
+      JSON.stringify((lrAfter.revisions || []).filter((r) => r.paraKey === conflictIdx2).map((r) => ({ t: r.type, a: r.author, k: r.paraKey }))))
+
+    // (9) 对齐核对：baseUnits 与当前文档对不上就必须失败退回，不许糊着往下重放。
+    const tampered = JSON.parse(JSON.stringify(fx.baseUnits))
+    const victim = tampered.findIndex((u) => u.key === 'p200')
+    tampered[victim].norm = tampered[victim].norm + '（被篡改）'
+    const misaligned = await exec('build_merge_draft', mergeArgs({ baseUnits: tampered }))
+    check('baseUnits 对不上时返回 stage:align', misaligned && misaligned.success === false && misaligned.stage === 'align',
+      JSON.stringify({ success: misaligned && misaligned.success, stage: misaligned && misaligned.stage, message: misaligned && misaligned.message }))
+
+    // (10) 溯源光标条在表格 / 演示文稿上的取数原语。
+    check('换新 Calc 文档', (await exec('debug_fresh_calc')).success === true)
+    await exec('sheet_write_cells', { startCell: 'A1', rows: [['甲', '乙'], ['丙', '丁']] })
+    await exec('sheet_select_range', { range: 'B7' })
+    const cell = await exec('sheet_get_active_cell')
+    check('sheet_get_active_cell 回报活动工作表与地址',
+      cell.success === true && cell.address === 'B7' && typeof cell.sheet === 'string' && cell.sheet.length > 0,
+      JSON.stringify(cell))
+
+    const pptxBytes = Array.from(fs.readFileSync(path.join(here, 'fixtures/impress-smoke.pptx')))
+    check('打开 pptx', (await exec('load_document', { bytes: pptxBytes, name: 'impress-smoke.pptx' })).success === true)
+    await exec('slide_goto', { slideNumber: 2 })
+    const cur = await exec('slide_get_current')
+    check('slide_get_current 回报当前页码（1 基）', cur.success === true && cur.slideNumber === 2, JSON.stringify(cur))
   }
 
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')
