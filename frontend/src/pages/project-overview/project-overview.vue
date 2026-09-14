@@ -3411,6 +3411,9 @@ export default {
     // mounted 绑定了全局（ipcRenderer/window 级）监听；全局事件只让最近展示的实例
     // 处理，否则一次事件触发 N 份副作用（与 PR#148 剪贴板重复入库同源）
     if (typeof window !== 'undefined') window.__checkbaActiveOverviewVm = this
+    // 标签栏的滚轮横滚：只能原生挂（模板 @wheel 收到的是 uni 重建过的普通对象，
+    // 见 utils/horizontalWheel.js），所以 DOM 就绪后挂一次，beforeUnmount 摘掉。
+    this.$nextTick(() => this.rebindTabsWheel())
     // 三方合并的编排器（spec §5.2）。依赖全部在这里注入：引擎实例从保活池借、
     // api 与文案从本页取——组合函数自己不 import 任何东西，好让它能被 node --test 直接跑。
     this._documentMerge = useDocumentMerge({
@@ -3436,9 +3439,6 @@ export default {
       },
       openOverview: () => this.goHandleAdoptConflict(),
     })
-    // 标签栏的滚轮横滚：只能原生挂（模板 @wheel 收到的是 uni 重建过的普通对象，
-    // 见 utils/horizontalWheel.js），所以 DOM 就绪后挂一次，beforeUnmount 摘掉。
-    this.$nextTick(() => this.rebindTabsWheel())
     // 余额刷新事件（充值弹窗 / SKU 购买成功后 emit）。页面栈多实例地雷：mounted 挂、
     // beforeUnmount 必须按引用 $off，否则每回来一次多一份订阅。
     this._onWalletRefresh = () => this.loadWalletBalance()
