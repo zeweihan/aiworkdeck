@@ -188,6 +188,48 @@ final class MergeFixtures {
         }
     }
 
+    /**
+     * 单张工作表，字符串格子存成 <b>内联字符串</b>（{@code <c t="inlineStr"><is><t>…</t></is></c>}）
+     * 而不是共享字符串表——SXSSF 的 inline string 模式与一部分 JS 导出库就是这么存的。
+     *
+     * <p>这个形态是个真地雷：POI 的 {@code XSSFCell.setCellValue(String)} 碰上 {@code t="inlineStr"}
+     * 只会写 {@code <v>}、不动 {@code <is>}，而读回走的是 {@code <is>}，于是写进去的新值静默丢失。
+     */
+    static byte[] xlsxInline(String sheetName, Map<String, String> cells) {
+        try (XSSFWorkbook wb = new XSSFWorkbook(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            fill(wb.createSheet(sheetName), cells, null, null);
+            toInlineStrings(wb);
+            wb.write(out);
+            return out.toByteArray();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** 把工作簿里所有字符串格子改写成内联形态；数值/公式/布尔格原样不动。 */
+    private static void toInlineStrings(XSSFWorkbook wb) {
+        for (Sheet sheet : wb) {
+            for (Row row : sheet) {
+                for (Cell cell : row) {
+                    if (cell.getCellType() != org.apache.poi.ss.usermodel.CellType.STRING) {
+                        continue;
+                    }
+                    String text = cell.getStringCellValue();
+                    org.openxmlformats.schemas.spreadsheetml.x2006.main.CTCell ct =
+                            ((org.apache.poi.xssf.usermodel.XSSFCell) cell).getCTCell();
+                    if (ct.isSetV()) {
+                        ct.unsetV();
+                    }
+                    org.openxmlformats.schemas.spreadsheetml.x2006.main.CTRst rst =
+                            org.openxmlformats.schemas.spreadsheetml.x2006.main.CTRst.Factory.newInstance();
+                    rst.setT(text);
+                    ct.setIs(rst);
+                    ct.setT(org.openxmlformats.schemas.spreadsheetml.x2006.main.STCellType.INLINE_STR);
+                }
+            }
+        }
+    }
+
     /** 把 pptx 每一页的 {@code <p:sldId id>} 改写成给定的值——模拟「导出件不保留 sldId」。 */
     static byte[] withSlideIds(byte[] pptx, long... ids) {
         try (XMLSlideShow show = new XMLSlideShow(new java.io.ByteArrayInputStream(pptx));
