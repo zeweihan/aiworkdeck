@@ -84,7 +84,7 @@ test('manual 项：逐处说清哪一段留了谁的', () => {
   const [line] = historyMergeLines(t, entry)
   assert.ok(line.text.startsWith('version.mergeManualLine('), line.text)
   assert.ok(line.text.includes('version.mergeUnitParagraph'), line.text)
-  assert.ok(line.text.includes('n=3'), line.text)
+  assert.ok(line.text.includes('n=4'), line.text)  // p3 是 0 基键，界面说「第 4 段」
   assert.ok(line.text.includes('version.mergeDecisionKept'), line.text)
   assert.ok(line.text.includes('version.mergeDecisionRejected'), line.text)
   assert.equal(line.more, 0)
