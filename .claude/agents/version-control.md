@@ -632,6 +632,7 @@ LCS 的 DP 表是 O(n·m)，超过 `MAX_CELLS = 1500×1500`（:109）退回「�
   两边同时改了样式表，合并结果取主线那一份，界面上不会有任何提示。
 - **耗时**：单路径 5 秒闸之外没有并行，一次冲突窗口里 N 份文件就是 N 次串行分析（缓存之后每轮 `/status` 才是 O(1)）；
   溯源第一次对着老文件回溯几百版会超过 30 秒请求预算、回 `computing`，这是设计里就接受的（提交钩子预算正是为了摊掉它）。
+- **`XlsxMerger` 写值前必须先清掉目标格的 inlineStr 形态**（`copyValue` 首行 `clearInlineString`）：POI 的 `XSSFCell.setCellValue(String)` 碰上 `t="inlineStr"` 的格子只写 `<v>`、不动 `<is>`，而读回走 `<is>`——另一侧的改动会被静默吞掉、合并「成功」但内容是旧值（SXSSF inline-string 模式与部分 JS 导出库产出的工作簿都是这形态，app-e2e J14 那轮用 POI 探针抓出来的）。护栏 `XlsxMergerTest.inlineStringCellsTakeOtherSideValue` / `.inlineStringCellOverwrittenByNumber`。
 - **pptx 页序只在律师显式裁决 `order` 这一处时才重排**（`PptxMerger.merge` :73 的 `takesOther(decisions, ORDER_KEY)`）：
   自动模式下页序一律保持主线那一份。
 
