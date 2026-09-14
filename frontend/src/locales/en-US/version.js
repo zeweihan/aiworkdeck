@@ -349,7 +349,6 @@ export default {
   mergeSideMainNeutral: 'one side',
   mergeSideOtherNeutral: 'the other side',
   mergeItemSep: ', ',
-  mergeUnitParagraph: 'paragraph {n}',
   mergeUnitCell: 'table {table}, row {row}, column {col}',
   mergeUnitSlide: 'slide {n}',
   mergeDecisionKept: ' kept {side}',

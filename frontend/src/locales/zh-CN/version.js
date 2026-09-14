@@ -354,7 +354,6 @@ export default {
   mergeSideMainNeutral: '一边',
   mergeSideOtherNeutral: '另一边',
   mergeItemSep: '、',
-  mergeUnitParagraph: '第 {n} 段',
   mergeUnitCell: '第 {table} 个表格第 {row} 行第 {col} 列',
   mergeUnitSlide: '第 {n} 页',
   mergeDecisionKept: '留了{side}的',
