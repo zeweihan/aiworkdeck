@@ -235,3 +235,37 @@ test('导出前必须先把两边的修订全部接受，顺序不许颠倒', as
   assert.ok(accept < exportAt, '接受修订必须在导出之前')
   assert.equal(calls.resolveFile[0].bytes.length, 3)
 })
+
+test('同一轮冲突被并发触发两次，仍然只合一遍、照样收尾（协作抽屉 conflict+changed 各调一次）', async () => {
+  // app-e2e J14 实测抓到的真实故障：撞冲突时 CollabDialog.onUpdate 先 emit('conflict')
+  // 再 emit('changed')，页面因此背靠背调两次 checkAdoptConflict。两次并发跑进来时，
+  // 后一次把 state.rows 换成新数组，前一次那轮循环把「这份合好了」写在了被换掉的旧对象上，
+  // finalize 读新数组只看到 PENDING——文件都已合好落盘，收尾却永远不发生，
+  // 仓库停在 MERGING，律师面对一个说着「已合并」却关不掉的裁决窗。
+  const { calls, deps } = makeHarness()
+  const merge = useDocumentMerge(deps)
+  const rows = [
+    { path: '表.xlsx', kind: 'XLSX', decision: 'AUTO', reason: 'CLEAN', mainChanges: 1, otherChanges: 1, overlapCount: 0, state: 'PENDING' },
+    { path: '演示.pptx', kind: 'PPTX', decision: 'AUTO', reason: 'CLEAN', mainChanges: 1, otherChanges: 1, overlapCount: 0, state: 'PENDING' },
+  ]
+  // 两次拿到的是同一份 /status 快照（第二次是在第一次还没合完时就进来的，所以仍是 PENDING）
+  const a = merge.onConflictStatus(conflictOf(rows.map((r) => ({ ...r })), { cloudTip: 'cloud1' }), 'cloud')
+  const b = merge.onConflictStatus(conflictOf(rows.map((r) => ({ ...r })), { cloudTip: 'cloud1' }), 'cloud')
+  await Promise.all([a, b])
+  assert.equal(calls.resolveStructured.length, 2, '两份文件各合一遍，不许因为并发合两遍')
+  assert.equal(calls.cloud.length, 1, '收尾只发一次')
+  assert.deepEqual(calls.cloud[0].resolutions, { '表.xlsx': 'MERGED', '演示.pptx': 'MERGED' })
+})
+
+test('更老的一份 /status 快照不许把本地已知的「已合好」抹回 PENDING', async () => {
+  const { calls, deps } = makeHarness()
+  const merge = useDocumentMerge(deps)
+  const row = { path: '表.xlsx', kind: 'XLSX', decision: 'AUTO', reason: 'CLEAN', mainChanges: 1, otherChanges: 1, overlapCount: 0, state: 'PENDING' }
+  await merge.onConflictStatus(conflictOf([{ ...row }], { cloudTip: 'cloud1' }), 'cloud')
+  assert.equal(merge.state.rows[0].state, 'MERGED')
+  // 后端那一轮 /status 还没看到落盘结果（缓存/时序），仍报 PENDING
+  await merge.onConflictStatus(conflictOf([{ ...row }], { cloudTip: 'cloud1' }), 'cloud')
+  assert.equal(merge.state.rows[0].state, 'MERGED', '行态倒退回 PENDING 会让界面转一个永远不来的圈')
+  assert.equal(calls.resolveStructured.length, 1, '幂等：同一份文件不重合')
+  assert.equal(calls.cloud.length, 1, '收尾也只发一次')
+})

@@ -3424,7 +3424,16 @@ export default {
       fetchMergeInputs,
       buildMergeDraft,
       api: { postMergeResolveFile, postMergeResolveStructured, resolveAdopt, resolveCloudMerge, resolveSessionEnd },
-      reloadFiles: (ids) => this.onVersionReloadFiles(ids || []),
+      reloadFiles: (ids) => {
+        this.onVersionReloadFiles(ids || [])
+        // 自动合并收尾之后必须把版本面板也刷一次。撞冲突时 onCollabConflict 已经把人送到
+        // 了版本面板（裁决弹窗随它那一次 /status 弹出来），而合并是在那之后几秒才完成的——
+        // 不刷的话面板一直端着合并前那份 /status，律师面对一个说着「已合并」、点「就按我
+        // 选的来」只会报错的裁决窗。collabRefreshToken 的 watcher 就是 VersionPanel 的
+        // refresh()（见 VersionPanel.vue :192），这一条也是三语境通用的。
+        // app-e2e J14 实测：不重叠的 xlsx+pptx 已经静默合好并落成一版，弹窗却还在。
+        this.collabRefreshToken += 1
+      },
       openOverview: () => this.goHandleAdoptConflict(),
     })
     // 标签栏的滚轮横滚：只能原生挂（模板 @wheel 收到的是 uni 重建过的普通对象，

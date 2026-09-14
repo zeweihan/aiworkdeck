@@ -174,7 +174,21 @@ export function useDocumentMerge(deps) {
     }
   }
 
-  async function onConflictStatus(conflict, ctx) {
+  // 一轮冲突会被连着触发好几次（协作抽屉撞冲突时 conflict 与 changed 两个事件各调一次
+  // checkAdoptConflict，侧栏面板重新挂载又是一次），所以这条**必须串起来跑**：并发进来的
+  // 第二次会把 state.rows 换成一份新数组，正在跑的第一次于是把「这份合好了」写在了被换掉
+  // 的旧对象上，finalize 读新数组只看到 PENDING——两份文件明明都已经合好落盘（后端
+  // /status 的 state 也是 MERGED），收尾却永远不发生，律师停在一个说着「已合并」、
+  // 却要他再点一次「就按我选的来」才关得掉的裁决窗前。
+  // app-e2e J14 实测复现：xlsx + pptx 两份不重叠改动，后端日志里 PptxMerger 跑了两遍
+  // （两次并发各合了一次），随后仓库一直停在 MERGING。
+  let queue = Promise.resolve()
+  function onConflictStatus(conflict, ctx) {
+    queue = queue.then(() => runConflictStatus(conflict, ctx), () => runConflictStatus(conflict, ctx))
+    return queue
+  }
+
+  async function runConflictStatus(conflict, ctx) {
     if (!conflict) {
       state.rows = []
       state.running = false
@@ -191,7 +205,16 @@ export function useDocumentMerge(deps) {
     const incoming = conflict.documentMerges || []
     state.rows = incoming.map((r) => {
       const prev = rowFor(r.path)
-      return prev ? { ...prev, ...r, decision: prev.decision === 'MANUAL' ? 'MANUAL' : r.decision } : { ...r }
+      // state 同理：本地已经知道「这份合好了」时，绝不让一份更老的 /status 快照把它
+      // 抹回 PENDING——抹回去了界面就从「已合并」倒退成「正在合并」，转一个永远不来的圈。
+      return prev
+        ? {
+          ...prev,
+          ...r,
+          decision: prev.decision === 'MANUAL' ? 'MANUAL' : r.decision,
+          state: String(prev.state || '').toUpperCase() === 'MERGED' ? 'MERGED' : r.state,
+        }
+        : { ...r }
     })
 
     const refs = { mergeBase: conflict.mergeBase, mainRef: conflict.mainlineTip, otherRef }

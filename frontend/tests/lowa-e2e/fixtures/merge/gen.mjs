@@ -228,7 +228,7 @@ function unitIndexOfCell(ti, ri, ci) {
     : TABLE1_AFTER_PARA + TABLE0.length * TABLE0[0].length + 1 + within
 }
 
-function buildBody(side) {
+function buildBody(side, conflict) {
   const parts = []
   const paraTexts = []
   for (let i = 0; i < PARA_COUNT; i++) {
@@ -240,11 +240,11 @@ function buildBody(side) {
     if (side === 'main') {
       const e = MAIN_EDITS.find((x) => x.para === i)
       if (e) text = applyEdit(text, e)
-      if (i === CONFLICT_PARA) text = applyEdit(text, MAIN_CONFLICT)
+      if (conflict && i === CONFLICT_PARA) text = applyEdit(text, MAIN_CONFLICT)
     } else if (side === 'other') {
       const e = OTHER_EDITS.find((x) => x.para === i)
       if (e) text = applyEdit(text, e)
-      if (i === CONFLICT_PARA) text = applyEdit(text, OTHER_CONFLICT)
+      if (conflict && i === CONFLICT_PARA) text = applyEdit(text, OTHER_CONFLICT)
       if (i === OTHER_FORMAT_ONLY_PARA) bold = true
     }
     const ci = COMMENT_PARAS.indexOf(i)
@@ -264,10 +264,14 @@ function otherTable(ti) {
 }
 
 // ---------- 对外接口 ----------
-export function generateMergeFixtures() {
-  const base = buildBody('base')
-  const main = buildBody('main')
-  const other = buildBody('other')
+// conflict=false 时两侧只改各自那几段、**不碰第 CONFLICT_PARA 段**，产出一套
+// 「只改不同段」的夹具（后端 ThreeWayAnalyzer 该判 AUTO）；默认 true 是原来那套
+// 「另有一段两边都改了」（该判 MANUAL）。lowa-e2e 组 34 用的是默认那套，
+// 不传参时产出的三份字节与加这个开关之前逐字节相同。
+export function generateMergeFixtures({ conflict = true } = {}) {
+  const base = buildBody('base', conflict)
+  const main = buildBody('main', conflict)
+  const other = buildBody('other', conflict)
 
   // baseUnits：正文段落 + 表格单元，表格单元跟在它所在表的 body 位置之后。
   const baseUnits = []
@@ -290,10 +294,12 @@ export function generateMergeFixtures() {
     type: 'MODIFY', baseStart: unitIndexOfPara(e.para), baseEnd: unitIndexOfPara(e.para) + 1,
     texts: [applyEdit(baseParaText(e.para), e)], ids: [], conflict: false,
   }))
-  mainChunks.push({
-    type: 'MODIFY', baseStart: unitIndexOfPara(CONFLICT_PARA), baseEnd: unitIndexOfPara(CONFLICT_PARA) + 1,
-    texts: [applyEdit(baseParaText(CONFLICT_PARA), MAIN_CONFLICT)], ids: [], conflict: true,
-  })
+  if (conflict) {
+    mainChunks.push({
+      type: 'MODIFY', baseStart: unitIndexOfPara(CONFLICT_PARA), baseEnd: unitIndexOfPara(CONFLICT_PARA) + 1,
+      texts: [applyEdit(baseParaText(CONFLICT_PARA), MAIN_CONFLICT)], ids: [], conflict: true,
+    })
+  }
   mainChunks.sort((a, b) => a.baseStart - b.baseStart)
 
   const otherChunks = OTHER_EDITS.map((e) => ({
@@ -315,10 +321,12 @@ export function generateMergeFixtures() {
     type: 'DELETE', baseStart: unitIndexOfPara(OTHER_DELETE_PARA), baseEnd: unitIndexOfPara(OTHER_DELETE_PARA) + 1,
     texts: [], ids: [], conflict: false,
   })
-  otherChunks.push({
-    type: 'MODIFY', baseStart: unitIndexOfPara(CONFLICT_PARA), baseEnd: unitIndexOfPara(CONFLICT_PARA) + 1,
-    texts: [applyEdit(baseParaText(CONFLICT_PARA), OTHER_CONFLICT)], ids: [], conflict: true,
-  })
+  if (conflict) {
+    otherChunks.push({
+      type: 'MODIFY', baseStart: unitIndexOfPara(CONFLICT_PARA), baseEnd: unitIndexOfPara(CONFLICT_PARA) + 1,
+      texts: [applyEdit(baseParaText(CONFLICT_PARA), OTHER_CONFLICT)], ids: [], conflict: true,
+    })
+  }
   otherChunks.sort((a, b) => a.baseStart - b.baseStart)
 
   // 「重放 + 全部接受」之后的预期正文段落（表格里的段落不计入，与引擎同构）。
@@ -330,7 +338,7 @@ export function generateMergeFixtures() {
     if (m) text = applyEdit(text, m)
     const o = OTHER_EDITS.find((x) => x.para === i)
     if (o) text = applyEdit(text, o)
-    if (i === CONFLICT_PARA) text = applyEdit(text, MAIN_CONFLICT)   // 冲突段留主线侧
+    if (conflict && i === CONFLICT_PARA) text = applyEdit(text, MAIN_CONFLICT)   // 冲突段留主线侧
     expectedParagraphs.push(text)
     if (i === OTHER_INSERT_AFTER_PARA) expectedParagraphs.push(OTHER_INSERT_TEXT)
   }
@@ -341,25 +349,214 @@ export function generateMergeFixtures() {
     other: docxBytes({ bodyXml: other.xml, comments: COMMENTS }),
     baseUnits,
     plan: { mainChunks, otherChunks },
-    conflicts: ['p' + CONFLICT_PARA],
+    conflicts: conflict ? ['p' + CONFLICT_PARA] : [],
     expected: {
       paragraphs: expectedParagraphs,
       paragraphCount: expectedParagraphs.length,
-      conflictParaKey: CONFLICT_PARA,
-      conflictMainText: applyEdit(baseParaText(CONFLICT_PARA), MAIN_CONFLICT),
-      conflictOtherText: applyEdit(baseParaText(CONFLICT_PARA), OTHER_CONFLICT),
+      conflictParaKey: conflict ? CONFLICT_PARA : null,
+      conflictBaseText: baseParaText(CONFLICT_PARA),
+      conflictMainText: conflict ? applyEdit(baseParaText(CONFLICT_PARA), MAIN_CONFLICT) : null,
+      conflictOtherText: conflict ? applyEdit(baseParaText(CONFLICT_PARA), OTHER_CONFLICT) : null,
       // 冲突段被「用律师乙的」替换后，整份正文的样子。
       takeOtherParagraphs: expectedParagraphs.map((t) =>
-        t === applyEdit(baseParaText(CONFLICT_PARA), MAIN_CONFLICT)
+        conflict && t === applyEdit(baseParaText(CONFLICT_PARA), MAIN_CONFLICT)
           ? applyEdit(baseParaText(CONFLICT_PARA), OTHER_CONFLICT) : t),
       formatOnlyParaKey: OTHER_FORMAT_ONLY_PARA,
       formatOnlyText: baseParaText(OTHER_FORMAT_ONLY_PARA),
       insertedText: OTHER_INSERT_TEXT,
       deletedText: baseParaText(OTHER_DELETE_PARA),
       tableCell: { table: 0, row: 2, col: 2, text: OTHER_TABLE_CELL.to },
-      mainEditCount: MAIN_EDITS.length + 1,      // 含冲突段
+      mainEditCount: MAIN_EDITS.length + (conflict ? 1 : 0),      // 含冲突段
       otherReplayCount: OTHER_EDITS.length + 3,  // 4 段文字 + 表格单元 + 插入 + 删除
       commentCount: COMMENTS.length,
+    },
+  }
+}
+
+// ============ 表格 / 演示文稿夹具（app-e2e J12 的 ④ 用，spec §6 那张表） ============
+// 这两类的合并文件由后端 POI 拼（不经引擎），所以夹具只要能被 POI 读开即可。
+// xlsx 是本文件现造的最小工作簿（sharedStrings 存法，同真实 Excel 产物）；pptx 不现造——
+// 从零拼一份能让 POI 打开的 pptx 要连 slideMaster / slideLayout / theme 一起写，
+// 一个字段写错就是运行时才发现的解析异常；直接借 lowa-e2e 既有的 impress-smoke.pptx
+// （两页、真 PowerPoint 产物）改几个 <a:t> 文字，风险低得多。
+
+// ---------- 最小 zip 读取器（只为改写 pptx 里的两个 XML 片段） ----------
+function unzipEntries(buf) {
+  // 从尾部找 EOCD，再走中央目录——本地头里的长度字段在带数据描述符的条目上不可信。
+  let eocd = -1
+  for (let i = buf.length - 22; i >= 0 && i >= buf.length - 66000; i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break }
+  }
+  if (eocd < 0) throw new Error('不是 zip：找不到中央目录结尾')
+  const count = buf.readUInt16LE(eocd + 10)
+  let p = buf.readUInt32LE(eocd + 16)
+  const entries = []
+  for (let i = 0; i < count; i++) {
+    if (buf.readUInt32LE(p) !== 0x02014b50) throw new Error('中央目录项头不对')
+    const method = buf.readUInt16LE(p + 10)
+    const compSize = buf.readUInt32LE(p + 20)
+    const nameLen = buf.readUInt16LE(p + 28)
+    const extraLen = buf.readUInt16LE(p + 30)
+    const commentLen = buf.readUInt16LE(p + 32)
+    const localOff = buf.readUInt32LE(p + 42)
+    const name = buf.toString('utf8', p + 46, p + 46 + nameLen)
+    const lnLen = buf.readUInt16LE(localOff + 26)
+    const leLen = buf.readUInt16LE(localOff + 28)
+    const dataStart = localOff + 30 + lnLen + leLen
+    const raw = buf.subarray(dataStart, dataStart + compSize)
+    entries.push({ name, data: method === 0 ? Buffer.from(raw) : zlib.inflateRawSync(raw) })
+    p += 46 + nameLen + extraLen + commentLen
+  }
+  return entries
+}
+
+// ---------- 最小 xlsx（POI XSSFWorkbook 能读开的最小件） ----------
+const XLSX_SHEET_NAME = 'Sheet1'
+const XLSX_BASE_ROWS = [
+  ['款项名称', '金额（元）', '支付期限'],
+  ['首付款', '1000000', '合同签署后三十日内'],
+  ['尾款', '2000000', '验收合格后六十日内'],
+]
+// 甲改 C2（首付款期限），乙改 C3（尾款期限）——不同格，该判自动合并。
+const XLSX_MAIN_CELL = { row: 1, col: 2, text: '合同签署后十五日内' }
+const XLSX_OTHER_CELL = { row: 2, col: 2, text: '验收合格后三十日内' }
+// 「同一格两边都改了」用的那一格（两侧写不同的字）。
+const XLSX_CONFLICT_MAIN = { row: 1, col: 1, text: '1200000' }
+const XLSX_CONFLICT_OTHER = { row: 1, col: 1, text: '1500000' }
+
+function colName(c) {
+  let s = ''
+  let n = c
+  do { s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26) - 1 } while (n >= 0)
+  return s
+}
+function xlsxBytes(rows) {
+  // 字符串走 sharedStrings（真实 Excel / WPS / LibreOffice 的存法）。**不要改成
+  // inlineStr**：POI 的 XSSFCell.setCellValue(String) 对 inlineStr 格只改 <v>、
+  // 不改 <is>，XlsxMerger 写进去的值会被静默丢掉，夹具一换存法这条链就假绿。
+  const shared = []
+  const index = new Map()
+  const sstIndex = (v) => {
+    if (!index.has(v)) { index.set(v, shared.length); shared.push(v) }
+    return index.get(v)
+  }
+  const sheetRows = rows.map((cells, r) => '<row r="' + (r + 1) + '">'
+    + cells.map((v, c) => '<c r="' + colName(c) + (r + 1) + '" t="s"><v>' + sstIndex(v) + '</v></c>').join('')
+    + '</row>').join('')
+  const SS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+  const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+  const sst = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<sst xmlns="' + SS + '" count="' + shared.length + '" uniqueCount="' + shared.length + '">'
+    + shared.map((v) => '<si><t xml:space="preserve">' + esc(v) + '</t></si>').join('') + '</sst>'
+  return zipBytes([
+    { name: '[Content_Types].xml', data: Buffer.from('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+      + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+      + '<Default Extension="xml" ContentType="application/xml"/>'
+      + '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+      + '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+      + '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>'
+      + '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+      + '</Types>', 'utf8') },
+    { name: '_rels/.rels', data: Buffer.from('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      + '<Relationship Id="rId1" Type="' + REL + '/officeDocument" Target="xl/workbook.xml"/>'
+      + '</Relationships>', 'utf8') },
+    { name: 'xl/workbook.xml', data: Buffer.from('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<workbook xmlns="' + SS + '" xmlns:r="' + REL + '">'
+      + '<sheets><sheet name="' + XLSX_SHEET_NAME + '" sheetId="1" r:id="rId1"/></sheets></workbook>', 'utf8') },
+    { name: 'xl/_rels/workbook.xml.rels', data: Buffer.from('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      + '<Relationship Id="rId1" Type="' + REL + '/worksheet" Target="worksheets/sheet1.xml"/>'
+      + '<Relationship Id="rId2" Type="' + REL + '/styles" Target="styles.xml"/>'
+      + '<Relationship Id="rId3" Type="' + REL + '/sharedStrings" Target="sharedStrings.xml"/>'
+      + '</Relationships>', 'utf8') },
+    { name: 'xl/sharedStrings.xml', data: Buffer.from(sst, 'utf8') },
+    { name: 'xl/styles.xml', data: Buffer.from('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<styleSheet xmlns="' + SS + '">'
+      + '<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>'
+      + '<fills count="1"><fill><patternFill patternType="none"/></fill></fills>'
+      + '<borders count="1"><border/></borders>'
+      + '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+      + '<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>'
+      + '</styleSheet>', 'utf8') },
+    { name: 'xl/worksheets/sheet1.xml', data: Buffer.from('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<worksheet xmlns="' + SS + '"><sheetData>' + sheetRows + '</sheetData></worksheet>', 'utf8') },
+  ])
+}
+function withCell(rows, edit) {
+  const copy = rows.map((r) => r.slice())
+  copy[edit.row][edit.col] = edit.text
+  return copy
+}
+
+/**
+ * 表格夹具。conflict=false：甲改 C2、乙改 C3（不同格 → 自动合并）；
+ * conflict=true：两边都再改 B2（同一格 → 逐格裁决）。
+ */
+export function generateXlsxFixtures({ conflict = false } = {}) {
+  const mainRows = conflict
+    ? withCell(withCell(XLSX_BASE_ROWS, XLSX_MAIN_CELL), XLSX_CONFLICT_MAIN)
+    : withCell(XLSX_BASE_ROWS, XLSX_MAIN_CELL)
+  const otherRows = conflict
+    ? withCell(withCell(XLSX_BASE_ROWS, XLSX_OTHER_CELL), XLSX_CONFLICT_OTHER)
+    : withCell(XLSX_BASE_ROWS, XLSX_OTHER_CELL)
+  return {
+    base: xlsxBytes(XLSX_BASE_ROWS),
+    main: xlsxBytes(mainRows),
+    other: xlsxBytes(otherRows),
+    expected: {
+      sheet: XLSX_SHEET_NAME,
+      mainCellKey: XLSX_SHEET_NAME + '!' + colName(XLSX_MAIN_CELL.col) + (XLSX_MAIN_CELL.row + 1),
+      mainCellText: XLSX_MAIN_CELL.text,
+      otherCellKey: XLSX_SHEET_NAME + '!' + colName(XLSX_OTHER_CELL.col) + (XLSX_OTHER_CELL.row + 1),
+      otherCellText: XLSX_OTHER_CELL.text,
+      conflictCellKey: XLSX_SHEET_NAME + '!' + colName(XLSX_CONFLICT_MAIN.col) + (XLSX_CONFLICT_MAIN.row + 1),
+      conflictBaseText: XLSX_BASE_ROWS[XLSX_CONFLICT_MAIN.row][XLSX_CONFLICT_MAIN.col],
+      conflictMainText: XLSX_CONFLICT_MAIN.text,
+      conflictOtherText: XLSX_CONFLICT_OTHER.text,
+    },
+  }
+}
+
+// ---------- pptx（借既有 impress-smoke.pptx 改文字） ----------
+const PPTX_SOURCE = new URL('../impress-smoke.pptx', import.meta.url)
+const PPTX_SLIDE1_FROM = '普通文本框内容'
+const PPTX_SLIDE2_FROM = '第二页文本框'
+const PPTX_MAIN_TEXT = '甲改的第一页正文'
+const PPTX_OTHER_TEXT = '乙改的第二页正文'
+const PPTX_OTHER_SLIDE1_TEXT = '乙也改了第一页正文'
+
+function pptxWith(edits) {
+  const entries = unzipEntries(fs.readFileSync(PPTX_SOURCE))
+  for (const e of entries) {
+    const edit = edits[e.name]
+    if (!edit) continue
+    const xml = e.data.toString('utf8')
+    const next = xml.replace('<a:t>' + edit.from + '</a:t>', '<a:t>' + esc(edit.to) + '</a:t>')
+    if (next === xml) throw new Error('pptx 夹具编辑落空: ' + e.name + ' ' + edit.from)
+    e.data = Buffer.from(next, 'utf8')
+  }
+  return zipBytes(entries)
+}
+
+/**
+ * 演示文稿夹具。conflict=false：甲改第 1 页、乙改第 2 页（不同页 → 自动合并）；
+ * conflict=true：两边都改第 1 页（同一页 → 逐页裁决）。
+ */
+export function generatePptxFixtures({ conflict = false } = {}) {
+  const base = pptxWith({})
+  const main = pptxWith({ 'ppt/slides/slide1.xml': { from: PPTX_SLIDE1_FROM, to: PPTX_MAIN_TEXT } })
+  const other = conflict
+    ? pptxWith({ 'ppt/slides/slide1.xml': { from: PPTX_SLIDE1_FROM, to: PPTX_OTHER_SLIDE1_TEXT } })
+    : pptxWith({ 'ppt/slides/slide2.xml': { from: PPTX_SLIDE2_FROM, to: PPTX_OTHER_TEXT } })
+  return {
+    base, main, other,
+    expected: {
+      mainText: PPTX_MAIN_TEXT,
+      otherText: conflict ? PPTX_OTHER_SLIDE1_TEXT : PPTX_OTHER_TEXT,
+      conflictSlideKey: 's1',     // ThreeWayAnalyzer 的页键是 s{页序}（对齐按 sldId，键按序号）
+      conflictBaseText: PPTX_SLIDE1_FROM,
     },
   }
 }

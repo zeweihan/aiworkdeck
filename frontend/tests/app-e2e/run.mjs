@@ -1776,6 +1776,52 @@ try {
   // 遇到真实内容冲突 → CONFLICT，这是 CloudSyncService.uploadToCloud 的 mode='cloud'
   // 语境（标签「用我这边的/用云端的」），不是 endSession 自身的 sessionEndConflict 语境
   // （那需要本机 git 收到过一次 receive-pack，这里 A/S/B 三个后端物理隔离，走不到那条路）。
+  //
+  // 这四样（两个裸 REST 身份、两个项目 id）与下面三个助手**必须活在 J11 的块外面**：
+  // J14（三方合并）跑在 J13 之后、复用同一套 A/S/B 拓扑（S、B 是 spawned 里的长驻
+  // 进程，活到整个套件的 finally），块内 const 声明的东西对它不可见。
+  let sApi = null
+  let bApi = null
+  let remoteProjectId = null
+  let bProjectId = null
+  const restOverwriteAt = async (apiFn, projectId, fileName, content) => {
+    const list = await apiFn('/api/projects/' + projectId + '/files')
+    const f = (Array.isArray(list) ? list : []).find((x) => x.name === fileName)
+    if (!f) throw new Error('找不到 ' + fileName + ': ' + JSON.stringify(list).slice(0, 200))
+    // 认 f.id（数据库主键，永远非空），不认 f.wpsFileId——跟 J9/J10 既有的
+    // restOverwrite 不同，这里的文件是清单同步（git clone）落库的，v2 清单只带
+    // uid/relPath，不携带 wpsFileId，走清单同步新建的行 wpsFileId 天然是 null。
+    // 现场调试实证：FileController.uploadFile 原来只认 wpsFileId，缺了数字 id 兜底，
+    // 撞上这类文件会把字节写进跟真文件不相干的孤儿路径且不触发版本信号——已经在
+    // FileController.resolveProjectFileForUpload 里补了跟 downloadFile 同款的双查
+    // 顺序（先按数据库 id 查，查不到再退回 wpsFileId），这里直接用 f.id 是对齐
+    // LibreOfficeEditor.vue 保存时 `f.wpsFileId || f.id` 的同一条兜底路径。
+    // content 可以是字符串，也可以是 Buffer / Uint8Array（J14 直传 docx/xlsx/pptx
+    // 原始字节）——后端不看 Content-Type，只读字节。
+    const form = new FormData()
+    form.append('file', new Blob([content], { type: 'text/plain' }), fileName)
+    const r = await fetch(apiFn.base + '/api/files/' + f.id + '/upload', {
+      method: 'POST',
+      headers: apiFn.sid ? { 'X-Session-Id': apiFn.sid } : {},
+      body: form,
+    })
+    const j = await r.json()
+    if (!j || j.code !== 0) throw new Error('REST 直传失败: ' + JSON.stringify(j))
+  }
+  const endSessionAt = async (apiFn, projectId, title) => {
+    const r = await apiFn('/api/projects/' + projectId + '/version/session/end', { method: 'POST', body: { title } })
+    if (!r || r.code !== 0) throw new Error('结束工作失败: ' + JSON.stringify(r).slice(0, 200))
+    return r.data
+  }
+  const pollUntil = async (fn, timeoutMs, intervalMs = 1000) => {
+    const start = Date.now()
+    for (;;) {
+      if (await fn()) return true
+      if (Date.now() - start >= timeoutMs) return false
+      await sleep(intervalMs)
+    }
+  }
+
   if (!J11_JAR) {
     note('skip', 'J11 需要 APP_E2E_JAR（backend/target/*.jar 绝对路径）未提供，已跳过多人协作旅程')
   } else {
@@ -1786,49 +1832,12 @@ try {
     // B 是同事的桌面：保持 local-mode 免登（与真实拓扑一致），裸 REST 即本机用户。
     const S = await spawnBackend('server', 9701, ['--security.local-mode=false'])
     const B = await spawnBackend('desktopB', 9702)
-    const sApi = mkApi(S)
-    const bApi = mkApi(B)
-
-    const restOverwriteAt = async (apiFn, projectId, fileName, content) => {
-      const list = await apiFn('/api/projects/' + projectId + '/files')
-      const f = (Array.isArray(list) ? list : []).find((x) => x.name === fileName)
-      if (!f) throw new Error('找不到 ' + fileName + ': ' + JSON.stringify(list).slice(0, 200))
-      // 认 f.id（数据库主键，永远非空），不认 f.wpsFileId——跟 J9/J10 既有的
-      // restOverwrite 不同，这里的文件是清单同步（git clone）落库的，v2 清单只带
-      // uid/relPath，不携带 wpsFileId，走清单同步新建的行 wpsFileId 天然是 null。
-      // 现场调试实证：FileController.uploadFile 原来只认 wpsFileId，缺了数字 id 兜底，
-      // 撞上这类文件会把字节写进跟真文件不相干的孤儿路径且不触发版本信号——已经在
-      // FileController.resolveProjectFileForUpload 里补了跟 downloadFile 同款的双查
-      // 顺序（先按数据库 id 查，查不到再退回 wpsFileId），这里直接用 f.id 是对齐
-      // LibreOfficeEditor.vue 保存时 `f.wpsFileId || f.id` 的同一条兜底路径。
-      const form = new FormData()
-      form.append('file', new Blob([content], { type: 'text/plain' }), fileName)
-      const r = await fetch(apiFn.base + '/api/files/' + f.id + '/upload', {
-        method: 'POST',
-        headers: apiFn.sid ? { 'X-Session-Id': apiFn.sid } : {},
-        body: form,
-      })
-      const j = await r.json()
-      if (!j || j.code !== 0) throw new Error('REST 直传失败: ' + JSON.stringify(j))
-    }
-    const endSessionAt = async (apiFn, projectId, title) => {
-      const r = await apiFn('/api/projects/' + projectId + '/version/session/end', { method: 'POST', body: { title } })
-      if (!r || r.code !== 0) throw new Error('结束工作失败: ' + JSON.stringify(r).slice(0, 200))
-      return r.data
-    }
-    const pollUntil = async (fn, timeoutMs, intervalMs = 1000) => {
-      const start = Date.now()
-      for (;;) {
-        if (await fn()) return true
-        if (Date.now() - start >= timeoutMs) return false
-        await sleep(intervalMs)
-      }
-    }
+    sApi = mkApi(S)
+    bApi = mkApi(B)
 
     const j11Base = path.join(OUT, 'qa-J11协作文件.txt')
     fs.writeFileSync(j11Base, 'QA J11 云端协作基线文件\n')
 
-    let remoteProjectId = null
     // A 在案件库那一侧的账号名 = 'awd_' + A 的本机 username（dev-board#625）。
     // 这不是随手取的名字，而是真实的桥接形状：同一个官网账户在本机叫 hanzewei、
     // 在案件库那边叫 awd_hanzewei，成员去重的第三把键（mergeMembers.sameMember）认的
@@ -1986,7 +1995,6 @@ try {
       bConnectionId = r.data.connectionId
     })
 
-    let bProjectId = null
     await step('B：列出并接入云端项目', async () => {
       const remotes = await bApi('/api/cloud/connections/' + bConnectionId + '/remote-projects')
       const list = (remotes && remotes.data && remotes.data.projects) || []
@@ -2972,6 +2980,640 @@ try {
       try { await j13Stub.close() } catch (e) { /* ignore */ }
     }
   }
+
+  // ============ J14 三方合并：不重叠自动合并 / 逐处裁决 / 逐段溯源 ============
+  // 规格 docs/superpowers/specs/2026-09-14-docx-three-way-merge-design.md §7 的 ①②③④。
+  // 复用 J11 建好的 A/S/B 拓扑（A = 9696 长驻桌面后端、UI 驱动；S = 团队服务器；
+  // B = 同事桌面，裸 REST），三份 docx / 两份表格 / 两份演示 / 一份 pdf 的字节由
+  // tests/lowa-e2e/fixtures/merge/gen.mjs 在内存里生成（产物不入库），走 J11 的
+  // restOverwriteAt 直传（Blob 里塞 Buffer，后端不看 Content-Type）。
+  //
+  // **覆盖边界（写在这里，免得下一个人以为这一段把引擎那一半也测了）**：
+  // app-e2e 的目标是浏览器（dev:h5 起在 5174，没有 COOP/COEP、也没有 dist/zetaoffice），
+  // LOWA 引擎在这里根本起不来（host.zetaoffice 对最小桩是 undefined，
+  // LibreOfficeEditor 直接判 'unsupported'）。所以 docx 那一半里**需要引擎执行**的两件事
+  //   ① decision=AUTO 的 docx 自动合并（隐藏实例比较 + 逐段重放）
+  //   ② 合并比对稿标签页 MergeReviewTab 的逐处接受/拒绝
+  // 在本套件里跑不了，由 lowa-e2e 组 34（build_merge_draft / merge_take_other）覆盖。
+  // 这里覆盖的是**接线**：后端三方分析的判定（docx 段落级 AUTO/MANUAL、pdf 整份）、
+  // 裁决总览的行态与按钮、xlsx/pptx 这两类**不经引擎**的自动合并与逐格/逐页裁决全链路、
+  // 尾注经 /history 的回显、逐段溯源出参。
+  console.log('== J14 三方合并 ==')
+  if (!J11_JAR || !bProjectId) {
+    note('skip', 'J14 需要 J11 建好的 A/S/B 拓扑（APP_E2E_JAR + J11 跑通），本轮已跳过三方合并旅程')
+  } else {
+    const { generateMergeFixtures, generateXlsxFixtures, generatePptxFixtures } =
+      await import('../lowa-e2e/fixtures/merge/gen.mjs')
+    const aApi = mkApi(BACKEND) // 与顶部的 api() 同一台后端，只是带 .base，好复用 restOverwriteAt
+    const DOCX_CLEAN = generateMergeFixtures({ conflict: false })   // 两边只改不同段 → 该判 AUTO
+    const DOCX_OVERLAP = generateMergeFixtures()                    // 另有一段两边都改了 → 该判 MANUAL
+    const XLSX_CLEAN = generateXlsxFixtures()
+    const XLSX_OVERLAP = generateXlsxFixtures({ conflict: true })
+    const PPTX_CLEAN = generatePptxFixtures()
+    const PPTX_OVERLAP = generatePptxFixtures({ conflict: true })
+    const pdfBytes = (tag) => Buffer.from('%PDF-1.4\n% J14 三方合并夹具 ' + tag
+      + '\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n', 'utf8')
+
+    // ---- 小助手 ----
+    const restCreateAt = async (apiFn, projectId, name, bytes) => {
+      const created = await apiFn('/api/projects/' + projectId + '/files/file', {
+        method: 'POST',
+        body: {
+          parentId: null, name,
+          fileType: (name.split('.').pop() || 'bin').toLowerCase(),
+          fileSize: bytes.length,
+        },
+      })
+      if (!created || !created.id) throw new Error('建文件行失败: ' + JSON.stringify(created).slice(0, 200))
+      const form = new FormData()
+      form.append('file', new Blob([bytes]), name)
+      const r = await fetch(apiFn.base + '/api/files/' + (created.wpsFileId || created.id) + '/upload', {
+        method: 'POST',
+        headers: apiFn.sid ? { 'X-Session-Id': apiFn.sid } : {},
+        body: form,
+      })
+      const j = await r.json()
+      if (!j || j.code !== 0) throw new Error('写字节失败: ' + JSON.stringify(j).slice(0, 200))
+      return created
+    }
+    // 结束工作会顺手做一次后台自动上传，紧接着再显式交一次有可能撞上它还在跑（同一把
+    // 仓库锁），回一句「这次没能交稿」。那不是回归，重试一次就过——真推不上去会连着三次
+    // 都失败，仍然如实报错。撞冲突则一次都不重试：那是断言目标本身。
+    const pushAt = async (apiFn, projectId, who) => {
+      let last = null
+      for (let i = 0; i < 3; i++) {
+        const r = await apiFn('/api/cloud/projects/' + projectId + '/upload', { method: 'POST' })
+        last = r
+        if (r && r.code === 0) {
+          if (r.data && r.data.status === 'CONFLICT') {
+            throw new Error(who + ' 交稿撞冲突，不该发生: ' + JSON.stringify(r.data).slice(0, 200))
+          }
+          return r.data
+        }
+        await sleep(2000)
+      }
+      throw new Error(who + ' 交稿失败: ' + String(JSON.stringify(last)).slice(0, 200))
+    }
+    const pullAt = async (apiFn, projectId, who) => {
+      const r = await apiFn('/api/cloud/projects/' + projectId + '/update', { method: 'POST' })
+      if (!r || r.code !== 0) throw new Error(who + ' 取回失败: ' + JSON.stringify(r).slice(0, 200))
+      return r.data
+    }
+    const versionStatusA = async () => {
+      const r = await api('/api/projects/' + QA.projectId + '/version/status')
+      return (r && r.data) || {}
+    }
+    const conflictA = async () => {
+      const d = await versionStatusA()
+      return d.sessionEndConflict || d.cloudConflict || d.adoptConflict || null
+    }
+    const mergeRowOf = (conflict, suffix) => ((conflict && conflict.documentMerges) || [])
+      .find((m) => String(m.path || '').endsWith(suffix)) || null
+    const historyEntries = async (limit = 20) => {
+      const r = await api('/api/projects/' + QA.projectId + '/version/history?limit=' + limit)
+      return (r && r.data && r.data.entries) || []
+    }
+    // 带 merges 的那一条版本记录（就是这次裁决/自动合并落成的那一版）
+    const latestMergeEntry = async () => {
+      const entries = await historyEntries()
+      return entries.find((e) => Array.isArray(e.merges) && e.merges.length) || null
+    }
+    const textAtHead = async (relPath) => {
+      const r = await api('/api/projects/' + QA.projectId
+        + '/version/versions/HEAD/file-text?path=' + encodeURIComponent(relPath))
+      return (r && r.data && r.data.text) || ''
+    }
+    // 「几何可见」：元素有矩形、在视口里、且中心点确实命中它自己（没被遮罩盖住）
+    const visibleTexts = (sel) => page.evaluate((s) => [...document.querySelectorAll(s)]
+      .filter((el) => {
+        const r = el.getBoundingClientRect()
+        if (r.width <= 0 || r.height <= 0) return false
+        if (r.bottom <= 0 || r.top >= innerHeight || r.right <= 0 || r.left >= innerWidth) return false
+        const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)
+        return !!hit && (hit === el || el.contains(hit) || hit.contains(el))
+      })
+      .map((el) => (el.innerText || '').trim()), sel)
+    // 裁决总览：版本面板重新挂载一次，顺带让页面的 checkAdoptConflict 再跑一遍
+    // （自动合并编排器挂在它上面，见 project-overview.vue 的 @status-changed）。
+    const remountVersionPanel = async () => {
+      await mouseClickSel('[title="资源管理器"]')
+      await mouseClickSel('[title="版本"]')
+      await page.waitForSelector('.cloud-dot', { timeout: 20000 })
+    }
+    const pullViaUi = async () => {
+      // 进这一步时仓库必须是干净的。上一轮没收尾的话裁决弹窗还挂着，而它是全屏遮罩
+      // （.awd-mask）：下面点「打开协作」会点在遮罩上，症状是 .collab-dialog 十秒超时，
+      // 完全看不出真因。把前提写成一条明确的失败信息，别让它伪装成 UI 回归。
+      const stale = await conflictA()
+      if (stale) {
+        throw new Error('上一轮的合并还停在没收尾的状态，本轮取回无从谈起: '
+          + String(JSON.stringify(stale)).slice(0, 200))
+      }
+      await remountVersionPanel()
+      await mouseClickText('打开协作')
+      await page.waitForSelector('.collab-dialog', { timeout: 10000 })
+      await mouseClickText('取回最新稿')
+      await sleep(2500)
+      await closeCollabDialog()
+      // 协作抽屉回来时页面自己会调一次 checkAdoptConflict（onCollabChanged /
+      // onCollabConflict），自动合并编排器挂在它上面，所以不必再手工刷一次。
+      // **撞上冲突时更是绝不能再去点 rail 图标**：裁决弹窗是全屏遮罩（.awd-mask），
+      // 点击坐标全落在遮罩上，不报错、只让后面的断言静默超时（v1 地雷 #24 同款）。
+      // 没弹窗时才补一次侧栏重挂，给「后端还没来得及开窗」留一次重新拉 /status 的机会。
+      if (!(await page.$('.adopt-dialog'))) await remountVersionPanel()
+    }
+
+    const NAME = {
+      docxClean: 'J14合同甲.docx',
+      docxOverlap: 'J14合同乙.docx',
+      xlsxClean: 'J14付款表.xlsx',
+      xlsxOverlap: 'J14同格表.xlsx',
+      pptxClean: 'J14演示.pptx',
+      pptxOverlap: 'J14同页演示.pptx',
+      pdf: 'J14扫描件.pdf',
+    }
+
+    await step('J14-准备：回到工作台、A 先把 J11 留下的那一版取回来（起点两边一致）', async () => {
+      // J12 的英文走查与 J13 的隔离后端各自把主 page 带去过别处（J13 用的是另一个
+      // 标签页，但语言键与页面栈都被动过），这里显式整页重载回到这份案卷的工作台。
+      await page.goto(BASE + '/#/pages/project-overview/project-overview?id=' + QA.projectId,
+        { waitUntil: 'networkidle2', timeout: 30000 })
+      await page.reload({ waitUntil: 'networkidle2', timeout: 30000 })
+      await waitText('资源管理器', 30000)
+      await pullAt(aApi, QA.projectId, 'A')
+      const c = await conflictA()
+      if (c) throw new Error('J14 起点不该停在冲突态: ' + JSON.stringify(c).slice(0, 200))
+    })
+
+    // ---------------- ① 不重叠自动合并（xlsx 不同格 + pptx 不同页） ----------------
+    // docx 的 AUTO 这一半要引擎，在本套件里跑不了（见段首覆盖边界）；xlsx/pptx 的合并
+    // 文件由后端 POI 拼，是这里能跑通的完整自动合并链：静默合好 + 自己收尾 + 不弹窗。
+    await step('J14-①-准备：A 落下表格与演示的共同上一版并交稿，B 取回', async () => {
+      await restCreateAt(aApi, QA.projectId, NAME.xlsxClean, XLSX_CLEAN.base)
+      await restCreateAt(aApi, QA.projectId, NAME.pptxClean, PPTX_CLEAN.base)
+      await endSessionAt(aApi, QA.projectId, 'J14 表格与演示的共同上一版')
+      await pushAt(aApi, QA.projectId, 'A')
+      await pullAt(bApi, bProjectId, 'B')
+      const files = await bApi('/api/projects/' + bProjectId + '/files')
+      const names = (Array.isArray(files) ? files : []).map((f) => f.name)
+      if (!names.includes(NAME.xlsxClean) || !names.includes(NAME.pptxClean)) {
+        throw new Error('B 没收到共同的上一版: ' + JSON.stringify(names))
+      }
+    })
+
+    // **顺序不能反**：结束工作会顺手做一次后台自动上传，案件库没领先时它会直接推上去。
+    // 所以必须让 B 先改先交（占住案件库那一侧），A 后改——A 的那次后台上传因此被拒、
+    // 只置待交稿标记（J11 已验过这条 I2 语义），两边的改动这才真的分头落在两条线上。
+    // 反过来先让 A 结束工作，A 的改动会被后台推上去，B 交稿时撞的是整份三选一，
+    // 根本走不到三方合并这条链（本轮实跑踩过一次）。
+    await step('J14-①-准备：B 先改一格一页并交稿，A 再改另一格另一页', async () => {
+      await restOverwriteAt(bApi, bProjectId, NAME.xlsxClean, XLSX_CLEAN.other)
+      await restOverwriteAt(bApi, bProjectId, NAME.pptxClean, PPTX_CLEAN.other)
+      await endSessionAt(bApi, bProjectId, '乙改了尾款期限与第二页')
+      await pushAt(bApi, bProjectId, 'B')
+      await restOverwriteAt(aApi, QA.projectId, NAME.xlsxClean, XLSX_CLEAN.main)
+      await restOverwriteAt(aApi, QA.projectId, NAME.pptxClean, PPTX_CLEAN.main)
+      await endSessionAt(aApi, QA.projectId, '甲改了付款期限与第一页')
+    })
+
+    let autoMergeSha = null
+    await step('J14-①：A 点「取回最新稿」→ 不弹裁决窗，两份都替他合好了', async () => {
+      await pullViaUi()
+      // 后端先开一次合并窗口（两边都动过同一批文件），编排器把两份都合好、按 MERGED 收尾。
+      const ok = await pollUntil(async () => {
+        const c = await conflictA()
+        if (c) return false
+        const entry = await latestMergeEntry()
+        return !!entry && entry.merges.length >= 2
+      }, 90000, 2000)
+      const entry = await latestMergeEntry()
+      if (!ok) {
+        throw new Error('等待超时：自动合并没有收尾（冲突态 ' + JSON.stringify(await conflictA()).slice(0, 200)
+          + '，带 merges 的版本 ' + JSON.stringify(entry).slice(0, 300) + '）')
+      }
+      autoMergeSha = entry.sha
+      const dialogOpen = await page.evaluate(() => {
+        const dlg = document.querySelector('.adopt-dialog')
+        return !!dlg && dlg.getClientRects().length > 0
+      })
+      if (dialogOpen) throw new Error('不重叠的改动不该惊动律师，却弹出了裁决窗')
+      await shot('J14-auto-merged')
+    })
+
+    await step('J14-①：历史那一行带 auto 合并记录与 cloud 语境', async () => {
+      const entry = await latestMergeEntry()
+      if (!entry) throw new Error('历史里没有带合并记录的版本')
+      if (entry.mergeContext !== 'cloud') {
+        throw new Error('mergeContext 不是 cloud: ' + JSON.stringify(entry).slice(0, 300))
+      }
+      for (const name of [NAME.xlsxClean, NAME.pptxClean]) {
+        const m = entry.merges.find((x) => String(x.path || '').endsWith(name))
+        if (!m) throw new Error('merges 里没有 ' + name + ': ' + JSON.stringify(entry.merges))
+        if (m.mode !== 'auto') throw new Error(name + ' 不是自动合并: ' + JSON.stringify(m))
+        if (!(Number(m.mainCount) > 0) || !(Number(m.otherCount) > 0)) {
+          throw new Error(name + ' 的两边处数不对（应当各合入至少一处）: ' + JSON.stringify(m))
+        }
+      }
+    })
+
+    await step('J14-①：合并后的正文真含两边的改动', async () => {
+      const xlsxText = await textAtHead(NAME.xlsxClean)
+      if (!xlsxText.includes(XLSX_CLEAN.expected.mainCellText)) {
+        throw new Error('表格里丢了甲改的那一格: ' + JSON.stringify(xlsxText.slice(0, 300)))
+      }
+      if (!xlsxText.includes(XLSX_CLEAN.expected.otherCellText)) {
+        throw new Error('表格里丢了乙改的那一格（自动合并没把另一侧合进来）: ' + JSON.stringify(xlsxText.slice(0, 300)))
+      }
+      const pptxText = await textAtHead(NAME.pptxClean)
+      if (!pptxText.includes(PPTX_CLEAN.expected.mainText) || !pptxText.includes(PPTX_CLEAN.expected.otherText)) {
+        throw new Error('演示里没有同时含两边改的页: ' + JSON.stringify(pptxText.slice(0, 300)))
+      }
+    })
+
+    await step('J14-①：退回到合并前那一版可用（回去看得到只有甲那一版，再回到合并版）', async () => {
+      const entries = await historyEntries(40)
+      const merged = entries.find((e) => e.sha === autoMergeSha)
+      const beforeSha = merged && Array.isArray(merged.parents) ? merged.parents[0] : null
+      if (!beforeSha) throw new Error('合并那一版没有第一父，退不回去: ' + String(JSON.stringify(merged)).slice(0, 300))
+      const back = await api('/api/projects/' + QA.projectId + '/version/revert', { method: 'POST', body: { ref: beforeSha } })
+      if (!back || back.code !== 0) throw new Error('退回合并前那一版失败: ' + JSON.stringify(back).slice(0, 200))
+      const beforeText = await textAtHead(NAME.xlsxClean)
+      if (!beforeText.includes(XLSX_CLEAN.expected.mainCellText)) {
+        throw new Error('退回之后甲自己那一版的改动也没了: ' + JSON.stringify(beforeText.slice(0, 300)))
+      }
+      if (beforeText.includes(XLSX_CLEAN.expected.otherCellText)) {
+        throw new Error('退回之后仍带着乙的改动，说明退回的不是合并前那一版: ' + JSON.stringify(beforeText.slice(0, 300)))
+      }
+      const fwd = await api('/api/projects/' + QA.projectId + '/version/revert', { method: 'POST', body: { ref: autoMergeSha } })
+      if (!fwd || fwd.code !== 0) throw new Error('回到合并那一版失败: ' + JSON.stringify(fwd).slice(0, 200))
+      const again = await textAtHead(NAME.xlsxClean)
+      if (!again.includes(XLSX_CLEAN.expected.otherCellText)) {
+        throw new Error('回到合并版之后内容没恢复: ' + JSON.stringify(again.slice(0, 300)))
+      }
+      await pushAt(aApi, QA.projectId, 'A')
+      await pullAt(bApi, bProjectId, 'B')
+    })
+
+    // ---------------- ② 逐处裁决（xlsx 逐格 + pptx 逐页，都在裁决总览里做完） ----------------
+    await step('J14-②-准备：B 先改同一格同一页并交稿，A 再改同一格同一页', async () => {
+      await restCreateAt(aApi, QA.projectId, NAME.xlsxOverlap, XLSX_OVERLAP.base)
+      await restCreateAt(aApi, QA.projectId, NAME.pptxOverlap, PPTX_OVERLAP.base)
+      await endSessionAt(aApi, QA.projectId, 'J14 同格表与同页演示的共同上一版')
+      await pushAt(aApi, QA.projectId, 'A')
+      await pullAt(bApi, bProjectId, 'B')
+      await restOverwriteAt(bApi, bProjectId, NAME.xlsxOverlap, XLSX_OVERLAP.other)
+      await restOverwriteAt(bApi, bProjectId, NAME.pptxOverlap, PPTX_OVERLAP.other)
+      await endSessionAt(bApi, bProjectId, '乙也改了首付款金额与第一页')
+      await pushAt(bApi, bProjectId, 'B')
+      await restOverwriteAt(aApi, QA.projectId, NAME.xlsxOverlap, XLSX_OVERLAP.main)
+      await restOverwriteAt(aApi, QA.projectId, NAME.pptxOverlap, PPTX_OVERLAP.main)
+      await endSessionAt(aApi, QA.projectId, '甲改了首付款金额与第一页')
+    })
+
+    await step('J14-②：取回后总览逐份说清「同一格/同一页两边都改了 · 1 处」', async () => {
+      await pullViaUi()
+      const ok = await pollUntil(async () => {
+        const c = await conflictA()
+        const x = mergeRowOf(c, NAME.xlsxOverlap)
+        const p = mergeRowOf(c, NAME.pptxOverlap)
+        return !!x && !!p && x.decision === 'MANUAL' && p.decision === 'MANUAL'
+      }, 60000, 2000)
+      const c = await conflictA()
+      if (!ok) throw new Error('后端没有把这两份判成逐处裁决: ' + JSON.stringify(c && c.documentMerges).slice(0, 400))
+      const x = mergeRowOf(c, NAME.xlsxOverlap)
+      const p = mergeRowOf(c, NAME.pptxOverlap)
+      if (x.kind !== 'XLSX' || x.reason !== 'OVERLAP' || Number(x.overlapCount) !== 1) {
+        throw new Error('表格那一行的判定不对: ' + JSON.stringify(x))
+      }
+      if (p.kind !== 'PPTX' || p.reason !== 'OVERLAP' || Number(p.overlapCount) !== 1) {
+        throw new Error('演示那一行的判定不对: ' + JSON.stringify(p))
+      }
+      await page.waitForSelector('.adopt-dialog', { timeout: 20000 })
+      const notes = await pollUntil(async () => {
+        const list = await visibleTexts('.adopt-dialog .adopt-row-note')
+        return list.includes('同一格两边都改了 · 1 处') && list.includes('同一页两边都改了 · 1 处')
+      }, 30000, 1000)
+      if (!notes) {
+        throw new Error('总览没有逐份说清两边都改了几处，实际可见文案: '
+          + JSON.stringify(await visibleTexts('.adopt-dialog .adopt-row-note')))
+      }
+      await shot('J14-manual-overview')
+    })
+
+    await step('J14-②：逐格裁决——留甲的那一格，确定这一份', async () => {
+      const keys = await pollUntil(async () => {
+        const list = await visibleTexts('.adopt-dialog .merge-cell-key')
+        return list.includes(XLSX_OVERLAP.expected.conflictCellKey)
+      }, 30000, 1000)
+      if (!keys) {
+        throw new Error('逐格清单里没有那一格（期望 ' + XLSX_OVERLAP.expected.conflictCellKey + '），实际: '
+          + JSON.stringify(await visibleTexts('.adopt-dialog .merge-cell-key')))
+      }
+      // 「你的」这一栏在表格那一行的第一个 .merge-cell-pick 上（sideLabel('main')，
+      // 甲就是本机这一侧），点它 = 这一格留甲的、拒绝乙的。
+      const clicked = await page.evaluate((cellKey) => {
+        const rows = [...document.querySelectorAll('.adopt-dialog .merge-cell-row')]
+        const row = rows.find((r) => {
+          const k = r.querySelector('.merge-cell-key')
+          return k && (k.innerText || '').trim() === cellKey
+        })
+        if (!row) return null
+        const pick = row.querySelectorAll('.merge-cell-pick')[0]
+        if (!pick) return null
+        const rect = pick.getBoundingClientRect()
+        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+      }, XLSX_OVERLAP.expected.conflictCellKey)
+      if (!clicked) throw new Error('找不到那一格的「你的」那一栏')
+      await page.mouse.click(clicked.x, clicked.y)
+      await sleep(500)
+      const confirmed = await page.evaluate((name) => {
+        const row = [...document.querySelectorAll('.adopt-dialog .adopt-row')].find((r) => {
+          const n = r.querySelector('.adopt-row-name')
+          return n && (n.innerText || '').trim() === name
+        })
+        if (!row) return null
+        const btn = row.querySelector('.merge-cell-confirm')
+        if (!btn || btn.className.includes('awd-btn-disabled')) return null
+        const rect = btn.getBoundingClientRect()
+        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+      }, NAME.xlsxOverlap)
+      if (!confirmed) throw new Error('「这份就这么定」没有变成可点（这一格还没选边？）')
+      await page.mouse.click(confirmed.x, confirmed.y)
+      const merged = await pollUntil(async () => {
+        const c = await conflictA()
+        const x = mergeRowOf(c, NAME.xlsxOverlap)
+        return !!x && String(x.state).toUpperCase() === 'MERGED'
+      }, 30000, 1000)
+      if (!merged) throw new Error('确定之后后端没有把这一份记成已合好')
+    })
+
+    await step('J14-②：逐页裁决——这一页用律师乙的，确定这一份', async () => {
+      const clicked = await page.evaluate(() => {
+        const rows = [...document.querySelectorAll('.adopt-dialog .merge-cell-row')]
+        const row = rows.find((r) => {
+          const k = r.querySelector('.merge-cell-key')
+          return k && /^第 \d+ 页$/.test((k.innerText || '').trim())
+        })
+        if (!row) return null
+        const pick = row.querySelectorAll('.merge-cell-pick')[1] // 第二栏 = 另一侧（律师乙）
+        if (!pick) return null
+        const rect = pick.getBoundingClientRect()
+        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, side: (pick.querySelector('.merge-cell-side') || {}).innerText }
+      })
+      if (!clicked) throw new Error('逐页清单里没有「第 N 页」那一行')
+      if (!String(clicked.side || '').includes('律师乙')) {
+        throw new Error('第二栏不是律师乙那一侧（两栏的抬头对不上）: ' + JSON.stringify(clicked.side))
+      }
+      await page.mouse.click(clicked.x, clicked.y)
+      await sleep(500)
+      const confirmed = await page.evaluate((name) => {
+        const row = [...document.querySelectorAll('.adopt-dialog .adopt-row')].find((r) => {
+          const n = r.querySelector('.adopt-row-name')
+          return n && (n.innerText || '').trim() === name
+        })
+        if (!row) return null
+        const btn = row.querySelector('.merge-cell-confirm')
+        if (!btn || btn.className.includes('awd-btn-disabled')) return null
+        const rect = btn.getBoundingClientRect()
+        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+      }, NAME.pptxOverlap)
+      if (!confirmed) throw new Error('演示那一份的「这份就这么定」没有变成可点')
+      await page.mouse.click(confirmed.x, confirmed.y)
+      const merged = await pollUntil(async () => {
+        const c = await conflictA()
+        const p = mergeRowOf(c, NAME.pptxOverlap)
+        return !!p && String(p.state).toUpperCase() === 'MERGED'
+      }, 30000, 1000)
+      if (!merged) throw new Error('确定之后后端没有把演示那一份记成已合好')
+      await shot('J14-manual-picked')
+    })
+
+    await step('J14-②：点「就按我选的来」收尾，冲突窗关闭', async () => {
+      await mouseClickText('就按我选的来')
+      const gone = await pollUntil(async () => !(await conflictA()), 40000, 1500)
+      if (!gone) throw new Error('确认之后仓库仍停在冲突态: ' + JSON.stringify(await conflictA()).slice(0, 300))
+      await page.waitForFunction(
+        () => !document.querySelector('.adopt-dialog') && !document.querySelector('.adopt-collapsed-bar'),
+        { timeout: 20000 },
+      )
+    })
+
+    await step('J14-②：历史里那一行是逐处裁决，逐处清单与律师选的一致', async () => {
+      const entry = await latestMergeEntry()
+      if (!entry) throw new Error('历史里没有带合并记录的版本')
+      const x = entry.merges.find((m) => String(m.path || '').endsWith(NAME.xlsxOverlap))
+      const p = entry.merges.find((m) => String(m.path || '').endsWith(NAME.pptxOverlap))
+      if (!x || !p) throw new Error('merges 里没有这两份: ' + JSON.stringify(entry.merges).slice(0, 400))
+      if (x.mode !== 'manual' || p.mode !== 'manual') {
+        throw new Error('不是逐处裁决: ' + JSON.stringify([x, p]).slice(0, 400))
+      }
+      const xd = (x.decisions || []).find((d) => d.key === XLSX_OVERLAP.expected.conflictCellKey)
+      if (!xd || xd.side !== 'M' || xd.action !== 'A') {
+        throw new Error('那一格记的不是「留了甲这边的」: ' + JSON.stringify(x.decisions))
+      }
+      const pd = (p.decisions || []).find((d) => d.key === PPTX_OVERLAP.expected.conflictSlideKey)
+      if (!pd || pd.side !== 'T' || pd.action !== 'A') {
+        throw new Error('那一页记的不是「用了律师乙的」: ' + JSON.stringify(p.decisions))
+      }
+    })
+
+    await step('J14-②：落盘内容与裁决一致（表格留甲的数、演示用乙的页）', async () => {
+      const xlsxText = await textAtHead(NAME.xlsxOverlap)
+      if (!xlsxText.includes(XLSX_OVERLAP.expected.conflictMainText)) {
+        throw new Error('表格那一格不是甲的数: ' + JSON.stringify(xlsxText.slice(0, 300)))
+      }
+      if (xlsxText.includes(XLSX_OVERLAP.expected.conflictOtherText)) {
+        throw new Error('表格那一格还留着乙的数（裁决没生效）: ' + JSON.stringify(xlsxText.slice(0, 300)))
+      }
+      // 没被问到的那两格（各自只有一边动过）仍要自动合入，不能因为进了裁决界面就丢
+      if (!xlsxText.includes(XLSX_OVERLAP.expected.otherCellText)) {
+        throw new Error('乙那一格只有他动过，不该被裁决界面吃掉: ' + JSON.stringify(xlsxText.slice(0, 300)))
+      }
+      const pptxText = await textAtHead(NAME.pptxOverlap)
+      if (!pptxText.includes(PPTX_OVERLAP.expected.otherText)) {
+        throw new Error('演示那一页不是乙的内容: ' + JSON.stringify(pptxText.slice(0, 300)))
+      }
+      await pushAt(aApi, QA.projectId, 'A')
+      await pullAt(bApi, bProjectId, 'B')
+    })
+
+    // ---------------- ③ 逐段溯源 ----------------
+    // 光标条与侧栏「溯源」标签要真引擎才显示得出来（见段首覆盖边界），这里验的是
+    // 它们读的那条数据：这一段最后是谁、哪一版改的。
+    await step('J14-③-准备：只有律师乙动过的一份合同，甲取回（不冲突）', async () => {
+      const proveName = 'J14溯源合同.docx'
+      await restCreateAt(aApi, QA.projectId, proveName, DOCX_CLEAN.base)
+      await endSessionAt(aApi, QA.projectId, '甲起草了溯源合同')
+      await pushAt(aApi, QA.projectId, 'A')
+      await pullAt(bApi, bProjectId, 'B')
+      await restOverwriteAt(bApi, bProjectId, proveName, DOCX_CLEAN.other)
+      await endSessionAt(bApi, bProjectId, '乙核对了溯源合同的期限条款')
+      await pushAt(bApi, bProjectId, 'B')
+      const pulled = await pullAt(aApi, QA.projectId, 'A')
+      if (pulled && pulled.status === 'CONFLICT') {
+        throw new Error('只有一边动过却撞了冲突: ' + JSON.stringify(pulled).slice(0, 200))
+      }
+      // 溯源出参读的是 CloudSyncService.remoteDisplayNames(projectId, **false**)——
+      // 只认缓存、绝不联网。那张字典由「真去案件库取一趟参与人表」的路径落缓存
+      // （proxyMembers 顺手 cacheRemoteDisplayNames），所以这里显式请一次参与人表预热。
+      // 拿 /cloud/status 预热是不可靠的：它只在 remoteAhead 为真时才走 allowFetch=true
+      // 那条路，A 刚取回完 remoteAhead 恰好是假。
+      const warm = await api('/api/cloud/projects/' + QA.projectId + '/members')
+      const warmed = (warm && warm.data && warm.data.members) || []
+      if (warmed.length < 2) {
+        throw new Error('没取到案件库参与人表，溯源署名无从翻译: ' + String(JSON.stringify(warm)).slice(0, 300))
+      }
+    })
+
+    await step('J14-③：溯源逐段给出「最后改这一段的是谁、哪一版」', async () => {
+      const files = await api('/api/projects/' + QA.projectId + '/files')
+      const f = (Array.isArray(files) ? files : []).find((x) => x.name === 'J14溯源合同.docx')
+      if (!f) throw new Error('找不到溯源用的那份合同')
+      let data = null
+      const ready = await pollUntil(async () => {
+        const r = await api('/api/projects/' + QA.projectId + '/version/provenance?fileId=' + f.id + '&ref=HEAD')
+        data = (r && r.data) || {}
+        return !data.computing && Array.isArray(data.units) && data.units.length > 0
+      }, 60000, 3000)
+      if (!ready) throw new Error('溯源没算出来: ' + JSON.stringify(data).slice(0, 300))
+      const byKey = {}
+      for (const u of data.units) byKey[u.key] = u
+      // p20 是乙改过的那一段（夹具 OTHER_EDITS 的第一条）
+      const changed = byKey.p20
+      if (!changed) throw new Error('溯源结果里没有第 20 段: ' + JSON.stringify(data.units.slice(0, 3)))
+      if (changed.self !== false) throw new Error('乙改的那一段被算成了本人: ' + JSON.stringify(changed))
+      if (changed.authorName !== '律师乙') {
+        throw new Error('乙改的那一段署名不是案件库展示名「律师乙」，而是 '
+          + JSON.stringify(changed.authorName) + '：' + JSON.stringify(changed))
+      }
+      // 标题**不写死成那段工作的名字**：改动信号先落成一条自动存档、还是被随后的结束工作
+      // 收进工作段提交，取决于防抖窗口有没有先到（本轮实测两种都出现过）。产品口径两种都对
+      // ——光标条在自动存档那一档就显示「自动存档」。所以这里断的是「挂上了一版真实的版本
+      // 记录」：标题非空、类型分类器给得出类型、而且这一版在历史里确实署着律师乙。
+      if (!String(changed.title || '').trim()) {
+        throw new Error('那一段没有挂上任何版本标题: ' + JSON.stringify(changed))
+      }
+      if (!String(changed.type || '').trim()) {
+        throw new Error('那一段没有版本类型（HistoryTypeClassifier 没跑）: ' + JSON.stringify(changed))
+      }
+      const hist = await api('/api/projects/' + QA.projectId + '/version/history?limit=60&includeAuto=true')
+      const rows = (hist && hist.data && hist.data.entries) || []
+      const attributed = rows.find((e) => e.sha === changed.sha)
+      if (!attributed) {
+        throw new Error('那一段挂的那一版不在提交历史里: ' + JSON.stringify(changed))
+      }
+      if (attributed.authorName !== '律师乙') {
+        throw new Error('那一版在提交历史里的署名不是律师乙: ' + JSON.stringify(attributed).slice(0, 300))
+      }
+      // 没人动过的段落仍归甲自己那一侧（标题同样不写死，理由见上一条）
+      const untouched = byKey.p0
+      if (!untouched || untouched.self !== true || !String(untouched.title || '').trim()) {
+        throw new Error('没被改过的段落没有继承甲自己那一版: ' + JSON.stringify(untouched))
+      }
+      if (changed.sha === untouched.sha) {
+        throw new Error('改过与没改过的两段挂到了同一版，溯源没有逐段区分: ' + JSON.stringify([changed, untouched]))
+      }
+      note('info', 'J14 溯源：第 20 段 → ' + changed.authorName + ' · ' + changed.title
+        + '（' + changed.type + ' ' + changed.shortId + '）；第 0 段 → '
+        + untouched.authorName + ' · ' + untouched.title + '（' + untouched.type + ' ' + untouched.shortId + '）')
+    })
+
+    // ---------------- ④ docx 段落级判定 + pdf 整份口径 ----------------
+    // 这一轮**刻意放在最后**：它以「先不取回」中止收场，A 会停在比案件库落后一版的
+    // 状态上，后面再有需要 A 交稿的轮次就会连带撞上这一轮造出来的冲突。
+    await step('J14-④-准备：两份 docx（只改不同段 / 改同一段）与一份 pdf', async () => {
+      await restCreateAt(aApi, QA.projectId, NAME.docxClean, DOCX_CLEAN.base)
+      await restCreateAt(aApi, QA.projectId, NAME.docxOverlap, DOCX_OVERLAP.base)
+      await restCreateAt(aApi, QA.projectId, NAME.pdf, pdfBytes('base'))
+      await endSessionAt(aApi, QA.projectId, 'J14 合同与扫描件的共同上一版')
+      await pushAt(aApi, QA.projectId, 'A')
+      await pullAt(bApi, bProjectId, 'B')
+      await restOverwriteAt(bApi, bProjectId, NAME.docxClean, DOCX_CLEAN.other)
+      await restOverwriteAt(bApi, bProjectId, NAME.docxOverlap, DOCX_OVERLAP.other)
+      await restOverwriteAt(bApi, bProjectId, NAME.pdf, pdfBytes('乙'))
+      await endSessionAt(bApi, bProjectId, '乙改了合同与扫描件')
+      await pushAt(bApi, bProjectId, 'B')
+      await restOverwriteAt(aApi, QA.projectId, NAME.docxClean, DOCX_CLEAN.main)
+      await restOverwriteAt(aApi, QA.projectId, NAME.docxOverlap, DOCX_OVERLAP.main)
+      await restOverwriteAt(aApi, QA.projectId, NAME.pdf, pdfBytes('甲'))
+      await endSessionAt(aApi, QA.projectId, '甲改了合同与扫描件')
+    })
+
+    await step('J14-④：段落级判定——只改不同段的判自动、改同一段的判逐处、pdf 只能整份', async () => {
+      await pullViaUi()
+      const ok = await pollUntil(async () => {
+        const c = await conflictA()
+        return !!mergeRowOf(c, NAME.docxOverlap) && !!mergeRowOf(c, NAME.pdf)
+      }, 60000, 2000)
+      const c = await conflictA()
+      if (!ok) throw new Error('取回之后没有拿到逐份分析: ' + JSON.stringify(c).slice(0, 400))
+      const clean = mergeRowOf(c, NAME.docxClean)
+      const overlap = mergeRowOf(c, NAME.docxOverlap)
+      const pdf = mergeRowOf(c, NAME.pdf)
+      if (!clean || clean.kind !== 'DOCX' || clean.decision !== 'AUTO' || clean.reason !== 'CLEAN') {
+        throw new Error('只改不同段的 docx 没被判成自动合并: ' + JSON.stringify(clean))
+      }
+      if (Number(clean.mainChanges) !== DOCX_CLEAN.expected.mainEditCount) {
+        throw new Error('甲改的处数不对（期望 ' + DOCX_CLEAN.expected.mainEditCount + '）: ' + JSON.stringify(clean))
+      }
+      if (!overlap || overlap.decision !== 'MANUAL' || overlap.reason !== 'OVERLAP'
+          || Number(overlap.overlapCount) !== 1) {
+        throw new Error('改同一段的 docx 没被判成逐处裁决 1 处: ' + JSON.stringify(overlap))
+      }
+      if (!pdf || pdf.kind !== 'WHOLE' || pdf.reason !== 'BINARY') {
+        throw new Error('pdf 没被判成整份二选一: ' + JSON.stringify(pdf))
+      }
+    })
+
+    await step('J14-④：「同一段两边都改了」那一处的三栏文字就是两位律师各自写的那句', async () => {
+      const r = await api('/api/projects/' + QA.projectId + '/version/merge/analysis?path='
+        + encodeURIComponent(NAME.docxOverlap))
+      const a = (r && r.data) || {}
+      const ov = (a.overlaps || [])[0]
+      if (!ov) throw new Error('分析里没有重叠那一处: ' + JSON.stringify(a).slice(0, 300))
+      if (ov.key !== 'p' + DOCX_OVERLAP.expected.conflictParaKey) {
+        throw new Error('重叠的不是夹具那一段: ' + JSON.stringify(ov).slice(0, 300))
+      }
+      if (ov.baseText !== DOCX_OVERLAP.expected.conflictBaseText
+          || ov.mainText !== DOCX_OVERLAP.expected.conflictMainText
+          || ov.otherText !== DOCX_OVERLAP.expected.conflictOtherText) {
+        throw new Error('三栏文字与夹具对不上: ' + JSON.stringify(ov).slice(0, 400))
+      }
+    })
+
+    await step('J14-④：总览上 docx 给「打开合并比对稿」、pdf 给整份选择的原因句', async () => {
+      await page.waitForSelector('.adopt-dialog', { timeout: 20000 })
+      const ok = await pollUntil(async () => {
+        const notes = await visibleTexts('.adopt-dialog .adopt-row-note')
+        return notes.includes('同一段两边都改了 · 1 处')
+          && notes.includes('PDF 与图片没有可比对的段落，只能整份选择')
+      }, 30000, 1000)
+      if (!ok) {
+        throw new Error('总览没有同时给出这两句，实际可见文案: '
+          + JSON.stringify(await visibleTexts('.adopt-dialog .adopt-row-note')))
+      }
+      const actions = await visibleTexts('.adopt-dialog .adopt-row-action')
+      if (!actions.includes('打开合并比对稿')) {
+        throw new Error('改同一段的 docx 没有给「打开合并比对稿」的入口: ' + JSON.stringify(actions))
+      }
+      // pdf 那一行仍然是原来的整份三选一（只有这类行才该有单选项）
+      const labels = await visibleTexts('.adopt-dialog .radio-label')
+      if (!labels.includes('留我这份') || !labels.includes('用同事那份')) {
+        throw new Error('pdf 那一行没有整份三选一: ' + JSON.stringify(labels))
+      }
+      await shot('J14-docx-and-pdf-rows')
+    })
+
+    await step('J14-④：点「先不取回」把这次合并整个中止，仓库回到干净态', async () => {
+      await mouseClickText('先不取回')
+      const gone = await pollUntil(async () => !(await conflictA()), 40000, 1500)
+      if (!gone) throw new Error('中止之后仓库仍停在冲突态: ' + JSON.stringify(await conflictA()).slice(0, 300))
+    })
+
+    note('skip', 'J14 未覆盖：docx 的自动合并执行与合并比对稿标签页逐处裁决——都要真 LOWA 引擎，'
+      + '浏览器目标（dev:h5，无 COOP/COEP、无 dist/zetaoffice）起不来，由 lowa-e2e 组 34 覆盖')
+  }
+
 } finally {
   await browser.close()
   // 清理：删除本次运行的 QA 项目（账号无删除接口，qa_bot_* 会留存，可在管理页清）
