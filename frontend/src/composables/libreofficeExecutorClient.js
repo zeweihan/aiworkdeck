@@ -38,6 +38,9 @@ export const EDITOR_ACTIONS = [
   // [spike/IME] implemented by the worker since Phase B but never whitelisted
   // (found by the primitive self-test: "Unknown action: move_cursor").
   'move_cursor', 'delete_backward', 'delete_forward', 'insert_paragraph', 'get_cursor_rect',
+  // [overlay Tab] 表格里跳格 / 正文里插制表符——判定在 worker（宿主不知道光标属于
+  // 哪个 story）。宿主发起，不是 AI 管线。
+  'tab_key',
   // [overlay 快捷键] desktop-parity keys (Cmd/Ctrl+A/B/I/U, Home/End) — the
   // worker holds the .uno: allowlist (UI_COMMANDS in office_thread.js).
   'ui_command',

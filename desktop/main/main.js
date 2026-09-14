@@ -554,6 +554,11 @@ function createMainWindow() {
   // 监听渲染层内的 copy/cut（编辑器/页面内复制等），统一推送给前端入库
   attachCopyListener(mainWindow.webContents, 'renderer')
 
+  // ⌘R 在 Writer 里是「右对齐」，整页重载会把工作台所有标签连同未落盘的改动一起
+  // 关掉（dev-board#628）。菜单那一侧已经摘掉了 role 自带的加速键，这里是兜底；
+  // 只挂顶层，编辑器 <webview> 的按键不经过它，理由见 reload-guard.js。
+  require('./reload-guard').attachReloadGuard(mainWindow.webContents, { packaged: app.isPackaged })
+
   // Handle file downloads: ensure "Safe As" dialog appears
   attachDownloadListener(mainWindow.webContents.session)
 

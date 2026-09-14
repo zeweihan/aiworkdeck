@@ -53,15 +53,16 @@ try {
   await exec('ui_command', { name: 'select_all' })
   const popupClip = { x: 165, y: 130, width: 305, height: 90 }
   const unobstructed = await page.screenshot({ clip: popupClip })
-  // 真鼠标右键落在已选中的第一行，验证引擎输入转发不会吞掉选区菜单。
+  // 真鼠标右键落在已选中的第一行：worker 的 XContextMenuInterceptor 取消
+  // Writer 自己的弹窗（#601），HTML 菜单不必、也不许再合成 Escape 去关它。
   await page.mouse.click(160, 232, { button: 'right' })
   await page.waitForFunction(() => [...document.querySelectorAll('.awd-wa-panel button')].some(b => b.textContent === '查询机构工商信息'))
   await page.evaluate(() => [...document.querySelectorAll('.awd-wa-panel button')].find(b => b.textContent === '查询机构工商信息').click())
   await page.waitForSelector('.awd-wa-panel table')
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
-  assert.deepEqual(await page.screenshot({ clip: popupClip }), unobstructed, 'Qt popup is dismissed instead of remaining behind the writing preview')
-  assert.equal(await page.evaluate(() => window.__writingNativeEscapes), 1)
-  assert.deepEqual(await exec('get_selection'), { success: true, text: '北京当红晴天律师事务所', hasSelection: true }, 'closing the Qt popup preserves the original selection')
+  assert.deepEqual(await page.screenshot({ clip: popupClip }), unobstructed, 'the worker suppressed Qt popup never opens behind the writing preview')
+  assert.equal(await page.evaluate(() => window.__writingNativeEscapes), 0, 'the host menu no longer synthesises Escape into the canvas (#601)')
+  assert.deepEqual(await exec('get_selection'), { success: true, text: '北京当红晴天律师事务所', hasSelection: true }, 'opening the host menu preserves the original selection')
   assert.equal(await text(), '北京当红晴天律师事务所', 'querying and previewing do not insert content')
   assert.equal(await page.evaluate(() => window.__writingRequests.filter(m => m.action === 'lookup').length), 1)
   await page.screenshot({ path: '/tmp/awd-538-writing-preview.png' })
@@ -84,7 +85,7 @@ try {
     if (!nativeMenu.equals(normalBackground)) break
     await new Promise(resolve => setTimeout(resolve, 50))
   }
-  assert.equal(await page.evaluate(() => window.__writingNativeEscapes), 1, 'ordinary right-click without a selection does not dismiss Qt menus')
+  assert.equal(await page.evaluate(() => window.__writingNativeEscapes), 0, 'no right-click path synthesises an Escape into the canvas')
   assert.notDeepEqual(nativeMenu, normalBackground, 'ordinary native context menu remains visible')
   await page.screenshot({ path: '/tmp/awd-538-writing-native-menu.png' })
   console.log('PASS: real IME → local menu → arrows/Tab → undo; explicit right-click lookup → preview → table → export → undo; no automatic external lookup')

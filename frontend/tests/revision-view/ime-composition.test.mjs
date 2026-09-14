@@ -227,3 +227,10 @@ test('a new composition after an early confirm commits its own phrase once', t =
   f.composition('compositionend', '资料')
   assert.deepEqual(f.commits, ['文件', '资料'])
 })
+
+test('the overlay input is opacity 0, not merely transparent text (dev-board#606)', t => {
+  const f = fixture(t)
+  assert.equal(f.input.style.opacity, '0', 'color/caretColor transparent does not hide the IME composition marker the browser paints')
+  assert.notEqual(f.input.style.visibility, 'hidden', 'hiding it that way would drop focus and the IME with it')
+  assert.notEqual(f.input.style.display, 'none')
+})

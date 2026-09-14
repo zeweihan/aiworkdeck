@@ -44,7 +44,16 @@ function harness() {
     app, BrowserWindow: Window, clipboard, path, console,
     process: { platform: 'darwin', env: {} }, __dirname: path.join(__dirname, '../main'),
     screen: { getPrimaryDisplay: () => ({ workAreaSize: { width: 1400, height: 900 } }) },
-    require: name => { assert.equal(name, './services/win-arch'); return { isWinArmEmulated: () => false } },
+    require: name => {
+      // 建窗那段里现场 require 的模块只有这两个；来了别的就当场报死，
+      // 免得新依赖悄悄混进建窗路径还没人知道。
+      const stubs = {
+        './services/win-arch': { isWinArmEmulated: () => false },
+        './reload-guard': { attachReloadGuard: () => true },
+      }
+      assert.ok(name in stubs, 'createMainWindow 里多了一个没桩的 require: ' + name)
+      return stubs[name]
+    },
     setInterval: fn => { intervals.push(fn); return intervals.length }, clearInterval: () => {},
     views: { layoutAll() {} }, restoreViewsVisibility() {}, syncOcrSelectWinBounds() {},
     attachCopyListener() {}, attachDownloadListener() {}, attachAvatarCorpRelaxation() {},

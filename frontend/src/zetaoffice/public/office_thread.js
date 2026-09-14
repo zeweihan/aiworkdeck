@@ -90,7 +90,11 @@ function anchorBookmark(range) {
   const name = ANCHOR_PREFIX + (++anchorSeq);
   const bm = xModel.createInstance('com.sun.star.text.Bookmark');
   bm.setName(name);
-  xModel.getText().insertTextContent(range, bm, true); // bAbsorb: bookmark spans the range
+  // 与 insertTextAtCursor 同一条纪律（dev-board#627）：书签必须插进 range 自己所属的
+  // XText。正文 XText 只接受属于自己的区间，range 在表格单元格（或页眉/脚注等别的
+  // story）里时 body.insertTextContent(range,…) 抛 RuntimeException，find_text_locations
+  // 的 anchorId 就成了 null，AI 的 set_selection / replace_at_position 在表格里够不着。
+  range.getText().insertTextContent(range, bm, true); // bAbsorb: bookmark spans the range
   return name;
 }
 function anchorRange(name) {
@@ -550,8 +554,13 @@ function commentIdOf(f) {
 // XText.insertString does NOT split paragraphs on '\n' (verified against the
 // real engine: a multi-line insert landed as ONE paragraph), so multi-paragraph
 // inserts must interleave insertControlCharacter(PARAGRAPH_BREAK).
+// 写入必须走**光标自己所属的 XText**（vc.getText()），不是 xModel.getText()。
+// 正文 XText 只接受属于自己的区间：光标在表格单元格（或页眉/脚注等别的 story）
+// 里时，body.insertString(vc,…) 抛 RuntimeException，IME 提交与粘贴就整条静默
+// 失败——「表格里打不进字」的病灶（dev-board#627）。insertInlineStyled 一直是
+// 这么写的，所以带 markdown 标记的插入在单元格里反而是好的。
 function insertTextAtCursor(vc, text) {
-  const xText = xModel.getText();
+  const xText = vc.getText();
   const parts = String(text).split('\n');
   for (let i = 0; i < parts.length; i++) {
     if (i > 0) xText.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
@@ -1230,6 +1239,14 @@ function currentTextTable(p) {
     if (t) return t;
   } catch (e) {}
   return null;
+}
+// 视图光标所在单元格名（如 "B1"）；不在表格里返回 ''。
+function viewCursorCellName() {
+  try {
+    const cell = ctrl.getViewCursor().getPropertyValue('Cell');
+    if (cell) return String(cell.getPropertyValue('CellName') || '');
+  } catch (e) {}
+  return '';
 }
 // 单元格名工具（A1..Z9、AA1..）：markdown 表格列数很小，两位字母够用。
 function cellName(col, row) {
@@ -2497,9 +2514,10 @@ function testPerf(pages) {
 function testInsertText(text) {
   try {
     const t = text || '中文渲染测试 中華人民共和國 ABC 123';
-    const xText = xModel.getText();
     let vc = null;
     try { vc = ctrl.getViewCursor(); } catch {}
+    // 写光标要用光标自己的 XText（dev-board#627）：正文 XText 写不了单元格里的光标。
+    const xText = vc ? vc.getText() : xModel.getText();
     if (vc) {
       // NOT setString(): that REPLACES the cursor's range and leaves the inserted
       // text SELECTED, so the next insert overwrites it (reported bug). Use
@@ -3326,9 +3344,9 @@ const EXEC = {
   // the IME overlay routes here — the overlay's single-line <input> can't make a
   // newline itself). Append, leave cursor collapsed after the break.
   insert_paragraph() {
-    const xText = xModel.getText();
     const vc = ctrl.getViewCursor();
     vc.collapseToEnd();
+    const xText = vc.getText();   // 同 insertTextAtCursor：单元格里必须用光标自己的 XText
     xText.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
     vc.collapseToEnd();
     return { success: true };
@@ -3366,6 +3384,25 @@ const EXEC = {
   delete_forward() {
     dispatchUno('.uno:Delete');
     return { success: true };
+  },
+  // Tab / Shift+Tab（IME 覆盖层转发的唯一 Tab 动作）。Word/Writer 语义：光标在
+  // 表格里 = 跳到下一格/上一格，正文里才插制表符。判定必须在 worker 做——宿主
+  // 拿不到光标属于哪个 story（dev-board#627 的次生问题：#627 之前覆盖层无条件
+  // 插制表符，在单元格里因 RuntimeException 静默失败＝看着像没反应；改用
+  // vc.getText() 之后它会真插进去，修订态下还多一条修订）。
+  tab_key(p) {
+    const shift = !!(p && p.shift);
+    const vc = ctrl.getViewCursor();
+    let cell = null;
+    try { cell = vc.getPropertyValue('Cell'); } catch (e) {}
+    if (!cell) {
+      vc.collapseToEnd();
+      insertTextAtCursor(vc, '\t');
+      vc.collapseToEnd();
+      return Object.assign({ success: true, inTable: false, inserted: '\t' }, verifySnapshot());
+    }
+    dispatchUno(shift ? '.uno:JumpToPrevCell' : '.uno:JumpToNextCell');
+    return { success: true, inTable: true, shift: shift, cell: viewCursorCellName() };
   },
   // Overlay shortcut keys (Cmd/Ctrl+A/B/I/U, Home/End) — see UI_COMMANDS.
   ui_command(p) {
@@ -7523,6 +7560,9 @@ const EXEC = {
   clear_anchors() {
     const bms = xModel.getBookmarks();
     const names = (bms.getElementNames && bms.getElementNames()) || [];
+    // 摘除与插入不同源：removeTextContent 本引擎实测容得下别的 story 的书签
+    // （单元格锚点用正文 XText 照样摘得掉，table-retype 的锚点组守着），
+    // 所以这里保留 xModel.getText()，不跟着 anchorBookmark 一起改。
     const xText = xModel.getText();
     let n = 0;
     for (let i = 0; i < names.length; i++) {
