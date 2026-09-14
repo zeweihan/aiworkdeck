@@ -139,4 +139,138 @@ final class MergeFixtures {
             throw new IllegalStateException(e);
         }
     }
+
+    /** 多张工作表的 xlsx；外层键是表名，内层是 {@code A1 -> 值}（{@code =} 开头写成公式）。 */
+    static byte[] xlsxSheets(Map<String, Map<String, String>> sheets) {
+        try (XSSFWorkbook wb = new XSSFWorkbook(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            for (Map.Entry<String, Map<String, String>> s : sheets.entrySet()) {
+                fill(wb.createSheet(s.getKey()), s.getValue(), null, null);
+            }
+            wb.write(out);
+            return out.toByteArray();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** 单张工作表，{@code boldKeys} 里的格子带加粗样式——用来验合并后样式还在。 */
+    static byte[] xlsxBold(String sheetName, Map<String, String> cells, java.util.Set<String> boldKeys) {
+        try (XSSFWorkbook wb = new XSSFWorkbook(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            org.apache.poi.ss.usermodel.CellStyle bold = wb.createCellStyle();
+            org.apache.poi.ss.usermodel.Font font = wb.createFont();
+            font.setBold(true);
+            bold.setFont(font);
+            fill(wb.createSheet(sheetName), cells, boldKeys, bold);
+            wb.write(out);
+            return out.toByteArray();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static void fill(Sheet sheet, Map<String, String> cells, java.util.Set<String> styled,
+                             org.apache.poi.ss.usermodel.CellStyle style) {
+        for (Map.Entry<String, String> e : cells.entrySet()) {
+            org.apache.poi.ss.util.CellReference ref = new org.apache.poi.ss.util.CellReference(e.getKey());
+            Row row = sheet.getRow(ref.getRow());
+            if (row == null) {
+                row = sheet.createRow(ref.getRow());
+            }
+            Cell cell = row.createCell(ref.getCol());
+            if (e.getValue().startsWith("=")) {
+                cell.setCellFormula(e.getValue().substring(1));
+            } else {
+                cell.setCellValue(e.getValue());
+            }
+            if (styled != null && styled.contains(e.getKey())) {
+                cell.setCellStyle(style);
+            }
+        }
+    }
+
+    /** 把 pptx 每一页的 {@code <p:sldId id>} 改写成给定的值——模拟「导出件不保留 sldId」。 */
+    static byte[] withSlideIds(byte[] pptx, long... ids) {
+        try (XMLSlideShow show = new XMLSlideShow(new java.io.ByteArrayInputStream(pptx));
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            org.openxmlformats.schemas.presentationml.x2006.main.CTSlideIdList list =
+                    show.getCTPresentation().getSldIdLst();
+            for (int i = 0; i < ids.length && i < list.sizeOfSldIdArray(); i++) {
+                list.getSldIdArray(i).setId(ids[i]);
+            }
+            show.write(out);
+            return out.toByteArray();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** 改写某一页的标题与正文（0 基页序）。 */
+    static byte[] editSlide(byte[] pptx, int index, String title, String body) {
+        try (XMLSlideShow show = new XMLSlideShow(new java.io.ByteArrayInputStream(pptx));
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            XSLFTextShape[] placeholders = show.getSlides().get(index).getPlaceholders();
+            placeholders[0].setText(title);
+            placeholders[1].setText(body);
+            show.write(out);
+            return out.toByteArray();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** 删掉某一页（0 基页序）。 */
+    static byte[] removeSlide(byte[] pptx, int index) {
+        try (XMLSlideShow show = new XMLSlideShow(new java.io.ByteArrayInputStream(pptx));
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            show.removeSlide(index);
+            show.write(out);
+            return out.toByteArray();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** 在末尾追加一页。 */
+    static byte[] appendSlide(byte[] pptx, String title, String body) {
+        try (XMLSlideShow show = new XMLSlideShow(new java.io.ByteArrayInputStream(pptx));
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            XSLFSlideLayout layout = show.getSlideMasters().get(0).getLayout(SlideLayout.TITLE_AND_CONTENT);
+            XSLFSlide slide = show.createSlide(layout);
+            XSLFTextShape[] placeholders = slide.getPlaceholders();
+            placeholders[0].setText(title);
+            placeholders[1].setText(body);
+            show.write(out);
+            return out.toByteArray();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** 读出每一页的「标题 + 正文」文本，断言用。 */
+    static List<String> slideTexts(byte[] pptx) {
+        try {
+            List<Slide> slides = PptxSlideReader.read(pptx);
+            List<String> texts = new java.util.ArrayList<>();
+            for (Slide slide : slides) {
+                texts.add(slide.text());
+            }
+            return texts;
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** 读出每一页的标题，断言页序用。 */
+    static List<String> slideTitles(byte[] pptx) {
+        try {
+            List<Slide> slides = PptxSlideReader.read(pptx);
+            List<String> titles = new java.util.ArrayList<>();
+            for (Slide slide : slides) {
+                titles.add(slide.title());
+            }
+            return titles;
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
 }
