@@ -148,6 +148,7 @@ export default {
   // 零 Git 术语：没有 merge/conflict/hunk，只有「合并」「同一段两边都改了」「逐处」。
   conflictHintMerge: '下面这些文件两边都改过。能自动合到一起的已经替你合好了，剩下的请逐份处理：',
   mergeAutoRunning: '正在合并同事的改动…',
+  mergeAutoRunningElapsed: '正在合并同事的改动…（已等 {seconds} 秒）',
   mergeRowMerged: '已合并：{main}改的 {mainCount} 处、{other}改的 {otherCount} 处',
   mergeRowManualDocx: '同一段两边都改了 · {count} 处',
   mergeRowManualXlsx: '同一格两边都改了 · {count} 处',

@@ -40,6 +40,7 @@ export function useDocumentMerge(deps) {
     rows: [],
     // 有没有文件正在自动合并中（顶栏协作 chip 据此显示「正在合并同事的改动…」）
     running: false,
+    startedAt: 0,
     ctx: null,
     sides: {},
   })
@@ -231,6 +232,7 @@ export function useDocumentMerge(deps) {
 
     if (pending.length) {
       state.running = true
+      state.startedAt = Date.now()
       try {
         for (const row of pending) {
           const key = String(otherRef || '') + '|' + row.path
