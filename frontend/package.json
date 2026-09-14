@@ -56,6 +56,7 @@
     "test:lowa-generated": "node tests/lowa-e2e/generated-docx.mjs",
     "test:lowa-reply": "node tests/lowa-e2e/reply-insertion.mjs",
     "test:lowa-table-retype": "node tests/lowa-e2e/table-retype.mjs",
+    "test:lowa-context-menu": "node tests/lowa-e2e/context-menu.mjs",
     "test:lowa-big": "LOWA_E2E_BIG=1 node tests/lowa-e2e/big-doc.mjs",
     "test:app-e2e": "node tests/app-e2e/run.mjs",
     "test:desktop-e2e": "node tests/desktop-e2e/run.mjs",
