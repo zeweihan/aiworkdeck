@@ -255,6 +255,20 @@ PR#797 当时只改了 `VersionController`，自动存档（`ProjectFileService.
 原值 SHA-256 前 6 位**，不是逐字换 `-`：后者会让所有三字中文名都变成 `---@local.…`，
 把两个同事判成同一个人。名字一律走 `UserService.signatureName`。
 
+**署名的「写入」与「显示」是两件事，出参侧再翻一道**（2026-09-14 收尾）：写进 Git 的作者名是
+`UserService.signatureName`，也就是**提交那台机器上的本机展示名**——单机模式下那是哨兵「本机用户」，
+于是两个不同的同事在提交历史里显示成同一个人，而同一屏的协作事件行（「律师乙 交了稿」）取的是
+案件库账户的展示名，一屏两种叫法。修法只动出参：邮箱是 `xxx@collab.aiworkdeck.local` 时，
+拿 `xxx`（案件库账号名）去案件库参与人表换展示名，**命中才换、未命中原样保留 git 署名、本人那一行
+不走特例**。唯一入口 `VersionAuthorResolver.preferredAuthorName(entry, remoteNames)` +
+`collabUsernameOf(email)`；字典由 `CloudSyncService.remoteDisplayNames(projectId, allowFetch)` 提供
+（按项目的内存缓存，TTL 10 分钟，**空表也缓存**——案件库连不上时不能让每次 120 秒轮询都重试一趟；
+`proxyMembers`/`ensureRemoteUserId` 拿到成员表时顺手回填）。**`allowFetch` 只有 `describeRemoteAhead`
+传 true**（案件库确实领先了、这句话非说清是谁不可），`/history`、`/timeline`、`/drafts/{id}/timeline`
+一律传 false——读列表不该为一个名字卡在一次网络请求上。`VersionEntry.withAuthorName` 只在出参侧用，
+Git 对象一字节不碰（历史永不重写，地雷 #1）。**`self` 仍然只按邮箱判，不受这道翻译影响**：
+护栏 `HistoryEndpointTest.remoteDisplayNamesReplaceTheGitSignature` 同时断言换名之后 self 不变。
+
 **`X-AWD-Resolutions` 尾注**（`ProjectRepoService`）：冲突裁决的结果写进提交消息，
 格式 `<path>=<MAIN|DRAFT|BOTH>; ...`，按路径排序（同一次裁决在任何机器上生成同一行文本）。
 只编码会破坏这一行的五个字符（`%` 必须**第一个**换，否则二次编码；`;` `=` `\r` `\n`），

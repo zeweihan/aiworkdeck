@@ -292,7 +292,7 @@ public class VersionController {
         } else {
             entries = repoService.log(projectId, "HEAD", limit);
         }
-        return ok(Map.of("versions", entries));
+        return ok(Map.of("versions", withRemoteNames(projectId, entries)));
     }
 
     @GetMapping("/versions/{sha}/changes")
@@ -345,9 +345,10 @@ public class VersionController {
         ProjectRepoService.HistoryPage page =
                 repoService.history(projectId, historyRoots(projectId), query);
 
+        Map<String, String> remoteNames = remoteDisplayNames(projectId);
         List<Map<String, Object>> entries = new ArrayList<>(page.rows().size());
         for (ProjectRepoService.HistoryRow row : page.rows()) {
-            entries.add(entryData(projectId, userId, row));
+            entries.add(entryData(projectId, userId, row, remoteNames));
         }
 
         data.put("enabled", true);
@@ -427,7 +428,8 @@ public class VersionController {
 
     /** 一行历史的完整形状。字段与 spec §2.4 的表逐条对应，前端不再二次推导。 */
     private Map<String, Object> entryData(long projectId, Long userId,
-                                          ProjectRepoService.HistoryRow row) {
+                                          ProjectRepoService.HistoryRow row,
+                                          Map<String, String> remoteNames) {
         VersionEntry e = row.entry();
         Map<String, Object> m = new HashMap<>();
         m.put("sha", e.sha());
@@ -435,7 +437,9 @@ public class VersionController {
         // title 是律师看的那一句：工作段有自己的名字（X-AWD-Note）就用它，否则用提交标题
         m.put("title", e.note() != null && !e.note().isBlank() ? e.note() : e.message());
         m.put("message", e.message());
-        m.put("authorName", e.authorName());
+        // 署名翻译成案件库账户的展示名（命中才换）——git 署名是对方那台机器的本机展示名，
+        // 单机模式下人人都叫「本机用户」。self 仍然按邮箱判，不受这一步影响。
+        m.put("authorName", VersionAuthorResolver.preferredAuthorName(e, remoteNames));
         m.put("authorEmail", e.authorEmail());
         m.put("self", isSelf(e, projectId, userId));
         m.put("when", e.when());
@@ -458,6 +462,32 @@ public class VersionController {
                 "added", c.added(), "modified", c.modified(),
                 "deleted", c.deleted(), "renamed", c.renamed()));
         return m;
+    }
+
+    /**
+     * 案件库那边的「账号名 → 展示名」。读列表一律不许联网（allowFetch=false）：
+     * 缓存里有就用，没有就保持 git 署名——为一个名字让时间线卡在一次网络请求上不值当。
+     * 缓存由云端状态轮询与参与人面板顺手喂（见 CloudSyncService.remoteDisplayNames）。
+     */
+    private Map<String, String> remoteDisplayNames(long projectId) {
+        try {
+            if (cloudSyncService == null) return Map.of();
+            Map<String, String> names = cloudSyncService.remoteDisplayNames(projectId, false);
+            return names == null ? Map.of() : names;
+        } catch (Exception e) {
+            log.warn("读取案件库展示名失败，历史按 git 署名显示: project={}", projectId, e);
+            return Map.of();
+        }
+    }
+
+    /** 出参侧统一把署名换成案件库账户的展示名；命中才换，未命中原样。 */
+    private List<VersionEntry> withRemoteNames(long projectId, List<VersionEntry> entries) {
+        Map<String, String> names = remoteDisplayNames(projectId);
+        if (names.isEmpty()) return entries;
+        // preferredAuthorName 未命中时原样回 authorName，所以这里不必再分支
+        return entries.stream()
+                .map(e -> e.withAuthorName(VersionAuthorResolver.preferredAuthorName(e, names)))
+                .toList();
     }
 
     /** 「这一版是不是我提交的」的唯一判法（见 VersionAuthorResolver）；resolver 缺席时一律否。 */
@@ -740,7 +770,7 @@ public class VersionController {
             return ok(Map.of("versions", List.of()));
         }
         List<VersionEntry> entries = repoService.log(projectId, draft.getBranchName(), limit);
-        return ok(Map.of("versions", entries));
+        return ok(Map.of("versions", withRemoteNames(projectId, entries)));
     }
 
     @PostMapping("/draft/{id}/switch")

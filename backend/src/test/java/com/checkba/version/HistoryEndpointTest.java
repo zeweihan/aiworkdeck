@@ -84,6 +84,7 @@ class HistoryEndpointTest {
                 mock(com.checkba.service.telemetry.TelemetryService.class),
                 mock(VersionLifecycleService.class));
         ReflectionTestUtils.setField(controller, "cloudSyncService", cloudSyncService);
+        ReflectionTestUtils.setField(controller, "authorResolver", realAuthorResolver());
 
         auth = mockStatic(AuthController.class);
         auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(ME);
@@ -106,6 +107,15 @@ class HistoryEndpointTest {
 
     private String commit(String content, String message, String kind) throws Exception {
         return commit("合同.txt", content, message, kind);
+    }
+
+    /** 指定署名的一笔提交（用来造「两个人在各自机器上都叫同一个名字」的真实场景）。 */
+    private String commitAs(String file, String content, String message,
+                            String authorName, String authorEmail) throws Exception {
+        Files.writeString(root.resolve("projects/7").resolve(file), content);
+        String sha = repoSvc.commitAll(PROJECT, message, "session", null, authorName, authorEmail);
+        assertNotNull(sha, "这一笔应该真的产生了版本：" + message);
+        return sha;
     }
 
     @SuppressWarnings("unchecked")
@@ -156,6 +166,59 @@ class HistoryEndpointTest {
             peer.add().addFilepattern(".").call();
             sha = peer.commit().setMessage(content + "\n\nX-AWD-Kind: session")
                     .setAuthor("律师乙", "awd_lawyer_b@collab.aiworkdeck.local").call().getName();
+            peer.push().setRefSpecs(new RefSpec("refs/heads/master:refs/heads/master")).call();
+        }
+        repoSvc.fetchFromOrigin(PROJECT, "awd_hanzewei", "awdt_test");
+        return sha;
+    }
+
+    /**
+     * 真的 {@link VersionAuthorResolver}（不是 mock）：{@code self} 那一位是本设计的核心判定，
+     * 用 mock 顶着等于把它整条测没了。本机账户在案件库那边叫 {@code awd_hanzewei}，
+     * 展示名刻意用单机模式的哨兵「本机用户」——真实 e2e 里每个人都叫这个名字，
+     * 只有邮箱能把人区分开，这正是最容易判错的场景。
+     */
+    private VersionAuthorResolver realAuthorResolver() {
+        com.checkba.model.entity.CloudConnection conn = new com.checkba.model.entity.CloudConnection();
+        conn.setId(3L);
+        conn.setServerUrl("https://case.aiworkdeck.com");
+        conn.setUsername("awd_hanzewei");
+        conn.setDeviceToken("awdt_test");
+        com.checkba.repository.CloudConnectionRepository connRepo =
+                mock(com.checkba.repository.CloudConnectionRepository.class);
+        when(connRepo.findById(3L)).thenReturn(Optional.of(conn));
+
+        com.checkba.model.entity.ProjectRemote remote = new com.checkba.model.entity.ProjectRemote();
+        remote.setId(1L);
+        remote.setProjectId(PROJECT);
+        remote.setConnectionId(3L);
+        remote.setRemoteProjectId("55");
+        com.checkba.repository.ProjectRemoteRepository remoteRepo =
+                mock(com.checkba.repository.ProjectRemoteRepository.class);
+        when(remoteRepo.findByProjectId(PROJECT)).thenReturn(Optional.of(remote));
+
+        com.checkba.model.entity.User me = new com.checkba.model.entity.User();
+        me.setId(ME);
+        me.setUsername("local");
+        me.setDisplayName(com.checkba.service.LocalIdentityService.LOCAL_DISPLAY_NAME);
+        com.checkba.repository.UserRepository users = mock(com.checkba.repository.UserRepository.class);
+        when(users.findById(ME)).thenReturn(Optional.of(me));
+
+        return new VersionAuthorResolver(remoteRepo, connRepo, users);
+    }
+
+    /** 任意一个人在案件库上交了一版（指定署名），本机随后 fetch 一次。 */
+    private String someoneSubmits(String file, String content, String message,
+                                  String displayName, String email) throws Exception {
+        Path peerDir = Files.createTempDirectory("peer");
+        String sha;
+        try (Git peer = Git.cloneRepository()
+                .setURI(repoSvc.remoteOriginUrl(PROJECT))
+                .setDirectory(peerDir.toFile()).setBranch("master").call()) {
+            Files.writeString(peerDir.resolve(file), content);
+            peer.add().addFilepattern(".").call();
+            sha = peer.commit().setMessage(message + "\n\nX-AWD-Kind: session")
+                    .setAuthor(displayName, email).call().getName();
             peer.push().setRefSpecs(new RefSpec("refs/heads/master:refs/heads/master")).call();
         }
         repoSvc.fetchFromOrigin(PROJECT, "awd_hanzewei", "awdt_test");
@@ -253,6 +316,7 @@ class HistoryEndpointTest {
         assertEquals(Boolean.FALSE, row(data, mine).get("remote"), "我自己刚落的版不是 remote");
         assertEquals("律师乙", row(data, theirs).get("authorName"));
         assertEquals(Boolean.FALSE, row(data, theirs).get("self"));
+        assertEquals(Boolean.TRUE, row(data, mine).get("self"), "我自己刚落的那版是「你」");
     }
 
     @Test
@@ -265,6 +329,125 @@ class HistoryEndpointTest {
         repoSvc.fastForwardMainline(PROJECT, repoSvc.originMasterRef());
 
         assertEquals(Boolean.FALSE, row(history(), theirs).get("remote"));
+    }
+
+    // ---------- 「这一版是不是我交的」 ----------
+
+    /**
+     * 同事那一版被「取回最新稿」快进成了本机主线的尖端，它仍然不是我交的。
+     *
+     * <p>真实场景（app-e2e J11）里每个人的 git 署名都是单机模式的哨兵「本机用户」——
+     * 名字完全一样，能把人分开的只有邮箱。所以这里刻意让同事与我同名：
+     * 一旦 {@code isSelf} 在某条路径上退回成比名字（或者拿错了 entry），这条当场红。
+     */
+    @Test
+    @DisplayName("被快进到主线尖端的同事那一版，仍然不是我交的")
+    void aColleagueCommitFastForwardedOntoTheMainlineTipIsStillNotMine() throws Exception {
+        linkCaseLibrary();
+        String theirs = someoneSubmits("意见书.txt", "同事写的", "B 第三次修改（提交历史用）",
+                com.checkba.service.LocalIdentityService.LOCAL_DISPLAY_NAME,
+                "lawyer_b@collab.aiworkdeck.local");
+        repoSvc.fastForwardMainline(PROJECT, repoSvc.originMasterRef());
+
+        Map<String, Object> entry = row(history(), theirs);
+
+        assertEquals(Boolean.FALSE, entry.get("self"),
+                "同事的版在主线尖端上也还是同事的；能区分的只有邮箱，不是名字");
+        assertEquals(com.checkba.service.LocalIdentityService.LOCAL_DISPLAY_NAME,
+                entry.get("authorName"), "前提校验：同事与我同名，这条测试才有意义");
+        assertEquals("lawyer_b@collab.aiworkdeck.local", entry.get("authorEmail"));
+        // 快进之后三条线都指着它——refs 多了不该改变 self
+        assertTrue(refTypes(entry).containsAll(Set.of("mainline", "local")), "实际: " + refTypes(entry));
+    }
+
+    /**
+     * 我自己的另一台电脑随后又推了两版，同事那一版**不能**因此变成「我交的」。
+     *
+     * <p>这是真机截图上被怀疑的那个形态：远端继续前进之后同一行的 refs 会变
+     * （案件库标签挪走），如果 {@code self} 是从 refs/remote 推导出来的、或者某条路径
+     * 拿 origin/master 尖端的作者去比，这一行就会翻面。
+     */
+    @Test
+    @DisplayName("我另一台电脑推了新版之后，同事那一版不会翻成「我交的」")
+    void laterPushesFromMyOwnOtherDeviceDoNotFlipAColleagueCommitToMine() throws Exception {
+        linkCaseLibrary();
+        String theirs = someoneSubmits("意见书.txt", "同事写的", "B 第三次修改（提交历史用）",
+                com.checkba.service.LocalIdentityService.LOCAL_DISPLAY_NAME,
+                "lawyer_b@collab.aiworkdeck.local");
+        repoSvc.fastForwardMainline(PROJECT, repoSvc.originMasterRef());
+        assertEquals(Boolean.FALSE, row(history(), theirs).get("self"), "前提：这时还是同事的");
+
+        // 同一个官网账户的第二台电脑（案件库账号名一模一样）推两版上来，本机只 fetch 不快进
+        someoneSubmits("另一台.txt", "自动存档", "修改了《另一台》",
+                com.checkba.service.LocalIdentityService.LOCAL_DISPLAY_NAME,
+                "awd_hanzewei@collab.aiworkdeck.local");
+        String mineElsewhere = someoneSubmits("另一台.txt", "甲在另一台电脑上的修改",
+                "甲在另一台电脑上的修改",
+                com.checkba.service.LocalIdentityService.LOCAL_DISPLAY_NAME,
+                "awd_hanzewei@collab.aiworkdeck.local");
+
+        Map<String, Object> data = history();
+        assertEquals(Boolean.FALSE, row(data, theirs).get("self"),
+                "同事那一版不能因为远端又前进了就变成我的");
+        assertEquals(Boolean.TRUE, row(data, mineElsewhere).get("self"),
+                "我自己在另一台电脑上交的那版才是「你」");
+        assertEquals(Boolean.TRUE, row(data, mineElsewhere).get("remote"),
+                "它还没取回，是案件库独有的那一版");
+    }
+
+    /**
+     * 版本行的署名换成案件库账户的展示名。
+     *
+     * <p>git 署名是**对方那台机器上的本机展示名**——单机模式下人人都叫「本机用户」，
+     * 两个不同的同事在历史里会显示成同一个人；而事件行（「律师乙 交了稿」）取的是
+     * 案件库账户的展示名，同一屏里两种叫法。映射按邮箱里的案件库账号名做，
+     * 本人那一行不走特例。
+     */
+    @Test
+    @DisplayName("署名换成案件库账户的展示名，本人那一行也换；映射不到的保持 git 署名")
+    void remoteDisplayNamesReplaceTheGitSignature() throws Exception {
+        String local = com.checkba.service.LocalIdentityService.LOCAL_DISPLAY_NAME;
+        String mine = commitAs("合同.txt", "我改的", "核对注册资本", local, MY_EMAIL);
+        String theirs = commitAs("意见书.txt", "同事改的", "补充意见书节选",
+                local, "lawyer_b@collab.aiworkdeck.local");
+        String offline = commitAs("附件.txt", "还没进案件库时落的",
+                "整理附件", local, "someone@local.aiworkdeck.local");
+        when(cloudSyncService.remoteDisplayNames(PROJECT, false)).thenReturn(Map.of(
+                "awd_hanzewei", "韩泽伟", "lawyer_b", "律师乙"));
+
+        Map<String, Object> data = history();
+
+        assertEquals("韩泽伟", row(data, mine).get("authorName"), "本人那一行也走同一条映射");
+        assertEquals(Boolean.TRUE, row(data, mine).get("self"), "换名字不该影响「是不是我」");
+        assertEquals("律师乙", row(data, theirs).get("authorName"));
+        assertEquals(Boolean.FALSE, row(data, theirs).get("self"));
+        assertEquals(local, row(data, offline).get("authorName"),
+                "本机域的邮箱在案件库里没有对应账户，保持 git 署名");
+        // 邮箱是账户级身份，不能被展示名的替换动过
+        assertEquals(MY_EMAIL, row(data, mine).get("authorEmail"));
+    }
+
+    @Test
+    @DisplayName("案件库展示名取不到（缓存空/没绑案件库）：历史照常显示 git 署名")
+    void missingRemoteDisplayNamesFallBackToTheGitSignature() throws Exception {
+        String local = com.checkba.service.LocalIdentityService.LOCAL_DISPLAY_NAME;
+        String theirs = commitAs("意见书.txt", "同事改的", "补充意见书节选",
+                local, "lawyer_b@collab.aiworkdeck.local");
+        when(cloudSyncService.remoteDisplayNames(PROJECT, false)).thenReturn(Map.of());
+
+        assertEquals(local, row(history(), theirs).get("authorName"));
+    }
+
+    @Test
+    @DisplayName("读列表一律不许为一个名字联网")
+    void listingNeverGoesOnlineJustToTranslateAName() throws Exception {
+        commitAs("合同.txt", "我改的", "核对注册资本",
+                com.checkba.service.LocalIdentityService.LOCAL_DISPLAY_NAME, MY_EMAIL);
+
+        history();
+
+        verify(cloudSyncService).remoteDisplayNames(PROJECT, false);
+        verify(cloudSyncService, never()).remoteDisplayNames(PROJECT, true);
     }
 
     // ---------- 自动存档折叠 ----------

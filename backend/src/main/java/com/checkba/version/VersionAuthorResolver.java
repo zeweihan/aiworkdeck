@@ -15,6 +15,7 @@ import com.checkba.service.UserService;
 import org.springframework.stereotype.Service;
 
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * 提交署名（作者名 + 作者邮箱）的**唯一出口**（spec 2026-09-14 §2.1）。
@@ -107,6 +108,43 @@ public class VersionAuthorResolver {
         // toEntry 出参时把本机哨兵名按界面语言本地化过，这一侧也要过同一道翻译才比得上
         String myName = LocalIdentityService.displayNameOf(me.name());
         return myName != null && myName.equals(entry.authorName());
+    }
+
+    /**
+     * 邮箱里的案件库账号名（{@code awd_xxx@collab.aiworkdeck.local} → {@code awd_xxx}），
+     * 不是这个域就回 null。
+     *
+     * <p>这是「跨机器认人」唯一可靠的锚：同一个官网账户在任何一台电脑上写下的提交
+     * 都带同一个账号名，而 git 署名里的**名字**是对方那台机器的本机展示名——
+     * 单机模式下人人都叫「本机用户」，两个不同的同事在历史里会显示成同一个人。
+     */
+    public static String collabUsernameOf(String email) {
+        if (email == null) return null;
+        String suffix = "@" + COLLAB_DOMAIN;
+        String e = email.trim();
+        if (e.length() <= suffix.length()) return null;
+        if (!e.toLowerCase(Locale.ROOT).endsWith(suffix)) return null;
+        String local = e.substring(0, e.length() - suffix.length());
+        return local.isBlank() ? null : local;
+    }
+
+    /**
+     * 这一版该署谁的名字：能在案件库参与人里按账号名对上就用**案件库那边的展示名**，
+     * 对不上原样保留 git 署名。
+     *
+     * <p>为什么要换：事件行（「律师乙 交了稿」）取的是案件库账户的展示名，而版本行取的是
+     * 对方机器上的 git 署名——同一个人在同一屏里两种叫法，没连官网账户的用户之间
+     * 更是全都叫「本机用户」。本人那一行走的是同一条映射，不走特例。
+     *
+     * @param remoteNames 案件库账号名 → 展示名，见 {@code CloudSyncService.remoteDisplayNames}
+     */
+    public static String preferredAuthorName(VersionEntry e, Map<String, String> remoteNames) {
+        if (e == null) return null;
+        if (remoteNames == null || remoteNames.isEmpty()) return e.authorName();
+        String username = collabUsernameOf(e.authorEmail());
+        if (username == null) return e.authorName();
+        String mapped = remoteNames.get(username);
+        return mapped == null || mapped.isBlank() ? e.authorName() : mapped;
     }
 
     /** 邮箱是不是本设计新写入的那两种域之一（判读侧据此分流新旧提交）。 */

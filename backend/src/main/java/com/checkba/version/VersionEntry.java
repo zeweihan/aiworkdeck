@@ -34,6 +34,16 @@ public record VersionEntry(
         List<Resolution> resolutions
 ) {
     /**
+     * 换一个署名（其余字段原样）。用在**出参侧**把 git 署名翻译成案件库账户的展示名
+     * （见 {@link VersionAuthorResolver#preferredAuthorName}）——写入侧一个字都不动，
+     * 历史永不重写。
+     */
+    public VersionEntry withAuthorName(String name) {
+        return new VersionEntry(sha, message, name, authorEmail, when, kind, note,
+                parents, milestone, resolutions);
+    }
+
+    /**
      * 一份文件的裁决结果。{@code kept} 是 MAIN/DRAFT/BOTH 之一（字面量与
      * {@code WorkSessionService.Resolution} 同源），语义按语境翻译成界面词——
      * 三语境的 MAIN/DRAFT 指向哪一侧完全不同，见 version-control.md 的方向表。

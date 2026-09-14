@@ -52,6 +52,13 @@ class CloudStatusAuthorsTest {
     private ProjectRepoService repoSvc;
     private CloudSyncService cloud;
 
+    /**
+     * 案件库 {@code GET /api/projects/55/members} 的桩回包。默认是一张空表——
+     * 映射不到任何人，状态条保持 git 署名，也就是本列上线前的行为。
+     * 单测绝不许真的出网：{@link #newCloud} 里那个 httpGet 覆写对别的 URL 直接抛。
+     */
+    private String membersJson = "{\"code\":0,\"data\":[]}";
+
     @BeforeEach
     void setUp(@TempDir Path tmp) throws Exception {
         root = tmp;
@@ -88,9 +95,7 @@ class CloudStatusAuthorsTest {
         UserRepository users = mock(UserRepository.class);
         when(users.findById(ME)).thenReturn(Optional.of(me));
 
-        cloud = new CloudSyncService(repoSvc, mock(WorkSessionService.class),
-                mock(ProjectTreeManifestService.class), mock(ProjectFileRepository.class),
-                connRepo, remoteRepo, mock(ProjectRepository.class));
+        cloud = newCloud(repoSvc, connRepo, remoteRepo);
         cloud.setAuthorResolverForTest(new VersionAuthorResolver(remoteRepo, connRepo, users));
 
         // 案件库：裸仓 + 把本机现有历史先推上去，两边这时是齐的
@@ -203,14 +208,67 @@ class CloudStatusAuthorsTest {
         ProjectRepoService broken = spy(repoSvc);
         doThrow(new VersionException("读取区间历史失败"))
                 .when(broken).commitsBetween(anyLong(), any(), any(), anyInt());
-        CloudSyncService degraded = new CloudSyncService(broken, mock(WorkSessionService.class),
-                mock(ProjectTreeManifestService.class), mock(ProjectFileRepository.class),
-                connRepoOf(), remoteRepoOf(), mock(ProjectRepository.class));
+        CloudSyncService degraded = newCloud(broken, connRepoOf(), remoteRepoOf());
 
         Map<String, Object> st = degraded.cloudStatus(PROJECT, ME);
 
         assertEquals(Boolean.TRUE, st.get("remoteAhead"), "一句更准的话不值得把整条状态打成 500");
         assertNull(st.get("remoteAheadCount"));
+    }
+
+    /**
+     * 案件库展示名的映射（把「本机用户」换成案件库账户真正的名字）。
+     *
+     * <p>这是 #623 的另一半：{@code remoteAheadAuthors} 取的是 git 署名，也就是**对方那台
+     * 机器上的本机展示名**——单机模式下人人都叫「本机用户」，两个不同的同事在状态条里
+     * 会显示成同一个人。而事件行取的是案件库账户的展示名，同一屏里两种叫法。
+     */
+    @Test
+    @DisplayName("状态条里的名字换成案件库账户的展示名；映射不到的保持 git 署名")
+    void remoteDisplayNamesReplaceTheGitSignature() throws Exception {
+        membersJson = "{\"code\":0,\"data\":["
+                + "{\"username\":\"awd_lisi\",\"displayName\":\"李思律师\"}]}";
+        // 两个人在各自机器上都叫「本机用户」，只有案件库账号名能把他们分开
+        someoneSubmits("本机用户", "awd_lisi", "李思改的第二稿");
+        someoneSubmits("本机用户", "awd_wangwu", "王五改的一版");
+
+        Map<String, Object> st = status();
+
+        assertEquals(List.of("本机用户", "李思律师"), st.get("remoteAheadAuthors"),
+                "新的在前：王五不在参与人表里，保持 git 署名；李思换成案件库那边的名字");
+        assertEquals(2, st.get("remoteAheadAuthorCount"), "映射之后才看得出是两个人");
+    }
+
+    @Test
+    @DisplayName("同一个项目十分钟内只取一次参与人表（状态条 120 秒轮询一次）")
+    void memberTableIsFetchedOncePerTtl() throws Exception {
+        someoneSubmits("本机用户", "awd_lisi", "李思改的第二稿");
+
+        status();
+        status();
+        status();
+
+        assertEquals(1, memberRequests, "缓存没生效的话每次轮询都要多打一趟请求");
+    }
+
+    private int memberRequests;
+
+    /** 带 httpGet 桩的 CloudSyncService：只答参与人表，别的 URL 一律当作「这条测试写错了」。 */
+    private CloudSyncService newCloud(ProjectRepoService repo,
+                                      CloudConnectionRepository connRepo,
+                                      ProjectRemoteRepository remoteRepo) {
+        return new CloudSyncService(repo, mock(WorkSessionService.class),
+                mock(ProjectTreeManifestService.class), mock(ProjectFileRepository.class),
+                connRepo, remoteRepo, mock(ProjectRepository.class)) {
+            @Override
+            protected String httpGet(String url, String sessionToken) {
+                if (url.endsWith("/members")) {
+                    memberRequests++;
+                    return membersJson;
+                }
+                throw new IllegalStateException("这条测试不该联网: " + url);
+            }
+        };
     }
 
     // 上一条用例要重建一个 CloudSyncService，把 setUp 里那两个 mock 仓储再取出来用

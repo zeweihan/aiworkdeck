@@ -32,6 +32,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -553,6 +554,85 @@ public class CloudSyncService {
         return cloudStatus(projectId, null);
     }
 
+    // ========== 案件库展示名缓存（把 git 署名换成案件库账户的名字） ==========
+
+    /**
+     * 一个项目的「案件库账号名 → 展示名」快照。{@code expiresAt} 到点即失效；
+     * **空表也会被缓存**——案件库连不上时不能让每一次 120 秒轮询都去重试一趟。
+     */
+    private record RemoteNames(Map<String, String> byUsername, long expiresAt) {}
+
+    /** 缓存有效期。参与人改名是低频事件，十分钟内看到旧名字完全可以接受。 */
+    static final long REMOTE_NAME_TTL_MS = 10 * 60 * 1000L;
+
+    private final Map<Long, RemoteNames> remoteNameCache = new ConcurrentHashMap<>();
+
+    /**
+     * 案件库那边的「账号名 → 展示名」。版本行的 git 署名是**对方那台机器的本机展示名**
+     * （单机模式下人人都叫「本机用户」），而事件行取的是案件库账户的展示名——
+     * 同一屏里两种叫法。这张表就是把前者翻译成后者的字典。
+     *
+     * @param allowFetch 缓存里没有时允不允许打一趟请求。只有「案件库确实领先了、
+     *                   此刻非说清是谁不可」的那条路传 true（{@link #describeRemoteAhead}）；
+     *                   读历史/时间线一律传 false——列表渲染不该因为一个名字去联网。
+     * @return 永不为 null；没有绑定案件库、取不到、或不许联网时是空表（调用方保持 git 署名）
+     */
+    public Map<String, String> remoteDisplayNames(long projectId, boolean allowFetch) {
+        RemoteNames cached = remoteNameCache.get(projectId);
+        if (cached != null && cached.expiresAt() > System.currentTimeMillis()) {
+            return cached.byUsername();
+        }
+        if (!allowFetch) return Map.of();
+        return refreshRemoteDisplayNames(projectId);
+    }
+
+    /**
+     * 真去案件库取一次参与人表并落缓存。整段吞异常：翻译不出名字只是让界面继续显示
+     * git 署名（本列上线前的既有行为），不值得为它把云端状态或提交历史打成错误。
+     */
+    private Map<String, String> refreshRemoteDisplayNames(long projectId) {
+        Map<String, String> names = Map.of();
+        try {
+            ProjectRemote remote = remoteRepository.findByProjectId(projectId).orElse(null);
+            if (remote != null) {
+                CloudConnection conn = connectionOf(remote);
+                JSONObject resp = JSONUtil.parseObj(httpGet(
+                        conn.getServerUrl() + "/api/projects/" + remote.getRemoteProjectId() + "/members",
+                        conn.getDeviceToken()));
+                if (resp.getInt("code", 1) == 0) {
+                    names = namesFrom(resp.getJSONArray("data"));
+                }
+            }
+        } catch (Exception e) {
+            log.warn("读取案件库参与人展示名失败（历史照常显示 git 署名）: project={}", projectId, e);
+        }
+        remoteNameCache.put(projectId,
+                new RemoteNames(names, System.currentTimeMillis() + REMOTE_NAME_TTL_MS));
+        return names;
+    }
+
+    /** 已经拿到手的参与人表顺手落进缓存（proxyMembers / ensureRemoteUserId 各调一次）。 */
+    private void cacheRemoteDisplayNames(long projectId, JSONArray rows) {
+        Map<String, String> names = namesFrom(rows);
+        if (names.isEmpty()) return; // 空表只在「真去取了一趟」时才值得缓存，见 refresh
+        remoteNameCache.put(projectId,
+                new RemoteNames(names, System.currentTimeMillis() + REMOTE_NAME_TTL_MS));
+    }
+
+    private static Map<String, String> namesFrom(JSONArray rows) {
+        if (rows == null) return Map.of();
+        Map<String, String> out = new LinkedHashMap<>();
+        for (Object o : rows) {
+            if (!(o instanceof JSONObject row)) continue;
+            String username = row.getStr("username");
+            String display = row.getStr("displayName");
+            if (username == null || username.isBlank()) continue;
+            if (display == null || display.isBlank()) continue;
+            out.put(username, display);
+        }
+        return out;
+    }
+
     /** {@code master..origin/master} 最多走这么多版：状态条只需要计数与前三个名字。 */
     static final int REMOTE_AHEAD_WALK_CAP = 200;
 
@@ -577,9 +657,11 @@ public class CloudSyncService {
                     projectId, repoService.mainBranch(), ORIGIN_MASTER, REMOTE_AHEAD_WALK_CAP);
             if (ahead.isEmpty()) return;
             m.put("remoteAheadCount", ahead.size());
+            // 案件库确实领先了、这句话非说清是谁不可——只有这条路允许为一个名字联网一次
+            Map<String, String> remoteNames = remoteDisplayNames(projectId, true);
             java.util.LinkedHashSet<String> distinct = new java.util.LinkedHashSet<>();
             for (VersionEntry e : ahead) {
-                String name = e.authorName();
+                String name = VersionAuthorResolver.preferredAuthorName(e, remoteNames);
                 if (name != null && !name.isBlank()) distinct.add(name);
             }
             List<String> authors = new ArrayList<>();
@@ -690,6 +772,7 @@ public class CloudSyncService {
         }
         List<Map<String, Object>> out = new ArrayList<>();
         JSONArray data = resp.getJSONArray("data");
+        cacheRemoteDisplayNames(projectId, data);
         if (data != null) {
             for (Object o : data) {
                 @SuppressWarnings("unchecked")
@@ -782,6 +865,7 @@ public class CloudSyncService {
                     conn.getDeviceToken()));
             if (resp.getInt("code", 1) != 0) return;
             JSONArray rows = resp.getJSONArray("data");
+            cacheRemoteDisplayNames(remote.getProjectId(), rows);
             if (rows == null) return;
             for (Object o : rows) {
                 if (!(o instanceof JSONObject row)) continue;
