@@ -492,9 +492,11 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
       return
     }
     if (e.key === 'Tab') {
-      // 制表符入文档（浏览器默认的焦点切换在画布上无意义）
+      // 浏览器默认的焦点切换在画布上无意义，一律吃掉。Word/Writer 语义下 Tab 是
+      // 两件事：表格里跳下一格（Shift+Tab 上一格）、正文里插制表符。光标属于哪个
+      // story 只有引擎知道，所以两边都交给 worker 的 tab_key 一条动作裁决。
       e.preventDefault()
-      forward('insert_at_cursor', { text: '\t' }, 'Tab 制表符 / tab')
+      forward('tab_key', { shift: e.shiftKey }, e.shiftKey ? 'Shift+Tab 上一格 / 制表符' : 'Tab 下一格 / 制表符')
       return
     }
     if (e.key === 'Backspace') {

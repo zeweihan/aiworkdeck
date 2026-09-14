@@ -174,6 +174,54 @@ try {
   assert.equal((await exec('set_selection', { anchor: cellAnchor })).success, false, '摘干净后锚点不该还在')
   console.log('PASS 表格单元格锚点：find_text_locations / set_selection / replace_at_position / clear_anchors')
 
+  // dev-board#627 的次生问题：表格单元格里按 Tab。
+  // #627 之前覆盖层无条件 insert_at_cursor('\t')，在单元格里因 RuntimeException
+  // 静默失败——看着像「Tab 没反应」，于是没人发现它本来就写错了；改用 vc.getText()
+  // 之后同一条分支会真把制表符插进单元格（修订态下还多记一条修订）。Word/Writer
+  // 的语义是：表格里 Tab 跳下一格、Shift+Tab 跳上一格，正文里才插制表符。
+  // 必须走覆盖层的真实 keydown 路径——病灶就在那条分支上，直接调 worker 动作
+  // 等于绕开被测对象。
+  await reload('all')
+  const cellNow = async () => ((await ok('get_ui_state')).selection || {}).cellName || ''
+  const pressTab = async (shift) => {
+    await page.$eval('[data-lo-ime]', e => e.focus())
+    if (shift) await page.keyboard.down('Shift')
+    await page.keyboard.press('Tab')
+    if (shift) await page.keyboard.up('Shift')
+  }
+  // forward() 是即发即忘的（覆盖层不等回包），所以轮询等光标真的挪过去。
+  const waitCell = async (want, label) => {
+    let got = ''
+    for (let i = 0; i < 30; i++) {
+      got = await cellNow()
+      if (got === want) return
+      await new Promise(r => setTimeout(r, 200))
+    }
+    assert.fail(label + '：光标应落在 ' + want + '，实际 ' + JSON.stringify(got))
+  }
+  await ok('find_navigate', { keyword: '法定代表人' })  // A1
+  await ok('collapse_selection', { to: 'end' })
+  assert.equal(await cellNow(), 'A1', 'Tab 用例的起点必须是 A1')
+  await pressTab(false)
+  await waitCell('B1', '表格内 Tab 应跳到下一格')
+  await pressTab(true)
+  await waitCell('A1', '表格内 Shift+Tab 应跳回上一格')
+  const tabbed = (await cells())[0]
+  assert.ok(!tabbed[0].includes('\t') && !tabbed[1].includes('\t'),
+    '表格内 Tab 不得把制表符写进单元格：' + JSON.stringify(tabbed))
+  // 正文里 Tab 仍然插制表符（同一条覆盖层分支的另一半，不许一起改掉）。
+  await ok('find_navigate', { keyword: '表后正文' })
+  await ok('collapse_selection', { to: 'end' })
+  assert.equal(await cellNow(), '', '正文对照的起点不应在表格里')
+  await pressTab(false)
+  let bodyText = ''
+  for (let i = 0; i < 30 && !bodyText.includes('\t'); i++) {
+    bodyText = ((await ok('get_document_text')).paragraphs.map(p => p.text).find(t => t.startsWith('表后正文')) || '')
+    if (!bodyText.includes('\t')) await new Promise(r => setTimeout(r, 200))
+  }
+  assert.equal(bodyText, '表后正文\t', '正文里 Tab 仍应插制表符')
+  console.log('PASS 表格内 Tab 跳格 / 正文 Tab 插制表符')
+
   // 对照：正文里的同一条链路本来就是好的，修复不得改变它。
   await reload('all')
   await ok('find_navigate', { keyword: '表后正文' })

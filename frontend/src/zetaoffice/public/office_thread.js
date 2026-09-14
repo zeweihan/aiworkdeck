@@ -1240,6 +1240,14 @@ function currentTextTable(p) {
   } catch (e) {}
   return null;
 }
+// 视图光标所在单元格名（如 "B1"）；不在表格里返回 ''。
+function viewCursorCellName() {
+  try {
+    const cell = ctrl.getViewCursor().getPropertyValue('Cell');
+    if (cell) return String(cell.getPropertyValue('CellName') || '');
+  } catch (e) {}
+  return '';
+}
 // 单元格名工具（A1..Z9、AA1..）：markdown 表格列数很小，两位字母够用。
 function cellName(col, row) {
   let name = '';
@@ -3376,6 +3384,25 @@ const EXEC = {
   delete_forward() {
     dispatchUno('.uno:Delete');
     return { success: true };
+  },
+  // Tab / Shift+Tab（IME 覆盖层转发的唯一 Tab 动作）。Word/Writer 语义：光标在
+  // 表格里 = 跳到下一格/上一格，正文里才插制表符。判定必须在 worker 做——宿主
+  // 拿不到光标属于哪个 story（dev-board#627 的次生问题：#627 之前覆盖层无条件
+  // 插制表符，在单元格里因 RuntimeException 静默失败＝看着像没反应；改用
+  // vc.getText() 之后它会真插进去，修订态下还多一条修订）。
+  tab_key(p) {
+    const shift = !!(p && p.shift);
+    const vc = ctrl.getViewCursor();
+    let cell = null;
+    try { cell = vc.getPropertyValue('Cell'); } catch (e) {}
+    if (!cell) {
+      vc.collapseToEnd();
+      insertTextAtCursor(vc, '\t');
+      vc.collapseToEnd();
+      return Object.assign({ success: true, inTable: false, inserted: '\t' }, verifySnapshot());
+    }
+    dispatchUno(shift ? '.uno:JumpToPrevCell' : '.uno:JumpToNextCell');
+    return { success: true, inTable: true, shift: shift, cell: viewCursorCellName() };
   },
   // Overlay shortcut keys (Cmd/Ctrl+A/B/I/U, Home/End) — see UI_COMMANDS.
   ui_command(p) {
