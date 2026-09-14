@@ -9,6 +9,9 @@
 // 场景：页边/气泡视图把删掉的字藏起来，单元格于是看着全空。
 //
 // 断言两头都要：新字既要进单元格文本（table_read）、又要真画在单元格里（像素）。
+//
+// 末尾一组是同族缺陷：anchorBookmark 用正文 XText 给单元格区间插锚点书签，同样抛，
+// 于是 AI 的 find_text_locations → set_selection / replace_at_position 在表格里够不着。
 import assert from 'node:assert/strict'
 import JSZip from 'jszip'
 import { PNG } from 'pngjs'
@@ -143,6 +146,33 @@ try {
   await ok('insert_paragraph')
   assert.equal((await cells())[1][1], '壹仟万元整\n', '回车必须在单元格内分段')
   console.log('PASS 未删改的单元格：直接键入与回车')
+
+  // 同族：anchorBookmark 也曾用正文 XText 插书签（xModel.getText().insertTextContent），
+  // 于是 find_text_locations 在单元格里的命中拿不到 anchorId——异常被 catch 吞掉，
+  // AI 的 set_selection / replace_at_position 一律回「anchor not found」，表格够不着。
+  // 末尾顺带钉住 clear_anchors：锚点从此会落在单元格里，而摘除与插入不同源——
+  // removeTextContent 本引擎容得下别的 story 的书签，正文 XText 照样摘得掉。
+  await reload('balloons')
+  const located = await ok('find_text_locations', { keyword: NAME })
+  assert.equal(located.count, 1, '夹具里「' + NAME + '」只在单元格出现一次：' + JSON.stringify(located.matches))
+  const cellAnchor = located.matches[0].anchorId
+  assert.ok(cellAnchor && cellAnchor.startsWith('__ai_anchor_'),
+    '单元格里的命中必须拿得到锚点书签（病灶下是 null）：' + JSON.stringify(located.matches[0]))
+  // 书签得真盖在单元格那几个字上：anchorRange 读回的文字要对得上
+  assert.equal((await ok('set_selection', { anchor: cellAnchor })).text, NAME,
+    '锚点读回的文字必须是单元格里的原文')
+  // 经锚点改一格（挑没被修订盖过的那格，断言不受行内/页边语义干扰）
+  const plainAnchor = (await ok('find_text_locations', { keyword: '壹仟万元' })).matches[0].anchorId
+  assert.ok(plainAnchor && plainAnchor.startsWith('__ai_anchor_'), '未修订的单元格同样要拿得到锚点：' + plainAnchor)
+  await ok('replace_at_position', { anchor: plainAnchor, newText: '贰仟万元' })
+  assert.equal((await cells())[1][1], '贰仟万元', '经锚点的替换必须落在单元格里：' + JSON.stringify(await cells()))
+  // 正文锚点这条老路不能被改坏
+  const bodyAnchor = (await ok('find_text_locations', { keyword: '表后正文' })).matches[0].anchorId
+  assert.ok(bodyAnchor && bodyAnchor.startsWith('__ai_anchor_'), '正文锚点仍须可用：' + bodyAnchor)
+  const cleared = await ok('clear_anchors')
+  assert.ok(cleared.cleared >= 3, 'clear_anchors 必须把单元格里的锚点一起摘干净：' + JSON.stringify(cleared))
+  assert.equal((await exec('set_selection', { anchor: cellAnchor })).success, false, '摘干净后锚点不该还在')
+  console.log('PASS 表格单元格锚点：find_text_locations / set_selection / replace_at_position / clear_anchors')
 
   // 对照：正文里的同一条链路本来就是好的，修复不得改变它。
   await reload('all')

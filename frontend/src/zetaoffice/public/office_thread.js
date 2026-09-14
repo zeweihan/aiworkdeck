@@ -90,7 +90,11 @@ function anchorBookmark(range) {
   const name = ANCHOR_PREFIX + (++anchorSeq);
   const bm = xModel.createInstance('com.sun.star.text.Bookmark');
   bm.setName(name);
-  xModel.getText().insertTextContent(range, bm, true); // bAbsorb: bookmark spans the range
+  // 与 insertTextAtCursor 同一条纪律（dev-board#627）：书签必须插进 range 自己所属的
+  // XText。正文 XText 只接受属于自己的区间，range 在表格单元格（或页眉/脚注等别的
+  // story）里时 body.insertTextContent(range,…) 抛 RuntimeException，find_text_locations
+  // 的 anchorId 就成了 null，AI 的 set_selection / replace_at_position 在表格里够不着。
+  range.getText().insertTextContent(range, bm, true); // bAbsorb: bookmark spans the range
   return name;
 }
 function anchorRange(name) {
@@ -2502,9 +2506,10 @@ function testPerf(pages) {
 function testInsertText(text) {
   try {
     const t = text || '中文渲染测试 中華人民共和國 ABC 123';
-    const xText = xModel.getText();
     let vc = null;
     try { vc = ctrl.getViewCursor(); } catch {}
+    // 写光标要用光标自己的 XText（dev-board#627）：正文 XText 写不了单元格里的光标。
+    const xText = vc ? vc.getText() : xModel.getText();
     if (vc) {
       // NOT setString(): that REPLACES the cursor's range and leaves the inserted
       // text SELECTED, so the next insert overwrites it (reported bug). Use
@@ -7528,6 +7533,9 @@ const EXEC = {
   clear_anchors() {
     const bms = xModel.getBookmarks();
     const names = (bms.getElementNames && bms.getElementNames()) || [];
+    // 摘除与插入不同源：removeTextContent 本引擎实测容得下别的 story 的书签
+    // （单元格锚点用正文 XText 照样摘得掉，table-retype 的锚点组守着），
+    // 所以这里保留 xModel.getText()，不跟着 anchorBookmark 一起改。
     const xText = xModel.getText();
     let n = 0;
     for (let i = 0; i < names.length; i++) {
