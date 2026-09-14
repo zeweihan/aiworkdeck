@@ -22,8 +22,9 @@
 // cursor.
 //
 // 组合中的文字（"输入过程"）由一个独立的不透明预览条显示，贴在光标框上方——
-// 输入框本身必须全透明（它压在画布上，显字会与正文叠印），而预览条不依赖光标
-// 映射，Phase A 下照样可见。
+// 输入框本身必须 opacity 0（它压在画布上，任何绘制都会叠在正文上：字靠 color
+// transparent，输入法给组合文字画的下划线只有 opacity 管得住），而预览条不依赖
+// 光标映射，Phase A 下照样可见。
 //
 // Native mapping uses the live Writer controller caret/visible-area twips and
 // the native editing window origin. It follows scrolling, zoom, keyboard moves
@@ -148,6 +149,12 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     position: 'absolute', top: '0', left: '0',
     margin: '0', padding: '0', border: '0', outline: '0',
     background: 'transparent', color: 'transparent', caretColor: 'transparent',
+    // opacity 0 才是真的什么都不画。字设成 transparent 只管字：浏览器给组合中的
+    // 文字画的输入法标记（真机上是输入法指定颜色的下划线）用的不是 color，于是
+    // 正文光标后面凭空多出一根线（dev-board#606）。opacity 不动布局，输入框照旧
+    // 持有焦点、几何照旧贴着光标，系统候选窗按它定位不受影响——不能改用
+    // visibility/display 藏，那会连焦点和 IME 一起掐掉。
+    opacity: '0',
     font: 'inherit', lineHeight: '1',
     pointerEvents: 'none', // clicks fall through to the canvas (Qt positions cursor)
     zIndex: '5',
