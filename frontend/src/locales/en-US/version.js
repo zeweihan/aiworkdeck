@@ -152,6 +152,7 @@ export default {
   mergeAutoRunningElapsed: 'Combining your colleague’s changes… ({seconds}s so far)',
   mergeRowMerged: 'Combined: {mainCount} change(s) by {main}, {otherCount} by {other}',
   mergeRowManualDocx: 'Both edited the same paragraph · {count} place(s)',
+  mergeRowManualFormatOnly: '{count} paragraph(s) where {other} changed only formatting can’t be carried over — needs you',
   mergeRowManualXlsx: 'Both edited the same cell · {count} place(s)',
   mergeRowManualPptx: 'Both edited the same slide · {count} place(s)',
   mergeRowWholeBinary: 'PDFs and images have no paragraphs to compare — choose one whole version',

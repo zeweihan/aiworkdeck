@@ -151,6 +151,9 @@ export default {
   mergeAutoRunningElapsed: '正在合并同事的改动…（已等 {seconds} 秒）',
   mergeRowMerged: '已合并：{main}改的 {mainCount} 处、{other}改的 {otherCount} 处',
   mergeRowManualDocx: '同一段两边都改了 · {count} 处',
+  // 另一侧只改了格式（加粗/对齐之类），文字重放带不过来 —— 这份没有任何段落冲突，
+  // 不能沿用上面那句「同一段两边都改了 · 0 处」（dev-board#631）。
+  mergeRowManualFormatOnly: '{other}只改了格式的 {count} 段带不过来，需要你处理',
   mergeRowManualXlsx: '同一格两边都改了 · {count} 处',
   mergeRowManualPptx: '同一页两边都改了 · {count} 处',
   mergeRowWholeBinary: 'PDF 与图片没有可比对的段落，只能整份选择',

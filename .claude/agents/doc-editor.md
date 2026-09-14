@@ -302,6 +302,17 @@ HOUSE 不再是常量：`buildHouse(profile)` 从画像 JSON 派生写端常量�
   版本对比标签页的只读靠的是「宿主没有任何保存路径」，不是靠它。`build_merge_draft` 因此**刻意不派发它**：
   合并稿本来就要可编辑。**别再拿这条命令去实现只读**，也别因为「看起来没用」把 `compare_document` 那句删掉之后
   以为只读性变了——两处的只读性从来都不由它提供。
+- **`.uno:CompareDocuments` 会弹 LO 原生的「管理修订」对话框，唯一压得住它的是「派发前把 LayoutManager
+  藏掉」**（dev-board#631，2026-09-14 真机实测，无头壳同样复现）：LayoutManager 可见时这条派发顺手
+  `ToggleChildWindow(FN_REDLINE_ACCEPT)`，对话框压在正文上、吃掉点击。**`NoAcceptDialog` 属性本引擎不认**
+  （带上它对话框照弹，别再往那条路上走）。所以 `compareWithBytes` 在派发之前调 `hideNativeChrome()`
+  （`lm.setVisible(false)`，:2948 上方）。位置不能往前挪也不能交给宿主：**`load_document` 会把藏好的 chrome
+  重新拉出来**（实测 `set_chrome{all:false}` 之后 `load_document`，`isVisible` 读回 true），而
+  `build_merge_draft` 内部连做三次 `load_document`，比较是这条链里最后一个会重建 chrome 的动作。
+  顺带这也补上了 dev-board#631 的另一半：`MergeReviewTab` / `VersionCompareTab` 都不是 `LibreOfficeEditor`、
+  没有 `EditorToolbar`，而**藏原生外壳的唯一调用点就是 `EditorToolbar.bootstrap()` 里那一句 `applyChrome(true)`**
+  ——所以那两个标签页此前整套菜单栏/两排工具栏/状态栏/右侧栏全露着。lowa-e2e 组 13 与组 34 各有一条
+  「先把 chrome 全开、命令跑完断言 `set_chrome({}).visible.all === false`」的守卫，摘掉 `hideNativeChrome()` 即转红。
 - **字符格式必须从跨整段的文字游标上读，不能问段落对象**（真机实测）——段落对象自己的 `CharWeight` 给的是
   **段落默认值**，整段加粗时读回来仍是 100，只有 `el.getText().createTextCursorByRange(el)` 建出来的游标读得到 150
   （`paragraphScan` :2995）。照段落对象读的话，「另一侧把整段加粗了」这一档会被判成「没改格式」，
@@ -324,7 +335,7 @@ lowa-e2e 组 34 最后一项就是篡改一条 `baseUnits.norm` 后断言必须�
 ## 验证
 
 - 装载失败分类 / relay 超时自愈判据 / 探活预算：`cd frontend && npm run test:lowa-unit`（node --test，不需要引擎；`tests/lowa-unit/editorLoadFailure.test.mjs`）。
-- 核心回归：`cd frontend && npm run test:lowa-e2e`（真引擎 puppeteer-core 无头，34 组人机模拟，2026-09-14 基线 542 步——组 34 是三方合并那一组，`build_merge_draft` / `merge_take_other` / `sheet_get_active_cell` / `slide_get_current`，夹具由 `tests/lowa-e2e/fixtures/merge/gen.mjs` 现造；前置 `npm run build:zetaoffice` + `node ../desktop/scripts/fetch-lowa-assets.js` 或设 LOWA_ENGINE_DIR）。
+- 核心回归：`cd frontend && npm run test:lowa-e2e`（真引擎 puppeteer-core 无头，34 组人机模拟，2026-09-14 基线 576 步——组 34 是三方合并那一组，`build_merge_draft` / `merge_take_other` / `sheet_get_active_cell` / `slide_get_current`，夹具由 `tests/lowa-e2e/fixtures/merge/gen.mjs` 现造；前置 `npm run build:zetaoffice` + `node ../desktop/scripts/fetch-lowa-assets.js` 或设 LOWA_ENGINE_DIR）。
 - 修订视图三态的接线契约（白名单 / 三态命令序列 / 换文档复位）：`npm run test:revision-view`（node --test，不需要引擎）。
 - 滚动稳定性（dev-board#604）：`npm run test:lowa-scroll`（真引擎，`tests/lowa-e2e/scroll-stability.mjs`）。真滚轮滚到第三页后逐条打只读命令（`get_review_context` / `get_completion_context` / `__agent` 读取 / 客体页自发的 180ms 刷新），断言 `get_review_layout().view.top` 一动不动；每步前先断言视口确实已离开文首，防空断言。
 - 表格单元格里的键入（dev-board#627）：`npm run test:lowa-table-retype`（真引擎，`tests/lowa-e2e/table-retype.mjs`）。显示方式（内联/气泡）× 删除路径（逐次 Backspace / 带选区一次删）× 输入路径（`insert_at_cursor` / CDP 真 IME 提交）八组，外加未删改的单元格直接键入与回车、正文对照组。每组两头都判：新字既要进单元格文本（`table_read` 比打字前**多出**这几个字，光看「包含李楠」会被行内视图里划掉的旧字骗过），又要真画在单元格里（文档按 200% 显示后数光标带的深色像素；100% 下一个汉字只有十来个像素，和插入符一个量级分不开）。无头 Chrome 第一张截图可能是空白画布，所以每次测量先丢一张热身。末尾还有一轮 Tab：走覆盖层真实 keydown（`page.keyboard.press('Tab')`，输入框已聚焦），断言 A1 →Tab→ B1 →Shift+Tab→ A1、两格都不含 `\t`，再回正文确认 Tab 仍插制表符。`forward()` 即发即忘，所以判定要轮询 `get_ui_state().selection.cellName` 而不是等回包。

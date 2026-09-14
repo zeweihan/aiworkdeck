@@ -99,6 +99,21 @@ test('文案：同一段两边都改了带处数；表格按格、演示按页�
   )
 })
 
+// dev-board#631：自动合并跑完才发现「另一侧只改了格式」而降级的那条路上 overlapCount
+// 是 0，沿用上一句就成了「同一段两边都改了 · 0 处」——一句假话，还把律师支去找不存在
+// 的冲突。走查代理正是被这句读成了「自动合并卡死」。
+test('文案：因「只改了格式」降级的行说清真实原因，不谎报 0 处段落冲突', () => {
+  assert.equal(
+    mergeRowText(t, docx({ decision: 'MANUAL', overlapCount: 0, formatOnlyCount: 1 }), { other: { authorName: '律师乙' } }),
+    'version.mergeRowManualFormatOnly({"other":"律师乙","count":1})'
+  )
+  // 真有段落冲突时仍走原来那句（两者并存以冲突为准——那才是律师必须逐处决定的）
+  assert.equal(
+    mergeRowText(t, docx({ decision: 'MANUAL', overlapCount: 2, formatOnlyCount: 1 }), {}),
+    'version.mergeRowManualDocx({"count":2})'
+  )
+})
+
 test('文案：整份文件按原因给不同的解释句', () => {
   const whole = (reason) => ({ path: 'a.pdf', kind: 'WHOLE', decision: 'WHOLE', reason, state: 'PENDING' })
   assert.equal(mergeRowText(t, whole('BINARY'), {}), 'version.mergeRowWholeBinary')

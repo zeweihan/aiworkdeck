@@ -79,8 +79,20 @@ export function mergeRowText(t, row, sides = {}, opts = {}) {
         otherCount,
       })
     }
-    case 'manual-docx':
-      return t('version.mergeRowManualDocx', { count: Number(row.overlapCount) || 0 })
+    case 'manual-docx': {
+      // 降级成 MANUAL 有两条不同的路：后端判「同一段两边都改了」（overlapCount>0），
+      // 与自动合并跑完才发现「另一侧只改了格式、文字重放带不过来」（useDocumentMerge
+      // 把 formatOnlyCount 挂在行上，spec §5.2）。后一条上 overlapCount 是 0，
+      // 沿用同一句文案就成了「同一段两边都改了 · 0 处」——一句假话，而且把律师引到
+      // 去找根本不存在的冲突（dev-board#631 真机走查就是卡在这句上，把一次正常的
+      // 降级读成了「自动合并卡死」）。
+      const overlap = Number(row.overlapCount) || 0
+      const formatOnly = Number(row.formatOnlyCount) || 0
+      if (!overlap && formatOnly) {
+        return t('version.mergeRowManualFormatOnly', { other: sideName(t, sides && sides.other), count: formatOnly })
+      }
+      return t('version.mergeRowManualDocx', { count: overlap })
+    }
     case 'manual-xlsx':
       return t('version.mergeRowManualXlsx', { count: Number(row.overlapCount) || 0 })
     case 'manual-pptx':
