@@ -117,9 +117,28 @@ test('本人改的说「你」，不说自己的名字', () => {
   assert.ok(!out.includes('韩泽伟'), out)
 })
 
-test('自动存档那一版说「自动存档」——那不是谁做的决定', () => {
-  const [u] = units(['第一条'], { 0: { type: 'auto', self: true } })
-  assert.ok(provenanceLabel(t, u).includes('version.typeAuto'))
+test('本人的自动存档：「你」仍在最前，标题位置补「自动存档」', () => {
+  const [u] = units(['第一条'], { 0: { type: 'auto', self: true, title: '' } })
+  const out = provenanceLabel(t, u)
+  assert.ok(out.includes('version.actorYou'), out)
+  assert.ok(out.includes('version.typeAuto'), out)
+})
+
+test('同事的自动存档：名字不许被「自动存档」顶掉', () => {
+  const [u] = units(['第一条'], { 0: { type: 'auto', self: false, authorName: '律师乙', title: '' } })
+  const out = provenanceLabel(t, u)
+  assert.ok(out.includes('律师乙'), out)
+  assert.ok(out.includes('version.typeAuto'), out)
+})
+
+test('带标题的自动存档（罕见）：标题位置显示标题，不说「自动存档」', () => {
+  const [u] = units(['第一条'], {
+    0: { type: 'auto', self: false, authorName: '律师乙', title: '批量重命名后自动存档' },
+  })
+  const out = provenanceLabel(t, u)
+  assert.ok(out.includes('律师乙'), out)
+  assert.ok(out.includes('批量重命名后自动存档'), out)
+  assert.ok(!out.includes('version.typeAuto'), out)
 })
 
 test('没对上的段落 = 本机未保存的改动；截断到头的段落 = 更早的版本', () => {

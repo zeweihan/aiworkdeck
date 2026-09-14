@@ -313,7 +313,9 @@ Analysis {
 ### 5.5 逐段溯源界面
 
 - `LibreOfficeEditor` 顶部工具栏右侧一条**溯源光标条**：光标所在段落对应的
-  「韩泽伟 · 9 月 13 日 · 核对注册资本」（本人显示「你」，自动存档显示「自动存档」，未对上显示「本机未保存的改动」），
+  「韩泽伟 · 9 月 13 日 · 核对注册资本」（作者名永远在最前，本人显示「你」；自动存档不例外——
+  版本标题那一格换成「自动存档」，如「律师乙 · 9 月 14 日 · 自动存档」，罕见带标题的自动存档仍显示标题；
+  未对上显示「本机未保存的改动」），
   点击 → `openCommitHistoryTab({focusSha})`。数据：`sel_changed` 与既有聚焦轮询触发 `get_review_context()` 取 `paragraphIndex`，
   查 `provenanceAlign` 的映射；文档保存落版后（`reload-files`/自动保存成功）重新拉 provenance。
   xlsx 用 `sheet_get_active_cell`，pptx 用 `slide_get_current`，同一条。
