@@ -3382,6 +3382,18 @@ export function getVersionHistory(projectId, opts = {}) {
   });
 }
 
+// 逐段溯源（dev-board#632）：这份文件的每一段/每一格/每一页，最后是哪一版改的。
+// 回 {ref, kind, units:[{key, textHash, sha, shortId, authorName, self, when, title, type}],
+//     truncated, computing}。computing=true 表示后端还在算，前端 3 秒后重试。
+export function getProvenance(projectId, fileId, ref) {
+  const qs = [`fileId=${encodeURIComponent(fileId)}`]
+  if (ref) qs.push(`ref=${encodeURIComponent(ref)}`)
+  return request({
+    url: `/api/projects/${projectId}/version/provenance?${qs.join('&')}`,
+    method: 'GET'
+  });
+}
+
 // 任意两版之间的文件增删改清单（「对比这两版」）。from/to 是 ref（sha 即可）。
 export function getVersionCompare(projectId, from, to) {
   return request({

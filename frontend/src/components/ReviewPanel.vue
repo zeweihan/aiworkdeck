@@ -7,6 +7,9 @@
         <text class="rp-tab" :class="{ on: tab === 'rev' }" @tap="tab = 'rev'">{{ $t('editor.review.revTab', { count: allGroups.length }) }}</text>
         <text class="rp-tab" :class="{ on: tab === 'cmt' }" @tap="tab = 'cmt'">{{ $t('editor.review.cmtTab', { count: comments.length }) }}</text>
         <text class="rp-tab" :class="{ on: tab === 'evd' }" @tap="tab = 'evd'">{{ $t('editor.review.evidenceTab', { count: evidenceCount }) }}</text>
+        <!-- 「溯源」（dev-board#632）：这一段是谁、哪一版、什么时候改的。
+             这份文件没有版本记录时 provenance 为 null，标签整个不出现。 -->
+        <text v-if="provenance" class="rp-tab" :class="{ on: tab === 'prov' }" @tap="tab = 'prov'">{{ $t('version.provenanceTab') }}</text>
       </view>
       <text v-else class="rp-merge-title">{{ $t('version.mergePanelTitle') }}</text>
       <text class="rp-close" @tap="$emit('close')">{{ $t('editor.review.collapse') }}</text>
@@ -156,7 +159,7 @@
       </template>
 
       <!-- 批注 -->
-      <template v-else>
+      <template v-else-if="tab === 'cmt'">
         <view v-if="!comments.length" class="rp-empty">
           <text class="rp-empty-t">{{ $t('editor.review.emptyCmtTitle') }}</text>
           <text class="rp-empty-s">{{ $t('editor.review.emptyCmtSub') }}</text>
@@ -174,6 +177,24 @@
           <view class="rp-acts">
             <text class="rp-act" @tap.stop="toggleResolved(c)">{{ c.resolved ? $t('editor.review.reopen') : $t('editor.review.resolve') }}</text>
           </view>
+        </view>
+      </template>
+
+      <!-- 溯源：按段落序列出「首 40 字 · 谁 · 哪天 · 哪一版」。点行定位到那一段，
+           点那一行的出处跳提交历史。 -->
+      <template v-else-if="tab === 'prov'">
+        <view v-if="provSummary" class="rp-prov-sum">{{ provSummary }}</view>
+        <view v-if="provenance && provenance.truncated" class="rp-prov-note">{{ $t('version.provenanceTruncated') }}</view>
+        <view v-if="!provRows.length" class="rp-empty">
+          <text class="rp-empty-t">{{ $t('version.provenanceEmpty') }}</text>
+        </view>
+        <view v-for="row in provRows" :key="'p' + row.index" class="rp-card rp-prov" @tap="gotoParagraph(row)">
+          <text class="rp-text">{{ row.snippet }}</text>
+          <text
+            class="rp-prov-from"
+            :class="{ link: !!(row.unit && row.unit.sha) }"
+            @tap.stop="openHistory(row)"
+          >{{ row.label }}</text>
         </view>
       </template>
     </scroll-view>
@@ -201,6 +222,7 @@ import EvidencePanel from '@/components/EvidencePanel.vue'
 import {
   groupRevisions, countByAuthorKind, filterByAuthorKind, linkCommentsToRevisions, authorKind,
 } from '@/utils/reviewGrouping.js'
+import { provenanceLabel } from '@/utils/provenanceAlign.js'
 
 // RedlineType 归一后的显示键 → i18n 键。插入/删除沿用旧键（文案不变）。
 const TYPE_I18N = {
@@ -228,7 +250,7 @@ function fenceSnapshot(src, fields) {
 export default {
   name: 'ReviewPanel',
   components: { EvidencePanel },
-  emits: ['close', 'changed', 'locate', 'merge-state', 'open-other-version'],
+  emits: ['close', 'changed', 'locate', 'merge-state', 'open-other-version', 'open-history'],
   props: {
     documentLocation: { type: Object, default: () => ({}) },
     // LibreOffice executor（executeCommand(action, params)）。null 时面板静默。
@@ -258,6 +280,9 @@ export default {
     // 每处改动的时间 = 那一侧版本的提交时间；引擎给的修订日期是比较时刻，界面不用它。
     mainWhen: { type: String, default: '' },
     otherWhen: { type: String, default: '' },
+    // 逐段溯源（dev-board#632）：{rows:[{index, text, unit}], summary, truncated, loading}。
+    // null = 这份文件没有溯源可看（没开版本记录 / 老服务端），「溯源」标签不出现。
+    provenance: { type: Object, default: null },
   },
   data() {
     return {
@@ -335,6 +360,17 @@ export default {
       ]
     },
     revisionGroups() { return filterByAuthorKind(this.allGroups, this.authorFilter) },
+    provSummary() { return (this.provenance && this.provenance.summary) || '' },
+    provRows() {
+      const rows = (this.provenance && this.provenance.rows) || []
+      const t = (k, p) => this.$t(k, p)
+      return rows.map((row) => ({
+        index: row.index,
+        unit: row.unit || null,
+        snippet: (String(row.text || '').trim() || this.$t('editor.review.emptyText')).slice(0, 40),
+        label: provenanceLabel(t, row.unit),
+      }))
+    },
     // 批注清单：标出「这条批注已经挂到 N 条修订上」，并按同一口径给出作者归类。
     commentRows() {
       const linked = this.links.linked
@@ -536,6 +572,14 @@ export default {
         identifier: target.identifier, documentSeq: g.documentSeq, revision: g.revision,
       }) })
     },
+    gotoParagraph(row) {
+      this.run('select_paragraph', { index: row.index })
+    },
+    openHistory(row) {
+      const sha = row && row.unit && row.unit.sha
+      if (!sha) return
+      this.$emit('open-history', { sha })
+    },
     gotoComment(c) {
       this.run('goto_comment', { id: c.id, index: c.index, documentSeq: c.documentSeq, revision: c.revision })
     },
@@ -671,4 +715,10 @@ export default {
 .rp-three-col { padding: 5px 7px; border-radius: 6px; background: var(--awd-surface-2); }
 .rp-three-h { display: block; font-size: 10px; color: var(--awd-text-3); margin-bottom: 2px; }
 .rp-three-t { display: block; font-size: 12px; color: var(--awd-text); line-height: 1.45; word-break: break-all; }
+/* 溯源列表：一行一段，上面是段落首 40 字，下面是它的出处。 */
+.rp-prov { cursor: pointer; }
+.rp-prov-sum { padding: 8px 10px; font-size: 11.5px; color: var(--awd-text-2); }
+.rp-prov-note { padding: 0 10px 8px; font-size: 11px; color: var(--awd-text-3); line-height: 1.6; }
+.rp-prov-from { display: block; margin-top: 4px; font-size: 11px; color: var(--awd-text-3); }
+.rp-prov-from.link { color: var(--awd-accent-text); text-decoration: underline; }
 </style>
