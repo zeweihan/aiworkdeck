@@ -13,12 +13,58 @@
             <view class="adopt-row-main">
               <text class="adopt-row-name">{{ row.name }}</text>
               <text
-                v-if="mainlineTip && draftTip"
+                v-if="mainlineTip && draftTip && showsWholeChoice(row)"
                 class="adopt-row-compare"
                 @tap="compare(row)"
               >{{ $t('version.compareViewDiff') }}</text>
             </view>
-            <view class="adopt-row-choices">
+            <!-- 逐份说明：这份是已经替你合好了、还在合、要你逐处裁决，还是只能整份选。
+                 legacy = 后端还没给 documentMerges（老版本），保持原来的纯三选一形态。 -->
+            <text v-if="row.state !== 'legacy'" class="adopt-row-note">{{ row.text }}</text>
+            <view v-if="rowActions(row).length" class="adopt-row-actions">
+              <text
+                v-for="a in rowActions(row)"
+                :key="a.key"
+                class="adopt-row-action"
+                @tap="onRowAction(row, a.key)"
+              >{{ a.label }}</text>
+            </view>
+            <!-- 表格逐格 / 演示逐页：两边都改过的那些格/页，每行选一边。
+                 展开就在这张清单里做，不另开标签页（只有 docx 要引擎渲染）。 -->
+            <view v-if="isStructuredRow(row)" class="merge-cells">
+              <text v-if="analysisState[row.path] === 'loading'" class="merge-cell-hint">{{ $t('version.mergeOverlapLoading') }}</text>
+              <text v-else-if="analysisState[row.path] === 'error'" class="merge-cell-hint">{{ $t('version.mergeOverlapFailed') }}</text>
+              <template v-else>
+                <view v-for="ov in overlapsOf(row)" :key="ov.key" class="merge-cell-row">
+                  <text class="merge-cell-key">{{ cellKeyLabel(row, ov) }}</text>
+                  <text class="merge-cell-base">{{ $t('version.mergeColBase') }}：{{ ov.baseText || $t('version.mergeEmptyCell') }}</text>
+                  <view class="merge-cell-picks">
+                    <view
+                      class="merge-cell-pick"
+                      :class="{ checked: pickOf(row.path, ov.key) === 'M' }"
+                      @tap="pickCell(row.path, ov.key, 'M')"
+                    >
+                      <text class="merge-cell-side">{{ sideLabel('main') }}</text>
+                      <text class="merge-cell-text">{{ ov.mainText || $t('version.mergeEmptyCell') }}</text>
+                    </view>
+                    <view
+                      class="merge-cell-pick"
+                      :class="{ checked: pickOf(row.path, ov.key) === 'T' }"
+                      @tap="pickCell(row.path, ov.key, 'T')"
+                    >
+                      <text class="merge-cell-side">{{ sideLabel('other') }}</text>
+                      <text class="merge-cell-text">{{ ov.otherText || $t('version.mergeEmptyCell') }}</text>
+                    </view>
+                  </view>
+                </view>
+                <view
+                  class="awd-btn awd-btn-primary merge-cell-confirm"
+                  :class="{ 'awd-btn-disabled': !allCellsPicked(row) || busy }"
+                  @tap="confirmStructured(row)"
+                >{{ $t('version.mergeRowConfirm') }}</view>
+              </template>
+            </view>
+            <view v-if="showsWholeChoice(row)" class="adopt-row-choices">
               <view
                 v-for="opt in choiceOptions"
                 :key="opt.value"
@@ -34,7 +80,9 @@
               </view>
             </view>
           </view>
-          <view class="adopt-foot-note">{{ footNote }}</view>
+          <!-- 脚注讲的是「两份都留着」那个选项的后果——一份整份三选一都没有时，
+               这句话没有任何对应的按钮，留着只会让律师去找一个不存在的选项。 -->
+          <view v-if="hasWholeChoiceRow" class="adopt-foot-note">{{ footNote }}</view>
         </template>
         <!-- 文案要跟下面那个按钮的字对上：这里唯一可点的出口就是「先不采纳」，
              说「撤销」会让律师在界面上找不到对应的按钮。 -->
@@ -64,7 +112,10 @@ import {
   resolveAdopt, abortAdopt,
   resolveCloudMerge, abortCloudMerge,
   resolveSessionEnd, abortSessionEnd,
+  getMergeAnalysis, postMergeResolveStructured,
 } from '@/services/api.js'
+import { isDesktopHost } from '@/services/host.js'
+import { mergeRowState, mergeRowText } from '@/utils/mergeRows.js'
 
 export default {
   name: 'AdoptConflictDialog',
@@ -83,13 +134,32 @@ export default {
     // 「对比」按钮要用的两个 ref：基线侧 tip / 增量侧 tip，来自 /status 对应的冲突字段。
     mainlineTip: { type: String, default: null },
     draftTip: { type: String, default: null },
+    // ---- 三方合并（spec §5.3）。后端还没给这三个字段时全部为空，本组件退回
+    // 原来的「整份三选一」形态，一行代码都不走新分支。 ----
+    // [{path, kind, decision, reason, mainChanges, otherChanges, overlapCount, state}]
+    // 加上 useDocumentMerge 挂上去的前端字段（failed/failReason/mainCount/otherCount）。
+    documentMerges: { type: Array, default: () => [] },
+    // {main: {sha, authorName, when, title, self}, other: {...}}——两侧尖端那一版的信息。
+    // 注意 main/other 是**物理侧**，与语境无关（方向表见 version-control.md）。
+    sides: { type: Object, default: () => ({}) },
+    // 两边分头改之前的那一版，打开合并比对稿要用
+    mergeBase: { type: String, default: null },
   },
-  emits: ['resolved', 'aborted', 'compare-file'],
+  emits: ['resolved', 'aborted', 'compare-file', 'open-merge-review', 'retry-merge'],
   data() {
     return {
       resolutions: {},
       collapsed: false,
       busy: false,
+      // 逐格/逐页裁决：path -> 'loading'|'ready'|'error'
+      analysisState: {},
+      // path -> Analysis（只用 overlaps）
+      analysisByPath: {},
+      // path -> {key: 'M'|'T'}
+      picks: {},
+      // 本组件自己知道、但 /status 还没回来的「这份已经合好了」：
+      // 合并比对稿完成裁决、逐格裁决确定之后立刻生效，不等下一轮轮询。
+      localMerged: {},
     }
   },
   computed: {
@@ -110,6 +180,8 @@ export default {
      * 实际丢的是对方对这份文档的全部改动。所以只讲事实：两边都改过，整份二选一。
      */
     hintText() {
+      // 后端给得出逐份分析时，「没法自动合到一起」这句就不再成立——能合的已经合好了。
+      if ((this.documentMerges || []).length) return this.$t('version.conflictHintMerge')
       return this.$t('version.conflictHint')
     },
     // 三个选项的后果说明必须短到各占一行——弹窗高度受 max-height 限制，说明一长
@@ -171,19 +243,169 @@ export default {
       if (this.mode === 'session-end') return this.$t('version.abortSessionEnd')
       return this.$t('version.abortAdopt')
     },
+    mergeByPath() {
+      const map = {}
+      for (const m of this.documentMerges || []) {
+        if (m && m.path) map[m.path] = this.localMerged[m.path] ? { ...m, ...this.localMerged[m.path] } : m
+      }
+      // 老后端没给 documentMerges，但本组件自己合好过某份（逐格裁决）：也要记住
+      for (const p of Object.keys(this.localMerged)) {
+        if (!map[p]) map[p] = { path: p, ...this.localMerged[p] }
+      }
+      return map
+    },
     rows() {
-      return this.conflictingPaths.map((path) => ({
-        path,
-        name: path.split('/').pop() || path,
-      }))
+      const isDesktop = isDesktopHost()
+      return this.conflictingPaths.map((path) => {
+        const merge = this.mergeByPath[path] || null
+        const state = merge ? mergeRowState(merge, { isDesktop }) : 'legacy'
+        return {
+          path,
+          name: path.split('/').pop() || path,
+          merge,
+          state,
+          text: merge ? mergeRowText(this.$t.bind(this), merge, this.sides || {}, { isDesktop }) : '',
+        }
+      })
     },
+    hasWholeChoiceRow() {
+      return this.rows.some((r) => this.showsWholeChoice(r))
+    },
+    // 「确认选择」的闸：每一行都得有结论。已经合好的（merged）算有结论——提交 MERGED；
+    // 还在自动合、或者律师还没做逐处裁决的，一律挡住。挡不住的后果是律师在
+    // 「同一段两边都改了」还没处理时就按整份覆盖收尾，对方那段改动静默丢掉。
     allChosen() {
-      return this.rows.length > 0 && this.rows.every((r) => !!this.resolutions[r.path])
+      if (!this.rows.length) return false
+      return this.rows.every((r) => {
+        if (r.state === 'merged') return true
+        if (this.showsWholeChoice(r)) return !!this.resolutions[r.path]
+        return false
+      })
     },
+  },
+  watch: {
+    // 逐格/逐页那两种行一出现就去拉正文（清单里直接展开，不需要律师再点一下展开）
+    rows: {
+      immediate: true,
+      handler(rows) {
+        for (const r of rows || []) {
+          if (this.isStructuredRow(r) && !this.analysisState[r.path]) this.loadAnalysis(r.path)
+        }
+      },
+    },
+  },
+  mounted() {
+    // 合并比对稿标签页完成裁决后发这条；总览据此把行态刷成「已合并」。
+    this._onFileResolved = (payload) => {
+      const path = payload && payload.path
+      if (!path) return
+      this.localMerged = { ...this.localMerged, [path]: { state: 'MERGED' } }
+    }
+    uni.$on('awd:merge-file-resolved', this._onFileResolved)
+  },
+  beforeUnmount() {
+    if (this._onFileResolved) uni.$off('awd:merge-file-resolved', this._onFileResolved)
   },
   methods: {
     choose(path, value) {
       this.resolutions = { ...this.resolutions, [path]: value }
+    },
+    // 哪几种行态还要律师做整份三选一：只能整份选的（pdf/图片/太大/解析不了）、
+    // 没有引擎的、自动合并失败的，以及老后端的 legacy 行。已合好 / 正在合 / 逐处裁决
+    // 这三种绝不能再给三选一——那是"整份覆盖"，会把已经合进去的对方改动一把抹掉。
+    showsWholeChoice(row) {
+      return row.state === 'legacy' || row.state === 'whole'
+        || row.state === 'whole-nondesktop' || row.state === 'auto-failed'
+    },
+    isStructuredRow(row) {
+      return row.state === 'manual-xlsx' || row.state === 'manual-pptx'
+    },
+    rowActions(row) {
+      if (row.state === 'merged') return [{ key: 'view', label: this.$t('version.mergeViewMerged') }]
+      if (row.state === 'manual-docx') return [{ key: 'review', label: this.$t('version.mergeOpenReview') }]
+      if (row.state === 'auto-failed') return [{ key: 'retry', label: this.$t('version.mergeRetryAuto') }]
+      return []
+    },
+    onRowAction(row, key) {
+      if (key === 'retry') { this.$emit('retry-merge', { path: row.path }); return }
+      this.openMergeReview(row, key === 'view')
+    },
+    // 合并比对稿标签页（F3 的 MergeReviewTab）。弹窗是全屏遮罩，和编辑区标签页没法
+    // 同屏共存，先收起——与「对比」同一套处置，裁决态本身留在后端，收起不丢东西。
+    openMergeReview(row, readonly) {
+      this.collapsed = true
+      this.$emit('open-merge-review', {
+        projectId: this.projectId,
+        path: row.path,
+        name: row.name,
+        ctx: this.mode,
+        mergeBase: this.mergeBase,
+        mainRef: this.mainlineTip,
+        otherRef: this.draftTip,
+        sides: this.sides || {},
+        readonly: !!readonly,
+      })
+    },
+    // 两边那两栏的抬头。后端给得出作者名就用作者名（展示名，不是用户名）；
+    // 给不出就退回语境标签（「我这份 / 同事那份」那一套）。
+    sideLabel(which) {
+      const side = (this.sides || {})[which]
+      if (side && side.self) return this.$t('version.mergeSideMine')
+      const name = side && typeof side.authorName === 'string' ? side.authorName.trim() : ''
+      if (name) return this.$t('version.mergeSideOther', { name })
+      return which === 'main' ? this.compareLabels.oldLabel : this.compareLabels.newLabel
+    },
+    cellKeyLabel(row, ov) {
+      if (row.state !== 'manual-pptx') return ov.key
+      const m = /^s(\d+)$/.exec(String(ov.key || ''))
+      return m ? this.$t('version.mergeColSlide', { n: m[1] }) : this.$t('version.mergeSlideOrder')
+    },
+    async loadAnalysis(path) {
+      this.analysisState = { ...this.analysisState, [path]: 'loading' }
+      try {
+        const res = await getMergeAnalysis(this.projectId, path)
+        const data = (res && res.data) || {}
+        this.analysisByPath = { ...this.analysisByPath, [path]: data }
+        this.analysisState = { ...this.analysisState, [path]: 'ready' }
+      } catch (e) {
+        console.warn('[Merge] 读取逐处分析失败', path, e)
+        this.analysisState = { ...this.analysisState, [path]: 'error' }
+      }
+    },
+    overlapsOf(row) {
+      const a = this.analysisByPath[row.path]
+      return (a && a.overlaps) || []
+    },
+    pickOf(path, key) {
+      return (this.picks[path] || {})[key] || ''
+    },
+    pickCell(path, key, side) {
+      const cur = { ...(this.picks[path] || {}) }
+      cur[key] = side
+      this.picks = { ...this.picks, [path]: cur }
+    },
+    allCellsPicked(row) {
+      const list = this.overlapsOf(row)
+      if (!list.length) return false
+      return list.every((ov) => !!this.pickOf(row.path, ov.key))
+    },
+    // 逐格/逐页确定：合并文件由后端按这份清单用 POI 拼，前端不送字节。
+    async confirmStructured(row) {
+      if (this.busy || !this.allCellsPicked(row)) return
+      this.busy = true
+      try {
+        const decisions = this.overlapsOf(row).map((ov) => ({
+          key: ov.key, side: this.pickOf(row.path, ov.key), action: 'A',
+        }))
+        await postMergeResolveStructured(this.projectId, { path: row.path, decisions })
+        this.localMerged = { ...this.localMerged, [row.path]: { state: 'MERGED' } }
+        uni.$emit('awd:merge-file-resolved', { path: row.path })
+        uni.showToast({ title: this.$t('version.mergeStructuredSaved'), icon: 'none' })
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || this.$t('version.mergeStructuredFailed'), icon: 'none' })
+      } finally {
+        this.busy = false
+      }
     },
     // 弹窗的 .awd-mask 是全屏遮罩，和「对比」打开的编辑区标签页没法同屏共存；
     // 先收起弹窗（不销毁，已选的三选一保留在内存里），对比看完点「继续处理」再展开——
@@ -199,17 +421,28 @@ export default {
         oldLabel: this.compareLabels.oldLabel,
       })
     },
+    // 提交给后端的裁决清单：已经逐处合好的那几份报 MERGED（字节早已落在工作区、
+    // 待决记录也在后端手里，这里只是告诉它"这份按合并结果收尾"），其余报三选一的值。
+    resolutionPayload() {
+      const out = {}
+      for (const r of this.rows) {
+        if (r.state === 'merged') out[r.path] = 'MERGED'
+        else if (this.resolutions[r.path]) out[r.path] = this.resolutions[r.path]
+      }
+      return out
+    },
     async confirm() {
       if (!this.allChosen || this.busy) return
       this.busy = true
       try {
+        const payload = this.resolutionPayload()
         let res
         if (this.mode === 'cloud') {
-          res = await resolveCloudMerge(this.projectId, this.resolutions)
+          res = await resolveCloudMerge(this.projectId, payload)
         } else if (this.mode === 'session-end') {
-          res = await resolveSessionEnd(this.projectId, this.sessionId, this.resolutions)
+          res = await resolveSessionEnd(this.projectId, this.sessionId, payload)
         } else {
-          res = await resolveAdopt(this.projectId, this.draftId, this.resolutions)
+          res = await resolveAdopt(this.projectId, this.draftId, payload)
         }
         const data = (res && res.data) || {}
         if (data.notice) uni.showToast({ title: data.notice, icon: 'none' })
@@ -277,6 +510,26 @@ export default {
 .adopt-row-name { font-size: 13.5px; color: var(--awd-text); word-break: break-all; }
 .adopt-row-compare { font-size: 12px; color: var(--awd-accent-text); text-decoration: underline; cursor: pointer; flex-shrink: 0; margin-left: 12px; }
 .adopt-row-choices { display: flex; flex-direction: column; gap: 6px; }
+/* 逐份说明（「已合并：…」「同一段两边都改了 · 2 处」）：这一行是律师判断
+   "这份还要不要我动手"的唯一依据，字号比选项说明大半级。 */
+.adopt-row-note { display: block; font-size: 12.5px; color: var(--awd-text-2); line-height: 1.6; margin-bottom: 8px; }
+.adopt-row-actions { display: flex; gap: 14px; margin-bottom: 8px; }
+.adopt-row-action { font-size: 12px; color: var(--awd-accent-text); text-decoration: underline; cursor: pointer; }
+.merge-cells { display: flex; flex-direction: column; gap: 10px; margin-bottom: 8px; }
+.merge-cell-hint { font-size: 12px; color: var(--awd-text-3); }
+.merge-cell-row { border: 1px solid var(--awd-border-subtle); border-radius: 6px; padding: 8px 10px; }
+.merge-cell-key { display: block; font-size: 12.5px; color: var(--awd-text); font-weight: 600; }
+.merge-cell-base { display: block; font-size: 12px; color: var(--awd-text-3); line-height: 1.5; margin: 4px 0 6px; }
+.merge-cell-picks { display: flex; flex-direction: column; gap: 6px; }
+.merge-cell-pick {
+  display: flex; flex-direction: column; gap: 2px; cursor: pointer;
+  padding: 6px 8px; border: 1px solid var(--awd-border); border-radius: 6px;
+}
+.merge-cell-pick.checked { border-color: var(--awd-accent); background: var(--awd-accent-soft); }
+.merge-cell-side { font-size: 12px; color: var(--awd-text-2); }
+.merge-cell-pick.checked .merge-cell-side { color: var(--awd-accent-text); font-weight: 600; }
+.merge-cell-text { font-size: 12.5px; color: var(--awd-text); line-height: 1.5; word-break: break-all; }
+.merge-cell-confirm { align-self: flex-start; }
 .radio-item {
   display: flex; flex-direction: column; gap: 2px; cursor: pointer;
   padding: 8px 10px; border: 1px solid var(--awd-border); border-radius: 6px;

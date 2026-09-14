@@ -77,9 +77,14 @@
         :conflicting-paths="sessionEndConflict.conflictingPaths"
         :mainline-tip="sessionEndConflict.mainlineTip"
         :draft-tip="sessionEndConflict.sessionTip"
+        :document-merges="sessionEndConflict.documentMerges || []"
+        :sides="sessionEndConflict.sides || {}"
+        :merge-base="sessionEndConflict.mergeBase"
         @resolved="onReload"
         @aborted="refresh"
         @compare-file="$emit('compare-file', $event)"
+        @open-merge-review="$emit('open-merge-review', $event)"
+        @retry-merge="$emit('retry-merge', $event)"
       />
       <AdoptConflictDialog
         v-else-if="cloudConflict"
@@ -88,9 +93,14 @@
         :conflicting-paths="cloudConflict.conflictingPaths"
         :mainline-tip="cloudConflict.mainlineTip"
         :draft-tip="cloudConflict.cloudTip"
+        :document-merges="cloudConflict.documentMerges || []"
+        :sides="cloudConflict.sides || {}"
+        :merge-base="cloudConflict.mergeBase"
         @resolved="onReload"
         @aborted="refresh"
         @compare-file="$emit('compare-file', $event)"
+        @open-merge-review="$emit('open-merge-review', $event)"
+        @retry-merge="$emit('retry-merge', $event)"
       />
       <AdoptConflictDialog
         v-else-if="adoptConflict"
@@ -100,9 +110,14 @@
         :conflicting-paths="adoptConflict.conflictingPaths"
         :mainline-tip="adoptConflict.mainlineTip"
         :draft-tip="adoptConflict.draftTip"
+        :document-merges="adoptConflict.documentMerges || []"
+        :sides="adoptConflict.sides || {}"
+        :merge-base="adoptConflict.mergeBase"
         @resolved="onReload"
         @aborted="onReload"
         @compare-file="$emit('compare-file', $event)"
+        @open-merge-review="$emit('open-merge-review', $event)"
+        @retry-merge="$emit('retry-merge', $event)"
       />
     </template>
   </view>
@@ -136,7 +151,9 @@ export default {
   // status-changed：面板内的结束工作/丢弃/回主线/采纳/放弃等操作都只更新面板自己的
   // 状态，不会通知页面级的顶栏/底部工作状态 chip（它们各自轮询/事件驱动，互不相通）。
   // refresh()/onReload() 每次拉完 /status 都发一次，页面据此重新拉一次自己的状态点。
-  emits: ['compare-file', 'clear-file-filter', 'reload-files', 'adopt-conflict', 'open-collab', 'open-history', 'status-changed'],
+  // open-merge-review / retry-merge：裁决总览里那两个按钮（「打开合并比对稿」「重试
+  // 自动合并」）的出口。标签页与隐藏引擎实例都归页面管，本面板只负责往上传。
+  emits: ['compare-file', 'clear-file-filter', 'reload-files', 'adopt-conflict', 'open-collab', 'open-history', 'status-changed', 'open-merge-review', 'retry-merge'],
   provide() {
     return { projectId: this.projectId }
   },

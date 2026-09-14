@@ -721,6 +721,8 @@
             @status-changed="checkAdoptConflict"
             @open-collab="openCollab"
             @open-history="openCommitHistoryTab({})"
+            @open-merge-review="onOpenMergeReview"
+            @retry-merge="onRetryMerge"
           />
           <MarketSidebarPanel
             v-else-if="leftPaneKey === 'market'"
@@ -1894,7 +1896,7 @@
         v-if="adoptConflictPending && leftPaneKey !== 'version'"
         class="adopt-pending-bar"
       >
-        <text class="adopt-pending-text">{{ $t('workbench.adoptPendingText') }}</text>
+        <text class="adopt-pending-text">{{ adoptPendingBarText }}</text>
         <text class="adopt-pending-go" @tap="goHandleAdoptConflict">{{ $t('workbench.goHandle') }}</text>
       </view>
 
@@ -2117,7 +2119,13 @@ import {
   getCloudMembers, // 成员堆栈：案卷放进案件库后，同事在库那边的名单本机 /members 里没有
   getCurrentUser as getCurrentUserApi, // 顶栏头像：补一次真实接口，本地缓存只是首屏兜底
   registerMeetingFromFile, // 右键转写：音频文件注册进会议录音面板（dev-board#227）
-  getDocInsight // 「依据」实体索引预取：窗格关着也要能 Cmd 点正文（dev-board#541）
+  getDocInsight, // 「依据」实体索引预取：窗格关着也要能 Cmd 点正文（dev-board#541）
+  // 三方合并：逐份落盘 + 三语境收尾（useDocumentMerge 的依赖，spec §5.2）
+  postMergeResolveFile,
+  postMergeResolveStructured,
+  resolveAdopt,
+  resolveCloudMerge,
+  resolveSessionEnd
 } from '@/services/api.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { signOut } from '@/utils/signOut.js'
@@ -2173,6 +2181,8 @@ import { panelDockingData, panelDockingMethods } from './panelDocking.js'
 import { railSortData, railSortMethods } from './railSort.js'
 import { themeSwitchData, themeSwitchMethods, themeSwitchComputed } from './themeSwitch.js'
 import { fileOpenTabsMethods } from './fileOpenTabs.js'
+import { useDocumentMerge } from '@/composables/useDocumentMerge.js'
+import { fetchMergeInputs, buildMergeDraft } from '@/services/mergeDraft.js'
 import { clipboardBridgeMethods } from './clipboardBridge.js'
 import { ocrActionMethods } from './ocrActions.js'
 import { ocrCaptureMethods } from './ocrCapture.js'
@@ -2299,6 +2309,12 @@ export default {
       // 有一次采纳停在待裁决状态（/status 的 adoptConflict）。版本面板之外也要提示，
       // 见模板里的 .adopt-pending-bar。版本面板打开时由它的 /status 拉取实时同步。
       adoptConflictPending: false,
+      // 真要律师动手的份数（能自动合的已经合好了，不算在内）。算不出来时为 0，
+      // 固定条退回不带数字的老文案。
+      adoptPendingCount: 0,
+      // useDocumentMerge 的状态容器（{rows, running, ctx, sides}）。必须在这里声明，
+      // 组合函数是 Object.assign 到这个对象上的，换成 created 里现造的裸对象就不是响应式了。
+      documentMergeState: { rows: [], running: false, ctx: null, sides: {} },
       // 文件树批量选择模式（由页面控制开关）
       fileBatchMode: false,
       checkedFileIds: [],
@@ -2751,7 +2767,16 @@ export default {
      * 律师改了半天文件还没结束本次工作时 chip 会显示「和大家的稿一致」——技术上没错
      * （还没落成版本，确实没什么可交），律师读起来却是假绿灯。
      */
+    // 面板之外那条固定提示条的字。知道份数就说份数——不重叠的那些文件早就静默合好了，
+    // 这里剩下的是真要律师动手的那几份，说清楚几份他才知道要花多少功夫。
+    adoptPendingBarText() {
+      if (this.adoptPendingCount > 0) return this.$t('workbench.adoptPendingCount', { count: this.adoptPendingCount })
+      return this.$t('workbench.adoptPendingText')
+    },
     collabStateText() {
+      // 自动合并进行中排在最前：这几秒里 adoptConflictPending 也是真的，但那时说
+      // 「有文件等你做选择」是假的——还没轮到律师，正在替他合。
+      if (this.documentMergeState.running) return this.$t('version.mergeAutoRunning')
       if (this.adoptConflictPending) return this.$t('workbench.adoptPendingText')
       const c = this.collabCloud || {}
       if (c.offline) return this.$t('workbench.collabOffline')
@@ -2764,6 +2789,7 @@ export default {
       return this.$t('workbench.collabInSync')
     },
     collabTone() {
+      if (this.documentMergeState.running) return 'blue'
       if (this.adoptConflictPending) return 'amber'
       const c = this.collabCloud || {}
       if (c.offline) return 'amber'
@@ -3361,6 +3387,22 @@ export default {
     // mounted 绑定了全局（ipcRenderer/window 级）监听；全局事件只让最近展示的实例
     // 处理，否则一次事件触发 N 份副作用（与 PR#148 剪贴板重复入库同源）
     if (typeof window !== 'undefined') window.__checkbaActiveOverviewVm = this
+    // 三方合并的编排器（spec §5.2）。依赖全部在这里注入：引擎实例从保活池借、
+    // api 与文案从本页取——组合函数自己不 import 任何东西，好让它能被 node --test 直接跑。
+    this._documentMerge = useDocumentMerge({
+      projectId: this.projectId,
+      state: this.documentMergeState,
+      isDesktop: () => isDesktopHost(),
+      t: (key, params) => this.$t(key, params),
+      toast: (title) => uni.showToast({ title, icon: 'none' }),
+      getExecutorForHiddenInstance: () => this.acquireLibreHiddenInstance(),
+      releaseHiddenInstance: (handle) => this.releaseLibreHiddenInstance(handle),
+      fetchMergeInputs,
+      buildMergeDraft,
+      api: { postMergeResolveFile, postMergeResolveStructured, resolveAdopt, resolveCloudMerge, resolveSessionEnd },
+      reloadFiles: (ids) => this.onVersionReloadFiles(ids || []),
+      openOverview: () => this.goHandleAdoptConflict(),
+    })
     // 标签栏的滚轮横滚：只能原生挂（模板 @wheel 收到的是 uni 重建过的普通对象，
     // 见 utils/horizontalWheel.js），所以 DOM 就绪后挂一次，beforeUnmount 摘掉。
     this.$nextTick(() => this.rebindTabsWheel())
@@ -4008,6 +4050,20 @@ export default {
     goHandleAdoptConflict() {
       if (this.leftPaneKey !== 'version') this.toggleLeftPane('version')
     },
+    // 裁决清单里「打开合并比对稿」/「查看合并稿」：标签页由 fileOpenTabs 开
+    // （openMergeReviewTab 是同一批任务里另一件产出，并行开发期间可能还没到位——
+    // 没有就退回原来的整份对比标签，不让按钮点了没反应）。
+    onOpenMergeReview(spec) {
+      if (typeof this.openMergeReviewTab === 'function') { this.openMergeReviewTab(spec); return }
+      this.onVersionCompareFile({
+        path: spec.path, name: spec.name, newRef: spec.otherRef, oldRef: spec.mainRef,
+      })
+    },
+    // 「重试自动合并」：清掉这份文件的失败记账，再拉一次 /status 让编排器重跑它
+    onRetryMerge({ path }) {
+      if (this._documentMerge) this._documentMerge.retry(path)
+      this.checkAdoptConflict()
+    },
     // 进页面时问一次「有没有停在待裁决的采纳」：版本面板可能整个会话都没被打开过
     // （比如上次崩在裁决窗口里、这次进来直接停在资源管理器），那样就没有任何东西
     // 会去拉 /status，律师看不到任何提示。面板打开后由它的 adopt-conflict 事件接管；
@@ -4019,6 +4075,18 @@ export default {
         const res = await getVersionStatus(this.projectId)
         const d = (res && res.data) || {}
         this.adoptConflictPending = !!(d.adoptConflict || d.cloudConflict || d.sessionEndConflict)
+        // 三语境判定链的优先级由后端保证互斥（sessionEnd > cloud > adopt），这里照同序取。
+        const conflict = d.sessionEndConflict || d.cloudConflict || d.adoptConflict || null
+        const ctx = d.sessionEndConflict ? 'session-end' : (d.cloudConflict ? 'cloud' : 'adopt')
+        this.adoptPendingCount = conflict ? (conflict.conflictingPaths || []).length : 0
+        // 不重叠的那些文件在这里被静默合掉（docx 走隐藏引擎实例，xlsx/pptx 走后端 POI），
+        // 全部合成功就自己收尾，不打扰律师；有一份要他动手才把人带到裁决清单。
+        // 组合函数内部按 (另一侧 tip, path) 幂等，这条每 120 秒轮询一次也不会重放。
+        if (this._documentMerge) {
+          this._documentMerge.onConflictStatus(conflict, ctx).catch((e) => {
+            console.warn('[DocumentMerge] 自动合并编排失败', e)
+          })
+        }
         // 底部状态栏工作状态点（同一次 /status，不多打接口）
         this.versionWorkStatus = {
           enabled: !!d.enabled,

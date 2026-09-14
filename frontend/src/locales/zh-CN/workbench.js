@@ -156,6 +156,8 @@ export default {
   webMarkInserted: '已插入网核标记',
   // 采纳等待处理固定条
   adoptPendingText: '有文件等你做选择',
+  // 知道有几份时说得更具体（能自动合的已经合好了，这条说的是真要律师动手的那几份）
+  adoptPendingCount: '有 {count} 份文件等你裁决',
   goHandle: '去处理',
   // 试用版说明弹窗
   trialInfoBody: '当前为试用版，全部功能均可正常使用。升级正式版可连接 AI WorkDeck 账户，同步已购内容并使用平台 AI 通道。',
