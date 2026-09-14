@@ -21,7 +21,9 @@ import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.lib.RepositoryState;
 import org.eclipse.jgit.revwalk.RevCommit;
+import org.eclipse.jgit.revwalk.RevFlag;
 import org.eclipse.jgit.revwalk.RevObject;
+import org.eclipse.jgit.revwalk.RevSort;
 import org.eclipse.jgit.revwalk.RevTag;
 import org.eclipse.jgit.revwalk.RevWalk;
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
@@ -47,8 +49,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -492,6 +496,229 @@ public class ProjectRepoService {
         }
     }
 
+    // ==================== 统一历史（spec 2026-09-14 §2.4） ====================
+
+    /**
+     * 一条参与这次 walk 的引用。{@code type} 只有 {@code "remote"} 有特殊语义
+     * （它决定这条引用算「案件库那一侧」还是「本机这一侧」，进而决定每一行的
+     * {@code remote} 位）；其余取值（mainline / draft / local）只作为标签原样带出去。
+     * {@code name} 是给律师看的那个词，由调用方给——本类不认识「稿」这种业务概念。
+     */
+    public record HistoryRoot(String ref, String type, String name) {}
+
+    /** 打在某一版上的引用标签（这一版正是某条线的尖端）。 */
+    public record RefLabel(String type, String name) {}
+
+    /** 相对第一父提交的 name-status 计数（已滤掉 {@code .awd/}）。 */
+    public record ChangeCounts(int added, int modified, int deleted, int renamed) {}
+
+    /**
+     * 历史里的一行。{@code remote} = 只有案件库那条线能走到它、本机主线与各稿都走不到
+     * （也就是「同事交了、我还没取回」的那几版）。
+     * {@code autoCount} 是折叠进这一行的自动存档数（{@code includeAuto=false} 时）。
+     */
+    public record HistoryRow(VersionEntry entry, List<RefLabel> refs, boolean remote,
+                             int autoCount, ChangeCounts changes) {}
+
+    /** 一页历史。{@code nextCursor} 为 null 表示没有更多了。 */
+    public record HistoryPage(List<HistoryRow> rows, String nextCursor) {}
+
+    /**
+     * 筛选条件。全部可空/可缺省：
+     * {@code cursor} 是上一页最后一行的 sha（从它**之后**继续）；
+     * {@code relPath} 非空时只留触及该文件的版本（口径同 {@link #logForPath}）；
+     * {@code author} 匹配作者邮箱或展示名（都按整串比，不做模糊）；
+     * {@code q} 是标题/完整消息的子串（不区分大小写）；
+     * {@code from}/{@code to} 含端。
+     */
+    public record HistoryQuery(int limit, String cursor, String author, String relPath,
+                               String q, Instant from, Instant to, boolean includeAuto) {}
+
+    /**
+     * 一次 walk 最多看这么多提交（只数游标之后的）。防的是「筛选条件把所有行都排除掉」
+     * 时把整部历史走穿——那种情况下多走几万条也变不出一行来。
+     */
+    static final int HISTORY_MAX_SCAN = 20000;
+
+    /**
+     * 主线 + 各稿 + 案件库最新稿的合并历史，也就是 {@code git log --graph --all} 那一份
+     * （spec 2026-09-14 §2.4）。按提交时间倒序，同时要求拓扑有序——
+     * {@link RevSort#TOPO} 保证每个父提交一定排在它全部子提交之后，
+     * 这既是泳道图能连得上线的前提，也是下面那两个 {@link RevFlag} 能正确传播的前提。
+     *
+     * <p>{@code remote} 位用 JGit 的旗标传播算：案件库那条线的尖端点上 REMOTE，
+     * 本机各条线的尖端点上 LOCAL，{@link RevWalk#carry} 让旗标顺着父边一路带下去；
+     * 一条提交拿到 REMOTE 却没拿到 LOCAL，就是本机还走不到的那种。
+     * 这比「先把本机历史整个 walk 一遍收进 Set 再比对」便宜一趟完整历史。
+     */
+    public HistoryPage history(long projectId, List<HistoryRoot> roots, HistoryQuery query) {
+        int limit = Math.max(1, query.limit());
+        List<MutableRow> picked = new ArrayList<>();
+        String nextCursor = null;
+
+        try (Repository repo = open(projectId); Git git = new Git(repo);
+             RevWalk walk = new RevWalk(repo); RevWalk diffWalk = new RevWalk(repo)) {
+            walk.sort(RevSort.COMMIT_TIME_DESC);
+            walk.sort(RevSort.TOPO, true);
+            RevFlag localSide = walk.newFlag("AWD_LOCAL");
+            RevFlag remoteSide = walk.newFlag("AWD_REMOTE");
+            walk.carry(localSide);
+            walk.carry(remoteSide);
+
+            Map<String, List<RefLabel>> tips = new LinkedHashMap<>();
+            boolean anyRoot = false;
+            for (HistoryRoot r : roots == null ? List.<HistoryRoot>of() : roots) {
+                if (r == null || r.ref() == null || r.ref().isBlank()) continue;
+                ObjectId id = repo.resolve(r.ref());
+                if (id == null) continue;
+                RevCommit tip;
+                try {
+                    tip = walk.parseCommit(id);
+                } catch (Exception e) {
+                    continue; // 引用指向的不是提交（理论上不会有）——跳过而不是让整页失败
+                }
+                tip.add("remote".equals(r.type()) ? remoteSide : localSide);
+                walk.markStart(tip);
+                anyRoot = true;
+                tips.computeIfAbsent(tip.getName(), k -> new ArrayList<>())
+                        .add(new RefLabel(r.type(), r.name()));
+            }
+            if (!anyRoot) return new HistoryPage(List.of(), null);
+
+            Map<String, String> milestones = milestonesIn(repo);
+            TreeFilter pathFilter = query.relPath() == null || query.relPath().isBlank()
+                    ? null : PathFilter.create(query.relPath());
+
+            boolean cursorPending = query.cursor() != null && !query.cursor().isBlank();
+            // 游标那一页的尾巴上可能还跟着几笔已经折进上一行的自动存档，这一页要把它们
+            // 原样跳掉——否则同一笔自动存档会在两页里各算一次。
+            boolean swallowAutos = false;
+            int scanned = 0;
+            int leadingAutos = 0;
+
+            for (RevCommit c : walk) {
+                if (cursorPending) {
+                    if (c.getName().equals(query.cursor())) {
+                        cursorPending = false;
+                        swallowAutos = true;
+                    }
+                    continue;
+                }
+                if (++scanned > HISTORY_MAX_SCAN) {
+                    log.warn("历史扫描超过上限，提前收尾: project={}, scanned={}", projectId, scanned);
+                    break;
+                }
+                VersionEntry entry = toEntry(c, milestones);
+                boolean isAuto = "auto".equals(entry.kind());
+                if (swallowAutos) {
+                    if (isAuto) continue;
+                    swallowAutos = false;
+                }
+                if (!matchesFilters(entry, query)) continue;
+                if (pathFilter != null && !touchesPath(repo, git, diffWalk, c, pathFilter)) continue;
+
+                if (isAuto && !query.includeAuto()) {
+                    if (picked.isEmpty()) leadingAutos++;
+                    else picked.get(picked.size() - 1).autoCount++;
+                    continue;
+                }
+                if (picked.size() >= limit) {
+                    // 这一页满了，而后面还有实打实的一行——留下游标，下一页从它之后接着走
+                    nextCursor = picked.get(picked.size() - 1).entry.sha();
+                    break;
+                }
+                MutableRow row = new MutableRow();
+                row.entry = entry;
+                row.id = c.getId();
+                row.firstParent = c.getParentCount() == 0 ? null : c.getParent(0).getId();
+                row.refs = tips.getOrDefault(c.getName(), List.of());
+                row.remote = c.has(remoteSide) && !c.has(localSide);
+                picked.add(row);
+                if (leadingAutos > 0) {
+                    // 顶上那几笔没有可附的行（比如上一段工作还没收尾就被筛掉了），
+                    // 附给随后出现的第一行——折叠本来就只是一个计数，不该凭空丢掉。
+                    row.autoCount += leadingAutos;
+                    leadingAutos = 0;
+                }
+            }
+
+            List<HistoryRow> rows = new ArrayList<>(picked.size());
+            for (MutableRow r : picked) {
+                rows.add(new HistoryRow(r.entry, r.refs, r.remote, r.autoCount,
+                        countChanges(repo, git, diffWalk, r.firstParent, r.id)));
+            }
+            return new HistoryPage(rows, nextCursor);
+        } catch (VersionException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new VersionException("读取统一历史失败: project=" + projectId, e);
+        }
+    }
+
+    /** history() 的中间态：记录挑中的行，等走完整趟 walk 再算变更计数。 */
+    private static final class MutableRow {
+        VersionEntry entry;
+        ObjectId id;
+        ObjectId firstParent;
+        List<RefLabel> refs = List.of();
+        boolean remote;
+        int autoCount;
+    }
+
+    /** 作者 / 关键词 / 日期三道便宜的筛子（路径那道贵，放在后面单独做）。 */
+    private static boolean matchesFilters(VersionEntry e, HistoryQuery q) {
+        if (q.from() != null && e.when() != null && e.when().isBefore(q.from())) return false;
+        if (q.to() != null && e.when() != null && e.when().isAfter(q.to())) return false;
+        if (q.author() != null && !q.author().isBlank()) {
+            String a = q.author().trim();
+            boolean hit = a.equalsIgnoreCase(e.authorEmail()) || a.equalsIgnoreCase(e.authorName());
+            if (!hit) return false;
+        }
+        if (q.q() != null && !q.q().isBlank()) {
+            String needle = q.q().trim().toLowerCase(Locale.ROOT);
+            String title = e.message() == null ? "" : e.message().toLowerCase(Locale.ROOT);
+            String note = e.note() == null ? "" : e.note().toLowerCase(Locale.ROOT);
+            if (!title.contains(needle) && !note.contains(needle)) return false;
+        }
+        return true;
+    }
+
+    /**
+     * 这一版有没有动过这个文件。口径与 {@link #logForPath} 一致：比的是**相对第一父提交**
+     * 的 diff（根提交与空树比），合并节点拿到的正是这段工作对该文件的净变化。
+     * 算不出来时保守地留下这一行——宁可多显示一行，也不要因为一次读取失败让某一版
+     * 从单文件历史里凭空消失。
+     */
+    private boolean touchesPath(Repository repo, Git git, RevWalk walk, RevCommit c, TreeFilter filter) {
+        try {
+            ObjectId firstParent = c.getParentCount() == 0 ? null : c.getParent(0).getId();
+            return !diffEntries(repo, git, walk, firstParent, c.getId(), filter).isEmpty();
+        } catch (Exception e) {
+            log.warn("按文件筛历史时读取变更失败，保留该版: sha={}", c.getName(), e);
+            return true;
+        }
+    }
+
+    /** 相对第一父提交的增删改名计数。算不出来给全 0（一行的计数不值得让整页失败）。 */
+    private ChangeCounts countChanges(Repository repo, Git git, RevWalk walk,
+                                      ObjectId firstParent, ObjectId id) {
+        int added = 0, modified = 0, deleted = 0, renamed = 0;
+        try {
+            for (FileChange fc : diffEntries(repo, git, walk, firstParent, id, null)) {
+                if (fc.path() == null || fc.path().startsWith(".awd/")) continue;
+                switch (fc.type()) {
+                    case ADD -> added++;
+                    case MODIFY -> modified++;
+                    case DELETE -> deleted++;
+                    case RENAME -> renamed++;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("统计某一版的变更计数失败: sha={}", id == null ? null : id.getName(), e);
+        }
+        return new ChangeCounts(added, modified, deleted, renamed);
+    }
+
     private VersionEntry toEntry(RevCommit c, Map<String, String> milestones) {
         String full = c.getFullMessage();
         String kind = extractTrailer(full, KIND_TRAILER);
@@ -721,6 +948,33 @@ public class ProjectRepoService {
             return id == null ? null : id.getName();
         } catch (Exception e) {
             throw new VersionException("解析版本失败: project=" + projectId + " ref=" + ref, e);
+        }
+    }
+
+    /**
+     * 这个引用/sha 是不是真的指向本仓库里存在的一次提交。
+     *
+     * <p>为什么不能用 {@link #resolveRef} 代替：JGit 的 {@code Repository.resolve} 对一个
+     * **格式合法但库里根本没有**的完整 sha 会原样把 ObjectId 还给你（它只做解析，
+     * 不做存在性检查），要等到拿它去 diff 才炸成技术档异常。所以「这一版在不在」
+     * 必须单独问一次——「对比这两版」的两个入参是律师自己选的，
+     * 找不到就该说人话，不能掉进通用的「操作失败」。
+     *
+     * <p>缺对象/类型不对一律回 false；其余异常照常上抛（那是仓库本身出问题，
+     * 不该被说成「找不到这一版」）。
+     */
+    public boolean commitExists(long projectId, String ref) {
+        if (ref == null || ref.isBlank()) return false;
+        try (Repository repo = open(projectId); RevWalk walk = new RevWalk(repo)) {
+            ObjectId id = repo.resolve(ref);
+            if (id == null) return false;
+            walk.parseCommit(id);
+            return true;
+        } catch (org.eclipse.jgit.errors.MissingObjectException
+                 | org.eclipse.jgit.errors.IncorrectObjectTypeException e) {
+            return false;
+        } catch (Exception e) {
+            throw new VersionException("检查版本是否存在失败: project=" + projectId + " ref=" + ref, e);
         }
     }
 
@@ -1076,6 +1330,13 @@ public class ProjectRepoService {
 
     private static final String ORIGIN = "origin";
     private static final String ORIGIN_MASTER = "refs/remotes/origin/master";
+
+    /**
+     * 案件库那条线在本机的引用名。对外暴露是因为「本机领先 N 版」要拿它当
+     * {@link #commitsBetween} 的起点（spec 2026-09-14 §2.4），常量本身不改名——
+     * 它在本类里还有十几处内部用法。
+     */
+    public String originMasterRef() { return ORIGIN_MASTER; }
     private static final String MILESTONE_SPEC =
             "+refs/tags/awd/milestone/*:refs/tags/awd/milestone/*";
 

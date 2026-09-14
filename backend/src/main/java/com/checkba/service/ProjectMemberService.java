@@ -66,6 +66,18 @@ public class ProjectMemberService {
     @Autowired(required = false)
     private com.checkba.service.account.AccountService accountService;
 
+    /**
+     * 协作事件（spec 2026-09-14 §2.3）：谁把谁加进/移出了案卷。**字段注入**，理由同上；
+     * required=false，桌面单机上这条根本不接线（那里没有案件库，也没人看事件行）。
+     */
+    @Autowired(required = false)
+    private com.checkba.version.cloud.CollabEventService collabEventService;
+
+    /** 单测用：同上。 */
+    void setCollabEventServiceForTest(com.checkba.version.cloud.CollabEventService service) {
+        this.collabEventService = service;
+    }
+
     /** 单测用：这两样走字段注入，手工 new 出来的实例得有地方补上。 */
     void setAccountLookupForTest(AccountBindingRepository repo, String accountBaseUrl) {
         this.accountBindingRepository = repo;
@@ -139,6 +151,23 @@ public class ProjectMemberService {
             // 不可再用，追加查询本身会再报错——只把异常翻译成查重分支本该给出的提示，
             // 跟着事务一起干净回滚。
             throw new IllegalArgumentException("用户已在项目中");
+        }
+        recordMemberEvent(com.checkba.version.cloud.CollabEvent.Kind.MEMBER_ADDED,
+                projectId, requesterId, user.getId(), role);
+    }
+
+    /**
+     * 记一条成员事件。{@code collabEventService} 自己永不抛（见其 record），这里再包一层
+     * 只是防「这条链路上还有别的东西会抛」——把人加进案卷是真动作，不能被旁白拖垮。
+     */
+    private void recordMemberEvent(com.checkba.version.cloud.CollabEvent.Kind kind, Long projectId,
+                                   Long actorUserId, Long targetUserId, String role) {
+        if (collabEventService == null || projectId == null) return;
+        try {
+            collabEventService.record(kind, projectId, actorUserId, null, null, null, null,
+                    targetUserId, role == null ? null : java.util.Map.of("role", role));
+        } catch (Exception e) {
+            log.warn("协作成员事件记录失败（已吞）: kind={}, project={}", kind, projectId, e);
         }
     }
 
@@ -431,6 +460,8 @@ public class ProjectMemberService {
                 .orElseThrow(() -> new IllegalArgumentException("成员不存在"));
 
         projectMemberRepository.delete(member);
+        recordMemberEvent(com.checkba.version.cloud.CollabEvent.Kind.MEMBER_REMOVED,
+                projectId, requesterId, userIdToRemove, targetRole);
 
         // 移出客户只删成员行不算收回权限：访问码没有有效期，持码人再登一次
         // 就会被重新加成 CLIENT 成员，所以同时把他名下的访问码作废掉。

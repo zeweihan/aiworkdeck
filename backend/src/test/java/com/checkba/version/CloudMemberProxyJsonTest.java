@@ -53,6 +53,8 @@ class CloudMemberProxyJsonTest {
         conn.setServerUrl("https://case.example.com");
         conn.setUsername("awd_hanzewei");
         conn.setDeviceToken("awdt_x");
+        conn.setTokenId(41L);
+        conn.setRemoteUserId(88L);
 
         ProjectRemoteRepository remoteRepo = mock(ProjectRemoteRepository.class);
         when(remoteRepo.findByProjectId(any())).thenReturn(Optional.of(remote));
@@ -106,5 +108,38 @@ class CloudMemberProxyJsonTest {
         assertNull(data.get("avatarUrl"), "JSONNull 必须已经变回 Java null");
         assertEquals(Boolean.TRUE, data.get("found"));
         assertEquals("乙律师", data.get("displayName"));
+    }
+
+    /**
+     * 协作事件（spec 2026-09-14 §2.3）：同款 JSONNull 陷阱——事件行里
+     * {@code avatarUrl}、{@code device.name}、{@code commitCount}、{@code target}
+     * 天生就有一大半是 null（成员事件没有设备、签出事件没有 sha），
+     * 不过 toPlain 就是「提交历史」标签页永远打不开。
+     *
+     * <p>同时钉住外层那两个字段：{@code selfUserId} 取**案件库那一侧**的 userId
+     * （CloudConnection.remoteUserId，不是本机 userId），{@code selfTokenId} 是本机这枚令牌。
+     */
+    @Test
+    void collabEventsAreProxiedAsPlainJavaWithSelfIdentity() throws Exception {
+        canned = "{\"code\":0,\"data\":{\"events\":[{\"id\":9,\"kind\":\"PUSH\","
+                + "\"actor\":{\"userId\":5,\"displayName\":\"乙律师\",\"avatarUrl\":null},"
+                + "\"device\":{\"tokenId\":3,\"name\":null},"
+                + "\"fromSha\":\"aaa\",\"toSha\":\"bbb\",\"commitCount\":2,"
+                + "\"target\":null,\"detail\":null,\"createdAt\":\"2026-09-14T10:30:00\"}]}}";
+
+        Map<String, Object> data = cloud.proxyCollabEvents(7L, 100, null);
+
+        String json = assertDoesNotThrow(() -> JACKSON.writeValueAsString(data),
+                "返回值必须是 Jackson 能序列化的纯 Java 结构");
+        assertTrue(json.contains("\"avatarUrl\":null"), json);
+        assertTrue(json.contains("\"name\":null"), json);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> events = (List<Map<String, Object>>) data.get("events");
+        assertEquals(1, events.size());
+        assertNull(events.get(0).get("target"), "JSONNull 必须已经变回 Java null");
+        assertEquals(2, events.get(0).get("commitCount"));
+        // 连接里存的是案件库那一侧的身份：本机 userId 与事件表毫无关系
+        assertEquals(88L, data.get("selfUserId"));
+        assertEquals(41L, data.get("selfTokenId"));
     }
 }

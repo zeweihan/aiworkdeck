@@ -45,6 +45,16 @@ public class ProjectController {
     @Value("${security.local-folder-projects.enabled:false}")
     private boolean localFolderProjectsEnabled;
 
+    /**
+     * 协作事件（spec 2026-09-14 §2.3）：案件库侧「案卷被放进来了」那一条。可选注入，
+     * 理由同上面的 addinProjectLinkService——既有测试手工 new 本控制器，null 即不记事件。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.version.cloud.CollabEventService collabEventService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.DeviceTokenService deviceTokenService;
+
     public ProjectController(ProjectService projectService, ProjectMemberService projectMemberService,
                              com.checkba.service.LocalProjectService localProjectService,
                              com.checkba.storage.ProjectStorageResolver storageResolver) {
@@ -62,7 +72,29 @@ public class ProjectController {
         if (userId == null) {
             throw new IllegalArgumentException("请先登录");
         }
-        return projectService.createProject(request, userId);
+        Project project = projectService.createProject(request, userId);
+        recordSharedIfFromDesktop(project, sessionId, userId);
+        return project;
+    }
+
+    /**
+     * 「{谁} 把案卷放进了案件库」。
+     *
+     * <p>判据是<b>这次建项目用的是设备令牌</b>：案件库侧的项目只有一条来路——桌面端
+     * {@code CloudSyncService.shareToCloud} 带着设备令牌调本端点。刻意不挂在
+     * {@code prepare-remote} 上（那条看着更像「共享」）：{@code cloneFromCloud} 也调它，
+     * 每有一位同事取回一份，历史里就会多出一条「他把案卷放进了案件库」。
+     */
+    private void recordSharedIfFromDesktop(Project project, String sessionId, Long userId) {
+        if (collabEventService == null || deviceTokenService == null || project == null) return;
+        if (sessionId == null
+                || !sessionId.startsWith(com.checkba.service.DeviceTokenService.TOKEN_PREFIX)) {
+            return;
+        }
+        var who = deviceTokenService.resolve(sessionId);
+        collabEventService.record(com.checkba.version.cloud.CollabEvent.Kind.SHARED,
+                project.getId(), userId, who == null ? null : who.tokenId(),
+                project.getName() == null ? null : Map.of("name", project.getName()));
     }
 
     /**

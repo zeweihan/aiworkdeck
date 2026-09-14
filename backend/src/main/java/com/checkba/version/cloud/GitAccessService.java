@@ -29,28 +29,34 @@ public class GitAccessService {
         this.memberService = memberService;
     }
 
-    public Long authorize(HttpServletRequest request, long projectId, boolean write) {
-        Long userId = resolveUser(request);
+    /**
+     * 回的是 {@link DeviceTokenService.ResolvedToken} 而不是裸 userId：协作事件要记下
+     * 「哪一台设备干的」，而这里是整条 git 链路上唯一见过那枚令牌的地方（往下走就只剩
+     * pack 流了）。丢掉 tokenId 的话，同一个账号在两台机器上的动作在事件行里分不开。
+     */
+    public DeviceTokenService.ResolvedToken authorize(HttpServletRequest request, long projectId, boolean write) {
+        DeviceTokenService.ResolvedToken who = resolveUser(request);
+        Long userId = who.userId();
         if (memberService.isClient(projectId, userId)) throw new GitAccessDeniedException(403);
         boolean allowed = write
                 ? memberService.hasWritePermission(projectId, userId)
                 : memberService.hasReadPermission(projectId, userId);
         if (!allowed) throw new GitAccessDeniedException(403);
-        return userId;
+        return who;
     }
 
     /**
      * 用户记忆仓库（user-{id}-memory.git）：owner-only——读写都只有本人可以，
      * 与项目成员体系无关（用户记忆里有跨项目的个人偏好，任何别人都不该看到）。
      */
-    public Long authorizeUserMemory(HttpServletRequest request, long ownerUserId, boolean write) {
-        Long userId = resolveUser(request);
-        if (userId != ownerUserId) throw new GitAccessDeniedException(403);
-        return userId;
+    public DeviceTokenService.ResolvedToken authorizeUserMemory(HttpServletRequest request, long ownerUserId, boolean write) {
+        DeviceTokenService.ResolvedToken who = resolveUser(request);
+        if (who.userId() == null || who.userId() != ownerUserId) throw new GitAccessDeniedException(403);
+        return who;
     }
 
-    /** Basic 头的 password 位是设备令牌 → userId。解析失败一律 401。 */
-    private Long resolveUser(HttpServletRequest request) {
+    /** Basic 头的 password 位是设备令牌 → 用户 + 设备。解析失败一律 401。 */
+    private DeviceTokenService.ResolvedToken resolveUser(HttpServletRequest request) {
         String header = request.getHeader("Authorization");
         if (header == null || !header.startsWith("Basic ")) {
             throw new GitAccessDeniedException(401);
@@ -64,8 +70,8 @@ public class GitAccessService {
         } catch (IllegalArgumentException e) {
             throw new GitAccessDeniedException(401);
         }
-        Long userId = deviceTokenService.resolveUserId(token);
-        if (userId == null) throw new GitAccessDeniedException(401);
-        return userId;
+        DeviceTokenService.ResolvedToken resolved = deviceTokenService.resolve(token);
+        if (resolved == null || resolved.userId() == null) throw new GitAccessDeniedException(401);
+        return resolved;
     }
 }

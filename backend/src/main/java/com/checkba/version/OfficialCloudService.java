@@ -188,8 +188,14 @@ public class OfficialCloudService {
 
     private CloudConnection bridge(String base, Long userId, String key,
                                    String fingerprint, CloudConnection existing) {
+        Map<String, String> bridgeBody = new java.util.LinkedHashMap<>();
+        bridgeBody.put("key", key);
+        // 设备名让协作事件行分得清「你在另一台电脑」是哪一台。取不到主机名就不传
+        // （案件库侧回落成「账户桥接」），绝不让一个可有可无的标签挡住桥接本身。
+        String deviceName = localHostName();
+        if (deviceName != null) bridgeBody.put("deviceName", deviceName);
         JSONObject resp = JSONUtil.parseObj(
-                httpPost(base + "/api/auth/awdk-login", JSONUtil.toJsonStr(Map.of("key", key))));
+                httpPost(base + "/api/auth/awdk-login", JSONUtil.toJsonStr(bridgeBody)));
         if (resp.getInt("code", 1) != 0) {
             throw VersionException.userFacing(LangText.of(
                     "没能连上官方团队案件库：" + resp.getStr("message", "稍后再试一次"),
@@ -203,12 +209,24 @@ public class OfficialCloudService {
         conn.setDisplayName(data.getStr("displayName"));
         conn.setDeviceToken(data.getStr("token"));
         conn.setTokenId(data.getLong("tokenId", null));
+        // 案件库那一侧的 userId：协作事件行判「这条是不是我干的」只能靠它
+        conn.setRemoteUserId(data.getLong("userId", null));
         conn.setAccountFingerprint(fingerprint);
         if (conn.getCreatedAt() == null) {
             conn.setCreatedAt(LocalDateTime.now());
         }
         log.info("已连上官方团队案件库: {} user={} as {}", base, userId, conn.getUsername());
         return connectionRepository.save(conn);
+    }
+
+    /** 本机主机名，取不到回 null（无网/无 DNS 的机器上 getLocalHost 会抛）。 */
+    private static String localHostName() {
+        try {
+            String name = java.net.InetAddress.getLocalHost().getHostName();
+            return name == null || name.isBlank() ? null : name.trim();
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** 单测覆写此 seam 打桩，形制同 CloudSyncService.httpPost。 */

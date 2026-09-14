@@ -227,6 +227,20 @@ public class CloudController {
     }
 
     /**
+     * 案件库那边的协作事件（谁交了稿 / 谁签出 / 谁取回 / 谁加了人，spec 2026-09-14 §2.3）。
+     * 权限同参与人列表：成员可读、CLIENT 拒绝。
+     */
+    @GetMapping("/projects/{projectId}/events")
+    public ResponseEntity<Map<String, Object>> events(
+            @PathVariable Long projectId,
+            @RequestParam(value = "limit", required = false) Integer limit,
+            @RequestParam(value = "before", required = false) Long before,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireMemberNonClient(projectId, sessionId);
+        return ok(cloudSyncService.proxyCollabEvents(projectId, limit == null ? 100 : limit, before));
+    }
+
+    /**
      * 查人（dev-board#444）：律师输手机号/邮箱，先回一张展示名 + 头像 + 打码联系方式的
      * 卡片，确认了才走加人。纯转发——解析、打码、限频都在案件库那一侧。
      */

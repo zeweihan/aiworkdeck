@@ -316,7 +316,11 @@ public class AuthController {
             return result;
         }
         try {
-            var session = awdkLoginService.login(body == null ? null : body.get("key"));
+            // deviceName 可选：桌面端连官方案件库时传本机主机名，协作事件行据此说
+            // 「你在另一台电脑交了稿（{设备名}）」。不传仍是「账户桥接」，老客户端不受影响。
+            var session = awdkLoginService.login(
+                    body == null ? null : body.get("key"),
+                    body == null ? null : body.get("deviceName"));
             authAbuseGuard.recordLoginSuccess(ip, AWDK_BRIDGE_RATE_KEY);
             result.put("code", 0);
             // tokenId 让调用方（桌面端官方案件库连接）在断开时撤得掉这枚长期凭据；

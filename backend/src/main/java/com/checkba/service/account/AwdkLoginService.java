@@ -106,6 +106,17 @@ public class AwdkLoginService {
      * @throws AccountException UNAUTHORIZED（Key 无效/格式错）/ NETWORK / MALFORMED（缺 accountId 等）
      */
     public synchronized BridgeSession login(String rawKey) {
+        return login(rawKey, null);
+    }
+
+    /**
+     * 同上，另带一个设备名（{@code deviceName}）——桌面端连官方案件库时传本机主机名，
+     * 好让协作事件行分得清「你在另一台电脑交了稿」是哪一台。空则仍是「账户桥接」。
+     *
+     * @throws IllegalArgumentException 开关关闭（业务错误，非鉴权错误）
+     * @throws AccountException UNAUTHORIZED（Key 无效/格式错）/ NETWORK / MALFORMED（缺 accountId 等）
+     */
+    public synchronized BridgeSession login(String rawKey, String deviceName) {
         requireEnabled();
         String key = rawKey == null ? "" : rawKey.trim();
         if (key.isEmpty() || !key.startsWith(KEY_PREFIX)) {
@@ -129,8 +140,9 @@ public class AwdkLoginService {
         // 属于他自己的 OpenRouter runtime key 存起来；awdk_ 本身用完即弃，仍然不落库。
         // 取不到（最常见是还没分配额度）绝不影响桥接——插件的绝大多数能力与 AI 额度无关。
         platformAiKeyService.tryProvision(user.getId(), key);
-        DeviceTokenService.IssuedToken issued =
-                deviceTokenService.issue(user.getId(), LangText.of("账户桥接", "Account bridging"));
+        String device = deviceName == null || deviceName.isBlank()
+                ? LangText.of("账户桥接", "Account bridging") : deviceName.trim();
+        DeviceTokenService.IssuedToken issued = deviceTokenService.issue(user.getId(), device);
         return new BridgeSession(issued.plaintext(), user.getId(), user.getUsername(),
                 user.getDisplayName(), issued.id());
     }

@@ -137,6 +137,8 @@ public class CloudSyncService {
         conn.setDisplayName(data.getStr("displayName"));
         conn.setDeviceToken(data.getStr("token"));
         conn.setTokenId(data.getLong("tokenId", null));
+        // 案件库那一侧的 userId：协作事件行判「这条是不是我干的」只能靠它
+        conn.setRemoteUserId(data.getLong("userId", null));
         conn.setCreatedAt(LocalDateTime.now());
         return connectionRepository.save(conn);
     }
@@ -700,6 +702,53 @@ public class CloudSyncService {
         return data == null ? Map.of("found", false) : data;
     }
 
+    /**
+     * 透传案件库的协作事件（spec 2026-09-14 §2.3），外层补两个「我是谁」的字段：
+     * {@code selfUserId} 是**案件库那一侧**的 userId（本机 userId 与事件表毫无关系），
+     * {@code selfTokenId} 是本机这枚设备令牌——界面据此把事件行说成「你」「你（某台电脑）」
+     * 还是同事的名字。旧连接（{@code remoteUserId} 为空）下 selfUserId 为 null，
+     * 界面一律按「他人」渲染；重新连接一次就有了。
+     */
+    public Map<String, Object> proxyCollabEvents(long projectId, int limit, Long before) {
+        ProjectRemote remote = requireRemoteBinding(projectId);
+        CloudConnection conn = connectionOf(remote);
+        String url = conn.getServerUrl() + "/api/projects/" + remote.getRemoteProjectId()
+                + "/collab-events?limit=" + limit + (before == null ? "" : "&before=" + before);
+        JSONObject resp = JSONUtil.parseObj(httpGet(url, conn.getDeviceToken()));
+        if (resp.getInt("code", 1) != 0) {
+            throw VersionException.userFacing(LangText.of(
+                    "读取协作记录失败：" + resp.getStr("message", "请重试"),
+                    "Failed to load collaboration records: " + resp.getStr("message", "please try again")));
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) toPlain(resp.getJSONObject("data"));
+        Object events = data == null ? null : data.get("events");
+        Map<String, Object> out = new HashMap<>();
+        out.put("events", events instanceof List<?> list ? list : List.of());
+        out.put("selfUserId", conn.getRemoteUserId());
+        out.put("selfTokenId", conn.getTokenId());
+        return out;
+    }
+
+    /**
+     * 上报「我取回了最新稿」。这件事只有客户端知道——服务端那一侧就是一次普通的
+     * upload-pack，和日常轮询分不开。失败只记日志：少一行旁白而已，绝不能让一次
+     * 已经落地的取回报错。
+     */
+    private void reportPulled(long projectId, CloudConnection conn) {
+        try {
+            ProjectRemote remote = remoteRepository.findByProjectId(projectId).orElse(null);
+            if (remote == null || conn == null) return;
+            Map<String, Object> body = new HashMap<>();
+            body.put("kind", "PULLED");
+            body.put("toSha", repoService.resolveRef(projectId, repoService.mainBranch()));
+            httpPost(conn.getServerUrl() + "/api/projects/" + remote.getRemoteProjectId()
+                    + "/collab-events", JSONUtil.toJsonStr(body), conn.getDeviceToken());
+        } catch (Exception e) {
+            log.warn("上报取回记录失败（已吞）: project={}", projectId, e);
+        }
+    }
+
     /** 透传服务端加成员端点，role 缺省 PARTICIPANT（由调用方决定，这里只透传）。 */
     public void proxyMembers(long projectId, String username, String role) {
         ProjectRemote remote = requireRemoteBinding(projectId);
@@ -781,6 +830,7 @@ public class CloudSyncService {
             repoService.fastForwardMainline(projectId, ORIGIN_MASTER);
             var manifest = manifestService.readAtRef(projectId, "HEAD");
             if (manifest != null) manifestService.applyToDatabase(projectId, manifest);
+            reportPulled(projectId, conn);
             return new UpdateResult(UpdateStatus.UPDATED, affectedSince(projectId, tipBefore), null);
         }
         // 真合并：两条已分叉的线
@@ -907,6 +957,7 @@ public class CloudSyncService {
                 remoteRepository.save(remote);
             });
         }
+        reportPulled(projectId, conn);
         return new UpdateResult(UpdateStatus.UPDATED, affectedSince(projectId, tipBefore), null, landed);
     }
 
