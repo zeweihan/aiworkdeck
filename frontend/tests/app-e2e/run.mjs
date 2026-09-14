@@ -2361,6 +2361,16 @@ try {
       if (d.remoteAheadBySelf) throw new Error('这几版是律师乙交的，remoteAheadBySelf 不该为真: ' + JSON.stringify(d).slice(0, 300))
       const authors = Array.isArray(d.remoteAheadAuthors) ? d.remoteAheadAuthors : []
       if (!authors.length) throw new Error('后端没给 remoteAheadAuthors: ' + JSON.stringify(d).slice(0, 300))
+      // 名字必须是**案件库账户**的展示名（律师乙），不是对方那台机器的 git 署名。
+      // 版本行的署名是推稿那台电脑的本机展示名（单机模式下人人都叫「本机用户」），
+      // CloudSyncService.remoteDisplayNames 负责把它翻成案件库那边的名字；
+      // 这条断言红成「本机用户」就说明那张字典没拿到——查 describeRemoteAhead
+      // 那条 allowFetch=true 的路（只有它允许现取一趟参与人表）。
+      if (authors[0] !== '律师乙') {
+        throw new Error('chip 里的作者名不是案件库账户展示名「律师乙」，而是 ' + JSON.stringify(authors[0])
+          + '——remoteDisplayNames 没把 git 署名翻过来（查 describeRemoteAhead 的 allowFetch 那条路）。'
+          + ' 云端状态=' + JSON.stringify(d).slice(0, 300))
+      }
       const expect = authors.length > 1 || Number(d.remoteAheadAuthorCount) > 1
         ? authors[0] + '等 ' + (Number(d.remoteAheadAuthorCount) || authors.length) + ' 人交了新稿 · ' + d.remoteAheadCount + ' 版'
         : authors[0] + '交了新稿 · ' + d.remoteAheadCount + ' 版'
@@ -2384,10 +2394,20 @@ try {
 
     await step('J11-历史：列表里有「案件库」标签的 remote 版本行 + 「律师乙 交了稿」事件行 + 工具栏「案件库领先 N 版」', async () => {
       await page.waitForSelector('.ch-row.is-remote', { timeout: 20000 })
-      const remoteRefs = await page.evaluate(() =>
-        [...document.querySelectorAll('.ch-row.is-remote .ch-ref-remote')].map((e) => (e.innerText || '').trim()))
-      if (!remoteRefs.includes('案件库')) {
-        throw new Error('remote 行上没有「案件库」标签，实际标签: ' + JSON.stringify(remoteRefs))
+      const remoteRows = await page.evaluate(() =>
+        [...document.querySelectorAll('.ch-row.is-remote')].map((r) => ({
+          refs: [...r.querySelectorAll('.ch-ref-remote')].map((e) => (e.innerText || '').trim()),
+          author: ((r.querySelector('.ch-author') || {}).innerText || '').trim(),
+          title: ((r.querySelector('.ch-title') || {}).innerText || '').trim(),
+        })))
+      if (!remoteRows.some((r) => r.refs.includes('案件库'))) {
+        throw new Error('remote 行上没有「案件库」标签，实际: ' + JSON.stringify(remoteRows))
+      }
+      // 版本行的署名也要是案件库账户展示名——事件行说「律师乙 交了稿」、版本行却说
+      // 「本机用户」的话，同一屏里同一个人有两种叫法（dev-board#623 收口那一条）。
+      if (!remoteRows.every((r) => r.author === '律师乙')) {
+        throw new Error('remote 版本行的署名不是案件库账户展示名「律师乙」: ' + JSON.stringify(remoteRows)
+          + '——查 VersionController 那条 remoteDisplayNames(projectId, false) 的缓存是否为空')
       }
       const events = await cloudEventTexts()
       const pushed = events.filter((t) => /^律师乙 交了稿( · \d+ 版)?$/.test(t))
