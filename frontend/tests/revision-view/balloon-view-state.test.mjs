@@ -18,9 +18,10 @@ test('an engine without native margins can still hide inline markup for external
 for (const failAt of [1, 2]) {
   test(`revision resolution preserves balloon mode when refresh ${failAt} fails`, () => {
     let mode = 'balloons', refreshes = 0, edits = 0
-    const resolve = new Function('isWriterDoc', 'readShowChanges', 'revisionViewState', 'withViewOnlyChange', 'applyRevisionView', 'xModel', 'isReviewWritable',
+    // Margin markup resolves in the inline view and records an undo boundary there (PR#819).
+    const resolve = new Function('isWriterDoc', 'readShowChanges', 'readShowChangesInMargin', 'rememberInlineUndo', 'revisionViewState', 'withViewOnlyChange', 'applyRevisionView', 'xModel', 'isReviewWritable',
       `${declaration('runRevisionResolution')};return runRevisionResolution`)(
-      () => true, () => false, () => ({ mode }), fn => fn(), next => { mode = next },
+      () => true, () => false, () => true, () => {}, () => ({ mode }), fn => fn(), next => { mode = next },
       { refresh() { if (++refreshes === failAt) throw new Error('refresh failed') } }, () => true)
     const edit = () => { edits++; return { success: true } }
     if (failAt === 1) assert.throws(() => resolve(edit), /refresh failed/)
@@ -33,9 +34,9 @@ for (const failAt of [1, 2]) {
 for (const blocked of ['stale', 'readonly']) {
   test(`revision commands reject ${blocked} input before changing views or editing`, () => {
     let edits = 0, views = 0
-    const resolve = new Function('isWriterDoc', 'readShowChanges', 'revisionViewState', 'withViewOnlyChange', 'applyRevisionView', 'xModel', 'isReviewWritable', 'currentReviewRevision', 'tableFail',
+    const resolve = new Function('isWriterDoc', 'readShowChanges', 'readShowChangesInMargin', 'rememberInlineUndo', 'revisionViewState', 'withViewOnlyChange', 'applyRevisionView', 'xModel', 'isReviewWritable', 'currentReviewRevision', 'tableFail',
       `${declaration('runRevisionResolution')};return runRevisionResolution`)(
-      () => true, () => false, () => ({mode:'balloons'}), fn => fn(), () => {views++}, {refresh(){}},
+      () => true, () => false, () => true, () => {}, () => ({mode:'balloons'}), fn => fn(), () => {views++}, {refresh(){}},
       () => blocked !== 'readonly', () => 10, message => ({success:false,message}))
     const result = resolve(() => { edits++;return {success:true} }, {revision:blocked==='stale'?9:10})
     assert.equal(result.success,false)
