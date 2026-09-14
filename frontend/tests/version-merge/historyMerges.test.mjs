@@ -97,8 +97,8 @@ test('同一段两边都接受了 = 「两边都留」，不是两句话', () =>
   }
   const [line] = historyMergeLines(t, entry)
   assert.ok(line.text.includes('version.mergeDecisionBoth'), line.text)
-  // 「第 12 段」只出现一次
-  assert.equal(line.text.split('n=12').length - 1, 1, line.text)
+  // 「第 13 段」（p12 是 0 基键，界面按 1 基说）只出现一次
+  assert.equal(line.text.split('n=13').length - 1, 1, line.text)
 })
 
 test('接受这边 + 拒绝那边 = 留了这边的一句话', () => {

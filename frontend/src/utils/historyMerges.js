@@ -41,11 +41,11 @@ export function mergeSideLabels(t, mergeContext, names = {}) {
   }
 }
 
-/** 单元键翻成律师的话：p12 → 第 12 段；t1.2.3 → 表格里的一格；s3 → 第 3 页；xlsx 的格原样。 */
+/** 单元键翻成律师的话：p12 → 第 13 段（后端段落键 0 基，界面与合并比对稿面板一样按 1 基说）；t1.2.3 → 表格里的一格；s3 → 第 3 页（页键本就 1 基）；xlsx 的格原样。 */
 function unitLabel(t, key) {
   const k = s(key)
   let m = /^p(\d+)$/.exec(k)
-  if (m) return t('version.mergeUnitParagraph', { n: Number(m[1]) })
+  if (m) return t('version.mergeUnitParagraph', { n: Number(m[1]) + 1 })
   m = /^t(\d+)\.(\d+)\.(\d+)$/.exec(k)
   if (m) return t('version.mergeUnitCell', { table: Number(m[1]), row: Number(m[2]), col: Number(m[3]) })
   m = /^s(\d+)$/.exec(k)
