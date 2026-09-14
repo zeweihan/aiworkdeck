@@ -243,6 +243,74 @@ HOUSE 不再是常量：`buildHouse(profile)` 从画像 JSON 派生写端常量�
 - `adopt_legacy_links` 不能把 TextPortion 直接喂 `insertTextContent`（抛 IllegalArgumentException），要 `createTextCursorByRange(start)` + `gotoRange(end, true)` 在正文上造区间游标；且先收集目标再插书签，枚举中改段落会让 portion 枚举失效。
 - `headingChainOf` 用 `XTextRangeCompare` 定位段落，表格单元格内的书签跨 story 比较会抛 → `sectionPath` 空、`paragraphIndex -1`（P0 接受）。
 
+## 三方合并的引擎原语（dev-board#630/#632，office_thread.js）
+
+律师版三方合并的引擎半边：后端算出「哪几处两边都动了、另一侧该怎么重放」，引擎把它做成一份
+**可编辑、两位作者署名分明**的合并比对稿。领域契约（单元键、`plan`/`baseUnits` 的来路、尾注怎么写）
+见 version-control.md 的「三方合并与逐段溯源」，这里只记引擎这一侧。
+
+**两个公共件先看**（`compare_document` 与 `build_merge_draft` 共用）：
+
+- `compareWithBytes(raw, url)`（:2948）—— 把字节写进 MEMFS（`SimpleFileAccess` + `SequenceInputStream`，
+  写前先 `kill` 掉同名旧文件）再派发 `.uno:CompareDocuments`，成功回 `{success:true, redlineCount}`，
+  失败回 `{success:false, stage, message}`，`stage ∈ input|memfs|dispatch`。派发完必 `invalidateParaIndex()`。
+  **修订署名必须由调用方在同一条 worker 命令里先设好**——这个函数自己不碰作者。
+  字节形态由 `toUnoByteSeq`（:2936）统一（Uint8Array / ArrayBuffer / 普通数组都收，结构化克隆跨 relay 与 worker
+  两跳后形态不定），转成 zeta.js 能喂给 UNO 的 signed 数组。
+- `paragraphScan()`（:2985）—— 正文顶层段落的「归一文字 + 格式指纹」快照，每段一条 `{norm, fmt}`。
+  指纹取四个段落属性（`ParaStyleName`/`ParaAdjust`/`ParaFirstLineIndent`/`ParaLeftMargin`）+ 七个字符属性
+  （`CharWeight`/`CharPosture`/`CharUnderline`/`CharHeight`/`CharColor`/`CharFontName`/`CharFontNameAsian`），
+  用 `|` 拼成一串。它存在的唯一理由是找出另一侧「只改了格式没改文字」的段——
+  **这件事不能靠 `.uno:CompareDocuments`**：真机实测（24.2.8-zhcn-r5）该命令只产出 Insert/Delete 两类修订，
+  整段加粗这种纯格式改动**一条都不报**。归一用 `mergeNormalize`（:2930），与后端 `DocxUnitReader.normalize`
+  和前端 `normalizeUnitText` 逐字同口径。
+
+**四条新原语的契约**：
+
+| 原语 | 入参 | 成功出参 | 失败 |
+|---|---|---|---|
+| `build_merge_draft`（:5869） | `{baseBytes, mainBytes, otherBytes, mainAuthor, otherAuthor, plan:{mainChunks, otherChunks}, baseUnits, name}` | `{success:true, name, revisions, count, mainCount, otherCount, replayed, conflicts:[单元键], formatOnly:[{paraKey, preview}], elapsedMs:{loadOther, loadBase, compareMain, replay, total}}` | `{success:false, stage, message, elapsedMs}`，`stage ∈ load-other｜load-base｜load-main｜compare-main｜align｜replay`（另有 `compareWithBytes` 自己那三档经 `compare-main` 透出 message） |
+| `merge_take_other`（:6125） | `{paraKey, text, author}` | `{success, paraKey, revisionCount, remainingInParagraph, text}`；`success` 的判据是**该段一条未处理修订都不剩**（`left.length === 0`） | 走 `tableFail`（非 Writer / 段落序非法 / 拒旧修订失败 / 写入失败） |
+| `sheet_get_active_cell`（:6165） | 无 | `{success:true, sheet, address}`（`address` 是 `B7` 这种 A1 写法） | `{success:false, error, message}`；非 Calc 文档明确拒绝 |
+| `slide_get_current`（:6184） | 无 | `{success:true, slideNumber}`（**1 基**，与 `slide_goto` 同口径） | `slideFail(...)`；非 Impress 文档明确拒绝 |
+
+后两条是**溯源光标条**的取数原语：段落级用 `get_review_context` 的 `paragraphIndex`，表格与演示文稿这两条是它的对应物。
+
+**`build_merge_draft` 的五步链路**（顺序是硬的）：
+① 载入另一侧 → `paragraphScan()`；② 载入共同的上一版 → `paragraphScan()`，两张快照按 `otherChunks` 推出的
+段序位移对齐后逐段比，文字相同而指纹不同的落进 `formatOnly`（:5952-5959）——**文字已被重放的段不再单列**，
+对不上的段**不猜**；③ 载入主线侧 → 以主线署名 `compareWithBytes(baseBytes)`，主线的改动成为带作者的字符级修订
+（含表格/批注/格式）；④ **对齐核对**：按 `mainChunks` 建「基线段序 → 当前段序」映射，先比段数总量（:6001）
+再对每一个未被主线改过的段逐段比归一文字（:6004-6009），任何一处对不上**整份退回 `stage:'align'`**；
+⑤ 切成对方署名，按 `otherChunks` 里 `conflict=false` 的块**从后往前**重放（:6051-6052，前面的段序才不会漂），
+最后恢复 `humanAuthor`。同一段两边都改了的块不重放——正文里只留主线侧那一版，另一侧的文字进 `conflicts`，
+交给面板的三选一（`merge_take_other`）。
+重放的三种块型各有写法：`INSERT` 走 `insertParasAfter`（找基线里前一个段落单元当锚点）、
+`DELETE` 走 `deleteUnit`（段落要**连段末换行一起选中**才是整段消失，:6029）、`MODIFY` 先清多余单元再追加新段、
+其余一一 `writeTrackedText`（字符级最小颗粒度，退化时整段替换）。表格单元走 `parseCellUnitKey` + `tableCellRange`（:3008/:3014）。
+
+**三条地雷**：
+
+- **修订作者只在同一条 worker 命令内设得住**（spike A2 实证）——`execCommand` 每条命令开头都会把署名重置回
+  `humanAuthor` / `AI WorkDeck`（见 `setRedlineAuthor` 的说明），跨命令切作者必然失效。
+  spike 第一轮两侧修订全签成「本地用户」就是这么来的，而合并稿的全部价值就在于「哪一处是谁改的」。
+  所以 `build_merge_draft` 是一条巨长的命令、`merge_take_other`（拒旧修订 → 切作者 → 写入 → 接受）同理，
+  **不要为了「可读性」把它们拆成几条原语**，也不要在宿主侧用两次 `run()` 去「先设作者再写入」。
+  两条命令都在每个出口（含失败出口）恢复 `humanAuthor`（`restoreAuthor` :5872 / :6150、:6153）——漏一条，
+  律师接着手打的字就会签成同事的名字。
+- **`.uno:EditDoc` 在 r5 上根本不生效**（spike A5 真机实测）——`compare_document` 里那一句派发（:5848）留着是历史，
+  版本对比标签页的只读靠的是「宿主没有任何保存路径」，不是靠它。`build_merge_draft` 因此**刻意不派发它**：
+  合并稿本来就要可编辑。**别再拿这条命令去实现只读**，也别因为「看起来没用」把 `compare_document` 那句删掉之后
+  以为只读性变了——两处的只读性从来都不由它提供。
+- **字符格式必须从跨整段的文字游标上读，不能问段落对象**（真机实测）——段落对象自己的 `CharWeight` 给的是
+  **段落默认值**，整段加粗时读回来仍是 100，只有 `el.getText().createTextCursorByRange(el)` 建出来的游标读得到 150
+  （`paragraphScan` :2995）。照段落对象读的话，「另一侧把整段加粗了」这一档会被判成「没改格式」，
+  那几段既不重放（文字没变）也不进 `formatOnly`，律师那边表现为**同事的格式改动凭空消失且没有任何提示**。
+
+**对齐核对不许放水**：`baseUnits` 为空直接 `fail('align', …)`（:5885），段数对不上、任一未改段文字对不上也都整份退回。
+宿主侧 `useDocumentMerge` 收到 `success:false` 时**一个字节都不写回去**——那份导出件的段落是错位的，写回去比不合更糟。
+lowa-e2e 组 34 最后一项就是篡改一条 `baseUnits.norm` 后断言必须回 `stage:'align'`（还原病灶即转红）。
+
 ## 文档 Generator 元数据（可溯源性设计规范附录 B4）
 
 保存出去的 docx/xlsx/pptx 在 `docProps/app.xml` 的 `<Application>` 里写 `AI WorkDeck <version>`（Word / WPS / LibreOffice 都写这个标准字段，我们此前是唯一不写的）。**只写产品名与版本，不写作者/单位/机器名**；开关 `document.generator.enabled` 缺省开，设置页「文档属性」一栏可关（交付前要 scrub 元数据的律所用）。
@@ -256,7 +324,7 @@ HOUSE 不再是常量：`buildHouse(profile)` 从画像 JSON 派生写端常量�
 ## 验证
 
 - 装载失败分类 / relay 超时自愈判据 / 探活预算：`cd frontend && npm run test:lowa-unit`（node --test，不需要引擎；`tests/lowa-unit/editorLoadFailure.test.mjs`）。
-- 核心回归：`cd frontend && npm run test:lowa-e2e`（真引擎 puppeteer-core 无头，33 组人机模拟，2026-09-09 基线 547 步；前置 `npm run build:zetaoffice` + `node ../desktop/scripts/fetch-lowa-assets.js` 或设 LOWA_ENGINE_DIR）。
+- 核心回归：`cd frontend && npm run test:lowa-e2e`（真引擎 puppeteer-core 无头，34 组人机模拟，2026-09-14 基线 542 步——组 34 是三方合并那一组，`build_merge_draft` / `merge_take_other` / `sheet_get_active_cell` / `slide_get_current`，夹具由 `tests/lowa-e2e/fixtures/merge/gen.mjs` 现造；前置 `npm run build:zetaoffice` + `node ../desktop/scripts/fetch-lowa-assets.js` 或设 LOWA_ENGINE_DIR）。
 - 修订视图三态的接线契约（白名单 / 三态命令序列 / 换文档复位）：`npm run test:revision-view`（node --test，不需要引擎）。
 - 滚动稳定性（dev-board#604）：`npm run test:lowa-scroll`（真引擎，`tests/lowa-e2e/scroll-stability.mjs`）。真滚轮滚到第三页后逐条打只读命令（`get_review_context` / `get_completion_context` / `__agent` 读取 / 客体页自发的 180ms 刷新），断言 `get_review_layout().view.top` 一动不动；每步前先断言视口确实已离开文首，防空断言。
 - 表格单元格里的键入（dev-board#627）：`npm run test:lowa-table-retype`（真引擎，`tests/lowa-e2e/table-retype.mjs`）。显示方式（内联/气泡）× 删除路径（逐次 Backspace / 带选区一次删）× 输入路径（`insert_at_cursor` / CDP 真 IME 提交）八组，外加未删改的单元格直接键入与回车、正文对照组。每组两头都判：新字既要进单元格文本（`table_read` 比打字前**多出**这几个字，光看「包含李楠」会被行内视图里划掉的旧字骗过），又要真画在单元格里（文档按 200% 显示后数光标带的深色像素；100% 下一个汉字只有十来个像素，和插入符一个量级分不开）。无头 Chrome 第一张截图可能是空白画布，所以每次测量先丢一张热身。末尾还有一轮 Tab：走覆盖层真实 keydown（`page.keyboard.press('Tab')`，输入框已聚焦），断言 A1 →Tab→ B1 →Shift+Tab→ A1、两格都不含 `\t`，再回正文确认 Tab 仍插制表符。`forward()` 即发即忘，所以判定要轮询 `get_ui_state().selection.cellName` 而不是等回包。
