@@ -4,6 +4,8 @@
 package com.checkba.version;
 
 import com.checkba.storage.StorageProperties;
+import com.checkba.version.merge.Decision;
+import com.checkba.version.merge.MergeRecord;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevWalk;
@@ -40,6 +42,8 @@ class CommitTrailerContractTest {
     private static final String NOTE_TRAILER = "X-AWD-Note: ";
     private static final String SKIPPED_TRAILER = "X-AWD-Skipped-Large-Files: ";
     private static final String RESOLUTIONS_TRAILER = "X-AWD-Resolutions: ";
+    private static final String MERGE_CONTEXT_TRAILER = "X-AWD-Merge-Context: ";
+    private static final String MERGES_TRAILER = "X-AWD-Merges: ";
 
     private ProjectRepoService svc(Path root) {
         StorageProperties props = new StorageProperties();
@@ -165,5 +169,157 @@ class CommitTrailerContractTest {
 
         assertTrue(!headMessage(s, 12L).contains(RESOLUTIONS_TRAILER));
         assertTrue(s.log(12L, sha, 1).get(0).resolutions().isEmpty());
+    }
+
+    // ==================== 第五、六条尾注：合并语境与逐处裁决（spec 2026-09-14 §4.6） ====================
+
+    /**
+     * 造一条真的撞车：{@code work/1} 与 master 都改 {@code files} 里的每一份，
+     * 随后 {@code mergeNoCommit} 把仓库停在 MERGING 态，等调用方 {@code commitMergeResolution}。
+     * 尾注的价值在于「律师事后还能看到那一次到底怎么合的」，只有真写进提交对象、
+     * 再从 {@code log()} 读回来才算兑现，所以这里不测字符串编解码，测真提交。
+     */
+    private ProjectRepoService conflictedRepo(Path root, long projectId, String... files) throws Exception {
+        Path work = root.resolve("projects/" + projectId);
+        Files.createDirectories(work);
+        for (String f : files) Files.writeString(work.resolve(f), "初稿");
+        ProjectRepoService s = svc(root);
+        s.init(projectId, "韩泽伟", "hzw@example.com");
+        s.createBranch(projectId, "work/1", "master");
+        s.checkoutBranch(projectId, "work/1");
+        for (String f : files) Files.writeString(work.resolve(f), "我这边");
+        s.commitAll(projectId, "我这边的工作", "auto", null, "韩泽伟", "hzw@example.com");
+        s.checkoutBranch(projectId, "master");
+        for (String f : files) Files.writeString(work.resolve(f), "同事那边");
+        s.commitAll(projectId, "同事的工作", "auto", null, "同事", "peer@example.com");
+        MergeOutcome outcome = s.mergeNoCommit(projectId, "work/1", "撞车的工作",
+                "韩泽伟", "hzw@example.com");
+        assertTrue(!outcome.success(), "这一步必须真的撞出冲突，否则后面测的不是裁决提交");
+        assertTrue(s.repositoryMerging(projectId));
+        return s;
+    }
+
+    private static Decision d(String key, String side, String action) {
+        return new Decision(key, side, action);
+    }
+
+    /**
+     * 逐处裁决的清单往返：一份中文名文件与一份名字里带 {@code ; = %} 的文件
+     * （三个字符正是这一行的分隔符与转义符，不编码就会把一行截成几条假记录），
+     * 清单里既有「留了哪一边」的 A/R，也有没有侧别的 {@code X}（律师自己改的）与
+     * {@code F}（另一边只改了格式、没自动合过来）。
+     */
+    @Test
+    void mergesTrailerRoundTripsManualDecisions(@TempDir Path root) throws Exception {
+        String tricky = "合同;甲=乙%3.docx";
+        ProjectRepoService s = conflictedRepo(root, 21L, "起诉状.docx", tricky);
+
+        List<MergeRecord> merges = List.of(
+                new MergeRecord("起诉状.docx", "manual",
+                        List.of(d("p3", "M", "A"), d("p7", "T", "A"), d("p12", "M", "A"),
+                                d("p12", "T", "R"), d("p9", "", "X"), d("p20", "", "F"),
+                                d("t1.2.3", "M", "A")),
+                        0, 0),
+                new MergeRecord(tricky, "manual", List.of(d("s3", "T", "A")), 0, 0));
+
+        String sha = s.commitMergeResolution(21L, "撞车的工作",
+                Map.of("起诉状.docx", "MERGED", tricky, "MERGED"),
+                merges, "adopt", "韩泽伟", "hzw@example.com");
+
+        String msg = headMessage(s, 21L);
+        assertTrue(msg.contains(MERGES_TRAILER), "缺 \"" + MERGES_TRAILER + "\"，实际：\n" + msg);
+        assertTrue(msg.contains("起诉状.docx=manual:p3MA,p7TA,p12MA,p12TR,p9X,p20F,t1.2.3MA"),
+                "逐处裁决的写法必须逐字对上 spec §4.6 的例子，实际：\n" + msg);
+        assertTrue(msg.contains("合同%3B甲%3D乙%253.docx=manual:s3TA"),
+                "路径里的 ; = % 必须编码（% 第一个换），否则这一行会被解析成几条假记录，实际：\n" + msg);
+        assertTrue(msg.contains(RESOLUTIONS_TRAILER), "MERGED 也要照常写进裁决尾注，实际：\n" + msg);
+        assertTrue(msg.contains("=MERGED"), "X-AWD-Resolutions 的值域要容得下 MERGED，实际：\n" + msg);
+
+        VersionEntry entry = s.log(21L, sha, 1).get(0);
+        List<VersionEntry.MergeSummary> back = entry.merges();
+        assertEquals(2, back.size(), "读回来的合并清单：" + back);
+        VersionEntry.MergeSummary one = back.stream()
+                .filter(m -> m.path().equals("起诉状.docx")).findFirst().orElseThrow();
+        assertEquals("manual", one.mode());
+        assertEquals(List.of(d("p3", "M", "A"), d("p7", "T", "A"), d("p12", "M", "A"),
+                d("p12", "T", "R"), d("p9", "", "X"), d("p20", "", "F"),
+                d("t1.2.3", "M", "A")), one.decisions());
+        VersionEntry.MergeSummary two = back.stream()
+                .filter(m -> m.path().equals(tricky)).findFirst().orElseThrow();
+        assertEquals(List.of(d("s3", "T", "A")), two.decisions(),
+                "带 ; = % 的路径必须原样解回来：" + two.path());
+        assertEquals("adopt", entry.mergeContext());
+    }
+
+    /** 自动合并那一档不逐处记，只记两边各合入几处（{@code M<n>,T<m>}）。 */
+    @Test
+    void mergesTrailerAutoCounts(@TempDir Path root) throws Exception {
+        ProjectRepoService s = conflictedRepo(root, 22L, "合同.docx");
+
+        String sha = s.commitMergeResolution(22L, "取回最新稿",
+                Map.of("合同.docx", "MERGED"),
+                List.of(new MergeRecord("合同.docx", "auto", List.of(), 3, 4)),
+                "cloud", "韩泽伟", "hzw@example.com");
+
+        assertTrue(headMessage(s, 22L).contains("合同.docx=auto:M3,T4"),
+                "自动合并写两边各几处，实际：\n" + headMessage(s, 22L));
+
+        VersionEntry entry = s.log(22L, sha, 1).get(0);
+        VersionEntry.MergeSummary m = entry.merges().get(0);
+        assertEquals("auto", m.mode());
+        assertEquals(3, m.mainCount());
+        assertEquals(4, m.otherCount());
+        assertTrue(m.decisions().isEmpty(), "auto 档不该解出逐处裁决：" + m.decisions());
+        assertEquals("cloud", entry.mergeContext());
+    }
+
+    /**
+     * 一份 500 处以上的长文书：尾注截到 500 条并追加 {@code +N}，
+     * 不能把一条提交说明撑成几十 KB（它是每次 {@code git log} 都要读出来的）。
+     */
+    @Test
+    void mergesTrailerTruncatesAt500(@TempDir Path root) throws Exception {
+        ProjectRepoService s = conflictedRepo(root, 23L, "长文书.docx");
+        List<Decision> many = new java.util.ArrayList<>();
+        for (int i = 0; i < 507; i++) many.add(d("p" + i, "M", "A"));
+
+        String sha = s.commitMergeResolution(23L, "撞车的工作",
+                Map.of("长文书.docx", "MERGED"),
+                List.of(new MergeRecord("长文书.docx", "manual", many, 0, 0)),
+                "session-end", "韩泽伟", "hzw@example.com");
+
+        String msg = headMessage(s, 23L);
+        assertTrue(msg.contains("p499MA,+7"),
+                "第 500 条之后要截断并追加 +7，实际：\n" + msg);
+        assertTrue(!msg.contains("p500MA"), "第 501 条起不该写进尾注，实际：\n" + msg);
+
+        VersionEntry.MergeSummary m = s.log(23L, sha, 1).get(0).merges().get(0);
+        assertEquals(500, m.decisions().size(), "截断后读回 500 条，实际 " + m.decisions().size());
+        assertEquals(d("p499", "M", "A"), m.decisions().get(499));
+    }
+
+    /**
+     * 语境尾注是所有裁决提交都要写的——包括这一版只有整份三选一、一处逐段合并都没有的：
+     * 提交历史标签页要靠它把裸的 MAIN/DRAFT 翻成对的话（三语境里 MAIN 指向的物理侧不同，
+     * 见 version-control.md 的方向表），没有它「留了你这边」在结束工作撞车语境下是反的。
+     */
+    @Test
+    void mergeContextTrailerWrittenWithWholeFileResolutions(@TempDir Path root) throws Exception {
+        ProjectRepoService s = conflictedRepo(root, 24L, "证据目录.pdf");
+
+        String sha = s.commitMergeResolution(24L, "结束工作",
+                Map.of("证据目录.pdf", "MAIN"), null, "session-end",
+                "韩泽伟", "hzw@example.com");
+
+        String msg = headMessage(s, 24L);
+        assertTrue(msg.contains(MERGE_CONTEXT_TRAILER + "session-end"),
+                "缺 \"" + MERGE_CONTEXT_TRAILER + "\"，实际：\n" + msg);
+        assertTrue(!msg.contains(MERGES_TRAILER),
+                "一处逐段合并都没有时不该写合并尾注，实际：\n" + msg);
+
+        VersionEntry entry = s.log(24L, sha, 1).get(0);
+        assertEquals("session-end", entry.mergeContext());
+        assertTrue(entry.merges().isEmpty());
+        assertEquals("MAIN", entry.resolutions().get(0).kept());
     }
 }
