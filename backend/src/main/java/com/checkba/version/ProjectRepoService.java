@@ -48,6 +48,7 @@ import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -114,6 +115,16 @@ public class ProjectRepoService {
     }
 
     private final ProjectStorageResolver storageResolver;
+
+    /**
+     * 逐段溯源的预算钩子（spec 2026-09-14 §4.7）。{@code ObjectProvider} 而不是直接注入：
+     * {@code ProvenanceService} 反过来依赖本类，直接注入就成了构造期的循环依赖；
+     * 用惰性取用把这个环拆开，本类照旧只依赖 {@code ProjectStorageResolver} 一个东西。
+     * 取不到（手工 new 的测试）时预算整条静默跳过——溯源算不算得出来，与提交成不成功无关。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.beans.factory.ObjectProvider<com.checkba.version.merge.ProvenanceService>
+            provenanceServiceProvider;
 
     public ProjectRepoService(ProjectStorageResolver storageResolver) {
         this.storageResolver = storageResolver;
@@ -398,9 +409,31 @@ public class ProjectRepoService {
                     .setAllowEmpty(true) // 体积过滤可能导致"这一轮只有跳过记录、树没变化"，仍要落一笔可追溯的提交
                     .setAuthor(authorName, authorEmail)
                     .call();
+            List<String> touched = new ArrayList<>(okNew);
+            touched.addAll(okTracked);
+            precomputeProvenance(projectId, c.getName(), touched);
             return c.getName();
         } catch (Exception e) {
             throw new VersionException("提交失败: project=" + projectId, e);
+        }
+    }
+
+    /**
+     * 这一版落定之后，把本次动过的文档的逐段溯源在后台先算好（spec 2026-09-14 §4.7）。
+     *
+     * <p>整段包在 try/catch 里，而且只在提交**已经成功**之后调：裁决窗口是数据安全窗口，
+     * 一个只为侧栏提速的旁路绝不能把律师刚刚裁决完的提交推回去。
+     */
+    private void precomputeProvenance(long projectId, String sha, Collection<String> relPaths) {
+        try {
+            if (provenanceServiceProvider == null || sha == null || relPaths == null || relPaths.isEmpty()) {
+                return;
+            }
+            com.checkba.version.merge.ProvenanceService provenance = provenanceServiceProvider.getIfAvailable();
+            if (provenance == null) return;
+            provenance.precomputeAsync(projectId, sha, new ArrayList<>(new LinkedHashSet<>(relPaths)));
+        } catch (Exception e) {
+            log.debug("预算逐段溯源失败（不影响提交）: project={} sha={}", projectId, sha, e);
         }
     }
 
@@ -1466,6 +1499,20 @@ public class ProjectRepoService {
             if (st != RepositoryState.MERGING && st != RepositoryState.MERGING_RESOLVED) {
                 throw new VersionException("当前不在合并冲突状态: project=" + projectId);
             }
+            // 这一次裁决动了哪些路径——要在 add 之前问，add 完索引就干净了。
+            // 只为后面的溯源预算用；读不到就算了，不为一个旁路让裁决提交多一条失败路径。
+            Set<String> touched = new LinkedHashSet<>();
+            try {
+                Status before = git.status().call();
+                touched.addAll(before.getConflicting());
+                touched.addAll(before.getModified());
+                touched.addAll(before.getChanged());
+                touched.addAll(before.getUntracked());
+                touched.addAll(before.getAdded());
+            } catch (Exception e) {
+                log.debug("裁决提交前读工作区状态失败（只影响溯源预算）: project={}", projectId, e);
+            }
+
             git.add().addFilepattern(".").call();
             git.add().addFilepattern(".").setUpdate(true).call();
 
@@ -1489,6 +1536,7 @@ public class ProjectRepoService {
                     .setMessage(fullMessage)
                     .setAuthor(authorName, authorEmail)
                     .call();
+            precomputeProvenance(projectId, c.getName(), touched);
             return c.getName();
         } catch (VersionException e) {
             throw e;
@@ -1525,6 +1573,32 @@ public class ProjectRepoService {
         } catch (Exception e) {
             throw new VersionException("读取重要版本失败: project=" + projectId, e);
         }
+    }
+
+    /**
+     * 按 sha 成批取版本记录（一次开仓库读完）。逐段溯源要把几十个 sha 翻成
+     * 「谁 · 哪一天 · 那一版叫什么」，一个 sha 开一次仓库不合算。
+     * 解析不出来的 sha 直接不进结果表，不抛异常——溯源是只读的锦上添花。
+     */
+    public Map<String, VersionEntry> entriesByShas(long projectId, Collection<String> shas) {
+        Map<String, VersionEntry> out = new LinkedHashMap<>();
+        if (shas == null || shas.isEmpty()) return out;
+        try (Repository repo = open(projectId); RevWalk walk = new RevWalk(repo)) {
+            Map<String, String> milestones = milestonesIn(repo);
+            for (String sha : shas) {
+                if (sha == null || sha.isBlank()) continue;
+                try {
+                    ObjectId id = repo.resolve(sha);
+                    if (id == null) continue;
+                    out.put(sha, toEntry(walk.parseCommit(id), milestones));
+                } catch (Exception e) {
+                    log.warn("读取版本记录失败: project={} sha={}", projectId, sha, e);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("成批读取版本记录失败: project={}", projectId, e);
+        }
+        return out;
     }
 
     /** log() 与 listMilestones() 共用的读取逻辑，接收已打开的 Repository，避免重复开仓库。 */

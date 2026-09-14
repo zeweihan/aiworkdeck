@@ -73,6 +73,13 @@ public class VersionController {
         this.pendingMergeStore = store;
     }
 
+    /**
+     * 逐段溯源（spec 2026-09-14 §4.7）。同样字段注入且允许缺席，理由同上——
+     * 手工 new 本控制器的几个测试用不到它，缺席时 {@code /provenance} 回空 units。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.version.merge.ProvenanceService provenanceService;
+
     /** 埋点：版本记录关键动作计数（op 是端点枚举名，不带任何项目/版本信息） */
     private void trackOp(String op) {
         telemetryService.record("version.op", Map.of("op", op, "ok", true));
@@ -547,6 +554,33 @@ public class VersionController {
         } catch (Exception ex) {
             return false;
         }
+    }
+
+    /**
+     * 逐段溯源（dev-board#632，spec 2026-09-14 §4.7）：这份文件的每一段 / 每一格 / 每一页，
+     * 最后是哪一版改的。
+     *
+     * <p>未开版本记录、这份文件还没进过版本、或服务端还没装上溯源，一律回**空 units + 200**，
+     * 不走异常信封：编辑器顶栏那一条溯源是锦上添花，它不该有能力把正文变成一个错误提示。
+     * 后端还在算（第一次对着老文件回溯几百版）时回 {@code computing:true}，前端过几秒再问一次。
+     */
+    @GetMapping("/provenance")
+    public ResponseEntity<Map<String, Object>> provenance(
+            @PathVariable Long projectId,
+            @RequestParam Long fileId,
+            @RequestParam(required = false) String ref,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = requireMember(projectId, sessionId);
+        String wanted = ref == null || ref.isBlank() ? "HEAD" : ref.trim();
+        // 归属校验先做：这一步不因「还没开版本记录」而跳过，越权探测在两条路径上同一个回答
+        String relPath = relPathOfFile(projectId, fileId);
+        if (!repoService.isInitialized(projectId) || provenanceService == null) {
+            return ok(Map.of("ref", wanted,
+                    "kind", com.checkba.version.merge.ThreeWayAnalyzer.kindOf(relPath)
+                            .name().toLowerCase(java.util.Locale.ROOT),
+                    "units", List.of(), "truncated", false, "computing", false));
+        }
+        return ok(provenanceService.provenance(projectId, userId, relPath, wanted));
     }
 
     /**
