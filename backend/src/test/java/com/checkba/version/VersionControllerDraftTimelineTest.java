@@ -70,7 +70,8 @@ class VersionControllerDraftTimelineTest {
     }
 
     private static VersionEntry entry(String sha, List<String> parents) {
-        return new VersionEntry(sha, "改了合同", "韩泽伟", Instant.now(), "auto", null, parents, null);
+        return new VersionEntry(sha, "改了合同", "韩泽伟", "hanzewei@local.aiworkdeck.local",
+                Instant.now(), "auto", null, parents, null, java.util.List.of());
     }
 
     @SuppressWarnings("unchecked")

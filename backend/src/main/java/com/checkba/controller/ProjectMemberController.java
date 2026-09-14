@@ -60,6 +60,9 @@ public class ProjectMemberController {
                 map.put("displayName", LocalIdentityService.displayNameOf(user.getDisplayName()));
                 // 本机有就本机，否则官网 /api/avatar/{accountId}——与「加同事」确认卡同一个口径
                 map.put("avatarUrl", projectMemberService.avatarUrlFor(user));
+                // 官网账户 id：本机名单与案件库名单的唯一去重键（spec 2026-09-14 §2.6）。
+                // 不知道就是 null，前端退回按用户名比。
+                map.put("accountId", projectMemberService.accountIdFor(user, callerId));
             }
             return map;
         }).collect(Collectors.toList());
@@ -76,6 +79,7 @@ public class ProjectMemberController {
                 ownerMap.put("username", owner.getUsername());
                 ownerMap.put("displayName", LocalIdentityService.displayNameOf(owner.getDisplayName()));
                 ownerMap.put("avatarUrl", projectMemberService.avatarUrlFor(owner));
+                ownerMap.put("accountId", projectMemberService.accountIdFor(owner, callerId));
                 resultList.add(0, ownerMap); // Add to top
             }
         }

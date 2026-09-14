@@ -60,8 +60,22 @@ public class DeviceTokenService {
         return new IssuedToken(t.getId(), plaintext);
     }
 
+    /**
+     * 解析结果：这枚令牌是谁的（{@code userId}）、是哪一台设备（{@code tokenId}）。
+     *
+     * <p>设备维度是协作事件区分「你在另一台电脑」与「同事」的唯一依据——同一个官网
+     * 账号在两台机器上桥接落到**同一行** app_users，光有 userId 分不出是哪台机器。
+     */
+    public record ResolvedToken(Long userId, Long tokenId) {}
+
     /** 未命中返回 null——调用方（静态鉴权入口）把 null 当未登录处理。 */
     public Long resolveUserId(String plaintext) {
+        ResolvedToken resolved = resolve(plaintext);
+        return resolved == null ? null : resolved.userId();
+    }
+
+    /** 解析本体，未命中返回 null。顺带按节流窗口补一次 lastUsedAt。 */
+    public ResolvedToken resolve(String plaintext) {
         if (plaintext == null || !plaintext.startsWith(TOKEN_PREFIX)) return null;
         return repository.findByTokenHash(sha256(plaintext))
                 .map(t -> {
@@ -72,7 +86,7 @@ public class DeviceTokenService {
                         t.setLastUsedAt(now);
                         repository.save(t);
                     }
-                    return t.getUserId();
+                    return new ResolvedToken(t.getUserId(), t.getId());
                 })
                 .orElse(null);
     }

@@ -38,7 +38,13 @@ class CloudMemberProxyJsonTest {
     private static final ObjectMapper JACKSON = new ObjectMapper();
 
     private String canned;
+    /** 成员列表那一趟单独给一份（remoteUserId 回填要走 {@code /members}）。 */
+    private String cannedMembers;
     private CloudSyncService cloud;
+    private CloudConnection conn;
+    private CloudConnectionRepository connRepo;
+    /** 实际打出去的 GET，用来断言「没有多打一趟成员请求」。 */
+    private final List<String> gets = new java.util.ArrayList<>();
 
     @BeforeEach
     void setUp() {
@@ -48,15 +54,17 @@ class CloudMemberProxyJsonTest {
         remote.setConnectionId(3L);
         remote.setRemoteProjectId("55");
 
-        CloudConnection conn = new CloudConnection();
+        conn = new CloudConnection();
         conn.setId(3L);
         conn.setServerUrl("https://case.example.com");
         conn.setUsername("awd_hanzewei");
         conn.setDeviceToken("awdt_x");
+        conn.setTokenId(41L);
+        conn.setRemoteUserId(88L);
 
         ProjectRemoteRepository remoteRepo = mock(ProjectRemoteRepository.class);
         when(remoteRepo.findByProjectId(any())).thenReturn(Optional.of(remote));
-        CloudConnectionRepository connRepo = mock(CloudConnectionRepository.class);
+        connRepo = mock(CloudConnectionRepository.class);
         when(connRepo.findById(any())).thenReturn(Optional.of(conn));
 
         cloud = new CloudSyncService(
@@ -69,10 +77,22 @@ class CloudMemberProxyJsonTest {
                 mock(ProjectRepository.class)) {
             @Override
             protected String httpGet(String url, String sessionToken) {
-                return canned;
+                gets.add(url);
+                return url.contains("/members") && cannedMembers != null ? cannedMembers : canned;
             }
         };
     }
+
+    /** 本机连着某个官网账户；{@code accountId} 是两侧唯一对得上的键。 */
+    private void localAccount(String accountId) {
+        com.checkba.service.account.AccountService acc =
+                mock(com.checkba.service.account.AccountService.class);
+        when(acc.currentAccountIdOrNull()).thenReturn(accountId);
+        cloud.setAccountServiceForTest(acc);
+    }
+
+    private static final String EVENTS_OK =
+            "{\"code\":0,\"data\":{\"events\":[]}}";
 
     /** 参与人列表：没传头像的同事（avatarUrl=null）不能把整条列表打成 500。 */
     @Test
@@ -106,5 +126,94 @@ class CloudMemberProxyJsonTest {
         assertNull(data.get("avatarUrl"), "JSONNull 必须已经变回 Java null");
         assertEquals(Boolean.TRUE, data.get("found"));
         assertEquals("乙律师", data.get("displayName"));
+    }
+
+    /**
+     * 协作事件（spec 2026-09-14 §2.3）：同款 JSONNull 陷阱——事件行里
+     * {@code avatarUrl}、{@code device.name}、{@code commitCount}、{@code target}
+     * 天生就有一大半是 null（成员事件没有设备、签出事件没有 sha），
+     * 不过 toPlain 就是「提交历史」标签页永远打不开。
+     *
+     * <p>同时钉住外层那两个字段：{@code selfUserId} 取**案件库那一侧**的 userId
+     * （CloudConnection.remoteUserId，不是本机 userId），{@code selfTokenId} 是本机这枚令牌。
+     */
+    @Test
+    void collabEventsAreProxiedAsPlainJavaWithSelfIdentity() throws Exception {
+        canned = "{\"code\":0,\"data\":{\"events\":[{\"id\":9,\"kind\":\"PUSH\","
+                + "\"actor\":{\"userId\":5,\"displayName\":\"乙律师\",\"avatarUrl\":null},"
+                + "\"device\":{\"tokenId\":3,\"name\":null},"
+                + "\"fromSha\":\"aaa\",\"toSha\":\"bbb\",\"commitCount\":2,"
+                + "\"target\":null,\"detail\":null,\"createdAt\":\"2026-09-14T10:30:00\"}]}}";
+
+        Map<String, Object> data = cloud.proxyCollabEvents(7L, 100, null);
+
+        String json = assertDoesNotThrow(() -> JACKSON.writeValueAsString(data),
+                "返回值必须是 Jackson 能序列化的纯 Java 结构");
+        assertTrue(json.contains("\"avatarUrl\":null"), json);
+        assertTrue(json.contains("\"name\":null"), json);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> events = (List<Map<String, Object>>) data.get("events");
+        assertEquals(1, events.size());
+        assertNull(events.get(0).get("target"), "JSONNull 必须已经变回 Java null");
+        assertEquals(2, events.get(0).get("commitCount"));
+        // 连接里存的是案件库那一侧的身份：本机 userId 与事件表毫无关系
+        assertEquals(88L, data.get("selfUserId"));
+        assertEquals(41L, data.get("selfTokenId"));
+    }
+
+    /**
+     * 存量连接（{@code remoteUserId} 为空）打开提交历史时自动回填，**不必断开重连**。
+     *
+     * <p>判据是官网账户 id：本机这台电脑连着的账户，在案件库参与人列表里对得上哪一行，
+     * 那行的 userId 就是「我在案件库那一侧的身份」。回填不了的话事件表里律师自己干的
+     * 每一行都会被说成同事干的。
+     */
+    @Test
+    void legacyConnectionBackfillsRemoteUserIdFromMembersByAccountId() {
+        conn.setRemoteUserId(null);
+        localAccount("acct-han");
+        cannedMembers = "{\"code\":0,\"data\":["
+                + "{\"userId\":5,\"username\":\"awd_lisi\",\"accountId\":\"acct-lisi\"},"
+                + "{\"userId\":88,\"username\":\"awd_hanzewei\",\"accountId\":\"acct-han\"}]}";
+        canned = EVENTS_OK;
+
+        Map<String, Object> data = cloud.proxyCollabEvents(7L, 100, null);
+
+        assertEquals(88L, data.get("selfUserId"), "回填后当场就要用上，不能等下一次打开");
+        assertEquals(88L, conn.getRemoteUserId());
+        assertTrue(gets.stream().anyMatch(u -> u.contains("/members")), "得真去查一趟参与人：" + gets);
+        verify(connRepo).save(conn);
+    }
+
+    /** 对不上（这台电脑的账户不在参与人里、或案件库还没给 accountId）：保持 null，不抛也不乱猜。 */
+    @Test
+    void noMatchingAccountLeavesSelfUserIdNullWithoutThrowing() {
+        conn.setRemoteUserId(null);
+        localAccount("acct-han");
+        cannedMembers = "{\"code\":0,\"data\":["
+                + "{\"userId\":5,\"username\":\"awd_lisi\",\"accountId\":\"acct-lisi\"},"
+                + "{\"userId\":6,\"username\":\"awd_wangwu\",\"accountId\":null}]}";
+        canned = EVENTS_OK;
+
+        Map<String, Object> data = assertDoesNotThrow(() -> cloud.proxyCollabEvents(7L, 100, null));
+
+        assertNull(data.get("selfUserId"), "认不出来就按他人渲染，不能拿别人的 userId 顶上");
+        assertNull(conn.getRemoteUserId());
+        verify(connRepo, never()).save(any());
+    }
+
+    /** 已经有 remoteUserId 的连接：一趟成员请求都不许多打。 */
+    @Test
+    void connectionThatAlreadyKnowsItsRemoteUserIdDoesNotQueryMembersAgain() {
+        localAccount("acct-han");
+        cannedMembers = null;   // 真去查 /members 的话会拿到事件回包，断言不到 88
+        canned = EVENTS_OK;
+
+        Map<String, Object> data = cloud.proxyCollabEvents(7L, 100, null);
+
+        assertEquals(88L, data.get("selfUserId"));
+        assertTrue(gets.stream().noneMatch(u -> u.contains("/members")),
+                "已经知道自己是谁，不该再查一次参与人：" + gets);
+        verify(connRepo, never()).save(any());
     }
 }

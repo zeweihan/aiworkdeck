@@ -3359,6 +3359,37 @@ export function getVersionChanges(projectId, sha) {
   });
 }
 
+// 统一历史（dev-board#624）：主线 + 各进行中稿 + origin/master 的 `--all` 视图，游标分页。
+// opts: {limit, cursor, author, fileId, q, from, to, includeAuto}
+// 回 {head, ahead, behind, remoteAheadAuthors, remoteAheadBySelf, entries[], nextCursor}。
+export function getVersionHistory(projectId, opts = {}) {
+  const qs = []
+  const put = (k, v) => {
+    if (v === undefined || v === null || v === '') return
+    qs.push(`${k}=${encodeURIComponent(v)}`)
+  }
+  put('limit', opts.limit || 100)
+  put('cursor', opts.cursor)
+  put('author', opts.author)
+  put('fileId', opts.fileId)
+  put('q', opts.q)
+  put('from', opts.from)
+  put('to', opts.to)
+  if (opts.includeAuto) qs.push('includeAuto=true')
+  return request({
+    url: `/api/projects/${projectId}/version/history?${qs.join('&')}`,
+    method: 'GET'
+  });
+}
+
+// 任意两版之间的文件增删改清单（「对比这两版」）。from/to 是 ref（sha 即可）。
+export function getVersionCompare(projectId, from, to) {
+  return request({
+    url: `/api/projects/${projectId}/version/compare?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+    method: 'GET'
+  });
+}
+
 export function endWorkSession(projectId, title) {
   return request({
     url: `/api/projects/${projectId}/version/session/end`,
@@ -3583,6 +3614,14 @@ export function abortSessionEnd(projectId) {
 // 成员代理：转发到云端项目实际的成员列表/邀请（不是本地项目成员）。
 export function getCloudMembers(projectId) {
   return request({ url: `/api/cloud/projects/${projectId}/members`, method: 'GET' })
+}
+
+// 案件库那边的协作事件（谁交了稿 / 谁签出 / 谁取回 / 谁加了人），桌面端经本机后端代理。
+// 回 {selfUserId, selfTokenId, events:[...]}——前两个字段用来把事件行说成「你」还是同事。
+export function getCloudEvents(projectId, opts = {}) {
+  const qs = [`limit=${opts.limit || 100}`]
+  if (opts.before) qs.push(`before=${encodeURIComponent(opts.before)}`)
+  return request({ url: `/api/cloud/projects/${projectId}/events?${qs.join('&')}`, method: 'GET' })
 }
 
 // 先查人：回 {found, displayName, avatarUrl, maskedContact, alreadyMember, currentRole, message}。

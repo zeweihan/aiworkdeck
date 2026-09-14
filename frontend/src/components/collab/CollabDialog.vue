@@ -76,6 +76,11 @@
                 :class="{ 'awd-btn-disabled': busy }"
                 @tap="onRefresh"
               >{{ $t('version.refreshStatus') }}</view>
+              <!-- 「案件库那边到底发生了什么」的去处：抽屉只说得出一句状态，
+                   逐版逐人的经过在中栏的提交历史标签页里（dev-board#624）。 -->
+              <view class="awd-btn awd-btn-secondary" @tap="$emit('open-history')">
+                {{ $t('version.viewCommitHistory') }}
+              </view>
             </view>
             <view class="collab-note">
               {{ $t('version.collabActionsNote') }}
@@ -247,6 +252,7 @@ import { getInitial } from '@/utils/textInitial.js'
 import { getAppLanguage } from '@/utils/appLanguage.js'
 import { siteBaseUrl } from '@/utils/siteLinks.js'
 import { inviteLinkFor, notFoundPresentation } from '@/utils/memberLookup.js'
+import { remoteAheadText } from '@/utils/collabWording.js'
 
 export default {
   name: 'CollabDialog',
@@ -266,7 +272,7 @@ export default {
   },
   // changed：云端状态可能变了，页面重新拉一次。reload-files：磁盘被改写，重载打开中的编辑器。
   // conflict：撞上了要逐份选择的情况，页面把人送到裁决现场。
-  emits: ['update:visible', 'changed', 'reload-files', 'conflict'],
+  emits: ['update:visible', 'changed', 'reload-files', 'conflict', 'open-history'],
   // 工作台 provide 的离开出口（先落盘再 reLaunch）与设置标签入口；宿主不是工作台时为 null
   inject: { leaveWorkbench: { default: null }, openSettingsTab: { default: null } },
   data() {
@@ -322,7 +328,10 @@ export default {
       if (this.conflictPending) return this.$t('version.pendingChoice')
       if (!this.cloud) return ''
       if (this.cloud.offline) return this.$t('version.libraryUnreachable')
-      if (this.cloud.remoteAhead) return this.$t('version.colleagueSubmittedNew')
+      // 「同事交了新稿」四处同源（utils/collabWording.js）
+      if (this.cloud.remoteAhead) {
+        return remoteAheadText((k, p) => this.$t(k, p), this.cloud, { fallbackKey: 'version.colleagueSubmittedNew' })
+      }
       if (this.cloud.pendingUpload || this.working) return this.$t('version.hasUnsubmittedChanges')
       return this.$t('version.inSyncWithTeam')
     },

@@ -344,6 +344,9 @@ class CloudSyncUpdateTest {
         assertTrue(Files.list(root.resolve("projects/7")).map(p -> p.getFileName().toString())
                 .anyMatch(n -> n.contains("来自：团队案件库")));
         assertEquals(repoSvc.resolveRef(7L, "master"), remoteMasterShaOfBare()); // 裁决后重推
+        // 裁决结果落进提交尾注（spec 2026-09-14 §2.2）
+        assertEquals(java.util.List.of(new VersionEntry.Resolution("合同.txt", "BOTH")),
+                repoSvc.log(7L, "master", 1).get(0).resolutions());
     }
 
     /**

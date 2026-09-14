@@ -12,6 +12,7 @@ import com.checkba.service.UserService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,6 +36,20 @@ public class VersionController {
     private final ProjectFileService projectFileService;
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
     private final VersionLifecycleService lifecycleService;
+
+    /**
+     * 提交署名解析（spec 2026-09-14 §2.1）。字段注入：本类的构造器被
+     * GlobalExceptionHandlerAuthCodeTest / VersionFileAccessTest 手工 new，加参数是纯 churn。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private VersionAuthorResolver authorResolver;
+
+    /**
+     * 云端状态（「案件库领先几版、都是谁交的」）。同样字段注入，理由同上——
+     * 本类的构造器被几个测试手工 new，且历史端点在没有云端协作时照常可用。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private CloudSyncService cloudSyncService;
 
     /** 埋点：版本记录关键动作计数（op 是端点枚举名，不带任何项目/版本信息） */
     private void trackOp(String op) {
@@ -213,7 +228,7 @@ public class VersionController {
         // 律师自己按下去就是他自己的决定。同时清掉 opt-out，否则下次自动触发点
         // 还会被旧标记拦住。
         lifecycleService.clearOptOut(projectId);
-        sessionService.enableVersionRecording(projectId, userName(userId), email(userId));
+        sessionService.enableVersionRecording(projectId, userName(userId), email(projectId, userId));
         trackOp("enable");
         return ok(Map.of("enabled", true));
     }
@@ -277,7 +292,7 @@ public class VersionController {
         } else {
             entries = repoService.log(projectId, "HEAD", limit);
         }
-        return ok(Map.of("versions", entries));
+        return ok(Map.of("versions", withRemoteNames(projectId, entries)));
     }
 
     @GetMapping("/versions/{sha}/changes")
@@ -289,6 +304,275 @@ public class VersionController {
         List<FileChange> changes = repoService.diffNameStatus(projectId, sha + "^", sha)
                 .stream().filter(c -> !c.path().startsWith(".awd/")).toList();
         return ok(Map.of("changes", changes));
+    }
+
+    // ==================== 统一历史与任意两版对比（spec 2026-09-14 §2.4） ====================
+
+    /**
+     * 程序员在 IDE 里那份 {@code git log --graph --all}，换成律师的词（dev-board#624）。
+     * 一次给回：主线 + 各稿 + 案件库最新稿合成的一条倒序流、两边各领先几版、
+     * 每一行是谁在什么时候干了什么、以及「这一版还没取回」的标记。
+     *
+     * <p>未开版本记录不是错误：回 {@code enabled:false} + 空列表、HTTP 仍是 200，
+     * 前端据此出「开启版本记录」的引导。这与 {@code /timeline} 的早退口径一致——
+     * 掉进 VersionException 的通用信封会让引导页显示成「读取失败」。
+     */
+    @GetMapping("/history")
+    public ResponseEntity<Map<String, Object>> history(
+            @PathVariable Long projectId,
+            @RequestParam(defaultValue = "100") int limit,
+            @RequestParam(required = false) String cursor,
+            @RequestParam(required = false) String author,
+            @RequestParam(required = false) Long fileId,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to,
+            @RequestParam(defaultValue = "false") boolean includeAuto,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = requireMember(projectId, sessionId);
+        Map<String, Object> data = new HashMap<>();
+        if (!repoService.isInitialized(projectId)) {
+            data.put("enabled", false);
+            data.put("entries", List.of());
+            return ok(data);
+        }
+
+        int capped = Math.min(Math.max(limit, 1), HISTORY_MAX_LIMIT);
+        String relPath = fileId == null ? null : relPathOfFile(projectId, fileId);
+        ProjectRepoService.HistoryQuery query = new ProjectRepoService.HistoryQuery(
+                capped, cursor, author, relPath, q,
+                parseFrom(from), parseTo(to), includeAuto);
+        ProjectRepoService.HistoryPage page =
+                repoService.history(projectId, historyRoots(projectId), query);
+
+        Map<String, String> remoteNames = remoteDisplayNames(projectId);
+        List<Map<String, Object>> entries = new ArrayList<>(page.rows().size());
+        for (ProjectRepoService.HistoryRow row : page.rows()) {
+            entries.add(entryData(projectId, userId, row, remoteNames));
+        }
+
+        data.put("enabled", true);
+        data.put("head", headData(projectId));
+        data.put("entries", entries);
+        data.put("nextCursor", page.nextCursor());
+        putSyncCounters(projectId, userId, data);
+        return ok(data);
+    }
+
+    /** limit 的服务端上限：再大也只是把一次请求拖长，前端滚到底会自己翻页。 */
+    private static final int HISTORY_MAX_LIMIT = 500;
+
+    /**
+     * 参与 walk 的四类引用。解析不出来的（没绑案件库时的 origin/master、一条稿都没有时）
+     * 由 {@link ProjectRepoService#history} 自己跳过，这里不必先判一遍。
+     */
+    private List<ProjectRepoService.HistoryRoot> historyRoots(long projectId) {
+        List<ProjectRepoService.HistoryRoot> roots = new ArrayList<>();
+        roots.add(new ProjectRepoService.HistoryRoot(
+                repoService.mainBranch(), "mainline", LangText.of("主线", "Mainline")));
+        for (WorkSession d : sessionService.listDrafts(projectId)) {
+            if (d.getBranchName() == null) continue;
+            roots.add(new ProjectRepoService.HistoryRoot(d.getBranchName(), "draft", d.getTitle()));
+        }
+        roots.add(new ProjectRepoService.HistoryRoot(
+                repoService.originMasterRef(), "remote", LangText.of("案件库", "Case Library")));
+        roots.add(new ProjectRepoService.HistoryRoot(
+                "HEAD", "local", LangText.of("本机", "This computer")));
+        return roots;
+    }
+
+    /** 当前站在主线还是某一稿上。 */
+    private Map<String, Object> headData(long projectId) {
+        Map<String, Object> head = new HashMap<>();
+        WorkSession draft = sessionService.activeDraftOnBranch(projectId).orElse(null);
+        head.put("branch", draft == null ? "mainline" : "draft");
+        head.put("draftName", draft == null ? null : draft.getTitle());
+        return head;
+    }
+
+    /**
+     * 「本机领先 N 版 · 案件库领先 M 版」。没绑案件库时两者都是 0，
+     * 且不放 remoteAhead* 那三个键——前端据「有没有这几个键」决定要不要说那句话。
+     * cloudStatus 是不联网的本地快照（见 CloudSyncService），放在这里不会让历史变慢。
+     */
+    private void putSyncCounters(long projectId, Long userId, Map<String, Object> data) {
+        Map<String, Object> cloud = Map.of("linked", false);
+        try {
+            if (cloudSyncService != null) cloud = cloudSyncService.cloudStatus(projectId, userId);
+        } catch (Exception e) {
+            log.warn("读取云端状态失败，历史照常给: project={}", projectId, e);
+        }
+        if (!Boolean.TRUE.equals(cloud.get("linked"))) {
+            data.put("ahead", 0);
+            data.put("behind", 0);
+            return;
+        }
+        int ahead = 0;
+        try {
+            ahead = repoService.commitsBetween(projectId, repoService.originMasterRef(),
+                    repoService.mainBranch(), AHEAD_WALK_CAP).size();
+        } catch (Exception e) {
+            log.warn("统计本机领先版数失败: project={}", projectId, e);
+        }
+        data.put("ahead", ahead);
+        Object behind = cloud.get("remoteAheadCount");
+        data.put("behind", behind instanceof Number n ? n.intValue() : 0);
+        if (cloud.containsKey("remoteAheadCount")) data.put("remoteAheadCount", cloud.get("remoteAheadCount"));
+        if (cloud.containsKey("remoteAheadAuthors")) data.put("remoteAheadAuthors", cloud.get("remoteAheadAuthors"));
+        if (cloud.containsKey("remoteAheadAuthorCount")) data.put("remoteAheadAuthorCount", cloud.get("remoteAheadAuthorCount"));
+        if (cloud.containsKey("remoteAheadBySelf")) data.put("remoteAheadBySelf", cloud.get("remoteAheadBySelf"));
+    }
+
+    /** 与 cloudStatus 数「案件库领先几版」同一个上限，两个数字的量纲才对得上。 */
+    private static final int AHEAD_WALK_CAP = 200;
+
+    /** 一行历史的完整形状。字段与 spec §2.4 的表逐条对应，前端不再二次推导。 */
+    private Map<String, Object> entryData(long projectId, Long userId,
+                                          ProjectRepoService.HistoryRow row,
+                                          Map<String, String> remoteNames) {
+        VersionEntry e = row.entry();
+        Map<String, Object> m = new HashMap<>();
+        m.put("sha", e.sha());
+        m.put("shortId", e.sha() == null || e.sha().length() < 7 ? e.sha() : e.sha().substring(0, 7));
+        // title 是律师看的那一句：工作段有自己的名字（X-AWD-Note）就用它，否则用提交标题
+        m.put("title", e.note() != null && !e.note().isBlank() ? e.note() : e.message());
+        m.put("message", e.message());
+        // 署名翻译成案件库账户的展示名（命中才换）——git 署名是对方那台机器的本机展示名，
+        // 单机模式下人人都叫「本机用户」。self 仍然按邮箱判，不受这一步影响。
+        m.put("authorName", VersionAuthorResolver.preferredAuthorName(e, remoteNames));
+        m.put("authorEmail", e.authorEmail());
+        m.put("self", isSelf(e, projectId, userId));
+        m.put("when", e.when());
+        m.put("kind", e.kind());
+        m.put("type", HistoryTypeClassifier.classify(e.message(), e.kind()));
+        m.put("parents", e.parents() == null ? List.of() : e.parents());
+        m.put("refs", row.refs().stream()
+                .map(r -> {
+                    Map<String, Object> one = new HashMap<>();
+                    one.put("type", r.type());
+                    one.put("name", r.name());
+                    return one;
+                }).toList());
+        m.put("milestone", e.milestone());
+        m.put("resolutions", e.resolutions() == null ? List.of() : e.resolutions());
+        m.put("remote", row.remote());
+        m.put("autoCount", row.autoCount());
+        ProjectRepoService.ChangeCounts c = row.changes();
+        m.put("changes", Map.of(
+                "added", c.added(), "modified", c.modified(),
+                "deleted", c.deleted(), "renamed", c.renamed()));
+        return m;
+    }
+
+    /**
+     * 案件库那边的「账号名 → 展示名」。读列表一律不许联网（allowFetch=false）：
+     * 缓存里有就用，没有就保持 git 署名——为一个名字让时间线卡在一次网络请求上不值当。
+     * 缓存由云端状态轮询与参与人面板顺手喂（见 CloudSyncService.remoteDisplayNames）。
+     */
+    private Map<String, String> remoteDisplayNames(long projectId) {
+        try {
+            if (cloudSyncService == null) return Map.of();
+            Map<String, String> names = cloudSyncService.remoteDisplayNames(projectId, false);
+            return names == null ? Map.of() : names;
+        } catch (Exception e) {
+            log.warn("读取案件库展示名失败，历史按 git 署名显示: project={}", projectId, e);
+            return Map.of();
+        }
+    }
+
+    /** 出参侧统一把署名换成案件库账户的展示名；命中才换，未命中原样。 */
+    private List<VersionEntry> withRemoteNames(long projectId, List<VersionEntry> entries) {
+        Map<String, String> names = remoteDisplayNames(projectId);
+        if (names.isEmpty()) return entries;
+        // preferredAuthorName 未命中时原样回 authorName，所以这里不必再分支
+        return entries.stream()
+                .map(e -> e.withAuthorName(VersionAuthorResolver.preferredAuthorName(e, names)))
+                .toList();
+    }
+
+    /** 「这一版是不是我提交的」的唯一判法（见 VersionAuthorResolver）；resolver 缺席时一律否。 */
+    private boolean isSelf(VersionEntry e, long projectId, Long userId) {
+        try {
+            return authorResolver != null && authorResolver.isSelf(e, projectId, userId);
+        } catch (Exception ex) {
+            return false;
+        }
+    }
+
+    /**
+     * 任意两版之间的文件清单（「对比这两版」）。from/to 可以是任何引用或 sha。
+     * 解析不出来就明说哪一头找不到——这是律师自己选的两行，不是内部错误。
+     */
+    @GetMapping("/compare")
+    public ResponseEntity<Map<String, Object>> compare(
+            @PathVariable Long projectId,
+            @RequestParam String from,
+            @RequestParam String to,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireMember(projectId, sessionId);
+        requireResolvable(projectId, from);
+        requireResolvable(projectId, to);
+        List<FileChange> changes = repoService.diffNameStatus(projectId, from, to)
+                .stream().filter(c -> !c.path().startsWith(".awd/")).toList();
+        return ok(Map.of("changes", changes));
+    }
+
+    /**
+     * 两个入参必须真的指向本仓库里的某一版。用 {@code commitExists} 而不是
+     * {@code resolveRef}：后者对「格式合法但库里没有」的完整 sha 会原样回一个 ObjectId，
+     * 要等拿去 diff 才炸成技术档异常，律师看到的是通用的「操作失败，请重试」。
+     */
+    private void requireResolvable(long projectId, String ref) {
+        if (!repoService.commitExists(projectId, ref)) {
+            throw VersionException.userFacing(LangText.of("找不到要对比的版本", "Cannot find the version to compare"));
+        }
+    }
+
+    /** fileId → 仓库内相对路径。归属校验与 /timeline 逐字一致（错误文案不带 fileId）。 */
+    private String relPathOfFile(Long projectId, Long fileId) {
+        ProjectFile f = projectFileService.getFile(fileId); // 文件不存在会抛异常
+        if (!projectId.equals(f.getProjectId())) {
+            throw new IllegalArgumentException(LangText.of("无权访问该文件", "You don't have access to this file"));
+        }
+        return WorkSessionService.repoRelativePath(f);
+    }
+
+    /**
+     * 日期筛选的两端。只写日期（{@code 2026-09-14}）时按**本机时区**理解成那一天的
+     * 起点 / 终点——律师选的是「9 月 14 日」，按 UTC 切会把当天早上八小时切到前一天去。
+     * 也接受完整时刻（ISO-8601）。解析不出来当作没填，不因为一个筛选参数让整页失败。
+     */
+    private static java.time.Instant parseFrom(String raw) {
+        return parseBoundary(raw, true);
+    }
+
+    private static java.time.Instant parseTo(String raw) {
+        return parseBoundary(raw, false);
+    }
+
+    private static java.time.Instant parseBoundary(String raw, boolean start) {
+        if (raw == null || raw.isBlank()) return null;
+        String s = raw.trim();
+        try {
+            java.time.LocalDate d = java.time.LocalDate.parse(s);
+            java.time.ZoneId zone = java.time.ZoneId.systemDefault();
+            return start
+                    ? d.atStartOfDay(zone).toInstant()
+                    : d.plusDays(1).atStartOfDay(zone).toInstant().minusMillis(1);
+        } catch (Exception ignored) {
+            // 不是纯日期，往下试完整时刻
+        }
+        try {
+            return java.time.OffsetDateTime.parse(s).toInstant();
+        } catch (Exception ignored) {
+            // 继续
+        }
+        try {
+            return java.time.Instant.parse(s);
+        } catch (Exception e) {
+            log.warn("无法解析历史筛选的日期，按未填处理: {}", s);
+            return null;
+        }
     }
 
     @PostMapping("/session/end")
@@ -486,7 +770,7 @@ public class VersionController {
             return ok(Map.of("versions", List.of()));
         }
         List<VersionEntry> entries = repoService.log(projectId, draft.getBranchName(), limit);
-        return ok(Map.of("versions", entries));
+        return ok(Map.of("versions", withRemoteNames(projectId, entries)));
     }
 
     @PostMapping("/draft/{id}/switch")
@@ -661,8 +945,12 @@ public class VersionController {
         return LangText.of("用户", "User");
     }
 
-    private String email(Long userId) {
-        return "user-" + userId + "@aiworkdeck.local";
+    /** 作者邮箱的唯一取法，规则集中在 {@link VersionAuthorResolver}（spec 2026-09-14 §2.1）。 */
+    private String email(Long projectId, Long userId) {
+        String name = userName(userId);
+        return authorResolver != null
+                ? authorResolver.email(projectId, userId, name)
+                : VersionAuthorResolver.localEmail(name);
     }
 
     private ResponseEntity<Map<String, Object>> ok(Map<String, Object> data) {

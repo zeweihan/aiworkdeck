@@ -582,17 +582,28 @@ test('loadProjects: 两次调用乱序回来，陈旧快照不许把刚删除的
 //     已在交付回报里说明）
 // ======================================================================
 
-const VND_SRC = read('components/version/VersionNodeDetail.vue')
+// dev-board#624 起这四件事的实现搬进 composables/useVersionActions.js（VersionNodeDetail 与
+// 提交历史标签页共用），busy 重入守卫也在那里：这条守卫测试跟着搬，宿主契约按
+// createVersionActions(host) 的形状搭（isBusy/setBusy 映射到 vm.busy）。
+const VA_SRC = read('composables/useVersionActions.js')
 
 function makeVersionNodeDetailVm(revertToVersionImpl) {
-  const body = extractMethod(VND_SRC, 'confirmRevert() {')
+  const body = extractMethod(VA_SRC, 'confirmRevert(sha) {')
   const modalCalls = []
   const uni = { showModal: (o) => modalCalls.push(o), showToast() {} }
   const vm = { busy: false, projectId: 1, version: { sha: 'abc123', when: Date.now() }, $t: (k) => k, $emit: () => {} }
-  vm.confirmRevert = new Function(
-    'revertToVersion', 'uni',
-    `return (function confirmRevert() ${body})`,
-  )(revertToVersionImpl, uni).bind(vm)
+  const host = {
+    projectId: () => vm.projectId,
+    t: (k, p) => vm.$t(k, p),
+    isBusy: () => vm.busy,
+    setBusy: (v) => { vm.busy = v },
+    emit: (name, payload) => vm.$emit(name, payload),
+  }
+  const inner = new Function(
+    'host', 't', 'toast', 'revertToVersion', 'uni',
+    `return (function confirmRevert(sha) ${body})`,
+  )(host, host.t, () => {}, revertToVersionImpl, uni)
+  vm.confirmRevert = () => inner(vm.version.sha)
   return { vm, modalCalls }
 }
 

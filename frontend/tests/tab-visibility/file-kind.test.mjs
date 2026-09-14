@@ -39,6 +39,7 @@ test('非文件标签一律不着色', () => {
     { fileType: 'market-detail', tabType: 'market-detail' },
     { fileType: undefined, tabType: 'admin-settings' },
     { fileType: 'plugin', tabType: undefined },
+    { fileType: undefined, tabType: 'commit-history' },
     { fileType: 'version-compare', tabType: 'version-compare' },
     { fileType: 'version-text-diff', tabType: 'version-text-diff' },
     { fileType: 'diff', tabType: 'diff' }
@@ -52,6 +53,7 @@ test('非文件标签一律不着色', () => {
 test('非文件 tabType 压过扩展名：浏览器标签就算带了 docx 也不着色', () => {
   assert.equal(fileKindKey('docx', 'web'), '')
   assert.equal(fileKindKey('png', 'admin-settings'), '')
+  assert.equal(fileKindKey('docx', 'commit-history'), '')
 })
 
 test('AI 工作计划那种虚拟 markdown 标签仍按 md 着色（它确实是一份 md 文档）', () => {

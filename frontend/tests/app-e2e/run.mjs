@@ -1829,10 +1829,18 @@ try {
     fs.writeFileSync(j11Base, 'QA J11 云端协作基线文件\n')
 
     let remoteProjectId = null
+    // A 在案件库那一侧的账号名 = 'awd_' + A 的本机 username（dev-board#625）。
+    // 这不是随手取的名字，而是真实的桥接形状：同一个官网账户在本机叫 hanzewei、
+    // 在案件库那边叫 awd_hanzewei，成员去重的第三把键（mergeMembers.sameMember）认的
+    // 正是这个前缀。写死一个 lawyer_a 的话本机那条与云端那条永远对不上，
+    // 参与人会一直显示成 3 人，「同一个人不算两遍」这条就永远测不到。
+    const meA = await api('/api/auth/me')
+    const aLocalUsername = (meA && meA.data && meA.data.username) || ''
+    const A_CLOUD_USER = aLocalUsername ? 'awd_' + aLocalUsername : 'lawyer_a'
     await step('J11-服务器注册两个账号', async () => {
-      const regA = await sApi('/api/auth/register', { method: 'POST', body: { username: 'lawyer_a', password: 'PwLawyerA123', displayName: '律师甲' } })
-      if (!regA || regA.code !== 0) throw new Error('注册 lawyer_a 失败: ' + JSON.stringify(regA).slice(0, 200))
-      sApi.sid = regA.data.sessionId // 全程以 lawyer_a 身份留在 S 上（加成员/服务器侧断言都用它）
+      const regA = await sApi('/api/auth/register', { method: 'POST', body: { username: A_CLOUD_USER, password: 'PwLawyerA123', displayName: '律师甲' } })
+      if (!regA || regA.code !== 0) throw new Error('注册 ' + A_CLOUD_USER + ' 失败: ' + JSON.stringify(regA).slice(0, 200))
+      sApi.sid = regA.data.sessionId // 全程以律师甲身份留在 S 上（加成员/服务器侧断言都用它）
       const regB = await sApi('/api/auth/register', { method: 'POST', body: { username: 'lawyer_b', password: 'PwLawyerB123', displayName: '律师乙' } })
       if (!regB || regB.code !== 0) throw new Error('注册 lawyer_b 失败: ' + JSON.stringify(regB).slice(0, 200))
     })
@@ -1849,7 +1857,7 @@ try {
       // 换掉的那一步原来是「注入 checkbaDesktop 桩 → 整页 reload admin → 填三个框」，
       // 那套体操连同它的两个页面栈坑一起随分区消失；桩本身也不必留（J12 自己另注一份）。
       const r = await api('/api/cloud/connect', { method: 'POST',
-        body: { serverUrl: S, username: 'lawyer_a', password: 'PwLawyerA123', deviceName: '桌面端' } })
+        body: { serverUrl: S, username: A_CLOUD_USER, password: 'PwLawyerA123', deviceName: '桌面端' } })
       if (!r || r.code !== 0) throw new Error('A 连接 S 失败: ' + JSON.stringify(r).slice(0, 200))
       // 记下这次连接的 id，finally 里断开——A 的桌面后端是长驻真实数据（不像 S/B 是
       // 跑完就扔的临时进程），CloudConnection 不清理会跨多次 e2e 运行累积。
@@ -2109,8 +2117,18 @@ try {
       if (!ok) throw new Error('等待超时：结束工作后 pendingUpload 没有被置上')
       await mouseClickSel('[title="资源管理器"]')
       await mouseClickSel('[title="版本"]')
-      const shown = await page.evaluate(() => document.body.innerText.includes('同事交了新稿'))
-      if (!shown) throw new Error('协作状态没有提示「同事交了新稿」')
+      // dev-board#623 之后这句话不再是写死的「同事交了新稿」：后端算得出作者与版数时
+      // 会说成「{谁}交了新稿 · N 版」（utils/collabWording.js 的三态），算不出来才落回老
+      // 那句。这里只断「说了有新稿」这件事本身——具体是哪一支由下面 J11-历史 那几步
+      // 逐条对账，在这里写死字面量只会让两边同时红。
+      const collabLine = await page.evaluate(() => {
+        const t = document.body.innerText
+        const m = t.match(/[^\n]*交了新稿[^\n]*/)
+        return m ? m[0].trim() : ''
+      })
+      if (!collabLine) {
+        throw new Error('协作状态没有提示有新稿（既不是「同事交了新稿」，也不是「{谁}交了新稿 · N 版」）')
+      }
       const dialogOpen = await page.evaluate(() => {
         const dlg = document.querySelector('.adopt-dialog')
         return !!dlg && dlg.getClientRects().length > 0
@@ -2230,6 +2248,332 @@ try {
           || String(acc.data.localProjectId) !== String(QA.projectId)) {
         throw new Error('查重没有回既有项目: ' + JSON.stringify(acc).slice(0, 200))
       }
+    })
+
+    // ==================== 协作历史（dev-board#623/#624/#625） ====================
+    // spec: docs/superpowers/specs/2026-09-14-collab-history-git-parity-design.md §3/§4。
+    // 上面那一段把「共享 → 接入 → 双向同步 → 冲突三选一」跑完了；这一段接着验
+    // 「这份案卷被谁动过」那条旁白链：顶栏那句话的三态、中栏「提交历史」标签页里的
+    // 版本行与事件行、裁决尾注的回显、同账号双设备的识别、参与人去重。
+    //
+    // 拓扑补一台 C = 律师甲的第二台电脑（spawnBackend 9704，9703 被 J13 占着）：
+    // 与 A 用**同一个案件库账号**连 S，区别只在设备令牌——「你在另一台电脑交了新稿」
+    // 与事件行的「你（某台电脑）」两句话唯一的真实来源就是这个差别，桩不出来。
+    //
+    // 事件行里凡是 actor 就是 A 自己的（放进案件库、加人、A 那台机器的签出/取回），
+    // 界面按 selfUserId/selfTokenId 说成「你」——这是 historyRows.actorKind 的契约，
+    // 不是「漏了名字」。只有别人（律师乙）和 A 的另一台电脑才带名字/设备名。
+    const cloudEventTexts = () => page.evaluate(() =>
+      [...document.querySelectorAll('.ch-event-text')].map((e) => (e.innerText || '').trim()))
+    const countEventText = (list, text) => list.filter((t) => t === text).length
+    // 列表行：先把行滚进视野再按 .ch-title（版本行标题）的矩形真实鼠标点击——
+    // 直接点整行中点会撞上第二行右侧的「自动存档 N 次」（它自带 @tap.stop，
+    // 点中了只展开自动存档、选不中这一版，且不报错，是一种静默失败）。
+    const clickHistoryRow = async (titlePart, nth = 0) => {
+      const box = await page.evaluate((part, n) => {
+        const rows = [...document.querySelectorAll('.ch-row')].filter((r) => {
+          const t = r.querySelector('.ch-title')
+          return t && (t.innerText || '').includes(part)
+        })
+        const row = rows[n]
+        if (!row) return null
+        row.scrollIntoView({ block: 'center' })
+        const t = row.querySelector('.ch-title')
+        const r = t.getBoundingClientRect()
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2, total: rows.length }
+      }, titlePart, nth)
+      if (!box) return 0
+      await page.mouse.click(box.x, box.y)
+      await sleep(600)
+      return box.total
+    }
+    // 工具栏按钮按 .commit-history 作用域点，不用全局 mouseClickText——「取回最新稿」
+    // 这几个字在协作抽屉里也有一份（此刻虽关着，但它是模态层，哪天顺序变了就会先命中它）。
+    const clickHistoryBtn = async (label) => {
+      const box = await page.evaluate((lbl) => {
+        const el = [...document.querySelectorAll('.commit-history .ch-btn')]
+          .find((b) => (b.innerText || '').trim() === lbl)
+        if (!el) return null
+        el.scrollIntoView({ block: 'center' })
+        const r = el.getBoundingClientRect()
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+      }, label)
+      if (!box) throw new Error('提交历史工具栏里没有按钮: ' + label)
+      await page.mouse.click(box.x, box.y)
+      await sleep(700)
+    }
+    const openHistoryTabByChip = async () => {
+      await page.waitForSelector('.collab-chip', { timeout: 20000 })
+      await mouseClickSel('.collab-chip')
+      await page.waitForSelector('.commit-history', { timeout: 20000 })
+      // 列表首屏是两串网络请求（/version/history + /cloud/.../events），等 loading 文案消失
+      await page.waitForFunction(() => {
+        const root = document.querySelector('.commit-history')
+        return !!root && !!root.querySelector('.ch-row')
+      }, { timeout: 20000 })
+    }
+
+    await step('J11-历史：B 先取回裁决结果，再交第三稿（造一条 A 还没取回的新版）', async () => {
+      const up = await bApi('/api/cloud/projects/' + bProjectId + '/update', { method: 'POST' })
+      if (!up || up.code !== 0) throw new Error('B 取回失败: ' + JSON.stringify(up).slice(0, 200))
+      if (up.data && up.data.status === 'CONFLICT') {
+        throw new Error('B 取回裁决结果时不该撞冲突（A 的裁决已包含 B 那一侧）: ' + JSON.stringify(up.data).slice(0, 200))
+      }
+      await restOverwriteAt(bApi, bProjectId, 'qa-J11协作文件.txt', 'QA J11 来自 B 的第三次修改（提交历史用）\n')
+      await endSessionAt(bApi, bProjectId, 'B 第三次修改（提交历史用）')
+      const ok = await pollUntil(async () => {
+        const tl = await sApi('/api/projects/' + remoteProjectId + '/version/timeline?limit=30')
+        const versions = (tl && tl.data && tl.data.versions) || []
+        return versions.some((v) => (v.note || v.message || '').includes('B 第三次修改'))
+      }, 40000, 1500)
+      if (!ok) throw new Error('等待超时：S 的时间线始终没有出现 B 第三次修改的节点')
+    })
+
+    await step('J11-历史：A 顶栏协作 chip 说清「谁交的 · 几版」（不是笼统的「同事交了新稿」）', async () => {
+      // 整页重载会走一次 onLoad → fetchCollabState({online:true})（真 fetch origin），
+      // 这是 chip 拿到新 remoteAhead 的唯一时机（否则要等 120 秒轮询）。
+      // **goto 之后必须再 reload 一次**：page.goto 到一模一样的 URL（连 hash 都相同）
+      // 是同文档导航，不产生新 document、onLoad 一次都不跑——现场实证过一次，
+      // 界面停在上一次的「和大家的稿一致」，看着像 remoteAhead 没算出来，
+      // 其实是这一页压根没重新加载（同本文件顶部「切语言必须整页 reload」同一个坑）。
+      await page.goto(BASE + '/#/pages/project-overview/project-overview?id=' + QA.projectId,
+        { waitUntil: 'networkidle2', timeout: 30000 })
+      await page.reload({ waitUntil: 'networkidle2', timeout: 30000 })
+      await page.waitForSelector('.collab-chip', { timeout: 20000 })
+      const ok = await pollUntil(async () => {
+        const t = await page.evaluate(() => {
+          const el = document.querySelector('.collab-chip-text')
+          return el ? (el.innerText || '').trim() : ''
+        })
+        return /交了新稿 · \d+ 版$/.test(t)
+      }, 30000, 1000)
+      const chipText = await page.evaluate(() => {
+        const el = document.querySelector('.collab-chip-text')
+        return el ? (el.innerText || '').trim() : ''
+      })
+      if (!ok) throw new Error('顶栏 chip 没有变成「{谁}交了新稿 · N 版」，实际是: ' + JSON.stringify(chipText))
+      // 与后端给的四个键逐个对账——文案是纯函数 collabWording.remoteAheadText 算出来的，
+      // 这里断的是「后端算得出作者与版数 + 前端走了带名字那一支」，不是某个写死的字符串。
+      const st = await api('/api/cloud/projects/' + QA.projectId + '/status')
+      const d = (st && st.data) || {}
+      if (!d.remoteAhead) throw new Error('后端没有报 remoteAhead: ' + JSON.stringify(d).slice(0, 300))
+      if (!(Number(d.remoteAheadCount) > 0)) throw new Error('remoteAheadCount 不是正数: ' + JSON.stringify(d).slice(0, 300))
+      if (d.remoteAheadBySelf) throw new Error('这几版是律师乙交的，remoteAheadBySelf 不该为真: ' + JSON.stringify(d).slice(0, 300))
+      const authors = Array.isArray(d.remoteAheadAuthors) ? d.remoteAheadAuthors : []
+      if (!authors.length) throw new Error('后端没给 remoteAheadAuthors: ' + JSON.stringify(d).slice(0, 300))
+      // 名字必须是**案件库账户**的展示名（律师乙），不是对方那台机器的 git 署名。
+      // 版本行的署名是推稿那台电脑的本机展示名（单机模式下人人都叫「本机用户」），
+      // CloudSyncService.remoteDisplayNames 负责把它翻成案件库那边的名字；
+      // 这条断言红成「本机用户」就说明那张字典没拿到——查 describeRemoteAhead
+      // 那条 allowFetch=true 的路（只有它允许现取一趟参与人表）。
+      if (authors[0] !== '律师乙') {
+        throw new Error('chip 里的作者名不是案件库账户展示名「律师乙」，而是 ' + JSON.stringify(authors[0])
+          + '——remoteDisplayNames 没把 git 署名翻过来（查 describeRemoteAhead 的 allowFetch 那条路）。'
+          + ' 云端状态=' + JSON.stringify(d).slice(0, 300))
+      }
+      const expect = authors.length > 1 || Number(d.remoteAheadAuthorCount) > 1
+        ? authors[0] + '等 ' + (Number(d.remoteAheadAuthorCount) || authors.length) + ' 人交了新稿 · ' + d.remoteAheadCount + ' 版'
+        : authors[0] + '交了新稿 · ' + d.remoteAheadCount + ' 版'
+      if (chipText !== expect) {
+        throw new Error('chip 文案与云端状态对不上。界面=' + JSON.stringify(chipText)
+          + ' 期望=' + JSON.stringify(expect) + ' 状态=' + JSON.stringify(d).slice(0, 300))
+      }
+      if (chipText === '同事交了新稿') throw new Error('chip 仍是笼统的老文案，作者/版数没生效')
+      await shot('J11-history-chip-colleague')
+    })
+
+    await step('J11-历史：点 chip 打开中栏「提交历史」标签且它是激活标签', async () => {
+      await openHistoryTabByChip()
+      const tab = await page.evaluate(() => {
+        const el = document.querySelector('.tab-item.active .tab-name')
+        return el ? (el.innerText || '').trim() : ''
+      })
+      if (tab !== '提交历史') throw new Error('激活标签不是「提交历史」，实际是: ' + JSON.stringify(tab))
+      await shot('J11-history-tab-open')
+    })
+
+    await step('J11-历史：列表里有「案件库」标签的 remote 版本行 + 「律师乙 交了稿」事件行 + 工具栏「案件库领先 N 版」', async () => {
+      await page.waitForSelector('.ch-row.is-remote', { timeout: 20000 })
+      const remoteRows = await page.evaluate(() =>
+        [...document.querySelectorAll('.ch-row.is-remote')].map((r) => ({
+          refs: [...r.querySelectorAll('.ch-ref-remote')].map((e) => (e.innerText || '').trim()),
+          author: ((r.querySelector('.ch-author') || {}).innerText || '').trim(),
+          title: ((r.querySelector('.ch-title') || {}).innerText || '').trim(),
+        })))
+      if (!remoteRows.some((r) => r.refs.includes('案件库'))) {
+        throw new Error('remote 行上没有「案件库」标签，实际: ' + JSON.stringify(remoteRows))
+      }
+      // 版本行的署名也要是案件库账户展示名——事件行说「律师乙 交了稿」、版本行却说
+      // 「本机用户」的话，同一屏里同一个人有两种叫法（dev-board#623 收口那一条）。
+      if (!remoteRows.every((r) => r.author === '律师乙')) {
+        throw new Error('remote 版本行的署名不是案件库账户展示名「律师乙」: ' + JSON.stringify(remoteRows)
+          + '——查 VersionController 那条 remoteDisplayNames(projectId, false) 的缓存是否为空')
+      }
+      const events = await cloudEventTexts()
+      const pushed = events.filter((t) => /^律师乙 交了稿( · \d+ 版)?$/.test(t))
+      if (!pushed.length) {
+        throw new Error('事件行里没有「律师乙 交了稿 · N 版」，现有事件行: ' + JSON.stringify(events))
+      }
+      if (!pushed.some((t) => /· \d+ 版$/.test(t))) {
+        throw new Error('「律师乙 交了稿」没有带版数（commitCount 没上报或为 0）: ' + JSON.stringify(pushed))
+      }
+      const counts = await page.evaluate(() => {
+        const el = document.querySelector('.ch-counts')
+        return el ? (el.innerText || '').trim() : ''
+      })
+      if (!/案件库领先 \d+ 版/.test(counts)) {
+        throw new Error('工具栏没有显示「案件库领先 N 版」，实际是: ' + JSON.stringify(counts))
+      }
+      await shot('J11-history-remote-row')
+    })
+
+    await step('J11-历史：在标签页里点「取回最新稿」后出现「你 取回了最新稿」事件行、remote 行消失', async () => {
+      const before = countEventText(await cloudEventTexts(), '你 取回了最新稿')
+      await clickHistoryBtn('取回最新稿')
+      const ok = await pollUntil(async () => {
+        const list = await cloudEventTexts()
+        return countEventText(list, '你 取回了最新稿') > before
+      }, 30000, 1500)
+      if (!ok) {
+        const list = await cloudEventTexts()
+        throw new Error('取回之后没有多出一条「你 取回了最新稿」（取回前 ' + before + ' 条）: ' + JSON.stringify(list))
+      }
+      const stillRemote = await page.evaluate(() => document.querySelectorAll('.ch-row.is-remote').length)
+      if (stillRemote !== 0) throw new Error('取回之后还剩 ' + stillRemote + ' 条 remote 行，说明 remote 位没有随取回消解')
+      await shot('J11-history-after-pull')
+    })
+
+    await step('J11-历史：裁决过的那一版，详情里显示裁决结果（X-AWD-Resolutions 尾注）', async () => {
+      const total = await clickHistoryRow('取回最新稿', 0)
+      if (!total) throw new Error('列表里没有标题含「取回最新稿」的版本行')
+      let lines = []
+      for (let i = 0; i < total; i++) {
+        await clickHistoryRow('取回最新稿', i)
+        lines = await page.evaluate(() =>
+          [...document.querySelectorAll('.ch-resolution')].map((e) => (e.innerText || '').trim()))
+        if (lines.length) break
+      }
+      if (!lines.length) {
+        throw new Error('' + total + ' 条「取回最新稿」版本行里，没有一条在详情里显示裁决结果')
+      }
+      if (!lines.some((l) => l.includes('qa-J11协作文件.txt') && l.includes('两边都留'))) {
+        throw new Error('裁决结果不是当初选的「两份都留着」: ' + JSON.stringify(lines))
+      }
+      await shot('J11-history-resolutions')
+    })
+
+    // ---- 同账号双设备：C = 律师甲的第二台电脑 ----
+    let cProjectId = null
+    await step('J11-历史：律师甲的第二台电脑（C）接入同一份案卷并交稿', async () => {
+      const C = await spawnBackend('desktopC', 9704)
+      const cApi = mkApi(C)
+      const conn = await cApi('/api/cloud/connect', { method: 'POST',
+        body: { serverUrl: S, username: A_CLOUD_USER, password: 'PwLawyerA123', deviceName: '律师甲的另一台电脑' } })
+      if (!conn || conn.code !== 0) throw new Error('C 连接云端失败: ' + JSON.stringify(conn).slice(0, 200))
+      const remotes = await cApi('/api/cloud/connections/' + conn.data.connectionId + '/remote-projects')
+      const list = (remotes && remotes.data && remotes.data.projects) || []
+      const proj = list.find((p) => p.name === QA.project)
+      if (!proj) throw new Error('C 在远端项目列表里没看到这份案卷: ' + JSON.stringify(list).slice(0, 200))
+      const acc = await cApi('/api/cloud/accept', { method: 'POST',
+        body: { connectionId: conn.data.connectionId, remoteProjectId: proj.id } })
+      if (!acc || acc.code !== 0) throw new Error('C 接入失败: ' + JSON.stringify(acc).slice(0, 200))
+      cProjectId = acc.data.localProjectId
+      await restOverwriteAt(cApi, cProjectId, 'qa-J11协作文件.txt', 'QA J11 甲在另一台电脑上的修改\n')
+      await endSessionAt(cApi, cProjectId, '甲在另一台电脑上的修改')
+      const ok = await pollUntil(async () => {
+        const tl = await sApi('/api/projects/' + remoteProjectId + '/version/timeline?limit=30')
+        const versions = (tl && tl.data && tl.data.versions) || []
+        return versions.some((v) => (v.note || v.message || '').includes('甲在另一台电脑上的修改'))
+      }, 40000, 1500)
+      if (!ok) throw new Error('等待超时：S 的时间线没有出现 C 交的那一版')
+    })
+
+    await step('J11-历史：A 顶栏变成「你在另一台电脑交了新稿 · N 版」（不再说成同事）', async () => {
+      // 同上一处：这一页此刻就停在这个 URL 上，只 goto 不 reload 等于什么都没做。
+      await page.goto(BASE + '/#/pages/project-overview/project-overview?id=' + QA.projectId,
+        { waitUntil: 'networkidle2', timeout: 30000 })
+      await page.reload({ waitUntil: 'networkidle2', timeout: 30000 })
+      await page.waitForSelector('.collab-chip', { timeout: 20000 })
+      const ok = await pollUntil(async () => {
+        const t = await page.evaluate(() => {
+          const el = document.querySelector('.collab-chip-text')
+          return el ? (el.innerText || '').trim() : ''
+        })
+        return /^你在另一台电脑交了新稿 · \d+ 版$/.test(t)
+      }, 30000, 1000)
+      const chipText = await page.evaluate(() => {
+        const el = document.querySelector('.collab-chip-text')
+        return el ? (el.innerText || '').trim() : ''
+      })
+      const st = await api('/api/cloud/projects/' + QA.projectId + '/status')
+      const d = (st && st.data) || {}
+      if (!ok) {
+        throw new Error('顶栏没有说成「你在另一台电脑交了新稿 · N 版」，实际是: ' + JSON.stringify(chipText)
+          + ' 云端状态=' + JSON.stringify(d).slice(0, 300))
+      }
+      if (d.remoteAheadBySelf !== true) {
+        throw new Error('remoteAheadBySelf 该为真（这几版都是同一个案件库账号交的）: ' + JSON.stringify(d).slice(0, 300))
+      }
+      await shot('J11-history-chip-self-other-device')
+    })
+
+    await step('J11-历史：事件行「你（律师甲的另一台电脑） 交了稿」', async () => {
+      await openHistoryTabByChip()
+      const ok = await pollUntil(async () => {
+        const list = await cloudEventTexts()
+        return list.some((t) => /^你（律师甲的另一台电脑） 交了稿( · \d+ 版)?$/.test(t))
+      }, 20000, 1500)
+      if (!ok) {
+        const list = await cloudEventTexts()
+        throw new Error('没有「你（律师甲的另一台电脑） 交了稿」这一行——同账号双设备没被认出来: '
+          + JSON.stringify(list))
+      }
+      await shot('J11-history-event-self-device')
+    })
+
+    await step('J11-历史：签出/放进案件库/加人三类事件行各出现一次（CHECKOUT 按设备去重）', async () => {
+      const list = await cloudEventTexts()
+      const expectOnce = [
+        '你 把案卷放进了案件库',      // SHARED：A 建的远端项目，只该有一条
+        '你 把 律师乙 加进了案卷',     // MEMBER_ADDED
+        '你 签出了一份',              // CHECKOUT：A 这台机器的令牌，日常 fetch 不该重复记
+        '律师乙 签出了一份',           // CHECKOUT：B 那台机器
+        '你（律师甲的另一台电脑） 签出了一份', // CHECKOUT：C 那台机器
+      ]
+      const wrong = expectOnce
+        .map((t) => ({ t, n: countEventText(list, t) }))
+        .filter((x) => x.n !== 1)
+      if (wrong.length) {
+        throw new Error('事件行条数不对: ' + JSON.stringify(wrong)
+          + '（1 = 恰好一条）。现有事件行: ' + JSON.stringify(list))
+      }
+      await shot('J11-history-events')
+    })
+
+    await step('J11-历史：顶栏参与人人数等于案件库成员数（同一个人不算两遍）', async () => {
+      const cm = await api('/api/cloud/projects/' + QA.projectId + '/members')
+      const cloudMembers = (cm && cm.data && cm.data.members) || []
+      if (cloudMembers.length !== 2) {
+        throw new Error('案件库成员数不是 2（甲乙）: ' + JSON.stringify(cloudMembers).slice(0, 300))
+      }
+      // 名单是两趟请求合出来的（本机 /members + 案件库 /cloud/.../members），
+      // 整页重载之后先到的是本机那一趟，云端那一趟回来才合并——直接读一次会读到中间态。
+      const readGrid = () => page.evaluate(() => ({
+        // 堆叠最多画 3 个头像，完整名单在展开面板里（hover 才可见，但一直在 DOM 上）
+        grid: [...document.querySelectorAll('.rail-members-container .member-grid-item')]
+          .map((e) => (e.getAttribute('title') || '').trim()),
+        stack: document.querySelectorAll('.rail-members-container .stack-avatar-mini').length,
+      }))
+      await pollUntil(async () => (await readGrid()).grid.length === cloudMembers.length, 20000, 1000)
+      const shown = await readGrid()
+      if (shown.grid.length !== cloudMembers.length) {
+        throw new Error('参与人 ' + shown.grid.length + ' 人，案件库只有 ' + cloudMembers.length
+          + ' 人——同一个人被算了两遍（mergeMembers 的三把键都没命中）: ' + JSON.stringify(shown.grid))
+      }
+      if (shown.grid.filter((n) => n === '律师乙').length !== 1) {
+        throw new Error('参与人名单里「律师乙」不是恰好一条: ' + JSON.stringify(shown.grid))
+      }
+      await shot('J11-history-members')
     })
   }
 

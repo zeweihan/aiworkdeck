@@ -190,6 +190,9 @@ class SessionEndConflictTest {
         assertTrue(Files.list(root.resolve("projects/7"))
                 .map(p -> p.getFileName().toString())
                 .anyMatch(n -> n.contains("来自") && n.contains("撞车的工作")));
+        // 裁决结果落进提交尾注（spec 2026-09-14 §2.2）
+        assertEquals(List.of(new VersionEntry.Resolution("合同.txt", "BOTH")),
+                repoSvc.log(7L, done.sha(), 1).get(0).resolutions());
     }
 
     @Test

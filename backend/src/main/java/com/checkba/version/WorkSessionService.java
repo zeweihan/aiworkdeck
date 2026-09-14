@@ -17,6 +17,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -110,6 +111,19 @@ public class WorkSessionService {
 
     ReentrantLock repoLock(long projectId) {
         return repoLocks.computeIfAbsent(projectId, id -> new ReentrantLock());
+    }
+
+    /**
+     * 提交署名解析（spec 2026-09-14 §2.1）。**字段注入不是构造器参数**：本类的构造器
+     * 被十来个单测手工 new，加参数是纯 churn（同 ProjectRepoService.maxTrackedFileSizeBytes
+     * 的先例）。required=false 让那些手工构造的实例照常能跑，email() 自带回落。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private VersionAuthorResolver authorResolver;
+
+    /** 单测用：走字段注入，手工 new 出来的实例得有地方补上。 */
+    void setAuthorResolverForTest(VersionAuthorResolver resolver) {
+        this.authorResolver = resolver;
     }
 
     public WorkSessionService(ProjectRepoService repoService,
@@ -766,7 +780,7 @@ public class WorkSessionService {
             }
             manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
             String msg = message != null ? message : describePendingChanges(projectId);
-            return repoService.commitAll(projectId, msg, "auto", null, userName, email(userName));
+            return repoService.commitAll(projectId, msg, "auto", null, userName, email(projectId, userId, userName));
         } finally {
             lock.unlock();
         }
@@ -877,7 +891,7 @@ public class WorkSessionService {
                 MergeOutcome outcome;
                 try {
                     outcome = repoService.merge(
-                            projectId, s.getBranchName(), finalTitle, userName, email(userName));
+                            projectId, s.getBranchName(), finalTitle, userName, email(projectId, userId, userName));
                 } catch (RuntimeException e) {
                     restoreSessionCheckout(projectId, s, e);
                     throw e;
@@ -906,7 +920,7 @@ public class WorkSessionService {
             MergeOutcome outcome;
             try {
                 outcome = repoService.mergeNoCommit(
-                        projectId, s.getBranchName(), finalTitle, userName, email(userName));
+                        projectId, s.getBranchName(), finalTitle, userName, email(projectId, userId, userName));
             } catch (RuntimeException e) {
                 restoreSessionCheckout(projectId, s, e);
                 throw e;
@@ -924,7 +938,8 @@ public class WorkSessionService {
                         userVisibleConflicts(repoService.conflictingPaths(projectId)),
                         mainTipNow, branchTip));
             }
-            return completeSessionMerge(projectId, s, mainTipNow, userName);
+            // 干净的真合并：没有任何裁决，不带 X-AWD-Resolutions 尾注。
+            return completeSessionMerge(projectId, s, mainTipNow, userId, userName, Map.of());
         } finally {
             lock.unlock();
         }
@@ -938,14 +953,15 @@ public class WorkSessionService {
      * 单一双亲提交。
      */
     private SessionEndResult completeSessionMerge(long projectId, WorkSession s,
-                                                   String mainTipBefore, String userName) {
+                                                   String mainTipBefore, Long userId, String userName,
+                                                   Map<String, String> resolutions) {
         TreeManifest theirs = manifestService.readAtRef(projectId, mainTipBefore);
         String baseSha = repoService.mergeBase(projectId, mainTipBefore, s.getBranchName());
         TreeManifest base = baseSha == null ? null : manifestService.readAtRef(projectId, baseSha);
         if (theirs != null) manifestService.unionApply(projectId, theirs, base);
         manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
-        String sha = repoService.commitMergeResolution(projectId, s.getTitle(),
-                userName, email(userName));
+        String sha = repoService.commitMergeResolution(projectId, s.getTitle(), resolutions,
+                userName, email(projectId, userId, userName));
         return closeMergedSession(projectId, s, sha);
     }
 
@@ -1029,7 +1045,8 @@ public class WorkSessionService {
                 applyResolution(projectId, path, choices.get(path),
                         mainTip, sessionTip, s.getTitle());
             }
-            return completeSessionMerge(projectId, s, mainTip, userName);
+            return completeSessionMerge(projectId, s, mainTip, userId, userName,
+                    resolutionNames(choices, conflicts));
         } finally {
             lock.unlock();
         }
@@ -1144,7 +1161,7 @@ public class WorkSessionService {
             manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
 
             String sha = repoService.commitAll(projectId,
-                    LangText.of("退回到早先的版本", "Reverted to an earlier version"), "session", null, userName, email(userName));
+                    LangText.of("退回到早先的版本", "Reverted to an earlier version"), "session", null, userName, email(projectId, userId, userName));
             log.info("退回: project={}, ref={}, newSha={}", projectId, ref, sha);
 
             List<Long> affectedFileIds = sha == null
@@ -1347,7 +1364,7 @@ public class WorkSessionService {
             // 干净路径也不让 JGit 自己提交（mergeNoCommit）：两条路都要以数据库为源
             // 写清单、清单必须进同一个采纳提交，见 completeAdopt。
             MergeOutcome outcome = repoService.mergeNoCommit(projectId,
-                    draft.getBranchName(), adoptMessage(draft), userName, email(userName));
+                    draft.getBranchName(), adoptMessage(draft), userName, email(projectId, userId, userName));
 
             if (outcome.success()) {
                 if (outcome.mergeSha() != null) {
@@ -1364,7 +1381,7 @@ public class WorkSessionService {
                 // MERGED_NOT_COMMITTED：合并有实质内容，交给 completeAdopt 补齐
                 // 清单并落成采纳提交。
                 return completeAdopt(projectId, draft, draftTip, mainTipBefore,
-                        null, back.affectedFileIds(), userName);
+                        null, back.affectedFileIds(), userId, userName, Map.of());
             }
 
             List<String> conflicts = userVisibleConflicts(outcome.conflictingPaths());
@@ -1380,7 +1397,7 @@ public class WorkSessionService {
                 // 只有内部的文件树清单冲突。律师不认识这个文件、也无从选择，
                 // 而清单并集本来就要按并集规则重写它——自己裁决掉，别去打扰他。
                 return completeAdopt(projectId, draft, draftTip, mainTipBefore,
-                        null, back.affectedFileIds(), userName);
+                        null, back.affectedFileIds(), userId, userName, Map.of());
             }
             log.info("采纳一稿遇到冲突，停在待裁决: project={}, branch={}, files={}",
                     projectId, draft.getBranchName(), conflicts.size());
@@ -1446,7 +1463,7 @@ public class WorkSessionService {
             }
 
             return completeAdopt(projectId, draft, draftTip, mainTipBefore,
-                    null, List.of(), userName);
+                    null, List.of(), userId, userName, resolutionNames(choices, conflicts));
         } finally {
             lock.unlock();
         }
@@ -1523,7 +1540,8 @@ public class WorkSessionService {
      */
     private AdoptOutcome completeAdopt(long projectId, WorkSession draft, String draftTip,
                                        String mainTipBefore, String committedSha,
-                                       List<Long> extraAffected, String userName) {
+                                       List<Long> extraAffected, Long userId, String userName,
+                                       Map<String, String> resolutions) {
         TreeManifest draftManifest = manifestService.readAtRef(projectId, draftTip);
         String baseSha = repoService.mergeBase(projectId, mainTipBefore, draftTip);
         TreeManifest base = baseSha == null ? null : manifestService.readAtRef(projectId, baseSha);
@@ -1532,8 +1550,8 @@ public class WorkSessionService {
         String sha = committedSha;
         if (sha == null) {
             manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
-            sha = repoService.commitMergeResolution(projectId, adoptMessage(draft),
-                    userName, email(userName));
+            sha = repoService.commitMergeResolution(projectId, adoptMessage(draft), resolutions,
+                    userName, email(projectId, userId, userName));
         }
 
         draft.setStatus(WorkSession.Status.MERGED);
@@ -1725,7 +1743,7 @@ public class WorkSessionService {
         } else if (!repoService.pendingChanges(projectId).isEmpty()) {
             manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
             String msg = describePendingChanges(projectId);
-            repoService.commitAll(projectId, msg, "auto", null, userName, email(userName));
+            repoService.commitAll(projectId, msg, "auto", null, userName, email(projectId, userId, userName));
         }
     }
 
@@ -1940,7 +1958,28 @@ public class WorkSessionService {
         return t.format(TITLE_FMT) + half + "的工作";
     }
 
-    private String email(String userName) {
-        return (userName == null ? "user" : userName) + "@aiworkdeck.local";
+    /**
+     * 提交作者邮箱的唯一取法（spec 2026-09-14 §2.1）——规则与判读侧集中在
+     * {@link VersionAuthorResolver}，这里只是转发。{@code authorResolver} 为空只发生在
+     * 手工 {@code new} 出本服务的单测里，回落本机域保证域名格式一致。
+     */
+    private String email(long projectId, Long userId, String userName) {
+        return authorResolver != null
+                ? authorResolver.email(projectId, userId, userName)
+                : VersionAuthorResolver.localEmail(userName);
+    }
+
+    /**
+     * 裁决表 → 提交尾注要的 {@code path → 枚举名}。
+     * {@link ProjectRepoService} 只认识 Git 概念，不该反向依赖本类的枚举。
+     */
+    static Map<String, String> resolutionNames(Map<String, Resolution> choices, List<String> paths) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (choices == null || paths == null) return out;
+        for (String path : paths) {
+            Resolution r = choices.get(path);
+            if (r != null) out.put(path, r.name());
+        }
+        return out;
     }
 }

@@ -132,7 +132,7 @@ class AuthControllerHardeningTest {
     @DisplayName("awdk-login 成功：返回 token/userId/username/displayName/tokenId 信封")
     void awdkLoginSuccessEnvelope() {
         AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
-        when(awdkLoginService.login(anyString()))
+        when(awdkLoginService.login(anyString(), any()))
                 .thenReturn(new AwdkLoginService.BridgeSession("awdt_x", 7L, "awd_hanzewei", "韩泽伟", 31L));
         AuthController controller = new AuthController(
                 null, null, null, null, serverGuard("open"), awdkLoginService, null, null, null, sessions(), false, null,
@@ -157,7 +157,7 @@ class AuthControllerHardeningTest {
     @DisplayName("awdk-login：没有 tokenId 就不下发这个键，绝不回落 0")
     void awdkLoginOmitsTokenIdWhenAbsent() {
         AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
-        when(awdkLoginService.login(anyString()))
+        when(awdkLoginService.login(anyString(), any()))
                 .thenReturn(new AwdkLoginService.BridgeSession("awdt_x", 7L, "awd_hanzewei", null, null));
         AuthController controller = new AuthController(
                 null, null, null, null, serverGuard("open"), awdkLoginService, null, null, null, sessions(), false, null,
@@ -175,7 +175,7 @@ class AuthControllerHardeningTest {
     @DisplayName("awdk-login 开关关闭：业务错误信封，不像掉线")
     void awdkLoginDisabledEnvelope() {
         AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
-        when(awdkLoginService.login(any()))
+        when(awdkLoginService.login(any(), any()))
                 .thenThrow(new IllegalArgumentException("本服务器未开启账户桥接功能"));
         AuthController controller = new AuthController(
                 null, null, null, null, serverGuard("open"), awdkLoginService, null, null, null, sessions(), false, null,
@@ -195,7 +195,7 @@ class AuthControllerHardeningTest {
     @DisplayName("awdk-login 无效 Key 连续 5 次后锁定：第 6 次不再出站")
     void awdkLoginLockoutAfterRepeatedInvalidKeys() {
         AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
-        when(awdkLoginService.login(anyString())).thenThrow(new AccountException(
+        when(awdkLoginService.login(anyString(), any())).thenThrow(new AccountException(
                 AccountException.Kind.UNAUTHORIZED, "账户 Key 无效或已被撤销，请到官网账户页重新生成"));
         AuthController controller = new AuthController(
                 null, null, null, null, serverGuard("open"), awdkLoginService, null, null, null, sessions(), false, null,
@@ -207,7 +207,7 @@ class AuthControllerHardeningTest {
         Map<String, Object> locked = controller.awdkLogin(Map.of("key", "awdk_bad"), http());
         assertEquals(1, locked.get("code"));
         assertTrue(String.valueOf(locked.get("message")).contains("临时锁定"));
-        verify(awdkLoginService, times(5)).login(anyString());
+        verify(awdkLoginService, times(5)).login(anyString(), any());
     }
 
     // ==================== 账户登录（手机号/邮箱，匿名端点） ====================

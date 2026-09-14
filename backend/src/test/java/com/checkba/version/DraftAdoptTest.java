@@ -496,6 +496,12 @@ class DraftAdoptTest {
         assertNotNull(repoSvc.readBlobAtCommit(7L, "HEAD", "合同（来自：试验稿）.txt"),
                 "另存的那一份必须真的进了这一版");
 
+        // 裁决结果落进提交尾注（spec 2026-09-14 §2.2）：律师事后要能看到这次留了谁的
+        Map<String, String> kept = repoSvc.log(7L, "HEAD", 1).get(0).resolutions().stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        VersionEntry.Resolution::path, VersionEntry.Resolution::kept));
+        assertEquals(Map.of("甲.txt", "MAIN", "乙.txt", "DRAFT", "合同.txt", "BOTH"), kept);
+
         ProjectFile copy = db.values().stream()
                 .filter(f -> "合同（来自：试验稿）.txt".equals(f.getName()))
                 .findFirst().orElseThrow(() -> new AssertionError("两份都留应该建一条新的文件树行"));

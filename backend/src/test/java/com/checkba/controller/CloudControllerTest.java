@@ -97,7 +97,7 @@ class CloudControllerTest {
 
             assertThrows(IllegalArgumentException.class,
                     () -> controller.status(PROJECT_ID, "sess"));
-            verify(cloudSyncService, never()).cloudStatus(anyLong());
+            verify(cloudSyncService, never()).cloudStatus(anyLong(), any());
         }
     }
 
@@ -144,7 +144,8 @@ class CloudControllerTest {
             verify(cloudSyncService, never()).abortCloudMerge(anyLong());
             verify(cloudSyncService, never()).proxyMembers(anyLong(), any(), any());
 
-            when(cloudSyncService.cloudStatus(PROJECT_ID)).thenReturn(Map.of("linked", false));
+            // userId 一起传进去（spec 2026-09-14 §2.5：状态要说得出「是不是我自己交的」）
+            when(cloudSyncService.cloudStatus(PROJECT_ID, USER_ID)).thenReturn(Map.of("linked", false));
             when(cloudSyncService.proxyMembers(PROJECT_ID)).thenReturn(List.of());
             assertEquals(0, controller.status(PROJECT_ID, "sess").getBody().get("code"));
             assertEquals(0, controller.members(PROJECT_ID, "sess").getBody().get("code"));

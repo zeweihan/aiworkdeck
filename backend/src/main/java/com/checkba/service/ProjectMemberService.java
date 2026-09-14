@@ -58,10 +58,35 @@ public class ProjectMemberService {
     @Autowired(required = false)
     private CollaboratorAdmission collaboratorAdmission;
 
+    /**
+     * 本机连着的官网账户（spec 2026-09-14 §2.6：参与人列表里「我自己」那一行的
+     * accountId）。同样**字段注入**，理由同上；required=false，案件库/自建服务器上
+     * 这条根本不接线也照常跑。
+     */
+    @Autowired(required = false)
+    private com.checkba.service.account.AccountService accountService;
+
+    /**
+     * 协作事件（spec 2026-09-14 §2.3）：谁把谁加进/移出了案卷。**字段注入**，理由同上；
+     * required=false，桌面单机上这条根本不接线（那里没有案件库，也没人看事件行）。
+     */
+    @Autowired(required = false)
+    private com.checkba.version.cloud.CollabEventService collabEventService;
+
+    /** 单测用：同上。 */
+    void setCollabEventServiceForTest(com.checkba.version.cloud.CollabEventService service) {
+        this.collabEventService = service;
+    }
+
     /** 单测用：这两样走字段注入，手工 new 出来的实例得有地方补上。 */
     void setAccountLookupForTest(AccountBindingRepository repo, String accountBaseUrl) {
         this.accountBindingRepository = repo;
         this.accountBaseUrl = accountBaseUrl;
+    }
+
+    /** 单测用：同上。 */
+    void setAccountServiceForTest(com.checkba.service.account.AccountService service) {
+        this.accountService = service;
     }
 
     /** 单测用：同上。 */
@@ -126,6 +151,23 @@ public class ProjectMemberService {
             // 不可再用，追加查询本身会再报错——只把异常翻译成查重分支本该给出的提示，
             // 跟着事务一起干净回滚。
             throw new IllegalArgumentException("用户已在项目中");
+        }
+        recordMemberEvent(com.checkba.version.cloud.CollabEvent.Kind.MEMBER_ADDED,
+                projectId, requesterId, user.getId(), role);
+    }
+
+    /**
+     * 记一条成员事件。{@code collabEventService} 自己永不抛（见其 record），这里再包一层
+     * 只是防「这条链路上还有别的东西会抛」——把人加进案卷是真动作，不能被旁白拖垮。
+     */
+    private void recordMemberEvent(com.checkba.version.cloud.CollabEvent.Kind kind, Long projectId,
+                                   Long actorUserId, Long targetUserId, String role) {
+        if (collabEventService == null || projectId == null) return;
+        try {
+            collabEventService.record(kind, projectId, actorUserId, null, null, null, null,
+                    targetUserId, role == null ? null : java.util.Map.of("role", role));
+        } catch (Exception e) {
+            log.warn("协作成员事件记录失败（已吞）: kind={}, project={}", kind, projectId, e);
         }
     }
 
@@ -320,6 +362,36 @@ public class ProjectMemberService {
                 .orElse(null);
     }
 
+    /**
+     * 这个人的官网账户 id（spec 2026-09-14 §2.6）；不知道就回 null。
+     *
+     * <p>参与人「2 人」的病根：本机成员表里的 {@code hanzewei} 与案件库成员表里的
+     * {@code awd_hanzewei} 是同一个官网账户，前端按用户名字符串去重所以显示两次。
+     * 账户 id 是两边唯一对得上的键，两侧的 members 都带上它，去重才有依据。
+     *
+     * <p>取法两级：{@code account_binding}（案件库侧每个人都桥接过，本机侧的同事也是
+     * 「加同事」预建出来的）→ 查不到时，如果问的就是**调用者自己**，用本机连着的那个
+     * 官网账户（桌面 local-mode 下本机用户从来不桥接，库里没有他的绑定行）。
+     * {@code callerId} 传 null 就只走第一级。
+     */
+    public String accountIdFor(User user, Long callerId) {
+        if (user == null || user.getId() == null) return null;
+        if (accountBindingRepository != null) {
+            String bound = accountBindingRepository.findByUserId(user.getId())
+                    .map(com.checkba.model.entity.AccountBinding::getExternalAccountId)
+                    .orElse(null);
+            if (bound != null && !bound.isBlank()) return bound;
+        }
+        if (accountService != null && user.getId().equals(callerId)) {
+            try {
+                return accountService.currentAccountIdOrNull();
+            } catch (Exception e) {
+                log.warn("读取本机账户 id 失败（参与人去重退化）: userId={}", user.getId(), e);
+            }
+        }
+        return null;
+    }
+
     private static String trimTrailingSlash(String url) {
         return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
     }
@@ -388,6 +460,8 @@ public class ProjectMemberService {
                 .orElseThrow(() -> new IllegalArgumentException("成员不存在"));
 
         projectMemberRepository.delete(member);
+        recordMemberEvent(com.checkba.version.cloud.CollabEvent.Kind.MEMBER_REMOVED,
+                projectId, requesterId, userIdToRemove, targetRole);
 
         // 移出客户只删成员行不算收回权限：访问码没有有效期，持码人再登一次
         // 就会被重新加成 CLIENT 成员，所以同时把他名下的访问码作废掉。

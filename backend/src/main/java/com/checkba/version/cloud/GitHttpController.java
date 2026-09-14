@@ -3,6 +3,7 @@
 
 package com.checkba.version.cloud;
 
+import com.checkba.service.DeviceTokenService;
 import com.checkba.version.ProjectRepoService;
 import com.checkba.version.WorkSessionService;
 import com.checkba.version.memory.MemoryRealm;
@@ -52,16 +53,19 @@ public class GitHttpController {
     private final WorkSessionService sessionService;
     private final MemoryRepoService memoryRepoService;
     private final MemorySyncService memorySyncService;
+    private final CollabEventService collabEventService;
 
     public GitHttpController(ProjectRepoService repoService, GitAccessService access,
                              WorkSessionService sessionService,
                              MemoryRepoService memoryRepoService,
-                             MemorySyncService memorySyncService) {
+                             MemorySyncService memorySyncService,
+                             CollabEventService collabEventService) {
         this.repoService = repoService;
         this.access = access;
         this.sessionService = sessionService;
         this.memoryRepoService = memoryRepoService;
         this.memorySyncService = memorySyncService;
+        this.collabEventService = collabEventService;
     }
 
     /**
@@ -93,7 +97,7 @@ public class GitHttpController {
             return;
         }
         try {
-            if (!deny(response, () -> authorizeTarget(request, target, RECEIVE_PACK.equals(service)))) return;
+            if (authorizeOrDeny(response, () -> authorizeTarget(request, target, RECEIVE_PACK.equals(service))) == null) return;
             if (!ensureRepoAvailable(target)) {
                 response.sendError(HttpServletResponse.SC_NOT_FOUND);
                 return;
@@ -110,7 +114,8 @@ public class GitHttpController {
                     up.sendAdvertisedRefs(new RefAdvertiser.PacketLineOutRefAdvertiser(out));
                 } else {
                     ReceivePack rp = new ReceivePack(repository);
-                    configureReceivePack(rp, target);
+                    // 只是广告 refs，没有 pusher 语境（真正的 push 走下面的 POST）
+                    configureReceivePack(rp, target, null);
                     rp.sendAdvertisedRefs(new RefAdvertiser.PacketLineOutRefAdvertiser(out));
                 }
             }
@@ -133,10 +138,17 @@ public class GitHttpController {
             return;
         }
         try {
-            if (!deny(response, () -> authorizeTarget(request, target, false))) return;
+            DeviceTokenService.ResolvedToken who =
+                    authorizeOrDeny(response, () -> authorizeTarget(request, target, false));
+            if (who == null) return;
             if (!ensureRepoAvailable(target)) {
                 response.sendError(HttpServletResponse.SC_NOT_FOUND);
                 return;
+            }
+            // 「谁签出了一份」：这台设备第一次来取这个案卷才记一条（记忆仓库不记——
+            // 那是本人自己的机器之间的事，没有协作旁白可言）。
+            if (target.projectId() != null) {
+                collabEventService.recordCheckoutOnce(target.projectId(), who.userId(), who.tokenId());
             }
             response.setContentType("application/x-git-upload-pack-result");
             noCache(response);
@@ -165,7 +177,9 @@ public class GitHttpController {
             return;
         }
         try {
-            if (!deny(response, () -> authorizeTarget(request, target, true))) return;
+            DeviceTokenService.ResolvedToken who =
+                    authorizeOrDeny(response, () -> authorizeTarget(request, target, true));
+            if (who == null) return;
             if (!ensureRepoAvailable(target)) {
                 response.sendError(HttpServletResponse.SC_NOT_FOUND);
                 return;
@@ -175,7 +189,7 @@ public class GitHttpController {
             try (Repository repository = openTarget(target)) {
                 ReceivePack rp = new ReceivePack(repository);
                 rp.setBiDirectionalPipe(false);
-                configureReceivePack(rp, target);
+                configureReceivePack(rp, target, who);
                 runReceiveLocked(target, () -> {
                     try {
                         rp.receive(body(request), response.getOutputStream(), null);
@@ -194,7 +208,8 @@ public class GitHttpController {
         }
     }
 
-    private Long authorizeTarget(HttpServletRequest request, RepoTarget target, boolean write) {
+    private DeviceTokenService.ResolvedToken authorizeTarget(
+            HttpServletRequest request, RepoTarget target, boolean write) {
         if (target.projectId() != null) {
             return access.authorize(request, target.projectId(), write);
         }
@@ -234,9 +249,10 @@ public class GitHttpController {
         }
     }
 
-    private void configureReceivePack(ReceivePack rp, RepoTarget target) {
+    private void configureReceivePack(ReceivePack rp, RepoTarget target,
+                                      DeviceTokenService.ResolvedToken pusher) {
         if (target.projectId() != null) {
-            configureProjectReceivePack(rp, target.projectId());
+            configureProjectReceivePack(rp, target.projectId(), pusher);
         } else {
             configureMemoryReceivePack(rp, target.memoryRealm().repoKey());
         }
@@ -251,7 +267,8 @@ public class GitHttpController {
      * setObjectChecker：push 上来的对象不可信（任何有写权限的成员都能手工构造 pack），
      * 开 JGit 的对象格式校验，畸形对象在入库前就被拒。
      */
-    private void configureProjectReceivePack(ReceivePack rp, long projectId) {
+    private void configureProjectReceivePack(ReceivePack rp, long projectId,
+                                             DeviceTokenService.ResolvedToken pusher) {
         rp.setObjectChecker(new ObjectChecker());
         rp.setPreReceiveHook((pack, commands) -> {
             if (repositoryMergingOrUnknown(projectId)) {
@@ -267,6 +284,17 @@ public class GitHttpController {
             for (ReceiveCommand cmd : commands) {
                 if ("refs/heads/master".equals(cmd.getRefName())
                         && cmd.getResult() == ReceiveCommand.Result.OK) {
+                    // 事件先记、落库后做：ingestPushedMainline 有「延后」与「失败转待同步」
+                    // 两条不落库的出路，而主线此刻已经真的前进了——「谁交了稿」是既成
+                    // 事实，不该跟着服务端本地物化的成败一起丢。
+                    if (pusher != null) {
+                        collabEventService.record(CollabEvent.Kind.PUSH, projectId,
+                                pusher.userId(), pusher.tokenId(),
+                                cmd.getOldId().name(), cmd.getNewId().name(),
+                                CollabEventService.countCommits(pack.getRepository(),
+                                        cmd.getOldId(), cmd.getNewId()),
+                                null, null);
+                    }
                     sessionService.ingestPushedMainline(projectId,
                             cmd.getOldId().name(), cmd.getNewId().name());
                 }
@@ -309,21 +337,22 @@ public class GitHttpController {
     }
 
     /**
-     * 鉴权失败时写响应并返回 false，让端点方法直接 return——不落入下面通用的
+     * 鉴权失败时写响应并返回 null，让端点方法直接 return——不落入下面通用的
      * catch(Exception) / failSafely 500 兜底。401 带 WWW-Authenticate，JGit 客户端靠它重试凭据；
      * 403 直接 sendError。
      */
-    private boolean deny(HttpServletResponse response, java.util.function.Supplier<Long> auth)
+    private DeviceTokenService.ResolvedToken authorizeOrDeny(
+            HttpServletResponse response,
+            java.util.function.Supplier<DeviceTokenService.ResolvedToken> auth)
             throws IOException {
         try {
-            auth.get();
-            return true;
+            return auth.get();
         } catch (GitAccessDeniedException e) {
             if (e.statusCode() == 401) {
                 response.setHeader("WWW-Authenticate", "Basic realm=\"AIWorkdeck Git\"");
             }
             response.sendError(e.statusCode());
-            return false;
+            return null;
         }
     }
 

@@ -31,6 +31,8 @@
  * `.cloud-bar` / `.cloud-dot` 是 app-e2e J11 的稳定断言锚点，改 UI 形态时要保留
  * （或成对更新 frontend/tests/app-e2e/run.mjs）。
  */
+import { remoteAheadText } from '@/utils/collabWording.js'
+
 export default {
   name: 'CloudSyncBar',
   props: {
@@ -55,7 +57,11 @@ export default {
     stateText() {
       if (this.conflictPending) return this.$t('version.pendingChoice')
       if (this.cloud.offline) return this.$t('version.libraryUnreachable')
-      if (this.cloud.remoteAhead) return this.$t('version.colleagueSubmittedNew')
+      // 「同事交了新稿」四处同源（utils/collabWording.js）：说得出作者就说清楚
+      // 是本人的另一台电脑还是哪位同事、几版，说不出才落回这句老文案。
+      if (this.cloud.remoteAhead) {
+        return remoteAheadText((k, p) => this.$t(k, p), this.cloud, { fallbackKey: 'version.colleagueSubmittedNew' })
+      }
       if (this.cloud.pendingUpload || this.working) return this.$t('version.hasUnsubmittedChanges')
       return this.$t('version.inSyncWithTeam')
     },
