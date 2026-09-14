@@ -133,7 +133,7 @@ jobs:
       - name: Inline review contracts (dev-board#547)
         working-directory: frontend
         run: npm run test:inline-review
-      - name: Revision view / IME overlay contracts (dev-board#587 #606)
+      - name: "Revision view / IME overlay contracts (dev-board#587 #606)"
         working-directory: frontend
         run: npm run test:revision-view
       - name: Optional components prompts (dev-board#530)

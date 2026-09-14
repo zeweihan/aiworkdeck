@@ -30,8 +30,9 @@ function isReloadShortcut(input) {
   if (!input || input.type !== 'keyDown') return false
   const key = String(input.key || '').toLowerCase()
   if (key === 'f5') return true
-  // ⌘R / Ctrl+R / ⇧⌘R 都算；Alt 组合也一并收掉，顶层没有任何 ⌘R 系的用法。
-  return key === 'r' && (!!input.control || !!input.meta)
+  // ⌘R / Ctrl+R / ⇧⌘R 都算。**带 Alt 的不算**：没有任何重载绑定带 Alt，而
+  // ⌥⌘R 是渲染层命令表里「修订模式」的加速键（config/commands/document.js），拦了就废。
+  return key === 'r' && (!!input.control || !!input.meta) && !input.alt
 }
 
 /**

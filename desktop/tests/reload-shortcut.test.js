@@ -145,6 +145,8 @@ test('reload 快捷键识别：⌘R / Ctrl+R / ⇧⌘R / F5 算，⌘C 与裸 r 
   assert.ok(isReloadShortcut({ type: 'keyDown', key: 'r', meta: true, shift: true }))
   assert.ok(isReloadShortcut({ type: 'keyDown', key: 'F5' }))
   assert.ok(!isReloadShortcut({ type: 'keyDown', key: 'c', meta: true }))
+  assert.ok(!isReloadShortcut({ type: 'keyDown', key: 'r', meta: true, alt: true }), '⌥⌘R 是「修订模式」的加速键，不是重载')
+  assert.ok(!isReloadShortcut({ type: 'keyDown', key: 'r', control: true, alt: true }))
   assert.ok(!isReloadShortcut({ type: 'keyDown', key: 'r' }))
   assert.ok(!isReloadShortcut({ type: 'keyUp', key: 'r', meta: true }), 'keyUp 拦了也没用，只认 keyDown')
   assert.ok(!isReloadShortcut(null))
