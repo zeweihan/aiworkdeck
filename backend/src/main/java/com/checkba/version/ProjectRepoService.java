@@ -863,7 +863,16 @@ public class ProjectRepoService {
     static final int MERGES_TRAILER_MAX_ITEMS = 500;
 
     private static final Set<String> MERGE_MODES = Set.of("auto", "manual");
-    private static final Set<String> MERGE_CONTEXTS = Set.of("adopt", "cloud", "session-end");
+    /**
+     * 三个裁决语境的字面量（spec 2026-09-14 §4.6）。写进用户产物的提交尾注，
+     * 三个调用点（采纳 / 云端取回 / 结束工作）各拿一个，别再各自写字符串。
+     */
+    public static final String MERGE_CONTEXT_ADOPT = "adopt";
+    public static final String MERGE_CONTEXT_CLOUD = "cloud";
+    public static final String MERGE_CONTEXT_SESSION_END = "session-end";
+
+    private static final Set<String> MERGE_CONTEXTS =
+            Set.of(MERGE_CONTEXT_ADOPT, MERGE_CONTEXT_CLOUD, MERGE_CONTEXT_SESSION_END);
     private static final Set<String> DECISION_ACTIONS = Set.of("A", "R", "X", "F");
     private static final Set<String> DECISION_SIDES = Set.of("M", "T");
 

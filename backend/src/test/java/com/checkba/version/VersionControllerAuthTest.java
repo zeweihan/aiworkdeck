@@ -46,8 +46,24 @@ class VersionControllerAuthTest {
     @Mock
     private VersionLifecycleService lifecycleService;
 
+    /**
+     * 三方合并的两个协作者走的是字段注入（见 VersionController 的注释），@InjectMocks
+     * 只做构造器注入，所以在这里手工补上——不补的话 merge/* 那三行的
+     * verifyNeverCalled 会落在一个永远是 null 的对象上，变成空断言。
+     */
+    @Mock
+    private com.checkba.version.merge.MergeAnalysisService mergeAnalysisService;
+    @Mock
+    private com.checkba.version.merge.PendingMergeStore pendingMergeStore;
+
     @InjectMocks
     private VersionController controller;
+
+    @org.junit.jupiter.api.BeforeEach
+    void wireMergeServices() {
+        controller.setMergeAnalysisServiceForTest(mergeAnalysisService);
+        controller.setPendingMergeStoreForTest(pendingMergeStore);
+    }
 
     @Test
     void clientRoleCannotSeeTimeline() {
@@ -156,7 +172,11 @@ class VersionControllerAuthTest {
         STATUS, ENABLE, PREPARE_REMOTE, CHANGES, SESSION_END, SESSION_RESOLVE_END, SESSION_ABORT_END,
         SESSION_DISCARD, SESSION_RESUME, REVERT, FILE_BYTES, FILE_TEXT, MILESTONE,
         DRAFT_CREATE, DRAFT_LIST, DRAFT_SWITCH, SWITCH_MAINLINE, DRAFT_ADOPT, DRAFT_RESOLVE, DRAFT_ABORT_ADOPT, DRAFT_ABANDON,
-        DISABLE
+        DISABLE,
+        // 三方合并（spec 2026-09-14 §4.3–§4.5）：读一份文件的逐处分析 + 两个落盘端点。
+        // 两个落盘端点把字节写进项目工作区，随后会被 git add . 收进律师的历史，
+        // 所以它们必须和别的写端点一样，在动手之前就把 READ_ONLY/CLIENT/非成员挡住。
+        MERGE_ANALYSIS, MERGE_RESOLVE_FILE, MERGE_RESOLVE_STRUCTURED
     }
 
     /**
@@ -168,7 +188,8 @@ class VersionControllerAuthTest {
             Endpoint.SESSION_ABORT_END, Endpoint.SESSION_DISCARD, Endpoint.SESSION_RESUME,
             Endpoint.REVERT, Endpoint.MILESTONE, Endpoint.DRAFT_CREATE, Endpoint.DRAFT_SWITCH,
             Endpoint.SWITCH_MAINLINE, Endpoint.DRAFT_ADOPT, Endpoint.DRAFT_RESOLVE,
-            Endpoint.DRAFT_ABORT_ADOPT, Endpoint.DRAFT_ABANDON, Endpoint.DISABLE);
+            Endpoint.DRAFT_ABORT_ADOPT, Endpoint.DRAFT_ABANDON, Endpoint.DISABLE,
+            Endpoint.MERGE_RESOLVE_FILE, Endpoint.MERGE_RESOLVE_STRUCTURED);
 
     static java.util.Set<Endpoint> writeEndpoints() {
         return WRITE_ENDPOINTS;
@@ -199,6 +220,12 @@ class VersionControllerAuthTest {
             case DRAFT_ABORT_ADOPT -> controller.abortAdopt(PROJECT_ID, 3L, sessionId);
             case DRAFT_ABANDON -> controller.abandonDraft(PROJECT_ID, 3L, sessionId);
             case DISABLE -> controller.disable(PROJECT_ID, sessionId);
+            case MERGE_ANALYSIS -> controller.mergeAnalysis(PROJECT_ID, "a.docx", sessionId);
+            case MERGE_RESOLVE_FILE -> controller.mergeResolveFile(PROJECT_ID, "a.docx", "manual", "[]", null,
+                    new org.springframework.mock.web.MockMultipartFile("file", "a.docx", null, new byte[]{1}),
+                    sessionId);
+            case MERGE_RESOLVE_STRUCTURED -> controller.mergeResolveStructured(PROJECT_ID,
+                    Map.of("path", "a.xlsx", "decisions", java.util.List.of()), sessionId);
         }
     }
 
@@ -233,6 +260,9 @@ class VersionControllerAuthTest {
             case DRAFT_ABANDON -> verify(sessionService, never())
                     .abandonDraft(anyLong(), anyLong(), any(), anyString());
             case DISABLE -> verify(lifecycleService, never()).disableVersionRecording(anyLong());
+            case MERGE_ANALYSIS -> verify(mergeAnalysisService, never()).analysisFor(anyLong(), anyString());
+            case MERGE_RESOLVE_FILE, MERGE_RESOLVE_STRUCTURED ->
+                    verify(pendingMergeStore, never()).put(anyLong(), any());
         }
     }
 
