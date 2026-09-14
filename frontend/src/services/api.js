@@ -3788,3 +3788,56 @@ export function saveDrawioDiagram(projectId, fileId, payload) {
     header: { 'Content-Type': 'application/json' }
   })
 }
+
+// ---- 文档类冲突的结构化三方合并（dev-board#630，spec §4.3–4.4） ------------
+// 注：F2（自动合并流程）也会产出同名包装，两条分支合并时留一份即可。
+
+/** 取某一条冲突路径的完整三方比对结果（含 overlaps 文本与引擎重放计划 plan）。 */
+export function getMergeAnalysis(projectId, path) {
+  return request({
+    url: `/api/projects/${projectId}/version/merge/analysis?path=${encodeURIComponent(path)}`,
+    method: 'GET',
+  })
+}
+
+/**
+ * 把一条路径裁决后的字节交给后端落盘 + 记待决记录（收尾时才真提交）。
+ * multipart：path / mode(auto|manual) / decisions(JSON 数组) / file。
+ * 走 XHR 不走 request()——request() 只发 JSON，而这里必须带上合并后的 docx 字节。
+ * @param {{path:string, mode:'auto'|'manual', decisions:Array, bytes:Uint8Array, name:string}} payload
+ */
+export function postMergeResolveFile(projectId, { path, mode, decisions, bytes, name }) {
+  const baseUrl = getApiBaseUrl()
+  const sessionId = getSessionId()
+  const form = new FormData()
+  form.append('path', path)
+  form.append('mode', mode || 'manual')
+  form.append('decisions', JSON.stringify(decisions || []))
+  if (bytes) {
+    const blob = new Blob([bytes], { type: 'application/octet-stream' })
+    form.append('file', blob, name || (path.split('/').pop() || 'merged.docx'))
+  }
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${baseUrl.replace(/\/$/, '')}/api/projects/${projectId}/version/merge/resolve-file`)
+    if (sessionId) xhr.setRequestHeader('X-Session-Id', sessionId)
+    const headers = getAuthHeaders() || {}
+    for (const k of Object.keys(headers)) {
+      // Content-Type 交给浏览器按 FormData 自己带 boundary，手工设会让后端解不出分段
+      if (String(k).toLowerCase() === 'content-type') continue
+      if (headers[k]) xhr.setRequestHeader(k, headers[k])
+    }
+    xhr.onload = () => {
+      if (xhr.status !== 200) { reject(new Error(t('common.submitFailedWithStatus', { status: xhr.status }))); return }
+      try {
+        const data = JSON.parse(xhr.responseText)
+        if (data.code === 0) resolve(data.data === undefined ? data : data.data)
+        else reject(new Error(data.message || t('common.submitFailed')))
+      } catch (e) {
+        reject(new Error(t('common.parseResponseFailed')))
+      }
+    }
+    xhr.onerror = () => reject(new Error(t('common.networkError')))
+    xhr.send(form)
+  })
+}

@@ -42,7 +42,10 @@ test('非文件标签一律不着色', () => {
     { fileType: undefined, tabType: 'commit-history' },
     { fileType: 'version-compare', tabType: 'version-compare' },
     { fileType: 'version-text-diff', tabType: 'version-text-diff' },
-    { fileType: 'diff', tabType: 'diff' }
+    { fileType: 'diff', tabType: 'diff' },
+    // 合并比对稿标签（dev-board#630）：名字里带的是 docx 的文件名，但它是一份
+    // 临时比对稿而不是那份文件本身，不能跟着 Word 蓝走。
+    { fileType: 'merge-review', tabType: 'merge-review' }
   ]
   for (const t of tabs) {
     assert.equal(fileKindKey(t.fileType, t.tabType), '',
@@ -54,6 +57,7 @@ test('非文件 tabType 压过扩展名：浏览器标签就算带了 docx 也�
   assert.equal(fileKindKey('docx', 'web'), '')
   assert.equal(fileKindKey('png', 'admin-settings'), '')
   assert.equal(fileKindKey('docx', 'commit-history'), '')
+  assert.equal(fileKindKey('docx', 'merge-review'), '')
 })
 
 test('AI 工作计划那种虚拟 markdown 标签仍按 md 着色（它确实是一份 md 文档）', () => {
