@@ -161,7 +161,7 @@
                     v-if="row.entry.autoCount"
                     class="ch-autos"
                     @tap.stop="showAutoSaves"
-                  >{{ $t('version.autoFoldedCount', { count: row.entry.autoCount }) }}</text>
+                  >{{ autoFoldedText(row.entry.autoCount) }}</text>
                 </view>
               </view>
             </view>
@@ -175,8 +175,8 @@
         <template v-if="selectedKeys.length === 2">
           <view class="ch-detail-title">{{ $t('version.compareBetween') }}</view>
           <view class="ch-detail-meta">{{ compareRangeText }}</view>
-          <view v-if="compareLoading" class="ch-detail-note">{{ $t('version.loadingGeneric') }}</view>
-          <view v-else-if="!compareChanges.length" class="ch-detail-note">{{ $t('version.noChangesThisVersion') }}</view>
+          <view v-if="comparePane === 'loading'" class="ch-detail-note">{{ $t('version.comparingLoading') }}</view>
+          <view v-else-if="comparePane === 'empty'" class="ch-detail-note">{{ $t('version.noChangesThisVersion') }}</view>
           <view v-for="c in compareChanges" :key="c.path" class="ch-change">
             <text class="ch-change-type" :class="'type-' + c.type">{{ changeTypeLabel(c.type) }}</text>
             <text class="ch-change-path">{{ c.path }}</text>
@@ -285,7 +285,7 @@ import {
   getProjectFiles, uploadToCloud, updateFromCloud, enableVersionControl,
 } from '@/services/api.js'
 import { layoutGraph, laneCountOf } from '@/utils/historyGraph.js'
-import { mergeHistoryRows, groupRowsByDay, eventRowText } from '@/utils/historyRows.js'
+import { mergeHistoryRows, groupRowsByDay, eventRowText, comparePaneState } from '@/utils/historyRows.js'
 import { createVersionActions } from '@/composables/useVersionActions.js'
 import { roleLabel } from '@/config/memberRoles.js'
 import AwdSelect from '@/components/AwdSelect.vue'
@@ -318,7 +318,7 @@ export default {
       head: null, ahead: 0, behind: 0,
       selectedKeys: [],
       changes: [], changesLoading: false, changesError: false,
-      compareChanges: [], compareLoading: false,
+      compareChanges: [], compareLoading: false, compareLoaded: false,
       selfUserId: null, selfTokenId: null,
       // 筛选
       authors: [], authorIndex: 0,
@@ -415,6 +415,14 @@ export default {
       if (key.indexOf('ev-') !== 0) return null
       return this.events.find((e) => `ev-${e.id}` === key) || null
     },
+    comparePane() {
+      return comparePaneState({
+        selectedCount: this.selectedKeys.length,
+        loading: this.compareLoading,
+        loaded: this.compareLoaded,
+        changes: this.compareChanges,
+      })
+    },
     compareRangeText() {
       if (this.selectedKeys.length !== 2) return ''
       const [a, b] = this.orderedSelection()
@@ -443,10 +451,16 @@ export default {
     selectedKeys() {
       this.changes = []
       this.compareChanges = []
+      this.compareLoaded = false
       if (this.selectedEntry) this.loadChanges()
+      // 选够两版就直接去拉清单：标题已经写着「这两版之间的改动」，
+      // 还要再点一次工具栏按钮才出内容，中间那段只会被读成「没有改动」。
+      // 工具栏那个按钮留着当重新加载。
+      if (this.selectedKeys.length === 2) this.loadCompare()
     },
   },
   created() {
+    this._compareSeq = 0
     this._actions = createVersionActions({
       projectId: () => this.projectId,
       t: (k, p) => this.$t(k, p),
@@ -605,16 +619,23 @@ export default {
     async loadCompare() {
       if (this.selectedKeys.length !== 2) return
       const [a, b] = this.orderedSelection()
+      // 连着改选时会并发飞出去好几趟，只认最后一趟的回包
+      const seq = ++this._compareSeq
       this.compareLoading = true
       try {
         const res = await getVersionCompare(this.projectId, a, b)
-        this.compareChanges = (res && res.data && res.data.changes) || (res && res.data) || []
-        if (!Array.isArray(this.compareChanges)) this.compareChanges = []
+        if (seq !== this._compareSeq) return
+        const list = (res && res.data && res.data.changes) || (res && res.data) || []
+        this.compareChanges = Array.isArray(list) ? list : []
       } catch (e) {
+        if (seq !== this._compareSeq) return
         uni.showToast({ title: this.$t('version.loadFailedToast'), icon: 'none' })
         this.compareChanges = []
       } finally {
-        this.compareLoading = false
+        if (seq === this._compareSeq) {
+          this.compareLoading = false
+          this.compareLoaded = true
+        }
       }
     },
 
@@ -749,6 +770,12 @@ export default {
       const d = new Date(at)
       if (isNaN(d.getTime())) return ''
       return this.$t('version.dayHeader', { month: d.getMonth() + 1, day: d.getDate() })
+    },
+    // en 下 1 不能说成「1 auto-saves」。仓里还没有用过 vue-i18n 的复数管道语法，
+    // 这里按数量在两个键之间选（zh 两条文案一样，显示不变）。
+    autoFoldedText(count) {
+      const n = Number(count) || 0
+      return this.$t(n === 1 ? 'version.autoFoldedCountOne' : 'version.autoFoldedCount', { count: n })
     },
     shortOf(sha) {
       const e = this.entries.find((x) => x.sha === sha)

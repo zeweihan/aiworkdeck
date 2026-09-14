@@ -471,6 +471,29 @@ class HistoryEndpointTest {
         assertEquals(0, ((Number) row(all, session).get("autoCount")).intValue());
     }
 
+    @Test
+    @DisplayName("自动存档只跟着自己那段工作走：筛掉的那段，它的自动存档不顺延到下一条命中的行")
+    void autoCountFollowsItsOwnSessionNoMatterHowTheListIsFiltered() throws Exception {
+        // 时间从旧到新：a1 | 第一段 | a2 a3 | 第二段 | a4 | J10 这一段
+        // 也就是三段工作各带 1 / 2 / 1 次自动存档。
+        commit("a1", "修改了《合同》", "auto");
+        commit("c1", "第一段工作", "session");
+        commit("a2", "修改了《J10 合同》", "auto");
+        commit("a3", "修改了《J10 合同》", "auto");
+        commit("c2", "第二段工作", "session");
+        commit("a4", "修改了《合同》", "auto");
+        String third = commit("c3", "J10 主线追加修改", "session");
+
+        assertEquals(1, ((Number) row(history(), third).get("autoCount")).intValue(),
+                "不筛选时这一段本来就只有一次自动存档");
+
+        Map<String, Object> filtered = history(100, null, null, null, "J10", null, null, false);
+        assertEquals(1, entries(filtered).size(), "只有第三段那一行命中关键词");
+        assertEquals(1, ((Number) entries(filtered).get(0).get("autoCount")).intValue(),
+                "自己那一笔自动存档照数（哪怕它不含关键词），"
+                        + "被筛掉的第二段那两笔（含关键词）一笔都不许顺延过来");
+    }
+
     // ---------- 筛选 ----------
 
     @Test

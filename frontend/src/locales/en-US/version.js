@@ -26,6 +26,7 @@ export default {
   milestoneFlag: 'Milestone',
   collapse: 'Collapse',
   autoSaveCount: '{count} autosaves in this session',
+  autoSaveCountOne: '1 autosave in this session',
 
   // ---- VersionNodeDetail.vue ----
   noChangesThisVersion: 'No file changes in this version',
@@ -275,6 +276,7 @@ export default {
   refreshList: 'Refresh',
   compareTwo: 'Compare These Two',
   compareBetween: 'Changes between these two versions',
+  comparingLoading: 'Comparing…',
   compareLabel: 'Compare',
   aheadBehind: 'This computer is ahead by {ahead} · the case library is ahead by {behind}',
   aheadOnly: 'This computer is ahead by {ahead}',
@@ -282,6 +284,7 @@ export default {
   inSyncCounts: 'In sync with the case library',
   dayHeader: '{month}/{day}',
   authorYou: '{name} (you)',
+  autoFoldedCountOne: '1 auto-save',
   autoFoldedCount: '{count} auto-saves',
   refMainline: 'Main',
   refRemote: 'Case Library',

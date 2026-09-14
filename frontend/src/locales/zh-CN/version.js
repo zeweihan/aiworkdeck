@@ -25,6 +25,7 @@ export default {
   milestoneFlag: '重要版本',
   collapse: '收起',
   autoSaveCount: '这段工作里还有 {count} 次自动存档',
+  autoSaveCountOne: '这段工作里还有 1 次自动存档',
 
   // ---- VersionNodeDetail.vue ----
   noChangesThisVersion: '这一版没有文件改动',
@@ -276,6 +277,7 @@ export default {
   refreshList: '刷新',
   compareTwo: '对比这两版',
   compareBetween: '这两版之间的改动',
+  comparingLoading: '正在对比…',
   compareLabel: '对比',
   aheadBehind: '本机领先 {ahead} 版 · 案件库领先 {behind} 版',
   aheadOnly: '本机领先 {ahead} 版',
@@ -283,6 +285,7 @@ export default {
   inSyncCounts: '和案件库一致',
   dayHeader: '{month} 月 {day} 日',
   authorYou: '{name}（你）',
+  autoFoldedCountOne: '自动存档 1 次',
   autoFoldedCount: '自动存档 {count} 次',
   refMainline: '主线',
   refRemote: '案件库',

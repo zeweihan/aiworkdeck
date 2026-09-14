@@ -127,3 +127,17 @@ export function groupRowsByDay(rows) {
   }
   return out
 }
+
+/**
+ * 右侧「这两版之间的改动」窗格此刻该显示什么：
+ * `'idle'`（没选够两版）| `'loading'`（正在对比）| `'empty'`（真的没有改动）| `'list'`。
+ *
+ * `loaded` 这一位是关键：从选中第二行到清单回来之间，窗格既不在 loading 也没有清单，
+ * 按「这一版没有文件改动」渲染的话，律师看到的是一句马上会被推翻的结论
+ * （手工走查 2026-09-14）。没拉过就一律先说「正在对比」。
+ */
+export function comparePaneState({ selectedCount = 0, loading = false, loaded = false, changes = [] } = {}) {
+  if (selectedCount !== 2) return 'idle'
+  if (loading || !loaded) return 'loading'
+  return (changes && changes.length) ? 'list' : 'empty'
+}

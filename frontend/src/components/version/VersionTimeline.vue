@@ -50,7 +50,7 @@
           class="node-autos-toggle"
           @tap="toggle(group.head.sha)"
         >
-          {{ expanded[group.head.sha] ? $t('version.collapse') : $t('version.autoSaveCount', { count: group.autos.length }) }}
+          {{ expanded[group.head.sha] ? $t('version.collapse') : $t(group.autos.length === 1 ? 'version.autoSaveCountOne' : 'version.autoSaveCount', { count: group.autos.length }) }}
         </view>
         <view v-if="expanded[group.head.sha]" class="node-autos">
           <view

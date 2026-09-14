@@ -515,7 +515,8 @@ public class ProjectRepoService {
     /**
      * 历史里的一行。{@code remote} = 只有案件库那条线能走到它、本机主线与各稿都走不到
      * （也就是「同事交了、我还没取回」的那几版）。
-     * {@code autoCount} 是折叠进这一行的自动存档数（{@code includeAuto=false} 时）。
+     * {@code autoCount} 是折叠进这一行的自动存档数（{@code includeAuto=false} 时）——
+     * 只含**属于这一段工作**的那几笔（历史结构决定，与筛选条件无关）。
      */
     public record HistoryRow(VersionEntry entry, List<RefLabel> refs, boolean remote,
                              int autoCount, ChangeCounts changes) {}
@@ -590,17 +591,27 @@ public class ProjectRepoService {
                     ? null : PathFilter.create(query.relPath());
 
             boolean cursorPending = query.cursor() != null && !query.cursor().isBlank();
-            // 游标那一页的尾巴上可能还跟着几笔已经折进上一行的自动存档，这一页要把它们
-            // 原样跳掉——否则同一笔自动存档会在两页里各算一次。
-            boolean swallowAutos = false;
             int scanned = 0;
+
+            // 自动存档的归属：walk 是新→旧，一段工作的几笔自动存档紧跟在这段工作那条
+            // 提交的**后面**，所以「归谁」就是「往上数最近的那条非自动提交」。三条纪律：
+            //  · 归属只看历史结构，**与筛选条件无关**——折叠态的自动存档一律不过筛子，
+            //    否则关键词一变，同一段工作的「自动存档 N 次」就跟着变（手工走查 2026-09-14）；
+            //  · 归属的那条提交要是**没有进这一页**（被筛掉了、或者它是上一页的最后一行），
+            //    它名下的自动存档一并不计——绝不能顺延到下一条命中的行上；
+            //  · 顶上那几笔（还没收尾的这段工作）没有更旧的归属可言，只能归给紧随其后的
+            //    第一条非自动提交；那一条也被筛掉的话，同样一并不计。
+            MutableRow autoOwner = null;     // 归属行，且它确实进了这一页
+            boolean autoOwnerSeen = false;   // 是否已经遇到过一条非自动提交
             int leadingAutos = 0;
 
             for (RevCommit c : walk) {
                 if (cursorPending) {
                     if (c.getName().equals(query.cursor())) {
                         cursorPending = false;
-                        swallowAutos = true;
+                        // 游标那一行是上一页的最后一行，它已经把自己名下的自动存档数过了——
+                        // 这一页认它作归属但不计数，否则同一笔会在两页里各算一次。
+                        autoOwnerSeen = true;
                     }
                     continue;
                 }
@@ -610,18 +621,22 @@ public class ProjectRepoService {
                 }
                 VersionEntry entry = toEntry(c, milestones);
                 boolean isAuto = "auto".equals(entry.kind());
-                if (swallowAutos) {
-                    if (isAuto) continue;
-                    swallowAutos = false;
+
+                if (isAuto && !query.includeAuto()) {
+                    if (autoOwner != null) autoOwner.autoCount++;
+                    else if (!autoOwnerSeen) leadingAutos++;
+                    continue;
                 }
+
+                // 走到这里就是一条候选行：从它起，后面那批自动存档改归它。
+                int carried = autoOwnerSeen ? 0 : leadingAutos;
+                leadingAutos = 0;
+                autoOwnerSeen = true;
+                autoOwner = null;            // 先当它进不了这一页，真进了再认回来
+
                 if (!matchesFilters(entry, query)) continue;
                 if (pathFilter != null && !touchesPath(repo, git, diffWalk, c, pathFilter)) continue;
 
-                if (isAuto && !query.includeAuto()) {
-                    if (picked.isEmpty()) leadingAutos++;
-                    else picked.get(picked.size() - 1).autoCount++;
-                    continue;
-                }
                 if (picked.size() >= limit) {
                     // 这一页满了，而后面还有实打实的一行——留下游标，下一页从它之后接着走
                     nextCursor = picked.get(picked.size() - 1).entry.sha();
@@ -633,13 +648,9 @@ public class ProjectRepoService {
                 row.firstParent = c.getParentCount() == 0 ? null : c.getParent(0).getId();
                 row.refs = tips.getOrDefault(c.getName(), List.of());
                 row.remote = c.has(remoteSide) && !c.has(localSide);
+                row.autoCount = carried;
                 picked.add(row);
-                if (leadingAutos > 0) {
-                    // 顶上那几笔没有可附的行（比如上一段工作还没收尾就被筛掉了），
-                    // 附给随后出现的第一行——折叠本来就只是一个计数，不该凭空丢掉。
-                    row.autoCount += leadingAutos;
-                    leadingAutos = 0;
-                }
+                autoOwner = row;
             }
 
             List<HistoryRow> rows = new ArrayList<>(picked.size());
