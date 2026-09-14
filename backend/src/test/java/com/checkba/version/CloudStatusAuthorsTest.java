@@ -130,6 +130,7 @@ class CloudStatusAuthorsTest {
         assertEquals(Boolean.FALSE, st.get("remoteAhead"));
         assertNull(st.get("remoteAheadCount"));
         assertNull(st.get("remoteAheadAuthors"));
+        assertNull(st.get("remoteAheadAuthorCount"));
         assertNull(st.get("remoteAheadBySelf"));
     }
 
@@ -159,6 +160,7 @@ class CloudStatusAuthorsTest {
         assertEquals(1, st.get("remoteAheadCount"));
         assertEquals(Boolean.FALSE, st.get("remoteAheadBySelf"));
         assertEquals(List.of("李思"), st.get("remoteAheadAuthors"));
+        assertEquals(1, st.get("remoteAheadAuthorCount"));
     }
 
     @Test
@@ -179,6 +181,8 @@ class CloudStatusAuthorsTest {
         List<String> authors = (List<String>) st.get("remoteAheadAuthors");
         assertEquals(3, authors.size(), "最多 3 个：状态条只放得下这么多，实际 " + authors);
         assertEquals(authors.size(), authors.stream().distinct().count(), "要去重：" + authors);
+        // 名单截断到 3 个，人数不能跟着截断——否则「张三等 N 人」在四个人以上永远说成 3 人
+        assertEquals(4, st.get("remoteAheadAuthorCount"), "我 + 李思 + 王五 + 赵六 = 4 个人");
     }
 
     @Test

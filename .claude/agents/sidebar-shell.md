@@ -718,6 +718,34 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 单测 `frontend/tests/insight/insightEntityTab.test.mjs`（`npm run test:insight`）。
 浮窗本身**不是标签**：它挂在页面根节点、position:fixed 贴点击点，详见 doc-insight.md。
 
+## 非文件标签 `commit-history`（dev-board#624）
+
+「提交历史」= 程序员那份 `git log --graph --all`（主线 + 各进行中稿 + 案件库最新稿的统一历史），
+渲染组件 `frontend/src/components/version/CommitHistoryTab.vue`，领域契约见 version-control.md 的
+「协作历史」一节。标签管道口径：
+
+- **`tabType:'commit-history'`、id `commit-history_<projectId>`、单例（跨两侧查重）**，
+  直接 push 进 `leftFiles`/`rightFiles` 绕过 `isFileTypeSupported`——与 `market-detail` /
+  `insight-entity` / 浏览器 tab 同法；开法在 `pages/project-overview/fileOpenTabs.js`
+  的 `openCommitHistoryTab(spec)`。**单例是硬要求**：重开一次等于把筛选、滚动位置、
+  选中的那一版全抹掉，而三个入口常常被同一个人在几秒内连点。
+- **三个入口**：顶栏协作 chip（`project-overview.vue` 的 `.collab-chip`，整块可点，
+  `focus: collabCloud && collabCloud.remoteAhead ? 'remote' : ''`）、协作抽屉
+  `CollabDialog` 里那个按钮、版本面板顶部的「查看完整历史」链接——后两者都是
+  `$emit('open-history')` 冒泡到页面上的 `@open-history="openCommitHistoryTab({})"`。
+- **`historyFocus` + `historyFocusToken` 成对存在**。`focus` 说这次要定位到哪儿
+  （`'remote'` = 第一条还没取回的版本，从「同事交了新稿」那个 chip 进来时用）；
+  `focusToken` 每次点击自增一，**没有它的话 focus 值不变时 props 也不变、已经挂载的
+  组件不会重新定位，用户会以为按钮坏了**。两个都要透传给 `<CommitHistoryTab>`
+  （`:focus` / `:focus-token`，左右两条 `v-else-if` 链里各一份）。
+- `'commit-history'` 已在 `pages/project-overview/fileKind.js` 的 `NON_FILE_TAB_TYPES` 里
+  （否则会被按扩展名上色）；标签图标走 `fileOpenTabs.js` 里 `GLYPHS.history` 的特判。
+- **关闭走通用的 `closeFile`，标签管道里不需要为它加任何特判**：没有引擎实例、
+  没有保活池/LRU 注册、没有 `flushSave`（它只是 `GET /version/history` 的只读视图）。
+  组件自己在 `mounted` 挂了三个全局监听（`keydown`/`mousedown` 捕获阶段 + `window focus`
+  自动刷新）与一个关键词防抖 `setTimeout`，四样都在它自己的 `beforeUnmount` 里摘干净——
+  **加新的全局监听要记得同步加到那个 `beforeUnmount`**，标签页是随时会被关掉的。
+
 ## 相关文件
 
 - `frontend/src/services/host.js` — **访问桌面壳能力的唯一出口**（浏览器面板/截图/剪贴板/组件下载/自动更新/本地文件对话框/应用菜单等）。业务代码一律 `import { host } from '@/services/host.js'`，**不要再写 `window.checkbaDesktop`**；「是不是桌面壳」用 `isDesktopHost()`。桌面态逐字段透传、Web 态缺席，所以既有的 `if (host.browser && ...)` 子对象守卫必须保留（守卫就是能力探测）。详见 doc-editor.md 的「宿主能力层与编辑器容器」。

@@ -418,6 +418,7 @@ public class VersionController {
         data.put("behind", behind instanceof Number n ? n.intValue() : 0);
         if (cloud.containsKey("remoteAheadCount")) data.put("remoteAheadCount", cloud.get("remoteAheadCount"));
         if (cloud.containsKey("remoteAheadAuthors")) data.put("remoteAheadAuthors", cloud.get("remoteAheadAuthors"));
+        if (cloud.containsKey("remoteAheadAuthorCount")) data.put("remoteAheadAuthorCount", cloud.get("remoteAheadAuthorCount"));
         if (cloud.containsKey("remoteAheadBySelf")) data.put("remoteAheadBySelf", cloud.get("remoteAheadBySelf"));
     }
 

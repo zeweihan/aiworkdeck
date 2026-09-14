@@ -10,13 +10,15 @@
  * 四处同源消费：顶栏协作 chip、底部状态条、版本面板的 CloudSyncBar、协作抽屉。
  *
  * 降级：后端没回 remoteAheadCount（老服务端）就落回调用方给的那句老文案，
- * 不编一个「· 0 版」出来。作者名单后端最多给 3 个，所以「等 N 人」里的 N
- * 在超过 3 人时会说少——说少好过说错，且这条路径上没有更准的数可用。
+ * 不编一个「· 0 版」出来。作者名单后端最多给 3 个，「等 N 人」里的 N 因此要用
+ * remoteAheadAuthorCount（去重后的作者总数）来算，拿名单长度算的话四个人以上
+ * 永远说成 3 人；老服务端不回这个字段时才退回名单长度。
  */
 
 /**
  * @param {Function} t          $t，签名 (key, params?) => string
- * @param {Object}   status     cloudStatus：{remoteAhead, remoteAheadCount, remoteAheadAuthors, remoteAheadBySelf}
+ * @param {Object}   status     cloudStatus：{remoteAhead, remoteAheadCount, remoteAheadAuthors,
+ *                              remoteAheadAuthorCount, remoteAheadBySelf}
  * @param {Object}   [opts]     { fallbackKey } 算不出作者时用的老文案键
  * @returns {string}
  */
@@ -30,7 +32,9 @@ export function remoteAheadText(t, status, opts = {}) {
   const authors = (Array.isArray(s.remoteAheadAuthors) ? s.remoteAheadAuthors : [])
     .map((a) => (a == null ? '' : String(a).trim()))
     .filter(Boolean)
-  if (authors.length === 1) return t('version.remoteAheadOne', { name: authors[0], count })
-  if (authors.length > 1) return t('version.remoteAheadMany', { name: authors[0], people: authors.length, count })
-  return fallback()
+  if (!authors.length) return fallback()
+  // 名单最多 3 个名字，人数另有其数：缺席（老服务端）才退回名单长度
+  const people = Number(s.remoteAheadAuthorCount) || authors.length
+  if (people <= 1) return t('version.remoteAheadOne', { name: authors[0], count })
+  return t('version.remoteAheadMany', { name: authors[0], people, count })
 }

@@ -66,6 +66,18 @@ public class CloudSyncService {
         this.authorResolver = resolver;
     }
 
+    /**
+     * 本机连着的官网账户（{@link #ensureRemoteUserId} 回填 remoteUserId 要用它做判据）。
+     * 同样字段注入，理由同上；required=false，自建服务器上没有官网账户也照常跑。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.account.AccountService accountService;
+
+    /** 单测用：同上。 */
+    void setAccountServiceForTest(com.checkba.service.account.AccountService service) {
+        this.accountService = service;
+    }
+
     public CloudSyncService(ProjectRepoService repoService,
                              WorkSessionService sessionService,
                              ProjectTreeManifestService manifestService,
@@ -544,9 +556,17 @@ public class CloudSyncService {
     /** {@code master..origin/master} 最多走这么多版：状态条只需要计数与前三个名字。 */
     static final int REMOTE_AHEAD_WALK_CAP = 200;
 
+    /** 状态条放得下的名字个数；总人数另走 {@code remoteAheadAuthorCount}。 */
+    static final int REMOTE_AHEAD_NAME_CAP = 3;
+
     /**
      * 往状态里补 {@code remoteAheadCount} / {@code remoteAheadAuthors} /
-     * {@code remoteAheadBySelf}。
+     * {@code remoteAheadAuthorCount} / {@code remoteAheadBySelf}。
+     *
+     * <p>名字最多给 {@value #REMOTE_AHEAD_NAME_CAP} 个（状态条只放得下这么多），但
+     * {@code remoteAheadAuthorCount} 是**去重后的作者总数**——「张三等 N 人」里的 N
+     * 要是拿名单长度算，四个人以上就永远说成 3 人。两个数字的量纲都受
+     * {@link #REMOTE_AHEAD_WALK_CAP} 这一趟 walk 的上限约束。
      *
      * <p>算不出来只记日志、不抛也不填字段——这是一个**常驻的状态指示**，为了一句
      * 更准的话把整个云端状态接口打成 500，比显示那句笼统的「同事交了新稿」糟得多。
@@ -557,13 +577,18 @@ public class CloudSyncService {
                     projectId, repoService.mainBranch(), ORIGIN_MASTER, REMOTE_AHEAD_WALK_CAP);
             if (ahead.isEmpty()) return;
             m.put("remoteAheadCount", ahead.size());
-            List<String> authors = new ArrayList<>();
+            java.util.LinkedHashSet<String> distinct = new java.util.LinkedHashSet<>();
             for (VersionEntry e : ahead) {
                 String name = e.authorName();
-                if (name != null && !name.isBlank() && !authors.contains(name)) authors.add(name);
-                if (authors.size() >= 3) break;
+                if (name != null && !name.isBlank()) distinct.add(name);
+            }
+            List<String> authors = new ArrayList<>();
+            for (String name : distinct) {
+                if (authors.size() >= REMOTE_AHEAD_NAME_CAP) break;
+                authors.add(name);
             }
             m.put("remoteAheadAuthors", authors);
+            m.put("remoteAheadAuthorCount", distinct.size());
             // 「全部都是我」才算本人——只要掺进一版同事的，界面就该说同事的名字。
             m.put("remoteAheadBySelf", authorResolver != null && userId != null
                     && ahead.stream().allMatch(e -> authorResolver.isSelf(e, projectId, userId)));
@@ -706,12 +731,13 @@ public class CloudSyncService {
      * 透传案件库的协作事件（spec 2026-09-14 §2.3），外层补两个「我是谁」的字段：
      * {@code selfUserId} 是**案件库那一侧**的 userId（本机 userId 与事件表毫无关系），
      * {@code selfTokenId} 是本机这枚设备令牌——界面据此把事件行说成「你」「你（某台电脑）」
-     * 还是同事的名字。旧连接（{@code remoteUserId} 为空）下 selfUserId 为 null，
-     * 界面一律按「他人」渲染；重新连接一次就有了。
+     * 还是同事的名字。本列上线前建的连接为空——{@link #ensureRemoteUserId} 在这里
+     * 自动补一次（不必断开重连）；实在对不上才留 null，界面一律按「他人」渲染。
      */
     public Map<String, Object> proxyCollabEvents(long projectId, int limit, Long before) {
         ProjectRemote remote = requireRemoteBinding(projectId);
         CloudConnection conn = connectionOf(remote);
+        ensureRemoteUserId(conn, remote);
         String url = conn.getServerUrl() + "/api/projects/" + remote.getRemoteProjectId()
                 + "/collab-events?limit=" + limit + (before == null ? "" : "&before=" + before);
         JSONObject resp = JSONUtil.parseObj(httpGet(url, conn.getDeviceToken()));
@@ -728,6 +754,49 @@ public class CloudSyncService {
         out.put("selfUserId", conn.getRemoteUserId());
         out.put("selfTokenId", conn.getTokenId());
         return out;
+    }
+
+    /**
+     * 存量连接的 {@code remoteUserId} 自动回填（spec 2026-09-14 §2.3 收尾）。
+     *
+     * <p>这一列是本设计才加的，本列之前建的连接全是空——而事件表记的是**案件库那一侧**的
+     * userId，空了就没法把「我自己干的那几行」认出来，律师会在提交历史里看到自己被当成同事。
+     * 让他去断开重连太荒唐（重连要重桥、重发设备令牌），所以这里自动补：
+     * 两侧 members 现在都带 {@code accountId}（官网账户 id，spec §2.6），拿本机连着的
+     * 那个账户去案件库参与人列表里对一下就知道我是谁。
+     *
+     * <p>只挂在**协作事件代理**这一条路上，不挂 {@code cloudStatus}/{@code checkCloud}：
+     * 那两个 120 秒轮询一次，为一件一次性的补写每两分钟多打一趟成员请求不值当。
+     * 回填成功后 {@code remoteUserId} 非空，这个方法此后直接返回。
+     *
+     * <p>整段吞异常：认不出「我是谁」只是让事件行一律按他人渲染（本列上线前的既有行为），
+     * 不值得为它把整个「提交历史」标签页打不开。
+     */
+    private void ensureRemoteUserId(CloudConnection conn, ProjectRemote remote) {
+        if (conn.getRemoteUserId() != null || accountService == null) return;
+        try {
+            String myAccountId = accountService.currentAccountIdOrNull();
+            if (myAccountId == null || myAccountId.isBlank()) return;
+            JSONObject resp = JSONUtil.parseObj(httpGet(
+                    conn.getServerUrl() + "/api/projects/" + remote.getRemoteProjectId() + "/members",
+                    conn.getDeviceToken()));
+            if (resp.getInt("code", 1) != 0) return;
+            JSONArray rows = resp.getJSONArray("data");
+            if (rows == null) return;
+            for (Object o : rows) {
+                if (!(o instanceof JSONObject row)) continue;
+                if (!myAccountId.equals(row.getStr("accountId"))) continue;
+                Long userId = row.getLong("userId", null);
+                if (userId == null) continue;
+                conn.setRemoteUserId(userId);
+                connectionRepository.save(conn);
+                log.info("已回填案件库侧的 userId: connection={} remoteUserId={}", conn.getId(), userId);
+                return;
+            }
+            log.info("案件库参与人里没有与本机账户对得上的行，事件行仍按他人渲染: connection={}", conn.getId());
+        } catch (Exception e) {
+            log.warn("回填案件库侧 userId 失败（已吞）: connection={}", conn.getId(), e);
+        }
     }
 
     /**

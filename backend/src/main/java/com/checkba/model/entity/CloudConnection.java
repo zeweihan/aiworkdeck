@@ -49,8 +49,8 @@ public class CloudConnection {
      * 我在**案件库那一侧**的 userId（不是本机的）。协作事件行靠它判「这条是不是我干的」：
      * 事件表记的全是案件库侧的 userId，本机 userId 与它毫无关系。
      *
-     * <p>本列上线前建的连接为空——那些连接上的事件一律按「他人」渲染，重新连接一次即可
-     * （断开重连，或官方案件库那条路上换个账号触发一次重桥）。
+     * <p>本列上线前建的连接为空——不必断开重连，{@code CloudSyncService.ensureRemoteUserId}
+     * 会在第一次打开「提交历史」时按官网账户 id 从案件库参与人列表里自动补上。
      */
     @Column
     private Long remoteUserId;

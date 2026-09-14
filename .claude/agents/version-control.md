@@ -94,14 +94,14 @@ description: 项目级版本记录领域。任务涉及版本记录/工作段（
   相关 i18n 键（`admin.cloud*` / `admin.memory*` / `admin.usernameLabel` / `passwordLabel` /
   `connectButton` / `disconnect` / `sync*` 一批，两语言各 56 个）已从 locale 删除。
 - `CloudAcceptDialog.vue`（`frontend/src/components/`，注意不在 `version/` 目录下）—— v2 新增，入口在 `userprofile.vue`，PR-E 后按钮文案是「从团队案件库取一份案卷」。列出当前连接下可见的案卷（`.cloud-project-row`/`.cloud-project-name`），逐个「取到本机」（`acceptCloudProject`）；没有连接时**只说一句** `version.noLibraryAvailableShort`——dev-board#440 撤掉了「去连一个」跳 `admin.vue` 那条路（目的地已经没有连库表单了），也撤掉了 `connections.length > 1` 的连接选择器（PR-E 为地雷 #31 加的那个），恒用 `conns[0]`。#439 起没有连接但官方可用时会先 `connectOfficialCloud()` 当场连上，所以「没有连接」只会发生在国际站。这个入口也是 `CollabDialog.inviteText` 邀请话术第 1 步指向的地方，改文案要同步改邀请话术。
-- `VersionTimeline.vue` —— 拉 `getVersionTimeline`，按 `kind==='session'` 分组（`grouped` computed），自动存档折进对应工作段节点下可展开；节点标题有 milestone 时前置「重要版本」flag 并用 milestone 名字整个替换掉原标题（`titleOf()` 只在无 milestone 时才退回 `note || message`）。采纳产生的合并提交 `kind` 也是 `session`（见下方「MERGING 态即冲突态」附近对 `adoptMessage` 的说明），作为独立的顶层节点渲染，标题就是 `"采纳：" + 稿名`——**没有为分叉/合并画连线**，是对 spec 5.8「另起一稿的分叉与采纳用连线画出」的有意降级（见下方核心契约）。
+- `VersionTimeline.vue` —— 拉 `getVersionTimeline`，按 `kind==='session'` 分组（`grouped` computed），自动存档折进对应工作段节点下可展开；节点标题有 milestone 时前置「重要版本」flag 并用 milestone 名字整个替换掉原标题（`titleOf()` 只在无 milestone 时才退回 `note || message`）。采纳产生的合并提交 `kind` 也是 `session`（见下方「MERGING 态即冲突态」附近对 `adoptMessage` 的说明），作为独立的顶层节点渲染，标题就是 `"采纳：" + 稿名`。**连线已经画了**（曾经的「有意降级」已作废）：合并节点在左侧轨道上带一段 `.merge-curve`（`isMerge(group.head)` 判真时渲染），进行中的稿另有 Phase B 的分叉线（`.draft-fork-curve`，数据来自 `loadDraftBranches` 逐稿拉 `/drafts/{id}/timeline` 找分叉点）——**分叉点落在当前拉到的主线历史窗口之外、端点出错或 404 时一律优雅降级为不画**，不弹错误弹窗。完整的 `git log --graph --all` 那一份在「提交历史」标签页（`CommitHistoryTab.vue` + `utils/historyGraph.js`），不在这个面板里。
 - `VersionNodeDetail.vue` —— 点某个节点弹出的详情弹窗：拉该 sha 的变更列表、「退回到这一版」二次确认、「标为重要版本」、第 3 期新增「从这一版另起一稿」（`openDraftNaming`，独立嵌套 `.awd-dialog`，同款 `.uni-input-input` 陷阱；`createDraft(projectId, version.sha, name)`，任意节点都能开，包括采纳产生的双亲合并节点）、对 `MODIFY` 类型且非根提交的改动行渲染「和上一版对比」按钮，`@tap` 上抛 `{path, sha}` 交给宿主页面决定走桌面修订稿分支还是文本降级分支。
 - `VersionCompareTab.vue` —— 第 2 期新增，「和上一版对比」的桌面 docx 展示宿主，**只读、绝无保存路径**：不订阅 `lo-relay` 的 `modified` 信号、不进保活池（`_libreRefs`/LRU 一概不注册）、`beforeUnmount` 只 `dispose executor` + 移除 `<webview>`。流程：并行下载新旧字节 + 启动引擎 → `load_document` 新版 → `compare_document` 一次性生成修订并自动切只读。
 
 **前端集成点**
 
 - `frontend/src/services/api.js`（:1572 附近起）具名导出：`getVersionStatus`、`enableVersionControl`、`getVersionTimeline`（`fileId` 参数）、`getVersionChanges`、`endWorkSession`、`discardWorkSession`、`resumeWorkSession`、`revertToVersion`、`markVersionMilestone`、`fetchVersionFileBytes`、`getVersionFileText`；第 3 期新增 `createDraft`、`listDrafts`、`switchToDraft`、`switchToMainline`、`adoptDraft`、`resolveAdopt`、`abortAdopt`、`abandonDraft`。一一对应 `VersionController` 的接口。v2 新增（:1732 附近起，`==================== 云端协作（v2）====================` 分区）：`cloudConnect`/`listCloudConnections`/`disconnectCloudConnection`/`listRemoteProjects`/`acceptCloudProject`（连接级，对 `/api/cloud/*` 非项目端点）、`shareProjectToCloud`/`getCloudStatus`/`checkCloud`/`uploadToCloud`/`updateFromCloud`/`resolveCloudMerge`/`abortCloudMerge`/`getCloudMembers`/`addCloudMember`（项目级，`/api/cloud/projects/{id}/*`）、`resolveSessionEnd`/`abortSessionEnd`（不在 `/api/cloud/*` 下，是 `/api/projects/{id}/version/session/resolve-end`/`abort-end`——结束工作撞车裁决走版本记录自己的端点，不经云端代理）。
-- `frontend/src/pages/project-overview/fileOpenTabs.js` 的 `onVersionCompareFile({path, sha, newRef, oldRef, name, oldLabel, newLabel})`：**两处来源共用同一个入口**——① `VersionNodeDetail` 的「和上一版对比」冒泡 `{path, sha}`，`newRef=sha`、`oldRef=sha+'^'`，标签走默认「上一版/这一版」；② 第 3 期新增，`AdoptConflictDialog` 的「对比」冒泡 `{path, newRef, oldRef, oldLabel, newLabel}`，两个 ref 已经是主线侧/稿侧的具体 sha，不需要再推导，「上一版/这一版」在这个场景里说不通（两边不是先后关系）改用调用方传入的标签。`桌面 + docx/doc` 走 `openVersionCompareTab`（`VersionCompareTab.vue`，LOWA 修订稿），其余走 `openVersionTextDiffTab`（`DocDiffViewer.vue` 的 `versionSpec` 模式，Monaco 红绿文本对比降级）。两个标签都是 `leftFiles`/`rightFiles` 里的普通标签页，但**跟侧栏面板键并非互不影响**：`project-overview.vue` 的 `isTabVisible()` 按 `leftPaneKey` 决定标签可见性——这两种标签必须在 `isTabVisible` 里显式放行 `version`（唯一入口所在的面板）与 `files`，否则从版本面板点开的对比标签会被整块藏死、编辑区显示空闲态（第 2 期终审 C1 实证）。
+- `frontend/src/pages/project-overview/fileOpenTabs.js` 的 `onVersionCompareFile({path, sha, newRef, oldRef, name, oldLabel, newLabel})`：**两处来源共用同一个入口**——① `VersionNodeDetail` 的「和上一版对比」冒泡 `{path, sha}`，`newRef=sha`、`oldRef=sha+'^'`，标签走默认「上一版/这一版」；② 第 3 期新增，`AdoptConflictDialog` 的「对比」冒泡 `{path, newRef, oldRef, oldLabel, newLabel}`，两个 ref 已经是主线侧/稿侧的具体 sha，不需要再推导，「上一版/这一版」在这个场景里说不通（两边不是先后关系）改用调用方传入的标签。`桌面 + docx/doc` 走 `openVersionCompareTab`（`VersionCompareTab.vue`，LOWA 修订稿），其余走 `openVersionTextDiffTab`（`DocDiffViewer.vue` 的 `versionSpec` 模式，Monaco 红绿文本对比降级）。两个标签都是 `leftFiles`/`rightFiles` 里的普通标签页。**标签现在与左栏面板完全解耦，不需要再为新标签类型「放行」任何面板**（dev-board#394）：`project-overview.vue` 的 `isTabVisible()` 委托 `pages/project-overview/tabVisibility.js` 的 `isTabVisibleInPane`，规则只剩一条「只要标签存在就可见」。此前那里是一张按 `leftPaneKey` 放行的白名单（最初只放 `files`，每发现一个功能「点了没反应」就补一项），版本对比标签当年正是因为漏了 `version` 而被整块藏死（第 2 期终审 C1）——那张名单已经整个撤掉，函数保留只是为了把契约钉在一个可单测的纯函数上。
 - `frontend/src/components/FileTree.vue` 右键菜单「这份文件的历史」（`@tap="$emit('file-history', contextMenu.targetItem); closeContextMenu()"`）→ `project-overview.vue` 的 `onFileHistory(file)`：设置 `versionFileFilter = {fileId, name}` 并把左栏切到 `version` 面板。右键菜单本身绑定的是原生 `@contextmenu.prevent`（不是 uni `@tap`），真实鼠标右键能直接触发（见下方「验证」一节的 e2e 配方）。
 - `frontend/src/config/leftSidebarPlugins.js`：入口 `version`（图标为时钟 SVG path，非图片资源）。**2026-08-19 挪出了 `LEFT_SIDEBAR_PLUGINS` 数组**——此前排在 rail 顶部那一串（项目概览/文件树/搜索/插件中心/语音/脱敏/门控项）的末尾，现在视觉上挪到 rail 底部、夹在「暂存区」与「成员堆叠」之间，独立导出成 `VERSION_PLUGIN` 并进 `OFF_RAIL_PLUGINS`（照 `DD_FILES_PLUGIN` 的先例）；`getLeftSidebarPlugin('version')` 与 `leftPaneTitle` 兜底仍能查到它（`OFF_RAIL_PLUGINS` 是它们的查找兜底表）。`getPluginsForUser('CLIENT')` 不返回它（CLIENT 只见 `dd-files`，与后端权限口径一致）。`project-overview.vue` 的命令面板「跳转到面板」清单（`menuCommands.js` 的 `pushMenuState`）读的是 `LEFT_SIDEBAR_PLUGINS`，version 挪出数组后需要手动把 `VERSION_PLUGIN` 拼回那份 `views` 清单，否则命令面板会漏掉这一项。`toggleLeftPane('version')` 语义、`VersionPanel.vue` 挂载点本身都没动。
 - 后端触发点：`ProjectFileService.signalChange()`与 `FileController.signalChange()` 两处调用 `workSessionService.onChangeSignal(...)`，都用 try/catch 包死、绝不阻断文件操作/上传。IDE 化本地文件夹项目（`Project.localRoot` 非空）另有 `LocalRootWatchService`（FSEvents 监听 + 防抖 800ms）触发 `LocalProjectService.reconcileProject` 对账——对账只写数据库、绝不写磁盘，新建/更新/软删除走 ProjectFileService 服务方法，signalChange 因此自带，**Finder 里的增删改同样进版本记录**。对账三条硬规则：无变化不动行（防版本噪声与修改时间失真）、回收站行不复活（软删除不动磁盘）、根目录不可达整体跳过（防外置盘拔出误判成全删）。
@@ -114,7 +114,7 @@ description: 项目级版本记录领域。任务涉及版本记录/工作段（
 
 **稿生命周期状态机与工作段的本质区别**：稿（`WorkSession.SessionType.DRAFT`）同样是 `ACTIVE → MERGED | DISCARDED`，但三点根本不同——① **绝不自动合并**：工作段有「结束本次工作」把分支 NO_FF 合并回主线这一条隐含在正常流程里的终点，稿没有对应物，唯一让稿并回主线的路径是律师显式点「采纳这一稿」；② **不受空闲结束管辖**：`onChangeSignal` 对 `draft/*` 分支跳过 `armIdleTimer`，稿可以放着几天不动也不会被自动收尾，`autoEndIfIdle` 只认工作段；③ **同一项目允许多个 ACTIVE**（`findByProjectIdAndStatusAndSessionTypeOrderByStartedAtDesc` 返回列表而非单条）——工作段是「律师当下在做的这件事」，稿是「律师想留着以后再决定要不要的平行方案」，语义上就允许并存多份。三者共用同一套 `WorkSession` 实体与状态字段，只用 `sessionType` 区分业务语义，不建单独的表。
 
-**对 spec 5.8「分叉连线图」的有意降级**：spec 原文设想时间线上用连线画出「另起一稿」的分叉与「采纳」的合并（类似 git 图形化工具的分支图）。实际实现是一条**平铺的线性列表**（`VersionTimeline.vue` 的 `grouped` computed 只按 `kind==='session'` 分组折叠自动存档，不画任何分支/合并连线）：进行中的稿单独列在 `DraftList` 里（不出现在主线时间线上，因为 `log()`/`getVersionTimeline` 只沿当前 HEAD 的历史 walk），采纳完成后合并提交作为一个普通的顶层节点出现（标题「采纳：{稿名}」），视觉上和一次普通的「结束工作」节点没有区别，看不出它曾经分过叉。这是有意的范围裁剪——分叉连线图需要额外的图形渲染与布局算法，且 spec 里再未出现具体设计，权衡后判断「稿列表 + 扁平时间线」已经能让律师看懂「发生了什么」，不值得为一张连线图额外投入。
+**spec 5.8「分叉连线图」的降级已经作废（2026-09-14）**：spec 原文设想时间线上用连线画出「另起一稿」的分叉与「采纳」的合并；v1 落地时降级成一条平铺列表，2026-09-14 两处都补上了。① 版本面板的 `VersionTimeline.vue`：合并节点画 `.merge-curve`，进行中的稿画 Phase B 分叉线（`.draft-fork-curve`），后者需要逐稿拉 `/drafts/{id}/timeline` 找分叉点，**分叉点不在当前主线历史窗口内 / 端点出错 / 404 一律降级为不画**。② 真正的 `git log --graph --all` 在新的「提交历史」标签页：`GET /version/history` 一次给回主线 + 各稿 + 案件库最新稿的合成流（walk 根、TOPO 与 RevFlag 依赖见下方「协作历史」一节），泳道布局在纯函数 `frontend/src/utils/historyGraph.js` 里。进行中的稿仍然同时列在 `DraftList` 中（`log()`/`getVersionTimeline` 只沿当前 HEAD walk，所以老的 `/timeline` 端点看不到它们）。
 
 **提交消息尾注**：`X-AWD-Kind: auto | session`，可选一行 `X-AWD-Note: ...`。`auto` = 工作段内自动存档；`session` = 工作段本身的合并节点（也用于 `enableVersionRecording` 的初始提交、`revertTo` 的退回提交）。解析见 `ProjectRepoService.extractTrailer()`（:172），按行 `trim()` 后判前缀，容忍消息里混有其他内容。
 
@@ -238,6 +238,140 @@ PR#797 当时只改了 `VersionController`，自动存档（`ProjectFileService.
 `service/account/AwdkLoginServiceTest` 的展示名三条、`service/collab/CollaboratorAdmissionTest` 的刷新两条。
 桌面侧的编辑入口与同步落点见 licensing-billing.md「身份展示」一节。
 
+## 协作历史（2026-09-14，dev-board#623/#624/#625，spec `docs/superpowers/specs/2026-09-14-collab-history-git-parity-design.md`）
+
+把「程序员在 IDE 里的 git 体验」逐条翻成律师的词：一份统一历史、任意两版对比、署名跨机器对得上、
+「谁在什么时候动了这份案卷」的旁白。界面零 Git 术语的纪律一字未松。
+
+**`VersionAuthorResolver` 是提交署名的唯一出口**（`com.checkba.version`）。病根：邮箱此前有两套合成公式
+（`{展示名}@aiworkdeck.local` 与 `user-{本机userId}@aiworkdeck.local`），前者改个昵称就换一个身份，
+后者是**本机自增主键**——同一个官网账户在两台电脑上是两个 id，两个不同的人又常常都是 `user-1`，
+「这一版是不是我交的」既漏判也误判。现在两条规则：项目已绑案件库 →
+`{CloudConnection.username}@collab.aiworkdeck.local`（`awd_xxx` 是官网账户在案件库侧的账号名，
+跨机器稳定、跨人唯一）；未绑定 → `{本机 username}@local.aiworkdeck.local`。
+**域名本身是判据**：`isSelf()` 先比邮箱，只有这两个新域才可信（`isAccountScoped`），
+旧公式的存量提交回落比展示名——历史永不重写（地雷 #1），存量只剩这一条线索，
+不能因为比不准就对全部旧历史一律判否。`sanitize()` 对非 ASCII 用户名**丢掉不安全字符再补一段
+原值 SHA-256 前 6 位**，不是逐字换 `-`：后者会让所有三字中文名都变成 `---@local.…`，
+把两个同事判成同一个人。名字一律走 `UserService.signatureName`。
+
+**`X-AWD-Resolutions` 尾注**（`ProjectRepoService`）：冲突裁决的结果写进提交消息，
+格式 `<path>=<MAIN|DRAFT|BOTH>; ...`，按路径排序（同一次裁决在任何机器上生成同一行文本）。
+只编码会破坏这一行的五个字符（`%` 必须**第一个**换，否则二次编码；`;` `=` `\r` `\n`），
+中文文件名原样留着——律师把仓库 clone 出去用 `git log` 是能读的。
+干净合并**不带**这条尾注。三个写入点共用 `commitMergeResolution(projectId, message, resolutions, …)`：
+`WorkSessionService.completeSessionMerge`（结束工作撞车裁决）、`WorkSessionService.completeAdopt`（采纳裁决）、
+`CloudSyncService.completeCloudMerge`（取回最新稿裁决）。
+**MAIN/DRAFT 在三个语境里指向的物理侧不同**，读这条尾注时必须带上语境——方向表见上方
+「三语境冲突判定链」，尾注里只有裸的 MAIN/DRAFT，它自己说不出「我这边」是哪边。
+读侧 `parseResolutions` 回 `VersionEntry.Resolution(path, kept)` 列表。
+
+**`cloudStatus(projectId, userId)` 的 remoteAhead 四个键**（`CloudSyncService.describeRemoteAhead`）：
+`remoteAheadCount`（案件库领先几版）、`remoteAheadAuthors`（去重作者名，**最多 3 个**，新的在前）、
+`remoteAheadAuthorCount`（去重作者**总数**）、`remoteAheadBySelf`（**全部**都是我才为真——
+掺进一版同事的，界面就该说同事的名字）。四个键都只在 `remoteAhead` 为真时出现，
+且统计失败时一个都不给（`remoteAhead` 与整条状态照常回，见那个方法的注释）：
+这是一个常驻状态指示，为一句更准的话把云端状态打成 500 比笼统的「同事交了新稿」糟得多。
+**缺席即降级**，不是错误——老服务端不回这几个键，前端 `collabWording.js` 落回旧那句话。
+量纲上限是 `REMOTE_AHEAD_WALK_CAP`（200）这一趟 walk。单参重载 `cloudStatus(projectId)` 是
+userId 未知时的纯 ref 快照，`remoteAheadBySelf` 恒 false（不谎称是本人）。
+`VersionController.putSyncCounters` 把这四个键连同 `ahead`/`behind` 转发进 `/version/history`。
+
+**`GET /version/history`**（`VersionController`，spec §2.4）= 程序员那份 `git log --graph --all`。
+一次给回 `{enabled, head:{branch, draftName}, entries[], nextCursor, ahead, behind, remoteAhead*}`。
+四类 walk 根（`historyRoots`）：主线、每个 ACTIVE 稿的分支、`origin/master`（案件库）、`HEAD`（本机）；
+解析不出的根由 `ProjectRepoService.history` 自己跳过。筛选 `HistoryQuery{limit, cursor, author, relPath, q, from, to, includeAuto}`：
+`author` 匹配作者邮箱**或**展示名（整串比，不模糊）、`q` 是标题/完整消息的子串、
+`from`/`to` 只写日期时按**本机时区**理解成那一天的起止（按 UTC 切会把当天早八小时切到前一天）。
+未开版本记录回 `enabled:false` + 空列表、HTTP 仍 200（同 `/timeline` 的早退口径，否则引导页显示成「读取失败」）。
+
+**`ProjectRepoService.history` 的 RevFlag/TOPO 依赖**：`RevSort.COMMIT_TIME_DESC` + `RevSort.TOPO`
+两个都要开——TOPO 保证每个父提交排在它全部子提交之后，这既是泳道图能连上线的前提，
+**也是两个 `RevFlag` 能正确传播的前提**。`remote` 位（「同事交了、我还没取回」）的算法是：
+案件库那条线的尖端点 `AWD_REMOTE`、本机各线的尖端点 `AWD_LOCAL`，`RevWalk.carry` 让旗标顺父边带下去，
+拿到 REMOTE 却没拿到 LOCAL 的就是本机走不到的。这比「先把本机历史整个 walk 一遍收进 Set 再比对」
+便宜一趟完整历史。分页游标是上一页最后一行的 sha；游标那一页尾巴上可能还跟着几笔已折进上一行的
+自动存档，下一页要 `swallowAutos` 原样跳掉，否则同一笔会在两页里各算一次。
+`HISTORY_MAX_SCAN`（20000）防「筛选把所有行都排除掉」时把整部历史走穿。
+
+**`GET /version/compare?from=&to=`**：任意两版之间的文件清单，两个入参可以是任何引用或 sha，
+`.awd/` 照例滤掉。**两个入参必须过 `commitExists` 而不是 `resolveRef`**——JGit 的
+`Repository.resolve` 对一个**格式合法但库里根本没有**的完整 sha 会原样把 ObjectId 还给你
+（它只做解析、不做存在性检查），要等拿去 diff 才炸成技术档异常，律师看到的是通用的
+「操作失败，请重试」。`commitExists` 对缺对象/类型不对回 false，其余异常照常上抛
+（那是仓库本身出问题，不该被说成「找不到这一版」）。
+
+**`HistoryTypeClassifier` 与消息模板是硬耦合的，改模板必改分类器**：七类
+`initial/session/pull/adopt/revert/auto/upgrade` 靠**提交标题字符串匹配**认出来，
+不是新加尾注——历史永不重写，而律师最想看清类型的恰恰是既有历史，提交消息是那些提交身上
+唯一可用的线索。生成侧都是 `LangText.of(zh, en)`，**同一个仓库里可能同时存在中英两种写法**
+（提交时界面是什么语言就写什么），所以每条都认两个字面量。五个生成点：
+`ProjectRepoService.init`（初始版本）、`WorkSessionService.prepareRemoteRepository`（升级版本记录格式）、
+`WorkSessionService.revertTo`（退回到早先的版本）、`WorkSessionService.adoptMessage`（「采纳：」前缀）、
+`CloudSyncService.cloudMergeTitle`（取回最新稿）。判定顺序有意义：**先按消息认出这五种具体动作，
+再退回 `X-AWD-Kind`**——「初始版本」「退回」身上的 kind 都是 `session`，先看 kind 会把它们
+一律归成「结束工作」。`HistoryTypeClassifierContractTest` 真的去调生成侧产出消息再来分类，
+谁改了文案没改这里，那条测试当场转红。
+
+**案件库侧 `collab_event` 表**（`com.checkba.version.cloud`，spec §2.3）= 远端 reflog：
+git 历史只记得「产出了哪一版」，记不住「谁交了稿」「谁签出了一份」「谁被加进来了」。
+表落在服务端，桌面端经 `GET /api/cloud/projects/{id}/events` 代理读（`CloudSyncService.proxyCollabEvents`）。
+**只增不改**，`CollabEventService.record` 整段吞异常——事件是旁白，
+不能为一行旁白让 push / 加人 / 建项目失败。七种 kind 与各自的记录点：
+
+| kind | 记在哪 | 要点 |
+|---|---|---|
+| `SHARED` | `ProjectController.recordSharedIfFromDesktop`（`POST /api/projects`） | 判据是**这次建项目用的是设备令牌**。刻意**不**挂在 `prepare-remote` 上（那条看着更像「共享」）：`cloneFromCloud` 也调它，每有一位同事取回一份就会多出一条「他把案卷放进了案件库」 |
+| `CHECKOUT` | `GitHttpController` 的 upload-pack 鉴权后，`recordCheckoutOnce` | 按 `(projectId, tokenId)` **首次**才记——每次 fetch 都是 upload-pack，不去重的话日常同步会把表刷成洪流。`tokenId` 为空（老令牌、自建服务器的口令登录）一律不记：没有设备身份就没法去重 |
+| `PUSH` | `GitHttpController` 的 **post-receive 钩子里**，`ingestPushedMainline` **之前** | 顺序是刻意的：`ingestPushedMainline` 有「延后」（`pendingIngestBase`，地雷 #28）与「失败转待同步」两条不落库的出路，而主线此刻已经真的前进了——「谁交了稿」是既成事实，不该跟着服务端本地物化的成败一起丢。`commitCount` 走 `countCommits`（首推时 old 是全零，数到根为止；数不出来回 0） |
+| `PULLED` | `CollabEventController` 的 `POST`，客户端上报（`CloudSyncService.reportPulled`） | **唯一由客户端上报的 kind**：取回这件事服务端那一侧就是一次普通的 upload-pack，跟日常轮询分不开。`POST` 因此**只收 PULLED**，其余一律 400——这是一个写别人历史的口子，放开 kind 等于让任何有写权限的成员伪造「某某交了稿」 |
+| `MEMBER_ADDED` / `MEMBER_REMOVED` | `ProjectMemberService`（字段注入 `collabEventService`，可为 null） | 成员事件没有设备，`tokenId` 为 null |
+| `MEMBER_ROLE_CHANGED` | **目前没有写入口** | 枚举里先留着（库里存 `Enum.name()` 不存序号，加值不会错位既有行）；改角色的路径还没接上来，读侧与前端已经能渲染它 |
+
+读端点权限只要求项目成员（**CLIENT 也可读**，与只读成员同口径：谁能看这份案卷，谁就该知道它被谁动过）。
+`device.name` **只对事件本人下发**（`CollabEventController.toDto` 比 `actorUserId == callerId`）——
+界面唯一用到它的地方是「你（{设备名}）」那一句，同事那一侧显示的是展示名；
+把别人机器的主机名摊给全项目成员是白给的信息。设备名的来路：
+`DeviceTokenService.ResolvedToken(userId, tokenId)` 是鉴权解析出的设备身份（`GitAccessService` 与
+`ProjectController` 都用它），令牌行上的 `name` 由签发时传入；桌面端连官方案件库时
+`OfficialCloudService` 把本机主机名当 `deviceName` 塞进 `POST /api/auth/awdk-login` 的 body，
+`AwdkLoginService.login(rawKey, deviceName)` 落到令牌行上（空则回落「账户桥接」/「Account bridging」）。
+
+**`CloudConnection.remoteUserId` = 我在案件库那一侧的 userId**（不是本机的）。事件表记的全是案件库侧的
+userId，本机 userId 与它毫无关系，所以 `proxyCollabEvents` 外层补 `selfUserId`/`selfTokenId` 两个字段，
+界面据此把行说成「你」「你（某台电脑）」还是同事的名字。写入点两处：`CloudSyncService.connect` 与
+`OfficialCloudService.connectOfficial`（都取 `data.userId`）。**本列上线前建的连接为空，
+靠 `CloudSyncService.ensureRemoteUserId` 自动回填、不必断开重连**：判据是官网账户 id
+（两侧 members 现在都带 `accountId`），拿 `AccountService.currentAccountIdOrNull()` 去案件库
+`GET /api/projects/{rid}/members` 里对一行，命中就把那行的 `userId` 存回连接。
+**只挂在协作事件代理这一条路上**，不挂 `cloudStatus`/`checkCloud`——那两个 120 秒轮询一次，
+为一件一次性的补写每两分钟多打一趟成员请求不值当；回填成功后 `remoteUserId` 非空，此后直接返回。
+整段吞异常：认不出「我是谁」只是让事件行一律按他人渲染（本列上线前的既有行为），
+不值得为它把整个「提交历史」标签页打不开。
+
+**成员的 `accountId` 与前端三级去重**：参与人「2 人」的病根是同一个官网账户在两张表里叫两个名字
+（本机 `hanzewei`，案件库 `awd_hanzewei`），旧去重只比 username 字符串。
+两侧 members 现在都带 `accountId`（`ProjectMemberService.accountIdFor(user, callerId)`：
+先查 `account_binding`，查不到且问的就是调用者自己时用本机连着的官网账户——桌面 local-mode 下
+本机用户从不桥接、库里没有他的绑定行）。前端 `frontend/src/utils/mergeMembers.js` 的
+`sameMember` 按可靠度试三把键：① `accountId` 相同（两边都补了之后这是唯一权威判据）→
+② `username` 字面相同（自建多用户服务器的本机轨，两边本来就是同一张用户表）→
+③ 云端 `username === 'awd_' + 本机 username`（桥接前缀，老数据里 `accountId` 可能为 null）。
+合并后**保留本机那条**（它带得动本机 userId 与权限语义），role/joinedAt 以案件库为准覆盖；
+云端独有的人追加时 id 加 `cloud-` 前缀避开 `:key` 撞号、**`userId` 一律抹成 null**
+（两个 id 空间，撞上会把别人的角色当成自己的）。
+
+**四处同源文案走 `frontend/src/utils/collabWording.js`**（纯函数，**不许 import**）：顶栏协作 chip、
+底部状态条、版本面板的 `CloudSyncBar`、协作抽屉 `CollabDialog` 四处显示同一句「同事交了新稿」。
+`remoteAheadText(t, status, {fallbackKey})` 三态：`remoteAheadBySelf` → 「你在另一台电脑上交了 N 版」；
+一个作者 → 带名字；多个 → 「{第一个名字}等 {people} 人」，**`people` 取 `remoteAheadAuthorCount`
+（去重总数），缺席才退回名单长度**——名单后端最多给 3 个，拿它算的话四个人以上永远说成 3 人。
+`remoteAheadCount` 缺席（老服务端）落回调用方给的老文案，不编一个「· 0 版」出来。
+
+**前端「提交历史」标签页**：`frontend/src/components/version/CommitHistoryTab.vue` +
+三个纯函数模块（`utils/historyRows.js` 说人话、`utils/historyGraph.js` 画泳道、`utils/mergeMembers.js` 去重），
+标签管道见 `sidebar-shell.md` 的 `commit-history` 一条。
+
 ## 已知地雷
 
 1. **历史永不重写**——硬不变量，理由与 Git 自己一致，为将来推云端仓库（v2）打基础。唯一例外是删除工作段/稿的分支引用（`deleteBranch(force=true)`）——**删的是引用不是历史**：从未合并的那种（`discardSession`/`abandonDraft`）连内容一起丢是本来的语义，已经合并进主线的那种（`endSession` 两条路径、`adoptDraft`）每一笔提交都还从 master 可达，删掉只是不再留一条对律师本就不可见的分支名。护栏测试：`RepoMaintenanceTest.gcPreservesEveryReachableVersion`，GC 前后逐条比对每个 `VersionEntry.sha()`。
@@ -313,6 +447,8 @@ PR#797 当时只改了 `VersionController`，自动存档（`ProjectFileService.
 49. **测试里的 file:// 裸仓库必须关 `receive.autogc`，否则 JGit 后台 gc 与 JUnit `@TempDir` 清理赛跑**（dev-board#500，CI run 34168686921 抓到）——往 file:// 远端 push 时 JGit 在本进程内跑 `ReceivePack`，收包收尾按远端仓库配置 `receive.autogc`（默认 true）调 `Repository.autoGC`；auto gc 又按 `gc.autoDetach`（默认 true）丢到 `WorkQueue` 后台线程，**`gc.log.lock` 在调用线程上同步建、在后台线程上异步删**——仓库再小、根本不需要 gc 也一样。测试方法一返回 JUnit 就递归删 `@TempDir`，撞上那几毫秒就是 `IO Failed to delete temp directory ... hub.git/gc.log.lock`，表现为 `MemoryLwwMergeTest.mergeNeverLeavesRepositoryMidMerge` 之类随机一条红。修法不是等后台任务（JGit 没暴露可等的句柄），而是在建裸仓时把 `receive.autogc=false` 写进它的 config：**一律用 `com.checkba.version.BareHub.init(dir)` 建测试裸仓**，已把 `MemoryLwwMergeTest`/`MemorySyncRoundTripTest`/`CloudSyncUploadTest`/`CloudSyncUpdateTest`/`ProjectRepoRemoteTest` 五处收拢。新写任何「裸仓 + push」的测试直接调它，别再手写 `Git.init().setBare(true)`。生产侧不受影响：团队服务器的 `GitHttpController` 收 push 后不清理目录，后台 gc 正是想要的。
 
 50. **`CollaborationPolicy` 是可替换的那一层，新的协作资格条件只许落在它里面**（dev-board#551）——将来律师之间只按项目连接时，把 `collab.eligibility.policy` 切成 `open` 就该整件事结束，**不要在 `ProjectMemberService`、`ProjectMemberController`、`CloudSyncService` 或任何别处另加一处组织检查**。散出去一条，切 `open` 之后就会剩下一道谁都找不到的隐形门：律师看到的仍是「对方不在你的律所或团队里」，而配置上明明已经放开。同理，名录未配置（`collab.directory.*` 为空）必须逐字维持今天的本地行为——自建服务器与桌面单机走的就是这条，任何「顺手也判一下」都会把它们一起堵死。
+
+51. **同一棵树里两个子代理同时跑 `mvn test`，会撞出 `NoClassDefFoundError` 假红**（2026-09-14 实测）——maven 把 class 写进同一个 `backend/target/classes`，`mvn test` 开头那次编译会先清掉要重编的类再写新的；另一个进程的 surefire 恰好在这个窗口里加载同一个类，就会拿到「类文件不存在」而不是「类有问题」。表现是一批与本次改动毫无关系的测试同时炸 `NoClassDefFoundError` / `ClassNotFoundException`，**串行重跑一次即全绿**。所以：一棵树同一时刻只许有一个 `mvn` 在跑；真要并行，各开各的 worktree（`target/` 才是隔离的）。看到这种形状的红先重跑，别顺着堆栈去改被点名的那个类——那里通常什么问题都没有。
 
 ## 验证
 
