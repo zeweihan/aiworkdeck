@@ -87,6 +87,7 @@ Operational Rules 第 2 条那句「revision mode disabled、改动立即生效�
   - **`find_replace` 全部替换的分流**：默认 `replaceAll=true` 走引擎原生 `XReplaceable.replaceAll`（`nativeTrackedReplaceAll`，150 命中 0.2s），它只能把「掐掉公共前后缀的中段」整块替换。`replaceAllIsSingleBlock(findText, replaceText)`（= `minimalEdits` 结果 ≤ 1 条）为 false 时（一句里两处散点改动）**不走原生路径**，改逐命中 `applyMinimalRedline`（命中 > 50 分批 + 进度 + 可取消）；单块差异（甲方→买方、我爱你→我恨你、纯插入）仍走快路径，大文档批量替换的性能不受影响。
   - **回退到整块的情形（不是 bug）**：旧/新文本含段落符或代理对（`goRight` 与 `getString` 的计数口径不一致）、纯插入到空 range、全量替换（脚本只有一条且覆盖整段）。
   - **模型层**：`DocumentEditTools.REDLINE_GRANULARITY_NOTE` 挂在五个替换类工具描述**末尾**，system prompt 第 7 节第 5 条同款——「未改动的文字逐字照抄原文，不要顺手改标点/润色」。引擎再细的 diff 也救不了模型把整句重新措辞。
+  - **三方合并的合并比对稿另有一套修订原语**（`build_merge_draft` / `merge_take_other`，dev-board#630）：两位律师的改动要在**同一条 worker 命令**里签成两个不同的作者。**入参/出参/失败 stage 与三条地雷见 `doc-editor.md` 的「三方合并的引擎原语」**，这里不重复。它们不在 AI 工具面上（宿主发起，`EDITOR_ACTIONS` 白名单），但共用 `applyMinimalRedline` / `setRedlineAuthor` 这两件，改颗粒度或署名逻辑时要顺手看一眼那一节。
   - **回归**：`frontend/tests/lowa-unit/minimalEdits.test.mjs`（`npm run test:lowa-unit`，抠 worker 纯函数在 node 里跑：我爱你→我恨你一删一插、一句三处改动三组片段、> 500 字段落首尾各一字只两条片段、随机小改动脚本套回恒等）；真引擎形态 lowa-e2e 组 11（含 `find_replace replaceAll` 三处散点、长段落、同段第二轮改动）；后端 `RedlineGranularityContractTest`（描述末位约束 + prompt 双语）。
 
 ## 核心数据流（以 doc_find_replace 为例）
