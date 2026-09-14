@@ -106,6 +106,8 @@
                 'is-event': row.kind === 'event',
                 'is-selected': selectedKeys.indexOf(row.key) >= 0,
                 'is-remote': row.kind === 'version' && row.entry.remote,
+                'has-merge': row.kind === 'version' && mergeLinesOf(row.entry).length > 0,
+                'is-flash': highlightKey === row.key,
               }"
               @tap="onRowTap(row, $event)"
             >
@@ -163,6 +165,13 @@
                     @tap.stop="showAutoSaves"
                   >{{ autoFoldedText(row.entry.autoCount) }}</text>
                 </view>
+                <!-- 合并说明（dev-board#630）：这一版自动合并了什么 / 逐处裁决了什么。
+                     行高随之变（.ch-row.has-merge 与 ROW_H_VERSION_MERGE 同时改）。 -->
+                <view
+                  v-for="(m, mi) in mergeLinesOf(row.entry)"
+                  :key="'m' + mi"
+                  class="ch-entry-merge"
+                >{{ m.text }}</view>
               </view>
             </view>
           </template>
@@ -206,6 +215,13 @@
             <text class="ch-detail-key">{{ $t('version.detailResolutions') }}</text>
             <view class="ch-detail-val">
               <view v-for="(line, i) in resolutionLines" :key="i" class="ch-resolution">{{ line }}</view>
+            </view>
+          </view>
+          <!-- 逐处裁决在列表行上是折叠的，详情区列全量（设计稿 §5.6） -->
+          <view v-if="selectedMergeLines.length" class="ch-detail-row">
+            <text class="ch-detail-key">{{ $t('version.detailMerges') }}</text>
+            <view class="ch-detail-val">
+              <view v-for="(m, i) in selectedMergeLines" :key="i" class="ch-resolution">{{ m.full }}</view>
             </view>
           </view>
 
@@ -286,6 +302,7 @@ import {
 } from '@/services/api.js'
 import { layoutGraph, laneCountOf } from '@/utils/historyGraph.js'
 import { mergeHistoryRows, groupRowsByDay, eventRowText, comparePaneState } from '@/utils/historyRows.js'
+import { historyMergeLines, resolutionLine } from '@/utils/historyMerges.js'
 import { createVersionActions } from '@/composables/useVersionActions.js'
 import { roleLabel } from '@/config/memberRoles.js'
 import AwdSelect from '@/components/AwdSelect.vue'
@@ -293,6 +310,9 @@ import AwdDatePicker from '@/components/AwdDatePicker.vue'
 
 const LANE_W = 16
 const ROW_H_VERSION = 46
+// 合并过文件的版本行多一行副标题（「自动合并了…」/「逐处裁决：…」）。泳道 SVG 按
+// rowHeight(row) 逐行画，所以这个常量与 .ch-row.has-merge 的 height 必须同时改。
+const ROW_H_VERSION_MERGE = 64
 const ROW_H_EVENT = 30
 
 export default {
@@ -309,6 +329,9 @@ export default {
     cloudLinked: { type: Boolean, default: false },
     // 页面上的协作动作/120 秒轮询完成后自增一次，本页据此重拉
     refreshToken: { type: Number, default: 0 },
+    // 从编辑器的溯源光标条点进来时带的那一版 sha（dev-board#632）：定位到它那一行并高亮。
+    // 折叠进工作段的自动存档不在默认清单里，本页会把自动存档拉进来再定位一次。
+    focusSha: { type: String, default: '' },
   },
   emits: ['compare-file', 'reload-files', 'changed', 'conflict'],
   data() {
@@ -329,6 +352,8 @@ export default {
       draftNaming: false, draftName: '',
       scrollIntoView: '',
       loadSeq: 0,
+      // 溯源点进来时高亮那一行 2 秒（只是「看这里」，不改变选中）
+      highlightKey: '',
     }
   },
   computed: {
@@ -428,22 +453,25 @@ export default {
       const [a, b] = this.orderedSelection()
       return `${this.shortOf(a)} → ${this.shortOf(b)}`
     },
+    // 整份三选一那几条。**方向按 mergeContext 翻译**：MAIN 在「结束工作撞车」语境里
+    // 是同事那边，旧文案一律说成「你这边」是反的（设计稿 §0 最后一条）。
+    // 老提交没有这条尾注，保持旧文案不追认。
     resolutionLines() {
-      const list = (this.selectedEntry && this.selectedEntry.resolutions) || []
-      return list.map((r) => {
-        const key = {
-          MAIN: 'version.resolutionKeptMain',
-          DRAFT: 'version.resolutionKeptDraft',
-          BOTH: 'version.resolutionKeptBoth',
-        }[r.kept] || 'version.resolutionKeptBoth'
-        return this.$t(key, { path: r.path })
-      })
+      const e = this.selectedEntry
+      const list = (e && e.resolutions) || []
+      const names = this.sideNamesOf(e)
+      return list.map((r) => resolutionLine((k, p) => this.$t(k, p), r, e && e.mergeContext, names))
+    },
+    // 选中那一版的合并说明，详情区列全量（列表行上是折叠版）
+    selectedMergeLines() {
+      return this.mergeLinesOf(this.selectedEntry)
     },
   },
   watch: {
     refreshToken() { this.reload({ keepSelection: true }) },
     focusToken() {
-      if (this.focus === 'remote') this.focusFirstRemote()
+      if (this.focusSha) this.focusBySha(this.focusSha)
+      else if (this.focus === 'remote') this.focusFirstRemote()
     },
     keyword() { this.debouncedReload() },
     fromDate() { this.reload() },
@@ -470,7 +498,7 @@ export default {
     })
   },
   mounted() {
-    this.reload({ focusRemote: this.focus === 'remote' })
+    this.reload({ focusRemote: this.focus === 'remote', focusSha: this.focusSha })
     this.loadFileOptions()
     // 键盘导航与窗口回到前台时刷新：都挂在 document/window 上——uni 会把 <view> 上的
     // 原生事件重建成普通对象，keydown 的 currentTarget 不是 DOM，拿不到容器做焦点判定。
@@ -492,6 +520,7 @@ export default {
     }
     if (typeof window !== 'undefined') window.removeEventListener('focus', this._onFocus)
     if (this._kwTimer) clearTimeout(this._kwTimer)
+    if (this._highlightTimer) clearTimeout(this._highlightTimer)
   },
   methods: {
     // ---------- 取数 ----------
@@ -513,7 +542,7 @@ export default {
      * 重拉。请求代次守卫与 VersionTimeline 同一条理由：筛选条件连着改时，先发的那次
      * 若后回，会把已经渲染好的结果覆盖成旧的过滤结果，而界面上的筛选器显示的是新条件。
      */
-    async reload({ keepSelection = false, focusRemote = false } = {}) {
+    async reload({ keepSelection = false, focusRemote = false, focusSha = '' } = {}) {
       const seq = ++this.loadSeq
       this.loading = true
       this.loadError = false
@@ -530,7 +559,8 @@ export default {
         this.collectAuthors()
         if (!keepSelection) this.selectedKeys = []
         this.loading = false
-        if (focusRemote) this.$nextTick(() => this.focusFirstRemote())
+        if (focusSha) this.$nextTick(() => this.focusBySha(focusSha))
+        else if (focusRemote) this.$nextTick(() => this.focusFirstRemote())
       } catch (e) {
         if (seq !== this.loadSeq) return
         console.warn('[History] 读取历史失败', e)
@@ -722,6 +752,30 @@ export default {
       this.scrollIntoView = ''
       this.$nextTick(() => { this.scrollIntoView = this.rowDomId(row) })
     },
+    /**
+     * 溯源点进来：定位到这一版那一行，选中并高亮 2 秒。
+     *
+     * 折叠进工作段的自动存档默认不在清单里（includeAuto=false），所以找不到时先把
+     * 自动存档拉进来再找一次——律师点的是「这一段是哪一版改的」，那一版恰好是一次
+     * 自动存档时，「点了没反应」是最糟的回答。只重试一次，避免打转。
+     */
+    focusBySha(sha, retried = false) {
+      const key = String(sha || '')
+      if (!key) return
+      const row = this.displayRows.find((r) => r.kind === 'version' && r.entry.sha === key)
+      if (!row) {
+        if (retried || this.includeAuto) return
+        this.includeAuto = true
+        this.reload().then(() => this.focusBySha(key, true))
+        return
+      }
+      this.selectedKeys = [row.key]
+      this.scrollIntoView = ''
+      this.highlightKey = row.key
+      clearTimeout(this._highlightTimer)
+      this._highlightTimer = setTimeout(() => { this.highlightKey = '' }, 2000)
+      this.$nextTick(() => { this.scrollIntoView = this.rowDomId(row) })
+    },
     // uni <scroll-view> 的 scroll-into-view 对 id 形状有硬要求（不合法只 console.error），
     // sha 与事件 id 里可能有非法字符，统一换下划线（同 fileOpenTabs.tabDomId）。
     rowDomId(row) {
@@ -730,7 +784,10 @@ export default {
 
     // ---------- 泳道图 ----------
     laneX(lane) { return lane * LANE_W + LANE_W / 2 },
-    rowHeight(row) { return row.kind === 'event' ? ROW_H_EVENT : ROW_H_VERSION },
+    rowHeight(row) {
+      if (row.kind === 'event') return ROW_H_EVENT
+      return this.mergeLinesOf(row.entry).length ? ROW_H_VERSION_MERGE : ROW_H_VERSION
+    },
     /** 上半段=进线（上一条版本行的出线落点），下半段=本行出线；事件行两段都是过路线。 */
     graphSegments(row) {
       const g = row.graph
@@ -756,6 +813,24 @@ export default {
 
     // ---------- 行文案 ----------
     titleOf(e) { return e.title || e.message || '' },
+    /**
+     * 两侧各叫什么：能从双亲提交查到那一侧尖端的作者就用作者名，否则用语境默认词
+     * （设计稿 §5.6）。**本人那一侧不替换成自己的名字**——界面说「你这边」比说
+     * 「韩泽伟这边」贴切，也与状态条一贯的口径一致。
+     */
+    sideNamesOf(e) {
+      const parents = (e && Array.isArray(e.parents)) ? e.parents : []
+      const nameAt = (i) => {
+        const p = this.entries.find((x) => x.sha === parents[i])
+        if (!p || p.self) return ''
+        return (p.authorName || '').trim()
+      }
+      return { main: nameAt(0), other: nameAt(1) }
+    },
+    mergeLinesOf(e) {
+      if (!e || !e.merges || !e.merges.length) return []
+      return historyMergeLines((k, p) => this.$t(k, p), e, this.sideNamesOf(e))
+    },
     authorText(e) {
       const name = (e.authorName || '').trim() || this.$t('version.unnamedColleague')
       return e.self ? this.$t('version.authorYou', { name }) : name
@@ -975,6 +1050,11 @@ export default {
   padding-right: 14px; cursor: pointer;
 }
 .ch-row.is-event { height: 30px; background: var(--awd-bg); }
+/* 行高与 ROW_H_VERSION_MERGE 同源：泳道 SVG 按它画，一边改另一边不改线就接不上 */
+.ch-row.has-merge { height: 64px; }
+/* 溯源点进来时的 2 秒「看这里」。不是选中态，所以用描边而不是底色，
+   免得与 .is-selected 的底色叠成看不出哪行被选中。 */
+.ch-row.is-flash { box-shadow: inset 0 0 0 1.5px var(--awd-accent); }
 .ch-row:hover { background: var(--awd-surface-2); }
 .ch-row.is-selected { background: var(--awd-accent-wash); }
 .ch-row.is-remote .ch-title { font-style: italic; }
@@ -1019,6 +1099,10 @@ export default {
 .ch-time, .ch-shortid { font-size: 11px; color: var(--awd-text-3); flex-shrink: 0; }
 .ch-shortid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .ch-autos { font-size: 11px; color: var(--awd-accent-text); text-decoration: underline; flex-shrink: 0; }
+.ch-entry-merge {
+  font-size: 11px; color: var(--awd-text-3); line-height: 16px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 
 /* ---- 详情 ---- */
 .ch-empty-btn { align-self: flex-start; }

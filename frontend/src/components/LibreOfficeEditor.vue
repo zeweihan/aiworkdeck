@@ -66,6 +66,18 @@
       @changed="onDocModified"
       @ui-state="$emit('menu-state')"
     />
+    <!-- 溯源光标条（dev-board#632）：光标停在哪一段，这里就说这一段最后是谁、
+         哪一版、什么时候改的。点一下跳到提交历史并高亮那一行。
+         画布是 webview/iframe，里面没有逐段 DOM，做不了 Word 那种悬停提示——
+         产品口径因此是「光标条 + 侧栏」，不是悬停（设计稿 §5.5）。 -->
+    <view v-if="provenanceBarVisible" class="libre-prov-bar">
+      <text v-if="provScopeLabel" class="libre-prov-scope">{{ provScopeLabel }}</text>
+      <text
+        class="libre-prov-text"
+        :class="{ clickable: !!provSha }"
+        @tap="openProvenanceHistory"
+      >{{ provText }}</text>
+    </view>
     <!-- review-overview-open：审阅概览现在浮在画布右侧（不挤宽画布），画布上的
          宿主浮层据此让出面板宽度，见样式 .libre-review-overview 之后那一段。 -->
     <view class="libre-body" :class="{ 'review-overview-open': reviewOverviewShown }">
@@ -122,6 +134,8 @@
         :project-id="projectId"
         :doc-file-id="file && file.id"
         :self-author="selfAuthor"
+        :provenance="provenanceForPanel"
+        @open-history="openProvenanceHistory"
         @close="reviewOpen = false"
         @changed="onReviewChanged"
         @locate="onEvidenceLocate"
@@ -161,8 +175,9 @@ import { stampApplication } from '@/utils/docxAppProps.js'
 import { documentStampApplication } from '@/utils/documentGeneratorSetting.js'
 import { createInlineReviewHost } from '@/composables/inlineReviewHost.js'
 import { createWritingAssistanceHost } from '@/composables/writingAssistanceHost.js'
-import { reviewDocInsight, listWritingCompletions, learnWritingCompletions, deleteWritingCompletion, clearWritingCompletions, lookupWritingSelection, getDocInsightEntity, getWritingCompletionDetail } from '@/services/api.js'
+import { getProvenance, reviewDocInsight, listWritingCompletions, learnWritingCompletions, deleteWritingCompletion, clearWritingCompletions, lookupWritingSelection, getDocInsightEntity, getWritingCompletionDetail } from '@/services/api.js'
 import { guestPointToHost } from '@/utils/insightPopup.js'
+import { alignProvenance, provenanceLabel, provenanceSummary } from '@/utils/provenanceAlign.js'
 
 let seq = 0
 
@@ -184,7 +199,7 @@ export default {
   // open-insight：行内写作提示 → 宿主打开「依据」窗格；不自动调用 AI 或外部库。
   // cursor-context：画布点击/光标移动时客体页回传的光标邻域（仅在 insightSubscribed
   //   为真时才产生——不订阅时客体页一条都不发，常态零开销）。
-  emits: ['close', 'ready', 'open-url', 'menu-state', 'evidence-drop', 'locator-consumed', 'open-evidence-target', 'command-progress', 'open-insight', 'cursor-context'],
+  emits: ['close', 'ready', 'open-url', 'menu-state', 'evidence-drop', 'locator-consumed', 'open-evidence-target', 'command-progress', 'open-insight', 'cursor-context', 'open-history'],
   props: {
     // Track D: the Office file to load into the editor ({ id, name, fileType,
     // wpsFileId }). When set, the editor fetches its bytes (authed) and loads the
@@ -259,6 +274,18 @@ export default {
       bootFailReason: '',
       // 改字 stale 提示条当前展示的条目 [{linkKey, text, link}]（合并规则见 StaleQueue）
       staleItems: [],
+      // 逐段溯源（dev-board#632）。provUnits 是后端按历史算好的「每个单元最后是哪一版
+      // 改的」，provRows 是它对到画布此刻段序之后的结果（对齐在 utils/provenanceAlign.js）。
+      // 没开版本记录 / 老服务端 / 拉失败时 provLoaded 恒为 false，整条界面静默不出现——
+      // 溯源是锦上添花，不该在编辑器里弹错。
+      provLoaded: false,
+      provLoading: false,
+      provUnits: [],
+      provTruncated: false,
+      provRows: [],
+      provUnit: null,
+      // 光标不在正文段落上（表格里、页眉里）时说不出这一段归谁，整条收起来
+      provInBody: true,
     }
   },
   computed: {
@@ -286,6 +313,32 @@ export default {
     },
     bootStageText() {
       return this.$t('editor.boot.' + this.bootStageKey)
+    },
+    // ---- 溯源 ----
+    provenanceBarVisible() {
+      return !!(this.ready && this.file && !this.loadingOverlayVisible && this.provLoaded && this.provInBody)
+    },
+    provScopeLabel() {
+      if (this.docKind === 'calc') return this.$t('version.provenanceCellLabel')
+      if (this.docKind === 'impress') return this.$t('version.provenanceSlideLabel')
+      return ''
+    },
+    provText() {
+      if (this.provLoading && !this.provUnit) return this.$t('version.provenanceLoading')
+      return provenanceLabel((k, p) => this.$t(k, p), this.provUnit)
+    },
+    provSha() {
+      return (this.provUnit && this.provUnit.sha) || ''
+    },
+    // 侧栏「溯源」标签的数据。null = 这份文件没有溯源可看，标签整个不出现。
+    provenanceForPanel() {
+      if (!this.provLoaded) return null
+      return {
+        rows: this.provRows,
+        summary: provenanceSummary((k, p) => this.$t(k, p), this.provRows),
+        truncated: this.provTruncated,
+        loading: this.provLoading,
+      }
     },
     loadingOverlayVisible() {
       // 「仅桌面版可用」是终态（h5 预览等场景），不是加载中——不展示进度面板。
@@ -327,7 +380,7 @@ export default {
     // 菜单栏读勾选/置灰的三个信号。合并在这个 watch 里而不是另起一块——
     // 选项对象里两个同名 key，后写的会把先写的整个覆盖掉。
     reviewOpen() { this.$emit('menu-state') },
-    ready(v) { this.$emit('menu-state'); if (v) { this.consumeLocator(); this.pushInsightSub(); this.pushTheme() } },
+    ready(v) { this.$emit('menu-state'); if (v) { this.consumeLocator(); this.pushInsightSub(); this.pushTheme(); this.loadProvenance() } },
     // 「依据」窗格开合 → 客体页的光标上报订阅（dev-board#182）
     insightSubscribed() { this.pushInsightSub() },
     docKind() { this.$emit('menu-state'); this.initWritingAssistance() },
@@ -372,6 +425,10 @@ export default {
     }
   },
   beforeUnmount() {
+    clearTimeout(this._provCursorTimer)
+    clearTimeout(this._provReloadTimer)
+    clearTimeout(this._provRetryTimer)
+    this._provSeq = (this._provSeq || 0) + 1
     if (this._writingHost) { this._writingHost.destroy(); this._writingHost = null }
     if (this._inlineReviewHost) { this._inlineReviewHost.destroy(); this._inlineReviewHost = null }
     uni.$off('file-drag-start', this._onEvidenceDragStart)
@@ -822,6 +879,9 @@ export default {
             // 插件事件通道（规范 v2.7）：PluginPane 按订阅转发 selection.changed（自带节流）。
             // payload 只给 fileId——选区内容由插件经 doc.exec get_selection 按 editor 权限拉取
             uni.$emit('awd:selection-changed', { fileId: this.file && this.file.id })
+            // 溯源光标条跟着光标走（设计稿 §5.5）。节流：光标条是只读的一句话，
+            // 没必要跟每一次方向键抢 office 线程。
+            this.scheduleProvenanceCursor()
           }
         } else if (msg.type === 'evidence-drop') {
           this.onGuestEvidenceDrop(msg.payload)
@@ -1235,6 +1295,8 @@ export default {
         this.initWritingAssistance()
         // 换进来的是另一个版本的文档，锚点要重新结账
         this.scheduleAnchorCheck()
+        // 溯源同理：画布上已经是另一版了，旧的段落归属一条都不作数
+        this.loadProvenance()
       }
     },
     // Authed binary fetch — same XHR auth pattern as FilePreview.fetchAuthedBlob,
@@ -1498,6 +1560,116 @@ export default {
         ])
       } finally { clearTimeout(timer) }
     },
+    // ================= 逐段溯源（dev-board#632） =================
+    // 数据流：后端按历史算好「每个单元最后是哪一版改的」→ 这里对到画布此刻的段序
+    // → 光标条与侧栏「溯源」标签。对齐必须做：后端的段序是**落版那一刻**的，律师
+    // 手上还没保存的插入/删除会把它推着漂，按 key 硬对会把名字贴到邻段头上。
+
+    /** 只读命令的薄封装：溯源整条是锦上添花，任何失败都只让它静默，不打扰编辑。 */
+    async provRun(action, params) {
+      if (!this.executor) return null
+      try {
+        const r = await this.executor.executeCommand(action, params || {})
+        return (r && r.success === false) ? null : r
+      } catch (e) { return null }
+    },
+    async loadProvenance() {
+      const f = this.file
+      if (!this.ready || !f || !f.id || !this.projectId || this.docLoadFailed) return
+      this._provSeq = (this._provSeq || 0) + 1
+      const seq = this._provSeq
+      this.provLoading = true
+      try {
+        const res = await getProvenance(this.projectId, f.id)
+        if (seq !== this._provSeq) return
+        const d = (res && res.data) || {}
+        // 后端还在算（首次对着老文件回溯几百版）：3 秒后再问一次，界面先说「正在查」。
+        if (d.computing) {
+          clearTimeout(this._provRetryTimer)
+          this._provRetryTimer = setTimeout(() => { if (seq === this._provSeq) this.loadProvenance() }, 3000)
+          return
+        }
+        this.provUnits = Array.isArray(d.units) ? d.units : []
+        this.provTruncated = !!d.truncated
+        this.provLoaded = true
+        await this.alignProvenanceRows(seq)
+      } catch (e) {
+        if (seq !== this._provSeq) return
+        // 没开版本记录 / 老服务端 / 这份文件还没进过版本：整条静默收起，不弹错。
+        this.provLoaded = false
+        this.provUnits = []
+        this.provRows = []
+        this.provUnit = null
+      } finally {
+        if (seq === this._provSeq) this.provLoading = false
+      }
+    },
+    /** 落版之后重拉（保存成功 / 宿主重载）。防抖：连着敲字会连着保存好几笔。 */
+    scheduleProvenanceReload() {
+      if (!this.projectId) return
+      clearTimeout(this._provReloadTimer)
+      this._provReloadTimer = setTimeout(() => this.loadProvenance(), 5000)
+    },
+    /** 引擎那一侧的全量正文段落（get_document_text 有 500 段 / 15000 字两道预算，要翻页）。 */
+    async fetchAllParagraphs() {
+      const out = []
+      let start = 0
+      for (let guard = 0; guard < 40; guard++) {
+        const r = await this.provRun('get_document_text', { startParagraph: start, maxParagraphs: 500 })
+        if (!r) break
+        for (const para of r.paragraphs || []) out.push({ index: para.index, text: para.text })
+        const next = Number(r.nextStartParagraph)
+        if (!r.truncated || !Number.isFinite(next) || next <= start) break
+        start = next
+      }
+      return out
+    },
+    async alignProvenanceRows(seq) {
+      if (this.docKind !== 'writer') { this._provMap = null; this.provRows = []; await this.updateProvenanceCursor(); return }
+      const paragraphs = await this.fetchAllParagraphs()
+      if (seq != null && seq !== this._provSeq) return
+      const map = alignProvenance(this.provUnits, paragraphs)
+      this._provMap = map
+      this.provRows = paragraphs.map((para) => ({
+        index: para.index, text: para.text, unit: map.get(para.index) || null,
+      }))
+      await this.updateProvenanceCursor()
+    },
+    scheduleProvenanceCursor() {
+      if (!this.provLoaded) return
+      clearTimeout(this._provCursorTimer)
+      this._provCursorTimer = setTimeout(() => this.updateProvenanceCursor(), 250)
+    },
+    /** 光标停在哪个单元上 → 那个单元的出处。表格/演示各有各的问法（设计稿 §5.5）。 */
+    async updateProvenanceCursor() {
+      if (!this.provLoaded || !this.executor) return
+      if (this.docKind === 'calc') {
+        const r = await this.provRun('sheet_get_active_cell')
+        const key = r && r.address ? `${r.sheet || ''}!${r.address}` : ''
+        this.provInBody = !!key
+        this.provUnit = key ? (this.provUnits.find((u) => u && u.key === key) || null) : null
+        return
+      }
+      if (this.docKind === 'impress') {
+        const n = Number((await this.provRun('slide_get_current') || {}).slideNumber)
+        this.provInBody = Number.isFinite(n) && n > 0
+        this.provUnit = this.provInBody ? (this.provUnits.find((u) => u && u.key === 's' + n) || null) : null
+        return
+      }
+      const ctx = await this.provRun('get_review_context')
+      const idx = Number(ctx && ctx.paragraphIndex)
+      // paraKey 为负 = 光标不在正文段落里（表格内、页眉页脚）。这时候说不出这一段
+      // 归谁，整条收起来——比说一句「本机未保存的改动」诚实。
+      this.provInBody = Number.isFinite(idx) && idx >= 0
+      this.provUnit = (this.provInBody && this._provMap) ? (this._provMap.get(idx) || null) : null
+    },
+    /** 点光标条 / 侧栏里的某一版 → 提交历史标签页定位到那一行。 */
+    openProvenanceHistory(payload) {
+      const sha = (payload && payload.sha) || this.provSha
+      if (!sha) return
+      this.$emit('open-history', { sha, fileId: this.file && this.file.id })
+    },
+
     // Track E: save — export the edited document from the worker (storeToURL →
     // bytes) and persist via the backend upload endpoint (same fileId contract
     // as the download the document was loaded from). Autosave calls this;
@@ -1552,6 +1724,8 @@ export default {
         this.appendLog('  ← saved to backend (fileId=' + fileId + ')')
         this._savePaused = false
         this.statusKey = prevStatusKey
+        // 这一笔落到后端之后才会被防抖的 commitNow 收成一版——溯源等它一会儿再重拉。
+        this.scheduleProvenanceReload()
         return true
       } catch (e) {
         this.statusKey = 'saveFailed'
@@ -1624,6 +1798,20 @@ export default {
 .libre-host { width: 100%; height: 100%; }
 /* Explicit review overview overlays the native gutter without shrinking the canvas. */
 .libre-review-overview { position: absolute; top: 0; right: 0; bottom: 0; z-index: 30; max-width: 100%; box-shadow: -8px 0 24px #00000018; }
+/* 溯源光标条：工具栏下面一条细带，右对齐一句「谁 · 哪天 · 哪一版」。
+   浅色外壳，不抢戏；能点的时候才给下划线与手型。 */
+.libre-prov-bar {
+  display: flex; align-items: center; justify-content: flex-end; gap: 6px;
+  height: 22px; flex-shrink: 0; padding: 0 10px; box-sizing: border-box;
+  background: var(--awd-bg); border-bottom: 1px solid var(--awd-border-subtle);
+}
+.libre-prov-scope { font-size: 11px; color: var(--awd-text-3); flex-shrink: 0; }
+.libre-prov-text {
+  font-size: 11px; color: var(--awd-text-2); min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.libre-prov-text.clickable { color: var(--awd-accent-text); text-decoration: underline; cursor: pointer; }
+
 /* 概览打开时，画布上的宿主浮层让出面板那 288px（= ReviewPanel .rp 的宽度），画布本身
    不挤宽。不让的话：保存失败的「重试」、改字 stale 条右侧的 保留/打开/忽略、拖拽关联
    投放框的右半边与居中提示都被压在面板底下，看不见也点不到。 */

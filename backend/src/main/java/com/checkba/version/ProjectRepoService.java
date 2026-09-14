@@ -5,6 +5,8 @@ package com.checkba.version;
 
 import com.checkba.service.LocalIdentityService;
 import com.checkba.storage.ProjectStorageResolver;
+import com.checkba.version.merge.Decision;
+import com.checkba.version.merge.MergeRecord;
 import org.eclipse.jgit.api.CreateBranchCommand;
 import org.eclipse.jgit.api.DiffCommand;
 import org.eclipse.jgit.api.Git;
@@ -46,7 +48,9 @@ import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -54,6 +58,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 每项目一个 Git 仓库的薄封装。只认识 Git 概念，不认识「工作段」——
@@ -110,6 +115,16 @@ public class ProjectRepoService {
     }
 
     private final ProjectStorageResolver storageResolver;
+
+    /**
+     * 逐段溯源的预算钩子（spec 2026-09-14 §4.7）。{@code ObjectProvider} 而不是直接注入：
+     * {@code ProvenanceService} 反过来依赖本类，直接注入就成了构造期的循环依赖；
+     * 用惰性取用把这个环拆开，本类照旧只依赖 {@code ProjectStorageResolver} 一个东西。
+     * 取不到（手工 new 的测试）时预算整条静默跳过——溯源算不算得出来，与提交成不成功无关。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.beans.factory.ObjectProvider<com.checkba.version.merge.ProvenanceService>
+            provenanceServiceProvider;
 
     public ProjectRepoService(ProjectStorageResolver storageResolver) {
         this.storageResolver = storageResolver;
@@ -274,6 +289,22 @@ public class ProjectRepoService {
      * {@link #encodeResolutionPath}。
      */
     private static final String RESOLUTIONS_TRAILER = "X-AWD-Resolutions: ";
+    /**
+     * 这一次裁决的语境（spec 2026-09-14 §4.6）：{@code adopt|cloud|session-end}。
+     * 所有裁决提交都写（**含只有整份三选一、一处逐段合并都没有的**）：裁决尾注里只有裸的
+     * MAIN/DRAFT，同一个标签在三语境里指向的物理侧完全不同，没有这一行，提交历史就只能
+     * 把「留了你这边」猜着写，结束工作撞车那一档会把话说反。
+     */
+    private static final String MERGE_CONTEXT_TRAILER = "X-AWD-Merge-Context: ";
+    /**
+     * 三方合并的逐文件记录（spec 2026-09-14 §4.6）：
+     * {@code <path>=<mode>:<list>; ...}，按路径排序；{@code mode} ∈ {@code auto|manual}，
+     * {@code auto} 的 list 是 {@code M<n>,T<m>}（两边各合入几处），
+     * {@code manual} 的 list 是逐处 {@code <key><side><action>} 用 {@code ,} 连接
+     * （{@code X}/{@code F} 没有 side，写成 {@code p9X}、{@code p20F}）。
+     * 只有整份三选一的裁决不带这条尾注。
+     */
+    private static final String MERGES_TRAILER = "X-AWD-Merges: ";
 
     /**
      * {@code .git/index.lock} 陈旧锁的判定阈值。commitAll/commitNow 等一切改仓库状态的
@@ -378,9 +409,31 @@ public class ProjectRepoService {
                     .setAllowEmpty(true) // 体积过滤可能导致"这一轮只有跳过记录、树没变化"，仍要落一笔可追溯的提交
                     .setAuthor(authorName, authorEmail)
                     .call();
+            List<String> touched = new ArrayList<>(okNew);
+            touched.addAll(okTracked);
+            precomputeProvenance(projectId, c.getName(), touched);
             return c.getName();
         } catch (Exception e) {
             throw new VersionException("提交失败: project=" + projectId, e);
+        }
+    }
+
+    /**
+     * 这一版落定之后，把本次动过的文档的逐段溯源在后台先算好（spec 2026-09-14 §4.7）。
+     *
+     * <p>整段包在 try/catch 里，而且只在提交**已经成功**之后调：裁决窗口是数据安全窗口，
+     * 一个只为侧栏提速的旁路绝不能把律师刚刚裁决完的提交推回去。
+     */
+    private void precomputeProvenance(long projectId, String sha, Collection<String> relPaths) {
+        try {
+            if (provenanceServiceProvider == null || sha == null || relPaths == null || relPaths.isEmpty()) {
+                return;
+            }
+            com.checkba.version.merge.ProvenanceService provenance = provenanceServiceProvider.getIfAvailable();
+            if (provenance == null) return;
+            provenance.precomputeAsync(projectId, sha, new ArrayList<>(new LinkedHashSet<>(relPaths)));
+        } catch (Exception e) {
+            log.debug("预算逐段溯源失败（不影响提交）: project={} sha={}", projectId, sha, e);
         }
     }
 
@@ -754,7 +807,9 @@ public class ProjectRepoService {
                 note,
                 parents,
                 milestones.get(c.getName()),
-                parseResolutions(extractTrailer(full, RESOLUTIONS_TRAILER)));
+                parseResolutions(extractTrailer(full, RESOLUTIONS_TRAILER)),
+                extractTrailer(full, MERGE_CONTEXT_TRAILER),
+                parseMerges(extractTrailer(full, MERGES_TRAILER)));
     }
 
     private String extractTrailer(String fullMessage, String prefix) {
@@ -829,6 +884,162 @@ public class ProjectRepoService {
                     item.substring(at + 1).trim()));
         }
         return out;
+    }
+
+    // ==================== 三方合并尾注（spec 2026-09-14 §4.6） ====================
+
+    /**
+     * 逐处裁决清单的条数上限。提交说明是每次 {@code git log} 都要整条读出来的东西，
+     * 一份 800 段的长文书逐处记下去能把一条说明撑到几十 KB；超出的部分记个总数
+     * （{@code +N}）就够——这一行是给律师看的说明，不是可回放的操作日志。
+     */
+    static final int MERGES_TRAILER_MAX_ITEMS = 500;
+
+    private static final Set<String> MERGE_MODES = Set.of("auto", "manual");
+    /**
+     * 三个裁决语境的字面量（spec 2026-09-14 §4.6）。写进用户产物的提交尾注，
+     * 三个调用点（采纳 / 云端取回 / 结束工作）各拿一个，别再各自写字符串。
+     */
+    public static final String MERGE_CONTEXT_ADOPT = "adopt";
+    public static final String MERGE_CONTEXT_CLOUD = "cloud";
+    public static final String MERGE_CONTEXT_SESSION_END = "session-end";
+
+    private static final Set<String> MERGE_CONTEXTS =
+            Set.of(MERGE_CONTEXT_ADOPT, MERGE_CONTEXT_CLOUD, MERGE_CONTEXT_SESSION_END);
+    private static final Set<String> DECISION_ACTIONS = Set.of("A", "R", "X", "F");
+    private static final Set<String> DECISION_SIDES = Set.of("M", "T");
+
+    /**
+     * {@code <path>=<mode>:<list>; ...} 尾注文本，空表/全是脏数据回 null
+     * （只有整份三选一的裁决不带这条）。顺序按路径排序，与
+     * {@link #resolutionsTrailerValue} 同一个理由：同一次合并在任何机器上生成同一行文本。
+     */
+    static String mergesTrailerValue(List<MergeRecord> merges) {
+        if (merges == null || merges.isEmpty()) return null;
+        List<MergeRecord> sorted = merges.stream()
+                .filter(m -> m != null && m.path() != null && !m.path().isBlank()
+                        && m.mode() != null && MERGE_MODES.contains(m.mode()))
+                .sorted(Comparator.comparing(MergeRecord::path))
+                .toList();
+        StringBuilder sb = new StringBuilder();
+        for (MergeRecord m : sorted) {
+            String list = "auto".equals(m.mode())
+                    ? "M" + Math.max(0, m.mainCount()) + ",T" + Math.max(0, m.otherCount())
+                    : manualDecisionList(m.decisions());
+            if (sb.length() > 0) sb.append("; ");
+            sb.append(encodeResolutionPath(m.path())).append('=')
+              .append(m.mode()).append(':').append(list);
+        }
+        return sb.length() == 0 ? null : sb.toString();
+    }
+
+    /** 逐处裁决：{@code p3MA,p7TA,p9X,p20F}，超过上限截断并追加 {@code +N}。 */
+    private static String manualDecisionList(List<Decision> decisions) {
+        if (decisions == null || decisions.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        int written = 0;
+        int skipped = 0;
+        for (Decision d : decisions) {
+            String one = decisionItem(d);
+            if (one == null) continue;              // 脏数据不写进用户产物
+            if (written >= MERGES_TRAILER_MAX_ITEMS) { skipped++; continue; }
+            if (sb.length() > 0) sb.append(',');
+            sb.append(one);
+            written++;
+        }
+        if (skipped > 0) {
+            if (sb.length() > 0) sb.append(',');
+            sb.append('+').append(skipped);
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 一处裁决的写法：{@code <key><side><action>}。{@code X}（律师自己改的）与
+     * {@code F}（另一边只改了格式）没有侧别。side/action 不合法的条目回 null 被丢掉——
+     * 写进去的是用户产物，宁可少记一条，也不能留一条解不回来的。
+     */
+    private static String decisionItem(Decision d) {
+        if (d == null || d.key() == null || d.key().isBlank()) return null;
+        String action = d.action() == null ? "" : d.action().trim();
+        if (!DECISION_ACTIONS.contains(action)) return null;
+        String side = d.side() == null ? "" : d.side().trim();
+        if ("A".equals(action) || "R".equals(action)) {
+            if (!DECISION_SIDES.contains(side)) return null;
+        } else {
+            side = "";
+        }
+        return encodeMergeKey(d.key()) + side + action;
+    }
+
+    /**
+     * 单元键的编码：路径那五个字符之外再加一个 {@code ,}（逐处清单的分隔符）。
+     * 正常的键（{@code p12}/{@code t1.2.3}/{@code s3}/{@code Sheet1!B7}）一个字符都不会变，
+     * 这层只是防工作表名里带分隔符时把一行截成几条假记录。逆运算与路径共用
+     * {@link #decodeResolutionPath}（{@code %2C} 也是合法的 %XX）。
+     */
+    private static String encodeMergeKey(String key) {
+        return encodeResolutionPath(key).replace(",", "%2C");
+    }
+
+    /** 尾注文本 → 逐文件合并记录；没有这条尾注（只有整份三选一/普通存档）回空列表。 */
+    static List<VersionEntry.MergeSummary> parseMerges(String trailerValue) {
+        if (trailerValue == null || trailerValue.isBlank()) return List.of();
+        List<VersionEntry.MergeSummary> out = new ArrayList<>();
+        for (String part : trailerValue.split(";")) {
+            String item = part.trim();
+            if (item.isEmpty()) continue;
+            // 路径里的 = 已经编码成 %3D，所以第一个 = 就是分隔符；mode 到第一个 : 为止
+            int at = item.indexOf('=');
+            if (at <= 0 || at == item.length() - 1) continue;
+            String path = decodeResolutionPath(item.substring(0, at));
+            String rest = item.substring(at + 1);
+            int colon = rest.indexOf(':');
+            if (colon <= 0) continue;
+            String mode = rest.substring(0, colon).trim();
+            String list = rest.substring(colon + 1).trim();
+            if ("auto".equals(mode)) {
+                int mainCount = 0;
+                int otherCount = 0;
+                for (String tok : list.split(",")) {
+                    String t = tok.trim();
+                    if (t.length() < 2) continue;
+                    try {
+                        int n = Integer.parseInt(t.substring(1));
+                        if (t.charAt(0) == 'M') mainCount = n;
+                        else if (t.charAt(0) == 'T') otherCount = n;
+                    } catch (NumberFormatException ignored) {
+                        // 手工改花了的尾注：这一项不算数，别让整条历史读不出来
+                    }
+                }
+                out.add(new VersionEntry.MergeSummary(path, "auto", List.of(), mainCount, otherCount));
+            } else if ("manual".equals(mode)) {
+                List<Decision> decisions = new ArrayList<>();
+                for (String tok : list.split(",")) {
+                    Decision d = parseDecisionItem(tok.trim());
+                    if (d != null) decisions.add(d);
+                }
+                out.add(new VersionEntry.MergeSummary(path, "manual", List.copyOf(decisions), 0, 0));
+            }
+        }
+        return out;
+    }
+
+    /** {@link #decisionItem} 的逆运算；{@code +7}（截断计数）不是一处裁决，回 null。 */
+    private static Decision parseDecisionItem(String item) {
+        if (item.isEmpty() || item.charAt(0) == '+') return null;
+        String action = item.substring(item.length() - 1);
+        if (!DECISION_ACTIONS.contains(action)) return null;
+        String head = item.substring(0, item.length() - 1);
+        String side = "";
+        if ("A".equals(action) || "R".equals(action)) {
+            if (head.isEmpty()) return null;
+            side = head.substring(head.length() - 1);
+            if (!DECISION_SIDES.contains(side)) return null;
+            head = head.substring(0, head.length() - 1);
+        }
+        if (head.isEmpty()) return null;
+        return new Decision(decodeResolutionPath(head), side, action);
     }
 
     /**
@@ -1264,11 +1475,44 @@ public class ProjectRepoService {
     public String commitMergeResolution(long projectId, String message,
                                         Map<String, String> resolutions,
                                         String authorName, String authorEmail) {
+        return commitMergeResolution(projectId, message, resolutions, null, null,
+                authorName, authorEmail);
+    }
+
+    /**
+     * 三方合并那一档（spec 2026-09-14 §4.6）：在裁决清单之外再记下
+     * <b>这一次是在哪个语境里裁决的</b>（{@code mergeContext} ∈ {@code adopt|cloud|session-end}）
+     * 与 <b>哪些文件是逐处合并的</b>（{@code merges}）。
+     *
+     * <p>语境这一行是所有裁决提交都写的，包括这一版只有整份三选一的：裁决尾注里只有裸的
+     * MAIN/DRAFT，同一个标签在三语境里指向的物理侧完全不同（方向表见 version-control.md），
+     * 没有它，提交历史只能把「留了你这边」猜着写，结束工作撞车那一档会把话说反。
+     * 语境值不在三个之内时只记一条 warn 并跳过这一行——**不为一行说明把律师的裁决提交打回去**，
+     * 裁决窗口里提交失败的代价比少一行尾注大得多。
+     */
+    public String commitMergeResolution(long projectId, String message,
+                                        Map<String, String> resolutions,
+                                        List<MergeRecord> merges, String mergeContext,
+                                        String authorName, String authorEmail) {
         try (Repository repo = open(projectId); Git git = new Git(repo)) {
             RepositoryState st = repo.getRepositoryState();
             if (st != RepositoryState.MERGING && st != RepositoryState.MERGING_RESOLVED) {
                 throw new VersionException("当前不在合并冲突状态: project=" + projectId);
             }
+            // 这一次裁决动了哪些路径——要在 add 之前问，add 完索引就干净了。
+            // 只为后面的溯源预算用；读不到就算了，不为一个旁路让裁决提交多一条失败路径。
+            Set<String> touched = new LinkedHashSet<>();
+            try {
+                Status before = git.status().call();
+                touched.addAll(before.getConflicting());
+                touched.addAll(before.getModified());
+                touched.addAll(before.getChanged());
+                touched.addAll(before.getUntracked());
+                touched.addAll(before.getAdded());
+            } catch (Exception e) {
+                log.debug("裁决提交前读工作区状态失败（只影响溯源预算）: project={}", projectId, e);
+            }
+
             git.add().addFilepattern(".").call();
             git.add().addFilepattern(".").setUpdate(true).call();
 
@@ -1277,10 +1521,22 @@ public class ProjectRepoService {
             if (resolutionLine != null) {
                 fullMessage = fullMessage + "\n" + RESOLUTIONS_TRAILER + resolutionLine;
             }
+            if (mergeContext != null && !mergeContext.isBlank()) {
+                if (MERGE_CONTEXTS.contains(mergeContext.trim())) {
+                    fullMessage = fullMessage + "\n" + MERGE_CONTEXT_TRAILER + mergeContext.trim();
+                } else {
+                    log.warn("未知的裁决语境，这一版不写语境尾注: project={} ctx={}", projectId, mergeContext);
+                }
+            }
+            String mergesLine = mergesTrailerValue(merges);
+            if (mergesLine != null) {
+                fullMessage = fullMessage + "\n" + MERGES_TRAILER + mergesLine;
+            }
             RevCommit c = git.commit()
                     .setMessage(fullMessage)
                     .setAuthor(authorName, authorEmail)
                     .call();
+            precomputeProvenance(projectId, c.getName(), touched);
             return c.getName();
         } catch (VersionException e) {
             throw e;
@@ -1317,6 +1573,32 @@ public class ProjectRepoService {
         } catch (Exception e) {
             throw new VersionException("读取重要版本失败: project=" + projectId, e);
         }
+    }
+
+    /**
+     * 按 sha 成批取版本记录（一次开仓库读完）。逐段溯源要把几十个 sha 翻成
+     * 「谁 · 哪一天 · 那一版叫什么」，一个 sha 开一次仓库不合算。
+     * 解析不出来的 sha 直接不进结果表，不抛异常——溯源是只读的锦上添花。
+     */
+    public Map<String, VersionEntry> entriesByShas(long projectId, Collection<String> shas) {
+        Map<String, VersionEntry> out = new LinkedHashMap<>();
+        if (shas == null || shas.isEmpty()) return out;
+        try (Repository repo = open(projectId); RevWalk walk = new RevWalk(repo)) {
+            Map<String, String> milestones = milestonesIn(repo);
+            for (String sha : shas) {
+                if (sha == null || sha.isBlank()) continue;
+                try {
+                    ObjectId id = repo.resolve(sha);
+                    if (id == null) continue;
+                    out.put(sha, toEntry(walk.parseCommit(id), milestones));
+                } catch (Exception e) {
+                    log.warn("读取版本记录失败: project={} sha={}", projectId, sha, e);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("成批读取版本记录失败: project={}", projectId, e);
+        }
+        return out;
     }
 
     /** log() 与 listMilestones() 共用的读取逻辑，接收已打开的 Repository，避免重复开仓库。 */

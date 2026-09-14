@@ -103,7 +103,7 @@ test('in-place Writer reload destroys the old vocabulary before loading and rebu
     _writingHost: { destroy: () => events.push('destroy') },
     loadDocument: async () => { assert.equal(vm._writingHost, null); assert.equal(vm._reloading, true); events.push('load'); return true },
     initWritingAssistance: () => { assert.equal(vm._reloading, false); events.push('init') },
-    appendLog() {}, scheduleAnchorCheck() {},
+    appendLog() {}, scheduleAnchorCheck() {}, loadProvenance() {},
   }
   assert.equal(await editorMethods.reloadFromBackend.call(vm), true)
   assert.deepEqual(events, ['destroy', 'load', 'init'])
@@ -115,7 +115,7 @@ test('failed or in-flight reload cannot reactivate assistance against old docume
     _writingHost: { destroy() {} },
     loadDocument: async () => { editorMethods.initWritingAssistance.call(vm); assert.equal(vm._writingHost, null); throw new Error('download failed') },
     initWritingAssistance: () => editorMethods.initWritingAssistance.call(vm),
-    appendLog() {}, scheduleAnchorCheck() {},
+    appendLog() {}, scheduleAnchorCheck() {}, loadProvenance() {},
   }
   assert.equal(await editorMethods.reloadFromBackend.call(vm), false)
   assert.equal(vm.docLoadFailed, true)

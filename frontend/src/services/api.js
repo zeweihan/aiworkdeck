@@ -3382,6 +3382,18 @@ export function getVersionHistory(projectId, opts = {}) {
   });
 }
 
+// 逐段溯源（dev-board#632）：这份文件的每一段/每一格/每一页，最后是哪一版改的。
+// 回 {ref, kind, units:[{key, textHash, sha, shortId, authorName, self, when, title, type}],
+//     truncated, computing}。computing=true 表示后端还在算，前端 3 秒后重试。
+export function getProvenance(projectId, fileId, ref) {
+  const qs = [`fileId=${encodeURIComponent(fileId)}`]
+  if (ref) qs.push(`ref=${encodeURIComponent(ref)}`)
+  return request({
+    url: `/api/projects/${projectId}/version/provenance?${qs.join('&')}`,
+    method: 'GET'
+  });
+}
+
 // 任意两版之间的文件增删改清单（「对比这两版」）。from/to 是 ref（sha 即可）。
 export function getVersionCompare(projectId, from, to) {
   return request({
@@ -3514,6 +3526,69 @@ export function abandonDraft(projectId, draftId) {
   return request({
     url: `/api/projects/${projectId}/version/draft/${draftId}/abandon`,
     method: 'POST'
+  });
+}
+
+// ---- 三方合并：结构化分析、逐份落盘（spec 2026-09-14-docx-three-way-merge-design §4.3–4.5）----
+// 三个裁决语境（采纳 / 取回 / 结束工作撞车）共用这三个端点：后端按 MERGE_HEAD 反查语境，
+// 不信客户端传的 ctx（ctx 只用来校验一致）。
+
+// 某一份冲突文件的完整三方分析：overlaps 的三栏文字、重放计划、基线单元。
+// /status 里的 documentMerges 只有计数，逐处裁决界面要靠这个端点拿正文。
+export function getMergeAnalysis(projectId, path) {
+  return request({
+    url: `/api/projects/${projectId}/version/merge/analysis?path=${encodeURIComponent(path)}`,
+    method: 'GET'
+  });
+}
+
+// 合并后的字节 + 逐处决定清单落盘（multipart）。
+// 走裸 XHR 而不是上面的 request()：uni.request 那层不传 FormData，而合并结果是整份
+// docx 字节（几 MB），塞进 JSON 里 base64 一圈既慢又白占内存（saveClipboardFile /
+// submitFeedback 已是同样的写法）。
+// bytes：Uint8Array（引擎 export_document 的出参）；decisions：Decision[] 数组，
+// 元素 {key, side: 'M'|'T'|'', action: 'A'|'R'|'X'|'F'}，mode=auto 时允许为空。
+export function postMergeResolveFile(projectId, { path, mode, decisions, bytes, name, ctx }) {
+  const baseUrl = getApiBaseUrl()
+  const sessionId = getSessionId()
+  const form = new FormData()
+  form.append('path', path)
+  form.append('mode', mode || 'manual')
+  form.append('decisions', JSON.stringify(decisions || []))
+  if (ctx) form.append('ctx', ctx)
+  if (bytes) {
+    const blob = bytes instanceof Blob ? bytes : new Blob([bytes], { type: 'application/octet-stream' })
+    form.append('file', blob, name || (String(path).split('/').pop() || 'merged.bin'))
+  }
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${baseUrl.replace(/\/$/, '')}/api/projects/${projectId}/version/merge/resolve-file`)
+    if (sessionId) xhr.setRequestHeader('X-Session-Id', sessionId)
+    xhr.onload = () => {
+      if (xhr.status !== 200) {
+        reject(new Error(t('common.submitFailedWithStatus', { status: xhr.status })))
+        return
+      }
+      try {
+        const data = JSON.parse(xhr.responseText)
+        if (data.code === 0) resolve(data)
+        else reject(new Error(data.message || t('common.submitFailed')))
+      } catch (e) {
+        reject(new Error(t('common.parseResponseFailed')))
+      }
+    }
+    xhr.onerror = () => reject(new Error(t('common.networkError')))
+    xhr.send(form)
+  })
+}
+
+// xlsx / pptx：合并文件由后端 POI 按 decisions 拼，前端只送决定，不送字节。
+// decisions 为空数组 = 自动模式（把另一侧独有的改动全部合入）。
+export function postMergeResolveStructured(projectId, { path, decisions }) {
+  return request({
+    url: `/api/projects/${projectId}/version/merge/resolve-structured`,
+    method: 'POST',
+    data: { path, decisions: decisions || [] }
   });
 }
 
@@ -3788,3 +3863,4 @@ export function saveDrawioDiagram(projectId, fileId, payload) {
     header: { 'Content-Type': 'application/json' }
   })
 }
+

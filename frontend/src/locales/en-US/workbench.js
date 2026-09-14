@@ -156,6 +156,8 @@ export default {
   webMarkInserted: 'Web evidence mark inserted',
   // Adoption pending bar
   adoptPendingText: 'Files awaiting your decision',
+  // When the count is known, be specific (the ones that could be combined automatically already were)
+  adoptPendingCount: '{count} file(s) awaiting your decision',
   goHandle: 'Resolve',
   // Trial info dialog
   trialInfoBody: 'You are on the trial version and all features are fully available. Upgrade to the full version to connect an AI WorkDeck account, sync purchased content, and use the AI WorkDeck Cloud channel.',

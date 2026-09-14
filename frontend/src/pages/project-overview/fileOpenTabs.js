@@ -561,6 +561,63 @@ export const fileOpenTabsMethods = {
       return file && file.tabType === 'version-compare'
     },
 
+    isMergeReviewTab(file) {
+      return !!(file && file.tabType === 'merge-review')
+    },
+
+    /**
+     * 「合并比对稿」标签（dev-board#630）：同一段两边都改了的那几处交给律师逐处裁决。
+     *
+     * 单例到「一个项目的一条路径」（id 里带 path）：裁决总览那一行的按钮常被连点，
+     * 重开一次等于把已经处理过的那几处裁决、已经接受/拒绝的修订全部丢掉重来——
+     * 而那份合并稿只在引擎实例里，关掉就没了。已经开着时只激活。
+     *
+     * @param spec {{projectId, path, name, ctx, mergeBase, mainRef, otherRef,
+     *              sides: {main:{authorName, when, title, self}, other:{…}},
+     *              readonly?, fileId?}}
+     */
+    openMergeReviewTab(spec = {}) {
+      const projectId = spec.projectId || this.projectId
+      const tabId = `merge-review_${projectId}_${spec.path}`
+      for (const pane of ['left', 'right']) {
+        const list = pane === 'left' ? this.leftFiles : this.rightFiles
+        const existing = list.find((f) => f.id === tabId)
+        if (existing) {
+          this[pane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'] = existing.id
+          this.focusedPane = pane
+          this.$nextTick(() => this.triggerWorkbenchResize())
+          return
+        }
+      }
+      const targetPane = this.splitMode ? this.focusedPane : 'left'
+      const list = targetPane === 'left' ? this.leftFiles : this.rightFiles
+      const idProp = targetPane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'
+      list.push({
+        id: tabId,
+        tabType: 'merge-review',
+        fileType: 'merge-review',
+        name: this.$t('version.mergeTabName', { name: spec.name }),
+        mergeSpec: {
+          projectId, path: spec.path, name: spec.name, ctx: spec.ctx,
+          mergeBase: spec.mergeBase, mainRef: spec.mainRef, otherRef: spec.otherRef,
+          sides: spec.sides || {}, readonly: !!spec.readonly, fileId: spec.fileId || null,
+        },
+        createdAt: Date.now(),
+      })
+      this[idProp] = tabId
+      this.focusedPane = targetPane
+      this.$nextTick(() => this.triggerWorkbenchResize())
+    },
+
+    /** 合并比对稿里的「先不处理 / 关闭」——只关标签页，不动后端的待决记录。 */
+    closeMergeReviewTab(file) {
+      if (!file) return
+      for (const pane of ['left', 'right']) {
+        const list = pane === 'left' ? this.leftFiles : this.rightFiles
+        if (list.some((f) => f.id === file.id)) this.closeFile(file.id, pane)
+      }
+    },
+
     /**
      * 「提交历史」标签（dev-board#624）：主线 + 各进行中稿 + 案件库最新稿的统一历史。
      *
@@ -575,11 +632,14 @@ export const fileOpenTabsMethods = {
       const projectId = spec.projectId || this.projectId
       const tabId = `commit-history_${projectId}`
       const focus = spec.focus || ''
+      // 溯源光标条点进来时带的那一版 sha（dev-board#632）
+      const focusSha = spec.focusSha || ''
       for (const pane of ['left', 'right']) {
         const list = pane === 'left' ? this.leftFiles : this.rightFiles
         const existing = list.find((f) => f.id === tabId)
         if (existing) {
           existing.historyFocus = focus
+          existing.historyFocusSha = focusSha
           // focusToken 让已经挂载的标签页知道「又被点了一次」：focus 值没变时
           // props 不变，组件不会重新定位，用户会以为按钮坏了。
           existing.historyFocusToken = (existing.historyFocusToken || 0) + 1
@@ -597,6 +657,7 @@ export const fileOpenTabsMethods = {
         tabType: 'commit-history',
         name: this.$t('version.historyTabName'),
         historyFocus: focus,
+        historyFocusSha: focusSha,
         historyFocusToken: 1,
       })
       this[idProp] = tabId

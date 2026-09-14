@@ -117,6 +117,9 @@ jobs:
       - name: Commit history tab, lane graph, member dedupe, collab wording (dev-board#623–#625)
         working-directory: frontend
         run: npm run test:version-history
+      - name: Three-way merge unit tests (merge rows, auto-merge flow, provenance align, history merges, dev-board#630–#632)
+        working-directory: frontend
+        run: npm run test:version-merge
       - name: Desensitize pane custom-words entry (dev-board#531)
         working-directory: frontend
         run: npm run test:desensitize

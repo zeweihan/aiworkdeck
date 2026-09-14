@@ -746,6 +746,30 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
   自动刷新）与一个关键词防抖 `setTimeout`，四样都在它自己的 `beforeUnmount` 里摘干净——
   **加新的全局监听要记得同步加到那个 `beforeUnmount`**，标签页是随时会被关掉的。
 
+## 非文件标签 `merge-review`（dev-board#630）
+
+「合并比对稿」= 同一段两边都改了的那几处交给律师逐处裁决的**可编辑**稿，
+渲染组件 `frontend/src/components/version/MergeReviewTab.vue`，领域契约见 version-control.md 的
+「三方合并与逐段溯源」一节。标签管道口径：
+
+- **`tabType:'merge-review'`、id `merge-review_<projectId>_<path>`、单例到「一个项目的一条路径」**，
+  直接 push 进 `leftFiles`/`rightFiles` 绕过 `isFileTypeSupported`——与 `commit-history` / `market-detail` /
+  `insight-entity` 同法；开法在 `pages/project-overview/fileOpenTabs.js` 的 `openMergeReviewTab(spec)`（:579）。
+  **id 里带 path 是硬要求**（`commit-history` 一个项目一个就够，这里不行）：一次冲突常常有好几份文件，
+  每份各是一份稿。**单例同样是硬要求**：裁决总览那一行的按钮常被连点，重开一次等于把已经处理过的那几处裁决、
+  已经接受/拒绝的修订全部丢掉重来——**而那份合并稿只在引擎实例里，关掉就没了**，后端不存它。已经开着时只激活。
+- `spec` 的形状是 `{projectId, path, name, ctx, mergeBase, mainRef, otherRef, sides:{main, other}, readonly?, fileId?}`，
+  由 `AdoptConflictDialog` 的「打开合并比对稿」按钮 `$emit('open-merge-review', spec)`，
+  经 `VersionPanel`（三个语境的 `v-if` 分支各透传一次）冒泡到页面上的 `@open-merge-review="onOpenMergeReview"`。
+  三个 ref 的物理侧随语境不同，**页面这一层不做任何方向推导**，原样透传。
+- **不分屏时落左窗格、已分屏时落当前焦点窗格**（`targetPane = splitMode ? focusedPane : 'left'`，:592），**不像 `insight-entity` 那样强制开分屏**：这份稿就是律师此刻要干的活本身，不是「并排看的详情」，把它挤到半边反而难裁。
+- `'merge-review'` 已在 `pages/project-overview/fileKind.js` 的 `NON_FILE_TAB_TYPES` 里（:17）。
+  **这条不只是「别上色」**：标签名里带的是那份 docx 的文件名，跟着 Word 蓝走会让律师以为自己开的就是正文，
+  保存/关闭的心智全错——它是一份临时比对稿，关掉不影响那份文件。
+- **关闭走 `closeMergeReviewTab(file)`（:613），它只关标签页、不动后端的待决记录**：
+  「先不处理」与「已经裁完了」在后端是同一个状态（有没有那条待决记录），关标签页不是撤销。
+  引擎实例随标签页销毁（不进保活池、不注册 LRU、没有 `flushSave`——它没有任何 upload 路径）。
+
 ## 相关文件
 
 - `frontend/src/services/host.js` — **访问桌面壳能力的唯一出口**（浏览器面板/截图/剪贴板/组件下载/自动更新/本地文件对话框/应用菜单等）。业务代码一律 `import { host } from '@/services/host.js'`，**不要再写 `window.checkbaDesktop`**；「是不是桌面壳」用 `isDesktopHost()`。桌面态逐字段透传、Web 态缺席，所以既有的 `if (host.browser && ...)` 子对象守卫必须保留（守卫就是能力探测）。详见 doc-editor.md 的「宿主能力层与编辑器容器」。

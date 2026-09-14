@@ -51,6 +51,35 @@ public class VersionController {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private CloudSyncService cloudSyncService;
 
+    /**
+     * 三方合并（spec 2026-09-14 §4.3/§4.4）。同样字段注入：本类的构造器被几个
+     * {@code @InjectMocks} 的单测装配，加构造器参数会让它们拿到 null 再 NPE。
+     * {@code required=false} 时三个冲突对象退回 v2 的老形状（documentMerges 为空
+     * = 全部整份三选一），端点自己报「这个功能现在用不了」。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.version.merge.MergeAnalysisService mergeAnalysisService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.version.merge.PendingMergeStore pendingMergeStore;
+
+    /** 单测/跨包装配用：走字段注入，手工 new 出来的实例得有地方补上。 */
+    public void setMergeAnalysisServiceForTest(com.checkba.version.merge.MergeAnalysisService service) {
+        this.mergeAnalysisService = service;
+    }
+
+    /** 单测/跨包装配用：同上。 */
+    public void setPendingMergeStoreForTest(com.checkba.version.merge.PendingMergeStore store) {
+        this.pendingMergeStore = store;
+    }
+
+    /**
+     * 逐段溯源（spec 2026-09-14 §4.7）。同样字段注入且允许缺席，理由同上——
+     * 手工 new 本控制器的几个测试用不到它，缺席时 {@code /provenance} 回空 units。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.version.merge.ProvenanceService provenanceService;
+
     /** 埋点：版本记录关键动作计数（op 是端点枚举名，不带任何项目/版本信息） */
     private void trackOp(String op) {
         telemetryService.record("version.op", Map.of("op", op, "ok", true));
@@ -76,7 +105,7 @@ public class VersionController {
     public ResponseEntity<Map<String, Object>> status(
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireMember(projectId, sessionId);
+        Long viewerId = requireMember(projectId, sessionId);
         Map<String, Object> data = new HashMap<>();
         boolean enabled = repoService.isInitialized(projectId);
         data.put("enabled", enabled);
@@ -89,16 +118,16 @@ public class VersionController {
             data.put("pendingRecovery", sessionService.pendingRecovery(projectId).isPresent());
             data.put("onDraft", sessionService.activeDraftOnBranch(projectId)
                     .map(this::draftRef).orElse(null));
-            Map<String, Object> sessionEndConflict = sessionEndConflictStatus(projectId);
+            Map<String, Object> sessionEndConflict = sessionEndConflictStatus(projectId, viewerId);
             Map<String, Object> cloudConflict = sessionEndConflict != null
-                    ? null : cloudConflictStatus(projectId);
+                    ? null : cloudConflictStatus(projectId, viewerId);
             data.put("sessionEndConflict", sessionEndConflict);
             data.put("cloudConflict", cloudConflict);
             // 三者都由 MERGE_HEAD 反查，先到先得：sessionEndConflict → cloudConflict →
             // adoptConflict。命中前两者中任一个时 adoptConflict 必须为 null，防止前端
             // 同时弹出多种裁决弹窗。
             data.put("adoptConflict", (sessionEndConflict != null || cloudConflict != null)
-                    ? null : adoptConflictStatus(projectId));
+                    ? null : adoptConflictStatus(projectId, viewerId));
             // 留底占了多少磁盘。版本记录现在默认开着，律师要能随时看见它的代价，
             // 才谈得上「知情之后决定要不要关」。
             data.put("repoSizeBytes", repoService.repoSizeBytes(projectId));
@@ -135,7 +164,7 @@ public class VersionController {
      * HEAD 仍停在合并前的主线 tip，MERGE_HEAD 就是稿的 tip，两者都已经在本方法里查过，
      * 顺手带出即可，不必再多查一次。
      */
-    private Map<String, Object> adoptConflictStatus(long projectId) {
+    private Map<String, Object> adoptConflictStatus(long projectId, Long viewerId) {
         if (!repoService.repositoryMerging(projectId)) return null;
         String mergeHeadSha = repoService.mergeHeadRef(projectId);
         WorkSession matched = mergeHeadSha == null ? null : sessionService.listDrafts(projectId).stream()
@@ -150,7 +179,27 @@ public class VersionController {
         m.put("conflictingPaths", conflicts);
         m.put("mainlineTip", repoService.resolveRef(projectId, "HEAD"));
         m.put("draftTip", mergeHeadSha);
+        m.putAll(mergeExtras(projectId, viewerId));
         return m;
+    }
+
+    /**
+     * 三个冲突对象共有的那三个三方合并字段（spec 2026-09-14 §4.3）：
+     * {@code mergeBase} / {@code documentMerges} / {@code sides}。三语境共用同一个服务，
+     * <b>不许各自拼一份</b>——前端对三个语境用的是同一套渲染代码，三份实现走散之后
+     * 律师在哪个语境里看到的清单不对，是没法从代码上先看出来的。
+     *
+     * <p>服务缺席或算不出来时回空表：冲突弹窗退回 v2 的老形状（全部整份三选一）。
+     * 这一步跑在 {@code /status} 上，为一份读不开的文件让整个冲突窗口消失，代价太大。
+     */
+    private Map<String, Object> mergeExtras(long projectId, Long userId) {
+        if (mergeAnalysisService == null) return Map.of();
+        try {
+            return mergeAnalysisService.conflictExtras(projectId, userId, remoteDisplayNames(projectId));
+        } catch (Exception e) {
+            log.warn("拼装三方合并字段失败，这次冲突窗口按整份三选一给: project={}", projectId, e);
+            return Map.of();
+        }
     }
 
     /**
@@ -167,7 +216,7 @@ public class VersionController {
      * draftId=null 逃生门——前端把「结束工作撞车」误当成「采纳撞车」，弹出错的裁决弹窗。
      * 查询失败必须让异常走 {@link #onVersionError} 显式报错，不能静默降级成错误的语境。
      */
-    private Map<String, Object> sessionEndConflictStatus(long projectId) {
+    private Map<String, Object> sessionEndConflictStatus(long projectId, Long viewerId) {
         if (!repoService.repositoryMerging(projectId)) return null;
         String mergeHead = repoService.mergeHeadRef(projectId);
         if (mergeHead == null) return null;
@@ -176,10 +225,12 @@ public class VersionController {
                 repoService.resolveRef(projectId, active.get().getBranchName()))) {
             return null;
         }
-        return sessionEndConflictData(new WorkSessionService.SessionEndConflict(
+        Map<String, Object> m = sessionEndConflictData(new WorkSessionService.SessionEndConflict(
                 active.get().getId(), active.get().getTitle(),
                 WorkSessionService.userVisibleConflicts(repoService.conflictingPaths(projectId)),
                 repoService.resolveRef(projectId, "HEAD"), mergeHead));
+        m.putAll(mergeExtras(projectId, viewerId));
+        return m;
     }
 
     /**
@@ -193,7 +244,7 @@ public class VersionController {
      * 排在 sessionEndConflict 之后、adoptConflict 之前（祖先判定放在活动段 tip 精确相等
      * 之后，顺序不能颠倒），命中时后者强制 null。
      */
-    private Map<String, Object> cloudConflictStatus(long projectId) {
+    private Map<String, Object> cloudConflictStatus(long projectId, Long viewerId) {
         if (!repoService.repositoryMerging(projectId)) return null;
         String mergeHead = repoService.mergeHeadRef(projectId);
         String originSha = repoService.originMasterSha(projectId);
@@ -206,6 +257,7 @@ public class VersionController {
                 repoService.conflictingPaths(projectId)));
         m.put("mainlineTip", repoService.resolveRef(projectId, "HEAD"));
         m.put("cloudTip", mergeHead);
+        m.putAll(mergeExtras(projectId, viewerId));
         return m;
     }
 
@@ -455,6 +507,11 @@ public class VersionController {
                 }).toList());
         m.put("milestone", e.milestone());
         m.put("resolutions", e.resolutions() == null ? List.of() : e.resolutions());
+        // 三方合并（spec 2026-09-14 §4.6/§5.6）：mergeContext 是把 resolutions/merges 里裸的
+        // MAIN/DRAFT、M/T 翻成「你 / 律师乙」的唯一依据（三语境里指向的物理侧不同）；
+        // merges 逐文件给出这一次是自动合并的还是逐处裁决的。老提交分别是 null 与空表。
+        m.put("mergeContext", e.mergeContext());
+        m.put("merges", e.merges() == null ? List.of() : e.merges());
         m.put("remote", row.remote());
         m.put("autoCount", row.autoCount());
         ProjectRepoService.ChangeCounts c = row.changes();
@@ -497,6 +554,33 @@ public class VersionController {
         } catch (Exception ex) {
             return false;
         }
+    }
+
+    /**
+     * 逐段溯源（dev-board#632，spec 2026-09-14 §4.7）：这份文件的每一段 / 每一格 / 每一页，
+     * 最后是哪一版改的。
+     *
+     * <p>未开版本记录、这份文件还没进过版本、或服务端还没装上溯源，一律回**空 units + 200**，
+     * 不走异常信封：编辑器顶栏那一条溯源是锦上添花，它不该有能力把正文变成一个错误提示。
+     * 后端还在算（第一次对着老文件回溯几百版）时回 {@code computing:true}，前端过几秒再问一次。
+     */
+    @GetMapping("/provenance")
+    public ResponseEntity<Map<String, Object>> provenance(
+            @PathVariable Long projectId,
+            @RequestParam Long fileId,
+            @RequestParam(required = false) String ref,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = requireMember(projectId, sessionId);
+        String wanted = ref == null || ref.isBlank() ? "HEAD" : ref.trim();
+        // 归属校验先做：这一步不因「还没开版本记录」而跳过，越权探测在两条路径上同一个回答
+        String relPath = relPathOfFile(projectId, fileId);
+        if (!repoService.isInitialized(projectId) || provenanceService == null) {
+            return ok(Map.of("ref", wanted,
+                    "kind", com.checkba.version.merge.ThreeWayAnalyzer.kindOf(relPath)
+                            .name().toLowerCase(java.util.Locale.ROOT),
+                    "units", List.of(), "truncated", false, "computing", false));
+        }
+        return ok(provenanceService.provenance(projectId, userId, relPath, wanted));
     }
 
     /**
@@ -613,6 +697,213 @@ public class VersionController {
                 projectId, targetSession, resolutionsFromRaw(raw), userId, userName(userId));
         return ok(Map.of("sha", r.sha() == null ? "" : r.sha()));
     }
+
+    // ==================== 三方合并（spec 2026-09-14 §4.3–§4.5） ====================
+
+    /**
+     * 一份冲突文件的完整结构化比对结果（含 overlaps 的三栏文字、引擎重放计划、基线单元）。
+     * 裁决界面按需拉，不塞进 {@code /status}——{@code plan}/{@code baseUnits} 对一份
+     * 几百段的合同是几十 KB，每 120 秒推一遍纯属浪费。
+     *
+     * <p>响应的 {@code data} 直接就是 {@code Analysis}（不再裹一层），前端
+     * {@code services/mergeDraft.js} 按这个形状读。
+     */
+    @GetMapping("/merge/analysis")
+    public ResponseEntity<Map<String, Object>> mergeAnalysis(
+            @PathVariable Long projectId,
+            @RequestParam("path") String path,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireMember(projectId, sessionId);
+        requireMergeServices();
+        com.checkba.version.merge.Analysis analysis =
+                mergeAnalysisService.analysisFor(projectId, WorkSessionService.safeRepoPath(path));
+        if (analysis == null) {
+            throw VersionException.userFacing(LangText.of(
+                    "这份文件不在等你做选择的清单里", "This file isn't among the ones waiting on your choice"));
+        }
+        return ResponseEntity.ok(Map.of("code", 0, "data", analysis));
+    }
+
+    /**
+     * 一份文件合并好了：字节写回工作区 + 记一条待决记录（spec 2026-09-14 §4.4）。
+     * 三个语境打的是同一个端点——语境由 {@code MERGE_HEAD} 反查，{@code ctx} 只用来
+     * 校验客户端手里那份冲突对象还是不是当前这一个（拿着过期对象落盘 = 往另一个合并
+     * 窗口里写字节）。
+     *
+     * <p>收尾不在这里：这一步只是「这一份我处理完了」，律师还能继续处理别的文件、
+     * 也还能整个中止。真正落成版本的是三个既有 resolve 端点（值填 {@code MERGED}）。
+     */
+    @PostMapping("/merge/resolve-file")
+    public ResponseEntity<Map<String, Object>> mergeResolveFile(
+            @PathVariable Long projectId,
+            @RequestParam("path") String path,
+            @RequestParam(value = "mode", required = false) String mode,
+            @RequestParam(value = "decisions", required = false) String decisions,
+            @RequestParam(value = "ctx", required = false) String ctx,
+            @RequestPart(value = "file", required = false) org.springframework.web.multipart.MultipartFile file,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireWriteMember(projectId, sessionId);
+        String rel = requireConflictPath(projectId, path, ctx);
+        byte[] bytes = readUpload(file);
+        if (bytes == null) {
+            throw VersionException.userFacing(LangText.of(
+                    "没有收到合并后的文件", "The merged file didn't come through"));
+        }
+        return ok(landMerged(projectId, rel, mode, parseDecisions(decisions), bytes));
+    }
+
+    /**
+     * 表格 / 演示文稿的合并文件由后端按决定清单拼（spec 2026-09-14 §4.5）——这两类不需要
+     * 引擎，所以字节不必在客户端和服务端之间走一个来回。{@code decisions} 为空即自动模式
+     * （把另一侧独有的改动全部合入）。
+     */
+    @PostMapping("/merge/resolve-structured")
+    public ResponseEntity<Map<String, Object>> mergeResolveStructured(
+            @PathVariable Long projectId,
+            @RequestBody(required = false) Map<String, Object> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireWriteMember(projectId, sessionId);
+        Object rawPath = body == null ? null : body.get("path");
+        String rel = requireConflictPath(projectId,
+                rawPath == null ? null : String.valueOf(rawPath), null);
+        List<com.checkba.version.merge.Decision> decisions = decisionsFromList(
+                body == null ? null : body.get("decisions"));
+
+        com.checkba.version.merge.Analysis analysis = mergeAnalysisService.analysisFor(projectId, rel);
+        if (analysis == null || (analysis.kind() != com.checkba.version.merge.MergeKind.XLSX
+                && analysis.kind() != com.checkba.version.merge.MergeKind.PPTX)) {
+            throw VersionException.userFacing(LangText.of(
+                    "这份文件不能这样合并", "This file can't be merged this way"));
+        }
+        String head = repoService.resolveRef(projectId, "HEAD");
+        String mergeHead = repoService.mergeHeadRef(projectId);
+        byte[] mainBytes = repoService.readBlobAtCommit(projectId, head, rel);
+        byte[] otherBytes = repoService.readBlobAtCommit(projectId, mergeHead, rel);
+        byte[] merged = analysis.kind() == com.checkba.version.merge.MergeKind.XLSX
+                ? com.checkba.version.merge.XlsxMerger.merge(mainBytes, otherBytes, analysis, decisions)
+                : com.checkba.version.merge.PptxMerger.merge(mainBytes, otherBytes, analysis, decisions);
+        String mode = decisions.isEmpty() ? "auto" : "manual";
+        return ok(landMerged(projectId, rel, mode, decisions, merged));
+    }
+
+    /**
+     * 落盘 + 记录 + 回执，两个 resolve-* 端点共用。计数只在自动模式下有意义
+     * （逐处裁决的账在 {@code decisions} 里），取自分析结果而不是信客户端报上来的数。
+     */
+    private Map<String, Object> landMerged(long projectId, String rel, String mode,
+                                           List<com.checkba.version.merge.Decision> decisions,
+                                           byte[] bytes) {
+        String normalized = "auto".equals(mode) ? "auto" : "manual";
+        com.checkba.version.merge.Analysis analysis = mergeAnalysisService.analysisFor(projectId, rel);
+        int mainCount = "auto".equals(normalized) && analysis != null ? analysis.mainChanges() : 0;
+        int otherCount = "auto".equals(normalized) && analysis != null ? analysis.otherChanges() : 0;
+
+        java.nio.file.Path target = repoService.workTree(projectId).resolve(rel);
+        try {
+            java.nio.file.Files.createDirectories(target.getParent());
+            java.nio.file.Files.write(target, bytes);
+        } catch (Exception e) {
+            throw new VersionException("写入合并结果失败: " + target, e);
+        }
+        pendingMergeStore.put(projectId, new com.checkba.version.merge.MergeRecord(
+                rel, normalized, "auto".equals(normalized) ? List.of() : decisions,
+                mainCount, otherCount));
+
+        Map<String, Object> data = new HashMap<>();
+        data.put("path", rel);
+        data.put("state", "MERGED");
+        data.put("mainCount", mainCount);
+        data.put("otherCount", otherCount);
+        return data;
+    }
+
+    /**
+     * 路径与语境的双重校验。<b>两条都不能省</b>：
+     * 路径不在本次冲突清单里 = 这个端点成了「往项目里任意写文件」的口子，而随后的
+     * {@code git add .} 会把它收进律师的历史；语境对不上 = 客户端手里那份冲突对象
+     * 是上一个合并窗口的，往当前窗口里写的是另一件事的字节。
+     */
+    private String requireConflictPath(long projectId, String path, String ctx) {
+        if (!repoService.repositoryMerging(projectId)) {
+            throw VersionException.userFacing(LangText.of(
+                    "现在没有等你做选择的文件", "There are no files waiting on your choice right now"));
+        }
+        requireMergeServices();
+        if (ctx != null && !ctx.isBlank() && !ctx.trim().equals(currentMergeContext(projectId))) {
+            throw VersionException.userFacing(LangText.of(
+                    "正在处理的是另一件事，请先把它处理完", "Something else is already in progress — please finish that first"));
+        }
+        String rel = WorkSessionService.safeRepoPath(path);
+        List<String> conflicts = WorkSessionService.userVisibleConflicts(
+                repoService.conflictingPaths(projectId));
+        if (!conflicts.contains(rel)) {
+            throw VersionException.userFacing(LangText.of(
+                    "这份文件不在等你做选择的清单里", "This file isn't among the ones waiting on your choice"));
+        }
+        return rel;
+    }
+
+    /**
+     * 当前这个合并窗口属于哪个语境。判定链与 {@code /status} 逐字同序
+     * （sessionEnd → cloud → adopt，见 version-control.md「三语境冲突判定链」），
+     * 只是不拼 payload——这里只要一个标签。
+     */
+    private String currentMergeContext(long projectId) {
+        String mergeHead = repoService.mergeHeadRef(projectId);
+        if (mergeHead == null) return null;
+        var active = sessionService.activeSession(projectId);
+        if (active.isPresent() && mergeHead.equals(
+                repoService.resolveRef(projectId, active.get().getBranchName()))) {
+            return ProjectRepoService.MERGE_CONTEXT_SESSION_END;
+        }
+        String originSha = repoService.originMasterSha(projectId);
+        if (originSha != null && (mergeHead.equals(originSha)
+                || repoService.isAncestor(projectId, mergeHead, repoService.originMasterRef()))) {
+            return ProjectRepoService.MERGE_CONTEXT_CLOUD;
+        }
+        return ProjectRepoService.MERGE_CONTEXT_ADOPT;
+    }
+
+    private void requireMergeServices() {
+        if (mergeAnalysisService == null || pendingMergeStore == null) {
+            throw VersionException.userFacing(LangText.of(
+                    "逐处合并现在用不了，请整份选择", "Merging piece by piece isn't available right now — please choose whole files"));
+        }
+    }
+
+    private byte[] readUpload(org.springframework.web.multipart.MultipartFile file) {
+        if (file == null || file.isEmpty()) return null;
+        try {
+            return file.getBytes();
+        } catch (Exception e) {
+            throw new VersionException("读取上传的合并结果失败", e);
+        }
+    }
+
+    /** {@code decisions} 是一段 JSON 数组文本（multipart 字段装不下结构化对象）。 */
+    private List<com.checkba.version.merge.Decision> parseDecisions(String json) {
+        if (json == null || json.isBlank()) return List.of();
+        try {
+            return MERGE_JSON.readValue(json,
+                    new com.fasterxml.jackson.core.type.TypeReference<List<com.checkba.version.merge.Decision>>() {});
+        } catch (Exception e) {
+            throw VersionException.userFacing(LangText.of("无效的请求", "Invalid request"));
+        }
+    }
+
+    /** JSON 请求体里那一段已经解成 List&lt;Map&gt; 了，换一条路转成 Decision。 */
+    private List<com.checkba.version.merge.Decision> decisionsFromList(Object raw) {
+        if (!(raw instanceof List<?> list) || list.isEmpty()) return List.of();
+        try {
+            return MERGE_JSON.convertValue(list,
+                    new com.fasterxml.jackson.core.type.TypeReference<List<com.checkba.version.merge.Decision>>() {});
+        } catch (Exception e) {
+            throw VersionException.userFacing(LangText.of("无效的请求", "Invalid request"));
+        }
+    }
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper MERGE_JSON =
+            new com.fasterxml.jackson.databind.ObjectMapper();
 
     @PostMapping("/session/abort-end")
     public ResponseEntity<Map<String, Object>> abortSessionEnd(

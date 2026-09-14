@@ -753,4 +753,55 @@ class HistoryEndpointTest {
                         "HEAD", "sess"));
         assertTrue(e.isUserFacing());
     }
+
+    // ---------- 合并语境与逐处裁决出参 ----------
+
+    /**
+     * 逐处裁决与自动合并的清单要原样走到历史出参上（spec 2026-09-14 §4.6/§5.6）：
+     * 提交历史标签页的副标题（「自动合并了律师乙对 合同.docx 的改动（你 3 处 · 律师乙 4 处）」、
+     * 「第 3 段留了你的、第 12 段拒绝了律师乙的」）全靠这两个字段，前端不再去解析提交说明；
+     * {@code mergeContext} 更是「你/律师乙」这两个词的唯一依据——三语境里 MAIN 指向的物理侧不同。
+     */
+    @Test
+    @DisplayName("历史出参带上合并语境与逐处裁决清单")
+    void historyExposesMergesAndContext() throws Exception {
+        Path work = root.resolve("projects/7");
+        Files.writeString(work.resolve("合同.docx"), "初稿");
+        String plainSha = repoSvc.commitAll(PROJECT, "上传合同", "session", null, "韩泽伟", MY_EMAIL);
+        repoSvc.createBranch(PROJECT, "work/1", "master");
+        repoSvc.checkoutBranch(PROJECT, "work/1");
+        Files.writeString(work.resolve("合同.docx"), "我这边");
+        repoSvc.commitAll(PROJECT, "我这边的工作", "auto", null, "韩泽伟", MY_EMAIL);
+        repoSvc.checkoutBranch(PROJECT, "master");
+        Files.writeString(work.resolve("合同.docx"), "同事那边");
+        repoSvc.commitAll(PROJECT, "同事的工作", "auto", null, "律师乙",
+                "awd_lawyer_b@collab.aiworkdeck.local");
+        assertFalse(repoSvc.mergeNoCommit(PROJECT, "work/1", "采纳：试验稿",
+                "韩泽伟", MY_EMAIL).success(), "这一步必须真的撞出冲突");
+        Files.writeString(work.resolve("合同.docx"), "裁决后的合同");
+
+        String sha = repoSvc.commitMergeResolution(PROJECT, "采纳：试验稿",
+                Map.of("合同.docx", "MERGED"),
+                List.of(new com.checkba.version.merge.MergeRecord("合同.docx", "manual",
+                        List.of(new com.checkba.version.merge.Decision("p3", "M", "A"),
+                                new com.checkba.version.merge.Decision("p12", "T", "R")),
+                        0, 0)),
+                "adopt", "韩泽伟", MY_EMAIL);
+
+        Map<String, Object> r = row(history(), sha);
+        assertEquals("adopt", r.get("mergeContext"));
+        @SuppressWarnings("unchecked")
+        List<VersionEntry.MergeSummary> merges = (List<VersionEntry.MergeSummary>) r.get("merges");
+        assertEquals(1, merges.size(), "实际：" + merges);
+        assertEquals("合同.docx", merges.get(0).path());
+        assertEquals("manual", merges.get(0).mode());
+        assertEquals(List.of("p3", "p12"),
+                merges.get(0).decisions().stream().map(d -> d.key()).toList());
+        assertEquals("R", merges.get(0).decisions().get(1).action());
+
+        // 没做过合并的普通一版：两个字段是空的，前端不会凭空多出一行副标题
+        Map<String, Object> plain = row(history(), plainSha);
+        assertNull(plain.get("mergeContext"));
+        assertTrue(((List<?>) plain.get("merges")).isEmpty());
+    }
 }

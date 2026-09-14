@@ -58,7 +58,17 @@ description: 项目级版本记录领域。任务涉及版本记录/工作段（
 - `GitHttpController` 路由已泛化：`/git/{repo}.git` 的 repo 位纯数字=项目文档仓库（v2 行为一字未动）、`user-{id}-memory`/`project-{id}-memory`=记忆仓库（`parseRepoName`，其余 404）。记忆仓库**没有 prepare-remote 流程**：鉴权通过后首次访问自动建空仓等首推；receive 无 pre-receive 守卫（从不 MERGING、工作树无用户编辑），post-receive `ingestPushedMemory` 把 push 差异回灌服务端 DB（尽力而为）。`GitAccessService.authorizeUserMemory`：user 仓 owner-only，不咨询成员服务。
 - 数据模型：`MemoryEntry.uid`（36 位 UUID 列，存量行由导出懒回填，跨机器只认 uid）；`MemoryRemote.java`（repoKey 唯一 → url/username/secret/pendingUpload/lastSyncAt，凭据本地保存，只用 fetch/push）。删除用墓碑（front-matter `tombstone: true`）不删文件；向量嵌入不进 Git，回灌走 `MemoryManager.saveMemory` 由现有机制重建。
 
-**前端 `frontend/src/components/version/`（7 个组件）**
+**三方合并与逐段溯源 `backend/src/main/java/com/checkba/version/merge/`（2026-09-14，dev-board#630/#631/#632，22 个类）**
+
+- `ThreeWayAnalyzer.java` —— 纯静态判定内核：`kindOf(path)` 认类型、`analyze(path, base, main, other)` 出 `Analysis`。docx 走 JGit `MergeAlgorithm`（:91），xlsx 比键集交集（:228），pptx 按 `sldId` 对齐 + 单判页序（:273）。体积闸 `MAX_BYTES = 20MB`（:38）、页序保留键 `ORDER_KEY = "order"`（:41）都在这里。
+- `DocxUnitReader.java` / `XlsxCellReader.java` / `PptxSlideReader.java` —— 三个读单元器（POI）。`DocxUnitReader.normalize`（:66）是**归一口径的唯一出处**，引擎与前端各有一份必须逐字相同的副本。
+- `MergeAnalysisService.java`（`@Service`）—— 合并窗口里的编排：按 `(projectId, HEAD, MERGE_HEAD)` 缓存（:83/:98）、单路径 5 秒闸 + 守护线程池（:47/:54）、`documentMerges`（:127）给 `/status`、`conflictExtras`（:159）给三个冲突对象。
+- `PendingMergeStore.java`（`@Service`）—— 待决记录，落 `<gitdir>/awd-merge-pending.json`（:48）。`put`/`get`/`all`/`clear` 四个方法，生命周期与合并窗口同寿。
+- `XlsxMerger.java` / `PptxMerger.java` —— 后端按 `decisions` 拼合并件（docx 那一半在引擎里）。pptx 有 sldId 与相似度两条对齐路径，阈值 `SIMILARITY_FLOOR = 0.6`（:58）。
+- `ProvenanceService.java`（`@Service`）—— 逐段溯源：`provenance()`（:150）对外、`precomputeAsync()`（:189）给提交钩子、`compute`/`attribute`/`align`（:269/:363/:407）是算法本体、缓存在 `<gitdir>/awd-cache/provenance/`（:516）。窗口 `MAX_HISTORY = 500`（:94）、请求预算 30 秒（:97）。
+- 记录类型：`Unit`（单元键 + 原文 + 归一）、`Chunk`（一侧的一处改动，**坐标永远落在基线上**）、`Overlap`（三栏文字）、`Analysis`、`MergePlan`、`MergeKind`、`MergeDecision`、`MergeReason`、`Decision`（`key`/`side`/`action`，逐字进用户产物）、`MergeRecord`、`Slide`、`ProvenanceUnit`。
+
+**前端 `frontend/src/components/version/`（8 个组件）**
 
 - `VersionPanel.vue` —— 左栏挂载入口（`project-overview.vue`，`leftPaneKey === 'version'` 分支），三态：未开启引导 / 加载失败态 / 已开启（`WorkSessionBar` + v2 新增 `CloudSyncBar` + 第 3 期新增 `DraftList` + `VersionTimeline` + `AdoptConflictDialog`）。`provide()` 下发 `projectId` 给子组件用 `inject`；`fileFilter` prop（`{fileId, name}`）非空时渲染「只看《{name}》的历史」过滤条（单文件历史入口）。`refresh()` 拉一次 `/status`，把 `onDraft`/`adoptConflict`/v2 新增 `cloudConflict`/`sessionEndConflict`/`drafts`（`enabled` 时另拉一次 `/drafts`）+ `fetchCloudState()`（`cloud`/`hasConnection`，:194）一起写进 data——**这些状态没有轮询，只在挂载或 `onReload()` 时刷新一次**，裸 REST 改动后必须靠切出/切回侧栏挂载点强制重新挂载（e2e 配方见下）。三语境冲突互斥挂载（:57-92，`v-if`/`v-else-if`/`v-else-if`），顺序 `sessionEndConflict > cloudConflict > adoptConflict`，与后端 `/status` 的判定优先级一致（见下方核心契约）。PR-E 新增 `collabRefreshToken` prop（页面上的协作抽屉做完动作自增一次，watch 到就 `refresh()`——本面板没有轮询，不这样推一下的话侧栏状态会停在动作之前）与 `open-collab` 透传 emit。反馈 13 修复新增 `status-changed` emit（`refresh()` 每次拉完 `/status` 都发一次，携带 `{enabled, working, changedCount, onDraft}`）：面板内的结束工作/丢弃/回主线/采纳/放弃此前只更新面板自己的状态，`project-overview.vue` 顶栏与底部状态栏各自的 `versionWorkStatus`（由页面自己的 `checkAdoptConflict()` 维护）从不被通知，会停在操作之前的样子——`project-overview.vue` 在 `<VersionPanel>` 标签上监听 `@status-changed="checkAdoptConflict"` 补上这条同步链（顶栏原有的「工作中」胶囊本身已在反馈 13 里去掉，只保留底部状态栏那一份）。
 - `WorkSessionBar.vue` —— 顶部状态条，三态：`onDraft` 非空时是稿态「正在稿《{name}》上修改」+「回到主线工作」「采纳这一稿」「放弃这一稿」三个按钮；`working` 时「工作中（已改 N 份文件）」+「结束本次工作」「丢弃」；都不是则空闲态固定文案「当前没有进行中的工作」（**注意：全仓没有「主线」这个用户可见文案**，命名弹窗走 `.awd-dialog` + uni-app 的 `.uni-input-input`，不是外层 `.awd-input`）。稿态的 `.draft-dot`/`.session-idle` 是 e2e 断言认组件真渲染的独有选择器（不用 body innerText 包含）。
@@ -96,7 +106,9 @@ description: 项目级版本记录领域。任务涉及版本记录/工作段（
 - `CloudAcceptDialog.vue`（`frontend/src/components/`，注意不在 `version/` 目录下）—— v2 新增，入口在 `userprofile.vue`，PR-E 后按钮文案是「从团队案件库取一份案卷」。列出当前连接下可见的案卷（`.cloud-project-row`/`.cloud-project-name`），逐个「取到本机」（`acceptCloudProject`）；没有连接时**只说一句** `version.noLibraryAvailableShort`——dev-board#440 撤掉了「去连一个」跳 `admin.vue` 那条路（目的地已经没有连库表单了），也撤掉了 `connections.length > 1` 的连接选择器（PR-E 为地雷 #31 加的那个），恒用 `conns[0]`。#439 起没有连接但官方可用时会先 `connectOfficialCloud()` 当场连上，所以「没有连接」只会发生在国际站。这个入口也是 `CollabDialog.inviteText` 邀请话术第 1 步指向的地方，改文案要同步改邀请话术。
 - `VersionTimeline.vue` —— 拉 `getVersionTimeline`，按 `kind==='session'` 分组（`grouped` computed），自动存档折进对应工作段节点下可展开；节点标题有 milestone 时前置「重要版本」flag 并用 milestone 名字整个替换掉原标题（`titleOf()` 只在无 milestone 时才退回 `note || message`）。采纳产生的合并提交 `kind` 也是 `session`（见下方「MERGING 态即冲突态」附近对 `adoptMessage` 的说明），作为独立的顶层节点渲染，标题就是 `"采纳：" + 稿名`。**连线已经画了**（曾经的「有意降级」已作废）：合并节点在左侧轨道上带一段 `.merge-curve`（`isMerge(group.head)` 判真时渲染），进行中的稿另有 Phase B 的分叉线（`.draft-fork-curve`，数据来自 `loadDraftBranches` 逐稿拉 `/drafts/{id}/timeline` 找分叉点）——**分叉点落在当前拉到的主线历史窗口之外、端点出错或 404 时一律优雅降级为不画**，不弹错误弹窗。完整的 `git log --graph --all` 那一份在「提交历史」标签页（`CommitHistoryTab.vue` + `utils/historyGraph.js`），不在这个面板里。
 - `VersionNodeDetail.vue` —— 点某个节点弹出的详情弹窗：拉该 sha 的变更列表、「退回到这一版」二次确认、「标为重要版本」、第 3 期新增「从这一版另起一稿」（`openDraftNaming`，独立嵌套 `.awd-dialog`，同款 `.uni-input-input` 陷阱；`createDraft(projectId, version.sha, name)`，任意节点都能开，包括采纳产生的双亲合并节点）、对 `MODIFY` 类型且非根提交的改动行渲染「和上一版对比」按钮，`@tap` 上抛 `{path, sha}` 交给宿主页面决定走桌面修订稿分支还是文本降级分支。
+- `MergeReviewTab.vue` —— 三方合并新增（dev-board#630），**可编辑**的合并比对稿宿主：主线侧改动是一批带作者的修订，另一侧不重叠的改动被逐段重放成另一位作者的修订，同一段两边都改了的那几处刻意没重放、交给右栏 `ReviewPanel`（`mode="merge"`）三选一。与 `VersionCompareTab` 一样**没有 upload 路径**（导出字节只走 `POST /version/merge/resolve-file`，绝不写回 `ProjectFile`）、不进保活池、不派发 `.uno:EditDoc`（spike A5 实测 r5 上不生效，只读靠的是「没有保存路径」）。标签管道见 `sidebar-shell.md` 的 `merge-review` 一条。
 - `VersionCompareTab.vue` —— 第 2 期新增，「和上一版对比」的桌面 docx 展示宿主，**只读、绝无保存路径**：不订阅 `lo-relay` 的 `modified` 信号、不进保活池（`_libreRefs`/LRU 一概不注册）、`beforeUnmount` 只 `dispose executor` + 移除 `<webview>`。流程：并行下载新旧字节 + 启动引擎 → `load_document` 新版 → `compare_document` 一次性生成修订并自动切只读。
+- **三方合并的前端纯函数与编排**：`composables/useDocumentMerge.js`（自动合并编排，纯工厂）、`services/mergeDraft.js`（`fetchMergeInputs` + `buildMergeDraft`，自动合并与比对稿标签页共用）、`utils/mergeRows.js`（裁决总览行态与文案）、`utils/mergeReviewDecisions.js`（`collectDecisions`）、`utils/historyMerges.js`（把两条新尾注翻成人话）、`utils/provenanceAlign.js`（溯源 LCS 对齐 + 自带同步 sha256）。后四个是零依赖纯函数，`node --test` 直接跑。
 
 **前端集成点**
 
@@ -386,6 +398,244 @@ userId，本机 userId 与它毫无关系，所以 `proxyCollabEvents` 外层补
 三个纯函数模块（`utils/historyRows.js` 说人话、`utils/historyGraph.js` 画泳道、`utils/mergeMembers.js` 去重），
 标签管道见 `sidebar-shell.md` 的 `commit-history` 一条。
 
+## 三方合并与逐段溯源（2026-09-14，dev-board#630/#631/#632，spec `docs/superpowers/specs/2026-09-14-docx-three-way-merge-design.md`）
+
+裁决界面此前只有「整份三选一」：同事改了第 3 段、我改了第 200 段，律师也只能二选一整份丢掉一边的工。
+这一节把裁决从「整份」降到「一段 / 一格 / 一页」，再加一条反向的问句——「这一段是谁写的」。
+零 Git 术语与「历史永不重写」两条纪律一字未松：合并只往前写新提交，溯源只读历史。
+
+**新增包 `backend/src/main/java/com/checkba/version/merge/`（22 个类）**，只认字节与单元、不认业务语义，
+与 `WorkSessionService`/`CloudSyncService` 的分工照 `ProjectRepoService` 的老规矩：
+- 读单元：`DocxUnitReader`（docx → `Unit` 序列）、`XlsxCellReader`（xlsx → `Sheet1!B7 → 值`）、`PptxSlideReader`（pptx → `Slide`）。
+- 判定：`ThreeWayAnalyzer`（纯静态）产出 `Analysis{kind, decision, reason, mainChanges, otherChanges, overlaps, mainOnly, otherOnly, plan, baseUnits}`。
+- 编排：`MergeAnalysisService`（缓存 + 超时 + `/status` 的精简清单）、`PendingMergeStore`（待决记录）。
+- 拼合并件：`XlsxMerger`、`PptxMerger`（docx 那一半在引擎里，见 doc-editor.md 的 `build_merge_draft`）。
+- 溯源：`ProvenanceService` + `ProvenanceUnit`。
+
+**单元键是跨端契约，不是实现细节**（`Unit`）：docx 正文段落 `p12`、docx 表格单元 `t1.2.3`（表序.行.列，都从 0 起）、
+xlsx 单元格 `Sheet1!B7`、pptx 页 `s3`（1 基页序）。这四种写法同时出现在四个地方——`/status` 的 `documentMerges`、
+引擎重放计划、裁决清单、提交尾注 `X-AWD-Merges`，其中最后一个**进了律师的仓库**，clone 出去 `git log` 读得到；
+改写法就是破坏兼容。`p{i}` 的 i 是**正文顶层段落**的枚举序（表格里的段落不占号，`DocxUnitReader.read` :46-59），
+与引擎 `get_paragraph`/`select_paragraph` 的下标同构——错一位就写错段。
+归一口径固定为 **NFC + 连续空白折一个 + trim**（`DocxUnitReader.normalize` :66），比对与溯源一律按归一结果；
+引擎侧 `mergeNormalize`（`office_thread.js` :2930）与前端 `normalizeUnitText`（`utils/provenanceAlign.js` :20）
+必须与它逐字相同，**三处任何一处改了另两处都要跟着改**，否则对齐核对当场把正常文档判成 `stage:'align'`。
+
+**docx 的判定是「把单元序列当成行喂给 JGit `MergeAlgorithm`」**（`ThreeWayAnalyzer.analyzeSequence` :91）：
+每行的内容是该单元归一文字的 SHA-256（`hashLines` :218），这样文字里的换行/制表符不会把一个单元劈成两行。
+**相邻也算冲突**——JGit 与 git 同口径，两侧的改动之间没有未改动的单元隔开时判冲突。这条保守口径是**刻意保留的**：
+spike A3 试过的 `.uno:MergeDocuments` 对挨着的两处改动不报冲突、静默叠加成病句，律师事后根本发现不了，宁可多问一次。
+又因为表格单元 `t{表}.{行}.{列}` 是**紧跟在该表的 body 位置之后插进同一条序列**的（`DocxUnitReader.read` :50），
+「同事改了表里一格、我改了表上面那一段」天然相邻，按同一口径进人工裁决——这也是刻意的，不是漏判。
+**不读 `w14:paraId`**：引擎导出 docx 会整类丢弃它（spike B1），靠它对齐必然假绿。
+xlsx 是无序集合，按单元格键比交集（`analyzeCells` :228），公式格取**公式字符串**（带前导等号）而不是算出来的值——
+两位律师改的是公式本身，比值会把「公式换了但结果碰巧一样」判成没改；空格子不进 map，于是「新增一格」与「删除一格」
+在键集上就是有/无，判定不需要额外分支。pptx 按 `sldId` 对齐页，页序另判一条、占用保留键 `order`（`ORDER_KEY` :41），
+且**只看两边都还留着的那些页的相对次序**（`orderOf` :372），新增/删除不算「调了页序」。
+
+**`MergeDecision` 三档**：`AUTO`（两边改的地方不重叠，静默合、不打扰律师）、`MANUAL`（逐处裁决）、
+`WHOLE`（退回整份选择）。`MergeReason` 七个值全都要有对应文案（`utils/mergeRows.js` 的 `WHOLE_REASON_KEYS`），
+**加一个值就要同步加一句人话**，否则界面落到那句兜底。`MergePlan{mainChunks, otherChunks}` 是给引擎的重放计划，
+引擎只重放 `otherChunks` 里 `conflict=false` 的块。
+
+**`MergeAnalysisService` 只在仓库停在 `MERGING` 时工作，且只认两个物理侧**：
+`main = 当前 HEAD 那一侧，other = MERGE_HEAD 那一侧`。哪一侧是「我」哪一侧是「同事」由语境决定、翻译是前端的事
+（方向表见上方「三语境冲突判定链」）。缓存键是 `(projectId, HEAD sha, MERGE_HEAD sha)`：
+合并窗口里这两个 sha 都不动，而 `/status` 每 120 秒轮一次、裁决面板还会再刷，每轮把几 MB 的 docx 重解一遍是白烧 CPU；
+离开 MERGING（裁决提交或中止）后这两个 sha 必然变或消失，条目当场作废，不会把上一次窗口的判定端给下一次。
+单路径分析上限 `PER_PATH_TIMEOUT_MILLIS = 5_000`（:47），超时的那一份降级成 `WHOLE + UNSUPPORTED`——
+三语境的冲突弹窗、协作状态条、顶栏 chip 全挂在 `/status` 这一条轮询上，它卡住等于整个界面装死。
+**超时只能「不等了」，掐不停已经跑起来的 POI 解析**（`Future.cancel` 对纯 CPU 解析不起作用），
+所以跑在一个守护线程池 `merge-analyzer` 里：跑飞的任务自己结束、不拦 JVM 退出、不占 HTTP 工作线程。
+体积闸 `ThreeWayAnalyzer.MAX_BYTES = 20MB`（:38）**只判在分析器这一处**，比 `version.max-tracked-file-size-bytes`（50MB）更紧；
+别在 `MergeAnalysisService` 里再判一次——两处判等于两个答案。
+`conflictExtras(projectId, userId, remoteNames)`（:159）拼三个冲突对象共用的那三个新字段
+（`mergeBase` / `documentMerges` / `sides`），**三语境的 `*ConflictStatus` 都调这一个方法，不许各自复制一份**：
+三份独立实现一定会在某一次改动里走散，而前端对三个语境用的是同一套渲染代码。
+`sides` 里的署名走 `VersionAuthorResolver.preferredAuthorName`，**任何情况下都不回账号名**（界面不显示 username）。
+
+**待决记录 `PendingMergeStore`：落在 `<gitdir>/awd-merge-pending.json`，不是工作区**。
+两个「为什么」都不能省——① 裁决收尾走的是 `commitMergeResolution` 的 `git add .`，放工作区的话这个内部文件会被原样
+收进律师的版本历史里，他不认识它，而且它只是本次裁决的中间态；gitdir 不在工作树里，`git add .` 收不到。
+② **必须落盘不能放内存**：裁决窗口是数据安全窗口，律师逐处裁完一份文件、还没点「确认选择」时把桌面端关了，
+重开之后 `/status` 要能说出「这份已经合好了」，否则他会被要求把同一份文件再裁一遍——
+而工作区里躺着的**已经是合并结果、不是冲突态**，第二遍裁出来的东西是错的。
+`documentMerges` 里的 `state` 就来自它：有记录 = `MERGED`，没有 = `PENDING`（`MergeAnalysisService.documentMerges` :140-141）。
+生命周期与合并窗口同寿：裁决提交成功后 `clear`（**提交成功之后才清**，提交失败时记录还在、律师重试一次照样能收尾），
+中止合并时也 `clear`（`WorkSessionService.abortAdopt` / `CloudSyncService` :1083）。
+读写两档的失败处理是反着的、都是有意的：**读不回来按空处理**（后果是律师重裁一遍，比拿一份解不回来的记录去收尾安全）、
+**写不进去当场抛 `VersionException`**（写不进去 = 合好的文件没人记得，收尾时会被当成没合过）。
+
+**四个新端点（`VersionController`，spec §4.3–§4.5、§4.7）**：
+
+| 端点 | 干什么 | 要点 |
+|---|---|---|
+| `GET /version/merge/analysis?path=` | 一份冲突文件的完整 `Analysis`（含 overlaps 三栏文字、`plan`、`baseUnits`） | 裁决界面**按需**拉，**不塞进 `/status`**——一份几百段的合同这几个字段是几十 KB，每 120 秒推一遍纯属浪费。响应的 `data` 直接就是 `Analysis`（不再裹一层），前端 `services/mergeDraft.js` 按这个形状读 |
+| `POST /version/merge/resolve-file` | docx：客户端把引擎导出的字节传上来落盘 + 记一条待决记录 | multipart（`decisions` 是一段 JSON 数组文本，multipart 字段装不下结构化对象）。**只是「这一份我处理完了」，不是收尾** |
+| `POST /version/merge/resolve-structured` | xlsx/pptx：合并件由后端 POI 按 `decisions` 拼 | 这两类不需要引擎，字节不必在客户端和服务端之间走一个来回；`decisions` 为空即自动模式（另一侧独有的改动全部合入） |
+| `GET /version/provenance?fileId=&ref=` | 这份文件每一段 / 每格 / 每页最后是哪一版改的 | 见下方「逐段溯源」 |
+
+两个 resolve 端点共用 `landMerged`（:793）落盘 + 记录 + 回执，计数**取自分析结果而不是信客户端报上来的数**，
+且只在自动模式下有意义（逐处裁决的账在 `decisions` 里）。
+入口校验是 `requireConflictPath(projectId, path, ctx)`（:826），**两道都不能省**：
+路径不在本次冲突清单里 = 这个端点成了「往项目里任意写文件」的口子，而随后的 `git add .` 会把它收进律师的历史；
+`ctx` 对不上 = 客户端手里那份冲突对象是上一个合并窗口的，往当前窗口里写的是另一件事的字节。
+`ctx` 的判定链 `currentMergeContext`（:851）与 `/status` **逐字同序**（sessionEnd → cloud → adopt），只是不拼 payload。
+三方合并服务缺席（老部署 / 手工 new 的单测）时 `requireMergeServices`（:867）回一句 userFacing 的
+「逐处合并现在用不了，请整份选择」——冲突窗口退回 v2 的老形状，`documentMerges` 为空即全部整份三选一。
+**收尾不在这四个端点里**：真正落成版本的仍是三个既有 resolve 端点（`/session/resolve-end`、`/draft/{id}/resolve`、
+云端取回裁决），逐处合好的那些文件在裁决清单里的值填 `MERGED`。
+
+**`Resolution.MERGED` 是第四档裁决，它的护栏在两个类里各写了一份、口径必须逐字相同**：
+`WorkSessionService.requireMergedHasPendingRecord`（:161，采纳 + 结束工作撞车）与
+`CloudSyncService.requireMergedHasPendingRecord`（:1212，云端取回）。
+这个值的意思是「这份文件的最终字节已经在工作区里了」，而那份字节是 `resolve-file` 写下去的、同时留了待决记录；
+**没有记录就说明工作区里躺着的还是带冲突标记的半成品**，认下去 = 把半成品提交进主线并推给同事，历史永不重写、不可逆。
+`pendingMergeStore` 缺席时一律判「没有记录」（宁可让律师重裁一遍）。
+落地侧 `WorkSessionService.applyResolution`（:1668）对 `MERGED` **一个字节都不许再写**（:1675 直接 return）：
+写 = 用合并前某一侧的原文把律师刚裁完的成果覆盖掉，而他不会收到任何提示。
+`switch` 里那条 `case MERGED -> { }`（:1680）只为让穷尽性检查留着，别当它是实现。
+
+**两条新尾注（`ProjectRepoService`，spec §4.6）**，与 `X-AWD-Resolutions` 同写在 `commitMergeResolution`（:1493）里：
+
+- **`X-AWD-Merge-Context: adopt|cloud|session-end`**（:298）——**所有裁决提交都写，含这一版只有整份三选一、
+  一处逐段合并都没有的**。理由：裁决尾注里只有裸的 `MAIN`/`DRAFT`，同一个标签在三语境里指向的物理侧完全不同
+  （方向表见上方），没有这一行，提交历史就只能把「留了你这边」猜着写，**结束工作撞车那一档会把话说反**。
+  值不在三个之内时只记一条 warn 并跳过这一行，**不为一行说明把律师的裁决提交打回去**。
+  三个字面量在 `MERGE_CONTEXT_ADOPT`/`_CLOUD`/`_SESSION_END`（:903-905），三个调用点各拿一个、别再各写字符串。
+- **`X-AWD-Merges: <path>=<mode>:<list>; ...`**（:307，`mergesTrailerValue` :917）——按路径排序
+  （同一次合并在任何机器上生成同一行文本，理由同 `resolutionsTrailerValue`）。`mode=auto` 时 list 是
+  `M<n>,T<m>`（两边各合入几处）；`mode=manual` 时是逐处 `<key><side><action>` 用 `,` 连接，
+  `X`（律师自己改的）与 `F`（另一侧只改了格式）没有侧别，写成 `p9X`、`p20F`。整行的样子：
+  `合同.docx=manual:p3MA,p7TA,p12MA,p9X,p20F,t1.2.3MA`。只有整份三选一的裁决**不带**这条尾注。
+  上限 `MERGES_TRAILER_MAX_ITEMS = 500`（:896），超出截断并追加 `+N`；读侧 `parseDecisionItem`（:1029）
+  认得 `+N` 不是一处裁决、回 null。编码：路径复用 `encodeResolutionPath`，单元键再多编一个 `,`（`encodeMergeKey` :981）——
+  正常的键一个字符都不会变，这层只防工作表名里带分隔符时把一行截成几条假记录。
+  side/action 不合法的条目**整条丢掉**（`decisionItem` :962）：写进去的是用户产物，宁可少记一条，也不能留一条解不回来的。
+  读侧 `parseMerges`（:986）→ `VersionEntry.MergeSummary`，与写入侧的 `MergeRecord` 字段同构，
+  分成两个类型只因为一个属合并包、一个属版本记录的出参。
+- 两条尾注都由 `VersionController` 原样转进 `/version/history` 的 entry（`mergeContext` + `merges`，:513-514），
+  老提交分别是 `null` 与空表。
+
+**前端把尾注翻回人话**：`frontend/src/utils/historyMerges.js`（纯函数，**不许 import**）。
+病灶是既有裁决文案把 `MAIN` 一律说成「你这边」，而 `MAIN` 的物理侧三语境不同——
+`mergeSideLabels(t, mergeContext, names)`（:32）按语境取两侧称呼，**老提交没有语境尾注时两侧都用中性词、不猜**；
+`historyMergeLines`（:101）每份文件一行，折叠阈值 `FOLD_AT = 6`（:24）、被折的处数单独回 `more` 供详情区展开；
+`resolutionLine`（:135）管整份三选一那一条，语境缺席就保持旧文案——历史怎么写的就怎么读，不追认。
+裁决清单的产出侧是 `utils/mergeReviewDecisions.js` 的 `collectDecisions`（:76），三块来源（同段冲突三选一 /
+逐条修订 / 另一侧只改格式）按顺序拼，**同一段里若干条修订同样处置只记一次**（`pushUnique` :57）——
+这是「哪一处、留了哪一边」的账，不是修订条数的账；脏值（侧别没映射上、处置缺席）宁可整条丢也不写进尾注。
+裁决总览每一行的行态与文案在 `utils/mergeRows.js`：`mergeRowState`（:28）的判定顺序
+（已合好 > 整份文件 > 需引擎但没引擎 > 自动合并失败 > 还在自动合 > 逐处裁决）**别按「看着顺」重排**——
+把 `MERGED` 排最前是因为崩溃恢复后 `/status` 会同时给出 `decision=AUTO` 与 `state=MERGED`，
+再显示成「正在合并」会让律师等一个永远不来的结果；把「整份文件」排在「非桌面端」前面是因为 pdf 在桌面端也只能整份选，
+说成「去桌面端就能逐处合」是假承诺。`needsEngine` 只认 `DOCX`（:24）——判据错了 Web 端会把表格行也白白降级成整份三选一。
+两个前端组件：裁决总览是既有的 `AdoptConflictDialog.vue`（三语境共用，加了逐处合并那几行与「打开合并比对稿」「重试自动合并」
+两个动作），合并比对稿是新标签页 `components/version/MergeReviewTab.vue`（标签管道见 `sidebar-shell.md` 的 `merge-review` 一条）。
+
+**自动合并的编排在前端** `frontend/src/composables/useDocumentMerge.js`（纯工厂，依赖全注入，`node --test` 直接跑）。
+三语境共用同一个入口 `onConflictStatus(conflict, ctx)`（:177）：`AUTO` 的 docx 借一个**不绑标签页的隐藏引擎实例**
+比较 + 重放 + 全部接受 + 导出 → `resolve-file(mode=auto)`；`AUTO` 的 xlsx/pptx 直接 `resolve-structured`（不碰引擎）；
+`MANUAL`/`WHOLE` 不动、交给裁决总览。三条不变式各有一个用例：
+① **有任何一份不是 `MERGED` 就不收尾**（`finalize` :139）——律师还没被问过，收尾等于替他做了决定；
+② **幂等**：按 `(另一侧 tip, path)` 记账（:46-52），`/status` 120 秒一轮、面板每次刷新也会再调一次，同一份文件不重放、
+同一次冲突不重复收尾；用 tip 而不是 projectId 做前缀，是因为中止一次合并后重新撞车时 MERGE_HEAD 会变、那时应该重跑；
+③ **引擎回 `success:false`（尤其 `stage:'align'`）时一个字节都不写回去**——那份导出件的段落是错位的，写回去比不合更糟。
+另一侧「只改了格式」的段带不过来（文字重放带不动格式），这**不是失败而是「不能静默合」**：整份降成 `MANUAL`（:96），
+让律师在合并比对稿里看见那几段自己套格式。
+`state.rows` 每轮要把上一轮挂在行上的前端字段（`failed`/`formatOnlyCount`/实际处数）保留下来（:192-195）——
+`/status` 每轮都给一份全新的 `documentMerges`，直接覆盖会把「自动合并失败」抹成「正在合并」，
+律师看到的是一个永远转不完的圈。
+借来的隐藏实例**必须在 `finally` 里归还**（`withHiddenEngine` :63）：不还的话每撞一次车就多留一个常驻 LOWA 实例（数百 MB），
+律师那边表现为越用越卡。
+两个准备动作（取三份字节 + 拉分析、喂给引擎）抽在 `services/mergeDraft.js`，**自动合并与合并比对稿标签页共用这一份**——
+两处的输入必须完全一致，否则「自动合出来的」和「律师在比对稿里看到的」是两份不同的文档，而这件事没有任何测试能自动发现。
+三语境里「另一侧」的 tip 字段名不同（`adopt=draftTip` / `cloud=cloudTip` / `session-end=sessionTip`，`otherRefOf` :26）：
+取错只是幂等键与取字节的 ref 错，**不会静默写错数据**（后端按 `MERGE_HEAD` 反查、不信客户端），但拿不到字节就合不成。
+
+**xlsx/pptx 的合并件由后端 POI 拼，一律以主线侧文件为底逐格 / 逐页改，不重新拼一份**
+（`XlsxMerger.merge` :45 / `PptxMerger.merge` :66）：表格里除单元格值以外的一切（条件格式、数据验证、图表、打印区域、
+冻结窗格、透视表）与演示文稿的母版、版式、主题、页面尺寸**没人动过就不该被合并动到**，而 POI 重建工作簿 / 文稿必丢这些。
+xlsx 只 `setCellValue`/`setCellFormula` 那几格，别的一律不碰；另一侧把某格清空了要**删掉**主线那一格而不是写空串
+（空串会留下一个「看着是空、其实有格子」的脏格）；改了公式要 `setForceFormulaRecalculation(true)`（缓存里是上一版算出来的值）。
+逐格 / 逐页裁决时，**另一侧独有的、没被问到的改动仍然自动合入**（`keysToTake` :86 / `accept` :346）——
+律师只被问了两边都动过的那几处，没被问到的不该因为进了裁决界面就丢掉。
+「判给另一侧」的判据两处同源：`side=T action=A`，或等价的「拒绝主线这边」`side=M action=R`（`takesOther`/`isTakeOther`）。
+pptx 另有**两条对齐路径**：正常按 `sldId`，两份文件的 sldId 一个都对不上时退回按「标题 + 文本」相似度对齐
+（字符二元组 Dice 系数，`SIMILARITY_FLOOR = 0.6`，:58/:249），退回路径**不信 `plan`**（它是按 sldId 算的、
+这时必然是「整份删光再整份新增」），改用 `baseUnits` 里的共同上一版页文本自己做一遍三方比较。
+**实测（2026-09-14，LOWA 24.2.8-zhcn-r5，无头）：引擎导出的 pptx 不保留 sldId**——三页 pptx 的 `901/777/512`
+往返一次变成 `256/257/258`（即「页序 + 256」，页数 / 页内容 / 页序都没变），也就是说
+**凡是经过编辑器保存过的 pptx，它的 sldId 只是页码的另一种写法，不是页的身份**。
+两份都出自引擎、页数相同时 sldId 会「碰巧全对上」，这时按 sldId 对齐等同于按页序对齐，一旦中间插过页就整体错位；
+判据 `sharesAnyId`（:85）只识别得了「一个都对不上」，识别不了「对上了但没意义」——
+**这一层要在 `ThreeWayAnalyzer` 一起改才自洽**（页键与 overlaps 也是按 sldId 算的），不要在 `PptxMerger` 里单独绕开，
+否则裁决界面上的页键与这里的对齐会各说各话。
+
+**逐段溯源（`ProvenanceService`，dev-board#632，§4.7）：归属规则只有两条**。
+沿这份文件的历史从 `ref` 往回走，对每一版 c：① 这一处文字在**某个父版本里原样存在**就继承那个父版本的归属，
+**先看第一父、再看第二父**；② 都找不到，这一处就是 c 改的（`attribute` :363）。
+**第二父那一步是这套东西里最值钱的一行**：合并提交里来自另一侧的段落必须归**对方那一版**；
+归到「我按下确认那一刻」的合并提交上，律师就再也看不出这份合同里哪几段是对方加的。
+「同一处文字」的判法是**降级口径**（spike B1：引擎导出 docx 会整类丢掉 `w14:paraId`，注入隐藏书签又会改写用户产物，
+所以没有稳定 id 可用）：docx 按归一文字的哈希序列跑一次 `HistogramDiff`、落在未变块里的算同一处（`align` :407）；
+xlsx 按单元格键、pptx 按 `sldId` 对齐再比文字。精度损失就这些——改了一个字的段落、被剪切粘到别处的段落归本版
+（「移动」本来就该算一次改动），两段一模一样的文字按位置对齐、对错了也是同样的文字。**规格不假装有稳定 id。**
+回溯顺序靠 `RevSort.TOPO` 保证「子在父之前」，倒着算就是「先父后子」，每一版算到时父版本一定已经就位（:319-321）。
+窗口之外的父版本仍要读出来做文字对齐（否则这一版会把没改过的段落全认成自己改的），但归属只说得出「更早的版本」（:375-383）。
+跟着改名走用 `FollowFilter` + `RenameCallback`，回调把历史上的旧路径**攒成一张候选表**、逐版读字节时挨个试（:288-299）——
+不靠「第几版之后换路径」去对号入座：JGit 什么时候发现改名与什么时候吐出那一版之间隔着一层重写父提交的生成器，
+按顺序对位很容易差一版，**差一版就等于那一版的段落全部错签**。
+`renameAwareDiffConfig`（:508）显式把 `diff.renames` 打开：实测（JGit 6.9）`FollowFilter` 不看这个开关照样跟得动改名
+（设成 false 测试仍全绿，换成 `PathFilter` 才会让 `followsRename` 转红），显式写上只是为了不把
+「改名跟随到底靠什么」交给用户那份仓库配置或某一版 JGit 的默认值去决定。
+
+溯源的三条预算：
+- **回溯窗口 `MAX_HISTORY = 500` 版**（:94），更早的只说「更早的版本」（`sha=null`）。
+  `truncated` **按结果说话而不是按「走没走到头」**（:343-345）：回溯截断了但每一处都还认到了某一版，
+  对律师来说就没有「更早的版本」这回事，不该在界面上多出一句提醒。
+- **逐版缓存落 `<gitdir>/awd-cache/provenance/<路径哈希前 16 位>/<sha>.json`**（`cacheDir` :516）。
+  放 gitdir 不放工作区，`git add .` 收不到它，也不会混进律师的文件树。缓存命中即停（:322-327）。
+  `CACHE_VERSION = 1`（:100）：口径变了就换号，老文件自然失效。缓存读不了就重算、写不了只是下次重算，两条都只 debug 日志。
+- **单次请求最多等 `REQUEST_BUDGET = 30s`**（:97），超了回 `computing:true`（后台继续算、前端过几秒再问一次），
+  **绝不把一个锦上添花的侧栏挂成几十秒的白屏**。同一个 `(项目, 路径, 版本)` 由 `inflight` 表保证只算一遍（:130），
+  三秒后的重试搭同一趟车。后台用既有的 `awd-async` 池（`taskExecutor`），缺席时退回自带的两线程守护池。
+  提交钩子 `precomputeAsync`（:189）在**提交已经成功之后**预算本次动过的文档，整段包 try/catch——
+  裁决窗口是数据安全窗口，一个只为侧栏提速的旁路绝不能把律师刚裁完的提交推回去
+  （`ProjectRepoService.precomputeProvenance` :427；这一次动了哪些路径要在 `git add` **之前**问，:1502-1514）。
+  `WHOLE` 那一档不预算（只有一条记录，现算也快）。
+
+出参 `ProvenanceUnit{key, textHash, sha, shortId, authorName, self, when, title, type}`：
+`textHash` 是归一文字的 SHA-256（十六进制小写）；`title` 与提交历史同口径（工作段有自己的名字就用它，否则用提交标题）；
+署名走 `preferredAuthorName`，**界面永远不显示 username**；读展示名一律 `allowFetch=false`（读列表不该为一个名字卡在网络请求上）。
+`GET /version/provenance` 未开版本记录 / 这份文件还没进过版本 / 服务端没装溯源，一律回**空 units + HTTP 200**、不走异常信封
+（`VersionController.provenance` :567）：编辑器顶栏那一条溯源是锦上添花，它不该有能力把正文变成一个错误提示；
+但**归属校验先做、不因为「还没开版本记录」而跳过**（:576），越权探测在两条路径上是同一个回答。
+
+**前端不按 `key` 硬对，按文本对齐**（`frontend/src/utils/provenanceAlign.js`，纯函数、不许 import）：
+后端的 `units` 是**落版那一刻**的段序，而律师此刻画布上的段序会被还没保存的改动推着漂——插一段，后面全错一位。
+按 key 硬对的后果是把「同事改的那一段」的名字贴到邻段头上，**溯源贴错名字比不显示更糟**。
+所以两侧各自归一后取 sha256 跑一次 LCS（`alignProvenance` :118），落在公共子序列里的段落才继承出处，
+其余一律说「本机未保存的改动」。前端**自带一份同步 sha256**：后端只回 `textHash` 不回原文
+（一份 400 段的合同全文回一遍既贵又没必要），而 `crypto.subtle` 是异步的、会把这个纯函数染成 Promise。
+**与后端的契约因此有三层：归一口径、编码（UTF-8）、算法（SHA-256）。**
+LCS 的 DP 表是 O(n·m)，超过 `MAX_CELLS = 1500×1500`（:109）退回「同位置且文本相同才算同一段」——比给出一份错位的溯源诚实。
+文案侧 `provenanceLabel`（:174）/ `provenanceSummary`（:189）：本人说「你」、自动存档说「自动存档」、
+没对上说「本机未保存的改动」、回溯到头说「更早的版本」。
+表格 / 演示文稿的「当前这一格 / 当前这一页」由引擎新原语 `sheet_get_active_cell` / `slide_get_current` 提供，
+与段落级的 `get_review_context.paragraphIndex` 是同一个位置（契约见 doc-editor.md）。
+
+**已知限制（都是取舍，不是待修的 bug）**：
+- **另一侧「只改了格式没改文字」的段自动合不过来**——文字重放带不动格式。这一档不静默丢掉：引擎把它列进 `formatOnly`，
+  整份文件降成 `MANUAL`，律师在合并比对稿第 3 块看到那几段自己套；尾注里记一条 `F`（只记录、没有侧别也没有处置）。
+- **样式表、页面设置、页眉页脚、编号定义一律不进比对单元**——三个读单元器只读段落 / 单元格 / 页的**文字**。
+  两边同时改了样式表，合并结果取主线那一份，界面上不会有任何提示。
+- **耗时**：单路径 5 秒闸之外没有并行，一次冲突窗口里 N 份文件就是 N 次串行分析（缓存之后每轮 `/status` 才是 O(1)）；
+  溯源第一次对着老文件回溯几百版会超过 30 秒请求预算、回 `computing`，这是设计里就接受的（提交钩子预算正是为了摊掉它）。
+- **`XlsxMerger` 写值前必须先清掉目标格的 inlineStr 形态**（`copyValue` 首行 `clearInlineString`）：POI 的 `XSSFCell.setCellValue(String)` 碰上 `t="inlineStr"` 的格子只写 `<v>`、不动 `<is>`，而读回走 `<is>`——另一侧的改动会被静默吞掉、合并「成功」但内容是旧值（SXSSF inline-string 模式与部分 JS 导出库产出的工作簿都是这形态，app-e2e J14 那轮用 POI 探针抓出来的）。护栏 `XlsxMergerTest.inlineStringCellsTakeOtherSideValue` / `.inlineStringCellOverwrittenByNumber`。
+- **pptx 页序只在律师显式裁决 `order` 这一处时才重排**（`PptxMerger.merge` :73 的 `takesOther(decisions, ORDER_KEY)`）：
+  自动模式下页序一律保持主线那一份。
+
 ## 已知地雷
 
 1. **历史永不重写**——硬不变量，理由与 Git 自己一致，为将来推云端仓库（v2）打基础。唯一例外是删除工作段/稿的分支引用（`deleteBranch(force=true)`）——**删的是引用不是历史**：从未合并的那种（`discardSession`/`abandonDraft`）连内容一起丢是本来的语义，已经合并进主线的那种（`endSession` 两条路径、`adoptDraft`）每一笔提交都还从 master 可达，删掉只是不再留一条对律师本就不可见的分支名。护栏测试：`RepoMaintenanceTest.gcPreservesEveryReachableVersion`，GC 前后逐条比对每个 `VersionEntry.sha()`。
@@ -464,10 +714,42 @@ userId，本机 userId 与它毫无关系，所以 `proxyCollabEvents` 外层补
 
 51. **同一棵树里两个子代理同时跑 `mvn test`，会撞出 `NoClassDefFoundError` 假红**（2026-09-14 实测）——maven 把 class 写进同一个 `backend/target/classes`，`mvn test` 开头那次编译会先清掉要重编的类再写新的；另一个进程的 surefire 恰好在这个窗口里加载同一个类，就会拿到「类文件不存在」而不是「类有问题」。表现是一批与本次改动毫无关系的测试同时炸 `NoClassDefFoundError` / `ClassNotFoundException`，**串行重跑一次即全绿**。所以：一棵树同一时刻只许有一个 `mvn` 在跑；真要并行，各开各的 worktree（`target/` 才是隔离的）。看到这种形状的红先重跑，别顺着堆栈去改被点名的那个类——那里通常什么问题都没有。
 
+52. **`MergeChunk` 的坐标不是基线坐标，转成基线区间是 `analyzeSequence` 自己做的事**（dev-board#630）——JGit 的 `MergeChunk.getBegin()/getEnd()` 是**它自己那条序列**（`sequenceIndex` 0=base / 1=ours / 2=theirs）上的下标：非冲突块拿到的是 ours 或 theirs 的下标，冲突组里 BASE 那一片才是基线下标。`ThreeWayAnalyzer.analyzeSequence`（:104-151）因此自己维护一个 `basePos` 游标，非冲突块的基线终点靠 `nextBaseBegin`（:163）往后找下一个 base 片的起点；冲突组里没有 BASE 片（两边在同一处各插了东西）时 `baseStart == baseEnd`，`toChunk` 据此判成 `INSERT`。**`Chunk.baseStart/baseEnd` 是对外承诺的基线坐标**——引擎的重放计划、`overlapsOf` 取三栏原文、pptx 的页键全按它算，直接把 `MergeChunk` 的下标当基线下标用，后果是整份文档的重放位置系统性偏移，而对齐核对（`stage:'align'`）只会告诉你「对不上」、不会告诉你偏了几位。改这段前先看懂 `basePos` 是怎么推进的。
+
+53. **修订作者只在同一条 worker 命令内设得住，所以「比较 + 重放」整条链必须在一条命令里跑完**（spike A2 实证）——`execCommand` 每条命令开头都会把署名重置成本机用户，跨命令切作者必然失效：spike 第一轮两侧修订全签成「本地用户」就是这么来的，而合并稿的全部价值就在于「哪一处是谁改的」。`build_merge_draft` 因此是一条巨长的命令（office_thread.js :5869），`merge_take_other`（:6125，拒旧修订 → 切作者 → 写入 → 接受）同理。**不要为了「可读性」把它拆成几条原语**，也不要在宿主侧用两次 `run()` 去「先设作者再写入」。契约细节见 doc-editor.md 的「三方合并引擎原语」。
+
+54. **`MERGED` 没有待决记录时走的是 userFacing 异常，不是 400**——两处护栏（`WorkSessionService.requireMergedHasPendingRecord` :161 / `CloudSyncService` :1212）抛的是 `VersionException.userFacing`，本控制器的异常处理器把它转成 **HTTP 200 + `code != 0` + 原文 message**（「这份文件还没有合并好的结果，请重新处理一遍」）。前端不要按状态码判这一档，按 `code`/`message` 判；也不要把它当成「请求非法」去加参数校验——它是一个**状态**问题（工作区里躺的是半成品），律师重走一遍逐处合并就好了。
+
+55. **pptx 页序只在律师显式裁决 `order` 那一处时才重排，自动模式一律保持主线页序**（`PptxMerger.merge` :73）——`adoptOtherOrder` 取的是 `takesOther(decisions, ORDER_KEY)`，`decisions` 为空（自动合）时恒 false。这是有意的：页序冲突在 `ThreeWayAnalyzer.analyzeSlides`（:319-324）里只有**两边都改了页序**才会记成一条 overlap，而一旦记了这份文件就进 `MANUAL`、根本不会走自动合；反过来「只有另一侧改了页序」不算冲突、也**不会**被自动搬过来。要改这条行为，判定侧（`orderOf` 的口径）与合并侧（`adoptOtherOrder`）必须一起改，只动一头会出现「界面上问了、落盘没动」或「没问就重排了」两种都很难查的形态。
+
 ## 验证
 
 - **破坏-还原式验证（「还原病灶即转红」）在本仓有一个真会骗人的坑：还原之后必须 `touch` 源文件**。破坏时脚本重写文件 → mtime 变新 → 编译进 `target/classes`；还原若用 `cp`/`mv` 把旧内容搬回来，源文件 mtime 反而**早于**那个被破坏的 `.class`，maven 增量编译判定「没变化」，后续每一次 `mvn test` 跑的都还是被破坏的字节码。dev-board#439 就因此追了半天一个根本不存在的「Hibernate 不生成复合唯一约束」的假故障（DDL 日志里真的没有那条约束——因为加载的是上一轮破坏后的类），还差点为它写了一个不必要的"修复"。凡是脚本化的破坏-还原循环，还原后加一行 `touch`，或者干脆 `mvn clean`。
 - 本领域后端单测（`cd backend && JAVA_HOME=$(/usr/libexec/java_home -v 21) mvn -q test`，覆盖 `ChangeDescriptionTest`/`ChangeSignalWiringTest`/`ProjectRepoBranchTest`/`ProjectRepoHistoryTest`/`ProjectRepoServiceTest`/`RepoMaintenanceTest`/`TreeManifestCaptureTest`/`TreeManifestSyncTest`/`VersionControllerAuthTest`/`WorkSessionRepositoryTest`/`WorkSessionServiceTest`，第 3 期新增 `DraftAdoptTest`/`DraftLifecycleTest`/`DraftSessionGuardTest`/`VersionControllerDraftStatusTest`；v2 新增 `CloudControllerTest`/`DeviceTokenServiceTest`/`CloudSyncUpdateTest`/`CloudSyncUploadTest`/`cloud.GitAccessServiceTest`/`cloud.GitHttpIngestTest`/`cloud.GitHttpProtocolTest`；union 复活语义三方基线收紧新增 `UnionReviveGuardTest`；记忆 Git 同步（Phase A）新增 `memory.MemoryFileCodecTest`/`memory.MemorySyncRoundTripTest`（round-trip/uid 回填幂等/离线 pendingUpload/防乒乓）/`memory.MemoryLwwMergeTest`（LWW 矩阵/墓碑防复活/无 MERGING 残留）/`memory.MemorySyncControllerAuthTest`/`cloud.MemoryRepoAccessTest`（user 仓 owner-only + 仓库名路由），两机模拟靠 `memory.MemorySyncTestMachine`——独立存储根 + map 后备 DB + 共享 file:// 裸仓库，不需要起 HTTP 服务）；P3 新增 `CommitLargeFileFilterTest`（写侧体积过滤四场景）；官方案件库直连（dev-board#439）新增 `OfficialCloudEndpointTest`（地址派生三分支 + lookalike 域名 + https 闸）/`OfficialCloudServiceTest`（桥接、幂等、指纹重桥、无账户文案、status 不漏令牌、一键共享）/`CloudCloneDedupeTest`（取回查重）/`ProjectRemoteUniqueConstraintTest`（复合唯一约束；**两个用例的 project_id 段必须不相交**，否则撞的是 project_id 那条既有约束，把复合约束删掉也照样绿）——`com.checkba.version.**` 基线随之从 323 变 344。这一批还有三个类落在过滤器之外，动 `ProjectMemberService.addMember` 或 awdk 桥回包形状时要单独圈上：`com.checkba.service.ProjectMemberAddByContactTest`、`com.checkba.controller.CloudControllerTest`、`com.checkba.controller.AuthControllerHardeningTest`。先查后加（dev-board#444）新增 `com.checkba.service.ProjectMemberLookupTest`（打码/头像/已是成员/查不到不抛/权限）、`com.checkba.controller.ProjectMemberLookupControllerTest`（限频转业务错误 + 加人共用计数）、`com.checkba.service.ProjectMemberVisibilityTest`（被加成参与人之后这份案卷出现在他的 `getUserProjects` 里——「取一份案卷」那个弹窗读的就是这条链，此前无人钉），并往 `com.checkba.service.AuthAbuseGuardTest` 加了两条；**这四个类同样都在 `com.checkba.version.**` 过滤器之外**，跑法：`-Dtest='...,ProjectMemberLookupTest,ProjectMemberLookupControllerTest,ProjectMemberVisibilityTest,AuthAbuseGuardTest'`。回官网找账户 + 资格门（dev-board#550 #551）再新增 `com.checkba.service.collab.SameFirmOrTeamPolicyTest`（六条判定分支 + OpenPolicy）、`collab.HttpAccountDirectoryClientTest`（未配置不出网、请求形状与「恰好一个定位键」、两种响应形状、裸 404/400/5xx/连不上/缺 accountId 一律不可用——**故障绝不退化成「没找到」**，桩服务用 JDK `HttpServer` 起在本机）、`collab.CollaboratorAdmissionTest`（本地有绑定走 accountId、本地无走 identifier、拒绝时**绝不建桥接用户**、名录未配置短路且零出站）、`collab.CollaborationPolicyConfigTest`（写错值启动即失败），并往 `ProjectMemberLookupTest`/`ProjectMemberAddByContactTest`/`ProjectMemberLookupControllerTest` 各加了几条；这四个新类也在 `com.checkba.version.**` 之外，一并圈进 `-Dtest=`。dev-board#438 新增 `VersionAutoEnableTest`（@SpringBootTest，走真容器验事件接线 + 异步派发；`@BeforeAll` 必须用 `ProjectStorageResolver.resolveConfiguredPath` 清存储根——surefire 的 `user.dir` 是 `backend/`，配置里的相对路径会被上提一级，直接 `Path.of("target", ...)` 删的是另一个目录）与 `VersionDisableTest`（纯单测）；同一张卡的并发回归修复新增 `PrepareRemoteRaceTest`（纯单测，20 轮 latch 起跑；改动本领域任何建仓/删仓路径后都要跑它）。本机必须 JDK 21，系统默认 25 会 SIGBUS。**`com.checkba.version.**` 这个过滤器圈不到本领域的一条护栏**：`com.checkba.service.ProjectDeleteCascadeTest`（删项目要连带清掉 `work_session` 行、记忆仓库两个目录、`memory_remote` 行，见地雷 #42），动 `ProjectService.deleteProject` 或本领域的磁盘布局时要单独 `-Dtest=` 圈它。
+- **三方合并与逐段溯源（dev-board#630/#631/#632）的后端单测**都在 `com.checkba.version.merge.**`（跟着 `com.checkba.version.**` 过滤器一起跑）：
+  `ThreeWayAnalyzerTest`（三类文件的 AUTO/MANUAL/WHOLE 矩阵，含 `adjacentParagraphsAreManual` / `tableCellNextToEditedParagraphIsManual`
+  两条钉「相邻即冲突」的、`pptxBothReorderIsManual` 钉页序冲突、`pdfIsWholeBinary`/`missingBaseIsWholeNoBase`/`unparseableIsWholeParseFailed`
+  三条钉降级理由）、`DocxUnitReaderTest`/`XlsxCellReaderTest`/`PptxSlideReaderTest`（单元键写法与归一口径）、
+  `XlsxMergerTest`/`PptxMergerTest`（以主线为底改、清空即删格、公式重算、sldId 与相似度两条对齐路径）、
+  `MergeAnalysisServiceTest`（缓存键、超时降级、`documentMerges` 的 `state`）、
+  `MergeResolveFileTest`（两个 resolve 端点 + `requireConflictPath` 的路径/语境双校验 + `MERGED` 护栏）、
+  `ProvenanceServiceTest`（两条归属规则、第二父、改名跟随 `followsRename`、窗口截断、缓存命中）。
+  尾注的写读往返由 `com.checkba.version.CommitTrailerContractTest` 钉（`X-AWD-Merge-Context` 三值 + 未知值只 warn 不阻断、
+  `X-AWD-Merges` 的 auto/manual 两种 list、截断 `+N`、脏条目丢弃、编码往返）。
+  夹具在同包的 `MergeFixtures`（现造三份同源 docx/xlsx/pptx）与 `MergeScene`（起一个真仓库把两边推到 MERGING 态），
+  **新写合并相关的用例直接用它们**，别再各自手搓 POI 文档。
+- 前端纯函数：`cd frontend && npm run test:version-merge`（node --test，不需要引擎）——
+  `tests/version-merge/` 下的 `mergeRows.test.mjs`（行态判定顺序与文案）、`mergeReviewDecisions.test.mjs`（三块来源合成 + 去重 + 脏值丢弃）、
+  `historyMerges.test.mjs`（三语境方向表 + 折叠 + 老提交中性词）、`provenanceAlign.test.mjs`（LCS 对齐 + sha256 与后端同值 + 超预算降级）、
+  `useDocumentMerge.test.mjs`（三条不变式：不全 MERGED 不收尾 / 幂等 / `stage:'align'` 不写回）。
+- 真引擎那一半是 `npm run test:lowa-e2e` 的**组 34**（`build_merge_draft` 两位作者署名、冲突段不重放、`formatOnly`、
+  全部接受后逐段等于预期合并文本、表格单元重放、同实例第二次合并、`merge_take_other`、篡改 `baseUnits` 必须回 `stage:'align'`、
+  `sheet_get_active_cell`/`slide_get_current`），夹具由 `tests/lowa-e2e/fixtures/merge/gen.mjs` 现造
+  （420 段 + 2 表 + 3 批注，`plan`/`baseUnits` 就是后端本该算出来的那一份）。
+- **app-e2e J14「三方合并」（22 步，J1–J14 合计 170 步）**：复用 J11 建好的 A/S/B 拓扑（`sApi`/`bApi`/`restOverwriteAt`/`endSessionAt`/`pollUntil` 已提到 J11 块外），夹具直接 `import('../lowa-e2e/fixtures/merge/gen.mjs')` 的 `generateMergeFixtures()`（同一份生成器，带表格/演示两套参数）。
+  四轮：① xlsx 改不同格 + pptx 改不同页 → A「取回最新稿」不弹窗、`/history` 那行带 `auto` 合并记录与 `cloud` 语境、正文含两边改动、退回合并前那一版可用；② 同一格/同一页 → 总览逐份说清「两边都改了 · 1 处」→ 逐格留甲的（记 M/A）、逐页用乙的（记 T/A）→ 「就按我选的来」收尾 → `merges` 为 manual 且 decisions 与所选一致、落盘内容一致；③ 只有乙动过的合同 → `GET /version/provenance` 第 20 段归乙（self=false）、第 0 段归甲；④ 两份 docx（不同段 / 同一段）+ 一份 pdf → `documentMerges` 判 AUTO / MANUAL / WHOLE(BINARY)、overlaps 三栏文字正确、总览上 docx 给「打开合并比对稿」、pdf 给整份原因句 → 「先不取回」中止、仓库回到干净态。
+  **④ 必须排最后并以中止收场**：它让 A 落后案件库一版，排前面会把后续需要 A 交稿的轮次连带撞冲突。**docx 的自动合并执行、合并比对稿标签页逐处裁决、溯源光标条**三样都要真引擎，浏览器目标（dev:h5，无 COOP/COEP、无 dist/zetaoffice）起不来，由 lowa-e2e 组 34 覆盖执行侧，J14 只覆盖后端判定与总览行态。
+  J14 抓出并修掉的两个缺陷：`useDocumentMerge.onConflictStatus` 可重入（`CollabDialog.onUpdate` 先 emit conflict 再 emit changed，页面背靠背调两次）→ 第二次整体替换 `state.rows` 丢掉第一次写在旧对象上的 MERGED → 永不收尾；修法是串成 Promise 队列 + 合并快照时保留本地已知 MERGED（护栏 `useDocumentMerge.test.mjs` 末两条）。自动合并成功后 VersionPanel 不会自己再拉 `/status`，裁决窗挂着不关 → `reloadFiles` 里同时 `collabRefreshToken += 1`。
 - `cd frontend && npm run test:lowa-e2e`——基线 44 步；组 13 是 `compare_document` 的生产 action 探针（真引擎里加载新版、以旧版字节比较、断言产出修订且 `redlineCount > 0`），覆盖桌面 docx 修订稿对比这一半，浏览器目标测不到（无 Electron webview）。第 3 期没有改这条链路，不需要重跑。
 - `cd frontend && npm run test:app-e2e`——J1-J10 实测 73 步（含 AI_E2E 未关闭时的两步 J6.5），J9（21 步）见上一节；**J10** 覆盖 spec 5.9 的另起一稿/双向切线/采纳-裁决-放弃全链路：① 一段命名工作垫底（含一个后面要制造冲突的基线文件）；② 节点详情「从这一版另起一稿」命名「试验稿」→断言状态条进入稿态（认 `.session-bar .draft-dot` 选择器，不用 body innerText 包含）；③ 稿上传一个专属文件→「回到主线工作」→断言稿态消失、文件树里看不到该文件（稿的改动不漏到主线）；④「切到这一稿」→断言文件回来（两线内容隔离的正反双证）；⑤ 回主线用裸 REST 改一个基线文件（同名覆盖上传同一 `wpsFileId`，与 J9 造 MODIFY 同一手段）、结束这段隐式打开的工作，再切回稿上用裸 REST 改同一文件产生不同内容→直接在稿态下点「采纳这一稿」（不手工切回主线——`adoptDraft` 内部自己会先停靠）→断言 `AdoptConflictDialog` 出现且列出该文件（认 `.adopt-dialog`/`.adopt-row-name` 选择器）；⑥ 选「两份都留」确认采纳→断言文件树同时出现原文件与「{原名}（来自：试验稿）」、时间线出现「采纳：试验稿」节点、稿列表清空；⑦ 从「采纳：试验稿」节点再开一稿（此时稿列表因为清空、`DraftList` 组件本身不渲染，只能仍走节点详情的入口）→「放弃这一稿」确认→断言回到主线、稿列表空、时间线里没有这一稿的采纳节点。旅程里版本面板与文件树共用同一侧栏挂载点，互斥渲染，脚本会来回切换 rail 按钮触发面板重新挂载（这也是裸 REST 改动后让版本面板重新拉取状态的手段，面板只在挂载时读一次状态、没有轮询）。J10 编写时现场抓到一个真实产品缺陷并已修复：见「已知地雷」第 23 条（`WorkSessionBar` 稿态三按钮行窄侧栏溢出裁切不可点）。
   **J11（v2 云端协作，27 步；PR-E 后 J1-J11 合计 104 步实测全绿）** 覆盖共享/接入/双向同步/冲突三选一全链路。**A 连团队服务器 S 那一步 dev-board#440 起走 `POST /api/cloud/connect` 裸 REST**（界面上的连库表单已撤；A 是外部起好的长驻进程、改不了它的环境变量，所以也不能用 `CLOUD_COLLAB_BASE_URL`）；连完当场断言「A 上恰好一条云端连接」——`CollabDialog.onShare` 现在只在恰好一条时用那一条、否则连官方案件库，残留连接会让后面的共享静默推去 `case.aiworkdeck.com`。其余步骤（放进案件库、加人、交稿/取回、冲突三选一、取回弹窗）仍是 UI 驱动。拓扑 A=既有 9696 桌面后端（UI 驱动）/ S=团队服务器/ B=同事桌面，S、B 由 `run.mjs` 的 `spawnBackend(tag, port)` helper 各起一个独立进程+独立 H2 文件+独立 `cwd`（同一份 `backend/target/*.jar`，`APP_E2E_JAR` 环境变量传路径）。跑法：
