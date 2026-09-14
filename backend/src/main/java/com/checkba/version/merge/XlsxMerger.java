@@ -8,8 +8,11 @@ import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.util.CellReference;
+import org.apache.poi.xssf.usermodel.XSSFCell;
 import org.apache.poi.xssf.usermodel.XSSFCellStyle;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.openxmlformats.schemas.spreadsheetml.x2006.main.CTCell;
+import org.openxmlformats.schemas.spreadsheetml.x2006.main.STCellType;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -145,6 +148,7 @@ public final class XlsxMerger {
 
     /** @return 这一格写的是公式 */
     private static boolean copyValue(Cell source, Cell target) {
+        clearInlineString(target);
         switch (source.getCellType()) {
             case FORMULA -> {
                 target.setCellFormula(source.getCellFormula());
@@ -156,6 +160,36 @@ public final class XlsxMerger {
             default -> target.setCellValue(source.getStringCellValue());
         }
         return false;
+    }
+
+    /**
+     * 写值前把目标格的<b>内联字符串</b>形态（{@code <c t="inlineStr"><is><t>…</t></is></c>}）拆掉。
+     *
+     * <p>SXSSF 的 inline string 模式和一部分 JS 导出库就是这么存字符串的。POI 的
+     * {@code XSSFCell.setCellValue(String)} 遇到 {@code t="inlineStr"} 只往 {@code <v>} 里写，
+     * 压根不动 {@code <is>}；而读回时走的又是 {@code <is>}——于是新值写进去了、读出来还是旧的，
+     * 另一侧对这一格的改动被静默吞掉，合并「成功」但内容是错的。
+     * 数值/布尔/公式分支不会读错（{@code t} 被改掉了），但旧的 {@code <is>} 会赖在 XML 里，
+     * 下一轮读写又可能被翻出来，所以一律先清干净。
+     *
+     * <p>清成 {@code t="n"} 且没有 {@code <v>}（POI 眼里的空格子），随后的 {@code setCellValue}
+     * 就会走正常的共享字符串/数值路径。样式引用 {@code s} 不碰，合并不该动格式。
+     */
+    private static void clearInlineString(Cell target) {
+        if (!(target instanceof XSSFCell xssfCell)) {
+            return;
+        }
+        CTCell ct = xssfCell.getCTCell();
+        if (ct.getT() != STCellType.INLINE_STR) {
+            return;
+        }
+        if (ct.isSetIs()) {
+            ct.unsetIs();
+        }
+        if (ct.isSetV()) {
+            ct.unsetV();
+        }
+        ct.setT(STCellType.N);
     }
 
     /** 主线这边本来就没有这一格（另一侧新增的格子/整张新表）时才带样式过来。 */
