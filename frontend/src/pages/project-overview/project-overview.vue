@@ -946,6 +946,25 @@
 
             <!-- 编辑器区域（会被底部工具面板压缩） -->
             <view class="editors-container">
+              <!-- 三方合并借走的隐藏引擎实例（librePool.acquireLibreHiddenInstance）必须挂在
+                   这里、v-if/v-else 之外：备胎那块 v-for 在下面的 .editors-grid 里，而
+                   .editors-grid 只在左栏开着文档时才渲染——律师在版本面板里点「取回最新稿」
+                   时左栏常常一份文档都没开，隐藏实例根本不会 mount，acquire 只能空转 180 秒
+                   后降级成整份三选一（2026-09-14 真机走查抓到的阻断缺陷）。
+                   .editors-container 本身 position:relative 且有尺寸，绝对定位的
+                   .libre-spare-standby 在这里照样有画布可 boot（display:none 不行，见 scss）。 -->
+              <view
+                v-for="sp in libreHiddenSpares"
+                :key="'libre-hidden-' + sp.key"
+                class="pane-content libre-spare-standby"
+              >
+                <LibreOfficeEditor
+                  :file="sp.file"
+                  @ready="onLibreSpareReady(sp, $event)"
+                  :project-id="projectId"
+                  :can-write="canWriteProject"
+                />
+              </view>
               <!-- 初始空状态 (仅当左侧也没有文件时) -->
               <view v-if="leftFiles.length === 0 && !splitMode" class="empty-workspace">
                 <view class="empty-content">
@@ -1024,7 +1043,7 @@
                        冷启动。未激活时用绝对定位 + visibility 隐藏而非 v-show：
                        display:none 下 boot 引擎画布无尺寸，风险未验证。 -->
                   <view
-                    v-for="sp in libreSpares"
+                    v-for="sp in libreVisibleSpares"
                     :key="'libre-spare-' + sp.key"
                     class="pane-content"
                     :class="{ 'libre-spare-standby': !(sp.file && activeFileLeft && activeFileLeft.id === sp.file.id) }"
@@ -2339,6 +2358,7 @@ export default {
       // useDocumentMerge 的状态容器（{rows, running, ctx, sides}）。必须在这里声明，
       // 组合函数是 Object.assign 到这个对象上的，换成 created 里现造的裸对象就不是响应式了。
       documentMergeState: { rows: [], running: false, ctx: null, sides: {} },
+      mergeElapsedTick: 0,
       // 文件树批量选择模式（由页面控制开关）
       fileBatchMode: false,
       checkedFileIds: [],
@@ -2578,6 +2598,10 @@ export default {
     }
   },
   computed: {
+    // 备胎分两桶渲染：可见桶（预热备胎 / 过继后的文档实例）留在左窗格里；隐藏桶
+    // （三方合并借用）挂在 .editors-container 直下，不受「左栏有没有开文档」影响。
+    libreVisibleSpares() { return this.libreSpares.filter((sp) => !sp.hidden) },
+    libreHiddenSpares() { return this.libreSpares.filter((sp) => sp.hidden) },
     ...themeSwitchComputed,
     GLYPHS() {
       return GLYPHS
@@ -2800,7 +2824,15 @@ export default {
     collabStateText() {
       // 自动合并进行中排在最前：这几秒里 adoptConflictPending 也是真的，但那时说
       // 「有文件等你做选择」是假的——还没轮到律师，正在替他合。
-      if (this.documentMergeState.running) return this.$t('version.mergeAutoRunning')
+      if (this.documentMergeState.running) {
+        // 一份 32 页的合同整链要二十多秒（引擎冷启动更久），一句不动的文案会让律师以为卡死；
+        // 把已等秒数带上，秒数走 mergeElapsedTick（只在 running 期间每秒推一次）。
+        const started = Number(this.documentMergeState.startedAt) || 0
+        const seconds = started ? Math.max(0, Math.floor((this.mergeElapsedTick - started) / 1000)) : 0
+        return seconds >= 5
+          ? this.$t('version.mergeAutoRunningElapsed', { seconds })
+          : this.$t('version.mergeAutoRunning')
+      }
       if (this.adoptConflictPending) return this.$t('workbench.adoptPendingText')
       const c = this.collabCloud || {}
       if (c.offline) return this.$t('workbench.collabOffline')
@@ -3070,6 +3102,7 @@ export default {
     }
   },
   beforeUnmount() {
+    clearInterval(this._mergeElapsedTimer)
     this.closeDocumentLinkPreview()
     this.disposeThemeSwitch()
     this.unbindTabsWheel()
@@ -3740,6 +3773,14 @@ export default {
     }
   },
   watch: {
+    // 自动合并进行中每秒推一次时钟，让顶栏那句「正在合并…」带上已等秒数；结束即停。
+    'documentMergeState.running'(running) {
+      clearInterval(this._mergeElapsedTimer)
+      this._mergeElapsedTimer = null
+      if (!running) return
+      this.mergeElapsedTick = Date.now()
+      this._mergeElapsedTimer = setInterval(() => { this.mergeElapsedTick = Date.now() }, 1000)
+    },
     // IDE 化窗口标题：「文件名 — 项目名 — AI WorkDeck」（Electron 窗口标题跟随 document.title）
     'project.name'() { this.updateWindowTitle() },
     activeFileIdLeft() { this.updateWindowTitle(); this.pushMenuState(); this.ensureActiveTabVisible('left') },

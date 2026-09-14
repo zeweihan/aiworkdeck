@@ -452,7 +452,8 @@ function createMainWindow() {
   // UI：直接复用现有 frontend（开发态用 dev server）
   if (IS_DEV) {
     mainWindow.loadURL(DEV_SERVER_URL)
-    mainWindow.webContents.openDevTools({ mode: 'detach' })
+    // 截图走查时那扇分离的 DevTools 窗恒在应用窗之上，正文区域拍不到；给个开关关掉它。
+    if (!process.env.AIWORKDECK_DEV_NO_DEVTOOLS) mainWindow.webContents.openDevTools({ mode: 'detach' })
   } else {
     // Production Mode: Load from dist
     // (packaged builds carry the frontend via electron-builder extraResources)

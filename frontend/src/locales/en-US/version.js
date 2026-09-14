@@ -149,6 +149,7 @@ export default {
   // No Git jargon: no merge/conflict/hunk — just “combined”, “both edited the same paragraph”.
   conflictHintMerge: 'The files below were edited on both sides. The ones that could be combined automatically already have been; please handle the rest one file at a time:',
   mergeAutoRunning: 'Combining your colleague’s changes…',
+  mergeAutoRunningElapsed: 'Combining your colleague’s changes… ({seconds}s so far)',
   mergeRowMerged: 'Combined: {mainCount} change(s) by {main}, {otherCount} by {other}',
   mergeRowManualDocx: 'Both edited the same paragraph · {count} place(s)',
   mergeRowManualXlsx: 'Both edited the same cell · {count} place(s)',
