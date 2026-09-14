@@ -168,18 +168,21 @@ function dayText(t, when) {
 
 /**
  * 一段的出处说成一句话：'韩泽伟 · 9 月 13 日 · 核对注册资本'。
- * 本人说「你」、自动存档说「自动存档」、没对上说「本机未保存的改动」、
- * 回溯到头说「更早的版本」。**永远不显示 username**（identity 契约）。
+ * 人名永远在最前——产品目标是「这一段是谁、哪一版、什么时候改的」，自动存档
+ * 也不例外：本人说「你」，同事说本名，**不会被「自动存档」顶掉**。
+ * 「自动存档」占的是版本标题那一格：type=auto 且没有标题时补这个词，
+ * 罕见地带了标题（比如批量重命名后的自动存档）就照样显示标题。
+ * 没对上说「本机未保存的改动」、回溯到头说「更早的版本」。
+ * **永远不显示 username**（identity 契约）。
  */
 export function provenanceLabel(t, unit, opts = {}) {
   if (!unit) return t('version.provenanceUnsaved')
   if (!unit.sha) return t('version.provenanceEarlier')
-  const who = unit.type === 'auto'
-    ? t('version.typeAuto')
-    : (unit.self
-      ? (s(opts.selfLabel).trim() || t('version.actorYou'))
-      : (s(unit.authorName).trim() || t('version.unnamedColleague')))
-  return [who, dayText(t, unit.when), s(unit.title).trim()].filter(Boolean).join(' · ')
+  const who = unit.self
+    ? (s(opts.selfLabel).trim() || t('version.actorYou'))
+    : (s(unit.authorName).trim() || t('version.unnamedColleague'))
+  const titlePart = unit.type === 'auto' ? (s(unit.title).trim() || t('version.typeAuto')) : s(unit.title).trim()
+  return [who, dayText(t, unit.when), titlePart].filter(Boolean).join(' · ')
 }
 
 /**

@@ -73,6 +73,7 @@ import { fetchMergeInputs, buildMergeDraft } from '@/services/mergeDraft.js'
 import { collectDecisions } from '@/utils/mergeReviewDecisions.js'
 import { getAuthHeaders } from '@/utils/auth.js'
 import { host } from '@/services/host.js'
+import { formatDateTime } from '@/utils/projectHomeFormat.js'
 
 export const MERGE_FILE_RESOLVED_EVENT = 'awd:merge-file-resolved'
 
@@ -177,7 +178,10 @@ export default {
     run(action, payload) { return this.executor.executeCommand(action, payload || {}) },
     whenLine(side) {
       if (!side) return ''
-      return side.when || ''
+      // 后端给的是 ISO 时间戳（Instant，带 Z），律师读不懂——换成与左栏时间线 /
+      // 提交历史标签页同一个格式化函数（src/utils/projectHomeFormat.js），
+      // 不要在这里再拼一份新的日期措辞。
+      return formatDateTime(side.when)
     },
     // 造合并比对稿：三份字节 + 后端算好的重放计划 → 一条 build_merge_draft 命令。
     async loadDraft() {
