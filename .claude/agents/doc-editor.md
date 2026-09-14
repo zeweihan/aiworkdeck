@@ -44,7 +44,7 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - 本地候选覆盖机构、人名、法规、条款、案例/案号、常用词及表述。`completionLexicon.js` 负责确定性提取和前缀匹配；打开文档仅采集有界实体到项目词库，个人词库只从本人输入/采用学习，低频词与表述不立即出候选。用户级开关同步当前各文档，可删除/清空学习项。
 - 文档候选按同一 revision 分页读取（最多 1,000 段/200,000 字/500 候选），首次读取与显式刷新才扫描；首次读取被编辑打断时，等待 1.2 秒停笔后重试，成功后不随每次按键重扫；机构、人名、法规、表述按类别保留名额。完整法规名称用于展示，裸法规/条款前缀使用匹配的补入形式；不得补出半个书名号。持股叙述的人名、机构前的“股东名册中”等已覆盖回归。
 - 打字只读客体内存，不调用外部库或模型。选中正文右键明确查询才走 `/completion/lookup`；资料由 `completionDetails.js` 转成带来源的预览，点击插入才修改正文。
-- 右键「二选一」由 worker 裁决（dev-board#601）：`installContextMenuInterceptor` 在每次换 controller 时注册 `XContextMenuInterceptor`，`hostHandlesContextMenu()` 为真（宿主可写、Writer、选区 1–160 字、行内「全部修订」视图下选区不碰删除修订）时返回 CANCELLED，原生菜单根本不弹；宿主右键走 `get_context_menu_context`（同一谓词，再经 FINAL_TEXT 视图取终稿文字），只在谓词成立时出 HTML 菜单。开关由 `set_host_context_menu` 随 writable 变化下发。**地雷：别再用合成 Escape 去关已弹出的 Qt 菜单**——关掉后 Qt 残留弹窗状态，下一次右键按下会移动光标、丢选区（真机复现：第二次打开即丢）；不带 Escape 时下一次按下又会点中残留菜单的「插入批注」。回归 `tests/lowa-e2e/context-menu.mjs`（真实按住/松开，像素判定两种菜单只出其一）。
+- 右键「二选一」由 worker 裁决（dev-board#601）：`installContextMenuInterceptor` 在每次换 controller 时注册 `XContextMenuInterceptor`，`hostHandlesContextMenu()` 为真（宿主可写、Writer、选区 1–160 字、行内「全部修订」视图下选区不碰删除修订）时返回 CANCELLED，原生菜单根本不弹；宿主右键走 `get_context_menu_context`（同一谓词，再经 FINAL_TEXT 视图取终稿文字），只在谓词成立时出 HTML 菜单。开关由 `set_host_context_menu` 随 writable 变化下发。**地雷：别再用合成 Escape 去关已弹出的 Qt 菜单**——关掉后 Qt 残留弹窗状态，下一次右键按下会移动光标、丢选区（真机复现：第二次打开即丢）；不带 Escape 时下一次按下又会点中残留菜单的「插入批注」。回归 `tests/lowa-e2e/context-menu.mjs`（真实按住/松开，像素判定两种菜单只出其一，无 npm 脚本、按路径 `node tests/lowa-e2e/context-menu.mjs` 跑）；`writing-ui.mjs` 另以 `__writingNativeEscapes === 0` 守着「一条合成 Escape 都不许发」——#819 只改了实现没改这条用例，它在 master 上按旧契约断言 1，红了一段时间。
 - UNO 三动作 `get_completion_context` / `accept_completion` / `insert_completion_content` 以不透明 token 校验模型、光标/选区两端及上下文；补全只追加后缀，表格/纯文本原样插入，整组一次撤销。真实修改使 token 失效，只读导出期间保留 snapshot（含恢复 modified 标志），不能因自动保存误拒插入，也不能放宽位置校验。行内修订视图停用。
 - 首期能力止于确定性词库匹配、显式资料查询和原子插入；自动语义诊断、逻辑审校、段落推理与自动改写不在本期范围。
 - 回归：`npm run test:completion`、`test:lowa-completion`、`test:writing-ui`、`test:writing-caret`、`test:lowa-link-preview`、`test:writing-desktop`；引擎测试包含移动/输入/重载拒旧 token、跨导出仍可插入、撤销/重做及资料表格。桌面用例从真实项目词库经中文输入/Tab 到自动保存后下载 DOCX 核对，夹具文件隔离在临时目录。
@@ -88,6 +88,7 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - **枚举型属性读回可能是裸 short**（ParaAdjust 实锤）：与 css.* 枚举成员比较必须走 `enumEq`/`unoEnumVal`（office_thread.js），恒等比较会"set 成功读回不等"。
 - **short 型属性（VertOrient/OutlineLevel）set 必须传 `shortAny()`**（带类型 Any）：裸 number 编组成 long，严格 setter（>>= sal_Int16）拒绝且常被 try 吞掉。
 - **表后定位不能用 `table.getAnchor().getEnd()`**——会落进 A1 单元格（后续内容写进表格里）；用 `cursorToParagraphAfterTable()`（按表名在正文枚举定位）。
+- **往视图光标写字必须用 `vc.getText()`，不是 `xModel.getText()`**（dev-board#627，真机实证）：正文 XText 只接受属于自己的区间，光标在**表格单元格**（或页眉/脚注等别的 story）里时 `xModel.getText().insertString(vc,…)` 抛 `RuntimeException`——IME 提交（`insert_at_cursor`）、粘贴（`replace_selection`）、回车（`insert_paragraph`）整条静默失败，用户看到的就是「表格里打不进字」。与删除路径、修订显示方式都无关（不删直接打也一样失败），删除只是撞上它的场景：页边/气泡视图把删掉的字藏起来，单元格于是看着全空。`insertInlineStyled` 一直用 `vc.getText()`，所以带 markdown 标记的插入在单元格里反而是好的——新增写光标的原语照它的写法。**同类未修的**：`anchorBookmark()`（`xModel.getText().insertTextContent`）在单元格区间上同样抛，所以 `bookmark_selection` / AI 锚点在表格里够不着（与 `headingChainOf` 跨 story 比较抛异常是同一族限制）。
 
 ## 自动保存（LibreOfficeEditor.vue）
 
@@ -257,6 +258,7 @@ HOUSE 不再是常量：`buildHouse(profile)` 从画像 JSON 派生写端常量�
 - 核心回归：`cd frontend && npm run test:lowa-e2e`（真引擎 puppeteer-core 无头，33 组人机模拟，2026-09-09 基线 547 步；前置 `npm run build:zetaoffice` + `node ../desktop/scripts/fetch-lowa-assets.js` 或设 LOWA_ENGINE_DIR）。
 - 修订视图三态的接线契约（白名单 / 三态命令序列 / 换文档复位）：`npm run test:revision-view`（node --test，不需要引擎）。
 - 滚动稳定性（dev-board#604）：`npm run test:lowa-scroll`（真引擎，`tests/lowa-e2e/scroll-stability.mjs`）。真滚轮滚到第三页后逐条打只读命令（`get_review_context` / `get_completion_context` / `__agent` 读取 / 客体页自发的 180ms 刷新），断言 `get_review_layout().view.top` 一动不动；每步前先断言视口确实已离开文首，防空断言。
+- 表格单元格里的键入（dev-board#627）：`npm run test:lowa-table-retype`（真引擎，`tests/lowa-e2e/table-retype.mjs`）。显示方式（内联/气泡）× 删除路径（逐次 Backspace / 带选区一次删）× 输入路径（`insert_at_cursor` / CDP 真 IME 提交）八组，外加未删改的单元格直接键入与回车、正文对照组。每组两头都判：新字既要进单元格文本（`table_read` 比打字前**多出**这几个字，光看「包含李楠」会被行内视图里划掉的旧字骗过），又要真画在单元格里（文档按 200% 显示后数光标带的深色像素；100% 下一个汉字只有十来个像素，和插入符一个量级分不开）。无头 Chrome 第一张截图可能是空白画布，所以每次测量先丢一张热身。
 - 大文档性能：`npm run test:lowa-big`（同一套启动件 `tests/lowa-e2e/_boot.mjs`；端口被别的 worktree 占着时设 `LOWA_E2E_PORT`）。
 - 涉桌面壳/webview：`npm run test:desktop-e2e`（弹 dev Electron 窗口，验证保存落盘链路）。
 - 全应用：`npm run test:app-e2e`。改编辑器三件套（原语/白名单/worker）必跑 lowa-e2e。

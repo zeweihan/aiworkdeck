@@ -550,8 +550,13 @@ function commentIdOf(f) {
 // XText.insertString does NOT split paragraphs on '\n' (verified against the
 // real engine: a multi-line insert landed as ONE paragraph), so multi-paragraph
 // inserts must interleave insertControlCharacter(PARAGRAPH_BREAK).
+// 写入必须走**光标自己所属的 XText**（vc.getText()），不是 xModel.getText()。
+// 正文 XText 只接受属于自己的区间：光标在表格单元格（或页眉/脚注等别的 story）
+// 里时，body.insertString(vc,…) 抛 RuntimeException，IME 提交与粘贴就整条静默
+// 失败——「表格里打不进字」的病灶（dev-board#627）。insertInlineStyled 一直是
+// 这么写的，所以带 markdown 标记的插入在单元格里反而是好的。
 function insertTextAtCursor(vc, text) {
-  const xText = xModel.getText();
+  const xText = vc.getText();
   const parts = String(text).split('\n');
   for (let i = 0; i < parts.length; i++) {
     if (i > 0) xText.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
@@ -3326,9 +3331,9 @@ const EXEC = {
   // the IME overlay routes here — the overlay's single-line <input> can't make a
   // newline itself). Append, leave cursor collapsed after the break.
   insert_paragraph() {
-    const xText = xModel.getText();
     const vc = ctrl.getViewCursor();
     vc.collapseToEnd();
+    const xText = vc.getText();   // 同 insertTextAtCursor：单元格里必须用光标自己的 XText
     xText.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
     vc.collapseToEnd();
     return { success: true };
