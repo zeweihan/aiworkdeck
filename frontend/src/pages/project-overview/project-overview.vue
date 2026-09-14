@@ -1100,6 +1100,16 @@
                       :key="activeFileLeft.id"
                       :compare-spec="activeFileLeft.compareSpec"
                     />
+                    <!-- 合并比对稿（dev-board#630）：同一段两边都改了的那几处逐处裁决。
+                         key 同 VersionCompareTab——两份不同路径的合并稿命中同一个分支，
+                         没有 key 会被就地复用，引擎里还是上一份稿。 -->
+                    <MergeReviewTab
+                      v-else-if="isMergeReviewTab(activeFileLeft)"
+                      :key="activeFileLeft.id"
+                      :merge-spec="activeFileLeft.mergeSpec"
+                      @close-tab="closeMergeReviewTab(activeFileLeft)"
+                      @open-version-compare="onVersionCompareFile($event)"
+                    />
                     <DocDiffViewer
                       v-else-if="isVersionTextDiffTab(activeFileLeft)"
                       :key="activeFileLeft.id"
@@ -1275,6 +1285,13 @@
                       v-else-if="isVersionCompareTab(activeFileRight)"
                       :key="activeFileRight.id"
                       :compare-spec="activeFileRight.compareSpec"
+                    />
+                    <MergeReviewTab
+                      v-else-if="isMergeReviewTab(activeFileRight)"
+                      :key="activeFileRight.id"
+                      :merge-spec="activeFileRight.mergeSpec"
+                      @close-tab="closeMergeReviewTab(activeFileRight)"
+                      @open-version-compare="onVersionCompareFile($event)"
                     />
                     <DocDiffViewer
                       v-else-if="isVersionTextDiffTab(activeFileRight)"
@@ -2079,6 +2096,7 @@ import { globalOverlayActive } from '@/utils/overlayState.js'
 import CompareDocDialog from '@/components/CompareDocDialog.vue'
 import DocDiffViewer from '@/components/DocDiffViewer.vue'
 import VersionCompareTab from '@/components/version/VersionCompareTab.vue'
+import MergeReviewTab from '@/components/version/MergeReviewTab.vue'
 import MarkdownPreview from '@/components/MarkdownPreview.vue'
 import FilePickerDialog from '@/components/FilePickerDialog.vue'
 
@@ -2245,6 +2263,7 @@ export default {
     CompareDocDialog,
     DocDiffViewer,
     VersionCompareTab,
+    MergeReviewTab,
     EasyVoicePane,
     DesensitizePane,
     FilePickerDialog,

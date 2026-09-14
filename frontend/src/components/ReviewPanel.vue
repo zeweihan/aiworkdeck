@@ -3,15 +3,16 @@
 <template>
   <view class="rp">
     <view class="rp-head">
-      <view class="rp-tabs">
+      <view v-if="!isMerge" class="rp-tabs">
         <text class="rp-tab" :class="{ on: tab === 'rev' }" @tap="tab = 'rev'">{{ $t('editor.review.revTab', { count: allGroups.length }) }}</text>
         <text class="rp-tab" :class="{ on: tab === 'cmt' }" @tap="tab = 'cmt'">{{ $t('editor.review.cmtTab', { count: comments.length }) }}</text>
         <text class="rp-tab" :class="{ on: tab === 'evd' }" @tap="tab = 'evd'">{{ $t('editor.review.evidenceTab', { count: evidenceCount }) }}</text>
       </view>
+      <text v-else class="rp-merge-title">{{ $t('version.mergePanelTitle') }}</text>
       <text class="rp-close" @tap="$emit('close')">{{ $t('editor.review.collapse') }}</text>
     </view>
 
-    <view v-if="tab === 'rev' && revisions.length" class="rp-bulk">
+    <view v-if="!isMerge && tab === 'rev' && revisions.length" class="rp-bulk">
       <text class="rp-bulk-btn" @tap="resolveAll('accept')">{{ $t('editor.review.acceptAll') }}</text>
       <text class="rp-bulk-btn" @tap="resolveAll('reject')">{{ $t('editor.review.rejectAll') }}</text>
     </view>
@@ -19,7 +20,7 @@
     <!-- 作者筛选：多方修订混在一份文档里时，先按「谁改的」收窄再逐条看。
          四个桶的数字恒按未筛选的全量算，切了筛选也不变（否则没法用它判断
          「还有几条别人的改动没看」）。 -->
-    <scroll-view v-if="tab === 'rev' && revisions.length" class="rp-filter" scroll-x>
+    <scroll-view v-if="!isMerge && tab === 'rev' && revisions.length" class="rp-filter" scroll-x>
       <view class="rp-filter-row">
         <text v-for="f in authorFilters" :key="f.kind" class="rp-chip" :class="[f.kind, { on: authorFilter === f.kind }]"
               @tap="authorFilter = f.kind">{{ f.label }}</text>
@@ -31,6 +32,7 @@
 
     <!-- 底稿页：独立组件、v-show 常驻（tab 上要显示计数，且切页不丢筛选/折叠态） -->
     <EvidencePanel
+      v-if="!isMerge"
       v-show="tab === 'evd'"
       :executor="executor"
       :project-id="projectId"
@@ -40,7 +42,84 @@
       @changed="$emit('changed')"
     />
 
-    <scroll-view v-show="tab !== 'evd'" class="rp-list" scroll-y :scroll-into-view="activeCardId" scroll-with-animation>
+    <!-- 合并比对稿模式（dev-board#630，spec §5.4）：三块固定顺序，没有标签切换。
+         ① 同一段两边都改了（置顶，未处理完挡住「完成裁决」）
+         ② 修订按两侧作者分组
+         ③ 另一侧只改了格式、没被自动带过来的段 -->
+    <scroll-view v-if="isMerge" class="rp-list" scroll-y>
+      <!-- ① 同一段两边都改了 -->
+      <view v-if="mergeConflictRows.length" class="rp-sec">
+        <text class="rp-sec-h">{{ $t('version.mergeBlockConflicts', { count: mergeConflictRows.length }) }}</text>
+        <view v-for="c in mergeConflictRows" :key="'mc-' + c.key" class="rp-card rp-conflict" :class="{ done: !!c.choice }">
+          <view class="rp-card-top">
+            <text class="rp-who">{{ c.where }}</text>
+            <text v-if="c.choice" class="rp-tag done">{{ c.choiceLabel }}</text>
+          </view>
+          <view class="rp-three">
+            <view class="rp-three-col">
+              <text class="rp-three-h">{{ $t('version.mergeBaseSideLabel') }}</text>
+              <text class="rp-three-t">{{ c.baseText || $t('editor.review.emptyText') }}</text>
+            </view>
+            <view class="rp-three-col">
+              <text class="rp-three-h">{{ mainSideLabel }}</text>
+              <text class="rp-three-t">{{ c.mainText || $t('editor.review.emptyText') }}</text>
+            </view>
+            <view class="rp-three-col">
+              <text class="rp-three-h">{{ otherSideLabel }}</text>
+              <text class="rp-three-t">{{ c.otherText || $t('editor.review.emptyText') }}</text>
+            </view>
+          </view>
+          <view class="rp-acts">
+            <text class="rp-act ok" @tap.stop="chooseConflict(c, 'main')">{{ $t('version.mergeUseSide', { side: mainSideLabel }) }}</text>
+            <text class="rp-act ok" @tap.stop="chooseConflict(c, 'other')">{{ $t('version.mergeUseSide', { side: otherSideLabel }) }}</text>
+            <text class="rp-act" @tap.stop="chooseConflict(c, 'self')">{{ $t('version.mergeEditSelf') }}</text>
+          </view>
+        </view>
+      </view>
+
+      <!-- ② 修订按两侧作者分组 -->
+      <view class="rp-sec">
+        <text class="rp-sec-h">{{ $t('version.mergeBlockRevisions', { count: allGroups.length }) }}</text>
+        <view v-if="!allGroups.length" class="rp-empty">
+          <text class="rp-empty-t">{{ $t('version.mergeNoPendingRevisions') }}</text>
+        </view>
+        <view v-for="side in mergeSideGroups" :key="'ms-' + side.side" class="rp-sub">
+          <text class="rp-sub-h">{{ $t('version.mergeSideGroup', { side: side.label, count: side.groups.length }) }}</text>
+          <view v-if="side.groups.length" class="rp-bulk">
+            <text class="rp-bulk-btn" @tap="resolveMergeSide(side, 'accept')">{{ $t('version.mergeAcceptSide', { side: side.label }) }}</text>
+            <text class="rp-bulk-btn" @tap="resolveMergeSide(side, 'reject')">{{ $t('version.mergeRejectSide', { side: side.label }) }}</text>
+          </view>
+          <view v-for="g in side.groups" :key="g.key" class="rp-card" :class="'k-' + g.authorKind" @tap="goto(g)">
+            <view class="rp-card-top">
+              <text class="rp-tag" :class="typeClass(g)">{{ typeLabel(g) }}</text>
+              <text v-if="g.inTable" class="rp-tag tbl">{{ $t('editor.review.table') }}</text>
+              <text class="rp-date">{{ side.when }}</text>
+            </view>
+            <text class="rp-text" :class="{ del: g.typeKey === 'delete' }">{{ g.text || $t('editor.review.emptyText') }}</text>
+            <text v-if="g.paragraph" class="rp-ctx">{{ g.paragraph }}</text>
+            <view class="rp-acts">
+              <text class="rp-act ok" @tap.stop="resolveMergeGroup(side, g, 'accept')">{{ $t('editor.review.accept') }}</text>
+              <text class="rp-act no" @tap.stop="resolveMergeGroup(side, g, 'reject')">{{ $t('editor.review.reject') }}</text>
+            </view>
+          </view>
+        </view>
+      </view>
+
+      <!-- ③ 另一侧只改了格式、没被自动带过来 -->
+      <view v-if="mergeFormatOnly.length" class="rp-sec">
+        <text class="rp-sec-h">{{ $t('version.mergeBlockFormatOnly', { side: otherSideLabel, count: mergeFormatOnly.length }) }}</text>
+        <text class="rp-sec-s">{{ $t('version.mergeFormatOnlyHint', { side: otherSideLabel }) }}</text>
+        <view v-for="f in mergeFormatRows" :key="'mf-' + f.key" class="rp-card" @tap="gotoParagraph(f.paraKey)">
+          <text class="rp-ctx">{{ f.where }}</text>
+          <text class="rp-text">{{ f.preview || $t('editor.review.emptyText') }}</text>
+          <view class="rp-acts">
+            <text class="rp-act" @tap.stop="$emit('open-other-version', f)">{{ $t('version.mergeViewOtherVersion', { side: otherSideLabel }) }}</text>
+          </view>
+        </view>
+      </view>
+    </scroll-view>
+
+    <scroll-view v-show="!isMerge && tab !== 'evd'" class="rp-list" scroll-y :scroll-into-view="activeCardId" scroll-with-animation>
       <!-- 修订 -->
       <template v-if="tab === 'rev'">
         <view v-if="!revisions.length" class="rp-empty">
@@ -149,7 +228,7 @@ function fenceSnapshot(src, fields) {
 export default {
   name: 'ReviewPanel',
   components: { EvidencePanel },
-  emits: ['close', 'changed', 'locate'],
+  emits: ['close', 'changed', 'locate', 'merge-state', 'open-other-version'],
   props: {
     documentLocation: { type: Object, default: () => ({}) },
     // LibreOffice executor（executeCommand(action, params)）。null 时面板静默。
@@ -163,15 +242,70 @@ export default {
     // authorName 同源（LibreOfficeEditor.currentAuthorName），拿不到时任何
     // 非 AI 的作者都算「其他人」，不把未署名的修订算到自己头上。
     selfAuthor: { type: String, default: '' },
+    // ---- 合并比对稿模式（dev-board#630，spec §5.4）。默认 'review' 时下面这些全不生效 ----
+    mode: { type: String, default: 'review' },
+    // 同一段两边都改了：后端 analysis.overlaps 原样传下来 [{key, baseText, mainText, otherText}]
+    mergeConflicts: { type: Array, default: () => [] },
+    // 另一侧只改了格式、没被自动带过来的段：引擎 build_merge_draft 的 formatOnly [{paraKey, preview}]
+    mergeFormatOnly: { type: Array, default: () => [] },
+    // 两侧修订的作者名（引擎在比较时署上的），用来把每条修订归到哪一边
+    mainAuthor: { type: String, default: '' },
+    otherAuthor: { type: String, default: '' },
+    // 两侧在这个语境里怎么称呼（「你」/「律师乙」/「案件库那边」…）。界面只说这两个词，
+    // 不说 MAIN/DRAFT，也不显示 username。
+    mainLabel: { type: String, default: '' },
+    otherLabel: { type: String, default: '' },
+    // 每处改动的时间 = 那一侧版本的提交时间；引擎给的修订日期是比较时刻，界面不用它。
+    mainWhen: { type: String, default: '' },
+    otherWhen: { type: String, default: '' },
   },
   data() {
     return {
       tab: 'rev', revisions: [], comments: [], error: '', resolving: false, evidenceCount: 0,
       reviewRevision: null, reviewDocumentSeq: null,
       authorFilter: 'all',
+      // 合并模式的两笔账：块 1 每处选了哪一边，块 2 每条修订怎么处置的。
+      // 「完成裁决」时由宿主用 collectDecisions 合成尾注清单。
+      mergeChoices: {}, mergeOutcomes: [],
     }
   },
   computed: {
+    isMerge() { return this.mode === 'merge' },
+    mainSideLabel() { return this.mainLabel || this.$t('version.mergeSideMainDefault') },
+    otherSideLabel() { return this.otherLabel || this.$t('version.mergeSideOtherDefault') },
+    // 块 1：同一段两边都改了。三栏文字来自后端 analysis.overlaps（引擎里这一段
+    // 只有主线侧的修订——另一侧刻意没重放，见 spec §5.1），所以对方那一栏必须
+    // 从后端拿，不能从文档里读。
+    mergeConflictRows() {
+      return (this.mergeConflicts || []).map((c) => {
+        const choice = this.mergeChoices[c.key] || ''
+        return Object.assign({}, c, {
+          choice,
+          choiceLabel: this.conflictChoiceLabel(choice),
+          where: this.unitLabel(c.key),
+          paraKey: this.paraIndexOf(c.key),
+        })
+      })
+    },
+    mergeFormatRows() {
+      return (this.mergeFormatOnly || []).map((f) => ({
+        key: 'p' + f.paraKey, paraKey: f.paraKey, preview: f.preview || '',
+        where: this.unitLabel('p' + f.paraKey),
+      }))
+    },
+    // 块 2：修订按两侧分组。作者名对不上任何一侧的（律师自己在正文里手改出来的）
+    // 不进这两组——它们既不是「你改的」也不是「律师乙改的」，逐处裁决的账里没有位置。
+    mergeSideGroups() {
+      const buckets = { M: [], T: [] }
+      for (const g of this.allGroups) {
+        const side = this.mergeSideOf(g.author)
+        if (side) buckets[side].push(g)
+      }
+      return [
+        { side: 'M', label: this.mainSideLabel, when: this.mainWhen, groups: buckets.M },
+        { side: 'T', label: this.otherSideLabel, when: this.otherWhen, groups: buckets.T },
+      ]
+    },
     listLimitReached() {
       return this.tab === 'rev' ? this.revisions.length >= 500 : this.tab === 'cmt' && this.comments.length >= 500
     },
@@ -213,8 +347,139 @@ export default {
   watch: {
     executor: { handler() { this.reload() }, immediate: true },
     refreshKey() { this.reload() },
+    // 合并模式下宿主的「完成裁决」按钮靠这条消息算可点与文案，所以清单一变就要报一次。
+    revisions() { if (this.isMerge) this.emitMergeState() },
+    mergeConflicts: { handler() { if (this.isMerge) this.emitMergeState() }, immediate: true },
   },
   methods: {
+    // ---- 合并比对稿模式（dev-board#630） ------------------------------------
+    /** 'p12' → 12；'t1.2.3' → null（表格单元不在正文段落序里，定位不过去） */
+    paraIndexOf(key) {
+      const m = /^p(\d+)$/.exec(String(key || ''))
+      return m ? Number(m[1]) : null
+    },
+    /** 单元键 → 律师读得懂的位置：「第 13 段」/「表格里的一格」 */
+    unitLabel(key) {
+      const i = this.paraIndexOf(key)
+      if (i === null) return this.$t('version.mergeUnitInTable')
+      return this.$t('version.mergeUnitParagraph', { n: i + 1 })
+    },
+    conflictChoiceLabel(choice) {
+      if (choice === 'main') return this.$t('version.mergeChoseSide', { side: this.mainSideLabel })
+      if (choice === 'other') return this.$t('version.mergeChoseSide', { side: this.otherSideLabel })
+      if (choice === 'self') return this.$t('version.mergeChoseSelf')
+      return ''
+    },
+    /** 一条修订属于哪一侧。作者名是引擎在同一条命令内署上的（spike A2）。 */
+    mergeSideOf(author) {
+      const a = String(author || '')
+      if (a && a === this.mainAuthor) return 'M'
+      if (a && a === this.otherAuthor) return 'T'
+      return ''
+    },
+    emitMergeState() {
+      const conflictChoices = (this.mergeConflicts || []).map((c) => ({ key: c.key, choice: this.mergeChoices[c.key] || '' }))
+      this.$emit('merge-state', {
+        conflictChoices,
+        revisionOutcomes: this.mergeOutcomes.slice(),
+        pendingConflicts: conflictChoices.filter((c) => !c.choice).length,
+        pendingRevisions: this.mergeSideGroups.reduce((n, s) => n + s.groups.length, 0),
+      })
+    },
+    recordOutcome(side, group, action) {
+      for (const r of group.items || []) {
+        this.mergeOutcomes.push({
+          paraKey: r.paraKey, inTable: !!r.inTable, side, action: action === 'accept' ? 'A' : 'R',
+        })
+      }
+    },
+    gotoParagraph(paraKey) {
+      if (paraKey === null || paraKey === undefined) return
+      this.run('select_paragraph', { index: paraKey })
+    },
+    /**
+     * 块 1 三选一。
+     * 「用你的」= 接受这一段主线侧的修订（另一侧本来就没重放进来）；
+     * 「用律师乙的」= 一条 worker 命令里拒掉这一段现有修订、切成对方作者写入对方
+     *   文字再接受（作者跨命令设不住，spike A2）；
+     * 「自己改」= 光标定位过去，律师手改，这一处只记一个 X。
+     */
+    async chooseConflict(row, choice) {
+      if (this.resolving) return
+      this.resolving = true
+      try {
+        if (choice === 'main') {
+          const items = this.revisionsInUnit(row)
+          if (items.length) {
+            const indices = items.map((r) => r.index).sort((a, b) => b - a)
+            await this.run('resolve_revisions', { indices, action: 'accept' })
+          }
+        } else if (choice === 'other') {
+          const res = await this.run('merge_take_other', {
+            paraKey: row.paraKey, text: row.otherText || '', author: this.otherAuthor,
+          })
+          if (!res) return // run() 已经把失败写进红条；这一处仍算未处理，别记账
+        } else if (choice === 'self') {
+          this.gotoParagraph(row.paraKey)
+        } else {
+          return
+        }
+        this.mergeChoices = Object.assign({}, this.mergeChoices, { [row.key]: choice })
+        this.$emit('changed')
+        await this.reload()
+        this.emitMergeState()
+      } finally {
+        this.resolving = false
+      }
+    },
+    revisionsInUnit(row) {
+      if (row.paraKey === null || row.paraKey === undefined) return []
+      return this.revisions.filter((r) => r.paraKey === row.paraKey)
+    },
+    async resolveMergeGroup(side, group, action) {
+      if (this.resolving) return
+      this.recordOutcome(side.side, group, action)
+      await this.resolveGroup(group, action)
+      this.emitMergeState()
+    },
+    async resolveMergeSide(side, action) {
+      if (this.resolving) return
+      const groups = side.groups.slice()
+      if (!groups.length) return
+      this.resolving = true
+      try {
+        // 一侧可能有几十条，逐条 resolve_revision 会把 office 线程排满；
+        // 按降序一次交给批量原语（处置一条后比它大的枚举序会前移，同 resolveGroup）。
+        const indices = groups.flatMap((g) => g.items.map((r) => r.index)).sort((a, b) => b - a)
+        const res = await this.run('resolve_revisions', { indices, action })
+        // 引擎没接住这一批时不记账——记了就等于在尾注里说「这一侧已经处置完」，
+        // 而文档里那几十条还原样躺着。
+        if (!res) return
+        for (const g of groups) this.recordOutcome(side.side, g, action)
+        this.$emit('changed')
+        await this.reload()
+      } finally {
+        this.resolving = false
+      }
+      this.emitMergeState()
+    },
+    /**
+     * 「完成裁决」时把剩下没处理的修订全部接受（未拒绝即保留，Word 的默认语义），
+     * 并把它们逐条记进账。返回最终两笔账，宿主交给 collectDecisions 合成尾注清单。
+     */
+    async acceptRemainingRevisions() {
+      const sides = this.mergeSideGroups
+      for (const s of sides) for (const g of s.groups) this.recordOutcome(s.side, g, 'accept')
+      if (sides.some((s) => s.groups.length)) {
+        await this.run('resolve_all_revisions', { action: 'accept' })
+        await this.reload()
+      }
+      this.emitMergeState()
+      return {
+        conflictChoices: (this.mergeConflicts || []).map((c) => ({ key: c.key, choice: this.mergeChoices[c.key] || '' })),
+        revisionOutcomes: this.mergeOutcomes.slice(),
+      }
+    },
     typeLabel(g) {
       // 认不出的类型原样显示引擎给的字符串——不猜，也不硬塞进「插入」。
       return TYPE_I18N[g.typeKey] ? this.$t(TYPE_I18N[g.typeKey]) : (g.type || this.$t('editor.review.typeOther'))
@@ -393,4 +658,17 @@ export default {
 .rp-act { padding: 2px 10px; border: 1px solid var(--awd-border); border-radius: 6px; font-size: 12px; color: var(--awd-text-2); }
 .rp-act.ok { border-color: var(--awd-mint); color: var(--awd-accent-text); }
 .rp-act.no { border-color: var(--awd-danger); color: var(--awd-danger-text); }
+
+/* 合并比对稿模式的三块（dev-board#630） */
+.rp-merge-title { font-size: 12px; font-weight: 600; color: var(--awd-text); }
+.rp-sec { margin-bottom: 14px; }
+.rp-sec-h { display: block; font-size: 12px; font-weight: 600; color: var(--awd-text); margin: 4px 0 6px; }
+.rp-sec-s { display: block; font-size: 11px; color: var(--awd-text-3); line-height: 1.5; margin-bottom: 6px; }
+.rp-sub { margin-bottom: 10px; }
+.rp-sub-h { display: block; font-size: 11px; color: var(--awd-text-2); margin: 6px 0 4px; }
+.rp-conflict { border-left: 3px solid var(--awd-warning); }
+.rp-three { display: flex; flex-direction: column; gap: 5px; margin: 4px 0 2px; }
+.rp-three-col { padding: 5px 7px; border-radius: 6px; background: var(--awd-surface-2); }
+.rp-three-h { display: block; font-size: 10px; color: var(--awd-text-3); margin-bottom: 2px; }
+.rp-three-t { display: block; font-size: 12px; color: var(--awd-text); line-height: 1.45; word-break: break-all; }
 </style>
