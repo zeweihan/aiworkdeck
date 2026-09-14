@@ -79,6 +79,25 @@ public class CloudSyncService {
         this.accountService = service;
     }
 
+    /**
+     * 三方合并（spec 2026-09-14 §4.3/§4.4）：冲突窗口 payload 里的
+     * {@code mergeBase}/{@code documentMerges}/{@code sides} 由分析服务统一拼，
+     * 逐处合好的文件由待决记录佐证。同样字段注入、{@code required=false}——
+     * 手工 new 出本服务的那几个单测不关心这一档，缺席时冲突窗口就是 v2 的老形状。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.version.merge.MergeAnalysisService mergeAnalysisService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.version.merge.PendingMergeStore pendingMergeStore;
+
+    /** 单测/跨包装配用：走字段注入，手工 new 出来的实例得有地方补上。 */
+    public void setMergeServicesForTest(com.checkba.version.merge.MergeAnalysisService analysis,
+                                        com.checkba.version.merge.PendingMergeStore store) {
+        this.mergeAnalysisService = analysis;
+        this.pendingMergeStore = store;
+    }
+
     public CloudSyncService(ProjectRepoService repoService,
                              WorkSessionService sessionService,
                              ProjectTreeManifestService manifestService,
@@ -1004,7 +1023,7 @@ public class CloudSyncService {
                 // 自裁的清单冲突不是律师做的选择，不记裁决尾注。
                 return completeCloudMerge(projectId, tipBefore, remoteSha, conn, userId, userName, Map.of());
             }
-            return new UpdateResult(UpdateStatus.CONFLICT, List.of(), cloudConflictPayload(projectId));
+            return new UpdateResult(UpdateStatus.CONFLICT, List.of(), cloudConflictPayload(projectId, userId));
         }
         return completeCloudMerge(projectId, tipBefore, remoteSha, conn, userId, userName, Map.of());
     }
@@ -1032,6 +1051,7 @@ public class CloudSyncService {
             for (String path : conflicts) {
                 if (choices.get(path) == null) throw VersionException.userFacing(LangText.of("还有文件没选留哪一份", "There are still files where you haven't picked which version to keep"));
             }
+            requireMergedHasPendingRecord(projectId, choices, conflicts);
             for (String path : conflicts) {
                 sessionService.applyResolution(projectId, path, choices.get(path),
                         mainTip, cloudTip, cloudSideLabel());
@@ -1059,6 +1079,8 @@ public class CloudSyncService {
             }
             requireCloudMergeWindow(projectId, repoService.mergeHeadRef(projectId));
             repoService.abortMerge(projectId);
+            // 待决记录与合并窗口同寿（同 WorkSessionService.abortAdopt）
+            if (pendingMergeStore != null) pendingMergeStore.clear(projectId);
             return LangText.of("这次没有取回，你的内容分毫未动", "Nothing was pulled — your content is untouched");
         } finally {
             lock.unlock();
@@ -1083,7 +1105,11 @@ public class CloudSyncService {
         if (cloudManifest != null) manifestService.unionApply(projectId, cloudManifest, base);
         manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
         repoService.commitMergeResolution(projectId, cloudMergeTitle(), resolutions,
+                pendingMergeStore == null ? List.of() : pendingMergeStore.all(projectId),
+                ProjectRepoService.MERGE_CONTEXT_CLOUD,
                 userName, authorEmail(projectId, userId, userName));
+        // 提交成功之后才清：提交失败时记录还在，律师重试一次照样能收尾。
+        if (pendingMergeStore != null) pendingMergeStore.clear(projectId);
         boolean landed = false;
         try {
             // 重推被拒是返回值不是异常（裁决窗口期间远端又被同事推进了一版）：不接住的话
@@ -1165,13 +1191,50 @@ public class CloudSyncService {
     }
 
     /** 冲突窗口 payload，形状同 VersionController.cloudConflictStatus——两处独立反查，不共享代码是故意的（一个在写入时机知道，一个在 /status 轮询时反查）。 */
-    private Map<String, Object> cloudConflictPayload(long projectId) {
+    private Map<String, Object> cloudConflictPayload(long projectId, Long userId) {
         Map<String, Object> m = new HashMap<>();
         m.put("conflictingPaths", WorkSessionService.userVisibleConflicts(
                 repoService.conflictingPaths(projectId)));
         m.put("mainlineTip", repoService.resolveRef(projectId, "HEAD"));
         m.put("cloudTip", repoService.mergeHeadRef(projectId));
+        // 三方合并那三个字段（spec 2026-09-14 §4.3）由分析服务统一拼——**不许在这里
+        // 复制一份**：/status 的 cloudConflictStatus 与这里给的是同一个冲突窗口，
+        // 两份独立实现走散之后前端会按同一套代码渲染出两种形状。
+        m.putAll(mergeExtras(projectId, userId));
         return m;
+    }
+
+    /**
+     * {@code MERGED} 的护栏，口径与 {@code WorkSessionService.requireMergedHasPendingRecord}
+     * 逐字相同（那边是采纳/结束工作两个语境，这里是云端取回）：没有待决记录就说明
+     * 工作区里躺着的还是带冲突标记的半成品，认下去等于把它提交进主线并推给同事。
+     */
+    private void requireMergedHasPendingRecord(long projectId,
+                                               Map<String, WorkSessionService.Resolution> choices,
+                                               List<String> conflicts) {
+        for (String path : conflicts) {
+            if (choices.get(path) != WorkSessionService.Resolution.MERGED) continue;
+            if (pendingMergeStore == null || pendingMergeStore.get(projectId, path).isEmpty()) {
+                throw VersionException.userFacing(LangText.of(
+                        "这份文件还没有合并好的结果，请重新处理一遍",
+                        "This file has no merged result yet — please work through it again"));
+            }
+        }
+    }
+
+    /**
+     * 冲突窗口里那三个三方合并字段。分析服务缺席（手工 new 出本服务的单测）时回空表——
+     * 冲突窗口退回 v2 的老形状，前端的 {@code documentMerges} 为空即全部整份三选一。
+     */
+    private Map<String, Object> mergeExtras(long projectId, Long userId) {
+        if (mergeAnalysisService == null) return Map.of();
+        try {
+            return mergeAnalysisService.conflictExtras(projectId, userId,
+                    remoteDisplayNames(projectId, false));
+        } catch (Exception e) {
+            log.warn("拼装三方合并字段失败，这次冲突窗口按整份三选一给: project={}", projectId, e);
+            return Map.of();
+        }
     }
 
     private CloudConnection connectionOf(ProjectRemote remote) {

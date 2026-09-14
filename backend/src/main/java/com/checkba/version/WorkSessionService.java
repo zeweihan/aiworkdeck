@@ -126,6 +126,51 @@ public class WorkSessionService {
         this.authorResolver = resolver;
     }
 
+    /**
+     * 逐处合并的待决记录（spec 2026-09-14 §4.4）。字段注入、{@code required=false}，
+     * 理由同 {@link #authorResolver}：本类的构造器被十来个单测手工 new。
+     * 缺席时 {@link Resolution#MERGED} 一律判为「没有记录」——宁可让律师重裁一遍，
+     * 也不能在没有记录的情况下认下「这份已经合好了」（那会把半成品提交进主线）。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.version.merge.PendingMergeStore pendingMergeStore;
+
+    /** 单测/跨包装配用：走字段注入，手工 new 出来的实例得有地方补上。 */
+    public void setPendingMergeStoreForTest(com.checkba.version.merge.PendingMergeStore store) {
+        this.pendingMergeStore = store;
+    }
+
+    /**
+     * 这次裁决里被标成「已经逐处合好」的那些文件（按路径排序）。收尾时写进
+     * {@code X-AWD-Merges} 尾注，提交成功后由调用方 {@link #clearPendingMerges} 清掉。
+     */
+    private List<com.checkba.version.merge.MergeRecord> pendingMerges(long projectId) {
+        return pendingMergeStore == null ? List.of() : pendingMergeStore.all(projectId);
+    }
+
+    private void clearPendingMerges(long projectId) {
+        if (pendingMergeStore != null) pendingMergeStore.clear(projectId);
+    }
+
+    /**
+     * {@link Resolution#MERGED} 的护栏：这个值的意思是「这份文件的最终字节已经在工作区里了」，
+     * 而那份字节是 {@code POST /version/merge/resolve-file} 写下去的、同时留下了待决记录。
+     * 没有记录就说明工作区里躺着的还是带冲突标记的半成品（或者合并前的旧内容），
+     * 认下去 = 把半成品提交进主线，历史永不重写，不可逆。
+     */
+    private void requireMergedHasPendingRecord(long projectId, Map<String, Resolution> choices,
+                                               List<String> conflicts) {
+        for (String path : conflicts) {
+            if (choices.get(path) != Resolution.MERGED) continue;
+            if (pendingMergeStore == null
+                    || pendingMergeStore.get(projectId, path).isEmpty()) {
+                throw VersionException.userFacing(LangText.of(
+                        "这份文件还没有合并好的结果，请重新处理一遍",
+                        "This file has no merged result yet — please work through it again"));
+            }
+        }
+    }
+
     public WorkSessionService(ProjectRepoService repoService,
                               ProjectTreeManifestService manifestService,
                               WorkSessionRepository sessionRepository,
@@ -961,7 +1006,10 @@ public class WorkSessionService {
         if (theirs != null) manifestService.unionApply(projectId, theirs, base);
         manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
         String sha = repoService.commitMergeResolution(projectId, s.getTitle(), resolutions,
+                pendingMerges(projectId), ProjectRepoService.MERGE_CONTEXT_SESSION_END,
                 userName, email(projectId, userId, userName));
+        // 提交成功之后才清：提交失败时记录还在，律师重试一次照样能收尾。
+        clearPendingMerges(projectId);
         return closeMergedSession(projectId, s, sha);
     }
 
@@ -1041,6 +1089,7 @@ public class WorkSessionService {
                     throw VersionException.userFacing(LangText.of("还有文件没选留哪一份", "There are still files where you haven't picked which version to keep"));
                 }
             }
+            requireMergedHasPendingRecord(projectId, choices, conflicts);
             for (String path : conflicts) {
                 applyResolution(projectId, path, choices.get(path),
                         mainTip, sessionTip, s.getTitle());
@@ -1060,6 +1109,7 @@ public class WorkSessionService {
             WorkSession s = activeSession(projectId)
                     .orElseThrow(() -> VersionException.userFacing(LangText.of("当前没有进行中的工作", "No work session in progress")));
             repoService.abortMerge(projectId);
+            clearPendingMerges(projectId);   // 理由同 abortAdopt：记录与合并窗口同寿
             if (!s.getBranchName().equals(repoService.currentBranch(projectId))) {
                 repoService.checkoutBranch(projectId, s.getBranchName());
             }
@@ -1315,8 +1365,13 @@ public class WorkSessionService {
                                List<String> conflictingPaths, List<Long> affectedFileIds,
                                String notice) {}
 
-    /** 逐文件三选一：用主线的 / 用这一稿的 / 两份都留。 */
-    public enum Resolution { MAIN, DRAFT, BOTH }
+    /**
+     * 逐文件三选一：用主线的 / 用这一稿的 / 两份都留，外加三方合并那一档
+     * {@code MERGED}——「这份文件已经逐处合好、字节就在工作区里」（spec 2026-09-14 §4.4）。
+     * {@code MERGED} 不写任何字节，只要求有一条待决记录佐证
+     * （见 {@link #requireMergedHasPendingRecord}）。
+     */
+    public enum Resolution { MAIN, DRAFT, BOTH, MERGED }
 
     /**
      * 中止采纳后要告诉律师的那句话（spec 第七节原句）。
@@ -1457,6 +1512,7 @@ public class WorkSessionService {
                 }
             }
 
+            requireMergedHasPendingRecord(projectId, choices, conflicts);
             for (String path : conflicts) {
                 applyResolution(projectId, path, choices.get(path),
                         mainTipBefore, draftTip, draft.getTitle());
@@ -1479,6 +1535,9 @@ public class WorkSessionService {
         lock.lock();
         try {
             repoService.abortMerge(projectId);
+            // 待决记录与合并窗口同寿：留到下一次窗口，那条记录指的是别的一版的字节，
+            // 会让下一次裁决把「这份已经合好了」认在一份没合过的文件上。
+            clearPendingMerges(projectId);
             log.info("中止一次采纳: project={}", projectId);
         } finally {
             lock.unlock();
@@ -1551,7 +1610,10 @@ public class WorkSessionService {
         if (sha == null) {
             manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
             sha = repoService.commitMergeResolution(projectId, adoptMessage(draft), resolutions,
+                    pendingMerges(projectId), ProjectRepoService.MERGE_CONTEXT_ADOPT,
                     userName, email(projectId, userId, userName));
+            // 提交成功之后才清：提交失败时记录还在，律师重试一次照样能收尾。
+            clearPendingMerges(projectId);
         }
 
         draft.setStatus(WorkSession.Status.MERGED);
@@ -1588,8 +1650,11 @@ public class WorkSessionService {
      * 这个文件，而它的正确内容由清单并集算出来、由 {@link #completeAdopt} 重写。
      * 排序只为了让前端拿到的顺序稳定。
      * 包内可见（Task 9）：CloudSyncService 的云端合并冲突裁决复用同一份过滤规则。
+     * 三方合并（spec 2026-09-14）之后 {@code com.checkba.version.merge} 也要照这份规则
+     * 挑待分析的路径，所以放宽到 public——**过滤规则只能有这一份**，复制一份出去
+     * 就等于给「内部清单文件不许出现在律师面前」这条铁律留了一个会走散的副本。
      */
-    static List<String> userVisibleConflicts(List<String> paths) {
+    public static List<String> userVisibleConflicts(List<String> paths) {
         return paths.stream().filter(p -> !p.startsWith(".awd/")).sorted().toList();
     }
 
@@ -1604,10 +1669,15 @@ public class WorkSessionService {
                                  String mainTip, String draftTip, String draftName) {
         String rel = safeRepoPath(path);
         Path work = repoService.workTree(projectId);
+        // 逐处合并的结果早就由 resolve-file 写在工作区那个路径上了（还留了待决记录，
+        // 见 requireMergedHasPendingRecord）。这一档一个字节都不许再写：写 = 用合并前
+        // 某一侧的原文把律师刚裁完的成果覆盖掉，而他不会收到任何提示。
+        if (choice == Resolution.MERGED) return;
         byte[] mainBytes = repoService.readBlobAtCommit(projectId, mainTip, rel);
         byte[] draftBytes = repoService.readBlobAtCommit(projectId, draftTip, rel);
 
         switch (choice) {
+            case MERGED -> { }   // 上面已经 return，这一支只为让 switch 保持穷尽
             case MAIN -> writeOrDelete(work.resolve(rel), mainBytes);
             case DRAFT -> writeOrDelete(work.resolve(rel), draftBytes);
             case BOTH -> {
