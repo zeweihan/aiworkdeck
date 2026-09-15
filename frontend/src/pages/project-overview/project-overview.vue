@@ -479,6 +479,21 @@
         @reload-files="onVersionReloadFiles"
         @conflict="onCollabConflict"
         @open-history="onOpenHistoryFromCollab"
+        @submit-guide="openSubmitGuide"
+        @collab-help="openCollabHelp"
+      />
+
+      <!-- 交稿引导（dev-board#645）：三处交稿入口共用这一个实例。三份各自判断必然
+           走散，而判错的后果是律师看到一句他读不懂的后端错误。 -->
+      <SubmitDraftGuide
+        v-model:visible="submitGuideVisible"
+        :project-id="projectId"
+        :working="!!versionWorkStatus.working"
+        :cloud="collabCloud"
+        :mode="submitGuideMode"
+        @changed="onCollabChanged"
+        @reload-files="onVersionReloadFiles"
+        @conflict="onCollabConflict"
       />
 
       <!-- 文档比较选择对话框 -->
@@ -1167,10 +1182,13 @@
                       :focus-token="activeFileLeft.historyFocusToken || 0"
                       :cloud-linked="collabLinked"
                       :refresh-token="collabRefreshToken"
+                      :cloud="collabCloud"
+                      :working="!!versionWorkStatus.working"
                       @compare-file="onVersionCompareFile"
                       @reload-files="onVersionReloadFiles"
                       @changed="onCollabChanged"
                       @conflict="onCollabConflict"
+                      @submit-guide="openSubmitGuide"
                     />
                     <!-- 「设置」标签：与 pages/admin 薄壳页共用同一个 AdminPane
                          （照插件广场 market-detail 那套 tab 形制）。个人中心 2026-08-20
@@ -1351,10 +1369,13 @@
                       :focus-token="activeFileRight.historyFocusToken || 0"
                       :cloud-linked="collabLinked"
                       :refresh-token="collabRefreshToken"
+                      :cloud="collabCloud"
+                      :working="!!versionWorkStatus.working"
                       @compare-file="onVersionCompareFile"
                       @reload-files="onVersionReloadFiles"
                       @changed="onCollabChanged"
                       @conflict="onCollabConflict"
+                      @submit-guide="openSubmitGuide"
                     />
                     <!-- 「设置」标签：见左窗格同名注释 -->
                     <AdminPane
@@ -2115,6 +2136,7 @@ import CommitHistoryTab from '@/components/version/CommitHistoryTab.vue'
 const ProjectCalendarPane = defineAsyncComponent(() => import('@/components/project-calendar/ProjectCalendarPane.vue'))
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
 import CollabDialog from '@/components/collab/CollabDialog.vue'
+import SubmitDraftGuide from '@/components/collab/SubmitDraftGuide.vue'
 import { MEMBER_GROUP_LABELS } from '@/config/memberRoles.js'
 import { globalOverlayActive } from '@/utils/overlayState.js'
 import CompareDocDialog from '@/components/CompareDocDialog.vue'
@@ -2273,6 +2295,7 @@ export default {
     DdRequestEditor,
     InviteMemberDialog,
     CollabDialog,
+    SubmitDraftGuide,
     ChatInterface,
     MarkdownPreview,
     PluginPane, // Added
@@ -2510,6 +2533,9 @@ export default {
       collabCloud: null,
       collabDialogVisible: false,
       collabInitialTab: 'casefile',
+      // 交稿引导（dev-board#645）：'guide' = 从「交稿」拦下来的三步清单，'help' = 只看说明
+      submitGuideVisible: false,
+      submitGuideMode: 'guide',
       collabRefreshToken: 0, // 自增一次 = 让版本面板重拉自己的那份状态
       focusedPane: 'left', // 'left' | 'right'
 
@@ -4208,6 +4234,17 @@ export default {
     openCollab(tab) {
       this.collabInitialTab = typeof tab === 'string' ? tab : 'casefile'
       this.collabDialogVisible = true
+    },
+    // 交稿引导（dev-board#645）。页面这边只管开窗：弹窗打开后自己走一次联网的状态
+    // 重读（三步清单上的勾选直接决定律师下一步点哪个按钮，用一份几分钟没刷新的快照
+    // 渲染它是在骗人），读完再经 changed 事件把页面这份也带新。
+    openSubmitGuide() {
+      this.submitGuideMode = 'guide'
+      this.submitGuideVisible = true
+    },
+    openCollabHelp() {
+      this.submitGuideMode = 'help'
+      this.submitGuideVisible = true
     },
     // 协作抽屉里的「查看提交历史」：抽屉是模态的，开完标签还挂在上面就把它挡住了。
     onOpenHistoryFromCollab() {

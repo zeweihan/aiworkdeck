@@ -304,6 +304,7 @@ import { layoutGraph, laneCountOf } from '@/utils/historyGraph.js'
 import { mergeHistoryRows, groupRowsByDay, eventRowText, comparePaneState } from '@/utils/historyRows.js'
 import { historyMergeLines, resolutionLine } from '@/utils/historyMerges.js'
 import { createVersionActions } from '@/composables/useVersionActions.js'
+import { submitGuideSteps } from '@/utils/submitGuide.js'
 import { roleLabel } from '@/config/memberRoles.js'
 import AwdSelect from '@/components/AwdSelect.vue'
 import AwdDatePicker from '@/components/AwdDatePicker.vue'
@@ -327,13 +328,17 @@ export default {
     focusToken: { type: Number, default: 0 },
     // 案卷放进过团队案件库才拉事件、才给交稿/取回两个按钮
     cloudLinked: { type: Boolean, default: false },
+    // 页面那份 cloudStatus 与 /version/status 的 working：只用来判「这次交稿要不要先
+    // 摆一张三步清单」（dev-board#645），本页不自己拉这两样。
+    cloud: { type: Object, default: null },
+    working: { type: Boolean, default: false },
     // 页面上的协作动作/120 秒轮询完成后自增一次，本页据此重拉
     refreshToken: { type: Number, default: 0 },
     // 从编辑器的溯源光标条点进来时带的那一版 sha（dev-board#632）：定位到它那一行并高亮。
     // 折叠进工作段的自动存档不在默认清单里，本页会把自动存档拉进来再定位一次。
     focusSha: { type: String, default: '' },
   },
-  emits: ['compare-file', 'reload-files', 'changed', 'conflict'],
+  emits: ['compare-file', 'reload-files', 'changed', 'conflict', 'submit-guide'],
   data() {
     return {
       loading: true, loadingMore: false, loadError: false, notEnabled: false,
@@ -947,6 +952,13 @@ export default {
     // （CONFLICT 送去裁决现场、被拒后自动整合过的文件要走重载链）。
     async onSubmitDraft() {
       if (this.busy) return
+      // 手头的活没收尾、或者案件库已经被推进过：先摆三步清单，别让后端那句
+      // REMOTE_AHEAD 打发人（dev-board#645）。判据是页面传下来的缓存快照，判漏了
+      // 仍旧走下面这条老路，后端那句话原样兜底。
+      if (!submitGuideSteps({ working: this.working, ...(this.cloud || {}) }).canSubmit) {
+        this.$emit('submit-guide')
+        return
+      }
       this.busy = true
       try {
         const res = await uploadToCloud(this.projectId)

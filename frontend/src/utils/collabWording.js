@@ -38,3 +38,27 @@ export function remoteAheadText(t, status, opts = {}) {
   if (people <= 1) return t('version.remoteAheadOne', { name: authors[0], count })
   return t('version.remoteAheadMany', { name: authors[0], people, count })
 }
+
+/**
+ * 交稿引导第 ② 步那一句（dev-board#645）。与 remoteAheadText 分支规则逐条相同
+ * （本人优先 > 一个作者 > 多个作者 > 算不出作者就说一句笼统的），只是句式从
+ * 「同事交了新稿」换成祈使的「取回…」——放在同一个文件里是为了改一处规则时
+ * 两句话不会走散。
+ *
+ * @param {Function} t      $t
+ * @param {Object}   status cloudStatus，字段同 remoteAheadText
+ * @returns {string}
+ */
+export function pullStepText(t, status) {
+  const s = status || {}
+  const count = Number(s.remoteAheadCount) || 0
+  if (!count) return t('version.submitGuidePullGeneric')
+  if (s.remoteAheadBySelf) return t('version.submitGuidePullSelf', { count })
+  const authors = (Array.isArray(s.remoteAheadAuthors) ? s.remoteAheadAuthors : [])
+    .map((a) => (a == null ? '' : String(a).trim()))
+    .filter(Boolean)
+  if (!authors.length) return t('version.submitGuidePullGeneric')
+  const people = Number(s.remoteAheadAuthorCount) || authors.length
+  if (people <= 1) return t('version.submitGuidePullOne', { name: authors[0], count })
+  return t('version.submitGuidePullMany', { name: authors[0], people, count })
+}
