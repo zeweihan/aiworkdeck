@@ -49,3 +49,64 @@ test('工作区尺寸在 new BrowserWindow 之前就取好', () => {
   assert.ok(wa >= 0 && win >= 0)
   assert.ok(wa < win, '要先量工作区再建窗')
 })
+
+// ── 主窗口尺寸「只读」护栏（B4 / 0907 清单 B10）。
+//
+// 那两条报告都说「窗口自己撑成整块工作区」。查下来运行期一条回写路径都没有：
+// 渲染层唯一能改几何的通道是 checkba:browser-set-bounds，它进的是 BrowserView
+// 的 bounds（browser-views.js 的 setBounds → layoutAll → view.setBounds），
+// 窗口本身一次都没被动过；BrowserView 比窗口大只会被裁，不会把窗口顶开。
+// 撑窗口的是 macOS 自己（双击标题栏 = 缩放），根因在渲染层的拖拽区，修在
+// frontend/src/App.vue，见 frontend/tests/window-chrome/titlebar-drag-region.test.mjs。
+//
+// 这两条把「不存在回写通道」钉住：以后要给窗口加尺寸回写，先过这个测试，
+// 顺便被迫想清楚「谁来触发」——弹出层引起的瞬时视口变化不算用户显式操作。
+
+// 收得住的接收者：这些都不是主窗口，给它们设几何是正常的。
+// 主窗口的别名（mainWindow / win / …）一律不在名单里——加了新别名就会红，
+// 这是刻意的：请先想清楚是谁触发这次回写。
+const GEOMETRY_RECEIVERS_OK = new Set(['view', 'views', 'ocrSelectWin', 'confirmWin', 'verifyWin'])
+const GEOMETRY_SETTERS = 'setBounds|setSize|setContentBounds|setContentSize'
+  + '|setMinimumSize|setMaximumSize|maximize|unmaximize|setFullScreen'
+
+function mainProcessSources() {
+  const dir = path.join(__dirname, '../main')
+  const out = []
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name)
+      if (e.isDirectory()) walk(p)
+      else if (e.name.endsWith('.js')) out.push(p)
+    }
+  }
+  walk(dir)
+  out.push(path.join(__dirname, '../preload/preload.js'))
+  return out
+}
+
+test('主进程里没有任何打在主窗口上的几何 setter', () => {
+  const re = new RegExp('([A-Za-z_$][\\w$]*)\\s*\\.\\s*(' + GEOMETRY_SETTERS + ')\\s*\\(', 'g')
+  const offenders = []
+  for (const file of mainProcessSources()) {
+    const code = fs.readFileSync(file, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+    let m
+    while ((m = re.exec(code))) {
+      if (GEOMETRY_RECEIVERS_OK.has(m[1])) continue
+      offenders.push(path.basename(file) + ': ' + m[1] + '.' + m[2] + '()')
+    }
+  }
+  assert.deepStrictEqual(offenders, [],
+    '主窗口尺寸是只读的：' + offenders.join('、')
+    + '。要新增回写就得同时回答「谁触发」——弹出层引起的瞬时视口变化不算用户显式操作。')
+})
+
+test('preload 不向渲染层暴露任何窗口尺寸通道', () => {
+  const code = fs.readFileSync(path.join(__dirname, '../preload/preload.js'), 'utf8')
+  const channels = (code.match(/'checkba:[^']+'/g) || []).map((s) => s.slice(1, -1))
+  const leaked = channels.filter((c) => /window/i.test(c)
+    && /(size|bounds|resize|maximi[sz]e|fullscreen)/i.test(c))
+  assert.deepStrictEqual(leaked, [],
+    '渲染层不该有改窗口尺寸的通道：' + leaked.join('、')
+    + '（checkba:browser-set-bounds 是 BrowserView 的 bounds，不是窗口，别混在一起）')
+})

@@ -415,6 +415,22 @@ no-drag 抠洞整片盖回可拖：v0.18.0 工作台顶栏「项目名切换器 
 重算挂在 App.vue 路由拦截器的 `complete()`（与 `refreshGlobalBack` 同处）+ popstate/hashchange，
 补算窗口 rAF/150/450/900/1600ms。**新增任何自带顶栏的页面，要同时进这两处名单。**
 
+**同一条机制的另一面：全屏浮层必须 `no-drag`，否则 macOS 会把窗口撑成整块工作区**
+（B4 / 0907 清单 B10，2026-09-15）。工作台顶栏那 42px 是 drag 区，任何
+`position: fixed; inset: 0` 的浮层（蒙层/弹窗遮罩/下拉菜单的关闭层）打开后，
+盖在顶栏上的那一条**仍然是 drag**：点它想关掉浮层，DOM 里收不到 click、浮层不关，
+用户于是再点一下——两次落在标题栏上的点击就是 macOS 的「双击标题栏 = 缩放」，
+AppKit 自己把窗口撑成 workAreaSize（本机 1920×962）。**全仓没有任何改主窗口尺寸的
+代码**：`desktop/main` 里的几何 setter 只打在 `ocrSelectWin`/`confirmWin`/BrowserView 上，
+preload 也不暴露窗口尺寸通道（`checkba:browser-set-bounds` 是 BrowserView 的 bounds，
+不是窗口；BrowserView 比窗口大只会被裁），渲染层的 `handleResponsiveResize` 只写
+`sidebarWidth`/`aiPanelWidth` 两个 CSS 宽度——所以「窗口自己变大」永远不是我们的代码干的。
+`App.vue` 里那份「全屏浮层退出拖拽区」名单收着 36 个浮层类名，**新增全屏浮层要加进去**；
+`frontend/tests/window-chrome/titlebar-drag-region.test.mjs`（`npm run test:window-chrome`，已进 CI）
+会扫 `frontend/src` 里所有铺满视口的 fixed 规则并逐个核对，漏一个就红，真不吃鼠标事件的层
+（`pointer-events: none`）才进那份 EXEMPT 并写理由。窗口尺寸「只读」这条由
+`desktop/tests/main-window-bounds.test.js` 新增的两条断言钉住。
+
 **菜单栏的数据源在渲染层，主进程只把 JSON 渲染成 NSMenu。**
 
 ```
