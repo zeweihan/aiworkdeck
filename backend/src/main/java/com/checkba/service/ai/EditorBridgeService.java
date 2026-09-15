@@ -117,6 +117,7 @@ public class EditorBridgeService {
             Map.entry("stream_flush", 120),
             Map.entry("apply_style_profile", 120),
             Map.entry("export_document", 180),
+            Map.entry("build_merge_draft", 180),
             // 整段插入类（dev-board#464）：一份十几页的报告经修订逐行落字远超 30s，
             // worker 那边照旧写完，后端却已经放弃等待。
             Map.entry("insert_at_cursor", 120),
@@ -130,7 +131,7 @@ public class EditorBridgeService {
      * 被模型读成失败，原样重发一次，用户看到同一份长报告以修订插了两遍。
      */
     static final String TIMEOUT_RESULT_JSON = "{\"error\": \"操作超时：编辑器可能仍在执行该命令，"
-            + "内容可能已写入。不要重发同一命令，先用读取工具（如 doc_get_document_text）确认文档状态。\"}";
+            + "内容可能已写入。不要重发同一命令，先用读取工具（如 doc_get_document_text）确认文档状态。\", \"code\": \"EDITOR_RESULT_TIMEOUT\", \"outcomeUnknown\": true, \"retryable\": false}";
 
     /**
      * 本轮（run）内已下发过的整段插入：conversationId -> 指纹集合。
@@ -549,7 +550,7 @@ public class EditorBridgeService {
                 recordBridge(action, "error", conversationId, bridgeStartMs);
                 // 编辑器明确报错 = 这段确实没写进去，撤掉去重登记（超时不撤，结局未知）
                 forgetBulkInsert(conversationId, action, params);
-                return "{\"error\": \"" + result.getError() + "\"}";
+                return errorJson(result.getError());
             }
 
         } catch (TimeoutException e) {
@@ -560,11 +561,16 @@ public class EditorBridgeService {
         } catch (Exception e) {
             log.error("Failed to execute editor command: action={}", action, e);
             recordBridge(action, "error", conversationId, bridgeStartMs);
-            return "{\"error\": \"" + e.getMessage() + "\"}";
+            return errorJson(e.getMessage());
 
         } finally {
             pendingRequests.remove(requestId);
         }
+    }
+
+    private String errorJson(String message) {
+        return objectMapper.valueToTree(Map.of("error",
+                message == null || message.isBlank() ? "编辑器未返回具体错误，请检查文档状态" : message)).toString();
     }
 
     /**

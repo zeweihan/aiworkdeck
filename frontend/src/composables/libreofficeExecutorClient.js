@@ -254,7 +254,7 @@ export function createLibreOfficeExecutor(opts = {}) {
     const budget = ACTION_BUDGET_MS[action] ? Math.max(timeoutMs, ACTION_BUDGET_MS[action]) : timeoutMs
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        if (pending.has(reqId)) { pending.delete(reqId); reject(new Error('LibreOffice command timeout: ' + action)) }
+        if (pending.has(reqId)) { pending.delete(reqId); reject(Object.assign(new Error('等待编辑器结果超时，操作可能仍在执行。请先检查文档和修订记录，确认结果前不要重复执行写入操作。'), { code: 'EDITOR_RESULT_TIMEOUT' })) }
       }, budget)
       pending.set(reqId, { resolve, reject, timer, onProgress: callOpts && callOpts.onProgress })
       if (callOpts && callOpts.onIssued) { try { callOpts.onIssued(reqId) } catch (e) { /* ignore */ } }
@@ -270,14 +270,14 @@ export function createLibreOfficeExecutor(opts = {}) {
     if (action && action.startsWith && action.startsWith('ppt_')) {
       const m = 'ppt_* not supported by the LibreOffice executor: ' + action
       if (opts.onError) opts.onError(m)
-      return { success: false, message: m }
+      return { success: false, message: m, error: m }
     }
     if (!EDITOR_ACTIONS.includes(action)) {
       // 埋点：白名单外拒绝是「新工具漏配 EDITOR_ACTIONS」的静默失败计数器
       trackEditorAction(action, params, false, 0, true)
       const m = 'Unknown action: ' + action
       if (opts.onError) opts.onError(m)
-      return { success: false, message: m }
+      return { success: false, message: m, error: m }
     }
     const startMs = Date.now()
     try {
@@ -288,7 +288,8 @@ export function createLibreOfficeExecutor(opts = {}) {
       trackEditorAction(action, params, false, Date.now() - startMs, false)
       const m = e && e.message ? e.message : String(e)
       if (opts.onError) opts.onError(m)
-      return { success: false, message: m }
+      return { success: false, message: m, error: m,
+        ...(e && e.code === 'EDITOR_RESULT_TIMEOUT' ? { code: e.code, outcomeUnknown: true, retryable: false } : {}) }
     }
   }
 

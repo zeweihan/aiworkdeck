@@ -1695,34 +1695,29 @@ public class AgentOrchestrator {
             handleStreamErrorTerminal(guard, projectId, userId, err, kind);
         }));
 
-        // 无活动看门狗：timeout 调大后，"流悄悄停了但不回调"的场景由它兜底终止本轮
-        handler.armInactivityWatchdog(STREAM_FIRST_TOKEN_TIMEOUT_SECONDS, STREAM_INACTIVITY_TIMEOUT_SECONDS);
-
-        // 自动 compaction：消息栈在长任务里只增不减，撑破上下文会 400 或质量塌方。
-        // 原地替换（而不是换个列表实例）——递归各层与两处回调共享同一个 messages 引用
+        // 先完成本地压缩和工具准备，再计模型请求的首字等待时间。
         compactIfNeeded(messages, conversationId, modelId);
-
-        // Execute Generation with Tools. ASK receives only the three read-only memory tools.
+        List<ToolSpecification> registered = toolRegistry.getAllSpecifications(conversationId);
+        List<ToolSpecification> visible;
         if (agentMode == AgentMode.ASK) {
-            List<ToolSpecification> readOnlyMemory = toolRegistry.getAllSpecifications(conversationId).stream()
-                    .filter(s -> ASK_MEMORY_TOOLS.contains(s.name())).toList();
-            log.info("Ask mode: generating with {} read-only memory tools", readOnlyMemory.size());
-            model.generate(messages, readOnlyMemory, handler);
+            visible = registered.stream().filter(s -> ASK_MEMORY_TOOLS.contains(s.name())).toList();
+            log.info("Ask mode: generating with {} read-only memory tools", visible.size());
         } else {
-            // Agent 和 Plan 模式：传递工具规格（内置 + 插件，统一来自注册表）
-            // 会话客户端能力过滤（Phase C：office/lowa/none）在注册表内完成；
-            // Skill 命中时由 SkillRouter 做可见性白名单裁剪（Phase 3B，未命中原样返回）
-            List<ToolSpecification> registered = toolRegistry.getAllSpecifications(conversationId);
-            List<ToolSpecification> visible = new java.util.ArrayList<>(skillRouter.visibleTools(guard.runId, registered));
-            // Memory is an invariant capability: skill action whitelists must not prevent an
-            // ordinary Agent/Plan request from recalling or persisting the user's context.
+            visible = new java.util.ArrayList<>(skillRouter.visibleTools(guard.runId, registered));
+            // Memory remains available even when a skill restricts other tools.
             for (ToolSpecification spec : registered) {
                 if (MEMORY_TOOLS.contains(spec.name())
                         && visible.stream().noneMatch(v -> v.name().equals(spec.name()))) {
                     visible.add(spec);
                 }
             }
+        }
+        handler.armInactivityWatchdog(STREAM_FIRST_TOKEN_TIMEOUT_SECONDS, STREAM_INACTIVITY_TIMEOUT_SECONDS);
+        try {
             model.generate(messages, visible, handler);
+        } catch (Exception e) {
+            // 同步抛错与异步失败共用终态闸：取消看门狗并执行有限重试 / 模型切换。
+            handler.onError(e);
         }
     }
 

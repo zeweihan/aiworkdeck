@@ -10,9 +10,9 @@
 //
 // Run:  npm run test:lowa-big            (from frontend/)
 // 夹具：python3 tests/lowa-e2e/fixtures/gen-big-doc.py（依赖 python-docx pillow）
-//       默认写到 $TMPDIR/awd-big-doc/big.docx；LOWA_BIG_DOC 可指向别的文件。
+//       默认写到 $TMPDIR/awd-big-doc/big-<页数>.docx；LOWA_BIG_DOC 可指向别的文件。
 // Env:  同 run.mjs（LOWA_ENGINE_DIR / PUPPETEER_EXECUTABLE_PATH / LOWA_E2E_PORT）；
-//       LOWA_BIG_RUNS 轮数（默认 3）；LOWA_BIG_QUIET_MS 导出后静默观察窗（默认 30000）。
+//       LOWA_BIG_PAGES 页数（默认150，可设300）；LOWA_BIG_RUNS 轮数（默认 3）；LOWA_BIG_QUIET_MS 导出后静默观察窗（默认 30000）。
 
 import fs from 'node:fs'
 import os from 'node:os'
@@ -28,15 +28,17 @@ if (process.env.LOWA_E2E_BIG !== '1') {
 }
 const RUNS = Math.max(1, Number(process.env.LOWA_BIG_RUNS || 3))
 const QUIET_MS = Number(process.env.LOWA_BIG_QUIET_MS || 30000)
-const EXPECTED_HITS = 150
-const EXPECTED_PARAS = 920
+const PAGES = Number(process.env.LOWA_BIG_PAGES || 150)
+if (!Number.isInteger(PAGES) || PAGES < 1) throw new Error('LOWA_BIG_PAGES must be a positive integer')
+const EXPECTED_HITS = PAGES
+const EXPECTED_PARAS = PAGES * 6 + Math.min(20, PAGES)
 
 // ---------- 夹具 ----------
-let bigDoc = process.env.LOWA_BIG_DOC || path.join(os.tmpdir(), 'awd-big-doc', 'big.docx')
+let bigDoc = process.env.LOWA_BIG_DOC || path.join(os.tmpdir(), 'awd-big-doc', 'big-' + PAGES + '.docx')
 if (!fs.existsSync(bigDoc)) {
   console.log('夹具不存在，生成中: ' + bigDoc)
   try {
-    bigDoc = execFileSync('python3', [path.join(here, 'fixtures/gen-big-doc.py'), '--out', bigDoc], { encoding: 'utf8' }).trim()
+    bigDoc = execFileSync('python3', [path.join(here, 'fixtures/gen-big-doc.py'), '--out', bigDoc, '--pages', String(PAGES)], { encoding: 'utf8' }).trim()
   } catch (e) {
     console.error('夹具生成失败：python3 -m pip install --user python-docx pillow 后重试')
     process.exit(2)
@@ -77,11 +79,11 @@ const server = await startServer({ patchServed, extraFiles: { '/big.docx': bigDo
 // ---------- 阈值 ----------
 // 单位 ms。另做结果形状断言（replaced 数 / truncated 字段 / modified 次数）。全部硬阈。
 const ITEMS = [
-  { key: 'load_document', label: 'load_document 6.7MB/150 页', max: 15000 },
+  { key: 'load_document', label: 'load_document ' + PAGES + ' 页夹具', max: 15000 },
   { key: 'get_document_text_2nd', label: 'get_document_text 第 2 次（同参数）', max: 300 },
   { key: 'find_text_locations_600', label: 'find_text_locations 约 600 命中（返回上限 50）', max: 9000 },
-  { key: 'find_replace_150', label: 'find_replace 修订 150 命中', max: 8000 },
-  { key: 'apply_house_style', label: 'apply_house_style 920 段 + 30 表', max: 120000 },
+  { key: 'find_replace_150', label: 'find_replace 修订 ' + PAGES + ' 命中', max: 8000 },
+  { key: 'apply_house_style', label: 'apply_house_style 全文 + 30 表', max: 120000 },
   { key: 'export_document', label: 'export_document', max: 10000 },
   { key: 'quiet_after_export', label: '导出后 ' + (QUIET_MS / 1000) + 's 内 modified 次数', max: 0, unit: '次' },
 ]
@@ -104,6 +106,7 @@ try {
       try { r = await window.__loExecutor.executeCommand(action, params || {}) }
       catch (e) { r = { success: false, message: String(e && e.message || e), timeout: true } }
       const ms = performance.now() - t0
+      if (action === 'export_document' && r?.bytes) window.__bigExportBytes = r.bytes
       const slim = {}
       for (const k of Object.keys(r || {})) {
         const v = r[k]
@@ -144,6 +147,18 @@ try {
     const g3 = await timed('get_document_text', { startParagraph: 800, maxParagraphs: 50 })
     console.log('  get_document_text {start:800}: ' + fmt(g3.ms) + ' returned=' + g3.r.returned)
 
+    // Read the tail explicitly: a successful first window does not prove full-document coverage.
+    const tail = await page.evaluate(async () => {
+      const head = await window.__loExecutor.executeCommand('get_document_text', { startParagraph: 0, maxParagraphs: 1 })
+      const last = await window.__loExecutor.executeCommand('get_document_text', {
+        startParagraph: Math.max(0, head.totalParagraphs - 20), maxParagraphs: 20,
+      })
+      return { success: last.success, text: JSON.stringify(last) }
+    })
+    if (tail.success !== true || !tail.text.includes('第' + PAGES + '节')) {
+      problems.push('第 ' + run + ' 轮未读到文档最后一节')
+    }
+
     // find_text_locations：「公司章程」全文约 645 处，原语上限 50 条（truncated=true），
     // 量的是 findFirst/findNext + 每条锚书签 + 上下文取回的成本（阈 9s = 改造前基线 3s x 3）
     const ftl = await timed('find_text_locations', { keyword: '公司章程' })
@@ -174,6 +189,11 @@ try {
     console.log('  export_document: ' + fmt(ex.ms) + ' size=' + (ex.r.size || ex.r.bytesLength))
     record('export_document', ex.ms)
     if (ex.r.success !== true) problems.push('第 ' + run + ' 轮 export_document 失败: ' + JSON.stringify(ex.r))
+    if (ex.r.success === true && process.env.LOWA_BIG_EXPORT) {
+      const bytes = await page.evaluate(() => Array.from(window.__bigExportBytes || []))
+      if (!bytes.length) problems.push('export_document returned no bytes')
+      else fs.writeFileSync(process.env.LOWA_BIG_EXPORT, Buffer.from(bytes))
+    }
 
     // 导出后静默窗：不该再冒 modified（否则宿主会再排一次保存，形成循环）
     const before = (await timed('debug_modified_count')).r.count
@@ -185,7 +205,16 @@ try {
 
   let mem = null
   try {
-    mem = await page.evaluate(async () => performance.measureUserAgentSpecificMemory ? (await performance.measureUserAgentSpecificMemory()).bytes : null)
+    mem = await page.evaluate(async () => {
+      if (!performance.measureUserAgentSpecificMemory) return null
+      let timer
+      try {
+        return await Promise.race([
+          performance.measureUserAgentSpecificMemory().then(result => result.bytes),
+          new Promise(resolve => { timer = setTimeout(() => resolve(null), 5000) }),
+        ])
+      } finally { clearTimeout(timer) }
+    })
   } catch (e) { /* 无跨源隔离或不支持 */ }
 
   // ---------- 汇总 ----------

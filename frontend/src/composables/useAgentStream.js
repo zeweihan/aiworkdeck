@@ -396,6 +396,11 @@ export function useAgentStream() {
         const sessionId = getSessionId()
 
         return new Promise(async (resolve, reject) => {
+            let connectTimedOut = false
+            const connectTimer = setTimeout(() => {
+                connectTimedOut = true
+                myController.abort()
+            }, 15000)
             try {
                 console.log('[AgentStream] Connecting SSE:', url)
                 const response = await fetch(url, {
@@ -404,6 +409,7 @@ export function useAgentStream() {
                     signal: myController.signal
                 })
 
+                clearTimeout(connectTimer) // 仅限制响应头等待，不限制长时间流式任务
                 if (!response.ok) throw new Error(`SSE Connection Failed: ${response.status}`)
 
                 isConnected.value = true
@@ -452,9 +458,12 @@ export function useAgentStream() {
             } catch (err) {
                 // 关键：若本连接已被替换（切换会话后新连接已建立），不得清理全局状态
                 const isCurrent = sseAbortController === myController
+                if (connectTimedOut) err = new Error(t('agentStream.connectionInterrupted'))
+                // 初始发送时 isStreaming 已经为 true；不能据此跳过 reject 留下悬空 Promise。
+                // 已建立的连接对应 Promise 已 resolve，重复 reject 无副作用。
+                reject(err)
                 if (err.name !== 'AbortError') {
                     console.error('[AgentStream] SSE Error:', err)
-                    if (!isConnected.value && !isStreaming.value) reject(err)
                     // SSE 连接出错时，确保结束当前 bubble 的加载状态
                     if (isCurrent && currentAssistantBubble.value && currentAssistantBubble.value.isStreaming) {
                         currentAssistantBubble.value.isStreaming = false
@@ -466,6 +475,7 @@ export function useAgentStream() {
                     isStreaming.value = false
                 }
             } finally {
+                clearTimeout(connectTimer)
                 // 同上：只有"自己仍是当前连接"时才清理，避免旧连接收尾时踩掉新连接
                 if (sseAbortController === myController) {
                     sseAbortController = null
@@ -722,32 +732,21 @@ export function useAgentStream() {
     }
 
     const abort = async () => {
-        // 1. 向后端发送取消请求
         const conversationId = currentConversationId.value
-        if (conversationId) {
-            try {
-                await fetch(`${getApiBaseUrl()}/api/agent/cancel/${conversationId}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-Session-Id': getSessionId() || '' }
-                })
-                console.log('[AgentStream] Cancel request sent for:', conversationId)
-            } catch (e) {
-                console.warn('[AgentStream] Failed to send cancel request:', e)
-            }
-        }
-
+        // 先结束本地等待。断网时取消请求本身也可能挂起，不能让停止按钮一起失效。
+        const stoppedBubble = currentAssistantBubble.value
         // 2. 中断前端连接
         if (messageAbortController) messageAbortController.abort()
         if (sseAbortController) sseAbortController.abort()
 
         // 3. 更新状态
         isStreaming.value = false
-        if (currentAssistantBubble.value) {
-            currentAssistantBubble.value.isStreaming = false
+        if (stoppedBubble) {
+            stoppedBubble.isStreaming = false
             // 顶层 thinking 归位：abort 在上面第 2 步已经掐断了本地 SSE，后端随后
             // 发出的 cancelled 事件永远到不了前端，正常收尾路径里的这段归零逻辑
             // 不会再有人执行——漏掉它计时器就永远读秒（dev-board#211）。
-            const thinking = currentAssistantBubble.value.thinking
+            const thinking = stoppedBubble.thinking
             if (thinking.status === 'thinking') {
                 thinking.status = 'done'
                 if (!thinking.duration || thinking.duration === 0) {
@@ -756,10 +755,24 @@ export function useAgentStream() {
             }
             // 终态收敛：停止后不允许卡片停留在"执行中"
             finalizeProcesses('error')
-            // 停止提示走独立字段，不写 content（见 createAssistantBubble 注释）。
-            // 措辞「已发送停止指令」：本地流已断开、不会再渲染新内容，但后端在途
-            // 的那一次调用可能仍在收尾，说「已停止」不完全诚实。
-            currentAssistantBubble.value.stopNotice = t('agentStream.stopRequested')
+            stoppedBubble.stopNotice = t('agentStream.stopPending')
+        }
+        if (!conversationId) return
+        const cancelController = new AbortController()
+        const cancelTimer = setTimeout(() => cancelController.abort(), 10000)
+        try {
+            const response = await fetch(`${getApiBaseUrl()}/api/agent/cancel/${conversationId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Session-Id': getSessionId() || '' },
+                signal: cancelController.signal
+            })
+            if (!response.ok) throw new Error(`Cancel request failed: ${response.status}`)
+            if (stoppedBubble) stoppedBubble.stopNotice = t('agentStream.stopRequested')
+        } catch (e) {
+            console.warn('[AgentStream] Failed to confirm cancel request:', e)
+            if (stoppedBubble) stoppedBubble.stopNotice = t('agentStream.stopUnconfirmed')
+        } finally {
+            clearTimeout(cancelTimer)
         }
     }
 

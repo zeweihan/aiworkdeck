@@ -49,6 +49,11 @@ test('超时后迟到的成功结果触发 onLateResult，而不是被静默丢�
   const p = relay.executeCommand('some_slow_action', { x: 1 })
   const timedOut = await p
   assert.equal(timedOut.success, false, '超时应先把失败结果 resolve 给调用方')
+  assert.equal(timedOut.code, 'EDITOR_RESULT_TIMEOUT')
+  assert.equal(timedOut.outcomeUnknown, true)
+  assert.equal(timedOut.retryable, false, '超时不能误导 AI 重复执行写入')
+  assert.match(timedOut.error, /不要重复执行写入操作/)
+  assert.equal(timedOut.message, timedOut.error, '宿主会读取 error 字段回传 AI')
 
   // worker 端"迟到"发回真正的结果——reqId 就是刚刚发送的那条消息里的 reqId。
   const reqId = t.sent[0].reqId

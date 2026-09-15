@@ -469,3 +469,7 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
 
 - 活跃文档提醒在中英两路明确要求新表整表 `doc_insert_table(rowsJson)` 一次提交，再做合并/格式，避免逐行写表耗尽 30 步；不放大全局步数限制。
 - 回答菜单「插入当前文档」复用 LOWA `stream_insert({text, complete:true})` 富文本路径，单命令冲出尾表；拒绝并行 Agent 写入，失败不显示成功。覆盖 `tests/project-home/ai-message-insert.test.mjs`；worker 契约见 ai-doc-bridge。
+
+## 超时与失败收尾补充（2026-09-15，dev-board#650）
+
+SSE 建连只等待响应头15秒，已有长流不套这个上限；发送中初次连接失败也必须reject。停止先结束本地等待，再独立用10秒请求确认后台取消，失败不能写“已停止”。模型generate同步抛错走handler.onError同一终态闸，工具准备/本地压缩完成才启动首字看门狗。验证见 `agent-stream-connect/abort` 和 `AgentOrchestratorFailoverFlowTest`；完整矩阵与成本流程见 `doc/ai-timeout-cost-audit.md`。

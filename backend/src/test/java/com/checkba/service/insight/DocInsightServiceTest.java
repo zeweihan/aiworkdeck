@@ -144,6 +144,7 @@ class DocInsightServiceTest {
         when(files.findById(DOC)).thenReturn(Optional.of(doc()));
         when(docText.extractText(any())).thenReturn(TEXT);
         when(chatModelFactory.getAuxChatModel()).thenReturn(model);
+        when(chatModelFactory.getAuxChatModel(any(java.time.Duration.class))).thenReturn(model);
         when(auxModelResolver.auxModelId()).thenReturn("qwen/qwen3.7-flash");
         when(model.generate(anyList())).thenReturn(modelReply(MODEL_JSON));
 
@@ -269,6 +270,47 @@ class DocInsightServiceTest {
     }
 
     // ---------------------------------------------------------------- 中间态与单飞
+
+    @Test
+    @DisplayName("两线程加32排队容量：拒绝可读且不留RUNNING/单飞占位，原任务照常完成")
+    void saturatedParseQueueRejectsCleanlyAndRecovers() throws Exception {
+        CountDownLatch entered = new CountDownLatch(2);
+        CountDownLatch release = new CountDownLatch(1);
+        when(files.findById(anyLong())).thenAnswer(inv -> {
+            ProjectFile file = doc();
+            file.setId(inv.getArgument(0));
+            return Optional.of(file);
+        });
+        when(docText.extractText(any())).thenAnswer(inv -> {
+            entered.countDown();
+            if (!release.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("test latch timed out");
+            return "普通正文";
+        });
+        when(model.generate(anyList())).thenReturn(modelReply("{}"));
+        List<StartResult> accepted = new ArrayList<>();
+        try {
+            accepted.add(svc.startParse(UID, PID, 100L));
+            accepted.add(svc.startParse(UID, PID, 101L));
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            for (long id = 102; id < 134; id++) accepted.add(svc.startParse(UID, PID, id));
+            assertEquals("等待解析", runStore.get(accepted.get(2).runId()).getPhase());
+            for (int retry = 0; retry < 2; retry++) {
+                IllegalArgumentException busy = assertThrows(IllegalArgumentException.class,
+                        () -> svc.startParse(UID, PID, 134L));
+                assertTrue(busy.getMessage().contains("解析任务较多"));
+                List<DocInsightRun> rejected = runStore.values().stream()
+                        .filter(r -> r.getDocFileId().equals(134L)).toList();
+                assertEquals(retry + 1, rejected.size(), "同文件重试应重新经过入队，不被残留单飞锁挡住");
+                assertTrue(rejected.stream().allMatch(r -> DocInsightRun.STATUS_FAILED.equals(r.getStatus())
+                        && r.getFinishedAt() != null && r.getError().contains("解析任务较多")));
+            }
+            assertTrue(accepted.stream().allMatch(a -> DocInsightRun.STATUS_RUNNING.equals(runStore.get(a.runId()).getStatus())));
+            release.countDown();
+            for (StartResult run : accepted) awaitStatus(run.runId(), DocInsightRun.STATUS_DONE);
+            awaitStatus(svc.startParse(UID, PID, 134L).runId(), DocInsightRun.STATUS_DONE);
+            verify(model, org.mockito.Mockito.times(35)).generate(anyList());
+        } finally { release.countDown(); svc.shutdown(); }
+    }
 
     @Test
     @DisplayName("startParse 先落 RUNNING 再异步跑；跑的过程中重复发起被拒")
@@ -714,8 +756,41 @@ class DocInsightServiceTest {
         stubPkulawUnavailable();
         DocInsightRun r = awaitStatus(svc.startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
         assertNotNull(r);
-        // 正则那条腿仍在：法规与案例照抽
+        // 正则那条腿仍在：法规与案例照抽，但不能让用户以为完成了完整的 AI 核查。
         assertEquals(2, entityStore.size());
+        assertTrue(r.getPhase().contains("1 个片段抽取失败"), r.getPhase());
+    }
+
+    @Test
+    @DisplayName("三万字分四块，单块失败仍抽取尾部实体，并提示结论不完整")
+    void longDocumentContinuesAfterFailedChunk() throws Exception {
+        props.setChunkChars(10000);
+        props.setChunkOverlap(500);
+        String tail = "全文末尾有限公司";
+        when(docText.extractText(any())).thenReturn("文".repeat(30000) + tail);
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        when(model.generate(anyList())).thenAnswer(inv -> {
+            int call = calls.incrementAndGet();
+            if (call == 2) throw new IllegalStateException("upstream timeout");
+            return modelReply(call == 4
+                    ? "{\"companies\":[{\"name\":\"" + tail + "\",\"quote\":\"" + tail + "\"}]}"
+                    : "{\"companies\":[]}");
+        });
+        DocInsightRun r = awaitStatus(svc.startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+        assertEquals(4, calls.get());
+        assertTrue(entityStore.values().stream().anyMatch(e -> tail.equals(e.getName())));
+        assertTrue(r.getPhase().contains("1 个片段抽取失败"), r.getPhase());
+        verify(tokenUsageService, org.mockito.Mockito.times(3)).recordUsage(eq(PID), eq(UID), anyString(), any(), any());
+    }
+
+    @Test
+    @DisplayName("超出全文上限时明确显示仅解析前缀")
+    void textLimitIsVisible() throws Exception {
+        props.setMaxChars(30000);
+        when(docText.extractText(any())).thenReturn("文".repeat(30001));
+        when(model.generate(anyList())).thenReturn(modelReply("{}"));
+        DocInsightRun r = awaitStatus(svc.startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+        assertTrue(r.getPhase().contains("只解析了前 30000 字"), r.getPhase());
     }
 
     @Test
@@ -1054,11 +1129,69 @@ class DocInsightServiceTest {
         assertTrue(result.deep());
         assertTrue(result.findings().stream().anyMatch(f -> "COUNT_MISMATCH".equals(f.kind())
                 && f.paragraphIndex() == 0 && f.related().size() == 1));
-        verify(chatModelFactory).getAuxChatModel();
+        verify(chatModelFactory).getAuxChatModel(any(java.time.Duration.class));
         verify(tokenUsageService).recordUsage(eq(PID), eq(UID), anyString(), any(), eq(null));
         verify(qichacha, never()).queryEciInfoJson(anyString());
         verify(mcp, never()).callTool(anyString(), anyString(), anyMap());
         verify(runs, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("三万字深入审校单块超时保留先前发现并标记不完整，不自动重试收费")
+    void deepReviewPreservesFindingsAfterFailedChunk() {
+        props.setChunkChars(10000);
+        props.setChunkOverlap(500);
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        when(model.generate(anyList())).thenAnswer(inv -> {
+            int call = calls.incrementAndGet();
+            if (call == 2) throw new IllegalStateException("upstream timeout");
+            return modelReply(call == 1
+                    ? MODEL_JSON.substring(0, MODEL_JSON.lastIndexOf('}')) + ",\"issues\":[]}"
+                    : "{\"claims\":[],\"issues\":[]}");
+        });
+        ReviewResult result = svc.review(UID, PID, DOC, List.of(
+                new ParagraphInput(0, TEXT),
+                new ParagraphInput(1, "文".repeat(15000)),
+                new ParagraphInput(2, "文".repeat(15000))), true, false);
+        assertEquals(2, calls.get());
+        assertEquals(false, result.summary().get("deepComplete"));
+        assertTrue(result.findings().stream().anyMatch(f -> "COUNT_MISMATCH".equals(f.kind())));
+        verify(tokenUsageService, org.mockito.Mockito.times(1)).recordUsage(eq(PID), eq(UID), anyString(), any(), eq(null));
+    }
+
+    @Test
+    @DisplayName("深入审校在105秒总预算耗尽后停止新调用，返回已完成块")
+    void deepReviewStopsAtTotalDeadline() {
+        props.setChunkChars(10000);
+        var clock = new java.util.concurrent.atomic.AtomicLong();
+        org.springframework.test.util.ReflectionTestUtils.setField(svc, "nanoTime",
+                (java.util.function.LongSupplier) clock::get);
+        var budgets = new java.util.ArrayList<java.time.Duration>();
+        when(chatModelFactory.getAuxChatModel(any(java.time.Duration.class))).thenAnswer(inv -> {
+            budgets.add(inv.getArgument(0));
+            return model;
+        });
+        when(model.generate(anyList())).thenAnswer(inv -> {
+            clock.addAndGet(java.time.Duration.ofSeconds(60).toNanos());
+            return modelReply("{\"claims\":[],\"issues\":[]}");
+        });
+        ReviewResult result = svc.review(UID, PID, DOC, List.of(
+                new ParagraphInput(0, "文".repeat(15000)), new ParagraphInput(1, "文".repeat(15000))), true, false);
+        assertEquals(List.of(java.time.Duration.ofSeconds(105), java.time.Duration.ofSeconds(45)), budgets);
+        assertEquals(false, result.summary().get("deepComplete"));
+        verify(model, org.mockito.Mockito.times(2)).generate(anyList());
+    }
+
+    @Test
+    @DisplayName("深入审校首块传输失败立即停，不继续提交其余收费请求")
+    void deepReviewStopsAfterFirstTransportFailure() {
+        props.setChunkChars(10000);
+        when(model.generate(anyList())).thenThrow(new IllegalStateException("upstream unavailable"));
+        ReviewResult result = svc.review(UID, PID, DOC, List.of(
+                new ParagraphInput(0, "文".repeat(15000)), new ParagraphInput(1, "文".repeat(15000))), true, false);
+        assertEquals(false, result.summary().get("deepComplete"));
+        verify(model, org.mockito.Mockito.times(1)).generate(anyList());
+        verify(tokenUsageService, never()).recordUsage(any(), any(), any(), any(), any());
     }
 
     @Test

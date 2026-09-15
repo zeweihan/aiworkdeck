@@ -53,3 +53,47 @@ test('RootBubble 渲染 stopNotice，且「用到文档」chip 判据仍只认 c
   assert.match(BUBBLE, /v-if="bubble\.content && !bubble\.isStreaming"/,
     'message-actions 的判据是 content 非空且流已结束，别把 stopNotice 算进去')
 })
+
+// 执行真正的 abort 函数体：挂起的网络请求不得阻挡本地收尾，失败也不能谎报已发送。
+function executeAbort(fetchImpl, timers = {}) {
+  const bubble = { isStreaming: true, thinking: { status: 'thinking', startTime: Date.now() - 1000 } }
+  const isStreaming = { value: true }
+  const aborted = []
+  const build = new Function('currentConversationId', 'currentAssistantBubble', 'isStreaming',
+    'messageAbortController', 'sseAbortController', 'finalizeProcesses', 't', 'fetch',
+    'getApiBaseUrl', 'getSessionId', 'setTimeout', 'clearTimeout', 'AbortController',
+    `${abortBody(CODE)}; return abort`)
+  const abort = build({ value: 'conversation-old' }, { value: bubble }, isStreaming,
+    { abort: () => aborted.push('message') }, { abort: () => aborted.push('sse') },
+    () => {}, key => key, fetchImpl, () => '', () => '',
+    timers.setTimeout || setTimeout, timers.clearTimeout || clearTimeout, AbortController)
+  return { bubble, isStreaming, aborted, promise: abort() }
+}
+
+test('取消网络请求还在等待时，本地流与思考计时已收尾；超时后明确未确认', async () => {
+  let expire
+  let timerCleared = false
+  const state = executeAbort((_url, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+  }), {
+    setTimeout: (callback, ms) => { assert.equal(ms, 10000); expire = callback; return 17 },
+    clearTimeout: id => { assert.equal(id, 17); timerCleared = true }
+  })
+  assert.equal(state.isStreaming.value, false)
+  assert.deepEqual(state.aborted, ['message', 'sse'])
+  assert.equal(state.bubble.thinking.status, 'done')
+  assert.equal(state.bubble.stopNotice, 'agentStream.stopPending')
+  expire()
+  await state.promise
+  assert.equal(state.bubble.stopNotice, 'agentStream.stopUnconfirmed')
+  assert.equal(timerCleared, true)
+})
+
+test('取消被服务端拒绝时不显示已发送；成功返回后才确认停止指令', async () => {
+  const rejected = executeAbort(async () => ({ ok: false, status: 403 }))
+  await rejected.promise
+  assert.equal(rejected.bubble.stopNotice, 'agentStream.stopUnconfirmed')
+  const accepted = executeAbort(async () => ({ ok: true, status: 200 }))
+  await accepted.promise
+  assert.equal(accepted.bubble.stopNotice, 'agentStream.stopRequested')
+})

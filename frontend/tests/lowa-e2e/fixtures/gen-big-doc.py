@@ -77,13 +77,13 @@ def noise_jpeg(rnd):
     return buf
 
 
-def build(out_path):
+def build(out_path, pages=PAGES):
     rnd = random.Random(SEED)
-    table_pages = set(rnd.sample(range(PAGES), TABLE_PAGES))
-    image_pages = set(rnd.sample(range(PAGES), IMAGE_PAGES))
+    table_pages = set(rnd.sample(range(pages), min(TABLE_PAGES, pages)))
+    image_pages = set(rnd.sample(range(pages), min(IMAGE_PAGES, pages)))
     doc = Document()
     doc.add_heading('尽职调查报告（大文档基线夹具）', level=1)
-    for page in range(PAGES):
+    for page in range(pages):
         doc.add_heading('第%d节 核查事项' % (page + 1), level=2)
         for i in range(PARAS_PER_PAGE):
             doc.add_paragraph(make_paragraph_text(rnd, with_token=(i == 0)))
@@ -95,7 +95,7 @@ def build(out_path):
                     table.cell(r, c).text = ('项目' if r == 0 else '%d' % rnd.randint(100, 99999)) if c else ('第%d行' % r)
         if page in image_pages:
             doc.add_picture(noise_jpeg(rnd), width=Inches(5.5))
-        if page < PAGES - 1:
+        if page < pages - 1:
             doc.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     doc.save(out_path)
@@ -106,12 +106,15 @@ def main():
     ap = argparse.ArgumentParser()
     default_out = os.path.join(tempfile.gettempdir(), 'awd-big-doc', 'big.docx')
     ap.add_argument('--out', default=default_out)
+    ap.add_argument('--pages', type=int, default=PAGES, help='Explicit page breaks, default 150')
     ap.add_argument('--force', action='store_true', help='已存在也重新生成')
     args = ap.parse_args()
     if os.path.exists(args.out) and not args.force:
         print(args.out)
         return
-    build(args.out)
+    if args.pages < 1:
+        ap.error('--pages must be positive')
+    build(args.out, args.pages)
     print(args.out)
 
 

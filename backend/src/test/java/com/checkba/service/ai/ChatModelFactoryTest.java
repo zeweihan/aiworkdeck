@@ -466,4 +466,53 @@ class ChatModelFactoryTest {
                     "业务错误文案不得含「" + forbidden + "」：前端据此判定掉线并清会话");
         }
     }
+    @Test
+    @DisplayName("限时辅助模型不会复用长超时缓存，HTTP失败不自动重发")
+    void boundedAuxiliaryModelDoesNotRetry() throws Exception {
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        var server = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            calls.incrementAndGet();
+            byte[] body = "{\"error\":{\"message\":\"unavailable\"}}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(503, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            properties.setProvider(AiModelProperties.Provider.OPENROUTER);
+            properties.getOpenRouter().setBaseUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/v1");
+            ChatLanguageModel bounded = factory.getAuxChatModel(java.time.Duration.ofSeconds(2));
+            assertNotSame(factory.getAuxChatModel(), bounded);
+            assertThrows(RuntimeException.class, () -> bounded.generate("test"));
+            assertEquals(1, calls.get(), "503 不可触发模型内部的自动重试");
+        } finally { server.stop(0); }
+    }
+
+    @Test
+    @DisplayName("限时辅助调用终止本地慢HTTP等待")
+    void boundedAuxiliaryModelTimesOutHttp() throws Exception {
+        var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        var server = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        server.setExecutor(executor);
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        server.createContext("/", exchange -> {
+            entered.countDown();
+            try { release.await(3, java.util.concurrent.TimeUnit.SECONDS); }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            finally { exchange.close(); }
+        });
+        server.start();
+        try {
+            properties.setProvider(AiModelProperties.Provider.OPENROUTER);
+            properties.getOpenRouter().setBaseUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/v1");
+            ChatLanguageModel bounded = factory.getAuxChatModel(java.time.Duration.ofMillis(200));
+            long start = System.nanoTime();
+            assertThrows(RuntimeException.class, () -> bounded.generate("test"));
+            assertEquals(0, entered.getCount());
+            assertTrue(java.time.Duration.ofNanos(System.nanoTime() - start).toMillis() < 2000);
+        } finally { release.countDown(); server.stop(0); executor.shutdownNow(); }
+    }
+
 }

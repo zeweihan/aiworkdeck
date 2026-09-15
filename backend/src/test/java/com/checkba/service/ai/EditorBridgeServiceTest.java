@@ -234,4 +234,28 @@ class EditorBridgeServiceTest {
         assertTrue(duplicate.contains("本轮已插入过"), "写成功之后的原样重发必须被拦");
         assertEquals(afterApplied, sent.size(), "被拦下时一个 worker 命令都不许发");
     }
+    @Test
+    @DisplayName("编辑器错误含引号换行时仍返回有效 JSON，缺错误时提供可读兜底")
+    void editorErrorsRemainValidJson() throws Exception {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var sse = org.mockito.Mockito.mock(SseEmitterService.class);
+        var svc = new EditorBridgeService(sse, mapper,
+                org.mockito.Mockito.mock(com.checkba.service.telemetry.TelemetryService.class));
+        svc.setCurrentConversationId("test-conversation");
+        String error = "无法应用样式 \"正文\"\n请先打开文档";
+        org.mockito.Mockito.doAnswer(inv -> {
+            var payload = mapper.readTree((String) inv.getArgument(2));
+            svc.completeEditorAction(payload.get("requestId").asText(), "test-conversation", false, null, error);
+            return null;
+        }).when(sse).send(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        assertEquals(error, mapper.readTree(svc.executeEditorCommand("apply_house_style", Map.of())).get("error").asText());
+        org.mockito.Mockito.doAnswer(inv -> {
+            var payload = mapper.readTree((String) inv.getArgument(2));
+            svc.completeEditorAction(payload.get("requestId").asText(), "test-conversation", false, null, null);
+            return null;
+        }).when(sse).send(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        org.junit.jupiter.api.Assertions.assertTrue(mapper.readTree(svc.executeEditorCommand("get_selection", Map.of()))
+                .get("error").asText().contains("未返回具体错误"));
+    }
+
 }

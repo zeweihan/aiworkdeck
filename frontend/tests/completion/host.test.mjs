@@ -222,7 +222,7 @@ test('document collection stops at paragraph and text budgets', async t => {
     paragraphs: Array.from({ length: 200 }, (_, i) => ({ index: (p.startParagraph || 0) + i, text: `北京主体${(p.startParagraph || 0) + i}有限公司。` })),
     truncated: true, nextStartParagraph: (p.startParagraph || 0) + 200 }))
   await f.host.start()
-  assert.equal(f.calls.filter(x => x.action === 'get_document_text').length, 5)
+  assert.equal(f.calls.filter(x => x.action === 'get_document_text').length, 50)
   const g = pagedFixture(t, p => ({ success: true, revision: 1,
     paragraphs: [{ index: p.startParagraph || 0, text: '甲'.repeat(14999) + '。' }], truncated: true, nextStartParagraph: (p.startParagraph || 0) + 1 }))
   await g.host.start()
@@ -282,4 +282,18 @@ test('typing during first document scan retries once idle; successful seeds do n
   host.modified?.()
   assert.equal(pendingTimers.size, 0)
   assert.equal(reads, completedReads)
+})
+
+ test('three-thousand short paragraphs retain a company in the document tail', async t => {
+  const tail = '青岛末页项目有限公司'
+  const f = pagedFixture(t, p => {
+    const start = p.startParagraph || 0
+    return { success: true, revision: 1,
+      paragraphs: Array.from({ length: 200 }, (_, i) => ({ index: start + i, text: start + i === 2999 ? tail : '这是普通正文短段落。' })),
+      truncated: start + 200 < 3000, nextStartParagraph: start + 200 }
+  })
+  await f.host.start()
+  assert.equal(f.calls.filter(x => x.action === 'get_document_text').length, 15)
+  assert.equal(matchCompletionItems('青岛末页', f.items())[0]?.text, tail)
+  assert.ok(f.learned.some(x => x.entries.some(e => e.text === tail)))
 })

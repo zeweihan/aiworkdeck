@@ -100,20 +100,13 @@ public class MeetingTranscriptionService {
     static final Duration DEFAULT_TRANSCODE_TIMEOUT = Duration.ofMinutes(20);
 
     /**
-     * 「转写中」卡死判定的阈值：{@code max(STUCK_FLOOR, 音频时长 × STUCK_FACTOR)}（dev-board#532）。
-     *
-     * <p>为什么需要它：会议进入 TRANSCRIBING 之后，只有上游给出终态才会离开这个状态
-     * （{@link #refreshViaTingwu} / {@link #refreshViaPlatform} 都刻意不把查询失败当成转写失败，
-     * 那是对的——网络抖动不该终结一个还在跑的任务）。但上游<b>永远</b>不给终态的情形是存在的：
-     * 听悟侧任务被清理、网关侧任务被回收、提交成功而任务实际没跑起来。此前这类会议
-     * 会永远停在「转写中」，而 {@link #startTranscription} 对该状态是幂等返回，
-     * 用户连「重试转写」都点不动，录音就此作废。
-     *
-     * <p>阈值取「音频时长 × 3、且不低于 30 分钟」（维护者 2026-09-09 拍板）：三倍相对
-     * 听悟/本机的实际耗时（都快于实时）留了数量级余量，30 分钟的下限则挡住「三分钟的
-     * 短录音九分钟就被判死」这种误杀。
+     * 云转写等待阈值：至少覆盖听悟官方的三小时排队/处理窗口。
+     * 超过阈值仅暂停自动查询；重试仍查询已有任务，不创建另一笔收费任务。
+     * https://help.aliyun.com/zh/tingwu/offline-transcribe-of-audio-and-video-files
      */
-    static final Duration STUCK_FLOOR = Duration.ofMinutes(30);
+    static final Duration STUCK_FLOOR = Duration.ofHours(3);
+    private static final String RESULT_PENDING_ZH = "转写结果暂未确认";
+    private static final String RESULT_PENDING_EN = "Transcription result not yet confirmed";
     static final int STUCK_FACTOR = 3;
 
     /**
@@ -371,8 +364,25 @@ public class MeetingTranscriptionService {
                 .orElseThrow(() -> new IllegalArgumentException(
                         LangText.of("会议不存在: ", "Meeting not found: ") + meetingId));
         if (MeetingRecording.STATUS_TRANSCRIBING.equals(meeting.getStatus())
-                || MeetingRecording.STATUS_TRANSCRIBED.equals(meeting.getStatus())) {
+                || MeetingRecording.STATUS_TRANSCRIBED.equals(meeting.getStatus())
+                || MeetingRecording.STATUS_EMPTY.equals(meeting.getStatus())) {
             return meeting;
+        }
+        // 本地等待超时不代表云端失败：恢复查询已提交的任务，避免重复转写和扣费。
+        String previousError = meeting.getError();
+        if (MeetingRecording.STATUS_FAILED.equals(meeting.getStatus())
+                && (meeting.getTingwuTaskId() != null || meeting.getGatewayTaskId() != null)
+                && previousError != null
+                && (previousError.startsWith(RESULT_PENDING_ZH) || previousError.startsWith(RESULT_PENDING_EN)
+                    // 兼容升级前已被本地看门狗判失败的记录，不能让这些用户重试时再扣一笔。
+                    || previousError.startsWith("转写超时：")
+                    || previousError.startsWith("Transcription timed out: no result after "))) {
+            meeting.setStatus(MeetingRecording.STATUS_TRANSCRIBING);
+            meeting.setError(null);
+            meeting.setLastPolledAt(null);
+            meeting.setTranscribingStartedAt(LocalDateTime.now());
+            meetingRepository.save(meeting);
+            return refreshIfNeeded(meeting);
         }
         // IllegalArgumentException：GlobalExceptionHandler 只对它透传 message，其余异常一律「服务器内部错误」
         if (MeetingRecording.STATUS_RECORDING.equals(meeting.getStatus())) {
@@ -680,17 +690,9 @@ public class MeetingTranscriptionService {
             // 已经处理过"这件事；找不到（测试里没有为这个 id 打桩 findById）时退回传入值，
             // 行为与修复前一致。
             MeetingRecording fresh = meetingRepository.findById(meeting.getId()).orElse(meeting);
-
-            // 卡死判定与下面的节流是同一类 check-then-act，必须在锁内、对库里最新的那一份做。
-            // 放到锁外用传入的旧快照做过一版，被 concurrentRefreshIsSerializedPerMeeting 逮住：
-            // 它给存量行补盖时间戳时会 save 那份旧快照，把并发的另一个请求刚写进去的
-            // lastPolledAt 一起抹掉，节流窗口随即失效、两个请求各问一遍上游
-            // （platform 档下就是各触发一次结算）。
-            MeetingRecording checked = failIfStuck(fresh);
-            if (MeetingRecording.STATUS_FAILED.equals(checked.getStatus())) {
-                return checked;
-            }
-            fresh = checked;
+            if (!MeetingRecording.STATUS_TRANSCRIBING.equals(fresh.getStatus())) return fresh;
+            viaPlatform = fresh.getGatewayTaskId() != null;
+            if (!viaPlatform && fresh.getTingwuTaskId() == null) return interruptedOrPending(fresh);
 
             LocalDateTime last = fresh.getLastPolledAt();
             if (last != null && last.isAfter(LocalDateTime.now().minusSeconds(POLL_THROTTLE_SECONDS))) {
@@ -699,7 +701,10 @@ public class MeetingTranscriptionService {
             fresh.setLastPolledAt(LocalDateTime.now());
             meetingRepository.save(fresh);
 
-            return viaPlatform ? refreshViaPlatform(fresh) : refreshViaTingwu(fresh);
+            // 先取最终结果：用户可能关闭面板数小时，不能把早已完成的任务先判死。
+            MeetingRecording refreshed = viaPlatform ? refreshViaPlatform(fresh) : refreshViaTingwu(fresh);
+            return MeetingRecording.STATUS_TRANSCRIBING.equals(refreshed.getStatus())
+                    ? failIfStuck(refreshed) : refreshed;
         } finally {
             lock.unlock();
         }
@@ -722,28 +727,13 @@ public class MeetingTranscriptionService {
 
     // ==================== 卡死判定（dev-board#532） ====================
 
-    /** 卡死阈值：{@code max(30 分钟, 音频时长 × 3)}。包可见供测试直接对拍。 */
+    /** 卡死阈值：{@code max(3 小时, 音频时长 × 3)}。包可见供测试直接对拍。 */
     static Duration stuckThreshold(long audioSeconds) {
         Duration byAudio = Duration.ofSeconds(Math.max(0, audioSeconds) * STUCK_FACTOR);
         return byAudio.compareTo(STUCK_FLOOR) > 0 ? byAudio : STUCK_FLOOR;
     }
 
-    /**
-     * 「转写中」停太久就判为卡死：置 FAILED + 写下原因，界面既有的「重试转写」按钮
-     * 随 FAILED 出现，用户一键即可重来（{@link #startTranscription} 对 FAILED 是可提交态）。
-     *
-     * <p><b>本进程正在跑的（{@link #inFlight}）一律跳过。</b>那几步各自都已经有界的超时
-     * （转码 {@link #transcodeTimeout}、直传 30 分钟、本机转写 4 小时），不需要再判一次；
-     * 更要紧的是 platform 档在这个窗口里可能刚刚完成预扣，判死会让用户去点重试，
-     * 结果对同一次转写扣第二笔 Credits。
-     *
-     * <p>存量行（{@code transcribingStartedAt} 为 null，升级前就停在转写中的）
-     * <b>第一次被看到时补盖当前时间，不当场判死</b>。理由：
-     * {@code updatedAt} 被 poll-on-read 每 10 秒的 lastPolledAt 落库刷新，永远是「刚刚」，
-     * 拿它当锚点判定形同虚设；{@code createdAt} 又早于真正开始转写的时刻（中间隔着整场录音），
-     * 拿它算已用时会高估，可能把刚提交不久的健康任务判死。补盖的代价只是存量卡死行
-     * 最多再多等一个阈值，换来的是绝不误杀——而这些行本来已经卡了不知多久，多等一次无妨。
-     */
+    /** 暂停超时任务的自动查询，保留任务号；不把本地等待超时解释为上游任务失败。 */
     private MeetingRecording failIfStuck(MeetingRecording meeting) {
         if (inFlight.contains(meeting.getId())) {
             return meeting;
@@ -758,12 +748,12 @@ public class MeetingTranscriptionService {
             return meeting;
         }
         long minutes = threshold.toMinutes();
-        log.warn("会议转写判定为卡死: meetingId={}, 已超过 {} 分钟", meeting.getId(), minutes);
+        log.warn("会议转写结果未确认，暂停自动查询: meetingId={}, 已超过 {} 分钟", meeting.getId(), minutes);
         meeting.setStatus(MeetingRecording.STATUS_FAILED);
         meeting.setError(LangText.of(
-                "转写超时：已超过 " + minutes + " 分钟仍未返回结果，判定为卡死。原始录音完好，可重试转写。",
-                "Transcription timed out: no result after " + minutes + " minutes, so it is treated as stuck. "
-                        + "The original recording is intact - you can retry."));
+                RESULT_PENDING_ZH + "：等待已超过 " + minutes + " 分钟。原始录音完好，重试将查询原任务，不会重新提交转写。",
+                RESULT_PENDING_EN + ": waiting exceeded " + minutes + " minutes. The original recording is intact; "
+                        + "retry checks the existing task without submitting another transcription."));
         return meetingRepository.save(meeting);
     }
 
@@ -917,9 +907,11 @@ public class MeetingTranscriptionService {
     }
 
     private MeetingRecording completeMeeting(MeetingRecording meeting, MeetingAsrSettings settings,
-                                             TingwuClient.TaskInfo info) {
+                                             TingwuClient.TaskInfo info) throws Exception {
+        // 网络失败交回轮询层：保留原任务，下次只取结果，不新建一次收费转写。
+        // 只有拿到结果并完成处理后才清理中转文件。
+        String transcriptionJson = info.transcriptionUrl() != null ? urlFetcher.fetch(info.transcriptionUrl()) : null;
         try {
-            String transcriptionJson = info.transcriptionUrl() != null ? urlFetcher.fetch(info.transcriptionUrl()) : null;
             return storeResults(meeting, transcriptionJson,
                     fetchQuietly(info.autoChaptersUrl()),
                     fetchQuietly(info.summarizationUrl()),

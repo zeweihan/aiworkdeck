@@ -40,7 +40,7 @@ final class DocInsightExtraction {
     }
 
     /** 一块的抽取结果。 */
-    record Parsed(List<RawEntity> entities, List<Claim> claims) {
+    record Parsed(List<RawEntity> entities, List<Claim> claims, boolean valid) {
     }
 
     /** 单条 quote 的长度上限（前端要拿它定位，太长反而定位不上）。 */
@@ -125,7 +125,7 @@ final class DocInsightExtraction {
         List<RawEntity> entities = new ArrayList<>();
         List<Claim> claims = new ArrayList<>();
         JsonNode root = readJson(raw, om);
-        if (root == null || !root.isObject()) return new Parsed(entities, claims);
+        if (root == null || !root.isObject()) return new Parsed(entities, claims, false);
 
         for (JsonNode n : array(root, "companies")) {
             String name = text(n, "name");
@@ -150,7 +150,7 @@ final class DocInsightExtraction {
             claims.add(new Claim(text(n, "subject"), text(n, "metric"), value,
                     text(n, "unit"), clip(text(n, "quote")), text(n, "numberText")));
         }
-        return new Parsed(entities, claims);
+        return new Parsed(entities, claims, true);
     }
 
     private static JsonNode readJson(String raw, ObjectMapper om) {
