@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Verify a LOWA big-doc export without opening or modifying user files.
 Usage: python3 verify-big-export.py /tmp/exported-300.docx --pages 300
 """
