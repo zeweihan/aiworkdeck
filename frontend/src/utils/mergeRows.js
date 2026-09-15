@@ -8,9 +8,13 @@
 //   {path, kind: DOCX|XLSX|PPTX|WHOLE, decision: AUTO|MANUAL|WHOLE,
 //    reason: NO_BASE|BINARY|UNSUPPORTED|OVERLAP|CLEAN|TOO_LARGE|PARSE_FAILED,
 //    mainChanges, otherChanges, overlapCount, state: PENDING|MERGED}
-// 再加三个**只在前端出现**的字段（useDocumentMerge 跑自动合并时挂上去的）：
-//   failed / failReason（自动合并没成）、mainCount / otherCount（引擎实际合了几处）、
+// 再加两个**只在前端出现**的字段（useDocumentMerge 跑自动合并时挂上去的）：
+//   failed / failReason（自动合并没成）、
 //   formatOnlyCount（另一侧只改格式、没能自动带过来的段数）。
+// 「改了几处」一律用后端三方比对算的 mainChanges / otherChanges（自动合过的那一份
+// 还会带上待决记录里同源的 mainCount / otherCount）。引擎回的那两个数是按修订作者
+// 分桶的，两侧同名时会把两边全算进一桶（真机 A3：11 / 0），刻意不往行上写。
+// 两侧的称呼由宿主算（utils/mergeSideNames.js）后经 opts.sideNames 传进来。
 //
 // 判定顺序是有讲究的，别按"看着顺"重排：
 //   已经合好 > 整份文件 > 需要引擎但没有引擎 > 自动合并失败 > 还在自动合 > 逐处裁决。
@@ -40,10 +44,14 @@ export function mergeRowState(row, opts = {}) {
   return 'manual-docx'
 }
 
-// 一侧的称呼。self 为真说的是律师自己（「你」），否则用后端给的展示名；
-// 两样都没有才落到「同事」——**任何情况下都不许退回用户名**（那是账号 id，不是名字，
+// 一侧的称呼。宿主算好了就照用（utils/mergeSideNames.js：两侧的人分不开时退到线上，
+// 真机 A3 的「你 / 你」就是这么来的）；没给才自己按 self/展示名推：self 为真说的是
+// 律师自己（「你」），否则用后端给的展示名，两样都没有才落到「同事」——
+// **任何情况下都不许退回用户名**（那是账号 id，不是名字，
 // 全局纪律见 CLAUDE.md「任何界面不显示 username」）。
-function sideName(t, side) {
+function sideName(t, side, given) {
+  const fromHost = typeof given === 'string' ? given.trim() : ''
+  if (fromHost) return fromHost
   if (side && side.self) return t('version.actorYou')
   const name = side && typeof side.authorName === 'string' ? side.authorName.trim() : ''
   return name || t('version.unnamedColleague')
@@ -66,6 +74,7 @@ const FAIL_REASON_KEYS = {
 
 export function mergeRowText(t, row, sides = {}, opts = {}) {
   const state = mergeRowState(row, opts)
+  const given = opts.sideNames || {}
   switch (state) {
     case 'auto-running':
       return t('version.mergeAutoRunning')
@@ -73,9 +82,9 @@ export function mergeRowText(t, row, sides = {}, opts = {}) {
       const mainCount = Number(row.mainCount != null ? row.mainCount : row.mainChanges) || 0
       const otherCount = Number(row.otherCount != null ? row.otherCount : row.otherChanges) || 0
       return t('version.mergeRowMerged', {
-        main: sideName(t, sides && sides.main),
+        main: sideName(t, sides && sides.main, given.main),
         mainCount,
-        other: sideName(t, sides && sides.other),
+        other: sideName(t, sides && sides.other, given.other),
         otherCount,
       })
     }
@@ -89,7 +98,7 @@ export function mergeRowText(t, row, sides = {}, opts = {}) {
       const overlap = Number(row.overlapCount) || 0
       const formatOnly = Number(row.formatOnlyCount) || 0
       if (!overlap && formatOnly) {
-        return t('version.mergeRowManualFormatOnly', { other: sideName(t, sides && sides.other), count: formatOnly })
+        return t('version.mergeRowManualFormatOnly', { other: sideName(t, sides && sides.other, given.other), count: formatOnly })
       }
       return t('version.mergeRowManualDocx', { count: overlap })
     }

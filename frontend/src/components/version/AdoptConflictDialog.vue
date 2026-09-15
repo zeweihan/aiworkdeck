@@ -116,6 +116,7 @@ import {
 } from '@/services/api.js'
 import { isDesktopHost } from '@/services/host.js'
 import { mergeRowState, mergeRowText } from '@/utils/mergeRows.js'
+import { resolveMergeSideNames } from '@/utils/mergeSideNames.js'
 
 export default {
   name: 'AdoptConflictDialog',
@@ -137,7 +138,9 @@ export default {
     // ---- 三方合并（spec §5.3）。后端还没给这三个字段时全部为空，本组件退回
     // 原来的「整份三选一」形态，一行代码都不走新分支。 ----
     // [{path, kind, decision, reason, mainChanges, otherChanges, overlapCount, state}]
-    // 加上 useDocumentMerge 挂上去的前端字段（failed/failReason/mainCount/otherCount）。
+    // 加上 useDocumentMerge 挂上去的前端字段（failed/failReason/formatOnlyCount）。
+    // 「改了几处」一律用后端的 mainChanges/otherChanges（自动合过的那一份另有同源的
+    // mainCount/otherCount）——引擎按修订作者分桶的那两个数不进这张清单。
     documentMerges: { type: Array, default: () => [] },
     // {main: {sha, authorName, when, title, self}, other: {...}}——两侧尖端那一版的信息。
     // 注意 main/other 是**物理侧**，与语境无关（方向表见 version-control.md）。
@@ -243,6 +246,15 @@ export default {
       if (this.mode === 'session-end') return this.$t('version.abortSessionEnd')
       return this.$t('version.abortAdopt')
     },
+    /*
+     * 两侧的称呼。两边是同一个人时（律师用「稿」管对方回稿，真机 A3）「你 / 你」
+     * 读不出哪边是哪边，这时退到线上（主线 / 稿《对方第三版回稿》）。合并比对稿
+     * 标签页用的是同一个函数，两处说法必须一致。
+     */
+    sideNames() {
+      return resolveMergeSideNames(this.$t.bind(this), this.sides,
+        { mode: this.mode, draftName: this.draftName })
+    },
     mergeByPath() {
       const map = {}
       for (const m of this.documentMerges || []) {
@@ -264,7 +276,8 @@ export default {
           name: path.split('/').pop() || path,
           merge,
           state,
-          text: merge ? mergeRowText(this.$t.bind(this), merge, this.sides || {}, { isDesktop }) : '',
+          text: merge ? mergeRowText(this.$t.bind(this), merge, this.sides || {},
+            { isDesktop, sideNames: this.sideNames }) : '',
         }
       })
     },
@@ -343,17 +356,20 @@ export default {
         mainRef: this.mainlineTip,
         otherRef: this.draftTip,
         sides: this.sides || {},
+        // 两侧是同一个人时，稿这一侧的称呼要带上稿名（「稿《对方第三版回稿》」），
+        // 而稿名只有本组件知道——标签页那边只有 sides 与语境。
+        draftName: this.draftName,
         readonly: !!readonly,
       })
     },
-    // 两边那两栏的抬头。后端给得出作者名就用作者名（展示名，不是用户名）；
-    // 给不出就退回语境标签（「我这份 / 同事那份」那一套）。
+    // 两边那两栏的抬头。两侧是两个分得开的人时照旧说「你的 / 某某 的」；分不开时
+    // （同一个账号两边都是自己）用线的称呼，不再两栏都写「你的」。
     sideLabel(which) {
+      const names = this.sideNames
+      if (!names.byPerson) return names[which]
       const side = (this.sides || {})[which]
       if (side && side.self) return this.$t('version.mergeSideMine')
-      const name = side && typeof side.authorName === 'string' ? side.authorName.trim() : ''
-      if (name) return this.$t('version.mergeSideOther', { name })
-      return which === 'main' ? this.compareLabels.oldLabel : this.compareLabels.newLabel
+      return this.$t('version.mergeSideOther', { name: names[which] })
     },
     cellKeyLabel(row, ov) {
       if (row.state !== 'manual-pptx') return ov.key

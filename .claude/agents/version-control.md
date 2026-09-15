@@ -108,7 +108,7 @@ description: 项目级版本记录领域。任务涉及版本记录/工作段（
 - `VersionNodeDetail.vue` —— 点某个节点弹出的详情弹窗：拉该 sha 的变更列表、「退回到这一版」二次确认、「标为重要版本」、第 3 期新增「从这一版另起一稿」（`openDraftNaming`，独立嵌套 `.awd-dialog`，同款 `.uni-input-input` 陷阱；`createDraft(projectId, version.sha, name)`，任意节点都能开，包括采纳产生的双亲合并节点）、对 `MODIFY` 类型且非根提交的改动行渲染「和上一版对比」按钮，`@tap` 上抛 `{path, sha}` 交给宿主页面决定走桌面修订稿分支还是文本降级分支。
 - `MergeReviewTab.vue` —— 三方合并新增（dev-board#630），**可编辑**的合并比对稿宿主：主线侧改动是一批带作者的修订，另一侧不重叠的改动被逐段重放成另一位作者的修订，同一段两边都改了的那几处刻意没重放、交给右栏 `ReviewPanel`（`mode="merge"`）三选一。与 `VersionCompareTab` 一样**没有 upload 路径**（导出字节只走 `POST /version/merge/resolve-file`，绝不写回 `ProjectFile`）、不进保活池、不派发 `.uno:EditDoc`（spike A5 实测 r5 上不生效，只读靠的是「没有保存路径」）。标签管道见 `sidebar-shell.md` 的 `merge-review` 一条。
 - `VersionCompareTab.vue` —— 第 2 期新增，「和上一版对比」的桌面 docx 展示宿主，**只读、绝无保存路径**：不订阅 `lo-relay` 的 `modified` 信号、不进保活池（`_libreRefs`/LRU 一概不注册）、`beforeUnmount` 只 `dispose executor` + 移除 `<webview>`。流程：并行下载新旧字节 + 启动引擎 → `load_document` 新版 → `compare_document` 一次性生成修订并自动切只读。
-- **三方合并的前端纯函数与编排**：`composables/useDocumentMerge.js`（自动合并编排，纯工厂）、`services/mergeDraft.js`（`fetchMergeInputs` + `buildMergeDraft`，自动合并与比对稿标签页共用）、`utils/mergeRows.js`（裁决总览行态与文案）、`utils/mergeReviewDecisions.js`（`collectDecisions`）、`utils/historyMerges.js`（把两条新尾注翻成人话）、`utils/provenanceAlign.js`（溯源 LCS 对齐 + 自带同步 sha256）。后四个是零依赖纯函数，`node --test` 直接跑。
+- **三方合并的前端纯函数与编排**：`composables/useDocumentMerge.js`（自动合并编排，纯工厂）、`services/mergeDraft.js`（`fetchMergeInputs` + `buildMergeDraft`，自动合并与比对稿标签页共用）、`utils/mergeRows.js`（裁决总览行态与文案）、`utils/mergeReviewDecisions.js`（`collectDecisions`）、`utils/historyMerges.js`（把两条新尾注翻成人话）、`utils/provenanceAlign.js`（溯源 LCS 对齐 + 自带同步 sha256）、`utils/mergeSideNames.js`（两侧的称呼与喂给引擎的署名 = 修订分桶键，见下方「两侧的称呼与分桶键」）。后五个是纯函数，`node --test` 直接跑（`mergeSideNames` 只 import `historyMerges`，其余零依赖）。
 
 **前端集成点**
 
@@ -336,6 +336,23 @@ userId 未知时的纯 ref 快照，`remoteAheadBySelf` 恒 false（不谎称是
 自动存档，下一页要 `swallowAutos` 原样跳掉，否则同一笔会在两页里各算一次。
 `HISTORY_MAX_SCAN`（20000）防「筛选把所有行都排除掉」时把整部历史走穿。
 
+**折叠自动存档时必须保住「稿」那几条线的尖端（`HistoryRoot.keepTip`，桌面端 v0.44.1 真机 B1）**——
+一稿的全部内容可能只有一笔自动存档（另起一稿 → 在稿上改了文件 → 回到主线，还没结束工作）。
+默认折叠把这唯一一笔折进别的行，于是**整条线从提交历史里消失**：`refs` 标签只打在尖端那一行上，
+那一行没了，标签与泳道分叉一起没了，律师会以为这一稿丢了（切回稿时左栏版本面板还看得到那笔存档，
+更像是数据丢了）。更糟的是那一笔会顺延成**主线上另一条提交**名下的「自动存档 N 次」。
+修法不是全局开 `includeAuto`（那会把每一段工作的几十笔存档全摊给律师）：
+`historyRoots` 只给**稿**那几条根带 `keepTip=true`，`history()` 收成 `keepTips` 集合，
+带标签的那一笔照常成行（标签与折叠计数都落在它身上），后面更旧的存档折进它。
+`ProjectRepoService` 仍然不认识「稿」——它只认这个开关，业务语义留在 `VersionController`。
+**主线与「本机」刻意不给这个开关**：它们尖端之外总还有别的版本撑着，折掉尖端只少一个标签、
+不会整条线消失；给了反而会让「还没收尾的这段工作」那笔存档天天顶在列表第一行
+（护栏 `HistoryEndpointTest.foldsAutosavesIntoTheRowAbove` 钉的正是这条现有行为）。
+两条新护栏：`draftWhoseOnlyCommitIsAnAutosaveStillShowsUp`（标签在尖端、parents 连得上分叉点、
+初始版本不背这笔计数）、`draftWithSeveralAutosavesShowsOnlyItsTip`（只尖端成行、其余折进它）。
+**遗留缺口**：主线/本机的尖端恰好是一笔自动存档时，那一行的「主线」「本机」标签仍然跟着折走
+（线本身照常可见，只是没有标签）——与上面那条刻意的取舍是同一个取舍，要动请另开卡。
+
 **`GET /version/compare?from=&to=`**：任意两版之间的文件清单，两个入参可以是任何引用或 sha，
 `.awd/` 照例滤掉。**两个入参必须过 `commitExists` 而不是 `resolveRef`**——JGit 的
 `Repository.resolve` 对一个**格式合法但库里根本没有**的完整 sha 会原样把 ObjectId 还给你
@@ -549,6 +566,30 @@ xlsx 是无序集合，按单元格键比交集（`analyzeCells` :228），公�
 两个前端组件：裁决总览是既有的 `AdoptConflictDialog.vue`（三语境共用，加了逐处合并那几行与「打开合并比对稿」「重试自动合并」
 两个动作），合并比对稿是新标签页 `components/version/MergeReviewTab.vue`（标签管道见 `sidebar-shell.md` 的 `merge-review` 一条）。
 
+**两侧的称呼与分桶键：人分不开时一律退到线上（`utils/mergeSideNames.js`，桌面端 v0.44.1 真机 A3）**——
+`resolveMergeSideNames(t, sides, {mode, draftName})` 是这件事的**唯一**判定点，
+`MergeReviewTab` / `AdoptConflictDialog` / `useDocumentMerge` 三处共用，不许各自再按 `self`/`authorName` 推一遍。
+病根：一个律师用「稿」管对方的回稿——主线是他写的、稿也是他签的——两侧 `sides.*.authorName`/`self` 完全相同，
+于是抬头、裁决总览那一行、右栏三选一按钮全写着「你」：「你改了 11 处 · 你改了 0 处」、「用你的 / 用你的 / 自己改」。
+一个人拿「稿」管对方回稿是常见用法，不是边角。规则两条：
+① **称呼**：两侧署名非空且不同 → 照旧（本人说「你」、对方说展示名，`byPerson=true`，一字不变）；
+否则退到线的称呼，直接借 `historyMerges.mergeSideLabels`（提交历史那几句用的就是它，两处说法必须一致），
+采纳语境另有稿名 `version.mergeSideDraftNamed`（「稿《对方第三版回稿》」）。
+② **`mainKey`/`otherKey` 是喂给引擎的署名，也就是修订的分桶键，出参保证互不相同**——
+引擎 `build_merge_draft` 按修订作者分桶（`office_thread.js` :6135），ReviewPanel 的 `mergeSideOf` 也按它分，
+两侧署名一样就把两边的修订全算进一桶，块 2 的分组与 `X-AWD-Merges` 尾注里的 M/T 一起错（进用户产物）。
+`byPerson` 时 key 仍是两位的**真名**（引擎署名不变）；分不开时 key 就是线的称呼。
+稿名只有 `AdoptConflictDialog` 知道，所以它经 `openMergeReviewTab` 的 `mergeSpec.draftName` 传给标签页。
+
+**「改了几处」只认后端的三方比对，绝不用引擎按作者分桶的那两个数**——
+`Analysis.mainChanges()`/`otherChanges()` 数的是两边各改了几个**单元**（`countChanges`，与署名无关），
+这正是律师心里那个数（主线改 2 处、稿改 5 处）。`MergeReviewTab` 的抬头取 `analysis.mainChanges/otherChanges`，
+`useDocumentMerge` **刻意不把** `draft.mainCount/otherCount` 挂到行上（引擎那两个是「这个作者名下有几条修订」，
+两侧同名时就是 11/0），`mergeRows.mergeRowText` 因此退回 `mainChanges/otherChanges`。
+配套：`MergeAnalysisService.documentMerges` 只在待决记录 `mode=auto` 时才放 `mainCount`/`otherCount`——
+逐处裁决的记录上那两个是 0（账在 `decisions` 里），端出去界面就写成「已合并：主线改的 0 处、稿《X》改的 0 处」，
+而律师刚亲手裁过好几处。**键缺席是契约**，前端据「有没有这个键」决定退不退回 `mainChanges`。
+
 **自动合并的编排在前端** `frontend/src/composables/useDocumentMerge.js`（纯工厂，依赖全注入，`node --test` 直接跑）。
 三语境共用同一个入口 `onConflictStatus(conflict, ctx)`（:177）：`AUTO` 的 docx 借一个**不绑标签页的隐藏引擎实例**
 比较 + 重放 + 全部接受 + 导出 → `resolve-file(mode=auto)`；`AUTO` 的 xlsx/pptx 直接 `resolve-structured`（不碰引擎）；
@@ -757,7 +798,8 @@ LCS 的 DP 表是 O(n·m)，超过 `MAX_CELLS = 1500×1500`（:109）退回「�
 - 前端纯函数：`cd frontend && npm run test:version-merge`（node --test，不需要引擎）——
   `tests/version-merge/` 下的 `mergeRows.test.mjs`（行态判定顺序与文案）、`mergeReviewDecisions.test.mjs`（三块来源合成 + 去重 + 脏值丢弃）、
   `historyMerges.test.mjs`（三语境方向表 + 折叠 + 老提交中性词）、`provenanceAlign.test.mjs`（LCS 对齐 + sha256 与后端同值 + 超预算降级）、
-  `useDocumentMerge.test.mjs`（三条不变式：不全 MERGED 不收尾 / 幂等 / `stage:'align'` 不写回）。
+  `useDocumentMerge.test.mjs`（三条不变式：不全 MERGED 不收尾 / 幂等 / `stage:'align'` 不写回；另加两侧同一个人时署名仍分得开、
+  引擎按作者分桶的数不写到行上）、`mergeSideNames.test.mjs`（两侧的称呼与分桶键：同一个人 / 两个同事同名 / 三语境 / 只有一侧有署名）。
 - 真引擎那一半是 `npm run test:lowa-e2e` 的**组 34**（`build_merge_draft` 两位作者署名、冲突段不重放、`formatOnly`、
   全部接受后逐段等于预期合并文本、表格单元重放、同实例第二次合并、`merge_take_other`、篡改 `baseUnits` 必须回 `stage:'align'`、
   `sheet_get_active_cell`/`slide_get_current`），夹具由 `tests/lowa-e2e/fixtures/merge/gen.mjs` 现造

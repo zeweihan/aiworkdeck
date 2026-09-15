@@ -107,6 +107,48 @@ class MergeResolveFileTest {
         }
     }
 
+    /**
+     * 逐处裁决的待决记录里两个计数刻意是 0（那一笔账在 {@code decisions} 里），
+     * 端给前端就成了「已合并：主线改的 0 处、稿《X》改的 0 处」——同一屏上律师刚亲手
+     * 裁过好几处（真机 A3 那一批）。缺席时前端退回 {@code mainChanges/otherChanges}，
+     * 那才是两边各改了几个单元的真实数，所以这两个键在逐处裁决时不许出现。
+     */
+    @Test
+    @DisplayName("逐处裁决之后 documentMerges 不端出 0 处，让前端退回两边各改了几处")
+    void manualMergeDoesNotReportZeroCounts(@TempDir Path tmp) throws Exception {
+        try (MergeScene s = new MergeScene(tmp)) {
+            s.stageAdoptConflict(DOC);
+
+            s.controller.mergeResolveFile(MergeScene.PROJECT_ID, DOC, "manual", DECISIONS_JSON,
+                    "adopt", upload(mergedBytes()), MergeScene.SESSION);
+
+            Map<String, Object> row = s.analysisSvc.documentMerges(MergeScene.PROJECT_ID).stream()
+                    .filter(r -> DOC.equals(r.get("path"))).findFirst().orElseThrow();
+            assertEquals("MERGED", row.get("state"));
+            assertFalse(row.containsKey("mainCount"),
+                    "逐处裁决没有「这一侧合了几处」这笔账，0 不许当成答案端出去");
+            assertFalse(row.containsKey("otherCount"));
+            assertEquals(1, row.get("mainChanges"), "前端要退回到这一个：主线改了第 2 段");
+            assertEquals(1, row.get("otherChanges"), "另一边改了第 5 段");
+        }
+    }
+
+    @Test
+    @DisplayName("自动合并之后 documentMerges 照常带两个计数（它们与分析结果同源）")
+    void autoMergeStillReportsCounts(@TempDir Path tmp) throws Exception {
+        try (MergeScene s = new MergeScene(tmp)) {
+            s.stageAdoptConflict(DOC);
+
+            s.controller.mergeResolveFile(MergeScene.PROJECT_ID, DOC, "auto", "[]", null,
+                    upload(mergedBytes()), MergeScene.SESSION);
+
+            Map<String, Object> row = s.analysisSvc.documentMerges(MergeScene.PROJECT_ID).stream()
+                    .filter(r -> DOC.equals(r.get("path"))).findFirst().orElseThrow();
+            assertEquals(1, row.get("mainCount"));
+            assertEquals(1, row.get("otherCount"));
+        }
+    }
+
     @Test
     @DisplayName("不在本次冲突清单里的路径一律拒绝")
     void rejectsPathOutsideConflicts(@TempDir Path tmp) throws Exception {

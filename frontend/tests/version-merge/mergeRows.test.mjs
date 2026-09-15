@@ -77,6 +77,30 @@ test('文案：已合并没拿到实际处数时退回分析给的改动数，�
   )
 })
 
+/*
+ * 真机 A3：同一个律师用「稿」管对方回稿时两侧署名一样，「你改的 N 处、你改的 0 处」
+ * 读不出哪边是哪边。宿主（AdoptConflictDialog）算好两侧称呼后从 opts.sideNames 喂进来，
+ * 本函数照用，不再自己按 self/authorName 推。
+ */
+test('文案：宿主给了两侧称呼就照用（同一个人时才分得出主线与这一稿）', () => {
+  const sides = { main: { authorName: '韩泽伟', self: true }, other: { authorName: '韩泽伟', self: true } }
+  assert.equal(
+    mergeRowText(t, docx({ state: 'MERGED', mainCount: 2, otherCount: 5 }), sides, {
+      sideNames: { main: '主线', other: '稿《对方第三版回稿》' },
+    }),
+    'version.mergeRowMerged({"main":"主线","mainCount":2,"other":"稿《对方第三版回稿》","otherCount":5})'
+  )
+})
+
+test('文案：只改了格式那一句也用宿主给的称呼', () => {
+  assert.equal(
+    mergeRowText(t, docx({ decision: 'MANUAL', overlapCount: 0, formatOnlyCount: 3 }), {}, {
+      sideNames: { main: '主线', other: '稿《试验稿》' },
+    }),
+    'version.mergeRowManualFormatOnly({"other":"稿《试验稿》","count":3})'
+  )
+})
+
 test('文案：两侧信息缺席时用「同事」兜底，绝不显示用户名', () => {
   assert.equal(
     mergeRowText(t, docx({ state: 'MERGED', mainCount: 1, otherCount: 2 }), { other: { username: 'u_8823' } }),

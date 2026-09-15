@@ -556,8 +556,17 @@ public class ProjectRepoService {
      * （它决定这条引用算「案件库那一侧」还是「本机这一侧」，进而决定每一行的
      * {@code remote} 位）；其余取值（mainline / draft / local）只作为标签原样带出去。
      * {@code name} 是给律师看的那个词，由调用方给——本类不认识「稿」这种业务概念。
+     *
+     * <p>{@code keepTip} = 这条线的尖端必须成行，哪怕它是一笔自动存档
+     * （{@code includeAuto=false} 本来会把它折掉）。由调用方按业务语义决定：
+     * 一条线要是尖端之外再没有别的版本，折掉尖端就等于把整条线从历史里抹掉，
+     * 标签与泳道分叉一起没了。本类照样不认识「稿」，只认这个开关。
      */
-    public record HistoryRoot(String ref, String type, String name) {}
+    public record HistoryRoot(String ref, String type, String name, boolean keepTip) {
+        public HistoryRoot(String ref, String type, String name) {
+            this(ref, type, name, false);
+        }
+    }
 
     /** 打在某一版上的引用标签（这一版正是某条线的尖端）。 */
     public record RefLabel(String type, String name) {}
@@ -620,6 +629,7 @@ public class ProjectRepoService {
             walk.carry(remoteSide);
 
             Map<String, List<RefLabel>> tips = new LinkedHashMap<>();
+            Set<String> keepTips = new LinkedHashSet<>();
             boolean anyRoot = false;
             for (HistoryRoot r : roots == null ? List.<HistoryRoot>of() : roots) {
                 if (r == null || r.ref() == null || r.ref().isBlank()) continue;
@@ -636,6 +646,7 @@ public class ProjectRepoService {
                 anyRoot = true;
                 tips.computeIfAbsent(tip.getName(), k -> new ArrayList<>())
                         .add(new RefLabel(r.type(), r.name()));
+                if (r.keepTip()) keepTips.add(tip.getName());
             }
             if (!anyRoot) return new HistoryPage(List.of(), null);
 
@@ -654,6 +665,8 @@ public class ProjectRepoService {
             //    它名下的自动存档一并不计——绝不能顺延到下一条命中的行上；
             //  · 顶上那几笔（还没收尾的这段工作）没有更旧的归属可言，只能归给紧随其后的
             //    第一条非自动提交；那一条也被筛掉的话，同样一并不计。
+            // 例外是 keepTip 那几条线的尖端：它们照常成行（标签与折叠计数都落在它身上），
+            // 不然一条只有自动存档的线会整个从历史里消失（dev-board 真机实测 B1）。
             MutableRow autoOwner = null;     // 归属行，且它确实进了这一页
             boolean autoOwnerSeen = false;   // 是否已经遇到过一条非自动提交
             int leadingAutos = 0;
@@ -675,7 +688,7 @@ public class ProjectRepoService {
                 VersionEntry entry = toEntry(c, milestones);
                 boolean isAuto = "auto".equals(entry.kind());
 
-                if (isAuto && !query.includeAuto()) {
+                if (isAuto && !query.includeAuto() && !keepTips.contains(c.getName())) {
                     if (autoOwner != null) autoOwner.autoCount++;
                     else if (!autoOwnerSeen) leadingAutos++;
                     continue;

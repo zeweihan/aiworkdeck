@@ -372,6 +372,8 @@ export default {
   detailSelectPrompt: 'Pick a row to see what changed. Hold Cmd/Ctrl and click two rows to compare them.',
   mergeSideMainline: 'the main line',
   mergeSideDraft: 'this draft',
+  // Used when the two sides can't be told apart by person (one account on both sides).
+  mergeSideDraftNamed: 'draft "{name}"',
   mergeSideYours: 'your side',
   mergeSideLibrary: 'the case library',
   mergeSideColleague: 'your colleague',

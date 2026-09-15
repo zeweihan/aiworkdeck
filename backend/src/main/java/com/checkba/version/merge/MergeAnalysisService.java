@@ -139,8 +139,14 @@ public class MergeAnalysisService {
             row.put("overlapCount", a.overlaps() == null ? 0 : a.overlaps().size());
             var pending = pendingStore.get(projectId, e.getKey());
             row.put("state", pending.isPresent() ? "MERGED" : "PENDING");
-            row.put("mainCount", pending.map(MergeRecord::mainCount).orElse(0));
-            row.put("otherCount", pending.map(MergeRecord::otherCount).orElse(0));
+            // 「这一侧合了几处」只有自动合并这一档才算得出（逐处裁决那一笔账在 decisions
+            // 里，记录上的两个计数是 0）。把 0 当成答案端出去，界面就写成「已合并：
+            // 主线改的 0 处、稿《X》改的 0 处」，而律师刚亲手裁过好几处（真机 A3 那一批）。
+            // 缺席时前端退回 mainChanges/otherChanges，那才是两边各改了几个单元的真实数。
+            pending.filter(r -> "auto".equals(r.mode())).ifPresent(r -> {
+                row.put("mainCount", r.mainCount());
+                row.put("otherCount", r.otherCount());
+            });
             rows.add(row);
         }
         return rows;

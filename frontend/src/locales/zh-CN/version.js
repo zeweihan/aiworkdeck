@@ -377,6 +377,8 @@ export default {
   // 判定全在 utils/historyMerges.js——MAIN 在结束工作撞车语境里是**同事**那边。
   mergeSideMainline: '主线',
   mergeSideDraft: '这一稿',
+  // 两侧的人分不开时（同一个账号两边都是自己）稿这一侧带上名字，主线那侧用上面那句。
+  mergeSideDraftNamed: '稿《{name}》',
   mergeSideYours: '你这边',
   mergeSideLibrary: '案件库那边',
   mergeSideColleague: '同事',

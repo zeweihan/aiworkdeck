@@ -71,6 +71,7 @@ import { createWebviewEditorExecutor, createIframeEditorExecutor } from '@/compo
 import { fetchVersionFileBytes, postMergeResolveFile, getFileDownloadUrl } from '@/services/api.js'
 import { fetchMergeInputs, buildMergeDraft } from '@/services/mergeDraft.js'
 import { collectDecisions } from '@/utils/mergeReviewDecisions.js'
+import { resolveMergeSideNames } from '@/utils/mergeSideNames.js'
 import { getAuthHeaders } from '@/utils/auth.js'
 import { host } from '@/services/host.js'
 import { formatDateTime } from '@/utils/projectHomeFormat.js'
@@ -85,7 +86,8 @@ export default {
   emits: ['close-tab', 'open-version-compare'],
   props: {
     // {projectId, path, name, ctx, mergeBase, mainRef, otherRef,
-    //  sides: {main: {authorName, when, title, self}, other: {…}}, readonly, fileId}
+    //  sides: {main: {authorName, when, title, self}, other: {…}},
+    //  draftName（采纳语境的稿名，两侧同一个人时靠它自报家门）, readonly, fileId}
     mergeSpec: { type: Object, required: true },
   },
   data() {
@@ -111,17 +113,20 @@ export default {
   computed: {
     readonly() { return !!this.mergeSpec.readonly },
     sides() { return this.mergeSpec.sides || {} },
-    mainAuthor() { return (this.sides.main && this.sides.main.authorName) || '' },
-    otherAuthor() { return (this.sides.other && this.sides.other.authorName) || '' },
-    // 界面只说展示名，永远不显示 username；本人那一侧说「你」。
-    mainLabel() {
-      const s = this.sides.main || {}
-      return s.self ? this.$t('version.actorYou') : (s.authorName || this.$t('version.mergeSideMainDefault'))
+    /*
+     * 两侧的称呼与喂给引擎的那两个署名。界面只说展示名，永远不显示 username；本人那一侧
+     * 说「你」——但两侧是同一个人时（律师用「稿」管对方回稿，真机 A3）「你 / 你」读不出
+     * 哪边是哪边，这时一律退到线上（主线 / 稿《对方第三版回稿》）。署名同时是引擎给修订
+     * 分桶的键，所以必须跟着分开，否则右栏块 2 的分组与尾注里的 M/T 一起错。
+     */
+    sideNames() {
+      return resolveMergeSideNames(this.$t.bind(this), this.sides,
+        { mode: this.mergeSpec.ctx, draftName: this.mergeSpec.draftName })
     },
-    otherLabel() {
-      const s = this.sides.other || {}
-      return s.self ? this.$t('version.actorYou') : (s.authorName || this.$t('version.mergeSideOtherDefault'))
-    },
+    mainAuthor() { return this.sideNames.mainKey },
+    otherAuthor() { return this.sideNames.otherKey },
+    mainLabel() { return this.sideNames.main },
+    otherLabel() { return this.sideNames.other },
     // 每处改动的时间 = 那一侧版本的提交时间（引擎给的修订日期是比较时刻，不能用）。
     mainWhen() { return this.whenLine(this.sides.main) },
     otherWhen() { return this.whenLine(this.sides.other) },
@@ -200,8 +205,12 @@ export default {
         const stage = res && res.stage ? res.stage : ''
         throw new Error((res && res.message) || this.$t('version.mergeBuildFailedStage', { stage: stage || '-' }))
       }
-      this.mainCount = res.mainCount || 0
-      this.otherCount = res.otherCount || 0
+      // 「改了几处」用后端三方比对给的单元数（analysis.mainChanges/otherChanges），
+      // 不用引擎回的 res.mainCount/otherCount——那两个是按修订作者分桶的，两侧同名时
+      // 会把两边全算进一桶（真机 A3：主线改 2 处、稿改 5 处，抬头却写「11 处 / 0 处」）。
+      const an = inputs.analysis || {}
+      this.mainCount = Number(an.mainChanges) || 0
+      this.otherCount = Number(an.otherChanges) || 0
       this.formatOnly = res.formatOnly || []
       // 三栏文字（共同的上一版 / 你的 / 律师乙的）只有后端有——引擎里这几段刻意
       // 没重放另一侧，从文档里读不出对方那一栏。

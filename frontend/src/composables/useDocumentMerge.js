@@ -20,6 +20,10 @@
 //   ③ 引擎回 success:false（尤其 stage:'align'，段落对不上）时**一个字节都不写回去**：
 //      那份导出件的段落是错位的，写回去比不合更糟。
 
+// 两侧的人分不开时（同一个账号两边都是自己——律师用「稿」管对方回稿）喂给引擎的署名
+// 要退到线上，否则引擎按作者分桶会把两边的修订全算进一桶（真机 A3：11 / 0）。
+import { resolveMergeSideNames } from '../utils/mergeSideNames.js'
+
 // 三语境里「另一侧」（MERGE_HEAD 那一侧）的 tip 字段名不同：
 // adopt=draftTip、cloud=cloudTip、session-end=sessionTip。取错只是幂等键与取字节的 ref 错，
 // 不会静默写错数据（后端按 MERGE_HEAD 反查，不信客户端），但拿不到字节就合不成。
@@ -43,6 +47,8 @@ export function useDocumentMerge(deps) {
     startedAt: 0,
     ctx: null,
     sides: {},
+    // 两侧的称呼与喂给引擎的那两个署名（resolveMergeSideNames 的出参）
+    sideNames: {},
   })
   // 幂等记账：键是 `${另一侧 tip}|${path}`，值是这份文件这一轮已经处理过了。
   // 用 tip 而不是 projectId 做前缀，是因为中止一次合并后重新撞车时 MERGE_HEAD 会变，
@@ -85,8 +91,8 @@ export function useDocumentMerge(deps) {
     const out = await withHiddenEngine(async (run) => {
       const inputs = await deps.fetchMergeInputs(deps.projectId, row.path, refs)
       const draft = await deps.buildMergeDraft(run, inputs, {
-        mainAuthor: (state.sides.main && state.sides.main.authorName) || '',
-        otherAuthor: (state.sides.other && state.sides.other.authorName) || '',
+        mainAuthor: state.sideNames.mainKey || '',
+        otherAuthor: state.sideNames.otherKey || '',
         name,
       })
       if (!draft || draft.success !== true) {
@@ -106,7 +112,10 @@ export function useDocumentMerge(deps) {
       await deps.api.postMergeResolveFile(deps.projectId, {
         path: row.path, mode: 'auto', decisions: [], bytes, name, ctx: state.ctx,
       })
-      return { merged: true, mainCount: draft.mainCount, otherCount: draft.otherCount }
+      // 刻意不把 draft.mainCount/otherCount 带出去：那是「这个作者名下有几条修订」，
+      // 不是「这一侧改了几处」——两侧同名时它就是 11/0。行上的「处数」一律用后端
+      // 三方比对给的 mainChanges/otherChanges（按单元数，与署名无关）。
+      return { merged: true }
     })
     if (out.engine === false) return { failed: true, failReason: 'engine' }
     return out.result
@@ -121,8 +130,6 @@ export function useDocumentMerge(deps) {
     if (!outcome) return
     if (outcome.merged) {
       row.state = 'MERGED'
-      if (outcome.mainCount != null) row.mainCount = outcome.mainCount
-      if (outcome.otherCount != null) row.otherCount = outcome.otherCount
       row.failed = false
       return
     }
@@ -195,12 +202,15 @@ export function useDocumentMerge(deps) {
       state.running = false
       state.ctx = null
       state.sides = {}
+      state.sideNames = {}
       return
     }
     const otherRef = otherRefOf(conflict, ctx)
     state.ctx = ctx
     state.sides = conflict.sides || {}
-    // 保留上一轮挂在行上的前端字段（failed / formatOnlyCount / 实际处数）：
+    state.sideNames = resolveMergeSideNames(t, state.sides,
+      { mode: ctx, draftName: conflict.draftName })
+    // 保留上一轮挂在行上的前端字段（failed / formatOnlyCount）：
     // /status 每轮都给一份全新的 documentMerges，直接覆盖会把"自动合并失败"抹成
     // "正在合并"，律师看到的是一个永远转不完的圈。
     const incoming = conflict.documentMerges || []

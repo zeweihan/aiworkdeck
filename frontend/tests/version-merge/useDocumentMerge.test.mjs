@@ -141,6 +141,51 @@ test('另一侧只改了格式 → 这份降成 MANUAL，字节一个都不写�
   assert.equal(merge.state.rows[0].state, 'PENDING')
 })
 
+/*
+ * 真机 A3：同一个账号两侧都是自己（律师用「稿」管对方回稿）时，两侧署名一样，
+ * 引擎按作者分桶就把两边的修订全算到一桶里（11 / 0）。署名 = 分桶键，必须分得开。
+ */
+test('两侧是同一个人时喂给引擎的两个署名仍然分得开', async () => {
+  const { calls, deps } = makeHarness()
+  const merge = useDocumentMerge(deps)
+  await merge.onConflictStatus(conflictOf([docxRow()], {
+    draftName: '对方第三版回稿',
+    sides: { main: { authorName: '韩泽伟', self: true }, other: { authorName: '韩泽伟', self: true } },
+  }), 'adopt')
+
+  assert.equal(calls.build.length, 1)
+  const opts = calls.build[0]
+  assert.ok(opts.mainAuthor, '署名不能是空串，引擎签不上作者')
+  assert.ok(opts.otherAuthor)
+  assert.notEqual(opts.mainAuthor, opts.otherAuthor)
+})
+
+test('两个人时喂给引擎的还是两位的真名，一个字不变', async () => {
+  const { calls, deps } = makeHarness()
+  const merge = useDocumentMerge(deps)
+  await merge.onConflictStatus(conflictOf([docxRow()]), 'adopt')
+
+  assert.equal(calls.build[0].mainAuthor, '张律师')
+  assert.equal(calls.build[0].otherAuthor, '李律师')
+})
+
+test('引擎按作者分桶的那两个数不许写到行上——「处数」只认后端的三方比对', async () => {
+  const { deps } = makeHarness({
+    buildMergeDraft: async () => ({ success: true, mainCount: 11, otherCount: 0, conflicts: [], formatOnly: [] }),
+  })
+  const merge = useDocumentMerge(deps)
+  await merge.onConflictStatus(conflictOf([docxRow({ mainChanges: 2, otherChanges: 5 })], {
+    sides: { main: { authorName: '韩泽伟', self: true }, other: { authorName: '韩泽伟', self: true } },
+  }), 'adopt')
+
+  const row = merge.state.rows[0]
+  assert.equal(row.state, 'MERGED')
+  assert.equal(row.mainCount, undefined, '11 是「这个作者名下有几条修订」，不是主线改了几处')
+  assert.equal(row.otherCount, undefined)
+  assert.equal(row.mainChanges, 2)
+  assert.equal(row.otherChanges, 5)
+})
+
 test('对齐核对失败（stage:align）→ 退回整份三选一，绝不把错位的字节写回去', async () => {
   const { calls, deps } = makeHarness({
     buildMergeDraft: async () => ({ success: false, stage: 'align', message: 'norm mismatch at p12' }),
