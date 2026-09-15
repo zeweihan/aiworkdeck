@@ -60,6 +60,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.Map;
@@ -119,6 +120,9 @@ public class DocInsightService {
 
     /** MCP / 网关返回的失败一律以此开头（{@link McpClientService#callTool} 的既有约定）。 */
     private static final String ERROR_PREFIX = "Error";
+    /** 上游报错里的 HTTP 状态码：括号里的三位数，或裸写的 4xx/5xx。 */
+    private static final Pattern UPSTREAM_STATUS =
+            Pattern.compile("\\((\\d{3})\\)|(?<![\\d.])([45]\\d{2})(?![\\d.])");
     /** 经营范围太长，工商详情里它一个字段能顶半页，截断后存。 */
     private static final int SCOPE_LIMIT = 500;
 
@@ -1018,9 +1022,20 @@ public class DocInsightService {
                     DocInsightEntity.HINT_NO_CREDENTIAL);
             return false;
         }
-        if (!StringUtils.hasText(raw) || raw.startsWith(ERROR_PREFIX)) {
-            unavailable(row, unavailablePrefix
-                    + (StringUtils.hasText(raw) ? raw : LangText.of("上游返回空结果", "empty response")));
+        if (!StringUtils.hasText(raw)) {
+            unavailable(row, unavailablePrefix + LangText.of("上游返回空结果", "empty response"));
+            return false;
+        }
+        if (raw.startsWith(ERROR_PREFIX)) {
+            // 上游原文只进日志：正文里既不许出现 JSON，也不许出现凭据细节（dev-board#688 D3）
+            log.warn("法宝通道失败 server={} tool={}: {}", server, tool, raw);
+            if (credentialRejected(raw)) {
+                unavailable(row, LangText.of("未配置北大法宝账号（检索通道的账号凭据被拒）",
+                        "No Pkulaw account is configured (the lookup credential was rejected)"),
+                        DocInsightEntity.HINT_UNAUTHORIZED);
+            } else {
+                unavailable(row, unavailablePrefix + upstreamReason(raw));
+            }
             return false;
         }
         JsonNode unwrapped = unwrapMcp(raw);
@@ -1076,6 +1091,36 @@ public class DocInsightService {
         Matcher m = LAW_NAME.matcher(s);
         if (m.matches()) return new String[]{m.group(1).trim(), m.group(2).trim()};
         return new String[]{s, ""};
+    }
+
+    /**
+     * 上游把这次调用当成「没有有效凭据」驳回了（北大法宝的原话是 401 + {@code 900902 Missing Credentials}）。
+     *
+     * <p>与 {@link McpProvider#NO_CREDENTIAL_PREFIX} 分开的只是发现时机：那一条是本机 token 为空、
+     * 传输层一个字节都没发；这一条是发出去了、上游说这个 token 不认。对用户是同一件事——
+     * 重试一百次还是同一句话，所以照 dev-board#458 的配置类三档给结构化原因码，
+     * 由窗格 / 写作辅助卡片摆一个可点的「去设置配置」按钮（dev-board#688 D3）。
+     */
+    private static boolean credentialRejected(String raw) {
+        String s = raw == null ? "" : raw;
+        return s.contains("900902") || s.toLowerCase(Locale.ROOT).contains("missing credentials")
+                || s.toLowerCase(Locale.ROOT).contains("invalid credentials");
+    }
+
+    /**
+     * 上游报错 → 给用户的一句人话。<b>原始返回体一律不下发</b>：401 那一串 JSON 里有凭据说明，
+     * 500 那一串里有调用栈，对用户都是噪音（dev-board#688 D3 的病灶就是把它整段打在卡片正文里）。
+     * 状态码留着——用户报障时就靠它；完整原文在调用处已经 {@code log.warn} 过了。
+     */
+    static String upstreamReason(String raw) {
+        Matcher m = UPSTREAM_STATUS.matcher(raw == null ? "" : raw);
+        String code = m.find() ? (m.group(1) != null ? m.group(1) : m.group(2)) : null;
+        if (code == null) {
+            return LangText.of("检索服务返回错误，详情见服务端日志",
+                    "the lookup service returned an error; see the server log");
+        }
+        return LangText.of("检索服务返回错误（", "the lookup service returned an error (") + code
+                + LangText.of("），详情见服务端日志", "); see the server log");
     }
 
     /** 通道不可用，但原因是瞬时的（上游故障 / 网关不可达 / 通道没配）：只有可读原因，没有原因码。 */

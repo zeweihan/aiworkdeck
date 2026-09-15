@@ -437,6 +437,66 @@ class DocInsightServiceTest {
                 "一个通道挂了不该连坐另一类实体");
     }
 
+    /** 上游 401 的原文：打包发出去的桌面端拿到的就是这一串（dev-board#688 D3 的截图）。 */
+    static final String PKULAW_401 = "Error calling MCP server (401): "
+            + "{\"code\":\"900902\",\"message\":\"Missing Credentials\","
+            + "\"description\":\"Invalid Credentials. Make sure you have given the correct access token\"}";
+
+    @Test
+    @DisplayName("上游 401 Missing Credentials → 配置类失败：带 UNAUTHORIZED 原因码，正文里没有原始 JSON")
+    void 法宝凭据被拒给原因码不给原始JSON() throws Exception {
+        when(qichacha.queryEciInfoJson(anyString())).thenReturn(QCC_FULL);
+        when(mcp.callTool(eq(DocInsightService.PKULAW_SEMANTIC), eq("get_article"), anyMap()))
+                .thenReturn(PKULAW_401);
+
+        awaitStatus(svc.startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+
+        DocInsightEntity law = entityOf(DocInsightEntity.KIND_LAW);
+        assertEquals(DocInsightEntity.RETRIEVAL_UNAVAILABLE, law.getRetrievalStatus());
+        assertEquals(DocInsightEntity.HINT_UNAUTHORIZED, law.getRetrievalHint(),
+                "重试一百次也没用的配置状态：必须给结构化原因码，前端据它摆「去设置配置」按钮");
+        String note = law.getRetrievalNote();
+        assertTrue(note.contains("未配置"), note);
+        assertFalse(note.contains("900902"), "上游的错误码不许打给用户：" + note);
+        assertFalse(note.contains("Missing Credentials"), "上游原文不许打给用户：" + note);
+        assertFalse(note.contains("{"), "原始 JSON 不许打给用户：" + note);
+        assertFalse(note.contains("本次不可用"), "配置类失败不是等得来的等待：" + note);
+        assertEquals(DocInsightEntity.HINT_UNAUTHORIZED, lawView().retrievalHint(), "原因码必须上到 REST 视图");
+    }
+
+    @Test
+    @DisplayName("写作辅助卡片（选中文字 → 在线查询）走同一套判定：原因码上到视图，正文没有原始 JSON")
+    void 写作辅助卡片凭据被拒复用同一套判定() {
+        when(mcp.callTool(eq(DocInsightService.PKULAW_SEMANTIC), anyString(), anyMap()))
+                .thenReturn(PKULAW_401);
+
+        EntityView view = svc.lookupSelection(UID, PID, "LAW", "《中华人民共和国公司法》第十五条");
+
+        assertEquals(DocInsightEntity.RETRIEVAL_UNAVAILABLE, view.retrievalStatus());
+        assertEquals(DocInsightEntity.HINT_UNAUTHORIZED, view.retrievalHint());
+        assertTrue(view.retrievalNote().contains("未配置"), view.retrievalNote());
+        assertFalse(view.retrievalNote().contains("900902"), view.retrievalNote());
+        assertFalse(view.retrievalNote().contains("{"), view.retrievalNote());
+    }
+
+    @Test
+    @DisplayName("非 401 的上游报错也不把 JSON 打给用户：正文只留人话 + 状态码，原文进日志")
+    void 上游报错正文只留人话() throws Exception {
+        when(qichacha.queryEciInfoJson(anyString())).thenReturn(QCC_FULL);
+        when(mcp.callTool(eq(DocInsightService.PKULAW_SEMANTIC), eq("get_article"), anyMap()))
+                .thenReturn("Error calling MCP server (500): {\"error\":\"internal\",\"trace\":\"...\"}");
+
+        awaitStatus(svc.startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_DONE);
+
+        DocInsightEntity law = entityOf(DocInsightEntity.KIND_LAW);
+        assertEquals(DocInsightEntity.RETRIEVAL_UNAVAILABLE, law.getRetrievalStatus());
+        assertNull(law.getRetrievalHint(), "瞬时故障没有原因码，窗格照旧给「重试」");
+        String note = law.getRetrievalNote();
+        assertFalse(note.contains("{"), "原始 JSON 不许打给用户：" + note);
+        assertFalse(note.contains("trace"), note);
+        assertTrue(note.contains("500"), "状态码留着，用户报障时用得上：" + note);
+    }
+
     @Test
     @DisplayName("案例通道未配置 → UNAVAILABLE 且写明原因；配上 server 名就自动接入")
     void 案例通道() throws Exception {

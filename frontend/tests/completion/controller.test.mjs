@@ -366,3 +366,30 @@ test('工商信息预览的字段名落在第一列并有可读最小宽度，�
   assert.match(panel, /max-width:calc\(100vw - 24px\)/, '弹层宽度仍受画布约束')
   assert.equal(/min-width:\d/.test(panel), false, '弹层最小宽度不能写成裸 px，窄画布下会溢出屏幕')
 })
+
+test('凭据被拒的在线查询给出去设置配置的按钮，服务端凭据那一档只给文案', async t => {
+  const h = harness(t)
+  h.setContext({ available: false, hasSelection: true, selectedText: '《中华人民共和国公司法》第十五条', token: 'selection-1' })
+  h.canvas.dispatchEvent(new h.dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 20, clientY: 30 })); await tick()
+  h.button('查询法规与条款').click()
+  h.respond('lookup', { title: '《中华人民共和国公司法》第十五条', hint: 'UNAUTHORIZED',
+    note: '未配置北大法宝账号（检索通道的账号凭据被拒）', variants: [] }); await tick()
+
+  assert.match(h.panel().textContent, /未配置北大法宝账号/)
+  assert.doesNotMatch(h.panel().textContent, /900902|Missing Credentials|\{/)
+  const go = h.button('去设置配置')
+  assert.ok(go, '配置类失败必须给一个可点的按钮，不能只留一句话')
+  assert.equal(h.button('查询法规与条款'), undefined)
+  go.click(); await tick()
+  assert.deepEqual(h.messages.findLast(m => m.action === 'settings').data, { nav: 'account' })
+
+  // 服务端凭据那一档（自建部署）没有可点的路：照依据窗格的口径只给文案
+  h.api.invalidate()
+  h.setContext({ available: false, hasSelection: true, selectedText: '《中华人民共和国公司法》第十五条', token: 'selection-2' })
+  h.canvas.dispatchEvent(new h.dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 20, clientY: 30 })); await tick()
+  h.button('查询法规与条款').click()
+  h.respond('lookup', { title: '《中华人民共和国公司法》第十五条', hint: 'NO_CREDENTIAL',
+    note: '本机未配置该检索通道的凭证（pkulaw-semantic），本次未检索', variants: [] }); await tick()
+  assert.match(h.panel().textContent, /本机未配置该检索通道的凭证/)
+  assert.equal(h.button('去设置配置'), undefined)
+})

@@ -18,6 +18,8 @@ dev-board#181（后端部分）+ #182 + #541（DOC 第四类实体）。
 
 词库生命周期同样按 scope_key 收口：`ProjectService.deleteProject` 在 Project 父行锁内只删 `p:<projectId>`；`AccountDeletionService.deleteAccount` 在官网账户传导成功后取得 User 父行锁，只删 `u:<userId>`。两把锁与学习相同，避免删除和异步学习交错留下孤儿；官网传导失败时不进入本地清理（aiworkdeck#791）。
 
+写作辅助卡片（「查看已有资料」/「查询法规与条款」）的失败态与依据窗格共用 `retrievalHint`：`completionDetails` 把原因码带到卡片，客体页 `hintAction` 据它摆按钮（NOT_CONNECTED/UNAUTHORIZED →「去设置配置」、NO_CREDITS →「去充值」、NO_CREDENTIAL 只给文案），点下去发 `writing-request` 的`settings` 动作 → 宿主注入的 `openSettingsTab({nav:'account'})`（客体页不导航）。
+
 只有用户选区菜单点击后的 POST `/lookup` 才调用 `DocInsightService.lookupSelection`，复用既有检索与计费上下文，不启动全文解析或 LLM 抽取。成功资料缓存到当前项目学习项，失败不覆盖已有资料；GET `/entries/{id}` 只读缓存。外部资料先预览，点击插入才写文档。候选类别 COMPANY/PERSON/LAW/ARTICLE/CASE/WORD/PHRASE；外查只接 COMPANY/LAW/CASE。
 
 测试：`CompletionServiceTest`、`CompletionPersistenceTest`、`CompletionControllerTest` 与 `DocInsightServiceTest`（授权、并发、限额、失败缓存与显式检索边界）。
@@ -81,7 +83,7 @@ UNAVAILABLE 里还有第二刀要切：**重试有用的**（上游故障、网�
 |---|---|---|
 | NOT_CONNECTED | `GatewayException.Kind.NOT_CONNECTED`（本机没连账户，打包态桌面端的常态） | 「去连接账户」→ `open-settings {nav:'account'}` |
 | NO_CREDITS | `Kind.NO_CREDITS`（法宝与企查查两条路都会来） | 「去充值」→ 同一个设置页 |
-| UNAUTHORIZED | `Kind.UNAUTHORIZED`（账户 Key 无效/被吊销） | 「去连接账户」 |
+| UNAUTHORIZED | `Kind.UNAUTHORIZED`（账户 Key 无效/被吊销）；**以及上游把 tools/call 当无凭据驳回**（法宝原话 401 + `900902 Missing Credentials`，dev-board#688 D3） | 「去连接账户」/ 写作辅助卡片里是「去设置配置」 |
 | NO_CREDENTIAL | `McpProvider.NO_CREDENTIAL_PREFIX`（自建部署缺服务端 `PKULAW_TOKEN`） | **只给文案**「凭据需由部署管理员在服务端配置」，不给按钮 |
 | null | 其余一切（含 SERVICE_DISABLED / UPSTREAM_FAILED / GATEWAY_UNREACHABLE / BAD_REQUEST，以及成功与 NOT_FOUND） | 照旧 note + 「重试」 |
 
@@ -89,6 +91,12 @@ UNAVAILABLE 里还有第二刀要切：**重试有用的**（上游故障、网�
 （「请先在设置中连接…」变成按钮，散文里再说一遍是噪音）。落点是 `DocInsightService.unavailableGateway`。
 判定必须走这个码，**前端绝不许拿 `retrievalNote` 做中文子串匹配**——note 双语（LangText），英文版一上线子串判定整条失效。
 NO_CREDENTIAL 不给按钮是刻意的：官方版没有法宝凭据输入框（BYOK 界面 #533 已撤），指一条不存在的路比不指更糟。
+
+**上游原文一律只进日志**（dev-board#688 D3）：`callAndStore` 见到 `"Error"` 前缀就 `log.warn` 全文，
+正文里既不许出现 JSON（401 那串里是凭据说明、500 那串里是调用栈），也不许出现上游错误码。
+带凭据语义的（`900902` / `Missing Credentials` / `Invalid Credentials`）走 `credentialRejected` →
+UNAUTHORIZED + 「未配置北大法宝账号」；其余走 `upstreamReason`，只留一句人话 + HTTP 状态码。
+判定与文案在**依据窗格与写作辅助卡片之间是同一份**：卡片的失败态也只看 `retrievalHint`。
 
 **NOT_FOUND 与 UNAVAILABLE 分开是硬要求**（dev-board#395）：用户的下一步完全不同——
 前者是「文档里这家公司/这个条号可能写错了」，后者是「过一会儿再试 / 去查账」。

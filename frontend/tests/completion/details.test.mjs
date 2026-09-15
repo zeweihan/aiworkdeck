@@ -148,3 +148,15 @@ test('缺少详情时保持空候选，不根据实体标题猜正文或来源',
     title: '《没有正文的法规》', source: '', date: '', note: '', variants: [],
   })
 })
+
+test('配置类检索失败把结构化原因码带给卡片，说明只用后端的人话', () => {
+  const view = completionDetails({
+    name: '《中华人民共和国公司法》第十五条', kind: 'LAW',
+    retrievalStatus: 'UNAVAILABLE', retrievalHint: 'UNAUTHORIZED',
+    retrievalNote: '未配置北大法宝账号（检索通道的账号凭据被拒）',
+    detail: null,
+  })
+  assert.equal(view.hint, 'UNAUTHORIZED')
+  assert.equal(view.note, '未配置北大法宝账号（检索通道的账号凭据被拒）')
+  assert.deepEqual(view.variants, [])
+})

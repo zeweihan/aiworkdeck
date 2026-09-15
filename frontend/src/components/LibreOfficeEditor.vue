@@ -211,6 +211,9 @@ export default {
   // cursor-context：画布点击/光标移动时客体页回传的光标邻域（仅在 insightSubscribed
   //   为真时才产生——不订阅时客体页一条都不发，常态零开销）。
   emits: ['close', 'ready', 'open-url', 'menu-state', 'evidence-drop', 'locator-consumed', 'open-evidence-target', 'command-progress', 'open-insight', 'cursor-context', 'open-history'],
+  // 写作辅助卡片遇到配置类检索失败时要指一条真路（dev-board#688 D3）。设置在工作台里是
+  // 一个标签（dev-board#582），组件拿不到页面实例，只能靠宿主注入——与 MarketDetailPane 同口径。
+  inject: { openSettingsTab: { default: null } },
   props: {
     // Track D: the Office file to load into the editor ({ id, name, fileType,
     // wpsFileId }). When set, the editor fetches its bytes (authed) and loads the
@@ -1138,6 +1141,7 @@ export default {
         storage: { get: (key) => uni.getStorageSync(key), set: (key, value) => uni.setStorageSync(key, value) },
         api: { list: listWritingCompletions, learn: learnWritingCompletions, remove: deleteWritingCompletion,
           clear: clearWritingCompletions, lookup: lookupWritingSelection, detail: getDocInsightEntity, learnedDetail: getWritingCompletionDetail },
+        openSettings: (opts) => { if (this.openSettingsTab) this.openSettingsTab(opts || {}) },
       })
       this._writingHost.start()
       this._inlineReviewHost = createInlineReviewHost({
