@@ -297,3 +297,20 @@ test('pack-release.yml：两条老腿只在 litigation-visual 时跑，runtime �
   assert.match(String(PACK_RELEASE_DOC.jobs.release.if), /!cancelled\(\)/)
   assert.match(String(PACK_RELEASE_DOC.jobs.release.if), /failure/)
 })
+
+test('master 暖缓存与安装包实际消费的缓存路径、key 和运行时参数一致', () => {
+  const warm = loadWorkflow('cache-warm.yml')
+  const build = loadWorkflow('desktop-build.yml').jobs.build
+  const warmSteps = warm.jobs.warm.steps
+  const cache = warmSteps.find(s => s.id === 'cache').with
+  const command = warmSteps.find(s => s.name === 'Bundle CPython runtime').run
+  for (const { plat } of warm.jobs.warm.strategy.matrix.include) {
+    const expand = value => value.replaceAll('${{ matrix.plat }}', plat).trim()
+    const consumer = build.steps.find(s => s.name === `Cache python runtime / graphviz (${plat})`).with
+    assert.equal(expand(cache.path), consumer.path.trim())
+    assert.equal(expand(cache.key), consumer.key)
+    assert.ok(build.steps.some(s => s.run?.trim() === expand(command)))
+  }
+  assert.deepEqual(warm.on.push.branches, ['master'])
+  assert.ok(!warm.on.push.tags)
+})
