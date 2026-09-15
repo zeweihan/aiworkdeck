@@ -84,6 +84,9 @@
 
     <view v-if="preview || result" class="section">
       <text class="help-text">{{ $t('panels.deMatchCount', { count: totalMatches }) }}</text>
+      <!-- 校验不过的号码不改正文（假号打码就是改坏正文），但必须让律师看见，
+           他才知道要不要把这几处补进上面的敏感词（dev-board C2）。 -->
+      <text v-if="totalSuspects" class="help-text suspect-text">{{ $t('panels.deSuspectCount', { count: totalSuspects }) }}</text>
       <text v-for="(warning, i) in (result?.warnings || preview?.warnings || [])" :key="i" class="help-text">{{ warning }}</text>
     </view>
     <view v-if="result?.file && operation === 'redact'" class="section">
@@ -112,7 +115,7 @@ export default {
     return {
       operation: 'redact', mode: 'TOKEN', filePath: '', fileName: '', fileId: null,
       availableStrategies: [], selectedStrategies: [], customTerms: '', excludedTerms: '',
-      password: '', recoveryKit: '', kitName: '', exportedKit: '', processing: false,
+      password: '', recoveryKit: '', kitName: '', exportedKit: '', exportedKitName: '', processing: false,
       preview: null, result: null, error: '', lastRedaction: null, settingsOpen: false, customWordsOpen: false,
     }
   },
@@ -123,13 +126,15 @@ export default {
       return JSON.stringify([this.fileId, this.selectedStrategies, this.customTerms, this.excludedTerms, this.effectiveMode])
     },
     totalMatches() { return Object.values(this.result?.counts || this.preview?.counts || {}).reduce((a, b) => a + b, 0) },
+    totalSuspects() { return Object.values(this.result?.suspects || this.preview?.suspects || {}).reduce((a, b) => a + b, 0) },
   },
   watch: {
     requestSignature() { this.preview = null; this.result = null; this.error = '' },
     operation() { this.result = null; this.error = '' },
     projectId() {
       this.fileId = null; this.filePath = ''; this.fileName = ''; this.password = ''
-      this.recoveryKit = ''; this.exportedKit = ''; this.kitName = ''; this.preview = null; this.result = null
+      this.recoveryKit = ''; this.exportedKit = ''; this.exportedKitName = ''; this.kitName = ''
+      this.preview = null; this.result = null
       this.customTerms = ''; this.excludedTerms = ''; this.lastRedaction = null
     },
   },
@@ -139,7 +144,8 @@ export default {
       try {
         const res = await getSensitiveOptions()
         this.availableStrategies = Array.isArray(res) ? res : res?.data || []
-        this.selectedStrategies = this.availableStrategies.filter(s => ['COMPANY', 'CHINESE_NAME', 'PHONE', 'ID_CARD', 'EMAIL', 'BANK_CARD'].includes(s.value)).map(s => s.value)
+        this.selectedStrategies = this.availableStrategies.filter(s => ['COMPANY', 'CHINESE_NAME', 'PHONE', 'ID_CARD',
+          'UNIFIED_SOCIAL_CREDIT', 'LAWYER_LICENSE', 'EMAIL', 'BANK_CARD'].includes(s.value)).map(s => s.value)
       } catch (e) { this.error = this.$t('panels.deFetchStrategiesFailed') }
     },
     chooseOperation(operation) {
@@ -167,8 +173,15 @@ export default {
       this.preview = null; this.result = null; this.error = ''
       this.filePath = file.filePath || file.path; this.fileName = file.name; this.fileId = file.id
     },
+    // 「浏览」自己没有文件树，要工作台把项目文件选择器打开。工作台必须**同步**
+    // 回执一次（第二个参数），否则这一步就是断的：真机上表现为点了「浏览」毫无
+    // 反应、连提示都没有（dev-board B6）。断了就说出来，不许静默。
     triggerFileSelect() {
-      if (!this.processing) this.$emit('request-file-select', file => { if (file) this.selectFile(file) })
+      if (this.processing) return
+      this.error = ''
+      let opened = false
+      this.$emit('request-file-select', file => { if (file) this.selectFile(file) }, () => { opened = true })
+      if (!opened) this.error = this.$t('panels.deBrowseUnavailable')
     },
     importFromActiveTab() {
       if (!this.processing) this.$emit('request-active-file', file => this.selectFile(file))
@@ -201,6 +214,9 @@ export default {
         const res = await desensitizeFile({ ...this.payload(), password: this.password })
         this.result = res
         this.exportedKit = res.recoveryKit || ''; this.preview = null
+        // 映射文件名带上原文件名：一个项目里可能先后脱敏好几份，光靠时间戳
+        // 分不出哪个映射配哪份副本，复敏时只能一个个试（dev-board C3）。
+        this.exportedKitName = this.kitFileName(source.name)
         this.lastRedaction = res.recoveryKit ? { source, file: res.file, kit: res.recoveryKit } : null
         if (this.exportedKit) {
           try { this.downloadKit() }
@@ -211,11 +227,17 @@ export default {
       } catch (e) { this.error = e.message }
       finally { this.processing = false }
     },
+    /** `<原文件名去扩展名>-复敏-<时间戳>.awd-recovery`；扩展名在桌面端决定另存目录，不能改。 */
+    kitFileName(sourceName) {
+      const base = String(sourceName || '').replace(/\.[^.]+$/, '').trim() || this.$t('panels.deKitFallbackName')
+      return `${base}-${this.$t('panels.deKitFileTag')}-${Date.now()}.awd-recovery`
+    },
     downloadKit() {
       if (!this.exportedKit) return
       const url = URL.createObjectURL(new Blob([this.exportedKit], { type: 'application/octet-stream' }))
       const link = document.createElement('a')
-      link.href = url; link.download = `recovery-${Date.now()}.awd-recovery`
+      link.href = url
+      link.download = this.exportedKitName || this.kitFileName('')
       document.body.appendChild(link); link.click(); link.remove()
       setTimeout(() => URL.revokeObjectURL(url), 1000)
     },
@@ -379,6 +401,7 @@ export default {
 }
 
 .help-text { display: block; color: var(--awd-text-2); font-size: 12px; line-height: 1.6; margin: 8px 0; }
+.suspect-text { color: var(--awd-warning-text); }
 .text-input { width: 100%; box-sizing: border-box; min-height: 64px; height: 76px; border: 1px solid var(--awd-border); border-radius: 4px; padding: 8px; color: var(--awd-text); background: var(--awd-surface); font-size: 12px; }
 .password-input { min-height: 36px; height: 36px; margin-bottom: 12px; }
 .preview-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; padding: 8px; margin: 8px 0; border: 1px solid var(--awd-border); font-size: 12px; line-height: 1.7; user-select: text; }

@@ -4286,10 +4286,14 @@ export default {
     prepareSensitiveFile(fileId) {
         return saveSensitiveInput(fileId, this._libreRefs, this._plainTextRefs)
     },
-    handleDesensitizeSelectFile(callback) {
+    // 第二个参数是给面板的同步回执：没回执，面板就把「选择器打不开」显示出来，
+    // 而不是让用户对着一个毫无反应的「浏览」按钮猜（dev-board B6）。
+    handleDesensitizeSelectFile(callback, ack) {
+        if (!this.projectId) return
         this.desensitizeFileSelectCallback = callback
         this.filePickerAllowFolder = false
         this.showFilePicker = true
+        if (typeof ack === 'function') ack()
     },
     handleDesensitizeActiveFile(callback) {
         const active = this.focusedPane === 'left' ? this.activeFileLeft : this.activeFileRight

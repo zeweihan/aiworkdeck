@@ -284,3 +284,46 @@ JAR 插件拿宿主能力的唯一契约：`com.checkba:plugin-api:1.1.0`（1.0.
 ## HR 用工模板包下架（2026-09-15，dev-board#649）
 
 `hr-template-pack` 已从三站注册表下架；`PluginService.isRetired` 在离线扫描与启用判定中拒绝该 ID，`PluginMarketService` 隐藏旧列表并拒绝直接安装。保留插件磁盘文件及用户已创建文书。其他通用插件机制不受影响。上线验证与回退备份位置见 `doc/hr-template-retirement.md`。
+
+## 脱敏面板 v0.44.1 真机三修（引擎 2.2.0）
+
+**C1 两类新内置规则**：`SensitiveType.UNIFIED_SOCIAL_CREDIT`（统一社会信用代码，18 位，
+GB 32100-2015 校验码 + 行政区划码；字符集去掉 I/O/S/V/Z）与 `SensitiveType.LAWYER_LICENSE`
+（律师执业证号，1 位类别 + 5 或 6 位行政区划 + 4 位年份 + 1 位性质 + 6 位序号 = 17 或 18 位，
+用「区划 + 年份 + 性质」三重结构代替校验位）。两者默认勾选——默认清单写在**前端**
+`DesensitizePane.fetchOptions`，后端只管把类型放进 `/api/sensitive/options`，加了类型不改前端等于没加。
+
+**C2 `suspects`（形似但校验失败的候选）**：新契约。`SensitiveType.reportsFailedVerification()`
+标出四类带确定校验规则的号码（ID_CARD / BANK_CARD / UNIFIED_SOCIAL_CREDIT / LAWYER_LICENSE）；
+`SensitiveTextEngine.detect` 把它们的落选候选收进 `failedVerification`，`edits()` 里按 span 去重、
+剔掉已被别的规则遮蔽或落在既有编号里的，累加成 `suspects()`。一路经
+`SensitiveService.Preview/Result` 与 `/api/sensitive/*` 的 `suspects` 字段到面板，
+显示为「另有 N 处疑似证件/卡号未通过校验，未处理」。
+**地雷**：姓名/地址的 `isPlausible` 判的是「像不像」而不是「校验对不对」，落选是常态，
+绝不能进这个计数——否则每份合同都会报几十处「疑似」，提示立刻变成噪音。
+**另一条**：校验不过的号本来就不是有效号码，不许为了「看起来识别到了」去掉校验位闸门
+（真机样例 `91370100MA3XK7L92Q` 的 GB 32100 校验位应为 `1`，它是个编造值，
+因此落在 suspects 里而不是被遮蔽——这是设计行为，不是漏识别）。
+
+**C3 复敏映射另存为**：文件名由面板给（`kitFileName()`：`<原文件名去扩展名>-复敏-<时间戳>.awd-recovery`，
+取的是**原件名**不是生成出来的中性副本名）；默认目录由桌面主进程给
+（`desktop/main/recovery-download.js` → `~/Documents/AI WorkDeck 复敏文件/`，
+英文界面 `AI WorkDeck Recovery`，不存在就建）。`will-download` 只对 `.awd-recovery` 换
+`defaultPath`，其它下载沿用系统默认目录；建目录失败退回裸文件名，不中断下载。
+**地雷**：`.awd-recovery` 扩展名是主进程分目录的唯一判据，改文件名模板时别动扩展名。
+
+**B6「浏览」不许静默**：面板没有文件树，`request-file-select` 事件把选择器交给工作台打开。
+现在多了**第二个参数 = 同步回执**：`handleDesensitizeSelectFile(callback, ack)` 打开选择器后必须
+`ack()`，面板收不到回执就显示 `panels.deBrowseUnavailable`。同时工作台根节点多了
+`modal-overlay-open` 类（`modalOverlayOpen` 计算属性：文件选择器/邀请/导出/比对/截图保存/图片预览），
+CSS 在弹窗期间把 `.pane-content` 里的 `iframe`/`webview` 置 `visibility: hidden`——
+`<webview>` 是独立合成层，HTML 浮层压在它上面的行为不可靠（LibreOfficeEditor.vue 里有同一条说明），
+弹窗整个落在文档画布后面就表现为「点了没反应」。**必须用 visibility，不能用 display:none**
+（会冻住 LOWA 的 Emscripten/Qt 事件循环，dev-board#539，与 `.libre-standby` 同一套写法）。
+`modalOverlayOpen` 刻意不含 `resizing` 与 `showOcrOverlay`（拖拽和 OCR 取词都要看得见画布）。
+注意：B6 的真机根因未能在无头环境复现——整条 emit→回执→对话框挂载链路经真渲染用例验证是通的，
+所以本轮修的是「没有失败出口」与「浮层压不住原生合成层」这两处，真机复测仍需确认。
+
+验证：`mvn test -Dtest='Sensitive*Test'`（204 项，含新增 `SensitiveCredentialRulesTest`）；
+`npm run test:desensitize`（41 项，含新增 `tests/desensitize/credential-rules.test.mjs`）；
+`cd desktop && node --test tests/recovery-download.test.js`（7 项，已进 desktop `npm test` 清单）。

@@ -83,7 +83,7 @@ public class SensitiveController {
             // Preserve the original endpoint contract for clients which do not yet send a mode.
             if (action.equals("desensitize") && request.mode() == null) return response(200, saved);
             return response(200, Map.of("file", saved, "recoveryKit", result.recoveryKit(),
-                    "counts", result.counts(), "warnings", result.warnings()));
+                    "counts", result.counts(), "suspects", result.suspects(), "warnings", result.warnings()));
         } catch (IllegalArgumentException e) {
             return response(400, Map.of("error", e.getMessage() == null ? "请求无效" : e.getMessage()));
         } catch (Exception e) {
