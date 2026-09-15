@@ -57,6 +57,7 @@
     "test:lowa-reply": "node tests/lowa-e2e/reply-insertion.mjs",
     "test:lowa-table-retype": "node tests/lowa-e2e/table-retype.mjs",
     "test:lowa-context-menu": "node tests/lowa-e2e/context-menu.mjs",
+    "test:lowa-escape-chrome": "node tests/lowa-e2e/escape-chrome.mjs",
     "test:lowa-ime-underline": "node tests/lowa-e2e/ime-underline.mjs",
     "test:lowa-redline-author": "node tests/lowa-e2e/redline-author.mjs",
     "test:lowa-big": "LOWA_E2E_BIG=1 node tests/lowa-e2e/big-doc.mjs",

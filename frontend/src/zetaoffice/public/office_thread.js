@@ -719,6 +719,41 @@ function dispatchUno(url) {
   css.frame.DispatchHelper.create(context).executeDispatch(ctrl.getFrame(), url, '', 0, []);
 }
 
+// 顶层窗口钉死全屏。画布里只该有正文——不是全屏的 VCL 顶层窗口会画出自己的标题栏
+// （「未命名 1 — ZetaOffice Writer」）和边框，正文缩在那个小窗里，用户以为编辑器坏了。
+// boot 与换文档（retarget）各调一次，这是全屏的唯一出处。
+//
+// 顺带记下 v0.44.1 真机走查 D1 的三条真机事实（2026-09-15，24.2.8-zhcn-r5，无头探针）：
+//   ① 退出全屏是 `.uno:Escape` 干的，键盘一概不碰也会发生：单独派发一条就够。
+//   ② 而且**异步生效**——派发它的那条命令里读回 FullScreen 仍是 true、几何还是
+//      800x576，下一条命令（或一轮 20ms 的 macrotask）才看到 785x691 + 标志位 false。
+//      所以事后补 ensureFullScreen() 救不回来（只找回标志位，尺寸仍是 785x691），
+//      唯一的正解是根本不派发它——见 deselect()。
+//   ③ **DOM 按键按落点分两种**：落在覆盖层 `<input>` 上的引擎不管（真 Esc 连按三次，
+//      几何与选区都一动不动——打字不会双份进文档也是同一个原因）；落在画布上的引擎
+//      收得到（Writer 自己的原生右键弹窗只有那条路关得掉）。Qt 的监听在**冒泡**阶段，
+//      宿主一 stopPropagation 它就收不到了。
+function ensureFullScreen() {
+  try { ctrl.getFrame().getContainerWindow().FullScreen = true; } catch (e) {}
+}
+
+// 宿主发起的「取消选区」（工具栏 / 菜单，非键盘路径）。**不派发 `.uno:Escape`**
+// （v0.44.1 真机走查 D1 真机实证）：那条槽会把全屏帧退出全屏，而且是异步生效的
+// ——同一条命令里读回 FullScreen 还是 true、几何还没变，下一条命令才看到 785x691
+// 的带标题栏窗口，事后补也补不准（`FullScreen = true` 只找回标志位；setPosSize
+// 自己又会退出全屏；`.uno:FullScreen` 是开关语义）。视图光标自己塌陷同样取消选区
+// （探针：hadSelection true → false），几何一动不动，成本一次 UNO 调用。
+//
+// 用户按的那个 Esc 分两路：落在画布上的交给引擎自己的按键处理（关掉 Writer 的原生
+// 右键弹窗独此一路，也不碰全屏），落在覆盖层输入框上的（引擎不管那种）才经这条
+// 命令取消选区。见 zetaOfficeImeOverlay.js 里 Esc 那一段的说明。
+function deselect() {
+  try {
+    ctrl.getViewCursor().collapseToStart();
+    return { success: true, name: 'escape' };
+  } catch (e) { return { success: false, name: 'escape', message: '取消选区失败: ' + errStr(e) }; }
+}
+
 // 缩放上下限。LO 自身允许 20%..600%，越界写进去引擎会自己夹，但夹之前会先按
 // 非法值重排一次版；在 JS 侧先夹住，捏合手势连发时不至于抖。
 const ZOOM_MIN = 20, ZOOM_MAX = 600;
@@ -726,6 +761,14 @@ const ZOOM_MIN = 20, ZOOM_MAX = 600;
 // LO 自己的 chrome（自建工具栏要关掉的那些）。singlemode-* 是选中表格/图片时
 // 自动冒出来的上下文工具栏——逐项关的时候必须连它们一起关，否则一选中表格就
 // 又钻出一条老气的工具栏。真机枚举所得（LayoutManager.getElements）。
+//
+// **真正会冒出来的是 *objectbar 这一族，不是 singlemode-*（v0.44.1 真机走查 D2 真机实证，
+// 2026-09-15，24.2.8-zhcn-r5）**：boot 时 getElements 只有 standardbar / textobjectbar /
+// menubar / statusbar 是可见的，11 条 singlemode-* 早已创建且不可见（所以 hideElement
+// 对它们有效，e2e 一直是绿的）；而光标一进表格单元格，引擎当场创建并显示
+// `private:resource/toolbar/tableobjectbar`——这个名字过去根本不在表里，谁都没藏过它。
+// 「定位」类跳转会拉起同族的 navigationobjectbar（箭头 + 对象类型列表那条）。
+// 下面这一组就是经典 Writer 的上下文工具栏全名，逐个 createElement 过、引擎都认。
 const CHROME_URLS = {
   menubar: 'private:resource/menubar/menubar',
   statusbar: 'private:resource/statusbar/statusbar',
@@ -744,6 +787,19 @@ const CHROME_URLS = {
     'private:resource/toolbar/singlemode-drawtext',
     'private:resource/toolbar/singlemode-annotation',
     'private:resource/toolbar/singlemode-printpreview',
+    // 经典上下文工具栏（引擎按上下文自己拉起来的那一族）
+    'private:resource/toolbar/tableobjectbar',
+    'private:resource/toolbar/navigationobjectbar',
+    'private:resource/toolbar/graphicobjectbar',
+    'private:resource/toolbar/frameobjectbar',
+    'private:resource/toolbar/oleobjectbar',
+    'private:resource/toolbar/drawingobjectbar',
+    'private:resource/toolbar/drawtextobjectbar',
+    'private:resource/toolbar/bezierobjectbar',
+    'private:resource/toolbar/numobjectbar',
+    'private:resource/toolbar/previewobjectbar',
+    'private:resource/toolbar/fullscreenbar',
+    'private:resource/toolbar/changes',
   ],
 };
 
@@ -764,7 +820,7 @@ const UI_COMMANDS = {
   word_left: '.uno:GoToPrevWord', word_right: '.uno:GoToNextWord',
   word_left_sel: '.uno:WordLeftSel', word_right_sel: '.uno:WordRightSel',
   line_start_sel: '.uno:StartOfLineSel', line_end_sel: '.uno:EndOfLineSel',
-  escape: '.uno:Escape',                                  // 取消选区
+  // escape（取消选区）**不在这张表里**：它不是一条 .uno: 派发，见 ui_command。
   page_up: '.uno:PageUp', page_down: '.uno:PageDown',
   // ---- [P1 自建工具栏] 字符格式 ----
   strikeout: '.uno:Strikeout',
@@ -2360,7 +2416,7 @@ function bootDoc() {
   ctrl = xModel.getCurrentController();
   installReviewCommentInterceptor(ctrl);
   installContextMenuInterceptor(ctrl);
-  try { ctrl.getFrame().getContainerWindow().FullScreen = true; } catch {}
+  ensureFullScreen();
   // RFC v2: revisions default ON — every edit (AI or typed) lands as a tracked
   // change the lawyer can accept/reject. Set once here (and on retarget) instead
   // of per-command, so no edit path can slip through untracked.
@@ -3548,10 +3604,12 @@ const EXEC = {
   },
   // Overlay shortcut keys (Cmd/Ctrl+A/B/I/U, Home/End) — see UI_COMMANDS.
   ui_command(p) {
-    const url = UI_COMMANDS[String(p.name || '')];
+    const name = String(p.name || '');
+    if (name === 'escape') return deselect();
+    const url = UI_COMMANDS[name];
     if (!url) return { success: false, message: 'ui_command not allowed: ' + (p.name || '') };
     dispatchUno(url);
-    return { success: true, name: String(p.name) };
+    return { success: true, name: name };
   },
   // 自建查找栏的「上一个/下一个」。**不用 find_text_locations**——那条路每个匹配
   // 插一个书签当锚点，书签会跟着文档存进 docx，用户只是搜个词不该在文件里留下
@@ -3781,8 +3839,14 @@ const EXEC = {
     // 之后，单纯 showElement 有时恢复不出来（真机实证）。逃生开关是「体验不能
     // 退步」的兜底保证，不能靠一次调用碰运气——先补 createElement 重建元素，
     // 再把整个 LayoutManager 打开，每一步都用 isElementVisible 复核。
+    // 藏这一侧必须**先 createElement 再 hideElement**（真机实证 v0.44.1 真机走查 D2）：
+    // 对一条还没被创建的元素调 hideElement 不留痕——光标第一次进表格时引擎照样
+    // 把 tableobjectbar 创建成可见的（探针：预先 hideElement 之后 isElementVisible
+    // 仍然回 true）。先把它创建出来再藏，引擎就记住了「这条是藏着的」，之后进出
+    // 表格都不再冒出来。13 条一起 create+hide 实测 115ms，只在开关时跑一次。
     const setOne = (url, on) => {
       if (!on) {
+        try { lm.createElement(url); } catch (e) {}
         try { lm.hideElement(url); } catch (e) {}
         return visible(url);
       }
@@ -4000,7 +4064,7 @@ const EXEC = {
       ctrl = loaded.getCurrentController();
       installReviewCommentInterceptor(ctrl);
       installContextMenuInterceptor(ctrl);
-      try { ctrl.getFrame().getContainerWindow().FullScreen = true; } catch (e) {}
+      ensureFullScreen();
       try { installKeyHandler(); } catch (e) {}
       // The listener is per-model — the freshly-loaded component needs its own.
       try { installModifyListener(xModel); } catch (e) { log('XModifyListener 安装失败 / install failed: ' + errStr(e)); }

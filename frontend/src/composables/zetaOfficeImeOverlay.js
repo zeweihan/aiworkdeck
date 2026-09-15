@@ -400,7 +400,7 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
   // during composition these keys drive the IME candidate window. Enter routes to
   // onEnter; Backspace/arrows route through sendCommand (skipped if not supplied,
   // letting them fall through to the harmless empty input).
-  input.addEventListener('keydown', (e) => {
+  const onKeyDown = (e) => {
     if (composing || e.isComposing || e.keyCode === 229) return
     // A real keystroke starts its own input; only an IME echo may repeat the commit.
     armTrailingCommit(null)
@@ -486,7 +486,18 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
       forward('ui_command', { name: e.key === 'PageUp' ? 'page_up' : 'page_down' }, e.key)
       return
     }
+    // Esc 按事件落点分两路（v0.44.1 真机走查 D1，都是真机实测出来的）：
+    //   · 落在**画布**上（Qt 把焦点抢过去了，典型是 Writer 自己的原生右键弹窗开着）
+    //     → 一个字都不碰，让它继续冒泡给引擎。引擎自己的按键处理是**唯一**关得掉
+    //     那个弹窗的路子（宿主一 stopPropagation 它就关不掉了），而且不碰全屏、
+    //     不清选区。
+    //   · 落在**覆盖层输入框**上（正常打字状态）→ 引擎不管它（Chromium/Qt 不从
+    //     <input> 里抢键：实测这种 Esc 引擎的选区一动不动），所以宿主自己取消选区。
+    // 两路都**不派发 `.uno:Escape`**：那条槽会把全屏帧退出全屏（画布里冒出
+    // 「未命名 1 — ZetaOffice Writer」标题栏的小窗），而且异步生效、补不回来。
+    // worker 里的 ui_command escape 已经改成视图光标塌陷，见 deselect()。
     if (e.key === 'Escape') {
+      if (e.target !== input) return
       e.preventDefault()
       forward('ui_command', { name: 'escape' }, 'Esc 取消选区 / deselect')
       return
@@ -509,7 +520,25 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
       e.preventDefault()
       forward('move_cursor', { dir: ARROW_DIR[e.key], extend: e.shiftKey }, '方向键 ' + ARROW_DIR[e.key] + (e.shiftKey ? '+选择' : ''))
     }
-  })
+  }
+  input.addEventListener('keydown', onKeyDown)
+
+  // 捕获阶段的兜底：候选卡片可见时 Tab/Enter/方向键必须由宿主先处理，而按键
+  // 不一定落在覆盖层输入框上——Qt 会在某些操作后把焦点抢回画布，合成键事件也可能
+  // 直接打在画布上（真机：候选出现后按 Tab 没反应，只能用鼠标点）。落在画布/文档
+  // 本身的按键在 document 捕获阶段就交给同一个处理器，处理掉的再 stopPropagation，
+  // 引擎（与浏览器默认的焦点跳转）都摸不到它。
+  // 只接画布与文档本身：宿主自己的 DOM 面板（写作辅助 / 即时审校 / 审阅气泡）里的
+  // 按键一概不碰，它们有自己的键盘处理；输入框自己的事件也不碰（上面那个监听器
+  // 已经处理过，不能处理两遍）。
+  const doc = canvas.ownerDocument || document
+  const onDocKeyDownCapture = (e) => {
+    if (disposed) return
+    if (e.target !== canvas && e.target !== doc && e.target !== doc.body && e.target !== doc.documentElement) return
+    onKeyDown(e)
+    if (e.defaultPrevented) e.stopPropagation()
+  }
+  doc.addEventListener('keydown', onDocKeyDownCapture, true)
 
   // FOCUS-RACE FIX (from the spike): a canvas click positions the LO cursor (Qt
   // handles it) but also steals keyboard focus, so the first keystroke after a
@@ -547,6 +576,7 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     destroy() {
       disposed = true; positionSequence++; clearTimeout(trailingTimer)
       canvas.removeEventListener('mouseup', onMouseUp)
+      doc.removeEventListener('keydown', onDocKeyDownCapture, true)
       input.remove()
       preview.remove()
     },
