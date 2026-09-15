@@ -99,6 +99,9 @@ jobs:
       - name: Tab visibility contract (dev-board#394)
         working-directory: frontend
         run: npm run test:tab-visibility
+      - name: Titlebar drag-region contract (全屏浮层必须 no-drag，B4 / 0907 B10)
+        working-directory: frontend
+        run: npm run test:window-chrome
       - name: Clipboard capture gate + delete chain (dev-board#455)
         working-directory: frontend
         run: npm run test:clipboard

@@ -487,6 +487,61 @@ html.is-desktop .project-header .avatar-menu-mask {
     -webkit-app-region: no-drag;
 }
 
+/* 全屏浮层退出拖拽区（B4 / 0907 清单 B10）。
+
+   工作台顶栏那 42px 自己就是标题栏（上面那条 drag）。拖拽区是壳按 app-region
+   另算的一套，**不受 z-index 与 DOM 命中管**（见 utils/windowChrome.js 的长注释）：
+   任何 `position: fixed; inset: 0` 的浮层打开后，它盖在顶栏上的那一条仍然是 drag，
+   于是点那一条想关掉浮层，DOM 里收不到 click、浮层不关；用户再点一下——两次落在
+   标题栏上的点击就是 macOS 的「双击标题栏 = 缩放」，AppKit 自己把窗口撑成整块工作区
+   （实测 1920×962 = workAreaSize）。全仓没有任何改主窗口尺寸的代码
+   （desktop/tests/main-window-bounds.test.js 钉着），撑窗口的是 macOS。
+
+   fixed 盒子恒排在常规流之后合成，所以这里的 no-drag 抠洞会赢过顶栏的 drag
+   （.awd-global-back 一直好用，同一个道理）。浮层铺满视口，连带保护了它里面的
+   菜单面板，不必逐个再列。
+
+   **新增全屏浮层要加进这张名单**；frontend/tests/window-chrome/titlebar-drag-region.test.mjs
+   会扫出漏掉的那个。真不吃鼠标事件的层（pointer-events: none）才进那份 EXEMPT。 */
+html.is-desktop .amb-mask,
+html.is-desktop .awd-dialog-mask,
+html.is-desktop .awd-mask,
+html.is-desktop .awd-select-mask,
+html.is-desktop .awdfb-mask,
+html.is-desktop .batch-menu-mask,
+html.is-desktop .ch-mask,
+html.is-desktop .compare-dialog-mask,
+html.is-desktop .context-menu-mask,
+html.is-desktop .cp-mask,
+html.is-desktop .dd-dialog-mask,
+html.is-desktop .dialog-overlay,
+html.is-desktop .dlp-mask,
+html.is-desktop .dock-menu-mask,
+html.is-desktop .dropdown-fixed-mask,
+html.is-desktop .dropdown-mask,
+html.is-desktop .file-picker-mask,
+html.is-desktop .filelink-mask,
+html.is-desktop .ihc-mask,
+html.is-desktop .image-preview-mask,
+html.is-desktop .memory-mask,
+html.is-desktop .modal-mask,
+html.is-desktop .model-mask,
+html.is-desktop .mr-dialog-mask,
+html.is-desktop .msg-act-mask,
+html.is-desktop .naming-mask,
+html.is-desktop .ocd-mask,
+html.is-desktop .ocr-overlay,
+html.is-desktop .popup-mask-transparent,
+html.is-desktop .qo-mask,
+html.is-desktop .sm-dialog-mask,
+html.is-desktop .task-dialog-mask,
+html.is-desktop .theme-menu-mask,
+html.is-desktop .upload-mask,
+html.is-desktop .webmark-drag-overlay,
+html.is-desktop .workdeck-dialog-mask {
+    -webkit-app-region: no-drag;
+}
+
 /* 工作台顶栏与项目概览顶栏的让位写在各自的样式表里（消费上面那两个变量），
    不在这里写——它们都有自己的 padding 简写，写在这里就要打权重官司。
    见 pages/project-overview/project-overview.scss 与
