@@ -195,6 +195,41 @@ class ProvenanceServiceTest {
         assertEquals("session", units.get("p0").type());
     }
 
+    /**
+     * 工作段内的自动存档要折进「它所属的那一版」（真机反馈 A2）。
+     *
+     * <p>律师在时间线上看不到自动存档（{@code VersionTimeline.grouped} 把 auto 折进上一条
+     * 命名节点），却会在编辑器顶上那条溯源里读到「修改了《合同》」这种机器生成的句子，
+     * 而不是他自己给这段工作起的名字。折叠口径与时间线逐字相同：沿 HEAD 从新往旧走，
+     * {@code session} 开组，其后（更旧）的 auto 都归到它头上。
+     *
+     * <p>这里第 1 段只被那笔 auto 动过、第 2 段被后面那笔命名版本动过：折叠生效时两段
+     * 都报那笔命名版本；去掉折叠，第 1 段会报 auto 的 sha 与「修改了《合同》」，当场转红。
+     */
+    @Test
+    void autosaveIsFoldedIntoTheNamedVersionItBelongsTo(@TempDir Path root) throws Exception {
+        ProjectRepoService repo = svc(root);
+        init(root, repo);
+
+        writeDoc(root, "合同.docx", "第一条 甲方", "第二条 乙方", "第三条 期限");
+        String first = commit(repo, "第一稿", "session");
+
+        writeDoc(root, "合同.docx", "第一条 甲方", "第二条 乙方（培训 5 个工作日）", "第三条 期限");
+        String auto = commit(repo, "修改了《合同》", "auto");
+
+        writeDoc(root, "合同.docx", "第一条 甲方", "第二条 乙方（培训 5 个工作日）", "第三条 期限一年");
+        String named = commit(repo, "第九条培训天数改为 5 个工作日", "session");
+
+        Map<String, ProvenanceUnit> units = unitsOf(service(repo).provenance(PID, UID, "合同.docx", "HEAD"));
+
+        assertNotEquals(auto, units.get("p1").sha(), "自动存档不该直接露给律师");
+        assertEquals(named, units.get("p1").sha(), "要报它所属的那一版");
+        assertEquals("第九条培训天数改为 5 个工作日", units.get("p1").title());
+        assertEquals("session", units.get("p1").type());
+        assertEquals(named, units.get("p2").sha(), "本来就归命名版本的那一段不受影响");
+        assertEquals(first, units.get("p0").sha(), "没被这段工作动过的段落照旧归更早那一版");
+    }
+
     @Test
     void xlsxCellsAndPptxSlides(@TempDir Path root) throws Exception {
         ProjectRepoService repo = svc(root);

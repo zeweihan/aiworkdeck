@@ -899,6 +899,10 @@ public class WorkSessionService {
         lock.lock();
         try {
             requireNotMerging(projectId);
+            // 站在某一稿上：这个动作的意思完全不同，见 endSessionOnDraft。
+            if (onDraftBranch(projectId)) {
+                return endSessionOnDraft(projectId, userId, userName, title);
+            }
             WorkSession s = activeSession(projectId)
                     .orElseThrow(() -> VersionException.userFacing(LangText.of("当前没有进行中的工作", "No work session in progress")));
 
@@ -988,6 +992,37 @@ public class WorkSessionService {
         } finally {
             lock.unlock();
         }
+    }
+
+    /**
+     * 站在某一稿上「结束本次工作」：给这一稿此刻的改动落一笔**有名字**的版本
+     * （{@code kind=session}），稿本身照旧 ACTIVE——不并回主线、不删分支、不切分支。
+     *
+     * <p>为什么必须在 {@link #endSession} 最前面分流、不能让它走下去：稿上不开工作段
+     * （{@code onChangeSignal} 对 {@code draft/*} 跳过 {@link #ensureSession}），而律师
+     * 切到稿上之前主线那一段工作很可能还挂着 ACTIVE——走下去就会把**主线那段工作**
+     * 合并掉，还把律师从稿上硬切回主线。
+     *
+     * <p>为什么要有这条路：稿上的改动此前只剩防抖存档那种无名版本，采纳之后历史里
+     * 这一稿全是「修改了《X》」，律师给不了它一个说得清的名字（真机反馈 B2）。
+     *
+     * <p>一个改动都没有时与主线同口径：不产生空提交，用返回值报信而不是抛异常
+     * （见 {@link SessionEndResult} 的说明）。
+     */
+    private SessionEndResult endSessionOnDraft(long projectId, Long userId, String userName, String title) {
+        Optional<WorkSession> draft = activeDraftOnBranch(projectId);
+        String finalTitle = (title == null || title.isBlank())
+                ? defaultTitle(draft.map(WorkSession::getStartedAt).orElse(null))
+                : title.trim();
+        manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
+        String sha = repoService.commitAll(projectId, finalTitle, "session", null,
+                userName, email(projectId, userId, userName));
+        if (sha == null) {
+            return new SessionEndResult(null, LangText.of("本次工作没有任何改动，未生成版本", "This work session had no changes, so no version was created"), null);
+        }
+        log.info("在稿上结束一段工作: project={}, branch={}, title={}",
+                projectId, draft.map(WorkSession::getBranchName).orElse("?"), finalTitle);
+        return new SessionEndResult(sha, null, null);
     }
 
     /**

@@ -558,12 +558,13 @@ public class ProvenanceService {
             }
         }
         Map<String, VersionEntry> entries = repoService.entriesByShas(projectId, shas);
+        Map<String, String> folded = foldAutosaves(projectId, entries);
         Map<String, String> remoteNames = remoteDisplayNames(projectId);
         String earlier = LangText.of("更早的版本", "Earlier versions");
 
         List<ProvenanceUnit> out = new ArrayList<>(attrs.size());
         for (Attr a : attrs) {
-            VersionEntry e = a.sha() == null ? null : entries.get(a.sha());
+            VersionEntry e = a.sha() == null ? null : entries.get(folded.getOrDefault(a.sha(), a.sha()));
             if (e == null) {
                 out.add(new ProvenanceUnit(a.key(), a.hash(), null, null, null, false, null, earlier, null));
                 continue;
@@ -581,6 +582,69 @@ public class ProvenanceService {
                     HistoryTypeClassifier.classify(e.message(), e.kind())));
         }
         return out;
+    }
+
+    /**
+     * 自动存档折进「它所属的那一版」（dev-board 真机反馈 A2）。
+     *
+     * <p>归属算的是**精确**那一笔提交，而工作段内的每一次防抖存档都是一笔
+     * {@code kind=auto} 的无名提交——律师在时间线上根本看不到它们（{@code VersionTimeline}
+     * 的 {@code grouped} 把 auto 折进上一条命名节点里），却会在编辑器顶上那条溯源里
+     * 读到「修改了《采购合同》」这种自动生成的句子，而不是他自己给这段工作起的名字。
+     * 这里按**和时间线完全相同的分组口径**做一次折叠：沿 HEAD 的历史从新往旧走，
+     * {@code kind=session} 的那一条开一组，其后（更旧）的每一条 auto 都归到它头上。
+     *
+     * <p>还没收尾的那段工作照旧不折（它的 auto 比任何命名版本都新，找不到归宿）——
+     * 这时界面上说「自动存档」是对的：那一段确实还没有名字。
+     *
+     * @return {@code {auto 的 sha -> 它所属的那一版的 sha}}；没有 auto 要折时是空表
+     */
+    private Map<String, String> foldAutosaves(long projectId, Map<String, VersionEntry> entries) {
+        boolean anyAuto = entries.values().stream().anyMatch(ProvenanceService::isAutosave);
+        if (!anyAuto) {
+            return Map.of();
+        }
+        List<VersionEntry> history;
+        try {
+            history = repoService.log(projectId, "HEAD", Math.max(1, maxHistory));
+        } catch (Exception e) {
+            // 折叠是出参侧的锦上添花，读不出历史就照原样显示自动存档
+            log.warn("折叠自动存档时读历史失败: project={}", projectId, e);
+            return Map.of();
+        }
+        Map<String, String> fold = foldMap(history);
+        // 折过去的那些版本自己也要有 entry 才翻得出标题/署名
+        Set<String> extra = new LinkedHashSet<>(fold.values());
+        extra.removeAll(entries.keySet());
+        if (!extra.isEmpty()) {
+            entries.putAll(repoService.entriesByShas(projectId, extra));
+        }
+        return fold;
+    }
+
+    /**
+     * {@code auto 的 sha -> 它所属的那一版}。{@code history} 必须是新在前
+     * （{@link ProjectRepoService#log} 的既有顺序），口径与前端 {@code VersionTimeline.grouped}
+     * 逐字相同：只有 {@code session} 开组，其余归到最近一条 session 上。包内可见供直接测。
+     */
+    static Map<String, String> foldMap(List<VersionEntry> history) {
+        Map<String, String> fold = new LinkedHashMap<>();
+        String named = null;
+        for (VersionEntry e : history) {
+            if (e == null || e.sha() == null) {
+                continue;
+            }
+            if (!isAutosave(e)) {
+                named = e.sha();
+            } else if (named != null) {
+                fold.put(e.sha(), named);
+            }
+        }
+        return fold;
+    }
+
+    private static boolean isAutosave(VersionEntry e) {
+        return e != null && "auto".equals(e.kind());
     }
 
     /** 读列表一律不许联网（allowFetch=false），与提交历史出参同口径。 */
