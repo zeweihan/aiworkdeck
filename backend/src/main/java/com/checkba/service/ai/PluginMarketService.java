@@ -139,6 +139,7 @@ public class PluginMarketService {
         } catch (Exception e) {
             throw new IllegalStateException(LangText.of("注册表返回内容无法解析: ", "Failed to parse registry response: ") + e.getMessage());
         }
+        list.removeIf(view -> PluginService.isRetired(view.getId()));
         for (MarketPluginView view : list) {
             view.setPriceCents(MarketPurchaseGate.normalizePrice(view.getPriceCents()));
             if (view.getPricingModel() == null || view.getPricingModel().isBlank()) {
@@ -174,6 +175,9 @@ public class PluginMarketService {
      */
     public synchronized String install(String id) {
         requireValidId(id);
+        if (PluginService.isRetired(id)) {
+            throw new IllegalStateException(LangText.of("该插件已下架，无法安装", "This plugin has been retired and cannot be installed"));
+        }
         if (publicKeyPem == null || publicKeyPem.isBlank()) {
             throw new IllegalStateException(LangText.of(
                     "未配置插件注册表公钥（ai.plugins.registry-public-key），拒绝安装",

@@ -101,6 +101,26 @@ class PluginMarketServiceTest {
     }
 
     @Test
+    void staleRegistryListingHidesOnlyRetiredPlugin() {
+        PluginMarketService svc = new PluginMarketService("http://registry.test/plugins", publicKeyPem,
+                pluginsDir.toString(), pluginService, gate) {
+            @Override protected String httpGet(String url) {
+                return "[{\"id\":\"hr-template-pack\"},{\"id\":\"hello-plugin\"}]";
+            }
+        };
+        var list = svc.listMarket();
+        assertEquals(1, list.size());
+        assertEquals("hello-plugin", list.get(0).getId());
+    }
+
+    @Test
+    void retiredPluginCannotBeDownloadedEvenWithAStaleRegistry() {
+        assertTrue(assertThrows(IllegalStateException.class,
+                () -> service(publicKeyPem).install("hr-template-pack")).getMessage().contains("下架"));
+        assertFalse(Files.exists(pluginsDir.resolve("hr-template-pack")));
+    }
+
+    @Test
     @DisplayName("minHostVersion 安装闸（规范 v2.7 P0）：宿主达标放行、不达标抛异常、dev 态与无声明放行")
     void minHostVersionInstallGate() throws Exception {
         PluginMarketService svc = service("");

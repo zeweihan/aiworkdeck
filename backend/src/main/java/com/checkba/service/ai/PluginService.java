@@ -36,6 +36,11 @@ public class PluginService {
     /** system_setting 中存放被禁用插件 id 列表（JSON 数组）的 key */
     public static final String DISABLED_KEY = "ai.plugins.disabled";
 
+    /** Product retirement: hide legacy installs even while the registry is unreachable. */
+    public static boolean isRetired(String pluginId) {
+        return "hr-template-pack".equals(pluginId);
+    }
+
     /** manifest 已定义的权限值（v1 四项 + v2.7 的 ai），未知值仅告警不拒绝（向前兼容） */
     private static final Set<String> KNOWN_PERMISSIONS =
             Set.of("file_read", "file_write", "network", "editor", "ai");
@@ -473,7 +478,7 @@ public class PluginService {
         // 不兼容 = 有效未启用（规范 v2.7 P0）：用户的启停意愿位不动，宿主升级后自然恢复。
         // 既有全部消费点（ToolRegistry 三处 / PluginWebController / invokeTool / skill isAvailable）
         // 都查这里，于是「不加载、不注册、不服务」免改自动成立。
-        if (incompatiblePluginIds.containsKey(pluginId)) {
+        if (isRetired(pluginId) || incompatiblePluginIds.containsKey(pluginId)) {
             return false;
         }
         maybeRefreshDisabledState();
@@ -905,6 +910,10 @@ public class PluginService {
                 PluginMetadata meta = parseManifest(json);
                 if (meta == null) {
                     log.error("Invalid manifest (missing id), skip plugin dir: {}", pluginDir.getName());
+                    continue;
+                }
+                if (isRetired(meta.getId())) {
+                    log.info("Skip retired plugin {}", meta.getId());
                     continue;
                 }
                 boolean duplicated = plugins.stream().anyMatch(p -> Objects.equals(p.getId(), meta.getId()));
