@@ -16,6 +16,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { classifyLoadFailure, shouldSelfHealLoadFailure } from '../../src/utils/editorLoadFailure.js'
+import { createAuthorNameResolver } from '../../src/utils/editorAuthor.js'
 
 const SRC = readFileSync(new URL('../../src/components/LibreOfficeEditor.vue', import.meta.url), 'utf8')
 
@@ -28,12 +29,13 @@ function loadMethods() {
   const factory = new Function(
     'getFileDownloadUrl', 'getCurrentUser', 'createRelayExecutor',
     'webviewTransport', 'iframeTransport', 'ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar',
-    'getAuthHeaders', 'host', 'classifyLoadFailure', 'shouldSelfHealLoadFailure', body)
+    'getAuthHeaders', 'host', 'classifyLoadFailure', 'shouldSelfHealLoadFailure',
+    'createAuthorNameResolver', body)
   // 失败分流与自愈判据喂**真实现**（dev-board#539）：桩掉它们等于把这份用例
   // 断言的 statusKey 变成测试自己写的常量。
   return factory((id) => '/download/' + id, () => ({ name: '测试用户' }),
     null, null, null, null, null, null, null, null,
-    classifyLoadFailure, shouldSelfHealLoadFailure).methods
+    classifyLoadFailure, shouldSelfHealLoadFailure, createAuthorNameResolver).methods
 }
 
 const METHODS = loadMethods()

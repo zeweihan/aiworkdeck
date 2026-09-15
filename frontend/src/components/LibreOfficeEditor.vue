@@ -162,8 +162,9 @@ import { classifyLoadFailure, shouldSelfHealLoadFailure } from '@/utils/editorLo
 import ReviewPanel from '@/components/ReviewPanel.vue'
 import EditorToolbar from '@/components/EditorToolbar.vue'
 import EvidenceStaleBar from '@/components/EvidenceStaleBar.vue'
-import { getFileDownloadUrl, getFileUploadUrl, listEvidenceLinks, reportEvidenceAnchors, keepEvidenceAnchor } from '@/services/api.js'
+import { getFileDownloadUrl, getFileUploadUrl, listEvidenceLinks, reportEvidenceAnchors, keepEvidenceAnchor, getCurrentUser as fetchAuthUser } from '@/services/api.js'
 import { getAuthHeaders, getCurrentUser } from '@/utils/auth.js'
+import { createAuthorNameResolver } from '@/utils/editorAuthor.js'
 import { host } from '@/services/host.js'
 import { anchorHash } from '@/utils/anchorHash.js'
 import { StaleQueue } from '@/utils/evidenceStaleQueue.js'
@@ -184,12 +185,22 @@ let seq = 0
 // 当前用户的展示名。两个地方要用同一个串：随 load_document 传给引擎（用户本人的
 // 修订以此署名）与审阅面板的「我」这一桶（dev-board#377）。抽成一处，免得哪天
 // 一边加了兜底另一边没加，用户自己的修订被归成「其他人」。
+// 取数与判定在 utils/editorAuthor.js（那边没有 import，跑得了 node --test）：
+// 本地缓存（登录页写的）里没有名字时要问一次 /api/auth/me——桌面 local-mode 免登
+// 从不写那个缓存键，读空串的后果是引擎按自己的兜底署「未知作者」。
 // **不许回落 username**（Spec §6）：手机号注册的用户名是 `u`+随机串，落进批注与修订
-// 就是永久的——历史条目不回填。取不到名字宁可给空串，让引擎用它自己的默认作者。
-function currentAuthorName() {
-  const u = getCurrentUser() || {}
-  return String(u.displayName || u.nickname || u.name || '')
+// 就是永久的——历史条目不回填。
+let authorResolver = null
+function authorNames() {
+  if (!authorResolver) {
+    authorResolver = createAuthorNameResolver({
+      readCached: () => getCurrentUser() || null,
+      fetchRemote: () => fetchAuthUser().then((r) => (r && r.data) || null),
+    })
+  }
+  return authorResolver
 }
+function currentAuthorName() { return authorNames().current() }
 
 export default {
   name: 'LibreOfficeEditor',
@@ -404,6 +415,10 @@ export default {
     // 之前的清单。宿主在命令返回时补这一发，面板不必再依赖那条边沿。
     this._onDocMutated = (p) => this.onDocMutatedEvent(p)
     uni.$on(DOC_MUTATED_EVENT, this._onDocMutated)
+    // 修订署名：本地缓存里没有展示名时问一次后端，拿到就补给引擎——空名字会让
+    // 引擎按自己的兜底把用户本人的修订全署成「未知作者」。不 await：解析慢了也
+    // 不该拖住 boot，loadDocument 到点会用那一刻已知的名字。
+    this.resolveRedlineAuthor()
     try {
       const api = host.zetaoffice
       if (!api || typeof api.getEditor !== 'function') {
@@ -460,6 +475,26 @@ export default {
     this.executor = null
   },
   methods: {
+    // ---- 修订署名 ----
+    // 展示名可能不在本地缓存里（桌面 local-mode 免登从不写那个键）：问一次后端，
+    // 拿到就同时补给审阅面板的「我」这一桶与引擎的修订署名。拿不到就什么都不做，
+    // 署名退回引擎兜底（今天的行为），编辑链路一律不受影响。
+    async resolveRedlineAuthor() {
+      let name = ''
+      try { name = await authorNames().resolve() } catch (e) { name = '' }
+      if (!name || name === this.selfAuthor) return
+      this.selfAuthor = name
+      await this.pushRedlineAuthor(name)
+    },
+    // 只补署名，不动文档：load_document **不带 bytes** 时 worker 只记下 authorName
+    // 就返回（office_thread.js 的 load_document 头两行 + 空字节早退），这是既有契约
+    // ——lowa-e2e 注入作者名走的就是它。引擎还没起来时不发：loadDocument 到点会
+    // 用同一个名字，这里抢在 boot 前发只会撞在握手上。
+    async pushRedlineAuthor(name) {
+      if (!this.executor || !this._endpointUp) return
+      try { await this.executor.executeCommand('load_document', { authorName: name }) }
+      catch (e) { this.appendLog('修订署名下发失败 / redline author push failed: ' + (e && e.message ? e.message : e)) }
+    },
     // ---- EvidenceLink：拖放接收层 ----
     onEvidenceDragOver(e) {
       this.evidenceDropOver = true
