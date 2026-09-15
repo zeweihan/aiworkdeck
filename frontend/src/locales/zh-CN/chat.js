@@ -223,6 +223,10 @@ export default {
   replaceSelection: '替换选区',
   exportAsWord: '导出为Word',
   stepN: '步骤 {n}',
+  timelinePlan: '计划 · {done}/{total}',
+  timelineExecuting: '正在执行 {n} 项操作',
+  timelineExecuted: '已执行 {n} 项操作',
+  timelineExecutionError: '{n} 项操作 · 有操作未完成',
   stepsGroup: '执行过程',
   approvalNeededFlag: '待确认',
   // ---- ProcessCard ----

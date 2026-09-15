@@ -18,8 +18,8 @@
   </div>
 
   <!-- Standard Card Variant (Root) -->
-  <div v-else class="thinking-card" :class="{ 'is-done': status === 'done', 'ghost': variant === 'ghost' }">
-    <div class="header" @click="toggle">
+  <div v-else class="thinking-card" :class="{ 'is-working': status === 'thinking', 'is-done': status === 'done', 'ghost': variant === 'ghost' }">
+    <button type="button" class="header" :aria-expanded="isExpanded" @click="toggle">
       <div class="left">
         <div class="status-indicator">
           <span v-if="status === 'thinking'" class="pulse-ring"></span>
@@ -34,10 +34,10 @@
       <div class="right">
         <span class="chevron-icon" :class="{ 'expanded': isExpanded }"></span>
       </div>
-    </div>
+    </button>
 
     <transition name="expand">
-      <div class="body" v-if="isExpanded">
+      <div class="body" v-if="isExpanded && content">
         <div class="content">
           <MarkdownPreview :content="content" />
         </div>
@@ -175,9 +175,14 @@ const toggle = () => {
 
 .header {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
+  gap: 8px;
   align-items: center;
-  padding: 6px 10px;
+  padding: 0;
+  border: 0;
+  font: inherit;
+  text-align: left;
+  margin: 0;
   cursor: pointer;
   background: var(--awd-surface);
   transition: background 0.2s;
@@ -260,30 +265,31 @@ const toggle = () => {
 }
 
 .title {
-  font-size: 11px; /* Slightly easier to read */
+  font-size: 12px;
   font-weight: 500;
   color: var(--awd-text-2); /* Gray-Medium */
   font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
 }
 
 .thinking-card.is-done .title {
-  color: var(--awd-text-3); /* Lighter gray when done */
+  color: var(--awd-text-2);
   font-weight: 500;
 }
 
 .chevron-icon {
   width: 6px;
   height: 6px;
-  border-right: 1.5px solid var(--awd-border-strong);
-  border-bottom: 1.5px solid var(--awd-border-strong);
-  transform: rotate(45deg);
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  color: var(--awd-text-2);
+  transform: rotate(-45deg);
   transition: transform 0.3s;
   display: block;
 }
 
 .chevron-icon.expanded {
-  transform: rotate(-135deg);
-  margin-top: 4px;
+  transform: rotate(45deg);
+  margin-top: 0;
 }
 
 .body {
@@ -507,4 +513,11 @@ const toggle = () => {
   max-height: 0;
   opacity: 0;
 }
+.header::after { border: 0; }
+.header:focus-visible { outline: 2px solid var(--awd-accent); outline-offset: 4px; }
+.thinking-card.is-working .title { animation: thinking-breathe 1.8s ease-in-out infinite; }
+@keyframes thinking-breathe { 50% { opacity: .5; } }
+@media (prefers-reduced-motion: reduce) { .thinking-card.is-working .title { animation: none; } }
+.thinking-card.ghost .body { margin-top: 8px; padding-left: 14px; border-left: 1px solid var(--awd-border); }
+.thinking-card.ghost :deep(.markdown-body) { font-size: 12px; line-height: 1.65; }
 </style>

@@ -16,6 +16,7 @@ import {
   removeInboxItem,
   replaceInboxItem,
 } from '../../src/composables/agentInboxState.mjs'
+import { captureChatTimeline, visibleChatTimeline } from '../../src/components/AgentMessage/chatTimeline.mjs'
 import { nextBubbleId } from '../../src/composables/bubbleId.js'
 
 const source = readFileSync(new URL('../../src/composables/useAgentStream.js', import.meta.url), 'utf8')
@@ -25,12 +26,12 @@ function stream(overrides = {}) {
     .replace('export function useAgentStream()', 'function useAgentStream()')
     .replace('        bubbles,\n', '        bubbles, handleEvent, currentAssistantBubble, createAssistantBubble, createUserBubble,\n')
   const factory = new Function('ref', 'reactive', 'nextTick', 'onUnmounted', 'getCurrentInstance',
-    'createProtocolTagRegex', 'decodeProtocolTags', 't', 'nextBubbleId',
+    'createProtocolTagRegex', 'decodeProtocolTags', 't', 'nextBubbleId', 'captureChatTimeline',
     'createInboxState', 'applyInboxReceipt', 'applyInboxSnapshot', 'applyInputApplied', 'markInboxEvent', 'removeInboxItem', 'replaceInboxItem',
     'getApiBaseUrl', 'getSessionId', 'getAgentInbox', 'updateAgentInboxItem', 'deleteAgentInboxItem', 'getConversationMetadata',
     body + '\nreturn useAgentStream()')
   const value = factory(ref, reactive, nextTick, () => {}, () => null,
-    createProtocolTagRegex, decodeProtocolTags, key => key, nextBubbleId,
+    createProtocolTagRegex, decodeProtocolTags, key => key, nextBubbleId, captureChatTimeline,
     createInboxState, applyInboxReceipt, applyInboxSnapshot, applyInputApplied, markInboxEvent, removeInboxItem, replaceInboxItem,
     () => 'http://test.local', () => 'test-session',
     overrides.getAgentInbox || (async () => ({ items: [], runId: null, status: null })),
@@ -259,4 +260,52 @@ test('applying an interjection preserves buffered text in its original assistant
   s.handleEvent('bubble_end', JSON.stringify({ status: 'finished' }))
   assert.equal(s.bubbles.value.at(-1).content, 'New reply after steer')
   assert.equal(prior.content, 'Visible untagged reply before steer')
+})
+
+for (const chunkSize of [1, 7, 9999]) {
+  test(`timeline preserves interleaved text/thinking/tools across ${chunkSize}-character deltas`, () => {
+    const s = stream()
+    const markup = '<thinking>First thought</thinking>Before.<process name="Read"><tool_code>read_file({})</tool_code></process><tool_output status="SUCCESS">Read result</tool_output><thinking>Second thought</thinking>After.<final>Final reply.</final>'
+    for (let i = 0; i < markup.length; i += chunkSize) s.handleEvent('text_delta', JSON.stringify({ content: markup.slice(i, i + chunkSize) }))
+    s.handleEvent('bubble_end', JSON.stringify({ status: 'finished' }))
+    const bubble = s.bubbles.value[0]
+    const entries = visibleChatTimeline(bubble)
+    assert.deepEqual(entries.map(e => e.type), ['thinking', 'text', 'execution', 'thinking', 'text'])
+    assert.equal(entries[2].procs[0].items[0].output, 'Read result')
+    assert.equal(bubble.content, 'Before.After.\n\nFinal reply.')
+    assert.equal(entries[3].data.content, 'Second thought')
+    s.resetSSE()
+  })
+}
+
+test('history replay preserves order, separate tool calls, markdown fences and unfinished questions without changing the active parser', () => {
+  const s = stream()
+  const code = '```js\nconst x = 1\n```'
+  const markup = `<final>Before.</final><process name="One"><tool_code>one({})</tool_code><tool_output status="SUCCESS">one result</tool_output></process><thinking>Review</thinking><process name="Two"><tool_code>two({})</tool_code><tool_output status="FAILURE">two failure</tool_output></process><final>${code}</final><question>Choose<option>A</option>`
+  const bubble = s.parseAssistantHistory(markup)
+  assert.deepEqual(visibleChatTimeline(bubble).map(e => e.type), ['text', 'execution', 'thinking', 'execution', 'text'])
+  assert.equal(new Set(bubble.processes.map(p => p.id)).size, 2)
+  assert.equal(bubble.processes[0].items[0].output, 'one result')
+  assert.equal(bubble.processes[1].items[0].output, 'two failure')
+  assert.equal(bubble.processes[1].items[0].status, 'error')
+  assert.ok(bubble.content.includes(code))
+  assert.equal(bubble.question.text, 'Choose')
+  assert.deepEqual(bubble.question.options, ['A'])
+  assert.equal(s.bubbles.value.length, 1)
+  s.handleEvent('text_delta', JSON.stringify({ content: '<final>Live' }))
+  assert.equal(s.bubbles.value[0].content, 'Live', 'final streams before a closing tag')
+  s.resetSSE()
+})
+
+test('reconnect rebuilds one ordered timeline and accepts subsequent text without duplication', () => {
+  const s = stream()
+  const content = 'Before.<process><tool_code>read_file({})</tool_code></process><tool_output status="SUCCESS">OK</tool_output><final>After'
+  s.handleEvent('state_recovery', JSON.stringify({ content }))
+  s.handleEvent('state_recovery', JSON.stringify({ content }))
+  s.handleEvent('text_delta', JSON.stringify({ content: ' recovery.</final>' }))
+  const bubble = s.bubbles.value[0]
+  assert.deepEqual(visibleChatTimeline(bubble).map(e => e.type), ['text', 'execution', 'text'])
+  assert.equal(bubble.content, 'Before.\n\nAfter recovery.')
+  assert.equal(bubble.processes.length, 1)
+  s.resetSSE()
 })
