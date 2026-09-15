@@ -1182,6 +1182,24 @@ class DocInsightServiceTest {
         verify(model, org.mockito.Mockito.times(2)).generate(anyList());
     }
 
+    /**
+     * PR#849 审查第 3 条：辅助模型不在可用清单（要去设置页换一个）曾被 for 循环里的
+     * catch (Exception) 吞成 deepComplete=false——用户只看到「未完整完成」，看不到该去哪修。
+     */
+    @Test
+    @DisplayName("辅助模型未配置：原样抛出去设置页的 4001，不降级成「部分完成」")
+    void deepReviewSurfacesFeatureNotConfigured() {
+        when(chatModelFactory.getAuxChatModel(any(java.time.Duration.class)))
+                .thenThrow(new com.checkba.exception.FeatureNotConfiguredException(
+                        "ai-aux-model", "辅助模型不在可用清单内"));
+        var e = assertThrows(com.checkba.exception.FeatureNotConfiguredException.class,
+                () -> svc.review(UID, PID, DOC, List.of(
+                        new ParagraphInput(0, "标的公司名下房产共 58 项。"),
+                        new ParagraphInput(1, "附表二：房产明细共 39 项。")), true, false));
+        assertEquals("ai-aux-model", e.getFeature());
+        assertTrue(e.getMessage().contains("辅助模型"), e.getMessage());
+    }
+
     @Test
     @DisplayName("深入审校首块传输失败立即停，不继续提交其余收费请求")
     void deepReviewStopsAfterFirstTransportFailure() {

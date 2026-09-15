@@ -277,13 +277,33 @@ class MeetingTranscriptionServiceTest {
         verify(fetcher, times(2)).fetch("http://r/trans");
     }
 
+    /**
+     * EMPTY（没识别到人声）不是成功终态，是「这次没转出东西」。面板 EMPTY 分支上的
+     * 「重试转写」必须真的重新提交，否则那颗按钮点了没反应；再次计费的风险由
+     * locale 的 meeting.emptyTranscriptBillingHint 明确告知，产品刻意允许。
+     */
     @Test
-    @DisplayName("合法空转写是已完成状态，重复提交不得新建付费任务")
-    void emptyTranscriptionIsIdempotent() {
+    @DisplayName("空转写可以重新提交：EMPTY 上的「重试转写」不能是幂等空转")
+    void emptyTranscriptionCanBeResubmitted() {
         MeetingRecording m = meeting(MeetingRecording.STATUS_EMPTY);
-        when(meetingRepository.findById(7L)).thenReturn(Optional.of(m));
-        assertEquals(MeetingRecording.STATUS_EMPTY, service(false).startTranscription(7L).getStatus());
-        verifyNoInteractions(tingwu, oss);
+        // save 原样返回入参，后台 submitToTingwu 会把这同一个实例写成 FAILED，与下面的
+        // 断言抢跑（同 MeetingTranscriptionTimeoutTest#startTranscriptionStampsAnchor 的说明）。
+        // 把后台线程卡在 findById 上直到断言做完。
+        Thread caller = Thread.currentThread();
+        CountDownLatch releaseBackground = new CountDownLatch(1);
+        when(meetingRepository.findById(7L)).thenAnswer(inv -> {
+            if (Thread.currentThread() != caller) {
+                releaseBackground.await(5, TimeUnit.SECONDS);
+            }
+            return Optional.of(m);
+        });
+        try {
+            assertEquals(MeetingRecording.STATUS_TRANSCRIBING,
+                    service(true).startTranscription(7L).getStatus(),
+                    "EMPTY 被当成幂等终态的话，界面上的「重试转写」点了没有任何反应");
+        } finally {
+            releaseBackground.countDown();
+        }
     }
 
     @Test

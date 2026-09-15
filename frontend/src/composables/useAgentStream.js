@@ -27,6 +27,15 @@ if (typeof window !== 'undefined' && !window.__awdSseNetworkHooks) {
     }
 }
 
+// 模型偶尔把整段协议裹进 ```xml。剥离只对流式正文做，历史回灌不做。
+// PARTIAL_FENCE = 结尾那截「再来几个字符就可能是完整围栏」的文本（``` 或 ```xml 的前缀）。
+const PARTIAL_FENCE = /`{1,3}[A-Za-z]*$/
+const stripCodeFences = (text) => text
+    .replace(/^```(?:xml|html|markdown)?\s*\n?/gm, '')
+    .replace(/\n?```\s*$/gm, '')
+    .replace(/```(?:xml|html|markdown)?\s*\n/g, '')
+    .replace(/\n```/g, '')
+
 export function useAgentStream() {
     // STATE: List of all bubbles (history + active)
     const bubbles = ref([])
@@ -149,6 +158,8 @@ export function useAgentStream() {
     // tool_output，必须 FIFO 归属到「第一个仍在 loading 的 tool」——按"最后一个
     // tool"归属会把所有结果都错挂到最后一个调用上。
     let activeToolItem = null
+    // 围栏剥离开关：历史回灌时关掉（历史正文里的 ``` 是真的代码块，不是协议外壳）
+    let stripFences = true
     // Event parser state
     let currentEventName = null
     let currentEventData = ''
@@ -211,6 +222,7 @@ export function useAgentStream() {
         activeProcessId = null
         thinkingParentProcessId = null
         activeToolItem = null
+        stripFences = true
     }
 
     // --- RESET SSE CONNECTION STATE ---
@@ -578,6 +590,7 @@ export function useAgentStream() {
         next.isStreaming = true
         next.thinking.status = 'thinking'
         next.thinking.startTime = Date.now()
+        captureChatTimeline(next)
         bubbles.value.push(next)
         currentAssistantBubble.value = next
         isStreaming.value = true
@@ -1399,7 +1412,9 @@ export function useAgentStream() {
     const flushRemainingBuffer = () => {
         if (parserBuffer && parserBuffer.trim()) {
             console.log('[AgentStream] Flushing remaining buffer:', parserBuffer.length, 'chars')
-            flushContent(parserBuffer)
+            // 结尾那截围栏是 processTextStream 特意留在缓冲区里的（见 PARTIAL_FENCE），
+            // 流已经结束就不会再长了，这里补上剥离，否则收尾的 ``` 会原样显示给用户
+            flushContent(stripFences ? stripCodeFences(parserBuffer) : parserBuffer)
             parserBuffer = ''
             captureChatTimeline(currentAssistantBubble.value)
         }
@@ -1832,7 +1847,9 @@ export function useAgentStream() {
                 const name = attributes['name'] || null
                 activeTag = 'artifact'
 
-                const aid = `art-${Date.now()}-${bubble.artifacts.length}`
+                // 历史回灌每条消息各建一个气泡，artifacts.length 每条都从 0 起：同毫秒解析
+                // 两条消息会撞出同一个 id，Vue 的 :key 撞了就会复用错节点
+                const aid = `art-${nextBubbleId()}`
                 handleArtifactEvent({ operation: 'create', id: aid, type, name, status: 'draft', data: { content: '' } })
             } else {
                 activeTag = null
@@ -1861,14 +1878,15 @@ export function useAgentStream() {
         }
 
         parserBuffer += text
+        stripFences = !history
 
-        if (!history) {
+        if (stripFences) {
             // FILTER: Strip markdown code block wrappers
-            parserBuffer = parserBuffer.replace(/^```(?:xml|html|markdown)?\s*\n?/gm, '')
-            parserBuffer = parserBuffer.replace(/\n?```\s*$/gm, '')
-            parserBuffer = parserBuffer.replace(/```(?:xml|html|markdown)?\s*\n/g, '')
-            parserBuffer = parserBuffer.replace(/\n```/g, '')
-
+            // 结尾那截「还可能长成完整围栏」的文本必须原样留在缓冲区里再剥：本函数末尾
+            // 会把缓冲区抽干到只剩半截标签，跨分片的 ``` 于是永远拼不起来，按半截剥会
+            // 让 ```xml 原样漏进正文（分片 '``' / '`xml\n' 实测）。
+            const hold = parserBuffer.length - (parserBuffer.match(PARTIAL_FENCE)?.[0].length || 0)
+            parserBuffer = stripCodeFences(parserBuffer.slice(0, hold)) + parserBuffer.slice(hold)
         }
 
         // 标签清单在 agentTagProtocol.mjs（与后端 AgentTagProtocol.TAGS 同一份）：
@@ -1909,7 +1927,12 @@ export function useAgentStream() {
         const possibleTag = parserBuffer.lastIndexOf('<')
         const tail = possibleTag >= 0 ? parserBuffer.slice(possibleTag) : ''
         const keepTail = tail && !tail.includes('>')
-        const end = keepTail ? possibleTag : parserBuffer.length
+        let end = keepTail ? possibleTag : parserBuffer.length
+        // 半截围栏与半截标签一样要留在缓冲区里，否则下一片来的时候已经无从拼接
+        if (stripFences) {
+            const fence = parserBuffer.match(PARTIAL_FENCE)
+            if (fence) end = Math.min(end, parserBuffer.length - fence[0].length)
+        }
         if (end > 0) {
             flushContent(parserBuffer.slice(0, end))
             parserBuffer = parserBuffer.slice(end)
@@ -1920,7 +1943,7 @@ export function useAgentStream() {
 
 
     const parseAssistantHistory = (content) => {
-        const saved = { bubble: currentAssistantBubble.value, parserBuffer, activeTag, activeProcessId, thinkingParentProcessId, activeToolItem, handler: clientActionHandler.value }
+        const saved = { bubble: currentAssistantBubble.value, parserBuffer, activeTag, activeProcessId, thinkingParentProcessId, activeToolItem, stripFences, handler: clientActionHandler.value }
         const bubble = createAssistantBubble()
         bubble.planTodos = []
         try {
@@ -1942,6 +1965,7 @@ export function useAgentStream() {
             activeProcessId = saved.activeProcessId
             thinkingParentProcessId = saved.thinkingParentProcessId
             activeToolItem = saved.activeToolItem
+            stripFences = saved.stripFences
             clientActionHandler.value = saved.handler
         }
     }

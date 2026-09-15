@@ -5,16 +5,21 @@ package com.checkba.service.meeting;
 
 import com.checkba.model.dto.MeetingTranscriptionProgress;
 import com.checkba.model.entity.MeetingRecording;
+import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.MeetingRecordingRepository;
 import com.checkba.repository.ProjectFileRepository;
 import com.checkba.service.SystemSettingService;
 import com.checkba.service.platform.ExternalProviderResolver;
 import com.checkba.service.platform.ExternalServiceProvider;
 import com.checkba.service.platform.PlatformGatewayClient;
+import com.checkba.storage.ProjectStorageResolver;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -43,6 +48,10 @@ class MeetingTranscriptionTimeoutTest {
     private SystemSettingService settingService;
     private TingwuClient tingwu;
     private ExternalProviderResolver resolver;
+    /** 逃生口用例要真的走到 tingwu.submitTask，所以音频定位这条链要是通的。 */
+    private ProjectFileRepository projectFileRepository;
+    private ProjectStorageResolver storageResolver;
+    private MeetingAudioTranscoder transcoder;
 
     /** 还在跑（ONGOING）：卡死判定不生效时，refreshIfNeeded 会照常轮询并保持 TRANSCRIBING。 */
     private static final TingwuClient.TaskInfo ONGOING =
@@ -54,16 +63,29 @@ class MeetingTranscriptionTimeoutTest {
         settingService = mock(SystemSettingService.class);
         tingwu = mock(TingwuClient.class);
         resolver = mock(ExternalProviderResolver.class);
+        projectFileRepository = mock(ProjectFileRepository.class);
+        storageResolver = mock(ProjectStorageResolver.class);
+        transcoder = mock(MeetingAudioTranscoder.class);
         when(meetingRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(settingService.get(anyString(), anyString())).thenReturn("x");
         when(resolver.resolve(anyString())).thenReturn(ExternalServiceProvider.BYOK);
         when(tingwu.getTask(any(), eq("task-1"))).thenReturn(ONGOING);
+
+        Path tempDir = Files.createTempDirectory("awd-meeting-timeout-test-");
+        File audioFile = tempDir.resolve("audio.mp3").toFile();
+        Files.write(audioFile.toPath(), new byte[360_000]);
+        ProjectFile pf = new ProjectFile();
+        pf.setId(11L);
+        pf.setFilePath("projects/1/audio.mp3");
+        when(projectFileRepository.findById(11L)).thenReturn(Optional.of(pf));
+        when(storageResolver.resolve(anyString())).thenReturn(audioFile.toPath());
+        when(transcoder.toMp3(any(), any())).thenReturn(audioFile);
     }
 
     private MeetingTranscriptionService service() {
         return new MeetingTranscriptionService(
-                meetingRepository, mock(ProjectFileRepository.class), null, settingService,
-                mock(MeetingAudioTranscoder.class), tingwu, mock(MeetingOssClient.class),
+                meetingRepository, projectFileRepository, storageResolver, settingService,
+                transcoder, tingwu, mock(MeetingOssClient.class),
                 resolver, mock(PlatformGatewayClient.class), mock(LocalAsrClient.class),
                 url -> "{\"Transcription\":{\"Paragraphs\":[]}}",
                 mock(MeetingTranscriptionService.BinaryUploader.class),
@@ -160,6 +182,42 @@ class MeetingTranscriptionTimeoutTest {
         assertEquals(MeetingRecording.STATUS_TRANSCRIBING, svc.startTranscription(7L).getStatus());
         verify(tingwu, times(2)).getTask(any(), eq("task-1"));
         verify(tingwu, never()).submitTask(any(), anyString());
+    }
+
+    /**
+     * 逃生口（PR#849 审查第 2 条）：只 refreshIfNeeded、永不重新提交的话，上游任务被清理 /
+     * 凭证换掉 / 网关持续不可达时用户会永远转圈——查不到 → 等满阈值 → 待确认 → 重试 →
+     * 再等一个阈值，没有任何手段强制重跑。所以同一条记录的「恢复查询」只做一次。
+     */
+    @Test
+    @DisplayName("恢复查询只做一次：第二次在同样的「待确认」上重试会清掉旧任务号重新提交")
+    void secondRetryAfterRecoveryResubmits() throws Exception {
+        MeetingRecording old = transcribing(Duration.ofMinutes(10).toMillis(), Duration.ofHours(4));
+        old.setAudioFileId(11L);
+        MeetingTranscriptionService svc = service();
+
+        // ① 第一次等满阈值：收尾文案说「重试只查原任务」
+        assertEquals(MeetingRecording.STATUS_FAILED, svc.refreshIfNeeded(old).getStatus());
+        assertTrue(old.getError().contains("不会重新提交转写"), old.getError());
+
+        // ② 第一次重试：只恢复查询，一分钱都不花
+        assertEquals(MeetingRecording.STATUS_TRANSCRIBING, svc.startTranscription(7L).getStatus());
+        assertEquals("task-1", old.getTingwuTaskId());
+        // 第二个参数用 any()（不是 anyString()）：oss 是 mock，签名 URL 回 null，
+        // anyString() 不匹配 null，never() 会因此永远为真，等于没验。
+        verify(tingwu, never()).submitTask(any(), any());
+
+        // ③ 再等满一个阈值：收尾文案改口，明说重试会重新提交、可能再次计费
+        old.setTranscribingStartedAt(LocalDateTime.now().minusHours(4));
+        old.setLastPolledAt(LocalDateTime.now().minusSeconds(11));
+        assertEquals(MeetingRecording.STATUS_FAILED, svc.refreshIfNeeded(old).getStatus());
+        assertTrue(old.getError().contains("重新提交转写，可能再次计费"), old.getError());
+
+        // ④ 第二次重试：走正常提交路径，旧任务号清空，恰好提交一次
+        assertEquals(MeetingRecording.STATUS_TRANSCRIBING, svc.startTranscription(7L).getStatus());
+        verify(tingwu, timeout(3000).times(1)).submitTask(any(), any());
+        assertNull(old.getTingwuTaskId(), "旧任务号不清掉的话，轮询还会去问那个永远查不到的任务");
+        assertNull(old.getGatewayTaskId());
     }
 
     @Test

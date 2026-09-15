@@ -67,7 +67,8 @@ export function captureChatTimeline(bubble) {
 
 export function visibleChatTimeline(bubble) {
   // Non-streaming system confirmations and older in-memory bubbles have no parser timeline.
-  const entries = bubble.timeline || [
+  // An empty array is truthy: test for length, or a bubble whose parser never ran renders nothing.
+  const entries = bubble.timeline?.length ? bubble.timeline : [
     ...(bubble.thinking?.content || bubble.isStreaming && bubble.thinking?.status === 'thinking' ? [{ type: 'thinking', data: bubble.thinking }] : []),
     ...(bubble.title ? [{ type: 'title' }] : []),
     ...(bubble.planTodos?.length ? [{ type: 'plan', data: bubble.planTodos }] : []),
@@ -81,8 +82,11 @@ export function visibleChatTimeline(bubble) {
     if (entry.type === 'thinking' && !entry.data.content && !(bubble.isStreaming && entry.data.status === 'thinking')) return
     if (entry.type === 'plan' && !entry.data.length) return
     if (entry.type === 'text') {
-      textEnd = entry.end
-      if (!bubble.content.slice(entry.start, entry.end).trim()) return
+      // Recovery snapshots and rollbacks shrink content under an already recorded slice.
+      const end = Math.min(entry.end, (bubble.content || '').length)
+      entry = { ...entry, end }
+      textEnd = end
+      if (end <= entry.start || !bubble.content.slice(entry.start, end).trim()) return
     }
     if (entry.type === 'process') {
       let group = result.at(-1)

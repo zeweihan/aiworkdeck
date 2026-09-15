@@ -107,6 +107,17 @@ public class MeetingTranscriptionService {
     static final Duration STUCK_FLOOR = Duration.ofHours(3);
     private static final String RESULT_PENDING_ZH = "转写结果暂未确认";
     private static final String RESULT_PENDING_EN = "Transcription result not yet confirmed";
+    /** 第一次「待确认」失败的收尾：重试只查原任务，不会再建一笔收费转写。 */
+    private static final String RETRY_QUERIES_ZH = "原始录音完好，重试将查询原任务，不会重新提交转写。";
+    private static final String RETRY_QUERIES_EN = "The original recording is intact; "
+            + "retry checks the existing task without submitting another transcription.";
+    /** 第二次「待确认」失败的收尾（逃生口）：重试会重新提交，可能再次计费。 */
+    private static final String RETRY_RESUBMITS_ZH = "原始录音完好，重试将重新提交转写，可能再次计费。";
+    private static final String RETRY_RESUBMITS_EN = "The original recording is intact; "
+            + "retry resubmits the transcription and may be charged again.";
+    /** 恢复查询期间挂在 error 上的留痕前缀（TRANSCRIBING 不显示 error，用户看不到它）。 */
+    private static final String RECOVERY_NOTICE_ZH = "正在查询原转写任务";
+    private static final String RECOVERY_NOTICE_EN = "Checking the existing transcription task";
     static final int STUCK_FACTOR = 3;
 
     /**
@@ -340,7 +351,7 @@ public class MeetingTranscriptionService {
 
     /**
      * 提交转写。同步只做状态置位（TRANSCRIBING），耗时步骤进后台执行器。
-     * RECORDED / FAILED 可提交；TRANSCRIBING/TRANSCRIBED 幂等返回。
+     * RECORDED / FAILED / EMPTY 可提交；TRANSCRIBING/TRANSCRIBED 幂等返回。
      *
      * <p>方法开头的状态判定与真正落库的 {@code setStatus(TRANSCRIBING) + save()} 之间
      * 隔着一整段校验逻辑，此前中间完全没有互斥：自动结束时触发一次 + 客户端超时重试
@@ -363,22 +374,30 @@ public class MeetingTranscriptionService {
         MeetingRecording meeting = meetingRepository.findById(meetingId)
                 .orElseThrow(() -> new IllegalArgumentException(
                         LangText.of("会议不存在: ", "Meeting not found: ") + meetingId));
+        // STATUS_EMPTY（没识别到人声）不是成功终态，是「这次没转出东西」：面板上那颗
+        // 「重试转写」按钮必须真的重新提交，emptyTranscriptBillingHint 已经把
+        // 「重试会再次提交并可能再次计费」说清楚了，产品刻意允许。
         if (MeetingRecording.STATUS_TRANSCRIBING.equals(meeting.getStatus())
-                || MeetingRecording.STATUS_TRANSCRIBED.equals(meeting.getStatus())
-                || MeetingRecording.STATUS_EMPTY.equals(meeting.getStatus())) {
+                || MeetingRecording.STATUS_TRANSCRIBED.equals(meeting.getStatus())) {
             return meeting;
         }
         // 本地等待超时不代表云端失败：恢复查询已提交的任务，避免重复转写和扣费。
+        // 但**只恢复一次**——见 escapeHatchArmed。
         String previousError = meeting.getError();
         if (MeetingRecording.STATUS_FAILED.equals(meeting.getStatus())
                 && (meeting.getTingwuTaskId() != null || meeting.getGatewayTaskId() != null)
                 && previousError != null
-                && (previousError.startsWith(RESULT_PENDING_ZH) || previousError.startsWith(RESULT_PENDING_EN)
-                    // 兼容升级前已被本地看门狗判失败的记录，不能让这些用户重试时再扣一笔。
-                    || previousError.startsWith("转写超时：")
-                    || previousError.startsWith("Transcription timed out: no result after "))) {
+                && isResultPending(previousError)
+                && !escapeHatchArmed(previousError)) {
             meeting.setStatus(MeetingRecording.STATUS_TRANSCRIBING);
-            meeting.setError(null);
+            // 恢复查询这件事必须在这条记录上留痕：第二次等满阈值时要据此换成
+            // 「重试将重新提交」的收尾文案（failIfStuck），那句文案同时是下一次
+            // 重试的逃生口判据。没有它的话，上游任务被清理 / 凭证换掉 / 网关长期
+            // 不可达的用户会永远转圈：查不到 → 等满阈值 → 待确认 → 重试 → 再等一轮，
+            // 没有任何手段强制重跑。不新增数据库列的理由：TRANSCRIBING 期间界面不渲染
+            // error（面板只在 FAILED 分支显示它），而三个终态写入
+            // （storeSegments / failFromResults / failMeeting）都会覆盖或清空它。
+            meeting.setError(recoveryNotice());
             meeting.setLastPolledAt(null);
             meeting.setTranscribingStartedAt(LocalDateTime.now());
             meetingRepository.save(meeting);
@@ -748,13 +767,51 @@ public class MeetingTranscriptionService {
             return meeting;
         }
         long minutes = threshold.toMinutes();
-        log.warn("会议转写结果未确认，暂停自动查询: meetingId={}, 已超过 {} 分钟", meeting.getId(), minutes);
+        // 这条记录已经恢复查询过一次、又等满了一个阈值：换成「重试将重新提交」的收尾，
+        // 它同时是 doStartTranscription 逃生口的判据。
+        boolean recovered = wasRecovered(meeting.getError());
+        log.warn("会议转写结果未确认，暂停自动查询: meetingId={}, 已超过 {} 分钟, 已恢复查询过={}",
+                meeting.getId(), minutes, recovered);
         meeting.setStatus(MeetingRecording.STATUS_FAILED);
         meeting.setError(LangText.of(
-                RESULT_PENDING_ZH + "：等待已超过 " + minutes + " 分钟。原始录音完好，重试将查询原任务，不会重新提交转写。",
-                RESULT_PENDING_EN + ": waiting exceeded " + minutes + " minutes. The original recording is intact; "
-                        + "retry checks the existing task without submitting another transcription."));
+                RESULT_PENDING_ZH + "：等待已超过 " + minutes + " 分钟。"
+                        + (recovered ? RETRY_RESUBMITS_ZH : RETRY_QUERIES_ZH),
+                RESULT_PENDING_EN + ": waiting exceeded " + minutes + " minutes. "
+                        + (recovered ? RETRY_RESUBMITS_EN : RETRY_QUERIES_EN)));
         return meetingRepository.save(meeting);
+    }
+
+    /** 本地等待超时留下的「待确认」失败（含升级前本地看门狗写的旧文案）。 */
+    private static boolean isResultPending(String error) {
+        return error.startsWith(RESULT_PENDING_ZH) || error.startsWith(RESULT_PENDING_EN)
+                // 兼容升级前已被本地看门狗判失败的记录，不能让这些用户重试时再扣一笔。
+                || error.startsWith("转写超时：")
+                || error.startsWith("Transcription timed out: no result after ");
+    }
+
+    /**
+     * 逃生口是否已经张开：这条记录恢复查询过一次，又等满了一个阈值还是没结果。
+     * 再点重试就走正常提交路径（清空 taskId、重新建任务、可能再次计费），
+     * 界面上的失败原因（{@link #RETRY_RESUBMITS_ZH}）已经把这件事写明。
+     */
+    private static boolean escapeHatchArmed(String error) {
+        return error.contains(RETRY_RESUBMITS_ZH) || error.contains(RETRY_RESUBMITS_EN);
+    }
+
+    /** 这条记录当前是不是处在「恢复查询」这一轮里。 */
+    private static boolean wasRecovered(String error) {
+        return error != null
+                && (error.startsWith(RECOVERY_NOTICE_ZH) || error.startsWith(RECOVERY_NOTICE_EN));
+    }
+
+    /** 恢复查询期间的留痕文案。用户看不到它（TRANSCRIBING 不渲染 error）。 */
+    private static String recoveryNotice() {
+        return LangText.of(
+                RECOVERY_NOTICE_ZH + "：本次重试只查询原任务，不重新提交；"
+                        + "若仍等不到结果，下次重试将重新提交转写，可能再次计费。",
+                RECOVERY_NOTICE_EN + ": this retry only checks the existing task and does not resubmit it. "
+                        + "If there is still no result, the next retry will resubmit the transcription "
+                        + "and may be charged again.");
     }
 
     /**

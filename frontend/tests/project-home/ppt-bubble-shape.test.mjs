@@ -10,10 +10,11 @@ const read = (rel) => readFileSync(new URL('../../src/' + rel, import.meta.url),
 const stripComments = (s) =>
   s.replace(/<!--[\s\S]*?-->/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 
-// RootBubble 对助手气泡的这三个字段是**裸解引用**（没有 ?. 也没有默认值）：
-// 模板首行读 bubble.thinking.status，isReady / hasContent 读 processes.length、
-// artifacts.length。少一个字段这条气泡就在渲染时抛 TypeError——Vue 3 会捕获并
-// 换成一个空注释节点，用户那句「已取消」/「开始生成」于是无声消失。
+// 原始病灶是 RootBubble 对这三个字段裸解引用、少一个就渲染时抛 TypeError。dev-board#646
+// 之后渲染走 chatTimeline.visibleChatTimeline，那条兜底分支全程 ?. / || []，缺字段不再抛。
+// 用例仍然守这三个字段：这两条系统确认气泡要和解析器建出来的气泡长得一模一样，写侧
+// （useAgentStream 的 flushContent 是 bubble.thinking.content += text、bubble.artifacts.push）
+// 至今假定字段已存在，形状漂掉就会在别处炸，而这里是最便宜的契约点。
 const REQUIRED = ['thinking', 'processes', 'artifacts']
 
 // 取出函数体里 bubbles.value.push({ ... }) 的那个对象字面量（括号配平地截）

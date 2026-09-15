@@ -53,6 +53,9 @@ test('超时后迟到的成功结果触发 onLateResult，而不是被静默丢�
   assert.equal(timedOut.outcomeUnknown, true)
   assert.equal(timedOut.retryable, false, '超时不能误导 AI 重复执行写入')
   assert.match(timedOut.error, /不要重复执行写入操作/)
+  // 这句会进 EN 版的编辑器日志与 AI 工具结果，必须中英双行（同
+  // LibreOfficeEditor.vue 的 '网络错误 / network error' 惯例）。
+  assert.match(timedOut.error, /Editor result timed out/)
   assert.equal(timedOut.message, timedOut.error, '宿主会读取 error 字段回传 AI')
 
   // worker 端"迟到"发回真正的结果——reqId 就是刚刚发送的那条消息里的 reqId。

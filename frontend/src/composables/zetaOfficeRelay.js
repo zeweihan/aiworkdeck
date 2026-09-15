@@ -170,7 +170,9 @@ export function createRelayExecutor({ send, subscribe, timeoutMs = 30000, onRead
           pending.delete(reqId)
           tombstones.set(reqId, action)
           if (tombstones.size > MAX_TOMBSTONES) tombstones.delete(tombstones.keys().next().value)
-          const message = '等待编辑器结果超时，操作可能仍在执行。请先检查文档和修订记录，确认结果前不要重复执行写入操作。'
+          // 中英双行（同 LibreOfficeEditor.vue 的 '网络错误 / network error'）：这句会进
+          // EN 版的编辑器日志和 AI 工具结果，硬编码中文在英文界面上读不懂。
+          const message = '等待编辑器结果超时，操作可能仍在执行。请先检查文档和修订记录，确认结果前不要重复执行写入操作。 / Editor result timed out; the operation may still be running. Check the document and tracked changes before repeating any write.'
           resolve({ success: false, message, error: message, code: 'EDITOR_RESULT_TIMEOUT', outcomeUnknown: true, retryable: false })
         }
       }, budget)

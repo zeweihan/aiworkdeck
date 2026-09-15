@@ -712,7 +712,7 @@
 
 <script>
 import RootBubble from './AgentMessage/RootBubble.vue'
-import { buildChatTurns, recoverPlanTodos } from './AgentMessage/chatTurns.mjs'
+import { buildChatTurns, isPlanSnapshotCall, recoverPlanTodos } from './AgentMessage/chatTurns.mjs'
 import { useChatReadingPosition } from '@/composables/useChatReadingPosition.js'
 import BackgroundTaskIndicator from './BackgroundTaskIndicator.vue'
 import AgentInbox from './AgentInbox.vue'
@@ -936,7 +936,7 @@ export default {
     const chatTurns = computed(() => buildChatTurns(bubbles.value, {
       isStreaming: isStreaming.value, runStatus: agentRunStatus.value
     }))
-    const { followLatest, handleMessageScroll, scrollToBottom, navigateToMessage } = useChatReadingPosition(messageList, messageContent)
+    const { followLatest, handleMessageScroll, scrollToBottom } = useChatReadingPosition(messageList, messageContent)
     watch(currentConversationId, () => { followLatest.value = true })
 
     const isDragging = ref(false)
@@ -1865,8 +1865,10 @@ export default {
               const recoveredTodos = recoverPlanTodos(bubble.processes)
               if (recoveredTodos !== null) {
                   bubble.planTodos = recoveredTodos
-                  const planIndex = bubble.timeline.findLastIndex(entry => entry.type === 'process' && entry.data.items.some(item => item.type === 'tool' && /todo_write\(/.test(item.code || '')))
-                  bubble.timeline.splice(planIndex + 1, 0, { type: 'plan', data: recoveredTodos })
+                  // 判据必须与 recoverPlanTodos 同源：各写一份时失败的 todo_write 也会命中，
+                  // 而 findLastIndex 落空（-1）会把计划卡 splice 到整条时间线最前面
+                  const planIndex = bubble.timeline.findLastIndex(entry => entry.type === 'process' && entry.data.items.some(isPlanSnapshotCall))
+                  bubble.timeline.splice(planIndex < 0 ? bubble.timeline.length : planIndex + 1, 0, { type: 'plan', data: recoveredTodos })
               }
               bubbles.value.push(bubble)
           }
@@ -2594,7 +2596,7 @@ export default {
        handleInboxSendNow,
        tokenUsage,
        messageList, messageContent, chatTurns,
-       followLatest, handleMessageScroll, navigateToMessage, scrollToBottom,
+       followLatest, handleMessageScroll, scrollToBottom,
        isDragging,
        contextFiles,
        pastedImages,
