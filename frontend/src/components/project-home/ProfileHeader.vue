@@ -323,4 +323,23 @@ export default {
     line-height: 20px;
   }
 }
+/* The standalone page keeps its document layout; the sidebar uses flat rows. */
+.profile-header.is-sidebar {
+  padding: var(--awd-panel-gap) var(--awd-panel-pad-x);
+  border: 0;
+  border-radius: 0;
+}
+.is-sidebar .profile-project-name { font-size: 13px; line-height: 22px; color: var(--awd-panel-text); }
+.is-sidebar .profile-guide { margin-top: 8px; padding: 0; border: 0; background: transparent; }
+.is-sidebar .profile-guide-desc { font-size: var(--awd-panel-fs-meta); line-height: 1.5; }
+.is-sidebar .profile-guide-btn { margin-top: 6px; padding: 3px 10px; }
+.is-sidebar .profile-fields { display: grid; grid-template-columns: 1fr; gap: 0; margin-top: 8px; }
+.is-sidebar .profile-field { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: baseline; gap: 0 8px; min-width: 0; padding: 5px 0; border-bottom: 1px solid var(--awd-border-subtle); }
+.is-sidebar .profile-field:last-child { border-bottom: 0; }
+.is-sidebar .profile-field-label { font-size: var(--awd-panel-fs-meta); }
+.is-sidebar .profile-field-value, .is-sidebar .profile-field-input, .is-sidebar .profile-field-picker { font-size: var(--awd-panel-fs); line-height: 18px; margin-top: 0; }
+.is-sidebar .profile-field-hint { grid-column: 2; font-size: var(--awd-panel-fs-meta); }
+@container home-pane (min-width: 360px) {
+  .is-sidebar .profile-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 16px; }
+}
 </style>

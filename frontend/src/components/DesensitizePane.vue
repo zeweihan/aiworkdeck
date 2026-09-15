@@ -3,12 +3,16 @@
 <template>
   <scroll-view scroll-y class="desensitize-pane">
     <view class="section">
-      <view class="actions-row">
+      <view class="actions-row operation-tabs">
         <button class="mini-btn" :class="{ active: operation === 'redact' }" :disabled="processing" @tap="chooseOperation('redact')">{{ $t('panels.deRedactTab') }}</button>
         <button class="mini-btn" :class="{ active: operation === 'restore' }" :disabled="processing" @tap="chooseOperation('restore')">{{ $t('panels.deRestoreTab') }}</button>
       </view>
       <text class="help-text">{{ $t('panels.deLocalNotice') }}</text>
-      <text class="help-text">{{ $t('panels.deWorkflow') }}</text>
+      <view class="workflow" v-if="operation === 'redact'" aria-live="polite">
+        <text :class="{ current: !fileId }">{{ $t('panels.deStepSelect') }}</text>
+        <text :class="{ current: fileId && !preview && !result }">{{ $t('panels.deStepReview') }}</text>
+        <text :class="{ current: preview || result }">{{ $t('panels.deStepCreate') }}</text>
+      </view>
       <view class="section-title">{{ $t('panels.deSectionFileSelect') }}</view>
       <view class="path-display" :class="{ empty: !filePath }" @tap="triggerFileSelect">{{ fileName || $t('panels.deFilePlaceholder') }}</view>
       <view class="actions-row">
@@ -18,11 +22,19 @@
       <text class="help-text">{{ $t('panels.deFormats') }}</text>
     </view>
 
+    <view v-if="error" class="section error-text" role="alert">{{ error }}</view>
+    <view v-if="processing" class="section processing-text" role="status">{{ $t('panels.deProcessing') }}</view>
+
     <template v-if="operation === 'redact'">
       <view class="section">
-        <view class="section-title">{{ $t('panels.deCustomWordsTitle') }}</view>
-        <textarea v-model="customTerms" :disabled="processing" class="text-input custom-words-input" :maxlength="100000" :placeholder="$t('panels.deCustomPlaceholder')" />
-        <text class="help-text">{{ $t('panels.deCustomWordsHint') }}</text>
+        <button class="settings-toggle custom-words-toggle" :aria-expanded="customWordsOpen" :disabled="processing" @tap="customWordsOpen = !customWordsOpen">
+          <text>{{ $t('panels.deCustomWordsTitle') }}</text>
+          <text class="settings-summary">{{ customWordsOpen ? '−' : '+' }}</text>
+        </button>
+        <view v-show="customWordsOpen" class="custom-words-content">
+          <textarea v-model="customTerms" :disabled="processing" class="text-input custom-words-input" :maxlength="100000" :placeholder="$t('panels.deCustomPlaceholder')" />
+          <text class="help-text">{{ $t('panels.deCustomWordsHint') }}</text>
+        </view>
       </view>
       <view class="section">
         <view class="section-title">{{ $t('panels.deModeTitle') }}</view>
@@ -32,8 +44,12 @@
         </view>
         <text class="help-text">{{ $t(isPdf ? 'panels.dePdfNotice' : effectiveMode === 'TOKEN' ? 'panels.deTokenNotice' : 'panels.deMaskNotice') }}</text>
       </view>
-      <view class="section">
-        <view class="section-title">{{ $t('panels.deStrategiesTitle') }}</view>
+      <view class="section settings-section">
+        <button class="settings-toggle" :aria-expanded="settingsOpen" :disabled="processing" @tap="settingsOpen = !settingsOpen">
+          <text>{{ $t('panels.deStrategiesTitle') }}</text>
+          <text class="settings-summary">{{ $t('panels.deSelectedStrategies', { count: selectedStrategies.length }) }} {{ settingsOpen ? '−' : '+' }}</text>
+        </button>
+        <view v-show="settingsOpen" class="settings-content">
         <view class="strategies-list">
           <label v-for="s in availableStrategies" :key="s.value" class="strategy-item" @tap="toggleStrategy(s.value)">
             <view class="checkbox" :class="{ checked: selectedStrategies.includes(s.value) }"><text v-if="selectedStrategies.includes(s.value)" class="check-mark">✓</text></view>
@@ -42,15 +58,19 @@
         </view>
         <view class="section-title">{{ $t('panels.deExcludedTerms') }}</view>
         <textarea v-model="excludedTerms" :disabled="processing" class="text-input" :maxlength="100000" :placeholder="$t('panels.deExcludedPlaceholder')" />
+        </view>
       </view>
       <view class="section">
-        <button class="workdeck-btn full-width" :disabled="processing || !fileId || (!selectedStrategies.length && !customTerms.trim())" @tap="handlePreview">{{ $t('panels.dePreview') }}</button>
+        <button class="workdeck-btn full-width" :class="{ 'workdeck-btn-primary': !preview }" :disabled="processing || !fileId || (!selectedStrategies.length && !customTerms.trim())" @tap="handlePreview">{{ $t('panels.dePreview') }}</button>
         <view v-if="preview" class="preview-text">{{ preview.text }}</view>
+        <template v-if="preview">
+        <text class="help-text">{{ $t('panels.deReviewNotice') }}</text>
         <template v-if="effectiveMode === 'TOKEN'">
           <view class="section-title">{{ $t('panels.dePassword') }}</view>
           <input v-model="password" :disabled="processing" class="text-input password-input" password :maxlength="1024" :placeholder="$t('panels.dePasswordHint')" />
         </template>
         <button class="workdeck-btn workdeck-btn-primary full-width" :loading="processing" :disabled="processing || !preview || (effectiveMode === 'TOKEN' && password.length < 10)" @tap="handleGenerate">{{ $t('panels.deGenerate') }}</button>
+        </template>
       </view>
     </template>
 
@@ -75,7 +95,6 @@
       <button class="workdeck-btn full-width" @tap="downloadKit">{{ $t('panels.deDownloadKit') }}</button>
       <text class="help-text">{{ $t('panels.deSaveKitNotice') }}</text>
     </view>
-    <view v-if="error" class="section error-text">{{ error }}</view>
   </scroll-view>
 </template>
 
@@ -94,7 +113,7 @@ export default {
       operation: 'redact', mode: 'TOKEN', filePath: '', fileName: '', fileId: null,
       availableStrategies: [], selectedStrategies: [], customTerms: '', excludedTerms: '',
       password: '', recoveryKit: '', kitName: '', exportedKit: '', processing: false,
-      preview: null, result: null, error: '', lastRedaction: null,
+      preview: null, result: null, error: '', lastRedaction: null, settingsOpen: false, customWordsOpen: false,
     }
   },
   computed: {
@@ -349,9 +368,9 @@ export default {
   font-size: var(--awd-panel-fs);
   font-weight: 600;
   cursor: pointer;
-  border: none;
-  background-color: var(--awd-accent);
-  color: var(--awd-text-on-accent);
+  border: 1px solid var(--awd-panel-border);
+  background-color: var(--awd-surface);
+  color: var(--awd-panel-text);
   transition: opacity 0.2s;
 }
 .workdeck-btn:disabled {
@@ -363,7 +382,21 @@ export default {
 .text-input { width: 100%; box-sizing: border-box; min-height: 64px; height: 76px; border: 1px solid var(--awd-border); border-radius: 4px; padding: 8px; color: var(--awd-text); background: var(--awd-surface); font-size: 12px; }
 .password-input { min-height: 36px; height: 36px; margin-bottom: 12px; }
 .preview-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; padding: 8px; margin: 8px 0; border: 1px solid var(--awd-border); font-size: 12px; line-height: 1.7; user-select: text; }
-.mini-btn.active { color: var(--awd-accent); border-color: currentColor; }
+.mini-btn.active { color: var(--awd-accent-text); border-color: currentColor; }
 button.mini-btn { min-height: 28px; height: auto; padding: 4px 6px; line-height: 1.5; margin: 0; white-space: normal; }
-.error-text { color: #b42318; font-size: 12px; }
+.workdeck-btn-primary { border-color: var(--awd-accent); background: var(--awd-accent); color: var(--awd-text-on-accent); }
+.full-width { width: 100%; box-sizing: border-box; margin: 0; }
+.operation-tabs { padding-top: var(--awd-panel-gap); }
+.workflow { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: var(--awd-panel-fs-meta); color: var(--awd-text-3); padding: 4px 0; }
+.workflow .current { color: var(--awd-accent-text); font-weight: 600; }
+.settings-toggle { display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%; margin: 0; padding: 6px 0; background: transparent; color: var(--awd-panel-text-2); font-size: var(--awd-panel-fs-sec); font-weight: 600; line-height: 1.5; text-align: left; border: none; border-radius: 0; }
+.settings-toggle::after { border: none; }
+.settings-summary { font-size: var(--awd-panel-fs-meta); font-weight: 400; flex-shrink: 0; }
+.settings-section { border-top: 1px solid var(--awd-panel-border); }
+.strategies-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(94px, 1fr)); }
+.settings-content { padding-top: 4px; }
+.error-text, .processing-text { margin: 0 var(--awd-panel-pad-x) var(--awd-panel-gap); padding: 8px; font-size: var(--awd-panel-fs); line-height: 1.5; border-radius: var(--awd-panel-radius); overflow-wrap: anywhere; }
+.error-text { color: var(--awd-danger-text); background: var(--awd-danger-soft); }
+.processing-text { color: var(--awd-accent-text); background: var(--awd-accent-wash); }
+button:focus-visible { outline: 2px solid var(--awd-accent); outline-offset: 2px; }
 </style>

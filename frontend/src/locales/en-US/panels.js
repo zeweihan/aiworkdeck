@@ -109,6 +109,11 @@ export default {
   smFileNamed: 'File #{id}',
 
   // DesensitizePane.vue
+  deStepSelect: '1 Select file',
+  deStepReview: '2 Review',
+  deStepCreate: '3 Create copy',
+  deSelectedStrategies: '{count} selected',
+  deReviewNotice: 'Review the preview and notices before creating a copy.',
   deWorkflow: 'Select original → Preview and create copy → Edit copy → Restore locally. Document tabs do not switch the sidebar.',
   deResultEditing: 'The redacted copy is open for editing. The selected input here does not follow document tab changes automatically.',
   dePdfResult: 'The redacted PDF is open for review. This rasterized copy cannot be directly edited or restored.',
