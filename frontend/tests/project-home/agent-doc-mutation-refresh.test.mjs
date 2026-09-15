@@ -17,6 +17,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createSerialQueue } from '../../src/utils/asyncSerialize.js'
 import { DOC_MUTATED_EVENT, DOC_MUTATED_DEBOUNCE_MS, isDocMutatingAction } from '../../src/utils/docEvents.js'
+import { createAuthorNameResolver } from '../../src/utils/editorAuthor.js'
 
 const ACTIONS_SRC = readFileSync(
   new URL('../../src/pages/project-overview/agentClientActions.js', import.meta.url), 'utf8')
@@ -42,9 +43,10 @@ function loadEditorMethods() {
   const factory = new Function(
     'getFileDownloadUrl', 'getCurrentUser', 'createRelayExecutor',
     'webviewTransport', 'iframeTransport', 'ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar',
-    'getAuthHeaders', 'host', 'DOC_MUTATED_EVENT', body)
+    'getAuthHeaders', 'host', 'DOC_MUTATED_EVENT', 'createAuthorNameResolver', body)
   return factory((id) => '/download/' + id, () => ({ name: '测试用户' }),
-    null, null, null, null, null, null, null, null, DOC_MUTATED_EVENT).methods
+    null, null, null, null, null, null, null, null, DOC_MUTATED_EVENT,
+    createAuthorNameResolver).methods
 }
 
 // ---- 宿主发信端（project-overview 的 AI 指令路由）----
