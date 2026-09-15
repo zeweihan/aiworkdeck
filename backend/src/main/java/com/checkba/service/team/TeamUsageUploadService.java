@@ -28,6 +28,10 @@ import java.util.Map;
  * </ol>
  *
  * <p>今天永远不传：当天还没过完，聚合出来的是半天数据，传上去下次还得覆盖。
+ *
+ * <p>四道闸之后还有一关，形态不同所以不并进上面那张表：<b>项目名的一次性确认</b>
+ * （{@link TeamProjectNameNotice}，C4）。它只拦「带项目名的那一份 payload」，
+ * 拒绝之后统计照常上报、只是名字被抹掉——见 {@link #settleProjectNames(Map)}。
  */
 @Slf4j
 @Service
@@ -42,17 +46,20 @@ public class TeamUsageUploadService {
     private final AccountService accountService;
     private final LocalIdentityService localIdentityService;
     private final TeamSettingsCache teamSettingsCache;
+    private final TeamProjectNameNotice projectNameNotice;
 
     public TeamUsageUploadService(TeamUsageSettings settings,
                                   TeamUsageRollupService rollupService,
                                   AccountService accountService,
                                   LocalIdentityService localIdentityService,
-                                  TeamSettingsCache teamSettingsCache) {
+                                  TeamSettingsCache teamSettingsCache,
+                                  TeamProjectNameNotice projectNameNotice) {
         this.settings = settings;
         this.rollupService = rollupService;
         this.accountService = accountService;
         this.localIdentityService = localIdentityService;
         this.teamSettingsCache = teamSettingsCache;
+        this.projectNameNotice = projectNameNotice;
     }
 
     @PostConstruct
@@ -106,6 +113,69 @@ public class TeamUsageUploadService {
         return localIdentityService.isLocalMode();
     }
 
+    /**
+     * 这台机器此刻是否卡在「项目名还没确认」上。给设置页用：它决定要不要显示确认入口。
+     *
+     * <p>刻意<b>不跑一遍聚合</b>（那是 30 天的库查询，而这个方法挂在每次读开关状态的路径上）：
+     * 判据只有四个便宜的布尔值。代价是「团队允许项目名、但这台机器这段时间没有任何项目活动」
+     * 的人也会看到确认入口——他看到的告知内容与名字清单都是真的（清单为空），不是假警报。
+     */
+    public boolean projectNamesPending() {
+        return settings.enabled()
+                && sharingAvailable()
+                && teamSettingsCache.shareProjectNames()
+                && !projectNameNotice.decided();
+    }
+
+    /**
+     * 项目名确认的状态（不含名字清单，那要跑一遍聚合）。设置页读开关状态时顺带拿到它。
+     *
+     * <p>为什么这几个方法挂在上报服务上、而不让 {@code AccountController} 直接注入
+     * {@link TeamProjectNameNotice}：上报服务才是「什么会从这台机器出去」的唯一决策方，
+     * 状态与决定都该从同一个出口走——顺带也省掉给控制器加第 11 个构造器参数
+     * （那会牵动七个与本次改动无关的测试）。
+     */
+    public Map<String, Object> projectNameStatus() {
+        Map<String, Object> out = new LinkedHashMap<>(projectNameNotice.status());
+        out.put("pending", projectNamesPending());
+        return out;
+    }
+
+    /** 确认框要的三样：状态、告知正文、将要上传的名字清单。 */
+    public Map<String, Object> projectNameNotice() {
+        Map<String, Object> out = new LinkedHashMap<>(projectNameNotice.status());
+        out.put("body", projectNameNotice.body());
+        out.put("names", pendingProjectNames());
+        return out;
+    }
+
+    /** 记下机器主人的决定（同意 / 只传匿名编号）。 */
+    public void decideProjectNames(boolean granted) {
+        projectNameNotice.decide(granted);
+    }
+
+    /** 退出团队 / 换账户后回到「没决定过」——听众换了，必须重新问一次。 */
+    public void resetProjectNameNotice() {
+        projectNameNotice.reset();
+    }
+
+    /**
+     * 待上传的项目名清单（去重，按最早的缺口在前）。<b>只读库、不发任何网络请求</b>——
+     * 这是给确认框用的预览，不能顺手把还没确认的名字先发出去。
+     */
+    public java.util.List<String> pendingProjectNames() {
+        if (!localIdentityService.isLocalMode()) return java.util.List.of();
+        Long userId = localIdentityService.localUserId();
+        LocalDate today = LocalDate.now();
+        java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
+        for (int i = BACKFILL_DAYS; i >= 1; i--) {
+            LocalDate date = today.minusDays(i);
+            if (settings.alreadyUploaded(date)) continue;
+            collectProjectNames(rollupService.rollupFor(date, userId), names);
+        }
+        return java.util.List.copyOf(names);
+    }
+
     /** 跳过原因（机器可读），供前端给出对应的下一步。不是错误，所以不进 GlobalExceptionHandler。 */
     static final class SkippedException extends RuntimeException {
         final String reason;
@@ -136,6 +206,7 @@ public class TeamUsageUploadService {
                 settings.markUploaded(date);
                 continue;
             }
+            if (!settleProjectNames(payload)) throw new SkippedException("project_names_pending");
             accountService.uploadTeamUsage(rollupService.toJson(payload));
             settings.markUploaded(date);
             uploaded++;
@@ -153,6 +224,58 @@ public class TeamUsageUploadService {
         if (!(body.get("team") instanceof Map<?, ?> team)) return false;
         teamSettingsCache.remember(team);
         return true;
+    }
+
+    /**
+     * 项目名这一关（C4，v0.44.1 真机实测：团队看板里直接出现了用户其他客户的真实项目名）。
+     *
+     * <p>{@code shareProjectNames} 默认 true 的裁决不变，变的是<b>第一次真的要把名字发出去
+     * 之前先问一句</b>。三种形态：
+     * <ul>
+     *   <li>这天本来就没有项目名（团队关了共享 / 那天没项目活动）：没什么要确认的，直接放行；</li>
+     *   <li>机器主人已同意：原样上传；</li>
+     *   <li>机器主人已拒绝：把名字抹成 null 再上传——拦的是名字，不是整条统计通道。</li>
+     * </ul>
+     *
+     * <p>还没决定过时返回 false，由调用方拦下整轮（那一天也<b>不</b>记成已传，
+     * 否则确认之后这段历史就永远缺一块）。
+     *
+     * <p>拒绝只落在本机，<b>不去改官网的团队设置</b>：那是整个团队的开关，普通成员改不动
+     * （官网 403），而一台机器的决定也不该替其他成员做主。本机这一关管的是
+     * 「从这台机器出去的字节」，正是该管的粒度。
+     *
+     * @return false = 该拦下来
+     */
+    private boolean settleProjectNames(Map<String, Object> payload) {
+        java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
+        collectProjectNames(payload, names);
+        if (names.isEmpty()) return true;
+        if (projectNameNotice.granted()) return true;
+        if (projectNameNotice.declined()) {
+            stripProjectNames(payload);
+            return true;
+        }
+        return false;
+    }
+
+    private static void collectProjectNames(Map<String, Object> payload, java.util.Set<String> into) {
+        if (!(payload.get("projects") instanceof java.util.List<?> rows)) return;
+        for (Object row : rows) {
+            if (row instanceof Map<?, ?> map && map.get("label") instanceof String label
+                    && !label.isBlank()) {
+                into.add(label);
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void stripProjectNames(Map<String, Object> payload) {
+        if (!(payload.get("projects") instanceof java.util.List<?> rows)) return;
+        for (Object row : rows) {
+            if (row instanceof Map<?, ?> map) {
+                ((Map<String, Object>) map).put("label", null);
+            }
+        }
     }
 
     /**

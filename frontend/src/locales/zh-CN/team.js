@@ -150,6 +150,19 @@ export default {
   skipNotLocalMode: '团队服务器模式下不上报使用统计',
   skipNotConnected: '这台机器还没有连接账户',
   skipNoTeam: '你还不在任何团队里',
+  skipProjectNamesPending: '项目名还没确认，统计先留在本机',
+
+  // ---- 项目名上云前的一次性确认（C4）。告知正文在后端（与版本号同源），这里只有标题与按钮 ----
+  projectNamesTitle: '这些项目名将随统计上传',
+  projectNamesConfirm: '同意上传',
+  projectNamesDecline: '只传匿名编号',
+  projectNamesNone: '（这段时间没有项目活动，暂时没有要上传的项目名）',
+  projectNamesPendingDesc: '项目名要经你确认才会上传，确认之前这段统计留在本机。',
+  projectNamesReview: '查看并确认',
+  projectNamesChange: '更改',
+  projectNamesOn: '项目名：随统计上传',
+  projectNamesOff: '项目名：只传匿名编号，不出本机',
+  projectNamesDeclinedToast: '已记下：项目名不出本机',
 
   // ---- 账户分区的入口行 ----
   accountRowLabel: '团队',

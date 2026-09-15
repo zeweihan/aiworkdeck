@@ -39,6 +39,7 @@ class TeamUsageUploadServiceTest {
     AccountService accountService;
     LocalIdentityService localIdentity;
     TeamSettingsCache teamSettingsCache;
+    TeamProjectNameNotice projectNameNotice;
     TeamUsageUploadService service;
 
     /** settings 是有状态的（记哪些天传过了），用一个真集合替代打桩更贴近真实行为。 */
@@ -51,7 +52,10 @@ class TeamUsageUploadServiceTest {
         accountService = mock(AccountService.class);
         localIdentity = mock(LocalIdentityService.class);
         teamSettingsCache = mock(TeamSettingsCache.class);
+        projectNameNotice = mock(TeamProjectNameNotice.class);
         uploadedDates = new HashSet<>();
+        // 默认「还没就项目名做过决定」——这是全新安装与刚加入团队时的真实形态
+        when(teamSettingsCache.shareProjectNames()).thenReturn(true);
 
         when(settings.enabled()).thenReturn(true);
         when(settings.lastUploadAt()).thenReturn("");
@@ -67,7 +71,7 @@ class TeamUsageUploadServiceTest {
         when(rollupService.toJson(any())).thenReturn("{}");
 
         service = new TeamUsageUploadService(settings, rollupService, accountService,
-                localIdentity, teamSettingsCache);
+                localIdentity, teamSettingsCache, projectNameNotice);
     }
 
     // ==================== 四道闸 ====================
@@ -171,7 +175,119 @@ class TeamUsageUploadServiceTest {
         verify(teamSettingsCache).remember(any());
     }
 
+    // ==================== 项目名确认闸（C4，v0.44.1 真机实测） ====================
+
+    @Test
+    @DisplayName("没就项目名做过决定时拦下上传：真实客户名不许在用户没看过告知之前进团队看板")
+    void undecidedProjectNamesBlockUpload() {
+        org.mockito.Mockito.doAnswer(i -> dayWithProject(i.getArgument(0), "某某公司破产清算"))
+                .when(rollupService).rollupFor(any(), any());
+
+        Map<String, Object> result = service.uploadNow();
+
+        assertEquals(true, result.get("skipped"));
+        assertEquals("project_names_pending", result.get("reason"));
+        verify(accountService, never()).uploadTeamUsage(anyString());
+        // 拦下的那天不能被记成已传，否则确认之后这段历史就永远缺一块
+        assertFalse(uploadedDates.contains(LocalDate.now().minusDays(1)));
+    }
+
+    @Test
+    @DisplayName("已同意：项目名照常随统计上传（默认 true 的裁决不变，只是先问一句）")
+    void grantedNoticeUploadsProjectNames() {
+        when(projectNameNotice.decided()).thenReturn(true);
+        when(projectNameNotice.granted()).thenReturn(true);
+        org.mockito.Mockito.doAnswer(i -> dayWithProject(i.getArgument(0), "某某公司破产清算"))
+                .when(rollupService).rollupFor(any(), any());
+
+        service.sync();
+
+        verify(accountService, org.mockito.Mockito.atLeastOnce()).uploadTeamUsage(anyString());
+        assertEquals("某某公司破产清算", firstUploadedLabel());
+    }
+
+    @Test
+    @DisplayName("已拒绝：统计照常上报，但项目名被抹成 null（拦的是名字，不是整条通道）")
+    void declinedNoticeUploadsWithoutProjectNames() {
+        when(projectNameNotice.decided()).thenReturn(true);
+        when(projectNameNotice.declined()).thenReturn(true);
+        org.mockito.Mockito.doAnswer(i -> dayWithProject(i.getArgument(0), "某某公司破产清算"))
+                .when(rollupService).rollupFor(any(), any());
+
+        service.sync();
+
+        verify(accountService, org.mockito.Mockito.times(TeamUsageUploadService.BACKFILL_DAYS))
+                .uploadTeamUsage(anyString());
+        assertEquals(null, firstUploadedLabel());
+    }
+
+    @Test
+    @DisplayName("那天没有任何项目名时不拦：没有要确认的东西，统计照常走")
+    void daysWithoutProjectNamesAreNeverBlocked() {
+        org.mockito.Mockito.doAnswer(i -> dayWithProject(i.getArgument(0), null))
+                .when(rollupService).rollupFor(any(), any());
+
+        Map<String, Object> result = service.uploadNow();
+
+        assertEquals(false, result.get("skipped"));
+        verify(accountService, org.mockito.Mockito.atLeastOnce()).uploadTeamUsage(anyString());
+    }
+
+    @Test
+    @DisplayName("待确认的项目名清单：按天去重，且一个网络请求都不发（这是给确认框用的预览）")
+    void pendingProjectNamesArePreviewedWithoutNetwork() {
+        org.mockito.Mockito.doAnswer(i -> dayWithProject(i.getArgument(0), "某某公司破产清算"))
+                .when(rollupService).rollupFor(any(), any());
+
+        java.util.List<String> names = service.pendingProjectNames();
+
+        assertEquals(java.util.List.of("某某公司破产清算"), names);
+        verifyNoInteractions(accountService);
+    }
+
+    @Test
+    @DisplayName("pending 标志：开关开着、团队允许项目名、本机还没决定过时为 true，决定过就落回 false")
+    void pendingFlagTracksTheDecision() {
+        assertTrue(service.projectNamesPending());
+
+        when(projectNameNotice.decided()).thenReturn(true);
+        assertFalse(service.projectNamesPending());
+    }
+
+    @Test
+    @DisplayName("团队已关掉「共享项目名」时不问：本来就没有项目名会上传")
+    void teamWithNamesOffNeverAsks() {
+        when(teamSettingsCache.shareProjectNames()).thenReturn(false);
+
+        assertFalse(service.projectNamesPending());
+    }
+
     // ==================== helpers ====================
+
+    /** 上报体里真正发出去的项目名（toJson 的入参就是即将序列化的 payload）。 */
+    @SuppressWarnings("unchecked")
+    private Object firstUploadedLabel() {
+        org.mockito.ArgumentCaptor<Map<String, Object>> captor =
+                org.mockito.ArgumentCaptor.forClass(Map.class);
+        verify(rollupService, org.mockito.Mockito.atLeastOnce()).toJson(captor.capture());
+        Map<String, Object> payload = captor.getAllValues().get(0);
+        java.util.List<Map<String, Object>> rows =
+                (java.util.List<Map<String, Object>>) payload.get("projects");
+        return rows.get(0).get("label");
+    }
+
+    /** 带一行项目的一天。{@code label} 为 null 表示团队关掉了共享项目名。 */
+    private static Map<String, Object> dayWithProject(LocalDate date, String label) {
+        Map<String, Object> payload = busyDay(date);
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("projectKey", "9f2c1d4e5a6b7c8d");
+        row.put("label", label);
+        row.put("minutes", 95L);
+        row.put("aiTurns", 3L);
+        row.put("editActions", 0L);
+        payload.put("projects", new java.util.ArrayList<>(java.util.List.of(row)));
+        return payload;
+    }
 
     private static Map<String, Object> busyDay(LocalDate date) {
         Map<String, Object> payload = new LinkedHashMap<>();

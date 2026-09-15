@@ -2727,6 +2727,26 @@ export function uploadTeamUsageNow() {
   }).then(unwrapEnvelope);
 }
 
+// 项目名上云前的一次性确认（C4）。回 { decided, granted, version, body, names }——
+// body 是告知正文，与版本号同源在后端（改文案就推版本、旧决定作废），前端只负责摆出来；
+// names 是「这台机器上还没传的那几天里会带上的项目名」，纯本机聚合，不打官网。
+export function getTeamProjectNameNotice() {
+  return request({
+    url: '/api/account/team/usage-sharing/project-names',
+    method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// granted=true 项目名随统计上传；false 只传不可逆短码（统计其余部分照常上报）。
+export function setTeamProjectNameConsent(granted) {
+  return request({
+    url: '/api/account/team/usage-sharing/project-names',
+    method: 'POST',
+    data: { granted },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
 export function getTelemetrySettings() {
   return request({
     url: '/api/telemetry/settings',

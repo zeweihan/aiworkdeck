@@ -150,6 +150,19 @@
             </view>
             <text class="team-footnote">{{ lastUploadText }}</text>
           </view>
+          <!-- 项目名上云前的一次性确认（C4）。待确认时后台上报正卡在这一关上，
+               必须给一个看得见的入口——否则用户只会看到看板一直是空的，无从下手。
+               决定过之后如实显示当前档位，并留一条「更改」的路：误点一次不该没有回头路。 -->
+          <view v-if="projectNamesPending" class="team-row">
+            <text class="team-footnote">{{ $t('team.projectNamesPendingDesc') }}</text>
+            <view class="team-btn small primary" @tap="onReviewProjectNames">
+              {{ $t('team.projectNamesReview') }}
+            </view>
+          </view>
+          <view v-else-if="projectNamesDecided" class="team-row">
+            <text class="team-footnote">{{ projectNamesStateText }}</text>
+            <text class="link-action" @tap="onReviewProjectNames">{{ $t('team.projectNamesChange') }}</text>
+          </view>
         </view>
       </view>
 
@@ -498,6 +511,7 @@ import {
   updateTeamMemberRole, removeTeamMember,
   getTeamSummary, setTeamProjectAlias,
   getTeamUsageSharing, setTeamUsageSharing, uploadTeamUsageNow,
+  getTeamProjectNameNotice, setTeamProjectNameConsent,
   joinTeam, regenerateTeamJoinCode,
   createFirm, joinFirm, updateFirm, regenerateFirmJoinCode, removeFirmTeam,
 } from '@/services/api.js'
@@ -537,6 +551,9 @@ export default {
       // available 初值刻意是 undefined 而不是 true/false：还没问过后端时既不该
       // 把开关点亮，也不该显示「不可用」的说明
       sharing: { enabled: false, lastUploadAt: '', available: undefined },
+      // 项目名上云前的一次性确认（C4）。三个初值都必须是 false——预设为已同意在个保法下无效。
+      // pending=true 表示后台上报此刻正卡在这一关上
+      projectNames: { decided: false, granted: false, pending: false },
       newTeamName: '',
       joinCodeInput: '',
       newFirmName: '',
@@ -631,6 +648,17 @@ export default {
       if (this.sharing.available === false) return this.$t('team.sharingDesktopOnly')
       return this.$t('team.sharingSwitchDesc')
     },
+    projectNamesPending() {
+      return !!this.projectNames.pending
+    },
+    projectNamesDecided() {
+      return !!this.projectNames.decided
+    },
+    // 决定过之后如实显示当前档位。没决定过时不显示——「没决定」不是一种档位
+    projectNamesStateText() {
+      if (!this.projectNames.decided) return ''
+      return this.projectNames.granted ? this.$t('team.projectNamesOn') : this.$t('team.projectNamesOff')
+    },
   },
   mounted() {
     this.reload()
@@ -700,6 +728,13 @@ export default {
           enabled: !!(s && s.enabled),
           lastUploadAt: (s && s.lastUploadAt) || '',
           available: s ? s.available : undefined,
+        }
+        // 缺字段一律按「没决定过」，绝不回落成已同意
+        const notice = (s && s.projectNames) || {}
+        this.projectNames = {
+          decided: !!notice.decided,
+          granted: !!notice.granted,
+          pending: !!notice.pending,
         }
       } catch (e) {
         // 开关读不到不该让整个面板报错：其余部分照常可用
@@ -978,7 +1013,44 @@ export default {
         // 切换失败不改本地状态：重新读一次让界面回到真相，而不是显示一个没生效的档位
         await setTeamUsageSharing(!!next)
         await this.loadSharing()
+        // 开启共享就是「第一次真的要把项目名发出去」那一刻，闸门落在这里（C4）。
+        // 已经决定过的不再打扰（promptProjectNames 未 force 时自己会退出）
+        if (next) await this.promptProjectNames()
       })
+    },
+    onReviewProjectNames() {
+      this.run(() => this.promptProjectNames(true))
+    },
+    /**
+     * 项目名上云前的一次性确认（C4）。正文与名字清单都来自后端：正文与版本号同源在
+     * Java 侧（改文案就推版本、旧决定作废），名字是本机聚合出来的「还没传的那几天会带上谁」。
+     *
+     * 同意 = 记下决定并把刚才被拦下的那几天补上；拒绝 = 记下决定、项目名不出本机，
+     * 统计其余部分下一轮照常上报。force=true 是用户主动点「查看并确认 / 更改」。
+     */
+    async promptProjectNames(force = false) {
+      const info = await getTeamProjectNameNotice()
+      if (!force && info && info.decided) return
+      const names = (info && Array.isArray(info.names)) ? info.names : []
+      const list = names.length
+        ? names.map((n) => `· ${n}`).join('\n')
+        : this.$t('team.projectNamesNone')
+      const answered = await new Promise((resolve) => uni.showModal({
+        title: this.$t('team.projectNamesTitle'),
+        content: `${(info && info.body) || ''}\n\n${list}`,
+        confirmText: this.$t('team.projectNamesConfirm'),
+        cancelText: this.$t('team.projectNamesDecline'),
+        // 弹窗本身出不来时按「没同意」处理：拿不到答复不能算同意
+        success: (res) => resolve(!!(res && res.confirm)),
+        fail: () => resolve(false),
+      }))
+      await setTeamProjectNameConsent(answered)
+      await this.loadSharing()
+      if (answered) {
+        await this.doUploadNow(false)
+      } else {
+        this.toast(this.$t('team.projectNamesDeclinedToast'))
+      }
     },
     onSetAlias(project) {
       uni.showModal({
@@ -998,22 +1070,33 @@ export default {
       })
     },
     onUploadNow() {
-      this.run(async () => {
-        const result = await uploadTeamUsageNow()
-        await this.loadSharing()
-        if (result && result.skipped) {
-          const reasons = {
-            disabled: 'team.skipDisabled',
-            not_local_mode: 'team.skipNotLocalMode',
-            not_connected: 'team.skipNotConnected',
-            no_team: 'team.skipNoTeam',
-          }
-          this.toast(this.$t(reasons[result.reason] || 'team.loadFailed'))
-          return
+      this.run(() => this.doUploadNow(true))
+    },
+    /**
+     * 立即上报的正身。allowPrompt=false 是从确认框里回来的那一次调用——
+     * 不允许它再弹一次确认框，否则「确认 → 上报 → 又待确认」会绕回去。
+     */
+    async doUploadNow(allowPrompt = true) {
+      const result = await uploadTeamUsageNow()
+      await this.loadSharing()
+      if (result && result.skipped) {
+        const reasons = {
+          disabled: 'team.skipDisabled',
+          not_local_mode: 'team.skipNotLocalMode',
+          not_connected: 'team.skipNotConnected',
+          no_team: 'team.skipNoTeam',
+          project_names_pending: 'team.skipProjectNamesPending',
         }
-        const days = (result && result.uploaded) || 0
-        this.toast(days ? this.$t('team.uploadDone', { days }) : this.$t('team.uploadNothing'))
-      })
+        this.toast(this.$t(reasons[result.reason] || 'team.loadFailed'))
+        // 卡在项目名这一关上时就地把确认框摆出来：只丢一句提示等于让用户自己去找入口
+        if (allowPrompt && result.reason === 'project_names_pending') {
+          await this.promptProjectNames(true)
+        }
+        return
+      }
+      const days = (result && result.uploaded) || 0
+      this.toast(days ? this.$t('team.uploadDone', { days }) : this.$t('team.uploadNothing'))
+      if (days) await this.loadSummary()
     },
   },
 }

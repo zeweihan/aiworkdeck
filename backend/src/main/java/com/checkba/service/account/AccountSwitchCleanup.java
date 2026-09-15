@@ -45,6 +45,7 @@ public class AccountSwitchCleanup {
     private final ChatModelFactory chatModelFactory;
     private final com.checkba.service.team.TeamUsageSettings teamUsageSettings;
     private final com.checkba.service.team.TeamSettingsCache teamSettingsCache;
+    private final com.checkba.service.team.TeamProjectNameNotice teamProjectNameNotice;
 
     /** 刚连上一个（可能是不同的）账户：旧账户的一切当场作废，再异步拉新账户的权益。 */
     public void afterConnect() {
@@ -76,5 +77,8 @@ public class AccountSwitchCleanup {
         // 日聚合按旧团队的口径带上项目名
         teamUsageSettings.resetLedger();
         teamSettingsCache.clear();
+        // 项目名上云的那一次确认同理（C4）：它是对着上一个账户所在团队的听众给的，
+        // 换了人必须重新问一次，否则新团队的看板会直接冒出这台机器上的真实客户名
+        teamProjectNameNotice.reset();
     }
 }

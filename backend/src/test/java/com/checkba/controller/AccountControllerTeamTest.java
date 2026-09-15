@@ -275,4 +275,63 @@ class AccountControllerTeamTest {
 
         assertEquals("no_team", data.get("reason"));
     }
+
+    // ==================== 项目名确认（C4） ====================
+
+    @Test
+    @DisplayName("开关状态里带上项目名确认的状态：设置页据此显出确认入口，不然那条上报会静默卡着")
+    void sharingStateCarriesProjectNameNotice() {
+        when(teamUsageUploadService.projectNameStatus())
+                .thenReturn(Map.of("decided", false, "granted", false, "pending", true));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) controller.teamUsageSharing(null).get("data");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> notice = (Map<String, Object>) data.get("projectNames");
+
+        assertEquals(true, notice.get("pending"));
+        assertEquals(false, notice.get("decided"));
+    }
+
+    @Test
+    @DisplayName("名字清单与告知正文都来自本机，一个官网请求都不打")
+    void projectNamesPreviewNeverTouchesTheWebsite() {
+        when(teamUsageUploadService.projectNameNotice()).thenReturn(Map.of(
+                "decided", false, "granted", false, "body", "告知正文",
+                "names", List.of("某某公司破产清算")));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) controller.teamProjectNames(null).get("data");
+
+        assertEquals(List.of("某某公司破产清算"), data.get("names"));
+        assertEquals("告知正文", data.get("body"));
+        verifyNoInteractions(accountService);
+    }
+
+    @Test
+    @DisplayName("决定只收布尔值：缺字段时拒绝，不把「没答」静默当成同意")
+    void projectNameDecisionRequiresBoolean() {
+        assertThrows(IllegalArgumentException.class, () -> controller.decideTeamProjectNames(null, null));
+        assertThrows(IllegalArgumentException.class,
+                () -> controller.decideTeamProjectNames(Map.of("granted", "true"), null));
+        verify(teamUsageUploadService, never())
+                .decideProjectNames(org.mockito.ArgumentMatchers.anyBoolean());
+
+        controller.decideTeamProjectNames(Map.of("granted", false), null);
+        verify(teamUsageUploadService).decideProjectNames(false);
+        verifyNoInteractions(accountService);
+    }
+
+    @Test
+    @DisplayName("官网回「已不在任何团队里」时重新问一次项目名：听众换了，旧决定不该继续生效")
+    void leavingTheTeamResetsTheProjectNameNotice() {
+        Map<String, Object> remote = new java.util.LinkedHashMap<>();
+        remote.put("team", null);
+        remote.put("invites", List.of());
+        when(accountService.fetchTeam()).thenReturn(remote);
+
+        controller.team(null);
+
+        verify(teamUsageUploadService).resetProjectNameNotice();
+    }
 }

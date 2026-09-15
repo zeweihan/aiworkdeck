@@ -1016,6 +1016,9 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
 - `service/team/TeamUsageUploadService.java` — 启动 + 24h，静默失败；`uploadNow()` 给设置页按钮用，
   **如实回传跳过原因**（disabled / not_local_mode / not_connected / no_team）。
 - `service/team/TeamSettingsCache.java` — 本机只读缓存「共享项目名」，读不到一律 false。
+- `service/team/TeamProjectNameNotice.java` — 项目名上云前的**一次性确认**（C4，v0.44.1）：
+  三态 `decided/granted/declined` + 版本号 + 告知正文，形态照 `MeetingRecordingNotice`
+  （**正文与版本号同源在这个文件里**，改文案就推 `VERSION`、旧决定作废）。
 - `WorkSessionRepository.findByUserIdAndStartedAtBetween` — 新增 finder；状态与段类型的过滤
   **刻意留在聚合层**，那是统计口径的一部分。
 - `InstallIdentityService.projectKey(projectId)` — `HMAC-SHA256(install-secret, "project:"+id)` 前 16 hex。
@@ -1031,10 +1034,28 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
 同理 `GET /api/account/team/usage-sharing` 回的 `available` 由后端下发，前端不许靠
 「有没有桌面壳」猜——猜错就是给用户一个永远不生效的开关。
 
+**四道闸之后还有第五关：项目名的一次性确认**（C4，v0.44.1 真机实测——团队看板里直接出现了
+用户其他客户的真实项目名）。`shareProjectNames` 默认 true 的裁决（设计 §9 第 1 条）**不变**，
+变的是第一次真的要把名字发出去之前先问一句。四条要点：
+- **拦的是名字，不是整条通道**：`settleProjectNames()` 三分支——那天本来没名字 → 放行；
+  已同意 → 原样上传；已拒绝 → `label` 抹成 null 再上传。还没决定过 → 整轮跳过
+  （reason `project_names_pending`），**那一天不记成已传**，否则确认之后历史永远缺一块。
+- **拒绝只落本机，不去改官网的团队设置**：那是整个团队的开关（成员改不动，官网 403），
+  一台机器的决定不该替其他成员做主。本机这一关管的是「从这台机器出去的字节」。
+- **端点与状态**：`GET/POST /api/account/team/usage-sharing/project-names`（名字清单 + 告知正文 /
+  记下决定），另外 `GET .../usage-sharing` 的回包多一个 `projectNames:{decided,granted,pending,version}`。
+  状态那一路**刻意不跑聚合**（它挂在每次读开关的路径上）；名字清单那一路才跑，且**一个网络请求都不发**。
+  控制器经 `TeamUsageUploadService` 的四个门面方法取用，**不新注入 `TeamProjectNameNotice`**——
+  给 `AccountController` 加第 11 个构造器参数会牵动七个与此无关的测试。
+- **前端三个入口**（`TeamPanel.vue`）：开启共享开关那一刻问一次、待确认时开关卡里的
+  「查看并确认」、决定之后的「更改」。`doUploadNow(allowPrompt)` 的那个参数是防
+  「确认 → 上报 → 又待确认」绕回去的。弹窗取不到答复一律按未同意处理。
+
 **换账户要清团队台账**（同地雷 22）：`AccountSwitchCleanup.invalidateAll()` 里加了
-`teamUsageSettings.resetLedger()` + `teamSettingsCache.clear()`。「哪些天传过了」记的是
+`teamUsageSettings.resetLedger()` + `teamSettingsCache.clear()` + `teamProjectNameNotice.reset()`。「哪些天传过了」记的是
 「传给**那个**账户」，换了人必须从头传；「共享项目名」是上一个团队的设置，留着会让
-下一个团队的日聚合按旧团队口径带上项目名。
+下一个团队的日聚合按旧团队口径带上项目名；项目名那一次确认同理——它是对着**那个团队**的
+听众给的，换了听众必须重新问（`GET /api/account/team` 回「已不在团队里」时也 reset 一次）。
 
 **动词的一处刻意偏差**：官网侧「改团队设置」「改成员角色」是 PATCH，本机透传层用 PUT。
 前端只有 `uni.request` 一个出口，它的 method 枚举里根本没有 PATCH。出站到官网那一跳仍是 PATCH。
@@ -1249,12 +1270,15 @@ return 404 兜底，云后端从 127.0.0.1 直连 Next。云侧唯一出口
   告知端点缺字段不算确认）；
   团队通道：`service/team/TeamUsageRollupServiceTest`（DRAFT/ACTIVE 排除、16h 上限、
   短码稳定且不泄露原 id、共享项目名默认关、六个计数的派生口径、token 分桶）、
-  `service/team/TeamUsageUploadServiceTest`（四道闸 + 补传窗口 + 今天永不传）、
+  `service/team/TeamUsageUploadServiceTest`（四道闸 + 补传窗口 + 今天永不传 +
+  项目名那一关的四种形态与预览不发网络）、
+  `service/team/TeamProjectNameNoticeTest`（默认没决定过 / 版本作废 / 正文说全四件事 /
+  三个掉线子串与 emoji）、
   `controller/AccountControllerTeamTest`（透传不裁字段、range/scope 归一、scope 归一不是鉴权、
-  层级七个动作原样转发、参数校验回业务信封、usage-sharing 不打官网）、
+  层级七个动作原样转发、参数校验回业务信封、usage-sharing 与项目名两条都不打官网）、
   `service/account/AccountServiceTest`（层级动作的方法与路径逐条对齐官网契约、改律所名出站仍是
   PATCH、路径段编码、summary 带 scope 且老签名默认 team）、
-  `service/account/AccountSwitchCleanupTest`（换账户清团队台账）；
+  `service/account/AccountSwitchCleanupTest`（换账户清团队台账 + 重新问一次项目名）；
   `controller/ExternalControllerEnvelopeTest`
   （网关失败原样抛出、回落不吞掉网关原因、查无结果是 code=1 不是 4010）。
 - 官网侧（`aiworkdeckweb`）：`scripts/verify-gateway.mts` 45 项 + `contract-check.mts` 的网关段，
