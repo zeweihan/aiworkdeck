@@ -19,6 +19,8 @@ public final class SensitiveTextEngine {
     private final Map<String, String> valueTokens = new LinkedHashMap<>();
     private final Map<String, String> recovery = new LinkedHashMap<>();
     private final Map<String, Integer> counts = new LinkedHashMap<>();
+    /** 形似但校验失败的号码候选（按类型计数）：不处理，但要让用户看见（dev-board C2）。 */
+    private final Map<String, Integer> suspects = new LinkedHashMap<>();
     private final boolean reversible;
     private String scope = UUID.randomUUID().toString().replace("-", "").substring(0, 12);
 
@@ -33,14 +35,19 @@ public final class SensitiveTextEngine {
         while (fullText.contains("_" + scope + "]]")) {
             scope = UUID.randomUUID().toString().replace("-", "").substring(0, 12);
         }
-        for (Hit hit : detect(fullText)) {
+        for (Hit hit : detect(fullText, new ArrayList<>())) {
             if (Set.of("CHINESE_NAME", "COMPANY").contains(hit.code) && !excluded.contains(hit.value)) {
                 known.putIfAbsent(hit.value, hit.code);
             }
         }
     }
 
-    private List<Hit> detect(String text) {
+    /**
+     * @param failedVerification 形似但校验失败的号码候选收集器（不关心时给一次性空表）。
+     *                 校验不过的号本来就不是有效号码，不能改正文，但静默丢弃会让用户
+     *                 以为文件里没有这类信息——所以单独返回而不是丢掉。
+     */
+    private List<Hit> detect(String text, List<Hit> failedVerification) {
         List<Hit> hits = new ArrayList<>();
         if (strategies.contains("CHINESE_NAME")) {
             for (var span : ChineseNameRecognizer.find(text, ChineseNameRecognizer.protectedRanges(text))) {
@@ -68,8 +75,11 @@ public final class SensitiveTextEngine {
                     if (candidate.length() < 6) continue;
                 }
                 String value = text.substring(start, end);
-                if (type.isPlausible(value) && !excluded.contains(value)) {
+                if (excluded.contains(value)) continue;
+                if (type.isPlausible(value)) {
                     hits.add(new Hit(start, end, type.getCode(), value));
+                } else if (type.reportsFailedVerification()) {
+                    failedVerification.add(new Hit(start, end, type.getCode(), value));
                 }
             }
         }
@@ -83,7 +93,8 @@ public final class SensitiveTextEngine {
     }
 
     public List<Edit> edits(String text) {
-        List<Hit> hits = detect(text);
+        List<Hit> suspectHits = new ArrayList<>();
+        List<Hit> hits = detect(text, suspectHits);
         BitSet protectedNames = strategies.contains("CHINESE_NAME") ? ChineseNameRecognizer.protectedRanges(text) : new BitSet();
         known.forEach((value, code) -> {
             int from = 0, at;
@@ -109,6 +120,15 @@ public final class SensitiveTextEngine {
             occupied.set(hit.start, hit.end);
             accepted.add(hit);
         }
+        // 已经替换掉的位置（含原有编号）不再报「疑似」：同一段数字被别的规则处理过，
+        // 再提示一遍只会让用户以为还有漏网的。
+        Set<String> reported = new HashSet<>();
+        for (Hit suspect : suspectHits) {
+            int next = occupied.nextSetBit(suspect.start);
+            if (next >= 0 && next < suspect.end) continue;
+            if (!reported.add(suspect.start + ":" + suspect.end)) continue;
+            suspects.merge(suspect.code, 1, Integer::sum);
+        }
         accepted.sort(Comparator.comparingInt(Hit::start));
         List<Edit> edits = new ArrayList<>();
         for (Hit hit : accepted) {
@@ -133,6 +153,7 @@ public final class SensitiveTextEngine {
     public String apply(String text) { return apply(text, edits(text)); }
     public Map<String, String> recovery() { return Map.copyOf(recovery); }
     public Map<String, Integer> counts() { return Map.copyOf(counts); }
+    public Map<String, Integer> suspects() { return Map.copyOf(suspects); }
 
     public static String apply(String text, List<Edit> edits) {
         StringBuilder result = new StringBuilder(text);

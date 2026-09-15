@@ -98,6 +98,9 @@ export default {
   },
   methods: {
     handleFileSelect(file) {
+      // FileTree 删掉当前选中项时会 emit('file-select', null)（取消选中）。
+      // 不判空的话这里就是一次 TypeError，对话框当场炸掉。
+      if (!file) { this.selectedFile = null; return }
       const isFolder = file.fileType === 'folder' || file.isFolder
       // 文件夹默认不可选；allowFolder 打开时可选，且不受 accept 扩展名过滤
       // （文件夹没有扩展名，拿 accept 卡它等于永远选不中）。

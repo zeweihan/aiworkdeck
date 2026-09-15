@@ -32,8 +32,8 @@ import java.nio.file.Path;
 @Service
 @Slf4j
 public class SensitiveService {
-    public static final String VERSION = "2.1.0";
-    public static final String DESCRIPTION = "本地规则脱敏：公司与中文姓名自动识别、补充词语、预览与编号替换；编辑副本后凭加密映射和密码复敏。引擎随桌面端更新，不调用大模型。";
+    public static final String VERSION = "2.2.0";
+    public static final String DESCRIPTION = "本地规则脱敏：公司、中文姓名、统一社会信用代码、律师执业证号等自动识别，补充词语、预览与编号替换；校验失败的证件号单独提示不处理；编辑副本后凭加密映射和密码复敏。引擎随桌面端更新，不调用大模型。";
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.checkba.service.document.DocumentGeneratorSettings documentGeneratorSettings;
 
@@ -56,8 +56,11 @@ public class SensitiveService {
             return terms.stream().map(String::trim).filter(t -> !t.isEmpty()).distinct().toList();
         }
     }
-    public record Result(String path, String recoveryKit, Map<String, Integer> counts, List<String> warnings) {}
-    public record Preview(String text, Map<String, Integer> counts, List<String> warnings) {}
+    /** suspects：形似但校验失败的号码候选（按类型计数），面板据此提示「未处理」（dev-board C2）。 */
+    public record Result(String path, String recoveryKit, Map<String, Integer> counts,
+                         Map<String, Integer> suspects, List<String> warnings) {}
+    public record Preview(String text, Map<String, Integer> counts,
+                          Map<String, Integer> suspects, List<String> warnings) {}
     private static final Set<String> TEXT_EXTENSIONS = Set.of("txt", "md", "csv", "log");
 
     public String processFile(String filePath, List<String> strategies) throws Exception {
@@ -119,7 +122,8 @@ public class SensitiveService {
         var messages = new ArrayList<>(warnings(ext));
         if (engine.counts().isEmpty()) messages.add("未识别到敏感信息，不代表原文没有敏感信息。");
         if (preview.length() > 12000) messages.add("预览仅显示前12000字符，统计和实际处理覆盖全文。");
-        return new Preview(preview.substring(0, Math.min(12000, preview.length())), engine.counts(), messages);
+        return new Preview(preview.substring(0, Math.min(12000, preview.length())),
+                engine.counts(), engine.suspects(), messages);
     }
 
     public Result processFile(String filePath, Options options) throws Exception {
@@ -138,7 +142,7 @@ public class SensitiveService {
             String kit = reversible && !engine.recovery().isEmpty() ? SensitiveRecoveryKit.encrypt(engine.recovery(), options.password()) : "";
             var messages = new ArrayList<>(warnings(ext));
             if (engine.counts().isEmpty()) messages.add("未识别到敏感信息，本次没有替换任何内容。");
-            return new Result(dest.toString(), kit, engine.counts(), messages);
+            return new Result(dest.toString(), kit, engine.counts(), engine.suspects(), messages);
         } catch (Exception e) { Files.deleteIfExists(dest); throw e; }
     }
 
@@ -166,7 +170,7 @@ public class SensitiveService {
             var messages = new ArrayList<String>();
             messages.add("仅恢复原样保留的编号；已删除或被改写的编号无法还原。复敏后的文件含原始敏感信息。");
             if (unknown[0] > 0) messages.add("另有" + unknown[0] + "个编号不属于此复敏文件，已保留原样。");
-            return new Result(dest.toString(), "", Map.of("RESTORED", restored[0]), messages);
+            return new Result(dest.toString(), "", Map.of("RESTORED", restored[0]), Map.of(), messages);
         } catch (Exception e) { Files.deleteIfExists(dest); throw e; }
     }
 

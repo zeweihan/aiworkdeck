@@ -969,3 +969,24 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 ## 左栏统一标准（2026-09-15，dev-board#648/#651）
 
 标准与脱敏路径见 `doc/sidebar-ui-standard.md`。项目概览在窄栏使用扁平字段/统计行；脱敏主路径为选文件→核查预览→生成副本，补充词/识别规则折叠，密码在预览后出现。录音保留异步进度/安装入口，统一主题与错误状态。动态尽调 CSS 在独立仓库 PR#2，详见 `doc/addon-sidebar-alignment.md`，未签名发布不能当作客户端已更新。
+
+## 全屏弹窗 vs 文档画布（2026-09-15，v0.44.1 真机 B6）
+
+工作台根节点新增 `modal-overlay-open` 类（`modalOverlayOpen` 计算属性 = 文件选择器 /
+邀请成员 / 导出 / 比对 / 截图保存 / 图片预览这几个**全屏** mask），SCSS 在此期间把
+`.pane-content` 里的 `iframe` / `webview` 置 `visibility: hidden`。原因与 `.is-resizing`
+那条同源：`<webview>` 是独立合成层，HTML `position: fixed` 浮层压在它上面的行为不可靠
+（LibreOfficeEditor.vue 模板里有同一条说明），开着文档时弹窗会整个落在画布后面，
+用户看到的就是「按钮点了没反应」。
+
+三条不许动：
+- **只能用 `visibility`**。`display: none` 会让 Chromium 把 guest 判成不可见，
+  LOWA 的 Emscripten/Qt 事件循环跟着冻住（dev-board#539，`.libre-standby` 同款写法）。
+- `modalOverlayOpen` **不含** `resizing.active`（拖拽时必须看得见画布才谈得上跟手）
+  与 `showOcrOverlay`（框选取词要看得见页面）。这两个由 `desktopOverlayActive` 另行处理。
+- 选择器只铺到 `.pane-content`，别放宽成全页 `:deep(webview)`——弹窗自己将来若内嵌
+  iframe 就会把自己藏掉。
+
+同批：脱敏面板的「浏览」现在要求工作台同步回执（`handleDesensitizeSelectFile(callback, ack)`
+里的 `ack()`），拿不到回执面板就报 `panels.deBrowseUnavailable`，不再静默。
+面板侧契约细节见 `.claude/agents/plugin-system.md`。

@@ -28,6 +28,37 @@ public enum SensitiveType {
         "保留前6后4位"
     ),
     
+    /**
+     * 统一社会信用代码（GB 32100-2015）：1 位登记管理部门 + 1 位机构类别 + 6 位行政区划码
+     * + 9 位主体标识码 + 1 位校验码；字符集去掉了 I、O、S、V、Z。
+     *
+     * <p>校验位是必须的：18 位长号在合同正文里到处都有（案号、批文号、流水号），
+     * 没有校验位就会把它们一起改坏。校验不过的候选不处理，但会计入「疑似未通过校验」
+     * 的提示，由律师自己决定要不要补进敏感词（dev-board C1/C2）。
+     */
+    UNIFIED_SOCIAL_CREDIT(
+        "UNIFIED_SOCIAL_CREDIT",
+        "统一社会信用代码",
+        "(?<![0-9A-Za-z])[0-9A-HJ-NPQRTUWXY]{2}\\d{6}[0-9A-HJ-NPQRTUWXY]{10}(?![0-9A-Za-z])",
+        "91************1234",
+        "GB 32100-2015 校验位过滤误报；校验不过的号不处理，预览下方会提示"
+    ),
+
+    /**
+     * 律师执业证号：1 位证书类别 + 5 位行政区划码 + 4 位首次执业年份 + 1 位执业性质
+     * + 6 位顺序号 = 17 位。部分地区用 6 位行政区划码，合计 18 位，两种长度都收。
+     *
+     * <p>纯数字没有校验位，改用「行政区划码 + 年份 + 执业性质」三重结构过滤误报——
+     * 随机的 17/18 位数字同时满足这三项的概率在千分之一量级。
+     */
+    LAWYER_LICENSE(
+        "LAWYER_LICENSE",
+        "律师执业证号",
+        "(?<!\\d)\\d{17,18}(?!\\d)",
+        "1**********123456",
+        "1 位类别 + 5/6 位行政区划 + 4 位年份 + 1 位性质 + 6 位序号；区划与年份过滤误报"
+    ),
+
     EMAIL(
         "EMAIL",
         "邮箱",
@@ -155,10 +186,67 @@ public enum SensitiveType {
         return switch (this) {
             case ID_CARD -> isPlausibleIdCard(candidate);
             case BANK_CARD -> candidate.matches("[1-9][0-9]{15,18}") && luhnValid(candidate);
+            case UNIFIED_SOCIAL_CREDIT -> isPlausibleUnifiedSocialCredit(candidate);
+            case LAWYER_LICENSE -> isPlausibleLawyerLicense(candidate);
             case CHINESE_NAME -> isPlausibleName(candidate);
             case ADDRESS -> candidate.matches(".*[省市区县路街道村镇号室].*");
             default -> true;
         };
+    }
+
+    /**
+     * 这一类的「形似但校验失败」是否值得单独告诉用户。
+     *
+     * <p>号码类（身份证/银行卡/信用代码/执业证号）有确定的校验规则，校验不过就是假号：
+     * 不处理是对的，但静默丢弃会让用户以为文件里没有这类信息。这四类的落选候选
+     * 会计入 {@code suspects}，在预览下方显示「另有 N 处疑似证件/卡号未通过校验」。
+     *
+     * <p>姓名、地址的 {@code isPlausible} 判的是「像不像」而不是「校验对不对」，
+     * 落选是常态（正文里的普通词），不进这个计数。
+     */
+    public boolean reportsFailedVerification() {
+        return switch (this) {
+            case ID_CARD, BANK_CARD, UNIFIED_SOCIAL_CREDIT, LAWYER_LICENSE -> true;
+            default -> false;
+        };
+    }
+
+    /** 大陆省级行政区划码前两位；统一社会信用代码里 10 代表登记管理机关在国家级。 */
+    private static final java.util.Set<String> PROVINCE_PREFIXES = java.util.Set.of(
+            "10", "11", "12", "13", "14", "15", "21", "22", "23", "31", "32", "33", "34", "35",
+            "36", "37", "41", "42", "43", "44", "45", "46", "50", "51", "52", "53", "54",
+            "61", "62", "63", "64", "65", "71", "81", "82");
+
+    /** GB 32100-2015 的代码字符集：0-9 与 A-Y，去掉 I、O、S、V、Z（共 31 个）。 */
+    private static final String USCC_CHARSET = "0123456789ABCDEFGHJKLMNPQRTUWXY";
+    private static final int[] USCC_WEIGHTS = {1, 3, 9, 27, 19, 26, 16, 17, 20, 29, 25, 13, 8, 24, 10, 30, 28};
+
+    /** 18 位、字符集合法、行政区划码是真省份，且第 18 位等于 GB 32100-2015 算出的校验码。 */
+    private static boolean isPlausibleUnifiedSocialCredit(String value) {
+        if (value.length() != 18) return false;
+        if (!PROVINCE_PREFIXES.contains(value.substring(2, 4))) return false;
+        int sum = 0;
+        for (int i = 0; i < 17; i++) {
+            int index = USCC_CHARSET.indexOf(value.charAt(i));
+            if (index < 0) return false;
+            sum += index * USCC_WEIGHTS[i];
+        }
+        int last = USCC_CHARSET.indexOf(value.charAt(17));
+        return last >= 0 && last == (31 - sum % 31) % 31;
+    }
+
+    /**
+     * 17 位（5 位行政区划）或 18 位（6 位行政区划）纯数字；区划前两位是真省份、
+     * 年份在 1980 到今年之间、执业性质位在 1-6。
+     */
+    private static boolean isPlausibleLawyerLicense(String value) {
+        if (!value.matches("[1-9]\\d{16,17}")) return false;
+        int divisionLength = value.length() == 17 ? 5 : 6;
+        if (!PROVINCE_PREFIXES.contains(value.substring(1, 3))) return false;
+        int year = Integer.parseInt(value.substring(1 + divisionLength, 5 + divisionLength));
+        if (year < 1980 || year > java.time.LocalDate.now().getYear()) return false;
+        char nature = value.charAt(5 + divisionLength);
+        return nature >= '1' && nature <= '6';
     }
 
     private static boolean isPlausibleName(String value) {
@@ -243,7 +331,16 @@ public enum SensitiveType {
             case BANK_CARD:
                 if (len > 10) return original.substring(0, 6) + "******" + original.substring(len - 4);
                 break;
-                
+
+            case UNIFIED_SOCIAL_CREDIT:
+                if (len == 18) return original.substring(0, 2) + "************" + original.substring(len - 4);
+                break;
+
+            case LAWYER_LICENSE:
+                if (len > 7) return original.substring(0, 1) + "*".repeat(len - 7) + original.substring(len - 6);
+                break;
+
+
             case CHINESE_NAME:
                 if (len == 2) return original.substring(0, 1) + "*";
                 if (len > 2) return original.substring(0, 1) + "*".repeat(len - 1);

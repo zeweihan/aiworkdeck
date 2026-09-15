@@ -380,10 +380,18 @@ function attachDownloadListener(session) {
   if (!session || session.__checkbaDownloadBound) return
   session.__checkbaDownloadBound = true
   session.on('will-download', (event, item, webContents) => {
+    // 复敏映射（.awd-recovery）另存为落在固定目录，其它下载沿用系统默认目录。
+    // 裸文件名当 defaultPath 时对话框开在「上次用过的目录」，复敏文件因此会落进
+    // 无关目录（真机上是「7-常用图片」）——它是密钥材料，必须与脱敏副本分开放。
+    const lang = require('./app-language')
+    const recoveryPath = require('./recovery-download').recoveryDefaultPath(item.getFilename(), {
+      documentsDir: (() => { try { return app.getPath('documents') } catch (e) { return '' } })(),
+      language: lang.getAppLanguage()
+    })
     // Set options for the save dialog
     item.setSaveDialogOptions({
-      title: require('./app-language').t({ zh: '保存文件', en: 'Save File' }),
-      defaultPath: item.getFilename() // Use the default filename suggestion
+      title: lang.t({ zh: '保存文件', en: 'Save File' }),
+      defaultPath: recoveryPath || item.getFilename() // Use the default filename suggestion
     })
     // Note: If item.setSavePath() is NOT called, Electron implicitly shows the dialog
     // (unless global "Always ask..." is disabled, but setSaveDialogOptions helps hint it).
