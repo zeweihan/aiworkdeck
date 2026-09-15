@@ -223,6 +223,10 @@ export default {
   replaceSelection: 'Replace Selection',
   exportAsWord: 'Export as Word',
   stepN: 'Step {n}',
+  timelinePlan: 'Plan · {done}/{total}',
+  timelineExecuting: 'Running {n} operations',
+  timelineExecuted: 'Ran {n} operations',
+  timelineExecutionError: '{n} operations · Needs attention',
   stepsGroup: 'Steps',
   approvalNeededFlag: 'Action Needed',
   // ---- ProcessCard ----

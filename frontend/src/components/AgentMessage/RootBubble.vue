@@ -3,105 +3,56 @@
 <template>
   <div class="root-bubble-wrapper">
 
-    <!-- GHOST STATE: Only Show Thinking if not ready -->
-    <div v-if="!hideActivity && !isReady && bubble.thinking.status === 'thinking'" class="ghost-thinking">
-        <ThinkingCard
-           :status="bubble.thinking.status"
-           :duration="bubble.thinking.duration"
-           :content="bubble.thinking.content"
-           :start-time="bubble.thinking.startTime"
-           variant="card"
-        />
-    </div>
-
-    <!-- ACTIVE STATE: Full Card -->
-    <div v-else class="active-bubble-wrapper">
-        <!-- 1. Thinking Card (Moved Out as Ghost) -->
-        <div v-if="!hideActivity" class="ghost-thinking-wrapper">
-             <ThinkingCard
-               :status="bubble.thinking.status"
-               :duration="bubble.thinking.duration"
-               :content="bubble.thinking.content"
-               :start-time="bubble.thinking.startTime"
-               variant="ghost"
+    <div class="active-bubble-wrapper">
+        <div class="root-bubble-container">
+          <template v-for="(entry, index) in timeline" :key="entry.key">
+            <ThinkingCard
+              v-if="entry.type === 'thinking'"
+              :status="isActive(entry, index) ? 'thinking' : 'done'"
+              :duration="entry.data.duration || 0"
+              :content="entry.data.content"
+              :start-time="entry.data.startTime || 0"
+              variant="ghost"
             />
-        </div>
-
-        <div v-if="hasContent" class="root-bubble-container">
-            <!-- 2. Title -->
-            <TitleCard v-if="bubble.title" :title="bubble.title" />
-
-            <!-- 2b. 计划卡（线性时序结构）：思考结束、制定计划后先展示计划框，
-                 下方才是各步骤的执行进展；每步内部再嵌工具调用记录。
-                 快照挂在气泡上（plan_update 时写入），历史消息各自保留当轮计划。 -->
-            <div v-if="!hideActivity && bubble.planTodos && bubble.planTodos.length" class="inline-plan">
-               <TodoProgressCard :todos="bubble.planTodos" />
-            </div>
-
-            <!-- 3. Process Stream（工具执行一律收进可折叠组：有 plan 步骤的按步骤分组，
-                 无归属的收进「执行过程」组；流式进行中展开最新组，结束后全部收起——
-                 后台操作细节默认不刷屏，点开才看） -->
-            <div v-if="!hideActivity" class="process-stream">
-               <template v-for="(group, gi) in processGroups" :key="group.key + '-' + gi">
-                  <div class="step-group">
-                     <div class="step-group-header" @click="toggleGroup(group.key, gi)">
-                        <span class="step-group-marker" :class="{ done: isGroupDone(group), error: groupHasError(group) }"></span>
-                        <span class="step-group-title">{{ group.title }}</span>
-                        <span class="step-group-count">{{ group.procs.length }}</span>
-                        <div class="step-chevron" :class="{ 'is-rotated': isGroupExpanded(group.key, gi) }">
-                           <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                              <polyline points="6 9 12 15 18 9"></polyline>
-                           </svg>
-                        </div>
-                     </div>
-                     <div v-show="isGroupExpanded(group.key, gi)" class="step-group-body">
-                        <ProcessCard
-                          v-for="proc in group.procs"
-                          :key="proc.id"
-                          :process="proc"
-                        />
-                     </div>
-                  </div>
-               </template>
-            </div>
-
-            <!-- 4. Artifacts（计划卡只在最新一条助手消息里可操作）。
-                 需要用户点按的审批卡（task_list/plan/implementation_plan 的 draft 态）
-                 与普通过程卡长得太像，用户反馈容易被夹在中间漏看。approve/revise 的
-                 回喂逻辑在 ArtifactCard.vue 内部，本卡不碰；这里只在外层套一层视觉
-                 强调（独立卡片/顶部色条/待确认标识），判据与 ArtifactCard 内部
-                 showApprovalBar 完全一致（isPlanType && actionable && status draft）。 -->
-            <div class="artifacts-stream" v-if="bubble.artifacts.length > 0">
+            <div v-else-if="entry.type === 'title'" class="stream-title">{{ bubble.title }}</div>
+            <section v-else-if="entry.type === 'execution' || entry.type === 'plan'" class="activity-entry">
+              <button type="button" class="activity-summary" :class="{ 'is-working': isActive(entry, index), 'has-error': hasError(entry) }"
+                :aria-expanded="isExpanded(entry, index)" @click="toggleEntry(entry, index)">
+                <span>{{ activityLabel(entry, index) }}</span>
+                <span class="activity-chevron" :class="{ open: isExpanded(entry, index) }" aria-hidden="true">›</span>
+              </button>
+              <div v-if="isExpanded(entry, index)" class="activity-details">
+                <TodoProgressCard v-if="entry.type === 'plan'" :todos="entry.data" :live="bubble.isStreaming" />
+                <ProcessCard v-else v-for="(proc, pi) in entry.procs" :key="pi" :process="proc" />
+              </div>
+            </section>
+            <template v-else-if="entry.type === 'artifact'">
                <div
-                 v-for="art in bubble.artifacts"
-                 :key="art.id"
                  class="artifact-wrapper"
-                 :data-chat-attention="isApprovalPending(art) ? '' : null"
-                 :class="{ 'artifact-wrapper--approval': isApprovalPending(art) }"
+                 :data-chat-attention="isApprovalPending(entry.data) ? '' : null"
+                 :class="{ 'artifact-wrapper--approval': isApprovalPending(entry.data) }"
                >
-                  <div v-if="isApprovalPending(art)" class="approval-flag">
+                  <div v-if="isApprovalPending(entry.data)" class="approval-flag">
                      <span class="approval-flag-dot"></span>
                      <span class="approval-flag-text">{{ $t('chat.approvalNeededFlag') }}</span>
                   </div>
                   <ArtifactCard
-                    :artifact="art"
-                    :id="art.id"
-                    :type="art.type"
-                    :status="art.status"
-                    :file-name="art.fileName"
-                    :data="art.data"
+                    :artifact="entry.data"
+                    :id="entry.data.id"
+                    :type="entry.data.type"
+                    :status="entry.data.status"
+                    :file-name="entry.data.fileName"
+                    :data="entry.data.data"
                     :actionable="isLatest && !bubble.isStreaming"
                     @open-tab="$emit('open-artifact-tab', $event)"
                     @approve="$emit('approve', $event)"
                   />
                </div>
+            </template>
+            <div v-else-if="entry.type === 'text'" class="main-content" data-chat-answer>
+              <MarkdownPreview :content="bubble.content.slice(entry.start, entry.end)" />
             </div>
-
-            <!-- 5. Main Content (The Answer) -->
-            <div v-if="bubble.content" class="main-content" data-chat-answer>
-               <div v-if="replyLabel" class="reply-label">{{ replyLabel }}</div>
-               <MarkdownPreview :content="bubble.content" />
-            </div>
+          </template>
 
             <!-- 5b. Message Actions：插入/替换/导出收进一个图标，点开再选（用户反馈三个
                  平铺按钮太占地方）。菜单向上弹，透明遮罩点外即收。 -->
@@ -157,21 +108,18 @@
 <script setup>
 import { computed, ref } from 'vue'
 import ThinkingCard from './ThinkingCard.vue'
-import TitleCard from './TitleCard.vue'
 import TodoProgressCard from './TodoProgressCard.vue'
 import ProcessCard from './ProcessCard.vue'
-import WalkthroughCard from './WalkthroughCard.vue'
 import ArtifactCard from '../ArtifactCard.vue'
 import QuestionCard from './QuestionCard.vue'
 import MarkdownPreview from '../MarkdownPreview.vue'
 import { t } from '@/i18n'
+import { visibleChatTimeline, isTimelineEntryActive } from './chatTimeline.mjs'
 
 const props = defineProps({
   bubble: { type: Object, required: true },
   /** 是否为最新一条助手消息（决定计划卡是否可操作） */
-  isLatest: { type: Boolean, default: false },
-  hideActivity: { type: Boolean, default: false },
-  replyLabel: { type: String, default: '' }
+  isLatest: { type: Boolean, default: false }
 })
 
 const emit = defineEmits(['open-artifact-tab', 'approve', 'message-action', 'answer-question'])
@@ -187,44 +135,24 @@ function pickAction(type) {
   sendAction(type)
 }
 
-// ---- 工具执行分组 ----
-// process 在创建时被 useAgentStream 打上 stepIndex/stepTitle（当时 in_progress 的
-// plan 项）。有步骤归属的按步骤收组；无归属的（含历史消息）也收进「执行过程」组，
-// 后台工具调用细节不再平铺刷屏。
-const processGroups = computed(() => {
-  const groups = []
-  let cur = null
-  for (const p of props.bubble.processes) {
-    const grouped = typeof p.stepIndex === 'number' && p.stepIndex >= 0
-    const key = grouped ? `s${p.stepIndex}` : ''
-    if (!cur || cur.key !== key) {
-      cur = { key, title: grouped ? (p.stepTitle || t('chat.stepN', { n: p.stepIndex + 1 })) : t('chat.stepsGroup'), procs: [] }
-      groups.push(cur)
-    }
-    cur.procs.push(p)
-  }
-  return groups
-})
-
-// 流式进行中默认展开最新一组；结束后（含历史消息）全部收起。用户手动开合后以用户为准
-// 展开状态按分组下标 gi 记，不能按 key（= stepIndex 派生的 's0'/'s1'/...）记：模型
-// 回退重做某一步时（比如 step 1 失败又重跑一次 step 0）processGroups 会产生两个
-// 非相邻但 stepIndex 相同、因此 key 相同的分组，按 key 记会让它们共用同一个槽位，
-// 点开/收起其中一个连带把另一个也翻了状态。gi 是各分组在当前渲染里的下标，
-// processes 只增不减（同一轮内不会重排/截断），已经渲染出来的分组的 gi 不会变，
-// 天然互不冲突。
-const groupToggles = ref({})
-const isGroupExpanded = (key, gi) => {
-  if (gi in groupToggles.value) return groupToggles.value[gi]
-  return !!props.bubble.isStreaming && gi === processGroups.value.length - 1
+const timeline = computed(() => visibleChatTimeline(props.bubble))
+const entryToggles = ref({})
+const isActive = (entry, index) => isTimelineEntryActive(entry, index, timeline.value, props.bubble.isStreaming)
+const isExpanded = (entry, index) => {
+  const active = isActive(entry, index)
+  const override = entryToggles.value[entry.key]
+  return override && override.active === active ? override.expanded : active
 }
-const toggleGroup = (key, gi) => {
-  groupToggles.value = { ...groupToggles.value, [gi]: !isGroupExpanded(key, gi) }
+const toggleEntry = (entry, index) => {
+  entryToggles.value = { ...entryToggles.value, [entry.key]: { active: isActive(entry, index), expanded: !isExpanded(entry, index) } }
 }
-const isGroupDone = (g) => g.procs.every(p =>
-  !(p.items || []).some(it => it.status === 'doing' || it.status === 'loading' || it.status === 'thinking')
-)
-const groupHasError = (g) => g.procs.some(p => (p.items || []).some(it => it.status === 'error'))
+const hasError = entry => entry.type === 'execution' && entry.procs.some(proc => (proc.items || []).some(item => item.status === 'error'))
+const activityLabel = (entry, index) => {
+  if (entry.type === 'plan') return t('chat.timelinePlan', { done: entry.data.filter(todo => todo.status === 'completed').length, total: entry.data.length })
+  const count = entry.procs.reduce((n, proc) => n + (proc.items || []).filter(item => item.type === 'tool').length, 0) || entry.procs.length
+  if (hasError(entry)) return t('chat.timelineExecutionError', { n: count })
+  return t(isActive(entry, index) ? 'chat.timelineExecuting' : 'chat.timelineExecuted', { n: count })
+}
 
 // ---- 审批卡视觉强调 ----
 // 判据刻意跟 ArtifactCard.showApprovalBar 完全对齐（isPlanType && actionable &&
@@ -235,30 +163,6 @@ function isApprovalPending(art) {
   return APPROVAL_ARTIFACT_TYPES.includes(art.type) && art.status === 'draft' && props.isLatest && !props.bubble.isStreaming
 }
 
-const hasPlan = computed(() => !!(props.bubble.planTodos && props.bubble.planTodos.length > 0))
-
-// 反问也算「有可见产出」：模型可以只输出一个 <question> 就停机（这正是反问的常见形态），
-// 漏掉这一项会让整条气泡停在 ghost thinking 态——用户看到的是「一直在想」，问题根本不显示。
-const hasQuestion = computed(() => !!props.bubble.question)
-
-const isReady = computed(() => {
-    // Show full card if we have a Title OR Plan OR Processes OR Main Content
-    // If only "Thinking", remain in Ghost state (unless it's done thinking and has no other content? No, unlikely)
-    return !!(props.bubble.title || hasPlan.value || props.bubble.processes.length > 0 || props.bubble.content || hasQuestion.value)
-})
-
-const hasContent = computed(() => {
-    if (props.hideActivity) return !!(props.bubble.content || props.bubble.artifacts.length || hasQuestion.value)
-    // Check if the bubble has any content to display
-    return !!(
-        props.bubble.title ||
-        hasPlan.value ||
-        props.bubble.processes.length > 0 ||
-        props.bubble.artifacts.length > 0 ||
-        props.bubble.content ||
-        hasQuestion.value
-    )
-})
 </script>
 
 <style scoped>
@@ -266,30 +170,11 @@ const hasContent = computed(() => {
     width: 100%;
 }
 
-.ghost-thinking {
-    max-width: 100%;
-    margin-left: 0;
-    padding: 0;
-}
-
-.active-bubble-wrapper {
-    width: 100%;
-}
-
-.ghost-thinking-wrapper {
-    margin-left: 0;
-    padding: 0;
-    margin-bottom: 6px;
-}
-
 .root-bubble-container {
   display: flex;
   flex-direction: column;
-  background: var(--awd-surface);
-  border: 1px solid var(--awd-border); /* Very subtle border */
-  border-radius: 12px; /* rounded-xl */
-  overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.08); /* shadow-sm plus */
+  gap: 12px;
+  background: transparent;
   max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
@@ -359,25 +244,18 @@ const hasContent = computed(() => {
   margin-bottom: 14px;
 }
 
-.reply-label {
-  color: var(--awd-accent-text);
-  font-size: 11px;
-  font-weight: 600;
-  margin: 4px 0 10px;
-}
 .main-content {
-  padding: 6px 12px;
+  padding: 0;
   font-size: 13px;
-  line-height: 1.55;
+  line-height: 1.7;
   color: var(--awd-text); /* Gray-Dark */
 }
 
 .message-actions {
   position: relative;
   display: flex;
-  padding: 8px 16px 12px;
-  border-top: 1px solid var(--awd-border-subtle);
-  margin-top: 6px;
+  padding: 0;
+  margin-top: 0;
 }
 
 .msg-act-trigger {
@@ -435,84 +313,28 @@ const hasContent = computed(() => {
   background: transparent;
 }
 
-/* 内联计划卡：卡片容器内左右留边，与步骤分组视觉对齐 */
-.inline-plan {
-  padding: 8px 10px 2px;
+.stream-title { color: var(--awd-text-2); font-size: 13px; }
+.activity-summary {
+  display: flex; align-items: center; gap: 8px; max-width: 100%;
+  border: 0; background: transparent; padding: 0; margin: 0;
+  color: var(--awd-text-2); font: inherit; font-size: 12px; line-height: 1.6;
+  text-align: left; cursor: pointer; overflow-wrap: anywhere;
 }
-
-.inline-plan :deep(.todo-progress-card) {
-  margin: 0;
-}
-
-/* ---- plan 步骤分组 ---- */
-.step-group {
-  border-bottom: 1px solid var(--awd-border-subtle);
-}
-
-.step-group-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 12px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.step-group-header:hover {
-  background: var(--awd-bg);
-}
-
-.step-group-marker {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #ADB5BD;
-  flex-shrink: 0;
-}
-
-.step-group-marker.done {
-  background: var(--awd-mint);
-}
-
-.step-group-marker.error {
-  background: var(--awd-danger);
-}
-
-.step-group-title {
-  flex: 1;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--awd-text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.step-group-count {
-  font-size: 10px;
-  color: var(--awd-text-2);
-  background: var(--awd-surface-2);
-  border-radius: 99px;
-  padding: 0 6px;
-  flex-shrink: 0;
-}
-
-.step-chevron {
-  color: var(--awd-text-3);
-  transition: transform 0.2s ease;
-  display: flex;
-  align-items: center;
-}
-
-.step-chevron.is-rotated {
-  transform: rotate(180deg);
-}
-
-.step-group-body {
-  padding-left: 10px;
-  border-left: 2px solid var(--awd-border);
-  margin-left: 14px;
-}
+.activity-summary::after { border: 0; }
+.activity-summary:hover { color: var(--awd-text); }
+.activity-summary:focus-visible { outline: 2px solid var(--awd-accent); outline-offset: 4px; border-radius: 3px; }
+.activity-summary.has-error { color: var(--awd-danger); }
+.activity-chevron { display: inline-block; transition: transform .18s; font-size: 18px; }
+.activity-chevron.open { transform: rotate(90deg); }
+.activity-summary.is-working > span:first-child { animation: activity-breathe 1.8s ease-in-out infinite; }
+@keyframes activity-breathe { 50% { opacity: .5; } }
+@media (prefers-reduced-motion: reduce) { .activity-summary.is-working > span:first-child { animation: none; } }
+.activity-details { margin: 8px 0 0 3px; padding-left: 12px; border-left: 1px solid var(--awd-border); }
+.activity-details :deep(.process-card) { border: 0; background: transparent; box-shadow: none; }
+.activity-details :deep(.process-header) { background: transparent; padding-left: 0; }
+.activity-details :deep(.title), .activity-details :deep(.step-text) { color: var(--awd-text-2); font-weight: 400; }
+.activity-details :deep(.todo-progress-card) { margin: 0; border: 0; background: transparent; }
+.activity-details :deep(.todo-header) { background: transparent; }
 
 .main-content:deep(p) {
   margin: 0 0 8px 0;
@@ -566,7 +388,7 @@ const hasContent = computed(() => {
 
 .main-content :deep(.markdown-body) {
   font-size: 13px;
-  line-height: 1.55;
+  line-height: 1.7;
   margin: 0;
   padding: 0;
   color: var(--awd-text);
@@ -579,6 +401,6 @@ const hasContent = computed(() => {
   margin-top: 14px !important;
   margin-bottom: 8px !important;
   font-weight: 600;
-  color: var(--awd-accent-text); /* Forest Green for headings */
+  color: var(--awd-text);
 }
 </style>
