@@ -1,5 +1,7 @@
-# 默认分支预热桌面构建共用的 CPython 与 Graphviz 缓存（dev-board#653）。
+# 默认分支预热桌面构建共用的 CPython 缓存（dev-board#653）。
 # 与 desktop-build.yml 的缓存路径、key 和 runtime-only 参数保持一致。
+# 缓存路径里的 graphviz/ 只是与 desktop-build 对齐的占位：桌面构建自 0.38 起不再
+# 打包 graphviz（它随 litigation-visual pack 由 pack-release.yml 出），这里也不装。
 name: 暖缓存（master）
 
 on:
@@ -43,24 +45,6 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         shell: bash
         run: node desktop/scripts/prepare-python-service.js --runtime-only 1 --out desktop/bundled/${{ matrix.plat }}
-
-      - name: Bundle graphviz (macOS)
-        if: steps.cache.outputs.cache-hit != 'true' && runner.os == 'macOS'
-        run: |
-          brew install graphviz
-          node desktop/scripts/prepare-graphviz.js --out desktop/bundled/${{ matrix.plat }}
-
-      - name: Bundle graphviz (Windows)
-        if: steps.cache.outputs.cache-hit != 'true' && runner.os == 'Windows'
-        shell: bash
-        run: |
-          # choco 社区源对 CI runner 限流严重，带退避重试（同 desktop-build.yml）
-          for attempt in 1 2 3 4 5; do
-            choco install graphviz --no-progress -y && break
-            [ "$attempt" = "5" ] && { echo "choco 重试耗尽"; exit 1; }
-            sleep $((attempt * 15))
-          done
-          node desktop/scripts/prepare-graphviz.js --out desktop/bundled/${{ matrix.plat }}
 
       - name: 结果
         shell: bash
