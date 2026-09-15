@@ -139,6 +139,18 @@ export default {
   skipNotLocalMode: 'Usage stats are not uploaded in team-server mode',
   skipNotConnected: 'This machine has no account connected',
   skipNoTeam: 'You are not in a team yet',
+  skipProjectNamesPending: 'Project names are not confirmed yet, so the stats stay on this machine',
+
+  projectNamesTitle: 'These project names will be uploaded with the stats',
+  projectNamesConfirm: 'Allow the names',
+  projectNamesDecline: 'Anonymous codes only',
+  projectNamesNone: '(No project activity in this period, so there is no project name to upload yet)',
+  projectNamesPendingDesc: 'Project names are uploaded only after you confirm; until then these stats stay on this machine.',
+  projectNamesReview: 'Review and confirm',
+  projectNamesChange: 'Change',
+  projectNamesOn: 'Project names: uploaded with the stats',
+  projectNamesOff: 'Project names: anonymous codes only, never leave this machine',
+  projectNamesDeclinedToast: 'Saved: project names stay on this machine',
 
   accountRowLabel: 'Team',
   accountRowNone: 'Not in a team',

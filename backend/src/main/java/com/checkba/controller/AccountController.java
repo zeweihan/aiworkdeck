@@ -441,6 +441,9 @@ public class AccountController {
             teamSettingsCache.remember(team);
         } else {
             teamSettingsCache.clear();
+            // 已经不在任何团队里了：项目名那个决定是对着<b>那个团队</b>的听众给的，
+            // 换了听众必须重新问一次（C4）
+            teamUsageUploadService.resetProjectNameNotice();
         }
         return ok(body);
     }
@@ -693,7 +696,43 @@ public class AccountController {
         // 这台机器上这个开关有没有意义（server 模式恒 false）。由后端如实下发，
         // 不让前端靠「有没有桌面壳」猜——猜错就是给用户一个永远不生效的开关
         data.put("available", teamUsageUploadService.sharingAvailable());
+        // 项目名的一次性确认（C4）。pending=true 时后台上报正卡在这一关上，
+        // 设置页据此把确认入口显出来——不给入口的话那条上报会一直静默卡着
+        data.put("projectNames", teamUsageUploadService.projectNameStatus());
         return data;
+    }
+
+    /**
+     * 待上传的项目名清单 + 告知正文，供设置页弹一次确认框。
+     *
+     * <p><b>纯本机</b>：名字来自本机聚合、正文来自 {@code TeamProjectNameNotice}，
+     * 不打官网。正文与版本号同源在 Java 侧（改文案就推版本，旧决定作废），
+     * 前端只负责把它原样摆出来。
+     */
+    @GetMapping("/team/usage-sharing/project-names")
+    public Map<String, Object> teamProjectNames(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
+        return ok(teamUsageUploadService.projectNameNotice());
+    }
+
+    /**
+     * 记下机器主人的决定：{@code {granted}}。同意 = 项目名随统计上传；
+     * 拒绝 = 项目名一律抹成 null，统计其余部分照常上报。
+     *
+     * <p>拒绝<b>只落在本机</b>，不去改官网的团队设置——那是整个团队的开关，
+     * 普通成员改不动（官网 403），一台机器的决定也不该替其他成员做主。
+     */
+    @PostMapping("/team/usage-sharing/project-names")
+    public Map<String, Object> decideTeamProjectNames(
+            @RequestBody(required = false) Map<String, Object> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
+        if (body == null || !(body.get("granted") instanceof Boolean granted)) {
+            throw new IllegalArgumentException("granted 必须是布尔值");
+        }
+        teamUsageUploadService.decideProjectNames(granted);
+        return ok(sharingState());
     }
 
     /**

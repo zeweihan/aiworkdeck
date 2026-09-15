@@ -283,6 +283,40 @@ test('项目名不在前端「补全」：只显示 label 或短码', () => {
   assert.match(teamPanel, /p\.label \|\| p\.projectKey/)
 })
 
+// ---- C4（v0.44.1 真机实测：团队看板里直接出现了用户其他客户的真实项目名） ----
+
+test('项目名第一次要上传之前弹一次确认：开启共享开关那一刻就问', () => {
+  // 开关打开 = 第一次真的要把项目名发出去，闸门就落在这里，不许拖到后台静默卡住
+  assert.match(teamPanel, /await setTeamUsageSharing\(!!next\)[\s\S]{0,240}promptProjectNames\(\)/)
+  assert.match(teamPanel, /async promptProjectNames\(/)
+})
+
+test('确认框列出将要上传的项目名，正文取自后端（与版本号同源，前端不许自己写一份告知）', () => {
+  assert.match(teamPanel, /info\.body/, '告知正文必须来自后端')
+  assert.match(teamPanel, /info\.names/, '名字清单必须来自后端')
+  assert.match(teamPanel, /team\.projectNamesNone/, '没有名字可上传时也要说清楚，不许给一个空框')
+  assert.ok(!/会出现在团队看板/.test(teamPanel), '告知正文不许在前端抄一份（版本号在后端）')
+})
+
+test('同意才上传，拒绝只记决定不上传', () => {
+  assert.match(teamPanel, /setTeamProjectNameConsent\(answered\)/)
+  assert.match(teamPanel, /if \(answered\) \{\s*await this\.doUploadNow\(false\)/,
+    '同意之后要把刚才被拦下的那几天补上')
+  assert.match(teamPanel, /team\.projectNamesDeclinedToast/, '拒绝要有明确回执')
+})
+
+test('待确认时给一个看得见的入口，并且决定之后还能改回来', () => {
+  assert.match(teamPanel, /projectNamesPending/)
+  assert.match(teamPanel, /team\.projectNamesReview/)
+  assert.match(teamPanel, /team\.projectNamesChange/, '决定之后必须还能改，否则误点一次就没有回头路')
+  assert.match(teamPanel, /projectNames: \{ decided: false, granted: false, pending: false \}/,
+    '三个初值都必须是 false——预设为已同意在个保法下无效')
+})
+
+test('「项目名还没确认」这个跳过原因能翻成人话', () => {
+  assert.match(teamPanel, /project_names_pending: 'team\.skipProjectNamesPending'/)
+})
+
 test('别名弹窗在平台不支持 editable 时按取消处理，不把已有别名清成空串', () => {
   assert.match(teamPanel, /typeof res\.content !== 'string'/)
 })
@@ -294,6 +328,7 @@ test('api.js 导出团队相关函数，且全部走本地后端 /api/account/te
     'acceptTeamInvite', 'updateTeamMemberRole', 'removeTeamMember', 'getTeamSummary',
     'setTeamProjectAlias', 'getTeamUsageSharing', 'setTeamUsageSharing', 'uploadTeamUsageNow',
     'joinTeam', 'regenerateTeamJoinCode',
+    'getTeamProjectNameNotice', 'setTeamProjectNameConsent',
     'createFirm', 'joinFirm', 'updateFirm', 'regenerateFirmJoinCode', 'removeFirmTeam']
   for (const fn of fns) {
     assert.ok(new RegExp(`export function ${fn}\\(`).test(api), `api.js 缺 ${fn}`)

@@ -27,6 +27,7 @@ class AccountSwitchCleanupTest {
 
     com.checkba.service.team.TeamUsageSettings teamUsageSettings;
     com.checkba.service.team.TeamSettingsCache teamSettingsCache;
+    com.checkba.service.team.TeamProjectNameNotice teamProjectNameNotice;
 
     @BeforeEach
     void setUp() {
@@ -38,9 +39,10 @@ class AccountSwitchCleanupTest {
         ChatModelFactory chatModelFactory = mock(ChatModelFactory.class);
         teamUsageSettings = mock(com.checkba.service.team.TeamUsageSettings.class);
         teamSettingsCache = mock(com.checkba.service.team.TeamSettingsCache.class);
+        teamProjectNameNotice = mock(com.checkba.service.team.TeamProjectNameNotice.class);
         cleanup = new AccountSwitchCleanup(accountService, entitlementService, platformAiChannel,
                 platformCreditsGate, platformUsageAccountant, chatModelFactory,
-                teamUsageSettings, teamSettingsCache);
+                teamUsageSettings, teamSettingsCache, teamProjectNameNotice);
     }
 
     @Test
@@ -67,5 +69,15 @@ class AccountSwitchCleanupTest {
         cleanup.afterDisconnect();
         verify(teamUsageSettings, org.mockito.Mockito.times(2)).resetLedger();
         verify(teamSettingsCache, org.mockito.Mockito.times(2)).clear();
+    }
+
+    @Test
+    @DisplayName("换账户要重新问一次项目名（C4）：上一个账户的同意不能覆盖新团队的听众")
+    void accountSwitchResetsProjectNameNotice() {
+        cleanup.afterConnect();
+        verify(teamProjectNameNotice).reset();
+
+        cleanup.afterDisconnect();
+        verify(teamProjectNameNotice, org.mockito.Mockito.times(2)).reset();
     }
 }

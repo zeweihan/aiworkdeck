@@ -52,6 +52,16 @@ test('「节约时间」的中英文案都带「估算 / estimated」，不做�
   assert.ok(zh.savedFormula.includes('分钟'), '中文脚注必须把公式摆出来')
 })
 
+test('项目名确认框的两个按钮都说清后果，拒绝那条给出真出路（C4）', async () => {
+  const zh = await load('zh-CN')
+  const en = await load('en-US')
+  assert.ok(zh.projectNamesTitle.includes('项目名'), zh.projectNamesTitle)
+  assert.ok(zh.projectNamesDecline.includes('匿名'), '拒绝按钮要说明「只传匿名编号」：' + zh.projectNamesDecline)
+  assert.ok(/anonymous/i.test(en.projectNamesDecline), en.projectNamesDecline)
+  // 待确认的说明要讲清「确认之前这段统计留在本机」，不然用户只看到看板一直是空的
+  assert.ok(zh.projectNamesPendingDesc.includes('本机'), zh.projectNamesPendingDesc)
+})
+
 test('隐私一句话点明「不含文档内容/文件名/对话」', async () => {
   const zh = await load('zh-CN')
   for (const needle of ['文档内容', '文件名', '对话']) {
