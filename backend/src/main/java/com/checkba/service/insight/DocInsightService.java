@@ -3,6 +3,7 @@
 
 package com.checkba.service.insight;
 
+import com.checkba.exception.FeatureNotConfiguredException;
 import com.checkba.model.entity.DocInsightEntity;
 import com.checkba.model.entity.DocInsightFinding;
 import com.checkba.model.entity.DocInsightRun;
@@ -243,6 +244,12 @@ public class DocInsightService {
                 if (!parsed.valid()) complete[0] = false;
                 claims.addAll(parsed.claims());
                 issues.addAll(parsed.issues());
+            } catch (FeatureNotConfiguredException e) {
+                // 辅助模型不在可用清单里（要去设置页换一个）——这不是可降级的传输故障，
+                // 而是一条用户能自己修的配置错误。吞成 deepComplete=false 的话界面只会说
+                // 「未完整完成」，用户永远看不到该去哪儿改。原样抛出，让 GlobalExceptionHandler
+                // 转成 {code:4001, feature} 的「去设置」提示。
+                throw e;
             } catch (Exception e) {
                 // Preserve completed chunks; the existing UI renders deepComplete=false as partial review.
                 complete[0] = false;

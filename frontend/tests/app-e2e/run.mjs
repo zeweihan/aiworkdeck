@@ -2788,65 +2788,69 @@ try {
       // OkHttp "Cannot invoke Response.code() because response is null" 的 NPE）。
       // 中文模式发同样需要调工具的指令一样会停滞——语言不是变量。
       //
-      // PR#809 之后过程卡不再渲染在消息流里，只在 TurnActivityPanel 的 processes 页里出现，
-      // 且面板默认收起——以前「等 .process-card 出现、等不到就 skip」在新 UI 下恒走 skip，
-      // 发版门静默失效。现在：等这一轮跑完 → 点 J12 这一轮自己的 .turn-activity-link
-      // （openTurn(turn.key)，直接落在 processes 页）→ 核对面板停在 J12 这一轮。
-      // skip 只认面板自己报的「这一轮 0 条动作」；面板打不开、不在 J12 这一轮、
-      // 有动作却找不到工具名，一律判红，UI 再改也只会响亮地红，不会悄悄 skip。
-      // 「跑完」以面板状态条为准（刚发出的这一轮就是最新一轮，状态条默认显示它）；
-      // 240s 覆盖上面那个 180s watchdog。还在跑时面板里 0 条动作不代表模型没调工具。
-      const ended = await page.waitForFunction(() => {
-        const s = document.querySelector('.turn-activity .turn-status')
-        return !!s && !/status-(running|queued)\b/.test(String(s.className))
-      }, { timeout: 240000, polling: 500 }).catch(() => null)
-      if (!ended) throw new Error('J12 这一轮 240s 后仍未结束（.turn-activity .turn-status 仍是 running/queued 或不存在）')
-      const linkSel = await page.waitForFunction((p) => {
-        const turns = [...document.querySelectorAll('.conversation-turn')].filter((t) => {
+      // dev-board#646 之后过程卡回到了消息流里：每条助手消息按时间线渲染，执行记录收在
+      // 自己的 .activity-summary 活动条下（默认收起，点开是 .activity-details）。
+      // TurnActivityPanel 与 .turn-activity/.turn-status/.turn-activity-link 已整体删除，
+      // 别再按那套选择器等——等不到只会空跑满超时。现在：等这一轮跑完（发送键不再是
+      // 停止态）→ 展开 J12 这一轮助手消息上的每一条活动条 → 在过程卡工具名上断言无 CJK。
+      // skip 只认「这一轮压根没有活动条 / 活动条里没有过程卡」；这一轮没有助手回复、
+      // 活动条被遮挡点不中、展不开、有过程卡却找不到工具名，一律判红。
+      // 240s 覆盖上面那个 180s watchdog。
+      const ended = await page.waitForFunction(() => !document.querySelector('.send-btn.stopping'),
+        { timeout: 240000, polling: 500 }).catch(() => null)
+      if (!ended) throw new Error('J12 这一轮 240s 后仍未结束（发送键仍停在停止态 .send-btn.stopping）')
+      // 每次都按提问原文重新定位这一轮：DOM 标记会被 Vue 重渲染弄丢，行内重复这四行最稳
+      const found = await page.evaluate((p) => {
+        const turn = [...document.querySelectorAll('.conversation-turn')].filter((t) => {
           const u = t.querySelector('.user-bubble-content')
           return u && (u.innerText || '').includes(p)
-        })
-        const a = turns.length && turns[turns.length - 1].querySelector('.turn-activity-link')
-        if (!a) return false
-        a.scrollIntoView({ block: 'center' })
-        return true
-      }, { timeout: 30000, polling: 500 }, J12_PROMPT).catch(() => null)
-      if (!linkSel) throw new Error('找不到 J12 这一轮的 .turn-activity-link（这一轮没有助手回复，或活动面板入口已改）')
-      await sleep(500)
-      const link = await page.evaluate((p) => {
-        const turns = [...document.querySelectorAll('.conversation-turn')].filter((t) => {
-          const u = t.querySelector('.user-bubble-content')
-          return u && (u.innerText || '').includes(p)
-        })
-        const a = turns[turns.length - 1].querySelector('.turn-activity-link')
-        const r = a.getBoundingClientRect()
-        const x = r.x + r.width / 2
-        const y = r.y + r.height / 2
-        const top = document.elementFromPoint(x, y)
-        return { ok: !!top && (top === a || a.contains(top)), x, y, top: top ? top.tagName + '.' + String(top.className || '') : 'null' }
+        }).pop()
+        if (!turn) return { ok: false, why: '找不到 J12 这一轮的 .conversation-turn（提问没落进消息区？）' }
+        if (!turn.querySelector('.message-row.assistant')) return { ok: false, why: 'J12 这一轮没有助手回复（.message-row.assistant 不存在）' }
+        return { ok: true, summaries: turn.querySelectorAll('.message-row.assistant .activity-summary').length }
       }, J12_PROMPT)
-      if (!link.ok) throw new Error('J12 这一轮的 .turn-activity-link 中心被遮挡，elementFromPoint 命中 ' + link.top)
-      await page.mouse.click(link.x, link.y)
-      const state = await page.waitForFunction(() => {
-        const panel = document.querySelector('.turn-activity .activity-panel')
-        const tab = panel && panel.querySelector('[data-activity-tab="processes"]')
-        if (!tab || tab.getAttribute('aria-selected') !== 'true') return null
-        return {
-          title: (panel.querySelector('.panel-title')?.innerText || '').trim(),
-          status: String(document.querySelector('.turn-activity .turn-status')?.className || ''),
-          entries: panel.querySelectorAll('.process-entry').length,
-          names: [...panel.querySelectorAll('.process-card .tool-name')].map((e) => (e.innerText || '').trim()).filter(Boolean),
-        }
-      }, { timeout: 10000 }).then((h) => h.jsonValue()).catch(() => null)
-      if (!state) throw new Error('点了 J12 这一轮的 .turn-activity-link，活动面板没有停在 processes 页（[data-activity-tab="processes"][aria-selected="true"] 不出现）')
-      if (!state.title.includes(J12_PROMPT)) throw new Error('活动面板显示的不是 J12 这一轮: ' + JSON.stringify(state.title.slice(0, 80)))
-      if (state.entries === 0) {
-        note('skip', 'J12 本轮模型未产出工具调用（活动面板报这一轮 0 条动作，' + state.status + '），过程卡工具名断言未执行')
+      if (!found.ok) throw new Error(found.why)
+      if (!found.summaries) {
+        note('skip', 'J12 本轮模型未产出工具调用（这一轮助手消息里没有 .activity-summary 活动条），过程卡工具名断言未执行')
         return
       }
-      if (!state.names.length) throw new Error('活动面板报 ' + state.entries + ' 条动作，却找不到 .process-card .tool-name')
-      const names = state.names
-      const bad = names.filter((t) => /[一-鿿]/.test(t))
+      for (let i = 0; i < found.summaries; i++) {
+        const hit = await page.evaluate((p, idx) => {
+          const turn = [...document.querySelectorAll('.conversation-turn')].filter((t) => {
+            const u = t.querySelector('.user-bubble-content')
+            return u && (u.innerText || '').includes(p)
+          }).pop()
+          const btn = turn && turn.querySelectorAll('.message-row.assistant .activity-summary')[idx]
+          if (!btn) return { ok: false, top: '（第 ' + idx + ' 条活动条不见了）' }
+          btn.scrollIntoView({ block: 'center' })
+          const r = btn.getBoundingClientRect()
+          const x = r.x + r.width / 2
+          const y = r.y + r.height / 2
+          const top = document.elementFromPoint(x, y)
+          return { ok: !!top && (top === btn || btn.contains(top)), x, y, top: top ? top.tagName + '.' + String(top.className || '') : 'null' }
+        }, J12_PROMPT, i)
+        if (!hit.ok) throw new Error('J12 这一轮第 ' + i + ' 条 .activity-summary 中心被遮挡，elementFromPoint 命中 ' + hit.top)
+        await page.mouse.click(hit.x, hit.y)
+        await sleep(200)
+      }
+      const state = await page.evaluate((p) => {
+        const turn = [...document.querySelectorAll('.conversation-turn')].filter((t) => {
+          const u = t.querySelector('.user-bubble-content')
+          return u && (u.innerText || '').includes(p)
+        }).pop()
+        return {
+          details: turn.querySelectorAll('.activity-details').length,
+          cards: turn.querySelectorAll('.activity-details .process-card').length,
+          names: [...turn.querySelectorAll('.activity-details .process-card .tool-name')].map((e) => (e.innerText || '').trim()).filter(Boolean)
+        }
+      }, J12_PROMPT)
+      if (!state.details) throw new Error('点了 J12 这一轮的 ' + found.summaries + ' 条 .activity-summary，.activity-details 一个都没展开')
+      if (!state.cards) {
+        note('skip', 'J12 本轮活动条里没有过程卡（只有任务清单，没有工具调用），过程卡工具名断言未执行')
+        return
+      }
+      if (!state.names.length) throw new Error('展开了 ' + state.cards + ' 张 .process-card，却找不到 .process-card .tool-name')
+      const bad = state.names.filter((t) => /[一-鿿]/.test(t))
       if (bad.length) throw new Error('en-US 下过程卡工具名仍含中文: ' + JSON.stringify(bad))
       await shot('j12-en-process-card')
     })

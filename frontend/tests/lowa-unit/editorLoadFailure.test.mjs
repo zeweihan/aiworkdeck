@@ -92,6 +92,9 @@ test('callOpts.timeoutMs 覆盖默认预算（死掉的 guest 3s 判死，不等
   assert.equal(r.outcomeUnknown, true)
   assert.equal(r.retryable, false)
   assert.equal(r.error, r.message)
+  // 超时文案中英双行：EN 版的编辑器日志与 AI 工具结果都会照抄这一句。
+  assert.match(r.message, /等待编辑器结果超时/)
+  assert.match(r.message, /Editor result timed out/)
   assert.equal(isRelayTimeout(r), true)
   assert.ok(dt < 2000, '必须按 callOpts.timeoutMs 超时，实际等了 ' + dt + 'ms')
   assert.equal(sent.length, 1)

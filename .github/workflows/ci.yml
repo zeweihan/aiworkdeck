@@ -87,6 +87,9 @@ jobs:
       - name: Test project-home page
         working-directory: frontend
         run: npm run test:project-home
+      - name: Test LibreOffice relay (迟到结果墓碑 + 三张预算表键集合对齐)
+        working-directory: frontend
+        run: npm run test:zeta-relay
       - name: Test EvidenceLink pure functions (anchor hash 双端对拍 / locator / 拖放建链)
         working-directory: frontend
         run: npm run test:evidence

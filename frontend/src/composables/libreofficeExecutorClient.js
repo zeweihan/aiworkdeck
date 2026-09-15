@@ -254,7 +254,7 @@ export function createLibreOfficeExecutor(opts = {}) {
     const budget = ACTION_BUDGET_MS[action] ? Math.max(timeoutMs, ACTION_BUDGET_MS[action]) : timeoutMs
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        if (pending.has(reqId)) { pending.delete(reqId); reject(Object.assign(new Error('等待编辑器结果超时，操作可能仍在执行。请先检查文档和修订记录，确认结果前不要重复执行写入操作。'), { code: 'EDITOR_RESULT_TIMEOUT' })) }
+        if (pending.has(reqId)) { pending.delete(reqId); reject(Object.assign(new Error('等待编辑器结果超时，操作可能仍在执行。请先检查文档和修订记录，确认结果前不要重复执行写入操作。 / Editor result timed out; the operation may still be running. Check the document and tracked changes before repeating any write.'), { code: 'EDITOR_RESULT_TIMEOUT' })) }
       }, budget)
       pending.set(reqId, { resolve, reject, timer, onProgress: callOpts && callOpts.onProgress })
       if (callOpts && callOpts.onIssued) { try { callOpts.onIssued(reqId) } catch (e) { /* ignore */ } }

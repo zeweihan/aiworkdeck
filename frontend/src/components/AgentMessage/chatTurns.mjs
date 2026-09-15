@@ -2,14 +2,23 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 const PLAN_TYPES = ['task_list', 'plan', 'implementation_plan']
 
+const TODO_WRITE_CALL = /^(?:\w+\.)?todo_write\(([\s\S]*)\)$/
+
+// The single predicate for "this execution item is where the plan snapshot came from".
+// Callers that place the recovered plan in the timeline must use it too, or the card
+// lands next to a different call than the one it was recovered from.
+export function isPlanSnapshotCall(item) {
+  return item?.type === 'tool' && item.status === 'success' && TODO_WRITE_CALL.test((item.code || '').trim())
+}
+
 // History stores tool calls, while live plan_update events carry a separate snapshot.
 // Recover JSON arguments only; never execute model-generated tool expressions.
 export function recoverPlanTodos(processes = []) {
   let snapshot = null
   for (const process of processes) {
     for (const item of process.items || []) {
-      if (item.type !== 'tool' || item.status !== 'success') continue
-      const match = (item.code || '').trim().match(/^(?:\w+\.)?todo_write\(([\s\S]*)\)$/)
+      if (!isPlanSnapshotCall(item)) continue
+      const match = (item.code || '').trim().match(TODO_WRITE_CALL)
       if (!match) continue
       try {
         const args = JSON.parse(match[1])
