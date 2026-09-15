@@ -419,6 +419,11 @@ public class VersionController {
     /**
      * 参与 walk 的四类引用。解析不出来的（没绑案件库时的 origin/master、一条稿都没有时）
      * 由 {@link ProjectRepoService#history} 自己跳过，这里不必先判一遍。
+     *
+     * <p>稿那几条根带 {@code keepTip}：一稿的全部内容可能只有一笔自动存档（另起一稿之后
+     * 改了文件、还没结束工作），默认的折叠会把它折进别的行里，这一稿于是从提交历史里整个
+     * 消失——标签没了、泳道也没有分叉，律师会以为稿丢了。主线与「本机」不给这个开关：
+     * 它们尖端之外总还有别的版本撑着，折掉尖端只少一个标签，不会整条线消失。
      */
     private List<ProjectRepoService.HistoryRoot> historyRoots(long projectId) {
         List<ProjectRepoService.HistoryRoot> roots = new ArrayList<>();
@@ -426,7 +431,8 @@ public class VersionController {
                 repoService.mainBranch(), "mainline", LangText.of("主线", "Mainline")));
         for (WorkSession d : sessionService.listDrafts(projectId)) {
             if (d.getBranchName() == null) continue;
-            roots.add(new ProjectRepoService.HistoryRoot(d.getBranchName(), "draft", d.getTitle()));
+            roots.add(new ProjectRepoService.HistoryRoot(
+                    d.getBranchName(), "draft", d.getTitle(), true));
         }
         roots.add(new ProjectRepoService.HistoryRoot(
                 repoService.originMasterRef(), "remote", LangText.of("案件库", "Case Library")));

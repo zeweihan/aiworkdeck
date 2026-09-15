@@ -520,6 +520,51 @@ class HistoryEndpointTest {
                         + "被筛掉的第二段那两笔（含关键词）一笔都不许顺延过来");
     }
 
+    /**
+     * 只有自动存档的那一稿（另起一稿 → 在稿上改了文件 → 回到主线，还没结束工作）
+     * 必须照样成行。这一稿的<b>唯一</b>一笔提交就是它的尖端，折掉它等于把整条线从
+     * 提交历史里抹掉：分支标签没了、泳道也没有分叉，律师会以为这一稿丢了
+     * （桌面端 v0.44.1 真机实测 B1）。主线与「本机」那两条线不受这条影响——
+     * 它们尖端之外还有别的版本撑着，折掉尖端只少一个标签、不会整条消失。
+     */
+    @Test
+    @DisplayName("只有自动存档的稿仍然成行：分支标签落在它的尖端上，自动存档不顺延给主线")
+    void draftWhoseOnlyCommitIsAnAutosaveStillShowsUp() throws Exception {
+        String initial = repoSvc.log(PROJECT, "HEAD", 1).get(0).sha();
+        repoSvc.createBranch(PROJECT, "draft/1000", "HEAD");
+        repoSvc.checkoutBranch(PROJECT, "draft/1000");
+        String draftAuto = commit("对方回过来的条款", "修改了《合同》", "auto");
+        repoSvc.checkoutBranch(PROJECT, repoSvc.mainBranch());
+        haveOneDraft("draft/1000", "对方第三版回稿");
+
+        Map<String, Object> data = history();
+
+        Map<String, Object> tip = row(data, draftAuto);
+        assertEquals(Set.of("draft"), refTypes(tip), "稿的标签只能落在它自己的尖端上");
+        assertEquals("对方第三版回稿", refName(tip, "draft"));
+        assertEquals(List.of(initial), tip.get("parents"), "分叉点是初始版本，泳道靠它连线");
+        assertEquals(0, ((Number) row(data, initial).get("autoCount")).intValue(),
+                "这一稿的自动存档已经自己成行，绝不能再顺延成初始版本名下的计数");
+    }
+
+    @Test
+    @DisplayName("稿上好几笔自动存档时只有尖端成行，其余折进它的计数")
+    void draftWithSeveralAutosavesShowsOnlyItsTip() throws Exception {
+        repoSvc.createBranch(PROJECT, "draft/1000", "HEAD");
+        repoSvc.checkoutBranch(PROJECT, "draft/1000");
+        commit("第一次改", "修改了《合同》", "auto");
+        commit("第二次改", "修改了《合同》", "auto");
+        String tipSha = commit("第三次改", "修改了《合同》", "auto");
+        repoSvc.checkoutBranch(PROJECT, repoSvc.mainBranch());
+        haveOneDraft("draft/1000", "对方第三版回稿");
+
+        Map<String, Object> data = history();
+
+        assertEquals(2, entries(data).size(), "只剩稿的尖端与初始版本两行");
+        assertEquals(2, ((Number) row(data, tipSha).get("autoCount")).intValue(),
+                "另外两笔折进尖端那一行");
+    }
+
     // ---------- 筛选 ----------
 
     @Test

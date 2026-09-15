@@ -574,7 +574,9 @@ export const fileOpenTabsMethods = {
      *
      * @param spec {{projectId, path, name, ctx, mergeBase, mainRef, otherRef,
      *              sides: {main:{authorName, when, title, self}, other:{…}},
-     *              readonly?, fileId?}}
+     *              draftName?, readonly?, fileId?}}
+     *        draftName 只在采纳语境有：两侧是同一个人时稿这一侧要靠它自报家门
+     *        （「稿《对方第三版回稿》」），否则两栏都写「你」。
      */
     openMergeReviewTab(spec = {}) {
       const projectId = spec.projectId || this.projectId
@@ -600,7 +602,8 @@ export const fileOpenTabsMethods = {
         mergeSpec: {
           projectId, path: spec.path, name: spec.name, ctx: spec.ctx,
           mergeBase: spec.mergeBase, mainRef: spec.mainRef, otherRef: spec.otherRef,
-          sides: spec.sides || {}, readonly: !!spec.readonly, fileId: spec.fileId || null,
+          sides: spec.sides || {}, draftName: spec.draftName || '',
+          readonly: !!spec.readonly, fileId: spec.fileId || null,
         },
         createdAt: Date.now(),
       })
