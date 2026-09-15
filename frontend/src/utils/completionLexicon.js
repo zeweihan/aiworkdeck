@@ -3,7 +3,13 @@
 
 const MAX_ENTRIES = 50
 const SENSITIVE_NUMBER = /(?:\d[\s-]*){11,19}/
-const ORGANIZATION_SUFFIX = '(?:有限责任公司|股份有限公司|有限公司|律师事务所|人民法院|人民检察院|仲裁委员会|合伙企业|委员会|人民政府|集团|银行|学校|医院|中心|局)'
+// 机构名后缀表：既拼成抽取用的正则，也用来判断某个前缀是不是机构名后缀被截断的尾巴。
+// 新增后缀只加到这一处。
+const ORGANIZATION_SUFFIXES = [
+  '有限责任公司', '股份有限公司', '有限公司', '律师事务所', '人民法院', '人民检察院',
+  '仲裁委员会', '合伙企业', '委员会', '人民政府', '集团', '银行', '学校', '医院', '中心', '局',
+]
+const ORGANIZATION_SUFFIX = `(?:${ORGANIZATION_SUFFIXES.join('|')})`
 const ORGANIZATION_RE = new RegExp(`[\\p{Script=Han}A-Za-z0-9（）()·]{2,60}?${ORGANIZATION_SUFFIX}`, 'gu')
 const ORGANIZATION_END_RE = new RegExp(`${ORGANIZATION_SUFFIX}$`, 'u')
 const LAW_ARTICLE_RE = /《[^》\r\n]{2,80}》(?:第[零〇一二三四五六七八九十百千万亿两\d]+条(?:之[零〇一二三四五六七八九十百千万亿两\d]+)?)?/gu
@@ -96,11 +102,21 @@ function isUsablePrefix(prefix) {
   return chineseCount >= 2 || latinCount >= 3 || caseNumberLead
 }
 
+// 「…有限公司」末尾的「公司」是机构名后缀被截断的尾巴，不是用户在敲「公司章程」。
+// 判据：前缀连上它前面那一个字之后仍落在某个已知机构名后缀的末尾。
+// 「该公司」这类合不成后缀的两字前缀照旧触发。
+function isOrganizationSuffixTail(before, prefix) {
+  const start = before.length - prefix.length - 1
+  if (start < 0) return false
+  const withLead = before.slice(start)
+  return ORGANIZATION_SUFFIXES.some((suffix) => suffix.endsWith(withLead))
+}
+
 function longestTailPrefix(before, text) {
   const maxLength = Math.min(before.length, text.length - 1)
   for (let length = maxLength; length > 0; length -= 1) {
     const prefix = before.slice(-length)
-    if (isUsablePrefix(prefix) && text.startsWith(prefix)) return prefix
+    if (isUsablePrefix(prefix) && text.startsWith(prefix) && !isOrganizationSuffixTail(before, prefix)) return prefix
   }
   return ''
 }
