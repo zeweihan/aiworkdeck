@@ -1,0 +1,73 @@
+# 默认分支预热桌面构建共用的 CPython 与 Graphviz 缓存（dev-board#653）。
+# 与 desktop-build.yml 的缓存路径、key 和 runtime-only 参数保持一致。
+name: 暖缓存（master）
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'desktop/scripts/prepare-python-service.js'
+      - 'desktop/scripts/prepare-graphviz.js'
+      - '.github/workflows/cache-warm.yml'
+      - '.github/workflows/desktop-build.yml'
+  workflow_dispatch:
+
+jobs:
+  warm:
+    name: 暖缓存 (${{ matrix.plat }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, plat: mac-arm64 }
+          - { os: windows-latest, plat: win-x64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 命中就整个作业没事干——说明当前 lock 对应的桶已经在默认分支上了
+      - name: Cache python runtime / graphviz
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            desktop/bundled/${{ matrix.plat }}/python
+            desktop/bundled/${{ matrix.plat }}/graphviz
+          key: v1-${{ matrix.plat }}-pybundle-${{ hashFiles('desktop/scripts/prepare-python-service.js', 'desktop/scripts/prepare-graphviz.js') }}
+
+      - name: Bundle CPython runtime
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: node desktop/scripts/prepare-python-service.js --runtime-only 1 --out desktop/bundled/${{ matrix.plat }}
+
+      - name: Bundle graphviz (macOS)
+        if: steps.cache.outputs.cache-hit != 'true' && runner.os == 'macOS'
+        run: |
+          brew install graphviz
+          node desktop/scripts/prepare-graphviz.js --out desktop/bundled/${{ matrix.plat }}
+
+      - name: Bundle graphviz (Windows)
+        if: steps.cache.outputs.cache-hit != 'true' && runner.os == 'Windows'
+        shell: bash
+        run: |
+          # choco 社区源对 CI runner 限流严重，带退避重试（同 desktop-build.yml）
+          for attempt in 1 2 3 4 5; do
+            choco install graphviz --no-progress -y && break
+            [ "$attempt" = "5" ] && { echo "choco 重试耗尽"; exit 1; }
+            sleep $((attempt * 15))
+          done
+          node desktop/scripts/prepare-graphviz.js --out desktop/bundled/${{ matrix.plat }}
+
+      - name: 结果
+        shell: bash
+        run: |
+          if [ "${{ steps.cache.outputs.cache-hit }}" = "true" ]; then
+            echo "缓存已在默认分支上，无需重建"
+          else
+            echo "已重建并写入默认分支的缓存桶，后续 PR 可命中"
+            du -sh desktop/bundled/${{ matrix.plat }}/* 2>/dev/null || true
+          fi
