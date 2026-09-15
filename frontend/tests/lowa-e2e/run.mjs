@@ -1759,8 +1759,14 @@ try {
     check('菜单栏保持隐藏', vis.visible.menubar === false, JSON.stringify(vis.visible.menubar))
     check('状态栏保持隐藏', vis.visible.statusbar === false)
     check('标尺保持关闭', vis.visible.rulers.ShowHoriRuler === false, JSON.stringify(vis.visible.rulers))
+    // singlemode-table 从来就没冒出来过（boot 时已创建且不可见，hideElement 对它有效）
+    // ——真正会在光标进单元格时被引擎拉起来的是 tableobjectbar，「定位」类跳转拉起的是
+    // navigationobjectbar。这两条过去不在 CHROME_URLS 里，本组只断言 singlemode-*，
+    // 于是真机上底部整条原生表格工具栏露着而 e2e 一直是绿的（v0.44.1 真机走查 D2）。
     check('选中表格后上下文工具栏没冒出来',
-      vis.visible.toolbars['singlemode-table'] === false, JSON.stringify(vis.visible.toolbars))
+      vis.visible.toolbars['singlemode-table'] === false
+        && vis.visible.toolbars['tableobjectbar'] === false
+        && vis.visible.toolbars['navigationobjectbar'] === false, JSON.stringify(vis.visible.toolbars))
     check('主工具栏保持隐藏',
       vis.visible.toolbars.standardbar === false && vis.visible.toolbars.textobjectbar === false,
       JSON.stringify(vis.visible.toolbars))
