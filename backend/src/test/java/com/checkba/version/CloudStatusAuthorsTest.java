@@ -108,6 +108,11 @@ class CloudStatusAuthorsTest {
     /** 某个人在案件库上交了一版（peer 克隆 → 提交 → 推回去），本机随后 fetch 一次。 */
     private void someoneSubmits(String displayName, String libraryAccount, String content)
             throws Exception {
+        submits(displayName, libraryAccount + "@collab.aiworkdeck.local", content);
+    }
+
+    /** 同上，但邮箱整串自己给——存量历史里的旧公式邮箱要靠它造出来。 */
+    private void submits(String displayName, String email, String content) throws Exception {
         Path peerDir = Files.createTempDirectory("peer");
         try (Git peer = Git.cloneRepository()
                 .setURI(repoSvc.remoteOriginUrl(PROJECT))
@@ -115,7 +120,7 @@ class CloudStatusAuthorsTest {
             Files.writeString(peerDir.resolve("合同.txt"), content);
             peer.add().addFilepattern(".").call();
             peer.commit().setMessage(content + "\n\nX-AWD-Kind: session")
-                    .setAuthor(displayName, libraryAccount + "@collab.aiworkdeck.local").call();
+                    .setAuthor(displayName, email).call();
             peer.push().setRefSpecs(new RefSpec("refs/heads/master:refs/heads/master")).call();
         }
         repoSvc.fetchFromOrigin(PROJECT, MY_LIBRARY_ACCOUNT, "awdt_test");
@@ -152,7 +157,46 @@ class CloudStatusAuthorsTest {
         assertEquals(Boolean.TRUE, st.get("remoteAhead"));
         assertEquals(2, st.get("remoteAheadCount"));
         assertEquals(Boolean.TRUE, st.get("remoteAheadBySelf"));
-        assertEquals(List.of("韩律师", "韩泽伟"), st.get("remoteAheadAuthors"), "新的在前");
+        // 两版都是我，作者名单里只该有一个「本人」，且用我现在的署名
+        // （dev-board#647：旧的实现按 git 署名去重，把同一个人的两个旧名字当成两个同事）
+        assertEquals(List.of("韩泽伟"), st.get("remoteAheadAuthors"));
+        assertEquals(1, st.get("remoteAheadAuthorCount"));
+    }
+
+    /**
+     * dev-board#647 报的那句错话：案件库领先的几版全是本人在另一台电脑上交的，但署名跨了
+     * 三个年代（用户名时代 / 旧公式邮箱 / 账户级邮箱），旧实现按 git 署名去重之后得出
+     * 「韩泽伟等 3 人交了新稿」。
+     */
+    @Test
+    @DisplayName("同一个人的几个旧署名归并成一个「本人」：bySelf=true，名单里不留旧名字")
+    void myOldSignaturesAreMergedIntoOne() throws Exception {
+        // 那阵子 signatureName 还取用户名，邮箱是 {用户名}@aiworkdeck.local
+        submits("hanzewei", "hanzewei@aiworkdeck.local", "九月十日改的");
+        // 再早一点：邮箱是 user-{本机userId}，另一台电脑上的 id 跟这台不是同一个
+        submits("韩泽伟", "user-9@aiworkdeck.local", "九月十一日改的");
+        // 现在：账户级邮箱，署名是那台电脑上的本机展示名
+        submits("韩律师", MY_LIBRARY_ACCOUNT + "@collab.aiworkdeck.local", "今天改的");
+
+        Map<String, Object> st = status();
+
+        assertEquals(3, st.get("remoteAheadCount"));
+        assertEquals(Boolean.TRUE, st.get("remoteAheadBySelf"), "三版都是我自己交的");
+        assertEquals(List.of("韩泽伟"), st.get("remoteAheadAuthors"));
+        assertEquals(1, st.get("remoteAheadAuthorCount"), "一个人，不是三个人");
+    }
+
+    @Test
+    @DisplayName("同事恰好与我同名：不许被并进「本人」那一格，还是两个人")
+    void aColleagueWhoHappensToShareMyNameIsStillSomeoneElse() throws Exception {
+        someoneSubmits("韩泽伟", MY_LIBRARY_ACCOUNT, "我改的一版");
+        someoneSubmits("韩泽伟", "awd_another", "同名的同事改的一版");
+
+        Map<String, Object> st = status();
+
+        assertEquals(Boolean.FALSE, st.get("remoteAheadBySelf"));
+        assertEquals(2, st.get("remoteAheadAuthorCount"),
+                "两个账户就是两个人，哪怕名字一模一样——归并只按「是不是本人」，不按名字");
     }
 
     @Test

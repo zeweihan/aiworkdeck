@@ -398,9 +398,11 @@ public class VersionController {
                 repoService.history(projectId, historyRoots(projectId), query);
 
         Map<String, String> remoteNames = remoteDisplayNames(projectId);
+        // 「我是谁」整页只算一次（别名集合要查几次库、读一次 account.json）
+        VersionAuthorResolver.SelfIdentity me = selfIdentity(projectId, userId);
         List<Map<String, Object>> entries = new ArrayList<>(page.rows().size());
         for (ProjectRepoService.HistoryRow row : page.rows()) {
-            entries.add(entryData(projectId, userId, row, remoteNames));
+            entries.add(entryData(row, remoteNames, me));
         }
 
         data.put("enabled", true);
@@ -479,9 +481,9 @@ public class VersionController {
     private static final int AHEAD_WALK_CAP = 200;
 
     /** 一行历史的完整形状。字段与 spec §2.4 的表逐条对应，前端不再二次推导。 */
-    private Map<String, Object> entryData(long projectId, Long userId,
-                                          ProjectRepoService.HistoryRow row,
-                                          Map<String, String> remoteNames) {
+    private Map<String, Object> entryData(ProjectRepoService.HistoryRow row,
+                                          Map<String, String> remoteNames,
+                                          VersionAuthorResolver.SelfIdentity me) {
         VersionEntry e = row.entry();
         Map<String, Object> m = new HashMap<>();
         m.put("sha", e.sha());
@@ -490,10 +492,14 @@ public class VersionController {
         m.put("title", e.note() != null && !e.note().isBlank() ? e.note() : e.message());
         m.put("message", e.message());
         // 署名翻译成案件库账户的展示名（命中才换）——git 署名是对方那台机器的本机展示名，
-        // 单机模式下人人都叫「本机用户」。self 仍然按邮箱判，不受这一步影响。
-        m.put("authorName", VersionAuthorResolver.preferredAuthorName(e, remoteNames));
+        // 单机模式下人人都叫「本机用户」。判为本人、且案件库那边也没有我的名字时，用我
+        // 现在的署名顶掉历史旧署名（dev-board#647），否则律师会在自己的历史里看到当年那串
+        // 用户名。self 仍然按邮箱/别名判，不受这一步影响。
+        boolean self = isSelf(e, me);
+        m.put("authorName", VersionAuthorResolver.preferredAuthorName(
+                e, remoteNames, self ? me.displayName() : null));
         m.put("authorEmail", e.authorEmail());
-        m.put("self", isSelf(e, projectId, userId));
+        m.put("self", self);
         m.put("when", e.when());
         m.put("kind", e.kind());
         m.put("type", HistoryTypeClassifier.classify(e.message(), e.kind()));
@@ -547,10 +553,20 @@ public class VersionController {
                 .toList();
     }
 
-    /** 「这一版是不是我提交的」的唯一判法（见 VersionAuthorResolver）；resolver 缺席时一律否。 */
-    private boolean isSelf(VersionEntry e, long projectId, Long userId) {
+    /** 「我是谁」的一次性快照；resolver 缺席或算不出来时为 null（此后一律判否）。 */
+    private VersionAuthorResolver.SelfIdentity selfIdentity(long projectId, Long userId) {
         try {
-            return authorResolver != null && authorResolver.isSelf(e, projectId, userId);
+            return authorResolver == null || userId == null
+                    ? null : authorResolver.selfIdentity(projectId, userId);
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    /** 「这一版是不是我提交的」的唯一判法（见 VersionAuthorResolver）；快照缺席时一律否。 */
+    private boolean isSelf(VersionEntry e, VersionAuthorResolver.SelfIdentity me) {
+        try {
+            return me != null && authorResolver != null && authorResolver.isSelf(e, me);
         } catch (Exception ex) {
             return false;
         }

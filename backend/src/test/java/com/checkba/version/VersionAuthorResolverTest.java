@@ -9,6 +9,7 @@ import com.checkba.model.entity.User;
 import com.checkba.repository.CloudConnectionRepository;
 import com.checkba.repository.ProjectRemoteRepository;
 import com.checkba.repository.UserRepository;
+import com.checkba.service.account.AccountService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -157,5 +158,70 @@ class VersionAuthorResolverTest {
         String email = resolver.email(PROJECT, ME, "韩泽伟");
         assertTrue(email.endsWith("@" + VersionAuthorResolver.LOCAL_DOMAIN),
                 "查库炸了也得给出一个本机域的邮箱，不能把落版一起拖垮：" + email);
+    }
+
+    // ---------- 本人历史上用过的那些署名（dev-board#647） ----------
+    //
+    // 真机现象：案件库领先的 6 版全是本人在另一台电脑上交的，但 9 月 10 日及更早那几版的
+    // 署名是「hanzewei」（那阵子 signatureName 还取用户名、邮箱还是旧公式），9 月 11 日起
+    // 才是「韩泽伟」。旧的回落只比当前展示名，于是同一个人的几个旧署名被当成几个同事，
+    // 顶栏说「韩泽伟等 3 人交了新稿」。放宽只作用在**旧域邮箱**这一侧。
+
+    @Test
+    @DisplayName("存量署名是本机 username（那阵子 signatureName 还取用户名）：仍然是我")
+    void legacySignatureWithLocalUsernameIsSelf() {
+        assertTrue(resolver.isSelf(entry("hanzewei", "hanzewei@aiworkdeck.local"), PROJECT, ME),
+                "「hanzewei」是我自己的用户名，不是另一个同事");
+    }
+
+    @Test
+    @DisplayName("存量署名是案件库账号名（awd_xxx）：仍然是我")
+    void legacySignatureWithLibraryAccountIsSelf() {
+        linkToLibrary("awd_hanzewei");
+
+        assertTrue(resolver.isSelf(entry("awd_hanzewei", "user-1@aiworkdeck.local"), PROJECT, ME));
+    }
+
+    @Test
+    @DisplayName("存量署名是官网账户的展示名（本机展示名后来改过）：仍然是我")
+    void legacySignatureWithWebsiteDisplayNameIsSelf() {
+        AccountService account = mock(AccountService.class);
+        when(account.currentDisplayNameOrNull()).thenReturn("韩律师");
+        resolver.setAccountServiceForTest(account);
+
+        assertTrue(resolver.isSelf(entry("韩律师", "user-1@aiworkdeck.local"), PROJECT, ME));
+    }
+
+    @Test
+    @DisplayName("署名早就改掉了，但旧邮箱的名字部分对得上：仍然是我")
+    void legacyEmailLocalPartIsAnAliasToo() {
+        assertTrue(resolver.isSelf(entry("某个早就改掉的名字", "hanzewei@aiworkdeck.local"),
+                PROJECT, ME));
+    }
+
+    @Test
+    @DisplayName("放宽只作用于旧域：新域邮箱仍然只按邮箱判，同名同事不会被认成我")
+    void widenedAliasesNeverLeakIntoTheNewDomain() {
+        linkToLibrary("awd_hanzewei");
+
+        assertFalse(resolver.isSelf(entry("hanzewei", "awd_lisi@collab.aiworkdeck.local"),
+                PROJECT, ME), "别名放宽绝不能让同名的另一个账户变成本人");
+        assertFalse(resolver.isSelf(entry("韩泽伟", "awd_lisi@collab.aiworkdeck.local"),
+                PROJECT, ME));
+    }
+
+    @Test
+    @DisplayName("旧公式里的 user-{本机id} 不算别名：那串正是「两个人都叫 user-1」的病根")
+    void machineScopedLegacyLocalPartIsNotAnAlias() {
+        // 极端假设：本机 username 恰好就叫 user-1。它仍然不许把别人机器上的 user-1 认成我
+        when(users.findById(ME)).thenReturn(Optional.of(user(ME, "user-1", "韩泽伟")));
+
+        assertFalse(resolver.isSelf(entry("李思", "user-1@aiworkdeck.local"), PROJECT, ME));
+    }
+
+    @Test
+    @DisplayName("快照里的当前署名（出参侧要用它顶掉旧署名）：展示名优先，与 signatureName 同口径")
+    void selfIdentityCarriesTheCurrentSignatureName() {
+        assertEquals("韩泽伟", resolver.selfIdentity(PROJECT, ME).displayName());
     }
 }
