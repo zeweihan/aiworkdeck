@@ -1050,7 +1050,7 @@ export default {
           // 与 onLateLoadResult 不冲突：这条路径不置 docLoadFailed（那个回调
           // 第一件事就是判它），且 remountEditor 会 dispose 掉旧 executor、
           // 连同 relay 的订阅一起断开，旧的迟到结果根本不会再回调进来。
-          if (shouldSelfHealLoadFailure(msg, this._loadSelfHealed)) {
+          if (shouldSelfHealLoadFailure(e, this._loadSelfHealed)) {
             this._loadSelfHealed = true
             this.appendLog('relay 超时 → 重启引擎重装一次 / relay timeout, remounting engine once')
             this.dirty = false
@@ -1068,7 +1068,7 @@ export default {
           // 失败原因分流（dev-board#539）：404 = 文件已不在磁盘上（重试无意义）、
           // 下载超时/网络错 = 请检查网络、其余（含引擎装载失败与 relay 超时）
           // 沿用 loadFailed。三个 key 都以 'Failed' 结尾，既有判据不必改。
-          this.statusKey = classifyLoadFailure(msg)
+          this.statusKey = classifyLoadFailure(e)
           // 记下这次失败时的世代号——迟到的 load_document 结果（见
           // onLateLoadResult）只在世代仍相符（没有更晚的装载尝试发生过）时
           // 才允许撤回这个失败态，防止串到后来的重试/换文档头上。
@@ -1211,7 +1211,7 @@ export default {
       const t0 = Date.now()
       const res = await this.executor.executeCommand('load_document', { bytes, name, authorName })
       this.appendLog('  ← ' + (Date.now() - t0) + 'ms ' + JSON.stringify(res))
-      if (!res || !res.success) throw new Error((res && res.message) || 'load_document returned no success')
+      if (!res || !res.success) throw Object.assign(new Error((res && res.message) || 'load_document returned no success'), { code: res?.code })
       if (res.kind) this.docKind = res.kind
       // 换文档后工具栏必须重读一次激活态：worker 的 retarget 会把修订显示方式
       // 复位到默认（上一份文档设过「最终稿」就在这一步被打回来），工具栏若还

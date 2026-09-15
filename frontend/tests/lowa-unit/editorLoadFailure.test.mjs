@@ -88,7 +88,11 @@ test('callOpts.timeoutMs 覆盖默认预算（死掉的 guest 3s 判死，不等
   const r = await relay.executeCommand(PROBE_ACTION, {}, { timeoutMs: 60 })
   const dt = Date.now() - t0
   assert.equal(r.success, false)
-  assert.match(r.message, /relay timeout/)
+  assert.equal(r.code, 'EDITOR_RESULT_TIMEOUT')
+  assert.equal(r.outcomeUnknown, true)
+  assert.equal(r.retryable, false)
+  assert.equal(r.error, r.message)
+  assert.equal(isRelayTimeout(r), true)
   assert.ok(dt < 2000, '必须按 callOpts.timeoutMs 超时，实际等了 ' + dt + 'ms')
   assert.equal(sent.length, 1)
   assert.equal(sent[0].action, PROBE_ACTION)
@@ -108,4 +112,13 @@ test('不传 callOpts 时预算表语义不变（load_document 仍是 180s 下�
   // 喂一条结果把 180s 的定时器清掉，否则测试进程要挂到超时才退出
   handler({ __lo: 'lo-relay', type: 'result', reqId: sent[0].reqId, result: { success: true } })
   assert.equal((await p).success, true)
+})
+
+test('结构化超时跨语言保持装载分类，且只自愈一次', () => {
+  for (const message of ['等待编辑器结果超时', 'Editor result timed out']) {
+    const error = Object.assign(new Error(message), { code: 'EDITOR_RESULT_TIMEOUT' })
+    assert.equal(classifyLoadFailure(error), STATUS_LOAD_FAILED)
+    assert.equal(shouldSelfHealLoadFailure(error, false), true)
+    assert.equal(shouldSelfHealLoadFailure(error, true), false)
+  }
 })
