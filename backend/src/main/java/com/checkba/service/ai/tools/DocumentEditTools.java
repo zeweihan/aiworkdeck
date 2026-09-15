@@ -710,6 +710,7 @@ public class DocumentEditTools implements AgentToolComponent {
     @Tool("【看】识别合同/协议的条款结构。按「第X条 / 第X章 / 一、二、」等编号文本把段落归并成条款，" +
           "返回每条条款的编号、标题和段落范围（startParagraph~endParagraph）。" +
           "统计条款数、按条款定位或修订时必须先用本工具，禁止把段落数/行数当条款数。" +
+          "目录最多返回 300 条，totalClauseCount 为完整目录数量；truncated=true 时用 nextStartParagraph 继续读取剩余正文。" +
           "拿到段落范围后可用 doc_get_document_text(startParagraph) 精读某条条款。")
     public String doc_get_clauses() {
         log.info("Tool: doc_get_clauses called");

@@ -12,6 +12,8 @@ export default {
   // Stream connection markers (markdown fragments appended to bubble content)
   connectionInterrupted: '*[Connection lost]*',
   // Stop notice (rendered from the separate bubble.stopNotice field, plain text)
+  stopPending: 'Sending stop request…',
+  stopUnconfirmed: 'Local waiting has ended, but the server stop was not confirmed. Check the task status after reconnecting.',
   stopRequested: 'Stop requested',
   // Re-entrancy guard toast on send
   alreadyStreamingToast: 'AI is still running. Wait for it to finish or click Stop.',

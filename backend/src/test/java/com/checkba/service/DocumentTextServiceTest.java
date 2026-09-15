@@ -33,6 +33,25 @@ class DocumentTextServiceTest {
     }
 
     @Test
+    void extractsTailFromThreeHundredPageBreaksAndThirtyThousandCharacters() throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try (XWPFDocument doc = new XWPFDocument()) {
+            for (int page = 0; page < 300; page++) {
+                var paragraph = doc.createParagraph();
+                paragraph.setPageBreak(page > 0);
+                paragraph.createRun().setText("第" + page + "页：" + "文".repeat(100));
+            }
+            doc.createParagraph().createRun().setText("DOCUMENT_TAIL_300");
+            doc.write(out);
+        }
+        String text = service.parse(new ByteArrayInputStream(out.toByteArray()));
+        assertTrue(text.length() > 30000);
+        assertTrue(text.contains("第0页："));
+        assertTrue(text.contains("第299页："));
+        assertTrue(text.contains("DOCUMENT_TAIL_300"), "末页文字必须完整抽取");
+    }
+
+    @Test
     void extractsTextFromPdfViaPdfbox3() throws Exception {
         // Tika 2.9.x 的 PDFParser 依赖 PDFBox 2.x API，与项目的 PDFBox 3.0.1 冲突
         // （NoSuchMethodError）；PDF 必须走 parsePdf 的 PDFBox 3 原生路径。

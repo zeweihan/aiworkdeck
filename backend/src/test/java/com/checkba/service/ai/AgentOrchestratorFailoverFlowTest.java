@@ -172,6 +172,36 @@ class AgentOrchestratorFailoverFlowTest {
     }
 
     @Test
+    @DisplayName("SDK 同步抛错也走模型切换，旧回调不得再次修改已完成的轮次")
+    void synchronousFailureUsesSameTerminalGateAndFailover() {
+        var captured = new java.util.concurrent.atomic.AtomicReference<StreamingResponseHandler<AiMessage>>();
+        StreamingChatLanguageModel primary = new StreamingChatLanguageModel() {
+            @Override
+            public void generate(List<ChatMessage> messages, StreamingResponseHandler<AiMessage> handler) {
+                captured.set(handler);
+                throw new RuntimeException("status code: 404 - No endpoints found");
+            }
+            @Override
+            public void generate(List<ChatMessage> messages, List<ToolSpecification> tools,
+                                 StreamingResponseHandler<AiMessage> handler) {
+                generate(messages, handler);
+            }
+        };
+        when(chatModelFactory.getStreamingChatModel(PRIMARY)).thenReturn(primary);
+        when(chatModelFactory.getStreamingChatModel(BACKUP)).thenReturn(new HealthyModel("已完成"));
+
+        run("conv-sync-failure");
+
+        verify(chatModelFactory).getStreamingChatModel(BACKUP);
+        assertEquals(AgentRunStateService.RunStatus.FINISHED, runState.get("conv-sync-failure").status());
+        int eventCount = sseEvents.size();
+        captured.get().onNext("迟到的内容");
+        captured.get().onError(new RuntimeException("late error"));
+        assertEquals(eventCount, sseEvents.size(), "同步失败后必须关闭原 handler 与看门狗");
+        assertFalse(sseEvents.contains("error"));
+    }
+
+    @Test
     @DisplayName("地域 403：换到区域无关模型把本轮跑完，提示里点名原因与新模型")
     void switchesToRegionAgnosticModelOnRegionBlock() {
         when(chatModelFactory.getStreamingChatModel(PRIMARY))

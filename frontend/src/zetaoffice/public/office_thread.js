@@ -3439,6 +3439,11 @@ const EXEC = {
     const firstBoundary = boundaries.length ? boundaries[0].index : total;
     return {
       success: true, totalParagraphs: total, clauseCount: clauses.length,
+      totalClauseCount: boundaries.length, truncated: boundaries.length > clauses.length,
+      ...(boundaries.length > clauses.length ? {
+        nextStartParagraph: boundaries[clauses.length].index,
+        note: '条款目录超过 300 条，仅返回前 300 条；totalClauseCount 是完整目录数量。请从 nextStartParagraph 用 get_document_text 继续读取正文。',
+      } : {}),
       granularity: hasTiao ? '第X条' : (boundaries.length ? '一、二、…' : 'none'),
       // 0..preambleParagraphs-1 = 首部（合同名称/当事人信息），不属于任何条款
       preambleParagraphs: firstBoundary,

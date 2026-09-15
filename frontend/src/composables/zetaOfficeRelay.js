@@ -54,7 +54,8 @@ export function serveExecutor({ executor, send, subscribe }) {
         onProgress: (p) => send({ __lo: TAG, type: 'progress', reqId: msg.reqId, done: p.done, total: p.total }),
       })
     } catch (e) {
-      result = { success: false, message: e && e.message ? e.message : String(e) }
+      const message = e && e.message ? e.message : String(e)
+      result = { success: false, message, error: message }
     }
     inflight.delete(msg.reqId)
     send({ __lo: TAG, type: 'result', reqId: msg.reqId, result })
@@ -169,7 +170,8 @@ export function createRelayExecutor({ send, subscribe, timeoutMs = 30000, onRead
           pending.delete(reqId)
           tombstones.set(reqId, action)
           if (tombstones.size > MAX_TOMBSTONES) tombstones.delete(tombstones.keys().next().value)
-          resolve({ success: false, message: 'LibreOffice relay timeout: ' + action })
+          const message = '等待编辑器结果超时，操作可能仍在执行。请先检查文档和修订记录，确认结果前不要重复执行写入操作。'
+          resolve({ success: false, message, error: message, code: 'EDITOR_RESULT_TIMEOUT', outcomeUnknown: true, retryable: false })
         }
       }, budget)
       pending.set(reqId, { resolve, timer, onProgress: callOpts && callOpts.onProgress })

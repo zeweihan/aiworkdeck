@@ -11,6 +11,8 @@ export default {
   // 流式连接标记（拼进气泡 content 的 markdown 片段）
   connectionInterrupted: '*[连接中断]*',
   // 停止提示（走 bubble.stopNotice 独立字段渲染，纯文本不是 markdown）
+  stopPending: '正在发送停止指令…',
+  stopUnconfirmed: '本地等待已结束，但未能确认后台停止。恢复连接后请检查任务状态。',
   stopRequested: '已发送停止指令',
   // 发送防重入 toast
   alreadyStreamingToast: 'AI 正在执行中，请等待完成或点击停止',

@@ -41,6 +41,7 @@ function textOf(err) {
  * @returns {'fileMissingFailed'|'downloadFailed'|'loadFailed'}
  */
 export function classifyLoadFailure(err) {
+  if (isRelayTimeout(err)) return STATUS_LOAD_FAILED
   const m = textOf(err)
   // 404/410 优先于下面的通用 HTTP 分支——「文件已不在磁盘上」是唯一一条
   // 「重试没有意义」的失败，不能被并进「下载失败，请检查网络」。
@@ -52,12 +53,12 @@ export function classifyLoadFailure(err) {
 
 /**
  * 这条失败是不是 relay 的墙钟超时（host 端不再等，worker 侧未必真失败）。
- * zetaOfficeRelay 的超时串形如 'LibreOffice relay timeout: load_document'。
+ * 优先读取稳定错误码，并兼容旧版本的 relay timeout 文本。
  *
  * @param {Error|string} err
  */
 export function isRelayTimeout(err) {
-  return /relay timeout/i.test(textOf(err))
+  return err?.code === 'EDITOR_RESULT_TIMEOUT' || /relay timeout/i.test(textOf(err))
 }
 
 /**

@@ -357,3 +357,7 @@ txt/md/markdown 自 dev-board#37 起不进 LOWA（前端走 PlainTextEditor.vue�
 ## 即时审校的范围契约（dev-board#547）
 
 新增 editor action `get_review_context`、`goto_review_range`、`apply_review_edit` 服务用户审校卡片，不新增 AI 工具。范围由 `revision + paragraphIndex（0 基）+ start/end（UTF-16）+ expectedParagraph + quote` 联合校验，禁止从过期提示直接改正文；修订采用与单步撤销复用现有基础设施。`ContractStructureAudit.Report.findingsTruncated` 表示任一规则结果超限，不能把截断报告当完整报告；正文编号检查遇被跳过的段落索引要断开连续性推断。完整契约与测试见 doc-editor/doc-insight。
+
+## 长文结果完整性（2026-09-15，dev-board#650）
+
+`get_clauses`返回最多300项，但额外返回`totalClauseCount/truncated/nextStartParagraph`，不能把数组长度当全文条款数。后端/relay超时返回`EDITOR_RESULT_TIMEOUT`、`outcomeUnknown=true`、`retryable=false`，先读回文档/修订再决定是否写入；message与error同时保留。`build_merge_draft`的三层预算对齐180秒。真实150/300分页夹具及导出核验见 `doc/verification/` 与 `doc/document-resilience-audit.md`。

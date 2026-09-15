@@ -255,6 +255,52 @@ class MeetingTranscriptionServiceTest {
     }
 
     @Test
+    @DisplayName("下载已完成任务的结果超时：保留任务号，下次仅重取结果，不重新付费转写")
+    void resultDownloadTimeoutRetriesExistingTask() throws Exception {
+        MeetingRecording m = meeting(MeetingRecording.STATUS_TRANSCRIBING);
+        m.setTingwuTaskId("task-paid");
+        when(meetingRepository.findById(7L)).thenReturn(Optional.of(m));
+        when(tingwu.getTask(any(), eq("task-paid"))).thenReturn(new TingwuClient.TaskInfo(
+                "COMPLETED", null, "http://r/trans", null, null, null));
+        when(fetcher.fetch("http://r/trans"))
+                .thenThrow(new java.net.http.HttpTimeoutException("download timed out"))
+                .thenReturn(TRANSCRIPTION_JSON);
+        MeetingTranscriptionService svc = service(true);
+
+        assertEquals(MeetingRecording.STATUS_TRANSCRIBING, svc.refreshIfNeeded(m).getStatus());
+        assertEquals("task-paid", m.getTingwuTaskId());
+        verifyNoInteractions(oss);
+        svc.startTranscription(7L);
+        verify(tingwu, never()).submitTask(any(), anyString());
+        m.setLastPolledAt(LocalDateTime.now().minusSeconds(11));
+        assertEquals(MeetingRecording.STATUS_TRANSCRIBED, svc.refreshIfNeeded(m).getStatus());
+        verify(fetcher, times(2)).fetch("http://r/trans");
+    }
+
+    @Test
+    @DisplayName("合法空转写是已完成状态，重复提交不得新建付费任务")
+    void emptyTranscriptionIsIdempotent() {
+        MeetingRecording m = meeting(MeetingRecording.STATUS_EMPTY);
+        when(meetingRepository.findById(7L)).thenReturn(Optional.of(m));
+        assertEquals(MeetingRecording.STATUS_EMPTY, service(false).startTranscription(7L).getStatus());
+        verifyNoInteractions(tingwu, oss);
+    }
+
+    @Test
+    @DisplayName("旧转写中快照遇到已完成数据库记录，不再查询或覆盖已有结果")
+    void staleSnapshotDoesNotPollCompletedTask() {
+        MeetingRecording stale = meeting(MeetingRecording.STATUS_TRANSCRIBING);
+        stale.setTingwuTaskId("task-1");
+        MeetingRecording completed = meeting(MeetingRecording.STATUS_TRANSCRIBED);
+        completed.setTingwuTaskId("task-1");
+        completed.setLastPolledAt(LocalDateTime.now().minusMinutes(5));
+        when(meetingRepository.findById(7L)).thenReturn(Optional.of(completed));
+        assertSame(completed, service(true).refreshIfNeeded(stale));
+        verifyNoInteractions(tingwu, fetcher);
+        verify(meetingRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("poll-on-read 节流：10 秒内不重复问听悟")
     void refreshThrottled() throws Exception {
         MeetingRecording m = meeting(MeetingRecording.STATUS_TRANSCRIBING);

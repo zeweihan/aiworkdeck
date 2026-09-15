@@ -419,3 +419,7 @@ FilePickerDialog :298 / EasyVoicePane :537 / DesensitizePane :543 / SearchPanel 
   文档实例 + 地址正确）。跑它要给后端加
   `SECURITY_BROWSER_PROXY_E2E_ALLOWED_HOSTS=127.0.0.1`，否则这一段会显式 skip（不假绿）。
   桌面端（BrowserView）那一半在 `npm run test:desktop-e2e`。
+
+## 转写超时与重取结果（2026-09-15，dev-board#650）
+
+云转写等待阈值为max(3小时,音频时长×3)，先查询上游结果再判断本地等待超时。结果下载失败保留原taskId；本地超时后重试查询原任务，不重新提交计费。兼容旧“转写超时”记录，EMPTY终态幂等，锁内用最新快照判断任务与终态。外部真正FAILED仍走原重试流程。本地请求取消不保证上游停止计费，详见 `doc/ai-timeout-cost-audit.md`。

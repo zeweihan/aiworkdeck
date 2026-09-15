@@ -64,7 +64,10 @@ import java.util.Set;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -156,6 +159,8 @@ public class DocInsightService {
     /** 同一份文档同时只跑一个解析。DB 里的 RUNNING 行是跨重启的兜底，这个集合是同进程的原子闸。 */
     private final Set<String> inFlight = ConcurrentHashMap.newKeySet();
     private final Set<String> deepReviews = ConcurrentHashMap.newKeySet();
+    private static final long DEEP_REVIEW_BUDGET_NANOS = java.time.Duration.ofSeconds(105).toNanos();
+    private java.util.function.LongSupplier nanoTime = System::nanoTime;
 
     /**
      * Reviews the live Writer body without persisting a run. {@code deep=false} is entirely local;
@@ -222,18 +227,28 @@ public class DocInsightService {
 
     private List<Claim> extractDeep(String text, Long projectId, Long userId,
                                     List<InlineDeepReview.Issue> issues, boolean[] complete) {
-        ChatLanguageModel model = chatModelFactory.getAuxChatModel();
+        long deadline = nanoTime.getAsLong() + DEEP_REVIEW_BUDGET_NANOS;
         String modelId = auxModelResolver.auxModelId();
         List<Claim> claims = new ArrayList<>();
         for (String chunk : DocInsightExtraction.chunks(text, props.getChunkChars(), props.getChunkOverlap())) {
-            Response<AiMessage> response = model.generate(List.of(UserMessage.from(
-                    InlineDeepReview.prompt(chunk, LangText.isEnglish()))));
-            recordUsage(response, modelId, projectId, userId);
-            InlineDeepReview.Result parsed = InlineDeepReview.parse(
-                    response.content() == null ? null : response.content().text(), chunk, om);
-            if (!parsed.valid()) complete[0] = false;
-            claims.addAll(parsed.claims());
-            issues.addAll(parsed.issues());
+            long remaining = deadline - nanoTime.getAsLong();
+            if (remaining <= 0) { complete[0] = false; break; }
+            try {
+                ChatLanguageModel model = chatModelFactory.getAuxChatModel(java.time.Duration.ofNanos(remaining));
+                Response<AiMessage> response = model.generate(List.of(UserMessage.from(
+                        InlineDeepReview.prompt(chunk, LangText.isEnglish()))));
+                recordUsage(response, modelId, projectId, userId);
+                InlineDeepReview.Result parsed = InlineDeepReview.parse(
+                        response.content() == null ? null : response.content().text(), chunk, om);
+                if (!parsed.valid()) complete[0] = false;
+                claims.addAll(parsed.claims());
+                issues.addAll(parsed.issues());
+            } catch (Exception e) {
+                // Preserve completed chunks; the existing UI renders deepComplete=false as partial review.
+                complete[0] = false;
+                log.warn("深入审校片段失败，保留已完成结果: {}", e.getMessage());
+                break; // Transport/account failures are not chunk-specific; do not pay for more doomed calls.
+            }
         }
         return claims;
     }
@@ -328,11 +343,13 @@ public class DocInsightService {
         return rows.stream().filter(p -> !quote.isBlank() && p.text().contains(quote)).findFirst().orElse(null);
     }
 
-    private final ExecutorService pool = Executors.newFixedThreadPool(2, r -> {
-        Thread t = new Thread(r, "doc-insight");
-        t.setDaemon(true);
-        return t;
-    });
+    // Bound retained document requests when many users parse at once; never run paid work on the caller thread.
+    private final ExecutorService pool = new ThreadPoolExecutor(2, 2, 0L, TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(32), r -> {
+                Thread t = new Thread(r, "doc-insight");
+                t.setDaemon(true);
+                return t;
+            }, new ThreadPoolExecutor.AbortPolicy());
 
     @PreDestroy
     void shutdown() {
@@ -358,7 +375,7 @@ public class DocInsightService {
             run.setProjectId(projectId);
             run.setDocFileId(docFileId);
             run.setStatus(DocInsightRun.STATUS_RUNNING);
-            run.setPhase(LangText.of("读取文档", "Reading the document"));
+            run.setPhase(LangText.of("等待解析", "Waiting to parse"));
             run.setModel(auxModelResolver.auxModelId());
             run.setStartedAt(LocalDateTime.now());
             run = runs.save(run);
@@ -372,11 +389,18 @@ public class DocInsightService {
             // 身份不跟随线程池，必须在提交时显式重放（见类注释「跨线程红线」）
             pool.submit(() -> PlatformAiUserScope.run(userId, () -> {
                 try {
+                    phase(runId, LangText.of("读取文档", "Reading the document"));
                     pipeline(runId, projectId, file, userId);
                 } finally {
                     inFlight.remove(key);
                 }
             }));
+        } catch (RejectedExecutionException e) {
+            String busy = LangText.of("解析任务较多，请稍后重试；本次未开始解析，不会调用 AI 或外部检索。",
+                    "Parsing is busy. Please try again later; this request did not start AI or external lookups.");
+            try { fail(runId, busy); } finally { inFlight.remove(key); }
+            // The public exception handler preserves business messages only for IllegalArgumentException.
+            throw new IllegalArgumentException(busy, e);
         } catch (RuntimeException e) {
             inFlight.remove(key);
             fail(runId, e.getMessage());
@@ -414,7 +438,7 @@ public class DocInsightService {
 
             List<RawEntity> raw = new ArrayList<>(DocInsightExtraction.scanDeterministic(text));
             List<Claim> claims = new ArrayList<>();
-            extract(runId, text, raw, claims, projectId, userId);
+            int failedChunks = extract(runId, text, raw, claims, projectId, userId);
 
             List<RawEntity> merged = DocInsightExtraction.merge(raw, props.getMaxMentions(), props.getMaxEntities());
             DocResolved resolved = resolveDocFiles(projectId, merged);
@@ -425,7 +449,13 @@ public class DocInsightService {
             List<DocInsightChecks.Finding> citations = validateCitations(runId, rows);
             int found = persistFindings(runId, projectId, file.getId(), claims, text, citations);
 
-            done(runId, summary(rows.size(), retrieved, found, truncated));
+            String resultSummary = summary(rows.size(), retrieved, found, truncated);
+            if (failedChunks > 0) {
+                resultSummary += LangText.of("；部分解析未完成：", "; Partial analysis: ") + failedChunks
+                        + LangText.of(" 个片段抽取失败，企业与一致性结论可能遗漏，请稍后重新解析",
+                        " chunks failed; entities and consistency checks may be incomplete. Please retry later");
+            }
+            done(runId, resultSummary);
         } catch (Throwable t) {
             log.warn("文档解析失败 runId={} fileId={}: {}", runId, file.getId(), t.toString());
             fail(runId, readable(t));
@@ -443,12 +473,13 @@ public class DocInsightService {
     }
 
     /** 逐块调辅助模型抽取。<b>单块失败只跳过这一块</b>——一份长文档不该因为某一块跑偏就整个作废。 */
-    private void extract(Long runId, String text, List<RawEntity> into, List<Claim> claims,
+    private int extract(Long runId, String text, List<RawEntity> into, List<Claim> claims,
                          Long projectId, Long userId) {
         List<String> chunks = DocInsightExtraction.chunks(text, props.getChunkChars(), props.getChunkOverlap());
         // 模型解析不出来（未配置辅助模型）要整轮失败：抽取是管线的地基，没有它只剩正则那点东西
         ChatLanguageModel model = chatModelFactory.getAuxChatModel();
         String modelId = auxModelResolver.auxModelId();
+        int failedChunks = 0;
         for (int i = 0; i < chunks.size(); i++) {
             phase(runId, LangText.of("抽取实体 ", "Extracting entities ") + (i + 1) + "/" + chunks.size());
             try {
@@ -459,12 +490,18 @@ public class DocInsightService {
                 recordUsage(response, modelId, projectId, userId);
                 Parsed parsed = DocInsightExtraction.parse(
                         response.content() == null ? null : response.content().text(), om);
+                if (!parsed.valid()) {
+                    failedChunks++;
+                    continue;
+                }
                 into.addAll(parsed.entities());
                 claims.addAll(parsed.claims());
             } catch (Exception e) {
+                failedChunks++;
                 log.warn("解析第 {} 块失败，跳过: {}", i + 1, e.getMessage());
             }
         }
+        return failedChunks;
     }
 
     private void recordUsage(Response<AiMessage> response, String modelId, Long projectId, Long userId) {

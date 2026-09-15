@@ -35,7 +35,7 @@ import static org.mockito.Mockito.*;
  * 上游任务永远不回终态（听悟侧任务丢了、网关侧任务被回收）时，会议<b>永远</b>停在转写中，
  * 而 startTranscription 对 TRANSCRIBING 是幂等返回，用户连「重试转写」都点不动。
  *
- * <p>拍板的阈值：{@code max(30 分钟, 音频时长 × 3)}。
+ * <p>拍板的阈值：{@code max(3 小时, 音频时长 × 3)}。
  */
 class MeetingTranscriptionTimeoutTest {
 
@@ -65,7 +65,7 @@ class MeetingTranscriptionTimeoutTest {
                 meetingRepository, mock(ProjectFileRepository.class), null, settingService,
                 mock(MeetingAudioTranscoder.class), tingwu, mock(MeetingOssClient.class),
                 resolver, mock(PlatformGatewayClient.class), mock(LocalAsrClient.class),
-                mock(MeetingTranscriptionService.UrlFetcher.class),
+                url -> "{\"Transcription\":{\"Paragraphs\":[]}}",
                 mock(MeetingTranscriptionService.BinaryUploader.class),
                 MeetingTranscriptionService.DEFAULT_TRANSCODE_TIMEOUT,
                 "", "", "", "", "");
@@ -93,17 +93,12 @@ class MeetingTranscriptionTimeoutTest {
     // ==================== ① 阈值计算 ====================
 
     @Test
-    @DisplayName("短音频取 30 分钟下限：10 分钟的录音转写 29 分钟不算卡死，31 分钟算")
-    void shortAudioUsesThirtyMinuteFloor() {
-        MeetingRecording ok = transcribing(Duration.ofMinutes(10).toMillis(), Duration.ofMinutes(29));
-        assertEquals(MeetingRecording.STATUS_TRANSCRIBING,
-                service().refreshIfNeeded(ok).getStatus(),
-                "10 分钟音频 × 3 = 30 分钟 < 下限，阈值应取 30 分钟；29 分钟还没到");
-
-        MeetingRecording stuck = transcribing(Duration.ofMinutes(10).toMillis(), Duration.ofMinutes(31));
-        assertEquals(MeetingRecording.STATUS_FAILED,
-                service().refreshIfNeeded(stuck).getStatus(),
-                "超过 30 分钟下限应判为卡死");
+    @DisplayName("云端短音频覆盖官方三小时排队窗口，31分钟不能判死")
+    void shortAudioCoversCloudQueueWindow() {
+        MeetingRecording queued = transcribing(Duration.ofMinutes(10).toMillis(), Duration.ofMinutes(31));
+        assertEquals(MeetingRecording.STATUS_TRANSCRIBING, service().refreshIfNeeded(queued).getStatus());
+        MeetingRecording pending = transcribing(Duration.ofMinutes(10).toMillis(), Duration.ofHours(3).plusMinutes(1));
+        assertEquals(MeetingRecording.STATUS_FAILED, service().refreshIfNeeded(pending).getStatus());
     }
 
     @Test
@@ -126,25 +121,56 @@ class MeetingTranscriptionTimeoutTest {
     @Test
     @DisplayName("卡死的会议置为 FAILED 并写下可读的失败原因（重试入口据 FAILED 出现）")
     void stuckMeetingFailsWithReadableReason() {
-        MeetingRecording stuck = transcribing(Duration.ofMinutes(10).toMillis(), Duration.ofHours(2));
+        List<String> savedStatuses = new java.util.ArrayList<>();
+        when(meetingRepository.save(any())).thenAnswer(inv -> {
+            MeetingRecording current = inv.getArgument(0);
+            savedStatuses.add(current.getStatus());
+            return current;
+        });
+        MeetingRecording stuck = transcribing(Duration.ofMinutes(10).toMillis(), Duration.ofHours(4));
         MeetingRecording out = service().refreshIfNeeded(stuck);
 
         assertEquals(MeetingRecording.STATUS_FAILED, out.getStatus());
         assertNotNull(out.getError(), "失败必须带原因，否则界面只会给一句泛化的「转写失败」");
-        assertTrue(out.getError().contains("超时"), "原因要说清是超时判定：" + out.getError());
-        assertTrue(out.getError().contains("30"), "原因里要带上判定用的阈值：" + out.getError());
+        assertTrue(out.getError().contains("暂未确认"), "原因要说清是超时判定：" + out.getError());
+        assertTrue(out.getError().contains("180"), "原因里要带上判定用的阈值：" + out.getError());
         // 原始录音完好这件事必须说，否则用户不敢重试
         assertTrue(out.getError().contains("录音"), "原因要交代录音本身还在：" + out.getError());
-        verify(meetingRepository).save(argThat(m ->
-                MeetingRecording.STATUS_FAILED.equals(m.getStatus())));
+        assertEquals(List.of(MeetingRecording.STATUS_TRANSCRIBING, MeetingRecording.STATUS_FAILED),
+                savedStatuses, "先记录查询时间，再保存本地暂停状态，各一次");
     }
 
     @Test
-    @DisplayName("卡死判定不去问上游：已经判死就没必要再打一次听悟")
-    void stuckMeetingSkipsUpstreamPoll() throws Exception {
-        MeetingRecording stuck = transcribing(Duration.ofMinutes(10).toMillis(), Duration.ofHours(2));
-        service().refreshIfNeeded(stuck);
-        verify(tingwu, never()).getTask(any(), anyString());
+    @DisplayName("久未打开面板先查原任务：已经完成的结果不得被本地超时覆盖")
+    void completedCloudTaskWinsOverLocalDeadline() throws Exception {
+        MeetingRecording old = transcribing(Duration.ofMinutes(10).toMillis(), Duration.ofHours(4));
+        when(tingwu.getTask(any(), eq("task-1"))).thenReturn(new TingwuClient.TaskInfo(
+                "COMPLETED", null, "http://r/trans", null, null, null));
+        assertEquals(MeetingRecording.STATUS_EMPTY, service().refreshIfNeeded(old).getStatus());
+        verify(tingwu).getTask(any(), eq("task-1"));
+    }
+
+    @Test
+    @DisplayName("本地超时后点重试只查原任务，保留taskId且不重复付费提交")
+    void retryAfterLocalDeadlineQueriesExistingTask() throws Exception {
+        MeetingRecording old = transcribing(Duration.ofMinutes(10).toMillis(), Duration.ofHours(4));
+        MeetingTranscriptionService svc = service();
+        assertEquals(MeetingRecording.STATUS_FAILED, svc.refreshIfNeeded(old).getStatus());
+        assertEquals("task-1", old.getTingwuTaskId());
+        assertEquals(MeetingRecording.STATUS_TRANSCRIBING, svc.startTranscription(7L).getStatus());
+        verify(tingwu, times(2)).getTask(any(), eq("task-1"));
+        verify(tingwu, never()).submitTask(any(), anyString());
+    }
+
+    @Test
+    @DisplayName("升级前本地超时的旧记录重试仍查询原任务")
+    void legacyTimeoutRetryDoesNotSubmitAgain() throws Exception {
+        MeetingRecording old = transcribing(Duration.ofMinutes(10).toMillis(), Duration.ofHours(4));
+        old.setStatus(MeetingRecording.STATUS_FAILED);
+        old.setError("转写超时：已超过 30 分钟仍未返回结果，判定为卡死。原始录音完好，可重试转写。");
+        assertEquals(MeetingRecording.STATUS_TRANSCRIBING, service().startTranscription(7L).getStatus());
+        verify(tingwu).getTask(any(), eq("task-1"));
+        verify(tingwu, never()).submitTask(any(), anyString());
     }
 
     // ==================== ③ 未超时的不动 ====================
@@ -192,8 +218,9 @@ class MeetingTranscriptionTimeoutTest {
     void legacyRowFailsAfterOneThreshold() {
         MeetingRecording legacy = transcribing(Duration.ofMinutes(10).toMillis(), null);
         service().refreshIfNeeded(legacy);
-        // 补盖的时间戳往前推 31 分钟，模拟「补盖后又过了一个阈值」
-        legacy.setTranscribingStartedAt(legacy.getTranscribingStartedAt().minusMinutes(31));
+        // 模拟完整三小时窗口过去，同时推进轮询时钟，不能仍停在十秒节流窗口内。
+        legacy.setTranscribingStartedAt(legacy.getTranscribingStartedAt().minusHours(3).minusMinutes(1));
+        legacy.setLastPolledAt(LocalDateTime.now().minusSeconds(11));
         assertEquals(MeetingRecording.STATUS_FAILED, service().refreshIfNeeded(legacy).getStatus());
     }
 

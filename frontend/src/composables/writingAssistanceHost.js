@@ -66,10 +66,10 @@ export function createWritingAssistanceHost({ projectId, fileId, userId, execute
       for (const p of result.paragraphs) {
         if (typeof p.text !== 'string') return
         const size = p.text.length + (paragraphs.length ? 1 : 0)
-        if (paragraphs.length >= 1000 || chars + size > 200000) { stop = true; break }
+        if (paragraphs.length >= 10000 || chars + size > 200000) { stop = true; break }
         paragraphs.push(p.text); chars += size
       }
-      if (stop || paragraphs.length >= 1000 || !result.truncated) break
+      if (stop || paragraphs.length >= 10000 || !result.truncated) break
       if (!Number.isInteger(result.nextStartParagraph) || result.nextStartParagraph <= start) return
       start = result.nextStartParagraph
     }

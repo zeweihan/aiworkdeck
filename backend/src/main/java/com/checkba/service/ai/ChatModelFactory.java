@@ -214,13 +214,46 @@ public class ChatModelFactory {
      * 辅助模型如果被静默换成贵模型，账单要到月底才看得出来。
      */
     public ChatLanguageModel getAuxChatModel() {
+        return getChatModel(validatedAuxModelId());
+    }
+
+    private String validatedAuxModelId() {
         String auxModel = auxModelResolver.auxModelId();
         if (!AllowedModels.isAllowed(auxModel)) {
             throw new com.checkba.exception.FeatureNotConfiguredException("ai-aux-model",
                     "辅助模型「" + auxModel + "」不在可用模型清单内，"
                             + "到设置页的 AI 供应商里重新选一个辅助模型即可");
         }
-        return getChatModel(auxModel);
+        return auxModel;
+    }
+
+    /** Request-scoped deadline for explicit inline review; never cache or automatically retry it. */
+    public ChatLanguageModel getAuxChatModel(java.time.Duration timeout) {
+        if (timeout == null || timeout.isZero() || timeout.isNegative()) {
+            throw new IllegalArgumentException("Auxiliary request deadline expired");
+        }
+        long started = System.nanoTime();
+        ResolvedTarget target = resolveTarget(validatedAuxModelId(), true);
+        recordModelUse(target.channel().name(), target.modelId(), false);
+        if (target.channel() == AiModelProperties.Provider.OLLAMA) {
+            return OllamaChatModel.builder().baseUrl(resolveOllamaBaseUrl()).modelName(target.modelId())
+                    .temperature(aiModelProperties.getOllama().getTemperature())
+                    .timeout(remainingTimeout(timeout, started)).maxRetries(0).build();
+        }
+        boolean platform = target.channel() == AiModelProperties.Provider.AWD_CLOUD;
+        String key = platform ? platformApiKey() : resolveOpenRouterApiKey();
+        String baseUrl = platform ? aiModelProperties.getOpenRouter().getBaseUrl() : resolveOpenRouterBaseUrl();
+        return OpenAiChatModel.builder().apiKey(key).baseUrl(baseUrl).modelName(target.modelId())
+                .timeout(remainingTimeout(timeout, started)).maxRetries(0)
+                .logRequests(false).logResponses(false).build();
+    }
+
+    private static java.time.Duration remainingTimeout(java.time.Duration budget, long started) {
+        java.time.Duration remaining = budget.minusNanos(System.nanoTime() - started);
+        if (remaining.isZero() || remaining.isNegative()) {
+            throw new IllegalStateException("Auxiliary request deadline expired");
+        }
+        return remaining;
     }
 
     /**
