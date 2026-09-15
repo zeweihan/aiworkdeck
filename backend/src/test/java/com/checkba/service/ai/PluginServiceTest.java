@@ -73,6 +73,25 @@ class PluginServiceTest {
             }
             """;
 
+    @Test
+    void retiredPluginNeverLoadsEvenOfflineAndLeavesFilesIntact() throws IOException {
+        writeManifest("hr-template-pack", """
+            {"id":"hr-template-pack","name":"HR 用工模板包","version":"2.0.0",
+             "skills":["drafting"],"backendJars":["retired.jar"]}
+            """);
+        Files.createDirectories(pluginsDir.resolve("hr-template-pack/drafting"));
+        writeManifest("hello-plugin", FULL_MANIFEST);
+        service.init();
+        assertFalse(service.isEnabled("hr-template-pack"));
+        assertEquals(List.of("hello-plugin"), service.getPlugins().stream().map(PluginService.PluginMetadata::getId).toList());
+        assertTrue(service.getPluginSkillDirs().isEmpty());
+        assertThrows(IllegalArgumentException.class, () -> service.setEnabled("hr-template-pack", true));
+        service.applyRevocations(Map.of());
+        service.rescan();
+        assertFalse(service.isEnabled("hr-template-pack"));
+        assertTrue(Files.exists(pluginsDir.resolve("hr-template-pack/manifest.json")));
+    }
+
     // ==== manifest 解析 ====
 
     @Test
