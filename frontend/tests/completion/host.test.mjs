@@ -297,3 +297,14 @@ test('typing during first document scan retries once idle; successful seeds do n
   assert.equal(matchCompletionItems('青岛末页', f.items())[0]?.text, tail)
   assert.ok(f.learned.some(x => x.entries.some(e => e.text === tail)))
 })
+
+test('settings request opens the host settings tab without touching any lookup API', async () => {
+  const opened = []
+  const f = fixture()
+  const host = createWritingAssistanceHost({ projectId: 11, fileId: 22, userId: 33, writable: true,
+    send: () => {}, api: f.api, storage: { get: () => ({}), set: () => {} },
+    execute: async () => ({ success: true }), openSettings: (opts) => opened.push(opts) })
+  await host.handle({ type: 'writing-request', session: host.session, id: 1, action: 'settings', data: { nav: 'account' } })
+  assert.deepEqual(opened, [{ nav: 'account' }])
+  assert.equal(f.calls.some((c) => ['lookup', 'detail'].includes(c.name)), false)
+})

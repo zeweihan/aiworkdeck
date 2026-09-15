@@ -3,8 +3,8 @@
 import { extractCompletionEntries, matchCompletionItems } from '../utils/completionLexicon.js'
 
 const LABELS = {
-  zh: { title: '写作辅助', close: '关闭', local: '仅本地补全 · Tab 接受 · Esc 关闭', empty: '暂无本地候选，常用内容会随写作积累。', enabled: '自动补全', learning: '学习我输入的常用内容', hints: '相关资料提示', manage: '已学词库', project: '本项目', user: '我的词库', remove: '删除', clear: '清空此范围的已学记录', confirm: '再次点击确认清空', loading: '正在读取…', stale: '光标或正文已变化，请重新选择后操作。', detail: '查看已有资料', insert: '插入以上内容', lookup: '在线查询（可能产生费用）', company: '查询机构工商信息', law: '查询法规与条款', case: '查询案例与案号', noDetail: '暂无可插入的资料。可选中文字后右键查询。', source: '来源', date: '查询时间', error: '操作未完成，请稍后重试。', saved: '已插入，可用撤销恢复。', current: '当前文档', refresh: '刷新本地词库', COMPANY: '机构', PERSON: '人名', LAW: '法规', ARTICLE: '条款', CASE: '案例', WORD: '词语', PHRASE: '表述' },
-  en: { title: 'Writing assistance', close: 'Close', local: 'Local suggestions · Tab accept · Esc dismiss', empty: 'No local suggestions yet. Vocabulary grows as you write.', enabled: 'Automatic suggestions', learning: 'Learn from my typing', hints: 'Related information', manage: 'Learned vocabulary', project: 'This project', user: 'My vocabulary', remove: 'Delete', clear: 'Clear learned entries in this scope', confirm: 'Click again to confirm', loading: 'Loading…', stale: 'The cursor or document changed. Select the text again.', detail: 'View saved information', insert: 'Insert the content above', lookup: 'Online lookup (charges may apply)', company: 'Look up company information', law: 'Look up a law or article', case: 'Look up a case', noDetail: 'No insertable information. Select text and right-click to look it up.', source: 'Source', date: 'Retrieved', error: 'The operation failed. Please try again.', saved: 'Inserted. Use Undo to revert.', current: 'Current document', refresh: 'Refresh local vocabulary', COMPANY: 'Company', PERSON: 'Person', LAW: 'Law', ARTICLE: 'Article', CASE: 'Case', WORD: 'Word', PHRASE: 'Phrase' },
+  zh: { title: '写作辅助', close: '关闭', local: '仅本地补全 · Tab 接受 · Esc 关闭', empty: '暂无本地候选，常用内容会随写作积累。', enabled: '自动补全', learning: '学习我输入的常用内容', hints: '相关资料提示', manage: '已学词库', project: '本项目', user: '我的词库', remove: '删除', clear: '清空此范围的已学记录', confirm: '再次点击确认清空', loading: '正在读取…', stale: '光标或正文已变化，请重新选择后操作。', detail: '查看已有资料', insert: '插入以上内容', lookup: '在线查询（可能产生费用）', company: '查询机构工商信息', law: '查询法规与条款', case: '查询案例与案号', noDetail: '暂无可插入的资料。可选中文字后右键查询。', source: '来源', date: '查询时间', error: '操作未完成，请稍后重试。', configure: '去设置配置', recharge: '去充值', saved: '已插入，可用撤销恢复。', current: '当前文档', refresh: '刷新本地词库', COMPANY: '机构', PERSON: '人名', LAW: '法规', ARTICLE: '条款', CASE: '案例', WORD: '词语', PHRASE: '表述' },
+  en: { title: 'Writing assistance', close: 'Close', local: 'Local suggestions · Tab accept · Esc dismiss', empty: 'No local suggestions yet. Vocabulary grows as you write.', enabled: 'Automatic suggestions', learning: 'Learn from my typing', hints: 'Related information', manage: 'Learned vocabulary', project: 'This project', user: 'My vocabulary', remove: 'Delete', clear: 'Clear learned entries in this scope', confirm: 'Click again to confirm', loading: 'Loading…', stale: 'The cursor or document changed. Select the text again.', detail: 'View saved information', insert: 'Insert the content above', lookup: 'Online lookup (charges may apply)', company: 'Look up company information', law: 'Look up a law or article', case: 'Look up a case', noDetail: 'No insertable information. Select text and right-click to look it up.', source: 'Source', date: 'Retrieved', error: 'The operation failed. Please try again.', configure: 'Open settings', recharge: 'Add credits', saved: 'Inserted. Use Undo to revert.', current: 'Current document', refresh: 'Refresh local vocabulary', COMPANY: 'Company', PERSON: 'Person', LAW: 'Law', ARTICLE: 'Article', CASE: 'Case', WORD: 'Word', PHRASE: 'Phrase' },
 }
 let instanceSeq = 0
 // Longest selection the right-click lookup menu accepts.
@@ -163,6 +163,16 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
     else note(t.noDetail)
     position()
   }
+  /**
+   * Configuration-class lookup failures (dev-board#458, dev-board#688 D3). The next step is
+   * decided by the structured reason code only — never by matching the bilingual note. A
+   * server-side credential (NO_CREDENTIAL) has no route the user can take, so it gets no
+   * button: pointing at a page that does not exist is worse than pointing at nothing.
+   */
+  function hintAction(hint) {
+    if (hint === 'NOT_CONNECTED' || hint === 'UNAUTHORIZED') button(t.configure, () => rpc('settings', { nav: 'account' }))
+    else if (hint === 'NO_CREDITS') button(t.recharge, () => rpc('settings', { nav: 'account' }))
+  }
   async function detailRequest(action, data, token) {
     clearTimeout(timer); const gen = ++generation
     show('detail'); note(t.loading)
@@ -173,6 +183,7 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
       if (action === 'lookup' && result.success !== false) rpc('refresh').catch(() => {})
       show('detail', result.title || data.text || t.title)
       if (result.note) note(result.note)
+      hintAction(result.hint)
       const variants = result.variants || []
       if (!variants.length) { note(t.noDetail); return }
       const body = doc.createElement('div'); panel.appendChild(body)

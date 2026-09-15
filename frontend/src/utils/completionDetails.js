@@ -137,7 +137,11 @@ export function completionDetails(entityView) {
   const source = entity.retrievalSource || (detail && typeof detail.source === 'string' ? detail.source : '')
   const date = entity.fetchedAt == null ? '' : String(entity.fetchedAt)
   const note = entity.retrievalNote == null ? '' : String(entity.retrievalNote)
-  const base = { title: entity.name == null ? '' : String(entity.name), source, date, note, variants: [] }
+  // Configuration-class failures carry a structured reason code (dev-board#458). The card
+  // decides its next step from this code only: the note is bilingual, so matching Chinese
+  // substrings would break the moment the English build ships.
+  const hint = entity.retrievalHint == null ? '' : String(entity.retrievalHint)
+  const base = { title: entity.name == null ? '' : String(entity.name), source, date, note, ...(hint ? { hint } : {}), variants: [] }
   if (!detail) return base
 
   const failed = ERROR_STATUSES.has(String(entity.retrievalStatus || '').toUpperCase())

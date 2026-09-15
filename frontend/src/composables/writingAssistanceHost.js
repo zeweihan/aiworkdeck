@@ -7,6 +7,7 @@ const preferenceListeners = new Map()
 
 /** Host-scoped vocabulary and explicit lookup. Dependencies stay injectable for isolation tests. */
 export function createWritingAssistanceHost({ projectId, fileId, userId, execute, send, api, storage, writable, language,
+  openSettings = null,
   timers = { set: (fn, ms) => setTimeout(fn, ms), clear: id => clearTimeout(id) } }) {
   const session = `${projectId}:${fileId}:${Date.now()}:${Math.random().toString(36).slice(2)}`
   const key = `awd_writing_preferences_${userId}`
@@ -111,6 +112,11 @@ export function createWritingAssistanceHost({ projectId, fileId, userId, execute
         const result = await api.clear(projectId, data.scope); await refresh(); return result
       }
       case 'detail': return completionDetails(await (data.entityId ? api.detail(projectId, data.entityId) : api.learnedDetail(projectId, data.id)))
+      case 'settings':
+        // Configuration-class lookup failures are a standing state; the card offers the
+        // settings route instead of a retry. The guest cannot navigate, so the host does.
+        if (openSettings) openSettings({ nav: 'account' })
+        return {}
       case 'lookup':
         if (!writable) throw new Error('Read-only document')
         // This branch is only reached by the selected-text context menu's explicit action.
