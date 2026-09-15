@@ -224,7 +224,7 @@
     <!-- 1. Header Actions -->
     <view class="chat-header">
        <view class="header-left">
-          <text class="project-name-display">{{ projectName }}</text>
+          <text class="project-name-display" :title="projectName">{{ projectName }}</text>
        </view>
        <view class="header-actions">
           <view class="memory-header-btn" @tap="showMemoryBrowser = true">{{ $t('chat.memoryButton') }}</view>
