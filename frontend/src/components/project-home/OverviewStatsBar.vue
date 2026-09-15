@@ -159,4 +159,12 @@ export default {
     font-size: 14px;
   }
 }
+.overview-stats-bar.is-sidebar { border: 0; border-top: 1px solid var(--awd-panel-border); border-radius: 0; padding: var(--awd-panel-gap) var(--awd-panel-pad-x); }
+.is-sidebar .stats-tiles { display: grid; grid-template-columns: 1fr; gap: 0; }
+.is-sidebar .stat-tile { min-width: 0; padding: 6px 0; background: transparent; border: 0; border-radius: 0; }
+.is-sidebar .stat-value { font-size: var(--awd-panel-fs); line-height: 18px; color: var(--awd-panel-text); }
+.is-sidebar .stat-caption { font-size: var(--awd-panel-fs-meta); line-height: 16px; margin-top: 0; }
+@container home-pane (min-width: 360px) {
+  .is-sidebar .stats-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
+}
 </style>

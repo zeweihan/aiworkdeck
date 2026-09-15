@@ -726,8 +726,10 @@ export default {
 }
 
 .plugin-error {
-  padding: 40px;
+  padding: var(--awd-panel-gap-lg) var(--awd-panel-pad-x);
   text-align: center;
-  color: var(--awd-text-3);
+  color: var(--awd-panel-text-2);
+  font-size: var(--awd-panel-fs);
+  line-height: 1.5;
 }
 </style>

@@ -122,3 +122,46 @@ test('download failure keeps the encrypted kit available and still opens the gen
   assert.equal(state.error, 'panels.deDownloadRetry')
   assert.equal(events[0][0], 'open-file'); assert.equal(events[0][1].id, 4)
 })
+
+// Render the actual template: collapsed settings must retain values, and creation
+// must stay behind the existing preview/password gates.
+const VueRuntime = await import('vue')
+const SsrRuntime = await import('vue/server-renderer')
+const { parse, compileTemplate } = await import('vue/compiler-sfc')
+const { descriptor } = parse(sfc)
+const compiled = compileTemplate({ source: descriptor.template.content, filename: 'DesensitizePane.vue', id: 'desensitize-pane', ssr: true, ssrCssVars: [], compilerOptions: { isCustomElement: tag => ['view', 'text', 'scroll-view'].includes(tag) } })
+assert.equal(compiled.errors.length, 0)
+const renderBody = compiled.code.replace(/^import \{([^}]+)\} from "(vue(?:\/server-renderer)?)"$/gm, (_, names, source) => `const {${names.replace(/\bas\b/g, ':')}} = ${source === 'vue' ? '__vue' : '__ssr'}`)
+  .replace('export function ssrRender', 'function ssrRender')
+const ssrRender = new Function('__vue', '__ssr', renderBody + '\nreturn ssrRender')(VueRuntime, SsrRuntime)
+async function renderPane(overrides = {}) {
+  const { component } = pane()
+  const app = VueRuntime.createSSRApp({ ...component, ssrRender, data: () => ({ ...component.data(), ...overrides }) }, { projectId: 1, prepareFile: async () => false })
+  app.config.globalProperties.$t = key => key
+  return SsrRuntime.renderToString(app)
+}
+
+test('initial sidebar exposes preview with collapsed settings and no premature password form', async () => {
+  const html = await renderPane({ fileId: 1, selectedStrategies: ['PHONE'] })
+  assert.match(html, /aria-expanded="false"/)
+  assert.match(html, /<view(?=[^>]*class="settings-content")(?=[^>]*style="display:none)[^>]*>/)
+  assert.match(html, /panels.dePreview/)
+  assert.doesNotMatch(html, /password-input/)
+  assert.doesNotMatch(html, />panels.deGenerate</)
+})
+
+test('review reveals password and disables generation until it is long enough', async () => {
+  const html = await renderPane({ fileId: 1, preview: { text: 'review this' } })
+  assert.match(html, /password-input/)
+  assert.match(html, /<button[^>]*disabled[^>]*>panels.deGenerate<\/button>/)
+  const ready = await renderPane({ fileId: 1, preview: { text: 'review this' }, password: 'long-enough-password' })
+  assert.match(ready, /<button(?![^>]*disabled)[^>]*>panels.deGenerate<\/button>/)
+})
+
+test('settings expansion retains selected rules and custom terms; processing exposes status', async () => {
+  const html = await renderPane({ settingsOpen: true, processing: true, customTerms: 'retained term', selectedStrategies: ['PHONE'] })
+  assert.match(html, /aria-expanded="true"/)
+  assert.match(html, /retained term/)
+  assert.match(html, /role="status"/)
+  assert.doesNotMatch(html, /<view(?=[^>]*class="settings-content")(?=[^>]*style="display:none)[^>]*>/)
+})

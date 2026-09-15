@@ -23,6 +23,7 @@
     <view class="home-column">
       <ProfileHeader
         ref="profileHeader"
+        :class="{ 'is-sidebar': compact }"
         :project-id="projectId"
         :project-name="projectName"
         :fields="profileFields"
@@ -34,7 +35,7 @@
         <text class="home-template-line-text">{{ templateLine }}</text>
       </view>
 
-      <OverviewStatsBar :stats="stats" :loading="statsLoading" />
+      <OverviewStatsBar :class="{ 'is-sidebar': compact }" :stats="stats" :loading="statsLoading" />
 
       <view class="home-section">
         <text class="home-section-title">{{ $t('projects.activitySectionTitle') }}</text>

@@ -109,6 +109,11 @@ export default {
   smFileNamed: '文件 #{id}',
 
   // DesensitizePane.vue
+  deStepSelect: '1 选择文件',
+  deStepReview: '2 核查预览',
+  deStepCreate: '3 生成副本',
+  deSelectedStrategies: '已选 {count} 项',
+  deReviewNotice: '请核查预览及下方提示，确认后生成副本。',
   deWorkflow: '选择原文件 → 预览并生成副本 → 编辑副本 → 本地复敏。切换文档标签不会更换左侧功能区。',
   deResultEditing: '已在编辑区打开脱敏副本，可直接修改。左侧所选文件不会随文档标签自动切换。',
   dePdfResult: '已打开脱敏 PDF 供核查；该结果是栅格化副本，不支持直接编辑或复敏。',
