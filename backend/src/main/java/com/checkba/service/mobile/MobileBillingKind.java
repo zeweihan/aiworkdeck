@@ -46,7 +46,14 @@ public enum MobileBillingKind {
     /** 官网明确拒绝的业务错误（非 404/409 的 4xx），或本地判定的拒绝（如统一账户已绑给别人）。 */
     REJECTED,
 
-    /** App 审核专用账号（{@link com.checkba.config.ReviewAccountGate}）：不桥接、不充值。 */
+    /**
+     * App 审核专用账号（{@link com.checkba.config.ReviewAccountGate}）：不桥接、不充值。
+     *
+     * <p><b>服务端自 dev-board#661（2026-09-15）起不再产生这个 kind</b>——审核账号改走普通新用户
+     * 路径，见 {@link MobileBillingService} 类注释「审核演示账号不再被拒」。枚举值与
+     * {@code openapi/mobile-v1.yaml} 里的枚举<b>保留</b>：四端（iOS / 小程序 / 安卓 / 鸿蒙）已按这份
+     * 契约对齐，删掉会连锁改四个端，而多留一个永不出现的分支的代价只是几行死代码。
+     */
     REVIEW_ACCOUNT,
 
     /**

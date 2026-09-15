@@ -3,7 +3,6 @@
 
 package com.checkba.service.mobile;
 
-import com.checkba.config.ReviewAccountGate;
 import com.checkba.model.entity.AccountBinding;
 import com.checkba.model.entity.User;
 import com.checkba.repository.AccountBindingRepository;
@@ -41,10 +40,19 @@ import java.util.regex.Pattern;
  *       已验证的</b>手机号/邮箱向官网 resolve 换来的。<b>绝不接受请求体传入</b>
  *       （做法同 {@link MobileTransferService#requireAccountId}）。</li>
  *   <li>User 既无手机号也无已验证邮箱 → 报错，<b>不回落任何机器级账户</b>。</li>
- *   <li>App 审核专用账号（{@link ReviewAccountGate}）不允许桥接、不允许充值——否则会给
- *       Apple/微信的审核员在官网建出一个真账户。</li>
  *   <li>解析出的 accountId 若已绑给别的 userId，<b>拒绝，不改绑</b>。</li>
  * </ul>
+ *
+ * <p><b>审核演示账号不再被拒</b>（dev-board#661，2026-09-15 App Review 2.1(b)）：这里原先有一条
+ * {@code requireNotReviewAccount}——审核身份（{@code auth.review-account.identity}）请求余额或充值
+ * 一律抛 {@link MobileBillingKind#REVIEW_ACCOUNT}，客户端按契约把余额行与充值入口<b>整行隐藏</b>。
+ * iOS 1.1.0 因此被 App Review 以 2.1(b) 拒审：审核员用演示账号进来，看不到任何内购入口，
+ * 无法验证 App 声明的内购功能。当初拒绝是因为审核身份配的是老板本人的真邮箱，放它 resolve
+ * 等于用一把写在审核备注里的公开固定码打开一个真钱包。<b>现在风险改由配置承接</b>：审核身份必须是
+ * 一个无真实钱包的专用邮箱（app@aiworkdeck.com），于是审核账号可以按普通新用户走完整路径
+ * （读余额 {@code create=false} → NOT_CONNECTED；点充值 {@code create=true} → resolve 开户），
+ * 审核员看得见入口也走得通流程。{@link MobileBillingKind#REVIEW_ACCOUNT} 枚举与 openapi 里的枚举值
+ * <b>保留</b>（四端已对齐，删它会连锁），只是服务端不再产生它。
  *
  * <p><b>读余额永不建号</b>（复审 C1）：{@code resolve} 的 {@code create} 位只在
  * {@link #createRecharge}（用户显式发起充值）这一条路上为 true，{@link #balance} 与
@@ -121,7 +129,6 @@ public class MobileBillingService {
     private final MobileBillingClient billing;
     private final AccountBindingRepository accountBindingRepository;
     private final UserRepository userRepository;
-    private final ReviewAccountGate reviewAccount;
 
     /** 充值下单/查单的总开关，默认关，见 {@link #requireRechargeEnabled()}。 */
     private final boolean rechargeEnabled;
@@ -137,12 +144,10 @@ public class MobileBillingService {
     public MobileBillingService(MobileBillingClient billing,
                                 AccountBindingRepository accountBindingRepository,
                                 UserRepository userRepository,
-                                ReviewAccountGate reviewAccount,
                                 @Value("${mobile.billing.recharge-enabled:false}") boolean rechargeEnabled) {
         this.billing = billing;
         this.accountBindingRepository = accountBindingRepository;
         this.userRepository = userRepository;
-        this.reviewAccount = reviewAccount;
         this.rechargeEnabled = rechargeEnabled;
     }
 
@@ -317,15 +322,12 @@ public class MobileBillingService {
      * 取该用户的官网 accountId：已绑定就用绑定，未绑定就拿<b>服务端 User 实体上已验证的</b>
      * 手机号/邮箱向官网 resolve 换一个并写入 {@code account_binding}。
      *
-     * <p>审核账号先于一切被挡掉：即便它不知怎么已经有了绑定，也不许走充值。
-     *
      * @param create 是否允许官网按该身份建号，见 {@link MobileBillingClient#resolveAccountId}
      */
     String requireAccountId(Long userId, boolean create) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException(LangText.of(
                         "账号不存在", "Account not found")));
-        requireNotReviewAccount(user);
 
         Optional<AccountBinding> existing = accountBindingRepository.findByUserId(userId);
         if (existing.isPresent()) {
@@ -406,22 +408,6 @@ public class MobileBillingService {
             throw new MobileBillingFailureException(MobileBillingKind.DISABLED, LangText.of(
                     "此服务器未开通统一账户充值",
                     "Unified account top-up is not enabled on this server"));
-        }
-    }
-
-    /**
-     * App 审核专用账号一律拒绝。
-     *
-     * <p>它是一条认证旁路上的空账号（{@link ReviewAccountGate}，固定验证码写在审核备注里给
-     * 外部人看），放它去 resolve 等于按审核员的手机号/邮箱在官网建出一个真账户，
-     * 之后那把公开的 6 位码就成了进那个真账户的钥匙。
-     */
-    private void requireNotReviewAccount(User user) {
-        if (reviewAccount.matches(user.getPhone()) || reviewAccount.matches(user.getVerifiedEmail())) {
-            log.warn("审核演示账号请求统一账户功能，已拒绝：userId={}", user.getId());
-            throw new MobileBillingFailureException(MobileBillingKind.REVIEW_ACCOUNT, LangText.of(
-                    "审核演示账号不支持余额与充值",
-                    "Balance and top-up are not available for the review demo account"));
         }
     }
 

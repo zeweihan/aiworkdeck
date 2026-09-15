@@ -29,13 +29,14 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * 手机端统一账户余额/充值服务（dev-board#425，spec §3.2）：账户桥接的四条红线
- * （只用服务端已验证身份 resolve、审核账号拒、无身份拒、绝不改绑）、幂等键必须客户端传、
+ * 手机端统一账户余额/充值服务（dev-board#425，spec §3.2）：账户桥接的三条红线
+ * （只用服务端已验证身份 resolve、无身份拒、绝不改绑）、幂等键必须客户端传、
  * 官网不可达的降级、余额缓存按 userId。
  *
  * <p>装配同 {@link MobileTransferServiceTest} 的 H2 配方；{@link MobileBillingClient}
  * 用 @MockBean 换成可控桩，不真的打网络。审核账号旁路在本上下文里<b>开着</b>
- * （auth.review-account.*），否则「审核账号被拒」这条根本走不到判据。
+ * （auth.review-account.*），钉的是 dev-board#661 之后的口径：审核账号<b>不再</b>被特殊对待，
+ * 与普通用户走同一条路（旁路关着的话这条断言就成了空跑）。
  *
  * <p><b>本类把充值总开关打开</b>（{@code mobile.billing.recharge-enabled=true}，复审 N1），
  * 测的是「开关开着时的行为」——顺带钉住这个配置键真的能把功能打开（键名写错的话下面所有
@@ -138,22 +139,47 @@ class MobileBillingServiceTest {
         verify(billing, never()).resolveAccountId(any(), any(), anyBoolean());
     }
 
+    /**
+     * dev-board#661（2026-09-15 App Review 2.1(b)）：审核演示账号原先在 balance/createRecharge
+     * 两条路上被 {@code requireNotReviewAccount} 一律拒掉，客户端按契约把余额行与充值入口整行隐藏，
+     * 审核员因此「找不到内购」。现在它没有任何特殊分支——这条用例钉的就是「和普通用户完全一样」：
+     * 读余额按已验证邮箱 {@code create=false} resolve，点充值 {@code create=true} 开户并落绑定。
+     * 风险改由配置承接（审核身份必须是无真实钱包的专用邮箱），不再由这一层拦。
+     */
     @Test
-    @DisplayName("审核账号（手机号形态与邮箱形态）：桥接与充值一律拒，绝不去官网建号")
-    void reviewAccountIsRefusedAndNeverReachesUpstream() {
+    @DisplayName("审核账号：不再有特殊分支，与普通用户走同一条桥接/充值路径")
+    void reviewAccountGoesThroughTheOrdinaryPath() {
         User byPhone = userService.findOrCreateByPhone("13800138000").user();
         User byMail = userService.findOrCreateReviewAccount("appreview@example.com");
 
-        for (User u : new User[]{byPhone, byMail}) {
-            assertTrue(assertThrows(IllegalArgumentException.class,
-                    () -> service.balance(u.getId())).getMessage().contains("审核演示账号"));
-            assertTrue(assertThrows(IllegalArgumentException.class,
-                    () -> service.createRecharge(u.getId(), 5000L, "idem-review-01", null, null, null))
-                    .getMessage()
-                    .contains("审核演示账号"));
-            assertTrue(accountBindingRepository.findByUserId(u.getId()).isEmpty());
-        }
-        verifyNoInteractions(billing);
+        String phoneAccount = "acct-review-phone-" + byPhone.getId();
+        when(billing.resolveAccountId(eq(byPhone.getPhone()), isNull(), eq(false))).thenReturn(phoneAccount);
+        when(billing.balance(phoneAccount)).thenReturn(new BalanceResult(0L, "CNY", null));
+        assertEquals(0L, service.balance(byPhone.getId()).balanceCents());
+        assertEquals(phoneAccount,
+                accountBindingRepository.findByUserId(byPhone.getId()).orElseThrow().getExternalAccountId());
+
+        // 邮箱形态的审核账号：读余额查无账户 → 和任何新用户一样是 NOT_CONNECTED，不是 REVIEW_ACCOUNT
+        when(billing.resolveAccountId(isNull(), eq("appreview@example.com"), eq(false)))
+                .thenThrow(new MobileBillingException(MobileBillingKind.NOT_FOUND, "按该身份查无账户"));
+        assertEquals(MobileBillingKind.NOT_CONNECTED,
+                assertThrows(MobileBillingFailureException.class,
+                        () -> service.balance(byMail.getId())).getKind());
+        assertTrue(accountBindingRepository.findByUserId(byMail.getId()).isEmpty());
+
+        // 点充值：create=true，按审核邮箱开户并落绑定——审核员能真的走完内购前的这一步
+        String mailAccount = "acct-review-mail-" + byMail.getId();
+        when(billing.resolveAccountId(isNull(), eq("appreview@example.com"), eq(true))).thenReturn(mailAccount);
+        when(billing.createRecharge(mailAccount, 5000L, "idem-review-0001", "appstore", "credits.cny.50", null))
+                .thenReturn(new RechargeOrder("native", "OT-review", 5000L, null, null, null,
+                        null, null, null, "token-review"));
+
+        RechargeOrder order = service.createRecharge(byMail.getId(), 5000L, "idem-review-0001",
+                "appstore", "credits.cny.50", null);
+
+        assertEquals("OT-review", order.outTradeNo());
+        assertEquals(mailAccount,
+                accountBindingRepository.findByUserId(byMail.getId()).orElseThrow().getExternalAccountId());
     }
 
     @Test
@@ -673,13 +699,8 @@ class MobileBillingServiceTest {
     }
 
     @Test
-    @DisplayName("服务层自己判定的失败也带 kind：审核账号 / 无身份 / 已绑给别人")
+    @DisplayName("服务层自己判定的失败也带 kind：无身份 / 已绑给别人")
     void serviceLevelFailuresCarryKind() {
-        User review = userService.findOrCreateByPhone("13800138000").user();
-        assertEquals(MobileBillingKind.REVIEW_ACCOUNT,
-                assertThrows(MobileBillingFailureException.class,
-                        () -> service.balance(review.getId())).getKind());
-
         User noId = userService.registerExternal("billkind" + SEQ.incrementAndGet(), "无身份");
         assertEquals(MobileBillingKind.NOT_CONNECTED,
                 assertThrows(MobileBillingFailureException.class,
