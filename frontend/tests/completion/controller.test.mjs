@@ -339,3 +339,30 @@ test('视口底部的补全菜单翻到光标上方，不遮住正在输入的�
   await suggestions(h)
   assert.ok(Number.parseFloat(h.panel().style.top) + 180 <= 716)
 })
+
+test('工商信息预览的字段名落在第一列并有可读最小宽度，窄画布下弹层仍不溢出（D6）', async t => {
+  const h = harness(t)
+  await suggestions(h); h.key('Tab'); await tick()
+  h.button('查看已有资料').click()
+  h.respond('detail', { title: '工商资料', variants: [{ rows: [
+    ['企业名称', entries[0].text],
+    ['统一社会信用代码', '91110108MA01ABCD2X'],
+    ['法定代表人', '韩明远'],
+  ] }] }); await tick()
+  const rows = [...h.doc.querySelectorAll('.awd-wa-panel table tr')]
+  assert.deepEqual(rows.map(tr => tr.querySelector('td:first-child').textContent), ['企业名称', '统一社会信用代码', '法定代表人'])
+
+  const css = h.doc.head.querySelector('style').textContent
+  const label = css.match(/\.awd-writing-assistance td:first-child\{([^}]*)\}/)
+  assert.ok(label, '字段名列需要独立的样式规则')
+  // 最长字段名「统一社会信用代码」8 个字；表格是自动布局，列宽不够就把字段名压成逐字竖排。
+  const min = label[1].match(/min-width:(\d+(?:\.\d+)?)(em|px)/)
+  assert.ok(min, '字段名列需要 min-width')
+  const px = min[2] === 'em' ? Number(min[1]) * 12 : Number(min[1])
+  assert.ok(px >= '统一社会信用代码'.length * 12, `字段名列至少要放下 8 个 12px 汉字，实际 ${px}px`)
+  assert.match(label[1], /word-break:keep-all/, '字段名不能按字符断行')
+
+  const panel = css.match(/\.awd-writing-assistance \.awd-wa-panel\{([^}]*)\}/)[1]
+  assert.match(panel, /max-width:calc\(100vw - 24px\)/, '弹层宽度仍受画布约束')
+  assert.equal(/min-width:\d/.test(panel), false, '弹层最小宽度不能写成裸 px，窄画布下会溢出屏幕')
+})

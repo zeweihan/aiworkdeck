@@ -192,3 +192,18 @@ test('出资叙述中的短机构名和普通主语不成为人名', () => {
   const text = '股东甲公司持股60%。股东北京银行出资600万元。记载全体股东出资。股东韩明远出资600万元。'
   assert.deepEqual(byKind(extractCompletionEntries(text, { segmenter: null }), 'PERSON'), ['韩明远'])
 })
+
+test('机构名后缀被截断的尾巴不触发同字开头的词条，正常两字前缀照旧触发（D5）', () => {
+  const items = [
+    { text: '公司章程', kind: 'PHRASE', scope: 'project' },
+    { text: '《公司法》', kind: 'LAW' },
+  ]
+  // 「…有限公司」里的「公司」是机构名后缀的一部分，不是用户在敲「公司章程」。
+  assert.deepEqual(matchCompletionItems('本协议由北京京微资易科技有限公司', items), [])
+  assert.deepEqual(matchCompletionItems('乙方为向阳合伙企业', [{ text: '企业所得税', kind: 'WORD' }]), [])
+  assert.deepEqual(matchCompletionItems('委托北京当红晴天律师事务所', [{ text: '事务所公函', kind: 'PHRASE' }]), [])
+  // 前一个字与前缀合不成机构名后缀时，两字前缀仍要给候选，别把正常触发一起误伤。
+  assert.equal(matchCompletionItems('请查阅该公司', items)[0]?.text, '公司章程')
+  assert.equal(matchCompletionItems('本次修订公司章', items)[0]?.text, '公司章程')
+  assert.equal(matchCompletionItems('公司', items)[0]?.text, '公司章程')
+})
