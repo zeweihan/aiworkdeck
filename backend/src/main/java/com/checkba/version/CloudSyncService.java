@@ -658,6 +658,9 @@ public class CloudSyncService {
     /** 状态条放得下的名字个数；总人数另走 {@code remoteAheadAuthorCount}。 */
     static final int REMOTE_AHEAD_NAME_CAP = 3;
 
+    /** 作者去重时「本人」那一格的键。不用名字当键，免得同名的同事被并进来。 */
+    private static final String SELF_AUTHOR_KEY = "\u0000self";
+
     /**
      * 往状态里补 {@code remoteAheadCount} / {@code remoteAheadAuthors} /
      * {@code remoteAheadAuthorCount} / {@code remoteAheadBySelf}。
@@ -678,21 +681,31 @@ public class CloudSyncService {
             m.put("remoteAheadCount", ahead.size());
             // 案件库确实领先了、这句话非说清是谁不可——只有这条路允许为一个名字联网一次
             Map<String, String> remoteNames = remoteDisplayNames(projectId, true);
-            java.util.LinkedHashSet<String> distinct = new java.util.LinkedHashSet<>();
+            // 「我是谁」整趟循环只算一次（这一趟最多 200 版）
+            VersionAuthorResolver.SelfIdentity me = authorResolver != null && userId != null
+                    ? authorResolver.selfIdentity(projectId, userId) : null;
+            // 去重键 → 显示名。本人历史上用过几个署名都只占 SELF_AUTHOR_KEY 这一格（dev-board#647：
+            // 旧实现按 git 署名去重，同一个人的三个年代的旧署名被数成三个同事）；哨兵键与
+            // 真名分开，恰好与我同名的同事也不会被并进「本人」那一格。
+            LinkedHashMap<String, String> distinct = new LinkedHashMap<>();
+            boolean allSelf = me != null;
             for (VersionEntry e : ahead) {
-                String name = VersionAuthorResolver.preferredAuthorName(e, remoteNames);
-                if (name != null && !name.isBlank()) distinct.add(name);
+                boolean self = me != null && authorResolver.isSelf(e, me);
+                if (!self) allSelf = false;
+                String name = VersionAuthorResolver.preferredAuthorName(
+                        e, remoteNames, self ? me.displayName() : null);
+                if (name == null || name.isBlank()) continue;
+                distinct.putIfAbsent(self ? SELF_AUTHOR_KEY : name, name);
             }
             List<String> authors = new ArrayList<>();
-            for (String name : distinct) {
+            for (String name : distinct.values()) {
                 if (authors.size() >= REMOTE_AHEAD_NAME_CAP) break;
                 authors.add(name);
             }
             m.put("remoteAheadAuthors", authors);
             m.put("remoteAheadAuthorCount", distinct.size());
             // 「全部都是我」才算本人——只要掺进一版同事的，界面就该说同事的名字。
-            m.put("remoteAheadBySelf", authorResolver != null && userId != null
-                    && ahead.stream().allMatch(e -> authorResolver.isSelf(e, projectId, userId)));
+            m.put("remoteAheadBySelf", allSelf);
         } catch (Exception e) {
             log.warn("统计远端新稿的作者失败（状态照常给）: project={}", projectId, e);
         }

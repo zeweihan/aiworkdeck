@@ -179,6 +179,11 @@ class HistoryEndpointTest {
      * 只有邮箱能把人区分开，这正是最容易判错的场景。
      */
     private VersionAuthorResolver realAuthorResolver() {
+        return realAuthorResolver("local", com.checkba.service.LocalIdentityService.LOCAL_DISPLAY_NAME);
+    }
+
+    /** 同上，但本机 username / 展示名自己给——「我历史上用过哪些署名」要靠它造。 */
+    private VersionAuthorResolver realAuthorResolver(String username, String displayName) {
         com.checkba.model.entity.CloudConnection conn = new com.checkba.model.entity.CloudConnection();
         conn.setId(3L);
         conn.setServerUrl("https://case.aiworkdeck.com");
@@ -199,8 +204,8 @@ class HistoryEndpointTest {
 
         com.checkba.model.entity.User me = new com.checkba.model.entity.User();
         me.setId(ME);
-        me.setUsername("local");
-        me.setDisplayName(com.checkba.service.LocalIdentityService.LOCAL_DISPLAY_NAME);
+        me.setUsername(username);
+        me.setDisplayName(displayName);
         com.checkba.repository.UserRepository users = mock(com.checkba.repository.UserRepository.class);
         when(users.findById(ME)).thenReturn(Optional.of(me));
 
@@ -425,6 +430,27 @@ class HistoryEndpointTest {
                 "本机域的邮箱在案件库里没有对应账户，保持 git 署名");
         // 邮箱是账户级身份，不能被展示名的替换动过
         assertEquals(MY_EMAIL, row(data, mine).get("authorEmail"));
+    }
+
+    /**
+     * dev-board#647：本人历史上用过好几种署名（用户名时代 / 展示名改过 / 旧公式邮箱），
+     * 旧的判定只比当前展示名，于是自己九月十日交的那版在历史里既不是「你」、
+     * 名字还显示成一串用户名。放宽只作用在旧域邮箱这一侧，且只动出参。
+     */
+    @Test
+    @DisplayName("我自己的旧署名：self=true，且显示成我现在的名字，不是当年那串用户名")
+    void myOldSignatureIsStillMeAndShowsMyCurrentName() throws Exception {
+        ReflectionTestUtils.setField(controller, "authorResolver",
+                realAuthorResolver("hanzewei", "韩泽伟"));
+        String old = commitAs("合同.txt", "我改的", "九月十日的工作",
+                "hanzewei", "hanzewei@aiworkdeck.local");
+
+        Map<String, Object> data = history();
+
+        assertEquals(Boolean.TRUE, row(data, old).get("self"), "那是我自己交的稿");
+        assertEquals("韩泽伟", row(data, old).get("authorName"), "界面上要说我现在的名字");
+        assertEquals("hanzewei@aiworkdeck.local", row(data, old).get("authorEmail"),
+                "历史永不重写：邮箱原样回，只有展示名在出参侧翻了一道");
     }
 
     @Test

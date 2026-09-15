@@ -184,6 +184,19 @@ public class AccountService {
     }
 
     /**
+     * 已连接账户在官网侧的展示名；未连接、或官网还没给过名字时返回 null。
+     *
+     * <p><b>纯本地读，绝不出网</b>，口径同 {@link #currentAccountIdOrNull()}。调用方是
+     * {@code VersionAuthorResolver.isSelf}——存量历史里的提交署名可能正是这个名字
+     * （本机展示名与官网展示名不一定一样），认不出来就会把自己当成同事。
+     */
+    public synchronized String currentDisplayNameOrNull() {
+        State state = loadState();
+        if (state.key == null || state.key.isBlank()) return null;
+        return state.displayName == null || state.displayName.isBlank() ? null : state.displayName;
+    }
+
+    /**
      * 当前连接账户的指纹（Key 的 SHA-256 前 12 位十六进制）；未连接返回 null。
      *
      * <p>给需要回答「现在连的还是不是刚才那个账户」的地方用——机器级的缓存（平台 AI 密钥、
