@@ -1,0 +1,26 @@
+serving /Users/zewei/Documents/2024-2044/5-Tech/1-2 checkba_cloud/.worktrees/sidebar-current/frontend/dist/zetaoffice (engine: /Applications/AI WorkDeck.app/Contents/Resources/frontend/dist/zetaoffice/lowa) on http://127.0.0.1:8918
+booting engine (~90s)...
+
+---- 第 1/1 轮 ----
+  load_document: 6.44s {"success":true,"kind":"writer"}
+  get_document_text: 1st 7.07s, 2nd 35ms total=1820 returned=96
+  get_document_text {start:800}: 194ms returned=50
+  find_text_locations: 3.69s matches=50 truncated=true
+  find_replace: 2.75s {"success":true,"replaced":300,"total":300,"recordChanges":true}
+  apply_house_style: 35.94s {"success":true,"tables":30,"truncated":false,"paragraphAfterEdit":"经核查，标的公司销售，建议清晰说明社会保险合规风险有效期内查封经营范围采购协议，规定公司章程有效期内供应商公司章程公司章程关联交易公允，同业竞争。合同主要商标承诺董事登记证书关联交易公司章程符合根据公司章程重大建议不存在采购租赁，诉讼相关完","selectedText":"标的"}
+  export_document: 9.20s size=6894482
+  导出后 30s modified 次数: 0
+
+| 项 | 中位数 | 各轮 | 硬阈 | 结果 |
+|---|---|---|---|---|
+| load_document 300 页夹具 | 6.44s | 6.44s | < 15.00s | PASS |
+| get_document_text 第 2 次（同参数） | 35ms | 35ms | < 300ms | PASS |
+| find_text_locations 约 600 命中（返回上限 50） | 3.69s | 3.69s | < 9.00s | PASS |
+| find_replace 修订 300 命中 | 2.75s | 2.75s | < 8.00s | PASS |
+| apply_house_style 全文 + 30 表 | 35.94s | 35.94s | < 120.00s | PASS |
+| export_document | 9.20s | 9.20s | < 10.00s | PASS |
+| 导出后 30s 内 modified 次数 | 0 | 0 | = 0 | PASS |
+
+页面内存（measureUserAgentSpecificMemory）: 2213 MB
+
+结果 / result: 全部达标
