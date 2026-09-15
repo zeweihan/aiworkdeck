@@ -18,6 +18,7 @@ import com.checkba.service.ProjectMemberService;
 import com.checkba.service.QichachaService;
 import com.checkba.service.ai.AuxModelResolver;
 import com.checkba.service.ai.ChatModelFactory;
+import com.checkba.service.ai.LlmErrorClassifier;
 import com.checkba.service.ai.PlatformAiUserScope;
 import com.checkba.service.ai.TokenUsageService;
 import com.checkba.service.ai.review.ContractStructureAudit;
@@ -165,7 +166,59 @@ public class DocInsightService {
     private final Set<String> inFlight = ConcurrentHashMap.newKeySet();
     private final Set<String> deepReviews = ConcurrentHashMap.newKeySet();
     private static final long DEEP_REVIEW_BUDGET_NANOS = java.time.Duration.ofSeconds(105).toNanos();
+
+    /**
+     * 还留着那一次重试时，从剩余预算里给它留出的时间。
+     *
+     * <p>不留的话「超时」这一类根本重试不了：一个挂死的调用会把整个 105 秒预算吃光，
+     * 返回 0 条发现 + 一句「未完整完成」（v0.44.1 真机 D4 现场）。105 秒总预算不能抬——
+     * 前端那条 HTTP 只等 120 秒，抬了就从「部分结果」变成「整条请求失败」。
+     */
+    private static final long DEEP_RETRY_RESERVE_NANOS = java.time.Duration.ofSeconds(35).toNanos();
+
+    /** 低于这个剩余预算就不再发新的收费调用：几秒钟的 call timeout 必然又超时一次。 */
+    private static final long DEEP_MIN_ATTEMPT_NANOS = java.time.Duration.ofSeconds(5).toNanos();
+
+    /** 本轮深入审校允许的自动重试次数（整轮上限，不是每块上限）。 */
+    private static final int DEEP_MAX_RETRIES = 1;
+
     private java.util.function.LongSupplier nanoTime = System::nanoTime;
+
+    /**
+     * 深入审校未完整完成的原因码。进 {@code summary.deepReason}，前端按码换本地化文案
+     * （{@code zetaOfficeInlineReview.js} 的 {@code deepReasons}）。
+     *
+     * <p>只说「未完整完成，可重试」等于什么都没告诉用户：他分不清是自己该去充值、该换网络、
+     * 还是文档太长要分段。码是稳定契约，改名要同步前端那张表。
+     */
+    static final String DEEP_REASON_TIMEOUT = "DEEP_TIMEOUT";
+    static final String DEEP_REASON_BUDGET = "DEEP_BUDGET";
+    static final String DEEP_REASON_UNPARSEABLE = "DEEP_UNPARSEABLE";
+    static final String DEEP_REASON_UPSTREAM = "DEEP_UPSTREAM";
+    static final String DEEP_REASON_NETWORK = "DEEP_NETWORK";
+    static final String DEEP_REASON_RATE_LIMITED = "DEEP_RATE_LIMITED";
+    static final String DEEP_REASON_QUOTA = "DEEP_QUOTA";
+    static final String DEEP_REASON_TOO_LONG = "DEEP_TOO_LONG";
+    static final String DEEP_REASON_MODEL_UNAVAILABLE = "DEEP_MODEL_UNAVAILABLE";
+    static final String DEEP_REASON_REGION = "DEEP_REGION";
+    static final String DEEP_REASON_FAILED = "DEEP_FAILED";
+
+    /** 一轮深入审校的过程记账：是否完整、第一个失败原因、那一次重试用掉了没有。 */
+    private static final class DeepRun {
+        boolean complete = true;
+        String reason = "";
+        int retries = 0;
+
+        void fail(String why) {
+            complete = false;
+            // 保留**第一个**原因：后续块的失败往往是同一个根因的回声，覆盖会把真原因丢掉
+            if (reason.isEmpty()) reason = why;
+        }
+
+        boolean canRetry() {
+            return retries < DEEP_MAX_RETRIES;
+        }
+    }
 
     /**
      * Reviews the live Writer body without persisting a run. {@code deep=false} is entirely local;
@@ -204,17 +257,19 @@ public class DocInsightService {
         addMissingDocuments(out, projectId, text, safe);
 
         boolean deepComplete = false;
+        DeepRun deepRun = null;
         if (deep) {
             String key = projectId + ":" + docFileId;
             if (!deepReviews.add(key)) throw new IllegalStateException("这份文档正在深入审校中");
             try {
                 List<InlineDeepReview.Issue> issues = new ArrayList<>();
-                boolean[] complete = {true};
+                DeepRun run = new DeepRun();
                 List<Claim> claims = PlatformAiUserScope.call(userId,
-                        () -> extractDeep(text, projectId, userId, issues, complete));
+                        () -> extractDeep(text, projectId, userId, issues, run));
                 addChecks(out, DocInsightChecks.countMismatches(claims, text), safe);
                 addLogicIssues(out, issues, safe);
-                deepComplete = complete[0];
+                deepComplete = run.complete;
+                deepRun = run;
             } finally {
                 deepReviews.remove(key);
             }
@@ -227,41 +282,156 @@ public class DocInsightService {
         summary.put("dominantScript", report.dominantScript);
         summary.put("currencies", report.currencies);
         summary.put("deepComplete", deepComplete);
+        if (deepRun != null && !deepComplete) {
+            summary.put("deepReason", deepRun.reason.isEmpty() ? DEEP_REASON_FAILED : deepRun.reason);
+            summary.put("deepRetried", deepRun.retries > 0);
+        }
         return new ReviewResult(List.copyOf(out), summary, truncated || outputTruncated, "body", deep);
     }
 
     private List<Claim> extractDeep(String text, Long projectId, Long userId,
-                                    List<InlineDeepReview.Issue> issues, boolean[] complete) {
+                                    List<InlineDeepReview.Issue> issues, DeepRun run) {
         long deadline = nanoTime.getAsLong() + DEEP_REVIEW_BUDGET_NANOS;
         String modelId = auxModelResolver.auxModelId();
         List<Claim> claims = new ArrayList<>();
-        for (String chunk : DocInsightExtraction.chunks(text, props.getChunkChars(), props.getChunkOverlap())) {
-            long remaining = deadline - nanoTime.getAsLong();
-            if (remaining <= 0) { complete[0] = false; break; }
-            try {
-                ChatLanguageModel model = chatModelFactory.getAuxChatModel(java.time.Duration.ofNanos(remaining));
-                Response<AiMessage> response = model.generate(List.of(UserMessage.from(
-                        InlineDeepReview.prompt(chunk, LangText.isEnglish()))));
-                recordUsage(response, modelId, projectId, userId);
-                InlineDeepReview.Result parsed = InlineDeepReview.parse(
-                        response.content() == null ? null : response.content().text(), chunk, om);
-                if (!parsed.valid()) complete[0] = false;
-                claims.addAll(parsed.claims());
-                issues.addAll(parsed.issues());
-            } catch (FeatureNotConfiguredException e) {
-                // 辅助模型不在可用清单里（要去设置页换一个）——这不是可降级的传输故障，
-                // 而是一条用户能自己修的配置错误。吞成 deepComplete=false 的话界面只会说
-                // 「未完整完成」，用户永远看不到该去哪儿改。原样抛出，让 GlobalExceptionHandler
-                // 转成 {code:4001, feature} 的「去设置」提示。
-                throw e;
-            } catch (Exception e) {
-                // Preserve completed chunks; the existing UI renders deepComplete=false as partial review.
-                complete[0] = false;
-                log.warn("深入审校片段失败，保留已完成结果: {}", e.getMessage());
-                break; // Transport/account failures are not chunk-specific; do not pay for more doomed calls.
+        List<String> chunks = DocInsightExtraction.chunks(text, props.getChunkChars(), props.getChunkOverlap());
+        for (int index = 0; index < chunks.size(); index++) {
+            String chunk = chunks.get(index);
+            // 同一块最多发两次：原调用 + 本轮那一次自动重试（整轮共享上限，见 DEEP_MAX_RETRIES）
+            while (true) {
+                long remaining = deadline - nanoTime.getAsLong();
+                if (remaining < DEEP_MIN_ATTEMPT_NANOS) {
+                    run.fail(DEEP_REASON_BUDGET);
+                    logDeepFailure(index, chunks.size(), chunk, DEEP_REASON_BUDGET, 0L, 0L, 0L, null, false);
+                    return claims;
+                }
+                // 留出重试预算：不留的话一个挂死的调用吃光 105 秒、一条发现都不返回
+                long attempt = run.canRetry() && remaining > DEEP_RETRY_RESERVE_NANOS * 2
+                        ? remaining - DEEP_RETRY_RESERVE_NANOS : remaining;
+                long startedAt = nanoTime.getAsLong();
+                // 建连耗时单独计：第一次调用要先探账户余额、provision 平台 key（各 5 秒 HTTP）
+                // 再做 DNS/TLS，这些不是模型时间。分开记才能证实/排除「首轮冷启动」这个猜想，
+                // 不然日志里只有一个总耗时，谁也说不清 105 秒花在哪儿（D4 现场）。
+                long setup = 0L;
+                try {
+                    ChatLanguageModel model = chatModelFactory.getAuxChatModel(java.time.Duration.ofNanos(attempt));
+                    setup = nanoTime.getAsLong() - startedAt;
+                    Response<AiMessage> response = model.generate(List.of(UserMessage.from(
+                            InlineDeepReview.prompt(chunk, LangText.isEnglish()))));
+                    recordUsage(response, modelId, projectId, userId);
+                    InlineDeepReview.Result parsed = InlineDeepReview.parse(
+                            response.content() == null ? null : response.content().text(), chunk, om);
+                    if (!parsed.valid()) {
+                        // 不是 JSON / 被截断：和传输失败不同，这一块换一次也许就好了，
+                        // 但它是块级问题——重试用完之后照旧继续后面的块（既有行为）。
+                        long elapsed = nanoTime.getAsLong() - startedAt;
+                        boolean retrying = run.canRetry();
+                        if (retrying) run.retries++;
+                        else run.fail(DEEP_REASON_UNPARSEABLE);
+                        logDeepFailure(index, chunks.size(), chunk, DEEP_REASON_UNPARSEABLE,
+                                attempt, setup, elapsed - setup, null, retrying);
+                        if (retrying) continue;
+                    }
+                    claims.addAll(parsed.claims());
+                    issues.addAll(parsed.issues());
+                    break;
+                } catch (FeatureNotConfiguredException e) {
+                    // 辅助模型不在可用清单里（要去设置页换一个）——这不是可降级的传输故障，
+                    // 而是一条用户能自己修的配置错误。吞成 deepComplete=false 的话界面只会说
+                    // 「未完整完成」，用户永远看不到该去哪儿改。原样抛出，让 GlobalExceptionHandler
+                    // 转成 {code:4001, feature} 的「去设置」提示。
+                    throw e;
+                } catch (Exception e) {
+                    long elapsed = nanoTime.getAsLong() - startedAt;
+                    String reason = deepFailureReason(e);
+                    // 可重试类（超时、瞬时 5xx、本机暂时连不上）在服务端自己重试一次再报失败：
+                    // 把重试推给用户，等于让他再等一轮并自己判断「是不是该重试」（D4 现场）。
+                    boolean retrying = isRetryableDeepReason(reason) && run.canRetry()
+                            && deadline - nanoTime.getAsLong() >= DEEP_MIN_ATTEMPT_NANOS;
+                    if (retrying) run.retries++;
+                    else run.fail(reason);
+                    logDeepFailure(index, chunks.size(), chunk, reason,
+                            attempt, setup, elapsed - setup, e, retrying);
+                    if (retrying) continue;
+                    // Transport/account failures are not chunk-specific; do not pay for more doomed calls.
+                    return claims;
+                }
             }
         }
         return claims;
+    }
+
+    /**
+     * 失败原因码。复用编排器那套 {@link LlmErrorClassifier}（状态码优先于文本匹配），
+     * 只在它之上把「超时」从 TRANSIENT 里单列出来——用户看到「模型没在预算内返回」和
+     * 「服务商临时故障」该做的事不一样。
+     */
+    private static String deepFailureReason(Throwable e) {
+        String message = e.getMessage() == null ? "" : e.getMessage();
+        // 预算在工厂里被建连/取密钥的耗时吃掉时抛的就是这一条，它不是传输故障
+        if (message.contains("deadline expired")) return DEEP_REASON_BUDGET;
+        LlmErrorClassifier.Kind kind = LlmErrorClassifier.classify(e);
+        return switch (kind) {
+            case RATE_LIMITED -> DEEP_REASON_RATE_LIMITED;
+            case QUOTA_EXHAUSTED -> DEEP_REASON_QUOTA;
+            case CONTEXT_OVERFLOW -> DEEP_REASON_TOO_LONG;
+            case MODEL_UNAVAILABLE -> DEEP_REASON_MODEL_UNAVAILABLE;
+            case REGION_BLOCKED -> DEEP_REASON_REGION;
+            case NETWORK_UNREACHABLE -> DEEP_REASON_NETWORK;
+            case TRANSIENT -> isTimeout(e) ? DEEP_REASON_TIMEOUT : DEEP_REASON_UPSTREAM;
+            case FATAL -> DEEP_REASON_FAILED;
+        };
+    }
+
+    private static boolean isTimeout(Throwable err) {
+        for (Throwable t = err; t != null; t = (t.getCause() == t ? null : t.getCause())) {
+            if (t instanceof java.net.SocketTimeoutException
+                    || t instanceof java.util.concurrent.TimeoutException
+                    || t instanceof java.io.InterruptedIOException) {
+                return true;
+            }
+            String msg = t.getMessage();
+            if (msg != null) {
+                String m = msg.toLowerCase(java.util.Locale.ROOT);
+                if (m.contains("timeout") || m.contains("timed out")) return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 可自动重试的原因。刻意不收限流（窗口按分钟计，立刻重试只是白烧一次调用）、
+     * 不收额度/地域/超窗/配置错（重试多少次都一样），也不收预算耗尽（没时间了）。
+     */
+    private static boolean isRetryableDeepReason(String reason) {
+        return DEEP_REASON_TIMEOUT.equals(reason)
+                || DEEP_REASON_UPSTREAM.equals(reason)
+                || DEEP_REASON_NETWORK.equals(reason);
+    }
+
+    /**
+     * 定位一次深入审校失败要的全部字段：停在第几块（= 正文检查到哪儿被截断）、这块多少字、
+     * 这次给了多少 call timeout、建连（余额探测 + provision key + DNS/TLS）与模型各花多久、
+     * 原因码、是否已自动重试、上游状态码（有的话）、真正发出去的辅助模型。
+     *
+     * <p>setupMs 与 callMs 分开是为了能证实或排除「首轮冷启动」：只有一个总耗时的话，
+     * 「105 秒花在哪儿」永远只能猜。正文一个字都不进日志（隐私边界同 spec）。
+     */
+    private void logDeepFailure(int index, int total, String chunk, String reason, long budgetNanos,
+                                long setupNanos, long callNanos, Throwable e, boolean retrying) {
+        Integer status = null;
+        for (Throwable t = e; t != null; t = (t.getCause() == t ? null : t.getCause())) {
+            if (t instanceof dev.ai4j.openai4j.OpenAiHttpException http) { status = http.code(); break; }
+        }
+        log.warn("深入审校{}: chunk={}/{} chars={} budgetMs={} setupMs={} callMs={} reason={} status={} model={} err={}",
+                retrying ? "片段失败，自动重试一次" : "片段失败，保留已完成结果",
+                index + 1, total, chunk.length(), millis(budgetNanos), millis(setupNanos), millis(callNanos),
+                reason, status, auxModelResolver.auxModelId(),
+                e == null ? "-" : e.getClass().getSimpleName() + ": " + e.getMessage());
+    }
+
+    private static long millis(long nanos) {
+        return java.time.Duration.ofNanos(Math.max(0L, nanos)).toMillis();
     }
 
     private static void addLogicIssues(List<Fact> out, List<InlineDeepReview.Issue> issues,

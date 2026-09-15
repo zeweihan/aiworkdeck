@@ -14,6 +14,34 @@ export function attachInlineReview({ canvas, input, execute, transport, language
   const t = LABELS[english ? 'en' : 'zh']
   const errors = english ? { REVIEW_INLINE_REVISIONS: 'Switch from inline tracked changes to margin or final view to review.', REVIEW_SNAPSHOT_FAILED: 'The current document could not be read. Try checking again.', REVIEW_FAILED: 'Review failed. Try checking again.', REVIEW_DEEP_INCOMPLETE: 'Deep review did not finish completely. Only completed checks are shown below; you can retry.' } : { REVIEW_INLINE_REVISIONS: '请切换到页边修订或最终视图后再审校。', REVIEW_SNAPSHOT_FAILED: '暂时无法读取当前文档，请重新检查。', REVIEW_FAILED: '本次审校未完成，请重新检查。', REVIEW_DEEP_INCOMPLETE: '深入审校未完整完成，以下仅为已完成的检查，可重试。' }
   let state = { session: '', enabled: false, revision: null, status: 'disabled', findings: [] }
+  // 「未完整完成，可重试」不说原因，用户分不清该充值、换网络还是把文档分段（dev-board D4）。
+  // 码由后端 DocInsightService.DEEP_REASON_* 下发，未知码只显示基础那句，绝不把码本身露给用户。
+  const deepReasons = english ? {
+    DEEP_TIMEOUT: ' Cause: the model did not respond within the time limit.',
+    DEEP_BUDGET: ' Cause: the review ran out of time; the rest of the body was not checked.',
+    DEEP_UNPARSEABLE: ' Cause: the model reply could not be parsed; it may have been cut off.',
+    DEEP_UPSTREAM: ' Cause: the model service is temporarily failing.',
+    DEEP_NETWORK: ' Cause: this machine cannot reach the model service. Check the network or proxy.',
+    DEEP_RATE_LIMITED: ' Cause: the model service is rate limiting. Wait a minute and try again.',
+    DEEP_QUOTA: ' Cause: the account is out of credit. Top up or allocate credit first.',
+    DEEP_TOO_LONG: ' Cause: this passage exceeds the model context. Split it and review again.',
+    DEEP_MODEL_UNAVAILABLE: ' Cause: the auxiliary model is unavailable. Pick another one in settings.',
+    DEEP_REGION: ' Cause: the provider rejected this network region. Change the model or the network.',
+    DEEP_FAILED: ' Cause: the model call failed.',
+  } : {
+    DEEP_TIMEOUT: '原因：AI 模型没有在时限内返回。',
+    DEEP_BUDGET: '原因：本次审校时间用尽，正文后面的部分还没检查。',
+    DEEP_UNPARSEABLE: '原因：模型返回的内容无法解析，可能被截断。',
+    DEEP_UPSTREAM: '原因：模型服务暂时故障。',
+    DEEP_NETWORK: '原因：本机连不上模型服务，请检查网络或代理。',
+    DEEP_RATE_LIMITED: '原因：模型服务限流，请等一分钟再试。',
+    DEEP_QUOTA: '原因：账户额度不足，请先充值或分配额度。',
+    DEEP_TOO_LONG: '原因：这一段正文超出模型上下文，请分段后再审校。',
+    DEEP_MODEL_UNAVAILABLE: '原因：当前辅助模型不可用，请到设置页更换。',
+    DEEP_REGION: '原因：当前网络环境被服务商按地域拒绝，请更换模型或网络。',
+    DEEP_FAILED: '原因：模型调用失败。',
+  }
+  const retried = english ? ' It was already retried once automatically.' : '（已自动重试一次仍失败）'
   let generation = 0, sequence = 0, timer = 0, disposed = false, composing = false, inFlight = false, again = false
   let anchor = null, click = null, context = null, panelMode = '', busy = false, activeTab = 'all'
   let panelPosition = null, drag = null, storageKey = ''
@@ -118,7 +146,7 @@ export function attachInlineReview({ canvas, input, execute, transport, language
     collapse.setAttribute('aria-expanded', 'true')
     button(t.close, hide, headActions)
     const body = copy('', panel, 'awd-ir-body')
-    copy(errors[state.message] || state.message || (state.status === 'error' ? t.error : state.status === 'stale' ? t.stale : state.status === 'checking' ? t.checking : t.local), body, 'awd-ir-note')
+    copy(note(), body, 'awd-ir-note')
     if (typeof state.summary === 'string' && state.summary) copy(state.summary, body)
     else if (Number.isFinite(state.summary?.findingCount)) copy(t.count(state.summary.findingCount), body, 'awd-ir-note')
     const fresh = context?.revision === state.revision && state.status === 'ready' && state.enabled !== false
@@ -158,6 +186,12 @@ export function attachInlineReview({ canvas, input, execute, transport, language
     button(t.insight, () => request('open-insight'), actions)
     button(state.enabled ? t.disable : t.enable, () => request('preferences', { enabled: !state.enabled }), body)
     place()
+  }
+  function note() {
+    const base = errors[state.message] || state.message
+      || (state.status === 'error' ? t.error : state.status === 'stale' ? t.stale : state.status === 'checking' ? t.checking : t.local)
+    if (state.message !== 'REVIEW_DEEP_INCOMPLETE') return base
+    return base + (deepReasons[state.deepReason] || '') + (state.deepRetried ? retried : '')
   }
   function renderChip() {
     chip.hidden = true

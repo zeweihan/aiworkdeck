@@ -174,6 +174,28 @@ test('malformed deep output is explicitly incomplete even when rule results are 
   assert.equal(f.messages.at(-1).message, 'REVIEW_DEEP_INCOMPLETE')
 })
 
+test('an incomplete deep review forwards the server reason code so the guest can name the cause', async (t) => {
+  const f = fixture(t)
+  f.dependencies.review = async () => ({
+    findings: [], summary: { deepComplete: false, deepReason: 'DEEP_TIMEOUT', deepRetried: true } })
+  await f.request('deep')
+  assert.equal(f.messages.at(-1).message, 'REVIEW_DEEP_INCOMPLETE')
+  assert.equal(f.messages.at(-1).deepReason, 'DEEP_TIMEOUT')
+  assert.equal(f.messages.at(-1).deepRetried, true)
+})
+
+test('a complete deep review clears any earlier reason code', async (t) => {
+  const f = fixture(t)
+  f.dependencies.review = async () => ({
+    findings: [], summary: { deepComplete: false, deepReason: 'DEEP_TIMEOUT' } })
+  await f.request('deep')
+  assert.equal(f.messages.at(-1).deepReason, 'DEEP_TIMEOUT')
+  f.dependencies.review = async () => ({ findings: [], summary: { deepComplete: true } })
+  await f.request('deep')
+  assert.equal(f.messages.at(-1).deepReason, '')
+  assert.equal(f.messages.at(-1).deepRetried, false)
+})
+
 test('layout key is stable per user across documents and differs between users', (t) => {
   const a = fixture(t, { userId: 'user-a', fileId: 8 }); a.host.start()
   const b = fixture(t, { userId: 'user-a', fileId: 9 }); b.host.start()
