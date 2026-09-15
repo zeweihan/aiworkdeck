@@ -288,6 +288,36 @@ export default {
   usernameRequired: '请输入同事的账号',
   generateFailed: '生成失败',
 
+  // ---- SubmitDraftGuide.vue（交稿引导，dev-board#645）----
+  // 状态 → 步骤的映射在 utils/submitGuide.js；第 ② 步那句话与顶栏「同事交了新稿」
+  // 同源（utils/collabWording.js 的 pullStepText）。
+  submitGuideTwoLeft: '交稿前还差两步',
+  submitGuideOneLeft: '交稿前还差一步',
+  submitGuideReady: '可以交稿了',
+  submitGuideOfflineTitle: '暂时连不上案件库',
+  submitGuideOfflineDesc: '现在连不上团队案件库，交稿要等网络恢复。你的改动都在本机，一个都不会丢。',
+  submitGuideStateTodo: '待做',
+  submitGuideStateActive: '进行中',
+  submitGuideStateDone: '已完成',
+  submitGuideStepEndDesc: '把这次改动收成一版，交出去的就是这一版。',
+  submitGuideStepEndDone: '这次的改动已经收成一版了。',
+  submitGuideStepSubmitDesc: '把本机的版送进案件库，同事才看得到。',
+  submitGuidePullSelf: '取回你在另一台电脑交的 {count} 版',
+  submitGuidePullOne: '取回{name}交的 {count} 版',
+  submitGuidePullMany: '取回{name}等 {people} 人交的 {count} 版',
+  submitGuidePullGeneric: '取回同事交的最新稿',
+  submitGuidePullDone: '案件库里没有你还没取回的稿。',
+  submitGuideLater: '稍后再说',
+  submitGuideHowTitle: '这套协作是怎么回事（举个例子）',
+  submitGuideHelpEntry: '这套协作怎么用',
+  submitGuideHelpTitle: '这套协作怎么用',
+  submitGuideHow1: '你和同事各自在自己电脑上改案卷，改动先落在本机，不会自动跑到对方那里。',
+  submitGuideHow2: '「结束本次工作」= 把这一段改动收成一版，像交作业前把草稿装订好。',
+  submitGuideHow3: '「交稿」= 把本机的版送进案件库，同事才看得到。',
+  submitGuideHow4: '「取回最新稿」= 把同事交的稿拿到本机；你们改的是不同段落就自动合到一起，同一段都改了才让你逐处决定留谁的。',
+  submitGuideHowExample: '例子：你昨晚改了《诉讼及行政处罚情况说明》第三节，同事上午改了同一份的第五节并交了稿。你点「取回最新稿」，两处自动合成一份；要是你们都改了第三节，会打开合并比对稿让你逐处选。',
+  submitGuideHowMnemonic: '口诀：结束工作 → 取回最新稿 → 交稿。',
+
   // ---- CloudAcceptDialog.vue ----
   pullFromLibraryTitle: '从团队案件库取一份案卷',
   noLibraryAvailableShort: '当前还没有可用的团队案件库',
