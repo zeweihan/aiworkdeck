@@ -33,7 +33,7 @@ export function createInlineReviewHost({ projectId, fileId, userId, execute, sen
   function invalidate() {
     if (disposed) return
     generation++; dirty = true; deepRevision = null
-    publish({ revision: null, status: enabled ? 'stale' : 'disabled', deepStatus: deepBusy ? 'checking' : 'idle', findings: [], message: '', summary: '' })
+    publish({ revision: null, status: enabled ? 'stale' : 'disabled', deepStatus: deepBusy ? 'checking' : 'idle', findings: [], message: '', summary: '', deepReason: '', deepRetried: false })
     schedule()
   }
   function preferences(next) {
@@ -111,11 +111,13 @@ export function createInlineReviewHost({ projectId, fileId, userId, execute, sen
       })
       publish({ revision: snap.revision, status: 'ready', findings, summary: result.summary || '',
         scope: result.scope || 'body', truncated: snap.truncated || !!result.truncated,
-        ...(deep ? { deepStatus: deepComplete ? 'ready' : 'error' } : {}), message: deepComplete ? '' : 'REVIEW_DEEP_INCOMPLETE' })
+        ...(deep ? { deepStatus: deepComplete ? 'ready' : 'error' } : {}), message: deepComplete ? '' : 'REVIEW_DEEP_INCOMPLETE',
+        deepReason: deepComplete ? '' : String(result.summary?.deepReason || ''),
+        deepRetried: !deepComplete && result.summary?.deepRetried === true })
       return true
     } catch (error) {
       if (current(gen) && (deep || deepRevision == null)) publish(deep
-        ? { deepStatus: 'error', message: String(error?.message || 'REVIEW_FAILED') }
+        ? { deepStatus: 'error', message: String(error?.message || 'REVIEW_FAILED'), deepReason: '', deepRetried: false }
         : { status: 'error', findings: [], message: String(error?.message || 'REVIEW_FAILED') })
       return false
     } finally {

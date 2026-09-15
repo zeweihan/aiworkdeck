@@ -107,6 +107,32 @@ test('English review controls and scope are localized', async t => {
   assert.ok(h.doc.querySelector('.awd-ir-panel').textContent.includes('Deep review did not finish completely'))
 })
 
+test('深入审校未完成时把原因说清楚，而不是只说「可重试」', async t => {
+  const h = harness(t)
+  h.state({ status: 'error', message: 'REVIEW_DEEP_INCOMPLETE', deepReason: 'DEEP_TIMEOUT', deepRetried: true }); await h.open()
+  const note = h.doc.querySelector('.awd-ir-panel').textContent
+  assert.ok(note.includes('深入审校未完整完成'))
+  assert.ok(note.includes('没有在时限内返回'), note)
+  assert.ok(note.includes('已自动重试一次'), note)
+  h.state({ status: 'error', message: 'REVIEW_DEEP_INCOMPLETE', deepReason: 'DEEP_QUOTA', deepRetried: false }); await h.open()
+  const quota = h.doc.querySelector('.awd-ir-panel').textContent
+  assert.ok(quota.includes('额度'))
+  assert.equal(quota.includes('已自动重试一次'), false, '限流/额度这类不重试，不能谎称已重试过')
+  // 未知码不许把整句吞掉，也不许把码本身当文案显示给用户
+  h.state({ status: 'error', message: 'REVIEW_DEEP_INCOMPLETE', deepReason: 'DEEP_WHATEVER' }); await h.open()
+  const unknown = h.doc.querySelector('.awd-ir-panel').textContent
+  assert.ok(unknown.includes('深入审校未完整完成'))
+  assert.equal(unknown.includes('DEEP_WHATEVER'), false)
+})
+
+test('English deep review failure names the cause too', async t => {
+  const h = harness(t, null, 'en-US')
+  h.state({ status: 'error', message: 'REVIEW_DEEP_INCOMPLETE', deepReason: 'DEEP_NETWORK' }); await h.open()
+  const note = h.doc.querySelector('.awd-ir-panel').textContent
+  assert.ok(note.includes('Deep review did not finish completely'))
+  assert.ok(note.toLowerCase().includes('network'), note)
+})
+
 test('检查结果未到时先校准点击位置，输入发生后不再用旧点击校准', async t => {
   const h = harness(t); h.state({ revision: null, status: 'checking' }); h.click(); await tick()
   assert.equal(h.calls.length, 1, 'caret calibration does not wait for review results')

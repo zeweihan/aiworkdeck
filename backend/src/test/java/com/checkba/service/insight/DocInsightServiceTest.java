@@ -1197,14 +1197,15 @@ class DocInsightServiceTest {
     }
 
     @Test
-    @DisplayName("三万字深入审校单块超时保留先前发现并标记不完整，不自动重试收费")
+    @DisplayName("三万字深入审校单块超时：重试一次后仍失败则保留先前发现并标记不完整")
     void deepReviewPreservesFindingsAfterFailedChunk() {
         props.setChunkChars(10000);
         props.setChunkOverlap(500);
         java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
         when(model.generate(anyList())).thenAnswer(inv -> {
             int call = calls.incrementAndGet();
-            if (call == 2) throw new IllegalStateException("upstream timeout");
+            // 第二块两次都超时（一次原调用 + 一次服务端重试），耗尽本轮重试上限
+            if (call == 2 || call == 3) throw new IllegalStateException("upstream timeout");
             return modelReply(call == 1
                     ? MODEL_JSON.substring(0, MODEL_JSON.lastIndexOf('}')) + ",\"issues\":[]}"
                     : "{\"claims\":[],\"issues\":[]}");
@@ -1213,8 +1214,10 @@ class DocInsightServiceTest {
                 new ParagraphInput(0, TEXT),
                 new ParagraphInput(1, "文".repeat(15000)),
                 new ParagraphInput(2, "文".repeat(15000))), true, false);
-        assertEquals(2, calls.get());
+        assertEquals(3, calls.get(), "重试上限是一轮一次：不能对同一块无限重试，也不能继续后面的收费块");
         assertEquals(false, result.summary().get("deepComplete"));
+        assertEquals("DEEP_TIMEOUT", result.summary().get("deepReason"));
+        assertEquals(true, result.summary().get("deepRetried"));
         assertTrue(result.findings().stream().anyMatch(f -> "COUNT_MISMATCH".equals(f.kind())));
         verify(tokenUsageService, org.mockito.Mockito.times(1)).recordUsage(eq(PID), eq(UID), anyString(), any(), eq(null));
     }
@@ -1237,7 +1240,9 @@ class DocInsightServiceTest {
         });
         ReviewResult result = svc.review(UID, PID, DOC, List.of(
                 new ParagraphInput(0, "文".repeat(15000)), new ParagraphInput(1, "文".repeat(15000))), true, false);
-        assertEquals(List.of(java.time.Duration.ofSeconds(105), java.time.Duration.ofSeconds(45)), budgets);
+        // 首块只拿 105-35=70 秒：还留着那一次重试时必须给它留出预算，否则一个挂死的调用
+        // 会吃光整个 105 秒、什么都不返回（D4 现场）。重试用掉之后才允许用满剩余预算。
+        assertEquals(List.of(java.time.Duration.ofSeconds(70), java.time.Duration.ofSeconds(45)), budgets);
         assertEquals(false, result.summary().get("deepComplete"));
         verify(model, org.mockito.Mockito.times(2)).generate(anyList());
     }
@@ -1261,7 +1266,7 @@ class DocInsightServiceTest {
     }
 
     @Test
-    @DisplayName("深入审校首块传输失败立即停，不继续提交其余收费请求")
+    @DisplayName("深入审校首块遇到不可重试的失败立即停，不重试也不继续提交其余收费请求")
     void deepReviewStopsAfterFirstTransportFailure() {
         props.setChunkChars(10000);
         when(model.generate(anyList())).thenThrow(new IllegalStateException("upstream unavailable"));
@@ -1270,6 +1275,100 @@ class DocInsightServiceTest {
         assertEquals(false, result.summary().get("deepComplete"));
         verify(model, org.mockito.Mockito.times(1)).generate(anyList());
         verify(tokenUsageService, never()).recordUsage(any(), any(), any(), any(), any());
+    }
+
+    /**
+     * D4（v0.44.1 真机）：首次点「深入审校（AI）」返回「未完整完成」且 AI 审校 0 条，
+     * 第二次点同一份文档得到 4 条。首轮那次是一个瞬时传输失败（超时/5xx），旧实现遇到它
+     * 直接 break——单块文档因此一条 claim 都没收到，用户看到的就是「0 条 + 可重试」，
+     * 而重试这件事本该由服务端替他做一次。
+     */
+    @Test
+    @DisplayName("深入审校首块瞬时超时自动重试一次，成功后按完整结果返回")
+    void deepReviewRetriesOnceAfterTransientFailure() {
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        when(model.generate(anyList())).thenAnswer(inv -> {
+            if (calls.incrementAndGet() == 1) throw new java.net.SocketTimeoutException("timeout");
+            return modelReply(MODEL_JSON.substring(0, MODEL_JSON.lastIndexOf('}')) + ",\"issues\":[]}");
+        });
+        ReviewResult result = svc.review(UID, PID, DOC, List.of(
+                new ParagraphInput(0, "标的公司名下房产共 58 项。"),
+                new ParagraphInput(1, "附表二：房产明细共 39 项。")), true, false);
+
+        assertEquals(2, calls.get(), "可重试类必须在服务端自动重试一次，不能把重试推给用户");
+        assertEquals(true, result.summary().get("deepComplete"));
+        assertNull(result.summary().get("deepReason"));
+        assertTrue(result.findings().stream().anyMatch(f -> "COUNT_MISMATCH".equals(f.kind())),
+                "重试成功后 AI 审校不该还是 0 条");
+    }
+
+    @Test
+    @DisplayName("重试也失败时给出可读原因码，且一轮只重试一次")
+    void deepReviewReportsTimeoutReasonAfterRetryFails() {
+        when(model.generate(anyList())).thenAnswer(inv -> {
+            throw new java.net.SocketTimeoutException("Read timed out");
+        });
+        ReviewResult result = svc.review(UID, PID, DOC, List.of(
+                new ParagraphInput(0, "标的公司名下房产共 58 项。")), true, false);
+
+        assertEquals(false, result.summary().get("deepComplete"));
+        assertEquals("DEEP_TIMEOUT", result.summary().get("deepReason"),
+                "只说「未完整完成」等于不告诉用户原因——前端按这个码换本地化文案");
+        assertEquals(true, result.summary().get("deepRetried"));
+        verify(model, org.mockito.Mockito.times(2)).generate(anyList());
+    }
+
+    @Test
+    @DisplayName("限流与额度不足不重试，原因码各自独立")
+    void deepReviewDoesNotRetryTerminalUpstreamFailures() {
+        when(model.generate(anyList()))
+                .thenThrow(new dev.ai4j.openai4j.OpenAiHttpException(429, "rate limit exceeded"));
+        ReviewResult limited = svc.review(UID, PID, DOC,
+                List.of(new ParagraphInput(0, "标的公司名下房产共 58 项。")), true, false);
+        assertEquals("DEEP_RATE_LIMITED", limited.summary().get("deepReason"));
+        assertEquals(false, limited.summary().get("deepRetried"));
+        verify(model, org.mockito.Mockito.times(1)).generate(anyList());
+
+        org.mockito.Mockito.reset(model);
+        when(model.generate(anyList()))
+                .thenThrow(new dev.ai4j.openai4j.OpenAiHttpException(402, "insufficient credits"));
+        ReviewResult broke = svc.review(UID, PID, DOC,
+                List.of(new ParagraphInput(0, "标的公司名下房产共 58 项。")), true, false);
+        assertEquals("DEEP_QUOTA", broke.summary().get("deepReason"));
+        verify(model, org.mockito.Mockito.times(1)).generate(anyList());
+    }
+
+    @Test
+    @DisplayName("模型输出不可解析也重试一次，仍不可解析则报可解析原因并继续其余块")
+    void deepReviewRetriesUnparseableOutputThenReportsIt() {
+        props.setChunkChars(10000);
+        when(model.generate(anyList())).thenReturn(modelReply("这是一段说明，不是 JSON"));
+        ReviewResult result = svc.review(UID, PID, DOC, List.of(
+                new ParagraphInput(0, "文".repeat(15000)), new ParagraphInput(1, "文".repeat(15000))), true, false);
+
+        assertEquals(false, result.summary().get("deepComplete"));
+        assertEquals("DEEP_UNPARSEABLE", result.summary().get("deepReason"));
+        assertEquals(true, result.summary().get("deepRetried"));
+        // 首块 2 次（一次重试）+ 其余 3 块各 1 次：无效输出是块级问题，不阻断后续块
+        verify(model, org.mockito.Mockito.times(5)).generate(anyList());
+    }
+
+    @Test
+    @DisplayName("预算耗尽时原因码是预算，不与传输失败混在一起")
+    void deepReviewReportsBudgetReasonWhenExhausted() {
+        props.setChunkChars(10000);
+        var clock = new java.util.concurrent.atomic.AtomicLong();
+        org.springframework.test.util.ReflectionTestUtils.setField(svc, "nanoTime",
+                (java.util.function.LongSupplier) clock::get);
+        when(model.generate(anyList())).thenAnswer(inv -> {
+            clock.addAndGet(java.time.Duration.ofSeconds(60).toNanos());
+            return modelReply("{\"claims\":[],\"issues\":[]}");
+        });
+        ReviewResult result = svc.review(UID, PID, DOC, List.of(
+                new ParagraphInput(0, "文".repeat(15000)), new ParagraphInput(1, "文".repeat(15000))), true, false);
+        assertEquals(false, result.summary().get("deepComplete"));
+        assertEquals("DEEP_BUDGET", result.summary().get("deepReason"));
+        assertEquals(false, result.summary().get("deepRetried"));
     }
 
     @Test

@@ -458,6 +458,20 @@ cd frontend && npm run build:h5 && npm run build:zetaoffice   # 改 editor-main.
   和有两条逐字引文支撑的主体/权利义务/条件/日期疑点、记 token 用量，再由
   `DocInsightChecks.countMismatches` 做确定性数量矛盾判定。同一文档单飞，仍不做工商、法规、案例或引用外查；
   坏 JSON 会令 `summary.deepComplete=false`，不得显示成“未发现问题”。
+- **不完整时必须给出原因码，不许只说「可重试」**（dev-board D4，v0.44.1 真机）：
+  `summary.deepReason` 是稳定契约，取值见 `DocInsightService.DEEP_REASON_*`（TIMEOUT / BUDGET /
+  UNPARSEABLE / UPSTREAM / NETWORK / RATE_LIMITED / QUOTA / TOO_LONG / MODEL_UNAVAILABLE / REGION / FAILED），
+  前端那张表在 `zetaOfficeInlineReview.js` 的 `deepReasons`，**改码名要同步两边**；未知码只显示基础那句，
+  绝不把码本身露给用户。分类复用 `LlmErrorClassifier`（状态码优先于文本匹配），只把「超时」从 TRANSIENT 里单列。
+  `summary.deepRetried` 说明服务端是否已自动重试过——限流/额度这类不重试的分类必须是 false，
+  否则界面会谎称「已重试过」。
+- **可重试类在服务端自动重试一次，整轮上限 1 次**（`DEEP_MAX_RETRIES`）：只收超时、瞬时 5xx、
+  本机暂时连不上与「输出不可解析」；限流（窗口按分钟计）、额度、地域、超窗、配置错一律不重试。
+  为了让「超时」这一类真的能重试，第一次尝试只拿 `剩余预算 - DEEP_RETRY_RESERVE_NANOS`(35 秒)——
+  不留的话一个挂死的调用吃光 105 秒总预算、一条发现都不返回（正是 D4 现场：首轮 0 条、二轮 4 条）。
+  **105 秒总预算不能抬**：前端那条 HTTP 只等 120 秒，抬了就从「部分结果」变成「整条请求失败」。
+  重试是第二次真实的收费调用（客户端超时不代表远端没算），所以上限只有 1 次；本地不重复记账，
+  `recordUsage` 只在拿到响应时才记。
 - scope 仅为 Writer 正文；表格、页眉页脚等当前拿不到可靠段落的内容，继续由保存文件后的专门核验覆盖。
 - 即时 finding 只陈述机械事实；重复或已过期的模型 quote 不下发定位结果，也不得自动改文档。
 - guest 以可拖动、可收起悬浮窗承载结果；收起态与展开态共用位置，分类 tab 固定在滚动列表上方。正文变化后旧结果只显示“等待重新检查”，不得继续定位或采用；补全候选出现只隐藏行旁提示，不改变用户选择的面板展开态。
@@ -486,6 +500,6 @@ cd backend && mvn clean test                      # 全量（跨类常量内联�
 
 ## 长文有界降级（2026-09-15，dev-board#650）
 
-显式深入审校的模型阶段总预算105秒（前端120秒），按剩余时间创建不缓存的辅助模型客户端并禁自动重试；传输/账户错误即停止后续块，保留已完成发现并`deepComplete=false`。正文异步解析累计失败块并在结果摘要说明遗漏风险。自动补全扫描最多10000段/200000字，仍有有限候选。边界、回归和实测分层见 `doc/document-resilience-audit.md`。
+显式深入审校的模型阶段总预算105秒（前端120秒），按剩余时间创建不缓存的辅助模型客户端；可重试类整轮自动重试一次（首次尝试为此预留35秒），限流/额度/地域/超窗不重试；传输/账户错误即停止后续块，保留已完成发现并`deepComplete=false`＋`deepReason`原因码。失败日志带`chunk=n/总数`、`chars`、`budgetMs`、`setupMs`（余额探测＋provision key＋DNS/TLS）、`callMs`、`status`、`model`，用于证实或排除首轮冷启动。正文异步解析累计失败块并在结果摘要说明遗漏风险。自动补全扫描最多10000段/200000字，仍有有限候选。边界、回归和实测分层见 `doc/document-resilience-audit.md`。
 
 解析排队使用2工作线程+32等待容量；超载请求返回可见繁忙提示并清理RUNNING/inFlight，拒绝路径不启动AI。真实饱和恢复测试见`DocInsightServiceTest.saturatedParseQueueRejectsCleanlyAndRecovers`。
