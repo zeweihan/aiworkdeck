@@ -27,7 +27,7 @@
                  「换一个项目」成了高频动作，只把一个 11px 的箭头当热区没人找得到。
                  重命名随之移进菜单（点名字改名是隐藏交互，本来也没人知道）。 -->
             <view v-else class="project-switcher" @tap.stop="toggleProjectSwitcher" :title="$t('workbench.switchRecentProject')">
-              <text class="project-name">{{ project.name || $t('workbench.unnamedProject') }}</text>
+              <text class="project-name" :title="project.name || $t('workbench.unnamedProject')">{{ project.name || $t('workbench.unnamedProject') }}</text>
               <text class="switcher-arrow" :class="{ 'is-open': projectSwitcherOpen }">▾</text>
             </view>
             <view v-if="projectSwitcherOpen" class="switcher-mask" @tap.stop="projectSwitcherOpen = false"></view>

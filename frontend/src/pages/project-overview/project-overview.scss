@@ -61,6 +61,7 @@ $color-accent: #5BD197; // Mint Green
 
 .header-left {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 16px;
 }
@@ -105,6 +106,7 @@ $color-accent: #5BD197; // Mint Green
 
 .project-info {
   display: flex;
+  min-width: 0;
   flex-direction: column;
   justify-content: center;
 }
@@ -117,6 +119,9 @@ $color-accent: #5BD197; // Mint Green
 }
 
 .project-name {
+  display: block;
+  min-width: 0;
+  @include text-ellipsis;
   font-size: 16px;
   font-weight: 600;
   color: var(--awd-accent-text); // Forest Green for title
@@ -131,6 +136,7 @@ $color-accent: #5BD197; // Mint Green
 /* 协作状态 chip（顶栏；只在案卷已放进团队案件库时渲染） */
 .collab-chip {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 6px;
   padding: 2px 10px;
@@ -178,6 +184,7 @@ $color-accent: #5BD197; // Mint Green
    之后这是高频动作）。给一条透明描边占位，hover 才显形——常显边框会让顶栏变吵。 */
 .project-switcher {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 6px;
   max-width: 320px;
@@ -195,6 +202,7 @@ $color-accent: #5BD197; // Mint Green
 }
 
 .switcher-arrow {
+  flex-shrink: 0;
   font-size: 11px;
   color: var(--awd-accent-text);
   transition: transform 0.15s;
@@ -309,6 +317,7 @@ $color-accent: #5BD197; // Mint Green
 }
 
 .project-status-badge {
+  flex-shrink: 0;
   background-color: var(--awd-accent-soft);
   border: 1px solid transparent; // Cleaner look
   border-radius: 4px;
