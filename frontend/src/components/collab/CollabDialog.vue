@@ -248,7 +248,7 @@
 <script>
 import {
   listCloudConnections,
-  shareProjectToCloud, uploadToCloud, updateFromCloud, checkCloud,
+  shareProjectToCloud, uploadToCloud, updateFromCloud, checkCloud, getVersionStatus,
   getCloudMembers, addCloudMember, lookupCloudMember, getOfficialCloud,
 } from '@/services/api.js'
 import { roleLabel, ASSIGNABLE_ROLES } from '@/config/memberRoles.js'
@@ -258,7 +258,7 @@ import { getAppLanguage } from '@/utils/appLanguage.js'
 import { siteBaseUrl } from '@/utils/siteLinks.js'
 import { inviteLinkFor, notFoundPresentation } from '@/utils/memberLookup.js'
 import { remoteAheadText } from '@/utils/collabWording.js'
-import { submitGuideSteps } from '@/utils/submitGuide.js'
+import { submitNeedsGuide } from '@/utils/submitGuide.js'
 
 export default {
   name: 'CollabDialog',
@@ -427,16 +427,23 @@ export default {
     },
     async onUpload() {
       if (this.busy) return
-      // 手头的活没收尾、或者案件库已经被推进过：直接交必被后端一句 REMOTE_AHEAD 打发，
-      // 那句话说不清下一步点哪里。先摆一张三步清单（dev-board#645）。判据是本机缓存的
-      // 快照，可能陈旧——判漏了仍旧走下面这条老路，后端那句话原样兜底。
-      if (!submitGuideSteps({ working: this.working, ...(this.cloud || {}) }).canSubmit) {
-        this.close()
-        this.$emit('submit-guide')
-        return
-      }
       this.busy = true
       try {
+        // 手头的活没收尾、或者案件库已经被推进过：先摆一张三步清单（dev-board#645）。
+        // 判据由 submitNeedsGuide 现读一次 /version/status，不能用页面递下来的那份
+        // working——它不会因为律师刚才的编辑而刷新，而「工作中」直接交并不会被后端
+        // 拒掉：主线一动没动，git 回 UP_TO_DATE 算作推成功，界面弹一句「已交稿」
+        // 而什么都没交（dev-board 0.44.1 清单 B3）。
+        if (await submitNeedsGuide({
+          projectId: this.projectId,
+          working: this.working,
+          cloud: this.cloud,
+          readStatus: getVersionStatus,
+        })) {
+          this.close()
+          this.$emit('submit-guide')
+          return
+        }
         const res = await uploadToCloud(this.projectId)
         const d = (res && res.data) || {}
         if (d.status === 'UPLOADED') {
@@ -448,6 +455,12 @@ export default {
         } else if (d.status === 'CONFLICT') {
           this.close()
           this.$emit('conflict')
+        } else if (d.status === 'NOTHING_TO_SUBMIT') {
+          // 上面那次现读漏拦了（读失败退回快照、或读完到推之间才开的工作段）：这次
+          // 什么都没交，后端说的是「先结束本次工作」。别弹「已交稿」，把三步清单摆出来。
+          uni.showToast({ title: d.message || this.$t('version.submitGuideOneLeft'), icon: 'none' })
+          this.close()
+          this.$emit('submit-guide')
         } else {
           uni.showToast({ title: d.message || this.$t('version.submitFailedNotice'), icon: 'none' })
         }

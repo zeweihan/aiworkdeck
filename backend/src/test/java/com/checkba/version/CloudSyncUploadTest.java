@@ -252,6 +252,94 @@ class CloudSyncUploadTest {
         assertEquals(repoSvc.resolveRef(7L, "master"), remoteMasterShaOfBare());
     }
 
+    /** 造一段没收尾的活：改动落在工作段分支上，主线一动没动。 */
+    private void openWorkSessionWithUncommittedVersion() throws Exception {
+        svc.enableVersionRecording(7L, "韩泽伟", "hzw@example.com");
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "还没结束工作的改动");
+        svc.commitNow(7L, 1L, "韩泽伟", null);
+        assertTrue(svc.activeSession(7L).isPresent(), "前提不成立：此刻应当有一段没收尾的活");
+    }
+
+    /**
+     * dev-board 0.44.1 清单 B3。手头这段活还没结束时点「交稿」，界面弹的是一句「已交稿」，
+     * 而什么都没交——那次编辑还在工作段分支上，主线与案件库一模一样，git 回 UP_TO_DATE，
+     * 而 pushMainlineToOrigin 把 UP_TO_DATE 与 OK 归成同一档（都是 pushed=true），
+     * uploadToCloud 于是照着成功那条路走：报 UPLOADED、清 pendingUpload、重盖 lastSyncSha。
+     *
+     * 前端的三步清单本来该在点下去之前就把人拦住（#848），但它的判据是页面快照、
+     * 漏拦了；后端这一句假「已交稿」就是漏拦之后的唯一那道兜底，所以它必须说实话。
+     */
+    @Test
+    void uploadWhileWorkSessionIsOpenReportsNothingToSubmitInsteadOfSuccess() throws Exception {
+        linkToBareRemote(7L);
+        cloud.uploadToCloud(7L, false);
+        String inLibrary = remoteMasterShaOfBare();
+        openWorkSessionWithUncommittedVersion();
+
+        CloudSyncService.UploadResult r = cloud.uploadToCloud(7L, false);
+
+        assertEquals(CloudSyncService.UploadStatus.NOTHING_TO_SUBMIT, r.status(),
+                "什么都没送出去，不许报成「已交稿」");
+        assertNotNull(r.message(), "这一档必须带一句能指出下一步的话");
+        assertEquals(inLibrary, remoteMasterShaOfBare(), "案件库那一侧一个字都不该变");
+    }
+
+    /**
+     * 同一档的第二半：不许清 pendingUpload。这次根本没有同步发生，把黄灯清掉等于
+     * 告诉律师「都交上去了」。也不该顺手置成 true——没有哪一次交稿被拒。
+     */
+    @Test
+    void uploadWhileWorkSessionIsOpenLeavesPendingUploadUntouched() throws Exception {
+        linkToBareRemote(7L);
+        cloud.uploadToCloud(7L, false);
+        remoteRowOf(7L).setPendingUpload(true); // 早先一次后台上传没成，黄灯还亮着
+        openWorkSessionWithUncommittedVersion();
+
+        cloud.uploadToCloud(7L, false);
+
+        assertTrue(remoteRowOf(7L).getPendingUpload(), "这次什么都没交，不许把黄灯清掉");
+    }
+
+    /**
+     * 反向护栏：主线与案件库一致、且手头没有没收尾的活（界面上那句「和大家的稿一致」），
+     * 点了交稿仍旧回 UPLOADED。新加的那一档只认「有活没收尾」，不许把这条路也一起改掉。
+     */
+    @Test
+    void uploadWithNothingNewButNoOpenSessionIsStillUploaded() throws Exception {
+        linkToBareRemote(7L);
+        cloud.uploadToCloud(7L, false);
+
+        CloudSyncService.UploadResult r = cloud.uploadToCloud(7L, false);
+
+        assertEquals(CloudSyncService.UploadStatus.UPLOADED, r.status());
+        assertFalse(remoteRowOf(7L).getPendingUpload());
+    }
+
+    /**
+     * 为什么这一档只能在 push **之后**判、不能为了省一次网络往返直接跳过 push：
+     * 那一次 push 的 refspec 里还带着里程碑标签（MILESTONE_SPEC）。主线没动、但律师
+     * 刚给某一版起了名字时，跳过 push 就等于把这个名字永远留在本机。
+     */
+    @Test
+    void milestoneTagsStillReachTheLibraryWhenMainlineDidNotMove() throws Exception {
+        linkToBareRemote(7L);
+        cloud.uploadToCloud(7L, false);
+        String named = repoSvc.resolveRef(7L, "master");
+        repoSvc.tagMilestone(7L, named, "签约版");
+        openWorkSessionWithUncommittedVersion();
+
+        cloud.uploadToCloud(7L, false);
+
+        String url = repoSvc.remoteOriginUrl(7L);
+        try (Git remoteGit = Git.open(Path.of(java.net.URI.create(url)).toFile())) {
+            assertFalse(
+                    remoteGit.getRepository().getRefDatabase()
+                            .getRefsByPrefix("refs/tags/awd/milestone/").isEmpty(),
+                    "里程碑标签仍要随这次 push 上到案件库");
+        }
+    }
+
     /**
      * Task 8 时这条路径只置黄灯（REMOTE_AHEAD）。Task 9 升级：没有未收尾工作/没站在稿上
      * 时被拒后会自动整合——这里两边真改了同一处（合同.txt 的内容），整合遇到真实冲突，

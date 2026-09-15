@@ -230,6 +230,32 @@ class CloudControllerTest {
         }
     }
 
+    /**
+     * dev-board 0.44.1 清单 B3：手头的活没收尾时那次交稿什么都没送出去，服务层回
+     * NOTHING_TO_SUBMIT + 一句「先结束本次工作」。这一档必须**原样**到前端——
+     * 前端三处交稿入口就是照 status 决定「弹三步清单」还是「弹已交稿」的，
+     * 状态名或 message 被吞掉，律师看到的又是那句假成功。
+     */
+    @Test
+    void uploadForwardsNothingToSubmitStatusAndMessage() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(USER_ID);
+            when(projectMemberService.hasReadPermission(PROJECT_ID, USER_ID)).thenReturn(true);
+            when(projectMemberService.isClient(PROJECT_ID, USER_ID)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(PROJECT_ID, USER_ID)).thenReturn(true);
+            when(cloudSyncService.uploadToCloud(PROJECT_ID, false)).thenReturn(
+                    new CloudSyncService.UploadResult(CloudSyncService.UploadStatus.NOTHING_TO_SUBMIT,
+                            "手头这段工作还没结束，还没有可以交的版。先结束本次工作，再交稿。"));
+
+            var resp = controller.upload(PROJECT_ID, "sess");
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) resp.getBody().get("data");
+            assertEquals("NOTHING_TO_SUBMIT", data.get("status"));
+            assertEquals("手头这段工作还没结束，还没有可以交的版。先结束本次工作，再交稿。", data.get("message"));
+        }
+    }
+
     @Test
     void updateForwardsProjectIdUserIdAndUserName() {
         try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
