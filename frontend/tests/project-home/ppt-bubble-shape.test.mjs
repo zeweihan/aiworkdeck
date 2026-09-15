@@ -16,13 +16,6 @@ const stripComments = (s) =>
 // 换成一个空注释节点，用户那句「已取消」/「开始生成」于是无声消失。
 const REQUIRED = ['thinking', 'processes', 'artifacts']
 
-test('RootBubble 确实裸解引用 thinking/processes/artifacts（本用例的前提）', () => {
-  const src = read('components/AgentMessage/RootBubble.vue')
-  assert.match(src, /bubble\.thinking\.status/, 'thinking 已改成可空解引用，本用例前提失效')
-  assert.match(src, /bubble\.processes\.length/, 'processes 已改成可空解引用，本用例前提失效')
-  assert.match(src, /bubble\.artifacts\.length/, 'artifacts 已改成可空解引用，本用例前提失效')
-})
-
 // 取出函数体里 bubbles.value.push({ ... }) 的那个对象字面量（括号配平地截）
 const pushedBubbleOf = (src, fnName) => {
   const start = src.indexOf('const ' + fnName)

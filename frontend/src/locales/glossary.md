@@ -82,6 +82,10 @@
 | 采纳（稿） | Adopt | 采纳-放弃-冲突三选一：Adopt / Discard / Resolve Conflict |
 | 交稿 | Submit Draft | 协作 |
 | 取回最新稿 | Pull Latest | 协作 |
+| 交稿引导 | Submit-draft guide | dev-board#645；交稿前那张三步清单，界面上不出现这个词组本身 |
+| 待做 / 进行中 / 已完成 | To do / Next / Done | 交稿引导的步骤标记；「进行中」= 轮到你做这一步，不是「正在跑」 |
+| 稍后再说 | Later | 交稿引导的退出按钮；与「取消 Cancel」区分——什么都没做，不是撤销 |
+| 这套协作怎么用 | How collaboration works | 协作抽屉里常驻的说明入口 |
 | 提交历史 | History | 中栏标签页（dev-board#624）；标签名短，「完整历史」入口 → Full History |
 | 完整历史 | Full History | 版本面板顶部与协作抽屉里通往提交历史标签页的入口 |
 | 泳道图 | Lane graph | 提交历史左侧那张图；对外不出现「分支图 / branch graph」 |

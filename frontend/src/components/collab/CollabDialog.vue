@@ -86,6 +86,11 @@
               {{ $t('version.collabActionsNote') }}
             </view>
           </template>
+          <!-- 常驻的说明入口：这三个按钮各自干什么、为什么有时点了交稿反而被拦下来，
+               只在被拦下来的那一刻讲一次不够——律师会在没被拦的时候想弄明白。 -->
+          <text class="collab-copy-link collab-help-link" @tap="openHelp">
+            {{ $t('version.submitGuideHelpEntry') }}
+          </text>
         </template>
 
         <!-- ==================== 案件参与人 ==================== -->
@@ -253,6 +258,7 @@ import { getAppLanguage } from '@/utils/appLanguage.js'
 import { siteBaseUrl } from '@/utils/siteLinks.js'
 import { inviteLinkFor, notFoundPresentation } from '@/utils/memberLookup.js'
 import { remoteAheadText } from '@/utils/collabWording.js'
+import { submitGuideSteps } from '@/utils/submitGuide.js'
 
 export default {
   name: 'CollabDialog',
@@ -272,7 +278,9 @@ export default {
   },
   // changed：云端状态可能变了，页面重新拉一次。reload-files：磁盘被改写，重载打开中的编辑器。
   // conflict：撞上了要逐份选择的情况，页面把人送到裁决现场。
-  emits: ['update:visible', 'changed', 'reload-files', 'conflict', 'open-history'],
+  // submit-guide / collab-help：都由页面那一个 SubmitDraftGuide 实例接手（三处交稿入口
+  // 共用一个实例，各自判断必然走散）。
+  emits: ['update:visible', 'changed', 'reload-files', 'conflict', 'open-history', 'submit-guide', 'collab-help'],
   // 工作台 provide 的离开出口（先落盘再 reLaunch）与设置标签入口；宿主不是工作台时为 null
   inject: { leaveWorkbench: { default: null }, openSettingsTab: { default: null } },
   data() {
@@ -413,8 +421,20 @@ export default {
         this.busy = false
       }
     },
+    openHelp() {
+      this.close()
+      this.$emit('collab-help')
+    },
     async onUpload() {
       if (this.busy) return
+      // 手头的活没收尾、或者案件库已经被推进过：直接交必被后端一句 REMOTE_AHEAD 打发，
+      // 那句话说不清下一步点哪里。先摆一张三步清单（dev-board#645）。判据是本机缓存的
+      // 快照，可能陈旧——判漏了仍旧走下面这条老路，后端那句话原样兜底。
+      if (!submitGuideSteps({ working: this.working, ...(this.cloud || {}) }).canSubmit) {
+        this.close()
+        this.$emit('submit-guide')
+        return
+      }
       this.busy = true
       try {
         const res = await uploadToCloud(this.projectId)
@@ -673,6 +693,7 @@ export default {
   color: var(--awd-accent-text); font-size: 13.5px; cursor: pointer;
   text-decoration: underline; align-self: flex-start;
 }
+.collab-help-link { margin-top: 14px; }
 
 .collab-invite-box {
   background: var(--awd-bg); border: 1px solid var(--awd-border); border-radius: 8px; padding: 12px;

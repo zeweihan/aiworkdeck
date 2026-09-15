@@ -84,21 +84,23 @@ async function render(state = {}) {
 
 const stripComments = (html) => html.replace(/<!--[\s\S]*?-->/g, '')
 
-// ==================== 首屏可见 ====================
+// ==================== 可选补充词渐进展开 ====================
 
-test('自定义词输入区在首屏 DOM 里：一个文件都没选、什么都没点，它就在', async () => {
+test('补充词入口默认可见，输入区默认折叠且保留在 DOM 中', async () => {
   const html = stripComments(await render())
-  assert.match(html, /panels\.deCustomWordsTitle/, '首屏没有「要涂黑的姓名/词语」标题')
+  assert.match(html, /panels\.deCustomWordsTitle/, '默认应可找到补充词入口')
+  assert.match(html, /<view(?=[^>]*class="custom-words-content")(?=[^>]*style="display:none)[^>]*>/)
   assert.match(html, /class="[^"]*custom-words-input[^"]*"/, '首屏没有自定义词输入框')
   assert.match(html, /panels\.deCustomPlaceholder/, '输入框没有占位提示')
 })
 
-test('可选补充词说明在首屏可见', async () => {
-  const html = stripComments(await render())
+test('展开补充词后可查看原有说明', async () => {
+  const html = stripComments(await render({ customWordsOpen: true }))
+  assert.doesNotMatch(html, /<view(?=[^>]*class="custom-words-content")(?=[^>]*style="display:none)[^>]*>/)
   assert.match(html, /panels\.deCustomWordsHint/, '首屏没有说明文案')
 })
 
-test('自定义词区在「脱敏策略」勾选区之前——姓名是主路径，不是附属选项', async () => {
+test('补充词入口仍在「脱敏策略」勾选区之前', async () => {
   const html = stripComments(await render())
   const words = html.indexOf('panels.deCustomWordsTitle')
   const strategies = html.indexOf('panels.deStrategiesTitle')

@@ -5,6 +5,7 @@ import { deleteAgentInboxItem, getAgentInbox, getApiBaseUrl, getConversationMeta
 import { getSessionId } from '@/utils/auth.js'
 import { createProtocolTagRegex, decodeProtocolTags } from '@/composables/agentTagProtocol.mjs'
 import { t } from '@/i18n'
+import { captureChatTimeline } from '@/components/AgentMessage/chatTimeline.mjs'
 import { nextBubbleId } from './bubbleId.js'
 import { applyInboxReceipt, applyInboxSnapshot, applyInputApplied, createInboxState, markInboxEvent, removeInboxItem, replaceInboxItem } from './agentInboxState.mjs'
 
@@ -143,6 +144,7 @@ export function useAgentStream() {
     let parserBuffer = ''
     let activeTag = null
     let activeProcessId = null
+    let thinkingParentProcessId = null
     // 当前 <tool_output> 归属的 tool 条目：一轮多工具时后端按调用顺序补发多个
     // tool_output，必须 FIFO 归属到「第一个仍在 loading 的 tool」——按"最后一个
     // tool"归属会把所有结果都错挂到最后一个调用上。
@@ -158,6 +160,7 @@ export function useAgentStream() {
         thinking: { status: 'idle', content: '', duration: 0, startTime: 0, endTime: 0 },
         title: '',
         processes: [],
+        timeline: [],
         // 延续当前任务清单，后续 plan_update 覆写；固定进度面板按轮保留快照。
         // TodoListService 约定跨轮保留直到下一次 todo_write，不能在“继续”时清空。
         planTodos: [...planTodos.value],
@@ -206,6 +209,7 @@ export function useAgentStream() {
         parserBuffer = ''
         activeTag = null
         activeProcessId = null
+        thinkingParentProcessId = null
         activeToolItem = null
     }
 
@@ -617,6 +621,7 @@ export function useAgentStream() {
             newBubble.isStreaming = true
             newBubble.thinking.status = 'thinking'
             newBubble.thinking.startTime = Date.now()
+            captureChatTimeline(newBubble)
             bubbles.value.push(newBubble)
             currentAssistantBubble.value = newBubble
             isStreaming.value = true
@@ -812,7 +817,10 @@ export function useAgentStream() {
                     const last = bubbles.value[bubbles.value.length - 1]
                     if (last && last.role === 'ASSISTANT') target = last
                 }
-                if (target) target.planTodos = [...planTodos.value]
+                if (target) {
+                    target.planTodos = [...planTodos.value]
+                    captureChatTimeline(target)
+                }
             } catch (e) {
                 console.error('Failed to parse plan_update', e)
             }
@@ -1305,6 +1313,7 @@ export function useAgentStream() {
                     bubble.content = ''
                     bubble.thinking = { status: 'idle', content: '', duration: 0, startTime: 0, endTime: 0 }
                     bubble.processes = []
+                    bubble.timeline = []
                     bubble.artifacts = []
                     bubble.walkthrough = ''
                     // 快照会把 <question> 整块重放，这里必须一起清掉，否则旧问题卡与重建的并存
@@ -1355,6 +1364,7 @@ export function useAgentStream() {
         }
         if (!proc.items) proc.items = []
         proc.items.push({ type: 'step', status: isDone ? 'done' : 'doing', text })
+        captureChatTimeline(bubble)
     }
 
     // --- PARSER HELPERS ---
@@ -1391,6 +1401,7 @@ export function useAgentStream() {
             console.log('[AgentStream] Flushing remaining buffer:', parserBuffer.length, 'chars')
             flushContent(parserBuffer)
             parserBuffer = ''
+            captureChatTimeline(currentAssistantBubble.value)
         }
     }
 
@@ -1404,6 +1415,7 @@ export function useAgentStream() {
                 data: evt.data,
                 fileName: evt.name ? evt.name : (evt.type === 'task_list' ? t('agentStream.taskListArtifact') : t('agentStream.planArtifact'))
             })
+            captureChatTimeline(currentAssistantBubble.value)
         }
     }
 
@@ -1422,13 +1434,16 @@ export function useAgentStream() {
             } else {
                 lastItem.content += text
             }
+            captureChatTimeline(bubble)
             return
         }
         if (bubble.thinking.status !== 'thinking') {
+            bubble.thinking = { status: 'idle', content: '', duration: 0, startTime: Date.now() }
             bubble.thinking.status = 'thinking'
             if (!bubble.thinking.startTime) bubble.thinking.startTime = Date.now()
         }
         bubble.thinking.content += text
+        captureChatTimeline(bubble)
     }
 
     const flushContent = (text) => {
@@ -1603,9 +1618,11 @@ export function useAgentStream() {
                     bubble.thinking.endTime = Date.now()
                     bubble.thinking.duration = (bubble.thinking.endTime - bubble.thinking.startTime) / 1000
                 }
-                activeTag = activeProcessId ? 'process' : null // Return to process scope or null
+                activeProcessId = thinkingParentProcessId
+                activeTag = activeProcessId ? 'process' : null // Return to the actual enclosing scope
             } else {
                 // Open thinking
+                thinkingParentProcessId = activeProcessId
                 if (activeProcessId) {
                     const proc = bubble.processes.find(p => p.id === activeProcessId)
                     if (proc) {
@@ -1631,7 +1648,8 @@ export function useAgentStream() {
                     activeProcessId = lastProc.id
                     activeTag = 'thinking'
                 } else {
-                    // Only root thinking if NO processes exist yet
+                    // Keep later thinking segments distinct in the transcript.
+                    if (bubble.thinking.status === 'done') bubble.thinking = { status: 'idle', content: '', duration: 0, startTime: Date.now() }
                     bubble.thinking.status = 'thinking'
                     // 发送时已打过 startTime（读秒从发送起算），这里只兜底补齐
                     if (!bubble.thinking.startTime) bubble.thinking.startTime = Date.now()
@@ -1663,7 +1681,7 @@ export function useAgentStream() {
                 activeProcessId = null
             } else {
                 settleRootThinking(bubble)
-                const pid = `proc-${Date.now()}`
+                const pid = `proc-${Date.now()}-${bubble.processes.length}`
                 // 新任务开始 = 之前所有任务的文字步骤都已结束（兜底收敛，防止历史卡片停留"执行中"）
                 bubble.processes.forEach(p => p.items?.forEach(item => {
                     if (item.type === 'step' && item.status === 'doing') item.status = 'done'
@@ -1776,7 +1794,11 @@ export function useAgentStream() {
             else activeTag = 'walkthrough'
         } else if (tagName === 'final') {
             if (isClose) activeTag = null
-            else { settleRootThinking(bubble); activeTag = 'final' }
+            else {
+                settleRootThinking(bubble)
+                if (bubble.content && !bubble.content.endsWith('\n\n')) bubble.content += '\n\n'
+                activeTag = 'final'
+            }
         } else if (tagName === 'question') {
             if (isClose) {
                 // 收尾去掉正文两端空白：模型习惯在标签后换行，问题卡首行会多一个空行
@@ -1810,7 +1832,7 @@ export function useAgentStream() {
                 const name = attributes['name'] || null
                 activeTag = 'artifact'
 
-                const aid = `art-${Date.now()}`
+                const aid = `art-${Date.now()}-${bubble.artifacts.length}`
                 handleArtifactEvent({ operation: 'create', id: aid, type, name, status: 'draft', data: { content: '' } })
             } else {
                 activeTag = null
@@ -1819,7 +1841,7 @@ export function useAgentStream() {
     }
 
     // --- XML STREAM PROCESSOR ---
-    const processTextStream = (text) => {
+    const processTextStream = (text, history = false) => {
         // FILTER: Detect and strip orphaned JSON content artifacts (e.g. {"content":""} or {"content":"..."})
         // This mitigates the issue where the model echoes the hidden JSON protocol
         if (text.trim().startsWith('{"content":') && text.trim().endsWith('}')) {
@@ -1840,11 +1862,14 @@ export function useAgentStream() {
 
         parserBuffer += text
 
-        // FILTER: Strip markdown code block wrappers
-        parserBuffer = parserBuffer.replace(/^```(?:xml|html|markdown)?\s*\n?/gm, '')
-        parserBuffer = parserBuffer.replace(/\n?```\s*$/gm, '')
-        parserBuffer = parserBuffer.replace(/```(?:xml|html|markdown)?\s*\n/g, '')
-        parserBuffer = parserBuffer.replace(/\n```/g, '')
+        if (!history) {
+            // FILTER: Strip markdown code block wrappers
+            parserBuffer = parserBuffer.replace(/^```(?:xml|html|markdown)?\s*\n?/gm, '')
+            parserBuffer = parserBuffer.replace(/\n?```\s*$/gm, '')
+            parserBuffer = parserBuffer.replace(/```(?:xml|html|markdown)?\s*\n/g, '')
+            parserBuffer = parserBuffer.replace(/\n```/g, '')
+
+        }
 
         // 标签清单在 agentTagProtocol.mjs（与后端 AgentTagProtocol.TAGS 同一份）：
         // option 是 question 的子标签，不认它的话选项文字会当正文流出去，用户会看到裸的 <option> 源码；
@@ -1873,15 +1898,53 @@ export function useAgentStream() {
                 flushContent(parserBuffer.substring(0, index))
             }
 
+            captureChatTimeline(currentAssistantBubble.value)
             handleTag(tagName, isSlash === '/', null, fullTag)
+            captureChatTimeline(currentAssistantBubble.value)
 
             // Slice buffer
             parserBuffer = parserBuffer.substring(index + fullTag.length)
             tagRegex.lastIndex = 0
         }
+        const possibleTag = parserBuffer.lastIndexOf('<')
+        const tail = possibleTag >= 0 ? parserBuffer.slice(possibleTag) : ''
+        const keepTail = tail && !tail.includes('>')
+        const end = keepTail ? possibleTag : parserBuffer.length
+        if (end > 0) {
+            flushContent(parserBuffer.slice(0, end))
+            parserBuffer = parserBuffer.slice(end)
+            captureChatTimeline(currentAssistantBubble.value)
+        }
     }
 
 
+
+    const parseAssistantHistory = (content) => {
+        const saved = { bubble: currentAssistantBubble.value, parserBuffer, activeTag, activeProcessId, thinkingParentProcessId, activeToolItem, handler: clientActionHandler.value }
+        const bubble = createAssistantBubble()
+        bubble.planTodos = []
+        try {
+            currentAssistantBubble.value = bubble
+            clientActionHandler.value = null
+            resetParser()
+            processTextStream(content || '', true)
+            flushRemainingBuffer()
+            settleRootThinking(bubble)
+            finalizeProcesses('success')
+            for (const entry of bubble.timeline) {
+                if (entry.type === 'thinking') Object.assign(entry.data, { status: 'done', duration: 0, startTime: 0 })
+            }
+            return bubble
+        } finally {
+            currentAssistantBubble.value = saved.bubble
+            parserBuffer = saved.parserBuffer
+            activeTag = saved.activeTag
+            activeProcessId = saved.activeProcessId
+            thinkingParentProcessId = saved.thinkingParentProcessId
+            activeToolItem = saved.activeToolItem
+            clientActionHandler.value = saved.handler
+        }
+    }
 
     const clientActionHandler = ref(null)
     const titleUpdateHandler = ref(null)
@@ -1970,6 +2033,7 @@ export function useAgentStream() {
         setConversationId: setConversationIdWithReset,
         resetSSE,
         clearBubbles,
+        parseAssistantHistory,
         currentConversationId,
         inboxState,
         updateInbox,

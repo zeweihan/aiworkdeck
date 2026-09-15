@@ -2435,6 +2435,90 @@ try {
       await shot('J11-history-remote-row')
     })
 
+    // ---- 交稿引导（dev-board#645）----
+    // 此刻案件库已经领先（上一步刚断言完 remoteAhead 与「案件库领先 N 版」），再给 A
+    // 造一段没收尾的活，就凑齐了「两步都欠」这个最能说明问题的时刻：以前点「交稿」
+    // 只会得到后端一句 REMOTE_AHEAD，律师读不出下一步该点哪里。
+    //
+    // 拦下来这一步的判据是页面手上的缓存快照（remoteAhead 一条就够），而清单上那两个
+    // 勾是弹窗自己开窗后重读出来的——所以「还差两步」这个标题恰好同时钉住了两件事：
+    // 拦截生效 + 弹窗的自刷新生效（页面那份 working 此刻还是旧的 false）。
+    //
+    // 收尾必须把这段活丢弃：下一步要在干净的 A 上点「取回最新稿」，留着一段没收尾的
+    // 工作会让那次取回变成三方合并，把后面几步全带偏。丢弃会把工作区还原成主线内容，
+    // 文件字节一并复原。
+    await step('J11-引导：手头有活 + 案件库领先时点「交稿」，先摆一张三步清单', async () => {
+      await restOverwrite('qa-J11协作文件.txt', 'QA J11 交稿引导：改了但没结束工作\n')
+      const before = await api('/api/projects/' + QA.projectId + '/version/status')
+      if (!(before && before.data && before.data.working)) {
+        throw new Error('裸 REST 改文件之后 A 没有进入「工作中」，引导的前提不成立: '
+          + JSON.stringify(before && before.data).slice(0, 300))
+      }
+
+      await clickHistoryBtn('交稿')
+      await page.waitForSelector('.submit-guide', { timeout: 15000 })
+      // 标题按「还欠几步」算（utils/submitGuide.js）。弹窗开窗时页面递过来的 working
+      // 还是 false，只有它自己重读过 /version/status 才会变成「两步」——所以这里轮询。
+      const okTitle = await pollUntil(async () => {
+        const t = await page.evaluate(() => {
+          const el = document.querySelector('.submit-guide .awd-title')
+          return el ? (el.innerText || '').trim() : ''
+        })
+        return t === '交稿前还差两步'
+      }, 20000, 800)
+      const title = await page.evaluate(() => {
+        const el = document.querySelector('.submit-guide .awd-title')
+        return el ? (el.innerText || '').trim() : ''
+      })
+      if (!okTitle) throw new Error('引导标题不是「交稿前还差两步」，实际是: ' + JSON.stringify(title))
+
+      // 第 ③ 步（交稿）在前两步做完之前不可点——可点的话律师照样会撞上那句后端错误，
+      // 这张清单就白摆了。判据是类名而不是「点下去没反应」：后者分不清「禁用了」与
+      // 「点歪了」（J10 那条按钮被裁切成不可点的地雷）。
+      const steps = await page.evaluate(() =>
+        [...document.querySelectorAll('.submit-guide .sg-step')].map((el) => {
+          const btn = el.querySelector('.sg-step-btn')
+          return {
+            id: [...el.classList].find((c) => c.startsWith('sg-step-')) || '',
+            state: ['sg-todo', 'sg-active', 'sg-done'].find((c) => el.classList.contains(c)) || '',
+            btnDisabled: !!btn && btn.classList.contains('awd-btn-disabled'),
+          }
+        }))
+      if (steps.length !== 3) throw new Error('引导上不是三步: ' + JSON.stringify(steps))
+      const submitStep = steps.find((s) => s.id === 'sg-step-submit')
+      if (!submitStep) throw new Error('引导上没有「交稿」那一步: ' + JSON.stringify(steps))
+      if (!submitStep.btnDisabled) {
+        throw new Error('前两步没做完，第 ③ 步「交稿」却是可点的: ' + JSON.stringify(steps))
+      }
+      // 顺序解锁：只有第一步是「进行中」，后两步都还是「待做」
+      if (steps[0].state !== 'sg-active' || steps[1].state !== 'sg-todo' || steps[2].state !== 'sg-todo') {
+        throw new Error('三步没有按顺序解锁: ' + JSON.stringify(steps))
+      }
+      await shot('J11-submit-guide-two-left')
+
+      // 「稍后再说」= 什么都没做地退出，不是撤销
+      const later = await page.evaluate(() => {
+        const el = document.querySelector('.submit-guide .sg-later')
+        if (!el) return null
+        const r = el.getBoundingClientRect()
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+      })
+      if (!later) throw new Error('引导上没有「稍后再说」按钮')
+      await page.mouse.click(later.x, later.y)
+      await sleep(600)
+      const stillOpen = await page.evaluate(() => !!document.querySelector('.submit-guide'))
+      if (stillOpen) throw new Error('点了「稍后再说」引导没关掉')
+
+      // 收尾：丢弃这段活，把 A 还原成干净的主线状态，交给下一步去取回
+      const dis = await api('/api/projects/' + QA.projectId + '/version/session/discard', { method: 'POST' })
+      if (!dis || dis.code !== 0) throw new Error('丢弃引导用的那段工作失败: ' + JSON.stringify(dis).slice(0, 200))
+      const after = await api('/api/projects/' + QA.projectId + '/version/status')
+      if (after && after.data && after.data.working) {
+        throw new Error('丢弃之后 A 仍是「工作中」，后面几步会被带偏: '
+          + JSON.stringify(after.data).slice(0, 300))
+      }
+    })
+
     await step('J11-历史：在标签页里点「取回最新稿」后出现「你 取回了最新稿」事件行、remote 行消失', async () => {
       const before = countEventText(await cloudEventTexts(), '你 取回了最新稿')
       await clickHistoryBtn('取回最新稿')

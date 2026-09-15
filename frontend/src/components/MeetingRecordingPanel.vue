@@ -1102,11 +1102,10 @@ export default {
 
 /* ---- 转写档位（录音开始前就摆出来）---- */
 .mr-tier {
-  margin: var(--awd-panel-gap) var(--awd-panel-pad-x) 0;
-  padding: 8px;
-  border: 1px solid var(--awd-border);
-  border-radius: var(--awd-panel-radius);
-  background: var(--awd-bg);
+  margin: 0;
+  padding: var(--awd-panel-gap) var(--awd-panel-pad-x);
+  border-bottom: 1px solid var(--awd-panel-border);
+  background: var(--awd-surface);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1197,7 +1196,7 @@ export default {
   margin: var(--awd-panel-gap) var(--awd-panel-pad-x) 0;
   padding: 10px;
   border: 1px solid var(--awd-border);
-  border-radius: 12px;
+  border-radius: var(--awd-panel-radius);
   background: var(--awd-bg);
   display: flex;
   flex-direction: column;
@@ -1253,11 +1252,10 @@ export default {
    这里刻意不跟着整体收紧：「开始录音」是这个面板唯一的主动作，把它压成
    一行 28px 的普通按钮会让面板失去焦点。收的是它周围的边距，不是按钮本身。 */
 .mr-record-zone {
-  margin: var(--awd-panel-gap) var(--awd-panel-pad-x);
-  padding: 10px;
-  border: 1px solid var(--awd-border);
-  border-radius: var(--awd-panel-radius);
-  background: var(--awd-bg);
+  margin: 0;
+  padding: var(--awd-panel-gap-lg) var(--awd-panel-pad-x);
+  border-bottom: 1px solid var(--awd-panel-border);
+  background: var(--awd-surface);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1514,7 +1512,7 @@ export default {
 .mr-detail {
   border-top: 1px solid var(--awd-border-subtle);
   padding: var(--awd-panel-gap) var(--awd-panel-pad-x);
-  background: var(--awd-info-soft);
+  background: var(--awd-bg);
   display: flex;
   flex-direction: column;
   gap: var(--awd-panel-gap);
@@ -1526,8 +1524,8 @@ export default {
 }
 
 .mr-link {
-  font-size: 11px;
-  color: var(--awd-info-text);
+  font-size: var(--awd-panel-fs-meta);
+  color: var(--awd-accent-text);
   cursor: pointer;
 
   &.danger { color: var(--awd-danger-text); }
@@ -1569,9 +1567,13 @@ export default {
 }
 
 .mr-error {
-  font-size: 11px;
+  padding: 8px;
+  border-radius: var(--awd-panel-radius);
+  background: var(--awd-danger-soft);
+  font-size: var(--awd-panel-fs);
   color: var(--awd-danger-text);
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .mr-progress-row {

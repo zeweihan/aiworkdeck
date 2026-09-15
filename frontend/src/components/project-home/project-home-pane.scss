@@ -17,6 +17,7 @@
    的 @container 断点，不许再在这里按 compact 布尔值无条件收窄。 */
 .project-home-pane.is-compact {
   height: 100%;
+  padding: 0;
   overflow-y: auto;
   background: var(--awd-surface);
 }
@@ -79,10 +80,6 @@
 
 /* 微窄：单列、最紧凑密度 */
 @container home-pane (max-width: 359px) {
-  .project-home-pane {
-    padding: 10px 12px;
-  }
-
   .home-column {
     gap: 10px;
   }
@@ -100,10 +97,6 @@
 
 /* 窄中：两列起步，字号/间距升一档——拖左栏最常落的区间，重点打磨 */
 @container home-pane (min-width: 360px) and (max-width: 559px) {
-  .project-home-pane {
-    padding: 14px 16px;
-  }
-
   .home-column {
     gap: 14px;
   }
@@ -120,3 +113,25 @@
 }
 
 /* 常规（>560px）：不写规则，落回上面已有的宽松默认样式 */
+
+/* Sidebar sections use the same edge and density as Explorer and Marketplace.
+   Container queries cannot select their own query container; host padding belongs here. */
+.project-home-pane.is-compact {
+  padding: 0;
+  .home-column { gap: 0; }
+  .home-section {
+    padding: var(--awd-panel-gap) var(--awd-panel-pad-x);
+    border: 0;
+    border-top: 1px solid var(--awd-panel-border);
+    border-radius: 0;
+  }
+  .home-section-title {
+    padding: 0;
+    margin: 0 0 var(--awd-panel-gap);
+    border: 0;
+    line-height: var(--awd-panel-sec-h);
+    font-size: var(--awd-panel-fs-sec);
+    color: var(--awd-panel-text-2);
+  }
+  .home-template-line { padding: var(--awd-panel-gap) var(--awd-panel-pad-x); }
+}

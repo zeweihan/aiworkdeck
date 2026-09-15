@@ -262,8 +262,17 @@ PR#797 当时只改了 `VersionController`，自动存档（`ProjectFileService.
 `{CloudConnection.username}@collab.aiworkdeck.local`（`awd_xxx` 是官网账户在案件库侧的账号名，
 跨机器稳定、跨人唯一）；未绑定 → `{本机 username}@local.aiworkdeck.local`。
 **域名本身是判据**：`isSelf()` 先比邮箱，只有这两个新域才可信（`isAccountScoped`），
-旧公式的存量提交回落比展示名——历史永不重写（地雷 #1），存量只剩这一条线索，
-不能因为比不准就对全部旧历史一律判否。`sanitize()` 对非 ASCII 用户名**丢掉不安全字符再补一段
+旧公式的存量提交回落比署名——历史永不重写（地雷 #1），存量只剩这一条线索，
+不能因为比不准就对全部旧历史一律判否。**回落这一侧比的是「我历史上用过的全部署名」**
+（dev-board#647，`SelfIdentity.aliases`）：当前展示名、本机 username（那阵子 `signatureName`
+还取用户名）、案件库账号名 `awd_xxx`、官网账户展示名（`AccountService.currentDisplayNameOrNull`，
+字段注入、缺席就少一条别名），外加旧公式邮箱 `{name}@aiworkdeck.local` 的 name 部分。
+理由是真机上同一个人的 6 版新稿跨了三个年代的署名（9 月 10 日前是 `hanzewei`，11 日起是
+「韩泽伟」），只比当前展示名就会把自己的旧署名数成几个同事，顶栏说「韩泽伟等 3 人交了新稿」。
+**放宽只作用在「是本人」这一侧**：新域邮箱那一支直接 return，同名的另一个账户不会因为别名多了
+就被认成我；`user-{本机userId}@aiworkdeck.local` 的本地部分**绝不当别名**——「两个不同的人都叫
+`user-1`」正是这套邮箱当初被换掉的病根。「我是谁」是一份 `SelfIdentity` 快照，
+`/history` 一页与 `describeRemoteAhead` 那趟 200 版各只算一次（别名要查几次库、读一次 account.json）。`sanitize()` 对非 ASCII 用户名**丢掉不安全字符再补一段
 原值 SHA-256 前 6 位**，不是逐字换 `-`：后者会让所有三字中文名都变成 `---@local.…`，
 把两个同事判成同一个人。名字一律走 `UserService.signatureName`。
 
@@ -278,8 +287,12 @@ PR#797 当时只改了 `VersionController`，自动存档（`ProjectFileService.
 `proxyMembers`/`ensureRemoteUserId` 拿到成员表时顺手回填）。**`allowFetch` 只有 `describeRemoteAhead`
 传 true**（案件库确实领先了、这句话非说清是谁不可），`/history`、`/timeline`、`/drafts/{id}/timeline`
 一律传 false——读列表不该为一个名字卡在一次网络请求上。`VersionEntry.withAuthorName` 只在出参侧用，
-Git 对象一字节不碰（历史永不重写，地雷 #1）。**`self` 仍然只按邮箱判，不受这道翻译影响**：
+Git 对象一字节不碰（历史永不重写，地雷 #1）。**`self` 仍然只按邮箱/别名判，不受这道翻译影响**：
 护栏 `HistoryEndpointTest.remoteDisplayNamesReplaceTheGitSignature` 同时断言换名之后 self 不变。
+**判为本人、且案件库那边也没有我的名字时，`/history` 的 `authorName` 用当前 `signatureName`
+顶掉那一行的历史旧署名**（dev-board#647，`preferredAuthorName` 的三参重载）——顺序是刻意的：
+**案件库参与人表永远优先**（它是展示名的权威源，本人那一行也走同一条映射，这是本列上线时定下的
+口径），只有映射没命中才轮到当前署名，否则律师会在自己的历史里看到一串当年的用户名还以为是别人。
 
 **`X-AWD-Resolutions` 尾注**（`ProjectRepoService`）：冲突裁决的结果写进提交消息，
 格式 `<path>=<MAIN|DRAFT|BOTH>; ...`，按路径排序（同一次裁决在任何机器上生成同一行文本）。
@@ -295,7 +308,10 @@ Git 对象一字节不碰（历史永不重写，地雷 #1）。**`self` 仍然�
 **`cloudStatus(projectId, userId)` 的 remoteAhead 四个键**（`CloudSyncService.describeRemoteAhead`）：
 `remoteAheadCount`（案件库领先几版）、`remoteAheadAuthors`（去重作者名，**最多 3 个**，新的在前）、
 `remoteAheadAuthorCount`（去重作者**总数**）、`remoteAheadBySelf`（**全部**都是我才为真——
-掺进一版同事的，界面就该说同事的名字）。四个键都只在 `remoteAhead` 为真时出现，
+掺进一版同事的，界面就该说同事的名字）。**去重前先把 `isSelf` 为真的那些归并成一个「本人」**
+（dev-board#647）：本人不管用过几个旧署名都只占 `SELF_AUTHOR_KEY` 那一格，显示成我现在的署名；
+哨兵键与真名分开，恰好与我同名的同事不会被并进来（护栏
+`CloudStatusAuthorsTest.aColleagueWhoHappensToShareMyNameIsStillSomeoneElse`）。四个键都只在 `remoteAhead` 为真时出现，
 且统计失败时一个都不给（`remoteAhead` 与整条状态照常回，见那个方法的注释）：
 这是一个常驻状态指示，为一句更准的话把云端状态打成 500 比笼统的「同事交了新稿」糟得多。
 **缺席即降级**，不是错误——老服务端不回这几个键，前端 `collabWording.js` 落回旧那句话。

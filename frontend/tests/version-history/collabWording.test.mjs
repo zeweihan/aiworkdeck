@@ -3,7 +3,7 @@
 // 「同事交了新稿」的三态文案（dev-board#623）。跑法：node --test tests/version-history/*.test.mjs
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { remoteAheadText } from '../../src/utils/collabWording.js'
+import { remoteAheadText, pullStepText } from '../../src/utils/collabWording.js'
 
 // 假 $t：把键与参数原样拼出来，断言的是「挑了哪个键、喂了什么参数」
 const t = (key, params) => `${key}(${JSON.stringify(params || {})})`
@@ -81,4 +81,31 @@ test('bySelf 优先于作者名单：本人的另一台电脑不说成「同事�
     remoteAhead: true, remoteAheadCount: 4, remoteAheadBySelf: true, remoteAheadAuthors: ['韩泽伟', '韩泽伟'],
   })
   assert.equal(out, 'version.remoteAheadSelf({"count":4})')
+})
+
+// ---- 交稿引导第 ② 步那一句（dev-board#645）：与上面同一套分支规则 ----
+test('引导第②步：本人在另一台电脑交的，说「你」', () => {
+  const out = pullStepText(t, { remoteAheadCount: 6, remoteAheadBySelf: true, remoteAheadAuthors: ['韩泽伟'] })
+  assert.equal(out, 'version.submitGuidePullSelf({"count":6})')
+})
+
+test('引导第②步：一个同事带名字与版数', () => {
+  const out = pullStepText(t, { remoteAheadCount: 6, remoteAheadAuthors: ['张三'] })
+  assert.equal(out, 'version.submitGuidePullOne({"name":"张三","count":6})')
+})
+
+test('引导第②步：多人用 remoteAheadAuthorCount 算人数，不用名单长度', () => {
+  const out = pullStepText(t, {
+    remoteAheadCount: 9, remoteAheadAuthors: ['张三', '李四', '王五'], remoteAheadAuthorCount: 5,
+  })
+  assert.equal(out, 'version.submitGuidePullMany({"name":"张三","people":5,"count":9})')
+})
+
+test('引导第②步：算不出版数或作者时落回一句笼统的，不编「0 版」', () => {
+  assert.equal(pullStepText(t, {}), 'version.submitGuidePullGeneric({})')
+  assert.equal(pullStepText(t, null), 'version.submitGuidePullGeneric({})')
+  assert.equal(
+    pullStepText(t, { remoteAheadCount: 3, remoteAheadAuthors: ['  ', null] }),
+    'version.submitGuidePullGeneric({})'
+  )
 })

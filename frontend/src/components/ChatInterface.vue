@@ -244,16 +244,7 @@
        </view>
     </view>
 
-    <TurnActivityPanel
-      v-if="chatTurns.length"
-      :key="currentConversationId || 'new-chat'"
-      ref="activityPanel"
-      :turns="chatTurns"
-      :is-streaming="isStreaming"
-      @navigate="navigateToMessage"
-    />
-
-    <!-- Replies stay in the transcript; task/thinking/tool details share one fixed panel. -->
+    <!-- Thinking, tools and replies stay in chronological order in the transcript. -->
     <div
       v-if="bubbles.length > 0 || isStreaming"
       class="message-list"
@@ -266,15 +257,9 @@
           v-for="{ bubble: msg, index } in (turn.user ? [turn.user, ...turn.assistants] : turn.assistants)"
           :key="msg.id || index"
           :data-message-index="index"
-          v-show="msg.role === 'USER' || index === turn.assistants[0]?.index || msg.content || msg.artifacts?.length || msg.question || msg.stopNotice"
           class="message-row"
           :class="msg.role.toLowerCase()"
         >
-        <button v-if="index === turn.assistants[0]?.index" class="turn-activity-link" @click="openTurnActivity(turn.key)">
-          {{ $t('chat.activityOpenDetails') }}
-          <span v-if="turn.processes.length"> · {{ turn.processes.length }}</span>
-          <span aria-hidden="true"> ↗</span>
-        </button>
           <!-- User Message -->
           <div v-if="msg.role === 'USER'" class="user-bubble">
             <!-- Image Thumbnails (above message) -->
@@ -308,8 +293,6 @@
           <div v-else-if="msg.role === 'ASSISTANT'" class="assistant-root-wrapper">
              <RootBubble
                :bubble="msg"
-               :hide-activity="true"
-               :reply-label="index === turn.answerIndex ? $t('chat.activityReply') : $t('chat.activityUpdate')"
                :is-latest="index === bubbles.length - 1"
                @open-artifact-tab="handleArtifactOpenTab"
                @approve="handleArtifactApprove"
@@ -729,14 +712,12 @@
 
 <script>
 import RootBubble from './AgentMessage/RootBubble.vue'
-import TurnActivityPanel from './AgentMessage/TurnActivityPanel.vue'
 import { buildChatTurns, recoverPlanTodos } from './AgentMessage/chatTurns.mjs'
 import { useChatReadingPosition } from '@/composables/useChatReadingPosition.js'
 import BackgroundTaskIndicator from './BackgroundTaskIndicator.vue'
 import AgentInbox from './AgentInbox.vue'
 import MemoryBrowser from './MemoryBrowser.vue'
 import { useAgentStream } from '@/composables/useAgentStream.js'
-import { parseToolBlock } from '@/composables/agentTagProtocol.mjs'
 import { ref, watch, onMounted, onBeforeUnmount, nextTick, getCurrentInstance, computed } from 'vue'
 import { createFile, getProjectFiles, getApiBaseUrl, rollbackConversation, performPptGeneration, getSkills, fetchAiModels, getAiConfig, cancelBackgroundTask, listPluginJobs, cancelPluginJob } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
@@ -757,7 +738,7 @@ import {
 
 export default {
   name: 'ChatInterface',
-  components: { RootBubble, BackgroundTaskIndicator, AgentInbox, MemoryBrowser, OptionalComponentCard, TurnActivityPanel },
+  components: { RootBubble, BackgroundTaskIndicator, AgentInbox, MemoryBrowser, OptionalComponentCard },
   props: {
     projectId: String,
     projectName: String,
@@ -795,6 +776,7 @@ export default {
       abort,
       setConversationId,
       clearBubbles,
+      parseAssistantHistory,
       onClientAction,
       onTitleUpdate,
       backgroundTasks,
@@ -951,12 +933,10 @@ export default {
     const pendingInbox = computed(() => pendingInboxItems(inboxState))
     const messageList = ref(null)
     const messageContent = ref(null)
-    const activityPanel = ref(null)
     const chatTurns = computed(() => buildChatTurns(bubbles.value, {
       isStreaming: isStreaming.value, runStatus: agentRunStatus.value
     }))
     const { followLatest, handleMessageScroll, scrollToBottom, navigateToMessage } = useChatReadingPosition(messageList, messageContent)
-    const openTurnActivity = (key) => activityPanel.value?.openTurn(key)
     watch(currentConversationId, () => { followLatest.value = true })
 
     const isDragging = ref(false)
@@ -1879,182 +1859,15 @@ export default {
                   timestamp: formatTime(msg.createdAt)
               })
           } else {
-              // Convert Assistant Message to Root Bubble Structure
-              // 1. Check for XML tags
-              const content = msg.content || ''
-
-              // Simple Heuristic: If content has <thinking> or <title>, try to parse?
-              // Or just dump content into Walkthrough for legacy safety.
-              // IF we want to support old artifacts in history, we parse them.
-
-              // Create default bubble
-              const bubble = {
-                  id: msg.id,
-                  role: 'ASSISTANT',
-                  thinking: { status: 'done', content: '', duration: 0 },
-                  title: '',
-                  processes: [],
-                  artifacts: [],
-                  walkthrough: '',
-                  content: '', // Main Answer (from <final> tag)
-                  // 反问（<question>）解析结果，形状与 useAgentStream.createAssistantBubble 一致：
-                  // { text, options, answered } | null
-                  question: null,
-                  timestamp: formatTime(msg.createdAt)
-              }
-
-              // Extract Artifacts
-              const artifactRegex = /<artifact\s+type="([^"]+)"(?:[^>]*)>([\s\S]*?)<\/artifact>/g
-              let remaining = content
-              let match
-              while ((match = artifactRegex.exec(content)) !== null) {
-                 const type = match[1]
-                 const artContent = match[2]
-                 bubble.artifacts.push({
-                     id: `hist-art-${Math.random()}`,
-                     type,
-                     status: 'draft',
-                     data: { content: artContent },
-                     fileName: type === 'task_list' ? 'Task List' : 'Plan'
-                 })
-                 remaining = remaining.replace(match[0], '')
-              }
-
-              // Extract title
-              const titleMatch = remaining.match(/<title>([\s\S]*?)<\/title>/)
-              if (titleMatch) {
-                  bubble.title = titleMatch[1]
-                  remaining = remaining.replace(titleMatch[0], '')
-              }
-
-              // Extract <walkthrough> tag content
-              const walkthroughMatch = remaining.match(/<walkthrough>([\s\S]*?)<\/walkthrough>/)
-              if (walkthroughMatch) {
-                  bubble.walkthrough = walkthroughMatch[1].trim()
-                  remaining = remaining.replace(walkthroughMatch[0], '')
-              }
-
-              // Extract <process> tags and their content (steps, tool_code, tool_output)
-              const processRegex = /<process(?:\s+name="([^"]*)")?[^>]*>([\s\S]*?)<\/process>/g
-              let processMatch
-              while ((processMatch = processRegex.exec(remaining)) !== null) {
-                  const processName = processMatch[1] || 'Processing'
-                  const processContent = processMatch[2]
-
-                  const proc = {
-                      id: `hist-proc-${Date.now()}-${Math.random()}`,
-                      title: processName,
-                      isExpanded: false, // Collapse by default in history
-                      items: [],  // CHANGED: Use items array instead of steps for consistency
-                      steps: [],  // Keep for backward compatibility
-                      content: ''
-                  }
-
-                  // Extract <step> tags
-                  const stepRegex = /<step>([\s\S]*?)<\/step>/g
-                  let stepMatch
-                  while ((stepMatch = stepRegex.exec(processContent)) !== null) {
-                      proc.items.push({
-                          type: 'step',
-                          status: 'done',
-                          text: stepMatch[1].trim()
-                      })
-                  }
-
-                  for (const segment of processContent.matchAll(/<thinking>([\s\S]*?)<\/thinking>/g)) {
-                      proc.items.push({ type: 'thinking', status: 'done', content: segment[1], duration: 0 })
-                  }
-
-                  // Extract <tool_code> and <tool_output> - create tool items
-                  // 解转义与标签清单都在 agentTagProtocol.mjs：落库正文里的工具载荷是中和过的
-                  // （否则输出里的 </tool_output>/</process> 会把这段解析整个带偏），此处还原成原文
-                  const toolBlock = parseToolBlock(processContent)
-
-                  if (toolBlock) {
-                      const code = toolBlock.code
-                      const outputAttrs = toolBlock.attrs
-                      const output = toolBlock.output
-
-                      // First: Try to parse status from attribute (new format)
-                      let status = 'success'
-                      const statusAttrMatch = outputAttrs.match(/status="([^"]*)"/)
-                      if (statusAttrMatch) {
-                          const statusAttr = statusAttrMatch[1]
-                          if (statusAttr === 'SUCCESS') {
-                              status = 'success'
-                          } else if (statusAttr === 'FAILURE') {
-                              status = 'error'
-                          }
-                      } else {
-                          // Fallback: Determine status from output content (legacy format)
-                          if (output.includes('Error') || output.includes('Exception') || output.includes('FAILURE')) {
-                              status = 'error'
-                          }
-                      }
-
-                      proc.items.push({
-                          type: 'tool',
-                          code: code,
-                          output: output,
-                          status: status
-                      })
-                  }
-
-                  bubble.processes.push(proc)
-              }
-
+              const bubble = parseAssistantHistory(msg.content || '')
+              bubble.id = msg.id
+              bubble.timestamp = formatTime(msg.createdAt)
               const recoveredTodos = recoverPlanTodos(bubble.processes)
-              if (recoveredTodos !== null) bubble.planTodos = recoveredTodos
-
-              // Clean up process tags from remaining
-              remaining = remaining.replace(/<process[^>]*>[\s\S]*?<\/process>/g, '')
-
-              const rootThoughts = [...remaining.matchAll(/<thinking>([\s\S]*?)<\/thinking>/g)]
-              bubble.thinking.content = rootThoughts.map(m => m[1].trim()).filter(Boolean).join('\n\n')
-              remaining = remaining.replace(/<thinking>[\s\S]*?<\/thinking>/g, '')
-              const replies = [...remaining.matchAll(/<final>([\s\S]*?)<\/final>/g)]
-              bubble.content = replies.map(m => m[1].trim()).filter(Boolean).join('\n\n')
-              remaining = remaining.replace(/<final>[\s\S]*?<\/final>/g, '')
-
-              // 反问（<question>）回灌。此前全仓不解析这个标签：落库正文里带着原样标签，
-              // 重开会话时整段 <question>…</question> 作为「未标记文本」掉进 bubble.content
-              // ——用户看到的是一堆 XML，选项更是无从点起。
-              // 刻意放在 <process> 剥离之后：工具输出里出现过 <question> 字样（模型复述协议）
-              // 也不会被当成真的反问。
-              // **这里不写 answered 的最终值**：artifact 那边把历史里的计划卡一律硬写成
-              // status:'draft'（见上方 Extract Artifacts），同样的写法换到问题卡上就是
-              // 「重开会话后已回答过的问题又长出一排能点的按钮」；answered 在整轮回灌结束后
-              // 按「这条之后还有没有用户消息」统一判定。
-              const questionMatch = remaining.match(/<question(?:\s[^>]*)?>([\s\S]*?)<\/question>/i)
-              // 兜底：模型漏了 </question>（截断/笔误）时后端仍按「有问题」停机
-              // （AgentOrchestrator.containsQuestion 只认起始标签），前端也得认，
-              // 否则这条最需要提示的消息反而只剩裸标签。
-              const openQuestionMatch = questionMatch
-                  ? null
-                  : remaining.match(/<question(?:\s[^>]*)?>([\s\S]*)$/i)
-              const questionRaw = questionMatch ? questionMatch[1] : (openQuestionMatch ? openQuestionMatch[1] : null)
-              if (questionRaw !== null) {
-                  const options = []
-                  const optionRegex = /<option>([\s\S]*?)<\/option>/gi
-                  let optMatch
-                  while ((optMatch = optionRegex.exec(questionRaw)) !== null) {
-                      const opt = optMatch[1].trim()
-                      if (opt) options.push(opt)
-                  }
-                  bubble.question = {
-                      text: questionRaw.replace(/<option>[\s\S]*?<\/option>/gi, '').trim(),
-                      options,
-                      answered: false
-                  }
-                  remaining = remaining.replace(questionMatch ? questionMatch[0] : openQuestionMatch[0], '')
+              if (recoveredTodos !== null) {
+                  bubble.planTodos = recoveredTodos
+                  const planIndex = bubble.timeline.findLastIndex(entry => entry.type === 'process' && entry.data.items.some(item => item.type === 'tool' && /todo_write\(/.test(item.code || '')))
+                  bubble.timeline.splice(planIndex + 1, 0, { type: 'plan', data: recoveredTodos })
               }
-
-              // Any remaining untagged text goes to content (fallback for legacy)
-              remaining = remaining.trim()
-              if (remaining && !bubble.content) {
-                  bubble.content = remaining
-              }
-
               bubbles.value.push(bubble)
           }
        })
@@ -2780,8 +2593,8 @@ export default {
        handleInboxMove,
        handleInboxSendNow,
        tokenUsage,
-       messageList, messageContent, activityPanel, chatTurns,
-       followLatest, handleMessageScroll, navigateToMessage, openTurnActivity, scrollToBottom,
+       messageList, messageContent, chatTurns,
+       followLatest, handleMessageScroll, navigateToMessage, scrollToBottom,
        isDragging,
        contextFiles,
        pastedImages,
@@ -3098,21 +2911,7 @@ export default {
 }
 
 .conversation-turn { margin-bottom: 18px; }
-.turn-activity-link {
-  display: block;
-  margin: 0 0 8px;
-  padding: 4px 0;
-  border: 0;
-  background: transparent;
-  color: var(--awd-text-2);
-  font: inherit;
-  font-size: 12px;
-  line-height: 1.5;
-  cursor: pointer;
-  text-align: left;
-}
-.turn-activity-link:hover { color: var(--awd-accent-text); }
-.turn-activity-link::after, .return-to-latest button::after { border: 0; }
+.return-to-latest button::after { border: 0; }
 .return-to-latest { position: relative; flex-shrink: 0; height: 0; z-index: 5; }
 .return-to-latest button {
   position: absolute;

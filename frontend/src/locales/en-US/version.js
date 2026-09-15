@@ -287,6 +287,36 @@ export default {
   usernameRequired: 'Please enter your colleague’s account',
   generateFailed: 'Failed to generate',
 
+  // ---- SubmitDraftGuide.vue (submit-draft guide, dev-board#645) ----
+  // State-to-steps mapping lives in utils/submitGuide.js; step 2's sentence shares its
+  // rules with the "a colleague submitted" line (utils/collabWording.js, pullStepText).
+  submitGuideTwoLeft: 'Two steps before you can submit',
+  submitGuideOneLeft: 'One step before you can submit',
+  submitGuideReady: 'Ready to submit',
+  submitGuideOfflineTitle: 'Can’t reach the case library right now',
+  submitGuideOfflineDesc: 'The team case library is unreachable, so submitting has to wait for the connection to come back. Your changes are all here on this computer — nothing is lost.',
+  submitGuideStateTodo: 'To do',
+  submitGuideStateActive: 'Next',
+  submitGuideStateDone: 'Done',
+  submitGuideStepEndDesc: 'Wrap these changes into one version — that version is what gets submitted.',
+  submitGuideStepEndDone: 'These changes are already wrapped into a version.',
+  submitGuideStepSubmitDesc: 'Send the version on this computer into the case library so colleagues can see it.',
+  submitGuidePullSelf: 'Pull the {count} version(s) you submitted from another computer',
+  submitGuidePullOne: 'Pull the {count} version(s) {name} submitted',
+  submitGuidePullMany: 'Pull the {count} version(s) from {name} and {people} others',
+  submitGuidePullGeneric: 'Pull the latest draft your colleagues submitted',
+  submitGuidePullDone: 'Nothing in the case library is waiting for you to pull.',
+  submitGuideLater: 'Later',
+  submitGuideHowTitle: 'How this collaboration works (with an example)',
+  submitGuideHelpEntry: 'How collaboration works',
+  submitGuideHelpTitle: 'How collaboration works',
+  submitGuideHow1: 'You and your colleagues each edit the case file on your own computer. Changes stay on your computer — they do not travel to anyone else on their own.',
+  submitGuideHow2: '“End This Work Session” = wrap this stretch of edits into one version, like binding a draft before handing it in.',
+  submitGuideHow3: '“Submit Draft” = send the version on this computer into the case library so colleagues can see it.',
+  submitGuideHow4: '“Pull Latest” = bring what your colleagues submitted onto this computer. If you edited different sections, they merge on their own; only when you both edited the same section are you asked to choose, section by section.',
+  submitGuideHowExample: 'Example: last night you edited section 3 of “Litigation and Administrative Penalties Statement”; this morning a colleague edited section 5 of the same file and submitted it. You click “Pull Latest” and both edits merge into one file. Had you both edited section 3, a merge review copy opens so you can choose section by section.',
+  submitGuideHowMnemonic: 'The order: end the work session, pull latest, submit.',
+
   // ---- CloudAcceptDialog.vue ----
   pullFromLibraryTitle: 'Pull a Case File from the Team Case Library',
   noLibraryAvailableShort: 'No team case library is available yet',

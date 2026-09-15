@@ -965,3 +965,7 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
   process "Electron" to get name of every menu bar item of menu bar 1'` 能直接读出
   真实 NSMenu，`click menu item "X" of menu 1 of menu bar item "View"` 能真点。
   **例外：`Toggle Full Screen` 点不动**（需要真实用户交互），全屏相关只能人工走查。
+
+## 左栏统一标准（2026-09-15，dev-board#648/#651）
+
+标准与脱敏路径见 `doc/sidebar-ui-standard.md`。项目概览在窄栏使用扁平字段/统计行；脱敏主路径为选文件→核查预览→生成副本，补充词/识别规则折叠，密码在预览后出现。录音保留异步进度/安装入口，统一主题与错误状态。动态尽调 CSS 在独立仓库 PR#2，详见 `doc/addon-sidebar-alignment.md`，未签名发布不能当作客户端已更新。
