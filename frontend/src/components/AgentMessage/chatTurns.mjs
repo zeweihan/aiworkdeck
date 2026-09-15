@@ -35,7 +35,7 @@ export function buildChatTurns(bubbles, { isStreaming = false, runStatus = null 
   let turn
   bubbles.forEach((bubble, index) => {
     if (bubble.role === 'USER' || !turn) {
-      turn = { key: String(bubble.id ?? index), user: null, assistants: [], label: '', todos: turn?.todos || [], thoughts: [], processes: [], answerIndex: -1, attentionIndex: -1, status: 'idle' }
+      turn = { key: String(bubble.id ?? index), user: null, assistants: [], label: '', todos: turn?.todos || [], thoughts: [], processes: [], answerIndex: -1, attentionIndex: -1, attentionKind: '', status: 'idle' }
       turns.push(turn)
     }
     if (bubble.role === 'USER') {
@@ -68,8 +68,22 @@ export function buildChatTurns(bubbles, { isStreaming = false, runStatus = null 
     }
     const last = latest.assistants.at(-1)
     const actionable = last && last.index === bubbles.length - 1 && !isStreaming && !last.bubble.isStreaming
-    if (actionable && (last.bubble.question && !last.bubble.question.answered || (last.bubble.artifacts || []).some(a => PLAN_TYPES.includes(a.type) && a.status === 'draft'))) latest.attentionIndex = last.index
-    if (latest.status !== 'queued') latest.status = (runStatus || (isStreaming ? 'RUNNING' : actionable && last.bubble.question && !last.bubble.question.answered ? 'AWAITING_INPUT' : latest.attentionIndex >= 0 ? 'AWAITING_APPROVAL' : 'IDLE')).toLowerCase()
+    const pendingQuestion = actionable && last.bubble.question && !last.bubble.question.answered
+    if (pendingQuestion || actionable && (last.bubble.artifacts || []).some(a => PLAN_TYPES.includes(a.type) && a.status === 'draft')) {
+      latest.attentionIndex = last.index
+      latest.attentionKind = pendingQuestion ? 'question' : 'approval'
+    }
+    if (latest.status !== 'queued') latest.status = (runStatus || (isStreaming ? 'RUNNING' : pendingQuestion ? 'AWAITING_INPUT' : latest.attentionIndex >= 0 ? 'AWAITING_APPROVAL' : 'IDLE')).toLowerCase()
   }
   return turns
+}
+
+// The locator bar must point only at cards the user can still act on, so it reads the
+// attention judgment above instead of deriving a second one: a bar that jumps to an
+// inert card is worse than no bar. Earliest first, because that is the one blocking
+// the conversation; count so the bar can say how many are waiting.
+export function pendingAttention(turns = []) {
+  const waiting = turns.filter(turn => turn.attentionIndex >= 0)
+  if (!waiting.length) return null
+  return { index: waiting[0].attentionIndex, kind: waiting[0].attentionKind, count: waiting.length }
 }

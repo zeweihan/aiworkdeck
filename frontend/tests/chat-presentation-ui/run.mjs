@@ -48,14 +48,29 @@ try {
   await page.evaluate(() => { window.chatState.bubbles.at(-1).content += '\n\n' + '继续输出\n\n'.repeat(20) })
   await page.waitForFunction(() => document.querySelector('.message-list').textContent.includes('继续输出'))
   assert.equal(await page.$eval('.message-list', el => el.scrollTop), before, 'stream must not steal reading position')
-  assert.ok(await visible('.return-to-latest button'))
-  await page.click('.return-to-latest button')
+  assert.ok(await visible('.return-to-latest .back-to-latest'))
+  await page.click('.return-to-latest .back-to-latest')
   await wait(() => window.chatState.followLatest)
-  // Interactive question and approval remain in the transcript.
-  for (const kind of ['question', 'approval']) {
+  // Interactive question and approval remain in the transcript, and stay reachable after
+  // the conversation scrolls past them.
+  const atBottom = () => wait(() => { const el = document.querySelector('.message-list'); return el.scrollHeight - el.clientHeight - el.scrollTop < 5 })
+  for (const [kind, label] of [['question', '待你回答'], ['approval', '待审批']]) {
     await page.evaluate(kind => window.loadFixture(kind), kind)
     await wait(() => document.querySelector('[data-chat-attention]'))
     assert.ok(await page.$eval('.message-list', el => el.textContent.includes('30日') || el.textContent.includes('按此推进')))
+    await atBottom()
+    assert.equal(await page.$('.attention-locator'), null, `${kind}: no locator while the card is on screen`)
+    await page.evaluate(() => { const el = document.querySelector('.message-list'); el.scrollTop = 0; el.dispatchEvent(new Event('scroll')) })
+    await wait(() => document.querySelector('.attention-locator'))
+    assert.ok(await page.$eval('.attention-locator', el => el.textContent.trim()).then(text => text.includes(label) && text.includes('1')), `${kind}: locator names what is waiting`)
+    await page.click('.attention-locator')
+    assert.ok(await page.$eval('[data-chat-attention]', el => {
+      const view = document.querySelector('.message-list').getBoundingClientRect()
+      const rect = el.getBoundingClientRect()
+      return rect.top < view.bottom && rect.bottom > view.top
+    }), `${kind}: clicking brings the card into view`)
+    assert.ok(await page.$('[data-chat-attention].chat-attention-flash'), `${kind}: the card is highlighted on arrival`)
+    await wait(() => !document.querySelector('.attention-locator'))
   }
   // Feed the real SSE handler, then answer a question: continuing must retain tasks.
   await page.evaluate(() => window.loadFixture('question'))
@@ -103,7 +118,7 @@ try {
   await wait(() => window.ready)
   assert.ok(await page.$eval('.message-list', el => el.textContent.includes('Ran 17 operations')), 'English controls interpolate')
   assert.deepEqual(errors, [], 'browser runtime errors')
-  console.log('PASS: chronological history/live stream, automatic collapse, manual disclosures, output inspection, scrolling, attention cards, narrow widths, themes, English')
+  console.log('PASS: chronological history/live stream, automatic collapse, manual disclosures, output inspection, scrolling, attention cards and their locator, narrow widths, themes, English')
 } catch (error) {
   console.error('BROWSER ERRORS', errors)
   console.error(await page.evaluate(() => document.querySelector('.message-row.assistant:last-child')?.textContent))

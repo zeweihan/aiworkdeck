@@ -3,6 +3,8 @@
 // AI chat panel (ChatInterface + AgentMessage cards + ArtifactCard + BackgroundTaskIndicator)
 export default {
   activityBackToLatest: 'Back to latest',
+  attentionLocatorQuestion: '{n} awaiting your answer',
+  attentionLocatorApproval: '{n} awaiting approval',
 
   // ---- Upload dialog ----
   uploadFileTitle: 'Upload Files',

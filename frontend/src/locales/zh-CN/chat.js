@@ -3,6 +3,8 @@
 // AI 对话面板（ChatInterface + AgentMessage 卡片族 + ArtifactCard + BackgroundTaskIndicator）
 export default {
   activityBackToLatest: '回到最新',
+  attentionLocatorQuestion: '有 {n} 条待你回答',
+  attentionLocatorApproval: '有 {n} 条待审批',
 
   // ---- 上传文件对话框 ----
   uploadFileTitle: '上传文件',
