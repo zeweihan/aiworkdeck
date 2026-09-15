@@ -5,6 +5,11 @@
     <template v-if="onDraft">
       <view class="session-dot draft-dot" />
       <text class="session-text">{{ $t('version.workingOnDraft', { name: onDraft.name }) }}</text>
+      <!-- 稿上同样要能「结束本次工作」并起名字：不给这个入口的话，稿上的改动只剩
+           无名的自动存档，采纳之后历史里这一稿全是「修改了《X》」（真机反馈 B2）。
+           走的是主线那条一模一样的命名流程（openNaming → end → endWorkSession），
+           后端按「当前站在稿上」把它落成这一稿上的一笔命名版本，不并回主线。 -->
+      <view class="awd-btn awd-btn-secondary session-btn" @tap="openNaming">{{ $t('version.endSession') }}</view>
       <view class="awd-btn awd-btn-secondary session-btn" @tap="returnToMainline">{{ $t('version.returnToMainline') }}</view>
       <view class="awd-btn awd-btn-primary session-btn" @tap="adopt">{{ $t('version.adoptDraft') }}</view>
       <view class="awd-btn awd-btn-danger session-btn" @tap="confirmAbandon">{{ $t('version.abandonDraft') }}</view>

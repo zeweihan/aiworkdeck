@@ -501,14 +501,12 @@ export const agentClientActionMethods = {
             }
 
             // 保活池实例不再"切回即重挂载"：后台常驻实例里还是旧内容。把该
-            // 文件的非活动保活实例逐出 LRU（卸载），下次激活时重挂载并拉取
-            // 新字节。
+            // 文件的非活动实例卸载掉（常规池 + 过继备胎两个注册表都要动，
+            // 见 librePool.js 的 unloadInactiveLibreInstances），下次激活时
+            // 重挂载并拉取新字节。
             let reloadOk = true
             if (updated) {
-                this.libreLruKeys = this.libreLruKeys.filter(k => {
-                    if (!k.endsWith(':' + file.id)) return true
-                    return k === 'left:' + this.activeFileIdLeft || k === 'right:' + this.activeFileIdRight
-                })
+                this.unloadInactiveLibreInstances(file.id)
                 // 当前正显示的实例逐不掉（保活池"活动文件必进池"），而它既不
                 // watch file 也不以 wpsFileId 为模板 key——上面 Object.assign 进
                 // pane 列表对它毫无作用，画布上还是改前的内容。律师接着编辑，

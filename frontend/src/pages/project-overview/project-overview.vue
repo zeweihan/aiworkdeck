@@ -734,6 +734,7 @@
             @reload-files="onVersionReloadFiles"
             @adopt-conflict="adoptConflictPending = $event"
             @status-changed="checkAdoptConflict"
+            @version-landed="refreshLibreProvenance"
             @open-collab="openCollab"
             @open-history="openCommitHistoryTab({})"
             @open-merge-review="onOpenMergeReview"

@@ -464,4 +464,65 @@ class DraftLifecycleTest {
         assertTrue(assertThrows(VersionException.class,
                 () -> svc.switchToMainline(7L, 1L, "韩泽伟")).isUserFacing());
     }
+
+    // ---- 稿上也能「结束本次工作」并命名（真机反馈 B2）-----------------------
+
+    /**
+     * 站在稿上点「结束本次工作」：在**这一稿**上落一笔有名字的版本，稿照旧 ACTIVE，
+     * 主线一个字不动、人也不许被切回主线。
+     *
+     * <p>断言里最要紧的三条：当前分支仍是那一稿、主线 tip 一字未变、主线那段
+     * ACTIVE 工作段仍然 ACTIVE。去掉 {@code endSession} 最前面那道稿分支分流，
+     * {@code activeSession} 会找到主线那段工作，checkout master 再合并——三条同时转红。
+     */
+    @Test
+    void endSessionOnADraftNamesAVersionOnTheDraftAndLeavesMainlineAlone() throws Exception {
+        // 真实顺序：律师先在主线上改了点东西（隐式开了一段工作），才想到另起一稿。
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "主线改了一句");
+        svc.commitNow(7L, 1L, "韩泽伟", null);
+        long workSessionId = svc.activeSession(7L).orElseThrow().getId();
+        String mainTipBefore = repoSvc.resolveRef(7L, repoSvc.mainBranch());
+
+        svc.createDraft(7L, null, "试验稿", 1L, "韩泽伟");
+        String draftBranch = repoSvc.currentBranch(7L);
+        Files.writeString(root.resolve("projects/7/合同.txt"), "稿上把第九条改了");
+
+        WorkSessionService.SessionEndResult r =
+                svc.endSession(7L, 1L, "韩泽伟", "第九条培训天数改为 5 个工作日");
+
+        assertNotNull(r.sha(), "稿上结束工作要真的落一版");
+        assertNull(r.notice());
+        assertNull(r.conflict());
+        assertEquals(draftBranch, repoSvc.currentBranch(7L), "结束之后还得站在这一稿上");
+
+        VersionEntry top = repoSvc.log(7L, "HEAD", 1).get(0);
+        assertEquals("第九条培训天数改为 5 个工作日", top.message(), "律师起的名字要进这一版");
+        assertEquals("session", top.kind(), "有名字的版本是 session，无名的自动存档才是 auto");
+        assertEquals("稿上把第九条改了",
+                new String(repoSvc.readBlobAtCommit(7L, "HEAD", "合同.txt")),
+                "这一版要真的带着稿上的改动");
+
+        assertEquals(mainTipBefore, repoSvc.resolveRef(7L, repoSvc.mainBranch()),
+                "主线一个字都不许动");
+        assertEquals(WorkSession.Status.ACTIVE, sessions.get(workSessionId).getStatus(),
+                "主线那段工作不能被顺手合并掉");
+        assertTrue(svc.listDrafts(7L).stream().anyMatch(d -> draftBranch.equals(d.getBranchName())),
+                "这一稿仍然是进行中的稿——刚才只是给它的改动起了个名字，不是结束这一稿");
+    }
+
+    /** 稿上没有任何改动时与主线同口径：不产生空提交，用返回值报信而不是抛异常。 */
+    @Test
+    void endSessionOnACleanDraftReportsNoChangesInsteadOfCommitting() throws Exception {
+        svc.createDraft(7L, null, "试验稿", 1L, "韩泽伟");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "稿上改了一句");
+        assertNotNull(svc.endSession(7L, 1L, "韩泽伟", "第一版").sha(), "前置条件：第一次要真的落版");
+        String tipBefore = repoSvc.resolveRef(7L, "HEAD");
+
+        WorkSessionService.SessionEndResult r = svc.endSession(7L, 1L, "韩泽伟", "再来一次");
+
+        assertNull(r.sha());
+        assertNotNull(r.notice());
+        assertEquals(tipBefore, repoSvc.resolveRef(7L, "HEAD"), "不许落空提交");
+    }
 }

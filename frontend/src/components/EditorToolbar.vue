@@ -684,6 +684,14 @@ export default {
       return res
     },
     toggleChrome() { this.closeMenus(); return this.applyChrome(!this.chromeHidden) },
+    // load_document 会把 LO 自己那套 chrome（菜单栏 / 两排工具栏 / 状态栏 / 标尺）重新
+    // 拉出来（真机实证，见 office_thread.js 的 hideNativeChrome 注释 ②），而 bootstrap
+    // 只在 executor 变化时跑一次——「就地重载」（版本退回 / 回到主线工作 / 采纳一稿）换的
+    // 是同一个 executor 手里的文档，没人再去藏一次，编辑区顶上就冒出整条原生菜单栏和
+    // 标尺（真机反馈 B5）。宿主换完文档后调这一条。
+    // 落的是**当前**开关状态而不是一律藏起来：设置里留了把 LO chrome 放出来的逃生开关，
+    // 律师自己打开的那一套不该被一次重载又摁回去。
+    reapplyChrome() { return this.applyChrome(this.chromeHidden) },
 
     // ---- 查找替换 ----
     toggleFind() {

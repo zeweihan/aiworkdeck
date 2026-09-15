@@ -717,6 +717,25 @@ class DraftAdoptTest {
                 "RED：合并改写过的非冲突文件必须进重载列表，否则 autosave 会把它写回旧字节");
     }
 
+    /**
+     * 裁决**收尾**（resolveAdopt）同样要把被改写的文件报进重载列表——真机反馈 A1 里
+     * 文档标签没刷新，得先钉清楚"后端到底有没有报信"：报了，问题在前端那条卸载链
+     * （非活动的过继备胎实例没被卸载，见 librePool.unloadInactiveLibreInstances）。
+     * 上面那条用例管的是 adoptDraft 撞车那一刻，这条管按下「就按我选的来」之后。
+     */
+    @Test
+    void resolveAdoptReportsTheResolvedFileForEditorReload() throws Exception {
+        db.put(501L, file(501L, "合同.txt"));
+        ConflictScene scene = stageAdoptConflict("合同.txt");
+
+        WorkSessionService.AdoptOutcome r = svc.resolveAdopt(7L, scene.draftId(),
+                Map.of("合同.txt", WorkSessionService.Resolution.DRAFT), 1L, "韩泽伟");
+
+        assertTrue(r.success());
+        assertTrue(r.affectedFileIds().contains(501L),
+                "裁决落定之后这份文件的字节变了，打开中的编辑器必须靠这个 id 去重载");
+    }
+
     // ---- 裁决期间的自动存档绝不能落地 ---------------------------------------
 
     /**

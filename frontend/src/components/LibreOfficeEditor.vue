@@ -1279,6 +1279,15 @@ export default {
         // 换完再清一次脏（retarget 里设 RecordChanges 会触发一次 modified）。
         this.docLoadFailed = false
         cancelAutoSave()
+        // 它还把 LO 原生那套 chrome（菜单栏 / 工具栏 / 状态栏 / 标尺）重新拉了出来，
+        // 而自建工具栏的 bootstrap 只在 executor 变化时跑——正常打开那条路藏过一次，
+        // 就地重载这条路没人藏，编辑区顶上就露出整条原生菜单栏和标尺（真机反馈 B5）。
+        // 工具栏只给 Writer 渲染、boot 期间也不在，取不到就什么都不做；藏不成顶多多
+        // 一条菜单栏，绝不能让它把重载本身弄失败（所以自己 try 住）。
+        const toolbar = this.$refs && this.$refs.toolbar
+        if (toolbar && typeof toolbar.reapplyChrome === 'function') {
+          try { await toolbar.reapplyChrome() } catch (e) { this.appendLog('reapply chrome failed: ' + e) }
+        }
         this.statusKey = prevStatusKey.endsWith('Failed') ? 'ready' : prevStatusKey
         this.appendLog('reload: 已就地换成后端最新内容')
         return true

@@ -241,9 +241,45 @@ export const librePoolMethods = {
         console.log('[ProjectOverview] LibreOffice keep-alive evicted (LRU):', key)
     },
 
+    // 后端就地改了某文件的内容，而该文件**没有**显示在任何窗格里（比如律师此刻正看着
+    // 合并比对稿那个标签页）：把它那些实例卸载掉，下次激活时重挂载并拉新字节。
+    //
+    // 两个注册表都得动，缺一个就是一次静默的"没刷新"：常规池按 libreLruKeys 渲染
+    // （leftLibreFiles/rightLibreFiles），而**过继备胎**渲染自 libreSpares，且
+    // leftLibreFiles 会把"有备胎顶着"的文件整个排除掉——只摘 LRU 键的话那个实例
+    // 压根不会卸载，律师切回去看到的还是改前的内容（真机反馈 A1：采纳一稿裁决完，
+    // 文档标签里仍是合并前的正文，关掉标签重开才对）。左窗格首开的那份文档一定是
+    // 过继来的备胎（maybeAdoptLibreSpare），也就是最常见的那一种实例。
+    // LRU 淘汰那条路早就两边都清了（evictLibreInstance 末尾的 pruneLibreSpare），
+    // 这里补齐同一件事。
+    //
+    // 活动实例逐不掉也不该逐（"活动文件必进池"）——它走 reloadActiveLibreInstances
+    // 就地换文档，这里原样跳过。
+    unloadInactiveLibreInstances(fileId) {
+        const isActiveKey = (key) =>
+            key === 'left:' + this.activeFileIdLeft || key === 'right:' + this.activeFileIdRight
+        this.libreLruKeys = this.libreLruKeys.filter(
+            (k) => !k.endsWith(':' + fileId) || isActiveKey(k))
+        if (!isActiveKey('left:' + fileId)) this.pruneLibreSpare('left:' + fileId)
+    },
+
+    // 版本记录落了新的一版（结束工作/采纳/退回…）：打开中的编辑器要重新问一次溯源。
+    // 内容没变的文件走不到 reload-files 那条链（那条只管被改写的文件），但它们的
+    // 段落归属照样变了——律师刚给这段工作起的名字、以及"本机未保存的改动"该消失的
+    // 那些段落，都只有重新拉一次 provenance 才会更新（真机反馈 A2/C5）。
+    // 逐实例尽力而为：某个实例还在 boot / 已经 dispose 都只是这一份不刷新。
+    refreshLibreProvenance() {
+        const refs = this._libreRefs || {}
+        for (const key of Object.keys(refs)) {
+            const inst = refs[key]
+            if (!inst || !inst.file || typeof inst.loadProvenance !== 'function') continue
+            try { inst.loadProvenance() } catch (e) { console.warn('[ProjectOverview] 溯源刷新失败:', e) }
+        }
+    },
+
     // 后端就地改了某文件的内容（版本退回 / 检查点恢复），而该文件正显示在某个
     // 窗格里：这个实例逐不出保活池（活动文件必进池），也不会因文件信息变化重
-    // 挂载，必须显式命令它就地重载。非活动实例由调用方摘出 LRU 卸载即可。
+    // 挂载，必须显式命令它就地重载。非活动实例走上面的 unloadInactiveLibreInstances。
     // 绝不能走 closeFile：它在关闭脏文档前 flushSave，会把编辑器里还端着的
     // 改前字节写回后端，正好冲掉刚做的退回/恢复。
     // 返回 false 表示有活动实例没能换成新内容（画布上还是旧的，该实例已自己

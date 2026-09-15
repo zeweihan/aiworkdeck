@@ -97,6 +97,10 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 
 **后端就地改了文件后重载活动实例**：`reloadFromBackend()`（版本退回 / 检查点恢复 / AI 直接改文件都该走它）。组件的 `watch file` **只认 null→文档**（备胎过继，PR#220），文档→文档换内容一概不触发，模板 key 也只含 `file.id`——改 `wpsFileId` 不会让正在显示的实例重新加载，必须显式调这个方法。它按序：取消 `_saveTimer` + 清 `dirty` → 等在途 `saving` 结束 → 清 `_bytesPromise`（预取的是旧字节）→ `loadDocument()` 就地 `load_document` 换文档 → 再清一次脏（retarget 里设 `RecordChanges` 会触发一次 modified）。失败则置 `docLoadFailed`（画布上还是旧内容，保存闸必须落下）。`loadDocument()` 返回 `true`=真换了文档、`false`=后端 0 字节（新建文件，保留空白 boot 文档）。宿主侧入口 `librePool.js` 的 `reloadActiveLibreInstances(fileId)`（只刷 `activeFileId` 命中**且 `inst.file.id` 相符**的实例——空白备胎不注册 `_libreRefs`，这条是硬判据）。**不能用 `closeFile`/淘汰活动实例代替**——那会 `flushSave` 把旧字节写回。
 
+**重载之后必须把 LO 原生 chrome 再藏一次**（v0.44.1 真机反馈 B5）：`load_document` 会把藏好的菜单栏 / 工具栏 / 状态栏 / 标尺**重新拉出来**（同一条实证见下方「三方合并的引擎原语」里 `hideNativeChrome` 那段），而藏它的唯一地方是 `EditorToolbar.bootstrap()` 末尾的 `applyChrome(true)`，那条只挂在 `watch executor`（immediate）上——**就地重载换的是同一个 executor 手里的文档，executor 没变、bootstrap 不会再跑**。表现：在稿上编辑 → 「回到主线工作」触发自动重载，编辑区顶上冒出整条「文件 编辑 视图 插入 …」和标尺，关掉标签重开才恢复。修法是 `reloadFromBackend()` 成功换完文档后调 `$refs.toolbar.reapplyChrome()`（落的是**当前**开关状态，不是一律藏起来——设置里留着把 LO chrome 放出来的逃生开关，律师自己开的那一套不该被一次重载摁回去）；取不到工具栏（非 Writer / boot 期间）就什么都不做，且整段 try 住——藏不成顶多多一条菜单栏，绝不能让它把重载本身弄失败。**今后任何新的「换文档但不换 executor」的路径都要补这一刀。** 护栏 `frontend/tests/version-history/reloadChrome.test.mjs`（含「必须排在 load_document 之后」的顺序断言）；真引擎那一半（`load_document` 之后 `isVisible` 读回 true）仍只有真机/lowa-e2e 能验。
+
+**非活动实例的重载靠「卸载 + 下次激活重挂载」，而卸载必须清两个注册表**：入口是 `librePool.unloadInactiveLibreInstances(fileId)`——`libreLruKeys`（常规池）与 `libreSpares`（过继备胎）**都要清**。只摘 LRU 键的话过继备胎那个实例压根不卸载（`leftLibreFiles` 会把「有备胎顶着」的文件整个排除掉），端着的还是改前的字节；而左窗格首开的那份文档一定是过继来的备胎。详情与真机表现见 version-control.md 已知地雷 #56。
+
 **重载撞上引擎仍在 boot**（含只读预览接力期）：`reloadFromBackend()` 不能只是跳过——预取的旧字节还排在 `finishDocLoad` 后面，装进来再 autosave 就把退回撤销了。此时置 `_reloadPending` 并返回 `true`（延后而非失败），`finishDocLoad` 发完 `ready` 立刻补一次真重载。只读预览体本身无害（无任何保存路径），有害的是它背后那份陈字节。
 
 守卫（防空文档覆盖，PR#194）：`docLoadFailed` 闸——load 失败或"元数据非空却下载 0 字节"（fileSize>0 而 bytes 空）时置位，此后 onDocModified 与 saveDocument 一律拒绝；fileSize==0 才当新建空白。**该编辑器存/取走整文件 XHR，不含分片上传**。

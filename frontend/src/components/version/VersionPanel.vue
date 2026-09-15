@@ -28,7 +28,7 @@
         :working="working"
         :changed-count="changedCount"
         :on-draft="onDraft"
-        @ended="refresh"
+        @ended="onVersionLanded"
         @discarded="onReload"
         @mainline-resumed="onReload"
         @draft-adopted="onReload"
@@ -153,7 +153,7 @@ export default {
   // refresh()/onReload() 每次拉完 /status 都发一次，页面据此重新拉一次自己的状态点。
   // open-merge-review / retry-merge：裁决总览里那两个按钮（「打开合并比对稿」「重试
   // 自动合并」）的出口。标签页与隐藏引擎实例都归页面管，本面板只负责往上传。
-  emits: ['compare-file', 'clear-file-filter', 'reload-files', 'adopt-conflict', 'open-collab', 'open-history', 'status-changed', 'open-merge-review', 'retry-merge'],
+  emits: ['compare-file', 'clear-file-filter', 'reload-files', 'adopt-conflict', 'open-collab', 'open-history', 'status-changed', 'open-merge-review', 'retry-merge', 'version-landed'],
   provide() {
     return { projectId: this.projectId }
   },
@@ -289,6 +289,15 @@ export default {
     onReload(affectedFileIds) {
       this.refresh()
       this.$emit('reload-files', affectedFileIds || [])
+      this.$emit('version-landed')
+    },
+    // 「结束本次工作」不改磁盘（没有 affectedFileIds 可言），所以不走上面那条重载链；
+    // 但它落定了新的一版，打开中的编辑器顶上那条溯源必须重新问一次——不问的话律师
+    // 刚起的名字不会出现（一直写着「初始版本」或自动存档的标题），刚敲的那些段落也
+    // 一直挂着「本机未保存的改动」，得再改一次才刷新（真机反馈 A2 / C5）。
+    onVersionLanded() {
+      this.refresh()
+      this.$emit('version-landed')
     },
     // 二次确认照 VersionNodeDetail「退回到这一版」的写法（uni.showModal）。
     // 这一步不可撤销，且会把整条时间线一次性删掉，措辞要把后果说全。
